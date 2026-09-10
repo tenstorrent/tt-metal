@@ -715,6 +715,38 @@
   sp_config: sc1
 
 
+# ===== Gemma4-31B D/P =================================================================================
+
+# Short numerical gate for the standalone disaggregated-prefill implementation. The test module
+# restricts itself to the supported CP8/TP4 Galaxy layout and exercises both the HF reference
+# comparison and traced-vs-eager replay. The checkpoint and tilized D/P cache are staged on /mnt/models.
+- name: "(Gemma4-31B-it) D/P prefill accuracy 8k"
+  fabric_profile: torus_xy
+  cmd: |
+    export HF_HUB_OFFLINE=1
+    export HF_HOME=/mnt/models/huggingface
+    export HF_MODEL=google/gemma-4-31B-it
+    export TT_CACHE_PATH=/mnt/models/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/gemma4_d_p/tests/test_prefill_correctness.py \
+        -k "device_prefill_matches_hf or device_traced_prefill_matches_eager or device_multi_chunk_traced_prefill_matches_eager or device_chunk_boundary_matches_hf" \
+        -vv --tb=short --timeout=3600
+    '
+  test_type: gemma4_dp
+  test_tags: [gemma4_dp, transformer]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 120
+      tier: 1
+      release_ready: false
+  owner_id: U078RU2KP9Q # Muhammad Asif Manzoor
+  team: models
+  sp_config: sc1
+
+
 # ===== MiniMax-M3-428B =================================================================================
 
 # MiniMax-M3 full-model real-weights prefill + per-layer KV PCC (standalone harness, not pytest).
