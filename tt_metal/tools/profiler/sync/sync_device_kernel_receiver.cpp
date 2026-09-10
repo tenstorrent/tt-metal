@@ -8,6 +8,40 @@
 #include "internal/ethernet/dataflow_api.h"
 #include "api/debug/assert.h"
 
+#if defined(PROFILE_KERNEL) && defined(PROFILE_STREAMING)
+#include "tools/profiler/kernel_profiler.hpp"
+// Link half of the d2d sync: one PP_CLOCK(CLOCK_LINK_REFCLK) sample per stamp -- this core's refclk low 24 bits
+// against its wall clock, exactly the local tracker's record with the link kind. The host pairs the two ends of
+// a round by index and fits refclk against refclk, so DVFS on either chip's wall clock cannot enter the link
+// solve. Streaming backend only: the DRAM profiler's build of this kernel is untouched.
+// Room for n words in this core's SPSC ring, non-blocking. The burst runs during bring-up before the host
+// receiver drains, so the pusher cannot free the ring mid-burst and a blocking reserve would deadlock the
+// pair; room only shrinks, so each side keeps a contiguous prefix of rounds that the host pairs by index.
+FORCE_INLINE bool link_clock_room(uint32_t n) {
+    invalidate_l1_cache();
+    return (kernel_profiler::wIndex - kernel_profiler::profiler_control_buffer[kernel_profiler::HEAD_INDEX]) <=
+           (kernel_profiler::RING_USABLE - n);
+}
+FORCE_INLINE void link_clock_stamp() {
+    const uint32_t wlo = *reinterpret_cast<volatile uint32_t*>(0xFFB121F0);  // reading L latches H: L first
+    const uint32_t whi = *reinterpret_cast<volatile uint32_t*>(0xFFB121F8);
+    volatile uint32_t* rlop = reinterpret_cast<volatile uint32_t*>(0xFFB98850);
+    volatile uint32_t* rhip = reinterpret_cast<volatile uint32_t*>(0xFFB98854);
+    const uint32_t h1 = *rhip;
+    uint32_t rlo = *rlop;
+    if (*rhip != h1) {  // no latch on the refclk pair: guard a 2^32 splice
+        rlo = *rlop;
+    }
+    kernel_profiler::ring_write_sticky_timer(whi);
+    kernel_profiler::ring_write_word(kernel_profiler::ppfmt::clock_w0(kernel_profiler::ppfmt::CLOCK_LINK_REFCLK, rlo));
+    kernel_profiler::ring_write_word(wlo);
+    kernel_profiler::publish_tail();
+}
+#else
+FORCE_INLINE bool link_clock_room(uint32_t) { return false; }
+FORCE_INLINE void link_clock_stamp() {}
+#endif
+
 FORCE_INLINE void eth_setup_handshake(std::uint32_t handshake_register_address, bool is_sender) {
     if (is_sender) {
         eth_send_bytes(handshake_register_address, handshake_register_address, 16);
@@ -23,21 +57,52 @@ static constexpr uint32_t HANDSHAKE_ADDR = eth_l1_mem::address_map::ERISC_L1_UNR
 static constexpr uint32_t NUM_CHANNELS = get_compile_time_arg_val(0);
 static constexpr uint32_t NUM_MESSAGES = get_compile_time_arg_val(1);
 static constexpr uint32_t MESSAGE_SIZE = get_compile_time_arg_val(2);
+#if defined(PROFILE_STREAMING)
+// The streaming backend always runs resident; the stop word address arrives as a runtime arg (positional
+// compile args past index 2 do not reach this kernel). Set in kernel_main, read in the message waits.
+static uint32_t g_stop_addr = 0;
+#endif
 
 template <bool MEASURE>
-FORCE_INLINE void run_loop_iteration(
+FORCE_INLINE bool run_loop_iteration(
     std::array<uint32_t, NUM_CHANNELS> const& channel_addrs,
     std::array<volatile eth_channel_sync_t*, NUM_CHANNELS> const& channel_sync_addrs) {
     if constexpr (MEASURE) {
+#if defined(PROFILE_STREAMING)
+        // Resident receiver: break the message wait on the host's stop word (the sender stopped first, so no further
+        // message is coming) and exit without echoing. Non-streaming builds compile this out entirely.
+        volatile tt_l1_ptr uint32_t* stopw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(g_stop_addr);
+        while (channel_sync_addrs[0]->bytes_sent == 0 && *stopw == 0) {
+            invalidate_l1_cache();
+        }
+        if (*stopw != 0) {
+            return false;
+        }
+#else
         while (channel_sync_addrs[0]->bytes_sent == 0) {
             invalidate_l1_cache();
         }
+#endif
 
         for (uint32_t i = 0; i < NUM_CHANNELS; i++) {
+#if defined(PROFILE_STREAMING)
+            while (channel_sync_addrs[i]->bytes_sent == 0 && *stopw == 0) {
+                invalidate_l1_cache();
+            }
+            if (*stopw != 0) {
+                return false;
+            }
+#else
             while (channel_sync_addrs[i]->bytes_sent == 0) {
                 invalidate_l1_cache();
             }
+#endif
+#if !defined(PROFILE_STREAMING)
             DeviceZoneScopedN("SYNC-ZONE-RECEIVER");
+#endif
+            if (link_clock_room(3)) {
+                link_clock_stamp();  // arrival (t1)
+            }
 
             channel_sync_addrs[i]->bytes_sent = 0;
             channel_sync_addrs[i]->receiver_ack = 0;
@@ -74,6 +139,7 @@ FORCE_INLINE void run_loop_iteration(
             }
         }
     }
+    return true;
 }
 
 static constexpr uint32_t MAX_CHANNELS = 8;
@@ -95,10 +161,18 @@ void kernel_main() {
     eth_setup_handshake(HANDSHAKE_ADDR, false);
 
     run_loop_iteration<false>(channel_addrs, channel_sync_addrs);
-    {
-        uint32_t i = 0;
-        for (uint32_t i = 0; i < NUM_MESSAGES; i++) {
-            run_loop_iteration<true>(channel_addrs, channel_sync_addrs);
+#if defined(PROFILE_STREAMING)
+    g_stop_addr = get_arg_val<uint32_t>(0);
+    volatile tt_l1_ptr uint32_t* stopw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(g_stop_addr);
+    while (*stopw == 0) {
+        if (!run_loop_iteration<true>(channel_addrs, channel_sync_addrs)) {
+            break;  // stopped mid-wait
         }
     }
+    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(g_stop_addr + 4) = 1;  // done, host polls this
+#else
+    for (uint32_t i = 0; i < NUM_MESSAGES; i++) {
+        run_loop_iteration<true>(channel_addrs, channel_sync_addrs);
+    }
+#endif
 }
