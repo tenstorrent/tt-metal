@@ -581,9 +581,8 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     const DFBSpecName DFB_SUM_1{"sum_1"};
     const DFBSpecName DFB_SUM_2{"sum_2"};
     const DFBSpecName DFB_EXP_MAX_DIFF{"exp_max_diff"};
-    const DFBSpecName DFB_PREV_SUM_2{"prev_sum_2"};
-    const DFBSpecName DFB_EXP_MAX_DIFF_2{"exp_max_diff_2"};
-    const DFBSpecName DFB_OUT_ACC_IM_2{"out_accumulate_im_2"};
+    // prev_sum_2 / exp_max_diff_2 / out_accumulate_im_2 are NOT allocated on Quasar's tile-counter budget:
+    // these tree-reduction temps reuse qk_im / out_m / out_im (idle during the tree phase). See the kernel.
 
     // ---- DFB specs + per-kernel endpoint bindings ----
     Group<DataflowBufferSpec> dfbs;
@@ -805,10 +804,6 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     add_compute_intermediate(DFB_SUM_2, "sum_2", stats_tile_size, statistics_tiles, stats_df, &stats_tile);
     add_compute_intermediate(
         DFB_EXP_MAX_DIFF, "exp_max_diff", stats_tile_size, statistics_tiles, stats_df, &stats_tile);
-    add_compute_intermediate(DFB_PREV_SUM_2, "prev_sum_2", stats_tile_size, statistics_tiles, stats_df, &stats_tile);
-    add_compute_intermediate(
-        DFB_EXP_MAX_DIFF_2, "exp_max_diff_2", stats_tile_size, statistics_tiles, stats_df, &stats_tile);
-    add_compute_intermediate(DFB_OUT_ACC_IM_2, "out_accumulate_im_2", im_tile_size, out_tiles, im_df, &im_tile);
 
     // ---- Tensor parameters + bindings ----
     Group<TensorParameter> tensor_params;
