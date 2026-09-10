@@ -21,6 +21,8 @@ the server runs (`readiness_vllm/server.log` line 18: `max_num_seqs: 32`).
 TTFT is unchanged: 17856 ms cold / 17644 ms warm against 17860 ms cold on the
 baseline, same harness, same prompt. Nothing here touches prefill.
 
+Confirmed under a real vLLM server, not just the harness — see "Serving".
+
 Three things were wrong, in descending size, and none of them was a precision
 or algorithm question:
 
@@ -580,6 +582,46 @@ Everything else passed: `full_model_trace_lifecycle`,
 (PCC 0.9999), `full_model_mixed_slots`, `check_conv_taps --multichip
 --active-mask --batch 32`, `multichip_traced_decode` (PCC 1.0), and both new
 tests.
+
+## Serving
+
+Everything above drives the generator or the adapter directly. All three layout
+bugs lived in code reached only through `generator_vllm` under a live scheduler,
+so the harnesses could not have found them and did not. This is a local vLLM
+server on the fixed code, configured to match `readiness_vllm/server.log`:
+`max_num_seqs 32`, `block_size 64`, `sample_on_device_mode decode_only`,
+`FABRIC_1D`, `trace_region_size 200000000`, the `qwen36_autoport` bundle via
+`EXTRA_MODELS_DIR`, and `QWEN36_PREFILL_PER_REQUEST=1` so the narrowed prefill is
+actually taken.
+
+`vllm bench serve`, isl 128, osl 64, 8 prompts, concurrency 8, temperature 0 —
+the same shape as the recorded readiness point:
+
+| | recorded (pre-change) | this branch | |
+| --- | ---: | ---: | ---: |
+| median TPOT, ms | 236.30 | **88.37** | **2.67x** |
+| mean TPOT, ms | 238.66 | 95.74 | 2.49x |
+| decode t/s/u | 4.23 | **11.32** | 2.67x |
+| completed / failed | 8 / 0 | **8 / 0** | |
+| output throughput, tok/s | 14.03 | 17.41 | 1.24x |
+
+The 88.37 ms median matches the 88.74 ms the standalone harness measures, so the
+harness number was not an artifact of bypassing the server.
+
+**But read the throughput row, not just the TPOT row.** This benchmark is
+TTFT-bound: 23.4 s of its 29.4 s is prefill, which nothing here touches, so
+end-to-end throughput moves 1.24x while decode latency moves 2.67x.
+`doc/kda_conv_swap` predicted exactly this ("a serving benchmark at this batch is
+prefill-bound, so end-to-end it would show far less than 1.694x until the prefill
+slot-scaling is addressed"). At a decode-dominated shape the win does reach
+aggregate throughput — isl 128, osl 512, concurrency 8 gives **59.51 tok/s**
+output at 95.34 ms median TPOT. Anyone quoting a single serving number for this
+model should say which shape it came from.
+
+Two caveats on the comparison. `max_model_len` was 4096 here against 262144 in
+the recorded run, to shorten startup; that changes cache and page-table setup, so
+the TTFT column (21467 -> 23376 ms) is not strictly comparable and is not a
+claim. And this is one run of each point, not a distribution.
 
 ## CI
 
