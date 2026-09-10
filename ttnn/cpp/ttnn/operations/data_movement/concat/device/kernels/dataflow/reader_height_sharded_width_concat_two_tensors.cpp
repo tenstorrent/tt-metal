@@ -5,10 +5,10 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "api/tensor/local_tensor_accessor.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
@@ -32,17 +32,17 @@ void kernel_main() {
     constexpr uint32_t group_stride_1 = input_stride_1 / groups;
 
     Noc noc;
-    // The output and both inputs are borrowed-memory buffers: each one's L1 storage is the shard of
-    // the tensor it stands for, which is why the accesses below are raw pointer arithmetic off the
-    // buffer's cursor rather than FIFO traffic.
-    DataflowBuffer output_dfb(dfb::output);
-    DataflowBuffer input_dfb_0(dfb::input_0);
-    DataflowBuffer input_dfb_1(dfb::input_1);
+    // The output and both inputs are this node's resident shards of the tensors they stand for,
+    // viewed through LocalTensorAccessors; the accesses below are raw pointer arithmetic off each
+    // shard's base address, and nothing here is FIFO traffic.
+    LocalTensorAccessor<uint8_t> output(tensor::output);
+    LocalTensorAccessor<uint8_t> input_0(tensor::input_0);
+    LocalTensorAccessor<uint8_t> input_1(tensor::input_1);
 
-    const uint32_t base_l1_write_addr = output_dfb.get_write_ptr();
+    const uint32_t base_l1_write_addr = output.get_bank_base_address();
 
     uint32_t l1_write_addr_0 = base_l1_write_addr + output_stick_offset;
-    const uint32_t l1_read_addr_0 = input_dfb_0.get_read_ptr() + input_start_0;
+    const uint32_t l1_read_addr_0 = input_0.get_bank_base_address() + input_start_0;
     noc.set_async_read_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
         UnicastEndpoint{},
         group_stick_size_0,
@@ -67,7 +67,7 @@ void kernel_main() {
     }
 
     uint32_t l1_write_addr_1 = base_l1_write_addr + output_stick_offset + group_stick_size_0;
-    const uint32_t l1_read_addr_1 = input_dfb_1.get_read_ptr() + input_start_1;
+    const uint32_t l1_read_addr_1 = input_1.get_bank_base_address() + input_start_1;
     noc.set_async_read_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
         UnicastEndpoint{},
         group_stick_size_1,

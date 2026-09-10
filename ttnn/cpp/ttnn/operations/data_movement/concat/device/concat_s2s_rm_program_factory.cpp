@@ -60,9 +60,6 @@ ttnn::device_operation::ProgramArtifacts ConcatS2SRMProgramFactory::create_progr
     // Program-scope resource names. Declared function-local (not at namespace scope) so that the
     // unity build, which concatenates every op's factory into one translation unit, cannot collide
     // these very generic identifiers across ops.
-    const DFBSpecName INPUT_0_DFB{"s2s_rm_input_0"};
-    const DFBSpecName INPUT_1_DFB{"s2s_rm_input_1"};
-    const DFBSpecName OUTPUT_DFB{"s2s_rm_output"};
     const TensorParamName INPUT_0{"input_0"};
     const TensorParamName INPUT_1{"input_1"};
     const TensorParamName OUTPUT{"output"};
@@ -70,43 +67,7 @@ ttnn::device_operation::ProgramArtifacts ConcatS2SRMProgramFactory::create_progr
     const auto& device = output.device();
 
     const uint32_t num_output_rows = output.padded_shape()[-2];
-    const tt::DataFormat dfb_data_format = datatype_to_dataformat_converter(output.dtype());
     const CoreRangeSet all_cores = inputs[0].get().shard_spec().value().grid;
-
-    // Each input's DFB borrows the input tensor's own shard memory: the kernel reaches tensor data
-    // through the buffer's read pointer, so the DFB *is* the tensor access.
-    const std::array<DFBSpecName, 2> input_dfb_names = {INPUT_0_DFB, INPUT_1_DFB};
-    const std::array<TensorParamName, 2> input_param_names = {INPUT_0, INPUT_1};
-
-    Group<DataflowBufferSpec> dataflow_buffers;
-    dataflow_buffers.reserve(num_input_tensors + 1);
-    for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
-        constexpr uint32_t num_input_num_units_per_shard_width = 1;
-        const ShardSpec shard_spec = inputs[input_id].get().shard_spec().value();
-        const uint32_t num_input_num_units_per_shard_height = shard_spec.shape[0];
-        const uint32_t num_input_units = num_input_num_units_per_shard_height * num_input_num_units_per_shard_width;
-        const uint32_t input_unit_size = shard_spec.shape[1] * inputs[input_id].get().element_size();
-        const uint32_t input_page_size = round_up_to_mul32(input_unit_size);
-
-        dataflow_buffers.push_back(DataflowBufferSpec{
-            .unique_id = input_dfb_names[input_id],
-            .entry_size = input_page_size,
-            .num_entries = num_input_units,
-            .data_format_metadata = dfb_data_format,
-            .borrowed_from = input_param_names[input_id],
-        });
-    }
-
-    const uint32_t num_output_units = output.shard_spec().value().shape[0];
-    const uint32_t output_unit_size = output.shard_spec().value().shape[1] * output.element_size();
-    const uint32_t output_page_size = round_up_to_mul32(output_unit_size);
-    dataflow_buffers.push_back(DataflowBufferSpec{
-        .unique_id = OUTPUT_DFB,
-        .entry_size = output_page_size,
-        .num_entries = num_output_units,
-        .data_format_metadata = dfb_data_format,
-        .borrowed_from = OUTPUT,
-    });
 
     const ShardSpec output_shard_spec = output.shard_spec().value();
     const uint32_t output_stick_size = output_shard_spec.shape[1] * output.element_size();
@@ -125,7 +86,7 @@ ttnn::device_operation::ProgramArtifacts ConcatS2SRMProgramFactory::create_progr
 
     // The four argument sets mirror the legacy positional lists one-for-one, so their values stay
     // diffable against the pre-port factory. The three buffer indices legacy carried in slots 0, 12
-    // and 13 are gone — they are DFB bindings now.
+    // and 13 are gone — they are tensor bindings now.
     const KernelSpec::CompileTimeArgs compile_time_args_0 = {
         {"input_stick_size_0", input_0_stick_size},
         {"input_stick_size_1", input_1_stick_size},
@@ -184,30 +145,13 @@ ttnn::device_operation::ProgramArtifacts ConcatS2SRMProgramFactory::create_progr
         "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
         "reader_height_sharded_width_concat_two_tensors.cpp";
 
-    // Both instances of the one source touch all three DFBs, and every touch is a raw read/write
-    // pointer peek — the kernel contains no reserve_back / push_back / wait_front / pop_front at
-    // all. Two role-free touchers per node is exactly enough to fill the validator's one-producer,
-    // one-consumer requirement, so bind one instance producer and the other consumer. The roles
-    // drive FIFO machinery this kernel never invokes, so on Gen1 the labels are cosmetic and the
-    // kernel code is untouched by the choice.
-    const auto make_dfb_bindings = [&](DFBEndpointType endpoint_type) {
-        return Group<DFBBinding>{
-            DFBBinding{
-                .dfb_spec_name = OUTPUT_DFB,
-                .accessor_name = "output",
-                .endpoint_type = endpoint_type,
-            },
-            DFBBinding{
-                .dfb_spec_name = INPUT_0_DFB,
-                .accessor_name = "input_0",
-                .endpoint_type = endpoint_type,
-            },
-            DFBBinding{
-                .dfb_spec_name = INPUT_1_DFB,
-                .accessor_name = "input_1",
-                .endpoint_type = endpoint_type,
-            },
-        };
+    // Both instances of the one source reach the output and both inputs as this node's resident
+    // shards, by base address only — the kernel carries no FIFO traffic at all — so each tensor is
+    // bound directly and the kernel views it through a LocalTensorAccessor.
+    const Group<TensorBinding> tensor_bindings{
+        TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"},
+        TensorBinding{.tensor_parameter_name = INPUT_0, .accessor_name = "input_0"},
+        TensorBinding{.tensor_parameter_name = INPUT_1, .accessor_name = "input_1"},
     };
 
     Group<KernelSpec> kernels;
@@ -223,14 +167,14 @@ ttnn::device_operation::ProgramArtifacts ConcatS2SRMProgramFactory::create_progr
         kernels.push_back(KernelSpec{
             .unique_id = reader_name,
             .source = KERNEL_SOURCE,
-            .dfb_bindings = make_dfb_bindings(DFBEndpointType::PRODUCER),
+            .tensor_bindings = tensor_bindings,
             .compile_time_args = reader_cta,
             .hw_config = ttnn::create_reader_datamovement_config(device.arch()),
         });
         kernels.push_back(KernelSpec{
             .unique_id = writer_name,
             .source = KERNEL_SOURCE,
-            .dfb_bindings = make_dfb_bindings(DFBEndpointType::CONSUMER),
+            .tensor_bindings = tensor_bindings,
             .compile_time_args = writer_cta,
             .hw_config = ttnn::create_writer_datamovement_config(device.arch()),
         });
@@ -256,13 +200,11 @@ ttnn::device_operation::ProgramArtifacts ConcatS2SRMProgramFactory::create_progr
         append_reader_writer_pair("", all_cores, compile_time_args_0, compile_time_args_1);
     }
 
-    // No kernel builds a TensorAccessor here, so no tensor is bound on a KernelSpec. The three
-    // parameters exist because the DFBs above borrow their memory, which is a use in its own right:
-    // each DFB's L1 address resolves at run time from the matching tensor argument.
+    // The three tensor parameters back the kernels' LocalTensorAccessors: each accessor's L1 base
+    // address resolves at run time from the matching tensor argument.
     ProgramSpec spec{
         .name = "concat_s2s_rm",
         .kernels = std::move(kernels),
-        .dataflow_buffers = std::move(dataflow_buffers),
         .tensor_parameters =
             {
                 TensorParameter{.unique_id = INPUT_0, .spec = inputs[0].get().tensor_spec()},
@@ -273,7 +215,7 @@ ttnn::device_operation::ProgramArtifacts ConcatS2SRMProgramFactory::create_progr
     };
 
     // The factory sets no runtime args at all, so ProgramRunArgs carries only the tensor arguments
-    // the borrowed DFBs resolve their addresses from.
+    // the kernels' LocalTensorAccessors resolve their addresses from.
     ProgramRunArgs run_args;
     run_args.tensor_args.emplace(INPUT_0, inputs[0].get());
     run_args.tensor_args.emplace(INPUT_1, inputs[1].get());

@@ -317,6 +317,18 @@ ttnn::device_operation::ProgramArtifacts ConcatS2STiledProgramFactory::create_pr
         .enable_32_bit_dest = fp32_dest_acc_en,
         .unpack_modes = std::move(unpack_modes),
     };
+    // The Gen1 config above is hand-built rather than helper-derived, so it carries no Gen2
+    // alternative of its own; on Quasar select ComputeGen2Config with the same three fields the
+    // Gen1 config sets (bfp_pack_precision_mode has no Gen2 counterpart and was left at its default).
+    ComputeHardwareConfig compute_hw = compute_hw_config;
+    if (inputs[0].get().device().arch() == tt::ARCH::QUASAR) {
+        // TODO(#52269): Quasar unpack_modes are copied from Gen1 and not yet optimized for Quasar.
+        compute_hw = ComputeGen2Config{
+            .fpu_math_fidelity = MathFidelity::HiFi4,
+            .enable_32_bit_dest = fp32_dest_acc_en,
+            .unpack_modes = compute_hw_config.unpack_modes,
+        };
+    }
 
     KernelSpec compute_spec{
         .unique_id = COMPUTE,
@@ -360,7 +372,7 @@ ttnn::device_operation::ProgramArtifacts ConcatS2STiledProgramFactory::create_pr
                 },
             },
         .compile_time_args = std::move(compute_compile_time_args),
-        .hw_config = std::move(compute_hw_config),
+        .hw_config = std::move(compute_hw),
     };
 
     Group<KernelSpec> kernels;
