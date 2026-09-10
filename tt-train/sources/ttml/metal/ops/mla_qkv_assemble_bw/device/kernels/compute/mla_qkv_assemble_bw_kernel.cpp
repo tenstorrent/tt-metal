@@ -30,7 +30,7 @@ void kernel_main() {
 
         // Head 0: copy the first head's Tr tiles into the accumulator (dst 0..Tr-1).
         cb_wait_front(cb_dkpe_in, Tr);
-        copy_tile_init(cb_dkpe_in);
+        copy_init(cb_dkpe_in);
         for (uint32_t w = 0U; w < Tr; ++w) {
             copy_tile(cb_dkpe_in, w, /* dst_idx */ w);
         }
@@ -39,7 +39,7 @@ void kernel_main() {
         // Heads 1..H-1: load each tile into dst[Tr] and add into dst[w].
         for (uint32_t h = 1U; h < n_heads; ++h) {
             cb_wait_front(cb_dkpe_in, Tr);
-            copy_tile_init(cb_dkpe_in);
+            copy_init(cb_dkpe_in);
             for (uint32_t w = 0U; w < Tr; ++w) {
                 constexpr uint32_t tmp_dst = Tr;
                 copy_tile(cb_dkpe_in, w, /* dst_idx */ tmp_dst);

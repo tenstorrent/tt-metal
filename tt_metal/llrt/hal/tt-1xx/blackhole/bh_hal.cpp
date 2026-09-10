@@ -492,6 +492,7 @@ void Hal::initialize_bh(
         dev_msgs::AddressableCoreType::ETH,
         dev_msgs::AddressableCoreType::PCIE,
         dev_msgs::AddressableCoreType::DRAM};
+    this->virtualizes_non_worker_cores_ = true;
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
     this->has_tile_counter_registers_ = false;
     this->supports_implicit_dfb_sync_ = false;

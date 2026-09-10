@@ -98,20 +98,41 @@ def create_tt_model(
     # Warm ttnn cache => skip the full HF weight load and build from .tensorbin. Hybrid: the few
     # host-consumed weights (token embedding, per-layer scalars/PLI) are served real from the
     # sidecar, the rest as dataless placeholders. Generalizes PR #50550 to gemma4 (#45400).
+    # Qualify the cache by mesh geometry BEFORE resolving cache_dir: ttnn.as_tensor
+    # reloads tensorbins as-is and ignores mesh_mapper, so a TP=4 cache built on
+    # MeshShape([2,4]) must not be reused on [1,4] (QB2). Setting cluster_shape here
+    # keeps the warm-cache marker (cache_dir) and the tensorbin path on the same
+    # directory instead of letting them diverge.
+    _worker_mesh = tuple(mesh_device.shape) if hasattr(mesh_device, "shape") else (1, 1)
+    model_args.cluster_shape = _worker_mesh
     cache_dir = model_args.weight_cache_path(dtype)
     # Resolved early so it can key the cache identity: gemma4 embeds each module's dtype in its
     # tensorbin FILENAME (attention/experts/shared_mlp/router *_{dtype} suffixes), so an edit to
     # precision_overrides.json changes which files a build needs. Without the precision in the
     # variant, a marker seeded under the old overrides would certify a warm build whose files do
     # not exist -- and as_tensor would persist placeholders for them. (#45400 review, finding B2)
-    _worker_mesh = tuple(mesh_device.shape) if hasattr(mesh_device, "shape") else (1, 1)
     _precision_for_variant = Gemma4Precision.load(model_path, _worker_mesh)
+    # The variant must also pin every knob that decides WHICH tensorbin FILENAMES a build needs, not
+    # only their dtype: a warm marker seeded before a filename change certifies a build whose files
+    # do not exist yet, and as_tensor then persists the dataless placeholders under the new names
+    # (weight_cache.py "Build options that change an as_tensor cache FILENAME ... must match
+    # exactly"). #50648 renamed the fused gate/up, .ws attention and .ws down-proj files without
+    # touching this identity and poisoned the Gemma-4-E4B caches on bh_p300 / bh_quietbox_2
+    # (#54831: 2085 of 2131 keys served as torch.empty and written to disk). Bump the layout tag
+    # whenever a cache filename scheme changes.
+    _cache_layout = {
+        "layout": "v2-fused-gate-up-ws",
+        "attn_dram_shard": os.environ.get("GEMMA4_ATTN_DRAM_SHARD", "1"),
+        "mlp_dram_shard": os.environ.get("GEMMA4_MLP_DRAM_SHARD", "1"),
+        "dram_cores": os.environ.get("GEMMA4_DRAM_CORES", "8"),
+    }
     cache_identity = dict(
         model_name=os.path.basename(str(model_path).rstrip("/")) or "gemma4",
         n_layers=model_args.num_hidden_layers,
         mesh_shape=_worker_mesh,
         build_variant={
             "precision": {k: str(v) for k, v in sorted(_precision_for_variant._overrides.items())},
+            "cache_layout": _cache_layout,
         },
     )
     loaded_real_weights = False
@@ -127,9 +148,8 @@ def create_tt_model(
 
     tensor_cache_path = str(cache_dir)
 
-    # Resolve per-module dtype overrides from precision_overrides.json. The
-    # mesh shape is the worker grid (rows x cols); a 1x1 mesh on a multi-device
-    # system still gets the 1x1 entry.
+    # Per-module dtype overrides from precision_overrides.json, resolved once
+    # above so the cache identity and the model share one value.
     precision = _precision_for_variant
 
     model = Gemma4Model(
@@ -201,7 +221,9 @@ def create_assistant_model(
     if state_dict is None:
         state_dict = Gemma4AssistantArgs.load_state_dict(assistant_path, dummy_weights=False)
 
-    tensor_cache_path = str(assistant_args.weight_cache_path(dtype))
+    mesh_shape = tuple(mesh_device.shape) if hasattr(mesh_device, "shape") else (1, 1)
+    assistant_args.cluster_shape = mesh_shape
+    tensor_cache_path = str(assistant_args.weight_cache_path(dtype, mesh_shape=mesh_shape))
 
     model = Gemma4AssistantModel(
         mesh_device=mesh_device,

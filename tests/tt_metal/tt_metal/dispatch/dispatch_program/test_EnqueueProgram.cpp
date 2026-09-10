@@ -232,7 +232,6 @@ void test_dummy_EnqueueProgram_with_runtime_args(
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program;
-    auto* device = mesh_device->get_devices()[0];
     auto eth_noc_xy = mesh_device->ethernet_core_from_logical_core(eth_core_coord);
 
     constexpr uint32_t num_runtime_args0 = 9;
@@ -270,7 +269,7 @@ void test_dummy_EnqueueProgram_with_runtime_args(
     Finish(cq);
 
     vector<uint32_t> dummy_kernel0_args_readback = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-        device->id(),
+        mesh_device->get_device_ids()[0],
         eth_noc_xy,
         MetalContext::instance().hal().get_dev_addr(
             tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED),
@@ -907,15 +906,15 @@ void test_basic_dispatch_functions(const std::shared_ptr<distributed::MeshDevice
     constexpr uint32_t k_LoopPerDev = 100;
 
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-    auto* device = mesh_device->get_devices()[0];
     log_info(tt::LogTest, "Running On Device {} CQ{}", mesh_device->id(), cq_id);
+    const auto device_id = mesh_device->get_device_ids()[0];
 
     // Alternate write patterns
     std::vector<uint32_t> src_data_1(k_DataSize / sizeof(uint32_t));
     std::vector<uint32_t> src_data_2(k_DataSize / sizeof(uint32_t));
     for (int i = 0; i < k_DataSize / sizeof(uint32_t); ++i) {
-        src_data_1[i] = (device->id() + rand()) * 0xdeadbeef;
-        src_data_2[i] = (device->id() + rand()) * 0xabcd1234;
+        src_data_1[i] = (device_id + rand()) * 0xdeadbeef;
+        src_data_2[i] = (device_id + rand()) * 0xabcd1234;
     }
     distributed::DeviceLocalBufferConfig l1_buffer_config{.page_size = k_PageSize, .buffer_type = BufferType::L1};
     distributed::DeviceLocalBufferConfig dram_buffer_config{.page_size = k_PageSize, .buffer_type = BufferType::DRAM};

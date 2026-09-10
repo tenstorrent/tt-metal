@@ -60,10 +60,12 @@ it is classified differently on different systems.
 | Whisper | WH N150, BH P150 |
 | Flux.1-schnell | BH QuietBox 2 |
 | Flux.1-dev | BH QuietBox 2, BH Single Galaxy |
+| Flux.2-dev | BH QuietBox 2, BH Single Galaxy |
 | Wan2.2-T2V-A14B | WH Galaxy, BH SC4 |
 | Wan2.2-I2V-A14B | WH Galaxy, BH SC4 |
 | Z-Image-Turbo | BH QuietBox 2 |
 | TT-DiT (shared) | WH N150, BH QuietBox 2 |
+| TT-DiT encoders (shared) | WH LLMBox |
 | TT-Transformers (shared) | WH LLMBox |
 | ResNet-50 | WH N150, WH LLMBox, BH P150b |
 ## Tier 2 Models

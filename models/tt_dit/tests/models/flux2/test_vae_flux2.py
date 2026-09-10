@@ -14,6 +14,7 @@ from ....parallel.config import Flux2VaeParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils import tensor
 from ....utils.check import assert_quality
+from .device_params import line_params_flux2, single_device_params_flux2
 
 _LAYERS_PER_BLOCK = 1  # pruned from pretrained (2) to keep host run fast
 
@@ -100,18 +101,15 @@ def prep_data(
 
 
 @pytest.mark.parametrize(
-    "mesh_device",
+    "mesh_device, device_params",
     [
-        pytest.param((1, 1), id="1x1"),
-        pytest.param((1, 8), id="1x8"),
-        pytest.param((4, 8), id="4x8"),
+        [(1, 1), single_device_params_flux2],
+        [(2, 2), line_params_flux2],
+        [(1, 8), line_params_flux2],
+        [(4, 8), line_params_flux2],
     ],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 65536}],
-    indirect=True,
+    ids=["1x1", "2x2", "1x8", "4x8"],
+    indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
     ("batch_size", "height", "width"),

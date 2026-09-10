@@ -74,6 +74,8 @@ max-daily-ai-credits: 10000
 if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
 "on":
   pull_request:
+    branches:
+    - main
     paths-ignore:
     - "*.md"
     - docs/**

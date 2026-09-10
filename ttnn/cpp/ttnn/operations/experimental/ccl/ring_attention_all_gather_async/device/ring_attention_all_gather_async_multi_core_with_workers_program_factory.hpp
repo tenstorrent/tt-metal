@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ring_attention_all_gather_async_device_operation_types.hpp"
+#include "kernels/ring_attention_rank_mapping.hpp"
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -14,6 +15,20 @@
 #include <vector>
 
 namespace ttnn::experimental::prim {
+
+// These indices/arg-slots must track the factory's kernel push order and runtime-arg layout in
+// lockstep; override_runtime_arguments() re-applies the semaphore address at these positions.
+namespace ring_attention_all_gather_async_dynamic {
+inline constexpr uint32_t kNumSendersPerLink = 2;
+inline constexpr uint32_t kReaderForwardKernelIdx = 0;
+inline constexpr uint32_t kWriterForwardKernelIdx = 1;
+inline constexpr uint32_t kReaderBackwardKernelIdx = 2;
+inline constexpr uint32_t kWriterBackwardKernelIdx = 3;
+inline constexpr uint32_t kReaderSemaphoreArg = 2;
+inline constexpr uint32_t kWriterSemaphoreArg = 4;
+inline constexpr uint32_t kForwardSemaphoreIdx = 1;
+inline constexpr uint32_t kBackwardSemaphoreIdx = 0;
+}  // namespace ring_attention_all_gather_async_dynamic
 
 struct RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory {
     using operation_attributes_t = RingAttentionAllGatherAsyncParams;
@@ -27,10 +42,24 @@ struct RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory {
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value,
         const ttnn::MeshCoordinateRangeSet& tensor_coords);
+
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn {
+
+struct RingAttentionRankMapping {
+    bool full_mesh = false;
+    ttnn::ccl::snake_ring::Orientation orientation = ttnn::ccl::snake_ring::Orientation::Row;
+    uint32_t mesh_rows = 0;
+    uint32_t mesh_cols = 0;
+};
 
 // Sparse cyclic predecessor exchange used by chunked GPT-OSS sliding attention.
 // Each device sends one local tile-row range to its logical next device and
@@ -42,6 +71,23 @@ struct RingAttentionNeighborHaloConfig {
     // predecessor tail back to device 0 over the backward fabric direction.
     bool send_backward = false;
     uint32_t unicast_hops = 1;
+
+    // Trace-safe metadata path. send_to_next_start_Ht above is linear in the chunk index, so on the
+    // scalar path the host rewrites the halo page ranges every dispatch — something a captured trace
+    // never replays. When kv_actual_isl is set, the halo kernels read it on-device and recompute the
+    // start themselves, making one capture valid for every chunk. slot_id also selects the flattened
+    // cache batch on-device. The remaining fields are static inputs to those derivations;
+    // source_device selects which group.s tail is read.
+    const ttnn::Tensor* slot_id = nullptr;
+    const ttnn::Tensor* kv_actual_isl = nullptr;
+    uint32_t kv_cache_num_layers = 1;
+    uint32_t kv_cache_layer_idx = 0;
+    uint32_t q_local_tile_rows = 0;
+    uint32_t halo_tile_rows = 0;
+    uint32_t source_device = 0;
+
+    bool derives_cache_batch_on_device() const { return slot_id != nullptr; }
+    bool derives_start_on_device() const { return kv_actual_isl != nullptr; }
 };
 
 namespace ring_attention_all_gather_async_detail {
@@ -49,20 +95,25 @@ namespace ring_attention_all_gather_async_detail {
 // All-gather reader runtime-arg layout: [0]=dim, [1]=ring_size, [2]=out_ready_sem,
 // followed by one tensor-descriptor block per gathered input.
 constexpr uint32_t kReaderRuntimeArgHeaderCount = 3;
+constexpr uint32_t kReaderReadySemaphoreFieldOffset = 2;
 // All-gather writer runtime-arg layout: [0]=dim, [1]=sem_noc0_x, [2]=sem_noc0_y, [3]=ring_size,
 // [4]=out_ready_sem, followed by one tensor-descriptor block per gathered input.
 constexpr uint32_t kWriterRuntimeArgHeaderCount = 5;
-// Per-input fields: Wt, Ht, out_Wt, out_Ht, batch_head_size, tile_id_start, tile_id_end,
-// input_batch_base (offset 7), valid_pages_per_batch_head (offset 8), worker link (offset 9).
-constexpr uint32_t kTensorDescriptorFieldCount = 10;
-constexpr uint32_t kInputBatchBaseFieldOffset = 7;
+constexpr uint32_t kWriterReadySemaphoreFieldOffset = 4;
+// Per-input scalar fields: Wt, Ht, out_Wt, out_Ht, batch_head_size,
+// input_batch_base (offset 5), valid_pages_per_batch_head (offset 6), and worker link (offset 7).
+// Metadata-enabled kernels append input_cache_batch_extent (offset 8).
+constexpr uint32_t kTensorDescriptorFieldCount = 8;
+constexpr uint32_t kMetadataTensorDescriptorFieldCount = kTensorDescriptorFieldCount + 1;
+constexpr uint32_t kInputBatchBaseFieldOffset = 5;
 // Per-(batch,head) page count each worker is allowed to gather. Defaults to the full input
 // (input_Ht * input_Wt); the fused ring_joint_sdpa path patches it down to the logical_n-valid
 // slab prefix so the gather moves only kv_actual-sized data, not the whole oversized cache.
-constexpr uint32_t kValidPagesFieldOffset = 8;
-constexpr uint32_t kWorkerLinkFieldOffset = 9;
+constexpr uint32_t kValidPagesFieldOffset = 6;
 constexpr uint32_t kNeighborReaderRuntimeArgHeaderCount = 1;
 constexpr uint32_t kNeighborReaderTensorDescriptorFieldCount = 5;
+constexpr uint32_t kNeighborReaderMetadataTensorDescriptorFieldCount =
+    kNeighborReaderTensorDescriptorFieldCount + 1;
 constexpr uint32_t kNeighborReaderInputTileStartFieldOffset = 2;
 constexpr uint32_t kNeighborReaderInputTileEndFieldOffset = 3;
 constexpr uint32_t kNeighborReaderInputBatchBaseFieldOffset = 4;
@@ -73,9 +124,48 @@ constexpr uint32_t kNeighborWriterInputTileStartFieldOffset = 2;
 constexpr uint32_t kNeighborWriterInputTileEndFieldOffset = 3;
 constexpr uint32_t kNeighborWriterInputOriginPageFieldOffset = 4;
 
+constexpr uint32_t kRingDirectionCount = 2;
+
+// Kernel order appended by ring_attention_all_gather_async_multi_core_with_workers_helper.
+// Fused consumers add these offsets to the number of kernels they emit before the all-gather.
+constexpr uint32_t kReaderForwardKernelOffset = 0;
+constexpr uint32_t kWriterForwardKernelOffset = 1;
+constexpr uint32_t kReaderBackwardKernelOffset = 2;
+constexpr uint32_t kWriterBackwardKernelOffset = 3;
+
+// Trace-safe metadata block (present only when the caller passes slot_id), appended to the READER's
+// args after the per-input tensor descriptors AND the input/output tensor-accessor address words --
+// one accessor word each per input, consumed by make_tensor_accessor_tuple.
+//   [+0] slot_id buffer address        [+1] kv_actual_isl buffer address
+//   [+2] chunk_local_tiles             [+3] kv_cache_num_layers      [+4] kv_cache_layer_idx
+// The reader recomposes the gathered slot on-device as slot_id[0] * num_layers + layer_idx.
+//
+// Buffer addresses are auto-patched on cache hits by the descriptor framework, but the two LAYER
+// scalars are plain values: a caller that shares ONE cached program across layers (rather than
+// hashing the layer index, as ring_joint_sdpa does) MUST re-patch kReaderMetadataLayerIdxOffset per
+// dispatch, or every layer gathers the slot of whichever layer took the cache miss.
+constexpr uint32_t kReaderAccessorWordsPerInput = 2;
+constexpr uint32_t kReaderMetadataSlotIdOffset = 0;
+constexpr uint32_t kReaderMetadataKvActualOffset = 1;
+constexpr uint32_t kReaderMetadataChunkLocalTilesOffset = 2;
+constexpr uint32_t kReaderMetadataNumLayersOffset = 3;
+constexpr uint32_t kReaderMetadataLayerIdxOffset = 4;
+
+// The metadata block is appended only on the metadata path, and that is exactly the path where every
+// per-input descriptor carries the extra input_cache_batch_extent word (offset 8). So the block always
+// sits behind kMetadataTensorDescriptorFieldCount-wide descriptors -- using the plain
+// kTensorDescriptorFieldCount here lands num_inputs words short, silently re-patching the wrong slot.
+inline uint32_t reader_metadata_base(uint32_t num_inputs) {
+    return kReaderRuntimeArgHeaderCount +
+           num_inputs * (kMetadataTensorDescriptorFieldCount + kReaderAccessorWordsPerInput);
+}
+
 inline uint32_t input_batch_base_pages(uint32_t batch_idx, uint32_t num_heads, uint32_t Ht, uint32_t Wt) {
     return batch_idx * num_heads * Ht * Wt;
 }
+
+bool uses_output_bank_owned_schedule(
+    const std::vector<Tensor>& input_tensors, const std::vector<Tensor>& output_tensors, int32_t dim);
 
 }  // namespace ring_attention_all_gather_async_detail
 
@@ -83,10 +173,10 @@ inline uint32_t input_batch_base_pages(uint32_t batch_idx, uint32_t num_heads, u
 // ring-attention all-gather worker pipeline to `desc`.
 //
 // `desc` may already contain entries from a parent op (e.g., ring_joint_sdpa).
-// Semaphore IDs assigned by this helper start at `desc.semaphores.size()` at
-// entry and are sequential. The descriptor framework auto-patches buffer
-// addresses on cache hits so callers do not need to retain kernel handles or
-// implement an override_runtime_arguments path.
+// Semaphore IDs are selected per worker core without colliding with existing
+// descriptors. The descriptor framework auto-patches buffer addresses on cache
+// hits so callers do not need to retain kernel handles or implement an
+// override_runtime_arguments path.
 void ring_attention_all_gather_async_multi_core_with_workers_helper(
     tt::tt_metal::ProgramDescriptor& desc,
     const std::vector<Tensor>& input_tensor,
@@ -97,6 +187,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     int32_t dim,
     uint32_t num_links,
     uint32_t ring_size,
+    // Communication-order rank. In full-mesh mode this must be the snake transport rank,
+    // never the canonical row-major tensor rank.
     uint32_t ring_index,
     ttnn::ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
@@ -114,23 +206,28 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     // std::nullopt => gather the full input (default). The fused ring_joint_sdpa path also re-patches
     // this per dispatch on cache hits (see apply_ring_joint_scalar_runtime_args).
     std::optional<uint32_t> gather_valid_Ht = std::nullopt,
-    // Trace-safe slot select: when set (with input_batch_slice_idx engaged), the readers recompute the
-    // single-slot gather offset from slot = slot_id[0] on-device, so a captured trace replays across
-    // cache slots. slot_id / kv_actual_isl are 1-element uint32 DRAM tensors (were metadata[0] /
-    // metadata[1]); the reader uses slot_id[0] for the gather slot and kv_actual_isl[0] for the gather
-    // extent, and the writer uses kv_actual_isl[0]. std::nullopt => take the host input_batch_base
-    // (default; existing callers unaffected). Both must be supplied together on the metadata path.
+    // Optional trace-safe slot selection. When present, slot_id[0] replaces the host-provided cache slot.
+    // It requires kv_actual_isl because the reader must also derive the valid gather extent on-device.
     std::optional<Tensor> slot_id = std::nullopt,
     std::optional<Tensor> kv_actual_isl = std::nullopt,
-    // Per-device Q slab in tiles (metadata path only): lets the reader/writer recompute the gather extent
-    // (gather_valid_Ht) from kv_actual_isl[0] on-device, so the gather stays bounded even when the host
-    // logical_n is a placeholder. Unused when slot_id is absent.
+    // kv_actual_isl is an independent 1-element uint32 DRAM tensor containing the trace-safe KV extent.
+    // With chunk_local_tiles, it lets reader and writer derive gather_valid_Ht on-device even when no
+    // device-resident slot selection is needed. std::nullopt keeps the host gather extent.
     uint32_t chunk_local_tiles = 0,
     // (user, layer)-major KV-cache batch dim (metadata path only): the reader computes the gathered
     // cache slot as slot * kv_cache_num_layers + kv_cache_layer_idx (slot = slot_id[0]), matching
     // update_padded_kv_cache. Defaults (1, 0) reduce to slot, so single-layer callers are unaffected.
     uint32_t kv_cache_num_layers = 1,
-    uint32_t kv_cache_layer_idx = 0);
+    uint32_t kv_cache_layer_idx = 0,
+    // Even-ring split-forwarding gate. The parent fused op owns this protocol decision: a fused
+    // consumer must implement the split-shard second-half wait (RingSDPAOpReceiver) to enable it.
+    // The helper still applies the legacy even-ring topology/size gate on top, so standalone
+    // callers retain their prior behavior with the default.
+    bool split_forwarding_enabled = true,
+    // Opt-in two-stage fused readiness: every received shard signals once at its row midpoint and
+    // once when complete. Only consumers that interpret the doubled semaphore protocol may enable it.
+    bool partial_readiness_enabled = false,
+    RingAttentionRankMapping rank_mapping = {});
 
 void ring_attention_neighbor_halo_exchange_helper(
     tt::tt_metal::ProgramDescriptor& desc,

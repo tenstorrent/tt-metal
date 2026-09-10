@@ -10,6 +10,9 @@ import ttnn
 from models.common.auto_compose import to_torch_auto_compose
 from models.common.modules.sampling.sampling_1d import Sampling1D, Sampling1DConfig, _resolve_sampling1d_config
 
+# 1D module suites target the T3K; skip when the host system is a Galaxy.
+pytestmark = pytest.mark.usefixtures("skip_on_galaxy_system")
+
 # ---------------------------------------------------------------------------
 # Model name constants (match test_mlp_1d.py naming convention)
 # ---------------------------------------------------------------------------

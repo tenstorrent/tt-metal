@@ -825,14 +825,13 @@ void RunTestIEth(
 
 // Run tests for host-side sanitization (uses functions that are from watcher_server.hpp).
 void CheckHostSanitization(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    auto* device = mesh_device->get_devices()[0];
     // Try reading from a core that doesn't exist
     constexpr CoreCoord core = {99, 99};
     uint64_t addr = 0;
     uint32_t sz_bytes = 4;
     try {
-        [[maybe_unused]] auto data =
-            tt::tt_metal::MetalContext::instance().get_cluster().read_core(device->id(), core, addr, sz_bytes);
+        [[maybe_unused]] auto data = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+            mesh_device->get_device_ids()[0], core, addr, sz_bytes);
     } catch (std::runtime_error& e) {
         const std::string expected = fmt::format("Host watcher: bad {} NOC coord {}\n", "read", core.str());
         const std::string error = std::string(e.what());

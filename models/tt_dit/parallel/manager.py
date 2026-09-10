@@ -6,7 +6,7 @@ import torch
 
 import ttnn
 
-from ..utils.tensor import bf16_tensor, local_device_to_torch
+from ..utils.tensor import local_device_to_torch
 
 
 class CCLManager:
@@ -139,7 +139,13 @@ class CCLManager:
         return dim
 
     def get_rs_ping_pong_buffer(
-        self, shape, dim, mesh_axis, return_output_buffer: bool = True, return_intermediate: bool = True
+        self,
+        shape,
+        dim,
+        mesh_axis,
+        return_output_buffer: bool = True,
+        return_intermediate: bool = True,
+        device_synchronize: bool = True,
     ):
         """
         Get or create ping pong buffers for reduce scatter operations.
@@ -160,7 +166,8 @@ class CCLManager:
         # Create buffers if not cached
         if cache_key not in self._ping_pong_buffer_cache:
             # Synchronize devices to ensure all are ready to allocate and proceed
-            ttnn.synchronize_device(self.mesh_device)
+            if device_synchronize:
+                ttnn.synchronize_device(self.mesh_device)
             # Create two buffers for ping pong
             buffers = []
             output_buffer_shape = list(shape)
@@ -174,13 +181,28 @@ class CCLManager:
             if self.topology == ttnn.Topology.Linear:
                 intermediate_buffer_shape[0] *= 2
             for _ in range(2):
+                # Device-native, uninitialized allocation: these scratch ping-pong
+                # buffers are fully overwritten by the reduce-scatter op, so no
+                # zero-init is needed.
                 intermediate_buffer = (
-                    bf16_tensor(torch.empty(intermediate_buffer_shape), device=self.mesh_device)
+                    ttnn.allocate_tensor_on_device(
+                        ttnn.Shape(intermediate_buffer_shape),
+                        ttnn.bfloat16,
+                        ttnn.TILE_LAYOUT,
+                        self.mesh_device,
+                        ttnn.DRAM_MEMORY_CONFIG,
+                    )
                     if return_intermediate
                     else None
                 )
                 output_buffer = (
-                    bf16_tensor(torch.empty(output_buffer_shape), device=self.mesh_device)
+                    ttnn.allocate_tensor_on_device(
+                        ttnn.Shape(output_buffer_shape),
+                        ttnn.bfloat16,
+                        ttnn.TILE_LAYOUT,
+                        self.mesh_device,
+                        ttnn.DRAM_MEMORY_CONFIG,
+                    )
                     if return_output_buffer
                     else None
                 )
@@ -188,7 +210,8 @@ class CCLManager:
 
             self._ping_pong_buffer_cache[cache_key] = buffers
             self._ping_pong_buffer_indices[cache_key] = 0
-            ttnn.synchronize_device(self.mesh_device)
+            if device_synchronize:
+                ttnn.synchronize_device(self.mesh_device)
 
         # Get current buffer and alternate index
         current_idx = self._ping_pong_buffer_indices[cache_key]
@@ -196,7 +219,7 @@ class CCLManager:
 
         return self._ping_pong_buffer_cache[cache_key][current_idx]
 
-    def get_ag_ping_pong_buffer(self, shape, dim, mesh_axis, dtype=ttnn.bfloat16):
+    def get_ag_ping_pong_buffer(self, shape, dim, mesh_axis, dtype=ttnn.bfloat16, device_synchronize=True):
         """
         Get or create ping pong buffers for all gather operations.
         Caches buffers based on shape, dim, and mesh_axis.
@@ -216,24 +239,28 @@ class CCLManager:
         # Create buffers if not cached
         if cache_key not in self._ping_pong_buffer_cache:
             # Synchronize devices to ensure all are ready to allocate and proceed
-            ttnn.synchronize_device(self.mesh_device)
+            if device_synchronize:
+                ttnn.synchronize_device(self.mesh_device)
             # Create two buffers for ping pong
             buffers = []
             output_buffer_shape = list(shape)
             output_buffer_shape[dim] *= self.mesh_device.shape[mesh_axis]  # All gather increases size
             for _ in range(2):
-                output_buffer = ttnn.from_torch(
-                    torch.empty(output_buffer_shape),
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=dtype,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    device=self.mesh_device,
+                # Device-native, uninitialized allocation: the all-gather fully
+                # overwrites this buffer, so no zero-init is needed.
+                output_buffer = ttnn.allocate_tensor_on_device(
+                    ttnn.Shape(output_buffer_shape),
+                    dtype,
+                    ttnn.TILE_LAYOUT,
+                    self.mesh_device,
+                    ttnn.DRAM_MEMORY_CONFIG,
                 )
                 buffers.append(output_buffer)
 
             self._ping_pong_buffer_cache[cache_key] = buffers
             self._ping_pong_buffer_indices[cache_key] = 0
-            ttnn.synchronize_device(self.mesh_device)
+            if device_synchronize:
+                ttnn.synchronize_device(self.mesh_device)
 
         # Get current buffer and alternate index
         current_idx = self._ping_pong_buffer_indices[cache_key]
@@ -317,7 +344,7 @@ class CCLManager:
         self._strided_ag_mm_sem_idx[cache_key] = 1 - cur_idx
         return self._strided_ag_mm_sem_cache[cache_key][cur_idx]
 
-    def get_fused_norm_stats_buffer(self, key, create_buffer):
+    def get_fused_norm_stats_buffer(self, key, create_buffer, device_synchronize=True):
         """Own the ping-pong pool + lifetime of the fused distributed-norm op's persistent
         stats (all-gather scratch) buffer.
 
@@ -340,7 +367,7 @@ class CCLManager:
             # Barrier before first use: ensure every device has allocated the persistent
             # stats buffer (and its DRAM scratch is live) before any device launches the op
             # and writes/atomic-incs into a peer's copy over fabric.
-            if entry["bufs"][0] is not None:
+            if entry["bufs"][0] is not None and device_synchronize:
                 ttnn.synchronize_device(self.mesh_device)
         bufs = entry["bufs"]
         if bufs[0] is None:
@@ -648,7 +675,7 @@ class CCLManager:
         return self.barrier_semaphores[mesh_axis][cur_idx]
 
     def get_np_ping_pong_buffer(
-        self, input_shape, dims, pad_left, pad_right, dtype=ttnn.bfloat16, t_front_pad: int = 0
+        self, input_shape, dims, pad_left, pad_right, dtype=ttnn.bfloat16, t_front_pad: int = 0, device_synchronize=True
     ):
         """
         Get or create ping pong buffers for neighbor pad operations.
@@ -674,21 +701,26 @@ class CCLManager:
         cache_key = ("np", tuple(output_shape), dtype)
 
         if cache_key not in self._ping_pong_buffer_cache:
-            ttnn.synchronize_device(self.mesh_device)
+            if device_synchronize:
+                ttnn.synchronize_device(self.mesh_device)
             buffers = []
             for _ in range(2):
-                output_buffer = ttnn.from_torch(
-                    torch.zeros(output_shape),
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    dtype=dtype,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    device=self.mesh_device,
+                # neighbor_pad relies on zeroed boundary-pad regions, so this buffer
+                # must be zero-initialized.
+                output_buffer = ttnn.allocate_tensor_on_device(
+                    ttnn.Shape(output_shape),
+                    dtype,
+                    ttnn.ROW_MAJOR_LAYOUT,
+                    self.mesh_device,
+                    ttnn.DRAM_MEMORY_CONFIG,
                 )
+                ttnn.fill(output_buffer, 0.0, output_tensor=output_buffer)
                 buffers.append(output_buffer)
 
             self._ping_pong_buffer_cache[cache_key] = buffers
             self._ping_pong_buffer_indices[cache_key] = 0
-            ttnn.synchronize_device(self.mesh_device)
+            if device_synchronize:
+                ttnn.synchronize_device(self.mesh_device)
 
         current_idx = self._ping_pong_buffer_indices[cache_key]
         self._ping_pong_buffer_indices[cache_key] = 1 - current_idx

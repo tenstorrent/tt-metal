@@ -2937,22 +2937,15 @@ class TtModelArgs:
         )
 
     def create_tokenizer(self):
-        """Create and return a Tokenizer instance based on the checkpoint type."""
-        if self.checkpoint_type == CheckpointType.Meta:
-            # Use the Meta Tokenizer
-            from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
+        """Create and return a HuggingFace tokenizer."""
+        from transformers import AutoTokenizer
 
-            return Tokenizer(self.tokenizer_path)
-        else:
-            # Create a HuggingFace AutoTokenizer
-            from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH)
 
-            tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH)
-
-            # Add meta-compatible stop token list to the HF tokenizer
-            if not "stop_tokens" in tokenizer.__dict__:
-                tokenizer.stop_tokens = [tokenizer.eos_token_id]
-            return tokenizer
+        # Add meta-compatible stop token list to the HF tokenizer
+        if not "stop_tokens" in tokenizer.__dict__:
+            tokenizer.stop_tokens = [tokenizer.eos_token_id]
+        return tokenizer
 
     def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True, add_special_tokens=True):
         if instruct:

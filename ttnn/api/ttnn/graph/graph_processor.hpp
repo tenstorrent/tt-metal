@@ -11,9 +11,12 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <filesystem>
 #include <mutex>
+#include <optional>
 #include <stack>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <any>
@@ -161,7 +164,17 @@ private:
     template <typename T>
     void end_function_process(const std::vector<T>& tensor_vec);
 
-    void track_function_end_impl();
+    // Appends the function_end vertex for the innermost open scope and returns its node id, so
+    // callers can decorate it. Does not pop `current_op_id`.
+    node_id track_function_end_impl();
+
+    // Closes the innermost open scope, marking its function_end aborted with `reason`.
+    // Callers must hold `mutex` and must have checked has_open_function().
+    void abort_open_function_impl(std::string_view reason);
+
+    // Whether a function_start is open, i.e. whether `current_op_id` holds more than the
+    // capture_start sentinel it is seeded with. Callers must hold `mutex`.
+    bool has_open_function() const { return current_op_id.size() > 1; }
 
     void clean_hook();
 
@@ -173,12 +186,22 @@ public:
 
     static nlohmann::json end_graph_capture_to_file(const std::filesystem::path& report_path);
 
+    static bool has_active_instance();
+    static void set_pending_program_factory(std::string type, std::size_t index, bool cache_hit);
+
     // Detailed buffer tracing control
     static void enable_detailed_buffer_tracing();
     static void disable_detailed_buffer_tracing();
     static bool is_detailed_buffer_tracing_enabled();
 
 private:
+    struct PendingProgramFactory {
+        std::string type;
+        std::size_t index = 0;
+        bool cache_hit = false;
+    };
+    static thread_local std::optional<PendingProgramFactory> pending_program_factory_;
+
     static std::atomic<bool> capture_detailed_buffer_tracing_;
 };
 

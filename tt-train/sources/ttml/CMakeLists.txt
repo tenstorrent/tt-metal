@@ -418,8 +418,8 @@ target_link_libraries(
 
 target_include_directories(ttml_pch PRIVATE ${PROJECT_SOURCE_DIR})
 
-if(COMMAND tt_disable_ccache_for_pch)
-    tt_disable_ccache_for_pch(ttml_pch)
+if(COMMAND tt_configure_ccache_for_pch)
+    tt_configure_ccache_for_pch(ttml_pch)
 endif()
 
 target_precompile_headers(ttml REUSE_FROM ttml_pch)

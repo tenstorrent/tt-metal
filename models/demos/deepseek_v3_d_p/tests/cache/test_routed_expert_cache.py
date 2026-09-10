@@ -207,7 +207,7 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
     # === Path 2: Cold Cache ===
     init_checker(CACHE_DIR)
     assert not TtRoutedExpert.check_cache_complete(
-        CACHE_DIR, "routed_expert", experts_per_chip
+        CACHE_DIR, "routed_expert", experts_per_chip, weights_dtype
     ), "Cache should be empty before build"
 
     logger.info(f"Building cache to {CACHE_DIR}")
@@ -225,7 +225,7 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
 
     init_checker(CACHE_DIR)
     assert TtRoutedExpert.check_cache_complete(
-        CACHE_DIR, "routed_expert", experts_per_chip
+        CACHE_DIR, "routed_expert", experts_per_chip, weights_dtype
     ), "Cache should be complete after build"
 
     profiler.start("cold_load")
@@ -289,3 +289,54 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
 
     assert passed_cold, f"Cold cache mismatch: PCC={pcc_cold}"
     assert passed_warm, f"Warm cache mismatch: PCC={pcc_warm}"
+
+
+# Host-only, pure filename logic. as_tensor stamps the requested dtype into the tensorbin name, so a
+# cache built at bfloat4_b must read as INCOMPLETE for a bfloat8_b request -- otherwise the empty
+# placeholder is loaded as the weights and the model reports a cache hit while running on nothing.
+# Same reasoning as TtIndexer.check_cache_complete.
+def _touch_expert_bin(cache_dir, prefix, local_idx, proj, dtype, layout=ttnn.TILE_LAYOUT):
+    # Reproduce the exact name as_tensor writes: core.py appends `_dtype_{dtype.name}_layout_{layout.name}`.
+    (cache_dir / f"{prefix}.local_{local_idx}_{proj}_dtype_{dtype.name}_layout_{layout.name}.tensorbin").touch()
+
+
+def test_routed_expert_check_cache_complete_is_dtype_aware(tmp_path):
+    from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
+
+    prefix, experts_per_chip = "routed_expert", 2
+
+    def write(dtype):
+        for f in tmp_path.glob("*.tensorbin"):
+            f.unlink()
+        for idx in range(experts_per_chip):
+            for proj in ("gate", "up", "down"):
+                _touch_expert_bin(tmp_path, prefix, idx, proj, dtype)
+        init_checker(tmp_path)  # re-scan: the checker caches the directory listing
+
+    # A complete bf4 cache is complete for bf4 ...
+    write(ttnn.bfloat4_b)
+    assert TtRoutedExpert.check_cache_complete(
+        tmp_path, prefix, experts_per_chip, ttnn.bfloat4_b
+    ), "bfloat4_b cache must be complete for a bfloat4_b request"
+
+    # ... and NOT for bf8, which is the whole point: the bf8 tensorbins do not exist.
+    assert not TtRoutedExpert.check_cache_complete(
+        tmp_path, prefix, experts_per_chip, ttnn.bfloat8_b
+    ), "bfloat4_b-only cache must fail a bfloat8_b completeness check"
+
+    # A superset cache (both dtypes on disk, as a regenerated cache carries) satisfies either.
+    for idx in range(experts_per_chip):
+        for proj in ("gate", "up", "down"):
+            _touch_expert_bin(tmp_path, prefix, idx, proj, ttnn.bfloat8_b)
+    init_checker(tmp_path)
+    for dtype in (ttnn.bfloat4_b, ttnn.bfloat8_b):
+        assert TtRoutedExpert.check_cache_complete(
+            tmp_path, prefix, experts_per_chip, dtype
+        ), f"superset cache must stay complete for {dtype.name}"
+
+    # One missing projection at the requested dtype is still incomplete.
+    (tmp_path / f"{prefix}.local_1_down_dtype_{ttnn.bfloat8_b.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin").unlink()
+    init_checker(tmp_path)
+    assert not TtRoutedExpert.check_cache_complete(
+        tmp_path, prefix, experts_per_chip, ttnn.bfloat8_b
+    ), "a missing projection at the requested dtype must read as incomplete"

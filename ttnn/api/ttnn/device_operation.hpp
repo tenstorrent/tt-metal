@@ -7,6 +7,8 @@
 #include <concepts>
 #include <exception>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/overloaded.hpp>
 #include "ttnn/tensor/tensor.hpp"
@@ -23,6 +25,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt-metalium/experimental/inspector.hpp>
+#include <internal/graph_function_abort.hpp>
 #include <type_traits>
 #include "ttnn/mesh_device_operation_adapter.hpp"
 #include "ttnn/operation_concepts.hpp"
@@ -56,6 +59,15 @@ template <typename... Ts>
     return table[i];
 }
 
+inline bool graph_capture_blocks_dispatch() {
+    if (auto hook = tt::tt_metal::GraphTracker::instance().get_hook()) {
+        if (auto* processor_hooks = dynamic_cast<ttnn::graph::ProcessorHooks*>(hook.get())) {
+            return processor_hooks->get_block();
+        }
+    }
+    return false;
+}
+
 template <typename device_operation_t>
 auto compute_program_hash(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
@@ -73,7 +85,7 @@ auto compute_program_hash(
 // Helper to create a mesh workload from a WorkloadFactory that may or may not
 // provide create_mesh_workload. If missing, synthesize it from create_at.
 template <typename WorkloadFactory, typename device_operation_t>
-static auto create_mesh_workload_from_workload_factory(
+auto create_mesh_workload_from_workload_factory(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const typename device_operation_t::tensor_args_t& tensor_args,
@@ -222,7 +234,7 @@ void enqueue_mesh_workload(
 
 // Dispatches `fn` to `program_factory` through either the `MeshWorkloadFactoryConcept` directly, or through the adapted
 // path for `ProgramFactoryConcept` / `ProgramDescriptorFactoryConcept` / `ProgramSpecFactoryConcept` /
-// `CustomProgramSpecFactoryConcept` factories.
+// `CustomProgramSpecFactoryConcept` / `MeshWorkloadSpecFactoryConcept` factories.
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t, typename ProgramFactory, typename Fn>
 void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, const Fn& fn) {
     std::visit(
@@ -244,6 +256,10 @@ void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, co
             [&]<CustomProgramSpecFactoryConcept T>(const T&) {
                 using AdaptedMeshWorkloadFactory =
                     mesh_device_operation_t::template CustomProgramSpecMeshWorkloadFactoryAdapter<T>;
+                fn.template operator()<AdaptedMeshWorkloadFactory>();
+            },
+            [&]<MeshWorkloadSpecFactoryConcept T>(const T&) {
+                using AdaptedMeshWorkloadFactory = mesh_device_operation_t::template MeshWorkloadSpecFactoryAdapter<T>;
                 fn.template operator()<AdaptedMeshWorkloadFactory>();
             },
             [&]<MeshWorkloadFactoryConcept WorkloadFactory>(const WorkloadFactory&) {
@@ -277,12 +293,14 @@ void handle_mesh_adapter_cache_hit(
         using cached_mesh_workload_t = typename WorkloadFactory::cached_mesh_workload_t;
         auto& cached_mesh_workload = cached_program_factory.cached_program.template get<cached_mesh_workload_t>();
 
-        if constexpr (requires { &WorkloadFactory::apply_descriptor; }) {
-            WorkloadFactory::apply_descriptor(
-                cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
-        } else {
-            WorkloadFactory::override_runtime_arguments(
-                cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
+        if (!graph_capture_blocks_dispatch()) {
+            if constexpr (requires { &WorkloadFactory::apply_descriptor; }) {
+                WorkloadFactory::apply_descriptor(
+                    cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
+            } else {
+                WorkloadFactory::override_runtime_arguments(
+                    cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
+            }
         }
 
         enqueue_mesh_workload<mesh_device_operation_t>(
@@ -332,14 +350,7 @@ void create_and_cache_mesh_workload(
             // buffer addresses are invalid (address=0). Caching such programs would
             // cause issues when later running in NORMAL mode.
             // In NORMAL capture mode, the hook exists but is non-blocking, so caching is safe.
-            bool hook_blocks = false;
-            if (auto hook = tt::tt_metal::GraphTracker::instance().get_hook()) {
-                auto* processor_hooks = dynamic_cast<ttnn::graph::ProcessorHooks*>(hook.get());
-                if (processor_hooks) {
-                    hook_blocks = processor_hooks->get_block();
-                }
-            }
-            bool should_cache = program_cache.is_enabled() && !hook_blocks;
+            bool should_cache = program_cache.is_enabled() && !graph_capture_blocks_dispatch();
             if (should_cache) {
                 program_cache.insert(
                     program_key, CachedProgramFactory{std::move(cached_workload), program_factory_index});
@@ -435,6 +446,22 @@ void launch_operation_with_adapter(
                 operation_attributes, tensor_args, tensor_return_value, mesh_device, program_cache, program_key);
         }
     }
+
+    // Stash factory identity after adapter work so nested function_end events cannot consume it.
+    if (ttnn::graph::GraphProcessor::has_active_instance()) {
+        // Prefer the cached index; select only when the miss was not inserted (NO_DISPATCH).
+        const std::size_t program_factory_index =
+            (is_program_cache_enabled && program_cache.contains(program_key))
+                ? program_cache.get(program_key).program_factory_index
+                : mesh_device_operation_t::select_program_factory(operation_attributes, tensor_args).index();
+        auto program_factory =
+            map_index_to_variant(program_factory_index, typename mesh_device_operation_t::program_factory_t{});
+        const std::string_view factory_type = std::visit(
+            [](auto&& alt) -> std::string_view { return ttsl::long_type_name<std::decay_t<decltype(alt)>>; },
+            program_factory);
+        ttnn::graph::GraphProcessor::set_pending_program_factory(
+            std::string(factory_type), program_factory_index, program_cache_hit);
+    }
 }
 
 template <DeviceOperationConcept device_operation_t>
@@ -475,7 +502,11 @@ typename device_operation_t::tensor_return_value_t launch(
         [&input_tensors](const Tensor& t) { input_tensors.push_back(std::cref(t)); }, tensor_args);
 
     const auto operation_name = detail::get_operation_name<device_operation_t>(operation_attributes);
-    tt::tt_metal::GraphTracker::instance().track_function_start(operation_name, operation_attributes, input_tensors);
+    // Everything below can throw: validation, output allocation and, for the circular-buffer /
+    // L1 clash of #28836, program dispatch. The guard closes the tracked scope on those paths too,
+    // marking it aborted, so the capture does not lose the failing op and misnest everything after
+    // it.
+    tt::tt_metal::internal::ScopedTrackedFunction tracked_function(operation_name, operation_attributes, input_tensors);
 
     for (const auto& input_tensor_ref : input_tensors) {
         const auto& input_tensor = input_tensor_ref.get();
@@ -499,7 +530,7 @@ typename device_operation_t::tensor_return_value_t launch(
     // Short-circuit for inactive MeshDevices (no-op). It is important this happens before any validation an op may
     // perform, as most of the MeshDevice calls will fail for inactive MeshDevices.
     if (mesh_device->get_view().get_devices().empty()) {
-        tt::tt_metal::GraphTracker::instance().track_function_end(tensor_return_value);
+        tracked_function.end(tensor_return_value);
         return tensor_return_value;
     }
 
@@ -525,7 +556,7 @@ typename device_operation_t::tensor_return_value_t launch(
     detail::launch_operation_with_adapter<MeshDeviceOperationAdapter<device_operation_t>>(
         operation_attributes, tensor_args, tensor_return_value, mesh_device);
 
-    tt::tt_metal::GraphTracker::instance().track_function_end(tensor_return_value);
+    tracked_function.end(tensor_return_value);
     return tensor_return_value;
 }
 

@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <limits>
 #include <vector>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -64,7 +65,12 @@ ttnn::Tensor unified_routed_expert_moe(
     RoutedExpertActivation activation = RoutedExpertActivation::Silu,
     const std::optional<std::vector<ttnn::Tensor>>& gate_biases = std::nullopt,
     const std::optional<std::vector<ttnn::Tensor>>& up_biases = std::nullopt,
-    const std::optional<std::vector<ttnn::Tensor>>& down_biases = std::nullopt);
+    const std::optional<std::vector<ttnn::Tensor>>& down_biases = std::nullopt,
+    // Active-token band this op owns: an expert whose count falls outside [min, max] is
+    // dropped like a zero count. Wide open by default; a hybrid dispatch narrows it so this
+    // op and moe_fused_swiglu split the experts by load over ONE shared counts vector.
+    uint32_t min_active_tokens = 0,
+    uint32_t max_active_tokens = std::numeric_limits<uint32_t>::max());
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn
 

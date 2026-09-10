@@ -24,7 +24,7 @@ def test_mul_inplace(device, h, w):
     ttnn.mul_(input_tensor_a, input_tensor_b)
     output = ttnn.to_torch(input_tensor_a)
 
-    assert_with_ulp(torch_output_tensor, output, ulp_threshold=1)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output, ulp_threshold=1)
 
 
 @pytest.mark.parametrize("h", [32])
@@ -40,7 +40,7 @@ def test_add_inplace(device, h, w):
     ttnn.add_(input_tensor_a, input_tensor_b)
     output = ttnn.to_torch(input_tensor_a)
 
-    assert_with_ulp(torch_output_tensor, output, ulp_threshold=1)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output, ulp_threshold=1)
 
 
 @pytest.mark.parametrize("h", [32])
@@ -56,4 +56,4 @@ def test_sub_inplace(device, h, w):
     ttnn.sub_(input_tensor_a, input_tensor_b)
     output = ttnn.to_torch(input_tensor_a)
 
-    assert_with_ulp(torch_output_tensor, output, ulp_threshold=1)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output, ulp_threshold=1)
