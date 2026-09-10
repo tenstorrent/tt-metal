@@ -395,14 +395,36 @@ ttnn::device_operation::ProgramArtifacts IndexedFillProgramFactory::create_progr
 
     const uint32_t shard_n_x = is_shard_local ? all_cores.bounding_box().grid_size().x : 0;
 
-    // Precompute per-column offsets for the shard-local path: only shard_n_x unique cx values
-    // exist, but the loop runs over all n_x * n_y cores. Avoids redundant recomputation for
-    // every core in the same column.
+    // WIDTH_SHARDED lays every shard along the width axis, so a core's column slice is its
+    // *shard index*, not its x coordinate: on a multi-row grid (e.g. 32 shards over 8x4) the
+    // two differ, and using x would make every core below the first row read the wrong columns
+    // and, via shard_row, look for the wrong batch. BLOCK_SHARDED does split batches across
+    // shard rows, so it keeps the row/column decomposition.
+    const bool width_sharded =
+        is_shard_local && input_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+    const uint32_t num_col_slices = width_sharded ? num_cores_total : shard_n_x;
+
+    // Shard index per core, in the order the shard spec's orientation assigns shards. Only
+    // WIDTH_SHARDED needs it, and only because `cores` above is always enumerated row-wise.
+    std::vector<uint32_t> shard_index_of_core(num_cores_total, 0);
+    if (width_sharded) {
+        const bool row_wise =
+            input_a.memory_config().shard_spec()->orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR;
+        const auto shard_order = corerange_to_cores(all_cores, std::nullopt, row_wise);
+        for (uint32_t s = 0; s < shard_order.size(); ++s) {
+            const auto it = std::find(cores.begin(), cores.end(), shard_order[s]);
+            shard_index_of_core[std::distance(cores.begin(), it)] = s;
+        }
+    }
+
+    // Precompute per-column offsets for the shard-local path: BLOCK_SHARDED has only shard_n_x
+    // unique values while the loop runs over all n_x * n_y cores, so this avoids recomputing
+    // them for every core in the same column.
     std::vector<ShardColOffsets> col_offsets;
-    if (is_shard_local && shard_n_x > 0) {
+    if (is_shard_local && num_col_slices > 0) {
         const auto& shard_spec_pre = *input_a.memory_config().shard_spec();
-        col_offsets.resize(shard_n_x);
-        for (uint32_t cx = 0; cx < shard_n_x; ++cx) {
+        col_offsets.resize(num_col_slices);
+        for (uint32_t cx = 0; cx < num_col_slices; ++cx) {
             col_offsets[cx] = compute_shard_col_offsets(input_a, shard_spec_pre, cx, is_tile);
         }
     }
@@ -436,8 +458,10 @@ ttnn::device_operation::ProgramArtifacts IndexedFillProgramFactory::create_progr
 
         } else if (is_shard_local) {
             // Shard row/col for BLOCK_SHARDED: indices within the shard grid bounding box.
-            const uint32_t shard_row = (shard_n_x > 0) ? (i / shard_n_x) : 0;
-            const uint32_t cx = (shard_n_x > 0) ? (i % shard_n_x) : 0;
+            // WIDTH_SHARDED holds every batch on every core, so it has no shard row, and its
+            // column slice is the shard index.
+            const uint32_t shard_row = (!width_sharded && shard_n_x > 0) ? (i / shard_n_x) : 0;
+            const uint32_t cx = width_sharded ? shard_index_of_core[i] : ((shard_n_x > 0) ? (i % shard_n_x) : 0);
             const uint32_t batch_offset_a = shard_row * total_batches_per_core;
 
             // Column-offset state for the INTERLEAVED_B read path (precomputed above).
