@@ -346,6 +346,12 @@ bool codegen_can_serve(
     return repeat_codegen::supported_by_codegen(working_tensor, working_repetition_vector);
 }
 
+RepeatCodegenSupport codegen_support_decision(
+    const ttnn::Tensor& tensor, const ttsl::SmallVector<uint32_t>& repeats, const MemoryConfig& output_memory) {
+    const bool eligible = codegen_can_serve(tensor, repeats, output_memory);
+    return {eligible, eligible && repeat_codegen::is_demoted(tensor, repeats)};
+}
+
 // Everything a preallocated output has to satisfy. Both routes run this, so a case that lands on
 // codegen is held to the same standard as one that lands on native.
 void validate_optional_output(
@@ -557,6 +563,18 @@ ttnn::Tensor repeat_native(
     return finalize_into_preallocated(working_tensor, optional_output_tensor);
 }
 
+RepeatCodegenSupport repeat_codegen_support(
+    const ttnn::Tensor& input_tensor,
+    const ttsl::SmallVector<uint32_t>& repetition_vector,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<ttnn::Tensor>& optional_output_tensor) {
+    auto [working_tensor, working_repetition_vector] = match_input_rank(input_tensor, repetition_vector);
+    const auto output_mem_config = derive_output_mem_config(input_tensor, memory_config, optional_output_tensor);
+    validate_optional_output(
+        input_tensor, working_tensor, working_repetition_vector, memory_config, optional_output_tensor);
+    return codegen_support_decision(working_tensor, working_repetition_vector, output_mem_config);
+}
+
 ttnn::Tensor repeat_force_native(
     const ttnn::Tensor& input_tensor,
     const ttsl::SmallVector<uint32_t>& repetition_vector,
@@ -592,7 +610,6 @@ ttnn::Tensor repeat(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     namespace detail = operations::data_movement::detail;
-    namespace repeat_codegen = operations::data_movement::repeat_codegen;
 
     auto [working_tensor, working_repetition_vector] = detail::match_input_rank(input_tensor, repetition_vector);
     const MemoryConfig output_mem_config =
@@ -602,8 +619,8 @@ ttnn::Tensor repeat(
     detail::validate_optional_output(
         input_tensor, working_tensor, working_repetition_vector, memory_config, optional_output_tensor);
 
-    if (detail::codegen_can_serve(working_tensor, working_repetition_vector, output_mem_config) &&
-        !repeat_codegen::is_demoted(working_tensor, working_repetition_vector)) {
+    const auto support = detail::codegen_support_decision(working_tensor, working_repetition_vector, output_mem_config);
+    if (support.eligible && !support.demoted) {
         // The codegen path writes an interleaved output in the input's buffer type and adds no layout
         // or resharding hop after it, so its last per-dim step can land in the prealloc directly.
         return detail::finalize_into_preallocated(

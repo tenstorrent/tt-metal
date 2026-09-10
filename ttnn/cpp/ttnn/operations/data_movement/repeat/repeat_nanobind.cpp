@@ -50,6 +50,21 @@ void bind_repeat(nb::module_& mod) {
     // Bound with a plain def rather than ttnn::bind_function: the latter tags the callable for
     // auto_register_ttnn_cpp_operations, which would republish these as ttnn.* operations. They are
     // meant to stay reachable only via this private module. See repeat_force.hpp.
+    nb::class_<detail::RepeatCodegenSupport>(mod, "RepeatCodegenSupport")
+        .def_ro("eligible", &detail::RepeatCodegenSupport::eligible)
+        .def_ro("demoted", &detail::RepeatCodegenSupport::demoted);
+    mod.def(
+        "repeat_codegen_support",
+        &detail::repeat_codegen_support,
+        nb::arg("input_tensor"),
+        nb::arg("repeat_dims"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("optional_output_tensor") = nb::none(),
+        nb::call_guard<nb::gil_scoped_release>(),
+        "Private routing declaration, not execution evidence. Preparation errors propagate; "
+        "demoted is evaluated only for eligible calls. May require device-backed input.");
+
     mod.def(
         "repeat_force_native",
         &detail::repeat_force_native,

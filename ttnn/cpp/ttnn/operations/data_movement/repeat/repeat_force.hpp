@@ -24,6 +24,18 @@ namespace ttnn::operations::data_movement::detail {
 //
 // Prefer `ttnn::repeat` everywhere else: it already declines the cases the second entry rejects.
 
+// Declaration only: successful preparation does not prove native validity or correctness.
+struct RepeatCodegenSupport {
+    bool eligible;
+    bool demoted;  // Evaluated only when eligible; false otherwise.
+};
+
+RepeatCodegenSupport repeat_codegen_support(
+    const ttnn::Tensor& input_tensor,
+    const ttsl::SmallVector<uint32_t>& repetition_vector,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt);
+
 // The existing composite/native implementation, unconditionally.
 ttnn::Tensor repeat_force_native(
     const ttnn::Tensor& input_tensor,
