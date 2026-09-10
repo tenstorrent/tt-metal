@@ -210,17 +210,10 @@ def make_recaption_logits_fn(
     from models.experimental.hunyuan_image_3_0.ref.attention.mask import (
         build_attention_mask,
         build_attention_mask_query_row,
+        mask_has_image_spans,
         to_additive,
     )
     from models.experimental.hunyuan_image_3_0.ttnn.kv_cache import HunyuanTtKvCache
-
-    def _mask_has_image_spans(slices) -> bool:
-        """True if any batch item has a bidirectional (image) span."""
-        if not slices:
-            return False
-        if isinstance(slices[0], list):  # per-batch list-of-lists
-            return any(len(spans) > 0 for spans in slices)
-        return len(slices) > 0  # flat list of spans
 
     if prefix_embeds is None and prefix_input_ids is None:
         raise ValueError("make_recaption_logits_fn requires prefix_embeds or prefix_input_ids")
@@ -318,7 +311,7 @@ def make_recaption_logits_fn(
         )
 
     def _upload_mask_full(S: int, B: int):
-        if not _mask_has_image_spans(attn_slices):
+        if not mask_has_image_spans(attn_slices):
             # Pure-causal prefill (text-only recaption, incl. the max-ISL context):
             # supply NO mask so SDPA uses its built-in causal path — no S×S host build
             # + PCIe upload (~1 GB at S=22784, hundreds of ms of device stall) and the
@@ -377,7 +370,16 @@ def make_recaption_logits_fn(
                 raise RuntimeError("KV cache prefill must run before decode steps")
             cos_full, sin_full = cos_sin_holder[0]
             cos_tt, sin_tt = model.layers[0].self_attn.rope.slice_cos_sin(cos_full, sin_full, query_pos)
-            mask_tt = _upload_mask_row(query_pos, S, B)
+            if not mask_has_image_spans(attn_slices):
+                mask_tt = ttnn.zeros(
+                    (B, 1, 1, S),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            else:
+                mask_tt = _upload_mask_row(query_pos, S, B)
             hidden = model.forward(
                 inputs_embeds=hidden_tt,
                 seq_len=S,
@@ -388,7 +390,10 @@ def make_recaption_logits_fn(
                 decode_step=True,
                 cos_sin=(cos_tt, sin_tt),
             )
-            ttnn.deallocate(mask_tt)
+            if mask_tt is not None:
+                ttnn.deallocate(mask_tt)
+            ttnn.deallocate(cos_tt)
+            ttnn.deallocate(sin_tt)
             ttnn.deallocate(hidden_tt)
         else:
             if S == prefix_len:
@@ -600,13 +605,14 @@ def generate_text(
         logits_tt = forward_logits_fn(ids)
         for step_i in range(config.max_new_tokens):
             next_ids = _next_ids_host(logits_tt, ids, step_i)
+            for i in range(B):
+                if not finished[i]:
+                    new_tokens[i].append(int(next_ids[i].item()))
             ids = torch.cat([ids, next_ids.view(B, 1)], dim=1)
             for i in range(B):
-                tid = int(next_ids[i].item())
-                new_tokens[i].append(tid)
-                if tid in stop_set:
+                if not finished[i] and int(next_ids[i].item()) in stop_set:
                     finished[i] = True
-            if all(finished):
+            if all(finished) and stop_set:
                 break
             logits_tt = forward_logits_fn(ids)
         return {"sequences": ids, "new_tokens": new_tokens}

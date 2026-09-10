@@ -3,6 +3,7 @@
 #
 # Shared pytest fixtures for the HunyuanImage-3.0 PCC tests.
 
+import os
 import sys
 from pathlib import Path
 
@@ -34,6 +35,15 @@ def pytest_collection_modifyitems(items):
             item.add_marker(pytest.mark.timeout(10800))
 
 
+@pytest.fixture(scope="session", autouse=True)
+def require_staged_checkpoint():
+    """Fail fast when ``HUNYUAN_MODEL_DIR`` is set but incomplete (CI / offline runs)."""
+    from models.experimental.hunyuan_image_3_0.ref.weights import ENV_BASE, HF_REPO_BASE, validate_env_checkpoint_dir
+
+    if os.environ.get(ENV_BASE):
+        validate_env_checkpoint_dir(ENV_BASE, HF_REPO_BASE)
+
+
 @pytest.fixture(scope="function")
 def device():
     """Function-scoped device — safe for single-device and mesh tests."""
@@ -49,8 +59,15 @@ def device():
 # ---------------------------------------------------------------------------
 @pytest.fixture(scope="module")
 def model_dir():
-    from models.experimental.hunyuan_image_3_0.ref.weights import MODEL_DIR
+    from models.experimental.hunyuan_image_3_0.ref.weights import (
+        ENV_BASE,
+        HF_REPO_BASE,
+        MODEL_DIR,
+        validate_env_checkpoint_dir,
+    )
 
+    if os.environ.get(ENV_BASE):
+        return validate_env_checkpoint_dir(ENV_BASE, HF_REPO_BASE)
     index = MODEL_DIR / "model.safetensors.index.json"
     if not index.exists():
         pytest.skip(f"Hunyuan checkpoint not found at {MODEL_DIR} (set HUNYUAN_MODEL_DIR)")
