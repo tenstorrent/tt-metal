@@ -17,7 +17,7 @@ enum PerfCounterType : std::uint16_t {
     // TDMA_UNPACK Group
     MATH_SRC_DATA_READY,
     MATH_NOT_D2S_STALLED,
-    MATH_FIDELITY_STALL,
+    MATH_FIDELITY_STALL,  // tied off in hardware, kept so the ordinals below do not shift
     MATH_INSTRN_STARTED,
     MATH_INSTRN_AVAILABLE,
     SRCB_WRITE_REQ,
@@ -100,7 +100,7 @@ enum PerfCounterType : std::uint16_t {
     L1_0_NOC_RING0_INCOMING_0,
     L1_0_NOC_RING0_INCOMING_1,
     // L1 Bank 1 (mux=1, ports 8-15)
-    L1_1_TDMA_PACKER_2,  // Wormhole port 8; Blackhole uses L1_1_PACKER_IF_0
+    L1_1_TDMA_PACKER_2,   // Wormhole port 8; Blackhole uses L1_1_PACKER_IF_0
     L1_1_EXT_UNPACKER_1,  // Wormhole ports 9-11; Blackhole uses L1_1_UNPACKER1_EXT_IF_1-3
     L1_1_EXT_UNPACKER_2,
     L1_1_EXT_UNPACKER_3,
@@ -295,18 +295,21 @@ constexpr std::pair<PerfCounterGroup, std::uint32_t> counter_group_flags[] = {
 };
 constexpr std::uint32_t NUM_COUNTER_GROUPS = sizeof(counter_group_flags) / sizeof(counter_group_flags[0]);
 
+// All six L1 groups count through the one L1 counter block; the group only picks the mux setting.
+constexpr std::uint32_t PERF_CNT_L1_ANY_GROUP = RISCV_DEBUG_REG_PERF_CNT_L1_0;
+
 // Indexed by PerfCounterGroup; keep the enum order.
 constexpr std::uint32_t cntl_reg_for_group[10] = {
     RISCV_DEBUG_REG_PERF_CNT_FPU0,            // FPU
     RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK0,      // PACK
     RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK0,    // UNPACK
-    RISCV_DEBUG_REG_PERF_CNT_L1_0,            // L1_0
-    RISCV_DEBUG_REG_PERF_CNT_L1_0,            // L1_1
+    PERF_CNT_L1_ANY_GROUP,                    // L1_0
+    PERF_CNT_L1_ANY_GROUP,                    // L1_1
     RISCV_DEBUG_REG_PERF_CNT_INSTRN_THREAD0,  // INSTRN
-    RISCV_DEBUG_REG_PERF_CNT_L1_0,            // L1_2
-    RISCV_DEBUG_REG_PERF_CNT_L1_0,            // L1_3
-    RISCV_DEBUG_REG_PERF_CNT_L1_0,            // L1_4
-    RISCV_DEBUG_REG_PERF_CNT_L1_0,            // L1_5
+    PERF_CNT_L1_ANY_GROUP,                    // L1_2
+    PERF_CNT_L1_ANY_GROUP,                    // L1_3
+    PERF_CNT_L1_ANY_GROUP,                    // L1_4
+    PERF_CNT_L1_ANY_GROUP,                    // L1_5
 };
 
 FORCE_INLINE std::uint32_t get_cntl_register_for_counter_group(PerfCounterGroup counter_group) {
