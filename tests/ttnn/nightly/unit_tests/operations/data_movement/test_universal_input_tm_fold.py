@@ -187,7 +187,8 @@ def _run_fold(
     assert_with_pcc(ref.float(), got.float(), pcc)
 
 
-# Interleaved routing — RM goes through MultiCoreDRAMFold RM branch; TILE untilizes first.
+# Interleaved routing — RM goes through MultiCoreDRAMFold RM branch; TILE takes the tile-native
+# scratch-gather factory when its output-row scratch fits L1, else falls back to untilize→RM.
 
 
 @pytest.mark.parametrize(
