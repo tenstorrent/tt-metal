@@ -79,19 +79,9 @@ def exchange_convolution_carry(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    tiled_final_carry = ttnn.slice(
-        gathered_tails,
-        (0, (sp_size - 1) * ttnn.TILE_SIZE, 0),
-        (batch, sp_size * ttnn.TILE_SIZE, channels),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    final_row_major = ttnn.to_layout(tiled_final_carry, ttnn.ROW_MAJOR_LAYOUT)
-    final_carry = ttnn.empty_like(initial_carry, memory_config=state_memory_config)
-    ttnn.slice(
-        final_row_major,
-        (0, 0, 0),
-        (batch, history, channels),
+    final_carry = ttnn.all_broadcast(
+        local_tail,
+        cluster_axis=sequence_parallel_axis,
         memory_config=state_memory_config,
-        output_tensor=final_carry,
-    )
+    )[sp_size - 1]
     return partition_carry, final_carry
