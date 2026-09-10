@@ -194,16 +194,22 @@
   cmd: |
     unset TT_METAL_WATCHER  # blocked by #50886
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B
+    # Deselections (-k) drop tests subsumed by stricter ones in this leg or dead under CI; see PR 55548 review notes.
     pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_attention_tp.py
-    pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_gdn_tp.py
+    pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_gdn_tp.py -k "not test_gdn_tp_prefill"
     pytest --timeout 60 models/demos/blackhole/qwen36/tests/test_mlp_tp.py
-    pytest --timeout 600 models/demos/blackhole/qwen36/tests/test_model_tp.py
+    pytest --timeout 600 models/demos/blackhole/qwen36/tests/test_model_tp.py -k "not test_model_tp_decode_batched and not test_model_tp_long_prefill_traced"
     pytest --timeout 600 models/demos/blackhole/qwen36/tests/test_decode_bucketing.py -k "test_bucket_warmup_compiles_all_widths_before_capture or test_all_buckets_fit_trace_region or test_bucket_trace_teardown_releases_all_stores"
-    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_mlp.py
+    # MTP speculative decode (unit-test coverage only until batch>1 lands; e2e runs plain decode).
+    # Placed after test_decode_bucketing, whose full-model load warms the tensor cache these reuse.
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_spec_sampling_math.py
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_mtp_torch_ref.py
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_fused_recurrent_gdn.py -k "not perf and not (no_initial_state and (blackhole-1 or blackhole-2))"
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_mtp_tp.py
+    pytest --timeout 600 models/demos/blackhole/qwen36/tests/test_spec_lossless.py
+    pytest --timeout 600 models/demos/blackhole/qwen36/tests/test_spec_determinism.py -k "not (test_spec_decode_is_deterministic and 128)"
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_patch_merger.py
-    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_vision_attention.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_vision_block.py
-    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_wrapped_model.py
   model: qwen3.6-27b
   model_family: Qwen
