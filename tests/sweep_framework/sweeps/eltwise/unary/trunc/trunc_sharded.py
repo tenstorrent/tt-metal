@@ -41,8 +41,8 @@ parameters = {
 
 def mesh_device_fixture():
     device = ttnn.open_device(device_id=0)
-    assert not ttnn.device.grayskull(device), "This op is not supported on Grayskull"
-    yield (device, "Wormhole_B0")
+    device_name = ttnn.get_arch_name()
+    yield (device, device_name)
     ttnn.close_device(device)
     del device
 
