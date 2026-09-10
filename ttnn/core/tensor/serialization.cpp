@@ -4,6 +4,7 @@
 
 #include "ttnn/tensor/serialization.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -20,6 +21,7 @@
 #include <flatbuffers/reflection.h>
 #include <flatbuffers/verifier.h>
 
+#include <tt-metalium/math.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/cleanup.hpp>
 
@@ -52,6 +54,13 @@ void safe_fwrite_bytes(
 }
 
 constexpr std::uint32_t kFlatbufferAlignment = alignof(std::uint64_t);
+
+// Alignment of the payload's start within the file, and hence within the page-aligned mmap that
+// `load_tensor_flatbuffer` hands to the device. Pinned host->device writes DMA straight out of that
+// mapping and require NoC L1 alignment (64 B on Blackhole, 16 B on Wormhole); a less aligned source
+// is rejected in dispatch and every shard falls back to the staged copy, logging
+// "Pinned source memory start address ... must be aligned 64 B" each time.
+constexpr std::uint64_t kPayloadAlignment = 64;
 
 void dump_tensor_flatbuffer_impl(const std::string& file_name, const Tensor& tensor, DumpTensorMode mode) {
     Tensor cpu_tensor = tensor.cpu();
@@ -87,9 +96,17 @@ void dump_tensor_flatbuffer_impl(const std::string& file_name, const Tensor& ten
     builder.Align(kFlatbufferAlignment);
     builder.Finish(tensor_offset);
 
-    const uint64_t header_size = builder.GetSize();
+    // Pad the header so the payload begins on a kPayloadAlignment boundary. The padding is counted in
+    // `header_size`, so a reader derives the same data offset it always has, and the flatbuffer verifier
+    // tolerates trailing bytes after the root table. Files written before this padding still load.
+    const uint64_t flatbuffer_size = builder.GetSize();
+    const uint64_t header_size = tt::round_up(sizeof(uint64_t) + flatbuffer_size, kPayloadAlignment) - sizeof(uint64_t);
     safe_fwrite_bytes(&header_size, sizeof(header_size), output_file, file_name, "tensor header size");
-    safe_fwrite_bytes(builder.GetBufferPointer(), header_size, output_file, file_name, "tensor header");
+    safe_fwrite_bytes(builder.GetBufferPointer(), flatbuffer_size, output_file, file_name, "tensor header");
+    if (header_size > flatbuffer_size) {
+        constexpr std::array<std::byte, kPayloadAlignment> zeros{};
+        safe_fwrite_bytes(zeros.data(), header_size - flatbuffer_size, output_file, file_name, "tensor header padding");
+    }
 
     for (const auto& buffer : buffers) {
         auto buffer_view = buffer.view_bytes();
