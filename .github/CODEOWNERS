@@ -29,6 +29,7 @@ METALIUM_GUIDE.md @davorchap @tenstorrent/metalium-developers-infra
 .github/instructions/ttnn.instructions.md @tenstorrent/metalium-developers-ttnn-core
 .github/time_budget.yaml @roseli-TT @tdowdallTT @dpopovTT
 .github/time_budgets/ @roseli-TT @tdowdallTT @dpopovTT
+.github/workflows/agentic-research-model-tests.yaml @yieldthought @mtairum @uaydonat @tenstorrent/metalium-developers-infra
 .github/workflows/fabric-cpu-only-tests-impl.yaml @Riddy21 @tt-asaigal @aliuTT @cfjchu @p1-0tr @tenstorrent/metalium-developers-infra
 .github/workflows/galaxy-profiler-tests-impl.yaml @mo-tenstorrent @akerteszTT @tenstorrent/metalium-developers-infra
 .github/workflows/galaxy-profiler-tests.yaml @mo-tenstorrent @akerteszTT @tenstorrent/metalium-developers-infra
@@ -66,6 +67,7 @@ conftest.py @tenstorrent/metalium-developers-infra
 
 # test scripts
 tests/CMakeLists.txt @tenstorrent/metalium-developers-infra
+tests/pipeline_reorg/agentic_research_model_tests.yaml @yieldthought @mtairum @uaydonat @jonathansuTT @cglagovichTT
 tests/pipeline_reorg/blaze_models_prefill_tests.yaml @mbezuljTT @mtairum @jonathansuTT @cglagovichTT
 tests/pipeline_reorg/models_device_perf_tests.yaml @mtairum @uaydonat @jonathansuTT @cglagovichTT
 tests/pipeline_reorg/models_e2e_tests.yaml @mtairum @uaydonat @jonathansuTT @cglagovichTT

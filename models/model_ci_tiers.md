@@ -36,23 +36,13 @@ Tier 3 models are compatible with the latest TT-Metal releases but are not optim
 
 # Current Model Assignments
 
-## Agentic Research Model Tests
+## Agentic Research Models
 
-[Agentic Research Model Tests](../.github/workflows/agentic-research-model-tests.yaml)
-runs every Saturday at 07:00 UTC and supports manual model, hardware, and tier
-selection. Its [registry](../tests/pipeline_reorg/agentic_research_model_tests.yaml)
-is independent of the daily model pipelines. Each hardware entry declares a tier
-and timeout, checked against `models.agentic_research_tier<N>` in
-[time_budget.yaml](../.github/time_budget.yaml). All registered tiers run weekly.
+These models use the [weekly Agentic Research pipeline](#agentic-research-model-tests).
 
 | Model implementation | System | Tier | Weekly coverage |
 |----------------------|--------|------|-----------------|
 | Llama3.1-8B QB2 TP4 | BH QuietBox 2 | 3 | Decoder PCC and trace replay; scored IFEval serving |
-
-When adding a model, add its command, owner, hardware, tier, and timeout to the
-registry and budget its runtime under the corresponding pipeline tier. Extend the
-manual model and hardware choices when needed. The shared model-test runner
-collects reports and validates centralized accuracy targets.
 
 ## Daily Model Pipelines
 
@@ -155,7 +145,7 @@ it is classified differently on different systems.
 
 # Pipelines
 
-Each test type has a per-tier GitHub Actions workflow and a shared configuration file. The workflows are separated by tier to allow independent scheduling, but the test definitions live in a single config YAML per pipeline.
+End-to-End, Unit, and Sweep tests have per-tier GitHub Actions workflows and a shared configuration file for each test type. vLLM Model Tests and Agentic Research Model Tests each use one workflow for all registered tiers.
 
 ## End-to-End Tests
 
@@ -242,6 +232,44 @@ Models covered (system · classification tier):
 | Gemma-4-31B | WH LLMBox | 2 |
 | Gemma-4-E2B | WH N150 | 3 |
 | NoOp (vLLM overhead) | WH Galaxy | 1 |
+
+## Agentic Research Model Tests
+
+This pipeline tests models brought up through agentic research. It runs every
+**Saturday at 07:00 UTC**. All registered tiers run on that schedule. Each model
+and hardware pair has its own tier, test coverage, and time budget.
+
+| Item | File |
+|------|------|
+| Workflow | [Agentic Research Model Tests](../.github/workflows/agentic-research-model-tests.yaml) |
+| Test commands | [agentic_research_model_tests.yaml](../tests/pipeline_reorg/agentic_research_model_tests.yaml) |
+| Time budgets | [time_budget.yaml](../.github/time_budget.yaml) |
+| Shared runner | [models-e2e-tests-impl.yaml](../.github/workflows/models-e2e-tests-impl.yaml) |
+
+Each test entry contains an explicit `cmd: |` block with its environment, setup,
+test, and cleanup commands. Keep those commands in the YAML so reviewers and
+dashboards can read the full procedure in one place. To reproduce a test locally,
+run its block from the checkout with the required hardware and model weights.
+
+For a manual run, select **Run workflow** in GitHub Actions. Choose `model`, `sku`,
+and `tier`, or leave them at `all`. Use `vllm-tt-plugin-ref` to select a plugin
+branch or tag; it defaults to `main`. A selection with no matching tests fails
+before the build starts. The Saturday schedule becomes active after the workflow
+is merged to the default branch.
+
+To add a model:
+
+1. Add its command, model identifier, owner, and team to the test YAML.
+2. For each SKU, set `tier` and `timeout` in minutes.
+3. Set the total budget under `models.agentic_research_tier<N>.<sku>` in
+   `time_budget.yaml`. The sum of test timeouts for that tier and SKU must fit
+   the budget. The initial QB2 Tier 3 budget is **10 minutes**.
+4. Add any new model or SKU to the workflow's manual choices. Add the required
+   targets to [model_targets.yaml](model_targets.yaml).
+
+The shared runner collects test reports and benchmark data, then checks the
+central targets. Tier 3 requires accuracy targets. Its `perf` field can be
+omitted or set to `{}`; measured performance is still reported.
 
 ## Other Pipelines
 

@@ -41,7 +41,7 @@ offline. Compiled kernels are cached beneath `TT_METAL_CACHE`.
 The plugin changes are in [vllm-tt-plugin #116](https://github.com/tenstorrent/vllm-tt-plugin/pull/116).
 Until that dependency merges, select `yieldthought/llama31-qb2-serving` in the
 workflow's plugin-ref input, or export `VLLM_TT_PLUGIN_REF` to that branch for
-the CI command below.
+the CI commands linked below.
 
 ```bash
 export TT_LLAMA_TEXT_VER=llama31_8b_qb2 MESH_DEVICE=P300x2
@@ -64,12 +64,10 @@ The **Agentic Research Model Tests** workflow runs every Saturday at 07:00 UTC.
 Select `llama3.1-8b-qb2` and `bh_quietbox_2` for a manual run. Its Tier 3 entry
 has a 10-minute test budget, independent of the daily model pipelines.
 
-The same command can run on an exclusive QB2 with the checkpoint cached and
-`HF_TOKEN` available for the gated evaluation dataset:
-
-```bash
-bash models/demos/llama31_8b_qb2/tests/run_ci.sh
-```
+The [CI entry](../../../tests/pipeline_reorg/agentic_research_model_tests.yaml)
+contains all setup, server, test, and cleanup commands. To reproduce CI, run its
+`cmd` block from the repository root on an exclusive QB2, with the checkpoint
+cached and `HF_TOKEN` available for the gated evaluation dataset.
 
 The critical decoder test compares real checkpoint weights against Hugging Face
 at `(batch, prompt length)` values `(1, 129)`, `(9, 1025)`, and `(32, 128)`.
@@ -92,7 +90,7 @@ latency. The central accuracy target is the research baseline of 80.47%, with
 7% relative tolerance. This small fixed subset is a regression check, not a
 full IFEval evaluation.
 
-On the validated QB2 source build, this command completed in 6 minutes 33 seconds:
+On the validated QB2 source build, these commands completed in 6 minutes 33 seconds:
 83.47% mean IFEval accuracy, 131.24 decode tokens/s/user, and identical text across
 both passes. The server's Python dependencies were already installed; the
 scorer environment and model kernel cache were fresh. These are measurements of
