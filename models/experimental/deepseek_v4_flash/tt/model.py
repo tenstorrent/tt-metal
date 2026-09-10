@@ -1259,6 +1259,15 @@ class DeepSeekV4Model(DeepSeekV4Module):
             streams = ttnn.repeat(streams, ttnn.Shape([1, 1, self.config.hc_mult, 1]))  # [B, 1, hc_mult, D]
 
         rope_cache: dict = {}
+        # Per-step tensors keyed the way the traced path keys them: the positions by
+        # device, the masks / window indices by (layer type, device). Both are built
+        # once and shared by every layer that reads them, which is what
+        # :meth:`_decode_submesh_static` does with its per-submesh ``step_ctx``.
+        # Rebuilding them per layer instead leaves a step's worth of short-lived L1
+        # allocations behind the MoE, whose static circular buffers then have nowhere
+        # to land.
+        pos_cache: dict = {}
+        step_cache: dict = {}
         last_submesh_id = 0
         w = self.sliding_window
         if not self.kv_caches:
@@ -1276,18 +1285,29 @@ class DeepSeekV4Model(DeepSeekV4Module):
             cos_tt, sin_tt, neg_sin_tt, cos_win_tt, sin_win_tt = self._rope_rows_decode(
                 rope, pos, layer_type, compress_rate, rope_cache, this_device
             )
-            mask, sdpa_cur_pos = (
-                decode_sdpa_bounds(
-                    w, layer_type, compress_rate, pos, self._decode_max_seq, this_device, batch=self._decode_batch
+            step_key = f'{"sliding" if layer_type == "sliding_attention" else compress_rate}_{this_device.id()}'
+            if step_key not in step_cache:
+                mask, sdpa_cur_pos = (
+                    decode_sdpa_bounds(
+                        w, layer_type, compress_rate, pos, self._decode_max_seq, this_device, batch=self._decode_batch
+                    )
+                    if layer_type == "sliding_attention" or self._SDPA_CAUSAL
+                    else (host_decode_mask(w, layer_type, compress_rate, pos, self._decode_max_seq, this_device), None)
                 )
-                if layer_type == "sliding_attention" or self._SDPA_CAUSAL
-                else (host_decode_mask(w, layer_type, compress_rate, pos, self._decode_max_seq, this_device), None)
-            )
-            win_slot = win_row = None
-            if compress_rate is not None:
-                slot, wi = _window_indices(compress_rate, pos)
-                win_slot = int32_pos_tensor(slot, this_device)
-                win_row = int32_pos_tensor(w + max(wi, 0), this_device)
+                win_slot = win_row = None
+                if compress_rate is not None:
+                    slot, wi = _window_indices(compress_rate, pos)
+                    win_slot = int32_pos_tensor(slot, this_device)
+                    win_row = int32_pos_tensor(w + max(wi, 0), this_device)
+                step_cache[step_key] = (mask, sdpa_cur_pos, win_slot, win_row)
+            mask, sdpa_cur_pos, win_slot, win_row = step_cache[step_key]
+            device_key = this_device.id()
+            if device_key not in pos_cache:
+                pos_cache[device_key] = (
+                    int32_pos_tensor(pos % w, this_device),
+                    int32_pos_tensor(pos, this_device),
+                )
+            sliding_pos, compress_pos = pos_cache[device_key]
             streams = layer.decode(
                 streams,
                 cos_tt,
@@ -1297,8 +1317,8 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 sin_win_tt,
                 mask,
                 self.kv_caches[li],
-                int32_pos_tensor(pos % w, this_device),
-                int32_pos_tensor(pos, this_device),
+                sliding_pos,
+                compress_pos,
                 input_ids=ids,
                 pool_compressor=self._compressor_pool_due(layer_type, pos),
                 win_slot=win_slot,
@@ -1307,12 +1327,26 @@ class DeepSeekV4Model(DeepSeekV4Module):
             )
             last_submesh_id = current_submesh_id
             _profile(this_device)
-            # Stage the next layer on this device while it is otherwise idle. Under the
-            # prefetcher the layers on a device share GCBs, so this must stay in layer
-            # order: each buffer is a FIFO and the matmuls pop it in the order queued.
-            next_on_device = self._next_layer_on_submesh(li)
-            if next_on_device is not None:
-                self.layers[next_on_device].prefetch_weights()
+            # Stage the next layer on this device while it is otherwise idle, but only
+            # where the traced path stages it: as the stack leaves this submesh, so the
+            # transfers overlap the handoff rather than the layer that follows
+            # immediately (see :meth:`_decode_submesh_static`). Under a contiguous
+            # placement that means no hoist at all -- the next layer runs straight away,
+            # and holding its weights through this layer's MoE is what leaves the fused
+            # expert op's static circular buffers without L1. ``LinearDecode.forward``
+            # queues its own request when nobody hoisted, so this is an overlap
+            # optimization, not a correctness requirement. Under the prefetcher the
+            # layers on a device share GCBs, so this must stay in layer order: each
+            # buffer is a FIFO and the matmuls pop it in the order queued.
+            leaves_submesh = (
+                self.use_submeshes
+                and li + 1 < self.num_layers
+                and self._submesh_id_for_layer(li + 1) != current_submesh_id
+            )
+            if leaves_submesh:
+                next_on_device = self._next_layer_on_submesh(li)
+                if next_on_device is not None:
+                    self.layers[next_on_device].prefetch_weights()
         with _region("HC_HEAD"):
             hidden = self.hc_head(streams)
         with _region("FINAL_NORM"):
