@@ -78,7 +78,7 @@ inline bool should_reconfig_src_reg_df(std::uint32_t old_operand, std::uint32_t 
 /**
  * Reprograms unpacker THCON OUT_DATA_FORMAT only (gasket); L1 format stays in buffer descriptors.
  */
-template <bool EN_32BIT_DEST, p_dim_stride_target dim_stride_target, bool to_from_int8 = false>
+template <bool EN_32BIT_DEST, p_dim_stride_target dim_stride_target, bool to_from_int8 /*unused*/ = false>
 inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_new_operand) {
     static_assert(
         dim_stride_target == p_dim_stride_target::IGNORE,
@@ -88,7 +88,7 @@ inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_new_op
         unpack_src_format[srca_operand_id], unpack_dst_format[srca_operand_id]);
 }
 
-template <bool EN_32BIT_DEST, p_dim_stride_target dim_stride_target, bool to_from_int8 = false>
+template <bool EN_32BIT_DEST, p_dim_stride_target dim_stride_target, bool to_from_int8 /*unused*/ = false>
 inline void llk_unpack_reconfig_data_format_srcb(const std::uint32_t srcb_new_operand) {
     static_assert(
         dim_stride_target == p_dim_stride_target::IGNORE,

@@ -91,7 +91,7 @@ inline void calculate_reciprocal() {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool EN_32BIT_DEST, bool legacy_compat = true>
+template <bool APPROXIMATION_MODE, bool EN_32BIT_DEST /*unused*/, bool legacy_compat = true>
 void recip_init() {
     static_assert(legacy_compat == true, "Non-default legacy_compat (false) not supported in Quasar reciprocal");
     llk_math_eltwise_unary_sfpu_init<SfpuType::reciprocal>();

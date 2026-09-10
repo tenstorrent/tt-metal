@@ -23,12 +23,12 @@
 
 namespace ckernel {
 
-template <SfpuType sfpu_op>
+template <SfpuType sfpu_op /*unused*/>
 inline void llk_math_eltwise_binary_sfpu_init() {
     _llk_math_eltwise_sfpu_init_();
 }
 
-template <SfpuType sfpu_op, class F, class... ARGS>
+template <SfpuType sfpu_op /*unused*/, class F, class... ARGS>
 inline void llk_math_eltwise_binary_sfpu_init(F&& init_func, ARGS&&... args) {
     _llk_math_eltwise_sfpu_init_();
     init_func(std::forward<ARGS>(args)...);

@@ -62,7 +62,7 @@ sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
  * @tparam TILE_SHAPE: destination tile shape used to calculate operand offsets
  */
 template <
-    bool APPROXIMATION_MODE,
+    bool APPROXIMATION_MODE /*unused*/,
     BinaryOp BINOP,
     bool is_fp32_dest_acc_en,
     DstRoundingMode dst_rounding_mode = DstRoundingMode::Default,
@@ -129,7 +129,7 @@ inline void calculate_sfpu_binary(
  * @tparam APPROXIMATION_MODE: forwarded to the op-specific init
  * @tparam BINOP: selects which op's init to run
  */
-template <bool APPROXIMATION_MODE, BinaryOp BINOP>
+template <bool APPROXIMATION_MODE /*unused unless BINOP is DIV*/, BinaryOp BINOP>
 inline void sfpu_binary_init() {
     if constexpr (BINOP == BinaryOp::DIV) {
         _init_reciprocal_<APPROXIMATION_MODE>();

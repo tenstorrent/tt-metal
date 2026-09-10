@@ -38,7 +38,7 @@ inline bool _llk_pack_skip_bh_tilize_workaround_wrapper_([[maybe_unused]] const 
 
 /// Pack configure/init \ref PackMode for unpack-tilize sweep-style tests. Wormhole B0 pack does not support
 /// \c PackMode::Tilize in \c configure_pack / \c _llk_pack_init_; Blackhole uses \ref llk_test_pack_mode_v.
-template <bool untilize, bool tilize>
+template <bool untilize /*unused*/, bool tilize /*unused*/>
 inline constexpr PackMode llk_unpack_tilize_sweep_pack_cfg_mode_v = PackMode::Default;
 
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
@@ -58,7 +58,7 @@ inline void _llk_pack_hw_configure_wrapper_(
         pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face, narrow_tile, relu_config);
 }
 
-template <bool is_fp32_dest_acc_en, bool is_tile_dim_reconfig_en = false>
+template <bool is_fp32_dest_acc_en, bool is_tile_dim_reconfig_en /*unused*/ = false>
 inline void _llk_pack_reconfig_data_format_wrapper_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
@@ -116,7 +116,7 @@ template <
     bool diagonal                = false,
     bool narrow_row              = false,
     std::uint32_t row_num_datums = TILE_C_DIM,
-    bool dense                   = false>
+    bool dense /*unused*/        = false>
 inline void _llk_pack_untilize_init_wrapper_(
     [[maybe_unused]] const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
@@ -133,7 +133,7 @@ template <
     bool narrow_row                  = false,
     std::uint32_t row_num_datums     = TILE_C_DIM,
     std::uint32_t tile_dst_ct_offset = 0,
-    bool dense                       = false>
+    bool dense /*unused*/            = false>
 inline void _llk_pack_untilize_wrapper_(
     const std::uint32_t address,
     const std::uint32_t pack_dst_format,
@@ -180,7 +180,7 @@ inline void _llk_pack_hw_configure_wrapper_(
         pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face, relu_config);
 }
 
-template <bool is_fp32_dest_acc_en, bool is_tile_dim_reconfig_en = false>
+template <bool is_fp32_dest_acc_en, bool is_tile_dim_reconfig_en /*unused*/ = false>
 inline void _llk_pack_reconfig_data_format_wrapper_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
@@ -229,7 +229,7 @@ inline void _llk_pack_init_with_src_wrapper_(
     _llk_pack_init_<pack_mode, zero_output>(pack_src_format, face_r_dim, tile_c_dim, num_faces, num_tiles, skip_bh_tilize_workaround);
 }
 
-template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
+template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode /*unused*/ = PackMode::Default>
 inline void _llk_pack_dest_init_wrapper_([[maybe_unused]] const std::uint32_t face_r_dim = FACE_R_DIM, [[maybe_unused]] const bool narrow_tile = false)
 {
     _llk_pack_dest_init_<Dst, is_fp32_dest_acc_en>();
@@ -254,12 +254,12 @@ inline void _llk_pack_untilize_init_wrapper_(
 
 template <
     std::uint32_t block_ct_dim,
-    std::uint32_t full_ct_dim        = block_ct_dim,
-    bool diagonal                    = false,
-    bool narrow_row                  = false,
-    std::uint32_t row_num_datums     = TILE_C_DIM,
-    std::uint32_t tile_dst_ct_offset = 0,
-    bool dense                       = false>
+    std::uint32_t full_ct_dim               = block_ct_dim,
+    bool diagonal                           = false,
+    bool narrow_row                         = false,
+    std::uint32_t row_num_datums /*unused*/ = TILE_C_DIM,
+    std::uint32_t tile_dst_ct_offset        = 0,
+    bool dense                              = false>
 inline void _llk_pack_untilize_wrapper_(
     const std::uint32_t address,
     [[maybe_unused]] const std::uint32_t pack_dst_format,

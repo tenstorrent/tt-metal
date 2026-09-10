@@ -142,7 +142,11 @@ void calculate_exponential([[maybe_unused]] const std::uint32_t exp_base_scale_f
     }
 }
 
-template <bool APPROXIMATION_MODE, uint32_t scale = 0x3F800000, bool CLAMP_NEGATIVE = true, bool EN_32BIT_DEST>
+template <
+    bool APPROXIMATION_MODE /*unused*/,
+    uint32_t scale = 0x3F800000,
+    bool CLAMP_NEGATIVE = true,
+    bool EN_32BIT_DEST /*unused*/>
 void exp_init() {
     static_assert(scale == 0x3F800000, "Non-default scale not supported in Quasar exp");
     static_assert(CLAMP_NEGATIVE == true, "Non-default CLAMP_NEGATIVE not supported in Quasar exp");

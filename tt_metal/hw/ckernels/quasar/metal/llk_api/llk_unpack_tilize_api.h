@@ -122,10 +122,10 @@ inline void llk_unpack_tilize_uninit([[maybe_unused]] const std::uint32_t operan
  * @param  ct_dim           Number of column tiles in the tilize block.
  */
 template <
-    bool neginf_srcA = false,
+    bool neginf_srcA /*unused*/ = false,
     std::uint32_t reload_srcB = false,
     bool zero_srcA = false,
-    bool zero_srcA_reduce = false>
+    bool zero_srcA_reduce /*unused*/ = false>
 inline void llk_unpack_tilizeA_B_init(
     const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t ct_dim) {
     static_assert(!zero_srcA, "zero_srcA = true does not trigger any functionality on Quasar.");
@@ -173,10 +173,10 @@ inline void llk_unpack_tilizeA_B_init(
  * @param  block_ct_dim Number of column tiles in the tilize block.
  */
 template <
-    bool neginf_srcA = false,
+    bool neginf_srcA /*unused*/ = false,
     std::uint32_t reload_srcB = false,
     bool zero_srcA = false,
-    bool zero_srcA_reduce = false>
+    bool zero_srcA_reduce /*unused*/ = false>
 inline void llk_unpack_tilizeA_B(
     const std::uint32_t operandA,
     const std::uint32_t operandB,

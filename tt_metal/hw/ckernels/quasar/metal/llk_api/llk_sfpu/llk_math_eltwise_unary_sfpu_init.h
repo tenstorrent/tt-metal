@@ -9,7 +9,7 @@
 namespace ckernel {
 
 // sfpu_op template parameter is unused, but kept for backwards compatibility
-template <SfpuType sfpu_op>
+template <SfpuType sfpu_op /*unused*/>
 inline void llk_math_eltwise_unary_sfpu_init() {
     _llk_math_eltwise_sfpu_init_();
 }

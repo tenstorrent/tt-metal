@@ -169,27 +169,27 @@ inline void llk_math_pack_sync_init() {
 // Math has no per-tile data-format state on Quasar; format reconfig is unpack-only.
 // The wrappers below are intentionally empty no-ops, kept so reconfig_data_format.h
 // can issue MATH((...)) uniformly across arches.
-template <bool EN_32BIT_DEST, bool to_from_int8 = false>
+template <bool EN_32BIT_DEST /*unused*/, bool to_from_int8 /*unused*/ = false>
 inline void llk_math_reconfig_data_format_srca(const std::uint32_t /*srca_new_operand*/) {}
 
-template <bool EN_32BIT_DEST, bool to_from_int8 = false>
+template <bool EN_32BIT_DEST /*unused*/, bool to_from_int8 /*unused*/ = false>
 inline void llk_math_reconfig_data_format_srcb(const std::uint32_t /*srcb_new_operand*/) {}
 
-template <bool EN_32BIT_DEST, bool to_from_int8 = false>
+template <bool EN_32BIT_DEST /*unused*/, bool to_from_int8 /*unused*/ = false>
 inline void llk_math_reconfig_data_format(
     const std::uint32_t /*srca_new_operand*/, const std::uint32_t /*srcb_new_operand*/) {}
 
-template <bool EN_32BIT_DEST, bool to_from_int8 = false>
+template <bool EN_32BIT_DEST /*unused*/, bool to_from_int8 /*unused*/ = false>
 inline void llk_math_reconfig_data_format(
     const std::uint32_t /*srca_old_operand*/,
     const std::uint32_t /*srca_new_operand*/,
     const std::uint32_t /*srcb_old_operand*/,
     const std::uint32_t /*srcb_new_operand*/) {}
 
-template <bool EN_32BIT_DEST, bool to_from_int8 = false>
+template <bool EN_32BIT_DEST /*unused*/, bool to_from_int8 /*unused*/ = false>
 inline void llk_math_reconfig_data_format_srca(
     const std::uint32_t /*srca_old_operand*/, const std::uint32_t /*srca_new_operand*/) {}
 
-template <bool EN_32BIT_DEST, bool to_from_int8 = false>
+template <bool EN_32BIT_DEST /*unused*/, bool to_from_int8 /*unused*/ = false>
 inline void llk_math_reconfig_data_format_srcb(
     const std::uint32_t /*srcb_old_operand*/, const std::uint32_t /*srcb_new_operand*/) {}

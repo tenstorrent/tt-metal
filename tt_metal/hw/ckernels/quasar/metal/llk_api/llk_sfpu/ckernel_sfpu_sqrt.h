@@ -11,13 +11,17 @@
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = SFPU_ITERATIONS, bool EN_32BIT_DEST, bool FAST_APPROX = false>
+template <
+    bool APPROXIMATION_MODE,
+    int ITERATIONS = SFPU_ITERATIONS,
+    bool EN_32BIT_DEST /*unused*/,
+    bool FAST_APPROX = false>
 inline void calculate_sqrt() {
     static_assert(FAST_APPROX == false, "Non-default FAST_APPROX (true) not supported in Quasar sqrt");
     _calculate_sqrt_<APPROXIMATION_MODE, ITERATIONS>();
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE /*unused*/>
 void sqrt_init() {
     // Empty function kept for backwards compatibility
 }

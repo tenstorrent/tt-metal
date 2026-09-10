@@ -124,7 +124,7 @@ inline void llk_unpack_A_init(
  */
 template <
     BroadcastType BType = BroadcastType::NONE,
-    bool acc_to_dest = false,
+    bool acc_to_dest /*unused*/ = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
 inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_index) {
@@ -165,7 +165,7 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
 // TODO: AM; Optimize block calls by using ntiles per unpack, issue #40798
 template <
     BroadcastType BType = BroadcastType::NONE,
-    bool acc_to_dest = false,
+    bool acc_to_dest /*unused*/ = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
 inline void llk_unpack_A_block(
