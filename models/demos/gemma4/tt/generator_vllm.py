@@ -1972,10 +1972,15 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
 
     model_capabilities = {
         **Gemma4ForCausalLM.model_capabilities,
-        # Sync: one decode step is a self-contained internal loop, so there is
-        # nothing to overlap (async pipelining is a concurrency tool). The
-        # perf comes from amortizing host overhead over the block, not async.
-        "supports_async_decode": False,
+        # Async overlaps host scheduling with the device decode for the ADAPTIVE
+        # BATCHED baseline fallback (conc>1), which returns raw device output the
+        # runner reads on the deferred pipeline -- baseline-entry parity (sync
+        # cost the fallback ~20-35% at conc-32). The plugin scheduler carries
+        # each step's block decision on its SchedulerOutput, so the solo spec
+        # block step (which returns committed host tokens with no read to
+        # overlap) stays correct under the async schedule/commit lag. Kill
+        # switch: GEMMA4_SUPPORTS_ASYNC_DECODE=0.
+        "supports_async_decode": os.environ.get("GEMMA4_SUPPORTS_ASYNC_DECODE", "1").lower() in ("1", "true", "yes"),
         "supports_sample_on_device": True,  # decode returns TOKENS (host)
         # A solo-decode vLLM step commits exactly _SPEC_BLOCK valid tokens
         # (short blocks are EOS-filled at a genuine stop; upstream trims).
@@ -2260,41 +2265,6 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
                 except Exception:
                     pass
 
-    def _adaptive_baseline_row(self, tt_out, num_reqs):
-        """Convert a batched baseline decode output into a host ``[num_reqs, 1]``
-        row: exactly one valid token per request, NO padding. Non-block steps
-        (batched decodes, prefill anchors) reserve exactly one placeholder in
-        the adaptive scheduler, so the emitted row length IS the step contract
-        -- sentinel padding was rejected as a correctness hazard and removed
-        from the plugin.
-        """
-        import torch
-
-        toks = tt_out
-        if not isinstance(toks, torch.Tensor):
-            # device (or host-ttnn) output -> host torch via the base path.
-            # process_decode_output_host returns (tokens_or_logits, logprobs).
-            host = super().read_decode_output(tt_out, async_read=False)
-            res = super().process_decode_output_host(host, is_tokens=True)
-            toks = res[0] if isinstance(res, (tuple, list)) else res
-        if not isinstance(toks, torch.Tensor):
-            toks = torch.as_tensor(toks)
-        # Greedy fallback if the base returned logits ([., vocab]) rather than
-        # sampled tokens (device sampling should give tokens under decode_only).
-        # This OVERRIDES any configured sampling policy for the step, so surface
-        # it the first time it happens (review finding on tt-metal#56048).
-        if toks.dim() >= 2 and toks.shape[-1] > 1:
-            if not getattr(self, "_adaptive_greedy_warned", False):
-                self._adaptive_greedy_warned = True
-                logger.warning(
-                    "Gemma4DFlash: batched baseline step returned logits, not "
-                    "tokens; applying greedy argmax (overrides sampling policy). "
-                    "Check sample_on_device_mode wiring if sampling matters."
-                )
-            toks = toks.argmax(dim=-1)
-        toks = toks.reshape(-1)
-        return toks[:num_reqs].to(torch.int32).reshape(num_reqs, 1)
-
     def decode_forward(self, *args, page_tables_per_layer=None, **kwargs):
         tokens = kwargs.get("tokens")
         if tokens is None and args:
@@ -2326,8 +2296,14 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
                 self.model[0].dflash_capture_taps(None)
             except Exception:
                 pass
-            tt_out = super().decode_forward(*args, page_tables_per_layer=page_tables_per_layer, **kwargs)
-            return self._adaptive_baseline_row(tt_out, batch)
+            # Return the RAW device output (honoring read_from_device): the
+            # runner's read_decode_output/process_decode_output_host/
+            # _get_output_tokens pipeline converts, trims to the real batch, and
+            # samples exactly as for a plain baseline model -- and under async
+            # scheduling the deferred read overlaps the next step's host
+            # scheduling (the whole point of the batched fallback). The width-1
+            # rows commit through the adaptive scheduler's non-block path.
+            return super().decode_forward(*args, page_tables_per_layer=page_tables_per_layer, **kwargs)
         anchor_from_runner = int(tokens.reshape(-1)[0])
         if self._spec_pending is not None:
             start = int(start_pos.reshape(-1)[0]) if start_pos is not None else None
@@ -2342,13 +2318,13 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
             # Solo decode but no dFlash session -- e.g. a request that prefilled
             # BATCHED (concurrency>1, no tap capture) and is now decoding alone
             # after its peers finished. It cannot speculate (no taps), so serve
-            # it as plain baseline, padded to the block width.
+            # it as plain baseline: raw device output, one width-1 row through
+            # the runner's baseline pipeline (same as the batched branch above).
             try:
                 self.model[0].dflash_capture_taps(None)
             except Exception:
                 pass
-            tt_out = super().decode_forward(*args, page_tables_per_layer=page_tables_per_layer, **kwargs)
-            return self._adaptive_baseline_row(tt_out, batch)
+            return super().decode_forward(*args, page_tables_per_layer=page_tables_per_layer, **kwargs)
         dec = self._spec_decoder
         if not self._spec_first_step and anchor_from_runner != dec.anchor:
             logger.warning(
@@ -2411,11 +2387,17 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         return out
 
     def read_decode_output(self, tt_out, async_read=False, *_, **__):
-        # Throughput mode: baseline decode_forward's device output is read the
-        # base way. Spec mode: decode_forward returns the committed host block.
-        if self._SPEC_BLOCK <= 1:
-            return super().read_decode_output(tt_out, async_read, *_, **__)
-        return (tt_out, []) if async_read else tt_out
+        # A SOLO SPEC BLOCK step returns committed host tokens from
+        # decode_forward -- nothing to read, pass them straight through (no
+        # events). Every other output is a DEVICE tensor: throughput mode, and
+        # the adaptive batched / no-session baseline steps that now return raw
+        # device output for the async read overlap. Route those to the base
+        # reader (events under async_read) so the deferred pipeline reads them.
+        import torch
+
+        if self._SPEC_BLOCK > 1 and isinstance(tt_out, torch.Tensor):
+            return (tt_out, []) if async_read else tt_out
+        return super().read_decode_output(tt_out, async_read, *_, **__)
 
     # -- plugin lifecycle hooks (block-output contract) -----------------------
     def release_request(self, row: int) -> None:
