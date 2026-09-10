@@ -215,7 +215,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
              {"tile_height", 1u},
              {"tile_width", 1u}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
-        .hw_config = create_reader_datamovement_config(device->arch()),
+        .hw_config = create_reader_datamovement_config(),
     };
 
     KernelSpec writer{
@@ -241,7 +241,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
              {"face_width", face_shape[1]}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"start_tile_idx", "end_tile_idx", "start_padding_tile_idx", "end_padding_tile_idx"}},
-        .hw_config = create_writer_datamovement_config(device->arch()),
+        .hw_config = create_writer_datamovement_config(),
     };
 
     if (needs_padding) {

@@ -615,21 +615,21 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
                 {"tilized_cb_second_reader_offset", 0u},
                 {"split_reader_cb_shared", 0u},
             },
-        .hw_config = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config),
+        .hw_config = ttnn::to_compute_hardware_config(compute_kernel_config),
     };
 
     // ---- Activation reader kernel ----
     // DFB bindings: produces ACT_ROW_MAJOR + ACT (mcast), consumes ACT_TILIZED (mcast source);
     // self-loops the borrowed ACT_SHARDED (input address source) and READER_INDICES.
-    m2::DataMovementHardwareConfig act_hw;
-    if (device->arch() == tt::ARCH::QUASAR) {
-        // QSR: this width-sharded activation reader fills the ACT_ROW_MAJOR/ACT DFB via per-window "stick"
-        // sub-tile NOC reads; that pattern stalls the DFB implicit-sync credit accounting (reader pinned at
-        // NRBW). Opt out so explicit reserve/push credits stay authoritative (mirrors tilize/transpose HC-sharded).
-        act_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
-    } else {
-        act_hw = m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = act_noc};
-    }
+    // Pin RISCV_0 + act_noc for TT-1.x.x. On TT-2.x.x this width-sharded activation reader fills
+    // ACT_ROW_MAJOR/ACT via per-window "stick" sub-tile NOC reads; that pattern stalls DFB implicit-sync
+    // credit accounting. Opt out so explicit reserve/push credits stay authoritative.
+    m2::DataMovementHardwareConfig act_hw{
+        .config_1xx =
+            m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = act_noc},
+        .config_2xx = m2::DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for_all = true},
+    };
     m2::KernelSpec act_kernel{
         .unique_id = KERNEL_ACT,
         .source = std::filesystem::path("ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
@@ -726,18 +726,15 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
         weights_tensor_bindings.push_back(m2::TensorBinding{.tensor_parameter_name = TP_BIAS, .accessor_name = "bias"});
     }
 
-    m2::DataMovementHardwareConfig weights_hw;
-    if (device->arch() == tt::ARCH::QUASAR) {
-        // This weights reader does explicit reserve_back/push_back on WEIGHTS/BIAS. Full-tile page reads avoid
-        // the sub-tile *stall* the act reader hits, but they do NOT avoid the Quasar *counter double-count*: the
-        // implicit-sync ISR bumps the same 16-bit tile counter as the explicit push -> overflow ->
-        // TILE_COUNTERS fault on the compute unpack consuming WEIGHTS. Opt out so explicit credits are
-        // authoritative.
-        weights_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
-    } else {
-        weights_hw =
-            m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = weights_noc};
-    }
+    // Pin RISCV_1 + weights_noc for TT-1.x.x. This weights reader does explicit reserve_back/push_back on
+    // WEIGHTS/BIAS; on TT-2.x.x the implicit-sync ISR would double-count those tile counters. Opt out so
+    // explicit credits stay authoritative.
+    m2::DataMovementHardwareConfig weights_hw{
+        .config_1xx =
+            m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = weights_noc},
+        .config_2xx = m2::DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for_all = true},
+    };
     m2::KernelSpec weights_kernel{
         .unique_id = KERNEL_WEIGHTS,
         .source = std::filesystem::path("ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"

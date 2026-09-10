@@ -52,8 +52,6 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
     auto unpadded_stick_bytes = W * input_tensor.element_size();
     auto padded_stick_bytes = W_padded * input_tensor.element_size();
 
-    IDevice* device = input_tensor.device();
-
     // input shard spec
     auto input_shard_spec = input_tensor.shard_spec().value();
     uint32_t shard_height_unpadded = input_shard_spec.shape[0];
@@ -160,7 +158,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
                 {"unpadded_stick_step", unpadded_stick_step},
                 {"padded_stick_step", padded_stick_step},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec writer{
@@ -193,7 +191,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::cr
                 {"padding_value_as_u32", padding_value_as_u32},
                 {"padding_value_num_bytes", static_cast<uint32_t>(output.element_size())},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // Neither sharded kernel takes runtime args: every per-core value is pinned by the hashed

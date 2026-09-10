@@ -1695,16 +1695,15 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             .endpoint_type = m2::DFBEndpointType::CONSUMER});
     }
 
-    m2::DataMovementHardwareConfig reader_hw;
-    if (device->arch() == tt::ARCH::QUASAR) {
-        // QSR: this conv activation reader fills the ACT/ACT_ROW_MAJOR DFB via per-window "stick" sub-tile NOC
-        // reads (read_sticks()); that pattern stalls the DFB implicit-sync credit accounting (reader pinned at
-        // NRBW). Opt out so explicit reserve/push credits stay authoritative (mirrors tilize/transpose HC-sharded).
-        reader_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
-    } else {
-        reader_hw =
-            m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = reader_noc};
-    }
+    // Pin RISCV_1 + reader_noc for TT-1.x.x. On TT-2.x.x this conv activation reader fills ACT/ACT_ROW_MAJOR
+    // via per-window "stick" sub-tile NOC reads (read_sticks()); that pattern stalls DFB implicit-sync credit
+    // accounting (reader pinned at NRBW). Opt out so explicit reserve/push credits stay authoritative.
+    m2::DataMovementHardwareConfig reader_hw{
+        .config_1xx =
+            m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = reader_noc},
+        .config_2xx = m2::DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for_all = true},
+    };
     m2::KernelSpec reader_kernel_spec{
         .unique_id = KERNEL_READER,
         .source = std::filesystem::path(reader_kernel),
@@ -1938,17 +1937,15 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     };
 
     // ---- writer mcast SENDER ----
-    m2::DataMovementHardwareConfig writer_sender_hw;
-    if (device->arch() == tt::ARCH::QUASAR) {
-        // The sender does explicit reserve_back/push_back on WEIGHTS/BIAS/ACT_SECOND to publish blocks to
-        // compute. On Quasar the implicit-sync ISR would ALSO bump those tile counters -> double-count ->
-        // 16-bit counter overflow -> TILE_COUNTERS fault on the compute unpack that consumes WEIGHTS. Opt out
-        // so explicit credits stay authoritative (mirrors the reader + matmul mcast fix).
-        writer_sender_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
-    } else {
-        writer_sender_hw = m2::DataMovementGen1Config{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc};
-    }
+    // Pin RISCV_0 + writer_mcast_noc for TT-1.x.x. The sender does explicit reserve_back/push_back on
+    // WEIGHTS/BIAS/ACT_SECOND; on TT-2.x.x the implicit-sync ISR would also bump those tile counters
+    // (double-count -> TILE_COUNTERS overflow). Opt out so explicit credits stay authoritative.
+    m2::DataMovementHardwareConfig writer_sender_hw{
+        .config_1xx =
+            m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc},
+        .config_2xx = m2::DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for_all = true},
+    };
     m2::KernelSpec writer_sender_spec{
         .unique_id = KERNEL_WRITER_SENDER,
         .source = std::filesystem::path(writer_sender_kernel),
@@ -1998,16 +1995,14 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     }
 
     // ---- writer mcast RECEIVER ----
-    m2::DataMovementHardwareConfig writer_receiver_hw;
-    if (device->arch() == tt::ARCH::QUASAR) {
-        // Same as the sender: the receiver does explicit reserve_back/push_back on WEIGHTS/BIAS/ACT_SECOND;
-        // opt out of implicit sync so those tile counters aren't double-bumped (else TILE_COUNTERS overflow
-        // on the compute unpack consuming WEIGHTS).
-        writer_receiver_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
-    } else {
-        writer_receiver_hw = m2::DataMovementGen1Config{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc};
-    }
+    // Same as the sender: pin RISCV_0 + writer_mcast_noc and opt out of DFB implicit sync so explicit
+    // reserve_back/push_back on WEIGHTS/BIAS/ACT_SECOND stay authoritative.
+    m2::DataMovementHardwareConfig writer_receiver_hw{
+        .config_1xx =
+            m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc},
+        .config_2xx = m2::DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for_all = true},
+    };
     m2::KernelSpec writer_receiver_spec{
         .unique_id = KERNEL_WRITER_RECEIVER,
         .source = std::filesystem::path(writer_receiver_kernel),
@@ -2179,7 +2174,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         .source = std::filesystem::path(compute_kernel),
         .compiler_options = {.defines = m2::KernelSpec::CompilerOptions::Defines(compute_defines)},
         .dfb_bindings = std::move(compute_dfb_bindings),
-        .hw_config = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config),
+        .hw_config = ttnn::to_compute_hardware_config(compute_kernel_config),
     };
 
     if (is_conv_1d_depthwise_conv) {
@@ -2298,10 +2293,13 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
              {"reader_num_h_subblocks",
               act_subblock_h_ntiles * act_num_subblocks * (full_k_ntiles / act_block_w_ntiles)}},
         .hw_config =
-            (device->arch() == tt::ARCH::QUASAR)
-                ? m2::DataMovementHardwareConfig{m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true}}
-                : m2::DataMovementHardwareConfig{m2::DataMovementGen1Config{
-                      .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc}},
+            m2::DataMovementHardwareConfig{
+                .config_1xx =
+                    m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc},
+                .config_2xx =
+                    m2::DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for_all = true},
+            },
     };
 
     // ---- Register kernels ----

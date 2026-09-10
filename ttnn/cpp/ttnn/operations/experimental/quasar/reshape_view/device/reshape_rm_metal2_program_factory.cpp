@@ -110,8 +110,7 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewRMMetalV2ProgramFactory::cre
                   "nop"}},
         // Repages with sub-tile writes (dest_page can be < source_page; tt_memmove chunks) -> per
         // ~/implicit_sync.md rule (A), revert to explicit credits.
-        .hw_config =
-            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     spec.kernels = {reader};

@@ -211,11 +211,11 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewRMProgramFactory::create_pro
 
     ProgramSpec spec;
     spec.name = "reshape_view_rm";
-    spec.kernels.push_back(make_rm_kernel(READER, create_reader_datamovement_config(device->arch()), SRC0, SRC1));
+    spec.kernels.push_back(make_rm_kernel(READER, create_reader_datamovement_config(), SRC0, SRC1));
     spec.dataflow_buffers.push_back(make_scratch_dfb(SRC0, dfb_size0, 2));
     spec.dataflow_buffers.push_back(make_scratch_dfb(SRC1, dfb_size1, 1));
     if (can_use_dual_kernel) {
-        spec.kernels.push_back(make_rm_kernel(WRITER, create_writer_datamovement_config(device->arch()), SRC2, SRC3));
+        spec.kernels.push_back(make_rm_kernel(WRITER, create_writer_datamovement_config(), SRC2, SRC3));
         spec.dataflow_buffers.push_back(make_scratch_dfb(SRC2, dfb_size0, 2));
         spec.dataflow_buffers.push_back(make_scratch_dfb(SRC3, dfb_size1, 1));
     }

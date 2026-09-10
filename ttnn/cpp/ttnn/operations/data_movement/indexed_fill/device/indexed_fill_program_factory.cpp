@@ -299,8 +299,6 @@ ttnn::device_operation::ProgramArtifacts IndexedFillProgramFactory::create_progr
         .data_format_metadata = dfb_data_format,
     });
 
-    const auto arch = input_a.device()->arch();
-
     // ---- Reader: single unified kernel; path selected via the `mode` compile-time arg.
     // The one source serves all four modes through `if constexpr (mode)`. Because the named
     // `args::` tokens are emitted per-kernel from the schema, and name lookup still runs on the
@@ -348,13 +346,13 @@ ttnn::device_operation::ProgramArtifacts IndexedFillProgramFactory::create_progr
                   "full_tile_w",
                   "col_page_offset",
                   "col_byte_offset"}},
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // ---- Writer: path-dependent source and bindings.
     KernelSpec writer{
         .unique_id = IF_WRITER,
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
     if (is_native || is_shard_local) {
         // Data DFB is borrowed onto the output buffer: the writer just synchronises on the DFB.

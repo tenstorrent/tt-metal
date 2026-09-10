@@ -364,7 +364,7 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "src"}},
         .compile_time_args = std::move(reader_ct_args),
         .runtime_arg_schema = {.runtime_arg_names = std::move(reader_rta_names)},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
     // --- Writer kernel ---
@@ -440,7 +440,7 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "dst"}},
         .compile_time_args = std::move(writer_ct_args),
         .runtime_arg_schema = {.runtime_arg_names = std::move(writer_rta_names)},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     });
 
     // --- Compute kernels ---
@@ -498,56 +498,51 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     // into sfpu_precision_mode and the caller's dst_full_sync_en into double_buffer_dest, silently
     // changing precision / Dest buffering. (DST_SYNC_FULL is still passed as a *define*, exactly as
     // legacy did.)
-    auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config);
-    // std::visit rather than a Gen1-only get_if: to_compute_hardware_config yields a
-    // ComputeGen2Config on Quasar, and the fields set below exist on both generations. The
-    // explicit-unpack-mode requirement in particular is enforced generation-agnostically, so a
-    // Gen1-only branch would leave FP32 + 32-bit-Dest programs failing ProgramSpec validation there.
-    std::visit(
-        [&](auto& compute_cfg) {
-            compute_cfg.sfpu_precision_mode = Precision::Precise;  // legacy math_approx_mode = false
-            compute_cfg.double_buffer_dest = true;                 // legacy dst_full_sync_en = false
-            // For Float32 input with fp32_dest_acc_en, force unpack-to-dest so that
-            // the unpacker writes full fp32 to DEST instead of routing through SrcA, which would
-            // downcast to TF32, losing precision and even leading to large-mean fp32 variance
-            // silently collapsing to ~0 due to TF32 truncation wiping the bits that are different
-            // between nearby samples.
-            //
-            // Apply this to every Float32 buffer the compute kernel reads back via copy_tile /
-            // transpose_tile:
-            //   - Input: needed on all three reduction paths (H, W, HW) with FP32 input. The Welford
-            //     SFPU intake reads it directly via copy_tile/transpose_tile, so UnpackToDest
-            //     preserves the full FP32 into DEST (there is no input pre-scaling -- see post_mul_scaler).
-            //   - W-reduce only: var -- the variance tile is read back after the initial
-            //     transpose to undo it.
-            //   - HW-reduce only: combined -- the variance tile is read back after the
-            //     writer-side cross-core re-reduction.
-            if (input_cb_data_format == tt::DataFormat::Float32) {
-                compute_cfg.unpack_modes.emplace(IN_DFB, UnpackMode::UnpackToDest);
+    auto compute_hw = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config);
+    {
+        auto& compute_cfg = compute_hw;
+        compute_cfg.sfpu_precision_mode = Precision::Precise;  // legacy math_approx_mode = false
+        compute_cfg.double_buffer_dest = true;                 // legacy dst_full_sync_en = false
+        // For Float32 input with fp32_dest_acc_en, force unpack-to-dest so that
+        // the unpacker writes full fp32 to DEST instead of routing through SrcA, which would
+        // downcast to TF32, losing precision and even leading to large-mean fp32 variance
+        // silently collapsing to ~0 due to TF32 truncation wiping the bits that are different
+        // between nearby samples.
+        //
+        // Apply this to every Float32 buffer the compute kernel reads back via copy_tile /
+        // transpose_tile:
+        //   - Input: needed on all three reduction paths (H, W, HW) with FP32 input. The Welford
+        //     SFPU intake reads it directly via copy_tile/transpose_tile, so UnpackToDest
+        //     preserves the full FP32 into DEST (there is no input pre-scaling -- see post_mul_scaler).
+        //   - W-reduce only: var -- the variance tile is read back after the initial
+        //     transpose to undo it.
+        //   - HW-reduce only: combined -- the variance tile is read back after the
+        //     writer-side cross-core re-reduction.
+        if (input_cb_data_format == tt::DataFormat::Float32) {
+            compute_cfg.unpack_modes.emplace(IN_DFB, UnpackMode::UnpackToDest);
+        }
+        if (reduce_w && fp32_dest_acc_en && !narrow_scratch_to_bf16) {
+            compute_cfg.unpack_modes.emplace(VAR_DFB, UnpackMode::UnpackToDest);
+        }
+        if (reduce_hw && fp32_dest_acc_en && !narrow_scratch_to_bf16) {
+            compute_cfg.unpack_modes.emplace(COMBINED_DFB, UnpackMode::UnpackToDest);
+        }
+        // Legacy left every other entry at Default (= UnpackToSrc). Metal 2.0 nonetheless requires an
+        // explicit mode for every Float32 buffer this kernel consumes under a 32-bit Dest register,
+        // so state the legacy value for those.
+        auto require_explicit_unpack_mode = [&](const DFBSpecName& name, tt::DataFormat format) {
+            if (fp32_dest_acc_en && format == tt::DataFormat::Float32) {
+                compute_cfg.unpack_modes.emplace(name, UnpackMode::UnpackToSrc);
             }
-            if (reduce_w && fp32_dest_acc_en && !narrow_scratch_to_bf16) {
-                compute_cfg.unpack_modes.emplace(VAR_DFB, UnpackMode::UnpackToDest);
-            }
-            if (reduce_hw && fp32_dest_acc_en && !narrow_scratch_to_bf16) {
-                compute_cfg.unpack_modes.emplace(COMBINED_DFB, UnpackMode::UnpackToDest);
-            }
-            // Legacy left every other entry at Default (= UnpackToSrc). Metal 2.0 nonetheless requires an
-            // explicit mode for every Float32 buffer this kernel consumes under a 32-bit Dest register,
-            // so state the legacy value for those.
-            auto require_explicit_unpack_mode = [&](const DFBSpecName& name, tt::DataFormat format) {
-                if (fp32_dest_acc_en && format == tt::DataFormat::Float32) {
-                    compute_cfg.unpack_modes.emplace(name, UnpackMode::UnpackToSrc);
-                }
-            };
-            require_explicit_unpack_mode(IN_DFB, input_cb_data_format);
-            if (reduce_w) {
-                require_explicit_unpack_mode(VAR_DFB, scratch_cb_data_format);
-            }
-            if (reduce_hw) {
-                require_explicit_unpack_mode(COMBINED_DFB, combined_cb_data_format);
-            }
-        },
-        compute_hw);
+        };
+        require_explicit_unpack_mode(IN_DFB, input_cb_data_format);
+        if (reduce_w) {
+            require_explicit_unpack_mode(VAR_DFB, scratch_cb_data_format);
+        }
+        if (reduce_hw) {
+            require_explicit_unpack_mode(COMBINED_DFB, combined_cb_data_format);
+        }
+    }
 
     auto make_compute = [&](const KernelSpecName& unique_id) {
         Group<DFBBinding> dfb_bindings = {

@@ -32,7 +32,6 @@ using tt::tt_metal::experimental::ProgramSpec;
 using tt::tt_metal::experimental::TensorBinding;
 using tt::tt_metal::experimental::TensorParameter;
 using tt::tt_metal::experimental::TensorParamName;
-using tt::tt_metal::experimental::unpack_modes;
 using tt::tt_metal::experimental::WorkUnitSpec;
 
 namespace ttnn::prim {
@@ -187,8 +186,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
                 // per kernel rather than duplicated per core.
                 .common_runtime_arg_names = {"Mt", "Kt", "Nt", "MtKt", "KtNt", "batch", "bcast_B", "MtNt"},
             },
-        .hw_config =
-            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     KernelSpec writer{
@@ -213,8 +211,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
             {
                 .runtime_arg_names = {"num_pages", "start_id"},
             },
-        .hw_config =
-            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // Per-node runtime args for reader and writer
@@ -261,8 +258,8 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
         device->arch(), num_cores, mm_kernel_defines, throttle_level);
 
     // Compute kernel(s) — one per core group with different tile counts.
-    auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config);
-    unpack_modes(compute_hw) = {
+    auto compute_hw = ttnn::to_compute_hardware_config(compute_kernel_config);
+    compute_hw.unpack_modes = {
         {IN0_DFB, tt::tt_metal::UnpackMode::UnpackToSrc},
         {IN1_DFB, tt::tt_metal::UnpackMode::UnpackToSrc},
     };

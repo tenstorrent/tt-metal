@@ -91,7 +91,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
             .endpoint_type = DFBEndpointType::PRODUCER,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles_per_core"}},
-        .hw_config = create_reader_datamovement_config(device->arch()),
+        .hw_config = create_reader_datamovement_config(),
     });
 
     spec.kernels.push_back(KernelSpec{
@@ -104,13 +104,13 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
             .endpoint_type = DFBEndpointType::CONSUMER,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"num_units"}},
-        .hw_config = create_writer_datamovement_config(device->arch()),
+        .hw_config = create_writer_datamovement_config(),
     });
 
     // Legacy built a ComputeConfigDescriptor directly, setting only fp32_dest_acc_en and
-    // unpack_to_dest_mode; every other field kept its Metal default, which ComputeGen1Config
+    // unpack_to_dest_mode; every other field kept its Metal default, which ComputeHardwareConfig
     // reproduces.
-    ComputeGen1Config compute_hw{.enable_32_bit_dest = fp32_dest_acc_en};
+    ComputeHardwareConfig compute_hw{.enable_32_bit_dest = fp32_dest_acc_en};
     if (src0_dfb_data_format == tt::DataFormat::Float32) {
         compute_hw.unpack_modes.insert({IN0, UnpackMode::UnpackToDest});
     }

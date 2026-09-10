@@ -65,7 +65,6 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
     const auto& final_decay_tensor = in.final_decay.mesh_tensor();
     const auto& t_inv_tensor = in.t_inv.mesh_tensor();
     const auto& device = v_beta_tensor.device();
-    const auto arch = device.arch();
 
     const uint32_t BH = attrs.batch_heads;
     const uint32_t NC = attrs.num_chunks;
@@ -184,7 +183,7 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
              {"Vt_full", Vt_full},
              {"summary_pair", static_cast<uint32_t>(summary)}},
         .runtime_arg_schema = {.runtime_arg_names = {"head", "value_block", "num_chunks"}},
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
     if (!summary) {
         reader.tensor_bindings.push_back(tt::tt_metal::experimental::TensorBinding{q_decay_tensor_name, "q_decay"});
@@ -217,11 +216,11 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
              {"Vt_full", Vt_full},
              {"summary_pair", static_cast<uint32_t>(summary)}},
         .runtime_arg_schema = {.runtime_arg_names = {"head", "value_block", "num_chunks"}},
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
-    auto compute_hw = ttnn::to_compute_hardware_config(arch, attrs.compute_kernel_config);
-    auto& unpack_modes = tt::tt_metal::experimental::unpack_modes(compute_hw);
+    auto compute_hw = ttnn::to_compute_hardware_config(attrs.compute_kernel_config);
+    auto& unpack_modes = compute_hw.unpack_modes;
     for (const auto& name :
          {state_dfb_name,
           t_inv_dfb_name,

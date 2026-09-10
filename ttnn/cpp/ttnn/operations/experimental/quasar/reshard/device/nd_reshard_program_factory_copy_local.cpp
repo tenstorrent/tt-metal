@@ -123,16 +123,15 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyLocalShardFactory<local_is
         };
     };
 
-    // Preserve the legacy explicit RISCV_0 / NOC RISCV_0_default placement.
-    DataMovementHardwareConfig brisc_hw;
-    if (input.device()->arch() == tt::ARCH::QUASAR) {
-        brisc_hw = DataMovementGen2Config{};
-    } else {
-        brisc_hw = DataMovementGen1Config{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-        };
-    }
+    // Preserve the legacy explicit RISCV_0 / NOC RISCV_0_default placement. Leave config_2xx
+    // disengaged so TT-2.x.x keeps default DFB implicit sync.
+    DataMovementHardwareConfig brisc_hw{
+        .config_1xx =
+            DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+            },
+    };
     KernelSpec brisc{
         .unique_id = COPY_LOCAL_BRISC,
         .source = kernel_source,
@@ -143,16 +142,15 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyLocalShardFactory<local_is
         .hw_config = std::move(brisc_hw),
     };
 
-    // Preserve the legacy explicit RISCV_1 / NOC RISCV_1_default placement.
-    DataMovementHardwareConfig ncrisc_hw;
-    if (input.device()->arch() == tt::ARCH::QUASAR) {
-        ncrisc_hw = DataMovementGen2Config{};
-    } else {
-        ncrisc_hw = DataMovementGen1Config{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
-        };
-    }
+    // Preserve the legacy explicit RISCV_1 / NOC RISCV_1_default placement. Leave config_2xx
+    // disengaged so TT-2.x.x keeps default DFB implicit sync.
+    DataMovementHardwareConfig ncrisc_hw{
+        .config_1xx =
+            DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = DataMovementProcessor::RISCV_1,
+                .noc = NOC::RISCV_1_default,
+            },
+    };
     KernelSpec ncrisc{
         .unique_id = COPY_LOCAL_NCRISC,
         .source = kernel_source,

@@ -131,7 +131,7 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
         .compile_time_args =
             {{"tiles_per_channel_dim", tiles_per_channel_dim}, {"tiles_per_width_dim", tiles_per_width_dim}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_block_id", "num_blocks"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // Writer kernel: DFB -> DRAM.
@@ -152,7 +152,7 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
              {"element_size", datum_size(out_dfb_data_format)}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"start_block_id", "num_blocks", "patch_height_offset", "output_offset"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // Compute kernel (untilize). One KernelSpec per legacy compute KernelDescriptor (main + cliff),
@@ -160,7 +160,7 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
     // only fp32_dest_acc_en was set by the legacy op -> enable_32_bit_dest.
     const bool fp32_dest_acc_en = dfb_data_format == tt::DataFormat::Float32;
     auto make_compute_spec = [&](const KernelSpecName& id, uint32_t nblocks) {
-        ComputeGen1Config compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
+        ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
         // The compute kernel consumes SRC0. When SRC0 is Float32 and enable_32_bit_dest is set,
         // the validator requires an explicit unpack mode. Legacy set none (default) -> UnpackToSrc.
         if (fp32_dest_acc_en) {
@@ -383,7 +383,7 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"}},
         .compile_time_args = common_cta,
         .runtime_arg_schema = {.runtime_arg_names = {"work_per_core", "src_index", "curr_src_row_index"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // Writer: consumes src0; when !is_l1_aligned it also uses src1 as a self-loop scratch.
@@ -403,7 +403,7 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
         .compile_time_args = common_cta,
         .runtime_arg_schema = {.runtime_arg_names = {"work_per_core", "dst_index"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // Per-core runtime args (name-first tables built from the legacy node-first loop).

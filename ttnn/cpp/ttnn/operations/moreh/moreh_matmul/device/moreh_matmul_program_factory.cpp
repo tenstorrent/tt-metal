@@ -397,7 +397,7 @@ ttnn::device_operation::ProgramArtifacts MorehMatmulOperation::MultiCoreProgramF
         .compile_time_args = reader_compile_time_args,
         // input_stride[8], other_stride[8], output_stride[8], input_not_bcast[8], other_not_bcast[8]
         .runtime_arg_schema = {.runtime_arg_names = {"output_tile_start_idx", "num_output_tiles"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = 5 * static_cast<uint32_t>(ttnn::MAX_NUM_DIMENSIONS)},
     };
 
@@ -408,7 +408,7 @@ ttnn::device_operation::ProgramArtifacts MorehMatmulOperation::MultiCoreProgramF
             .dfb_spec_name = OUT0, .accessor_name = "out0", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_id", "num_output_tiles"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     log_debug(
@@ -438,19 +438,17 @@ ttnn::device_operation::ProgramArtifacts MorehMatmulOperation::MultiCoreProgramF
         // Style A: translate the resolved TTNN ComputeKernelConfig; helper handles the four knobs
         // (math_fidelity, math_approx_mode->sfpu_precision_mode, fp32_dest_acc_en->enable_32_bit_dest,
         // dst_full_sync_en->double_buffer_dest inverted) and the arch selection.
-        auto compute_hw = ttnn::to_compute_hardware_config(
-            device->arch(),
-            ttnn::ComputeKernelConfig{
-                .math_fidelity = math_fidelity,
-                .math_approx_mode = math_approx_mode,
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .dst_full_sync_en = dst_full_sync_en});
+        auto compute_hw = ttnn::to_compute_hardware_config(ttnn::ComputeKernelConfig{
+            .math_fidelity = math_fidelity,
+            .math_approx_mode = math_approx_mode,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = dst_full_sync_en});
         if (fp32_dest_acc_en) {
             // Legacy set unpack_to_dest_mode[c_24] = UnpackToDestFp32 (rest Default). Metal 2.0 requires
             // an explicit unpack_mode for every Float32 DFB consumed under enable_32_bit_dest: IM0 (c_24)
             // and IM3 (c_27) are Float32 here. IM0 -> UnpackToDest (legacy UnpackToDestFp32), IM3 ->
             // UnpackToSrc (legacy Default).
-            std::get<ComputeGen1Config>(compute_hw).unpack_modes = {
+            compute_hw.unpack_modes = {
                 {IM0, UnpackMode::UnpackToDest},
                 {IM3, UnpackMode::UnpackToSrc},
             };

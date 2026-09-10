@@ -1177,8 +1177,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         // exactly the sub-tile pattern that stalls the DFB implicit-sync credit accounting (reader
         // pinned at NRBW/cb_reserve_back, compute idle). Mirror the tilize/transpose HC-sharded
         // workaround and opt out of implicit sync so explicit reserve/push credits stay authoritative.
-        .hw_config =
-            ttnn::create_reader_datamovement_config(mesh_device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     std::optional<KernelSpec> reader1;
@@ -1194,8 +1193,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
             // QSR: companion opt-out on the split/second reader (writer-face). Same sub-tile stick
             // DFB transfers as reader0; keep explicit reserve/push credits authoritative to avoid the
             // implicit-sync NWFW/NRBW stall (mirrors tilize/transpose HC-sharded).
-            .hw_config = ttnn::create_writer_datamovement_config(
-                mesh_device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+            .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
         };
     }
 
@@ -1358,13 +1356,11 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         /*default_l1_acc=*/false,
         /*default_dst_full_sync_en=*/(params.is_large_kernel && return_indices) || indexes_32_bit);
 
-    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(
-        device_arch,
-        ttnn::ComputeKernelConfig{
-            .math_fidelity = get_math_fidelity(device_compute_kernel_config),
-            .math_approx_mode = false,
-            .fp32_dest_acc_en = get_fp32_dest_acc_en(device_compute_kernel_config),
-            .dst_full_sync_en = get_dst_full_sync_en(device_compute_kernel_config)});
+    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(ttnn::ComputeKernelConfig{
+        .math_fidelity = get_math_fidelity(device_compute_kernel_config),
+        .math_approx_mode = false,
+        .fp32_dest_acc_en = get_fp32_dest_acc_en(device_compute_kernel_config),
+        .dst_full_sync_en = get_dst_full_sync_en(device_compute_kernel_config)});
 
     KernelSpec compute{
         .unique_id = COMPUTE_KERNEL,

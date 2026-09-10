@@ -202,7 +202,7 @@ ttnn::device_operation::ProgramArtifacts RepeatAndInterleaveEltwiseMulProgramFac
                 .runtime_arg_names =
                     {"in1_num_blocks", "in1_start_id", "in1_num_blocks_h", "in1_num_blocks_w", "in0_num_blocks_w"},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec writer{
@@ -227,7 +227,7 @@ ttnn::device_operation::ProgramArtifacts RepeatAndInterleaveEltwiseMulProgramFac
                 .runtime_arg_names =
                     {"out_num_blocks_w_per_core", "start_id", "out_num_blocks_h", "out_total_blocks_w"},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     Group<DFBBinding> compute_dfb_bindings = {
@@ -279,12 +279,12 @@ ttnn::device_operation::ProgramArtifacts RepeatAndInterleaveEltwiseMulProgramFac
     };
 
     // Compute hw_config — Style B (the legacy factory set a Metal ComputeConfigDescriptor directly,
-    // with no TTNN ComputeKernelConfig behind it). Build ComputeGen1Config field by field: the three
+    // with no TTNN ComputeKernelConfig behind it). Build ComputeHardwareConfig field by field: the three
     // fields the descriptor set explicitly are carried over (math_approx_mode = false becomes
-    // sfpu_precision_mode = Precise), and the three it left alone stay at ComputeGen1Config's
+    // sfpu_precision_mode = Precise), and the three it left alone stay at ComputeHardwareConfig's
     // defaults, which coincide with the legacy descriptor's. No unpack_modes entry is required
     // because enable_32_bit_dest is false.
-    const ComputeHardwareConfig compute_hw_config = ComputeGen1Config{
+    const ComputeHardwareConfig compute_hw_config{
         .fpu_math_fidelity = operation_attributes.math_fidelity,
         .sfpu_precision_mode = Precision::Precise,
         .enable_32_bit_dest = false,

@@ -142,7 +142,7 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
                 .endpoint_type = DFBEndpointType::PRODUCER,
             }},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles_per_core"}},
-        .hw_config = ttnn::create_reader_datamovement_config(input.device()->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // Writer kernel (writes interleaved output to DRAM). Both layout variants present the same binding
@@ -159,7 +159,7 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
                 .endpoint_type = DFBEndpointType::CONSUMER,
             }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
-        .hw_config = ttnn::create_writer_datamovement_config(input.device()->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
     if (is_tile) {
         writer.source =
@@ -209,11 +209,11 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
                  }},
             .compile_time_args = {{"per_core_tile_cnt", num_units_per_shard}},
             // Every field of the legacy ComputeConfigDescriptor{} was left at its default, and the
-            // Metal 2.0 Gen1 compute defaults match those field for field (HiFi4; math_approx_mode
-            // false = Precise SFPU; bfp8_pack_precise false = Approximate pack; fp32_dest_acc_en
-            // false; dst_full_sync_en false = double_buffer_dest true), so an all-default Gen1 config
+            // Metal 2.0 ComputeHardwareConfig defaults match those field for field (HiFi4; math_approx_mode
+            // false = Precise SFPU; bfp8_pack_precise false = Approximate pack in config_1xx; fp32_dest_acc_en
+            // false; dst_full_sync_en false = double_buffer_dest true), so an all-default ComputeHardwareConfig
             // reproduces the legacy settings exactly.
-            .hw_config = ComputeHardwareConfig{ComputeGen1Config{}},
+            .hw_config = ComputeHardwareConfig{},
         });
         work_unit_kernels.push_back(COMPUTE);
     }

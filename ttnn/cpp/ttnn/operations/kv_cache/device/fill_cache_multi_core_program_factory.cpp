@@ -201,7 +201,7 @@ ttnn::device_operation::ProgramArtifacts FillCacheMultiCoreProgramFactory::creat
             .dfb_spec_name = SRC0_DFB, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = reader_tensor_bindings,
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // ---- Writer (donor Metal 2.0 fork; its interface: dfb::out CONSUMER, tensor::dst, num_pages/start_id) ----
@@ -216,7 +216,7 @@ ttnn::device_operation::ProgramArtifacts FillCacheMultiCoreProgramFactory::creat
             .dfb_spec_name = SRC0_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = DST, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // ---- Per-core runtime args ----

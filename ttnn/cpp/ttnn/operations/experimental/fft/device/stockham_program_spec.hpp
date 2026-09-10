@@ -137,11 +137,10 @@ inline Group<DFBBinding> writer_bindings(bool is_bf16, bool apply_post_twiddle) 
 }
 
 inline KernelSpec make_compute(uint32_t log2_sub_n) {
-    ComputeGen1Config gen1{.fpu_math_fidelity = MathFidelity::HiFi4, .enable_32_bit_dest = true};
+    ComputeHardwareConfig compute_hw{.fpu_math_fidelity = MathFidelity::HiFi4, .enable_32_bit_dest = true};
     for (const auto& name : {EVEN_R, EVEN_I, ODD_R, ODD_I, TWIDDLE_R, TWIDDLE_I, TMP_R, TMP_I, TW_ODD_R, TW_ODD_I}) {
-        gen1.unpack_modes.emplace(name, UnpackMode::UnpackToDest);
+        compute_hw.unpack_modes.emplace(name, UnpackMode::UnpackToDest);
     }
-    ComputeHardwareConfig compute_hw = std::move(gen1);
     return KernelSpec{
         .unique_id = COMPUTE,
         .source = "ttnn/cpp/ttnn/operations/experimental/fft/device/kernels/compute/batch_fft_compute.cpp",

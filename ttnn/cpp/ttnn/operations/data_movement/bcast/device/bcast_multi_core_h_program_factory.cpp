@@ -127,7 +127,7 @@ ttnn::device_operation::ProgramArtifacts BcastMultiCoreHProgramFactory::create_p
              TensorBinding{.tensor_parameter_name = INPUT_B, .accessor_name = "src1"}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"src0_num_tiles", "NCHtWt", "NC", "Ht", "Wt", "nc1", "start_id", "HtWt"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec writer{
@@ -138,10 +138,10 @@ ttnn::device_operation::ProgramArtifacts BcastMultiCoreHProgramFactory::create_p
             .dfb_spec_name = OUT, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"Ht", "Wt", "Wt_read", "Wt_skip", "NC", "HtWt"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
-    ComputeHardwareConfig compute_hw = ComputeGen1Config{};  // legacy ComputeConfigDescriptor{} defaults
+    ComputeHardwareConfig compute_hw{};  // legacy ComputeConfigDescriptor{} defaults
     KernelSpec compute{
         .unique_id = COMPUTE,
         .source =

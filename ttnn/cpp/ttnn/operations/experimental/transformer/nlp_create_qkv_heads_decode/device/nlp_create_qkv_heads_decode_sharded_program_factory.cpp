@@ -158,7 +158,6 @@ ttnn::device_operation::ProgramArtifacts NLPCreateQKVHeadsDecodeShardedProgramFa
     const std::filesystem::path kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/device/kernels/"
         "reader_tm_tile_layout_nlp_create_qkv_heads_decode.cpp";
-    const auto arch = device->arch();
 
     auto make_kernel = [&](const KernelSpecName& unique_id,
                            uint32_t phases_to_read,
@@ -259,26 +258,26 @@ ttnn::device_operation::ProgramArtifacts NLPCreateQKVHeadsDecodeShardedProgramFa
         /*phases_to_read=*/1,
         /*process_qv=*/true,
         overlap_qk_coregrid,
-        create_reader_datamovement_config(arch)));
+        create_reader_datamovement_config()));
     kernels.push_back(make_kernel(
         Q_WRITER,
         /*phases_to_read=*/2,
         /*process_qv=*/true,
         overlap_qk_coregrid,
-        create_writer_datamovement_config(arch)));
+        create_writer_datamovement_config()));
     if (!overlap_qk_coregrid) {
         kernels.push_back(make_kernel(
             K_READER,
             /*phases_to_read=*/1,
             /*process_qv=*/false,
             /*process_k=*/true,
-            create_reader_datamovement_config(arch)));
+            create_reader_datamovement_config()));
         kernels.push_back(make_kernel(
             K_WRITER,
             /*phases_to_read=*/2,
             /*process_qv=*/false,
             /*process_k=*/true,
-            create_writer_datamovement_config(arch)));
+            create_writer_datamovement_config()));
     }
 
     Group<WorkUnitSpec> work_units = {WorkUnitSpec{

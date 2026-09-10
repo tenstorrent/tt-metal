@@ -1021,12 +1021,12 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
         .packer_l1_acc = packer_l1_acc,
         .dst_full_sync_en = dst_full_sync_en,
     };
-    auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), resolved_config);
+    auto compute_hw = ttnn::to_compute_hardware_config(resolved_config);
     // unpack_modes: Metal 2.0 requires an explicit entry for each Float32-format DFB a compute kernel
     // consumes when enable_32_bit_dest is set. Legacy set no unpack_to_dest_mode (all Default = UnpackToSrc),
     // so every required entry is UnpackToSrc. The trigger is the DFB's format, not the tensor dtype.
     if (fp32_dest_acc_en) {
-        auto& modes = unpack_modes(compute_hw);
+        auto& modes = compute_hw.unpack_modes;
         auto maybe_unpack = [&](const DFBSpecName& name, tt::DataFormat df, bool bound) {
             if (bound && df == tt::DataFormat::Float32) {
                 modes.insert({name, tt::tt_metal::UnpackMode::UnpackToSrc});
@@ -1069,7 +1069,7 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
                   "mcast_y0",
                   "mcast_y1",
                   "num_dests"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = 2 * num_output_cores},
     };
     KernelSpec writer{
@@ -1103,7 +1103,7 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
                   "children_per_round_3",
                   "children_per_round_4",
                   "children_per_round_5"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
         .advanced_options =
             {.num_runtime_varargs = 2 * num_cores_per_head + 2 * num_reducer_cores + 2 * num_output_cores},
     };

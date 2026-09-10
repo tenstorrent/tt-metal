@@ -5197,19 +5197,19 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 namespace m2 = tt::tt_metal::experimental;
 
 namespace CMAKE_UNIQUE_NAMESPACE {
-// Create a generation-agnostic data movement hardware config: Gen1 (WH/BH) takes the given
-// processor & NOC; Gen2 (Quasar) uses the default config, optionally opting the kernel's DFBs
-// out of implicit-sync credit accounting (disable_dfb_implicit_sync_for_all) — a Gen2-only concept
-// ignored on Gen1.
+// Pin processor/NOC in config_1xx (required on TT-1.x.x, ignored on TT-2.x.x). Engage config_2xx
+// only when disable_dfb_implicit_sync_for_all is set; unused extras are ignored at program construction.
 m2::DataMovementHardwareConfig make_datamovement_hardware_config(
-    tt::ARCH arch,
     tt::tt_metal::DataMovementProcessor processor,
     tt::tt_metal::NOC noc,
     bool disable_dfb_implicit_sync_for_all = false) {
-    if (arch == tt::ARCH::QUASAR) {
-        return m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = disable_dfb_implicit_sync_for_all};
+    m2::DataMovementHardwareConfig config{
+        .config_1xx = m2::DataMovementHardwareConfig::DataMovement1XXConfig{.processor = processor, .noc = noc}};
+    if (disable_dfb_implicit_sync_for_all) {
+        config.config_2xx =
+            m2::DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for_all = true};
     }
-    return m2::DataMovementGen1Config{.processor = processor, .noc = noc};
+    return config;
 }
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 
@@ -5808,13 +5808,11 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         m2::SemaphoreSpec{.unique_id = RO_IN1_RECEIVER_SEM, .target_nodes = all_cores},
     };
 
-    m2::ComputeHardwareConfig compute_hw_config = ttnn::to_compute_hardware_config(
-        device->arch(),
-        ttnn::ComputeKernelConfig{
-            .math_fidelity = math_fidelity,
-            .math_approx_mode = math_approx_mode,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = false});
+    m2::ComputeHardwareConfig compute_hw_config = ttnn::to_compute_hardware_config(ttnn::ComputeKernelConfig{
+        .math_fidelity = math_fidelity,
+        .math_approx_mode = math_approx_mode,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = false});
 
     // ---- in0 sender kernel CTAs (named) ----
     auto make_in0_sender_cta = [&](uint32_t core_has_output_block_work,
@@ -5962,7 +5960,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         // multicast that never delivers VALID, and the whole grid hangs at receiver_sem.wait(VALID).
         // Matches the working mcast_2d factory.
         .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-            device->arch(),
             tt::tt_metal::DataMovementProcessor::RISCV_1,
             in0_noc,
             /*disable_dfb_implicit_sync_for_all=*/true),
@@ -5992,7 +5989,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             .runtime_arg_schema = {.runtime_arg_names = in0_no_work_rta_names},
             // [#47797] Pin RISCV_1 + in0_noc (see in0 sender above); block-sharded mcast geometry.
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(),
                 tt::tt_metal::DataMovementProcessor::RISCV_1,
                 in0_noc,
                 /*disable_dfb_implicit_sync_for_all=*/true),
@@ -6018,7 +6014,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             .runtime_arg_schema = {.runtime_arg_names = in0_no_work_rta_names},
             // [#47797] Pin RISCV_1 + in0_noc (see in0 sender above); block-sharded mcast geometry.
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(),
                 tt::tt_metal::DataMovementProcessor::RISCV_1,
                 in0_noc,
                 /*disable_dfb_implicit_sync_for_all=*/true),
@@ -6056,7 +6051,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             // [#47797] Pin RISCV_1 + in0_noc for NOC parity with the in0 sender (the receiver's
             // sender_sem.up to the sender must use the same NOC as the mcast geometry).
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(),
                 tt::tt_metal::DataMovementProcessor::RISCV_1,
                 in0_noc,
                 /*disable_dfb_implicit_sync_for_all=*/true),
@@ -6172,7 +6166,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             // The bare WRITER hint resolves to NOC1 here and the writes never leave the NIU
             // (npw_sent=0), hanging the final barrier.
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(),
                 tt::tt_metal::DataMovementProcessor::RISCV_0,
                 in1_noc,
                 /*disable_dfb_implicit_sync_for_all=*/true),
@@ -6830,13 +6823,11 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             .unique_id = RO_IN1_RECEIVER_SEM, .target_nodes = CoreRangeSet(in1_mcast_receiver_cores_bounding_box)},
     };
 
-    m2::ComputeHardwareConfig compute_hw_config = ttnn::to_compute_hardware_config(
-        device->arch(),
-        ttnn::ComputeKernelConfig{
-            .math_fidelity = math_fidelity,
-            .math_approx_mode = math_approx_mode,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = false});
+    m2::ComputeHardwareConfig compute_hw_config = ttnn::to_compute_hardware_config(ttnn::ComputeKernelConfig{
+        .math_fidelity = math_fidelity,
+        .math_approx_mode = math_approx_mode,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = false});
 
     // The in1 sender multicasts weights/bias over a dest rectangle whose start/end are swapped based
     // on in1_noc (below). The in1 sender/receiver writer kernels MUST issue NoC ops on that same NOC,
@@ -6932,7 +6923,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             // Pin RISCV_1 + in0_noc (not a plain READER hint -> NOC_0) so this does not collide with the
             // in1 sender writer on NOC_0. See the in0_noc comment above.
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(),
                 tt::tt_metal::DataMovementProcessor::RISCV_1,
                 in0_noc,
                 /*disable_dfb_implicit_sync_for_all=*/true),
@@ -7043,7 +7033,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             // Pin RISCV_0 + in1_noc (legacy parity): the multicast dest rectangle was swapped for
             // in1_noc, so the mcast must issue on in1_noc or it inverts and degenerates.
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(),
                 tt::tt_metal::DataMovementProcessor::RISCV_0,
                 in1_noc,
                 /*disable_dfb_implicit_sync_for_all=*/true),
@@ -7125,7 +7114,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             // Pin RISCV_0 + in1_noc (legacy parity) so the receiver's NoC ops use the same NOC as
             // the sender's multicast geometry.
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(),
                 tt::tt_metal::DataMovementProcessor::RISCV_0,
                 in1_noc,
                 /*disable_dfb_implicit_sync_for_all=*/true),
@@ -7205,7 +7193,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             .source = std::filesystem::path(NOOP_DM_KERNEL_PATH),
             .dfb_bindings = std::move(noop_dm_dfb),
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(),
                 tt::tt_metal::DataMovementProcessor::RISCV_0,
                 in1_noc,
                 /*disable_dfb_implicit_sync_for_all=*/true),
@@ -7218,7 +7205,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             // the program-spec validator rejects (noc_inserted). in0_noc is the opposite NOC -> distinct.
             // Mirrors the worker-core split (in0 reader on in0_noc, in1 writer on in1_noc).
             .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
-                device->arch(),
                 tt::tt_metal::DataMovementProcessor::RISCV_1,
                 in0_noc,
                 /*disable_dfb_implicit_sync_for_all=*/true),

@@ -27,7 +27,7 @@ namespace ttnn::operations::moreh::moreh_softmax_backward {
 // merge into one scope, where same-named constants would collide.
 namespace metal2 {
 
-using tt::tt_metal::experimental::ComputeUnpackModes;
+using ComputeUnpackModes = tt::tt_metal::experimental::ComputeHardwareConfig::ComputeUnpackModes;
 using tt::tt_metal::experimental::DataflowBufferSpec;
 using tt::tt_metal::experimental::DFBSpecName;
 using tt::tt_metal::experimental::KernelSpec;

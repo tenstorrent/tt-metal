@@ -97,7 +97,7 @@ ttnn::device_operation::ProgramArtifacts IndexedFusedUpdateCacheProgramFactory::
              {"bytes_per_element", bytes_per_element},
              {"scratch_buffer_depth", scratch_buffer_depth}},
         .runtime_arg_schema = {.runtime_arg_names = {"source_rows", "worker_start", "worker_stride"}},
-        .hw_config = ttnn::create_reader_datamovement_config(cache1.device()->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     ProgramSpec spec{
