@@ -30,72 +30,31 @@ In order to add vLLM support to a new Tenstorrent model, the following requireme
       ```python
       prefill_forward(tokens : torch.Tensor, page_table : torch.Tensor | None = None, kv_cache : list | None = None, prompt_lens : torch.Tensor | None = None, empty_slots : list[int] | None = None, enable_trace : bool = True, sampling_params : TTSamplingParams | None = None, start_pos : torch.Tensor | list[int] | None = None, **kwargs)
       ```
-    - `decode_forward` (**text-only models**): returns the decode outputs on host if `read_from_device=True` (default True) otherwise on device. The `tokens` argument has shape `(max_batch_size, 1)` and has been zero-padded along the batch dim to the max batch size (along with `start_pos` with shape `(max_batch_size)` and `page_table` with shape `(max_batch_size, max_num_blocks)`). For fully-DP or DP-attention models, each DP group's batch is padded and the batches are concatenated. The decode inputs are intentionally padded to `max_batch_size` and `max_num_blocks` since the default behaviour in vLLM is to use `enable_trace=True` and TT-NN tracing requires constant input shapes. Similar to `prefill_forward`, the optional `sampling_params` argument is a dataclass with sampling attributes such as `temperature`, `top_p`, `top_k`. For eligible structured decode, the plugin sets `defer_device_sampling=True` and deliberately omits `sampling_params`; `decode_forward` then returns an opaque one-shot payload containing device logits and authoritative decode state instead of sampling immediately.
+    - `decode_forward` (**text-only models**): returns the decode outputs on host if `read_from_device=True` (default True) otherwise on device. The `tokens` argument has shape `(max_batch_size, 1)` and has been zero-padded along the batch dim to the max batch size (along with `start_pos` with shape `(max_batch_size)` and `page_table` with shape `(max_batch_size, max_num_blocks)`). For fully-DP or DP-attention models, each DP group's batch is padded and the batches are concatenated. The decode inputs are intentionally padded to `max_batch_size` and `max_num_blocks` since the default behaviour in vLLM is to use `enable_trace=True` and TT-NN tracing requires constant input shapes. Similar to `prefill_forward`, the optional `sampling_params` argument is a dataclass with sampling attributes such as `temperature`, `top_p`, `top_k`. The plugin keeps structured-output requests on host sampling, even when device sampling is enabled, and applies the grammar mask on host before token selection.
       ```python
-      decode_forward(tokens : torch.Tensor, start_pos : torch.Tensor, page_table : torch.Tensor, kv_cache : list, enable_trace : bool = True, read_from_device : bool = True, sampling_params : TTSamplingParams | None = None, reset_batch : bool = False, prompt_tokens : torch.Tensor | None = None, output_tokens : torch.Tensor | None = None, slot_remap = None, defer_device_sampling : bool = False, grammar_bitmask : torch.Tensor | None = None, skip_trace_precompile : bool = False, **kwargs)
+      decode_forward(tokens : torch.Tensor, start_pos : torch.Tensor, page_table : torch.Tensor, kv_cache : list, enable_trace : bool = True, read_from_device : bool = True, sampling_params : TTSamplingParams | None = None, reset_batch : bool = False, prompt_tokens : torch.Tensor | None = None, output_tokens : torch.Tensor | None = None, slot_remap = None, **kwargs)
       ```
-      The plugin later completes that payload after vLLM produces its packed
-      `int32` grammar mask:
-      ```python
-      sample_decode_on_device(deferred_decode, *, sampling_params : TTSamplingParams, grammar_bitmask : torch.Tensor)
-      ```
-      The deferred payload owns position, reset, token-history, slot-remap,
-      trace, and reload state. It is consumed exactly once. The grammar mask
-      has shape `(batch_size, ceil(vocab_size / 32))`, with one bit per token
-      and `1` meaning allowed. Rows follow the immutable submitted TT row
-      order, including all-allowed rows for plain requests and padding gaps.
-      Multi-model execution concatenates complete model-local slot blocks.
-      `slot_remap[i] = j` means destination slot `i` inherits sampler state
-      from source slot `j`; each accepted decode applies it exactly once before
-      advancing per-slot sampling state.
     - `warmup_model_prefill`: compiles or captures the model's prefill variants. The plugin invokes it once without tracing and again with tracing when configured.
       ```python
       warmup_model_prefill(kv_cache : list, enable_trace : bool, can_sample_on_device : bool)
       ```
-    - `warmup_model_decode`: compiles or captures decode and sampling variants. `can_sample_device_grammar=True` adds grammar-on variants, excluding logprob configurations that the plugin keeps on host. Traced grammar requires the plugin's normal two-phase order: compile with `enable_trace=False`, then capture with `enable_trace=True`.
+    - `warmup_model_decode`: compiles or captures the model's decode and sampling variants. The plugin first compiles prefill and decode with `enable_trace=False`, then captures each with `enable_trace=True` when its trace mode is enabled.
       ```python
-      warmup_model_decode(kv_cache : list, enable_trace : bool, max_batch_size : int, num_blocks : int, can_sample_on_device : bool, can_sample_device_grammar : bool = False, read_from_device : bool = True, greedy_only : bool = False, skip_trace_precompile : bool = False, sampling_trace_variants_prepared : bool = False)
-      ```
-      `grammar_bitmask` on `decode_forward` is used only by model warmup to
-      capture the grammar-on sampling trace. Runtime grammar arrives later via
-      `sample_decode_on_device`.
-      With `trace_mode=all`, the plugin also calls these hooks around prefill
-      trace capture so both host- and device-sampled decode buffers exist before
-      any trace is live:
-      ```python
-      prepare_device_grammar_decode_trace_warmup(kv_cache : list, max_batch_size : int, num_blocks : int) -> bool
-      capture_prepared_device_grammar_decode_trace() -> None
-      ```
-      Returning `False` from preparation keeps structured outputs on host.
-      Returning `True` requires the capture hook to exist.
-    - `enable_device_grammar`: allocates the persistent grammar-mask state after
-      the plugin has selected device grammar for this runtime and before model
-      warmup captures traces. It returns whether activation succeeded and sets
-      `device_grammar_enabled` accordingly.
-      ```python
-      enable_device_grammar() -> bool
+      warmup_model_decode(kv_cache : list, enable_trace : bool, max_batch_size : int, num_blocks : int, can_sample_on_device : bool)
       ```
     - `model_capabilities`: Class dictionary that lets VLLM know which optional
       TT backend features the model supports. We use it in
       [platform.py](https://github.com/tenstorrent/vllm-tt-plugin/blob/main/src/vllm_tt_plugin/platform.py)
       to validate requested features and enable or disable them in VLLM. Missing
-      keys default to `False`. The recognized sampling keys include
+      keys default to `False`. Recognized keys include
       `supports_prefix_caching`, `supports_async_decode`,
-      `supports_sample_on_device`, and `supports_device_grammar`.
+      and `supports_sample_on_device`.
       `supports_prefix_caching` controls automatic
       prefix caching. `supports_async_decode` allows async scheduling for models
       that can submit decode with `read_from_device=False` and later read the
       output asynchronously. `supports_sample_on_device` allows the
-      `sample_on_device_mode` TT config option. `supports_device_grammar`
-      additionally certifies late packed-mask application before decode token
-      selection. It requires `supports_sample_on_device`; the initial contract
-      excludes structured prefill, row-sharded sampling, async structured
-      overlap (launch with `--no-async-scheduling`), logprobs, and block-output
-      models. The loaded generator exposes `device_grammar_enabled` after
-      `enable_device_grammar()` runs; a false value makes the plugin retain host
-      sampling.
-      Example:
-      `model_capabilities={"supports_prefix_caching": True, "supports_async_decode": True, "supports_sample_on_device": True, "supports_device_grammar": True}`
+      `sample_on_device_mode` TT config option. Example:
+      `model_capabilities={"supports_prefix_caching": True, "supports_async_decode": True, "supports_sample_on_device": True}`
 3. **(Multi-modal models only)** Currently, we only support image+text input modalities. An example generation class is `Gemma3ForConditionalGeneration` in [models/tt_transformers/tt/generator_vllm.py](https://github.com/tenstorrent/tt-metal/blob/main/models/tt_transformers/tt/generator_vllm.py). For more info on multi-modal models see also [vLLM Docs - Multi-Modal Support](https://docs.vllm.ai/en/latest/contributing/model/multimodal.html)). These models have the same interface requirements as the text-only models, as well as the following:
    - `prefill_forward` (**image+text models**): same as text-only models with an additional kwarg (`pixel_values`) for the image inputs.
 
