@@ -16,6 +16,13 @@ Two comparisons, because one number cannot answer both questions:
   as well as the attention, and a 4-forward distilled sampler is chaotic under weight
   perturbation. A low number here is not evidence about VSA.
 
+Both at the adapter's own four forwards and at a single forward, because the four-forward number
+alone cannot be read. A distilled sampler amplifies any perturbation at the first step into a
+different trajectory, so a low PCC there is consistent both with a broken attention and with a
+sound one that merely lands on a different valid sample. At one forward the arms start from
+identical noise and the delta is the attention's own error, un-amplified -- that pair is the
+instrument; the four-forward pair is the outcome.
+
 Scored on the denoised rows first, both modalities, and on the decoded uint8 frames second. The
 VAE is nonlinear, so a pixel PCC reports the decoder's sensitivity folded in with the latent
 difference under test.
@@ -43,7 +50,9 @@ from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from .common import GALAXY_MESHES
 from .common_av import CALIBRATED_FOX_PROMPT, artifact_dir, to_uint8_frames, weights_dir
 
-NUM_INFERENCE_STEPS = 5  # five sigma grid points, four transformer forwards
+# Sigma grid points; forwards are one fewer. Five is the adapter's own sampling contract, two is the
+# single-forward probe.
+STEP_POINTS = (2, 5)
 SEED = 0
 ASPECT_RATIO = (16, 9)
 DURATION_S = 15.0
@@ -93,8 +102,8 @@ def _adapter_path(bundle: Path, slug: str) -> Path:
     return path
 
 
-def _arm_file(arm: str) -> Path:
-    return artifact_dir("h3_vsa_fidelity") / f"{arm}_{DURATION_S:.0f}s_seed{SEED}.pt"
+def _arm_file(arm: str, steps: int) -> Path:
+    return artifact_dir("h3_vsa_fidelity") / f"{arm}_{DURATION_S:.0f}s_fwd{steps - 1}_seed{SEED}.pt"
 
 
 def _metrics(a: torch.Tensor, b: torch.Tensor) -> dict[str, float]:
@@ -125,9 +134,10 @@ def _metrics(a: torch.Tensor, b: torch.Tensor) -> dict[str, float]:
 
 
 @pytest.mark.timeout(7200)
+@pytest.mark.parametrize("steps", STEP_POINTS, ids=[f"fwd{s - 1}" for s in STEP_POINTS])
 @pytest.mark.parametrize("arm", list(ARMS), ids=list(ARMS))
 @pytest.mark.parametrize(("mesh_device", "device_params"), GALAXY_MESHES[:1], indirect=["mesh_device", "device_params"])
-def test_denoise_arm(mesh_device, reset_seeds, arm):
+def test_denoise_arm(mesh_device, reset_seeds, arm, steps):
     """One arm of the A/B: generate at the shared working point and hand the rows to the report."""
     slug, vsa_config = ARMS[arm]
     vsa_on = vsa_config is not None and not vsa_config.bypass
@@ -155,7 +165,7 @@ def test_denoise_arm(mesh_device, reset_seeds, arm):
         num_frames=num_frames,
         height=height,
         width=width,
-        num_inference_steps=NUM_INFERENCE_STEPS,
+        num_inference_steps=steps,
         seed=SEED,
     )
 
@@ -179,46 +189,54 @@ def test_denoise_arm(mesh_device, reset_seeds, arm):
         "sparsity": VSA_SPARSITY if vsa_on else None,
         "bypass": vsa_config is not None and vsa_config.bypass,
         "seed": SEED,
+        "forwards": steps - 1,
         "duration_s": DURATION_S,
         "padded_len": pipeline.last_padded_len,
         "video_rows": video_rows,
         "audio_rows": audio_rows,
         "frames": frames,
     }
-    torch.save(payload, _arm_file(arm))
+    torch.save(payload, _arm_file(arm, steps))
     logger.info(
-        f"{arm}: video rows {tuple(video_rows.shape)}, audio rows {tuple(audio_rows.shape)}, "
-        f"frames {tuple(frames.shape)}, padded_len={pipeline.last_padded_len} -> {_arm_file(arm)}"
+        f"{arm} at {steps - 1} forwards: video rows {tuple(video_rows.shape)}, audio rows "
+        f"{tuple(audio_rows.shape)}, frames {tuple(frames.shape)}, "
+        f"padded_len={pipeline.last_padded_len} -> {_arm_file(arm, steps)}"
     )
 
 
 def test_fidelity_report():
-    """PCC and MSE for every pair, from the arm files. Host only; run after the arms in one session."""
-    missing = [arm for arm in ARMS if not _arm_file(arm).exists()]
-    if missing:
-        pytest.skip(f"arms {missing} have not run; run the whole file in one invocation")
+    """PCC and MSE for every pair at every step point present. Host only; run after the arms."""
+    present = [steps for steps in STEP_POINTS if all(_arm_file(arm, steps).exists() for arm in ARMS)]
+    if not present:
+        pytest.skip("no step point has all three arms on disk; run test_denoise_arm first")
 
-    arms = {arm: torch.load(_arm_file(arm), weights_only=False) for arm in ARMS}
-    # VSA tile order pads the packed sequence to its own geometry, so the arms need not agree here;
-    # the denoised rows are the logical rows either way and their shapes are checked per field.
-    for arm, payload in arms.items():
-        logger.info(
-            f"{arm}: variant {payload['slug']}, vsa={payload['vsa']}, bypass={payload['bypass']}, "
-            f"padded_len={payload['padded_len']}"
-        )
-
-    for arm, reference, what in PAIRS:
-        logger.info(f"=== {arm} vs {reference} -- {what}")
-        for field in FIELDS:
-            a, b = arms[arm][field], arms[reference][field]
-            assert a.shape == b.shape, f"{field}: {tuple(a.shape)} != {tuple(b.shape)}"
-            found = _metrics(a, b)
+    for steps in present:
+        arms = {arm: torch.load(_arm_file(arm, steps), weights_only=False) for arm in ARMS}
+        logger.info(f"######## {steps - 1} forward(s)")
+        # VSA tile order pads the packed sequence to its own geometry, so the arms need not agree
+        # here; the denoised rows are the logical rows either way, checked per field below.
+        for arm, payload in arms.items():
             logger.info(
-                f"  {field:<11} PCC = {found['pcc'] * 100:8.4f} %   MSE = {found['mse']:.6g}   "
-                f"RMSE/σ_ref = {found['relative_rmse'] * 100:6.2f} %   (σ_ref = {found['std_ref']:.4g})"
+                f"{arm}: variant {payload['slug']}, vsa={payload['vsa']}, bypass={payload['bypass']}, "
+                f"padded_len={payload['padded_len']}"
             )
+        for arm, reference, what in PAIRS:
+            logger.info(f"=== {arm} vs {reference} -- {what}")
+            for field in FIELDS:
+                a, b = arms[arm][field], arms[reference][field]
+                assert a.shape == b.shape, f"{field}: {tuple(a.shape)} != {tuple(b.shape)}"
+                found = _metrics(a, b)
+                logger.info(
+                    f"  {field:<11} PCC = {found['pcc'] * 100:8.4f} %   MSE = {found['mse']:.6g}   "
+                    f"RMSE/\u03c3_ref = {found['relative_rmse'] * 100:6.2f} %   "
+                    f"(\u03c3_ref = {found['std_ref']:.4g})"
+                )
 
-    # Structural only: the numbers above are recorded, not gated.
-    for arm, payload in arms.items():
-        for field in FIELDS:
-            assert torch.isfinite(payload[field].float()).all(), f"{arm}: {field} is not finite"
+        # Structural only: the numbers above are recorded, not gated.
+        for arm, payload in arms.items():
+            for field in FIELDS:
+                assert torch.isfinite(payload[field].float()).all(), f"{arm}: {field} is not finite"
+
+    missing = [steps for steps in STEP_POINTS if steps not in present]
+    if missing:
+        logger.warning(f"step points {[s - 1 for s in missing]} forward(s) had no complete arm set")
