@@ -236,6 +236,19 @@ class TestHelpers:
         assert np.array_equal(first, second), "padding differs between loads of one checkpoint"
         assert first[2:].any(), "padding is all zeros, which leaves dead neurons"
 
+    def test_pad_writes_every_added_cell_when_both_dims_grow(self):
+        src, dst = (64, 64), (128, 128)
+        arr = np.arange(src[0] * src[1], dtype=np.float32).reshape(src)
+
+        def pad_over(poison):
+            junk = np.full(dst, poison, np.float32)  # same shape and dtype, so the block is reused
+            del junk
+            return _pad_to(arr, dst, "w")
+
+        first, second = pad_over(1e30), pad_over(-1e30)
+        assert np.array_equal(first[: src[0], : src[1]], arr), "checkpoint block moved"
+        assert np.array_equal(first, second), "an added cell kept what was already in the buffer"
+
     def test_pad_refuses_to_discard_weights(self, expect_error):
         """Silently cropping an oversized checkpoint would throw away vocabulary."""
         with expect_error(RuntimeError, "would discard weights"):
@@ -379,7 +392,7 @@ def e2e_config(use_tp: bool, placement: EmbeddingPlacement) -> LlamaConfig:
     )
 
 
-def write_hf_checkpoint(directory) -> dict[str, np.ndarray]:
+def write_hf_checkpoint(directory, vocab: int = VOCAB) -> dict[str, np.ndarray]:
     save_file = pytest.importorskip("safetensors.numpy").save_file
 
     rng = np.random.default_rng(99)
@@ -388,8 +401,8 @@ def write_hf_checkpoint(directory) -> dict[str, np.ndarray]:
         return rng.standard_normal((rows, cols)).astype(np.float32)
 
     tensors = {
-        "model.embed_tokens.weight": w(VOCAB, MODEL_HIDDEN),
-        "lm_head.weight": w(VOCAB, MODEL_HIDDEN),
+        "model.embed_tokens.weight": w(vocab, MODEL_HIDDEN),
+        "lm_head.weight": w(vocab, MODEL_HIDDEN),
         "model.norm.weight": rng.standard_normal(MODEL_HIDDEN).astype(np.float32),
     }
     for layer in range(N_LAYERS):
@@ -594,6 +607,18 @@ class TestLoadIntoModel:
         expected_gate_up = np.concatenate([hf[f"{pfx}.mlp.gate_proj.weight"], hf[f"{pfx}.mlp.up_proj.weight"]], axis=0)
         got = read_param(params, "Llama/blocks/0/mlp/w_gate_up/weight")
         assert np.array_equal(got, as_bf16(expected_gate_up)), "w_gate_up without TP"
+
+    def test_pads_a_vocab_shorter_than_the_parameter(self, tmp_path):
+        short = VOCAB - 8
+        hf = write_hf_checkpoint(tmp_path, vocab=short)
+        config = e2e_config(True, EmbeddingPlacement.VocabParallel)
+        model = Llama(config)
+        load_from_safetensors(model, tmp_path, config)
+
+        got = read_param(model.parameters(), "Llama/tok_emb/weight", {"tp": 2})
+        assert got.shape == (VOCAB, MODEL_HIDDEN), "not grown to the parameter's vocab"
+        assert np.array_equal(got[:short], as_bf16(hf["model.embed_tokens.weight"])), "checkpoint rows moved"
+        assert got[short:].any(), "padding is all zeros, which leaves dead rows"
 
     def test_forward_runs_on_loaded_weights(self, tmp_path):
         """Loaded weights must actually drive the fused ops, not just sit at the right shape."""

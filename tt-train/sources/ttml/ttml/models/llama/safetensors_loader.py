@@ -2,15 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Load HuggingFace Llama safetensors weights into a Python Llama model.
-
-:func:`_rules` names the checkpoint tensors feeding each parameter; the driver walks parameters
-and pulls, so a fused parameter fetches its sources together and nothing needs staging.
-A parameter with no rule is an error.
-
-Placement is read from the destination parameter, and fused block sizes from the source tensors,
-so the only thing stated twice anywhere is the block *order*.
-"""
+"""Load HuggingFace Llama safetensors weights into a Python Llama model."""
 
 from __future__ import annotations
 
@@ -116,23 +108,23 @@ def _assemble(blocks: Sequence[np.ndarray], shard_dim: int | None, mesh_size: in
     return np.concatenate([slices_by_block[i][rank] for rank in range(mesh_size) for i in range(len(blocks))], axis=0)
 
 
-def _require_shape(arr: np.ndarray, shape: tuple[int, int], what: str) -> np.ndarray:
+def _require_shape(arr: np.ndarray, shape: tuple[int, int], subject: str) -> np.ndarray:
     if arr.shape != shape:
         raise RuntimeError(
-            f"{what}: the checkpoint gives {arr.shape} but the parameter is {shape}. "
+            f"{subject}: the checkpoint gives {arr.shape} but the parameter is {shape}. "
             f"Check that the LlamaConfig matches the checkpoint."
         )
     return arr
 
 
-def _pad_to(arr: np.ndarray, shape: tuple[int, int], what: str) -> np.ndarray:
+def _pad_to(arr: np.ndarray, shape: tuple[int, int], subject: str) -> np.ndarray:
     """Grow *arr* to *shape*. Never shrinks."""
     if arr.shape == shape:
         return arr
-    if any(target < source for target, source in zip(shape, arr.shape)):
+    if any(tgt < src for tgt, src in zip(shape, arr.shape)):
         raise RuntimeError(
-            f"{what}: the checkpoint gives {arr.shape}, larger than the parameter's {shape}, so "
-            f"loading would discard weights. Check vocab_size against the checkpoint."
+            f"{subject}: the checkpoint gives {arr.shape}, larger than the parameter's {shape}, so "
+            f"loading would discard weights."
         )
     rows, cols = arr.shape
     rng = np.random.default_rng(_PAD_SEED)
@@ -150,7 +142,7 @@ def _to_bf16_4d(arr: np.ndarray) -> np.ndarray:
     return arr.reshape(1, 1, *arr.shape).astype(ml_dtypes.bfloat16, order="C")
 
 
-def _sharded_dim(param, what: str) -> int | None:
+def _sharded_dim(param, subject: str) -> int | None:
     """Which tensor dim *param* shards over the 'tp' mesh axis, or ``None`` if replicated.
     No 'tp' axis is the single-device case, not an error.
     """
@@ -162,7 +154,7 @@ def _sharded_dim(param, what: str) -> int | None:
     placements = sharding.placements
     if placements is None:
         raise RuntimeError(
-            f"{what}: could not read mesh placements; assuming replicated could scramble the shards."
+            f"{subject}: could not read mesh placements; assuming replicated could scramble the shards."
         ) from sharding.read_error
 
     tp_axis = mesh.axis_index("tp")
@@ -173,7 +165,7 @@ def _sharded_dim(param, what: str) -> int | None:
         return None
     if placement.dim not in (ROW_DIM, COL_DIM):
         raise RuntimeError(
-            f"{what}: sharded on dim {placement.dim} over 'tp'; expected {ROW_DIM} (rows) or {COL_DIM} (cols)."
+            f"{subject}: sharded on dim {placement.dim} over 'tp'; expected {ROW_DIM} (rows) or {COL_DIM} (cols)."
         )
     return placement.dim
 
@@ -195,7 +187,7 @@ class _Rule:
     sources: tuple[str, ...]
     # (arrays) -> blocks, when the checkpoint layout is not what the parameter wants.
     transform: Callable[..., list[np.ndarray]] | None = None
-    # Vocabulary parameters may be larger than the checkpoint's; everything else must match.
+    # The parameter may legitimately exceed its sources (tile padding); the excess is filled, not an error.
     pad: bool = False
 
 
@@ -320,8 +312,8 @@ def load_from_safetensors(
         )
 
     print(f"Loaded {len(rules)} parameters from {len(consumed)} checkpoint tensors.")
-    if init_only := sorted(_left_at_init(set(parameters))):
-        print(f"Left at initial values ({len(init_only)}): the checkpoint carries no biases.")
+    if init_only := _left_at_init(set(parameters)):
+        print(f"Left at initial values: {len(init_only)} parameters the checkpoint does not carry.")
     leftover = set(checkpoint) - consumed
     if unused := sorted(n for n in leftover if not n.endswith(_NOT_WEIGHTS)):
         print(f"Note: {len(unused)} checkpoint tensors were not used:")
