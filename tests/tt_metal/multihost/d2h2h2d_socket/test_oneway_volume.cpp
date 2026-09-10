@@ -1248,7 +1248,11 @@ int run_device(Options& o) {
     // This also makes the test runnable on ANY two nodes that each have a device, rather than
     // only on a pair wired into one fabric -- which is what a CI job needs.
     namespace mh = tt::tt_metal::distributed::multihost;
-    const mh::ContextPtr& world = mh::DistributedContext::get_current_world();
+    // BY VALUE, NOT BY REFERENCE. get_current_world() returns a reference to the global
+    // current_world_; binding a reference here would make `world` alias whatever
+    // set_current_world(solo) installs below, and the restore would assign it to itself --
+    // leaving the solo (size 1) context current, so connect_mesh() finds no peers.
+    const mh::ContextPtr world = mh::DistributedContext::get_current_world();
     {
         const mh::ContextPtr solo =
             world->split(mh::Color{static_cast<int>(o.host_ident)}, mh::Key{0});

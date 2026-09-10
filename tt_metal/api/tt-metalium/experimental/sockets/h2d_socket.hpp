@@ -194,6 +194,16 @@ public:
     // bytes_acked_ptr_[0] only when the cache is insufficient.
     bool acked_past(uint32_t watermark);
 
+    // Refreshes the cached bytes_acked_ from pinned host RAM and returns it.
+    //
+    // For callers that need the raw counter rather than acked_past()'s yes/no -- a delta
+    // against an earlier snapshot, or the value itself in an error message. Prefer
+    // acked_past() wherever a predicate will do: this ALWAYS mfences, where acked_past
+    // skips the fence whenever the cached value already settles the question.
+    //
+    // Not const: it updates the bytes_acked_ cache, same as acked_past().
+    uint32_t bytes_acked_snapshot();
+
     void set_page_size(uint32_t page_size);
 
     void write(void* data, uint32_t num_pages);

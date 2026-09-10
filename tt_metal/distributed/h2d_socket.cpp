@@ -771,6 +771,17 @@ bool H2DSocket::acked_past(uint32_t watermark) {
     return bytes_sent_ - bytes_acked_ <= bytes_since_watermark;
 }
 
+uint32_t H2DSocket::bytes_acked_snapshot() {
+    // Unconditional refresh, unlike acked_past()'s fast path: the caller wants the value,
+    // so a stale cache is not an answer. The mfence orders this load after whatever the
+    // caller did before asking -- the device writes bytes_acked into pinned host RAM, so
+    // this is a local load, not a non-posted PCIe read.
+    tt_driver_atomics::mfence();
+    volatile uint32_t bytes_acked_value = bytes_acked_ptr_[0];
+    bytes_acked_ = bytes_acked_value;
+    return bytes_acked_;
+}
+
 void H2DSocket::push_bytes(uint32_t num_bytes) {
     if (write_ptr_ + num_bytes >= fifo_curr_size_) {
         write_ptr_ = write_ptr_ + num_bytes - fifo_curr_size_;
