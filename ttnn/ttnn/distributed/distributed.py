@@ -17,6 +17,10 @@ MeshDevice = ttnn._ttnn.multi_device.MeshDevice
 DispatchCoreType = ttnn._ttnn.device.DispatchCoreType
 
 
+class MeshValueIncompleteError(ValueError):
+    """Raised when local mesh shards do not cover every global sharded region."""
+
+
 def _mesh_coordinate_key(mesh_coord):
     return tuple(int(value) for value in mesh_coord)
 
@@ -186,7 +190,7 @@ def _compute_mesh_value_layout(*, topology, shard_shapes_by_mesh_coord):
         partition_coords = tuple(itertools.product(*(range(distribution_shape[axis]) for axis in shard_axes)))
         missing_partitions = set(partition_coords) - partition_sizes.keys()
         if missing_partitions:
-            raise ValueError(
+            raise MeshValueIncompleteError(
                 f"Cannot reconstruct tensor dimension {tensor_dim}; missing mesh partitions {sorted(missing_partitions)}"
             )
 
@@ -218,7 +222,7 @@ def _compute_mesh_value_layout(*, topology, shard_shapes_by_mesh_coord):
     represented_slices = {slice_key(slices_by_mesh_key[mesh_coord_key]) for mesh_coord_key in normalized_shapes}
     required_slices = {slice_key(shard_slices) for shard_slices in slices_by_mesh_key.values()}
     if represented_slices != required_slices:
-        raise ValueError("Mesh shards do not cover every sharded region of the global tensor")
+        raise MeshValueIncompleteError("Mesh shards do not cover every sharded region of the global tensor")
 
     return tuple(global_shape), slices_by_mesh_key, topology_coords_by_key
 

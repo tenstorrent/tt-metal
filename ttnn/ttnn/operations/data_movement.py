@@ -6,7 +6,6 @@ from typing import Tuple, Union, List
 
 import ttnn
 import ttnn.decorators
-from ttnn.operations.golden_common import golden_identity
 
 
 def _preprocess_golden_function_inputs(args, kwargs):
@@ -318,7 +317,11 @@ def _golden_function(input_tensor, shifts, dim=None, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.roll, golden_function=_golden_function)
 
 
-ttnn.attach_golden_function(ttnn.move, golden_function=golden_identity)
+def _golden_function(input_tensor, *args, **kwargs):
+    return input_tensor
+
+
+ttnn.attach_golden_function(ttnn.move, golden_function=_golden_function)
 
 
 def _golden_function(input, dim, index, src, *args, **kwargs):
@@ -440,7 +443,11 @@ def _golden_function(input, stride_h, stride_w, *args, padding=(0, 0), collapse_
 ttnn.attach_golden_function(ttnn.fold, golden_function=_golden_function)
 
 
-ttnn.attach_golden_function(ttnn.untilize, golden_function=golden_identity)
+def _golden_function(input_tensor, *args, **kwargs):
+    return input_tensor
+
+
+ttnn.attach_golden_function(ttnn.untilize, golden_function=_golden_function)
 
 
 def _golden_function(input_tensor, output_tensor_end, *args, **kwargs):
@@ -451,13 +458,27 @@ def _golden_function(input_tensor, output_tensor_end, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.untilize_with_unpadding, golden_function=_golden_function)
 
 
-# The output shape and pad value describe physical tile padding; the logical value is unchanged.
-ttnn.attach_golden_function(ttnn.tilize_with_val_padding, golden_function=golden_identity)
+def _golden_function(input_tensor, output_tensor_shape, pad_value, *args, **kwargs):
+    # output_tensor_shape describes physical tile padding; the logical output keeps the input shape.
+    return input_tensor
 
-# Tile alignment is physical padding; the logical value is unchanged.
-ttnn.attach_golden_function(ttnn.tilize_with_zero_padding, golden_function=golden_identity)
 
-ttnn.attach_golden_function(ttnn.fill_implicit_tile_padding, golden_function=golden_identity)
+ttnn.attach_golden_function(ttnn.tilize_with_val_padding, golden_function=_golden_function)
+
+
+def _golden_function(input_tensor, *args, **kwargs):
+    # Tile alignment is physical padding; the logical output keeps the input shape.
+    return input_tensor
+
+
+ttnn.attach_golden_function(ttnn.tilize_with_zero_padding, golden_function=_golden_function)
+
+
+def _golden_function(input_tensor, fill_value, *args, **kwargs):
+    return input_tensor
+
+
+ttnn.attach_golden_function(ttnn.fill_implicit_tile_padding, golden_function=_golden_function)
 
 
 def _golden_function(N, C, H, W, hOnes, wOnes, any, val_hi, val_lo, *args, **kwargs):

@@ -100,8 +100,9 @@ def test_compose_mesh_value_validates_replicated_shards(expect_error):
     assert torch.equal(composed, torch.cat((first_partition, second_partition)))
 
     shards[mesh_coords[1]] = first_partition + 1
-    with expect_error(ValueError, "differs from its replica group"):
+    with expect_error(ValueError, "differs from its replica group") as exception_info:
         ttnn.compose_mesh_value(shards_by_mesh_coord=shards, topology=topology)
+    assert not isinstance(exception_info.value, ttnn.MeshValueIncompleteError)
 
 
 def test_mesh_value_helpers_support_partial_replica_coordinate_sets():
@@ -137,7 +138,7 @@ def test_mesh_value_helpers_reject_incomplete_sharded_coverage(expect_error):
         mesh_coords[2]: (2, 2),
     }
 
-    with expect_error(ValueError, "do not cover every sharded region"):
+    with expect_error(ttnn.MeshValueIncompleteError, "do not cover every sharded region"):
         ttnn.decompose_mesh_value(
             torch.zeros((3, 5)),
             topology=topology,
@@ -181,6 +182,28 @@ def _two_group_collective_inputs():
         torch.tensor([[10.0, 20.0]], dtype=torch.bfloat16),
         torch.tensor([[30.0, 40.0]], dtype=torch.bfloat16),
     ]
+
+
+def test_collective_groups_follow_logical_distribution_coordinates():
+    mesh_coords = tuple(ttnn.MeshCoordinate(row, column) for row in range(2) for column in range(2))
+    topology = ttnn.TensorTopologySnapshot(
+        distribution_shape=(4,),
+        placements=(ttnn.PlacementReplicate(),),
+        mesh_coords=mesh_coords,
+    )
+    input_golden = ttnn.DistributedGolden(
+        topology=topology,
+        shards={
+            mesh_coord: torch.tensor([index + 1.0], dtype=torch.bfloat16)
+            for index, mesh_coord in enumerate(mesh_coords)
+        },
+    )
+
+    output = ttnn.get_golden_function(ttnn.all_reduce)(input_golden, cluster_axis=0)
+
+    assert set(output.shards) == set(mesh_coords)
+    for output_shard in output.shards.values():
+        assert torch.equal(output_shard, torch.tensor([10.0], dtype=torch.bfloat16))
 
 
 def test_all_broadcast_golden_composes_every_collective_group():

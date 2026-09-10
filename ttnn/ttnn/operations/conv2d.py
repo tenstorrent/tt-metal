@@ -187,15 +187,18 @@ def _normalize_conv_padding(padding):
 
 
 def _reshape_conv_input_to_nchw(input_tensor, batch_size, input_height, input_width, in_channels):
+    # 1, 1, NHW, C -> N, C, H, W
     return input_tensor.reshape(batch_size, input_height, input_width, -1)[..., :in_channels].permute(0, 3, 1, 2)
 
 
 def _flatten_conv_output_to_ttnn_layout(output_tensor):
     batch_size, out_channels, output_height, output_width = output_tensor.shape
+    # N, C, H, W -> 1, 1, NHW, C
     return output_tensor.permute(0, 2, 3, 1).reshape(1, 1, batch_size * output_height * output_width, out_channels)
 
 
 def _flatten_conv_bias(bias_tensor):
+    # Torch convolution functions expect a one-dimensional bias.
     return None if bias_tensor is None else bias_tensor.reshape(-1).float()
 
 

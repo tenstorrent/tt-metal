@@ -25,6 +25,7 @@ from .distributed import (
     visualize_tensor,
     visualize_system_mesh,
     distribute,
+    MeshValueIncompleteError,
     TensorTopologySnapshot,
     DistributedGolden,
     mesh_coords_for_shards,

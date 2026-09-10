@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import itertools
+
 import ttnn
 
 Topology = ttnn._ttnn.operations.ccl.Topology
@@ -20,6 +22,8 @@ MMSignalAggregatorMode = ttnn._ttnn.operations.experimental.ccl_experimental.MMS
 
 
 def _preprocess_collective_golden_inputs(function_args, function_kwargs):
+    """Wrap a collective input as a coordinate-keyed DistributedGolden."""
+
     input_tensor = function_args[0] if function_args else function_kwargs["input_tensor"]
     distributed_input = ttnn.decorators.distributed_golden_for_comparison(input_tensor)
 
@@ -33,16 +37,22 @@ def _preprocess_collective_golden_inputs(function_args, function_kwargs):
 
 
 def _get_collective_groups(topology, cluster_axis):
-    """Return topology coordinates grouped along the collective axis."""
+    """Group physical mesh coordinates along a logical distribution axis."""
 
     mesh_coords = list(topology.mesh_coords)
     if cluster_axis is None:
         return [mesh_coords]
 
+    distribution_shape = tuple(int(dimension) for dimension in topology.distribution_shape)
+    if cluster_axis < 0:
+        cluster_axis += len(distribution_shape)
+    if cluster_axis < 0 or cluster_axis >= len(distribution_shape):
+        raise ValueError(f"Collective axis {cluster_axis} is invalid for distribution shape {distribution_shape}")
+
+    distribution_coords = itertools.product(*(range(dimension) for dimension in distribution_shape))
     groups = {}
-    for mesh_coord in mesh_coords:
-        coordinate = tuple(int(value) for value in mesh_coord)
-        group_coordinate = coordinate[:cluster_axis] + coordinate[cluster_axis + 1 :]
+    for distribution_coord, mesh_coord in zip(distribution_coords, mesh_coords, strict=True):
+        group_coordinate = distribution_coord[:cluster_axis] + distribution_coord[cluster_axis + 1 :]
         groups.setdefault(group_coordinate, []).append(mesh_coord)
     return list(groups.values())
 
@@ -299,6 +309,7 @@ def _golden_function_point_to_point(
     if sender_coord not in input_shards:
         sender_coord_key = tuple(int(value) for value in sender_coord)
         raise ValueError(f"Point-to-point golden requires sender shard at coordinate {sender_coord_key}")
+    # A fresh point-to-point output initializes only the receiver shard.
     return ttnn.DistributedGolden(
         topology=input_tensor.topology,
         shards={receiver_coord: input_shards[sender_coord].clone()},
@@ -405,6 +416,8 @@ ttnn.attach_golden_function(ttnn.all_to_all_combine, golden_function=_golden_fun
 
 
 def _preprocess_reduce_to_root_golden_inputs(function_args, function_kwargs):
+    """Wrap each reduce-to-root state input while preserving its mesh topology."""
+
     function_args = list(function_args)
     function_kwargs = dict(function_kwargs)
     input_names = ("input_tensor_l", "input_tensor_s", "input_tensor_m")
@@ -575,6 +588,8 @@ ttnn.attach_golden_function(
 
 
 def _preprocess_moe_routing_remap_golden_inputs(function_args, function_kwargs):
+    """Wrap replicated routing weights with their coordinate-keyed mesh topology."""
+
     input_tensor = function_args[0] if function_args else function_kwargs["routing_weights_tensor"]
     distributed_input = ttnn.decorators.distributed_golden_for_comparison(input_tensor)
     function_args = list(function_args)

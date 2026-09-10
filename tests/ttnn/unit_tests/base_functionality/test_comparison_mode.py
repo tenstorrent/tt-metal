@@ -37,6 +37,10 @@ class _FakeDistributedTensor:
     def device(self):
         return None
 
+    @property
+    def shape(self):
+        return self.value.shape
+
 
 def test_ulp_comparison_policy_for_degenerate_output(expect_error):
     golden = torch.tensor([1.0], dtype=torch.bfloat16)
@@ -155,6 +159,34 @@ def test_scalar_output_comparison(monkeypatch, expect_error):
         )
 
 
+def test_structured_output_pairs_preserve_order_and_scalar_routing(monkeypatch):
+    golden_tensor = torch.tensor([1.0])
+    output_tensor = torch.tensor([1.0])
+
+    output_pairs = ttnn.decorators._structured_output_pairs(
+        (golden_tensor, 2, {"value": 3.0}),
+        (output_tensor, 2, {"value": 3.0}),
+    )
+
+    assert output_pairs[0][0] is golden_tensor
+    assert output_pairs[0][1] is output_tensor
+    assert output_pairs[1:] == ((2, 2), (3.0, 3.0))
+    assert ttnn.decorators.should_compare_scalar_outputs((1, {"value": 2.0}), (1, {"value": 2.0}))
+    assert not ttnn.decorators.should_compare_scalar_outputs((1, 2), (1,))
+
+    monkeypatch.setattr(ttnn.graph, "record_tensor_comparison_data", lambda **_: None)
+    comparison_records = ttnn.decorators.compare_tensors_using_pcc(
+        "ttnn.test_operation",
+        (1, {"value": 2.0}),
+        (1, {"value": 2.0}),
+        desired_pcc=0.99,
+        level="globally",
+        fail_on_bad_comparison=True,
+    )
+    assert len(comparison_records) == 2
+    assert all(record["matches"] for record in comparison_records)
+
+
 def test_stored_global_golden_preserves_distributed_metadata():
     output = torch.tensor([0.0])
     mesh_coord = ttnn.MeshCoordinate(0, 1)
@@ -260,6 +292,33 @@ def test_distributed_comparison_records_mesh_coordinate(monkeypatch, expect_erro
         )
 
 
+def test_distributed_comparison_requires_explicit_runtime_coordinate(monkeypatch, expect_error):
+    golden_coords = (ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, 1))
+    golden_topology = ttnn.TensorTopologySnapshot(
+        distribution_shape=(1, 2),
+        placements=(ttnn.PlacementReplicate(), ttnn.PlacementReplicate()),
+        mesh_coords=golden_coords,
+    )
+    output_topology = ttnn.TensorTopologySnapshot(
+        distribution_shape=(1,),
+        placements=(ttnn.PlacementReplicate(),),
+        mesh_coords=(golden_coords[0],),
+    )
+    runtime_output = _FakeDistributedTensor(topology=output_topology)
+    runtime_output.tensor_id = 17
+    golden = ttnn.DistributedGolden(
+        topology=golden_topology,
+        shards={golden_coords[1]: torch.tensor([1.0])},
+        compare_coords=frozenset({golden_coords[1]}),
+    )
+    monkeypatch.setattr(ttnn, "Tensor", _FakeDistributedTensor)
+    monkeypatch.setattr(ttnn, "get_device_tensors", lambda _: [_FakeDistributedTensor(torch.tensor([1.0]))])
+    monkeypatch.setattr(ttnn, "to_torch", lambda tensor, **_: tensor.value)
+
+    with expect_error(ValueError, r"no shard for comparison coordinate \(0, 1\)"):
+        ttnn.decorators._distributed_comparison_pairs(golden, runtime_output)
+
+
 def test_distributed_golden_conversion_does_not_mask_unexpected_errors(monkeypatch, expect_error):
     def raise_unexpected_error(_):
         raise AttributeError("unexpected discovery bug")
@@ -268,6 +327,45 @@ def test_distributed_golden_conversion_does_not_mask_unexpected_errors(monkeypat
 
     with expect_error(AttributeError, "unexpected discovery bug"):
         ttnn.decorators.distributed_golden_for_comparison(object())
+
+
+def test_to_torch_for_comparison_does_not_mask_unexpected_distributed_errors(monkeypatch, expect_error):
+    topology = ttnn.TensorTopologySnapshot(
+        distribution_shape=(2,),
+        placements=(ttnn.PlacementReplicate(),),
+        mesh_coords=(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, 1)),
+    )
+    runtime_tensor = _FakeDistributedTensor(topology=topology)
+
+    def raise_unexpected_error(*_):
+        raise AttributeError("unexpected conversion bug")
+
+    monkeypatch.setattr(ttnn, "Tensor", _FakeDistributedTensor)
+    monkeypatch.setattr(ttnn.decorators, "distributed_golden_for_comparison", raise_unexpected_error)
+
+    with expect_error(AttributeError, "unexpected conversion bug"):
+        ttnn.decorators.to_torch_for_comparison(runtime_tensor)
+
+
+def test_distributed_golden_conversion_rejects_inconsistent_replicas(monkeypatch, expect_error):
+    mesh_coords = tuple(ttnn.MeshCoordinate(row, column) for row in range(2) for column in range(2))
+    topology = ttnn.TensorTopologySnapshot(
+        distribution_shape=(2, 2),
+        placements=(ttnn.PlacementShard(0), ttnn.PlacementReplicate()),
+        mesh_coords=mesh_coords,
+    )
+    runtime_tensor = _FakeDistributedTensor(topology=topology)
+    device_tensors = [
+        _FakeDistributedTensor(torch.tensor([[1.0]])),
+        _FakeDistributedTensor(torch.tensor([[2.0]])),
+        _FakeDistributedTensor(torch.tensor([[3.0]])),
+        _FakeDistributedTensor(torch.tensor([[3.0]])),
+    ]
+    monkeypatch.setattr(ttnn, "get_device_tensors", lambda _: device_tensors)
+    monkeypatch.setattr(ttnn, "to_torch", lambda tensor, **_: tensor.value)
+
+    with expect_error(ValueError, "differs from its replica group"):
+        ttnn.decorators.distributed_golden_for_comparison(runtime_tensor)
 
 
 def test_collective_golden_does_not_require_remote_shards():

@@ -177,6 +177,10 @@ def compare_tensors_using_pcc(
     flattened_output = comparison_output.reshape(-1)
 
     def is_constant(flattened_tensor):
+        """Return whether a flattened tensor contains one repeated value.
+        Treats empty and all-NaN tensors as constant for PCC routing.
+        """
+
         if flattened_tensor.numel() == 0:
             return True
         first_value = flattened_tensor[0]
@@ -195,7 +199,7 @@ def compare_tensors_using_pcc(
     )
     use_comparison_config = comparison_config is not None and (comparison_config.scope == "all" or pcc_is_degenerate)
     # Operation goldens opt into non-PCC metrics only where their numerical contract requires it.
-    # Unmarked outputs retain the existing PCC and degenerate allclose behavior without relaxation.Q
+    # Unmarked outputs retain the existing PCC and degenerate allclose behavior without relaxation.
     if use_comparison_config and comparison_config.method == "skip":
         return []
 
@@ -399,18 +403,25 @@ def get_all_tensors(object_value):
 
 
 def should_compare_tensor_outputs(golden_outputs, outputs):
+    """Return whether either output structure contains tensor values.
+    Selects the tensor comparison path when one side exposes tensors.
+    """
+
+    # Keep tensor and scalar comparison paths separate so each can preserve its report contract.
     return bool(get_all_tensors(golden_outputs)) or bool(get_all_tensors(outputs))
 
 
 def should_compare_scalar_outputs(golden_outputs, outputs):
+    """Return whether corresponding leaves in two output structures are all numeric scalars."""
+
     import numbers
 
     try:
         output_pairs = _structured_output_pairs(golden_outputs, outputs)
     except (TypeError, ValueError):
-        return True
-    return any(
-        isinstance(golden_output, numbers.Number) or isinstance(output, numbers.Number)
+        return False
+    return bool(output_pairs) and all(
+        isinstance(golden_output, numbers.Number) and isinstance(output, numbers.Number)
         for golden_output, output in output_pairs
     )
 
@@ -511,6 +522,8 @@ def _convert_ttnn_to_torch_for_comparison(tensor):
 
 
 def distributed_golden_for_comparison(tensor, golden_value=None):
+    """Represent a mesh tensor as a global value plus coordinate-keyed Torch shards."""
+
     try:
         device_tensors = list(ttnn.get_device_tensors(tensor))
         topology = tensor.tensor_topology()
@@ -547,7 +560,7 @@ def distributed_golden_for_comparison(tensor, golden_value=None):
     }
     try:
         global_value = ttnn.compose_mesh_value(shards_by_mesh_coord=shards, topology=topology)
-    except ValueError:
+    except ttnn.MeshValueIncompleteError:
         global_value = None
     return ttnn.DistributedGolden(
         topology=topology,
@@ -569,6 +582,7 @@ def _distributed_golden_global_value(distributed_golden):
 
 
 def to_torch_for_comparison(tensor, golden_tensor=None):
+    import math
     import torch
 
     if isinstance(tensor, torch.Tensor):
@@ -576,13 +590,10 @@ def to_torch_for_comparison(tensor, golden_tensor=None):
     if not isinstance(tensor, ttnn.Tensor):
         raise RuntimeError(f"Unsupported tensor type for comparison: {type(tensor)}")
 
-    if isinstance(golden_tensor, ttnn.DistributedGolden):
-        return distributed_golden_for_comparison(tensor)
-
-    try:
-        return _distributed_golden_global_value(distributed_golden_for_comparison(tensor))
-    except Exception:
+    topology = ttnn.TensorTopologySnapshot.from_topology(tensor.tensor_topology())
+    if math.prod(topology.distribution_shape) == 1:
         return _convert_ttnn_to_torch_for_comparison(tensor)
+    return _distributed_golden_global_value(distributed_golden_for_comparison(tensor))
 
 
 def _distributed_comparison_pairs(golden, output):
@@ -615,7 +626,8 @@ def _distributed_comparison_pairs(golden, output):
             shard_shapes_by_mesh_coord=shard_shapes,
         )
 
-    compare_coords = golden.compare_coords if golden.compare_coords is not None else frozenset(expected_shards)
+    compare_coords_are_explicit = golden.compare_coords is not None
+    compare_coords = golden.compare_coords if compare_coords_are_explicit else frozenset(expected_shards)
     pairs = []
     for mesh_coord in golden.topology.mesh_coords:
         if mesh_coord not in compare_coords:
@@ -624,6 +636,8 @@ def _distributed_comparison_pairs(golden, output):
         if mesh_coord not in expected_shards:
             raise ValueError(f"Distributed golden has no shard for comparison coordinate {mesh_coord_key}")
         if mesh_coord_key not in actual_shards_by_key:
+            if compare_coords_are_explicit:
+                raise ValueError(f"Runtime output has no shard for comparison coordinate {mesh_coord_key}")
             continue
         actual_shard = actual_shards_by_key[mesh_coord_key]
         actual_shard.tensor_id = output.tensor_id
@@ -633,10 +647,11 @@ def _distributed_comparison_pairs(golden, output):
 
 
 def _structured_output_pairs(golden_outputs, outputs):
-    import numbers
     import torch
 
     if isinstance(outputs, (ttnn.Tensor, torch.Tensor)) and isinstance(golden_outputs, (list, tuple)):
+        # Backward goldens commonly return a one-element list even when the runtime returns one tensor.
+        # Unwrap only this unambiguous singleton shape; preserve list handling for true multi-output operations.
         if len(golden_outputs) != 1:
             raise ValueError(
                 f"Output structure mismatch: tensor output cannot be paired with {len(golden_outputs)} golden outputs"
@@ -677,13 +692,7 @@ def _structured_output_pairs(golden_outputs, outputs):
             return
         yield golden_output, output
 
-    output_pairs = tuple(pairs(golden_outputs, outputs))
-    return tuple(
-        sorted(
-            output_pairs,
-            key=lambda pair: not (isinstance(pair[0], numbers.Number) or isinstance(pair[1], numbers.Number)),
-        )
-    )
+    return tuple(pairs(golden_outputs, outputs))
 
 
 def get_tensor_report_record(tensor):
@@ -741,17 +750,24 @@ OPERATION_CALL_STACK = []
 
 
 def default_preprocess_golden_function_inputs(function_args, function_kwargs):
-    def preprocess(object_value):
+    def recursive_preprocess_golden_function_inputs(object_value):
         if isinstance(object_value, ttnn.Tensor):
             return to_torch_for_comparison(object_value)
-        if isinstance(object_value, (list, tuple)):
-            return type(object_value)(preprocess(element) for element in object_value)
-        return object_value
+        elif isinstance(object_value, (list, tuple)):
+            new_object_value = [recursive_preprocess_golden_function_inputs(element) for element in object_value]
+            return type(object_value)(new_object_value)
+        else:
+            return object_value
 
-    return (
-        tuple(preprocess(arg) for arg in function_args),
-        {key: preprocess(value) for key, value in function_kwargs.items()},
-    )
+    new_args = []
+    for arg in function_args:
+        new_arg = recursive_preprocess_golden_function_inputs(arg)
+        new_args.append(new_arg)
+    new_kwargs = {}
+    for key, value in function_kwargs.items():
+        new_value = recursive_preprocess_golden_function_inputs(value)
+        new_kwargs[key] = new_value
+    return tuple(new_args), new_kwargs
 
 
 def prepare_backward_golden_inputs(function_args_and_kwargs):
@@ -795,16 +811,19 @@ def default_postprocess_golden_function_outputs(output, function_args, function_
         if ttnn.is_tensor_storage_on_device(input_tensor):
             input_device = input_tensor.device()
 
-    def postprocess(value):
+    def recursive_postprocess_golden_function_outputs(output):
         import torch
 
-        if isinstance(value, torch.Tensor):
-            return ttnn.from_torch(value, dtype=input_dtype, layout=input_layout, device=input_device)
-        if isinstance(value, (list, tuple)):
-            return type(value)(postprocess(element) for element in value)
-        raise RuntimeError(f"Unsupported output type: {type(value)}")
+        if isinstance(output, torch.Tensor):
+            return ttnn.from_torch(output, dtype=input_dtype, layout=input_layout, device=input_device)
+        elif isinstance(output, (list, tuple)):
+            new_output = [recursive_postprocess_golden_function_outputs(element) for element in output]
+            return type(output)(new_output)
+        else:
+            raise RuntimeError(f"Unsupported output type: {type(output)}")
 
-    return postprocess(output)
+    output = recursive_postprocess_golden_function_outputs(output)
+    return output
 
 
 TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR = {}
@@ -812,6 +831,12 @@ TENSOR_IDS_PRODUCED_BY_OPERATION = set()
 
 
 def preprocess_global_golden_function_inputs(function_args, function_kwargs, *, local_golden_inputs=None):
+    """Resolve stored global goldens while preserving each operation's local preprocessing shape.
+
+    A matching ``local_value`` is the locally preprocessed argument, not a device-local shard.
+    Its type determines whether a cached mesh golden stays distributed for the global golden.
+    """
+
     if ttnn.CONFIG.report_path is None:
         return None
     input_index = 0
@@ -828,10 +853,11 @@ def preprocess_global_golden_function_inputs(function_args, function_kwargs, *, 
                         f"Intermediate tensor with tensor_id {object_value.tensor_id} (input index: {input_index}) is not found in the global golden tensors. Global golden will be skipped"
                     )
                     raise RuntimeError("Intermediate tensor is not found in the global golden tensors")
-                logger.warning(
-                    f"Input tensor with tensor_id {object_value.tensor_id} (input index: {input_index})  is not found in the global golden tensors. Creating it from ttnn tensor."
-                )
-                golden_tensor = to_torch_for_comparison(object_value)
+                else:
+                    logger.warning(
+                        f"Input tensor with tensor_id {object_value.tensor_id} (input index: {input_index})  is not found in the global golden tensors. Creating it from ttnn tensor."
+                    )
+                    golden_tensor = to_torch_for_comparison(object_value)
             else:
                 golden_tensor = TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[object_value.tensor_id]
             input_index += 1
@@ -881,16 +907,15 @@ def postprocess_global_golden_function_outputs(outputs, golden_outputs):
         if output.tensor_id is None:
             raise RuntimeError("Output tensor does not have a tensor_id")
         if isinstance(output, ttnn.Tensor) and not isinstance(golden_output, ttnn.DistributedGolden):
-            try:
-                device_tensor_count = len(ttnn.get_device_tensors(output))
-            except Exception:
-                device_tensor_count = 0
+            device_tensor_count = len(ttnn.get_device_tensors(output))
             if device_tensor_count > 1:
                 golden_output = distributed_golden_for_comparison(output, golden_output)
         TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[output.tensor_id] = _clone_golden_value(golden_output)
 
 
 def _clone_golden_value(value):
+    """Clone a golden storage boundary while retaining recognized comparison metadata."""
+
     import torch
 
     if isinstance(value, torch.Tensor):
@@ -1418,7 +1443,7 @@ class Operation:
                     global_golden_function_output, output
                 ):
                     try:
-                        global_tensor_comparison_records = compare_scalar_outputs(
+                        global_tensor_comparison_records = compare_tensors_using_pcc(
                             self.python_fully_qualified_name,
                             global_golden_function_output,
                             output,
@@ -1734,7 +1759,9 @@ def get_fallback_function(operation):
         )
         updated_function_args, updated_function_kwargs = preprocess_inputs(function_args, function_kwargs)
         output = golden_function(*updated_function_args, **updated_function_kwargs)
-        return postprocess_outputs(output, function_args, function_kwargs)
+        output = postprocess_outputs(output, function_args, function_kwargs)
+
+        return output
 
     return fallback_function
 

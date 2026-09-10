@@ -3,37 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-_MISSING = object()
-
-
-def golden_identity(value=_MISSING, *_, **kwargs):
-    """Return the logical value unchanged."""
-
-    if value is _MISSING:
-        for argument_name in ("input_tensor", "tensor", "input"):
-            if argument_name in kwargs:
-                return kwargs[argument_name]
-        raise TypeError("golden_identity requires a value")
-    return value
-
-
-def golden_torch_dtype_for_ttnn(dtype, *, default=None):
-    """Translate a TTNN dtype to its Torch counterpart, with an optional default."""
-
-    if dtype is None:
-        return default
-
-    import ttnn
-
-    return ttnn.ttnn_dtype_to_torch_dtype(dtype)
-
-
-def golden_normalize_shape(shape):
-    """Normalize a TTNN, list, or tuple shape to a tuple."""
-
-    return tuple(shape)
-
-
 def golden_apply_fused_activations(tensor, activation=None, *, program_config=None):
     """Apply the program-config fused activation or the explicitly requested activation."""
 
