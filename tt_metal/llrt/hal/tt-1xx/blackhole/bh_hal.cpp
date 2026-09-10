@@ -254,7 +254,7 @@ public:
         // -fno-lto: emit a plain (non-LTO) object for this TU. With -flto the RVV builtins are
         // streamed as GIMPLE and re-expanded by the link-stage LTRANS units, which do not carry
         // the vector -march, breaking code generation at link time (observed with sfpi 7.70.0).
-        // The link itself stays stock (-flto=auto): a fat-free object simply opts out of LTO.
+        // The link itself stays stock: a fat-free object simply opts out of LTO.
         //
         // -fno-tree-vectorize -fno-tree-slp-vectorize: the vector unit is only reachable through
         // explicit intrinsics; keep the auto-vectorizers from touching scalar kernel/LLK code.
