@@ -388,6 +388,22 @@
   team: ttnn
   category: data_movement
 
+- name: ccl watcher regression tests
+  # These regressions only fail when a device ASSERT can trap, so the watcher has to be enabled
+  # before pytest starts. With enable-watcher off (the default for this job) ASSERT compiles to a
+  # no-op (tt_metal/hw/inc/api/debug/assert.h) and the tests would pass whether or not the fix is
+  # present. Same four variables CI's enable-watcher sets, with the poll interval at 30s.
+  cmd: |
+    export TT_METAL_WATCHER=30 TT_METAL_WATCHER_APPEND=1
+    export TT_METAL_WATCHER_NOINLINE=1 TT_METAL_WATCHER_DISABLE_ETH=1
+    pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/watcher -xv --timeout=600
+  skus:
+    bh_quietbox_2:
+      timeout: 30
+  owner_id: U07M7QZ0BQA # Camilo Vega
+  team: ttnn
+  category: ccl
+
 - name: ccl nightly tests
   cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly
   skus:
