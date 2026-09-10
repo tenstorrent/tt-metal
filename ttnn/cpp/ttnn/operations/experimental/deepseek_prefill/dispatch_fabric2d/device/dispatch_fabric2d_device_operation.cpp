@@ -57,6 +57,14 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
         "dispatch_fabric2d: axis {} is out of range for a {} mesh",
         args.axis,
         args.device->shape());
+    // read_control_tables lands row r of the offsets table at `control + r * num_routed_experts`
+    // words, and a DRAM read needs a 64-byte-aligned L1 destination on Blackhole. Every row after
+    // the first is misaligned unless the row is a whole number of 64-byte lines.
+    TT_FATAL(
+        args.num_routed_experts % 16 == 0,
+        "dispatch_fabric2d: num_routed_experts must be a multiple of 16 (got {}); a row of the offsets "
+        "table has to be a whole number of 64-byte lines or the per-row DRAM reads are misaligned",
+        args.num_routed_experts);
     TT_FATAL(
         args.num_links >= 1 && args.num_links <= 4,
         "dispatch_fabric2d: num_links must be between 1 and 4 (got {})",

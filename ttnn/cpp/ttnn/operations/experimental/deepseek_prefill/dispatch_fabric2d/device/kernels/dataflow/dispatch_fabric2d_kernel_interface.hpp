@@ -70,8 +70,6 @@ constexpr uint32_t META_PAD_STRIDE = 64;
 
 // Words per assignment in the reader's assignment block: [dst_chip_id, dst_row, split_idx, split_count].
 constexpr uint32_t ASSIGNMENT_WORDS = 4;
-// Marks a schedule entry as "relay chunk k" rather than "own assignment k".
-constexpr uint32_t SCHED_FWD = 0x80000000u;
 
 // Ring slot = token + routing tail. 64 keeps the slot stride DRAM-aligned (14336 + 64 = 64 * 225), which
 // lets a fabric write target a (token_size + 64)-byte forwarding page directly.

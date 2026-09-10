@@ -241,13 +241,11 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
 
             uint32_t own_count = 0;
             std::vector<uint32_t> assignment_words;
-            std::vector<uint32_t> schedule;
             for (const auto& a : work) {
                 if (a.is_relay) {
-                    schedule.push_back(dspf2d::SCHED_FWD | a.relay_chunk);
                     continue;
                 }
-                schedule.push_back(own_count++);
+                own_count++;
                 assignment_words.push_back(a.dst_chip_id);
                 assignment_words.push_back(a.dst_row);
                 assignment_words.push_back(a.split_idx);
@@ -285,8 +283,8 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
                                         l1,
                                         plan,
                                         own_count,
-                                        static_cast<uint32_t>(schedule.size()) - own_count)
-                                        .to_ct_word_arr(chip_ids, assignment_words, schedule, in_words, out_words);
+                                        static_cast<uint32_t>(work.size()) - own_count)
+                                        .to_ct_word_arr(chip_ids, assignment_words, in_words, out_words);
             for (uint32_t i = 0; i < dspf2d::ReaderRtArg::kCount; i++) {
                 tt::tt_metal::TensorAccessorArgs(dram[i]).append_to(rdr.compile_time_args);
             }
