@@ -65,8 +65,45 @@ def applicable_formulations(C: int) -> list[Any]:
 # sweep's provenance comment (date, host, l1_small_size, clip lengths) with every block so a row's origin is
 # knowable when it goes stale.
 
-_FORMULATIONS: dict[DeviceKey, dict[ShapeKey, Any]] = {}
-_SLICES: dict[DeviceKey, dict[ShapeKey, tuple[int, int]]] = {}
+_FORMULATIONS: dict[DeviceKey, dict[ShapeKey, Any]] = {
+    # Blackhole Galaxy (P150-class chips, 12x10 compute grid). Swept 2026-09-10 on bh-glx-120-c03u02, one device,
+    # l1_small_size 65536, with the 14 shapes the MiniMax-H3 audio decoder calls the filter with at 5 s (207 latent
+    # frames) and 15 s (603): batch 2, K=7 stride-1 up-sampler and K=12 stride-2 anti-alias filter per band, C 512 -> 8.
+    # Only the two widest K=7 filters want chunking (C*K = 3584 / 1792 rows of activation block); at C=512 the
+    # full-channel conv never fits, at C=256 it fits from 3 slices but the 128-chunk is 20-25 % faster.
+    # tools/sweep_tap_filter_configs.py --merge-json tap_sweep_5s_f1_*.json tap_sweep_15s_f1_*.json
+    ("blackhole", 12, 10): {
+        (512, 12, 2): "direct",
+        (512, 7, 1): 128,
+        (256, 12, 2): "direct",
+        (256, 7, 1): 128,
+        (128, 12, 2): "direct",
+        (128, 7, 1): "direct",
+        (64, 12, 2): "direct",
+        (64, 7, 1): "direct",
+        (32, 12, 2): "direct",
+        (32, 7, 1): "direct",
+        (16, 12, 2): "direct",
+        (16, 7, 1): "direct",
+        (8, 12, 2): "direct",
+        (8, 7, 1): "direct",
+    },
+}
+_SLICES: dict[DeviceKey, dict[ShapeKey, tuple[int, int]]] = {
+    # Same sweep. A row exists only where the explicit count beat conv1d's auto-slicing by >= 10 % at the reference
+    # length (the 15 s one): the auto-slicer's L1 estimate over-slices the long, narrow filters (11-24 % slower).
+    # For the wide filters (C >= 128) explicit and auto were within noise, so conv1d keeps slicing those itself.
+    # Every derived count was checked against the smallest fitting count at all eight swept lengths (5 s and 15 s).
+    ("blackhole", 12, 10): {
+        (64, 12, 2): (60300, 8),
+        (64, 7, 1): (60300, 5),
+        (32, 12, 2): (120600, 8),
+        (32, 7, 1): (120600, 5),
+        (16, 7, 1): (241200, 2),
+        (8, 12, 2): (482400, 4),
+        (8, 7, 1): (482400, 4),
+    },
+}
 
 
 def register_tap_configs(

@@ -352,7 +352,28 @@ def main() -> None:
     ap.add_argument("--repeat", type=int, default=DEFAULT_REPEAT)
     ap.add_argument("--mac", action="store_true", help="also time the MAC fallback")
     ap.add_argument("--json", help="write every measurement here")
+    ap.add_argument(
+        "--merge-json",
+        nargs="*",
+        default=[],
+        help="no device: rebuild the tables from these --json outputs together (e.g. a 5 s and a 15 s sweep)",
+    )
     args = ap.parse_args()
+
+    if args.merge_json:
+        merged, device_key, provenance = [], None, []
+        for path in args.merge_json:
+            with open(path) as fh:
+                data = json.load(fh)
+            key = tuple(data["device_key"])
+            if device_key is not None and key != device_key:
+                sys.exit(f"{path} is for device class {key}, the others for {device_key}; one table per class")
+            device_key = key
+            merged.extend(data["results"])
+            provenance.append(f"{os.path.basename(path)} ({len(data['results'])} shapes, l1_small {data['l1_small']})")
+        formulations, slices, checks = build_tables(merged)
+        print_tables(device_key, formulations, slices, checks, "merged from " + ", ".join(provenance))
+        return
 
     rows, cols = (int(v) for v in args.mesh.lower().split("x"))
     fabric = rows * cols > 1
