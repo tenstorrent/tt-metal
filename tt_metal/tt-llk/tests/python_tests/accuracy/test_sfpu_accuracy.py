@@ -61,13 +61,6 @@ APPROX_CAPABLE_OPS = [
     MathOperation.Sin,
     MathOperation.Cos,
     MathOperation.Gelu,
-    # Tanh's approximation is a 3-segment SFPLUT in calculate_tanh. It used to be held out
-    # of this list, and _skip_if_unsupported carried a matching "Metal tanh does not support
-    # approximation mode" skip -- both wrong, and the skip was dead code besides, since this
-    # list is what decides whether approx=Yes is ever generated. This sweep only records
-    # accuracy (no ULP gating), so the coarse LUT is the interesting case, not a reason to
-    # withhold. Its error against the default 5% rtol is a separate matter, handled by
-    # test_eltwise_unary_sfpu's own format-keyed skip.
     MathOperation.Tanh,
 ]
 
