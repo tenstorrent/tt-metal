@@ -640,6 +640,37 @@ def test_hardtanh_golden_matches_the_clamp_golden():
         )
 
 
+@pytest.mark.parametrize(
+    "output_format,dest_acc",
+    [
+        (DataFormat.Float16_b, DestAccumulation.Yes),
+        (DataFormat.Float32, DestAccumulation.No),
+        (DataFormat.Float32, DestAccumulation.Yes),
+    ],
+)
+def test_fmod_golden_preserves_dividend_sign_through_pack(output_format, dest_acc):
+    import torch
+    from helpers.golden_generators import UnarySFPUGolden
+
+    probes = torch.tensor([float("inf"), -float("inf"), 5.0, -5.0])
+    result = UnarySFPUGolden()(
+        MathOperation.Fmod,
+        probes.repeat(256),
+        output_format,
+        dest_acc,
+        DataFormat.Float32,
+        dimensions=(32, 32),
+    )
+
+    if output_format == DataFormat.Float32 and dest_acc == DestAccumulation.Yes:
+        assert torch.isnan(result[:2]).all()
+    else:
+        assert torch.equal(result[:2].float(), probes[:2])
+    assert torch.equal(torch.signbit(result[:4]), torch.signbit(probes))
+    expected = torch.fmod(probes[2:], UnarySFPUGolden._FMOD_DIVISOR)
+    assert torch.equal(result[2:4].float(), expected)
+
+
 def test_reduce_extremum_follows_the_total_order_on_floats_only():
     """Reduce MAX/MIN fold under the SFPU total order; Sum/Average stay IEEE; ints stay torch.
 
