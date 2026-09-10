@@ -302,6 +302,7 @@ def _compute_and_send(
     t_perf = time.perf_counter()
     where = f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']})"
     logger.info(f"[pp rank {rank}] CHUNK_START c={c} compute_start={t_start:.6f} {where}")
+
     out = runtime.prefill_chunk(
         inp,
         kv_caches,
@@ -370,6 +371,7 @@ def run_request_loop(
         _lease_reclaim(d2d_in, d2d_out)
         if cfg.is_first_rank:
             inp, meta, metadata_msg = _socket_next(h2d_service)
+            logger.info(f"Recieved tensor from socket of shape: {inp.shape}")
         else:
             inp, meta, metadata_msg = _d2d_recv(d2d_in)
         if _is_shutdown_sentinel(meta):
