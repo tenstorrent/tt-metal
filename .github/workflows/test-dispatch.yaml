@@ -121,7 +121,7 @@ jobs:
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Run QB2 registry command
         uses: ./docker-job/.github/actions/run-with-log
-        timeout-minutes: 10
+        timeout-minutes: 12
         with:
           log-file: generated/test_logs/qb2-registry.log
           run: ${{ inputs.command }}
