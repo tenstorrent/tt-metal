@@ -105,6 +105,8 @@ def test_configure_only_installs_the_program_and_never_runs_it(mesh_device):
     assert cfg["enables"][0] != 0
 
     ttnn.generic_op([other, scratch], program)
+    # Raw L1 reads do not wait for the asynchronously launched kernel to finish.
+    ttnn.synchronize_device(mesh_device)
     assert _words(mesh_device, addr, 1) == [MARKER], "the same descriptor, launched for real, runs"
     ttnn.deallocate(scratch)
     ttnn.deallocate(other)
