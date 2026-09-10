@@ -304,11 +304,17 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     v_if(out_exp >= 255) { y = std::numeric_limits<float>::infinity(); }
     v_endif;
 
+    // |pow| removes a -0 exponent: convert<vSMag16> would round trip that back to something the
+    // bit-exact compare below reports as non-integer (on BH, not on WH) and gives NaN instead of 1
+    // for a -0 base. Kept on WH too, where it passes only because that conversion happens to
+    // preserve the sign of a -0, which is not a guarantee.
+    sfpi::vFloat abs_pow = sfpi::abs(pow);
+
     v_if(base < 0.0f) {  // negative base
         // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
         // Check valid base range
         auto pow_int = sfpi::convert<sfpi::vSMag16>(
-            pow, sfpi::RoundMode::Nearest);  // int16 should be plenty, since large powers will approach 0/Inf
+            abs_pow, sfpi::RoundMode::Nearest);  // int16 should be plenty, since large powers will approach 0/Inf
         auto pow_rounded = sfpi::convert<sfpi::vFloat>(pow_int, sfpi::RoundMode::Nearest);
 
         // If pow is odd integer then result is negative
@@ -316,7 +322,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
         y = sfpi::setsgn2(y, pow_int);
 
         // Check for integer power, if it is not then overwrite result with NaN
-        v_if(pow_rounded != pow) {  // negative base and non-integer power => set to NaN
+        v_if(pow_rounded != abs_pow) {  // negative base and non-integer power => set to NaN
             y = std::numeric_limits<float>::quiet_NaN();
         }
         v_endif;
@@ -333,12 +339,11 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     // Fill 0 for every non-zero exponent, then narrow to the negative ones, which
     // IEEE defines as +inf. v_and tightens the enclosing predicate in place, so it
     // costs one compare where a second flat v_if would also save and restore the
-    // lane mask. Gating on |pow| lets both signed zeros fall through to the mainline.
+    // lane mask. Gating on |pow| lets both signed zeros keep the mainline's 1.
     // Both fills take their sign from y rather than writing a positive constant, because
     // IEEE keeps the sign of a zero base through an odd integer exponent.
     sfpi::vFloat abs_end = sfpi::abs(base);
     v_if(abs_end == 0.f) {
-        sfpi::vFloat abs_pow = sfpi::abs(pow);
         v_if(abs_pow != 0.f) {
             y = sfpi::copysgn(sfpi::vFloat(0.0f), y);
             v_and(pow < 0.f);
