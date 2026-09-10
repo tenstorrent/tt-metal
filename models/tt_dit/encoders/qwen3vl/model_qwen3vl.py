@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import itertools
 import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -38,6 +39,84 @@ class Qwen3VlContext:
     tp_axis: int | None
     ccl_manager: CCLManager | None
     fsdp_mesh_axis: int | None = None
+    # When set, every decoder linear (qkv/o/gate/up/down projections) is built with this compute
+    # kernel config instead of the tt_dit-wide default from `linear_compute_config`. See
+    # `Qwen3VlTextEncoder`'s `high_fidelity_linears`.
+    linear_compute_kernel_config: object | None = None
+
+
+def vision_token_runs(input_ids: torch.Tensor, image_token_id: int | Sequence[int]) -> list[tuple[int, int]]:
+    """`(start, length)` of each contiguous run of a vision pad token in a single sequence.
+
+    Qwen3-VL presentations never interleave a vision block with anything: MiniMax-H3 emits a
+    `"<Picture i>: "` label, then `<|vision_start|>`, then one run of `<|image_pad|>`, then
+    `<|vision_end|>`. So one image is one run, and the merged vision tokens map onto the runs in order.
+
+    `image_token_id` may be several ids, which `ref2va` needs: its presentation mixes
+    `<|image_pad|>` runs (one per image reference) with `<|video_pad|>` runs (one per merged frame
+    pair of a video reference). Runs come back in sequence order regardless of pad id, in one
+    interleaved list, because `_scatter_rows` consumes the tower's rows in run order and the caller
+    assembles that output in presentation order.
+
+    A run boundary is a change of token, so two adjacent runs of different pad ids are two runs. That
+    does not arise in a MiniMax-H3 presentation, where a `"<{t} seconds>"` label separates two video
+    blocks, but merging them would mis-slice.
+    """
+    pad_ids = {int(image_token_id)} if isinstance(image_token_id, int) else {int(i) for i in image_token_id}
+    if input_ids.ndim == 2:
+        if input_ids.shape[0] != 1:
+            msg = f"expected a single sequence, got batch {input_ids.shape[0]}"
+            raise ValueError(msg)
+        input_ids = input_ids[0]
+    runs: list[tuple[int, int]] = []
+    start, current = None, None
+    for index, token in enumerate(input_ids.tolist()):
+        if token in pad_ids:
+            if start is None:
+                start, current = index, token
+            elif token != current:
+                # A different pad id: close the run and open a new one at this row.
+                runs.append((start, index - start))
+                start, current = index, token
+        elif start is not None:
+            runs.append((start, index - start))
+            start, current = None, None
+    if start is not None:
+        runs.append((start, len(input_ids) - start))
+    return runs
+
+
+def _scatter_rows(base: ttnn.Tensor, values: ttnn.Tensor, runs: Sequence[tuple[int, int]], *, add: bool) -> ttnn.Tensor:
+    """Write `values` into the row ranges `runs` of `base`, either replacing or adding.
+
+    Done by slicing and concatenating rather than a masked scatter: the vision positions are contiguous
+    runs, so this is exact, and row slicing on the sequence axis is already how this module trims its
+    padding. `values` rows are consumed in run order.
+    """
+    # The vision tower emits `(rows, hidden)` while the sequence buffer is `(batch, seq, hidden)`;
+    # normalize so the slicing below is rank-agnostic.
+    if len(values.shape) == 2:
+        values = ttnn.reshape(values, (1, values.shape[0], values.shape[1]))
+
+    total = sum(length for _, length in runs)
+    if values.shape[-2] != total:
+        msg = f"runs cover {total} rows but values has {values.shape[-2]}"
+        raise ValueError(msg)
+
+    pieces: list[ttnn.Tensor] = []
+    cursor = taken = 0
+    for start, length in runs:
+        if start < cursor:
+            msg = f"runs must be sorted and disjoint; {start} overlaps {cursor}"
+            raise ValueError(msg)
+        if start > cursor:
+            pieces.append(base[:, cursor:start, :])
+        chunk = values[:, taken : taken + length, :]
+        pieces.append(ttnn.add(base[:, start : start + length, :], chunk) if add else chunk)
+        cursor, taken = start + length, taken + length
+    if cursor < base.shape[-2]:
+        pieces.append(base[:, cursor:, :])
+    return ttnn.concat(pieces, dim=-2) if len(pieces) > 1 else pieces[0]
 
 
 # adapted from https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L769
@@ -55,13 +134,29 @@ class Qwen3VlTextEncoder(Module):
         rms_norm_eps: float,
         rope_theta: float,
         mrope_section: Sequence[int],
+        head_dim: int | None = None,
         activation_layers: Sequence[int] | None = None,
         device: ttnn.MeshDevice,
         parallel_config: EncoderParallelConfig | None = None,
         ccl_manager: CCLManager | None = None,
         is_fsdp: bool = False,
+        high_fidelity_linears: bool = False,
     ) -> None:
         super().__init__()
+
+        # Qwen3-VL declares `head_dim` explicitly and it is NOT always `hidden_size // num_heads`:
+        # Qwen3-VL-8B happens to satisfy that (4096 // 32 == 128), but MiniMax-H3's conditioner does
+        # not (5120 // 64 == 80, while the checkpoint's head_dim is 128, giving an inner dimension of
+        # 8192 wider than the residual stream). Pass the config's value; the derivation is only a
+        # fallback for callers whose checkpoint omits it.
+        if head_dim is None:
+            if hidden_size % num_attention_heads != 0:
+                msg = (
+                    f"cannot derive head_dim: hidden_size {hidden_size} is not divisible by "
+                    f"num_attention_heads {num_attention_heads}. Pass `head_dim` explicitly."
+                )
+                raise ValueError(msg)
+            head_dim = hidden_size // num_attention_heads
 
         # FSDP: For encoders, we can only use FSDP if there's a separate axis from TP.
         # Since the encoder runs on a submesh (e.g., 1x4), we need to check if the other axis
@@ -79,11 +174,26 @@ class Qwen3VlTextEncoder(Module):
                 f"tensor-parallel axis has size > 1 (mesh shape {tuple(device.shape)})."
             )
 
+        # `high_fidelity_linears` builds every decoder linear at HiFi4 instead of the tt_dit-wide
+        # HiFi2 default. Everything else (fp32 DEST accumulate, packer L1 accumulate, non-approx)
+        # matches the default. Off by default: one model's measurement is not evidence about the
+        # others sharing this module.
+        linear_compute_kernel_config = None
+        if high_fidelity_linears:
+            linear_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
+
         ctx = Qwen3VlContext(
             device=device,
             tp_axis=parallel_config.tensor_parallel.mesh_axis if parallel_config is not None else None,
             ccl_manager=ccl_manager,
             fsdp_mesh_axis=fsdp_mesh_axis,
+            linear_compute_kernel_config=linear_compute_kernel_config,
         )
 
         if ctx.tp_axis is not None and ctx.ccl_manager is None:
@@ -99,6 +209,7 @@ class Qwen3VlTextEncoder(Module):
                 num_attention_heads=num_attention_heads,
                 num_key_value_heads=num_key_value_heads,
                 rms_norm_eps=rms_norm_eps,
+                head_dim=head_dim,
                 ctx=ctx,
             )
             for _ in range(num_hidden_layers)
@@ -109,7 +220,9 @@ class Qwen3VlTextEncoder(Module):
         self._tp_axis = ctx.tp_axis
         self._ccl_manager = ctx.ccl_manager
         self._mrope_section = mrope_section
-        self._head_dim = hidden_size // num_attention_heads
+        # See Qwen3VlAttention: head_dim is not derivable from hidden_size / num_heads for every
+        # Qwen3-VL checkpoint. The rope tables are built at this width, so it must agree.
+        self._head_dim = head_dim if head_dim is not None else hidden_size // num_attention_heads
         self._rope_theta = rope_theta
         # When set, forward returns the raw hidden states after each of these decoder layers
         # (no final norm) — the Ideogram4 multi-layer feature tap. Otherwise returns the
@@ -122,7 +235,24 @@ class Qwen3VlTextEncoder(Module):
         *,
         attention_mask: ttnn.Tensor | None = None,
         pos_embeds: tuple[ttnn.Tensor, ttnn.Tensor],
+        vision_embeds: ttnn.Tensor | None = None,
+        vision_runs: Sequence[tuple[int, int]] | None = None,
+        deepstack_embeds: Sequence[ttnn.Tensor] | None = None,
     ) -> list[ttnn.Tensor]:
+        """Args beyond the text path, all optional so text-only callers are unaffected:
+
+        vision_embeds: the vision tower's merged tokens, which *replace* the embeddings of the
+            `<|image_pad|>` rows named by `vision_runs` (see [`vision_token_runs`]).
+        deepstack_embeds: one feature per entry of the tower's `deepstack_visual_indexes`, *added* to
+            the vision rows after decoder layers `0 .. len(deepstack_embeds) - 1`. The reference keys
+            these off the list length, not the vision layer indexes they came from.
+        """
+        if (vision_embeds is None) != (vision_runs is None):
+            msg = "vision_embeds and vision_runs must be passed together"
+            raise ValueError(msg)
+        if deepstack_embeds and vision_runs is None:
+            msg = "deepstack_embeds needs vision_runs to know which rows to add to"
+            raise ValueError(msg)
         batch_size, seq_len = input_ids.shape
 
         if attention_mask is not None:
@@ -157,6 +287,9 @@ class Qwen3VlTextEncoder(Module):
             # clone to move out of persistent buffer
             input_embeds = ttnn.clone(input_embeds)
 
+        if vision_embeds is not None:
+            input_embeds = _scatter_rows(input_embeds, vision_embeds, vision_runs, add=False)
+
         hidden_states = input_embeds
         captured: list[ttnn.Tensor] = []
 
@@ -166,6 +299,10 @@ class Qwen3VlTextEncoder(Module):
                 attention_bias=attention_bias,
                 pos_embeds=pos_embeds,
             )
+            # Vision also enters here, not only at the embeddings: the tower's intermediate features are
+            # added to the vision rows of the first few layers.
+            if deepstack_embeds and layer_idx < len(deepstack_embeds):
+                hidden_states = _scatter_rows(hidden_states, deepstack_embeds[layer_idx], vision_runs, add=True)
             if self._activation_layers is not None and layer_idx in self._activation_layers:
                 captured.append(hidden_states)
 
@@ -202,6 +339,7 @@ class Qwen3VlDecoderLayer(Module):
         intermediate_size: int,
         hidden_act: str,
         rms_norm_eps: float,
+        head_dim: int | None = None,
         ctx: Qwen3VlContext,
     ) -> None:
         super().__init__()
@@ -211,6 +349,7 @@ class Qwen3VlDecoderLayer(Module):
             num_heads=num_attention_heads,
             num_key_value_heads=num_key_value_heads,
             rms_norm_eps=rms_norm_eps,
+            head_dim=head_dim,
             ctx=ctx,
         )
         self.mlp = Qwen3VlMlp(
@@ -246,6 +385,7 @@ class Qwen3VlAttention(Module):
         num_heads: int,
         num_key_value_heads: int,
         rms_norm_eps: float,
+        head_dim: int | None = None,
         ctx: Qwen3VlContext,
     ) -> None:
         super().__init__()
@@ -253,11 +393,19 @@ class Qwen3VlAttention(Module):
         if ctx.tp_axis is not None:
             assert ctx.ccl_manager is not None
 
-        if hidden_size % num_heads != 0:
-            msg = f"hidden_size {hidden_size} must be divisible by num_heads {num_heads}"
-            raise ValueError(msg)
-
-        head_dim = hidden_size // num_heads
+        # Qwen3-VL does not require `head_dim == hidden_size // num_heads`, and the larger
+        # checkpoints do not satisfy it: the 32B-class model MiniMax-H3 conditions on has
+        # hidden_size 5120 with 64 heads of 128, so `q_proj` is [8192, 5120] rather than square.
+        # `num_heads * head_dim` need not equal `hidden_size`: the projections below are sized from
+        # `head_dim` throughout, so a q/k/v inner dimension wider (or narrower) than the residual
+        # stream is supported. Passing head_dim explicitly is therefore required for those
+        # checkpoints; the derivation stays the default because it is correct for the 8B
+        # (4096 / 32 = 128) that Ideogram-4 loads.
+        if head_dim is None:
+            if hidden_size % num_heads != 0:
+                msg = f"hidden_size {hidden_size} must be divisible by num_heads {num_heads}"
+                raise ValueError(msg)
+            head_dim = hidden_size // num_heads
 
         # Qwen3 (unlike Qwen2.5) applies per-head RMSNorm to q and k (over head_dim),
         # after the qkv projection / head split and before RoPE.
@@ -279,6 +427,7 @@ class Qwen3VlAttention(Module):
             mesh_axis=ctx.tp_axis,
             fsdp_mesh_axis=ctx.fsdp_mesh_axis,
             ccl_manager=ctx.ccl_manager,
+            compute_kernel_config=ctx.linear_compute_kernel_config,
         )
         self.o_proj = ColParallelLinear(
             padded_heads * head_dim,
@@ -288,6 +437,7 @@ class Qwen3VlAttention(Module):
             mesh_axis=ctx.tp_axis,
             fsdp_mesh_axis=ctx.fsdp_mesh_axis,
             ccl_manager=ctx.ccl_manager,
+            compute_kernel_config=ctx.linear_compute_kernel_config,
         )
 
         self._sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -446,6 +596,7 @@ class Qwen3VlMlp(Module):
             mesh_axis=ctx.tp_axis,
             fsdp_mesh_axis=ctx.fsdp_mesh_axis,
             ccl_manager=ctx.ccl_manager,
+            compute_kernel_config=ctx.linear_compute_kernel_config,
         )
         self.up_proj = ColParallelLinear(
             hidden_size,
@@ -455,6 +606,7 @@ class Qwen3VlMlp(Module):
             mesh_axis=ctx.tp_axis,
             fsdp_mesh_axis=ctx.fsdp_mesh_axis,
             ccl_manager=ctx.ccl_manager,
+            compute_kernel_config=ctx.linear_compute_kernel_config,
         )
         self.down_proj = RowParallelLinear(
             intermediate_size,
@@ -464,6 +616,7 @@ class Qwen3VlMlp(Module):
             mesh_axis=ctx.tp_axis,
             fsdp_mesh_axis=ctx.fsdp_mesh_axis,
             ccl_manager=ctx.ccl_manager,
+            compute_kernel_config=ctx.linear_compute_kernel_config,
         )
 
         if hidden_act != "silu":
@@ -506,9 +659,9 @@ def _apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tens
     # the fused ttnn.experimental.rotary_embedding_llama (rope_halfsplit_to_interleaved*); that
     # conversion is numerically neutral there. Not adopted here: it needs a head_dim channel
     # permutation baked into the qkv weights, and the encoder RoPE is a negligible slice of latency
-    # (the encoder is ~1.5% of end-to-end), so the fused op buys ~nothing. (An earlier interleaved
-    # attempt regressed PCC only because cos/sin were left half-split while the rotate switched to
-    # adjacent-pair -- a bug in that attempt, not the layout.)
+    # (the encoder is ~1.5% of end-to-end), so the fused op buys ~nothing. If it is ever adopted,
+    # cos/sin must be converted to adjacent-pair along with the rotate -- mixing the two layouts
+    # regresses PCC silently.
     return x * cos + _rotate_half(x) * sin
 
 
@@ -570,6 +723,109 @@ def prepare_attention_bias(attention_mask: ttnn.Tensor) -> ttnn.Tensor:
 
 # adapted from https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L491
 # and https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L545
+def vision_position_ids(
+    start_position: int,
+    grid_thw: Sequence[int] | torch.Tensor,
+    *,
+    temp_merge_size: int = 1,
+    spatial_merge_size: int = 1,
+    time_interval: int = 1,
+) -> torch.Tensor:
+    """The `(3, num_vision_tokens)` M-RoPE grid of one image or video block, offset by `start_position`.
+
+    The `(t, h, w)` axes carry *different* positions here, unlike a text run where all three share the
+    token index. That divergence is what makes the interleaved layout observable -- see
+    [`create_rope_tensors`].
+
+    The repeat patterns below are load-bearing and mirror the reference exactly; `start_position` is
+    added to the temporal axis only *after* `time_interval` is applied, and order matters.
+    """
+    llm_grid_t = int(grid_thw[0]) // temp_merge_size
+    llm_grid_h = int(grid_thw[1]) // spatial_merge_size
+    llm_grid_w = int(grid_thw[2]) // spatial_merge_size
+
+    position_temporal = torch.arange(llm_grid_t) * time_interval
+    position_width = torch.arange(llm_grid_w) + start_position
+    position_height = torch.arange(llm_grid_h) + start_position
+
+    position_width = position_width.repeat(llm_grid_h * llm_grid_t)
+    position_height = position_height.repeat_interleave(llm_grid_w).repeat(llm_grid_t)
+    position_temporal = position_temporal.repeat_interleave(llm_grid_h * llm_grid_w) + start_position
+
+    return torch.stack([position_temporal, position_height, position_width], dim=0)
+
+
+def mrope_position_ids(
+    mm_token_type_ids: torch.Tensor,
+    *,
+    image_grid_thw: torch.Tensor | None = None,
+    video_grid_thw: torch.Tensor | None = None,
+    spatial_merge_size: int = 2,
+) -> torch.Tensor:
+    """The `(3, batch_size, sequence_length)` M-RoPE grid of a multimodal prompt.
+
+    The sequence is walked as runs of one modality, which is what `mm_token_type_ids` (0 text, 1
+    image, 2 video -- as produced by `Qwen3VLProcessor.create_mm_token_type_ids`) encodes. A text run
+    advances all three axes together by its length; a vision run consumes the next entry of the
+    matching `*_grid_thw` and advances the clock by `max(h, w) // spatial_merge_size`.
+
+    Only the position grid is returned. The reference also produces `mrope_position_deltas`, which
+    exists to re-base positions for cached incremental decoding; the conditioner runs a single
+    prefill with `use_cache=False` and never needs it.
+
+    Padding is not handled: this takes one unpadded sequence per batch item, which is what the
+    conditioner feeds (its attention mask is all ones).
+    """
+    if video_grid_thw is not None:
+        # Timestamps separate the frames of a video, so each frame is its own grid.
+        video_grid_thw = torch.repeat_interleave(video_grid_thw, video_grid_thw[:, 0], dim=0).clone()
+        video_grid_thw[:, 0] = 1
+
+    grid_iters = {
+        1: iter(image_grid_thw) if image_grid_thw is not None else None,
+        2: iter(video_grid_thw) if video_grid_thw is not None else None,
+    }
+
+    batch_size, sequence_length = mm_token_type_ids.shape
+    position_ids = torch.zeros(3, batch_size, sequence_length, dtype=torch.long)
+    for batch_idx in range(batch_size):
+        current_pos = 0
+        runs = []
+        for modality, group in itertools.groupby(enumerate(mm_token_type_ids[batch_idx].tolist()), lambda x: x[1]):
+            group = list(group)
+            runs.append((modality, group[0][0], group[-1][0] + 1))
+
+        segments = []
+        for modality, start_idx, end_idx in runs:
+            if modality == 0:
+                text_len = end_idx - start_idx
+                segments.append(torch.arange(text_len).view(1, -1).expand(3, -1) + current_pos)
+                current_pos += text_len
+            else:
+                if grid_iters[modality] is None:
+                    msg = f"mm_token_type_ids contains modality {modality} but no matching grid was passed"
+                    raise ValueError(msg)
+                grid_thw = next(grid_iters[modality])
+                segments.append(vision_position_ids(current_pos, grid_thw, spatial_merge_size=spatial_merge_size))
+                current_pos += max(int(grid_thw[1]), int(grid_thw[2])) // spatial_merge_size
+        position_ids[:, batch_idx] = torch.cat(segments, dim=1).reshape(3, -1)
+
+    return position_ids
+
+
+def _apply_interleaved_mrope(freqs: torch.Tensor, mrope_section: Sequence[int]) -> torch.Tensor:
+    """Reorganize `(3, batch, seq, head_dim // 2)` freqs from chunked `[TTT..HHH..WWW]` to interleaved
+    `[THWTHW..TT]`, preserving frequency continuity. Returns `(batch, seq, head_dim // 2)`."""
+    freqs_t = freqs[0]
+    for dim, offset in enumerate((1, 2), start=1):  # H, W
+        length = mrope_section[dim] * 3
+        idx = slice(offset, length, 3)
+        freqs_t[..., idx] = freqs[dim, ..., idx]
+    return freqs_t
+
+
+# adapted from https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L491
+# and https://github.com/huggingface/transformers/blob/v4.57.1/src/transformers/models/qwen2_5_vl/modeling_qwen2_5_vl.py#L545
 def create_rope_tensors(
     batch_size: int,
     sequence_length: int,
@@ -577,8 +833,27 @@ def create_rope_tensors(
     head_dim: int,
     rope_theta: float,
     mrope_section: Sequence[int],
+    position_ids: torch.Tensor | None = None,
+    interleaved: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    if attention_mask is not None:
+    """`(cos, sin)` of shape `(batch, 1, seq, head_dim)` for the decoder's rotary embedding.
+
+    Args:
+        position_ids: `(3, batch, sequence_length)` from [`mrope_position_ids`]. Defaults to the token
+            index shared by all three axes, which is what a text-only prompt needs.
+        interleaved: whether the checkpoint declares `rope_scaling.mrope_interleaved`. The two layouts
+            assign the same *frequency* to each output slot and differ only in which axis's position
+            feeds it, so they coincide exactly while all three axes agree -- i.e. for a text-only
+            prompt, where this flag is a no-op. It becomes observable as soon as `position_ids`
+            carries a vision run.
+    """
+    if position_ids is not None:
+        assert position_ids.shape == (
+            3,
+            batch_size,
+            sequence_length,
+        ), f"position_ids must be (3, {batch_size}, {sequence_length}), got {tuple(position_ids.shape)}"
+    elif attention_mask is not None:
         assert attention_mask.shape == (batch_size, sequence_length)
 
         position_ids = attention_mask.long().cumsum(-1) - 1
@@ -587,10 +862,23 @@ def create_rope_tensors(
     else:
         position_ids = torch.arange(sequence_length).view(1, 1, -1).expand(3, batch_size, -1)
 
+    # `theta ** -x` rather than the reference's `1 / theta ** x`: mathematically identical, one fp32
+    # ulp apart (~1.2e-7 relative), and *not* invisible after the bf16 cast the caller applies -- a few
+    # entries land on the other side of a rounding boundary. Do not switch forms: existing callers
+    # depend on this one bit-for-bit, and its 1-ulp divergence from the reference is absorbed in the
+    # measured PCC.
     inv_freq = rope_theta ** (-torch.arange(0, head_dim, 2, dtype=torch.int64).to(dtype=torch.float) / head_dim)
     inv_freq_expanded = inv_freq[None, None, :, None].float().expand(3, batch_size, -1, 1)
     position_ids_expanded = position_ids[:, :, None, :].float()
     freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(2, 3)
+
+    if interleaved:
+        # The axis selection happens on the freqs, before the duplication and the cos/sin.
+        freqs = _apply_interleaved_mrope(freqs, mrope_section)
+        emb = torch.cat((freqs, freqs), dim=-1)
+        return emb.cos().unsqueeze(1), emb.sin().unsqueeze(1)
+
+    # Chunked: select per contiguous section, after the cos/sin.
     emb = torch.cat((freqs, freqs), dim=-1)
     cos = emb.cos()
     sin = emb.sin()

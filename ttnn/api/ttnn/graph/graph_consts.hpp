@@ -34,6 +34,12 @@ constexpr auto kBorrowsMemory = "borrows_memory";
 constexpr auto kDeviceId = "device_id";
 constexpr auto kDurationNs = "duration_ns";
 constexpr auto kMaxSizePerBank = "max_size_per_bank";
+constexpr auto kProgramFactoryType = "program_factory_type";
+constexpr auto kProgramFactoryIndex = "program_factory_index";
+constexpr auto kProgramCacheHit = "program_cache_hit";
+// Set on a function_end that closes a scope left by an exception rather than by returning.
+constexpr auto kAborted = "aborted";
+constexpr auto kAbortReason = "abort_reason";
 
 // node names
 constexpr auto kNodeBuffer = "buffer";
@@ -66,6 +72,11 @@ constexpr auto kReportTimestampNs = "capture_timestamp_ns";
 constexpr auto kReportTotalDurationNs = "total_duration_ns";
 constexpr auto kReportRank = "rank";
 constexpr auto kReportWorldSize = "world_size";
+constexpr auto kReportGitSha = "git_sha";
+constexpr auto kReportGitShaShort = "git_sha_short";
+constexpr auto kReportGitVersion = "version";
+constexpr auto kReportBuildType = "build_type";
+constexpr auto kReportGitDirty = "dirty";
 
 // device info keys
 constexpr auto kDeviceNumYCores = "num_y_cores";

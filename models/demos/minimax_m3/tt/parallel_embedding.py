@@ -48,6 +48,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.minimax_m3.tt.residual import use_sharded_residual
 
 # Cache keys for the SHARDED embed table. Distinct from the old replicated "model.embed_tokens.weight",
 # and — critically — neither key is a prefix of the other: weight_cache_is_complete matches by startswith,
@@ -99,6 +100,10 @@ class TtParallelEmbedding(LightweightModule):
         self.sp_axis = mesh_config.sp_axis
         self.dtype = dtype
         self.shard_vocab_on_sp = shard_vocab_on_sp
+        # Residual-stream layout (tt/residual.py). Both lookup paths already produce emb/tp naturally —
+        # the 1D path from its local emb-dim slice, the 2D path out of its SP reduce-scatter — so the
+        # sharded scheme is a matter of NOT running the closing TP all-gather, not of adding anything.
+        self.gather_emb = not use_sharded_residual()
 
         tp = mesh_device.shape[self.tp_axis]
         sp = mesh_device.shape[self.sp_axis]
@@ -161,15 +166,15 @@ class TtParallelEmbedding(LightweightModule):
         )
 
     def forward(self, tokens: ttnn.Tensor) -> ttnn.Tensor:
-        """tokens: SP-seq-sharded (replicated across TP) uint32 indices [1, 1, s_local] ->
-        [1, 1, s_local, emb_dim] bf16, full hidden replicated across the TP cols (the M3 residual-stream
-        contract)."""
+        """tokens: SP-seq-sharded (replicated across TP) uint32 indices [1, 1, s_local] -> bf16
+        [1, 1, s_local, emb_dim] full hidden replicated across the TP cols, or [1, 1, s_local,
+        emb_dim / tp] under a sharded residual — the M3 residual-stream contract either way."""
         if not self.shard_vocab_on_sp:
             emb = ttnn.embedding(tokens, self.weight, layout=ttnn.TILE_LAYOUT, dtype=self.dtype)
             if len(emb.shape) == 3:
                 emb = ttnn.unsqueeze_to_4D(emb)
             tp = self.mesh_device.shape[self.tp_axis]
-            if tp > 1:
+            if tp > 1 and self.gather_emb:
                 emb = self.mesh_config.allgather(emb, self.ccl_manager, axis=self.tp_axis, dim=3)
             return emb
         return self._forward_2d(tokens)
@@ -203,7 +208,8 @@ class TtParallelEmbedding(LightweightModule):
         if sp > 1:
             emb = self.mesh_config.reduce_scatter(emb, self.ccl_manager, dim=2, axis=self.sp_axis)
 
-        # 4) TP all-gather on emb_dim -> [1,1,s_local,emb_dim] (full hidden, TP-replicated).
-        if tp > 1:
+        # 4) TP all-gather on emb_dim -> [1,1,s_local,emb_dim] (full hidden, TP-replicated). Skipped
+        #    under a sharded residual: step 3 already left the stream at emb_dim/tp.
+        if tp > 1 and self.gather_emb:
             emb = self.mesh_config.allgather(emb, self.ccl_manager, axis=self.tp_axis, dim=3)
         return emb

@@ -7,24 +7,21 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint_pages.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #define u8_l1_ptr volatile tt_l1_ptr uint8_t*
 #define u8_vol_ptr volatile uint8_t*
 #define u8_ptr uint8_t*
 
 void kernel_main() {
-    constexpr uint32_t unpadded_stick_bytes         = get_compile_time_arg_val(0);
-    constexpr uint32_t padded_stick_bytes         = get_compile_time_arg_val(1);
-    constexpr uint32_t unpadded_shard_height        = get_compile_time_arg_val(2);
-    constexpr uint32_t padded_shard_height        = get_compile_time_arg_val(3);
-    constexpr uint32_t W_front_pad_bytes = get_compile_time_arg_val(4);
+    constexpr auto unpadded_stick_bytes = get_arg(args::unpadded_stick_bytes);
+    constexpr auto unpadded_shard_height = get_arg(args::unpadded_shard_height);
+    constexpr auto W_front_pad_bytes = get_arg(args::W_front_pad_bytes);
 
-    constexpr uint32_t input_shard_dfb = get_compile_time_arg_val(5);
-    constexpr uint32_t output_shard_dfb = get_compile_time_arg_val(6);
-    constexpr uint32_t unpadded_stick_step = get_compile_time_arg_val(7);
-    constexpr uint32_t padded_stick_step = get_compile_time_arg_val(8);
+    constexpr auto unpadded_stick_step = get_arg(args::unpadded_stick_step);
+    constexpr auto padded_stick_step = get_arg(args::padded_stick_step);
 
-    DataflowBuffer dfb_input_shard(input_shard_dfb);
-    DataflowBuffer dfb_output_shard(output_shard_dfb);
+    DataflowBuffer dfb_input_shard(dfb::in_shard);
+    DataflowBuffer dfb_output_shard(dfb::out_shard);
 
     uint32_t input_shard_base_addr = dfb_input_shard.get_write_ptr();
     uint32_t output_shard_base_addr = dfb_output_shard.get_write_ptr();

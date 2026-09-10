@@ -232,3 +232,98 @@ def test_windowed_sdpa_q_token_offset(
         f"windows={cu_window_seqlens} pcc={pcc}"
     )
     assert passing, f"PCC below threshold: {pcc}"
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "seq_len, chunk, cu_window_seqlens",
+    [
+        # Windows straddle the shard cuts (shards are 64 rows), so every device resolves a different
+        # window set from a different offset -- the strongest test of per-coordinate extraction.
+        (256, 32, [0, 96, 160, 256]),
+    ],
+    ids=["straddling"],
+)
+@pytest.mark.parametrize("num_heads", [8])
+def test_windowed_sdpa_q_offset_tensor_on_mesh(mesh_device, seq_len, chunk, cu_window_seqlens, num_heads):
+    """The offset tensor's actual use case: ONE SDPA call over a mesh, Q sharded on the sequence.
+
+    The serial test above proves each offset value is honored; this proves the per-device plumbing.
+    Every device runs the SAME cached program, so the offsets must diverge through data: Q is sharded
+    on dim 2 across the mesh, K/V and cu_window_seqlens are replicated, and the 1-element offset
+    tensor is sharded so device d's local value is d * shard_rows. If per-coordinate extraction or
+    accessor binding broke (e.g. every device reading device 0's offset), devices 1..3 would mask
+    against the wrong windows and the composed PCC craters.
+
+    Skips (via the mesh_device fixture) on machines with fewer than 4 devices.
+    """
+    torch.manual_seed(42)
+    b, dh = 1, 128
+    scale = dh**-0.5
+    num_shards = mesh_device.get_num_devices()
+    shard_rows = seq_len // num_shards
+    assert shard_rows % 32 == 0, "offset must be tile-aligned"
+
+    q = torch.randn(b, num_heads, seq_len, dh, dtype=torch.bfloat16)
+    k = torch.randn(b, num_heads, seq_len, dh, dtype=torch.bfloat16)
+    v = torch.randn(b, num_heads, seq_len, dh, dtype=torch.bfloat16)
+
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
+        exp_approx_mode=False,
+        q_chunk_size=chunk,
+        k_chunk_size=chunk,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
+    )
+
+    replicate = ttnn.ReplicateTensorToMesh(mesh_device)
+    q_tt = ttnn.from_torch(
+        q,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=2),
+    )
+    k_tt = ttnn.from_torch(k, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate)
+    v_tt = ttnn.from_torch(v, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate)
+    cu_tt = ttnn.from_torch(
+        torch.tensor(cu_window_seqlens, dtype=torch.int32),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint32,
+        mesh_mapper=replicate,
+    )
+    offsets_tt = ttnn.from_torch(
+        torch.arange(num_shards, dtype=torch.int32) * shard_rows,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint32,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+
+    out_tt = ttnn.transformer.scaled_dot_product_attention(
+        q_tt,
+        k_tt,
+        v_tt,
+        is_causal=False,
+        scale=scale,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+        cu_window_seqlens=cu_tt,
+        windowed_q_token_offset_tensor=offsets_tt,
+    )
+    out = ttnn.to_torch(out_tt, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2)).to(torch.float32)
+
+    mask = windowed_mask(seq_len, cu_window_seqlens).unsqueeze(0).unsqueeze(0)
+    gt = torch.nn.functional.scaled_dot_product_attention(
+        q.to(torch.float32), k.to(torch.float32), v.to(torch.float32), attn_mask=mask, scale=scale
+    )
+
+    passing, pcc = comp_pcc(gt, out, 0.99)
+    logger.info(
+        f"windowed SDPA mesh q-offset s={seq_len} devices={num_shards} heads={num_heads} "
+        f"windows={cu_window_seqlens} pcc={pcc}"
+    )
+    assert passing, f"PCC below threshold: {pcc}"

@@ -206,18 +206,18 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     // memory pressure; the dispatch commands captured in the trace are
     // independent per-enqueue, so dispatch_s still fires 4096 separate
     // kernel_start pulses on replay.
-    distributed::MeshTraceId trace_id = distributed::BeginTraceCapture(mesh_device.get(), cq.id());
+    distributed::MeshTraceId trace_id = mesh_device->begin_mesh_trace(cq);
     for (uint32_t i = 0; i < kNumProgramsInTrace; ++i) {
         distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
     }
-    mesh_device->end_mesh_trace(cq.id(), trace_id);
+    mesh_device->end_mesh_trace(cq, trace_id);
 
     const std::chrono::seconds replay_window(
         tt::parse_env<std::uint32_t>("TT_RT_PROFILER_SATURATION_SECONDS", kDefaultStressReplaySeconds));
     uint64_t num_replays = 0;
     const auto replay_deadline = std::chrono::steady_clock::now() + replay_window;
     do {
-        mesh_device->replay_mesh_trace(cq.id(), trace_id, true);
+        mesh_device->replay_mesh_trace(cq, trace_id, true);
         ++num_replays;
     } while (std::chrono::steady_clock::now() < replay_deadline);
 
@@ -304,18 +304,18 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
     auto& cq = mesh_device->mesh_command_queue(0);
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
-    distributed::MeshTraceId trace_id = distributed::BeginTraceCapture(mesh_device.get(), cq.id());
+    distributed::MeshTraceId trace_id = mesh_device->begin_mesh_trace(cq);
     for (uint32_t i = 0; i < kNumProgramsInTrace; ++i) {
         distributed::EnqueueMeshWorkload(cq, workload, false);
     }
-    mesh_device->end_mesh_trace(cq.id(), trace_id);
+    mesh_device->end_mesh_trace(cq, trace_id);
 
     constexpr auto kCalibrationWindow = std::chrono::seconds(2);
     const uint64_t pubs_before = rt->num_published_records();
     const auto cal_start = std::chrono::steady_clock::now();
     const auto cal_deadline = cal_start + kCalibrationWindow;
     while (std::chrono::steady_clock::now() < cal_deadline) {
-        mesh_device->replay_mesh_trace(cq.id(), trace_id, true);
+        mesh_device->replay_mesh_trace(cq, trace_id, true);
     }
     const double cal_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - cal_start).count();
     const double production_rate = static_cast<double>(rt->num_published_records() - pubs_before) / cal_seconds;
@@ -373,7 +373,7 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
 
     const auto run_deadline = std::chrono::steady_clock::now() + run_window;
     while (std::chrono::steady_clock::now() < run_deadline) {
-        mesh_device->replay_mesh_trace(cq.id(), trace_id, true);
+        mesh_device->replay_mesh_trace(cq, trace_id, true);
     }
 
     mesh_device->quiesce_devices();

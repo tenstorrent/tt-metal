@@ -303,6 +303,8 @@ def test_pipeline_distilled(
             run(prompt=steady_state_prompt, number=1, seed=seed)
             logger.info("=== traced steady-state pass (gen #2, pure replay) ===")
             run(prompt=replay_prompt, number=2, seed=seed)
+            # Gate gen #2: a corrupted full-replay pass is the failure this structure exists to
+            # catch, and gen #1 still has a capture in it.
             check_output_with_clip(replay_prompt, 2)
             check_output_with_vbench(replay_prompt, 2, seed=seed)
         else:

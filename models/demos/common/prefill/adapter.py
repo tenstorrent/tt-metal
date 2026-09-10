@@ -69,6 +69,9 @@ class PrefillRunParams:
     weight_cache_path: Optional[Path]
     sp_axis: int = 0
     tp_axis: int = 1
+    # KV dedup (PREFILL_TP_SHARD_KV): shard the KV/index caches across TP too, so each of the sp*tp devices
+    # holds a distinct 1/(sp*tp) slice instead of tp copies. Storage only; sparse (DSA) path only.
+    tp_shard_kv: bool = False
     # Explicit semantic cache format selected by model/module configuration. Scaled FP8 is a packed
     # mixed-format row, so it must not be represented or inferred as a bare tensor dtype.
     sparse_kv_cache_format: Optional[object] = None
@@ -78,6 +81,10 @@ class PrefillRunParams:
     # MoE shared-expert ∥ dispatch overlap (default on). Off => single-segment trace (no per-chunk
     # sub-device swaps), faster replay at the cost of the overlap. See TtPrefillRuntimeConfig.
     overlap_shared_expert_with_dispatch: bool = True
+    # Build the DFlash drafter context-KV cache during prefill. Opt-in / default False so adding this
+    # feature never breaks existing PrefillRunParams constructors (which need not pass it); the runner
+    # derives it from the model capability (supports_dflash) + PREFILL_DFLASH + a drafter checkpoint.
+    dflash_enabled: bool = False
 
     @property
     def sp_factor(self) -> int:
@@ -91,7 +98,7 @@ class PrefillRunParams:
 class KvCaches(ABC):
     """Opaque handle for a model's on-device KV cache(s), returned by ``allocate_kv_cache``. The engine
     never introspects it: it allocates it once, OWNS its lifetime, passes it back into every runtime call
-    that touches it (compile / prefill_chunk / build_kv_chunk_table / kv_cache_pcc_check / read_slot_kv),
+    that touches it (compile / prefill_chunk / build_kv_chunk_table),
     and frees it with the mesh at shutdown. Each model returns its own concrete subclass shaped however
     fits its cache (a named struct of one or more device tensors), so the engine imposes no structure and
     growing/renaming a model's caches never touches it."""
@@ -121,10 +128,15 @@ class PrefillModelAdapter(ABC):
     # Route the MoE routing all-gather's global semaphores to L1_SMALL instead of
     # pinning the main-L1 floor. Requires l1_small_size > 0.
     routing_use_l1_small_for_semaphores: bool = False
+    # Opting in promises that ``allocate_kv_cache`` passes ``params.tp_shard_kv`` to every cache allocator;
+    # otherwise writes go TP-sharded into TP-replicated caches. The runner asserts on this.
+    supports_tp_shard_kv: bool = False
     # Emb-axis sharding of the cross-rank D2D hidden state (seq is always SP-sharded). True (default):
     # emb TP-sharded, [Shard(2), Shard(3)]. False: emb replicated across TP, [Shard(2), Replicate()].
     # Must match the layout the model's decoder layer consumes/produces.
     pipeline_activation_emb_tp_sharded: bool = True
+    # Whether this model ships a DFlash speculative drafter the prefill runner can build during prefill
+    supports_dflash: bool = False
 
     # =====================================================================
     # Glue the engine calls. The adapter is a factory + descriptor only: it says
@@ -179,7 +191,7 @@ class PrefillModelAdapter(ABC):
         is stateless w.r.t. the KV cache — it receives the engine-owned ``KvCaches`` as an
         argument on each call. The engine then calls ``.compile(kv_caches)`` and drives
         it (make_chunk_input, prefill_chunk, and — when enabled — build_kv_chunk_table /
-        kv_cache_pcc_check / set_layer_ack_channel). ``params`` carries the per-rank knobs."""
+        set_layer_ack_channel). ``params`` carries the per-rank knobs."""
 
     # =====================================================================
     # Test-only metadata (HF download coordinates + reference modeling).
@@ -199,7 +211,19 @@ class PrefillModelAdapter(ABC):
     mla_ref_cache_env: Optional[str] = None
     moe_pcc_threshold: float = 0.999
     mla_pcc_threshold: float = 0.999
+    # Gate hidden-state PCCs on the per-token RMS-normalised score instead of the raw one. Set True
+    # for a model with massive activation channels, where a raw whole-tensor PCC measures a few
+    # hundred outliers rather than the layer (Mistral Small 4: absmax/rms ~150 by layer 30).
+    gate_hidden_states_on_npcc: bool = False
     supports_pretrained: bool = True
+    # Model layer whose ``self_attn.*`` holds the MLA weights; None if no checkpoint is reachable.
+    pretrained_mla_layer: Optional[int] = 0
+    # This variant's OWN golden MLA-trace dirs (each holding mla_io/ + kv_cache/), for the
+    # MLA-level trace tests; one per user, cycled. Empty = no trace was ever recorded for it.
+    mla_trace_defaults: tuple[str, ...] = ()
+    # Use ``config_builder`` for pretrained tests too, instead of AutoConfig on the checkpoint. Set
+    # True when the checkpoint's config loads but says something the TT stack would misread.
+    config_builder_overrides_checkpoint: bool = False
     # Whether the tokenizer needs trust_remote_code=True (custom tokenizer code shipped in the repo,
     # e.g. Kimi's tiktoken-backed BBPE). DeepSeek-V3 uses a stock fast tokenizer, so it turns this off
     # to avoid the flat-config trust_remote_code import path that otherwise breaks its load.
@@ -243,6 +267,15 @@ class PrefillModelAdapter(ABC):
     def reference_moe_cls(self) -> Optional[type]:
         return None
 
+    @property
+    def reference_rotary_cls(self) -> Optional[type]:
+        """Rope module a standalone reference attention needs its ``(cos, sin)`` from.
+
+        Only needed for references from transformers >= 5, which compute rope at the MODEL level and
+        pass ``position_embeddings`` down, so an attention used on its own has to be handed them.
+        The vendored DeepSeek/Kimi references build rope internally and leave this None."""
+        return None
+
 
 # ---------------------------------------------------------------------------
 # Model registry
@@ -264,6 +297,8 @@ ADAPTER_PATHS = {
     "kimi_k2_6": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_6:KimiK26Adapter",
     # Kimi-K2.7: same architecture as K2.6, new checkpoint (adapters/kimi_k2_7.py).
     "kimi_k2_7": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_7:KimiK27Adapter",
+    # Mistral-Small-4-119B: dense MLA + MoE; config hand-built (transformers 5.x rope_parameters).
+    "mistral_small_4": "models.demos.deepseek_v3_d_p.tt.runners.adapters.mistral_small_4:MistralSmall4Adapter",
     "minimax_m3": "models.demos.minimax_m3.tt.runners.adapters.minimax_m3:MiniMaxM3PrefillAdapter",
     # GPT-OSS-120B: GQA (not MLA) + attention sinks + sliding/full alternation + EP MoE.
     "gpt_oss_d_p": "models.demos.gpt_oss_d_p.tt.runners.adapters.gpt_oss:GptOssPrefillAdapter",

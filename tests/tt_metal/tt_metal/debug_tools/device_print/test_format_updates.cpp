@@ -2,16 +2,40 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
+#include <vector>
+
 #include "debug_tools_fixture.hpp"
-#include "tt_metal/llrt/tt_elffile.hpp"
 #include "hostdev/device_print_structures.h"
+#include "elf_file.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
-using namespace ll_api;
 using namespace std::string_view_literals;
 
-using DevicePrintStringInfo = device_print_detail::structures::DevicePrintStringInfo32;
+namespace {
+
+using StringInfo32 = device_print_detail::structures::DevicePrintStringInfo32;
+using StringInfo64 = device_print_detail::structures::DevicePrintStringInfo64;
+
+template <typename InfoT>
+std::vector<StringInfo64> ReadStringInfos(std::span<const std::byte> info_bytes) {
+    const auto* entries = reinterpret_cast<const InfoT*>(info_bytes.data());
+    const size_t count = info_bytes.size() / sizeof(InfoT);
+
+    std::vector<StringInfo64> infos;
+    infos.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        infos.push_back(StringInfo64{
+            .format_string_ptr = entries[i].format_string_ptr,
+            .file = entries[i].file,
+            .line = entries[i].line,
+            .padding = entries[i].padding});
+    }
+    return infos;
+}
+
+}  // namespace
 
 class DevicePrintFormatUpdatesFixture : public DevicePrintFixture {
 public:
@@ -21,43 +45,38 @@ public:
         stl::Span<const uint32_t> runtime_args = {}) {
         const std::string elf_file_path = CompileKernel(kernel_path, runtime_args);
 
-        // Read device_print sections from ELF
-        ElfFile elf;
-        elf.ReadImage(elf_file_path);
+        // Same reader the DEVICE_PRINT server uses (DevicePrintParser::get_parser_for_elf). It also
+        // reports the ELF's pointer size, which is what selects the matching string-info layout:
+        // the entries are pointer-sized, so they are 4 bytes wide on Wormhole/Blackhole and 8 on
+        // Quasar.
+        ttexalens::native_elf::ElfFile elf(elf_file_path);
 
-        std::cout << "ELF file read successfully: " << elf_file_path << std::endl;
+        const auto* info_section = elf.get_section_by_name(".device_print_strings_info");
+        const auto* strings_section = elf.get_section_by_name(".device_print_strings");
+        ASSERT_NE(info_section, nullptr);
+        ASSERT_NE(strings_section, nullptr);
 
-        const auto& segments = elf.GetSegments();
-        ASSERT_FALSE(segments.empty());
-        uint64_t format_strings_info_address = 0;
-        std::span<std::byte> format_strings_info_bytes =
-            elf.GetSectionContents(".device_print_strings_info", format_strings_info_address);
+        const std::span<const std::byte> format_strings_info_bytes = info_section->data();
+        const std::span<const std::byte> format_strings_bytes = strings_section->data();
+        const uint64_t format_strings_address = strings_section->address();
         ASSERT_FALSE(format_strings_info_bytes.empty());
-        uint64_t format_strings_address = 0;
-        std::span<std::byte> format_strings_bytes =
-            elf.GetSectionContents(".device_print_strings", format_strings_address);
         ASSERT_FALSE(format_strings_bytes.empty());
 
-        // Extract strings from sections
-        DevicePrintStringInfo* info_ptr = reinterpret_cast<DevicePrintStringInfo*>(format_strings_info_bytes.data());
-        size_t num_messages = format_strings_info_bytes.size() / sizeof(DevicePrintStringInfo);
+        const std::vector<StringInfo64> string_infos = elf.get_pointer_size() == 8
+                                                           ? ReadStringInfos<StringInfo64>(format_strings_info_bytes)
+                                                           : ReadStringInfos<StringInfo32>(format_strings_info_bytes);
+
+        // An entry's format_string_ptr and file are both addresses into the strings section.
+        const auto string_at = [&](uint64_t address) {
+            return std::string_view(
+                reinterpret_cast<const char*>(format_strings_bytes.data() + (address - format_strings_address)));
+        };
 
         for (const auto& expected_format_message : expected_format_messages) {
-            bool found = false;
-            for (size_t i = 0; i < num_messages; ++i) {
-                const DevicePrintStringInfo& info = info_ptr[i];
-                const char* format_string = reinterpret_cast<const char*>(
-                    format_strings_bytes.data() + (info.format_string_ptr - format_strings_address));
-                std::string_view format_str(format_string);
-                const char* file_string =
-                    reinterpret_cast<const char*>(format_strings_bytes.data() + (info.file - format_strings_address));
-                std::string_view file_str(file_string);
-                if (format_str == expected_format_message && file_str.ends_with(kernel_path)) {
-                    // Found expected format string
-                    found = true;
-                    break;
-                }
-            }
+            const bool found = std::ranges::any_of(string_infos, [&](const StringInfo64& info) {
+                return string_at(info.format_string_ptr) == expected_format_message &&
+                       string_at(info.file).ends_with(kernel_path);
+            });
             if (!found) {
                 FAIL() << "Expected format string not found: " << expected_format_message;
             }
@@ -224,6 +243,22 @@ TEST_F(DevicePrintFormatUpdatesFixture, PrintStringTypes) {
 
     TestFormatUpdate(
         "tests/tt_metal/tt_metal/test_kernels/device_print/print_string_types.cpp", ttsl::make_span(messages));
+}
+
+// dp_type_name_t<T> carries no data: the type name is stored in .device_print_strings and the
+// argument is the pointer to it, so it uses the same type specifier as CTSTR.
+TEST_F(DevicePrintFormatUpdatesFixture, PrintTypeName) {
+    std::vector<std::string_view> messages = {
+        "builtin type: {0,s}\n"sv,
+        "struct type: {0,s}\n"sv,
+        "enum type: {0,s}\n"sv,
+        "template type: {0,s}\n"sv,
+        "decltype: {0,s}\n"sv,
+        "with value: {0,s} = {1,f}\n"sv,
+    };
+
+    TestFormatUpdate(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_type_name.cpp", ttsl::make_span(messages));
 }
 
 TEST_F(DevicePrintFormatUpdatesFixture, PrintReorder) {

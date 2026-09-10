@@ -38,6 +38,10 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "api/core_local_mem.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
@@ -92,8 +96,13 @@ void kernel_main() {
     // (only read when fuse_rope). 0 when no RoPE.
     const uint32_t transformation_mat_addr = get_arg_val<uint32_t>(arg_idx++);
 
-    const uint32_t output_tile_bytes = get_tile_size(output_cb);
+    Noc noc;
+    CircularBuffer cb_output(output_cb);
+
+    const uint32_t output_tile_bytes = cb_output.get_tile_size();
     const auto output_accessor = TensorAccessor(output_args, output_addr);
+    // Page size, distinct from output_tile_bytes above, which is the CB slot stride.
+    const uint32_t output_page_bytes = output_accessor.get_aligned_page_size();
     const uint32_t num_tile_rows = tile_row_end - tile_row_start;
 
     // Populate compute's reduce-scalar / epsilon / trans_mat CBs before any AG
@@ -123,13 +132,17 @@ void kernel_main() {
             FabricConnectionManager::build_from_args<FabricConnectionManager::BUILD_AND_OPEN_CONNECTION_START_ONLY>(
                 arg_idx);
 
+        CircularBuffer cb_pkt_hdr(reserved_packet_header_cb);
+        CircularBuffer cb_stats_local(stats_local_cb);
+        CircularBuffer cb_stats_gathered(stats_gathered_cb);
+
         // Reserve two packet header slots, one for each direction.
-        cb_reserve_back(reserved_packet_header_cb, 1);
-        auto pkt_hdr_fwd_addr = get_write_ptr(reserved_packet_header_cb);
-        cb_push_back(reserved_packet_header_cb, 1);
-        cb_reserve_back(reserved_packet_header_cb, 1);
-        auto pkt_hdr_bwd_addr = get_write_ptr(reserved_packet_header_cb);
-        cb_push_back(reserved_packet_header_cb, 1);
+        cb_pkt_hdr.reserve_back(1);
+        auto pkt_hdr_fwd_addr = cb_pkt_hdr.get_write_ptr();
+        cb_pkt_hdr.push_back(1);
+        cb_pkt_hdr.reserve_back(1);
+        auto pkt_hdr_bwd_addr = cb_pkt_hdr.get_write_ptr();
+        cb_pkt_hdr.push_back(1);
 
         volatile PACKET_HEADER_TYPE* pkt_hdr_forward = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(pkt_hdr_fwd_addr);
         volatile PACKET_HEADER_TYPE* pkt_hdr_backward =
@@ -158,9 +171,9 @@ void kernel_main() {
         // that compute can't produce until it gets stats_gathered[r] (the LTX-audio
         // TP=2 small-shape hang).
         const uint32_t total_stats_tiles = num_tile_rows * ring_size;
-        cb_reserve_back(stats_gathered_cb, total_stats_tiles);
-        const uint32_t stats_gathered_base = get_write_ptr(stats_gathered_cb);
-        const uint32_t stats_tile_bytes = get_tile_size(stats_gathered_cb);
+        cb_stats_gathered.reserve_back(total_stats_tiles);
+        const uint32_t stats_gathered_base = cb_stats_gathered.get_write_ptr();
+        const uint32_t stats_tile_bytes = cb_stats_gathered.get_tile_size();
 
         // GlobalSemaphore on this core; remote chips atomic_inc it via fabric.
         const uint64_t out_ready_sem_noc_addr_in_pkt = safe_get_noc_addr(my_x[0], my_y[0], out_ready_sem_bank_addr, 0);
@@ -174,8 +187,9 @@ void kernel_main() {
         // chips, advancing l1_read_addr afterwards.
         uint32_t cumulative_incs = 0;
         for (uint32_t r = 0; r < num_tile_rows; r++) {
-            cb_wait_front(stats_local_cb, 1);
-            size_t l1_read_addr = get_read_ptr(stats_local_cb);
+            cb_stats_local.wait_front(1);
+            // size_t: the fabric helper takes it by reference and advances it.
+            size_t l1_read_addr = cb_stats_local.get_read_ptr();
 
             const uint32_t my_slot_offset = (r * ring_size + my_device_index) * stats_tile_bytes;
             const uint32_t my_slot_addr = stats_gathered_base + my_slot_offset;
@@ -195,21 +209,23 @@ void kernel_main() {
                 /*val=*/1,
                 /*flush=*/true);
 
-            cb_pop_front(stats_local_cb, 1);
+            cb_stats_local.pop_front(1);
 
             // Wait for this row's incs (cumulative across rows so far): each of the
             // (ring_size-1) remote chips atomic_inc's once per row. The remote runs the
             // identical per-row loop, so both chips stay in lockstep — no deadlock.
             cumulative_incs += (ring_size - 1);
             if (cumulative_incs > 0) {
+                // out_ready is a GlobalSemaphore.
                 noc_semaphore_wait_min(out_ready_sem_ptr, cumulative_incs);
             }
             // Local write of my own slot for row r must land before compute reads it.
-            noc_async_write_barrier();
+            noc.async_write_barrier();
             // Release this row's ring_size gathered slots so compute's chunk r can run.
-            cb_push_back(stats_gathered_cb, ring_size);
+            cb_stats_gathered.push_back(ring_size);
         }
         // Reset for any subsequent invocations of this op.
+        // out_ready is a GlobalSemaphore.
         noc_semaphore_set(out_ready_sem_ptr, 0);
 
         // Guard close on is_logically_connected(), matching the canonical CCL writers.
@@ -235,8 +251,8 @@ void kernel_main() {
             // `tiles_in_block` are valid; wait+pop the full block but only
             // NoC-write the valid tiles. Without this, multi-chunk overflows
             // output_cb because over-pushed garbage slots never drain.
-            cb_wait_front(output_cb, block_size);
-            uint32_t output_rd_ptr = get_read_ptr(output_cb);
+            cb_output.wait_front(block_size);
+            uint32_t output_rd_ptr = cb_output.get_read_ptr();
 
             for (uint32_t i = 0; i < tiles_in_block; i++) {
                 const uint32_t c = col_tile + i;
@@ -244,17 +260,22 @@ void kernel_main() {
                 const uint32_t t_col = c - h * head_dim_tiles;
                 const uint32_t output_tile_idx =
                     h * total_num_tile_rows * head_dim_tiles + tile_row * head_dim_tiles + t_col;
-                noc_async_write_page(output_tile_idx, output_accessor, output_rd_ptr);
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(output_rd_ptr),
+                    output_accessor,
+                    output_page_bytes,
+                    {},
+                    {.page_id = output_tile_idx});
                 output_rd_ptr += output_tile_bytes;
             }
             // _flushed (write request committed to NoC) instead of _barrier
             // (round-trip ACK). L1 source can be reused once the write has
             // left the core. Final barrier at end of kernel ensures all
             // writes complete before exit.
-            noc_async_writes_flushed();
-            cb_pop_front(output_cb, block_size);
+            noc.async_writes_flushed();
+            cb_output.pop_front(block_size);
         }
     }
     // Final barrier — all in-flight output writes must complete before exit.
-    noc_async_write_barrier();
+    noc.async_write_barrier();
 }

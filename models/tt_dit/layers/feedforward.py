@@ -112,12 +112,22 @@ class ParallelFeedForward(Module):
             ccl_manager=ccl_manager,
         )
 
-    def forward(self, x: ttnn.Tensor, compute_kernel_config=None, parallel_config=None) -> ttnn.Tensor:
+    def forward(
+        self, x: ttnn.Tensor, compute_kernel_config=None, parallel_config=None, default_block_size=None
+    ) -> ttnn.Tensor:
         """
         Expects x to be replicated.
         Return output fractured on columns.
+
+        `default_block_size` is forwarded to ff1 only, for callers that have measured block sizes for
+        their ff1 shape; ff2 keeps the generic path.
         """
-        ff1_out = self.ff1(x, compute_kernel_config=compute_kernel_config, parallel_config=parallel_config)
+        ff1_out = self.ff1(
+            x,
+            compute_kernel_config=compute_kernel_config,
+            parallel_config=parallel_config,
+            default_block_size=default_block_size,
+        )
         return self.ff2(ff1_out, compute_kernel_config=compute_kernel_config)
 
     def forward_fused_addcmul(
@@ -128,14 +138,24 @@ class ParallelFeedForward(Module):
         scalar: float = 1.0,
         compute_kernel_config=None,
         parallel_config=None,
+        default_block_size=None,
+        core_grid=None,
     ) -> ttnn.Tensor:
         """Fused FFN forward with addcmul fused at the RS final write step.
 
         Computes: addcmul_a + scalar * ff2(ff1(x)) * addcmul_b
         Both addcmul_a and addcmul_b are already at their per-TP-device [D/tp] slice —
         no AllGather or scatter matmul is required.
+
+        `default_block_size` is forwarded to ff1 only, as in `forward`.
         """
-        ff1_out = self.ff1(x, compute_kernel_config=compute_kernel_config, parallel_config=parallel_config)
+        ff1_out = self.ff1(
+            x,
+            compute_kernel_config=compute_kernel_config,
+            parallel_config=parallel_config,
+            default_block_size=default_block_size,
+            core_grid=core_grid,
+        )
         return self.ff2.forward_fused_addcmul(
             ff1_out,
             addcmul_a,

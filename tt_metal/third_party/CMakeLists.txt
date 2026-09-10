@@ -89,6 +89,12 @@ endif()
 target_compile_options(TracyClient PUBLIC -fno-omit-frame-pointer)
 # Tracy sources emit this warning under our global -Werror; keep suppression local to TracyClient.
 target_compile_options(TracyClient PRIVATE -Wno-unused-variable)
+# The top-level -Wno-deprecated-declarations (see CMakeLists.txt) is declared after these
+# subdirectories are added, so it never reaches Tracy's own targets: GCC's libstdc++ marks
+# std::get_temporary_buffer as deprecated, and Tracy's server code (e.g. TracyFileRead.hpp)
+# still triggers it internally via std::stable_sort/inplace_merge. Suppress it locally on all
+# real (non-vendored) Tracy targets rather than relying on the global flag's declaration order.
+target_compile_options(TracyClient PRIVATE -Wno-deprecated-declarations)
 # Their executable exports symbols (-rdynamic) → Tracy can map addresses to names.
 target_link_options(TracyClient PUBLIC -rdynamic)
 
@@ -121,6 +127,30 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             "${TRACY_CLI_BIN_DIR}"
 )
+
+# Same -Wno-deprecated-declarations suppression as TracyClient above, extended to the rest of
+# Tracy's own (non-vendored) targets -- their server code is what actually triggers the warning.
+foreach(
+    _tt_tracy_deprecated_target
+    IN
+    ITEMS
+        TracyServer
+        TracyGetOpt
+        tracy-csvexport
+        tracy-capture
+        tracy-capture-daemon
+)
+    if(NOT TARGET ${_tt_tracy_deprecated_target})
+        continue()
+    endif()
+    get_target_property(_tt_tracy_deprecated_target_type ${_tt_tracy_deprecated_target} TYPE)
+    if(_tt_tracy_deprecated_target_type STREQUAL "INTERFACE_LIBRARY")
+        continue()
+    endif()
+    target_compile_options(${_tt_tracy_deprecated_target} PRIVATE -Wno-deprecated-declarations)
+endforeach()
+unset(_tt_tracy_deprecated_target)
+unset(_tt_tracy_deprecated_target_type)
 
 # Force a portable ISA baseline for Tracy server/CLI and key deps on x86_64.
 if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")

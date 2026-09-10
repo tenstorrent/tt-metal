@@ -50,7 +50,6 @@ void kernel_main() {
 #else
 
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(dfb_id_in0);
-    constexpr const uint32_t in0_tile_hw = get_tile_hw(dfb_id_in0);
     // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM and the in0
     // CB pages are sized to match (see the program factory), so tiles must be laid out in L1 at the
     // padded stride. The NOC still reads the unpadded tile of data into each padded slot. No-op when

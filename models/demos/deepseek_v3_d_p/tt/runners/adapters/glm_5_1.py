@@ -38,10 +38,10 @@ class GLM51Adapter(MLAPrefillAdapter):
     ttnn_cache_default = "/mnt/models/deepseek-prefill-cache/GLM-5_1-Cache"
     default_gate_mode = "DEVICE_FP32"  # GLM: single expert group
     prefill_trace_default = "/mnt/models/deepseek-prefill-cache/golden/structured_traces/glm_51_code_debug_55k_vllm"
+    mla_trace_defaults = ("/mnt/models/deepseek-prefill-cache/golden/mla_sdpa_traces/glm_51_56320_sdpa_mla",)
 
-    # Single expert group + device gate: route routing-all-gather semaphores to L1_SMALL.
-    # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores.
-    l1_small_size = 768
+    # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores and rest for other needs.
+    l1_small_size = 1152
     routing_use_l1_small_for_semaphores = True
 
     def load_hf_config(self):

@@ -132,85 +132,6 @@ run_t3000_trace_stress_tests() {
   fi
 }
 
-run_t3000_resnet_tests() {
-  fail=0
-  # Record the start time
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_resnet_tests"
-
-  pytest models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_resnet50_performant.py ; fail+=$?
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_resnet_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
-run_t3000_dit_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-  test_name=${FUNCNAME[1]}
-
-  echo "LOG_METAL: Running ${test_name}"
-
-  # Run test_model for sd35 large
-  for test_cmd in "$@"; do
-    pytest ${test_cmd} ; fail+=$?
-  done
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: ${test_name} $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
-run_t3000_sd35large_tests() {
-  run_t3000_dit_tests \
-    "models/tt_dit/tests/models/sd35/test_vae_sd35.py -k t3k" \
-    "models/tt_dit/tests/models/sd35/test_attention_sd35.py" \
-    "models/tt_dit/tests/models/sd35/test_transformer_sd35.py::test_sd35_transformer_block"
-}
-
-run_t3000_motif_tests() {
-  run_t3000_dit_tests \
-    "models/tt_dit/tests/models/motif/test_attention_motif.py::test_attention_motif" \
-    "models/tt_dit/tests/models/motif/test_transformer_block_motif.py::test_transformer_block_motif"
-}
-
-run_t3000_qwenimage_tests() {
-  run_t3000_dit_tests \
-    "models/tt_dit/tests/encoders/qwen25vl/test_qwen25vl.py::test_qwen25vl_encoder_pair -k 2x4"
-}
-
-run_t3000_mochi_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_mochi_tests"
-
-  export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
-  FAKE_DEVICE=T3K pytest models/tt_dit/tests/models/mochi/test_vae_mochi.py -k "(decoder and 1x8 and load_dit and small_latent) or conv3d_1x1x1 or (1x8 and l768 and bf16)" --timeout=1500; fail+=$?
-  pytest models/tt_dit/tests/models/mochi/test_attention_mochi.py -k "short_seq"; fail+=$?
-  pytest models/tt_dit/tests/models/mochi/test_transformer_mochi.py -k "1x8 or 2x4 and short_seq and not yes_load_cache and not model_caching"; fail+=$?
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_mochi_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
 run_t3000_tests() {
   # Run ethernet tests
   run_t3000_ethernet_tests
@@ -230,23 +151,8 @@ run_t3000_tests() {
   # Run Llama3.2-11B Vision tests on spoofed N300
   # run_t3000_spoof_n300_llama3.2-11b-vision_freq_tests
 
-  # Run resnet tests
-  run_t3000_resnet_tests
-
-  # Run sd35_large tests
-  run_t3000_sd35large_tests
-
-  # Run motif tests
-  run_t3000_motif_tests
-
   # Run trace tests
   run_t3000_trace_stress_tests
-
-  # Run mochi tests
-  run_t3000_mochi_tests
-
-  # Run qwenimage tests
-  run_t3000_qwenimage_tests
 }
 
 fail=0

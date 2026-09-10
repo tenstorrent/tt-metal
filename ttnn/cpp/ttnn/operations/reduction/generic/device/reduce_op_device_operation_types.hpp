@@ -34,9 +34,15 @@ struct ReduceParams {
     // may be set at a time (validated in validate_on_program_cache_miss).
     bool row_major_w_dense_path{false};
     bool row_major_h_dense_path{false};
-    // Accurate fp32 mean: route Float32 SUM through the SFPU (full fp32); set from
-    // ttnn.mean(fast_and_approximate_mode=False).
+    // Accurate fp32: route Float32 through the SFPU (full fp32); set from
+    // fast_and_approximate_mode=False on sum/mean/max/min.
     bool use_sfpu_reduce{false};
+    // Number of contiguous H segments to reduce independently (RM-H dense path; 1 = no split).
+    // Spreads a tall-H reduce over more cores, yielding a (N, C, num_h_slices, W) partial.
+    uint32_t num_h_slices{1};
+    // Physical layout the op must produce: TILE on the tilized paths, ROW_MAJOR on the dense RM
+    // ones, or TILE from RM-H when num_h_slices == 1.
+    tt::tt_metal::Layout output_layout{tt::tt_metal::Layout::TILE};
 };
 
 }  // namespace ttnn::prim

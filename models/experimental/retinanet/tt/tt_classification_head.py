@@ -133,9 +133,6 @@ def ttnn_retinanet_classification_head(
 
     grid_size = ttnn.CoreGrid(y=8, x=8)
 
-    input_mask_tensor = ttnn.create_group_norm_input_mask(in_channels, 32, grid_size.y)
-    input_mask_tensor = input_mask_tensor.to(device, ttnn.DRAM_MEMORY_CONFIG)
-
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=model_config.get("MATH_FIDELITY", ttnn.MathFidelity.HiFi4),
@@ -165,7 +162,6 @@ def ttnn_retinanet_classification_head(
                 padding=(1, 1),
                 num_groups=32,
                 grid_size=grid_size,
-                input_mask=input_mask_tensor,
                 model_config=model_config,
                 compute_config=compute_config,
                 conv_config=fpn_conv_config,

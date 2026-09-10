@@ -1,33 +1,29 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
-from loguru import logger
-from datetime import datetime
 import hashlib
-import requests
 import json
 import math
-import torch
-import pytest
 import os
-import ttnn
+from datetime import datetime
+from pathlib import Path
 
+import pytest
+import requests
+import torch
+from loguru import logger
+
+import ttnn
+from models.common.utility_functions import comp_pcc
+from models.common.weight_cache import build_cached_state_dict, mark_weight_cache_complete, weight_cache_is_complete
 from models.demos.llama3_70b_galaxy.tt.generator import Generator, SamplingParams
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
-from models.tt_transformers.tt.common import (
-    preprocess_inputs_prefill,
-    PagedAttentionConfig,
-)
-from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
-from models.common.utility_functions import (
-    comp_pcc,
-)
 from models.demos.utils.device_sku import get_current_device_sku_name
 from models.demos.utils.llm_demo_utils import verify_perf
 from models.demos.utils.model_targets import resolve_perf_targets
 from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -210,11 +206,39 @@ def create_tt_model(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
         dummy_weights=dummy_weights,
+        cache_hf=False,  # Demo never builds a torch reference; keep the lighter weight loader.
     )
     # When running running prefill-only profile, run just 1 layer
     tt_model_args.n_layers = num_layers if not prefill_profile else 1
 
-    state_dict = tt_model_args.load_state_dict()
+    # Warm ttnn cache => build from .tensorbin, skip the HF from_pretrained load. Pure placeholder:
+    # this galaxy demo embeds tokens on-device (HostEmbedding is tests-only), so the state_dict
+    # feeds only the TtTransformer -- no host-weight hybrid needed. (#45400)
+    cache_dir = tt_model_args.weight_cache_path(dtype)
+    cache_identity = dict(
+        model_name=tt_model_args.model_name,
+        n_layers=tt_model_args.n_layers,
+        mesh_shape=tuple(mesh_device.shape),
+        # The galaxy loader picks prefetcher-vs-DRAM cache FILENAMES off use_prefetcher
+        # (llama_attention.py wqkv_sharded_2d_prefetcher / _dram), and the optimizations level
+        # sets per-tensor dtypes that are baked into filenames. Key the marker on both so a cache
+        # seeded under one configuration is not certified for another. (#45400 review, finding B2)
+        build_variant={
+            "use_prefetcher": bool(getattr(tt_model_args, "use_prefetcher", False)),
+            "optimizations": repr(getattr(tt_model_args, "optimizations", None)),
+        },
+    )
+    loaded_real_weights = False
+    if (
+        not prefill_profile
+        and not getattr(tt_model_args, "dummy_weights", False)
+        and weight_cache_is_complete(cache_dir, **cache_identity)
+    ):
+        logger.info("Warm ttnn weight cache detected -- skipping HF state_dict load.")
+        state_dict = build_cached_state_dict(cache_dir, build_variant=cache_identity["build_variant"])
+    else:
+        state_dict = tt_model_args.load_state_dict()
+        loaded_real_weights = bool(state_dict) and not getattr(tt_model_args, "dummy_weights", False)
     page_table = None
     paged_attention_config = None
     tt_kv_cache = None
@@ -245,6 +269,9 @@ def create_tt_model(
 
     if use_paged_kv_cache:
         tt_kv_cache = [l.attention.layer_past for l in model.layers]
+
+    if loaded_real_weights and not prefill_profile:
+        mark_weight_cache_complete(cache_dir, state_dict, **cache_identity)
 
     return tt_model_args, model, page_table, [tt_kv_cache]
 
@@ -921,7 +948,11 @@ def test_demo_text(
     max_generated_tokens = request.config.getoption("--max_generated_tokens") or max_generated_tokens
     paged_attention = request.config.getoption("--paged_attention") or paged_attention
     page_params = request.config.getoption("--page_params") or page_params
-    sampling_params = request.config.getoption("--sampling_params") or sampling_params
+    cli_sampling_params = request.config.getoption("--sampling_params")
+    if cli_sampling_params:
+        # Merge onto the parametrized defaults so a partial override (e.g. only
+        # temperature) keeps the remaining keys the demo indexes unconditionally.
+        sampling_params = {**sampling_params, **cli_sampling_params}
     if request.config.getoption("--stop_at_eos") in [
         0,
         1,
@@ -1080,7 +1111,7 @@ def test_demo_text(
         prefill_profile=prefill_profile,
     )
 
-    model_args.tokenizer = Tokenizer(model_args.tokenizer_path)
+    model_args.tokenizer = model_args.create_tokenizer()
     tokenizer = model_args.tokenizer
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
@@ -1722,8 +1753,10 @@ def test_demo_text(
     )
 
     # The ci-eval-1 prompt file pairs its prompts ([A, A, B, B, ...]), so consecutive repeat batches
-    # run identical inputs and must produce identical outputs. A mismatch means state is leaking
-    # across repeat batches (or decode is non-deterministic), which the accuracy checks cannot catch.
+    # run identical inputs. ci-eval-1 runs temperature=0 argmax, so any divergence between paired
+    # batches indicates a real defect (e.g. trace/fabric-CCL buffer corruption), which can first
+    # diverge late in generation. This exact-match gate was purpose-built for that (PR #30739,
+    # issue #27242), so require byte-identical full outputs rather than a token prefix.
     if "ci-eval-1" in test_id:
         # Fail loudly rather than skipping the comparison if any batch failed to record its output
         assert (
@@ -1733,10 +1766,21 @@ def test_demo_text(
         all_matches = True
         for first_idx in range(0, repeat_batches - 1, 2):
             second_idx = first_idx + 1
+            first_tokens = repeat_batch_outputs[first_idx].split()
+            second_tokens = repeat_batch_outputs[second_idx].split()
+            compared = min(len(first_tokens), len(second_tokens))
+            matched = sum(1 for a, b in zip(first_tokens, second_tokens) if a == b)
+            overlap = matched / compared if compared else 1.0
             if repeat_batch_outputs[first_idx] == repeat_batch_outputs[second_idx]:
-                logger.info(f"Batches {first_idx} and {second_idx} comparison PASSED: outputs match")
+                logger.info(
+                    f"Batches {first_idx} and {second_idx} comparison PASSED: "
+                    f"outputs are byte-identical (token overlap {overlap:.1%})"
+                )
             else:
-                logger.warning(f"Batches {first_idx} and {second_idx} comparison FAILED: outputs differ")
+                logger.warning(
+                    f"Batches {first_idx} and {second_idx} comparison FAILED: "
+                    f"outputs differ (token overlap {overlap:.1%})"
+                )
                 logger.info(f"  Batch {first_idx} output: {repeat_batch_outputs[first_idx][:100]}...")
                 logger.info(f"  Batch {second_idx} output: {repeat_batch_outputs[second_idx][:100]}...")
                 all_matches = False

@@ -45,8 +45,7 @@ protected:
     }
 
     void create_devices(const std::vector<ChipId>& device_ids) {
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config();
         // TODO: Some CI machines have lots of cards, running all tests on all the cards is slow.
         // Coverage for multidevices should be decent if we just confirm 2 work.
         id_to_device_ = distributed::MeshDevice::create_unit_meshes(
@@ -131,8 +130,7 @@ protected:
     }
 
     void create_devices(const std::vector<ChipId>& ids) {
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config();
         id_to_device_ = distributed::MeshDevice::create_unit_meshes(
             ids, l1_small_size_, trace_region_size_, num_command_queues(), dispatch_core_config);
         devices_.clear();
@@ -169,27 +167,29 @@ protected:
 
 class MeshDeviceSingleCardBufferFixture : public MeshDeviceSingleCardFixture {};
 
-// Single unit-mesh fixture: always owns exactly one MeshDevice and exposes
-// RunProgram / FinishCommands overloads that do not take a device arg.
-class UnitMeshFixture : public MeshDeviceSingleCardFixture {
+// Single unit-mesh fixture: always owns exactly one unit MeshDevice.
+class UnitMeshAnyDispatchFixture : public AnyDispatchMeshDeviceSingleCardFixture {
 public:
-    distributed::MeshDevice& device() { return *device_; }
+    distributed::MeshDevice& device() { return *devices_.front(); }
 
-    void RunProgram(Program program, bool skip_finish = false) {
-        distributed::MeshWorkload workload;
-        workload.add_program(distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0)), std::move(program));
-        MeshDispatchFixture::RunProgram(device_, workload, skip_finish);
-    }
-    void FinishCommands() { MeshDispatchFixture::FinishCommands(device_); }
-
-private:
+protected:
     void create_devices() override {
         const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
         AnyDispatchMeshDeviceSingleCardFixture::create_devices({mmio_device_id});
-        device_ = devices_.front();
     }
+};
 
-    std::shared_ptr<distributed::MeshDevice> device_;
+// Single unit-mesh fixture: always owns exactly one unit MeshDevice.
+// Requires slow dispatch mode.
+class UnitMeshFixture : public MeshDeviceSingleCardFixture {
+public:
+    distributed::MeshDevice& device() { return *devices_.front(); }
+
+protected:
+    void create_devices() override {
+        const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
+        AnyDispatchMeshDeviceSingleCardFixture::create_devices({mmio_device_id});
+    }
 };
 
 class BlackholeSingleCardFixture : public MeshDeviceSingleCardFixture {
@@ -207,7 +207,7 @@ protected:
     }
 };
 
-class QuasarMeshDeviceSingleCardFixture : public MeshDeviceSingleCardFixture {
+class QuasarMeshDeviceSingleCardFixture : public UnitMeshFixture {
 protected:
     void SetUp() override {
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());

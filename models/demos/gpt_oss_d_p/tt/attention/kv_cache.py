@@ -20,19 +20,21 @@ from dataclasses import dataclass
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, get_num_dram_banks
+from models.demos.common.prefill.adapter import KvCaches
+from models.demos.common.prefill.runners.migration import get_num_dram_banks
+
+# Must match the DRAM NdShard in allocate_kv_cache and the address-table bank walk.
+NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
 
 
 @dataclass
-class GptOssKVCache:
+class GptOssKVCache(KvCaches):
     """Externally-owned, user-major packed prefill KV caches for the SP chunked-KV path.
 
     Two persistent device caches, each per-chip shape ``[num_users*num_layers, 1, seq_local, head_dim]``:
 
       * ``k``, ``v`` — GQA K/V. Under TP=cols each chip holds 1 KV head (heads sharded on the TP cols
         at write time); the sequence is SP-sharded block-cyclic on the ``sp`` rows.
-
-    Unlike M3 there is NO ``index_k`` (gpt-oss has no sparse lightning indexer).
     """
 
     k: ttnn.Tensor

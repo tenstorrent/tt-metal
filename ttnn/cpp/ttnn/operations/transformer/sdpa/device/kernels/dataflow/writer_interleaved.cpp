@@ -6,6 +6,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
+#include "api/debug/assert.h"
 #include "api/tensor/tensor_accessor.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
@@ -73,31 +74,42 @@ void kernel_main() {
     const uint32_t cu_window_seqlens_eles = get_arg_val<uint32_t>(11);
     // Global row index of this tensor's first Q row. Non-zero when Q is a sequence-parallel shard:
     // Q/output are addressed locally, but cu_window_seqlens and K/V are global, so the mask generator
-    // needs the shard's global origin. Zero for an unsharded Q, which is the only case today.
-    uint32_t q_tok_offset = get_arg_val<uint32_t>(12);
+    // needs the shard's global origin. Windowed builds only: the ring-distributed factory shares this
+    // kernel, never sets use_windowed_mask, and supplies runtime args only through slot 11 — so slots
+    // 12..27 must not be read there (mirrors the reader's guarded windowed tail).
+    uint32_t q_tok_offset = 0;
     // Per-device form: when a tensor was supplied its value wins, read below once cb_cu_window_in is
     // available. Zero address means the caller used the scalar above.
-    const uint32_t q_tok_offset_addr = get_arg_val<uint32_t>(13);
+    uint32_t q_tok_offset_addr = 0;
     // 3D-neighborhood descriptor {T,H,W,kt,kh,kw}; T==0 selects the block-diagonal (cu_window) path.
-    const uint32_t nb_T = get_arg_val<uint32_t>(14);
-    const uint32_t nb_H = get_arg_val<uint32_t>(15);
-    const uint32_t nb_W = get_arg_val<uint32_t>(16);
-    const uint32_t nb_kt = get_arg_val<uint32_t>(17);
-    const uint32_t nb_kh = get_arg_val<uint32_t>(18);
-    const uint32_t nb_kw = get_arg_val<uint32_t>(19);
+    uint32_t nb_T = 0, nb_H = 0, nb_W = 0, nb_kt = 0, nb_kh = 0, nb_kw = 0;
     // Spatial-SP over W: full width + this shard's global W origin (signed). nb_W_full == 0 => not
     // W-sharded (mask uses local == global W).
-    const uint32_t nb_W_full = get_arg_val<uint32_t>(20);
-    const int32_t nb_w_origin = static_cast<int32_t>(get_arg_val<uint32_t>(21));
+    uint32_t nb_W_full = 0;
+    int32_t nb_w_origin = 0;
     // Block-permuted Q descriptor {bt,bh,bw} (bt==0 => strided). Reader/mask decode Q coords from it.
-    const uint32_t nb_bt = get_arg_val<uint32_t>(22);
-    const uint32_t nb_bh = get_arg_val<uint32_t>(23);
-    const uint32_t nb_bw = get_arg_val<uint32_t>(24);
-    // GNA query-group stride {st,sh,sw}; 1 is standard neighborhood attention. Appended after the block
-    // descriptor so the older slots keep their indices.
-    const uint32_t nb_st = get_arg_val<uint32_t>(25);
-    const uint32_t nb_sh = get_arg_val<uint32_t>(26);
-    const uint32_t nb_sw = get_arg_val<uint32_t>(27);
+    uint32_t nb_bt = 0, nb_bh = 0, nb_bw = 0;
+    // GNA query-group stride {st,sh,sw}; 1 is standard neighborhood attention (never 0: the kernels divide
+    // by it). Appended after the block descriptor so the older slots keep their indices.
+    uint32_t nb_st = 1, nb_sh = 1, nb_sw = 1;
+    if constexpr (use_windowed_mask) {
+        q_tok_offset = get_arg_val<uint32_t>(12);
+        q_tok_offset_addr = get_arg_val<uint32_t>(13);
+        nb_T = get_arg_val<uint32_t>(14);
+        nb_H = get_arg_val<uint32_t>(15);
+        nb_W = get_arg_val<uint32_t>(16);
+        nb_kt = get_arg_val<uint32_t>(17);
+        nb_kh = get_arg_val<uint32_t>(18);
+        nb_kw = get_arg_val<uint32_t>(19);
+        nb_W_full = get_arg_val<uint32_t>(20);
+        nb_w_origin = static_cast<int32_t>(get_arg_val<uint32_t>(21));
+        nb_bt = get_arg_val<uint32_t>(22);
+        nb_bh = get_arg_val<uint32_t>(23);
+        nb_bw = get_arg_val<uint32_t>(24);
+        nb_st = get_arg_val<uint32_t>(25);
+        nb_sh = get_arg_val<uint32_t>(26);
+        nb_sw = get_arg_val<uint32_t>(27);
+    }
 
     constexpr uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;  // non-streaming drain only
@@ -158,6 +170,14 @@ void kernel_main() {
             q_tok_offset = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(off_ptr);
         }
         if (nb_T == 0) {
+            // Watcher-build guard for the offset contract the host cannot check in the tensor form (the
+            // per-device value lives on device, so validate() never sees it): the origin must be
+            // tile-aligned, and the Q shard must fit in the K sequence. Tile-granular -- the host's
+            // scalar-form check rounded up to whole tiles. Compiled out of non-watcher builds.
+            ASSERT(q_tok_offset % tt::constants::TILE_HEIGHT == 0);
+            ASSERT(
+                q_tok_offset / tt::constants::TILE_HEIGHT + valid_Sqt <=
+                (unpadded_Sk + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT);
             const auto cu_window_reader = TensorAccessor(cu_window_args, cu_window_seqlens_addr);
             constexpr uint32_t cu_tile_bytes = get_tile_size(cb_cu_window_in);
             CircularBuffer cb_cu(cb_cu_window_in);

@@ -8,9 +8,9 @@ built "the MiniMax-M3 way": reuse the shared DeepSeek EP-MoE dispatch/combine su
 fused `unified_routed_expert_ffn` (SwiGLU-OAI + biases), a block-cyclic KV cache, and a runtime
 that plugs into the model-agnostic `models/demos/common/prefill` engine.
 
-> **Multi-chunk prefill runs as of this PR (P6).** Chunk N attends the accumulated prefix
-> (chunks 0..N-1) via the ring cache-read over the block-cyclic SP KV cache. Chunk 0 / one-shot uses
-> the AllGather gather-Q stand-in; chunks 1+ use the native ring SDPA (Pavle Josipović's op, #51438).
+> **Multi-chunk prefill runs through one path.** Every sequence-parallel chunk, including chunk 0,
+> uses the cache-backed native ring SDPA over the block-cyclic SP KV cache (Pavle Josipović's op,
+> #51438).
 
 ## Roadmap
 
@@ -22,7 +22,7 @@ Stacked PRs, bottom-up. **This PR is P6 (chunked prefill via the ring SDPA).**
 - [x] **P3 — MoE** (merged): `TtGptOssMoE` over the DeepSeek EP submodules (SwiGLU-OAI + biases, no shared expert).
 - [x] **P4 — model + runtime** (merged): full model, chunked-prefill runtime, and the `common/prefill` adapter.
 - [x] **P5 — galaxy bring-up** (this PR): TP=8 / SP=4 / EP=32 on the 4×8 Blackhole Galaxy — full 36L model, real weights, per-layer KV-cache PCC vs golden.
-- [x] **P6 — ring SDPA** *(this PR)*: the sinks + sliding + halo-CCL ring SDPA (Pavle Josipović's op, #51438) — wires chunks 1+ to the ring cache-read for multi-chunk prefill.
+- [x] **P6 — ring SDPA** *(this PR)*: the sinks + sliding + halo-CCL ring SDPA (Pavle Josipović's op, #51438) — routes every sequence-parallel chunk through the cache-backed ring path.
 - [ ] **P7 — unification**: hoist the shared prefill scaffolding (attention output-proj/CCL tail, config, `utils/`) into `common/prefill`.
 
 ## Beyond the bring-up stack
@@ -80,10 +80,10 @@ Per chip, per layer, one prefill chunk (`S_loc = S/SP`):
 - Sinks are stored **pre-divided by `config.scaling`** (the `1/√head_dim` softmax scale, i.e. ×√64),
   so the SDPA kernel's own `×scale` of the sink logit recovers the raw HF value (HF does not scale the sink).
 - Layers alternate `sliding_attention` (window 128) and `full_attention` off `hf_config.layer_types`.
-- **Chunk 0 / one-shot uses AllGather + normal SDPA** (`ttnn.transformer.scaled_dot_product_attention`
-  with `is_causal`, `sliding_window_size`, `attention_sink`) — correct, but replicates the full K/V per
-  chip so it does not scale to 128k. **Chunks 1+ use the native ring cache-read** (`tt/attention/dense_sp.py`,
-  Pavle's RingJointSDPA, #51438) over the block-cyclic SP cache — added by this PR.
+- **Every chunked SP chunk uses the native ring cache-read** (`tt/attention/dense_sp.py`,
+  RingJointSDPA) over the block-cyclic SP cache. Chunk 0 writes its K/V into the cache and uses the
+  same complete-first-group ring path as chunks 1+. Equal-sized one-shot prefill retains the exact
+  replicated Q/K/V bootstrap because sliding RingJointSDPA requires short Q against a longer K/V cache.
 
 ## Testing
 

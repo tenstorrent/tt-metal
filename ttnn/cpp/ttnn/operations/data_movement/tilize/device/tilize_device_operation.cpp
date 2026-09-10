@@ -206,6 +206,15 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             input_tensor_a.dtype() != DataType::FP8_E4M3 || (is_floating_point(out_dt) && out_dt != DataType::FP8_E4M3),
             "FP8_E4M3 input to tilize requires a float TILE output (FLOAT32, BFLOAT16, BFLOAT8_B, or BFLOAT4_B)");
+        // The Blackhole 8-bit unpack-tilize path corrupts odd rows when the block is a single column
+        // tile (ct_dim == 1, i.e. one tile per row); wider outputs are correct. Reject the broken
+        // narrow case for fp8 to avoid silently-wrong data (tt-llk narrow 8-bit tilize bug).
+        TT_FATAL(
+            input_tensor_a.dtype() != DataType::FP8_E4M3 || (width / tile_width) > 1,
+            "FP8_E4M3 tilize requires more than one tile per row (padded width {} must exceed one tile of {}); "
+            "the single-tile-per-row 8-bit unpack-tilize path is currently broken on this architecture",
+            width,
+            tile_width);
     }
 
     uint32_t stick_size = stick_s * input_tensor_a.element_size();  // Assuming bfloat16 dataformat
@@ -358,60 +367,16 @@ TilizeDeviceOperation::tensor_return_value_t TilizeDeviceOperation::create_outpu
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
 }
 
-void TilizeDeviceOperation::override_runtime_arguments(
-    tt::tt_metal::Program& program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value,
-    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // tilize has no custom compute_program_hash, so every shape-derived arg (work split, tile ids,
-    // page sizes) is keyed and only the buffer addresses move between hits: O(1) per kernel/CB.
-    using namespace tt::tt_metal;
-    const auto& input = tensor_args.input_tensor;
-    Buffer* src_buffer = input.buffer();
-    Buffer* dst_buffer = tensor_return_value.buffer();
-    const uint32_t src_addr = src_buffer->address();
-    const uint32_t dst_addr = dst_buffer->address();
-    const bool output_is_interleaved =
-        tensor_return_value.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED;
-
-    // Every factory pushes reader first and writer second, each taking its buffer at slot 0.
-    constexpr uint32_t kReaderKernelIdx = 0, kWriterKernelIdx = 1;
-    const auto patch_slot0 = [&program](uint32_t kernel_idx, uint32_t addr) {
-        for (auto& col : GetRuntimeArgs(program, kernel_idx)) {
-            for (auto& a : col) {
-                if (a.size() > 0) {
-                    a[0] = addr;
-                }
+// Re-point slot 0 of every core's args for one kernel. Shared by the tilize factories' cache-hit
+// hooks so the slot layout the factories all bake has a single home.
+void patch_tilize_kernel_slot0(tt::tt_metal::Program& program, uint32_t kernel_idx, uint32_t address) {
+    for (auto& col : tt::tt_metal::GetRuntimeArgs(program, kernel_idx)) {
+        for (auto& a : col) {
+            if (a.size() > 0) {
+                a[0] = address;
             }
         }
-    };
-
-    std::visit(
-        [&](auto&& factory) {
-            using Factory = std::decay_t<decltype(factory)>;
-            if constexpr (
-                std::is_same_v<Factory, ttnn::prim::TilizeMultiCoreShardedProgramFactory> ||
-                std::is_same_v<Factory, ttnn::prim::TilizeMultiCoreShardedRetileProgramFactory>) {
-                // Sharded input rides on a buffer-backed CB, so the reader carries no address. The
-                // writer only does when the output is interleaved; otherwise it is CB-backed too.
-                if (output_is_interleaved) {
-                    patch_slot0(kWriterKernelIdx, dst_addr);
-                }
-                // CBs are matched positionally: src0, [mid, for retile], output.
-                ProgramDescriptor cb_addr_only;
-                cb_addr_only.cbs.push_back(CBDescriptor{.buffer = src_buffer});
-                if constexpr (std::is_same_v<Factory, ttnn::prim::TilizeMultiCoreShardedRetileProgramFactory>) {
-                    cb_addr_only.cbs.push_back(CBDescriptor{});
-                }
-                cb_addr_only.cbs.push_back(CBDescriptor{.buffer = output_is_interleaved ? nullptr : dst_buffer});
-                apply_descriptor_runtime_args(program, cb_addr_only);  // override-rebuild-ok: cb-addr-only
-            } else {
-                patch_slot0(kReaderKernelIdx, src_addr);
-                patch_slot0(kWriterKernelIdx, dst_addr);
-            }
-        },
-        select_program_factory(operation_attributes, tensor_args));
+    }
 }
 
 ttnn::Tensor tilize(
@@ -426,7 +391,11 @@ ttnn::Tensor tilize(
     return ttnn::device_operation::launch<TilizeDeviceOperation>(
         TilizeParams{
             .output_mem_config = output_mem_config.value_or(input_tensor.memory_config()),
-            .output_dtype = output_dtype.value_or(input_tensor.dtype()),
+            // FP8_E4M3 is ROW_MAJOR-only, so it can never be the TILE output dtype. When the caller
+            // doesn't request a specific output dtype, default an FP8 input to FLOAT32 (the format it
+            // unpacks to in DEST) instead of echoing the illegal FP8 dtype.
+            .output_dtype = output_dtype.value_or(
+                input_tensor.dtype() == DataType::FP8_E4M3 ? DataType::FLOAT32 : input_tensor.dtype()),
             .use_multicore = use_multicore,
             .enough_space_height = enough_space_height,
             .use_low_perf = use_low_perf,

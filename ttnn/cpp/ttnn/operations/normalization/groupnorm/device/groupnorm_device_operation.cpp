@@ -194,11 +194,17 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
             input_mask.value().storage_type());
         TT_FATAL(input_mask.value().buffer() != nullptr, "Input mask must be allocated in buffers on device!");
         TT_FATAL(a.device() == input_mask.value().device(), "Input and input mask tensors must be on same device");
+        // For non-tile-aligned H*W on the two-pass path the mask carries a second, row-masked copy
+        // of every group; that is the only reason dim1 may be 2 * num_groups.
+        const bool row_mask_doubled = !args.use_welford && (a.logical_shape()[2] != a.padded_shape()[2]);
+        const uint32_t expected_mask_groups = args.num_groups * (row_mask_doubled ? 2 : 1);
         TT_FATAL(
-            input_mask.value().padded_shape()[1] == args.num_groups,
-            "Input mask dim1 must match number of groups, got: {} vs {}",
-            input_mask.value().padded_shape()[1],
-            args.num_groups);
+            input_mask.value().padded_shape()[1] == expected_mask_groups,
+            "Input mask dim1 must be {} ({}num_groups={}), got: {}",
+            expected_mask_groups,
+            row_mask_doubled ? "2 x " : "",
+            args.num_groups,
+            input_mask.value().padded_shape()[1]);
         TT_FATAL(
             input_mask.value().padded_shape()[2] == tile_height,
             "Input mask height must equal tile height ({}), got: {}",
@@ -244,6 +250,8 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
             negative_mask.value().padded_shape()[3],
             tile_width);
         TT_FATAL(a.is_sharded(), "Negative mask support is only available for sharded input tensors.");
+        // The Welford compute kernels have no negative-mask path.
+        TT_FATAL(!args.use_welford, "Negative mask is not supported with use_welford=True.");
         TT_FATAL(
             a.layout() == Layout::ROW_MAJOR,
             "If using negative mask, input tensor must be in ROW_MAJOR layout, but layout is {}",
@@ -253,6 +261,29 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             output_layout == Layout::ROW_MAJOR,
             "If using negative mask, output tensor must be in ROW_MAJOR layout, but layout is {}",
+            output_layout);
+    }
+
+    // synthesize_negative_mask makes the sharded writer kernel build the per-group
+    // selector directly in L1 instead of reading a tensor.
+    // This attribute is determined by ttnn::group_norm itself (see needs_negative_mask_overlap)
+    if (args.synthesize_negative_mask) {
+        TT_FATAL(
+            a.is_sharded(),
+            "group_norm: synthesize_negative_mask is only supported for sharded inputs (the interleaved factories "
+            "have no negative-mask code path).");
+        // The Welford kernels have no negative-mask path at all.
+        TT_FATAL(!args.use_welford, "group_norm: synthesize_negative_mask is not supported with use_welford=True.");
+        // Mirrors the layout requirements enforced above for a caller-supplied negative_mask tensor.
+        TT_FATAL(
+            a.layout() == Layout::ROW_MAJOR,
+            "group_norm: synthesize_negative_mask requires a ROW_MAJOR input tensor, but layout is {}",
+            a.layout());
+        Layout output_layout =
+            std::visit([](const auto& config) -> Layout { return config.output_layout; }, args.program_config);
+        TT_FATAL(
+            output_layout == Layout::ROW_MAJOR,
+            "group_norm: synthesize_negative_mask requires a ROW_MAJOR output layout, but layout is {}",
             output_layout);
     }
 
@@ -353,7 +384,8 @@ Tensor group_norm(
     std::optional<Tensor> beta,
     std::optional<Tensor> input_mask,
     std::optional<Tensor> negative_mask,
-    std::optional<Tensor> reciprocals) {
+    std::optional<Tensor> reciprocals,
+    bool synthesize_negative_mask) {
     if (negative_mask.has_value()) {
         TT_FATAL(
             negative_mask.value().storage_type() == StorageType::DEVICE,
@@ -363,6 +395,9 @@ Tensor group_norm(
             negative_mask.value().buffer() != nullptr, "Negative mask must be allocated in buffers on device!");
         TT_FATAL(input.device() == negative_mask.value().device(), "Input and negative mask tensors must be on same device");
     }
+    TT_FATAL(
+        !(synthesize_negative_mask && negative_mask.has_value()),
+        "synthesize_negative_mask=True is mutually exclusive with a caller-supplied negative_mask tensor.");
     using OperationType = GroupNormDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .eps = eps,
@@ -371,6 +406,7 @@ Tensor group_norm(
         .program_config = program_config,
         .compute_kernel_config = compute_kernel_config,
         .use_welford = use_welford,
+        .synthesize_negative_mask = synthesize_negative_mask,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .input = input,

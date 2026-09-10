@@ -27,6 +27,7 @@ jobs:
 
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -43,6 +44,7 @@ jobs:
 
   run-ttnn-tests:
     needs: [check-harbor, build-artifact]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
     uses: ./.github/workflows/ttnn-sanity-tests-impl.yaml
     secrets: inherit
     with:

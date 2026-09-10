@@ -7,10 +7,14 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import profiler, run_for_wormhole_b0
-from models.demos.utils.common_demo_utils import get_mesh_mappers
+from models.demos.utils.common_demo_utils import get_mesh_mappers, report_vision_fps
 from models.experimental.mobileNetV3.runner.performant_runner_infra import MobileNetV3PerformanceRunnerInfra
 from models.perf.perf_utils import prep_perf_report
 from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
+
+
+# Throughput must stay within this fraction below the target before the test fails.
+PERF_MARGIN = 0.10
 
 
 def run_model_pipeline(device, test_infra, num_measurement_iterations):
@@ -67,6 +71,8 @@ def run_perf_e2e_mobilenetV3(
     model_location_generator,
     resolution,
     expected_inference_throughput,
+    model_target_name=None,
+    enforce_perf_floor=False,
 ):
     profiler.clear()
 
@@ -103,10 +109,25 @@ def run_perf_e2e_mobilenetV3(
         inference_time_cpu=0.0,
     )
 
+    throughput_fps = batch_size / inference_time_avg
     logger.info(
-        f"MobileNetV3{resolution[0]}x{resolution[1]} batch_size: {batch_size}, inference time (avg): {inference_time_avg}, FPS: {batch_size/inference_time_avg}"
+        f"MobileNetV3{resolution[0]}x{resolution[1]} batch_size: {batch_size}, inference time (avg): {inference_time_avg}, FPS: {throughput_fps}"
     )
     logger.info(f"MobileNetV3 compile time: {compile_time} s")
+
+    if model_target_name:
+        report_vision_fps(model_target_name, throughput_fps, batch_size)
+
+    # Only the single-device leg is measured in CI, so only it carries a floor. The
+    # multi-device target is the author-time value and has never been confirmed on a
+    # runner -- gating it would assert against an unverified number.
+    if enforce_perf_floor:
+        min_throughput_fps = expected_inference_throughput * (1 - PERF_MARGIN)
+        assert throughput_fps >= min_throughput_fps, (
+            f"MobileNetV3 throughput {throughput_fps:.2f} fps below the "
+            f"{100 * (1 - PERF_MARGIN):.0f}% floor of {min_throughput_fps:.2f} fps "
+            f"(target {expected_inference_throughput} fps)"
+        )
 
 
 @run_for_wormhole_b0()
@@ -117,7 +138,7 @@ def run_perf_e2e_mobilenetV3(
 @pytest.mark.parametrize("batch_size_per_device", (1,))
 @pytest.mark.parametrize(
     "resolution, expected_inference_throughput",
-    [((224, 224), 250)],
+    [((224, 224), 263.29)],
 )
 def test_mobilenetv3_perf_single_device(
     device,
@@ -132,6 +153,8 @@ def test_mobilenetv3_perf_single_device(
         model_location_generator,
         resolution,
         expected_inference_throughput,
+        model_target_name="mobilenetv3",
+        enforce_perf_floor=True,
     )
 
 

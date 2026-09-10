@@ -301,6 +301,7 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
     reader_compile_time_args.push_back(0);  // mcast_enabled
     reader_compile_time_args.push_back(static_cast<uint32_t>(use_zigzag_balancing));  // arg 33
     reader_compile_time_args.push_back(0);  // arg 34: use_windowed_narrowing — ring is never windowed
+    reader_compile_time_args.push_back(0);  // arg 35: neighborhood_gather — ring is never windowed
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);

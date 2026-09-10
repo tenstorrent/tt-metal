@@ -80,6 +80,8 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
     // Shared per-MM-core progress counter scratch; see MinimalMatmulStridedReduceScatterAsyncInputs.
     const std::optional<const Tensor>& mm_progress_counters = std::nullopt,
     std::optional<uint32_t> mm_window_blocks = std::nullopt,
-    const std::optional<const Tensor>& mm_credit_counters = std::nullopt);
+    const std::optional<const Tensor>& mm_credit_counters = std::nullopt,
+    // Fused concat: second in0 source (suffix half of K; input_tensor is the prefix half).
+    const std::optional<const Tensor>& mm_optional_input_tensor = std::nullopt);
 
 }  // namespace ttnn::prim

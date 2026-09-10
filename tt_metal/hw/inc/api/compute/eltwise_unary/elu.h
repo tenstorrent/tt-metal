@@ -30,9 +30,10 @@ namespace ckernel {
  * | slope          | slope used in elu calculation                                              | uint32_t | Greater than 0                                        | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void elu_tile(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_elu, (APPROX, DST_ACCUM_MODE), idst, VectorMode::RC, param0));
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_elu, (APPROX, is_fp32_dest_acc_en), idst, VectorMode::RC, param0));
 }
 /**
  * Please refer to documentation for any_init.

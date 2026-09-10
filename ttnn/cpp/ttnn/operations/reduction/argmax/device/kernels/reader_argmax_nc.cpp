@@ -47,7 +47,7 @@ void kernel_main() {
 
     Noc noc;
     DataflowBuffer dfb(dfb_in0);
-    const uint32_t tile_bytes = get_tile_size(dfb_in0);
+    const uint32_t tile_bytes = dfb.get_tile_size();
 
     for (uint32_t out_i = 0; out_i < num_output_tiles; ++out_i) {
         const uint32_t output_tile_id = start_id + out_i;

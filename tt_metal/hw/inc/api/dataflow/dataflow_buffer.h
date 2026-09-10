@@ -16,11 +16,22 @@
 #include "internal/circular_buffer_interface.h"
 #endif
 
+// PrefetcherPipe-relay checkpoint align, called from the RelayDFBBindingToken constructor on
+// TRISC (unpack/pack). DM aligns in PrefetcherPipe::bind_relay().
+#if defined(COMPILE_FOR_TRISC) && !defined(ARCH_QUASAR) && !defined(UCK_CHLKC_MATH)
+#include "internal/prefetcher_pipe_init.h"
+#endif
+
 #ifndef COMPILE_FOR_TRISC
 #include "api/dataflow/noc.h"
 #include "tools/profiler/noc_debugging_profiler.hpp"
+
+class DataflowBuffer;
+template <>
+struct noc_traits_t<DataflowBuffer>;
 #endif
 
+#include "api/dataflow/dfb_binding_token.h"
 #include "api/debug/assert.h"
 #include "api/debug/waypoint.h"
 #include "api/lock.h"
@@ -64,34 +75,6 @@ template <bool IsWrite, typename ReleaseFunc>
     return DfbScopedLock<IsWrite, ReleaseFunc>(pointer, release);
 }
 
-// Opaque handle for a DataflowBuffer binding (declared in kernel_bindings_generated.h).
-// The user will never directly interact with this type.
-//
-// The user's host code declares an accessor_name when binding a DFB endpoint to a kernel.
-// The user then uses that accessor_name to construct a DataflowBuffer in the kernel code.
-//
-// Usage example:
-//   // (Host code declares "my_dfb_name" as the DFB accessor name for this kernel.)
-//   // In the kernel code:
-//   DataflowBuffer my_dfb(dfb::my_dfb_name);
-//
-// Here my_dfb_name is a constexpr DFBBindingToken, auto-included in kernel_bindings_generated.h.
-//
-struct DFBBindingToken {
-    explicit constexpr DFBBindingToken(uint16_t id) noexcept : id_(id) {}
-
-    // DFBBindingToken is backed by a compile-time ID (an implicit CTA).
-
-    // Implicit conversion to uint32_t:
-    // This lets a Metal 2.0 kernel pass a DFBBindingToken directly to Gen1 (WH/BH) LLK
-    // compute APIs that expect a raw CB id.
-    // This conversion is constexpr; it's intended for Gen1 use only.
-    constexpr operator uint32_t() const noexcept { return id_; }
-
-private:
-    uint16_t id_;
-};
-
 class DataflowBuffer {
 public:
 #ifdef ARCH_QUASAR
@@ -105,7 +88,19 @@ public:
     //   DataflowBuffer dfb(my_dfb_name);
     DataflowBuffer(DFBBindingToken token) : DataflowBuffer(static_cast<uint16_t>(token)) {}
 
-    // Low-level constructor: prefer DFBBindingToken overload above for new kernel code.
+    // Relay local DFB (CrossNode / PrefetcherPipe bridge to compute). Same runtime object;
+    // the token type is how the host marks the binding as a relay at compile time.
+    // For PrefetcherPipe relays on TRISC, construction snaps the borrowed local iface to the
+    // durable checkpoint via a launch-msg slot lookup keyed by token.prefetcher_pipe_id()
+    DataflowBuffer(RelayDFBBindingToken token) : DataflowBuffer(static_cast<uint16_t>(token)) {
+#if defined(COMPILE_FOR_TRISC) && !defined(ARCH_QUASAR) && !defined(UCK_CHLKC_MATH)
+        if (token.prefetcher_pipe_id() != RelayDFBBindingToken::NO_PREFETCHER_PIPE) {
+            experimental::align_local_dfb_to_prefetcher_pipe_slot(logical_dfb_id_, token.prefetcher_pipe_id());
+        }
+#endif
+    }
+
+    // Low-level constructor: prefer DFBBindingToken / RelayDFBBindingToken for new kernel code.
     DataflowBuffer(uint16_t logical_dfb_id);
 
     uint16_t get_id() const { return logical_dfb_id_; }
@@ -326,8 +321,10 @@ public:
     // Peek current FIFO cursors (byte address / arch units). Use for local entry data access —
     // prefer holding a scoped_write_lock/scoped_read_lock when poking L1. Prefer noc.h for Class 1
     // transfers (pass the DFB).
-    uint32_t get_write_ptr() const { return get_write_ptr_impl(); }
-    uint32_t get_read_ptr() const { return get_read_ptr_impl(); }
+    // On Quasar DM, this returns the uncached alias temporarily until we figure out a long term
+    // cache strategy.
+    uint32_t get_write_ptr() const { return get_write_ptr_impl() + L1_UNCACHED_OFFSET; }
+    uint32_t get_read_ptr() const { return get_read_ptr_impl() + L1_UNCACHED_OFFSET; }
 
 #ifndef ARCH_QUASAR
     // WH/BH only — mutate FIFO cursor state (rewind / jump / hold-wr style surgery).
@@ -341,15 +338,20 @@ public:
     //   - Flag any NOC write into the locked entries as WRITE_TO_LOCKED_DFB.
     //   - On Quasar, invalidate the L2 cache range on acquire.
     // In addition, scoped_write_lock also flushes on release.
+    //
+    // get_ptr() hands out the UNCACHED alias on Quasar DM, matching get_write_ptr()/get_read_ptr(), so
+    // CPU accesses through the lock reach TL1 directly.
     [[nodiscard]] auto scoped_write_lock(uint16_t num_entries = 1) {
         const ScopedLockRegion region = lock_acquire_impl<true>(num_entries);
-        return make_dfb_scoped_lock<true>(
-            region.start, [this, region, num_entries]() { lock_release_impl<true>(region, num_entries); });
+        return make_dfb_scoped_lock<true>(region.start + L1_UNCACHED_OFFSET, [this, region, num_entries]() {
+            lock_release_impl<true>(region, num_entries);
+        });
     }
     [[nodiscard]] auto scoped_read_lock(uint16_t num_entries = 1) {
         const ScopedLockRegion region = lock_acquire_impl<false>(num_entries);
-        return make_dfb_scoped_lock<false>(
-            region.start, [this, region, num_entries]() { lock_release_impl<false>(region, num_entries); });
+        return make_dfb_scoped_lock<false>(region.start + L1_UNCACHED_OFFSET, [this, region, num_entries]() {
+            lock_release_impl<false>(region, num_entries);
+        });
     }
 
 private:
@@ -360,7 +362,20 @@ private:
     void finish_impl();
     uint32_t get_write_ptr_impl() const;
     uint32_t get_read_ptr_impl()  const;
+
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    static constexpr uint32_t L1_UNCACHED_OFFSET = MEM_L1_UNCACHED_BASE;
+#else
+    static constexpr uint32_t L1_UNCACHED_OFFSET = 0;
+#endif
+
+    // NOC APIs do not accept uncached addresses, but this is private so not exposed to kernels.
+    uint32_t get_noc_write_addr() const { return get_write_ptr_impl(); }
+    uint32_t get_noc_read_addr() const { return get_read_ptr_impl(); }
+
 #ifndef COMPILE_FOR_TRISC
+    friend struct noc_traits_t<DataflowBuffer>;
+
     void write_barrier_impl(const Noc &noc) const;
 #endif
 
@@ -436,24 +451,30 @@ struct noc_traits_t<DataflowBuffer> {
         static_assert(
             address_type == Noc::AddressType::LOCAL_L1,
             "DataflowBuffer without mcast range can only be used as L1 source");
-        return src.get_read_ptr() + args.offset_bytes;
+        // Use cached addresses for NOC APIs
+        return src.get_noc_read_addr() + args.offset_bytes;
     }
     template <Noc::AddressType address_type>
     static auto dst_addr(const DataflowBuffer& dst, const Noc& noc, const dst_args_type& args) {
         static_assert(
             address_type == Noc::AddressType::LOCAL_L1,
             "DataflowBuffer without mcast range can only be used as L1 destination");
-        return dst.get_write_ptr() + args.offset_bytes;
+        // Use cached addresses for NOC APIs
+        return dst.get_noc_write_addr() + args.offset_bytes;
     }
     template <Noc::AddressType address_type>
     static auto dst_addr_mcast(const DataflowBuffer& dst, const Noc& noc, const dst_args_mcast_type& args) {
         static_assert(
             address_type == Noc::AddressType::NOC, "DataflowBuffer with mcast range cannot be used as L1 destination");
-        auto local_addr = dst.get_write_ptr() + args.offset_bytes;
+        // Use cached addresses for NOC APIs
+        auto local_addr = dst.get_noc_write_addr() + args.offset_bytes;
         return ::get_noc_multicast_addr(
             args.noc_x_start, args.noc_y_start, args.noc_x_end, args.noc_y_end, local_addr, noc.get_noc_id());
     }
 };
+
+template <>
+inline constexpr bool noc_zero_l1_endpoint_v<DataflowBuffer> = true;
 
 #endif
 

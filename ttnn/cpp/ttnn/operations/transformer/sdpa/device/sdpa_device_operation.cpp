@@ -598,19 +598,29 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
             max_cu_window_seqlens,
             cu_eles);
         // A sharded Q must start on a tile boundary -- the mask generator offsets whole tiles -- and its
-        // rows must lie inside the sequence the windows describe.
-        const auto q_rows = q.logical_shape()[-2];
-        TT_FATAL(
-            attrs.windowed_q_token_offset % tt::constants::TILE_HEIGHT == 0,
-            "windowed_q_token_offset must be a multiple of {}, got {}.",
-            tt::constants::TILE_HEIGHT,
-            attrs.windowed_q_token_offset);
-        TT_FATAL(
-            attrs.windowed_q_token_offset + q_rows <= static_cast<uint32_t>(k.logical_shape()[-2]),
-            "windowed Q shard [{}, {}) does not fit in the K sequence length {}.",
-            attrs.windowed_q_token_offset,
-            attrs.windowed_q_token_offset + q_rows,
-            k.logical_shape()[-2]);
+        // rows must lie inside the sequence the windows describe. The row-count bound holds for any
+        // offset >= 0, so it is checked in both offset forms.
+        const auto q_rows = static_cast<uint32_t>(q.logical_shape()[-2]);
+        const auto k_rows = static_cast<uint32_t>(k.logical_shape()[-2]);
+        TT_FATAL(q_rows <= k_rows, "windowed Q shard has {} rows, more than the K sequence length {}.", q_rows, k_rows);
+        if (!tensors.windowed_q_token_offset_tensor.has_value()) {
+            // Scalar form. (When the tensor is supplied it overrides the scalar on device, and its
+            // per-device values cannot be validated here without a readback -- tile alignment and
+            // offset + q_rows <= Sk are the caller's responsibility in that form.)
+            TT_FATAL(
+                attrs.windowed_q_token_offset % tt::constants::TILE_HEIGHT == 0,
+                "windowed_q_token_offset must be a multiple of {}, got {}.",
+                tt::constants::TILE_HEIGHT,
+                attrs.windowed_q_token_offset);
+            // q_rows <= k_rows was checked above, so the subtraction cannot wrap.
+            TT_FATAL(
+                attrs.windowed_q_token_offset <= k_rows - q_rows,
+                "windowed Q shard [{}, {} + {}) does not fit in the K sequence length {}.",
+                attrs.windowed_q_token_offset,
+                attrs.windowed_q_token_offset,
+                q_rows,
+                k_rows);
+        }
         if (tensors.windowed_q_token_offset_tensor.has_value()) {
             const auto& off = tensors.windowed_q_token_offset_tensor.value();
             TT_FATAL(off.storage_type() == StorageType::DEVICE, "windowed_q_token_offset_tensor must be on device.");

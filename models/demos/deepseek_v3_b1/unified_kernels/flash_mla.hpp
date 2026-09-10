@@ -18,7 +18,7 @@
 #elif defined(COMPILE_FOR_TRISC)
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
-#include "../kernel_includes/tt_metal/include/compute_kernel_api/sdpa.h"
+#include "api/compute/experimental/sdpa.h"
 #include "api/compute/eltwise_unary/exp.h"
 #endif
 
@@ -31,37 +31,42 @@ static_assert(noc_mode == DM_DYNAMIC_NOC, "Flash MLA Decode kernel only supports
 // ============================================================================
 #if defined(COMPILE_FOR_BRISC)
 template <typename Accessor>
-FORCE_INLINE uint64_t get_shard_noc_addr_helper(const Accessor& reader, uint32_t shard_id, uint8_t noc = noc_index) {
+FORCE_INLINE std::uint64_t get_shard_noc_addr_helper(
+    const Accessor& reader, std::uint32_t shard_id, std::uint8_t noc = noc_index) {
     return reader.get_shard_noc_addr(shard_id, 0, noc);
 }
 
-constexpr uint32_t MCAST_INVALID = 0;
-constexpr uint32_t MCAST_VALID = 1;
+constexpr std::uint32_t MCAST_INVALID = 0;
+constexpr std::uint32_t MCAST_VALID = 1;
 #endif
 
 // ============================================================================
 // NCRISC helpers (Writer)
 // ============================================================================
 #if defined(COMPILE_FOR_NCRISC)
-template <uint32_t bits_per_step>
-FORCE_INLINE constexpr uint32_t step_semaphore_inc(uint32_t step, uint32_t sub_bit = 0) {
+template <std::uint32_t bits_per_step>
+FORCE_INLINE constexpr std::uint32_t step_semaphore_inc(std::uint32_t step, std::uint32_t sub_bit = 0) {
     return 1U << (step * bits_per_step + sub_bit);
 }
-template <uint32_t bits_per_step>
-FORCE_INLINE constexpr uint32_t step_semaphore_shift(uint32_t step, uint32_t sub_bit = 0) {
+template <std::uint32_t bits_per_step>
+FORCE_INLINE constexpr std::uint32_t step_semaphore_shift(std::uint32_t step, std::uint32_t sub_bit = 0) {
     return step * bits_per_step + sub_bit;
 }
 
 FORCE_INLINE void mask_last_chunk(
-    uint32_t cb_mask, uint32_t k_chunk_size, uint32_t cur_pos, uint32_t k_chunk_end, uint32_t k_num_chunks) {
+    std::uint32_t cb_mask,
+    std::uint32_t k_chunk_size,
+    std::uint32_t cur_pos,
+    std::uint32_t k_chunk_end,
+    std::uint32_t k_num_chunks) {
     bool mask_last_chunk = k_chunk_end == k_num_chunks && (cur_pos + 1) % k_chunk_size != 0;
     if (mask_last_chunk) {
         DeviceZoneScopedN("mask-last-chunk");
         cb_reserve_back(cb_mask, 1);
-        volatile tt_l1_ptr uint32_t* mask_write_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_mask));
-        uint32_t num_unmasked = cur_pos % k_chunk_size + 1;
-        uint32_t i = 0;
+        volatile tt_l1_ptr std::uint32_t* mask_write_ptr =
+            reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(get_write_ptr(cb_mask));
+        std::uint32_t num_unmasked = cur_pos % k_chunk_size + 1;
+        std::uint32_t i = 0;
         for (; i < num_unmasked / 2; i++) {
             *mask_write_ptr++ = 0x00000000;
         }
@@ -93,120 +98,120 @@ struct FlashMLADecode {
     // Includes both per-core runtime values and compile-time constants.
     // ========================================================================
 
-    template <uint32_t k_page_size_, uint32_t vDHt_, uint32_t cb_out_o_, bool use_alt_mcast_vc_ = false>
+    template <std::uint32_t k_page_size_, std::uint32_t vDHt_, std::uint32_t cb_out_o_, bool use_alt_mcast_vc_ = false>
     struct WriterCTArgs {
-        static constexpr uint32_t k_page_size = k_page_size_;
-        static constexpr uint32_t vDHt = vDHt_;
-        static constexpr uint32_t cb_out_o = cb_out_o_;
+        static constexpr std::uint32_t k_page_size = k_page_size_;
+        static constexpr std::uint32_t vDHt = vDHt_;
+        static constexpr std::uint32_t cb_out_o = cb_out_o_;
         static constexpr bool use_alt_mcast_vc = use_alt_mcast_vc_;
     };
 
     struct ReaderCTArgs {};
 
     template <
-        uint32_t cb_q_in_,
-        uint32_t cb_k_in_,
-        uint32_t cb_mask_,
-        uint32_t cb_interm_out_,
-        uint32_t cb_interm_ms_,
-        uint32_t cb_out_in_,
-        uint32_t cb_ms_in_,
-        uint32_t cb_out_o_,
-        uint32_t cb_out_ms_,
-        uint32_t cb_out_final_>
+        std::uint32_t cb_q_in_,
+        std::uint32_t cb_k_in_,
+        std::uint32_t cb_mask_,
+        std::uint32_t cb_interm_out_,
+        std::uint32_t cb_interm_ms_,
+        std::uint32_t cb_out_in_,
+        std::uint32_t cb_ms_in_,
+        std::uint32_t cb_out_o_,
+        std::uint32_t cb_out_ms_,
+        std::uint32_t cb_out_final_>
     struct ComputeCTArgs {
-        static constexpr uint32_t cb_q_in = cb_q_in_;
-        static constexpr uint32_t cb_k_in = cb_k_in_;
-        static constexpr uint32_t cb_mask = cb_mask_;
-        static constexpr uint32_t cb_interm_out = cb_interm_out_;
-        static constexpr uint32_t cb_interm_ms = cb_interm_ms_;
-        static constexpr uint32_t cb_out_in = cb_out_in_;
-        static constexpr uint32_t cb_ms_in = cb_ms_in_;
-        static constexpr uint32_t cb_out_o = cb_out_o_;
-        static constexpr uint32_t cb_out_ms = cb_out_ms_;
-        static constexpr uint32_t cb_out_final = cb_out_final_;
+        static constexpr std::uint32_t cb_q_in = cb_q_in_;
+        static constexpr std::uint32_t cb_k_in = cb_k_in_;
+        static constexpr std::uint32_t cb_mask = cb_mask_;
+        static constexpr std::uint32_t cb_interm_out = cb_interm_out_;
+        static constexpr std::uint32_t cb_interm_ms = cb_interm_ms_;
+        static constexpr std::uint32_t cb_out_in = cb_out_in_;
+        static constexpr std::uint32_t cb_ms_in = cb_ms_in_;
+        static constexpr std::uint32_t cb_out_o = cb_out_o_;
+        static constexpr std::uint32_t cb_out_ms = cb_out_ms_;
+        static constexpr std::uint32_t cb_out_final = cb_out_final_;
     };
 
     struct ReaderArgs {
-        uint32_t k_addr;
-        uint32_t local_cur_pos;
-        uint32_t slot_id;
-        uint32_t cur_batch;
-        uint32_t core_num_in_reduce;
-        uint32_t is_mcast_sender;
-        uint32_t mcast_start_x;
-        uint32_t mcast_start_y;
-        uint32_t mcast_end_x;
-        uint32_t mcast_end_y;
-        uint32_t num_mcast_dests;
-        uint32_t vc;
-        uint32_t St;
-        uint32_t DHt;
-        uint32_t Sk_chunk_t;
-        uint32_t num_cores_per_head;
-        uint32_t k_chunk_size;
-        uint32_t mcast_semaphore_addr;
-        uint32_t k_page_size;
-        uint32_t k_num_pages;
-        uint32_t ncrisc_brisc_sync_semaphore_addr;
-        uint32_t receiver_ready_semaphore_addr;
-        uint32_t kv_cache_cur_pos_ready_semaphore_addr;
-        uint32_t kv_cache_cur_pos_ready_value;
-        uint32_t cb_k_in;
+        std::uint32_t k_addr;
+        std::uint32_t local_cur_pos;
+        std::uint32_t slot_id;
+        std::uint32_t cur_batch;
+        std::uint32_t core_num_in_reduce;
+        std::uint32_t is_mcast_sender;
+        std::uint32_t mcast_start_x;
+        std::uint32_t mcast_start_y;
+        std::uint32_t mcast_end_x;
+        std::uint32_t mcast_end_y;
+        std::uint32_t num_mcast_dests;
+        std::uint32_t vc;
+        std::uint32_t St;
+        std::uint32_t DHt;
+        std::uint32_t Sk_chunk_t;
+        std::uint32_t num_cores_per_head;
+        std::uint32_t k_chunk_size;
+        std::uint32_t mcast_semaphore_addr;
+        std::uint32_t k_page_size;
+        std::uint32_t k_num_pages;
+        std::uint32_t ncrisc_brisc_sync_semaphore_addr;
+        std::uint32_t receiver_ready_semaphore_addr;
+        std::uint32_t kv_cache_cur_pos_ready_semaphore_addr;
+        std::uint32_t kv_cache_cur_pos_ready_value;
+        std::uint32_t cb_k_in;
     };
 
     struct WriterArgs {
-        uint32_t local_cur_pos;
-        uint32_t slot_id;
-        uint32_t cur_batch;
-        uint32_t core_num_in_reduce;
-        uint32_t is_output_core;
-        uint32_t is_mcast_sender;
-        uint32_t output_core_noc_x;
-        uint32_t output_core_noc_y;
-        uint32_t mcast_start_x;
-        uint32_t mcast_start_y;
-        uint32_t mcast_end_x;
-        uint32_t mcast_end_y;
-        tt_l1_ptr uint32_t* tree_reduction_info;
-        uint32_t Sk_chunk_t;
-        uint32_t num_cores_per_head;
-        uint32_t reducer_semaphore_addr;
-        uint32_t k_chunk_size;
-        uint32_t q_chunk_size_bytes;
-        uint32_t DHt;
-        uint32_t num_mcast_dests;
-        uint32_t full_grid_mcast_start_x;
-        uint32_t full_grid_mcast_start_y;
-        uint32_t full_grid_mcast_end_x;
-        uint32_t full_grid_mcast_end_y;
-        uint32_t full_grid_mcast_num_dests;
-        uint32_t q_input_mcast_semaphore_addr;
-        uint32_t mcast_semaphore_addr;
-        uint32_t ncrisc_brisc_sync_semaphore_addr;
-        uint32_t k_num_pages;
-        uint32_t num_tree_reduction_steps;
-        uint32_t receiver_ready_semaphore_addr;
-        uint32_t cb_k_in;
-        uint32_t cb_q_in;
-        uint32_t cb_mask;
-        uint32_t cb_out_in;
-        uint32_t cb_ms_in;
-        uint32_t cb_out_ms;
+        std::uint32_t local_cur_pos;
+        std::uint32_t slot_id;
+        std::uint32_t cur_batch;
+        std::uint32_t core_num_in_reduce;
+        std::uint32_t is_output_core;
+        std::uint32_t is_mcast_sender;
+        std::uint32_t output_core_noc_x;
+        std::uint32_t output_core_noc_y;
+        std::uint32_t mcast_start_x;
+        std::uint32_t mcast_start_y;
+        std::uint32_t mcast_end_x;
+        std::uint32_t mcast_end_y;
+        tt_l1_ptr std::uint32_t* tree_reduction_info;
+        std::uint32_t Sk_chunk_t;
+        std::uint32_t num_cores_per_head;
+        std::uint32_t reducer_semaphore_addr;
+        std::uint32_t k_chunk_size;
+        std::uint32_t q_chunk_size_bytes;
+        std::uint32_t DHt;
+        std::uint32_t num_mcast_dests;
+        std::uint32_t full_grid_mcast_start_x;
+        std::uint32_t full_grid_mcast_start_y;
+        std::uint32_t full_grid_mcast_end_x;
+        std::uint32_t full_grid_mcast_end_y;
+        std::uint32_t full_grid_mcast_num_dests;
+        std::uint32_t q_input_mcast_semaphore_addr;
+        std::uint32_t mcast_semaphore_addr;
+        std::uint32_t ncrisc_brisc_sync_semaphore_addr;
+        std::uint32_t k_num_pages;
+        std::uint32_t num_tree_reduction_steps;
+        std::uint32_t receiver_ready_semaphore_addr;
+        std::uint32_t cb_k_in;
+        std::uint32_t cb_q_in;
+        std::uint32_t cb_mask;
+        std::uint32_t cb_out_in;
+        std::uint32_t cb_ms_in;
+        std::uint32_t cb_out_ms;
     };
 
     struct ComputeArgs {
-        uint32_t local_cur_pos;
-        uint32_t do_reduce;
-        uint32_t do_output;
-        uint32_t slot_id;
-        uint32_t cur_batch;
-        uint32_t core_num_in_reduce;
-        uint32_t is_sender_after_reduce;
-        tt_l1_ptr uint32_t* tree_reduction_info;
-        uint32_t k_chunk_size;
-        uint32_t num_cores_per_head;
-        uint32_t num_tree_reduction_steps;
+        std::uint32_t local_cur_pos;
+        std::uint32_t do_reduce;
+        std::uint32_t do_output;
+        std::uint32_t slot_id;
+        std::uint32_t cur_batch;
+        std::uint32_t core_num_in_reduce;
+        std::uint32_t is_sender_after_reduce;
+        tt_l1_ptr std::uint32_t* tree_reduction_info;
+        std::uint32_t k_chunk_size;
+        std::uint32_t num_cores_per_head;
+        std::uint32_t num_tree_reduction_steps;
     };
 
     using RTArgs = unified_kernels::SelectByRISCV<WriterArgs, ReaderArgs, ComputeArgs>;
@@ -223,7 +228,7 @@ struct FlashMLADecode {
             }
         }
 
-        void set_pos_and_slot(RTArgs& args, uint32_t local_cur_pos, uint32_t slot_id) {
+        void set_pos_and_slot(RTArgs& args, std::uint32_t local_cur_pos, std::uint32_t slot_id) {
             args.local_cur_pos = local_cur_pos;
             args.slot_id = slot_id;
         }
@@ -238,11 +243,11 @@ struct FlashMLADecode {
          */
         static void push_dummy_sdpa_inputs() {
 #if defined(COMPILE_FOR_TRISC)
-            constexpr uint32_t cb_out_o = CTArgs::cb_out_o;
-            constexpr uint32_t cb_out_ms = CTArgs::cb_out_ms;
-            constexpr uint32_t Sq_chunk_t = get_named_compile_time_arg_val("PNHt");
-            constexpr uint32_t vDHt = get_named_compile_time_arg_val("vDHt");
-            constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
+            constexpr std::uint32_t cb_out_o = CTArgs::cb_out_o;
+            constexpr std::uint32_t cb_out_ms = CTArgs::cb_out_ms;
+            constexpr std::uint32_t Sq_chunk_t = get_named_compile_time_arg_val("PNHt");
+            constexpr std::uint32_t vDHt = get_named_compile_time_arg_val("vDHt");
+            constexpr std::uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
             cb_reserve_back(cb_out_ms, 1);
             cb_push_back(cb_out_ms, 1);
@@ -254,82 +259,82 @@ struct FlashMLADecode {
     private:
         void impl([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
-            constexpr uint8_t MCAST_NOC_INDEX = 0;
-            constexpr uint8_t ATOMIC_NOC_INDEX = 1;
-            constexpr uint32_t BRISC_MCAST_LOOPS = 2;
+            constexpr std::uint8_t MCAST_NOC_INDEX = 0;
+            constexpr std::uint8_t ATOMIC_NOC_INDEX = 1;
+            constexpr std::uint32_t BRISC_MCAST_LOOPS = 2;
             noc_async_write_set_trid(0, MCAST_NOC_INDEX);
 #endif
 // ====================================================================
 // BRISC (Reader)
 // ====================================================================
 #if defined(COMPILE_FOR_BRISC)
-            constexpr uint8_t READ_NOC_INDEX = 0;
+            constexpr std::uint8_t READ_NOC_INDEX = 0;
             constexpr auto k_tensor_args = TensorAccessorArgs<0>();
 
             const bool is_mcast_sender = args.is_mcast_sender == 1;
 
-            uint32_t cur_pos = args.local_cur_pos;
+            std::uint32_t cur_pos = args.local_cur_pos;
 
             auto [k_num_chunks, k_chunk_start, k_chunk_end] = get_runtime_args(
                 cur_pos, args.cur_batch, args.core_num_in_reduce, args.num_cores_per_head, args.k_chunk_size);
 
-            volatile tt_l1_ptr uint32_t* kv_cache_cur_pos_ready_semaphore_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.kv_cache_cur_pos_ready_semaphore_addr);
+            volatile tt_l1_ptr std::uint32_t* kv_cache_cur_pos_ready_semaphore_ptr =
+                reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(args.kv_cache_cur_pos_ready_semaphore_addr);
 
             if (k_chunk_start == k_chunk_end) {
                 return;
             }
 
-            const uint32_t k_chunk_tiles = args.Sk_chunk_t * args.DHt;
+            const std::uint32_t k_chunk_tiles = args.Sk_chunk_t * args.DHt;
 
             const auto k_reader = TensorAccessor(k_tensor_args, args.k_addr);
 
-            const uint32_t num_chunks_per_batch = args.St / args.Sk_chunk_t;
+            const std::uint32_t num_chunks_per_batch = args.St / args.Sk_chunk_t;
 
-            volatile tt_l1_ptr uint32_t* mcast_semaphore_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.mcast_semaphore_addr);
+            volatile tt_l1_ptr std::uint32_t* mcast_semaphore_ptr =
+                reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(args.mcast_semaphore_addr);
 
-            volatile tt_l1_ptr uint32_t* ncrisc_brisc_sync_curr_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.ncrisc_brisc_sync_semaphore_addr);
-            volatile tt_l1_ptr uint32_t* ncrisc_brisc_sync_next_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.ncrisc_brisc_sync_semaphore_addr + 4);
-            volatile tt_l1_ptr uint32_t* k_write_curr_ptr_shared =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.ncrisc_brisc_sync_semaphore_addr + 8);
-            volatile tt_l1_ptr uint32_t* k_write_next_ptr_shared =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.ncrisc_brisc_sync_semaphore_addr + 12);
+            volatile tt_l1_ptr std::uint32_t* ncrisc_brisc_sync_curr_ptr =
+                reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(args.ncrisc_brisc_sync_semaphore_addr);
+            volatile tt_l1_ptr std::uint32_t* ncrisc_brisc_sync_next_ptr =
+                reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(args.ncrisc_brisc_sync_semaphore_addr + 4);
+            volatile tt_l1_ptr std::uint32_t* k_write_curr_ptr_shared =
+                reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(args.ncrisc_brisc_sync_semaphore_addr + 8);
+            volatile tt_l1_ptr std::uint32_t* k_write_next_ptr_shared =
+                reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(args.ncrisc_brisc_sync_semaphore_addr + 12);
             // Reset the other semaphores outside the base offset to 0
             noc_semaphore_set(ncrisc_brisc_sync_next_ptr, 0);
 
-            volatile tt_l1_ptr uint32_t* receiver_ready_semaphore_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.receiver_ready_semaphore_addr);
-            const uint64_t sender_receiver_ready_noc_addr = get_noc_addr(
+            volatile tt_l1_ptr std::uint32_t* receiver_ready_semaphore_ptr =
+                reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(args.receiver_ready_semaphore_addr);
+            const std::uint64_t sender_receiver_ready_noc_addr = get_noc_addr(
                 args.mcast_start_x, args.mcast_start_y, args.receiver_ready_semaphore_addr, ATOMIC_NOC_INDEX);
 
-            const uint64_t brisc_mcast_noc_addr = get_noc_multicast_addr<MCAST_NOC_INDEX>(
+            const std::uint64_t brisc_mcast_noc_addr = get_noc_multicast_addr<MCAST_NOC_INDEX>(
                 args.mcast_start_x, args.mcast_start_y, args.mcast_end_x, args.mcast_end_y, 0);
-            const uint64_t brisc_mcast_sem_addr = brisc_mcast_noc_addr | args.mcast_semaphore_addr;
-            const uint32_t k_chunk_total_size = args.k_num_pages * args.k_page_size;
+            const std::uint64_t brisc_mcast_sem_addr = brisc_mcast_noc_addr | args.mcast_semaphore_addr;
+            const std::uint32_t k_chunk_total_size = args.k_num_pages * args.k_page_size;
 
             // Only the core handling the last chunk needs to wait for the KV cache cur pos ready
             bool wait_for_kv_cache_ready = k_chunk_end == k_num_chunks;
-            uint32_t loop_iter = 0;
+            std::uint32_t loop_iter = 0;
             if (is_mcast_sender && BRISC_MCAST_LOOPS > 0) {
                 noc_semaphore_set(mcast_semaphore_ptr, MCAST_VALID);
             } else if (!is_mcast_sender) {
                 unified_kernels::unicast_atomic_inc_set_state<false, true, true, false, write_at_cmd_buf>(
                     sender_receiver_ready_noc_addr, 1, 31, ATOMIC_NOC_INDEX);
             }
-            for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; k_chunk += args.num_cores_per_head) {
+            for (std::uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; k_chunk += args.num_cores_per_head) {
                 {
                     DeviceZoneScopedN("reader-k-read");
 
                     cb_reserve_back(args.cb_k_in, k_chunk_tiles);
-                    uint32_t k_write_ptr = get_write_ptr(args.cb_k_in);
+                    std::uint32_t k_write_ptr = get_write_ptr(args.cb_k_in);
 
                     if (is_mcast_sender && loop_iter < BRISC_MCAST_LOOPS) {
                         DeviceZoneScopedN("mcast-sender-serialized-read-and-mcast");
-                        const uint32_t shard_id = args.slot_id * num_chunks_per_batch + k_chunk;
-                        uint64_t k_src_noc_addr = get_shard_noc_addr_helper(k_reader, shard_id, READ_NOC_INDEX);
+                        const std::uint32_t shard_id = args.slot_id * num_chunks_per_batch + k_chunk;
+                        std::uint64_t k_src_noc_addr = get_shard_noc_addr_helper(k_reader, shard_id, READ_NOC_INDEX);
 
                         if (wait_for_kv_cache_ready && (k_chunk + args.num_cores_per_head) >= k_chunk_end) {
                             DeviceZoneScopedN("wait-for-kv-cache-ready");
@@ -348,7 +353,7 @@ struct FlashMLADecode {
                             noc_semaphore_wait(receiver_ready_semaphore_ptr, args.num_mcast_dests);
                             noc_semaphore_set(receiver_ready_semaphore_ptr, 0);
 
-                            uint64_t mcast_dest_addr = brisc_mcast_noc_addr | k_write_ptr;
+                            std::uint64_t mcast_dest_addr = brisc_mcast_noc_addr | k_write_ptr;
                             noc_async_write_multicast(
                                 k_write_ptr,
                                 mcast_dest_addr,
@@ -367,8 +372,8 @@ struct FlashMLADecode {
                         }
                     } else if (is_mcast_sender) {
                         DeviceZoneScopedN("mcast-sender-sharded-read");
-                        const uint32_t shard_id = args.slot_id * num_chunks_per_batch + k_chunk;
-                        uint64_t k_src_noc_addr = get_shard_noc_addr_helper(k_reader, shard_id, READ_NOC_INDEX);
+                        const std::uint32_t shard_id = args.slot_id * num_chunks_per_batch + k_chunk;
+                        std::uint64_t k_src_noc_addr = get_shard_noc_addr_helper(k_reader, shard_id, READ_NOC_INDEX);
 
                         if (loop_iter == BRISC_MCAST_LOOPS) {
                             noc_async_read_one_packet_set_state<true>(
@@ -379,21 +384,21 @@ struct FlashMLADecode {
                         // Cycle through the free trid range owned by user-defined transactions.
                         // Reserved trids for built-in writes/atomics/reads are declared in
                         // unified_kernels::{write,write_reg,write_at,read}_trid (see dataflow_common.hpp).
-                        constexpr uint32_t TRID_MIN = 1;
-                        constexpr uint32_t NUM_TRIDS = NOC_MAX_TRANSACTION_ID - TRID_MIN + 1;
-                        constexpr uint32_t TRID_MAX = TRID_MIN + NUM_TRIDS - 1;
+                        constexpr std::uint32_t TRID_MIN = 1;
+                        constexpr std::uint32_t NUM_TRIDS = NOC_MAX_TRANSACTION_ID - TRID_MIN + 1;
+                        constexpr std::uint32_t TRID_MAX = TRID_MIN + NUM_TRIDS - 1;
                         static_assert(TRID_MIN >= 1, "trid 0 is reserved");
                         static_assert(TRID_MAX <= NOC_MAX_TRANSACTION_ID);
                         static_assert(NUM_TRIDS >= 1);
 
-                        uint32_t src_base_addr = (uint32_t)(k_src_noc_addr & 0xFFFFFFFF);
-                        uint32_t src_offset = 0;
-                        uint32_t dst_addr = k_write_ptr;
+                        std::uint32_t src_base_addr = (std::uint32_t)(k_src_noc_addr & 0xFFFFFFFF);
+                        std::uint32_t src_offset = 0;
+                        std::uint32_t dst_addr = k_write_ptr;
 
-                        uint32_t curr_trid = TRID_MIN;
-                        uint32_t wait_trid = TRID_MIN;
-                        uint32_t pages_issued = 0;
-                        uint32_t pages_completed = 0;
+                        std::uint32_t curr_trid = TRID_MIN;
+                        std::uint32_t wait_trid = TRID_MIN;
+                        std::uint32_t pages_issued = 0;
+                        std::uint32_t pages_completed = 0;
                         if (wait_for_kv_cache_ready && (k_chunk + args.num_cores_per_head) >= k_chunk_end) {
                             noc_semaphore_wait(kv_cache_cur_pos_ready_semaphore_ptr, args.kv_cache_cur_pos_ready_value);
                             noc_semaphore_set(kv_cache_cur_pos_ready_semaphore_ptr, 0);
@@ -402,7 +407,7 @@ struct FlashMLADecode {
                         noc_semaphore_wait(ncrisc_brisc_sync_curr_ptr, 0);
                         *k_write_curr_ptr_shared = k_write_ptr;
                         noc_semaphore_set(ncrisc_brisc_sync_curr_ptr, 1);
-                        for (uint32_t i = 0; i < NUM_TRIDS && pages_issued < args.k_num_pages; ++i) {
+                        for (std::uint32_t i = 0; i < NUM_TRIDS && pages_issued < args.k_num_pages; ++i) {
                             noc_async_read_set_trid(curr_trid, READ_NOC_INDEX);
                             noc_async_read_one_packet_with_state_with_trid(
                                 src_base_addr, src_offset, dst_addr, curr_trid, READ_NOC_INDEX);
@@ -454,31 +459,31 @@ struct FlashMLADecode {
 // NCRISC (Writer)
 // ====================================================================
 #elif defined(COMPILE_FOR_NCRISC)
-            constexpr uint8_t READ_NOC_INDEX = 1;
-            constexpr uint8_t WRITE_NOC_INDEX = 1;
+            constexpr std::uint8_t READ_NOC_INDEX = 1;
+            constexpr std::uint8_t WRITE_NOC_INDEX = 1;
 
-            constexpr uint32_t k_page_size = CTArgs::k_page_size;
-            constexpr uint32_t vDHt = CTArgs::vDHt;
-            constexpr uint32_t cb_out_o = CTArgs::cb_out_o;
+            constexpr std::uint32_t k_page_size = CTArgs::k_page_size;
+            constexpr std::uint32_t vDHt = CTArgs::vDHt;
+            constexpr std::uint32_t cb_out_o = CTArgs::cb_out_o;
 
-            constexpr uint32_t out_chunk_tiles = vDHt;
-            constexpr uint32_t tile_bytes_intermed = get_tile_size(cb_out_o);
-            constexpr uint32_t o_write_size = out_chunk_tiles * tile_bytes_intermed;
-            constexpr uint32_t ms_write_size = tile_bytes_intermed;
+            constexpr std::uint32_t out_chunk_tiles = vDHt;
+            constexpr std::uint32_t tile_bytes_intermed = get_tile_size(cb_out_o);
+            constexpr std::uint32_t o_write_size = out_chunk_tiles * tile_bytes_intermed;
+            constexpr std::uint32_t ms_write_size = tile_bytes_intermed;
             static_assert(ms_write_size <= NOC_MAX_BURST_SIZE);
             static_assert(o_write_size <= NOC_MAX_BURST_SIZE);
-            constexpr uint32_t q_mcast_vc =
+            constexpr std::uint32_t q_mcast_vc =
                 CTArgs::use_alt_mcast_vc ? NOC_DISPATCH_MULTICAST_WRITE_VC : NOC_MULTICAST_WRITE_VC;
 
-            const uint32_t q_chunk_tiles = args.DHt;
+            const std::uint32_t q_chunk_tiles = args.DHt;
 
-            volatile tt_l1_ptr uint32_t* q_input_mcast_semaphore_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.q_input_mcast_semaphore_addr);
+            volatile tt_l1_ptr std::uint32_t* q_input_mcast_semaphore_ptr =
+                reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(args.q_input_mcast_semaphore_addr);
 
             const bool is_mcast_sender = args.is_mcast_sender == 1;
             const bool is_output_core = args.is_output_core == 1;
 
-            uint32_t cur_pos = args.local_cur_pos;
+            std::uint32_t cur_pos = args.local_cur_pos;
 
             auto [k_num_chunks, k_chunk_start, k_chunk_end] = get_runtime_args(
                 cur_pos, args.cur_batch, args.core_num_in_reduce, args.num_cores_per_head, args.k_chunk_size);
@@ -488,7 +493,7 @@ struct FlashMLADecode {
                 if (is_output_core) {
                     cb_wait_front(args.cb_q_in, q_chunk_tiles);
                     if (is_mcast_sender) {
-                        uint64_t q_input_mcast_sem_noc_addr = get_noc_multicast_addr<MCAST_NOC_INDEX>(
+                        std::uint64_t q_input_mcast_sem_noc_addr = get_noc_multicast_addr<MCAST_NOC_INDEX>(
                             args.full_grid_mcast_start_x,
                             args.full_grid_mcast_start_y,
                             args.full_grid_mcast_end_x,
@@ -499,7 +504,7 @@ struct FlashMLADecode {
                             q_input_mcast_sem_noc_addr, 1, args.full_grid_mcast_num_dests, MCAST_NOC_INDEX, q_mcast_vc);
                         mask_last_chunk(args.cb_mask, args.k_chunk_size, cur_pos, k_chunk_end, k_num_chunks);
                     } else {
-                        const uint64_t sender_receiver_ready_noc_addr = get_noc_addr(
+                        const std::uint64_t sender_receiver_ready_noc_addr = get_noc_addr(
                             args.mcast_start_x,
                             args.mcast_start_y,
                             args.q_input_mcast_semaphore_addr,
@@ -512,11 +517,11 @@ struct FlashMLADecode {
                     noc_semaphore_wait(q_input_mcast_semaphore_ptr, 1);
                 } else {
                     // wait for 8 q heads
-                    uint64_t q_noc_addr = get_noc_addr(
+                    std::uint64_t q_noc_addr = get_noc_addr(
                         args.output_core_noc_x, args.output_core_noc_y, get_read_ptr(args.cb_q_in), READ_NOC_INDEX);
                     mask_last_chunk(args.cb_mask, args.k_chunk_size, cur_pos, k_chunk_end, k_num_chunks);
                     cb_reserve_back(args.cb_q_in, q_chunk_tiles);
-                    uint32_t q_write_addr = get_write_ptr(args.cb_q_in);
+                    std::uint32_t q_write_addr = get_write_ptr(args.cb_q_in);
                     unified_kernels::noc_async_read_preprogram_all_state(
                         q_noc_addr, q_write_addr, args.q_chunk_size_bytes, READ_NOC_INDEX);
                     noc_semaphore_wait(q_input_mcast_semaphore_ptr, 1);
@@ -535,31 +540,31 @@ struct FlashMLADecode {
             // KV Cache Multicast (page-level pipelining)
             // Skip first BRISC_MCAST_LOOPS iterations — handled by BRISC
             // =================================================================
-            const uint32_t num_k_chunks = k_chunk_end - k_chunk_start;
-            const uint32_t num_loop_iters = (num_k_chunks + args.num_cores_per_head - 1) / args.num_cores_per_head;
+            const std::uint32_t num_k_chunks = k_chunk_end - k_chunk_start;
+            const std::uint32_t num_loop_iters = (num_k_chunks + args.num_cores_per_head - 1) / args.num_cores_per_head;
             if (is_mcast_sender && num_loop_iters > BRISC_MCAST_LOOPS) {
-                volatile tt_l1_ptr uint32_t* mcast_semaphore_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.mcast_semaphore_addr);
+                volatile tt_l1_ptr std::uint32_t* mcast_semaphore_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(args.mcast_semaphore_addr);
 
-                volatile tt_l1_ptr uint32_t* ncrisc_brisc_sync_curr_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.ncrisc_brisc_sync_semaphore_addr);
-                volatile tt_l1_ptr uint32_t* ncrisc_brisc_sync_next_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.ncrisc_brisc_sync_semaphore_addr + 4);
-                volatile tt_l1_ptr uint32_t* k_write_curr_ptr_shared =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.ncrisc_brisc_sync_semaphore_addr + 8);
-                volatile tt_l1_ptr uint32_t* k_write_next_ptr_shared =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.ncrisc_brisc_sync_semaphore_addr + 12);
+                volatile tt_l1_ptr std::uint32_t* ncrisc_brisc_sync_curr_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(args.ncrisc_brisc_sync_semaphore_addr);
+                volatile tt_l1_ptr std::uint32_t* ncrisc_brisc_sync_next_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(args.ncrisc_brisc_sync_semaphore_addr + 4);
+                volatile tt_l1_ptr std::uint32_t* k_write_curr_ptr_shared =
+                    reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(args.ncrisc_brisc_sync_semaphore_addr + 8);
+                volatile tt_l1_ptr std::uint32_t* k_write_next_ptr_shared =
+                    reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(args.ncrisc_brisc_sync_semaphore_addr + 12);
 
-                volatile tt_l1_ptr uint32_t* receiver_ready_semaphore_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.receiver_ready_semaphore_addr);
+                volatile tt_l1_ptr std::uint32_t* receiver_ready_semaphore_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(args.receiver_ready_semaphore_addr);
 
-                const uint64_t mcast_noc_addr = get_noc_multicast_addr<MCAST_NOC_INDEX>(
+                const std::uint64_t mcast_noc_addr = get_noc_multicast_addr<MCAST_NOC_INDEX>(
                     args.mcast_start_x, args.mcast_start_y, args.mcast_end_x, args.mcast_end_y, 0);
-                const uint64_t mcast_sem_addr = mcast_noc_addr | args.mcast_semaphore_addr;
+                const std::uint64_t mcast_sem_addr = mcast_noc_addr | args.mcast_semaphore_addr;
 
                 noc_semaphore_set(mcast_semaphore_ptr, 1);
 
-                for (uint32_t k_chunk = k_chunk_start + BRISC_MCAST_LOOPS * args.num_cores_per_head;
+                for (std::uint32_t k_chunk = k_chunk_start + BRISC_MCAST_LOOPS * args.num_cores_per_head;
                      k_chunk < k_chunk_end;
                      k_chunk += args.num_cores_per_head) {
                     DeviceZoneScopedN("mcast-sender-multicast");
@@ -571,16 +576,16 @@ struct FlashMLADecode {
                         args.num_mcast_dests, args.k_num_pages + 1, MCAST_NOC_INDEX);
 
                     invalidate_l1_cache();
-                    uint32_t page_addr = *k_write_curr_ptr_shared;
+                    std::uint32_t page_addr = *k_write_curr_ptr_shared;
 
-                    uint64_t mcast_dest_addr = mcast_noc_addr | page_addr;
+                    std::uint64_t mcast_dest_addr = mcast_noc_addr | page_addr;
                     mcast_send_set_state_runtime<false, false, true, true, true, false, write_cmd_buf>(
                         page_addr, mcast_dest_addr, k_page_size, args.num_mcast_dests, MCAST_NOC_INDEX);
                     if constexpr (!mcast_is_shared_write_cmd_buf) {
                         mcast_send_set_state_runtime<false, false, true, true, true, false, write_reg_cmd_buf>(
                             args.mcast_semaphore_addr,
                             mcast_sem_addr,
-                            sizeof(uint32_t),
+                            sizeof(std::uint32_t),
                             args.num_mcast_dests,
                             MCAST_NOC_INDEX);
                     }
@@ -590,7 +595,7 @@ struct FlashMLADecode {
 
                     mcast_send_issue_txn<write_cmd_buf>(MCAST_NOC_INDEX);
 
-                    for (uint32_t page = 1; page < args.k_num_pages; ++page) {
+                    for (std::uint32_t page = 1; page < args.k_num_pages; ++page) {
                         page_addr += k_page_size;
                         mcast_dest_addr = mcast_noc_addr | page_addr;
                         mcast_send_set_state_runtime<false, false, false, true, false, false, write_cmd_buf>(
@@ -603,7 +608,7 @@ struct FlashMLADecode {
                         mcast_send_set_state_runtime<false, false, false, true, true, false, write_reg_cmd_buf>(
                             args.mcast_semaphore_addr,
                             mcast_sem_addr,
-                            sizeof(uint32_t),
+                            sizeof(std::uint32_t),
                             args.num_mcast_dests,
                             MCAST_NOC_INDEX);
                     }
@@ -628,26 +633,26 @@ struct FlashMLADecode {
             // =================================================================
             // Tree Reduction
             // =================================================================
-            constexpr uint32_t bits_per_step = 2;
-            constexpr uint32_t ms_sub_bit = 0;
-            constexpr uint32_t o_sub_bit = 1;
+            constexpr std::uint32_t bits_per_step = 2;
+            constexpr std::uint32_t ms_sub_bit = 0;
+            constexpr std::uint32_t o_sub_bit = 1;
 
-            volatile tt_l1_ptr uint32_t* in0_receiver_semaphore_addr_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.reducer_semaphore_addr);
+            volatile tt_l1_ptr std::uint32_t* in0_receiver_semaphore_addr_ptr =
+                reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(args.reducer_semaphore_addr);
 
-            uint32_t num_active_s_blocks =
+            std::uint32_t num_active_s_blocks =
                 (k_num_chunks < args.num_cores_per_head) ? k_num_chunks : args.num_cores_per_head;
             bool needs_reduction = (num_active_s_blocks > 1);
-            uint32_t cb_ms_in_base_addr = get_write_ptr(args.cb_ms_in);
-            uint32_t cb_out_in_base_addr = get_write_ptr(args.cb_out_in);
+            std::uint32_t cb_ms_in_base_addr = get_write_ptr(args.cb_ms_in);
+            std::uint32_t cb_out_in_base_addr = get_write_ptr(args.cb_out_in);
 
             if (needs_reduction) {
-                for (uint32_t step = 0; step < args.num_tree_reduction_steps; ++step) {
+                for (std::uint32_t step = 0; step < args.num_tree_reduction_steps; ++step) {
                     DeviceZoneScopedN("tree-reduction-step");
-                    uint32_t role_code = args.tree_reduction_info[step * 4 + 0];
-                    uint32_t partner_s_block_idx = args.tree_reduction_info[step * 4 + 1];
-                    uint32_t partner_x = args.tree_reduction_info[step * 4 + 2];
-                    uint32_t partner_y = args.tree_reduction_info[step * 4 + 3];
+                    std::uint32_t role_code = args.tree_reduction_info[step * 4 + 0];
+                    std::uint32_t partner_s_block_idx = args.tree_reduction_info[step * 4 + 1];
+                    std::uint32_t partner_x = args.tree_reduction_info[step * 4 + 2];
+                    std::uint32_t partner_y = args.tree_reduction_info[step * 4 + 3];
 
                     if (role_code != 0 && partner_s_block_idx >= num_active_s_blocks) {
                         continue;
@@ -655,13 +660,14 @@ struct FlashMLADecode {
 
                     if (role_code == 1) {
                         DeviceZoneScopedN("tree-reduction-sender");
-                        uint32_t inc_value = step_semaphore_inc<bits_per_step>(step, ms_sub_bit);
-                        uint64_t output_write_coord = get_noc_addr(partner_x, partner_y, 0, WRITE_NOC_INDEX);
-                        uint64_t partner_semaphore_addr = output_write_coord | args.reducer_semaphore_addr;
+                        std::uint32_t inc_value = step_semaphore_inc<bits_per_step>(step, ms_sub_bit);
+                        std::uint64_t output_write_coord = get_noc_addr(partner_x, partner_y, 0, WRITE_NOC_INDEX);
+                        std::uint64_t partner_semaphore_addr = output_write_coord | args.reducer_semaphore_addr;
                         // Should be safe to pre-increment here
                         unified_kernels::unicast_write_increment_counters<true>(2, WRITE_NOC_INDEX);
                         unified_kernels::unicast_atomic_inc_increment_counters<false>(2, WRITE_NOC_INDEX);
-                        uint64_t output_write_addr = output_write_coord | (cb_ms_in_base_addr + step * ms_write_size);
+                        std::uint64_t output_write_addr =
+                            output_write_coord | (cb_ms_in_base_addr + step * ms_write_size);
                         unified_kernels::unicast_write_set_state<true, true, true, true, false, write_cmd_buf>(
                             get_read_ptr(args.cb_out_ms), output_write_addr, ms_write_size, WRITE_NOC_INDEX);
                         unified_kernels::unicast_atomic_inc_set_state<false, true, true, false, write_at_cmd_buf>(
@@ -687,9 +693,9 @@ struct FlashMLADecode {
 
                     } else if (role_code == 2) {
                         DeviceZoneScopedN("tree-reduction-receiver");
-                        uint32_t shift_value = step_semaphore_shift<bits_per_step>(step, ms_sub_bit);
+                        std::uint32_t shift_value = step_semaphore_shift<bits_per_step>(step, ms_sub_bit);
                         cb_reserve_back(args.cb_ms_in, 1);
-                        uint32_t sem_val;
+                        std::uint32_t sem_val;
                         do {
                             invalidate_l1_cache();
                             sem_val = *in0_receiver_semaphore_addr_ptr;
@@ -712,25 +718,25 @@ struct FlashMLADecode {
 // TRISC (Compute)
 // ====================================================================
 #elif defined(COMPILE_FOR_TRISC)
-            constexpr uint32_t DHt = get_named_compile_time_arg_val("DHt");
-            constexpr uint32_t vDHt = get_named_compile_time_arg_val("vDHt");
-            constexpr uint32_t Sq_chunk_t = get_named_compile_time_arg_val("PNHt");
-            constexpr uint32_t Sk_chunk_t = get_named_compile_time_arg_val("Sk_chunk_t");
-            constexpr uint32_t scale_fp32 = get_named_compile_time_arg_val("scale_fp32");
-            constexpr uint32_t dst_size = get_named_compile_time_arg_val("dst_size");
-            constexpr uint32_t cb_q_in = CTArgs::cb_q_in;
-            constexpr uint32_t cb_k_in = CTArgs::cb_k_in;
-            constexpr uint32_t cb_mask = CTArgs::cb_mask;
-            constexpr uint32_t cb_interm_out = CTArgs::cb_interm_out;
-            constexpr uint32_t cb_interm_ms = CTArgs::cb_interm_ms;
-            constexpr uint32_t cb_out_in = CTArgs::cb_out_in;
-            constexpr uint32_t cb_ms_in = CTArgs::cb_ms_in;
-            constexpr uint32_t cb_out_o = CTArgs::cb_out_o;
-            constexpr uint32_t cb_out_ms = CTArgs::cb_out_ms;
-            constexpr uint32_t cb_out_final = CTArgs::cb_out_final;
+            constexpr std::uint32_t DHt = get_named_compile_time_arg_val("DHt");
+            constexpr std::uint32_t vDHt = get_named_compile_time_arg_val("vDHt");
+            constexpr std::uint32_t Sq_chunk_t = get_named_compile_time_arg_val("PNHt");
+            constexpr std::uint32_t Sk_chunk_t = get_named_compile_time_arg_val("Sk_chunk_t");
+            constexpr std::uint32_t scale_fp32 = get_named_compile_time_arg_val("scale_fp32");
+            constexpr std::uint32_t dst_size = get_named_compile_time_arg_val("dst_size");
+            constexpr std::uint32_t cb_q_in = CTArgs::cb_q_in;
+            constexpr std::uint32_t cb_k_in = CTArgs::cb_k_in;
+            constexpr std::uint32_t cb_mask = CTArgs::cb_mask;
+            constexpr std::uint32_t cb_interm_out = CTArgs::cb_interm_out;
+            constexpr std::uint32_t cb_interm_ms = CTArgs::cb_interm_ms;
+            constexpr std::uint32_t cb_out_in = CTArgs::cb_out_in;
+            constexpr std::uint32_t cb_ms_in = CTArgs::cb_ms_in;
+            constexpr std::uint32_t cb_out_o = CTArgs::cb_out_o;
+            constexpr std::uint32_t cb_out_ms = CTArgs::cb_out_ms;
+            constexpr std::uint32_t cb_out_final = CTArgs::cb_out_final;
 
-            constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
-            constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
+            constexpr std::uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
+            constexpr std::uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
             static_assert(out_chunk_tiles % 2 == 0, "out_chunk_tiles must be even");
 
@@ -738,12 +744,10 @@ struct FlashMLADecode {
             const bool do_output = args.do_output == 1;                            // set to 0 in fused
             const bool is_sender_after_reduce = args.is_sender_after_reduce == 1;  // set to 1 in fused
 
-            constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
-
             constexpr bool transpose_k = true;
             constexpr bool transpose_v = false;
 
-            reconfig_data_format<SrcOrder::Regular, true>(cb_k_in, cb_q_in);
+            reconfig_full_operand(cb_k_in, cb_q_in);
             pack_reconfig_data_format<true>(cb_out_o);
             PACK((llk_math_sfpu_sdpa_reduce_row_init<false, DST_ACCUM_MODE, DataFormat::Float16_b>()));
             PACK(SFPU_UNARY_INIT_FN(
@@ -752,44 +756,44 @@ struct FlashMLADecode {
                 (true /*APPROXIMATION_MODE*/, scale_fp32, true /*CLAMP_NEGATIVE*/, DST_ACCUM_MODE)));
             sdpa_custom_mm_block_init_pack_short();
 
-            uint32_t cur_pos = args.local_cur_pos;
+            std::uint32_t cur_pos = args.local_cur_pos;
             auto [k_num_chunks, k_chunk_start, k_chunk_end] = get_runtime_args(
                 cur_pos, args.cur_batch, args.core_num_in_reduce, args.num_cores_per_head, args.k_chunk_size);
             if (k_chunk_start == k_chunk_end) {
                 return;
             }
 
-            uint32_t num_active_s_blocks =
+            std::uint32_t num_active_s_blocks =
                 (k_num_chunks < args.num_cores_per_head) ? k_num_chunks : args.num_cores_per_head;
 
-            uint32_t num_cores_to_wait = 0;
-            for (uint32_t step = 0; step < args.num_tree_reduction_steps; ++step) {
-                uint32_t role_code = args.tree_reduction_info[step * 2 + 0];
-                uint32_t partner_s_block_idx = args.tree_reduction_info[step * 2 + 1];
+            std::uint32_t num_cores_to_wait = 0;
+            for (std::uint32_t step = 0; step < args.num_tree_reduction_steps; ++step) {
+                std::uint32_t role_code = args.tree_reduction_info[step * 2 + 0];
+                std::uint32_t partner_s_block_idx = args.tree_reduction_info[step * 2 + 1];
                 if (role_code == 2 && partner_s_block_idx < num_active_s_blocks) {
                     num_cores_to_wait++;
                 }
             }
 
-            constexpr uint32_t packed_tile_size = 8 * 2;
-            constexpr uint32_t mm2_dst_offset = 0;
-            constexpr uint32_t mm2_dst_tile_offset = mm2_dst_offset / packed_tile_size;
-            constexpr uint32_t max_dst_offset = mm2_dst_offset + packed_tile_size * vDHt;
-            constexpr uint32_t max_dst_tile_offset = max_dst_offset / packed_tile_size;
-            constexpr uint32_t sum_dst_offset = max_dst_offset + 2;
-            constexpr uint32_t corr_exp_dst_offset = max_dst_offset + packed_tile_size;
-            constexpr uint32_t mm1_dst_offset = corr_exp_dst_offset + packed_tile_size;
-            constexpr uint32_t mm1_dst_tile_offset = mm1_dst_offset / packed_tile_size;
+            constexpr std::uint32_t packed_tile_size = 8 * 2;
+            constexpr std::uint32_t mm2_dst_offset = 0;
+            constexpr std::uint32_t mm2_dst_tile_offset = mm2_dst_offset / packed_tile_size;
+            constexpr std::uint32_t max_dst_offset = mm2_dst_offset + packed_tile_size * vDHt;
+            constexpr std::uint32_t max_dst_tile_offset = max_dst_offset / packed_tile_size;
+            constexpr std::uint32_t sum_dst_offset = max_dst_offset + 2;
+            constexpr std::uint32_t corr_exp_dst_offset = max_dst_offset + packed_tile_size;
+            constexpr std::uint32_t mm1_dst_offset = corr_exp_dst_offset + packed_tile_size;
+            constexpr std::uint32_t mm1_dst_tile_offset = mm1_dst_offset / packed_tile_size;
 
             constexpr bool exp_approx_mode = false;
 
-            constexpr uint32_t output_granularity = out_chunk_tiles;
+            constexpr std::uint32_t output_granularity = out_chunk_tiles;
             static_assert(
                 out_chunk_tiles % output_granularity == 0, "out_chunk_tiles must be divisible by output_granularity");
 
             bool sdpa_output_is_final = do_output && (!do_reduce || num_cores_to_wait == 0);
-            uint32_t sdpa_output_cb = 0;
-            uint32_t sdpa_ms_cb = 0;
+            std::uint32_t sdpa_output_cb = 0;
+            std::uint32_t sdpa_ms_cb = 0;
             if (sdpa_output_is_final) {
                 sdpa_output_cb = cb_out_final;
                 sdpa_ms_cb = cb_out_ms;
@@ -802,7 +806,8 @@ struct FlashMLADecode {
                 sdpa_ms_cb = cb_out_ms;
             }
             pack_block_contiguous_init(sdpa_output_cb);
-            uint32_t num_chunks = (k_chunk_end - k_chunk_start + args.num_cores_per_head - 1) / args.num_cores_per_head;
+            std::uint32_t num_chunks =
+                (k_chunk_end - k_chunk_start + args.num_cores_per_head - 1) / args.num_cores_per_head;
             bool mask_last_chunk = k_chunk_end == k_num_chunks && (cur_pos + 1) % args.k_chunk_size != 0;
             if (mask_last_chunk) {
                 cb_wait_front(cb_mask, 1);
@@ -811,22 +816,24 @@ struct FlashMLADecode {
             cb_reserve_back(sdpa_output_cb, vDHt);
             cb_reserve_back(sdpa_ms_cb, Sq_chunk_t);
             tile_regs_acquire();
-            for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
+            for (std::uint32_t chunk = 0; chunk < num_chunks; chunk++) {
                 bool last_chunk = chunk == (num_chunks - 1);
                 compute_sdpa_chunk<
                     Sk_chunk_t,
                     q_chunk_tiles,
                     out_chunk_tiles,
                     scale_fp32,
-                    scale_bf16,
                     transpose_k,
                     transpose_v,
                     packed_tile_size,
                     exp_approx_mode,
+                    /*qk_signal_granularity=*/1,
+                    /*exp_signal_granularity=*/1,
                     output_granularity,
                     false>(
                     cb_q_in,
                     cb_k_in,
+                    cb_k_in,  // cb_v: single-CB MLA layout (separate_v=false reads V from cb_k)
                     cb_mask,
                     sdpa_output_cb,
                     mm1_dst_offset,
@@ -843,10 +850,10 @@ struct FlashMLADecode {
                 pack_block_contiguous(max_dst_tile_offset, sdpa_ms_cb, 1);
                 cb_push_back(sdpa_ms_cb, Sq_chunk_t);
             } else {
-                compute_sdpa_recip<out_chunk_tiles, exp_approx_mode, scale_bf16, output_granularity>(
+                compute_sdpa_recip<out_chunk_tiles, exp_approx_mode, scale_fp32, output_granularity>(
                     cb_q_in, sum_dst_offset, corr_exp_dst_offset, mm2_dst_offset);
             }
-            for (uint32_t i = 0; i < out_chunk_tiles; i += output_granularity) {
+            for (std::uint32_t i = 0; i < out_chunk_tiles; i += output_granularity) {
                 PACK(t6_semaphore_wait_on_zero<p_stall::STALL_PACK>(semaphore::FPU_SFPU));
                 pack_block_contiguous(mm2_dst_tile_offset + i, sdpa_output_cb, output_granularity);
                 PACK(t6_semaphore_get<p_stall::PACK>(semaphore::FPU_SFPU));
@@ -859,13 +866,13 @@ struct FlashMLADecode {
             MATH(t6_semaphore_wait_on_max<p_stall::STALL_SFPU>(semaphore::FPU_SFPU));
 
             static_assert(vDHt % dst_size == 0, "vDHt must be divisible by dst_size");
-            constexpr uint32_t num_blocks = vDHt / dst_size;
-            constexpr uint32_t block_size = vDHt / num_blocks;
+            constexpr std::uint32_t num_blocks = vDHt / dst_size;
+            constexpr std::uint32_t block_size = vDHt / num_blocks;
 
             if (do_reduce && num_cores_to_wait > 0) {
-                reconfig_data_format_srca</*is_tile_dim_reconfig_en=*/true>(cb_ms_in);
+                reconfig_full_operand_srca(cb_ms_in);
                 exp_tile_init<exp_approx_mode, scale_fp32>();
-                for (uint32_t i = 0; i < num_cores_to_wait - 1; i++) {
+                for (std::uint32_t i = 0; i < num_cores_to_wait - 1; i++) {
                     sdpa_tail<exp_approx_mode, false, block_size, num_blocks, scale_fp32, VectorMode::C>(
                         cb_ms_in, cb_interm_ms, cb_interm_ms, cb_out_in, cb_interm_out, cb_interm_out);
                 }

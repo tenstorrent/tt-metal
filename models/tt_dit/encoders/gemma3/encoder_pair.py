@@ -363,12 +363,7 @@ class GemmaTokenizerEncoderPair:
             src_idx, keep_mask = self.video_connector.build_indices(tokens.attention_mask, seq)
 
             video_dev, audio_dev = self._encode_device(
-                tt_ids,
-                tt_gemma_mask,
-                fe_mask,
-                src_idx,
-                keep_mask,
-                traced=self._encoder_trace and self._trace_gate_open,
+                tt_ids, tt_gemma_mask, fe_mask, src_idx, keep_mask, traced=self._encoder_trace and self._trace_gate_open
             )
             video_embeds = ttnn.to_torch(ttnn.get_device_tensors(video_dev)[0]).float()
             audio_embeds = (

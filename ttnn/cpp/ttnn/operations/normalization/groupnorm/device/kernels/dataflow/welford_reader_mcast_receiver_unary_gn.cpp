@@ -183,18 +183,30 @@ void kernel_main() {
             p_global_means[0] = local_result.mean;
             p_global_vars[0] = local_result.variance;
 
+#ifndef GN_DISTRIBUTED_AG
             // Signal to sender that our partial data is ready
             reduce_receiver_sem.up(noc, mcast_sender_noc_x, mcast_sender_noc_y, 1);
 
             // Wait for sender to signal that it has sent the global data
             reduce_sender_sem.wait(VALID);
             reduce_sender_sem.set(INVALID);
+#endif
 
             local_means_ptr += local_stride_per_group;
             local_vars_ptr += local_stride_per_group;
             global_means_ptr += 2 * single_tile_size_bytes;
             global_vars_ptr += 2 * single_tile_size_bytes;
         }
+
+#ifdef GN_DISTRIBUTED_AG
+        // Batched handshake: signal the master ONCE that all groups' partials are ready, then wait
+        // ONCE for its single batched mcast-back of the GLOBAL (mean, var) for every group. The
+        // master defers its mcast-back until after the cross-device fabric exchange, so the
+        // per-group lock-step above would deadlock that single exchange.
+        reduce_receiver_sem.up(noc, mcast_sender_noc_x, mcast_sender_noc_y, 1);
+        reduce_sender_sem.wait(VALID);
+        reduce_sender_sem.set(INVALID);
+#endif
 
         dfb_ex_partial.pop_front(2);
         dfb_ex_global.push_back(2 * num_groups);

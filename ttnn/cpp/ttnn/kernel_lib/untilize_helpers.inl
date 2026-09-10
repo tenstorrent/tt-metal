@@ -148,7 +148,8 @@ template <
     untilize_config::RemapMode remap_mode>
 ALWI void untilize(uint32_t num_blocks) {
     // Compile-time validation
-    static_assert(input_dfb != output_dfb, "Untilize cannot be done in-place: input_dfb and output_dfb must be different");
+    static_assert(
+        input_dfb != output_dfb, "Untilize cannot be done in-place: input_dfb and output_dfb must be different");
     static_assert(block_width_tiles > 0, "block_width_tiles must be greater than 0");
     static_assert(input_dfb < 32, "Invalid input_dfb: must be less than 32");
     static_assert(output_dfb < 32, "Invalid output_dfb: must be less than 32");
@@ -180,18 +181,6 @@ ALWI void untilize(uint32_t num_blocks) {
         pack_reconfig_data_format(output_dfb);
     }
 
-    // Validate DFB capacity.
-    // Guarded because get_local_cb_interface() references cb_interface, which is
-    // not defined for the MATH TRISC (trisc.cc excludes it via #if !defined(UCK_CHLKC_MATH)).
-    PACK(ASSERT(get_dfb_num_pages(output_dfb) >= block_width_tiles));
-    if constexpr (dispatch::use_fast) {
-        UNPACK(ASSERT(get_dfb_num_pages(input_dfb) >= block_width_tiles));
-    } else if constexpr (dispatch::use_block_based_pack_path) {
-        UNPACK(ASSERT(get_dfb_num_pages(input_dfb) >= dispatch::sub_block_width));
-    } else {
-        UNPACK(ASSERT(get_dfb_num_pages(input_dfb) >= block_width_tiles));
-    }
-
     // =================================================================
     // INITIALIZATION
     // =================================================================
@@ -209,6 +198,22 @@ ALWI void untilize(uint32_t num_blocks) {
     // Construct DataflowBuffer objects for sync operations
     DataflowBuffer in_dfb(input_dfb);
     DataflowBuffer out_dfb(output_dfb);
+
+    // Validate DFB capacity — placed AFTER DataflowBuffer construction. The constructor runs
+    // dfb_ensure_ready(), which blocks until this buffer's producer has published its tile-counter
+    // state (buf_capacity). get_dfb_num_pages() reads buf_capacity, so before construction it races
+    // the producer's publish and can read a stale/zero capacity (a false trip surfacing only under
+    // timing shifts). See tilize_helpers.inl for the full rationale.
+    // Guarded because get_local_cb_interface() references cb_interface, which is
+    // not defined for the MATH TRISC (trisc.cc excludes it via #if !defined(UCK_CHLKC_MATH)).
+    PACK(ASSERT(get_dfb_num_pages(output_dfb) >= block_width_tiles));
+    if constexpr (dispatch::use_fast) {
+        UNPACK(ASSERT(get_dfb_num_pages(input_dfb) >= block_width_tiles));
+    } else if constexpr (dispatch::use_block_based_pack_path) {
+        UNPACK(ASSERT(get_dfb_num_pages(input_dfb) >= dispatch::sub_block_width));
+    } else {
+        UNPACK(ASSERT(get_dfb_num_pages(input_dfb) >= block_width_tiles));
+    }
 
     if constexpr (wait_mode == untilize_config::WaitMode::WaitUpfront) {
         uint32_t total_tiles = block_width_tiles * num_blocks;

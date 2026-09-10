@@ -54,11 +54,10 @@ std::shared_ptr<tt_metal::Program> create_traffic_generator_program(
 
     auto program = std::make_shared<tt_metal::Program>();
 
-    // Use first device
-    auto* src_physical_device = device->get_devices()[0];
     // Get source fabric node ID from logical first device
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    FabricNodeId src_fabric_node = control_plane.get_fabric_node_id_from_physical_chip_id(src_physical_device->id());
+    const auto device_id = device->get_device_ids()[0];
+    FabricNodeId src_fabric_node = control_plane.get_fabric_node_id_from_physical_chip_id(device_id);
     // Target core on remote chip for traffic destination
     tt::tt_metal::CoreCoord remote_logical_core(0, 0);
 
@@ -129,32 +128,27 @@ void signal_worker_teardown(
 
     std::vector<uint32_t> data = {WORKER_TEARDOWN};
 
-    // Get the actual device where the kernel is running (first device in mesh)
-    auto* device = mesh_device->get_devices()[0];
-
     auto virtual_core = mesh_device->virtual_core_from_logical_core(logical_core, CoreType::WORKER);
 
     // Use Cluster::write_core() to write to L1 on the device
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         data.data(),
         sizeof(uint32_t),
-        tt_cxy_pair(device->id(), virtual_core),
+        tt_cxy_pair(mesh_device->get_device_ids()[0], virtual_core),
         teardown_signal_address);
 }
 
 void wait_for_worker_complete(
     fabric_router_tests::BaseFabricFixture* fixture,
     const std::shared_ptr<tt_metal::distributed::MeshDevice>& device,
-    tt_metal::Program& program,
     std::chrono::milliseconds timeout) {
-
     // Wait for the worker program to complete with timeout
     // This blocks until the program completes or timeout expires
 
     auto start = std::chrono::steady_clock::now();
 
     // Call the fixture's wait method to block until program completes
-    fixture->WaitForSingleProgramDone(device, program);
+    fixture->WaitForSingleProgramDone(device);
 
     auto elapsed = std::chrono::steady_clock::now() - start;
     if (elapsed > timeout) {

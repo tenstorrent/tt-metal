@@ -16,6 +16,13 @@ void kernel_main() {
     const std::uint32_t num_blks = get_arg(args::num_rows);
     const std::uint32_t tile_offset = get_arg(args::tile_offset);
     const std::uint32_t Wt = get_arg(args::Wt);
+    // in0's DFB capacity; pad finishes the fifo cycle between rows.
+    constexpr std::uint32_t in0_t = get_arg(args::in0_t);
+    // Uniform blocks tile every CB capacity, so a row that blk divides already ends on the base.
+    const bool pad_to_fifo_base = Wt > 0 && blk > 0 && (Wt % blk) != 0;
+    const std::uint32_t in0_pad = pad_to_fifo_base ? ((in0_t - (Wt % in0_t)) % in0_t) : 0;
+    // fused_attn is sized in4_t = round_up(Wt, blk) but only Wt tiles are read per row/batch; same deal.
+    const std::uint32_t attn_pad = pad_to_fifo_base ? ((blk - (Wt % blk)) % blk) : 0;
 
     constexpr std::uint32_t dfb_id_in0 = dfb::in0;
 
@@ -74,7 +81,7 @@ void kernel_main() {
     std::uint32_t curr_tile = tile_offset;
     for (std::uint32_t i = 0; i < num_blks; ++i) {
         for (std::uint32_t j = 0; j < Wt; j += blk) {
-            std::uint32_t rem = blk;  // (i + blk > num_tiles) ? num_tiles - i : blk;
+            std::uint32_t rem = (j + blk > Wt) ? (Wt - j) : blk;  // clamped final block
             dfb_id_in0_obj.reserve_back(rem);
             std::uint32_t write_offset = 0;
             for (std::uint32_t r = 0; r < rem; ++r) {
@@ -86,6 +93,10 @@ void kernel_main() {
             noc.async_read_barrier();
             dfb_id_in0_obj.push_back(rem);
         }
+        if (in0_pad > 0) {
+            dfb_id_in0_obj.reserve_back(in0_pad);
+            dfb_id_in0_obj.push_back(in0_pad);
+        }
 
 #if FUSED_SCALE_MASK
 // Recall that the total attention tensor size in tiles is NC,1,Wt
@@ -93,9 +104,10 @@ void kernel_main() {
 // of slice of tensor that was assigned to our core, then we skip to next batch
 #if CAUSAL_MASK
         for (std::uint32_t j = 0; j < Wt; j += blk) {
-            dfb_id_attn_obj.reserve_back(blk);
+            std::uint32_t rem = (j + blk > Wt) ? (Wt - j) : blk;  // clamped final block
+            dfb_id_attn_obj.reserve_back(rem);
             std::uint32_t mask_write_offset = 0;
-            for (std::uint32_t wb = 0; wb < blk; ++wb) {
+            for (std::uint32_t wb = 0; wb < rem; ++wb) {
                 noc.async_read(
                     addr_mask,
                     dfb_id_attn_obj,
@@ -106,7 +118,11 @@ void kernel_main() {
                 ++mask_id;
             }
             noc.async_read_barrier();
-            dfb_id_attn_obj.push_back(blk);
+            dfb_id_attn_obj.push_back(rem);
+        }
+        if (attn_pad > 0) {
+            dfb_id_attn_obj.reserve_back(attn_pad);
+            dfb_id_attn_obj.push_back(attn_pad);
         }
         ++ht;
         ++mask_ht;
@@ -122,9 +138,10 @@ void kernel_main() {
         if (read_mask) {
             for (std::uint32_t j = 0; j < Wt; j += blk) {
                 // This is only executed every blk wts
-                dfb_id_attn_obj.reserve_back(blk);
+                std::uint32_t rem = (j + blk > Wt) ? (Wt - j) : blk;  // clamped final block
+                dfb_id_attn_obj.reserve_back(rem);
                 std::uint32_t mask_write_offset = 0;
-                for (std::uint32_t wb = 0; wb < blk; ++wb) {
+                for (std::uint32_t wb = 0; wb < rem; ++wb) {
                     noc.async_read(
                         addr_mask,
                         dfb_id_attn_obj,
@@ -135,7 +152,11 @@ void kernel_main() {
                     ++mask_id;
                 }
                 noc.async_read_barrier();
-                dfb_id_attn_obj.push_back(blk);
+                dfb_id_attn_obj.push_back(rem);
+            }
+            if (attn_pad > 0) {
+                dfb_id_attn_obj.reserve_back(attn_pad);
+                dfb_id_attn_obj.push_back(attn_pad);
             }
             read_mask = false;
         }

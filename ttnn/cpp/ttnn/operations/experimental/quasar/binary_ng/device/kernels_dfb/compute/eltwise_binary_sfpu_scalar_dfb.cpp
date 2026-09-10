@@ -79,17 +79,19 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
     // unpacker reads, so use copy_tile_to_dst_init_short (which reprograms the unpacker descriptor)
     // to point at each operand before its copy_tile loop. matches_metal_v2_slice requires lhs and rhs
     // to share a data format, so the data-format reconfig the WH/BH _with_dt path performs is not needed.
-    copy_tile_to_dst_init_short(dfb_post_lhs_id);
+    copy_init(dfb_post_lhs_id);
 #else
-    copy_tile_to_dst_init_short_with_dt(dfb_post_rhs_id, dfb_post_lhs_id);
+    reconfig_data_format_srca(dfb_post_rhs_id, dfb_post_lhs_id);
+    copy_init(dfb_post_lhs_id);
 #endif
     for (uint32_t i = 0; i < n; ++i) {
         copy_tile(dfb_post_lhs_id, i, i * 2);
     }
 #ifdef ARCH_QUASAR
-    copy_tile_to_dst_init_short(dfb_post_rhs_id);
+    copy_init(dfb_post_rhs_id);
 #else
-    copy_tile_to_dst_init_short_with_dt(dfb_post_lhs_id, dfb_post_rhs_id);
+    reconfig_data_format_srca(dfb_post_lhs_id, dfb_post_rhs_id);
+    copy_init(dfb_post_rhs_id);
 #endif
     for (uint32_t i = 0; i < n; ++i) {
         copy_tile(dfb_post_rhs_id, 0, i * 2 + 1);  // Always use scalar at index 0
@@ -143,9 +145,10 @@ void kernel_main() {
     constexpr uint32_t dfb_post_rhs_id = dfb_pre_rhs_id;
 #endif
 
-    unary_op_init_common(dfb_post_lhs_id, dfb_out_id);
+    compute_kernel_hw_startup(dfb_post_lhs_id, dfb_out_id);
+    copy_init(dfb_post_lhs_id);
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluConfig::zero())));
+    pack_relu_config(ReluConfig::zero());
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
@@ -174,5 +177,13 @@ void kernel_main() {
     }
 
     // Pop the single reused scalar tile from the RHS DFB.
+    // Only the zero-work path (num_tiles == 0) needs this: both chunk loops zero-trip, so nothing unpacks
+    // dfb_post_rhs between its wait_front(1) above and this pop_front(1) -> a bare pair that traps the Quasar
+    // unpacker. dummy_unpack() interposes an UNPACR_NOP so POP follows a real unpack. For num_tiles > 0 the op
+    // already unpacked the RHS, so skip it. (On WH/BH dummy_unpack is a debug-only SrcA flush with no ordering
+    // role; the guard also keeps it off the hot path there.)
+    if (num_tiles == 0) {
+        dummy_unpack(dfb_post_rhs_id);
+    }
     dfb_post_rhs.pop_front(1);
 }

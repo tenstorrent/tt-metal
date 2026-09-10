@@ -12,6 +12,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/mesh_ring_plan.hpp"
 
 namespace ttnn::operations::experimental::high_bw_all_gather {
 
@@ -263,7 +264,7 @@ HighBwAllGatherUnicastFactory::cached_mesh_workload_t HighBwAllGatherUnicastFact
     auto data_valid_sem =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
     log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
-    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevices);
+    tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
     log_debug(tt::LogOp, "All devices are ready, starting program execution");
 
     for (const auto& coord : tensor_coords.coords()) {
@@ -304,23 +305,45 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         !fabric_is_2d || operation_attributes.neighbor_unicast_eligible,
         "Fabric2D high_bw_all_gather neighbor unicast requires a host-proved direct physical line/ring");
 
+    const bool linearized_mesh_ring = operation_attributes.linearized_mesh_ring;
     const uint32_t axis = operation_attributes.cluster_axis;
-    const auto topology = operation_attributes.axis_topology[axis];
+    const auto topology =
+        linearized_mesh_ring ? tt::tt_fabric::Topology::Ring : operation_attributes.axis_topology[axis];
     const bool is_ring = tt::tt_fabric::is_ring_or_torus(topology);
 
     const uint32_t num_devices = operation_attributes.num_devices;
     TT_FATAL(
         !is_ring || num_devices > 2,
-        "high_bw_all_gather ring schedule requires more than two devices on cluster_axis {}; "
-        "a size-two axis has no distinct wrap edge",
+        "high_bw_all_gather ring schedule requires more than two participating devices; got {}, "
+        "linearized_mesh_ring={}, cluster_axis={}",
+        num_devices,
+        linearized_mesh_ring,
         axis);
-    const uint32_t device_idx = ::ttnn::ccl::get_linearized_index_from_physical_coord(
-        input_tensor, sender_device_coord, std::optional<uint32_t>{operation_attributes.cluster_axis});
-
-    auto fwd_coord =
-        ::ttnn::ccl::get_physical_neighbor_from_physical_coord(input_tensor, sender_device_coord, 1, topology, axis);
-    auto bwd_coord =
-        ::ttnn::ccl::get_physical_neighbor_from_physical_coord(input_tensor, sender_device_coord, -1, topology, axis);
+    const auto mesh_shape = mesh_device->shape();
+    TT_FATAL(
+        !linearized_mesh_ring ||
+            (operation_attributes.mesh_rows == mesh_shape[0] && operation_attributes.mesh_cols == mesh_shape[1]),
+        "cached full mesh-ring shape {}x{} does not match live mesh shape {}",
+        operation_attributes.mesh_rows,
+        operation_attributes.mesh_cols,
+        mesh_shape);
+    const ttnn::operations::ccl::common::MeshRingPlan mesh_ring_plan{
+        .cluster_axis = linearized_mesh_ring ? std::nullopt : std::optional<uint32_t>{axis},
+        .full_mesh = linearized_mesh_ring,
+        .orientation = operation_attributes.snake_ring_orientation,
+        .mesh_rows = linearized_mesh_ring ? operation_attributes.mesh_rows : mesh_shape[0],
+        .mesh_cols = linearized_mesh_ring ? operation_attributes.mesh_cols : mesh_shape[1],
+        .ring_size = num_devices,
+        .num_links = operation_attributes.num_links,
+        .topology = topology,
+        .fabric_config = operation_attributes.fabric_config,
+        .axis_topology = operation_attributes.axis_topology,
+        .route_plan_hash = operation_attributes.neighbor_route_plan_hash};
+    const auto mesh_ring_position =
+        ttnn::operations::ccl::common::get_mesh_ring_position(input_tensor, sender_device_coord, mesh_ring_plan);
+    const uint32_t device_idx = mesh_ring_position.transport_rank;
+    auto fwd_coord = mesh_ring_position.forward_coord;
+    auto bwd_coord = mesh_ring_position.backward_coord;
 
     // Stripes a direction sends from a device: ring -> N/2; line fwd -> d+1, bwd -> N-d; 0 at a dead endpoint.
     // Also queried for the downstream device to choose granular vs single data_valid signalling.
@@ -354,24 +377,33 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     // Num worker cores per direction per link. >1 requires an additional fabric mux core to own the fabric
     // connection and multiplex traffic.
     // This is a major perf knob, below heuristic was determined from extensive test sweeps.
-    const uint32_t num_links = operation_attributes.axis_num_links[axis];
+    const uint32_t num_links = operation_attributes.num_links;
     const bool has_runtime_controls =
         operation_attributes.input_batch_index.has_value() || operation_attributes.gathered_dim_size.has_value();
     const auto page_geometry = derive_page_geometry(input_tensor, output_tensor, operation_attributes);
-    // gathered_dim_size is deliberately cache-key-independent. Runtime controls always use the
-    // direct indexed schedule, and their page ranges are patched below from page_geometry.
+    // gathered_dim_size is deliberately cache-key-independent. Runtime controls reuse the compiled
+    // schedule and patch its selected page base and active ranges below from page_geometry.
     const uint32_t input_page_size = page_geometry.input_page_size;
     const uint32_t num_dram_banks = mesh_device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
     TT_FATAL(num_dram_banks > 0, "high_bw_all_gather requires at least one allocator-managed DRAM bank");
+    // Size the cached worker topology for the maximum output allocation. Runtime prefix lengths are excluded
+    // from the program hash, so every cache hit must reuse this worst-case tier.
     const uint64_t total_output_bytes =
         (uint64_t)output_tensor.buffer()->num_pages() * output_tensor.buffer()->aligned_page_size();
     const uint64_t per_link_bytes = total_output_bytes / std::max(1u, num_links);
     constexpr uint64_t bank_owned_min_link_bytes = 1500000ULL;
     constexpr uint64_t high_parallelism_min_link_bytes = 32000000ULL;
-    const auto can_use_fixed_shape_bank_owned = [&](uint32_t workers_per_direction) {
-        return !has_runtime_controls &&
-               can_use_output_bank_owned_schedule(
-                   input_tensor, output_tensor, page_geometry, num_links, workers_per_direction, num_dram_banks);
+    // Select the worker tier from the maximum per-slot geometry. Runtime prefixes retain the same fixed
+    // output-rank stride, and both their source and destination page sequences remain bank-stridable; only
+    // the number of active pages changes. This lets one cached program keep the bank-owned fast path while
+    // input_batch_index/gathered_dim_size patch its page base and active slice counts at dispatch time.
+    auto scheduling_geometry = page_geometry;
+    if (has_runtime_controls) {
+        scheduling_geometry.num_input_pages = page_geometry.output_chunks_per_stripe;
+    }
+    const auto can_use_bank_owned = [&](uint32_t workers_per_direction) {
+        return can_use_output_bank_owned_schedule(
+            input_tensor, output_tensor, scheduling_geometry, num_links, workers_per_direction, num_dram_banks);
     };
     uint32_t workers_per_dir = 1;
     if (input_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0) {
@@ -382,22 +414,21 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         // scatter fallback. Keep two workers for small messages, where additional core/mux setup is not amortized.
         const uint32_t bank_covering_workers =
             scheduler::workers_per_direction_to_cover_banks(num_links, num_dram_banks);
-        if (per_link_bytes >= bank_owned_min_link_bytes && can_use_fixed_shape_bank_owned(bank_covering_workers)) {
+        if (per_link_bytes >= bank_owned_min_link_bytes && can_use_bank_owned(bank_covering_workers)) {
             workers_per_dir = bank_covering_workers;
         }
 
         // Large messages benefit from additional in-flight DRAM reads after every bank is covered.
         const uint32_t high_parallelism_workers = std::max(8u, bank_covering_workers);
-        if (per_link_bytes >= high_parallelism_min_link_bytes &&
-            can_use_fixed_shape_bank_owned(high_parallelism_workers)) {
+        if (per_link_bytes >= high_parallelism_min_link_bytes && can_use_bank_owned(high_parallelism_workers)) {
             workers_per_dir = high_parallelism_workers;
         }
     } else if (input_tensor.device()->arch() == tt::ARCH::BLACKHOLE) {
         // Measured on Blackhole across every qualified page format and line/ring schedules. Four workers amortize
         // their mux/core overhead once a bank-owned message reaches roughly 1.5 MB/link. Eight workers do not
         // consistently pull ahead of four until roughly 32 MB/link.
-        const bool four_workers_bank_owned = can_use_fixed_shape_bank_owned(4);
-        const bool eight_workers_bank_owned = can_use_fixed_shape_bank_owned(8);
+        const bool four_workers_bank_owned = can_use_bank_owned(4);
+        const bool eight_workers_bank_owned = can_use_bank_owned(8);
 
         workers_per_dir = 2;
         if (per_link_bytes >= bank_owned_min_link_bytes && four_workers_bank_owned) {
@@ -422,7 +453,7 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         available_worker_cores = available_worker_cores.intersection(operation_attributes.sub_core_grid.value());
     }
     const uint32_t preferred_workers_per_dir = workers_per_dir;
-    const bool preferred_schedule_is_bank_owned = can_use_fixed_shape_bank_owned(preferred_workers_per_dir);
+    const bool preferred_schedule_is_bank_owned = can_use_bank_owned(preferred_workers_per_dir);
     const auto worker_count_fits = [&](uint32_t count) {
         return scheduler::worker_count_fits(
             count, num_links, static_cast<uint32_t>(available_worker_cores.num_cores()));
@@ -440,7 +471,7 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
             static_cast<uint32_t>(available_worker_cores.num_cores()),
             reduction_tiers);
     }
-    if (preferred_schedule_is_bank_owned && !can_use_fixed_shape_bank_owned(workers_per_dir)) {
+    if (preferred_schedule_is_bank_owned && !can_use_bank_owned(workers_per_dir)) {
         // Do not spend almost as many cores on the scatter fallback when a restricted grid falls just short of
         // covering every bank.
         workers_per_dir = std::min(2u, workers_per_dir);
@@ -603,13 +634,14 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     // when the input uses an ND-sharded/block-cyclic DRAM layout. Keeping the
     // destination pages bank-local lets the writer coalesce small pages into a
     // full Fabric packet instead of falling back to four-entry scatter writes.
-    // Runtime-sized cache prefixes use direct indexed scheduling. A bank-owned schedule bakes a
-    // max-shape stride into the binary, so keep it for the fixed-shape fast path only.
-    const bool output_bank_owned_schedule = can_use_fixed_shape_bank_owned(workers_per_dir);
+    // The output stride is already the maximum per-rank slot width. Runtime prefixes patch their active
+    // bank-owned page ranges below without changing that stride or the compiled worker topology.
+    const bool output_bank_owned_schedule = can_use_bank_owned(workers_per_dir);
     const uint32_t slice_step = output_bank_owned_schedule ? num_dram_banks : 1;
-    // Selected-slot/prefix gathers patch this at runtime. Every fixed-shape path, including direct
-    // scheduling, can bake its stripe width so the iterator avoids dynamic div/mod.
-    const uint32_t static_output_chunks_per_stripe = has_runtime_controls ? 0 : output_chunks_per_stripe;
+    // Runtime controls change the selected source base and active page count, but every rank retains its
+    // maximum output slot. Its stripe width is therefore structural and can stay baked into the iterator,
+    // avoiding dynamic divide/modulo on both fixed-shape and selected-prefix paths.
+    const uint32_t static_output_chunks_per_stripe = output_chunks_per_stripe;
 
     ////////////////////////////////////////////////////////////////
     // Circular Buffer and Kernel creation
@@ -642,6 +674,10 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         cb_page_size,            // cb entry size
         slice_step,              // one means contiguous slices; >1 owns one interleaved DRAM bank
         static_output_chunks_per_stripe,
+        linearized_mesh_ring,  // translate snake ring indices back to row-major tensor stripe indices
+        static_cast<uint32_t>(operation_attributes.snake_ring_orientation),
+        operation_attributes.mesh_rows,
+        operation_attributes.mesh_cols,
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
@@ -656,6 +692,10 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         packet_size,             // packet_size
         slice_step,              // one means scatter packets; >1 enables contiguous full packets
         static_output_chunks_per_stripe,
+        linearized_mesh_ring,  // translate snake ring indices back to row-major tensor stripe indices
+        static_cast<uint32_t>(operation_attributes.snake_ring_orientation),
+        operation_attributes.mesh_rows,
+        operation_attributes.mesh_cols,
     };
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
 
@@ -878,8 +918,10 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         .device_idx = device_idx,
         .forward_iterations = fwd_iters,
         .backward_iterations = bwd_iters,
+        .num_dram_banks = num_dram_banks,
         .is_ring = is_ring,
         .ring_even_split = ring_even_split,
+        .output_bank_owned_schedule = output_bank_owned_schedule,
     };
 
     return {std::move(program), std::move(shared_variables)};
@@ -921,36 +963,51 @@ void HighBwAllGatherUnicastFactory::override_runtime_arguments(
             continue;
         }
 
-        // The selected-slot/prefix path intentionally uses the direct (non-bank-owned) schedule.
         // Patch only scalar runtime arguments: no program rebuild, worker re-selection, allocation, or
-        // tensor view/slice is involved on a cache hit.
+        // tensor view/slice is involved on a cache hit. The compiled schedule may be bank-owned; in that
+        // case each worker keeps one output DRAM bank while the selected input base and active count vary.
         const uint32_t total_slices = shared_vars.num_links * shared_vars.workers_per_direction;
         const uint32_t data_valid_granularity =
             derive_data_valid_granularity(page_geometry, operation_attributes.packet_size, total_slices);
         const uint32_t input_pages_per_slice = page_geometry.num_input_pages / total_slices;
         const uint32_t remainder = page_geometry.num_input_pages % total_slices;
+        const uint32_t slice_step = shared_vars.output_bank_owned_schedule ? shared_vars.num_dram_banks : 1;
         for (uint32_t link = 0; link < shared_vars.num_links; ++link) {
             for (uint32_t dir = 0; dir < 2; ++dir) {
                 const bool is_forward = dir == 0;
-                // Runtime-controlled gathers are always direct scheduled, so their per-worker
-                // output slice is contiguous. Keep this distinct from the ring traversal step.
-                constexpr uint32_t slice_step = 1;
                 const uint32_t num_recv =
                     shared_vars.is_ring
                         ? shared_vars.num_devices / 2
                         : (is_forward ? shared_vars.device_idx : shared_vars.num_devices - 1 - shared_vars.device_idx);
                 for (uint32_t w = 0; w < shared_vars.workers_per_direction; ++w) {
                     const uint32_t slice_idx = link * shared_vars.workers_per_direction + w;
-                    const uint32_t input_page_start =
-                        slice_idx * input_pages_per_slice + std::min(slice_idx, remainder);
+                    uint32_t input_page_start = slice_idx * input_pages_per_slice + std::min(slice_idx, remainder);
+                    uint32_t worker_input_page_count = input_pages_per_slice + (slice_idx < remainder ? 1u : 0u);
+                    if (shared_vars.output_bank_owned_schedule) {
+                        const auto bank_owned_slice = scheduler::derive_bank_owned_slice(
+                            page_geometry.num_input_pages,
+                            shared_vars.num_links,
+                            shared_vars.workers_per_direction,
+                            shared_vars.num_dram_banks,
+                            link,
+                            w);
+                        input_page_start = bank_owned_slice.input_page_start;
+                        worker_input_page_count = bank_owned_slice.page_count;
+                    }
                     const uint32_t input_page_end =
-                        (slice_idx + 1) * input_pages_per_slice + std::min(slice_idx + 1, remainder);
+                        shared_vars.output_bank_owned_schedule
+                            ? input_page_start + worker_input_page_count * shared_vars.num_dram_banks
+                            : (slice_idx + 1) * input_pages_per_slice + std::min(slice_idx + 1, remainder);
                     const uint32_t local_output_start =
-                        (static_cast<uint64_t>(input_page_start) * page_geometry.num_output_chunks) /
-                        page_geometry.num_input_pages;
+                        shared_vars.output_bank_owned_schedule
+                            ? input_page_start
+                            : (static_cast<uint64_t>(input_page_start) * page_geometry.num_output_chunks) /
+                                  page_geometry.num_input_pages;
                     const uint32_t local_output_end =
-                        (static_cast<uint64_t>(input_page_end) * page_geometry.num_output_chunks) /
-                        page_geometry.num_input_pages;
+                        shared_vars.output_bank_owned_schedule
+                            ? local_output_start + worker_input_page_count
+                            : (static_cast<uint64_t>(input_page_end) * page_geometry.num_output_chunks) /
+                                  page_geometry.num_input_pages;
                     const uint32_t slice_count = local_output_end - local_output_start;
                     const uint32_t half = slice_count / 2;
                     const uint32_t final_start =

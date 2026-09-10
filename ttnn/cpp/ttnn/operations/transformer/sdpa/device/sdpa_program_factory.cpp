@@ -181,6 +181,77 @@ uint32_t attention_sink_tile_count(bool use_attention_sink, bool use_streaming_c
     return use_streaming_compute ? 1 : q_chunk_tiles;
 }
 
+// TensorAccessorArgs placeholder rule for optional tensors: nullptr when absent, so the accessor
+// chain stays intact and kernels compile against it but never read it.
+tt::tt_metal::Buffer* buffer_or_null(const std::optional<Tensor>& t) {
+    return t.has_value() ? t.value().buffer() : nullptr;
+}
+
+// Windowed (block-diagonal / 3D-neighborhood) CB allocation and runtime values, split out of create_descriptor (which
+// sits at clang-tidy's cognitive-complexity limit). The allocators are create_descriptor's CB lambdas.
+struct WindowedSetup {
+    tt::tt_metal::Buffer* cu_window_buffer = nullptr;
+    tt::tt_metal::Buffer* q_offset_buffer = nullptr;
+    uint32_t cu_window_seqlens_eles = 0;
+    // Global row index of Q row 0. Non-zero only when Q is a sequence-parallel shard of a longer
+    // sequence: Q and the output are addressed locally, while cu_window_seqlens and K/V stay global,
+    // so the writer's mask generator needs the shard's origin to find the right windows.
+    uint32_t q_token_offset = 0;
+};
+
+template <typename AllocateTileCb, typename AllocateCb>
+WindowedSetup setup_windowed_cbs(
+    const SDPAParams& attrs,
+    const SDPAInputs& tensors,
+    sdpa_cb::CBIds& cb_ids,
+    const AllocateTileCb& allocate_tile_cb,
+    const AllocateCb& allocate_cb) {
+    WindowedSetup w;
+    // When NOT windowed, fall back to a valid CB id (q_in): the writer's windowed block is gated by
+    // `if constexpr`, but in a non-template function the discarded branch is still compiled, so
+    // get_tile_size/get_dataformat on this id must be well-formed (an inactive id would
+    // constexpr-fault on unpack_tile_size[-1]).
+    cb_ids.cu_window_seqlens = cb_ids.q_in;
+    cb_ids.windowed_q_offset = cb_ids.q_in;
+    cb_ids.windowed_cu_reader = cb_ids.q_in;
+    cb_ids.windowed_k_range = cb_ids.q_in;
+    if (!attrs.is_windowed) {
+        return w;
+    }
+    // The reader->compute k-range ctrl CB carries each Q chunk's {k_lo, k_hi} and is needed in both
+    // windowed sub-modes (block-diagonal and 3D-neighborhood); double-buffered so the reader can run a
+    // Q chunk ahead (sparse_sdpa precedent).
+    constexpr uint32_t k_range_page_size = 16;
+    cb_ids.windowed_k_range = allocate_cb(k_range_page_size, 2, tt::DataFormat::Int32);
+    w.q_token_offset = attrs.windowed_q_token_offset;
+    // Reader scratch, always a REAL dedicated CB whenever windowed: it holds the reader's OWN cu_window
+    // copy (block-diagonal; sharing the writer's CB would put two producers on one CB) and/or stages the
+    // per-device Q offset (both sub-modes, incl. 3D-neighborhood which has no cu tensor). It must never
+    // alias the Q input CB -- a stray reserve_back there desyncs Q streaming. A UInt32 tile fits both the
+    // cu array (validated int32/uint32) and the 4-byte offset read.
+    cb_ids.windowed_cu_reader = allocate_tile_cb(1, tt::tile_size(tt::DataFormat::UInt32), tt::DataFormat::UInt32);
+    if (tensors.cu_window_seqlens.has_value()) {
+        // 1-tile CB holding cu_window_seqlens, loaded once by the writer. Block-diagonal sub-mode only.
+        const auto& cu = tensors.cu_window_seqlens.value();
+        tt::DataFormat cu_df = tt::tt_metal::datatype_to_dataformat_converter(cu.dtype());
+        cb_ids.cu_window_seqlens = allocate_tile_cb(1, tt::tile_size(cu_df), cu_df);
+        w.cu_window_buffer = cu.buffer();
+        w.cu_window_seqlens_eles = cu.logical_shape()[-1];
+    }
+    if (tensors.windowed_q_token_offset_tensor.has_value()) {
+        // Per-device form: the writer reads the value at runtime, so the scalar baked into the
+        // program is unused. Kept identical across devices, which is the point -- one program.
+        // The offset gets its own 1-tile CB: every other CB has a producer/consumer contract with
+        // another kernel that a writer-side reserve/push would break (borrowing the reader-produced
+        // chunk_start_idx_writer CB deadlocked).
+        const auto& off = tensors.windowed_q_token_offset_tensor.value();
+        tt::DataFormat off_df = tt::tt_metal::datatype_to_dataformat_converter(off.dtype());
+        cb_ids.windowed_q_offset = allocate_tile_cb(1, tt::tile_size(off_df), off_df);
+        w.q_offset_buffer = off.buffer();
+    }
+    return w;
+}
+
 }  // namespace
 
 ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
@@ -585,15 +656,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         .append_to(reader_compile_time_args);
     // Windowed K-range narrowing: the reader needs its own view of cu_window_seqlens and the per-device
     // Q-offset tensor to compute each Q chunk's [k_lo, k_hi) — same placeholder rule as the writer's pair.
-    TensorAccessorArgs(
-        (is_windowed && tensor_args.cu_window_seqlens.has_value()) ? tensor_args.cu_window_seqlens.value().buffer()
-                                                                   : nullptr)
-        .append_to(reader_compile_time_args);
-    TensorAccessorArgs(
-        tensor_args.windowed_q_token_offset_tensor.has_value()
-            ? tensor_args.windowed_q_token_offset_tensor.value().buffer()
-            : nullptr)
-        .append_to(reader_compile_time_args);
+    TensorAccessorArgs(buffer_or_null(tensor_args.cu_window_seqlens)).append_to(reader_compile_time_args);
+    TensorAccessorArgs(buffer_or_null(tensor_args.windowed_q_token_offset_tensor)).append_to(reader_compile_time_args);
 
     // Set up semaphore IDs for KV chain forwarding (non-causal only).
     // In the descriptor pattern, semaphore IDs are explicit sequential integers
@@ -655,17 +719,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // out accessor, then the cu_window accessor chained right after it (before the CB-id block) so the
     // accessor offset chain stays intact. nullptr when not windowed (consistent placeholder).
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
-    TensorAccessorArgs(
-        (is_windowed && tensor_args.cu_window_seqlens.has_value()) ? tensor_args.cu_window_seqlens.value().buffer()
-                                                                   : nullptr)
-        .append_to(writer_compile_time_args);
+    TensorAccessorArgs(buffer_or_null(tensor_args.cu_window_seqlens)).append_to(writer_compile_time_args);
     // Then the per-device Q-offset accessor. Same chain, same placeholder rule: nullptr when the caller
     // passed the offset as a scalar (or is not windowed), in which case the writer never reads it.
-    TensorAccessorArgs(
-        tensor_args.windowed_q_token_offset_tensor.has_value()
-            ? tensor_args.windowed_q_token_offset_tensor.value().buffer()
-            : nullptr)
-        .append_to(writer_compile_time_args);
+    TensorAccessorArgs(buffer_or_null(tensor_args.windowed_q_token_offset_tensor)).append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_compile_time_args = {
         // matmul args
@@ -800,21 +857,13 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         cb_ids.mask_in = allocate_tile_cb(mask_tiles, actual_mask_tile_size, actual_mask_df);
     }
 
-    // Windowed: 1-tile CB holding cu_window_seqlens, loaded once by the writer. When NOT windowed, fall
-    // back to a valid CB id (q_in): the writer's windowed block is gated by `if constexpr`, but in a
-    // non-template function the discarded branch is still compiled, so get_tile_size/get_dataformat on
-    // this id must be well-formed (an inactive id would constexpr-fault on unpack_tile_size[-1]).
-    tt::tt_metal::Buffer* cu_window_buffer = nullptr;
-    tt::tt_metal::Buffer* windowed_q_offset_buffer = nullptr;
-    uint32_t cu_window_seqlens_eles = 0;
-    // Global row index of Q row 0. Non-zero only when Q is a sequence-parallel shard of a longer
-    // sequence: Q and the output are addressed locally, while cu_window_seqlens and K/V stay global,
-    // so the writer's mask generator needs the shard's origin to find the right windows.
-    uint32_t windowed_q_token_offset = 0;
-    cb_ids.cu_window_seqlens = cb_ids.q_in;
-    cb_ids.windowed_q_offset = cb_ids.q_in;
-    cb_ids.windowed_cu_reader = cb_ids.q_in;
-    cb_ids.windowed_k_range = cb_ids.q_in;
+    // Windowed (block-diagonal) CBs and runtime values; see setup_windowed_cbs above.
+    const WindowedSetup windowed =
+        setup_windowed_cbs(operation_attributes, tensor_args, cb_ids, allocate_tile_cb, allocate_cb);
+    tt::tt_metal::Buffer* const cu_window_buffer = windowed.cu_window_buffer;
+    tt::tt_metal::Buffer* const windowed_q_offset_buffer = windowed.q_offset_buffer;
+    const uint32_t cu_window_seqlens_eles = windowed.cu_window_seqlens_eles;
+    const uint32_t windowed_q_token_offset = windowed.q_token_offset;
     // {T, H, W, kt, kh, kw} for 3D-neighborhood mode; all-zero otherwise. Passed as runtime args to the
     // reader (k-range) and writer (mask gen); the kernels select the 3D path when the leading dim (T) != 0.
     const std::array<uint32_t, 6> neighborhood =
@@ -830,44 +879,13 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // divide by it to find a query's group; 1 is exactly standard neighborhood attention.
     const std::array<uint32_t, 3> nbr_stride =
         operation_attributes.neighborhood_stride.value_or(std::array<uint32_t, 3>{1, 1, 1});
-    if (is_windowed) {
-        // The reader->compute k-range ctrl CB carries each Q chunk's {k_lo, k_hi} and is needed in both
-        // windowed sub-modes (block-diagonal and 3D-neighborhood); double-buffered so the reader can run a
-        // Q chunk ahead (sparse_sdpa precedent). The cu_window CBs are only for the block-diagonal path.
-        constexpr uint32_t k_range_page_size = 16;
-        cb_ids.windowed_k_range = allocate_cb(k_range_page_size, 2, tt::DataFormat::Int32);
-        windowed_q_token_offset = operation_attributes.windowed_q_token_offset;
-        // Reader scratch, always a REAL dedicated CB whenever windowed: it holds the cu_window tile
-        // (block-diagonal) and/or stages the per-device Q offset (both sub-modes, incl. 3D-neighborhood
-        // which has no cu tensor). It must never alias the Q input CB -- a stray reserve_back there
-        // desyncs Q streaming. UInt32 tile fits both the cu array and the 4-byte offset read.
-        cb_ids.windowed_cu_reader = allocate_tile_cb(1, tt::tile_size(tt::DataFormat::UInt32), tt::DataFormat::UInt32);
-        if (operation_attributes.neighborhood_gather) {
-            // Reader's row-major staging scratch: one full W-row page (W * D bf16 elems, sized for the wider
-            // of K's DHt and V's vDHt head dim), landed from DRAM before its box w-run is face-scattered
-            // into cb_k/cb_v. W-run coalescing => one page-read per (t,h) box-row instead of per token.
-            const uint32_t nb_W = operation_attributes.neighborhood_3d.value()[2];
-            const uint32_t gather_stage_bytes = nb_W * std::max(DHt, vDHt) * TILE_WIDTH * sizeof(uint16_t);
-            cb_ids.gather_stage = allocate_cb(gather_stage_bytes, 1, tt::DataFormat::Float16_b);
-        }
-        if (tensor_args.cu_window_seqlens.has_value()) {
-            const auto& cu = tensor_args.cu_window_seqlens.value();
-            tt::DataFormat cu_df = tt::tt_metal::datatype_to_dataformat_converter(cu.dtype());
-            cb_ids.cu_window_seqlens = allocate_tile_cb(1, tt::tile_size(cu_df), cu_df);
-            cu_window_buffer = cu.buffer();
-            cu_window_seqlens_eles = cu.logical_shape()[-1];
-        }
-        if (tensor_args.windowed_q_token_offset_tensor.has_value()) {
-            // Per-device form: the writer reads the value at runtime, so the scalar baked into the
-            // program is unused. Kept identical across devices, which is the point -- one program.
-            // The offset gets its own 1-tile CB: every other CB has a producer/consumer contract with
-            // another kernel that a writer-side reserve/push would break (borrowing the reader-produced
-            // chunk_start_idx_writer CB deadlocked).
-            const auto& off = tensor_args.windowed_q_token_offset_tensor.value();
-            tt::DataFormat off_df = tt::tt_metal::datatype_to_dataformat_converter(off.dtype());
-            cb_ids.windowed_q_offset = allocate_tile_cb(1, tt::tile_size(off_df), off_df);
-            windowed_q_offset_buffer = off.buffer();
-        }
+    if (is_windowed && operation_attributes.neighborhood_gather) {
+        // Reader's row-major staging scratch: one full W-row page (W * D bf16 elems, sized for the wider
+        // of K's DHt and V's vDHt head dim), landed from DRAM before its box w-run is face-scattered
+        // into cb_k/cb_v. W-run coalescing => one page-read per (t,h) box-row instead of per token.
+        const uint32_t nb_W = operation_attributes.neighborhood_3d.value()[2];
+        const uint32_t gather_stage_bytes = nb_W * std::max(DHt, vDHt) * TILE_WIDTH * sizeof(uint16_t);
+        cb_ids.gather_stage = allocate_cb(gather_stage_bytes, 1, tt::DataFormat::Float16_b);
     }
 
     cb_ids.identity_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);

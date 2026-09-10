@@ -16,6 +16,16 @@ on:
           - wormhole
           - blackhole
           - quasar
+      speed-of-light:
+        description: "Enable --speed-of-light for LLK performance tests"
+        required: false
+        default: true
+        type: boolean
+      upload-to-warehouse:
+        description: "Upload the run's Parquet to the perf warehouse over SFTP"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   checks: write
@@ -34,6 +44,12 @@ jobs:
     with:
       # Scheduled runs have no dispatch inputs, so retain the existing behavior.
       architecture: ${{ inputs.architecture || 'all' }}
+      # Nightly runs always use speed-of-light; manual runs use the checkbox.
+      speed-of-light: ${{ github.event_name == 'schedule' || inputs.speed-of-light }}
+      # Off for the scheduled nightly until the warehouse key is authorised. A
+      # scheduled run has no inputs, so the expression falls through to false.
+      # Turning it on for every night is this one expression -> true.
+      upload-to-warehouse: ${{ inputs.upload-to-warehouse || false }}
     secrets: inherit
 
   llk-perf-summary:

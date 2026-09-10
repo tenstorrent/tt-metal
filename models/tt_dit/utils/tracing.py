@@ -14,8 +14,7 @@ import torch
 from loguru import logger
 
 import ttnn
-
-from .tensor import from_torch
+from models.tt_dit.utils import tensor
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -32,27 +31,41 @@ class StateTensor:
     """
 
     def __init__(self) -> None:
-        self._value: ttnn.Tensor | None = None
+        self._data: ttnn.Tensor | None = None
+
+    @property
+    def data(self) -> ttnn.Tensor | None:
+        return self._data
 
     @property
     def value(self) -> ttnn.Tensor | None:
-        return self._value
+        return self._data
 
     def update(
         self,
         value: torch.Tensor | ttnn.Tensor,
         traced: bool,
         dtype: ttnn.DataType = ttnn.bfloat16,
-        mesh_axes: list[int | None] | None = None,
-        device: ttnn.MeshDevice | None = None,
+        mesh_axes: list[int] | None = None,
+        device: ttnn.Device | None = None,
     ) -> None:
+        """Update the state tensor with a new value.
+           If the tensor is used during tracing, the value is copied to (or used to initalize) the underlying tensor.
+
+        Args:
+            value: The new value to update the state tensor with.
+            traced: Whether the tensor is used during tracing.
+            dtype: The data type of the value.
+            mesh_axes: The mesh axes of the value.
+            device: The device of the value.
+        """
         if torch.is_tensor(value):
             assert device is not None, "device must be provided if using torch tensor"
-            value = from_torch(value, device=device, mesh_axes=mesh_axes, dtype=dtype)
-        if self._value is None or not traced:
-            self._value = value
+            value = tensor.from_torch(value, device=device, mesh_axes=mesh_axes, dtype=dtype)
+        if self._data is None or not traced:
+            self._data = value
         else:
-            ttnn.copy(value, self._value)
+            ttnn.copy(value, self._data)
 
 
 class Tracer:
@@ -442,7 +455,7 @@ def _tree_map(f: Callable[..., Any], x: Any, /, *xs: Any, path_label: str) -> An
             msg = f"types of '{path_label}' should be the same: {type(x)} != {type(y)}"
             raise TypeError(msg)
 
-    if isinstance(x, tuple):
+    if isinstance(x, tuple) and all(isinstance(y, tuple) for y in xs):
         for y in xs:
             if len(x) != len(y):
                 msg = f"tuple lengths of '{path_label}' should be the same: {len(x)} != {len(y)}"
@@ -452,7 +465,7 @@ def _tree_map(f: Callable[..., Any], x: Any, /, *xs: Any, path_label: str) -> An
             _tree_map(f, *elts, path_label=f"{path_label}[{i}]") for i, elts in enumerate(zip(x, *xs, strict=True))
         )
 
-    if isinstance(x, list):
+    if isinstance(x, list) and all(isinstance(y, list) for y in xs):
         for y in xs:
             if len(x) != len(y):
                 msg = f"list lengths of '{path_label}' should be the same: {len(x)} != {len(y)}"
@@ -460,7 +473,7 @@ def _tree_map(f: Callable[..., Any], x: Any, /, *xs: Any, path_label: str) -> An
 
         return [_tree_map(f, *elts, path_label=f"{path_label}[{i}]") for i, elts in enumerate(zip(x, *xs, strict=True))]
 
-    if isinstance(x, dict):
+    if isinstance(x, dict) and all(isinstance(y, dict) for y in xs):
         for y in xs:
             if x.keys() != y.keys():
                 msg = f"dict keys of '{path_label}' should be the same: {x.keys()} != {y.keys()}"

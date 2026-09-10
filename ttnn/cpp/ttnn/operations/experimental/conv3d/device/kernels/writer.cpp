@@ -382,5 +382,13 @@ void kernel_main() {
             }
         }
     }
+    // Flush writes before retiring, not just atomics. The weight multicast above is issued
+    // linked and is deliberately NOT barriered against the flag mcast (same NoC + static VC
+    // keeps them ordered), which is conv2d's pattern -- but conv2d also ends its kernel with a
+    // write barrier, and that half was missing here. The only other write barrier is inside the
+    // `is_reducer` branch, so a McastSender that is a *worker* retired with multicast write-acks
+    // still outstanding: noc_nonposted_writes_num_issued > ..._acked, a linked command still
+    // holding its VC, and the next op's NoC traffic wedging against the leftover state.
+    noc.async_write_barrier();
     noc.async_atomic_barrier();
 }

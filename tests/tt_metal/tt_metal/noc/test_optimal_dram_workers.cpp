@@ -14,8 +14,8 @@
 
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"

@@ -84,7 +84,7 @@ inline void _llk_unpack_reduce_mop_config_(
  */
 template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION>
 inline void _llk_unpack_reduce_init_(
-    const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1, const TensorShape& tensor_shape, const std::uint32_t num_tiles = NUM_TILES)
+    const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1, const TensorShape tensor_shape, const std::uint32_t num_tiles = NUM_TILES)
 {
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, (REDUCE_DIMENSION == ReduceDim::REDUCE_ROW));

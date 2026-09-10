@@ -2,10 +2,10 @@
 # Install mold linker from upstream binary release for faster linking
 set -euo pipefail
 
-MOLD_VERSION="${MOLD_VERSION:-2.40.4}"
-# SHA256 for mold-2.40.4-x86_64-linux.tar.gz
+MOLD_VERSION="${MOLD_VERSION:-2.42.0}"
+# SHA256 for mold-2.42.0-x86_64-linux.tar.gz
 # Verified from GitHub release
-MOLD_SHA256="${MOLD_SHA256:-4c999e19ffa31afa5aa429c679b665d5e2ca5a6b6832ad4b79668e8dcf3d8ec1}"
+MOLD_SHA256="${MOLD_SHA256:-f5ed2f6e31d1ada4f07fe766fe0de7a73104d1c5cdc59086fcecc16a43720b6d}"
 
 INSTALL_DIR="${INSTALL_DIR:-/usr/local}"
 DOWNLOAD_URL="https://github.com/rui314/mold/releases/download/v${MOLD_VERSION}/mold-${MOLD_VERSION}-x86_64-linux.tar.gz"
