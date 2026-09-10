@@ -86,8 +86,8 @@ Opening that path in an editor shows you HTML source, not the report — it need
 | level | zones/layer | what you get |
 |---|---|---|
 | **1** coarse | ~3 | `attn` vs `mlp` per layer. Start here — it answers "which block". |
-| **2** medium | ~20 | every block that costs real time: sdpa, the CCLs, `cache_read`, `indexer`, and the MoE stages (`dispatch` / `experts_mm` / `combine` / `moe_reduce`). The default. |
-| **3** fine | ~35 | + norms, residuals, rope, head splits, and sub-splits (`deshard` vs `slice`). |
+| **2** medium | ~20 | every block that costs real time: sdpa, the CCLs (incl. the MSA cache-read gathers `ag_kv` / `ag_index_k`), `indexer`, and the MoE stages (`dispatch` / `experts_mm` / `combine` / `moe_reduce`). The default. |
+| **3** fine | ~35 | + norms, residuals, rope, head splits, and sub-splits (weighted-sum vs reduce-scatter). |
 
 Suppressing a zone never loses time — its ops are charged to the nearest enclosing zone, so every
 level accounts for 100% of the chunk, just in fewer buckets. Levels also buy headroom against Tracy's
@@ -292,31 +292,30 @@ pkill -f tools/tracy/serve_wasm.py     # tracy leaves a WASM server on :8080
 Sanity references for "does my capture look right", **not** CI targets — they are per-zone kernel
 times from a deliberately partial 6-layer build, so they do not belong in `models/model_targets.yaml`
 (which holds CI-enforced end-to-end model metrics). Nothing validates these; they are here to catch a
-broken capture. A healthy `LEVEL=2 LAYERS=6 CACHE=25600` run, real weights, bf4 experts, measured three
-times across two days:
+broken capture. A healthy `LEVEL=2 LAYERS=6 CACHE=25600` run, real weights, bf4 experts, `1d` fabric,
+after the `high_bw_all_gather` cache read (#55668, measured 2026-09-07):
 
 | | expected |
 |---|---|
-| dense layer | 4.33 - 4.35 ms |
-| sparse layer | 9.9 - 10.3 ms |
-| `attn/ring_joint_sdpa` | 1.952 ms |
-| `attn/sparse_sdpa` | 1.717 ms |
-| firmware multiplier | ~1.35x |
-| 60-layer projection | 860 - 875 ms |
+| dense layer | 4.0 - 4.1 ms |
+| sparse layer | 7.6 - 7.8 ms |
+| `attn/ring_joint_sdpa` | 1.954 ms |
+| `attn/sparse_sdpa` | 0.96 ms |
+| `attn/ag_kv` + `attn/ag_index_k` | 0.39 ms (0.29 ms on `1d_ring`) |
+| 60-layer chunk wall-clock (perf harness, 5k @ 25k) | 840 - 850 ms |
 
-Compute zones land within ~1%. The collectives (`combine`, `dispatch`, `moe_reduce`) move by tens of
+Captures from before #55668 (whole-cache de-shard on every sparse layer, bf16 K/V copies) read
+sparse 9.9 - 10.3 ms and `attn/sparse_sdpa` 1.717 ms. Compute zones land within ~1%. The collectives (`combine`, `dispatch`, `moe_reduce`) move by tens of
 percent between runs — that variance is real cross-chip skew, not a broken capture.
 
-## The `cache_read/deshard` hypothesis
+## The MSA cache read (`ag_kv` + `ag_index_k`)
 
 The packed KV cache is one tensor per K/V/index_k of shape
 `[num_users*num_layers, 1, seq_local, head_dim]` ([attention/kv_cache.py](../../tt/attention/kv_cache.py)).
-The MSA cache-read path converts the **whole** tensor from NdShard to DRAM-interleaved on **every**
-sparse layer — the round-robin bank mapping is only intact for the full tensor, so it cannot slice one
-layer's slot first ([attention/prefill.py](../../tt/attention/prefill.py)). At 61440 tokens that is
-~63 MiB per tensor, read+write, ×3 tensors, ×57 layers ≈ 20+ GiB of DRAM traffic per chunk — plausibly
-more than every expert weight read combined.
-
-`profile_prefill.py` logs the expected byte count at startup, and the report separates
-`attn/cache_read/deshard` from `attn/cache_read/slice`, so the measured cost and GB/s land right next
-to the prediction.
+The MSA cache read ([attention/msa.py](../../tt/attention/msa.py) `msa_sp_attention_cache_read`) gathers the
+one selected slot straight out of the ND-sharded cache with `ttnn.experimental.high_bw_all_gather`
+(`input_batch_index`), moving only the written prefix (`gathered_dim_size`) into a persistent worst-case
+buffer, so the whole cache-read cost is the two gather zones. The earlier path converted the **whole** cache
+from NdShard to DRAM-interleaved on every sparse layer (`cache_read/{deshard,slice}` zones); that path and
+its zones were removed in #55668, and captures from before it show the zone under `attn/cache_read`.
+Numbers for both are in PR #55668.
