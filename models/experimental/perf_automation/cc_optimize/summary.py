@@ -1475,24 +1475,34 @@ def _stage_items_observed(stage, profile) -> int:
     section: read what the model did and join on a number, never on a name.
     """
     try:
+        from agent.opclass import MATMUL_OP_CLASS
         from agent.roofline import parse_matmul_shape
     except Exception:  # noqa: BLE001
         try:
+            from models.experimental.perf_automation.agent.opclass import MATMUL_OP_CLASS
             from models.experimental.perf_automation.agent.roofline import parse_matmul_shape
         except Exception:  # noqa: BLE001
             return 0
     _rows: dict = {}
+    _parseable: dict = {}
     for _b in ((profile or {}).get("stage_buckets") or {}).get(str(stage)) or []:
+        _in_matmuls = str((_b or {}).get("id") or "") == MATMUL_OP_CLASS
         for _o in (_b or {}).get("top_ops") or []:
             # LOGICAL ROWS FIRST. `shape` carries the PADDED dim -- what the kernel computed -- so a
             # decode step retiring one row per user reads 32 for a batch of 8, and the stage would
             # look like it retires 32 items and stop being a per-user rate. `rows` is the count the
             # model asked for. Falling back to the fingerprint keeps profiles written before it.
-            # MATMULS ONLY, AND THE SHAPE PARSE IS THAT TEST -- it is the one thing that says this op
-            # is a matmul rather than a LayerNorm or a datamove. `rows` is recorded for EVERY op, so
-            # preferring it before this check counted every elementwise and movement op in the stage,
-            # and those outnumber the matmuls: their row counts could carry the mode away from the
-            # arithmetic the ceiling is about.
+            # MATMULS ONLY, AND THE BUCKET'S CLASS IS THAT TEST. The shape parse was doing this job
+            # and cannot: a LayerNorm, an SDPA and a BinaryNg all publish the same MxK @ KxN
+            # fingerprint and parse just as cleanly, so every one of them voted. They outnumber the
+            # matmuls, and where a stage folds its batch into the matmul while its elementwise ops
+            # stay per-request the two populations disagree and the majority carries the mode away
+            # from the arithmetic the ceiling is about -- measured on voxtral_mini_3b_2507 prefill,
+            # where 25 non-matmul votes at 416 outvoted 15 matmuls at 3328 (416 x batch 8) and
+            # under-counted the compute roof 8x. Encode and decode were unaffected only because
+            # their two populations happen to agree; that is luck, not a property.
+            # The parse still runs: it supplies the padded-M fallback below and drops ops with no
+            # usable dims.
             _parsed = parse_matmul_shape(str((_o or {}).get("shape") or ""))
             if not _parsed:
                 continue
@@ -1503,7 +1513,14 @@ def _stage_items_observed(stage, profile) -> int:
             except (TypeError, ValueError):  # a field this did not write: the fingerprint still holds
                 _m = _parsed[0]
             if _m > 0:
-                _rows[_m] = _rows.get(_m, 0) + max(1, int((_o or {}).get("count") or 1))
+                _w = max(1, int((_o or {}).get("count") or 1))
+                _parseable[_m] = _parseable.get(_m, 0) + _w
+                if _in_matmuls:
+                    _rows[_m] = _rows.get(_m, 0) + _w
+    # A profile written before buckets carried their class states no matmul bucket at all. Falling
+    # back to the older all-parseable-ops vote keeps those profiles priced exactly as they were,
+    # rather than dropping them to "states nothing" and pricing the stage at one item.
+    _rows = _rows or _parseable
     if not _rows:
         return 0
     # THE ROW COUNT MOST OF THE STAGE'S MATMULS RUN AT, not the biggest one. Ranking by FLOPs picks
