@@ -332,10 +332,12 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.requantize">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">requantize</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">in_scale</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span> <span class="pre">or</span> <span class="pre">Number</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">in_zero_point</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span> <span class="pre">or</span> <span class="pre">Number</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">out_scale</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span> <span class="pre">or</span> <span class="pre">Number</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">out_zero_point</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span> <span class="pre">or</span> <span class="pre">Number</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">axis</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Number</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.requantize" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">requantize</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">in_scale</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span> <span class="pre">or</span> <span class="pre">Number</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">in_zero_point</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span> <span class="pre">or</span> <span class="pre">Number</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">out_scale</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span> <span class="pre">or</span> <span class="pre">Number</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">out_zero_point</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span> <span class="pre">or</span> <span class="pre">Number</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">axis</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dtype</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.DataType</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.requantize" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Re-quantize Operation</p>
+<p>Re-expresses an already quantized tensor on a different scale and zero point:
+<code class="docutils literal notranslate"><span class="pre">q'</span> <span class="pre">=</span> <span class="pre">(input_tensor</span> <span class="pre">-</span> <span class="pre">in_zero_point)</span> <span class="pre">*</span> <span class="pre">in_scale</span> <span class="pre">/</span> <span class="pre">out_scale</span> <span class="pre">+</span> <span class="pre">out_zero_point</span></code>.
+Equivalent to dequantizing and then quantizing with the output scale and zero point.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
@@ -352,8 +354,10 @@
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><span class="tt-api-param-name"><strong>axis</strong> (<em>Number</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">the axis of the quantization dimension of the input tensor.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>axis</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">the axis of the quantization dimension of the input tensor. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">data type for the output tensor. Defaults to <cite>None</cite>.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">memory configuration for the operation. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">preallocated output tensor. Defaults to <cite>None</cite>.</span></p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
@@ -390,27 +394,42 @@
 <li><p><strong>Per-channel to Per-channel</strong>: Requantization with per-channel parameters along the same axis.</p></li>
 </ul>
 <p><strong>Execution Paths:</strong></p>
-<p>When all four parameters (in_scale, in_zero_point, out_scale, out_zero_point) are provided as tensors and an axis is specified:
-- The operation uses a path with explicit shape expansion and broadcasting.
-- Per-tensor parameters (scalar tensors) are broadcast to match the input tensor shape.
-- Per-channel parameters (1D tensors) are reshaped and expanded along the specified axis.
-- The implementation performs the mathematical requantization in floating point and typecasts to the output dtype: q’ = q * (s_in/s_out) + (z_out - z_in * s_in/s_out).</p>
-<p>When all four parameters are provided as scalar values (float/int32):
-- Uses a path with a specialized kernel operation.
-- Computes the requantization directly in a single fused operation.</p>
-<p>When there is a mix of scalar and tensor parameters:
-- Falls back to a composite operation path.
-- Decomposes requantization into separate dequantize and quantize operations.</p>
+<p>When all four parameters (in_scale, in_zero_point, out_scale, out_zero_point) are provided as tensors and an axis is specified:</p>
+<ul class="simple">
+<li><p>The operation uses a path with explicit shape expansion and broadcasting.</p></li>
+<li><p>Per-tensor parameters (scalar tensors) are broadcast to match the input tensor shape.</p></li>
+<li><p>Per-channel parameters (1D tensors) are reshaped and expanded along the specified axis.</p></li>
+<li><p>The implementation performs the mathematical requantization in floating point and typecasts to the output dtype: q’ = q * (s_in/s_out) + (z_out - z_in * s_in/s_out).</p></li>
+</ul>
+<p>When all four parameters are provided as scalar values (float/int32):</p>
+<ul class="simple">
+<li><p>Uses a path with a specialized kernel operation.</p></li>
+<li><p>Computes the requantization directly in a single fused operation.</p></li>
+</ul>
+<p>When there is a mix of scalar and tensor parameters:</p>
+<ul class="simple">
+<li><p>Falls back to a composite operation path.</p></li>
+<li><p>Decomposes requantization into separate dequantize and quantize operations.</p></li>
+</ul>
 </div>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
-<div class="doctest highlight-default notranslate">
-<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([[</span><span class="mf">0.1</span><span class="p">,</span> <span class="mf">0.2</span><span class="p">],</span> <span class="p">[</span><span class="mf">0.3</span><span class="p">,</span> <span class="mf">0.4</span><span class="p">]],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">in_scale</span> <span class="o">=</span> <span class="mf">0.001173</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">in_zero_point</span> <span class="o">=</span> <span class="o">-</span><span class="mi">213</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">out_scale</span> <span class="o">=</span> <span class="mf">0.002727</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">out_zero_point</span> <span class="o">=</span> <span class="o">-</span><span class="mi">73</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">requantize</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">in_scale</span><span class="p">,</span> <span class="n">in_zero_point</span><span class="p">,</span> <span class="n">out_scale</span><span class="p">,</span> <span class="n">out_zero_point</span><span class="p">)</span>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Create a quantized tensor to requantize</span>
+<span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span>
+    <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([[</span><span class="o">-</span><span class="mi">127</span><span class="p">,</span> <span class="o">-</span><span class="mi">42</span><span class="p">],</span> <span class="p">[</span><span class="mi">43</span><span class="p">,</span> <span class="mi">127</span><span class="p">]],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int32</span><span class="p">),</span>
+    <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">int32</span><span class="p">,</span>
+    <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span>
+    <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="c1"># Requantize onto a different scale and zero point, [-127, 127] -&gt; [-36, 73]</span>
+<span class="n">in_scale</span> <span class="o">=</span> <span class="mf">0.001173</span>
+<span class="n">in_zero_point</span> <span class="o">=</span> <span class="o">-</span><span class="mi">213</span>
+<span class="n">out_scale</span> <span class="o">=</span> <span class="mf">0.002727</span>
+<span class="n">out_zero_point</span> <span class="o">=</span> <span class="o">-</span><span class="mi">73</span>
+<span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">requantize</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">in_scale</span><span class="p">,</span> <span class="n">in_zero_point</span><span class="p">,</span> <span class="n">out_scale</span><span class="p">,</span> <span class="n">out_zero_point</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Requantize result: </span><span class="si">{</span><span class="n">output</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>

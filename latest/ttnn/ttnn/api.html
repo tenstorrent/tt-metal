@@ -1924,15 +1924,15 @@ use <code class="docutils literal notranslate"><span class="pre">align_shape_to_
 <div class="tt-api-card-list docutils container">
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.dequantize.html#ttnn.dequantize" title="ttnn.dequantize"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.dequantize</span></code></a></p>
-<p class="tt-api-card-desc">De-quantize Operation</p>
+<p class="tt-api-card-desc">Converts a quantized integer tensor back to floating point: <code class="docutils literal notranslate"><span class="pre">t</span> <span class="pre">=</span> <span class="pre">(input_tensor</span> <span class="pre">-</span> <span class="pre">zero_point)</span> <span class="pre">*</span> <span class="pre">scale</span></code>, per tensor by default or per channel along <code class="xref py py-attr docutils literal notranslate"><span class="pre">axis</span></code>.</p>
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.quantize.html#ttnn.quantize" title="ttnn.quantize"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.quantize</span></code></a></p>
-<p class="tt-api-card-desc">Quantize Operation</p>
+<p class="tt-api-card-desc">Quantizes a floating-point tensor into an integer tensor: <code class="docutils literal notranslate"><span class="pre">q</span> <span class="pre">=</span> <span class="pre">input_tensor</span> <span class="pre">/</span> <span class="pre">scale</span> <span class="pre">+</span> <span class="pre">zero_point</span></code>, per tensor by default or per channel along <code class="xref py py-attr docutils literal notranslate"><span class="pre">axis</span></code>.</p>
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.requantize.html#ttnn.requantize" title="ttnn.requantize"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.requantize</span></code></a></p>
-<p class="tt-api-card-desc">Re-quantize Operation</p>
+<p class="tt-api-card-desc">Re-expresses an already quantized tensor on a different scale and zero point: <code class="docutils literal notranslate"><span class="pre">q'</span> <span class="pre">=</span> <span class="pre">(input_tensor</span> <span class="pre">-</span> <span class="pre">in_zero_point)</span> <span class="pre">*</span> <span class="pre">in_scale</span> <span class="pre">/</span> <span class="pre">out_scale</span> <span class="pre">+</span> <span class="pre">out_zero_point</span></code>.</p>
 </div>
 </div>
 </section>
