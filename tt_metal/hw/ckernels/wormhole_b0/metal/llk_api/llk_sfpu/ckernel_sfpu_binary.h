@@ -131,6 +131,36 @@ inline void calculate_sfpu_binary(
                 result = sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] * in0;
             }
             v_endif;
+        } else if constexpr (BINOP == BinaryOp::NEXTAFTER || BINOP == BinaryOp::NEXTAFTER_BF16) {
+            // Step in0 one representable value toward in1. Consecutive floats of one sign are
+            // consecutive integers when the bit pattern is read as an integer, so the step is taken
+            // there: that gives one ULP at in0's own magnitude, which a fixed epsilon cannot.
+            // bfloat16 keeps its mantissa in the top 16 bits of the fp32 dest register, so one of
+            // its ULPs is 0x10000 there.
+            constexpr int kUlpStep = (BINOP == BinaryOp::NEXTAFTER_BF16) ? 0x10000 : 1;
+            // Kept flat, with every value declared up front: the sfpi predication pass does not
+            // survive a v_if nested inside a v_else here.
+            sfpi::vInt bits = sfpi::as<sfpi::vInt>(in0);
+            sfpi::vFloat tiny = sfpi::as<sfpi::vFloat>(sfpi::vInt(kUlpStep));
+            // A step of zero leaves in0 alone, which is what in0 == in1 wants.
+            sfpi::vInt step = 0;
+            // The bit pattern grows away from zero for either sign, so the direction of the step
+            // depends on in0's sign as well as on which side in1 lies.
+            v_if(in0 < in1 && in0 >= 0.0f) { step = kUlpStep; }
+            v_endif;
+            v_if(in0 < in1 && in0 < 0.0f) { step = -kUlpStep; }
+            v_endif;
+            v_if(in0 > in1 && in0 > 0.0f) { step = -kUlpStep; }
+            v_endif;
+            v_if(in0 > in1 && in0 <= 0.0f) { step = kUlpStep; }
+            v_endif;
+            result = sfpi::as<sfpi::vFloat>(bits + step);
+            // Both zeros share the magnitude 0 but not the sign bit, so neither reaches the correct
+            // neighbour by stepping its own pattern. Set them from the target's sign instead.
+            v_if(in0 == 0.0f && in1 > 0.0f) { result = tiny; }
+            v_endif;
+            v_if(in0 == 0.0f && in1 < 0.0f) { result = -tiny; }
+            v_endif;
         }
 
         if constexpr (

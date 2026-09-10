@@ -8,20 +8,83 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_ulp
+
+# nextafter moves its first operand by a single ULP, so a PCC comparison against the golden
+# stays at ~1.0 even when the op returns the input untouched. Every assertion here is exact.
+
+# The SFPU flushes subnormals to zero, so results in the subnormal range are out of scope.
+SMALLEST_NORMAL = 1.1754943508222875e-38
 
 
-@pytest.mark.parametrize("shape", [(1, 1, 32, 32)])
-def test_nextafter(device, shape):
+def _all_bfloat16_values():
+    """Every bfloat16 bit pattern, as float32. Pattern p widens to the float32 pattern p << 16."""
+    patterns = torch.arange(1 << 16, dtype=torch.int64) << 16
+    signed = torch.where(patterns >= 2**31, patterns - 2**32, patterns).to(torch.int32)
+    return signed.view(torch.float32)
+
+
+def _in_scope(a, expected):
+    """Drop elements the SFPU cannot represent: subnormal (flushed to zero) and non-finite."""
+    mask = (a.abs().float() >= SMALLEST_NORMAL) & (expected.abs().float() >= SMALLEST_NORMAL)
+    return mask & torch.isfinite(a) & torch.isfinite(expected)
+
+
+@pytest.mark.parametrize("shape", [(1, 1, 32, 32), (1, 1, 320, 384)])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+def test_nextafter(device, shape, dtype):
     torch.manual_seed(0)
+    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
 
-    torch_input_tensor_a = torch.rand(shape, dtype=torch.bfloat16)
-    torch_input_tensor_b = torch.rand(shape, dtype=torch.bfloat16)
+    torch_input_tensor_a = torch.rand(shape, dtype=torch_dtype) * 200 - 100
+    torch_input_tensor_b = torch.rand(shape, dtype=torch_dtype) * 300 - 150
 
     torch_output_tensor = torch.nextafter(torch_input_tensor_a, torch_input_tensor_b)
 
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.nextafter(input_tensor_a, input_tensor_b)
-    output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.nextafter(input_tensor_a, input_tensor_b))
+
+    in_scope = _in_scope(torch_input_tensor_a, torch_output_tensor)
+    assert_with_ulp(
+        expected_result=torch_output_tensor[in_scope], actual_result=output_tensor[in_scope], ulp_threshold=0
+    )
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+def test_nextafter_direction_and_equality(device, dtype):
+    """Stepping up, stepping down, and the a == b case that must return b unchanged."""
+    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+
+    values = torch.tensor([1.0, -1.0, 3.5, -3.5, 1e30, -1e30, 1e-30, -1e-30], dtype=torch_dtype)
+    a = values.repeat(3).reshape(1, 1, 1, -1).expand(1, 1, 32, 24).contiguous()
+    b = torch.cat([values + 10.0, values - 10.0, values]).reshape(1, 1, 1, -1).expand(1, 1, 32, 24).contiguous()
+
+    expected = torch.nextafter(a, b)
+
+    ttnn_a = ttnn.from_torch(a, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_b = ttnn.from_torch(b, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn.nextafter(ttnn_a, ttnn_b))
+
+    in_scope = _in_scope(a, expected)
+    assert_with_ulp(expected_result=expected[in_scope], actual_result=actual[in_scope], ulp_threshold=0)
+
+
+@pytest.mark.parametrize("toward", ["up", "down"])
+def test_nextafter_exhaustive_bfloat16(device, toward):
+    """Walk every normal bfloat16 value one ULP up and one ULP down."""
+    limit = torch.finfo(torch.bfloat16).max
+    a = _all_bfloat16_values().reshape(1, 1, 256, 256).to(torch.bfloat16)
+    b = torch.full_like(a, limit if toward == "up" else -limit)
+    expected = torch.nextafter(a, b)
+
+    ttnn_a = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_b = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn.nextafter(ttnn_a, ttnn_b))
+
+    # Of the 65536 patterns, 256 are inf/NaN and 256 are zero or subnormal; one more drops out
+    # at the end of the ladder, where the last normal steps to infinity.
+    in_scope = _in_scope(a, expected)
+    assert in_scope.sum() == 65023, f"expected 65023 normal patterns in scope, got {in_scope.sum()}"
+
+    assert_with_ulp(expected_result=expected[in_scope], actual_result=actual[in_scope], ulp_threshold=0)
