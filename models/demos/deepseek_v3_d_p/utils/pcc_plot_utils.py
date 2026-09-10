@@ -11,10 +11,11 @@ Provides:
 - Summary file writer for CI integration
 """
 
-import os
 from pathlib import Path
 
 from loguru import logger
+
+from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import is_primary_rank, summary_dir
 
 
 def _build_run_name(result: dict) -> str:
@@ -260,7 +261,10 @@ def generate_pcc_mermaid(result: dict, threshold: float = 0.99) -> str:
             legend += f" &nbsp; 🟣 PE Threshold ({pe_threshold})"
         sections.append(legend + "\n")
 
-    output_by_label = {_short_label(l): (pcc, threshold) for l, pcc in output_pcc.items()}
+    # Per-label bars for the output stages, so a model whose norm/lm_head/logits bar differs from its
+    # per-layer bar renders each against the one it was actually gated on. Falls back to the scalar.
+    output_thresholds = result.get("output_thresholds", {})
+    output_by_label = {_short_label(l): (pcc, output_thresholds.get(l, threshold)) for l, pcc in output_pcc.items()}
     kv_by_idx = {i: (pcc, kv_threshold) for i, pcc in enumerate(kvpe_kv_pcc.values())}
     pe_by_idx = {i: (pcc, pe_threshold) for i, pcc in enumerate(kvpe_pe_pcc.values())}
 
@@ -335,7 +339,7 @@ def _y_range(values: list, threshold: float) -> str:
     return f"{max(0, min_val):.2f} --> 1.00"
 
 
-def write_pcc_summary(result: dict, threshold: float = 0.99, output_dir: str = None) -> Path:
+def write_pcc_summary(result: dict, threshold: float = 0.99, output_dir: str = None) -> Path | None:
     """
     Write PCC summary markdown (with Mermaid charts) to a per-run file.
 
@@ -347,20 +351,19 @@ def write_pcc_summary(result: dict, threshold: float = 0.99, output_dir: str = N
     Args:
         result: Dict with 'pcc' tuple and metadata.
         threshold: PCC threshold for pass/fail.
-        output_dir: Directory for summary files.
-                    Defaults to PCC_SUMMARY_DIR env var or /tmp/pcc_summaries.
+        output_dir: Directory for summary files. Defaults to PREFILL_SUMMARIES/pcc.
 
     Returns:
-        Path to the written file.
+        Path to the written file, or None on a non-primary MPI rank (which writes nothing).
     """
+    # The default dir is the shared /ci volume in CI, and this test runs under `mpirun --pernode`;
+    # only rank 0 writes so ranks don't race-truncate the same file (matches emit_summary).
+    if not is_primary_rank():
+        return None
     if output_dir is None:
-        # Per-user default dir: a shared hardcoded /tmp/pcc_summaries is owned by
-        # whoever created it first and raises PermissionError for everyone else.
-        import getpass
-
-        output_dir = os.getenv("PCC_SUMMARY_DIR", f"/tmp/pcc_summaries_{getpass.getuser()}")
-
-    out = Path(output_dir).resolve()
+        out = summary_dir("pcc")  # unified summaries root: PREFILL_SUMMARIES/pcc
+    else:
+        out = Path(output_dir).resolve()
     out.mkdir(parents=True, exist_ok=True)
 
     run_name = _build_run_name(result)

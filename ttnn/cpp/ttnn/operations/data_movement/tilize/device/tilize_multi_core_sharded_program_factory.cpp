@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tilize_multi_core_sharded_program_factory.hpp"
+#include "ttnn/operations/data_movement/tilize/device/tilize_device_operation.hpp"
+
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -16,19 +19,22 @@ using namespace tt::tt_metal;
 namespace ttnn::prim {
 
 ProgramDescriptor TilizeMultiCoreShardedProgramFactory::create_descriptor(
-    const TilizeParams& /*operation_attributes*/, const TilizeInputs& tensor_args, Tensor& tensor_return_value) {
+    const TilizeParams& operation_attributes, const TilizeInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input = tensor_args.input_tensor;
     const Tensor& output = tensor_return_value;
+    const uint32_t tile_width = operation_attributes.tile.get_width();
+    const uint32_t tile_hw = operation_attributes.tile.get_tile_hw();
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(input.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
+    uint32_t input_single_tile_size = operation_attributes.tile.get_tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    uint32_t output_single_tile_size = operation_attributes.tile.get_tile_size(output_cb_data_format);
     bool fp32_llk_acc = input.dtype() == DataType::FLOAT32 || input.dtype() == DataType::FP8_E4M3 ||
-                        output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
+                        output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B ||
+                        input.dtype() == DataType::UINT8;
 
     auto shard_spec = input.shard_spec().value();
-    uint32_t num_tiles_per_shard = shard_spec.shape[0] * shard_spec.shape[1] / TILE_HW;
-    uint32_t num_tiles_per_row = shard_spec.shape[1] / TILE_WIDTH;
+    uint32_t num_tiles_per_shard = shard_spec.shape[0] * shard_spec.shape[1] / tile_hw;
+    uint32_t num_tiles_per_row = shard_spec.shape[1] / tile_width;
     const CoreRangeSet& all_cores = shard_spec.grid;
 
     const bool output_is_interleaved = output.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED;
@@ -38,6 +44,8 @@ ProgramDescriptor TilizeMultiCoreShardedProgramFactory::create_descriptor(
 
     Buffer* src_buffer = input.buffer();
     Buffer* dst_buffer = output.buffer();
+
+    const TileDescriptor tile_descriptor(operation_attributes.tile);
 
     ProgramDescriptor desc;
 
@@ -50,6 +58,7 @@ ProgramDescriptor TilizeMultiCoreShardedProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(src0_cb_index),
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
+            .tile = tile_descriptor,
         });
         cb_src0.buffer = src_buffer;
         desc.cbs.push_back(std::move(cb_src0));
@@ -68,6 +77,7 @@ ProgramDescriptor TilizeMultiCoreShardedProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(output_cb_index),
             .data_format = output_cb_data_format,
             .page_size = output_single_tile_size,
+            .tile = tile_descriptor,
         });
         if (!output_is_interleaved) {
             cb_output.buffer = dst_buffer;
@@ -131,7 +141,8 @@ ProgramDescriptor TilizeMultiCoreShardedProgramFactory::create_descriptor(
     // Compute: standard tilize kernel (same for both output paths).
     {
         std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-        if (fp32_llk_acc) {
+        // UInt8 uses 32-bit dest as integer (not float): do not enable FP32 unpack-to-dest mode.
+        if (fp32_llk_acc && input.dtype() != DataType::UINT8) {
             unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
         }
 
@@ -149,6 +160,27 @@ ProgramDescriptor TilizeMultiCoreShardedProgramFactory::create_descriptor(
     }
 
     return desc;
+}
+
+void TilizeMultiCoreShardedProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const TilizeParams& /*operation_attributes*/,
+    const TilizeInputs& tensor_args,
+    Tensor& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Sharded input rides on a buffer-backed CB, so the reader carries no address. The writer only
+    // does when the output is interleaved; otherwise it is CB-backed too.
+    const bool output_is_interleaved =
+        tensor_return_value.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED;
+    if (output_is_interleaved) {
+        patch_tilize_kernel_slot0(program, 1, tensor_return_value.buffer()->address());
+    }
+
+    // CBs are matched positionally against create_descriptor's push order.
+    ProgramDescriptor cb_addr_only;
+    cb_addr_only.cbs.push_back(CBDescriptor{.buffer = tensor_args.input_tensor.buffer()});
+    cb_addr_only.cbs.push_back(CBDescriptor{.buffer = output_is_interleaved ? nullptr : tensor_return_value.buffer()});
+    apply_descriptor_runtime_args(program, cb_addr_only);  // override-rebuild-ok: cb-addr-only
 }
 
 }  // namespace ttnn::prim

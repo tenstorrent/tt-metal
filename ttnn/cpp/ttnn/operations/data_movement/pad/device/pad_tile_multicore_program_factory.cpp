@@ -3,17 +3,30 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "pad_tile_multicore_program_factory.hpp"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 using namespace tt::constants;
 
 namespace ttnn::prim {
 using ttnn::operations::data_movement::get_num_pages;
+
+namespace {
+// Names are prefixed per factory: all seven pad factories land in one unity-build
+// translation unit, where every anonymous namespace is merged into a single scope.
+const KernelSpecName TILE_MC_READER{"reader"};
+const KernelSpecName TILE_MC_WRITER{"writer"};
+const DFBSpecName TILE_MC_IN0{"in0"};
+const DFBSpecName TILE_MC_PAD{"pad"};
+const TensorParamName TILE_MC_INPUT{"input"};
+const TensorParamName TILE_MC_OUTPUT{"output"};
+}  // namespace
 
 static inline int advance_tensor_index(std::vector<uint32_t>& idx, const ttnn::Shape& dims, uint32_t ndims) {
     // increment least-significant dim first
@@ -28,9 +41,11 @@ static inline int advance_tensor_index(std::vector<uint32_t>& idx, const ttnn::S
     return 0;  // overflowed most-significant dim
 }
 
-ProgramDescriptor PadTileMulticoreProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_program_artifacts(
     const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& output) {
     const auto& a = tensor_args.input;
+    const auto& input_mesh_tensor = a.mesh_tensor();
+    const auto& output_mesh_tensor = output.mesh_tensor();
     const auto& pad_value = operation_attributes.pad_value;
     const auto& output_padded_shape = operation_attributes.output_padded_shape;
 
@@ -48,48 +63,28 @@ ProgramDescriptor PadTileMulticoreProgramFactory::create_descriptor(
 
     auto cores_in_order = corerange_to_cores(all_cores, num_cores, true);
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t page_size = output.buffer()->page_size();
     uint32_t multi_buffering_size = 2;
-    uint32_t input_cb_index = tt::CBIndex::c_0;
-    uint32_t output_cb_index = tt::CBIndex::c_1;
-    uint32_t pad_val_cb_index = tt::CBIndex::c_2;
 
-    ProgramDescriptor desc;
+    DataflowBufferSpec in0_dfb{
+        .unique_id = TILE_MC_IN0,
+        .entry_size = page_size,
+        .num_entries = multi_buffering_size,
+        .data_format_metadata = dfb_data_format,
+    };
 
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = page_size * multi_buffering_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(input_cb_index),
-            .data_format = cb_data_format,
-            .page_size = page_size,
-        }}},
-    });
+    // Pad buffer: the writer fills one entry with the pad value and NoC-writes it out for every
+    // page outside the input region. Nothing drains it, so the writer is its only toucher and
+    // binds both endpoints (self-loop).
+    DataflowBufferSpec pad_dfb{
+        .unique_id = TILE_MC_PAD,
+        .entry_size = page_size,
+        .num_entries = 1,
+        .data_format_metadata = dfb_data_format,
+    };
 
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = page_size * multi_buffering_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(output_cb_index),
-            .data_format = cb_data_format,
-            .page_size = page_size,
-        }}},
-    });
-
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = page_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(pad_val_cb_index),
-            .data_format = cb_data_format,
-            .page_size = page_size,
-        }}},
-    });
-
-    Buffer* input_buffer = a.buffer();
-    Buffer* output_buffer = output.buffer();
-    TT_ASSERT(output_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t packed_pad_value;
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
@@ -113,39 +108,82 @@ ProgramDescriptor PadTileMulticoreProgramFactory::create_descriptor(
                 "FLOAT32");
     }
 
-    std::vector<uint32_t> reader_ct_args = {
-        (std::uint32_t)input_cb_index,
-        (std::uint32_t)page_size,
-        (std::uint32_t)output_padded_shape.rank(),
+    // The four num_dims-long RTA blocks below (input/output page shapes and per-dim ids) are
+    // reached by index in `for (d < num_dims)` loops, so they travel as runtime varargs rather
+    // than named arguments.
+    const uint32_t num_dims = static_cast<uint32_t>(output_padded_shape.rank());
+    const uint32_t num_varargs = 4 * num_dims;
+
+    KernelSpec reader{
+        .unique_id = TILE_MC_READER,
+        .source = "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/reader_pad_tiled.cpp",
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = TILE_MC_IN0,
+                    .accessor_name = "in0",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{
+                    .tensor_parameter_name = TILE_MC_INPUT,
+                    .accessor_name = "src",
+                },
+            },
+        .compile_time_args =
+            {
+                {"page_size", page_size},
+                {"num_dims", num_dims},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"num_pages_to_write", "start_offset"}},
+        .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
+        .advanced_options = {.num_runtime_varargs = num_varargs},
     };
-    TensorAccessorArgs(*input_buffer).append_to(reader_ct_args);
 
-    std::vector<uint32_t> writer_ct_args = {
-        (std::uint32_t)input_cb_index,
-        (std::uint32_t)output_cb_index,
-        (std::uint32_t)pad_val_cb_index,
-        (std::uint32_t)page_size,
-        (std::uint32_t)output_padded_shape.rank(),
-        (std::uint32_t)packed_pad_value,
-        (std::uint32_t)output.element_size(),
+    KernelSpec writer{
+        .unique_id = TILE_MC_WRITER,
+        .source = "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/writer_pad_tiled.cpp",
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = TILE_MC_IN0,
+                    .accessor_name = "in0",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = TILE_MC_PAD,
+                    .accessor_name = "pad",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = TILE_MC_PAD,
+                    .accessor_name = "pad",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{
+                    .tensor_parameter_name = TILE_MC_OUTPUT,
+                    .accessor_name = "dst",
+                },
+            },
+        .compile_time_args =
+            {
+                {"page_size", page_size},
+                {"num_dims", num_dims},
+                {"pad_value", packed_pad_value},
+                {"element_size", static_cast<uint32_t>(output.element_size())},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"num_pages_to_write", "start_offset"}},
+        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
+        .advanced_options = {.num_runtime_varargs = num_varargs},
     };
-    TensorAccessorArgs(*output_buffer).append_to(writer_ct_args);
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/reader_pad_tiled.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_ct_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/writer_pad_tiled.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = std::move(writer_ct_args);
-    writer_desc.config = WriterConfigDescriptor{};
+    KernelRunArgs reader_run_args{.kernel = TILE_MC_READER};
+    KernelRunArgs writer_run_args{.kernel = TILE_MC_WRITER};
 
     /*
     As an example, lets say we want to pad a [2, 1, 32, 32] tensor to [2, 3, 64, 64]
@@ -211,49 +249,33 @@ ProgramDescriptor PadTileMulticoreProgramFactory::create_descriptor(
             num_pages_per_core = 0;  // no-op
         }
 
-        // Slot 0 is a raw buffer base address (no offset).  Use Buffer* on active
-        // cores so the framework patches the address on cache hits.  Idle cores
-        // (num_pages_per_core == 0) pass 0u to skip BufferBinding registration —
-        // the kernel short-circuits and never dereferences the address.
-        KernelDescriptor::RTArgList reader_runtime_args;
-        KernelDescriptor::RTArgList writer_runtime_args;
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values,
+            core,
+            {{"num_pages_to_write", num_pages_per_core}, {"start_offset", input_page_offset}});
+        AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values,
+            core,
+            {{"num_pages_to_write", num_pages_per_core}, {"start_offset", output_page_offset}});
 
-        if (num_pages_per_core != 0) {
-            reader_runtime_args.push_back(input_buffer);
-            writer_runtime_args.push_back(output_buffer);
-        } else {
-            reader_runtime_args.push_back(0u);
-            writer_runtime_args.push_back(0u);
-        }
-
-        reader_runtime_args.push_back(num_pages_per_core);
-        reader_runtime_args.push_back(input_page_offset);
-
-        writer_runtime_args.push_back(num_pages_per_core);
-        writer_runtime_args.push_back(output_page_offset);
-
-        // Every core should get the same input and output tile shapes.
+        // Every core should get the same input and output tile shapes, and then where the core
+        // should start writing in the output tensor.
+        AdvancedKernelRunArgs::Varargs varargs;
+        varargs.reserve(num_varargs);
         for (auto v : input_page_shape) {
-            reader_runtime_args.push_back(v);
-            writer_runtime_args.push_back(v);
+            varargs.push_back(v);
         }
         for (auto v : output_page_shape) {
-            reader_runtime_args.push_back(v);
-            writer_runtime_args.push_back(v);
+            varargs.push_back(v);
         }
-
-        // As well as where the core should start writing in the output tensor.
         for (uint32_t v : input_id_per_dim) {
-            reader_runtime_args.push_back(v);
-            writer_runtime_args.push_back(v);
+            varargs.push_back(v);
         }
         for (uint32_t v : output_id_per_dim) {
-            reader_runtime_args.push_back(v);
-            writer_runtime_args.push_back(v);
+            varargs.push_back(v);
         }
-
-        reader_desc.emplace_runtime_args(core, reader_runtime_args);
-        writer_desc.emplace_runtime_args(core, writer_runtime_args);
+        reader_run_args.advanced_options.runtime_varargs[core] = varargs;
+        writer_run_args.advanced_options.runtime_varargs[core] = std::move(varargs);
 
         // We now need to increment the input and output id_per_dims by the number of pages this core is processing
         // Similarly to in the kernel, we only increment the input id_per_dim if we are within the input region
@@ -275,10 +297,36 @@ ProgramDescriptor PadTileMulticoreProgramFactory::create_descriptor(
         // The input and output id_per_dim should now be set correctly for the next core
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
+    ProgramSpec spec{
+        .name = "pad_tile_multicore",
+        .kernels = {std::move(reader), std::move(writer)},
+        .dataflow_buffers = {std::move(in0_dfb), std::move(pad_dfb)},
+        .tensor_parameters =
+            {
+                TensorParameter{.unique_id = TILE_MC_INPUT, .spec = input_mesh_tensor.tensor_spec()},
+                TensorParameter{.unique_id = TILE_MC_OUTPUT, .spec = output_mesh_tensor.tensor_spec()},
+            },
+        .work_units =
+            {
+                WorkUnitSpec{
+                    .name = "main",
+                    .kernels = {TILE_MC_READER, TILE_MC_WRITER},
+                    .target_nodes = all_cores,
+                },
+            },
+    };
 
-    return desc;
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)};
+    run_args.tensor_args = {
+        {TILE_MC_INPUT, TensorArgument{input_mesh_tensor}},
+        {TILE_MC_OUTPUT, TensorArgument{output_mesh_tensor}},
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
 }
 
 }  // namespace ttnn::prim

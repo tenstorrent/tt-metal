@@ -15,6 +15,7 @@
 
 using namespace tt;
 using namespace tt::tt_metal;
+using ttnn::Tensor;
 using namespace constants;
 
 void run_softmax(distributed::MeshDevice* device, const ttnn::Shape& shape) {

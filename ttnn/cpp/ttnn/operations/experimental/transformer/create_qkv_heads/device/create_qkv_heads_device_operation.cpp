@@ -101,13 +101,13 @@ CreateQKVHeadsResultSpec CreateQKVHeadsDeviceOperation::compute_output_specs(
     auto mem_config_v = tt::tt_metal::MemoryConfig(
         args.output_mem_config.memory_layout(), args.output_mem_config.buffer_type(), v_spec);
 
-    TensorSpec out_tensor_q(
+    tt::tt_metal::TensorSpec out_tensor_q(
         q_shape,
         tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), mem_config_q));
-    TensorSpec out_tensor_k(
+    tt::tt_metal::TensorSpec out_tensor_k(
         k_shape,
         tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), mem_config_k));
-    TensorSpec out_tensor_v(
+    tt::tt_metal::TensorSpec out_tensor_v(
         v_shape,
         tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), mem_config_v));
     return {out_tensor_q, out_tensor_k, out_tensor_v};
@@ -125,22 +125,6 @@ CreateQKVHeadsResult CreateQKVHeadsDeviceOperation::create_output_tensors(
         create_device_tensor(std::get<1>(specs), tensor_args.input.device()),
         create_device_tensor(std::get<2>(specs), tensor_args.input.device()),
     };
-}
-
-ttsl::hash::hash_t CreateQKVHeadsDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-
-    operation::Hash hash = operation::hash_operation<CreateQKVHeadsDeviceOperation>(
-        args.num_q_heads,
-        args.num_kv_heads,
-        args.head_dim,
-        args.transpose_k_heads,
-        args.output_mem_config,
-        input_tensor,
-        input_tensor.device()->compute_with_storage_grid_size());
-
-    return hash;
 }
 
 }  // namespace ttnn::experimental::prim

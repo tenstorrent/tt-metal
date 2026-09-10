@@ -160,7 +160,8 @@ struct TrainingConfig {
     uint32_t seed = 5489U;
     uint32_t model_save_interval = 0;
     uint32_t batch_size = 64;
-    uint32_t num_epochs = 1;
+    // 0 = no epoch cap; max_steps ends the run.
+    uint32_t num_epochs = 0;
     uint32_t max_steps = 5000;
     uint32_t gradient_accumulation_steps = 1;
     std::string model_config;
@@ -177,7 +178,9 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.seed = training_config["seed"].as<uint32_t>();
     config.model_save_interval = training_config["model_save_interval"].as<uint32_t>(config.model_save_interval);
     config.batch_size = training_config["batch_size"].as<uint32_t>();
-    config.num_epochs = training_config["num_epochs"].as<uint32_t>();
+    if (auto num_epochs_node = training_config["num_epochs"]) {
+        config.num_epochs = num_epochs_node.as<uint32_t>();
+    }
     config.max_steps = training_config["max_steps"].as<uint32_t>();
     config.gradient_accumulation_steps =
         training_config["gradient_accumulation_steps"].as<uint32_t>(config.gradient_accumulation_steps);
@@ -531,6 +534,12 @@ int main(int argc, char **argv) {
     auto dataset = create_dataset(text_or_tokens, sequence_length, model_config);
 
     fmt::print("Dataset size: {}\n", dataset.get_size());
+    if (dataset.get_size() == 0) {
+        throw std::runtime_error(fmt::format(
+            "Dataset is empty: {} holds fewer than sequence_length + 1 = {} tokens",
+            training_config.data_path,
+            sequence_length + 1));
+    }
 
     struct CachedHostData {
         std::vector<uint32_t> data;
@@ -778,14 +787,19 @@ int main(int argc, char **argv) {
     };
 
     const uint32_t num_epochs = training_config.num_epochs;
-    auto gradient_accumulator_helper = GradientAccumulator(training_config.gradient_accumulation_steps);
+    const uint32_t accumulation_steps = training_config.gradient_accumulation_steps;
+    auto gradient_accumulator_helper = GradientAccumulator(accumulation_steps);
 
     bool is_everything_compiled = false;
-    auto memory_snapshot = [&is_everything_compiled, track_memory](const std::string &name) {
-        if (track_memory && !is_everything_compiled) {
-            ttml::utils::MemoryUsageTracker::snapshot(name);
-        }
-    };
+    uint32_t accumulation_micro_step = 0;
+    auto memory_snapshot =
+        [&is_everything_compiled, track_memory, accumulation_steps, &accumulation_micro_step](const std::string &name) {
+            if (track_memory && !is_everything_compiled) {
+                const std::string snapshot_name =
+                    accumulation_steps > 1 ? fmt::format("{}_micro_{}", name, accumulation_micro_step) : name;
+                ttml::utils::MemoryUsageTracker::snapshot(snapshot_name);
+            }
+        };
 
     const bool needs_to_call_loss = pipeline_needs_to_call_loss(multihost_config);
     // All TP-enabled LM heads (TP-only and PP+TP) emit vocab-sharded logits, so the loss
@@ -793,7 +807,7 @@ int main(int argc, char **argv) {
     const bool use_vocab_parallel_loss = device_config.enable_tp;
 
     // Training loop
-    for (uint32_t epoch = 0; epoch < num_epochs; ++epoch) {
+    for (uint32_t epoch = 0; num_epochs == 0 || epoch < num_epochs; ++epoch) {
         for (auto [features, target, masks] : train_dataloader) {
             ttml::autograd::ctx().get_profiler().read_results(device, "dataloader_step_done");
 
@@ -803,6 +817,7 @@ int main(int argc, char **argv) {
             auto start_timer = std::chrono::high_resolution_clock::now();
             if (gradient_accumulator_helper.should_zero_grad()) {
                 optimizer->zero_grad();
+                accumulation_micro_step = 0;
             }
             auto output = run_model(model, features, masks);
             float loss_float = 0.0F;
@@ -831,6 +846,7 @@ int main(int argc, char **argv) {
 
             auto samples = features->get_value().logical_shape()[0];
             gradient_accumulator_helper.update(loss_float, samples);
+            ++accumulation_micro_step;
 
             if (gradient_accumulator_helper.should_step()) {
                 // synchronize gradients for multi-device case, no-op if single device

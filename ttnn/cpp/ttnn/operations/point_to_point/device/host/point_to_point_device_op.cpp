@@ -154,7 +154,7 @@ PointToPointOp::spec_return_value_t PointToPointOp::compute_output_specs(
     // its fabric query (get_tt_fabric_channel_buffer_size_bytes) requires an initialized
     // fabric context, which a purely local transfer must not depend on.
     if (operation_attributes.send_coord == operation_attributes.receive_coord) {
-        const TensorSpec placeholder_intermediate_spec(Shape{1, 1}, final_output_spec.tensor_layout());
+        const tt::tt_metal::TensorSpec placeholder_intermediate_spec(Shape{1, 1}, final_output_spec.tensor_layout());
         return {placeholder_intermediate_spec, final_output_spec};
     }
 
@@ -172,7 +172,7 @@ PointToPointOp::spec_return_value_t PointToPointOp::compute_output_specs(
 
     Shape intermediate_shape{total_packets, packet_page_dim};
 
-    TensorSpec intermediate_spec(intermediate_shape, final_output_spec.tensor_layout());
+    tt::tt_metal::TensorSpec intermediate_spec(intermediate_shape, final_output_spec.tensor_layout());
 
     return {intermediate_spec, final_output_spec};
 }
@@ -227,7 +227,7 @@ tt::tt_metal::WorkloadDescriptor PointToPointOp::SendReceive::create_workload_de
     auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     auto semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
     log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready in p2p op");
-    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
+    tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, {});
     log_debug(tt::LogOp, "Synchronize devices in p2p op done");
 
     const auto& send_coord = operation_attributes.send_coord;

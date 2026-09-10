@@ -4,6 +4,8 @@
 
 **`tt-run` (auto allocation mode):** For application launches, you normally do **not** call this binary directly. Use **`tt-run --mesh-graph-descriptor <mgd> --hosts …`** (real cluster) or **`--mock-cluster-rank-binding …`** (mock); `tt-run` runs `generate_rank_bindings` as **Phase 1** (or reuses a cache under `generated/ttrun/<cache_id>/`). See [ttnn/ttnn/distributed/README_ttrun.md](../../ttnn/ttnn/distributed/README_ttrun.md).
 
+**Enumerating all solutions:** to generate rank bindings for **every** valid topology solution (not just the first), see [README_generate_rank_bindings_all_solutions.md](README_generate_rank_bindings_all_solutions.md).
+
 ---
 
 ## Prerequisites
@@ -117,7 +119,7 @@ These matter for discovery, PGD lookup, and optional phase-2 mapping:
 | `TT_METAL_HOME` | Base for repo-relative PGD search paths; defaults to `.` if unset. |
 | `TT_METAL_MOCK_CLUSTER_DESC_PATH` | If set per rank, rank 0 can gather paths and emit **`phase2_mock_mapping.yaml`**; rankfile behavior may use a single local hostname for placement in mock scenarios. |
 
-Implementation: `find_and_load_pgd` in `tools/scaleout/src/generate_rank_bindings.cpp`.
+Implementation: `find_and_load_physical_grouping_descriptor` in `tt_metal/fabric/fabric_host_utils.cpp` (shared with ControlPlane / TopologyMapper).
 
 ---
 

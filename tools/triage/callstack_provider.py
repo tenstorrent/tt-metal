@@ -39,7 +39,7 @@ from ttexalens.context import Context
 from ttexalens.gdb.gdb_server import GdbServer, ServerSocket
 from ttexalens.gdb.gdb_client import get_gdb_callstack
 from ttexalens.elf import ElfFile
-from ttexalens.hardware.risc_debug import CallstackEntry
+from ttexalens.elf import CallstackEntry
 from ttexalens.tt_exalens_lib import top_callstack, callstack
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 from utils import WARN
@@ -79,7 +79,7 @@ def get_callstack(
     full_callstack: bool,
     rewind_pc_for_ebreak: bool,
 ) -> KernelCallstackWithMessage:
-    context = location._device._context
+    context = location.device._context
     elfs: list[ElfFile] = [elfs_cache[dispatcher_core_data.firmware_path]]
     offsets: list[int | None] = [None]
     if dispatcher_core_data.kernel_path is not None:
@@ -87,7 +87,7 @@ def get_callstack(
         offsets.append(dispatcher_core_data.kernel_offset)
     try:
         if not full_callstack:
-            pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
+            pc = location.device.get_block(location).get_risc_debug(risc_name).get_pc()
             if rewind_pc_for_ebreak:
                 pc = pc - 4
             try:
@@ -113,7 +113,7 @@ def get_callstack(
                 error_message = str(e) + " - defaulting to top callstack"
                 try:
                     # If full callstack failed, we default to top callstack
-                    pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
+                    pc = location.device.get_block(location).get_risc_debug(risc_name).get_pc()
                     if rewind_pc_for_ebreak:
                         pc = pc - 4
                     cs = top_callstack(pc, elfs, offsets, context)
@@ -230,7 +230,7 @@ class CallstackProvider:
         gdb = use_gdb_callstack if use_gdb_callstack is not None else self.gdb_callstack
 
         cache_key = (
-            location._device.id,
+            location.device.id,
             location.to_str("noc0"),
             risc_name,
             full,
@@ -341,7 +341,7 @@ class CallstackProvider:
                 if len(callstack_with_message.callstack) > 0 and callstack_with_message.callstack[0].pc is None:
                     try:
                         callstack_with_message.callstack[0].pc = (
-                            location._device.get_block(location).get_risc_debug(risc_name).get_pc()
+                            location.device.get_block(location).get_risc_debug(risc_name).get_pc()
                         )
                     except TimeoutDeviceRegisterError:
                         raise

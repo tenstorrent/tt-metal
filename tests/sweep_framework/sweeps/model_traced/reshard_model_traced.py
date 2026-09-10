@@ -14,6 +14,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
     get_mesh_composer,
+    reconcile_golden_to_actual,
     dispatch_axis_for_grid,
     shard_grid_bounds,
 )
@@ -307,5 +308,14 @@ def run(
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None, mesh_composer=mesh_composer)
     e2e_perf = stop_measuring_time(start_time)
 
-    # Comparison
+    # Comparison. Reconcile the golden to the gathered actual first, as every comparable
+    # model_traced module does -- reshard was the only one going straight to check_with_pcc,
+    # so it had nothing to absorb a mesh-stitch shape difference. When the inputs came through
+    # replicate_with_topology (all chips holding identical data), the gather can return the
+    # fully concatenated tensor, and check_with_pcc then rejects it on shape before any
+    # comparison happens: run 30791207587 vector 5e8847da9503 failed with
+    # expected [8, 1, 384, 768] vs actual [256, 1, 384, 768] -- exactly 32x on dim 0, the mesh
+    # size. reconcile_golden_to_actual's per-dim ratio tile is written for precisely that case.
+    if is_mesh_device:
+        torch_output = reconcile_golden_to_actual(torch_output, output_tensor, input_a_tensor_placement)
     return [check_with_pcc(torch_output, output_tensor, 0.999), e2e_perf]

@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -16,16 +19,18 @@ void kernel_main() {
     uint32_t ublock_size_bytes = get_tile_size(cb_id_out0);
     uint32_t ublock_size_tiles = 1;
 
+    Noc noc;
+    CircularBuffer cb_out0(cb_id_out0);
+    UnicastEndpoint dst;
+
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
-        uint64_t dst_noc_addr = get_noc_addr(dst_noc_x, dst_noc_y, dst_addr);
+        cb_out0.wait_front(ublock_size_tiles);
+        noc.async_write(
+            cb_out0, dst, ublock_size_bytes, {}, {.noc_x = dst_noc_x, .noc_y = dst_noc_y, .addr = dst_addr});
 
-        cb_wait_front(cb_id_out0, ublock_size_tiles);
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
-        noc_async_write(l1_read_addr, dst_noc_addr, ublock_size_bytes);
+        noc.async_write_barrier();
 
-        noc_async_write_barrier();
-
-        cb_pop_front(cb_id_out0, ublock_size_tiles);
+        cb_out0.pop_front(ublock_size_tiles);
         dst_addr += ublock_size_bytes;
     }
 }

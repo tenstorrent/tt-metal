@@ -5,10 +5,13 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
+#include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
 
 #include <span>
+#include <string>
 #include <ttnn/distributed/distributed_tensor.hpp>
 
 #include "autograd/autocast_tensor.hpp"
@@ -26,8 +29,11 @@
 #include "ops/linear_op.hpp"
 #include "ops/losses.hpp"
 #include "ops/matmul_op.hpp"
-#include "ops/mla_qkv_assemble_op.hpp"
 #include "ops/mla_q_rope.hpp"
+#include "ops/mla_qkv_assemble_op.hpp"
+#include "ops/moe_ffn_swiglu_op.hpp"
+#include "ops/moe_group_op.hpp"
+#include "ops/moe_ungroup_op.hpp"
 #include "ops/multi_head_utils.hpp"
 #include "ops/polynorm_op.hpp"
 #include "ops/rand_op.hpp"
@@ -62,6 +68,10 @@ void py_module_types(nb::module_& m) {
 
     m.def_submodule("matmul");
     m.def_submodule("mla");
+    {
+        auto py_moe = m.def_submodule("moe");
+        nb::class_<ttml::ops::MoEGroupOutputs>(py_moe, "MoEGroupOutputs");
+    }
     m.def_submodule("multi_head_utils");
     m.def_submodule("attention");
     m.def_submodule("reshape");
@@ -250,6 +260,67 @@ void py_module(nb::module_& m) {
     }
 
     {
+        auto py_moe = static_cast<nb::module_>(m.attr("moe"));
+        auto py_moe_group_outputs = static_cast<nb::class_<ttml::ops::MoEGroupOutputs>>(py_moe.attr("MoEGroupOutputs"));
+        py_moe_group_outputs.def_ro("grouped", &ttml::ops::MoEGroupOutputs::grouped);
+        py_moe_group_outputs.def_ro("grouped_scores", &ttml::ops::MoEGroupOutputs::grouped_scores);
+        py_moe_group_outputs.def_ro("k_slot", &ttml::ops::MoEGroupOutputs::k_slot);
+        py_moe_group_outputs.def_ro("counts", &ttml::ops::MoEGroupOutputs::counts);
+        py_moe_group_outputs.def_ro("offsets", &ttml::ops::MoEGroupOutputs::offsets);
+        py_moe_group_outputs.def_ro("plan", &ttml::ops::MoEGroupOutputs::plan);
+
+        py_moe.def(
+            "moe_group_op",
+            &ttml::ops::moe_group_op,
+            nb::arg("dispatched"),
+            nb::arg("metadata"),
+            nb::arg("scores"),
+            nb::arg("local_expert_ids"),
+            nb::arg("e_local"),
+            nb::arg("k"),
+            "Autograd wrapper around metal::moe_group. Forward gathers tokens by\n"
+            "local expert and per-token routing weights into grouped layout.\n"
+            "Backward uses metal::moe_ungroup to scatter d(grouped) back to\n"
+            "d(dispatched) (H = hidden_dim) and d(grouped_scores) back to\n"
+            "d(scores) (H = K, via K-wide one-hot expansion of k_slot).");
+
+        py_moe.def(
+            "moe_ungroup_op",
+            &ttml::ops::moe_ungroup_op,
+            nb::arg("expert_out"),
+            nb::arg("grouped_scores"),
+            nb::arg("metadata"),
+            nb::arg("local_expert_ids"),
+            nb::arg("plan"),
+            nb::arg("offsets"),
+            nb::arg("e_local"),
+            nb::arg("k"),
+            nb::arg("d"),
+            nb::arg("b"),
+            nb::arg("s"),
+            "Autograd wrapper around metal::moe_ungroup. Forward scatters expert\n"
+            "outputs back to dense [D,B,S,H], fused with the per-token weight\n"
+            "scaling baked into grouped_scores. Backward gathers d(ungrouped)\n"
+            "via metal::moe_group, multiplies by grouped_scores to produce\n"
+            "d(expert_out), and reduces expert_out * grad_grouped along H to\n"
+            "produce d(grouped_scores).");
+
+        py_moe.def(
+            "moe_ffn_swiglu_fw",
+            &ttml::ops::moe_ffn_swiglu_fw,
+            nb::arg("grouped"),
+            nb::arg("offsets"),
+            nb::arg("w_gate"),
+            nb::arg("w_up"),
+            nb::arg("w_down"),
+            "Per-expert SwiGLU FFN on grouped layout. For each local expert e:\n"
+            "  Y_e = (SiLU(X_e @ W_gate_e) * (X_e @ W_up_e)) @ W_down_e\n"
+            "where X_e = grouped[offsets[e] : offsets[e+1], :].\n"
+            "Returns Y [1, 1, T_cap, H] with autograd through grouped and the\n"
+            "per-expert weight lists.");
+    }
+
+    {
         auto py_multi_head_utils = static_cast<nb::module_>(m.attr("multi_head_utils"));
         py_multi_head_utils.def("heads_creation", &ttml::ops::heads_creation, nb::arg("qkv"), nb::arg("num_heads"));
         py_multi_head_utils.def("heads_fusion", &ttml::ops::heads_fusion, nb::arg("x"));
@@ -292,13 +363,13 @@ void py_module(nb::module_& m) {
             nb::arg("value"),
             nb::arg("mask") = std::nullopt);
         // Overload 2: mask as ttnn.Tensor (or None) - wrap it in autograd::Tensor
-        // ttnn.Tensor wraps tt::tt_metal::Tensor, so we accept that type
+        // ttnn.Tensor wraps ttnn::Tensor, so we accept that type
         py_attention.def(
             "scaled_dot_product_attention",
             [](const autograd::TensorPtr& query,
                const autograd::TensorPtr& key,
                const autograd::TensorPtr& value,
-               const std::optional<tt::tt_metal::Tensor>& mask) -> autograd::TensorPtr {
+               const std::optional<ttnn::Tensor>& mask) -> autograd::TensorPtr {
                 std::optional<autograd::TensorPtr> mask_ptr = std::nullopt;
                 if (mask.has_value()) {
                     mask_ptr = autograd::create_tensor(mask.value(), false);
@@ -489,7 +560,14 @@ void py_module(nb::module_& m) {
     {
         auto py_unary = static_cast<nb::module_>(m.attr("unary"));
         py_unary.def("relu", &ttml::ops::relu, nb::arg("tensor"));
-        py_unary.def("gelu", &ttml::ops::gelu, nb::arg("tensor"));
+        py_unary.def(
+            "gelu",
+            &ttml::ops::gelu,
+            nb::arg("tensor"),
+            nb::kw_only(),
+            nb::arg("variant") = GeluVariant::ACCURATE,
+            "GELU activation. `variant` takes a ttnn.GeluVariant. Unlike ttnn, the FastLut variant is\n"
+            "not supported.");
         py_unary.def("silu", &ttml::ops::silu, nb::arg("tensor"), nb::arg("use_composite_bw") = false);
         py_unary.def("exp", &ttml::ops::exp, nb::arg("tensor"));
         py_unary.def("clip", &ttml::ops::clip, nb::arg("tensor"), nb::arg("lo"), nb::arg("hi"));
@@ -525,7 +603,7 @@ void py_module(nb::module_& m) {
     }
 
     {
-        auto py_metal = m.def_submodule("metal");
+        auto py_metal = static_cast<nb::module_>(m.attr("metal"));
         py_metal.def(
             "moe_group",
             &ttml::metal::moe_group,

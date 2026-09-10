@@ -7,6 +7,7 @@
 #include <cstring>
 #include <utility>
 
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt_stl/assert.hpp>
@@ -37,6 +38,40 @@ ttnn::Tensor tensor_from_bfp8_bytes(std::span<const uint8_t> raw_bytes, const st
     tt::tt_metal::TensorSpec spec(tensor_shape, layout);
 
     tt::tt_metal::HostBuffer host_buffer(std::move(packed));
+    return ttnn::Tensor(std::move(host_buffer), std::move(spec));
+}
+
+ttnn::Tensor tensor_from_bf16_bytes(std::span<const uint8_t> raw_bytes, const std::vector<uint32_t>& shape) {
+    TT_FATAL(
+        raw_bytes.size() % sizeof(bfloat16) == 0,
+        "tensor_from_bf16_bytes: raw byte size {} is not a multiple of {} (bfloat16 is 2 bytes)",
+        raw_bytes.size(),
+        sizeof(bfloat16));
+
+    size_t n_elems = raw_bytes.size() / sizeof(bfloat16);
+    size_t shape_volume = 1;
+    for (uint32_t dim : shape) {
+        shape_volume *= dim;
+    }
+    TT_FATAL(
+        n_elems == shape_volume,
+        "tensor_from_bf16_bytes: {} bf16 elements decoded from {} raw bytes do not match the requested "
+        "shape's volume {} — the shape/byte count are inconsistent",
+        n_elems,
+        raw_bytes.size(),
+        shape_volume);
+
+    std::vector<bfloat16> data(n_elems);
+    std::memcpy(data.data(), raw_bytes.data(), raw_bytes.size());
+
+    tt::tt_metal::Shape tensor_shape(ttsl::Span<const uint32_t>(shape.data(), shape.size()));
+    tt::tt_metal::TensorLayout layout(
+        tt::tt_metal::DataType::BFLOAT16,
+        tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
+        tt::tt_metal::MemoryConfig{});
+    tt::tt_metal::TensorSpec spec(tensor_shape, layout);
+
+    tt::tt_metal::HostBuffer host_buffer(std::move(data));
     return ttnn::Tensor(std::move(host_buffer), std::move(spec));
 }
 

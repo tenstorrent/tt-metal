@@ -44,7 +44,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         UNPACK_FMT, UNPACK_FMT, UNPACK_FMT, UNPACK_FMT, FACE_R_DIM, FACE_R_DIM, 4 /* num_faces */, 4 /* num_faces */);
     _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-        0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, FACE_R_DIM, 4 /* num_faces */, UNPACK_FMT, UNPACK_FMT);
+        0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, 4), UNPACK_FMT, UNPACK_FMT);
     _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(L1_ADDRESS(params.buffer_A[0]), UNPACK_FMT, UNPACK_FMT);
 }
 
@@ -59,11 +59,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "params.h"
 
 using namespace ckernel;
-
-// calculate_binop_with_scalar() below reads DST_ACCUM_MODE: its RSUB branch applies
-// the fp32->bf16 RNE correction only for the 16-bit-dest (dest_acc:No) path, exactly
-// like production. It's a real constexpr, not the sfpu_operations.h #define hack.
-static constexpr bool DST_ACCUM_MODE = is_fp32_dest_acc_en;
 
 #include "llk_sfpu/ckernel_sfpu_binop_with_unary.h"
 #include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
@@ -88,12 +83,12 @@ void run_kernel(RUNTIME_PARAMETERS)
     // Scalar binop: out(tile 0) = binop(dst, scalar). VectorMode::RC drives 4
     // faces (8 rows each), so ITERATIONS is 8 per call, matching the production
     // add_unary_tile / sub_unary_tile / ... APIs.
-    SFPU_UNARY_INIT(unused);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::unused, is_fp32_dest_acc_en>();
     SFPU_UNARY_CALL(
         DstSync::SyncHalf,
         is_fp32_dest_acc_en,
         calculate_binop_with_scalar,
-        (APPROX_MODE, SFPU_BINOP_MODE, 8 /* ITERATIONS */),
+        (APPROX_MODE, SFPU_BINOP_MODE, 8 /* ITERATIONS */, is_fp32_dest_acc_en),
         0 /* dst_index */,
         VectorMode::RC,
         SFPU_UNARY_SCALAR);

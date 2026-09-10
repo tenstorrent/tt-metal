@@ -15,6 +15,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -550,10 +551,14 @@ std::vector<uint32_t> get_runtime_args_for_given_ranges_diff_width(
     const uint32_t ending_range) {
     std::vector<uint32_t> runtime_args = physical_core_coords;
     runtime_args.push_back(input_addr);
-    auto& num_output_pages_for_this_call = runtime_args.emplace_back(0);
+    // Placeholder written via index after the loop; a reference into `runtime_args` here would
+    // dangle once subsequent push_back()s reallocate the vector (heap-use-after-free).
+    const size_t num_output_pages_idx = runtime_args.size();
+    runtime_args.push_back(0);
     runtime_args.push_back(ending_range - starting_range);
     runtime_args.push_back(output_page_offset);
 
+    uint32_t num_output_pages_for_this_call = 0;
     for (uint32_t block_id = starting_range; block_id < ending_range; block_id++) {
         const auto& block = compressed_stride_vector[block_id];
 
@@ -583,6 +588,7 @@ std::vector<uint32_t> get_runtime_args_for_given_ranges_diff_width(
         }
         num_output_pages_for_this_call += pages_in_base_pattern * block.num_repeats;
     }
+    runtime_args[num_output_pages_idx] = num_output_pages_for_this_call;
     return runtime_args;
 }
 
@@ -786,28 +792,36 @@ ttnn::device_operation::ProgramArtifacts ReshardGenericFactory::create_program_a
         {"unit_size", unit_size},
     };
 
-    const auto make_worker = [&](const char* name, DataMovementRoleHint role, DFBEndpointType endpoint) {
-        KernelSpec k{
+    const auto make_worker = [&](const char* name, DataMovementHardwareConfig hw_config, DFBEndpointType endpoint) {
+        return KernelSpec{
             .unique_id = KernelSpecName{name},
             .source = std::filesystem::path(kernel_source),
-            .hw_config = DataMovementHardwareConfig{.role = role},
+            .dfb_bindings = {DFBBinding{
+                .dfb_spec_name = DFBSpecName{kGenDfbName},
+                .accessor_name = kGenDfbName,
+                .endpoint_type = endpoint,
+            }},
+            .tensor_bindings =
+                {TensorBinding{
+                     .tensor_parameter_name = TensorParamName{kGenInputTensorParam},
+                     .accessor_name = kGenInputTensorParam},
+                 TensorBinding{
+                     .tensor_parameter_name = TensorParamName{kGenOutputTensorParam},
+                     .accessor_name = kGenOutputTensorParam}},
+            .compile_time_args = compile_time_args,
+            .hw_config = std::move(hw_config),
+            .advanced_options = {.num_runtime_varargs = num_varargs},
         };
-        k.tensor_bindings.push_back(TensorBinding{
-            .tensor_parameter_name = TensorParamName{kGenInputTensorParam}, .accessor_name = kGenInputTensorParam});
-        k.tensor_bindings.push_back(TensorBinding{
-            .tensor_parameter_name = TensorParamName{kGenOutputTensorParam}, .accessor_name = kGenOutputTensorParam});
-        k.dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = DFBSpecName{kGenDfbName},
-            .accessor_name = kGenDfbName,
-            .endpoint_type = endpoint,
-        });
-        k.compile_time_args = compile_time_args;
-        k.advanced_options.num_runtime_varargs = num_varargs;
-        return k;
     };
 
-    KernelSpec k0 = make_worker("reader", DataMovementRoleHint::READER, DFBEndpointType::PRODUCER);
-    KernelSpec k1 = make_worker("writer", DataMovementRoleHint::WRITER, DFBEndpointType::CONSUMER);
+    KernelSpec k0 = make_worker(
+        "reader",
+        ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        DFBEndpointType::PRODUCER);
+    KernelSpec k1 = make_worker(
+        "writer",
+        ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+        DFBEndpointType::CONSUMER);
 
     // The borrowed DFB is only an address source (the kernel writes via get_write_ptr() + offset and
     // only ever touches the real, mapped output pages). A sharded output shard shape can be padded

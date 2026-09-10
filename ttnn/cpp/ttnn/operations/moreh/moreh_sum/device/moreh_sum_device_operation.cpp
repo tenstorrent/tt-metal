@@ -102,7 +102,7 @@ MorehSumOperation::spec_return_value_t MorehSumOperation::compute_output_specs(
     }
 
     log_debug(tt::LogOp, "{}:{} output_shape {}", __func__, __LINE__, output_shape);
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         TensorLayout(
             tensor_args.input.dtype(), PageConfig(tensor_args.input.layout()), operation_attributes.memory_config));

@@ -88,6 +88,7 @@ class TextEncoder:
             subfolder="text_encoder",
             parallel_config=self._encoder_parallel_config,
             mesh_shape=tuple(self._device.shape),
+            mesh_device=self._device,
             get_torch_state_dict=lambda: self._torch_text_encoder.state_dict(),
         )
 
@@ -162,7 +163,7 @@ class TextEncoder:
         mesh_mapper = ttnn.ShardTensor2dMesh(self._device, mesh_shape=tuple(self._device.shape), dims=dims)
         tt_prompt = ttnn.from_torch(
             text_input_ids,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self._device,
             mesh_mapper=mesh_mapper,
         )
@@ -183,4 +184,4 @@ class TextEncoder:
 
         _, seq_len, _ = prompt_embeds.shape
         prompt_embeds = ttnn.repeat(prompt_embeds, (1, num_videos_per_prompt, 1))
-        return ttnn.view(prompt_embeds, (1, batch_size * num_videos_per_prompt, seq_len, -1))
+        return ttnn.reshape(prompt_embeds, (1, batch_size * num_videos_per_prompt, seq_len, -1))

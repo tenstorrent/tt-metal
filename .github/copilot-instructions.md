@@ -17,6 +17,32 @@
 | `tools/` | Profiler, debugger, scaleout tooling |
 | `.github/` | CI/CD workflows and infra |
 
+## External Repository Context
+
+When a correctness question depends on behavior outside tt-metal that local code
+and documentation do not resolve, use the DeepWiki MCP tools for the relevant
+repository:
+
+- `tenstorrent/tt-umd`: device discovery, coordinate translation, memory access,
+  and communication contracts.
+- `tenstorrent/tt-kmd`: Linux driver interfaces, including IOCTLs, mmap, DMA
+  buffers, page pinning, device resource lifetime, and reset/recovery. Consult
+  when the question crosses the UMD/kernel-driver boundary.
+- `tenstorrent/tt-isa-documentation`: instruction semantics, NoC ordering,
+  synchronization, alignment, and architecture-specific hardware behavior.
+
+Use `ask_question` for focused questions naming the relevant symbols and hardware
+architecture. Follow the answer's source references and verify their applicability
+before reporting a defect. Check UMD behavior against the submodule revision used
+by the PR, KMD behavior against supported driver versions and UMD compatibility
+requirements (including the Linux kernel version where relevant), and ISA behavior
+against the target hardware architecture. DeepWiki's indexed revision may differ.
+
+Cite supporting source code or documentation in findings. If DeepWiki is
+unavailable or a claim cannot be verified, state any material uncertainty and
+avoid asserting an unverified defect. Use DeepWiki only to resolve concrete review
+questions.
+
 ## Review Language
 
 Respond in **English**. Be terse. Use code blocks for every actionable diff.
@@ -48,6 +74,24 @@ When the same logic appears in more than one place, it will inevitably drift. Fl
 
 ### Magic numbers require a derivation
 Bare numeric literals in code are invisible assumptions. Every hardcoded offset, size, or threshold should either be derived from a named constant or accompanied by a comment explaining where the value comes from and under what conditions it might change.
+
+### Comments explain the present, not the diff
+
+A comment must say why the code is the way it is, not what it replaced. `// reduced by 1 KB from 8 KB` gives a later reader nothing to judge the current value against, and describing the change in more detail does not rescue it — only the constraint that pins the value does: what the region has to hold, which hardware limit it derives from, what breaks if it grows. This applies to prose comments but matters most on numeric constants: memory region sizes, thresholds, buffer counts. The diff and the git history already record the old value; the file has to record the reason.
+
+Comparing against a simpler or earlier implementation is still worth writing down when the current approach's advantage is non-obvious, or when benchmark numbers back the comparison up.
+
+```cpp
+// Says nothing about whether 7 KB is right — more detail about the change doesn't help
+constexpr uint32_t k_scratch_size = 7 * 1024;  // reduced by 1 KB from 8 KB
+
+// States the constraint that fixes the value
+constexpr uint32_t k_scratch_size = 7 * 1024;  // largest local-init scratch use is 6.5 KB;
+                                               // the rest of the window goes to the prefetcher
+
+// Fair comparison: non-obvious win, backed by a measurement
+// One batched 4 KB read rather than eight 512 B reads — ~20% higher relay throughput.
+```
 
 ### Complex conditions belong in named variables
 When an `if` condition involves multiple conjuncts or non-obvious logic, hoist it into a descriptively named `bool`. The variable name serves as the comment the reader would otherwise have to reconstruct mentally.
@@ -104,6 +148,34 @@ Why it matters: this title is the release-note line; <reason>.
 
 Suggested title: `<rewritten title>`
 ````
+
+## PR Description Completeness
+
+Every PR must say **what it does and why** in its own words. Flag a PR whose body is
+still the unmodified template, or whose Summary is empty, consists only of the
+template's HTML comments, or merely restates the file list the diff already shows.
+This is the one description requirement — raise it at 🟡 IMPORTANT.
+
+**Why it matters:** the Summary is the only place a reviewer learns the intent a diff
+cannot convey, and it is what the release notes and any future bisect are read against.
+
+Additionally, where they apply, raise these at 🟢 SUGGESTION — never block on them:
+
+- **User-visible behaviour changes** — a change to an op's output dtype, shape, or
+  accepted argument set should be stated explicitly, since it is the migration signal
+  for callers.
+- **Perf/accuracy numbers** — before/after figures for a PR categorised Performance
+  or claiming an accuracy improvement.
+- **Issue link** — ask the author to link the issue this fixes or relates to, if there
+  is one. When the diff itself cites an issue number (in a test name, comment, or
+  docstring) that the body does not link, name that number.
+
+Do not attempt to write the Summary for the author; state what is missing and why a
+reviewer needs it.
+
+If a PR description claims a performance improvement but includes no performance
+measurement, raise a 🟡 IMPORTANT finding asking for benchmark evidence in the
+description (for example, before/after numbers and the measurement setup).
 
 ## Testing Expectations
 

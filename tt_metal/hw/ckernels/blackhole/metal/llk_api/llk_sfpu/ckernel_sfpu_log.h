@@ -34,12 +34,13 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 
 namespace ckernel {
 namespace sfpu {
 
-template <bool FAST_APPROX, bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en>
+template <bool FAST_APPROX, bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en, bool IS_BASE_TWO = false>
 sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_scale_factor) {
     sfpi::vFloat three_quarters = 0.75f;
     sfpi::vInt e = sfpi::as<sfpi::vInt>(a) - sfpi::as<sfpi::vInt>(three_quarters);
@@ -94,10 +95,30 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
 
         r = r * s + m;
         e_float = sfpi::copysgn(e_float, sfpi::as<sfpi::vFloat>(e));
-        result = e_float * sfpi::vConstFloatPrgm0 + r;
+        if constexpr (IS_BASE_TWO) {
+            // log2 takes an exact path.  Scaling the finished natural-log sum, as
+            // result *= 1/ln(2), also scales the exponent contribution by
+            // ln(2) * (1/ln(2)), which does not round to exactly 1 in float, so log2 of
+            // an exact power of two came back an ULP low for 46 of the 254 representable
+            // exponents.
+            //
+            // Applying the base change to the mantissa term only leaves the exponent
+            // term as e_float * 2^-23.  The exponent arrives here as k << 23 and 2^-23 is
+            // a power of two, so that product is exact and log2(2^k) == k for every k.
+            // Instruction count is unchanged: one multiply plus one multiply-add, where
+            // before it was one multiply-add plus one multiply.
+            //
+            // This is deliberately not applied to other bases.  For log10 the equivalent
+            // constant is log10(2) * 2^-23, which is not exactly representable, and
+            // folding it in measured worse than the existing path.
+            constexpr float TWO_TO_M23 = 1.19209290e-7f;  // 0x1.0p-23
+            result = e_float * TWO_TO_M23 + r * sfpi::as<sfpi::vFloat>(sfpi::vUInt(log_base_scale_factor));
+        } else {
+            result = e_float * sfpi::vConstFloatPrgm0 + r;
 
-        if constexpr (HAS_BASE_SCALING) {
-            result *= sfpi::as<sfpi::vFloat>(sfpi::vUInt(log_base_scale_factor));
+            if constexpr (HAS_BASE_SCALING) {
+                result *= sfpi::as<sfpi::vFloat>(sfpi::vUInt(log_base_scale_factor));
+            }
         }
 
         // For zero, result is negative before this multiply, so result * +inf
@@ -116,11 +137,12 @@ template <
     bool FAST_APPROX,
     bool HAS_BASE_SCALING,
     bool is_fp32_dest_acc_en,
-    int ITERATIONS = 8>
+    int ITERATIONS = 8,
+    bool IS_BASE_TWO = false>
 inline void calculate_log(uint log_base_scale_factor) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat result = calculate_log_body<FAST_APPROX, HAS_BASE_SCALING, is_fp32_dest_acc_en>(
+        sfpi::vFloat result = calculate_log_body<FAST_APPROX, HAS_BASE_SCALING, is_fp32_dest_acc_en, IS_BASE_TWO>(
             sfpi::dst_reg[0], log_base_scale_factor);
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
@@ -132,6 +154,7 @@ inline void calculate_log(uint log_base_scale_factor) {
 
 template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en>
 inline void log_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     const float LOG_TWO = 0.693147182f;       // 0x1.62e430p-1
     const float TWO_TO_M23 = 1.19209290e-7f;  // 0x1.0p-23
     // e represents k << 23 rather than k, so pre-fold the 2^(-23) factor into

@@ -6,30 +6,28 @@
 
 #include <api/dataflow/dataflow_api.h>
 #include <ttnn/operations/pool/device/kernels/fixed_point_arithmetic.hpp>
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 void kernel_main() {
     // Runtime arguments
-    const uint32_t input_buffer_addr = get_arg_val<uint32_t>(0);  // Input tensor DRAM address
-    const uint32_t num_sticks = get_arg_val<uint32_t>(1);         // Number of output sticks for this core
-    const uint32_t start_stick_id = get_arg_val<uint32_t>(2);     // Starting output stick ID
+    const auto num_sticks = get_arg(args::num_sticks);          // Number of output sticks for this core
+    const auto start_stick_id = get_arg(args::start_stick_id);  // Starting output stick ID
 
     // Compile-time arguments
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);                // Output CB ID
-    constexpr uint32_t aligned_stick_nbytes = get_compile_time_arg_val(1);     // Aligned stick size in bytes
-    constexpr uint32_t input_height = get_compile_time_arg_val(2);             // Input H
-    constexpr uint32_t input_width = get_compile_time_arg_val(3);              // Input W
-    constexpr uint32_t output_height = get_compile_time_arg_val(4);            // Output H
-    constexpr uint32_t output_width = get_compile_time_arg_val(5);             // Output W
-    constexpr uint32_t num_pages_per_width = get_compile_time_arg_val(6);      // Number of pages across width
-    constexpr int32_t reciprocal_scale_h_fixed = get_compile_time_arg_val(7);  // input_h/output_h in Q16.16
-    constexpr int32_t reciprocal_scale_w_fixed = get_compile_time_arg_val(8);  // input_w/output_w in Q16.16
+    constexpr auto aligned_stick_nbytes = get_arg(args::aligned_input_page_size);  // Aligned stick size in bytes
+    constexpr auto input_height = get_arg(args::input_height);                     // Input H
+    constexpr auto input_width = get_arg(args::input_width);                       // Input W
+    constexpr auto output_height = get_arg(args::output_height);                   // Output H
+    constexpr auto output_width = get_arg(args::output_width);                     // Output W
+    constexpr auto num_pages_per_width = get_arg(args::num_pages_across_width);    // Number of pages across width
+    constexpr int32_t reciprocal_scale_h_fixed = get_arg(args::reciprocal_scale_h_fixed);  // input_h/output_h Q16.16
+    constexpr int32_t reciprocal_scale_w_fixed = get_arg(args::reciprocal_scale_w_fixed);  // input_w/output_w Q16.16
 
-    // Tensor accessor compile-time args start at index 9
-    constexpr auto src_args = TensorAccessorArgs<9>();
-    const auto input_tensor_accessor = TensorAccessor(src_args, input_buffer_addr);
+    const auto input_tensor_accessor = TensorAccessor(tensor::input);
 
-    experimental::CB out_cb(cb_id_out);
+    DataflowBuffer out_dfb(dfb::out);
     Noc noc;
 
     // Process sticks assigned to this core
@@ -62,16 +60,16 @@ void kernel_main() {
                                       clamped_src_x * num_pages_per_width + in_stick_offset;
 
         // Reserve space in output CB
-        out_cb.reserve_back(1);
+        out_dfb.reserve_back(1);
 
         // Read source stick from DRAM
-        noc.async_read(input_tensor_accessor, out_cb, aligned_stick_nbytes, {.page_id = src_stick_id}, {});
+        noc.async_read(input_tensor_accessor, out_dfb, aligned_stick_nbytes, {.page_id = src_stick_id}, {});
 
         // Wait for read to complete
         noc.async_read_barrier();
 
         // Push to CB
-        out_cb.push_back(1);
+        out_dfb.push_back(1);
 
         page_id++;
     }

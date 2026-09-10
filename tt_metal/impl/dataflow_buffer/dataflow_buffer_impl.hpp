@@ -9,11 +9,13 @@
 #include <memory>
 #include <optional>
 #include <unordered_map>
+#include <span>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
 
 #include <tt-metalium/core_coord.hpp>
+#include "impl/context/context_types.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer.hpp"
 
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
@@ -24,7 +26,13 @@ struct KernelGroup;
 
 namespace tt::tt_metal::experimental::dfb::detail {
 
-// Per-risc config matching dfb_initializer_per_risc_t
+// Who writes this DFB's remapper ClientL/ClientR registers on device.
+enum class RemapperProgrammer : uint8_t {
+    NONE,           // DFB does not use the remapper
+    DM1,            // DM1 programs the pairs during DFB init; producers wait on ClientL valid
+    TENSIX_PACKER,  // each Neo's packer programs its own pair; DM1 cannot see Tensix-only TCs
+};
+
 struct LocalDFBInterfaceHost {
     std::array<uint32_t, ::dfb::MAX_NUM_TILE_COUNTERS_TO_RR> base_addr = {0};
     std::array<uint32_t, ::dfb::MAX_NUM_TILE_COUNTERS_TO_RR> limit = {0};
@@ -35,6 +43,8 @@ struct LocalDFBInterfaceHost {
     uint32_t consumer_tcs = 0;
     uint8_t remapper_consumer_ids_mask = 0;
     uint8_t producer_client_type = 0;
+    // Intra-tensix only: sacrificial ClientR shadow TC paired with packed_tile_counter[0]. 0xFF if unused.
+    uint8_t intra_shadow_tc_id = 0xFF;
 };
 
 struct DFBRiscConfig {
@@ -52,9 +62,17 @@ struct DfbGroup {
 };
 
 struct DataflowBufferImpl {
+    // Unique, program-wide handle
     uint32_t id{};
+    // Owning MetalContext; set from ProgramImpl at add_dataflow_buffer.
+    ContextId context_id_{DEFAULT_CONTEXT_ID};
+    // Device-facing slot number, baked into kernel binaries as the dfb::<name> accessor value and
+    // used as the config-table index in the dispatch payload.
+    uint32_t device_slot{};
     CoreRangeSet core_ranges;
     DataflowBufferConfig config;
+
+    ContextId get_context_id() const { return context_id_; }
 
     uint16_t risc_mask = 0;  // bits 0-7 = DM riscs, bits 8-15 = Tensix riscs
     uint8_t tensix_trisc_mask = 0;  // bits 0-3: which TRISC(s) use DFB (producer=bit2, consumer=bit0 or bit3)
@@ -75,6 +93,8 @@ struct DataflowBufferImpl {
     bool configs_finalized = false;
     // Flag to track if this DFB uses remapper (set during finalization)
     bool use_remapper = false;
+    // Signals who programs the remapper pairs on device
+    RemapperProgrammer remapper_programmer = RemapperProgrammer::NONE;
 
     // Set by set_borrowed_memory_base_addr()
     uint32_t borrowed_addr_ = 0;
@@ -105,7 +125,12 @@ struct DataflowBufferImpl {
 
     uint32_t total_size() const { return config.entry_size * config.num_entries; }
     uint32_t serialized_size() const;
-    std::vector<uint8_t> serialize_for_core(const CoreCoord& core) const;
+    uint16_t dm1_remapper_slot_count() const;  // slots this DFB contributes to the core-wide DM1 blob
+    void append_dm1_remapper_slots_for_core(const CoreCoord& core, std::vector<uint8_t>& data) const;
+
+    // Returns per-core DFBRiscConfig with base_addr/limit resolved for core's alloc_addr.
+    // Used by serialize_dfb_config_for_core to build per-hart init blobs.
+    std::vector<DFBRiscConfig> compute_per_core_risc_configs(const CoreCoord& core) const;
 
     // Override entry_size and/or num_entries. Recomputes capacity/stride and, on a re-entry
     // (already-finalized) DFB with implicit sync, recomputes the txn descriptors in place while
@@ -120,6 +145,40 @@ struct DataflowBufferImpl {
     }
 };
 
+// Host-precomputed init indices in dfb_global_header_t (participation masks; dfb_byte_offset filled during layout
+// write). Device uses these instead of walking all DFBs on the merged-loop hot path.
+void populate_dfb_global_header_participation(
+    dfb_global_header_t& ghdr, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
+
+void verify_dfb_global_header_participation(
+    const dfb_global_header_t& ghdr, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
+
+// Verifies that each hart's blob in the serialized config is internally consistent.
+void verify_dfb_hart_blobs(
+    std::span<const uint8_t> config_bytes, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
+
+// Packed Quasar config size for [prefix | DM1 blobs | DM0 blobs | layouts], including L1 transfer padding.
+uint32_t compute_dfb_config_serialized_size(
+    const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
+
+// DM0 ISR blob region: core header + txn_id-indexed hw pool + txn desc pool.
+uint32_t dm0_isr_blob_region_size(const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
+
+// DM1 remapper blob: core header + contiguous remapper slots across all DFBs on core.
+uint32_t dm1_remapper_blob_core_size(const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
+
+std::vector<uint8_t> serialize_dm1_remapper_core_blob(
+    const CoreCoord& core, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
+
+// Packs the architecture-specific per-core DFB config into caller-owned storage.
+// WH/BH uses a sparse, device-slot-indexed format table; Quasar uses
+// [header | offset table | DM1 blobs | DM0 blobs | per-DFB layouts].
+// Returns the number of bytes to transfer.
+size_t serialize_dfb_config_for_core(
+    const CoreCoord& core,
+    const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core,
+    std::span<uint8_t> out);
+
 class TileCounterAllocator {
 public:
     // Allocate a tile counter for (core, tensix_id).
@@ -127,6 +186,14 @@ public:
     // use_t6_only=true  → Tensix-only pool [TC_TENSIX_POOL_START, NUM_TILE_COUNTERS_PER_TENSIX)
     // The remapper can reference any of the 32 TCs, so both pools live in one allocator.
     ::dfb::PackedTileCounter allocate(const CoreCoord& core, uint8_t tensix_id, bool use_t6_only = false);
+
+    // Allocate ClientL + sacrificial ClientR shadow from the Tensix-only pool for one intra-tensix
+    // DFB on (core, tensix_id). Only ClientL is used for credits; ClientR exists solely to absorb
+    // the remapper's HW update copy. The two TCs need not be adjacent. Each call spends
+    // TILE_COUNTERS_PER_INTRA_TENSIX_DFB of that Neo's NUM_TENSIX_ONLY_TILE_COUNTERS.
+    std::pair<::dfb::PackedTileCounter, ::dfb::PackedTileCounter> allocate_intra_tensix_pair(
+        const CoreCoord& core, uint8_t tensix_id);
+
     void reset() { next_tc_id_.clear(); }
 
 private:
@@ -137,23 +204,46 @@ private:
     std::unordered_map<CoreCoord, PerCoreCounters> next_tc_id_;
 };
 
+// Remapper pairs are split by fan-out and programmer:
+//   DM1 1-to-many → [0, 16)
+//   1-to-1 pool [16, 64) shared by DM1 (bottom-up) and packer/intra (top-down):
+//     reserve_packer_ranges() claims an exact contiguous block per Neo from pair 63 downward;
+//     allocate() gives DM1 pairs from pair 16 upward. The two frontiers are collision-checked.
+// This keeps packer-owned pairs above DM1's high watermark while leaving unused capacity available.
 class RemapperIndexAllocator {
 public:
-    uint8_t allocate(const CoreCoord& core_coord);
+    // Claim exact contiguous 1-to-1 blocks for each Neo's packer pairs on this core.
+    // Must run before any allocate()/allocate_for_packer() for the core.
+    void reserve_packer_ranges(const CoreCoord& core_coord, const std::array<uint8_t, ::dfb::NUM_TENSIX>& counts);
+    // DM1-programmed pairs. one_to_many selects the fan-out pool vs the shared 1-to-1 frontier.
+    uint8_t allocate(const CoreCoord& core_coord, bool one_to_many);
+    // Next pair from Neo `tensix_id`'s reserved contiguous block (ascending).
+    uint8_t allocate_for_packer(const CoreCoord& core_coord, uint8_t tensix_id);
     void reset();
 
 private:
-    std::unordered_map<CoreCoord, uint8_t> next_index_;
+    struct PerCorePools {
+        uint8_t next_one_to_many = 0;  // offset into [0, NUM_REMAPPER_ONE_TO_MANY_PAIRINGS)
+        uint8_t next_one_to_one = 0;   // DM1 offset from REMAPPER_ONE_TO_ONE_PAIR_START (bottom-up)
+        uint8_t packer_floor = ::dfb::NUM_REMAPPER_PAIRINGS;       // first packer-owned pair (top-down)
+        std::array<uint8_t, ::dfb::NUM_TENSIX> packer_base = {};   // absolute pair index, or 0xFF if unused
+        std::array<uint8_t, ::dfb::NUM_TENSIX> packer_count = {};  // exact reserved count
+        std::array<uint8_t, ::dfb::NUM_TENSIX> packer_next = {};   // offset within [base, base+count)
+    };
+    std::unordered_map<CoreCoord, PerCorePools> next_index_;
 };
 
-// Allocates hardware transaction IDs. Valid range: [0, 31]
+// Allocates DFB implicit-sync transaction IDs from the runtime pool
+// [DFB_TXN_ID_BASE, HW_TXN_ID_MAX], top-down.
+// Txn id 0 is reserved (NOC_V2_TRID_STATIC). User kernels may use [0, USER_TXN_ID_MAX].
 class TxnIdAllocator {
 public:
     std::vector<uint8_t> allocate(uint8_t count);
-    void reset() { next_id_ = 0; }
+    void reset() { next_id_ = HW_TXN_ID_MAX; }
 
 private:
-    uint8_t next_id_ = 0;
+    // Next highest ID available to allocate (descending within the DFB pool).
+    uint8_t next_id_ = HW_TXN_ID_MAX;
 };
 
 // Allocates Remapper clientTypes for ALL consumer mode.

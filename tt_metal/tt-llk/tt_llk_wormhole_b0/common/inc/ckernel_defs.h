@@ -184,7 +184,7 @@ constexpr static std::uint32_t GET_L1_HEADERLESS_TILE_SIZE(std::uint32_t format)
             return (1024 >> 4);
         default:
             return ((1024 >> 4) + (64 >> 4));
-    };
+    }
 }
 
 constexpr static bool IS_BFP_FORMAT(std::uint32_t format)
@@ -200,7 +200,7 @@ constexpr static bool IS_BFP_FORMAT(std::uint32_t format)
             return true;
         default:
             return false;
-    };
+    }
 }
 
 constexpr static bool IS_BFP_A_FORMAT(std::uint32_t format)
@@ -213,7 +213,7 @@ constexpr static bool IS_BFP_A_FORMAT(std::uint32_t format)
             return true;
         default:
             return false;
-    };
+    }
 }
 
 constexpr static bool IS_A_FORMAT(std::uint32_t format)
@@ -228,7 +228,7 @@ constexpr static bool IS_A_FORMAT(std::uint32_t format)
             return true;
         default:
             return false;
-    };
+    }
 }
 
 constexpr static std::uint32_t SCALE_DATUM_SIZE(std::uint32_t format, std::uint32_t datum_count)
@@ -246,7 +246,7 @@ constexpr static std::uint32_t SCALE_DATUM_SIZE(std::uint32_t format, std::uint3
 
         default:
             return datum_count;
-    };
+    }
 }
 
 // Datum byte size from a data format's low 2 bits: Float32 -> 4, Float16 -> 2, else 1.
@@ -283,6 +283,15 @@ enum class RoundingMode : std::uint8_t
     Floor = 2,
 };
 
+// Selects how a float32 SFPU result is narrowed when it is stored back into a
+// bf16 DEST. Ignored when fp32 DEST accumulation is enabled, since no narrowing
+// happens in that case.
+enum class DstRoundingMode : std::uint8_t
+{
+    Default     = 0, // SFPSTORE truncates fp32->bf16 on all architectures; no software rounding
+    NearestEven = 1, // IEEE 754 round-to-nearest-even, applied in software before the store
+};
+
 enum class BinaryOp : std::uint8_t
 {
     ADD           = 0,
@@ -302,6 +311,37 @@ enum class BinaryOp : std::uint8_t
     GE            = 14,
     EQ            = 15,
     NE            = 16,
+    // Test-harness binary ops (functional coverage for metal llk_sfpu kernels that
+    // have no dedicated production BinaryOp). Appended at the end so existing values
+    // are unchanged.
+    MAX             = 17,
+    MIN             = 18,
+    FMOD            = 19,
+    REMAINDER       = 20,
+    BITWISE_AND     = 21,
+    BITWISE_OR      = 22,
+    BITWISE_XOR     = 23,
+    DIV_INT32       = 24,
+    DIV_INT32_FLOOR = 25,
+    GCD             = 26,
+    LCM             = 27,
+    RSUB_INT32      = 28,
+    MASK            = 29,
+    ATAN2           = 30,
+    MUL_INT32       = 31,
+    ISCLOSE         = 32,
+    LOGSIGMOID      = 33,
+    // Integer / format-typed binary SFPU kernels (functional coverage). Names match the
+    // corresponding SfpuType enumerators so the coverage guard maps them 1:1.
+    EQ_INT           = 34,
+    NE_INT           = 35,
+    MAX_INT32        = 36,
+    MIN_INT32        = 37,
+    MAX_UINT32       = 38,
+    MIN_UINT32       = 39,
+    REMAINDER_INT32  = 40,
+    REMAINDER_UINT32 = 41,
+    FMOD_INT32       = 42,
 };
 
 enum class PackMode : std::uint8_t

@@ -10,9 +10,11 @@ tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py (shared helpers in spa
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole
+from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
+from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.unit_tests.operations.sdpa.sparse_sdpa_test_utils import (
     make_inputs,
     golden,
@@ -188,8 +190,15 @@ def test_sparse_sdpa_determinism(device, q_dtype, kv_dtype):
         return ttnn.to_layout(o, ttnn.TILE_LAYOUT)
 
     ref, marker = None, None
+    kv_format = (
+        ttnn.transformer.SparseKVFormat.BF16 if kv_dtype == ttnn.bfloat16 else ttnn.transformer.SparseKVFormat.FP8_E4M3
+    )
     for _ in range(iters):
-        cur = comparable(ttnn.transformer.sparse_sdpa(tt_q, tt_kv, tt_idx, V_DIM, scale=K_DIM**-0.5, k_chunk_size=kc))
+        cur = comparable(
+            ttnn.transformer.sparse_sdpa(
+                tt_q, tt_kv, tt_idx, V_DIM, kv_format=kv_format, scale=K_DIM**-0.5, k_chunk_size=kc
+            )
+        )
         if ref is None:
             ref = cur
         else:
@@ -199,9 +208,14 @@ def test_sparse_sdpa_determinism(device, q_dtype, kv_dtype):
     assert mismatch == 0.0, "sparse_sdpa output is not deterministic across repeated runs"
 
 
-# ---- Perf-only (no golden; full-size golden gather is ~GBs). Profile with:
-#      python -m tracy -p -r -v -m pytest <thisfile>::test_sparse_sdpa_perf
-#      then read "DEVICE KERNEL DURATION [ns]" for SparseSDPAOperation. ----
+# ---- Perf check (no golden; full-size golden gather is ~GBs). Device timing via the real-time device program
+#      profiler: the op is profiled with profile_realtime_program and its device kernel duration is asserted
+#      within +/- SPARSE_PERF_MARGIN of the value measured on a Blackhole p150b. A symmetric band catches
+#      regressions AND unexpected speedups. Math utilization is not meaningful for this block-sparse op (the
+#      gather/DMA dominates), so we gate on wall-clock device duration. Needs no tracy build. ----
+# Observed run-to-run spread is <1%; 5% leaves headroom for board/thermal variance while catching a regression.
+SPARSE_PERF_MARGIN = 0.05
+
 # nv (valid keys/token) patterns. Chunk-skip benefit is sparsity-dependent, so sweep it.
 _NV = {
     "dense": lambda s, T, K: K,  # all TOPK valid (no skip) -> worst case, proves no regression
@@ -212,23 +226,129 @@ _NV = {
 }
 
 
+def _run_sparse_sdpa_perf(device, H, S, T, TOPK, kc, nv, cache_format):
+    nv_fn = _NV[nv]
+    q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: nv_fn(s, T, TOPK))
+    if cache_format == "bf16":
+        out, _ = run_op(q, kv, indices, device, kc, V_DIM)
+    else:
+        assert cache_format == "scaled_fp8"
+        tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
+        tt_latent_bf16 = to_dev(kv[..., :V_DIM].to(torch.bfloat16), device, ttnn.bfloat16)
+        tt_latent, tt_scales = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
+            tt_latent_bf16, round_scale_to_power_of_two=True
+        )
+        tt_rope = to_dev(kv[..., V_DIM:].to(torch.bfloat16), device, ttnn.bfloat16)
+        tt_packed = ttnn.experimental.deepseek_prefill.pack_scaled_fp8_kv_cache(tt_latent, tt_scales, tt_rope)
+        tt_indices = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+        tt_out = ttnn.transformer.sparse_sdpa(
+            tt_q,
+            tt_packed,
+            tt_indices,
+            V_DIM,
+            kv_format=ttnn.transformer.SparseKVFormat.SCALED_FP8,
+            scale=K_DIM**-0.5,
+            k_chunk_size=kc,
+        )
+        out = ttnn.to_torch(tt_out)
+    assert tuple(out.shape) == (1, H, S, V_DIM)
+
+
 @run_for_blackhole()
 @pytest.mark.parametrize(
-    "S,T,TOPK,kc,nv",
+    "S,T,TOPK,kc,nv,expected_ms",
     [
-        (640, 56320, 2048, 256, "dense"),  # production shape (Q[32,640,576], KV[56320,576], idx[640,2048])
-        (640, 56320, 2048, 256, "half"),
-        (640, 56320, 2048, 256, "causal"),
-        (640, 56320, 2048, 256, "sparse"),
-        (640, 56320, 2048, 256, "mixed"),
-        (110, 56320, 2048, 256, "dense"),  # 1 token/core, 8 chunks, real T -> representative DRAM locality
-        (8, 56320, 2048, 256, "dense"),  # 8 cores -> low DRAM contention; isolates BW headroom vs floor
+        (640, 56320, 2048, 256, "dense", 3.33),  # production shape (Q[32,640,576], KV[56320,576], idx[640,2048])
+        (640, 56320, 2048, 256, "half", 1.78),
+        (640, 56320, 2048, 256, "causal", 0.732),
+        (640, 56320, 2048, 256, "sparse", 0.576),
+        (640, 56320, 2048, 256, "mixed", 1.838),
+        (110, 56320, 2048, 256, "dense", 0.576),  # 1 token/core, 8 chunks, real T -> representative DRAM locality
+        (8, 56320, 2048, 256, "dense", 0.155),  # 8 cores -> low DRAM contention; isolates BW headroom vs floor
     ],
     ids=["prod-dense", "prod-half", "prod-causal", "prod-sparse", "prod-mixed", "zone1tok", "lowcore"],
 )
-def test_sparse_sdpa_perf(device, S, T, TOPK, kc, nv):
+@pytest.mark.requires_host_iommu
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+def test_sparse_sdpa_perf(device, S, T, TOPK, kc, nv, expected_ms):
     H = 32
     nv_fn = _NV[nv]
     q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: nv_fn(s, T, TOPK))
-    out, _ = run_op(q, kv, indices, device, kc, V_DIM)  # no golden; correctness covered by the PCC tests
+
+    if not ttnn.device.IsProgramRealtimeProfilerActive():
+        # This runs only on the IOMMU-pinned sku (the broad non-IOMMU sdpa glob excludes it by marker), so an
+        # inactive profiler means it regressed on a sku that should have it -- fail (not skip), matching the
+        # sprint / ring-joint perf checks.
+        pytest.fail("Real-time profiler must be active for sparse_sdpa perf checks (needs IOMMU)")
+
+    # Profile the op with the real-time device profiler (one dispatch -> one device program record), same as
+    # the single-chip SDPA sprint perf check. No golden; correctness is covered by the PCC tests.
+    result, perf_record = profile_realtime_program(device, lambda: run_op(q, kv, indices, device, kc, V_DIM))
+    out, _ = result
+    duration_ms = perf_record["duration_ns"] / 1e6
+    lower = expected_ms * (1 - SPARSE_PERF_MARGIN)
+    upper = expected_ms * (1 + SPARSE_PERF_MARGIN)
+    logger.info(
+        f"sparse_sdpa perf S={S} T={T} TOPK={TOPK} kc={kc} nv={nv}: duration={duration_ms:.3f} ms "
+        f"(expected {expected_ms:.3f} ms, band [{lower:.3f}, {upper:.3f}])"
+    )
     assert tuple(out.shape) == (1, H, S, V_DIM)
+    assert lower <= duration_ms <= upper, (
+        f"sparse_sdpa {nv} device kernel duration {duration_ms:.3f} ms outside band [{lower:.3f}, {upper:.3f}] ms "
+        f"(expected {expected_ms:.3f} ms, margin +/- {SPARSE_PERF_MARGIN * 100:.0f}%)"
+    )
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize("H", [32, 64], ids=["deepseek-h32", "glm-h64"])
+def test_sparse_sdpa_perf_scaled_fp8_production(device, H):
+    """Production DeepSeek and GLM geometries using the scaled mixed-format cache."""
+    _run_sparse_sdpa_perf(device, H, 640, 56320, 2048, 256, "dense", "scaled_fp8")
+
+
+@run_for_blackhole()
+@skip_with_watcher("Watcher perturbs host dispatch timing.")
+def test_sparse_sdpa_indexed_cache_hit_host_dispatch_is_cheap(device):
+    """The indexed cache hit must patch runtime args in place, not re-run create_descriptor. A rebuild-on-hit
+    stays one cache entry (invisible to entry-count asserts) yet its host cost scales with the full compute grid
+    and is paid on every indexed-decode dispatch. Host enqueue time is the only signal, so assert min-of-N stays
+    an order of magnitude below the >1ms a full-descriptor rebuild costs on the production grid."""
+    import time
+
+    H, S, T, TOPK, kc, B = 32, 64, 256, 64, 32, 8
+    device.clear_program_cache()
+    gen = torch.Generator().manual_seed(0)
+    q = torch.randn(1, H, S, K_DIM, generator=gen, dtype=torch.float32)
+    kv_full = torch.randn(B, 1, T, K_DIM, generator=gen, dtype=torch.float32)
+    indices = torch.stack([torch.randperm(T, generator=gen)[:TOPK] for _ in range(S)]).reshape(1, 1, S, TOPK)
+    tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
+    tt_kv = to_dev(kv_full.to(torch.bfloat16), device, ttnn.bfloat16)
+    tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+
+    def hit(cb):
+        return ttnn.transformer.sparse_sdpa(
+            tt_q,
+            tt_kv,
+            tt_idx,
+            V_DIM,
+            kv_format=ttnn.transformer.SparseKVFormat.BF16,
+            k_chunk_size=kc,
+            cache_batch_idx=cb,
+        )
+
+    hit(0)  # warm: cache miss / compile
+    entries = device.num_program_cache_entries()
+    samples = []
+    for i in range(200):
+        t0 = time.perf_counter_ns()
+        hit(i % B)  # vary the slot so the override actually re-applies kv_batch_page_offset
+        samples.append(time.perf_counter_ns() - t0)
+    ttnn.synchronize_device(device)
+    assert device.num_program_cache_entries() == entries, "timed calls must be pure cache hits"
+    min_us = min(samples) / 1000.0
+    logger.info(f"sparse_sdpa indexed cache-hit host dispatch: min={min_us:.1f}us over {len(samples)} hits")
+    assert min_us < 1000.0, (
+        f"indexed cache-hit host dispatch {min_us:.0f}us: override_runtime_arguments is rebuilding the full "
+        f"descriptor on every hit instead of patching the runtime-arg slots in place"
+    )

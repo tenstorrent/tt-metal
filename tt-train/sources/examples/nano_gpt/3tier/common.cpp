@@ -22,7 +22,9 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.seed = training_config["seed"].as<uint32_t>();
     config.model_save_interval = training_config["model_save_interval"].as<uint32_t>();
     config.batch_size = training_config["batch_size"].as<uint32_t>();
-    config.num_epochs = training_config["num_epochs"].as<uint32_t>();
+    if (auto num_epochs_node = training_config["num_epochs"]) {
+        config.num_epochs = num_epochs_node.as<uint32_t>();
+    }
     config.max_steps = training_config["max_steps"].as<uint32_t>();
     config.gradient_accumulation_steps =
         training_config["gradient_accumulation_steps"].as<uint32_t>(config.gradient_accumulation_steps);
@@ -127,6 +129,13 @@ std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const Trainin
 
     auto dataset_size = dataset.get_size();
     auto steps_per_dataset = dataset_size / (config.batch_size * config.gradient_accumulation_steps);
+    if (steps_per_dataset == 0) {
+        throw std::runtime_error(fmt::format(
+            "Dataset of {} samples is smaller than one step of batch_size {} x gradient_accumulation_steps {}",
+            dataset_size,
+            config.batch_size,
+            config.gradient_accumulation_steps));
+    }
 
     return {steps_per_dataset, vocab_size};
 }

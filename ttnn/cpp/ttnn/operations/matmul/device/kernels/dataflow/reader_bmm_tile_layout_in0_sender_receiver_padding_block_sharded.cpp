@@ -9,7 +9,7 @@
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
@@ -50,11 +50,11 @@ void kernel_main() {
     tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_x)));
     tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_y)));
 
-    constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in0");
-    constexpr uint32_t cb_id_in2 = get_named_compile_time_arg_val("cb_in0_sharded");  // Sharded cb
+    constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("cb_in0");
+    constexpr uint32_t dfb_id_in2 = get_named_compile_time_arg_val("cb_in0_sharded");  // Sharded cb
 
-    constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
-    constexpr DataFormat in0_data_format = get_dataformat(cb_id_in0);
+    constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(dfb_id_in0);
+    constexpr DataFormat in0_data_format = get_dataformat(dfb_id_in0);
 
     constexpr uint32_t num_blocks_per_shard = shard_width_in_tiles / in0_block_w;
     // In case we need to send multiple blocks per shard, and shard height in tiles is greater than 1
@@ -66,8 +66,8 @@ void kernel_main() {
     constexpr uint32_t in0_tensor_next_h_dim_block_stride = shard_read_stride * in0_block_h;
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
-    CircularBuffer cb_in2(cb_id_in2);
+    DataflowBuffer dfb_in0(dfb_id_in0);
+    DataflowBuffer dfb_in2(dfb_id_in2);
     // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
     // to receive the mcast
     Semaphore<> sender_sem(get_compile_time_arg_val(9));
@@ -102,9 +102,9 @@ void kernel_main() {
     }
     receiver_sem.set(VALID);
 
-    cb_in2.reserve_back(batch * in0_block_num_tiles);
+    dfb_in2.reserve_back(batch * in0_block_num_tiles);
 
-    uint32_t in0_tensor_shard_read_addr = cb_in2.get_read_ptr();
+    uint32_t in0_tensor_shard_read_addr = dfb_in2.get_read_ptr();
     uint32_t in0_tensor_read_addr = 0;
 
     MatmulOpReceiver fused_op_receiver;
@@ -130,7 +130,7 @@ void kernel_main() {
                         block_id = fused_op_receiver.align_to_slice_and_sync(block, sender_id);
                     }
 
-                    cb_in0.reserve_back(in0_block_num_tiles);
+                    dfb_in0.reserve_back(in0_block_num_tiles);
 
                     // All cores in receiver grid need to participate in receiving regardless if they produce output
                     // work or not. Otherwise, data corruption since we mcast from and to the same CB (eg.
@@ -143,7 +143,7 @@ void kernel_main() {
 
                     if (block_id == sender_id) {
                         // Operand 0
-                        uint32_t in0_tensor_local_l1_write_addr = cb_in0.get_write_ptr();
+                        uint32_t in0_tensor_local_l1_write_addr = dfb_in0.get_write_ptr();
 
                         if constexpr (extract_shard_sub_blocks) {
                             in0_tensor_read_addr = in0_tensor_local_l1_write_addr;
@@ -342,14 +342,14 @@ void kernel_main() {
                         // wait on in0 semaphore value to become VALID (set by mcast sender after it multicasts data)
                         receiver_sem.wait(VALID);
                     }
-                    cb_in0.push_back(in0_block_num_tiles);
+                    dfb_in0.push_back(in0_block_num_tiles);
 
-                    // If core does not produce output block work, free cb_id_in0 immediately.
+                    // If core does not produce output block work, free dfb_id_in0 immediately.
                     // This is necessary since mcast is in lockstep; this ensures write ptr addresses are synced
                     // properly for cores that only send and have no compute / writer active. Technically, don't have to
-                    // do this if cb_id_in0 is not double buffered.
+                    // do this if dfb_id_in0 is not double buffered.
                     if constexpr (!core_has_output_block_work) {
-                        cb_in0.pop_front(in0_block_num_tiles);
+                        dfb_in0.pop_front(in0_block_num_tiles);
                     }
                 }
             }

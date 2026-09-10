@@ -28,7 +28,7 @@ target_link_libraries(
 )
 
 TT_ENABLE_UNITY_BUILD(unit_tests_api_lib)
-target_precompile_headers(unit_tests_api_lib REUSE_FROM metal_common_pch)
+target_precompile_headers(unit_tests_api_lib REUSE_FROM metal_test_pch)
 
 # Create the test executable
 add_executable(unit_tests_api)
@@ -67,7 +67,7 @@ target_link_libraries(
         Boost::smart_ptr
 )
 TT_ENABLE_UNITY_BUILD(unit_tests_tensor_lib)
-target_precompile_headers(unit_tests_tensor_lib REUSE_FROM metal_common_pch)
+target_precompile_headers(unit_tests_tensor_lib REUSE_FROM metal_test_pch)
 
 add_executable(unit_tests_tensor)
 target_link_libraries(unit_tests_tensor PRIVATE unit_tests_tensor_lib)
@@ -87,9 +87,10 @@ target_include_directories(
     PRIVATE
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
+        ${PROJECT_SOURCE_DIR}
 )
 target_link_libraries(unit_tests_per_core_allocation PRIVATE test_metal_common_libs)
-target_precompile_headers(unit_tests_per_core_allocation REUSE_FROM metal_common_pch)
+target_precompile_headers(unit_tests_per_core_allocation REUSE_FROM metal_test_pch)
 set_target_properties(
     unit_tests_per_core_allocation
     PROPERTIES
@@ -97,6 +98,57 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/test/tt_metal
 )
 
+# Quasar-only DFB init timing benchmarks (standalone; not linked into unit_tests_api).
+add_executable(dfb_init_timing_bench dataflow_buffer/dfb_init_timing_bench.cpp)
+target_include_directories(
+    dfb_init_timing_bench
+    BEFORE
+    PRIVATE
+        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/common
+)
+target_link_libraries(
+    dfb_init_timing_bench
+    PRIVATE
+        test_metal_common_libs
+        Boost::smart_ptr
+)
+target_precompile_headers(dfb_init_timing_bench REUSE_FROM metal_test_pch)
+set_target_properties(
+    dfb_init_timing_bench
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal
+)
+
 if(TT_METAL_USE_EMULE)
     target_link_options(unit_tests_api PRIVATE -rdynamic)
+    target_link_libraries(unit_tests_api_lib PRIVATE tt-emule::headers)
+
+    # Per-fiber ASAN sanitizer-state isolation test. Its own binary because it
+    # includes the emule kernel-side context header (jit_hw/internal/
+    # emule_thread_ctx.h) directly, which isn't on the shared api test lib's
+    # include path and shouldn't be dragged into its unity build / PCH. Sources come
+    # from the emule-owned emule/sources.cmake (included via sources.cmake above).
+    add_executable(unit_tests_fiber_asan ${UNIT_TESTS_FIBER_ASAN_SOURCES})
+    target_include_directories(
+        unit_tests_fiber_asan
+        BEFORE
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}/tests
+            ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
+            ${TT_EMULE_PATH}/include
+    )
+    target_link_libraries(unit_tests_fiber_asan PRIVATE test_metal_common_libs)
+    target_precompile_headers(unit_tests_fiber_asan REUSE_FROM metal_test_pch)
+    target_link_options(unit_tests_fiber_asan PRIVATE -rdynamic)
+    set_target_properties(
+        unit_tests_fiber_asan
+        PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY
+                ${PROJECT_BINARY_DIR}/test/tt_metal
+    )
 endif()

@@ -69,6 +69,32 @@ PermuteDeviceOperation::spec_return_value_t PermuteDeviceOperation::compute_outp
 
     auto output_mem_config = attributes.output_mem_config;
 
+    // ND-sharded fallback: permute is a dimension reorder, so the shard follows the
+    // same permutation. Keep ND provenance instead of dropping into legacy synthesis,
+    // otherwise the output loses created_with_nd_shard_spec for 4D / rank-greater-4.
+    if (output_mem_config.created_with_nd_shard_spec() && output_mem_config.nd_shard_spec().has_value()) {
+        auto nd_spec = *output_mem_config.nd_shard_spec();
+        if (input_tensor.memory_config().created_with_nd_shard_spec() && input_tensor.nd_shard_spec().has_value()) {
+            // An ND-sharded input keeps the existing derivation: the shard shape is reordered
+            // by the same permutation as the tensor. The attributes cannot tell whether this
+            // config was supplied by the caller or defaulted from the input, so both behave
+            // alike here.
+            ttsl::SmallVector<uint32_t> shard_shape_vec(attributes.dims.size());
+            std::transform(attributes.dims.begin(), attributes.dims.end(), shard_shape_vec.begin(), [&](auto dim) {
+                return input_tensor.nd_shard_spec()->shard_shape[dim];
+            });
+            nd_spec = nd_spec.with_shard_shape(Shape(std::move(shard_shape_vec)));
+        }
+        // A non-ND input cannot have produced an ND config by defaulting, so this one came from
+        // the caller and is already expressed in the output frame: honor it verbatim.
+        return tt::tt_metal::TensorSpec(
+            output_shape,
+            tt::tt_metal::TensorLayout(
+                input_tensor.dtype(),
+                tt::tt_metal::PageConfig(input_tensor.layout()),
+                MemoryConfig(output_mem_config.buffer_type(), nd_spec)));
+    }
+
     // Derive shard_spec when sharded output lacks one.
     if (output_mem_config.is_sharded() && !output_mem_config.shard_spec().has_value()) {
         ttsl::SmallVector<uint32_t> output_padded_vec(output_shape.view().begin(), output_shape.view().end());
@@ -118,7 +144,7 @@ PermuteDeviceOperation::spec_return_value_t PermuteDeviceOperation::compute_outp
         }
     }
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
             input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), output_mem_config));
@@ -141,23 +167,6 @@ PermuteDeviceOperation::tensor_return_value_t PermuteDeviceOperation::create_out
     }
     return create_device_tensor(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
-}
-
-ttsl::hash::hash_t PermuteDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
-    const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-    const auto program_factory = select_program_factory(operation_attributes, tensor_args);
-
-    return tt::tt_metal::operation::hash_operation<PermuteDeviceOperation>(
-        operation_attributes.dims,
-        operation_attributes.output_mem_config,
-        operation_attributes.pad_value,
-        program_factory.index(),
-        input_tensor.tensor_spec(),
-        input_tensor.padded_shape(),
-        output_spec,
-        output_spec.padded_shape());
 }
 
 }  // namespace ttnn::operations::data_movement

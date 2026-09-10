@@ -143,8 +143,7 @@ ConvTranspose2dResult conv_transpose2d_L1(
             input_tensor.layout(),
             input_tensor.dtype(),
             output_dtype,
-            tt::tt_metal::is_device_tensor(input_tensor) ? std::make_optional(input_tensor.memory_config())
-                                                         : std::nullopt,
+            ttnn::is_device_tensor(input_tensor) ? std::make_optional(input_tensor.memory_config()) : std::nullopt,
             kernel_size,
             ConvTranspose2dDimensions::CONV2D_STRIDE,
             dilation,
@@ -220,7 +219,7 @@ ConvTranspose2dResult conv_transpose2d_L1(
         conv_is_1d_depthwise,
         coalesce_1d_depthwise_kw_reads);
 
-    bool weight_is_on_device = tt::tt_metal::is_device_tensor(weight_tensor);
+    bool weight_is_on_device = ttnn::is_device_tensor(weight_tensor);
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
     if (!weight_is_on_device) {
@@ -1057,8 +1056,8 @@ Result conv_transpose2d_DRAM(
         input_tensor_on_device.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Input Tensor to Conv DRAM should be in Interleaved Memory Layout");
 
-    Tensor dram_output_tensor = tt::tt_metal::create_device_tensor(
-        TensorSpec(
+    Tensor dram_output_tensor = ttnn::create_device_tensor(
+        tt::tt_metal::TensorSpec(
             ttnn::Shape({batch_size, dims.output_height, dims.output_width, out_channels}),
             tt::tt_metal::TensorLayout(
                 output_dtype,
@@ -1115,7 +1114,7 @@ ConvT2dExecutionPath determine_conv_transpose2d_execution_path(
 }
 
 ConvT2dExecutionPath determine_conv_transpose2d_execution_path(
-    const tt::tt_metal::StorageType& storage_type,
+    const ttnn::StorageType& storage_type,
     const MemoryConfig& memory_config,
     const std::optional<const op_slicing::Op2DSliceConfig>& slice_config) {
     // If slice config explicitly specifies L1_FULL, use L1 path
@@ -1131,7 +1130,7 @@ ConvT2dExecutionPath determine_conv_transpose2d_execution_path(
     }
 
     // If no slice config and input is already on device in L1, use L1 path
-    if (!slice_config.has_value() && storage_type == tt::tt_metal::StorageType::DEVICE && memory_config.is_l1()) {
+    if (!slice_config.has_value() && storage_type == ttnn::StorageType::DEVICE && memory_config.is_l1()) {
         return ConvT2dExecutionPath::L1;
     }
 

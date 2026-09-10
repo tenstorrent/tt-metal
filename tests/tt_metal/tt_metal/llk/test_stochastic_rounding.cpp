@@ -78,22 +78,14 @@ StochasticRoundingResult run_stochastic_rounding(
     tt_metal::Program program = tt_metal::CreateProgram();
     auto mesh_workload = distributed::MeshWorkload();
 
-    const distributed::DeviceLocalBufferConfig input_device_local_config{
-        .page_size = input_byte_size,
-        .buffer_type = tt_metal::BufferType::DRAM,
-    };
-    const distributed::DeviceLocalBufferConfig output_device_local_config{
-        .page_size = output_byte_size,
-        .buffer_type = tt_metal::BufferType::DRAM,
-    };
-
-    const distributed::ReplicatedBufferConfig input_replicated_config{.size = input_byte_size};
-    const distributed::ReplicatedBufferConfig output_replicated_config{.size = output_byte_size};
-
-    auto input_dram_buffer =
-        distributed::MeshBuffer::create(input_replicated_config, input_device_local_config, cq.device());
-    auto output_dram_buffer =
-        distributed::MeshBuffer::create(output_replicated_config, output_device_local_config, cq.device());
+    auto input_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = input_byte_size},
+        {.page_size = input_byte_size, .buffer_type = tt_metal::BufferType::DRAM},
+        cq.device());
+    auto output_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = output_byte_size},
+        {.page_size = output_byte_size, .buffer_type = tt_metal::BufferType::DRAM},
+        cq.device());
 
     uint32_t input_dram_byte_address = input_dram_buffer->address();
     uint32_t output_dram_byte_address = output_dram_buffer->address();

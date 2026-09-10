@@ -53,7 +53,7 @@ void kernel_main() {
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t dst1 = 1;
 
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_0, tt::CBIndex::c_16);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_0, tt::CBIndex::c_16);
 
     dfb_one_obj.wait_front(onetile);              // comes from the reader
     dfb_decimal_obj.wait_front(onetile);          // comes from the reader

@@ -17,7 +17,7 @@ void MlaQRopeDeviceOperation::validate_on_program_cache_miss(
 
     auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
         TT_FATAL(
-            tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
+            tensor.storage_type() == ttnn::StorageType::DEVICE,
             "MlaQRope requires {} on device. Got {}",
             name,
             enchantum::to_string(tensor.storage_type()));
@@ -33,7 +33,7 @@ void MlaQRopeDeviceOperation::validate_on_program_cache_miss(
             name,
             enchantum::to_string(tensor.dtype()));
         TT_FATAL(
-            tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
+            tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
             "MlaQRope requires {} INTERLEAVED. Got {}",
             name,
             enchantum::to_string(tensor.memory_config().memory_layout()));
@@ -113,7 +113,7 @@ void MlaQRopeDeviceOperation::validate_on_program_cache_miss(
 MlaQRopeDeviceOperation::spec_return_value_t MlaQRopeDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     const auto& q_in = tensor_args.q_in;
-    return ttnn::TensorSpec(
+    return tt::tt_metal::TensorSpec(
         q_in.logical_shape(),
         tt::tt_metal::TensorLayout(q_in.dtype(), tt::tt_metal::Layout::TILE, q_in.memory_config()));
 }
@@ -121,13 +121,22 @@ MlaQRopeDeviceOperation::spec_return_value_t MlaQRopeDeviceOperation::compute_ou
 MlaQRopeDeviceOperation::tensor_return_value_t MlaQRopeDeviceOperation::create_output_tensors(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     auto spec = compute_output_specs({}, tensor_args);
-    return create_device_tensor(spec, tensor_args.q_in.device());
+    return ttnn::create_device_tensor(spec, tensor_args.q_in.device());
 }
 
 ttsl::hash::hash_t MlaQRopeDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // Memory configs are hashed because TensorAccessorArgs bake buffer placement into
+    // compile-time args, so a placement change must not reuse a cached program.
     return tt::tt_metal::operation::hash_operation<MlaQRopeDeviceOperation>(
-        args, tensor_args.q_in.dtype(), tensor_args.q_in.logical_shape(), tensor_args.cos_cache.logical_shape());
+        args,
+        tensor_args.q_in.dtype(),
+        tensor_args.q_in.logical_shape(),
+        tensor_args.cos_cache.logical_shape(),
+        tensor_args.q_in.memory_config(),
+        tensor_args.cos_cache.memory_config(),
+        tensor_args.sin_cache.memory_config(),
+        tensor_args.trans_mat.memory_config());
 }
 
 MlaQRopeDeviceOperation::program_factory_t MlaQRopeDeviceOperation::select_program_factory(

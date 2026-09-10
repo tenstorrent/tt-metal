@@ -50,8 +50,8 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
     constexpr bool tilize_reconfig = in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 &&
                                      (kernel_h * kernel_w) <= 16 && !last_tile_is_partial;
 
-    experimental::CB in_cb(in_cb_id);
-    experimental::CB clear_cb(clear_value_cb_id);
+    DataflowBuffer in_dfb(in_cb_id);
+    DataflowBuffer clear_dfb(clear_value_cb_id);
     Noc noc;
     UnicastEndpoint self_ep;
 
@@ -63,14 +63,14 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                 (c_i == in_nblocks_c - 1) ? in_nbytes_c - c_i * MAX_BYTES_PER_REDUCTION : MAX_BYTES_PER_REDUCTION;
         }
 
-        in_cb.reserve_back(1);
+        in_dfb.reserve_back(1);
         uint32_t write_offset = 0;
         uint32_t processed_sticks = 0;
         // page zeroing is only necessary for tiled block output format so that scale is not affected by
         // junk/padding data
         if constexpr (zero_pages) {
             if (c_i == in_nblocks_c - 1 && last_tile_is_partial) {
-                zero_out_page(noc, in_cb);
+                zero_out_page(noc, in_dfb);
             }
         }
         // When the CB intentionally holds more rows than the kernel window (medium kernels,
@@ -85,7 +85,7 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                 constexpr uint32_t tail_offset_bytes = total_elems_to_reduce * row_stride_elems * BYTES_PER_ELEM;
                 constexpr uint32_t tail_elems = (num_tilized_rows - total_elems_to_reduce) * row_stride_elems;
                 fill_with_val(
-                    in_cb.get_write_ptr() + tail_offset_bytes, tail_elems, static_cast<uint16_t>(bf16_init_value));
+                    in_dfb.get_write_ptr() + tail_offset_bytes, tail_elems, static_cast<uint16_t>(bf16_init_value));
             }
         }
         for (uint32_t h = 0; h < kernel_h; ++h) {
@@ -95,7 +95,7 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                     in_l1_read_base_addr + (stick_offset * shard_width_bytes + c_i * MAX_BYTES_PER_REDUCTION);
                 noc.async_read(
                     self_ep,
-                    in_cb,
+                    in_dfb,
                     read_bytes * w_multiple,
                     experimental::local_addr(read_offset),
                     {.offset_bytes = write_offset});
@@ -111,8 +111,8 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                     if ((processed_sticks % max_sticks_for_reduction) == 0 ||
                         processed_sticks == total_elems_to_reduce) {
                         noc.async_read_barrier();
-                        in_cb.push_back(1);
-                        in_cb.reserve_back(1);
+                        in_dfb.push_back(1);
+                        in_dfb.reserve_back(1);
                         write_offset = 0;
                         // If next is last chunk, fill whole buffer with the init_value. note for max pool we do
                         // not need to fill the CB for the partial chunk since as long as we have N>1 chunks we
@@ -124,7 +124,7 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                             // clear the in CB
                             if ((total_elems_to_reduce - processed_sticks) < max_sticks_for_reduction &&
                                 processed_sticks != total_elems_to_reduce) {
-                                clear_out_tiles<clear_value_cb_id>(noc, in_cb, clear_cb, in_cb_ntiles);
+                                clear_out_tiles<clear_value_cb_id>(noc, in_dfb, clear_dfb, in_cb_ntiles);
                             }
                         }
                     }
@@ -154,7 +154,7 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
         }
         if constexpr (!is_large_kernel) {
             noc.async_read_barrier();
-            in_cb.push_back(1);
+            in_dfb.push_back(1);
         }
     }
 }
@@ -233,24 +233,24 @@ void kernel_main() {
          interm_reduction_chunks <= multi_buffering_factor);
     constexpr uint32_t in_cb_ntiles = in_cb_sz / (TILE_WIDTH * TILE_HEIGHT);  // only use the non-multi buffering size
 
-    experimental::CB clear_value_cb(clear_value_cb_id);
-    experimental::CB in_scalar_cb(in_scalar_cb_id);
-    experimental::CB in_shard_cb(in_shard_cb_id);
-    experimental::CB reader_indices_cb(in_reader_indices_cb_id);
-    experimental::CB config_cb(config_cb_id);
+    DataflowBuffer clear_value_dfb(clear_value_cb_id);
+    DataflowBuffer in_scalar_dfb(in_scalar_cb_id);
+    DataflowBuffer in_shard_dfb(in_shard_cb_id);
+    DataflowBuffer reader_indices_dfb(in_reader_indices_cb_id);
+    DataflowBuffer config_dfb(config_cb_id);
 
     // fill the clear cb
     if constexpr (is_avg_pool || need_to_initialize_in_cb) {
         if constexpr (reader_id == 0) {
-            fill_with_val(clear_value_cb.get_write_ptr(), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
-            clear_value_cb.push_back(1);
+            fill_with_val(clear_value_dfb.get_write_ptr(), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
+            clear_value_dfb.push_back(1);
         }
         if constexpr (reader_id == 1) {
-            clear_value_cb.wait_front(1);
+            clear_value_dfb.wait_front(1);
         }
         // for average pool clear out tiles runs in loop, no need to initialize here
         if constexpr (!is_avg_pool || !is_large_kernel) {
-            clear_out_tiles<in_cb_id, clear_value_cb_id>(Noc(), experimental::CB(in_cb_id), clear_value_cb);
+            clear_out_tiles<in_cb_id, clear_value_cb_id>(Noc(), DataflowBuffer(in_cb_id), clear_value_dfb);
         }
     }
 
@@ -259,25 +259,25 @@ void kernel_main() {
         // Fill only the first FACE_WIDTH, since we set reload_srcB = true in unpack_tilizeA_B_block, meaning the values
         // for the remaining faces will be reused from the first one. This is safe here because there’s no difference
         // between the first and second face.
-        fill_with_val(in_scalar_cb.get_write_ptr(), FACE_WIDTH, bf16_scalar >> 16);
-        in_scalar_cb.push_back(1);
+        fill_with_val(in_scalar_dfb.get_write_ptr(), FACE_WIDTH, bf16_scalar >> 16);
+        in_scalar_dfb.push_back(1);
     }
     const uint32_t core_nhw_index = get_arg_val<uint32_t>(1);
 
-    const uint32_t in_l1_read_base_addr = in_shard_cb.get_read_ptr();
+    const uint32_t in_l1_read_base_addr = in_shard_dfb.get_read_ptr();
     if constexpr (config_in_dram) {
         if (reader_id == 0) {
             load_config_tensor_if_in_dram<
                 reader_dram_addr,
                 reader_page_size,
                 reader_tensor_args_index,
-                in_reader_indices_cb_id>(Noc(), reader_indices_cb, core_nhw_index);
+                in_reader_indices_cb_id>(Noc(), reader_indices_dfb, core_nhw_index);
 
         } else {
-            reader_indices_cb.wait_front(1);
+            reader_indices_dfb.wait_front(1);
         }
     }
-    uint32_t reader_indices_l1_addr = reader_indices_cb.get_read_ptr();
+    uint32_t reader_indices_l1_addr = reader_indices_dfb.get_read_ptr();
     volatile tt_l1_ptr uint32_t* reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader_indices_l1_addr);
 
@@ -291,7 +291,7 @@ void kernel_main() {
     uint32_t scalar_end;
     uint32_t counter = reader_id;
     if constexpr (!one_scalar_per_core) {
-        uint32_t config_l1_addr = config_cb.get_read_ptr();
+        uint32_t config_l1_addr = config_dfb.get_read_ptr();
         if constexpr (config_in_dram) {
             if (reader_id == 0) {
                 constexpr uint32_t config_tensor_args_index =
@@ -300,9 +300,9 @@ void kernel_main() {
                     config_dram_addr,
                     config_page_size,
                     config_tensor_args_index,
-                    config_cb_id>(Noc(), config_cb, core_nhw_index);
+                    config_cb_id>(Noc(), config_dfb, core_nhw_index);
             } else {
-                config_cb.wait_front(1);
+                config_dfb.wait_front(1);
             }
         }
         config_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(config_l1_addr);
@@ -333,7 +333,7 @@ void kernel_main() {
                     reader_nindices,
                     use_split_reader,
                     multi_buffering_factor>(
-                    in_scalar_cb, scalar_start, scalar_end, scalar_value, scalar_index, counter, config_ptr);
+                    in_scalar_dfb, scalar_start, scalar_end, scalar_value, scalar_index, counter, config_ptr);
             }
             read_kernel_with_top_left_index<
                 in_nblocks_c,

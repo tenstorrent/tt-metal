@@ -87,4 +87,8 @@ void kernel_main() {
             }
         }
     }
+
+    // Drain the mcast-ready atomics (sender_sem.up) before returning, so no non-posted atomic is
+    // in flight at kernel exit. Matches the dram_sharded / ring_all_gather receivers.
+    noc.async_atomic_barrier();
 }

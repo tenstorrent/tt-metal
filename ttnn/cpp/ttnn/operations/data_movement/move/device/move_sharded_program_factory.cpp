@@ -13,6 +13,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 namespace ttnn::prim {
 
@@ -98,20 +99,15 @@ ProgramDescriptor MoveShardedProgramFactory::create_descriptor(
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_desc.config = DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
 
-    // Runtime args derive from the address arithmetic (output_addr - input_addr) and
-    // therefore must be recomputed every call.  We deliberately emit them as plain
-    // scalars (no Buffer* / BufferBinding) so the adapter's resolved bindings stay
-    // empty and the slow cache-hit path runs create_descriptor() again — which
-    // recomputes move_chunk_size_bytes, num_chunks, remainder_chunk_size_bytes
-    // from the freshly-allocated buffer addresses.  CB addresses are still patched
-    // via desc.cbs[*].buffer in apply_descriptor_runtime_args().
+    // Reader args derive from the address arithmetic (output_addr - input_addr), so
+    // override_runtime_arguments re-derives all four in place on every cache hit (#48928).
     const auto cores = corerange_to_cores(shard_grid, std::nullopt, true);
     for (const auto& core : cores) {
         reader_desc.emplace_runtime_args(
             core,
             {total_size_bytes,
              num_chunks,
-             move_chunk_size_bytes,  // smuggled-rta-ok: re-applied on cache hit via get_dynamic_runtime_args (#48928)
+             move_chunk_size_bytes,  // smuggled-rta-ok: dst-src address delta, no Buffer binding expresses it
              remainder_chunk_size_bytes});
     }
 
@@ -120,38 +116,44 @@ ProgramDescriptor MoveShardedProgramFactory::create_descriptor(
     return desc;
 }
 
-// #48928: on a cache hit, recompute only the reader's address-derived scalar args (arg 0
-// total_size_bytes is shape-constant; args 1-3 ride on chunk = dst_addr - src_addr) instead of
-// re-running create_descriptor. Trips the descriptor fast path (which also re-patches the sharded
-// CB addresses). Returns empty for the non-sharded factories so they are unaffected.
-std::vector<tt::tt_metal::DynamicRuntimeArg> MoveDeviceOperation::get_dynamic_runtime_args(
-    const MoveOperationAttributes& operation_attributes,
+// move has no custom compute_program_hash, so the shapes and therefore every work-split arg are keyed:
+// only the buffer addresses, and the chunk arithmetic derived from them, move between cache hits.
+void MoveShardedProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const MoveOperationAttributes& /*operation_attributes*/,
     const MoveTensorArgs& tensor_args,
     Tensor& tensor_return_value,
-    const std::optional<ttnn::MeshCoordinate>& /*mesh_coordinate*/) {
-    if (operation_attributes.move_op_parallelization_strategy != MoveOpParallelizationStrategy::MULTI_CORE_SHARDED) {
-        return {};
-    }
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     Buffer* src_buffer = tensor_args.input_tensor.buffer();
     Buffer* dst_buffer = tensor_return_value.buffer();
+
+    // Same derivation as create_descriptor: the copy is expressed as chunks of the
+    // dst-minus-src address delta, so all four reader args follow the addresses.
     const uint32_t total_size_bytes = src_buffer->aligned_size_per_bank();
     const uint32_t move_chunk_size_bytes = dst_buffer->address() - src_buffer->address();
-    if (move_chunk_size_bytes == 0) {
-        return {};  // degenerate dst==src (unreachable for a real move); avoids div-by-zero below.
-    }
+    TT_FATAL(
+        move_chunk_size_bytes % src_buffer->alignment() == 0,
+        "Expected chunk size bytes to move to be {} byte aligned.",
+        src_buffer->alignment());
     const uint32_t num_chunks = total_size_bytes / move_chunk_size_bytes;
     const uint32_t remainder_chunk_size_bytes = total_size_bytes % move_chunk_size_bytes;
-
-    const auto cores = corerange_to_cores(tensor_args.input_tensor.shard_spec().value().grid, std::nullopt, true);
-    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
-    dynamic_args.reserve(cores.size() * 3);
-    for (const auto& core : cores) {
-        dynamic_args.push_back({0, core, 1, num_chunks});
-        dynamic_args.push_back(
-            {0, core, 2, move_chunk_size_bytes});  // smuggled-rta-ok: this IS the get_dynamic re-application (#48928)
-        dynamic_args.push_back({0, core, 3, remainder_chunk_size_bytes});
+    for (auto& col : tt::tt_metal::GetRuntimeArgs(program, 0)) {
+        for (auto& a : col) {
+            if (a.size() < 4) {
+                continue;
+            }
+            a[0] = total_size_bytes;
+            a[1] = num_chunks;
+            a[2] = move_chunk_size_bytes;
+            a[3] = remainder_chunk_size_bytes;
+        }
     }
-    return dynamic_args;
+
+    // Both CBs are tensor-backed; create_descriptor pushes src then dst.
+    tt::tt_metal::ProgramDescriptor cb_addr_only;
+    cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = src_buffer});
+    cb_addr_only.cbs.push_back(tt::tt_metal::CBDescriptor{.buffer = dst_buffer});
+    tt::tt_metal::apply_descriptor_runtime_args(program, cb_addr_only);  // override-rebuild-ok: cb-addr-only
 }
 
 }  // namespace ttnn::prim

@@ -22,7 +22,7 @@ bool is_dram_interleaved(const ttnn::Tensor& tensor) {
 }
 
 void validate_index_tensor(const ttnn::Tensor& tensor, const std::string& name) {
-    TT_FATAL(tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "{} must be on device", name);
+    TT_FATAL(tensor.storage_type() == ttnn::StorageType::DEVICE, "{} must be on device", name);
     TT_FATAL(tensor.buffer() != nullptr, "{} must have a buffer", name);
     TT_FATAL(tensor.dtype() == tt::tt_metal::DataType::UINT32, "{} must be UINT32, got {}", name, tensor.dtype());
     TT_FATAL(
@@ -37,7 +37,7 @@ void validate_index_tensor(const ttnn::Tensor& tensor, const std::string& name) 
 }
 
 void validate_data_tensor(const ttnn::Tensor& tensor, const std::string& name) {
-    TT_FATAL(tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "{} must be on device", name);
+    TT_FATAL(tensor.storage_type() == ttnn::StorageType::DEVICE, "{} must be on device", name);
     TT_FATAL(tensor.buffer() != nullptr, "{} must have a buffer", name);
     // BFLOAT8_B for production, BFLOAT16 for the PCC-comparison test path. The op is byte-level
     // tile-copy (no math on the data), so the kernels work for either dtype as long as global

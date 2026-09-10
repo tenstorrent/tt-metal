@@ -6,16 +6,16 @@ from typing import List
 
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
-from fuser.fused_loop import FusedLoop, LoopBlockRow
-from fuser.fused_operation import FusedOperation
 from fuser.fuser_config import GlobalConfig
+from fuser.l1_operation import L1Operation
+from fuser.tile_loop import LoopBlockRow, TileLoop
 from helpers.llk_params import MathOperation
 
 from .eltwise import EltwiseFpu
 
 
 class SubBcastColCustomFpu(EltwiseFpu):
-    loop: FusedLoop = LoopBlockRow()
+    loop: TileLoop = LoopBlockRow()
     per_block_init = True
 
     def __init__(self):
@@ -29,7 +29,7 @@ class SubBcastColCustomFpu(EltwiseFpu):
 
     def init(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
@@ -43,17 +43,18 @@ class SubBcastColCustomFpu(EltwiseFpu):
 
     def calculate(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         ct_dim = block.block_tiles_x
-        return f"_llk_math_sub_bcast_cols_reuse_custom_({ct_dim});\n"
+        tensor_shape = operation.tile_shape.cpp_value
+        return f"_llk_math_sub_bcast_cols_reuse_custom_({ct_dim}, {tensor_shape}, {block.tile_id_block});\n"
 
     def uninit(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,

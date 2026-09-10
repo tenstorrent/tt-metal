@@ -119,7 +119,8 @@ bool run_dm_neighbour(const shared_ptr<distributed::MeshDevice>& mesh_device, co
         (uint32_t)test_config.num_of_transactions,
         (uint32_t)test_config.pages_per_bank,
         (uint32_t)test_config.page_size_bytes,
-        (uint32_t)test_config.test_id};
+        (uint32_t)test_config.test_id,
+        (uint32_t)test_config.num_banks};
 
     // Worker cores
     vector<CoreCoord> worker_cores;

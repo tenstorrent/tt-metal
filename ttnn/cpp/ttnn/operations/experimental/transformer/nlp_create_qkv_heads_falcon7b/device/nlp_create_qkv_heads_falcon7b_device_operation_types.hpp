@@ -20,9 +20,9 @@ struct NlpCreateQkvHeadsFalcon7bResult {
 };
 
 struct NlpCreateQkvHeadsFalcon7bResultSpec {
-    TensorSpec q;
-    TensorSpec k;
-    TensorSpec v;
+    tt::tt_metal::TensorSpec q;
+    tt::tt_metal::TensorSpec k;
+    tt::tt_metal::TensorSpec v;
 };
 
 }  // namespace ttnn::experimental::prim

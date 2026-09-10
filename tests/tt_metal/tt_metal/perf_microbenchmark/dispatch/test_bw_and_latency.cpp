@@ -11,7 +11,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
-#include <tt-metalium/tt_metal_profiler.hpp>
 #include <cstdint>
 #include <exception>
 #include <iomanip>
@@ -221,7 +220,7 @@ int main(int argc, char** argv) {
     try {
         auto mesh_device = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(0 /*device_id*/);
         auto& cq = mesh_device->mesh_command_queue();
-        auto device_id = mesh_device->get_devices()[0]->id();
+        auto device_id = mesh_device->get_device_ids()[0];
 
         auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
         tt_metal::Program program = tt_metal::CreateProgram();
@@ -456,7 +455,7 @@ int main(int argc, char** argv) {
 
             uint32_t dispatch_l1_unreserved_base =
                 MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
-                    CommandQueueDeviceAddrType::UNRESERVED);
+                    CommandQueueDeviceAddrType::UNRESERVED, cq.id());
             for (int i = 0; i < warmup_iterations_g; i++) {
                 if (source_mem_g == 4) {
                     tt::tt_metal::MetalContext::instance().get_cluster().read_core(

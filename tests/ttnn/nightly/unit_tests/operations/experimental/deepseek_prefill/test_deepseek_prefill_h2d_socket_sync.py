@@ -19,8 +19,10 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole, skip_for_slow_dispatch
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 
 pytestmark = [
+    pytest.mark.requires_host_iommu,
     skip_for_slow_dispatch(),
     pytest.mark.skipif(
         not is_blackhole(),
@@ -32,7 +34,7 @@ _DTYPE_TORCH = torch.int32
 _DTYPE_TTNN = ttnn.uint32
 _DTYPE_SIZE = 4
 _METADATA_SIZE_BYTES = 12  # 3 x uint32: [slot_id, actual_start, actual_end]
-_ISL = 640
+_ISL = PREFILL_CHUNK_TOKENS_PER_CHIP
 _NUM_ITERS = 3
 
 

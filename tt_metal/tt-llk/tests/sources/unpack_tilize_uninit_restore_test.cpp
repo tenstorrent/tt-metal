@@ -77,7 +77,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         num_faces,
         num_faces);
 
-    const std::uint32_t tilize_num_faces = _llk_unpack_tilize_num_faces_wrapper_(num_faces);
+    const std::uint32_t tilize_num_faces = num_faces;
     const std::uint32_t block_ct_dim     = _llk_unpack_tilize_block_ct_dim_wrapper_(1);
 
     _llk_unpack_tilize_init_wrapper_(
@@ -110,7 +110,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // ---- Run 1: plain datacopy of the tilized tile (same format, no reconfig) ----
     run = 1;
     _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-        0, 0, face_r_dim, num_faces, formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst);
+        0, 0, ckernel::make_tensor_shape_from_legacy(face_r_dim, num_faces), formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst);
     _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
         L1_ADDRESS(buffer_A_tilized), formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst);
 }

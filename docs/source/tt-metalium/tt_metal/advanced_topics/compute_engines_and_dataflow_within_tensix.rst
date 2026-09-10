@@ -186,10 +186,11 @@ For example, to perform matrix multiplication:
 
 .. code-block:: c++
 
-    // Configure (un)packer and FPU for matmul mode.
-    // The unpacker is configured based on cb_in0 and cb_in1.
-    // The packer is configured based on cb_out.
-    mm_init(CBIndex::c_0, CBIndex::c_1, CBIndex::c_16);
+    // One-time hardware setup: the unpacker is configured based on cb_in0 and cb_in1, and the
+    // packer based on cb_out. Matmul maps in0 -> SrcB and in1 -> SrcA, so it uses SrcOrder::Reverse.
+    compute_kernel_hw_startup<SrcOrder::Reverse>(CBIndex::c_0, CBIndex::c_1, CBIndex::c_16);
+    // Configure the (un)packer and FPU for matmul mode.
+    matmul_init(CBIndex::c_0, CBIndex::c_1);
 
     // Repeated computation can be performed without re-initialization.
     for(int i=0; i < 8; i++) {
@@ -226,7 +227,7 @@ For example, to perform matrix multiplication:
     }
 
 .. warning::
-    The same input circular buffers (e.g., ``cb_in0`` and ``cb_in1``) must be specified in both ``mm_init`` and ``matmul_tiles``. Using different circular buffers between these calls results in undefined behavior, as the unpacker may interpret the data incorrectly or read from invalid memory.
+    The same input circular buffers (e.g., ``cb_in0`` and ``cb_in1``) must be specified in both ``matmul_init`` and ``matmul_tiles``. Using different circular buffers between these calls results in undefined behavior, as the unpacker may interpret the data incorrectly or read from invalid memory.
 
 The configuration information for the unpacker and packer is derived from the circular buffer metadata. In the example above, circular buffers 0 and 1 are used to configure the unpacker to place their data into ``SrcA`` and ``SrcB``, respectively. The packer is configured to pack data into the format expected by circular buffer 16.
 
@@ -235,14 +236,15 @@ Vector engine/SFPU
 
 The vector engine, or SFPU, is designed for high-throughput processing of vector data. Unlike matrix engine APIs, SFPU APIs require the user to explicitly unpack data into the ``Dst`` registers before performing computations and then pack the results back into L1 memory. This design enables easier chaining of operations.
 
-The vector engine APIs also require an initialization phase. The ``init_sfpu`` function configures the unpacker and packer to handle the data types of the input and output circular buffers. Unlike the matrix engine, the unpacker cannot be configured for a second operand; it assumes that all input circular buffers contain the same underlying data type. As with the matrix engine, ensure that parameters are consistent between initialization and computation calls to avoid undefined behavior.
+The vector engine APIs also require an initialization phase. Call ``compute_kernel_hw_startup`` once at the start of the kernel to configure the unpacker and packer for the input and output circular buffers, then ``copy_init`` to set up the unpacker for copying tiles into ``Dst``. Unlike the matrix engine, the unpacker cannot be configured for a second operand; it assumes that all input circular buffers contain the same underlying data type. As with the matrix engine, ensure that parameters are consistent between initialization and computation calls to avoid undefined behavior.
 
 For example, to compute the element-wise sum of two tiles:
 
 .. code-block:: c++
 
-    // Configure the (un)packer based on the data formats of the CBs.
-    init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    // Configure the hardware once for the CBs, then set up the tile copy.
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    copy_init(tt::CBIndex::c_0);
 
     for(int i=0; i < 8; i++) {
         cb_wait_front(CBIndex::c_0, 1); cb_wait_front(CBIndex::c_1, 1);
@@ -269,16 +271,16 @@ For example, to compute the element-wise sum of two tiles:
     }
 
 .. note::
-    ``copy_tile_init`` can be used to re-configure the unpacker to consume different data formats from circular buffers. If ``CBIndex::c_0`` and ``CBIndex::c_1`` contain different data types, the unpacking part of the above example can be rewritten as follows:
+    ``copy_init`` can be used to re-configure the unpacker to consume different data formats from circular buffers. If ``CBIndex::c_0`` and ``CBIndex::c_1`` contain different data types, the unpacking part of the above example can be rewritten as follows:
 
     .. code-block:: c++
 
-        copy_tile_init(CBIndex::c_0);
+        copy_init(CBIndex::c_0);
         copy_tile(CBIndex::c_0, /*tile_offset_in_cb*/0, /*dst_offset_tiles*/0);
-        copy_tile_init(CBIndex::c_1);
+        copy_init(CBIndex::c_1);
         copy_tile(CBIndex::c_1, /*tile_offset_in_cb*/0, /*dst_offset_tiles*/1);
 
-    Note that ``copy_tile_init`` is always needed when unpacking FP32 values into 32-bit ``Dst`` registers. ``init_sfpu`` assumes a 16-bit storage size and sets up the unpacker for bfloat16, which would cause a loss of precision if an explicit initialization is not performed.
+    Note that ``copy_init`` is always needed when unpacking FP32 values into 32-bit ``Dst`` registers, and whenever you switch the unpacker to a circular buffer with a different data format; otherwise the data may be treated as 16-bit, causing a loss of precision.
 
     Similarly, the ``pack_reconfig_data_format`` function and its variants can be used to change the packer's output data format. This is necessary when a computation produces multiple tiles that must be written to circular buffers with different data formats. For example, to pack two tiles into two separate circular buffers, each with a unique data format:
 

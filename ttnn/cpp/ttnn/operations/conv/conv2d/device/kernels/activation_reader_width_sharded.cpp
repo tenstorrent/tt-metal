@@ -98,17 +98,17 @@ void kernel_main() {
     }
 
     // Experimental API objects
-    experimental::CB reader_indices_cb(cb_reader_indices);
-    experimental::CB act_rm_cb(cb_id_act_row_major_bfloat16);
-    experimental::CB act_cb(cb_id_act);
-    experimental::CB tilized_in0_cb(tilized_in0_cb_id);
-    experimental::CB sharded_act_cb(cb_id_sharded_act);
+    DataflowBuffer reader_indices_dfb(cb_reader_indices);
+    DataflowBuffer act_rm_dfb(cb_id_act_row_major_bfloat16);
+    DataflowBuffer act_dfb(cb_id_act);
+    DataflowBuffer tilized_in0_dfb(tilized_in0_cb_id);
+    DataflowBuffer sharded_act_dfb(cb_id_sharded_act);
     Noc noc;
 
-    load_config_tensor_if_in_dram<27, 28, 29, cb_reader_indices>(noc, reader_indices_cb, 0);
+    load_config_tensor_if_in_dram<27, 28, 29, cb_reader_indices>(noc, reader_indices_dfb, 0);
 
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader_indices_cb.get_write_ptr());
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader_indices_dfb.get_write_ptr());
 
     // Experimental API multicast endpoint
     MulticastEndpoint mcast_ep;
@@ -135,7 +135,7 @@ void kernel_main() {
     // Striding to next row happens using stride_h_bytes
     constexpr uint32_t stride_h_bytes = (conv_act_size_w)*conv_act_c_bytes * dilation_h;
 
-    uint32_t act_l1_read_addr = sharded_act_cb.get_read_ptr();
+    uint32_t act_l1_read_addr = sharded_act_dfb.get_read_ptr();
     experimental::set_read_state<conv_act_c_read_bytes>(noc, act_l1_read_addr);
     uint32_t reader_idx = 0;
     uint32_t l1_write_addr_act = 0;
@@ -146,7 +146,7 @@ void kernel_main() {
 
     // Reset reader_idx to finish act_block_h_datums
     for (uint32_t block_h_index = 0; block_h_index < act_num_blocks_h; block_h_index++) {
-        act_l1_read_addr = sharded_act_cb.get_read_ptr();
+        act_l1_read_addr = sharded_act_dfb.get_read_ptr();
         uint32_t old_reader_idx = reader_idx;
         for (uint32_t block_w_index = 0; block_w_index < act_num_blocks_w; block_w_index++) {
             reader_idx = old_reader_idx;
@@ -162,8 +162,8 @@ void kernel_main() {
                     uint16_t end_ind = two_reader_indices >> 16;
                     for (uint16_t ind = start_ind; ind <= end_ind; ind += stride_w) {
                         if (remaining_indexes == TILE_HEIGHT) {
-                            l1_write_addr_act = act_rm_cb.get_write_ptr();
-                            act_rm_cb.reserve_back(ntile_width);
+                            l1_write_addr_act = act_rm_dfb.get_write_ptr();
+                            act_rm_dfb.reserve_back(ntile_width);
                         }
                         read_channels<weight_size_h, weight_size_w>(
                             noc,
@@ -177,15 +177,15 @@ void kernel_main() {
 
                         if (--remaining_indexes == 0) {
                             noc.async_read_barrier();
-                            act_rm_cb.push_back(ntile_width);
-                            l1_write_addr_act = act_rm_cb.get_write_ptr();
+                            act_rm_dfb.push_back(ntile_width);
+                            l1_write_addr_act = act_rm_dfb.get_write_ptr();
                             remaining_indexes = TILE_HEIGHT;
                         }
                     }
                 }
                 if (remaining_indexes && remaining_indexes != TILE_HEIGHT) {
                     noc.async_read_barrier();
-                    act_rm_cb.push_back(ntile_width);
+                    act_rm_dfb.push_back(ntile_width);
                 }
                 reader_idx++;
 
@@ -194,8 +194,8 @@ void kernel_main() {
                 act_l1_read_addr += conv_act_c_read_bytes;
             } else {
                 for (uint32_t tile_h_index = 0; tile_h_index < ntile_height; tile_h_index++) {
-                    act_rm_cb.reserve_back(ntile_width);
-                    act_rm_cb.push_back(ntile_width);
+                    act_rm_dfb.reserve_back(ntile_width);
+                    act_rm_dfb.push_back(ntile_width);
                 }
             }
 
@@ -203,7 +203,7 @@ void kernel_main() {
             // Compute should function like regular mm
 #ifndef SKIP_MCAST
             for (uint32_t act_w_outer_i = 0; act_w_outer_i < num_input_cores; act_w_outer_i++) {
-                act_cb.reserve_back(act_block_num_tiles);
+                act_dfb.reserve_back(act_block_num_tiles);
                 if (act_w_outer_i == this_core_id) {
                     // MCAST SENDER: send entire tilized input to other cores in column
                     // wait until all act mcast destinations have atomically incremented the act semaphore_addr (i.e.
@@ -216,14 +216,15 @@ void kernel_main() {
                     act_mcast_receiver_sem.set(INVALID);
 
                     // compute tilizes and pops cb_id_act and pushes to tilized_in0_cb_id
-                    tilized_in0_cb.wait_front(act_block_num_tiles);
+                    tilized_in0_dfb.wait_front(act_block_num_tiles);
 
                     // Now we have the block in the CB address, we can mcast to dests!
-                    auto tilized_src =
-                        use<CircularBuffer::AddrSelector::READ_PTR>(tilized_in0_cb);
+                    // A bare DataflowBuffer NOC source already resolves to get_read_ptr() (see
+                    // noc_traits_t<DataflowBuffer>).
+                    auto tilized_src = tilized_in0_dfb;
 
                     // Multicast tilized activations to all reader cores (including self)
-                    mcast_dst.addr = act_cb.get_write_ptr();
+                    mcast_dst.addr = act_dfb.get_write_ptr();
                     noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
                         tilized_src,
                         mcast_ep,
@@ -271,10 +272,10 @@ void kernel_main() {
                     act_mcast_receiver_sem.wait(VALID);
                 }
 
-                act_cb.push_back(act_block_num_tiles);
+                act_dfb.push_back(act_block_num_tiles);
 
             }  // num_input_cores
-            tilized_in0_cb.pop_front(act_block_num_tiles);
+            tilized_in0_dfb.pop_front(act_block_num_tiles);
 #endif
         }
     }

@@ -23,13 +23,13 @@ from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 KVPE_DIM = 576
 
 
-def _build_reference_kv_tensor(submesh, num_users, max_seq_len):
+def _build_reference_kv_tensor(submesh, num_users, max_seq_len, k_chunk_size):
     """Create a KV cache via the original from_torch + ShardTensor2dMesh path."""
     mesh_rows = submesh.shape[0]
     mesh_cols = submesh.shape[1]
     per_device_seq = max_seq_len // mesh_rows
 
-    program_config = FlashMLADecode.ProgramConfig(k_chunk_size=128, exp_approx_mode=False)
+    program_config = FlashMLADecode.ProgramConfig(k_chunk_size=k_chunk_size, exp_approx_mode=False)
     kv_nd_shard_spec = ttnn.NdShardSpec(
         shard_shape=[1, 1, program_config.k_chunk_size, KVPE_DIM],
         grid=program_config.grid.optimal_dram_grid(),
@@ -51,14 +51,40 @@ def _build_reference_kv_tensor(submesh, num_users, max_seq_len):
 
 
 @pytest.mark.parametrize(
+    "dtype,layout",
+    [
+        (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.fp8_e4m3, ttnn.ROW_MAJOR_LAYOUT),
+    ],
+    ids=["bf16_row_major", "fp8_e4m3_row_major"],
+)
+def test_dram_zero_fill_row_major_formats(bh_2d_mesh_device, dtype, layout):
+    """Exercise native row pages directly; FP8 is widened only for host readback."""
+    output = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 128, KVPE_DIM]),
+        dtype,
+        layout,
+        bh_2d_mesh_device,
+        ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    DRAMZeroFill.op(output)
+    ttnn.synchronize_device(bh_2d_mesh_device)
+
+    result = ttnn.to_torch(output, mesh_composer=ttnn.ConcatMeshToTensor(bh_2d_mesh_device, dim=0))
+    assert torch.equal(result.float(), torch.zeros_like(result, dtype=torch.float32))
+
+
+@pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
 @pytest.mark.parametrize("max_seq_len", [1024 * 32, 1024 * 64, 1024 * 128])
 @pytest.mark.parametrize("num_users", [1, 32, 64])
+@pytest.mark.parametrize("k_chunk_size", [128, 256])
 @pytest.mark.requires_grid_size((12, 10))
-def test_dram_zero_fill(bh_2d_mesh_device, num_users: int, max_seq_len: int) -> None:
+def test_dram_zero_fill(bh_2d_mesh_device, num_users: int, max_seq_len: int, k_chunk_size: int) -> None:
     """Zero-fill a KV-cache-shaped DRAM tensor and verify all zeros."""
     if is_slow_dispatch() and (num_users > 1 or max_seq_len > 1024 * 32):
         pytest.skip("Host readback (ttnn.to_torch) for this shape is too slow in slow dispatch mode")
@@ -87,6 +113,7 @@ def test_dram_zero_fill(bh_2d_mesh_device, num_users: int, max_seq_len: int) -> 
         submesh,
         num_users=num_users,
         max_seq_len=max_seq_len,
+        k_chunk_size=k_chunk_size,
         kvpe_dim=KVPE_DIM,
         mesh_shape=(mesh_rows, mesh_cols),
     )
@@ -100,6 +127,7 @@ def test_dram_zero_fill(bh_2d_mesh_device, num_users: int, max_seq_len: int) -> 
         submesh,
         num_users=num_users,
         max_seq_len=max_seq_len,
+        k_chunk_size=k_chunk_size,
         kvpe_dim=KVPE_DIM,
         mesh_shape=(mesh_rows, mesh_cols),
     )
@@ -120,7 +148,7 @@ def test_dram_zero_fill(bh_2d_mesh_device, num_users: int, max_seq_len: int) -> 
     )
 
     # Verify topology matches reference from_torch + ShardTensor2dMesh path
-    ref_tensor = _build_reference_kv_tensor(submesh, num_users, max_seq_len)
+    ref_tensor = _build_reference_kv_tensor(submesh, num_users, max_seq_len, k_chunk_size)
 
     ref_topo = ref_tensor.tensor_topology()
     out_topo = output_tensor.tensor_topology()

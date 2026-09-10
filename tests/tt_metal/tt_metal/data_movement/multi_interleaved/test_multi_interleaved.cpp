@@ -27,6 +27,7 @@ struct MultiInterleavedConfig {
     uint32_t page_size_bytes = 0;
     DataFormat l1_data_format = DataFormat::Invalid;
     CoreRangeSet cores;
+    CoreCoord grid_size = {0, 0};
     bool read_kernel = true;
     bool write_kernel = true;
 };
@@ -53,16 +54,14 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
     const size_t per_core_size_bytes = test_config.num_pages * test_config.page_size_bytes;
     const size_t total_buffer_size_bytes = num_cores * per_core_size_bytes;
 
-    InterleavedBufferConfig interleaved_buffer_config{
-        .device = device,
-        .size = total_buffer_size_bytes,
-        .page_size = test_config.page_size_bytes,
-        .buffer_type = BufferType::DRAM};
-    std::shared_ptr<Buffer> input_buffer;
-    input_buffer = CreateBuffer(interleaved_buffer_config);
+    auto& cq = mesh_device->mesh_command_queue();
+    distributed::ReplicatedBufferConfig global_config{.size = total_buffer_size_bytes};
+    distributed::DeviceLocalBufferConfig local_config{
+        .page_size = test_config.page_size_bytes, .buffer_type = BufferType::DRAM};
+    auto input_buffer = distributed::MeshBuffer::create(global_config, local_config, mesh_device.get());
     uint32_t input_buffer_address = input_buffer->address();
 
-    auto output_buffer = CreateBuffer(interleaved_buffer_config);
+    auto output_buffer = distributed::MeshBuffer::create(global_config, local_config, mesh_device.get());
     uint32_t output_buffer_address = output_buffer->address();
 
     TT_FATAL(input_buffer_address != output_buffer_address, "Input and output buffer addresses must be different");
@@ -89,7 +88,9 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
         (uint32_t)test_config.page_size_bytes,
         (uint32_t)l1_cb_index,
         (uint32_t)test_config.test_id,
-        (uint32_t)sync};
+        (uint32_t)sync,
+        (uint32_t)test_config.grid_size.x,
+        (uint32_t)test_config.grid_size.y};
 
     vector<uint32_t> writer_compile_args = {
         (uint32_t)test_config.num_of_transactions,
@@ -97,7 +98,9 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
         (uint32_t)test_config.page_size_bytes,
         (uint32_t)l1_cb_index,
         (uint32_t)test_config.test_id,
-        (uint32_t)sync};
+        (uint32_t)sync,
+        (uint32_t)test_config.grid_size.x,
+        (uint32_t)test_config.grid_size.y};
 
     if (sync) {
         // Create circular buffers - each core only needs space for its own data
@@ -209,7 +212,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
     // Launch program and record outputs
 
     if (test_config.read_kernel) {
-        detail::WriteToBuffer(input_buffer, packed_input);
+        distributed::EnqueueWriteMeshBuffer(cq, input_buffer, packed_input, /*blocking=*/true);
         MetalContext::instance().get_cluster().dram_barrier(device->id());
     } else {
         // If not reading, write each core's slice to L1 directly
@@ -228,7 +231,6 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
         distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));  // Single device at (0,0)
     mesh_workload.add_program(target_devices, std::move(program));
 
-    auto& cq = mesh_device->mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     Finish(cq);
 
@@ -236,7 +238,8 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const MultiI
     bool is_equal = false;
 
     if (test_config.write_kernel) {
-        detail::ReadFromBuffer(output_buffer, packed_output);
+        distributed::ReadShard(
+            cq, packed_output, output_buffer, distributed::MeshCoordinate(coord_data), /*blocking=*/true);
         is_equal = (packed_output == packed_golden);
         if (!is_equal) {
             log_error(tt::LogTest, "Equality Check failed");
@@ -295,6 +298,7 @@ void directed_ideal_test(
         .page_size_bytes = page_size_bytes,
         .l1_data_format = DataFormat::Float16_b,
         .cores = core_range_set,
+        .grid_size = mst_grid_size,
         .read_kernel = read,
         .write_kernel = write};
 
@@ -341,11 +345,59 @@ void packet_sizes_test(
                 .page_size_bytes = page_size_bytes,
                 .l1_data_format = DataFormat::Float16_b,
                 .cores = core_range_set,
+                .grid_size = mst_grid_size,
                 .read_kernel = read,
                 .write_kernel = write};
 
             // Run
             EXPECT_TRUE(run_dm(mesh_device, test_config));
+        }
+    }
+}
+
+void grid_packet_sizes_test(
+    const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_case_id, bool read, bool write) {
+    auto* device = mesh_device->impl().get_device(0);
+
+    auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
+
+    uint32_t max_page_size_bytes = 256 * flit_size_bytes;
+    uint32_t max_num_pages = 256;
+
+    CoreCoord full_grid = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
+    std::vector<CoreCoord> grid_sizes = {{2, 2}, {6, 6}, full_grid};
+
+    for (auto& grid_size : grid_sizes) {
+        CoreCoord start_coord = {0, 0};
+        CoreCoord end_coord = CoreCoord(start_coord.x + grid_size.x - 1, start_coord.y + grid_size.y - 1);
+        CoreRangeSet core_range_set({CoreRange(start_coord, end_coord)});
+
+        for (uint32_t pages = 1; pages <= max_num_pages; pages *= 4) {
+            uint32_t num_of_transactions;
+            uint32_t num_pages;
+            if (pages > 16) {
+                num_of_transactions = pages / 16;
+                num_pages = 16;
+            } else {
+                num_of_transactions = 1;
+                num_pages = pages;
+            }
+            for (uint32_t page_size_bytes = flit_size_bytes; page_size_bytes <= max_page_size_bytes;
+                 page_size_bytes *= 2) {
+                MultiInterleavedConfig test_config = {
+                    .test_id = test_case_id,
+                    .num_of_transactions = num_of_transactions,
+                    .num_pages = num_pages,
+                    .page_size_bytes = page_size_bytes,
+                    .l1_data_format = DataFormat::Float16_b,
+                    .cores = core_range_set,
+                    .grid_size = grid_size,
+                    .read_kernel = read,
+                    .write_kernel = write};
+
+                EXPECT_TRUE(run_dm(mesh_device, test_config));
+            }
         }
     }
 }
@@ -522,6 +574,23 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovement6x6MultiInterleavedWriteSizes
     CoreCoord mst_grid_size = {6, 6};
     unit_tests::dm::multi_interleaved::packet_sizes_test(
         get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, false, true);
+}
+
+/* ========== GRID SWEEP TESTS ========== */
+
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedGridSweepSizes) {
+    uint32_t test_case_id = 128;
+    unit_tests::dm::multi_interleaved::grid_packet_sizes_test(get_mesh_device(), test_case_id, true, true);
+}
+
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedReadGridSweepSizes) {
+    uint32_t test_case_id = 129;
+    unit_tests::dm::multi_interleaved::grid_packet_sizes_test(get_mesh_device(), test_case_id, true, false);
+}
+
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedWriteGridSweepSizes) {
+    uint32_t test_case_id = 130;
+    unit_tests::dm::multi_interleaved::grid_packet_sizes_test(get_mesh_device(), test_case_id, false, true);
 }
 
 }  // namespace tt::tt_metal

@@ -1,15 +1,18 @@
 name: LLK PR Review
-run-name: "LLK PR Review — PR #${{ github.event.inputs.pr_number }} (effort: ${{ github.event.inputs.effort }})"
+run-name: "LLK PR Review — PR #${{ inputs.pr_number }} (effort: ${{ inputs.effort }}, debug: ${{ inputs.debug_output }})"
 
 # On-demand AI code review for LLK pull requests.
 #
 # Run it manually from the Actions tab (workflow_dispatch) against any PR
-# number. The job runs the code-review plugin command against the PR's diff,
+# number. The job runs the repository-local LLK review command against the PR's
+# diff,
 # with:
 #   * the LLK MCP servers (tt_metal/tt-llk/.mcp.json — DeepWiki, Atlassian, Glean),
-#   * the team's private LLK review knowledge, fetched at runtime and injected as
-#     an appended system prompt.
-# It posts its findings as inline review comments on the PR.
+#   * the team's private LLK review knowledge, fetched at runtime and routed to
+#     each reviewer by role, with repository-local review instructions and a
+#     compact coordination system prompt.
+# It posts findings as inline review comments, or an issue-level no-findings
+# summary when no actionable findings survive.
 #
 # The human gate is that a person with write access must dispatch the workflow.
 
@@ -27,27 +30,32 @@ on:
         default: "max"
         type: choice
         options: [low, medium, high, max]
+      debug_output:
+        description: "Print full Claude output (may expose private review context in Actions logs)"
+        required: false
+        default: false
+        type: boolean
 
 # One review at a time per PR; a newer trigger does not kill an in-flight review.
 concurrency:
-  group: llk-pr-review-${{ github.event.inputs.pr_number }}
+  group: llk-pr-review-${{ inputs.pr_number }}
   cancel-in-progress: false
 
 jobs:
   review:
     runs-on: ubuntu-latest
-    timeout-minutes: 60          # the command fans out subagents; this bounds it
+    timeout-minutes: 150         # measured full reviews can exceed 85 minutes
     permissions:
       contents: read             # read the checkout
       pull-requests: write       # post inline review comments
       issues: write              # post acknowledgement / summary
       id-token: write            # OIDC, if the key path requires it
     env:
-      PR_NUMBER: ${{ github.event.inputs.pr_number }}
+      PR_NUMBER: ${{ inputs.pr_number }}
     steps:
-      # 1. Checkout so the command (and the knowledge assembly step) has the repo.
-      #    The command fetches the diff itself via `gh pr diff`, so a shallow
-      #    checkout of the default ref is enough.
+      # 1. Checkout the ref containing this workflow and the review instructions.
+      #    This checkout is orchestration-only; PR code is placed in exact
+      #    base/head worktrees below.
       - name: Checkout repository
         uses: actions/checkout@main   # intentionally floating: always latest
         with:
@@ -67,71 +75,176 @@ jobs:
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
-      # 3. Assemble the knowledge into a single append-system-prompt file:
-      #    a framing line, then each .md file. (Posting mechanics are handled by
-      #    the code-review command itself — it uses the action's inline-comment
-      #    MCP tool — so we only inject domain knowledge here.)
-      - name: Assemble review system prompt
+      # 3. Materialize the exact PR revisions. A workflow_dispatch checkout is
+      #    normally the reviewer branch, not the PR base or head; allowing agents
+      #    to read code from it can produce stale comparisons and false findings.
+      - name: Prepare exact PR base and head worktrees
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "::error::PR number must contain only decimal digits"
+            exit 1
+          fi
+
+          base_tip_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.base.sha')"
+          head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          if [[ ! "$base_tip_sha" =~ ^[0-9a-f]{40}$ ]] || [[ ! "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::GitHub returned an invalid PR base or head SHA"
+            exit 1
+          fi
+
+          git fetch --no-tags --depth=200 origin "$base_tip_sha"
+          git fetch --no-tags --depth=200 origin "pull/${PR_NUMBER}/head"
+          fetched_head="$(git rev-parse FETCH_HEAD)"
+          if [ "$fetched_head" != "$head_sha" ]; then
+            echo "::error::PR head moved while the review was starting; dispatch a fresh review"
+            exit 1
+          fi
+
+          if ! comparison_base_sha="$(git merge-base "$base_tip_sha" "$head_sha")"; then
+            git fetch --no-tags --depth=2000 origin "$base_tip_sha"
+            git fetch --no-tags --depth=2000 origin "pull/${PR_NUMBER}/head"
+            fetched_head="$(git rev-parse FETCH_HEAD)"
+            if [ "$fetched_head" != "$head_sha" ]; then
+              echo "::error::PR head moved while resolving its merge-base; dispatch a fresh review"
+              exit 1
+            fi
+            comparison_base_sha="$(git merge-base "$base_tip_sha" "$head_sha")"
+          fi
+          if [[ ! "$comparison_base_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Could not resolve the PR merge-base"
+            exit 1
+          fi
+
+          base_dir="${GITHUB_WORKSPACE}/.llk-review-pr-base"
+          head_dir="${GITHUB_WORKSPACE}/.llk-review-pr-head"
+          git worktree add --detach "$base_dir" "$comparison_base_sha"
+          git worktree add --detach "$head_dir" "$head_sha"
+
+          test "$(git -C "$base_dir" rev-parse HEAD)" = "$comparison_base_sha"
+          test "$(git -C "$head_dir" rev-parse HEAD)" = "$head_sha"
+
+          {
+            echo "LLK_PR_BASE_TIP_SHA=$base_tip_sha"
+            echo "LLK_PR_BASE_SHA=$comparison_base_sha"
+            echo "LLK_PR_HEAD_SHA=$head_sha"
+            echo "LLK_PR_BASE_DIR=$base_dir"
+            echo "LLK_PR_HEAD_DIR=$head_dir"
+          } >> "$GITHUB_ENV"
+
+          echo "Prepared PR merge-base ${comparison_base_sha:0:12}, base tip ${base_tip_sha:0:12}, and head ${head_sha:0:12}"
+
+      # 4. Validate the repository-local review instructions and runtime
+      #    knowledge, then build the complete system prompt.
+      #    Task subagents have isolated contexts, so the repository-local
+      #    instructions tell each role which source files to read. Keeping the
+      #    full corpus out of the parent prompt avoids paying for irrelevant
+      #    knowledge repeatedly.
+      - name: Prepare review knowledge
         run: |
           set -euo pipefail
           src=".llk-review-knowledge-src/dashboard/pr_review/knowledge"
+          review_instructions="tt_metal/tt-llk/.claude/commands/llk-code-review.md"
           out="${GITHUB_WORKSPACE}/.llk-review-system-prompt.md"
-          {
-            # === AMPLIFIED RECALL DIRECTIVE (Option A) ===
-            # This overrides the code-review command's default precision-over-recall
-            # posture for this specialized LLK hardware review. Placed FIRST so it
-            # frames everything that follows.
-            echo "# ============================================================"
-            echo "# TOP-PRIORITY REVIEW DIRECTIVE — READ AND OBEY BEFORE ANYTHING ELSE"
-            echo "# ============================================================"
-            echo
-            echo "You are the LLK PR review bot reviewing low-level kernel (LLK) code for"
-            echo "Tenstorrent hardware. Subtle correctness, hazard, and performance issues in"
-            echo "this code are extremely costly and hard to catch in normal review, so the"
-            echo "cost of MISSING a real issue vastly outweighs the cost of a false positive."
-            echo
-            echo "THEREFORE, the usual \"only flag HIGH SIGNAL issues / if you are not certain,"
-            echo "do not flag it / false positives erode trust\" posture DOES NOT APPLY to this"
-            echo "review. You MUST NOT silently discard, filter out, or downgrade a finding"
-            echo "merely because:"
-            echo "  - you are not fully certain it is a real bug,"
-            echo "  - it depends on specific inputs, state, or hardware configuration,"
-            echo "  - it is a style / convention / quality concern rather than a hard bug, or"
-            echo "  - it is not a quotable rule in a repo CLAUDE.md file."
-            echo
-            echo "REPORT ANYTHING SUSPICIOUS. If something looks off, surface it. When you are"
-            echo "uncertain, DO NOT drop it — report it and clearly label it as a SUSPICION"
-            echo "with your confidence level and what would confirm or refute it. Err strongly"
-            echo "on the side of OVER-reporting. \"Nothing to flag\" must be a rare, last-resort"
-            echo "conclusion that you reach only after genuinely finding nothing suspicious,"
-            echo "never a default."
-            echo
-            echo "Do NOT restrict your analysis to the diff alone. Read the surrounding code"
-            echo "and cross-file context (e.g. macro init vs. calculate paths, ISA/assembly"
-            echo "headers, both Blackhole and Wormhole variants) — LLK hazards usually live in"
-            echo "the interaction between files, not in the diff lines themselves."
-            echo
-            echo "Treat the LLK knowledge below as AUTHORITATIVE documented convention. A"
-            echo "finding that is grounded in this knowledge IS a citeable violation of a"
-            echo "documented convention, regardless of file path or which CLAUDE.md applies."
-            echo "Apply it to ALL files in this PR, including those under tt_metal/hw/."
-            echo
-            echo "# ------------------------------------------------------------"
-            echo "# LLK REVIEW KNOWLEDGE (authoritative)"
-            echo "# ------------------------------------------------------------"
-            echo
-            for f in "$src"/*.md; do
-              [ -e "$f" ] || continue
-              echo "# === $(basename "$f") ==="
-              cat "$f"
-              echo
-            done
-          } > "$out"
-          echo "Assembled $(wc -l < "$out") lines into $out"
+          required=(
+            pinned-rules.md
+            learnings.md
+            review-rubric.md
+            conventions.md
+            golden-review.md
+            performance-audit.md
+          )
+          for name in "${required[@]}"; do
+            if [ ! -s "$src/$name" ]; then
+              echo "::error::Required LLK review knowledge is missing or empty: $name"
+              exit 1
+            fi
+          done
 
-      # 4. Run the review: the code-review plugin command against the PR, posting
-      #    findings inline via --comment, with the LLK MCP servers and knowledge.
-      - name: Run /code-review
+          if [ ! -s "$review_instructions" ]; then
+            echo "::error::Repository-local LLK review instructions are missing or empty"
+            exit 1
+          fi
+
+          cp "$review_instructions" "$out"
+
+          {
+            echo
+            echo "# LLK review coordination directive"
+            echo
+            echo "You are the lead orchestrator for a Tenstorrent LLK pull-request review."
+            echo "The authoritative private knowledge files are under:"
+            echo "  $src"
+            echo
+            echo "The workflow checkout root contains review orchestration, not PR code."
+            echo "Read current PR code only from the exact head worktree:"
+            echo "  $LLK_PR_HEAD_DIR (commit $LLK_PR_HEAD_SHA)"
+            echo "Read baseline code only from the exact PR merge-base worktree:"
+            echo "  $LLK_PR_BASE_DIR (merge-base commit $LLK_PR_BASE_SHA)"
+            echo "The current PR base-branch tip is commit $LLK_PR_BASE_TIP_SHA."
+            echo "The intake agent may inspect the complete PR diff once to build whole-PR"
+            echo "context. Downstream reviewers and validators must use exact-SHA, path-scoped"
+            echo "git diffs. Never infer PR code from the workflow checkout root or another"
+            echo "local branch."
+            echo
+            echo "Task subagents do not inherit this system prompt or the parent's context."
+            echo "For every delegated review or validation task, explicitly name the exact"
+            echo "knowledge files that role must Read. Do not paste the whole corpus into task"
+            echo "prompts. The repository-local review command defines the role-to-file routing."
+            echo
+            echo "Every Agent call must set run_in_background=false. For a parallel phase, emit"
+            echo "all Agent calls together in one assistant message and wait for every tool"
+            echo "result. Never return a progress update as the final result while agents run."
+            echo "Do not begin validation until all reviewers return, and do not begin posting"
+            echo "until all validators return. Missing results must be retried synchronously."
+            echo
+            echo "Recall is more important than precision for subtle LLK correctness and HW"
+            echo "hazards. Keep grounded suspicions and state what would confirm or refute them;"
+            echo "drop only findings shown to be incorrect, pre-existing, duplicate, or out of"
+            echo "scope. Do not manufacture generic concerns merely to produce a comment."
+            echo
+            echo "Human-pinned rules are mandatory and have highest priority. At least one"
+            echo "dedicated reviewer must read pinned-rules.md and actively check every rule."
+            echo "Use golden-review.md only for test/golden changes and performance-audit.md"
+            echo "only for SFPI, raw TTI, or otherwise performance-sensitive kernel changes."
+            echo
+            echo "Before final filtering and posting, read conventions.md once and apply it to"
+            echo "all output. Every surviving finding must be introduced by this PR, actionable,"
+            echo "deduplicated against existing review comments, and anchored to the smallest"
+            echo "relevant changed line or contiguous right-side range, with file/line fallback."
+            echo
+            echo "Keep all worktrees read-only. Never use Write/Edit or temporary files. Use"
+            echo "Bash only for one direct gh api command, the intake agent's one complete"
+            echo "gh pr diff call, or an allowlisted read-only"
+            echo "git diff/show/log/rev-parse command per call, with no pipes, redirects, shell"
+            echo "composition, substitution, or inline environment assignment. Never run"
+            echo "find / or read Claude execution/tool-result files. Repeat these constraints"
+            echo "and the exact revision paths in every delegated Task prompt."
+            echo "Run git commands directly from the orchestration checkout root. Never use"
+            echo "git -C or cd; exact commits are already available in the root object database."
+          } >> "$out"
+          echo "Prepared LLK review system prompt ($(wc -w < "$out") words); validated ${#required[@]} knowledge files"
+
+      # 5. Run the repository-local LLK review against the PR. It posts via
+      #    the authenticated gh CLI instead of the unavailable inline-comment
+      #    MCP server.
+      - name: Record review start time
+        run: echo "LLK_REVIEW_STARTED_AT=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_ENV"
+
+      # Join the tailnet ephemerally via OIDC so Anthropic traffic uses the
+      # allowlisted on-prem egress path configured for this repository.
+      - name: Tailscale
+        uses: tailscale/github-action@306e68a486fd2350f2bfc3b19fcd143891a4a2d8 # v4.1.2
+        with:
+          oauth-client-id: ${{ vars.TS_GHA_PUBLIC_INTERNET_CLIENT_ID }}
+          audience: ${{ vars.TS_GHA_PUBLIC_INTERNET_AUDIENCE }}
+          tags: tag:tt-github-actions-public-internet-outbound
+
+      - name: Run LLK code review
+        id: llk_code_review
         uses: anthropics/claude-code-action@v1
         env:
           # GITHUB_TOKEN is the per-run automatic token; its write scope comes
@@ -142,21 +255,143 @@ jobs:
           # Real Anthropic API key — sent as x-api-key to api.anthropic.com.
           anthropic_api_key: ${{ secrets.LLK_PR_REVIEW_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          show_full_output: false   # keep the run log quiet; flip to true to debug
-          # Install the code-review command from Anthropic's plugin marketplace.
-          plugin_marketplaces: "https://github.com/anthropics/claude-code.git"
-          plugins: "code-review@claude-code-plugins"
-          # The command takes a PR reference and an optional --comment flag (there
-          # is no effort argument). --comment makes it post inline comments.
-          prompt: "/code-review:code-review ${{ github.repository }}/pull/${{ env.PR_NUMBER }} --comment"
+          show_full_output: ${{ inputs.debug_output }}
+          # The full review contract is appended from the repository-local file
+          # prepared above; this prompt supplies only the invocation arguments.
+          prompt: "Review ${{ github.repository }}/pull/${{ env.PR_NUMBER }} --comment"
           # No --model override: defaults apply, so the command's per-role
           # haiku/sonnet/opus subagents each use their intended model. --effort
-          # sets the session reasoning effort (the code-review command itself
-          # takes no effort argument). The allowlist must include the inline-
-          # comment MCP tool the command posts with, plus gh for diff/view.
+          # sets the session reasoning effort (the review command itself takes
+          # no effort argument). gh is used for both PR inspection and posting.
           claude_args: |
-            --effort ${{ github.event.inputs.effort || 'max' }}
-            --allowedTools "Task,Bash(gh:*),Bash(git:*),Bash(grep:*),Bash(find:*),Bash(diff:*),Bash(head:*),Bash(sed:*),mcp__github_inline_comment__create_inline_comment,mcp__deepwiki,mcp__atlassian,mcp__glean_default"
-            --max-turns 100
+            --effort ${{ inputs.effort || 'max' }}
+            --allowedTools "Agent,Task,Read,Grep,Glob,Skill,Bash(gh api:*),Bash(gh pr diff:*),Bash(git diff:*),Bash(git show:*),Bash(git log:*),Bash(git rev-parse:*),mcp__deepwiki__*,mcp__atlassian__*,mcp__glean_default__*"
+            --max-turns 150
             --mcp-config tt_metal/tt-llk/.mcp.json
             --append-system-prompt-file ${{ github.workspace }}/.llk-review-system-prompt.md
+
+      # The execution file can contain private injected knowledge and tool
+      # arguments. Emit only aggregate tool counts and static Bash categories;
+      # never print commands, arguments, paths, prompts, or file contents.
+      - name: Report Claude permission denials
+        if: always() && steps.llk_code_review.outputs.execution_file != ''
+        env:
+          CLAUDE_EXECUTION_FILE: ${{ steps.llk_code_review.outputs.execution_file }}
+        run: |
+          set -euo pipefail
+
+          if [ ! -f "$CLAUDE_EXECUTION_FILE" ]; then
+            echo "::warning::Claude execution file was not found; denial summary is unavailable"
+            exit 0
+          fi
+
+          if ! denial_summary="$(
+            jq -r '
+              def denials:
+                .[]
+                | select(.type == "result")
+                | .permission_denials[]?;
+
+              def command:
+                .tool_input.command? // "";
+
+              def bash_prefix_category:
+                command as $command
+                | if $command == "" then
+                    "empty-or-unavailable"
+                  elif ($command | test("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=")) then
+                    "inline-environment-assignment"
+                  elif ($command | test("^[[:space:]]*gh[[:space:]]+api([[:space:]]|$)")) then
+                    "allowlisted-gh-api"
+                  elif ($command | test("^[[:space:]]*gh[[:space:]]+pr[[:space:]]+diff([[:space:]]|$)")) then
+                    "allowlisted-intake-pr-diff"
+                  elif ($command | test("^[[:space:]]*git[[:space:]]+(diff|show|log|rev-parse)([[:space:]]|$)")) then
+                    "allowlisted-read-only-git"
+                  elif ($command | test("^[[:space:]]*find([[:space:]]|$)")) then
+                    "forbidden-find"
+                  elif ($command | test("^[[:space:]]*(grep|rg|diff|head|tail|sed|awk|cat|ls|wc|nl|cut|sort|uniq|tree|basename|dirname)([[:space:]]|$)")) then
+                    "unlisted-read-command"
+                  else
+                    "unrecognized-or-unlisted"
+                  end;
+
+              [
+                (denials | ["tool", (.tool_name // "unknown")]),
+                (denials
+                  | select(.tool_name == "Bash")
+                  | ["bash-prefix", bash_prefix_category]),
+                (denials
+                  | select(.tool_name == "Bash" and (command | test("&&|\\|\\||[;|\\n]|(^|[^&])&([^&]|$)")))
+                  | ["bash-feature", "compound-or-separated"]),
+                (denials
+                  | select(.tool_name == "Bash" and (command | test("[<>]")))
+                  | ["bash-feature", "contains-redirection-character"]),
+                (denials
+                  | select(.tool_name == "Bash" and (command | test("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=")))
+                  | ["bash-feature", "inline-environment-assignment"]),
+                (denials
+                  | select(.tool_name == "Bash" and (command | length > 10000))
+                  | ["bash-feature", "over-10000-characters"])
+              ]
+              | sort
+              | group_by(.)
+              | .[]
+              | "\(.[0][0])\t\(.[0][1])\t\(length)"
+            ' "$CLAUDE_EXECUTION_FILE"
+          )"; then
+            echo "::warning::Could not parse Claude permission denials"
+            exit 0
+          fi
+
+          if [ -z "$denial_summary" ]; then
+            echo "Claude reported no permission denials"
+            exit 0
+          fi
+
+          echo "Claude permission denials (aggregate categories only):"
+          while IFS=$'\t' read -r category label count; do
+            echo "${category}/${label}: ${count}"
+          done <<< "$denial_summary"
+
+      # Re-read GitHub instead of trusting process success. A session that exits
+      # cleanly without executing its posting contract is a failed review; never
+      # mask that failure by manufacturing a workflow-level "No issues found".
+      - name: Verify review output was posted
+        if: steps.llk_code_review.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          current_head="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          if [ "$current_head" != "$LLK_PR_HEAD_SHA" ]; then
+            echo "::error::PR head changed during review; discard this result and dispatch a fresh review"
+            exit 1
+          fi
+
+          for attempt in 1 2 3; do
+            inline_count="$(
+              gh api \
+                "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/comments?since=${LLK_REVIEW_STARTED_AT}&per_page=100" \
+                --jq '[.[] | select(.user.login == "github-actions[bot]")] | length'
+            )"
+            issue_count="$(
+              gh api \
+                "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?since=${LLK_REVIEW_STARTED_AT}&per_page=100" \
+                --jq '[.[] | select(.user.login == "github-actions[bot]")] | length'
+            )"
+            if (( inline_count + issue_count > 0 )); then
+              echo "LLK review posted ${inline_count} inline and ${issue_count} issue-level comment(s)"
+              exit 0
+            fi
+            if (( attempt < 3 )); then
+              sleep 2
+            fi
+          done
+
+          echo "::error::Claude completed without posting any LLK review output"
+          exit 1
+
+      # 6. Remove the ephemeral tailnet node immediately, even on failure.
+      - name: Tailscale cleanup
+        if: always()
+        run: sudo tailscale logout

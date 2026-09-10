@@ -18,7 +18,7 @@ void ExecuteTestHangDeviceOperation::validate_on_program_cache_hit(
 
 ExecuteTestHangDeviceOperation::spec_return_value_t ExecuteTestHangDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         tensor_args.tensor.logical_shape(),
         tt::tt_metal::TensorLayout(
             tensor_args.tensor.dtype(), tt::tt_metal::PageConfig(tensor_args.tensor.layout()), MemoryConfig{}));

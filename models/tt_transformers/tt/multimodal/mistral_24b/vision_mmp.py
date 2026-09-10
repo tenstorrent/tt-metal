@@ -55,6 +55,16 @@ class TTMistral3PatchMerger(LightweightModule):
         tokens_per_image = [h * w for h, w in image_sizes]
         d = image_features.shape[-1]
 
+        # Collapse any leading batch/rank dimensions so the token axis is dim 0, which is
+        # what the split below indexes. The caller's shape has varied by rank (the vision
+        # tower returns rank 4 and vision_model.py squeezes twice), and ttnn.split became
+        # strict in #49575 -- "a split_sizes list must sum exactly to the split dimension",
+        # where it previously accepted sum >= dim_size and silently mis-covered the data.
+        # Normalising here makes the contract explicit instead of rank-dependent, and lets
+        # split's own validation catch a genuine token-count mismatch loudly.
+        if len(image_features.shape) != 2 or image_features.shape[0] != sum(tokens_per_image):
+            image_features = ttnn.reshape(image_features, (-1, d))
+
         permuted_tensor = []
         for image_index, image_tokens in enumerate(ttnn.split(image_features, tokens_per_image, dim=0)):
             # Reshape image_tokens into a 2D grid

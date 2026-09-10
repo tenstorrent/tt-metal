@@ -5,9 +5,11 @@
 #pragma once
 
 #include <filesystem>
+#include <set>
 #include <string>
 #include <variant>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 
 /**
@@ -29,11 +31,16 @@ class Program;
 
 namespace experimental::quasar {
 static constexpr uint32_t QUASAR_NUM_DM_CORES_PER_CLUSTER = 8;
+// Tensix WORKER clusters reserve DM0 (ISR) and DM1 (remapper) for runtime use; CreateKernel
+// assigns user kernels to DM2..DM7 only. Dispatch-engine cores do not apply this reservation.
+static constexpr uint32_t QUASAR_NUM_RESERVED_DM_CORES_PER_CLUSTER = 2;
+static constexpr uint32_t QUASAR_NUM_USER_DM_CORES_PER_CLUSTER =
+    QUASAR_NUM_DM_CORES_PER_CLUSTER - QUASAR_NUM_RESERVED_DM_CORES_PER_CLUSTER;
 static constexpr uint32_t QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER = 4;
 
 struct QuasarDataMovementConfig {
-    // Number of data movement cores per cluster to use
-    uint32_t num_threads_per_cluster = QUASAR_NUM_DM_CORES_PER_CLUSTER;
+    // Number of data movement cores per cluster to use (max is QUASAR_NUM_USER_DM_CORES_PER_CLUSTER)
+    uint32_t num_threads_per_cluster = QUASAR_NUM_USER_DM_CORES_PER_CLUSTER;
 
     std::vector<uint32_t> compile_args;
 
@@ -73,8 +80,6 @@ struct QuasarComputeConfig {
     std::vector<UnpackToDestMode> unpack_to_dest_mode;
     bool bfp8_pack_precise = false;
     bool math_approx_mode = false;
-    bool enable_2x_src_format = false;
-    bool unpack_to_dest_en = false;
 
     std::vector<uint32_t> compile_args;
 
@@ -126,5 +131,18 @@ KernelHandle CreateKernel(
     const std::string& file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const QuasarComputeConfig& config);
+
+/**
+ * @brief Reserve free data-movement processors on the given programmable core type.
+ *
+ * Same allocation policy as Quasar Tensix CreateKernel: pick the lowest-numbered free DMs.
+ * On TENSIX, DM0/DM1 are reserved and skipped; on DISPATCH the full DM0..DM7 set is available.
+ */
+std::set<DataMovementProcessor> GetAvailableDataMovementProcessors(
+    Program& program,
+    const CoreRangeSet& core_ranges,
+    uint32_t num_processors_per_cluster,
+    HalProgrammableCoreType programmable_core_type);
+
 }  // namespace experimental::quasar
 }  // namespace tt::tt_metal

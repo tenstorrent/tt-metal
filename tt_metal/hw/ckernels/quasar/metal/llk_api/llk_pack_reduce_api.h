@@ -22,7 +22,7 @@
 template <ReduceDim reduce_dim, [[maybe_unused]] PackMode pack_mode = PackMode::Default>
 inline void llk_pack_reduce_mask_config(std::uint32_t ocb) {
     static_assert(pack_mode == PackMode::Default, "Quasar pack reduce mask does not support pack_mode != Default");
-    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(ocb);
+    const ckernel::TensorShape tensor_shape = get_output_tensor_shape(ocb);
     _llk_pack_reduce_mask_config_<reduce_dim>(tensor_shape);
 }
 

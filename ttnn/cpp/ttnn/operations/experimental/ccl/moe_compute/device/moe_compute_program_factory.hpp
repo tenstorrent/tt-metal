@@ -55,8 +55,8 @@ struct MoEComputeMeshWorkloadFactory {
         // Combine global semaphores (empty in ComputeOnly mode)
         std::vector<GlobalSemaphore> combine_global_semaphores;
 
-        // Path used to build this workload (Full = combine kernels built; ComputeOnly = bypassed).
-        MoEComputePath path = MoEComputePath::Full;
+        // Path used to build this workload (FullCcl/FullLocal = combine kernels built; ComputeOnly = bypassed).
+        MoEComputePath path = MoEComputePath::FullCcl;
     };
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 

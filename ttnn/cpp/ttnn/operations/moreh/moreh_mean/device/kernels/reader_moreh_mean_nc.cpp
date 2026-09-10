@@ -7,40 +7,35 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t i = 0;
-    const auto input_addr = get_arg_val<uint32_t>(i++);
-    const auto num_input_tiles = get_arg_val<uint32_t>(i++);
-    const auto num_output_tiles = get_arg_val<uint32_t>(i++);
-    const auto input_tile_stride = get_arg_val<uint32_t>(i++);
-    const auto start_id = get_arg_val<uint32_t>(i++);
-    const auto HtWt = get_arg_val<uint32_t>(i++);
-    const auto inner_size = get_arg_val<uint32_t>(i++);
+    const auto num_input_tiles = get_arg(args::num_input_tiles);
+    const auto num_output_tiles = get_arg(args::num_output_tiles);
+    const auto input_tile_stride = get_arg(args::input_tile_stride);
+    const auto start_id = get_arg(args::start_id);
+    const auto HtWt = get_arg(args::HtWt);
+    const auto inner_size = get_arg(args::inner_size);
 
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
-    constexpr uint32_t cb_id_in2 = tt::CBIndex::c_2;
 
     union {
         float f;
         uint32_t u;
     } scaler;
     scaler.f = 0.0f;
-    DataflowBuffer dfb_in1(cb_id_in1);
+    DataflowBuffer dfb_in1(dfb::in1);
     fill_cb_with_value(dfb_in1, scaler.u);
 
     scaler.f = 1.0f / num_input_tiles;
-    DataflowBuffer dfb_in2(cb_id_in2);
+    DataflowBuffer dfb_in2(dfb::scalar);
     fill_cb_with_value(dfb_in2, scaler.u, 1);
 
-    constexpr auto input_args = TensorAccessorArgs<0>();
-    const auto s = TensorAccessor(input_args, input_addr);
+    const auto s = TensorAccessor(tensor::input);
 
     Noc noc;
-    DataflowBuffer dfb_in0(cb_id_in0);
-    const auto in0_tile_bytes = get_tile_size(cb_id_in0);
+    DataflowBuffer dfb_in0(dfb::input);
+    const auto in0_tile_bytes = dfb_in0.get_tile_size();
 
     for (uint32_t i = start_id; i < start_id + num_output_tiles; i++) {
         uint32_t hw_tile_id = i % HtWt;

@@ -24,6 +24,8 @@ std::vector<ttnn::Tensor> chunk(const ttnn::Tensor& input_tensor, const uint32_t
     int chunk_size = tt::div_up(size_along_dim, num_chunks);
 
     std::vector<ttnn::Tensor> chunks;
+    // A chunk holds at least one element, so fewer than num_chunks are produced for a small dim.
+    chunks.reserve(std::min(num_chunks, static_cast<uint32_t>(size_along_dim)));
     int start = 0;
 
     while (start < size_along_dim) {
@@ -40,7 +42,7 @@ std::vector<ttnn::Tensor> chunk(const ttnn::Tensor& input_tensor, const uint32_t
 
         ttnn::Tensor chunk_tensor = ttnn::slice(input_tensor, slice_start, slice_end, slice_step);
 
-        chunks.push_back(chunk_tensor);
+        chunks.push_back(std::move(chunk_tensor));
 
         start = end;
     }

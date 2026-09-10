@@ -107,6 +107,8 @@ public:
 
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
+        // Upper bound: tmu-crt0.o, noc.o and substitutes.o.
+        objs.reserve(3);
         if (params.is_fw) {
             // Needed to setup gp, sp, etc. for all processors which are launched with assert/deassert PC method
             // For 2 erisc, erisc0 is launched from base firmware so it's not needed
@@ -130,6 +132,8 @@ public:
 
     std::vector<std::string> includes(const Params& params) const override {
         std::vector<std::string> includes;
+        // Upper bound: 8 common includes, at most 2 from the core type switch, plus the firmware dir.
+        includes.reserve(11);
 
         // Common includes for all core types
         includes.push_back("tt_metal/hw/ckernels/blackhole/metal/common");
@@ -234,6 +238,31 @@ public:
             cflags += "-mno-tt-fix-whbhebreak ";
         }
         return cflags;
+    }
+
+    std::string rvv_compile_flags(const Params& params) const override {
+        // Only the pack TRISC (TRISC2) fronts the Tensix vector unit on Blackhole.
+        if (!(params.core_type == HalProgrammableCoreType::TENSIX &&
+              params.processor_class == HalProcessorClassType::COMPUTE && params.processor_id == 2)) {
+            return {};
+        }
+        // -march is the exact ISA string -mcpu=tt-bh-tensix resolves to (per
+        // `riscv-tt-elf-g++ -mcpu=tt-bh-tensix -v`), plus _zve32f. Passed after -mcpu (recipe
+        // cflags are appended after common_flags), so it overrides the arch while keeping the
+        // tt-bh-tensix tuning.
+        //
+        // -fno-lto: emit a plain (non-LTO) object for this TU. With -flto the RVV builtins are
+        // streamed as GIMPLE and re-expanded by the link-stage LTRANS units, which do not carry
+        // the vector -march, breaking code generation at link time (observed with sfpi 7.70.0).
+        // The link itself stays stock (-flto=auto): a fat-free object simply opts out of LTO.
+        //
+        // -fno-tree-vectorize -fno-tree-slp-vectorize: the vector unit is only reachable through
+        // explicit intrinsics; keep the auto-vectorizers from touching scalar kernel/LLK code.
+        //
+        // -Wno-error=array-bounds: RVV intrinsic loads/stores through casted L1 pointers trip
+        // -Warray-bounds false positives at -O3 under -Werror.
+        return "-march=rv32im_zmmul_zaamo_zba_zbb_xtttensixbh_zve32f -fno-lto "
+               "-fno-tree-vectorize -fno-tree-slp-vectorize -Wno-error=array-bounds ";
     }
 
     std::string linker_script(const Params& params) const override {
@@ -429,6 +458,7 @@ void Hal::initialize_bh(
             case DispatchFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER:
             case DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER:
             case DispatchFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER: return true;
+            case DispatchFeature::DISPATCH_KERNEL_CONFIG_BUFFER: return false;
             default: TT_THROW("Invalid Blackhole dispatch feature {}", static_cast<int>(feature));
         }
     };
@@ -462,6 +492,7 @@ void Hal::initialize_bh(
         dev_msgs::AddressableCoreType::ETH,
         dev_msgs::AddressableCoreType::PCIE,
         dev_msgs::AddressableCoreType::DRAM};
+    this->virtualizes_non_worker_cores_ = true;
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
     this->has_tile_counter_registers_ = false;
     this->supports_implicit_dfb_sync_ = false;

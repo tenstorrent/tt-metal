@@ -28,10 +28,10 @@ void RotateHalfDeviceOperation::validate_on_program_cache_miss(
         "RotateHalf does not currently support sharding");
 }
 
-TensorSpec RotateHalfDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec RotateHalfDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const Tensor& input_tensor = tensor_args;
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
         TensorLayout::fromPaddedShape(
             input_tensor.dtype(),
@@ -43,7 +43,7 @@ TensorSpec RotateHalfDeviceOperation::compute_output_specs(
 
 Tensor RotateHalfDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const TensorSpec spec = compute_output_specs(operation_attributes, tensor_args);
+    const tt::tt_metal::TensorSpec spec = compute_output_specs(operation_attributes, tensor_args);
     return create_device_tensor(spec, tensor_args.device());
 }
 

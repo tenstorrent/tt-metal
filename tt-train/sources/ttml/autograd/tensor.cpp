@@ -29,10 +29,10 @@ void topological_sort(
 
 namespace ttml::autograd {
 
-Tensor::Tensor(const tt::tt_metal::Tensor& value, bool requires_grad) : m_value(value), m_requires_grad(requires_grad) {
+Tensor::Tensor(const ttnn::Tensor& value, bool requires_grad) : m_value(value), m_requires_grad(requires_grad) {
 }
 
-void Tensor::add_grad(const tt::tt_metal::Tensor& grad) {
+void Tensor::add_grad(const ttnn::Tensor& grad) {
     // Skip gradient addition if not required. Part of branch pruning autograd optimization.
     if (!m_requires_grad) {
         return;
@@ -110,11 +110,11 @@ void print_tensor_stats(const autograd::TensorPtr& tensor, const std::string& na
     core::print_tensor_stats(tensor->get_value(), name);
 }
 
-void Tensor::set_value(const tt::tt_metal::Tensor& value) {
+void Tensor::set_value(const ttnn::Tensor& value) {
     m_value.set_tensor(value);
 }
 
-void Tensor::set_grad(const tt::tt_metal::Tensor& grad) {
+void Tensor::set_grad(const ttnn::Tensor& grad) {
     if (core::is_tensor_initialized(grad)) {
         auto grad_shape = grad.logical_shape();
         auto value_shape = m_value.get_tensor().logical_shape();
@@ -136,15 +136,15 @@ void Tensor::set_requires_grad(bool requires_grad) {
     m_requires_grad = requires_grad;
 }
 
-const tt::tt_metal::Tensor& Tensor::get_value(PreferredPrecision preferred_precision) const {
+const ttnn::Tensor& Tensor::get_value(PreferredPrecision preferred_precision) const {
     return m_value.get_tensor(preferred_precision);
 }
 
-const tt::tt_metal::Tensor& Tensor::get_grad() const {
+const ttnn::Tensor& Tensor::get_grad() const {
     return m_grad;
 }
 
-tt::tt_metal::Tensor& Tensor::get_grad() {
+ttnn::Tensor& Tensor::get_grad() {
     return m_grad;
 }
 

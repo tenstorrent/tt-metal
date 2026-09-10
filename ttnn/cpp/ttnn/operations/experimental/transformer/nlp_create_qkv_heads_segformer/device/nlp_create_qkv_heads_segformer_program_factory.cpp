@@ -56,9 +56,9 @@ NlpCreateQkvHeadsSegformerProgramFactory::cached_program_t NlpCreateQkvHeadsSegf
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::Tensor& q = std::get<0>(output);
-    tt_metal::Tensor& k = std::get<1>(output);
-    tt_metal::Tensor& v = std::get<2>(output);
+    ttnn::Tensor& q = std::get<0>(output);
+    ttnn::Tensor& k = std::get<1>(output);
+    ttnn::Tensor& v = std::get<2>(output);
 
     tt_metal::Buffer* q_buffer = q.buffer();
     TT_ASSERT(q_buffer != nullptr, "Output q buffer should be allocated on device!");

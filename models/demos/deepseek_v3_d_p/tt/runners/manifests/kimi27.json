@@ -1,0 +1,6 @@
+{
+  "env": {
+    "PREFILL_MODEL": "kimi_k2_7",
+    "PREFILL_GATE_FALLBACK_MODE": "DEVICE_FP32"
+  }
+}

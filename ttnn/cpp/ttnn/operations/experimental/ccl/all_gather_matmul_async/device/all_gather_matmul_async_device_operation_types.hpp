@@ -41,6 +41,6 @@ struct AllGatherMatmulAsyncInputs {
 };
 
 using AllGatherMatmulAsyncResult = std::vector<Tensor>;
-using AllGatherMatmulAsyncResultSpec = std::vector<ttnn::TensorSpec>;
+using AllGatherMatmulAsyncResultSpec = std::vector<tt::tt_metal::TensorSpec>;
 
 }  // namespace ttnn::experimental::prim

@@ -9,6 +9,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/operations.hpp"
 #include "test_utils/random_data.hpp"
 #include "xtensor/core/xtensor_forward.hpp"
 
@@ -303,6 +304,304 @@ static const AdamWCase kWeightDecayCases[] = {
 };
 
 INSTANTIATE_TEST_SUITE_P(AdamWWeightDecay, AdamWComparisonTest, ::testing::ValuesIn(kWeightDecayCases), CaseName);
+
+// ====================================================================
+// weight_decay_skip_1d Tests
+// With the flag enabled, 1-D params (RMSNorm gains/biases, shape {1,1,1,N})
+// must not be weight-decayed, while 2-D params still are.
+// ====================================================================
+
+class AdamWWeightDecaySkip1DTest : public ::testing::Test {
+public:
+    static void SetUpTestSuite() {
+        ttml::autograd::ctx().open_device();
+    }
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
+    }
+
+protected:
+    void TearDown() override {
+        ttml::autograd::ctx().reset_graph();
+    }
+};
+
+TEST_F(AdamWWeightDecaySkip1DTest, SkipsDecayOn1DParamsOnly) {
+    using namespace ttml;
+
+    const std::array<std::size_t, 4> shape_1d = {1, 1, 1, 4096};   // RMSNorm-gain-like
+    const std::array<std::size_t, 4> shape_2d = {1, 1, 128, 256};  // matmul-weight-like
+
+    const float lr = 1e-2f;
+    const float beta1 = 0.9f;
+    const float beta2 = 0.999f;
+    const float epsilon = 1e-8f;
+    // Large wd so the decay term (lr*wd*param) is well above tolerance: makes the "would-be-decayed"
+    // reference clearly separable from the (correctly) undecayed 1-D result.
+    const float weight_decay = 1.0f;
+    const size_t initial_steps = 10;
+
+    autograd::ctx().set_seed(123U);
+    auto& gen = autograd::ctx().get_generator();
+    const uint32_t seed_1d_w = gen();
+    const uint32_t seed_1d_g = gen();
+    const uint32_t seed_1d_m = gen();
+    const uint32_t seed_1d_v = gen();
+    const uint32_t seed_2d_w = gen();
+    const uint32_t seed_2d_g = gen();
+    const uint32_t seed_2d_m = gen();
+    const uint32_t seed_2d_v = gen();
+
+    xt::xarray<float> w1_0 = test_utils::make_uniform_xarray<float>(shape_1d, -1.0F, 1.0F, seed_1d_w);
+    xt::xarray<float> g1_0 = test_utils::make_uniform_xarray<float>(shape_1d, -1.0F, 1.0F, seed_1d_g);
+    xt::xarray<float> m1_0 = test_utils::make_uniform_xarray<float>(shape_1d, -1.0F, 1.0F, seed_1d_m);
+    xt::xarray<float> v1_0 = test_utils::make_uniform_xarray<float>(shape_1d, 0.0F, 1.0F, seed_1d_v);
+
+    xt::xarray<float> w2_0 = test_utils::make_uniform_xarray<float>(shape_2d, -1.0F, 1.0F, seed_2d_w);
+    xt::xarray<float> g2_0 = test_utils::make_uniform_xarray<float>(shape_2d, -1.0F, 1.0F, seed_2d_g);
+    xt::xarray<float> m2_0 = test_utils::make_uniform_xarray<float>(shape_2d, -1.0F, 1.0F, seed_2d_m);
+    xt::xarray<float> v2_0 = test_utils::make_uniform_xarray<float>(shape_2d, 0.0F, 1.0F, seed_2d_v);
+
+    // References: 1-D param stepped WITHOUT weight decay, 2-D param stepped WITH weight decay.
+    xt::xarray<float> w1_no_wd = w1_0;
+    CPUAdamW cpu_1d_no_wd(lr, beta1, beta2, epsilon, /*weight_decay=*/0.0f, /*amsgrad=*/false);
+    cpu_1d_no_wd.set_state(m1_0, v1_0, initial_steps);
+    cpu_1d_no_wd.step(w1_no_wd, g1_0);
+
+    xt::xarray<float> w2_with_wd = w2_0;
+    CPUAdamW cpu_2d_with_wd(lr, beta1, beta2, epsilon, weight_decay, false);
+    cpu_2d_with_wd.set_state(m2_0, v2_0, initial_steps);
+    cpu_2d_with_wd.step(w2_with_wd, g2_0);
+
+    // What the 1-D param WOULD be if it were (incorrectly) decayed — used to prove the decay is
+    // large enough to matter, so the "no decay" match below isn't a vacuous pass.
+    xt::xarray<float> w1_with_wd = w1_0;
+    CPUAdamW cpu_1d_with_wd(lr, beta1, beta2, epsilon, weight_decay, false);
+    cpu_1d_with_wd.set_state(m1_0, v1_0, initial_steps);
+    cpu_1d_with_wd.step(w1_with_wd, g1_0);
+
+    // Device AdamW: both params in one optimizer, weight_decay_skip_1d enabled.
+    auto gain = autograd::create_tensor(to_tt_bf16(w1_0), true);
+    gain->set_grad(to_tt_bf16(g1_0));
+    auto weight = autograd::create_tensor(to_tt_bf16(w2_0), true);
+    weight->set_grad(to_tt_bf16(g2_0));
+    serialization::NamedParameters params{{"gain", gain}, {"weight", weight}};
+
+    optimizers::AdamWConfig cfg;
+    cfg.lr = lr;
+    cfg.beta1 = beta1;
+    cfg.beta2 = beta2;
+    cfg.epsilon = epsilon;
+    cfg.weight_decay = weight_decay;
+    cfg.weight_decay_skip_1d = true;
+    optimizers::AdamW opt(params, cfg);
+
+    // Inject momentum state (weight_decay_skip_1d is config-only, not serialized, so it is preserved).
+    {
+        serialization::StateDict state;
+        state["exp_avg"] = serialization::NamedParameters{
+            {"gain", autograd::create_tensor(to_tt_bf16(m1_0), false)},
+            {"weight", autograd::create_tensor(to_tt_bf16(m2_0), false)}};
+        state["exp_avg_sq"] = serialization::NamedParameters{
+            {"gain", autograd::create_tensor(to_tt_bf16(v1_0), false)},
+            {"weight", autograd::create_tensor(to_tt_bf16(v2_0), false)}};
+        state["steps"] = initial_steps;
+        state["lr"] = lr;
+        state["beta1"] = beta1;
+        state["beta2"] = beta2;
+        state["epsilon"] = epsilon;
+        state["weight_decay"] = weight_decay;
+        state["amsgrad"] = false;
+        state["stochastic_rounding"] = false;
+        opt.set_state_dict(state);
+    }
+
+    opt.step();
+
+    auto gain_result = core::to_xtensor(gain->get_value());
+    auto weight_result = core::to_xtensor(weight->get_value());
+
+    const float mean_error_tolerance = 1e-3f;
+    const float max_error_tolerance = 1e-2f;
+
+    // 1-D param must match the NO-weight-decay reference.
+    auto gain_metrics = compute_error_metrics(w1_no_wd, gain_result, "gain_1d");
+    EXPECT_LE(gain_metrics.mean_error, mean_error_tolerance) << "1-D param should not be weight-decayed";
+    EXPECT_LE(gain_metrics.max_error, max_error_tolerance) << "1-D param should not be weight-decayed";
+
+    // 2-D param must match the weight-decayed reference.
+    auto weight_metrics = compute_error_metrics(w2_with_wd, weight_result, "weight_2d");
+    EXPECT_LE(weight_metrics.mean_error, mean_error_tolerance) << "2-D param should be weight-decayed";
+    EXPECT_LE(weight_metrics.max_error, max_error_tolerance) << "2-D param should be weight-decayed";
+
+    // Guard against a vacuous pass: the undecayed 1-D result must be clearly distinct from the
+    // would-be-decayed reference, i.e. the weight decay is actually large enough to observe.
+    auto skip_vs_decay = compute_error_metrics(w1_with_wd, gain_result, "gain_skip_vs_decay");
+    EXPECT_GT(skip_vs_decay.mean_error, mean_error_tolerance)
+        << "weight decay too small to distinguish skipping from applying it; test is not meaningful";
+}
+
+// ====================================================================
+// State-dict restore tests
+// A checkpoint's betas may differ from the constructor config; both the
+// moment updates and the bias correction (beta powers) must follow the
+// restored betas.
+// ====================================================================
+
+class AdamWStateDictTest : public ::testing::Test {
+public:
+    static void SetUpTestSuite() {
+        ttml::autograd::ctx().open_device();
+    }
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
+    }
+
+protected:
+    void TearDown() override {
+        ttml::autograd::ctx().reset_graph();
+    }
+};
+
+// Builds an optimizer whose constructor betas differ from the effective ones, applies the
+// effective betas either through the state dict or through the setters, then verifies one
+// step against a CPU reference driven purely by the effective betas.
+static void run_effective_betas_step_and_compare(bool use_beta_setters) {
+    using namespace ttml;
+
+    const float lr = 1e-2f;
+    const float epsilon = 1e-8f;
+    const size_t initial_steps = 10;
+    const float constructor_beta1 = 0.9f;
+    const float constructor_beta2 = 0.999f;
+    const float effective_beta1 = 0.5f;
+    const float effective_beta2 = 0.9f;
+    const std::array<std::size_t, 4> shape = {1, 1, 128, 256};
+
+    autograd::ctx().set_seed(123U);
+    auto& gen = autograd::ctx().get_generator();
+    const uint32_t seed_param = gen();
+    const uint32_t seed_grad = gen();
+    const uint32_t seed_first_moment = gen();
+    const uint32_t seed_second_moment = gen();
+
+    xt::xarray<float> w0 = test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed_param);
+    xt::xarray<float> g0 = test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed_grad);
+    xt::xarray<float> m0 = test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed_first_moment);
+    xt::xarray<float> v0 = test_utils::make_uniform_xarray<float>(shape, 0.0F, 1.0F, seed_second_moment);
+
+    // CPU reference driven purely by the effective betas: the behavior a resumed run must match.
+    xt::xarray<float> w_cpu = w0;
+    CPUAdamW cpu_opt(lr, effective_beta1, effective_beta2, epsilon, /*weight_decay=*/0.0f, /*amsgrad=*/false);
+    cpu_opt.set_state(m0, v0, initial_steps);
+    cpu_opt.step(w_cpu, g0);
+
+    auto theta = autograd::create_tensor(to_tt_bf16(w0), true);
+    theta->set_grad(to_tt_bf16(g0));
+    serialization::NamedParameters params{{"theta", theta}};
+
+    optimizers::AdamWConfig cfg;
+    cfg.lr = lr;
+    cfg.beta1 = constructor_beta1;
+    cfg.beta2 = constructor_beta2;
+    cfg.epsilon = epsilon;
+    cfg.weight_decay = 0.0f;
+    optimizers::AdamW opt(params, cfg);
+
+    // When exercising the setters, the state dict carries the constructor betas so that only
+    // the setters introduce the effective ones.
+    const float state_beta1 = use_beta_setters ? constructor_beta1 : effective_beta1;
+    const float state_beta2 = use_beta_setters ? constructor_beta2 : effective_beta2;
+    {
+        serialization::StateDict state;
+        state["exp_avg"] = serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_bf16(m0), false)}};
+        state["exp_avg_sq"] = serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_bf16(v0), false)}};
+        state["steps"] = initial_steps;
+        state["lr"] = lr;
+        state["beta1"] = state_beta1;
+        state["beta2"] = state_beta2;
+        state["epsilon"] = epsilon;
+        state["weight_decay"] = 0.0f;
+        state["amsgrad"] = false;
+        state["stochastic_rounding"] = false;
+        opt.set_state_dict(state);
+    }
+
+    if (use_beta_setters) {
+        opt.set_beta1(effective_beta1);
+        opt.set_beta2(effective_beta2);
+    }
+
+    EXPECT_EQ(opt.get_steps(), initial_steps);
+    EXPECT_FLOAT_EQ(opt.get_beta1(), effective_beta1);
+    EXPECT_FLOAT_EQ(opt.get_beta2(), effective_beta2);
+
+    opt.step();
+
+    auto result = core::to_xtensor(theta->get_value());
+    auto metrics = compute_error_metrics(w_cpu, result, "effective_betas");
+
+    const float mean_error_tolerance = 1e-3f;
+    const float max_error_tolerance = 1e-2f;
+    EXPECT_LE(metrics.mean_error, mean_error_tolerance) << "bias correction must follow the effective betas";
+    EXPECT_LE(metrics.max_error, max_error_tolerance) << "bias correction must follow the effective betas";
+
+    // Guard against a vacuous pass: a step whose moments follow the effective betas but whose
+    // bias correction still carries the constructor betas' powers must be clearly distinguishable
+    // from the reference.
+    xt::xarray<float> m1 = effective_beta1 * m0 + (1.0f - effective_beta1) * g0;
+    xt::xarray<float> v1 = effective_beta2 * v0 + (1.0f - effective_beta2) * (g0 * g0);
+    const float stale_bias_correction1 =
+        1.0f - std::pow(constructor_beta1, static_cast<float>(initial_steps)) * effective_beta1;
+    const float stale_bias_correction2 =
+        1.0f - std::pow(constructor_beta2, static_cast<float>(initial_steps)) * effective_beta2;
+    xt::xarray<float> w_stale =
+        w0 - lr * (m1 / stale_bias_correction1) / (xt::sqrt(v1 / stale_bias_correction2) + epsilon);
+    auto stale_metrics = compute_error_metrics(w_cpu, w_stale, "stale_bias_correction");
+    EXPECT_GT(stale_metrics.mean_error, mean_error_tolerance)
+        << "constructor and effective betas too close to distinguish; test is not meaningful";
+}
+
+TEST_F(AdamWStateDictTest, RestoredBetasDriveBiasCorrection) {
+    run_effective_betas_step_and_compare(/*use_beta_setters=*/false);
+}
+
+TEST_F(AdamWStateDictTest, BetaSettersRecomputeBiasCorrection) {
+    run_effective_betas_step_and_compare(/*use_beta_setters=*/true);
+}
+
+// ====================================================================
+// Validation tests
+// ====================================================================
+
+using AdamWValidationTest = AdamWStateDictTest;
+
+TEST_F(AdamWValidationTest, RejectsLogicalShapeMismatchWithEqualPadding) {
+    using namespace ttml;
+
+    // Logical 31x32 and 32x32 both round up to one 32x32 tile, so only logical-shape
+    // validation can tell them apart.
+    const std::array<std::size_t, 4> param_shape = {1, 1, 32, 32};
+    const std::array<std::size_t, 4> grad_shape = {1, 1, 31, 32};
+    auto param = to_tt_bf16(test_utils::make_uniform_xarray<float>(param_shape, -1.0F, 1.0F, 123U));
+    auto grad = to_tt_bf16(test_utils::make_uniform_xarray<float>(grad_shape, -1.0F, 1.0F, 124U));
+    auto exp_avg = to_tt_bf16(test_utils::make_uniform_xarray<float>(param_shape, -1.0F, 1.0F, 125U));
+    auto exp_avg_sq = to_tt_bf16(test_utils::make_uniform_xarray<float>(param_shape, 0.0F, 1.0F, 126U));
+
+    EXPECT_ANY_THROW(ttml::metal::adamw(
+        param,
+        grad,
+        exp_avg,
+        exp_avg_sq,
+        /* max_exp_avg_sq */ std::nullopt,
+        /* lr */ 1e-3f,
+        /* beta1 */ 0.9f,
+        /* beta2 */ 0.999f,
+        /* beta1_pow */ 0.9f,
+        /* beta2_pow */ 0.999f,
+        /* epsilon */ 1e-8f,
+        /* weight_decay */ 0.0f));
+}
 
 // ====================================================================
 // AMSGrad Tests

@@ -7,9 +7,13 @@ print_usage() {
     echo "  --image <image>           (Optional) Docker image to use"
     echo "  --empty-entrypoint        (Optional) Pass --entrypoint=\"\" to docker run"
     echo "  --volume <path>           (Optional) Extra host path to mount into the container (repeatable)"
+    echo "  --docker-arg <arg>        (Optional) Extra argument passed verbatim to 'docker run' (repeatable)"
+    echo "                            e.g. --docker-arg --cap-add=SYS_PTRACE --docker-arg --shm-size=2g"
     echo "  --mpi-interface <iface>   (Optional) Network interface to pin MPI to (default: ens5f0np0)"
     echo "                            Passed to --prtemca oob_tcp_if_include and --mca btl_tcp_if_include."
     echo "                            Interface names vary by site; override on non-Markham clusters."
+    echo "  --tag-host                (Optional) Prefix each rank's output with [hostname]"
+    echo "                            instead of mpirun's [jobid,rank] --tag-output (off by default)"
     echo "  --print                   Print the command alongside execution"
     echo "  --print-only              Print the command without executing it"
     echo "  [global-mpi-args]     Global MPI arguments applied to all ranks"
@@ -41,12 +45,28 @@ print_usage() {
     echo "  $0 --image myimage --oversubscribe --timeout 300 --host host1,host2 ./myapp"
 }
 
+# Single-quote a bash -c payload for the eval below. A single-quoted string cannot
+# contain a single quote by any escaping, so each one is emitted as '\'' (close,
+# escaped quote, reopen). Without this a value like --docker-arg --env=X=it's
+# terminates the wrapper and the whole command fails to parse.
+sq_wrap() {
+    local payload="$1"
+    payload=${payload//\'/\'\\\'\'}
+    printf "'%s'" "$payload"
+}
+
 default() {
     local image="ghcr.io/tenstorrent/tt-metal/upstream-tests-wh-6u:latest"
     local empty_entrypoint=false
     local extra_volumes=""
+    # Extra 'docker run' args (repeatable --docker-arg); %q-quoted to survive the eval below.
+    local docker_extra_args=""
     local print_flag=false
     local print_only=false
+    # Host-tag each rank's output (replaces mpirun's [jobid,rank] --tag-output).
+    # Off by default to preserve [jobid,rank] for callers that parse it; enable
+    # with --tag-host.
+    local tag_host=false
     # Interface names differ between sites; default works on Markham,
     # override elsewhere via --mpi-interface.
     local mpi_interface="ens5f0np0"
@@ -86,6 +106,26 @@ default() {
                 extra_volumes="$extra_volumes -v ${vol}:${vol}"
                 shift
                 ;;
+            --docker-arg)
+                # A docker arg may start with '-' (e.g. --cap-add), so don't reject dash-prefixed values.
+                if [[ $# -lt 2 || -z "$2" ]]; then
+                    echo "Error: --docker-arg requires a non-empty value"
+                    print_usage
+                    exit 1
+                fi
+                docker_extra_args="$docker_extra_args $(printf '%q' "$2")"
+                shift 2
+                ;;
+            --docker-arg=*)
+                local da="${1#--docker-arg=}"
+                if [[ -z "$da" ]]; then
+                    echo "Error: --docker-arg requires a non-empty value"
+                    print_usage
+                    exit 1
+                fi
+                docker_extra_args="$docker_extra_args $(printf '%q' "$da")"
+                shift
+                ;;
             --mpi-interface)
                 if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
                     echo "Error: --mpi-interface requires a non-empty interface name"
@@ -110,6 +150,10 @@ default() {
                 ;;
             --print-only)
                 print_only=true
+                shift
+                ;;
+            --tag-host)
+                tag_host=true
                 shift
                 ;;
             *)
@@ -223,8 +267,18 @@ default() {
         exit 1
     fi
 
-    # Build the command for each rank group
-    local base_mpirun_args="--tag-output --prtemca oob_tcp_if_include $mpi_interface --mca plm_ssh_args \"-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR\" --mca btl_tcp_if_include $mpi_interface"
+    # With --tag-host we host-tag each rank ourselves, so drop mpirun's [jobid,rank]
+    # --tag-output to avoid a double tag.
+    local output_tag_arg="--tag-output"
+    if [[ "$tag_host" == true ]]; then
+        output_tag_arg=""
+    fi
+    local base_mpirun_args="$output_tag_arg --prtemca oob_tcp_if_include $mpi_interface --mca plm_ssh_args \"-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR\" --mca btl_tcp_if_include $mpi_interface"
+
+    # Bare [real-host] tag applied in the remote shell (outside the container), so it
+    # reports the true host regardless of container hostname. No single quotes (would
+    # clash with the bash -c '...' wrapper); $(hostname)/$l resolve on the rank.
+    local host_tag_pipe='while IFS= read -r l; do printf "[%s] %s\n" "$(hostname)" "$l"; done'
 
     # Add global MPI args to base
     if [[ ${#global_mpi_args[@]} -gt 0 ]]; then
@@ -278,10 +332,14 @@ default() {
         fi
 
         # Build docker command
-        local docker_cmd="docker run \$(env | grep -E \"^(OMPI_|PMIX_)\" | cut -f1 -d= | awk \"{print \\\"-e \\\" \\\$1}\" | tr \"\n\" \" \") $docker_env_flags --rm --net=host --privileged -v /tmp:/tmp -v /dev/hugepages-1G:/dev/hugepages-1G -v \$HOME:\$HOME --user \$(id -u):\$(id -g) -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro$extra_volumes $entrypoint_opt $image $executable"
+        local docker_cmd="docker run \$(env | grep -E \"^(OMPI_|PMIX_)\" | cut -f1 -d= | awk \"{print \\\"-e \\\" \\\$1}\" | tr \"\n\" \" \") $docker_env_flags --rm --net=host --privileged -v /tmp:/tmp -v /dev/hugepages-1G:/dev/hugepages-1G -v \$HOME:\$HOME --user \$(id -u):\$(id -g) -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro$extra_volumes$docker_extra_args $entrypoint_opt $image $executable"
 
         # Single segment without per-rank args
-        mpirun_segments+=("bash -c '$docker_cmd'")
+        if [[ "$tag_host" == true ]]; then
+            mpirun_segments+=("bash -c $(sq_wrap "set -o pipefail; $docker_cmd 2>&1 | $host_tag_pipe")")
+        else
+            mpirun_segments+=("bash -c $(sq_wrap "$docker_cmd")")
+        fi
     else
         # Multi-executable mode with per-rank specifications
         for group in "${rank_groups[@]}"; do
@@ -351,10 +409,14 @@ default() {
             fi
 
             # Build docker command for this group
-            local docker_cmd="docker run \$(env | grep -E \"^(OMPI_|PMIX_)\" | cut -f1 -d= | awk \"{print \\\"-e \\\" \\\$1}\" | tr \"\n\" \" \") $docker_env_flags --rm --net=host --privileged -v /tmp:/tmp -v /dev/hugepages-1G:/dev/hugepages-1G -v \$HOME:\$HOME --user \$(id -u):\$(id -g) -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro$extra_volumes $entrypoint_opt $image $executable"
+            local docker_cmd="docker run \$(env | grep -E \"^(OMPI_|PMIX_)\" | cut -f1 -d= | awk \"{print \\\"-e \\\" \\\$1}\" | tr \"\n\" \" \") $docker_env_flags --rm --net=host --privileged -v /tmp:/tmp -v /dev/hugepages-1G:/dev/hugepages-1G -v \$HOME:\$HOME --user \$(id -u):\$(id -g) -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro$extra_volumes$docker_extra_args $entrypoint_opt $image $executable"
 
             # Combine this group's MPI args with docker command
-            mpirun_segments+=("${mpi_args[*]} bash -c '$docker_cmd'")
+            if [[ "$tag_host" == true ]]; then
+                mpirun_segments+=("${mpi_args[*]} bash -c $(sq_wrap "set -o pipefail; $docker_cmd 2>&1 | $host_tag_pipe")")
+            else
+                mpirun_segments+=("${mpi_args[*]} bash -c $(sq_wrap "$docker_cmd")")
+            fi
         done
     fi
 

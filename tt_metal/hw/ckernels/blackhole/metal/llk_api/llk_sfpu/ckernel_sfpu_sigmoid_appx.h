@@ -4,45 +4,39 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
-
-using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
 
 template <int ITERATIONS = 8>
 inline void calculate_sigmoid_appx() {
-    vUInt l0 = l_reg[LRegs::LReg0];
-    vUInt l1 = l_reg[LRegs::LReg1];
-    vUInt l2 = l_reg[LRegs::LReg2];
+    sfpi::vLut8si si0 = sfpi::l_reg[sfpi::LRegs::LReg0];
+    sfpi::vLut8si si1 = sfpi::l_reg[sfpi::LRegs::LReg1];
+    sfpi::vLut8si si2 = sfpi::l_reg[sfpi::LRegs::LReg2];
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat val = dst_reg[0];
+        sfpi::vFloat val = sfpi::dst_reg[0];
 
-        dst_reg[0] = lut(val, l0, l1, l2) + 0.5f;
+        sfpi::dst_reg[0] = sfpi::lut(val, si0, si1, si2) + 0.5f;
 
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 
-    l_reg[LRegs::LReg0] = l0;
-    l_reg[LRegs::LReg1] = l1;
-    l_reg[LRegs::LReg2] = l2;
+    sfpi::l_reg[sfpi::LRegs::LReg0] = si0;
+    sfpi::l_reg[sfpi::LRegs::LReg1] = si1;
+    sfpi::l_reg[sfpi::LRegs::LReg2] = si2;
 }
 
 inline void sigmoid_appx_init() {
-    uint imm0;
-    uint imm1;
-    uint imm2;
-    imm0 = 0x3DFF;
-    imm1 = 0x21D8;
-    imm2 = 0xFF10;
-    TTI_SFPLOADI(0, 2, imm0);
-    TTI_SFPLOADI(1, 2, imm1);
-    TTI_SFPLOADI(2, 2, imm2);
+    // Load the 3 fp16b LUT coefficients into LReg0-2
+    sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut8si(0.22656f, 0.0f);
+    sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vLut8si(0.26562f, -0.04687f);
+    sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vLut8si(0.0f, 0.5f);
 }
 
 }  // namespace sfpu

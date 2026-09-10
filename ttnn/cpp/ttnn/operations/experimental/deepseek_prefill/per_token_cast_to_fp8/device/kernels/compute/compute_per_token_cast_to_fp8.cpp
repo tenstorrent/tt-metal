@@ -6,11 +6,11 @@
 // per 128-element block.
 //
 // Per block = tile_h rows x 128 cols = 4 tiles for default 32-wide tiles:
-//   1. tilize cb_in -> cb_tile.
-//   2. compute per-row amax over the 128-element block, clamp(>=1e-4), multiply by 1/448
-//      -> scale (col 0) -> cb_scale_tiles. recip(scale) -> 1/scale -> cb_inv_scale_tiles.
-//   3. divide: out_tile = cb_tile * bcast_col(cb_inv_scale_tiles) per tile -> cb_out_tile.
-//   4. untilize cb_out_tile -> cb_output_e4m3 (scaled, cast to e4m3).
+//   Phase 1: cb_in -> cb_tile: tilize (ROW_MAJOR input) or copy (INPUT_TILE_LAYOUT: input already tiled).
+//   Phase 2: compute per-row amax over the 128-element block, clamp(>=1e-4), multiply by 1/448
+//            -> scale (col 0) -> cb_scale_tiles. recip(scale) -> 1/scale -> cb_inv_scale_tiles.
+//   Phase 3: divide (cb_tile * bcast_col(cb_inv_scale_tiles)) into DST, then pack_untilize_dest straight
+//            to cb_output_e4m3 (scaled, cast to e4m3) -- fused divide+untilize, no cb_out_tile round-trip.
 // The writer extracts column 0 of cb_scale_tiles into the scale output [..., M, H/128].
 //
 // fp32_dest_acc_en=True (required for e4m3 on Blackhole; also gives fp32 reduce/divide precision).
@@ -18,8 +18,6 @@
 #include <cstdint>
 
 #include "api/compute/common.h"
-#include "api/compute/tilize.h"
-#include "api/compute/untilize.h"
 #include "api/compute/reduce.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tile_move_copy.h"
@@ -30,7 +28,37 @@
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/eltwise_unary/clamp.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/pack_untilize.h"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+
+#ifdef TRISC_MATH
+namespace ckernel::sfpu {
+
+// The input is positive and normal because the amax is clamped before this
+// helper runs. Preserve an exact power of two; otherwise increment its biased
+// exponent and clear the mantissa.
+template <int ITERATIONS = 8>
+inline void calculate_ceil_power_of_two() {
+    for (int d = 0; d < ITERATIONS; ++d) {
+        sfpi::vFloat value = sfpi::dst_reg[0];
+        sfpi::vInt exponent = sfpi::exexp(value, sfpi::ExponentMode::Biased);
+        sfpi::vFloat mantissa = sfpi::setexp(value, 127);
+        sfpi::vFloat result = sfpi::setexp(sfpi::vFloat(1.0f), exponent);
+        v_if(mantissa != 1.0f) { result = sfpi::setexp(sfpi::vFloat(1.0f), exponent + 1); }
+        v_endif;
+        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg++;
+    }
+}
+
+}  // namespace ckernel::sfpu
+
+inline void ceil_power_of_two_tile(uint32_t idst) {
+    SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_ceil_power_of_two, (8 /* ITERATIONS */), idst, VectorMode::RC);
+}
+#endif
 
 void kernel_main() {
     constexpr uint32_t cb_in_id = get_compile_time_arg_val(0);
@@ -45,17 +73,16 @@ void kernel_main() {
     CircularBuffer cb_scale_tiles(cb_scale_tiles_id);
     constexpr uint32_t cb_inv_scale_tiles_id = get_compile_time_arg_val(5);
     CircularBuffer cb_inv_scale_tiles(cb_inv_scale_tiles_id);
-    constexpr uint32_t cb_out_tile_id = get_compile_time_arg_val(6);
-    CircularBuffer cb_out_tile(cb_out_tile_id);
-    constexpr uint32_t cb_output_e4m3_id = get_compile_time_arg_val(7);
+    constexpr uint32_t cb_output_e4m3_id = get_compile_time_arg_val(6);
     CircularBuffer cb_output_e4m3(cb_output_e4m3_id);
-    constexpr uint32_t clamp_min_bits = get_compile_time_arg_val(8);
-    constexpr uint32_t clamp_max_bits = get_compile_time_arg_val(9);
-    constexpr uint32_t inv_448_bits = get_compile_time_arg_val(10);
+    constexpr uint32_t clamp_min_bits = get_compile_time_arg_val(7);
+    constexpr uint32_t clamp_max_bits = get_compile_time_arg_val(8);
+    constexpr uint32_t inv_448_bits = get_compile_time_arg_val(9);
 
     // Tile width from the tensor's tile spec.
     constexpr uint32_t block_w = 128;  // BlockW
-    constexpr uint32_t tile_w = get_compile_time_arg_val(11);
+    constexpr uint32_t tile_w = get_compile_time_arg_val(10);
+    constexpr bool round_scale_to_power_of_two = get_compile_time_arg_val(11) != 0;
     constexpr uint32_t block_wt = block_w / tile_w;  // BlockWt
     constexpr uint32_t block_ht = 1;                 // BlockHt
     constexpr uint32_t tiles_per_block = block_ht * block_wt;
@@ -73,27 +100,41 @@ void kernel_main() {
 
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         {
-            // ----- 1. tilize input row-major -> tile -----
+            // ----- Phase 1: get input tiles into fp32 cb_tile -----
+#ifdef INPUT_TILE_LAYOUT
+            // TILE input is already tiled, so copy instead of tilize. The fp32 copy is also what makes
+            // bf16 correct: reading bf16 cb_in into the reduce would expose only 2 faces (cols 0-15)
+            // and corrupt the per-128 amax.
             reconfig_data_format_srca(cb_in_id);
             pack_reconfig_data_format(cb_tile_id);
-            tilize_init(cb_in_id, tiles_per_block, cb_tile_id);
+            copy_init(cb_in_id);
             cb_in.wait_front(tiles_per_block);
             cb_tile.reserve_back(tiles_per_block);
-            tilize_block(cb_in_id, tiles_per_block, cb_tile_id);
+            for (uint32_t k = 0; k < tiles_per_block; ++k) {
+                tile_regs_acquire();
+                copy_tile(cb_in_id, k, IDST0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(IDST0, cb_tile_id);
+                tile_regs_release();
+            }
             cb_tile.push_back(tiles_per_block);
             cb_in.pop_front(tiles_per_block);
-            tilize_uninit(cb_in_id, cb_tile_id);
+#else
+            // ROW_MAJOR input: tilize the row-major block into tiles.
+            compute_kernel_lib::tilize<tiles_per_block, cb_in_id, cb_tile_id>(block_ht);
+#endif
 
-            // ----- 2. block amax -> scale (col 0) and 1/scale (col 0) -----
+            // ----- Phase 2: block amax -> scale (col 0) and 1/scale (col 0) -----
             cb_tile.wait_front(tiles_per_block);  // read by index; popped after the divide
             for (uint32_t block_h_idx = 0; block_h_idx < block_ht; ++block_h_idx) {
-                // Abs the block row's tiles into cb_abs. Force the SrcA tile-dim/stride reconfig
-                // (is_tile_dim_reconfig_en=true): the default reconfig keeps the prior element
-                // stride, so after a bf16 tilize the fp32 cb_tile would be read with a 2-byte
-                // stride and copy_tile would misread it (corrupting the amax for bf16 input).
-                reconfig_data_format_srca<false, true>(cb_tile_id);
+                // Abs the block row's tiles into cb_abs. Use reconfig_full_operand_srca so the SrcA tile/face
+                // geometry is reprogrammed for cb_tile too (not just the format): after a bf16 tilize the fp32
+                // cb_tile would otherwise be read with a stale geometry and copy_tile would misread it
+                // (corrupting the amax for bf16 input).
+                reconfig_full_operand_srca(cb_tile_id);
                 pack_reconfig_data_format(cb_abs_id);
-                copy_tile_init(cb_tile_id);
+                copy_init(cb_tile_id);
                 cb_abs.reserve_back(block_wt);
                 abs_tile_init();
                 for (uint32_t k = 0; k < block_wt; ++k) {
@@ -129,6 +170,11 @@ void kernel_main() {
                 clamp_tile(IDST0, clamp_min_bits, clamp_max_bits);  // slot 0 = clamp(amax)
                 binop_with_scalar_tile_init();
                 mul_unary_tile(IDST0, inv_448_bits);  // slot 0 = scale = clamp(amax)/448
+                if constexpr (round_scale_to_power_of_two) {
+                    // UE8M0-style scale: 2^ceil(log2(scale)), formed directly from the
+                    // float32 exponent and mantissa so power-of-two boundaries are exact.
+                    MATH((ceil_power_of_two_tile(IDST0)));
+                }
                 copy_dest_values_init();
                 copy_dest_values<DataFormat::Float32>(IDST0, IDST1);  // slot 1 = scale
                 recip_tile_init();
@@ -146,37 +192,33 @@ void kernel_main() {
                 cb_abs.pop_front(block_wt);
             }
 
-            // ----- 3. divide: cb_out_tile = cb_tile * bcast_col(1/scale) -----
+            // ----- Phase 3: divide (cb_tile * bcast_col(1/scale)) into DST, then pack_untilize straight
+            // to e4m3 -- fused divide+untilize, no cb_out_tile L1 round-trip and no separate untilize pass.
+            // In 32-bit DST (fp32_dest_acc) the half-sync pack-untilize cap is 4 tiles = one block. -----
             reconfig_data_format(cb_tile_id, cb_inv_scale_tiles_id);
-            pack_reconfig_data_format(cb_out_tile_id);
-            mul_bcast_cols_init_short(cb_tile_id, cb_inv_scale_tiles_id);
+            mul_bcast_cols_init(cb_tile_id, cb_inv_scale_tiles_id);
+            pack_untilize_dest_init<tiles_per_block, tiles_per_block>(cb_output_e4m3_id);
             cb_inv_scale_tiles.wait_front(block_ht);
-            cb_out_tile.reserve_back(tiles_per_block);
+            cb_output_e4m3.reserve_back(tiles_per_block);
+            tile_regs_acquire();
             for (uint32_t block_h_idx = 0; block_h_idx < block_ht; ++block_h_idx) {
                 for (uint32_t k = 0; k < block_wt; ++k) {
-                    tile_regs_acquire();
                     mul_tiles_bcast_cols(
-                        cb_tile_id, cb_inv_scale_tiles_id, block_h_idx * block_wt + k, block_h_idx, IDST0);
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_tile(IDST0, cb_out_tile_id);
-                    tile_regs_release();
+                        cb_tile_id,
+                        cb_inv_scale_tiles_id,
+                        block_h_idx * block_wt + k,
+                        block_h_idx,
+                        block_h_idx * block_wt + k);
                 }
             }
-            cb_out_tile.push_back(tiles_per_block);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_untilize_dest<tiles_per_block>(cb_output_e4m3_id);
+            tile_regs_release();
+            cb_output_e4m3.push_back(tiles_per_block);
             cb_tile.pop_front(tiles_per_block);
             cb_inv_scale_tiles.pop_front(block_ht);
-
-            // ----- 4. untilize cb_out_tile -> output e4m3 (scaled) -----
-            reconfig_data_format_srca(cb_out_tile_id);
-            pack_reconfig_data_format(cb_output_e4m3_id);
-            untilize_init(cb_out_tile_id);
-            cb_out_tile.wait_front(tiles_per_block);
-            cb_output_e4m3.reserve_back(tiles_per_block);
-            untilize_block(cb_out_tile_id, tiles_per_block, cb_output_e4m3_id);
-            cb_output_e4m3.push_back(tiles_per_block);
-            cb_out_tile.pop_front(tiles_per_block);
-            untilize_uninit(cb_out_tile_id);
+            pack_untilize_uninit(cb_output_e4m3_id);
         }
     }
 }

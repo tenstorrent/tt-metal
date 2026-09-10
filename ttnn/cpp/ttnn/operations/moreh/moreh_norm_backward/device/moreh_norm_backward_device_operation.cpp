@@ -29,7 +29,7 @@ MorehNormBackwardOperation::spec_return_value_t MorehNormBackwardOperation::comp
     if (tensor_args.input_grad.has_value()) {
         return tensor_args.input_grad->tensor_spec();
     }
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         tensor_args.input.logical_shape(),
         TensorLayout(
             tensor_args.input.dtype(), PageConfig(tensor_args.input.layout()), operation_attributes.memory_config));

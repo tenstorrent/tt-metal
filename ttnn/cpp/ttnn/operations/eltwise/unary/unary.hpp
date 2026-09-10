@@ -152,13 +152,11 @@ Tensor gelu(
 
 DECLARE_UNARY_OP_WITH_FLOAT_PARAM(heaviside)
 DECLARE_UNARY_OP_WITH_FLOAT_PARAM(leaky_relu)
-DECLARE_UNARY_OP_WITH_FLOAT_PARAM(relu_max)
-DECLARE_UNARY_OP_WITH_FLOAT_PARAM(relu_min)
-DECLARE_UNARY_OP_WITH_FLOAT_PARAM(unary_remainder)
 DECLARE_UNARY_OP_WITH_FLOAT_PARAM(celu)
 DECLARE_UNARY_OP_WITH_FLOAT_PARAM(rpow)
 DECLARE_UNARY_OP_WITH_FLOAT_PARAM(unary_fmod)
 DECLARE_UNARY_OP_WITH_FLOAT_PARAM(prelu_sfpu)
+DECLARE_UNARY_OP_WITH_FLOAT_PARAM(softcap)
 
 #undef DECLARE_UNARY_OP_WITH_FLOAT_PARAM
 
@@ -222,6 +220,9 @@ Tensor selu(
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 DECLARE_UNARY_OP_SCALAR_VARIANT(fill)
+DECLARE_UNARY_OP_SCALAR_VARIANT(unary_remainder)
+DECLARE_UNARY_OP_SCALAR_VARIANT(relu_max)
+DECLARE_UNARY_OP_SCALAR_VARIANT(relu_min)
 DECLARE_UNARY_OP_SCALAR_VARIANT(power)
 DECLARE_UNARY_OP_SCALAR_VARIANT(gt_unary)
 DECLARE_UNARY_OP_SCALAR_VARIANT(lt_unary)
@@ -300,6 +301,14 @@ Tensor where_tss(
     const Tensor& condition,
     const operations::unary::ScalarVariant& value_true,
     const operations::unary::ScalarVariant& value_false,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+
+Tensor mac_tss(
+    const Tensor& input_tensor_a,
+    float value1,
+    float value2,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);

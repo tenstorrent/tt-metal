@@ -69,7 +69,7 @@ enum class EndpointRole : uint8_t { Sender, Receiver };
 struct EndpointId {
     EndpointRole role = EndpointRole::Sender;
     FabricNodeId node_id{MeshId{0}, 0};
-    CoreCoord logical_core;
+    tt::tt_metal::CoreCoord logical_core;
     uint16_t config_idx = 0;
 
     bool operator==(const EndpointId&) const = default;
@@ -217,11 +217,11 @@ private:
     void process_sender_read_results(
         FabricNodeId node_id,
         const TestDevice& test_device,
-        const std::unordered_map<CoreCoord, std::vector<uint32_t>>& core_data);
+        const std::unordered_map<tt::tt_metal::CoreCoord, std::vector<uint32_t>>& core_data);
     void process_receiver_read_results(
         FabricNodeId node_id,
         const TestDevice& test_device,
-        const std::unordered_map<CoreCoord, std::vector<uint32_t>>& core_data);
+        const std::unordered_map<tt::tt_metal::CoreCoord, std::vector<uint32_t>>& core_data);
     void check_for_hung_endpoints();
     void display_granular_progress(std::chrono::duration<double> elapsed);
     bool all_endpoints_resolved() const;

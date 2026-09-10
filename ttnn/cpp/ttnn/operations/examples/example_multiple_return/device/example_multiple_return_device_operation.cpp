@@ -25,7 +25,7 @@ void ExampleMultipleReturnDeviceOperation::validate_on_program_cache_hit(
 ExampleMultipleReturnDeviceOperation::spec_return_value_t ExampleMultipleReturnDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
-    TensorSpec spec(
+    tt::tt_metal::TensorSpec spec(
         input_tensor.logical_shape(),
         tt::tt_metal::TensorLayout(
             input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), MemoryConfig{}));

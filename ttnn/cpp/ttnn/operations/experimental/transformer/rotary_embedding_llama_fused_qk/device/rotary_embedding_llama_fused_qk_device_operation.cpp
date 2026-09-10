@@ -120,10 +120,10 @@ RotaryEmbeddingLlamaFusedQkResultSpec RotaryEmbeddingLlamaFusedQKDeviceOperation
     const auto& q_shape = q_input_tensor.logical_shape();
     const auto& k_shape = k_input_tensor.logical_shape();
     return {
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             q_shape,
             TensorLayout(q_input_tensor.dtype(), PageConfig(q_input_tensor.layout()), args.q_output_mem_config)),
-        TensorSpec(
+        tt::tt_metal::TensorSpec(
             k_shape,
             TensorLayout(k_input_tensor.dtype(), PageConfig(k_input_tensor.layout()), args.k_output_mem_config))};
 }

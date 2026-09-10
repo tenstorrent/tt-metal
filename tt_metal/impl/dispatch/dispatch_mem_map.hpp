@@ -9,6 +9,7 @@
 
 #include <umd/device/types/core_coordinates.hpp>
 #include "command_queue_common.hpp"
+#include "dispatch_core_common.hpp"
 #include "dispatch_settings.hpp"
 
 namespace tt::llrt {
@@ -17,7 +18,6 @@ class RunTimeOptions;
 
 namespace tt::tt_metal {
 class Hal;
-enum class CommandQueueDeviceAddrType : uint8_t;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal {
@@ -40,7 +40,7 @@ public:
         uint32_t num_hw_cqs,
         const Hal& hal,
         bool is_galaxy_cluster,
-        bool are_fd_kernels_on_same_core,
+        const CommandQueueDispatchLayout& cq_layout,
         const tt::llrt::RunTimeOptions& rtoptions);
 
     uint32_t prefetch_q_entries() const;
@@ -51,11 +51,11 @@ public:
 
     uint32_t max_prefetch_command_size() const;
 
-    uint32_t cmddat_q_base() const;
+    uint32_t cmddat_q_base(uint8_t cq_id) const;
 
     uint32_t cmddat_q_size() const;
 
-    uint32_t scratch_db_base() const;
+    uint32_t scratch_db_base(uint8_t cq_id) const;
 
     uint32_t scratch_db_size() const;
 
@@ -63,7 +63,7 @@ public:
 
     uint32_t dispatch_buffer_block_size_pages() const;
 
-    uint32_t dispatch_buffer_base() const;
+    uint32_t dispatch_buffer_base(uint8_t cq_id) const;
 
     uint32_t dispatch_buffer_pages() const;
 
@@ -87,10 +87,10 @@ public:
     // just read the addresses and pass the runtime per-device print-core count to the kernel
     // via static_config_.device_print_noc_locations_count.
     uint32_t dispatch_s_device_print_l1_cache_size() const;
-    uint32_t device_print_dispatch_noc_locations_addr() const;
-    uint32_t device_print_dispatch_l1_cache_addr() const;
+    uint32_t device_print_dispatch_noc_locations_addr(uint8_t cq_id) const;
+    uint32_t device_print_dispatch_l1_cache_addr(uint8_t cq_id) const;
 
-    uint32_t get_device_command_queue_addr(const CommandQueueDeviceAddrType& device_addr_type) const;
+    uint32_t get_device_command_queue_addr(const CommandQueueDeviceAddrType& device_addr_type, uint8_t cq_id) const;
 
     uint32_t get_host_command_queue_addr(const CommandQueueHostAddrType& host_addr) const;
 
@@ -103,7 +103,9 @@ public:
     // Offset to be passed in the go message.
     uint8_t get_dispatch_message_update_offset(uint32_t index) const;
 
-    uint32_t get_prefetcher_l1_size() const;
+    // Index of the first worker-completion counter reserved for cq_id's workers, in the shared
+    // WORKER_COMPLETION_SEMAPHORES L1 region.
+    uint32_t get_completion_counter_offset(uint8_t cq_id) const;
 
 private:
     uint32_t cmddat_q_base_ = 0;
@@ -117,9 +119,11 @@ private:
 
     DispatchSettings settings;
 
+    uint32_t num_cqs_per_core_ = 0;
+    uint32_t cq_zone_stride_ = 0;
+
     uint32_t host_alignment_ = 0;
     uint32_t l1_alignment_ = 0;
-    uint32_t l1_size_ = 0;
     uint32_t noc_overlay_start_addr_ = 0;
     uint32_t noc_stream_reg_space_size_ = 0;
     uint32_t noc_stream_remote_dest_buf_space_available_update_reg_index_ = 0;

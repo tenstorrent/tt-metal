@@ -24,11 +24,13 @@ void kernel_main() {
     constexpr uint32_t pages_per_bank = get_compile_time_arg_val(1);
     constexpr uint32_t page_size_bytes = get_compile_time_arg_val(2);
     constexpr uint32_t test_id = get_compile_time_arg_val(3);
+    constexpr uint32_t num_banks = get_compile_time_arg_val(4);
 
     DeviceTimestampedData("Number of transactions", num_of_transactions);
     DeviceTimestampedData("Transaction size in bytes", pages_per_bank * page_size_bytes);
     DeviceTimestampedData("Bank id", bank_id);
     DeviceTimestampedData("Test id", test_id);
+    DeviceTimestampedData("Number of Banks", num_banks);
 
     uint32_t dst_addr = l1_addr;
 

@@ -70,6 +70,7 @@ def initialize_vllm_text_transformer(
             max_batch_size=max_batch_size // tt_data_parallel,
             optimizations=optimizations,
             max_seq_len=max_seq_len,
+            cache_hf=False,  # vLLM never builds a torch reference; keep the lighter weight loader.
         )
 
         if n_layers is not None:
@@ -166,6 +167,7 @@ class LlamaForCausalLM(Generator):
         "supports_async_decode": True,
         "supports_prefix_caching": True,
         "supports_sample_on_device": True,
+        "max_device_top_k": 32,
     }
 
     def __init__(self, *args, **kwargs):
@@ -216,6 +218,7 @@ class QwenForCausalLM(Generator):
     # Class-level capabilities
     model_capabilities = {
         "supports_sample_on_device": True,
+        "max_device_top_k": 32,
     }
 
     def __init__(self, *args, **kwargs):

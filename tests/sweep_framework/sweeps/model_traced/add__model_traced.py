@@ -182,7 +182,11 @@ def run(
 
     start_time = start_measuring_time()
     ttnn.add_(input_tensor_a, input_tensor_b, **op_kwargs)
-    output_tensor = mesh_tensor_to_torch(input_tensor_a, device if is_mesh_device else None)
+    output_tensor = mesh_tensor_to_torch(
+        input_tensor_a,
+        device if is_mesh_device else None,
+        scatter_placement=input_a_tensor_placement if is_mesh_device else None,
+    )
     e2e_perf = stop_measuring_time(start_time)
 
     # Check with PCC

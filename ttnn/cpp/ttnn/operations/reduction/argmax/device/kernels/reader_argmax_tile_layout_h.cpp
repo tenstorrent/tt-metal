@@ -6,7 +6,8 @@
 #include "argmax_common.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/tensor_accessor.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 #include <stdint.h>
 
@@ -19,45 +20,35 @@
  */
 
 void kernel_main() {
-    constexpr uint32_t src_cb_idx = get_compile_time_arg_val(0);
-    constexpr uint32_t dst_cb_idx = get_compile_time_arg_val(1);
+    constexpr auto src_page_size = get_arg(args::src_page_size);
 
-    constexpr uint32_t src_page_size = get_compile_time_arg_val(2);
+    constexpr auto tile_height = get_arg(args::tile_height);
+    constexpr auto tile_width = get_arg(args::tile_width);
 
-    constexpr uint32_t tile_height = get_compile_time_arg_val(4);
-    constexpr uint32_t tile_width = get_compile_time_arg_val(5);
+    constexpr auto input_height = get_arg(args::input_height);
+    constexpr auto input_width = get_arg(args::input_width);
 
-    constexpr uint32_t input_height = get_compile_time_arg_val(6);
-    constexpr uint32_t input_width = get_compile_time_arg_val(7);
+    constexpr auto logical_height = get_arg(args::logical_height);
+    constexpr auto logical_width = get_arg(args::logical_width);
 
-    constexpr uint32_t logical_height = get_compile_time_arg_val(8);
-    constexpr uint32_t logical_width = get_compile_time_arg_val(9);
+    constexpr auto outer_dim_size = get_arg(args::outer_dim_size);
 
-    constexpr uint32_t outer_dim_size = get_compile_time_arg_val(10);
+    // This reader takes no reduce_all/keepdim arguments; the width reader adds those.
 
-    // TensorAccessor follows the kernel-specific compile-time args (no reduce_all/keepdim; width reader adds those).
-    constexpr uint32_t num_c_time_args = 11;
-
-    const uint32_t src_base_addr = get_arg_val<uint32_t>(0);
-    const uint32_t dst_base_addr = get_arg_val<uint32_t>(1);
-
-    constexpr auto s_src_args = TensorAccessorArgs<num_c_time_args>();
-    constexpr auto s_dst_args = TensorAccessorArgs<s_src_args.next_compile_time_args_offset()>();
-
-    auto s_src = TensorAccessor(s_src_args, src_base_addr);
-    auto s_dst = TensorAccessor(s_dst_args, dst_base_addr);
+    auto s_src = TensorAccessor(tensor::src);
+    auto s_dst = TensorAccessor(tensor::dst);
     using dst_accessor_type = decltype(s_dst);
 
-    CircularBuffer src_cb(src_cb_idx);
-    const uint32_t src_cb_addr = src_cb.get_write_ptr();
-    constexpr DataFormat src_data_format = get_dataformat(src_cb_idx);
-    CircularBuffer dst_cb(dst_cb_idx);
-    const uint32_t dst_cb_addr = dst_cb.get_write_ptr();
+    DataflowBuffer src_dfb(dfb::src);
+    const uint32_t src_dfb_addr = src_dfb.get_write_ptr();
+    constexpr DataFormat src_data_format = get_dataformat(dfb::src);
+    DataflowBuffer dst_dfb(dfb::dst);
+    const uint32_t dst_dfb_addr = dst_dfb.get_write_ptr();
 
     auto default_val = get_default_value<src_data_format>();
     using src_element_type = decltype(default_val);
 
-    // Required by OutputContext; unused with collect_row_major_output<false> (values go to output CB).
+    // Required by OutputContext; unused with collect_row_major_output<false> (values go to output DFB).
     uint32_t stack_unused[1] = {0};
 
     // Batching must match the output buffer page size. Do not use keepdim ? 1 : width (one uint32
@@ -81,9 +72,9 @@ void kernel_main() {
         face_height_rem,
         face_width_rem,
         src_data_format,
-        src_cb_addr);
+        src_dfb_addr);
 
-    OutputContext output_ctx((uint32_t*)stack_unused, 1, dst_cb_addr, output_page_elements);
+    OutputContext output_ctx((uint32_t*)stack_unused, 1, dst_dfb_addr, output_page_elements);
 
     Noc noc;
 
@@ -101,7 +92,7 @@ void kernel_main() {
             for (uint32_t h_tile = 0; h_tile < input_height; h_tile++) {
                 const uint32_t src_tile_id = outer_index * inner_size + h_tile * input_width + w_tile;
 
-                noc.async_read(s_src, src_cb, src_page_size, {.page_id = src_tile_id}, {.offset_bytes = 0});
+                noc.async_read(s_src, src_dfb, src_page_size, {.page_id = src_tile_id}, {.offset_bytes = 0});
                 noc.async_read_barrier();
 
                 process_loaded_tile_all_h_columns<src_element_type, src_data_format>(

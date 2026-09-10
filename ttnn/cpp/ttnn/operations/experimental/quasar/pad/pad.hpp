@@ -41,8 +41,8 @@ ttnn::Tensor pad(
 // legacy API
 ttnn::Tensor pad(
     const ttnn::Tensor& input_tensor,
-    const tt::tt_metal::Array4D& output_padded_shape,
-    const tt::tt_metal::Array4D& input_tensor_start,
+    const ttnn::Array4D& output_padded_shape,
+    const ttnn::Array4D& input_tensor_start,
     float value,
     bool use_multicore = true,
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,

@@ -281,6 +281,13 @@ def test_convt2d_dram(
     if device.core_grid.y != 8 and is_wormhole_b0():
         pytest.skip("Needs 8x8 Grid for Wormhole_b0")
 
+    if layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip(
+            "Row-major DRAM auto-slicing underestimates peak L1 for simultaneous interleaved-to-row-major "
+            "untilize staging buffers and can select an oversized slice; tiled DRAM-slicing coverage remains "
+            "enabled. See https://github.com/tenstorrent/tt-metal/issues/51672"
+        )
+
     # for TILE layout, the maximum number of slices for the (16,  16,  16, 256, 128) test case is 1 due to tile boundary constraints
     adjusted_num_slices = num_slices
     if (

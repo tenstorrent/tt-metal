@@ -80,9 +80,9 @@ void DramPrefetcherOperation::validate_on_program_cache_miss(
     TT_FATAL(tensor_addrs_data_format == tt::DataFormat::UInt32, "Tensor containing addresses must be of type UInt32");
 }
 
-TensorSpec DramPrefetcherOperation::compute_output_specs(
+tt::tt_metal::TensorSpec DramPrefetcherOperation::compute_output_specs(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         ttnn::Shape{32, 32},
         tt::tt_metal::TensorLayout(
             tensor_args.input_tensors[0].dtype(),

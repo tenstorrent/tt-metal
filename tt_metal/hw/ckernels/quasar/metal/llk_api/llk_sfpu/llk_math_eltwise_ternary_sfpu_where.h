@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel_sfpu_where.h"
 #include "llk_assert.h"
 #include "llk_defs.h"
@@ -26,7 +27,7 @@ inline void llk_math_eltwise_ternary_sfpu_where_init() {
 /**
  * @brief Executes a ternary per-lane where select over DEST tiles.
  *
- * Dispatches @c _calculate_where_ face-by-face via the ternary params wrapper.
+ * Dispatches @c calculate_where face-by-face via the ternary params wrapper.
  * Per-lane result: @c out = (cond != 0) ? true_val : false_val.
  *
  * @tparam APPROXIMATE   Unused for where; kept for API parity with other SFPU ops.
@@ -40,7 +41,11 @@ inline void llk_math_eltwise_ternary_sfpu_where_init() {
  */
 template <bool APPROXIMATE, [[maybe_unused]] DataFormat data_format>
 inline void llk_math_eltwise_ternary_sfpu_where(
-    uint dst_index0, uint dst_index1, uint dst_index2, uint odst, int vector_mode = (int)VectorMode::RC) {
+    std::uint32_t dst_index0,
+    std::uint32_t dst_index1,
+    std::uint32_t dst_index2,
+    std::uint32_t odst,
+    int vector_mode = (int)VectorMode::RC) {
     LLK_ASSERT(vector_mode == (int)VectorMode::RC, "Quasar currently only supports vector mode RC");
     SFPU_TERNARY_CALL(
         DST_SYNC_MODE,

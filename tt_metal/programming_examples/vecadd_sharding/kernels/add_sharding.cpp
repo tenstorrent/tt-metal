@@ -25,8 +25,8 @@ void kernel_main() {
 
     constexpr uint32_t dst_reg = 0;
 
-    binary_op_init_common(cb_in0, cb_in1, cb_out0);
-    add_tiles_init(cb_in0, cb_in1);
+    compute_kernel_hw_startup(cb_in0, cb_in1, cb_out0);
+    add_init(cb_in0, cb_in1);
 
     // The standard vector addition kernel but without waiting on circular buffers (as explained
     // above).

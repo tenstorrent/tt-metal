@@ -51,11 +51,18 @@ void kernel_main() {
     // (= experts), so downstream masked_bincount / dispatch / combine skip them.
     uint32_t num_real_tokens = 0xFFFFFFFF;  // default: no padding -> every row is real
     uint32_t pad_side = 0;
+    Noc noc;
     if (padding_config_addr != 0) {
-        cb_reserve_back(cb_padding_config, 1);
-        const uint32_t padding_config_l1_addr = get_write_ptr(cb_padding_config);
-        noc_async_read_page(0, padding_config_accessor, padding_config_l1_addr);
-        noc_async_read_barrier();
+        CircularBuffer padding_config_cb(cb_padding_config);
+        padding_config_cb.reserve_back(1);
+        const uint32_t padding_config_l1_addr = padding_config_cb.get_write_ptr();
+        noc.async_read(
+            padding_config_accessor,
+            padding_config_cb,
+            padding_config_cb.get_tile_size(),
+            {.page_id = 0},
+            {.offset_bytes = 0});
+        noc.async_read_barrier();
 
         volatile tt_l1_ptr uint32_t* padding_config_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(padding_config_l1_addr);
@@ -63,7 +70,6 @@ void kernel_main() {
         pad_side = padding_config_ptr[1];
     }
 
-    Noc noc;
     CircularBuffer out_indices_cb(cb_out_indices);
     CircularBuffer out_weights_cb(cb_out_weights);
 

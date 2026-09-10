@@ -6,7 +6,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
-#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
@@ -65,9 +64,12 @@ void kernel_main() {
         uint32_t l1_write_addr = cb_in0.get_write_ptr();
         uint32_t curr_stick_id = base_stick_id;
         for (uint32_t k = 0; k < num_rows; k++) {
-            CoreLocalMem<uint32_t> dst_mem(l1_write_addr);
             noc.async_read(
-                s, dst_mem, block_size, {.page_id = curr_stick_id + k, .offset_bytes = offset}, {.offset_bytes = 0});
+                s,
+                cb_in0,
+                block_size,
+                {.page_id = curr_stick_id + k, .offset_bytes = offset},
+                {.offset_bytes = k * block_row_size});
 
             if (block_row_size > block_size) {
                 volatile tt_l1_ptr std::uint32_t* dst = (volatile tt_l1_ptr uint32_t*)(l1_write_addr + block_size);

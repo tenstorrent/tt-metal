@@ -42,6 +42,6 @@ constexpr size_t JOINT_SDPA_JOINT_OUTPUT_IDX = 1;
 using JointSDPAResult = Tensors;
 
 // JointSDPAResultSpec is a vector of 2 TensorSpecs: [output, joint_output]
-using JointSDPAResultSpec = std::vector<TensorSpec>;
+using JointSDPAResultSpec = std::vector<tt::tt_metal::TensorSpec>;
 
 }  // namespace ttnn::prim

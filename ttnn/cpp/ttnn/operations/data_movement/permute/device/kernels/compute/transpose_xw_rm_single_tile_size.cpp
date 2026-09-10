@@ -9,26 +9,24 @@
 #include "api/compute/tilize.h"
 #include "api/compute/pack_untilize.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr uint32_t x_block_size = get_named_compile_time_arg_val("x_block_size");
-    constexpr uint32_t w_block_size = get_named_compile_time_arg_val("w_block_size");
+    constexpr uint32_t x_block_size = get_arg(args::x_block_size);
+    constexpr uint32_t w_block_size = get_arg(args::w_block_size);
 
-    // constexpr uint32_t x_block_size = get_compile_time_arg_val(0);
-    // constexpr uint32_t w_block_size = get_compile_time_arg_val(1);
+    uint32_t num_blocks = get_arg(args::num_blocks);
 
-    uint32_t num_blocks = get_arg_val<uint32_t>(0);
+    constexpr auto cb_in = dfb::cb_in;
+    constexpr auto cb_tilize = dfb::cb_tilize;
+    constexpr auto cb_out = dfb::cb_out;
 
-    constexpr auto cb_in = tt::CBIndex::c_0;
-    constexpr auto cb_tilize = tt::CBIndex::c_1;
-    constexpr auto cb_out = tt::CBIndex::c_2;
-
-    CircularBuffer cb_tilize_exp(cb_tilize);
-    CircularBuffer cb_out_exp(cb_out);
+    DataflowBuffer dfb_tilize_exp(cb_tilize);
+    DataflowBuffer dfb_out_exp(cb_out);
 
     compute_kernel_hw_startup(cb_in, cb_out);
-    unary_op_init_common(cb_in, cb_out);
+    copy_init(cb_in);
 
     for (uint32_t n = 0; n < num_blocks; n++) {
         // Tilize input via unpack and then pack (asymmetric: x_block_size rows → 1 tile)
@@ -41,7 +39,7 @@ void kernel_main() {
             compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1, x_block_size);
 
         // transpose input
-        cb_tilize_exp.wait_front(1);
+        dfb_tilize_exp.wait_front(1);
         transpose_init(cb_tilize);
         pack_untilize_dest_init<1>(cb_out);
 
@@ -50,16 +48,16 @@ void kernel_main() {
         tile_regs_commit();
 
         // pack and untilize
-        cb_out_exp.reserve_back(w_block_size);
+        dfb_out_exp.reserve_back(w_block_size);
 
         tile_regs_wait();
         pack_untilize_dest<1>(cb_out);  // pack call
         tile_regs_release();
 
-        cb_out_exp.push_back(w_block_size);
+        dfb_out_exp.push_back(w_block_size);
 
         pack_untilize_uninit(cb_out);
 
-        cb_tilize_exp.pop_front(1);
+        dfb_tilize_exp.pop_front(1);
     }
 }

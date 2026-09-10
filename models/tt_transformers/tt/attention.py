@@ -9,7 +9,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
-from models.common.utility_functions import nearest_32
+from models.common.utility_functions import copy_to_buffer, nearest_32
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup, num_to_corerange
@@ -131,6 +131,12 @@ class Attention(LightweightModule):
         self.sdpa_decode_compute_kernel_cfg = decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.SDPA_DECODE, configuration=configuration
         )
+        # Some architectures (e.g. Gemma-2, head_dim=256) need the flash-decode op's
+        # internal default compute config instead of the framework's forced
+        # fp32_dest_acc_en/packer_l1_acc, which corrupts the cross-chunk online-softmax
+        # reduction for large head_dim. Config-gated flag; False for every other model.
+        if getattr(configuration, "sdpa_decode_use_default_compute_config", False):
+            self.sdpa_decode_compute_kernel_cfg = None
         self.li_o_decode_compute_kernel_cfg = decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_O_DECODE, configuration=configuration
         )
@@ -179,29 +185,47 @@ class Attention(LightweightModule):
 
         # Create combined QKV bias if present in state dict
         if f"{wq_str}.bias" in state_dict:
+            bias_num_devices = self.num_devices_per_group if self.TG else configuration.num_devices
             qkv_bias = torch.concat(
                 [
                     torch.concat(
                         [
-                            torch.chunk(state_dict[f"{wq_str}.bias"], configuration.num_devices)[i],
-                            torch.chunk(state_dict[f"{wk_str}.bias"], configuration.num_devices)[i],
-                            torch.chunk(state_dict[f"{wv_str}.bias"], configuration.num_devices)[i],
+                            torch.chunk(state_dict[f"{wq_str}.bias"], bias_num_devices)[i],
+                            torch.chunk(state_dict[f"{wk_str}.bias"], bias_num_devices)[i],
+                            torch.chunk(state_dict[f"{wv_str}.bias"], bias_num_devices)[i],
                         ],
                         dim=-1,
                     )
-                    for i in range(configuration.num_devices)
+                    for i in range(bias_num_devices)
                 ],
                 dim=-1,
             )
+            # Galaxy QKV matmuls shard the input dimension over mesh columns, so the
+            # column all-reduce sums one partial result from every column. The bias is
+            # replicated over those columns and added to each partial before the
+            # collective; divide it by the number of contributors so the reduced
+            # result contains exactly one copy of the model bias.
+            if self.TG:
+                qkv_bias = qkv_bias / configuration.cluster_shape[1]
+            bias_mesh_mapper = (
+                ttnn.ShardTensor2dMesh(
+                    self.mesh_device,
+                    dims=(-1, None),
+                    mesh_shape=configuration.cluster_shape,
+                )
+                if self.TG
+                else ttnn.ShardTensorToMesh(self.mesh_device, dim=-1)
+            )
+            bias_cache_suffix = f"sharded_2d_col_reduce_{configuration.cluster_shape[1]}" if self.TG else "sharded"
             # Prefill can use broadcasting on the bias add so wants a 1d tensor
             self.wqkv_bias_prefill = ttnn.as_tensor(
                 qkv_bias,
                 device=self.mesh_device,
-                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+                mesh_mapper=bias_mesh_mapper,
                 dtype=ttnn.bfloat16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.TILE_LAYOUT,
-                cache_file_name=cache_name("wqkv_bias_prefill_sharded"),
+                cache_file_name=cache_name(f"wqkv_bias_prefill_{bias_cache_suffix}"),
             )
             # as_tensor returns (32, dim) which is incorrect, this reshape updates the padded size to the correct size
             self.wqkv_bias_prefill = ttnn.reshape(
@@ -222,11 +246,11 @@ class Attention(LightweightModule):
                 bias_tensor = ttnn.as_tensor(
                     qkv_bias_decode,
                     device=self.mesh_device,
-                    mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+                    mesh_mapper=bias_mesh_mapper,
                     dtype=ttnn.bfloat16,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     layout=ttnn.TILE_LAYOUT,
-                    cache_file_name=cache_name(f"wqkv_bias_decode_sharded_{batch_size}"),
+                    cache_file_name=cache_name(f"wqkv_bias_decode_{bias_cache_suffix}_{batch_size}"),
                 )
                 self.wqkv_bias_decode.append(bias_tensor)
 
@@ -436,6 +460,124 @@ class Attention(LightweightModule):
             for k_or_v in [cache_k, cache_v]
         ]
 
+    def _update_wqkv(self, tensor: ttnn.Tensor) -> None:
+        """In-place replace ``self.wqkv`` via ``ttnn.copy``. Caller must match
+        the constructor's ``self.wqkv``: shape ``(1, 1, H, qkv_size_per_device)``,
+        TILE, ``ShardTensor2dMesh(dims=(2, 3))`` (or ``(3, 2)`` on TG).
+        """
+        copy_to_buffer(tensor, self.wqkv, self.wqkv_dtype)
+
+    def _update_wo(self, tensor: ttnn.Tensor) -> None:
+        """In-place replace ``self.wo`` (and ``self.wo_sharded_ring`` when the
+        prefetcher is enabled) via ``ttnn.copy``. Both must stay in sync: the
+        decode path reads ``wo_sharded_ring`` instead of ``wo`` when
+        ``self.prefetcher is not None``.
+        """
+        copy_to_buffer(tensor, self.wo, self.wo_dtype)
+        wo_sharded_ring = getattr(self, "wo_sharded_ring", None)
+        if wo_sharded_ring is not None:
+            copy_to_buffer(tensor, wo_sharded_ring, self.wo_dtype)
+
+    def _update_wqkv_bias(
+        self,
+        q_proj_bias: ttnn.Tensor,
+        k_proj_bias: ttnn.Tensor,
+        v_proj_bias: ttnn.Tensor,
+    ) -> None:
+        """In-place replace ``self.wqkv_bias_prefill`` and ``self.wqkv_bias_decode``
+        from separate HF Q/K/V biases. Not yet implemented (needs the
+        constructor's per-device slice+concat and decode batch broadcast).
+        """
+        raise NotImplementedError("wqkv_bias update is not yet implemented")
+
+    def _update_qk_norm(self, which: str, weight: ttnn.Tensor) -> None:
+        """In-place replace the optional Q-/K-RMSNorm gamma. Not yet implemented:
+        ``self.q_norm``/``self.k_norm`` are lambdas closing over an internal
+        ``RMSNorm`` not exposed on ``self``, so we can't delegate to
+        ``RMSNorm.update`` without a small refactor.
+        """
+        raise NotImplementedError(f"{which} update is not yet implemented")
+
+    def update(
+        self,
+        *,
+        q_proj: ttnn.Tensor,
+        k_proj: ttnn.Tensor,
+        v_proj: ttnn.Tensor,
+        o_proj: ttnn.Tensor,
+        q_proj_bias: ttnn.Tensor | None = None,
+        k_proj_bias: ttnn.Tensor | None = None,
+        v_proj_bias: ttnn.Tensor | None = None,
+        q_norm: ttnn.Tensor | None = None,
+        k_norm: ttnn.Tensor | None = None,
+        hf_rope: bool = False,
+    ) -> None:
+        """In-place replace the on-device attention weights via ``ttnn.copy``.
+
+        HF-format input contract (see ``LLAMA_WEIGHT_TRANSFER.md``): required
+        ``self_attn.{q,k,v,o}_proj.weight`` plus optional biases/QK-norm gammas,
+        as HF Linear shapes wrapped in two leading unit dims, bf16, TILE,
+        DRAM-interleaved, replicated.
+
+        ``hf_rope`` (default ``False``): whether Q/K rows are in HF split-half
+        rotary order or already in this model's convention. ``False`` is right
+        for the ttml -> tt-transformers transfer (both store Meta-permuted Q/K
+        for Llama-3.2-1B-Instruct). When it disagrees with ``self.use_hf_rope``
+        an HF<->Meta row permutation is required; not implemented (raises).
+
+        Conversion (single-device only): transpose each proj (mirrors the
+        constructor's ``torch.transpose``), concat Q/K/V along the output dim,
+        then ``_update_wqkv``/``_update_wo`` ``ttnn.copy`` into existing buffers,
+        preserving buffer addresses (so captured traces and the prefetcher's
+        recorded addresses stay valid). The multi-device per-device
+        chunk-transpose-concat is not yet implemented.
+
+        Raises ``ValueError`` when optional inputs don't match construction-time
+        presence (e.g. biases passed but the module has no QKV bias).
+        """
+        if hf_rope != self.use_hf_rope:
+            raise NotImplementedError(
+                "Attention.update: HF<->Meta Q/K row permutation is not yet "
+                f"implemented (hf_rope={hf_rope}, self.use_hf_rope={self.use_hf_rope}). "
+                "Permute Q/K rows on the caller side, or extend update() with the "
+                "on-device row-permutation kernel."
+            )
+        if self.num_devices_per_group != 1:
+            raise NotImplementedError(
+                "Attention.update for num_devices_per_group > 1 is not yet "
+                "implemented; the multi-device path needs the constructor's "
+                "per-device chunk-transpose-concat (see __init__'s qkv_list loop)."
+            )
+
+        q_t = ttnn.transpose(q_proj, -2, -1)
+        k_t = ttnn.transpose(k_proj, -2, -1)
+        v_t = ttnn.transpose(v_proj, -2, -1)
+        wqkv_fused = ttnn.concat([q_t, k_t, v_t], dim=-1)
+        self._update_wqkv(wqkv_fused)
+
+        wo_internal = ttnn.transpose(o_proj, -2, -1)
+        self._update_wo(wo_internal)
+
+        bias_present = (q_proj_bias is not None) or (k_proj_bias is not None) or (v_proj_bias is not None)
+        if bias_present:
+            if self.wqkv_bias_prefill is None:
+                raise ValueError(
+                    "Q/K/V projection biases were supplied but Attention was " "constructed without a QKV bias."
+                )
+            if q_proj_bias is None or k_proj_bias is None or v_proj_bias is None:
+                raise ValueError("Q/K/V projection biases must all be supplied together.")
+            self._update_wqkv_bias(q_proj_bias, k_proj_bias, v_proj_bias)
+        else:
+            if self.wqkv_bias_prefill is not None:
+                raise ValueError(
+                    "Attention was constructed with a QKV bias but Q/K/V " "projection biases were not supplied."
+                )
+
+        if q_norm is not None:
+            self._update_qk_norm("q_norm", q_norm)
+        if k_norm is not None:
+            self._update_qk_norm("k_norm", k_norm)
+
     def to_qk_fused_memory_config(self, q_tensor: ttnn.Tensor, k_tensor: ttnn.Tensor):
         """
         Convert Q and K tensors to height-sharded memory layouts suitable for
@@ -590,16 +732,28 @@ class Attention(LightweightModule):
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
-        xqkv_fused_sharded = ttnn.linear(
-            x,
-            self.wqkv,
-            memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.DECODE, self.prefetcher),
-            program_config=self.args.get_attn_qkv_program_config(Mode.DECODE, 1, self.prefetcher),
-            compute_kernel_config=self.li_qkv_decode_compute_kernel_cfg,
-            dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
-            global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
-            sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
-        )
+        if self.TG and self.prefetcher is None:
+            x_interleaved = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+            xqkv_fused_sharded = ttnn.linear(
+                x_interleaved,
+                self.wqkv,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=None,
+                compute_kernel_config=self.li_qkv_decode_compute_kernel_cfg,
+                dtype=self.ccl_dtype,
+            )
+            ttnn.deallocate(x_interleaved)
+        else:
+            xqkv_fused_sharded = ttnn.linear(
+                x,
+                self.wqkv,
+                memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.DECODE, self.prefetcher),
+                program_config=self.args.get_attn_qkv_program_config(Mode.DECODE, 1, self.prefetcher),
+                compute_kernel_config=self.li_qkv_decode_compute_kernel_cfg,
+                dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
+                global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
+                sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
+            )
         # FIXME: File bug against dram-sharded matmuls with bias
         if self.wqkv_bias_decode:
             # select the bias tensor based on the number of tiles in the rows
@@ -619,7 +773,7 @@ class Attention(LightweightModule):
             memory_config=qkv_all_reduce_mem_cfg
             if qkv_all_reduce_mem_cfg is not None
             else xqkv_fused_sharded.memory_config(),
-            sharded=True,
+            sharded=not (self.TG and self.prefetcher is None),
             dtype=self.ccl_dtype,
             topology=self.ccl_topology,
             subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,

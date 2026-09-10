@@ -64,12 +64,6 @@ jobs:
           echo "::error::Pre-commit hooks failed. Suggested fixes posted as PR review comments above."
           echo "To fix locally: pre-commit run --from-ref origin/main --to-ref HEAD"
           exit 1
-  check-black:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Do Nothing
-        run: echo "Black is covered by pre-commit. This is a placeholder to be removed after updating branch restrictions."
-
   check-spdx-licenses:
     runs-on: ubuntu-latest
     steps:

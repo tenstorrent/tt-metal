@@ -1,0 +1,10 @@
+[
+    [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Who are you and what can you do?"}
+            ]
+        }
+    ]
+]

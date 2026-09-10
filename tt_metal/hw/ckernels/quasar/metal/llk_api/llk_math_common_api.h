@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_template.h"
@@ -12,6 +13,11 @@
 #include "llk_math_common.h"
 #include "llk_operands.h"
 #include "llk_sync.h"
+
+namespace llk_math_detail {
+template <auto...>
+inline constexpr bool always_false_v = false;
+}  // namespace llk_math_detail
 
 /*************************************************************************
  * LLK MATH COMMON
@@ -82,10 +88,20 @@ inline constexpr MathFidelity get_effective_math_fidelity() {
  * @brief Sets the dest dvalid for FPU/SFPU
  *
  * @tparam SET_DEST_DVALID: which client to set data valid for, values = p_cleardvalid::FPU/SFPU
+ * @tparam DST: Destination register banking mode: SyncHalf = double banked (math/pack overlap), SyncFull = one bank
+ *(serialized)
+ *
+ * @warning SYNC SCHEME: dest-dvalid. There are two mutually exclusive Dest register synchronization schemes: the
+ * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
+ * compute APIs.
  **/
-template <std::uint8_t SET_DEST_DVALID>
+template <std::uint8_t SET_DEST_DVALID, DstSync DST>
 inline void llk_math_set_dvalid() {
-    _llk_math_set_dvalid_<SET_DEST_DVALID>();
+    static_assert(
+        llk_math_detail::always_false_v<SET_DEST_DVALID, DST>,
+        "llk_math_set_dvalid belongs to the dest-dvalid sync scheme, should not be mixed with semaphores which are "
+        "currently used in tt-metal.");
+    _llk_math_set_dvalid_<SET_DEST_DVALID, DST>();
 }
 
 /**
@@ -99,6 +115,10 @@ inline void llk_math_set_dvalid() {
 /**
  * @brief Waits until destination register space is available.
  * Blocks on the MATH_PACK semaphore until the packer gets the semaphore.
+ *
+ * @warning SYNC SCHEME: semaphores. There are two mutually exclusive Dest register synchronization schemes: the
+ * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
+ * compute APIs.
  */
 inline void llk_math_wait_for_dest_available() {
     _llk_math_wait_for_dest_available_();
@@ -114,6 +134,10 @@ inline void llk_math_wait_for_dest_available() {
  * @brief Signals that the current destination section is done.
  * After math is done, posts to the MATH_PACK semaphore so the packer can proceed;
  * @tparam EN_32BIT_DEST: Set to true to use 32bit math dest in Float32 or Int32 format
+ *
+ * @warning SYNC SCHEME: semaphores. There are two mutually exclusive Dest register synchronization schemes: the
+ * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
+ * compute APIs.
  */
 template <bool EN_32BIT_DEST>
 inline void llk_math_dest_section_done() {
@@ -121,13 +145,17 @@ inline void llk_math_dest_section_done() {
     // no-real-work unpack-to-dest forwarder.
     _llk_sync_post_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::MATH_PACK);
     if constexpr (DST_SYNC_MODE == DstSync::SyncHalf && !UnpackToDestEn) {
-        _llk_sync_advance_dest_section_<ckernel::math::TRISC_ID, EN_32BIT_DEST, p_stall::WAIT_SFPU, p_stall::MATH>();
+        _llk_sync_advance_dest_section_<ckernel::TRISC_ID, EN_32BIT_DEST, p_stall::WAIT_SFPU, p_stall::MATH>();
     }
 }
 
 /**
  * @brief Initializes math–pack synchronization for the destination register.
  * Waits for any previous packs to finish, resets the dest bank id, initializes the MATH_PACK semaphore
+ *
+ * @warning SYNC SCHEME: semaphores. There are two mutually exclusive Dest register synchronization schemes: the
+ * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
+ * compute APIs.
  */
 inline void llk_math_pack_sync_init() {
     _llk_math_pack_sync_init_<DST_SYNC_MODE>();

@@ -52,6 +52,7 @@ from models.common.utility_functions import run_for_blackhole
 from tests.ttnn.unit_tests.operations.prefetcher_common import (
     round_up as _round_up,
     make_recv_contig_weight as _make_recv_contig_weight,
+    require_tensor_prefetcher,
 )
 
 
@@ -60,11 +61,7 @@ pytestmark = run_for_blackhole("Tensor prefetcher requires Blackhole")
 
 @pytest.fixture(autouse=True)
 def _require_tensor_prefetcher(device):
-    """Skip unless programmable DRAM cores are available on this device."""
-    if not ttnn.experimental.is_tensor_prefetcher_supported(device):
-        pytest.skip(
-            "programmable DRAM cores unavailable (need Blackhole, firmware >= 19.12.0.0, and either no harvested DRAM channels or a single device)"
-        )
+    require_tensor_prefetcher(device)
 
 
 _NUM_DRAM_BANKS = 8
@@ -243,7 +240,7 @@ def test_bw_tensor_prefetcher(device, op_name, shape):
         for b in range(num_dram_banks)
     ]
     gcb_size = _gcb_size_bytes(page_size, pages_per_layer)
-    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(device, bank_to_receivers, gcb_size)
+    gcb = ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(device, bank_to_receivers, gcb_size)
 
     ttnn.experimental.start_tensor_prefetcher(device)
     ttnn.experimental.queue_tensor_prefetcher_request(
@@ -334,11 +331,11 @@ def test_bw_tensor_prefetcher_recv_contig(device, op_name, shape):
     ]
     gcb_size = _gcb_size_bytes(page_size, pages_per_layer)
     dual_senders = os.environ.get("BENCH_DUAL_SENDERS", "0") == "1"
-    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(
-        device, bank_to_receivers, gcb_size, dual_senders_per_bank=dual_senders
+    gcb = ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(
+        device, bank_to_receivers, gcb_size, support_multi_receiver_shards=not dual_senders
     )
 
-    ttnn.experimental.start_tensor_prefetcher(device, dual_senders_per_bank=dual_senders)
+    ttnn.experimental.start_tensor_prefetcher(device)
     ttnn.experimental.queue_tensor_prefetcher_request(
         device, [(tt_weight, num_receivers)] * num_prefetch_layers, global_cb=gcb
     )
@@ -420,8 +417,8 @@ def test_bw_tensor_prefetcher_streaming(device, op_name, shape):
     window_blocks = min(window_blocks, pages_per_layer)
     gcb_size = window_blocks * page_size
     dual_senders = os.environ.get("BENCH_DUAL_SENDERS", "0") == "1"
-    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(
-        device, bank_to_receivers, gcb_size, dual_senders_per_bank=dual_senders
+    gcb = ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(
+        device, bank_to_receivers, gcb_size, support_multi_receiver_shards=not dual_senders
     )
 
     logger.info(
@@ -430,7 +427,7 @@ def test_bw_tensor_prefetcher_streaming(device, op_name, shape):
         f"pages_per_layer={pages_per_layer} gcb_size={gcb_size} trace_repeats={trace_repeats}"
     )
 
-    ttnn.experimental.start_tensor_prefetcher(device, dual_senders_per_bank=dual_senders)
+    ttnn.experimental.start_tensor_prefetcher(device)
     # Identity rotation (rotation[r] = r) = natural topology ring order (reproduces old streaming=True).
     ttnn.experimental.queue_tensor_prefetcher_request(
         device, [(tt_weight, num_receivers, list(range(num_receivers)))] * num_prefetch_layers, global_cb=gcb

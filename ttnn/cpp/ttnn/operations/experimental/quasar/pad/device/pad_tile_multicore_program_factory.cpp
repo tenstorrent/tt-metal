@@ -15,6 +15,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
@@ -133,7 +134,7 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "src"}},
         .compile_time_args = {{"num_dims", num_dims}, {"page_size", page_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages_to_write", "start_offset"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
     reader_spec.advanced_options.num_runtime_varargs = 4 * num_dims;
 
@@ -152,7 +153,7 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
              {"pad_value", packed_pad_value},
              {"element_size", static_cast<uint32_t>(output.element_size())}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages_to_write", "start_offset"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
     writer_spec.advanced_options.num_runtime_varargs = 4 * num_dims;
 
@@ -206,12 +207,24 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
             varargs.push_back(v);
         }
 
-        reader_run.runtime_arg_values.push_back(
-            {node, {{"num_pages_to_write", num_pages_per_core}, {"start_offset", input_page_offset}}});
+        KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
+        AddRuntimeArgsForNode(
+            reader_rtas,
+            node,
+            {
+                {"num_pages_to_write", num_pages_per_core},
+                {"start_offset", input_page_offset},
+            });
         reader_run.advanced_options.runtime_varargs[node] = varargs;
 
-        writer_run.runtime_arg_values.push_back(
-            {node, {{"num_pages_to_write", num_pages_per_core}, {"start_offset", output_page_offset}}});
+        KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
+        AddRuntimeArgsForNode(
+            writer_rtas,
+            node,
+            {
+                {"num_pages_to_write", num_pages_per_core},
+                {"start_offset", output_page_offset},
+            });
         writer_run.advanced_options.runtime_varargs[node] = varargs;
 
         // Advance the running per-dim indices by this core's page count (input id only advances while

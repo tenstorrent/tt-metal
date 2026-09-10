@@ -35,6 +35,31 @@ namespace blocks {
 constexpr uint32_t SCORE_FUNC_SIGMOID = 0;       // DeepSeek-V3 / Kimi
 constexpr uint32_t SCORE_FUNC_SQRTSOFTPLUS = 1;  // DeepSeek-V4: sqrt(softplus(x))
 
+// Widen width_tiles input tiles from their (possibly bf16) source format into an fp32 output CB.
+// The whole gate pipeline computes in fp32, and the downstream two-operand ops (e.g. add_bias) need
+// every operand in a single format, so the bf16 gate logits/bias are upcast here (lossless) instead
+// of by a separate host-side ttnn.typecast op. When the input is already fp32 this is an identity copy.
+void upcast_tiles(uint32_t cb_in_id, uint32_t cb_out_fp32_id, uint32_t width_tiles) {
+    CircularBuffer cb_in(cb_in_id);
+    CircularBuffer cb_out(cb_out_fp32_id);
+    reconfig_data_format_srca(cb_in_id);
+    copy_init(cb_in_id);
+    pack_reconfig_data_format(cb_out_fp32_id);
+    for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
+        cb_in.wait_front(1);
+        tile_regs_acquire();
+        copy_tile(cb_in_id, 0, 0);
+        tile_regs_commit();
+        cb_in.pop_front(1);
+
+        cb_out.reserve_back(1);
+        tile_regs_wait();
+        pack_tile(0, cb_out_fp32_id);
+        tile_regs_release();
+        cb_out.push_back(1);
+    }
+}
+
 // Applies the selected router affinity activation to each logits tile. The output CB (historically
 // "sigmoid" scores) holds the unbiased activated scores that the writer later gathers for the weights.
 template <uint32_t score_func>
@@ -47,7 +72,7 @@ void apply_score_func(uint32_t cb_in_scores_id, uint32_t cb_activated_scores_id,
         // Reconfigure the unpacker for float32 input (a prior top-k iteration may have left it on UInt16).
         reconfig_data_format_srca(cb_in_scores_id);
         // copy tile from scores cb to destination register 0
-        copy_tile_to_dst_init_short(cb_in_scores_id);
+        copy_init(cb_in_scores_id);
         copy_tile(cb_in_scores_id, 0, 0);
         if constexpr (score_func == SCORE_FUNC_SQRTSOFTPLUS) {
             // sqrt(softplus(x)) with beta=1, threshold=20 (matches torch.nn.functional.softplus defaults).
@@ -73,13 +98,19 @@ void apply_score_func(uint32_t cb_in_scores_id, uint32_t cb_activated_scores_id,
     }
 }
 
+template <bool dump_biased = false>
 void add_bias(
-    uint32_t cb_sigmoid_scores_id, uint32_t cb_in_bias_id, uint32_t cb_biased_scores_id, uint32_t width_tiles) {
+    uint32_t cb_sigmoid_scores_id,
+    uint32_t cb_in_bias_id,
+    uint32_t cb_biased_scores_id,
+    uint32_t width_tiles,
+    uint32_t cb_biased_dump_id = 0) {
     CircularBuffer cb_sigmoid_scores(cb_sigmoid_scores_id);
     CircularBuffer cb_in_bias(cb_in_bias_id);
     CircularBuffer cb_biased_scores(cb_biased_scores_id);
+    CircularBuffer cb_biased_dump(cb_biased_dump_id);
     // Perform add bias on sigmoid scores
-    add_tiles_init(cb_sigmoid_scores_id, cb_in_bias_id, false);
+    add_init(cb_sigmoid_scores_id, cb_in_bias_id, false);
     cb_sigmoid_scores.wait_front(width_tiles);
     for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
         cb_in_bias.wait_front(1);
@@ -89,11 +120,20 @@ void add_bias(
         cb_in_bias.pop_front(1);
 
         cb_biased_scores.reserve_back(1);
+        if constexpr (dump_biased) {
+            cb_biased_dump.reserve_back(1);
+        }
         tile_regs_wait();
         pack_reconfig_data_format(cb_biased_scores_id);
         pack_tile(0, cb_biased_scores_id);
+        if constexpr (dump_biased) {
+            pack_tile(0, cb_biased_dump_id);
+        }
         tile_regs_release();
         cb_biased_scores.push_back(1);
+        if constexpr (dump_biased) {
+            cb_biased_dump.push_back(1);
+        }
     }
 }
 
@@ -169,8 +209,8 @@ void sum_top_experts_per_group(
     CircularBuffer cb_top_experts_per_group(cb_top_experts_per_group_id);
     CircularBuffer cb_group_summed_scores(cb_group_summed_scores_id);
     // sum the top experts_per_group rows for each group
-    binary_op_init_common(cb_top_experts_per_group_id, cb_top_experts_per_group_id, cb_group_summed_scores_id);
-    add_tiles_init(cb_top_experts_per_group_id, cb_top_experts_per_group_id, true);
+    compute_kernel_hw_startup(cb_top_experts_per_group_id, cb_top_experts_per_group_id, cb_group_summed_scores_id);
+    add_init(cb_top_experts_per_group_id, cb_top_experts_per_group_id, true);
     cb_top_experts_per_group.wait_front(summed_experts_per_group);
 
     cb_group_summed_scores.reserve_back(1);
@@ -209,9 +249,10 @@ void topk_group_scores(
     cb_group_index_template.wait_front(1);
 
     // copy scores tiles to dest reg 0 and index tiles to dest reg 2
-    copy_tile_to_dst_init_short(cb_group_summed_scores_id);
+    copy_init(cb_group_summed_scores_id);
     copy_tile(cb_group_summed_scores_id, 0, 0);
-    copy_tile_to_dst_init_short_with_dt(cb_group_summed_scores_id, cb_group_index_template_id);
+    reconfig_data_format_srca(cb_group_summed_scores_id, cb_group_index_template_id);
+    copy_init(cb_group_index_template_id);
     copy_tile(cb_group_index_template_id, 0, 2);
 
     // llk_topk_sort -> inplace
@@ -359,7 +400,7 @@ void normalize_scores(
     reconfig_data_format(cb_reduce_intermediate_id, cb_epsilon_scalar_id);
     pack_reconfig_data_format(cb_reciprocal_sums_id);
 
-    add_bcast_scalar_init_short(cb_reduce_intermediate_id, cb_epsilon_scalar_id);
+    add_bcast_scalar_init(cb_reduce_intermediate_id, cb_epsilon_scalar_id);
     add_tiles_bcast<BroadcastType::SCALAR>(cb_reduce_intermediate_id, cb_epsilon_scalar_id, 0, 0, 0);
 
     // 4. Recip
@@ -379,7 +420,7 @@ void normalize_scores(
     // 6. Broadcast multiply
     tile_regs_acquire();
     cb_reciprocal_sums.wait_front(1);
-    mul_bcast_cols_init_short(cb_gathered_sigmoid_id, cb_reciprocal_sums_id);
+    mul_bcast_cols_init(cb_gathered_sigmoid_id, cb_reciprocal_sums_id);
     mul_tiles_bcast<BroadcastType::COL>(
         cb_gathered_sigmoid_id, cb_reciprocal_sums_id, 0, 0, 0);  // tile *= 1/(sum_col(tile))
     tile_regs_commit();
@@ -401,7 +442,7 @@ void scale(
     CircularBuffer cb_out_weights(cb_out_weights_id);
     cb_normalized_scores.wait_front(1);
     cb_route_scale_scalar.wait_front(1);
-    mul_tiles_bcast_scalar_init_short(cb_normalized_scores_id, cb_route_scale_scalar_id);
+    mul_bcast_scalar_init(cb_normalized_scores_id, cb_route_scale_scalar_id);
 
     tile_regs_acquire();
 

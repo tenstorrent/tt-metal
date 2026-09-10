@@ -97,7 +97,7 @@ FORCE_INLINE void generate_bcast_scaler(DataflowBuffer cb_scaler, uint32_t scale
 
 FORCE_INLINE void fill_cb_with_value(DataflowBuffer cb, uint32_t value, int32_t num_of_elems = 1024) {
     cb.reserve_back(1);
-    const DataFormat data_format = get_dataformat(cb.get_id());
+    const DataFormat data_format = cb.get_dataformat();
     switch ((uint)data_format & 0x1F) {
         case ((uint8_t)DataFormat::Float32):
         case ((uint8_t)DataFormat::Int32):

@@ -18,7 +18,7 @@ namespace ttnn::prim {
 struct MatmulDeviceOperation {
     using operation_attributes_t = MatmulParams;
     using tensor_args_t = MatmulInputs;
-    using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
 
     using program_factory_t = std::variant<
@@ -42,7 +42,12 @@ struct MatmulDeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
-    static ttsl::hash::hash_t compute_program_hash(
+    // NOTE: intentionally NOT named compute_program_hash so the device-operation framework does
+    // NOT detect a custom program-cache hash (DeviceOperationWithCustomProgramCacheConcept) and
+    // instead keys the program cache on the default hash (attributes + tensor_args). This helper is
+    // retained only for the experimental descriptor interface (models/experimental/ops/descriptors),
+    // which computes its own cache key and reaches it through the pybind name "compute_program_hash".
+    static ttsl::hash::hash_t compute_descriptor_program_hash(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(

@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 
 void kernel_main() {
@@ -19,20 +19,20 @@ void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(6);                       // Height tiles to process
     constexpr uint32_t Wt_final = get_compile_time_arg_val(7);                 // Total width tiles from all cores
     constexpr uint32_t num_dests = get_compile_time_arg_val(8);                // Number of sending cores
-    constexpr uint32_t final_values_cb_index = get_compile_time_arg_val(9);    // Aggregated TopK values
-    constexpr uint32_t final_indices_cb_index = get_compile_time_arg_val(10);  // Aggregated TopK indices
+    constexpr uint32_t final_values_dfb_index = get_compile_time_arg_val(9);   // Aggregated TopK values
+    constexpr uint32_t final_indices_dfb_index = get_compile_time_arg_val(10);  // Aggregated TopK indices
 
     Noc noc;
     Semaphore<> receiver_sem(receiver_sem_id);
     Semaphore<> sender_sem(sender_sem_id);
-    CircularBuffer final_values_cb(final_values_cb_index);
-    CircularBuffer final_indices_cb(final_indices_cb_index);
+    DataflowBuffer final_values_dfb(final_values_dfb_index);
+    DataflowBuffer final_indices_dfb(final_indices_dfb_index);
 
     // Collect local TopK results from all cores
     for (uint32_t i = 0; i < Ht; ++i) {  // Process each height row
         // Reserve space for incoming data from all local cores
-        final_values_cb.reserve_back(Wt_final);   // Space for all TopK values
-        final_indices_cb.reserve_back(Wt_final);  // Space for all TopK indices
+        final_values_dfb.reserve_back(Wt_final);   // Space for all TopK values
+        final_indices_dfb.reserve_back(Wt_final);  // Space for all TopK indices
 
         // Initialize semaphores for this height row
         // Reset synchronization state for this height row
@@ -53,8 +53,8 @@ void kernel_main() {
 
         // Commit received data
         // Mark the received data as available to the final compute kernel
-        final_values_cb.push_back(Wt_final);
-        final_indices_cb.push_back(Wt_final);
+        final_values_dfb.push_back(Wt_final);
+        final_indices_dfb.push_back(Wt_final);
     }  // i loop
 
     // Ensure all NoC operations complete before kernel termination

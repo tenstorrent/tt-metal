@@ -26,6 +26,12 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
     const auto& input_tensors = tensor_args.input_tensors;
 
     if (const bool input_is_sharded = input_tensors[0].is_sharded(); !input_is_sharded) {
+        // The launch infra allocates the output tensor before factory selection, so the
+        // allocator's free window already accounts for it.
+        if (can_use_tiled_unaligned_concat(
+                input_tensors, args.dim, args.groups, args.output_mem_config, /*output_already_allocated=*/true)) {
+            return ConcatTiledUnalignedProgramFactory{};
+        }
         return ConcatProgramFactory{};
     }
 
@@ -67,6 +73,20 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
     // default factory
     // including ND sharded tensors
     return ConcatProgramFactory{};
+}
+
+ttsl::hash::hash_t ConcatDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // can_use_tiled_unaligned_concat (reached via select_program_factory) reads live L1 occupancy,
+    // so the factory choice is not a pure function of operation_attributes/tensor_args and the
+    // default hash (which only combines those two) can't tell apart two calls with identical specs
+    // but different allocator state. Mixing in the selected factory's index forces a cache miss
+    // whenever the decision flips, instead of replaying a cached program built for the other
+    // factory -- silently pinning the slow fallback, or worse, replaying a native program whose CB
+    // addresses were baked in for a free L1 window into a window a live tensor now occupies.
+    auto factory = select_program_factory(operation_attributes, tensor_args);
+    return tt::tt_metal::operation::hash_operation<ConcatDeviceOperation>(
+        operation_attributes, tensor_args, factory.index());
 }
 
 void ConcatDeviceOperation::validate_on_program_cache_miss(
@@ -115,7 +135,9 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
                 "Sharded tensors must have the same shard orientation.");
         }
     }
-    if (warn_about_alignment) {
+    if (warn_about_alignment &&
+        !can_use_tiled_unaligned_concat(
+            input_tensors, args.dim, args.groups, args.output_mem_config, /*output_already_allocated=*/true)) {
         log_warning(
             tt::LogOp,
             "ttnn.concat: Tile padding along concatenated dim ({}) is not "
@@ -165,7 +187,7 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec ConcatDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec ConcatDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const Tensor& ref_in_tensor = tensor_args.input_tensors.at(0);
     ttnn::Shape shape_out = ref_in_tensor.logical_shape();
@@ -175,7 +197,7 @@ TensorSpec ConcatDeviceOperation::compute_output_specs(
         shape_out[args.dim] += curr_shape[args.dim];
     }
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         shape_out, TensorLayout(ref_in_tensor.dtype(), PageConfig(ref_in_tensor.layout()), args.output_mem_config));
 }
 
@@ -183,44 +205,6 @@ Tensor ConcatDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_spec = compute_output_specs(operation_attributes, tensor_args);
     return create_device_tensor(output_spec, tensor_args.input_tensors[0].device());
-}
-
-ttsl::hash::hash_t ConcatDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto factory = select_program_factory(operation_attributes, tensor_args);
-    auto hash = tt::tt_metal::operation::hash_operation<ConcatDeviceOperation>(
-        operation_attributes.dim,
-        operation_attributes.groups,
-        operation_attributes.output_mem_config,
-        operation_attributes.sub_core_grids,
-        factory.index(),
-        tensor_args.input_tensors.size());
-
-    for (std::size_t tensor_index = 0; tensor_index < tensor_args.input_tensors.size(); ++tensor_index) {
-        const auto& tensor = tensor_args.input_tensors[tensor_index];
-        hash = ttsl::hash::hash_objects(
-            hash,
-            tensor_index,
-            tensor.logical_shape().rank(),
-            tensor.logical_shape(),
-            tensor.padded_shape(),
-            tensor.layout(),
-            tensor.dtype(),
-            tensor.memory_config());
-    }
-
-    const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-    hash = ttsl::hash::hash_objects(
-        hash,
-        tensor_args.input_tensors.size(),
-        output_spec.logical_shape().rank(),
-        output_spec.logical_shape(),
-        output_spec.padded_shape(),
-        output_spec.layout(),
-        output_spec.data_type(),
-        output_spec.memory_config());
-
-    return hash;
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>

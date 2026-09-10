@@ -1,0 +1,17 @@
+# Single-rank single-galaxy mesh for the Flux multihost CI experiment.
+# Copied from models/demos/deepseek_v3_b1/scaleout_configs/rev_c/one_galaxy, which is proven to
+# load and map on the bh_sc1 (single BH galaxy) SKU. One connected local 4x2 BLACKHOLE block
+# (8 devices) owned by a single rank.
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 2 ] dim_types: [ RING, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels {
+    count: 2
+    policy: RELAXED
+  }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }

@@ -8,6 +8,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_ops.h"
+#include "cmath_common.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -52,6 +53,7 @@ inline void calculate_dropout(std::uint32_t probability, std::uint32_t scale) {
 
 template <bool APPROXIMATION_MODE /*unused*/>
 inline void dropout_init(const std::uint32_t seed) {
+    math::reset_counters(p_setrwc::SET_ABD_F);
     init_prng_seed(seed);
 }
 

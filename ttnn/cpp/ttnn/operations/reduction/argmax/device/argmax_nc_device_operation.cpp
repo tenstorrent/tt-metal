@@ -58,7 +58,7 @@ void ArgMaxNCDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec ArgMaxNCDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec ArgMaxNCDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
@@ -77,7 +77,7 @@ TensorSpec ArgMaxNCDeviceOperation::compute_output_specs(
     auto output_shape = input_shape;
     output_shape[normalized_dim] = 1;
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::UINT32,

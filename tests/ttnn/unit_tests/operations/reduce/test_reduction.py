@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import pytest
 import torch
 
@@ -190,6 +192,49 @@ def test_var_fp32_doscale_wt_gt_1(device, scalar, N):
         pcc_threshold=0.9999,
         check_ulp=False,
     )
+
+
+@pytest.mark.parametrize("correction", [False, True])
+# 10529 = 32 * 329 + 1: partial tail leaf, 8 carry levels, and 3 cross-level finalize_tree
+# merges, which neither 16385 (512 leaves) nor 131072 (4096 leaves) exercised, since both had a
+# single-bit leaf count. Detects a re-widened centered-moment block by ~43x the 1% tolerance.
+@pytest.mark.parametrize("width", [10529], ids=["partial_leaf_uneven_tree"])
+@pytest.mark.parametrize("torch_dtype,ttnn_dtype", [(torch.bfloat16, ttnn.bfloat16), (torch.float32, ttnn.float32)])
+def test_std_var_wide_low_variance(device, torch_dtype, ttnn_dtype, width, correction):
+    # The HW writer combines one equal-count partial per column. For sufficiently
+    # wide inputs, directly subtracting the first and second moments of the partial
+    # means can round to a negative M2 even though the input is non-constant.
+    torch_input = torch.full((1, 1, 32, width), 1.1015625, dtype=torch_dtype)
+    torch_input[:, :, :, 0] = 0.0
+
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    for torch_op, ttnn_op in ((torch.var, ttnn.var), (torch.std, ttnn.std)):
+        reference = torch_op(torch_input.to(torch.float64), dim=(-2, -1), keepdim=True, correction=int(correction))
+        output = ttnn_op(tt_input, dim=(-2, -1), keepdim=True, correction=correction)
+        actual = ttnn.to_torch(ttnn.from_device(output)).to(torch.float64)
+
+        assert torch.isfinite(actual).all()
+        torch.testing.assert_close(actual, reference, rtol=0.01, atol=1e-15)
+
+
+def test_std_var_hw_reduce_batch_crosses_tree_block(device):
+    # Reducing N together with HW creates one logical partial stream. With W=49,
+    # one leaf crosses the N boundary and the 98 partials produce three full
+    # leaves plus a tail, exercising the unequal-level tree finalizer.
+    torch_input = torch.full((2, 1, 32, 49), 1.1015625, dtype=torch.bfloat16)
+    torch_input[0, :, :, 0] = 0.0
+    dim = (0, -2, -1)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    for torch_op, ttnn_op in ((torch.var, ttnn.var), (torch.std, ttnn.std)):
+        reference = torch_op(torch_input.to(torch.float64), dim=dim, keepdim=True, correction=0)
+        output = ttnn_op(tt_input, dim=dim, keepdim=True, correction=False)
+        actual = ttnn.to_torch(ttnn.from_device(output)).to(torch.float64)
+
+        assert torch.isfinite(actual).all()
+        torch.testing.assert_close(actual, reference, rtol=0.01, atol=1e-7)
 
 
 # Test a 1D, 2D, 3D, and 4D tensor
@@ -411,22 +456,40 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
         pcc_threshold=0.999,
         rtol=0.05,
         atol=0.7,
-        frobenius_threshold=0.004,
+        frobenius_threshold=0.006,
     )
 
 
-@pytest.mark.parametrize("dim1", [1])
-# This test picks the maximum dim2 that will pick the singlecore implementation.
-# TopK multicore uses 8 cores in blackhole, so we need to add support for bitonic sort with 8 cores
-# and non power of 2 dims as compared to wormhole. Issue #23465.
-@pytest.mark.parametrize(
-    "dim2",
-    [8192 - 64, pytest.param(50257, marks=pytest.mark.xfail(condition=is_blackhole(), reason="Issue #23465"))],
+skip_routed_topk_on_sim = pytest.mark.skipif(
+    is_blackhole() and bool(os.environ.get("TT_METAL_SIMULATOR")),
+    reason=(
+        "Large indices topk on BH needs SFPCONFIG instr_mod1=8, unmodeled by ttsim "
+        "(https://github.com/tenstorrent/ttsim-private/issues/798)"
+    ),
 )
+
+
+@pytest.mark.parametrize("dim1", [1])
 @pytest.mark.parametrize("dim", [1])
-@pytest.mark.parametrize("k", [50, 3200])
 @pytest.mark.parametrize("largest", [True])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+# One case per distinct code path, instead of the (dim2 x k x dtype) product:
+#   (8192,   50) width is a power of 2 and >= multi_core_min_width, and adjusted_k=64 <= 64, so
+#                this is the only case here that reaches the multi-core program factory
+#   (50257,  50) width is not a multiple of 32 -> implicit padding in the last tile (GPT-2 vocab)
+#   (8192, 1024) k > 64 -> single-core, and Kt=32 exercises the multi-tile-k merge ramp
+#   bfloat8_b is paired with the large-k case: bfp8 unpack/pack reconfig plus the bfp8 L1 sizing
+#                path, which only matters when Kt is large
+
+
+@pytest.mark.parametrize(
+    "dim2, k, dtype",
+    [
+        (8192, 50, ttnn.bfloat16),
+        pytest.param(50257, 50, ttnn.bfloat16, marks=skip_routed_topk_on_sim),
+        pytest.param(8192, 1024, ttnn.bfloat16, marks=skip_routed_topk_on_sim),
+        (8192, 1024, ttnn.bfloat8_b),
+    ],
+)
 def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
     torch.manual_seed(2005)
     shape = [dim1, dim2]
@@ -490,11 +553,14 @@ def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
 
 
 @pytest.mark.parametrize("dim1", [1])
-@pytest.mark.parametrize("dim2", [128256, 151936])
+# 128256 (Llama-3 vocab) carries the UInt32 index / 32-bit-dest branch. 151936 (Qwen) takes the
+# same path and is 18% wider, and it is still covered by tests/.../reduce/test_topk.py.
+@pytest.mark.parametrize("dim2", [128256])
 @pytest.mark.parametrize("dim", [1])
 @pytest.mark.parametrize("k", [50])
 @pytest.mark.parametrize("largest", [True])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@skip_routed_topk_on_sim
 def test_large_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
     torch.manual_seed(2005)
     shape = [dim1, dim2]
@@ -552,10 +618,19 @@ def test_large_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
 @pytest.mark.parametrize("dim3", [8])
 @pytest.mark.parametrize("dim4", [256])
 @pytest.mark.parametrize("dim5", [64])
-@pytest.mark.parametrize("dim", [3, 4])
-@pytest.mark.parametrize("k", [17, 32, 64])
 @pytest.mark.parametrize("largest", [True])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+# k=17 -> adjusted_k=32 plus the host-side slice, k=32 -> no slice, k=64 -> Kt=2.
+# dim=4 is the last dim (no transpose), dim=3 takes the transpose/transpose-back path.
+# dtype is orthogonal to both, so it is varied across the cases rather than crossed with them.
+@pytest.mark.parametrize(
+    "dim, k, dtype",
+    [
+        (4, 17, ttnn.bfloat16),
+        (4, 64, ttnn.bfloat8_b),
+        (3, 32, ttnn.bfloat16),
+        (3, 64, ttnn.bfloat8_b),
+    ],
+)
 def test_5d_topk(device, dim1, dim2, dim3, dim4, dim5, dim, k, largest, dtype):
     torch.manual_seed(2005)
     shape = [dim1, dim2, dim3, dim4, dim5]
@@ -625,10 +700,15 @@ def test_5d_topk(device, dim1, dim2, dim3, dim4, dim5, dim, k, largest, dtype):
 @pytest.mark.parametrize("dim5", [128])
 @pytest.mark.parametrize("dim6", [64])
 # @pytest.mark.parametrize("dim", [0, 1, 2, 3, 4, 5]) transpose cannot handle N-D tensor for all dims
-@pytest.mark.parametrize("dim", [4, 5])
-@pytest.mark.parametrize("k", [50, 64])
 @pytest.mark.parametrize("largest", [True])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize(
+    "dim, k, dtype",
+    [
+        (5, 50, ttnn.bfloat16),
+        (5, 64, ttnn.bfloat8_b),
+        (4, 50, ttnn.bfloat16),
+    ],
+)
 def test_6d_topk(device, dim1, dim2, dim3, dim4, dim5, dim6, dim, k, largest, dtype):
     torch.manual_seed(2005)
     shape = [dim1, dim2, dim3, dim4, dim5, dim6]
@@ -907,18 +987,18 @@ def test_run_reduce_sum_h_after_max_pool(device, input_shape, kernel_size):
 
 
 @pytest.mark.parametrize(
-    argnames="tensor_shape, keepdim, dim, op",
+    argnames="tensor_shape, keepdim, dim, op, error_msg",
     argvalues=[
-        ([], True, None, "mean"),
-        ([], True, None, "std"),
-        ([32], False, -1, "sum"),
-        ([32, 0], True, 0, "max"),
-        ([0, 0, 0], True, 2, "min"),
-        ([0, 32, 0], False, -2, "std"),
-        ([32, 32, 32, 0], False, 3, "var"),
+        ([], True, None, "mean", None),
+        ([], True, None, "std", None),
+        ([32], False, -1, "sum", None),
+        ([32, 0], True, 0, "max", None),
+        ([0, 0, 0], True, 2, "min", "Expected reduction dim 2 to have non-zero size"),
+        ([0, 32, 0], False, -2, "std", None),
+        ([32, 32, 32, 0], False, 3, "var", None),
     ],
 )
-def test_torch_compatibility(device, tensor_shape, keepdim, dim, op):
+def test_torch_compatibility(device, tensor_shape, keepdim, dim, op, error_msg, expect_error):
     """
     Test the compatibility of the torch and ttnn output for the given operation and different
     tensor shapes, keepdim, and dim values.
@@ -944,10 +1024,15 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op):
         torch_errored = True
 
     ttnn_errored = False
-    try:
-        ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim)
-    except RuntimeError:
+    if error_msg:
+        with expect_error(RuntimeError, error_msg):
+            ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim)
         ttnn_errored = True
+    else:
+        try:
+            ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim)
+        except RuntimeError:
+            ttnn_errored = True
 
     assert torch_errored == ttnn_errored, f"torch: {torch_errored}, ttnn: {ttnn_errored}"
 

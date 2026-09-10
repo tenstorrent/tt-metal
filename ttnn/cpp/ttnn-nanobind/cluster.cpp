@@ -4,21 +4,27 @@
 
 #include "ttnn-nanobind/cluster.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <string_view>
 #include <vector>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/experimental/cluster_noc_helpers.hpp>
+#include <internal/cluster_noc_helpers.hpp>
 
 #include "ttnn/cluster.hpp"
 
 namespace ttnn::cluster {
 
 namespace {
+
+// nb::bytes owns its buffer for the duration of the call, so a non-owning
+// span over it is safe for these synchronous writes.
+ttsl::Span<const std::byte> as_bytes(const nb::bytes& data) {
+    return {reinterpret_cast<const std::byte*>(data.c_str()), data.size()};
+}
 
 void bind_ttnn_cluster(nb::module_& mod) {
     mod.def(
@@ -85,23 +91,13 @@ void bind_ttnn_cluster(nb::module_& mod) {
                 ...     int(fnid.mesh_id), int(fnid.chip_id))
         )doc");
 
-    // ------------------------------------------------------------------------
-    // Minimal NOC write / read access to a device core, intended for X280
-    // (L2CPU) integration tests that need to poke control mailboxes in LIM
-    // from Python without dragging in the `tt_umd` Python bindings (those
-    // can't coexist with ttnn in the same process -- both register the same
-    // nanobind C++ types and the second import aborts the interpreter).
-    //
-    // Coordinates are TRANSLATED NOC coords; on Blackhole TRANSLATED == NOC0
-    // for L2CPU and worker cores. The data path goes through the same
-    // tt::tt_metal::Cluster::write_core / read_core that the H2DSocket /
-    // D2HSocket L2CPU constructors use internally.
-    // ------------------------------------------------------------------------
+    // Raw NOC read/write access to a device core. Coordinates are TRANSLATED NOC
+    // coords. Backed by Cluster::write_core / read_core.
 
     mod.def(
         "write_to_core",
-        [](uint32_t device_id, uint32_t x, uint32_t y, uint64_t addr, nb::bytes data) {
-            tt::tt_metal::distributed::noc_write(device_id, x, y, addr, std::string_view(data.c_str(), data.size()));
+        [](uint32_t device_id, uint32_t x, uint32_t y, uint64_t addr, const nb::bytes& data) {
+            tt::tt_metal::internal::noc_write(device_id, x, y, addr, as_bytes(data));
         },
         nb::arg("device_id"),
         nb::arg("x"),
@@ -119,22 +115,15 @@ void bind_ttnn_cluster(nb::module_& mod) {
                 data (bytes): Bytes to write.
 
             Notes:
-                - For L2CPU (X280) targets on Blackhole, ``(x, y)`` is the
-                  TRANSLATED NOC coord (e.g. (8, 3) / (8, 5) / (8, 7) / (8, 9))
-                  and ``addr`` is the L3 LIM address.
-                - The X280 must be initialised (chip not in reset, L2CPU in
-                  reset is fine since LIM is NOC-addressable independently
-                  of the X280 core itself).
-                - ECC priming caveat: a partial-word write to a never-touched
-                  LIM cache line can fault. Prime each target line with a
-                  64-byte zero write first if writing < 64 B at uninitialised
-                  addresses.
+                - For L2CPU targets, ``addr`` is a LIM address.
+                - A partial-line write to LIM whose ECC has not been initialised
+                  can fault; write a full 64-byte line first at such addresses.
         )doc");
 
     mod.def(
         "read_from_core",
         [](uint32_t device_id, uint32_t x, uint32_t y, uint64_t addr, uint32_t size) -> nb::bytes {
-            auto buf = tt::tt_metal::distributed::noc_read(device_id, x, y, addr, size);
+            auto buf = tt::tt_metal::internal::noc_read(device_id, x, y, addr, size);
             return nb::bytes(reinterpret_cast<const char*>(buf.data()), buf.size());
         },
         nb::arg("device_id"),
@@ -158,25 +147,14 @@ void bind_ttnn_cluster(nb::module_& mod) {
             Notes: See ``write_to_core``.
         )doc");
 
-    // ------------------------------------------------------------------------
-    // UC-path counterparts of write_to_core / read_from_core.
-    //
-    // write_to_core / read_from_core go through UMD's WC TLB window with
-    // Relaxed ordering and (above the DMA threshold) the PCIe DMA fast
-    // path; both can re-order or merge writes on the host side.
-    //
-    // *_immediate / *_reg below take the UMD UC TLB / Strict ordering
-    // path (Cluster::write_core_immediate / Cluster::read_reg) -- every
-    // byte hits the chip in program order with no host-side combining.
-    // Use for control registers and any LIM access that must not be
-    // merged into a single bursted line.
-    // ------------------------------------------------------------------------
+    // UC-path counterparts. write_to_core / read_from_core use the WC TLB window
+    // with Relaxed ordering and may merge or re-order host-side writes; the calls
+    // below use the UC TLB window with Strict ordering.
 
     mod.def(
         "write_to_core_immediate",
-        [](uint32_t device_id, uint32_t x, uint32_t y, uint64_t addr, nb::bytes data) {
-            tt::tt_metal::distributed::noc_write_immediate(
-                device_id, x, y, addr, std::string_view(data.c_str(), data.size()));
+        [](uint32_t device_id, uint32_t x, uint32_t y, uint64_t addr, const nb::bytes& data) {
+            tt::tt_metal::internal::noc_write_immediate(device_id, x, y, addr, as_bytes(data));
         },
         nb::arg("device_id"),
         nb::arg("x"),
@@ -194,7 +172,7 @@ void bind_ttnn_cluster(nb::module_& mod) {
     mod.def(
         "read_reg",
         [](uint32_t device_id, uint32_t x, uint32_t y, uint64_t addr) -> uint32_t {
-            return tt::tt_metal::distributed::noc_read_reg_u32(device_id, x, y, addr);
+            return tt::tt_metal::internal::noc_read_reg_u32(device_id, x, y, addr);
         },
         nb::arg("device_id"),
         nb::arg("x"),
@@ -206,22 +184,13 @@ void bind_ttnn_cluster(nb::module_& mod) {
             Companion to ``write_to_core_immediate``.
         )doc");
 
-    // ------------------------------------------------------------------------
-    // DRAM bank table snapshot, used by the X280 migration worker (and any
-    // other host-driven kernel) to populate the same per-bank NOC routing
-    // table that BRISC sees on Tensix. Mirrors
-    // RiscFirmwareInitializer::generate_device_bank_to_noc_tables for NOC=0
-    // (see tt_metal/distributed/cluster_noc_helpers.cpp::get_dram_bank_table
-    // and tt_metal/impl/device/firmware/risc_firmware_initializer.cpp lines
-    // 476-512). Equivalent to tt-blaze's dram_bank_to_noc_xy[NOC0] +
-    // bank_to_dram_offset[] (blaze/ops/migration/kernels/op.hpp lines
-    // 282-291).
-    // ------------------------------------------------------------------------
+    // Per-bank DRAM NOC routing table, mirroring what
+    // RiscFirmwareInitializer::generate_device_bank_to_noc_tables programs for NOC=0.
 
     mod.def(
         "get_dram_bank_table",
         [](uint32_t device_id) -> nb::list {
-            auto table = tt::tt_metal::distributed::get_dram_bank_table(device_id);
+            auto table = tt::tt_metal::internal::get_dram_bank_table(device_id);
             nb::list out;
             for (const auto& e : table) {
                 nb::dict d;
@@ -260,11 +229,6 @@ void bind_ttnn_cluster(nb::module_& mod) {
             Notes:
                 - The device must be opened first (e.g. via
                   ``ttnn.open_mesh_device``); otherwise this throws.
-                - Intended consumer is the X280 migration worker (see
-                  ``x280/host_ttnn/utils/_dram_bank_table.py``) which
-                  packs these entries into the LIM-resident
-                  ``x280_dram_bank_table_t`` so the firmware can route
-                  to any DRAM bank just like a Tensix migration kernel.
         )doc");
 }
 

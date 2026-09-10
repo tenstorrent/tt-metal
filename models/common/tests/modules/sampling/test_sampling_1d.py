@@ -10,6 +10,9 @@ import ttnn
 from models.common.auto_compose import to_torch_auto_compose
 from models.common.modules.sampling.sampling_1d import Sampling1D, Sampling1DConfig, _resolve_sampling1d_config
 
+# 1D module suites target the T3K; skip when the host system is a Galaxy.
+pytestmark = pytest.mark.usefixtures("skip_on_galaxy_system")
+
 # ---------------------------------------------------------------------------
 # Model name constants (match test_mlp_1d.py naming convention)
 # ---------------------------------------------------------------------------
@@ -144,7 +147,6 @@ class TestSampling1DDevice:
         sampler.load_device_buffers()
         assert sampler._device_buffers_loaded
         assert isinstance(sampler._index_offsets, ttnn.Tensor)
-        assert isinstance(sampler._local_indices, ttnn.Tensor)
         assert isinstance(sampler._seeds, ttnn.Tensor)
         assert isinstance(sampler._user_ids, ttnn.Tensor)
 
@@ -203,23 +205,22 @@ class TestSampling1DDevice:
     # ------------------------------------------------------------------
 
     def test_bind_strategy_ccl_introspection_with_kwargs(self, ttnn_mesh_device):
-        """_bind_strategy correctly detects buffer_key/dtype support on line_all_gather."""
+        """_bind_strategy correctly detects buffer_key support on line_all_gather."""
         from dataclasses import replace
 
         sampler = Sampling1D(vocab_size=1024, mesh_device=ttnn_mesh_device)
 
         class MockCCL:
-            def line_all_gather(self, tensor, dim, cluster_axis, memory_config, num_links, buffer_key=None, dtype=None):
+            def line_all_gather(self, tensor, dim, cluster_axis, memory_config, num_links, buffer_key=None):
                 return tensor
 
         sampler.config = replace(sampler.config, tt_ccl=MockCCL())
         sampler._bind_strategy()
 
         assert sampler._line_all_gather_supports_buffer_key
-        assert sampler._line_all_gather_supports_dtype
 
     def test_bind_strategy_ccl_introspection_no_kwargs(self, ttnn_mesh_device):
-        """_bind_strategy detects when line_all_gather does NOT support buffer_key/dtype."""
+        """_bind_strategy detects when line_all_gather does NOT support buffer_key."""
         from dataclasses import replace
 
         sampler = Sampling1D(vocab_size=1024, mesh_device=ttnn_mesh_device)
@@ -232,7 +233,6 @@ class TestSampling1DDevice:
         sampler._bind_strategy()
 
         assert not sampler._line_all_gather_supports_buffer_key
-        assert not sampler._line_all_gather_supports_dtype
 
     def test_bind_strategy_ccl_introspection_exception(self, ttnn_mesh_device):
         """_bind_strategy handles TypeError from inspect.signature gracefully (lines 125-126)."""
@@ -253,7 +253,6 @@ class TestSampling1DDevice:
             sampler._bind_strategy()
 
         assert not sampler._line_all_gather_supports_buffer_key
-        assert not sampler._line_all_gather_supports_dtype
 
     # ------------------------------------------------------------------
     # Error paths (lines 178, 186)
@@ -286,7 +285,7 @@ class TestSampling1DDevice:
 
     @pytest.mark.parametrize("vocab_size", [1024])
     def test_perform_all_gather_with_mock_ccl(self, ttnn_mesh_device, vocab_size):
-        """_perform_all_gather passes buffer_key/dtype kwargs when line_all_gather supports them."""
+        """_perform_all_gather passes the buffer_key kwarg when line_all_gather supports it."""
         B, K = 32, 32
         sampler = Sampling1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device)
         sampler.load_device_buffers()
@@ -299,7 +298,6 @@ class TestSampling1DDevice:
 
         sampler._line_all_gather = mock_line_ag
         sampler._line_all_gather_supports_buffer_key = True
-        sampler._line_all_gather_supports_dtype = True
 
         test_tensor = ttnn.from_torch(
             torch.zeros(1, 1, B, K, dtype=torch.bfloat16),
@@ -316,12 +314,10 @@ class TestSampling1DDevice:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             num_links=1,
             buffer_key="TEST_KEY",
-            dtype=ttnn.bfloat16,
         )
 
         assert result is test_tensor
         assert captured_kwargs.get("buffer_key") == "TEST_KEY"
-        assert captured_kwargs.get("dtype") == ttnn.bfloat16
 
     # ------------------------------------------------------------------
     # from_model_args model_config branches (lines 406-408, 416-419)
@@ -1503,11 +1499,10 @@ def test_sampling1d_logprobs_topk(ttnn_mesh_device):
 
     The old single-token logprob path only computes on multi-device shards with
     num_devices ∈ {8, 32} (T3K 1×8). On 1×1/1×2 the calculator returns None even when enabled.
-    On 1×8, with k=1/p=0/temp=1 the sampled token is the argmax, so its logprob must match
-    torch.log_softmax(logits)[argmax].
+    On 1×8, the returned logprob must match torch.log_softmax(logits)[sampled_token] within
+    bf16 reduction tolerance. PCC is intentionally not used here because the k=1 random-bf16 case
+    is near-constant and can degenerate to zero variance on device.
     """
-    from models.common.utility_functions import comp_pcc
-
     torch.manual_seed(42)
     B = 32
     vocab_size = 32768  # divisible by 8
@@ -1538,10 +1533,8 @@ def test_sampling1d_logprobs_topk(ttnn_mesh_device):
     # Reference: log_softmax over the full vocab (fp32), indexed at the sampled token.
     ref_log_softmax = torch.log_softmax(logits_host.float().squeeze(), dim=-1)  # [B, V]
     ref_lp = ref_log_softmax[torch.arange(B), tokens_host]
-
-    passing, pcc_msg = comp_pcc(ref_lp, lp_host, pcc=0.99)
-    print(f"\n  logprobs PCC (V={vocab_size}, mesh={cluster_shape}): {pcc_msg}")
-    assert passing, f"logprobs PCC below threshold: {pcc_msg}"
+    max_abs_error = torch.max(torch.abs(ref_lp - lp_host)).item()
+    assert max_abs_error <= 5e-2, f"logprobs max abs error {max_abs_error:.6f} exceeds bf16 tolerance"
 
 
 # ==============================================================================

@@ -26,6 +26,6 @@ struct RotaryEmbeddingLlamaFusedQkInputs {
 
 using RotaryEmbeddingLlamaFusedQkResult = std::tuple<Tensor, Tensor>;
 
-using RotaryEmbeddingLlamaFusedQkResultSpec = std::tuple<TensorSpec, TensorSpec>;
+using RotaryEmbeddingLlamaFusedQkResultSpec = std::tuple<tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec>;
 
 }  // namespace ttnn::experimental::prim

@@ -26,7 +26,7 @@ struct MorehClipGradNormStep3Operation {
         const Tensor& clip_coef_clamped;
     };
 
-    using spec_return_value_t = std::vector<TensorSpec>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
 
     static tt::tt_metal::ProgramDescriptor create_descriptor(

@@ -20,8 +20,8 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         mod,
         R"doc(
             Return True if the Tensor prefetcher (DRISC) is supported on `mesh_device`,
-            i.e. programmable DRAM cores are available (Blackhole with firmware >= 19.12.0.0
-            and either no harvested DRAM channels or a single device). When this returns False,
+            i.e. programmable DRAM cores are available (Blackhole with firmware >= 19.12.0.0).
+            When this returns False,
             start_tensor_prefetcher would raise, so callers can use this to skip instead.
 
             Args:
@@ -48,14 +48,12 @@ void bind_tensor_prefetcher(nb::module_& mod) {
 
             Args:
                 mesh_device (ttnn.MeshDevice): the mesh device to launch on.
-                dual_senders_per_bank (bool): if True, run two DRISC sender kernels per DRAM
-                    bank (the free subchannel plus the NOC1-endpoint subchannel, both on NOC0)
-                    and split each bank's receivers across them. Recv-contig layout only; the
-                    GCB must be created with the matching flag. Defaults to False.
+
+            Two sender kernels are provisioned per DRAM bank. Each queued GCB selects one
+            or both senders per bank; unused senders remain parked on their sockets.
         )doc",
         &start_tensor_prefetcher,
-        nb::arg("mesh_device"),
-        nb::arg("dual_senders_per_bank") = false);
+        nb::arg("mesh_device"));
 
     ttnn::bind_function<"queue_tensor_prefetcher_request", "ttnn.experimental.">(
         mod,
@@ -84,13 +82,16 @@ void bind_tensor_prefetcher(nb::module_& mod) {
                     = r reproduces the natural topology order; the matmul must consume in the
                     matching order, else it deadlocks.
                 global_cb (GlobalCircularBuffer): a DRAM-sender GCB (created via
-                    ttnn.experimental.create_global_circular_buffer_with_dram_senders).
+                    ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher).
                 device_subset (Optional[MeshCoordinateRangeSet]): subset of the mesh that
                     processes this request. Defaults to the full mesh.
-                cq_id (Optional[int]): command queue that may be recording a trace. When that
-                    CQ is mid trace-capture, the request is captured into the trace instead of
-                    being sent immediately, and is re-sent on every execute_trace of that trace.
-                    Defaults to the current/default command queue.
+                capture_into_trace (bool): whether this request may be captured into a trace.
+                    When True and the current command queue is mid trace-capture, the request
+                    is captured into the trace instead of being sent immediately, and is
+                    re-sent on every execute_trace of that trace. Defaults to False: the
+                    request is always sent immediately and is never captured, whatever any
+                    command queue is doing. Which queue counts as current follows the usual
+                    ttnn convention — pass cq_id=n, or wrap the call in ttnn.command_queue(n).
 
             Returns:
                 None
@@ -101,7 +102,7 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         nb::arg("global_cb"),
         nb::kw_only(),
         nb::arg("device_subset") = std::nullopt,
-        nb::arg("cq_id") = std::nullopt);
+        nb::arg("capture_into_trace") = false);
 
     ttnn::bind_function<"wait_for_cq_on_tensor_prefetcher", "ttnn.experimental.">(
         mod,
@@ -117,7 +118,8 @@ void bind_tensor_prefetcher(nb::module_& mod) {
 
             Args:
                 mesh_device (ttnn.MeshDevice): the mesh device whose prefetcher to fence.
-                cq_id (int): the command queue to fence against.
+                cq_id (Optional[int]): the command queue to fence against. Defaults to the
+                    calling thread's current queue (also what ttnn.command_queue(n) sets).
                 device_subset (Optional[MeshCoordinateRangeSet]): subset of the mesh to
                     fence. Defaults to the full mesh.
 
@@ -126,7 +128,7 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         )doc",
         &wait_for_cq_on_tensor_prefetcher,
         nb::arg("mesh_device"),
-        nb::arg("cq_id") = 0,
+        nb::arg("cq_id") = std::nullopt,
         nb::kw_only(),
         nb::arg("device_subset") = std::nullopt);
 
@@ -144,7 +146,7 @@ void bind_tensor_prefetcher(nb::module_& mod) {
 
     // DRAM-sender GCB factories. MeshDevice-only (the per-mesh DRISC L1 arena lives on
     // MeshDeviceImpl) and only ever paired with the Tensor prefetcher above.
-    ttnn::bind_function<"create_global_circular_buffer_with_dram_senders", "ttnn.experimental.">(
+    ttnn::bind_function<"create_global_circular_buffer_for_tensor_prefetcher", "ttnn.experimental.">(
         mod,
         R"doc(
             Create a GlobalCircularBuffer where senders are programmable DRAM cores (Blackhole DRISCs).
@@ -156,31 +158,43 @@ void bind_tensor_prefetcher(nb::module_& mod) {
                 bank_to_receivers: List of (bank_id, receivers) pairs.
                 size: Per-receiver fifo size in bytes.
                 buffer_type: Buffer type (L1 or L1_SMALL).
-                dual_senders_per_bank: If True, split each bank's receivers across two DRISC
-                    sender cores (recv-contig layout only); must match the prefetcher config.
+                support_multi_receiver_shards: If True (default), a bank's shard may feed multiple
+                    receivers (legacy interleaved layout), which requires a single sender per bank.
+                    Set False to promise each receiver owns a disjoint contiguous shard
+                    (receiver-contiguous layout); a bank with two or more receivers may then split
+                    them across two DRISC sender cores for higher bandwidth.
         )doc",
-        &ttnn::global_circular_buffer::create_global_circular_buffer_with_dram_senders,
+        &ttnn::global_circular_buffer::create_global_circular_buffer_for_tensor_prefetcher,
         nb::keep_alive<0, 1>(),
         nb::arg("mesh_device"),
         nb::arg("bank_to_receivers"),
         nb::arg("size"),
         nb::arg("buffer_type") = tt::tt_metal::BufferType::L1,
-        nb::arg("dual_senders_per_bank") = false);
+        nb::arg("support_multi_receiver_shards") = true);
 
     ttnn::bind_function<"create_global_circular_buffer_for_matmul_1d", "ttnn.experimental.">(
         mod,
         R"doc(
-            Build a DRAM-sender GlobalCircularBuffer sized to feed one or more 1D ring matmuls
-            (gather_in0=true) with their weight tensors. See impl notes in
-            tt_metal/impl/buffers/global_circular_buffer.cpp.
+            Build a DRAM-sender GlobalCircularBuffer sized to feed one or more gather_in0 or
+            mcast_in0 1D matmuls with their weight tensors. The weight's DRAM layout is
+            auto-detected (legacy WIDTH_SHARDED K-row-major vs receiver-contiguous NdShardSpec)
+            and validated/sized accordingly.
 
             Args:
                 mesh_device: The mesh device.
-                program_configs: List of 1D mcast matmul program configs (each gather_in0=True).
-                weights: List of DRAM-sharded in1 tensors, one per program_config.
+                program_configs: List of compatible 1D matmul program configs.
+                weights: List of DRAM in1 tensors, one per program_config. All must share the same
+                    DRAM layout (all legacy WIDTH_SHARDED, or all receiver-contiguous NdShardSpec).
                 bank_to_receivers: List of (bank_id, receivers) pairs.
                 size: GCB size in bytes.
                 buffer_type: Buffer type (L1 or L1_SMALL).
+                support_multi_receiver_shards: Optional per-bank sender-count override; leave None
+                    (default) in production. When None the sender count follows the detected layout:
+                    legacy WIDTH_SHARDED -> single sender per bank; receiver-contiguous -> dual
+                    senders per bank (higher bandwidth; single-receiver banks fall back to one).
+                    Pass an explicit value to override, mainly for tests/benchmarks: True forces
+                    single sender, False forces dual senders. Forcing False (dual) on a legacy
+                    weight raises (that layout is always single-sender).
         )doc",
         &ttnn::global_circular_buffer::create_global_circular_buffer_for_matmul_1d,
         nb::keep_alive<0, 1>(),
@@ -189,21 +203,20 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         nb::arg("weights"),
         nb::arg("bank_to_receivers"),
         nb::arg("size"),
-        nb::arg("buffer_type") = tt::tt_metal::BufferType::L1);
+        nb::arg("buffer_type") = tt::tt_metal::BufferType::L1,
+        nb::arg("support_multi_receiver_shards") = std::nullopt);
 
     ttnn::bind_function<"tensor_prefetcher_block_count_for_matmul_1d", "ttnn.experimental.">(
         mod,
         R"doc(
-            Compute and validate the block_count to pair with a receiver-contiguous DRAM weight
-            in queue_tensor_prefetcher_request, for a gather_in0 1D matmul fed via global_cb.
-            Centralizes the recv-contig prefetcher/matmul cross-checks (num_shards == ring_size,
-            weight K divisible by ring_size, weight per-receiver N == per_core_N) so call sites
-            don't re-derive (and mis-derive) them. Returns the block_count (== ring_size); raises
-            on any mismatch.
+            Compute and validate the block_count to pair with a DRAM weight in
+            queue_tensor_prefetcher_request for a gather_in0 or mcast_in0 1D matmul fed via
+            global_cb. Gather returns the receiver/ring count. Mcast returns
+            weight_K_tiles / in0_block_w and uses natural FIFO order.
 
             Args:
-                program_config: The gather_in0 1D mcast matmul program config that will consume the weight.
-                weight: The receiver-contiguous (NdShardSpec) DRAM weight tensor.
+                program_config: The 1D matmul program config that will consume the weight.
+                weight: The DRAM weight tensor, in either layout.
                 global_cb: The DRAM-sender GCB the prefetcher and matmul share.
 
             Returns:
@@ -213,34 +226,6 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         nb::arg("program_config"),
         nb::arg("weight"),
         nb::arg("global_cb"));
-
-    ttnn::bind_function<"create_global_circular_buffer_for_matmul_1d_recv_contig", "ttnn.experimental.">(
-        mod,
-        R"doc(
-            Receiver-contiguous counterpart of create_global_circular_buffer_for_matmul_1d: build a
-            DRAM-sender GlobalCircularBuffer sized to feed one or more gather_in0 1D ring matmuls from
-            NdShardSpec (receiver-contiguous) DRAM weights, validating the (program_config, weight,
-            bank_to_receivers) triple in one place. See impl notes in ttnn/core/global_circular_buffer.cpp.
-
-            Args:
-                mesh_device: The mesh device.
-                program_configs: List of 1D mcast matmul program configs (each gather_in0=True).
-                weights: List of NdShardSpec DRAM in1 tensors, one per program_config.
-                bank_to_receivers: List of (bank_id, receivers) pairs (strided round-robin placement).
-                size: GCB size in bytes (>= ring_size * largest per-receiver page).
-                buffer_type: Buffer type (L1 or L1_SMALL).
-                dual_senders_per_bank: If True, split each bank's receivers across two DRISC sender cores
-                    (must match the StartTensorPrefetcher flag).
-        )doc",
-        &ttnn::global_circular_buffer::create_global_circular_buffer_for_matmul_1d_recv_contig,
-        nb::keep_alive<0, 1>(),
-        nb::arg("mesh_device"),
-        nb::arg("program_configs"),
-        nb::arg("weights"),
-        nb::arg("bank_to_receivers"),
-        nb::arg("size"),
-        nb::arg("buffer_type") = tt::tt_metal::BufferType::L1,
-        nb::arg("dual_senders_per_bank") = false);
 }
 
 }  // namespace ttnn::operations::experimental

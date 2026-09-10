@@ -23,7 +23,7 @@ void kernel_main() {
     constexpr bool is_lastdim_layernorm = get_compile_time_arg_val(9) == 1;
     constexpr bool is_groupnorm = get_compile_time_arg_val(10) == 1;
 
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_0, tt::CBIndex::c_16);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_0, tt::CBIndex::c_16);
 
     constexpr auto cb_x = tt::CBIndex::c_0;
     DataflowBuffer dfb_x_obj(cb_x);  // input
@@ -209,10 +209,10 @@ void kernel_main() {
             for (uint32_t j = 0; j < block_size; j++) {
                 tile_regs_acquire();
                 if (is_lastdim_layernorm) {
-                    sub_bcast_cols_init_short_with_dt(dfb_x_obj, dfb_ex_obj);
+                    sub_bcast_cols_init_with_dt(dfb_x_obj, dfb_ex_obj);
                     sub_tiles_bcast_cols(cb_x, cb_ex, j, first_tile, j);
                 } else {
-                    sub_tiles_bcast_scalar_init_short_with_dt(dfb_x_obj, dfb_ex_obj);
+                    sub_bcast_scalar_init_with_dt(dfb_x_obj, dfb_ex_obj);
                     sub_tiles_bcast_scalar(cb_x, cb_ex, j, first_tile, j);
                 }
                 tile_regs_commit();
@@ -386,10 +386,10 @@ void kernel_main() {
             for (uint32_t j = 0; j < block_size; j++) {
                 tile_regs_acquire();
                 if (is_lastdim_layernorm) {
-                    sub_bcast_cols_init_short_with_dt(dfb_x_obj, dfb_ex_obj);
+                    sub_bcast_cols_init_with_dt(dfb_x_obj, dfb_ex_obj);
                     sub_tiles_bcast_cols(cb_x, cb_ex, j, first_tile, j);
                 } else {
-                    sub_tiles_bcast_scalar_init_short_with_dt(dfb_x_obj, dfb_ex_obj);
+                    sub_bcast_scalar_init_with_dt(dfb_x_obj, dfb_ex_obj);
                     sub_tiles_bcast_scalar(cb_x, cb_ex, j, first_tile, j);
                 }
                 tile_regs_commit();
@@ -412,10 +412,10 @@ void kernel_main() {
             for (uint32_t j = 0; j < block_size; j++) {
                 tile_regs_acquire();
                 if (is_lastdim_layernorm) {
-                    mul_bcast_cols_init_short_with_dt(dfb_reuse_obj, dfb_recip_std_obj);
+                    mul_bcast_cols_init_with_dt(dfb_reuse_obj, dfb_recip_std_obj);
                     mul_tiles_bcast_cols(cb_reuse, cb_recip_std, j, first_tile, j);
                 } else {
-                    mul_tiles_bcast_scalar_init_short_with_dt(dfb_reuse_obj, dfb_recip_std_obj);
+                    mul_bcast_scalar_init_with_dt(dfb_reuse_obj, dfb_recip_std_obj);
                     mul_tiles_bcast_scalar(cb_reuse, cb_recip_std, j, first_tile, j);
                 }
                 tile_regs_commit();
@@ -437,11 +437,11 @@ void kernel_main() {
                 for (uint32_t j = 0; j < block_size; j++) {
                     tile_regs_acquire();
                     if (is_groupnorm) {
-                        mul_tiles_bcast_scalar_init_short_with_dt(dfb_gamma_beta_or_out_obj, dfb_gamma_obj);
+                        mul_bcast_scalar_init_with_dt(dfb_gamma_beta_or_out_obj, dfb_gamma_obj);
                         mul_tiles_bcast_scalar(cb_gamma_beta_or_out, cb_gamma, j, j, j);
                     } else {
                         if (is_lastdim_layernorm) {
-                            mul_bcast_rows_init_short_with_dt(dfb_gamma_beta_or_out_obj, dfb_gamma_obj);
+                            mul_bcast_rows_init_with_dt(dfb_gamma_beta_or_out_obj, dfb_gamma_obj);
                             mul_tiles_bcast_rows(cb_gamma_beta_or_out, cb_gamma, j, j, j);
                         } else {
                             mul_tiles_init_with_dt(dfb_gamma_beta_or_out_obj, dfb_gamma_obj);
@@ -467,11 +467,11 @@ void kernel_main() {
                 for (uint32_t j = 0; j < block_size; j++) {
                     tile_regs_acquire();
                     if (is_groupnorm) {
-                        add_bcast_scalar_init_short_with_dt(dfb_gamma_beta_obj, dfb_beta_obj);
+                        add_bcast_scalar_init_with_dt(dfb_gamma_beta_obj, dfb_beta_obj);
                         add_tiles_bcast_scalar(cb_gamma_beta, cb_beta, j, j, j);
                     } else {
                         if (is_lastdim_layernorm) {
-                            add_bcast_rows_init_short_with_dt(dfb_gamma_beta_obj, dfb_beta_obj);
+                            add_bcast_rows_init_with_dt(dfb_gamma_beta_obj, dfb_beta_obj);
                             add_tiles_bcast_rows(cb_gamma_beta, cb_beta, j, j, j);
                         } else {
                             add_tiles_init_with_dt(dfb_gamma_beta_obj, dfb_beta_obj);

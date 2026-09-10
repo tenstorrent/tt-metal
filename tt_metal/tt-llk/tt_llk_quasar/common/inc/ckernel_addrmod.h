@@ -150,6 +150,7 @@ behave like the Bias counter.
 
 #include <cstdint>
 
+#include "ckernel_trisc_id.h" // ckernel::TRISC_ID (compile-time thread id), used as the default addrmod thread
 #include "tensix.h"
 
 namespace ckernel
@@ -257,8 +258,10 @@ struct addr_mod_t
 
 #define NUM_MATH_ADDR_MODS 8
 
-    // Program source and dest registers
-    __attribute__((always_inline)) inline addr_mod_t const& set(const std::uint8_t mod_index, std::uint32_t thread_id = 1) const
+    // Program source and dest registers. thread_id defaults to TRISC_ID (the thread this kernel is
+    // compiled for); a hard-coded default silently programmed another thread's addrmod slot -- the pack
+    // path (_llk_pack_dest_semaphore_section_done_) was writing into the math thread's slot. See tt-llk #1665.
+    __attribute__((always_inline)) inline addr_mod_t const& set(const std::uint8_t mod_index, std::uint32_t thread_id = TRISC_ID) const
     {
         auto cfg                                                                = (volatile std::uint32_t*)TENSIX_CFG_BASE;
         cfg[addr_mod_src_reg_addr[mod_index] + NUM_MATH_ADDR_MODS * thread_id]  = src_val();

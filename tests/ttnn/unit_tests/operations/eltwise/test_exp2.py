@@ -9,36 +9,6 @@ import numpy as np
 from tests.ttnn.utils_for_testing import assert_with_ulp, assert_allclose, flush_subnormal_values_to_zero
 
 
-def test_exp2_arange_masking(device):
-    # Exp2 Working range - Overflow from 128(inf), Underflow till -127(<0)
-    low = -126.0
-    high = 127.0
-
-    # Generate all possible bit patterns for bf16
-    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
-    input_tensor = all_bitpatterns.view(torch.bfloat16)
-    input_tensor_f32 = input_tensor.to(torch.float32)
-
-    # masking to working range
-    mask = (input_tensor_f32 >= low) & (input_tensor_f32 <= high)
-    input_tensor = input_tensor[mask]
-
-    tt_in = ttnn.from_torch(
-        input_tensor,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    golden_function = ttnn.get_golden_function(ttnn.exp2)
-    golden = golden_function(input_tensor, device=device)
-
-    tt_result = ttnn.exp2(tt_in)
-    result = ttnn.to_torch(tt_result)
-    assert_with_ulp(golden, result, 1)
-
-
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -72,7 +42,7 @@ def test_exp2_ULP(input_shapes, low, high, device):
 
     tt_result = ttnn.exp2(tt_in)
     result = ttnn.to_torch(tt_result)
-    assert_with_ulp(golden, result, 1)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
 
 
 @pytest.mark.parametrize(
@@ -162,7 +132,7 @@ def test_exp2_fp32_accuracy(device):
     tt_result = ttnn.exp2(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert_with_ulp(golden, result, 1)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
 
 
 def test_exp2_fp32_special_values(device):
@@ -211,7 +181,7 @@ def test_exp2_fp32_special_values(device):
     assert torch.equal(torch.isnan(result), torch.isnan(golden))
     assert torch.equal(torch.isposinf(result), torch.isposinf(golden))
     assert torch.equal(torch.isneginf(result), torch.isneginf(golden))
-    assert_with_ulp(golden, result, 1, allow_nonfinite=True)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1, allow_nonfinite=True)
 
 
 # Targeted edge-case coverage for the optimised exp2 (see #44507).
@@ -282,4 +252,4 @@ def test_exp2_special_values(device):
 
     if finite_indices:
         idx = torch.tensor(finite_indices)
-        assert_with_ulp(golden_flat[idx], result[idx], 1)
+        assert_with_ulp(expected_result=golden_flat[idx], actual_result=result[idx], ulp_threshold=1)

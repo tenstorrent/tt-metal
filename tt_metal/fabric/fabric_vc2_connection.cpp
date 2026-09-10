@@ -33,7 +33,7 @@ void append_fabric_vc2_connection_rt_args(
     const FabricNodeId& dst_fabric_node_id,
     const uint32_t link_idx,
     ProgramOrDescriptor& worker_program_or_desc,
-    const CoreCoord& worker_core,
+    const tt::tt_metal::CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args) {
     TT_FATAL(
         src_fabric_node_id != dst_fabric_node_id,
@@ -143,7 +143,7 @@ void append_fabric_vc2_connection_rt_args(
     const auto router_direction = control_plane.routing_direction_to_eth_direction(forwarding_direction.value());
 
     ChipId src_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
-    CoreCoord fabric_router_virtual_core =
+    tt::tt_metal::CoreCoord fabric_router_virtual_core =
         tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_eth_core_from_channel(
             src_chip_id, fabric_router_channel);
 
@@ -259,7 +259,7 @@ template void append_fabric_vc2_connection_rt_args<tt::tt_metal::Program>(
     const FabricNodeId&,
     uint32_t,
     tt::tt_metal::Program&,
-    const CoreCoord&,
+    const tt::tt_metal::CoreCoord&,
     std::vector<uint32_t>&);
 
 template void append_fabric_vc2_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
@@ -267,7 +267,7 @@ template void append_fabric_vc2_connection_rt_args<tt::tt_metal::ProgramDescript
     const FabricNodeId&,
     uint32_t,
     tt::tt_metal::ProgramDescriptor&,
-    const CoreCoord&,
+    const tt::tt_metal::CoreCoord&,
     std::vector<uint32_t>&);
 
 }  // namespace tt::tt_fabric

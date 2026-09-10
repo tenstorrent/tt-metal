@@ -13,17 +13,22 @@
 
 namespace tt::tt_metal::emule {
 
+// `owner` is the registering Buffer's unique_id(); remove() erases exactly that
+// registration. Removal keyed by address alone would be wrong: several live
+// buffers can share a start with different ends (Buffer::view subviews, the mesh
+// kernel-bin view wrappers), and erasing a start-match could delete another
+// wrapper's still-live extent.
 class LiveL1Ranges {
 public:
-    static void add(int device_id, uint32_t start, uint32_t end);
-    static void remove(int device_id, uint32_t start);
+    static void add(int device_id, uint32_t start, uint32_t end, uint64_t owner);
+    static void remove(int device_id, uint64_t owner);
     static std::vector<uint64_t> snapshot(int device_id);
 };
 
 class LiveDramRanges {
 public:
-    static void add(int device_id, uint32_t start, uint32_t end);
-    static void remove(int device_id, uint32_t start);
+    static void add(int device_id, uint32_t start, uint32_t end, uint64_t owner);
+    static void remove(int device_id, uint64_t owner);
     static std::vector<uint64_t> snapshot(int device_id);
 };
 

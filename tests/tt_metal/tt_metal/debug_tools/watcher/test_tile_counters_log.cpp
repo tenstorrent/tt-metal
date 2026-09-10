@@ -49,12 +49,10 @@ void RunTest(
     const experimental::NodeCoord node{static_cast<uint32_t>(logical_core.x), static_cast<uint32_t>(logical_core.y)};
 
     // Allocate L1 buffer for sync flag
-    tt_metal::InterleavedBufferConfig sync_buffer_config{
-        .device = device,
-        .size = sizeof(uint32_t),
-        .page_size = sizeof(uint32_t),
-        .buffer_type = tt_metal::BufferType::L1};
-    auto sync_buffer = CreateBuffer(sync_buffer_config);
+    auto sync_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = sizeof(uint32_t)},
+        {.page_size = sizeof(uint32_t), .buffer_type = tt_metal::BufferType::L1},
+        mesh_device.get());
     uint32_t tensix_sync_addr = sync_buffer->address();
     std::vector<uint32_t> zero_data = {0};
     tt::tt_metal::detail::WriteToDeviceL1(device, logical_core, tensix_sync_addr, zero_data);
@@ -83,10 +81,7 @@ void RunTest(
         .compiler_options = {.defines = {{"DFB_PRODUCER", "1"}}},
         .dfb_bindings = {experimental::ProducerOf(TILE_COUNTER_DFB, "tile_counter_dfb")},
         .compile_time_args = {{"num_entries", NUM_ENTRIES_PER_PRODUCER}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
+        .hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true},
     };
 
     // NEO compute consumer kernel (4 threads = 4 Neo clusters)
@@ -106,7 +101,7 @@ void RunTest(
             {{"num_entries", entries_per_consumer},
              {"num_consumers_to_run", NUM_CONSUMERS_TO_RUN},
              {"sync_flag_addr", tensix_sync_addr}},
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = experimental::ComputeGen2Config{},
     };
 
     experimental::WorkUnitSpec wu{

@@ -23,7 +23,8 @@ Tensor pool_sum(
     int dim_arg,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
-    float scalar);
+    float scalar,
+    const std::optional<Layout>& output_layout = std::nullopt);
 
 }  // namespace operations::reduction
 
@@ -36,7 +37,12 @@ Tensor sum(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     float scalar = 1.0f,
     bool correction = true,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    // When false (default), fp32 sum runs on the accurate SFPU path; true selects the faster tf32 FPU path.
+    bool fast_and_approximate_mode = false,
+    // Layout of the result. std::nullopt (default) is TILE, except a ROW_MAJOR input reduced over
+    // -1/-2 on the dense RM path, which stays ROW_MAJOR. An explicit layout is always honored.
+    const std::optional<Layout>& output_layout = std::nullopt);
 
 Tensor mean(
     const Tensor& input_tensor_arg,
@@ -46,7 +52,11 @@ Tensor mean(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     float scalar = 1.0f,
     bool correction = true,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    // When false (default), fp32 mean runs on the accurate SFPU path; true selects the faster tf32 FPU path.
+    bool fast_and_approximate_mode = false,
+    // See ttnn::sum above.
+    const std::optional<Layout>& output_layout = std::nullopt);
 
 Tensor max(
     const Tensor& input_tensor_arg,
@@ -56,7 +66,9 @@ Tensor max(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     float scalar = 1.0f,
     bool correction = true,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    // When false (default), fp32 max runs on the accurate SFPU path; true selects the faster tf32 FPU path.
+    bool fast_and_approximate_mode = false);
 
 Tensor min(
     const Tensor& input_tensor_arg,
@@ -66,10 +78,10 @@ Tensor min(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     float scalar = 1.0f,
     bool correction = true,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    // When false (default), fp32 min runs on the accurate SFPU path; true selects the faster tf32 FPU path.
+    bool fast_and_approximate_mode = false);
 
-// use_legacy is deprecated and non-functional: the Welford implementation is always
-// used. The parameter is kept only for API compatibility and will be removed.
 Tensor std(
     const Tensor& input_tensor_arg,
     const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>>& dim_arg = std::nullopt,
@@ -78,11 +90,8 @@ Tensor std(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     float scalar = 1.0f,
     bool correction = true,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-    bool use_legacy = false);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
-// use_legacy is deprecated and non-functional: the Welford implementation is always
-// used. The parameter is kept only for API compatibility and will be removed.
 Tensor var(
     const Tensor& input_tensor_arg,
     const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>>& dim_arg = std::nullopt,
@@ -91,7 +100,6 @@ Tensor var(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     float scalar = 1.0f,
     bool correction = true,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-    bool use_legacy = false);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 }  // namespace ttnn

@@ -75,7 +75,8 @@ Tensor untilize_with_unpadding(
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    bool fp32_dest_acc_en = input_tensor.dtype() == DataType::UINT32 || input_tensor.dtype() == DataType::FLOAT32;
+    bool fp32_dest_acc_en = input_tensor.dtype() == DataType::UINT32 || input_tensor.dtype() == DataType::INT32 ||
+                            input_tensor.dtype() == DataType::FLOAT32;
 
     ttsl::SmallVector<uint32_t> output_end_vector;
     ttnn::Shape output_end;

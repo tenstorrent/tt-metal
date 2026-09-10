@@ -8,6 +8,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "cpp/ttnn/operations/experimental/ccl/reduce_scatter_common/kernels/common.hpp"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     // Define all compile-time arguments at the beginning
@@ -24,6 +25,11 @@ void kernel_main() {
     uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
+
+    CircularBuffer cb_input(cb_input_id);
+    CircularBuffer cb_interm(cb_interm_id);
+    CircularBuffer cb_interm2(cb_interm2_id);
+    CircularBuffer cb_compute_output(cb_compute_output_id);
 
     compute_kernel_hw_startup(cb_interm_id, cb_input_id, cb_compute_output_id);
 
@@ -78,20 +84,20 @@ void kernel_main() {
                         if (reduce_interm) {
                             // If reduce_output, add 3 tensors. Else add 2 tensors.
                             if (reduce_output) {
-                                cb_wait_front(cb_interm2_id, tile_granularity);
+                                cb_interm2.wait_front(tile_granularity);
                             }
-                            cb_wait_front(cb_input_id, tile_granularity);
-                            cb_wait_front(cb_interm_id, tile_granularity);
+                            cb_input.wait_front(tile_granularity);
+                            cb_interm.wait_front(tile_granularity);
 
                             tile_regs_acquire();  // acquire DST registers for MATH thread, resets DST to 0
                             if (reduce_output) {
-                                copy_tile_init(cb_interm2_id);
+                                copy_init(cb_interm2_id);
                                 for (uint32_t tile_id = 0; tile_id < tiles_to_read; ++tile_id) {
                                     copy_tile(cb_interm2_id, tile_id, tile_id);  // load DST
                                 }
-                                add_tiles_init(cb_interm_id, cb_input_id, true);  // DST = srcA + srcB + DST
+                                add_init(cb_interm_id, cb_input_id, true);  // DST = srcA + srcB + DST
                             } else {
-                                add_tiles_init(cb_interm_id, cb_input_id, false);  // DST = srcA + srcB
+                                add_init(cb_interm_id, cb_input_id, false);  // DST = srcA + srcB
                             }
                             for (uint32_t tile_id = 0; tile_id < tiles_to_read; ++tile_id) {
                                 add_tiles(cb_interm_id, cb_input_id, tile_id, tile_id, tile_id);
@@ -99,19 +105,19 @@ void kernel_main() {
                             tile_regs_commit();  // release lock on DST by MATH thread, signal the PACK thread
 
                             if (reduce_output) {
-                                cb_pop_front(cb_interm2_id, tile_granularity);
+                                cb_interm2.pop_front(tile_granularity);
                             }
-                            cb_pop_front(cb_input_id, tile_granularity);
-                            cb_pop_front(cb_interm_id, tile_granularity);
+                            cb_input.pop_front(tile_granularity);
+                            cb_interm.pop_front(tile_granularity);
 
-                            cb_reserve_back(cb_compute_output_id, tile_granularity);
+                            cb_compute_output.reserve_back(tile_granularity);
                             tile_regs_wait();  // acquire lock on DST for PACK thread
                             for (uint32_t tile_id = 0; tile_id < tiles_to_read; ++tile_id) {
                                 pack_tile(tile_id, cb_compute_output_id, tile_id);  // pack results from DST registers
                                                                                     // to output circular buffers
                             }
                             tile_regs_release();  // release lock on DST by PACK thread
-                            cb_push_back(cb_compute_output_id, tile_granularity);
+                            cb_compute_output.push_back(tile_granularity);
                         }
                         tiles_read += tiles_to_read;
 

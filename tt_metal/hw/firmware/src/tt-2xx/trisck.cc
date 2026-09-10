@@ -103,12 +103,20 @@ uint32_t _start() {
     wait_for_go_message();
     RecordPerfCounters();
 
-    DeviceZoneScopedMainChildN("TRISC-KERNEL");
-
     // Paint stack after all thread_local writes and CRT init are done.
     mark_stack_usage();
 
+    DeviceZoneScopedMainChildN("TRISC-KERNEL");
+
     EARLY_RETURN_FOR_DEBUG
+
+#ifdef ARCH_QUASAR
+    // Raise the Memory Access Hang timeout so that it does not falsely trip a 0x19/0x119 hw trap.
+#ifndef CSR_TIMEOUT_COUNT
+#define CSR_TIMEOUT_COUNT 0xBD0
+#endif
+    asm volatile("csrw %0, %1" : : "i"(CSR_TIMEOUT_COUNT), "r"(0x100000));
+#endif
 
     WAYPOINT("K");
     run_kernel();

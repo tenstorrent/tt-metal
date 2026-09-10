@@ -22,7 +22,7 @@ using operation_attributes_t = SiLUBackwardParams;
 using tensor_args_t = SiLUBackwardInputs;
 
 // Output tensor specs and tensors
-using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
 using tensor_return_value_t = ttnn::Tensor;
 
 }  // namespace ttml::metal::ops::silu_bw::device

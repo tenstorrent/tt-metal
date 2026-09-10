@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "cmath_common.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -25,6 +26,8 @@ namespace sfpu {
 // Constants 0.5 and 1.0 are exactly representable in IEEE 754.
 // Clamping to [0, 1] gives exact boundary values (0 or 1),
 // so the final multiply produces exact 0 or exact x at transitions.
+inline void hardmish_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void hardmish() {
     for (int d = 0; d < ITERATIONS; d++) {

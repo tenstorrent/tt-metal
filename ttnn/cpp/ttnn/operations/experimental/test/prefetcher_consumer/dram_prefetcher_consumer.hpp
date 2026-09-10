@@ -33,7 +33,7 @@ struct DramPrefetcherConsumerDeviceOperation {
     struct tensor_args_t {};
 
     // Side-effect op (no output tensors).
-    using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<ttnn::Tensor>;
 
     struct ProgramFactory {

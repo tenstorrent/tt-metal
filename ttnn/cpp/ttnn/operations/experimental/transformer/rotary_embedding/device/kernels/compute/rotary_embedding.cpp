@@ -22,10 +22,10 @@ ALWI void MUL_TILES(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
 
     tile_regs_acquire();
 #ifdef DECODE_MODE
-    mul_bcast_rows_init_short(in0_cb, in1_cb);
+    mul_bcast_rows_init(in0_cb, in1_cb);
     mul_tiles_bcast_rows(in0_cb, in1_cb, 0, in1_idx, 0);
 #else
-    mul_tiles_init(in0_cb, in1_cb);
+    mul_init(in0_cb, in1_cb);
     mul_tiles(in0_cb, in1_cb, 0, 0, 0);
 #endif
     tile_regs_commit();
@@ -106,7 +106,7 @@ void kernel_main() {
     constexpr uint32_t untilized_sin_sync_cb = get_compile_time_arg_val(15);
     constexpr uint32_t retilized_cos_cb = get_compile_time_arg_val(16);
     constexpr uint32_t retilized_sin_cb = get_compile_time_arg_val(17);
-    binary_op_init_common(sin_cb, scalar_cb, untilized_sin_cb);
+    compute_kernel_hw_startup(sin_cb, scalar_cb, untilized_sin_cb);
     UNTILIZE_TILES<Wt, sin_cb, untilized_sin_cb>();
     UNTILIZE_TILES<Wt, cos_cb, untilized_cos_cb>();
     reconfig_data_format_srca(cos_cb, untilized_sin_cb);
@@ -116,7 +116,7 @@ void kernel_main() {
     updated_cos_cb = retilized_cos_cb;
     updated_sin_cb = retilized_sin_cb;
 #else
-    binary_op_init_common(rotated_in_cb, scalar_cb, rotated_in_interm_cb);
+    compute_kernel_hw_startup(rotated_in_cb, scalar_cb, rotated_in_interm_cb);
 #endif
     uint32_t in1_idx = 0;
     for (uint32_t i = 0; i < num_rows; ++i) {
@@ -131,7 +131,7 @@ void kernel_main() {
                 cb_rotated_in.wait_front(onetile);
 
                 tile_regs_acquire();
-                mul_tiles_bcast_scalar_init_short(rotated_in_cb, scalar_cb);
+                mul_bcast_scalar_init(rotated_in_cb, scalar_cb);
                 mul_tiles_bcast_scalar(rotated_in_cb, scalar_cb, 0, 0, 0);
                 tile_regs_commit();
 
@@ -166,7 +166,7 @@ void kernel_main() {
             pack_reconfig_data_format(cos_interm_cb, out_cb);
 
             tile_regs_acquire();
-            add_tiles_init(cos_interm_cb, sin_interm_cb);
+            add_init(cos_interm_cb, sin_interm_cb);
             add_tiles(cos_interm_cb, sin_interm_cb, 0, 0, 0);
             tile_regs_commit();
 

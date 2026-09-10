@@ -249,7 +249,7 @@ Tensor compute_reshape_mapping_host_tensor(
         ttnn::ROW_MAJOR_LAYOUT,
         MemoryConfig());
 
-    return Tensor::from_vector(flat_mapping_vector, TensorSpec(mapping_shape, mapping_layout));
+    return Tensor::from_vector(flat_mapping_vector, tt::tt_metal::TensorSpec(mapping_shape, mapping_layout));
 }
 }  // namespace detail
 

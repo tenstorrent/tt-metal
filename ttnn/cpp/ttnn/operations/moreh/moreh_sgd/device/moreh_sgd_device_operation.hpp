@@ -31,7 +31,7 @@ struct MorehSgdOperation {
         const std::optional<Tensor>& momentum_buffer_out;
     };
 
-    using spec_return_value_t = std::vector<std::optional<TensorSpec>>;
+    using spec_return_value_t = std::vector<std::optional<tt::tt_metal::TensorSpec>>;
     using tensor_return_value_t = std::vector<std::optional<Tensor>>;
 
     static tt::tt_metal::ProgramDescriptor create_descriptor(

@@ -174,11 +174,11 @@ void validate_reduce_op_tensor(
     std::string_view op_name,
     std::string_view tensor_label,
     const ReduceOpDeviceGridValidationOptions* core_grids_within_device_grid,
-    std::optional<TensorSpec> tensor_spec_ref) {
+    std::optional<tt::tt_metal::TensorSpec> tensor_spec_ref) {
     const bool sharded_tensor_validation = tensor_spec_ref.has_value() || tensor_ref.is_sharded();
     if (sharded_tensor_validation) {
         if (tensor_spec_ref.has_value()) {
-            const TensorSpec& tensor_spec = tensor_spec_ref.value();
+            const tt::tt_metal::TensorSpec& tensor_spec = tensor_spec_ref.value();
             const MemoryConfig& memory_config = tensor_spec.memory_config();
             if (memory_config.nd_shard_spec().has_value()) {
                 const auto& nd_shard_shape = memory_config.nd_shard_spec().value().shard_shape;

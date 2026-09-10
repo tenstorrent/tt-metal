@@ -31,25 +31,28 @@ void bind_all_reduce_create_qkv_heads(nb::module_& mod) {
         Args:
             input_tensor (ttnn.Tensor): multi-device tensor
             buffer_tensor (ttnn.Tensor): buffer tensor for intermediate results
+            batch_offset (ttnn.Tensor): Batch offset tensor
             cluster_axis (int): Provided a MeshTensor, the axis corresponding to MeshDevice to perform the operation on
             mesh_device (MeshDevice): Device mesh to perform the operation on
-            multi_device_global_semaphore (MultiDeviceGlobalSemaphore): Semaphore for multi-device synchronization
+            multi_device_global_semaphore (ttnn.GlobalSemaphore): A single semaphore used for cross-device
+                synchronization. The ``multi_device_`` prefix is a legacy name; one ``GlobalSemaphore`` is
+                expected here, not a per-device collection.
             num_heads (int): Number of attention heads
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration of the all_reduce output
             topology (ttnn.Topology, optional): The topology configuration (Ring or Linear). Defaults to Linear
             num_links (int, optional): Number of links to use for the operation
             subdevice_id (SubDeviceId, optional): Worker subdevice ID
             num_kv_heads (int, optional): Number of key/value heads
-            overlap_qk_coregrid (bool, optional): Whether to overlap Q and K coregrid. Defaults to True
-            batch_offset (Tensor, optional): Batch offset tensor
             slice_size (int, optional): Size of slices
-            final_memory_config (MemoryConfig, optional): Final memory configuration
-            optional_output_tensors (tuple[Tensor, Tensor, Tensor], optional): Optional pre-allocated output tensors
+            final_memory_config (ttnn.MemoryConfig, optional): Memory configuration of the Q, K and V outputs
+            dtype (ttnn.DataType, optional): Data type of the Q, K and V outputs
+            use_noc1_only (bool, optional): Restrict the operation to NOC1. Defaults to False
 
         Returns:
-            tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: Query, Key, and Value tensors
+            tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: the all_reduce output tensor followed by
+            the Query, Key and Value tensors
         )doc",
         &ttnn::experimental::all_reduce_create_qkv_heads,
         nb::arg("input_tensor"),

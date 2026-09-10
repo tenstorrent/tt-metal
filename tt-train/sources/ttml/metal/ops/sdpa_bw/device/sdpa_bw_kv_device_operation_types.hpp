@@ -33,6 +33,6 @@ using tensor_args_t = SDPABackwardKVInputs;
 
 using tensor_return_value_t = std::tuple<ttnn::Tensor, ttnn::Tensor>;  // [grad_K, grad_V]
 
-using spec_return_value_t = std::tuple<ttnn::TensorSpec, ttnn::TensorSpec>;
+using spec_return_value_t = std::tuple<tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec>;
 
 }  // namespace ttml::metal::ops::sdpa_bw::device::kv

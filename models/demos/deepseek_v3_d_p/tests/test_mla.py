@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Test for instantiating both reference CPU and TT device MLA modules with the same weights.
-This test verifies that both modules can be created and weights are loaded correctly.
+MLA device tests: chunked prefill against the CPU torch reference / a recorded GPU trace, plus the
+chunked perf gate. ``run_mla_inference`` is the shared single-shot forward helper, also used by
+tests/test_kv_cache_table.py and tests/sparse_mla/test_sparse_mla.py.
 """
 
+import math
 import os
 from pathlib import Path
 
@@ -16,11 +18,18 @@ from transformers.cache_utils import DynamicCache
 from ttnn.device import is_blackhole
 
 import ttnn
-from models.common.utility_functions import hf_cache_layer_kv
+from models.common.utility_functions import comp_pcc, hf_cache_layer_kv
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.reference_runners import run_reference_mla
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
-from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers, resolve_has_indexer
+from models.demos.deepseek_v3_d_p.tt.mla.rope import (
+    ChunkMetadata,
+    RotarySetup,
+    refresh_llama4_scale,
+    write_chunk_metadata,
+)
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     blockcyclic_cache_host,
     blockcyclic_positions,
@@ -29,16 +38,17 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     reverse_reorder_tensor_chunks,
     rotated_chip_positions,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS, PREFILL_CHUNK_TOKENS_PER_CHIP
 from models.demos.deepseek_v3_d_p.utils.chunked_prefill_utils import (
     cpu_mla_reference,
-    discover_traces,
     load_trace,
     partition_iters,
-    single_trace,
+    resolve_traces,
 )
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
-from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
+from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
+from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -55,6 +65,9 @@ def run_mla_inference(
     tt_kvpe_cache,
     return_indices=False,
     inject_indices=None,
+    is_chunked=False,
+    active_seq_len=None,
+    actual_start=None,
 ):
     """
     Utility function to run MLA inference without host comparison.
@@ -70,12 +83,25 @@ def run_mla_inference(
         is_balanced: Whether to use balanced chunk ordering
         topology: Topology (Linear or Ring)
         tt_kvpe_cache: Initialized KVPE cache on device
+        is_chunked / active_seq_len / actual_start: prefill mode, passed straight to ttMLA and
+            forward(). No chunk loop here -- one forward over the whole sequence -- so only two
+            triples fit: single-shot (False/None/None) or one chunk (True/seq_len/0). Sparse must chunk.
 
     Returns:
         Tuple of (tt_output, hidden_states, chunk_order, shard_dims)
     """
     # Create TT MLA
     logger.info("Creating TT MLA...")
+
+    # The mode is the caller's, not derived: dense chunked prefill is real (test_mla_chunked_prefill,
+    # tt_prefill_runtime.py), so sparsity cannot decide it -- it only decides what a sparse caller may
+    # declare, since ttMLA binds _apply_rope_padded + _sparse_chunked_attn from _has_indexer alone.
+    has_indexer = resolve_has_indexer(config)
+    assert not has_indexer or is_chunked, (
+        "sparse (DSA) MLA has no single-shot path -- it is block-cyclic by construction. Pass "
+        "is_chunked=True: this helper's single forward is then declared as one full-length chunk at "
+        "offset 0, which is what actually executes."
+    )
 
     mla_tt = ttMLA(
         config,
@@ -87,13 +113,30 @@ def run_mla_inference(
         tp_axis=tp_axis,
         is_balanced=is_balanced,
         topology=topology,
-        # Match the single-layer test cache (num_kvpe_cache_layers=1): the sparse single-shot write now
-        # goes through update_padded_kv_cache, which asserts cache_batch % layer_num == 0. Dense is
-        # unaffected (its single-shot write uses fill_cache_for_user_, which ignores layer_num).
+        is_chunked=is_chunked,
+        active_seq_len=active_seq_len,
         layer_num=1,
+        sparse_kv_cache_format=tt_kvpe_cache.format,
     )
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
-    rope_tensors = rope_setup.get_rope_tensors(seq_len)
+    index_kv_cache = None
+    if has_indexer:
+        rope_tensors = rope_setup.get_rope_tensors_indexed(cache_seq_len_global=seq_len, chunk_size_global=seq_len)
+        # Layer-slot count mirrors the serving adapter: the indexer strides the folded user-major cache by
+        # num_full_indexer_layers (GLM-5.2 cross-layer reuse), so the cache must carry that many slots for
+        # update_padded_kv_cache's cache_batch % num_layers check. Falls back to 1 (no indexer_types).
+        index_kv_cache = init_kvpe_cache(
+            kvpe_cache_head_dim=config.index_head_dim,
+            mesh_device=mesh_device,
+            seq_len=seq_len,
+            mesh_shape=mesh_shape,
+            sp_axis=sp_axis,
+            num_kvpe_cache_layers=num_full_indexer_layers(config) or 1,
+            num_users=1,
+            dtype=ttnn.bfloat8_b,
+        )
+    else:
+        rope_tensors = rope_setup.get_rope_tensors(seq_len)
 
     # Verify TT MLA exists
     assert mla_tt is not None, "TT MLA should exist"
@@ -127,13 +170,15 @@ def run_mla_inference(
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
     # GLM-5.2 indexer reuse (return_indices / inject_indices): capture this layer's top-k selection, or
-    # feed a prior layer's to skip the indexer. Defaults leave the single-shot forward unchanged.
+    # feed a prior layer's to skip the indexer. Defaults leave the forward unchanged.
     mla_out = mla_tt.forward(
         hidden_states=tt_hidden_states,
         rope_tensors=rope_tensors,
         kvpe_cache=tt_kvpe_cache,
+        actual_start=actual_start,
         indexer_indices=inject_indices,
         return_indexer_indices=return_indices,
+        index_kv_cache=index_kv_cache,
     )
     indices = None
     if return_indices:
@@ -172,22 +217,20 @@ def run_model(
 
     # Conditionally load fixtures - only load what we need!
     if use_pretrained:
-        config, sd = request.getfixturevalue("pretrained_transformer_weights")
-        weights = sd["layers"][0]["mla_weights"]
+        config, weights = request.getfixturevalue("pretrained_mla_layer_weights")
     else:
         config, weights = request.getfixturevalue("random_weights")
 
-    fabric_config = device_params.get("fabric_config", ttnn.FabricConfig.FABRIC_1D)
-    topology = ttnn.Topology.Ring if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING else ttnn.Topology.Linear
+    topology = per_axis_topology(device_params["fabric_config"])
 
-    production_mesh = [32, 4]
     sp_axis = 0
     tp_axis = 1
 
     mesh_shape = list(mesh_device.shape)
 
+    # 640 tokens on every chip; the global length follows the mesh. max_sl keeps the literal seq_len.
     if scale_down_sl:
-        seq_len = (seq_len // production_mesh[sp_axis]) * mesh_shape[sp_axis]
+        seq_len = PREFILL_CHUNK_TOKENS_PER_CHIP * mesh_shape[sp_axis]
 
     # temp hack
     config.max_seq_len = seq_len
@@ -219,9 +262,9 @@ def run_model(
     logger.info("=" * 80)
 
     # Initialize KVPE cache
-    kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank  # 576
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_cache_head_dim,
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BFP8_TILE,
+        hf_config=config,
         mesh_device=mesh_device,
         seq_len=seq_len,
         mesh_shape=mesh_shape,
@@ -314,7 +357,7 @@ def run_model(
         # Read back KVPE cache from device
         # Cache is replicated across TP, so concat TP replicas on dim 1 (unused) and discard extras
         tt_kvpe_cache_torch = ttnn.to_torch(
-            tt_kvpe_cache,
+            tt_kvpe_cache.storage,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
         ).to(torch.bfloat16)
         tt_kvpe_cache_torch = tt_kvpe_cache_torch[:1, :1, :, :]
@@ -371,104 +414,50 @@ def run_model(
     logger.success(f"✓ Reference and TT comparison with {weight_type} weights successful")
 
 
-# sp x tp
-@pytest.mark.parametrize(
-    "mesh_device",
-    [(32, 4), (8, 4), (2, 4)],
-    ids=["32x4", "8x4", "2x4"],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-        },
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-        },
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-        },
-    ],
-    ids=["line", "ring", "fabric2d"],
-    indirect=True,
-)
-@pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
-@pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
-@pytest.mark.parametrize("seq_len", [128 * 1024, 100 * 1024], ids=["seq128k", "seq100k"])
-@pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
-@pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])
-@pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
-@pytest.mark.timeout(0)
-def test_ds_mla(
-    use_pretrained,
-    request,
-    mesh_device,
-    seq_len,
-    skip_host_comparison,
-    scale_down_sl,
-    is_balanced,
-    is_ci_env,
-    is_ci_v2_env,
-    device_params,
-    variant,
-):
-    run_model(
-        variant,
-        use_pretrained,
-        request,
-        mesh_device,
-        seq_len,
-        skip_host_comparison,
-        scale_down_sl,
-        is_balanced,
-        is_ci_env,
-        is_ci_v2_env,
-        device_params,
-    )
-
-
-@pytest.mark.parametrize("mesh_device", [(8, 4), (2, 4)], ids=["8x4", "2x4"], indirect=True)
+# sp x tp -- Mistral Small 4 bringup. Modelled on the DeepSeek single-shot MLA test (removed upstream in #55619) and deliberately narrowed;
+# every axis that test sweeps is pinned here to ONE value unless it changes the number being measured.
+#   mesh_device        (8, 4) only. Production SP-axis shape for this box; a (2, 4) PCC is not a
+#                      production-shape result, and the TTNN weight cache is keyed on device count.
+#   device_params      fabric2d only. FABRIC_1D is not in CI_ALLOWED_FABRICS for BH galaxy (8,4), so
+#                      pinning it skips the row; TorusXY needs a certified cabling descriptor.
+#   use_pretrained     random only. This row measures the MLA math, which the random-weight path
+#                      exercises identically; the pretrained checkpoint is covered by the chunked
+#                      rows below and by the transformer row.
+#   seq_len            5k and 25k, as Kimi. 25k is the row that crosses position 8192, where the
+#                      llama4 query temperature starts to apply (scale 1.139 at 25600, exactly 1.0
+#                      at 5120), so it is the only case here that exercises it.
+#   skip_host_comparison  check_pcc only. skip_check does the device work and computes NO PCC; the
+#                      gate for this step IS the PCC, so that case would be a silent zero-signal run.
+#   is_balanced        sequential only.
+# scale_down_sl stays swept (2 cases per seq_len): it is the one axis that changes the seq_len
+# actually run (max_sl 5120/25600 vs scaled_sl (sl//32)*8 = 1280/6400), which exercises different
+# padding/rotation paths. Only the max_sl references are staged; the scaled ones recompute.
+#
+# NOT WIRED ON PURPOSE: reference_attention_cls. run_reference_mla returns None for a variant with
+# no reference (reference_runners.py:63), so the [reference_output] PCC is skipped and the three
+# gate PCCs below still come from create_mla_reference -- the vendored DeepSeek MLA, which is
+# variant-independent. Whether that vendored reference is the right truth for Mistral is a separate
+# question and is deliberately NOT settled by this test.
+@pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-        },
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
-        },
-        {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
         },
     ],
-    ids=["line", "ring", "fabric2d"],
+    ids=["fabric2d"],
     indirect=True,
 )
 @pytest.mark.parametrize("use_pretrained", [False], ids=["random"])
 @pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
-@pytest.mark.parametrize(
-    "seq_len",
-    [5 * 1024, 25 * 1024],
-    ids=["seq5k", "seq25k"],
-)
-@pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
+@pytest.mark.parametrize("seq_len", [PREFILL_CHUNK_TOKENS, 25 * 1024], ids=["seq5k", "seq25k"])
+@pytest.mark.parametrize("skip_host_comparison", [False], ids=["check_pcc"])
 @pytest.mark.parametrize("is_balanced", [False], ids=["sequential"])
-@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
-@pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
+@pytest.mark.parametrize("variant", ["mistral_small_4"], indirect=True, ids=["mistral"])
+@pytest.mark.skipif(not is_blackhole(), reason="Mistral Small 4 bringup targets the Blackhole galaxy")
 @pytest.mark.timeout(0)
-def test_kimi_mla(
+def test_mistral_small4_mla(
     use_pretrained,
     request,
     mesh_device,
@@ -500,14 +489,9 @@ def test_kimi_mla(
 # Unified chunked-prefill driver. One loop (preload -> N iters of write+rope+ring_mla -> compare)
 # parametrized by where the prefix/reference come from. See test_mla_chunked_prefill below.
 # ---------------------------------------------------------------------------------------------------
-# Set MLA_CHUNKED_TRACE_DIR to the ROOT dir holding one subdir per layer-0 GPU trace (each with
-# mla_io/ + kv_cache/). It enables the prefill>0 scenarios (load the prior KV + reference from the
-# real GPU run); multi-user pulls one trace per user, cycling if there are fewer traces than users.
-# The root may mix kimi and deepseek traces as siblings; discover_traces filters by variant name.
-MLA_CHUNKED_TRACE_DIR = os.environ.get("MLA_CHUNKED_TRACE_DIR")
-# MLA_CHUNKED_TRACE_PATH points straight at ONE specific trace dir (the leaf holding mla_io/ +
-# kv_cache/, not the root). It takes precedence over MLA_CHUNKED_TRACE_DIR and skips the root
-# scan/variant-filter entirely; the single trace is shared (cycled) across all users.
+# reference='trace' takes its trace dirs from variant.mla_trace_defaults. MLA_CHUNKED_TRACE_PATH
+# overrides that with ONE specific trace dir (the leaf holding mla_io/ + kv_cache/), shared across all
+# users -- for a trace that is not the variant's registered one.
 MLA_CHUNKED_TRACE_PATH = os.environ.get("MLA_CHUNKED_TRACE_PATH")
 
 # Per-iteration VALID token counts for the rotation/padding edge cases, tuned for the TARGET 8x4 mesh
@@ -524,6 +508,32 @@ ROTATED_VALID_LISTS = [
 ]
 ROTATED_VALID_IDS = ["aligned_min", "midchip_straddle", "lastchip", "rot_partial", "multislab", "allfull"]
 
+# Determinism gate, same contract as test_prefill_block / test_prefill_transformer: repeats must be
+# bit-identical, so the threshold is exactly 1.0. Rep 0 is the baseline, hence >= 2.
+DETERMINISM_PCC_THRESHOLD = 1.0
+DETERMINISM_REPS = 3
+
+# Realtime ("lightweight") profiler perf gate: in-process device program records, so no Tracy
+# subprocess, no signposts and no ops-CSV re-parse -- it runs on the plain build (PR #49840).
+# Measured 2026-08-05 on bh_sc1_high_power (run 31010521345): 12.073 ms. Reads 4.4% above the Tracy
+# path's 11_562_468 as expected -- Tracy averages collectives across chips, this takes the max.
+K3_CHUNKED_RT_PERF_NS = 12_073_303
+K3_CHUNKED_RT_PERF_MARGIN = 0.03
+
+
+def _rt_profile_forward_ns(mesh_device, run_fn):
+    """Profile one region; return (result, total_ns) where each program contributes its MAX duration
+    across chips (slowest chip gates that program) -- the sparse-MLA/PR #49840 convention."""
+    result, records = profile_realtime_program(mesh_device, run_fn, collect_all=True)
+    per_program = {}
+    for record in records:
+        runtime_id = record["runtime_id"]
+        if not runtime_id:  # 0 is the profiler's own sentinel
+            continue
+        duration_ns = float(record["duration_ns"])
+        per_program[runtime_id] = max(per_program.get(runtime_id, 0.0), duration_ns)
+    return result, sum(per_program.values())
+
 
 def _run_chunked_prefill(
     request,
@@ -535,21 +545,37 @@ def _run_chunked_prefill(
     prefill_len=0,
     num_users=1,
     use_pretrained=False,
-    topology=ttnn.Topology.Linear,
+    topology=None,
+    use_metadata_tensor=False,
+    determinism_check=False,
+    profile=False,
+    tight_cache=False,
 ):
     """Unified chunked-prefill scenario, decoupled from the reference.
 
     `reference` selects how inputs + ground truth are produced -- independent of prefill_len / env:
       * "cpu"   -> synthetic inputs + torch MLA reference (k_pe in Meta basis). Partial-chunk iters
                    (rotation) allowed; any prefix is preloaded from the CPU reference KV.
-      * "trace" -> GPU-trace inputs + reference (k_pe in HF basis, re-interleaved to compare). TRACE
-                    ONLY: requires MLA_CHUNKED_TRACE_DIR or MLA_CHUNKED_TRACE_PATH (skips if both unset); supports partial iters.
+      * "trace" -> GPU-trace inputs + reference (k_pe re-interleaved for a roped trace, compared
+                    directly under NoPE). TRACE ONLY: dirs come from variant.mla_trace_defaults (or
+                    MLA_CHUNKED_TRACE_PATH); supports partial iters.
       * None    -> no reference (functional/perf): random inputs + random prefix, finite-output check.
     Multi-user partitions iters_isl across users (last gets the remainder); each user is independent in
     its own cache slot, so cross-user contamination surfaces as a per-user output PCC drop.
     """
     assert reference in ("cpu", "trace", None), f"reference must be 'cpu'|'trace'|None, got {reference!r}"
+    # Mutually exclusive like determinism_check vs pcc_validation in test_prefill_block: a reference
+    # comparison measures accuracy, the repeats measure device determinism. Pick one.
+    if determinism_check and reference is not None:
+        pytest.skip("determinism_check needs reference=None (func) -- accuracy is the cpu/trace path's job")
+    # Same exclusion, same reason: a reference run pays a CPU torch pass this measurement does not want.
+    if profile and reference is not None:
+        pytest.skip("profile needs reference=None (func) -- accuracy is the cpu/trace path's job")
+    if profile and not ttnn.device.IsProgramRealtimeProfilerActive():
+        pytest.fail("realtime profiler inactive (needs Blackhole, WORKER dispatch, fabric-tensix DM off)")
     sp_axis, tp_axis = 0, 1
+    if topology is None:
+        topology = per_axis_topology()
     mesh_shape = list(mesh_device.shape)
     sp = mesh_shape[sp_axis]
     tile = ttnn.TILE_SIZE
@@ -561,12 +587,16 @@ def _run_chunked_prefill(
     assert prefill_len % tile == 0, f"prefill_len {prefill_len} must be tile-aligned"
 
     use_trace = reference == "trace"
+    traces = None
     if use_trace:
-        if MLA_CHUNKED_TRACE_DIR is None and MLA_CHUNKED_TRACE_PATH is None:
-            pytest.skip(
-                "reference='trace' requires MLA_CHUNKED_TRACE_DIR (root) or "
-                "MLA_CHUNKED_TRACE_PATH (single trace) -- trace-only scenario"
-            )
+        trace_variant = request.getfixturevalue("variant")
+        trace_paths = [MLA_CHUNKED_TRACE_PATH] if MLA_CHUNKED_TRACE_PATH else trace_variant.mla_trace_defaults
+        assert trace_paths, (
+            f"reference='trace' is not supported for variant '{trace_variant.name}': no golden MLA "
+            "trace was ever recorded for it (mla_trace_defaults is empty). Use reference='cpu' or "
+            "reference='func', or point MLA_CHUNKED_TRACE_PATH at a trace."
+        )
+        traces = resolve_traces(trace_paths, num_users)
         # The trace is a DENSE token sequence; iters_isl just chunks it variably. Partial iters pad
         # the device's fixed-width chunk (masked by causality) -- they are not pad in the sequence --
         # so any iters_isl / prefill works exactly like the CPU ref. The only trace constraint is
@@ -574,33 +604,51 @@ def _run_chunked_prefill(
         use_pretrained = True  # the GPU trace was generated with the real checkpoint
 
     groups = partition_iters(iters_isl, num_users)
-    # Resolve trace dirs: a single explicit trace (MLA_CHUNKED_TRACE_PATH) wins; otherwise scan the
-    # root (MLA_CHUNKED_TRACE_DIR) and filter the kimi/deepseek siblings by variant name.
-    if not use_trace:
-        traces = None
-    elif MLA_CHUNKED_TRACE_PATH is not None:
-        traces = single_trace(MLA_CHUNKED_TRACE_PATH, num_users)
-    else:
-        variant_name = request.getfixturevalue("variant").name
-        traces = discover_traces(MLA_CHUNKED_TRACE_DIR, num_users, variant_name)
 
     # Cache holds the max (kv_actual + chunk) window across all users/iters, slab-aligned, >= 2 slabs.
     max_window = chunk_size_global * 2
+    max_real_end = 0
     for g in groups:
         ka = prefill_len
         for v in g:
             max_window = max(max_window, ka + chunk_size_global)
             ka += v
+            max_real_end = max(max_real_end, ka)
+    if tight_cache:
+        # Cache sized to the REAL tokens, not the padded window, so a late iteration's window runs past
+        # the end of it -- the server's tail chunk. update_padded_kv_cache clamps the write and ring_mla
+        # caps logical_n at the cache.
+        write_end = -(-max_real_end // tile) * tile
+        max_window = max(chunk_size_global * 2, write_end)
     seq_len_cache = ((max_window + chunk_size_global - 1) // chunk_size_global) * chunk_size_global
+    if tight_cache:
+        overruns = [
+            ka
+            for g in groups
+            for ka in [prefill_len + sum(g[:i]) for i in range(len(g))]
+            if ka + chunk_size_global > seq_len_cache
+        ]
+        assert overruns, (
+            f"tight_cache scenario does not actually overrun: cache {seq_len_cache}, chunk "
+            f"{chunk_size_global}, real end {max_real_end} -- no iteration's padded window passes the cache"
+        )
+        logger.info(
+            f"tight_cache: cache {seq_len_cache} for {max_real_end} real tokens; "
+            f"{len(overruns)} iteration(s) pad past it, worst {max(overruns) + chunk_size_global}"
+        )
 
     if use_pretrained:
-        config, sd = request.getfixturevalue("pretrained_transformer_weights")
-        weights = sd["layers"][0]["mla_weights"]
+        # MLA-only fixture: this driver uses nothing but the attention weights, and the full-layer one
+        # cannot load Kimi-K3's MXFP4 MoE side.
+        config, weights = request.getfixturevalue("pretrained_mla_layer_weights")
     else:
         config, weights = request.getfixturevalue("random_weights")
     config.max_seq_len = seq_len_cache
     kvpe_dim = config.kv_lora_rank + config.qk_rope_head_dim
     hidden_size = config.hidden_size
+    # A roped GPU trace stores k_pe HF half-split while the device cache is Meta interleaved; under NoPE
+    # (Kimi-K3) neither side rotates, so there is no basis difference to correct.
+    trace_pe_interleave = use_trace and not getattr(config, "mla_use_nope", False)
 
     logger.info(
         f"chunked prefill: mesh={tuple(mesh_device.shape)} chunk={chunk_size_global} prefill={prefill_len} "
@@ -649,15 +697,23 @@ def _run_chunked_prefill(
         is_balanced=False,
         topology=topology,
         is_chunked=True,
+        active_seq_len=chunk_size_global,
         slot_num=num_users,
         layer_num=1,
     )
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
     indexed_rope = rope_setup.get_rope_tensors_indexed(
-        cache_seq_len_global=seq_len_cache, chunk_size_global=chunk_size_global
+        # tail_slack: an overrunning iteration still ropes its whole padded slab, so the table needs one
+        # chunk of headroom (as the production transformer passes).
+        cache_seq_len_global=seq_len_cache,
+        chunk_size_global=chunk_size_global,
+        tail_slack=tight_cache,
     )
-    tt_kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=kvpe_dim,
+    # Persistent, refreshed per chunk; None for every variant without a query temperature.
+    llama4_scale_buf = rope_setup.make_llama4_scale_buffer(chunk_size_global)
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BFP8_TILE,
+        hf_config=config,
         mesh_device=mesh_device,
         seq_len=seq_len_cache,
         mesh_shape=mesh_shape,
@@ -681,12 +737,9 @@ def _run_chunked_prefill(
         cache_host = torch.zeros(num_users, 1, seq_len_cache, kvpe_dim, dtype=torch.bfloat16)
         for u in range(num_users):
             kv_prior = users[u]["kv_prior"]
-            if use_trace:
-                # The GPU trace stores k_pe in the HF half-split basis; the device cache is the Meta
-                # interleaved basis. Re-interleave the k_pe block before preload (k_nope is basis-
-                # agnostic) -- same transform the post-run cache comparison applies. Without this the
-                # 50k preloaded prefix attends in the wrong basis and only the output PCC (not the
-                # cache PCC, which checks just the new region) shows the ~0.92 drop.
+            if trace_pe_interleave:
+                # Same transform the post-run cache comparison applies (k_nope is basis-agnostic);
+                # without it the preloaded prefix attends in the wrong basis.
                 kv_prior = kv_prior.clone()
                 d = kvpe_dim - config.kv_lora_rank
                 pe = kv_prior[:, config.kv_lora_rank :]
@@ -700,7 +753,7 @@ def _run_chunked_prefill(
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=cache_shard_dims),
         )
-        ttnn.copy_host_to_device_tensor(cache_host_tt, tt_kvpe_cache)
+        ttnn.copy_host_to_device_tensor(cache_host_tt, tt_kvpe_cache.storage)
         ttnn.synchronize_device(mesh_device)
 
     mesh_device.enable_program_cache()
@@ -708,6 +761,8 @@ def _run_chunked_prefill(
     out_accum = [torch.zeros(1, 1, users[u]["total_len"], hidden_size, dtype=torch.bfloat16) for u in range(num_users)]
 
     # ---- iterate: interleave users by local iter index (exercises cross-user isolation) ----
+    det_failures = []
+    profiled_ns = 0.0
     n_iters = max(len(u["group"]) for u in users)
     logger.info(f"Starting DEVICE chunked prefill: up to {n_iters} iters x {num_users} user(s)")
     for i in range(n_iters):
@@ -736,19 +791,87 @@ def _run_chunked_prefill(
                     mesh_device, mesh_shape=tuple(mesh_device.shape), dims=hidden_shard_dims
                 ),
             )
-            tt_out = mla_tt.forward(
-                hidden_states=tt_h,
-                rope_tensors=indexed_rope,
-                kvpe_cache=tt_kvpe_cache,
-                actual_start=kv_actual,
-                cache_user_id=u,
-            )
-            out_flat = ttnn.to_torch(
-                tt_out,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    mesh_device, dims=out_concat_dims, mesh_shape=mesh_device.shape
-                ),
-            ).to(torch.bfloat16)[0, 0]
+            # Trace-safe metadata variant: build the runner's canonical metadata and hand it to forward
+            # verbatim -- ttMLA threads it to all chunked ops (update/rope/zero_pad/ring_mla), which read
+            # their per-chunk scalars on-device. The contract is a 3-tuple of separate 1-element uint32
+            # tensors indexed as metadata[0]=slot_id, [1]=actual_start, [2]=actual_end -- NOT one packed
+            # tensor. slot_id = cache_user_id (layer_num=1, so it is also the flat cache slot).
+            kv_pad_metadata = None
+            if use_metadata_tensor:
+                scalars = tuple(
+                    ttnn.from_torch(
+                        torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1),
+                        device=mesh_device,
+                        dtype=ttnn.uint32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                    )
+                    for val in (u, kv_actual, valid_end)
+                )
+                # 4th field is Mistral's query-scale buffer (None elsewhere), refreshed here by
+                # write_chunk_metadata so the scalars and the scale advance together.
+                kv_pad_metadata = ChunkMetadata(*scalars, llama4_scale_buf)
+                write_chunk_metadata(
+                    kv_pad_metadata,
+                    (u, kv_actual, valid_end),
+                    hf_config=config,
+                    mesh_device=mesh_device,
+                    chunk_size_global=chunk_size_global,
+                    sp_axis=sp_axis,
+                )
+            # Metadata path: pass ONLY the per-element metadata operands (the runtime's _trace_metadata
+            # equivalent) -- actual_start/actual_end are read on-device, so leave them None to prove
+            # forward needs no host per-chunk scalars. cache_user_id is unused on this path (slot comes
+            # from metadata[0]).
+            # Determinism re-issues the SAME forward on the same device inputs. forward takes
+            # actual_start/cache_user_id from the caller, so a repeat rewrites the same cache slots
+            # with the same data -- idempotent, like the repeated block() in test_prefill_block.
+            det_baseline = None
+            for rep in range(DETERMINISM_REPS if determinism_check else 1):
+
+                def _forward():
+                    return mla_tt.forward(
+                        hidden_states=tt_h,
+                        rope_tensors=indexed_rope,
+                        kvpe_cache=tt_kvpe_cache,
+                        actual_start=None if use_metadata_tensor else kv_actual,
+                        # Scalar path needs actual_end only when the window overruns; None otherwise keeps
+                        # the existing scenarios writing the whole padded slab. (Metadata always carries it.)
+                        actual_end=valid_end if (tight_cache and not use_metadata_tensor) else None,
+                        cache_user_id=u,
+                        metadata=kv_pad_metadata,
+                    )
+
+                if profile:
+                    tt_out, fwd_ns = _rt_profile_forward_ns(mesh_device, _forward)
+                    profiled_ns += fwd_ns
+                    logger.info(f"  user {u} iter {i}: forward {fwd_ns / 1e6:.3f} ms (realtime profiler)")
+                else:
+                    tt_out = _forward()
+                out_flat = ttnn.to_torch(
+                    tt_out,
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(
+                        mesh_device, dims=out_concat_dims, mesh_shape=mesh_device.shape
+                    ),
+                ).to(torch.bfloat16)[0, 0]
+                if not determinism_check:
+                    continue
+                if rep == 0:
+                    det_baseline = out_flat.clone()
+                    continue
+                # Collect rather than assert: one report listing every non-deterministic (user, iter,
+                # rep) beats aborting on the first, same as the prefill-block/transformer checks.
+                _, pcc = comp_pcc(det_baseline.float(), out_flat.float())
+                status = "PASS" if pcc >= DETERMINISM_PCC_THRESHOLD else "FAIL"
+                logger.info(f"  user {u} iter {i} rep {rep} vs rep0: PCC = {pcc:.6f}  {status}")
+                if pcc < DETERMINISM_PCC_THRESHOLD:
+                    det_failures.append((u, i, rep, pcc))
+            if kv_pad_metadata is not None:
+                # .scalars: field 3 is a persistent buffer allocated outside this loop, so a
+                # blanket deallocate would free it before the next chunk reads it.
+                for meta_tensor in kv_pad_metadata.scalars:
+                    ttnn.deallocate(meta_tensor)
 
             assert torch.isfinite(out_flat).all(), f"user {u} iter {i}: non-finite output"
             valid_pairs = [(row, gp) for row, gp in enumerate(flat) if gp < valid_end]
@@ -767,6 +890,19 @@ def _run_chunked_prefill(
         ttnn.synchronize_device(mesh_device)
         ttnn.distributed_context_barrier()
 
+    if profile:
+        return profiled_ns
+
+    if determinism_check:
+        if det_failures:
+            msg = "; ".join(f"user {u} iter {i} rep {rep}: {pcc:.6f}" for u, i, rep, pcc in det_failures)
+            pytest.fail(f"Determinism PCC below {DETERMINISM_PCC_THRESHOLD}: {msg}")
+        logger.success(
+            f"✓ Chunked prefill determinism: {DETERMINISM_REPS} reps of every forward bit-identical "
+            f"({n_iters} iter(s) x {num_users} user(s))"
+        )
+        return
+
     if reference is None:
         logger.success(f"✓ Functional chunked prefill ran ({num_users} user(s), finite output)")
         return
@@ -783,10 +919,10 @@ def _run_chunked_prefill(
     # ---- check the measured KV cache vs the reference. The rotation accumulates into the canonical
     #      block-cyclic layout, so blockcyclic_positions un-rotates the final cache (incl. partial
     #      chunks). k_nope is compared directly; k_pe is direct for the CPU ref (mla_reference is
-    #      Meta-style) but re-interleaved for the GPU trace (HF half-split -> device Meta basis). ----
+    #      Meta-style) and for NoPE, re-interleaved for a roped GPU trace -- see trace_pe_interleave. ----
     if any(users[u]["kv_post"] is not None for u in range(num_users)):
         cache_sr = ttnn.to_torch(
-            tt_kvpe_cache,
+            tt_kvpe_cache.storage,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
         ).to(torch.float32)[
             :, :1
@@ -802,14 +938,342 @@ def _run_chunked_prefill(
             dev = nat[prefill_len : users[u]["total_len"]]
             ref = users[u]["kv_post"][prefill_len:].to(torch.float32)
             ref_pe = ref[:, kv_lora:]
-            if use_trace:  # GPU trace stores k_pe HF half-split -> re-interleave to the device Meta basis
+            if trace_pe_interleave:  # HF half-split -> device Meta basis
                 ref_pe = torch.stack([ref_pe[:, : d // 2], ref_pe[:, d // 2 :]], dim=-1).reshape(-1, d)
             _, nope_msg = assert_with_pcc(ref[:, :kv_lora], dev[:, :kv_lora], 0.98)
             _, pe_msg = assert_with_pcc(ref_pe, dev[:, kv_lora:], 0.98)
-            basis = "Meta-aligned" if use_trace else "direct"
+            basis = "Meta-aligned" if trace_pe_interleave else "direct"
             logger.info(f"  user {u} KV cache PCC -- k_nope: {nope_msg}  k_pe[{basis}]: {pe_msg}")
 
     logger.success(f"✓ Chunked prefill passed ({'trace' if use_trace else 'cpu'} ref, {num_users} user(s))")
+
+
+# ---------------------------------------------------------------------------------------------------
+# Direct checks on the llama4 query-scale tensor. These read the tensor back off-device and compare it
+# to rotated_chip_positions ground truth, INSTEAD of inferring correctness from an output PCC.
+#
+# Why not an output-PCC test: the query temperature moves full-output PCC by ~0.002 against this file's
+# 0.98 gate (measured by disabling the device side: rot-allfull 0.9918 -> 0.9910, deep-50k+5k
+# 0.9994 -> 0.9972). So every chunked scenario passes with the term absent, AND passes with it applied
+# to the WRONG ROWS -- which is the bug this was written after finding. The first implementation used
+# arange(start, start + chunk), correct only when `start` is slab-aligned; both scenarios used to
+# "confirm" it happened to be slab-aligned, so neither could see it.
+#
+# Offsets cover aligned (0, 5120, 51200) and rotated (640 chip-aligned, 672 mid-chip straddle, 4480
+# last chip, 6400 multi-slab) starts, each either crossing 8192 or sitting past it, so the scale
+# actually varies across chips rather than being uniform.
+@pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    ids=["line"],
+    indirect=True,
+)
+@pytest.mark.parametrize("kv_actual", [0, 640, 672, 4480, 5120, 6400, 7680, 8192, 51200])
+@pytest.mark.parametrize("route", ["host", "buffer", "runtime"])
+@pytest.mark.parametrize("variant", ["mistral_small_4"], indirect=True, ids=["mistral"])
+@pytest.mark.skipif(not is_blackhole(), reason="Mistral Small 4 is validated on Blackhole only")
+@pytest.mark.timeout(0)
+def test_llama4_query_scale_matches_rotated_positions(request, mesh_device, kv_actual, route, variant, device_params):
+    """The per-chip scale values must match the positions those chips actually carry.
+
+    All three delivery routes, because nothing else covers them:
+      * "host"    -> ttMLA builds the tensor from a host actual_start (single-shot / scalar path).
+      * "buffer"  -> refresh_llama4_scale writes the persistent buffer the traced path reads.
+      * "runtime" -> TtPrefillRuntime's own writer, so the arguments it passes are covered too.
+
+    The chunked scenarios cannot check any of this: an unrefreshed buffer holds ones, which is just
+    "no scale", and that is inside the PCC gate's noise.
+    """
+    chunk_size_global = 5120
+    sp_axis, tp_axis = 0, 1
+    sp = mesh_device.shape[sp_axis]
+    chunk_local = chunk_size_global // sp
+    seq_len_cache = ((kv_actual + 2 * chunk_size_global) // chunk_size_global) * chunk_size_global
+
+    config, weights = request.getfixturevalue("random_weights")
+    config.max_seq_len = seq_len_cache
+
+    mla_tt = ttMLA(
+        config,
+        weights,
+        mesh_device,
+        layer_idx=0,
+        seq_len=seq_len_cache,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        is_balanced=False,
+        topology=ttnn.Topology.Linear,
+        is_chunked=True,
+        active_seq_len=chunk_size_global,
+        slot_num=1,
+        layer_num=1,
+    )
+    assert mla_tt._llama4_beta is not None, "llama_4_scaling_beta is not reaching ttMLA"
+
+    if route == "host":
+        tt_scale = mla_tt._llama4_scale(kv_actual, chunk_local, None)
+    else:
+        setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
+        buf = setup.make_llama4_scale_buffer(chunk_size_global)
+        assert buf is not None, "RotarySetup did not allocate the persistent buffer"
+        if route == "buffer":
+            refresh_llama4_scale(buf, config, mesh_device, kv_actual, chunk_size_global, sp_axis=sp_axis)
+        else:
+            # Nothing in-tree constructs a TtPrefillRuntime (it needs the full model and a trace
+            # region), so a stub carrying the four attributes the method touches stands in for one.
+            meta = tuple(
+                ttnn.from_torch(
+                    torch.tensor([0], dtype=torch.int64).reshape(1, 1, 1, 1),
+                    device=mesh_device,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                )
+                for _ in range(3)
+            )
+            write_chunk_metadata(
+                ChunkMetadata(*meta, buf),
+                (0, kv_actual, kv_actual + chunk_size_global),
+                hf_config=config,
+                mesh_device=mesh_device,
+                chunk_size_global=chunk_size_global,
+                sp_axis=sp_axis,
+            )
+            start_back = ttnn.to_torch(meta[1], mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+            assert int(start_back.flatten()[0]) == kv_actual, "metadata[1] was not written"
+        tt_scale = buf
+
+    shard_dims = [None, None]
+    shard_dims[sp_axis] = 2
+    shard_dims[tp_axis] = 1  # head dim is replicated; concat and read one slice
+    got = ttnn.to_torch(
+        tt_scale, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
+    )
+
+    beta = mla_tt._llama4_beta
+    orig_max = mla_tt._llama4_orig_max
+    positions = rotated_chip_positions(kv_actual, sp, chunk_local)
+    flat = torch.tensor([positions[c][r] for c in range(sp) for r in range(chunk_local)], dtype=torch.float32)
+    want = 1.0 + beta * torch.log(1.0 + torch.floor(flat / orig_max))
+
+    actual = got[0, 0, :, 0].float()
+    n_distinct = int(want.unique().numel())
+    logger.info(
+        f"kv_actual={kv_actual} route={route}: {n_distinct} distinct scale value(s), "
+        f"range [{want.min():.6f}, {want.max():.6f}]"
+    )
+    torch.testing.assert_close(actual, want.to(actual.dtype), rtol=0, atol=4e-3)
+
+    # A uniform chunk cannot distinguish a correct row map from a permuted one, so pin which cases are
+    # supposed to vary. A chunk varies iff it straddles a multiple of orig_max; sitting entirely inside
+    # one window (kv_actual=8192 -> positions 8192..13311) is uniform and correct.
+    straddles = (kv_actual // orig_max) != ((kv_actual + chunk_size_global - 1) // orig_max)
+    assert (n_distinct > 1) == straddles, (
+        f"kv_actual={kv_actual}: expected {'varying' if straddles else 'uniform'} scale, "
+        f"got {n_distinct} distinct value(s)"
+    )
+
+
+# The rows above check the scale tensor's VALUES. None of them checks that it reaches tt_q: the 27
+# direct rows call _llama4_scale itself, and the trace-replay row multiplies a synthetic q of its own.
+# Deleting the multiply in _q_stem leaves every one of them green. This row closes that gap by running
+# _q_stem twice, scale active and scale suppressed, and asserting the ratio between the two outputs is
+# the scale itself -- so the wiring is covered rather than inferred. Output PCC cannot do this job, for
+# the same reason given above: the temperature moves full-output PCC by ~0.002 against a 0.98 gate.
+@pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    ids=["line"],
+    indirect=True,
+)
+# Past 8192, so the scale is not 1.0 and the assertion can actually fail. At 5120 the scale is exactly
+# 1.0 and this test would pass with the multiply deleted.
+@pytest.mark.parametrize("kv_actual", [25600], ids=["past_8192"])
+@pytest.mark.parametrize("variant", ["mistral_small_4"], indirect=True, ids=["mistral"])
+@pytest.mark.skipif(not is_blackhole(), reason="Mistral Small 4 is validated on Blackhole only")
+@pytest.mark.timeout(0)
+def test_llama4_query_scale_is_applied_in_q_stem(request, mesh_device, kv_actual, variant, device_params):
+    """The query temperature must be applied to tt_q, not merely computed correctly."""
+    chunk_size_global = 5120
+    sp_axis, tp_axis = 0, 1
+    sp = mesh_device.shape[sp_axis]
+    chunk_local = chunk_size_global // sp
+    seq_len_cache = ((kv_actual + 2 * chunk_size_global) // chunk_size_global) * chunk_size_global
+
+    config, weights = request.getfixturevalue("random_weights")
+    config.max_seq_len = seq_len_cache
+
+    mla_tt = ttMLA(
+        config,
+        weights,
+        mesh_device,
+        layer_idx=0,
+        seq_len=seq_len_cache,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        is_balanced=False,
+        topology=ttnn.Topology.Linear,
+        is_chunked=True,
+        active_seq_len=chunk_size_global,
+        slot_num=1,
+        layer_num=1,
+    )
+    assert mla_tt._llama4_beta is not None, "llama_4_scaling_beta is not reaching ttMLA"
+
+    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
+    rope_tensors = rope_setup.get_rope_tensors_indexed(
+        cache_seq_len_global=seq_len_cache, chunk_size_global=chunk_size_global
+    )
+
+    # _q_stem deallocates qr, so build one input per call from the same host tensor.
+    torch.manual_seed(0)
+    qr_host = torch.randn(1, 1, chunk_local, config.q_lora_rank, dtype=torch.float32)
+
+    def _q_stem_output(apply_scale: bool):
+        qr = ttnn.from_torch(
+            qr_host,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        saved = mla_tt._llama4_beta
+        if not apply_scale:
+            mla_tt._llama4_beta = None  # skips the multiply in _q_stem
+        try:
+            out = mla_tt._q_stem(qr, rope_tensors, kv_actual, chunk_local, metadata=None)
+        finally:
+            mla_tt._llama4_beta = saved
+        shard_dims = [None, None]
+        shard_dims[sp_axis] = 2
+        shard_dims[tp_axis] = 1
+        return ttnn.to_torch(
+            out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
+        ).float()
+
+    scaled = _q_stem_output(apply_scale=True)
+    plain = _q_stem_output(apply_scale=False)
+
+    beta, orig_max = mla_tt._llama4_beta, mla_tt._llama4_orig_max
+    positions = rotated_chip_positions(kv_actual, sp, chunk_local)
+    flat = torch.tensor([positions[c][r] for c in range(sp) for r in range(chunk_local)], dtype=torch.float32)
+    want = 1.0 + beta * torch.log(1.0 + torch.floor(flat / orig_max))
+    assert want.min() > 1.0, f"kv_actual={kv_actual} produced scale 1.0; the test cannot fail as written"
+
+    # Compare where the unscaled magnitude is large enough that the ratio is not dominated by bf16
+    # quantisation of near-zero entries.
+    ref = plain[0, 0, :, :]
+    got = scaled[0, 0, :, :]
+    mask = ref.abs() > 0.1
+    assert mask.any(), "no usable magnitudes in the q stem output"
+    ratio = (got[mask] / ref[mask]).float()
+    per_row = want.unsqueeze(-1).expand_as(ref)[mask]
+    logger.info(
+        f"kv_actual={kv_actual}: expected scale range [{want.min():.6f}, {want.max():.6f}], "
+        f"observed ratio range [{ratio.min():.6f}, {ratio.max():.6f}]"
+    )
+    torch.testing.assert_close(ratio, per_row, rtol=2e-2, atol=2e-2)
+
+
+# ---------------------------------------------------------------------------------------------------
+# Does a CAPTURED trace read the scale buffer's live contents, or a capture-time snapshot?
+#
+# That one ttnn semantic is why the traced path uses a persistent buffer refreshed per chunk instead of
+# a host-built tensor. If a replay saw a snapshot, every chunk after the captured one would silently
+# carry the captured chunk's temperature, and the chunked PCC gate could not see it.
+#
+# Deliberately a two-op trace, not a full MLA forward: attention at a 51200-token offset reads 51200
+# tokens of prior KV, so a replay-vs-eager comparison there has to preload the cache identically before
+# each measured run -- which tests cache bookkeeping on top of the thing actually in question.
+#
+# Offsets 0 (scale 1.0) and 51200 (1.194591) are 19% apart and each uniform across the chunk, so a
+# snapshot and a live read are unmistakable and no rotation reasoning is needed to read the result.
+@pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 16 * 1024 * 1024}],
+    ids=["line"],
+    indirect=True,
+)
+@pytest.mark.parametrize("variant", ["mistral_small_4"], indirect=True, ids=["mistral"])
+@pytest.mark.skipif(not is_blackhole(), reason="Mistral Small 4 is validated on Blackhole only")
+@pytest.mark.timeout(0)
+def test_llama4_scale_buffer_is_live_under_trace_replay(request, mesh_device, variant, device_params):
+    """A replay must pick up a refreshed scale buffer, and must not change without one."""
+    chunk_size_global = 5120
+    sp_axis, tp_axis = 0, 1
+    off_a, off_b = 0, 51200
+    seq_len_cache = ((off_b + 2 * chunk_size_global) // chunk_size_global) * chunk_size_global
+
+    config, _ = request.getfixturevalue("random_weights")
+    config.max_seq_len = seq_len_cache
+    scale_buf = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).make_llama4_scale_buffer(
+        chunk_size_global
+    )
+    assert scale_buf is not None, "RotarySetup did not allocate the persistent buffer"
+
+    rope_scaling = config.rope_scaling
+    beta, orig_max = rope_scaling["llama_4_scaling_beta"], rope_scaling["original_max_position_embeddings"]
+    expect = {off: 1.0 + beta * math.log(1.0 + off // orig_max) for off in (off_a, off_b)}
+    assert expect[off_a] != expect[off_b], "offsets must differ in scale or this test proves nothing"
+
+    shard_dims = [None, None]
+    shard_dims[sp_axis] = 2
+    shard_dims[tp_axis] = 1
+    width = config.kv_lora_rank + config.qk_rope_head_dim
+    q = ttnn.from_torch(
+        torch.ones(1, config.num_attention_heads, chunk_size_global, width, dtype=torch.bfloat16),
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+    )
+
+    refresh_llama4_scale(scale_buf, config, mesh_device, off_a, chunk_size_global, sp_axis=sp_axis)
+    out = ttnn.multiply(q, scale_buf)  # warm/compile before recording
+    ttnn.synchronize_device(mesh_device)
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    out = ttnn.multiply(q, scale_buf)
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+
+    def replayed():
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+        got = ttnn.to_torch(
+            out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
+        )
+        return got[0, 0, :, 0].float()
+
+    try:
+        at_a = replayed()
+        torch.testing.assert_close(
+            at_a, torch.full_like(at_a, expect[off_a]), rtol=0, atol=4e-3, msg="replay at the captured offset is wrong"
+        )
+
+        refresh_llama4_scale(scale_buf, config, mesh_device, off_b, chunk_size_global, sp_axis=sp_axis)
+        at_b = replayed()
+        logger.info(f"trace replay: offset {off_a} -> {at_a[0]:.6f}, offset {off_b} -> {at_b[0]:.6f}")
+        torch.testing.assert_close(
+            at_b,
+            torch.full_like(at_b, expect[off_b]),
+            rtol=0,
+            atol=4e-3,
+            msg=(
+                f"after refreshing to offset {off_b} a replay still produced {at_b[0]:.6f} (expected "
+                f"{expect[off_b]:.6f}); the captured graph reads a capture-time SNAPSHOT, so the "
+                "persistent-buffer design does not hold and the traced path needs the position math "
+                "evaluated on-device instead"
+            ),
+        )
+
+        torch.testing.assert_close(replayed(), at_b, rtol=0, atol=0, msg="replay is not deterministic")
+    finally:
+        ttnn.release_trace(mesh_device, tid)
 
 
 # Functionality scenarios (id, kwargs) -- PURE FUNCTIONALITY: no mesh, no reference. Mesh and
@@ -823,12 +1287,19 @@ _CHUNKED_SCENARIOS = (
     # NOTE: ids must not nest as substrings, else `-k <id>` can't isolate one (pytest -k is substring).
     # Convention: "-Nu" = N users. "maxedge"/"deep" are intentional families (single- + multi-user).
     + [("maxedge-1u", dict(iters_isl=[2560, 2592, 5120]))]
+    # One aligned full chunk, no padding and no rotation -- the determinism baseline, where a repeat
+    # diff can only come from the device, not from the pad/rotate bookkeeping maxedge exercises.
+    + [("plain-5k", dict(iters_isl=[5120]))]
     + [
         ("production-50k+5k", dict(iters_isl=[5120] * 11)),
         ("fullchunk-2u", dict(iters_isl=[5120] * 4, num_users=2)),
         # Multi-user WITH padding/rotation: each user runs the full maxedge pattern in its own slot
         # (partition splits [..]*2 into one maxedge per user), exercising rotation + cross-user isolation.
         ("maxedge-2u", dict(iters_isl=[2560, 2592, 5120] * 2, num_users=2)),
+        # Tail chunk padding PAST the cache end: each iter leaves a tile of pad, so kv_actual drifts and
+        # the final 32-token iter's window ends 5056 past the 10240 cache while its real tokens fit. Only
+        # a drifted start can overrun. See tight_cache in the driver.
+        ("padoverflow-1u", dict(iters_isl=[5120 - 32] * 2 + [32], tight_cache=True)),
         ("deep-50k+5k", dict(iters_isl=[5120], prefill_len=50 * 1024)),
         ("deep-2u", dict(iters_isl=[5120, 5120], prefill_len=50 * 1024, num_users=2)),
     ]
@@ -836,55 +1307,145 @@ _CHUNKED_SCENARIOS = (
 
 
 @pytest.mark.parametrize(
-    "device_params",
+    "mesh_device,device_params",
     [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-        },
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-        },
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-        },
+        pytest.param((2, 2), fabric2d_device_params(l1_small_size=1152), id="fabric2d-2x2"),
+        pytest.param((2, 4), fabric2d_device_params(l1_small_size=1152), id="fabric2d-2x4"),
+        # high_bw_all_gather parks readiness/completion semaphores in L1_SMALL. On 8x4 the
+        # fallback fragments general L1 enough that a later op's static circular buffers collide.
+        #
+        pytest.param((8, 4), torus_xy_device_params(l1_small_size=1152), id="torus-xy-8x4"),
     ],
-    ids=["line", "ring", "fabric2d"],
-    indirect=True,
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4), (8, 4)], ids=["2x2", "2x4", "8x4"], indirect=True)
 @pytest.mark.parametrize("reference", ["cpu", "trace", None], ids=["cpu", "trace", "func"])
 @pytest.mark.parametrize("kwargs", [kw for _, kw in _CHUNKED_SCENARIOS], ids=[sid for sid, _ in _CHUNKED_SCENARIOS])
-@pytest.mark.parametrize("variant", ["deepseek_v3_d_p", "kimi_k2_6"], indirect=True, ids=["dsv3", "kimi"])
+@pytest.mark.parametrize(
+    "variant",
+    ["kimi_k2_7", "kimi_k3", "mistral_small_4"],
+    indirect=True,
+    # Name the Kimi generation explicitly. pytest -k is substring-based, so the ids must stay
+    # disjoint: "k2_7" and "k3" cannot cross-match, whereas a bare "kimi" id would match both
+    # generations and silently widen every `-k` selector (CI yaml, tests/perf/test_mla_perf.py).
+    # "mistral4" matches the transformer/block rows' id, so one `-k mistral4` selects this model
+    # across all three; `-k mistral` still finds it, and no other variant here shares the prefix.
+    ids=["k2_7", "k3", "mistral4"],
+)
+@pytest.mark.parametrize("use_metadata_tensor", [False, True], ids=["scalar", "metadata"])
+@pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 @pytest.mark.timeout(0)
-def test_mla_chunked_prefill(request, mesh_device, kwargs, reference, device_params, variant):
+def test_mla_chunked_prefill(
+    request, mesh_device, kwargs, reference, device_params, variant, use_metadata_tensor, determinism_check
+):
     """Unified chunked-prefill driver crossed with independent mesh and reference axes. Each
     functionality scenario (rotation edges, production depth, multi-user, deep prefix) runs on any mesh
-    and is validated against the CPU torch reference ('cpu'), the GPU trace ('trace', skips without
-    MLA_CHUNKED_TRACE_DIR/PATH), or run with no reference ('func'). Select with e.g.
+    and is validated against the CPU torch reference ('cpu'), the GPU trace ('trace', asserts if the
+    variant has no registered trace), or run with no reference ('func'). Select with e.g.
     -k 'maxedge-1u and trace and 8x4'. See _run_chunked_prefill.
 
-    Real weights on the CPU-reference path: point the variant's HF env var (DEEPSEEK_V3_HF_MODEL /
-    KIMI_K2_6_HF_MODEL) at a checkpoint to validate the chunked path against the CPU torch reference
+    Real weights on the CPU-reference path: point the variant's HF env var (KIMI_K2_7_HF_MODEL /
+    KIMI_K3_HF_MODEL) at a checkpoint to validate the chunked path against the CPU torch reference
     with pretrained weights instead of random. create_mla_reference is config-driven and
     architecture-agnostic (Kimi's YaRN/theta flow through, absorbed-MLA math matches the variant's own
-    reference), so this works for both variants. It complements the deepseek GPU-trace path, which only
+    reference), so this works for both variants. It complements the GPU-trace path, which only
     replays full-chunk iters and so never exercises real weights across the rotation/partial-chunk edge
-    scenarios that the cpu path covers. Without the env var, fall back to random (mirroring
-    test_kimi_mla). kimi_k2_6 also runs the trace path (loader + k_pe re-interleave are arch-agnostic; needs kimi
-    GPU traces in MLA_CHUNKED_TRACE_DIR). It otherwise runs the same
-    config-driven driver on any arch/mesh."""
+    scenarios that the cpu path covers. Without the env var, fall back to random. kimi_k2_7 has no
+    registered golden MLA trace (https://github.com/tenstorrent/tt-metal/issues/54973), so selecting
+    'trace' for it fails rather than silently passing; it runs the cpu and func paths, otherwise the
+    same config-driven driver on any arch/mesh.
+
+    kimi_k3 (NoPE + output gate, 96 heads) runs 'scalar' only -- 'metadata' is skipped explicitly
+    below. Unlike kimi_k2_7 it runs 'trace', taking real weights from layer 3 via
+    variant.pretrained_mla_layer. Its rotation scenarios still matter: rotation comes from the
+    block-cyclic cache write and the causal offset, not from RoPE."""
+    # Per-variant, not module-level: two CI selectors for this test are variant-unqualified, so
+    # without this a kimi_k3 case would run on Wormhole T3K where it has never been validated.
+    if variant.name == "kimi_k3" and not is_blackhole():
+        pytest.skip("kimi_k3 is validated on Blackhole only")
+    # The metadata contract serves the trace-safe runtime (inbound_socket_service_sync feeds forward
+    # tt_metadata directly). K3 has no runtime -- build_runtime/allocate_kv_cache deliberately raise
+    # -- so the path is unreachable for it and passes only via the shared arch-agnostic ttMLA.forward.
+    # Incidental, not a K3 guarantee; re-enable when K3 has a runtime that actually feeds metadata.
+    if variant.name == "kimi_k3" and use_metadata_tensor:
+        pytest.skip("kimi_k3 has no runtime, so the metadata (device-scalar) path is unreachable for it")
+    # No K3 checkpoint is reachable, so no GPU trace was ever recorded for it. _run_chunked_prefill
+    # already asserts on supports_pretrained, but only once a trace root is configured -- so on a box
+    # with MLA_CHUNKED_TRACE_PATH set these cases would hard-fail instead of being cleanly out of
+    # scope. Skip up front; the assert stays as the backstop for any future supports_pretrained=False
+    # variant and for the silent K2.6-trace-substitution it was written to catch.
+    if variant.name == "kimi_k3" and reference == "trace":
+        pytest.skip("kimi_k3 has no reachable checkpoint, so no GPU trace exists for it")
+    # Same reason as K3's: the variant-unqualified CI selectors for this test would otherwise run
+    # Mistral on Wormhole T3K, where it has never been brought up.
+    if variant.name == "mistral_small_4" and not is_blackhole():
+        pytest.skip("mistral_small_4 is validated on Blackhole only")
+    # Variant-agnostic, not a name check: mla_trace_defaults is the adapter's own declaration that
+    # no golden was ever recorded ("Empty = ..." in adapter.py), which is exactly the condition the
+    # assert in _run_chunked_prefill reports. Skipping up front reads as out of scope instead of as
+    # a hard failure, and any future variant without a trace is covered without editing this file.
+    # Mistral is the case that needs it today; 'cpu' and 'func' cover all 13 scenarios between them.
+    if reference == "trace" and not variant.mla_trace_defaults:
+        pytest.skip(f"no golden MLA trace recorded for {variant.name}; use reference='cpu' or 'func'")
     # Opt into real weights on the cpu path when the variant's checkpoint env var is set. The "trace"
     # path already forces pretrained; "func" is ref-less so weights don't matter. The pretrained
     # fixture skips the test if the env var is set but the checkpoint is incomplete.
     if reference == "cpu" and os.environ.get(variant.env_var) and not kwargs.get("use_pretrained"):
         kwargs = {**kwargs, "use_pretrained": True}
-    topology = (
-        ttnn.Topology.Ring
-        if device_params.get("fabric_config") == ttnn.FabricConfig.FABRIC_1D_RING
-        else ttnn.Topology.Linear
+    topology = per_axis_topology(device_params["fabric_config"])
+    _run_chunked_prefill(
+        request,
+        mesh_device,
+        reference=reference,
+        topology=topology,
+        use_metadata_tensor=use_metadata_tensor,
+        determinism_check=determinism_check,
+        **kwargs,
     )
-    _run_chunked_prefill(request, mesh_device, reference=reference, topology=topology, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(l1_small_size=1152),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        )
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["kimi_k3"], indirect=True, ids=["k3"])
+@pytest.mark.skipif(not is_blackhole(), reason="kimi_k3 and the realtime profiler are Blackhole-only")
+@pytest.mark.skipif(
+    not is_high_power(),
+    reason="perf job requires a high-power (>=130W TDP) host; guards the exabox.tenstorrent.com/power=14kw label",
+)
+@pytest.mark.timeout(0)
+def test_mla_chunked_perf_check(request, mesh_device, device_params, variant):
+    """Kimi-K3 chunked-prefill MLA perf on the 8x4 Galaxy: 50k cached prefix + one fresh 5k chunk,
+    timed with the realtime (lightweight) profiler instead of Tracy.
+
+    NOT comparable to test_kimi_k3_mla_chunked_perf_galaxy's 11_562_468: that number comes from the
+    Tracy merge path, which averages collectives across chips, while this takes the max for every
+    program. K3's forward is ~7% CCL, so the two disagree by construction."""
+    topology = per_axis_topology(device_params["fabric_config"])
+    total_ns = _run_chunked_prefill(
+        request,
+        mesh_device,
+        reference=None,
+        topology=topology,
+        profile=True,
+        iters_isl=[5120],
+        prefill_len=50 * 1024,
+    )
+    lower = K3_CHUNKED_RT_PERF_NS * (1 - K3_CHUNKED_RT_PERF_MARGIN)
+    upper = K3_CHUNKED_RT_PERF_NS * (1 + K3_CHUNKED_RT_PERF_MARGIN)
+    logger.info(
+        f"kimi_k3 chunked 50k+5k realtime perf: {total_ns:,.0f} ns ({total_ns / 1e6:.3f} ms), "
+        f"expected {K3_CHUNKED_RT_PERF_NS:,} ns, band [{lower:,.0f}, {upper:,.0f}]"
+    )
+    assert lower <= total_ns <= upper, (
+        f"device time {total_ns:,.0f} ns outside band [{lower:,.0f}, {upper:,.0f}] "
+        f"(expected {K3_CHUNKED_RT_PERF_NS:,} ns, margin +/- {K3_CHUNKED_RT_PERF_MARGIN * 100:.1f}%)"
+    )

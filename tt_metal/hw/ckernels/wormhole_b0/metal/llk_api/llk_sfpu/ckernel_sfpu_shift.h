@@ -13,6 +13,25 @@
 namespace ckernel {
 namespace sfpu {
 
+// Map the SFP load/store instruction mode to the sfpi DataLayout whose load/store format byte
+// matches it (see ckernel_sfpu_rsub_int32.h):
+//   INT32 (4)          -> I32  (sign-mag<->2's-comp conversion on load/store)
+//   LO16 (6)           -> U16
+//   INT32_2S_COMP (12) -> SM32 (raw)
+template <InstrModLoadStore INSTRUCTION_MODE>
+inline constexpr sfpi::DataLayout shift_layout() {
+    return (INSTRUCTION_MODE == InstrModLoadStore::LO16)            ? sfpi::DataLayout::U16
+           : (INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP) ? sfpi::DataLayout::SM32
+                                                                    : sfpi::DataLayout::I32;
+}
+
+// The in-register value type that the layout can load/store: U16 holds unsigned lanes,
+// I32/SM32 hold signed (2's-complement) lanes.
+template <sfpi::DataLayout LAYOUT>
+using shift_vtype = std::conditional_t<LAYOUT == sfpi::DataLayout::U16, sfpi::vUInt, sfpi::vInt>;
+
+constexpr std::uint32_t dst_tile_size = 32;
+
 template <bool APPROXIMATION_MODE, int ITERATIONS, InstrModLoadStore INSTRUCTION_MODE, bool SIGN_MAGNITUDE_FORMAT>
 inline void calculate_binary_left_shift(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
@@ -21,24 +40,24 @@ inline void calculate_binary_left_shift(
 
     constexpr InstrModLoadStore sfpload_instr_mod =
         SIGN_MAGNITUDE_FORMAT ? InstrModLoadStore::INT32_2S_COMP : INSTRUCTION_MODE;
+    constexpr sfpi::DataLayout layout = shift_layout<sfpload_instr_mod>();
+    using vType = shift_vtype<layout>;
 
-    // SFPU microcode
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        // size of each tile in Dest is 64 rows
-        constexpr std::uint32_t dst_tile_size = 64;
-        // load
-        TT_SFPLOAD(p_sfpu::LREG0, sfpload_instr_mod, ADDR_MOD_3, dst_index_in0 * dst_tile_size);
-        TT_SFPLOAD(p_sfpu::LREG1, sfpload_instr_mod, ADDR_MOD_3, dst_index_in1 * dst_tile_size);
-        // if (shift_amount < 0 OR shift_amount >= 32) -> result should be 0
-        TTI_SFPSETCC(0, p_sfpu::LREG1, p_sfpu::LREG0, 4);
-        TTI_SFPIADD(0xFE0, p_sfpu::LREG1, p_sfpu::LREG2, 1);  // 0xFE0 = -32
-        TTI_SFPCOMPC(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
-        TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
-        TTI_SFPENCC(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
-        // shift left
-        TTI_SFPSHFT(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
-        // store result
-        TT_SFPSTORE(p_sfpu::LREG0, sfpload_instr_mod, ADDR_MOD_3, dst_index_out * dst_tile_size);
+        vType a = sfpi::dst_reg[dst_index_in0 * dst_tile_size].mode<layout>();
+        vType s = sfpi::dst_reg[dst_index_in1 * dst_tile_size].mode<layout>();
+        sfpi::vUInt value = sfpi::as<sfpi::vUInt>(a);
+        sfpi::vInt shift = sfpi::as<sfpi::vInt>(s);
+
+        // A positive shift amount shifts left (logical).
+        sfpi::vUInt result = sfpi::shft(value, shift, sfpi::ShiftMode::Logical);
+
+        // Out-of-range shift amounts (shift < 0 or shift >= 32) produce 0.
+        v_if(shift < 0 || shift >= 32) { result = 0; }
+        v_endif;
+
+        sfpi::dst_reg[dst_index_out * dst_tile_size].mode<layout>() = sfpi::as<vType>(result);
         sfpi::dst_reg++;
     }
 }
@@ -51,33 +70,34 @@ inline void calculate_binary_right_shift(
 
     constexpr InstrModLoadStore sfpload_instr_mod =
         SIGN_MAGNITUDE_FORMAT ? InstrModLoadStore::INT32_2S_COMP : INSTRUCTION_MODE;
+    constexpr sfpi::DataLayout layout = shift_layout<sfpload_instr_mod>();
+    using vType = shift_vtype<layout>;
 
-    // SFPU microcode
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        // size of each tile in Dest is 64 rows
-        constexpr std::uint32_t dst_tile_size = 64;
-        // load
-        TT_SFPLOAD(p_sfpu::LREG0, sfpload_instr_mod, ADDR_MOD_3, dst_index_in0 * dst_tile_size);
-        TT_SFPLOAD(p_sfpu::LREG1, sfpload_instr_mod, ADDR_MOD_3, dst_index_in1 * dst_tile_size);
-        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);  // save shift_value for later
-        // if (shift_amount < 0 OR shift_amount >= 32) -> result should be 0
-        TTI_SFPSETCC(0, p_sfpu::LREG1, p_sfpu::LREG0, 4);
-        TTI_SFPIADD(0xFE0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LCONST_0);  // 0xFE0 = -32
-        TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
-        TTI_SFPENCC(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
-        TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG1, 6);  // take negative of shift_amount to shift right
-        // shift right
-        TTI_SFPSHFT(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
-        // if shift_value was negative, need to shift in 1's manually
-        TTI_SFPSETCC(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);     // only run if shift_value is negative
-        TTI_SFPSETCC(0, p_sfpu::LREG1, p_sfpu::LREG0, 2);     // only needed if shift_amount>0
-        TTI_SFPIADD(0x020, p_sfpu::LREG1, p_sfpu::LREG2, 5);  // take 32-shift_amount (0x020 = 32)
-        TTI_SFPNOT(0, p_sfpu::LCONST_0, p_sfpu::LREG3, 0);    // put all 1's into LREG3
-        TTI_SFPSHFT(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);      // shift all 1's by 32-shift_amount
-        TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG0, 0);        // OR in the 1's
-        TTI_SFPENCC(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
-        // store result
-        TT_SFPSTORE(p_sfpu::LREG0, sfpload_instr_mod, ADDR_MOD_3, dst_index_out * dst_tile_size);
+        vType a = sfpi::dst_reg[dst_index_in0 * dst_tile_size].mode<layout>();
+        vType s = sfpi::dst_reg[dst_index_in1 * dst_tile_size].mode<layout>();
+        sfpi::vUInt value = sfpi::as<sfpi::vUInt>(a);
+        sfpi::vInt shift = sfpi::as<sfpi::vInt>(s);
+
+        // Right shift by `shift` (a negative shift amount shifts left). Out-of-range lanes are
+        // fixed up to 0 by the final guard below, so their intermediate result here is don't-care.
+        sfpi::vUInt result = sfpi::shft(value, 0 - shift, sfpi::ShiftMode::Logical);
+
+        // Arithmetic shift: when the original value is negative (and the shift is non-zero) the
+        // vacated high bits must be filled with 1's rather than 0's.
+        v_if(sfpi::as<sfpi::vInt>(value) < 0 && shift != 0) {
+            sfpi::vUInt high_ones = sfpi::shft(~sfpi::vUInt(0), 32 - shift, sfpi::ShiftMode::Logical);
+            result = result | high_ones;
+        }
+        v_endif;
+
+        // Out-of-range shift amounts (shift < 0 or shift >= 32) produce 0, matching the sibling
+        // kernels and the original "shift_amount < 0 OR >= 32 -> 0" contract.
+        v_if(shift < 0 || shift >= 32) { result = 0; }
+        v_endif;
+
+        sfpi::dst_reg[dst_index_out * dst_tile_size].mode<layout>() = sfpi::as<vType>(result);
         sfpi::dst_reg++;
     }
 }
@@ -90,25 +110,26 @@ inline void calculate_logical_right_shift(
 
     constexpr InstrModLoadStore sfpload_instr_mod =
         SIGN_MAGNITUDE_FORMAT ? InstrModLoadStore::INT32_2S_COMP : INSTRUCTION_MODE;
+    constexpr sfpi::DataLayout layout = shift_layout<sfpload_instr_mod>();
+    using vType = shift_vtype<layout>;
 
-    // SFPU microcode
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        // size of each tile in Dest is 64 rows
-        constexpr std::uint32_t dst_tile_size = 64;
-        // load
-        TT_SFPLOAD(p_sfpu::LREG0, sfpload_instr_mod, ADDR_MOD_3, dst_index_in0 * dst_tile_size);
-        TT_SFPLOAD(p_sfpu::LREG1, sfpload_instr_mod, ADDR_MOD_3, dst_index_in1 * dst_tile_size);
-        // if (shift_amount < 0 OR shift_amount >= 32) -> result should be 0
-        TTI_SFPSETCC(0, p_sfpu::LREG1, p_sfpu::LREG0, 4);
-        TTI_SFPIADD(0xFE0, p_sfpu::LREG1, p_sfpu::LREG2, 1);  // 0xFE0 = -32
-        TTI_SFPCOMPC(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
-        TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
-        TTI_SFPENCC(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
-        // shift right
-        TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG1, 6);  // take negative of shift_amount to shift right
-        TTI_SFPSHFT(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
-        // store result
-        TT_SFPSTORE(p_sfpu::LREG0, sfpload_instr_mod, ADDR_MOD_3, dst_index_out * dst_tile_size);
+        vType a = sfpi::dst_reg[dst_index_in0 * dst_tile_size].mode<layout>();
+        vType s = sfpi::dst_reg[dst_index_in1 * dst_tile_size].mode<layout>();
+        sfpi::vUInt value = sfpi::as<sfpi::vUInt>(a);
+        sfpi::vInt shift = sfpi::as<sfpi::vInt>(s);
+
+        // Out-of-range shift amounts (shift < 0 or shift >= 32) produce 0. Zeroing the value up
+        // front (rather than the result afterwards) means the single shift below still yields 0 for
+        // those lanes, and lets the compiler negate `shift` in place instead of keeping a live copy.
+        v_if(shift < 0 || shift >= 32) { value = 0; }
+        v_endif;
+
+        // Right shift by `shift` (a negative shift amount shifts left).
+        sfpi::vUInt result = sfpi::shft(value, 0 - shift, sfpi::ShiftMode::Logical);
+
+        sfpi::dst_reg[dst_index_out * dst_tile_size].mode<layout>() = sfpi::as<vType>(result);
         sfpi::dst_reg++;
     }
 }

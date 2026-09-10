@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ckernel.h"
+
 void kernel_main() {
     uint32_t src0_dram = get_arg_val<uint32_t>(0);
     uint32_t src1_dram = get_arg_val<uint32_t>(1);
@@ -39,6 +41,12 @@ void kernel_main() {
     DPRINT("Adding integers: {} + {}\n", *dat0, *dat1);
 
     (*out0) = (*dat0) + (*dat1);
+
+    // Force the store above to land in L1 before the noc_async_write below reads dst_l1 as its source.
+    // A baby-RISCV store can retire before it lands, and the RISCV and NoC are independent L1 clients with
+    // no ordering between them (MemoryOrdering.md), so the NoC could otherwise read a stale value.
+    // load_blocking stalls the pipeline until the store is processed.
+    (void)ckernel::load_blocking(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_l1));
 
     // Write data from L1 -> DRAM. Again this is a non-blocking operation.
     // Thus we need to use noc_async_write_barrier() to wait until the data is

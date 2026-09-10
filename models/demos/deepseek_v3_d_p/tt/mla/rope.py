@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import NamedTuple, Optional
+
 import torch
 from transformers.configuration_utils import PretrainedConfig
 
@@ -9,6 +11,7 @@ from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3YarnR
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     block_cyclic_reorder,
     create_balanced_chunk_order,
+    llama4_scale_host,
     reorder_tensor_chunks,
 )
 
@@ -22,11 +25,14 @@ def get_rot_transformation_mat():
     return rot_emb_matrix
 
 
-def get_cos_sin_matrix(hf_config, interleave: bool = True):
+def get_cos_sin_matrix(hf_config, interleave: bool = True, num_positions: int | None = None):
     """Get cos and sin matrices for rotary positional embeddings.
 
     HuggingFace returns cos/sin in [max_seq_len, dim] with dim = [t1,..,td//2, t1,..,td//2].
-    Returns cos, sin as [1, 1, max_seq_len, dim].
+    Returns cos, sin as [1, 1, num_positions or max_seq_len, dim].
+
+    ``num_positions`` overrides how many positions the table covers (default hf_config.max_seq_len).
+    It is a table LENGTH, not a rope parameter: YaRN's frequencies do not depend on it.
 
     interleave (which physical columns form a rotated pair):
         True  -> Meta-style duplicated pairs [t1,t1,..,td//2,td//2]; pairs (0,1),(2,3),..
@@ -41,7 +47,7 @@ def get_cos_sin_matrix(hf_config, interleave: bool = True):
     """
     args = {
         "dim": hf_config.qk_rope_head_dim,
-        "max_position_embeddings": hf_config.max_seq_len,
+        "max_position_embeddings": num_positions if num_positions is not None else hf_config.max_seq_len,
         "base": hf_config.rope_theta * 1.0,
         "device": "cpu",
         "scaling_factor": hf_config.rope_scaling["factor"],
@@ -119,6 +125,107 @@ def interleaved_perm_matrix(rope_dim: int = 64) -> torch.Tensor:
     return perm
 
 
+class ChunkMetadata(NamedTuple):
+    """Per-chunk device state a captured trace reads at fixed addresses.
+
+    Fields 0-2 are the original contract and must stay in position: the chunked ops index them, so a
+    plain 3-tuple is still a valid metadata argument and every non-Mistral variant keeps passing one.
+
+    ``llama4_scale`` is Mistral's query-temperature buffer, here because it shares that lifetime --
+    allocated once, refreshed per chunk, read by a replay at a captured address. Advance all of it
+    with write_chunk_metadata. Field 3 is persistent while 0-2 are per-chunk, so iterating or
+    deallocating the whole tuple frees a buffer every later chunk still reads: reach for
+    ``.scalars`` whenever you mean "the per-chunk state".
+    """
+
+    slot_id: ttnn.Tensor
+    actual_start: ttnn.Tensor
+    actual_end: ttnn.Tensor
+    llama4_scale: Optional[ttnn.Tensor] = None
+
+    @property
+    def scalars(self) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        """The three per-chunk scalars alone -- safe to iterate, write and deallocate."""
+        return (self.slot_id, self.actual_start, self.actual_end)
+
+
+def write_chunk_metadata(
+    metadata: tuple,
+    values: tuple,
+    *,
+    hf_config: PretrainedConfig,
+    mesh_device: ttnn.MeshDevice,
+    chunk_size_global: int,
+    sp_axis: int = 0,
+) -> None:
+    """Advance one chunk's metadata scalars and llama4 scale buffer together.
+
+    One function because both are per-chunk state a captured trace reads from fixed addresses, and the
+    scale is silent when stale: the buffer is initialised to ones, so a missed refresh applies no
+    temperature rather than failing, and the chunked PCC gate cannot see the difference (~0.002 against
+    a 0.98 threshold). ``values`` is (slot_id, actual_start, actual_end).
+    """
+    assert len(values) == 3, f"expected 3 values, got {len(values)}"
+    assert len(metadata) >= 3, f"metadata must carry the 3 scalar tensors, got {len(metadata)}"
+    # A caller may still pass a plain 3-tuple (every variant without a query scale does).
+    scalars = metadata.scalars if isinstance(metadata, ChunkMetadata) else tuple(metadata)[:3]
+    for dst, val in zip(scalars, values):
+        host = ttnn.from_torch(
+            torch.tensor([val], dtype=torch.int64).reshape(1, 1, 1, 1),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        ttnn.copy_host_to_device_tensor(host, dst)
+    refresh_llama4_scale(
+        getattr(metadata, "llama4_scale", None), hf_config, mesh_device, values[1], chunk_size_global, sp_axis=sp_axis
+    )
+
+
+def _llama4_scale_geometry(hf_config: PretrainedConfig, mesh_device: ttnn.MeshDevice, sp_axis: int):
+    """(heads_local, width, shard_dims) for the query-scale buffer.
+
+    The allocator and the per-chunk writer below must agree exactly -- a mismatch surfaces only as a
+    copy_host_to_device_tensor failure at runtime -- so the shape contract is stated once.
+    """
+    heads_local = hf_config.num_attention_heads // mesh_device.shape[1 - sp_axis]
+    width = hf_config.kv_lora_rank + hf_config.qk_rope_head_dim
+    shard_dims = [None, None]
+    shard_dims[sp_axis] = 2
+    return heads_local, width, shard_dims
+
+
+def refresh_llama4_scale(
+    buf: Optional[ttnn.Tensor],
+    hf_config: PretrainedConfig,
+    mesh_device: ttnn.MeshDevice,
+    kv_actual_isl: int,
+    chunk_size_global: int,
+    *,
+    sp_axis: int = 0,
+) -> None:
+    """Rewrite the persistent query-scale buffer for one chunk. No-op when ``buf`` is None.
+
+    Must use the same actual_start written to metadata[1]; write_chunk_metadata does both.
+    """
+    if buf is None:
+        return
+    rope_scaling = hf_config.rope_scaling
+    beta = rope_scaling["llama_4_scaling_beta"]
+    orig_max = rope_scaling["original_max_position_embeddings"]
+    sp = mesh_device.shape[sp_axis]
+    heads_local, width, shard_dims = _llama4_scale_geometry(hf_config, mesh_device, sp_axis)
+    assert chunk_size_global % sp == 0, f"sp ({sp}) must divide chunk_size_global ({chunk_size_global})"
+
+    host = ttnn.from_torch(
+        llama4_scale_host(kv_actual_isl, sp, chunk_size_global // sp, heads_local, width, beta, orig_max).contiguous(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape),
+    )
+    ttnn.copy_host_to_device_tensor(host, buf)
+
+
 class RotarySetup:
     """Rotary positional embedding setup for MLA prefill with SP sharding and balanced reordering."""
 
@@ -134,6 +241,28 @@ class RotarySetup:
         self.sp_axis = sp_axis
         self.is_balanced = is_balanced
         self.sp_factor = mesh_device.shape[sp_axis]
+        self.use_nope = bool(getattr(hf_config, "mla_use_nope", False))  # Kimi-K3 path: no rope
+
+    def make_llama4_scale_buffer(self, chunk_size_global: int) -> Optional[ttnn.Tensor]:
+        """Allocate Mistral's persistent query-scale buffer, or None for other variants.
+
+        Here because it is the same kind of object as cos/sin -- position-derived, SP-sharded on the
+        same axis -- but NOT returned in the rope_tensors dict: everything in there is build-once
+        static and this is rewritten every chunk. It belongs to ChunkMetadata. Ones-initialised so an
+        unrefreshed buffer is a no-op rather than garbage.
+        """
+        rope_scaling = getattr(self.hf_config, "rope_scaling", None) or {}
+        if rope_scaling.get("llama_4_scaling_beta") is None:
+            return None
+        heads_local, width, shard_dims = _llama4_scale_geometry(self.hf_config, self.mesh_device, self.sp_axis)
+        return ttnn.from_torch(
+            torch.ones(1, heads_local, chunk_size_global, width, dtype=torch.bfloat16),
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=shard_dims, mesh_shape=self.mesh_device.shape),
+        )
 
     def get_rope_tensors(self, seq_len: int) -> dict[str, ttnn.Tensor]:
         """Get cos, sin, and transformation matrices sharded over SP axis.
@@ -144,6 +273,8 @@ class RotarySetup:
         Always Meta-style interleaved cos/sin + a trans_matrix (rotary_embedding_llama) — the
         MLA's own RoPE layout.
         """
+        if self.use_nope:
+            return {}  # Kimi-K3 path
         cos_matrix_torch, sin_matrix_torch = get_cos_sin_matrix(self.hf_config, interleave=True)
 
         assert (
@@ -186,7 +317,9 @@ class RotarySetup:
 
         return {"cos_matrix": cos_matrix, "sin_matrix": sin_matrix, "trans_matrix": trans_matrix}
 
-    def get_rope_tensors_indexed(self, cache_seq_len_global: int, chunk_size_global: int) -> dict[str, ttnn.Tensor]:
+    def get_rope_tensors_indexed(
+        self, cache_seq_len_global: int, chunk_size_global: int, tail_slack: bool = False
+    ) -> dict[str, ttnn.Tensor]:
         """Get whole-cache cos/sin/trans matrices for the KV-pad-aware *indexed* rotated path.
 
         This builds the rope values for the *entire* cache once. The cos/sin are
@@ -202,12 +335,18 @@ class RotarySetup:
                 cover every position the cache can hold). Per-chip shard = cache_seq_len_global // sp.
             chunk_size_global: global chunk size (one chunk across all SP devices). Per-chip chunk =
                 chunk_size_global // sp_factor, which keys the block-cyclic reorder.
+            tail_slack: extend the table by ONE chunk past the cache. A chunk ropes its whole padded
+                slab, so a last chunk padding past the cache end would read past an exactly-sized
+                table. The KV cache skips that tail instead (valid_global); the rope table, being one
+                shared tensor, has to be readable.
 
         Constraints (mirroring the block-cyclic / cache layout):
             * ``cache_seq_len_global <= max_seq_len``
             * ``chunk_size_global % (TILE_SIZE * sp_factor) == 0``
             * ``cache_seq_len_global % chunk_size_global == 0``
         """
+        if self.use_nope:
+            return {}  # Kimi-K3 path
         assert not self.is_balanced, "indexed rotated rope is incompatible with is_balanced"
         sp = self.sp_factor
         assert (
@@ -221,10 +360,11 @@ class RotarySetup:
             f"chunk_size_global ({chunk_size_global})"
         )
         chunk_local = chunk_size_global // sp
+        table_seq_len = cache_seq_len_global + (chunk_size_global if tail_slack else 0)
 
-        cos_matrix_torch, sin_matrix_torch = get_cos_sin_matrix(self.hf_config)
-        cos_matrix_torch = cos_matrix_torch[..., :cache_seq_len_global, :]
-        sin_matrix_torch = sin_matrix_torch[..., :cache_seq_len_global, :]
+        cos_matrix_torch, sin_matrix_torch = get_cos_sin_matrix(self.hf_config, num_positions=table_seq_len)
+        cos_matrix_torch = cos_matrix_torch[..., :table_seq_len, :]
+        sin_matrix_torch = sin_matrix_torch[..., :table_seq_len, :]
 
         # Block-cyclic reorder keyed by the per-chip chunk so a plain SP shard hands device c the
         # rope values for every global position it carries, in local-cache-row order.
@@ -259,24 +399,3 @@ class RotarySetup:
         )
 
         return {"cos_matrix": cos_matrix, "sin_matrix": sin_matrix, "trans_matrix": trans_matrix}
-
-    def get_indexer_rope_tables(self, interleave: bool) -> dict[str, ttnn.Tensor]:
-        """Full-length REPLICATED cos/sin (+ trans_matrix iff ``interleave``) for the DSA lightning
-        indexer's natural-path RoPE. Distinct from ``get_rope_tensors`` (SP-sharded, interleaved-only,
-        for the MLA q_pe/k_pe): the indexer keeps a replicated full/gathered key cache, chooses its
-        convention per config (GLM interleaved -> ``rotary_embedding_llama``; DeepSeek half-split ->
-        ``rotary_embedding_hf``), and slices the tables per chunk itself. Pure rotations (no mscale),
-        same theta/YaRN as the MLA. Returns ``{"cos", "sin", "trans"}`` with ``trans=None`` for the
-        half-split (DeepSeek) convention."""
-        cos, sin = get_cos_sin_matrix(self.hf_config, interleave=interleave)
-
-        def repl(t):
-            return ttnn.from_torch(
-                t.to(torch.bfloat16),
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
-
-        return {"cos": repl(cos), "sin": repl(sin), "trans": repl(get_rot_transformation_mat()) if interleave else None}

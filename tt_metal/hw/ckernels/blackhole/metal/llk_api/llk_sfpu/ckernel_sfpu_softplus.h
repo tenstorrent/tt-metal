@@ -7,6 +7,7 @@
 #include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
@@ -92,12 +93,14 @@ sfpi_inline sfpi::vFloat softplus_exp_negative(sfpi::vFloat x) {
     return result;
 }
 
+inline void softplus_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void calculate_softplus_body(const float beta, const float beta_reciprocal, const float threshold) {
     sfpi::vFloat val = sfpi::dst_reg[0];
     sfpi::vFloat t = beta * val;
 
-    v_if(t < threshold) {
+    v_if(t <= threshold) {
         // a = |t| via setsgn (clear sign bit, no branch)
         sfpi::vFloat a = sfpi::setsgn(t, 0);
 
@@ -158,7 +161,7 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
     v_endif;
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_softplus(std::uint32_t param0, std::uint32_t param1, std::uint32_t param2) {
     const float beta = Converter::as_float(param0);
     const float beta_reciprocal = Converter::as_float(param1);
@@ -168,8 +171,5 @@ inline void calculate_softplus(std::uint32_t param0, std::uint32_t param1, std::
         sfpi::dst_reg++;
     }
 }
-
-template <bool APPROXIMATION_MODE>
-void softplus_init() {}
 
 }  // namespace ckernel::sfpu

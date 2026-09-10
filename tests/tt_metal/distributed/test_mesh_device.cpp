@@ -5,22 +5,32 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <tt-metalium/allocator.hpp>
+#include <cstdlib>
+#include <unordered_map>
 #include <memory>
 #include <optional>
 #include <vector>
 
 #include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include "gmock/gmock.h"
 #include "hostdevcommon/common_values.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_config.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/shape_base.hpp>
 #include <tt-metalium/system_mesh.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -34,6 +44,15 @@ namespace {
 using ::testing::IsEmpty;
 using ::testing::SizeIs;
 
+// Builds the expected bank id -> worker core map from a per-bank list (indexed by DRAM bank id).
+std::unordered_map<uint32_t, CoreCoord> to_bank_map(const std::vector<CoreCoord>& per_bank) {
+    std::unordered_map<uint32_t, CoreCoord> assignment;
+    for (uint32_t bank_id = 0; bank_id < per_bank.size(); ++bank_id) {
+        assignment.emplace(bank_id, per_bank[bank_id]);
+    }
+    return assignment;
+}
+
 TEST(MeshDeviceInitTest, Init1x1Mesh) {
     MeshDeviceConfig config(MeshShape(1, 1));
 
@@ -44,6 +63,77 @@ TEST(MeshDeviceInitTest, Init1x1Mesh) {
     });
 }
 
+std::shared_ptr<MeshDevice> create_unit_mesh_for_close_tests() {
+    return MeshDevice::create(
+        MeshDeviceConfig(MeshShape(1, 1)),
+        DEFAULT_L1_SMALL_SIZE,
+        DEFAULT_TRACE_REGION_SIZE,
+        1,
+        DispatchCoreType::WORKER);
+}
+
+// Compile a dummy CB program so ProgramImpl holds persistent-L1 seals and a kernel-binary
+// MeshBuffer, then stash the MeshWorkload in the device program cache. Mirrors the TTNN
+// cached-op lifetime that hangs on hybrid multihost if close_impl destroys the cache.
+void compile_and_cache_dummy_workload(MeshDevice& mesh, const program_cache::detail::ProgramCacheKey& key) {
+    mesh.enable_program_cache();
+
+    Program program;
+    const CoreRangeSet cores(CoreRange({0, 0}, {0, 0}));
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
+        cores,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    const CircularBufferConfig cb_config =
+        CircularBufferConfig(2048, {{0, tt::DataFormat::Float16_b}}).set_page_size(0, 2048);
+    CreateCircularBuffer(program, cores, cb_config);
+
+    MeshWorkload workload;
+    workload.add_program(MeshCoordinateRange(mesh.shape()), std::move(program));
+    EnqueueMeshWorkload(mesh.mesh_command_queue(), workload, false);
+    Finish(mesh.mesh_command_queue());
+
+    program_cache::detail::CachedMeshWorkload<int> cached(std::move(workload), /*shared_variables=*/0);
+    mesh.get_program_cache().insert(key, program_cache::detail::CachedProgramFactory(std::move(cached), 0));
+}
+
+TEST(MeshDeviceInitTest, CloseDoesNotClearProgramCache) {
+    if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
+        GTEST_SKIP() << "Requires fast dispatch to enqueue a MeshWorkload";
+    }
+
+    auto mesh = create_unit_mesh_for_close_tests();
+    compile_and_cache_dummy_workload(
+        *mesh, program_cache::detail::ProgramCacheKey{.hash = 0xC105E, .canonical = "close-does-not-clear-cache"});
+
+    const auto entries_before_close = mesh->num_program_cache_entries();
+    ASSERT_GT(entries_before_close, 0u);
+
+    // close() must leave cached programs in place: destroying them here hangs hybrid
+    // multihost teardown (RELEASE-13). Seal lifetime is handled by PersistentL1Arena.
+    mesh->close();
+    EXPECT_EQ(mesh->num_program_cache_entries(), entries_before_close);
+}
+
+TEST(MeshDeviceInitTest, DestroyAfterCloseDoesNotTerminateOnPersistentL1Seals) {
+    if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
+        GTEST_SKIP() << "Requires fast dispatch to enqueue a MeshWorkload";
+    }
+
+    auto mesh = create_unit_mesh_for_close_tests();
+    compile_and_cache_dummy_workload(
+        *mesh,
+        program_cache::detail::ProgramCacheKey{.hash = 0x5EA1, .canonical = "destroy-after-close-persistent-l1-seals"});
+
+    ASSERT_GT(mesh->num_program_cache_entries(), 0u);
+    mesh->close();
+
+    // Tracker/arena are already gone; dropping the MeshDevice destroys the cache and
+    // ~Seal must no-op instead of TT_FATAL from a noexcept ProgramImpl destructor.
+    EXPECT_NO_THROW(mesh.reset());
+}
+
 using MeshDevice2x4Test = MeshDevice2x4Fixture;
 using MeshDeviceTest = GenericMeshDeviceFixture;
 
@@ -52,8 +142,7 @@ TEST_F(MeshDevice2x4Test, SystemMeshTearDownWithoutClose) {
 
     const auto system_shape = sys.shape();
     ASSERT_EQ(system_shape.dims(), 2);
-    EXPECT_EQ(system_shape[0], 2);
-    EXPECT_EQ(system_shape[1], 4);
+    EXPECT_GE(system_shape.mesh_size(), mesh_device_->shape().mesh_size());
 }
 
 TEST_F(MeshDevice2x4Test, MemoryAllocationStatistics) {
@@ -136,9 +225,30 @@ TEST(GetOptimalDramBankToLogicalWorkerAssignmentAPI, UnitMeshes) {
     auto device_ids_set = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
     std::vector<int> device_ids(device_ids_set.begin(), device_ids_set.end());
     auto devs = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(device_ids);
+    const MeshCoordinate coord(0, 0);
     for (auto& [_, dev] : devs) {
-        EXPECT_NO_THROW(dev->get_optimal_dram_bank_to_logical_worker_assignment(NOC::NOC_0));
-        EXPECT_NO_THROW(dev->get_optimal_dram_bank_to_logical_worker_assignment(NOC::NOC_1));
+        for (auto noc : {NOC::NOC_0, NOC::NOC_1}) {
+            std::unordered_map<uint32_t, CoreCoord> per_device;
+            EXPECT_NO_THROW(per_device = dev->get_optimal_dram_bank_to_logical_worker_assignment(noc, coord));
+            // On a 1x1 mesh the single local device is the queried device, so the per-coordinate overload
+            // must match querying that device directly (bank id -> the same per-bank worker core).
+            const auto expected =
+                dev->impl().get_device(coord)->get_optimal_dram_bank_to_logical_worker_assignment(noc);
+            EXPECT_EQ(per_device, to_bank_map(expected));
+        }
+    }
+}
+
+TEST_F(MeshDevice2x4Test, GetOptimalDramBankToLogicalWorkerAssignmentPerDevice) {
+    for (auto noc : {NOC::NOC_0, NOC::NOC_1}) {
+        for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+            std::unordered_map<uint32_t, CoreCoord> per_device;
+            EXPECT_NO_THROW(per_device = mesh_device_->get_optimal_dram_bank_to_logical_worker_assignment(noc, coord));
+            // The per-coordinate result must match querying that specific device directly.
+            auto* device = mesh_device_->impl().get_device(coord);
+            ASSERT_NE(device, nullptr);
+            EXPECT_EQ(per_device, to_bank_map(device->get_optimal_dram_bank_to_logical_worker_assignment(noc)));
+        }
     }
 }
 

@@ -36,7 +36,7 @@ constexpr std::uint32_t nop_insn_for_unused_unpacker_engine()
  * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
  * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32-bit mode
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table, values = 0 - 16
+ * stored in the buffer descriptor table; allocated from the unpack TRISC partition [0,16) at op-init time (see llk_bfd_alloc.h)
  * @param num_tiles: number of tiles to unpack at a time for a single operand
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  */
@@ -97,7 +97,7 @@ inline void _llk_unpack_unary_operand_variable_tile_size_mop_config_(
  * values = p_unpacr::UNP_A/p_unpacr::UNP_B/p_unpacr::UNP_DEST
  * @tparam IS_32b_DEST_EN: Set to True to enable using Math destination Register in 32-bit mode
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table, values = 0 - 16
+ * stored in the buffer descriptor table; allocated from the unpack TRISC partition [0,16) at op-init time (see llk_bfd_alloc.h)
  * @param num_tiles: number of tiles to unpack at a time for a single operand
  */
 template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN>
@@ -144,13 +144,13 @@ inline void _llk_unpack_unary_operand_mop_config_(const std::uint32_t buf_desc_i
  * @tparam UNP_SEL: Selects which unpacker resource to use, values = <p_unpacr::UNP_A/UNP_B>
  * @tparam IS_32b_DEST_EN: Enables using the math destination register in 32-bit mode, values = <true/false>
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
- * stored in the buffer descriptor table, values = 0 - 16
+ * stored in the buffer descriptor table; allocated from the unpack TRISC partition [0,16) at op-init time (see llk_bfd_alloc.h)
  * @param num_tiles: number of tiles to unpack at a time for a single operand, default 1 tile of 32x32
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  * @note Does NOT support tiny-tiles
  */
 template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN>
-inline void _llk_unpack_unary_operand_transpose_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles, const TensorShape& tensor_shape)
+inline void _llk_unpack_unary_operand_transpose_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles, const TensorShape tensor_shape)
 {
     static_assert((UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B), "UNP_SEL can only be p_unpacr::UNP_A or p_unpacr::UNP_B for unpack transpose");
 
@@ -298,7 +298,7 @@ inline void _llk_unpack_unary_operand_reuse_dest_mop_config_(const std::uint32_t
  * @tparam reuse_dest: When not NONE, configures per-face unpack with dummy dvalid, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
  * @tparam unpack_to_dest: When true, selects the semaphore-synchronized unpack-to-DEST path; requires UNP_SEL == UNP_DEST, values = <true/false>
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is
- *        stored in the buffer descriptor table, values = 0 - 16
+ *        stored in the buffer descriptor table; allocated from the unpack TRISC partition [0,16) at op-init time (see llk_bfd_alloc.h)
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  * @param num_tiles: Number of tiles to unpack at a time for a single operand; default 1 tile of 32x32.
  * @note On the math thread (T1): for the plain datacopy path pair with @ref _llk_math_eltwise_unary_datacopy_init_; for reuse_dest != NONE this is the
@@ -324,9 +324,9 @@ inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, con
         // producer (UNP_DEST), so it programs the per-TRISC section base itself rather than
         // letting the math middleman set it on its behalf
         // Establish the initial bank-0 base here; the per-tile call flips
-        // it in SyncHalf. unpack::TRISC_ID == 0 selects the same SEC slot the UNP_DEST client reads.
+        // it in SyncHalf. TriscID::Unpack selects the same SEC slot the UNP_DEST client reads.
         ckernel::trisc::_reset_dest_register_offset_();
-        ckernel::trisc::_set_dest_section_base_<ckernel::unpack::TRISC_ID>(ckernel::trisc::_get_dest_buffer_base_());
+        ckernel::trisc::_set_dest_section_base_<to_underlying(ckernel::trisc::TriscID::Unpack)>(ckernel::trisc::_get_dest_buffer_base_());
 
         cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0 /*TRANSPOSE_EN forced false for UNP_DEST*/);
         cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
@@ -412,7 +412,7 @@ inline void _llk_unpack_unary_operand_(const std::uint32_t l1_tile_idx, const Te
         // Unpack owns the DEST section base, so it flips to the other bank for the next iteration
         if constexpr (DEST_SYNC_MODE == ckernel::DstSync::SyncHalf)
         {
-            _llk_sync_advance_dest_section_<ckernel::unpack::TRISC_ID, true /*EN_32BIT_DEST*/, p_stall::UNPACK0>();
+            _llk_sync_advance_dest_section_<to_underlying(ckernel::trisc::TriscID::Unpack), true /*EN_32BIT_DEST*/, p_stall::UNPACK0>();
         }
         return;
     }

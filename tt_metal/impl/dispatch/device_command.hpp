@@ -28,11 +28,10 @@ namespace tt::tt_metal {
 template <bool hugepage_write = false>
 class DeviceCommand {
 public:
-    DeviceCommand() = default;
-    DeviceCommand(void* cmd_region, uint32_t cmd_sequence_sizeB);
-
+    explicit DeviceCommand(MetalContext& ctx);
+    DeviceCommand(MetalContext& ctx, void* cmd_region, uint32_t cmd_sequence_sizeB);
     template <bool hp_w = hugepage_write, typename std::enable_if_t<!hp_w, int> = 0>
-    DeviceCommand(uint32_t cmd_sequence_sizeB);
+    DeviceCommand(MetalContext& ctx, uint32_t cmd_sequence_sizeB);
 
     DeviceCommand& operator=(const DeviceCommand& other);
     DeviceCommand& operator=(DeviceCommand&& other) noexcept;
@@ -52,9 +51,10 @@ public:
     vector_aligned<uint32_t> cmd_vector() const;
 
     void add_dispatch_wait(
-        uint32_t flags, uint32_t address, uint32_t stream, uint32_t count, uint8_t dispatcher_type = 0);
+        uint32_t flags, uint32_t address, uint32_t stream, uint32_t count, uint8_t cq_id, uint8_t dispatcher_type = 0);
 
-    void add_dispatch_wait_with_prefetch_stall(uint32_t flags, uint32_t address, uint32_t stream, uint32_t count);
+    void add_dispatch_wait_with_prefetch_stall(
+        uint32_t flags, uint32_t address, uint32_t stream, uint32_t count, uint8_t cq_id);
 
     void add_prefetch_relay_linear(uint32_t noc_xy_addr, DeviceAddr lengthB, DeviceAddr addr);
 
@@ -313,12 +313,14 @@ private:
         }
     }
 
+    void init_from_context(MetalContext& ctx);
+
     uint32_t cmd_sequence_sizeB = 0;
     void* cmd_region = nullptr;
     uint32_t cmd_write_offsetB = 0;
-    uint32_t pcie_alignment =
-        tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST);
-    uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
+    MetalContext* ctx_ = nullptr;
+    uint32_t pcie_alignment = 0;
+    uint32_t l1_alignment = 0;
 
     vector_aligned<uint32_t> cmd_region_vector;
 };

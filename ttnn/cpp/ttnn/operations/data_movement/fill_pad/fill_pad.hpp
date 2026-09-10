@@ -11,6 +11,6 @@ namespace ttnn {
 // value (the default).
 Tensor fill_implicit_tile_padding(
     const Tensor& input_tensor,
-    tt::tt_metal::PadValue fill_value,
+    ttnn::PadValue fill_value,
     const std::optional<MemoryConfig>& memory_config = std::nullopt);
 }  // namespace ttnn

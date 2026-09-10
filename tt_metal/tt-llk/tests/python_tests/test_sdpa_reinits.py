@@ -5,6 +5,7 @@
 import pytest
 import torch
 from conftest import skip_for_coverage, skip_for_wormhole
+from helpers.device_io import read_from_device, write_to_device
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     BroadcastGolden,
@@ -35,7 +36,6 @@ from helpers.test_variant_parameters import (
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.unpack import unpack_res_tiles
 from helpers.utils import passed_test
-from ttexalens.tt_exalens_lib import read_from_device, write_to_device
 
 
 @skip_for_coverage

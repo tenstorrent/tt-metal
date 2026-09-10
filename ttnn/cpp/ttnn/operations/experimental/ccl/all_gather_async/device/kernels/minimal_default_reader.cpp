@@ -398,4 +398,11 @@ void kernel_main() {
     }
 
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
+
+    // Flush any outstanding NOC transactions before the kernel exits. In the fused path
+    // OpSignaler issues non-posted atomic semaphore increments over NOC; without waiting for
+    // their acknowledgement the watcher trips an inter-kernel data race. Mirror the writer's
+    // ending which barriers both writes and non-posted atomics.
+    noc_obj.async_write_barrier();
+    noc_obj.async_atomic_barrier();
 }

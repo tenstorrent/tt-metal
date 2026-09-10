@@ -33,8 +33,8 @@ import torch
 import ttnn
 
 import ttml
+from ttml.common.utils import resolve_padded_load_shape
 from ttml.sharding import Sharding
-
 
 # =====================================================================
 # Weight permutation utilities (HF -> ttml)
@@ -137,12 +137,18 @@ def build_weight_mapping_single(config, root_prefix, tie_word_embeddings):
             "unpermute_proj",
             config.num_attention_heads,
         )
-        mapping[f"{hp}.self_attn.k_proj.weight"] = f"{tp}/self_attn/k_proj/weight"
+        # Fused KV: the single ttml kv_proj weight is built from the two HF weights
+        # k_proj and v_proj. The mapping key is the K weight; the "combine_kv"
+        # transform pulls v_proj from the state-dict and concatenates
+        # [unpermute_proj(k) ; v] on the row axis (K rows first, then V rows) to
+        # match the [K | V] output layout grouped_heads_creation expects. v_proj is
+        # NOT permuted (only K carries the RoPE-permute, mirroring q_proj/k_proj).
+        mapping[f"{hp}.self_attn.k_proj.weight"] = f"{tp}/self_attn/kv_proj/weight"
         transforms[f"{hp}.self_attn.k_proj.weight"] = (
-            "unpermute_proj",
+            "combine_kv",
             config.num_key_value_heads,
+            f"{hp}.self_attn.v_proj.weight",
         )
-        mapping[f"{hp}.self_attn.v_proj.weight"] = f"{tp}/self_attn/v_proj/weight"
         mapping[f"{hp}.self_attn.o_proj.weight"] = f"{tp}/self_attn/o_proj/weight"
 
         if config.attention_bias:
@@ -151,12 +157,12 @@ def build_weight_mapping_single(config, root_prefix, tie_word_embeddings):
                 "unpermute_proj",
                 config.num_attention_heads,
             )
-            mapping[f"{hp}.self_attn.k_proj.bias"] = f"{tp}/self_attn/k_proj/bias"
+            mapping[f"{hp}.self_attn.k_proj.bias"] = f"{tp}/self_attn/kv_proj/bias"
             transforms[f"{hp}.self_attn.k_proj.bias"] = (
-                "unpermute_proj",
+                "combine_kv",
                 config.num_key_value_heads,
+                f"{hp}.self_attn.v_proj.bias",
             )
-            mapping[f"{hp}.self_attn.v_proj.bias"] = f"{tp}/self_attn/v_proj/bias"
             mapping[f"{hp}.self_attn.o_proj.bias"] = f"{tp}/self_attn/o_proj/bias"
 
         mapping[f"{hp}.self_attn.q_norm.weight"] = f"{tp}/self_attn/q_norm/weight"
@@ -172,6 +178,51 @@ def build_weight_mapping_single(config, root_prefix, tie_word_embeddings):
 
     mapping["model.norm.weight"] = f"{root_prefix}/ln_fc/weight"
     return mapping, transforms
+
+
+def expected_fused_load_shape(config, hf_name: str, tie_word_embeddings: bool = False):
+    """GLOBAL LOGICAL (un-tile-padded) shape of an HF tensor AS LOADED into the
+    fused-KV ttml Qwen3 model, or ``None`` if unknown.
+
+    Shared by every HF -> ttml Qwen3 loader (single-device, FSDP, TP, and resume)
+    so they all verify the checkpoint against the same config-derived shape before
+    tile-padding. The HF ``k_proj`` key is the fused-KV mapping key, so it returns
+    the POST-fuse ``kv_proj`` shape (rows = ``2 * num_key_value_heads * head_dim``);
+    ``v_proj`` is consumed by the fuse (never a mapping key) so it has no entry.
+    Shapes are global -- callers reconstruct any per-device/TP scaling of the
+    destination target themselves.
+    """
+    h = config.hidden_size
+    q_dim = config.num_attention_heads * config.head_dim
+    kv_dim = config.num_key_value_heads * config.head_dim
+    inter = config.intermediate_size
+    hd = config.head_dim
+    vocab = config.vocab_size
+    if hf_name.endswith("embed_tokens.weight") or hf_name == "lm_head.weight":
+        return (vocab, h)
+    if hf_name.endswith(".self_attn.q_proj.weight"):
+        return (q_dim, h)
+    if hf_name.endswith(".self_attn.q_proj.bias"):
+        return (q_dim,)
+    if hf_name.endswith(".self_attn.k_proj.weight"):  # fused kv_proj (post-combine)
+        return (2 * kv_dim, h)
+    if hf_name.endswith(".self_attn.k_proj.bias"):
+        return (2 * kv_dim,)
+    if hf_name.endswith(".self_attn.o_proj.weight"):
+        return (h, q_dim)
+    if hf_name.endswith(".self_attn.o_proj.bias"):
+        return (h,)
+    if hf_name.endswith(".self_attn.q_norm.weight") or hf_name.endswith(".self_attn.k_norm.weight"):
+        return (hd,)
+    if hf_name.endswith(".input_layernorm.weight") or hf_name.endswith(".post_attention_layernorm.weight"):
+        return (h,)
+    if hf_name.endswith(".mlp.gate_proj.weight") or hf_name.endswith(".mlp.up_proj.weight"):
+        return (inter, h)
+    if hf_name.endswith(".mlp.down_proj.weight"):
+        return (h, inter)
+    if hf_name == "model.norm.weight":
+        return (h,)
+    return None
 
 
 # =====================================================================
@@ -250,7 +301,7 @@ def load_weights_from_hf(
     mapping, transforms = build_weight_mapping_single(config, root_prefix, tie_word_embeddings)
 
     # For a materialized FSDP-sharded parameter, ``.shape()`` returns the LOCAL
-    # per-device shape, not the global tensor shape. ``_prepare`` pads each HF
+    # per-device shape, not the global tensor shape. ``_prepare_hf_weights`` pads each HF
     # weight to ``ttml_shapes[name]`` and (in the sharded path) hands the result
     # to ``Tensor.from_numpy(full_np, ..., mapper)``, where the mapper expects
     # the GLOBAL tensor and slices the per-device shards itself. So in the
@@ -276,7 +327,7 @@ def load_weights_from_hf(
                 # The param is genuinely sharded on some mesh axis. Scale the
                 # local per-device shape back up to the global shape on each
                 # sharded dim using the live distribution shape, writing it back
-                # into ``ttml_shapes`` so ``_prepare`` pads to the global shape
+                # into ``ttml_shapes`` so ``_prepare_hf_weights`` pads to the global shape
                 # (the mapper re-slices the per-device shards). Then reuse the
                 # mapper Sharding built from that same topology.
                 for axis_idx, placement in enumerate(sharding.placements):
@@ -288,7 +339,7 @@ def load_weights_from_hf(
                 # single-device: global == local shape, fan the full host copy out.
                 sharded_mappers[name] = replicate_mapper
 
-    def _prepare(hf_name, ttml_name):
+    def _prepare_hf_weights(hf_name, ttml_name):
         # CPU-only prep (float cast, permutation, padding). The device transfer
         # (torch_to_ttml) is done serially in the main loop below for BOTH
         # paths: running those device ops concurrently across worker threads
@@ -306,24 +357,40 @@ def load_weights_from_hf(
                 weight = unpermute_proj_rows(weight, num_heads=tr[1])
             elif tr[0] == "unpermute_norm":
                 weight = unpermute_norm_weights(weight)
+            elif tr[0] == "combine_kv":
+                # tr = ("combine_kv", num_kv_heads, v_hf_name). Build the fused
+                # kv_proj weight: unpermute K (RoPE row-permute), leave V as-is,
+                # then concatenate [K ; V] on the row axis (dim 0) so the fused
+                # projection outputs K features first, then V.
+                num_kv_heads, v_hf_name = tr[1], tr[2]
+                if v_hf_name not in hf_state_dict:
+                    return None
+                k_w = unpermute_proj_rows(weight, num_heads=num_kv_heads)
+                v_w = hf_state_dict[v_hf_name].float()
+                weight = torch.cat([k_w, v_w], dim=0)
 
+        # ttml_shape is already the GLOBAL tile-padded target (scaled up on sharded
+        # dims for the FSDP path above; == local for single-device). Verify the
+        # checkpoint against the config-implied logical shape and pad UP -- never
+        # crop -- via the shared policy helper.
         ttml_shape = ttml_shapes[ttml_name]
+        expected = expected_fused_load_shape(config, hf_name, tie_word_embeddings)
         if weight.dim() == 2:
+            tgt_rows, tgt_cols = resolve_padded_load_shape(
+                weight.shape, (ttml_shape[2], ttml_shape[3]), expected, name=hf_name
+            )
             rows, cols = weight.shape
-            tgt_rows, tgt_cols = ttml_shape[2], ttml_shape[3]
             if rows != tgt_rows or cols != tgt_cols:
                 padded = torch.zeros(tgt_rows, tgt_cols, dtype=weight.dtype)
-                padded[: min(rows, tgt_rows), : min(cols, tgt_cols)] = weight[
-                    : min(rows, tgt_rows), : min(cols, tgt_cols)
-                ]
+                padded[:rows, :cols] = weight  # pad-up only (helper guaranteed tgt >= src)
                 weight = padded
             weight = weight.unsqueeze(0).unsqueeze(0)
         elif weight.dim() == 1:
+            (tgt_dim,) = resolve_padded_load_shape(weight.shape, (ttml_shape[-1],), expected, name=hf_name)
             dim = weight.shape[0]
-            tgt_dim = ttml_shape[-1]
             if dim != tgt_dim:
                 padded = torch.zeros(tgt_dim, dtype=weight.dtype)
-                padded[: min(dim, tgt_dim)] = weight[: min(dim, tgt_dim)]
+                padded[:dim] = weight
                 weight = padded
             weight = weight.unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
@@ -336,7 +403,9 @@ def load_weights_from_hf(
     skipped: List[str] = []
 
     with ThreadPoolExecutor(max_workers=4) as pool:
-        futures = [(hf_name, ttml_name, pool.submit(_prepare, hf_name, ttml_name)) for hf_name, ttml_name in items]
+        futures = [
+            (hf_name, ttml_name, pool.submit(_prepare_hf_weights, hf_name, ttml_name)) for hf_name, ttml_name in items
+        ]
         for hf_name, ttml_name, future in futures:
             prepared = future.result()
             if prepared is None:
@@ -346,7 +415,7 @@ def load_weights_from_hf(
                 continue
             # ``prepared`` is a padded host torch weight from the worker thread;
             # the device transfer below runs serially in the main thread (TTNN
-            # device ops are not thread-safe -- see the note in ``_prepare``).
+            # device ops are not thread-safe -- see the note in ``_prepare_hf_weights``).
             param = ttml_params[ttml_name]
             if sharded:
                 # ``prepared`` is the padded GLOBAL-shape host weight (see above).

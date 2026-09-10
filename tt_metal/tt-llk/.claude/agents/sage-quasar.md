@@ -46,7 +46,7 @@ Key pages (fetch directly with `mcp__atlassian__getConfluencePage`):
 |---------|---------|----------|
 | `1613201604` | Tensix ISA (164 child pages, one per instruction) | Any instruction lookup — start here |
 | `1170505767` | Tensix SFPU Instruction Set Architecture | SFPU per-instruction details |
-| `1256423592` | Quasar/Trinity SFPU Micro-Architecture Spec | SFPU pipeline, capabilities, constraints |
+| `1256423592` | Quasar SFPU Micro-Architecture Spec | SFPU pipeline, capabilities, constraints |
 | `84508873` | Tensix NEO High Level Specification | General Quasar/Neo architecture overview |
 | `48300268` | Microarchitecture tree root (80+ sub-pages) | Deep-dive into any uarch subsystem |
 | `1612808713` | REPLAY instruction | Replay buffer for ITERATIONS loops |
@@ -60,7 +60,7 @@ mcp__atlassian__searchConfluenceUsingCql
   cql: "space.title = \"Tensix Neo\" AND text ~ \"{topic}\""
 
 mcp__atlassian__searchConfluenceUsingCql
-  cql: "text ~ \"quasar {topic}\" OR text ~ \"trinity {topic}\""
+  cql: "text ~ \"quasar {topic}\""
 ```
 
 ### 2. assembly.yaml (quick reference)

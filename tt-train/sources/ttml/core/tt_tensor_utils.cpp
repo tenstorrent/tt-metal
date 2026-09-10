@@ -31,7 +31,7 @@ T get_median(std::vector<T>& vec) {
 };
 
 template <typename T>
-void print_tensor_stats_(const tt::tt_metal::Tensor& tensor, const std::string& name) {
+void print_tensor_stats_(const ttnn::Tensor& tensor, const std::string& name) {
     auto tensor_shape = tensor.logical_shape();
     auto tensor_vec = tensor.to_vector<T>();
 
@@ -55,7 +55,7 @@ void print_tensor_stats_(const tt::tt_metal::Tensor& tensor, const std::string& 
 }
 
 template <typename T>
-tt::tt_metal::Tensor ttml_create_owned_tensor(
+ttnn::Tensor ttml_create_owned_tensor(
     std::vector<T>&& data, const ttnn::Shape& shape, tt::tt_metal::DataType data_type, tt::tt_metal::Layout layout) {
     auto buffer = tt::tt_metal::HostBuffer(std::move(data));
     return {std::move(buffer), shape, data_type, layout};
@@ -73,33 +73,32 @@ std::vector<tt::tt_metal::HostBuffer> get_as(const ttnn::Tensor& tensor) {
 }  // namespace
 namespace ttml::core {
 
-tt::tt_metal::Tensor zeros_like(const tt::tt_metal::Tensor& tensor) {
+ttnn::Tensor zeros_like(const ttnn::Tensor& tensor) {
     return ttnn::moreh_full_like(tensor, 0.F, tensor.dtype(), tensor.layout(), tensor.memory_config());
 }
 
-tt::tt_metal::Tensor ones_like(const tt::tt_metal::Tensor& tensor) {
+ttnn::Tensor ones_like(const ttnn::Tensor& tensor) {
     return ttnn::moreh_full_like(tensor, 1.F, tensor.dtype(), tensor.layout(), tensor.memory_config());
 }
 
-tt::tt_metal::Tensor empty(
+ttnn::Tensor empty(
     const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, const ttnn::MemoryConfig& memory_config) {
     return ttnn::empty(shape, ttnn::DataType::BFLOAT16, ttnn::Layout::TILE, device, memory_config);
 }
 
-tt::tt_metal::Tensor full(
-    const ttnn::Shape& shape, float value, ttnn::distributed::MeshDevice* device, ttnn::DataType dtype) {
+ttnn::Tensor full(const ttnn::Shape& shape, float value, ttnn::distributed::MeshDevice* device, ttnn::DataType dtype) {
     return ttnn::full(shape, value, dtype, ttnn::Layout::TILE, std::ref(*device));
 }
 
-tt::tt_metal::Tensor zeros(const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, ttnn::DataType dtype) {
+ttnn::Tensor zeros(const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, ttnn::DataType dtype) {
     return core::full(shape, 0.F, device, dtype);
 }
 
-tt::tt_metal::Tensor ones(const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, ttnn::DataType dtype) {
+ttnn::Tensor ones(const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, ttnn::DataType dtype) {
     return core::full(shape, 1.F, device, dtype);
 }
 template <class VectorType, ttnn::DataType TensorType>
-tt::tt_metal::Tensor from_vector(
+ttnn::Tensor from_vector(
     const std::vector<VectorType>& buffer,
     const ttnn::Shape& shape,
     ttnn::distributed::MeshDevice* device,
@@ -117,14 +116,14 @@ tt::tt_metal::Tensor from_vector(
     }
 
     const auto tensor_layout =
-        ttnn::TensorLayout(TensorType, ttnn::PageConfig(ttnn::Layout::ROW_MAJOR), tt::tt_metal::MemoryConfig{});
+        tt::tt_metal::TensorLayout(TensorType, ttnn::PageConfig(ttnn::Layout::ROW_MAJOR), tt::tt_metal::MemoryConfig{});
 
     ttnn::Tensor output;
     if (mesh_mapper != nullptr) {
         output = ttnn::distributed::create_distributed_tensor(
             ttsl::make_const_span(buffer), shape, tensor_layout, *mesh_mapper);
     } else {
-        output = ttnn::Tensor::from_vector(buffer, ttnn::TensorSpec(shape, tensor_layout));
+        output = ttnn::Tensor::from_vector(buffer, tt::tt_metal::TensorSpec(shape, tensor_layout));
     }
 
     /* Workaround necessary due to the issue #38186.*/
@@ -145,48 +144,48 @@ tt::tt_metal::Tensor from_vector(
     return output;
 }
 
-template tt::tt_metal::Tensor from_vector<bfloat16, ttnn::DataType::BFLOAT16>(
+template ttnn::Tensor from_vector<bfloat16, ttnn::DataType::BFLOAT16>(
     const std::vector<bfloat16>&,
     const ttnn::Shape&,
     ttnn::distributed::MeshDevice*,
     ttnn::Layout,
     const ttnn::distributed::TensorToMesh*);
-template tt::tt_metal::Tensor from_vector<float, ttnn::DataType::BFLOAT16>(
+template ttnn::Tensor from_vector<float, ttnn::DataType::BFLOAT16>(
     const std::vector<float>&,
     const ttnn::Shape&,
     ttnn::distributed::MeshDevice*,
     ttnn::Layout,
     const ttnn::distributed::TensorToMesh*);
-template tt::tt_metal::Tensor from_vector<float, ttnn::DataType::FLOAT32>(
+template ttnn::Tensor from_vector<float, ttnn::DataType::FLOAT32>(
     const std::vector<float>&,
     const ttnn::Shape&,
     ttnn::distributed::MeshDevice*,
     ttnn::Layout,
     const ttnn::distributed::TensorToMesh*);
-template tt::tt_metal::Tensor from_vector<uint32_t, ttnn::DataType::UINT32>(
+template ttnn::Tensor from_vector<uint32_t, ttnn::DataType::UINT32>(
     const std::vector<uint32_t>&,
     const ttnn::Shape&,
     ttnn::distributed::MeshDevice*,
     ttnn::Layout,
     const ttnn::distributed::TensorToMesh*);
-template tt::tt_metal::Tensor from_vector<int32_t, ttnn::DataType::INT32>(
+template ttnn::Tensor from_vector<int32_t, ttnn::DataType::INT32>(
     const std::vector<int32_t>&,
     const ttnn::Shape&,
     ttnn::distributed::MeshDevice*,
     ttnn::Layout,
     const ttnn::distributed::TensorToMesh*);
-template tt::tt_metal::Tensor from_vector<uint16_t, ttnn::DataType::UINT16>(
+template ttnn::Tensor from_vector<uint16_t, ttnn::DataType::UINT16>(
     const std::vector<uint16_t>&,
     const ttnn::Shape&,
     ttnn::distributed::MeshDevice*,
     ttnn::Layout,
     const ttnn::distributed::TensorToMesh*);
 
-bool is_tensor_initialized(const tt::tt_metal::Tensor& tensor) {
+bool is_tensor_initialized(const ttnn::Tensor& tensor) {
     return tensor.tensor_attributes != nullptr;
 }
 
-void print_tensor_stats(const tt::tt_metal::Tensor& tensor, const std::string& name) {
+void print_tensor_stats(const ttnn::Tensor& tensor, const std::string& name) {
     if (tensor.dtype() == ttnn::DataType::BFLOAT16 || tensor.dtype() == ttnn::DataType::FLOAT32) {
         print_tensor_stats_<float>(tensor, name);
     } else {

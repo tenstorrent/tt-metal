@@ -23,8 +23,8 @@ using TensorTopologyTest = GenericMeshDeviceFixture;
 using TensorTopology2x4Test = MeshDevice2x4Fixture;
 
 TEST_F(TensorTopologyTest, SingleDevice) {
-    const auto tensor_spec =
-        TensorSpec(ttnn::Shape{1, 1, 1, 3}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    const auto tensor_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape{1, 1, 1, 3}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
     Tensor input_tensor = Tensor::from_vector(std::vector<float>{42.F, 13.F, -99.F}, tensor_spec);
 
     const auto mesh_mapper_config = MeshMapperConfig{
@@ -61,8 +61,8 @@ TEST_F(TensorTopologyTest, SingleDevice) {
 }
 
 TEST_F(TensorTopology2x4Test, Replicate2D) {
-    const auto tensor_spec =
-        TensorSpec(ttnn::Shape{1, 1, 1, 3}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    const auto tensor_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape{1, 1, 1, 3}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
     Tensor input_tensor = Tensor::from_vector(std::vector<float>{42.F, 13.F, -99.F}, tensor_spec);
 
     const auto mesh_mapper_config = MeshMapperConfig{
@@ -134,7 +134,7 @@ TEST_F(TensorTopology2x4Test, Shard1DRowMajor) {
     for (int i = 0; i < num_devices; i++) {
         test_data.insert(test_data.end(), {i * 1.F, i * 2.F, i * 3.F});
     }
-    const auto tensor_spec = TensorSpec(
+    const auto tensor_spec = tt::tt_metal::TensorSpec(
         ttnn::Shape{1, num_devices, 3, 1}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
     Tensor input_tensor = Tensor::from_vector(test_data, tensor_spec);
 
@@ -170,7 +170,7 @@ TEST_F(TensorTopology2x4Test, GetTensorCoord) {
     for (int i = 0; i < num_devices; i++) {
         test_data.insert(test_data.end(), {i * 1.F, i * 2.F, i * 3.F});
     }
-    const auto tensor_spec = TensorSpec(
+    const auto tensor_spec = tt::tt_metal::TensorSpec(
         ttnn::Shape{1, num_devices, 3, 1}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
     Tensor input_tensor = Tensor::from_vector(test_data, tensor_spec);
 
@@ -211,7 +211,7 @@ TEST_F(TensorTopology2x4Test, CreateFullyReplicatedTensorTopology) {
     for (int i = 0; i < num_devices; i++) {
         test_data.insert(test_data.end(), {i * 1.F, i * 2.F, i * 3.F});
     }
-    const auto tensor_spec = TensorSpec(
+    const auto tensor_spec = tt::tt_metal::TensorSpec(
         ttnn::Shape{1, num_devices, 3, 1}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
     Tensor input_tensor = Tensor::from_vector(test_data, tensor_spec);
 
@@ -219,7 +219,8 @@ TEST_F(TensorTopology2x4Test, CreateFullyReplicatedTensorTopology) {
     Tensor replicated_tensor = distribute_tensor(input_tensor, *mapper);
 
     const auto& tensor_topology = replicated_tensor.tensor_topology();
-    auto expected_topology = TensorTopology::create_fully_replicated_tensor_topology(mesh_device_->shape());
+    auto expected_topology =
+        tt::tt_metal::TensorTopology::create_fully_replicated_tensor_topology(mesh_device_->shape());
 
     EXPECT_EQ(tensor_topology, expected_topology);
 }
@@ -230,7 +231,7 @@ TEST_F(TensorTopology2x4Test, CreateShardedTensorTopology) {
     for (int i = 0; i < num_devices; i++) {
         test_data.insert(test_data.end(), {i * 1.F, i * 2.F, i * 3.F});
     }
-    const auto tensor_spec = TensorSpec(
+    const auto tensor_spec = tt::tt_metal::TensorSpec(
         ttnn::Shape{1, num_devices, 3, 1}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
     Tensor input_tensor = Tensor::from_vector(test_data, tensor_spec);
 
@@ -238,7 +239,7 @@ TEST_F(TensorTopology2x4Test, CreateShardedTensorTopology) {
     Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper);
 
     const auto& tensor_topology = sharded_tensor.tensor_topology();
-    auto expected_topology = TensorTopology::create_sharded_tensor_topology(mesh_device_->shape(), 1);
+    auto expected_topology = tt::tt_metal::TensorTopology::create_sharded_tensor_topology(mesh_device_->shape(), 1);
 
     EXPECT_EQ(tensor_topology, expected_topology);
 }

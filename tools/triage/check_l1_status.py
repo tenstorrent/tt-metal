@@ -29,7 +29,7 @@ script_config = ScriptConfig(
 
 
 def check_worker_l1_launch_value(location: OnChipCoordinate, tensix_fw_launch_values: dict[int, int]) -> None:
-    expected_fw_launch_value = tensix_fw_launch_values.get(location._device.unique_id)
+    expected_fw_launch_value = tensix_fw_launch_values.get(location.device.unique_id)
     if expected_fw_launch_value is None:
         raise RuntimeError(f"Missing Inspector build env data for {location}")
 

@@ -16,8 +16,9 @@ Environment Variables:
 import os
 import torch
 import ttnn
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Sequence, Tuple
 import ast
+from loguru import logger
 
 
 def parse_placement_from_traced(tensor_placement: Optional[Dict]) -> Optional[ttnn.TensorMemoryLayout]:
@@ -190,7 +191,547 @@ def shard_grid_bounds(mc):
     return max_x, max_y
 
 
+# ── Job-level device reuse (opt-in via TTNN_SWEEP_JOB_DEVICE=1) ───────────────
+# When the sweeps runner keeps ONE process per job (persistent worker), a single
+# open mesh device is reused across every module/vector that needs the SAME
+# device configuration, and only reopened when the resolved config actually
+# changes. This avoids the per-module device reopen that force-reinitializes
+# dispatch on Galaxy and wedges a dispatch core (run_mailbox=0x40). Every module
+# opens its device through create_mesh_device() and closes via
+# ttnn.close_mesh_device(), so caching + a deferred-close guard here is
+# transparent to the modules (a module that opens its own device just gets the
+# cached one; its per-module close is deferred to job end / config change).
+# Device-count boundary between single-host clusters (N150=1, N300=2, T3K=8) and
+# multi-host Galaxy (32 chips). Galaxy is the only place the per-module device
+# reopen wedges a dispatch core, so job-level device reuse is gated to clusters
+# with MORE than this many devices.
+_SINGLE_HOST_MAX_DEVICES = 8
+
+_JOB_DEVICE = None
+_JOB_DEVICE_KEY = None
+_orig_close_mesh_device = ttnn.close_mesh_device
+
+
+def _job_device_enabled() -> bool:
+    """Job-level device reuse is opt-in (TTNN_SWEEP_JOB_DEVICE=1) AND restricted to
+    Galaxy (>8 devices). The per-module device reopen it avoids only force-reinits
+    dispatch (and wedges a core) on Galaxy; single-host (N150/N300/T3K) has no such
+    issue AND has modules that take a SINGLE-device path (ttnn.open_device, e.g.
+    clamp/fast_reduce_nc when get_mesh_shape() returns None on 1 chip) that would
+    collide with a held cached mesh device. Gating to Galaxy keeps every single-host
+    lane on the original per-module behavior. TTNN_SWEEP_JOB_DEVICE_FORCE=1 bypasses
+    the device-count gate (for validation on smaller clusters)."""
+    if os.environ.get("TTNN_SWEEP_JOB_DEVICE") != "1":
+        return False
+    if os.environ.get("TTNN_SWEEP_JOB_DEVICE_FORCE") == "1":
+        return True
+    try:
+        return ttnn.get_num_devices() > _SINGLE_HOST_MAX_DEVICES
+    except Exception:
+        return False
+
+
+def _axis_token(dispatch_core_axis):
+    """Canonical lowercase token ('row'/'col') for a dispatch axis.
+
+    str(ttnn.DispatchCoreAxis.COL) is 'DispatchCoreAxis.COL' while the
+    TTNN_DISPATCH_AXIS env override is 'col'. Keying on the raw str() made those two
+    DIFFERENT keys for the SAME physical device, so a module that derived COL from its
+    vector grid missed the cache against the worker's env-derived 'col' device and did a
+    full close+reopen -- on Galaxy every needless reopen risks wedging a dispatch core
+    (run_mailbox=0x40). Measured on the Galaxy vector set: 18 of the 44 reopens in the
+    modules that open per vector were this mismatch alone (linear: 19 of its 68 vectors).
+    """
+    return str(dispatch_core_axis).split(".")[-1].strip().lower()
+
+
+def _job_device_key(mesh_shape, l1_small_size, dispatch_core_axis, prefer_eth):
+    """Canonical key for the device config create_mesh_device WOULD open. Must be
+    identical for the same intended device regardless of whether the caller passes
+    an explicit axis or relies on env/auto-detect, so the worker's open and a
+    module's own _ensure_*_device() open collapse to one cached device. Returns
+    None when the config can't be keyed safely (auto axis with no env override) —
+    caching is skipped so an ambiguous config never returns the wrong device."""
+    arch = os.environ.get("ARCH_NAME", "").lower()
+    if not arch:
+        try:
+            arch = ttnn.get_arch_name().lower()
+        except Exception:
+            arch = ""
+    if "blackhole" in arch:
+        disp = ("default",)
+    else:
+        try:
+            single_host = ttnn.get_num_devices() <= _SINGLE_HOST_MAX_DEVICES
+        except Exception:
+            single_host = False
+        if single_host and prefer_eth:
+            disp = ("ETH",)  # ETH intent (may fall back to WORKER, but the key stays consistent)
+        elif dispatch_core_axis is not None:
+            disp = ("WORKER", _axis_token(dispatch_core_axis))
+        else:
+            env_axis = os.environ.get("TTNN_DISPATCH_AXIS", "").strip().lower()
+            if env_axis in ("col", "row"):
+                disp = ("WORKER", env_axis)
+            else:
+                return None  # auto-detect axis is op-dependent -> not safe to share
+    return (tuple(mesh_shape), int(l1_small_size), bool(prefer_eth), disp)
+
+
 def create_mesh_device(
+    mesh_shape: Tuple[int, int],
+    device_ids: Optional[list] = None,
+    l1_small_size: int = 79104,
+    dispatch_core_axis=None,
+    prefer_eth: bool = True,
+) -> ttnn.MeshDevice:
+    """Open a mesh device, reusing a cached job-level device when
+    TTNN_SWEEP_JOB_DEVICE=1 and the resolved config matches (see
+    _job_device_key). On a config change the prior job device is closed first so
+    the reopen/reconfig is legal (SetFabricConfig requires no open devices)."""
+    if not _job_device_enabled():
+        return _create_mesh_device_uncached(mesh_shape, device_ids, l1_small_size, dispatch_core_axis, prefer_eth)
+
+    global _JOB_DEVICE, _JOB_DEVICE_KEY
+    key = _job_device_key(mesh_shape, l1_small_size, dispatch_core_axis, prefer_eth)
+    if key is None:
+        # Not safely keyable (e.g. auto-detect axis) -> don't cache this device.
+        # Close any live cached device FIRST so this uncached open never runs a
+        # SECOND mesh alongside it (the open guard also closes, but do it
+        # explicitly here so the one-live-device invariant is local and obvious).
+        # Refuse if the close fails rather than open a second live mesh.
+        if _JOB_DEVICE is not None and not close_job_device():
+            raise RuntimeError(
+                "create_mesh_device: refusing an unkeyable open because the cached "
+                "job device could not be closed (would leave two live mesh devices)"
+            )
+        return _create_mesh_device_uncached(mesh_shape, device_ids, l1_small_size, dispatch_core_axis, prefer_eth)
+
+    if _JOB_DEVICE is not None and _JOB_DEVICE_KEY == key:
+        return _JOB_DEVICE
+    if _JOB_DEVICE is not None:
+        # Config changed: really close the old device before opening the new one
+        # (a device must be closed before a fabric reconfig). If the close FAILS,
+        # refuse to reopen -- a second live mesh corrupts context state; surface
+        # the teardown error instead of silently reopening. close_job_device()
+        # nulls _JOB_DEVICE/_KEY on success.
+        if not close_job_device():
+            raise RuntimeError(
+                "create_mesh_device: refusing to reopen on a config change because "
+                "the prior job device could not be closed (would leave two live meshes)"
+            )
+    _JOB_DEVICE = _create_mesh_device_uncached(mesh_shape, device_ids, l1_small_size, dispatch_core_axis, prefer_eth)
+    _JOB_DEVICE_KEY = key
+    return _JOB_DEVICE
+
+
+def _guarded_close_mesh_device(device, *args, **kwargs):
+    """Deferred close: a module's per-module/per-vector close of the shared job
+    device is a no-op (it stays open for the next module); the real close happens
+    at job end (close_job_device) or on a config change (in create_mesh_device)."""
+    if _JOB_DEVICE is not None and device is _JOB_DEVICE:
+        return None
+    return _close_mesh_and_parent(device, *args, **kwargs)
+
+
+# Install the deferred-close guard. No-op behavior when the job device is disabled
+# (or nothing is cached), since it just passes through to the original close.
+ttnn.close_mesh_device = _guarded_close_mesh_device
+
+
+_orig_set_fabric_config = getattr(ttnn, "set_fabric_config", None)
+
+
+def _guarded_set_fabric_config(*args, **kwargs):
+    """A fabric config change requires ALL devices closed. Modules that change
+    fabric (e.g. conv2d heavy<->light: close -> set_fabric_config -> reopen) call
+    ttnn.close_mesh_device first, but that is deferred for the cached job device —
+    so really close it here before the reconfig, or metal asserts 'SetFabricConfig
+    not allowed while devices are still open'. create_mesh_device reopens after.
+    If the close FAILS, refuse the reconfig rather than reconfigure fabric with a
+    live device (which is illegal / corrupts state)."""
+    if not close_job_device():
+        raise RuntimeError(
+            "set_fabric_config: refusing to reconfigure fabric because the cached job "
+            "device could not be closed (a live mesh would make the reconfig illegal)"
+        )
+    return _orig_set_fabric_config(*args, **kwargs)
+
+
+if _orig_set_fabric_config is not None:
+    ttnn.set_fabric_config = _guarded_set_fabric_config
+
+
+# ── Fabric configuration: match the device setup the traced model used ────────
+# The fabric is part of a mesh device's configuration, not a global default, and the model
+# tests treat it that way: conftest.py's mesh_device fixture pops fabric_config /
+# reliability_mode / fabric_tensix_config out of device_params, calls set_fabric BEFORE
+# open_mesh_device, and reset_fabric after. Every galaxy model behind our traced configs
+# relies on it -- llama3_70b_galaxy/demo/text_demo.py sets "fabric_config": True, and
+# deepseek_v3/demo/demo.py calls set_fabric_config(get_fabric_config(), RELAXED_INIT) with
+# DISABLED at teardown.
+#
+# This path used to skip it entirely. Only ccl_common (the CCL modules) configured fabric, so
+# every other module opened a 32-chip mesh with whatever fabric state the process happened to
+# carry -- replaying llama/gpt_oss/deepseek ops under a device configuration the model never
+# used. Beyond being wrong on its own terms, it correlated with the intermittent Galaxy hangs:
+# the generic-path 2D batches (p1, p2, mesh8x4_col_2d, rms_norm_pre/post_all_gather) hung in
+# four separate lead-model runs and ran clean across two runs with this in place, including a
+# same-box rematch (p1 hung on j09glx02 and completed 542/542 on j09glx02 hours later).
+# It does NOT address the CCL path (which already configured fabric) or the 1D path; both still
+# hang intermittently and need hang recovery rather than a configuration change.
+#
+# The tracer records only machine_info + pytest_args + source -- no device_params -- so the
+# value cannot be read back from a trace and is derived from the mesh, matching the rule
+# all_gather_async_model_traced already applies. Ring is deliberately not inferred: topology is
+# a per-op property this path cannot know.
+#
+# Kill switch: TTNN_SWEEP_FABRIC=off restores the previous behaviour exactly.
+# Explicit override: TTNN_SWEEP_FABRIC=1d | 2d.
+_FABRIC_ENV = "TTNN_SWEEP_FABRIC"
+
+
+def _fabric_mode() -> str:
+    return os.environ.get(_FABRIC_ENV, "auto").strip().lower()
+
+
+def fabric_config_for_mesh(mesh_shape):
+    """The FabricConfig a model test would have set for `mesh_shape`, or None to leave
+    the fabric alone (single device, or disabled by env).
+
+    Mirrors all_gather_async_model_traced: a line mesh gets FABRIC_1D, a genuinely 2D mesh
+    gets FABRIC_2D. Ring (FABRIC_1D_RING) is deliberately not inferred -- topology is a
+    per-op property the generic path cannot know."""
+    mode = _fabric_mode()
+    if mode in ("", "off", "0", "false", "no", "disabled"):
+        return None
+    if _orig_set_fabric_config is None:
+        return None
+    try:
+        rows, cols = int(mesh_shape[0]), int(mesh_shape[1])
+    except (TypeError, ValueError, IndexError):
+        return None
+    if rows * cols <= 1:
+        return None
+    if mode == "1d":
+        return ttnn.FabricConfig.FABRIC_1D
+    if mode == "2d":
+        return ttnn.FabricConfig.FABRIC_2D
+    return ttnn.FabricConfig.FABRIC_1D if (rows == 1 or cols == 1) else ttnn.FabricConfig.FABRIC_2D
+
+
+# True between a successful _apply_fabric_config and its matching reset. Gates the reset so we
+# only ever clear a fabric WE configured -- ccl_common manages its own and must not be disturbed.
+_FABRIC_APPLIED = False
+
+
+def _apply_fabric_config(mesh_shape) -> None:
+    """Set the fabric for an imminent open. DISABLED first, mirroring ccl_common: metal
+    rejects a transition straight from one live config to another."""
+    global _FABRIC_APPLIED
+    cfg = fabric_config_for_mesh(mesh_shape)
+    if cfg is None:
+        return
+    logger.info(f"SWEEPS: setting fabric {cfg} for mesh {tuple(mesh_shape)} before open")
+    _orig_set_fabric_config(ttnn.FabricConfig.DISABLED)
+    _orig_set_fabric_config(cfg)
+    _FABRIC_APPLIED = True
+
+
+def _reset_fabric_config() -> None:
+    """The reset_fabric() half of the model fixture's contract: leave the process with the
+    fabric DISABLED so nothing inherits a configuration it never asked for.
+
+    No-ops unless we are the ones who set it (_FABRIC_APPLIED), so a fabric configured by
+    ccl_common survives. Uses the UNGUARDED setter: callers run after the device is already
+    closed, and the guarded one would call back into close_job_device."""
+    global _FABRIC_APPLIED
+    if not _FABRIC_APPLIED or _orig_set_fabric_config is None:
+        return
+    try:
+        _orig_set_fabric_config(ttnn.FabricConfig.DISABLED)
+    except Exception:
+        logger.exception("SWEEPS: failed to reset the fabric config after closing the mesh device")
+    finally:
+        _FABRIC_APPLIED = False
+
+
+_orig_open_mesh_device = ttnn.open_mesh_device
+
+# Full-host mesh orientations a 2D submesh can be carved out of, per host device count.
+_FULL_HOST_MESH_CANDIDATES = {32: ((8, 4), (4, 8)), 16: ((8, 2), (2, 8), (4, 4))}
+
+# Carved submesh -> (submesh, parent full mesh). The submesh is kept referenced so its
+# id() cannot be reused by another object while the mapping is live.
+_SUBMESH_PARENTS = {}
+
+
+def _full_host_mesh_for(mesh_shape, num_devices):
+    """The full-host mesh a 2D SUBMESH must be carved from, or None to open directly.
+
+    Opening MeshShape(submesh) directly on a galaxy fails fabric router sync on the
+    submesh's BOUNDARY ethernet links -- they connect to chips outside the carved region,
+    so they never complete the handshake. Opening the full host mesh runs bring-up over the
+    whole (healthy) topology, and a submesh of an already-synced fabric works.
+
+    Returns None when mesh_shape is 1D (a line/ring is opened directly) or already spans
+    the host. Mirrors _full_galaxy_mesh_for in all_gather_async_model_traced, which has done
+    this per-vector for CCL since before the generic path existed.
+    """
+    try:
+        dims = tuple(int(d) for d in mesh_shape)
+    except (TypeError, ValueError):
+        return None
+    if len(dims) != 2:
+        return None
+    rows, cols = dims
+    if rows <= 1 or cols <= 1:
+        return None
+    if rows * cols >= num_devices:
+        return None
+    for full_rows, full_cols in _FULL_HOST_MESH_CANDIDATES.get(num_devices, ()):
+        if full_rows >= rows and full_cols >= cols and full_rows * full_cols == num_devices:
+            return (full_rows, full_cols)
+    return None
+
+
+def _open_mesh_carving_submesh(*args, **kwargs):
+    """Open the requested mesh, carving it out of the full host mesh when it is a 2D submesh.
+
+    Every non-CCL module reaches the device through here, so a batch that declares a submesh
+    shape (MESH_DEVICE_SHAPE=4x4 on a 32-card box) no longer opens that submesh directly.
+    conv2d on a directly-opened 4x4 tripped fabric router sync in every job that contained it
+    -- lead-models runs 30696173498 and 30702184301, 2 of 2, while every 4x4 job WITHOUT
+    conv2d passed (5 of 5, one with 352 vectors) -- and on the full 4x8 mesh conv2d passes.
+
+    The requested shape is preserved: the returned device's shape IS the submesh, so traced
+    placement metadata still matches and create_tensor_on_mesh does not fall back to
+    ReplicateTensorToMesh. That fallback is the original bug device-key batching removed, so
+    declaring the full mesh instead of carving would not be a fix.
+
+    Falls back to a direct open when carving is not applicable, not possible (e.g. a degraded
+    host with fewer chips than the full mesh needs), or disabled via
+    TTNN_SWEEP_NO_SUBMESH_CARVE=1.
+    """
+    requested = kwargs.get("mesh_shape")
+    if requested is None or os.environ.get("TTNN_SWEEP_NO_SUBMESH_CARVE", "").strip() == "1":
+        return _orig_open_mesh_device(*args, **kwargs)
+
+    try:
+        num_devices = ttnn.get_num_devices()
+    except Exception:
+        return _orig_open_mesh_device(*args, **kwargs)
+
+    full = _full_host_mesh_for(requested, num_devices)
+    if full is None:
+        return _orig_open_mesh_device(*args, **kwargs)
+
+    submesh_shape = tuple(int(d) for d in requested)
+    parent = None
+    try:
+        logger.info(f"SWEEPS: opening full host mesh {full} then carving submesh {submesh_shape}")
+        parent_kwargs = dict(kwargs)
+        parent_kwargs["mesh_shape"] = ttnn.MeshShape(*full)
+        parent = _orig_open_mesh_device(*args, **parent_kwargs)
+        submesh = parent.create_submesh(ttnn.MeshShape(submesh_shape))
+    except Exception as e:
+        # Carving failed (commonly: the host has fewer chips than `full` needs, e.g. a box
+        # whose topology downgraded). Close the parent and fall back to a direct open so the
+        # behaviour is no worse than before this path existed.
+        logger.warning(f"SWEEPS: submesh carve of {submesh_shape} from {full} failed ({e}); opening directly")
+        if parent is not None:
+            try:
+                parent.quiesce_devices()
+            except Exception:
+                logger.exception("SWEEPS: quiesce_devices before closing the parent mesh after a failed carve failed")
+            try:
+                _orig_close_mesh_device(parent)
+            except Exception as close_error:
+                # The fallback below would open a SECOND mesh alongside a parent that is still
+                # live, which is exactly the state _guarded_open_mesh_device exists to prevent
+                # (invalid context_id / "binary not found" / event-order fatals on Galaxy, and
+                # a box left wedged for every job after this one). A carve error is recoverable;
+                # two live meshes are not. Surface it instead -- sweeps_runner classifies a
+                # mesh-open failure as infra, so the vector is reported honestly and the box
+                # survives.
+                raise RuntimeError(
+                    f"submesh carve of {submesh_shape} from {full} failed ({e}) AND the parent mesh "
+                    f"could not be closed ({close_error}); refusing to open a second mesh over a live one"
+                ) from close_error
+        return _orig_open_mesh_device(*args, **kwargs)
+
+    _SUBMESH_PARENTS[id(submesh)] = (submesh, parent)
+    return submesh
+
+
+def _close_mesh_and_parent(device, *args, **kwargs):
+    """Close `device`, or its parent when `device` is a carved submesh.
+
+    Closing a submesh does not release the parent's devices, so the parent must be closed or
+    the next open runs a second live mesh (which corrupts context state on Galaxy).
+
+    The carved submesh shares the PARENT's command queues, so the parent is quiesced first to
+    drain them -- otherwise closing it with submesh work still in flight throws, which makes
+    close_job_device() report failure and the fabric-reconfig / reopen guards then refuse
+    ("refusing to reconfigure fabric because the cached job device could not be closed").
+    That cost 30 vectors in lead-models run 30706921019 (24 conv2d + 6 group_norm), all of
+    them fabric-reconfiguring modules. Mirrors ccl_common._teardown_cached_device, which has
+    always quiesced before closing a carved parent."""
+    entry = _SUBMESH_PARENTS.pop(id(device), None)
+    if entry is None:
+        result = _orig_close_mesh_device(device, *args, **kwargs)
+        # Reset here, not only in close_job_device: create_mesh_device deliberately bypasses
+        # the job-device cache (caching disabled, or an unkeyable config), and those devices are
+        # closed straight through this path -- close_job_device would early-return on
+        # _JOB_DEVICE is None and never reset, leaving the process-global fabric enabled for
+        # whatever opens next. _reset_fabric_config only acts if WE set it, so a fabric
+        # configured by ccl_common is left alone.
+        _reset_fabric_config()
+        return result
+    parent = entry[1]
+    try:
+        parent.quiesce_devices()
+    except Exception:
+        logger.exception("SWEEPS: quiesce_devices before closing the carved parent mesh failed")
+    result = _orig_close_mesh_device(parent, *args, **kwargs)
+    _reset_fabric_config()
+    return result
+
+
+def _guarded_open_mesh_device(*args, **kwargs):
+    """Some modules (linear/matmul gather_in0 ring, batched DRAM-sharded) open their
+    OWN mesh device directly via ttnn.open_mesh_device instead of create_mesh_device,
+    so they bypass the job-device cache. With the deferred-close guard the cached job
+    device stays open, so a direct open would run a SECOND device alongside it — on
+    Galaxy that corrupts device/context state (TT_FATAL metal_context.cpp:74
+    'context_id ... is invalid', kernel.cpp:443 'binary not found', dispatch.cpp:254
+    event-order). Really close the cached job device first so only ONE device is ever
+    open; the next create_mesh_device reopens and re-caches it. Safe against the
+    cache-miss reopen path in create_mesh_device (which nulls _JOB_DEVICE before
+    calling _create_mesh_device_uncached -> here close_job_device is a no-op) and
+    calls _orig_open_mesh_device (not the wrapper), so no re-entrancy. If the close
+    FAILS, refuse to open rather than leave two live mesh devices."""
+    if _job_device_enabled():
+        if not close_job_device():
+            raise RuntimeError(
+                "open_mesh_device: refusing to open a new mesh because the cached job "
+                "device could not be closed (would leave two live mesh devices)"
+            )
+    return _open_mesh_carving_submesh(*args, **kwargs)
+
+
+ttnn.open_mesh_device = _guarded_open_mesh_device
+
+
+def device_canary(device) -> Tuple[bool, str]:
+    """Ask the device a question we already know the answer to: is 2 + 2 still 4, on every chip?
+
+    Returns (healthy, detail). Never raises -- a throw IS a failed canary.
+
+    Why this exists. Wedge detection is otherwise REACTIVE: the runner pattern-matches the
+    exception text a vector produced, so a device that returns plausible-looking garbage is
+    indistinguishable from an op that computed the wrong answer. Lead-models run 31295900210
+    is the case in point -- after a device timeout, `add`, `linear` and
+    `nlp_create_qkv_heads_decode` each came back at PCC exactly 0.0 (an all-zeros readback)
+    and were booked as three separate test failures. All three pass in other runs on other
+    boxes. A health probe answers the question directly instead of inferring it from prose.
+
+    The tensor is SHARDED over the whole mesh, not run on one chip: a batch's vectors span
+    every device in its mesh, so a probe that only exercises chip 0 would miss exactly the
+    per-chip corruption this is meant to catch. Scatter + compute + gather all participate.
+
+    Exact equality, not PCC: 2.0 and 4.0 are exactly representable in bfloat16, so any
+    deviation at all is corruption rather than precision.
+    """
+    try:
+        num_devices = device.get_num_devices() if hasattr(device, "get_num_devices") else 1
+    except Exception as e:
+        return False, f"canary: could not query device count ({e})"
+
+    try:
+        rows = 32 * max(int(num_devices), 1)
+        torch_in = torch.full((rows, 32), 2.0, dtype=torch.float32)
+        if hasattr(device, "get_num_devices") and num_devices > 1:
+            mapper = ttnn.ShardTensorToMesh(device, dim=0)
+            tt_in = ttnn.from_torch(
+                torch_in, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=mapper
+            )
+            out = ttnn.to_torch(ttnn.add(tt_in, tt_in), mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))
+        else:
+            tt_in = ttnn.from_torch(torch_in, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            out = ttnn.to_torch(ttnn.add(tt_in, tt_in))
+    except Exception as e:
+        return False, f"canary: 2+2 raised on a {num_devices}-device mesh ({type(e).__name__}: {str(e)[:160]})"
+
+    try:
+        if tuple(out.shape) != (rows, 32):
+            return False, f"canary: 2+2 returned shape {tuple(out.shape)}, expected {(rows, 32)}"
+        bad = int((out != 4.0).sum().item())
+        if bad:
+            return False, (
+                f"canary: 2+2 != 4 in {bad}/{out.numel()} elements on a {num_devices}-device mesh "
+                f"(first value {out.flatten()[0].item()}) -- the device is returning corrupt data"
+            )
+    except Exception as e:
+        return False, f"canary: could not verify the 2+2 result ({e})"
+    return True, f"canary: 2+2 == 4 across {num_devices} device(s)"
+
+
+def clear_job_device_program_cache() -> None:
+    """Clear the cached job device's program cache — call at each module boundary
+    so a new module doesn't collide with an earlier module's cached programs /
+    kernel binaries on the reused device (TT_FATAL kernel.cpp:443 'binary not
+    found')."""
+    if _JOB_DEVICE is not None:
+        try:
+            _JOB_DEVICE.clear_program_cache()
+        except Exception:
+            pass
+
+
+def close_job_device() -> bool:
+    """Really close the cached job device (job end / worker teardown, config
+    change, fabric reconfig).
+
+    Returns True on success (or when nothing is cached). On a close FAILURE it
+    KEEPS _JOB_DEVICE set (does not forget it) and returns False, so callers that
+    require all devices closed before proceeding — a fabric reconfig or a fresh
+    mesh open — can refuse rather than run a second live mesh and corrupt context.
+    Best-effort teardown callers may ignore the result."""
+    global _JOB_DEVICE, _JOB_DEVICE_KEY
+    if _JOB_DEVICE is None:
+        return True
+    try:
+        # _close_mesh_and_parent, not the raw close: the cached job device may be a submesh
+        # carved from a full host mesh, and closing the submesh would leave the parent open.
+        _close_mesh_and_parent(_JOB_DEVICE)
+    except Exception:
+        logger.exception("close_job_device: failed to close the cached job device; keeping it cached")
+        return False
+    _JOB_DEVICE = None
+    _JOB_DEVICE_KEY = None
+    # reset_fabric() half of the model fixture's contract: leave the process with the
+    # fabric DISABLED so the next open starts from a known state and nothing inherits a
+    # config it never asked for.
+    _reset_fabric_config()
+    return True
+
+
+def _create_mesh_device_uncached(*args, **kwargs) -> ttnn.MeshDevice:
+    """Open a mesh device, resetting the fabric if the open fails.
+
+    Wraps _open_mesh_device_configured so a fabric we set on the way in never outlives a failed
+    open: without this, an exception between _apply_fabric_config and a returned device would
+    leave the process-global fabric enabled for whatever opens next (the same leak as an
+    uncached close, see _close_mesh_and_parent)."""
+    try:
+        return _open_mesh_device_configured(*args, **kwargs)
+    except BaseException:
+        _reset_fabric_config()
+        raise
+
+
+def _open_mesh_device_configured(
     mesh_shape: Tuple[int, int],
     device_ids: Optional[list] = None,
     l1_small_size: int = 79104,
@@ -229,6 +770,11 @@ def create_mesh_device(
     # 7x10 grids); on blackhole just open with the default dispatch core config
     # — which blackhole supports — and skip it entirely. This also overrides any
     # explicit dispatch_core_axis a caller passes, since blackhole can't honor it.
+    # Match the model-test fixture: fabric is configured BEFORE the mesh is opened.
+    # Callers guarantee no live cached device here (create_mesh_device closes it first),
+    # which is what makes a fabric transition legal.
+    _apply_fabric_config(mesh_shape)
+
     _arch = os.environ.get("ARCH_NAME", "").lower()
     if not _arch:
         try:
@@ -261,7 +807,7 @@ def create_mesh_device(
     # ETH dispatch cores can't be allocated and a failed ETH open re-inits
     # MetalContext and wedges the command queue, so leave those on WORKER.
     try:
-        _single_host = ttnn.get_num_devices() <= 8
+        _single_host = ttnn.get_num_devices() <= _SINGLE_HOST_MAX_DEVICES
     except Exception:
         _single_host = False
     # prefer_eth=False lets a caller opt out of ETH dispatch. conv2d needs WORKER
@@ -831,6 +1377,43 @@ def vector_axis_matches(device, op_kwargs, named_mcs=None):
     return required == actual
 
 
+def scatter_uses_replicate_topology(tensor_placement, mesh_device) -> bool:
+    """Whether create_tensor_on_mesh would build this placement via replicate_with_topology.
+
+    A pure function of the traced placement and the actual mesh -- no device data involved -- and
+    the SINGLE source of truth for that branch: create_tensor_on_mesh calls it to decide, and
+    mesh_tensor_to_torch calls it to know how the input was built, so the two can never drift.
+
+    This matters because replicate_with_topology puts IDENTICAL data on every chip while stamping a
+    Shard topology, so a gathered output has to be collapsed to one copy to match a golden computed
+    from the per-chip shape. Deciding that from the tensor alone is ambiguous (identical per-device
+    shapes occur both here and for a genuine even shard), and _replicated_single_copy resolves it by
+    comparing per-device CONTENTS -- which makes the returned SHAPE data-dependent: a single
+    differing byte flips a [1,1,128,2048] chunk to [1,1,128,8192] on a mesh whose shard axis is 4.
+    """
+    if not tensor_placement:
+        return False
+    if "PlacementShard" not in str(tensor_placement.get("placement", "")):
+        return False
+    try:
+        actual_mesh = mesh_device.shape
+        actual_rows, actual_cols = actual_mesh[0], actual_mesh[1]
+    except Exception:
+        actual_rows, actual_cols = 1, 1
+
+    traced = tensor_placement.get("mesh_device_shape", "[1, 1]")
+    if isinstance(traced, str):
+        try:
+            traced = ast.literal_eval(traced)
+        except (ValueError, SyntaxError):
+            traced = [1, 1]
+    if not isinstance(traced, (list, tuple)):
+        traced = [1, 1]
+    traced_rows = traced[0] if len(traced) > 0 else 1
+    traced_cols = traced[1] if len(traced) > 1 else 1
+    return actual_rows >= traced_rows and actual_cols >= traced_cols
+
+
 def create_tensor_on_mesh(
     torch_tensor: torch.Tensor,
     mesh_device: ttnn.MeshDevice,
@@ -862,28 +1445,8 @@ def create_tensor_on_mesh(
     # ShardTensor2dMesh would re-shard the input and produce a smaller per-chip
     # shape, so delegate to replicate_with_topology, which keeps .shape =
     # input shape and stamps the correct sharded topology metadata.
-    if tensor_placement:
-        _placement_str = str(tensor_placement.get("placement", ""))
-        if "PlacementShard" in _placement_str:
-            try:
-                actual_mesh = mesh_device.shape
-                _ar, _ac = actual_mesh[0], actual_mesh[1]
-            except Exception:
-                _ar, _ac = 1, 1
-            import ast as _ast0
-
-            _ms_raw = tensor_placement.get("mesh_device_shape", "[1, 1]")
-            if isinstance(_ms_raw, str):
-                try:
-                    _ms_raw = _ast0.literal_eval(_ms_raw)
-                except Exception:
-                    _ms_raw = [1, 1]
-            _tr = _ms_raw[0] if len(_ms_raw) > 0 else 1
-            _tc = _ms_raw[1] if len(_ms_raw) > 1 else 1
-            if _ar >= _tr and _ac >= _tc:
-                return replicate_with_topology(
-                    torch_tensor, mesh_device, dtype, layout, memory_config, tensor_placement
-                )
+    if scatter_uses_replicate_topology(tensor_placement, mesh_device):
+        return replicate_with_topology(torch_tensor, mesh_device, dtype, layout, memory_config, tensor_placement)
 
     # Determine mesh mapper based on placement
     if tensor_placement:
@@ -941,9 +1504,39 @@ def create_tensor_on_mesh(
                     dims.append(None)
             dims_tuple = tuple(dims)
 
-            # Traced shapes are global (pre-shard); ShardTensor2dMesh splits
-            # them across the mesh internally.
-            mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=dims_tuple, mesh_shape=mesh_shape_tuple)
+            # Both mesh axes sharding the SAME tensor dim cannot go through
+            # ShardTensor2dMesh: its C++ chunk_ndim normalizes the dims and then hard-fails
+            # "dims must be unique" (partition.cpp), because it chunks each listed dim once.
+            # A traced ['PlacementShard(-1)', 'PlacementShard(3)'] on a 4D tensor is exactly
+            # that -- -1 and 3 are the same dim -- and it means dim 3 is split rows*cols ways
+            # in total. That IS expressible, as a 1D shard of that dim over the flattened
+            # mesh, so use it. Scatter and gather then use the same 1D scheme (see
+            # mesh_tensor_to_torch), which makes them inverses by construction regardless of
+            # how devices are ordered.
+            #
+            # Without this the mapper throws at distribution time, the tensor ends up
+            # distributed some other way, and the op returns a CORRECTLY SHAPED but wrong
+            # result -- no assert fires and it surfaces as an unexplained low PCC. That is the
+            # near-zero-PCC class: lead-models run 30706921019 mesh8x4_col_2d, 8 multiply
+            # vectors at PCC 0.0096-0.0152 plus 1 linear at 0.093, every one of them carrying
+            # this placement, with 6 "dims must be unique" TT_FATALs in the same log.
+            # REACHABILITY: on a mesh big enough for the traced shape this is NOT reached --
+            # the replicate_with_topology early-return above claims every PlacementShard
+            # placement first. It only runs when the device is too small for the traced mesh,
+            # which is the one case that skips that return. Kept for that case; the gather-side
+            # counterpart in mesh_tensor_to_torch is what fires on a compatible mesh.
+            _dup_dim = _same_shard_dim(dims_tuple, torch_tensor.ndim)
+            if _dup_dim is not None:
+                logger.info(
+                    f"SWEEPS: scatter -- placement shards dim {_dup_dim} on BOTH mesh axes "
+                    f"{mesh_shape_tuple}; using a 1D shard over the flattened mesh "
+                    f"({mesh_shape_tuple[0] * mesh_shape_tuple[1]} devices)"
+                )
+                mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=_dup_dim)
+            else:
+                # Traced shapes are global (pre-shard); ShardTensor2dMesh splits
+                # them across the mesh internally.
+                mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=dims_tuple, mesh_shape=mesh_shape_tuple)
         elif len(entries) == 1:
             shard_match = re.search(r"PlacementShard\((?:dim=)?(-?\d+)\)", entries[0])
             if shard_match:
@@ -1062,6 +1655,29 @@ def get_mesh_shape() -> Optional[Tuple[int, int]]:
     return None
 
 
+_LOGGED_MESH_SHAPE = None
+
+
+def _log_resolved_mesh_shape(shape, source):
+    """Log the resolved model-traced mesh shape once per process, then return it.
+
+    Nothing else in a sweep run records which mesh shape was opened, so a job whose
+    vectors were traced across several topologies gave no way to tell from the logs which
+    one they actually ran on (verified against Galaxy job 90192732565: MESH_DEVICE_SHAPE
+    never appears, and neither does any opened-shape line). Logged once, not per vector,
+    to keep it out of the per-vector noise.
+    """
+    global _LOGGED_MESH_SHAPE
+    entry = (tuple(shape), source)
+    if _LOGGED_MESH_SHAPE != entry:
+        _LOGGED_MESH_SHAPE = entry
+        try:
+            logger.info(f"SWEEPS: model-traced mesh shape resolved to {tuple(shape)} via {source}.")
+        except Exception:
+            pass  # logging must never break device setup
+    return shape
+
+
 def get_model_traced_mesh_shape() -> Tuple[int, int]:
     """Get mesh shape for model-traced sweep modules.
 
@@ -1070,11 +1686,28 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
     only reproduced when the sweep re-executes on a mesh device.
 
     Priority: MESH_DEVICE_SHAPE env var > master JSON > auto-detect.
+
+    NOTE the priority list is misleading: get_mesh_shape() ALREADY falls back to hardware
+    auto-detect, so it returns non-None on any host with >= 2 devices and the master-JSON
+    and auto-detect blocks below are unreachable there. They only run on a single-device
+    host (or before ttnn is initialised). On Galaxy the answer is therefore always (4, 8),
+    from auto-detect -- the master JSON never influences it.
+
+    Only ttnn-model-trace-sweep-validation-impl.yaml sets MESH_DEVICE_SHAPE (per matrix
+    batch); ttnn-run-sweeps-impl.yaml does not, and never downloads the master JSON either
+    (the sweep job pulls only the 'sweeps-vectors' artifact). So a lead-model Galaxy job
+    runs every vector on (4, 8) even though its vectors were traced across several
+    topologies (4x8: 1138, 4x4: 413, 8x4: 366, 1x32: 38, 1x1: 37). The 404 traced at
+    (8, 4)/(1, 32) fail create_tensor_on_mesh's actual_rows/cols >= traced_rows/cols test
+    and fall back to ReplicateTensorToMesh. The result is logged (once per process)
+    because nothing else in a run records it -- verified absent from Galaxy job
+    90192732565's log, which is why this was invisible in CI.
     """
     # Env var takes priority — CI sets this per batch to match traced topology.
     shape = get_mesh_shape()
     if shape:
-        return shape
+        _src = "MESH_DEVICE_SHAPE env" if os.environ.get("MESH_DEVICE_SHAPE", "").strip() else "hardware auto-detect"
+        return _log_resolved_mesh_shape(shape, _src)
 
     # Fall back to master JSON, filtering by current arch AND card count.
     try:
@@ -1105,6 +1738,15 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
 
             with open(_master_path) as _f_ms:
                 _m_ms = _json_ms.load(_f_ms)
+            # Tally EVERY matching config's shape and take the most common one rather
+            # than returning the first hit. The scan walks ALL ops, so "first" was
+            # whichever op happened to lead the JSON, not the op being run: with the
+            # 32-card master JSON it yields ttnn.add's (8, 4) even when running softmax,
+            # although (4, 8) is the majority (1138 vectors vs 366). This branch is only
+            # reachable on a single-device host (see the docstring), so this is a
+            # correctness/consistency fix rather than a behaviour change on Galaxy --
+            # majority-wins now agrees with what auto-detect picks.
+            _shape_votes = {}
             for _op_ms in _m_ms.get("operations", {}).values():
                 for _cfg_ms in _op_ms.get("configurations", []):
                     _mi_ms = _cfg_ms.get("traced_machine_info") or {}
@@ -1133,7 +1775,11 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
                         if isinstance(_ms_val, str):
                             _ms_val = _ast_ms.literal_eval(_ms_val)
                         if isinstance(_ms_val, list) and len(_ms_val) == 2:
-                            return tuple(_ms_val)
+                            _key_ms = tuple(_ms_val)
+                            _shape_votes[_key_ms] = _shape_votes.get(_key_ms, 0) + 1
+            if _shape_votes:
+                _best = max(_shape_votes.items(), key=lambda kv: kv[1])[0]
+                return _log_resolved_mesh_shape(_best, f"master JSON majority of {_shape_votes}")
     except Exception:
         pass  # Intentionally ignored: master config parsing is best-effort, fall through to auto-detect
     # Auto-detect mesh shape from available hardware.
@@ -1142,16 +1788,16 @@ def get_model_traced_mesh_shape() -> Tuple[int, int]:
     try:
         num_devices = ttnn.get_num_devices()
         if num_devices >= 32:
-            return (4, 8)  # Galaxy
+            return _log_resolved_mesh_shape((4, 8), f"auto-detect ({num_devices} devices, Galaxy)")
         elif num_devices >= 8:
-            return (1, 8)  # T3000
+            return _log_resolved_mesh_shape((1, 8), f"auto-detect ({num_devices} devices, T3000)")
         elif num_devices >= 2:
-            return (1, num_devices)
+            return _log_resolved_mesh_shape((1, num_devices), f"auto-detect ({num_devices} devices)")
     except Exception:
         # ttnn may not be initialized yet (env var path is preferred).
         # Fall through to a 1x1 default for non-mesh runs.
         pass
-    return (1, 1)
+    return _log_resolved_mesh_shape((1, 1), "default (no mesh detected)")
 
 
 def _replicated_single_copy(device_tensors, to_torch_fn):
@@ -1189,7 +1835,9 @@ def _replicated_single_copy(device_tensors, to_torch_fn):
     return ref
 
 
-def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None, force_single_device=False) -> torch.Tensor:
+def mesh_tensor_to_torch(
+    ttnn_tensor, mesh_device=None, mesh_composer=None, force_single_device=False, scatter_placement=None
+) -> torch.Tensor:
     """Convert a TTNN mesh tensor back to torch, reassembling shards by topology.
 
     Replicated tensors return device 0. Sharded tensors are reassembled
@@ -1207,7 +1855,21 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None, forc
             via replicate_with_topology and the golden was computed from a
             single copy — comparing against the full gathered output would
             produce shape mismatches.
+        scatter_placement: The traced ``input_*_tensor_placement`` the INPUT was built from. When
+            it implies the replicate_with_topology path (see
+            scatter_uses_replicate_topology), the golden is per-chip, so the gather collapses to a
+            single copy deterministically instead of asking _replicated_single_copy whether the
+            per-device bytes happen to match. Prefer this over force_single_device: it is derived
+            from the vector rather than asserted by the caller, so it stays correct for a genuine
+            shard (where it is False and the normal gather runs).
     """
+    if scatter_placement is not None and not force_single_device:
+        try:
+            force_single_device = scatter_uses_replicate_topology(
+                scatter_placement, mesh_device or ttnn_tensor.device()
+            )
+        except Exception:
+            force_single_device = False
 
     def _get_torch_dtype(t):
         try:
@@ -1268,6 +1930,17 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None, forc
                         single = _replicated_single_copy(dt, _to_torch_safe)
                         if single is not None:
                             return single
+                        # Contents differ, so this is treated as a real shard and the gather is
+                        # about to multiply the shape by the mesh factor. Logged because that used
+                        # to happen silently: one lead-models split vector passed on one Galaxy box
+                        # and returned a 4x-wide chunk on another, from this branch alone. A caller
+                        # that knows the input's placement should pass scatter_placement and never
+                        # reach here.
+                        logger.warning(
+                            f"SWEEPS: gather -- Shard topology with identical per-device shapes "
+                            f"{shapes[0]} but DIFFERING data; concatenating {len(dt)} shards. If the "
+                            f"golden is per-chip, pass scatter_placement to keep the shape stable."
+                        )
         except Exception:
             # Best-effort fast path; on any error fall back to the normal
             # topology-driven gather below.
@@ -1348,6 +2021,28 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None, forc
         try:
             d0 = placements[0].dim
             d1 = placements[1].dim
+            # Mirror the scatter side: when both mesh axes shard the SAME tensor dim,
+            # create_tensor_on_mesh used a 1D shard over the flattened mesh (ConcatMesh2d
+            # cannot express it either -- same "dims must be unique" constraint), so gather
+            # it back the same way. Using the same 1D scheme on both sides is what makes the
+            # round trip an identity.
+            _dup = _same_shard_dim((d0, d1), per_dev_ndim)
+            if _dup is not None:
+                # THIS is the half of the duplicate-dim fix that actually fires. The scatter
+                # side is short-circuited by replicate_with_topology on any mesh big enough for
+                # the traced shape, so a 2D-sharded tensor arrives here with its topology
+                # stamped and the gather is where ConcatMesh2dToTensor would be handed two
+                # entries naming the same dim -> "dims must be unique" -> caught -> wrong data
+                # -> low PCC. Logged because it went unlogged before: 19 FATALs vanished
+                # between runs 30706921019 and 30791207587 with nothing in the log to show why,
+                # which cost a long detour through the (unreachable) scatter-side branch.
+                logger.info(
+                    f"SWEEPS: gather -- placements name dim {_dup} on BOTH mesh axes "
+                    f"{tuple(dist_dims)}; composing with a 1D concat over the flattened mesh"
+                )
+                result = ttnn.to_torch(ttnn_tensor, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=_dup))
+                torch_dtype = _get_torch_dtype(ttnn_tensor)
+                return result.to(torch_dtype) if torch_dtype is not None else result
             comp = ttnn.ConcatMesh2dToTensor(device, mesh_shape=tuple(dist_dims), dims=(d0, d1))
             result = ttnn.to_torch(ttnn_tensor, mesh_composer=comp)
             torch_dtype = _get_torch_dtype(ttnn_tensor)
@@ -1402,6 +2097,29 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None, forc
     if device_tensors:
         return _to_torch_safe(device_tensors[0])
     return _to_torch_safe(ttnn_tensor)
+
+
+def _same_shard_dim(dims, ndim):
+    """The tensor dim both mesh axes shard, or None.
+
+    ttnn's chunk_ndim normalizes negative dims and then requires them to be unique, so a
+    placement naming the same dim twice (e.g. ['PlacementShard(-1)', 'PlacementShard(3)'] on a
+    4D tensor) cannot go through the 2D mapper/composer at all. It is still meaningful --
+    that dim is split rows*cols ways -- and is expressible as a 1D shard over the flattened
+    mesh, which is what callers substitute. Returns the normalized dim so both the scatter and
+    gather sides agree on which one it is.
+    """
+    if ndim is None or len(dims) != 2:
+        return None
+    try:
+        d0, d1 = (int(d) for d in dims)
+    except (TypeError, ValueError):
+        return None
+    d0 = d0 + ndim if d0 < 0 else d0
+    d1 = d1 + ndim if d1 < 0 else d1
+    if d0 != d1 or not (0 <= d0 < ndim):
+        return None
+    return d0
 
 
 def broadcast_torch_inputs_to_global(
@@ -1555,7 +2273,9 @@ def broadcast_torch_inputs_to_global(
     return result if result is not None else _fallback_global_broadcast()
 
 
-def tile_torch_to_global(torch_tensor: torch.Tensor, tensor_placement: Optional[Dict]) -> torch.Tensor:
+def tile_torch_to_global(
+    torch_tensor: torch.Tensor, tensor_placement: Optional[Dict], max_shape: Optional[Sequence[int]] = None
+) -> torch.Tensor:
     """Expand a per-chip torch tensor to its global shape based on placement.
 
     For each PlacementShard(d) entry in `placement` paired with a factor N from
@@ -1616,6 +2336,20 @@ def tile_torch_to_global(torch_tensor: torch.Tensor, tensor_placement: Optional[
             d = ndim - 1
         if d < 0:
             continue
+        if max_shape is not None and d < len(max_shape):
+            # Never tile past the gathered actual. `placement` records how the INPUT was
+            # distributed, but a Shard on a dim that could not actually be split -- e.g. a
+            # size-1 broadcast operand declared [Shard(1), Shard(0)] on a 4x8 mesh -- did not
+            # multiply the device output, so repeating by that factor invents data. Observed on
+            # lead-models 4x8 multiply vectors 9d1aa2d11efe / 828c7b4faac3: the golden was
+            # tiled 256x (dim0 1->64, dim1 4->16), which both mismatched the actual and, at
+            # (64,16,44544,3072) float64, asked the host for 1.02 TiB and OOMed. Capping keeps
+            # the golden bounded by the real output; the caller then finishes the match.
+            current = out.shape[d]
+            allowed = max_shape[d] // current if current else 1
+            n = min(n, max(1, allowed))
+            if n <= 1:
+                continue
         repeats = [1] * out.ndim
         repeats[d] = n
         out = out.repeat(*repeats)
@@ -1669,43 +2403,58 @@ def reconcile_golden_to_actual(
             return g
         torch_golden = g
 
-    # Strategy 2: per-dim integer-ratio tile.
-    if torch_golden.ndim == actual_global.ndim:
-        repeats = []
-        ok = True
-        for d in range(torch_golden.ndim):
-            g = torch_golden.shape[d]
-            a = actual_global.shape[d]
-            if g == 0 or a % g != 0:
-                ok = False
-                break
-            repeats.append(a // g)
-        if ok and any(r > 1 for r in repeats):
-            tiled = torch_golden.repeat(*repeats)
-            if tiled.shape == actual_global.shape:
-                return tiled
+    # Strategies 2 and 3: repeat up / slice down to the actual, using the actual's shape alone.
+    matched = _match_ratio_or_slice(torch_golden, actual_global)
+    if matched is not None:
+        return matched
 
-    # Strategy 3: golden LARGER than actual — slice golden to match.
-    if torch_golden.ndim == actual_global.ndim:
-        slice_ok = True
-        slices = []
-        for d in range(torch_golden.ndim):
-            g = torch_golden.shape[d]
-            a = actual_global.shape[d]
-            if a <= g:
-                slices.append(slice(0, a))
-            else:
-                slice_ok = False
-                break
-        if slice_ok and any(s.stop < torch_golden.shape[i] for i, s in enumerate(slices)):
-            sliced = torch_golden[tuple(slices)]
-            if sliced.shape == actual_global.shape:
-                return sliced
-
-    # Strategy 4: placement-driven tile (legacy path).
+    # Strategy 4: placement-driven tile (legacy path), capped at the actual's shape so a
+    # non-splittable Shard cannot inflate the golden (see tile_torch_to_global).
     out = torch_golden
     for plac in placements:
         if out.shape == actual_global.shape:
             break
-        out = tile_torch_to_global(out, plac)
+        out = tile_torch_to_global(out, plac, max_shape=actual_global.shape)
+    if out.shape != actual_global.shape:
+        # Capping can land short of the actual; finish with the shape-driven reconcilers rather
+        # than returning something that is merely closer and failing the caller's shape assert.
+        matched = _match_ratio_or_slice(out, actual_global)
+        if matched is not None:
+            return matched
     return out
+
+
+def _match_ratio_or_slice(torch_golden: torch.Tensor, actual_global: torch.Tensor) -> Optional[torch.Tensor]:
+    """Match `torch_golden` to `actual_global` by whole-dim repeat or slice, else None."""
+    if torch_golden.shape == actual_global.shape:
+        return torch_golden
+    if torch_golden.ndim != actual_global.ndim:
+        return None
+
+    # Per-dim integer-ratio tile (golden smaller than actual).
+    repeats = []
+    ok = True
+    for d in range(torch_golden.ndim):
+        g = torch_golden.shape[d]
+        a = actual_global.shape[d]
+        if g == 0 or a % g != 0:
+            ok = False
+            break
+        repeats.append(a // g)
+    if ok and any(r > 1 for r in repeats):
+        tiled = torch_golden.repeat(*repeats)
+        if tiled.shape == actual_global.shape:
+            return tiled
+
+    # Golden LARGER than actual — slice golden to match.
+    slices = []
+    for d in range(torch_golden.ndim):
+        if actual_global.shape[d] <= torch_golden.shape[d]:
+            slices.append(slice(0, actual_global.shape[d]))
+        else:
+            return None
+    if any(s.stop < torch_golden.shape[i] for i, s in enumerate(slices)):
+        sliced = torch_golden[tuple(slices)]
+        if sliced.shape == actual_global.shape:
+            return sliced
+    return None

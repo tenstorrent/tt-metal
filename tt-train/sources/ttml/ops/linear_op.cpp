@@ -62,12 +62,11 @@ void moreh_linear_backward(
         tensor->get_value(),
         weight->get_value(),
         /* are required outputs */ std::vector<bool>{true, true, bias != nullptr},
-        bias != nullptr ? std::optional<tt::tt_metal::Tensor>(bias->get_value())
-                        : std::optional<tt::tt_metal::Tensor>(std::nullopt),
+        bias != nullptr ? std::optional<ttnn::Tensor>(bias->get_value()) : std::optional<ttnn::Tensor>(std::nullopt),
         tensor_grad,
         weight_grad,
-        bias ? std::optional<tt::tt_metal::Tensor>(ttnn::empty_like(bias->get_value()))
-             : std::optional<tt::tt_metal::Tensor>(std::nullopt),
+        bias ? std::optional<ttnn::Tensor>(ttnn::empty_like(bias->get_value()))
+             : std::optional<ttnn::Tensor>(std::nullopt),
         /* input_grad_mem_config */ std::nullopt,
         /* weight_grad_mem_config */ std::nullopt,
         /* bias_grad_mem_config */ std::nullopt,
@@ -98,8 +97,7 @@ autograd::TensorPtr linear_op(
     out->set_value(ttnn::linear(
         tensor->get_value(),
         weight->get_value(),
-        bias != nullptr ? std::optional<tt::tt_metal::Tensor>(bias->get_value())
-                        : std::optional<tt::tt_metal::Tensor>(std::nullopt),
+        bias != nullptr ? std::optional<ttnn::Tensor>(bias->get_value()) : std::optional<ttnn::Tensor>(std::nullopt),
         /* transpose_a */ false,
         /* tranpose_b */ true,
         /* memory_config */ std::nullopt,

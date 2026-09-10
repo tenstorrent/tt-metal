@@ -16,7 +16,7 @@ namespace ttml::autograd {
 class Tensor : public std::enable_shared_from_this<Tensor> {
 private:
     AutocastTensor m_value;
-    tt::tt_metal::Tensor m_grad;
+    ttnn::Tensor m_grad;
     bool m_requires_grad = false;
     std::optional<NodeId> m_node_id;
 
@@ -26,19 +26,19 @@ public:
     Tensor(Tensor &&) noexcept = default;
     Tensor &operator=(const Tensor &) = default;
     Tensor &operator=(Tensor &&) noexcept = default;
-    explicit Tensor(const tt::tt_metal::Tensor &value, bool requires_grad = false);
+    explicit Tensor(const ttnn::Tensor &value, bool requires_grad = false);
     ~Tensor() = default;
 
-    void set_value(const tt::tt_metal::Tensor &value);
-    void set_grad(const tt::tt_metal::Tensor &grad);
+    void set_value(const ttnn::Tensor &value);
+    void set_grad(const ttnn::Tensor &grad);
     void set_node(const std::optional<NodeId> &node);
     void clean_node();
-    void add_grad(const tt::tt_metal::Tensor &grad);
+    void add_grad(const ttnn::Tensor &grad);
     void set_requires_grad(bool requires_grad);
 
-    const tt::tt_metal::Tensor &get_value(PreferredPrecision preferred_precision = PreferredPrecision::HALF) const;
-    const tt::tt_metal::Tensor &get_grad() const;
-    tt::tt_metal::Tensor &get_grad();
+    const ttnn::Tensor &get_value(PreferredPrecision preferred_precision = PreferredPrecision::HALF) const;
+    const ttnn::Tensor &get_grad() const;
+    ttnn::Tensor &get_grad();
     bool get_requires_grad() const;
     const std::optional<NodeId> &get_node() const;
     const ttnn::Shape &get_shape() const;

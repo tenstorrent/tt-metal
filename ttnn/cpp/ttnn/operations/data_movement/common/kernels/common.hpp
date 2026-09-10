@@ -8,13 +8,20 @@
 // It's best to copy and paste the functions in rather than include the header as code size will likely explode
 // Best to separate in to cpp/hpp at some point to avoid the code size explosion but need to figure out the linking
 // issues
-#include <stdio.h>
 #include <cstring>
 #include <type_traits>
 
 #include "api/dataflow/noc.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#if !defined(ARCH_QUASAR)
+// ckernel::load_blocking (store-drain in copy_via_memmove) — WH/BH only. On Quasar this header is
+// unusable from a data-movement (DM) build: ckernel.h -> ckernel_addrmod.h -> ckernel_trisc_id.h #errors
+// unless COMPILE_FOR_TRISC is defined, and Quasar's ckernel.h has no load_blocking. The Quasar drain
+// below uses a plain volatile load instead, so ckernel.h is not needed here on Quasar. (tt_l1_ptr comes
+// from risc_attribs.h, not ckernel.h, so guarding this include does not lose it.)
+#include "ckernel.h"
+#endif
 
 constexpr uint64_t ALIGN_REQ_64 = 64;
 constexpr uint64_t MASK_64 = 0xFFFFFFFFFFFFFFC0;
@@ -32,12 +39,10 @@ FORCE_INLINE void enhanced_noc_async_read(
                                        ? NOC_MAX_BURST_SIZE
                                        : (max_transfer_size == 0 ? NOC_MAX_BURST_SIZE + 1 : max_transfer_size);
     noc.async_read<NocOptions::DEFAULT, page_size>(
-        UnicastEndpoint{},
+        PrecomposedUnicastEndpoint{},
         CoreLocalMem<uint32_t>(dst_l1_addr),
         bytes,
-        {.noc_x = (uint32_t)NOC_UNICAST_ADDR_X(src_noc_addr),
-         .noc_y = (uint32_t)NOC_UNICAST_ADDR_Y(src_noc_addr),
-         .addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(src_noc_addr)},
+        {.noc_addr = src_noc_addr},
         {.offset_bytes = 0});
 }
 
@@ -57,12 +62,10 @@ FORCE_INLINE void enhanced_noc_async_write(
                                        : (max_transfer_size == 0 ? NOC_MAX_BURST_SIZE + 1 : max_transfer_size);
     noc.async_write<NocOptions::DEFAULT, page_size>(
         CoreLocalMem<uint32_t>(src_l1_addr),
-        UnicastEndpoint{},
+        PrecomposedUnicastEndpoint{},
         bytes,
         {.offset_bytes = 0},
-        {.noc_x = (uint32_t)NOC_UNICAST_ADDR_X(dst_noc_addr),
-         .noc_y = (uint32_t)NOC_UNICAST_ADDR_Y(dst_noc_addr),
-         .addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(dst_noc_addr)});
+        {.noc_addr = dst_noc_addr});
 }
 
 template <uint32_t max_transfer_size, bool only_writes>
@@ -85,9 +88,88 @@ FORCE_INLINE noc_traits_t<UnicastEndpoint>::dst_args_type self_l1_dst_args(Noc n
     return {.noc_x = my_x[id], .noc_y = my_y[id], .addr = addr};
 }
 
+// CPU memmove of an L1 region, with the store-visibility drain the NoC datamover paths get for free.
+// A memmove is baby-RISCV stores; a store can retire before its write-request lands in L1, and the RISCV
+// core and the NoC are different L1 clients with no program-order guarantee between them
+// (WormholeB0/TensixTile/BabyRISCV/MemoryOrdering.md). When the copy is not deferred (!copy_async), drain
+// the last written word (blocking load + memory clobber) so the copy is processed before the caller
+// publishes / NoC-reads the destination -- the counterpart of the NoC path's completion barrier.
+//
+// ARCH_QUASAR cache coherency (#51763): this CPU-copy fallback is not cache-coherent on Quasar by default.
+// Quasar's data path is Core -> L1 D$ -> L2 -> TL1, and invalidate_l1_cache() is a no-op there
+// (risc_common.h), so two gaps had to be closed (both fixed below, ARCH_QUASAR && COMPILE_FOR_DM only):
+//   (a) SOURCE read: if the source was just NoC-written into a reused CB, the RISC's cached line can be
+//       stale. The memmove reads the source through the UNCACHED L1 alias (src + MEM_L1_UNCACHED_BASE) so it
+//       bypasses BOTH the private L1 D$ and L2 and reads TL1 directly -- always fresh. An L2-only invalidate
+//       would NOT suffice: invalidate_l2_cache_range touches L2 only, invalidate_l1_cache() is a no-op, and
+//       nothing invalidates the private per-core L1 D$ here (only invalidate_cache_all / invalidate_l1_dcache
+//       do), so a resident stale D$ line could be hit before reaching L2.
+//   (b) DEST publish: the CPU stores land in L1 D$/L2, not TL1. The drain below only reads back the dirty
+//       L1D line (a LOCAL ordering barrier) -- unlike WH/BH load_blocking it does NOT publish to TL1, and the
+//       copy_async=true path skips even the drain. flush_l2_cache_range(dst, bytes) after the memmove
+//       publishes to TL1 (it probes the L1 D$ for dirty lines first) so a later NoC / other-agent read sees
+//       the copied data.
+// This was a PRE-EXISTING gap, unreachable until this header started compiling for Quasar DM; it is a
+// fallback path (tt_memmove only calls it on overlapping self-copy or the misaligned fallback), off the
+// resnet critical path, and does not manifest on the emulator (flat memory, no cache hierarchy modeled).
+// WH/BH are unchanged (invalidate_l1_cache + the load_blocking drain; the uncached-alias / L2-flush blocks
+// are ARCH_QUASAR && COMPILE_FOR_DM only).
+template <bool copy_async>
+FORCE_INLINE void copy_via_memmove(const uint32_t dst_l1_addr, const uint32_t src_l1_addr, const uint32_t bytes) {
+    invalidate_l1_cache();
+    uint32_t src_read_addr = src_l1_addr;
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // (a, #51763) SOURCE coherency: read the source through the UNCACHED L1 alias so the memmove bypasses the
+    // RISC caches entirely and always sees freshly NoC-written data. invalidate_l1_cache() is a no-op on Quasar,
+    // and an L2-range invalidate does NOT reach the private per-core L1 D$ (data path Core -> L1 D$ -> L2 -> TL1;
+    // only invalidate_cache_all / invalidate_l1_dcache touch the D$). So a stale D$ line for a reused-CB source
+    // (e.g. a loop re-reading the same scratch buffer) could otherwise be read before it ever reaches L2. The
+    // uncached alias reads TL1 directly, so no source-side cache invalidation is needed. (The DEST side stays
+    // cached: flush_l2_cache_range() below probes the L1 D$, so dirty destination lines are still written back.)
+    src_read_addr = src_l1_addr + MEM_L1_UNCACHED_BASE;
+#endif
+    // Cast the L1 address (uint32_t) to a pointer through uintptr_t: a bare (void*)(uint32_t) is an
+    // int-to-pointer cast that -Werror=int-to-pointer-cast rejects on Quasar (64-bit pointers). uintptr_t
+    // is the correct width on every arch, so this is a no-op change for WH/BH.
+    memmove((void*)(uintptr_t)(dst_l1_addr), (void*)(uintptr_t)(src_read_addr), (size_t)(bytes));
+    if constexpr (!copy_async) {
+        if (bytes != 0) {
+            // Drain the 4B-aligned word holding the last written byte: in-bounds and aligned for any
+            // size/alignment (dst may be sub-word-aligned on the misaligned path).
+            volatile tt_l1_ptr uint32_t* drain_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>((dst_l1_addr + bytes - 1) & ~uint32_t{3});
+#if defined(ARCH_QUASAR)
+            // Quasar has no ckernel::load_blocking. This volatile load is a LOCAL ordering barrier only
+            // (reads back the dirty L1D line); the L2->TL1 publish for cross-agent visibility is done by the
+            // flush_l2_cache_range() after this block (see the #51763 coherency note above).
+            (void)*drain_ptr;
+#else
+            (void)ckernel::load_blocking(drain_ptr);
+#endif
+        }
+    }
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // (b, #51763) DEST coherency: the CPU stores land in L1 D$/L2, not TL1; the volatile-load drain above is
+    // only a LOCAL ordering barrier (and the copy_async path skips it entirely). Flush the L2 range so a
+    // later NoC / other-agent read of the destination sees the copied data. Runs on both async and sync paths.
+    if (bytes != 0) {
+        flush_l2_cache_range(static_cast<uintptr_t>(dst_l1_addr), static_cast<size_t>(bytes));
+    }
+#endif
+}
+
 template <bool guaranteed_16B_aligned, bool copy_async, bool use_read_datamover, uint32_t max_transfer_size>
 FORCE_INLINE void tt_memmove(Noc noc, const uint32_t dst_l1_addr, const uint32_t src_l1_addr, const uint32_t bytes) {
     constexpr uint32_t page_size = max_transfer_size == 0 ? NOC_MAX_BURST_SIZE + 1 : max_transfer_size;
+    // A NoC self-copy is a plain source->dest transfer with no overlap (memmove) semantics: when
+    // [src,src+bytes) and [dst,dst+bytes) overlap, an in-flight write can be read back as a later
+    // source, so the copy is only correct while reads happen to outrun the overlapping writes. Fall
+    // to the CPU memmove, which copies in the safe direction. Non-overlapping copies (the common
+    // cross-buffer case) are unaffected.
+    if ((dst_l1_addr < src_l1_addr + bytes) && (src_l1_addr < dst_l1_addr + bytes)) {
+        copy_via_memmove<copy_async>(dst_l1_addr, src_l1_addr, bytes);
+        return;
+    }
     if constexpr (use_read_datamover) {
         if constexpr (guaranteed_16B_aligned) {
             noc.async_read<NocOptions::DEFAULT, page_size>(
@@ -111,8 +193,7 @@ FORCE_INLINE void tt_memmove(Noc noc, const uint32_t dst_l1_addr, const uint32_t
                     noc.async_read_barrier();
                 }
             } else {
-                invalidate_l1_cache();
-                memmove((void*)(dst_l1_addr), (void*)(src_l1_addr), (size_t)(bytes));
+                copy_via_memmove<copy_async>(dst_l1_addr, src_l1_addr, bytes);
             }
         }
     } else {
@@ -138,8 +219,7 @@ FORCE_INLINE void tt_memmove(Noc noc, const uint32_t dst_l1_addr, const uint32_t
                     noc.async_write_barrier();
                 }
             } else {
-                invalidate_l1_cache();
-                memmove((void*)(dst_l1_addr), (void*)(src_l1_addr), (size_t)(bytes));
+                copy_via_memmove<copy_async>(dst_l1_addr, src_l1_addr, bytes);
             }
         }
     }
@@ -258,10 +338,8 @@ struct ByteSizeAddressType<Size, typename std::enable_if<Size == 4>::type> {
 // buffers, HEIGHT-sharded RM (whole row stays on one core), and shards whose width covers
 // the full row.
 //
-// dest_id is a logical row index; pages_per_row converts it to the starting page index in
-// the destination buffer. pages_per_row is the last (W) axis of dspec.tensor_shape() after
-// squeeze — equivalent to (and now generalized from) the prior tensor_shape()[1] indexing,
-// which assumed a fully-squeezed 2D dspec and so misread the C dim for 4D NCHW inputs.
+// pages_per_row = ceil(tensor_W_pages / shard_W_pages); HEIGHT-sh collapses to 1 for any W·E.
+// Split-branch stride is exact iff shard_W_pages == 1 (RM B/W-sh: one shard-row = one page).
 template <typename AddrGenType>
 FORCE_INLINE void noc_async_write_sharded(
     Noc noc, uint32_t l1_addr, AddrGenType tensor, uint32_t dest_id, uint32_t offset, uint32_t size) {
@@ -271,7 +349,8 @@ FORCE_INLINE void noc_async_write_sharded(
     } else {
         const auto& dspec = tensor.dspec();
         const uint32_t r = dspec.rank();
-        const uint32_t pages_per_row = (r > 1) ? dspec.tensor_shape()[r - 1] : 1u;
+        const uint32_t shard_W = (r >= 1) ? dspec.shard_shape()[r - 1] : 1u;
+        const uint32_t pages_per_row = (r > 1 && shard_W > 0) ? div_up(dspec.tensor_shape()[r - 1], shard_W) : 1u;
         if (pages_per_row <= 1) {
             noc.async_write(
                 CoreLocalMem<uint32_t>(l1_addr), tensor, size, {}, {.page_id = dest_id, .offset_bytes = offset});
@@ -281,8 +360,10 @@ FORCE_INLINE void noc_async_write_sharded(
         uint32_t sharded_dest_id = dest_id * pages_per_row + offset / page_size;
         uint32_t sharded_offset = offset % page_size;
         uint32_t num_pages = div_up(size + sharded_offset, page_size);
+        // Explicit counter; a derived `size - i*page_size` would underflow because iter 0 is a partial page.
+        uint32_t remaining = size;
         for (uint32_t i = 0; i < num_pages; i++) {
-            uint32_t write_size = std::min(size - i * page_size, page_size - sharded_offset);
+            uint32_t write_size = std::min(remaining, page_size - sharded_offset);
             noc.async_write(
                 CoreLocalMem<uint32_t>(l1_addr),
                 tensor,
@@ -292,6 +373,7 @@ FORCE_INLINE void noc_async_write_sharded(
             sharded_dest_id++;
             sharded_offset = 0;
             l1_addr += write_size;
+            remaining -= write_size;
         }
     }
 }
@@ -316,7 +398,8 @@ FORCE_INLINE void noc_async_read_sharded(
     } else {
         const auto& dspec = tensor.dspec();
         const uint32_t r = dspec.rank();
-        const uint32_t pages_per_row = (r > 1) ? dspec.tensor_shape()[r - 1] : 1u;
+        const uint32_t shard_W = (r >= 1) ? dspec.shard_shape()[r - 1] : 1u;
+        const uint32_t pages_per_row = (r > 1 && shard_W > 0) ? div_up(dspec.tensor_shape()[r - 1], shard_W) : 1u;
         if (pages_per_row <= 1) {
             noc.async_read(
                 tensor, CoreLocalMem<uint32_t>(l1_addr), size, {.page_id = src_id, .offset_bytes = offset}, {});
@@ -326,8 +409,10 @@ FORCE_INLINE void noc_async_read_sharded(
         uint32_t sharded_src_id = src_id * pages_per_row + offset / page_size;
         uint32_t sharded_offset = offset % page_size;
         uint32_t num_pages = div_up(size + sharded_offset, page_size);
+        // Explicit counter; a derived `size - i*page_size` would underflow because iter 0 is a partial page.
+        uint32_t remaining = size;
         for (uint32_t i = 0; i < num_pages; i++) {
-            uint32_t read_size = std::min(size - i * page_size, page_size - sharded_offset);
+            uint32_t read_size = std::min(remaining, page_size - sharded_offset);
             noc.async_read(
                 tensor,
                 CoreLocalMem<uint32_t>(l1_addr),
@@ -337,6 +422,7 @@ FORCE_INLINE void noc_async_read_sharded(
             sharded_src_id++;
             sharded_offset = 0;
             l1_addr += read_size;
+            remaining -= read_size;
         }
     }
 }

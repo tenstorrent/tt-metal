@@ -45,23 +45,23 @@ enum class stochastic_round_settings_t {
 // TDMA Registers
 ////////////
 typedef struct {
-    uint32_t row_section_size : 16;
-    uint32_t exp_section_size : 16;
-    uint32_t tile_dst_addr : 32;
-    uint32_t uncompressed : 1;
-    uint32_t reserved_0 : 3;
-    uint32_t out_data_format : 2;
-    uint32_t reserved_1 : 2;
-    uint32_t in_data_format : 2;
-    uint32_t reserved_2 : 22;
-    uint32_t reserved_3 : 32;
+    std::uint32_t row_section_size : 16;
+    std::uint32_t exp_section_size : 16;
+    std::uint32_t tile_dst_addr : 32;
+    std::uint32_t uncompressed : 1;
+    std::uint32_t reserved_0 : 3;
+    std::uint32_t out_data_format : 2;
+    std::uint32_t reserved_1 : 2;
+    std::uint32_t in_data_format : 2;
+    std::uint32_t reserved_2 : 22;
+    std::uint32_t reserved_3 : 32;
 } packer_config_t;  // 16B
 
 typedef struct {
-    uint32_t rd_ptr;
-    uint32_t wr_ptr;
-    uint32_t rsvd0;
-    uint32_t rsvd1;
+    std::uint32_t rd_ptr;
+    std::uint32_t wr_ptr;
+    std::uint32_t rsvd0;
+    std::uint32_t rsvd1;
 #ifndef TENSIX_FIRMWARE
     operator std::string() const {
         return fmt::format("Fifo Control: rd_ptr(0x{:08x}) wr_ptr(0x{:08x})", rd_ptr, wr_ptr);
@@ -70,20 +70,20 @@ typedef struct {
 } fifo_ctl_t;
 
 typedef struct {
-    uint32_t val[4];
+    std::uint32_t val[4];
     packer_config_t f;
 } packer_config_u;
 
 typedef struct {
-    uint32_t src_addr : 32;
-    uint32_t dst_addr : 32;
-    uint32_t xfer_size : 32;
-    uint32_t xfer_dir : 2;
-    uint32_t reserved_0 : 30;
+    std::uint32_t src_addr : 32;
+    std::uint32_t dst_addr : 32;
+    std::uint32_t xfer_size : 32;
+    std::uint32_t xfer_dir : 2;
+    std::uint32_t reserved_0 : 30;
 } mover_config_t;  // 16B
 
 typedef struct {
-    uint32_t val[4];
+    std::uint32_t val[4];
     mover_config_t f;
 } mover_config_u;
 
@@ -127,7 +127,7 @@ if sum ~= 128 then print "You goofed up your bitfield" end
 static_assert(sizeof(tile_descriptor_t) == 16, "tile_desc must be 128b!");  // Descriptor must be 128 bits
 
 typedef union {
-    uint32_t val[4];
+    std::uint32_t val[4];
     tile_descriptor_t f;
 } tile_descriptor_u;
 
@@ -169,7 +169,7 @@ struct TileHeader {
 };
 
 union TileHeader_u {
-    uint32_t val[4];
+    std::uint32_t val[4];
     TileHeader header;
 
     TileHeader_u() {}
@@ -261,13 +261,13 @@ enum class DataFormat : std::uint8_t {
     UInt4 = 25,
     // Special-case encodings used only for int 2x-packed Src Reg Storage :
     MxFp4_2x_A = 27,  // store MXFP4 in Src Regs as 2x-packed format with 5-bit exp this is supported in Quasar only
-                      // (not supported in Trinity)
+                      // (not supported on other architectures)
     MxFp4_2x_B = 24,  // store MXFP4 in Src Regs as 2x-packed format with 8-bit exp this is supported in Quasar only
-                      // (not supported in Trinity)
-    Int8_2x =
-        26,  // store INT8 in Src Regs as 2x-Packed INT8;   this is supported in Trinity only (not supported in Quasar)
-    UInt8_2x =
-        28,  // store UINT8 in Src Regs as 2x Packed UINT8; this is supported in Trinity only (not supported in Quasar)
+                      // (not supported on other architectures)
+    Int8_2x = 26,   // store INT8 in Src Regs as 2x-Packed INT8;   supported on other architectures only (not supported
+                    // in Quasar)
+    UInt8_2x = 28,  // store UINT8 in Src Regs as 2x Packed UINT8; supported on other architectures only (not supported
+                    // in Quasar)
 
     automatic = 0xfe,  // Not a valid HW enum value, but useful to have it here for SW
     Invalid = 0xff     // Not a valid HW enum value, but useful to have it here for SW
@@ -275,7 +275,7 @@ enum class DataFormat : std::uint8_t {
 
 // True for the 2x-packed, src-register-only DataFormats (one Src register lane holds two packed
 // sub-elements, driving the matmul EN_X2 traversal). These never appear as L1/CB formats — only as
-// an unpack_dst (Src register) format. MxFp4_2x_A/B are Quasar-only; Int8_2x/UInt8_2x are Trinity.
+// an unpack_dst (Src register) format. MxFp4_2x_A/B are Quasar-only; Int8_2x/UInt8_2x are for other architectures.
 constexpr inline bool is_2x_format(DataFormat format) {
     return format == DataFormat::MxFp4_2x_A || format == DataFormat::MxFp4_2x_B || format == DataFormat::Int8_2x ||
            format == DataFormat::UInt8_2x;
@@ -297,14 +297,8 @@ typedef struct {
 static_assert(sizeof(buffer_descriptor_t) == 16, "buffer_desc must be 128b!");
 
 typedef union {
-    uint32_t words[4];
+    std::uint32_t words[4];
     buffer_descriptor_t f;
 } buffer_descriptor_u;
-
-typedef struct {
-    buffer_descriptor_u buf_desc;
-    uint32_t buf_desc_id;
-    unsigned reg_data_format;
-} tdma_descriptor_t;
 
 #endif

@@ -392,6 +392,30 @@ src = bank_local_base[t]
     + sb  * sub_stride_bytes         // sub_stride_bytes = rows_per_sub * n_per_recv * tile_bytes
 ```
 
+#### Matmul consumer contracts
+
+Two 1D matmul consumers can drain a DRAM-sender GCB:
+
+- **Ring gather-in0:** `block_count = receiver_count`. Batched mode uses no rotation and waits for
+  all blocks. `stream_in1=true` uses an identity rotation request so each receiver sees its
+  ring-rotated K-block sequence and can consume from a two-page GCB window.
+- **Mcast-in0:** `block_count = K_tiles / in0_block_w`. Every receiver sees K-blocks
+  `0..block_count-1` in natural FIFO order, so the request has an empty rotation and
+  `stream_in1=false`. The reader still consumes each page as it arrives, allowing the same
+  two-page GCB window. Initially this mode requires one output block per receiver and one effective
+  activation batch, so each prefetched stream is consumed exactly once.
+
+For both contracts one page contains `(K_tiles / block_count) * per_core_N` weight tiles for one
+receiver, and the GCB receiver set must exactly match the matmul output workers.
+
+Both consumers work on either DRAM layout. The per-receiver page stream is what the consumer sees,
+and neither layout constrains it: the receiver-contiguous NdShardSpec provides one full-K,
+`per_core_N`-wide shard per receiver, while the K-row-major layout divides each bank's shard into the
+requested `block_count` K-blocks and slices every block across that bank's receivers. Streaming is
+the one exception — a per-receiver rotation is receiver-contiguous only — so a K-row-major gather
+consumer is always batched, whereas K-row-major mcast is not (its natural FIFO order needs no
+rotation).
+
 #### Fit ladder (receiver-contiguous)
 
 The receiver-contiguous path rotates through three stage slots

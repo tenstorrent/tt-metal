@@ -46,7 +46,7 @@ void DramPrefetcherValidatorDeviceOperation::validate_on_program_cache_hit(
 
 DramPrefetcherValidatorDeviceOperation::spec_return_value_t
 DramPrefetcherValidatorDeviceOperation::compute_output_specs(const operation_attributes_t&, const tensor_args_t&) {
-    return std::vector<ttnn::TensorSpec>{};
+    return std::vector<tt::tt_metal::TensorSpec>{};
 }
 
 DramPrefetcherValidatorDeviceOperation::tensor_return_value_t
@@ -56,9 +56,13 @@ DramPrefetcherValidatorDeviceOperation::create_output_tensors(const operation_at
 
 ttsl::hash::hash_t DramPrefetcherValidatorDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    // GlobalCircularBuffer / Tensor aren't reflection-hashable here; pick the bits that
-    // determine Program shape: scalar attrs, GCB identity, the source tensor's DRAM
-    // address (compile-time arg via TensorAccessorArgs), and its dataformat.
+    // Everything create_at reads has to be keyed, because override_runtime_arguments is a no-op here.
+    // The whole GlobalCircularBuffer goes in rather than just its config address: the sender/receiver
+    // core mapping becomes the kernels' core ranges and their compile- and runtime args, and the size
+    // and buffer type set the CB geometry, none of which a recycled config address distinguishes.
+    // On the tensor side, create_at derives k_tiles, total_n_tiles, n_per_recv_tiles, is_recv_contig,
+    // tile_bytes and the CB page sizes from the real shape, tile and memory config, and emits
+    // TensorAccessorArgs as compile-time args, so the address alone is not a sufficient identity.
     const auto* tensor_buffer = tensor_args.source_tensor.buffer();
     const tt::DataFormat dataformat = tt::tt_metal::datatype_to_dataformat_converter(tensor_args.source_tensor.dtype());
     return ttsl::hash::hash_objects_with_default_seed(
@@ -67,9 +71,19 @@ ttsl::hash::hash_t DramPrefetcherValidatorDeviceOperation::compute_program_hash(
         attrs.print_stride,
         attrs.streaming,
         attrs.rotation,
-        static_cast<uint64_t>(attrs.global_cb->config_address()),
+        attrs.global_cb.has_value() ? std::hash<tt::tt_metal::experimental::GlobalCircularBuffer>{}(*attrs.global_cb)
+                                    : std::size_t{0},
+        // std::hash covers the GCB's structure (core mapping, size, buffer type) but not which
+        // allocation it is. The remote CB is created against the GCB and bakes both of these addresses
+        // at build time, and UpdateDynamicCircularBufferAddress refuses to re-point a GCB-backed CB, so
+        // two same-shaped GCBs at different allocations must not share a program.
+        static_cast<uint64_t>(attrs.global_cb.has_value() ? attrs.global_cb->buffer_address() : 0),
+        static_cast<uint64_t>(attrs.global_cb.has_value() ? attrs.global_cb->config_address() : 0),
         static_cast<uint64_t>(tensor_buffer != nullptr ? tensor_buffer->address() : 0),
-        static_cast<uint32_t>(dataformat));
+        static_cast<uint32_t>(dataformat),
+        tensor_args.source_tensor.tensor_spec().page_config(),
+        tensor_args.source_tensor.padded_shape(),
+        tensor_args.source_tensor.memory_config());
 }
 
 ttnn::device_operation::CachedProgram<DramPrefetcherValidatorDeviceOperation::ProgramFactory::shared_variables_t>
