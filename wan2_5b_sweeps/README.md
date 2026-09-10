@@ -65,3 +65,15 @@ low-single-digit seconds (0.5 s is an aggressive stretch given the heavier VAE +
 4. **VAE OPT #4:** re-benchmark E2E (at **81 frames**), target VAE decode <= ~1-2 s.
 
 *(Separately: I2V wiring for 5B is still pending — per-token timestep AdaLN + VAE encoder.)*
+
+## MEASURED after VAE conv3d-blocking optimization (single BH Galaxy, 81 frames)
+Registered swept conv3d blockings in `pipeline_wan_ti2v_5b.py` (`_register_5b_conv3d_tables`).
+480p VAE decode **8.9 s -> 2.42 s (~3.6x)**; test PASSED, no OOM. Real measured E2E:
+
+| Resolution | Steps | E2E (warm-traced) | denoise/step | VAE decode | first-gen (cold) |
+|---|---|---|---|---|---|
+| 480p (832x480) | 40 | **8.82 s** (measured) | 158 ms | 2.42 s | 14.67 s |
+| 480p (832x480) | 20 | ~5.6 s (derived) | 158 ms | 2.42 s | - |
+
+720p: 7/13 conv3d shapes swept + registered as exact entries (heaviest layers done); remaining 6
+fall back to the L1-safe 480p channel table. Full 720p sweep + re-benchmark pending (device handover).
