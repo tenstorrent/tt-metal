@@ -33,8 +33,8 @@ void kernel_main() {
     // is in fp32 elements.
     constexpr bool stats_is_fp32 = get_compile_time_arg_val(13) != 0;
 
-    const bool has_mcast_first_group = get_arg_val<uint32_t>(0);
-    const bool has_mcast_last_group = get_arg_val<uint32_t>(1);
+    const bool has_mcast_first_group = get_arg_val<uint32_t>(0) == 1;
+    const bool has_mcast_last_group = get_arg_val<uint32_t>(1) == 1;
 
     // mid mcast group
     const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(2);
@@ -44,22 +44,22 @@ void kernel_main() {
     const uint32_t num_mcast_cores_mid_group = get_arg_val<uint32_t>(6);
 
     // first mcast group
-    uint32_t mcast_first_group_dest_noc_start_x;
-    uint32_t mcast_first_group_dest_noc_start_y;
-    uint32_t mcast_first_group_dest_noc_end_x;
-    uint32_t mcast_first_group_dest_noc_end_y;
+    uint32_t mcast_first_group_dest_noc_start_x = 0;
+    uint32_t mcast_first_group_dest_noc_start_y = 0;
+    uint32_t mcast_first_group_dest_noc_end_x = 0;
+    uint32_t mcast_first_group_dest_noc_end_y = 0;
     // last mcast group
-    uint32_t mcast_last_group_dest_noc_start_x;
-    uint32_t mcast_last_group_dest_noc_start_y;
-    uint32_t mcast_last_group_dest_noc_end_x;
-    uint32_t mcast_last_group_dest_noc_end_y;
+    uint32_t mcast_last_group_dest_noc_start_x = 0;
+    uint32_t mcast_last_group_dest_noc_start_y = 0;
+    uint32_t mcast_last_group_dest_noc_end_x = 0;
+    uint32_t mcast_last_group_dest_noc_end_y = 0;
 
     tt_l1_ptr uint32_t* noc_coord_x;
     tt_l1_ptr uint32_t* noc_coord_y;
 
     // number of cores in mcast groups
-    uint32_t num_mcast_cores_first_group;
-    uint32_t num_mcast_cores_last_group;
+    uint32_t num_mcast_cores_first_group = 0;
+    uint32_t num_mcast_cores_last_group = 0;
 
     // first and last group noc addrs are specified inline via coordinates in multicast write calls
 
@@ -76,8 +76,8 @@ void kernel_main() {
         mcast_last_group_dest_noc_end_y = get_arg_val<uint32_t>(15);
         num_mcast_cores_last_group = get_arg_val<uint32_t>(16);
 
-        noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(17));
-        noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(17 + num_mcast_cores));
+        noc_coord_x = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(17));
+        noc_coord_y = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(17 + num_mcast_cores));
 
     } else if (has_mcast_first_group and not has_mcast_last_group) {
         mcast_first_group_dest_noc_start_x = get_arg_val<uint32_t>(7);
@@ -86,8 +86,8 @@ void kernel_main() {
         mcast_first_group_dest_noc_end_y = get_arg_val<uint32_t>(10);
         num_mcast_cores_first_group = get_arg_val<uint32_t>(11);
 
-        noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(12));
-        noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(12 + num_mcast_cores));
+        noc_coord_x = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(12));
+        noc_coord_y = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(12 + num_mcast_cores));
 
     } else if (not has_mcast_first_group and has_mcast_last_group) {
         mcast_last_group_dest_noc_start_x = get_arg_val<uint32_t>(7);
@@ -96,15 +96,15 @@ void kernel_main() {
         mcast_last_group_dest_noc_end_y = get_arg_val<uint32_t>(10);
         num_mcast_cores_last_group = get_arg_val<uint32_t>(11);
 
-        noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(12));
-        noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(12 + num_mcast_cores));
+        noc_coord_x = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(12));
+        noc_coord_y = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(12 + num_mcast_cores));
 
     } else {
-        noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(7));
-        noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(7 + num_mcast_cores));
+        noc_coord_x = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(7));
+        noc_coord_y = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(7 + num_mcast_cores));
     }
 
-    Noc noc;
+    const Noc noc;
     Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
     Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
     reduce_sender_sem.set(VALID);
@@ -118,10 +118,10 @@ void kernel_main() {
 
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
     DataflowBuffer dfb_ex_global(dfb_ex_global_id);
-    DataflowBuffer dfb_in0(dfb_in0_id);
+    const DataflowBuffer dfb_in0(dfb_in0_id);
     DataflowBuffer dfb_repack(dfb_repack_id);
     DataflowBuffer dfb_repack_out(dfb_repack_out_id);
-    DataflowBuffer dfb_out0(dfb_out0_id);
+    const DataflowBuffer dfb_out0(dfb_out0_id);
 
     constexpr uint32_t single_tile_size_bytes = get_tile_size(dfb_ex_partial_id);
     // This is the stride between two consecutive local means/variances in the dfb_ex_partial
@@ -136,9 +136,9 @@ void kernel_main() {
     constexpr uint32_t local_stride_per_group = local_stride * single_row_size_bytes;
 
 #if defined(READER_REPACK) and defined(TILIZE_IN)
-    uint32_t in0_l1_read_addr = dfb_in0.get_read_ptr();
+    const uint32_t in0_l1_read_addr = dfb_in0.get_read_ptr();
     uint32_t src_addr_in0 = in0_l1_read_addr;
-    UnicastEndpoint self_ep;
+    const UnicastEndpoint self_ep;
     for (uint32_t m = 0; m < per_core_M; ++m) {
         dfb_repack.reserve_back(per_core_N);
         uint32_t l1_write_addr_repack = dfb_repack.get_write_ptr();
@@ -169,9 +169,9 @@ void kernel_main() {
         auto global_means_ptr = dfb_ex_global.get_write_ptr();
         auto global_vars_ptr = global_means_ptr + single_tile_size_bytes;
 
-        for (uint32_t m = 0; m < num_groups; ++m) {
-            auto p_local_means = reinterpret_cast<stats_read_t*>(local_means_ptr);
-            auto p_local_vars = reinterpret_cast<stats_read_t*>(local_vars_ptr);
+        for (uint32_t group = 0; group < num_groups; ++group) {
+            auto* p_local_means = reinterpret_cast<stats_read_t*>(local_means_ptr);
+            auto* p_local_vars = reinterpret_cast<stats_read_t*>(local_vars_ptr);
 
 #ifdef WELFORD_SFPU_LOCAL_COMBINE
             const auto local_result =
@@ -182,8 +182,8 @@ void kernel_main() {
 #endif
 
             // Write this to dfb_ex_global
-            auto p_global_means = reinterpret_cast<volatile stats_write_t*>(global_means_ptr);
-            auto p_global_vars = reinterpret_cast<volatile stats_write_t*>(global_vars_ptr);
+            auto* p_global_means = reinterpret_cast<volatile stats_write_t*>(global_means_ptr);
+            auto* p_global_vars = reinterpret_cast<volatile stats_write_t*>(global_vars_ptr);
             p_global_means[0] = local_result.mean;
             p_global_vars[0] = local_result.variance;
 
@@ -192,17 +192,17 @@ void kernel_main() {
                 reduce_receiver_sem.wait(num_mcast_cores - 1);
                 reduce_receiver_sem.set(0);
 
-                UnicastEndpoint remote_ep;
+                const UnicastEndpoint remote_ep;
                 for (uint32_t i = 1; i < num_mcast_cores; ++i) {
                     noc.async_read<NocOptions::DEFAULT, NOC_L1_READ_ALIGNMENT_BYTES>(
                         remote_ep,
-                        CoreLocalMem<uint32_t>(global_means_ptr + i * NOC_L1_READ_ALIGNMENT_BYTES),
+                        CoreLocalMem<uint32_t>(global_means_ptr + (i * NOC_L1_READ_ALIGNMENT_BYTES)),
                         NOC_L1_READ_ALIGNMENT_BYTES,
                         {.noc_x = noc_coord_x[i], .noc_y = noc_coord_y[i], .addr = global_means_ptr},
                         {});
                     noc.async_read<NocOptions::DEFAULT, NOC_L1_READ_ALIGNMENT_BYTES>(
                         remote_ep,
-                        CoreLocalMem<uint32_t>(global_vars_ptr + i * NOC_L1_READ_ALIGNMENT_BYTES),
+                        CoreLocalMem<uint32_t>(global_vars_ptr + (i * NOC_L1_READ_ALIGNMENT_BYTES)),
                         NOC_L1_READ_ALIGNMENT_BYTES,
                         {.noc_x = noc_coord_x[i], .noc_y = noc_coord_y[i], .addr = global_vars_ptr},
                         {});
@@ -212,8 +212,8 @@ void kernel_main() {
 
             // Read dfb_ex_global through read-typed views; the writes below reuse the write-typed pointers (same L1
             // addresses).
-            auto p_global_means_read = reinterpret_cast<stats_read_t*>(global_means_ptr);
-            auto p_global_vars_read = reinterpret_cast<stats_read_t*>(global_vars_ptr);
+            auto* p_global_means_read = reinterpret_cast<stats_read_t*>(global_means_ptr);
+            auto* p_global_vars_read = reinterpret_cast<stats_read_t*>(global_vars_ptr);
             auto global_result =
                 combine_welford_stats<num_mcast_cores, block_hw * tile_width * tile_height, global_stride>(
                     p_global_means_read, p_global_vars_read);
@@ -224,7 +224,7 @@ void kernel_main() {
 
             // mcast to other cores
             if constexpr (num_mcast_cores > 1) {
-                MulticastEndpoint mcast_dst;
+                const MulticastEndpoint mcast_dst;
                 noc.async_write_multicast(
                     CoreLocalMem<uint32_t>(global_means_ptr),
                     mcast_dst,
@@ -307,17 +307,17 @@ void kernel_main() {
     uint32_t l1_write_addr_repack = dfb_out0.get_write_ptr();
     for (uint32_t m = 0; m < per_core_M; ++m) {
         dfb_repack_out.wait_front(per_core_N);
-        uint32_t in0_l1_read_addr = dfb_repack_out.get_read_ptr();
-        uint32_t src_addr_in0 = in0_l1_read_addr;
-        UnicastEndpoint self_ep;
+        const uint32_t repack_l1_read_addr = dfb_repack_out.get_read_ptr();
+        uint32_t src_addr_repack = repack_l1_read_addr;
+        const UnicastEndpoint repack_self_ep;
         for (uint32_t i = 0; i < tile_height; ++i) {
             noc.async_read(
-                self_ep,
+                repack_self_ep,
                 CoreLocalMem<uint32_t>(l1_write_addr_repack),
                 per_core_N_bytes,
-                {.noc_x = my_x[noc.get_noc_id()], .noc_y = my_y[noc.get_noc_id()], .addr = src_addr_in0},
+                {.noc_x = my_x[noc.get_noc_id()], .noc_y = my_y[noc.get_noc_id()], .addr = src_addr_repack},
                 {});
-            src_addr_in0 += per_core_N_bytes_with_stride;
+            src_addr_repack += per_core_N_bytes_with_stride;
             l1_write_addr_repack += per_core_N_bytes;
         }
         noc.async_read_barrier();

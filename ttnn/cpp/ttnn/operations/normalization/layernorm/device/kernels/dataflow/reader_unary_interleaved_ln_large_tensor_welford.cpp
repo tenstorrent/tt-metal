@@ -18,9 +18,9 @@ namespace generic = norm::kernel_util::generic;
 namespace layernorm_dataflow_utils = norm::layernorm::device::kernels::dataflow;
 
 void kernel_main() {
-    uint32_t NCHt = get_arg(args::NCHt);
-    uint32_t Wt = get_arg(args::Wt);
-    uint32_t tile_offset = get_arg(args::reader_start);
+    const uint32_t NCHt = get_arg(args::NCHt);
+    const uint32_t Wt = get_arg(args::Wt);
+    const uint32_t tile_offset = get_arg(args::reader_start);
 #ifdef AFFINE_MCAST_SENDER
     const uint32_t mcast_start_x = get_arg(args::mcast_start_x);
     const uint32_t mcast_start_y = get_arg(args::mcast_start_y);

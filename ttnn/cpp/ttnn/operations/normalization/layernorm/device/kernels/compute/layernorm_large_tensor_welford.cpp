@@ -72,16 +72,16 @@ void two_pass_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     for (auto block : generic::blocks(Wt, blk)) {
         // Materialize x = a + b once in L1. Both statistics passes below reread
         // this block locally; they do not add another traversal of a or b.
-        dfb_in_obj.wait_front(block.full_block_size());
-        dfb_inb_obj.wait_front(block.full_block_size());
+        dfb_in_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
+        dfb_inb_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
         pack_reconfig_data_format(dfb_interm_pre_add);
-        dfb_interm_pre_add_obj.reserve_back(block.full_block_size());
+        dfb_interm_pre_add_obj.reserve_back(static_cast<uint16_t>(block.full_block_size()));
         if constexpr (fp32_sfpu_finalizer) {
-            dfb_pre_add_fp32_obj.reserve_back(block.full_block_size());
+            dfb_pre_add_fp32_obj.reserve_back(static_cast<uint16_t>(block.full_block_size()));
         }
         if constexpr (fp32_sfpu_finalizer) {
-            dfb_in_fp32_obj.wait_front(block.full_block_size());
-            dfb_inb_fp32_obj.wait_front(block.full_block_size());
+            dfb_in_fp32_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
+            dfb_inb_fp32_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
             copy_init(dfb_in_fp32);
             for (uint32_t i = 0; i < block.local().size(); i += 2) {
                 const bool has_second_tile = i + 1 < block.local().size();
@@ -113,8 +113,8 @@ void two_pass_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
                 reconfig_data_format_srca(dfb_inb_fp32, dfb_in_fp32);
                 copy_init(dfb_in_fp32);
             }
-            dfb_in_fp32_obj.pop_front(block.full_block_size());
-            dfb_inb_fp32_obj.pop_front(block.full_block_size());
+            dfb_in_fp32_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
+            dfb_inb_fp32_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
         } else {
             reconfig_data_format(dfb_in, dfb_inb);
             add_init(dfb_in, dfb_inb);
@@ -129,16 +129,16 @@ void two_pass_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
             }
             tile_regs_release();
         }
-        dfb_in_obj.pop_front(block.full_block_size());
-        dfb_inb_obj.pop_front(block.full_block_size());
-        dfb_interm_pre_add_obj.push_back(block.full_block_size());
+        dfb_in_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
+        dfb_inb_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
+        dfb_interm_pre_add_obj.push_back(static_cast<uint16_t>(block.full_block_size()));
         if constexpr (fp32_sfpu_finalizer) {
-            dfb_pre_add_fp32_obj.push_back(block.full_block_size());
+            dfb_pre_add_fp32_obj.push_back(static_cast<uint16_t>(block.full_block_size()));
         }
 
-        dfb_interm_pre_add_obj.wait_front(block.full_block_size());
+        dfb_interm_pre_add_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
         if constexpr (fp32_sfpu_finalizer) {
-            dfb_pre_add_fp32_obj.wait_front(block.full_block_size());
+            dfb_pre_add_fp32_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
         }
         if (!block.is_first()) {
             dfb_ex_obj.wait_front(1);
@@ -206,10 +206,10 @@ void two_pass_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         tile_regs_commit();
 
         if constexpr (!fused_pre_add_replay) {
-            dfb_interm_pre_add_obj.pop_front(block.full_block_size());
+            dfb_interm_pre_add_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
         }
         if constexpr (fp32_sfpu_finalizer) {
-            dfb_pre_add_fp32_obj.pop_front(block.full_block_size());
+            dfb_pre_add_fp32_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
         }
         if (!block.is_first()) {
             dfb_ex_obj.pop_front(1);
@@ -302,15 +302,15 @@ void two_pass_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     uint32_t accumulated_n = 0;
     for (auto block : generic::blocks(Wt, blk)) {
         if constexpr (welford_fp32_alias) {
-            dfb_x_welford_obj.wait_front(block.full_block_size());
+            dfb_x_welford_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
         } else {
-            dfb_in_obj.wait_front(block.full_block_size());
+            dfb_in_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
         }
         if constexpr (fp32_sfpu_finalizer) {
             // The finalizer's input alias shares SRAM with dfb_in but has independent FIFO
             // pointers. Consume its first-pass entry here so the second-pass entry identifies
             // the tiles re-read for normalization rather than stale first-pass storage.
-            dfb_in_fp32_obj.wait_front(block.full_block_size());
+            dfb_in_fp32_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
         }
 
         uint32_t block_n = 0;
@@ -355,12 +355,12 @@ void two_pass_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         accumulated_n += block_n;
 
         if constexpr (welford_fp32_alias) {
-            dfb_x_welford_obj.pop_front(block.full_block_size());
+            dfb_x_welford_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
         }
         if constexpr (fp32_sfpu_finalizer) {
-            dfb_in_fp32_obj.pop_front(block.full_block_size());
+            dfb_in_fp32_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
         }
-        dfb_in_obj.pop_front(block.full_block_size());
+        dfb_in_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
     }
 
     welford_restore_state(mean_dst);
@@ -376,7 +376,7 @@ void two_pass_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
 void kernel_main() {
     namespace kutil = norm::kernel_util;
 
-    uint32_t NCHt = get_arg(args::NCHt);
+    const uint32_t NCHt = get_arg(args::NCHt);
     constexpr auto Wt = get_arg(args::Wt);
     constexpr auto blk = get_arg(args::block_size);
     constexpr auto do_gamma = get_arg(args::do_gamma);
@@ -421,10 +421,10 @@ void kernel_main() {
 #else
     constexpr auto dfb_beta = dfb_in;
 #endif
-    uint32_t dfb_xmm = dfb::xmm;            // x - E[x]
-    constexpr auto dfb_ex = dfb::ex;        // E[x]
-    constexpr auto dfb_ex2 = dfb::ex2;      // Var[x] = E[(x-E[x])^2]
-    constexpr auto dfb_ex2pe = dfb::ex2pe;  // Var[x]+ε
+    uint32_t dfb_xmm = dfb::xmm;                        // x - E[x]
+    constexpr auto dfb_ex = dfb::ex;                    // E[x]
+    constexpr auto dfb_ex2 = dfb::ex2;                  // Var[x] = E[(x-E[x])^2]
+    constexpr auto dfb_ex2pe = dfb::ex2pe;              // Var[x]+ε
     constexpr auto dfb_reciprocals = dfb::reciprocals;  // Pre-computed reciprocals
 
     // The buffer the welford intake reads: the fused pre-add result when there is a residual,
@@ -524,7 +524,7 @@ void kernel_main() {
 
     // Get pointer to the reciprocal LUT
     using recip_lut_t = std::array<uint32_t, W>;
-    auto p_reciprocals = kutil::compute::memory::get_pointer_to_cb_data<recip_lut_t>(dfb_reciprocals, 0);
+    auto* p_reciprocals = kutil::compute::memory::get_pointer_to_cb_data<recip_lut_t>(dfb_reciprocals, 0);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // Fused pre-add materializes x = a + b before the two statistics passes.
@@ -722,23 +722,23 @@ void kernel_main() {
 
             for (auto block : generic::blocks(Wt, blk)) {
                 if constexpr (fused_pre_add_replay) {
-                    dfb_x_replay_obj.wait_front(block.full_block_size());
+                    dfb_x_replay_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
                 } else {
-                    dfb_in_obj.wait_front(block.full_block_size());
-                    dfb_in_fp32_obj_eltwise.wait_front(block.full_block_size());
+                    dfb_in_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
+                    dfb_in_fp32_obj_eltwise.wait_front(static_cast<uint16_t>(block.full_block_size()));
                     if constexpr (fuse_pre_add) {
-                        dfb_inb_obj.wait_front(block.full_block_size());
-                        dfb_inb_fp32_obj_eltwise.wait_front(block.full_block_size());
+                        dfb_inb_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
+                        dfb_inb_fp32_obj_eltwise.wait_front(static_cast<uint16_t>(block.full_block_size()));
                     }
                 }
                 if constexpr (welford_fp32_alias && !fuse_pre_add) {
-                    dfb_x_welford_obj_eltwise.wait_front(block.full_block_size());
+                    dfb_x_welford_obj_eltwise.wait_front(static_cast<uint16_t>(block.full_block_size()));
                 }
                 if constexpr (!(do_gamma || do_beta)) {
                     dfb_xmm = dfb_out;
                 }
                 DataflowBuffer dfb_normalized(dfb_xmm);
-                dfb_normalized.reserve_back(block.full_block_size());
+                dfb_normalized.reserve_back(static_cast<uint16_t>(block.full_block_size()));
                 pack_reconfig_data_format(dfb_xmm);
                 constexpr uint32_t data_dst = 0;
                 constexpr uint32_t residual_dst = 1;
@@ -808,50 +808,54 @@ void kernel_main() {
                         copy_init(first_input_dfb);
                     }
                 }
-                dfb_normalized.push_back(block.full_block_size());
+                dfb_normalized.push_back(static_cast<uint16_t>(block.full_block_size()));
 
                 if constexpr (fused_pre_add_replay) {
-                    dfb_x_replay_obj.pop_front(block.full_block_size());
+                    dfb_x_replay_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
                 } else {
-                    dfb_in_obj.pop_front(block.full_block_size());
-                    dfb_in_fp32_obj_eltwise.pop_front(block.full_block_size());
+                    dfb_in_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
+                    dfb_in_fp32_obj_eltwise.pop_front(static_cast<uint16_t>(block.full_block_size()));
                     if constexpr (fuse_pre_add) {
-                        dfb_inb_obj.pop_front(block.full_block_size());
-                        dfb_inb_fp32_obj_eltwise.pop_front(block.full_block_size());
+                        dfb_inb_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
+                        dfb_inb_fp32_obj_eltwise.pop_front(static_cast<uint16_t>(block.full_block_size()));
                     }
                 }
                 if constexpr (welford_fp32_alias && !fuse_pre_add) {
-                    dfb_x_welford_obj_eltwise.pop_front(block.full_block_size());
+                    dfb_x_welford_obj_eltwise.pop_front(static_cast<uint16_t>(block.full_block_size()));
                 }
                 if constexpr (do_gamma == 1) {
                     reconfig_data_format(dfb_xmm, dfb_gamma);
                     tile_regs_acquire();
-                    dfb_gamma_obj.wait_front(block.full_block_size());
-                    DataflowBuffer(dfb_xmm).wait_front(block.full_block_size());
+                    dfb_gamma_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
+                    DataflowBuffer(static_cast<uint16_t>(dfb_xmm))
+                        .wait_front(static_cast<uint16_t>(block.full_block_size()));
                     mul_bcast_rows_init(dfb_xmm, dfb_gamma);
                     for (auto i : block.local()) {
                         mul_tiles_bcast_rows(dfb_xmm, dfb_gamma, i, i, i);
                     }
                     tile_regs_commit();
-                    dfb_gamma_obj.pop_front(block.full_block_size());
-                    DataflowBuffer(dfb_xmm).pop_front(block.full_block_size());
+                    dfb_gamma_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
+                    DataflowBuffer(static_cast<uint16_t>(dfb_xmm))
+                        .pop_front(static_cast<uint16_t>(block.full_block_size()));
 
                     if constexpr (!do_beta) {
                         pack_reconfig_data_format(dfb_out);
                     }
                     tile_regs_wait();
                     if constexpr (!do_beta) {
-                        dfb_out_obj.reserve_back(block.full_block_size());
+                        dfb_out_obj.reserve_back(static_cast<uint16_t>(block.full_block_size()));
                         for (auto i : block.local()) {
                             pack_tile(i, dfb_out);
                         }
-                        dfb_out_obj.push_back(block.full_block_size());
+                        dfb_out_obj.push_back(static_cast<uint16_t>(block.full_block_size()));
                     } else {
-                        DataflowBuffer(dfb_xmm).reserve_back(block.full_block_size());
+                        DataflowBuffer(static_cast<uint16_t>(dfb_xmm))
+                            .reserve_back(static_cast<uint16_t>(block.full_block_size()));
                         for (auto i : block.local()) {
                             pack_tile(i, dfb_xmm);
                         }
-                        DataflowBuffer(dfb_xmm).push_back(block.full_block_size());
+                        DataflowBuffer(static_cast<uint16_t>(dfb_xmm))
+                            .push_back(static_cast<uint16_t>(block.full_block_size()));
                     }
                     tile_regs_release();
                 }
@@ -860,23 +864,25 @@ void kernel_main() {
                     tile_regs_acquire();
                     reconfig_data_format(dfb_xmm, dfb_beta);
                     add_bcast_rows_init(dfb_xmm, dfb_beta);
-                    DataflowBuffer(dfb_xmm).wait_front(block.full_block_size());
-                    dfb_beta_obj.wait_front(block.full_block_size());
+                    DataflowBuffer(static_cast<uint16_t>(dfb_xmm))
+                        .wait_front(static_cast<uint16_t>(block.full_block_size()));
+                    dfb_beta_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
                     for (auto i : block.local()) {
                         add_tiles_bcast_rows(dfb_xmm, dfb_beta, i, i, i);
                     }
                     tile_regs_commit();
-                    dfb_beta_obj.pop_front(block.full_block_size());
-                    DataflowBuffer(dfb_xmm).pop_front(block.full_block_size());
+                    dfb_beta_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
+                    DataflowBuffer(static_cast<uint16_t>(dfb_xmm))
+                        .pop_front(static_cast<uint16_t>(block.full_block_size()));
 
                     pack_reconfig_data_format(dfb_out);
-                    dfb_out_obj.reserve_back(block.full_block_size());
+                    dfb_out_obj.reserve_back(static_cast<uint16_t>(block.full_block_size()));
                     tile_regs_wait();
                     for (auto i : block.local()) {
                         pack_tile(i, dfb_out);
                     }
                     tile_regs_release();
-                    dfb_out_obj.push_back(block.full_block_size());
+                    dfb_out_obj.push_back(static_cast<uint16_t>(block.full_block_size()));
                 }
             }
         } else {
@@ -885,21 +891,21 @@ void kernel_main() {
                 // and only tiles that have data in them are
                 // processed, but need to sync with reader on full blocks
                 if constexpr (fused_pre_add_replay) {
-                    dfb_x_replay_obj.wait_front(block.full_block_size());
+                    dfb_x_replay_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
                 } else {
-                    dfb_in_obj.wait_front(block.full_block_size());
+                    dfb_in_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
                 }
                 if constexpr (welford_fp32_alias && !fuse_pre_add) {
                     // dfb_x_welford was pushed by the reader in pass 2; wait for the push and pop in
                     // lockstep with dfb_in. We do not actually read dfb_x_welford in the eltwise pass
                     // (FPU consumes dfb_in via SrcA); this is purely a FIFO-pointer sync.
-                    dfb_x_welford_obj_eltwise.wait_front(block.full_block_size());
+                    dfb_x_welford_obj_eltwise.wait_front(static_cast<uint16_t>(block.full_block_size()));
                 }
                 if constexpr (fuse_pre_add && !fused_pre_add_replay) {
                     // Form a+b in FP32 DEST before centring. Evaluating
                     // (a-anchor)+(anchor-mean)+b instead would cancel two values
                     // near the input base in the FPU and lose low-order variation.
-                    dfb_inb_obj.wait_front(block.full_block_size());
+                    dfb_inb_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
                     tile_regs_acquire();
                     reconfig_data_format(dfb_in, dfb_inb);
                     add_init(dfb_in, dfb_inb);
@@ -907,24 +913,24 @@ void kernel_main() {
                         add_tiles(dfb_in, dfb_inb, i, i, i);
                     }
                     tile_regs_commit();
-                    dfb_in_obj.pop_front(block.full_block_size());
-                    dfb_inb_obj.pop_front(block.full_block_size());
+                    dfb_in_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
+                    dfb_inb_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
 
-                    dfb_interm_pre_add_obj.reserve_back(block.full_block_size());
+                    dfb_interm_pre_add_obj.reserve_back(static_cast<uint16_t>(block.full_block_size()));
                     tile_regs_wait();
                     pack_reconfig_data_format(dfb_interm_pre_add);
                     for (auto i : block.local()) {
                         pack_tile(i, dfb_interm_pre_add);
                     }
                     tile_regs_release();
-                    dfb_interm_pre_add_obj.push_back(block.full_block_size());
+                    dfb_interm_pre_add_obj.push_back(static_cast<uint16_t>(block.full_block_size()));
 
-                    dfb_interm_pre_add_obj.wait_front(block.full_block_size());
+                    dfb_interm_pre_add_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
                     tile_regs_acquire();
                     reconfig_data_format(dfb_interm_pre_add, dfb_ex);
                     sub_bcast_cols_compensated_init(dfb_interm_pre_add, dfb_ex);
                     sub_bcast_cols_compensated(dfb_interm_pre_add, dfb_ex, 0, 0, block.size());
-                    dfb_interm_pre_add_obj.pop_front(block.full_block_size());
+                    dfb_interm_pre_add_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
                 } else {
                     tile_regs_acquire();
                     constexpr auto dfb_normalize_in = fused_pre_add_replay ? dfb_x_replay : dfb_in;
@@ -932,12 +938,12 @@ void kernel_main() {
                     sub_bcast_cols_compensated_init(dfb_normalize_in, dfb_ex);
                     sub_bcast_cols_compensated(dfb_normalize_in, dfb_ex, 0, 0, block.size());
                     if constexpr (fused_pre_add_replay) {
-                        dfb_x_replay_obj.pop_front(block.full_block_size());
+                        dfb_x_replay_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
                     } else {
-                        dfb_in_obj.pop_front(block.full_block_size());
+                        dfb_in_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
                     }
                     if constexpr (welford_fp32_alias && !fuse_pre_add) {
-                        dfb_x_welford_obj_eltwise.pop_front(block.full_block_size());
+                        dfb_x_welford_obj_eltwise.pop_front(static_cast<uint16_t>(block.full_block_size()));
                     }
                 }
 
@@ -958,44 +964,50 @@ void kernel_main() {
 
                 pack_reconfig_data_format(dfb_xmm);
                 // Sync with writer on full blocks
-                DataflowBuffer(dfb_xmm).reserve_back(block.full_block_size());
+                DataflowBuffer(static_cast<uint16_t>(dfb_xmm))
+                    .reserve_back(static_cast<uint16_t>(block.full_block_size()));
                 tile_regs_wait();
                 for (auto i : block.local()) {
                     pack_tile(i, dfb_xmm);
                 }
-                DataflowBuffer(dfb_xmm).push_back(block.full_block_size());
+                DataflowBuffer(static_cast<uint16_t>(dfb_xmm))
+                    .push_back(static_cast<uint16_t>(block.full_block_size()));
                 tile_regs_release();
 
                 if constexpr (do_gamma == 1) {
                     // Multiply by gamma
                     reconfig_data_format(dfb_xmm, dfb_gamma);
                     tile_regs_acquire();
-                    dfb_gamma_obj.wait_front(block.full_block_size());
-                    DataflowBuffer(dfb_xmm).wait_front(block.full_block_size());
+                    dfb_gamma_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
+                    DataflowBuffer(static_cast<uint16_t>(dfb_xmm))
+                        .wait_front(static_cast<uint16_t>(block.full_block_size()));
                     mul_bcast_rows_init(dfb_xmm, dfb_gamma);
                     for (auto i : block.local()) {
                         mul_tiles_bcast_rows(dfb_xmm, dfb_gamma, i, i, i);
                     }
                     tile_regs_commit();
-                    dfb_gamma_obj.pop_front(block.full_block_size());
-                    DataflowBuffer(dfb_xmm).pop_front(block.full_block_size());
+                    dfb_gamma_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
+                    DataflowBuffer(static_cast<uint16_t>(dfb_xmm))
+                        .pop_front(static_cast<uint16_t>(block.full_block_size()));
 
                     if constexpr (!do_beta) {
                         pack_reconfig_data_format(dfb_out);
                     }
                     tile_regs_wait();
                     if constexpr (!do_beta) {
-                        dfb_out_obj.reserve_back(block.full_block_size());
+                        dfb_out_obj.reserve_back(static_cast<uint16_t>(block.full_block_size()));
                         for (auto i : block.local()) {
                             pack_tile(i, dfb_out);
                         }
-                        dfb_out_obj.push_back(block.full_block_size());
+                        dfb_out_obj.push_back(static_cast<uint16_t>(block.full_block_size()));
                     } else {
-                        DataflowBuffer(dfb_xmm).reserve_back(block.full_block_size());
+                        DataflowBuffer(static_cast<uint16_t>(dfb_xmm))
+                            .reserve_back(static_cast<uint16_t>(block.full_block_size()));
                         for (auto i : block.local()) {
                             pack_tile(i, dfb_xmm);
                         }
-                        DataflowBuffer(dfb_xmm).push_back(block.full_block_size());
+                        DataflowBuffer(static_cast<uint16_t>(dfb_xmm))
+                            .push_back(static_cast<uint16_t>(block.full_block_size()));
                     }
                     tile_regs_release();
                 }
@@ -1005,23 +1017,25 @@ void kernel_main() {
                     tile_regs_acquire();
                     reconfig_data_format(dfb_xmm, dfb_beta);
                     add_bcast_rows_init(dfb_xmm, dfb_beta);
-                    DataflowBuffer(dfb_xmm).wait_front(block.full_block_size());
-                    dfb_beta_obj.wait_front(block.full_block_size());
+                    DataflowBuffer(static_cast<uint16_t>(dfb_xmm))
+                        .wait_front(static_cast<uint16_t>(block.full_block_size()));
+                    dfb_beta_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
                     for (auto i : block.local()) {
                         add_tiles_bcast_rows(dfb_xmm, dfb_beta, i, i, i);
                     }
                     tile_regs_commit();
-                    dfb_beta_obj.pop_front(block.full_block_size());
-                    DataflowBuffer(dfb_xmm).pop_front(block.full_block_size());
+                    dfb_beta_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
+                    DataflowBuffer(static_cast<uint16_t>(dfb_xmm))
+                        .pop_front(static_cast<uint16_t>(block.full_block_size()));
 
                     pack_reconfig_data_format(dfb_out);
-                    dfb_out_obj.reserve_back(block.full_block_size());
+                    dfb_out_obj.reserve_back(static_cast<uint16_t>(block.full_block_size()));
                     tile_regs_wait();
                     for (auto i : block.local()) {
                         pack_tile(i, dfb_out);
                     }
                     tile_regs_release();
-                    dfb_out_obj.push_back(block.full_block_size());
+                    dfb_out_obj.push_back(static_cast<uint16_t>(block.full_block_size()));
                 }
             }
         }

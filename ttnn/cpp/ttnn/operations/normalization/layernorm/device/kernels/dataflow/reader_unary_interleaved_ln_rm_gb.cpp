@@ -17,11 +17,11 @@
 namespace generic = norm::kernel_util::generic;
 
 void kernel_main() {
-    uint32_t NCHt = get_arg(args::NCHt);
-    uint32_t Wt = get_arg(args::Wt);
-    uint32_t tile_offset = get_arg(args::reader_start);
+    const uint32_t NCHt = get_arg(args::NCHt);
+    const uint32_t Wt = get_arg(args::Wt);
+    const uint32_t tile_offset = get_arg(args::reader_start);
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer dfb_in0(dfb::in);
     // Welford-fp32 alias of dfb_in (non-fused) or dfb_x (fused). Shares SRAM with the
     // primary buffer but has its own read/write pointers, so we must push_back on it whenever we
@@ -106,7 +106,7 @@ void kernel_main() {
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         for (auto block : generic::blocks(Wt, blk)) {
-            dfb_in0.reserve_back(block.full_block_size());
+            dfb_in0.reserve_back(static_cast<uint16_t>(block.full_block_size()));
             uint32_t idx = 0;
             for (auto r : block.local()) {
                 noc.async_read(
@@ -118,7 +118,7 @@ void kernel_main() {
                 idx++;
             }
             noc.async_read_barrier();
-            dfb_in0.push_back(block.full_block_size());
+            dfb_in0.push_back(static_cast<uint16_t>(block.full_block_size()));
 
 #ifdef FUSE_PRE_ADD
             dfb_in1.reserve_back(block.full_block_size());
@@ -160,8 +160,8 @@ void kernel_main() {
             for (auto block : generic::blocks(Wt, blk)) {
 #ifdef FUSE_GAMMA
                 {
-                    dfb_gamma.reserve_back(block.full_block_size());
-                    UnicastEndpoint local_ep;
+                    dfb_gamma.reserve_back(static_cast<uint16_t>(block.full_block_size()));
+                    const UnicastEndpoint local_ep;
                     uint32_t idx = 0;
                     for (auto r : block.local()) {
                         noc.async_read(
@@ -177,19 +177,19 @@ void kernel_main() {
                             gamma_half_row_bytes,
                             {.noc_x = my_x[noc.get_noc_id()],
                              .noc_y = my_y[noc.get_noc_id()],
-                             .addr = dfb_gamma.get_write_ptr() + idx * gamma_tile_bytes + gamma_half_row_bytes},
-                            {.offset_bytes = idx * gamma_tile_bytes + gamma_face_bytes});
+                             .addr = dfb_gamma.get_write_ptr() + (idx * gamma_tile_bytes) + gamma_half_row_bytes},
+                            {.offset_bytes = (idx * gamma_tile_bytes) + gamma_face_bytes});
                         idx++;
                     }
                     noc.async_read_barrier();
-                    dfb_gamma.push_back(block.full_block_size());
+                    dfb_gamma.push_back(static_cast<uint16_t>(block.full_block_size()));
                 }
 #endif
 
 #ifdef FUSE_BETA
                 {
-                    dfb_beta.reserve_back(block.full_block_size());
-                    UnicastEndpoint local_ep;
+                    dfb_beta.reserve_back(static_cast<uint16_t>(block.full_block_size()));
+                    const UnicastEndpoint local_ep;
                     uint32_t idx = 0;
                     for (auto r : block.local()) {
                         noc.async_read(
@@ -205,12 +205,12 @@ void kernel_main() {
                             beta_half_row_bytes,
                             {.noc_x = my_x[noc.get_noc_id()],
                              .noc_y = my_y[noc.get_noc_id()],
-                             .addr = dfb_beta.get_write_ptr() + idx * beta_tile_bytes + beta_half_row_bytes},
-                            {.offset_bytes = idx * beta_tile_bytes + beta_face_bytes});
+                             .addr = dfb_beta.get_write_ptr() + (idx * beta_tile_bytes) + beta_half_row_bytes},
+                            {.offset_bytes = (idx * beta_tile_bytes) + beta_face_bytes});
                         idx++;
                     }
                     noc.async_read_barrier();
-                    dfb_beta.push_back(block.full_block_size());
+                    dfb_beta.push_back(static_cast<uint16_t>(block.full_block_size()));
                 }
 #endif
             }  // wt loop

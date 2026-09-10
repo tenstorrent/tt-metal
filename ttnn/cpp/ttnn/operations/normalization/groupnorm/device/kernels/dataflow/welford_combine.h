@@ -44,13 +44,16 @@ inline WelfordStats<float> combine(const WelfordStats<float>& a, const WelfordSt
     WelfordStats<float> result;
     result.count = a.count + b.count;
 
-    float delta = b.mean - a.mean;
-    result.mean = a.mean + delta * (static_cast<float>(b.count) / result.count);
+    const float delta = b.mean - a.mean;
+    result.mean = a.mean + delta * (static_cast<float>(b.count) / static_cast<float>(result.count));
 
-    float m2_a = a.variance * a.count;
-    float m2_b = b.variance * b.count;
+    const float m2_a = a.variance * static_cast<float>(a.count);
+    const float m2_b = b.variance * static_cast<float>(b.count);
     result.variance =
-        (m2_a + m2_b + delta * delta * (static_cast<float>(a.count) * b.count / result.count)) / result.count;
+        (m2_a + m2_b +
+         delta * delta *
+             (static_cast<float>(a.count) * static_cast<float>(b.count) / static_cast<float>(result.count))) /
+        static_cast<float>(result.count);
 
     return result;
 }
@@ -121,7 +124,7 @@ inline WelfordStats<std::uint16_t> combine_welford_stats(T means, T vars) {
     // M2(means) = sum(delta^2) - sum(delta)^2 / ARRAY_SIZE.
     constexpr float inv_size = 1.0f / static_cast<float>(ARRAY_SIZE);
     const float mean_delta = mean_delta_sum * inv_size;
-    const float means_m2 = mean_delta_sq_sum - mean_delta_sum * mean_delta;
+    const float means_m2 = mean_delta_sq_sum - (mean_delta_sum * mean_delta);
 
     WelfordStats<std::uint16_t> result;
     result.mean = fp32_to_bf16_truncate(base_mean + mean_delta);

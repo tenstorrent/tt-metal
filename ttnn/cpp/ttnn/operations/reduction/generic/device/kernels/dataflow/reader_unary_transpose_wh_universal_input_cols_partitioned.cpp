@@ -15,8 +15,8 @@
 void kernel_main() {
     // Start id in column major order. This should be the start of a column.
     uint32_t col_start_tile_id = get_arg(args::col_start_tile_id);
-    uint32_t curr_col_in_batch = get_arg(args::curr_col_in_batch);
-    uint32_t num_cols = get_arg(args::num_cols);  // number of cols to read
+    const uint32_t curr_col_in_batch = get_arg(args::curr_col_in_batch);
+    const uint32_t num_cols = get_arg(args::num_cols);  // number of cols to read
 
     constexpr auto Ht = get_arg(args::Ht);
     constexpr auto Wt = get_arg(args::Wt);
@@ -35,9 +35,9 @@ void kernel_main() {
     // Int32 SFPU max keeps one acc DST per column plus one shared work DST (DEST_AUTO_LIMIT - 1).
     constexpr DataFormat reduce_format = get_dataformat(dfb::in0);
     constexpr bool use_sfpu_reduce_path = is_sfpu_reduce_path<REDUCE_OP, REDUCE_DIM, reduce_format, fp32_mode>();
-    constexpr uint32_t row_chunk = sfpu_two_pass ? 1
-                                                 : (use_sfpu_reduce_path ? (compute_kernel_lib::DEST_AUTO_LIMIT - 1)
-                                                                         : compute_kernel_lib::DEST_AUTO_LIMIT);
+    constexpr uint32_t dest_row_chunk =
+        use_sfpu_reduce_path ? (compute_kernel_lib::DEST_AUTO_LIMIT - 1) : compute_kernel_lib::DEST_AUTO_LIMIT;
+    constexpr uint32_t row_chunk = sfpu_two_pass ? 1 : dest_row_chunk;
 
     constexpr uint32_t onetile = 1;
 #ifdef WELFORD_TWO_PASS_STREAMING_CB_TILES
@@ -47,13 +47,13 @@ void kernel_main() {
 #endif
 
 #ifndef WELFORD_TWO_PASS
-    float scaler_f = __builtin_bit_cast(float, scaler_bits);
+    const float scaler_f = __builtin_bit_cast(float, scaler_bits);
     dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, REDUCE_OP, REDUCE_DIM>(scaler_f);
 #endif
 
     auto tensor_accessor = TensorAccessor(tensor::src);
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer dfb_in0(dfb::in0);
 
     const uint32_t tile_bytes = dfb_in0.get_tile_size();
@@ -86,7 +86,7 @@ void kernel_main() {
     // reset_w - resets w to the column number in the batch of the starting column
     // reset_curr_id - resets curr_id to the next tile in the starting column
     for (uint32_t i = 0; i < num_cols; i += row_chunk) {
-        uint32_t reset_curr_id = col_start_tile_id;
+        const uint32_t reset_curr_id = col_start_tile_id;
 
 #ifdef WELFORD_TWO_PASS_L1_REPLAY
         for (std::uint32_t ht_base = 0; ht_base < Ht; ht_base += max_read_batch) {
@@ -145,10 +145,10 @@ void kernel_main() {
                 col_start_tile_id = reset_curr_id + 1;
             }
         } else {
-            uint32_t chunk_end = std::min(i + row_chunk, num_cols);
+            const uint32_t chunk_end = std::min(i + row_chunk, num_cols);
             uint32_t curr_id = col_start_tile_id;
-            uint32_t reset_w = w;
-            uint32_t reset_col_start = col_start_tile_id;
+            const uint32_t reset_w = w;
+            const uint32_t reset_col_start = col_start_tile_id;
             // Tail is shorter than the CB batch, so the reserve would not be contiguous.
             const bool batch_chunk = batch_reads && ((chunk_end - i) == row_chunk);
             for (uint32_t j = 0; j < Ht; ++j) {

@@ -82,8 +82,8 @@ void kernel_main() {
      * Examples: "Start Statistics Aggregation" or "End Statistics Aggregation"
      */
 
-    constexpr uint32_t do_gamma = get_named_compile_time_arg_val("do_gamma");
-    constexpr uint32_t do_beta = get_named_compile_time_arg_val("do_beta");
+    constexpr bool do_gamma = get_named_compile_time_arg_val("do_gamma") == 1;
+    constexpr bool do_beta = get_named_compile_time_arg_val("do_beta") == 1;
     constexpr uint32_t num_cores_per_mcast_group = get_named_compile_time_arg_val("num_cores_per_mcast_group");
 
     constexpr uint32_t num_batches = get_named_compile_time_arg_val("batch");
@@ -225,7 +225,7 @@ void kernel_main() {
 
     constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
     uint32_t num_out_blocks_padded = num_out_blocks;
-    uint32_t extra_out_block = false;
+    bool extra_out_block = false;
     uint32_t out_block_h_last = out_block_h_normal;
     if constexpr (block_h % num_out_blocks != 0) {
         extra_out_block = true;
@@ -620,8 +620,8 @@ void kernel_main() {
                         // The blocks after this loop assume srcb still carries cb_xmm's format.
                         reconfig_data_format_srcb(dfb_xmm_id);
 
-                        uint32_t cols_available = tile_width - group_offset;
-                        uint32_t cols_consumed = std::min(cols_available, channels_left);
+                        const uint32_t cols_available = tile_width - group_offset;
+                        const uint32_t cols_consumed = std::min(cols_available, channels_left);
                         channels_left -= cols_consumed;
                         group_offset += cols_consumed;
 

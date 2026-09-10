@@ -8,7 +8,6 @@
 // It's best to copy and paste the functions in rather than include the header as code size will likely explode
 // Best to separate in to cpp/hpp at some point to avoid the code size explosion but need to figure out the linking
 // issues
-#include <stdio.h>
 #include <cstring>
 #include <type_traits>
 

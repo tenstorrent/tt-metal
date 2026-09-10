@@ -55,7 +55,7 @@ inline WelfordBlockStats finalize_block(
     static_assert(COUNT > 0);
     constexpr float inv_count = 1.0f / static_cast<float>(COUNT);
     const float mean_delta = mean_delta_sum * inv_count;
-    const float raw_means_m2 = mean_delta_sq_sum - mean_delta_sum * mean_delta;
+    const float raw_means_m2 = mean_delta_sq_sum - (mean_delta_sum * mean_delta);
     const float means_m2 = raw_means_m2 < 0.0f ? 0.0f : raw_means_m2;
     return {.mean = base_mean + mean_delta, .variance_sum = partial_var_sum + means_m2};
 }
@@ -64,8 +64,8 @@ inline WelfordBlockStats combine_known_counts(
     const WelfordBlockStats& a, const WelfordBlockStats& b, float b_fraction, float cross_weight) {
     const float delta = b.mean - a.mean;
     return {
-        .mean = a.mean + delta * b_fraction,
-        .variance_sum = a.variance_sum + b.variance_sum + delta * delta * cross_weight};
+        .mean = a.mean + (delta * b_fraction),
+        .variance_sum = a.variance_sum + b.variance_sum + (delta * delta * cross_weight)};
 }
 
 inline void push_full_block(WelfordBlockStats* tree, WelfordBlockStats block, std::uint32_t completed_blocks) {
@@ -137,7 +137,7 @@ void kernel_main() {
     constexpr std::uint32_t FACE_ELEMENTS = FACE_W * FACE_W;
     constexpr std::uint32_t last_tile_cols = (W % tile_width == 0) ? tile_width : W % tile_width;
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer dfb_partial(dfb::partial);
     DataflowBuffer dfb_combined(dfb::combined);
     DataflowBuffer dfb_out(dfb::out);
@@ -151,7 +151,7 @@ void kernel_main() {
     // NC_per_core is the total number of NC slices assigned to this core.
     // Each output element is produced by combining reduce_batch_size
     // consecutive NC slices (each contributing Wt partial tile pairs).
-    std::uint32_t num_outputs = NC_per_core / reduce_batch_size;
+    const std::uint32_t num_outputs = NC_per_core / reduce_batch_size;
 
     // dfb::combined has one entry, so its write pointer wraps to the same tile
     // after every push/pop cycle. Clear the full tile once before publishing
@@ -205,11 +205,11 @@ void kernel_main() {
                 push_full_block(tree, block, completed_blocks);
                 ++completed_blocks;
 #else
-                std::uint32_t num_cols = (wt < Wt - 1) ? tile_width : last_tile_cols;
+                const std::uint32_t num_cols = (wt < Wt - 1) ? tile_width : last_tile_cols;
                 for (std::uint32_t c = 0; c < num_cols; ++c) {
                     // In tile row format, columns 0-15 are in Face 0 and
                     // columns 16-31 are in Face 1 (offset by FACE_ELEMENTS).
-                    std::uint32_t idx = (c < FACE_W) ? c : (FACE_ELEMENTS + c - FACE_W);
+                    const std::uint32_t idx = (c < FACE_W) ? c : (FACE_ELEMENTS + c - FACE_W);
                     const float partial_mean = means_ptr[idx];
                     const float partial_var = vars_ptr[idx];
 
@@ -249,17 +249,27 @@ void kernel_main() {
         }
 
         if constexpr (tail_size > 0) {
-            const auto tail = finalize_block<tail_size>(
-                block_base_mean, block_mean_delta_sum, block_mean_delta_sq_sum, block_partial_var_sum);
+            // finalize_block<tail_size> is deliberately not bound to a local. clang instantiates a
+            // specialization named in a discarded `if constexpr` branch when the call initialises a
+            // declaration (verified on clang 20; GCC 9 and clang 10 do not), which makes
+            // finalize_block's static_assert(COUNT > 0) fire for every config whose partial count
+            // divides evenly by the block size. In assignment position the guard holds and the
+            // assert keeps its value. Only one of the two branches below is ever compiled.
             if constexpr (num_full_blocks == 0) {
-                combined = tail;
+                combined = finalize_block<tail_size>(
+                    block_base_mean, block_mean_delta_sum, block_mean_delta_sq_sum, block_partial_var_sum);
             } else {
                 constexpr std::uint32_t full_count = num_full_blocks * welford_block_size;
                 constexpr float inv_num_partials = 1.0f / static_cast<float>(num_partials);
                 constexpr float tail_fraction = static_cast<float>(tail_size) * inv_num_partials;
                 constexpr float cross_weight =
                     static_cast<float>(full_count) * static_cast<float>(tail_size) * inv_num_partials;
-                combined = combine_known_counts(combined, tail, tail_fraction, cross_weight);
+                combined = combine_known_counts(
+                    combined,
+                    finalize_block<tail_size>(
+                        block_base_mean, block_mean_delta_sum, block_mean_delta_sq_sum, block_partial_var_sum),
+                    tail_fraction,
+                    cross_weight);
             }
         }
 
@@ -291,7 +301,7 @@ void kernel_main() {
 
         // --- Phase 2: NOC-write the output tile (packed by compute) to DRAM ---
         dfb_out.wait_front(1);
-        std::uint32_t out_tile_id = output_tile_start_id + out;
+        const std::uint32_t out_tile_id = output_tile_start_id + out;
         noc.async_write(dfb_out, tensor_out, out_tile_size_bytes, {}, {.page_id = out_tile_id});
         noc.async_writes_flushed();
         dfb_out.pop_front(1);

@@ -23,7 +23,7 @@ void kernel_main() {
     // Runtime args:
     // Total number of outer-loop iterations (N * C * Ht),
     // i.e. how many independent row-reductions this core must perform.
-    uint32_t NCHt = get_arg(args::NCHt);
+    const uint32_t NCHt = get_arg(args::NCHt);
 
     // Compile-time args:
     // Number of tiles along the W (reduction) dimension.

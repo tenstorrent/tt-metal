@@ -55,8 +55,11 @@
 #define MEM_DM_KERNEL_SIZE (1024 * 48)
 #define MEM_DM_GLOBAL_SIZE (1024 * 2)
 #define MEM_TRISC_GLOBAL_SIZE (1024 * 2)
+// Per-DM stride of the local region: crt0 puts tp at base + n * size and sp at base + (n+1) * size,
+// so these also place every stack. The DM D$ indexes on addr[10:6] (2-way, 32 sets of 64 B), so keep
+// both a multiple of 2 KB or DMs land on different sets.
 #define MEM_DM_LOCAL_SIZE (1024 * 8)
-#define MEM_DISPATCH_DM_LOCAL_SIZE (1024 * 9)
+#define MEM_DISPATCH_DM_LOCAL_SIZE (1024 * 10)
 #define MEM_TRISC_LOCAL_SIZE (1024 * 4)
 #define MEM_TRISC_KERNEL_SIZE (1024 * 24)
 #define MEM_TRISC_LOCAL_OFFSET (0x2000)

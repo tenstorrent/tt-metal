@@ -26,7 +26,7 @@
 void kernel_main() {
     // Runtime arg: number of independent column-reductions this core must perform.
     // Each column-reduction processes Ht tiles vertically and produces one output tile.
-    uint32_t NCWt = get_arg(args::NCWt);
+    const uint32_t NCWt = get_arg(args::NCWt);
 
     // Compile-time args:
     // Number of tiles along the H (reduction) dimension.
