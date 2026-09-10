@@ -73,7 +73,7 @@ on:
       additional_test_categories:
         description: >
           Additional test categories to run (comma-separated, e.g.,
-          conv,pool,sdpa,eltwise,matmul,experimental,docs_examples,ops_docs_check,misc,moreh,fused,reduction,data_movement,transformers,compute_fused)
+          conv,pool,sdpa,eltwise,kernel_lib,matmul,experimental,docs_examples,ops_docs_check,misc,moreh,fused,reduction,data_movement,transformers,compute_fused)
         required: false
         type: string
         default: ""
@@ -224,7 +224,7 @@ jobs:
       enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
       additional_test_categories: >-
         ${{ (github.event_name == 'schedule' &&
-        'conv,matmul,fused,reduction,experimental,pool,eltwise,transformers,moreh,misc,sdpa,data_movement,ccl,docs_examples,cpp_accessor,cpp_lab_examples')
+        'conv,matmul,fused,reduction,experimental,pool,eltwise,kernel_lib,transformers,moreh,misc,sdpa,data_movement,ccl,docs_examples,cpp_accessor,cpp_lab_examples')
         || (inputs.run_ccl_tests && inputs.run_cpp_tests && format('{0},ccl,cpp_accessor,cpp_lab_examples', inputs.additional_test_categories))
         || (inputs.run_ccl_tests && format('{0},ccl', inputs.additional_test_categories))
         || (inputs.run_cpp_tests && format('{0},cpp_accessor,cpp_lab_examples', inputs.additional_test_categories))

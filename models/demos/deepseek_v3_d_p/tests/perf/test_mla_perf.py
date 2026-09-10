@@ -9,16 +9,9 @@ import pytest
 from models.demos.deepseek_v3_d_p.utils.perf_utils import (
     _is_galaxy_env,
     adjust_margin_for_ddr_speed,
-    run_mla_perf_loudbox,
     run_model_device_perf_test_with_merge,
 )
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
-
-_TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_mla.py::test_ds_mla"
-
-# 640 tokens/chip on both: 8x4 takes seq5k literally, 2x4 scales it to 1280 global.
-_CMD_2X4 = f"pytest {_TEST_PATH} -k 'balanced and skip_check and seq5k and scaled_sl and random and fabric2d-2x4' --wrapper-invocation"
-_CMD_8X4 = f"pytest {_TEST_PATH} -k 'balanced and skip_check and seq5k and max_sl and random and torus-xy-8x4' --wrapper-invocation"
 
 # Kimi K2.6 chunked prefill: 50k cache + one 5k chunk. The 50k prefix is preloaded before the
 # MLA_START signpost, so only the single forward is timed.
@@ -56,55 +49,6 @@ def _require_certified_torus_xy():
 _CMD_K3_CHUNKED_8X4 = (
     f"pytest {_CHUNKED_TEST_PATH} " "-k 'deep-50k+5k and k3 and func and torus-xy-8x4 and scalar' --wrapper-invocation"
 )
-
-
-def _ci_unsupported_param_combos(**params):
-    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
-
-    if not on_ci:
-        return False
-    # Measures the non-chunked balanced MLA path; production runs chunked+non_balanced,
-    # covered by the chunked galaxy perf tests below.
-    return True
-
-
-@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
-@pytest.mark.timeout(0)
-def test_deepseek_v3_mla_perf_loudbox():
-    """Retain the existing 2x4 LoudBox proxy on unwrapped Fabric2D."""
-    run_mla_perf_loudbox(
-        command_2x4=_CMD_2X4,
-        # Re-measured 2026-08-22 at 640 tokens/chip, BH LoudBox bh-lb-15, DDR 16000, 150W.
-        # Mean of 14 runs, 2.658-2.664 ms, 0.25% peak to peak.
-        expected_ns_2x4=2_660_615,
-        model_name_2x4="deepseek_v3_mla_lb_2x4_fabric2d",
-        subdir="deepseek_v3_mla",
-        margin=0.03,
-        comments_2x4="isl5k_lb_2x4_fabric2d_proxy",
-    )
-
-
-@_REQUIRE_HIGH_POWER
-@pytest.mark.timeout(0)
-def test_deepseek_v3_mla_perf_galaxy():
-    if not _is_galaxy_env():
-        pytest.skip("This test requires 8x4 mesh - galaxy. (set MESH_DEVICE=TG)")
-    _require_certified_torus_xy()
-
-    margin = adjust_margin_for_ddr_speed(0.03)
-
-    run_model_device_perf_test_with_merge(
-        command=_CMD_8X4,
-        # Measured 2026-08-22, 14kW BH galaxy bh-glx-110-c04u02, 8x4 TorusXY certified, DDR 16000.
-        # Two runs 3.894 / 3.886 ms, spread 0.21%.
-        expected_device_perf_ns_per_iteration=3_890_333,
-        subdir="deepseek_v3_mla",
-        model_name="deepseek_v3_mla_glx_8x4",
-        num_iterations=1,
-        batch_size=1,
-        margin=margin,
-        comments="isl5k_glx_8x4_ground_truth",
-    )
 
 
 @_REQUIRE_HIGH_POWER

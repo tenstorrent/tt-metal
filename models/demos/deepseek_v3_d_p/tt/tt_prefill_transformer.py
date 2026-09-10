@@ -323,19 +323,10 @@ class TtPrefillTransformer(LightweightModule):
         trace captured over forward() is split at the shared-expert/dispatch sub-device boundaries
         (see utils/sub_device_trace.py). Pass None to restore plain eager load/clear.
 
-        DENSE-MLA ONLY. Tracing a sparse/DSA (indexer) model is rejected: the traced forward advances
-        its per-chunk scalars through the metadata ops, and the indexer path has no metadata overload
-        yet — the captured forward also never threads index_kv_cache, so a sparse model would replay
-        silently WITHOUT its indexer cache and produce wrong KV rather than failing. Porting the
-        indexer ops is out of scope here."""
-        if controller is not None:
-            assert not self._has_indexer, (
-                "trace capture is not supported for sparse/DSA (indexer) attention. Supported today: "
-                "the dense-MLA models (deepseek_v3, kimi_k2_6, kimi_k2_7). GLM (glm_5_1 / glm_5_2) and "
-                "any other indexer/sparse-attention variant need their indexer ops ported to the "
-                "per-element-tensor metadata form first — until then run them untraced (use_trace=False "
-                "/ PREFILL_USE_TRACE=0)."
-            )
+        Both dense-MLA and sparse/DSA (indexer) models are traceable: the indexer ops
+        (ring_indexer_score_dsa, topk_large_indices) read their per-chunk scalars on-device from the
+        metadata tensors, so a replay derives each chunk's causal window instead of reusing the
+        captured one."""
         for layer in self.layers:
             layer.set_trace_controller(controller)
 
@@ -496,8 +487,9 @@ class TtPrefillTransformer(LightweightModule):
             if reuse:
                 h, _, new_idx = ret
                 if mode == "full":
-                    if indexer_indices is not None:
-                        ttnn.deallocate(indexer_indices)
+                    # TP top-k all-gather results alias model-owned persistent scratch. Replacing the
+                    # Python reference is sufficient: explicitly deallocating the previous wrapper
+                    # would invalidate the same backing buffer that ``new_idx`` now references.
                     indexer_indices = new_idx
             else:
                 h, _ = ret
@@ -512,9 +504,9 @@ class TtPrefillTransformer(LightweightModule):
                 intermediates[f"layer_{i}"] = self._to_host(h)
             if read_profiler:
                 ttnn.ReadDeviceProfiler(self.mesh_device)
-        # GLM-5.2 reuse: free the last full layer's held top-k indices after the final layer.
-        if reuse and indexer_indices is not None:
-            ttnn.deallocate(indexer_indices)
+        # Drop only the temporary wrapper. The TP gather buffer remains owned by TT_CCL and is released
+        # with the model; on TP=1 normal Python reference counting releases the non-persistent result.
+        indexer_indices = None
 
         # Non-last pipeline ranks stop here: the layer slice's output activation is
         # handed to the next rank, which continues from this hidden state. The norm /

@@ -110,7 +110,10 @@ void kernel_main() {
     // Accessor compile-arg stream order (host appends in this exact order):
     // out, then start, then up (UP_SPLIT). The accessors are constructed
     // unconditionally; up_acc is used only when writer_split_up.
-    constexpr uint32_t out_accessor_offset = 20;
+    constexpr uint32_t min_active_tokens = get_compile_time_arg_val(20);
+    constexpr uint32_t max_active_tokens = get_compile_time_arg_val(21);
+
+    constexpr uint32_t out_accessor_offset = 22;
     constexpr auto out_args = TensorAccessorArgs<out_accessor_offset>();
     const auto out_acc = TensorAccessor(out_args, output_addr, cb_out_buf.get_tile_size());
 
@@ -167,7 +170,10 @@ void kernel_main() {
     for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
         const auto up_acc = TensorAccessor(up_args, get_arg_val<uint32_t>(UP_RT + local_expert_id), up_tile_bytes);
         const uint32_t global_expert_id = idx_ptr[local_expert_id];
-        const uint32_t count_value = counts_ptr[global_expert_id];
+        // Hybrid dispatch: experts outside this op's band belong to the other routed-expert
+        // op and are dropped here exactly like a zero count.
+        const uint32_t count_value =
+            adaptive_chunk::count_in_band(counts_ptr[global_expert_id], min_active_tokens, max_active_tokens);
         // Same capacity clamp the reader and compute apply to the device-produced
         // count (see adaptive_chunk::clamp_count_tiles): arithmetic, so it bounds
         // the chunk loop in Release too, where ASSERT is a no-op.

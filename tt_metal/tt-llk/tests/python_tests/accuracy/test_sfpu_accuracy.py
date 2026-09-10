@@ -61,6 +61,7 @@ APPROX_CAPABLE_OPS = [
     MathOperation.Sin,
     MathOperation.Cos,
     MathOperation.Gelu,
+    MathOperation.Tanh,
 ]
 
 FORMATS = input_output_formats(
@@ -100,14 +101,10 @@ ACCURACY_PARAMS = list(
 
 def _skip_if_unsupported(
     mathop: MathOperation,
-    approx_mode: ApproximationMode,
     dest_acc: DestAccumulation,
     formats: InputOutputFormat,
 ) -> None:
     """Skip variants the hardware / metal stack does not support."""
-    if mathop == MathOperation.Tanh and approx_mode == ApproximationMode.Yes:
-        pytest.skip(reason="Metal tanh does not support approximation mode")
-
     if (
         dest_acc == DestAccumulation.No
         and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
@@ -131,7 +128,7 @@ def test_sfpu_accuracy_sweep(
     fast_mode: FastMode,
     dest_acc: DestAccumulation,
 ):
-    _skip_if_unsupported(mathop, approx_mode, dest_acc, formats)
+    _skip_if_unsupported(mathop, dest_acc, formats)
 
     from accuracy.accuracy_harness import run_case
 
@@ -152,7 +149,7 @@ def test_sfpu_perf_sweep(
     dest_acc: DestAccumulation,
 ):
     """Perf-only sweep: run the perf kernel across every scenario for timings."""
-    _skip_if_unsupported(mathop, approx_mode, dest_acc, formats)
+    _skip_if_unsupported(mathop, dest_acc, formats)
 
     from accuracy.accuracy_harness import RunMode, run_case
 
@@ -183,7 +180,7 @@ def test_sfpu_accuracy_and_perf_sweep(
     fast_mode: FastMode,
     dest_acc: DestAccumulation,
 ):
-    _skip_if_unsupported(mathop, approx_mode, dest_acc, formats)
+    _skip_if_unsupported(mathop, dest_acc, formats)
 
     from accuracy.accuracy_harness import RunMode, run_case
 
