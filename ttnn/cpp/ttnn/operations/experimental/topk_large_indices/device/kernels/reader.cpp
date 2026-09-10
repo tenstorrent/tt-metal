@@ -2,6 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Chunked row reader, both parallelization modes (role picked by the factory):
+//   * default (row-parallel): each core reads full rows.
+//   * TOPK_TREE (column-parallel): each core reads only its contiguous slice
+//     of every row, offset by the extra slice_offset_bytes runtime arg. An
+//     empty slice (num_chunks == 0, valid_length cut) reads nothing.
+
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -14,6 +20,12 @@ void kernel_main() {
     const uint32_t num_chunks = get_arg_val<uint32_t>(3);
     const uint32_t tail_chunk_bytes = get_arg_val<uint32_t>(4);
     const uint32_t input_page_bytes = get_arg_val<uint32_t>(5);
+#ifdef TOPK_TREE
+    // Byte offset of this core's slice within each row.
+    const uint32_t slice_offset_bytes = get_arg_val<uint32_t>(6);
+#else
+    constexpr uint32_t slice_offset_bytes = 0;
+#endif
 
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
     constexpr uint32_t chunk_bytes = get_compile_time_arg_val(1);
@@ -42,7 +54,7 @@ void kernel_main() {
                         input,
                         input_cb,
                         read_bytes,
-                        {.page_id = row, .offset_bytes = chunk * chunk_bytes + tile_offset},
+                        {.page_id = row, .offset_bytes = slice_offset_bytes + chunk * chunk_bytes + tile_offset},
                         {.offset_bytes = tile_offset});
                 }
             }
