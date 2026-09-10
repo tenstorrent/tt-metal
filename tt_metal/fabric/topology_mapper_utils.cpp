@@ -2537,8 +2537,8 @@ std::optional<std::string> hostname_for_asic_from_hostname_map(
     return std::nullopt;
 }
 
-// Minimal host cover for inter-mesh mapping: partition physical meshes by host, then apply preferred
-// constraints so unbound logical meshes tend to pack onto fewer hosts.
+// Minimal host cover for inter-mesh mapping: partition physical meshes by host and cap the number of hosts the
+// mapping may occupy, so unbound logical meshes pack onto the fewest hosts.
 // Only called when the physical graph is not already identity-bound via asic_id_to_mesh_rank (Phase 1).
 // TODO: This can be removed and replaced with cost heuristics when using a SAT solver because preferred
 // constraints aren't very effective here
@@ -2596,9 +2596,9 @@ void add_inter_mesh_minimal_host_cover_from_hostname_map(
         return;
     }
 
-    const auto [single_group_fits, preferred_globals] =
-        ::tt::tt_fabric::PhysicalGroupingDescriptor::find_minimum_coverage_group(
-            logical_target_set, global_mesh_groups);
+    const bool single_group_fits =
+        ::tt::tt_fabric::PhysicalGroupingDescriptor::find_minimum_coverage_group(logical_target_set, global_mesh_groups)
+            .first;
     if (single_group_fits) {
         std::vector<std::set<MeshId>> target_groups;
         target_groups.push_back(logical_target_set);
@@ -2637,20 +2637,9 @@ void add_inter_mesh_minimal_host_cover_from_hostname_map(
                 chips_per_host);
         }
     }
-
-    if (!preferred_globals.empty()) {
-        if (!single_group_fits) {
-            log_debug(
-                tt::LogFabric,
-                "Inter-mesh host alignment: target count {} exceeds largest single partition; preferring minimal host "
-                "cover ({} preferred globals)",
-                logical_target_set.size(),
-                preferred_globals.size());
-        }
-        for (const MeshId& target : logical_target_set) {
-            inter_mesh_constraints.add_preferred_constraint(target, preferred_globals);
-        }
-    }
+    // No per-mesh preferred host cover: the same-rank partition plus the hard at-most-k_min cap already make the
+    // solver use the fewest hosts, and the SAT solver picks which ones. Preferring one guessed cover on top of the
+    // cap only asked the solver to prove that guess infeasible before settling on a valid packing.
 }
 
 // Helper function to build ASIC positions to ASIC IDs map
