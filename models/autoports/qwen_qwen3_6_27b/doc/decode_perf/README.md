@@ -633,9 +633,16 @@ killed"` appears three times in the baseline log, for the three points below. So
 the sweep's wall time is set by how many points hit that cap and by the
 prefill-bound long-ISL points, **not** by decode speed.
 
-Measured per point, from both job logs (which *are* fetchable while the run is in
-progress via `gh api .../actions/jobs/<id>/logs` — the handoff's claim that
-in-progress logs return `BlobNotFound` holds for the run-level log, not this one):
+Measured per point, from both job logs. A correction on how to get them: `gh api
+.../actions/jobs/<id>/logs` *does* return content for an in-progress job, where
+`gh run view --log` refuses ("still in progress; logs will be available when it
+is complete"). But the blob it returns is then **frozen at the first fetch** —
+re-fetching either of these two jobs five hours later returned byte-identical
+content ending at the same timestamp. So it gives one mid-run snapshot, not live
+progress, and the only live signal after that is job-step metadata
+(`gh api .../actions/jobs/<id>`), which for this workflow is a single monolithic
+"Run tests" step and therefore carries no detail. Numbers below are from the
+snapshots, not from completed runs:
 
 | point | baseline `38153c48c8a` | this branch | speedup |
 | --- | ---: | ---: | ---: |
