@@ -209,8 +209,20 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void tanh_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (APPROXIMATION_MODE) {
-        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut8si(0.90625f, 0.0f);
-        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vLut8si(0.09375f, 0.8125f);
+        // 3-segment SFPLUT: |x| buckets split at exactly 1.0 and 2.0, SGN_RETAIN, so the
+        // result is sign(x) * (A*|x| + B) and the kernel is odd.
+        //
+        // Remez minimax fit under three constraints -- tanh(0) = 0, continuity at |x| = 1,
+        // and exact 1.0 saturation from |x| = 2 -- which leave a single free parameter
+        // (LReg0's slope); LReg1's pair follows from it as (1 - A, 2A - 1), and LReg2 is
+        // fixed by correctness rather than fitted, since tanh is exactly 1.0 out at infinity.
+        // Max abs error 0.0563, against 0.1447 for the previous 0.90625 / 0.09375+0.8125
+        // table, whose peak sat at x = 1.0 and exceeded the unary sweep's default 5% rtol.
+        //
+        // Derivation, rejected alternatives and the coefficient byte encoding are in
+        // APPROX_TANH_RETUNE.md; refit with approx_tanh_remez_fit.py.
+        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut8si(0.8125f, 0.0f);
+        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vLut8si(0.1875f, 0.625f);
         sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vLut8si(0.0f, 1.0f);
     } else {
         if constexpr (is_fp32_dest_acc_en) {
