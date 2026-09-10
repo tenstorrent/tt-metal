@@ -583,6 +583,15 @@ def _fullpipe_e2e_inner(repo_root: Path, mcp_env: dict, devices: str, label: str
     env = cc_env(repo_root, devices)
     env.update(mcp_env)
     env.setdefault("PERF_MCP_FULLPIPE_SAMPLES", "3")
+    if label == "BEFORE":
+        # THE BASELINE IS THE ONE MEASUREMENT NOTHING ELSE CAN SUBSTITUTE FOR. Every lever attempt
+        # this run is scored against it (_fullpipe_reference_ms fails closed with no baseline: no
+        # attempt can ever be credited a win), so giving up on a thermal plateau here -- acceptable
+        # for an ordinary per-lever reading, which just gets skipped -- silently disables the whole
+        # run's ability to record progress. Every other labeled measurement keeps the bounded,
+        # give-up-on-plateau behavior; this only widens it for the one call that blocks everything
+        # downstream if it never lands.
+        env.setdefault("PERF_MCP_COOLDOWN_NO_GIVEUP", "1")
     print(
         f"  [optimize/cc] measuring FULL-model end-to-end ({label}) — ALL layers (uncapped), no tracy (one slow run, minutes)..."
     )

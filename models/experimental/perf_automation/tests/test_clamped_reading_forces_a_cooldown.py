@@ -76,7 +76,7 @@ def test_the_discard_path_actually_calls_it():
     src = (_PA / "cc_optimize" / "perf_mcp.py").read_text()
     i = src.index("DISCARDED %.4f ms")
     window = src[i : src.index("return float(ms)", i)]
-    assert "_cooldown_after_clamp()" in window, "a discarded reading still retries without cooling"
+    assert "_cooldown_after_clamp(" in window, "a discarded reading still retries without cooling"
     assert "return (" in window, "an unreachable target still falls through into another hot attempt"
 
 

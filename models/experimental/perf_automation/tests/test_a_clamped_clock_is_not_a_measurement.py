@@ -212,10 +212,10 @@ def test_the_threshold_is_the_stated_number(mcp):
 
 
 def test_it_sits_above_the_temperature_the_cooldown_holds_to(mcp):
-    """So a board that has just completed a post-clamp cooldown is always clear to start again. The
-    other way round -- a gate stricter than the cooldown -- would cool to 60C, be refused, and wait
-    on a board already as cold as the tool knows how to make it."""
-    assert mcp._clamp_threshold_c() > mcp._COOLDOWN_TO_C
+    """So a board that has just completed a post-clamp cooldown is always clear to start again. Both
+    gates read the die temperature with an inclusive <=, so a board sitting AT the shared target
+    clears both -- equal is fine here, not just stricter-than."""
+    assert mcp._clamp_threshold_c() >= mcp._COOLDOWN_TO_C
 
 
 def test_evidence_does_not_move_it(mcp):

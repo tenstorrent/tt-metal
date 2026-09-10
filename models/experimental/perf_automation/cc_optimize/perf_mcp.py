@@ -20,6 +20,7 @@ from __future__ import annotations
 import atexit
 import collections
 import hashlib
+import itertools
 import json
 import os
 import signal
@@ -3482,7 +3483,7 @@ def _cooling_marker(which):
     print(which, file=sys.stderr, flush=True)
 
 
-_COOLDOWN_TO_C = float(os.environ.get("PERF_MCP_COOLDOWN_TO_C", "60"))
+_COOLDOWN_TO_C = float(os.environ.get("PERF_MCP_COOLDOWN_TO_C", "65"))
 # NO TIMER ON COOLING. A board cools at the rate it cools; a deadline on that is a guess about
 # physics, and the only thing it can do is cut the wait short and hand back a hot board. What IS
 # evidence is the trend: a board still dropping will get there, and a board that has not moved in
@@ -3977,7 +3978,14 @@ def _measure_full_pipeline_guarded():
     anchoring the ledger to a number taken at 800 MHz instead of 1350.
     """
     discarded = 0
-    for _ in range(1 + max(0, _THERMAL_RETRIES)):
+    # PERF_MCP_COOLDOWN_NO_GIVEUP (set only around the BEFORE baseline call, see
+    # run.py:_fullpipe_e2e_inner): a missing baseline fails every later win-check closed for the
+    # rest of the run (_fullpipe_reference_ms has nothing to ratchet against), so this one caller
+    # keeps trying -- and keeps waiting out a thermal plateau rather than accepting it -- instead of
+    # giving up after the ordinary bounded retry count that a ordinary per-lever reading uses.
+    _no_giveup = os.environ.get("PERF_MCP_COOLDOWN_NO_GIVEUP") == "1"
+    _attempts = itertools.count() if _no_giveup else range(1 + max(0, _THERMAL_RETRIES))
+    for _ in _attempts:
         # THE SAME ONE TRIGGER. This called the 65C measurement gate; it now holds only at the
         # safety ceiling, per the operator's rule that work pauses when the board is dangerous and
         # not merely warm. The clamp machinery below is untouched and is what still protects the
@@ -4003,7 +4011,7 @@ def _measure_full_pipeline_guarded():
             # A RETRY IS ONLY WORTH TAKING FROM A COLD BOARD. Going straight back in reproduces the
             # clamp and adds heat; the headroom wait ahead of the next attempt is bounded and would
             # give up again. Hold for a real cooldown instead, and stop retrying if it never comes.
-            _cool_ok, _cool_c = _cooldown_after_clamp()
+            _cool_ok, _cool_c = _cooldown_after_clamp(give_up_on_plateau=not _no_giveup)
             if not _cool_ok:
                 return (
                     None,
