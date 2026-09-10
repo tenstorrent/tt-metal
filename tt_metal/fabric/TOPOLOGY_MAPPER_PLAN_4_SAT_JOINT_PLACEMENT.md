@@ -17,6 +17,15 @@ Implementation notes that differ from the sketches below:
   (`variant_is_trait_free`) rather than by list position, and capped at 8192 candidates per definition.
 - Under a RELAXED policy the strict-seam tier is solved with a conflict budget; the relaxed tier is not.
 
+**Follow-ups (not done):**
+- **Multi-solution master solve (TODO).** `start_sat_placement` returns the first model. It should enumerate
+  placements like the inner solver does (blocking clause per model via
+  `TopologySatSolver::configure_for_blocking_clause_enumeration`), so a caller can pull the next placement when
+  the downstream inter-mesh mapping rejects one, alternatives can be ranked by seam width / hosts spanned /
+  preferred variant, and the number of placements can be reported. Block on footprints rather than raw seat
+  literals, or the same footprint set comes back under each torus variant.
+- Phase 2/3 (rewire the DFS onto the master list, MRV) and Phase 7 (`PGD_DFS_DEBUG` cleanup).
+
 **Priority: 1 if Plan 3 cannot place Gemma; 3 otherwise.** §1 is the evidence.
 
 Sibling plans: [Plan 3 — connectivity-aware PGD placement](TOPOLOGY_MAPPER_PLAN_3_CONNECTIVITY_AWARE_PGD_PLACEMENT.md).
