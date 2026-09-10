@@ -104,7 +104,7 @@ TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkSemaphoreCompileLimits) {
     // This is a compile-time contract test; these programs are never launched.
     // 14 tiles with unit signaling and 16 tiles with grouped signaling fit the
     // 4-bit semaphore. At 16 tiles, either unit-signaling path must be rejected.
-    for (const auto args : {std::vector<std::uint32_t>{14, 1, 1}, {16, 2, 2}, {16, 1, 2}, {16, 2, 1}}) {
+    for (const auto& args : {std::vector<std::uint32_t>{14, 1, 1}, {16, 2, 2}, {16, 1, 2}, {16, 2, 1}}) {
         SCOPED_TRACE(::testing::Message() << "chunk=" << args[0] << ", qk=" << args[1] << ", exp=" << args[2]);
         const bool fits = args[0] / args[1] + 1 <= 15 && args[0] / args[2] + 1 <= 15;
         Program program = CreateProgram();
