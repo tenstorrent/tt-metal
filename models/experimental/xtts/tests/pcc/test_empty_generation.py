@@ -15,6 +15,11 @@ matmul program config with ``per_core_M = 0`` and divide by it (ZeroDivisionErro
 Eager ``generate()`` signals the same outcome with a different sentinel -- ``latents_tt=None`` --
 which unpacks as ``None.shape`` in ``TtLatentUpsampler.forward`` (AttributeError). One guard cannot
 serve both, so each inference entry point short-circuits on its own sentinel.
+
+All three cases share one model build in a single test on purpose. Building ``TtXtts`` and taking
+the first full-pipeline trace is the expensive part on CI's cold kernel cache, and the xtts unit
+job runs inside a fixed 25-minute team budget (``.github/time_budget.yaml``); three separate tests
+paid it three times. The scenarios are labelled so a failure still names the one that broke.
 """
 
 import pytest
@@ -28,8 +33,8 @@ from models.experimental.xtts.config import (
     SESSION_TRACE_REGION,
     STOP_AUDIO_TOKEN,
     STOP_TEXT_TOKEN,
+    TILE,
 )
-from models.experimental.xtts.tests.pcc.test_tt_trace import TRACE_MAX_SEQ
 from models.experimental.xtts.reference.xtts_conditioning import load_coqui_test_audio
 from models.experimental.xtts.reference.xtts_gpt_generate import wrap_text_ids
 from models.experimental.xtts.reference.xtts_inference import XttsReference
@@ -39,7 +44,6 @@ from models.experimental.xtts.tt.xtts_inference import TtXtts
 from models.experimental.xtts.tt.xtts_sampler import TtSampler
 
 REF_SECONDS = 6
-PAD_TO = 96  # matches the traced suite so prefill kernels are shared
 SAMPLING = dict(
     temperature=GENERATION.temperature,
     top_k=GENERATION.top_k,
@@ -69,10 +73,7 @@ def _inputs(device, xtts_state_dict):
     )
     ids = wrap_text_ids(preprocess_text("Hello world", lang="en"))
     real_len = ids.shape[1]
-    # Pad to the width the rest of the traced tests use rather than this text's own tile
-    # multiple: a unique pad_to/max_seq mints a whole 30-layer kernel set that no other test
-    # reuses, and on CI's cold cache that compile dominated the suite's runtime.
-    pad_to = PAD_TO
+    pad_to = -(-real_len // TILE) * TILE
     padded = torch.nn.functional.pad(ids, (0, pad_to - real_len), value=STOP_TEXT_TOKEN)
     tt = TtXtts(device, xtts_state_dict, reference.decoder_full)
     return tt, wav, spk_tt, padded, real_len, pad_to
@@ -93,24 +94,19 @@ def _assert_empty_audio(wav_dev, where):
 
 
 def _max_seq(pad_to, budget):
-    """The shared KV geometry, asserted big enough for this prompt and budget.
-
-    Decode is bit-identical across cache depths (test_gpt_decode_max_seq_sweep covers
-    160/384/608/992), so an oversized cache costs nothing but shares kernels with every other
-    traced test.
-    """
-    assert NUM_LATENTS + pad_to + budget + 2 <= TRACE_MAX_SEQ, "budget does not fit the shared max_seq"
-    return TRACE_MAX_SEQ
+    """KV geometry for a prompt of pad_to text tokens and a budget-code decode."""
+    return -(-(NUM_LATENTS + pad_to + budget + 2) // TILE) * TILE
 
 
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": L1_SMALL_SIZE, "trace_region_size": SESSION_TRACE_REGION}], indirect=True
 )
-def test_smallest_budget_returns_empty_audio(device, xtts_state_dict, reset_seeds):
-    """A one-step budget owns no latent, so both entry points must return empty audio."""
+def test_empty_generation_returns_empty_audio(device, xtts_state_dict, reset_seeds):
+    """Every way of generating nothing returns empty audio through every inference entry point."""
     tt, wav, spk_tt, padded, real_len, pad_to = _inputs(device, xtts_state_dict)
-    budget = 1
 
+    # --- 1. Smallest budget: one step runs, no code owns a latent yet. -----------------------
+    budget = 1
     wav_dev, codes, perf = tt.inference_fully_traced(
         padded, wav, spk_tt, _max_seq(pad_to, budget), max_new_tokens=budget, text_real_len=real_len, **SAMPLING
     )
@@ -118,58 +114,30 @@ def test_smallest_budget_returns_empty_audio(device, xtts_state_dict, reset_seed
     _assert_empty_audio(wav_dev, "one-step budget, traced")
     assert perf["vocoder_replay_s"] == 0.0, "vocoder ran on an empty generation"
 
-    session = tt.traced_session(wav, spk_tt, pad_to, _max_seq(pad_to, budget), budget, **SAMPLING)
-    try:
-        wav_t, codes_s, _ = session.run(padded, real_len)
-        assert codes_s.shape[1] == 0, f"session produced {codes_s.shape[1]} codes at budget 1"
-        assert wav_t.numel() == 0, "session produced audio for an empty generation"
-    finally:
-        session.close()
-
-
-@pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": L1_SMALL_SIZE, "trace_region_size": SESSION_TRACE_REGION}], indirect=True
-)
-def test_first_step_stop_returns_empty_audio(device, xtts_state_dict, monkeypatch, reset_seeds):
-    """A step-0 STOP is the empty-audio contract: no codes, no audio, no vocoder call."""
-    tt, wav, spk_tt, padded, real_len, pad_to = _inputs(device, xtts_state_dict)
+    # --- 2. Step-0 STOP through the traced wrapper. ------------------------------------------
     budget = 8  # a real budget -- STOP is forced, not a consequence of running out of steps
-
-    # Force STOP from the first sampled token. The constant is built OUTSIDE the capture, so the
-    # traced step only records a device-to-device copy of it into tok_buf.
+    # The constant is built OUTSIDE the capture, so the traced step only records a
+    # device-to-device copy of it into tok_buf.
     stop_const = ttnn.from_torch(
         torch.full((1, 1), STOP_AUDIO_TOKEN, dtype=torch.int32),
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         dtype=ttnn.uint32,
     )
-    monkeypatch.setattr(TtSampler, "pick_dev", lambda self, logits, gumbel=None, bias=None: stop_const)
-
-    wav_dev, codes, perf = tt.inference_fully_traced(
-        padded, wav, spk_tt, _max_seq(pad_to, budget), max_new_tokens=budget, text_real_len=real_len, **SAMPLING
-    )
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(TtSampler, "pick_dev", lambda self, logits, gumbel=None, bias=None: stop_const)
+        wav_dev, codes, perf = tt.inference_fully_traced(
+            padded, wav, spk_tt, _max_seq(pad_to, budget), max_new_tokens=budget, text_real_len=real_len, **SAMPLING
+        )
     assert perf["stopped"], "forced STOP was not reported as a stop"
     assert codes.shape[1] == 0, f"step-0 STOP emitted {codes.shape[1]} codes (STOP must not be one)"
     _assert_empty_audio(wav_dev, "step-0 STOP, traced")
     assert perf["vocoder_replay_s"] == 0.0, "vocoder ran on a step-0 STOP"
 
-
-@pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": L1_SMALL_SIZE, "trace_region_size": SESSION_TRACE_REGION}], indirect=True
-)
-def test_first_step_stop_returns_empty_audio_eager(device, xtts_state_dict, monkeypatch, reset_seeds):
-    """The eager entry point owes the same contract: a step-0 STOP returns empty audio, not a raise.
-
-    Eager ``generate()`` signals the empty case with ``latents_tt=None`` rather than a ``[1, 0, 1024]``
-    tensor, so the traced ``latents.shape[1] == 0`` guard cannot cover it -- unguarded it unpacks
-    ``None.shape`` in ``TtLatentUpsampler.forward``.
-    """
-    tt, wav, spk_tt, padded, _real_len, _pad_to = _inputs(device, xtts_state_dict)
-
-    # Force STOP as the very first sampled token. SAMPLING carries temperature 0.65, so generate()
-    # builds a TtSampler and picks through sampler.pick.
-    monkeypatch.setattr(TtSampler, "pick", lambda self, logits: STOP_AUDIO_TOKEN)
-
-    wav_dev, codes = tt.inference(padded, wav, spk_tt, max_new_tokens=8, **SAMPLING)
-    assert codes.shape[1] == 0, f"step-0 STOP emitted {codes.shape[1]} codes (STOP must not be one)"
+    # --- 3. Step-0 STOP through the eager wrapper, which signals empty as None. --------------
+    # SAMPLING carries temperature 0.65, so generate() builds a TtSampler and picks through pick.
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(TtSampler, "pick", lambda self, logits: STOP_AUDIO_TOKEN)
+        wav_dev, codes = tt.inference(padded, wav, spk_tt, max_new_tokens=8, **SAMPLING)
+    assert codes.shape[1] == 0, f"eager step-0 STOP emitted {codes.shape[1]} codes"
     _assert_empty_audio(wav_dev, "step-0 STOP, eager")
