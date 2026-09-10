@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <vector>
 
@@ -22,6 +23,8 @@ std::vector<ttnn::Tensor> recurrent_chunk_scan(
     const ttnn::Tensor& t_inv,
     const ttnn::Tensor& initial_state,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<ttnn::MemoryConfig>& state_memory_config = std::nullopt,
+    uint32_t state_group_count = 1,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 
 std::vector<ttnn::Tensor> summarize_chunk_recurrence(

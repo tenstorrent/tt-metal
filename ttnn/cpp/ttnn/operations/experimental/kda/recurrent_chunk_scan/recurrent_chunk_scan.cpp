@@ -63,6 +63,8 @@ std::vector<ttnn::Tensor> recurrent_chunk_scan(
     const ttnn::Tensor& t_inv,
     const ttnn::Tensor& initial_state,
     const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<ttnn::MemoryConfig>& state_memory_config,
+    uint32_t state_group_count,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
     using namespace ttnn::experimental::prim::kda_factory_detail;
     constexpr std::string_view operation_name = "recurrent_chunk_scan";
@@ -81,7 +83,9 @@ std::vector<ttnn::Tensor> recurrent_chunk_scan(
         t_inv,
         initial_state,
         ttnn::experimental::prim::RecurrentChunkScanMode::RECURRENT,
+        state_group_count,
         output_memory_config,
+        state_memory_config.value_or(output_memory_config),
         kernel_config);
 }
 
@@ -108,6 +112,8 @@ std::vector<ttnn::Tensor> summarize_chunk_recurrence(
         t_inv,
         std::nullopt,
         ttnn::experimental::prim::RecurrentChunkScanMode::SUMMARY,
+        1,
+        output_memory_config,
         output_memory_config,
         kernel_config);
 }

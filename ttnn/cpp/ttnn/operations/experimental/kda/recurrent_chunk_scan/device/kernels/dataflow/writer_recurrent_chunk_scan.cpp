@@ -46,7 +46,7 @@ FORCE_INLINE void write_summary(uint32_t head, uint32_t value_block) {
     write_value_slice<Kt, Vt, VtFull>(final_state_accessor, final_state, noc, row_base, value_block);
 }
 
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t VtFull>
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t VtFull, uint32_t StateGroupCount>
 FORCE_INLINE void write_recurrent(uint32_t head, uint32_t value_block, uint32_t num_chunks) {
     const auto output_accessor = TensorAccessor(tensor::output);
     const auto final_state_accessor = TensorAccessor(tensor::final_state);
@@ -58,15 +58,20 @@ FORCE_INLINE void write_recurrent(uint32_t head, uint32_t value_block, uint32_t 
         const uint32_t row_base = (head * num_chunks + chunk) * Ct * VtFull;
         write_value_slice<Ct, Vt, VtFull>(output_accessor, output, noc, row_base, value_block);
     }
-    const uint32_t state_row_base = head * Kt * VtFull;
-    write_value_slice<Kt, Vt, VtFull>(final_state_accessor, final_state, noc, state_row_base, value_block);
+    if (head % StateGroupCount == StateGroupCount - 1) {
+        const uint32_t state_row_base = (head / StateGroupCount) * Kt * VtFull;
+        write_value_slice<Kt, Vt, VtFull>(final_state_accessor, final_state, noc, state_row_base, value_block);
+    } else {
+        final_state.wait_front(Kt * Vt);
+        final_state.pop_front(Kt * Vt);
+    }
 }
 
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t Vt_full, uint32_t summary_pair>
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t Vt_full, uint32_t state_group_count, uint32_t summary_pair>
 TT_KERNEL void writer(uint32_t head, uint32_t value_block, uint32_t num_chunks) {
     if constexpr (summary_pair) {
         write_summary<Kt, Vt, Vt_full>(head, value_block);
     } else {
-        write_recurrent<Ct, Kt, Vt, Vt_full>(head, value_block, num_chunks);
+        write_recurrent<Ct, Kt, Vt, Vt_full, state_group_count>(head, value_block, num_chunks);
     }
 }

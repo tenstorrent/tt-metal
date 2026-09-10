@@ -17,7 +17,11 @@ namespace ttnn::experimental::prim {
 namespace {
 
 void check_protocol_tensor(
-    const Tensor& tensor, std::string_view name, bool allow_bf16, std::string_view operation_name) {
+    const Tensor& tensor,
+    std::string_view name,
+    bool allow_bf16,
+    std::string_view operation_name,
+    bool require_interleaved = true) {
     using namespace kda_factory_detail;
     check_allocated_device_tensor(tensor, operation_name, name);
     check_layout(tensor, Layout::TILE, operation_name, name);
@@ -27,7 +31,9 @@ void check_protocol_tensor(
     } else {
         check_dtype(tensor, DataType::FLOAT32, operation_name, name);
     }
-    check_interleaved(tensor, operation_name, name);
+    if (require_interleaved) {
+        check_interleaved(tensor, operation_name, name);
+    }
 }
 
 void check_shape(const Tensor& tensor, const Shape& shape, std::string_view name, std::string_view operation_name) {
@@ -68,6 +74,10 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
     }
     check_compute_config(attrs.compute_kernel_config, operation_name);
     TT_FATAL(attrs.batch_heads > 0, "{}: batch_heads must be positive", operation_name);
+    TT_FATAL(
+        attrs.state_group_count > 0 && attrs.batch_heads % attrs.state_group_count == 0,
+        "{}: state_group_count must be positive and divide batch_heads",
+        operation_name);
     TT_FATAL(attrs.num_chunks > 0, "{}: num_chunks must be positive", operation_name);
     TT_FATAL(
         attrs.key_dim > 0 && attrs.value_dim > 0 && attrs.key_dim % tt::constants::TILE_WIDTH == 0 &&
@@ -90,7 +100,7 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
 
     if (attrs.mode == RecurrentChunkScanMode::RECURRENT) {
         TT_FATAL(in.initial_state.has_value(), "{}: initial_state is required", operation_name);
-        check_protocol_tensor(*in.initial_state, "initial_state", false, operation_name);
+        check_protocol_tensor(*in.initial_state, "initial_state", false, operation_name, /*require_interleaved=*/false);
         check_same_device(in.v_beta, *in.initial_state, operation_name, "initial_state");
         check_shape(*in.initial_state, Shape({BH, K, V}), "initial_state", operation_name);
     } else {
@@ -104,13 +114,13 @@ RecurrentChunkScanOperation::spec_return_value_t RecurrentChunkScanOperation::co
     const bool summary = attrs.mode == RecurrentChunkScanMode::SUMMARY;
     const auto output_dtype = summary ? DataType::FLOAT32 : DataType::BFLOAT16;
     const auto output_layout = TensorLayout(output_dtype, PageConfig(Layout::TILE), attrs.output_mem_config);
-    const auto state_layout = TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
+    const auto state_layout = TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.state_mem_config);
     const auto first_shape =
         summary ? Shape({attrs.batch_heads, attrs.key_dim, attrs.value_dim})
                 : Shape({attrs.batch_heads, attrs.num_chunks, tt::constants::TILE_HEIGHT, attrs.value_dim});
     return {
         TensorSpec(first_shape, output_layout),
-        TensorSpec(Shape({attrs.batch_heads, attrs.key_dim, attrs.value_dim}), state_layout)};
+        TensorSpec(Shape({attrs.batch_heads / attrs.state_group_count, attrs.key_dim, attrs.value_dim}), state_layout)};
 }
 
 RecurrentChunkScanOperation::tensor_return_value_t RecurrentChunkScanOperation::create_output_tensors(
@@ -165,7 +175,9 @@ std::vector<Tensor> recurrent_chunk_scan(
     const Tensor& t_inv,
     const std::optional<Tensor>& initial_state,
     RecurrentChunkScanMode mode,
+    uint32_t state_group_count,
     const MemoryConfig& output_mem_config,
+    const MemoryConfig& state_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config) {
     const auto& value_shape = v_beta.logical_shape();
     const auto& key_shape = kd.logical_shape();
@@ -178,8 +190,10 @@ std::vector<Tensor> recurrent_chunk_scan(
             .num_chunks = value_shape[1],
             .key_dim = key_shape[3],
             .value_dim = value_shape[3],
+            .state_group_count = state_group_count,
             .mode = mode,
             .output_mem_config = output_mem_config,
+            .state_mem_config = state_mem_config,
             .compute_kernel_config = compute_kernel_config},
         RecurrentChunkScanInputs{
             .v_beta = v_beta,

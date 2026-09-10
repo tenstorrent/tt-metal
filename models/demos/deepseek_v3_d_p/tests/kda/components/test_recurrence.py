@@ -116,7 +116,8 @@ def test_recurrence_matches_reference_and_is_deterministic(
                 summary_group_chunks=summary_group_chunks,
                 local_scan_strategy=local_scan_strategy,
             )
-        return output, final_state
+        assert final_state.memory_config().nd_shard_spec is not None
+        return output, ttnn.to_memory_config(final_state, ttnn.DRAM_MEMORY_CONFIG)
 
     (
         (output_tt, final_state_tt),

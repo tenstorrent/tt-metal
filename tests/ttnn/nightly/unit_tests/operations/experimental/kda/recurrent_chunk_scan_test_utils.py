@@ -119,6 +119,8 @@ def run_recurrent(
     state: ttnn.Tensor,
     *,
     memory_config: ttnn.MemoryConfig | None = None,
+    state_memory_config: ttnn.MemoryConfig | None = None,
+    state_group_count: int = 1,
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
 ) -> list[ttnn.Tensor]:
     with ttnn.manage_config("throw_exception_on_fallback", True):
@@ -126,6 +128,8 @@ def run_recurrent(
             *protocol,
             state,
             memory_config=memory_config,
+            state_memory_config=state_memory_config,
+            state_group_count=state_group_count,
             compute_kernel_config=compute_kernel_config,
         )
 
