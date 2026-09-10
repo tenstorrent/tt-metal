@@ -20,6 +20,11 @@ on:
         required: false
         default: L1_TO_L1
         type: string
+      notify_on_success:
+        description: "Also post to Slack when the gate passes (noisy; useful while testing the bot)"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -219,6 +224,97 @@ jobs:
               repo: context.repo.repo,
               body: report
             });
+
+      # Keep the report and the per-point CSVs. The Slack message links here.
+      - name: Upload the gate report
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: llk-perf-gate-report-${{ inputs.arch }}
+          path: |
+            perf_gate_report.md
+            perf_gate_report.points.csv
+            perf_gate_report.regressions.csv
+          if-no-files-found: ignore
+
+      # Build the Slack message. It reports the verdict and holds no thresholds
+      # of its own — the gate has already decided. No channel id means no
+      # notification, so the gate still works where the bot is not set up.
+      - name: Build the Slack payload
+        id: slack
+        if: always()
+        env:
+          SLACK_CHANNEL_ID: ${{ secrets.LLK_PERF_GATE_SLACK_CHANNEL_ID }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          GATE_EXIT_CODE: ${{ steps.compare.outputs.gate_exit_code }}
+          ARCH: ${{ inputs.arch }}
+          RUN_TYPES: ${{ inputs.run_types }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$SLACK_CHANNEL_ID" ]; then
+            echo "LLK_PERF_GATE_SLACK_CHANNEL_ID is unset. No notification is sent."
+            echo "should_post=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          BASELINE_SHA=$(python3 - <<'PYTHON'
+          import json
+          import os
+
+          path = "baseline_metadata.json"
+          data = json.load(open(path)) if os.path.exists(path) else {}
+          print(data.get("commit_sha", ""))
+          PYTHON
+          )
+
+          python3 "${LLK_PATH}/perf/gate_slack_notify.py" \
+            --regressions perf_gate_report.regressions.csv \
+            --report perf_gate_report.md \
+            --have-baseline have_baseline.txt \
+            --exit-code "${GATE_EXIT_CODE:-0}" \
+            --channel "$SLACK_CHANNEL_ID" \
+            --pr-number "$PR_NUMBER" \
+            --pr-url "$PR_URL" \
+            --pr-title "$PR_TITLE" \
+            --author "$PR_AUTHOR" \
+            --arch "$ARCH" \
+            --run-types "$RUN_TYPES" \
+            --run-url "$RUN_URL" \
+            --baseline-sha "$BASELINE_SHA" \
+            ${{ inputs.notify_on_success && '--notify-on-success' || '' }} \
+            --out slack_payload.json && exit 0
+
+          echo "::error::The gate could not build its Slack notification."
+          echo "should_post=false" >> $GITHUB_OUTPUT
+
+      # The notifier must never block a PR. A Slack failure is an annotation,
+      # not a job failure — the gate verdict below is what decides the merge.
+      - name: Notify Slack
+        if: always() && steps.slack.outputs.should_post == 'true'
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
+        run: |
+          if [ -z "$SLACK_BOT_TOKEN" ]; then
+            echo "::error::LLK_SLACK_REPORTING_BOT_TOKEN is unset; the gate could not notify Slack."
+            exit 0
+          fi
+
+          RESPONSE=$(curl -sS -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+            -H "Content-type: application/json; charset=utf-8" \
+            --data @slack_payload.json) || true
+
+          case "$RESPONSE" in
+            *'"ok":true'*)
+              echo "Posted the gate verdict to Slack."
+              ;;
+            *)
+              echo "::error::Slack rejected the gate notification: ${RESPONSE}"
+              ;;
+          esac
 
       # Check whether baseline was found and gate passed
       - name: Gate verdict
