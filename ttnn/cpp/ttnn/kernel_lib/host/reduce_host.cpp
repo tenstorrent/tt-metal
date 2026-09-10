@@ -84,6 +84,42 @@ bool is_supported_add_type(DataType dtype) {
            dtype == DataType::BFLOAT4_B;
 }
 
+bool requires_sfpu(DataType dtype, ReduceFp32Mode fp32_mode) {
+    return dtype == DataType::INT32 || (dtype == DataType::FLOAT32 && fp32_mode == ReduceFp32Mode::Accurate);
+}
+
+void validate_backend_support(
+    DataType dtype,
+    ReduceOpMath math,
+    ReduceOpDim dim,
+    ReduceFp32Mode fp32_mode,
+    const ReduceHardwareConfig& hardware,
+    bool accumulates) {
+    // Keep the host contract aligned with is_sfpu_reduce_path() and reduce()'s
+    // static assertions. In particular, AVG and HW do not select the SFPU.
+    const bool sfpu = requires_sfpu(dtype, fp32_mode);
+    TT_FATAL(dtype != DataType::INT32 || math != ReduceOpMath::AVG, "Reduce planner: INT32 AVG is not supported");
+    TT_FATAL(
+        dtype != DataType::FLOAT32 || fp32_mode != ReduceFp32Mode::Accurate || math != ReduceOpMath::AVG,
+        "Reduce planner: accurate FLOAT32 AVG requires lowering to SUM with a normalization scalar");
+    TT_FATAL(
+        math != ReduceOpMath::MIN || sfpu,
+        "Reduce planner: MIN requires INT32 or accurate FLOAT32; lower native MIN to -MAX(-x)");
+    TT_FATAL(
+        !sfpu || dim != ReduceOpDim::HW,
+        "Reduce planner: INT32 and accurate FLOAT32 HW reductions require separate W and H calls");
+    TT_FATAL(!sfpu || hardware.arch != tt::ARCH::QUASAR, "Reduce planner: SFPU reductions are not supported on Quasar");
+    TT_FATAL(
+        dtype != DataType::FLOAT32 || fp32_mode != ReduceFp32Mode::Accurate || hardware.fp32_dest_acc_en,
+        "Reduce planner: accurate FLOAT32 reduction requires fp32 DEST accumulation");
+    TT_FATAL(
+        !accumulates || math != ReduceOpMath::MAX || dim != ReduceOpDim::HW,
+        "Reduce planner: cross-call HW MAX cannot reload the accumulator layout required by the backend");
+    TT_FATAL(
+        !accumulates || math != ReduceOpMath::MAX || dim != ReduceOpDim::W || hardware.arch != tt::ARCH::QUASAR,
+        "Reduce planner: cross-call W MAX requires an accumulator transpose unavailable on Quasar");
+}
+
 bool supports_direct_input_alias(const tt::tt_metal::TensorSpec& input, ReduceOpDim dim) {
     if (!input.memory_config().is_sharded() || !input.memory_config().is_l1()) {
         return false;
@@ -257,12 +293,20 @@ void configure_scalar_and_aux(
     float scalar,
     std::uint32_t logical_reduce_elements,
     std::uint32_t partial_elements,
-    bool has_partial) {
+    bool has_partial,
+    bool uses_sfpu) {
     TT_FATAL(tile_h > 0 && tile_w > 0, "Reduce planner: auxiliary tile shape must be non-zero");
     plan.auxiliary_tiles.clear();
     plan.partial_mode = compute_kernel_lib::ReducePartialMode::None;
 
-    if (plan.algorithm == ReduceAlgorithm::AccumulateViaAdd) {
+    if (uses_sfpu) {
+        // SFPU folds never read the scaler. Keep the auxiliary tile for the
+        // shared buffer protocol, and scale only the finalized output in reduce<Call>().
+        plan.reduce_factor = 1;
+        plan.post_scale = scalar;
+        plan.auxiliary_tiles.push_back(
+            {.value = 1.0F, .type = ReduceAuxiliaryTileType::FirstRow, .num_valid_elements = tile_w});
+    } else if (plan.algorithm == ReduceAlgorithm::AccumulateViaAdd) {
         plan.reduce_factor = math == ReduceOpMath::AVG ? logical_reduce_elements : 1U;
         plan.post_scale = math == ReduceOpMath::AVG ? scalar * logical_reduce_elements : scalar;
         if (has_partial) {
@@ -338,15 +382,14 @@ ReducePlan make_tiled_plan(
                                      : checked_mul_u32(logical_h, logical_w, "logical HW reduction volume"));
     const std::uint32_t partial_elements =
         dim == ReduceOpDim::W ? logical_w % tile_w : (dim == ReduceOpDim::H ? logical_h % tile_h : 0U);
-    const bool has_axis_partial =
-        partial_elements != 0 && (math == ReduceOpMath::SUM || math == ReduceOpMath::AVG || math == ReduceOpMath::MAX);
+    const bool has_axis_partial = partial_elements != 0;
+    const bool uses_sfpu = requires_sfpu(input.data_type(), fp32_mode);
     // The SFPU implementations do not consume scaler tiles. A ReduceTile plan
     // may use either GMPOOL or SFPU, depending on its dtype and accuracy mode.
     TT_FATAL(
-        math != ReduceOpMath::MAX || !has_axis_partial ||
-            (input.data_type() != DataType::INT32 &&
-             !(input.data_type() == DataType::FLOAT32 && fp32_mode == ReduceFp32Mode::Accurate)),
-        "Reduce planner: partial MAX scalers require the native reduce_tile path; INT32 and accurate FLOAT32 use SFPU");
+        !uses_sfpu || !has_axis_partial,
+        "Reduce planner: SFPU reductions cannot mask a partial reduction axis; identity-pad the input and describe "
+        "the padded reduction view");
     const bool scalar_has_2d_partial = dim == ReduceOpDim::HW && ((logical_h % tile_h) || (logical_w % tile_w));
 
     const auto automatic_algorithm = add_is_legal(input, math, dim, fp32_mode, hardware, scalar_has_2d_partial) &&
@@ -359,7 +402,16 @@ ReducePlan make_tiled_plan(
         "Reduce planner: AccumulateViaAdd was forced for an unsupported tiled reduction");
     plan.algorithm = forced_algorithm.value_or(automatic_algorithm);
     configure_scalar_and_aux(
-        plan, math, dim, tile_h, tile_w, scalar, logical_reduce_elements, partial_elements, has_axis_partial);
+        plan,
+        math,
+        dim,
+        tile_h,
+        tile_w,
+        scalar,
+        logical_reduce_elements,
+        partial_elements,
+        has_axis_partial,
+        uses_sfpu);
 
     const auto input_format = tt::tt_metal::datatype_to_dataformat_converter(input.data_type());
     const auto output_format = tt::tt_metal::datatype_to_dataformat_converter(output.data_type());
@@ -404,10 +456,7 @@ ReducePlan make_tiled_plan(
         const auto input_budget = available_for_input(hardware, fixed_owned_bytes, max_input_cb_bytes);
         std::uint32_t output_group = 1;
         if (dim == ReduceOpDim::H) {
-            const bool uses_sfpu_work_tile =
-                input.data_type() == DataType::INT32 ||
-                (input.data_type() == DataType::FLOAT32 && fp32_mode == ReduceFp32Mode::Accurate);
-            const uint32_t output_slots = destination_tiles(hardware) - (uses_sfpu_work_tile ? 1U : 0U);
+            const uint32_t output_slots = destination_tiles(hardware) - (uses_sfpu ? 1U : 0U);
             TT_FATAL(output_slots > 0, "Reduce planner: H reduction has no DEST output slots");
             output_group = std::min(plan.Wt, output_slots);
         }
@@ -433,7 +482,8 @@ ReducePlan make_tiled_plan(
                     scalar,
                     logical_reduce_elements,
                     partial_elements,
-                    has_axis_partial);
+                    has_axis_partial,
+                    uses_sfpu);
             }
         }
 
@@ -555,7 +605,17 @@ ReducePlan make_row_major_plan(
     plan.algorithm = forced_algorithm.value_or(automatic_algorithm);
     // Dense input is explicitly identity-padded by the reader before tilization, so it does not
     // need a second scaler or mask tile even when the logical edge is partial.
-    configure_scalar_and_aux(plan, math, dim, tile_h, tile_w, scalar, logical_reduce_elements, partial_elements, false);
+    configure_scalar_and_aux(
+        plan,
+        math,
+        dim,
+        tile_h,
+        tile_w,
+        scalar,
+        logical_reduce_elements,
+        partial_elements,
+        false,
+        requires_sfpu(input.data_type(), fp32_mode));
     plan.partial_reduce_axis_elements = has_partial ? partial_elements : 0U;
 
     const auto input_format = tt::tt_metal::datatype_to_dataformat_converter(input.data_type());
@@ -712,7 +772,8 @@ ReducePlan make_reduce_plan_impl(
     const ReduceHardwareConfig& hardware,
     std::optional<std::size_t> max_input_cb_bytes,
     std::optional<ReduceAlgorithm> forced_algorithm,
-    std::optional<std::uint32_t> threshold_axis_tiles = std::nullopt) {
+    std::optional<std::uint32_t> threshold_axis_tiles = std::nullopt,
+    bool accumulates = false) {
     TT_FATAL(
         reduce_math != tt::tt_metal::ReduceOpMath::STD && reduce_math != tt::tt_metal::ReduceOpMath::VAR,
         "Reduce planner: Welford STD/VAR reductions are outside this planner");
@@ -732,10 +793,7 @@ ReducePlan make_reduce_plan_impl(
     TT_FATAL(
         input_spec.layout() != Layout::TILE || output_spec.layout() == Layout::TILE,
         "Reduce planner: tiled input requires tiled output");
-    TT_FATAL(
-        input_spec.data_type() != DataType::FLOAT32 || fp32_mode != ReduceFp32Mode::Accurate ||
-            (hardware.arch != tt::ARCH::QUASAR && hardware.fp32_dest_acc_en),
-        "Reduce planner: accurate FLOAT32 reduction requires fp32 DEST accumulation on a non-Quasar device");
+    validate_backend_support(input_spec.data_type(), reduce_math, reduce_dim, fp32_mode, hardware, accumulates);
 
     ReducePlan plan;
     if (input_spec.layout() == Layout::ROW_MAJOR) {
@@ -988,7 +1046,8 @@ ReduceSequencePlan make_reduce_sequence_plan(
             hardware,
             config.max_input_cb_bytes,
             algorithm,
-            threshold_axis_tiles));
+            threshold_axis_tiles,
+            accumulates));
     }
 
     // A raw AccumulateViaAdd partial and a finalized ReduceTile partial are different accumulator formats.
@@ -1010,7 +1069,8 @@ ReduceSequencePlan make_reduce_sequence_plan(
                 hardware,
                 config.max_input_cb_bytes,
                 ReduceAlgorithm::ReduceTile,
-                threshold_axis_tiles));
+                threshold_axis_tiles,
+                accumulates));
         }
     }
 
