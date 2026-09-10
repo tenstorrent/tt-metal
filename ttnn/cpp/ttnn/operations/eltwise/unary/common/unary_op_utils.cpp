@@ -1173,17 +1173,17 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
 }
 
 void add_input_dtype_defines(DataType dtype, std::map<std::string, std::string>& defines) {
+    // Exactly one tag survives: the caller's dtype, except that an earlier float32 operand keeps INP_FLOAT32
+    // over a later bf16-class one (the float32 SFPU variants are the accurate ones for both).
+    const bool keep_float32 = defines.contains("INP_FLOAT32") && dtype != DataType::INT32 && dtype != DataType::UINT32;
+    for (const char* tag : {"INP_FLOAT32", "INP_INT32", "INP_UINT32", "INP_FLOAT"}) {
+        defines.erase(tag);
+    }
     switch (dtype) {
-        case DataType::FLOAT32:
-            defines.erase("INP_FLOAT");
-            defines["INP_FLOAT32"] = "1";
-            break;
         case DataType::INT32: defines["INP_INT32"] = "1"; break;
         case DataType::UINT32: defines["INP_UINT32"] = "1"; break;
-        default:
-            if (!defines.contains("INP_FLOAT32")) {
-                defines["INP_FLOAT"] = "1";
-            }
+        case DataType::FLOAT32: defines["INP_FLOAT32"] = "1"; break;
+        default: defines[keep_float32 ? "INP_FLOAT32" : "INP_FLOAT"] = "1"; break;
     }
 }
 
