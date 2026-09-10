@@ -28,21 +28,22 @@
     "dram_gb": 21.74
   },
   "after": {
-    "ar_frames_per_s": 21.656,
-    "llm_step_ms": 21.74,
-    "depth_loop_ms": 23.96,
-    "host_ms": 0.37,
+    "ar_frames_per_s": 21.65,
+    "llm_step_ms": 21.8,
+    "depth_loop_ms": 23.9,
+    "host_ms": 0.4,
     "dit_window_s": [
-      2.513,
-      2.386
+      2.551,
+      2.449
     ],
-    "vocoder_window_s_in_thread": [
-      8.222,
-      4.809
+    "vocoder_window_s_in_worker_process": [
+      6.834,
+      5.218
     ],
-    "dit_plus_vocoder_phase_s": 15.54,
-    "total_s": 27.21,
-    "dram_gb": 15.13
+    "dit_plus_vocoder_phase_s": 14.61,
+    "total_s": 26.3,
+    "dram_gb": 15.13,
+    "load_s": 15.2
   },
   "ar_frame_ms_e2e": 46.2,
   "ar_frame_ms_device_estimate": 42.4,
@@ -61,7 +62,7 @@
     "note": "matmuls 56-68 % DRAM; nlp_create_qkv_heads + nlp_concat_heads 4.2 ms on 2 cores"
   },
   "dit_step": {
-    "ms_e2e_per_step_after": 83.8,
+    "ms_e2e_per_step_after": 85.0,
     "ms_e2e_per_step_before": 117.0,
     "ms_device_1block_after": 2.68,
     "note": "compute-bound; fp16 accumulation + full-grid configs + fused SiLU + 256-wide SDPA"
@@ -82,6 +83,7 @@
     "nlp_create_qkv_heads / nlp_concat_heads parallelise over tile rows: 2 cores for the depth decoder's 2 x 32 rows (4.2 ms per frame)",
     "fp32 destination accumulation halves the matmul subblock capacity; the DiT runs fp16 accumulation (log-mel 0.98 -> 1.27 dB with in0_block_w 4)",
     "ttnn.experimental.conv3d in fp32 with the default 1D blocking runs the 31 vocoder convs in 16 s per window (host: 7.3 s); bf16 conv3d exceeds L1; tt_dit padding helpers write host tensors inside the graph so the vocoder cannot be traced",
-    "bf16 MLP weights do not fit the prefill MLP matmul's circular buffers on P150 (1.82 MB > 1.5 MB)"
+    "bf16 MLP weights do not fit the prefill MLP matmul's circular buffers on P150 (1.82 MB > 1.5 MB)",
+    "a vocoder worker thread is starved by the DiT loop's GIL-holding read-backs (31.6 s for a 6.8 s window); the vocoder runs in a spawned worker process instead"
   ]
 }

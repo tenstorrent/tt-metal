@@ -118,7 +118,9 @@ class DepthDecoder(LightweightModule):
         # (doc/optimize/sweeps/depth.json, depth12k.json). ``use_program_configs = False`` restores the defaults.
         self.matmul_grid = ttnn.CoreCoord(10, 10)
         self.matmul_in0_block_w = 4
-        self.use_program_configs = True
+        # Swept for bfp8 weights only; with bf16 weights (stage 03 / functional policy) the default programs already run
+        # at 74-78 % of DRAM bandwidth and the 1D configs cost ~2 ms per frame (doc/optimize/README.md).
+        self.use_program_configs = self.weight_dtype == ttnn.bfloat8_b
         # RMSNorm: the interleaved kernel parallelizes over tile rows and the padded sequence has
         # only two, so it ran on 2 cores (75 us). Width-sharding the [64, 4096] activation over a
         # 4x4 grid (shards [64, 256]) runs the norm on 16 cores in ~7 us plus two ~3 us resharding
@@ -250,9 +252,11 @@ class DepthDecoder(LightweightModule):
         cores = self.matmul_grid.x * self.matmul_grid.y
         mt, kt, nt = -(-m // TILE), k // TILE, -(-n // TILE)
         per_n = -(-nt // cores)
-        if per_n > 2:
-            # N = 12288 (wqkv) and 7168 (heads): the op default already reaches 320-340 GB/s; the 1D configs tie or
-            # lose (doc/optimize/sweeps/depth12k.json), so they keep the default program.
+        if per_n > 2 or n < 4096:
+            # N = 12288 (wqkv) and 7168 (fused heads): the op default already reaches 320-340 GB/s; the 1D configs tie or
+            # lose (doc/optimize/sweeps/depth12k.json), so they keep the default program. N = 1024 (a single head, eager
+            # path only) keeps the default too so that head(k) stays bit-identical to the fused heads_all block the
+            # traced step uses (test_traced_step_matches_eager_and_perf).
             return None
         blk = self.matmul_in0_block_w
         while kt % blk:

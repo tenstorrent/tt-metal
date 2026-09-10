@@ -1,12 +1,12 @@
 {
   "after": {
-    "ar_frames_per_s": 21.655952261019763,
-    "commit": "b8bac93ba28",
-    "depth_loop_ms": 23.955918195939425,
-    "dit_chunk_s": 2.5128951729275286,
+    "ar_frames_per_s": 21.650967906302643,
+    "commit": "56da949aa96",
+    "depth_loop_ms": 23.92716859504432,
+    "dit_chunk_s": 2.5509909220272675,
     "dit_chunk_s_all": [
-      2.5128951729275286,
-      2.386314914911054
+      2.5509909220272675,
+      2.4485418080585077
     ],
     "golden_replay": {
       "frame_hiddens_backbone_pcc_min": 0.9845897368923088,
@@ -20,18 +20,18 @@
       ],
       "log_mel_mean_abs_db": 0.917697012424469,
       "log_mel_rms_db": 1.2673242092132568,
-      "wall_s": 27.079359738039784,
-      "wav_pcc": 0.9985527730336222
+      "wall_s": 26.26621464791242,
+      "wav_pcc": 0.9985527730904501
     },
-    "host_ms": 0.36752162235918867,
+    "host_ms": 0.38017556293908344,
     "label": "after",
-    "llm_step_ms": 21.744219434913248,
+    "llm_step_ms": 21.770845174323767,
     "load_kwargs": {
       "dtype_policy": "optimized"
     },
-    "recorded_at": "2026-09-10 00:09:19",
-    "total_10s_clip_s": 27.213007983984426,
-    "vocoder_chunk_s": 8.221868811990134
+    "recorded_at": "2026-09-10 00:28:56",
+    "total_10s_clip_s": 26.279003871022724,
+    "vocoder_chunk_s": 6.833957704948261
   },
   "before": {
     "ar_frames_per_s": 13.317548677882412,

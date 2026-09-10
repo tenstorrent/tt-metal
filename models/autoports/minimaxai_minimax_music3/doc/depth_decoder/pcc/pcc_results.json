@@ -152,9 +152,9 @@
     ]
   },
   "perf_depth_loop_per_frame": {
-    "eager_ms": 29.49229590012692,
+    "eager_ms": 29.429746908135712,
     "note": "host wall time per 7-step teacher-forced frame incl. per-step logits read-back; warmed",
-    "traced_ms": 31.052944500697777,
+    "traced_ms": 31.14413315197453,
     "traced_vs_eager_max_abs_diff": 0.0,
     "traced_vs_eager_min_pcc": 1.0
   },

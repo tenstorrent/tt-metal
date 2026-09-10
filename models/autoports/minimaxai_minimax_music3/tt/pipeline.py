@@ -30,8 +30,9 @@ before ``generate`` returns, so no buffer allocated after a capture is alive dur
 
 from __future__ import annotations
 
+import os
 import time
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
@@ -59,6 +60,7 @@ from models.autoports.minimaxai_minimax_music3.tt.denoiser import (
 from models.autoports.minimaxai_minimax_music3.tt.depth_decoder import DepthDecoder
 from models.autoports.minimaxai_minimax_music3.tt.flow_transformer import FlowTransformer
 from models.autoports.minimaxai_minimax_music3.tt.llm import MusicLLM
+from models.autoports.minimaxai_minimax_music3.tt.vocoder_worker import VocoderProcess
 
 NUM_LATENT_CHANNELS = 128
 WARMUP_PROMPT = "Genre: ambient. A quiet pad."
@@ -81,7 +83,8 @@ POLICY_PRESETS = {
         "vocoder": "host",
     },
     # Stage 07 default: bfp8 backbone weights (attention, MLP, LM head) + bfp8 KV cache, bfp8 depth-decoder and DiT
-    # transformer weights (bf16 activations, norms, embeddings), traced DiT step, on-device CFG + top-k.
+    # transformer weights (bf16 activations, norms, embeddings), traced DiT step; CFG + top-k stay on the host (see
+    # doc/optimize/README.md: on-device topk / gather cost 10 ms against a 0.18 ms read-back).
     "optimized": {
         "llm_policy": "optimized",
         "depth_dtype": "bfp8",
@@ -140,8 +143,13 @@ class MiniMaxMusic3Pipeline:
         self.latent_hop_length = int(vocoder.hop_length)
         self.frame_rate = FRAME_RATE
         self.load_log = load_log or {}
-        # Stage 07: overlap the host vocoder of window k with the denoising of window k + 1 (host vocoder only).
+        # Stage 07: overlap the host vocoder of window k with the denoising of window k + 1 in a separate process
+        # (host vocoder only; a thread is starved by the DiT loop's GIL-holding read-backs, doc/optimize/README.md).
         self.overlap_vocoder = not hasattr(vocoder, "mesh_device")
+        self.vocoder_process: Optional[VocoderProcess] = None
+        if self.overlap_vocoder:
+            self.vocoder_process = VocoderProcess(self.weights_dir, threads=max(4, min(10, (os.cpu_count() or 8) - 4)))
+            self.vocoder_process.start()  # spawns now; the worker loads its fp32 weights while the chip warms up
 
     # ------------------------------------------------------------------ construction
     @classmethod
@@ -254,6 +262,8 @@ class MiniMaxMusic3Pipeline:
         pipe.preset = preset
         if warm:
             pipe.warm()
+        if pipe.vocoder_process is not None:
+            log["vocoder_worker_ready_s"] = pipe.vocoder_process.warm()
         log["dram_resident"] = dram_usage_bytes(mesh_device)
         log["load_total_s"] = time.perf_counter() - t_all
         logger.info(f"MiniMaxMusic3Pipeline ready in {log['load_total_s']:.0f}s; DRAM {log['dram_resident']}")
@@ -385,11 +395,10 @@ class MiniMaxMusic3Pipeline:
         dit_times: List[float] = []
         voc_futures: List[Future] = []
         prev_lat = prev_cond = None
-        # Stage 07: the host vocoder of window k runs in a worker thread while the device denoises window k + 1
-        # (torch releases the GIL inside its kernels; the DiT loop's host side is trace replays and small axpys).
-        # Both stay in program order, the device is never touched from the worker, and the vocoder itself is
-        # unchanged, so the audio is bit-identical to the sequential path (test_same_seed_determinism).
-        executor = ThreadPoolExecutor(max_workers=1) if self.overlap_vocoder else None
+        # Stage 07: the host vocoder of window k runs in the vocoder worker process while the device denoises window
+        # k + 1. Results are consumed in program order, the worker never touches the device, and the vocoder itself
+        # is unchanged, so the audio is bit-identical to the sequential path (test_same_seed_determinism).
+        executor = self.vocoder_process if (self.overlap_vocoder and self.vocoder_process is not None) else None
         t_dit_phase = time.perf_counter()
         try:
             for k, start in enumerate(starts):
@@ -409,7 +418,7 @@ class MiniMaxMusic3Pipeline:
                 prev_lat, prev_cond = r.previous_latent, r.previous_condition
                 results.append(r)
                 if executor is not None:
-                    voc_futures.append(executor.submit(self._vocode_timed, r.latents.float()))
+                    voc_futures.append(executor.submit(r.latents))
         finally:
             self.denoiser.end_of_song()
         timings["dit_per_chunk"] = dit_times
@@ -424,7 +433,6 @@ class MiniMaxMusic3Pipeline:
                 wav, dt = fut.result()
                 waveforms.append(wav)
                 voc_times.append(dt)
-            executor.shutdown(wait=True)
         else:
             for r in results:
                 wav, dt = self._vocode_timed(r.latents.float())
@@ -474,6 +482,9 @@ class MiniMaxMusic3Pipeline:
 
     # ------------------------------------------------------------------ housekeeping
     def release(self) -> None:
+        if self.vocoder_process is not None:
+            self.vocoder_process.close()
+            self.vocoder_process = None
         self.ar.release()
         self.denoiser.release()
         self.transformer.release()

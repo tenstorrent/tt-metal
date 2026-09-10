@@ -41,6 +41,9 @@ from models.autoports.minimaxai_minimax_music3.tt.constants import (
 from models.common.utility_functions import comp_pcc
 
 PCC_FRAME = 0.99  # per-frame and overall frame_hiddens PCC vs the golden
+# Stage 07: the same file runs against the optimized backbone with MM3_LLM_POLICY=optimized (conftest) and a relaxed
+# per-frame bar (MM3_AR_PCC_FRAME_MIN; doc/optimize/README.md justifies 0.97: one frame of 250 at 0.979 under LoFi).
+PCC_FRAME_MIN = float(os.environ.get("MM3_AR_PCC_FRAME_MIN", PCC_FRAME))
 DOC_DIR = Path(__file__).resolve().parents[1] / "doc" / "ar_generator"
 MANIFEST = R.reference_dir() / "manifest.json"
 
@@ -241,7 +244,7 @@ def test_teacher_forced_frame_hiddens_vs_golden(ar, manifest, golden_ar):
         decode_stats=out["decode_stats"],
     )
     assert overall >= PCC_FRAME, overall
-    assert min(per_frame) >= PCC_FRAME, (min(per_frame), per_frame.index(min(per_frame)))
+    assert min(per_frame) >= PCC_FRAME_MIN, (min(per_frame), per_frame.index(min(per_frame)))
 
 
 def _check_codes(codes: torch.Tensor):

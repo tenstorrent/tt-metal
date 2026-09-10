@@ -1,10 +1,10 @@
 {
   "dit_trace_vs_eager": {
     "_meta": {
-      "commit": "b8bac93ba28",
-      "loadavg_1m": 2.958984375,
+      "commit": "56da949aa96",
+      "loadavg_1m": 5.60595703125,
       "log_hint": "gate07_final",
-      "recorded_at": "2026-09-10 00:12:22"
+      "recorded_at": "2026-09-10 00:34:04"
     },
     "max_abs_err": 0.0,
     "pcc": 1.0,
@@ -12,10 +12,10 @@
   },
   "golden_replay": {
     "_meta": {
-      "commit": "b8bac93ba28",
-      "loadavg_1m": 2.958984375,
+      "commit": "56da949aa96",
+      "loadavg_1m": 5.60595703125,
       "log_hint": "gate07_final",
-      "recorded_at": "2026-09-10 00:12:22"
+      "recorded_at": "2026-09-10 00:34:04"
     },
     "bars": {
       "frame_hiddens_pcc": 0.98,
@@ -31,55 +31,55 @@
     "log_mel": {
       "frames": 862,
       "length_mismatch_samples": 0,
-      "max_abs_db": 9.36123275756836,
+      "max_abs_db": 9.36124038696289,
       "mean_abs_db": 0.917697012424469,
       "rms_db": 1.2673242092132568
     },
     "timings": {
-      "ar": 11.224386103102006,
+      "ar": 11.250290807103738,
       "ar_detail": {
-        "depth": 5.579727252479643,
-        "host": 0.0868633562931791,
-        "llm_step": 5.430096006835811,
+        "depth": 5.595857294974849,
+        "host": 0.08985389326699078,
+        "llm_step": 5.4375229347497225,
         "llm_steps": 250,
-        "prefill": 0.12468855897895992
+        "prefill": 0.12401763000525534
       },
-      "ar_frames_per_s": 22.52313623918225,
-      "dit": 4.851033490966074,
-      "dit_and_vocoder_phase": 15.730787756037898,
+      "ar_frames_per_s": 22.469338656413896,
+      "dit": 5.105044960859232,
+      "dit_and_vocoder_phase": 15.24314823502209,
       "dit_per_chunk": [
-        2.4972924819448963,
-        2.353741009021178
+        2.6370813129469752,
+        2.4679636479122564
       ],
       "dit_per_step_ms": [
-        83.24308273149654,
-        78.45803363403927
+        87.90271043156584,
+        82.26545493040855
       ],
-      "prefill": 0.12468855897895992,
-      "total": 26.955835292930715,
-      "vocoder": 13.233181805931963,
+      "prefill": 0.12401763000525534,
+      "total": 26.494156038970686,
+      "vocoder": 12.601026998017915,
       "vocoder_overlapped": true,
       "vocoder_per_chunk": [
-        8.462119529023767,
-        4.7710622769081965
+        7.435692162020132,
+        5.165334835997783
       ]
     },
-    "wall_s": 26.956315740011632,
-    "wav_pcc": 0.9985527730336222
+    "wall_s": 26.494849581969902,
+    "wav_pcc": 0.9985527730904501
   },
   "load": {
     "_meta": {
-      "commit": "b8bac93ba28",
-      "loadavg_1m": 2.1513671875,
+      "commit": "56da949aa96",
+      "loadavg_1m": 6.1611328125,
       "log_hint": "gate07_final",
-      "recorded_at": "2026-09-10 00:11:54"
+      "recorded_at": "2026-09-10 00:33:36"
     },
-    "ar_init_s": 0.5944014369742945,
+    "ar_init_s": 0.6178648509085178,
     "depth_dtype": "bfp8",
-    "depth_load_s": 5.217820277088322,
+    "depth_load_s": 5.344829517998733,
     "dit_dtype": "bfp8",
     "dit_fidelity": "hifi2_fp16",
-    "dit_load_s": 0.48883107805158943,
+    "dit_load_s": 0.48508014692924917,
     "dit_trace": true,
     "dram_after_depth": {
       "allocated_bytes": 12418792448,
@@ -110,9 +110,9 @@
       "total_bytes": 32578731008
     },
     "dtype_policy": "optimized",
-    "llm_load_s": 5.4724828460020944,
+    "llm_load_s": 5.822847709059715,
     "llm_policy": "optimized",
-    "load_total_s": 12.492023734026588,
+    "load_total_s": 13.706408787984401,
     "policy_report": {
       "components": {
         "depth_dtype": "bfp8",
@@ -155,17 +155,18 @@
       "vocoder": "MiniMaxMusic3Vocoder"
     },
     "vocoder": "host",
-    "vocoder_load_s": 0.14903264306485653,
-    "warm_ar_s": 0.3339329588925466,
-    "warm_dit_s": 0.22366084705572575,
+    "vocoder_load_s": 0.15152996208053082,
+    "vocoder_worker_ready_s": 0.7067714949371293,
+    "warm_ar_s": 0.3415804129326716,
+    "warm_dit_s": 0.22283141291700304,
     "weights_dir": "/home/jashan/.cache/huggingface/hub/models--MiniMaxAI--MiniMax-Music3/snapshots/fbdf52fbaaca799592917417eb05f1899f1255ec"
   },
   "policy_report": {
     "_meta": {
-      "commit": "b8bac93ba28",
-      "loadavg_1m": 2.1513671875,
+      "commit": "56da949aa96",
+      "loadavg_1m": 6.1611328125,
       "log_hint": "gate07_final",
-      "recorded_at": "2026-09-10 00:11:54"
+      "recorded_at": "2026-09-10 00:33:36"
     },
     "components": {
       "depth_dtype": "bfp8",
@@ -209,36 +210,36 @@
   },
   "short_song": {
     "_meta": {
-      "commit": "b8bac93ba28",
-      "loadavg_1m": 4.16357421875,
+      "commit": "56da949aa96",
+      "loadavg_1m": 5.23681640625,
       "log_hint": "gate07_final",
-      "recorded_at": "2026-09-10 00:12:31"
+      "recorded_at": "2026-09-10 00:34:09"
     },
     "frames": 50,
     "timings": {
-      "ar": 2.601295398082584,
+      "ar": 2.4278834889410064,
       "ar_detail": {
-        "depth": 1.255552964634262,
-        "host": 0.09830632852390409,
-        "llm_step": 1.1228154924465343,
+        "depth": 1.2082844832912087,
+        "host": 0.01702321134507656,
+        "llm_step": 1.0783756012097,
         "llm_steps": 50,
-        "prefill": 0.12388229998759925
+        "prefill": 0.12366718100383878
       },
-      "ar_frames_per_s": 20.182342637345247,
-      "dit": 3.8955218150513247,
-      "dit_and_vocoder_phase": 5.602056405972689,
+      "ar_frames_per_s": 21.699351674479782,
+      "dit": 0.2996317599900067,
+      "dit_and_vocoder_phase": 2.1286584539338946,
       "dit_per_chunk": [
-        3.8955218150513247
+        0.2996317599900067
       ],
       "dit_per_step_ms": [
-        649.2536358418874
+        49.93862666500112
       ],
-      "prefill": 0.12388229998759925,
-      "total": 8.203642399050295,
-      "vocoder": 1.7062006529886276,
+      "prefill": 0.12366718100383878,
+      "total": 4.556844921084121,
+      "vocoder": 1.8269242329988629,
       "vocoder_overlapped": true,
       "vocoder_per_chunk": [
-        1.7062006529886276
+        1.8269242329988629
       ]
     }
   }

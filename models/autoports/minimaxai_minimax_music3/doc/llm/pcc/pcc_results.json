@@ -12,7 +12,7 @@
     "hidden_pcc": 0.9990024907463882,
     "logits_pcc": 0.998579832344655,
     "seq_len": 104,
-    "wall_seconds_first_call": 0.31517720222473145
+    "wall_seconds_first_call": 0.15635418891906738
   },
   "layer0_decode": {
     "bar": 0.995,
@@ -65,21 +65,21 @@
   "prefill_len_10240_runs": {
     "decode_positions": [],
     "seq_len": 10240,
-    "wall_seconds": 6.577574968338013
+    "wall_seconds": 5.256845474243164
   },
   "prefill_len_1_runs": {
     "decode_positions": [
       1
     ],
     "seq_len": 1,
-    "wall_seconds": 0.36805057525634766
+    "wall_seconds": 0.15822672843933105
   },
   "prefill_len_333_runs": {
     "decode_positions": [
       333
     ],
     "seq_len": 333,
-    "wall_seconds": 0.6461710929870605
+    "wall_seconds": 0.4052391052246094
   },
   "prefill_len_5000_runs": {
     "decode_positions": [
@@ -87,7 +87,7 @@
       10239
     ],
     "seq_len": 5000,
-    "wall_seconds": 3.3072855472564697
+    "wall_seconds": 3.1590049266815186
   },
   "teacher_forced_decode": {
     "bar": 0.99,
