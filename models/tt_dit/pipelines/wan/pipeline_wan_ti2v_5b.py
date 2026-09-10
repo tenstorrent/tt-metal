@@ -10,8 +10,8 @@ dim=3072 / ffn=14336 / TP=4. Sweep before claiming perf.
 
 import ttnn
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
+from models.tt_dit.utils.conv3d import _BLOCKINGS, register_conv3d_configs
 from models.tt_dit.utils.matmul import FusedMMRSConfig, register_fused_mmrs_configs, register_matmul_configs
-from models.tt_dit.utils.conv3d import register_conv3d_configs, _BLOCKINGS
 
 _5B_CHECKPOINT = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
 
@@ -57,7 +57,6 @@ def _register_5b_matmul_tables() -> None:
     )
 
 
-
 def _register_5b_conv3d_tables() -> None:
     """BH Galaxy 4x8, Wan2.2 TI2V-5B VAE decoder conv3d blockings.
 
@@ -70,16 +69,16 @@ def _register_5b_conv3d_tables() -> None:
     """
     register_conv3d_configs(
         {
-            (64, 1024, (3, 3, 3)): (64, 256, 1, 8, 4),      # conv_in
-            (1024, 1024, (3, 3, 3)): (128, 64, 7, 16, 2),   # res_deep (t9/t16); sized for t16
-            (1024, 2048, (3, 1, 1)): (512, 128, 3, 8, 4),   # tconv (t9/t16); conservative C_out
+            (64, 1024, (3, 3, 3)): (64, 256, 1, 8, 4),  # conv_in
+            (1024, 1024, (3, 3, 3)): (128, 64, 7, 16, 2),  # res_deep (t9/t16); sized for t16
+            (1024, 2048, (3, 1, 1)): (512, 128, 3, 8, 4),  # tconv (t9/t16); conservative C_out
             (1024, 1024, (1, 3, 3)): (256, 128, 1, 16, 2),  # spatial_deep/spatial_mid; sized for mid
-            (1024, 512, (3, 3, 3)): (64, 256, 2, 16, 2),    # up_512
-            (512, 512, (3, 3, 3)): (64, 256, 2, 16, 2),     # res_512
-            (512, 512, (1, 3, 3)): (256, 128, 1, 16, 2),    # spatial_512
-            (512, 256, (3, 3, 3)): (64, 256, 2, 8, 4),      # up_256
-            (256, 256, (3, 3, 3)): (64, 256, 2, 8, 4),      # res_256
-            (256, 12, (3, 3, 3)): (128, 32, 4, 8, 4),       # conv_out
+            (1024, 512, (3, 3, 3)): (64, 256, 2, 16, 2),  # up_512
+            (512, 512, (3, 3, 3)): (64, 256, 2, 16, 2),  # res_512
+            (512, 512, (1, 3, 3)): (256, 128, 1, 16, 2),  # spatial_512
+            (512, 256, (3, 3, 3)): (64, 256, 2, 8, 4),  # up_256
+            (256, 256, (3, 3, 3)): (64, 256, 2, 8, 4),  # res_256
+            (256, 12, (3, 3, 3)): (128, 32, 4, 8, 4),  # conv_out
         }
     )
 
@@ -88,17 +87,23 @@ _register_5b_matmul_tables()
 _register_5b_conv3d_tables()
 
 # 720p exact-shape conv3d winners (measured on 4x8, 720p t=7; keyed by full shape tuple so the
-# 480p channel-keyed table is untouched). Partial (7/13 swept before handover); the remaining
-# 720p shapes fall back to the channel-keyed table above (L1-safe, just not yet speed-tuned).
+# 480p channel-keyed table is untouched). Complete (13/13 swept via bruteforce_conv3d_sweep.py
+# bh_4x8_5b_720p_t7); every 720p VAE conv3d now has a speed-tuned exact-shape entry.
 _BLOCKINGS.update(
     {
-        (4, 8, 64, 1024, (3, 3, 3), 9, 11, 10): (64, 256, 1, 4, 8),
-        (4, 8, 1024, 1024, (3, 3, 3), 16, 22, 20): (128, 64, 7, 8, 4),
-        (4, 8, 1024, 1024, (3, 3, 3), 9, 11, 10): (128, 64, 7, 4, 8),
-        (4, 8, 1024, 1024, (1, 3, 3), 14, 22, 20): (256, 128, 1, 4, 8),
-        (4, 8, 1024, 1024, (1, 3, 3), 28, 44, 40): (256, 128, 1, 4, 8),
-        (4, 8, 1024, 2048, (3, 1, 1), 16, 22, 20): (512, 256, 2, 8, 4),
-        (4, 8, 1024, 2048, (3, 1, 1), 9, 11, 10): (512, 128, 7, 4, 8),
+        (4, 8, 64, 1024, (3, 3, 3), 9, 11, 10): (64, 256, 1, 4, 8),  # conv_in
+        (4, 8, 1024, 1024, (3, 3, 3), 16, 22, 20): (128, 64, 7, 8, 4),  # res_deep_t16
+        (4, 8, 1024, 1024, (3, 3, 3), 9, 11, 10): (128, 64, 7, 4, 8),  # res_deep_t9
+        (4, 8, 1024, 1024, (1, 3, 3), 14, 22, 20): (256, 128, 1, 4, 8),  # spatial_deep
+        (4, 8, 1024, 1024, (1, 3, 3), 28, 44, 40): (256, 128, 1, 4, 8),  # spatial_mid
+        (4, 8, 1024, 2048, (3, 1, 1), 16, 22, 20): (512, 256, 2, 8, 4),  # tconv_t16
+        (4, 8, 1024, 2048, (3, 1, 1), 9, 11, 10): (512, 128, 7, 4, 8),  # tconv_t9
+        (4, 8, 1024, 512, (3, 3, 3), 30, 44, 40): (64, 256, 2, 4, 8),  # up_512
+        (4, 8, 512, 512, (3, 3, 3), 30, 44, 40): (64, 256, 2, 4, 8),  # res_512
+        (4, 8, 512, 512, (1, 3, 3), 28, 88, 80): (256, 128, 1, 4, 8),  # spatial_512
+        (4, 8, 512, 256, (3, 3, 3), 30, 88, 80): (64, 256, 2, 4, 8),  # up_256
+        (4, 8, 256, 256, (3, 3, 3), 30, 88, 80): (64, 256, 2, 4, 8),  # res_256
+        (4, 8, 256, 12, (3, 3, 3), 30, 88, 80): (128, 32, 3, 4, 8),  # conv_out
     }
 )
 
