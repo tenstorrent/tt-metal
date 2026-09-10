@@ -15,9 +15,11 @@ void kernel_main() {
     const uint32_t skew_iters = get_arg_val<uint32_t>(4);
     const uint32_t max_participants = get_arg_val<uint32_t>(5);
     const uint32_t num_dm_threads = get_arg_val<uint32_t>(6);
+    const uint32_t num_tensixes = get_arg_val<uint32_t>(7);
 
     const uint32_t thread_id = get_my_thread_id();
     const uint32_t trisc_id = internal_::get_trisc_id();
+    // Slots after the DM harts, one per TRISC of every NEO this kernel occupies.
     const uint32_t participant = num_dm_threads + thread_id * NUM_TRISC_CORES + trisc_id;
 
     volatile tt_l1_ptr uint32_t* arrivals =
@@ -27,7 +29,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* post =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(post_addr + MEM_L1_UNCACHED_BASE);
 
-    sync_all_cores(max_participants);
+    dm_compute_barrier(num_dm_threads, num_tensixes);
 
     for (uint32_t r = 0; r < rounds; r++) {
         uint32_t delay = (participant + 1) * skew_iters;
@@ -36,8 +38,10 @@ void kernel_main() {
         }
 
         arrivals[r * max_participants + participant] = 1;
-        sync_all_cores(max_participants);
+        dm_compute_barrier(num_dm_threads, num_tensixes);
 
+        // One observer counts arrivals. Every DM hart and TRISC is past the barrier above, so a
+        // short count here means the barrier released early.
         if (thread_id == 0 && trisc_id == 0) {
             uint32_t count = 0;
             for (uint32_t p = 0; p < max_participants; p++) {
@@ -45,10 +49,10 @@ void kernel_main() {
             }
             observed[r] = count;
         }
-        sync_all_cores(max_participants);
+        dm_compute_barrier(num_dm_threads, num_tensixes);
 
         post[r * max_participants + participant] = 1;
-        sync_all_cores(max_participants);
+        dm_compute_barrier(num_dm_threads, num_tensixes);
     }
 
     if (thread_id == 0 && trisc_id == 0) {
