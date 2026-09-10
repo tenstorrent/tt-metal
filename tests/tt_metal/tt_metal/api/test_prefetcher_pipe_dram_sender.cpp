@@ -11,8 +11,8 @@
 //   * the host stamping a real PrefetcherPipe sender config page into DRISC L1,
 //   * credits crossing L1 address spaces in both directions (sender credit -> worker L1,
 //     receiver ack -> DRISC L1),
-//   * the sender deriving each receiver's write cursor from that receiver's durable counter, so
-//     the cursor survives across programs,
+//   * the sender keeping each receiver's write cursor in that receiver's counter slot in the
+//     config page, so the cursor survives across programs,
 //   * per-sender DRISC L1 placement: a pipe reserves its config page on its own sender core, so a
 //     whole set of pipes costs the small DRISC zone one offset.
 
@@ -309,9 +309,9 @@ TEST_F(PrefetcherPipeDramSenderFixture, SmokeOneSenderFourReceivers) {
 }
 
 TEST_F(PrefetcherPipeDramSenderFixture, CursorPersistsAcrossPrograms) {
-    // The sender stores no write cursor: it derives each receiver's position from that receiver's
-    // durable entries_sent counter. A second program must therefore resume mid-ring rather than
-    // restart at slot 0.
+    // The sender's write cursors live in its config page, beside the credit counters, and no
+    // Attach resets either. A second program must therefore resume mid-ring rather than restart at
+    // slot 0.
     constexpr uint32_t kNumReceivers = 2;
     constexpr uint32_t kBatch = 2;
     const CoreRangeSet receiver_cores(CoreRange({0, 0}, {kNumReceivers - 1, 0}));
@@ -435,8 +435,8 @@ TEST_F(PrefetcherPipeDramSenderFixture, AttachAcceptsAnyEntrySizeTheRingHolds) {
 TEST_F(PrefetcherPipeDramSenderFixture, EntrySizeNotDividingRingWrapsOnTheGap) {
     // An entry size the ring does not divide leaves a trailing gap that holds no entry. The sender
     // lands back on slot 0 only if it credits that gap along with the entry reaching the usable
-    // limit: its cursor is derived as (entries_sent % ring_units), so an uncredited gap would leave
-    // the next lap starting inside the gap instead of at the ring base.
+    // limit: the cursor advances by the units credited, so an uncredited gap would leave the next
+    // lap starting inside the gap instead of at the ring base.
     constexpr uint32_t kNumReceivers = 2;
     const CoreRangeSet receiver_cores(CoreRange({0, 0}, {kNumReceivers - 1, 0}));
     const PipeSet set =
@@ -481,9 +481,9 @@ TEST_F(PrefetcherPipeDramSenderFixture, EntrySizeNotDividingRingWrapsOnTheGap) {
 
 TEST_F(PrefetcherPipeDramSenderFixture, BlockSizeChangeAcrossPrograms) {
     // Two consumers of one pipe set that read different block sizes. The ring size is fixed at
-    // creation and both sizes divide it, so the DRAM sender snaps its derived cursor onto the new
-    // grid and publishes the skipped bytes as pad credits, which the receivers' own resize
-    // consumes. Neither endpoint stores a cursor, so the two snaps have to agree by arithmetic.
+    // creation and both sizes divide it, so the DRAM sender snaps each cursor onto the new grid and
+    // publishes the skipped bytes as pad credits, which the receivers' own resize consumes. Each
+    // endpoint snaps its own pointer, so the two snaps have to agree by arithmetic.
     constexpr uint32_t kNumReceivers = 2;
     constexpr uint32_t kFirstEntrySize = kEntrySize;
     constexpr uint32_t kSecondEntrySize = 2 * kEntrySize;

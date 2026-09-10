@@ -131,7 +131,7 @@ std::vector<uint32_t> build_sender_config_page(
         page[i++] = static_cast<uint32_t>(phys.y);
     }
     // The counters themselves stay zero from the zero-fill: a fresh pipe has no credits
-    // outstanding, and every receiver's derived write cursor starts at the ring base.
+    // outstanding, and the write cursor each counter slot carries starts at the ring base.
     return page;
 }
 

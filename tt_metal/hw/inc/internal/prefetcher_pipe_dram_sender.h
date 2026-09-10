@@ -17,17 +17,20 @@
 //   * Credits are counted in L1_ALIGNMENT-byte units. Each receiver owns a counter pair --
 //     entries_sent at +0, entries_acked at +L1_ALIGNMENT -- and pairs are strided by
 //     2 * L1_ALIGNMENT, both locally in DRISC L1 and on the receiver side.
-//   * A receiver's write cursor is *derived* from its entries_sent counter rather than stored,
-//     which is what makes the cursor durable across programs: (sent % ring_units) * L1_ALIGNMENT.
+//   * A receiver's write cursor is stored in the padding word of its counter slot
+//     (PREFETCHER_PIPE_SLOT_WR_OFFSET_WORD) and advanced whenever that receiver is credited, the
+//     same durable field the worker-sender path keeps it in. It lives in the config page, so it
+//     survives across programs; it is not derived from entries_sent because that counter's 2^32
+//     wrap only preserves a (sent % ring_units) derivation for a power-of-two ring.
 //   * Credit increments and payload writes ride the same NOC VC, so a drained NIU implies the
 //     payload landed before the credit the receiver observes.
 //
 // An entry size need not divide the ring. When it does not, the last `ring_bytes % entry_bytes`
 // bytes are a trailing gap that holds no entry: writes stop at the page-aligned usable limit, and
 // the wrap credits the gap along with the entry that reaches it. That keeps a lap worth exactly
-// ring_bytes of credit, which is what lets the write cursor be derived as
-// (entries_sent % ring_units) instead of stored -- the property that makes the cursor durable
-// across programs. This is the same trailing-gap term the worker-sender path uses.
+// ring_bytes of credit, which is what lets a cursor advanced by credited units come back to the
+// ring base on the same lap as the receiver's read pointer. This is the same trailing-gap term the
+// worker-sender path uses.
 //
 // The one rule a caller must keep: a write of n entries must not straddle the usable limit,
 // matching the contiguous-write rule the worker-sender path also enforces.
@@ -93,11 +96,45 @@ FORCE_INLINE uint32_t pipe_receiver_noc_xy(const PipeSenderCtx& ctx, uint32_t r,
     return uint32_t(NOC_XY_ENCODING(DYNAMIC_NOC_X(noc, xy[2 * r]), DYNAMIC_NOC_Y(noc, xy[2 * r + 1])));
 }
 
-// Byte offset into the ring where receiver r's next entry goes, derived from its credit counter.
-// Matches the worker-sender path's wr_offset_from_sent().
-FORCE_INLINE uint32_t pipe_derived_wr_offset(const PipeSenderCtx& ctx, uint32_t r) {
-    const uint32_t sent_units = *pipe_local_sent_ptr(ctx, r);
-    return (sent_units % pipe_ring_units(ctx)) * L1_ALIGNMENT;
+// Receiver r's write cursor, in the padding word of its counter slot. entries_sent and
+// entries_acked are NOC-atomic targets and so sit a whole L1_ALIGNMENT apart; the cursor rides the
+// padding that alignment already reserves, which is both where the worker-sender path keeps it and
+// inside the range a credit reset zeroes, so credits and cursors can never reset out of step.
+FORCE_INLINE volatile tt_l1_ptr uint32_t* pipe_local_wr_offset_ptr(const PipeSenderCtx& ctx, uint32_t r) {
+    return pipe_local_sent_ptr(ctx, r) + PREFETCHER_PIPE_SLOT_WR_OFFSET_WORD;
+}
+
+// Byte offset into the ring where receiver r's next entry goes. Matches the worker-sender path's
+// sender_wr_offset().
+FORCE_INLINE uint32_t pipe_sender_wr_offset(const PipeSenderCtx& ctx, uint32_t r) {
+    return *pipe_local_wr_offset_ptr(ctx, r);
+}
+
+// Advance receiver r's cursor by the units just credited to it. Payload and any trailing gap are
+// both in `units` (pipe_units_for_write), so a lap is exactly the full ring and the contiguous-write
+// rule caps one credit at a lap: one conditional subtract is enough. Mirrors the worker-sender
+// path's advance_wr_offset().
+FORCE_INLINE void pipe_advance_wr_offset(const PipeSenderCtx& ctx, uint32_t r, uint32_t units) {
+    volatile tt_l1_ptr uint32_t* offset_ptr = pipe_local_wr_offset_ptr(ctx, r);
+    uint32_t next = *offset_ptr + units * L1_ALIGNMENT;
+    ASSERT(next <= ctx.ring_bytes);
+    if (next >= ctx.ring_bytes) {
+        next -= ctx.ring_bytes;
+    }
+    *offset_ptr = next;
+}
+
+// Publish `wr_offset` as every receiver's cursor, given the base of a sender's counter pairs.
+// Takes that base rather than a PipeSenderCtx so the prefetcher's receiver-contiguous loop -- which
+// keeps one working cursor for a whole round in its RemoteSenderCBInterface, because it credits
+// every receiver the same bytes -- can put the round's result back without rebuilding the context.
+FORCE_INLINE void pipe_store_wr_offset(uint32_t local_counters_ptr, uint32_t num_receivers, uint32_t wr_offset) {
+    volatile tt_l1_ptr uint32_t* offset_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_counters_ptr) + PREFETCHER_PIPE_SLOT_WR_OFFSET_WORD;
+    for (uint32_t r = 0; r < num_receivers; ++r) {
+        *offset_ptr = wr_offset;
+        offset_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);
+    }
 }
 
 // Free credit units (L1_ALIGNMENT-sized) at the most-backed-up receiver, without blocking. Lets a
@@ -133,9 +170,11 @@ FORCE_INLINE void pipe_reserve_back(const PipeSenderCtx& ctx, uint32_t num_entri
     }
 }
 
-// Publish `units` L1_ALIGNMENT-sized credit units to one receiver: bump this core's local counter
-// and NOC-inc the receiver's mirror of it. Advancing entries_sent is also what moves that
-// receiver's derived write cursor forward, so call this only after the payload writes are flushed.
+// Publish `units` L1_ALIGNMENT-sized credit units to one receiver: bump this core's local counter,
+// advance that receiver's write cursor by the same units, and NOC-inc the receiver's mirror of the
+// counter. Crediting is what moves the cursor, so call this only after the payload writes are
+// flushed. Every write path publishes through here, which is what keeps the cursor in step with the
+// credits -- a resize's pad credits move it by exactly the bytes they skip.
 FORCE_INLINE void pipe_credit_receiver(const PipeSenderCtx& ctx, uint32_t r, uint32_t units, uint8_t noc) {
     if (units == 0) {
         return;
@@ -143,6 +182,7 @@ FORCE_INLINE void pipe_credit_receiver(const PipeSenderCtx& ctx, uint32_t r, uin
     const uint32_t remote_noc_xy = pipe_receiver_noc_xy(ctx, r, noc);
     const uint32_t remote_sent_ptr = ctx.remote_counters_base + 2 * r * L1_ALIGNMENT;
     *pipe_local_sent_ptr(ctx, r) += units;
+    pipe_advance_wr_offset(ctx, r, units);
     // Posted, matching the worker-sender path: receivers discover credit by polling, and this
     // core observes their acks the same way.
     noc_semaphore_inc</*skip_ptr_update=*/true>(get_noc_addr_helper(remote_noc_xy, remote_sent_ptr), units, noc);
@@ -150,7 +190,7 @@ FORCE_INLINE void pipe_credit_receiver(const PipeSenderCtx& ctx, uint32_t r, uin
 
 // Credit units a write of `num_entries` starting at `wr_offset` publishes: the payload, plus the
 // trailing gap when the write reaches the usable limit, so a full lap credits exactly ring_bytes
-// and the derived cursor wraps to zero. Mirrors the worker-sender path's units_for_write().
+// and the cursor wraps to zero. Mirrors the worker-sender path's units_for_write().
 FORCE_INLINE uint32_t pipe_units_for_write(const PipeSenderCtx& ctx, uint32_t wr_offset, uint32_t num_entries) {
     const uint32_t payload_bytes = num_entries * ctx.entry_bytes;
     const uint32_t usable = pipe_usable_bytes(ctx);
@@ -165,11 +205,11 @@ FORCE_INLINE uint32_t pipe_units_for_write(const PipeSenderCtx& ctx, uint32_t wr
 // reaches the wrap, so the gap credit is computed per receiver rather than once.
 FORCE_INLINE void pipe_push_credits(const PipeSenderCtx& ctx, uint32_t num_entries, uint8_t noc) {
     for (uint32_t r = 0; r < ctx.num_receivers; ++r) {
-        pipe_credit_receiver(ctx, r, pipe_units_for_write(ctx, pipe_derived_wr_offset(ctx, r), num_entries), noc);
+        pipe_credit_receiver(ctx, r, pipe_units_for_write(ctx, pipe_sender_wr_offset(ctx, r), num_entries), noc);
     }
 }
 
-// Switch this sender to `entry_bytes` for subsequent pushes: snap every receiver's derived write
+// Switch this sender to `entry_bytes` for subsequent pushes: snap every receiver's stored write
 // cursor onto the new entry grid and publish the bytes it skips as pad credits. A receiver runs the
 // matching snap -- PrefetcherPipe's constructor, when the Attach entry size differs from the one
 // last applied -- and waits for exactly these credits, so the two endpoints stay on one grid.
@@ -186,7 +226,7 @@ FORCE_INLINE void pipe_set_entry_size(PipeSenderCtx& ctx, uint32_t entry_bytes, 
     ctx.entry_bytes = entry_bytes;
     const uint32_t usable = pipe_usable_bytes(ctx);
     for (uint32_t r = 0; r < ctx.num_receivers; ++r) {
-        const uint32_t current_offset = pipe_derived_wr_offset(ctx, r);
+        const uint32_t current_offset = pipe_sender_wr_offset(ctx, r);
         const uint32_t offset_into_entry = current_offset % entry_bytes;
         uint32_t adjustment_bytes = offset_into_entry == 0 ? 0u : entry_bytes - offset_into_entry;
         if (current_offset + adjustment_bytes >= usable) {
@@ -200,11 +240,12 @@ FORCE_INLINE void pipe_set_entry_size(PipeSenderCtx& ctx, uint32_t entry_bytes, 
     }
 }
 
-// Post num_entries' worth of payload to one receiver at its derived write position, as
-// entries_per_packet-sized packets. Does not touch credits.
+// Post num_entries' worth of payload to one receiver at its stored write position, as
+// entries_per_packet-sized packets. Does not touch credits, so it does not move that cursor:
+// repeating a write before crediting overwrites the same slots.
 FORCE_INLINE void pipe_write_to_receiver(
     const PipeSenderCtx& ctx, uint32_t r, uint32_t src_l1_addr, uint32_t num_entries, uint8_t noc) {
-    const uint32_t wr_offset = pipe_derived_wr_offset(ctx, r);
+    const uint32_t wr_offset = pipe_sender_wr_offset(ctx, r);
     const uint32_t bytes = num_entries * ctx.entry_bytes;
     // Contiguous-write rule: a write must not straddle the usable limit, past which the ring holds
     // only the trailing gap.

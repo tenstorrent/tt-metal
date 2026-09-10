@@ -514,9 +514,8 @@ def test_validator_pipe_recv_contig(device, K, N, dtype, recv_per_bank, num_laye
 
     The streaming case is the pipe twin of test_validator_dram_sender_recv_contig[streaming]: the
     rotation changes which DRAM block feeds a receiver at each push step, not how much any receiver
-    is credited, so a pipe sender's derived write cursor stays in lockstep across receivers exactly
-    as it does for batched delivery. A byte mismatch here means the rotation reached the wrong
-    receiver."""
+    is credited, so a pipe sender's write cursors stay in lockstep across receivers exactly as they
+    do for batched delivery. A byte mismatch here means the rotation reached the wrong receiver."""
     tt_weight, pipes, _push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
         device, K, N, dtype, recv_per_bank, dual_senders=dual_senders
     )
@@ -560,8 +559,8 @@ def test_validator_pipe_recv_contig_shard_contiguous(device, K, N, dtype, recv_p
 def test_validator_pipe_cursor_persists_across_requests(device, K, N, dtype, recv_per_bank):
     """Two separate queue calls of one layer each, drained by one two-layer validator.
 
-    A PrefetcherPipe sender stores no write cursor: it derives each receiver's position from that
-    receiver's durable credit counter. The second request must therefore resume where the first
+    A PrefetcherPipe sender keeps each receiver's write cursor beside that receiver's credit
+    counters, in the durable config page. The second request must therefore resume where the first
     stopped, which this only detects because the validator expects block b of layer 2 in the slot
     following layer 1's."""
     tt_weight, pipes, _push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
@@ -582,9 +581,8 @@ def test_validator_pipe_block_size_not_dividing_ring(device, K, N, dtype, recv_p
 
     Pipes are created at half this tensor's block size and an odd depth, so the ring is N-and-a-half
     blocks. The DRAM sender stops at the page-aligned usable limit and credits the leftover half
-    block as padding at each wrap, which is what keeps its derived cursor -- (entries_sent %
-    ring_units) -- landing on a block boundary. Two layers so the ring wraps at least once with a
-    gap in play.
+    block as padding at each wrap, so a lap credits the whole ring and its cursor comes back to the
+    ring base on a block boundary. Two layers so the ring wraps at least once with a gap in play.
     """
     tt_weight, bank_to_receivers, push_page_size, ring_size = _recv_contig_weight_and_bank_map(
         device, K, N, dtype, recv_per_bank
@@ -613,7 +611,7 @@ def test_validator_pipe_ring_holds_one_block(device, K, N, dtype, recv_per_bank,
     The transport only needs somewhere to put one block -- it is a consumer that wants a second one
     for lookahead -- so this is a supported (if unpipelined) geometry. The 1.5-block variant puts a
     half-block trailing gap after that one block, so each push credits payload plus gap and the
-    derived cursor wraps back to zero every time.
+    cursor wraps back to zero every time.
     """
     tt_weight, bank_to_receivers, push_page_size, ring_size = _recv_contig_weight_and_bank_map(
         device, K, N, dtype, recv_per_bank
@@ -675,9 +673,9 @@ def test_validator_pipe_dual_single_receiver_bank(device, K, N, dtype):
 def test_validator_pipe_multi_set_switching(device, K, N, dtype, recv_per_bank):
     """Two pipe sets share one prefetcher; interleave A -> B -> A.
 
-    Every pipe owns its own DRISC config page, and a sender's write cursor is derived from that
-    page's credit counters, so switching sets mid-stream has to leave each set's cursor where it
-    was. The third request is the one that catches a set whose state the B request disturbed.
+    Every pipe owns its own DRISC config page, and a sender's write cursors live in that page
+    beside its credit counters, so switching sets mid-stream has to leave each set's cursors where
+    they were. The third request is the one that catches a set whose state the B request disturbed.
     Receivers are stacked vertically so the sets are disjoint; both run on the same DRAM senders.
     The pipe twin of test_validator_dram_sender_multi_gcb_switching.
     """
