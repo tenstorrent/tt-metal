@@ -167,11 +167,22 @@ class KimiKDA:
 
     def decode_state_to_prefill(self, ds: KDADecodeState, slot: int = 0) -> KdaState:
         """Extract slot ``slot`` as a prefill-style state (for tests / continued prefill)."""
-        rec = ttnn.slice(ds.recurrent, (slot, 0, 0, 0), (slot + 1,) + tuple(ds.recurrent.shape)[1:])
-        rows = [ttnn.slice(h, (0, slot, 0), (1, slot + 1, self.conv_width)) for h in ds.conv_history]
-        conv = ttnn.to_layout(ttnn.concat(rows, dim=1), ttnn.ROW_MAJOR_LAYOUT)
-        for r in rows:
-            ttnn.deallocate(r)
+        # NB: a full-range ttnn.slice returns the INPUT tensor itself (B == 1) -> clone so callers may free the result
+        # without destroying the decode-state buffers.
+        B = ds.recurrent.shape[0]
+        if B == 1:
+            rec = ttnn.clone(ds.recurrent, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            rows = list(ds.conv_history)  # aliases: never deallocate
+        else:
+            rec = ttnn.slice(ds.recurrent, (slot, 0, 0, 0), (slot + 1,) + tuple(ds.recurrent.shape)[1:])
+            rows = [ttnn.slice(h, (0, slot, 0), (1, slot + 1, self.conv_width)) for h in ds.conv_history]
+        cat = ttnn.concat(rows, dim=1)  # fresh tensor
+        conv = ttnn.to_layout(cat, ttnn.ROW_MAJOR_LAYOUT)
+        if conv is not cat:
+            ttnn.deallocate(cat)
+        if B != 1:
+            for r in rows:
+                ttnn.deallocate(r)
         return KdaState(recurrent=rec, convolution=conv)
 
     # ---- prefill -----------------------------------------------------------------------------
