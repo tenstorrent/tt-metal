@@ -299,8 +299,8 @@ class TTBEVFormerEncoder:
             different grid needs a new encoder instance.
         bev_w (int): BEV grid width. See bev_h.
         spatial_shapes: Multi-scale feature shapes [num_levels, 2]. Fixed for the lifetime
-            of the encoder and its attention modules, which build their offset normalizers
-            from it at construction. Feeding features at a different resolution requires a
+            of the encoder and its attention modules, which fold it into their sampling-offset
+            Linear at construction. Feeding features at a different resolution requires a
             new encoder instance; it cannot be changed between forwards.
         **kwargs: Additional arguments
 
