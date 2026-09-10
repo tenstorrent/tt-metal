@@ -1,0 +1,1 @@
+/home/jashan/.cache/huggingface/hub/models--MiniMaxAI--MiniMax-Music3/snapshots/fbdf52fbaaca799592917417eb05f1899f1255ec
