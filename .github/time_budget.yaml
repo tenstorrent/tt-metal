@@ -333,7 +333,7 @@ llk:
 models:
   # Agentic Research Model Tests: Saturday 07:00 UTC, independent of daily model tiers.
   agentic_research_tier3:
-    bh_quietbox_2: 10
+    bh_quietbox_2: 12
   merge_gate:
     wh_galaxy_merge_gate: 5
   sanity:

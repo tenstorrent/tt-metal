@@ -62,7 +62,7 @@ opening the mesh; they do not need to be repeated in the launch command.
 
 The **Agentic Research Model Tests** workflow runs every Saturday at 07:00 UTC.
 Select `llama3.1-8b-qb2` and `bh_quietbox_2` for a manual run. Its Tier 3 entry
-has a 10-minute test budget, independent of the daily model pipelines.
+has a 12-minute test budget, independent of the daily model pipelines.
 
 The [CI entry](../../../tests/pipeline_reorg/agentic_research_model_tests.yaml)
 contains all setup, server, test, and cleanup commands. To reproduce CI, run its
@@ -99,8 +99,12 @@ this fixed workload, not guarantees for other request lengths or concurrency.
 
 The weekly command now selects the whole model test directory, including the
 device token-history wrap test and host regressions for generation readback and
-hardware admission. The expanded command needs a fresh QB2 run; the prior timing
-does not measure those added checks.
+hardware admission. A [CI run at `1970d4e25e5`](https://github.com/tenstorrent/tt-metal/actions/runs/34480800119)
+passed all 24 model tests in 82.75 seconds, then completed 54 of 56 serving
+requests before reaching its 10-minute limit. All 26 completed second-pass
+responses matched the first pass. No final accuracy summary was produced.
+The 12-minute budget allows the remaining requests, scoring/reporting, and
+runner variance; the complete command still needs validation within that budget.
 
 The scorer runs in a separate environment to preserve the serving dependency
 set. `tests/report.py` converts its saved summary into the standard tt-metal

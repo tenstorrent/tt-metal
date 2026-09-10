@@ -264,7 +264,10 @@ To add a model:
 2. For each SKU, set `tier` and `timeout` in minutes.
 3. Set the total budget under `models.agentic_research_tier<N>.<sku>` in
    `time_budget.yaml`. The sum of test timeouts for that tier and SKU must fit
-   the budget. The initial QB2 Tier 3 budget is **10 minutes**.
+   the budget. The initial QB2 Tier 3 budget is **12 minutes**, including setup,
+   model tests, serving, and reporting. The [10-minute validation run](https://github.com/tenstorrent/tt-metal/actions/runs/34480800119)
+   passed all 24 model tests and completed 54 of 56 serving requests before its
+   timeout; the budget includes room for completion and runner variance.
 4. Add any new model or SKU to the workflow's manual choices. Add the required
    targets to [model_targets.yaml](model_targets.yaml).
 

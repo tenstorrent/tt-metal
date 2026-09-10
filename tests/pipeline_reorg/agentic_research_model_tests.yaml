@@ -64,7 +64,9 @@
   model_family: Llama
   skus:
     bh_quietbox_2:
-      timeout: 10
+      # Run 34480800119 reached 54/56 requests at 10 minutes after 24 passing tests.
+      # Allow the remaining requests, scoring/reporting, and ~15% runner variance.
+      timeout: 12
       tier: 3
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
