@@ -1,0 +1,94 @@
+# MiniMax Music 3 (MiniMaxAI/MiniMax-Music3) text-to-music on ONE Tenstorrent Blackhole chip — CONTAINER (v5.1) package.
+# Authored from the bring-up on a QB2 (chip 0 of 2x p300c), tt-metal branch jashan/minimax-music3 (base 8e18a76).
+#   tt-model package --container models/autoports/minimaxai_minimax_music3/tt-model.yaml --out ~/tt-model-builds
+schema: "5.1"
+repo: jashansinghTT/minimax-music3-blackhole
+name: minimax-music3
+weights:
+  repo: MiniMaxAI/MiniMax-Music3
+  revision: fbdf52fbaaca799592917417eb05f1899f1255ec   # main as of 2026-08-14; not gated
+  # only the diffusers-format sub-folders are used (28.5 GB of the 57 GB repo): the unconverted originals are skipped
+  ignore_patterns: ["flowmatching_vae.pth", "dav.pth", "qwen_7B/*", "assets/*", "figures/*", "scripts/*"]
+kind: tt-dit-server            # uvicorn + our own FastAPI app (no vLLM: a music model has no chat/completions API)
+arch: blackhole
+
+source:
+  tt_metal: /home/jashan/tt-metal-music3
+  code:                        # allowlist — exactly what ships; verified by the stage-08 import-closure grep
+    - models/common
+    - models/tt_transformers/tt
+    - models/autoports/minimaxai_minimax_music3/__init__.py
+    - models/autoports/minimaxai_minimax_music3/config.py
+    - models/autoports/minimaxai_minimax_music3/reference
+    - models/autoports/minimaxai_minimax_music3/tt
+    - models/autoports/minimaxai_minimax_music3/server
+  ubuntu: "22.04"
+  python: "3.12"
+
+runtime:
+  app: models.autoports.minimaxai_minimax_music3.server.app:app
+  mesh_shape_env: MUSIC3_MESH_SHAPE      # the launcher writes "1x1" here from mesh_device
+  packages:                              # HTTP + audio stack on top of torch (tt-metal's own pin is inserted by tt-model)
+    - "fastapi>=0.115,<1"
+    - "uvicorn[standard]>=0.30"
+    - "pydantic>=2.9,<3"
+    - "python-multipart>=0.0.9"
+    - "soundfile>=0.12"
+    - "soxr>=0.5"
+    - "numpy>=1.24.4,<2"
+    - "safetensors"
+    - "tokenizers"
+    - "huggingface_hub"
+    - "transformers"                     # tt_transformers.ModelArgs loads the Qwen3 backbone through it
+    - "loguru"
+    - "pyyaml"
+    - "einops"
+    - "pytest"                           # models/common/utility_functions imports it at module level
+
+serve:
+  port: 8000
+  env:
+    MUSIC3_WEIGHTS_REVISION: "fbdf52fbaaca799592917417eb05f1899f1255ec"
+    MUSIC3_MAX_SEQ_LEN: "16384"
+    MUSIC3_MAX_FRAMES: "9000"
+    MUSIC3_WARMUP: "1"
+    MUSIC3_WARMUP_FRAMES: "200"
+    MUSIC3_TRACE_REGION_MB: "256"
+    TT_METAL_OPERATION_TIMEOUT_SECONDS: "180.0"
+  args: ["--timeout-keep-alive", "75"]
+
+serve_profiles:
+  - name: p150
+    description: One Blackhole chip (P150; on a P300 / QuietBox 2 the first chip). The whole model on 32 GB.
+    hardware: p150
+    mesh_device: P150
+    env: {TT_METAL_VISIBLE_DEVICES: "0", MUSIC3_FABRIC_CONFIG: none}
+default_profile: p150
+
+verify:
+  - "import models.autoports.minimaxai_minimax_music3.server.app as a; assert a.app"
+  - "import models.autoports.minimaxai_minimax_music3.tt.generator, models.autoports.minimaxai_minimax_music3.tt.dit, models.autoports.minimaxai_minimax_music3.tt.depth_decoder"
+  - "import models.autoports.minimaxai_minimax_music3.server.schemas as s; s.SpeechRequest(input='[verse]\\nla', instructions='pop')"
+  - "import soundfile as sf; assert 'FLAC' in sf.available_formats()"
+  - "import soxr, numpy; assert numpy.__version__.startswith('1.'), numpy.__version__"
+  - "from transformers import Qwen3ForCausalLM, Qwen2Tokenizer"
+
+card:
+  description: >
+    MiniMax Music 3, a lyrics-and-caption conditioned music generation model (8B Qwen3-based global LLM, 0.6B depth
+    decoder for the residual RVQ codebooks, 2.4B flow-matching DiT and a DAC-style vocoder; 44.1 kHz stereo, served
+    at 32 kHz like the reference server) running on a single Tenstorrent Blackhole chip. SGLang-Omni compatible
+    /v1/audio/speech API plus an async jobs API for multi-minute songs. Model weights under the MiniMax-Music3
+    Community License (products must display "MiniMax-Music3").
+  quickstart: |
+    ### Try it
+    ```bash
+    curl -s localhost:20000/v1/health
+    curl -s localhost:20000/v1/audio/speech -H 'Content-Type: application/json' -d '{
+      "model": "MiniMaxAI/MiniMax-Music3",
+      "input": "[Verse]\nMorning light filtering through the pine\n[Chorus]\nSoftly the world begins to breathe",
+      "instructions": "A warm acoustic pop song with intimate female vocals, fingerpicked guitar and soft piano.",
+      "response_format": "wav", "seed": 7, "max_new_tokens": 750}' -o song.wav
+    ```
+    `max_new_tokens` counts audio frames (25 per second). Long songs: `POST /v1/music/jobs` then poll `GET /v1/music/jobs/{id}`
+    and fetch `GET /v1/music/jobs/{id}/audio`.
