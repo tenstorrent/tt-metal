@@ -330,7 +330,7 @@ private:
         uint32_t dest_host = 0;
     };
 
-    // A message in flight, per core. 
+    // A message in flight, per core.
     struct SendSlot {
         // kPayloadLocal sits BETWEEN the other two, and it exists because those are two different
         // facts. MPI_Rput's handle retires when THIS host is done with the TX arena; it promises
