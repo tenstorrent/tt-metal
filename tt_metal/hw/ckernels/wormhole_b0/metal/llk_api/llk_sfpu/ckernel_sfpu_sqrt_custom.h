@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <limits>
+
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
@@ -17,7 +19,8 @@ namespace sfpu {
 // bits (seed -> ~7 bits after 1 iter -> ~14 bits after 2 iters). Two iterations
 // give near-fp32 accuracy; a single iteration (~0.17% rel error, <0.5 bf16 ULP)
 // suffices for consumers whose own approximation error already dominates.
-template <bool APPROXIMATION_MODE, int NEWTON_ITERATIONS = 2>
+// NEGATIVE_INFINITY_SAFE adds a branch for IEEE sqrt(-inf) = NaN; off by default, see below.
+template <bool APPROXIMATION_MODE, bool NEGATIVE_INFINITY_SAFE = false, int NEWTON_ITERATIONS = 2>
 sfpi_inline sfpi::vFloat sfpu_sqrt_custom(sfpi::vFloat in) {
     sfpi::vFloat val = in;
     sfpi::vFloat out = val;
@@ -30,9 +33,6 @@ sfpi_inline sfpi::vFloat sfpu_sqrt_custom(sfpi::vFloat in) {
     // NaN lanes. That is safe -- exexp(NaN) == 255 falsifies the other conjunct and AND is
     // monotone, so NaN passes through whatever the compare returned.
     //
-    // Residual: -inf passes through where IEEE and the golden give NaN. No negative-to-NaN guard,
-    // because erfinv's NR undershoot makes `tmp + intermediate_result` (ckernel_sfpu_erfinv.h:40)
-    // non-positive for small in-domain x, which would turn erfinv(1e-6) into NaN.
     v_if(val != 0.0f && sfpi::exexp(val, sfpi::ExponentMode::Biased) != 255) {
         sfpi::vUInt magic = sfpi::as<sfpi::vUInt>(sfpi::vFloat(sfpi::sFloat16b(0x5f37)));
         sfpi::vFloat approx = sfpi::as<sfpi::vFloat>(magic - (sfpi::as<sfpi::vUInt>(val) >> 1));
@@ -44,6 +44,17 @@ sfpi_inline sfpi::vFloat sfpu_sqrt_custom(sfpi::vFloat in) {
         out = approx * val;
     }
     v_endif;
+
+    // IEEE sqrt(-inf) = NaN, where the pass-through above yields -inf. Opt-in: no production
+    // consumer can reach a -inf and the branch is not free (erfinv paid ~1.12x for it), so only
+    // the test-only calculate_sqrt_custom wrapper turns it on. Must stay an exact-pattern test
+    // against a literal +qNaN -- the reasoning is with the edge sweep in test_eltwise_unary_sfpu.py.
+    if constexpr (NEGATIVE_INFINITY_SAFE) {
+        v_if(sfpi::as<sfpi::vInt>(val) == static_cast<int>(0xFF800000)) {
+            out = std::numeric_limits<float>::quiet_NaN();
+        }
+        v_endif;
+    }
     return out;
 }
 
