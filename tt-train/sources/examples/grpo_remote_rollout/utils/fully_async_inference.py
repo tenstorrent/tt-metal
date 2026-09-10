@@ -194,7 +194,14 @@ def run_inference_loop(
             stop_token_ids=stop_token_ids,
             pad_token_id=pad_token_id,
             temperature=grpo_temperature,
-            top_k=0,
+            # TEMPORARY LIMITATION: rollout samples through top-k=32 so the
+            # on-device log-probs calculator has a bounded softmax to work
+            # with, while the trainer continues to score its untruncated
+            # policy. The returned rollout log-probs therefore do not yet
+            # form an exact importance-sampling pair with trainer-side
+            # log-probs. Matches the analogous choice in
+            # gsm8k_onestep_training_example.py.
+            top_k=32,
             top_p=1.0,
             seed=None,
             # dummy_weights=True; the first bridge dict we install below

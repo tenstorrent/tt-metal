@@ -133,6 +133,18 @@ class TttGenerationWorker:
             top_k=[int(top_k)] * n,
             top_p=[float(top_p)] * n,
             seed=[seed] * n if seed is not None else None,
+            # Turn on the on-device log-probs kernel. Without this, tt_transformers'
+            # process_decode_output_host substitutes torch.ones(...) as a sentinel
+            # for the missing log-probs tensor, which makes _generate_impl return
+            # 1.0 for every sampled-token log-prob (so np.exp(lp) == e everywhere
+            # downstream, including the rollout log-probs pushed on the
+            # RolloutQueue). Matches the on-device single-device log-probs path
+            # enabled in models/common/sampling/tt_log_probs.py.
+            enable_log_probs=[True] * n,
+            # 0 → old path (single scalar sampled-token log-prob) rather than the
+            # new top-K LogProbsResult path. _generate_impl still expects a plain
+            # torch.Tensor of scalars.
+            num_logprobs=[0] * n,
         )
 
     def generate(
@@ -151,7 +163,7 @@ class TttGenerationWorker:
             max_new_tokens=max_new_tokens,
             enable_trace=enable_trace,
             stop_at_eos=stop_at_eos,
-            collect_logprobs=False,
+            collect_logprobs=True,
         )
         return completions
 
