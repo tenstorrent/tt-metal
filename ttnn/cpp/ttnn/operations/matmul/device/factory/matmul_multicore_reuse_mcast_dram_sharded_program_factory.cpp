@@ -675,11 +675,22 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         in0_mcast_sender_noc_y.push_back((std::uint32_t)device->worker_core_from_logical_core(core).y);
     }
 
+    // The sender-coordinate table is the same on every node that reads it, so it goes out as common
+    // runtime args: one multicast write per kernel group, instead of a copy appended to every
+    // sender's and every receiver's unique arg list. Note this does not shrink per-core L1 - unique
+    // and common args draw on the same kernel-config budget - the saving is in the dispatch payload.
+    // The kernel reads the two blocks at get_common_arg_addr(0) and (num_storage_cores).
+    in0_sender_kernel_desc.common_runtime_args.reserve(in0_mcast_sender_noc_x.size() + in0_mcast_sender_noc_y.size());
+    in0_sender_kernel_desc.common_runtime_args.insert(
+        in0_sender_kernel_desc.common_runtime_args.end(), in0_mcast_sender_noc_x.begin(), in0_mcast_sender_noc_x.end());
+    in0_sender_kernel_desc.common_runtime_args.insert(
+        in0_sender_kernel_desc.common_runtime_args.end(), in0_mcast_sender_noc_y.begin(), in0_mcast_sender_noc_y.end());
+
     // in0 sender runtime args (mcast senders)
     uint32_t sender_id = 0;
     for (auto core : mcast_senders_coords) {
         std::vector<uint32_t> mm_in0_sender_args;
-        mm_in0_sender_args.reserve(3 + in0_mcast_sender_noc_x.size() + in0_mcast_sender_noc_y.size());
+        mm_in0_sender_args.reserve(3);
 
         uint32_t worker_core_type;
         if (find(storage_worker_common.begin(), storage_worker_common.end(), core) != storage_worker_common.end()) {
@@ -692,10 +703,6 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         mm_in0_sender_args.push_back((std::uint32_t)sender_id);
         mm_in0_sender_args.push_back(
             (std::uint32_t)((core == input_all_storage_cores_vec.back()) and (in0_last_ktile_w > 0)));
-        mm_in0_sender_args.insert(
-            mm_in0_sender_args.end(), in0_mcast_sender_noc_x.begin(), in0_mcast_sender_noc_x.end());
-        mm_in0_sender_args.insert(
-            mm_in0_sender_args.end(), in0_mcast_sender_noc_y.begin(), in0_mcast_sender_noc_y.end());
 
         in0_sender_kernel_desc.runtime_args.emplace_back(core, std::move(mm_in0_sender_args));
         sender_id++;
@@ -705,15 +712,11 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     std::vector<CoreCoord> mcast_receiver_coords = corerange_to_cores(mcast_receivers);
     for (auto core : mcast_receiver_coords) {
         std::vector<uint32_t> mm_in0_receiver_args;
-        mm_in0_receiver_args.reserve(3 + in0_mcast_sender_noc_x.size() + in0_mcast_sender_noc_y.size());
+        mm_in0_receiver_args.reserve(3);
         uint32_t worker_core_type = 3;
         mm_in0_receiver_args.push_back((std::uint32_t)worker_core_type);
         mm_in0_receiver_args.push_back((std::uint32_t)0);
         mm_in0_receiver_args.push_back((std::uint32_t)0);  // in0_last_ktile_w
-        mm_in0_receiver_args.insert(
-            mm_in0_receiver_args.end(), in0_mcast_sender_noc_x.begin(), in0_mcast_sender_noc_x.end());
-        mm_in0_receiver_args.insert(
-            mm_in0_receiver_args.end(), in0_mcast_sender_noc_y.begin(), in0_mcast_sender_noc_y.end());
 
         in0_sender_kernel_desc.runtime_args.emplace_back(core, std::move(mm_in0_receiver_args));
     }

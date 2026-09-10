@@ -44,8 +44,10 @@ void kernel_main() {
     const uint32_t sender_id = get_arg_val<uint32_t>(1);
     const bool is_last_ktile_padded = static_cast<bool>(get_arg_val<uint32_t>(2));
 
-    tt_l1_ptr uint32_t* in0_mcast_sender_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(3));
-    tt_l1_ptr uint32_t* in0_mcast_sender_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(3 + num_storage_cores));
+    // Common runtime args: the sender-coordinate table is identical on every node, so the factory
+    // sends it once per kernel group rather than appending a copy to each core's unique args.
+    tt_l1_ptr uint32_t* in0_mcast_sender_noc_x = (tt_l1_ptr uint32_t*)(get_common_arg_addr(0));
+    tt_l1_ptr uint32_t* in0_mcast_sender_noc_y = (tt_l1_ptr uint32_t*)(get_common_arg_addr(num_storage_cores));
 
     const uint32_t sender_block_id = sender_id * num_blocks_per_shard;
 
