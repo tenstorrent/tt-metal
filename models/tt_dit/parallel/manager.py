@@ -783,6 +783,8 @@ class CCLManager:
                 tensor.shape, dims, pad_left, pad_right, dtype=tensor.get_dtype(), t_front_pad=t_front_pad
             )
 
+        # Always Linear: the op resolves neighbours as a line, but sizes its startup-barrier multicast
+        # from this argument, and under Ring the edge shards never reach the barrier count (deadlock).
         return ttnn.experimental.neighbor_pad_async(
             tensor,
             dims,
@@ -793,7 +795,7 @@ class CCLManager:
             neighbor_sems,
             [barrier_sem],
             num_links=num_links,
-            topology=self.topology,
+            topology=ttnn.Topology.Linear,
             persistent_output_buffer=persistent_buf,
             logical_h=logical_h,
             t_front_pad=t_front_pad,

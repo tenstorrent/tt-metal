@@ -37,6 +37,7 @@ from ....models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3Au
 from ....models.audio_vae.vocoder_ltx import TILE_HEIGHT
 from ....parallel.config import ParallelFactor
 from ....parallel.manager import CCLManager
+from ....pipelines.minimax_h3.pipeline_minimax_h3 import resolve_mesh_preset
 from ....utils.check import assert_quality
 from .common import build_audio_decoder, load_config, psnr, weights_subdir
 
@@ -608,9 +609,16 @@ def test_audio_decode_t_parallel(mesh_device, num_latent_frames):
     baseline_out = None
     baseline_s = None
     results = []
+    # Run the pipeline's own CCL preset (Ring, two links on 4x8) so the gate exercises production settings;
+    # an unlisted mesh shape (1x32) has no preset and keeps the single-link line.
+    preset = resolve_mesh_preset(tuple(mesh_device.shape), required=False)
+    num_links = preset.get("num_links", 1)
+    topology = preset.get("topology", ttnn.Topology.Linear)
+    logger.info(f"CCL for the sharded decoders: num_links={num_links}, topology={topology}")
+
     for factor, axis in factors:
         pc = None if factor <= 1 else ParallelFactor(factor=factor, mesh_axis=axis)
-        ccl = None if pc is None else CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+        ccl = None if pc is None else CCLManager(mesh_device, num_links=num_links, topology=topology)
         try:
             decoder = _build(mesh_device, config, converted, pc, ccl)
             out = decoder(latents)
