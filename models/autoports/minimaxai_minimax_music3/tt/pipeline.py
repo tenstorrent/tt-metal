@@ -126,9 +126,14 @@ class MiniMaxMusic3Pipeline:
         vocoder: V.MiniMaxMusic3Vocoder,
         weights_dir: Path,
         dtype_policy: str,
+        vocoder_mode: str = "host",
+        preset: Optional[dict] = None,
         load_log: Optional[dict] = None,
         denoiser: Optional[ChunkDenoiser] = None,
+        vocoder_threads: Optional[int] = None,
     ):
+        if vocoder_mode not in VOCODER_MODES:
+            raise ValueError(f"vocoder_mode must be one of {VOCODER_MODES}, got {vocoder_mode!r}")
         self.mesh_device = mesh_device
         self.llm = llm
         self.depth = depth
@@ -138,6 +143,8 @@ class MiniMaxMusic3Pipeline:
         self.vocoder = vocoder
         self.weights_dir = Path(weights_dir)
         self.dtype_policy = dtype_policy
+        self.vocoder_mode = vocoder_mode
+        self.preset = dict(preset) if preset is not None else {}
         self.denoiser = denoiser if denoiser is not None else ChunkDenoiser(transformer, condition_encoder)
         self.sampling_rate = int(vocoder.sampling_rate)
         self.latent_hop_length = int(vocoder.hop_length)
@@ -145,10 +152,11 @@ class MiniMaxMusic3Pipeline:
         self.load_log = load_log or {}
         # Stage 07: overlap the host vocoder of window k with the denoising of window k + 1 in a separate process
         # (host vocoder only; a thread is starved by the DiT loop's GIL-holding read-backs, doc/optimize/README.md).
-        self.overlap_vocoder = not hasattr(vocoder, "mesh_device")
+        self.overlap_vocoder = vocoder_mode == "host"
         self.vocoder_process: Optional[VocoderProcess] = None
         if self.overlap_vocoder:
-            self.vocoder_process = VocoderProcess(self.weights_dir, threads=max(4, min(10, (os.cpu_count() or 8) - 4)))
+            threads = int(vocoder_threads) if vocoder_threads else max(4, min(10, (os.cpu_count() or 8) - 4))
+            self.vocoder_process = VocoderProcess(self.weights_dir, threads=threads)
             self.vocoder_process.start()  # spawns now; the worker loads its fp32 weights while the chip warms up
 
     # ------------------------------------------------------------------ construction
@@ -177,7 +185,7 @@ class MiniMaxMusic3Pipeline:
                 ``DTYPE_POLICIES`` name; ``"bf16"`` / ``"bfp8"`` transformer-weight dtype; ``"host"`` / ``"device"``).
             warm: run a 1-frame song and one full-length DiT step so the AR traces exist and the DiT programs (and
                 the 200-frame-window DiT trace) are ready before the first real request.
-            vocoder_threads: torch intra-op threads for the host vocoder (default: leave torch's setting).
+            vocoder_threads: torch intra-op threads of the host vocoder worker process (default: ``max(4, min(10, cpus - 4))``).
             dit_trace: capture / replay the DiT Euler step as a trace per window shape (``False`` = eager, stage 05 path).
         """
         from models.autoports.minimaxai_minimax_music3.reference.hf_llm import weights_dir as default_weights_dir
@@ -201,8 +209,6 @@ class MiniMaxMusic3Pipeline:
             raise ValueError(f"depth_dtype must be one of {sorted(DEPTH_DTYPES)}, got {preset['depth_dtype']!r}")
         if preset["vocoder"] not in VOCODER_MODES:
             raise ValueError(f"vocoder must be one of {VOCODER_MODES}, got {preset['vocoder']!r}")
-        if vocoder_threads:
-            torch.set_num_threads(int(vocoder_threads))
         log: Dict[str, object] = {
             "weights_dir": str(weights_dir),
             "dtype_policy": dtype_policy,
@@ -256,10 +262,12 @@ class MiniMaxMusic3Pipeline:
             vocoder=vocoder_model,
             weights_dir=weights_dir,
             dtype_policy=dtype_policy,
+            vocoder_mode=preset["vocoder"],
+            preset=preset,
             load_log=log,
             denoiser=denoiser,
+            vocoder_threads=vocoder_threads,
         )
-        pipe.preset = preset
         if warm:
             pipe.warm()
         if pipe.vocoder_process is not None:
@@ -273,7 +281,7 @@ class MiniMaxMusic3Pipeline:
         """The dtypes actually configured on every component (work log / context contract evidence)."""
         return {
             "preset": self.dtype_policy,
-            "components": dict(getattr(self, "preset", {})),
+            "components": dict(self.preset),
             "llm": self.llm.dtype_report(),
             "depth_weight_dtype": str(self.depth.weight_dtype),
             "dit_weight_dtype": str(self.transformer.weight_dtype),
@@ -488,7 +496,7 @@ class MiniMaxMusic3Pipeline:
         self.ar.release()
         self.denoiser.release()
         self.transformer.release()
-        if hasattr(self.vocoder, "release"):
+        if self.vocoder_mode == "device":
             self.vocoder.release()
         self.condition_encoder.release()
         self.llm.release()

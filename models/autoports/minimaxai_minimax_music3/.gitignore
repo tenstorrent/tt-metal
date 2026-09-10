@@ -3,6 +3,8 @@ generated/
 # The repo-level .gitignore drops *.csv / *.log; keep the small evidence files the work log cites.
 !doc/depth_decoder/tracy/*/perf_report.csv
 !doc/depth_decoder/triage/trace_probe.log
+# Stage 03 keeps its two Tracy raw ops dumps (ops.csv.gz, 0.5 MB) and stacked charts tracked: the work log's device-time
+# figures are derived from them and cite them. Later stages commit only the report txt/csv/summary (rules below).
 # Stage 05: the diffusers scheduler step triples (0.5 MB) are test inputs and travel with the tests.
 !doc/flow_dit/pcc/scheduler_triples.pt
 !doc/flow_dit/tracy/*/perf_report.csv

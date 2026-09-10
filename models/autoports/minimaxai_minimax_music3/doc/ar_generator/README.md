@@ -3,7 +3,10 @@
 Work log for the AR stage of MiniMax-Music3 on one Blackhole chip: diffusers' `MiniMaxMusic3TokenizeStep`
 + `MiniMaxMusic3AutoregressiveStep` driving the stage-02 `MusicLLM` and the stage-03 `DepthDecoder`.
 
-* implementation: [`../../tt/ar_generator.py`](../../tt/ar_generator.py) (`ARGenerator`, `sample_top_k`),
+* implementation: [`../../tt/ar_generator.py`](../../tt/ar_generator.py) (`ARGenerator`, `sample_top_k`; **superseded in
+  stage 07**: the generation hot path is now `_guided_window` + `sample_top_k_candidates`, a multinomial over the <= 50
+  candidates instead of the full 200k-wide tensor, see `doc/optimize/README.md` decision 1 - `_full_logits` / `sample_top_k`
+  remain for diagnostics and tests),
   [`../../tt/prompt.py`](../../tt/prompt.py) (`clean_caption`, `normalize_lyrics`, `assemble_prompt`, `PromptEncoder`)
 * changes to earlier stages: [`../../tt/llm.py`](../../tt/llm.py) gained `MusicLLM(logits_window=...)` /
   `set_logits_window`, `prepare_decode_inputs`, `decode_windowed` (the stage-02 API and tests are unchanged;
@@ -48,8 +51,8 @@ reference's.
 | reference step | here |
 |---|---|
 | `embed_tokens(text_ids)` + prefill | host gather from the bf16 embedding table, `MusicLLM.prefill` (both rows) |
-| `lm_head(last_hidden)`, `vocab_mask`, CFG 1.5, conditional top-50 restriction, re-mask | the decode trace returns the tile-aligned column window `[151648, 168064)` untilized; the host puts the logical window `[151670, 168059)` (end token + 16384 semantic codes) back into a `-inf`-filled `[2, 200000]` tensor and runs the reference arithmetic unchanged |
-| `_sample_top_k(guided, generator)` | identical code on the full-length tensor with a CPU `torch.Generator(seed)` (the multinomial draws one random number per category, so the tensor length is part of the sampling contract) |
+| `lm_head(last_hidden)`, `vocab_mask`, CFG 1.5, conditional top-50 restriction, re-mask | the decode trace returns the tile-aligned column window `[151648, 168064)` untilized; the host puts the logical window `[151670, 168059)` (end token + 16384 semantic codes) back into a `-inf`-filled `[2, 200000]` tensor and runs the reference arithmetic unchanged (stage 04; since stage 07 the same arithmetic runs on the 16389-value window directly, `_guided_window`) |
+| `_sample_top_k(guided, generator)` | identical code on the full-length tensor with a CPU `torch.Generator(seed)` (the multinomial draws one random number per category, so the tensor length is part of the sampling contract) (stage 04; since stage 07 the hot path draws from the <= 50 candidates, `sample_top_k_candidates`, doc/optimize decision 1) |
 | end token -> break; frame 0 not emitted | same |
 | `_generate_depth_codes`: projection of `last_hidden` and `embed(sem + offset)`, 7 steps, per-step CFG 1.5 + top-50, `code.repeat(2)`, `hidden[:1]` collected | `DepthStepTrace.begin_frame(hidden_device_tensor, sem_embed)` then 7 `step()` replays; per step the host reads the `[2, 1024]` head logits and the `[1, 4096]` row-0 hidden |
 | `frame_hiddens.append(cat(last_hidden[:1], depth_hidden))` | same, fp32 on host |

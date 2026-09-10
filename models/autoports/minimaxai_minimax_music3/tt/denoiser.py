@@ -105,7 +105,7 @@ class ChunkDenoiser:
         """One window. ``frame_hiddens_chunk [1, F, 32768]`` (F <= 200), ``noise [1, 128, L]`` with
         ``L = latent_length(F)``; ``condition`` (raw encoder output ``[1, L, 2048]``) may be passed to skip the encoder.
         ``on_step(i, t, latents)`` sees the latents after every Euler update (for drift logging)."""
-        steps = steps or self.num_inference_steps
+        steps = self.num_inference_steps if steps is None else int(steps)
         if condition is None:
             condition = self.condition_encoder(frame_hiddens_chunk)
         condition = condition.float().clone()

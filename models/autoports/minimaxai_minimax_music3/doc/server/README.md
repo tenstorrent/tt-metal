@@ -45,7 +45,7 @@ Gate: `~/mm3-bringup/checks/08.sh` (= `pytest tests/test_server.py -m "not slow"
 - **Warm-up.** `MiniMaxMusic3Pipeline.load` already captures the AR traces and the 200-frame-window DiT trace; the
   lifespan then generates a 2 s / 4-step song (smallest window shape, vocoder-worker round trip, wav encoder) before it
   yields, so `Application startup complete` means "fully warm".
-- **Contract.** `input` = lyrics, `instructions` = caption, `response_format` must be `wav` (400 otherwise),
+- **Contract.** `input` = lyrics, `instructions` = caption, `response_format` must be `wav` (422 otherwise, a body-validation error),
   `max_new_tokens` = frames at 25 fps (default 1500, max 9000), `audio_duration` seconds as an alias (both given and
   disagreeing -> 400), `num_inference_steps` 1..200 (default 30), `stream: true` -> 501, `model` other than
   `MiniMaxAI/MiniMax-Music3` -> 404, prompt over 5000 tokens -> 400 (tokenized on the host before the lock is taken).
@@ -57,12 +57,12 @@ Gate: `~/mm3-bringup/checks/08.sh` (= `pytest tests/test_server.py -m "not slow"
   and the stage-06 evidence say 44.1 kHz, and the stage prompt asks for 44.1 kHz), plus `X-MM3-*` headers with the
   frames, seed, stop reason, prompt tokens and generation time. Errors use the OpenAI `{"error": {...}}` shape.
 - **Shutdown.** uvicorn turns SIGTERM into the lifespan shutdown: vocoder worker process stopped, pipeline released,
-  mesh closed (`device closed` in the log); the tests assert exit code 0.
+  mesh closed (`device closed` in the log); the tests accept exit code 0 or -15 (uvicorn re-raises the captured SIGTERM; -15 is what was observed).
 
 ## Evidence
 
 Hardware: Blackhole p300c, board id `000004613193411b` (`tt-smi -s`), device 0 of the 1x1 mesh, host `qbge-devex-02`.
-Code: commit `1f3a581da33 (stage files; this line was added in the follow-up commit)` on `jashan/minimax-music3` (`models/autoports/minimaxai_minimax_music3`).
+Code: commit `1f3a581da33` (the final `results.json` run was recorded at `fd28ebad279`, whose `server/` and `tests/` are identical) on `jashan/minimax-music3` (`models/autoports/minimaxai_minimax_music3`).
 
 Gate run (`~/mm3-bringup/checks/08.sh`, 2026-09-10 01:09-01:11, idle host, warm weight caches; `doc/server/results.json`,
 pytest output `generated/gate08.log`, server stdout `generated/server_test.log`): **7 passed in 148 s, `GATE_OK`**. Two

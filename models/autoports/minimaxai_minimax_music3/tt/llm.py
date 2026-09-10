@@ -253,12 +253,25 @@ class MusicTransformer(Transformer):
         return hidden, logits
 
 
+_WEIGHT_CACHE_ROOT: Optional[Path] = None
+
+
 def _default_weight_cache_root() -> Path:
-    root = os.environ.get("TT_CACHE_PATH")
-    if root:
-        return Path(root)
-    base = os.environ.get("TT_METAL_CACHE") or str(Path.home() / ".cache" / "tt-metal-cache-mm3")
-    return Path(base) / "minimax_music3_llm"
+    """The converted-weight cache root, resolved once per process.
+
+    ``MusicLLM.__init__`` points ``TT_CACHE_PATH`` (what tt_transformers reads) at ``<root>/<policy key>``; resolving
+    the root again from that variable for a second ``MusicLLM`` in the same process (``scripts/policy_probe_device.py``
+    loops over policies) would nest the caches (``<root>/<policy1>/<policy2>``), so the first resolution is kept.
+    """
+    global _WEIGHT_CACHE_ROOT
+    if _WEIGHT_CACHE_ROOT is None:
+        root = os.environ.get("TT_CACHE_PATH")
+        if root:
+            _WEIGHT_CACHE_ROOT = Path(root)
+        else:
+            base = os.environ.get("TT_METAL_CACHE") or str(Path.home() / ".cache" / "tt-metal-cache-mm3")
+            _WEIGHT_CACHE_ROOT = Path(base) / "minimax_music3_llm"
+    return _WEIGHT_CACHE_ROOT
 
 
 class MusicLLM:
@@ -849,10 +862,19 @@ class MusicLLM:
             "bytes_per_token_per_layer": per_layer // (self.paged_attention_config.max_num_blocks * self.block_size),
         }
 
-    def release(self):
+    def release_trace(self):
+        """Drop the captured decode trace; the next ``decode`` re-runs the warm compile and captures a new one.
+
+        Lets a caller change the traced graph (``set_logits_window``) after a decode has already run. The
+        persistent decode inputs and the KV cache are kept.
+        """
         if self._trace_id is not None:
             ttnn.release_trace(self.mesh_device, self._trace_id)
             self._trace_id = None
+            self._trace_out = None
+
+    def release(self):
+        self.release_trace()
 
 
 def _bytes_per_element(dtype) -> float:

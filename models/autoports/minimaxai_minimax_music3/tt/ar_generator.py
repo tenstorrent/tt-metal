@@ -39,7 +39,6 @@ import torch
 import torch.nn.functional as F
 from loguru import logger
 
-import ttnn
 from models.autoports.minimaxai_minimax_music3.reference import hf_llm as R
 from models.autoports.minimaxai_minimax_music3.tt.constants import (
     AR_CFG_SCALE,
@@ -101,8 +100,9 @@ class ARGenerator:
     """Prompt + lyrics -> ``frame_hiddens [1, F, 32768]`` and the sampled RVQ codes, on device.
 
     Args:
-        llm: the stage-02 ``MusicLLM`` (its decode trace must not be captured yet, so the logits
-            window can still be installed; ``MusicLLM(..., logits_window=...)`` also works).
+        llm: the stage-02 ``MusicLLM``. The generator installs the semantic logits window on it; a decode
+            trace captured before that (a process that already ran ``MusicLLM.decode``) is released and
+            re-captured with the window on the first frame.
         depth: the stage-03 ``DepthDecoder`` with its weights on device.
         tokenizer_dir: the checkpoint's ``tokenizer`` directory (default ``$MM3_WEIGHTS/tokenizer``).
         embed_weight / audio_embeddings: host copies of the backbone embedding table
@@ -130,17 +130,15 @@ class ARGenerator:
         assert self.embed_weight.shape == (llm.vocab_size, LLM_HIDDEN), tuple(self.embed_weight.shape)
         logger.info(f"ARGenerator: host embedding tables ready in {time.time() - t0:.1f}s")
 
-        # Logits window on device (only possible before the backbone trace exists; otherwise fall
-        # back to the full-vocabulary read-back and slice on the host).
-        if llm.logits_window is None and llm._trace_id is None:
+        # The traced decode returns only the tile-aligned semantic window of the logits. The window is part of the
+        # captured graph, so a trace captured without it is released here and re-captured on the first frame.
+        if llm.logits_window is None:
+            if llm._trace_id is not None:
+                logger.warning("ARGenerator: backbone trace captured without a logits window; releasing it")
+                llm.release_trace()
             llm.set_logits_window(WINDOW_START, WINDOW_END)
-        self.window = llm.logits_window
-        if self.window is not None and tuple(self.window) != (WINDOW_START, WINDOW_END):
-            raise ValueError(f"MusicLLM logits window {self.window} does not cover {(WINDOW_START, WINDOW_END)}")
-        if self.window is None:
-            logger.warning(
-                "ARGenerator: backbone trace already captured without a logits window; reading the full vocabulary"
-            )
+        if tuple(llm.logits_window) != (WINDOW_START, WINDOW_END):
+            raise ValueError(f"MusicLLM logits window {llm.logits_window} does not cover {(WINDOW_START, WINDOW_END)}")
 
         # Trace-lifetime order: backbone decode inputs, then the depth buffers + depth traces; the
         # backbone trace is captured on the first decode (its outputs are consumed before every
@@ -168,9 +166,10 @@ class ARGenerator:
     def _full_logits(self, window_logits: torch.Tensor) -> torch.Tensor:
         """Put the read-back window into a full-vocabulary fp32 tensor with every masked id at -inf.
 
-        The reference samples over the whole 200k vocabulary; ``torch.multinomial`` draws one random
-        number per category, so the sampled index for a given seed depends on the tensor length.
-        Restoring the full length keeps the host sampling literally the reference's.
+        Diagnostics and tests only (``sample_top_k``, ``end_token_stats``, ``_semantic_rank``): the reference's
+        full-length multinomial draws one random number per category, so reproducing its exact draws needs the
+        full 200k-wide tensor. The generation hot path uses ``_guided_window`` + ``sample_top_k_candidates``
+        instead (stage 07, doc/optimize/README.md decision 1: same candidate set and probabilities, cheaper draw).
         """
         full = torch.full((self.batch, self.llm.vocab_size), -float("inf"))
         full[:, WINDOW_START:WINDOW_END] = window_logits
@@ -227,17 +226,11 @@ class ARGenerator:
 
     def _decode(self, feedback: torch.Tensor, position: int):
         """One backbone step -> (device hidden row tensor, host fp32 hidden [2, 4096], host fp32 window logits [2, W])."""
+        # The full tiled logits output of the backbone trace is never read: it is allocated inside the backbone
+        # capture, after the depth traces exist, so a depth replay may overwrite it - only the hidden (copied into
+        # the depth seed buffer first) and the window (read back first) are consumed.
         pos = torch.full((self.batch,), position, dtype=torch.int64)
-        if self.window is not None:
-            return self.llm.decode_windowed(feedback, pos)
-        # Fallback without a device-side window: full-vocabulary read-back, sliced on the host. (In windowed
-        # mode the full tiled logits output of the backbone trace is never read: it is allocated inside the
-        # backbone capture, after the depth traces exist, so a depth replay may overwrite it - only the hidden
-        # (copied into the depth seed buffer first) and the window (read back first) are consumed.)
-        hidden_dev, logits_dev = self.llm.decode(feedback, pos, read_back=False)
-        h = ttnn.to_torch(hidden_dev).float()[0, 0, : self.batch, :LLM_HIDDEN]
-        l = ttnn.to_torch(logits_dev).float()[0, 0, : self.batch, WINDOW_START:WINDOW_END]
-        return hidden_dev, h, l
+        return self.llm.decode_windowed(feedback, pos)
 
     def _depth_frame(
         self,

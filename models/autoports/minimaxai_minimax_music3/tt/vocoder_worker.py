@@ -14,11 +14,13 @@ from __future__ import annotations
 
 import time
 from concurrent.futures import Future, ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from multiprocessing import get_context
 from pathlib import Path
 from typing import Optional
 
 import torch
+from loguru import logger
 
 _VOCODER = None
 
@@ -57,14 +59,28 @@ class VocoderProcess:
 
     def warm(self) -> float:
         """Force the worker to start and load its weights (returns the seconds it took)."""
-        self.start()
         t0 = time.perf_counter()
-        self._pool.submit(_vocode, torch.zeros(1, 128, 4)).result()
+        self._submit(torch.zeros(1, 128, 4)).result()
         return time.perf_counter() - t0
 
     def submit(self, latents: torch.Tensor) -> Future:
+        return self._submit(latents.detach().float().contiguous())
+
+    def _submit(self, latents: torch.Tensor) -> Future:
+        """Submit to the pool; a pool whose worker died (OOM kill, signal) is discarded and re-spawned once.
+
+        ``ProcessPoolExecutor`` stays broken forever after its worker exits abnormally, and the server keeps one
+        pipeline for its whole life, so without this a single worker death would fail every later request.
+        """
         self.start()
-        return self._pool.submit(_vocode, latents.detach().float().contiguous())
+        try:
+            return self._pool.submit(_vocode, latents)
+        except BrokenProcessPool as e:
+            logger.warning(f"vocoder worker died ({e}); re-spawning it once")
+            self._pool.shutdown(wait=False)
+            self._pool = None
+            self.start()
+            return self._pool.submit(_vocode, latents)
 
     def close(self) -> None:
         if self._pool is not None:

@@ -155,6 +155,7 @@ def golden():
 
 # ----------------------------------------------------------------------------- tests
 @pytest.mark.hardware
+@pytest.mark.timeout(1800)  # includes the session pipeline load (cold weight caches: ~150 s) and the 2-window replay
 def test_golden_replay(pipeline, golden):
     """Teacher-forced codes + golden noises -> latents PCC >= 0.98 per window and wav within the log-mel bar."""
     frames = golden["codes"].shape[0]
@@ -233,6 +234,7 @@ def test_golden_replay(pipeline, golden):
 
 
 @pytest.mark.hardware
+@pytest.mark.timeout(900)
 def test_free_running_10s(pipeline):
     """Seed 7, 10 s: a stereo 44.1 kHz wav with RMS > 1e-3, finite, duration within 1 s of frames / 25."""
     out = pipeline.generate(GOLDEN_PROMPT, GOLDEN_LYRICS, audio_duration=10.0, seed=7, num_inference_steps=30)
@@ -288,6 +290,7 @@ def test_audio_durations(pipeline, audio_duration, expected_frames, expected_sta
 
 
 @pytest.mark.hardware
+@pytest.mark.timeout(900)
 def test_same_seed_determinism(pipeline):
     """Two runs with the same seed give the same codes, latents and audio."""
     kwargs = dict(audio_duration=2.0, seed=3, num_inference_steps=FAST_STEPS)
@@ -320,3 +323,35 @@ def test_seed_none_draws_a_seed(pipeline):
     out = pipeline.generate(GOLDEN_PROMPT, GOLDEN_LYRICS, audio_duration=2.0, seed=None, num_inference_steps=2)
     assert isinstance(out["seed"], int)
     _check_audio(out)
+
+
+@pytest.mark.timeout(600)
+def test_vocoder_worker_respawns_after_death():
+    """A killed vocoder worker (OOM kill, signal) is replaced on the next submit instead of failing every later request.
+
+    Host only: the worker holds the fp32 vocoder, never the device. ``ProcessPoolExecutor`` marks itself broken for
+    good after an abnormal worker exit; ``VocoderProcess._submit`` re-spawns it once.
+    """
+    from concurrent.futures.process import BrokenProcessPool
+
+    from models.autoports.minimaxai_minimax_music3.tt.vocoder_worker import VocoderProcess
+
+    weights = R.weights_dir()
+    if not (weights / "vocoder" / "config.json").is_file():
+        pytest.skip(f"vocoder weights missing under {weights}")
+    proc = VocoderProcess(weights, threads=2)
+    try:
+        proc.warm()
+        latents = torch.randn(1, 128, 8)
+        wav0, _ = proc.submit(latents).result()
+        (pid,) = list(proc._pool._processes)
+        os.kill(pid, 9)
+        # the pool notices the death on its next call; a bare pool would raise BrokenProcessPool here and forever after
+        try:
+            proc._pool.submit(time.sleep, 0).result(timeout=60)
+        except BrokenProcessPool:
+            pass
+        wav1, _ = proc.submit(latents).result(timeout=300)
+        assert wav1.shape == wav0.shape and torch.equal(wav0, wav1), (wav0.shape, wav1.shape)
+    finally:
+        proc.close()

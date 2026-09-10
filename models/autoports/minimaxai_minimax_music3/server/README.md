@@ -6,9 +6,12 @@ optimized dtype policy) behind the OpenAI-style audio endpoint the model card do
 ## Launch
 
 ```bash
-source ~/mm3-bringup/common.sh
-cd $MM3_WT && HF_MODEL=$MM3_WEIGHTS MM3_MESH_SHAPE=1x1 $MM3_PY -m uvicorn --host 0.0.0.0 --port 8000 --lifespan on models.autoports.minimaxai_minimax_music3.server.app:app
+cd <tt-metal root>
+HF_MODEL=<MiniMax-Music3 snapshot dir, or MiniMaxAI/MiniMax-Music3> MM3_MESH_SHAPE=1x1 \
+python -m uvicorn --host 0.0.0.0 --port 8000 --lifespan on models.autoports.minimaxai_minimax_music3.server.app:app
 ```
+
+(On the bring-up host: `source ~/mm3-bringup/common.sh; cd $MM3_WT` and use `$MM3_PY` with `HF_MODEL=$MM3_WEIGHTS`.)
 
 This is exactly how tt-model-manager's `TtDitServerLauncher` starts a `tt-dit-server` app inside its container
 (`python -m uvicorn --host 0.0.0.0 --port <port> --lifespan on <module:attr>`). The server is ready when uvicorn prints
@@ -19,7 +22,7 @@ Environment:
 
 | variable | meaning | default |
 |---|---|---|
-| `HF_MODEL` | HF repo id (`MiniMaxAI/MiniMax-Music3`, downloaded with `snapshot_download` minus the raw `.pth` / `qwen_7B` files) or a local snapshot directory | `$MM3_WEIGHTS` |
+| `HF_MODEL` | HF repo id (`MiniMaxAI/MiniMax-Music3`, downloaded with `snapshot_download` minus the raw `.pth` / `qwen_7B` files) or a local snapshot directory | required |
 | `MM3_MESH_SHAPE` | mesh shape the launcher resolved (`RxC`); v1 is single-chip and always opens a 1x1 mesh on device 0, the value is logged. The tt-model manifest must set `runtime.mesh_shape_env: MM3_MESH_SHAPE`, otherwise the launcher exports `FLUX2_MESH_SHAPE` and the app falls back to `1x1` | `1x1` |
 | `MESH_DEVICE` | board name from the launcher (`P150` / `P300` / `P300x2`), logged and reported by `/health` | unset |
 | `MM3_REQUEST_TIMEOUT_S` | per-request timeout; the request gets a 504 but the device finishes the song before the next one starts | `1800` |
@@ -38,7 +41,7 @@ Environment:
 | `model` | `MiniMaxAI/MiniMax-Music3` (optional; anything else -> 404) |
 | `input` | lyrics; structure tags like `[Verse]` on their own lines |
 | `instructions` | music description (caption) |
-| `response_format` | `wav` (the only format; others -> 400) |
+| `response_format` | `wav` (the only format; others -> 422, a body-validation error) |
 | `seed` | optional; the seed used is returned in `X-MM3-Seed` |
 | `max_new_tokens` | max audio frames at 25 fps (default 1500 = 60 s, max 9000); the song may end earlier at the end token |
 | `audio_duration` | seconds, alias of `max_new_tokens / 25` |
@@ -47,7 +50,7 @@ Environment:
 
 Response headers: `X-MM3-Frames`, `X-MM3-Seed`, `X-MM3-Stopped-By` (`max_frames` / `end_token` / `context`),
 `X-MM3-Prompt-Tokens`, `X-MM3-Generation-Seconds`, `X-MM3-Sampling-Rate`. Limits: prompt <= 5000 tokens, frames <= 9000
-(400 otherwise). The backbone context is 10240 positions, so a song holds at most `10240 - prompt_tokens` frames; a
+(400 otherwise); `input` / `instructions` over 200,000 characters are rejected at validation (422). The backbone context is 10240 positions, so a song holds at most `10240 - prompt_tokens` frames; a
 longer request is cut there and reports `X-MM3-Stopped-By: context` (the reference has the same cap). Every error,
 body-validation errors included, uses the OpenAI shape `{"error": {"message", "type"}}` (400 / 404 / 422 / 501 / 504).
 
@@ -81,4 +84,6 @@ the vocoder worker process is stopped, the pipeline released and the mesh closed
 
 `tests/test_server.py` starts the server in a subprocess (under the hardware lock), waits for readiness, and checks
 `/health`, `/v1/models`, a 10 s generation (seed 7), bad requests, a second request and the model-card curl. Evidence
-goes to `doc/server/results.json`, wavs and the server log to `generated/`. Run: `~/mm3-bringup/checks/08.sh`.
+goes to `doc/server/results.json`, wavs and the server log to `generated/`. Run:
+`python -m pytest models/autoports/minimaxai_minimax_music3/tests/test_server.py -m "not slow" -x` from the tt-metal root
+(the bring-up host's gate `~/mm3-bringup/checks/08.sh` is the same command under the hardware lock).

@@ -55,6 +55,7 @@ from models.autoports.minimaxai_minimax_music3.tt.prompt import PromptEncoder
 MODEL_ID = "MiniMaxAI/MiniMax-Music3"
 DEFAULT_FRAMES = 1500  # 60 s, the model card's default `max_new_tokens`
 MAX_STEPS = 200
+MAX_TEXT_CHARS = 200_000  # per string field; a 5000-token prompt is far below this
 # Raw MiniMax checkpoints the diffusers layout does not use (about 20 GB): never downloaded by the server.
 WEIGHTS_IGNORE_PATTERNS = ("flowmatching_vae.pth", "dav.pth", "qwen_7B/*", "assets/*", "figures/*", "scripts/*")
 WARMUP_PROMPT = "Genre: ambient. A quiet pad."
@@ -79,7 +80,7 @@ class Settings:
     """Everything the launcher / operator controls through the environment."""
 
     def __init__(self) -> None:
-        self.hf_model = os.environ.get("HF_MODEL", "").strip() or os.environ.get("MM3_WEIGHTS", "").strip()
+        self.hf_model = os.environ.get("HF_MODEL", "").strip()
         self.mesh_shape = os.environ.get("MM3_MESH_SHAPE", "1x1").strip() or "1x1"
         self.mesh_device_name = os.environ.get("MESH_DEVICE", "").strip()
         self.dtype_policy = os.environ.get("MM3_DTYPE_POLICY", "optimized").strip() or "optimized"
@@ -265,8 +266,11 @@ class SpeechRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     model: Optional[str] = None
-    input: str = Field(..., description="lyrics; structure tags such as [verse] on their own lines")
-    instructions: str = Field(..., description="music description / caption")
+    # 5000 tokens of lyrics are well under 100 KB; the cap rejects oversize bodies before the host tokenizes them.
+    input: str = Field(
+        ..., max_length=MAX_TEXT_CHARS, description="lyrics; structure tags such as [verse] on their own lines"
+    )
+    instructions: str = Field(..., max_length=MAX_TEXT_CHARS, description="music description / caption")
     response_format: str = "wav"
     seed: Optional[int] = Field(None, ge=0, le=2**63 - 1)
     max_new_tokens: Optional[int] = Field(None, ge=1, description="audio frames at 25 fps (default 1500)")

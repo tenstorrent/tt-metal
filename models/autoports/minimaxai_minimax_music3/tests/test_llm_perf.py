@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import time
 
 import pytest
@@ -63,7 +64,20 @@ def _write(evidence_dir, name, payload):
 
 
 def _board_id() -> str:
-    return os.environ.get("MM3_BOARD_ID", "000004613193411b (p300c, tt-smi -s)")
+    """Board id recorded in the perf JSON: MM3_BOARD_ID, else the first BOARD_ID line of `tt-smi -s`, else unknown."""
+    if os.environ.get("MM3_BOARD_ID"):
+        return os.environ["MM3_BOARD_ID"]
+    try:
+        out = subprocess.run(["tt-smi", "-s"], capture_output=True, text=True, timeout=60).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return "unknown"
+    try:
+        info = json.loads(out)["device_info"]
+        idx = int(os.environ.get("TT_METAL_VISIBLE_DEVICES", "0").split(",")[0] or "0")
+        board = info[idx]["board_info"]
+        return f"{board['board_id']} ({board['board_type']}, tt-smi -s)"
+    except (ValueError, KeyError, IndexError):
+        return "unknown"
 
 
 @pytest.fixture

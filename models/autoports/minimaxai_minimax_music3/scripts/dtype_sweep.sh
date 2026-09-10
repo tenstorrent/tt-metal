@@ -10,9 +10,13 @@
 #   source ~/mm3-bringup/common.sh && cd $MM3_WT
 #   nohup bash models/autoports/minimaxai_minimax_music3/scripts/dtype_sweep.sh > models/autoports/minimaxai_minimax_music3/generated/dtype_sweep.log 2>&1 &
 set -uo pipefail
-source ~/mm3-bringup/common.sh
+# Environment: MM3_WT (tt-metal root), MM3_PY (ttnn python), MM3_MODEL_DIR (this autoport) - exported by the
+# bring-up host's common.sh; elsewhere set them by hand.
+: "${MM3_WT:?set MM3_WT to the tt-metal root}" "${MM3_PY:?set MM3_PY to the ttnn python}" "${MM3_MODEL_DIR:?set MM3_MODEL_DIR}"
+command -v with_hw_lock >/dev/null 2>&1 || with_hw_lock() { "$@"; }   # the bring-up host serializes device users with flock
 cd "$MM3_WT"
 G="$MM3_MODEL_DIR/generated"
+mkdir -p "$G"
 EXTRA="${MM3_SWEEP_EXTRA:-}"
 for mlp in bfp8 bfp4 bf16; do
   for kv in bfp8 bf16; do

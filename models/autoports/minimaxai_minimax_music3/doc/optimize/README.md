@@ -4,7 +4,8 @@ Work log for the optimized MiniMax-Music3 pipeline: the `dtype_policy="optimized
 default), measured before / after with one harness on the stage-06 golden 10 s clip and a free-running 10 s song.
 
 * implementation: [`../../tt/llm.py`](../../tt/llm.py) (`DTYPE_POLICIES`: bfp8 attention / MLP / LM-head weights, bfp8 KV
-  cache, LoFi decode matmuls + LM head; the sweep policies), [`../../tt/depth_decoder.py`](../../tt/depth_decoder.py)
+  cache, LoFi decode matmuls + LM head - note the `LI_FF1_FF3` / `LI_FF2` groups also cover the prefill MLP matmuls, tt_transformers
+  has no separate prefill MLP group, so the prefill MLP runs LoFi under `optimized` too; the golden replay includes the prefill; the sweep policies), [`../../tt/depth_decoder.py`](../../tt/depth_decoder.py)
   (`weight_dtype`, explicit 1D-mcast matmul program configs), [`../../tt/flow_transformer.py`](../../tt/flow_transformer.py)
   (`weight_dtype`, matmul fidelity presets, 256-wide SDPA chunks, `DiTStepTrace`: one trace per window shape),
   [`../../tt/denoiser.py`](../../tt/denoiser.py) (traced Euler loop, persistent 200-frame-window shape),

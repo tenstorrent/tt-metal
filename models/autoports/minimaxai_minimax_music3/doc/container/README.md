@@ -150,10 +150,10 @@ curl http://127.0.0.1:8010/v1/audio/speech -H 'Content-Type: application/json' -
 |---|---|
 | `GET /health`, `GET /v1/models` | `status ok, warm true, busy false, dtype_policy optimized`; model id `MiniMaxAI/MiniMax-Music3` (`generated/container/health_before.json`) |
 | model-card curl, 250 frames (10 s), seed 7 | HTTP 200 `audio/wav`, 1,763,372 bytes; headers `x-mm3-frames 250`, `x-mm3-seed 7`, `x-mm3-stopped-by max_frames`, `x-mm3-prompt-tokens 58`, `x-mm3-generation-seconds 29.30`; curl wall 29.31 s. Validated: 44,100 Hz, 2 channels, PCM_16, 9.996 s, RMS 0.0943, peak 1.000 -> `generated/container/served_seed7_10s.wav` (= `state/09.served_wav`) |
-| model-card curl verbatim, 750 frames (30 s), seed 7 | HTTP 200, 30.02 s of audio, RMS 0.1087, peak 1.000, generation 85.89 s, wall 85.91 s -> `generated/container/served_model_card_curl_750.wav`; stage 08 measured 30.02 s / RMS 0.109 / 83.47 s wall for the same request on the host, and the two wavs are byte-identical |
+| model-card curl verbatim, 750 frames (30 s), seed 7 | HTTP 200, 30.02 s of audio, RMS 0.1087, peak 1.000, generation 85.89 s, wall 85.91 s -> `generated/container/served_model_card_curl_750.wav`; stage 08 measured 30.02 s / RMS 0.109 / 83.58 s wall for the same request on the host, and the two wavs are byte-identical |
 | `tt-model stop <scratch manifest> --profile p300x2` | `clean shutdown 2.2s`, container removed (`$MM3_LOGS/09.stop.log`) |
 
-Like-for-like timing: the verbatim 750-frame model-card request took 85.89 s in the container versus 83.47 s wall on
+Like-for-like timing: the verbatim 750-frame model-card request took 85.89 s in the container versus 83.58 s wall on
 the host in stage 08 (`doc/server/results.json`, about 3 % slower), and the two wavs are byte-identical
 (`generated/minimax_music3_model_card_curl.wav` from stage 08). The 10 s request is not comparable with the stage-08
 10 s test (different prompt: 58 vs 104 prompt tokens). The host was also running a Llama-3.1-8B tt-studio container on
@@ -235,7 +235,7 @@ this work log in the follow-up commit.
   kind; cosmetic.
 - `tt-model stop` removes the container, so its logs vanish with it; capture `docker logs` first (done for the consumer
   run, missed for the author run, whose boot is in `$MM3_LOGS/09.serve.log`).
-- The container's 750-frame generation was about 3 % slower than the host's (85.89 s vs 83.47 s); cause not isolated.
+- The container's 750-frame generation was about 3 % slower than the host's (85.89 s vs 83.58 s); cause not isolated.
 - The wire manifest's `dirty: true` also reflects the untracked `tt_metal/third_party/tt-cluster-descriptors/` left by the
   submodule init, besides the `doc/*/results.json` rewrites; neither ships.
 - `requirements.lock` resolved `transformers 5.17.0` and `huggingface_hub 1.30.0`, newer than the host's 5.15.0 / 1.16.1;
