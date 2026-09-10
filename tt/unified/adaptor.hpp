@@ -1,31 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//
-// Metal (v1) binding for the unified programming model.
-//
-// <tt/unified/core> includes this automatically. To bind the model to something else
-// -- the host trace harness, say -- define TT_UNIFIED_CUSTOM_BINDING before
-// including <tt/unified/core> and provide the same names yourself.
-//
-// Two jobs:
-//
-//   1. Derive thread identity from the defines metal already emits for every
-//      kernel build (tt_metal/llrt/hal/tt-1xx/hal_1xx_common.cpp). Nothing is
-//      passed from the host -- pointing three KernelDescriptors at one source is
-//      enough, because each build already knows what it is.
-//
-//        COMPILE_FOR_BRISC            -> DM thread 0  (writer, by convention)
-//        COMPILE_FOR_NCRISC           -> DM thread 1  (reader)
-//        UCK_CHLKC_{UNPACK,MATH,PACK} -> compute
-//
-//   2. Map the model's intrinsics onto metal APIs where metal has no
-//      thread-polymorphic name. The DFB protocol needs no binding at all:
-//      cb_reserve_back / cb_push_back / cb_wait_front / cb_pop_front already
-//      resolve per projection -- dataflow_api.h on a DM core, api/compute/cb_api.h
-//      on a TRISC (where they become PACK(llk_push_tiles) and friends).
 
 #pragma once
-
-// --- Thread identity ---
 
 #if defined(COMPILE_FOR_BRISC)
 #define IS_DM_THREAD 1
@@ -39,35 +14,19 @@
 #error "unified_metal.hpp: no metal thread-identity define present"
 #endif
 
-// --- Metal headers, per projection ---
-//
-// tensor_accessor_args.h works on both (it only needs get_compile_time_arg_val),
-// which is what lets a shared source chain CT-arg offsets.
-
 #include <cstdint>
 #include <type_traits>
 
-// Metal 2.0's dataflow buffer, on EVERY projection. It is the one DFB-protocol name that is
-// genuinely thread-polymorphic: its reserve/push route to PACK(llk_...) on a TRISC and to the
-// dataflow free functions on a data-movement core, which is exactly what the free functions
-// resolved to before -- byte for byte, see internal/tt-1xx/dataflow_buffer.inl against
-// api/compute/cb_api.h. So this is a change of spelling on Gen1 and the only correct spelling
-// on Gen2, where tile counters and implicit sync live behind the object.
 #include "api/dataflow/dataflow_buffer.h"
 
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
 #include "api/compute/common.h"
-// Both binary headers, because add/sub/mul exist on both units: _sfpu.h has the
-// forms that take two DST slots, eltwise_binary.h the ones that read two circular
-// buffers. Which is cheaper is what FpuEltwiseFusion is for.
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/eltwise_unary/relu.h"
-// silu has no per-op header of its own: it is declared only in metal's umbrella
-// compute_kernel_api.h, so that is where SwiGLU's activation has to come from.
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/eltwise_unary/sqrt.h"
@@ -82,9 +41,6 @@
 #include "api/tensor/tensor_accessor_args.h"
 #else
 #include "api/dataflow/dataflow_api.h"
-// Metal 2.0's NOC handle. Data movement only -- api/dataflow/noc.h declares nothing under
-// COMPILE_FOR_TRISC -- which is why the transaction handles carry a noc INDEX rather than one
-// of these: the handles are declared on every projection.
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/tensor_accessor.h"
@@ -92,56 +48,21 @@
 #endif
 
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-// api/tensor/tensor_accessor.h does not compile on a TRISC: it wants NOC_INDEX
-// and redeclares get_common_arg_addr against api/compute/common.h. A compute
-// kernel never dereferences an accessor -- it only carries one through a
-// statement shared with the data-movement projections -- so an empty stand-in
-// under metal's own name is enough, and kernels spell it identically either way.
 struct TensorAccessor {
     template <typename Args>
     constexpr TensorAccessor(Args, uint32_t) {}
 
-    // The Metal 2.0 spelling: TensorAccessor(tensor::name), built from a binding token
-    // rather than an args block and a base address. A compute projection still never
-    // dereferences one -- it only carries it through a statement shared with the
-    // data-movement projections -- so this stand-in takes the token and ignores it, the
-    // same way the two-argument form above ignores its arguments.
-    //
-    // Constrained so it cannot out-compete the copy constructor for a non-const
-    // TensorAccessor lvalue, which is the standard hazard of a one-argument template
-    // constructor: the template would deduce an exact match where the copy constructor
-    // needs a qualification conversion.
     template <typename Token, typename = std::enable_if_t<!std::is_same<std::decay_t<Token>, TensorAccessor>::value>>
     constexpr explicit TensorAccessor(Token) {}
 
-    // Present so a custom load/store routine compiles here; see below.
     std::uint64_t get_noc_addr(uint32_t, uint32_t = 0, uint8_t = 0) const {
         ASSERT(false);
         return 0;
     }
 };
 
-// The data-movement intrinsics, as unreachable no-ops.
-//
-// A custom routine's body is compiled on EVERY projection: the harness only
-// *calls* it from inside a `#if IS_DM_THREAD` region, but the closure lives in
-// the shared kernel source, and C++ compiles a non-generic lambda's body where
-// it is written. So
-//
-//     noc_load<1>(storage, [&](uint32_t l1, uint32_t bytes) {
-//         noc_async_read(acc.get_noc_addr(p), l1, bytes);   // <-- compiled on TRISC too
-//     });
-//
-// fails to build on compute unless these names resolve. (A generic `[](auto l1,
-// ...)` lambda happens to survive, because a dependent argument defers lookup to
-// an instantiation that never happens here -- too fragile to rely on.)
-//
-// They assert rather than sit empty: nothing on a compute thread has any
-// business touching the NOC, and the dead bodies strip out of the TRISC binary.
 inline void noc_async_read(std::uint64_t, uint32_t, uint32_t, uint8_t = 0) { ASSERT(false); }
 inline void noc_async_write(uint32_t, std::uint64_t, uint32_t, uint8_t = 0) { ASSERT(false); }
-// Named by the multicast noc_load, which is itself written as a custom routine --
-// so its body reaches here the same way a user's would.
 inline void noc_async_write_multicast(uint32_t, std::uint64_t, uint32_t, uint32_t, bool = false, uint8_t = 0) {
     ASSERT(false);
 }
@@ -153,8 +74,6 @@ inline std::uint64_t get_noc_addr(uint32_t) {
     ASSERT(false);
     return 0;
 }
-// A custom routine targeting a peer's buffer reaches for these: it addresses the
-// peer by its own copy of the same dataflow buffer.
 inline uint32_t get_write_ptr(uint32_t) {
     ASSERT(false);
     return 0;
@@ -164,7 +83,6 @@ inline uint32_t get_read_ptr(uint32_t) {
     return 0;
 }
 
-// The thread's NOC, for a routine that passes it explicitly.
 inline constexpr uint8_t noc_index = 0;
 
 inline void noc_async_read_barrier(uint8_t = 0) { ASSERT(false); }
@@ -172,16 +90,6 @@ inline void noc_async_write_barrier(uint8_t = 0) { ASSERT(false); }
 inline void noc_async_writes_flushed(uint8_t = 0) { ASSERT(false); }
 inline void noc_async_atomic_barrier(uint8_t = 0) { ASSERT(false); }
 
-// Metal's Noc, as an unreachable stand-in.
-//
-// api/dataflow/noc.h declares nothing under COMPILE_FOR_TRISC, and the multicast noc_load
-// barriers inside `if constexpr (thread == TT_DM_THREAD_ID)` rather than behind a preprocessor
-// guard -- so its body is COMPILED on compute even though it never runs there, and a name it
-// mentions has to resolve. Exactly the reason the free NOC intrinsics above are stubbed; this
-// is the same stub for the object that replaces them.
-//
-// Asserts rather than sitting empty, for the same reason they do: nothing on a compute thread
-// has any business touching the NOC, and the dead bodies strip out of the TRISC binary.
 struct Noc {
     Noc() = default;
     explicit Noc(uint8_t) {}
@@ -195,50 +103,12 @@ struct Noc {
 namespace tt {
 namespace unified {
 
-// A buffer's handle, by slot. Constructed where it is used rather than stored, because it
-// holds a REFERENCE to the interface and the model's movable types (Block, the Noc*Tx handles)
-// could not then be moved. It is an id and an array lookup, so the compiler folds it.
 inline DataflowBuffer buffer(uint32_t dfb) { return DataflowBuffer(static_cast<uint16_t>(dfb)); }
 
-// The buffer's *configured* entry size, not the data format's tile size -- get_tile_size() is
-// derived from unpack_tile_size[] and only coincides when an entry happens to hold one tile.
-//
-// This used to read fifo_page_size and apply cb_addr_shift by hand, the shift being 0 on a
-// data-movement build (bytes) and CIRCULAR_BUFFER_COMPUTE_ADDR_SHIFT on a TRISC (16B words).
-// get_entry_size() does that conversion itself, so the arch detail is metal's again rather
-// than duplicated here.
-//
-// Defined on every projection, unlike the NOC intrinsics above: a kernel converting a tile
-// count to a byte offset needs the answer in code shared by all five threads.
 inline uint32_t dfb_entry_bytes(uint32_t dfb) { return buffer(dfb).get_entry_size(); }
 
-// How many pages the HOST configured this dataflow buffer with.
-//
-// DATA MOVEMENT ONLY, unlike dfb_entry_bytes above, and the difference is a LINK one rather
-// than anything about the value. `cb_interface` has no definition in a TRISC link -- a
-// live reference from a compute projection fails with "undefined reference to
-// cb_interface" out of the LLK headers. dfb_entry_bytes gets away with appearing in shared
-// code only because its result is invariably dead on compute and LTO deletes the call
-// before the linker sees it; a use that compute genuinely evaluates would fail the same
-// way. So anything reading this must sit behind a data-movement guard.
-//
-// The value is the same fact on every projection regardless, since the host configures
-// one dataflow buffer for the core, which is what makes checking it on one thread enough.
 inline uint32_t dfb_num_entries(uint32_t dfb) { return buffer(dfb).get_total_num_entries(); }
 
-// The TILE GEOMETRY the compute kernel was BUILT for, per buffer, in elements.
-//
-// This is the host's `tile_format_metadata` as it actually reached the device: the JIT emits
-// it into chlkc_descriptors.h as constexpr tables, so it is the one authority on what the
-// unpacker will do. Recomposed rather than read directly -- a tile is a grid of faces, and
-// only the face counts and the face row extent are tabulated:
-//
-//     rows = face_r_dim * num_faces_r_dim        32x32 -> 16 * 2 = 32,   1x32 -> 1 * 1 = 1
-//     cols = num_faces_c_dim * FACE_C_DIM        32x32 ->  2 * 16 = 32,  1x32 -> 2 * 16 = 32
-//
-// UNPACK and MATH only. The tables sit under `#if !defined(UCK_CHLKC_PACK)` in the generated
-// header, with a parallel pack_* set for the packer, so this is not readable from the pack
-// thread and not from a data-movement one at all.
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD && !defined(UCK_CHLKC_PACK)
 #define TT_U_HAVE_DFB_TILE_GEOMETRY 1
 
@@ -250,31 +120,20 @@ inline constexpr uint32_t dfb_tile_cols(uint32_t dfb) {
     return static_cast<uint32_t>(unpack_num_faces_c_dim[dfb]) * static_cast<uint32_t>(ckernel::FACE_C_DIM);
 }
 
-// The same tables, packed into one comparable word: the four fields the UNPACKER's tile
-// descriptor is programmed from, which is what `llk_unpack_hw_configure` reads. Not the two
-// extents above -- those are the logical geometry a Shape is checked against, and a
-// comparison wants what the programming step consumes, so that nothing it reads can change
-// without this noticing.
 inline constexpr uint32_t unpack_tile_geometry(uint32_t dfb) {
     return (static_cast<uint32_t>(unpack_tile_face_r_dim[dfb]) << 24) |
            (static_cast<uint32_t>(unpack_tile_num_faces[dfb]) << 16) |
-           (static_cast<uint32_t>(unpack_partial_face[dfb]) << 8) |
-           static_cast<uint32_t>(unpack_narrow_tile[dfb]);
+           (static_cast<uint32_t>(unpack_partial_face[dfb]) << 8) | static_cast<uint32_t>(unpack_narrow_tile[dfb]);
 }
 #endif
 
-// And the PACKER's, from its own set. The two sets are emitted under opposite guards
-// (`genfiles.cpp:989` against `:994`), so each is invisible where the other lives -- which is
-// why these are two accessors and not one, and why the re-configuration in math.hpp is per
-// RISC rather than a single decision made once.
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD && defined(UCK_CHLKC_PACK)
 #define TT_U_HAVE_PACK_TILE_GEOMETRY 1
 
 inline constexpr uint32_t pack_tile_geometry(uint32_t dfb) {
     return (static_cast<uint32_t>(pack_tile_face_r_dim[dfb]) << 24) |
            (static_cast<uint32_t>(pack_tile_num_faces[dfb]) << 16) |
-           (static_cast<uint32_t>(pack_partial_face[dfb]) << 8) |
-           static_cast<uint32_t>(pack_narrow_tile[dfb]);
+           (static_cast<uint32_t>(pack_partial_face[dfb]) << 8) | static_cast<uint32_t>(pack_narrow_tile[dfb]);
 }
 #endif
 

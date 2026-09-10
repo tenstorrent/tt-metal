@@ -1,22 +1,4 @@
 // SPDX-License-Identifier: Apache-2.0
-//
-// Core API of the unified programming model -- declarations only.
-//
-// A unified kernel is ONE source describing a whole Tensix pipeline. It is
-// compiled once per baby RISC-V thread, and each statement below lowers to that
-// thread's half of the dataflow-buffer protocol:
-//
-//   INPUT                    OUTPUT                   INTERMED
-//        DM    Compute            DM    Compute            DM    Compute
-//   reserve <- *               * -> reserve                   reserve
-//     write                          write                      write
-//      push ->    wait         wait <-  push                     push
-//                read          read                              wait
-//         * <-     pop          pop -> *                         read
-//                                                                 pop
-//
-// Include <tt/unified/core>, not this header directly -- it selects an implementation
-// and a backend binding, and documents the layering.
 
 #pragma once
 
@@ -30,45 +12,18 @@
 namespace tt {
 namespace unified {
 
+// Public interface for unified kernels. Include <tt/unified/core> rather than
+// this file directly so the appropriate intrinsic binding is installed first.
 template <typename S>
 struct Block;
-// kNoDfb -- "this block was handed to me; I did not choose its buffer". A
-// ComputeBlock<S, DfbId> names its own buffer and fuses an expression into it, and
-// DERIVES from ComputeBlock<S, kNoDfb>, so it decays to a plain block everywhere the
-// library already takes one. That is what keeps every signature below single-parameter.
+
 constexpr uint32_t kNoDfb = ~0u;
 
 template <typename S, uint32_t DfbId = kNoDfb>
 class ComputeBlock;
 
-// ---------------------------------------------------------------------------
-// Geometry
-//
-// Core coordinates come in two flavours, kept as distinct types so the
-// translation between them is explicit and checked. LOGICAL is what the host
-// reasons about (0,0 is the first worker of the program's core range); PHYSICAL
-// is what the NOC addresses. Mixing them silently targets the wrong core, which
-// is why there is no implicit conversion.
-//
-// Members that touch NOC state are defined in the implementation header behind a
-// data-movement guard: my_x/my_y, the logical->virtual tables and get_noc_addr
-// are all data-movement-only names.
-// ---------------------------------------------------------------------------
-
-// Both coordinate types are built by NAME, never by position: LogicalCoord::xy(x, y)
-// and LogicalCoord::yx(y, x) construct the same thing from arguments in opposite orders,
-// and the call says which one you meant.
-//
-// The reason is that the two conventions in play disagree. Metal writes coordinates x
-// first -- get_noc_addr(x, y), CoreCoord(x, y) -- while these structs store y first, and
-// tensor code everywhere else (torch, and every framework that follows it) is row-major
-// and reads y first too. A bare pair is therefore ambiguous to a reader and silently
-// wrong when guessed, and the failure is not a crash: a multicast rectangle addressed
-// through transposed corners still runs, on the wrong cores.
-//
-// The constructors are private so there is no positional form to guess at. That also
-// makes these non-aggregates, so `LogicalCoord{1, 2}` no longer compiles -- which is the
-// point, since that spelling was the ambiguous one.
+// Physical coordinates address the NOC grid. Use xy()/yx() to make argument
+// order explicit. this_core() is meaningful only on data-movement threads.
 struct PhysicalCoord {
     uint32_t y;
     uint32_t x;
@@ -76,44 +31,28 @@ struct PhysicalCoord {
     static constexpr PhysicalCoord yx(uint32_t y, uint32_t x) { return PhysicalCoord(y, x); }
     static constexpr PhysicalCoord xy(uint32_t x, uint32_t y) { return PhysicalCoord(y, x); }
 
-    // This core's own physical coordinate, on this thread's NOC.
-    //
-    // DATA MOVEMENT ONLY. On a compute projection this returns the ORIGIN, not the
-    // real coordinate: my_x/my_y are filled by risc_init(), which does not run on a
-    // TRISC (risc_common.h guards it out), so metal gives compute no way to know
-    // where it is. The consequence is a quiet one -- a statement whose COMPUTE side
-    // branches on this behaves as though every core were (0,0), so dataflow-buffer
-    // traffic guarded by it happens everywhere and the pushes go unmatched. Gate
-    // NOC work on it, never DFB work; LogicalCoord::this_core() is the one that
-    // every projection answers correctly.
     static PhysicalCoord this_core();
     static PhysicalCoord origin();
 
     uint64_t get_noc_addr(uintptr_t l1_addr) const;
 
-    // constexpr like the factories: a coordinate can now be built at compile time, so
-    // comparing two of them should be answerable there as well.
     constexpr bool operator==(PhysicalCoord o) const { return y == o.y && x == o.x; }
     constexpr bool operator!=(PhysicalCoord o) const { return !(*this == o); }
 
 private:
-    // explicit as well as private: inside the class, `return {y, x}` would otherwise
-    // still reach this constructor by list-initialisation, which is the positional form
-    // the factories exist to remove. Now even the implementation has to name an order.
     explicit constexpr PhysicalCoord(uint32_t y_in, uint32_t x_in) : y(y_in), x(x_in) {}
 };
 
+// Logical coordinates are relative to the program's worker grid and are valid
+// on every projection. Conversion to a physical coordinate requires a
+// data-movement thread.
 struct LogicalCoord {
     uint32_t y;
     uint32_t x;
 
-    // See PhysicalCoord above for why these are named rather than positional.
     static constexpr LogicalCoord yx(uint32_t y, uint32_t x) { return LogicalCoord(y, x); }
     static constexpr LogicalCoord xy(uint32_t x, uint32_t y) { return LogicalCoord(y, x); }
 
-    // Correct on ALL projections, unlike PhysicalCoord::this_core(): compute is
-    // told its logical position by the firmware even though it cannot resolve it
-    // to a NOC address. Branch on this one, including in code compute runs.
     static LogicalCoord this_core();
     static LogicalCoord origin();
 
@@ -121,26 +60,14 @@ struct LogicalCoord {
 
     uint64_t get_noc_addr(uintptr_t l1_addr) const;
 
-    // constexpr like the factories: a coordinate can now be built at compile time, so
-    // comparing two of them should be answerable there as well.
     constexpr bool operator==(LogicalCoord o) const { return y == o.y && x == o.x; }
     constexpr bool operator!=(LogicalCoord o) const { return !(*this == o); }
 
 private:
-    // explicit as well as private: inside the class, `return {y, x}` would otherwise
-    // still reach this constructor by list-initialisation, which is the positional form
-    // the factories exist to remove. Now even the implementation has to name an order.
     explicit constexpr LogicalCoord(uint32_t y_in, uint32_t x_in) : y(y_in), x(x_in) {}
 };
 
-// The h x w extent of a core rectangle. Not a tile shape -- see Shape.
-// Built by name for the same reason the coordinates are, and the confusion is the same
-// one: this holds h before w, while metal's grid sizes go the other way -- a CoreCoord or
-// compute_with_storage_grid_size is (x, y), meaning (w, h). hw(h, w) and wh(w, h) build the
-// same extent from arguments in opposite orders, and the call says which was meant.
-//
-// A transposed extent is another silent failure: a 1 x N multicast row addressed as N x 1
-// covers a column instead, which still runs and still writes, just to the wrong cores.
+// Height and width of a rectangular core region.
 struct Extent {
     uint32_t h;
     uint32_t w;
@@ -155,17 +82,14 @@ private:
     explicit constexpr Extent(uint32_t h_in, uint32_t w_in) : h(h_in), w(w_in) {}
 };
 
-// A multicast rectangle, inclusive of both corners.
+// Inclusive physical multicast rectangle. A single coordinate converts to a
+// one-core rectangle.
 struct PhysicalMcast {
     PhysicalCoord start;
     PhysicalCoord end;
 
-    // Declaring any constructor costs PhysicalMcast its aggregate status, so the
-    // two-corner form has to be spelled out rather than left to brace-init.
     PhysicalMcast(PhysicalCoord start, PhysicalCoord end) : start(start), end(end) {}
 
-    // Implicit: a single core is a 1x1 rectangle, which is what lets the unicast
-    // noc_core_write hand its PhysicalCoord straight to the handle.
     PhysicalMcast(PhysicalCoord unit) : start(unit), end(unit) {}
 
     uint64_t get_noc_addr(uintptr_t l1_addr) const;
@@ -174,23 +98,11 @@ struct PhysicalMcast {
 
     bool contains(PhysicalCoord c) const { return c.y >= start.y && c.y <= end.y && c.x >= start.x && c.x <= end.x; }
 
-    // Destination counts. Metal's multicast primitives exclude the sender unless
-    // NocOptions::MCAST_INCL_SRC is set, and num_dests must exclude it on exactly
-    // the same terms -- but only when the sender is in range at all.
-    //
-    // Which to use depends on where the issuer sits, and the two cases are real:
-    //
-    //   ..._sender()  -- the issuer IS `start`. The handshake paths elect their
-    //                    sender with `this_core() == start`, so containment is a
-    //                    known fact and the count is a constant.
-    //
-    //   ..._excluding -- the issuer is wherever it is. A core pushing a block to
-    //                    a rectangle is usually OUTSIDE it, in which case every
-    //                    core in the rectangle is a destination. See noc_core_write.
     uint32_t num_dests_excluding_sender() const { return volume() - 1; }
     uint32_t num_dests_excluding(PhysicalCoord sender) const { return volume() - (contains(sender) ? 1 : 0); }
 };
 
+// Logical multicast rectangle described by its top-left coordinate and extent.
 struct LogicalMcast {
     LogicalCoord coord;
     Extent extent;
@@ -202,18 +114,6 @@ struct LogicalMcast {
     uint32_t volume() const { return extent.h * extent.w; }
 };
 
-// ---------------------------------------------------------------------------
-// Storage -- a dataflow buffer
-// ---------------------------------------------------------------------------
-
-// A buffer id as a TYPE, so Storage can check against it at compile time.
-//
-// `Storage<X> s(kDfbX)` takes its id as a constructor argument, and nothing inside a
-// constructor can see a runtime argument's value -- so the geometry check there can only
-// ever be a runtime ASSERT. Handing the id over as `u::dfb<kDfbX>` instead makes it a
-// template argument, and the same check becomes a static_assert that fires in every build,
-// release included. Kernels already write `constexpr uint32_t kDfbX = get_arg(...)`, so the
-// value is a constant expression at the call site either way; this is what carries it in.
 template <uint32_t DfbId>
 struct DfbTag {
     static constexpr uint32_t id = DfbId;
@@ -222,52 +122,20 @@ struct DfbTag {
 template <uint32_t DfbId>
 inline constexpr DfbTag<DfbId> dfb{};
 
+// Shape-bearing base for a dataflow buffer. Callers normally declare one of
+// Input, Output, or Intermediate instead. store() evaluates a compute
+// expression into this buffer and returns the resulting ownership token.
 template <typename S>
 struct Storage {
     using shape = S;
 
-    // NOT CONSTRUCTIBLE, and that is the design rather than an inconvenience. A bare
-    // Storage says nothing about which projections stand at the buffer's two ends, so
-    // there is nothing for a noc call to check itself against and nothing for the host to
-    // read -- which is the state this API was in when unified_harness.py had to infer the
-    // roles by pattern-matching kernel source. Declare a buffer as u::Input, u::Output or
-    // u::Intermediate; those are the only callers of what follows. Storage remains the
-    // SHAPE-ONLY base the library takes wherever the endpoint is irrelevant -- Block,
-    // Accumulator, the Tx handles -- which is what keeps those signatures single-parameter.
 protected:
-    // The ONLY constructor: the buffer id arrives as a template argument, because that is
-    // what an Endpoint carries. There used to be a second form taking the id by value, for
-    // an id that was not a constant expression; nothing needed one once every buffer was
-    // declared as an endpoint, and it went. Both of its checks are here, one of them
-    // stronger for the move: geometry is a static_assert rather than a runtime ASSERT.
     template <uint32_t DfbId>
     explicit Storage(DfbTag<DfbId>) : dfb_id(DfbId) {
-        // THE CAPACITY CHECK, which cannot be static: the page count is a thing the host
-        // configured and the device reads back at runtime.
-        //
-        // A buffer smaller than one block cannot ever satisfy cb_reserve_back, so the kernel
-        // does not fail -- it waits forever, with no assert and no output, and the device
-        // needs a reset. Checking it where the buffer is declared turns that into a stop at
-        // a source line. Greater-or-equal, not equal: a deeper buffer is how a reader runs
-        // ahead of compute, and every prefetch depth in this work is exactly that.
-        //
-        // Assertion-only, and asserts are compiled out unless WATCHER_ENABLED or
-        // LIGHTWEIGHT_KERNEL_ASSERTS is set -- see unified_api_hazards.md, which is why the
-        // test harness turns them on.
-        //
-        // Data movement only: cb_interface does not link on a TRISC, so a live read of it
-        // from a compute projection fails the build. One thread is enough -- the host
-        // configures one dataflow buffer for the core, so every projection would be checking
-        // the same number.
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
         ASSERT(dfb_num_entries(DfbId) >= S::num_entries);
 #endif
 
-        // AND THE TILE GEOMETRY this Shape claims, against what the host actually configured
-        // -- the authority being the constexpr tables the JIT emitted for this build, so the
-        // check cannot drift from what the unpacker will do. Compute only, and UNPACK/MATH at
-        // that, because that is where those tables live: the mirror of the capacity check
-        // being data-movement only. Between them, both ends are covered.
 #if defined(TT_U_HAVE_DFB_TILE_GEOMETRY)
         static_assert(
             dfb_tile_rows(DfbId) == S::tile::rows,
@@ -288,70 +156,18 @@ public:
     Storage& operator=(Storage&&) = delete;
     Storage& operator=(const Storage&) = delete;
 
-    // Evaluate a compute fusion into this buffer. The loop shape is chosen by the
-    // fusion's kind; see Strategy in tt/unified/math.hpp.
     template <typename Node>
     Block<S> store(const Node& node) const;
 
     uint32_t dfb_id;
-    // PAGES, which is what the dataflow-buffer protocol counts -- reserve, push,
-    // wait and pop are all in pages, and dfb_entry_bytes() sizes one. The compute
-    // strategies then walk it as a TILE count, which holds only because this model
-    // configures one tile per page; see Storage::store.
-    //
-    // Static now that the shape is: reading it off an instance still compiles, so
-    // every `storage.num_entries` in the implementation is unchanged.
+
     static constexpr uint32_t num_entries = S::num_entries;
 };
 
-// ---------------------------------------------------------------------------
-// Endpoints -- a Storage that says which projections stand at its two ends
-// ---------------------------------------------------------------------------
-//
-// Metal 2.0 wants a producer and a consumer named per dataflow buffer, and the three
-// combinations a Tensix pipeline can use are the three columns of the api.h table above:
-// INPUT (data movement produces, compute consumes), OUTPUT (the other way round), and
-// INTERMEDIATE (compute at both ends, a self-loop DFB).
-//
-// WHY THE KERNEL SAYS IT. The host has to know the roles to build the ProgramSpec, and
-// it used to READ THEM OFF THIS FILE -- unified_harness.py matched the `thread` argument
-// of every noc_load / noc_store with a regex per spelling, so every new overload here was
-// a silent parser update over there. Declaring the endpoint makes it one line the host
-// reads at a fixed position, and makes the role a TYPE, so the API can hold to it:
-//
-//     u::Input<0, kDfbIn, Block1D>   in_storage;    // DM thread 0 fills it
-//     u::Output<1, kDfbOut, Block1D> out_storage;   // DM thread 1 drains it
-//     u::Intermediate<kDfbAcc, Out>  acc_storage;   // compute at both ends
-//
-// WHAT THAT BUYS, all of it structural rather than checked:
-//   * noc_load takes an Input, so filling a buffer whose other end is compute does not
-//     compile. That matters more than it looks: a wrong endpoint is SILENT on Gen1 --
-//     circular-buffer state is per core, so either DM thread can drive a buffer whatever
-//     the host declared -- and only becomes a hang on Gen2, where the role drives the
-//     tile-counter credit flow. See unified_metal2_spec.md 5.1.
-//   * The DM thread comes OUT of the type, so noc_load no longer takes it as a template
-//     argument. One statement of the fact, so there is nothing to disagree.
-//   * An Intermediate cannot name a thread: the type has no parameter for one.
-//   * An Input has no store(): a buffer filled by data movement is not one compute packs
-//     into, and the host has bound its producer to a DM kernel, so it could not work.
-//
-// STILL TO COME. The drain side is unconverted: the storage-leading noc_store forms take a
-// Storage, and the Block-leading one -- the commoner spelling -- carries no endpoint at all,
-// so it keeps its explicit <thread>. Tagging Block with the endpoint it came from is what
-// closes that, and it reaches Accumulator and RetainedBlock, so it is its own change.
-//
-// The buffer id is a template argument too, which is what makes the tile-geometry check
-// below a static_assert in every build rather than a runtime ASSERT -- the reason the
-// u::dfb<> tag form existed, now had by construction.
-
 enum class Role : uint8_t { Input, Output, Intermediate };
 
-// An Intermediate's data-movement thread: it has none.
 inline constexpr int kNoDmThread = -1;
 
-// noc_load's `pair` argument, left to follow the endpoint's own thread. A sentinel rather
-// than `pair = T`, because a template parameter cannot default to one declared after it and
-// the endpoint's thread only arrives with the argument.
 inline constexpr int kPairOfThread = -1;
 
 template <Role R, int DmThread, uint32_t DfbId, typename S>
@@ -361,73 +177,47 @@ struct Endpoint : Storage<S> {
     static constexpr uint32_t dfb_id_v = DfbId;
 
 protected:
-    // Only Input / Output / Intermediate construct one. Endpoint carries the role as a
-    // template parameter, so spelling it directly would let a fourth combination exist --
-    // an Intermediate with a thread, say -- that the three types cannot express.
     Endpoint() : Storage<S>(dfb<DfbId>) {}
 };
 
-// Filled by DM thread `DmThread`, read by compute.
+// Buffer produced by the selected data-movement thread and consumed by compute.
 template <int DmThread, uint32_t DfbId, typename S>
 struct Input : Endpoint<Role::Input, DmThread, DfbId, S> {
     Input() = default;
 
-    // An Input is filled by DATA MOVEMENT. Compute packing into one would be writing to a
-    // buffer whose producer binding is on a DM kernel: wrong on Gen1 and unlowerable on
-    // Gen2. Deleted rather than absent so the error names the reason.
     template <typename Node>
     Block<S> store(const Node& node) const = delete;
 };
 
-// Filled by compute, drained by DM thread `DmThread`.
+// Buffer produced by compute and drained by the selected data-movement thread.
 template <int DmThread, uint32_t DfbId, typename S>
 struct Output : Endpoint<Role::Output, DmThread, DfbId, S> {
     Output() = default;
 };
 
-// Compute at both ends: an accumulator, a retained value, a scratch block. No thread.
+// Buffer whose producer and consumer are both compute.
 template <uint32_t DfbId, typename S>
 struct Intermediate : Endpoint<Role::Intermediate, kNoDmThread, DfbId, S> {
     Intermediate() = default;
 };
 
-// This core's own pages, handed to a custom load or store routine. The harness has
-// already reserved them (or waited on them), so these are the facts the routine
-// cannot work out for itself: where the block starts now that the pointer has
-// advanced, and how big a page is.
-//
-// L1, and named for it, because a routine juggles TWO page spaces at once and they
-// are easy to confuse. A TensorAccessor's pages are indices into a tensor that
-// mostly lives somewhere else; these are addresses in this core's L1:
-//
-//     noc_async_read(acc.get_noc_addr(tensor_page), pages.addr(i), pages.entry_bytes);
-//                                     ^ index, remote   ^ address, local
-//
-// `count` is the number the handle will push or pop whatever the routine actually
-// touches, so looping on it -- rather than on a tile count the kernel re-derives
-// from a compile-time arg -- is what keeps the two in step.
+// Consecutive local-L1 pages supplied to custom load and store callbacks.
+// count is the number of pages the enclosing transaction publishes or consumes.
 struct L1Entries {
     uint32_t base;
     uint32_t entry_bytes;
     uint32_t count;
 
-    // Address of page `i`, so a routine never writes the stride arithmetic itself.
     uint32_t addr(uint32_t i) const { return base + i * entry_bytes; }
 
     uint32_t total_bytes() const { return count * entry_bytes; }
 };
 
-// ---------------------------------------------------------------------------
-// Block -- move-only evidence that a Storage was produced into
-//
-// Every Block comes from an operation that has already pushed, which is what
-// makes it safe to hand one to a DM thread to drain. Move-only so it reaches
-// exactly one consumer; consumers take it by value.
-// ---------------------------------------------------------------------------
-
 template <typename S, AccumulatorMode Mode = AccumulatorMode::Dst>
 class Accumulator;
 
+// Move-only evidence that a buffer has been produced. A Block must be passed to
+// exactly one consumer, such as ComputeBlock, noc_store(), or noc_core_*().
 template <typename S>
 struct Block {
     using shape = S;
@@ -444,26 +234,12 @@ struct Block {
     Block(Block&& o);
     Block& operator=(Block&& o);
 
-    // Part of the CONSUMER contract, not user API: every consumer that takes a
-    // Block by value must call this once, to record that the pages were really
-    // used. The destructor asserts on a Block that owed consumption and never got
-    // it, which is how a dropped output block is caught.
-    //
-    // It cannot be folded into the move, because C++17 guaranteed elision means a
-    // prvalue handed straight to a by-value parameter initializes it directly and
-    // no move ever runs. Only the consumer knows consumption happened.
-    //
-    // Compiles to nothing when asserts are off.
     void consume();
 
     uint32_t dfb_id;
     static constexpr uint32_t num_entries = S::num_entries;
 
 private:
-    // A RETAINED block: one the Accumulator hands back mid-accumulation. Its pages
-    // still belong to the accumulator, so it must neither be transferred to
-    // another thread nor consumed -- only the next accumulate() call may touch
-    // them. Only Accumulator can make one.
     struct Retained {};
     Block(const Storage<S>& storage, Retained);
 
@@ -471,61 +247,20 @@ private:
     friend class Accumulator;
 
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
-    // Two independent facts, deliberately not folded into one flag:
-    //   must_consume -- this Block owes a consumer (false for retained blocks)
-    //   consumed     -- a consumer has taken it
-    // A moved-from Block has must_consume=false and consumed=true, so it is silent
-    // at destruction and asserts if used again.
     bool must_consume = true;
     bool consumed = false;
 
-    // Poison stamped into a moved-from Block's dfb_id. num_entries is part of the
-    // type now, so there is one field left to poison -- which is enough, since any
-    // use of a moved-from Block goes through dfb_id.
     static constexpr uint32_t kMovedFrom = ~uint32_t(0);
 #endif
 };
 
-// ---------------------------------------------------------------------------
-// RetainedBlock -- a Block that outlives the statement that produced it
-//
-// For a value carried across a loop: written in one iteration, read in the next. The running
-// maximum, sum and output of an online softmax are the case this exists for.
-//
-// A Block cannot simply be left lying around. It owes a consumer, and ~Block asserts if it
-// never reached one, which is how a dropped output is caught. A ComputeBlock is not the
-// answer either: it waits in its constructor and POPS in its destructor, so using the value
-// you just wrote also consumes it -- the state is gone before the next iteration looks for
-// it, and on device that is a hang.
-//
-// So the obligation is MOVED here rather than discharged. That distinction is the whole
-// point: a `retain(block)` that just called consume() would switch off the very check worth
-// keeping, whereas ~RetainedBlock asserting that it is empty says "you pushed pages and
-// nobody ever waited on them" -- the same diagnostic, relocated.
-//
-//     RetainedBlock<Vec> m;                       // OUTSIDE the loop: that is the lifetime
-//     for (uint32_t j = 0; j < chunks; ++j) {
-//         if (j == 0) {
-//             m = m_storage.store(first(...));    // moves the obligation into the slot
-//         } else {
-//             ComputeBlock<Vec> prev = m.release();   // the consumer: waits, then pops
-//             m = m_storage.store(update(prev, ...));
-//         }
-//     }
-//
-// Costs nothing in a release build: every member below is assertion-only, so the slot is
-// byte-for-byte a Block.
-// ---------------------------------------------------------------------------
-
+// Holds a produced block across scopes or loop iterations. release() transfers
+// it back to a normal Block for consumption.
 template <typename S>
 class RetainedBlock {
 public:
     using Held = Block<S>;
 
-    // The premise that lets the occupancy flag and the destructor be assertion-only: with
-    // assertions off Block has no user-declared destructor, so there is nothing to run and
-    // nothing to track. If Block ever acquires a resource this breaks the build rather than
-    // leaking quietly.
 #if !(defined(ASSERT_ENABLED) && ASSERT_ENABLED)
     static_assert(
         std::is_trivially_destructible<Held>::value,
@@ -541,27 +276,19 @@ public:
     ~RetainedBlock();
 #endif
 
-    // A slot is a fixed place, not a value: it names where the state lives for the whole loop.
     RetainedBlock(const RetainedBlock&) = delete;
     RetainedBlock& operator=(const RetainedBlock&) = delete;
     RetainedBlock(RetainedBlock&&) = delete;
     RetainedBlock& operator=(RetainedBlock&&) = delete;
 
-    // Take ownership of a freshly stored block. The MOVE is the mechanism: it transfers the
-    // obligation and leaves the source silent. Copying the dfb id into a second Block would
-    // leave two obligations for one push, and the source would then assert as it died.
     RetainedBlock& operator=(Held&& in);
 
-    // Hand the block to its consumer, leaving the slot empty. By value, so the caller
-    // move-constructs from the returned temporary.
     Held release();
 
 private:
     void emplace(Held&& in);
     Held& get();
 
-    // Manual storage because Block has no default constructor -- which is also what lets the
-    // slot exist before the first value does.
     alignas(Held) unsigned char buf[sizeof(Held)];
 
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
@@ -569,29 +296,9 @@ private:
 #endif
 };
 
-// ---------------------------------------------------------------------------
-// Accumulator -- multi-block matmul
-//
-// The k-loop belongs to the kernel, because the operand DFBs have to be waited and
-// popped per block so the reader can stream them. The Accumulator holds the state
-// that loop would otherwise carry: which buffer is the running total, which is
-// the destination, and whether there is anything to reload yet.
-//
-//     Accumulator acc(partials_storage, out_storage);
-//     for (uint32_t k = 0; k < Geom::num_blocks; ++k) {
-//         ComputeBlock a = noc_load<1>(in0_storage, in0, k).wait();
-//         ComputeBlock b = noc_load<1>(in1_storage, in1, k).wait();
-//         Block result = acc.accumulate(matmul<Geom>(a, b), k == Geom::num_blocks - 1);
-//         if (k == Geom::num_blocks - 1) noc_store<0>(std::move(result), out, 0);
-//     }
-//
-// The two Storages must be DIFFERENT dataflow buffers. Intermediate blocks are
-// pushed to the accumulation buffer and re-consumed by the next call; if that
-// were also the output buffer, the DM writer would drain the first intermediate
-// as though it were the answer, and two threads would be popping one DFB (see the
-// warning in api/compute/cb_api.h).
-// ---------------------------------------------------------------------------
-
+// Carries partial results across a multi-block matmul. accumulate() writes an
+// intermediate result unless finish is true, in which case it writes the output.
+// The optional epilogue transforms only the completed result.
 template <typename S, AccumulatorMode Mode>
 class Accumulator {
 public:
@@ -599,28 +306,9 @@ public:
 
     Accumulator(const Storage<S>& acc_storage, const Storage<S>& out_storage);
 
-    // Fold one k-block into the running total. `finish` selects the pack target:
-    // the accumulation buffer, or the output buffer on the last block.
-    //
-    // The two ways of attaching SFPU work mean DIFFERENT things:
-    //
-    //   accumulate(relu(mm), finish)                          per-step: relu runs
-    //     on every k-block, so the accumulator carries the transformed value.
-    //
-    //   accumulate(mm, finish, [](auto n){ return relu(n); })  finish-only: relu
-    //     runs once, on the completed accumulator.
-    //
-    // The lambda receives the node and returns one with a longer chain; only the
-    // ops *it* adds are deferred. See Strategy<FPUFusion>::run for what "per-step"
-    // sees in each mode -- the contribution alone in L1 mode, the running total in
-    // Dst mode.
-    //
-    // Only the Block returned on the finishing call is meaningful; earlier ones
-    // describe the accumulation buffer, which the next call re-consumes.
     template <typename Node, typename Epilogue = std::nullptr_t>
     Block<S> accumulate(const Node& node, bool finish, Epilogue epilogue = nullptr);
 
-    // Reset between output blocks.
     void clear();
 
 private:
@@ -629,10 +317,8 @@ private:
     bool reload = false;
 };
 
-// ---------------------------------------------------------------------------
-// ComputeBlock -- compute-side consumption of a Block, and an expression leaf
-// ---------------------------------------------------------------------------
-
+// Compute-side view of a produced block. Construction waits for its pages and
+// destruction releases them. Its lifetime must cover every expression using it.
 template <typename S>
 class ComputeBlock<S, kNoDfb> : public expr::Fluent<ComputeBlock<S, kNoDfb>> {
 public:
@@ -654,32 +340,15 @@ private:
     static constexpr uint32_t num_entries = S::num_entries;
 };
 
-// A coarse "could store() take this at all" gate: node_shape defaults to Node::shape, so
-// this admits every expression node AND anything else carrying a shape -- a Block, a
-// Storage, an Accumulator. It is enough to keep an unrelated type out of the shim's
-// constructor below, and NOT enough to keep a Block out, which is why that case is
-// deleted explicitly rather than left to this.
 template <typename T, typename = void>
 struct is_storable : std::false_type {};
 template <typename T>
 struct is_storable<T, std::void_t<node_shape_t<T>>> : std::true_type {};
 
-// The DfbId form. It adds no state and no behaviour -- it is a CONSTRUCTOR, spelled as a
-// type so that the buffer is named on the declaration side and the initialiser is nothing
-// but the expression:
-//
-//     u::ComputeBlock<X, kDfbSq> sq = x * x;          // vs. sq_storage.store(x * x)
-//
-// The shape must still be written out; C++17 cannot deduce one class template argument
-// while another is supplied. It is checked against the expression by Storage::store's
-// static_assert, so a wrong one is a compile error rather than a silent mis-size.
 template <typename S, uint32_t DfbId>
 class ComputeBlock : public ComputeBlock<S, kNoDfb> {
 public:
 #if defined(TT_U_HAVE_DFB_TILE_GEOMETRY)
-    // Free here, and with no new spelling to adopt: the buffer id is already a template
-    // argument of this form, so the geometry check is a static_assert. Storage's own is
-    // one too, for the same reason -- an endpoint carries its id in the type.
     static_assert(
         dfb_tile_rows(DfbId) == S::tile::rows,
         "this ComputeBlock's tile HEIGHT is not the one the host configured for the buffer -- "
@@ -690,56 +359,25 @@ public:
 #endif
 
     template <typename Node, typename = std::enable_if_t<is_storable<Node>::value>>
-    // Through an Intermediate, not a bare Storage, because Storage is no longer
-    // constructible -- and because an Intermediate is what this buffer IS. The shim form
-    // has no Storage for a noc call to name, so compute stands at both of its ends, which
-    // is exactly the endpoint the host derives for it by elimination. The geometry
-    // static_asserts above are this form's own; the Intermediate is what brings the
-    // capacity ASSERT along with it.
     ComputeBlock(const Node& node) : ComputeBlock<S, kNoDfb>(Intermediate<DfbId, S>().store(node)) {}
 
-    // A Block is a pushed obligation waiting for its one consumer, not an expression.
-    // is_storable does not exclude it (a Block has a `shape`), so without this the
-    // constructor above accepts one and STORES it: a silent copy into this buffer, with
-    // the original's pages still unconsumed and still waiting. Non-template, so it wins
-    // the match outright and the error names the mistake. To consume a Block, declare a
-    // plain ComputeBlock<S> over it.
     ComputeBlock(Block<S>) = delete;
 };
 
-// as_node, copy, bcast, the reduces and the SFPU adaptors are all OVERLOADS taking
-// ComputeBlock<S> by const reference, so derived-to-base deduction reaches them
-// untouched. is_operand is a SPECIALISATION, and specialisations are not inherited --
-// this is the one hook the shim has to restate.
 template <typename S, uint32_t D>
 struct is_operand<ComputeBlock<S, D>> : std::true_type {};
 
-// CTAD reads deduction guides off the PRIMARY template only, and the Block-consuming
-// constructor now lives in the kNoDfb specialisation. Without this stated explicitly,
-// every `u::ComputeBlock x = u::noc_load<0>(...).wait();` in every kernel stops deducing.
 template <typename S>
 ComputeBlock(Block<S>) -> ComputeBlock<S, kNoDfb>;
 
-// ---------------------------------------------------------------------------
-// Adaptors letting a ComputeBlock stand in for an expression leaf. These are the
-// hooks tt/unified/math.hpp declares; they live here because this is the only
-// place the math layer needs to know about a core type.
-// ---------------------------------------------------------------------------
-
-// Without this the operator+ in tt/unified/math.hpp is SFINAE'd out and
-// `lhs + rhs` does not resolve.
 template <typename S>
 struct is_operand<ComputeBlock<S>> : std::true_type {};
 
 template <typename S>
 TileSource<S> as_node(const ComputeBlock<S>& b);
 
-// The identity expression: materialise a block into another buffer. `store` takes an
-// expression, and sometimes the expression is just "this block" -- seeding a running value, or
-// copying a scratch result into the buffer that will carry it to the next iteration.
-//
-// as_node does the same thing, but it is the hook the math layer reaches through rather than
-// something a kernel should name.
+// Build compute expressions from live ComputeBlocks. Expressions execute when
+// passed to Storage::store(), noc_store(), or a buffer-owning ComputeBlock.
 template <typename S>
 TileSource<S> copy(const ComputeBlock<S>& b);
 
@@ -756,66 +394,16 @@ auto sqrt_(const ComputeBlock<S>& b);
 template <typename S>
 auto rsqrt(const ComputeBlock<S>& b);
 
-// The geometry is DERIVED from the operands -- see MatmulGeometry in
-// tt/unified/math.hpp. A must be rt x kt tiles and B kt x ct, and their agreement on
-// kt is a compile error rather than silent garbage.
-//
-// `Tr` selects whether B's TILES are read transposed. It is not a B-transpose on its
-// own -- the tile grid is the reader's job -- and it must match the argument given to
-// matmul_init. See TransposeB in tt/unified/math.hpp, which spells out both halves.
 template <TransposeB Tr = TransposeB::No, typename SA, typename SB>
 auto matmul(const ComputeBlock<SA>& a, const ComputeBlock<SB>& b);
 
-// Mark a ComputeBlock as a BROADCAST operand along `A`, for use as the right-hand side
-// of +, - or *:
-//
-//     u::ComputeBlock m = m_storage.store(u::reduce_max<u::Axis::Cols>(x, one));
-//     e_storage.store((x - u::bcast<u::Axis::Cols>(m)).exp());          // exp(x - rowmax)
-//
-// The axis is DECLARED because a Shape counts tiles and cannot express it: one tile
-// holding a row, a column, or a lone value at [0, 0] is Shape<1, 1> in every case. The
-// vector's shape is then CHECKED against the axis, so the two carry different halves of
-// the requirement and neither is guessed. See bcast_vec_shape in tt/unified/math.hpp.
-//
-// The same axis names a reduction's collapse, so a reduction and the broadcast undoing it
-// agree by construction: reduce over Cols yields Shape<rows, 1>, which is exactly what
-// bcast<Axis::Cols> demands.
-//
-// A ComputeBlock and not a Storage, for the reason reduce_* takes one: its constructor
-// holds the cb_wait_front that makes reading the buffer legal, and its destructor holds
-// the matching pop. Hold it at the scope the vector must survive -- for a resident vector
-// re-read by every block, that is kernel scope.
 template <Axis A, typename S>
 Broadcast<A, S> bcast(const ComputeBlock<S>& v);
 
-// Reduce `b`'s tile grid down one axis, within and across tiles. `Axis` says which
-// dimension collapses; the input grid comes from `b`'s own shape -- see ReduceAxis in
-// tt/unified/math.hpp for what each axis leaves behind.
-//
-//     using In = u::Shape<4, 4>;
-//     u::Storage<u::reduce_shape<In, u::ReduceAxis::Rows>> out(kDfbOut);   // Shape<1, 4>
-//     out.store(u::reduce_sum<u::ReduceAxis::Rows>(block, scaler));
-//
-// The destination's shape is checked against what the reduction yields, so a
-// mis-sized output buffer does not compile.
-//
-// `scaler` comes from fill_reduce_scaler and must be held at KERNEL scope: every
-// reduce_tile re-reads it, so it must not be popped until the kernel ends. Taking
-// a ComputeBlock rather than a Storage is what says so -- and proves the buffer
-// was actually filled and waited on.
 template <ReduceAxis Axis, typename SB, typename SC>
 ReduceNode<SB, Axis, ReducePool::Sum, expr::UnaryChain<>> reduce_sum(
     const ComputeBlock<SB>& b, const ComputeBlock<SC>& scaler);
 
-// Same shape, different fold. The SCALER differs though, and silently: metal folds
-// it into every reduce_tile, so
-//
-//   sum, max   scaler 1               -- kReduceScalerOne
-//   mean       scaler 1/N             -- bf16_pair(1.0f / ReduceGeometry<In>::elements(Axis))
-//              (1/sqrt(N) when both axes collapse)
-//
-// A mean fed a scaler of 1 is just a sum, with nothing to say so. The scaler is
-// the kernel's to fill, so the kernel has to match it to the fold it asks for.
 template <ReduceAxis Axis, typename SB, typename SC>
 ReduceNode<SB, Axis, ReducePool::Max, expr::UnaryChain<>> reduce_max(
     const ComputeBlock<SB>& b, const ComputeBlock<SC>& scaler);
@@ -824,69 +412,16 @@ template <ReduceAxis Axis, typename SB, typename SC>
 ReduceNode<SB, Axis, ReducePool::Avg, expr::UnaryChain<>> reduce_mean(
     const ComputeBlock<SB>& b, const ComputeBlock<SC>& scaler);
 
-// ---------------------------------------------------------------------------
-// custom_compute -- the escape hatch
-//
-// The compute-side counterpart of noc_load's and noc_store's Fn forms: for a pass
-// this model does not express, call the LLK directly.
-//
-//     custom_compute(a, b, [&](uint32_t a_dfb, uint32_t b_dfb) {
-//     #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-//         // any llk / compute api, on those two buffers
-//     #endif
-//     });
-//
-// Takes any number of ComputeBlocks and a routine taking that many dataflow-buffer
-// ids, in the same order. Anything else in a block position is a compile error.
-//
-// WHY THE GUARD IS YOURS. The routine is only CALLED on the compute projection --
-// this does nothing on the three data-movement ones -- but its body is COMPILED on
-// all five, because a lambda's body is compiled where it is written. So every name
-// it mentions has to resolve on a data-movement build too, and most LLK entry
-// points do not. Hence the `#if` inside. Exactly the contract noc_load's Fn form
-// has, from the other side.
-//
-// WHAT THE HARNESS DOES: waits the blocks (each ComputeBlock's constructor did) and
-// pops them at the end of the enclosing scope (its destructor). That is all.
-//
-// WHAT IT DOES NOT DO, and each of these is yours:
-//
-//   * DST registers. No tile_regs_acquire/commit/wait/release around the routine --
-//     unlike Storage::store, whose strategies bracket every pass. If the routine
-//     uses DST it must bracket itself.
-//   * The output. The routine gets INPUT buffers. To produce a block, reach the
-//     destination's `Storage::dfb_id`, do the reserve/pack/push by hand, and then
-//     `Block<Out>{out_storage}` is the handle a data-movement thread can drain --
-//     that constructor only records the buffer, it does not push.
-//   * PUTTING THE UNITS BACK. This is the one that bites. Unpacker, math and packer
-//     configuration is per-kernel state, and whatever the routine leaves set, the
-//     next unified op inherits. The library's own passes already live with this --
-//     every matmul re-runs matmul_block_init because a broadcast or a reduction
-//     before it reconfigured the units. A routine that reconfigures anything should
-//     leave it as it found it, or the next op returns garbage with nothing to say so.
-// ---------------------------------------------------------------------------
-
 template <typename T>
 struct is_compute_block : std::false_type {};
 
 template <typename S>
 struct is_compute_block<ComputeBlock<S>> : std::true_type {};
 
+// Invoke a custom compute callback with the DFB ids of its leading
+// ComputeBlock arguments. The callback owns all raw compute setup and cleanup.
 template <typename... Ts>
 void custom_compute(Ts&&... ts);
-
-// ---------------------------------------------------------------------------
-// Reserved multicast semaphores
-//
-// The multicast handshake needs two counters that mean nothing to the caller, so
-// the harness reserves them and passes their base id in as a define. Two PER DM
-// THREAD, at base + 2*thread: multicasts on one NOC serialize in hardware anyway,
-// so a pair per NOC is the natural granularity, and giving each thread its own
-// pair keeps a NOC-0 and a NOC-1 broadcast from sharing handshake state.
-//
-// The base sits above any semaphore the caller allocated, so user ids are
-// unconstrained.
-// ---------------------------------------------------------------------------
 
 #if defined(TT_UNIFIED_MCAST_SEM_BASE)
 inline constexpr bool kMcastSemsReserved = true;
@@ -896,45 +431,6 @@ inline constexpr bool kMcastSemsReserved = false;
 inline constexpr uint32_t kMcastSemBase = 0;
 #endif
 
-// ---------------------------------------------------------------------------
-// Buffer slots
-//
-//     constexpr uint32_t kDfbIn = get_named_compile_time_arg_val("dfb_in");
-//     u::Input<0, kDfbIn, Block1D> in_storage;
-//
-// A kernel cannot get its buffers' slot numbers from the `dfb::` binding tokens the way a
-// single-projection kernel would. A token is emitted only into the kernels that bind that
-// buffer (genfiles.cpp:129), a buffer's two endpoint roles are both spoken for, and a
-// unified kernel declares every Storage on every projection -- so `dfb::out` does not exist
-// on the build that only reads `in`. See unified_metal2_spec.md 7.1.
-//
-// So the slot arrives as a named compile-time VALUE, exactly like every other scalar the
-// kernel is given, under the name `dfb_<buffer>`. The harness predicts it from metal's
-// allocator rule (lowest free slot, declaration order) and unified_program_spec() documents
-// that prediction.
-//
-// The prediction is not separately checked, and the reason it need not be is that all five
-// projections read the SAME value: a wrong one has every thread agreeing on a buffer the
-// host allocated to something else, which is a hang or wrong data on the first run rather
-// than anything silent. That is unlike the endpoint ROLES, which really are silent when
-// wrong on Gen1 -- see derive_roles() in unified_harness.py, which is why those are read off
-// the kernel rather than restated.
-// ---------------------------------------------------------------------------
-
-// Under Metal 2.0 the base is a PREDICTION, and this is where it gets checked.
-//
-// Semaphores reach a 2.0 kernel as `sem::<name>` ids the host assigned, and the harness has
-// to predict them because everything below derives its ids from one base by arithmetic --
-// which needs the reserved run to be contiguous and to start where the harness thinks it
-// does. The host is the only party that knows either fact, and a token is the only thing
-// that reports it back, so the harness passes the FIRST and LAST reserved names as token
-// expressions and the arithmetic is checked against them here.
-//
-// Checking both ends is what makes it airtight rather than indicative: metal cannot issue a
-// duplicate id, so six distinct ids whose smallest is `base` and whose largest is `base + 5`
-// can only be the contiguous run.
-//
-// Nothing to check on the legacy path, where the harness allocates the ids itself.
 #if defined(TT_UNIFIED_MCAST_SEM_FIRST) && defined(TT_UNIFIED_MCAST_SEM_LAST)
 static_assert(
     kMcastSemBase == static_cast<uint32_t>(TT_UNIFIED_MCAST_SEM_FIRST),
@@ -945,21 +441,14 @@ static_assert(
     "kMcastSemBase by arithmetic, so a gap in the run silently retargets a handshake");
 #endif
 
-// Ids of the pair belonging to `thread`.
 template <int thread>
 inline constexpr uint32_t kMcastReadySem = kMcastSemBase + 2 * thread;
 template <int thread>
 inline constexpr uint32_t kMcastSentSem = kMcastSemBase + 2 * thread + 1;
 
-// One more per thread, above the two pairs: the arrival flag a multicast
-// noc_core_write raises on its receivers. It gets its own slot rather than
-// borrowing the pair above, because a core-to-core push and a broadcast (or a
-// synchronize_cores) can legitimately be in flight on one thread at once.
 template <int thread>
 inline constexpr uint32_t kCopyArrivedSem = kMcastSemBase + 4 + thread;
 
-// The program's core grid, so a whole-program barrier needs no arguments. Also
-// supplied by the harness, which is the only place that knows the core range.
 #if defined(TT_UNIFIED_CORE_GRID_H) && defined(TT_UNIFIED_CORE_GRID_W)
 inline constexpr bool kCoreGridKnown = true;
 inline constexpr uint32_t kCoreGridH = TT_UNIFIED_CORE_GRID_H;
@@ -970,28 +459,14 @@ inline constexpr uint32_t kCoreGridH = 1;
 inline constexpr uint32_t kCoreGridW = 1;
 #endif
 
-// Whether that grid is the WHOLE story: H x W cores, all of them running this program.
-//
-// It is not always. The grid above is the core range's BOUNDING BOX, and a range set need
-// not fill it -- twelve cores laid out row-major are eight in row 0 and four in row 1,
-// whose bounding box is 2 x 8 = sixteen. A rectangle is the only thing a multicast can
-// address, so anything derived from the bounding box then addresses four cores that were
-// never launched, and a barrier waits on them forever.
-//
-// The harness knows both numbers and defines this only when they agree, which turns that
-// hang into a compile error at the one call that cannot take a region argument.
 #if defined(TT_UNIFIED_CORE_GRID_EXACT)
 inline constexpr bool kCoreGridExact = true;
 #else
 inline constexpr bool kCoreGridExact = false;
 #endif
 
-// Two bfloat16 1.0 values in one 32-bit word -- the scaler a SUM reduction wants.
-// A float32 DFB would want a single 0x3F800000 instead.
 inline constexpr uint32_t kReduceScalerOne = 0x3F803F80u;
 
-// The same word for any value: bfloat16 is the top half of a float32, twice over.
-// A mean needs it, because its scaler is 1/N rather than 1 -- see reduce_mean.
 inline uint32_t bf16_pair(float v) {
     uint32_t bits = 0;
     __builtin_memcpy(&bits, &v, sizeof(bits));
@@ -999,20 +474,8 @@ inline uint32_t bf16_pair(float v) {
     return (half << 16) | half;
 }
 
-// ---------------------------------------------------------------------------
-// synchronize_cores -- barrier across the CORES of a region
-//
-// Every participating core runs the same statement; the region's start corner is
-// the rendezvous point. Reuses the reserved multicast handshake pair, which is
-// why every operation touching those semaphores leaves both at 0 on every core.
-//
-// It synchronizes CORES, not the five threads on a core: only DM thread `thread`
-// participates, and the other projections run straight past. Two threads can
-// barrier independently, since each has its own reserved pair.
-//
-// The no-argument form spans the program's whole core grid.
-// ---------------------------------------------------------------------------
-
+// Barrier all cores in region on the selected data-movement thread. The
+// zero-argument overload uses the configured worker grid.
 template <int thread>
 void synchronize_cores(PhysicalMcast region);
 
@@ -1022,108 +485,46 @@ void synchronize_cores(LogicalMcast region);
 template <int thread>
 void synchronize_cores();
 
-// ---------------------------------------------------------------------------
-// Semaphore -- a host-allocated L1 counter, projected onto one DM thread
-//
-// The storage belongs to the HOST: a SemaphoreDescriptor on the program reserves
-// one slot per core in a range and stamps its initial value, and `semaphore_id`
-// is the index into that reservation. This is what makes cross-core signalling
-// work at all -- every core resolves the same id to the same L1 offset, and the
-// offset is independent of which RISC is running.
-//
-// Do NOT give a Semaphore its own storage instead. A member or local would sit at
-// an address that only happens to agree across cores (and not at all across the
-// BRISC/NCRISC binaries), and its initial value would be set by a constructor
-// that runs once per binary load rather than once per program launch.
-//
-// `thread` selects the owning DM thread, exactly as for the Noc*Tx handles: every
-// operation is a no-op on the other projections, so one shared statement means
-// "thread N does this".
+// Thread-bound wrapper around a local NOC semaphore. wait() requires equality;
+// wait_min() accepts any value at least as large as the requested value.
 template <int thread>
 class Semaphore {
 public:
     explicit Semaphore(uint32_t semaphore_id);
 
-    // The reserved id. A handle that outlives this object has to carry the id rather
-    // than a reference: every pair-derived multicast builds its two semaphores as
-    // LOCALS inside noc_load, and a reference would dangle the moment it returned.
     uint32_t semaphore_id() const;
 
-    // Local: spin until this core's copy reaches (or reaches at least) `value`.
     Semaphore& wait(uint32_t value);
     Semaphore& wait_min(uint32_t value);
 
-    // Local: overwrite this core's copy.
     Semaphore& set(uint32_t value);
 
-    // Remote: atomically add to the SAME semaphore on another core.
     Semaphore& inc_remote(PhysicalCoord coord, uint32_t value = 1);
     Semaphore& inc_remote(LogicalCoord coord, uint32_t value = 1);
 
-    // Remote: atomically add to the same semaphore on every core of a rectangle.
-    // Must be issued by the rectangle's start corner, which is excluded from the
-    // destinations.
     Semaphore& inc_mcast(PhysicalMcast mcast, uint32_t value = 1);
     Semaphore& inc_mcast(LogicalMcast mcast, uint32_t value = 1);
 
-    // Remote: copy this core's value into the same semaphore on every core of a
-    // rectangle. Named for what it does -- do not call it `mcast`, or a parameter
-    // of the same name shadows the overload set.
     Semaphore& set_mcast(PhysicalMcast mcast);
     Semaphore& set_mcast(LogicalMcast mcast);
 
 private:
-    // Backs semaphore_id(). Metal's Semaphore keeps its own L1 address private and
-    // exposes no id, so a handle that has to outlive this object carries this instead
-    // -- and there is deliberately no l1_addr() accessor recomputing that address by
-    // hand: a routine addressing the semaphore directly should take the Semaphore.
     uint32_t id;
 
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
-    // Metal's own semaphore. Spelled ::Semaphore because this class shadows it.
     ::Semaphore<ProgrammableCoreType::TENSIX> sem;
 #endif
 };
 
-// Optional per-instance profiler zones inside the multicast sender, for splitting its
-// k-block into waiting-for-receivers, waiting-for-DRAM, and broadcasting. Off unless
-// TT_UNIFIED_MCAST_ZONES is defined, because a zone per block per core is a lot of records
-// and the profiler drops them silently once its buffer fills.
 #if defined(TT_UNIFIED_MCAST_ZONES) && defined(IS_DM_THREAD) && IS_DM_THREAD
 #define TT_U_ZONE(name) DeviceZoneScopedN(name)
 #else
 #define TT_U_ZONE(name) ((void)0)
 #endif
 
-// ---------------------------------------------------------------------------
-// NOC transaction handles
-//
-// Reads: wait() is mandatory -- you need the data, and it is what publishes the
-// destination. A forgotten wait() is caught by the destructor assert.
-//
-// Writes: fire and forget. The destructor completes them correctly, so there is
-// nothing at the call site to forget. wait() is there for the rare case that
-// needs *landed* rather than *departed*.
-// ---------------------------------------------------------------------------
-// NocAsyncMcastTx -- the handle a MULTICAST load returns
-//
-// A multicast load is not a plain read: the sender fills its own copy from DRAM and
-// then broadcasts it, while every receiver has its copy filled for it and learns so
-// from a flag. NocAsyncReadTx cannot express the second half, because it has no idea
-// which role this core plays or which semaphore carries the flag.
-//
-// So this carries both -- the `data_sent` id and the role -- and today does nothing
-// with them. `wait()` is byte for byte what NocAsyncReadTx's does: the read barrier
-// and the push. The receiver's flag wait is still inside noc_load, where it has
-// always been.
-//
-// THAT IS DELIBERATE. Sinking the flag wait into wait() is a behaviour change with a
-// precondition attached -- the flag is a 0/1 the sender rewrites every round, so a
-// receiver holding an uncleared 1 cannot tell round b from b+1 -- and it belongs in
-// its own step. See unified_mcast_handle_spec.md. This step is the shape only, and
-// its checkpoint is that every suite is unchanged.
-// ---------------------------------------------------------------------------
-
+// Asynchronous transaction handles are single-use synchronization objects.
+// Read and multicast handles return a produced Block from wait(); write handles
+// release their source pages when wait() completes.
 template <int thread, typename S>
 struct NocAsyncMcastTx {
     using shape = S;
@@ -1139,27 +540,13 @@ struct NocAsyncMcastTx {
     ~NocAsyncMcastTx();
 #endif
 
-    // Publishes the block. No argument, and returns Block<S>, so every existing call
-    // site -- all of them `noc_load(...).wait()` -- compiles unchanged.
     Block<S> wait() const;
 
     uint32_t dfb_id;
     static constexpr uint32_t num_entries = S::num_entries;
 
-    // The NOC this transaction was ISSUED on, so wait() can barrier on that one.
-    //
-    // Not decoration. noc_async_read_barrier and noc_async_writes_flushed are per-NOC, and a
-    // barrier on the wrong one returns immediately -- the push then publishes pages that have
-    // not landed, with no hang and no assert. So the NOC has to travel with the handle rather
-    // than be re-derived at the barrier, which is why this member exists before anything can
-    // request a NOC other than the thread's own. See unified_explicit_noc_spec.md, step 1.
-    //
-    // Stored as the INDEX rather than as a Noc: the handle types exist on every projection and
-    // Noc is declared only off-TRISC, so a Noc member would not compile on compute. It is
-    // reconstituted where it is used, inside data-movement-guarded code.
     uint8_t noc_id = noc_index;
 
-    // Carried for the step that moves the flag wait here. Unused today.
     mutable Semaphore<thread> data_sent;
     bool sender;
 
@@ -1167,8 +554,6 @@ struct NocAsyncMcastTx {
     mutable bool waited = false;
 #endif
 };
-
-// ---------------------------------------------------------------------------
 
 template <int thread, typename S>
 struct NocAsyncReadTx {
@@ -1186,23 +571,11 @@ struct NocAsyncReadTx {
     ~NocAsyncReadTx();
 #endif
 
-    // Completes the read and publishes the destination.
     Block<S> wait() const;
 
     uint32_t dfb_id;
     static constexpr uint32_t num_entries = S::num_entries;
 
-    // The NOC this transaction was ISSUED on, so wait() can barrier on that one.
-    //
-    // Not decoration. noc_async_read_barrier and noc_async_writes_flushed are per-NOC, and a
-    // barrier on the wrong one returns immediately -- the push then publishes pages that have
-    // not landed, with no hang and no assert. So the NOC has to travel with the handle rather
-    // than be re-derived at the barrier, which is why this member exists before anything can
-    // request a NOC other than the thread's own. See unified_explicit_noc_spec.md, step 1.
-    //
-    // Stored as the INDEX rather than as a Noc: the handle types exist on every projection and
-    // Noc is declared only off-TRISC, so a Noc member would not compile on compute. It is
-    // reconstituted where it is used, inside data-movement-guarded code.
     uint8_t noc_id = noc_index;
 
 #if defined(IS_DM_THREAD) && IS_DM_THREAD && defined(ASSERT_ENABLED) && ASSERT_ENABLED
@@ -1222,44 +595,18 @@ struct NocAsyncWriteTx {
     NocAsyncWriteTx(NocAsyncWriteTx&&) = delete;
     NocAsyncWriteTx& operator=(NocAsyncWriteTx&&) = delete;
 
-    // Releases the source: flush, then pop.
     ~NocAsyncWriteTx();
 
-    // Optional: block until the data has LANDED at the destination.
     void wait() const;
 
     uint32_t dfb_id;
     static constexpr uint32_t num_entries = S::num_entries;
 
-    // The NOC this transaction was ISSUED on, so wait() can barrier on that one.
-    //
-    // Not decoration. noc_async_read_barrier and noc_async_writes_flushed are per-NOC, and a
-    // barrier on the wrong one returns immediately -- the push then publishes pages that have
-    // not landed, with no hang and no assert. So the NOC has to travel with the handle rather
-    // than be re-derived at the barrier, which is why this member exists before anything can
-    // request a NOC other than the thread's own. See unified_explicit_noc_spec.md, step 1.
-    //
-    // Stored as the INDEX rather than as a Noc: the handle types exist on every projection and
-    // Noc is declared only off-TRISC, so a Noc member would not compile on compute. It is
-    // reconstituted where it is used, inside data-movement-guarded code.
     uint8_t noc_id = noc_index;
 };
 
-// A core-to-core copy has both halves: a local source Block to release and a
-// destination Storage to publish. The destination follows the read rule (explicit
-// wait()) and the source follows the write rule (the destructor).
-//
-// Pull: the source is the PEER's L1 and the local Block is only a handle, so the
-// destructor pops it bare, and this core's own read barrier is proof the data
-// landed -- it landed here.
 template <int thread, typename D, typename S>
 struct NocAsyncReadCoreTx {
-    // A core-to-core copy is not required to fill its destination: a GATHER has n
-    // writers each depositing its own source at its own byte_offset, so the
-    // destination is n times the source. What must hold is that the source fits and
-    // tiles the destination evenly -- one whole slot per writer. Equality would be
-    // wrong; nothing checked either fact before, since the two page counts were
-    // independent runtime fields.
     static_assert(
         S::num_entries <= D::num_entries,
         "a core-to-core copy's source does not fit its destination -- the source Block has more pages "
@@ -1285,17 +632,6 @@ struct NocAsyncReadCoreTx {
     uint32_t src_dfb;
     static constexpr uint32_t src_entries = S::num_entries;
 
-    // The NOC this transaction was ISSUED on, so wait() can barrier on that one.
-    //
-    // Not decoration. noc_async_read_barrier and noc_async_writes_flushed are per-NOC, and a
-    // barrier on the wrong one returns immediately -- the push then publishes pages that have
-    // not landed, with no hang and no assert. So the NOC has to travel with the handle rather
-    // than be re-derived at the barrier, which is why this member exists before anything can
-    // request a NOC other than the thread's own. See unified_explicit_noc_spec.md, step 1.
-    //
-    // Stored as the INDEX rather than as a Noc: the handle types exist on every projection and
-    // Noc is declared only off-TRISC, so a Noc member would not compile on compute. It is
-    // reconstituted where it is used, inside data-movement-guarded code.
     uint8_t noc_id = noc_index;
 
 #if defined(IS_DM_THREAD) && IS_DM_THREAD && defined(ASSERT_ENABLED) && ASSERT_ENABLED
@@ -1303,28 +639,8 @@ struct NocAsyncReadCoreTx {
 #endif
 };
 
-// Push: this core's L1 is the source, so the NOC must have finished reading it
-// before the pop and the destructor flushes first.
-//
-// The write side also carries the arrival handshake, which is why it is a
-// separate type. A write barrier only tells the SENDER its data landed -- it
-// waits on the destination's acks, which the receiving core cannot observe. So
-// for a push to a rectangle, wait() splits by role: the sender barriers and then
-// raises `arrived` across the rectangle, and every core inside waits on it before
-// publishing its own copy of `dst`.
-//
-// `arrived` is a member rather than a parameter: it is protocol plumbing on a
-// host-reserved slot (kCopyArrivedSem), the same argument that makes the reserved
-// broadcast pair preferable to a caller-supplied one. It sits unused on the
-// unicast form, where construction costs only an L1 address.
 template <int thread, typename D, typename S>
 struct NocAsyncWriteCoreTx {
-    // A core-to-core copy is not required to fill its destination: a GATHER has n
-    // writers each depositing its own source at its own byte_offset, so the
-    // destination is n times the source. What must hold is that the source fits and
-    // tiles the destination evenly -- one whole slot per writer. Equality would be
-    // wrong; nothing checked either fact before, since the two page counts were
-    // independent runtime fields.
     static_assert(
         S::num_entries <= D::num_entries,
         "a core-to-core copy's source does not fit its destination -- the source Block has more pages "
@@ -1351,21 +667,8 @@ struct NocAsyncWriteCoreTx {
     uint32_t src_dfb;
     static constexpr uint32_t src_entries = S::num_entries;
 
-    // The NOC this transaction was ISSUED on, so wait() can barrier on that one.
-    //
-    // Not decoration. noc_async_read_barrier and noc_async_writes_flushed are per-NOC, and a
-    // barrier on the wrong one returns immediately -- the push then publishes pages that have
-    // not landed, with no hang and no assert. So the NOC has to travel with the handle rather
-    // than be re-derived at the barrier, which is why this member exists before anything can
-    // request a NOC other than the thread's own. See unified_explicit_noc_spec.md, step 1.
-    //
-    // Stored as the INDEX rather than as a Noc: the handle types exist on every projection and
-    // Noc is declared only off-TRISC, so a Noc member would not compile on compute. It is
-    // reconstituted where it is used, inside data-movement-guarded code.
     uint8_t noc_id = noc_index;
 
-    // mutable: wait() is const across the whole API, and signalling is what a
-    // wait on this handle does.
     mutable Semaphore<thread> arrived;
     bool reader;
 
@@ -1374,78 +677,25 @@ struct NocAsyncWriteCoreTx {
 #endif
 };
 
-// ---------------------------------------------------------------------------
-// Data movement. Each is pinned to a DM thread by its `thread` argument and
-// compiles away entirely on every other thread.
-//
-// `thread` ALSO picks the NOC, since a DM thread is bound to one by its index,
-// and the two NOCs are not interchangeable: for DRAM reads NOC 0 is much the
-// faster of them. Measured on the blocked matmul, where flipping which NOC
-// carries the large operand is worth 1.4x on its own and the whole arrangement
-// spans 2.6x; rmsnorm 2.4x; flash attention 1.18x, it being latency-bound
-// rather than bandwidth-bound. So the rule these kernels follow is READS ON
-// THREAD 0, writes on 1 -- and where there are two read streams, the BIG one
-// takes thread 0 and the other takes 1 so they still overlap. Getting this
-// backwards costs more than any other single choice in these kernels; see
-// unified_llama_prefill.md.
-// ---------------------------------------------------------------------------
-
-// Reads `storage.num_entries` pages into the buffer, starting at page
-// `block_idx * storage.num_entries`. The returned handle publishes them.
+// Load one shape-sized block from tensor pages into storage. block_idx selects
+// the block in the accessor. Input overloads derive the DM thread from storage.
 template <int thread, typename S, typename Accessor>
 NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, const Accessor& acc, uint32_t block_idx);
 
-// The ENDPOINT form, and the one to write: the buffer is an Input, so the thread comes out
-// of its declaration instead of being restated here. See Endpoint above for why the kernel
-// is where the endpoint is said, and why saying it twice was the hazard.
-//
-// The Storage form above stays until every kernel has converted; it takes a bare Storage,
-// which says nothing about either end, so it cannot check anything.
 template <int T, uint32_t Id, typename S, typename Accessor>
 NocAsyncReadTx<T, S> noc_load(const Input<T, Id, S>& storage, const Accessor& acc, uint32_t block_idx);
 
-// Custom load, for routines the built-in overload cannot express. The harness
-// keeps the dataflow-buffer protocol -- cb_reserve_back, the write pointer, and
-// (via the returned handle) the read barrier and cb_push_back -- and `fn` owns
-// the traffic. It is called as
-//
-//     fn(L1Entries pages)
-//
-// and must fill pages.count consecutive pages from pages.base: that is the
-// count the handle pushes, whatever `fn` actually wrote, so loop on pages.count.
-//
-// The built-in overloads above are written this way too, so this path carries the
-// same weight as they do rather than being a side door.
-//
-// `fn` must issue ONLY READS, and only on this thread's assigned NOC. The handle
-// releases with noc_async_read_barrier(), which covers reads on a single NOC --
-// reads issued on the other NOC, or writes, are not covered, and the push would
-// then publish pages that have not landed.
-//
-// `fn` is only CALLED on the owning data-movement thread, but its body is
-// COMPILED on all five projections, so the intrinsics it names have to resolve
-// everywhere; see tt/unified/adaptor.hpp.
+// Custom load. fn(L1Entries) must issue reads that fill every supplied page on
+// the selected thread's NOC. The returned handle completes and publishes them.
 template <int thread, typename S, typename Fn>
 NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, Fn fn);
 
-// The endpoint form.
 template <int T, uint32_t Id, typename S, typename Fn>
 NocAsyncReadTx<T, S> noc_load(const Input<T, Id, S>& storage, Fn fn);
 
-// Multicast load: one core in the rectangle reads the block from `acc` and
-// multicasts it into the SAME dataflow buffer on every core of the rectangle.
-// Every core runs this same statement; which side of the handshake it takes is a
-// runtime decision on its own coordinate.
-//
-// Two semaphores are required, and both must be reserved by the host so all cores
-// agree on their offsets:
-//   receivers_ready -- receivers count themselves in; the sender waits for them
-//   data_sent       -- the sender announces the payload has been multicast
-//
-// The call is repeatable without host intervention, which takes deliberate resets
-// -- a semaphore that keeps its count lets the NEXT call fall straight through
-// the handshake. `receivers_ready` is cleared by the sender once it has counted
-// everyone in; `data_sent` is cleared by each receiver after it observes it.
+// Multicast load. One core reads the block and distributes it to every core in
+// mcast. Explicit semaphore overloads use caller-managed handshake semaphores;
+// pair-based overloads use the reserved pair selected by the template argument.
 template <int thread, typename S, typename Accessor>
 NocAsyncMcastTx<thread, S> noc_load(
     const Storage<S>& storage,
@@ -1464,39 +714,17 @@ NocAsyncMcastTx<thread, S> noc_load(
     const Accessor& acc,
     uint32_t block_idx);
 
-// Same, with the handshake semaphores supplied by the harness's reservation.
-// Prefer these: the pair is protocol plumbing, and having callers allocate it
-// invites the initial-value and reset mistakes the explicit form makes possible.
-//
-// `pair` selects which reserved pair to use, defaulting to the driving thread's.
-// Two broadcasts must never share a pair -- their ready counters would interleave
-// and noc_semaphore_wait, which waits for EQUALITY, would miss its target. The
-// default is right when they run on different threads (the usual case: one per
-// NOC, overlapping). Name the pair explicitly to put two broadcasts on ONE thread
-// and still keep them apart.
 template <int thread, int pair = thread, typename S, typename Accessor>
 NocAsyncMcastTx<thread, S> noc_load(
     const Storage<S>& storage, PhysicalMcast mcast, const Accessor& acc, uint32_t block_idx);
 
-// The endpoint form. `pair` keeps its own template slot -- it is not the thread and must
-// stay nameable, since two broadcasts on ONE thread need different pairs (bmm_mcast does
-// exactly that) -- and defaults to the pair belonging to the endpoint's own thread.
 template <int pair = kPairOfThread, int T, uint32_t Id, typename S, typename Accessor>
 NocAsyncMcastTx<T, S> noc_load(
     const Input<T, Id, S>& storage, PhysicalMcast mcast, const Accessor& acc, uint32_t block_idx);
 
-// Multicast load with a CUSTOM fill, the same relationship the plain noc_load's Fn form has
-// to its accessor form. `fn` runs on the sender only and fills its copy however it likes;
-// the broadcast that follows does not care how the bytes arrived.
-//
-// This is what lets a multicast operand be gathered rather than read as one contiguous
-// block. A k-slice of a row-major activation, or a (k, n) tile of a wider weight matrix, is
-// strided in DRAM and contiguous nowhere -- but it is an ordinary block once in L1. Costs no
-// extra traffic: the built-in read issues one request per page too.
 template <int thread, int pair = thread, typename S, typename Fn>
 NocAsyncMcastTx<thread, S> noc_load(const Storage<S>& storage, PhysicalMcast mcast, Fn fn);
 
-// The endpoint forms of the custom multicast fill.
 template <int pair = kPairOfThread, int T, uint32_t Id, typename S, typename Fn>
 NocAsyncMcastTx<T, S> noc_load(const Input<T, Id, S>& storage, PhysicalMcast mcast, Fn fn);
 template <int thread, int pair = thread, typename S, typename Fn>
@@ -1508,120 +736,51 @@ template <int thread, int pair = thread, typename S, typename Accessor>
 NocAsyncMcastTx<thread, S> noc_load(
     const Storage<S>& storage, LogicalMcast mcast, const Accessor& acc, uint32_t block_idx);
 
-// The endpoint form. `pair` keeps its own template slot -- it is not the thread and must
-// stay nameable, since two broadcasts on ONE thread need different pairs (bmm_mcast does
-// exactly that) -- and defaults to the pair belonging to the endpoint's own thread.
 template <int pair = kPairOfThread, int T, uint32_t Id, typename S, typename Accessor>
 NocAsyncMcastTx<T, S> noc_load(
     const Input<T, Id, S>& storage, LogicalMcast mcast, const Accessor& acc, uint32_t block_idx);
 
-// Fill a one-page Storage with the constant metal's reduce folds in: the value in
-// the first row of each of the tile's four 16x16 faces, zero everywhere else.
-// Call it ONCE, before the first reduction; it pushes the page and nothing ever
-// pops it, because every reduce_tile re-reads the same tile.
-//
-// `value_bits` is written as raw 32-bit words, so its packing follows the DFB's
-// format: for bfloat16 one word is TWO values, which is what kReduceScalerOne is.
-// Sum wants 1.0; an average wants 1/N (1/sqrt(N) reducing both axes).
-// Returns the page as a Block, so a scaler is held the same way a fused bias is:
-// as a ComputeBlock at KERNEL scope. That is what makes the wait happen once, in
-// its constructor, and the pop happen at the end of the kernel rather than after
-// the first reduction.
+// Fill and publish the persistent one-page scaler used by reductions.
+// value_bits contains the packed value in the buffer's element format.
 template <int thread, typename S>
 Block<S> fill_reduce_scaler(const Storage<S>& scaler, uint32_t value_bits = kReduceScalerOne);
 
-// The endpoint form. A scaler buffer is filled by data movement like any other Input; that
-// it is filled once and never popped is a property of the protocol, not of the endpoint.
 template <int T, uint32_t Id, typename S>
 Block<S> fill_reduce_scaler(const Input<T, Id, S>& scaler, uint32_t value_bits = kReduceScalerOne);
 
-// Drains a Block to a tensor. Takes the Block by value: this call consumes it.
+// Store a produced block to tensor pages. block_idx selects the destination
+// block. Storage-leading overloads evaluate node into storage before writing.
 template <int thread, typename S, typename Accessor>
 NocAsyncWriteTx<thread, S> noc_store(Block<S> block, const Accessor& acc, uint32_t block_idx);
 
-// The congruent form: lead with the Storage, as noc_load does, and pass the expression
-// rather than wrapping it in a store(). By const reference because Storage has copy and
-// move both deleted.
 template <int thread, typename S, typename Accessor, typename Node>
 NocAsyncWriteTx<thread, S> noc_store(
     const Storage<S>& storage, const Node& node, const Accessor& acc, uint32_t block_idx);
 
-// The endpoint form: the buffer is an Output, so the DM thread that drains it comes out of
-// its declaration. Compute produces into it here and the returned handle pops.
 template <int T, uint32_t Id, typename S, typename Accessor, typename Node>
 NocAsyncWriteTx<T, S> noc_store(
     const Output<T, Id, S>& storage, const Node& node, const Accessor& acc, uint32_t block_idx);
 
-// Custom store: the mirror of the custom noc_load. `fn` is called as
-// fn(L1Entries pages) over `block`'s pages -- pages.count is the number the handle
-// pops.
-//
-// `fn` must issue ONLY WRITES, and only on this thread's assigned NOC. The handle
-// releases the source buffer with noc_async_writes_flushed() and pops, which
-// covers writes departing local L1 on a single NOC. Reads issued here, or writes
-// on the other NOC, are not covered, so the pop can hand the pages back while
-// they are still being sourced.
+// Custom store. fn(L1Entries) must issue writes for the supplied source pages
+// on the selected thread's NOC. The returned handle completes the writes and
+// releases the source pages.
 template <int thread, typename S, typename Fn>
 NocAsyncWriteTx<thread, S> noc_store(Block<S> block, Fn fn);
 
-// The same for the custom form. Disjoint from noc_store(Block, Accessor, idx) -- also three
-// arguments -- by the FIRST parameter: a Storage and a Block are both deduced, and neither
-// converts to the other, so exactly one candidate is ever viable.
 template <int thread, typename S, typename Node, typename Fn>
 NocAsyncWriteTx<thread, S> noc_store(const Storage<S>& storage, const Node& node, Fn fn);
 
-// The endpoint form of the custom store.
 template <int T, uint32_t Id, typename S, typename Node, typename Fn>
 NocAsyncWriteTx<T, S> noc_store(const Output<T, Id, S>& storage, const Node& node, Fn fn);
 
-// ---------------------------------------------------------------------------
-// Core-to-core movement: pull a peer's block into this core's Storage
-// (noc_core_read), or push this core's block into a peer's Storage
-// (noc_core_write). `byte_offset` shifts the PEER-side address within its buffer.
-//
-// The Physical overloads are the real ones; the Logical ones translate and
-// forward. Only the write side takes a rectangle: pushing one block to many peers
-// is meaningful, pulling from many is not.
-//
-// NOTE: reserve/push act on the *local* view of the destination DFB. For a genuine
-// peer buffer the far side's pointers have to be advanced too -- see
-// api/remote_circular_buffer.h (remote_cb_reserve_back /
-// remote_cb_push_back_and_write_pages, asymmetric between sender and receiver) or
-// the explicit semaphore handshake the matmul mcast kernels use.
-// ---------------------------------------------------------------------------
-
+// Copy blocks between cores. coord or dst_range identifies the peer side;
+// byte_offset is within the peer buffer. For writes, write_predicate selects
+// participating writers and wait(num_writers) must match that count. Callers
+// must keep peer buffer pointers synchronized across repeated exchanges.
 template <int thread, typename D, typename S>
 NocAsyncReadCoreTx<thread, D, S> noc_core_read(
     const Storage<D>& dst, Block<S> src, PhysicalCoord coord, uint32_t byte_offset = 0);
 
-// EVERY core in the exchange runs one statement and takes its side from its own
-// coordinate and predicate:
-//
-//   `dst_range`         the cores being written INTO. A core inside it is a
-//                       reader: it takes delivery and publishes its own copy of
-//                       `dst`.
-//   `write_predicate`   whether THIS core writes. Its destinations are `dst_range`.
-//
-// `wait(num_writers)` is the count the reader collects: how many cores had
-// write_predicate true. Nothing checks it against reality -- too high hangs, too
-// low publishes short.
-//
-// WHAT THIS GIVES YOU is arrival notification for ONE push: the writers raise
-// `arrived` after their payload, and the reader will not publish `dst` until it
-// has counted them all. That is the part a write barrier cannot do, since it
-// tells only the writer that its data landed.
-//
-// WHAT IT DOES NOT GIVE YOU is a repeatable channel. Two things are the caller's:
-//
-//   1. dst has to be FREE before the writers write. Nothing here tells a writer
-//      that the reader is done with the previous round's contents, and the
-//      reader's `arrived.set(0)` after collecting is a window in which a writer
-//      already into the next round loses its increment -- which hangs the round
-//      after. Put a synchronize_cores() between pushes, or otherwise establish
-//      that every reader is finished, and both go away.
-//
-//   2. Addressing. The destination is computed from the WRITER's local view of
-//      `dst`, so the copies have to stay in step (see the NOTE above).
 template <int thread, typename D, typename S>
 NocAsyncWriteCoreTx<thread, D, S> noc_core_write(
     const Storage<D>& dst, Block<S> src, PhysicalCoord coord, bool write_predicate, uint32_t byte_offset = 0);
@@ -1638,13 +797,9 @@ template <int thread, typename D, typename S>
 NocAsyncWriteCoreTx<thread, D, S> noc_core_write(
     const Storage<D>& dst, Block<S> src, LogicalCoord coord, bool write_predicate, uint32_t byte_offset = 0);
 
-// The endpoint form. The DESTINATION is an Input: a core-to-core write fills a dataflow
-// buffer from data movement, which is the same endpoint a noc_load gives it -- the peer's
-// copy of that buffer is filled by this thread, and the DFB's producer binding says so.
 template <int T, uint32_t Id, typename D, typename S>
 NocAsyncWriteCoreTx<T, D, S> noc_core_write(
-    const Input<T, Id, D>& dst, Block<S> src, LogicalCoord coord, bool write_predicate,
-    uint32_t byte_offset = 0);
+    const Input<T, Id, D>& dst, Block<S> src, LogicalCoord coord, bool write_predicate, uint32_t byte_offset = 0);
 
 template <int thread, typename D, typename S>
 NocAsyncWriteCoreTx<thread, D, S> noc_core_write(
