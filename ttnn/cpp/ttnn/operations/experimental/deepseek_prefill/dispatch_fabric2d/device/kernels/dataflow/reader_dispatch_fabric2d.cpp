@@ -73,10 +73,14 @@ Control carve_control() {
 // Every source chip's row of the offsets table, plus the two tensors that close the last row, plus the
 // dispatch table. A few kB, read once and indexed from L1 thereafter.
 void read_control_tables(const Control& c) {
-    const auto offsets_acc = TensorAccessor(dspf2d::ReaderCtArgs::offsets_args, get_arg_val<uint32_t>(2));
-    const auto table_acc = TensorAccessor(dspf2d::ReaderCtArgs::table_args, get_arg_val<uint32_t>(3));
-    const auto counts_acc = TensorAccessor(dspf2d::ReaderCtArgs::counts_args, get_arg_val<uint32_t>(4));
-    const auto region_acc = TensorAccessor(dspf2d::ReaderCtArgs::region_args, get_arg_val<uint32_t>(5));
+    const auto offsets_acc = TensorAccessor(
+        dspf2d::ReaderCtArgs::offsets_args, get_arg_val<uint32_t>(dspf2d::ReaderRtArg::kExpertOffsetsAddr));
+    const auto table_acc = TensorAccessor(
+        dspf2d::ReaderCtArgs::table_args, get_arg_val<uint32_t>(dspf2d::ReaderRtArg::kDispatchTableAddr));
+    const auto counts_acc =
+        TensorAccessor(dspf2d::ReaderCtArgs::counts_args, get_arg_val<uint32_t>(dspf2d::ReaderRtArg::kCountsAddr));
+    const auto region_acc = TensorAccessor(
+        dspf2d::ReaderCtArgs::region_args, get_arg_val<uint32_t>(dspf2d::ReaderRtArg::kRegionOffsetsAddr));
 
     const uint32_t row_bytes = ct.num_routed_experts * 4u;
     for (uint32_t r = 0; r < ct.extent; r++) {
@@ -93,7 +97,8 @@ void read_control_tables(const Control& c) {
 // L1 destination on Blackhole, so reading topk uint16 per token into a packed array would put every token
 // after the first at a wrong address and build the whole index out of garbage.
 void read_indices(const Control& c) {
-    const auto indices_acc = TensorAccessor(dspf2d::ReaderCtArgs::indices_args, get_arg_val<uint32_t>(1));
+    const auto indices_acc =
+        TensorAccessor(dspf2d::ReaderCtArgs::indices_args, get_arg_val<uint32_t>(dspf2d::ReaderRtArg::kIndicesAddr));
     const uint32_t record_bytes = ct.topk * 2u;
     for (uint32_t t = 0; t < ct.seq_len; t++) {
         noc_async_read(indices_acc.get_noc_addr(t), (uint32_t)c.indices + t * ct.indices_pad_stride, record_bytes);
@@ -332,11 +337,15 @@ void kernel_main() {
 
     fill_entries(c);
 
-    const auto in_acc = TensorAccessor(dspf2d::ReaderCtArgs::in_args, get_arg_val<uint32_t>(0));
-    const auto out_acc = TensorAccessor(dspf2d::ReaderCtArgs::out_payload_args, get_arg_val<uint32_t>(6));
-    const auto meta_acc = TensorAccessor(dspf2d::ReaderCtArgs::out_meta_args, get_arg_val<uint32_t>(7));
+    const auto in_acc =
+        TensorAccessor(dspf2d::ReaderCtArgs::in_args, get_arg_val<uint32_t>(dspf2d::ReaderRtArg::kInputAddr));
+    const auto out_acc = TensorAccessor(
+        dspf2d::ReaderCtArgs::out_payload_args, get_arg_val<uint32_t>(dspf2d::ReaderRtArg::kOutPayloadAddr));
+    const auto meta_acc =
+        TensorAccessor(dspf2d::ReaderCtArgs::out_meta_args, get_arg_val<uint32_t>(dspf2d::ReaderRtArg::kOutMetaAddr));
 
-    const auto fwd_acc = TensorAccessor(dspf2d::ReaderCtArgs::fwd_args, get_arg_val<uint32_t>(8));
+    const auto fwd_acc =
+        TensorAccessor(dspf2d::ReaderCtArgs::fwd_args, get_arg_val<uint32_t>(dspf2d::ReaderRtArg::kFwdAddr));
     const uint32_t my_region = ct.stream * ct.fwd_pages_per_stream;
 
     chunk_starts(c, ct.in_chunks_base, c.in_start);
