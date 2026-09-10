@@ -781,6 +781,11 @@ class TtPrefillRuntime:
                     slot_idx=slot_id,
                     actual_end=actual_end,
                 )
+                # TODO: the drafter needs its own layer ack here. All num_layers acks fire inside
+                # model.forward above, but this write lands after it returns, so a migration worker
+                # acting on the last ack would copy drafter chunks this chunk has not written yet.
+                # Read-back (the producer's PCC gate) is unaffected -- it runs after the request --
+                # but live migration of the drafter caches is blocked until this is ordered.
                 return None
             # Non-last rank: pack this rank's finalized FC partial alongside the hidden for the next rank.
             return self._pack_activation(out, self.drafter.export_partial())

@@ -804,6 +804,29 @@ def _write_pcc_verdict(
         json.dump(verdict, f)
 
 
+def _dflash_caches_are_local(kv_table, device_map: dict, *, slot_id: int) -> bool:
+    """Whether this host owns the DFlash drafter caches the table describes.
+
+    The drafter is built on ONE rank (the KV tail), so its caches live on ONE host, but every rank sees
+    its configs because the table is shared. ``read_dram_umd`` is local-PCIe only, so a rank elsewhere
+    would resolve a chip it cannot read and abort inside umd_dram_reader
+    (``TT_FATAL: it != uid_to_chip.end()``) rather than skip. Probing one config is enough: all of them
+    describe the same two caches on the same host.
+
+    The KVPE reader has the equivalent behaviour inline (``except KeyError: continue`` per layer); the
+    drafter needs it hoisted because its reader checks every (layer, head) as one unit.
+    """
+    from models.demos.deepseek_v3_d_p.tt.runners.kv_chunk_table import dflash_config_name
+
+    try:
+        config_id = kv_table.config_id_of(dflash_config_name("k", 0))
+        loc = kv_table.lookup(0, 0, slot_id, config_id)
+        _resolve_unique_id(kv_table.get_device_group(loc.device_group_index).fabric_node_ids, device_map)
+    except KeyError:
+        return False
+    return True
+
+
 def _verify_resident_slots(kv_table, stats: RunStats, threshold: float, slot_traces: dict, rank: int = 0) -> bool:
     device_map = _read_device_map(int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60")))
     if not device_map:
@@ -813,6 +836,12 @@ def _verify_resident_slots(kv_table, stats: RunStats, threshold: float, slot_tra
 
     dflash_threshold = float(os.environ.get("PREFILL_DFLASH_PCC", "0.88"))
     check_dflash = any(name.startswith("dflash_") for name in _config_names(kv_table))
+    if check_dflash and not _dflash_caches_are_local(kv_table, device_map, slot_id=min(stats.resident, default=0)):
+        logger.info(
+            "[producer] drafter caches are not on this host; leaving the drafter PCC to the rank that "
+            "owns them (the KV-tail rank)."
+        )
+        check_dflash = False
     if check_dflash:
         from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_kv_validation import dflash_kv_table_pcc_check
 
