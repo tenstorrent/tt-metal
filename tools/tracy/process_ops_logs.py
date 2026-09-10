@@ -657,10 +657,14 @@ def _enrich_ops_from_perf_csv(
         # Build a lookup that matches the C++ ProgramExecutionUID structure:
         # (GLOBAL CALL COUNT, METAL TRACE ID) -> list of perf rows (one per replay session, or one for non-trace)
         perf_rows_by_key: Dict[Tuple[int, Optional[int]], List[Dict[str, Any]]] = {}
+        replayed_trace_ids: Set[int] = set()
         for (op_id, trace_id, session_id), row in device_perf_by_device[device_id].items():
             perf_rows_by_key.setdefault((op_id, trace_id), []).append(row)
+            if trace_id is not None:
+                replayed_trace_ids.add(int(trace_id))
 
         enriched_ops = []
+        dropped_ops_by_trace: Dict[int, int] = {}
         for host_op in host_ops_by_device[device_id]:
             op_id = int(host_op["global_call_count"])
             host_trace_id = host_op.get("metal_trace_id")
@@ -679,6 +683,13 @@ def _enrich_ops_from_perf_csv(
                 for (cand_op_id, _cand_trace_id), rows in perf_rows_by_key.items():
                     if cand_op_id == op_id:
                         candidates.extend(rows)
+
+            if not candidates and host_trace_id is not None and host_trace_id not in replayed_trace_ids:
+                # The host captured this trace but never replayed it (e.g. a prefill-only demo
+                # that records the decode trace up front), so the device produced no data for
+                # any of its ops. Drop them instead of failing the whole report.
+                dropped_ops_by_trace[host_trace_id] = dropped_ops_by_trace.get(host_trace_id, 0) + 1
+                continue
 
             assert candidates, (
                 f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
@@ -707,6 +718,12 @@ def _enrich_ops_from_perf_csv(
 
                 enriched_op["_device_perf_row"] = perf_row
                 enriched_ops.append(enriched_op)
+
+        for dropped_trace_id, dropped_count in sorted(dropped_ops_by_trace.items()):
+            logger.warning(
+                f"Device {device_id}: trace {dropped_trace_id} was captured but never replayed; "
+                f"dropping its {dropped_count} host ops, which have no device data in {PROFILER_CPP_DEVICE_PERF_REPORT}"
+            )
 
         host_ops_by_device[device_id] = enriched_ops
     return host_ops_by_device
