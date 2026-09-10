@@ -222,6 +222,53 @@ Will result in both ``a < b`` and ``a >= b`` being printed, but only the element
 
 ``v_and`` can be used inside any predicated conditional block (i.e., a ``v_block`` or a ``v_if``).
 
+Register Pressure
+^^^^^^^^^^^^^^^^^
+
+Register pressure refers to the number of live variables, which should
+be held in registers, at any point in the program.  The more live
+values, the higher the pressure. The SFPU only has 8 LRegs available
+to hold variables. Usually when more values are live the compiler will
+emit spill and fill code to store values on the program stack.  But
+this not possible on the SFPU, as there is no simple path between the
+lregs and memory for the lregs. If this situation happens, the
+compiler will emit an error message of the form:
+
+.. code-block::
+
+   error: there are too few lregs to hold live values
+   note: try 'sfpi::lreg_pressure', or reduce the number of live variables
+   note: instruction is '1504: [sp:SI]=L0:XTT32SI       REG_DEAD L0:XTT32SI'
+
+The preceeding ``inlined from ...`` lines provide information about
+the context of the instruction (usually the instruction is embedded in
+the sfpi library, so somewhere further back in the include chain is
+the cause).
+
+As the note indicates, sfpi provides a type that can be used to tell
+the compiler register pressure is high, and therefore avoid
+optimizations that can increse it. It is not however a guaranteed
+solution.  To use this, place:
+
+.. code-block:: c++
+
+   sfpi::lreg_pressure _;
+
+in the scope you determine to have high register pressure. (The ``_``
+indicates an aribtrary name of no importance.) The pressure will be
+noted between the defined variable and the end of the scope.  If,
+within a high pressure area you determine the pressure drops, you may
+embed:
+
+.. code-block:: c++
+
+    sfpu::lreg_pressure _(false);
+
+which will reduce the pressure from that point until the end of its
+scope. ``lreg_pressure`` objects nest the pressure correctly, so one
+may be embedded within another's scope (most likely via function
+inlining).
+
 Data Type Details
 -----------------
 
