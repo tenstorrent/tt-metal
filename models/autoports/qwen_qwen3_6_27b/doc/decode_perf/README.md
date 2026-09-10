@@ -625,6 +625,38 @@ claim. And this is one run of each point, not a distribution.
 
 ## CI
 
+### Evals: quality is unchanged, and the eval does 1.6x more decode work
+
+`34414429853` on `e970b4f966d` is the first **genuine** eval run of this branch:
+1h40m, zero `EngineCore encountered a fatal error`, zero layout errors, 154k log
+lines. Against the pre-change baseline `34360801790` on `38153c48c8a`, which was
+also genuine (1h38m, zero fatal errors):
+
+| | baseline `38153c48c8a` | this branch `e970b4f966d` |
+| --- | ---: | ---: |
+| `r1_gpqa_diamond` | **40** (ratio 0.4484, ❌ FAIL vs published 89.2) | **40** (ratio 0.4484, ❌ FAIL) |
+| mean seconds per task | 541.6 | 541.5 |
+| generation throughput, median | 16.8 tok/s | **29.6 tok/s** |
+| concurrent requests, median | 5 | 4 |
+| generated tokens in the window | ~93k | **~150k** |
+| time decoding / prefilling / idle | 86 / 1 / 8 min | 86 / 1 / 8 min |
+
+Two things to take from this. **Quality does not move**: identical score and
+identical ratio, so the eval's failure against the published 89.2 is this port's
+pre-existing quality gap — consistent with `doc/SAMPLING_TEXT_QUALITY.md`'s
+recorded text-quality defect in long free-running generation — and not something
+the conv, matmul or mask changes introduced. **And the speedup does reach the
+eval**: it is decode-bound (86 of 94 minutes decoding, ~1 minute prefilling), and
+the same 86 minutes of decoding produced ~150k tokens instead of ~93k, at a
+*lower* median concurrency (4 against 5). Per request that is 7.4 against
+3.4 tok/s, ~2.2x, which is the 2.67x TPOT gain discounted by prefill interleaving.
+
+One thing this does **not** explain: `mean_seconds_per_task` is identical to
+541.5 against 541.6 despite 1.6x more decode work in the same window. The
+available job logs do not carry per-request completion lines at this verbosity,
+so I cannot say from them whether the task set, the per-task token budget, or the
+client sets that figure. Recorded as unexplained rather than guessed at.
+
 **A crashed engine can report success.** Two evals runs reported job success with
 a dead EngineCore — `run-evals` exited 0 after the traceback. The tell is
 duration: 10 minutes, then 10 minutes, for a model that needs ~15 just to stage
@@ -641,7 +673,8 @@ duration and grepping for `EngineCore encountered a fatal error`.
 | `34404067300` | benchmarks | `2092bf3424d` | failure — transient `git clone` TLS error in the image build, model never ran |
 | `34404082346` | evals | `2092bf3424d` | "success", engine dead — `single_slot_prefill_view` |
 | `34413443092` | benchmarks | `2092bf3424d` | cancelled once the same defect was known |
-| `34414429853` | evals | `e970b4f966d` | dispatched after all three fixes |
+| `34360801790` | evals | `38153c48c8a` | genuine, `r1_gpqa_diamond` 40 — the baseline for quality |
+| `34414429853` | evals | `e970b4f966d` | **genuine, `r1_gpqa_diamond` 40 — unchanged** |
 | `34414440695` | benchmarks | `e970b4f966d` | dispatched after all three fixes |
 
 `34404067300` is worth one note of its own: the image build died in a `git clone`
