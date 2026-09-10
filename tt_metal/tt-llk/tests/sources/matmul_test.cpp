@@ -100,8 +100,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                     else
                     {
-                        LLK_ASSERT(ckernel::is_valid_L1_address(L1_ADDRESS(buffer_A[last_a])), "unpack A real-buffer top address is outside L1");
-                        LLK_ASSERT(ckernel::is_valid_L1_address(L1_ADDRESS(buffer_B[last_b])), "unpack B real-buffer top address is outside L1");
+                        LLK_ASSERT(is_valid_L1_address(L1_ADDRESS(buffer_A[last_a])), "unpack A real-buffer top address is outside L1");
+                        LLK_ASSERT(is_valid_L1_address(L1_ADDRESS(buffer_B[last_b])), "unpack B real-buffer top address is outside L1");
                     }
                     _llk_unpack_AB_matmul_<>(
                         addr_a,
@@ -265,7 +265,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     const std::uint32_t addr = LOOP_FACTOR > 1 ? PERF_ADDRESS(PERF_OUTPUT, i) : L1_ADDRESS(buffer_Res[i]);
                     if (LOOP_FACTOR == 1)
                     {
-                        LLK_ASSERT(ckernel::is_valid_L1_address(L1_ADDRESS(buffer_Res[i])), "pack result real-buffer address is outside L1");
+                        LLK_ASSERT(is_valid_L1_address(L1_ADDRESS(buffer_Res[i])), "pack result real-buffer address is outside L1");
                     }
                     _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, addr);
                 }
