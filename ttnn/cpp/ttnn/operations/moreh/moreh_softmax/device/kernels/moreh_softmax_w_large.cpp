@@ -78,8 +78,10 @@ void kernel_main() {
                     /*pop=*/1,
                     /*popm=*/0);
 #else
+                sub_tiles_bcast_cols_to_cb(dfb_in0_obj, dfb_max_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*pop1=*/0);
+
                 rexp_tile_and_mask_tile_to_cb(
-                    dfb_in0_obj,
+                    dfb_tmp_obj,
                     dfb_mask_obj,
                     dfb_exps_obj,
                     /*itile=*/0,
