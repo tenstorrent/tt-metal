@@ -69,7 +69,7 @@ TPOT/E2EL in ms; throughput in tokens/s (Tput) and requests/s (Req Tput).
 | 1 | 1 | 131072 | 128 | 24876 | 36.2 | 29470 | 4.3 | 4452 | 0.034 |
 | 4 | 4 | 131072 | 128 | 67757 | 299.1 | 105738 | 4.8 | 4963 | 0.038 |
 
-Optimizations are env-gated (default off): the serving set is
+Optimizations are **ON BY DEFAULT** for this model (set via `model_config.py` setdefault; override any flag from the environment to disable it). The serving set is
 `QWEN36_GDN_OUT_MODE=agmm QWEN36_GDN_CONV=kda TT_SDPA_GQA_MCAST=1 QWEN36_SDPA_K_CHUNK=256`
 `QWEN36_AGMM_LAYOUT=nt11x8 TT_GDN_SCAN_MCAST=1 TT_SDPA_GQA_MCAST_QPAIR=1 QWEN36_GDN_PROJ_CHUNKS=1`
 `QWEN36_GDN_GB_BF16=1 QWEN36_KDA_TILE_IN=1 QWEN36_AGMM_BARRIER=1 QWEN36_GDN_SLOT_DEVICE_COPY=2`
