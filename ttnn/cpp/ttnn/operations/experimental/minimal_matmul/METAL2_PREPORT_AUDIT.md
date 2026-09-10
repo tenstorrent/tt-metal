@@ -44,6 +44,48 @@ the change and its cause are named. The three material changes since: the op's
 `ProgramDescriptor` migration landed (#55738), the two Device 2.0 CB-index holdovers were fixed
 (#55051 / #55072), and the dead split device-op files were deleted (#55051).
 
+## Addendum — 2026-09-10, later the same day: the sheet was refreshed, and the gate clears
+
+The readiness row was updated after this audit was written. **The single blocker is resolved and
+the op's verdict is now GREEN.** The audit body below is left as written (it is the record of what
+was found at the time); this addendum is the delta.
+
+| column | at audit time | after refresh | effect |
+|---|---|---|---|
+| `Concept` | `legacy device-op` | **`descriptor`** | conflict resolved — matches the code |
+| `Is able to port?` | `yes (with PD step)` | **`yes`** | **the gate clears** |
+| `Override runtime args method?` | `n/a` | **`no`** | see below |
+| `Porting Target` | `ProgramSpecFactoryConcept` | `ProgramSpecFactoryConcept` | unchanged |
+| `TensorParameter relaxation` | `none` | `none` | unchanged |
+
+**Revised result: GREEN.** Every gate-bearing subject now clears — Device 2.0, feature
+compatibility, offset base pointers, TensorAccessor 3rd argument, and the TTNN factory concept.
+
+**Two fields are still stale**, and they are the remaining half of the factory-set cross-check.
+Both still name the *legacy* CCL-only helper rather than the device op's factory:
+
+- `Factory (variant)` = `MinimalMatmulProgramFactory` — but this device op's `program_factory_t`
+  alternative is the nested `MinimalMatmulDeviceOperation::ProgramFactory`
+  (`device/minimal_matmul_device_operation.hpp:42`). `MinimalMatmulProgramFactory` still exists as
+  a type, but it is the legacy emitter for
+  `experimental/ccl/minimal_matmul_strided_reduce_scatter_async`, not this op's factory.
+- `Factory definition path` = `device/minimal_matmul_program_factory.hpp` — same problem; the
+  factory is declared in `device/minimal_matmul_device_operation.hpp` with its body in
+  `device/minimal_matmul_program_descriptor.cpp`.
+
+These are **cosmetic relative to the gate** and do not re-RED the op; recorded for the sheet owner
+because reusing the legacy name for this op's row will recreate exactly the confusion this audit
+had to untangle.
+
+**On `Override runtime args method? = no`.** At audit time the code *did* declare an
+`override_runtime_arguments` on the descriptor factory
+(`device/minimal_matmul_program_descriptor.cpp:951`), which by the recipe's rule maps to
+`CustomProgramSpecFactoryConcept`. The refreshed cell says `no`, which maps to the base concept —
+and the base concept is what the port targeted, on the invoker's decision, after analysis showed
+that override refreshed *only* tensor addresses (the set the base concept refreshes automatically).
+Sheet and port now agree. The port deleted the override, so the cell is accurate for the ported
+code. Rationale and what was traded is in `METAL2_PORT_REPORT.md` → *Concept deviation*.
+
 ## Status summary
 
 | Field | Value |
