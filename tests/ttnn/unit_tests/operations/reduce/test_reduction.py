@@ -413,6 +413,49 @@ def test_std_var_fp32_w_l1_replay_respects_occupied_l1(device, enabled_program_c
     assert l1_pressure.is_allocated()
 
 
+@pytest.mark.skipif(not is_blackhole(), reason="The near-capacity reservation is calibrated for Blackhole L1")
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 1024 * 1024}], indirect=True)
+def test_std_var_fp32_w_l1_replay_preserves_l1_small(device, enabled_program_cache):
+    torch.manual_seed(20260910)
+    torch_input = torch.randn((1, 1, 32, 8192), dtype=torch.float32)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # Warm the cache while L1_SMALL is empty. Its reserved region must still be
+    # excluded from the CB budget: this row would otherwise use 1 MiB of replay.
+    for ttnn_op in (ttnn.var, ttnn.std):
+        warm_output = ttnn_op(tt_input, dim=-1, keepdim=True, correction=True)
+        ttnn.synchronize_device(device)
+        warm_output.deallocate(force=True)
+
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    sentinel_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1_SMALL,
+        ttnn.ShardSpec(core_grid, (32, 16384), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    sentinel_reference = torch.full((1, 1, 32, 16384), 3.25, dtype=torch.bfloat16)
+    sentinel = ttnn.from_torch(
+        sentinel_reference,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=sentinel_memory_config,
+    )
+
+    for _ in range(2):
+        for torch_op, ttnn_op in ((torch.var, ttnn.var), (torch.std, ttnn.std)):
+            reference = torch_op(torch_input.to(torch.float64), dim=-1, keepdim=True, correction=1)
+            actual = ttnn.to_torch(ttnn_op(tt_input, dim=-1, keepdim=True, correction=True))
+            torch.testing.assert_close(actual, reference, rtol=1e-3, atol=1e-3, check_dtype=False)
+            torch.testing.assert_close(ttnn.to_torch(sentinel), sentinel_reference, rtol=0, atol=0)
+
+
 # Regression test for FP32 variance precision with a non-unity scalar
 # AND the reduction dimension crosses a tile boundary (Wt>1).
 # Unlike test_var_fp32_translation_invariance above, which tests whether inputs preserve
