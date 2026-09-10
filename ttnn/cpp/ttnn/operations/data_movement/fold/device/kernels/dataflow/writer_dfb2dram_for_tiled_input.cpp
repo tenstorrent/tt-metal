@@ -22,52 +22,60 @@ void kernel_main() {
     constexpr uint32_t tiles_per_channel_dim = get_arg(args::tiles_per_channel_dim);
     constexpr uint32_t tiles_per_width_dim = get_arg(args::tiles_per_width_dim);
 
-    const uint32_t start_block_id = get_arg(args::start_block_id);
-    const uint32_t num_blocks = get_arg(args::num_blocks);
-    uint32_t patch_height_offset = get_arg(args::patch_height_offset);
-    uint32_t curr_out_page = get_arg(args::output_offset);
+    const uint32_t start_super_block_id = get_arg(args::start_block_id);
+    const uint32_t num_super_blocks = get_arg(args::num_blocks);
 
     constexpr uint32_t output_width = input_width / stride_width;
+    constexpr uint32_t patch_size = stride_height * stride_width;
+    constexpr uint32_t output_stick_bytes = patch_size * c_bytes;
 
     const auto dst = TensorAccessor(tensor::dst);
     Noc noc;
-    DataflowBuffer dfb_in1(dfb::in1);
+    DataflowBuffer dfb_untilized(dfb::in1);
+    DataflowBuffer dfb_scratch(dfb::in2);
 
-    const uint32_t end_block_id = start_block_id + num_blocks;
-    for (uint32_t block_id = start_block_id; block_id < end_block_id; block_id++) {
-        uint32_t remaining_width = input_width;
-        uint32_t out_page = curr_out_page;
-        uint32_t stride_w_idx = 0;
-        // Per-input-row patch base within the output stick: `(h % sh) * sw` slots.
-        const uint32_t row_patch_base = patch_height_offset * stride_width;
+    // cb_asm holds one full output row; touched only by this kernel, so raw pointer + local ordering.
+    const uint32_t scratch_base = dfb_scratch.get_write_ptr();
 
-        for (uint32_t tile_idx = 0; tile_idx < tiles_per_width_dim; tile_idx++) {
-            dfb_in1.wait_front(tiles_per_channel_dim);
-            const uint32_t src_base = dfb_in1.get_read_ptr();
+    const uint32_t end_super_block_id = start_super_block_id + num_super_blocks;
+    for (uint32_t sb = start_super_block_id; sb < end_super_block_id; ++sb) {
+        // Gather `stride_height` input rows worth of C-byte sticks into cb_asm; each pixel lands at
+        // `out_w * output_stick_bytes + patch_idx * c_bytes` so every output stick becomes contiguous.
+        for (uint32_t local_h = 0; local_h < stride_height; ++local_h) {
+            uint32_t remaining_width = input_width;
+            const uint32_t row_patch_base = local_h * stride_width;
+            for (uint32_t w_tile = 0; w_tile < tiles_per_width_dim; ++w_tile) {
+                dfb_untilized.wait_front(tiles_per_channel_dim);
+                const uint32_t src_base = dfb_untilized.get_read_ptr();
 
-            const uint32_t width_limit =
-                (remaining_width < tt::constants::TILE_HEIGHT) ? remaining_width : tt::constants::TILE_HEIGHT;
-
-            for (uint32_t local_w = 0; local_w < width_limit; local_w++) {
-                const uint32_t patch_idx = row_patch_base + stride_w_idx;
-                // Scatter each input pixel's C real bytes into its patch slot in the output stick.
-                noc_async_write_sharded(
-                    noc, src_base + local_w * c_padded_bytes, dst, out_page, patch_idx * c_bytes, c_bytes);
-                if (++stride_w_idx == stride_width) {
-                    stride_w_idx = 0;
-                    out_page++;
+                const uint32_t width_limit =
+                    (remaining_width < tt::constants::TILE_HEIGHT) ? remaining_width : tt::constants::TILE_HEIGHT;
+                const uint32_t w_base = w_tile * tt::constants::TILE_HEIGHT;
+                for (uint32_t local_w = 0; local_w < width_limit; ++local_w) {
+                    const uint32_t w_in = w_base + local_w;
+                    const uint32_t out_w = w_in / stride_width;
+                    const uint32_t patch_idx = row_patch_base + (w_in % stride_width);
+                    tt_memmove<false, false, false, c_bytes>(
+                        noc,
+                        scratch_base + out_w * output_stick_bytes + patch_idx * c_bytes,
+                        src_base + local_w * c_padded_bytes,
+                        c_bytes);
                 }
+                remaining_width -= tt::constants::TILE_HEIGHT;
+                dfb_untilized.pop_front(tiles_per_channel_dim);
             }
-
-            remaining_width -= tt::constants::TILE_HEIGHT;
-            noc.async_write_barrier();
-            dfb_in1.pop_front(tiles_per_channel_dim);
         }
-
-        // Advance to the next output-h row only after `sh` input rows have been scattered.
-        if (++patch_height_offset == stride_height) {
-            curr_out_page += output_width;
-            patch_height_offset = 0;
+        // Emit one aligned page-sized write per output stick; super-blocks are laid out sequentially.
+        const uint32_t output_page_base = sb * output_width;
+        for (uint32_t out_w = 0; out_w < output_width; ++out_w) {
+            noc_async_write_sharded(
+                noc,
+                scratch_base + out_w * output_stick_bytes,
+                dst,
+                output_page_base + out_w,
+                /*offset=*/0,
+                output_stick_bytes);
         }
+        noc.async_write_barrier();
     }
 }
