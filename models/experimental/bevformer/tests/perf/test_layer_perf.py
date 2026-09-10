@@ -81,6 +81,7 @@ def test_bevformer_layer_perf(
 
     ttnn.synchronize_device(device)
     outputs = []
+    ttnn.ReadDeviceProfiler(device)
     signpost("start")
     for _ in range(DEVICE_PERF_ITERS):
         outputs.append(op_fn())
