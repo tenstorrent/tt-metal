@@ -6,6 +6,7 @@
 
 #include <tt_stl/assert.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -20,6 +21,7 @@
 #include "impl/buffers/prefetcher_pipe_dram_sender_internal.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "mesh_device.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal::experimental {
 
@@ -81,19 +83,82 @@ std::vector<TensorPrefetcherBankPipes> CreatePrefetcherPipesForTensorPrefetcher(
 
 std::vector<std::pair<CoreCoord, CoreRangeSet>> prefetcher_pipe_sender_receiver_mapping(
     const std::vector<TensorPrefetcherBankPipes>& banks) {
-    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping;
+    return prefetcher_pipe_sender_receiver_mapping(flatten_prefetcher_pipe_banks(banks));
+}
+
+std::vector<std::shared_ptr<PrefetcherPipe>> flatten_prefetcher_pipe_banks(
+    const std::vector<TensorPrefetcherBankPipes>& banks) {
+    std::vector<std::shared_ptr<PrefetcherPipe>> pipes;
     size_t num_pipes = 0;
     for (const auto& bank : banks) {
         num_pipes += bank.pipes.size();
     }
-    mapping.reserve(num_pipes);
+    pipes.reserve(num_pipes);
     for (const auto& bank : banks) {
         for (const auto& pipe : bank.pipes) {
             TT_FATAL(pipe != nullptr, "PrefetcherPipe group for DRAM bank {} holds a null pipe", bank.bank_id);
-            mapping.emplace_back(pipe->sender_core(), pipe->receiver_cores());
+            pipes.push_back(pipe);
         }
     }
-    return mapping;
+    return pipes;
+}
+
+std::vector<TensorPrefetcherBankPipes> group_prefetcher_pipes_by_bank(
+    const std::vector<std::shared_ptr<PrefetcherPipe>>& pipes) {
+    std::vector<TensorPrefetcherBankPipes> banks;
+    for (const auto& pipe : pipes) {
+        TT_FATAL(pipe != nullptr, "PrefetcherPipe list holds a null pipe at index {}", banks.size());
+        const auto bank_id = static_cast<uint32_t>(pipe->sender_core().x);
+        // A run, not a lookup: a bank that reappears after its run opens a second group with the
+        // same id, which the queue path rejects. Folding it back into the first group would accept a
+        // list whose banks interleave, and slab bases come from adjacency.
+        if (banks.empty() || banks.back().bank_id != bank_id) {
+            banks.push_back(TensorPrefetcherBankPipes{.bank_id = bank_id, .pipes = {}});
+        }
+        banks.back().pipes.push_back(pipe);
+    }
+    for (const auto& bank : banks) {
+        TT_FATAL(
+            bank.pipes.size() <= 2,
+            "DRAM bank {} is driven by {} PrefetcherPipes; a bank has two DRISC sender cores, so it can hold at most "
+            "two",
+            bank.bank_id,
+            bank.pipes.size());
+        // Which of the bank's two DRISC cores a pipe sends from is what orders the pair: the first
+        // role's pipe owns the bank's leading receivers, and slab bases are accumulated in list
+        // order, so a swapped pair would hand the trailing receivers base 0. Receiver counts cannot
+        // tell the two apart -- an even split gives both the same count.
+        auto* mesh_device = bank.pipes.front()->get_device();
+        // Any device of the mesh answers this: the roles are logical coords naming endpoint roles,
+        // which a well-formed descriptor set resolves the same way mesh-wide (only the physical
+        // subchannel behind a role moves with a device's DRAM harvest).
+        const std::vector<CoreCoord> roles =
+            mesh_device->impl().dram_sender_logical_cores(mesh_device->get_devices().front(), bank.bank_id);
+        size_t previous_role = 0;
+        for (size_t p = 0; p < bank.pipes.size(); ++p) {
+            const CoreCoord sender = bank.pipes[p]->sender_core();
+            const auto role = std::find(roles.begin(), roles.end(), sender);
+            TT_FATAL(
+                role != roles.end(),
+                "PrefetcherPipe {} sends from {}, which is not one of DRAM bank {}'s sender cores",
+                p,
+                sender.str(),
+                bank.bank_id);
+            const auto role_index = static_cast<size_t>(std::distance(roles.begin(), role));
+            TT_FATAL(
+                p == 0 || role_index > previous_role,
+                "DRAM bank {}'s PrefetcherPipes are not in sender order: pipe {} sends from {}, its bank's sender "
+                "{}, after a pipe that sends from its sender {}. A sender's bank-local slab base is accumulated in "
+                "list order, so pass the pipes as CreatePrefetcherPipesForTensorPrefetcher returned them",
+                bank.bank_id,
+                p,
+                sender.str(),
+                role_index,
+                previous_role);
+            previous_role = role_index;
+        }
+    }
+    return banks;
 }
 
 DeviceAddr sender_state_drisc_l1_base(const PrefetcherPipe& pipe) {

@@ -151,6 +151,10 @@ private:
     // have to name the target's type. Built by target_for() from either a DRAM-sender
     // GlobalCircularBuffer or the per-bank groups of DRAM-sender PrefetcherPipes. Owns its mapping
     // by value: the pipes' mapping is assembled at queue time and has no home on the pipe objects.
+    //
+    // It holds no reference to the target itself, and must not start to. A pipe reaching here from
+    // Python is owned by a shared_ptr whose deleter takes the GIL, so the worker thread must never
+    // be the one that drops the last owner; addresses and a mapping are all it needs anyway.
     struct RequestTarget {
         // Sender core -> receivers, in the order that fixes bank-local slab numbering.
         std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping;
