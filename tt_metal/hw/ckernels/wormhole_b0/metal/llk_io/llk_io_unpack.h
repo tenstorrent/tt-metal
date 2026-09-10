@@ -87,7 +87,7 @@ inline void llk_pop_tiles(
     const std::int32_t operand, const std::int32_t num_tiles, const std::int32_t block_c_dim = 0) {
     std::uint32_t input = operand;
 
-    // Tensix uses 4B addresses (tiles_acked_ptr byte address but div-by-4)
+    // Convert the counter's byte address to a Tensix 4-byte word address, masked to 18 bits.
     const std::uint32_t tiles_acked_addr_tensix =
         static_cast<std::uint32_t>((reinterpret_cast<std::uintptr_t>(get_cb_tiles_acked_ptr(operand)) >> 2) & 0x3ffff);
     std::uint32_t num_words = num_tiles * get_local_cb_interface(operand).fifo_page_size;

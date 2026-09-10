@@ -43,7 +43,7 @@ inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32
 inline void llk_push_to_brisc(const std::int32_t operand, const std::int32_t num_tiles, const std::int32_t num_words) {
     std::uint32_t output = operand;
 
-    // Tensix uses 4B addresses (tiles_received_ptr byte address but div-by-4)
+    // Convert the counter's byte address to a Tensix 4-byte word address, masked to 18 bits.
     const std::uint32_t tiles_received_addr_tensix = static_cast<std::uint32_t>(
         (reinterpret_cast<std::uintptr_t>(get_cb_tiles_received_ptr(operand)) >> 2) & 0x3ffff);
 
