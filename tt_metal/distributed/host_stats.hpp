@@ -206,6 +206,14 @@ struct alignas(64) WorkerStats {
     TraceBucket trace[kTraceBuckets];
     uint64_t trace_clamped = 0;  // samples that landed past the last bucket
 
+    // False when pin_this_thread() failed for this worker. The work it does is still
+    // correct, but the scheduler was free to migrate it mid-run, so its hop timings are
+    // not comparable with the pinned workers'. Written once at thread start and read at
+    // collect(), so neither field is on the hot path; both sit before pad[64] so the
+    // false-sharing padding still ends the struct.
+    bool pinned = true;
+    std::string pin_error;  // strerror text from the failed pthread_setaffinity_np
+
     std::vector<std::array<Dist, kHopCount>> ladder_windows;
     std::vector<uint64_t> ladder_window_bytes;  // payload sealed into each window
     const struct VolumeLadder* ladder_cfg = nullptr;
@@ -507,6 +515,15 @@ struct RunStats {
     uint64_t total_stolen() const { return total(&WorkerStats::stolen); }
     uint64_t total_tx_credit_skips() const { return total(&WorkerStats::tx_credit_skips); }
     uint64_t total_delivered() const { return total(&WorkerStats::delivered); }
+
+    // Not total(): that folds uint64_t event counters, and this counts threads.
+    uint32_t workers_unpinned() const {
+        uint32_t n = 0;
+        for (const auto& w : per_worker) {
+            n += w.pinned ? 0u : 1u;
+        }
+        return n;
+    }
 };
 
 std::string format_table(const RunStats& s);
@@ -516,6 +533,11 @@ std::string basic_csv_header();
 std::string format_basic_csv(const RunStats& s, const std::string& tag);
 
 std::string sample_count_warning(const RunStats& s);
+
+// Empty unless a worker failed to pin. An unpinned worker in a pinned pool is the one row
+// that cannot be compared with the others, so the run says so up front rather than leaving
+// it to be found later as an unexplained outlier.
+std::string pinning_warning(const RunStats& s);
 
 std::string format_trace_csv(const RunStats& s, const std::string& tag);
 

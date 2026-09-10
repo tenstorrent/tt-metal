@@ -355,6 +355,7 @@ std::string format_table(const RunStats& s) {
              "  The wall figure above spans setup and teardown too, so it is a floor, not a rate.\n";
     }
 
+    o << pinning_warning(s);
     o << sample_count_warning(s);
 
     return o.str();
@@ -434,6 +435,25 @@ std::string sample_count_warning(const RunStats& s) {
     if (n_minor > 0) {
         o << "\n  note: " << n_minor << " row(s) off by a handful of samples (gate-flip race, ANALYSIS.md B.1):\n"
           << minor.str();
+    }
+    return o.str();
+}
+
+std::string pinning_warning(const RunStats& s) {
+    const uint32_t n = s.workers_unpinned();
+    if (n == 0) {
+        return {};
+    }
+    std::ostringstream o;
+    o << "\n  !! " << n << " of " << s.per_worker.size()
+      << " worker(s) NOT CPU-PINNED. The scheduler was free to migrate them mid-run, so\n"
+         "     their hop timings carry migration noise and are not comparable with the\n"
+         "     pinned workers'. The run continued and the numbers below are still real\n"
+         "     work, but do not quote a spread that mixes these rows with the rest:\n";
+    for (size_t i = 0; i < s.per_worker.size(); ++i) {
+        if (!s.per_worker[i].pinned) {
+            o << "       worker " << i << ": " << s.per_worker[i].pin_error << "\n";
+        }
     }
     return o.str();
 }

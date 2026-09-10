@@ -174,16 +174,22 @@ void BankScanner::run_job(uint32_t id, Job& job) {
 }
 
 void BankScanner::worker_loop(uint32_t id) {
+    // Bound before the pin attempt so a failure has somewhere to land. Safe: stats_ is
+    // sized in the constructor, long before start() spawns any thread.
+    WorkerStats& ws = stats_[id];
+
     if (cfg_.pin_threads) {
         const int cpu = id < cfg_.cpus.size() ? cfg_.cpus[id] : static_cast<int>(id);
         // A failure here is recorded, not fatal: an unpinned worker still does correct
         // work, it just makes its own timing rows untrustworthy. Better to run and say so
         // than to refuse to start on a machine with a restrictive cpuset.
         const std::string err = pin_this_thread(cpu);
-        (void)err;
+        if (!err.empty()) {
+            ws.pinned = false;
+            ws.pin_error = err;
+        }
     }
 
-    WorkerStats& ws = stats_[id];
     const Shard shard = shard_of(id);
     const bool has_shard = shard.first <= shard.last;
 
