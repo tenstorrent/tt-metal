@@ -1023,6 +1023,7 @@
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: e2e
 
 - name: TT-DiT Flux.2-dev multihost e2e tests
   cmd: |
@@ -1046,6 +1047,7 @@
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: e2e
 
 # ── Z-Image ────────────────────────────────────────────────────────
 

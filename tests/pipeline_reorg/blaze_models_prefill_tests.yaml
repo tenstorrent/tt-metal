@@ -668,6 +668,7 @@
       release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -755,6 +756,7 @@
       release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -820,6 +822,7 @@
       timeout: 4
   owner_id: U08SXRPCTJ5  # Janko Mitrovic
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -839,6 +842,7 @@
       timeout: 3
   owner_id: U08SXRPCTJ5  # Janko Mitrovic
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -962,6 +966,7 @@
       release_ready: false
   owner_id: U08GEEEEC75 # ssalice
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -988,6 +993,7 @@
       release_ready: false
   owner_id: U08GEEEEC75 # ssalice
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -1014,6 +1020,7 @@
       release_ready: false
   owner_id: U08GEEEEC75 # ssalice
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -1034,6 +1041,7 @@
       release_ready: false
   owner_id: U08GEEEEC75 # ssalice
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -1060,6 +1068,7 @@
       release_ready: false
   owner_id: U08GEEEEC75 # ssalice
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -1095,6 +1104,7 @@
       release_ready: false
   owner_id: U08GEEEEC75 # ssalice
   team: models
+  budget_type: demo
   sp_config: sc1
 
 # Trace twin of the entry above: SAME splits, SAME golden, SAME KV bar -- the only difference is that
@@ -1126,6 +1136,7 @@
       release_ready: false
   owner_id: U08GEEEEC75 # ssalice
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -1318,6 +1329,7 @@
       timeout: 35
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: shield
+  budget_type: demo
   sp_config: sc1
 
 
@@ -1338,6 +1350,7 @@
       timeout: 40
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: shield
+  budget_type: demo
   sp_config: sc1
 
 

@@ -1151,6 +1151,7 @@
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: unit
 
 # Same three test files as the bh_quietbox_2 leg above, on the 4x8 galaxy instead of 2x2.
 - name: TT-DiT Flux.2-dev multihost unit tests
@@ -1179,6 +1180,7 @@
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: unit
 
 - name: Z-Image-Turbo unit tests
   cmd: |
