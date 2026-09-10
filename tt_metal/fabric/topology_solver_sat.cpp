@@ -513,7 +513,11 @@ inline bool topology_sat_add_at_least_k_literals(
         return true;
     }
     const size_t clause_width = m - k + 1;
-    if (topology_sat_combinations_exceed_limit(m, clause_width, max_combination_clauses)) {
+    // A guarded (optional) constraint always uses the sequential counter: the combinatorial encoding would put
+    // the guard literal on every one of its C(m, m-k+1) wide clauses, and that many wide clauses sharing one
+    // literal makes CaDiCaL's congruence-closure preprocessing (gate extraction / subsumption) take minutes on
+    // otherwise easy instances. The counter carries the guard on its single assertion clause only.
+    if (extra_lit != 0 || topology_sat_combinations_exceed_limit(m, clause_width, max_combination_clauses)) {
         topology_sat_add_at_least_k_counter(solver, lits, k, extra_lit);
         return true;
     }
