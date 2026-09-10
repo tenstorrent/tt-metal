@@ -125,6 +125,7 @@ def run_conv3d_test(
     grid_size=(1, 1),
     dilation=(1, 1, 1),
     dtype=ttnn.DataType.BFLOAT16,
+    config=None,
 ):
     tt_input, conv3d_module, gt_output, kernel_config, output_dims = setup_conv3d_test(
         input_shape,
@@ -142,9 +143,10 @@ def run_conv3d_test(
     C = input_shape[1]
 
     # Prepare weights and bias for TTNN
-    config = create_conv3d_config(
-        compute_with_storage_grid_size=grid_size, C_in_block=32, dilation=dilation, weights_dtype=dtype
-    )
+    if config is None:
+        config = create_conv3d_config(
+            compute_with_storage_grid_size=grid_size, C_in_block=32, dilation=dilation, weights_dtype=dtype
+        )
 
     w = conv3d_module.weight.data
     tt_weight = ttnn.from_torch(w, dtype=dtype, pad_value=0)
