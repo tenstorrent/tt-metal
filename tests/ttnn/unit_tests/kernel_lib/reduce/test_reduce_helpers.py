@@ -958,3 +958,32 @@ def test_reduce_helpers_narrow_sfpu(device, dtype, pool, cols):
         torch.testing.assert_close(actual.to(torch.int64), expected, rtol=0, atol=0)
     else:
         torch.testing.assert_close(actual.to(torch.float64), expected, rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.parametrize("dtype", ["int32", "fp32"])
+@pytest.mark.parametrize("dim", ["REDUCE_ROW", "REDUCE_COL"])
+@pytest.mark.parametrize("calls", [1, 2])
+@pytest.mark.parametrize("scalar", [0.5, -0.5, 0.0])
+def test_reduce_helpers_sfpu_scaled_sum(device, dtype, dim, calls, scalar):
+    """Apply scaling once after the final SFPU sum, including integer truncation."""
+    if "QUASAR" in str(device.arch()).upper():
+        pytest.skip("The reduce helper rejects SFPU reduce paths on Quasar")
+    case = ReduceCase(
+        name=f"scaled-sfpu-{dtype}-{dim}-calls{calls}-scalar{scalar}",
+        family="scalar",
+        dim=dim,
+        rows=3,
+        cols=3,
+        calls=calls,
+        scalar=scalar,
+        input_dtype=dtype,
+        output_dtype=dtype,
+        fp32_mode="Accurate" if dtype == "fp32" else "Fast",
+    )
+    actual, expected = _run_case(device, case)
+    if dtype == "int32":
+        # These small sums are exactly representable in FLOAT32. The helper's
+        # post-multiply converts back to INT32 with truncation toward zero.
+        torch.testing.assert_close(actual.to(torch.int64), expected.trunc().to(torch.int64), rtol=0, atol=0)
+    else:
+        torch.testing.assert_close(actual.to(torch.float64), expected, rtol=1e-5, atol=1e-5)

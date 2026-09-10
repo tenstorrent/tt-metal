@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <functional>
@@ -101,7 +102,97 @@ TEST(ReduceHostPlanner, PartialMaxUsesExistingScalerRecipe) {
     }
 }
 
-TEST(ReduceHostPlanner, PartialMaxScalerRequiresNativeReduceTile) {
+TEST(ReduceHostPlanner, RejectsUnsupportedBackendRequests) {
+    using namespace tt::tt_metal;
+    using namespace ttnn::kernel_lib::host;
+    struct Case {
+        DataType dtype;
+        ReduceOpMath math;
+        ReduceOpDim dim;
+        ReduceFp32Mode mode;
+    };
+    const Case cases[] = {
+        {DataType::BFLOAT16, ReduceOpMath::MIN, ReduceOpDim::W, ReduceFp32Mode::Fast},
+        {DataType::FLOAT32, ReduceOpMath::MIN, ReduceOpDim::H, ReduceFp32Mode::Fast},
+        {DataType::INT32, ReduceOpMath::AVG, ReduceOpDim::W, ReduceFp32Mode::Fast},
+        {DataType::INT32, ReduceOpMath::SUM, ReduceOpDim::HW, ReduceFp32Mode::Fast},
+        {DataType::INT32, ReduceOpMath::MAX, ReduceOpDim::HW, ReduceFp32Mode::Fast},
+        {DataType::INT32, ReduceOpMath::MIN, ReduceOpDim::HW, ReduceFp32Mode::Fast},
+        {DataType::FLOAT32, ReduceOpMath::AVG, ReduceOpDim::W, ReduceFp32Mode::Accurate},
+        {DataType::FLOAT32, ReduceOpMath::AVG, ReduceOpDim::H, ReduceFp32Mode::Accurate},
+        {DataType::FLOAT32, ReduceOpMath::SUM, ReduceOpDim::HW, ReduceFp32Mode::Accurate},
+        {DataType::FLOAT32, ReduceOpMath::MAX, ReduceOpDim::HW, ReduceFp32Mode::Accurate},
+        {DataType::FLOAT32, ReduceOpMath::MIN, ReduceOpDim::HW, ReduceFp32Mode::Accurate},
+    };
+    for (const auto arch : {tt::ARCH::WORMHOLE_B0, tt::ARCH::BLACKHOLE, tt::ARCH::QUASAR}) {
+        const ReduceHardwareConfig hardware{arch, true, false, 1U << 20};
+        for (const auto& test : cases) {
+            SCOPED_TRACE(
+                ::testing::Message() << "arch=" << static_cast<int>(arch) << " dtype=" << static_cast<int>(test.dtype)
+                                     << " math=" << static_cast<int>(test.math)
+                                     << " dim=" << static_cast<int>(test.dim));
+            const TensorLayout layout(test.dtype, PageConfig(Layout::TILE), MemoryConfig{});
+            const TensorSpec input(Shape{32, 64}, layout);
+            const TensorSpec output(
+                Shape{test.dim == ReduceOpDim::W ? 32U : 1U, test.dim == ReduceOpDim::H ? 64U : 1U}, layout);
+            EXPECT_ANY_THROW(make_reduce_plan(input, output, test.math, test.dim, 1.0F, test.mode, hardware));
+            const ReduceCallConfig config{input, output, test.math, test.dim, 1.0F, test.mode};
+            EXPECT_ANY_THROW(make_reduce_sequence_plan({{0U, config}}, {1U, 3U, 2U}, hardware));
+        }
+    }
+}
+
+TEST(ReduceHostPlanner, ValidatesSfpuArchitectureAndDest) {
+    using namespace tt::tt_metal;
+    using namespace ttnn::kernel_lib::host;
+    for (const auto dtype : {DataType::INT32, DataType::FLOAT32}) {
+        const TensorLayout layout(dtype, PageConfig(Layout::TILE), MemoryConfig{});
+        const TensorSpec input(Shape{64, 64}, layout);
+        for (const auto dim : {ReduceOpDim::W, ReduceOpDim::H}) {
+            const TensorSpec output(Shape{dim == ReduceOpDim::W ? 64U : 1U, dim == ReduceOpDim::H ? 64U : 1U}, layout);
+            for (const auto math : {ReduceOpMath::SUM, ReduceOpMath::MAX, ReduceOpMath::MIN}) {
+                for (const auto arch : {tt::ARCH::WORMHOLE_B0, tt::ARCH::BLACKHOLE, tt::ARCH::QUASAR}) {
+                    const ReduceHardwareConfig hardware{arch, true, false, 1U << 20};
+                    if (arch == tt::ARCH::QUASAR) {
+                        EXPECT_ANY_THROW(
+                            make_reduce_plan(input, output, math, dim, 1.0F, ReduceFp32Mode::Accurate, hardware));
+                    } else {
+                        EXPECT_NO_THROW(
+                            make_reduce_plan(input, output, math, dim, 1.0F, ReduceFp32Mode::Accurate, hardware));
+                        if (dtype == DataType::FLOAT32) {
+                            const ReduceHardwareConfig no_fp32_dest{arch, false, false, 1U << 20};
+                            EXPECT_ANY_THROW(make_reduce_plan(
+                                input, output, math, dim, 1.0F, ReduceFp32Mode::Accurate, no_fp32_dest));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST(ReduceHostPlanner, ValidatesCrossCallMaxSupport) {
+    using namespace tt::tt_metal;
+    using namespace ttnn::kernel_lib::host;
+    const TensorLayout layout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{});
+    const TensorSpec input(Shape{64, 64}, layout);
+    for (const auto arch : {tt::ARCH::WORMHOLE_B0, tt::ARCH::BLACKHOLE, tt::ARCH::QUASAR}) {
+        const ReduceHardwareConfig hardware{arch, true, false, 1U << 20};
+        for (const auto dim : {ReduceOpDim::W, ReduceOpDim::H, ReduceOpDim::HW}) {
+            const TensorSpec output(Shape{dim == ReduceOpDim::W ? 64U : 1U, dim == ReduceOpDim::H ? 64U : 1U}, layout);
+            const ReduceCallConfig config{input, output, ReduceOpMath::MAX, dim, 1.0F, ReduceFp32Mode::Fast};
+            EXPECT_NO_THROW(make_reduce_sequence_plan({{0U, config}}, {1U, 3U, 2U}, hardware));
+            const std::vector<ReduceCbConfig> calls{{0U, config}, {4U, config}};
+            if (dim == ReduceOpDim::HW || (arch == tt::ARCH::QUASAR && dim == ReduceOpDim::W)) {
+                EXPECT_ANY_THROW(make_reduce_sequence_plan(calls, {1U, 3U, 2U}, hardware));
+            } else {
+                EXPECT_NO_THROW(make_reduce_sequence_plan(calls, {1U, 3U, 2U}, hardware));
+            }
+        }
+    }
+}
+
+TEST(ReduceHostPlanner, SfpuRequiresIdentityPaddedReductionAxis) {
     using namespace tt::tt_metal;
     using namespace ttnn::kernel_lib::host;
     const ReduceHardwareConfig hardware{
@@ -117,9 +208,75 @@ TEST(ReduceHostPlanner, PartialMaxScalerRequiresNativeReduceTile) {
         for (const auto dim : {ReduceOpDim::W, ReduceOpDim::H}) {
             const auto input = spec(dim == ReduceOpDim::W ? Shape{32, 45} : Shape{45, 32});
             const auto output = spec(dim == ReduceOpDim::W ? Shape{32, 1} : Shape{1, 32});
-            EXPECT_ANY_THROW(
-                make_reduce_plan(input, output, ReduceOpMath::MAX, dim, 1.0F, ReduceFp32Mode::Accurate, hardware));
+            for (const auto math : {ReduceOpMath::SUM, ReduceOpMath::MAX, ReduceOpMath::MIN}) {
+                EXPECT_ANY_THROW(make_reduce_plan(input, output, math, dim, 1.0F, ReduceFp32Mode::Accurate, hardware));
+                const ReduceCallConfig config{input, output, math, dim, 1.0F, ReduceFp32Mode::Accurate};
+                EXPECT_ANY_THROW(make_reduce_sequence_plan({{0U, config}}, {1U, 3U, 2U}, hardware));
+                // Once the caller has identity-padded the input, an aligned view
+                // needs no mask/scaler recipe. The original logical view is rejected.
+                const auto padded_input = spec(dim == ReduceOpDim::W ? Shape{32, 64} : Shape{64, 32});
+                const auto plan =
+                    make_reduce_plan(padded_input, output, math, dim, 1.0F, ReduceFp32Mode::Accurate, hardware);
+                EXPECT_EQ(plan.partial_mode, compute_kernel_lib::ReducePartialMode::None);
+            }
         }
+    }
+}
+
+TEST(ReduceHostPlanner, SfpuScalarSurvivesSingleAndSequenceSerialization) {
+    using namespace tt::tt_metal;
+    using namespace ttnn::kernel_lib::host;
+    namespace args = ttnn::kernel_lib::reduce_plan_args;
+    for (const auto arch : {tt::ARCH::WORMHOLE_B0, tt::ARCH::BLACKHOLE}) {
+        const ReduceHardwareConfig hardware{arch, true, false, 1U << 20};
+        for (const auto dtype : {DataType::INT32, DataType::FLOAT32}) {
+            const TensorLayout layout(dtype, PageConfig(Layout::TILE), MemoryConfig{});
+            const auto mode = dtype == DataType::FLOAT32 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
+            for (const auto dim : {ReduceOpDim::W, ReduceOpDim::H}) {
+                const TensorSpec input(Shape{64, 64}, layout);
+                const TensorSpec output(
+                    Shape{dim == ReduceOpDim::W ? 64U : 1U, dim == ReduceOpDim::H ? 64U : 1U}, layout);
+                for (const float scalar : {1.0F, 0.5F, -0.5F, 0.0F}) {
+                    const auto plan = make_reduce_plan(input, output, ReduceOpMath::SUM, dim, scalar, mode, hardware);
+                    EXPECT_FLOAT_EQ(plan.post_scale, scalar);
+                    ASSERT_EQ(plan.auxiliary_tiles.size(), 1U);
+                    EXPECT_FLOAT_EQ(plan.auxiliary_tiles[0].value, 1.0F);
+                    const auto words = ReduceCallArgs(plan, {0U, 1U, 2U}).get_compile_time_args();
+                    EXPECT_EQ(
+                        words[static_cast<uint32_t>(args::CallWord::PostScaleBits)], std::bit_cast<uint32_t>(scalar));
+
+                    const ReduceCallConfig config{input, output, ReduceOpMath::SUM, dim, scalar, mode};
+                    const auto sequence =
+                        make_reduce_sequence_plan({{0U, config}, {4U, config}}, {1U, 3U, 2U}, hardware);
+                    ASSERT_EQ(sequence.calls.size(), 2U);
+                    EXPECT_EQ(
+                        sequence.calls[0].accumulation_mode, ttnn::kernel_lib::ReduceAccumulationMode::Intermediate);
+                    EXPECT_EQ(sequence.calls[1].accumulation_mode, ttnn::kernel_lib::ReduceAccumulationMode::Final);
+                    const auto final_words = ReduceCallArgs(sequence.calls.back()).get_compile_time_args();
+                    EXPECT_EQ(
+                        final_words[static_cast<uint32_t>(args::CallWord::PostScaleBits)],
+                        std::bit_cast<uint32_t>(scalar));
+                    ASSERT_EQ(sequence.auxiliary.tiles.size(), 1U);
+                    EXPECT_FLOAT_EQ(sequence.auxiliary.tiles[0].value, 1.0F);
+                }
+            }
+        }
+    }
+}
+
+TEST(ReduceHostPlanner, AccurateRowMajorSumKeepsReaderPaddingAndPostScale) {
+    using namespace tt::tt_metal;
+    using namespace ttnn::kernel_lib::host;
+    const ReduceHardwareConfig hardware{tt::ARCH::BLACKHOLE, true, false, 1U << 20};
+    const TensorLayout layout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{});
+    for (const auto dim : {ReduceOpDim::W, ReduceOpDim::H}) {
+        const TensorSpec input(dim == ReduceOpDim::W ? Shape{32, 45} : Shape{45, 32}, layout);
+        const TensorSpec output(dim == ReduceOpDim::W ? Shape{32, 1} : Shape{1, 32}, layout);
+        const auto plan =
+            make_reduce_plan(input, output, ReduceOpMath::SUM, dim, 0.5F, ReduceFp32Mode::Accurate, hardware);
+        EXPECT_EQ(plan.path, ReducePath::DenseRowMajor);
+        EXPECT_EQ(plan.partial_mode, compute_kernel_lib::ReducePartialMode::None);
+        EXPECT_FLOAT_EQ(plan.post_scale, 0.5F);
     }
 }
 

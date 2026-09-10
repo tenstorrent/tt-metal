@@ -143,7 +143,10 @@ struct ReducePlan {
 
     // post_scale is applied once, after reduction finalization and before any
     // caller callback. The auxiliary recipe is already lowered to physical tile
-    // specifications in the order consumed by compute.
+    // specifications in the order consumed by compute. SFPU reductions apply the
+    // caller's scalar here because they do not consume scaler tiles. A non-unit
+    // INT32 scale converts the reduced value to FLOAT32, multiplies, then converts
+    // back to INT32 with truncation toward zero (matching reduce_post_mul_tile).
     float post_scale = 1.0F;
     compute_kernel_lib::ReducePartialMode partial_mode = compute_kernel_lib::ReducePartialMode::None;
     std::vector<ReduceAuxiliaryTileSpec> auxiliary_tiles;
@@ -249,6 +252,12 @@ private:
 // reduction-owned L1 budget". A cap of zero is a sentinel for an input tensor
 // already sharded in L1; in that case the input CB aliases the tensor and owns
 // no scratch allocation.
+// INT32 and accurate FLOAT32 use SFPU SUM/MAX/MIN along W or H on non-Quasar
+// devices. Accurate FLOAT32 AVG must be lowered to SUM plus its normalization
+// scalar; SFPU HW reductions must be split into W and H. Tiled SFPU calls require
+// a tile-aligned reduction axis: callers with partial inputs must identity-pad
+// that axis and describe the padded view. Dense row-major staging already pads
+// its input to the reduction identity before tilizing.
 ReducePlan make_reduce_plan(
     const tt::tt_metal::TensorSpec& input_spec,
     const tt::tt_metal::TensorSpec& output_spec,
