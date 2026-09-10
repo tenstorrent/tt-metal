@@ -1673,7 +1673,7 @@
   model: bge_m3
   skus:
     wh_n150:
-      timeout: 15
+      timeout: 20
       tier: 2
   owner_id: U082LLYBLSW # Gabriel Tobar (CODEOWNERS @gtobarTT)
   team: models
