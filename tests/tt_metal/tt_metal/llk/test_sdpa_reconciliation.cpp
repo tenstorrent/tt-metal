@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <stdexcept>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -11,6 +12,7 @@
 #include <tt-metalium/tt_metal.hpp>
 
 #include "llk_device_fixture.hpp"
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -94,6 +96,37 @@ TEST_F(LLKBlackholeSingleCardFixture, SdpaRecipFidelityAndSignalling) {
         for (const auto granularity : {1u, 2u}) {
             SCOPED_TRACE(::testing::Message() << "fidelity=" << fidelity << ", granularity=" << granularity);
             run_sdpa_recip(*devices_.at(0), fidelity, granularity);
+        }
+    }
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkSemaphoreCompileLimits) {
+    // This is a compile-time contract test; these programs are never launched.
+    // 14 tiles with unit signaling and 16 tiles with grouped signaling fit the
+    // 4-bit semaphore. At 16 tiles, either unit-signaling path must be rejected.
+    for (const auto args : {std::vector<std::uint32_t>{14, 1, 1}, {16, 2, 2}, {16, 1, 2}, {16, 2, 1}}) {
+        SCOPED_TRACE(::testing::Message() << "chunk=" << args[0] << ", qk=" << args[1] << ", exp=" << args[2]);
+        const bool fits = args[0] / args[1] + 1 <= 15 && args[0] / args[2] + 1 <= 15;
+        Program program = CreateProgram();
+        const CoreCoord core{0, 0};
+        for (const auto cb :
+             {tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_2, tt::CBIndex::c_3, tt::CBIndex::c_16}) {
+            auto config = CircularBufferConfig(2048, {{cb, tt::DataFormat::Float16_b}}).set_page_size(cb, 2048);
+            if (cb == tt::CBIndex::c_0 || cb == tt::CBIndex::c_16) {
+                config.set_unpack_face_geometry(cb, 8, 2);
+            }
+            CreateCircularBuffer(program, core, config);
+        }
+        CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/compute/sdpa_chunk_compile_limits.cpp",
+            core,
+            ComputeConfig{.math_fidelity = MathFidelity::LoFi, .fp32_dest_acc_en = false, .compile_args = args});
+        auto* device = devices_.at(0)->get_devices()[0];
+        if (fits) {
+            EXPECT_NO_THROW(program.impl().compile(device));
+        } else {
+            EXPECT_THROW(program.impl().compile(device), std::runtime_error);
         }
     }
 }
