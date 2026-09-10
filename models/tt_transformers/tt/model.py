@@ -118,14 +118,14 @@ class Transformer(LightweightModule):
         )
 
         # Model-family dispatch (Command-R / cohere): swap the decoder block, final
-        # norm and LM head. Lazy imports keep tt.cohere out of the default path.
+        # norm and LM head. Lazy imports keep the experimental cohere module out of the default path.
         ActualBlockClass = block_class
         ActualLMHeadCls = lm_head_cls
         final_norm_builder_resolved = final_norm_builder
         if str(getattr(self.args, "model_type", None) or "").lower() == "cohere":
-            from models.tt_transformers.tt.cohere.cohere_decoder import CohereDecoderLayer
-            from models.tt_transformers.tt.cohere.cohere_lm_head import CohereLMHead
-            from models.tt_transformers.tt.cohere.cohere_norm import build_cohere_final_norm
+            from models.experimental.cohere.tt.cohere_decoder import CohereDecoderLayer
+            from models.experimental.cohere.tt.cohere_lm_head import CohereLMHead
+            from models.experimental.cohere.tt.cohere_norm import build_cohere_final_norm
 
             ActualBlockClass = ActualBlockClass or CohereDecoderLayer
             ActualLMHeadCls = ActualLMHeadCls or CohereLMHead
