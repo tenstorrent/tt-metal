@@ -579,6 +579,11 @@ void D2H2H2DSocket::return_credit(uint32_t origin_selector, uint64_t turnaround_
              " which is outside the configured topology");
         return;
     }
+    if (origin_core >= kProvisionedCores) {
+        fail("credit: origin selector names core " + std::to_string(origin_core) +
+             " which is outside the provisioned core range");
+        return;
+    }
     const uint64_t n = credit_out_[origin_host][origin_core].fetch_add(1, std::memory_order_relaxed) + 1;
     // ONE PEER OR REFUSE. With several peers a credit sent to the wrong one stalls the real
     // sender forever, and an uncredited sender reads as a hang over there.
