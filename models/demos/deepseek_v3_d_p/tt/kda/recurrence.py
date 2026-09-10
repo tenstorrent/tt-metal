@@ -252,8 +252,9 @@ def _distributed_affine_prefix(
         memory_config=output_memory,
     )
 
-    carry = ttnn.to_memory_config(initial_state, working_memory)
-    carry = ttnn.reshape(carry, (1, batch_heads, key_dim, value_dim))
+    initial_state_4d = ttnn.reshape(initial_state, (1, batch_heads, key_dim, value_dim))
+    carry = ttnn.to_memory_config(initial_state_4d, working_memory)
+    final_state = ttnn.empty_like(initial_state_4d, memory_config=state_memory_config)
     entry_states = []
     for rank in range(sp_size):
         entry_states.append(carry)
@@ -287,11 +288,10 @@ def _distributed_affine_prefix(
             dtype=KDA_RECURRENT_STATE_DTYPE,
             compute_kernel_config=compute_config,
         )
-        carry = ttnn.add(
-            carry,
-            rank_b_for_carry,
-            memory_config=state_memory_config if rank == sp_size - 1 else working_memory,
-        )
+        if rank == sp_size - 1:
+            carry = ttnn.add(carry, rank_b_for_carry, output_tensor=final_state)
+        else:
+            carry = ttnn.add(carry, rank_b_for_carry, memory_config=working_memory)
 
     replicated_entries = ttnn.concat(entry_states, dim=0, memory_config=output_memory)
     entry_state = ttnn.mesh_partition(
@@ -301,7 +301,7 @@ def _distributed_affine_prefix(
         memory_config=output_memory,
     )
     entry_state = ttnn.reshape(entry_state, (batch_heads, key_dim, value_dim))
-    return entry_state, carry
+    return entry_state, final_state
 
 
 def _scan_grouped_chunks(
@@ -355,7 +355,7 @@ def _scan_grouped_chunks(
         compute_kernel_config=compute_config.affine_prefix,
     )
     grouped_state_memory = kda_nd_dram_memory_config(
-        grouped.v_beta.device(),
+        grouped.v_beta,
         (1, geometry.key_dim, ttnn.TILE_SIZE),
     )
     grouped_scan = _scan_chunks(
@@ -428,7 +428,7 @@ class KDARecurrence:
         """Return ``(new_state, output)`` for directly named recurrence tensors."""
         geometry = _recurrence_geometry(q, v, beta)
         state_memory_config = self._state_memory_config or kda_nd_dram_memory_config(
-            q.device(),
+            q,
             (1, 1, geometry.key_dim, ttnn.TILE_SIZE),
         )
 
@@ -461,7 +461,7 @@ class KDARecurrence:
                 state,
                 compute_config=self._compute_config.scan,
                 state_memory_config=kda_nd_dram_memory_config(
-                    prepared.v_beta.device(),
+                    prepared.v_beta,
                     (1, geometry.key_dim, ttnn.TILE_SIZE),
                 ),
             )
