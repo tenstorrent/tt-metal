@@ -132,7 +132,7 @@ inline KernelSpec::CompilerOptions::Defines reader_defines(bool is_bf16) {
 // `row_len` is the number of valid elements per row (N1 for apply_twiddles,
 // P for the xl and complex_mul variants); the writer emits exactly that many
 // so the tile's padding lanes never reach DRAM.
-inline KernelSpec make_writer(tt::ARCH arch, uint32_t row_len, bool is_bf16) {
+inline KernelSpec make_writer(uint32_t row_len, bool is_bf16) {
     Group<DFBBinding> bindings = {
         DFBBinding{.dfb_spec_name = B_R, .accessor_name = "b_r", .endpoint_type = DFBEndpointType::CONSUMER},
         DFBBinding{.dfb_spec_name = B_I, .accessor_name = "b_i", .endpoint_type = DFBEndpointType::CONSUMER},
@@ -160,7 +160,7 @@ inline KernelSpec make_writer(tt::ARCH arch, uint32_t row_len, bool is_bf16) {
              TensorBinding{.tensor_parameter_name = OUT_I, .accessor_name = "out_i"}},
         .compile_time_args = {{"n1", row_len}},
         .runtime_arg_schema = {.runtime_arg_names = {"base_row", "num_rows"}},
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 }
 
@@ -171,14 +171,13 @@ inline KernelSpec make_writer(tt::ARCH arch, uint32_t row_len, bool is_bf16) {
 // outright; the legacy descriptor asked for unpack-to-dest on every fp32
 // buffer, which for the consumed ones is UnpackToDest.
 inline KernelSpec make_compute() {
-    ComputeGen1Config gen1{
+    ComputeHardwareConfig compute_hw{
         .fpu_math_fidelity = MathFidelity::HiFi4,
         .enable_32_bit_dest = true,
     };
     for (const auto& id : {A_R, A_I, T_R, T_I, TMP_R, TMP_I}) {
-        gen1.unpack_modes.emplace(id, UnpackMode::UnpackToDest);
+        compute_hw.unpack_modes.emplace(id, UnpackMode::UnpackToDest);
     }
-    ComputeHardwareConfig compute_hw = std::move(gen1);
 
     return KernelSpec{
         .unique_id = COMPUTE,

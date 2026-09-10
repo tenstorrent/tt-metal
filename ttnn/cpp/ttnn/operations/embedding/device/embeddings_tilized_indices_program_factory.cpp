@@ -220,7 +220,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
             },
         .runtime_arg_schema =
             {.runtime_arg_names = {"tile_offset", "face_offset", "num_rows", "curr_col", "starting_index"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     });
 
     // -----------------------------------------------------------------------
@@ -242,7 +242,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsTilizedIndicesProgramFactory:
                 TensorBinding{.tensor_parameter_name = OUTPUT_PARAM, .accessor_name = "dst"},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"stick_size", "num_sticks", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     });
 
     spec.work_units.push_back(WorkUnitSpec{

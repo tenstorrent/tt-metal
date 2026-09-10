@@ -160,8 +160,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             // this unnecessary" cleanup removed the opt-out, but that sim fix is inert on the emulator/HW.
             // Disable implicit sync so the kernel's explicit reserve_back/push_back is the sole authority
             // (matches every other Quasar tilize/untilize/HC-transpose dataflow kernel).
-            .hw_config =
-                ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+            .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
         };
 
         KernelSpec writer_spec{
@@ -189,22 +188,17 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             // each core's output shard as zeros. The craq-sim "sub-tile fix" that motivated removing the
             // opt-out is inert on the emulator/HW. Disable implicit sync so the explicit wait_front/pop_front
             // is the sole authority (matches the HC-transpose / tilize / untilize Quasar dataflow kernels).
-            .hw_config =
-                ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
+            .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
         };
 
         ttnn::ComputeKernelConfig compute_cfg{
             .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
-        ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_cfg);
+        ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(compute_cfg);
         if (src_is_float32) {
             // Keep the source CB and the tile-formatted intermediate (cb_tilize) in full Float32
             // on the unpack-to-dest path; both feed the transpose.
-            std::visit(
-                [&](auto& c) {
-                    c.unpack_modes.emplace(CB_IN0, tt::tt_metal::UnpackMode::UnpackToDest);
-                    c.unpack_modes.emplace(CB_TILIZE, tt::tt_metal::UnpackMode::UnpackToDest);
-                },
-                compute_hw);
+            compute_hw.unpack_modes.emplace(CB_IN0, tt::tt_metal::UnpackMode::UnpackToDest);
+            compute_hw.unpack_modes.emplace(CB_TILIZE, tt::tt_metal::UnpackMode::UnpackToDest);
         }
 
         KernelSpec compute_spec{
@@ -284,7 +278,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "src"}},
             .runtime_arg_schema =
                 {.runtime_arg_names = {"num_tiles", "start_id", "start_ht", "start_wt", "Ht", "Wt", "HtWt"}},
-            .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+            .hw_config = ttnn::create_reader_datamovement_config(),
         };
 
         KernelSpec writer_spec{
@@ -297,15 +291,14 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "dst"}},
             .compile_time_args = {{"page_size", dst_single_tile_size}},
             .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-            .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+            .hw_config = ttnn::create_writer_datamovement_config(),
         };
 
         ttnn::ComputeKernelConfig compute_cfg{
             .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
-        ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_cfg);
+        ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(compute_cfg);
         if (src_is_float32) {
-            std::visit(
-                [&](auto& c) { c.unpack_modes.emplace(CB_IN0, tt::tt_metal::UnpackMode::UnpackToDest); }, compute_hw);
+            compute_hw.unpack_modes.emplace(CB_IN0, tt::tt_metal::UnpackMode::UnpackToDest);
         }
 
         KernelSpec compute_spec{

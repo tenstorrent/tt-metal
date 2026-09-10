@@ -73,7 +73,7 @@ ttnn::device_operation::ProgramArtifacts ManualSeedSingleSeedToAllCoresProgramFa
         .source = kernel_path,
         .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
         .compile_time_args = {{"seed", operation_attributes.seeds.value_or(0)}},
-        .hw_config = ComputeGen1Config{},
+        .hw_config = ComputeHardwareConfig{},
     };
 
     ProgramSpec spec{
@@ -109,7 +109,7 @@ ttnn::device_operation::ProgramArtifacts ManualSeedSingleSeedSingleCoreProgramFa
         .source = kernel_path,
         .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
         .compile_time_args = {{"seed", operation_attributes.seeds.value_or(0)}},
-        .hw_config = ComputeGen1Config{},
+        .hw_config = ComputeHardwareConfig{},
     };
 
     ProgramSpec spec{
@@ -184,7 +184,7 @@ ttnn::device_operation::ProgramArtifacts ManualSeedSingleSeedSetCoresProgramFact
         }},
         .compile_time_args = {{"number_of_ids", number_of_ids}},
         .runtime_arg_schema = {.runtime_arg_names = {"core_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(operation_attributes.device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelRunArgs reader_run_args{.kernel = READER};
@@ -207,7 +207,7 @@ ttnn::device_operation::ProgramArtifacts ManualSeedSingleSeedSetCoresProgramFact
             .endpoint_type = DFBEndpointType::CONSUMER,
         }},
         .compile_time_args = {{"seed", operation_attributes.seeds.value_or(0)}},
-        .hw_config = ComputeGen1Config{},
+        .hw_config = ComputeHardwareConfig{},
     };
 
     ProgramSpec spec{
@@ -312,7 +312,7 @@ ttnn::device_operation::ProgramArtifacts ManualSeedSetSeedsSetCoresProgramFactor
              }},
         .compile_time_args = {{"number_of_ids", number_of_ids}},
         .runtime_arg_schema = {.runtime_arg_names = {"core_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(operation_attributes.device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelRunArgs reader_run_args{.kernel = READER};
@@ -334,7 +334,7 @@ ttnn::device_operation::ProgramArtifacts ManualSeedSetSeedsSetCoresProgramFactor
             .accessor_name = "kernel_communication",
             .endpoint_type = DFBEndpointType::CONSUMER,
         }},
-        .hw_config = ComputeGen1Config{},
+        .hw_config = ComputeHardwareConfig{},
     };
 
     ProgramSpec spec{

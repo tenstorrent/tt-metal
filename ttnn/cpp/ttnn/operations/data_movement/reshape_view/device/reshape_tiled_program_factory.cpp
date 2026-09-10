@@ -397,7 +397,7 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
                 {"Tile_size_bytes", input_tile_size_bytes},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"start_output_page_idx", "end_output_page_idx"}},
-        .hw_config = create_reader_datamovement_config(device->arch()),
+        .hw_config = create_reader_datamovement_config(),
     };
 
     KernelSpec writer{
@@ -425,7 +425,7 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
                 {"element_sz_bytes", tt::datum_size(output_dfb_data_format)},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"start_output_page", "end_output_page"}},
-        .hw_config = create_writer_datamovement_config(device->arch()),
+        .hw_config = create_writer_datamovement_config(),
     };
 
     spec.kernels = {reader, writer};

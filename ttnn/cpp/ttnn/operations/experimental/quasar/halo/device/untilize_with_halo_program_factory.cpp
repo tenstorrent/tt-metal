@@ -376,8 +376,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
             .compile_time_args =
                 {{"tiles_per_row", ntiles_per_block}, {"block_size", clamped_block_size_height / TILE_HEIGHT}},
             .runtime_arg_schema = {.runtime_arg_names = {"total_blocks"}},
-            .hw_config = ttnn::to_compute_hardware_config(
-                input_tensor.device()->arch(), operation_attributes.compute_kernel_config),
+            .hw_config = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config),
         };
         kernels.push_back(std::move(compute));
     }
@@ -397,16 +396,13 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
                                  uint32_t reader_block_start_offset,
                                  DataMovementProcessor processor,
                                  NOC noc) {
-        DataMovementHardwareConfig reader_hw;
-        if (device->arch() == tt::ARCH::QUASAR) {
-            // QSR: this reader fills/drains DFBs with many sub-tile (per-row stick) NOC reads/writes (gather
-            // scatter-writes, pad replication, partial-page DRAM config reads); that sub-tile pattern stalls the
-            // DFB implicit-sync credit accounting. Opt out so explicit push_back/pop_front stay authoritative
-            // (mirrors tilize default / transpose HC-sharded).
-            reader_hw = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
-        } else {
-            reader_hw = DataMovementGen1Config{.processor = processor, .noc = noc};
-        }
+        // Pin processor/noc for TT-1.x.x. On TT-2.x.x this reader fills/drains DFBs with many sub-tile
+        // (per-row stick) NOC reads/writes; that pattern stalls DFB implicit-sync credit accounting.
+        // Opt out so explicit push_back/pop_front stay authoritative.
+        DataMovementHardwareConfig reader_hw{
+            .config_1xx = DataMovementHardwareConfig::DataMovement1XXConfig{.processor = processor, .noc = noc},
+            .config_2xx = DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for_all = true},
+        };
         KernelSpec reader{
             .unique_id = name,
             .source = std::filesystem::path(kReaderKernelPath),

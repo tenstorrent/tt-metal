@@ -16,7 +16,6 @@
 #include "intimg_device_operation.hpp"
 
 #include <array>
-#include <variant>
 
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/buffer.hpp>
@@ -137,8 +136,6 @@ ttnn::device_operation::ProgramArtifacts IntImgDeviceOperation::ProgramFactory::
         {"cores_y", CORES_Y},
     };
 
-    const auto arch = input_tensor.device()->arch();
-
     // ---- Reader (DM). Produces START (zero-fill) and INPUT (DRAM load). Reads the input tensor via binding. ----
     m2::KernelSpec reader_spec{
         .unique_id = READER,
@@ -150,7 +147,7 @@ ttnn::device_operation::ProgramArtifacts IntImgDeviceOperation::ProgramFactory::
                  .dfb_spec_name = INPUT, .accessor_name = "input", .endpoint_type = m2::DFBEndpointType::PRODUCER}},
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = T_INPUT, .accessor_name = "input"}},
         .compile_time_args = scalar_ctas,
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // ---- Compute. Consumes START/INPUT/AXIS_3_BUFFER, produces OUTPUT, self-loops ACC/CUMSUM_STAGE_0/1/2/
@@ -208,9 +205,9 @@ ttnn::device_operation::ProgramArtifacts IntImgDeviceOperation::ProgramFactory::
                  .endpoint_type = m2::DFBEndpointType::CONSUMER}},
         .compile_time_args = scalar_ctas,
     };
-    // Compute hw_config — Style B (legacy set a Metal ComputeConfig directly). Build ComputeGen1Config; carry the
+    // Compute hw_config — Style B (legacy set a Metal ComputeConfig directly). Build ComputeHardwareConfig; carry the
     // resolved legacy values (HiFi4, math_approx_mode=false -> Precise, fp32_dest_acc_en -> enable_32_bit_dest).
-    m2::ComputeGen1Config compute_cfg{
+    m2::ComputeHardwareConfig compute_cfg{
         .fpu_math_fidelity = MathFidelity::HiFi4,
         .sfpu_precision_mode = Precision::Precise,
         .enable_32_bit_dest = fp32_dest_acc_en,
@@ -219,7 +216,7 @@ ttnn::device_operation::ProgramArtifacts IntImgDeviceOperation::ProgramFactory::
     // mode default (=UnpackToSrc); replicate that for the 8 DFBs the compute kernel consumes (OUTPUT is producer-only).
     // For bf16 input enable_32_bit_dest is false and no entries are required.
     if (fp32_dest_acc_en) {
-        compute_cfg.unpack_modes = m2::ComputeUnpackModes{
+        compute_cfg.unpack_modes = m2::ComputeHardwareConfig::ComputeUnpackModes{
             {START, UnpackMode::UnpackToSrc},
             {INPUT, UnpackMode::UnpackToSrc},
             {ACC, UnpackMode::UnpackToSrc},
@@ -230,7 +227,7 @@ ttnn::device_operation::ProgramArtifacts IntImgDeviceOperation::ProgramFactory::
             {AXIS_3_BUFFER, UnpackMode::UnpackToSrc},
         };
     }
-    compute_spec.hw_config = m2::ComputeHardwareConfig{compute_cfg};
+    compute_spec.hw_config = compute_cfg;
 
     // ---- Writer (DM). Consumes OUTPUT (DRAM write), produces AXIS_3_BUFFER (cross-row readback). One output
     //      TensorBinding covers both the write and the readback (both go through the same TensorAccessor). ----
@@ -246,7 +243,7 @@ ttnn::device_operation::ProgramArtifacts IntImgDeviceOperation::ProgramFactory::
                  .endpoint_type = m2::DFBEndpointType::PRODUCER}},
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = T_OUTPUT, .accessor_name = "output"}},
         .compile_time_args = scalar_ctas,
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // ---- WorkUnit: all three kernels on the fixed 2x4 grid (placement derives DFB residency). ----

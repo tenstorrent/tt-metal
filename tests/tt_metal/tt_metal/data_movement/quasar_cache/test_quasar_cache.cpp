@@ -33,7 +33,7 @@ struct L2FlushTestConfig {
     uint32_t base_addr;
     uint32_t num_words;
     uint32_t value;
-    uint32_t test_mode;  // 0=flush_line, 1=flush_range, 2=flush_full, 3=invalidate_line
+    uint32_t test_mode;             // 0=flush_line, 1=flush_range, 2=flush_full, 3=invalidate_line
     bool expect_new_values = true;  // true for flush tests, false for invalidate tests
 };
 
@@ -58,7 +58,7 @@ bool run_l2_flush_test(distributed::MeshDevice& mesh_device, const L2FlushTestCo
                 .runtime_arg_names = {"base_addr", "test_mode"},
                 .common_runtime_arg_names = {"value", "num_words"},
             },
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
 
     experimental::WorkUnitSpec main_wu{
@@ -98,8 +98,8 @@ bool run_l2_flush_test(distributed::MeshDevice& mesh_device, const L2FlushTestCo
     for (uint32_t i = 0; i < config.num_words; i++) {
         uint32_t expected = config.expect_new_values ? (config.value + i) : old_value;
         if (output_data[i] != expected) {
-            log_error(tt::LogTest, "Mismatch at index {}: expected 0x{:08x}, got 0x{:08x}",
-                      i, expected, output_data[i]);
+            log_error(
+                tt::LogTest, "Mismatch at index {}: expected 0x{:08x}, got 0x{:08x}", i, expected, output_data[i]);
             pass = false;
         }
     }
@@ -115,7 +115,7 @@ struct L1DCacheTestConfig {
     uint32_t base_addr;
     uint32_t num_words;
     uint32_t value;
-    uint32_t test_mode;  // 0=flush_line, 1=flush_full, 2=invalidate_line, 3=invalidate_full
+    uint32_t test_mode;      // 0=flush_line, 1=flush_full, 2=invalidate_line, 3=invalidate_full
     bool expect_new_values;  // true for flush tests, false for invalidate tests
 };
 
@@ -140,7 +140,7 @@ bool run_l1_dcache_test(distributed::MeshDevice& mesh_device, const L1DCacheTest
                 .runtime_arg_names = {"base_addr", "test_mode"},
                 .common_runtime_arg_names = {"value", "num_words"},
             },
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
 
     experimental::WorkUnitSpec main_wu{
@@ -180,8 +180,8 @@ bool run_l1_dcache_test(distributed::MeshDevice& mesh_device, const L1DCacheTest
     for (uint32_t i = 0; i < config.num_words; i++) {
         uint32_t expected = config.expect_new_values ? (config.value + i) : old_value;
         if (output_data[i] != expected) {
-            log_error(tt::LogTest, "Mismatch at index {}: expected 0x{:08x}, got 0x{:08x}",
-                      i, expected, output_data[i]);
+            log_error(
+                tt::LogTest, "Mismatch at index {}: expected 0x{:08x}, got 0x{:08x}", i, expected, output_data[i]);
             pass = false;
         }
     }
@@ -248,7 +248,7 @@ TEST_F(QuasarL2CacheOps, InvalidateLine) {
         .base_addr = 100 * 1024,
         .num_words = 16,
         .value = 0x99990000,
-        .test_mode = 3,  // invalidate line
+        .test_mode = 3,             // invalidate line
         .expect_new_values = false  // Invalidate doesn't write back, so old values should remain
     };
     EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l2_flush_test(this->device(), config));
@@ -265,7 +265,7 @@ TEST_F(QuasarL2CacheOps, InvalidateFreshRead) {
         .base_addr = 100 * 1024,
         .num_words = 16,
         .value = 0xFE5A0000,
-        .test_mode = 4,  // invalidate fresh read
+        .test_mode = 4,            // invalidate fresh read
         .expect_new_values = true  // After invalidation, new values written via uncached path should be visible
     };
     EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l2_flush_test(this->device(), config));
@@ -317,7 +317,7 @@ TEST_F(QuasarL1DCacheOps, InvalidateLine) {
         .base_addr = 100 * 1024,
         .num_words = 16,
         .value = 0x33330000,
-        .test_mode = 2,  // invalidate line
+        .test_mode = 2,             // invalidate line
         .expect_new_values = false  // should see old values
     };
     EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l1_dcache_test(this->device(), config));
@@ -333,7 +333,7 @@ TEST_F(QuasarL1DCacheOps, InvalidateFull) {
         .base_addr = 100 * 1024,
         .num_words = 16,
         .value = 0x44440000,
-        .test_mode = 3,  // invalidate full
+        .test_mode = 3,             // invalidate full
         .expect_new_values = false  // should see old values
     };
     EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l1_dcache_test(this->device(), config));
@@ -350,7 +350,7 @@ TEST_F(QuasarL1DCacheOps, InvalidateFreshRead) {
         .base_addr = 100 * 1024,
         .num_words = 16,
         .value = 0xFE5B0000,
-        .test_mode = 4,  // invalidate fresh read
+        .test_mode = 4,            // invalidate fresh read
         .expect_new_values = true  // After invalidation, new values written via uncached path should be visible
     };
     EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l1_dcache_test(this->device(), config));

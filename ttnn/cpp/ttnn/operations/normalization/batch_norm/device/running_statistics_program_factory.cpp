@@ -302,7 +302,7 @@ ttnn::device_operation::ProgramArtifacts RunningStatistics::RunningStatisticsPro
         .compile_time_args = {{"fill_momentum_fp32", static_cast<uint32_t>(any_float32)}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"momentum", "start_tile_id", "num_tiles", "HtWt", "n_stride", "c_stride", "N", "C"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // WRITER KERNEL
@@ -378,14 +378,14 @@ ttnn::device_operation::ProgramArtifacts RunningStatistics::RunningStatisticsPro
             {{"old_stat_is_fp32", static_cast<uint32_t>(running_stat_data_format == DataFormat::Float32)}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"start_tile_id", "num_tiles", "HtWt", "n_stride", "c_stride", "N", "C"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // COMPUTE KERNEL
     // fp32_dest_acc_en selects the compute source and gates the unpack_modes list below, so it is
     // read directly. to_compute_hardware_config carries the four knobs it covers -- math_fidelity,
     // math_approx_mode, fp32_dest_acc_en and dst_full_sync_en -- into hw_config; packer_l1_acc and
-    // throttle_level are deliberately not translated. ComputeGen1Config has no packer_l1_acc field,
+    // throttle_level are deliberately not translated. ComputeHardwareConfig has no packer_l1_acc field,
     // so the value this op resolves for it stays unapplied, as it also was under the descriptor API.
     const bool fp32_dest_acc_en = ttnn::get_fp32_dest_acc_en(operation_attributes.compute_kernel_config);
     const bool use_sfpu_kernel = fp32_dest_acc_en || any_float32;
@@ -515,18 +515,12 @@ ttnn::device_operation::ProgramArtifacts RunningStatistics::RunningStatisticsPro
         });
     }
 
-    auto compute_hw_config =
-        ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config);
+    auto compute_hw_config = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config);
     if (fp32_dest_acc_en) {
         // Re-key of the legacy unpack_to_dest_mode vector, which was indexed by CB id. The
         // writer-facing stat buffers are producer-only for this kernel, so they get no entry. An
         // omitted DFB keeps the UnpackToSrc default.
-        // Reach unpack_modes through the generation-neutral accessor rather than
-        // std::get<ComputeGen1Config>: the helper above returns whichever alternative matches
-        // `arch`, so naming Gen1 here would throw std::bad_variant_access on Quasar. (The local is
-        // named dfb_unpack_modes so it does not shadow the accessor.)
-        // TODO(#52269): Quasar unpack_modes are copied from Gen1 and not yet optimized for Quasar.
-        auto& dfb_unpack_modes = unpack_modes(compute_hw_config);
+        auto& dfb_unpack_modes = compute_hw_config.unpack_modes;
         for (const auto& dfb_name :
              {BATCH_MEAN_DFB,
               BATCH_VAR_DFB,

@@ -110,7 +110,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             .endpoint_type = DFBEndpointType::PRODUCER,
         }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"}},
-        .hw_config = create_reader_datamovement_config(device->arch()),
+        .hw_config = create_reader_datamovement_config(),
     };
     if (row_major) {
         reader.source =
@@ -135,7 +135,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
     // ---- writer ----
     KernelSpec writer{
         .unique_id = WRITER,
-        .hw_config = create_writer_datamovement_config(device->arch()),
+        .hw_config = create_writer_datamovement_config(),
     };
     if (row_major) {
         writer.source =
@@ -178,8 +178,8 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
 
     // Legacy built a ComputeConfigDescriptor directly (no TTNN ComputeKernelConfig feeding it),
     // setting only fp32_dest_acc_en and unpack_to_dest_mode; every other field kept its Metal
-    // default, which ComputeGen1Config reproduces.
-    ComputeGen1Config compute_hw{.enable_32_bit_dest = fp32_dest_acc_en};
+    // default, which ComputeHardwareConfig reproduces.
+    ComputeHardwareConfig compute_hw{.enable_32_bit_dest = fp32_dest_acc_en};
     if (src0_dfb_data_format == tt::DataFormat::Float32) {
         compute_hw.unpack_modes.insert({IN0, UnpackMode::UnpackToDest});
         if (row_major) {

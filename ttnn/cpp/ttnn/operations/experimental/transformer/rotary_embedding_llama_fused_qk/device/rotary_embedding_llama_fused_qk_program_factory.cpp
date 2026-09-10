@@ -207,12 +207,12 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaFusedQKProgramFacto
     // hw_config mirrors the legacy ComputeConfigDescriptor subset: the legacy factory resolved the
     // full TTNN compute config but copied only math_fidelity and fp32_dest_acc_en onto the
     // descriptor, leaving math_approx_mode / dst_full_sync_en at descriptor defaults. Those
-    // defaults coincide with ComputeGen1Config's (sfpu_precision_mode = Precise,
+    // defaults coincide with ComputeHardwareConfig's (sfpu_precision_mode = Precise,
     // double_buffer_dest = true), so only the two copied fields are set here. No unpack_modes
     // entries: every DFB is bfloat16 (validate() forces BFLOAT16 tensors), so the Float32
     // required-entry rule never triggers even when enable_32_bit_dest is on.
-    const ComputeHardwareConfig compute_hw_config =
-        ComputeGen1Config{.fpu_math_fidelity = math_fidelity, .enable_32_bit_dest = fp32_dest_acc_en};
+    const ComputeHardwareConfig compute_hw_config{
+        .fpu_math_fidelity = math_fidelity, .enable_32_bit_dest = fp32_dest_acc_en};
 
     auto self_loop = [](const DFBSpecName& dfb, const std::string& name) {
         return Group<DFBBinding>{

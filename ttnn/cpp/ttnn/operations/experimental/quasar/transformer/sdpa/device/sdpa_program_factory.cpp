@@ -1457,7 +1457,7 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
         .tensor_bindings = reader_tensors,
         .compile_time_args = reader_cta,
         .runtime_arg_schema = {.runtime_arg_names = reader_rta_names},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec::CompileTimeArgs writer_cta = {
@@ -1558,13 +1558,15 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
 
     KernelSpec writer{
         .unique_id = WRITER,
-        .source = "ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/kernels/dataflow/writer_interleaved.cpp",
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/kernels/dataflow/"
+            "writer_interleaved.cpp",
         .compiler_options = {.defines = writer_defines},
         .dfb_bindings = writer_dfbs,
         .tensor_bindings = writer_tensors,
         .compile_time_args = writer_cta,
         .runtime_arg_schema = {.runtime_arg_names = writer_rta_names},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     KernelSpec::CompileTimeArgs compute_cta = {
@@ -1676,7 +1678,7 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
         compute_defines.insert({"USE_WINDOWED_NARROWING", "1"});
     }
 
-    auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config);
+    auto compute_hw = ttnn::to_compute_hardware_config(compute_kernel_config);
     if (fp32_dest_acc_en) {
         // qk_im / sum_A / sum_B are Float32 when enable_32_bit_dest is on; the validator requires an
         // explicit unpack_modes entry for each Float32 DFB the compute consumes. Legacy defaulted to
@@ -1685,7 +1687,7 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
         // std::get<ComputeGen1Config>: the helper above builds the config from device->arch(), so on
         // Quasar it returns the Gen2 alternative and naming Gen1 here throws std::bad_variant_access.
         // TODO(#52269): Quasar unpack_modes are copied from Gen1 and not yet optimized for Quasar.
-        auto& dfb_unpack_modes = unpack_modes(compute_hw);
+        auto& dfb_unpack_modes = compute_hw.unpack_modes;
         dfb_unpack_modes.insert({QK_IM, tt::tt_metal::UnpackMode::UnpackToSrc});
         dfb_unpack_modes.insert({SUM_A, tt::tt_metal::UnpackMode::UnpackToSrc});
         dfb_unpack_modes.insert({SUM_B, tt::tt_metal::UnpackMode::UnpackToSrc});

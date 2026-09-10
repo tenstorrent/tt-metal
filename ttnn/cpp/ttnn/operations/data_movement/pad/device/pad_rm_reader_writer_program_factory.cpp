@@ -136,7 +136,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterProgramFactory::create
                      "num_local_unpadded_Y",
                      "num_local_W"},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec writer{
@@ -169,7 +169,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterProgramFactory::create
                      "dst_stick_offset",
                      "num_local_W"},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     uint32_t padded_row_diff_size_nbytes = padded_row_size_nbytes - unpadded_row_size_nbytes;

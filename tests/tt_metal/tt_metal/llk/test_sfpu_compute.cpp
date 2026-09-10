@@ -77,7 +77,9 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
     {"square", {{"SFPU_OP_CHAIN_0", "square_tile_init(); square_tile(0);"}}},
     {"negative", {{"SFPU_OP_CHAIN_0", "negative_tile_init(); negative_tile(0);"}}},
     {"softplus",
-     {{"SFPU_OP_CHAIN_0", "softplus_tile_init(); softplus_tile(0, /* beta */ 0x3F800000u, /* recip */0x3F800000u, /* threshold */ 0x41A00000u);"}}},
+     {{"SFPU_OP_CHAIN_0",
+       "softplus_tile_init(); softplus_tile(0, /* beta */ 0x3F800000u, /* recip */0x3F800000u, /* threshold */ "
+       "0x41A00000u);"}}},
     {"clamp", {{"SFPU_OP_CHAIN_0", "clamp_tile_init(); clamp_tile(0, 0xBF800000u, 0x3F800000u);"}}},  // [-1.0f, 1.0f]
     // Comparison-to-zero family (unary): result = 1.0f if predicate(x, 0) else 0.0f.
     {"eqz", {{"SFPU_OP_CHAIN_0", "eqz_tile_init(); eqz_tile(0);"}}},
@@ -649,8 +651,9 @@ struct SfpuConfig {
     CoreRangeSet cores;
     std::string sfpu_op;
     bool approx_mode = true;
-    bool dst_full_sync_en = true;      // SyncFull by default (matches today's implicit behavior)
-    bool unpack_to_dest = false;       // route input DFB to Dest (unpack_modes=UnpackToDest); pair with en_32bit_dest for 32-bit Dest
+    bool dst_full_sync_en = true;  // SyncFull by default (matches today's implicit behavior)
+    bool unpack_to_dest =
+        false;  // route input DFB to Dest (unpack_modes=UnpackToDest); pair with en_32bit_dest for 32-bit Dest
     bool en_32bit_dest = false;
 };
 
@@ -725,10 +728,13 @@ std::vector<uint32_t> run_sfpu_pipeline(
 
     experimental::DataMovementHardwareConfig reader_hw_config;
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        reader_hw_config = experimental::DataMovementHardwareConfig{
+            .config_2xx = experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                .disable_dfb_implicit_sync_for_all = true}};
     } else {
-        reader_hw_config = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
+        reader_hw_config = experimental::DataMovementHardwareConfig{
+            .config_1xx = experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default}};
     }
 
     experimental::KernelSpec reader_spec{
@@ -747,10 +753,13 @@ std::vector<uint32_t> run_sfpu_pipeline(
 
     experimental::DataMovementHardwareConfig writer_hw_config;
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        writer_hw_config = experimental::DataMovementHardwareConfig{
+            .config_2xx = experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                .disable_dfb_implicit_sync_for_all = true}};
     } else {
-        writer_hw_config = experimental::DataMovementGen1Config{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+        writer_hw_config = experimental::DataMovementHardwareConfig{
+            .config_1xx = experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}};
     }
 
     experimental::KernelSpec writer_spec{
@@ -768,13 +777,13 @@ std::vector<uint32_t> run_sfpu_pipeline(
     };
 
     experimental::ComputeHardwareConfig compute_hw_config;
-    experimental::ComputeUnpackModes unpack_modes{};
+    experimental::ComputeHardwareConfig::ComputeUnpackModes unpack_modes{};
     if (test_config.unpack_to_dest) {
         unpack_modes = {{IN_DFB, tt::tt_metal::UnpackMode::UnpackToDest}};
     }
     const bool fp32_dest_acc_en = test_config.en_32bit_dest;
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        compute_hw_config = experimental::ComputeGen2Config{
+        compute_hw_config = experimental::ComputeHardwareConfig{
             .sfpu_precision_mode =
                 test_config.approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise,
             .enable_32_bit_dest = fp32_dest_acc_en,
@@ -782,7 +791,7 @@ std::vector<uint32_t> run_sfpu_pipeline(
             .unpack_modes = unpack_modes,
         };
     } else {
-        compute_hw_config = experimental::ComputeGen1Config{
+        compute_hw_config = experimental::ComputeHardwareConfig{
             .sfpu_precision_mode =
                 test_config.approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise,
             .enable_32_bit_dest = fp32_dest_acc_en,
@@ -952,7 +961,11 @@ experimental::KernelSpec make_writer_unary_quasar_spec(
             .access_pattern = experimental::DFBAccessPattern::STRIDED,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
-        .hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .config_2xx =
+                    experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                        .disable_dfb_implicit_sync_for_all = true}},
     };
 }
 
@@ -1081,18 +1094,22 @@ bool run_sfpu_binary_two_input_buffer(
              }},
         .runtime_arg_schema =
             {.runtime_arg_names = {"src0_addr", "src0_bank_id", "src1_addr", "src1_bank_id", "num_tiles"}},
-        .hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .config_2xx =
+                    experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                        .disable_dfb_implicit_sync_for_all = true}},
     };
 
     experimental::ComputeHardwareConfig compute_hw_config;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        compute_hw_config = experimental::ComputeGen2Config{
+        compute_hw_config = experimental::ComputeHardwareConfig{
             .sfpu_precision_mode =
                 test_config.approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise,
             .enable_32_bit_dest = is_int8_op,
         };
     } else {
-        compute_hw_config = experimental::ComputeGen1Config{
+        compute_hw_config = experimental::ComputeHardwareConfig{
             .sfpu_precision_mode =
                 test_config.approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise,
             .enable_32_bit_dest = is_int8_op,
@@ -1264,17 +1281,21 @@ bool run_sfpu_ternary_three_input_buffer(
                       "num_tiles",
                       "src2_addr",
                       "src2_bank_id"}},
-            .hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true},
+            .hw_config =
+                experimental::DataMovementHardwareConfig{
+                    .config_2xx =
+                        experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                            .disable_dfb_implicit_sync_for_all = true}},
         };
 
         experimental::ComputeHardwareConfig compute_hw_config;
         if (mesh_device->arch() == tt::ARCH::QUASAR) {
-            compute_hw_config = experimental::ComputeGen2Config{
+            compute_hw_config = experimental::ComputeHardwareConfig{
                 .sfpu_precision_mode =
                     test_config.approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise,
             };
         } else {
-            compute_hw_config = experimental::ComputeGen1Config{
+            compute_hw_config = experimental::ComputeHardwareConfig{
                 .sfpu_precision_mode =
                     test_config.approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise,
             };
@@ -1536,7 +1557,11 @@ void run_quasar_sfpu_unpack_to_dest_16b(
         .unpack_to_dest = true,  // 16-bit operand unpack-to-dest (fp32_dest_acc_en stays false)
     };
     log_info(
-        tt::LogTest, "Quasar SFPU 16b->DEST: op={} num_tiles={} dst_full_sync_en={}", sfpu_op, num_tiles, dst_full_sync_en);
+        tt::LogTest,
+        "Quasar SFPU 16b->DEST: op={} num_tiles={} dst_full_sync_en={}",
+        sfpu_op,
+        num_tiles,
+        dst_full_sync_en);
     EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_all_same_buffer(dev, cfg));
 }
 

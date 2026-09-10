@@ -156,7 +156,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledProgramFactory::create_
                   "ct",
                   "ctoffs",
                   "wt"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // ------------------------------------------------------------------------
@@ -170,7 +170,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledProgramFactory::create_
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "dst"}},
         .compile_time_args = {{"page_size", single_tile_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // ------------------------------------------------------------------------

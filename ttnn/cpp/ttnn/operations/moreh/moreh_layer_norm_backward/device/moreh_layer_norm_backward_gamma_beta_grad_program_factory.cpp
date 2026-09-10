@@ -251,7 +251,7 @@ MorehLayerNormBackwardGammaBetaGradOperation::MorehLayerNormBackwardGammaBetaGra
                      "mean_rstd_height",
                      "mean_rstd_width"},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     Group<DFBBinding> writer_dfb_bindings{};
@@ -276,7 +276,7 @@ MorehLayerNormBackwardGammaBetaGradOperation::MorehLayerNormBackwardGammaBetaGra
         .dfb_bindings = writer_dfb_bindings,
         .tensor_bindings = writer_tensor_bindings,
         .runtime_arg_schema = {.runtime_arg_names = {"num_cols_per_core", "tile_offset"}},
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     ////////////////////////////////////////////////////////////////////////////
@@ -319,12 +319,12 @@ MorehLayerNormBackwardGammaBetaGradOperation::MorehLayerNormBackwardGammaBetaGra
             DFBBinding{.dfb_spec_name = DBETA, .accessor_name = "dbeta", .endpoint_type = DFBEndpointType::PRODUCER});
     }
 
-    auto compute_hw = ttnn::to_compute_hardware_config(arch, compute_kernel_config);
+    auto compute_hw = ttnn::to_compute_hardware_config(compute_kernel_config);
     // Metal 2.0 requires an explicit unpack mode for every Float32 buffer a compute kernel consumes
     // while the Dest register is 32-bit; the descriptor factory set no unpack_to_dest_mode at all, so
     // every entry here reproduces that default (unpack into SrcA/B).
-    if (enable_32_bit_dest(compute_hw)) {
-        auto& modes = unpack_modes(compute_hw);
+    if (compute_hw.enable_32_bit_dest) {
+        auto& modes = compute_hw.unpack_modes;
         for (const auto& dfb : dfbs) {
             const bool consumed_by_compute =
                 std::any_of(compute_dfb_bindings.begin(), compute_dfb_bindings.end(), [&](const DFBBinding& binding) {

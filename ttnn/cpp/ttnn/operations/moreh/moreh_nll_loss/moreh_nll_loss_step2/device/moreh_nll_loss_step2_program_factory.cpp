@@ -98,14 +98,11 @@ void bind_self_loop(Group<DFBBinding>& bindings, const DFBSpecName& dfb, std::st
 // explicitly, so where the 32-bit Dest register makes the five intermediates Float32, each gets an
 // explicit UnpackToSrc -- the same mode as before, now spelled out. All five are bound by the
 // compute kernel in every configuration, so the table needs no further conditions.
-//
-// It is reached through the unpack_modes() accessor rather than std::get<ComputeGen1Config>, which
-// would throw on a Gen2 (Quasar) target.
 ComputeHardwareConfig make_compute_hw_config(
-    tt::ARCH arch, const DeviceComputeKernelConfig& compute_kernel_config, bool fp32_dest_acc_en) {
-    auto hw_config = ttnn::to_compute_hardware_config(arch, compute_kernel_config);
+    const DeviceComputeKernelConfig& compute_kernel_config, bool fp32_dest_acc_en) {
+    auto hw_config = ttnn::to_compute_hardware_config(compute_kernel_config);
     if (fp32_dest_acc_en) {
-        unpack_modes(hw_config) = {
+        hw_config.unpack_modes = {
             {DFB_TMP_WEIGHT, UnpackMode::UnpackToSrc},
             {DFB_TMP_INPUT, UnpackMode::UnpackToSrc},
             {DFB_TMP1, UnpackMode::UnpackToSrc},
@@ -334,7 +331,7 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_step2_impl_2d(
         .dfb_bindings = std::move(reader_dfb_bindings),
         .tensor_bindings = std::move(reader_tensor_bindings),
         .runtime_arg_schema = {.runtime_arg_names = {"ignore_index", "num_tiles_per_core", "start_id", "N", "C"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec writer{
@@ -355,10 +352,10 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_step2_impl_2d(
                 TensorBinding{.tensor_parameter_name = TENSOR_OUTPUT, .accessor_name = "output"},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles_per_core", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
-    const auto compute_hw_config = make_compute_hw_config(device->arch(), compute_kernel_config, fp32_dest_acc_en);
+    const auto compute_hw_config = make_compute_hw_config(compute_kernel_config, fp32_dest_acc_en);
 
     spec.kernels.push_back(std::move(reader));
     spec.kernels.push_back(std::move(writer));
@@ -591,7 +588,7 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_step2_impl_3d(
         .tensor_bindings = std::move(reader_tensor_bindings),
         .runtime_arg_schema =
             {.runtime_arg_names = {"ignore_index", "num_tiles_per_core", "start_id", "C", "W", "element_size"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec writer{
@@ -612,10 +609,10 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_step2_impl_3d(
                 TensorBinding{.tensor_parameter_name = TENSOR_OUTPUT, .accessor_name = "output"},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles_per_core", "start_id", "W", "element_size"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
-    const auto compute_hw_config = make_compute_hw_config(device->arch(), compute_kernel_config, fp32_dest_acc_en);
+    const auto compute_hw_config = make_compute_hw_config(compute_kernel_config, fp32_dest_acc_en);
 
     spec.kernels.push_back(std::move(reader));
     spec.kernels.push_back(std::move(writer));
@@ -873,7 +870,7 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_step2_impl_4d(
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"ignore_index", "num_tiles_per_core", "start_id", "C", "num_inner_tile", "weight_num_tile"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec writer{
@@ -894,10 +891,10 @@ ttnn::device_operation::ProgramArtifacts moreh_nll_loss_step2_impl_4d(
                 TensorBinding{.tensor_parameter_name = TENSOR_OUTPUT, .accessor_name = "output"},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles_per_core", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
-    const auto compute_hw_config = make_compute_hw_config(device->arch(), compute_kernel_config, fp32_dest_acc_en);
+    const auto compute_hw_config = make_compute_hw_config(compute_kernel_config, fp32_dest_acc_en);
 
     spec.kernels.push_back(std::move(reader));
     spec.kernels.push_back(std::move(writer));

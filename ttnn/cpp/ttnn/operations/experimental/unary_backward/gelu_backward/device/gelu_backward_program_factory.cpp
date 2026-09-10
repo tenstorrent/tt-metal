@@ -118,7 +118,7 @@ ttnn::device_operation::ProgramArtifacts GeluBackwardProgramFactory::create_prog
             {
                 .runtime_arg_names = {"num_tiles", "start_id", "block_height", "block_width", "num_cores_y"},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(device.arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // --- Writer Kernel ---
@@ -143,15 +143,15 @@ ttnn::device_operation::ProgramArtifacts GeluBackwardProgramFactory::create_prog
             {
                 .runtime_arg_names = {"num_pages", "start_id"},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(device.arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // --- Compute Kernel ---
     // The legacy factory set a Metal ComputeConfigDescriptor directly rather than resolving a TTNN
-    // ComputeKernelConfig, so build the Gen1 config by hand and leave every field the op did not set
-    // at its default: ComputeGen1Config's defaults coincide with the legacy descriptor's
+    // ComputeKernelConfig, so build ComputeHardwareConfig by hand and leave every field the op did not set
+    // at its default: ComputeHardwareConfig's defaults coincide with the legacy descriptor's
     // (math_approx_mode=false -> sfpu_precision_mode=Precise, dst_full_sync_en=false ->
-    // double_buffer_dest=true, bfp8_pack_precise=false -> bfp_pack_precision_mode=Approximate).
+    // double_buffer_dest=true, bfp8_pack_precise=false -> config_1xx bfp_pack_precision_mode=Approximate).
     bool fp32_dest_acc_en = (dst_cb_data_format == DataFormat::Float32) || (dst_cb_data_format == DataFormat::Int32) ||
                             (dst_cb_data_format == DataFormat::UInt32);
 
@@ -161,7 +161,7 @@ ttnn::device_operation::ProgramArtifacts GeluBackwardProgramFactory::create_prog
     // buffer on the SrcA/B path. Reproduce that exactly by emitting UnpackToDest only where the
     // legacy request was live; an omitted entry means UnpackToSrc, which is what legacy effectively
     // used for every narrower format.
-    ComputeUnpackModes unpack_modes;
+    ComputeHardwareConfig::ComputeUnpackModes unpack_modes;
     if (src0_cb_data_format == DataFormat::Float32) {
         unpack_modes[GRAD_OUTPUT_DFB] = UnpackMode::UnpackToDest;
     }
@@ -169,7 +169,7 @@ ttnn::device_operation::ProgramArtifacts GeluBackwardProgramFactory::create_prog
         unpack_modes[INPUT_DFB] = UnpackMode::UnpackToDest;
     }
 
-    ComputeGen1Config compute_hw_config{
+    ComputeHardwareConfig compute_hw_config{
         .fpu_math_fidelity = MathFidelity::HiFi4,
         .enable_32_bit_dest = fp32_dest_acc_en,
         .unpack_modes = std::move(unpack_modes),
@@ -215,7 +215,7 @@ ttnn::device_operation::ProgramArtifacts GeluBackwardProgramFactory::create_prog
             {
                 .runtime_arg_names = {"num_tiles"},
             },
-        .hw_config = ComputeHardwareConfig{std::move(compute_hw_config)},
+        .hw_config = std::move(compute_hw_config),
     };
 
     ProgramSpec spec{

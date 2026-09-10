@@ -123,7 +123,7 @@ ttnn::device_operation::ProgramArtifacts PadTileCoreProgramFactory::create_progr
                 },
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec writer{
@@ -169,7 +169,7 @@ ttnn::device_operation::ProgramArtifacts PadTileCoreProgramFactory::create_progr
                      "num_padded_Xt",
                      "pad_value"},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     ProgramSpec spec{

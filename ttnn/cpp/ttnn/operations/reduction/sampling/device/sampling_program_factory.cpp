@@ -289,13 +289,13 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
              {"tile_height", tile_height},
              {"use_32bit_index", static_cast<uint32_t>(use_32bit_index)},
              {"num_users", num_users}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // 32-bit (Int32) sort indices require fp32 dest accumulation so the top-k LLK loads/stores
     // indices in INT32 mode; the 16-bit (UInt16) path uses LO16 mode with fp32 dest acc off. Every
     // other field keeps its default, matching what the compute config defaulted to before.
-    const ComputeGen1Config compute_config{
+    const ComputeHardwareConfig compute_config{
         .enable_32_bit_dest = use_32bit_index,
     };
 
@@ -521,7 +521,7 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
                  {"num_cores", num_cores},
                  {"use_32bit_index", static_cast<uint32_t>(use_32bit_index)},
                  {"num_users", num_users}},
-            .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+            .hw_config = ttnn::create_writer_datamovement_config(),
         };
     };
 
