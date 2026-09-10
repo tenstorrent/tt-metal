@@ -47,6 +47,15 @@ void kernel_main() {
         compute_kernel_lib::untilize<Wt, dfb::cache, dfb::untilized_cache>(1);
 
         // Wait on writer to update block, then tilize back
+#ifdef ARCH_QUASAR
+        // Quasar: the packer's destination ring is baked in by the last PACK init. pack_untilize_init
+        // (inside the untilize above) pointed it at dfb::untilized_cache, and tilize_init has no PACK
+        // step on Quasar (the tilize helper's pack_reconfig_data_format reprograms only the format
+        // gasket), so without this the re-tilized block never reaches dfb::out and the writer stores
+        // zeros. Retarget the ring to dfb::out before tilizing. WH/BH: tilize_init / pack_untilize_uninit
+        // reprogram the packer themselves; same idiom as experimental/quasar/binary_ng's compute kernels.
+        pack_init(dfb::out);
+#endif
         compute_kernel_lib::tilize<Wt, dfb::untilized_cache2, dfb::out>(1);
     }
 }

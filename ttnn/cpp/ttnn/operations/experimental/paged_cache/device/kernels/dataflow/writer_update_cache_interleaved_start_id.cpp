@@ -165,7 +165,9 @@ void kernel_main() {
 
     if (send_signal) {
         // send signal to receiver core that we are done using the input DFB
-        Semaphore<>(sem::receiver).up(noc, send_core_x, send_core_y, 1);
+        // CTAD: the sem:: token carries the host-resolved scope (always LOCAL_NONATOMIC on Gen1; on
+        // Gen2 the census may pick another mechanism, and spelling out Semaphore<> would not compile).
+        Semaphore(sem::receiver).up(noc, send_core_x, send_core_y, 1);
         noc.async_atomic_barrier();
     }
 }

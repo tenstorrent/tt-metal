@@ -252,6 +252,17 @@ ttnn::device_operation::ProgramArtifacts PagedRowMajorFusedUpdateCacheProgramFac
 
     uint32_t num_cache_tiles = 2 * Wt;   // double buffered
     uint32_t num_interm_tiles = 2 * Wt;  // double buffered
+    if (device->arch() == tt::ARCH::QUASAR) {
+        // Quasar (craq-sim, 2026-09-10): a pack_untilize into ring slot >= 1 of the aliased
+        // untilized_cache/untilized_cache2 pair never lands there (the writer then patches, and compute
+        // re-tilizes, an all-zero slot: every odd head of the cache block comes back zero). The pipeline
+        // is strictly serial per head anyway -- compute cannot start untilize(h+1) before tilize(h), which
+        // waits on the writer's republish of h -- so the second slot is never in flight concurrently and
+        // single-buffering these intermediates is behaviour-preserving. WH/BH keep the double buffer.
+        // Root cause is below the op (llk_pack_untilize slot offset / alias lowering); see
+        // QUASAR_UPLIFT_REPORT.md.
+        num_interm_tiles = Wt;
+    }
     uint32_t num_output_tiles = B * Wt;
 
     ProgramSpec spec;
@@ -604,6 +615,19 @@ ttnn::device_operation::ProgramArtifacts PagedRowMajorFusedUpdateCacheProgramFac
         }
     }
 
+    // Gen2 (Quasar): KernelSpec::hw_config must hold the target generation's alternative -- the spec
+    // validator rejects a ComputeGen1Config on Quasar. Copy across only the fields the Gen1 config
+    // sets (enable_32_bit_dest, unpack_modes); bfp_pack_precision_mode has no Gen2 counterpart and
+    // the Gen2-only enable_2x_src_register is left at its default. WH/BH take the Gen1 config unchanged.
+    ComputeHardwareConfig compute_hw_config = compute_hw;
+    if (device->arch() == tt::ARCH::QUASAR) {
+        // TODO(#52269): Quasar unpack_modes are copied from Gen1 and not yet optimized for Quasar.
+        compute_hw_config = ComputeGen2Config{
+            .enable_32_bit_dest = compute_hw.enable_32_bit_dest,
+            .unpack_modes = compute_hw.unpack_modes,
+        };
+    }
+
     KernelSpec compute{
         .unique_id = RMF_COMPUTE_KERNEL,
         .source = RMF_COMPUTE_SOURCE,
@@ -641,7 +665,7 @@ ttnn::device_operation::ProgramArtifacts PagedRowMajorFusedUpdateCacheProgramFac
                 {"num_heads", num_heads},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"has_work", "is_input1"}},
-        .hw_config = compute_hw,
+        .hw_config = compute_hw_config,
     };
 
     spec.kernels.push_back(std::move(reader));

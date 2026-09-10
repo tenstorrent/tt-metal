@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
@@ -18,14 +19,14 @@ constexpr uint32_t TILE_H = 32;
 
 template <uint32_t num_heads, uint32_t block_size_t, uint32_t Wt>
 uint32_t virtual_seq_tile_id_to_physical_tile_id(
-    uint32_t seq_tile_idx, uint32_t cur_head, const volatile tt_l1_ptr uint32_t* const page_table_ptr) {
+    uint32_t seq_tile_idx, uint32_t cur_head, const Scratchpad<volatile uint32_t>& page_table) {
     // Given some index in the sequence tiles in range [0, max_seq_len_t]
     // Return the physical tile id for that tile row, or SKIP_PAGE_TABLE_ENTRY if block is skipped
     constexpr uint32_t block_stride = num_heads * block_size_t * Wt;
     const uint32_t head_offset = cur_head * block_size_t * Wt;
 
     const uint32_t virtual_block = seq_tile_idx / block_size_t;
-    const uint32_t physical_block = page_table_ptr[virtual_block];
+    const uint32_t physical_block = page_table[virtual_block];
 
     if (physical_block == SKIP_PAGE_TABLE_ENTRY) {
         return SKIP_PAGE_TABLE_ENTRY;  // Return sentinel to indicate skip
@@ -72,34 +73,35 @@ void kernel_main() {
     }
 
     DataflowBuffer dfb_in(dfb::in);
-    DataflowBuffer dfb_page_table(dfb::page_table);
+    // Writer-private staging regions (scratchpads): a page-table row and, when bound, the batch_idx
+    // and valid_seq_len tensors. Each is NoC-read into L1 and then read back by this kernel alone, so
+    // no FIFO credits are involved. (They were self-loop DFBs whose single reserve_back was pure
+    // bookkeeping; Gen2/Quasar rejects a DM self-loop.) Indexing goes through the scratchpad from 0:
+    // the former write pointer was captured once and never advanced.
+    Scratchpad<volatile uint32_t> page_table(scratch::page_table);
 #ifdef USE_BATCH_IDX_TENSOR
-    DataflowBuffer dfb_batch_idx(dfb::batch_idx);
+    Scratchpad<volatile uint32_t> batch_idx_arr(scratch::batch_idx);
 #endif
 #ifdef USE_VALID_SEQ_LEN
-    DataflowBuffer dfb_valid_seq_len(dfb::valid_seq_len);
+    Scratchpad<volatile uint32_t> valid_seq_len_scratch(scratch::valid_seq_len);
 #endif
 
     // Resolve batch_idx source. With USE_BATCH_IDX_TENSOR we load the
-    // (small) 1D tensor into an L1 DFB once so per-row lookups stay local.
+    // (small) 1D tensor into an L1 scratchpad once so per-row lookups stay local.
     // Otherwise the scalar fallback runtime arg is used.
-    volatile tt_l1_ptr uint32_t* batch_idx_arr = nullptr;
     uint32_t scalar_batch_idx = 0;
 #ifdef USE_BATCH_IDX_TENSOR
     {
         const auto batch_idx_gen = TensorAccessor(tensor::batch_idx);
-        dfb_batch_idx.reserve_back(1);
-        const uint32_t batch_idx_dfb_wr_ptr = dfb_batch_idx.get_write_ptr();
         // The tensor is a contiguous 1D int (uint32/int32) tensor in DRAM with
         // `batch_idx_num_elements` entries; one TensorAccessor stick covers it.
         noc.async_read(
             batch_idx_gen,
-            CoreLocalMem<uint32_t>(batch_idx_dfb_wr_ptr),
+            batch_idx_arr,
             batch_idx_stick_size * batch_idx_num_elements,
             {.page_id = 0},
-            {});
+            {.offset_bytes = 0});
         noc.async_read_barrier();
-        batch_idx_arr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_idx_dfb_wr_ptr);
     }
 #else
     scalar_batch_idx = get_arg(args::batch_idx_fallback);
@@ -111,12 +113,9 @@ void kernel_main() {
 #ifdef USE_VALID_SEQ_LEN
     {
         const auto valid_gen = TensorAccessor(tensor::valid_seq_len);
-        dfb_valid_seq_len.reserve_back(1);
-        const uint32_t valid_dfb_wr_ptr = dfb_valid_seq_len.get_write_ptr();
-        noc.async_read(
-            valid_gen, CoreLocalMem<uint32_t>(valid_dfb_wr_ptr), valid_seq_len_stick_size, {.page_id = 0}, {});
+        noc.async_read(valid_gen, valid_seq_len_scratch, valid_seq_len_stick_size, {.page_id = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        const uint32_t valid_seq_len_tokens = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(valid_dfb_wr_ptr);
+        const uint32_t valid_seq_len_tokens = valid_seq_len_scratch[0];
         // Round the real length up to a whole tile (TILE_HEIGHT == 32, >> 5) and then
         // up to a whole block_size_t: the surviving ring window [effective_end -
         // capacity_t, effective_end) must be block-aligned so the wrapped page_table
@@ -136,10 +135,6 @@ void kernel_main() {
 
     const auto out_gen = TensorAccessor(tensor::out);
     const auto page_table_gen = TensorAccessor(tensor::page_table);
-
-    dfb_page_table.reserve_back(1);
-    const uint32_t page_table_dfb_wr_ptr = dfb_page_table.get_write_ptr();
-    volatile tt_l1_ptr uint32_t* page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_dfb_wr_ptr);
 
     // Cache the last batch for which page_table was loaded. Legacy path loads
     // once on the first row (cache miss) and then hits for all remaining rows;
@@ -200,11 +195,7 @@ void kernel_main() {
         // Reload page_table row only on batch boundary.
         if (batch_idx != cached_batch) {
             noc.async_read(
-                page_table_gen,
-                CoreLocalMem<uint32_t>(page_table_dfb_wr_ptr),
-                page_table_stick_size,
-                {.page_id = batch_idx},
-                {});
+                page_table_gen, page_table, page_table_stick_size, {.page_id = batch_idx}, {.offset_bytes = 0});
             noc.async_read_barrier();
             cached_batch = batch_idx;
         }
@@ -216,7 +207,7 @@ void kernel_main() {
             seq_tile_id %= capacity_t;
         }
         uint32_t physical_tile_id =
-            virtual_seq_tile_id_to_physical_tile_id<num_heads, block_size_t, Wt>(seq_tile_id, cur_head, page_table_ptr);
+            virtual_seq_tile_id_to_physical_tile_id<num_heads, block_size_t, Wt>(seq_tile_id, cur_head, page_table);
 
         if (physical_tile_id == SKIP_PAGE_TABLE_ENTRY) {
             // Block should be skipped. Consume the input tiles from the DFB and discard.

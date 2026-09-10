@@ -153,7 +153,9 @@ void kernel_main() {
 
     if (wait_to_start_signal) {
         // wait for signal from writer that it has finished using the input DFB
-        Semaphore<> receiver_sem(sem::receiver);
+        // CTAD: the sem:: token carries the host-resolved scope (always LOCAL_NONATOMIC on Gen1; on
+        // Gen2 the census may pick another mechanism, and spelling out Semaphore<> would not compile).
+        Semaphore receiver_sem(sem::receiver);
         receiver_sem.wait(1);
         receiver_sem.set(0);
     }

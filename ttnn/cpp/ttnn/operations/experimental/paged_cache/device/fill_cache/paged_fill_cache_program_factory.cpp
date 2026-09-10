@@ -32,9 +32,10 @@ namespace {
 // Metal 2.0 spec resource names for this factory.  Prefixed to keep the anonymous namespace free of
 // collisions when the op's factory .cpp files are unity-built into one translation unit.
 const DFBSpecName FC_INPUT_DFB{"input"};
-const DFBSpecName FC_PAGE_TABLE_DFB{"page_table"};
-const DFBSpecName FC_BATCH_IDX_DFB{"batch_idx"};
-const DFBSpecName FC_VALID_SEQ_LEN_DFB{"valid_seq_len"};
+// Writer-private staging regions (formerly writer self-loop DFBs; see the ScratchpadSpecs below).
+const ScratchpadSpecName FC_PAGE_TABLE_SCRATCH{"page_table"};
+const ScratchpadSpecName FC_BATCH_IDX_SCRATCH{"batch_idx"};
+const ScratchpadSpecName FC_VALID_SEQ_LEN_SCRATCH{"valid_seq_len"};
 
 const TensorParamName FC_INPUT_TENSOR{"input"};
 const TensorParamName FC_CACHE_TENSOR{"cache"};
@@ -169,20 +170,17 @@ ttnn::device_operation::ProgramArtifacts PagedFillCacheProgramFactory::create_pr
         page_table_stick_size_B % 32 == 0,
         "page table page size in bytes must be a multiple of 32 due to address alignment");
     uint32_t log2_page_table_stick_size_B = std::log2(page_table_stick_size_B);
-    tt::DataFormat page_table_data_format = tt_metal::datatype_to_dataformat_converter(page_table_tensor.dtype());
 
     // batch_idx_tensor specific parameters. When provided, the tensor's
     // element count must equal input_batch: one batch_idx per input batch
     // row. The legacy single-batch case (input_batch == 1, tensor.shape ==
     // [1]) falls out naturally.
     const bool use_batch_idx_tensor = batch_idx_tensor.has_value();
-    tt::DataFormat batch_idx_data_format = tt::DataFormat::UInt32;
     uint32_t batch_idx_stick_size_B = 4;  // per-element size, e.g. 4 for uint32
     uint32_t batch_idx_num_elements = 1;
 
     if (use_batch_idx_tensor) {
         const auto& tensor = batch_idx_tensor.value();
-        batch_idx_data_format = tt_metal::datatype_to_dataformat_converter(tensor.dtype());
         batch_idx_stick_size_B = tensor.element_size();
         batch_idx_num_elements = tensor.physical_volume();
         TT_FATAL(
@@ -242,32 +240,32 @@ ttnn::device_operation::ProgramArtifacts PagedFillCacheProgramFactory::create_pr
         .num_entries = num_input_tiles,
         .data_format_metadata = input_data_format,
     });
-    // Touched only by the writer: reserved once and then written through a raw pointer, never
-    // pushed or popped. The writer is therefore bound as both endpoints (self-loop) — on Gen1 a DFB
-    // lowers to a hardware FIFO that one RISC can both fill and drain, so a single-toucher buffer
-    // needs no second kernel to be legal.
-    spec.dataflow_buffers.push_back(DataflowBufferSpec{
-        .unique_id = FC_PAGE_TABLE_DFB,
-        .entry_size = page_table_stick_size_B,
-        .num_entries = 1,
-        .data_format_metadata = page_table_data_format,
+
+    //-------------------------------------------------------------------------
+    // Scratchpads
+    //-------------------------------------------------------------------------
+    // Writer-private staging regions: the writer NoC-reads a page-table row (and, when present, the
+    // batch_idx / valid_seq_len tensors) into L1 once and then reads the values back through the
+    // scratchpad. Nothing else touches them and no FIFO credits are ever exchanged, so they are
+    // scratchpads, not dataflow buffers. (They were single-toucher DFBs bound by the writer as both
+    // PRODUCER and CONSUMER -- a DM self-loop, legal on Gen1 but rejected by the spec validator on
+    // Gen2/Quasar.) size_per_node carries the former DFB's whole allocation, entry_size * num_entries.
+    spec.scratchpads.push_back(ScratchpadSpec{
+        .unique_id = FC_PAGE_TABLE_SCRATCH,
+        .size_per_node = page_table_stick_size_B * 1,  // one page-table stick
     });
     if (use_batch_idx_tensor) {
         // Holds all `batch_idx_num_elements` entries so the writer kernel can pick the right entry
-        // per batch row in the batched case. Writer-only, so likewise a self-loop.
-        spec.dataflow_buffers.push_back(DataflowBufferSpec{
-            .unique_id = FC_BATCH_IDX_DFB,
-            .entry_size = batch_idx_stick_size_B,
-            .num_entries = batch_idx_num_elements,
-            .data_format_metadata = batch_idx_data_format,
+        // per batch row in the batched case.
+        spec.scratchpads.push_back(ScratchpadSpec{
+            .unique_id = FC_BATCH_IDX_SCRATCH,
+            .size_per_node = batch_idx_stick_size_B * batch_idx_num_elements,
         });
     }
     if (use_valid_seq_len) {
-        spec.dataflow_buffers.push_back(DataflowBufferSpec{
-            .unique_id = FC_VALID_SEQ_LEN_DFB,
-            .entry_size = valid_seq_len_stick_size_B,
-            .num_entries = 1,
-            .data_format_metadata = tt::DataFormat::UInt32,
+        spec.scratchpads.push_back(ScratchpadSpec{
+            .unique_id = FC_VALID_SEQ_LEN_SCRATCH,
+            .size_per_node = valid_seq_len_stick_size_B * 1,  // one element
         });
     }
 
@@ -364,16 +362,10 @@ ttnn::device_operation::ProgramArtifacts PagedFillCacheProgramFactory::create_pr
         .accessor_name = "in",
         .endpoint_type = DFBEndpointType::CONSUMER,
     });
-    // Self-loop: this kernel is the only toucher of the page-table buffer.
-    writer.dfb_bindings.push_back(DFBBinding{
-        .dfb_spec_name = FC_PAGE_TABLE_DFB,
+    // Writer-private staging region for the page-table row (see the ScratchpadSpec above).
+    writer.scratchpad_bindings.push_back(ScratchpadBinding{
+        .scratchpad_spec_name = FC_PAGE_TABLE_SCRATCH,
         .accessor_name = "page_table",
-        .endpoint_type = DFBEndpointType::PRODUCER,
-    });
-    writer.dfb_bindings.push_back(DFBBinding{
-        .dfb_spec_name = FC_PAGE_TABLE_DFB,
-        .accessor_name = "page_table",
-        .endpoint_type = DFBEndpointType::CONSUMER,
     });
     writer.tensor_bindings.push_back(TensorBinding{
         .tensor_parameter_name = FC_CACHE_TENSOR,
@@ -385,16 +377,9 @@ ttnn::device_operation::ProgramArtifacts PagedFillCacheProgramFactory::create_pr
     });
     writer.runtime_arg_schema.runtime_arg_names = {"start_row_num", "num_rows", "noop"};
     if (use_batch_idx_tensor) {
-        // Self-loop, same shape as the page-table buffer.
-        writer.dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = FC_BATCH_IDX_DFB,
+        writer.scratchpad_bindings.push_back(ScratchpadBinding{
+            .scratchpad_spec_name = FC_BATCH_IDX_SCRATCH,
             .accessor_name = "batch_idx",
-            .endpoint_type = DFBEndpointType::PRODUCER,
-        });
-        writer.dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = FC_BATCH_IDX_DFB,
-            .accessor_name = "batch_idx",
-            .endpoint_type = DFBEndpointType::CONSUMER,
         });
         writer.tensor_bindings.push_back(TensorBinding{
             .tensor_parameter_name = FC_BATCH_IDX_TENSOR,
@@ -407,15 +392,9 @@ ttnn::device_operation::ProgramArtifacts PagedFillCacheProgramFactory::create_pr
         writer.runtime_arg_schema.runtime_arg_names.push_back("batch_idx_fallback");
     }
     if (use_valid_seq_len) {
-        writer.dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = FC_VALID_SEQ_LEN_DFB,
+        writer.scratchpad_bindings.push_back(ScratchpadBinding{
+            .scratchpad_spec_name = FC_VALID_SEQ_LEN_SCRATCH,
             .accessor_name = "valid_seq_len",
-            .endpoint_type = DFBEndpointType::PRODUCER,
-        });
-        writer.dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = FC_VALID_SEQ_LEN_DFB,
-            .accessor_name = "valid_seq_len",
-            .endpoint_type = DFBEndpointType::CONSUMER,
         });
         writer.tensor_bindings.push_back(TensorBinding{
             .tensor_parameter_name = FC_VALID_SEQ_LEN_TENSOR,
