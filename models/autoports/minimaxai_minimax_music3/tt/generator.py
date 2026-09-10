@@ -217,11 +217,11 @@ class Music3Generator:
         os.environ.setdefault("TT_CACHE_PATH", str(W.cache_root() / "tt_cache"))
         Path(os.environ["TT_CACHE_PATH"]).mkdir(parents=True, exist_ok=True)
         t0 = time.time()
-        self.args = ModelArgs(
-            self.mesh, instruct=False, max_batch_size=2, max_seq_len=self.max_seq_len, cache_hf_flag=False
-        )
+        self.args = ModelArgs(self.mesh, instruct=False, max_batch_size=2, max_seq_len=self.max_seq_len, cache_hf=False)
         if n_layers:
             self.args.n_layers = int(n_layers)
+        # the two rows are prefilled one at a time (batched prefill would call prepare_inputs_prefill with batch_size=2)
+        self.args.disable_batched_prefill = True
         self.log(
             f"ModelArgs: {self.args.model_name} device={self.args.device_name} vocab={self.args.vocab_size}/{self.args.padded_vocab_size} "
             f"layers={self.args.n_layers} max_seq_len={self.args.max_seq_len} prefill_chunk={getattr(self.args, 'max_prefill_chunk_size', '?')}"
