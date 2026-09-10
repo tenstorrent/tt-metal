@@ -1519,14 +1519,20 @@ walk, 0.997 -> 0.908 -> 0.871 -> 0.857.
 
 ### What these four measurements add to §4i's list
 
-11. **An aggregate is not evidence about a distribution.** "Net flat over 10 cells" concealed
-    1,324 regressions with a worst case of 0.519x. A perf claim needs the count above and below
-    the threshold, not a mean.
-12. **Reproducibility is not intrinsicness.** Before attributing a failure to an op, run the
-    cell in isolation. It is one command and it would have saved a day here.
-13. **A sorted chart must show what it drops.** 127 of 416 cases silently unpaired, and 23,458
-    bars drawn 1px apart on a 1,000px canvas so every regression fell off the right edge —
-    both flattered the result in the same direction.
+11. **"Total time unchanged" does not mean "nothing got slower".** The implementer summed ten
+    cells, got 0.996x, and reported no real cost. The full sweep gives the same 0.9965x — and
+    1,324 cases more than 5% slower against 177 faster, worst 0.519x. The losses and the wins
+    cancelled in the sum. So a perf claim must report **how many cases got slower, how many
+    faster, and the worst one** — never a total or a mean on its own.
+12. **A result repeating does not mean the op caused it.** Run the failing case ON ITS OWN
+    before blaming the op. Here 49 failures repeated across two replicates, both orderings and
+    eight phases, and were caused by the previous test's leftover memory — the environment
+    repeated too. The cells all pass one-per-process, which is one command and would have saved
+    a day.
+13. **A chart must show the cases it could not plot.** Two ways this went wrong in one day:
+    127 of 416 cases failed to pair and were silently omitted, and 23,458 bars were drawn 1px
+    apart on a 1,000px canvas so everything past the first thousand fell off the right edge.
+    Both hid the slow end, because the data was sorted fastest-first.
 
 ## 5. Playground: the op and its gap
 
