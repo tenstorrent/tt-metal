@@ -1055,17 +1055,15 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         act_block_h_ntiles);
     uint32_t num_blocks_act_h_per_core = per_core_out_matrix_height_ntiles / act_block_h_ntiles;
 
-    // OPTION C (split tilize/matmul) test toggle. When TT_METAL_QSR_CONV_SPLIT_TILIZE is set, select the
-    // conv_bmm_split_tilize_metal2.cpp compute kernel, which tilizes ALL height blocks first (one contiguous
-    // tilize phase) then matmuls them, so the compute engine transitions tilize->matmul only once (diagnostic
-    // for the Quasar per-block tilize<->matmul DEST-handshake 0x19 race). Gated to the height-sharded,
-    // single-K-block (in0_num_blocks_w == 1), single-output-width-block (num_blocks_weight_w_per_core == 1),
-    // no-split-reader / no-activation-reuse / non-depthwise path -- the resnet stem / 1x1 conv shape the split
-    // kernel implements. Requires act_tilized to hold all height blocks at once (resized below). Everything
-    // else falls back to the fused kernel even when the env is set.
-    const bool split_tilize_matmul = (std::getenv("TT_METAL_QSR_CONV_SPLIT_TILIZE") != nullptr) && height_sharded &&
-                                     !is_conv_1d_depthwise_conv && !enable_split_reader && !enable_activation_reuse &&
-                                     (in0_num_blocks_w == 1) && (num_blocks_weight_w_per_core == 1);
+    // 1D depthwise multi-height-block accumulation needs a DEDICATED read-back scratch. out_cb (the
+    // persistent borrowed sharded output) cannot double as the dest-reuse scratch when there is more
+    // than one height block: earlier blocks' finished tiles are never popped, so block N's read-back
+    // would consume block N-1's output. Mirrors the shared cb_info's depthwise_dest_reuse_scratch
+    // gate (conv2d_op_program_factory_common.cpp) and upstream conv2d_op_sharded_program_factory.cpp,
+    // and matches the compute kernel's use_partials_scratch CTA (issue #51270, items 4/5). Single
+    // height block keeps the in-place accumulate on out_cb.
+    const bool depthwise_uses_partials_scratch =
+        is_conv_1d_depthwise_conv && !coalesce_1d_depthwise_kw_reads && num_blocks_act_h_per_core > 1;
 
     // OPTION B — PROGRAM A (tilize-only, standalone). When TT_METAL_QSR_CONV_SPLIT_PROGRAM is set, this conv
     // op runs ONLY the gather+tilize half in a fresh tilize-oriented Metal program (conv_tilize_only_metal2.cpp)
@@ -1534,29 +1532,20 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             // borrowed_from OUTPUT — the op's output IS the tilized activation). No separate ACT_TILIZED DFB.
             // (fix #3 tried a fresh intermediate DFB + writer here; REVERTED — it still deadlocked identically
             // in fast_tilize_block, so the borrowed output was NOT the cause. See the WH split memory.)
-        } else if (split_tilize_matmul) {
-            // OPTION C: hold ALL height blocks of tilized activation at once (num_blocks_act_h_per_core x
-            // one block) so Phase 1 can tilize every block before Phase 2's matmul consumes them. NB: the
-            // ring extent (page_size_units x num_entries) must stay under the uint16_t limit (65,536 units
-            // = 1 MB); if the full per-core tilized activation exceeds that, the DFB spec is rejected at
-            // program creation and this path cannot be used for that conv (fall back to the fused kernel).
-            const CBInfo& tilized_info = cb(Conv2dCb::ACT_TILIZED);
-            spec.dataflow_buffers.push_back(m2::DataflowBufferSpec{
-                .unique_id = DFB_ACT_TILIZED,
-                .entry_size = tilized_info.page_size,
-                .num_entries = tilized_info.num_pages * num_blocks_act_h_per_core,
-                .data_format_metadata = tilized_info.data_format,
-            });
         } else {
             spec.dataflow_buffers.push_back(make_dfb(DFB_ACT_TILIZED, Conv2dCb::ACT_TILIZED));
         }
     }
 
     // MATMUL_PARTIALS: self-loop accumulator (resolution #2).  Borrowed-from OUTPUT when
-    // partials_cb_uses_output.  1D depthwise allocates no partials CB (dest-reuse), so skip it there.
-    if (!is_conv_1d_depthwise_conv && !split_program_tilize_only) {
+    // partials_cb_uses_output.  1D depthwise normally accumulates in-place on out_cb (dest-reuse) and
+    // allocates no partials CB — EXCEPT the multi-height-block non-coalesced path, which needs a
+    // DEDICATED (never borrowed) scratch so block N doesn't read back block N-1's already-written
+    // output (#51270 item 4). The shared cb_info sizes MATMUL_PARTIALS to act_block_num_tiles for that
+    // case.
+    if ((!is_conv_1d_depthwise_conv && !split_program_tilize_only) || depthwise_uses_partials_scratch) {
         auto dfb = make_dfb(DFB_MATMUL_PARTIALS, Conv2dCb::MATMUL_PARTIALS);
-        if (partials_cb_uses_output) {
+        if (partials_cb_uses_output) {  // never true for depthwise -> depthwise scratch stays dedicated
             dfb.borrowed_from = TP_OUTPUT;
         }
         spec.dataflow_buffers.push_back(std::move(dfb));
@@ -1648,8 +1637,6 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                                         "conv_unpack_tilize_probe_metal2.cpp"
         : split_program_tilize_only   ? "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
                                         "conv_tilize_only_metal2.cpp"
-        : split_tilize_matmul         ? "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
-                                        "conv_bmm_split_tilize_metal2.cpp"
                                       : "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
                                         "conv_bmm_tilize_metal2.cpp";
     const std::string writer_sender_kernel =
@@ -1874,7 +1861,12 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             // 2D writer CTA set (writer_tiled_out_2d_..._metal2).
             ctas.insert({"num_blocks_weight_h", num_blocks_act_w});
             ctas.insert({"weight_block_num_tiles", weight_block_num_tiles});
-            ctas.insert({"weight_block_height_num_outer", out_conv_c_blocks});
+            // Loop count = INPUT channel-block count (conv_act_c_blocks): the writer pushes one weights
+            // block per input channel-block that compute consumes (in0_num_blocks_w = conv_act_c_blocks *
+            // num_blocks_act_w). Using out_conv_c_blocks here under/over-pushes when the input and output
+            // shard grids differ in the channel dim -> compute's cb_in1.wait_front hangs (#51270 item 2).
+            // The tile-id stride keeps out_conv_c_blocks via weight_block_height_num_outer_in below.
+            ctas.insert({"weight_block_height_num_outer", conv_act_c_blocks});
             if (is_sender) {
                 ctas.insert({"weight_block_height_ntiles", weight_block_h_ntiles});
                 ctas.insert({"weight_block_width_ntiles", weight_block_w_ntiles});
@@ -1905,7 +1897,9 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             ctas.insert({"num_blocks_weight_h", num_blocks_act_w});
             ctas.insert({"weight_block_num_tiles", weight_block_num_tiles});
             if (is_sender) {
-                ctas.insert({"weight_block_height_num_outer", out_conv_c_blocks});
+                // Loop count = input channel-block count (see the 2D branch above). Inert for non-block-
+                // sharded convs (both quantities are 1), fixed for consistency (#51270 item 2).
+                ctas.insert({"weight_block_height_num_outer", conv_act_c_blocks});
                 ctas.insert({"weight_block_height_ntiles", weight_block_h_ntiles});
                 ctas.insert({"weight_block_width_ntiles", weight_block_w_ntiles});
                 ctas.insert({"weight_stride_h", weight_matrix_width_ntiles});
@@ -2149,10 +2143,26 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                 .endpoint_type = m2::DFBEndpointType::CONSUMER},
             m2::DFBBinding{
                 .dfb_spec_name = DFB_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::PRODUCER},
-            // OUT is also self-consumed (dest-reuse accumulate reads prior partial back from out_cb).
+            // OUT is also self-consumed: for a single height block the dest-reuse accumulate reads the
+            // prior partial back from out_cb (in-place). For the multi-height-block scratch path below,
+            // out_cb is only produced (last tap) and this consumer is degenerate (never popped) — the
+            // same shape the coalesced path uses.
             m2::DFBBinding{
                 .dfb_spec_name = DFB_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER},
         };
+        if (depthwise_uses_partials_scratch) {
+            // Dedicated read-back scratch for multi-height-block accumulation (producer + consumer
+            // self-loop). Earlier taps pack the partial here and read it back; only the last tap writes
+            // out_cb (#51270 item 4).
+            compute_dfb_bindings.push_back(m2::DFBBinding{
+                .dfb_spec_name = DFB_MATMUL_PARTIALS,
+                .accessor_name = "matmul_partials",
+                .endpoint_type = m2::DFBEndpointType::PRODUCER});
+            compute_dfb_bindings.push_back(m2::DFBBinding{
+                .dfb_spec_name = DFB_MATMUL_PARTIALS,
+                .accessor_name = "matmul_partials",
+                .endpoint_type = m2::DFBEndpointType::CONSUMER});
+        }
     } else {
         compute_dfb_bindings = {
             m2::DFBBinding{
@@ -2218,6 +2228,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             {"in0_num_blocks_w", in0_num_blocks_w},
             {"kernel_width", filter_w},
             {"coalesce_kw_reads", (uint32_t)coalesce_1d_depthwise_kw_reads},
+            {"use_partials_scratch", (uint32_t)depthwise_uses_partials_scratch},
         };
     } else {
         compute_kernel_spec.compile_time_args = {

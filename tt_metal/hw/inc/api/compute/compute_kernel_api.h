@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "chlkc_list.h"
 #include "ckernel.h"
 #ifndef ARCH_QUASAR
 #include "ckernel_globals.h"
