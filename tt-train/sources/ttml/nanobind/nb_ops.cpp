@@ -323,6 +323,13 @@ void py_module(nb::module_& m) {
     {
         auto py_multi_head_utils = static_cast<nb::module_>(m.attr("multi_head_utils"));
         py_multi_head_utils.def("heads_creation", &ttml::ops::heads_creation, nb::arg("qkv"), nb::arg("num_heads"));
+        py_multi_head_utils.def(
+            "split_heads",
+            &ttml::ops::split_heads,
+            nb::arg("x"),
+            nb::arg("num_heads"),
+            "Split a single separately-projected tensor into heads.\n"
+            "(B, 1, S, num_heads * head_dim) -> (B, num_heads, S, head_dim).");
         py_multi_head_utils.def("heads_fusion", &ttml::ops::heads_fusion, nb::arg("x"));
         py_multi_head_utils.def(
             "grouped_heads_creation",

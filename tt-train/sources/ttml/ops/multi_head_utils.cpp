@@ -4,6 +4,8 @@
 
 #include "multi_head_utils.hpp"
 
+#include <stdexcept>
+
 #include "autograd/auto_context.hpp"
 #include "autograd/graph.hpp"
 #include "autograd/graph_utils.hpp"
@@ -56,6 +58,44 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> heads_
         out_v->set_node(autograd::add_backward_node_always([]() {}, out_v, qkv, out_q));
     }
     return {out_q, out_k, out_v};
+}
+
+autograd::TensorPtr split_heads(const autograd::TensorPtr& x, uint32_t num_heads) {
+    auto x_shape = x->get_value().logical_shape();
+    if (x_shape[1] != 1U) {
+        throw std::invalid_argument(
+            fmt::format("split_heads expects an input of shape (B, 1, S, E), but dim 1 is {}.", x_shape[1]));
+    }
+    if (num_heads == 0U) {
+        throw std::invalid_argument("split_heads expects num_heads to be positive, got 0.");
+    }
+    if (x_shape[3] % num_heads != 0U) {
+        throw std::invalid_argument(fmt::format(
+            "split_heads expects the embedding dim ({}) to be divisible by num_heads ({}).", x_shape[3], num_heads));
+    }
+
+    // (B, 1, S, E) -> (B, num_heads, S, E / num_heads)
+    // num_kv_heads = 0 splits the whole input into query heads, leaving the k and v outputs empty.
+    auto [q, k, v] = ttnn::experimental::nlp_create_qkv_heads(
+        x->get_value(),
+        std::nullopt,
+        /*num_q_heads=*/num_heads,
+        /*num_kv_heads=*/0,
+        /*transpose_k_heads=*/false,
+        /*kv_tied=*/false,
+        /*memory_config=*/std::nullopt,
+        /*optional_output_tensors=*/std::nullopt);
+
+    auto out = autograd::create_tensor(q);
+
+    autograd::GradFunction grad = [out, x]() {
+        // (B, num_heads, S, E / num_heads) -> (B, 1, S, E)
+        x->add_grad(ttnn::experimental::nlp_concat_heads(out->get_grad()));
+    };
+
+    out->set_node(autograd::add_backward_node(std::move(grad), out, x));
+
+    return out;
 }
 
 autograd::TensorPtr heads_fusion(const autograd::TensorPtr& x) {
