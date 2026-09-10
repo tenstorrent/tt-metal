@@ -40,14 +40,16 @@
 //      kernel. Participants are every TRISC of every NEO the kernel occupies,
 //      i.e. get_num_threads() * NUM_TRISC_CORES, so the barrier releases only
 //      once unpack, math, pack and SFPU on all of those NEOs have arrived.
-//      The L1 barrier of flavor 1 cannot be reused: the TRISC roles do not
-//      share a coherent view of L1, so an arrival written by one role is not
-//      guaranteed to be seen by another. This rides on a pair of tensix global
-//      semaphores instead, which are registers every TRISC reads identically.
+//      TRISCs do share a coherent view of L1, so the L1 atomics of flavor 1
+//      would work here too. This rides on a pair of tensix global semaphores
+//      instead because they are register accesses rather than an L1 round
+//      trip, and because the L1 slot array and the id that selects it are
+//      DM-side firmware state that a TRISC build does not have.
 //
-//   3. DM threads and TRISCs together -- dm_compute_barrier(). Participants
-//      span both processor kinds, so neither the DM-only L1 barrier nor the
-//      compute pair alone will do. It uses a second, independent tensix global
+//   3. DM threads and TRISCs together -- dm_compute_barrier(). Here the L1
+//      barrier is not an option: DMs and TRISCs do not share a coherent view
+//      of L1 over atomics, so an arrival one kind writes is not guaranteed to
+//      be seen by the other. It uses a second, independent tensix global
 //      semaphore pair, which keeps a mixed rendezvous from corrupting the
 //      count of a compute-only sync_threads() that is in flight, and vice
 //      versa. Participants are counted in the units a user parallelizes over,
