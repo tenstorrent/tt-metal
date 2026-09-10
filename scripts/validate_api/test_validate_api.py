@@ -99,6 +99,40 @@ class ApiValidationTests(unittest.TestCase):
         self.header("tt-metalium/a.hpp", "#pragma once\n// example \\\n#include <internal/a.hpp>\n")
         self.assertEqual(self.errors(), [])
 
+    def test_forbidden_includes_with_multiline_comments_are_rejected(self):
+        for directive in (
+            "# /* comment\ncontinued */ include <internal/a.hpp>",
+            "#include /* comment\ncontinued */ <internal/a.hpp>",
+        ):
+            with self.subTest(directive=directive):
+                self.header("tt-metalium/a.hpp", f"#pragma once\n{directive}\n")
+                errors = self.errors()
+                self.assertEqual(len(errors), 1)
+                self.assertIn("a.hpp:2:", errors[0])
+                self.assertIn("must not include internal", errors[0])
+
+    def test_allowed_directives_with_multiline_comments_are_accepted(self):
+        self.header(
+            "tt-metalium/a.hpp",
+            "#pragma /* comment\ncontinued */ once\n"
+            "# /* comment\ncontinued */ include <vector>\n"
+            "#include /* comment\ncontinued */ <string>\n",
+        )
+        self.assertEqual(self.errors(), [])
+
+    def test_multiline_comments_and_continuations_preserve_source_locations(self):
+        self.header(
+            "tt-metalium/a.hpp",
+            "/* license\ncomment */\n#pragma once\n"
+            "# /* comment\n*/ include \\\n<internal/a.hpp>\n"
+            "/* before directive\n*/ #include <internal/b.hpp>\n",
+        )
+        errors = self.errors()
+        self.assertEqual(len(errors), 2)
+        self.assertIn("a.hpp:4:", errors[0])
+        self.assertIn("a.hpp:8:", errors[1])
+        self.assertTrue(all("must not include internal" in error for error in errors))
+
     def test_all_conditional_branches_are_checked(self):
         self.header("tt-metalium/a.hpp", "#pragma once\n#if OTHER_ARCH\n#include <internal/a.hpp>\n#endif\n")
         self.assertTrue(any("must not include internal" in error for error in self.errors()))
@@ -238,6 +272,29 @@ class ApiValidationTests(unittest.TestCase):
             "#pragma once\nconstexpr int n = 1'000;\n/*\n#include <internal/a.hpp>\n*/\n// don't include internals\n",
         )
         self.assertEqual(self.errors(), [])
+
+    def test_digit_separators_before_inline_comments_with_apostrophes(self):
+        for number in ("1'000", "1'000'000", "0xA'B", "0b1'0", ".1'0", "1e+1'0", "0x1p-1'0"):
+            with self.subTest(number=number):
+                self.header(
+                    "tt-metalium/a.hpp",
+                    f"#pragma once\nconstexpr auto n = {number}; /* don't include this example\n"
+                    "#include <internal/a.hpp>\n*/\n",
+                )
+                self.assertEqual(self.errors(), [])
+
+    def test_character_literals_do_not_hide_following_comments(self):
+        for literal in ("'/'", "'\"'", "'\\''", "u8'a'", "u'a'", "U'a'", "L'a'"):
+            with self.subTest(literal=literal):
+                self.header(
+                    "tt-metalium/a.hpp",
+                    f"#pragma once\nconstexpr auto c = {literal}; /* don't include this example\n"
+                    "#include <internal/a.hpp>\n*/\n#include <internal/b.hpp>\n",
+                )
+                errors = self.errors()
+                self.assertEqual(len(errors), 1)
+                self.assertIn("a.hpp:5:", errors[0])
+                self.assertIn("<internal/b.hpp>", errors[0])
 
     def test_unapproved_includes_are_rejected(self):
         for include in ("unknown_dependency/header.hpp", "unprefixed.hpp"):

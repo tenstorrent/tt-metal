@@ -10,6 +10,7 @@ See tt_metal/api/README.md for its scope and the compiler-based follow-up.
 import argparse
 import json
 import re
+from bisect import bisect_right
 from collections import defaultdict
 from pathlib import Path
 from typing import NamedTuple, Optional
@@ -197,8 +198,11 @@ ALLOWED_DEPENDENCIES = {
 }
 # Preserve ordinary string/character literals so comment markers in them are not
 # interpreted as comments. Mask raw strings too: they can contain fake directives.
+# Match preprocessing numbers before their digit separators can start a character
+# literal, including separators after exponent signs and in hexadecimal values.
 COMMENTS_AND_LITERALS = re.compile(
     r'R"(?P<delimiter>[^\s()\\]{0,16})\(.*?\)(?P=delimiter)"'
+    r"|(?<!\w)(?:\d|\.\d)(?:[eEpP][+-]|[\w.]|'\w)*"
     r'|"(?:\\.|[^"\\\n])*"'
     r"|'(?:\\.|[^'\\\n])*'"
     r"|//[^\n]*|/\*.*?\*/",
@@ -223,15 +227,32 @@ def source_lines(text: str) -> list[tuple[int, str]]:
         pending = []
     if pending:
         lines.append((start, "".join(pending)))
+    if not lines:
+        return []
 
     def mask(match: re.Match) -> str:
         value = match.group()
-        if value.startswith(("//", "/*", 'R"')):
+        if value.startswith("/*"):
+            # A block comment is whitespace even when it spans physical lines;
+            # its internal newlines do not terminate a preprocessing directive.
+            return " " * len(value)
+        if value.startswith(("//", 'R"')):
             return "".join("\n" if c == "\n" else " " for c in value)
         return value
 
-    cleaned = COMMENTS_AND_LITERALS.sub(mask, "\n".join(line for _, line in lines))
-    return [(number, line) for (number, _), line in zip(lines, cleaned.split("\n"))]
+    spliced = "\n".join(line for _, line in lines)
+    line_starts = [0] + [match.end() for match in re.finditer("\n", spliced)]
+    cleaned = COMMENTS_AND_LITERALS.sub(mask, spliced)
+    # Masks preserve character offsets, so map the first substantive character
+    # back to its physical line even after a leading multiline comment.
+    result = []
+    offset = 0
+    for line in cleaned.split("\n"):
+        first_token = offset + len(line) - len(line.lstrip())
+        source_index = bisect_right(line_starts, first_token) - 1
+        result.append((lines[source_index][0], line))
+        offset += len(line) + 1
+    return result
 
 
 def tier(path: str) -> str | None:
