@@ -2385,19 +2385,21 @@ class ModelArgs:
         # 128256 comes from original llama 3 vocab size. 128256 / 4 was experimentally the maximum columns that worked per device.
         # The LM head for that was on 48 cores, so we know 128256 / 4 / 48 = 668 columns per core is close to the L1 limit.
         # FIXME: Update blackhole figure to be per-core as well.
-        LLAMA_VOCAB_SIZE = 128256
-        NUM_LM_HEAD_CORES = 48
-        NUM_LM_HEAD_COLUMNS = 8
         max_columns_per_device = (
             668 * core_grid.num_cores
         )  # 668 columns per core is close to the L1 limit in LM head matmul.
         if is_blackhole():
-            if self.num_devices == 4:
-                max_columns_per_device = LLAMA_VOCAB_SIZE // self.num_devices // NUM_LM_HEAD_COLUMNS
-            elif self.num_devices == 8:
-                max_columns_per_device = LLAMA_VOCAB_SIZE // self.num_devices // (NUM_LM_HEAD_COLUMNS * 2)
-            else:
-                max_columns_per_device = LLAMA_VOCAB_SIZE // NUM_LM_HEAD_COLUMNS
+            # Blackhole now uses the same PER-CORE budget as Wormhole (the FIXME above).
+            # The old figures were a fixed fraction of one model's vocab (128256/num_devices/8),
+            # so they ignored the grid entirely: on a 64-core LM-head grid that is ~63 columns
+            # per core against a limit of ~668, and LMHead.forward then ran EIGHT separate
+            # dram-sharded matmuls -- plus eight sharded->interleaved reshards and an 8-way
+            # concat -- to cover one device's columns. Those splits read exactly the same
+            # weight bytes as one wide matmul would, so the extra launches buy nothing and
+            # each one pays its own ramp-up on a DRAM-bandwidth-bound op. Blackhole's L1 is
+            # 1.57 MB/core (>= Wormhole's ~1.5 MB), so the per-core figure the Wormhole path
+            # already trusts is not a relaxation of the L1 bound here.
+            max_columns_per_device = 668 * core_grid.num_cores
         if prefetcher is not None:
             return math.ceil(max_columns_per_device / (ttnn.TILE_SIZE * prefetcher.ring_size)) * (
                 ttnn.TILE_SIZE * prefetcher.ring_size
