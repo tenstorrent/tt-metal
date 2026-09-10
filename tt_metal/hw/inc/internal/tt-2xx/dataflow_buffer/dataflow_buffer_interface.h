@@ -35,7 +35,7 @@ extern overlay::RemapperAPI g_remapper_configurator;
 
 // ring_size is uint32 L1-aligned units so a DFB can span full Quasar L1 (~4 MB).
 // Cursor byte-offset is not stored: it is derived from wr_entry_idx (advances in lockstep
-// with stride_size / stride_size_tiles). That keeps sizeof(LocalDFBInterface)==89 so
+// with stride_size / stride_size_tiles). That keeps sizeof(LocalDFBInterface)==95 so
 // g_dfb_interface[16] + logical map fit in pack TLS (2048) with the required 256B stack.
 struct DFBTCSlot {
     uint32_t base_addr;
@@ -53,11 +53,15 @@ struct LocalDFBInterface {
     uint8_t stride_size_tiles;
     uint8_t num_tcs_to_rr;
     uint8_t tc_idx;
+    uint16_t block_size;
+    uint16_t split_tc;
+    uint16_t tiles_collected;
+    uint16_t jump;
     DFBTCSlot tc_slots[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
 } __attribute__((packed));
 
 static_assert(sizeof(DFBTCSlot) == 13, "DFBTCSlot (pack TRISC) size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 89, "LocalDFBInterface (pack TRISC) size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 97, "LocalDFBInterface (pack TRISC) size is incorrect");
 
 #elif defined(COMPILE_FOR_TRISC)
 
@@ -78,11 +82,15 @@ struct LocalDFBInterface {
     uint8_t num_tcs_to_rr;
     uint8_t tc_idx;
     uint8_t tensix_trisc_mask;
+    uint16_t block_size;
+    uint16_t split_tc;
+    uint16_t tiles_collected;
+    uint16_t jump;
     DFBTCSlot tc_slots[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
 } __attribute__((packed));
 
 static_assert(sizeof(DFBTCSlot) == 13, "DFBTCSlot (unpack TRISC) size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 88, "LocalDFBInterface (unpack TRISC) size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 96, "LocalDFBInterface (unpack TRISC) size is incorrect");
 
 #else
 
@@ -111,16 +119,22 @@ struct LocalDFBInterface {
     uint8_t num_entries_per_txn_id;
     uint8_t num_entries_per_txn_id_per_tc;
     uint8_t num_txn_ids;
-    uint8_t broadcast_tc;  // DM-DM ALL producer: post to all TCs instead of round-robin
+    uint8_t broadcast_tc;   // DM-DM ALL producer: post to all TCs instead of round-robin
     uint8_t _tc_align_pad;  // pad bytes [8,20) → 20B so tc_slots[] stays 4B-aligned
 
     uint16_t num_entries;
+    uint16_t block_size;       // entries in one block; 1 unless the ring is BLOCKED
+    uint16_t split_tc;         // Blocked->Strided producer / Strided->Blocked DM consumer: a
+                               // transaction spans all its TCs, so give each TC its share
+                               // instead of one TC everything
+    uint16_t tiles_collected;  // tiles taken from the current counter so far
+    uint32_t jump;             // cursor jump in bytes, taken on each TC rotation
 
     DFBTCSlot tc_slots[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
 };
 
 static_assert(sizeof(DFBTCSlot) == 20, "DFBTCSlot size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 144, "LocalDFBInterface size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 152, "LocalDFBInterface size is incorrect");
 
 #endif
 

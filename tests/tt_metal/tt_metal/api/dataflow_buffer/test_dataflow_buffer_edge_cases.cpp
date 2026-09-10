@@ -673,4 +673,80 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, DMTensixTest1xDFB_RingPressure_4Sx4A_2_0
     run_single_dfb_program_2_0(this->device(), params);
 }
 
+
+// =====================================================================================
+// BLOCKED A1 DRAM-pipeline data-verify tests
+// =====================================================================================
+// Identity cases (high confidence): BLOCKED any P, STRIDED P==1, ALL P==1.
+TEST_F(UnitMeshFixture, A1Blocked_2_0_DMTensixDM_BLOCKED_1B_blk4) {
+    run_a1_blocked_pipeline(this->device(), m2::DFBAccessPattern::BLOCKED, 1, 4, 16);
+}
+TEST_F(UnitMeshFixture, A1Blocked_2_0_DMTensixDM_STRIDED_1B_blk4) {
+    run_a1_blocked_pipeline(this->device(), m2::DFBAccessPattern::STRIDED, 1, 4, 16);
+}
+TEST_F(UnitMeshFixture, A1Blocked_2_0_DMTensixDM_ALL_1B_blk4) {
+    run_a1_blocked_pipeline(this->device(), m2::DFBAccessPattern::ALL, 1, 4, 16);
+}
+// Fan-in (P>1 into 1 Tensix consumer): identity for both patterns under global block order.
+TEST_F(UnitMeshFixture, A1Blocked_2_0_DMTensixDM_BLOCKED_2B_blk4) {
+    run_a1_blocked_pipeline(this->device(), m2::DFBAccessPattern::BLOCKED, 2, 4, 16);
+}
+TEST_F(UnitMeshFixture, A1Blocked_2_0_DMTensixDM_BLOCKED_4B_blk4) {
+    run_a1_blocked_pipeline(this->device(), m2::DFBAccessPattern::BLOCKED, 4, 4, 16);
+}
+TEST_F(UnitMeshFixture, A1Blocked_2_0_DMTensixDM_ALL_2B_blk4) {
+    run_a1_blocked_pipeline(this->device(), m2::DFBAccessPattern::ALL, 2, 4, 16);
+}
+TEST_F(UnitMeshFixture, A1Blocked_2_0_DMTensixDM_ALL_4B_blk4) {
+    run_a1_blocked_pipeline(this->device(), m2::DFBAccessPattern::ALL, 4, 4, 16);
+}
+// Implicit-sync variants, same goldens. The DM endpoints use the ISR/txn path; the Tensix consumer still
+// posts explicit credits, since the ISR path is DM-only.
+TEST_F(UnitMeshFixture, A1Blocked_2_0_DMTensixDM_BLOCKED_1B_blk4_impl) {
+    run_a1_blocked_pipeline(this->device(), m2::DFBAccessPattern::BLOCKED, 1, 4, 16, /*implicit=*/true);
+}
+TEST_F(UnitMeshFixture, A1Blocked_2_0_DMTensixDM_STRIDED_1B_blk4_impl) {
+    run_a1_blocked_pipeline(this->device(), m2::DFBAccessPattern::STRIDED, 1, 4, 16, /*implicit=*/true);
+}
+TEST_F(UnitMeshFixture, A1Blocked_2_0_DMTensixDM_ALL_1B_blk4_impl) {
+    run_a1_blocked_pipeline(this->device(), m2::DFBAccessPattern::ALL, 1, 4, 16, /*implicit=*/true);
+}
+// Implicit producer, asymmetric BLOCKED (2 DM producers into 1 Tensix consumer). A Tensix consumer is
+// always explicit, so this pairs an implicit producer with an explicit consumer.
+TEST_F(UnitMeshFixture, A1Blocked_2_0_DMTensixDM_BLOCKED_2B_blk4_impl) {
+    run_a1_blocked_pipeline(this->device(), m2::DFBAccessPattern::BLOCKED, 2, 4, 16, /*implicit=*/true);
+}
+TEST_F(UnitMeshFixture, A1Blocked_2_0_DMTensixDM_ALL_2B_blk4_impl) {
+    run_a1_blocked_pipeline(this->device(), m2::DFBAccessPattern::ALL, 2, 4, 16, /*implicit=*/true);
+}
+
+// C>1 Tensix consumers. RUN WITH TT_METAL_WATCHER=1 (multi-thread coherence race).
+// DM -> Tensix data coverage for the non-BLOCKED consumer patterns and STRIDED -> BLOCKED:
+// the first hop carries the pattern under test into C Tensix consumers, the second hop is the
+// proven 1Sx1S pass-through, so the Tensix side's addressing is verified end to end.
+TEST_F(UnitMeshFixture, A1Fanout_2_0_DMTensixDM_STRIDED_1Bx2_blk4) {
+    run_a1_fanout_blocked_pipeline(this->device(), 2, 4, 16, /*implicit=*/false, m2::DFBAccessPattern::STRIDED);
+}
+TEST_F(UnitMeshFixture, A1Fanout_2_0_DMTensixDM_STRIDED_1Bx4_blk4) {
+    run_a1_fanout_blocked_pipeline(this->device(), 4, 4, 16, /*implicit=*/false, m2::DFBAccessPattern::STRIDED);
+}
+TEST_F(UnitMeshFixture, A1Fanout_2_0_DMTensixDM_SB_1Sx2B_blk4) {
+    run_a1_fanout_blocked_pipeline(
+        this->device(), 2, 4, 16, /*implicit=*/false, m2::DFBAccessPattern::BLOCKED, m2::DFBAccessPattern::STRIDED);
+}
+TEST_F(UnitMeshFixture, A1Fanout_2_0_DMTensixDM_SB_1Sx1B_blk4) {
+    run_a1_fanout_blocked_pipeline(
+        this->device(), 1, 4, 16, /*implicit=*/false, m2::DFBAccessPattern::BLOCKED, m2::DFBAccessPattern::STRIDED);
+}
+TEST_F(UnitMeshFixture, A1Fanout_2_0_DMTensixDM_BLOCKED_1Bx2_blk4) {
+    run_a1_fanout_blocked_pipeline(this->device(), 2, 4, 16);
+}
+TEST_F(UnitMeshFixture, A1Fanout_2_0_DMTensixDM_BLOCKED_1Bx4_blk4) {
+    run_a1_fanout_blocked_pipeline(this->device(), 4, 4, 16);
+}
+// Implicit DM producer with fan-out (C>P). The block-aware commit_implicit_read routes a whole block to
+TEST_F(UnitMeshFixture, A1Fanout_2_0_DMTensixDM_BLOCKED_1Bx2_blk4_impl) {
+    run_a1_fanout_blocked_pipeline(this->device(), 2, 4, 16, /*implicit=*/true);
+}
+
 }  // namespace tt::tt_metal
