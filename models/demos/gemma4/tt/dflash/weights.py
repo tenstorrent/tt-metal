@@ -13,6 +13,7 @@ own SharedMLP is GeGLU, the wrong activation for this Qwen3-style drafter).
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -86,17 +87,21 @@ def load_gemma4_dflash_weights(
 
     # fc: small (5376x32256), replicated on every device -- its output feeds
     # every layer's k_proj/v_proj (column-parallel, which need a full-width
-    # input), so it must not be TP-sharded itself.
+    # input), so it must not be TP-sharded itself. bfp8 halves weight bandwidth
+    # on the M x 32256 x 5376 matmul (production default). GEMMA4_DFLASH_FC_BFP8=0
+    # reverts to bf16.
+    fc_bfp8 = os.environ.get("GEMMA4_DFLASH_FC_BFP8", "1").lower() not in ("0", "false", "no")
+    fc_dtype = ttnn.bfloat8_b if fc_bfp8 else attn_dtype
     fc_w = fc_state_dict(flat)["weight"].transpose(-2, -1).unsqueeze(0).unsqueeze(0)  # [1,1,32256,5376]
     is_mesh = hasattr(mesh_device, "shape")
     replicate = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
     fc_tt = ttnn.as_tensor(
         fc_w,
         device=mesh_device,
-        dtype=attn_dtype,
+        dtype=fc_dtype,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=replicate,
-        cache_file_name=cache("fc.weight"),
+        cache_file_name=cache(f"{'bfp8_' if fc_bfp8 else ''}fc.weight"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 

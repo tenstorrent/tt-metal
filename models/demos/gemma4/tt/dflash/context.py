@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import ttnn
 from models.demos.gemma4.tt.dflash.weights import Gemma4DFlashWeights
+from models.demos.gemma4.tt.rms_norm import dflash_context_hidden_norm
 
 
 def compute_context(weights: Gemma4DFlashWeights, tapped_hidden_states: list[ttnn.Tensor]) -> ttnn.Tensor:
@@ -45,7 +46,7 @@ def compute_context(weights: Gemma4DFlashWeights, tapped_hidden_states: list[ttn
     concat = ttnn.concat(tapped_hidden_states, dim=-1)  # [1,1,seq,6*hidden_size]
     proj = ttnn.linear(concat, weights.fc)
     ttnn.deallocate(concat)
-    context = weights.hidden_norm(proj)
+    context = dflash_context_hidden_norm(weights.hidden_norm, proj)
     ttnn.deallocate(proj)
     return context
 
@@ -104,6 +105,6 @@ class ContextAccumulator:
         assert self._accum is not None, "finalize() called before any tap()"
         accum = self._accum
         self._accum = None
-        context = self.hidden_norm(accum)
+        context = dflash_context_hidden_norm(self.hidden_norm, accum)
         ttnn.deallocate(accum)
         return context

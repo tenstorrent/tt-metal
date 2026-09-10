@@ -1085,6 +1085,107 @@ def dflash_fc_linear_config(mesh_device, m: int, k: int, n: int):
     return None, None
 
 
+def dflash_ctx_kv_mode() -> str:
+    """DFlash ctx K/V projection matmul mode (``project_ctx_kv`` k/v linears).
+
+    Shape ``M x hidden x (local_kv * head_dim)`` — e.g. ``32 x 5376 x 128`` on T3K
+    TP=8. Swept at ``32 x 5376 x 128`` (2026-09-10): **auto_hifi3_destacc** won at
+    ~0.13 ms/call vs ``auto_hifi4`` ~0.23 ms (~44% faster); forced 1D/2D progcfgs did
+    not beat ttnn auto on this narrow-N shape. Default ``auto_hifi3_destacc``: ttnn
+    auto program selection, HiFi3, ``fp32_dest_acc_en=True``. See
+    ``test_dflash_ctx_kv_sweep.py`` (matmul) and ``test_dflash_ctx_kv_commit_sweep.py``
+    (full commit). Also ``decode_1d``, ``1d_c*``, ``2d_*`` progcfg modes.
+    """
+    return os.environ.get("GEMMA4_DFLASH_CTX_KV_MODE", "auto_hifi3_destacc").lower()
+
+
+def _dflash_ctx_kv_progcfg_from_mode(mesh_device, m: int, k: int, n: int, mode: str):
+    return _dflash_fc_progcfg_from_mode(mesh_device, m, k, n, mode)
+
+
+def dflash_ctx_kv_linear_config(mesh_device, m: int, k: int, n: int):
+    """``(program_config, compute_kernel_config)`` for DFlash ctx ``k_proj``/``v_proj``.
+
+    Default ``auto_hifi3_destacc``: ttnn auto + HiFi3 + fp32 dest-acc (sweep winner on
+    WH T3K at ``32 x 5376 x 128``). ``legacy`` / ``auto_hifi4`` restore prior paths.
+    """
+    mode = dflash_ctx_kv_mode()
+    if mode in ("0", "off", "legacy"):
+        return None, None
+    if mode == "auto_hifi4":
+        return None, _dflash_fc_ckc(mesh_device, "auto_hifi4")
+    if mode == "auto_hifi4_destacc":
+        return None, None
+    m = int(m)
+    if m <= 0 or k <= 0 or n <= 0:
+        return None, None
+    if mode == "decode_1d":
+        dec = decode_1d_matmul_config(mesh_device, k, n, m=min(m, TILE_SIZE))
+        if dec is None:
+            return None, None
+        return dec
+
+    program_config = _dflash_ctx_kv_progcfg_from_mode(mesh_device, m, k, n, mode)
+    if program_config is not None:
+        return program_config, _dflash_fc_ckc(mesh_device, "auto_hifi4")
+    if mode.startswith("auto"):
+        return None, _dflash_fc_ckc(mesh_device, mode)
+    return None, None
+
+
+def dflash_ctx_kv_linear_out_mode() -> str:
+    """Out memcfg for ctx ``k_proj``/``v_proj`` matmul.
+
+    ``auto`` (default): L1 when ``m*n`` fits the prefill L1 budget, else DRAM.
+    ``l1`` / ``dram`` force the destination. See ``test_dflash_ctx_kv_commit_sweep.py``.
+    """
+    return os.environ.get("GEMMA4_DFLASH_CTX_KV_LINEAR_OUT", "auto").lower()
+
+
+def dflash_ctx_kv_linear_out_memcfg(mesh_device, m: int, n: int):
+    """Device memory config for ctx k/v linear output."""
+    mode = dflash_ctx_kv_linear_out_mode()
+    if mode in ("dram", "0"):
+        return ttnn.DRAM_MEMORY_CONFIG
+    if mode in ("l1", "1"):
+        return ttnn.L1_MEMORY_CONFIG
+    return prefill_l1_out_memcfg(int(m), int(n))
+
+
+def dflash_ctx_kv_hidden_norm_mode() -> str:
+    """Ctx-commit ``hidden_norm`` variant (``project_ctx_kv`` on ``raw_rows``).
+
+    ``default`` / empty: interleaved DRAM-out (trace-safe in fused decoder).
+    ``l1``: isolated sweep winner; ``sharded`` / ``sharded_l1`` for experiments.
+    """
+    return os.environ.get("GEMMA4_DFLASH_CTX_KV_HIDDEN_NORM", "default").lower()
+
+
+def dflash_ctx_kv_merge_mode() -> str:
+    """Gather-merge path when writing new ctx K/V rows into ``ctx_k``/``ctx_v``.
+
+    ``dram`` (default): interleaved DRAM intermediates (current path).
+    ``l1``: concat / reshape / embedding output in L1 where supported.
+    ``l1_new``: only the ``new`` tensor is moved to L1 before concat.
+    ``l1_embed``: embedding gather output in L1 before assign.
+    """
+    return os.environ.get("GEMMA4_DFLASH_CTX_KV_MERGE", "dram").lower()
+
+
+def dflash_ctx_kv_skip_identity_merge() -> bool:
+    """Skip gather-merge when ``merge_idx`` is identity (no new rows referenced).
+
+    Default on for eager / Tracy paths where identity merge is a no-op. The
+    traced fused ``_body`` always runs the full merge (trace-safe fixed graph).
+    """
+    return os.environ.get("GEMMA4_DFLASH_CTX_KV_MERGE_SKIP_IDENTITY", "1").lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+
+
 class DramShardedLinear:
     """A single DRAM-width-sharded weight served for both decode and prefill.
 

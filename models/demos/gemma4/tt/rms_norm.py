@@ -382,3 +382,41 @@ class RMSNorm(nn.Module):
                     **out_kwargs,
                 )
             return tt_output
+
+
+def dflash_context_hidden_norm(rmsnorm: RMSNorm, x: ttnn.Tensor) -> ttnn.Tensor:
+    """Optimized ``hidden_norm`` after the dFlash ``fc`` projection.
+
+    Default: interleaved ``ttnn.rms_norm`` with DRAM output. Isolated sweeps
+    (``test_dflash_hidden_norm_sweep.py``) show L1-out is faster at M<=32, but
+    inside the fused ``DFlashFusedDecoder`` trace the extra L1 resident tensor
+    clashes with dataflow CBs (``dataflow_buffer.cpp`` L1 overlap). Width-sharded
+    norm regressed 4-9x at this row count; do not use the default sharded path.
+
+    Set ``GEMMA4_DFLASH_HIDDEN_NORM_L1=1`` for the L1-out experiment path.
+    ``GEMMA4_DFLASH_HIDDEN_NORM_LEGACY=1`` is an alias for the DRAM default.
+    """
+    if os.environ.get("GEMMA4_DFLASH_HIDDEN_NORM_L1", "0").lower() in ("1", "true", "yes"):
+        return rmsnorm(x, skip_sharded_path=True, interleaved_memory_config=ttnn.L1_MEMORY_CONFIG)
+    return rmsnorm(x, skip_sharded_path=True)
+
+
+def dflash_ctx_kv_hidden_norm(rmsnorm: RMSNorm, x: ttnn.Tensor) -> ttnn.Tensor:
+    """``hidden_norm`` on ctx commit rows inside ``project_ctx_kv``.
+
+    Default: interleaved DRAM-out (trace-safe in the fused decoder). Override via
+    ``GEMMA4_DFLASH_CTX_KV_HIDDEN_NORM`` for commit sweep experiments
+    (``test_dflash_ctx_kv_commit_sweep.py``); ``l1`` selects the isolated winner.
+    """
+    from models.demos.gemma4.tt.dram_sharded import dflash_ctx_kv_hidden_norm_mode
+
+    mode = dflash_ctx_kv_hidden_norm_mode()
+    if mode in ("", "default", "prod", "production", "legacy", "dram"):
+        return rmsnorm(x, skip_sharded_path=True)
+    if mode == "l1":
+        return rmsnorm(x, skip_sharded_path=True, interleaved_memory_config=ttnn.L1_MEMORY_CONFIG)
+    if mode == "sharded":
+        return rmsnorm(x, keep_sharded=False)
+    if mode == "sharded_l1":
+        return rmsnorm(x, keep_sharded=True)
+    return rmsnorm(x, skip_sharded_path=True)
