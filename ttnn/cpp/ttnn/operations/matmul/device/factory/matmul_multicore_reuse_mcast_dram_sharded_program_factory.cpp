@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -305,7 +305,6 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     // Semaphore IDs (manually assigned, matching CreateSemaphore sequential allocation)
     uint32_t in0_mcast_sender_semaphore_id = 0;
     uint32_t in0_mcast_receiver_semaphore_id = 1;
-    uint32_t in0_mcast_sender_valid_semaphore_id = 2;
 
     uint32_t in0_num_subblocks = (per_core_M / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -321,27 +320,24 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     }
 
     std::vector<uint32_t> in0_sender_compile_time_args = {
-        (std::uint32_t)in0_block_num_tiles,                         // in0_block_num_tiles
-        (std::uint32_t)in0_block_num_tiles * in0_single_tile_size,  // in0_block_size_bytes
-        (std::uint32_t)in0_last_ktile_w,                            // in0_last_ktile_w
-        (std::uint32_t)0,                                           // in0_last_ktile_h (transpose not supported)
+        (std::uint32_t)in0_block_num_tiles,                         // [0]  in0_block_num_tiles
+        (std::uint32_t)in0_block_num_tiles * in0_single_tile_size,  // [1]  in0_block_size_bytes
+        (std::uint32_t)in0_last_ktile_w,                            // [2]  in0_last_ktile_w
+        (std::uint32_t)0,                                           // [3]  in0_last_ktile_h (transpose unsupported)
         // in0 mcast args
-        (std::uint32_t)in0_mcast_sender_semaphore_id,
-        (std::uint32_t)in0_mcast_receiver_semaphore_id,
-        (std::uint32_t)num_worker_cores,  // in0_mcast_num_dests
-        (std::uint32_t)num_mcast_cores,   // in0_mcast_num_cores
+        (std::uint32_t)in0_mcast_sender_semaphore_id,    // [4]
+        (std::uint32_t)in0_mcast_receiver_semaphore_id,  // [5]
+        (std::uint32_t)num_worker_cores,                 // [6]  in0_mcast_num_dests
+        (std::uint32_t)num_mcast_cores,                  // [7]  in0_mcast_num_cores
         // block
-        (std::uint32_t)num_blocks,
+        (std::uint32_t)num_blocks,  // [8]
         // mcast noc coords
-        (std::uint32_t)start_core_noc.x,
-        (std::uint32_t)start_core_noc.y,
-        (std::uint32_t)end_core_noc.x,
-        (std::uint32_t)end_core_noc.y,
-        // semaphore valid
-        (std::uint32_t)in0_mcast_sender_valid_semaphore_id,
-        //
-        (std::uint32_t)num_blocks_per_shard,
-        (std::uint32_t)in0_block_w};
+        (std::uint32_t)start_core_noc.x,      // [9]
+        (std::uint32_t)start_core_noc.y,      // [10]
+        (std::uint32_t)end_core_noc.x,        // [11]
+        (std::uint32_t)end_core_noc.y,        // [12]
+        (std::uint32_t)num_blocks_per_shard,  // [13]
+        (std::uint32_t)in0_block_w};          // [14]
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         (std::uint32_t)in1_buffer_page_size,
@@ -654,8 +650,6 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         .id = in0_mcast_sender_semaphore_id, .core_ranges = all_cores_in_rect_grid, .initial_value = INVALID});
     desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
         .id = in0_mcast_receiver_semaphore_id, .core_ranges = all_cores_in_rect_grid, .initial_value = INVALID});
-    desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-        .id = in0_mcast_sender_valid_semaphore_id, .core_ranges = all_cores_in_rect_grid, .initial_value = VALID});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Runtime Args (per-core loop)
@@ -679,11 +673,18 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         in0_mcast_sender_noc_y.push_back((std::uint32_t)device->worker_core_from_logical_core(core).y);
     }
 
+    // The sender-coordinate table is the same on every node.
+    in0_sender_kernel_desc.common_runtime_args.reserve(in0_mcast_sender_noc_x.size() + in0_mcast_sender_noc_y.size());
+    in0_sender_kernel_desc.common_runtime_args.insert(
+        in0_sender_kernel_desc.common_runtime_args.end(), in0_mcast_sender_noc_x.begin(), in0_mcast_sender_noc_x.end());
+    in0_sender_kernel_desc.common_runtime_args.insert(
+        in0_sender_kernel_desc.common_runtime_args.end(), in0_mcast_sender_noc_y.begin(), in0_mcast_sender_noc_y.end());
+
     // in0 sender runtime args (mcast senders)
     uint32_t sender_id = 0;
     for (auto core : mcast_senders_coords) {
         std::vector<uint32_t> mm_in0_sender_args;
-        mm_in0_sender_args.reserve(3 + in0_mcast_sender_noc_x.size() + in0_mcast_sender_noc_y.size());
+        mm_in0_sender_args.reserve(3);
 
         uint32_t worker_core_type;
         if (find(storage_worker_common.begin(), storage_worker_common.end(), core) != storage_worker_common.end()) {
@@ -696,10 +697,6 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         mm_in0_sender_args.push_back((std::uint32_t)sender_id);
         mm_in0_sender_args.push_back(
             (std::uint32_t)((core == input_all_storage_cores_vec.back()) and (in0_last_ktile_w > 0)));
-        mm_in0_sender_args.insert(
-            mm_in0_sender_args.end(), in0_mcast_sender_noc_x.begin(), in0_mcast_sender_noc_x.end());
-        mm_in0_sender_args.insert(
-            mm_in0_sender_args.end(), in0_mcast_sender_noc_y.begin(), in0_mcast_sender_noc_y.end());
 
         in0_sender_kernel_desc.runtime_args.emplace_back(core, std::move(mm_in0_sender_args));
         sender_id++;
@@ -709,15 +706,11 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     std::vector<CoreCoord> mcast_receiver_coords = corerange_to_cores(mcast_receivers);
     for (auto core : mcast_receiver_coords) {
         std::vector<uint32_t> mm_in0_receiver_args;
-        mm_in0_receiver_args.reserve(3 + in0_mcast_sender_noc_x.size() + in0_mcast_sender_noc_y.size());
+        mm_in0_receiver_args.reserve(3);
         uint32_t worker_core_type = 3;
         mm_in0_receiver_args.push_back((std::uint32_t)worker_core_type);
         mm_in0_receiver_args.push_back((std::uint32_t)0);
         mm_in0_receiver_args.push_back((std::uint32_t)0);  // in0_last_ktile_w
-        mm_in0_receiver_args.insert(
-            mm_in0_receiver_args.end(), in0_mcast_sender_noc_x.begin(), in0_mcast_sender_noc_x.end());
-        mm_in0_receiver_args.insert(
-            mm_in0_receiver_args.end(), in0_mcast_sender_noc_y.begin(), in0_mcast_sender_noc_y.end());
 
         in0_sender_kernel_desc.runtime_args.emplace_back(core, std::move(mm_in0_receiver_args));
     }

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -30,8 +30,8 @@ void kernel_main() {
     constexpr uint32_t in0_mcast_dest_noc_start_y = get_compile_time_arg_val(10);
     constexpr uint32_t in0_mcast_dest_noc_end_x = get_compile_time_arg_val(11);
     constexpr uint32_t in0_mcast_dest_noc_end_y = get_compile_time_arg_val(12);
-    constexpr uint32_t num_blocks_per_shard = get_compile_time_arg_val(14);
-    constexpr uint32_t in0_block_w = get_compile_time_arg_val(15);
+    constexpr uint32_t num_blocks_per_shard = get_compile_time_arg_val(13);
+    constexpr uint32_t in0_block_w = get_compile_time_arg_val(14);
     constexpr uint32_t in0_block_h = in0_block_num_tiles / in0_block_w;
     constexpr uint32_t num_storage_cores = num_blocks / num_blocks_per_shard;
 
@@ -44,8 +44,9 @@ void kernel_main() {
     const uint32_t sender_id = get_arg_val<uint32_t>(1);
     const bool is_last_ktile_padded = static_cast<bool>(get_arg_val<uint32_t>(2));
 
-    tt_l1_ptr uint32_t* in0_mcast_sender_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(3));
-    tt_l1_ptr uint32_t* in0_mcast_sender_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(3 + num_storage_cores));
+    // The sender-coordinate table is identical on every node.
+    tt_l1_ptr uint32_t* in0_mcast_sender_noc_x = (tt_l1_ptr uint32_t*)(get_common_arg_addr(0));
+    tt_l1_ptr uint32_t* in0_mcast_sender_noc_y = (tt_l1_ptr uint32_t*)(get_common_arg_addr(num_storage_cores));
 
     const uint32_t sender_block_id = sender_id * num_blocks_per_shard;
 
