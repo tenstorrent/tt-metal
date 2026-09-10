@@ -21,7 +21,7 @@ Runs only against the Quasar simulator (no silicon): from tests/python_tests
 """
 
 import pytest
-from conftest import skip_for_coverage
+from conftest import quasar_only, skip_for_coverage
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import (
     ApproximationMode,
@@ -98,6 +98,7 @@ def _quasar_accuracy_params():
 QUASAR_ACCURACY_PARAMS = _quasar_accuracy_params()
 
 
+@quasar_only
 @skip_for_coverage
 @pytest.mark.quasar
 @pytest.mark.accuracy
