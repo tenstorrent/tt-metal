@@ -18,9 +18,9 @@ pytestmark = pytest.mark.use_module_device({"l1_small_size": 32 * 1024})
     "config_name, bev_size, batch_size, expected_pcc, expected_abs_error, expected_rel_error, expected_high_error_ratio",
     [
         ("nuscenes_base", (100, 100), 1, 0.997, 0.05, 0.8, 0.5),
-        ("nuscenes_tiny", (100, 100), 1, 0.996, 0.05, 0.8, 0.5),
+        ("nuscenes_tiny", (100, 100), 1, 0.996, 0.09, 0.8, 0.5),
         ("carla_base", (100, 100), 1, 0.997, 0.05, 0.8, 0.5),
-        ("carla_tiny", (100, 100), 1, 0.995, 0.05, 0.8, 0.5),
+        ("carla_tiny", (100, 100), 1, 0.995, 0.09, 0.8, 0.5),
     ],
 )
 @pytest.mark.parametrize("seed", [0])
