@@ -10,7 +10,7 @@
 // per-tensor geometry. The kernel builds a RemoteSenderCBInterface from that state,
 // runs the chunk-loop logic, and acks the socket page. A GCB's mutable fifo_wr_ptr
 // is written back so the next request to it resumes at the right ring offset; a
-// pipe's cursor is derived from its durable counters and needs no write-back.
+// pipe's is written back into its config page, where each receiver keeps its own copy.
 //
 // Request page wire format (one socket page): a TensorPrefetcherRequestHeader
 // (one-byte command id + per-command union). The STOP command (all-zero page) exits
@@ -226,11 +226,11 @@ FORCE_INLINE void prefetcher_sender_barrier(const RemoteSenderCBInterface& iface
 // share their first four words (is_sender, num_receivers, fifo_start, fifo_size), which is what lets
 // the loop keep reading fifo_size from config_ptr[3].
 //
-// The write cursor is not stored anywhere: it is derived from a receiver's durable entries_sent
-// counter. Receiver-contiguous delivery finalizes a round by crediting every receiver the same B
-// blocks, so all receivers share one cursor and receiver 0's is representative. That holds under
-// the streaming rotation too -- it varies which DRAM block feeds a receiver, not how much each one
-// is credited.
+// The write cursor comes from the pipe's own config page, where every receiver has a durable copy
+// beside its credit counters. Receiver-contiguous delivery finalizes a round by crediting every
+// receiver the same B blocks, so all receivers share one cursor and receiver 0's is representative.
+// That holds under the streaming rotation too -- it varies which DRAM block feeds a receiver, not
+// how much each one is credited.
 FORCE_INLINE void load_pipe_sender_state(
     const experimental::PipeSenderCtx& ctx, uint32_t entry_size, RemoteSenderCBInterface& iface) {
     iface.config_ptr = ctx.config_ptr;
@@ -240,7 +240,16 @@ FORCE_INLINE void load_pipe_sender_state(
     iface.aligned_pages_sent_ptr = ctx.local_counters_ptr;
     iface.num_receivers_and_remote_pages_sent_ptr = remote_cb_pack(ctx.num_receivers, ctx.remote_counters_base);
     iface.fifo_limit_page_aligned = ctx.fifo_start_addr + (ctx.ring_bytes - ctx.ring_bytes % entry_size);
-    iface.fifo_wr_ptr = ctx.fifo_start_addr + experimental::pipe_derived_wr_offset(ctx, 0);
+    iface.fifo_wr_ptr = ctx.fifo_start_addr + experimental::pipe_sender_wr_offset(ctx, 0);
+}
+
+// Put a tensor's finishing write cursor back into every receiver's slot in the pipe's config page,
+// which is where the next tensor's snap and the next program's load read it. The round loop advances
+// only the working copy in `iface` -- the cursor is per receiver, but recv-contig credits them
+// alike -- so this is the pipe's counterpart to store_sender_state.
+FORCE_INLINE void store_pipe_sender_state(const RemoteSenderCBInterface& iface, uint32_t num_receivers) {
+    experimental::pipe_store_wr_offset(
+        iface.aligned_pages_sent_ptr, num_receivers, iface.fifo_wr_ptr - iface.fifo_start_addr);
 }
 
 // Loads the per-GCB sender state block's RemoteSenderCBInterface-compatible region
@@ -440,7 +449,7 @@ void kernel_main() {
                 reinterpret_cast<volatile tt_l1_ptr uint8_t*>(g) + sizeof(TensorPrefetcherTensorLayout));
 
             if (is_pipe) {
-                // Snap every receiver's derived write cursor onto this tensor's entry grid before
+                // Snap every receiver's stored write cursor onto this tensor's entry grid before
                 // rebuilding the interface, publishing the skipped bytes as pad credits. The
                 // consumer's PrefetcherPipe constructor runs the matching snap when its Attach
                 // entry size differs from the one last applied and blocks on exactly these credits,
@@ -451,8 +460,8 @@ void kernel_main() {
                 experimental::pipe_load_sender_ctx(pipe_ctx, target_state_addr);
                 experimental::pipe_set_entry_size(pipe_ctx, t_page_bytes_per_recv, noc_index);
                 // Rebuild the interface from the PrefetcherPipe config page each tensor. The write
-                // cursor comes from the durable per-receiver counters, which is what makes it
-                // resume correctly across requests and across programs.
+                // cursor comes out of that page, which is what makes it resume correctly across
+                // requests and across programs.
                 load_pipe_sender_state(pipe_ctx, t_page_bytes_per_recv, iface);
             } else {
                 // Set the sender fifo page size to one full per-receiver page. When resize skips
@@ -877,6 +886,11 @@ void kernel_main() {
                     pages_sent_global += B;
                 }
             }
+            if (is_pipe) {
+                // Per tensor rather than per request: the next entry in this same request snaps
+                // its cursors onto its own entry grid, and that snap reads them from the page.
+                store_pipe_sender_state(iface, num_receivers);
+            }
         }
 
         // ---- Profile dump (only emitted when watcher ring-buffer is enabled) ----
@@ -897,8 +911,8 @@ void kernel_main() {
         PROF_DUMP(0xB1u, stage_third);
 
         // Persist mutable state (fifo_wr_ptr) so the next request to this GCB resumes at the right
-        // ring offset. A PrefetcherPipe has nothing to write back: its cursor is derived from the
-        // per-receiver credit counters, which finalize already advanced.
+        // ring offset. A PrefetcherPipe writes its cursor back per tensor instead, into the config
+        // page every one of its receivers holds a copy in.
         if (!is_pipe) {
             store_sender_state(state, iface);
         }
