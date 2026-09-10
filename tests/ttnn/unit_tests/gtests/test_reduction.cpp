@@ -362,6 +362,91 @@ TEST(ReduceHostPlanner, BasicAlgorithmAndChunkSanity) {
         0));
 }
 
+TEST(ReduceHostPlanner, AdditiveThresholdSpansAccumulatedCalls) {
+    using namespace tt::tt_metal;
+    using namespace ttnn::kernel_lib::host;
+
+    const auto make_tiled_spec = [](const Shape& shape) {
+        return TensorSpec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{}));
+    };
+    const ReduceHardwareConfig hardware{
+        .arch = tt::ARCH::BLACKHOLE,
+        .fp32_dest_acc_en = false,
+        .dst_full_sync_en = false,
+        .available_l1_bytes = 1U << 20,
+    };
+    const auto output = make_tiled_spec(Shape{1, 1, 32, 1});
+
+    const auto make_reductions = [&](const Shape& shape, std::uint32_t count) {
+        std::vector<ReduceCbConfig> reductions;
+        for (std::uint32_t i = 0; i < count; ++i) {
+            reductions.push_back(
+                {i,
+                 ReduceCallConfig{
+                     .input_spec = make_tiled_spec(shape),
+                     .output_spec = output,
+                     .reduce_math = ReduceOpMath::SUM,
+                     .reduce_dim = ReduceOpDim::W,
+                     .scalar = 1.0F,
+                     .fp32_mode = ReduceFp32Mode::Fast}});
+        }
+        return reductions;
+    };
+    const ReduceSequenceCbIds cb_ids{.auxiliary_cb_id = 8U, .accumulator_cb_id = 9U, .output_cb_id = 10U};
+
+    // Two tiles along W is below the W threshold of four, so one such call on its own uses ReduceTile.
+    const auto single = make_reduce_plan(
+        make_tiled_spec(Shape{1, 1, 32, 2 * 32}),
+        output,
+        ReduceOpMath::SUM,
+        ReduceOpDim::W,
+        1.0F,
+        ReduceFp32Mode::Fast,
+        hardware);
+    EXPECT_EQ(single.algorithm, compute_kernel_lib::ReduceAlgorithm::ReduceTile);
+
+    // Accumulating two of them reduces four tiles for one finalization, so the sequence clears the threshold.
+    const auto pooled = make_reduce_sequence_plan(make_reductions(Shape{1, 1, 32, 2 * 32}, 2), cb_ids, hardware);
+    ASSERT_EQ(pooled.calls.size(), 2U);
+    for (const auto& call : pooled.calls) {
+        EXPECT_EQ(call.plan.algorithm, compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd);
+    }
+
+    // Four single-tile calls also clear it, and the sequence stays homogeneous.
+    const auto pooled_singles = make_reduce_sequence_plan(make_reductions(Shape{1, 1, 32, 32}, 4), cb_ids, hardware);
+    ASSERT_EQ(pooled_singles.calls.size(), 4U);
+    for (const auto& call : pooled_singles.calls) {
+        EXPECT_EQ(call.plan.algorithm, compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd);
+    }
+
+    // A sequence whose grand total is still below the threshold keeps ReduceTile.
+    const auto below = make_reduce_sequence_plan(make_reductions(Shape{1, 1, 32, 32}, 2), cb_ids, hardware);
+    ASSERT_EQ(below.calls.size(), 2U);
+    for (const auto& call : below.calls) {
+        EXPECT_EQ(call.plan.algorithm, compute_kernel_lib::ReduceAlgorithm::ReduceTile);
+    }
+
+    // H uses a threshold of eight; four calls of two row tiles each reach it.
+    const auto col_output = make_tiled_spec(Shape{1, 1, 1, 32});
+    std::vector<ReduceCbConfig> col_reductions;
+    for (std::uint32_t i = 0; i < 4; ++i) {
+        col_reductions.push_back(
+            {i,
+             ReduceCallConfig{
+                 .input_spec = make_tiled_spec(Shape{1, 1, 2 * 32, 32}),
+                 .output_spec = col_output,
+                 .reduce_math = ReduceOpMath::SUM,
+                 .reduce_dim = ReduceOpDim::H,
+                 .scalar = 1.0F,
+                 .fp32_mode = ReduceFp32Mode::Fast}});
+    }
+    const auto col_sequence = make_reduce_sequence_plan(col_reductions, cb_ids, hardware);
+    ASSERT_EQ(col_sequence.calls.size(), 4U);
+    for (const auto& call : col_sequence.calls) {
+        EXPECT_EQ(call.plan.algorithm, compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd);
+    }
+}
+
 class ReductionSmoke : public TTNNFixtureWithSuiteDevice<ReductionSmoke> {};
 
 namespace detail {

@@ -226,6 +226,28 @@ bool add_is_legal(
 
 std::uint32_t add_threshold(ReduceOpDim dim) { return dim == ReduceOpDim::W ? 4U : 8U; }
 
+// Reduction-axis tile count as the two planning paths derive it, without planning. The sequence
+// planner sums this across accumulated calls to test the additive threshold once for the sequence.
+std::uint32_t threshold_axis_tiles_of(const tt::tt_metal::TensorSpec& input, ReduceOpDim dim) {
+    const auto& logical = input.logical_shape();
+    const auto& padded = input.padded_shape();
+    const auto tile = input.tile();
+    // The dense row-major path derives Ht from the logical height; the tiled path uses the padded height.
+    const std::uint32_t height = input.layout() == Layout::ROW_MAJOR
+                                     ? checked_u32(logical[logical.rank() - 2], "threshold logical height")
+                                     : checked_u32(padded[padded.rank() - 2], "threshold padded height");
+    const std::uint32_t width = checked_u32(padded[padded.rank() - 1], "threshold padded width");
+    const std::uint32_t ht = div_up_u32(height, tile.get_height());
+    const std::uint32_t wt = div_up_u32(width, tile.get_width());
+    if (dim == ReduceOpDim::W) {
+        return wt;
+    }
+    if (dim == ReduceOpDim::H) {
+        return ht;
+    }
+    return checked_mul_u32(ht, wt, "threshold HW tile count");
+}
+
 void configure_scalar_and_aux(
     ReducePlan& plan,
     ReduceOpMath math,
@@ -285,7 +307,8 @@ ReducePlan make_tiled_plan(
     ReduceFp32Mode fp32_mode,
     const ReduceHardwareConfig& hardware,
     std::optional<std::size_t> max_input_cb_bytes,
-    std::optional<ReduceAlgorithm> forced_algorithm) {
+    std::optional<ReduceAlgorithm> forced_algorithm,
+    std::optional<std::uint32_t> threshold_axis_tiles) {
     ReducePlan plan;
     plan.path = ReducePath::Tiled;
 
@@ -327,7 +350,7 @@ ReducePlan make_tiled_plan(
     const bool scalar_has_2d_partial = dim == ReduceOpDim::HW && ((logical_h % tile_h) || (logical_w % tile_w));
 
     const auto automatic_algorithm = add_is_legal(input, math, dim, fp32_mode, hardware, scalar_has_2d_partial) &&
-                                             reduced_tiles >= add_threshold(dim)
+                                             threshold_axis_tiles.value_or(reduced_tiles) >= add_threshold(dim)
                                          ? ReduceAlgorithm::AccumulateViaAdd
                                          : ReduceAlgorithm::ReduceTile;
     TT_FATAL(
@@ -481,7 +504,8 @@ ReducePlan make_row_major_plan(
     ReduceFp32Mode fp32_mode,
     const ReduceHardwareConfig& hardware,
     std::optional<std::size_t> max_input_cb_bytes,
-    std::optional<ReduceAlgorithm> forced_algorithm) {
+    std::optional<ReduceAlgorithm> forced_algorithm,
+    std::optional<std::uint32_t> threshold_axis_tiles) {
     TT_FATAL(dim == ReduceOpDim::W || dim == ReduceOpDim::H, "Reduce planner: dense row-major supports W or H only");
     TT_FATAL(
         math == ReduceOpMath::SUM,
@@ -522,10 +546,10 @@ ReducePlan make_row_major_plan(
     const std::uint32_t logical_reduce_elements = dim == ReduceOpDim::W ? logical_w : logical_h;
     const std::uint32_t partial_elements = dim == ReduceOpDim::W ? logical_w % tile_w : logical_h % tile_h;
     const bool has_partial = partial_elements != 0 && (math == ReduceOpMath::SUM || math == ReduceOpMath::AVG);
-    const auto automatic_algorithm =
-        add_is_legal(input, math, dim, fp32_mode, hardware, false) && reduced_tiles >= add_threshold(dim)
-            ? ReduceAlgorithm::AccumulateViaAdd
-            : ReduceAlgorithm::ReduceTile;
+    const auto automatic_algorithm = add_is_legal(input, math, dim, fp32_mode, hardware, false) &&
+                                             threshold_axis_tiles.value_or(reduced_tiles) >= add_threshold(dim)
+                                         ? ReduceAlgorithm::AccumulateViaAdd
+                                         : ReduceAlgorithm::ReduceTile;
     TT_FATAL(
         !forced_algorithm.has_value() || *forced_algorithm != ReduceAlgorithm::AccumulateViaAdd ||
             automatic_algorithm == ReduceAlgorithm::AccumulateViaAdd,
@@ -689,7 +713,8 @@ ReducePlan make_reduce_plan_impl(
     ReduceFp32Mode fp32_mode,
     const ReduceHardwareConfig& hardware,
     std::optional<std::size_t> max_input_cb_bytes,
-    std::optional<ReduceAlgorithm> forced_algorithm) {
+    std::optional<ReduceAlgorithm> forced_algorithm,
+    std::optional<std::uint32_t> threshold_axis_tiles = std::nullopt) {
     TT_FATAL(
         reduce_math != tt::tt_metal::ReduceOpMath::STD && reduce_math != tt::tt_metal::ReduceOpMath::VAR,
         "Reduce planner: Welford STD/VAR reductions are outside this planner");
@@ -725,7 +750,8 @@ ReducePlan make_reduce_plan_impl(
             fp32_mode,
             hardware,
             max_input_cb_bytes,
-            forced_algorithm);
+            forced_algorithm,
+            threshold_axis_tiles);
     } else {
         plan = make_tiled_plan(
             input_spec,
@@ -736,7 +762,8 @@ ReducePlan make_reduce_plan_impl(
             fp32_mode,
             hardware,
             max_input_cb_bytes,
-            forced_algorithm);
+            forced_algorithm,
+            threshold_axis_tiles);
     }
     plan.reduce_math = reduce_math;
     plan.reduce_dim = reduce_dim;
@@ -922,6 +949,16 @@ ReduceSequencePlan make_reduce_sequence_plan(
     std::vector<ReducePlan> plans;
     plans.reserve(reductions.size());
 
+    // AccumulateViaAdd pays its fixed finalization cost — the within-tile sfpu_reduce collapse and the AVG
+    // normalization — once, at the Final call, while its cheaper per-tile fold applies to every call. The
+    // break-even threshold therefore tests the whole sequence's reduction axis, not one call's.
+    std::uint64_t sequence_axis_tiles = 0;
+    for (const auto& [input_cb_id, config] : reductions) {
+        (void)input_cb_id;
+        sequence_axis_tiles += threshold_axis_tiles_of(config.input_spec, config.reduce_dim);
+    }
+    const auto threshold_axis_tiles = checked_u32(sequence_axis_tiles, "sequence reduction axis tile count");
+
     for (const auto& [input_cb_id, config] : reductions) {
         TT_FATAL(
             input_cb_id != cb_ids.auxiliary_cb_id && input_cb_id != cb_ids.output_cb_id &&
@@ -951,7 +988,8 @@ ReduceSequencePlan make_reduce_sequence_plan(
             config.fp32_mode,
             hardware,
             config.max_input_cb_bytes,
-            std::nullopt));
+            std::nullopt,
+            threshold_axis_tiles));
     }
 
     // A raw AccumulateViaAdd partial and a finalized ReduceTile partial are different accumulator formats.
@@ -972,7 +1010,8 @@ ReduceSequencePlan make_reduce_sequence_plan(
                 config.fp32_mode,
                 hardware,
                 config.max_input_cb_bytes,
-                ReduceAlgorithm::ReduceTile));
+                ReduceAlgorithm::ReduceTile,
+                threshold_axis_tiles));
         }
     }
 
