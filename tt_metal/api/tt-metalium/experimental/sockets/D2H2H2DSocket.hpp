@@ -191,8 +191,6 @@ public:
     void set_store_guard(const StoreGuard& g) { store_guard_ = g; }
     uint64_t store_faults() const { return store_faults_.load(std::memory_order_relaxed); }
 
-    // A socket named for a five-hop path cannot be constructed without the hop in the middle.
-    // `transport` is held by reference and must outlive the socket.
     D2H2H2DSocket(HostRegion& region, Deliverer* deliverer, HostTopology topo,
                   ClockSync clock, SocketConfig cfg, Transport& transport);
     ~D2H2H2DSocket();
@@ -200,22 +198,13 @@ public:
     D2H2H2DSocket(const D2H2H2DSocket&) = delete;
     D2H2H2DSocket& operator=(const D2H2H2DSocket&) = delete;
 
-    // Builds the peer table, starts the sender thread, then starts the scan pool.
-    //
     bool open(std::string& err);
 
-    // Scanner first, then the sender. That order is not cosmetic: the workers are what FILL
-    // the send queue, so stopping them first is what lets the queue drain to empty instead of
-    // being abandoned with work in it.
     void stop();
 
-    // --- what the caller waits on -----------------------------------------
     const SocketCounters& counters() const { return counters_; }
     std::string first_error() const;
 
-    // True once the middle hop has failed a post or a drain. A faulted transport does not
-    // recover, so a caller spinning on counters would otherwise sit there until its own
-    // deadline.
     bool transport_failed() const { return transport_failed_.load(std::memory_order_acquire); }
 
     void set_recording(bool on) {
@@ -225,15 +214,9 @@ public:
 
     Transport& transport() const { return transport_; }
 
-    // Registered before open(). The constructor takes one transport
-    // because at two hosts there is exactly one; a mesh passes the first as that primary and
-    // the rest through here. Must be called before open() -- open() builds the table from them
-    // and the sender thread reads it without synchronisation afterwards.
+    // Registered before open()
     void add_peer(Transport* t) { extra_peers_.push_back(t); }
 
-    // Every connected peer, for the driver's end-of-send / end-of-receive barriers. ASCENDING
-    // host id -- PeerTable::all() walks its entries in index order -- because a common order
-    // across ranks is what makes N pairwise barriers deadlock-free.
     std::vector<Transport*> peers_for_barrier() const { return peers_.all(); }
 
     void stamp_timed_start() {
@@ -258,7 +241,6 @@ public:
     HostRegion& region() const { return region_; }
 
 private:
-    // ---- the service path, on the scan workers ---------------------------
 
     uint64_t service_one(const Job& job, WorkerStats& ws);
     uint64_t service_rx(const Job& job, WorkerStats& ws, bool rec);
@@ -267,16 +249,8 @@ private:
     uint64_t deliver_to_l1(const Job& job, WorkerStats& ws, uint32_t stage, uint64_t& stage_ns,
                            bool rec);
 
-    // `visibility_ns` receives the read-back half of the split elapsed operand -- the cost of
-    // PROVING the push landed, which is inside the returned total. Zero when the probe was not
-    // armed or the message predates kFlagElapsedSplit.
     uint64_t elapsed_ns_of(const Job& job, bool& usable, uint64_t& visibility_ns) const;
 
-    // ---- the middle hop --------------------------------------------------
-
-    // commented out b/c deadcode -- the trailing `bool reply` is always false
-    // uint64_t deliver_remote(const Job& job, WorkerStats& ws, uint32_t dest_core, uint64_t length,
-    //                         uint64_t accumulated_ns, bool reply);
     uint64_t deliver_remote(const Job& job, WorkerStats& ws, uint32_t dest_core, uint64_t length,
                             uint64_t accumulated_ns);
 
@@ -285,12 +259,6 @@ private:
     void append_transport_stats(RunStats& s) const;
     void dump_transport(std::string& into) const;
 
-    // A credit for a remotely-armed notice: the sender cannot see its slot is free any other
-    // way. The credit has to name a peer as well as a core.
-    // `turnaround_ns` is the kHopRemoteHostToRemoteT6 delta we just measured for the message
-    // being credited, on OUR clock. It rides home in the credit word so the sender can subtract
-    // it from its own post -> credit-visible bracket -- tt-fabric's responder pattern. See
-    // credit_pack().
     void return_credit(uint32_t origin_selector, uint64_t turnaround_ns);
 
     // ---- shared helpers --------------------------------------------------
@@ -298,30 +266,20 @@ private:
     void retire_tx(uint32_t core);
     static void add_sample(WorkerStats& ws, bool rec, uint32_t hop, uint64_t ns);
     static void add_sample_with_size(WorkerStats& ws, bool rec, uint32_t hop, uint64_t ns, uint64_t amt);
-    // The hop's sample plus the payload that crossed it, under the one warmup gate.
     static void add_sample_with_payload(WorkerStats& ws, bool rec, uint32_t hop, uint64_t ns, uint64_t payload);
-    // The same, plus the ELAPSED WINDOW that contains those bytes -- which is the denominator a
-    // bandwidth needs. Four fields behind one bool, for the reason add_sample() gives: a leg
-    // whose bytes and window came from two differently-gated sites would divide one population
-    // by another's clock. See Span and basic_csv_header().
     static void add_sample_with_window(WorkerStats& ws, bool rec, uint32_t hop, uint64_t ns,
                                        uint64_t payload, uint64_t open_ns, uint64_t close_ns);
     bool recording() const { return recording_.load(std::memory_order_relaxed); }
 
     bool recording_now();
 
-    // A staging slot per thread. post_notice must source its bytes from our own registered
-    // region, and two threads staging into the same bytes would interleave their notices.
     static uint32_t my_stage_slot();
 
-    // ---- what a scan worker hands to the sender --------------------------
     struct SendReq {
         uint32_t src_core = 0;
         uint32_t dest_core = 0;
         uint64_t length = 0;
         uint64_t accumulated_ns = 0;
-        // commented out b/c deadcode
-        // bool reply = false;
         uint64_t t_queued = 0;
         // The effective address, forwarded unmodified. Zero means "not a store".
         uint64_t dest_uva = 0;
@@ -332,16 +290,6 @@ private:
 
     // A message in flight, per core.
     struct SendSlot {
-        // kPayloadLocal sits BETWEEN the other two, and it exists because those are two different
-        // facts. MPI_Rput's handle retires when THIS host is done with the TX arena; it promises
-        // nothing about the peer. Only Transport::flush() promises that, and it costs a round
-        // trip with no nonblocking form to hide it behind.
-        //
-        // So the flush is amortised over every slot sitting in this phase at once -- which is why
-        // it is a phase rather than a call inside send_poll(). Flushing where the notice is armed
-        // would put a full round trip on each message; flushing per lap divides one round trip by
-        // the send window (sender_loop())
-	//
         enum Phase : uint8_t { kIdle = 0, kAwaitPayload = 1, kAwaitNotice = 2, kPayloadLocal = 3 };
         uint8_t phase = kIdle;
         SendReq r{};
@@ -349,25 +297,13 @@ private:
         OpHandle notice_op{};
         uint64_t t0 = 0;
         uint64_t deadline = 0;
-        // The endpoint this message was posted on -- a completion must be reaped on the same
-        // transport that produced it, or with several peers the poll either never sees it or
-        // reaps somebody else's and attributes the host-to-host stage to the wrong message.
         Transport* tp = nullptr;
         // Which of the destination core's receive slots this sender owns. DERIVED from the
         // source, not claimed -- so a slot has one lifetime source and needs no ticket, no
         // tail pointer and no lap check.
-        // commented out b/c deadcode -- always 0; send_arm_notice() now passes the literal
         // uint32_t rx_slot = 0;
     };
 
-    // Single outstanding credit measurement per core, and one is all a core can have: its
-    // destination has a single RX control word, so a second message cannot be armed until the
-    // first is credited.
-    //
-    // Armed when the notice retires (we know the message's absolute count there) and disarmed by
-    // the sender loop's credit pass. Owned by the sender thread ALONE: nothing else reads or
-    // writes it, which is why it needs no lock and no atomics.
-    //
     struct CreditWatch {
         bool armed = false;
         bool timed = false;      // the message passed the straddler test when it was posted
@@ -402,16 +338,9 @@ private:
     SocketCounters counters_;
     Transport& transport_;
 
-    // Per-core state. Sized to the provisioned maximum rather than cfg_.cores so an
-    // out-of-range core index from a corrupt operand indexes a real slot instead of running
-    // off the end.
     std::vector<std::vector<std::atomic<uint64_t>>> credit_out_;  // remote deliveries echoed back
     std::vector<std::atomic<uint64_t>> delivered_per_core_;       // the value rdma_signal carries
-    // Single delivery at a time per core. The H2D endpoint, its write pointer and the per-core
-    // acked snapshot the delivery wait measures against are all per-core state with NO
-    // per-message identity; letting two of a core's receive slots be delivered concurrently by
-    // two stealing workers raced all three. A converged end state cannot see a delivery that
-    // returned before its own bytes landed.
+    // Single delivery at a time per core.
     std::vector<std::mutex> deliver_m_;
     std::vector<std::atomic<uint64_t>> notice_sent_;  // notices armed in the peer's bank
     std::vector<std::atomic<uint64_t>> tx_retired_;   // the value rdma_completion carries
@@ -432,7 +361,6 @@ private:
     mutable std::mutex err_mutex_;
     std::string first_error_;
 
-    // ---- the sender -------------------------------------------------------
     std::atomic<bool> transport_failed_{false};
 
     // Each core has a single queue. A destination core has one RX control word, so at most one message
@@ -459,10 +387,8 @@ private:
     static constexpr std::chrono::microseconds kCreditFlushInterval{100};
     std::chrono::steady_clock::time_point last_credit_flush_{};
     std::atomic<uint64_t> credit_flushes_{0};
-    // RX-SIDE CREDIT GATE INSTRUMENTATION. deliver_remote() only returns a credit
-    // when the arriving ctrl word carries kFlagRemoteNotice. The stall dump's ctrl_rx is read
-    // from the region at dump time, so it cannot tell "the flag never arrived" from "the word
-    // was consumed and cleared". These record what was actually seen at consumption.
+    // rx-side credit gate instrumentation. deliver_remote() only returns a credit
+    // when the arriving ctrl word carries kFlagRemoteNotice.
     std::atomic<uint64_t> rx_deliveries_{0};        // times deliver_remote() reached the gate
     std::atomic<uint64_t> rx_remote_notice_{0};     // ... of those, how many had the flag
     std::atomic<uint64_t> rx_first_ctrl_{0};        // the first ctrl word consumed, verbatim
