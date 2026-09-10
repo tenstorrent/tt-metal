@@ -25,6 +25,7 @@ from tracy import signpost
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
+from models.demos.deepseek_v3_d_p.tt.moe.routing_capture import maybe_capture
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_latent_proj import TtLatentMoeProjections
@@ -289,6 +290,7 @@ class TtMoe(LightweightModule):
                 the shared expert takes shared_expert_activation, which is a separate knob.
         """
         super().__init__()
+        self._layer_idx = layer_idx
         self.mesh_device = mesh_device
         # Shared per-mesh CCL singleton: persistent global semaphores for the TP all-gather of x,
         # so all_gather_async reuses them instead of leaking fresh L1 semaphores every layer.
@@ -677,6 +679,9 @@ class TtMoe(LightweightModule):
             padding_config=padding_config,
             actual_start=actual_start or 0,
         )
+
+        # No-op unless TT_DS_DUMP_ROUTING is set; see tt/moe/routing_capture.py.
+        maybe_capture(indices, self._layer_idx, actual_isl)
 
         tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = self.routing_setup(
             ttnn_top_k_experts_indices=indices,
