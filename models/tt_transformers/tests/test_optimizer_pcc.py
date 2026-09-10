@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import gc
 import os
+import tempfile
+from pathlib import Path
 
 import pytest
 import torch
@@ -18,8 +20,18 @@ from models.tt_transformers.tt.model_config import DecodersPrecision
 
 
 INPUT_IDS = [128000] + [1000 + ((index * 7919) % 120000) for index in range(127)]
+# Floor for the worst of prefill and decode PCC against the Hugging Face bf16 reference. The
+# production full-model test accepts 0.86 for this performance-precision configuration.
 PCC_THRESHOLD = 0.90
 MAX_SEQ_LEN = 2048
+# See test_optimizer_perf.CACHE_ROOT: a fresh weight cache forces the HF conversion path and avoids
+# the warm-cache load that has hung on the embedding file. Gitignored, inside the checkout.
+CACHE_ROOT = Path(__file__).resolve().parents[3] / "generated" / "optimizer_cache"
+
+
+def _logits(result) -> torch.Tensor:
+    """decode_forward returns (logits, log_probs) when sampling is done on host; keep the logits."""
+    return result[0] if isinstance(result, tuple) else result
 
 
 def _pcc(actual: torch.Tensor, expected: torch.Tensor) -> float:
@@ -41,11 +53,14 @@ def _close(mesh_device):
 
 
 @pytest.mark.no_reset_default_device
-@pytest.mark.timeout(300)
-def test_optimizer_full_model_pcc():
+@pytest.mark.timeout(1800)
+def test_optimizer_full_model_pcc(monkeypatch):
     """Compare full-depth prefill and one teacher-forced decode with Hugging Face."""
     model_path = os.environ["HF_MODEL"]
     mesh_device = generator = model = model_args = reference = state_dict = tt_kv_cache = None
+    CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+    cache = tempfile.TemporaryDirectory(prefix="pcc-", dir=str(CACHE_ROOT))
+    monkeypatch.setenv("TT_CACHE_PATH", cache.name)
     try:
         ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
         mesh_device = ttnn.open_mesh_device(
@@ -98,15 +113,17 @@ def test_optimizer_full_model_pcc():
             warmup_prefill=False,
         ).reshape(1, -1)
         prefill_pcc = _pcc(tt_prefill, hf_prefill)
-        tt_decode = generator.decode_forward(
-            teacher_token.reshape(1, 1),
-            torch.tensor([len(INPUT_IDS)], dtype=torch.int64),
-            page_table=page_table,
-            kv_cache=kv_cache,
-            enable_trace=False,
-            read_from_device=True,
-            sampling_params=None,
-            reset_batch=True,
+        tt_decode = _logits(
+            generator.decode_forward(
+                teacher_token.reshape(1, 1),
+                torch.tensor([len(INPUT_IDS)], dtype=torch.int64),
+                page_table=page_table,
+                kv_cache=kv_cache,
+                enable_trace=False,
+                read_from_device=True,
+                sampling_params=None,
+                reset_batch=True,
+            )
         ).reshape(1, -1)
         decode_pcc = _pcc(tt_decode, hf_decode)
         measured_pcc = min(prefill_pcc, decode_pcc)
@@ -124,3 +141,4 @@ def test_optimizer_full_model_pcc():
         tt_kv_cache = None
         gc.collect()
         _close(mesh_device)
+        cache.cleanup()
