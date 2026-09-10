@@ -10,6 +10,7 @@ from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
 from fuser.l1_operation import L1Operation
+from fuser.operand import BfdResource, bfd_current
 from fuser.tile_loop import LoopBlock, TileLoop
 
 
@@ -66,16 +67,19 @@ class MatmulUnpacker(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        buf_desc_id_a = compute_unit.src_a.buf_desc_id
-        buf_desc_id_b = compute_unit.src_b.buf_desc_id
+        bfd_program = compute_unit.src_a.bfd_alloc_and_program(
+            BfdResource.UNP1
+        ) + compute_unit.src_b.bfd_alloc_and_program(BfdResource.UNP0)
+        id_a = bfd_current(BfdResource.UNP1)
+        id_b = bfd_current(BfdResource.UNP0)
         rt_dim = block.block_tiles_y
         ct_dim = block.block_tiles_x
         num_cols = compute_unit.src_a.tile_shape.total_col_dim()
         kt_dim = compute_unit.src_a.dimensions[1] // num_cols
 
         return (
-            f"_llk_unpack_matmul_init_<false>"
-            f"({buf_desc_id_a}, {buf_desc_id_b}, {ct_dim}, {rt_dim}, {kt_dim});\n"
+            bfd_program + f"_llk_unpack_matmul_init_<false>"
+            f"({id_a}, {id_b}, {ct_dim}, {rt_dim}, {kt_dim});\n"
         )
 
     def unpack(

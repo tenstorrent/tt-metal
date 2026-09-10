@@ -126,8 +126,17 @@ MlaQRopeDeviceOperation::tensor_return_value_t MlaQRopeDeviceOperation::create_o
 
 ttsl::hash::hash_t MlaQRopeDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // Memory configs are hashed because TensorAccessorArgs bake buffer placement into
+    // compile-time args, so a placement change must not reuse a cached program.
     return tt::tt_metal::operation::hash_operation<MlaQRopeDeviceOperation>(
-        args, tensor_args.q_in.dtype(), tensor_args.q_in.logical_shape(), tensor_args.cos_cache.logical_shape());
+        args,
+        tensor_args.q_in.dtype(),
+        tensor_args.q_in.logical_shape(),
+        tensor_args.cos_cache.logical_shape(),
+        tensor_args.q_in.memory_config(),
+        tensor_args.cos_cache.memory_config(),
+        tensor_args.sin_cache.memory_config(),
+        tensor_args.trans_mat.memory_config());
 }
 
 MlaQRopeDeviceOperation::program_factory_t MlaQRopeDeviceOperation::select_program_factory(

@@ -17,6 +17,12 @@ class KimiK26Config:
     EMB_SIZE = 7168  # embedding dimension
     FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
     MOE_INTERMEDIATE_SIZE = 2048  # MoE FFN hidden dimension
+    # Routed-expert hybrid split. moe_fused_swiglu beat the composite at EVERY measured
+    # token count on the 7168x2048 routed-expert shape (1.02-2.37x across 0-5120 tokens),
+    # so there is no crossover to place a threshold at. A bound this far above any
+    # per-expert region leaves the composite an empty band, which TtRoutedExpert reads as
+    # 'fused owns the layer' and drops the composite dispatch entirely.
+    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 2**31 - 1
     INTERMEDIATE_SIZE = 18432  # Dense FFN hidden dimension
 
     # MoE configuration

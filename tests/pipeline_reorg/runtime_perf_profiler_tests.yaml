@@ -47,3 +47,24 @@
       timeout: 5
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+
+# --- Data movement regressions ---
+- name: runtime_perf_data_movement
+  cmd: |
+    export TT_METAL_DEVICE_PROFILER=1
+    export TRACY_NO_INVARIANT_CHECK=1
+    export PYTHONPATH="${TT_METAL_HOME}/tools:${PYTHONPATH}"
+    # Skip repo-root conftest.py (it imports ttnn.device). Flags live in this
+    # directory's conftest.py, so --confcutdir keeps collection self-contained
+    # without installing a wheel into the shared profiler job.
+    pytest -svv --confcutdir=tests/tt_metal/tt_metal/data_movement/python \
+      tests/tt_metal/tt_metal/data_movement/python/test_data_movement.py \
+      --gtest-filter Directed --verbose-log
+  profiler_logs_path: /work/generated/profiler/.logs
+  skus:
+    wh_n300_perf:
+      timeout: 20
+    bh_p150_perf:
+      timeout: 20
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime

@@ -84,7 +84,7 @@ def test_unary_sharded_ops(input_shape, sharded_config, ttnn_op, dtype, atol_thr
 
     # Compare with golden using specified thresholds
     assert torch.allclose(ttnn_output, torch_output, atol=atol_threshold)
-    assert_with_ulp(torch_output, ttnn_output, ulp_threshold)
+    assert_with_ulp(expected_result=torch_output, actual_result=ttnn_output, ulp_threshold=ulp_threshold)
 
 
 @pytest.mark.parametrize(
@@ -127,7 +127,7 @@ def test_unary_exhaustive_bitpatterns(ttnn_op, dtype, low, high, atol_threshold,
     ttnn_output = ttnn.to_torch(ttnn_output)
 
     # Compare with golden using specified threshold
-    assert_with_ulp(ttnn_output, torch_output, ulp_threshold)
+    assert_with_ulp(expected_result=torch_output, actual_result=ttnn_output, ulp_threshold=ulp_threshold)
     assert torch.allclose(ttnn_output, torch_output, atol=atol_threshold)
 
 

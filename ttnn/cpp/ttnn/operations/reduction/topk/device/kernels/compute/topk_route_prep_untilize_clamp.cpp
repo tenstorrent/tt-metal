@@ -73,7 +73,7 @@ void kernel_main() {
     DataflowBuffer dfb_out(cb_out);
 
     compute_kernel_hw_startup(cb_in, cb_out);
-    unary_op_init_common(cb_in, cb_out);
+    copy_init(cb_in);
     unary_max_tile_init();
     pack_untilize_dest_init<bw_full>(cb_out);
 

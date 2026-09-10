@@ -273,7 +273,7 @@ ttnn::device_operation::ProgramArtifacts RotaryEmbeddingLlamaMultiCorePrefillSha
     KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = kComputeSource,
-        .compiler_options = {.defines = reload_define},
+        .compiler_options = {.defines = reload_define, .opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings =
             {DFBBinding{
                  .dfb_spec_name = INPUT_DFB, .accessor_name = "input", .endpoint_type = DFBEndpointType::CONSUMER},

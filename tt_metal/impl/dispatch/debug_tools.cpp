@@ -149,7 +149,7 @@ void wait_for_program_vector_to_arrive_and_compare_to_host_program_vector(
 
                 match_device_program_data_with_host_program_data(
                     DISPATCH_MAP_DUMP, device_dispatch_dump_file_name.c_str());
-                CloseDevice(device);
+                MetalContext::instance().device_manager()->close_device(device->id());
                 exit(0);
             }
         }

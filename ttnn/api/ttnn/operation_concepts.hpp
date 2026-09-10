@@ -115,11 +115,29 @@ concept HasSpecRuntimeArgsOverride = requires {
 };
 }  // namespace detail
 
-// Base spec factory: cache hit refreshes only tensor bindings.
+// A factory whose programs vary across the mesh: one call returns the workload-scoped resources
+// plus a ProgramSpec and ProgramRunArgs per coordinate range.
+//   static MeshWorkloadArtifacts create_mesh_workload_artifacts(
+//       const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&,
+//       const ttnn::MeshCoordinateRangeSet& tensor_coords);
+// Optionally, to refresh run args on a cache hit:
+//   static ProgramRunArgs override_runtime_arguments(
+//       const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&,
+//       const ttnn::MeshCoordinateRange& range);
+// One Program backs a whole range, so the override is called once per range and takes the range
+// rather than a coordinate: what it returns applies to every device the range covers.
+template <typename T>
+concept MeshWorkloadSpecFactoryConcept = requires {
+    &T::create_mesh_workload_artifacts;
+} && !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T> && !ProgramDescriptorFactoryConcept<T>;
+
+// Base spec factory: cache hit refreshes only tensor bindings. SPMD-shaped -- one ProgramSpec,
+// replicated across the mesh. A factory whose programs differ per device is a
+// MeshWorkloadSpecFactoryConcept instead.
 template <typename T>
 concept ProgramSpecFactoryConcept =
     requires { &T::create_program_artifacts; } && !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T> &&
-    !ProgramDescriptorFactoryConcept<T> && !detail::HasSpecRuntimeArgsOverride<T>;
+    !ProgramDescriptorFactoryConcept<T> && !MeshWorkloadSpecFactoryConcept<T> && !detail::HasSpecRuntimeArgsOverride<T>;
 
 // Spec factory that additionally re-applies per-dispatch runtime args on every cache hit: its
 // override_runtime_arguments returns a ProgramRunArgs applied via UpdateProgramRunArgs (the
@@ -132,7 +150,7 @@ concept ProgramSpecFactoryConcept =
 template <typename T>
 concept CustomProgramSpecFactoryConcept =
     requires { &T::create_program_artifacts; } && detail::HasSpecRuntimeArgsOverride<T> && !ProgramFactoryConcept<T> &&
-    !MeshWorkloadFactoryConcept<T> && !ProgramDescriptorFactoryConcept<T>;
+    !MeshWorkloadFactoryConcept<T> && !ProgramDescriptorFactoryConcept<T> && !MeshWorkloadSpecFactoryConcept<T>;
 
 // Detect operations that put create_descriptor directly on the operation struct
 // (no program_factory_t wrapper needed for single-descriptor operations).
@@ -171,7 +189,7 @@ concept HasSelectProgramFactory = requires(
 
 // Validate that all variant alternatives in a program_factory_t satisfy exactly one of
 // ProgramFactoryConcept, MeshWorkloadFactoryConcept, ProgramDescriptorFactoryConcept,
-// ProgramSpecFactoryConcept, or CustomProgramSpecFactoryConcept.
+// ProgramSpecFactoryConcept, CustomProgramSpecFactoryConcept, or MeshWorkloadSpecFactoryConcept.
 namespace detail {
 template <typename Variant, std::size_t... Is>
 consteval bool all_factories_valid(std::index_sequence<Is...>) {
@@ -180,7 +198,8 @@ consteval bool all_factories_valid(std::index_sequence<Is...>) {
           MeshWorkloadFactoryConcept<std::variant_alternative_t<Is, Variant>> +
           ProgramDescriptorFactoryConcept<std::variant_alternative_t<Is, Variant>> +
           ProgramSpecFactoryConcept<std::variant_alternative_t<Is, Variant>> +
-          CustomProgramSpecFactoryConcept<std::variant_alternative_t<Is, Variant>>) == 1) &&
+          CustomProgramSpecFactoryConcept<std::variant_alternative_t<Is, Variant>> +
+          MeshWorkloadSpecFactoryConcept<std::variant_alternative_t<Is, Variant>>) == 1) &&
         ...);
 }
 }  // namespace detail

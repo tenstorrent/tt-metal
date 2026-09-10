@@ -89,4 +89,4 @@ def test_conv_transpose2d_ulp(device, input_dtype, ulp_threshold, input_channels
     tt_output_torch = tt_output_torch.reshape(batch_size, out_height, out_width, out_channels)
     tt_output_torch = torch.permute(tt_output_torch, (0, 3, 1, 2))
 
-    assert_with_ulp(torch_output, tt_output_torch, ulp_threshold)
+    assert_with_ulp(expected_result=torch_output, actual_result=tt_output_torch, ulp_threshold=ulp_threshold)

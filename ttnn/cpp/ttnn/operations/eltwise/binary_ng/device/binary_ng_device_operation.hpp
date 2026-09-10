@@ -125,8 +125,8 @@ struct BinaryNgDeviceOperation {
         std::optional<Tensor> input_tensor_b;
         std::optional<Tensor> output_tensor;
 
-        // Operand dtypes and memory configs, plus each sharded operand's shape in pages. Omits logical
-        // shape by design, so differently-shaped interleaved calls share one cache entry.
+        // Operand dtypes, memory configs, Alignment, and Tile, plus each sharded operand's shape in
+        // pages. Omits logical shape by design, so differently-shaped interleaved calls share one cache entry.
         ttsl::hash::hash_t to_hash() const;
     };
 

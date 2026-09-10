@@ -19,6 +19,7 @@
 #include <utility>
 
 #include "unicast_common.hpp"
+#include "high_bw_all_gather_metadata.hpp"
 
 using address_t = uint32_t;
 
@@ -41,7 +42,11 @@ void kernel_main() {
     // See unicast_reader.cpp: the maximum per-rank output slot remains fixed for
     // runtime-controlled gathers, so its stripe width can be baked.
     constexpr uint32_t static_output_chunks_per_stripe = get_compile_time_arg_val(7);
-    constexpr auto output_tensor_args = TensorAccessorArgs<8>();
+    constexpr bool linearized_mesh_ring = get_compile_time_arg_val(8) != 0;
+    constexpr auto snake_orientation = static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(9));
+    constexpr uint32_t mesh_rows = get_compile_time_arg_val(10);
+    constexpr uint32_t mesh_cols = get_compile_time_arg_val(11);
+    constexpr auto output_tensor_args = TensorAccessorArgs<12>();
 
     // The direct-EDM/mux path and mux geometry follow the tensor-accessor arguments.
     constexpr uint32_t mux_ct_base = output_tensor_args.next_compile_time_args_offset();
@@ -51,6 +56,10 @@ void kernel_main() {
     constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(mux_ct_base + 3);
     constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(mux_ct_base + 4);
     constexpr uint32_t num_mux_clients = get_compile_time_arg_val(mux_ct_base + 5);
+    // Active-extent mailbox block, after the fixed 6-entry mux block.
+    constexpr uint32_t ext_ct_base = mux_ct_base + 6;
+    constexpr bool extent_from_metadata = get_compile_time_arg_val(ext_ct_base) != 0;
+    constexpr uint32_t cb_meta_writer_id = get_compile_time_arg_val(ext_ct_base + 1);
 
     constexpr uint32_t outputs_per_cb_page = cb_page_size / output_chunk_size;
 
@@ -74,7 +83,7 @@ void kernel_main() {
     const uint8_t data_valid_sem_noc_x = get_arg_val<uint32_t>(arg_idx++);  // mirror core (data_valid_sem target)
     const uint8_t data_valid_sem_noc_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_granular_sends = get_arg_val<uint32_t>(arg_idx++);  // leading sends the downstream relays
-    const uint32_t data_valid_granularity = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t data_valid_granularity_rt = get_arg_val<uint32_t>(arg_idx++);
     [[maybe_unused]] const uint8_t neighbor_dev_id = get_arg_val<uint32_t>(arg_idx++);
     [[maybe_unused]] const uint16_t neighbor_mesh_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t output_chunks_per_stripe = get_arg_val<uint32_t>(arg_idx++);
@@ -117,6 +126,34 @@ void kernel_main() {
     }
 
     auto output_tensor_accessor = TensorAccessor(output_tensor_args, output_tensor_address);
+
+    // Active-extent values. The host left these at the worst case it built the program for; on the
+    // metadata path the READER derived the narrowed schedule and published it here. Reader and writer
+    // share this core, so taking the reader's values is what guarantees both sides of the semaphore
+    // protocol agree -- deriving independently could drift, and drift hangs rather than corrupts.
+    uint32_t eff_slice_start = slice_start;
+    uint32_t eff_slice_count = slice_count;
+    uint32_t eff_final_start = final_start;
+    uint32_t eff_final_count = final_count;
+    uint32_t data_valid_granularity = data_valid_granularity_rt;
+    if constexpr (extent_from_metadata) {
+        CircularBuffer cb_writer_meta(cb_meta_writer_id);
+        cb_writer_meta.wait_front(1);
+        // cb_wait_front only spins on a stream register; it does not fence L1. The mailbox sits at a FIXED
+        // CB address whose contents change per chunk on the traced path, so with the Blackhole L1 data
+        // cache enabled (TT_METAL_ENABLE_L1_DATA_CACHE_RISCVS incl. BR) this could read the previous
+        // chunk's slice_count/final_count while the reader had already published the new schedule --
+        // a semaphore mismatch or hang, not a wrong number. Same wait_front + invalidate + volatile
+        // sequence this PR's writer_indexer_score.cpp uses on its mailbox; the two must not disagree.
+        invalidate_l1_cache();
+        CoreLocalMem<volatile HighBwAllGatherMetadataSchedule> mailbox(cb_writer_meta.get_read_ptr());
+        eff_slice_start = mailbox->slice_start;
+        eff_slice_count = mailbox->slice_count;
+        eff_final_start = mailbox->final_start;
+        eff_final_count = mailbox->final_count;
+        data_valid_granularity = mailbox->data_valid_granularity;
+        cb_writer_meta.pop_front(1);
+    }
 
     Noc noc;
     CircularBuffer cb(cb0_id);
@@ -164,23 +201,23 @@ void kernel_main() {
             safe_get_noc_addr(data_valid_sem_noc_x, data_valid_sem_noc_y, data_valid_sem, 0);
         auto signal = [&](uint32_t chunks) { atomic_inc(downstream_data_valid_addr, chunks); };
 
-        ///////////////////////////////////////////////////
-        // MAIN
-        ///////////////////////////////////////////////////
-
         OutputStripeIterator<
             output_chunks_per_page,
             output_chunk_size,
             num_devices,
             slice_step,
-            static_output_chunks_per_stripe>
+            static_output_chunks_per_stripe,
+            linearized_mesh_ring,
+            snake_orientation,
+            mesh_rows,
+            mesh_cols>
             it;
 
         uint32_t stripe = initial_stripe;
         for (uint32_t iter = 0; iter < num_iters; ++iter) {
             const bool last = (iter == num_iters - 1);
-            const uint32_t start = last ? final_start : slice_start;
-            const uint32_t count = last ? final_count : slice_count;
+            const uint32_t start = last ? eff_final_start : eff_slice_start;
+            const uint32_t count = last ? eff_final_count : eff_slice_count;
             const bool granular = (iter < num_granular_sends);  // downstream relays this stripe -> signal fine-grained
             const bool local_copy = (iter == 0) && (do_local_write != 0);
             it.init(stripe, start, count, output_chunks_per_stripe);

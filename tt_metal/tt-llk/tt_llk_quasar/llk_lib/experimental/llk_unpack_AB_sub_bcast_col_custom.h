@@ -32,7 +32,7 @@ using namespace ckernel;
  * @note On the math thread, pair with @ref _llk_math_eltwise_binary_init_custom_ (T1); on pack, with @ref _llk_pack_init_ (T2).
  * @note @ref _llk_unpack_AB_sub_bcast_col_custom_ is the matching execute call on this thread.
  */
-inline void _llk_unpack_AB_sub_bcast_col_init_custom_(const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
+inline void _llk_unpack_AB_sub_bcast_col_init_custom_(const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
     // One predicate for all three threads; see @ref validate_tensor_shape_sub_bcast_col_custom_ for why
     // this path is stricter than validate_tensor_shape_tile_dependent_ops_.
