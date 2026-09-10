@@ -83,11 +83,16 @@ private:
         int64_t timestamp_ns,
         uint32_t runtime_id,
         std::span<const uint64_t> values);
-    // Device<->device sync plots, all RATES: per chip, the applied AICLK (GHz) each sync observes -- the 3 us LOCAL
-    // tracker and the 1 ms LINK stamps -- from a sliding dwall/drefclk over one stream of PP_CLOCK samples; the gap
-    // between a chip's two curves is the local-vs-linked error. Plus the cross-chip refclk scale regression the d2d
-    // consumer publishes through SyncPlots.
-    void emit_frequency(size_t begin, size_t end);
+    // Device<->device sync plots, all RATES. Per chip and per sync kind (the 3 us LOCAL tracker, the 1 ms LINK
+    // stamps): the chip's applied AICLK over the ROOT chip's at the same instant -- the factor that scales its
+    // wall-clock rate onto the root's; the root reads exactly 1. Each stream's AICLK comes from a sliding
+    // dwall/drefclk over its PP_CLOCK samples. Plus the cross-chip refclk scale regression the d2d consumer publishes
+    // through SyncPlots.
+    struct FreqPoint {
+        int64_t host_ns;
+        double ghz;
+    };
+    std::vector<FreqPoint> compute_frequency(size_t begin, size_t end) const;
     const char* intern_name(const std::string& name);
     // Plots are emitted at capture end, not during decode: at decode time the correction is not yet solved
     // (lookup returns 0) and the timeline map has no segments (points land at raw, hours-off timestamps).
