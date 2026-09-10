@@ -4,30 +4,25 @@
 
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr auto cb_param_in = tt::CBIndex::c_0;
-    DataflowBuffer dfb_param_in_obj(cb_param_in);
-    constexpr auto cb_grad = tt::CBIndex::c_1;
-    DataflowBuffer dfb_grad_obj(cb_grad);
-    constexpr auto cb_momentum_in = tt::CBIndex::c_2;
-    DataflowBuffer dfb_momentum_in_obj(cb_momentum_in);
+    DataflowBuffer dfb_param_in_obj(dfb::param_in);
+    DataflowBuffer dfb_grad_obj(dfb::grad);
+#if defined(MOMENTUM) && defined(MOMENTUM_INITIALIZED)
+    DataflowBuffer dfb_momentum_in_obj(dfb::momentum_in);
+#endif
 
-    constexpr auto cb_param_out = tt::CBIndex::c_16;
-    DataflowBuffer dfb_param_out_obj(cb_param_out);
-    constexpr auto cb_momentum_out = tt::CBIndex::c_17;
-    DataflowBuffer dfb_momentum_out_obj(cb_momentum_out);
+    DataflowBuffer dfb_param_out_obj(dfb::param_out);
+#if defined(MOMENTUM)
+    DataflowBuffer dfb_momentum_out_obj(dfb::momentum_out);
+#endif
 
-    constexpr auto cb_scalar_args = tt::CBIndex::c_24;
-    DataflowBuffer dfb_scalar_args_obj(cb_scalar_args);
-    constexpr auto cb_tmp1 = tt::CBIndex::c_25;
-    DataflowBuffer dfb_tmp1_obj(cb_tmp1);
-    constexpr auto cb_tmp2 = tt::CBIndex::c_26;
-    DataflowBuffer dfb_tmp2_obj(cb_tmp2);
-    constexpr auto cb_tmp3 = tt::CBIndex::c_27;
-    DataflowBuffer dfb_tmp3_obj(cb_tmp3);
-    constexpr auto cb_tmp4 = tt::CBIndex::c_28;
-    DataflowBuffer dfb_tmp4_obj(cb_tmp4);
+    DataflowBuffer dfb_scalar_args_obj(dfb::scalar_args);
+    DataflowBuffer dfb_tmp1_obj(dfb::tmp1);
+    DataflowBuffer dfb_tmp2_obj(dfb::tmp2);
+    DataflowBuffer dfb_tmp3_obj(dfb::tmp3);
+    DataflowBuffer dfb_tmp4_obj(dfb::tmp4);
 
     constexpr uint32_t lr_tile = 0;
     constexpr uint32_t momentum_tile = 1;
@@ -35,15 +30,15 @@ void kernel_main() {
     constexpr uint32_t weight_decay_tile = 3;
     constexpr uint32_t one_tile = 4;
 
-    compute_kernel_hw_startup(cb_param_in, cb_param_in, cb_param_out);
+    compute_kernel_hw_startup(dfb::param_in, dfb::param_in, dfb::param_out);
 
-    uint32_t num_tiles = get_compile_time_arg_val(0);
+    constexpr uint32_t num_tiles = get_arg(args::num_tiles);
 
     // from reader
     dfb_scalar_args_obj.wait_front(5);
 
     for (uint32_t n = 0; n < num_tiles; ++n) {
-        uint32_t cb_grad_tmp = cb_grad;
+        uint32_t cb_grad_tmp = dfb::grad;
 #if defined(WEIGHT_DECAY)
         // grad += param * weight_decay
         mul_tiles_to_cb(
@@ -51,7 +46,7 @@ void kernel_main() {
 
         add_tiles_to_cb(dfb_grad_obj, dfb_tmp1_obj, dfb_tmp2_obj, 0, 0, /*pop0=*/1, /*pop1=*/1);
 
-        cb_grad_tmp = cb_tmp2;
+        cb_grad_tmp = dfb::tmp2;
 #endif  // WEIGHT_DECAY
 
 #if defined(MOMENTUM)
@@ -72,7 +67,7 @@ void kernel_main() {
 
         add_tiles_to_cb(dfb_tmp3_obj, dfb_tmp4_obj, dfb_tmp1_obj, 0, 0, /*pop0=*/1, /*pop1=*/1);
 
-        cb_momentum_tmp = cb_tmp1;
+        cb_momentum_tmp = dfb::tmp1;
 #endif
 
         {
@@ -100,7 +95,7 @@ void kernel_main() {
             add_tiles_to_cb(dfb_tmp3_obj, dfb_grad_tmp_obj, dfb_tmp4_obj, 0, 0, /*pop0=*/1, /*pop1=*/1);
         }
 
-        cb_grad_tmp = cb_tmp4;
+        cb_grad_tmp = dfb::tmp4;
 #else
 // have to pop cb_grad_tmp
 #if defined(MOMENTUM_INITIALIZED)
