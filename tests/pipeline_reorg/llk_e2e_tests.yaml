@@ -6,8 +6,8 @@
   coverage: false
   cmd: |
     set -euo pipefail
-    git fetch --no-tags --depth=1 origin d87af74bd14cda49bcbd8ecef50f59e7c5d1894a
-    git show d87af74bd14cda49bcbd8ecef50f59e7c5d1894a:tt_metal/tt-llk/tests/sources/matmul_face_compressed_test.cpp > tests/sources/matmul_face_compressed_test.cpp
+    git -c safe.directory="$GITHUB_WORKSPACE" fetch --no-tags --depth=1 origin d87af74bd14cda49bcbd8ecef50f59e7c5d1894a
+    git -c safe.directory="$GITHUB_WORKSPACE" show d87af74bd14cda49bcbd8ecef50f59e7c5d1894a:tt_metal/tt-llk/tests/sources/matmul_face_compressed_test.cpp > tests/sources/matmul_face_compressed_test.cpp
     git hash-object tests/sources/matmul_face_compressed_test.cpp
     cd tests/python_tests
     pytest -q --override-ini=log_cli=false -n auto \
