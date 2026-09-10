@@ -6,6 +6,8 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/vector.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "dram_prefetcher_consumer.hpp"
@@ -52,7 +54,7 @@ void bind_test_dram_prefetcher_consumer(nb::module_& mod) {
                 num_iters (int): total entries each receiver should consume (= num_layers * num_blocks).
                 page_size_bytes (int): entry size to Attach at; must match the per-receiver block
                     size the sender pushes.
-                prefetcher_pipes (TensorPrefetcherPipes): the DRAM-sender pipes being pushed into,
+                prefetcher_pipes (List[PrefetcherPipe]): the DRAM-sender pipes being pushed into,
                     from create_prefetcher_pipes_for_tensor_prefetcher.
         )doc",
         &test_tensor_prefetcher_pipe_consumer,
@@ -121,7 +123,7 @@ void bind_test_dram_prefetcher_consumer(nb::module_& mod) {
                     prefetcher is being driven with.
                 num_layers (int): number of layers the prefetcher will push.
                 print_stride (int): DPRINT every Nth iter; first/last always logged. 0 = first/last only.
-                prefetcher_pipes (TensorPrefetcherPipes): the DRAM-sender pipes being pushed into,
+                prefetcher_pipes (List[PrefetcherPipe]): the DRAM-sender pipes being pushed into,
                     from create_prefetcher_pipes_for_tensor_prefetcher.
                 streaming (bool): when True, expect the streaming prefetcher's ring-rotated
                     delivery (entry at FIFO position p is physical block (lead_block + p) mod
