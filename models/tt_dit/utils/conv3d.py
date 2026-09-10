@@ -410,6 +410,12 @@ _BLOCKINGS = {
     # ===================================================================
     # LTX-2.3 22B Video VAE decoder, BH Loud Box 2x4 (h_factor=2, w_factor=4), 1080p.
     # Regenerate via bruteforce_conv3d_sweep.py -k "sweep_all and h2w4"
+    # Swept at the 145-frame (6.04s) clip, so the T values below are that clip's per-stage
+    # T (21/39/75/147...). Other clip lengths have different per-stage T (H/W are identical —
+    # they depend only on mesh+resolution) and are served by the T-relaxed lookup in
+    # get_conv3d_config, which reuses these spatial/channel blockings at any T (blocking is
+    # math-invariant; only T_out_block is clamped to <= T_out). Without that, non-145f lengths
+    # collapse to the (Cin,32,1,1,1) H=W=1 fallback and the eager VAE decode is ~9x slower.
     # ===================================================================
     (2, 4, 128, 1024, (3, 3, 3), 21, 17, 15): (64, 256, 1, 2, 16),  # ltx_s0_conv_in — 778us
     (2, 4, 1024, 1024, (3, 3, 3), 21, 17, 15): (128, 64, 5, 2, 16),  # ltx_s0_res — 7956us
@@ -434,6 +440,24 @@ _BLOCKINGS = {
     (2, 4, 1024, 1024, (3, 3, 3), 21, 18, 16): (64, 32, 1, 2, 2),  # post-upsample res
     (2, 4, 1024, 128, (3, 3, 3), 21, 18, 16): (64, 32, 1, 2, 2),  # final_conv
     # ===================================================================
+    # LTX-2.3 704x1280 (720p) decoder, BH Loud Box 2x4 (h_factor=2, w_factor=4). Per-device (H,W):
+    # s1(22,20) s2/s3(44,40) s4(88,80). Each blocking is transplanted from the nearest
+    # same-(Cin,Cout,kernel) 1080p 2x4 entry above — all H_out*W_out=32 to stay off the BH
+    # non-32-hw conv3d hang path. Blocking is a math-invariant re-tiling (byte-identical decode,
+    # md5-verified on device), so this only recovers the off-1080p VAE-decode regression: 2x4 720p
+    # was collapsing to the (Cin,32,1,1,1) H=W=1 channel fallback (~9s eager decode). Cached-T
+    # chunk lengths (T=3/4) reuse these via the T-relaxed lookup (T_out_block clamped to T_out).
+    # The deep 1024-ch s0 stages (s0_res/s0_up/s0_conv_in) stay on the conservative channel
+    # fallback pending a full sweep (OOM-sensitive at 4096-ch width) — mirrors the 4x8 720p block.
+    # ===================================================================
+    (2, 4, 512, 512, (3, 3, 3), 39, 22, 20): (64, 256, 1, 4, 8),  # s1_res
+    (2, 4, 512, 4096, (3, 3, 3), 39, 22, 20): (128, 64, 5, 2, 16),  # s1_up
+    (2, 4, 512, 512, (3, 3, 3), 75, 44, 40): (64, 256, 1, 8, 4),  # s2_res
+    (2, 4, 256, 256, (3, 3, 3), 147, 44, 40): (64, 256, 1, 8, 4),  # s3_res
+    (2, 4, 256, 512, (3, 3, 3), 147, 44, 40): (64, 256, 1, 8, 4),  # s3_chg
+    (2, 4, 128, 128, (3, 3, 3), 147, 88, 80): (64, 128, 6, 4, 8),  # s4_res
+    (2, 4, 128, 48, (3, 3, 3), 147, 88, 80): (128, 64, 6, 4, 8),  # s4_out
+    # ===================================================================
     # LTX-2.3 22B Video VAE decoder, BH Galaxy 4x8 (h_factor=4, w_factor=8), 1080p.
     # Regenerate via bruteforce_conv3d_sweep.py -k "sweep_all and h4w8"
     # ===================================================================
@@ -455,6 +479,33 @@ _BLOCKINGS = {
     (4, 8, 1024, 4096, (1, 3, 3), 19, 5, 4): (256, 64, 1, 4, 4),  # ups_ups (kT=1) — 1235us
     (4, 8, 1024, 1024, (3, 3, 3), 21, 10, 8): (128, 64, 5, 4, 8),  # ups_post_res — 2012us
     (4, 8, 1024, 128, (3, 3, 3), 21, 10, 8): (128, 64, 7, 8, 4),  # ups_final — 277us
+    # LTX-2.3 704x1280 (720p) decoder, BH Galaxy 4x8. Large-spatial res/change convs, transplanted
+    # from the nearest same-(Cin,Cout,kernel) 1080p entry — all H_out*W_out=32 to stay off the BH
+    # non-32-hw conv3d hang path. Recovers the off-1080p VAE-decode regression (was hitting the
+    # conservative channel fallback); the deep 1024-ch stages stay on that fallback pending a full sweep.
+    (4, 8, 256, 256, (3, 3, 3), 147, 22, 20): (64, 256, 1, 8, 4),  # s3_res
+    (4, 8, 256, 256, (3, 3, 3), 3, 22, 20): (64, 256, 1, 8, 4),  # s3_res (cached-T)
+    (4, 8, 256, 256, (3, 3, 3), 4, 22, 20): (64, 256, 1, 8, 4),  # s3_res (chunk head)
+    (4, 8, 256, 512, (3, 3, 3), 147, 22, 20): (64, 256, 1, 8, 4),  # s3_chg
+    (4, 8, 512, 512, (3, 3, 3), 75, 22, 20): (64, 256, 1, 8, 4),  # s2_res
+    (4, 8, 512, 512, (3, 3, 3), 3, 22, 20): (64, 256, 1, 8, 4),  # s2_res (cached-T)
+    (4, 8, 512, 512, (3, 3, 3), 39, 11, 10): (64, 256, 1, 4, 8),  # s1_res
+    (4, 8, 512, 4096, (3, 3, 3), 39, 11, 10): (128, 64, 5, 4, 8),  # s1_up
+    (4, 8, 128, 128, (3, 3, 3), 147, 44, 40): (128, 64, 6, 2, 16),  # s4_res
+    (4, 8, 128, 128, (3, 3, 3), 3, 44, 40): (128, 64, 6, 2, 16),  # s4_res (cached-T)
+    # LTX-2.3 704x1280 (720p) deep 1024-ch decoder-s0 + latent-upsampler convs, BH Galaxy 4x8.
+    # Bruteforce-swept (hw_product=32, so off the BH non-32-hw hang path); recovers the degenerate
+    # (Cin,32,1,1,1) H_out=W_out=1 channel fallback these keys were hitting (3-13x per-conv on device).
+    (4, 8, 1024, 1024, (3, 3, 3), 21, 6, 6): (128, 64, 5, 4, 8),  # 1325us was 17517 (13.2x)
+    (4, 8, 1024, 1024, (3, 3, 3), 21, 6, 5): (128, 64, 5, 8, 4),  # 1342us was 14654 (10.9x)
+    (4, 8, 1024, 1024, (3, 3, 3), 3, 11, 10): (64, 256, 1, 4, 8),  # 463us was 3110 (6.7x)
+    (4, 8, 1024, 1024, (3, 3, 3), 3, 6, 5): (64, 256, 1, 8, 4),  # 347us was 1073 (3.1x)
+    (4, 8, 1024, 4096, (3, 3, 3), 21, 6, 5): (128, 64, 7, 8, 4),  # s0_up — 3589us was 37118 (10.3x)
+    (4, 8, 1024, 128, (3, 3, 3), 21, 6, 6): (128, 64, 3, 4, 8),  # 176us was 1502 (8.5x)
+    (4, 8, 1024, 128, (3, 3, 3), 4, 11, 10): (128, 32, 2, 4, 8),  # 106us was 622 (5.8x)
+    (4, 8, 1024, 128, (3, 3, 3), 3, 6, 5): (64, 32, 1, 8, 4),  # 58us was 178 (3.1x)
+    (4, 8, 128, 1024, (3, 3, 3), 21, 6, 5): (64, 128, 3, 8, 4),  # 164us was 350 (2.1x)
+    (4, 8, 512, 128, (3, 3, 3), 4, 22, 20): (64, 128, 1, 8, 4),  # 103us was 1090 (10.5x)
 }
 
 # Fallback table: (C_in, C_out, kernel) -> blocking.
@@ -475,6 +526,13 @@ _DEFAULT_BLOCKINGS = {
     # channel combos all have swept exact _BLOCKINGS entries for 2x4/4x8 1080p;
     # they remain here as the cross-mesh/cross-resolution fallback (the hardcoded
     # full-Cin default OOMs at these widths).
+    (128, 1024, (3, 3, 3)): (
+        64,
+        128,
+        1,
+        2,
+        2,
+    ),  # s0_conv_in / ups_initial — sole LTX decoder+ups combo with no channel fallback; the (Cin,32,1,1,1) default OOMs at off-1080p spatial dims
     (1024, 4096, (3, 3, 3)): (256, 32, 1, 1, 1),  # s0_up
     (512, 4096, (3, 3, 3)): (256, 32, 1, 1, 1),  # s1_up
     # Same-channel 3x3x3 resnet convs: full-Cin default weight-CB (Cin*32*27*2)
@@ -604,6 +662,50 @@ _HALO_LAST_KEYS = {
 }
 
 
+# Lazily-built index of swept _BLOCKINGS keyed by (h_factor, w_factor, C_in, C_out, kernel, H, W),
+# dropping T -> list of (T, blocking). See _t_relaxed_blocking.
+_BLOCKINGS_BY_SPATIAL: dict | None = None
+
+
+def _t_relaxed_blocking(h_factor, w_factor, in_channels, out_channels, kernel_size, T, H, W):
+    """Reuse a swept blocking from the SAME (mesh, channels, kernel, H, W) at a different T.
+
+    Conv3d blocking is a math-invariant tiling of the same convolution (PCC-verified across
+    re-sweeps), and the L1-critical spatial/channel blocking (C_in/C_out/H_out/W_out) depends
+    only on channels and per-device H/W — not on the temporal extent. H/W are set by the mesh
+    and output resolution, so they are IDENTICAL across clip lengths; only T changes with frame
+    count. The swept ``_BLOCKINGS`` table, however, only has entries for the T values of the one
+    production clip length that was swept (e.g. 145-frame/1080p), so every other length misses
+    every exact entry and collapses to the ``(Cin, 32, 1, 1, 1)`` H=W=1 fallback (one output
+    pixel per work-unit — ~9x slower eager decode).
+
+    This reuses the proven spatial/channel blocking for any T at the same resolution/mesh. Only
+    ``T_out_block`` is temporal; we clamp it to the actual output-T (the op requires
+    ``T_out_block <= T_out``; non-divisors are allowed and handled as a remainder). Returns
+    ``None`` when no same-signature swept entry exists (falls through to the channel table).
+    """
+    global _BLOCKINGS_BY_SPATIAL
+    if _BLOCKINGS_BY_SPATIAL is None:
+        idx: dict = {}
+        for (hf, wf, cin, cout, k, t, h, w), blk in _BLOCKINGS.items():
+            idx.setdefault((hf, wf, cin, cout, k, h, w), []).append((t, blk))
+        _BLOCKINGS_BY_SPATIAL = idx
+
+    if not (T and H and W):
+        return None
+    cands = _BLOCKINGS_BY_SPATIAL.get((h_factor, w_factor, in_channels, out_channels, kernel_size, H, W))
+    if not cands:
+        return None
+    # Prefer the swept entry at the largest T <= requested T (closest temporal regime); else the
+    # smallest swept T available. The choice only affects the reused T_out_block (clamped below).
+    le = [c for c in cands if c[0] <= T]
+    src_T, blk = max(le, key=lambda c: c[0]) if le else min(cands, key=lambda c: c[0])
+    C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = blk
+    T_out = max(1, T - (kernel_size[0] - 1))  # causal/valid conv along T
+    T_out_block = max(1, min(T_out_block, T_out))
+    return C_in_block, C_out_block, T_out_block, H_out_block, W_out_block, src_T
+
+
 def get_conv3d_config(
     in_channels, out_channels, kernel_size, weights_dtype, grid_size, *, h_factor=1, w_factor=1, T=0, H=0, W=0
 ):
@@ -643,19 +745,27 @@ def get_conv3d_config(
             f"Cin={C_in_block} Cout={C_out_block} T={T_out_block} H={H_out_block} W={W_out_block}"
         )
     else:
-        fallback = _DEFAULT_BLOCKINGS.get(channel_key)
-        if fallback is not None:
-            C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = fallback
-            logger.warning(
-                f"conv3d blocking [fallback] {blocking_key} -> channel_key={channel_key} -> "
+        relaxed = _t_relaxed_blocking(h_factor, w_factor, in_channels, out_channels, kernel_size, T, H, W)
+        if relaxed is not None:
+            C_in_block, C_out_block, T_out_block, H_out_block, W_out_block, src_T = relaxed
+            logger.info(
+                f"conv3d blocking [T-relaxed] {blocking_key} -> reuse swept T={src_T} -> "
                 f"Cin={C_in_block} Cout={C_out_block} T={T_out_block} H={H_out_block} W={W_out_block}"
             )
         else:
-            C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = in_channels, 32, 1, 1, 1
-            logger.warning(
-                f"conv3d blocking [NONE] {blocking_key} -> no match in any table, using hardcoded default: "
-                f"Cin={C_in_block} Cout={C_out_block} T={T_out_block} H={H_out_block} W={W_out_block}"
-            )
+            fallback = _DEFAULT_BLOCKINGS.get(channel_key)
+            if fallback is not None:
+                C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = fallback
+                logger.warning(
+                    f"conv3d blocking [fallback] {blocking_key} -> channel_key={channel_key} -> "
+                    f"Cin={C_in_block} Cout={C_out_block} T={T_out_block} H={H_out_block} W={W_out_block}"
+                )
+            else:
+                C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = in_channels, 32, 1, 1, 1
+                logger.warning(
+                    f"conv3d blocking [NONE] {blocking_key} -> no match in any table, using hardcoded default: "
+                    f"Cin={C_in_block} Cout={C_out_block} T={T_out_block} H={H_out_block} W={W_out_block}"
+                )
 
     return ttnn.Conv3dConfig(
         weights_dtype=weights_dtype,

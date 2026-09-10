@@ -26,7 +26,28 @@ from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 from ....utils.tracing import traced_function
 from .attention_ltx import LTXAttention
-from .quant_config import LtxQuantProfile
+
+# gen#0 self-warms the DiT via a prep_run=True capture instead of the warmup denoise. Off by default:
+# it is only safe when the inner_step @traced_function captures with prep_run under this flag, which it
+# does not, so enabling it skips warmup with no self-warm and compiles the DiT cold in the reserved window.
+LTX_DIT_PREP_RUN = os.environ.get("LTX_DIT_PREP_RUN", "0") in ("1", "true", "True")
+
+# Fold the three still-unfused gated residuals (audio cross-attn, A->V, V->A) into their to_out matmul
+# epilogue, via the primitive the self-attentions already use. Math-identical, and it removes three
+# programs per block. The traced step carries a large work-independent floor, so a program removed is
+# worth more than the FLOPs it carried. Set to 0 to restore the standalone addcmul for an A/B.
+LTX_FOLD_GATED_RESIDUAL = os.environ.get("LTX_FOLD_GATED_RESIDUAL", "1") in ("1", "true", "True")
+
+# PROBE ONLY (not a shipping path): replace the three gated-residual addcmul(t,t1,t2) calls with the
+# algebraically identical add(t, multiply(t1,t2)). Same math, different bf16 rounding — a control that
+# measures how far the sampler amplifies a rounding-scale perturbation, independent of the fold.
+LTX_PROBE_ADDCMUL_SPLIT = os.environ.get("LTX_PROBE_ADDCMUL_SPLIT", "0") in ("1", "true", "True")
+
+
+def _gated_residual(t: ttnn.Tensor, t1: ttnn.Tensor, t2: ttnn.Tensor) -> ttnn.Tensor:
+    if LTX_PROBE_ADDCMUL_SPLIT:
+        return ttnn.add(t, ttnn.multiply(t1, t2))
+    return ttnn.addcmul(t, t1, t2)
 
 
 def _tile_preserving_chunk0(x: ttnn.Tensor, n: int) -> list[ttnn.Tensor]:
@@ -120,8 +141,6 @@ class LTXTransformerBlock(Module):
         has_audio: bool = False,
         apply_gated_attention: bool = False,
         cross_attention_adaln: bool = True,
-        quant_config: LtxQuantProfile | None = None,
-        lora_enabled: bool = False,
     ) -> None:
         super().__init__()
 
@@ -149,15 +168,7 @@ class LTXTransformerBlock(Module):
             "parallel_config": parallel_config,
             "is_fsdp": is_fsdp,
             "apply_gated_attention": apply_gated_attention,
-            "quant_config": quant_config,
-            "lora_enabled": lora_enabled,
         }
-
-        # FFN precision: the profile supplies the ff dtypes + casts; no quant_config leaves the
-        # ParallelFeedForward ctor defaults, reproducing bf16. lora_enabled always threads through.
-        ffn_kwargs = {"lora_enabled": lora_enabled}
-        if quant_config is not None:
-            ffn_kwargs.update(quant_config.ffn_kwargs())
 
         # FSDP fractures FFN weights across the SP axis (on top of the TP fracture);
         # without it the FFN is only TP-sharded and replicated across every SP device.
@@ -183,7 +194,6 @@ class LTXTransformerBlock(Module):
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
             fsdp_mesh_axis=fsdp_mesh_axis,
-            **ffn_kwargs,
         )
         self.adaln_coeff = 9 if cross_attention_adaln else 6
         # Outer-param layout (coeff, 1, 1, D): keeps each modulation parameter on the
@@ -224,7 +234,6 @@ class LTXTransformerBlock(Module):
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
                 fsdp_mesh_axis=fsdp_mesh_axis,
-                **ffn_kwargs,
             )
             self.audio_scale_shift_table = Parameter(
                 total_shape=[self.adaln_coeff, 1, 1, audio_dim],
@@ -269,16 +278,13 @@ class LTXTransformerBlock(Module):
                 dtype=ttnn.bfloat16,
             )
 
-        if quant_config is not None:
-            self.ff_compute_kernel_config = quant_config.mm_compute_config(mesh_device.arch())
-        else:
-            self.ff_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-                mesh_device.arch(),
-                math_fidelity=ttnn.MathFidelity.HiFi2,
-                math_approx_mode=False,
-                fp32_dest_acc_en=True,
-                packer_l1_acc=True,
-            )
+        self.ff_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "ff.net.0.proj", "ffn.ff1")
@@ -368,6 +374,7 @@ class LTXTransformerBlock(Module):
         audio_padding_mask: ttnn.Tensor | None = None,
         audio_padding_mask_full: ttnn.Tensor | None = None,
         video_padding_mask: ttnn.Tensor | None = None,
+        video_kv_logical_n: int | None = None,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
         # Video modulation; `_p1` chunks carry +1 baked into the scale slot (see _prepare_torch_state).
         shifted_v = self.scale_shift_table.data + video_temb
@@ -454,14 +461,20 @@ class LTXTransformerBlock(Module):
                 audio_prompt_mod = ttnn.addcmul(a_kv_shift, audio_prompt, a_kv_scale_p1)
             else:
                 audio_prompt_mod = audio_prompt
-            audio_1BND = self.audio_attn2(
-                spatial_1BND=audio_ca_input,
-                N=audio_N,
-                prompt_1BLP=audio_prompt_mod,
-                kv_replicated=True,
-                addcmul_residual=audio_1BND,
-                addcmul_gate=a_gate_ca,
-            )
+            if LTX_FOLD_GATED_RESIDUAL:
+                audio_1BND = self.audio_attn2(
+                    spatial_1BND=audio_ca_input,
+                    N=audio_N,
+                    prompt_1BLP=audio_prompt_mod,
+                    kv_replicated=True,
+                    addcmul_residual=audio_1BND,
+                    addcmul_gate=a_gate_ca,
+                )
+            else:
+                audio_ca_out = self.audio_attn2(
+                    spatial_1BND=audio_ca_input, N=audio_N, prompt_1BLP=audio_prompt_mod, kv_replicated=True
+                )
+                audio_1BND = _gated_residual(audio_1BND, audio_ca_out, a_gate_ca)
         else:
             audio_ca_input = self.audio_norm2(audio_1BND)
             audio_ca_out = self.audio_attn2(
@@ -501,10 +514,10 @@ class LTXTransformerBlock(Module):
                 k_rope_cos=audio_cross_pe_cos_full,
                 k_rope_sin=audio_cross_pe_sin_full,
                 trans_mat=trans_mat,
-                addcmul_residual=video_1BND,
-                addcmul_gate=v_ca_gate,
+                addcmul_residual=video_1BND if LTX_FOLD_GATED_RESIDUAL else None,
+                addcmul_gate=v_ca_gate if LTX_FOLD_GATED_RESIDUAL else None,
             )
-            video_1BND = a2v_output
+            video_1BND = a2v_output if LTX_FOLD_GATED_RESIDUAL else _gated_residual(video_1BND, a2v_output, v_ca_gate)
 
             # V→A: video provides context for audio
             audio_q_v2a = ttnn.addcmul(a_shift_v2a, audio_normed_xattn, a_scale_v2a_p1)
@@ -522,12 +535,14 @@ class LTXTransformerBlock(Module):
                 # the ring SDPA gathers internally instead of a separate K/V all-gather.
                 k_rope_cos=video_cross_pe_cos,
                 k_rope_sin=video_cross_pe_sin,
-                kv_logical_n=video_N,
+                # Audio syncs to the decoded (stripped) grid, so exclude any appended anchor tokens
+                # from the video context it attends to. Defaults to video_N when unset.
+                kv_logical_n=video_kv_logical_n if video_kv_logical_n is not None else video_N,
                 trans_mat=trans_mat,
-                addcmul_residual=audio_1BND,
-                addcmul_gate=a_ca_gate,
+                addcmul_residual=audio_1BND if LTX_FOLD_GATED_RESIDUAL else None,
+                addcmul_gate=a_ca_gate if LTX_FOLD_GATED_RESIDUAL else None,
             )
-            audio_1BND = v2a_output
+            audio_1BND = v2a_output if LTX_FOLD_GATED_RESIDUAL else _gated_residual(audio_1BND, v2a_output, a_ca_gate)
 
         # Video feed forward
         video_1BND = self._modulated_ffn(self.ffn, self.norm3, video_1BND, v_shift_ff, v_scale_ff_p1, v_gate_ff)
@@ -567,9 +582,7 @@ class LTXTransformerModel(Module):
         has_audio: bool = False,
         apply_gated_attention: bool = False,
         cross_attention_adaln: bool = True,
-        lora_enabled: bool = False,
         image_conditioning: bool = False,
-        quant_config: LtxQuantProfile | None = None,
     ) -> None:
         super().__init__()
 
@@ -579,7 +592,6 @@ class LTXTransformerModel(Module):
         self.num_layers = num_layers
         self.has_audio = has_audio
         self.cross_attention_adaln = cross_attention_adaln
-        self.lora_enabled = lora_enabled
         # I2V: video AdaLN modulation is per-token (denoise_mask * sigma) instead of batch-scalar.
         # Audio / prompt / A<->V cross AdaLN stay batch-scalar regardless.
         self.image_conditioning = image_conditioning
@@ -716,8 +728,6 @@ class LTXTransformerModel(Module):
                     has_audio=has_audio,
                     apply_gated_attention=apply_gated_attention,
                     cross_attention_adaln=cross_attention_adaln,
-                    quant_config=quant_config,
-                    lora_enabled=lora_enabled,
                 )
             )
 
@@ -867,6 +877,7 @@ class LTXTransformerModel(Module):
         audio_padding_mask: ttnn.Tensor | None = None,
         audio_padding_mask_full: ttnn.Tensor | None = None,
         video_padding_mask: ttnn.Tensor | None = None,
+        video_kv_logical_n: int | None = None,
         gather_output: bool = True,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
         """Device-only, trace-capturable denoising step. All tensor args are ttnn (no torch).
@@ -985,8 +996,14 @@ class LTXTransformerModel(Module):
 
         skip_self_attn_set = frozenset(skip_self_attn_blocks) if skip_self_attn_blocks else frozenset()
 
+        # LTX_SKIP_BLOCKS="a,b,..": identity-skip whole blocks (layer-prune experiment; residual passes
+        # through unchanged). Baked into the trace, so it must be constant across capture+replay.
+        _prune = {int(x) for x in os.environ.get("LTX_SKIP_BLOCKS", "").split(",") if x.strip().isdigit()}
+
         # Transformer blocks
         for block_idx, block in enumerate(self.transformer_blocks):
+            if block_idx in _prune:
+                continue
             result = block(
                 video_1BND=video_1BND,
                 video_prompt=video_prompt_1BLP,
@@ -1017,11 +1034,19 @@ class LTXTransformerModel(Module):
                 audio_padding_mask=audio_padding_mask,
                 audio_padding_mask_full=audio_padding_mask_full,
                 video_padding_mask=video_padding_mask,
+                video_kv_logical_n=video_kv_logical_n,
             )
             if self.has_audio:
                 video_1BND, audio_1BND = result
             else:
                 video_1BND = result
+            # Profiler drain every 16 blocks (LTX_PROFILE_FLUSH): 16 blocks × ~35 ops stays under the
+            # 12k-marker DRAM buffer, so markers are never dropped, while a per-BLOCK drain (a host
+            # readback of all 32 devices each block) is far too slow. Profiling only; no effect traced.
+            if os.environ.get("LTX_PROFILE_FLUSH") and (
+                block_idx % 16 == 15 or block_idx == len(self.transformer_blocks) - 1
+            ):
+                ttnn.ReadDeviceProfiler(self.mesh_device)
 
         v_inner_local = video_emb_ts.shape[-1]
         if self.image_conditioning:
@@ -1156,17 +1181,14 @@ class LTXTransformerCheckpoint:
             sd = fuse_loras_into(sd, lora_specs)
         return sd
 
-    def cache_name(self, lora_specs: list[LoraSpec], quant_tag: str | None = None) -> str:
-        """Cache key for ``cache_module.load_model``. LoRA-tagged so fused and base weights don't
-        alias in ``TT_DIT_CACHE_DIR``; quant-tagged because cached tensorbins carry their dtype, so
-        a bf8 preset run and the bf16 baseline must live in separate dirs."""
+    def cache_name(self, lora_specs: list[LoraSpec]) -> str:
+        """Cache key for ``cache_module.load_model``. LoRA-tagged so fused and
+        base weights don't alias in ``TT_DIT_CACHE_DIR``."""
         base = os.path.basename(self._checkpoint_path).removesuffix(".safetensors")
-        if lora_specs:
-            tag = "+".join(f"{os.path.basename(s.path).removesuffix('.safetensors')}@{s.strength}" for s in lora_specs)
-            base = f"{base}.lora-{tag}"
-        if quant_tag:
-            base = f"{base}.q-{quant_tag}"
-        return base
+        if not lora_specs:
+            return base
+        tag = "+".join(f"{os.path.basename(s.path).removesuffix('.safetensors')}@{s.strength}" for s in lora_specs)
+        return f"{base}.lora-{tag}"
 
     def build(
         self,
@@ -1183,14 +1205,10 @@ class LTXTransformerCheckpoint:
         is_fsdp: bool,
         has_audio: bool,
         image_conditioning: bool,
-        quant_config: LtxQuantProfile | None = None,
-        lora_enabled: bool = False,
     ) -> LTXTransformerModel:
         """Construct an ``LTXTransformerModel`` for this checkpoint (weights NOT loaded).
 
         Loading is deferred so the caller can manage the lifecycle (deallocate / reload).
-        ``quant_config`` bakes the preset dtypes into construction, so a cache miss loads
-        weights direct-to-quant and the cache write holds the quantized tensorbins.
         """
         return LTXTransformerModel(
             num_attention_heads=num_attention_heads,
@@ -1207,8 +1225,6 @@ class LTXTransformerCheckpoint:
             apply_gated_attention=self.has_gate,
             cross_attention_adaln=self.cross_attention_adaln,
             image_conditioning=image_conditioning,
-            quant_config=quant_config,
-            lora_enabled=lora_enabled,
         )
 
     def load(
@@ -1219,12 +1235,11 @@ class LTXTransformerCheckpoint:
         mesh_shape: tuple[int, ...],
         is_fsdp: bool,
         lora_specs: list[LoraSpec],
-        quant_tag: str | None = None,
     ) -> None:
         """Load (or reload) weights for a previously-built transformer."""
         cache_module.load_model(
             model,
-            model_name=self.cache_name(lora_specs, quant_tag),
+            model_name=self.cache_name(lora_specs),
             subfolder="transformer",
             parallel_config=parallel_config,
             mesh_shape=mesh_shape,
