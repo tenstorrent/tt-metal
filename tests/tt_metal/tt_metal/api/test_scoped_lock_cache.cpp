@@ -20,7 +20,6 @@ namespace {
 // Sentinels: NEW[s] = DFB_CACHE_NEW_BASE + s, OLD[s] = DFB_CACHE_OLD_BASE + s.
 constexpr uint32_t DFB_CACHE_NEW_BASE = 0xAA00;
 constexpr uint32_t DFB_CACHE_OLD_BASE = 0xBB00;
-constexpr uint32_t DFB_CACHE_RESULT_OFFSET = 0x40000;  // scratch L1 region, well clear of the small ring
 
 struct DfbCacheParams {
     uint32_t num_producers;
@@ -99,7 +98,15 @@ std::vector<uint32_t> dfb_cache_held(const std::vector<uint32_t>& block, const D
 // Builds the DFB, enqueues the cache-op kernel, and returns the per-slot read-back.
 std::vector<uint32_t> run_dfb_scoped_lock_cache_test(distributed::MeshDevice& mesh_device, const DfbCacheParams& p) {
     const uint32_t ring_base = static_cast<uint32_t>(mesh_device.allocator()->get_base_allocator_addr(HalMemType::L1));
-    const uint32_t result_addr = ring_base + DFB_CACHE_RESULT_OFFSET;
+    // Layout: handshake -> num_rounds words (one per round, written by the consumer);
+    // multi-consumer-ALL -> num_consumers blocks of num_entries; else 1 block of num_entries.
+    const uint32_t result_words = p.handshake ? p.num_rounds : (p.multi_all ? p.num_consumers : 1u) * p.num_entries;
+    const uint32_t result_bytes = result_words * sizeof(uint32_t);
+    auto result_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = result_bytes},
+        distributed::DeviceLocalBufferConfig{.page_size = result_bytes, .buffer_type = BufferType::L1},
+        &mesh_device);
+    const uint32_t result_addr = static_cast<uint32_t>(result_buffer->address());
     const CoreCoord core{0, 0};
     const CoreRangeSet crs(CoreRange(core, core));
     const experimental::NodeCoord node{core.x, core.y};
@@ -216,17 +223,9 @@ std::vector<uint32_t> run_dfb_scoped_lock_cache_test(distributed::MeshDevice& me
     distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
 
     // Kernels write their in-kernel verification read-back (via the non-cacheable alias so the result lands
-    // in TL1) to the scratch region; the host reads it directly. Layout: handshake -> num_rounds words (one
-    // per round, written by the consumer); multi-consumer-ALL -> num_consumers blocks of num_entries; else 1
-    // block of num_entries.
-    uint32_t result_words;
-    if (p.handshake) {
-        result_words = p.num_rounds;
-    } else {
-        result_words = (p.multi_all ? p.num_consumers : 1u) * p.num_entries;
-    }
+    // in TL1) to the result buffer; the host reads it directly.
     std::vector<uint32_t> result;
-    detail::ReadFromDeviceL1(mesh_device.get_devices()[0], core, result_addr, result_words * sizeof(uint32_t), result);
+    detail::ReadFromDeviceL1(mesh_device.get_devices()[0], core, result_addr, result_bytes, result);
     return result;
 }
 
