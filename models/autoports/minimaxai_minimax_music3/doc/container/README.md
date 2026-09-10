@@ -13,11 +13,16 @@ decision below was taken without asking.
 | `doc/container/README.md` | this work log |
 | `generated/container/` (gitignored) | the served wavs, response headers, `/health` dumps and the consumer container log |
 
-No code under `tt/`, `server/` or tt-model-manager changed. The stage-08 server already read `MM3_MESH_SHAPE`, `MESH_DEVICE`,
-`HF_MODEL`, `TT_DIT_CACHE_DIR` and `TT_METAL_CACHE` the way the `TtDitServerLauncher` exports them, and `tt-model`
-(`~/tt-model-manager`, branch `feat/source-extra-code`, commit `240112f` plus an uncommitted `shlex.quote` in the
-`--print` path that is not mine) needed no change, so no `fix/*` branch or PR was opened (`~/mm3-bringup/state/09.prs.txt`
-says so).
+No code under `tt/` or `server/` changed. The stage-08 server already read `MM3_MESH_SHAPE`, `MESH_DEVICE`,
+`HF_MODEL`, `TT_DIT_CACHE_DIR` and `TT_METAL_CACHE` the way the `TtDitServerLauncher` exports them, and the stage ran
+with `tt-model` from `~/tt-model-manager` (branch `feat/source-extra-code`, commit `240112f` plus an uncommitted
+`shlex.quote` in the `--print` path that is not mine) unchanged. One tt-model-manager bug surfaced during the consumer
+stop (`tt-model stop` without `--profile` reported a clean stop of a `p300` container that never existed, because
+`container.running(name_filter)` matches container names by substring, so `...-p300` matched `...-p300x2`). It is
+harmless for this stage (the real container was stopped cleanly) and was fixed on a `fix/` branch with a regression
+test and a draft PR: https://github.com/tenstorrent/tt-model-manager/pull/89 (branch `fix/stop-exact-container-name`
+off `origin/main` in a separate worktree `~/tt-model-manager-fix`, so the `feat/source-extra-code` checkout used by the stage
+was left untouched; full offline suite `729 passed`). Also in `~/mm3-bringup/state/09.prs.txt`.
 
 ## The manifest, and why each field is what it is
 
@@ -56,7 +61,7 @@ says so).
   `models.tt_transformers.tt.model` (asserting `Transformer`), and the host-side libraries with a `numpy < 2` check. All
   ran inside the finished image (build log step `[runtime 21/22] RUN bash /ctx/verify.sh`, 14.7 s).
 - **`ubuntu "22.04"`, `python "3.12"`**: the base image is `ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest`
-  (digest `c2161d26c599...`, created 2026-09-09); the venv inside is Python 3.12.14, matching the host's 3.12.13.
+  (digest `c2161d26c599...`, `docker image inspect` reports created 2026-09-09T21:56Z); the venv inside is Python 3.12.14, matching the host's 3.12.13.
 
 Validation without building (skill step 8) and the argv preview matched the stage-08 launch flag for flag:
 
@@ -85,7 +90,7 @@ source ~/mm3-bringup/common.sh; cd $MM3_WT
 | `build_metal.sh` inside the builder stage | 487.5 s. Not a cold build: the `ccache` / CPM cache mounts on this host were warm from an earlier tt-model build of another model (the 1-3 h estimate did not apply) |
 | engine install (`torch==2.11.0` + packages, `uv`) | 5.3 s (uv cache) |
 | `verify.sh` inside the runtime image | 14.7 s, all assertions passed |
-| image `tt-model/minimax-music3:ac48eefd11a5` | 866 MB content, 3.94 GB unpacked; OCI layout `image/` 827 MB in 28 blobs |
+| image `tt-model/minimax-music3:ac48eefd11a5` | 866.2 MB content (`docker images`: 3.94 GB unpacked, read after the build, not in a log); OCI layout `image/` 827 MB in 28 blobs |
 | staged package | `$MM3_BUILDS/minimax-music3/{tt_kernel_manifest.json, README.md, requirements.lock, code/, image/}` |
 
 `package` froze the image's venv into `requirements.lock` and recorded `runtime.lock: requirements.lock` on the wire
@@ -145,13 +150,14 @@ curl http://127.0.0.1:8010/v1/audio/speech -H 'Content-Type: application/json' -
 |---|---|
 | `GET /health`, `GET /v1/models` | `status ok, warm true, busy false, dtype_policy optimized`; model id `MiniMaxAI/MiniMax-Music3` (`generated/container/health_before.json`) |
 | model-card curl, 250 frames (10 s), seed 7 | HTTP 200 `audio/wav`, 1,763,372 bytes; headers `x-mm3-frames 250`, `x-mm3-seed 7`, `x-mm3-stopped-by max_frames`, `x-mm3-prompt-tokens 58`, `x-mm3-generation-seconds 29.30`; curl wall 29.31 s. Validated: 44,100 Hz, 2 channels, PCM_16, 9.996 s, RMS 0.0943, peak 1.000 -> `generated/container/served_seed7_10s.wav` (= `state/09.served_wav`) |
-| model-card curl verbatim, 750 frames (30 s), seed 7 | HTTP 200, 30.02 s of audio, RMS 0.1087, peak 1.000, generation 85.89 s, wall 85.91 s -> `generated/container/served_model_card_curl_750.wav`; stage 08 measured 30.02 s / RMS 0.109 / 83.2 s for the same request on the host |
+| model-card curl verbatim, 750 frames (30 s), seed 7 | HTTP 200, 30.02 s of audio, RMS 0.1087, peak 1.000, generation 85.89 s, wall 85.91 s -> `generated/container/served_model_card_curl_750.wav`; stage 08 measured 30.02 s / RMS 0.109 / 83.47 s wall for the same request on the host, and the two wavs are byte-identical |
 | `tt-model stop <scratch manifest> --profile p300x2` | `clean shutdown 2.2s`, container removed (`$MM3_LOGS/09.stop.log`) |
 
-The 10 s song took 29.3 s in the container versus 26.3 s on the host in stages 07/08 (about 11 % slower). Not
-investigated in this stage: the container runs with `MM3_TORCH_THREADS` defaulting to `cpu_count - 4` like the host,
-but the host was also running a Llama-3.1-8B tt-studio container on chips 0/1 and the tt-studio stack during this run,
-so the difference may be host contention rather than the container. Recorded as an open item.
+Like-for-like timing: the verbatim 750-frame model-card request took 85.89 s in the container versus 83.47 s wall on
+the host in stage 08 (`doc/server/results.json`, about 3 % slower), and the two wavs are byte-identical
+(`generated/minimax_music3_model_card_curl.wav` from stage 08). The 10 s request is not comparable with the stage-08
+10 s test (different prompt: 58 vs 104 prompt tokens). The host was also running a Llama-3.1-8B tt-studio container on
+chips 0/1 and the tt-studio stack during this run, so the 3 % may be host contention; not isolated.
 
 ## Publish (private, own namespace)
 
@@ -190,7 +196,7 @@ HOME=$MM3_ROOT/consumer-home with_hw_lock timeout 3000 tt-model --no-color serve
 | model-card curl, 250 frames, seed 7 | HTTP 200, `x-mm3-generation-seconds 29.47`, curl wall 29.48 s; 44.1 kHz stereo, 9.996 s, RMS 0.0943, peak 1.000 -> `generated/container/consumer_seed7_10s.wav` |
 | consumer wav vs author-path wav | **bit-identical** (`np.array_equal`, max abs diff 0.0) |
 | `docker logs` captured before stop | `generated/container/consumer_container.log` (643 lines); `/health` -> `generated/container/consumer_health.json` |
-| `HOME=... tt-model stop jashansinghTT/MiniMax-Music3-tt` | `clean shutdown 1.9s`, no `tt-model-minimax-music3-*` container left (`$MM3_LOGS/09.consumer_stop.log`) |
+| `HOME=... tt-model stop jashansinghTT/MiniMax-Music3-tt` | `clean shutdown 1.9s` for `tt-model-minimax-music3-p300x2`, no `tt-model-minimax-music3-*` container left (`$MM3_LOGS/09.consumer_stop.log`). The log also claims a clean stop of `tt-model-minimax-music3-p300`, which never existed: see the tt-model-manager finding below |
 
 ## Gate
 
@@ -229,7 +235,9 @@ this work log in the follow-up commit.
   kind; cosmetic.
 - `tt-model stop` removes the container, so its logs vanish with it; capture `docker logs` first (done for the consumer
   run, missed for the author run, whose boot is in `$MM3_LOGS/09.serve.log`).
-- The container's 10 s generation was 29.3 s vs 26.3 s on the host (see above); cause not isolated.
+- The container's 750-frame generation was about 3 % slower than the host's (85.89 s vs 83.47 s); cause not isolated.
+- The wire manifest's `dirty: true` also reflects the untracked `tt_metal/third_party/tt-cluster-descriptors/` left by the
+  submodule init, besides the `doc/*/results.json` rewrites; neither ships.
 - `requirements.lock` resolved `transformers 5.17.0` and `huggingface_hub 1.30.0`, newer than the host's 5.15.0 / 1.16.1;
   outputs matched bit for bit, but a future rebuild without the lock could drift further. Re-authoring with
   `runtime.lock: requirements.lock` (committing the lock next to the YAML) would freeze it.
