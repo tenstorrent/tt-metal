@@ -12,10 +12,200 @@
 *Slide-style status deck. Each `---` is a slide. Keep slides to one screen.*
 ***Chronological: newest week first.***
 
-**Two platforms, and the distinction runs through everything below.** *craq-sim* is a fast functional
+Two platforms, and the distinction runs through everything below.** *craq-sim* is a fast functional
 simulator (~15 s/run, deterministic) with no transfer latency and no contention — it is where all development
 happens. The *hardware emulator* is the closest thing to real behaviour we can get; it is available but far
 less accessible, so it is spent deliberately and rarely. **Never mix numbers from the two.**
+
+# ► Week of 2026-09-03 — Milestone 1.0 shipped; 1.1 measured 34/34; a main regression found
+
+## 1. TL;DR
+
+- *
+- Milestone 1.0 is merged.** PR #55000, squashed as `d66f111add3`. The Quasar-native factory, its
+  kernels and the three record docs are on main.
+- Fixed metal host 2.0 production binary_ng issue #54138
+- **Two defects filed**, one to each owner: craq-sim#338 (implicit sync unimplemented) and
+  tt-metal#55276 (chained-DFB corruption — the 18-config data corruption).
+- **Milestone 1.1 correctness is answered: 34 of 34 bit-exact**, full coverage matrix, on a
+  **one-line** kernel fix. Uneven tile counts work, **including zero-work threads** (slide 3).
+- **A third defect found, in main itself:** multi-threaded Quasar DFB **hangs** on `origin/main` while
+  passing at our pre-merge anchor. Attributed by bisection, not yet root-caused (slide 4). **This is now
+  the critical path** — M1.1 cannot land until it is fixed.
+
+Also: reviewed the 1.0 perf analysis for inaccuracies and corrected the docs in place
+
+Also: attemped to support quasar CI, but currently blocked by craq-sim release procedure.
+
+---
+
+## 2. Two defects filed, routed by owner
+
+| issue | what | why that owner |
+|---|---|---|
+| **craq-sim#338** | Implicit sync is **not implemented**: `PER_TR_ID_IP_*` reads 0 unconditionally, and DFB credit posting is `posted++` per transaction keyed only on `(tensix_id, counter)` — no txn-ID dimension, no threshold. The host computes the whole txn-ID apparatus and the simulator discards it. | Two named, verified simulator gaps. An existing upstream test is already red on an unmodified tree. |
+| **tt-metal#55276** | Two DFBs chained through a Tensix stage silently return wrong data when a DM endpoint outnumbers the Tensix side — the 18-of-31 config corruption, reproduced in a standalone gtest with no TTNN. | Two of the three candidate layers are tt-metal code, and the one mechanism we can name is host-side: `tile_counter_allocator_` is a member of `ProgramImpl`, so it is **program-scoped, not per-DFB** — both DFBs on a cluster draw counters from one allocator. |
+
+Both carry a reproducer that applies to `origin/main`. The tests stayed **unstaged by decision**: these
+DFB gtests run in no CI list, so merging them would add tests nothing executes.
+
+---
+
+## 3. Milestone 1.1 / F1 — measured: 34 of 34 bit-exact on a one-line fix
+
+**The whole change is one line.** The compute kernel's `my_tiles = num_tiles / get_num_threads()`
+truncated, so `Tc % C != 0` left entries unconsumed and the writer waited forever. It becomes
+`num_tiles / N + (get_my_thread_id() < num_tiles % N ? 1 : 0)` — the share the DFB already hands
+consumer thread `c`. Reader and writer needed nothing: their strided loops are already uneven-safe, and
+per-cluster unequal counts were already plumbed through `split_work_to_cores` (metal's "core" is a
+whole Quasar cluster).
+
+**Result: 34/34 PASS, `mismatch = 0` on every case, native routing asserted throughout.** The full
+matrix below was run one process per case, on the pre-merge anchor `8e3f13a177b` (main itself cannot run
+multi-threaded — slide 4).
+
+**Two predictions from source analysis that the data falsified:**
+
+- **The empty-thread deadlock does not happen — the barrier is unreachable on our path.** The only
+  `sync_threads` in the DFB path (`dataflow_buffer.inl:390`) lives inside `handle_final_credits`, whose
+  two callers are both guarded by `ptiles_read_ > 0` / `ctiles_written_ > 0`. Those counters are
+  incremented *only* by `commit_implicit_read`/`commit_implicit_write` (`:538`, `:572`), reached only
+  from the **implicit-sync** overloads. **Our factory hardcodes explicit sync, so both are permanently 0
+  and no thread ever calls it.** The deadlock needs an asymmetry — some threads arriving, one not — and
+  nobody arrives. Empty threads aren't handled; they never matter. *The hazard is still real for
+  implicit sync (M2.6), which craq-sim cannot run anyway (craq-sim#338).*
+
+**Coverage rests on two independent levels**, which is what makes a small matrix sufficient:
+
+1. **Cluster level** — `split_work_to_cores` yields at most two groups differing by 1.
+2. **Thread level** — depends *only* on each cluster's count `Tc`, so `T = 32·Tc` isolates it completely.
+
+### Level 2 — thread level, all clusters identical (`T = 32·Tc`), at `(4,4,2)` — **all PASS**
+
+| `Tc` | `T` | R=4 → | C=4 → | W=2 → | what only this case exercises |
+|---:|---:|---|---|---|---|
+| 1 | 32 | 1,0,0,0 | 1,0,0,0 | 1,0 | empties on **all three** axes |
+| 2 | 64 | 1,1,0,0 | 1,1,0,0 | 1,1 | empties on R/C while **W is exactly even** |
+| 3 | 96 | 1,1,1,0 | 1,1,1,0 | 2,1 | a **single** empty thread + tail on W |
+| **4** | **128** | 1,1,1,1 | 1,1,1,1 | 2,2 | today's minimum legal shape — even everywhere |
+| 5 | 160 | 2,1,1,1 | 2,1,1,1 | 3,2 | tail on all three, **no** empties |
+| 6 | 192 | 2,2,1,1 | 2,2,1,1 | 3,3 | tail on R/C while W is even, no empties |
+| 7 | 224 | 2,2,2,1 | 2,2,2,1 | 4,3 | tail on all three, opposite parity |
+| 8 | 256 | 2,2,2,2 | even | 4,4 | even, ring **exactly** full |
+| 9 | 288 | 3,2,2,2 | 3,2,2,2 | 5,4 | first tail that **wraps** the ring |
+| 40 | 1280 | 10 each | 10 each | 20,20 | even, deep wrap — the perf shape |
+| 41 | 1312 | 11,10,10,10 | same | 21,20 | tail at depth, deep wrap |
+
+`Tc=2` and `Tc=6` are the discriminating pair: both leave W exactly even while R and C are ragged, one
+with empty threads and one without — which separates the truncating divide from the empty-thread case.
+A single ragged shape conflates them.
+
+### Level 1 — cluster level — **all PASS**
+
+| `T` | clusters | per-cluster | exercises |
+|---:|---:|---|---|
+| 1 | 1 | 1 | single cluster, 3 empty readers |
+| 31 | 31 | 1 each | **fewer clusters than the grid** — one cluster gets no kernel at all |
+| 33 | 32 | one 2, thirty-one 1 | two groups **and** empties |
+| 129 | 32 | one 5, thirty-one 4 | two groups, tails, no empties |
+| 1281 | 32 | one 41, thirty-one 40 | two groups at perf scale |
+
+**`(4,4,2)` cannot be the only config.** Its input DFBs are entirely `num_tcs_to_rr = 1`, so it never
+reaches the `handle_final_credits` tail branch. `1,4,4` and `4,4,1` drive `N=4` with one thread owning
+every counter — first-class cases, not sanity checks. Config coverage, all PASS:
+
+| config | cases | reaches |
+|---|---:|---|
+| `4,4,2` | 16 | full Level-2 `Tc` sweep + all Level-1 splits |
+| `1,4,4` | 6 | `num_tcs_to_rr = 4` on the **producer** side |
+| `4,4,1` | 6 | `num_tcs_to_rr = 4` on the **consumer** side |
+| `2,4,2` | 4 | `N = 2` on **both** sides at once |
+| `1,1,1` | 2 | degenerate control — every `N = 1` |
+
+**Any `T` is constructible** as `[1, 1, 32, T·32]` — legitimate because the reader walks
+`page = start_tile_id + k`, so behaviour depends on `T` alone, not on how it factors.
+
+**F1 is now implemented, not just measured.** The divisibility gate is **deleted** — not bypassed —
+so `matches_quasar_native_slice` requires only a non-empty output and a non-empty worker grid; the
+`lcm(R,C,W)` computation that existed solely to serve it is gone. Eleven ragged shapes and a
+cache-interference case are **checked in** to `test_binary_ng_quasar_native.py`, each asserting native
+routing from `kernels.yaml` so a silent fallback cannot pass. 14 passed with the knob on, and the
+fallback arm is unaffected (1 passed, 14 skipped with it off).
+
+Program-cache behaviour is asserted rather than assumed: the op has no `compute_program_hash` override,
+so the framework hashes tensor specs and different shapes take different entries — the new test walks
+even → ragged → even → empty-thread → even in **one process** and re-checks each.
+
+**Two caveats stand.** This is craq-sim, which prices data movement at zero, so 34/34 bit-exact is a
+correctness result and says nothing about what uneven work *costs*. And none of it can land while main
+hangs multi-threaded (slide 4).
+
+Full write-up: `.link_to_claude/plans/quasar-m1-1-uneven-tiles.md`.
+
+---
+
+## 4. BLOCKER — two regressions in main; Quasar multi-thread does not run there
+
+Two independent problems, found after resetting the branch onto main. **Neither is visible to CI**,
+because Quasar tests run only on real WH/BH — never craq-sim.
+
+**4.1 No Quasar DFB kernel compiles (confirmed, patched locally).** `831426fef6f` (#51597) appended
+`&& !defined(NOC_API_V1)` to both include guards in `dataflow_buffer.h`, and `jit_build/build.cpp:220`
+defines `NOC_API_V1` for Quasar-on-`.so`-simulator — so craq-sim builds take the **tt-1xx (Gen1)**
+headers. Reproduced on the untouched upstream nightly test. The impl-selection guard is collateral: the
+commit only meant to hide the *zeroing* API, and used the correct skip-pattern for `noc_zero_dram.inl`
+but not for the other two.
+
+**4.2 Multi-threaded DFB hangs on main — ATTRIBUTED by bisection, not root-caused.**
+
+Same test, same simulator (`ad401613`), same env; the only variable is the commit:
+
+| commit | native `4,4,2`, 1280 tiles | |
+|---|---|---|
+| **`8e3f13a177b`** — our pre-merge branch head | **PASS 4.83 s** | the anchor; docs' `44.12 cyc/tile` reproduce here |
+| **`origin/main`** `d2f4b3afeca` | **HANG** — 101% CPU, indefinite | |
+
+⇒ **main regressed multi-threaded Quasar DFB** somewhere between the branch's base and today.
+
+Ruled out by direct test rather than reasoning: our kernel edits (reverted, still hangs); the probe and
+its shape (reproduces on the untouched upstream nightly test); the two simulator scheduling env vars;
+and **craq-sim version** — identical hang on `9ed8f797` and `ad401613`. On main, native `1,1,1` passes
+(6.91 s) and the non-native path passes (7.15 s), so the surviving difference is *one thread vs many*.
+
+**Note the merge commit is not a safe anchor.** `831426fef6f` landed 2026-09-01, a day before PR #55000
+merged, so `d66f111add3` inherits 4.1 as well. The last commit that runs Quasar multi-thread on craq-sim
+is the pre-merge branch head. Next step is bisecting main between the branch base and `d2f4b3afeca`.
+
+---
+
+## 5. Quasar has no craq-sim CI, and it cost us twice this week
+
+The Quasar regression lists (`tests/scripts/quasar/quasar_regression_tests.yaml`,
+`quasar_sim_regresion_tests.yaml`) are explicit per-test allowlists, and nightly runs Quasar only on real
+WH/BH SKUs. So **nothing in CI ever executes a Quasar DFB test on craq-sim.**
+
+Two regressions this week landed in main and sat there unnoticed as a direct result: the `NOC_API_V1`
+guard breakage (4.1), and an upstream implicit-sync test that is already red on an unmodified tree
+(craq-sim#338). Both were found by hand, locally.
+
+**Local experiment on the version axis:** craq-sim was 13 commits stale (2026-08-26 against a Sep-3
+main). We updated to `ad401613`, rebuilt, and re-tested — then rebuilt again at the old `9ed8f797` to
+test causality. Result: the skew was real housekeeping but **not** the cause of 4.2. Version skew has now
+bitten three times, and this instance presented as a **silent spin**, not the loud
+`UnimplementedFunctionality` abort of the earlier two — the more dangerous form, since it is
+indistinguishable from the DFB deadlocks we actually hunt.
+
+**Standing rule adopted:** after any rebase onto main, run a known-good sanity case *and* check craq-sim
+is current, before taking any new measurement.
+
+---
+
+## 6. Next
+
+1. **Bisect 4.2** between the branch base and `d2f4b3afeca`. It is the critical path: nothing merges
+   while main cannot run Quasar multi-thread, and it is a regression against a shipped feature.
+2. **Report 4.1 upstream** — small, well-evidenced, unblocks every craq-sim user. Local patch ready.
+---
 
 # ► Week of 2026-08-27 — Milestone 1 measured
 
@@ -24,10 +214,11 @@ less accessible, so it is spent deliberately and rarely. **Never mix numbers fro
 The founding question was whether Quasar's idle engines are worth exploiting for elementwise ops: the
 baseline used **2 of 6** DM cores and **1 of 4** Tensix. Answer: **yes**, by a wide margin.
 
-`R=4, C=4, W=2` — all 6 user DM cores, all 4 Neos — delivers a measured **2.70x** at the 1280-tile
-benchmark shape, rising to **4.00x** as tensors grow past the fixed launch cost — **exactly the theoretical ceiling** —
-**bit-exact**, against a
-**1.30x** go/no-go criterion. **GO.**
+`R=4, C=4, W=2` — all 6 user DM cores, all 4 Neos — delivers a measured **2.70x latency gain** at the
+1280-tile benchmark shape (re-measured 2026-09-09 as 2.69x), on a **4.00x throughput gain** that the
+latency gain approaches as tensors grow past the fixed launch cost — **exactly the theoretical ceiling** —
+**bit-exact**, against a **1.30x** go/no-go criterion. Baseline is the native factory at `1,1,1`
+(Milestone-1 code). **GO.**
 
 Also this week: rebased onto main (302 commits; tt-llk #1678 landed, so `C > 1` is live), and craq-sim blocker issue #319 has been fixed. Tasks 4 and 5
 landed (thread-generic kernels + host wiring), and the full legal `(R,C,W)` space was measured
@@ -57,33 +248,51 @@ as correctness, and they are the only reason the compute term is known at all.
 
 ---
 
-## 3. Two numbers, and why both
+## 3. Throughput gain and latency gain — two different quantities
 
-`span(T) = prologue + marginal × T`, fitted over **60 → 180 tiles/cluster**, where the curve is straight
-(three points, max residual 3.3 cycles on spans of 3.7k–32.9k).
+Both arms are the **Quasar-native factory** (Milestone 1): identical kernels and factory, thread counts
+set to `1,1,1` for the baseline, so the ratio isolates threading and nothing else. The Milestone-0
+`metal_v2` measurement (§3 of the 2026-08-27 entry) is a **history record** and is never a denominator
+for perf gains. Basis rule: design §2.1.
 
-| basis | `1,1,1` | `4,4,2` | speedup | what it is |
-|---|---|---|---|---|
-| **marginal** (slope of span vs T) | 176.50 | 44.12 | **4.00x** | steady-state cost per tile; prologue-free |
-| span @ 180 t/c (5760 tiles) | 180.76 | 50.26 | 3.60x | raw `span/T`; large-tensor observation |
-| **span @ 40 t/c (1280 tiles)** | 195.68 | 72.42 | **2.70x** | raw `span/T`; what you observe at the benchmark shape |
+`span(T) = prologue + marginal × T`. Measured spans, median over 32 clusters, both arms, one sim session:
 
-Both bases are correct and they are not interchangeable — the span basis is always the smaller number,
-because the prologue is a larger fraction of the faster config's total. **Marginal perf gain is more
-illustrative, but span perf gain is more real:** the marginal isolates steady-state scaling and is the
-only basis on which different thread counts are comparable, while the span basis is what somebody running
-the op at a given size actually gets. Definitions and the rule for naming the basis: design §2.1.
+| tiles/cluster | total tiles | `1,1,1` span | `4,4,2` span | **latency gain** |
+|---:|---:|---:|---:|---:|
+| 40 | 1280 | 7813 | 2909 | **2.69x** |
+| 60 | 1920 | 11333 | 3751 | 3.02x |
+| 120 | 3840 | 21893 | 6395 | 3.42x |
+| 180 | 5760 | 32453 | 9031 | 3.59x |
+| ∞ | — | — | — | 4.00x |
+
+Fitted over 60/120/180 (the straight region): `1,1,1` = **773 + 176.00·T**, `4,4,2` = **1112 + 44.00·T**.
+The `1,1,1` arm is exactly linear (both 60-cycle steps are 10560); `4,4,2` least-squares to 44.00 with a
+±0.07 spread. Reproduces the earlier independent fit (176.50/44.12, prologue 767/1106) within 0.3%.
+
+| the gain | value | basis | what it answers |
+|---|---:|---|---|
+| **throughput gain** | **4.00x** | `176.00 / 44.00`, slope ratio | how much faster tiles retire in steady state |
+| **latency gain** | **2.69x** | `7813 / 2909`, span ratio @ 1280 tiles | how much sooner the op finishes at the benchmark shape |
+
+**They are not two readings of one number.** Throughput is a rate: its gain is the slope ratio and carries
+no prologue, so it is size-independent. Latency is the time to finish a fixed tensor: its gain is
+`(773 + 176T) / (1112 + 44T)`, which climbs monotonically with `T` and approaches 4.00x without reaching
+it. **Throughput gain is the ceiling; latency gain is what is delivered at a stated size.** Quote the
+latency gain for a result and name the size; quote the throughput gain as the asymptote — never the
+reverse, and never either one unlabelled.
 
 **4.00x is the ceiling, not a coincidence.** Going `1,1,1 → 4,4,2` shrinks the three roofline terms by
 (reader 4x, compute 4x, **writer only 2x**), so no cost model of the form `f(Rc/R, Cc/C, Wc/W)` can
-exceed 4x. Measured: `176.50 / 44.12 = 4.0005`. The constants were pinned independently — `Cc` from the
-`C=1` plateau, `Rc`/`Wc` from the `R=1` and `W=1` rows — so landing on the cap is a check the data could
-have failed, not a construction.
+exceed 4x. Measured twice on independent fits: `176.50 / 44.12 = 4.0005` and `176.00 / 44.00 = 4.0000`.
+The constants were pinned independently — `Cc` from the `C=1` plateau, `Rc`/`Wc` from the `R=1` and `W=1`
+rows — so landing on the cap is a check the data could have failed, not a construction. Note the *ratio*
+reproduced to 4 digits across the two fits even though the absolute constants moved 0.3%.
 
-The gap between 4.00x and 2.70x is prologue: `4,4,2` carries the larger fixed cost (1106 vs 767 cycles —
-more cores to launch and rendezvous), which is 38% of its span at 40 tiles/cluster. It amortises away —
-3.60x by 180 tiles/cluster. **Quote 2.70x as the measured result at the benchmark shape; 4.00x is the
-asymptote.**
+**The whole gap between the two gains is prologue.** `4,4,2` carries the larger fixed cost (1112 vs 773
+cycles — more cores to launch and rendezvous), and at 40 tiles/cluster that is **38% of its span**. So the
+faster config pays a bigger entry fee, which is why the latency gain starts well below the ceiling and
+climbs as the body grows: 2.69x → 3.02x → 3.42x → 3.59x over 40 → 180 tiles/cluster. **Quote 2.69x as the
+measured result at the benchmark shape; 4.00x is the asymptote.**
 
 ---
 
@@ -260,7 +469,7 @@ asserted against this deck's own table.
 
 `marginal = max(165.0/R, 176.5/C, 83.5/W)` cyc/tile. **31 of 31 configs within 0.04%.**
 
-| term | per-core cost | how it is pinned |
+| term | single-thread cyc/tile | how it is pinned |
 |---|---|---|
 | reader | **165.0** | the `R=1` rows: `1,2,x` measure 165.00 |
 | **compute** | **176.5** | **15 configs at `C=1`, spread 0.017% while DM cores go 2 → 6** |
@@ -308,7 +517,7 @@ columns stay. (`F#` in the review-findings doc is an unrelated namespace.)
 | M# | F# | item | note |
 |---|---|---|---|
 | **1.0** | — | **phase-1 slice + thread sweep — DONE** | bf16 `add`, TILE, interleaved, no bcast, even divisibility. `4,4,2` optimum, criterion cleared |
-| 1.1 | F1 | uneven tile counts | every later milestone inherits the restriction otherwise |
+| **1.1** | F1 | **uneven tile counts — DONE 2026-09-04** | gate deleted; one-line compute-kernel fix; 34/34 bit-exact incl. zero-work threads. Cannot land while main hangs |
 | 1.2 | F2 | rest of FPU op set (sub, mul) | `multiply` is fidelity-dependent |
 | 1.3 | F3 | sharded / borrowed operands | zero NoC ⇒ isolates the compute levers |
 | 1.4 | F4 | mixed layouts | falls out of F3 |
@@ -381,6 +590,8 @@ Period covered: design + measurement. **Implementation plan not yet written — 
   `program_factory_t` variant seam, so the current functional path stays live as a reference arm.
 - **Measured a baseline** on craq-sim: **213.72 cyc/tile**, using **2 of 6** DM cores and **1 of 4** Tensix
   engines, with the one active Tensix ~96 % stalled. That idle hardware is the entire premise of the project.
+  (This is the `metal_v2` arm — a Milestone-0 **history record**; later perf gains all divide by the
+  native factory at `1,1,1`, never by this.)
 - **Investigated what craq-sim can and cannot measure** — and it changed the plan, twice.
 - **Measured every tunable knob reachable without new code.** Each moves craq-sim by **<=1.10x**
   (~1.17x combined) — **but that is a statement about craq-sim, not about the knobs.** Two of the three are
@@ -407,16 +618,22 @@ independently confirmed by two reviewers each. All evidence archived with file:l
 
 ---
 
-## 3. Measured baseline (craq-sim, 32x40 tiles, bf16 DRAM-interleaved `add`)
+## 3. Measured baseline — the `metal_v2` arm (Milestone 0), craq-sim, 32x40 tiles, bf16 DRAM-interleaved `add`
 
 | quantity | value |
 |---|---|
-| per-core kernel span | 8549 cycles -> **213.72 cyc/tile** |
+| per-cluster kernel span | 8549 cycles -> **213.72 cyc/tile** |
 | marginal cost | **187.0 cyc/tile**, exactly linear across 5 shape rungs |
 | DM cores active | **2 of 6** (`DM2` reader, `DM3` writer) |
 | Tensix engines active | **1 of 4**; within it TRISC3 runs **16 cycles** — SFPU wholly unused |
 | Tensix utilisation | ~**96 % stalled** — compute is starved, not busy |
 | all-operands-sharded roofline | 64.6 cyc/tile => **3.31x headroom** (craq-sim basis) |
+
+**History record (Milestone 0): every number in this table is the `metal_v2` factory**, the arm
+Milestone 0 reproduces. **Perf gains are never computed against it** — the baseline for every gain in
+these docs is the **native factory at `1,1,1`** (176.00 marginal / 7813 span @ 40 t/c). The
+187.00 → 176.00 delta is the F13 stride-cascade price (research §5.0.2), a cost record, not part of any
+gain.
 
 **Reproducible and deterministic:** bit-identical across runs (sim clock 17934), ~15 s per run. Re-verified
 after every experiment.
@@ -441,7 +658,7 @@ Consequences we hit in practice:
 - Three traps that produce *wrong* conclusions rather than missing ones (ring-full instruction replay faking a
   depth knee; deterministic races making a green multi-thread run evidence-free; no-contention linear scaling).
 - **And one in our own harness**: the profiler CSV has no dispatch key, so two dispatches in one process
-  leave a *per-core blend* of two shapes — now guarded against.
+  leave a *per-cluster blend* of two shapes — now guarded against.
 - Tensix is **not** 1 instr/cycle (up to 3), so compute-thread sweeps sit on a different scale than DM sweeps.
 
 ---
