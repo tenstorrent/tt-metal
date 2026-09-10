@@ -197,8 +197,10 @@ resolve_tool() {
 	fi
 
 	# Run straight out of a checkout: tools/scaleout/kmd_triage -> root.
+	local repo_root
+	repo_root=$(cd -- "$script_dir/../../.." && pwd)
 	for c in build build_Release build_RelWithDebInfo build_Debug; do
-		candidates+=("$script_dir/../../../$c/tools/scaleout/kmd_triage")
+		candidates+=("$repo_root/$c/tools/scaleout/kmd_triage")
 	done
 
 	for c in "${candidates[@]}"; do
