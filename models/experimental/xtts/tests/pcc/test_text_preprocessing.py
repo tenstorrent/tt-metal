@@ -23,7 +23,9 @@ def space_id():
 
 @pytest.mark.parametrize(
     "separator",
-    ["\n", "\t", "\r\n", " ", "\n\n", " \n ", "\t\t", ""],
+    # Escapes, not literals: a raw U+2028 is a Python line terminator (str.splitlines splits
+    # on it) so line-oriented scanners mis-count this file -- it broke the SPDX CI check.
+    ["\n", "\t", "\r\n", "\xa0", "\n\n", " \n ", "\t\t", "\u2028"],
     ids=["newline", "tab", "crlf", "nbsp", "blank-line", "mixed", "double-tab", "line-sep"],
 )
 def test_separator_yields_one_space_marker(separator, space_id):
