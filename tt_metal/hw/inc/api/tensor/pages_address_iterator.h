@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <array>
 #include <cstddef>
 #include "api/tensor/page.h"
 #include "internal/tensor/helpers.h"

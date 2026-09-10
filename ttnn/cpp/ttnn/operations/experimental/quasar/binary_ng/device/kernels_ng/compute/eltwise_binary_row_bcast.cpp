@@ -65,9 +65,6 @@ void kernel_main() {
         exp_cb_bcast.pop_front(num_tiles_per_cycle);
         // unary_bcast_uninit<BroadcastType::ROW>(cb_bcast);
         pack_reconfig_data_format(cb_llk_post, cb_out);
-#ifdef ARCH_BLACKHOLE
-        PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));
-#endif
 
         PREPROCESS(LHS, DataflowBuffer(cb_pre_lhs), exp_cb_post_lhs, exp_cb_out, num_tiles_per_cycle);
         exp_cb_post_lhs.wait_front(num_tiles_per_cycle);

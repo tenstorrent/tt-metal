@@ -220,7 +220,7 @@ Tensor clamp(
     std::optional<Tensor> min,
     std::optional<Tensor> max,
     const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<Tensor>& /*output_tensor*/) {
+    const std::optional<Tensor>& output_tensor) {
     auto output_memory_config = output_mem_config.value_or(input_a.memory_config());
     TT_FATAL((max.has_value() || min.has_value()), "Only one of 'min' or 'max' can be None. Please provide one value");
     if (!max.has_value()) {
@@ -228,26 +228,24 @@ Tensor clamp(
             ttnn::ge(input_a, min.value(), std::nullopt, output_memory_config),
             input_a,
             min.value(),
-            output_memory_config);
+            output_memory_config,
+            output_tensor);
     }
     if (!min.has_value()) {
         return ttnn::where(
             ttnn::le(input_a, max.value(), std::nullopt, output_memory_config),
             input_a,
             max.value(),
-            output_memory_config);
+            output_memory_config,
+            output_tensor);
     }
+    // y = max(min(x, max), lo) with lo = min(min, max).
+    // torch.clamp defines the degenerate case min > max as "every element becomes max"; clamping the
+    // lower bound to the upper bound first folds that case into the plain two-op form, so the whole
+    // tensor-bounds path is three device kernels instead of seven (issue #49996).
+    Tensor lo = ttnn::minimum(min.value(), max.value(), std::nullopt, output_memory_config);
     Tensor a_max = ttnn::minimum(input_a, max.value(), std::nullopt, output_memory_config);
-    Tensor temp = ttnn::where(
-        ttnn::eq(min.value(), 0.0f, std::nullopt, output_memory_config),
-        ttnn::relu(a_max, output_memory_config),
-        ttnn::maximum(a_max, min.value(), std::nullopt, output_memory_config),
-        output_memory_config);
-    return ttnn::where(
-        ttnn::gt(min.value(), max.value(), std::nullopt, output_memory_config),
-        max.value(),
-        temp,
-        output_memory_config);
+    return ttnn::maximum(a_max, lo, std::nullopt, output_memory_config, output_tensor);
 }
 
 // Gated Linear Unit activation: matmul(split[0],sigmoid(split[1]))

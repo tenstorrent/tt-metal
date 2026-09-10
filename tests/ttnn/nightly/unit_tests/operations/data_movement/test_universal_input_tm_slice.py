@@ -203,7 +203,7 @@ def _run_slice(
 
     # bf16 native → bit-exact; bf8_b/f32 → PCC (quantization or composite bf16 intermediates).
     if dtype == ttnn.bfloat16 and ulp_when_exact:
-        assert_with_ulp(ref, got, ulp_threshold=0)
+        assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=0)
     else:
         assert_with_pcc(ref.float(), got.float(), 0.9999)
 
@@ -1116,7 +1116,7 @@ def _slice_and_assert_shrink(device, shape, begins, ends, out_layout, expected_g
     slices = tuple(slice(b, e, 1) for b, e in zip(begins, ends))
     ref = x[slices]
     got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
-    assert_with_ulp(ref, got, ulp_threshold=0)
+    assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=0)
 
 
 def test_slice_specless_sharded_output_grid_shrinks_height(device):
@@ -1193,4 +1193,4 @@ def test_slice_specless_sharded_output_grid_shrinks_block_col_major(device):
     assert ss.grid == expected, f"Expected COL_MAJOR rect (0,0)->(1,2), got {ss.grid}"
     ref = x[0:1, 0:1, 0:64, 0:96]
     got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
-    assert_with_ulp(ref, got, ulp_threshold=0)
+    assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=0)

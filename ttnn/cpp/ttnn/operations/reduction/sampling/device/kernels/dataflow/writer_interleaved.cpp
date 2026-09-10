@@ -30,7 +30,7 @@ constexpr uint32_t FACE_HEIGHT = 16;
 // Widen bf16 to float32 — exact since bf16 is a subset of float32.
 // Uses soft-float on the data-movement RISC-V core.
 FORCE_INLINE float bf16_to_f32(uint16_t bf16) {
-    uint32_t bits = (uint32_t)bf16 << 16;
+    uint32_t bits = static_cast<uint32_t>(bf16) << 16;
     float result;
     __builtin_memcpy(&result, &bits, sizeof(float));
     return result;
@@ -58,7 +58,7 @@ void kernel_main() {
         calculate_and_prepare_reduce_scaler<dfb::scaler_sum, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
     // read k, p, temp
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer dfb_k(dfb::k);
     DataflowBuffer dfb_p(dfb::p);
     DataflowBuffer dfb_temp(dfb::temp);
@@ -66,65 +66,65 @@ void kernel_main() {
     DataflowBuffer dfb_final_indices(dfb::final_indices);
     DataflowBuffer dfb_local_values(dfb::local_values);
     DataflowBuffer dfb_local_indices(dfb::local_indices);
-    DataflowBuffer dfb_out(dfb::out);
+    const DataflowBuffer dfb_out(dfb::out);
 
     const auto addrg_k = TensorAccessor(tensor::k);
     dfb_k.reserve_back(1);
-    uint32_t dfb_k_ptr = dfb_k.get_write_ptr();
+    const uint32_t dfb_k_ptr = dfb_k.get_write_ptr();
     // Read the entire aligned chunk to avoid NOC alignment issues
     noc.async_read(addrg_k, dfb_k, k_chunk_size, {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
     dfb_k.push_back(1);
-    CoreLocalMem<volatile uint32_t> k_ptr(dfb_k_ptr);
+    const CoreLocalMem<volatile uint32_t> k_ptr(dfb_k_ptr);
     // Index into the chunk to get this core's value
-    uint32_t k = k_ptr[core_id];
+    const uint32_t k = k_ptr[core_id];
 
     const auto addrg_p = TensorAccessor(tensor::p);
     dfb_p.reserve_back(1);
-    uint32_t dfb_p_ptr = dfb_p.get_write_ptr();
+    const uint32_t dfb_p_ptr = dfb_p.get_write_ptr();
     // Read the entire aligned chunk to avoid NOC alignment issues
     noc.async_read(addrg_p, dfb_p, p_chunk_size, {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
     dfb_p.push_back(1);
-    CoreLocalMem<volatile uint16_t> p_ptr(dfb_p_ptr);
+    const CoreLocalMem<volatile uint16_t> p_ptr(dfb_p_ptr);
     // Index into the chunk to get this core's value
-    uint32_t p = p_ptr[core_id];
+    const uint32_t p = p_ptr[core_id];
 
     const auto addrg_temp = TensorAccessor(tensor::temp);
     // dfb_temp.reserve_back(1);
-    uint32_t dfb_temp_ptr = dfb_temp.get_write_ptr();
+    const uint32_t dfb_temp_ptr = dfb_temp.get_write_ptr();
     // Read the entire aligned chunk to avoid NOC alignment issues
     noc.async_read(addrg_temp, dfb_temp, temp_chunk_size, {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
     // dfb_temp.push_back(1);
 
-    CoreLocalMem<volatile uint16_t> temp_ptr(dfb_temp_ptr);
+    const CoreLocalMem<volatile uint16_t> temp_ptr(dfb_temp_ptr);
     // Index into the chunk to get this core's value
-    uint16_t temp = temp_ptr[core_id];
-    uint32_t temp_packed = (static_cast<uint32_t>(temp) << 16) + static_cast<uint32_t>(temp);
+    const uint16_t temp = temp_ptr[core_id];
+    const uint32_t temp_packed = (static_cast<uint32_t>(temp) << 16) + static_cast<uint32_t>(temp);
     generate_bcast_unary_scalar(dfb_temp, temp_packed);
     // generate the top-k mask
     constexpr uint32_t one = 1;
     generate_mask<dfb::mask, one>(one, ids_per_batch / 32, k - 1);
     // get random number
     dfb_rand.wait_front(1);
-    CoreLocalMem<volatile uint16_t> rand_values(dfb_rand.get_read_ptr());
-    uint16_t rand = rand_values[0];
+    const CoreLocalMem<volatile uint16_t> rand_values(dfb_rand.get_read_ptr());
+    const uint16_t rand = rand_values[0];
     // wait for compute kernel
     dfb_final_indices.wait_front(num_users);
     dfb_local_values.wait_front(1);
     dfb_local_indices.wait_front(1);
     // Read producer-written compute outputs from these buffers in SRAM.
-    CoreLocalMem<volatile uint16_t> local_values(dfb_local_values.get_read_ptr());
+    const CoreLocalMem<volatile uint16_t> local_values(dfb_local_values.get_read_ptr());
 
     using local_index_t = std::conditional_t<use_32bit_index, uint32_t, uint16_t>;
-    CoreLocalMem<volatile local_index_t> local_indices(dfb_local_indices.get_read_ptr());
+    const CoreLocalMem<volatile local_index_t> local_indices(dfb_local_indices.get_read_ptr());
 
-    CoreLocalMem<volatile uint32_t> final_indices(
-        dfb_final_indices.get_read_ptr() + core_id * final_indices_stick_size);
+    const CoreLocalMem<volatile uint32_t> final_indices(
+        dfb_final_indices.get_read_ptr() + (core_id * final_indices_stick_size));
 
-    uint32_t out_addr = dfb_out.get_write_ptr();
-    CoreLocalMem<volatile uint32_t> index_out(out_addr);
+    const uint32_t out_addr = dfb_out.get_write_ptr();
+    const CoreLocalMem<volatile uint32_t> index_out(out_addr);
 
     uint32_t start_id_local_phase_0 = core_id * FACE_WIDTH;
     // each user is on 1 core, so core_id = user_id
@@ -134,7 +134,7 @@ void kernel_main() {
         start_id_local_phase_0 = 2 * FACE_WIDTH * FACE_HEIGHT + (core_id - FACE_WIDTH) * FACE_WIDTH;
     }
     uint32_t end_id_local_phase_0 = start_id_local_phase_0 + FACE_WIDTH;
-    uint32_t start_id_local_phase_1 = FACE_WIDTH * FACE_HEIGHT + start_id_local_phase_0;
+    uint32_t start_id_local_phase_1 = (FACE_WIDTH * FACE_HEIGHT) + start_id_local_phase_0;
     uint32_t end_id_local_phase_1 = start_id_local_phase_1 + (k - FACE_WIDTH);
     if (k <= FACE_WIDTH) {
         end_id_local_phase_0 = start_id_local_phase_0 + k;
@@ -143,7 +143,7 @@ void kernel_main() {
     }
 
     // Top-p filtering in float32 for precision
-    float p_f = bf16_to_f32(static_cast<uint16_t>(p & 0xFFFF));
+    const float p_f = bf16_to_f32(static_cast<uint16_t>(p & 0xFFFF));
     float cum_prob_f = 0.0f;
     uint32_t kept_tokens = 0;
     bool cutoff_found_in_phase_0 = false;
@@ -185,7 +185,7 @@ void kernel_main() {
     }
 
     // Stochastic sampling in float32
-    float rand_f = bf16_to_f32(rand);
+    const float rand_f = bf16_to_f32(rand);
     float cum_sum_f = 0.0f;
     index_out[core_id] = final_indices[local_indices[start_id_local_phase_0]];
     bool index_found = false;

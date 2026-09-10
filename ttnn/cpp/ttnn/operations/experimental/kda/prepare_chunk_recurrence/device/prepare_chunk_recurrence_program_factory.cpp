@@ -78,7 +78,10 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
     const m2::DFBSpecName anchor_decay_dfb{"anchor_decay"};
     const m2::DFBSpecName normalized_q_dfb{"normalized_q"};
     const m2::DFBSpecName normalized_k_dfb{"normalized_k"};
-    const m2::DFBSpecName inverse_n3_dfb{"inverse_n3"};
+    const m2::DFBSpecName tile_workspace_0_dfb{"tile_workspace_0"};
+    const m2::DFBSpecName tile_workspace_1_dfb{"tile_workspace_1"};
+    const m2::DFBSpecName tile_workspace_2_dfb{"tile_workspace_2"};
+
     const m2::DFBSpecName workspace_3_dfb{"workspace_3"};
     const m2::DFBSpecName workspace_2_dfb{"workspace_2"};
     const m2::TensorParamName Q_TENSOR{"q"};
@@ -118,7 +121,7 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
         make_dfb(eye_dfb, cc, fp32),
         make_dfb(tril_dfb, cc, fp32),
         make_dfb(ones_dfb, cc, fp32),
-        make_dfb(block_masks_dfb, 2, fp32),
+        make_dfb(block_masks_dfb, 3, fp32),
         make_dfb(workspace_0_dfb, ck, fp32),
         make_dfb(scan_decay_dfb, ck, fp32),
         make_dfb(centered_inverse_decay_dfb, ck, fp32),
@@ -128,15 +131,21 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
         make_dfb(kd_dfb, 2 * ck, output_formats[1]),
         make_dfb(q_decay_dfb, 2 * ck, output_formats[2]),
         make_dfb(intra_dfb, 2 * cc, output_formats[3]),
-        make_dfb(workspace_1_dfb, kv * 2, fp32),
+        make_dfb(workspace_1_dfb, ck, fp32),
         make_dfb(final_decay_dfb, 2 * Kt, output_formats[5]),
         make_dfb(k_decay_transposed_dfb, 2 * kc, output_formats[4]),
         make_dfb(anchor_decay_dfb, kv, fp32),
         make_dfb(normalized_q_dfb, ck, fp32),
-        make_dfb(normalized_k_dfb, std::max(ck, 2U), fp32),
-        make_dfb(inverse_n3_dfb, 1, fp32),
+        make_dfb(normalized_k_dfb, ck, fp32),
+        // Row workspaces publish whole Kt-tile rows. Keep one-tile reductions and
+        // inverse intermediates separate so no transaction can cross a ring end.
+        make_dfb(tile_workspace_0_dfb, 1, fp32),
+        // The nested inverse reads its current level while packing the next one.
+        make_dfb(tile_workspace_1_dfb, 2, fp32),
+        make_dfb(tile_workspace_2_dfb, 1, fp32),
+
         make_dfb(workspace_3_dfb, scratch, fp32),
-        make_dfb(workspace_2_dfb, kv * 2, fp32),
+        make_dfb(workspace_2_dfb, ck, fp32),
     };
     m2::KernelSpec reader{
         .unique_id = READER,
@@ -224,7 +233,10 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
     unpack_modes[anchor_decay_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[normalized_q_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[normalized_k_dfb] = UnpackMode::UnpackToSrc;
-    unpack_modes[inverse_n3_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[tile_workspace_0_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[tile_workspace_1_dfb] = UnpackMode::UnpackToSrc;
+    unpack_modes[tile_workspace_2_dfb] = UnpackMode::UnpackToSrc;
+
     unpack_modes[workspace_3_dfb] = UnpackMode::UnpackToSrc;
     unpack_modes[workspace_2_dfb] = UnpackMode::UnpackToSrc;
     m2::KernelSpec compute{
@@ -260,8 +272,13 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
                 m2::DFBBinding{normalized_q_dfb, "normalized_q", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{normalized_k_dfb, "normalized_k", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{normalized_k_dfb, "normalized_k", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{inverse_n3_dfb, "inverse_n3", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{inverse_n3_dfb, "inverse_n3", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{tile_workspace_0_dfb, "tile_workspace_0", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{tile_workspace_0_dfb, "tile_workspace_0", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{tile_workspace_1_dfb, "tile_workspace_1", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{tile_workspace_1_dfb, "tile_workspace_1", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{tile_workspace_2_dfb, "tile_workspace_2", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{tile_workspace_2_dfb, "tile_workspace_2", m2::DFBEndpointType::CONSUMER},
+
                 m2::DFBBinding{workspace_3_dfb, "workspace_3", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{workspace_3_dfb, "workspace_3", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{workspace_2_dfb, "workspace_2", m2::DFBEndpointType::PRODUCER},
