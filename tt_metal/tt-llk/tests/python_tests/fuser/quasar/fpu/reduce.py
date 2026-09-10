@@ -11,20 +11,19 @@ from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
 from fuser.l1_operation import L1Operation
 from fuser.tile_loop import LoopTileByTile, TileLoop
-from helpers.llk_params import DataFormat, ReduceDimension, ReducePool
+from helpers.llk_params import ReduceDimension, ReducePool
 
 
 def _is_int_fpu_enabled(
     reduce_dim: ReduceDimension, config: GlobalConfig, compute_unit: FpuNode
 ) -> str:
-    int_fpu_formats = {DataFormat.Int8, DataFormat.UInt8, DataFormat.Int32}
     return (
         "true"
         if (
             config.dest_acc.value
             and reduce_dim == ReduceDimension.Row
             and any(
-                operand is not None and operand.data_format in int_fpu_formats
+                operand is not None and operand.data_format.needs_int8_math_config()
                 for operand in (compute_unit.src_a, compute_unit.src_b)
             )
         )

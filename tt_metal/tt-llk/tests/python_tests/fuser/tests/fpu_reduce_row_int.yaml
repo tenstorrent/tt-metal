@@ -10,7 +10,7 @@ operands:
     const_value: 1.0
   - name: "reduce_row_out"
     dims: [128, 128]
-    format: "Int8"
+    format: "Int32"
 
 operations:
   - math:

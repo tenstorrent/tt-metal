@@ -47,7 +47,6 @@ from fuser.validator import (
 )
 from helpers.llk_params import (
     BroadcastType,
-    DataFormat,
     MathOperation,
     ReduceDimension,
 )
@@ -93,11 +92,11 @@ _reduce_col_only = reject(
     "unpacker can only be paired with a column reduce (operation: Reduce, reduce_dim: REDUCE_COL)",
 )
 
-_INT_FPU_FORMATS = {DataFormat.Int8, DataFormat.UInt8, DataFormat.Int32}
-
 _int_reduce_row_only = reject(
     lambda s, a, b: s.reduce_dim != ReduceDimension.Row
-    and any(op is not None and op.data_format in _INT_FPU_FORMATS for op in (a, b)),
+    and any(
+        op is not None and op.data_format.needs_int8_math_config() for op in (a, b)
+    ),
     "integer reduce is only supported for REDUCE_ROW; REDUCE_COL/REDUCE_SCALAR have no int FPU path",
 )
 

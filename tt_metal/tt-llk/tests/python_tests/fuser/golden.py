@@ -30,6 +30,7 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     AccToDest,
     BroadcastType,
+    DataFormat,
     EltwiseBinaryReuseDestType,
     ReduceDimension,
     ReducePool,
@@ -264,7 +265,7 @@ class Golden:
         node: "FpuNode",
         block_max: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        output_format = config.sentinel.golden_math_format
+        math_format = config.sentinel.golden_math_format
         tile_shape = operation.tile_shape
         dimensions = operation.max_output_dimensions
         num_faces = tile_shape.total_num_faces()
@@ -275,7 +276,17 @@ class Golden:
         pool = torch.amax if pool_type == ReducePool.Max else torch.sum
         generate_golden = get_golden_generator(ReduceGolden)
 
-        def reduce(tensor: torch.Tensor, fold_blocks: bool) -> torch.Tensor:
+        int32_dest = (
+            config.dest_acc.value
+            and reduce_dim == ReduceDimension.Row
+            and math_format.needs_int8_math_config()
+        )
+        output_format = DataFormat.Int32 if int32_dest else math_format
+        src_input_format = math_format if int32_dest else None
+
+        def reduce(
+            tensor: torch.Tensor, fold_blocks: bool, input_format
+        ) -> torch.Tensor:
             reduced = tilize_block(
                 tensor, dimensions, output_format, num_faces, tile_dimensions=tile_dims
             ).flatten()
@@ -286,6 +297,7 @@ class Golden:
                 output_format,
                 tile_cnt=grid_y * grid_x,
                 tile_shape=tile_shape,
+                input_format=input_format,
             ).flatten()
 
             if fold_blocks:
@@ -310,8 +322,10 @@ class Golden:
                 num_faces=num_faces,
             ).flatten()
 
-        src_reduced = reduce(tensor_a, block_max or node.reduce_to_tile)
-        dest_reduced = reduce(tensor_dst, block_max)
+        src_reduced = reduce(
+            tensor_a, block_max or node.reduce_to_tile, src_input_format
+        )
+        dest_reduced = reduce(tensor_dst, block_max, None)
 
         if pool_type == ReducePool.Average:
             span = tile_dims[1] if reduce_dim == ReduceDimension.Row else tile_dims[0]
