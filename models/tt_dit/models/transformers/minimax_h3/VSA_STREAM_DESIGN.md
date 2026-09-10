@@ -684,3 +684,36 @@ standalone win never reaches the metric that matters. The branch therefore keeps
 pattern is documented here so it is not reintroduced, and `bstride` stays in the geometry, parked, labelled
 e2e-neutral. The real lever for the slowest-device-gated block is per-device load balance and the K/V
 all-gather overlap, not the stream order.
+
+## 13. Per-device balance (item 1) and ring-attention overlap (item 2), 2026-09-10
+
+**Item 1 -- per-device load balance: not actionable.** Every one of the 32 devices does identical vsa_sdpa
+work: top-k is a fixed size (k=179), so each device lists the same block count per row (607488 total), and
+the ~20 dense rows in the union are shared. The measured 0.62 ms slowest-device gap (3.7 %: d14 17.47 vs mean
+16.85) is physical -- same-shard devices (d6/d14 on shard 6) differ 0.41 ms despite identical selections, so
+it is mesh position / NoC distance / power variance, which host-side row dealing cannot touch. No change.
+
+**Item 2 -- ring attention overlap of the 8.1 ms K/V all-gather: feasible, biggest remaining lever.**
+Today the fine stage does a blocking ring all-gather of the full K/V across SP=8 (`all_gather_async`, Ring,
+2 links, ~8.1 ms) then runs `vsa_sdpa` on the full DRAM K/V by global block id -- the gather overlaps nothing
+because vsa_sdpa depends on all of it. Ring attention instead forwards K/V shards around the SP ring and
+computes each shard's selected blocks as it arrives, carrying online-softmax state across the 8 steps.
+
+Two findings make this worth building:
+1. The per-ring-step compute hides the comm. From the real 15 s indices, each device's top-k spreads over all
+   8 KV shards with a gentle spatial decay (own shard 29-36 %, neighbors 15-18 %, far shards 5-8 %; target
+   shard = padded_id >> coarse_slots_shift). Per-step compute = 16.5 ms x fraction is >= the ~1.0 ms/step comm
+   for nearly every step; idealized exposed comm ~0.05 ms, realistically 2-3 ms with contention. Hidden ~5-8 ms
+   of 8.1 -> block 59.8 -> ~52-54 ms (~10-13 %), more than every other lever in this project combined.
+2. The overlap is already proven on this hardware: the dense path's `exp_ring_joint_scaled_dot_product_attention`
+   fuses ring KV forwarding (tt_fabric MUX clients on dedicated grid columns) with flash-attention compute in
+   one op (exp_ring_joint_sdpa_program_factory.cpp). VSA ring attention = that machinery + a per-shard selection
+   filter, reusing the shard-of-block map (global_slot // tiles_per_shard, vsa_geometry.py).
+
+Design sketch for `vsa_ring_sdpa`: model on exp_ring_joint_sdpa; the fabric MUX forwards shard s+1 while the
+compute processes shard s; the reader consumes the arriving shard's K/V (fabric->L1) instead of one DRAM
+tensor; global selected ids are split into (shard, local_block) and only the current shard's blocks are
+visited each step; the streaming leader/worker engine and exact online-softmax state carry across ring steps.
+Effort: a large new fused CCL+compute op (op-level project, not a tweak), the highest-value next build. Risk:
+NoC/DRAM vs fabric contention (mitigated by exp_ring's dedicated MUX columns) and preserving determinism/exact
+numerics across ring steps.
