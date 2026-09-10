@@ -192,20 +192,14 @@ class TTMSDeformableAttention:
     def _fold_offset_normalizer(self, spatial_shapes):
         """Pre-scale the ``sampling_offsets`` Linear so its output is already normalized.
 
-        The normalizer is ``[W, H]`` per level, fixed by the feature-pyramid config, so
-        dividing the Linear's output by it is a static per-output-channel scale that folds
-        into the parameters exactly: ``s * (Wx + b) == (Wx + b) / normalizer``. Folding it
-        removes a broadcast divide whose operands tile-pad an extent-2 axis to 32.
+        The normalizer is ``[W, H]`` per level and fixed by config, so dividing the
+        Linear's output by it is a constant per-channel scale that folds into the
+        parameters exactly: ``s * (Wx + b) == (Wx + b) / normalizer``. That drops a
+        broadcast divide from every forward.
 
-        The Linear emits ``num_heads * num_levels * num_points * 2`` channels ordered
-        (head, level, point, xy) with xy innermost, which is what makes the scale
-        expressible as a single row. ``preprocess_linear_weight`` stores the weight
-        transposed as ``(in, out)`` and the bias as ``(1, out)``, so one ``(1, out)`` row
-        broadcasts over both.
-
-        Returns:
-            The folded ``(weight, bias)``. Both are ``None`` when params carry no
-            ``sampling_offsets``; ``bias`` alone is ``None`` for a bias-free Linear.
+        One ``(1, out)`` row scales weight and bias alike, because the Linear emits
+        channels ordered (head, level, point, xy) and preprocessing stores the weight as
+        ``(in, out)`` with the bias as ``(1, out)``.
         """
         sampling_offsets = getattr(self.params, "sampling_offsets", None)
         if sampling_offsets is None:
