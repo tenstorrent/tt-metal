@@ -805,7 +805,15 @@ def main() -> None:
 
     def push_chunk(slot_id: int, chunk_idx: int, actual_start: int, actual_end: int) -> float:
         pool = pools_by_trace[slot_traces[slot_id]]
-        chunk_bytes = producer._chunk_to_host_array(pool[actual_start : actual_start + producer.CHUNK_SIZE])
+        chunk_bytes = producer._chunk_to_host_array(
+            producer.ADAPTER.prepare_chunk_tokens(
+                pool,
+                actual_start=actual_start,
+                actual_end=actual_end,
+                chunk_size=producer.CHUNK_SIZE,
+                sp_factor=producer.GLOBAL_MESH_SHAPE[0],
+            )
+        )
         assert (
             chunk_bytes.nbytes == payload_bytes
         ), f"payload {chunk_bytes.nbytes}B != service-expected {payload_bytes}B"

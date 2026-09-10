@@ -439,6 +439,12 @@ class Gemma4Model:
                 packed_global_rope=packed_rope if layer_type == "full_attention" else None,
                 packed_sliding_rope=packed_rope if layer_type == "sliding_attention" else None,
             )
+            if self._ring_metadata_external:
+                from models.demos.gemma4_d_p.tt.attention.ring_prefill import zero_ring_cache_padding
+
+                zero_ring_cache_padding(
+                    self.tt_kv_cache[i], self.ccl_manager, self.mesh_config, self.prefill_chunk_size
+                )
             if d2h_service is not None:
                 ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=metadata_msg)
             elif on_layer_complete is not None:
@@ -528,8 +534,18 @@ class Gemma4Model:
             torch_output = ttnn.to_torch(tt_out)
         return torch_output[..., last_token_idx, : self.vocab_size]
 
-    def process_logits_after_prefill_trace(self, hidden_states, last_token_idx):
-        """Run the LM head on a chunk-relative token tile without freeing the trace output."""
+    def process_logits_after_prefill_trace(self, hidden_states, last_token_idx, *, chunk_start_idx=None):
+        """Project a token tile without freeing the trace output.
+
+        By default last_token_idx is a physical chunk row. With chunk_start_idx,
+        it is an absolute token position in a rotated chunk.
+        """
+        if chunk_start_idx is not None:
+            from models.demos.common.prefill.chunk_layout import chunk_row_for_position
+
+            last_token_idx = chunk_row_for_position(
+                last_token_idx, chunk_start_idx, self.prefill_chunk_size, self.mesh_config.prefill.sp
+            )
         gathered = self._cp_gather_prefill_sequence(hidden_states)
         tile_start = (last_token_idx // 32) * 32
         sliced = ttnn.slice(gathered, (0, 0, tile_start, 0), (1, 1, tile_start + 32, gathered.shape[-1]))

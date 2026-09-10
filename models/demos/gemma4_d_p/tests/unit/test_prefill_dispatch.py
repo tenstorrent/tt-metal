@@ -19,6 +19,9 @@ def test_migration_ack_follows_each_layer_write(monkeypatch, ack_mode, prefill_w
     hidden = SimpleNamespace(shape=(1, 1, 1024, 64))
     model = object.__new__(Gemma4Model)
     model.prefill_weights_only = prefill_weights_only
+    model.ccl_manager = SimpleNamespace(get_ring_valid_end=lambda: None)
+    model.mesh_config = object()
+    model.prefill_chunk_size = 8192
     model.mesh_device = object()
     model.hf_config = SimpleNamespace(layer_types=("sliding_attention", "full_attention"))
     model.tt_kv_cache = [None, None]
@@ -42,6 +45,13 @@ def test_migration_ack_follows_each_layer_write(monkeypatch, ack_mode, prefill_w
         return forward
 
     model.layers = [layer(0), layer(1)]
+    from models.demos.gemma4_d_p.tt.attention import ring_prefill
+
+    monkeypatch.setattr(
+        ring_prefill,
+        "zero_ring_cache_padding",
+        lambda *_: events.append(("zero", len([e for e in events if e[0] == "write"]) - 1)),
+    )
     monkeypatch.setattr(ttnn, "synchronize_device", lambda _: events.append(("sync", None)))
     service, metadata = object(), object()
 
@@ -64,6 +74,7 @@ def test_migration_ack_follows_each_layer_write(monkeypatch, ack_mode, prefill_w
     expected = []
     for idx in range(2):
         expected.append(("write", idx))
+        expected.append(("zero", idx))
         if ack_mode == "callback":
             expected.append(("sync", None))
         expected.append(("ack", idx))
@@ -123,7 +134,8 @@ def test_projection_loads_only_required_weight(monkeypatch, is_global):
     assert len([name for name in loaded if "/wqk" in name]) == 1
 
 
-def test_last_token_projection_gathers_cp_before_slicing(monkeypatch):
+@pytest.mark.parametrize("position,chunk_start,tile_start", [(8191, None, 8160), (8999, 6976, 800)])
+def test_last_token_projection_gathers_cp_before_slicing(monkeypatch, position, chunk_start, tile_start):
     events = []
     hidden = SimpleNamespace(shape=(1, 1, 1024, 64), deallocate=Mock())
     gathered = SimpleNamespace(shape=(1, 1, 8192, 64), deallocate=Mock())
@@ -138,8 +150,8 @@ def test_last_token_projection_gathers_cp_before_slicing(monkeypatch):
 
     def slice_tile(actual, start, end):
         assert actual is gathered
-        assert start == (0, 0, 8160, 0)
-        assert end == (1, 1, 8192, 64)
+        assert start == (0, 0, tile_start, 0)
+        assert end == (1, 1, tile_start + 32, 64)
         events.append("slice")
         return token_tile
 
@@ -151,7 +163,9 @@ def test_last_token_projection_gathers_cp_before_slicing(monkeypatch):
     model._cp_gather_prefill_sequence = gather
     model._apply_lm_head = project
     monkeypatch.setattr(ttnn, "slice", slice_tile)
-    assert model.process_logits_after_prefill_trace(hidden, 8191) is logits
+    model.prefill_chunk_size = 8192
+    model.mesh_config = SimpleNamespace(prefill=SimpleNamespace(sp=8))
+    assert model.process_logits_after_prefill_trace(hidden, position, chunk_start_idx=chunk_start) is logits
     assert events == ["gather", "slice", "project"]
     hidden.deallocate.assert_not_called()
     gathered.deallocate.assert_called_once_with(True)

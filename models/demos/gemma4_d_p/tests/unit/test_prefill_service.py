@@ -17,8 +17,8 @@ from models.demos.gemma4_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPr
     [
         (-1, 0, 8192, "slot_id"),
         (2, 0, 8192, "slot_id"),
-        (0, -8192, 0, "chunk-aligned"),
-        (0, 7000, 9000, "chunk-aligned"),
+        (0, -8192, 0, "32-token aligned"),
+        (0, 7000, 9000, "32-token aligned"),
         (0, 0, 0, "invalid chunk range"),
         (0, 0, 8193, "invalid chunk range"),
         (0, 16384, 24576, "exceed"),

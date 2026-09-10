@@ -53,7 +53,7 @@ These checks cover packed-cache algebra, projection/RoPE permutations, migration
 ## Prefill service
 
 The common runner supports one CP8/TP4 Galaxy, multiple resident user slots,
-chunk-aligned requests, and traced or eager execution. It loads input/decoder
+32-token-aligned continuation requests, and traced or eager execution. It loads input/decoder
 weights only; the LM head and final norm are omitted. The manifest reserves
 32 MiB per device for traces and enables device-side layer acknowledgements.
 
@@ -87,6 +87,23 @@ Set `PREFILL_SEND_SHUTDOWN=0` to keep the server available after a run.
 Match context and chunk configuration between processes; server environment
 variables override manifest defaults. `REQUESTS_COMPLETE` confirms all layer
 acknowledgements arrived; synthetic tokens do not establish numerical accuracy.
+Continuation metadata is `(slot_id, actual_start, actual_end)` with an exclusive
+end. Send a full chunk using the position-derived CP layout in
+`models/demos/common/prefill/chunk_layout.py`; the Gemma4 producer adapter packs
+it automatically. The prefix must already be resident. Round an unaligned start
+down to 32 and resend the preceding tokens (e.g. resume at 7000 using
+`[6976,9000)`). `actual_end` may be unaligned and may equal the context limit.
+Padding is a suffix per SP rank. Cache writes exclude padded tiles and each
+layer clears the migration pad window before acknowledging completion.
+Rotated sliding attention uses a two-slab predecessor halo (2048 rows per SP
+rank with the default geometry), shared across layers. This requires the TTNN
+changes in this branch; an older installed library is insufficient.
+External IS/dgen interoperability still requires confirming its payload layout.
+
+To exercise partial chunks and continuations with the producer, also set
+`PREFILL_PRODUCER_MID_END_PROB=1`, `PREFILL_PRODUCER_MULTI_TURN_PROB=1`, and
+`PREFILL_PRODUCER_MAX_REQUESTS=6`. Leave enough context for multiple turns.
+
 With the same model/cache environment, run the device regression with:
 
 ```bash
@@ -95,3 +112,16 @@ pytest models/demos/gemma4_d_p/tests/test_common_prefill_runtime.py -sv
 
 It exercises slot changes, eager/traced KV equivalence, migration-table export,
 and D2H acknowledgement metadata. It is not a comparison against an HF model.
+
+Rotated numerical and multi-head pad-cleanup regressions (requires a current
+TTNN build):
+
+```bash
+pytest models/demos/gemma4_d_p/tests/test_zero_cache_padding.py -sv
+GEMMA4_ROTATED_TEST_LAYERS=6 pytest models/demos/gemma4_d_p/tests/test_rotated_prefill.py -sv
+GEMMA4_ROTATED_TEST_LAYERS=60 pytest models/demos/gemma4_d_p/tests/test_rotated_prefill.py -sv
+```
+
+The rotated test compares valid hidden states and sliding/global KV with aligned
+prefill at PCC >= 0.999, checks exact prefix/other-slot preservation and zero
+migration padding, and includes a final partial chunk at cache capacity.

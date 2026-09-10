@@ -147,6 +147,7 @@ class CCLManager:
         # slot and prefix length are properties of the chunk, not the layer, so all 60
         # layers read the same two tensors and the host updates them once per chunk.
         self._ring_metadata = None
+        self._ring_valid_end = None
 
     def _scalar_metadata_tensor(self, value):
         """1-element uint32 replicated DRAM tensor holding one per-chunk scalar.
@@ -177,7 +178,11 @@ class CCLManager:
             self._ring_metadata = (self._scalar_metadata_tensor(0), self._scalar_metadata_tensor(0))
         return self._ring_metadata
 
-    def set_ring_metadata(self, slot_idx, kv_actual_global):
+    def get_ring_valid_end(self):
+        """Optional persistent real-token end for bounded service writes and pad cleanup."""
+        return self._ring_valid_end
+
+    def set_ring_metadata(self, slot_idx, kv_actual_global, valid_global=None):
         """Update the metadata tensors in place for the chunk about to run.
 
         Called once per chunk, before the layer loop (or before a trace replay). Writes
@@ -185,7 +190,14 @@ class CCLManager:
         the addresses it captured.
         """
         slot_t, kv_t = self.get_ring_metadata()
-        for tensor, value in ((slot_t, slot_idx), (kv_t, kv_actual_global)):
+        updates = [(slot_t, slot_idx), (kv_t, kv_actual_global)]
+        if valid_global is not None:
+            if self._ring_valid_end is None:
+                self._ring_valid_end = self._scalar_metadata_tensor(valid_global)
+            updates.append((self._ring_valid_end, valid_global))
+        elif self._ring_valid_end is not None:
+            raise ValueError("valid_global is required once bounded cache writes are enabled")
+        for tensor, value in updates:
             host = ttnn.from_torch(
                 torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1),
                 dtype=ttnn.uint32,

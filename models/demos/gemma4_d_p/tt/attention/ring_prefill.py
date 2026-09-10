@@ -146,6 +146,7 @@ def write_chunk_to_packed_ring_cache(
             chunk,
             slot_t,
             kv_t,
+            valid_global=ccl_manager.get_ring_valid_end(),
             layer_idx=layer_idx,
             num_layers=num_layers,
             cluster_axis=mesh_config.sp_axis,
@@ -270,6 +271,7 @@ def write_chunk_to_ring_cache(
                 chunk,
                 slot_t,
                 kv_t,
+                valid_global=ccl_manager.get_ring_valid_end(),
                 layer_idx=layer_idx,
                 num_layers=num_layers,
                 cluster_axis=mesh_config.sp_axis,
@@ -343,6 +345,8 @@ def ring_prefill_attention(
         k_chunk = program_config.k_chunk_size
         halo_tokens = -(-(sliding_window - 1) // k_chunk) * k_chunk
         gather_seq = max(halo_tokens, TILE_HEIGHT)
+        if ccl_manager.get_ring_valid_end() is not None:
+            gather_seq = min(2 * tt_q.shape[2], cache_seq)
     else:
         gather_seq = cache_seq * cp
     buffer_k = ccl_manager.get_ring_gather_buffer(
@@ -391,3 +395,23 @@ def ring_prefill_attention(
         sliding_window_size=sliding_window,
     )
     return out
+
+
+def zero_ring_cache_padding(layer_cache, ccl_manager, mesh_config, chunk_size):
+    """Clear the migration pad window in each head without copying the cache."""
+    end = ccl_manager.get_ring_valid_end()
+    if end is None:
+        return
+    slot, _ = ccl_manager.get_ring_metadata()
+    tensors = (layer_cache.kv,) if isinstance(layer_cache, PackedRingKVCache) else layer_cache
+    for cache in tensors:
+        ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+            cache,
+            slot,
+            end,
+            layer_idx=0,
+            num_layers=1,
+            chunk_size_global=chunk_size,
+            cluster_axis=mesh_config.sp_axis,
+            pad_align=128,
+        )

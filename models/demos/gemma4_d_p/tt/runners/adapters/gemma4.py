@@ -41,6 +41,11 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
     default_gate_mode = "DEVICE_FP32"
     pipeline_activation_emb_tp_sharded = False
 
+    def prepare_chunk_tokens(self, token_pool, *, actual_start, actual_end, chunk_size, sp_factor):
+        from models.demos.common.prefill.chunk_layout import pack_chunk_tokens
+
+        return pack_chunk_tokens(token_pool[actual_start:actual_end], actual_start, actual_end, chunk_size, sp_factor)
+
     def load_hf_config(self):
         from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs
 

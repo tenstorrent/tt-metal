@@ -14,6 +14,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.common.prefill.chunk_layout import chunk_positions, pack_chunk_tokens, validate_chunk_range
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
 from models.demos.gemma4_d_p.config import MeshConfig
 from models.demos.gemma4_d_p.tt.common import create_tt_model
@@ -122,8 +123,12 @@ class TtPrefillRuntime:
         self._trace_input = self.make_chunk_input([0] * self.config.chunk_size)
         self._trace_metadata_msg = self._make_metadata_msg((0, 0, self.config.chunk_size))
 
-    def make_chunk_input(self, token_ids: list[int]):
-        """Stage a full sequential chunk in the producer's CP-major layout."""
+    def make_chunk_input(self, token_ids: list[int], *, actual_start=0, actual_end=None):
+        """Pack sequential tokens into the CP-major layout used by the producer."""
+        actual_end = actual_start + len(token_ids) if actual_end is None else actual_end
+        token_ids = pack_chunk_tokens(
+            token_ids, actual_start, actual_end, self.config.chunk_size, self.config.sp_factor
+        )
         tokens = torch.tensor(token_ids, dtype=torch.int32).reshape(
             self.config.sp_factor, 1, self.config.chunk_size // self.config.sp_factor
         )
@@ -167,8 +172,14 @@ class TtPrefillRuntime:
     def trace_metadata_msg(self):
         return self._trace_metadata_msg
 
-    def _stage_metadata(self, slot_id: int, actual_start: int):
-        positions = torch.arange(actual_start, actual_start + self.config.chunk_size, dtype=torch.int32).reshape(1, -1)
+    def _stage_metadata(self, slot_id: int, actual_start: int, actual_end=None):
+        actual_end = actual_start + self.config.chunk_size if actual_end is None else actual_end
+        positions = torch.tensor(
+            chunk_positions(actual_start, self.config.chunk_size, self.config.sp_factor), dtype=torch.int32
+        ).reshape(1, -1)
+        # Padding has no semantic RoPE position. Keep its lookup in bounds even
+        # when a final padded chunk extends beyond the configured context.
+        positions[positions >= actual_end] = 0
         ttnn.copy_host_to_device_tensor(
             _host_tensor(
                 self.mesh_device,
@@ -180,7 +191,9 @@ class TtPrefillRuntime:
             ),
             self.device_positions,
         )
-        self.model.ccl_manager.set_ring_metadata(slot_idx=slot_id, kv_actual_global=actual_start)
+        self.model.ccl_manager.set_ring_metadata(
+            slot_idx=slot_id, kv_actual_global=actual_start, valid_global=actual_end
+        )
         for semaphore in self.model.ccl_manager.ring_attention_ccl_semaphore_handles:
             ttnn.reset_global_semaphore_value(semaphore, 0)
 
@@ -260,14 +273,11 @@ class TtPrefillRuntime:
         kv = self._resolve_kv(kv_caches)
         if not 0 <= slot_id < kv.num_users:
             raise ValueError(f"slot_id {slot_id} outside [0, {kv.num_users})")
-        if actual_start < 0 or actual_start % self.config.chunk_size:
-            raise ValueError("actual_start must be nonnegative and chunk-aligned")
-        if not actual_start < actual_end <= actual_start + self.config.chunk_size:
-            raise ValueError("invalid chunk range")
-        if actual_start + self.config.chunk_size > self.config.max_seq_len:
-            raise ValueError("padded chunk exceeds the configured cache")
+        validate_chunk_range(
+            actual_start, actual_end, self.config.chunk_size, self.config.sp_factor, self.config.max_seq_len
+        )
         self._trace_request_id = request_id
-        self._stage_metadata(slot_id, actual_start)
+        self._stage_metadata(slot_id, actual_start, actual_end)
         source = self._normalize_input(input_tensor)
         if self.config.use_trace:
             if not self._trace_captured:
