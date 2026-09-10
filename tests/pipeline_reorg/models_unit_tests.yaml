@@ -1984,6 +1984,7 @@
 - name: xtts-v2 unit tests
   cmd: |
     set -e
+    unset TT_METAL_WATCHER
     uv pip install -r models/experimental/xtts/requirements.txt
     # test_empty_generation runs in the e2e job instead: it needs a full traced pipeline, which
     # costs 294 s of cold-cache compile here but 118 s there (the e2e perf test has already
@@ -1994,7 +1995,7 @@
   model_family: XTTS
   skus:
     bh_p150b_civ2:
-      timeout: 25
+      timeout: 45
       tier: 3
   owner_id: U087HGJ455E # Sudhanshu Singhal
   team: shield

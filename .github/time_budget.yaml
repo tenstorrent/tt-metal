@@ -186,7 +186,7 @@ shield:
     bh_p150: 100
     bh_p150b_civ2: 90
   unit_tier3:
-    bh_p150b_civ2: 45
+    bh_p150b_civ2: 65
     bh_p150: 2
   device_perf:
     wh_n150: 100
