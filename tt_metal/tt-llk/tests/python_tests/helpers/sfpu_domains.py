@@ -1915,9 +1915,9 @@ _SPECIALS_CARRYING_INPUTS: FrozenSet[DataFormat] = frozenset(
 # What this does not claim: the *sign of a zero result* is a separate, arch-dependent
 # question -- SFPMAD flushes negative zero to positive on Wormhole and preserves it on
 # Blackhole.
-# Ops enrolled with no golden change: driven over the full specials set on every
-# Blackhole-reachable triple, with the golden and the kernel giving the same answer at every
-# special the pipeline delivers. That is what this suite can establish -- not that the golden
+# Ops enrolled with no golden change: driven over the full specials set on every reachable
+# triple, with the golden and the kernel giving the same answer at every special the
+# pipeline delivers. That is what this suite can establish -- not that the golden
 # is independently correct, though the risk is small for goldens that route through torch or
 # are plain arithmetic.
 _SPECIALS_READY_UNCHANGED: Tuple[MathOperation, ...] = (
@@ -1978,17 +1978,13 @@ _SPECIALS_READY_TORCH_ROUTED: Tuple[MathOperation, ...] = (
 )
 
 SPECIALS_READY_OPS: Dict[MathOperation, str] = {
-    MathOperation.Identity: "Pass-through: every special maps to itself. Green on "
-    "Blackhole across all safe triples.",
-    MathOperation.Abs: "Magnitude: |+/-inf| = +inf, |NaN| = NaN, |+/-0| = 0. Green on "
-    "Blackhole.",
-    MathOperation.Exp: "IEEE: exp(+inf) = +inf, exp(-inf) = 0, exp(+/-0) = 1. Green on "
-    "Blackhole.",
-    MathOperation.Sin: "sin(+/-inf) = NaN, sin(NaN) = NaN, sin(+/-0) = +/-0. Golden moved "
-    "off math.sin, which *raised* on a non-finite input rather than returning one. Green "
-    "on Blackhole.",
-    MathOperation.Cos: "cos(+/-inf) = NaN, cos(NaN) = NaN, cos(+/-0) = 1. Golden moved off "
-    "math.cos for the same reason as Sin. Green on Blackhole.",
+    MathOperation.Identity: "Pass-through: every special maps to itself.",
+    MathOperation.Abs: "Magnitude: |+/-inf| = +inf, |NaN| = NaN, |+/-0| = 0.",
+    MathOperation.Exp: "IEEE: exp(+inf) = +inf, exp(-inf) = 0, exp(+/-0) = 1.",
+    MathOperation.Sin: "sin(+/-inf) = NaN, sin(NaN) = NaN, sin(+/-0) = +/-0. Golden routes "
+    "through torch rather than math.sin, which raises on a non-finite input.",
+    MathOperation.Cos: "cos(+/-inf) = NaN, cos(NaN) = NaN, cos(+/-0) = 1. Golden routes "
+    "through torch rather than math.cos, for the same reason as Sin.",
     MathOperation.Neg: "neg(+/-inf) = -/+inf, neg(NaN) = NaN, neg(+/-0) = -/+0. Rests on "
     "the golden not mangling a NaN's sign through a 16-bit Dest (see cast_to_dest_dtype): "
     "Neg is the one op here that produces a *negative* NaN.",
@@ -2005,14 +2001,14 @@ SPECIALS_READY_OPS: Dict[MathOperation, str] = {
     "through rather than synthesising a NaN (tt-metal issue #52930) -- and is xfailed per "
     "combination rather than hidden in the golden.",
     **{
-        op: "Enrolled with no golden change: driven over the full specials set on every "
-        "Blackhole-reachable triple and agreed with its golden at each one. See "
-        "_SPECIALS_READY_UNCHANGED for the scope of that claim."
+        op: "Enrolled with no golden change: driven over the full specials set and agreed "
+        "with its golden at every one. See _SPECIALS_READY_UNCHANGED for the scope of "
+        "that claim."
         for op in _SPECIALS_READY_UNCHANGED
     },
     **{
         op: "Its golden routes through torch rather than math.acos / math.asin / math.tan, "
-        "which raise on a non-finite input instead of returning NaN. Green on Blackhole."
+        "which raise on a non-finite input instead of returning NaN."
         for op in _SPECIALS_READY_TORCH_ROUTED
     },
     # Ops whose golden needed a fix of its own: a guard written for finite inputs ("did this
@@ -2020,13 +2016,13 @@ SPECIALS_READY_OPS: Dict[MathOperation, str] = {
     # wrong.
     MathOperation.Square: "square(+/-inf) = +inf, square(NaN) = NaN. The golden tested "
     "isfinite(x * x) to detect overflow, which is also false for NaN, so it reported inf "
-    "where the kernel correctly returns NaN. Green on Blackhole after the fix.",
+    "where the kernel correctly returns NaN.",
     MathOperation.I0: "I0(+/-inf) = +inf (I0 is even and unbounded), I0(NaN) = NaN. "
     "torch.special.i0 returns NaN at +/-inf, which is a torch limitation rather than the "
     "mathematics -- the kernel was the correct party here and the golden was not.",
     MathOperation.Hardshrink: "hardshrink(NaN) = NaN. The golden's |x| > lambda test is "
     "false for NaN, which sent it to the shrink-to-zero branch; torch and the kernel both "
-    "propagate. Green on Blackhole after the fix.",
+    "propagate.",
     # The comparison family, which answers on the SFPU's total order rather than IEEE's unordered
     # compare: +NaN ranks above every finite value and -NaN below -inf. So each returns its own
     # upper-bound dispatch constant where IEEE says NaN, and clamping a +NaN lands on that bound.
@@ -2074,7 +2070,7 @@ SPECIALS_READY_OPS: Dict[MathOperation, str] = {
     # ignores the input, so the probe says nothing about NaN semantics.
     MathOperation.Fill: "Input-independent: fill writes a constant, so every special maps to "
     "that constant. The probe asserts the fill survives a non-finite input, not any NaN "
-    "semantics. Green on Blackhole.",
+    "semantics.",
 }
 
 # Three facts the entries above rest on:
@@ -2307,27 +2303,26 @@ def specials_after_nan_sign_gate(
 BINARY_SPECIALS_READY_OPS: Dict[MathOperation, str] = {
     # Plain SFPMAD arithmetic, which the ISA specifies as IEEE754 for a non-finite input.
     MathOperation.SfpuElwadd: "IEEE: inf+x = inf, inf+(-inf) = NaN, NaN+x = NaN. Plain SFPMAD, "
-    "which the ISA specifies as IEEE for a non-finite input. Green on Wormhole.",
+    "which the ISA specifies as IEEE for a non-finite input.",
     MathOperation.SfpuElwsub: "As SfpuElwadd; inf-inf = NaN is the case worth having.",
-    MathOperation.SfpuElwmul: "IEEE: inf*x = inf, inf*0 = NaN, +/-0 signs multiply. Green on "
-    "Wormhole.",
+    MathOperation.SfpuElwmul: "IEEE: inf*x = inf, inf*0 = NaN, +/-0 signs multiply.",
     MathOperation.SfpuElwrsub: "As SfpuElwsub with the operands reversed.",
     # Total order -- and the reason max/min enrol on a model the six comparisons could not: their
     # kernel is a bare SFPSWAP(VEC_MIN_MAX) with no NaN guard.
     MathOperation.SfpuBinaryMax: "binary_max_min is a bare SFPSWAP(VEC_MIN_MAX) with no NaN "
     "guard, so the documented total order reaches the result: +NaN is the maximum, -NaN the "
     "minimum. Golden models sfpu_max, not torch.maximum -- those agree on +NaN by coincidence "
-    "and differ on -NaN. Green on Wormhole.",
+    "and differ on -NaN.",
     MathOperation.SfpuBinaryMin: "As SfpuBinaryMax, and the op that made the difference visible: "
     "torch.minimum propagates a NaN where the total order returns the other operand.",
     # IEEE unordered, because these kernels reject a NaN operand before comparing. The guard is
     # quoted per sequence in BinarySFPUGolden, above _lt.
     MathOperation.SfpuElwEq: "calculate_binary_comp_fp32_equal rejects a NaN operand, so its "
     "pre-stored default stands and eq(NaN, x) = 0 -- IEEE's unordered answer, deliberately, "
-    "not the total order. Green on Wormhole.",
+    "not the total order.",
     MathOperation.SfpuElwNe: "As SfpuElwEq; its default result is 1, so ne(NaN, x) = 1.",
     MathOperation.SfpuElwLt: "calculate_binary_comp_fp32_strict_ordered pre-stores 0 and guards "
-    "the store with the same 'rejects NaN' predicate, so lt(NaN, x) = 0. Green on Wormhole.",
+    "the store with the same rejects-NaN predicate, so lt(NaN, x) = 0.",
     MathOperation.SfpuElwGt: "As SfpuElwLt, operands swapped.",
     MathOperation.SfpuElwLe: "calculate_binary_comp_fp32_weak_ordered pre-stores 1, rejects if "
     "false, then stores 0 where either operand is a NaN. So le(NaN, x) = 0.",
