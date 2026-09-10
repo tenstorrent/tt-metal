@@ -25,6 +25,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/test_emule_host_wait.cpp
     ${CMAKE_CURRENT_LIST_DIR}/test_host_alignment.cpp
     ${CMAKE_CURRENT_LIST_DIR}/test_metadata_size.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/test_named_compile_time_args.cpp
     ${CMAKE_CURRENT_LIST_DIR}/test_noc_without_barrier.cpp
     ${CMAKE_CURRENT_LIST_DIR}/test_padded_write.cpp
     ${CMAKE_CURRENT_LIST_DIR}/test_semaphore_write.cpp

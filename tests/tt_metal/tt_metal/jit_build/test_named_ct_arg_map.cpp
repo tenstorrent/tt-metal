@@ -151,9 +151,8 @@ TEST(NamedCtArgMap, HeaderDefinesTheMacroAndIsIncludeGuarded) {
     EXPECT_NE(header.find(R"(#define KERNEL_COMPILE_TIME_ARG_MAP {"cb_in0",1})"), std::string::npos);
     // The macro must be the whole body on one logical line: a stray newline inside the map would
     // terminate the #define and silently truncate the arg list. Everything after that line is the
-    // include that turns the macro into the get_named_compile_time_arg_val API -- performed here,
-    // in the generated header, because under TT_METAL_JIT_PCH the kernel's own include of
-    // compile_time_args.h re-includes as a no-op (the guard is already satisfied inside the PCH).
+    // include that turns the macro into the get_named_compile_time_arg_val API. In a PCH build
+    // the prelude saw no map, so this must work without another include from the consumer.
     const std::size_t define_pos = header.find("#define KERNEL_COMPILE_TIME_ARG_MAP");
     const std::size_t define_end = header.find('\n', define_pos);
     ASSERT_NE(define_end, std::string::npos);

@@ -261,12 +261,10 @@ std::string format_named_ct_arg_map(const std::unordered_map<std::string, std::u
 }
 
 std::string format_named_ct_arg_map_header(const std::unordered_map<std::string, std::uint32_t>& named_args) {
-    // The include turns the macro into the get_named_compile_time_arg_val API right
-    // here, rather than relying on the kernel to include compile_time_args.h after
-    // this header. That indirect route breaks under TT_METAL_JIT_PCH, where
-    // compile_time_args.h is already in the precompiled prelude and so re-includes as
-    // a no-op. named_compile_time_args.h is re-includable and needs nothing that is
-    // not yet defined at force-include time; see the comment there.
+    // Declare the named API as soon as the map is available. In a PCH build the
+    // earlier include of compile_time_args.h saw no map, and consumers need not
+    // include it again. The separate API header also avoids requiring FORCE_INLINE
+    // while this generated header is being force-included.
     return "// AUTO-GENERATED -- do not edit.\n#pragma once\n\n#define KERNEL_COMPILE_TIME_ARG_MAP " +
            format_named_ct_arg_map(named_args) + "\n\n#include \"api/named_compile_time_args.h\"\n";
 }

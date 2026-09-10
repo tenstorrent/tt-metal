@@ -44,8 +44,8 @@ constexpr uint32_t get_named_ct_arg(std::string_view name) {
 
 // clang-format off
 /**
- * Returns the value of a named constexpr argument from kernel_compile_time_args array provided during kernel creation using
- * CreateKernel calls. The name-to-index mapping is defined via KERNEL_COMPILE_TIME_ARG_MAP. Migrating all existing kernels to
+ * Returns the value of a named constexpr argument provided during kernel creation using CreateKernel calls.
+ * The name-to-value mapping is defined via KERNEL_COMPILE_TIME_ARG_MAP. Migrating all existing kernels to
  * use named compile time arguments is not a trivial task, so backward-compatibility is maintained by allowing the use of the
  * get_compile_time_arg_val function with an index. get_compile_time_arg_val can be deprecated in the future upon completion
  * of the migration and by request. See vecadd_multi_core.cpp for an example of how to use named compile time arguments.
