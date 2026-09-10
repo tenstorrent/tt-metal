@@ -210,6 +210,7 @@ def load_separate_models_like_test_end2end(model_args, mesh_device, dtype, paged
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
+        own_vision=False,
     )
     logger.info("Separate vision and text models loaded like test_end2end.py")
     return vision_model, text_model

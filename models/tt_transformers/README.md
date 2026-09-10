@@ -341,7 +341,7 @@ Max Prefill Chunk Sizes (text-only):
 
 **Chunked prefill (Llama3.2-11B multimodal)**: Llama3.2-11B multimodal is currently only supported on N300 and T3000. On N300, a max prefill context length of 8k is supported, while T3000 supports a max context length of 128k. Vision stack and demo: [models/demos/multimodal/llama3_vision](../demos/multimodal/llama3_vision).
 
-**Chunked prefill (Mistral-Small-3.1-24B multimodal)**: Mistral-Small-3.1-24B-Instruct-2503 (Pixtral vision) is currently supported on T3000. On T3000, a max prefill context length of 128k is supported.
+**Chunked prefill (Mistral-Small-3.1-24B multimodal)**: vision tower and e2e live in [models/experimental/mistral_24b](../experimental/mistral_24b). Text decoder still uses TTT. On T3000, a max prefill context length of 128k is supported.
 
 **EXAONE-4.5-33B**: text decoder still lives here (`force_text_only` / hybrid RoPE-NoPE). Not in pipeline CI, so it is no longer listed as verified. Image input is experimental: [exaone_45_vision_hybrid.py](../experimental/exaone45_vl/demo/exaone_45_vision_hybrid.py) (host or `--vision-device tt`) + the on-device tower in [models/experimental/exaone45_vl](../experimental/exaone45_vl). Vision is not wired through vLLM.
 

@@ -246,14 +246,12 @@
     # a real illegal NOC read rather than fixing it; tracked separately.
     unset TT_METAL_WATCHER
     export HF_MODEL=mistralai/Mistral-Small-3.1-24B-Instruct-2503 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mistral-Small-3.1-24B-Instruct-2503
-    pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_conv2d.py
-    pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_rms.py
-    pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_mlp.py
-    pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_attention.py
-    pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_pixtral_transformer.py
-    pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_patch_rot_emb.py
-    pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_model.py
-    pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_tower.py
+    pytest --timeout 600 models/experimental/mistral_24b/tests/test_conv2d.py
+    pytest --timeout 600 models/experimental/mistral_24b/tests/test_vision_rms.py
+    pytest --timeout 600 models/experimental/mistral_24b/tests/test_vision_mlp.py
+    pytest --timeout 600 models/experimental/mistral_24b/tests/test_vision_attention.py
+    pytest --timeout 600 models/experimental/mistral_24b/tests/test_pixtral_transformer.py
+    pytest --timeout 600 models/experimental/mistral_24b/tests/test_patch_rot_emb.py
   model: mistral-small-3.1-24b
   model_family: Mistral
   skus:

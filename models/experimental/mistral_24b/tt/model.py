@@ -28,6 +28,7 @@ class MistralTransformer(Transformer):
         weight_cache_path,
         paged_attention_config=None,
         use_paged_kv_cache=False,
+        own_vision=True,
     ):
         super().__init__(
             args,
@@ -38,6 +39,26 @@ class MistralTransformer(Transformer):
             paged_attention_config=paged_attention_config,
             use_paged_kv_cache=use_paged_kv_cache,
         )
+        self.vision_model = None
+        if own_vision:
+            from models.experimental.mistral_24b.tt.pipeline.vision_model import TtMistralVisionTransformer
+
+            self.vision_model = TtMistralVisionTransformer(
+                mesh_device=mesh_device,
+                state_dict=state_dict,
+                state_dict_prefix="vision_tower.",
+                dtype=dtype,
+                model_args=args,
+                tt_ccl=self.tt_ccl,
+            )
+
+    def compute_vision_token(self, pixel_values=None, image_sizes=None, vision_model=None, **kwargs):
+        tower = vision_model if vision_model is not None else self.vision_model
+        if pixel_values is None or tower is None:
+            return None
+        if image_sizes is not None and not isinstance(image_sizes[0], (list, tuple)):
+            image_sizes = [image_sizes]
+        return tower(pixel_values, image_sizes)
 
     def prepare_inputs_prefill(
         self,
@@ -57,6 +78,7 @@ class MistralTransformer(Transformer):
         # When trace_enabled, use None for device to keep tensors on host
         device = None if trace_enabled else self.mesh_device
 
+        pt_tokens = tokens
         tokens = tokens.reshape(1, 1, 1, -1)
         S = tokens.shape[-1]
         tokens = ttnn.from_torch(
@@ -70,41 +92,53 @@ class MistralTransformer(Transformer):
         # Only perform embedding and vision processing when not in trace mode
         if not trace_enabled:
             tokens_embd = self.embd(tokens)
-
-        # Only access processed_inputs if not in trace mode and if available
-        if not trace_enabled and "processed_inputs" in kwargs and kwargs["processed_inputs"] is not None:
-            pixel_values = kwargs["processed_inputs"]["pixel_values"]
-            input_ids = kwargs["processed_inputs"]["input_ids"]
-            image_sizes = kwargs["processed_inputs"]["image_sizes"]
-
-            if pixel_values is not None:
-                vision_model = kwargs["vision_model"]
-                vision_output = vision_model(pixel_values, image_sizes)
-                vision_output_torch = ttnn.to_torch(
-                    vision_output, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=-1)
-                )[:, : vision_output.shape[-1]]
-                tokens_embd = ttnn.to_torch(tokens_embd, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=-1))
-                sliced_token_embds = tokens_embd[: tokens_embd.shape[0]]
-
-                image_features = vision_output_torch
-
-                input_ids = torch.nn.functional.pad(
-                    input_ids, (0, tokens_embd.shape[1] - input_ids.shape[1]), "constant", 0
+            image_token_id = getattr(self.args, "image_token_index", None) or 10
+            vision_output = self.compute_vision_token(**kwargs)
+            if vision_output is not None:
+                tokens_embd = ttnn.to_torch(
+                    tokens_embd, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1)
                 )
-                special_image_mask = (input_ids == 10).unsqueeze(-1)
+                comp_vision_output = ttnn.to_torch(
+                    vision_output, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+                )[: vision_output.shape[0], :]
+                image_features = comp_vision_output.squeeze(0)
+                special_image_mask = (pt_tokens == image_token_id).unsqueeze(-1)
                 special_image_mask = special_image_mask.expand_as(tokens_embd)
                 image_features = image_features.to(tokens_embd.device, tokens_embd.dtype)
                 tokens_embd = tokens_embd.masked_scatter(special_image_mask, image_features)
+                tokens_embd = self.args.prepare_residual_tensor_prefill(tokens_embd)
+            elif kwargs.get("processed_inputs") is not None:
+                pixel_values = kwargs["processed_inputs"]["pixel_values"]
+                input_ids = kwargs["processed_inputs"]["input_ids"]
+                image_sizes = kwargs["processed_inputs"]["image_sizes"]
 
-                tokens_embd = ttnn.from_torch(
-                    tokens_embd,
-                    dtype=ttnn.bfloat16,
-                    device=self.mesh_device,
-                    layout=ttnn.TILE_LAYOUT,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(
-                        self.mesh_device, dims=(None, 2), mesh_shape=list(self.mesh_device.shape)
-                    ),
-                )
+                if pixel_values is not None:
+                    vision_model = kwargs.get("vision_model") or self.vision_model
+                    vision_output = vision_model(pixel_values, image_sizes)
+                    vision_output_torch = ttnn.to_torch(
+                        vision_output, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=-1)
+                    )[:, : vision_output.shape[-1]]
+                    tokens_embd = ttnn.to_torch(tokens_embd, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=-1))
+
+                    image_features = vision_output_torch
+
+                    input_ids = torch.nn.functional.pad(
+                        input_ids, (0, tokens_embd.shape[1] - input_ids.shape[1]), "constant", 0
+                    )
+                    special_image_mask = (input_ids == image_token_id).unsqueeze(-1)
+                    special_image_mask = special_image_mask.expand_as(tokens_embd)
+                    image_features = image_features.to(tokens_embd.device, tokens_embd.dtype)
+                    tokens_embd = tokens_embd.masked_scatter(special_image_mask, image_features)
+
+                    tokens_embd = ttnn.from_torch(
+                        tokens_embd,
+                        dtype=ttnn.bfloat16,
+                        device=self.mesh_device,
+                        layout=ttnn.TILE_LAYOUT,
+                        mesh_mapper=ttnn.ShardTensor2dMesh(
+                            self.mesh_device, dims=(None, 2), mesh_shape=list(self.mesh_device.shape)
+                        ),
+                    )
 
         # Only unsqueeze when not in trace mode
         if not trace_enabled:
@@ -172,3 +206,32 @@ class MistralTransformer(Transformer):
             tt_chunk_page_table,
             tt_chunk_start_idx,
         )
+
+
+_MISTRAL_VISION_MAX_SEQ_LEN_FLOOR = 4096
+
+
+def create_mistral_24b_model(
+    mesh_device,
+    max_batch_size,
+    max_seq_len,
+    dtype=ttnn.bfloat8_b,
+    use_paged_kv_cache=False,
+    checkpoint=None,
+):
+    from models.tt_transformers.tt.model_config import ModelArgs
+
+    max_seq_len = max(max_seq_len, _MISTRAL_VISION_MAX_SEQ_LEN_FLOOR)
+    tt_model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len)
+    if checkpoint is None:
+        checkpoint = tt_model_args.load_state_dict()
+    model = MistralTransformer(
+        mesh_device=mesh_device,
+        state_dict=checkpoint,
+        weight_cache_path=tt_model_args.weight_cache_path(ttnn.bfloat8_b),
+        dtype=ttnn.bfloat8_b,
+        args=tt_model_args,
+        use_paged_kv_cache=use_paged_kv_cache,
+        own_vision=True,
+    )
+    return tt_model_args, model, checkpoint
