@@ -28,9 +28,8 @@ void kernel_main() {
     for (std::uint32_t i = 0; i < entries_per_neo; i++) {
         // Pack TRISC: wait for free space, increment entry in-place, post credit.
         dfb.reserve_back(1);
-        // TEN-4746: the pack thread wrote L1 directly (no PACR) since reserve_back, so push_back would
-        // trip the pack-side ordering guard. A no-write dummy pack issues a real PACR to order the push
-        // after the reserve without clobbering the manual increments above.
+        // TEN-4746: issue a no-write PACR after reserve_back to order the later push_back.
+        // The PACK thread waits for it below before directly incrementing the reserved L1 entry.
         dummy_pack(dfb::out);
 #ifdef UCK_CHLKC_PACK
         {
