@@ -277,8 +277,9 @@ ttnn::device_operation::ProgramArtifacts build_paged_fill_cache_artifacts(
 
     // The three metadata buffers below are touched by the writer alone: it reserves an entry, takes
     // the write pointer, NoC-reads the metadata into it and reads it straight back through an SRAM
-    // pointer, never pushing. One toucher cannot present a producer and a consumer on distinct
-    // kernels, so the writer binds both endpoints of each.
+    // pointer, never pushing. With no second kernel to take the opposite endpoint, each is bound as
+    // a self-loop pair: one PRODUCER and one CONSUMER on the same kernel, which is the one form of
+    // repeated binding the spec validator sanctions.
     Group<DFBBinding> writer_dfb_bindings = {
         DFBBinding{
             .dfb_spec_name = FC_IN_TILES,
