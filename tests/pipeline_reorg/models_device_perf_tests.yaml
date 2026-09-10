@@ -136,11 +136,13 @@
     PROFILER_DIR="generated/profiler/deepseek_v3_fused_ops_device_perf"
     TRACY_TIMEOUT_PORT=5000
     TRACY_OP_SUPPORT_COUNT=10000
+    rc=0
     run_tracy_case() {
       local name="$1"
       local perf_env_var="$2"
       local test_target="$3"
       local k_expr="$4"
+      local case_rc=0
       echo "--- Case: $name | Target: $test_target | Expr: $k_expr"
       env "${perf_env_var}=1" python3 -m tracy -p -r \
         -o "$PROFILER_DIR" \
@@ -148,7 +150,11 @@
         --op-support-count "$TRACY_OP_SUPPORT_COUNT" \
         -t "$TRACY_TIMEOUT_PORT" \
         -a device_kernel_duration \
-        -m "pytest $test_target -k \"$k_expr\""
+        -m "pytest $test_target -k \"$k_expr\"" || case_rc=$?
+      if [ "$case_rc" -ne 0 ]; then
+        echo "--- Case FAILED (rc=$case_rc): $name"
+        rc=$case_rc
+      fi
       sleep 10
     }
     run_tracy_case "embedding decode seq1 + prefill seq128" "DS_EMBEDDING_DEVICE_PERF" "models/demos/deepseek_v3/tests/fused_op_unit_tests/embedding/test_ds_embedding.py::test_ds_embedding" "program_cache and not no_program_cache and real_weights and ((trace and decode and 1) or (eager and prefill and 128))"
@@ -163,6 +169,7 @@
     run_tracy_case "all_gather_preff1_3 decode seq1 + prefill seq128" "DS_ALL_GATHER_PREFF1_3_DEVICE_PERF" "models/demos/deepseek_v3/tests/fused_op_unit_tests/mlp/test_ds_all_gather_preff1_3.py::test_ds_all_gather_preff1_3" "program_cache and not no_program_cache and ((trace and decode and 1) or (eager and prefill and 128))"
     run_tracy_case "moe decode seq1 + prefill seq128" "DS_MOE_FORWARD_DEVICE_PERF" "models/demos/deepseek_v3/tests/fused_op_unit_tests/moe/test_ds_moe.py::test_ds_moe_forward" "test_ds_moe_forward and real_weights and program_cache and not no_program_cache and ((trace and decode and 1) or (eager and prefill and 128))"
     run_tracy_case "mla decode seq1 + prefill seq128" "DS_MLA_FORWARD_DEVICE_PERF" "models/demos/deepseek_v3/tests/fused_op_unit_tests/mla/test_ds_mla.py::test_ds_mla_forward" "test_ds_mla_forward and real_weights and program_cache and not no_program_cache and ((trace and decode and 1) or (eager and prefill and 128))"
+    exit $rc
   model: deepseek-v3-tg
   model_family: DeepSeek
   skus:
