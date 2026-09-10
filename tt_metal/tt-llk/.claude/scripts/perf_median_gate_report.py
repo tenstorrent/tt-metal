@@ -22,7 +22,7 @@ GATE = 0.02
 def per_config(path):
     d = pd.read_csv(path)
     g = d.groupby("variant_id")["cycles"]
-    return pd.DataFrame(
+    out = pd.DataFrame(
         {
             "n": g.size(),
             "median": g.median(),
@@ -31,12 +31,17 @@ def per_config(path):
             "max": g.max(),
         }
     )
+    if "module" in d.columns:
+        out["module"] = d.groupby("variant_id")["module"].first()
+    return out
 
 
 def main():
     root = sys.argv[1] if len(sys.argv) > 1 else os.path.expanduser("~/mediangate")
     a = per_config(os.path.join(root, "baseline_runs.csv"))
     b = per_config(os.path.join(root, "baseline2_runs.csv"))
+    if "module" in b.columns:
+        b = b.drop(columns=["module"])
     j = a.join(b, lsuffix="_1", rsuffix="_2", how="inner")
     print(f"configs: sweep1 {len(a)}  sweep2 {len(b)}  joined {len(j)}")
     print(f"runs per config: {int(j.n_1.median())} / {int(j.n_2.median())}\n")
@@ -76,6 +81,18 @@ def main():
         )
         .to_string()
     )
+    if "module" in j.columns:
+        by = j.groupby("module").apply(
+            lambda g: pd.Series(
+                {
+                    "configs": len(g),
+                    "median>2%": int((g.median_move > GATE).sum()),
+                    "today>2%": int((g.within_move_1 > GATE).sum()),
+                }
+            )
+        )
+        print("\nper test module:")
+        print(by.to_string())
     fired = int((j.median_move > GATE).sum())
     print(
         f"\nA median-vs-median gate at 2% fires on {fired} of {len(j)} configs of unchanged code."

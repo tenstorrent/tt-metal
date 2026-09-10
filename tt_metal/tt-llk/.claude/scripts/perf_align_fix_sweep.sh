@@ -27,26 +27,33 @@ MODE="${MODE:-p2align}"
 # DUMP=1 also writes one row per (variant, run) with the L1_TO_L1 cycles to
 # $OUT/<pass>_runs.csv, so per-config medians can be compared across passes.
 DUMP="${DUMP:-0}"
+# TESTS: perf test modules to run. Both matmul families flag on Wormhole
+# (45 perf_math_matmul rows and 8 perf_matmul rows in the 5-run baseline).
+TESTS="${TESTS:-perf_math_matmul}"
 PASSES="${PASSES:-baseline:none align0:0 align12:3}"
 export RUNNER_TEMP="${RUNNER_TEMP:-$HOME/llk-wh-build}"
 
 mkdir -p "$OUT"; cd "$PT"; source "$LLK/tests/.venv/bin/activate"
 say() { echo "=== $* -- $(date -u +%H:%M:%SZ) ==="; }
-restore() { cd "$PT"; git checkout -- perf_math_matmul.py "$SRC/math_matmul_perf.cpp" "$PACKC" "$CORE" 2>/dev/null; }
+restore() { cd "$PT"; git checkout -- perf_math_matmul.py perf_matmul.py "$SRC/math_matmul_perf.cpp" "$PACKC" "$CORE" 2>/dev/null; }
 
-git diff --quiet -- perf_math_matmul.py "$SRC/math_matmul_perf.cpp" "$PACKC" "$CORE" \
+git diff --quiet -- perf_math_matmul.py perf_matmul.py "$SRC/math_matmul_perf.cpp" "$PACKC" "$CORE" \
   || { echo "FATAL: tree dirty"; exit 1; }
 # Arm the cleanup only after the check, so aborting cannot revert another run.
 trap 'restore; echo "=== restored ==="' EXIT
 
+KEXPR=$(echo $TESTS | sed "s/ / or /g")
+say "tests: $KEXPR"
 say "resetting card"; tt-smi -r 2>&1 | tail -2; sleep 10
 
 run_pass() {
     local NAME=${1%%:*} PAD=${1##*:}
     say "pass $NAME  mode=$MODE  n=$PAD"
     restore
-    sed -i "s/^    configuration\.run(perf_report)\$/    configuration.run(perf_report, run_count=$RUNS)/" perf_math_matmul.py
-    grep -q "run_count=$RUNS" perf_math_matmul.py || { echo "FATAL: run_count sed"; exit 1; }
+    for M in $TESTS; do
+        sed -i "s/^    configuration\.run(perf_report)\$/    configuration.run(perf_report, run_count=$RUNS)/" "$M.py"
+        grep -q "run_count=$RUNS" "$M.py" || { echo "FATAL: run_count sed in $M.py"; exit 1; }
+    done
     if [ "$DUMP" = 1 ]; then
 python3 - "$CORE" <<'PY'
 import sys
@@ -59,7 +66,7 @@ NEW = """            _d = __import__("os").environ.get("TS_DUMP")
                 _s = _tl[(_tl["thread"] == "unpack") & (_tl["type"] == "ZONE_START")].sort_values("run_index")
                 _e = _tl[(_tl["thread"] == "pack") & (_tl["type"] == "ZONE_END")].sort_values("run_index")
                 if len(_s) and len(_s) == len(_e):
-                    pd.DataFrame({"variant_id": self.variant_id, "run_index": _s["run_index"].values,
+                    pd.DataFrame({"variant_id": self.variant_id, "module": self.test_name, "run_index": _s["run_index"].values,
                                   "cycles": _e["timestamp"].values - _s["timestamp"].values}).to_csv(
                         _d, mode="a", header=not __import__("os").path.exists(_d), index=False)
 """ + OLD
@@ -101,9 +108,9 @@ PY
     fi
     rm -rf "$LLK/perf_data"
     CHIP_ARCH=wormhole pytest -q --override-ini=log_cli=false --compile-producer -n 10 \
-      -m perf --perf-run-types L1_TO_L1 -k perf_math_matmul . > "$OUT/${NAME}_compile.log" 2>&1
+      -m perf --perf-run-types L1_TO_L1 -k "$KEXPR" . > "$OUT/${NAME}_compile.log" 2>&1
     CHIP_ARCH=wormhole pytest -q --override-ini=log_cli=false --compile-consumer -n 15 \
-      -m perf --perf-run-types L1_TO_L1 -k perf_math_matmul . > "$OUT/${NAME}_run.log" 2>&1
+      -m perf --perf-run-types L1_TO_L1 -k "$KEXPR" . > "$OUT/${NAME}_run.log" 2>&1
     say "pass $NAME rc=$?  runs_rows=$([ -n "${TS_DUMP:-}" ] && wc -l < "$TS_DUMP" 2>/dev/null || echo -)"
     rm -rf "$OUT/$NAME"; cp -r "$LLK/perf_data" "$OUT/$NAME" 2>/dev/null
 }
