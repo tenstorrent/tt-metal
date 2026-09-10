@@ -510,6 +510,7 @@ on:
           - embedding_bw.embedding_bw
           - fused.layer_norm_traces
           - fused.softmax_traces
+          - indexed_fused_update_cache
           - losses.l1_loss
           - losses.mse_loss
           - matmul.full.matmul_default_block_sharded
@@ -794,6 +795,7 @@ jobs:
     uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
     needs: [check-harbor, resolve-inputs]
+    if: ${{ !cancelled() && needs.resolve-inputs.result == 'success' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read

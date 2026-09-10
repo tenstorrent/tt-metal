@@ -12,6 +12,11 @@
 
 namespace ttnn::experimental::prim {
 
+// Matmul-signal aggregators (fused all-gather only) need one extra worker core per direction on top of the
+// mux/worker cores. Auto falls back to reader-signaled matmul when those cores do not fit at the requested
+// core_grid_offset; On requires them, Off never uses them.
+enum class MMSignalAggregatorMode : uint8_t { Auto, On, Off };
+
 struct StridedAllGatherAsyncParams {
     const std::vector<tt::tt_metal::IDevice*> devices;
     const uint32_t dim;

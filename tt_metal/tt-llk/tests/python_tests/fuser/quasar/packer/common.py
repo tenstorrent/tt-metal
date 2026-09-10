@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from fuser.operand import Operand
 from helpers.format_config import DataFormat
 from helpers.golden_generators import PackGolden
+from helpers.llk_params import PerfRunType
 
 if TYPE_CHECKING:
     from fuser.fuser_config import GlobalConfig
@@ -21,11 +22,7 @@ def hw_configure_pack(
     pack_dst: DataFormat,
     pack_mode: str = "PackMode::Default",
 ) -> str:
-    desc = output.cpp_desc_name
-    return (
-        f"{desc}.reg_data_format = static_cast<std::uint8_t>({pack_src.cpp_underlying_value});\n"
-        f"_llk_pack_hw_configure_<p_pacr::PACK0, {dest_acc}>({desc}, ReluConfig::from_packed(0));\n"
-    )
+    return f"_llk_pack_hw_configure_<p_pacr::PACK0, {dest_acc}>(static_cast<DataFormat>({pack_src.cpp_underlying_value}), ReluConfig::from_packed(0));\n"
 
 
 def configure_pack(
@@ -34,11 +31,7 @@ def configure_pack(
     pack_src: DataFormat,
     pack_dst: DataFormat,
 ) -> str:
-    desc = output.cpp_desc_name
-    return (
-        f"{desc}.reg_data_format = static_cast<std::uint8_t>({pack_src.cpp_underlying_value});\n"
-        f"_llk_pack_hw_configure_<p_pacr::PACK0, {dest_acc}>({desc}, ReluConfig::from_packed(0));\n"
-    )
+    return f"_llk_pack_hw_configure_<p_pacr::PACK0, {dest_acc}>(static_cast<DataFormat>({pack_src.cpp_underlying_value}), ReluConfig::from_packed(0));\n"
 
 
 def relu_config(
@@ -64,8 +57,10 @@ def pack_dest_init(
     config: "GlobalConfig", operation: "L1Operation", node: "PackNode"
 ) -> str:
     if config.quasar_use_dvalid:
-        return "set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});\n"
-    elif operation.stage_id != 1:
+        if config.perf_run_type in (None, PerfRunType.L1_TO_L1):
+            return "set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});\n"
+        return "set_up_zero_dest_dvalid_handshake_for_pack();\n"
+    if operation.stage_id != 1:
         return ""
     return f"_llk_pack_dest_init_<p_pacr::PACK0, {operation.dest_sync.cpp_enum_value}>();\n"
 

@@ -38,6 +38,7 @@ class FpuNode:
         transpose_faces: Transpose = Transpose.No,
         transpose_within_face: Transpose = Transpose.No,
         broadcast_type: BroadcastType = BroadcastType.None_,
+        broadcast_tile: int = None,
         data_copy_type: DataCopyType = DataCopyType.A2D,
         reuse_dest: EltwiseBinaryReuseDestType = EltwiseBinaryReuseDestType.NONE,
         math_fidelity: MathFidelity = MathFidelity.LoFi,
@@ -54,6 +55,7 @@ class FpuNode:
         self.transpose_faces = transpose_faces
         self.transpose_within_face = transpose_within_face
         self.broadcast_type = broadcast_type
+        self.broadcast_tile = broadcast_tile
         self.reuse_dest = reuse_dest
         self.math_fidelity = math_fidelity
         self.enforce_fp32_accumulation = enforce_fp32_accumulation
@@ -143,7 +145,7 @@ class FpuNode:
         operation: "L1Operation",
         config: "GlobalConfig",
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        if self.unpacker is not None:
+        if self.unpacker is not None and self.src_a is not None:
             unpacked_tensor_a, unpacked_tensor_b = self.unpacker.golden(
                 input_tensor_a, input_tensor_b, operation, config, self
             )

@@ -134,6 +134,21 @@ void set_runtime_args(
 
 }  // namespace
 
+ComputeBodyMode compute_body_mode(uint32_t k, uint32_t input_last_dim) {
+    const uint32_t llk_k = to_uint32(snap_to_llk_target_k(k));
+
+    // For an internal K >= 1024, segmented fusion handles every width with
+    // one binary; rows of at most 32 chunks naturally execute as one segment.
+    // Gate on the snapped LLK K so public k values in [528, 1008] get the same
+    // fused body as k=1024 instead of silently falling back to classic.
+    if (llk_k >= to_uint32(LlkTargetK::K1024)) {
+        return ComputeBodyMode::FusedSegmented;
+    }
+
+    const uint32_t physical_chunks = tt::div_up(input_last_dim, llk_k);
+    return physical_chunks <= 32 ? ComputeBodyMode::FusedEndToEnd : ComputeBodyMode::Classic;
+}
+
 TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -198,7 +213,8 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_args));
 
-    std::vector<uint32_t> compute_compile_args = {cb_in, cb_indices, llk_k};
+    const auto body_mode = compute_body_mode(k, input.logical_shape()[-1]);
+    std::vector<uint32_t> compute_compile_args = {cb_in, cb_indices, llk_k, static_cast<uint32_t>(body_mode)};
     auto compute_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/compute.cpp",

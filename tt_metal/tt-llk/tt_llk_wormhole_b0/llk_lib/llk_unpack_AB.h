@@ -33,7 +33,7 @@ using namespace ckernel::unpacker;
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
  */
 template <BroadcastType BType = BroadcastType::NONE>
-inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const ckernel::TensorShape &tensor_shape)
+inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const ckernel::TensorShape tensor_shape)
 {
     const std::uint32_t num_faces_r_dim = tensor_shape.num_faces_r_dim;
     const std::uint32_t num_faces_c_dim = tensor_shape.num_faces_c_dim;

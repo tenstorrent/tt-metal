@@ -68,7 +68,8 @@ void kernel_main() {
     DataflowBuffer cb_tilize_buf(dfb::cb_tilize);
     DataflowBuffer cb_out(dfb::cb_out0);
 
-    unary_op_init_common(dfb::cb_in0, dfb::cb_out0);
+    compute_kernel_hw_startup(dfb::cb_in0, dfb::cb_out0);
+    copy_init(dfb::cb_in0);
 
     for (uint32_t n = 0; n < num_hw_blocks_per_core; n++) {
         // Tilize input (Ht rows × Wt tiles). Fp32Mode::Lossless keeps the full

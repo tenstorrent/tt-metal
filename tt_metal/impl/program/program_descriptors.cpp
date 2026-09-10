@@ -12,8 +12,8 @@
 #include "tt_stl/overloaded.hpp"
 #include <tt_stl/reflection.hpp>
 
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
-#include <tt-metalium/experimental/tensor/tensor_types.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
 
 namespace tt::tt_metal {
 
@@ -142,8 +142,8 @@ static inline ttsl::hash::hash_t hash_kernel_descriptor(const KernelDescriptor& 
         kernel.compiler_include_paths,
         kernel.common_runtime_args.size(),
         kernel.runtime_args.size(),
-        // Blaze-only experimental named args (issue #50953): hash the named-RT-arg schema
-        // (names/lengths/dispatch), NOT values — values don't affect the JIT build.
+        // Blaze-only experimental named args (issue #50953): hash compile-time names/values
+        // and the runtime-arg schema. Runtime values do not affect the JIT build.
         experimental::blaze::hash_named_args_schema(kernel.blaze_named_args),
         kernel.config.index(),
         kernel.config);

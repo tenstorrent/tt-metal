@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <limits>
+#include "ttnn/operations/reduction/topk/device/topk_constants.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
 
 namespace ttnn::prim {
@@ -22,37 +24,53 @@ namespace ttnn::prim {
  */
 uint32_t largest_power_of_two(uint32_t x) { return x == 0 ? 0 : (1U << (31 - __builtin_clz(x))); }
 
+bool topk_multicore_structurally_eligible(uint32_t reduced_width, uint32_t num_tile_rows, uint32_t k) {
+    // Requirement #1: enough width for parallel execution to pay off. The single-core
+    // factory parallelizes across tile ROWS, so when the input has at most
+    // multi_core_low_ht_max_tile_rows tile rows most of the grid idles and the
+    // column-split multi-core path wins from multi_core_low_ht_min_width up
+    // (measured ~4x on 32x2048 k=32); wide-and-tall inputs keep the row-parallel
+    // single-core path below multi_core_min_width.
+    const bool width_gate = (reduced_width >= constants::multi_core_min_width) ||
+                            (num_tile_rows <= constants::multi_core_low_ht_max_tile_rows &&
+                             reduced_width >= constants::multi_core_low_ht_min_width);
+    // Requirement #2: the multi-core bitonic sort network addresses elements with
+    // 16-bit indices (the OUTPUT index tensor may still be 16- or 32-bit), and the
+    // network requires a power-of-two width.
+    const bool is_pow2 = reduced_width != 0 && (reduced_width & (reduced_width - 1)) == 0;
+    // Requirement #3: K limit of the local-topk/gather/final-topk pipeline.
+    return width_gate && (reduced_width < constants::multi_core_max_width_exclusive) && is_pow2 &&
+           (k <= constants::multi_core_max_k);
+}
+
 /**
  * @brief Finds optimal core configuration for multi-core TopK execution
  *
  * This function determines the best way to distribute TopK work across multiple cores
- * by analyzing memory constraints, core availability, and workload balance. It searches
- * for a configuration that maximizes parallelization while staying within hardware limits.
+ * by analyzing memory constraints, core availability, and workload balance. It evaluates
+ * every valid configuration and returns the one with the lowest modeled makespan
+ * (see the fitted cost model at the search loop below).
  *
  * Algorithm overview:
  * 1. Start with a conservative split size based on available cores and width
+ *    (clamped up to the minimum split so small widths on large grids start valid)
  * 2. Iteratively try larger split sizes (powers of 2) up to max_dim
  * 3. For each split size, calculate required cores and memory costs
  * 4. Verify that configuration fits within available cores and memory
  * 5. Find contiguous core arrangement that matches the requirement
- * 6. Return the first valid configuration found
+ * 6. Score each valid configuration with the makespan model
+ *    (kLocalCostFactor * Wt_local + kFinalCostFactor * Wt_final) and return the minimum
  *
  * Memory cost model:
  * - Gather cost: Data movement between cores (2 * num_cores * tile_sizes)
  * - Local cost: Per-core memory usage (split_size/TILE_WIDTH * tile_sizes)
  * - Total must fit within L1 memory per core
  *
- * @param width Total width of the dimension being processed (in elements)
- * @param min_dim Minimum allowed split size (hardware constraint)
- * @param max_dim Maximum allowed split size (hardware constraint)
- * @param k Number of top elements to find
- * @param core_range Available core grid for parallel execution
- * @param l1_size L1 cache size per core (memory constraint)
- * @param value_tile_size Memory size of value tiles
- * @param index_tile_size Memory size of index tiles
- * @return Optional TopKCoreConfig with optimal settings, or nullopt if impossible
+ * Returns std::nullopt (single-core fallback) instead of throwing when the grid or
+ * width cannot support the multi-core layout.
  */
-std::optional<TopKCoreConfig> find_topk_core_config(
+namespace {
+std::optional<TopKCoreConfig> find_topk_core_config_impl(
     uint32_t width,
     uint32_t min_dim,
     uint32_t max_dim,
@@ -61,19 +79,35 @@ std::optional<TopKCoreConfig> find_topk_core_config(
     uint32_t l1_size,
     uint32_t value_tile_size,
     uint32_t index_tile_size,
-    uint32_t tile_width) {
-    // Calculate the maximum number of cores available in the core grid
-    const auto max_cores =
-        (core_range.end_coord.y - core_range.start_coord.y - 1) * (core_range.end_coord.x - core_range.start_coord.x);
-    TT_FATAL(max_cores > 0, "Core grid must contain at least one core. Got core range: {}", core_range.str());
+    uint32_t tile_width,
+    bool first_valid_only) {
+    // Grid dimensions (inclusive coordinates). The multi-core layout places the local
+    // cores in a (max_x x max_y) rectangle and the final gather core on the row below
+    // it, so it needs at least 2 columns and 3 rows; smaller grids (e.g. a single-row
+    // sub_core_grids) fall back to single-core via nullopt. Computing the +1 sizes
+    // first keeps the arithmetic unsigned-underflow-free.
+    const uint32_t grid_x = core_range.end_coord.x - core_range.start_coord.x + 1;
+    const uint32_t grid_y = core_range.end_coord.y - core_range.start_coord.y + 1;
+    if (grid_x < 2 || grid_y < 3) {
+        return std::nullopt;
+    }
+    const uint32_t max_x = grid_x - 1;
+    const uint32_t max_y = grid_y - 2;
+    const uint32_t max_cores = max_x * max_y;
 
     // Calculate conservative starting split size:
     // 1. Divide width by tile width to get number of tiles
     // 2. Divide by largest power-of-two <= max_cores for balanced distribution
     // 3. Convert back to elements by multiplying by tile width
-    // This ensures we start with a split size that can utilize most available cores
-    const uint32_t start_split_size =
-        static_cast<uint32_t>(width / tile_width / largest_power_of_two(max_cores)) * tile_width;
+    // This starts the sweep at the smallest split that can utilize most available
+    // cores. When the grid has more (power-of-two) cores than the width has tiles
+    // the division truncates to zero, so clamp up to the smallest legal split —
+    // otherwise widths right at the eligibility floor (e.g. 1024 = 32 tiles on a
+    // 96-core grid, lp2 = 64) would produce a zero split instead of a valid config.
+    const uint32_t start_split_size = std::max(
+        {static_cast<uint32_t>(width / tile_width / largest_power_of_two(max_cores)) * tile_width,
+         min_dim,
+         tile_width});
 
     // The transposed intermediate CBs (c_2, c_4, c_6, and c_8 on local cores) all use bf16
     // when the input format is bfp8/bfp4 to avoid shared-exponent precision loss during sort
@@ -82,21 +116,35 @@ std::optional<TopKCoreConfig> find_topk_core_config(
     const uint32_t bf16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
     const uint32_t transposed_tile_size = std::max(value_tile_size, bf16_tile_size);
 
-    // Search for optimal split size by trying powers of 2 from conservative start to max_dim
+    // Search all power-of-2 split sizes and keep the one with the best modeled makespan.
+    // The first-valid (= smallest split, most cores) choice maximizes the SERIAL final
+    // stage: the single final core does O(num_cores * k) gather-merge work while every
+    // local core does O(split_size) sort work. Model both sides and minimize
+    //   T ~ kLocalCostFactor * Wt_local + kFinalCostFactor * Wt_final
+    // Constants fitted on p150a silicon (4 configs across 8192/32768-wide k=64 cells,
+    // <0.5% residual): a local tile costs ~3.5x a final tile — locals run full
+    // 64-element sorts per tile while the final core runs merge/rebuild pair-ops.
+    // Wormhole impact: this selection logic is arch-neutral and changes nothing
+    // Wormhole-specific — the low-tile-row eligibility gate applies identically
+    // there, and the start-split clamp above only binds at the eligibility floor
+    // (a zero split needs lp2(max_cores) > width-in-tiles; Wormhole grids top out
+    // at lp2(max_cores) = 32, so W=1024's 32 tiles never truncate to zero there).
+    constexpr uint32_t kLocalCostFactor = 7;
+    constexpr uint32_t kFinalCostFactor = 2;
+    std::optional<TopKCoreConfig> best_config = std::nullopt;
+    uint32_t best_score = std::numeric_limits<uint32_t>::max();
     for (uint32_t split_size = start_split_size; split_size <= max_dim; split_size *= 2) {
-        // Calculate work distribution for this split size
-        TT_FATAL(
-            split_size != 0,
-            "Split size must be non-zero (got 0 for width={}, max_cores={}, max_dim={})",
-            width,
-            max_cores,
-            max_dim);
         const uint32_t rem = width % split_size;                      // Remainder after even division
         const uint32_t num_cores = (width / split_size) + (rem > 0);  // Cores needed (extra for remainder)
 
         // Per-core L1 footprint mirroring the multi-core factory's CBs: charge the gather/output
         // buffers to a single core (they live on one core), not amortised across all cores.
-        const uint32_t Wt_final = (num_cores * std::max(k, tile_width)) / tile_width;
+        // Each local core physically produces ceil(k / tile_width) tiles (the writer strides by
+        // Kt tiles), so the gathered width is num_cores * Kt tiles — round K UP to the tile
+        // boundary. Warning: a flooring formula (e.g. max(k, tile_width)) undersizes the gather
+        // CBs and the final reader's tile count for K values that are not tile multiples.
+        const uint32_t Kt = tt::div_up(k, tile_width);
+        const uint32_t Wt_final = num_cores * Kt;
         const uint32_t Wt_local = split_size / tile_width;
         const uint32_t shared_cost = 4 * (value_tile_size + index_tile_size) +              // c_0,c_1 input
                                      Wt_final * (transposed_tile_size + index_tile_size) +  // c_4,c_5 gathered
@@ -107,61 +155,86 @@ std::optional<TopKCoreConfig> find_topk_core_config(
             shared_cost + Wt_local * (transposed_tile_size + index_tile_size) + 2 * transposed_tile_size;
         const uint32_t per_core_cost = std::max(final_core_cost, local_core_cost);
 
-        // Extract core grid dimensions from the available range
-        const uint32_t max_x = core_range.end_coord.x - core_range.start_coord.x;
-        const uint32_t max_y = core_range.end_coord.y - core_range.start_coord.y - 1;
-        const uint32_t max_cores_available = max_x * max_y;
         // Quick check: skip this configuration if it needs more cores than available
-        if (num_cores > max_cores_available) {
+        if (num_cores > max_cores) {
             continue;
         }
 
-        // Find contiguous core arrangement that matches the required number of cores
-        // Hardware performs better with contiguous rectangular core grids
+        // Find a contiguous rectangular core arrangement matching the required core count.
+        // Hardware performs better with contiguous rectangular core grids. Scan y upward and
+        // take the first factorization that fits: the WIDEST (smallest-y) rectangle. This is
+        // the arrangement the split model's cost constants were fitted against on silicon
+        // (and what the previous descending double-loop shipped — its inner break only exited
+        // the x-loop, so it also kept the smallest-y match despite its comment).
         bool contiguous_cores_available = false;
         uint32_t selected_x = 0;
         uint32_t selected_y = 0;
-
-        // Search from largest dimensions down to find optimal core grid shape
-        // Prefer arrangements that maximize spatial locality
-        for (uint32_t y = max_y; y > 0; y--) {
-            for (uint32_t x = max_x; x > 0; x--) {
-                if (x * y == num_cores) {
-                    selected_x = x;
-                    selected_y = y;
-                    contiguous_cores_available = true;
-                    break;  // Take the first (largest) valid arrangement found
-                }
+        for (uint32_t y = 1; y <= max_y; y++) {
+            if (num_cores % y != 0) {
+                continue;
+            }
+            const uint32_t x = num_cores / y;
+            if (x <= max_x) {
+                selected_x = x;
+                selected_y = y;
+                contiguous_cores_available = true;
+                break;
             }
         }
-        // Comprehensive validation: check all requirements for a valid configuration
-        if (num_cores <= max_cores &&      // Core count feasible
-            per_core_cost < l1_size &&     // Memory fits
-            num_cores > 1 &&               // Multi-core beneficial
-            split_size >= min_dim &&       // Hardware minimum met
-            contiguous_cores_available &&  // Can arrange cores
-            rem == 0) {                    // Perfect division (no remainder)
 
-            // Create configuration with all the calculated parameters
-            TopKCoreConfig config{};
-            config.num_cores = static_cast<uint16_t>(num_cores);
-            config.split_size = static_cast<uint16_t>(split_size);
-            config.rem = static_cast<uint16_t>(rem);
+        // Comprehensive validation: check all requirements for a valid configuration.
+        const bool valid = num_cores <= max_cores &&      // Core count feasible
+                           per_core_cost < l1_size &&     // Memory fits
+                           num_cores > 1 &&               // Multi-core beneficial
+                           split_size >= min_dim &&       // Hardware minimum met
+                           contiguous_cores_available &&  // Can arrange cores
+                           rem == 0;                      // Perfect division (no remainder)
+        if (!valid) {
+            continue;
+        }
 
-            // Calculate final input size after parallel processing:
-            // Each core produces top-K results, so final size is num_cores * max(K, TILE_WIDTH)
-            // TILE_WIDTH minimum ensures proper tile alignment
-            config.final_input_size = static_cast<uint16_t>(num_cores * std::max(k, tile_width));
+        // Create configuration with all the calculated parameters
+        TopKCoreConfig config{};
+        config.num_cores = static_cast<uint16_t>(num_cores);
+        config.split_size = static_cast<uint16_t>(split_size);
+        config.rem = static_cast<uint16_t>(rem);
+        // Final gather width: each core lands Kt = ceil(K / tile_width) tiles, so the
+        // final stage input is num_cores * Kt tiles (a power of two whenever num_cores
+        // and Kt are, which the final merge's log2(Wt_final) iteration count relies on).
+        config.final_input_size = static_cast<uint16_t>(Wt_final * tile_width);
+        config.selected_x = static_cast<uint16_t>(selected_x);
+        config.selected_y = static_cast<uint16_t>(selected_y);
 
-            config.selected_x = static_cast<uint16_t>(selected_x);
-            config.selected_y = static_cast<uint16_t>(selected_y);
+        // Existence checks (verify_multi_core_cost) do not need the best-scoring
+        // config, just whether any valid one exists — return the first and skip the
+        // rest of the sweep.
+        if (first_valid_only) {
+            return config;
+        }
 
-            // Return the first valid configuration found (greedy approach)
-            return std::make_optional(config);
+        // Only keep a config if it also beats the best modeled makespan so far.
+        const uint32_t score = kLocalCostFactor * Wt_local + kFinalCostFactor * Wt_final;
+        if (score < best_score) {
+            best_score = score;
+            best_config = config;
         }
     }
-    // No valid configuration found after trying all split sizes
-    return std::nullopt;
+    return best_config;
+}
+}  // namespace
+
+std::optional<TopKCoreConfig> find_topk_core_config(
+    uint32_t width,
+    uint32_t min_dim,
+    uint32_t max_dim,
+    uint32_t k,
+    const tt::tt_metal::CoreRange& core_range,
+    uint32_t l1_size,
+    uint32_t value_tile_size,
+    uint32_t index_tile_size,
+    uint32_t tile_width) {
+    return find_topk_core_config_impl(
+        width, min_dim, max_dim, k, core_range, l1_size, value_tile_size, index_tile_size, tile_width, false);
 }
 
 /**
@@ -191,9 +264,13 @@ bool verify_multi_core_cost(
     uint32_t value_tile_size,
     uint32_t index_tile_size,
     uint32_t tile_width) {
-    const auto config = find_topk_core_config(
-        width, min_dim, max_dim, k, core_range, l1_size, value_tile_size, index_tile_size, tile_width);
-    return config.has_value();
+    // Existence is independent of the makespan score: any valid split proves
+    // feasibility, so stop the sweep at the first valid config instead of paying
+    // the full scored search (this runs on the host dispatch hot path from both
+    // select_program_factory and validate_on_program_cache_miss).
+    return find_topk_core_config_impl(
+               width, min_dim, max_dim, k, core_range, l1_size, value_tile_size, index_tile_size, tile_width, true)
+        .has_value();
 }
 
 /**
@@ -259,6 +336,12 @@ bool verify_single_core_cost(const ttnn::Tensor& input_tensor, uint32_t k, bool 
 
     // Verify that total memory requirement fits within single core's L1 cache
     return memory_cost_local < device->l1_size_per_core();
+}
+
+bool is_uint32_index_required(const ttnn::Tensor& input_tensor, int8_t dim) {
+    const bool dim_fits_uint16 = input_tensor.padded_shape()[dim] <= std::numeric_limits<uint16_t>::max();
+    const bool is_fp32 = input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32;
+    return !dim_fits_uint16 || is_fp32;
 }
 
 }  // namespace ttnn::prim

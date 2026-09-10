@@ -10,6 +10,7 @@
 #include <string>
 #include <utility>
 
+#include <tt-metalium/allocator.hpp>  // Allocator::get_bank_size (real L1 bank, not nominal l1_size_per_core)
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>  // tt::tile_size (DFB ring-extent cap for no-spill conv)
 #include <tt_stl/assert.hpp>
@@ -340,13 +341,13 @@ Result conv2d_DRAM(
 static ttnn::Tensor fix_conv_output_logical_nhw(
     const ttnn::Tensor& out, uint32_t batch_size, uint32_t output_height, uint32_t output_width) {
     const auto& logical = out.logical_shape();
+    const uint32_t true_nhw = batch_size * output_height * output_width;
     // Only the flattened conv-as-matmul output form [1, 1, NHW, C] is over-counted here; leave anything else
     // (already-unflattened, rank != 4, or batch/H folded differently) untouched to avoid mislabeling a real
     // spatial dim as NHW.
     if (logical.rank() != 4 || logical[0] != 1 || logical[1] != 1) {
         return out;
     }
-    const uint32_t true_nhw = batch_size * output_height * output_width;
     if (static_cast<uint32_t>(logical[2]) == true_nhw || static_cast<uint32_t>(logical[2]) < true_nhw) {
         // Already correct, or somehow smaller (never over-count) -- do not touch.
         return out;
@@ -668,6 +669,16 @@ Result conv2d_L1(
     // plain matmul (im2col is trivial), so setting full_inner_dim engages the split; this dodges the fused
     // conv's full-N HEIGHT_SHARDED weights overflow (the observed N-halving) AND the fused 0x19. 1x1 already
     // has act_block_w == full_K (single K-block, num_blocks_act_w == 1), so no act_block_w override is needed.
+    // [#48552] Route the 1x1 conv that use_matmul_for_1x1_conv REJECTED (stride>1 => the layer4 downsample
+    // 1024->2048 s2) through the SPLIT path (Program A gather+tilize -> Program B plain K-spill matmul) -- the
+    // same proven path conv2 uses, and the same one the passing s1 1x1 convs effectively use. A 1x1 conv IS a
+    // plain matmul (im2col is trivial), so setting full_inner_dim engages the split; this dodges the fused
+    // conv's full-N HEIGHT_SHARDED weights overflow (the observed N-halving) AND the fused 0x19. 1x1 already
+    // has act_block_w == full_K (single K-block, num_blocks_act_w == 1), so no act_block_w override is needed.
+    // [#48552 Stage2 REVERTED-AGAIN] A block-sharded extension was tried (relax to block_sharded_conv + force
+    // act_block_w=full_K), but the DPRINT proved block-sharding splits K across the GRID columns (nbw2 on the
+    // 2-core grid) regardless of act_block_w -> the split never engages and act_block_w=full_K + nbw2 is an
+    // inconsistent K config. HEIGHT_SHARDED is the only single-K-block shape, so keep this HS-only.
     const bool force_1x1_nonmm_split = arch_is_quasar && split_env_requested && height_sharded_conv && !mm_conv &&
                                        !conv_is_1d_depthwise && (kernel_size[0] == 1) && (kernel_size[1] == 1) &&
                                        (full_inner_dim_k_ntiles <= kQuasarConvNoSpillMaxKTiles);
@@ -703,7 +714,7 @@ Result conv2d_L1(
         // Program A's resident output = per-core tilized activation [per_core_M, full_K] tiles.
         const uint64_t tilized_act_bytes =
             static_cast<uint64_t>(per_core_m_ntiles) * full_inner_dim_k_ntiles * out_tile_bytes;
-        const uint64_t l1_bank = device->l1_size_per_core();
+        const uint64_t l1_bank = device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
         // Ceiling on the per-core tilized activation: L1 fit. The tilized-activation output alone crowds the
         // bank, so reserve ~20 % for the resident halo input, weights, matmul CBs and allocator fragmentation.
         // (A former uint16_t DFB ring-extent cap of ~1 MB -- Program A's borrowed DFB_OUT holds the WHOLE
@@ -712,7 +723,12 @@ Result conv2d_L1(
         // ring_size field to uint32_t, so the ring extent is no longer binding and only L1 fit matters. This
         // also keeps such convs off the DRAM slice path, whose slice_write can't consume the per-core
         // tile-padding a height-sharded conv output carries for non-tile-aligned per-core heights.)
-        const uint64_t fit_threshold = (l1_bank * 80) / 100;
+        // [#54488] Small banks have far less headroom for the tilized activation alongside the halo input,
+        // weights, matmul CBs and allocator fragmentation, so slice more aggressively (60%) there; full-size
+        // banks keep the validated ~80% ceiling. (60% of ~2.68 MB ~= 1.6 MB, below the ~1.7 MB layer1 conv2
+        // tilized activation, so it now DRAM-slices instead of OOMing 31 KB short.)
+        const bool small_bank = l1_bank < (3ull * 1024 * 1024);
+        const uint64_t fit_threshold = small_bank ? (l1_bank * 60) / 100 : (l1_bank * 80) / 100;
         if (tilized_act_bytes > fit_threshold) {
             // Number of output-height slices so each slice's tilized activation ((per_core_M/num_slices)*full_K)
             // stays under half the bank, leaving ample room for the slice's halo input, weights and matmul CBs.
@@ -976,21 +992,15 @@ Result conv2d_L1(
         // 1x1-conv path uses (bias + activation folded into the matmul program config). Gate must match the
         // factory's split_program_tilize_only eligibility (height-sharded + full_inner_dim single-K-block; this
         // is the !mm_conv, non-depthwise branch already).
-        // DIAGNOSTIC (tilize isolation): TT_METAL_QSR_CONV_TILIZE_ONLY_NO_MATMUL stops after Program A and returns
-        // the tilized activation [M, K] ITSELF (skips the Program B matmul), so a test can read it back and diff
-        // against a host golden — isolating the UnpackToDestEn tilize from the matmul. Program A still ran
-        // tilize-only above (the factory keys off TT_METAL_QSR_CONV_SPLIT_PROGRAM). See test_conv2d_tilize_readback.py.
-        const bool tilize_only_no_matmul = (std::getenv("TT_METAL_QSR_CONV_TILIZE_ONLY_NO_MATMUL") != nullptr);
         // NOTE: the arch==QUASAR restriction was REMOVED so the split runs on WH/BH too (bring-up/validation with
         // working LLK). It MUST match the sharded factory's split_program_tilize_only gate, which is env-only (no
-        // arch check) — otherwise the factory builds the tilize-only Program A but conv2d.cpp skips Program B, and
-        // the op returns the raw tilized activation [M,K] instead of the conv result [M,N]. The env var is the
-        // explicit opt-in (only tests set it), so production convs on any arch are unaffected.
+        // arch check). The env var is the explicit opt-in (only tests set it), so production convs on any arch
+        // are unaffected.
         // [#48552 Stage2 REVERTED] block-sharded can't use the single-K-block split (in0_num_blocks_w>1 ->
         // needs cross-column K-reduction the split path deliberately avoids); keep height-sharded-only.
         const bool split_program_active = (std::getenv("TT_METAL_QSR_CONV_SPLIT_PROGRAM") != nullptr) &&
                                           parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED &&
-                                          conv_config.full_inner_dim && !tilize_only_no_matmul;
+                                          conv_config.full_inner_dim;
         if (split_program_active) {
             std::optional<ttnn::operations::experimental::quasar::matmul::MatmulProgramConfig> program_config =
                 std::nullopt;
@@ -1049,8 +1059,17 @@ Result conv2d_L1(
                     // K-spill when full-K weights EXCEED 512 tiles, and when spilling keep the resident block well
                     // under (<=256 tiles) by picking the largest divisor of full_K with in0_block_w*N <= 256.
                     uint32_t in0_blk_w_mm = full_k_ntiles_mm;
-                    constexpr uint32_t kSingleBlockFitTiles = 512;
-                    constexpr uint32_t kSpillTargetTiles = 256;
+                    // If have less memory to use per L1 bank (e.g. ~2.68 MB) the matmul's
+                    // weights + activation CBs, sized by in0_block_w, alongside the resident tilized activation
+                    // overflow / clash with L1 (validate_dataflow_buffer_region: static DFBs overlap an L1
+                    // buffer). Spill harder there -- lower single-block ceiling AND smaller resident K-block --
+                    // to shrink the matmul CB footprint below the bank. NOTE: more K-blocks = more DRAM-weights
+                    // K-spill-accumulate steps (watch for the 0x10000 tile-counter HW race, though layer4
+                    // already K-spills fine). Full-size banks keep the validated 512/256 tuning.
+                    const bool small_bank_mm =
+                        device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1) < (3ull * 1024 * 1024);
+                    const uint32_t kSingleBlockFitTiles = small_bank_mm ? 256u : 512u;
+                    const uint32_t kSpillTargetTiles = small_bank_mm ? 64u : 256u;
                     if (n_ntiles_mm * full_k_ntiles_mm > kSingleBlockFitTiles) {
                         uint32_t k_blk = full_k_ntiles_mm;
                         while (k_blk > 1 &&
@@ -1156,11 +1175,23 @@ Result conv2d_L1(
         // This is the plain matmul (no fused conv_bmm, no 0x19); its DRAM-weights K-spill accumulate is the
         // Blocker-A capability (DPRINT-masked). Small 1x1 (<=512t, e.g. 1024->512 at 512t) keep the full-K single
         // block, unchanged and still passing.
-        if (kernel_size[0] == 1 && kernel_size[1] == 1) {
+        //
+        // HEIGHT-SHARDED ONLY: block-sharded splits K across grid columns, so the per-core shard K is
+        // full_K / num_cores_c (< full_K). Forcing in0_block_w = full_K then exceeds the per-core K and trips
+        // the matmul divisibility check ((shard_K_tiles) % in0_block_w == 0) — e.g. WH block-sharded layer3
+        // 1x1 with shard_K=2 tiles vs in0_block_w=16. Block-sharded also keeps per-core K small, so no DRAM
+        // spill is needed there. This mirrors the split-path Program B K-spill above, which is likewise
+        // height-sharded-only. On block-sharded convs (WH/BH layer3/4) the matmul config from
+        // determine_matmul_op_config_from_conv_op_config_qsr is used unchanged.
+        if (height_sharded_conv && kernel_size[0] == 1 && kernel_size[1] == 1) {
             const uint32_t full_k_mm = full_inner_dim_k_ntiles;  // 1x1: = in_ch_padded/32
+            // [#54488] Same small-bank spill as the split-path Program B above: on a ~2.68 MB Quasar bank the
+            // wide 1x1 weights CB (conv3 256->1024 / 512->2048, downsample) clashes with L1, so spill harder.
+            const bool small_bank_mm =
+                device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1) < (3ull * 1024 * 1024);
+            const uint32_t kSingleBlockFitTiles = small_bank_mm ? 256u : 512u;
+            const uint32_t kSpillTargetTiles = small_bank_mm ? 64u : 256u;
             auto kspill_in0_bw = [&](uint32_t per_core_n) -> uint32_t {
-                constexpr uint32_t kSingleBlockFitTiles = 512;
-                constexpr uint32_t kSpillTargetTiles = 256;
                 if (per_core_n == 0 || per_core_n * full_k_mm <= kSingleBlockFitTiles) {
                     return full_k_mm;
                 }

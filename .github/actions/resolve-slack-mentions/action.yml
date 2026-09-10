@@ -1,0 +1,139 @@
+name: 'Resolve Slack mentions for GitHub users'
+description: >
+  Resolves a list of GitHub logins to Slack mentions ("<@ID>", falling back to
+  "@login" when no match is found) by fetching the full Slack workspace member
+  list and fuzzy-matching on real name / display name / username. Single
+  source of truth for this resolution algorithm so any fix to the matching
+  logic or the hardcoded override map only needs to be made once.
+
+inputs:
+  github-logins:
+    description: 'JSON array of GitHub logins to resolve, e.g. ["octocat","hubot"]'
+    required: true
+  slack-bot-token:
+    description: 'Slack bot token with users:read scope'
+    required: true
+  github-token:
+    description: 'GitHub token used to look up each login''s display name'
+    required: true
+
+outputs:
+  mentions-json:
+    description: 'JSON object mapping each input login to its resolved Slack mention text'
+    value: ${{ steps.resolve.outputs.mentions_json }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve
+      id: resolve
+      shell: bash
+      env:
+        SLACK_BOT_TOKEN: ${{ inputs.slack-bot-token }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        GITHUB_LOGINS_JSON: ${{ inputs.github-logins }}
+      run: |
+        set -euo pipefail
+
+        LOGINS=$(echo "$GITHUB_LOGINS_JSON" | jq -r 'unique | .[]')
+
+        echo "Fetching all Slack users..."
+        SLACK_USERS_FILE="${RUNNER_TEMP}/slack_users.json"
+        PAGES_FILE=$(mktemp)
+        CURSOR=""
+        while true; do
+          RESPONSE=$(curl -s \
+            -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+            "https://slack.com/api/users.list?limit=1000${CURSOR:+&cursor=$CURSOR}")
+
+          if [ "$(jq -r '.ok' <<< "$RESPONSE")" != "true" ]; then
+            echo "::warning::Failed to fetch Slack users: $(jq -r '.error // "Unknown error"' <<< "$RESPONSE")"
+            break
+          fi
+
+          jq '.members' <<< "$RESPONSE" >> "$PAGES_FILE"
+          CURSOR=$(jq -r '.response_metadata.next_cursor // ""' <<< "$RESPONSE")
+          if [ -z "$CURSOR" ] || [ "$CURSOR" = "null" ]; then
+            break
+          fi
+        done
+        # Flatten the per-page member arrays into one; an error before any page
+        # was fetched leaves an empty file, which becomes [].
+        jq -s 'add // []' "$PAGES_FILE" > "$SLACK_USERS_FILE"
+        rm -f "$PAGES_FILE"
+        echo "Fetched $(jq 'length' "$SLACK_USERS_FILE") Slack users"
+
+        # Hardcoded overrides for known GitHub<->Slack mismatches, then fuzzy match.
+        find_slack_user_id() {
+          local full_name="$1"
+          local github_username="$2"
+
+          case "$github_username" in
+            "mradosavljevicTT") echo "U0837MYG788"; return 0 ;;
+            "nsextonTT") echo "U08TVGQGGAE"; return 0 ;;
+            "ncvetkovicTT") echo "U07AUABTEP6"; return 0 ;;
+            "jvegaTT") echo "U07M7QZ0BQA"; return 0 ;;
+          esac
+
+          # Exact-match tiers, first hit wins: real name, then display name ==
+          # full name, then Slack username / display name == GitHub login.
+          USER_ID=$(jq -r --arg name "$full_name" --arg login "$github_username" '
+            map(select(.real_name == $name or .profile.real_name == $name))
+            + map(select(.profile.display_name == $name))
+            + map(select(.name == $login or .profile.display_name == $login))
+            | .[0].id // ""' "$SLACK_USERS_FILE")
+
+          # Fuzzy fallback: any >=3-char word of the full name that matches
+          # exactly one Slack user (an ambiguous word is never trusted).
+          if [ -z "$USER_ID" ]; then
+            IFS=' ' read -ra NAME_WORDS <<< "$full_name"
+            for word in "${NAME_WORDS[@]}"; do
+              if [ ${#word} -ge 3 ]; then
+                WORD_MATCHES=$(jq -r --arg word "$word" \
+                  '.[] | select(
+                    (.real_name // "" | ascii_downcase | contains($word | ascii_downcase)) or
+                    (.profile.real_name // "" | ascii_downcase | contains($word | ascii_downcase)) or
+                    (.profile.display_name // "" | ascii_downcase | contains($word | ascii_downcase))
+                  ) | .id + "|" + (.real_name // .profile.real_name // .name)' "$SLACK_USERS_FILE")
+
+                if [ -n "$WORD_MATCHES" ]; then
+                  MATCH_COUNT=$(echo "$WORD_MATCHES" | wc -l)
+                  if [ "$MATCH_COUNT" -eq 1 ]; then
+                    USER_ID=$(echo "$WORD_MATCHES" | cut -d'|' -f1)
+                    break
+                  fi
+                fi
+              fi
+            done
+          fi
+
+          echo "$USER_ID"
+        }
+
+        MENTIONS_JSON="{}"
+        while IFS= read -r gh_user; do
+          [ -z "$gh_user" ] && continue
+
+          USER_DATA=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/users/$gh_user" 2>/dev/null || echo "{}")
+          USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
+          [ -z "$USER_NAME" ] || [ "$USER_NAME" = "null" ] && USER_NAME="$gh_user"
+
+          SLACK_ID=$(find_slack_user_id "$USER_NAME" "$gh_user")
+
+          if [ -n "$SLACK_ID" ]; then
+            MENTION="<@$SLACK_ID>"
+            echo "Resolved @$gh_user -> Slack <@$SLACK_ID>"
+          else
+            MENTION="@$gh_user"
+            echo "Could not resolve @$gh_user to Slack, using GitHub username fallback"
+          fi
+
+          MENTIONS_JSON=$(echo "$MENTIONS_JSON" | jq --arg login "$gh_user" --arg mention "$MENTION" '. + {($login): $mention}')
+        done <<< "$LOGINS"
+
+        {
+          echo 'mentions_json<<EOF'
+          echo "$MENTIONS_JSON"
+          echo 'EOF'
+        } >> "$GITHUB_OUTPUT"

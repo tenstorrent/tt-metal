@@ -1,5 +1,10 @@
 name: "[internal] TM Fabric Perf Tests"
 
+# Runs the fabric perf matrix from tests/pipeline_reorg/fabric_perf_tests.yaml.
+# T3K microbenchmarks with profiler on by default (see the TT_METAL_DEVICE_PROFILER
+# Coverage comment below). Entries opt into fabric BW / latency SFTP upload via
+# `upload_benchmarks: true`.
+
 on:
   workflow_call:
     inputs:
@@ -12,87 +17,98 @@ on:
       docker-image:
         required: true
         type: string
-      run-perf-fabric-bw:
+      enabled-skus:
         required: false
-        type: boolean
-        default: true
-        description: "Run T3K ubench - Fabric BW performance test"
-      run-perf-fabric-mux-bw:
+        type: string
+        default: ALL_SKUS_IN_TESTS
+        description: "Comma-separated SKUs (from sku_config.yaml), or ALL_SKUS_IN_TESTS."
+      test-names:
         required: false
-        type: boolean
-        default: true
-        description: "Run T3K ubench - Fabric Mux BW performance test"
-      run-perf-fabric-mux-v2-throughput:
-        required: false
-        type: boolean
-        default: true
-        description: "Run T3K ubench - Fabric Mux V2 Throughput performance test"
+        type: string
+        default: ""
+        description: "Comma-separated entry names from fabric_perf_tests.yaml to run (default: all)."
 
 jobs:
-  generate-matrix:
+  load-test-matrix:
     runs-on: ubuntu-slim
     outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      matrix: ${{ steps.filter-matrix.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/fabric_perf_tests.yaml
     steps:
-      - id: set-matrix
-        shell: bash
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Verify test timeouts against budget
         run: |
-          matrix_items=()
+          set -e
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "perf"
+      - name: Build test matrix based on enabled SKUs
+        id: build-matrix
+        run: |
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "${{ inputs.enabled-skus }}" \
+            ./.github/sku_config.yaml \
+            --event "${{ github.event_name }}"
+      - name: Restrict matrix to requested test names
+        id: filter-matrix
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, sys
 
-          # Check which test groups should be included
-          if [[ "${{ inputs.run-perf-fabric-bw }}" == "true" ]]; then
-            # TT_METAL_DEVICE_PROFILER=0 overrides the job-level profiler env for THIS gate only: the BW
-            # golden is calibrated to real (uninstrumented) fabric bandwidth, but the container enables the
-            # device profiler, which JIT-compiles kernels with -DPROFILE_KERNEL=1 and inflates the router
-            # cycle counts (worst on multicast/ring/mesh: 11-18% low) -> systematic golden-comparison failures.
-            # The BW is measured from the fabric router's own always-on telemetry, not Tracy, so disabling the
-            # profiler yields the clean measurement the golden expects. (Mux BW below is also profiler-off for
-            # the same reason -- its golden was recalibrated to the profiler-off measurement in d7bfc04.)
-            matrix_items+=('{"arch":"wormhole_b0","runs-on":["arch-wormhole_b0","pipeline-perf","config-t3000","in-service"],"name":"T3K ubench - Fabric BW && Latency","cmd":"TT_METAL_CLEAR_L1=1 TT_METAL_DEVICE_PROFILER=0 ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_ubench_at_least_2x2_mesh.yaml"}')
-          fi
+          matrix = json.loads(r"""${{ steps.build-matrix.outputs.matrix }}""")
+          names = [n.strip() for n in r"""${{ inputs.test-names }}""".split(",") if n.strip()]
+          if names:
+              base = lambda entry: entry["name"].split(" [")[0]
+              unknown = sorted(set(names) - {base(t) for t in matrix})
+              if unknown:
+                  print(f"::error::test-names not present in the matrix: {', '.join(unknown)}")
+                  sys.exit(1)
+              matrix = [t for t in matrix if base(t) in names]
+              print(f"Restricted matrix to: {', '.join(t['name'] for t in matrix)}", file=sys.stderr)
+          print("matrix=" + json.dumps(matrix, separators=(",", ":")))
+          PY
 
-          if [[ "${{ inputs.run-perf-fabric-mux-bw }}" == "true" ]]; then
-            matrix_items+=('{"arch":"wormhole_b0","runs-on":["arch-wormhole_b0","pipeline-perf","config-t3000","in-service"],"name":"T3K ubench - Fabric Mux BW","cmd":"TT_METAL_DEVICE_PROFILER=0 pytest -svv tests/tt_metal/microbenchmarks/ethernet/test_fabric_mux_bandwidth.py"}')
-          fi
-
-          if [[ "${{ inputs.run-perf-fabric-mux-v2-throughput }}" == "true" ]]; then
-            matrix_items+=('{"arch":"wormhole_b0","runs-on":["arch-wormhole_b0","pipeline-perf","config-t3000","in-service"],"name":"T3K ubench - Fabric Mux V2 Throughput","cmd":"TT_METAL_DEVICE_PROFILER=0 pytest -svv tests/tt_metal/microbenchmarks/ethernet/test_fabric_mux_v2_throughput.py"}')
-          fi
-
-          # If no items selected, fail the job with an error
-          if [ ${#matrix_items[@]} -eq 0 ]; then
-            echo "ERROR: No perf test groups selected. Please enable at least one test group input."
-            exit 1
-          fi
-
-          # Convert array to JSON array format
-          matrix_json="["
-          for i in "${!matrix_items[@]}"; do
-            if [ $i -gt 0 ]; then
-              matrix_json+=","
-            fi
-            matrix_json+="${matrix_items[i]}"
-          done
-          matrix_json+="]"
-
-          echo "matrix=$matrix_json" >> $GITHUB_OUTPUT
-          echo "Generated matrix: $matrix_json"
   fabric-perf-tests:
-    needs: generate-matrix
+    needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
+    # Coverage: bind the mainline GH environment on main so the fabric BW /
+    # latency SFTP upload secrets below are available.
+    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
+    # ARCH_NAME is derived inline from matrix.test-group.sku:
+    # bh_* / *blackhole* -> blackhole; wh_* / *wormhole* -> wormhole_b0; else '' so
+    # run_cpp_fabric_tests.sh / run_t3000_unit_tests.sh trip their -z guards on
+    # unrecognized SKUs.
     container:
       image: ${{ inputs.docker-image }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: ${{ matrix.test-group.arch }}
+        ARCH_NAME: ${{ (contains(matrix.test-group.sku, 'bh_') || contains(matrix.test-group.sku, 'blackhole')) && 'blackhole' || (contains(matrix.test-group.sku, 'wh_') || contains(matrix.test-group.sku, 'wormhole')) && 'wormhole_b0' || '' }}
         LOGURU_LEVEL: INFO
+        # Coverage: perf legs default to profiler ON so Tracy captures timing.
+        # Entries whose BW golden is calibrated against uninstrumented routers
+        # must prepend TT_METAL_DEVICE_PROFILER=0 to their cmd (see fabric_perf_tests.yaml).
         TT_METAL_DEVICE_PROFILER: 1
         TRACY_NO_INVARIANT_CHECK: 1
       volumes:
@@ -103,8 +119,6 @@ jobs:
       run:
         shell: bash
         working-directory: /work
-    name: ${{ matrix.test-group.name }}
-    runs-on: ${{ matrix.test-group.runs-on }}
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -118,15 +132,18 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: Run microbenchmark tests
-        timeout-minutes: 45
+      - name: ${{ matrix.test-group.name }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
         run: ${{ matrix.test-group.cmd }}
+      # Coverage: upload the microbenchmark CSVs produced under
+      # /work/generated/profiler/.logs. Distinct from the generic test_reports_
+      # artifact; downstream perf tooling ingests these.
       - name: Upload microbenchmark report csvs
         uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          prefix: microbenchmark-report-csv-${{ join(matrix.test-group.name) }}
+          prefix: microbenchmark-report-csv-${{ matrix.test-group.name }}
           path: /work/generated/profiler/.logs
       - name: Upload generated test reports
         uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
@@ -134,21 +151,20 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - name: Check for benchmark data
-        id: check-benchmark-data
-        if: ${{ !cancelled() && github.ref_name == 'main' }}
-        shell: bash
-        run: |
-          if [ -f "generated/fabric/bandwidth_summary_results_wormhole_b0_upload.csv" ]; then
-            echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
-            echo "Benchmark files found, will upload to database"
-          else
-            echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
-            echo "Benchmark files not found, database upload will be skipped"
-          fi
+      # Coverage: entries that emit fabric BW / latency CSVs opt in via
+      # `upload_benchmarks: true` (see fabric_perf_tests.yaml). On main,
+      # check for the generated files and SFTP them to the perf dashboard.
+      - name: Check for benchmark and latency data
+        id: check-data
+        if: ${{ !cancelled() && github.ref_name == 'main' && matrix.test-group.upload_benchmarks == true }}
+        uses: ./docker-job/.github/actions/check-latency-bw-results
+        with:
+          path: /work
+          arch: ${{ (contains(matrix.test-group.sku, 'bh_') || contains(matrix.test-group.sku, 'blackhole')) && 'blackhole' || (contains(matrix.test-group.sku, 'wh_') || contains(matrix.test-group.sku, 'wormhole')) && 'wormhole_b0' || '' }}
+          check_bw: ${{ github.ref_name == 'main' }}
+          check_latency: ${{ github.ref_name == 'main' }}
       - name: Upload benchmark data
-        ## Only upload benchmark data for main branch
-        if: ${{ !cancelled() && github.ref_name == 'main' && contains(matrix.test-group.name, 'Fabric BW') && steps.check-benchmark-data.outputs.has_benchmark_data == 'true' }}
+        if: ${{ !cancelled() && github.ref_name == 'main' && matrix.test-group.upload_benchmarks == true && steps.check-data.outputs.has_benchmark_data == 'true' }}
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
@@ -156,4 +172,14 @@ jobs:
           username: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
           path: /work
+      - name: Upload latency data
+        if: ${{ !cancelled() && github.ref_name == 'main' && matrix.test-group.upload_benchmarks == true && steps.check-data.outputs.has_latency_data == 'true' }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+        with:
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: /work/.github/actions/upload-data-via-sftp/fabric_latency_benchmark_data_batchfile.txt
+          username: ${{ secrets.SFTP_FABRIC_LATENCY_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
+          path: /work
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()

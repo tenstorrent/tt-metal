@@ -58,12 +58,15 @@ void kernel_main() {
     constexpr uint32_t group_row_offset = get_compile_time_arg_val(23);
     constexpr uint32_t tile_width = get_compile_time_arg_val(24);
 
-    // Non-tile-aligned H*W (#50682); derivation and precision caveat in compute/groupnorm.cpp.
-    // Unlike the interleaved kernel this one consumes the mean during centering, so K*E[x]^2 is
-    // computed before centering and stashed in dfb_kmsq until the rsqrt step.
-    constexpr uint32_t logical_hw = get_compile_time_arg_val(25);
-    constexpr uint32_t padded_hw = get_compile_time_arg_val(26);
-    constexpr bool has_pad_correction = padded_hw != logical_hw;
+    // Non-tile-aligned H*W; see compute/groupnorm.cpp. logical_hw / padded_hw only keep two shapes
+    // padding to the same size out of one cached program; has_row_mask is what this branches on.
+    constexpr uint32_t logical_hw [[maybe_unused]] = get_compile_time_arg_val(25);
+    constexpr uint32_t padded_hw [[maybe_unused]] = get_compile_time_arg_val(26);
+    constexpr bool has_row_mask = get_compile_time_arg_val(27) == 1;
+    // Composed-mask protocol: the writer ships ONE row-0-only column-selector set per (batch,
+    // group) unconditionally; under has_row_mask this kernel composes the batch's final
+    // row-tile's mask on device as rowvalid (c_18) x column selector -> c_19.
+    constexpr uint32_t mask_tiles_per_group = block_w;
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
@@ -82,6 +85,13 @@ void kernel_main() {
     constexpr uint32_t dfb_gamma_id = tt::CBIndex::c_5;
     constexpr uint32_t dfb_beta_id = tt::CBIndex::c_6;
     constexpr uint32_t dfb_input_mask_id = tt::CBIndex::c_7;
+    // Pass-1 operand source: tilized-input CB when the reader tilizes, raw input CB otherwise.
+    // (The init calls keep using dfb_in0_id, as before -- only the ops switch.)
+#ifdef TILIZE_IN
+    constexpr uint32_t dfb_pass1_src_id = dfb_in_id;
+#else
+    constexpr uint32_t dfb_pass1_src_id = dfb_in0_id;
+#endif
 
     // interm cbs
     constexpr uint32_t dfb_repack_id = tt::CBIndex::c_11;
@@ -93,12 +103,10 @@ void kernel_main() {
     constexpr uint32_t dfb_ex_global_id = num_cores_per_mcast_group == 1 ? dfb_ex_partial_id : tt::CBIndex::c_15;
     constexpr uint32_t dfb_ex2pe_id = tt::CBIndex::c_17;
     constexpr uint32_t dfb_ones_id = tt::CBIndex::c_26;
-
-    // #50682 pad-correction CBs. dfb_k holds K from the writer; dfb_msq is transient scratch;
-    // dfb_kmsq carries K*E[x]^2 across the centering loop.
-    constexpr uint32_t dfb_k_id = tt::CBIndex::c_18;
-    constexpr uint32_t dfb_msq_id = tt::CBIndex::c_19;
-    constexpr uint32_t dfb_kmsq_id = tt::CBIndex::c_20;
+    // Composed-mask CBs, created only under pad correction (has_row_mask); aliased to
+    // always-present CBs otherwise.
+    constexpr uint32_t dfb_rowvalid_id = has_row_mask ? tt::CBIndex::c_18 : tt::CBIndex::c_26;
+    constexpr uint32_t dfb_mask_last_id = has_row_mask ? tt::CBIndex::c_19 : tt::CBIndex::c_7;
 
     // output cb
     constexpr uint32_t dfb_out0_id = tt::CBIndex::c_16;
@@ -178,16 +186,15 @@ void kernel_main() {
     DataflowBuffer dfb_in_negative_mask(dfb_in_negative_mask_id);
     DataflowBuffer dfb_inbeta(dfb_inbeta_id);
     DataflowBuffer dfb_input_mask(dfb_input_mask_id);
+    DataflowBuffer dfb_mask_last(dfb_mask_last_id);
     DataflowBuffer dfb_ones(dfb_ones_id);
     DataflowBuffer dfb_out(dfb_out_id);
     DataflowBuffer dfb_outbeta(dfb_outbeta_id);
     DataflowBuffer dfb_outgamma(dfb_outgamma_id);
+    DataflowBuffer dfb_rowvalid(dfb_rowvalid_id);
     DataflowBuffer dfb_scaler(dfb_scaler_id);
     DataflowBuffer dfb_scaler_global(dfb_scaler_global_id);
     DataflowBuffer dfb_x(dfb_x_id);
-    DataflowBuffer dfb_k(dfb_k_id);
-    DataflowBuffer dfb_msq(dfb_msq_id);
-    DataflowBuffer dfb_kmsq(dfb_kmsq_id);
 
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN
@@ -217,6 +224,10 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_in0_id, dfb_input_mask_id, dfb_x_id);
 #endif
 
+    if constexpr (has_row_mask) {
+        dfb_rowvalid.wait_front(1);
+    }
+
     index_b_offset = 0;
     for (uint32_t b = 0; b < batch; ++b) {
         index_g_offset = 0;
@@ -224,10 +235,41 @@ void kernel_main() {
             // mask input
             index_h_offset = index_b_offset + index_g_offset;
             reconfig_data_format_srcb(dfb_in0_id, dfb_input_mask_id);
-            mul_init(dfb_in0_id, dfb_input_mask_id);
+            dfb_input_mask.wait_front(mask_tiles_per_group);
+            // Compose the final row-tile's mask: rowvalid[r] * colsel[c] -> dfb_mask_last. The
+            // column selector's row 0 is broadcast down the rowvalid tile, so the product
+            // varies down the rows.
+            if constexpr (has_row_mask) {
+                if constexpr (enable_fp32_reconfig) {
+                    reconfig_data_format_srca(dfb_rowvalid_id);
+                    pack_reconfig_data_format(dfb_mask_last_id);
+                }
+                mul_bcast_rows_init(dfb_rowvalid_id, dfb_input_mask_id);
+                dfb_mask_last.reserve_back(block_w);
+                index_subblock_w_offset = 0;
+                for (uint32_t j = 0; j < num_subblocks_w; ++j) {
+                    tile_regs_acquire();
+                    for (uint32_t w = 0; w < subblock_w; ++w) {
+                        mul_tiles_bcast_rows(dfb_rowvalid_id, dfb_input_mask_id, 0, w + index_subblock_w_offset, w);
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t w = 0; w < subblock_w; ++w) {
+                        pack_tile(w, dfb_mask_last_id);
+                    }
+                    tile_regs_release();
+                    index_subblock_w_offset += subblock_w;
+                }
+                dfb_mask_last.push_back(block_w);
+                if constexpr (enable_fp32_reconfig) {
+                    reconfig_data_format_srca(dfb_in0_id);
+                    pack_reconfig_data_format(dfb_x_id);
+                }
+            }
             dfb_x.reserve_back(block_hw);
-            dfb_input_mask.wait_front(block_w);
-            for (uint32_t i = 0; i < block_h; ++i) {
+            const uint32_t bcast_row_tiles = has_row_mask ? block_h - 1 : block_h;
+            mul_bcast_rows_init(dfb_in0_id, dfb_input_mask_id);
+            for (uint32_t i = 0; i < bcast_row_tiles; ++i) {
                 index_subblock_w_offset = 0;
                 for (uint32_t j = 0; j < num_subblocks_w; ++j) {
                     tile_regs_acquire();
@@ -239,12 +281,33 @@ void kernel_main() {
                         if (index >= per_core_MN) {
                             index = per_core_MN - 1;
                         }
-                        uint32_t index_mask = w + index_subblock_w_offset;
-#ifdef TILIZE_IN
-                        mul_tiles(dfb_in_id, dfb_input_mask_id, index, index_mask, w);
-#else
-                        mul_tiles(dfb_in0_id, dfb_input_mask_id, index, index_mask, w);
-#endif
+                        mul_tiles_bcast_rows(
+                            dfb_pass1_src_id, dfb_input_mask_id, index, w + index_subblock_w_offset, w);
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t i = 0; i < subblock_w; ++i) {
+                        pack_tile(i, dfb_x_id);
+                    }
+                    tile_regs_release();
+                    index_subblock_w_offset += subblock_w;
+                }
+                index_h_offset += per_core_N;
+            }
+            // Peeled final row-tile: full-tile multiply with the composed mask.
+            if constexpr (has_row_mask) {
+                dfb_mask_last.wait_front(block_w);
+                reconfig_data_format_srcb(dfb_input_mask_id, dfb_mask_last_id);
+                mul_init(dfb_in0_id, dfb_mask_last_id);
+                index_subblock_w_offset = 0;
+                for (uint32_t j = 0; j < num_subblocks_w; ++j) {
+                    tile_regs_acquire();
+                    for (uint32_t w = 0; w < subblock_w; ++w) {
+                        uint32_t index = w + index_subblock_w_offset + index_h_offset;
+                        if (index >= per_core_MN) {
+                            index = per_core_MN - 1;
+                        }
+                        mul_tiles(dfb_pass1_src_id, dfb_mask_last_id, index, w + index_subblock_w_offset, w);
                     }
                     tile_regs_commit();
                     tile_regs_wait();
@@ -257,7 +320,7 @@ void kernel_main() {
                 index_h_offset += per_core_N;
             }
             dfb_x.push_back(block_hw);
-            reconfig_data_format_srcb(dfb_input_mask_id, dfb_ones_id);
+            reconfig_data_format_srcb(has_row_mask ? dfb_mask_last_id : dfb_input_mask_id, dfb_ones_id);
 
             // Partial-E[x]
             index_h_offset = 0;
@@ -315,40 +378,16 @@ void kernel_main() {
             }
             dfb_ex_global.wait_front(1);
 
-            // Stash K*E[x]^2 while cb_ex_global still holds E[x]; centering below consumes it.
-            if constexpr (has_pad_correction) {
-                dfb_k.wait_front(1);
-                // dfb_msq = E[x]^2
-                dfb_msq.reserve_back(1);
-                tile_regs_acquire();
-                mul_init(dfb_ex_global_id, dfb_ex_global_id);
-                mul_tiles(dfb_ex_global_id, dfb_ex_global_id, 0, 0, dst0);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(dst0, dfb_msq_id);
-                tile_regs_release();
-                dfb_msq.push_back(1);
-                // dfb_kmsq = K * E[x]^2 (persists until the rsqrt step)
-                dfb_msq.wait_front(1);
-                dfb_kmsq.reserve_back(1);
-                tile_regs_acquire();
-                mul_init(dfb_msq_id, dfb_k_id);
-                mul_tiles(dfb_msq_id, dfb_k_id, 0, 0, dst0);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(dst0, dfb_kmsq_id);
-                tile_regs_release();
-                dfb_msq.pop_front(1);
-                dfb_kmsq.push_back(1);
-            }
-
             // x - E[x]
-            sub_bcast_scalar_init(dfb_x_id, dfb_ex_global_id);
             // fp32: reset both srcs so fp32 x/mean aren't read through the partial-E[x] bf16 dfb_ones format.
+            // The reconfig has to precede the init: the init's LLK assert checks that the unpack config
+            // registers already describe these operands. (The MOP is built from the init's static
+            // arguments; the registers themselves are consumed later, by UNPACR.)
             if constexpr (enable_fp32_reconfig) {
                 reconfig_data_format_srca(dfb_x_id);
                 reconfig_data_format_srcb(dfb_ex_global_id);
             }
+            sub_bcast_scalar_init(dfb_x_id, dfb_ex_global_id);
             for (uint32_t i = 0; i < block_h; i++) {
                 index_subblock_w_offset = 0;
                 for (uint32_t j = 0; j < num_subblocks_w; j++) {
@@ -372,17 +411,18 @@ void kernel_main() {
             dfb_ex_global.pop_front(1);
 
             reconfig_data_format_srcb(dfb_ex_global_id, dfb_input_mask_id);
-            mul_init(dfb_x_id, dfb_input_mask_id);
+            // Re-mask (x - E[x]); otherwise each padding row is centered to (garbage - E[x])
+            // and squared into the variance.
+            mul_bcast_rows_init(dfb_x_id, dfb_input_mask_id);
             dfb_x.wait_front(block_hw);
 
-            for (uint32_t i = 0; i < block_h; i++) {
+            for (uint32_t i = 0; i < bcast_row_tiles; i++) {
                 index_subblock_w_offset = 0;
                 for (uint32_t j = 0; j < num_subblocks_w; ++j) {
                     tile_regs_acquire();
                     for (uint32_t w = 0; w < subblock_w; ++w) {
                         uint32_t index = w + index_subblock_w_offset;
-                        uint32_t index_mask = index;
-                        mul_tiles(dfb_x_id, dfb_input_mask_id, index, index_mask, w);
+                        mul_tiles_bcast_rows(dfb_x_id, dfb_input_mask_id, index, index, w);
                     }
                     tile_regs_commit();
 
@@ -397,8 +437,35 @@ void kernel_main() {
                     tile_regs_release();
                 }
             }
-            dfb_input_mask.pop_front(block_w);
-            reconfig_data_format_srcb(dfb_input_mask_id, dfb_x_id);
+            // Peeled final row-tile: full-tile multiply with the composed mask.
+            if constexpr (has_row_mask) {
+                reconfig_data_format_srcb(dfb_input_mask_id, dfb_mask_last_id);
+                mul_init(dfb_x_id, dfb_mask_last_id);
+                index_subblock_w_offset = 0;
+                for (uint32_t j = 0; j < num_subblocks_w; ++j) {
+                    tile_regs_acquire();
+                    for (uint32_t w = 0; w < subblock_w; ++w) {
+                        uint32_t index = w + index_subblock_w_offset;
+                        mul_tiles(dfb_x_id, dfb_mask_last_id, index, index, w);
+                    }
+                    tile_regs_commit();
+
+                    dfb_x.pop_front(subblock_w);
+                    dfb_x.reserve_back(subblock_w);
+
+                    tile_regs_wait();
+                    for (uint32_t i = 0; i < subblock_w; ++i) {
+                        pack_tile(i, dfb_x_id);
+                    }
+                    dfb_x.push_back(subblock_w);
+                    tile_regs_release();
+                }
+            }
+            dfb_input_mask.pop_front(mask_tiles_per_group);
+            if constexpr (has_row_mask) {
+                dfb_mask_last.pop_front(block_w);
+            }
+            reconfig_data_format_srcb(has_row_mask ? dfb_mask_last_id : dfb_input_mask_id, dfb_x_id);
 
             // (x - E[x])^2
             index_h_offset = 0;
@@ -456,32 +523,17 @@ void kernel_main() {
             dfb_ex_global.wait_front(1);
             dfb_ex2pe.reserve_back(1);
 
-            // Var := Var - K*E[x]^2, staged through dfb_msq so (Var + eps) is unchanged when aligned.
-            constexpr uint32_t dfb_var_src_id = has_pad_correction ? dfb_msq_id : dfb_ex_global_id;
-            if constexpr (has_pad_correction) {
-                dfb_kmsq.wait_front(1);
-                dfb_msq.reserve_back(1);
-                tile_regs_acquire();
-                sub_init(dfb_ex_global_id, dfb_kmsq_id);
-                sub_tiles(dfb_ex_global_id, dfb_kmsq_id, 0, 0, dst0);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(dst0, dfb_msq_id);
-                tile_regs_release();
-                dfb_kmsq.pop_front(1);
-                dfb_msq.push_back(1);
-                dfb_msq.wait_front(1);
-            }
-
+            // The row mask keeps the padding out of both sums, so this is already the variance over
+            // the real rows; no back-correction needed.
             // (Var + eps)
             tile_regs_acquire();
-            add_init(dfb_var_src_id, dfb_eps_id);
             // fp32: reset both srcs so bf16 eps isn't read through the (x-Ex)^2 fp32 format (else garbage var+eps).
             if constexpr (enable_fp32_reconfig) {
-                reconfig_data_format_srca(dfb_var_src_id);
+                reconfig_data_format_srca(dfb_ex_global_id);
                 reconfig_data_format_srcb(dfb_eps_id);
             }
-            add_tiles(dfb_var_src_id, dfb_eps_id, 0, 0, dst0);
+            add_init(dfb_ex_global_id, dfb_eps_id);
+            add_tiles(dfb_ex_global_id, dfb_eps_id, 0, 0, dst0);
             // 1/[sqrt(Var + eps)]
             rsqrt_tile_init<true>();
             rsqrt_tile<true>(dst0);
@@ -491,17 +543,14 @@ void kernel_main() {
             tile_regs_release();
             dfb_ex2pe.push_back(1);
             dfb_ex_global.pop_front(1);
-            if constexpr (has_pad_correction) {
-                dfb_msq.pop_front(1);
-            }
             //  (x - Ex) * 1/[sqrt(Var + eps)]
             index_h_offset = 0;
-            mul_bcast_scalar_init(dfb_x_id, dfb_ex2pe_id);
             // fp32: reset both srcs so fp32 x/rstd aren't read through the (var+eps) bf16 dfb_eps format.
             if constexpr (enable_fp32_reconfig) {
                 reconfig_data_format_srca(dfb_x_id);
                 reconfig_data_format_srcb(dfb_ex2pe_id);
             }
+            mul_bcast_scalar_init(dfb_x_id, dfb_ex2pe_id);
 
             dfb_ex2pe.wait_front(1);
             for (uint32_t i = 0; i < block_h; i++) {
@@ -536,7 +585,7 @@ void kernel_main() {
                     uint32_t index_h1_offset = 0;
 
                     if (copy_or_add == true) {
-                        copy_tile_init(dfb_x_id);
+                        copy_init(dfb_x_id);
                     } else {
                         add_init(dfb_out_id, dfb_x_id);
                     }
@@ -582,7 +631,7 @@ void kernel_main() {
                 // zero out values in cb_tilized_in input by multiplying with negative mask for the current group
                 dfb_in_negative_mask.wait_front(block_w);
                 reconfig_data_format_srcb(dfb_x_id, dfb_in_negative_mask_id);
-                mul_init(dfb_in_id, dfb_in_negative_mask_id);
+                mul_bcast_rows_init(dfb_in_id, dfb_in_negative_mask_id);
 
                 for (uint32_t w = 0; w < block_w_curr; w++) {
                     index_h_offset = index_b_offset + index_g_offset;
@@ -593,7 +642,7 @@ void kernel_main() {
                         uint32_t index_in = w + index_h_offset;
                         uint32_t index_mask = w;
 
-                        mul_tiles(dfb_in_id, dfb_in_negative_mask_id, index_in, index_mask, dst0);
+                        mul_tiles_bcast_rows(dfb_in_id, dfb_in_negative_mask_id, index_in, index_mask, dst0);
                         tile_regs_commit();
 
                         tile_regs_wait();
@@ -679,12 +728,12 @@ void kernel_main() {
     if constexpr (do_gamma) {
         index_h_offset = 0;
         if constexpr (use_negative_mask == false) {
-            mul_bcast_rows_init(dfb_out_id, dfb_gamma_id);
             // fp32: reset both srcs so bf16 gamma isn't read through the normalization loop's fp32 format.
             if constexpr (enable_fp32_reconfig) {
                 reconfig_data_format_srca(dfb_out_id);
                 reconfig_data_format_srcb(dfb_gamma_id);
             }
+            mul_bcast_rows_init(dfb_out_id, dfb_gamma_id);
             dfb_outgamma.reserve_back(per_core_MN);
             dfb_gamma.wait_front(per_core_N);
             for (uint32_t i = 0; i < per_core_M; ++i) {
@@ -705,12 +754,12 @@ void kernel_main() {
             dfb_outgamma.wait_front(per_core_MN);
         } else {
             // cb in has data required for gamma, so we do it inplace
-            mul_bcast_rows_init(dfb_in_id, dfb_gamma_id);
             // fp32: see non-negative-mask branch above.
             if constexpr (enable_fp32_reconfig) {
                 reconfig_data_format_srca(dfb_in_id);
                 reconfig_data_format_srcb(dfb_gamma_id);
             }
+            mul_bcast_rows_init(dfb_in_id, dfb_gamma_id);
             dfb_gamma.wait_front(per_core_N);
             dfb_in.wait_front(per_core_MN);
             for (uint32_t i = 0; i < per_core_M; i++) {
@@ -732,12 +781,12 @@ void kernel_main() {
     if constexpr (do_beta) {
         if constexpr (use_negative_mask == false) {
             index_h_offset = 0;
-            add_bcast_rows_init(dfb_inbeta_id, dfb_beta_id);
             // fp32: reset both srcs so bf16 beta isn't read as fp32 (matters especially when do_gamma=false).
             if constexpr (enable_fp32_reconfig) {
                 reconfig_data_format_srca(dfb_inbeta_id);
                 reconfig_data_format_srcb(dfb_beta_id);
             }
+            add_bcast_rows_init(dfb_inbeta_id, dfb_beta_id);
             dfb_outbeta.reserve_back(per_core_MN);
             dfb_beta.wait_front(per_core_N);
             for (uint32_t i = 0; i < per_core_M; ++i) {
@@ -757,12 +806,12 @@ void kernel_main() {
             dfb_outbeta.wait_front(per_core_MN);
         } else {
             // cb_in_id has data required for beta, so we do it inplace
-            add_bcast_rows_init(dfb_in_id, dfb_beta_id);
             // fp32: see non-negative-mask branch above.
             if constexpr (enable_fp32_reconfig) {
                 reconfig_data_format_srca(dfb_in_id);
                 reconfig_data_format_srcb(dfb_beta_id);
             }
+            add_bcast_rows_init(dfb_in_id, dfb_beta_id);
             dfb_beta.wait_front(per_core_N);
             dfb_in.wait_front(per_core_MN);
             for (uint32_t i = 0; i < per_core_M; i++) {

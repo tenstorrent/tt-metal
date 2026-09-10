@@ -8,6 +8,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 template <typename PadAccessor>
 inline __attribute__((always_inline)) void fill_with_val_async(
@@ -38,33 +39,21 @@ inline __attribute__((always_inline)) void fill_with_val_async(
 }
 
 void kernel_main() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_unpadded_W = get_arg_val<uint32_t>(2);
-    const uint32_t num_total_W = get_arg_val<uint32_t>(3);
-    const uint32_t num_unpadded_Z = get_arg_val<uint32_t>(4);
-    const uint32_t num_total_Z = get_arg_val<uint32_t>(5);
-    const uint32_t num_unpadded_Y = get_arg_val<uint32_t>(6);
-    const uint32_t num_total_Y = get_arg_val<uint32_t>(7);
-    const uint32_t unpadded_X_nbytes = get_arg_val<uint32_t>(10);
-    const uint32_t padded_X_nbytes = get_arg_val<uint32_t>(11);
-    const uint32_t padded_X_diff_nbytes = get_arg_val<uint32_t>(12);
-    const uint32_t pad_value_const_buffer_addr = get_arg_val<uint32_t>(13);
+    const auto num_unpadded_W = get_arg(args::num_unpadded_W);
+    const auto num_unpadded_Z = get_arg(args::num_unpadded_Z);
+    const auto num_total_Z = get_arg(args::num_total_Z);
+    const auto unpadded_X_nbytes = get_arg(args::unpadded_X_nbytes);
+    const auto padded_X_nbytes = get_arg(args::padded_X_nbytes);
+    const auto padded_X_diff_nbytes = get_arg(args::padded_X_diff_nbytes);
     const uint32_t pad_value_const_buffer_nbytes = 64;  // assumed to be 64 bytes, fails on BH when > 64. TODO: generalize? (Issue #21978)
-    const uint32_t pad_value_packed = get_arg_val<uint32_t>(15);
-    const uint32_t start_src_stick_id = get_arg_val<uint32_t>(16);
-    const uint32_t start_src_stick_wi = get_arg_val<uint32_t>(18);
-    const uint32_t start_src_stick_offset = get_arg_val<uint32_t>(20);  // == start_src_stick_wi * elem_size
-    const uint32_t num_local_Y = get_arg_val<uint32_t>(21);
-    const uint32_t num_local_unpadded_Y = get_arg_val<uint32_t>(22);
-    const uint32_t full_unpadded_X_nbytes = get_arg_val<uint32_t>(23);
-    const uint32_t num_local_W = get_arg_val<uint32_t>(26);
+    const auto pad_value_packed = get_arg(args::pad_value_packed);
+    const auto start_src_stick_id = get_arg(args::start_src_stick_id);
+    const auto start_src_stick_offset = get_arg(args::start_src_stick_offset);  // == start_src_stick_wi * elem_size
+    const auto num_local_Y = get_arg(args::num_local_Y);
+    const auto num_local_unpadded_Y = get_arg(args::num_local_unpadded_Y);
+    const auto num_local_W = get_arg(args::num_local_W);
 
-    constexpr auto src_args = TensorAccessorArgs<2>();
-    constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
-    constexpr auto pad_tensor_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
-
-    constexpr uint32_t dfb_id = tt::CBIndex::c_0;
-    DataflowBuffer dfb(dfb_id);
+    DataflowBuffer dfb(dfb::in0);
     Noc noc;
 
     // calculate the offset for alignment of padding in rows/sticks
@@ -72,9 +61,9 @@ void kernel_main() {
     const uint32_t l1_addr_align_offset =
         32 - l1_addr_partial % 32;  // NOTE: this is fine with double buffering since offset will be same for each page
 
-    const auto s0 = TensorAccessor(src_args, src_addr);
+    const auto s0 = TensorAccessor(tensor::src);
 
-    const auto s_const = TensorAccessor(pad_tensor_args, pad_value_const_buffer_addr);
+    const auto s_const = TensorAccessor(tensor::pad_value);
 
     uint16_t pad_value = pad_value_packed >> 16;
 

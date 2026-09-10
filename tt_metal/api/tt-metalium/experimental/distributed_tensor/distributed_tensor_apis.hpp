@@ -10,8 +10,8 @@
 
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
-#include <tt-metalium/experimental/tensor/host_tensor.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 

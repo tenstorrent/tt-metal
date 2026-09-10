@@ -532,9 +532,9 @@ emit_summary() {
     cat "$summary_tmp" >&2
     if [[ -n "$summary_file" ]]; then
         {
-            printf '\n```\n'
+            printf '\n<details>\n<summary>Host Load Sidecar: %s</summary>\n\n```\n' "$label"
             cat "$summary_tmp"
-            printf '```\n'
+            printf '```\n\n</details>\n'
         } >> "$summary_file"
     fi
 }

@@ -5,6 +5,8 @@
 // DFB re-entry / entry-size / num-entries override runtime tests (legacy-only).
 
 #include "dfb_test_common.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -15,7 +17,7 @@ struct DfbSizeOverride {
 };
 
 static void run_dfb_size_override_test(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     bool implicit_sync_param,
     uint32_t data_entry_size,   // bound-tensor page size == effective entry_size for every launch
     uint32_t entry_size_spec,   // DFB-declared entry_size
@@ -24,8 +26,7 @@ static void run_dfb_size_override_test(
     const std::vector<DfbSizeOverride>& launches,
     uint8_t num_producers = 1,
     uint8_t num_consumers = 1) {
-    IDevice* device = mesh_device->get_devices()[0];
-    const bool implicit_sync = (device->arch() == ARCH::QUASAR) && implicit_sync_param;
+    const bool implicit_sync = (mesh_device.arch() == ARCH::QUASAR) && implicit_sync_param;
 
     // Per-thread compile-time loop bounds; the strided kernels split `workload` across the threads
     // (ceiling division, with a runtime entries_per_core bound to skip the tail).
@@ -39,12 +40,12 @@ static void run_dfb_size_override_test(
     const experimental::TensorParamName OUT_TENSOR{"out_tensor"};
 
     const auto tensor_spec = make_flat_dram_tensor_spec(data_entry_size, workload);
-    MeshTensor in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
-    MeshTensor out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
+    MeshTensor in_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
+    MeshTensor out_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
 
     experimental::DataMovementHardwareConfig dm_producer_cfg;
     experimental::DataMovementHardwareConfig dm_consumer_cfg;
-    if (device->arch() == ARCH::QUASAR) {
+    if (mesh_device.arch() == ARCH::QUASAR) {
         dm_producer_cfg = experimental::DataMovementGen2Config{};
         dm_consumer_cfg = experimental::DataMovementGen2Config{};
     } else {
@@ -87,7 +88,7 @@ static void run_dfb_size_override_test(
         .hw_config = dm_consumer_cfg,
     };
     // Implicit sync is gen2 only
-    if (device->arch() == ARCH::QUASAR && !implicit_sync) {
+    if (mesh_device.arch() == ARCH::QUASAR && !implicit_sync) {
         auto& producer_hw_config = std::get<experimental::DataMovementGen2Config>(
             std::get<experimental::DataMovementHardwareConfig>(producer_spec.hw_config));
         auto& consumer_hw_config = std::get<experimental::DataMovementGen2Config>(
@@ -116,7 +117,10 @@ static void run_dfb_size_override_test(
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    auto device_range = distributed::MeshCoordinateRange(mesh_device.shape());
+    distributed::MeshWorkload mesh_workload;
+    mesh_workload.add_program(device_range, experimental::MakeProgramFromSpec(mesh_device, spec));
+    Program& program = mesh_workload.get_programs().at(device_range);
 
     const auto input =
         tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, workload * data_entry_size / sizeof(uint32_t));
@@ -159,19 +163,19 @@ static void run_dfb_size_override_test(
         EXPECT_EQ(dfb->config.entry_size, eff_entry_size);
         EXPECT_EQ(dfb->config.num_entries, eff_num_entries);
 
-        detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), input);
-        if (device->arch() == ARCH::QUASAR) {
+        slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
+        if (mesh_device.arch() == ARCH::QUASAR) {
             // TODO #38042: barrier not yet uplifted for Quasar; wait for the DRAM write to land.
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
             std::vector<uint32_t> rdback;
-            detail::ReadFromBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), rdback);
+            slow_dispatch::ReadFromBuffer(in_tensor.mesh_buffer(), rdback);
             tt_driver_atomics::mfence();
             ASSERT_EQ(rdback, input);
         }
-        detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
+        distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), mesh_workload, /*blocking=*/true);
 
         std::vector<uint32_t> output;
-        detail::ReadFromBuffer(*out_tensor.mesh_buffer().get_reference_buffer(), output);
+        slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
         EXPECT_EQ(output, input);
     }
 }
@@ -179,7 +183,7 @@ static void run_dfb_size_override_test(
 // Gen1-only override / re-entry runtime tests (no 2.0 twin)
 TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB_NumEntriesOverride_ReEntry) {
     run_dfb_size_override_test(
-        this->devices_.at(0),
+        this->device(),
         GetParam(),
         /*data_entry_size=*/64,
         /*entry_size_spec=*/64,
@@ -192,7 +196,7 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB_NumEntriesOverride_ReEntry) {
 // use page size 64; the override raises entry_size to 64 (matching the tensors) before launch.
 TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB_EntrySizeOverride) {
     run_dfb_size_override_test(
-        this->devices_.at(0),
+        this->device(),
         GetParam(),
         /*data_entry_size=*/64,
         /*entry_size_spec=*/32,
@@ -206,7 +210,7 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB_EntrySizeOverride) {
 // capacity, plus reallocation for the new total_size.
 TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB_BothOverride) {
     run_dfb_size_override_test(
-        this->devices_.at(0),
+        this->device(),
         GetParam(),
         /*data_entry_size=*/64,
         /*entry_size_spec=*/32,
@@ -219,7 +223,7 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB_BothOverride) {
 TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB_NumEntriesOverride_ReEntry_3Sx3S) {
     DFB_SKIP_IF_UNSUPPORTED(3, 3);
     run_dfb_size_override_test(
-        this->devices_.at(0),
+        this->device(),
         GetParam(),
         /*data_entry_size=*/64,
         /*entry_size_spec=*/64,
@@ -234,7 +238,7 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB_NumEntriesOverride_ReEntry_3Sx3S
 TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB_NumEntriesOverride_ReEntry_1Sx4S) {
     DFB_SKIP_IF_UNSUPPORTED(1, 4);
     run_dfb_size_override_test(
-        this->devices_.at(0),
+        this->device(),
         GetParam(),
         /*data_entry_size=*/64,
         /*entry_size_spec=*/64,
@@ -249,7 +253,7 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB_NumEntriesOverride_ReEntry_1Sx4S
 TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB_NumEntriesOverride_ReEntry_4Sx1S) {
     DFB_SKIP_IF_UNSUPPORTED(4, 1);
     run_dfb_size_override_test(
-        this->devices_.at(0),
+        this->device(),
         GetParam(),
         /*data_entry_size=*/64,
         /*entry_size_spec=*/64,

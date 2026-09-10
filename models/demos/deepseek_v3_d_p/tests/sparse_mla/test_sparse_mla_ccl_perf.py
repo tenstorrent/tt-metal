@@ -4,9 +4,13 @@
 
 """Galaxy CCL microbenchmarks and LoudBox proxies for GLM sparse-MLA tensor shapes and placements.
 
-Each collective sparse MLA runs in production (``tt/mla/mla.py``) is expressed as one ``CollectivePath``
-value; the tests turn each into a build -> profile -> (verify) -> report cycle under the real-time
-profiler. Adding a fourth collective is a single ``CollectivePath`` literal — no new driver code.
+Each collective shape and placement that sparse MLA uses in production (``tt/mla/mla.py``) is expressed
+as one ``CollectivePath`` value; the tests turn each into a build -> profile -> (verify) -> report cycle
+under the real-time profiler. Adding a fourth collective is a single ``CollectivePath`` literal — no
+new driver code.
+
+The KVPE-prefix benchmark evaluates ``high_bw_all_gather``. The GLM head/sequence redistribution
+benchmarks continue to measure the production ``all_to_all_async_generic`` paths.
 """
 
 import math
@@ -20,10 +24,14 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import glm_hf_config
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric2d_device_params,
+    torus_xy_device_params,
+    torus_y_device_params,
+)
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_mesh import detect_num_devices
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.test_sparse_mla_perf import CHUNK_TOKENS, GALAXY_SP, SCENARIOS
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import create_global_semaphores
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 
@@ -117,33 +125,33 @@ class CollectivePath:
     """One production sparse-MLA collective, described declaratively.
 
     ``collective_axis`` unifies three things: which mesh axis the op runs over (SP/TP), the ``cluster_axis``
-    of its collective, and which axis supplies the roofline ``participants`` count. ``out_dim is None``
-    marks a pure all-gather; otherwise the op is an all-to-all reshard. Shapes are
-    ``(workload, mesh_shape) -> list`` builders so a proxy and Galaxy share one source.
+    of its collective, and which axis supplies the roofline ``participants`` count. ``partition_dim is None``
+    marks a pure all-gather; otherwise the op is an all-to-all reshard. Shapes are ``(workload, mesh_shape)
+    -> list`` builders so a proxy and Galaxy share one source.
     """
 
     name: str
     mla_ref: str  # the production source this mirrors, e.g. "mla.py:1468"
     collective_axis: int
-    in_dim: int
+    gather_dim: int
     input_placements: tuple
     layout: object
     logical_shape: Callable
     local_input_shape: Callable
     output_placements: tuple  # tensor placements after the collective (asserted post-op)
-    out_dim: Optional[int] = None
+    partition_dim: Optional[int] = None
     expected_output_shape: Optional[Callable] = None
     verify_reshard: bool = False
 
     def __post_init__(self):
-        if self.out_dim is not None:
+        # A reshard needs an expected output shape to assert, and its reconstruct/recompose use placement
+        # .dim, so every reshard placement must be a shard (a Replicate has no dim).
+        if self.partition_dim is not None:
             assert self.expected_output_shape is not None, f"{self.name}: reshard path needs expected_output_shape"
             assert all(
                 isinstance(placement, ttnn.PlacementShard)
                 for placement in self.input_placements + self.output_placements
             ), f"{self.name}: reshard placements must all be PlacementShard"
-            assert self.input_placements[self.collective_axis].dim == self.in_dim
-            assert self.output_placements[self.collective_axis].dim == self.out_dim
 
 
 # --------------------------------------------------------------------------------------------------
@@ -201,9 +209,9 @@ def _sequence_to_head_output_shape(w: Workload, mesh_shape) -> list:
 # The three production collectives, as data.
 KVPE_ALL_GATHER = CollectivePath(
     name="kvpe_all_gather",
-    mla_ref="mla.py:1534 (_gather_kvpe_prefix)",
+    mla_ref="mla.py:1543 (_gather_kvpe_prefix)",
     collective_axis=SP_AXIS,
-    in_dim=2,
+    gather_dim=2,
     input_placements=(ttnn.PlacementShard(2), ttnn.PlacementReplicate()),  # SP shards tokens; TP replicates.
     output_placements=(ttnn.PlacementReplicate(), ttnn.PlacementReplicate()),  # gathered over SP -> fully replicated.
     layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -213,10 +221,10 @@ KVPE_ALL_GATHER = CollectivePath(
 
 GLM_HEAD_TO_SEQUENCE = CollectivePath(
     name="glm_head_to_sequence_reshard",
-    mla_ref="mla.py:1423 (_sparse_mla thin-head transpose)",
+    mla_ref="mla.py:1481-1489 (_sparse_mla thin-head transpose)",
     collective_axis=TP_AXIS,
-    in_dim=1,
-    out_dim=2,
+    gather_dim=1,
+    partition_dim=2,
     input_placements=(ttnn.PlacementShard(2), ttnn.PlacementShard(1)),  # SP shards Q, TP shards H.
     output_placements=(ttnn.PlacementShard(2), ttnn.PlacementShard(2)),  # SP shards Q, TP also shards Q.
     layout=ttnn.TILE_LAYOUT,
@@ -228,10 +236,10 @@ GLM_HEAD_TO_SEQUENCE = CollectivePath(
 
 GLM_SEQUENCE_TO_HEAD = CollectivePath(
     name="glm_sequence_to_head_reshard",
-    mla_ref="mla.py:1471 (_sparse_mla transpose inverse)",
+    mla_ref="mla.py:1528-1538 (_sparse_mla transpose inverse)",
     collective_axis=TP_AXIS,
-    in_dim=2,
-    out_dim=1,
+    gather_dim=2,
+    partition_dim=1,
     input_placements=(ttnn.PlacementShard(2), ttnn.PlacementShard(2)),  # SP shards Q, TP also shards Q.
     output_placements=(ttnn.PlacementShard(2), ttnn.PlacementShard(1)),  # SP shards Q, TP shards H.
     layout=ttnn.TILE_LAYOUT,
@@ -248,28 +256,21 @@ GLM_SEQUENCE_TO_HEAD = CollectivePath(
 def ccl_mesh_param(collective_axis: int):
     """`pytest.param(mesh_shape, device_params, marks, id)` for the box + collective axis (collection time).
 
-    Galaxy (32): the production 8x4. LoudBox (8): an SP=8 line proxy (one line of 8 mirrors a Galaxy SP
-    row) for SP collectives, or a 2x4 mesh preserving TP=4 for TP collectives.
+    Galaxy (32): the production 8x4 TorusXY profile. LoudBox (8): the existing SP=8 proxy migrated
+    to TorusY for SP-axis collectives, or the existing 2x4 Fabric2D proxy for TP collectives.
     """
     num_devices = detect_num_devices()
-    canonical_fabric = {  # matches the deepseek conftest FABRIC_2D params (fabric router + reliability mode)
-        "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-        "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-    }
-    fabric_2d = {"trace_region_size": 100000, "fabric_config": ttnn.FabricConfig.FABRIC_2D, **canonical_fabric}
+    fabric_2d = fabric2d_device_params(trace_region_size=100000)
+    torus_xy = torus_xy_device_params(trace_region_size=100000)
     if num_devices == 32:
-        system, mesh_shape, mesh_topology, device_params = "galaxy", (8, 4), "mesh-8x4", fabric_2d
+        system, mesh_shape, mesh_topology, device_params = "galaxy_torus_xy", (8, 4), "mesh-8x4", torus_xy
     elif num_devices == 8:
-        system = "loudbox_proxy"
         if collective_axis == SP_AXIS:
-            # SP=8 line proxy for a Galaxy SP row. Production runs the SP all-gather on Topology.Linear
-            # (mla.py:259), so the proxy mirrors that with a FABRIC_1D line — not a ring, which would model a
-            # transport Galaxy does not use today. FABRIC_1D isolates the single axis, so it omits the 2D
-            # fabric-router config.
-            mesh_shape, mesh_topology = (8, 1), "line"
-            device_params = {"trace_region_size": 100000, "fabric_config": ttnn.FabricConfig.FABRIC_1D}
+            system, mesh_shape, mesh_topology = "loudbox_torus_y", (8, 1), "ring"
+            device_params = torus_y_device_params(trace_region_size=100000)
         else:
-            mesh_shape, mesh_topology, device_params = (2, 4), "mesh-2x4", fabric_2d
+            system, device_params = "loudbox_fabric2d", fabric_2d
+            mesh_shape, mesh_topology = (2, 4), "mesh-2x4"
     else:
         reason = f"CCL perf supports Galaxy (32 chips) or LoudBox (8), found {num_devices}"
         return pytest.param((1, 1), fabric_2d, marks=pytest.mark.skip(reason=reason), id="unsupported")
@@ -282,49 +283,40 @@ def ccl_mesh_param(collective_axis: int):
     )
 
 
-def resolve_runtime_system(mesh_device, path: CollectivePath, topology=ttnn.Topology.Linear) -> RuntimeSystem:
+def resolve_runtime_system(mesh_device, path: CollectivePath, fabric_config) -> RuntimeSystem:
     """Fabric roofline inputs for the live mesh: topology, link count, per-direction bandwidth."""
     mesh_shape = tuple(mesh_device.shape)
-    # Production uses Linear; perf tests may override this to compare the same workload on Ring.
+    topology = per_axis_topology(fabric_config)[path.collective_axis]
     default_gbps = _GALAXY_LINK_GBPS_PER_DIRECTION if math.prod(mesh_shape) == 32 else _LOUDBOX_LINK_GBPS_PER_DIRECTION
     link_gbps = float(os.environ.get("MLA_CCL_LINK_GBPS_PER_DIRECTION", default_gbps))
     return RuntimeSystem(mesh_shape, topology, NUM_LINKS, link_gbps)
 
 
 # --------------------------------------------------------------------------------------------------
-# Profiling + semaphores
+# Profiling
 # --------------------------------------------------------------------------------------------------
-def _global_semaphores(mesh_device):
-    compute_grid = mesh_device.compute_with_storage_grid_size()
-    cores = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1))}
-    )
-    gather_semaphores = create_global_semaphores(mesh_device, cores, 0)
-    barrier_semaphore = ttnn.create_global_semaphore(mesh_device, cores, 0)
-    return gather_semaphores, barrier_semaphore
-
-
-def _profile_programs(mesh_device, run_fn, latest_program_only=False):
+def _profile_programs(mesh_device, run_fn, expected_programs):
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("Real-time profiler must be active for sparse MLA CCL perf checks")
 
     # Drain setup programs before registering the callback so only run_fn contributes records.
     ttnn.synchronize_device(mesh_device)
     result, records = profile_realtime_program(mesh_device, run_fn, collect_all=True)
-    # Receiver delivery is asynchronous: a setup program completed before callback registration can arrive
-    # after it and appear in records. A2A dispatches exactly one measured program, so select the newest
-    # monotonic runtime ID there. All-gather retains all IDs because it may dispatch multiple programs.
-    if latest_program_only:
-        measured_runtime_id = max(record["runtime_id"] for record in records)
-        records = tuple(record for record in records if record["runtime_id"] == measured_runtime_id)
-
-    measured_records = tuple(record for record in records if record["runtime_id"])
+    # The receiver can deliver already-completed setup records after the callback is registered. Runtime
+    # IDs are monotonic, so retain exactly the programs dispatched by run_fn at the end of the capture.
+    runtime_ids = sorted({record["runtime_id"] for record in records if record["runtime_id"]})
+    assert len(runtime_ids) >= expected_programs
+    measured_runtime_ids = set(runtime_ids[-expected_programs:])
+    records = [record for record in records if record["runtime_id"] in measured_runtime_ids]
     program_durations_ns = {}
-    for record in measured_records:
+    for record in records:
         runtime_id = record["runtime_id"]
-        program_durations_ns[runtime_id] = max(program_durations_ns.get(runtime_id, 0.0), float(record["duration_ns"]))
+        if runtime_id:
+            program_durations_ns[runtime_id] = max(
+                program_durations_ns.get(runtime_id, 0.0), float(record["duration_ns"])
+            )
     assert program_durations_ns, "real-time profiler returned no valid program durations"
-    return result, measured_records, program_durations_ns
+    return result, tuple(records), program_durations_ns
 
 
 def _tensor_description(tensor):
@@ -337,9 +329,43 @@ def _tensor_description(tensor):
 # --------------------------------------------------------------------------------------------------
 def run_collective(mesh_device, path: CollectivePath, workload: Workload, system: RuntimeSystem) -> Measurement:
     """Build the input, profile the collective, and (for reshards) prove it moved data losslessly."""
-    if path.out_dim is None:
+    if path.partition_dim is None:
         return _run_all_gather(mesh_device, path, workload, system)
     return _run_reshard(mesh_device, path, workload, system)
+
+
+def _gathered_placements(input_placements, gather_dim, cluster_axis):
+    placements = list(input_placements)
+    collective_placement = placements[cluster_axis]
+    assert isinstance(collective_placement, ttnn.PlacementShard)
+    assert collective_placement.dim == gather_dim
+    placements[cluster_axis] = ttnn.PlacementReplicate()
+    return tuple(placements)
+
+
+def _placement_signature(placements):
+    return tuple(placement.dim if isinstance(placement, ttnn.PlacementShard) else None for placement in placements)
+
+
+def _allocate_gather_output(mesh_device, global_shape, layout, placements):
+    return ttnn.rand(
+        global_shape,
+        mesh_device,
+        layout=layout,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.MeshMapperConfig(list(placements), mesh_device.shape),
+    )
+
+
+def _high_bw_all_gather(tt_input, output_tensor, gather_dim, cluster_axis, num_links):
+    return ttnn.experimental.high_bw_all_gather(
+        tt_input,
+        dim=gather_dim,
+        output_tensor=output_tensor,
+        cluster_axis=cluster_axis,
+        num_links=num_links,
+    )
 
 
 def _run_all_gather(mesh_device, path, workload, system) -> Measurement:
@@ -354,22 +380,23 @@ def _run_all_gather(mesh_device, path, workload, system) -> Measurement:
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=mesh_mapper,
     )
-    gather_semaphores, barrier_semaphore = _global_semaphores(mesh_device)
-    tt_output, records, program_durations_ns = _profile_programs(
+    usable_topology = ttnn.get_usable_topology(tt_input, system.topology, path.collective_axis)
+    assert usable_topology == system.topology, (
+        f"{path.name}: requested {system.topology} on cluster_axis={path.collective_axis}, "
+        f"but Fabric resolved {usable_topology}"
+    )
+    gathered_placements = _gathered_placements(path.input_placements, path.gather_dim, path.collective_axis)
+    assert _placement_signature(gathered_placements) == _placement_signature(path.output_placements)
+    tt_output = _allocate_gather_output(mesh_device, global_shape, path.layout, gathered_placements)
+    _, records, program_durations_ns = _profile_programs(
         mesh_device,
-        lambda: ttnn.experimental.all_gather_async(
-            tt_input,
-            dim=path.in_dim,
-            multi_device_global_semaphore=gather_semaphores,
-            barrier_semaphore=barrier_semaphore,
-            num_links=system.num_links,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=system.topology,
-            cluster_axis=path.collective_axis,
-        ),
+        lambda: _high_bw_all_gather(tt_input, tt_output, path.gather_dim, path.collective_axis, system.num_links),
+        expected_programs=1,
     )
     assert list(tt_output.shape) == global_shape
-    assert tt_output.tensor_topology().placements() == list(path.output_placements)
+    assert _placement_signature(tt_output.tensor_topology().placements()) == _placement_signature(
+        path.output_placements
+    )
     measurement = Measurement(
         records, program_durations_ns, _tensor_description(tt_input), _tensor_description(tt_output)
     )
@@ -378,12 +405,13 @@ def _run_all_gather(mesh_device, path, workload, system) -> Measurement:
     return measurement
 
 
-def _reshard(tt_input, path, system):
-    """Run the single all-to-all used by sparse MLA to exchange sharded tensor dimensions."""
+def _reshard(tt_input, output_buffer, path, system):
+    """Run the all-to-all used by sparse MLA to exchange sharded tensor dimensions."""
     return ttnn.experimental.all_to_all_async_generic(
         tt_input,
-        in_dim=path.in_dim,
-        out_dim=path.out_dim,
+        in_dim=path.gather_dim,
+        out_dim=path.partition_dim,
+        persistent_output_buffer=output_buffer,
         num_links=system.num_links,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         topology=system.topology,
@@ -424,12 +452,12 @@ def _build_reshard_input(mesh_device, path, torch_input, system):
     )
     tt_input = ttnn.experimental.all_to_all_async_generic(
         source,
-        in_dim=path.out_dim,
-        out_dim=path.in_dim,
+        in_dim=path.output_placements[cax].dim,
+        out_dim=path.input_placements[cax].dim,
         num_links=system.num_links,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        topology=system.topology,
         cluster_axis=cax,
+        topology=system.topology,
     )
     ttnn.synchronize_device(mesh_device)
     ttnn.deallocate(source)
@@ -455,11 +483,18 @@ def _run_reshard(mesh_device, path, workload, system) -> Measurement:
     tt_input = _build_reshard_input(mesh_device, path, torch_input, system)
     # Input shape is shared with the traffic roofline; output shape remains an explicit reshard assertion.
     assert list(ttnn.get_device_tensors(tt_input)[0].shape) == path.local_input_shape(workload, mesh_shape)
-
+    # Match MLA: preallocate the exact per-device output once, outside the profiled collective.
+    output_buffer = ttnn.empty(
+        path.expected_output_shape(workload, mesh_shape),
+        device=mesh_device,
+        layout=path.layout,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
     tt_output, records, program_durations_ns = _profile_programs(
         mesh_device,
-        lambda: _reshard(tt_input, path, system),
-        latest_program_only=True,
+        lambda: _reshard(tt_input, output_buffer, path, system),
+        expected_programs=1,
     )
     assert list(ttnn.get_device_tensors(tt_output)[0].shape) == path.expected_output_shape(workload, mesh_shape)
     if path.verify_reshard:
@@ -482,7 +517,7 @@ def collective_roofline(path: CollectivePath, workload: Workload, mesh_device, s
     local_input_bytes = math.prod(path.local_input_shape(workload, mesh_shape)) * torch.bfloat16.itemsize
     participants = mesh_shape[path.collective_axis]
     num_devices = math.prod(mesh_shape)
-    if path.out_dim is None:
+    if path.partition_dim is None:
         critical_path_bytes = local_input_bytes * (participants - 1)
         total_network_bytes = critical_path_bytes * num_devices
         sustained_directions = 2 if system.topology == ttnn.Topology.Ring else 1
@@ -512,7 +547,7 @@ def report(path: CollectivePath, scenario: str, mesh_device, measurement: Measur
     sp, tp = mesh_device.shape
 
     logger.info(
-        f"{path.name}/{scenario} [{traffic.topology}, SP{sp}xTP{tp}]: {measurement.input_description} -> {measurement.output_description}"
+        f"{path.name}/{scenario} [SP{sp}xTP{tp}]: {measurement.input_description} -> {measurement.output_description}"
     )
     logger.info(
         f"theoretical fabric roofline: {traffic.link_gigabits_per_second_per_direction:.1f} "
@@ -523,7 +558,7 @@ def report(path: CollectivePath, scenario: str, mesh_device, measurement: Measur
         f"total-mesh={traffic.total_network_bytes / 1e6:.3f} MB, "
         f"theoretical={traffic.theoretical_ns / 1e3:.3f} us"
     )
-    measured_ops = "all_to_all" if path.out_dim is not None else "all_gather"
+    measured_ops = "all_to_all" if path.partition_dim is not None else "all_gather"
     logger.info(
         f"real-time profiler measured: {measured_ns / 1e3:.3f} us ({measured_ops}), "
         f"achieved ethernet bandwidth={measured_gigabytes_per_second:.3f} / "
@@ -572,10 +607,10 @@ def _workload(scenario):
     )
 
 
-def _run(mesh_device, path, scenario, topology=ttnn.Topology.Linear):
+def _run(mesh_device, device_params, path, scenario):
     assert mesh_device.arch() == ttnn.Arch.BLACKHOLE, "bandwidth assumptions apply to Blackhole only"
     workload = _workload(scenario)
-    system = resolve_runtime_system(mesh_device, path, topology)
+    system = resolve_runtime_system(mesh_device, path, device_params["fabric_config"])
     measurement = run_collective(mesh_device, path, workload, system)
     traffic = collective_roofline(path, workload, mesh_device, system)
     report(path, scenario, mesh_device, measurement, traffic)
@@ -587,33 +622,28 @@ def _run(mesh_device, path, scenario, topology=ttnn.Topology.Linear):
     [ccl_mesh_param(SP_AXIS)],
     indirect=["mesh_device", "device_params"],
 )
-def test_kvpe_all_gather_perf(mesh_device, scenario):
+def test_kvpe_all_gather_perf(mesh_device, device_params, scenario):
     """Profile the SP all-gather used for the GLM KVPE prefix."""
-    _run(mesh_device, KVPE_ALL_GATHER, scenario)
-
-
-RESHARD_TOPOLOGIES = (ttnn.Topology.Linear, ttnn.Topology.Ring)
+    _run(mesh_device, device_params, KVPE_ALL_GATHER, scenario)
 
 
 @pytest.mark.parametrize("scenario", _NON_LOOP_SCENARIOS, ids=_scenario_id)
-@pytest.mark.parametrize("topology", RESHARD_TOPOLOGIES, ids=["linear", "ring"])
 @pytest.mark.parametrize(
     "mesh_device,device_params",
     [ccl_mesh_param(TP_AXIS)],
     indirect=["mesh_device", "device_params"],
 )
-def test_glm_head_to_sequence_reshard_perf(mesh_device, scenario, topology):
+def test_glm_head_to_sequence_reshard_perf(mesh_device, device_params, scenario):
     """Profile GLM's head-sharded to sequence-sharded TP redistribution."""
-    _run(mesh_device, GLM_HEAD_TO_SEQUENCE, scenario, topology)
+    _run(mesh_device, device_params, GLM_HEAD_TO_SEQUENCE, scenario)
 
 
 @pytest.mark.parametrize("scenario", _NON_LOOP_SCENARIOS, ids=_scenario_id)
-@pytest.mark.parametrize("topology", RESHARD_TOPOLOGIES, ids=["linear", "ring"])
 @pytest.mark.parametrize(
     "mesh_device,device_params",
     [ccl_mesh_param(TP_AXIS)],
     indirect=["mesh_device", "device_params"],
 )
-def test_glm_sequence_to_head_reshard_perf(mesh_device, scenario, topology):
+def test_glm_sequence_to_head_reshard_perf(mesh_device, device_params, scenario):
     """Profile GLM's sequence-sharded to head-sharded TP redistribution."""
-    _run(mesh_device, GLM_SEQUENCE_TO_HEAD, scenario, topology)
+    _run(mesh_device, device_params, GLM_SEQUENCE_TO_HEAD, scenario)

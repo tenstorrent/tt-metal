@@ -12,6 +12,7 @@ set(TTNN_OP_EXPERIMENTAL_MINIMAL_MATMUL_SRCS
     minimal_matmul_split.cpp
     device/minimal_matmul_device_operation.cpp
     device/minimal_matmul_program_factory.cpp
+    device/minimal_matmul_fabric_bound_program_factory.cpp
 )
 
 # Registered on the shared `ttnn` Python module target from

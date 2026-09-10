@@ -6,37 +6,29 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     using namespace tt::constants;
-    uint32_t i = 0;
-    auto target_addr = get_arg_val<uint32_t>(i++);
-    auto weight_addr = get_arg_val<uint32_t>(i++);
-    auto ignore_index = static_cast<int32_t>(get_arg_val<uint32_t>(i++));
-    auto num_units_per_core = get_arg_val<uint32_t>(i++);
-    auto start_id = get_arg_val<uint32_t>(i++);
-    auto C = get_arg_val<uint32_t>(i++);
-    auto weight_num_tile = get_arg_val<uint32_t>(i++);
-    auto element_size = get_arg_val<uint32_t>(i++);
-    auto target_element_size = get_arg_val<uint32_t>(i++);
-
-    constexpr uint32_t cb_target = tt::CBIndex::c_0;
-    constexpr uint32_t cb_weight = tt::CBIndex::c_1;
-
-    constexpr uint32_t cb_output = tt::CBIndex::c_16;
+    auto ignore_index = static_cast<int32_t>(get_arg(args::ignore_index));
+    auto num_units_per_core = get_arg(args::num_units_per_core);
+    auto start_id = get_arg(args::start_id);
+    auto C = get_arg(args::C);
+    auto weight_num_tile = get_arg(args::weight_num_tile);
 
     // ublocks size defined in tiles
 
-    constexpr bool weight_has_value = get_compile_time_arg_val(0) == 1;
-    constexpr auto target_args = TensorAccessorArgs<1>();
-    constexpr auto weight_args = TensorAccessorArgs<target_args.next_compile_time_args_offset()>();
+    constexpr bool weight_has_value = get_arg(args::weight_has_value) == 1;
 
-    const auto addrg_target = TensorAccessor(target_args, target_addr);
+    const auto addrg_target = TensorAccessor(tensor::target);
 
+    DataflowBuffer dfb_target_obj(dfb::target);
+    DataflowBuffer dfb_output_obj(dfb::output);
 #if defined(WEIGHT)
-    const uint32_t weight_tile_bytes = get_tile_size(cb_weight);
+    DataflowBuffer dfb_weight_obj(dfb::weight);
+    const uint32_t weight_tile_bytes = dfb_weight_obj.get_tile_size();
     auto weight_element_size = weight_tile_bytes / 1024;
-    const auto addrg_weight = TensorAccessor(weight_args, weight_addr);
+    const auto addrg_weight = TensorAccessor(tensor::weight);
 #endif
 
     constexpr uint32_t onetile = 1;
@@ -47,12 +39,6 @@ void kernel_main() {
 
     const auto u16_one = uint16_t(one.u >> 16);
     const auto u16_zero = uint16_t(zero.u >> 16);
-
-    DataflowBuffer dfb_target_obj(cb_target);
-    DataflowBuffer dfb_output_obj(cb_output);
-#if defined(WEIGHT)
-    DataflowBuffer dfb_weight_obj(cb_weight);
-#endif
 
     uint32_t end_id = start_id + num_units_per_core;
     for (uint32_t i = start_id; i < end_id; ++i) {

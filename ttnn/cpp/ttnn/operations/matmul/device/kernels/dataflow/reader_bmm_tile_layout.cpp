@@ -51,15 +51,16 @@ void kernel_main() {
     constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("cb_in0");
     constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("cb_in1");
 
-    const uint32_t in0_single_tile_size_bytes = get_tile_size(dfb_id_in0);
-    const uint32_t in1_single_tile_size_bytes = get_tile_size(dfb_id_in1);
+    DataflowBuffer dfb_in0(dfb_id_in0);
+    DataflowBuffer dfb_in1(dfb_id_in1);
+
+    const uint32_t in0_single_tile_size_bytes = dfb_in0.get_tile_size();
+    const uint32_t in1_single_tile_size_bytes = dfb_in1.get_tile_size();
 
     const auto s0 = TensorAccessor(in0_args, in0_tensor_addr);
     const auto s1 = TensorAccessor(in1_args, in1_tensor_addr);
 
     Noc noc;
-    DataflowBuffer dfb_in0(dfb_id_in0);
-    DataflowBuffer dfb_in1(dfb_id_in1);
 
     for (uint32_t b = 0; b < batch; b++) {
         uint32_t in0_tensor_current_block_start_tile_id = in0_tensor_start_tile_id;

@@ -432,7 +432,7 @@ tt::tt_metal::ProgramDescriptor build_dispatch_program_descriptor(
         reader_rt_args.push_back(mapping_tensor.buffer());
         reader_rt_args.push_back(output_tensor.buffer());
         reader_rt_args.push_back(metadata_tensor.buffer());
-        reader_rt_args.push_back((uint32_t)cross_device_semaphore.address());
+        reader_rt_args.push_back((uint32_t)cross_device_semaphore.address());  // smuggled-rta-ok
         reader_rt_args.push_back(token_range_start);
         reader_rt_args.push_back(token_range_end);
         desc.kernels[ternary_reader_kernel_id].emplace_runtime_args(sender_core, reader_rt_args);
@@ -511,7 +511,7 @@ tt::tt_metal::WorkloadDescriptor AllToAllDispatchDeviceOperation::AllToAllDispat
     auto final_barrier_semaphore =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
     tt::tt_metal::distributed::Synchronize(
-        mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated
+        *mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated
 
     WorkloadDescriptor workload_descriptor;
     workload_descriptor.semaphores.push_back(init_barrier_semaphore);

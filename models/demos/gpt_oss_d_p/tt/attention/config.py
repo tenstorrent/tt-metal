@@ -39,7 +39,7 @@ class AttentionConfig:
     # kernel's internal scaling reproduces HF (which doesn't scale the sink). See weights.py.
     scaling: float | None = None
 
-    # P1 SP path: AllGather K/V + single-chip SDPA (sliding + sinks). Native ring SDPA swaps in at P6.
+    # SP prefill path: cache-backed RingJointSDPA (sliding + sinks) from chunk 0 onward.
     sequence_parallel: bool = False
 
     def __post_init__(self):

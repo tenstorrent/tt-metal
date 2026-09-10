@@ -47,12 +47,6 @@ from loguru import logger
 from transformers import AutoConfig, AutoTokenizer
 
 import ttnn
-from models.common.models.executor import (
-    load_eval_repeat_prompts_batch32,
-    run_eval_repeat_batch32,
-    run_perf_benchmark,
-    run_teacher_forcing,
-)
 from models.common.models.qwen25_coder_32b.executor import EagerQwen25Coder32BExecutor, TracedQwen25Coder32BExecutor
 from models.common.models.qwen25_coder_32b.model import (
     QWEN25_CODER_32B_ACCURACY,
@@ -61,6 +55,12 @@ from models.common.models.qwen25_coder_32b.model import (
 )
 from models.common.sampling.sampling_params import SamplingParams
 from models.common.tests.demos.cleanup_utils import cleanup_model_case
+from models.common.tests.demos.run_helpers import (
+    load_eval_repeat_prompts_batch32,
+    run_eval_repeat_batch32,
+    run_perf_benchmark,
+    run_teacher_forcing,
+)
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.demos.utils.model_targets import resolve_accuracy_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler

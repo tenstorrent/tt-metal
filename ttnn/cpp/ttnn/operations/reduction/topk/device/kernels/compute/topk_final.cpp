@@ -44,35 +44,36 @@
  */
 
 void kernel_main() {
-    constexpr uint32_t input_dfb_index = get_compile_time_arg_val(0);
-    constexpr uint32_t index_dfb_index = get_compile_time_arg_val(1);
-    constexpr uint32_t input_transposed_dfb_index = get_compile_time_arg_val(2);
-    constexpr uint32_t index_transposed_dfb_index = get_compile_time_arg_val(3);
-    constexpr uint32_t values_dfb_index = get_compile_time_arg_val(4);
-    constexpr uint32_t output_ind_dfb_index = get_compile_time_arg_val(5);
-    constexpr uint32_t Ht = get_compile_time_arg_val(6);
-    constexpr uint32_t Wt = get_compile_time_arg_val(7);  // Leftover row size after multicore processing
-    constexpr uint32_t K = get_compile_time_arg_val(8);
-    constexpr uint32_t Kt = get_compile_time_arg_val(9);
-    constexpr uint32_t logk = get_compile_time_arg_val(10);
-    constexpr uint32_t logWt = get_compile_time_arg_val(11);
-    constexpr uint32_t largest = get_compile_time_arg_val(12);
-    constexpr uint32_t sorted = get_compile_time_arg_val(13);
+    constexpr std::uint32_t input_dfb_index = get_compile_time_arg_val(0);
+    constexpr std::uint32_t index_dfb_index = get_compile_time_arg_val(1);
+    constexpr std::uint32_t input_transposed_dfb_index = get_compile_time_arg_val(2);
+    constexpr std::uint32_t index_transposed_dfb_index = get_compile_time_arg_val(3);
+    constexpr std::uint32_t values_dfb_index = get_compile_time_arg_val(4);
+    constexpr std::uint32_t output_ind_dfb_index = get_compile_time_arg_val(5);
+    constexpr std::uint32_t Ht = get_compile_time_arg_val(6);
+    constexpr std::uint32_t Wt = get_compile_time_arg_val(7);  // Leftover row size after multicore processing
+    constexpr std::uint32_t K = get_compile_time_arg_val(8);
+    constexpr std::uint32_t Kt = get_compile_time_arg_val(9);
+    constexpr std::uint32_t logk = get_compile_time_arg_val(10);
+    constexpr std::uint32_t logWt = get_compile_time_arg_val(11);
+    constexpr std::uint32_t largest = get_compile_time_arg_val(12);
+    constexpr std::uint32_t sorted = get_compile_time_arg_val(13);
     constexpr bool stable_sort = get_compile_time_arg_val(14) == 1;  // Ties keep the lowest index
 
     // dest indices for where to unpack the tiles for the llk
     // the input goes in index 0,1 and the index goes in index 2,3
-    constexpr uint32_t input_dest_start = 0;
-    constexpr uint32_t index_dest_start = 2;
-    constexpr uint32_t input_dest_end = 1;
-    constexpr uint32_t index_dest_end = 3;
+    constexpr std::uint32_t input_dest_start = 0;
+    constexpr std::uint32_t index_dest_start = 2;
+    constexpr std::uint32_t input_dest_end = 1;
+    constexpr std::uint32_t index_dest_end = 3;
 
-    constexpr uint32_t tiles_per_seq = (K + 31) / 32;
+    constexpr std::uint32_t tiles_per_seq = (K + 31) / 32;
     bool switch_dir = (K == 64);
-    int seq_per_2tiles = std::max((2 * 32) / K, (uint32_t)2);
+    int seq_per_2tiles = std::max((2 * 32) / K, (std::uint32_t)2);
 
     // init pack, compute and unpack
-    init_sfpu(input_dfb_index, values_dfb_index);
+    compute_kernel_hw_startup(input_dfb_index, values_dfb_index);
+    copy_init(input_dfb_index);
     ckernel::topk_tile_init();
 
     DataflowBuffer input_dfb(input_dfb_index);
@@ -81,7 +82,7 @@ void kernel_main() {
     DataflowBuffer index_transposed_dfb(index_transposed_dfb_index);
 
     // Aggregate results from all local cores for each height row
-    for (uint32_t ht = 0; ht < Ht; ++ht) {
+    for (std::uint32_t ht = 0; ht < Ht; ++ht) {
         input_dfb.wait_front(Wt);  // Wait for all local TopK results (values)
         index_dfb.wait_front(Wt);  // Wait for all local TopK results (indices)
 
@@ -89,9 +90,19 @@ void kernel_main() {
         // The reader kernel manages input_cb_index/index_cb_index, while compute
         // operations require separate staging buffers for in-place bitonic operations.
 
+        // Re-establish datacopy unpack state for the values gather. At ht==0
+        // init_sfpu covers this, but at ht>=1 the state left by the previous
+        // iteration's transpose_and_pack(index_transposed...) is TRANSPOSE
+        // mode with the INDEX (UInt16/UInt32) SRCA format; the bare copy_tile
+        // below would unpack the bf16 gathered values as garbage (silicon:
+        // fabricated ~1e38 values in every ht>=1 row).
+        // The reconfig above already forces SRCA to input_dfb_index's format (what the deprecated
+        // copy_tile_to_dst_init_short_with_dt's guarded reconfig would do), so only copy_init remains.
+        reconfig_data_format_srca(input_dfb_index);
+        copy_init(input_dfb_index);
         pack_reconfig_data_format(input_transposed_dfb_index);
         // Copy all received value tiles from local cores to transposed staging buffer
-        for (uint32_t wt = 0; wt < Wt; wt++) {
+        for (std::uint32_t wt = 0; wt < Wt; wt++) {
             tile_regs_acquire();
             copy_tile(input_dfb_index, wt, 0);  // Copy tile from local core wt
             tile_regs_commit();
@@ -107,9 +118,10 @@ void kernel_main() {
         input_dfb.pop_front(Wt);  // Release input buffer space
 
         // Copy all received index tiles from local cores to transposed staging buffer
-        copy_tile_to_dst_init_short_with_dt(input_dfb_index, index_dfb_index);
+        reconfig_data_format_srca(input_dfb_index, index_dfb_index);
+        copy_init(index_dfb_index);
         pack_reconfig_data_format(index_transposed_dfb_index);
-        for (uint32_t wt = 0; wt < Wt; wt++) {
+        for (std::uint32_t wt = 0; wt < Wt; wt++) {
             tile_regs_acquire();
             copy_tile(index_dfb_index, wt, 0);  // Copy index tile from local core wt
             tile_regs_commit();
@@ -125,7 +137,7 @@ void kernel_main() {
         index_transposed_dfb.wait_front(Wt);
         index_dfb.pop_front(Wt);  // Release input buffer space
 
-        uint32_t num_k_sequences = (Wt * 32) / K;  // K-element sequences across all local results
+        std::uint32_t num_k_sequences = (Wt * 32) / K;  // K-element sequences across all local results
 
         // Bitonic merge iterations to compute global TopK
         // Apply the same log(Wt_final) bitonic merge iterations as local cores,
@@ -136,7 +148,7 @@ void kernel_main() {
         // - Iteration 0: Merge (0,1), (2,3), (4,5), ... from different local cores
         // - Iteration 1: Merge (0,2), (4,6), (8,10), ... across core boundaries
         // - Final iteration: Global TopK across all cores' contributions
-        for (uint32_t m_iter = 0; m_iter < logWt; ++m_iter) {
+        for (std::uint32_t m_iter = 0; m_iter < logWt; ++m_iter) {
             process_iteration<stable_sort>(
                 m_iter,                      // Current merge iteration
                 K,                           // TopK value

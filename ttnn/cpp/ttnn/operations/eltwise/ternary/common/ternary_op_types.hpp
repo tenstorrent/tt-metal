@@ -23,6 +23,7 @@ enum class TernaryOpType {
     ADDCMUL,     // fused multiply-add: out = input_a + value * input_b * input_c
     ADDCDIV,     // fused divide-add: out = input_a + value * input_b / input_c
     SNAKE_BETA,  // fused activation: out = a + sin^2(b * a) / c   (a=x, b=alpha, c=beta)
+    MAC,         // multiply-accumulate: out = a * b + c
 };
 
 // Variant types for ternary operations

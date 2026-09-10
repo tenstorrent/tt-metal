@@ -98,6 +98,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #define DST_ACCUM_MODE is_fp32_dest_acc_en
 constexpr bool APPROX = false;
 #include "experimental/llk_sfpu/ckernel_sfpu_sampling.h"
+#if defined(SAMPLING_POLLUTE_PRGM0)
+#include "llk_sfpu/ckernel_sfpu_log.h"
+#endif
 #undef DST_ACCUM_MODE
 
 using namespace ckernel;
@@ -107,7 +110,7 @@ namespace
 inline void run_sampling_op()
 {
 #if defined(SAMPLING_OP_RECIP_SCALAR)
-    ckernel::sfpu::calculate_sampling_recip_scalar<SAMPLING_LEGACY_COMPAT>();
+    ckernel::sfpu::calculate_sampling_recip_scalar<SAMPLING_LEGACY_COMPAT, is_fp32_dest_acc_en>();
 #elif defined(SAMPLING_OP_CLAMP_MAX_SCALAR)
     ckernel::sfpu::calculate_sampling_clamp_max_scalar(SFPU_UNARY_SCALAR);
 #elif defined(SAMPLING_OP_MUL_UNARY_SCALAR)
@@ -145,7 +148,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // path and is a no-op for legacy_compat. Everything else needs only the invariant
     // SFPU config + ADDR_MOD_7 from the LLK init.
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
+
+#if defined(SAMPLING_POLLUTE_PRGM0)
+    // Stand in for an earlier op in the same kernel that owns vConstFloatPrgm0. log_init
+    // sets it to LOG_TWO * 2^-23 (~8.3e-8); the non-legacy reciprocal's Newton-Raphson
+    // step needs 2.0f, so this is the cross-op hazard sampling_recip_init exists to
+    // repair -- see tt-metal #52745. Any vConstFloatPrgm0 writer would do; log is picked
+    // because its constant is nine orders of magnitude away, so a surviving pollution is
+    // unmistakable rather than a near-miss.
+    ckernel::sfpu::log_init<false /* APPROXIMATION_MODE */, false /* FAST_APPROX */, is_fp32_dest_acc_en>();
+#endif
+
+#if !defined(SAMPLING_SKIP_RECIP_INIT)
     ckernel::sfpu::sampling_recip_init<SAMPLING_LEGACY_COMPAT>();
+#endif
 
     _llk_math_wait_for_dest_available_<DST_SYNC>();
 

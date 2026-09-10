@@ -19,7 +19,7 @@ DriscL1Arena::DriscL1Arena(ContextId context_id) {
     TT_FATAL(
         hal.has_programmable_core_type(HalProgrammableCoreType::DRAM),
         "DriscL1Arena requires programmable DRAM cores, which auto-enable on Blackhole with firmware "
-        ">= 19.12.0.0 and either no harvested DRAM channels or a single device");
+        ">= 19.12.0.0");
 
     unreserved_base_ = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
     drisc_unreserved_size_ = hal.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);

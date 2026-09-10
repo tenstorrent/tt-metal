@@ -7,7 +7,7 @@ file consumed by prepare_test_matrix.py), so this validator never drifts from th
 tests that actually exist. Supported tokens are:
 
   * "all"                -> run every stage
-  * each entry's test_type   (e.g. mla, prefill_block, kimi_moe, ...)
+  * each entry's test_type   (e.g. mla_chunked, glm_moe, kimi_moe, ...)
   * each entry's test_group  (e.g. module -> run every stage in that group)
 
 Selection rules:
@@ -24,7 +24,7 @@ Usage:
     python validate_test_type_selection.py <tests_yaml_path> <selection>
 
 Examples:
-    python validate_test_type_selection.py tests/pipeline_reorg/blaze_models_prefill_tests.yaml "mla,prefill_block"
+    python validate_test_type_selection.py tests/pipeline_reorg/blaze_models_prefill_tests.yaml "mla_chunked,glm_moe"
     python validate_test_type_selection.py tests/pipeline_reorg/blaze_models_prefill_tests.yaml ""        # -> all
     python validate_test_type_selection.py tests/pipeline_reorg/blaze_models_prefill_tests.yaml "all"
 """
@@ -48,7 +48,10 @@ def load_supported_tokens(tests_yaml_path):
     """
     Return (test_types, test_groups, supported) derived from the test matrix YAML.
 
-    `supported` is the full set of accepted tokens (test_types + test_groups + "all").
+    `supported` is the full set of accepted tokens (test_types + test_groups +
+    test_tags + "all"). test_tags is a per-entry list of coarse selectors -- the
+    model a leg covers (kimi_k3) and the unit under test (moe) -- so one token can
+    select every leg for a model or for a subsystem.
     """
     if not os.path.exists(tests_yaml_path):
         error(f"Test matrix file not found: {tests_yaml_path}")
@@ -61,7 +64,8 @@ def load_supported_tokens(tests_yaml_path):
 
     test_types = sorted({t["test_type"] for t in tests if t.get("test_type")})
     test_groups = sorted({t["test_group"] for t in tests if t.get("test_group")})
-    supported = {ALL, *test_types, *test_groups}
+    test_tags = sorted({g for t in tests for g in (t.get("test_tags") or [])})
+    supported = {ALL, *test_types, *test_groups, *test_tags}
     return test_types, test_groups, supported
 
 

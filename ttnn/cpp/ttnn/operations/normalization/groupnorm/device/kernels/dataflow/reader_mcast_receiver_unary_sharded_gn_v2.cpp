@@ -45,9 +45,6 @@ void kernel_main() {
     DataflowBuffer dfb_repack_out(dfb_repack_out_id);
     DataflowBuffer dfb_out0(dfb_out0_id);
 
-    const uint32_t single_tile_size_bytes = get_tile_size(dfb_ex_partial_id);
-    const DataFormat data_format = get_dataformat(dfb_ex_partial_id);
-
 #if defined(READER_REPACK) and defined(TILIZE_IN)
     uint32_t in0_l1_read_addr = dfb_in0.get_read_ptr();
     uint32_t src_addr_in0 = in0_l1_read_addr;

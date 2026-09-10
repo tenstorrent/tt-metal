@@ -26,6 +26,15 @@ struct SparseSDPAOperation {
     struct SparseSDPAProgramFactory {
         static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& attrs, const tensor_args_t& t, tensor_return_value_t& output);
+
+        // Cache-hit re-apply of the per-dispatch state the hash excludes: buffer addresses and
+        // kv_batch_page_offset (cache_batch_idx * kv length T). Patched in place; no rebuild.
+        static void override_runtime_arguments(
+            tt::tt_metal::Program& program,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
     };
 
     using program_factory_t = std::variant<SparseSDPAProgramFactory>;
@@ -38,15 +47,6 @@ struct SparseSDPAOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
-    // Cache-hit re-apply of the per-dispatch state the hash excludes: buffer addresses and kv_batch_page_offset
-    // (cache_batch_idx * kv length T). See the program factory.
-    static void override_runtime_arguments(
-        tt::tt_metal::Program& program,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 Tensor sparse_sdpa(

@@ -146,6 +146,14 @@ class LazyBuffer:
             )
             ttnn.copy_host_to_device_tensor(host_tt, self._value)
 
+    def release(self) -> None:
+        """Release the materialized device buffer and allow later reload."""
+        if self._value is None:
+            return
+        value = self._value
+        ttnn.deallocate(value)
+        self._value = None
+
     def is_resolved(self) -> bool:
         """Check if all required fields for materialization are set."""
         return self.device is not None and self.dtype is not None and self.layout is not None

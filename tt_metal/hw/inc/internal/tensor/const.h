@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <cstdint>
+#include <cstddef>
 #include <limits>
 
 namespace tensor_accessor {

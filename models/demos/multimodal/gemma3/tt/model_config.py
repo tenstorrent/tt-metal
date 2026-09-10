@@ -38,6 +38,24 @@ _GEMMA3_SDPA_DECODE_K_CHUNK_DEFAULT = 256
 _GEMMA3_SDPA_DECODE_K_CHUNK_PROGRAM_TRACE = 32
 
 
+# Vision weights gemma3 materializes to device WITHOUT a .tensorbin cache_file_name (patch-embed
+# conv, siglip position embedding, the two multi_modal_projector weights) -- a warm run would feed
+# them uninitialized garbage, so they must be served real from the host sidecar even on a warm
+# cache. Everything else flows through cached ttnn.as_tensor and is placeholder-safe. Enumerated
+# from the gemma3 vision stack (#45400 follow-up). Text path consumes none of these.
+GEMMA3_HOST_WEIGHT_SUFFIXES = (
+    "patch_embedding._linear.weight",
+    "patch_embedding._linear.bias",
+    "position_embedding.positional_embedding",
+    "mm_input_projection_weight",
+    "mm_soft_emb_norm.weight",
+)
+
+
+def is_gemma3_host_weight(key):
+    return any(key.endswith(s) for s in GEMMA3_HOST_WEIGHT_SUFFIXES)
+
+
 class ModelArgs(TTModelArgs):
     OP_KEYS = (
         # Embedding

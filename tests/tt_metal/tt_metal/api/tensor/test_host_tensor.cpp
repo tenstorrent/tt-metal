@@ -15,11 +15,11 @@
 
 #include <type_traits>
 
-#include <tt-metalium/experimental/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
-#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/layout/page_config.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/host_buffer.hpp>

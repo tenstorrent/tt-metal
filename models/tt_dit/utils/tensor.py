@@ -406,6 +406,16 @@ def _host_buffer_to_torch(buf, padded_shape: list[int], tt_dtype: ttnn.DataType)
     return raw.view(torch_dtype).reshape(padded_shape)
 
 
+def as_bf16(t: ttnn.Tensor) -> ttnn.Tensor:
+    """Cast to bf16, skipping the op if the tensor already is bf16.
+
+    `ttnn.typecast` has no same-dtype early-out — it always dispatches a full elementwise copy
+    program — so a redundant cast costs a program launch per call, including on every trace
+    replay. Use this wherever a tensor may already have been cast by the caller.
+    """
+    return t if t.dtype == ttnn.bfloat16 else ttnn.typecast(t, dtype=ttnn.bfloat16)
+
+
 def float_to_unit_range(t: ttnn.Tensor) -> ttnn.Tensor:
     """On-device denormalization: map from [-1.0, 1.0] to [0.0, 1.0]."""
     t = ttnn.to_layout(t, ttnn.TILE_LAYOUT)
@@ -475,6 +485,33 @@ def _reassemble_2d(
     write, halving total memory traffic.
     """
     d0, d1 = concat_dims
+
+    if d0 is not None and d0 == d1:
+        # One tensor dim fractured row-major over the *whole* mesh (`ShardTensorToMesh(dim=d)` hands
+        # shard `i` to device `(i // cols, i % cols)`), so both mesh indices fold into a single
+        # linearised block offset rather than two independent per-axis concats. The general branch
+        # writes `slices[d0]` then `slices[d1]` into the same index, losing the row: shard `(r, c)`
+        # lands at position `c` for every `r`. The C++ equivalent refuses duplicate dims outright
+        # (`ttnn/core/tensor/xtensor/partition.cpp`).
+        cols = mesh_shape[1]
+        span = shard_shape[d0]
+        full_shape = list(shard_shape)
+        full_shape[d0] = span * mesh_shape[0] * cols
+
+        out_dtype = dtype if dtype is not None else shards[0].dtype
+        if permute is not None:
+            out = torch.empty([full_shape[p] for p in permute], dtype=out_dtype)
+            d0_out = list(permute).index(d0)
+        else:
+            out = torch.empty(full_shape, dtype=out_dtype)
+            d0_out = d0
+
+        for coord, shard in zip(mesh_coords, shards):
+            base = (int(coord[0]) * cols + int(coord[1])) * span
+            slices = [slice(None)] * len(full_shape)
+            slices[d0_out] = slice(base, base + span)
+            out[tuple(slices)] = shard.permute(*permute).contiguous() if permute is not None else shard
+        return out
 
     if d0 is not None and d1 is not None:
         s0, s1 = shard_shape[d0], shard_shape[d1]
@@ -870,3 +907,30 @@ def print_tensor_mem_info(tt: ttnn.Tensor):
         logger.info("  layout:", s.layout)
         logger.info("  dtype:", s.dtype)
         logger.info("  memory_config:", s.memory_config())
+
+
+def prepare_weight_for_concatenated_input(
+    weight: torch.Tensor,
+    sizes: Sequence[int],
+    *,
+    device_count: int,
+    tile_pad_segments: bool = True,
+) -> torch.Tensor:
+    """Shard weight by device_count per segment and stack.
+
+    tile_pad_segments=True (fused concat): zero-pad each per-device segment K to a tile boundary
+    so minimal_matmul([prefix, suffix], weight) works for any channel count.
+    tile_pad_segments=False (materialized concat): contiguous stack, for use with ttnn.concat.
+    """
+    segments = weight.split(sizes, dim=1)
+    padded_segments = []
+    for seg in segments:
+        unf = seg.unflatten(1, [device_count, -1])  # [out, device_count, K_seg/dev]
+        if tile_pad_segments:
+            k_per_dev = unf.shape[2]
+            k_padded = ((k_per_dev + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+            if k_padded != k_per_dev:
+                pad = torch.zeros(*unf.shape[:2], k_padded - k_per_dev, dtype=unf.dtype)
+                unf = torch.cat([unf, pad], dim=2)
+        padded_segments.append(unf)
+    return torch.cat(padded_segments, dim=2).flatten(1, 2)

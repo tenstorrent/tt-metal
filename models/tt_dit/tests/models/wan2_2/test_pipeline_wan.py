@@ -89,6 +89,9 @@ def test_pipeline_inference(
     if (not is_fsdp) and (not ttnn.device.is_blackhole()):
         pytest.skip("FSDP=False unsupported on non-blackhole systems due to memory constraints")
 
+    if tuple(mesh_device.shape) == (2, 2) and height > 480:
+        pytest.skip("2x2 lacks the DRAM capacity for 720p")
+
     num_frames = 81
     num_inference_steps = 40
 

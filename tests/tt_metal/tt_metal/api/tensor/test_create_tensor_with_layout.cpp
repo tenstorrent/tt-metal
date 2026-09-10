@@ -5,11 +5,11 @@
 #include <gtest/gtest.h>
 
 #include <tt-metalium/shape.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
-#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
-#include <tt-metalium/experimental/tensor/tensor_types.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"

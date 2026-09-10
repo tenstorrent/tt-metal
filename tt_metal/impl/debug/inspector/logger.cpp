@@ -7,6 +7,8 @@
 #include "impl/debug/inspector/types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "distributed/mesh_device_impl.hpp"
+#include <enchantum/enchantum.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <iomanip>
 #include <chrono>
 
@@ -96,7 +98,118 @@ Logger::Logger(const std::filesystem::path& logging_path, std::optional<int> ran
             additional_text);
     }
 
+    if (MetalContext::instance().rtoptions().get_inspector_log_mesh_buffers()) {
+        mesh_buffers_ostream.open(this->logging_path / "mesh_buffers_log.yaml", std::ios::trunc);
+        if (!mesh_buffers_ostream.is_open()) {
+            TT_INSPECTOR_THROW(
+                "Failed to create inspector file: {}\n{}",
+                (this->logging_path / "mesh_buffers_log.yaml").string(),
+                additional_text);
+        }
+    }
+
+    if (MetalContext::instance().rtoptions().get_inspector_log_mesh_sockets()) {
+        mesh_sockets_ostream.open(this->logging_path / "mesh_sockets_log.yaml", std::ios::trunc);
+        if (!mesh_sockets_ostream.is_open()) {
+            TT_INSPECTOR_THROW(
+                "Failed to create inspector file: {}\n{}",
+                (this->logging_path / "mesh_sockets_log.yaml").string(),
+                additional_text);
+        }
+    }
+
     initialized = true;
+}
+
+void Logger::log_mesh_buffer_allocated(const distributed::MeshBuffer* mesh_buffer) noexcept {
+    if (!initialized || !mesh_buffers_ostream.is_open()) {
+        return;
+    }
+    try {
+        // The pointer is the identity: MeshBuffer has no id of its own, and it is what the registry and the
+        // socket map are both keyed by, so this is what correlates a log entry with everything else.
+        mesh_buffers_ostream << "- mesh_buffer_allocated:\n";
+        mesh_buffers_ostream << "    id: " << reinterpret_cast<uintptr_t>(mesh_buffer) << "\n";
+        mesh_buffers_ostream << "    address: " << mesh_buffer->address() << "\n";
+        mesh_buffers_ostream << "    size: " << mesh_buffer->size() << "\n";
+        mesh_buffers_ostream << "    device_local_size: " << mesh_buffer->device_local_size() << "\n";
+        mesh_buffers_ostream << "    buffer_type: "
+                             << enchantum::to_string(mesh_buffer->device_local_config().buffer_type) << "\n";
+        mesh_buffers_ostream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now())
+                             << "\n";
+        mesh_buffers_ostream.flush();
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log mesh buffer allocated: {}", e.what());
+    }
+}
+
+void Logger::log_mesh_buffer_deallocated(const distributed::MeshBuffer* mesh_buffer) noexcept {
+    if (!initialized || !mesh_buffers_ostream.is_open()) {
+        return;
+    }
+    try {
+        // Address is repeated so a reader can pair events without holding every create in memory. device()
+        // is deliberately not touched: it throws once the MeshDevice is gone, which is common at teardown.
+        mesh_buffers_ostream << "- mesh_buffer_deallocated:\n";
+        mesh_buffers_ostream << "    id: " << reinterpret_cast<uintptr_t>(mesh_buffer) << "\n";
+        mesh_buffers_ostream << "    address: " << mesh_buffer->address() << "\n";
+        mesh_buffers_ostream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now())
+                             << "\n";
+        mesh_buffers_ostream.flush();
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log mesh buffer deallocated: {}", e.what());
+    }
+}
+
+void Logger::log_mesh_socket_created(
+    const distributed::MeshBuffer* config_buffer, const MeshSocketData& socket_data) noexcept {
+    if (!initialized || !mesh_sockets_ostream.is_open()) {
+        return;
+    }
+    try {
+        // Keyed by config buffer pointer, matching the mesh buffer log.
+        mesh_sockets_ostream << "- mesh_socket_created:\n";
+        mesh_sockets_ostream << "    id: " << reinterpret_cast<uintptr_t>(config_buffer) << "\n";
+        mesh_sockets_ostream << "    is_sender: " << (socket_data.is_sender ? "true" : "false") << "\n";
+        mesh_sockets_ostream << "    config_buffer_address: " << socket_data.config_buffer_address << "\n";
+        mesh_sockets_ostream << "    data_buffer_address: " << socket_data.data_buffer_address << "\n";
+        mesh_sockets_ostream << "    fifo_size: " << socket_data.fifo_size << "\n";
+        mesh_sockets_ostream << "    local_mesh_id: " << socket_data.local_mesh_id << "\n";
+        mesh_sockets_ostream << "    peer_mesh_id: " << socket_data.peer_mesh_id << "\n";
+        mesh_sockets_ostream << "    local_cores:\n";
+        for (const auto& core_data : socket_data.local_cores) {
+            mesh_sockets_ostream << "      - chip_id: " << core_data.chip_id << "\n";
+            mesh_sockets_ostream << "        fabric_chip_id: " << core_data.core.fabric_chip_id << "\n";
+            mesh_sockets_ostream << "        core: [" << core_data.core.core_x << ", " << core_data.core.core_y << "]\n";
+            mesh_sockets_ostream << "        peers:\n";
+            for (const auto& peer : core_data.peers) {
+                mesh_sockets_ostream << "          - fabric_chip_id: " << peer.fabric_chip_id << "\n";
+                mesh_sockets_ostream << "            core: [" << peer.core_x << ", " << peer.core_y << "]\n";
+            }
+        }
+        mesh_sockets_ostream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now())
+                             << "\n";
+        mesh_sockets_ostream.flush();
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log mesh socket created: {}", e.what());
+    }
+}
+
+void Logger::log_mesh_socket_destroyed(
+    const distributed::MeshBuffer* config_buffer, const MeshSocketData& socket_data) noexcept {
+    if (!initialized || !mesh_sockets_ostream.is_open()) {
+        return;
+    }
+    try {
+        mesh_sockets_ostream << "- mesh_socket_destroyed:\n";
+        mesh_sockets_ostream << "    id: " << reinterpret_cast<uintptr_t>(config_buffer) << "\n";
+        mesh_sockets_ostream << "    config_buffer_address: " << socket_data.config_buffer_address << "\n";
+        mesh_sockets_ostream << "    timestamp_ns: " << convert_timestamp(std::chrono::high_resolution_clock::now())
+                             << "\n";
+        mesh_sockets_ostream.flush();
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log mesh socket destroyed: {}", e.what());
+    }
 }
 
 void Logger::log_program_created(const ProgramData& program_data) noexcept {

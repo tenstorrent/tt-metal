@@ -2,6 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
+// reader_bmm_8bank_output_tiles_partitioned_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this
+// file serves the consumers still on the legacy API. Until the last of them migrates and this file
+// is retired, changes here likely belong in the fork too.
+
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
@@ -37,9 +42,12 @@ void kernel_main() {
     constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("cb_in0");
     constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("cb_in1");
 
+    DataflowBuffer dfb_in0(dfb_id_in0);
+    DataflowBuffer dfb_in1(dfb_id_in1);
+
     constexpr uint32_t onetile = 1;
-    const uint32_t in0_tile_bytes = get_tile_size(dfb_id_in0);
-    const uint32_t in1_tile_bytes = get_tile_size(dfb_id_in1);
+    const uint32_t in0_tile_bytes = dfb_in0.get_tile_size();
+    const uint32_t in1_tile_bytes = dfb_in1.get_tile_size();
 
     uint32_t itileA = output_tile_start_id / Nt * Kt;  // input0 row = output row * input0 width
 
@@ -55,8 +63,6 @@ void kernel_main() {
     const auto s1 = TensorAccessor(src1_args, src1_addr);
 
     Noc noc;
-    DataflowBuffer dfb_in0(dfb_id_in0);
-    DataflowBuffer dfb_in1(dfb_id_in1);
 
     for (uint32_t n = 0; n < num_output_tiles; n++) {
         for (uint32_t kt = 0; kt < Kt; kt++) {

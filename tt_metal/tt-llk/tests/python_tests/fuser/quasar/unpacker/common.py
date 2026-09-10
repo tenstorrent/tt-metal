@@ -33,28 +33,22 @@ def _emit_configure(
     unpack_B_dst: DataFormat,
 ) -> str:
     if _is_unary_broadcast_unpacker(compute_node):
-        desc_b = compute_node.src_b.cpp_desc_name
-        code = f"{desc_b}.reg_data_format = static_cast<std::uint8_t>({unpack_B_dst.cpp_underlying_value});\n"
-        code += f"_llk_unpack_configure_unary_<p_unpacr::UNP_B>({desc_b});\n"
-        return code
+        return f"_llk_unpack_configure_unary_<p_unpacr::UNP_B>(static_cast<DataFormat>({unpack_B_dst.cpp_underlying_value}));\n"
 
     is_unary = is_unary_unpacker(compute_node)
     has_reuse_dest = compute_node.reuse_dest != EltwiseBinaryReuseDestType.NONE
     unpack_to_dest = compute_node.unpack_to_dest.value
 
-    desc_a = compute_node.src_a.cpp_desc_name
-    code = f"{desc_a}.reg_data_format = static_cast<std::uint8_t>({unpack_A_dst.cpp_underlying_value});\n"
+    code = ""
     if unpack_to_dest:
         code += f"_llk_math_upk_to_dest_hw_configure_<false, {dest_acc}, false>();\n"
 
     if is_unary and ((dest_acc == "true" and not unpack_to_dest) or has_reuse_dest):
-        code += f"_llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>({desc_a}, {desc_a});\n"
+        code += f"_llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(static_cast<DataFormat>({unpack_A_dst.cpp_underlying_value}), static_cast<DataFormat>({unpack_A_dst.cpp_underlying_value}));\n"
     elif is_unary:
-        code += f"_llk_unpack_configure_unary_<p_unpacr::UNP_A>({desc_a});\n"
+        code += f"_llk_unpack_configure_unary_<p_unpacr::UNP_A>(static_cast<DataFormat>({unpack_A_dst.cpp_underlying_value}));\n"
     else:
-        desc_b = compute_node.src_b.cpp_desc_name
-        code += f"{desc_b}.reg_data_format = static_cast<std::uint8_t>({unpack_B_dst.cpp_underlying_value});\n"
-        code += f"_llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>({desc_a}, {desc_b});\n"
+        code += f"_llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(static_cast<DataFormat>({unpack_A_dst.cpp_underlying_value}), static_cast<DataFormat>({unpack_B_dst.cpp_underlying_value}));\n"
 
     return code
 
@@ -87,10 +81,28 @@ def configure_unpack(
     return _emit_configure(compute_node, dest_acc, new_A_dst, new_B_dst)
 
 
-def dvalid_init(quasar_use_dvalid: bool = False) -> str:
-    if quasar_use_dvalid:
-        return "set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});\n"
-    return ""
+def _upk_to_dest_sem_init(config: "GlobalConfig", operation: "L1Operation") -> str:
+    from fuser.fpu_node import FpuNode
+    from fuser.quasar.unpacker.unpack_a import _uses_upk_to_dest_semaphores
+
+    if not _uses_upk_to_dest_semaphores(config):
+        return ""
+    if not any(
+        isinstance(node, FpuNode) and node.unpack_to_dest.value
+        for node in operation.math.math_nodes
+    ):
+        return ""
+    return "_llk_sync_init_(semaphore::UNPACK_MATH, 1, 0);\n"
+
+
+def dvalid_init(config: "GlobalConfig" = None, operation: "L1Operation" = None) -> str:
+    from helpers.llk_params import PerfRunType
+
+    if config.quasar_use_dvalid:
+        if config.perf_run_type in (None, PerfRunType.L1_TO_L1):
+            return "set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});\n"
+        return "set_up_zero_dest_dvalid_handshake_for_unpack();\n"
+    return _upk_to_dest_sem_init(config, operation)
 
 
 def sync_with_packer(config: "GlobalConfig", operation: "L1Operation") -> str:

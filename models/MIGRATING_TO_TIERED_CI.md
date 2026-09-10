@@ -189,8 +189,7 @@ keys. Common values:
 If your model is currently running in any of:
 
 - `tests/pipeline_reorg/t3k_e2e_tests.yaml`,
-  `t3k_unit_tests.yaml`, `t3k_demo_tests.yaml`, `t3k_perf_tests.yaml`,
-  `t3k_integration_tests.yaml`
+  `t3k_unit_tests.yaml`, `t3k_integration_tests.yaml`
 - `tests/pipeline_reorg/galaxy_*_tests.yaml`
 - `tests/pipeline_reorg/blackhole_demo_tests.yaml`
 - single-card / standalone workflow files
@@ -498,12 +497,46 @@ an outdated target.
 
 Every tiered model is expected to declare:
 
-- **Accuracy** target (top1 / top5 token-matching against a reference).
+- **Accuracy** target (`top1` / `top5`). For LLMs these are token-matching
+  against a reference; for vision classifiers they are classification
+  accuracy from the same run that measures throughput.
 - **Performance** target (`prefill_time_to_token` in seconds,
-  `decode_t/s/u`, `decode_t/s`, with a `decode_tolerance` for slack).
+  `decode_t/s/u`, `decode_t/s` for LLMs; `fps` for vision classifiers),
+  each with a tolerance for slack.
 
 **Tier 3 models are exempt from perf targets** (the perf fields can be
 omitted or set to `{}`), but accuracy targets still apply.
+
+### Tolerances
+
+**Tolerances are fractions in `[0.0, 1.0]`, not multipliers.** 15% slack
+is `0.15`, not `1.15`. Anything outside that range is a hard validation
+error (`tolerance '<name>' outside [0.0, 1.0]`), so a multiplier-style
+value fails the job rather than silently widening the band.
+
+Resolution order for a given metric, first match wins:
+
+1. `<metric>_tolerance` — slashes normalized to underscores, so both
+   `decode_t/s/u_tolerance` and `decode_t_s_u_tolerance` work.
+2. `tolerance` — a generic fallback applying to every metric in the entry.
+3. `DEFAULT_PERF_TOLERANCE` (`0.15`) from
+   [`models/demos/utils/model_targets.py`](./demos/utils/model_targets.py).
+
+Put each tolerance next to the metric it modifies, but note the blocks are
+**not** scopes: the validator flattens `perf` and `accuracy` into one dict
+(with `accuracy` applied last, so it wins on a name clash). A generic
+`tolerance:` therefore applies to perf and accuracy metrics alike no matter
+which block it sits in — prefer per-metric keys when the two need different
+slack. Pick each from how noisy the metric actually is: throughput on
+shared CI hosts drifts far more than correctness does, so accuracy is
+typically held an order of magnitude tighter than perf.
+
+> **Watch the key name.** Any key ending in `_tolerance` is accepted
+> without complaint — the validator skips it instead of rejecting it as an
+> unknown metric — but only the exact names above are ever *read*. A
+> plausible-looking `decode_tolerance` is silently ignored and the metric
+> quietly falls back to the `0.15` default. If a tolerance does not seem
+> to take effect, check the key spells out the full metric name.
 
 ### Entry schema
 
@@ -521,10 +554,11 @@ targets:
               prefill_time_to_token: 0.136   # seconds
               decode_t/s/u: 16.30
               decode_t/s: 521.6              # = batch_size * decode_t/s/u
-              decode_tolerance: 1.15         # 15% slack on decode_t/s/u
+              decode_t/s/u_tolerance: 0.15   # fraction, NOT a multiplier: 0.15 == 15% slack
             accuracy:
               top1: 96.0                     # percent
               top5: 100.0
+              top1_tolerance: 0.01           # 1% slack
             owner_id: U03XXXXXXXX
             team: models
 ```

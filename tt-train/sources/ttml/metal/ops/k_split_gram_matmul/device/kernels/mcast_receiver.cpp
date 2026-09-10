@@ -4,7 +4,10 @@
 //
 // Plain multicast receiver — runs on RISCV_1 (col interior/upper) or RISCV_0 (helper row receiver).
 // Only receives multicast tiles into CB; does not write output.
-// When REDUCE_RECV is defined, also waits for partner's reduce partial per (m_sub, n_sub) block.
+// When REDUCE_RECV is defined, also receives the partner's reduce partial per
+// (m_sub, n_sub) block, using the credit handshake described in mcast_receiver_writer.cpp:
+// reserve the c_5 slot, credit the partner via its reduce_ack_sem, then wait for the data
+// semaphore. Every c_5 transaction is a full M_block × N_block block.
 
 #include <stdint.h>
 
@@ -21,11 +24,12 @@ void kernel_main() {
 #ifdef REDUCE_RECV
     constexpr uint32_t reduce_cb = get_compile_time_arg_val(6);
     const uint32_t reduce_sem_addr = get_semaphore(get_compile_time_arg_val(7));
-    constexpr uint32_t Mpc = get_compile_time_arg_val(8);
-    constexpr uint32_t num_m_blocks = get_compile_time_arg_val(9);
-    constexpr uint32_t M_block = get_compile_time_arg_val(10);
-    constexpr uint32_t num_n_blocks = get_compile_time_arg_val(11);
+    constexpr uint32_t num_m_blocks = get_compile_time_arg_val(8);
+    constexpr uint32_t M_block = get_compile_time_arg_val(9);
+    constexpr uint32_t num_n_blocks = get_compile_time_arg_val(10);
+    const uint32_t reduce_ack_sem_addr = get_semaphore(get_compile_time_arg_val(11));
     constexpr uint32_t N_block = M_block;
+    constexpr uint32_t reduce_block_capacity = M_block * N_block;
 #else
     constexpr uint32_t num_m_blocks = get_compile_time_arg_val(6);
     constexpr uint32_t num_n_blocks = get_compile_time_arg_val(7);
@@ -34,6 +38,10 @@ void kernel_main() {
     uint32_t argidx = 0;
     const uint32_t sender_noc_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t sender_noc_y = get_arg_val<uint32_t>(argidx++);
+#ifdef REDUCE_RECV
+    const uint32_t partner_noc_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t partner_noc_y = get_arg_val<uint32_t>(argidx++);
+#endif
 
     volatile tt_l1_ptr uint32_t* receiver_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_semaphore_addr);
@@ -59,15 +67,13 @@ void kernel_main() {
             {
                 volatile tt_l1_ptr uint32_t* reduce_sem_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_sem_addr);
-                const uint32_t M_start = m_sub * M_block;
-                const uint32_t current_M_block = std::min(M_block, Mpc - M_start);
-                const uint32_t N_start = n_sub * N_block;
-                const uint32_t current_N = std::min(N_block, Mpc - N_start);
-                const uint32_t block_tiles = current_M_block * current_N;
-                cb_reserve_back(reduce_cb, block_tiles);
-                noc_semaphore_wait(reduce_sem_ptr, 1);
+                const uint64_t partner_ack_noc = get_noc_addr(partner_noc_x, partner_noc_y, reduce_ack_sem_addr);
+                cb_reserve_back(reduce_cb, reduce_block_capacity);
+                // c_5 slot is free — credit the partner to send the next block
+                noc_semaphore_inc(partner_ack_noc, 1);
+                noc_semaphore_wait_min(reduce_sem_ptr, 1);
                 noc_semaphore_set(reduce_sem_ptr, 0);
-                cb_push_back(reduce_cb, block_tiles);
+                cb_push_back(reduce_cb, reduce_block_capacity);
             }
 #endif
         }

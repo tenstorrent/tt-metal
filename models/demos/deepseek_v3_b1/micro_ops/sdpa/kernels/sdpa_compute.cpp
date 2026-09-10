@@ -5,43 +5,42 @@
 #include <cstdint>
 
 #include "api/compute/compute_kernel_api.h"
-#include "../../../kernel_includes/tt_metal/include/compute_kernel_api/sdpa.h"
+#include "api/compute/experimental/sdpa.h"
 
 void kernel_main() {
     // CB indices passed as compile-time args
-    constexpr uint32_t cb_q = get_compile_time_arg_val(0);             // q input
-    constexpr uint32_t cb_k = get_compile_time_arg_val(1);             // k input
-    constexpr uint32_t cb_out = get_compile_time_arg_val(2);           // output CB
-    constexpr uint32_t cb_stats = get_compile_time_arg_val(3);         // stats CB
-    constexpr uint32_t chunk_size = get_compile_time_arg_val(4);       // chunk size
-    constexpr uint32_t num_chunks = get_compile_time_arg_val(5);       // number of chunks
-    constexpr uint32_t num_tiles_k = get_compile_time_arg_val(6);      // number of tiles in k
-    constexpr uint32_t num_tiles_v = get_compile_time_arg_val(7);      // number of tiles in v
-    constexpr uint32_t num_tiles_stats = get_compile_time_arg_val(8);  // number of tiles in stats
-    constexpr uint32_t scale_fp32 = get_compile_time_arg_val(9);       // scale factor in FP32 uint32 representation
+    constexpr std::uint32_t cb_q = get_compile_time_arg_val(0);             // q input
+    constexpr std::uint32_t cb_k = get_compile_time_arg_val(1);             // k input
+    constexpr std::uint32_t cb_out = get_compile_time_arg_val(2);           // output CB
+    constexpr std::uint32_t cb_stats = get_compile_time_arg_val(3);         // stats CB
+    constexpr std::uint32_t chunk_size = get_compile_time_arg_val(4);       // chunk size
+    constexpr std::uint32_t num_chunks = get_compile_time_arg_val(5);       // number of chunks
+    constexpr std::uint32_t num_tiles_k = get_compile_time_arg_val(6);      // number of tiles in k
+    constexpr std::uint32_t num_tiles_v = get_compile_time_arg_val(7);      // number of tiles in v
+    constexpr std::uint32_t num_tiles_stats = get_compile_time_arg_val(8);  // number of tiles in stats
+    constexpr std::uint32_t scale_fp32 = get_compile_time_arg_val(9);  // scale factor in FP32 uint32 representation
     static_assert(num_tiles_stats == 1, "num_tiles_stats must be 1");
-    constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
 
     constexpr bool transpose_k = true;
     constexpr bool transpose_v = false;
 
     // 8 rows per face, 2 faces per tile
     // constexpr uint32_t max_dst_offset = 8 * 2 * chunk_size;
-    constexpr uint32_t packed_tile_size = 8 * 2;
-    constexpr uint32_t mm2_dst_offset = 0;
-    constexpr uint32_t mm2_dst_tile_offset = mm2_dst_offset / packed_tile_size;
-    constexpr uint32_t max_dst_offset = mm2_dst_offset + packed_tile_size * num_tiles_v;
-    constexpr uint32_t max_dst_tile_offset = max_dst_offset / packed_tile_size;
+    constexpr std::uint32_t packed_tile_size = 8 * 2;
+    constexpr std::uint32_t mm2_dst_offset = 0;
+    constexpr std::uint32_t mm2_dst_tile_offset = mm2_dst_offset / packed_tile_size;
+    constexpr std::uint32_t max_dst_offset = mm2_dst_offset + packed_tile_size * num_tiles_v;
+    constexpr std::uint32_t max_dst_tile_offset = max_dst_offset / packed_tile_size;
     // Second col in the tile containing max
-    constexpr uint32_t sum_dst_offset = max_dst_offset + 2;
+    constexpr std::uint32_t sum_dst_offset = max_dst_offset + 2;
     // Next tile after max/sum
-    constexpr uint32_t corr_exp_dst_offset = max_dst_offset + packed_tile_size;
-    constexpr uint32_t mm1_dst_offset = corr_exp_dst_offset + packed_tile_size;
-    constexpr uint32_t mm1_dst_tile_offset = mm1_dst_offset / packed_tile_size;
+    constexpr std::uint32_t corr_exp_dst_offset = max_dst_offset + packed_tile_size;
+    constexpr std::uint32_t mm1_dst_offset = corr_exp_dst_offset + packed_tile_size;
+    constexpr std::uint32_t mm1_dst_tile_offset = mm1_dst_offset / packed_tile_size;
 
     constexpr bool exp_approx_mode = false;
 
-    constexpr uint32_t output_granularity = num_tiles_v;
+    constexpr std::uint32_t output_granularity = num_tiles_v;
     static_assert(num_tiles_v % output_granularity == 0, "num_tiles_v must be divisible by output_granularity");
 
     // TODO: Init ahead of time
@@ -60,21 +59,23 @@ void kernel_main() {
     cb_reserve_back(cb_out, num_tiles_v);
     cb_reserve_back(cb_stats, num_tiles_stats);
     tile_regs_acquire();
-    for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
+    for (std::uint32_t chunk = 0; chunk < num_chunks; chunk++) {
         compute_sdpa_chunk<
             chunk_size,
             num_tiles_k,
             num_tiles_v,
             scale_fp32,
-            scale_bf16,
             transpose_k,
             transpose_v,
             packed_tile_size,
             exp_approx_mode,
+            /*qk_signal_granularity=*/1,
+            /*exp_signal_granularity=*/1,
             output_granularity>(
             cb_q,
             cb_k,
-            0,  // cb_mask
+            cb_k,  // cb_v: single-CB MLA layout (separate_v=false reads V from cb_k)
+            0,     // cb_mask
             cb_out,
             mm1_dst_offset,
             mm2_dst_offset,
@@ -87,7 +88,7 @@ void kernel_main() {
     }
 
     // Sem is incremented once per output_granularity tiles since sem can only go up to 15
-    for (uint32_t i = 0; i < num_tiles_v; i += output_granularity) {
+    for (std::uint32_t i = 0; i < num_tiles_v; i += output_granularity) {
         PACK(t6_semaphore_wait_on_zero<p_stall::STALL_PACK>(semaphore::FPU_SFPU));
         pack_block_contiguous(mm2_dst_tile_offset + i, cb_out, output_granularity);
         PACK(t6_semaphore_get<p_stall::PACK>(semaphore::FPU_SFPU));

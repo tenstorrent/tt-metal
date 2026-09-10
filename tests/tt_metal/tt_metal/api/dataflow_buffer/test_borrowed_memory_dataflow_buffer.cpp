@@ -20,13 +20,14 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
-#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/layout/page_config.hpp>
 
 #include "device_fixture.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/program/program_impl.hpp"
 #include "metal2_host_api/test_helpers.hpp"
@@ -85,12 +86,8 @@ struct BorrowedDFBTestConfig {
 //   1. The DFB ring was allocated at the borrowed MeshTensor's L1 address.
 //   2. (Optional) DRAM output == DRAM input.
 void run_borrowed_memory_dfb_program(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    const NodeCoord& node,
-    const BorrowedDFBTestConfig& cfg) {
-
-    IDevice* device = mesh_device->get_devices()[0];
-    const ARCH arch = device->arch();
+    distributed::MeshDevice& mesh_device, const NodeCoord& node, const BorrowedDFBTestConfig& cfg) {
+    const ARCH arch = mesh_device.arch();
     const bool is_all = (cfg.cap == DFBAccessPattern::ALL);
 
     constexpr uint32_t implicit_sync = 0;
@@ -204,14 +201,17 @@ void run_borrowed_memory_dfb_program(
     // -----------------------------------------------------------------------
     // Create program and allocate tensors
     // -----------------------------------------------------------------------
-    Program program = MakeProgramFromSpec(*mesh_device, spec);
+    auto device_range = distributed::MeshCoordinateRange(mesh_device.shape());
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range, MakeProgramFromSpec(mesh_device, spec));
+    Program& program = workload.get_programs().at(device_range);
 
-    MeshTensor src_tensor = MeshTensor::allocate_on_device(*mesh_device, src_spec);
+    MeshTensor src_tensor = MeshTensor::allocate_on_device(mesh_device, src_spec);
     std::optional<MeshTensor> dst_tensor;
     if (!cfg.tensix_consumer) {
-        dst_tensor.emplace(MeshTensor::allocate_on_device(*mesh_device, dst_spec));
+        dst_tensor.emplace(MeshTensor::allocate_on_device(mesh_device, dst_spec));
     }
-    MeshTensor ring_tensor = MeshTensor::allocate_on_device(*mesh_device, ring_spec);
+    MeshTensor ring_tensor = MeshTensor::allocate_on_device(mesh_device, ring_spec);
 
     // -----------------------------------------------------------------------
     // Build and apply run params
@@ -261,15 +261,13 @@ void run_borrowed_memory_dfb_program(
     // -----------------------------------------------------------------------
     std::vector<uint32_t> input(cfg.num_entries * cfg.entry_size / sizeof(uint32_t));
     std::iota(input.begin(), input.end(), 0u);
-    detail::WriteToBuffer(*src_tensor.mesh_buffer().get_reference_buffer(), input);
+    slow_dispatch::WriteToBuffer(src_tensor.mesh_buffer(), input);
 
-    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
 
     // Assert the borrowed tensor's L1 address was used for the DFB ring. For a borrowed DFB this
     // stays PINNED across a size override (no reallocation).
-    EXPECT_EQ(
-        program.impl().dataflow_buffers()[0]->uniform_alloc_addr(),
-        static_cast<uint32_t>(ring_tensor.address()));
+    EXPECT_EQ(program.impl().dataflow_buffers()[0]->uniform_alloc_addr(), static_cast<uint32_t>(ring_tensor.address()));
 
     if (cfg.num_entries_override.has_value()) {
         EXPECT_EQ(program.impl().dataflow_buffers()[0]->config.num_entries, *cfg.num_entries_override)
@@ -278,7 +276,7 @@ void run_borrowed_memory_dfb_program(
 
     if (cfg.verify_data && !cfg.tensix_consumer) {
         std::vector<uint32_t> output;
-        detail::ReadFromBuffer(*dst_tensor->mesh_buffer().get_reference_buffer(), output);
+        slow_dispatch::ReadFromBuffer(dst_tensor->mesh_buffer(), output);
         EXPECT_EQ(input, output);
     }
 }
@@ -286,11 +284,10 @@ void run_borrowed_memory_dfb_program(
 // Verifies that UpdateTensorArgs can redirect a borrowed DFB ring to a different
 // L1 tensor between runs on the same compiled program.
 void run_update_address_test(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     const NodeCoord& node,
     std::optional<uint32_t> reentry_num_entries_override = std::nullopt) {
-    IDevice* device = mesh_device->get_devices()[0];
-    const ARCH arch = device->arch();
+    const ARCH arch = mesh_device.arch();
 
     constexpr uint32_t num_entries  = 16;
     constexpr uint32_t entry_size   = 256;
@@ -369,14 +366,17 @@ void run_update_address_test(
     spec.dataflow_buffers = {dfb_spec};
     spec.work_units       = {MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
-    Program program = MakeProgramFromSpec(*mesh_device, spec);
+    auto device_range = distributed::MeshCoordinateRange(mesh_device.shape());
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range, MakeProgramFromSpec(mesh_device, spec));
+    Program& program = workload.get_programs().at(device_range);
 
-    MeshTensor src_tensor = MeshTensor::allocate_on_device(*mesh_device, src_spec);
-    MeshTensor dst_tensor = MeshTensor::allocate_on_device(*mesh_device, dst_spec);
+    MeshTensor src_tensor = MeshTensor::allocate_on_device(mesh_device, src_spec);
+    MeshTensor dst_tensor = MeshTensor::allocate_on_device(mesh_device, dst_spec);
 
     // Two distinct L1 ring tensors - swapped between runs.
-    MeshTensor ring_tensor_a = MeshTensor::allocate_on_device(*mesh_device, ring_spec);
-    MeshTensor ring_tensor_b = MeshTensor::allocate_on_device(*mesh_device, ring_spec);
+    MeshTensor ring_tensor_a = MeshTensor::allocate_on_device(mesh_device, ring_spec);
+    MeshTensor ring_tensor_b = MeshTensor::allocate_on_device(mesh_device, ring_spec);
     ASSERT_NE(ring_tensor_a.address(), ring_tensor_b.address())
         << "Test pre-condition: two separate L1 allocations must have distinct addresses";
 
@@ -386,7 +386,7 @@ void run_update_address_test(
     // --- Run 1: ring at ring_tensor_a ---
     std::vector<uint32_t> input_a(total_words);
     std::iota(input_a.begin(), input_a.end(), 0u);
-    detail::WriteToBuffer(*src_tensor.mesh_buffer().get_reference_buffer(), input_a);
+    slow_dispatch::WriteToBuffer(src_tensor.mesh_buffer(), input_a);
 
     ProgramRunArgs params1;
     params1.kernel_run_args = {
@@ -405,14 +405,13 @@ void run_update_address_test(
         {experimental::TensorParamName{"dfb_ring_tensor"}, TensorArgument{ring_tensor_a}},
     };
     SetProgramRunArgs(program, params1);
-    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
 
     EXPECT_EQ(
-        program.impl().dataflow_buffers()[0]->uniform_alloc_addr(),
-        static_cast<uint32_t>(ring_tensor_a.address()));
+        program.impl().dataflow_buffers()[0]->uniform_alloc_addr(), static_cast<uint32_t>(ring_tensor_a.address()));
     {
         std::vector<uint32_t> output;
-        detail::ReadFromBuffer(*dst_tensor.mesh_buffer().get_reference_buffer(), output);
+        slow_dispatch::ReadFromBuffer(dst_tensor.mesh_buffer(), output);
         EXPECT_EQ(input_a, output);
     }
 
@@ -422,7 +421,7 @@ void run_update_address_test(
     // UpdateTensorArgs fast-path (address only).
     std::vector<uint32_t> input_b(total_words);
     std::iota(input_b.begin(), input_b.end(), total_words);  // distinct from run 1
-    detail::WriteToBuffer(*src_tensor.mesh_buffer().get_reference_buffer(), input_b);
+    slow_dispatch::WriteToBuffer(src_tensor.mesh_buffer(), input_b);
 
     if (reentry_num_entries_override.has_value()) {
         // Combined re-bind + resize in ONE SetProgramRunArgs: point the borrowed ring at a different
@@ -452,18 +451,17 @@ void run_update_address_test(
                 {experimental::TensorParamName{"dfb_ring_tensor"}, TensorArgument{ring_tensor_b}},
             });
     }
-    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
 
     EXPECT_EQ(
-        program.impl().dataflow_buffers()[0]->uniform_alloc_addr(),
-        static_cast<uint32_t>(ring_tensor_b.address()));
+        program.impl().dataflow_buffers()[0]->uniform_alloc_addr(), static_cast<uint32_t>(ring_tensor_b.address()));
     if (reentry_num_entries_override.has_value()) {
         EXPECT_EQ(program.impl().dataflow_buffers()[0]->config.num_entries, *reentry_num_entries_override)
             << "combined re-bind + resize: num_entries override was not applied";
     }
     {
         std::vector<uint32_t> output;
-        detail::ReadFromBuffer(*dst_tensor.mesh_buffer().get_reference_buffer(), output);
+        slow_dispatch::ReadFromBuffer(dst_tensor.mesh_buffer(), output);
         EXPECT_EQ(input_b, output);
     }
 }
@@ -474,29 +472,32 @@ void run_update_address_test(
 // All-architecture tests (Quasar, Wormhole, Blackhole)
 // =============================================================================
 
-TEST_F(MeshDeviceFixture, BorrowedMemoryDMDM1Sx1S) {
-    run_borrowed_memory_dfb_program(devices_.at(0), NodeCoord{0, 0}, {
-        .num_entries     = 16,
-        .entry_size      = 256,
-        .num_producers   = 1,
-        .num_consumers   = 1,
-        .cap             = DFBAccessPattern::STRIDED,
-        .tensix_consumer = false,
-        .verify_data     = true,
-    });
-}
-
-TEST_F(MeshDeviceFixture, BorrowedMemoryDMDM1Sx1S_UpdateAddress) {
-    run_update_address_test(devices_.at(0), NodeCoord{0, 0});
-}
-
-TEST_F(MeshDeviceFixture, BorrowedMemoryDMDM1Sx1S_UpdateAddressAndSize) {
-    run_update_address_test(devices_.at(0), NodeCoord{0, 0}, /*reentry_num_entries_override=*/8);
-}
-
-TEST_F(MeshDeviceFixture, BorrowedMemoryDMDM1Sx1S_NumEntriesOverride) {
+TEST_F(UnitMeshFixture, BorrowedMemoryDMDM1Sx1S) {
     run_borrowed_memory_dfb_program(
-        devices_.at(0),
+        this->device(),
+        NodeCoord{0, 0},
+        {
+            .num_entries = 16,
+            .entry_size = 256,
+            .num_producers = 1,
+            .num_consumers = 1,
+            .cap = DFBAccessPattern::STRIDED,
+            .tensix_consumer = false,
+            .verify_data = true,
+        });
+}
+
+TEST_F(UnitMeshFixture, BorrowedMemoryDMDM1Sx1S_UpdateAddress) {
+    run_update_address_test(this->device(), NodeCoord{0, 0});
+}
+
+TEST_F(UnitMeshFixture, BorrowedMemoryDMDM1Sx1S_UpdateAddressAndSize) {
+    run_update_address_test(this->device(), NodeCoord{0, 0}, /*reentry_num_entries_override=*/8);
+}
+
+TEST_F(UnitMeshFixture, BorrowedMemoryDMDM1Sx1S_NumEntriesOverride) {
+    run_borrowed_memory_dfb_program(
+        this->device(),
         NodeCoord{0, 0},
         {
             .num_entries = 16,
@@ -510,9 +511,9 @@ TEST_F(MeshDeviceFixture, BorrowedMemoryDMDM1Sx1S_NumEntriesOverride) {
         });
 }
 
-TEST_F(MeshDeviceFixture, BorrowedMemoryDMDM1Sx1S_SizeOverrideExceedsBackingFails) {
+TEST_F(UnitMeshFixture, BorrowedMemoryDMDM1Sx1S_SizeOverrideExceedsBackingFails) {
     run_borrowed_memory_dfb_program(
-        devices_.at(0),
+        this->device(),
         NodeCoord{0, 0},
         {
             .num_entries = 16,
@@ -531,49 +532,58 @@ TEST_F(MeshDeviceFixture, BorrowedMemoryDMDM1Sx1S_SizeOverrideExceedsBackingFail
 // Quasar-only tests (multi-producer / multi-consumer, explicit sync)
 // =============================================================================
 
-TEST_F(MeshDeviceFixture, BorrowedMemoryDMDM2Sx4S) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, BorrowedMemoryDMDM2Sx4S) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Multi-producer DFB requires Quasar";
     }
-    run_borrowed_memory_dfb_program(devices_.at(0), NodeCoord{0, 0}, {
-        .num_entries     = 16,
-        .entry_size      = 256,
-        .num_producers   = 2,
-        .num_consumers   = 4,
-        .cap             = DFBAccessPattern::STRIDED,
-        .tensix_consumer = false,
-        .verify_data     = true,
-    });
+    run_borrowed_memory_dfb_program(
+        this->device(),
+        NodeCoord{0, 0},
+        {
+            .num_entries = 16,
+            .entry_size = 256,
+            .num_producers = 2,
+            .num_consumers = 4,
+            .cap = DFBAccessPattern::STRIDED,
+            .tensix_consumer = false,
+            .verify_data = true,
+        });
 }
 
-TEST_F(MeshDeviceFixture, BorrowedMemoryDMDM4Sx2S) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, BorrowedMemoryDMDM4Sx2S) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Multi-producer DFB requires Quasar";
     }
-    run_borrowed_memory_dfb_program(devices_.at(0), NodeCoord{0, 0}, {
-        .num_entries     = 16,
-        .entry_size      = 256,
-        .num_producers   = 4,
-        .num_consumers   = 2,
-        .cap             = DFBAccessPattern::STRIDED,
-        .tensix_consumer = false,
-        .verify_data     = true,
-    });
+    run_borrowed_memory_dfb_program(
+        this->device(),
+        NodeCoord{0, 0},
+        {
+            .num_entries = 16,
+            .entry_size = 256,
+            .num_producers = 4,
+            .num_consumers = 2,
+            .cap = DFBAccessPattern::STRIDED,
+            .tensix_consumer = false,
+            .verify_data = true,
+        });
 }
 
-TEST_F(MeshDeviceFixture, BorrowedMemoryDMTensix2Sx4B) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, BorrowedMemoryDMTensix2Sx4B) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Multi-producer DFB requires Quasar";
     }
-    run_borrowed_memory_dfb_program(devices_.at(0), NodeCoord{0, 0}, {
-        .num_entries     = 16,
-        .entry_size      = 256,
-        .num_producers   = 2,
-        .num_consumers   = 4,
-        .cap             = DFBAccessPattern::ALL,
-        .tensix_consumer = true,
-        .verify_data     = false,
-    });
+    run_borrowed_memory_dfb_program(
+        this->device(),
+        NodeCoord{0, 0},
+        {
+            .num_entries = 16,
+            .entry_size = 256,
+            .num_producers = 2,
+            .num_consumers = 4,
+            .cap = DFBAccessPattern::ALL,
+            .tensix_consumer = true,
+            .verify_data = false,
+        });
 }
 
 }  // namespace tt::tt_metal

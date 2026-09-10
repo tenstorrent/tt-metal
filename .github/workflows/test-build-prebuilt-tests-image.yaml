@@ -1,0 +1,206 @@
+name: "Test build-prebuilt-tests-image"
+# Exercises the build-prebuilt-tests-image producer end to end: build the packages, bake
+# them into the ci-test image, then run a real gtest on hardware from that image
+# with no artifact download and no install step. A green run here is the whole
+# claim of the change, so this stays as the producer's regression test.
+
+on:
+  pull_request:
+    # ready_for_review is not a default activity type, and the build below skips
+    # drafts. Without it a PR opened as a draft is never tested on the revision
+    # actually submitted for review. Same reason pr-gate.yaml lists it.
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - ".github/workflows/build-prebuilt-tests-image.yaml"
+      - ".github/workflows/test-build-prebuilt-tests-image.yaml"
+      - "dockerfile/Dockerfile.prebuilt-tests-packages"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+# One run per branch, so a superseded run does not keep a hardware leg busy.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: "Build packages"
+    # Forks cannot push the image, and drafts should not spend a hardware leg.
+    if: ${{ github.event.pull_request.head.repo.fork != true && !github.event.pull_request.draft }}
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      platform: "Ubuntu 24.04"
+      toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
+      build-type: "Release"
+      # Only the debs are baked; the tarball would just be an upload nothing reads.
+      publish-artifact: false
+      publish-package: true
+      # The ci-test image this bakes onto already stages SFPI, same as the gate.
+      use-system-sfpi: true
+      checkout-filter: tree:0
+
+  bake:
+    name: "Bake packages into the prebuilt tests image"
+    needs: build
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
+      base-image: ${{ needs.build.outputs.ci-test-docker-image }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-packages
+      build-args: PRODUCT=tt-metalium
+
+  bake-smoke-ttnn:
+    name: "Bake smoke / tt-nn"
+    needs: build
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
+      base-image: ${{ needs.build.outputs.ci-test-docker-image }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-packages
+      build-args: |
+        PRODUCT=tt-nn
+        PROFILE=smoke
+
+  bake-examples-runtime:
+    name: "Bake examples / tt-metalium"
+    needs: build
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
+      base-image: ${{ needs.build.outputs.ci-test-docker-image }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-packages
+      build-args: |
+        PRODUCT=tt-metalium
+        PROFILE=examples
+
+  bake-examples-ttnn:
+    name: "Bake examples / tt-nn"
+    needs: build
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
+      base-image: ${{ needs.build.outputs.ci-test-docker-image }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-packages
+      build-args: |
+        PRODUCT=tt-nn
+        PROFILE=examples
+
+  # Package selection is the thing most likely to break silently: a wrong set
+  # still builds and publishes. Checking the manifest of every combination costs
+  # no hardware, so only the smoke image needs a real test leg below.
+  verify-payloads:
+    name: "Check every image carries the right packages"
+    needs: [bake, bake-smoke-ttnn, bake-examples-runtime, bake-examples-ttnn]
+    if: ${{ needs.bake.outputs.image != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Assert each payload
+        env:
+          SMOKE_METALIUM: ${{ needs.bake.outputs.image }}
+          SMOKE_TTNN: ${{ needs.bake-smoke-ttnn.outputs.image }}
+          EXAMPLES_METALIUM: ${{ needs.bake-examples-runtime.outputs.image }}
+          EXAMPLES_TTNN: ${{ needs.bake-examples-ttnn.outputs.image }}
+        run: |
+          set -euo pipefail
+          check() {
+            local ref="$1"; shift
+            echo "::group::${ref}"
+            local manifest
+            manifest=$(docker run --rm --entrypoint cat "${ref}" /etc/prebuilt-tests-manifest)
+            echo "${manifest}"
+            for pkg in "$@"; do
+              grep -qE "^${pkg} " <<<"${manifest}" \
+                || { echo "::error::${ref} is missing ${pkg}"; exit 1; }
+            done
+            echo "::endgroup::"
+          }
+          check "$SMOKE_METALIUM"    tt-metalium tt-metalium-validation
+          check "$SMOKE_TTNN"        tt-metalium tt-nn tt-nn-validation
+          check "$EXAMPLES_METALIUM" tt-metalium tt-metalium-dev tt-metalium-examples
+          check "$EXAMPLES_TTNN"     tt-metalium tt-metalium-dev tt-nn tt-nn-dev tt-nn-examples
+
+  verify:
+    name: "Run a test from the image"
+    needs: bake
+    # This runs freshly built native code from the PR on a hardware runner, and
+    # only needs to pull an image. Do not let it inherit packages: write.
+    permissions:
+      contents: read
+      packages: read
+    # Empty ref means the producer was skipped (fork); nothing to verify.
+    if: ${{ needs.bake.outputs.image != '' }}
+    runs-on: tt-ubuntu-2204-N150-viommu-stable
+    timeout-minutes: 20
+    container:
+      image: ${{ needs.bake.outputs.image }}
+      # The runner pulls before any step runs, so no login step can help here.
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      env:
+        ARCH_NAME: wormhole_b0
+        LOGURU_LEVEL: INFO
+        LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
+      volumes:
+        - /work
+        # No hugepages on viommu runners, same as smoke.yaml.
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - name: The payload came from the image, not from an artifact
+        run: |
+          set -euo pipefail
+          # Written by the Dockerfile's install layer, so its presence proves the
+          # bake ran. Checking only that the binary exists would also pass if the
+          # base image happened to ship these packages itself.
+          test -s /etc/prebuilt-tests-manifest
+          cat /etc/prebuilt-tests-manifest
+          grep -q '^tt-metalium ' /etc/prebuilt-tests-manifest
+          command -v tt-metalium-validation-smoke
+
+      - name: Run one smoke test against the baked packages
+        timeout-minutes: 10
+        env:
+          GTEST_COLOR: yes
+        run: |
+          /usr/bin/tt-metalium-validation-smoke \
+            --gtest_filter="MeshDispatchFixture.TensixFailOnDuplicateKernelCreationDataflow"
