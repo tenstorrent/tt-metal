@@ -24,17 +24,17 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_lower_clamp_only_(sfpi::vFloat val)
 
     sfpi::vInt z = _float_to_int32_for_exp_21f_(xlog2);
 
-    sfpi::vInt exponential_part = exexp(sfpi::reinterpret<sfpi::vFloat>(z), sfpi::ExponentMode::NoDebias);
-    sfpi::vInt fractional_part  = sfpi::exman(sfpi::reinterpret<sfpi::vFloat>(z));
+    sfpi::vInt exponential_part = exexp(sfpi::as<sfpi::vFloat>(z), sfpi::ExponentMode::Biased);
+    sfpi::vInt fractional_part  = sfpi::exman(sfpi::as<sfpi::vFloat>(z));
 
-    sfpi::vFloat frac = sfpi::int32_to_float(fractional_part, sfpi::RoundMode::NearestEven);
+    sfpi::vFloat frac = sfpi::int32_to_float(fractional_part, sfpi::RoundMode::NearestAway);
     frac              = PolynomialEvaluator::eval(frac, 1.0017248f, 7.839635491371155e-08f, 4.791750143340323e-15f);
 
     sfpi::vFloat y = sfpi::setexp(frac, exponential_part);
 
     if constexpr (!is_fp32_dest_acc_en)
     {
-        y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::NearestEven);
+        y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::NearestAway);
     }
 
     return y;
