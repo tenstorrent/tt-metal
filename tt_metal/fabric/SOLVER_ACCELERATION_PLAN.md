@@ -49,15 +49,16 @@ is tiny and rigid).
 
 ## 3. Decision
 
-**Ship gimsatul driven in-process, wrapped in a best-of-N race, with the distilled pool as an enabler that
-must be fed by a live CaDiCaL searcher (P3) to earn its keep.** Rationale from the *contention-controlled*
-data (§5a — this replaces an earlier overstated read): the pool's benefit is real but **narrow** — a durable
-edge at 112 (completes 3/4 seeds vs cold gimsatul's 1/4), a wash at 144, and thread-budget-dependent at 128
-— because in pure gimsatul-every-step mode the pool barely fills (fixed units only). So the load-bearing
-pieces are: (1) **in-process gimsatul** (removes the subprocess/DIMACS cost — done, P6), (2) the **best-of-N
-race** (the real answer to gimsatul's large run-to-run nondeterminism and the 112–128 variance), and (3)
-**P3** to make the pool actually accumulate learned clauses. The clause-share portfolio is kept only as the
-pool's producer, not a standalone mode; plain CaDiCaL is the race's warm arm + fallback.
+**Ship gimsatul driven in-process (P6), wrapped in a best-of-N race (P2); do NOT ship the distilled pool as
+a default — demote it to an experiment gated behind P3.** Rationale from the *8-seed, contention-controlled*
+data (§5a — this replaces earlier overstated reads): with constant thread usage the pool is **not
+meaningfully better than cold gimsatul** — marginal at 112 (4/8 vs 3/8), a wash at 128, and a **net negative
+at 144** (~3× slower; injection overhead with nothing to prune), because in pure gimsatul-every-step mode it
+barely fills. So the load-bearing wins are: (1) **in-process gimsatul** (removes the subprocess/DIMACS cost —
+done, P6), and (2) the **best-of-N race** (the real answer to gimsatul's large run-to-run nondeterminism —
+144 walls spanned 66–973s). The pool waits on **P3** (a live CaDiCaL searcher feeding it real learned
+clauses) to justify itself, and is off by default until then. The clause-share portfolio is kept only as the
+pool's producer; plain CaDiCaL is the race's warm arm + fallback.
 
 ## 4. Architecture
 
@@ -119,25 +120,32 @@ the oversubscription edge, and gimsatul's threads were preempted by a *fluctuati
 that is partly a harness artifact. A re-run at **16 threads (16 + 35 spin ≈ 51 ≪ 64, guaranteed headroom)**,
 paired A-vs-B on the same seeds {1,5,99,123}, isolates the pool from CPU contention:
 
-| size | **B: gimsatul+pool** (completions / caps) | **A: gimsatul cold** | honest verdict |
-|---:|---|---|---|
-| 112 | **5/5 · 623–1151s ×3, 1@cap** — completes **3/4** | 5/5 ×1, 2–4@cap ×3 — completes **1/4** | **B — real, durable edge** |
-| 128 | 2, 3, 1, 1 @cap | 2, 2, 2, 1 @cap | wash / slight A **at 16t** (B led at 32t → thread-budget-dependent) |
-| 144 | 99–973s (all 1 exhaustive) | 118–711s (all 1) | wash — trade wins by seed on nondeterminism alone |
+Final **8-seed** result (seeds {1,5,7,42,99,123,777,2024}), every cell verified at `load ≈ 47–52` on the
+idle 64-core box (constant thread usage confirmed per-cell):
 
-**Corrected conclusion (this supersedes the earlier framing):**
-- The blanket "pool wins" was **overstated** — inflated by CPU oversubscription + too few seeds against
-  gimsatul's large intrinsic nondeterminism (144 wall swung 99↔973s for the *same* mode).
-- **Where the pool genuinely, repeatably helps: 112** (completes 3/4 vs 1/4, faster head-to-head when both
-  finish) — survives contention-clean multi-seed.
-- **144: no pool value** — single rigid host-set, near-empty pool → pure nondeterminism.
-- **128: thread-budget-dependent** — pool ahead at 32 threads, wash-to-slight-A at 16.
-- Root cause of the modest effect (and the actionable lever): in **pure gimsatul-every-step mode the pool
-  barely fills** (fixed units only, no learned clauses). Its theoretical power requires **P3** — keep a
-  CaDiCaL searcher populating the pool. The current benchmark tests the pool *starved*, and it still edges
-  ahead at 112, which is encouraging for what P3 could unlock.
-- **Methodology note for all future runs:** cap `gimsatul_threads + mpi_ranks ≤ cores` (or fix MPI idle
-  busy-wait), and average ≥4 seeds — single-seed A-vs-B gaps are dominated by nondeterminism + contention.
+| size | **B: gimsatul+pool** | **A: gimsatul cold** | honest verdict |
+|---:|---|---|---|
+| 112 | completes **4/8**; faster when both finish (623 vs 907s; 626 vs 1197s) | completes **3/8** | **marginal B edge** |
+| 128 | **0/8** complete; median 2 sols @cap | **1/8** complete; median 2 sols | **wash** (A took the sole completion at 16t) |
+| 144 | 8/8 · median **~507s** | 8/8 · median **~157s** | **A ~3× faster — pool is a net negative here** |
+
+**Final conclusion (8 seeds, contention-controlled — supersedes all earlier framing):**
+- The original "pool wins broadly" was an artifact of **CPU oversubscription + too few seeds**. With
+  constant thread usage and 8 seeds, **gimsatul+pool is *not* meaningfully better than cold gimsatul.**
+- 112: only a **marginal** edge (4/8 vs 3/8 completions). 128: **wash** at 16 threads (the 32-thread pool
+  lead did not survive a fair core budget). 144: the pool is a **net negative** (~3× slower) — its injected
+  clauses add propagation overhead where a single rigid solution leaves nothing to prune.
+- Root cause: in **pure gimsatul-every-step mode the pool barely fills** (fixed units only, no learned
+  clauses), so it can't help and sometimes hurts. **The pool only earns its keep with P3** — a live CaDiCaL
+  searcher feeding it real learned clauses — which this benchmark does *not* exercise.
+- **Revised ship recommendation:** the load-bearing wins are **in-process gimsatul (P6)** and the
+  **best-of-N race (P2)** — which directly answers gimsatul's large run-to-run nondeterminism (144 walls
+  spanned 66–973s across seeds/modes). The **distilled pool is demoted to an experiment gated behind P3**;
+  do not ship it as a default until P3 shows it accumulates useful clauses. Cold-gimsatul-in-a-race is the
+  safe default.
+- **Methodology (mandatory for future runs):** cap `gimsatul_threads + mpi_ranks ≤ cores` (the 36-rank
+  harness busy-waits ~31 cores regardless of yield flags), log `load@start` per cell, and average ≥8 seeds —
+  single-seed A-vs-B gaps are pure nondeterminism.
 
 D remains not viable alone on min-host (times out on 128 prime + all 128/144 enums) in either measurement.
 
