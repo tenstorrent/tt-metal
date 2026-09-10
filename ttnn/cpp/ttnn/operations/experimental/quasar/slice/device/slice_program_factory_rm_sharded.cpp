@@ -94,13 +94,27 @@ inline std::vector<std::vector<uint32_t>> get_slice_runtime_varargs_rm_sharded(
 
     std::vector<std::vector<uint32_t>> ret_val(num_cores_unpadded);
 
+    // The input's shards have to cover the input's rows, so every row id inside the input maps to a shard
+    // index inside input_cores. Sharded TensorSpec construction rejects a shard height and grid that cannot
+    // cover the tensor, so a failure here means the three values passed in do not describe one tensor.
+    TT_FATAL(
+        static_cast<uint64_t>(shard_height_padded) * input_cores.size() >= num_padded_sticks,
+        "qsr::SliceRmShardedProgramFactory: the input's {} shards of {} rows cannot hold its {} rows.",
+        input_cores.size(),
+        shard_height_padded,
+        num_padded_sticks);
+
     uint32_t start_offset =
         ttnn::operations::experimental::quasar::get_rm_start_offset(input_tensor, output_tensor_start);
     for (uint32_t i = 0, num_sticks_written = 0; i < num_cores_unpadded; i++) {
         uint32_t num_sticks_per_core_unpadded = shard_height_unpadded;
         uint32_t num_sticks_per_core_padded = shard_height_padded;
 
-        // figure out the start read stick id for each core, and the start id for each dim
+        // Reducing num_sticks_written modulo the output dimensions gives this core's first source row,
+        // and the start id for each dimension that the walk below advances from. A core whose slots all lie
+        // past the final output row enters here with num_sticks_written already past the output row count,
+        // so the reduction wraps and its first source row lands back inside the input. Such a core copies
+        // rows into slots that lie outside the output and are never read back.
         id_per_dim[0] = num_sticks_written % num_unpadded_sticks_per_dim[0];
         uint32_t unpadded_written = num_sticks_written / num_unpadded_sticks_per_dim[0];
         uint32_t start_id = id_per_dim[0] + start_offset;
@@ -142,25 +156,18 @@ inline std::vector<std::vector<uint32_t>> get_slice_runtime_varargs_rm_sharded(
             uint32_t shard_id = stick_id / num_sticks_per_core_padded;
             uint32_t stick_id_in_shard = stick_id - (shard_id * num_sticks_per_core_padded);
 
-            // A core's output shard has room for shard_height_unpadded rows. When the core count does not
-            // divide the output row count, the shards together have room for more rows than the output
-            // holds, so the last slots lie past the final output row and have no source row. For those,
-            // stick_ids_per_core can return an input row id at or past num_padded_sticks. Row ids only
-            // rise, so the ids past the input's end are the tail of this core's list, and leaving them out
-            // shifts none of the rows that do have a source.
+            // When the core count does not divide the output row count, the output shards together have
+            // room for more rows than the output holds, so a core that holds real rows can hold surplus
+            // slots past the final output row as well. The walk above reaches those surplus slots by
+            // running off the end of the input, returning ids at or past num_padded_sticks that name rows
+            // the input does not have. Row ids only rise, so the ids at or past num_padded_sticks are the
+            // tail of this core's list and stopping drops exactly them. The num_padded_sticks bound is
+            // what keeps the reads of a core that holds both real rows and surplus slots inside the
+            // input. A core whose slots all lie past the final output row is the separate case described
+            // where start_id is derived above.
             if (stick_id >= num_padded_sticks) {
                 break;
             }
-            // Every input row lies in one of the input's own shards, so the row-id bound above already
-            // puts the shard index inside input_cores. A shard index outside input_cores would mean the
-            // input's shard height, shard grid and row count do not describe the same tensor.
-            TT_FATAL(
-                shard_id < input_cores.size(),
-                "qsr::SliceRmShardedProgramFactory: input row {} falls in shard {}, but the input shard grid "
-                "holds only {} shards.",
-                stick_id,
-                shard_id,
-                input_cores.size());
             shard_stick_map[shard_id].push_back(stick_id_in_shard);
         }
 

@@ -26,7 +26,9 @@ def random_torch_tensor(dtype, shape):
 
 
 def height_sharded_l1_mem_config(shard_grid, num_rows, row_width, orientation=ttnn.ShardOrientation.ROW_MAJOR):
-    """Height-shard num_rows rows of row_width elements over shard_grid, one shard per core in the grid."""
+    """Height-shard num_rows rows of row_width elements over shard_grid. The shard height is num_rows
+    divided by the number of cores, rounded up, so the shards together can have room for more rows than
+    num_rows and the trailing cores of the grid can end up holding none."""
     num_cores = shard_grid.num_cores()
     shard_h = (num_rows + num_cores - 1) // num_cores
     shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, row_width), orientation)
@@ -246,6 +248,43 @@ def test_slice_rm_sharded_shard_grid_order(device, shard_grid, orientation, n, c
         input_shard_orientation=orientation,
         output_shard_orientation=orientation,
     )
+
+
+@pytest.mark.parametrize(
+    "input_shard_grid, output_shard_grid",
+    [
+        (
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))]),
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 0))]),
+        ),
+        (
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))]),
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))]),
+        ),
+        (
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(4, 1)),
+                ]
+            ),
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))]),
+        ),
+    ],
+    ids=["disjoint_cores", "fewer_output_cores", "two_input_rectangles_one_output"],
+)
+@pytest.mark.parametrize("n", [1])
+@pytest.mark.parametrize("c", [128])
+@pytest.mark.parametrize("h", [128])
+@pytest.mark.parametrize("w", [16])
+def test_slice_rm_sharded_input_and_output_grids_differ(device, input_shard_grid, output_shard_grid, n, c, h, w):
+    """Checks that ttnn.slice matches the same slice taken in PyTorch exactly when the input and the
+    output are height sharded over different shard grids. The input's shard grid decides which core
+    holds each source row, and the output's shard grid decides which core each shard's work is sent to,
+    so ttnn.slice reads each core from the shard grid of its own tensor. The three cases make the
+    input's shard grid and the output's shard grid disagree in a different way: disjoint sets of cores,
+    an output on fewer cores than the input, and an input of two rectangles against an output of one."""
+    run_slice_rm_sharded(device, n, c, h, w, input_shard_grid=input_shard_grid, output_shard_grid=output_shard_grid)
 
 
 @pytest.mark.parametrize("input_shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
