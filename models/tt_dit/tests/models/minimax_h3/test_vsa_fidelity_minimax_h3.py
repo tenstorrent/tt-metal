@@ -4,8 +4,12 @@
 
 """How far VSA moves the 4-forward FastH3 output, in PCC and MSE, against the dense reference.
 
-Two comparisons, because one number cannot answer both questions:
+Three comparisons, because no single number answers the question:
 
+- **sparsification only** -- the BASE checkpoint, no adapter, VSA on vs off. The base gate is
+  zero-init, so ``gate_compress_is_zero`` makes the compressed branch a no-op in both arms and the
+  only difference is that the fine stage drops all but the listed key blocks. Nothing here is off
+  its training distribution, so this is the cost of sparsifying the attention and nothing else.
 - **attention only** -- the VSA student's adapter run with VSA on vs off, the off arm through
   ``MiniMaxH3VSAConfig.bypass`` so the gates still load. The adapter weights are held fixed, so the
   delta is the attention path alone. That arm is off-distribution -- a trained
@@ -58,9 +62,12 @@ ASPECT_RATIO = (16, 9)
 DURATION_S = 15.0
 VSA_SPARSITY = 0.9  # the sparsity the VSA students were distilled against (vsa-h3-90pct-tile64)
 
-# arm -> (variant slug, VSA config). `bypass` loads the gates and runs dense anyway, which is what
-# makes the vsa_off arm a same-weights comparison rather than a different model.
+# arm -> (variant slug or None for the base checkpoint, VSA config). `bypass` loads the gates and
+# runs dense anyway, which is what makes the vsa_off arm a same-weights comparison rather than a
+# different model; the base arms need no such lever because the base carries no gate to bind.
 ARMS = {
+    "base_vsa": (None, MiniMaxH3VSAConfig(sparsity=VSA_SPARSITY)),
+    "base_dense": (None, None),
     "vsa": ("vsa-datafree", MiniMaxH3VSAConfig(sparsity=VSA_SPARSITY)),
     "vsa_off": ("vsa-datafree", MiniMaxH3VSAConfig(sparsity=VSA_SPARSITY, bypass=True)),
     "dense": ("dense-datafree", None),
@@ -68,6 +75,7 @@ ARMS = {
 
 # (arm, reference arm, what the pair isolates)
 PAIRS = (
+    ("base_vsa", "base_dense", "sparsification only: base checkpoint, zero gate, VSA vs dense"),
     ("vsa", "vsa_off", "attention only: same adapter, VSA vs dense"),
     ("vsa", "dense", "shipping delta: VSA student vs dense student"),
 )
@@ -141,8 +149,7 @@ def test_denoise_arm(mesh_device, reset_seeds, arm, steps):
     """One arm of the A/B: generate at the shared working point and hand the rows to the report."""
     slug, vsa_config = ARMS[arm]
     vsa_on = vsa_config is not None and not vsa_config.bypass
-    bundle = _bundle()
-    lora_path = _adapter_path(bundle, slug)
+    lora_path = _adapter_path(_bundle(), slug) if slug is not None else None
 
     if not os.environ.get("TT_DIT_CACHE_DIR"):
         logger.warning("TT_DIT_CACHE_DIR is unset; every weight load reads safetensors and the run will drag")
@@ -153,7 +160,7 @@ def test_denoise_arm(mesh_device, reset_seeds, arm, steps):
     pipeline = MiniMaxH3Pipeline.create_pipeline(
         mesh_device=mesh_device,
         weights_dir=weights_dir("transformer", "text_encoder", "vae", "audio_vae"),
-        lora_path=str(lora_path),
+        lora_path=None if lora_path is None else str(lora_path),
         lora_strength=float(os.environ.get("FASTH3_LORA_STRENGTH", 1.0)),
         vsa_config=vsa_config,
     )
@@ -170,21 +177,28 @@ def test_denoise_arm(mesh_device, reset_seeds, arm, steps):
     )
 
     report = pipeline._lora_report
-    assert report is not None and report.bound, f"{arm}: the transformer was built without an adapter bound"
-    if vsa_config is not None:
-        # A gate that fails to land is not a crash: the run completes through the ungated compressed
-        # branch and looks like a success, which would silently make this the wrong measurement.
-        assert len(report.replaced) == pipeline.transformer_config["num_layers"], (
-            f"{arm}: {len(report.replaced)} gates assigned for "
-            f"{pipeline.transformer_config['num_layers']} blocks; VSA is running partly ungated"
-        )
+    if slug is None:
+        assert report is None, f"{arm}: a base arm must run unadapted, but an adapter was bound"
+        # The zero gate is what makes this pair a clean sparsification A/B: with it, the compressed
+        # branch is skipped identically in both arms and only the fine stage's block list differs.
+        ungated = all(block.attn.gate_compress_is_zero for block in pipeline._transformer.transformer_blocks)
+        assert ungated, f"{arm}: the base checkpoint carries a non-zero gate; the pair is not a clean A/B"
+    else:
+        assert report is not None and report.bound, f"{arm}: the transformer was built without an adapter bound"
+        if vsa_config is not None:
+            # A gate that fails to land is not a crash: the run completes through the ungated
+            # compressed branch and looks like a success, silently making this the wrong measurement.
+            assert len(report.replaced) == pipeline.transformer_config["num_layers"], (
+                f"{arm}: {len(report.replaced)} gates assigned for "
+                f"{pipeline.transformer_config['num_layers']} blocks; VSA is running partly ungated"
+            )
 
     video_rows, audio_rows = pipeline.last_video_rows, pipeline.last_audio_rows
     assert video_rows is not None and audio_rows is not None, f"{arm}: the pipeline exposed no denoised rows"
     frames = torch.from_numpy(to_uint8_frames(output))
     payload = {
         "arm": arm,
-        "slug": slug,
+        "slug": slug or "base",
         "vsa": vsa_on,
         "sparsity": VSA_SPARSITY if vsa_on else None,
         "bypass": vsa_config is not None and vsa_config.bypass,
@@ -205,25 +219,28 @@ def test_denoise_arm(mesh_device, reset_seeds, arm, steps):
 
 
 def test_fidelity_report():
-    """PCC and MSE for every pair at every step point present. Host only; run after the arms."""
-    present = [steps for steps in STEP_POINTS if all(_arm_file(arm, steps).exists() for arm in ARMS)]
-    if not present:
-        pytest.skip("no step point has all three arms on disk; run test_denoise_arm first")
-
-    for steps in present:
-        arms = {arm: torch.load(_arm_file(arm, steps), weights_only=False) for arm in ARMS}
+    """PCC and MSE for every pair whose arms are on disk, at every step point. Host only."""
+    reported = False
+    for steps in STEP_POINTS:
+        pairs = [p for p in PAIRS if all(_arm_file(arm, steps).exists() for arm in p[:2])]
+        if not pairs:
+            continue
+        reported = True
         logger.info(f"######## {steps - 1} forward(s)")
-        # VSA tile order pads the packed sequence to its own geometry, so the arms need not agree
-        # here; the denoised rows are the logical rows either way, checked per field below.
-        for arm, payload in arms.items():
+        cache: dict[str, dict] = {}
+        for arm in {arm for pair in pairs for arm in pair[:2]}:
+            cache[arm] = torch.load(_arm_file(arm, steps), weights_only=False)
+            payload = cache[arm]
+            # VSA tile order pads the packed sequence to its own geometry, so the arms need not
+            # agree here; the denoised rows are the logical rows either way, checked per field.
             logger.info(
                 f"{arm}: variant {payload['slug']}, vsa={payload['vsa']}, bypass={payload['bypass']}, "
                 f"padded_len={payload['padded_len']}"
             )
-        for arm, reference, what in PAIRS:
+        for arm, reference, what in pairs:
             logger.info(f"=== {arm} vs {reference} -- {what}")
             for field in FIELDS:
-                a, b = arms[arm][field], arms[reference][field]
+                a, b = cache[arm][field], cache[reference][field]
                 assert a.shape == b.shape, f"{field}: {tuple(a.shape)} != {tuple(b.shape)}"
                 found = _metrics(a, b)
                 logger.info(
@@ -231,12 +248,10 @@ def test_fidelity_report():
                     f"RMSE/\u03c3_ref = {found['relative_rmse'] * 100:6.2f} %   "
                     f"(\u03c3_ref = {found['std_ref']:.4g})"
                 )
-
         # Structural only: the numbers above are recorded, not gated.
-        for arm, payload in arms.items():
+        for arm, payload in cache.items():
             for field in FIELDS:
                 assert torch.isfinite(payload[field].float()).all(), f"{arm}: {field} is not finite"
 
-    missing = [steps for steps in STEP_POINTS if steps not in present]
-    if missing:
-        logger.warning(f"step points {[s - 1 for s in missing]} forward(s) had no complete arm set")
+    if not reported:
+        pytest.skip("no step point has both arms of any pair on disk; run test_denoise_arm first")
