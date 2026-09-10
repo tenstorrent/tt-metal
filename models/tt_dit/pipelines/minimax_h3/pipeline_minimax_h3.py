@@ -424,6 +424,11 @@ class MiniMaxH3Pipeline:
         # measured call agree on it -- every program in the 50-block stack is keyed on this, so a
         # mismatch means the "warm" number was cold and nothing else would say so.
         self.last_padded_len: int | None = None
+        # The last call's denoised rows, before either decoder. Attention-path A/Bs are scored here
+        # rather than on pixels: the VAE is a nonlinear map, so a pixel-space PCC reports the
+        # decoder's sensitivity mixed in with the latent difference under test.
+        self.last_video_rows: torch.Tensor | None = None
+        self.last_audio_rows: torch.Tensor | None = None
 
     # ------------------------------------------------------------------ construction
 
@@ -1855,8 +1860,10 @@ class MiniMaxH3Pipeline:
         transformer = self._prepare_transformer()
         adaln_cache = self._prepare_adaln_cache(num_inference_steps)
         vsa_geometry = None
-        if self.vsa_config is not None:
+        if self.vsa_config is not None and not self.vsa_config.bypass:
             vsa_geometry = self._prepare_vsa(transformer, layout, num_latent_frames, latent_height, latent_width)
+        elif self.vsa_config is not None:
+            logger.warning("VSA bypass: gates are loaded but the dense attention path runs")
         t0 = time.time()
         video_rows, audio_rows = self._denoise(
             transformer,
@@ -1871,6 +1878,7 @@ class MiniMaxH3Pipeline:
             vsa_geometry=vsa_geometry,
         )
         t_denoise = time.time() - t0
+        self.last_video_rows, self.last_audio_rows = video_rows.clone(), audio_rows.clone()
         timings.append(("Denoise", t_denoise))
         logger.info(f"Denoise: {t_denoise:.1f}s — {num_inference_steps - 1} steps")
 

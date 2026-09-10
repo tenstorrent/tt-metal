@@ -70,6 +70,11 @@ class MiniMaxH3VSAConfig:
     # convoy, VSA_STREAM_DESIGN.md 11; measured 19.5 -> 17.7 ms on the real 15 s shard) | "identity" |
     # "canonical" | "zorder" (see MiniMaxH3VSAGeometry.stream_order). Deterministic for a given order.
     stream_order: str = "identity"  # bstride4.16 is -9.5% standalone but needs the leader protocol fix (log)
+    # Build the VSA modules and load their gates, then run the DENSE attention path anyway. An A/B
+    # lever, not a serving knob: a VSA student's `to_gate_compress` has no module to bind to when the
+    # attention is built without a config, so this is the only way to hold the adapter weights fixed
+    # while changing the attention.
+    bypass: bool = False
 
 
 def compute_topk(sparsity: float, num_candidates: int) -> int:
