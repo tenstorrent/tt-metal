@@ -16,8 +16,8 @@ from models.experimental.bevformer.tt.tt_point_sampling_3d_2d import (
     point_sampling_3d_to_2d_ttnn,
 )
 
-from models.experimental.bevformer.config.encoder_config import (
-    get_preset_config,
+from models.experimental.bevformer.config.encoder_config import get_preset_config
+from models.experimental.bevformer.tests.camera_rig import (
     img_metas_for_dataset,
     lidar2img_for_dataset,
 )
