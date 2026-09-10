@@ -300,6 +300,8 @@ output = MLP.forward_prefill(input_tensor, run_config) # or forward_decode(input
 
 ## VLLM Server (TT backend)
 
+See the vLLM installation instructions [here](https://github.com/tenstorrent/vllm/tree/dev). **Important**: these snippets were tested for this fork, while the TT-specific development is now in [vLLM TT Plugin](https://github.com/tenstorrent/vllm-tt-plugin).
+
 To run the DeepSeek-V3 model via vLLM with the TT device backend, configure the environment and launch the server as shown below. Adjust the paths for your workspace.
 
 ```bash
