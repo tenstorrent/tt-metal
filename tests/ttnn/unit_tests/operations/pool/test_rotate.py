@@ -154,6 +154,14 @@ def test_custom_fill_values(device, fill, interpolation_mode, dtype):
     ttnn_output = ttnn.rotate(ttnn_input, angle=angle, fill=fill, interpolation_mode=interpolation_mode)
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
+    # Nearest OOB fill must be tight; whole-image atol=6 hides the FLOAT32 packing bug.
+    # Bilinear interpolates near the edge, so those pixels are not exact fill.
+    if interpolation_mode == "nearest":
+        fill_mask = torch.all(torch_output_nhwc == fill, dim=-1)
+        assert torch.any(fill_mask), "45° rotation should produce out-of-bounds fill pixels"
+        fill_close = torch.allclose(ttnn_output_torch[fill_mask], torch_output_nhwc[fill_mask], atol=1e-5, rtol=0)
+        assert fill_close, f"OOB fill mismatch for fill={fill}, dtype={dtype}"
+
     atol, rtol = get_rotate_tolerances(input_shape, angle, interpolation_mode)
     comparison_passed = torch.allclose(torch_output_nhwc, ttnn_output_torch, atol=atol, rtol=rtol)
     assert comparison_passed, f"Fill value test failed for fill={fill}, mode={interpolation_mode}, dtype={dtype}"
