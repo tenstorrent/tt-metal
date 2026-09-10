@@ -36,7 +36,7 @@ void kernel_main() {
     const uint32_t next_core_noc_x = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
     const uint32_t next_core_noc_y = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
     const uint32_t noc_id = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-    const bool end_of_hop = (bool)get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const bool end_of_hop = static_cast<bool>(get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++)));
     const uint32_t* unpadded_in0_shard_widths_in_tiles = nullptr;
     if (!is_hop_core) {
         unpadded_in0_shard_widths_in_tiles = reinterpret_cast<uint32_t*>(get_arg_addr(static_cast<int>(rt_args_idx)));
