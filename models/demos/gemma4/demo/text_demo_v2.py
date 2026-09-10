@@ -849,12 +849,11 @@ def _spec_bounded_sliding(max_seq_len, mesh_device, model_path, paged_attention=
     so long-context spec decode gets the memory profile the model needs (31B at
     >=128k does not fit unbounded).
     """
-    try:
-        lc = resolve_gemma4_demo_long_context(max_seq_len, mesh_device, model_path, paged_attention=paged_attention)
-        return bool(lc["bounded_sliding"])
-    except Exception as exc:  # policy unavailable -> previous behaviour
-        logger.warning(f"Spec-decode long-context policy unavailable ({exc}); using unbounded sliding KV")
-        return False
+    # No silent fallback: at >=128k the 31B model does NOT fit unbounded, so
+    # continuing after a policy-resolution failure serves a broken memory
+    # profile. Fail fast instead (review finding on tt-metal#56048).
+    lc = resolve_gemma4_demo_long_context(max_seq_len, mesh_device, model_path, paged_attention=paged_attention)
+    return bool(lc["bounded_sliding"])
 
 
 def _run_spec_decode(
@@ -1139,8 +1138,14 @@ def _run_spec_decode_batched(
     temperature = sampling_params.get("temperature", 0)
     if temperature and temperature > 0:
         pytest.skip("batched spec-decode supports greedy only (set temperature=0)")
+    _env_k = os.environ.get("GEMMA4_SPEC_DRAFT_LEN")
+    _auto_requested = draft_len is None and (_env_k is None or _env_k.strip().lower() == "auto")
     if draft_len is None:
-        draft_len = int(os.environ.get("GEMMA4_SPEC_DRAFT_LEN", 3))
+        # "auto" mirrors the solo path: seed the short-prompt default so
+        # anything reading draft_len early is sane, then defer to
+        # auto_draft_len_batched below (previously int("auto") raised here
+        # before the auto-override could run).
+        draft_len = 3 if _auto_requested else int(_env_k)
 
     block_size = page_params["page_block_size"]
     blocks_per_user = math.ceil(max_seq_len / block_size)
@@ -1234,7 +1239,7 @@ def _run_spec_decode_batched(
     from models.demos.gemma4.tt.spec_decode import auto_draft_len_batched
 
     _auto_k = auto_draft_len_batched(max(prompt_lens) if prompt_lens else None, B)
-    if os.environ.get("GEMMA4_SPEC_DRAFT_LEN") is None and draft_len != _auto_k:
+    if _auto_requested and draft_len != _auto_k:
         logger.info(f"Spec-decode batch-aware K: B={B} -> draft_len {draft_len} -> {_auto_k}")
         draft_len = _auto_k
     if draft_len < 1:
