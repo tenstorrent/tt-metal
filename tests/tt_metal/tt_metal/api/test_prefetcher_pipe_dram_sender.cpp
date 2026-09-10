@@ -56,10 +56,10 @@ constexpr uint32_t kEntrySize = 256;  // multiple of L1_ALIGNMENT (16 on Blackho
 constexpr uint32_t kRingDepth = 4;
 
 // A Tensor-prefetcher delivery target: the per-bank pipe groups the factory returns, plus the
-// bank-major flattening the rest of this file drives the senders through. That flattening comes
-// from prefetcher_pipe_sender_receiver_mapping, the same helper the TensorPrefetcherPipes wrapper
-// one layer up uses, so this test cannot disagree with it about pipe order; `pipes` indexes
-// alongside it.
+// bank-major flattening the rest of this file drives the senders through. Both views come from the
+// shared helpers -- flatten_prefetcher_pipe_banks and prefetcher_pipe_sender_receiver_mapping --
+// which is what a consumer one layer up holds a target as, so this test cannot disagree with it
+// about pipe order; `pipes` and `mapping` index alongside each other.
 struct PipeSet {
     std::vector<experimental::TensorPrefetcherBankPipes> banks;
     // One entry per pipe, bank-major: that pipe's sender core and its receivers.
@@ -81,13 +81,8 @@ PipeSet make_pipe_set(
         num_entries,
         BufferType::L1,
         /*support_multi_receiver_shards=*/!dual_senders_per_bank);
-    set.mapping = experimental::prefetcher_pipe_sender_receiver_mapping(set.banks);
-    set.pipes.reserve(set.mapping.size());
-    for (const auto& bank : set.banks) {
-        for (const auto& pipe : bank.pipes) {
-            set.pipes.push_back(pipe);
-        }
-    }
+    set.pipes = experimental::flatten_prefetcher_pipe_banks(set.banks);
+    set.mapping = experimental::prefetcher_pipe_sender_receiver_mapping(set.pipes);
     return set;
 }
 
@@ -349,6 +344,11 @@ TEST_F(PrefetcherPipeDramSenderFixture, DualSendersSplitBankReceivers) {
     ASSERT_EQ(set.mapping.at(0).second.num_cores(), 2u);
     ASSERT_EQ(set.mapping.at(1).second.num_cores(), 2u);
     ASSERT_NE(set.mapping.at(0).first, set.mapping.at(1).first);
+    // Both senders drive this bank, and the leading pipe owns ceil(n/2) of its receivers. A caller
+    // handing the pipes on as a list is held to that split, since it is what the two senders'
+    // bank-local slab bases are derived from.
+    EXPECT_EQ(set.pipes.at(0)->sender_core().x, set.pipes.at(1)->sender_core().x);
+    EXPECT_EQ(set.pipes.at(0)->receiver_cores().num_cores(), (kNumReceivers + 1) / 2);
 
     // Each sender addresses its own receivers as local indices 0..n-1, so the pattern is preloaded
     // per sender with labels restarting at 0.
