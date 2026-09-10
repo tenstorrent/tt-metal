@@ -5,6 +5,7 @@
 """Shared helpers for the Quasar pool tests (mirrors binary_ng_quasar_test_utils.py)."""
 
 import torch
+from loguru import logger
 
 
 def _build_input(pattern, batch, in_h, in_w, channels, seed, mod):
@@ -41,13 +42,13 @@ def _dump_mismatches(got, golden, out_h, out_w, channels, n_dump):
     if n == 0:
         return
     worst = torch.topk(per_stick, n).indices
-    print(f"\nQPOOL: {bad}/{got.shape[0]} sticks mismatch; worst {n}:")
+    logger.info(f"QPOOL: {bad}/{got.shape[0]} sticks mismatch; worst {n}:")
     for s in worst.tolist():
         b, r = divmod(s, out_h * out_w)
         oh, ow = divmod(r, out_w)
         ch = int(diff[s].argmax().item())
         k = min(8, channels)
-        print(
+        logger.info(
             f"  stick {s} (b={b}, oh={oh}, ow={ow}) worst ch={ch} "
             f"exp={golden[s, ch].item():.4f} got={got[s, ch].item():.4f} | "
             f"ch0..{k - 1} exp={[round(v, 3) for v in golden[s, :k].tolist()]} "

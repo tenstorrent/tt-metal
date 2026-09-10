@@ -37,6 +37,7 @@ import pytest
 import torch
 
 import ttnn
+from loguru import logger
 
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.pool_quasar_test_utils import (
     _build_input,
@@ -135,7 +136,7 @@ def _run_case(
         )
         core_desc = f"{gy}x{gx}x{shard.upper()}"
 
-    print(
+    logger.info(
         f"\nQPOOL-MATRIX: {pool} C={channels} in={batch}x{in_h}x{in_w} k={kernel} s={stride} p={padding} "
         f"{core_desc} layout={'TILE' if tiled_input else 'ROW_MAJOR'}"
         + (f" pattern={pattern}" if pattern != PATTERN else "")
@@ -144,7 +145,6 @@ def _run_case(
         + (" excl_pad" if count_include_pad is False else "")
         + (f" {dtype}" if dtype != "bf16" else "")
         + (" out=TILE" if out_layout == "tile" else ""),
-        flush=True,
     )
 
     x = ttnn.from_torch(
@@ -204,7 +204,7 @@ def _run_cases(device, cases):
         sim_skip = kwargs.pop("sim_skip", None)
         if sim_skip and os.environ.get("TT_METAL_SIMULATOR") and not os.environ.get("QPOOL_NO_SIM_SKIP"):
             results[name] = f"PASS (SIM-SKIP: {sim_skip})"
-            print(f"QPOOL-MATRIX: {name}: {results[name]}", flush=True)
+            logger.info(f"QPOOL-MATRIX: {name}: {results[name]}")
             continue
         try:
             results[name] = _run_case(device, **kwargs)
@@ -212,10 +212,10 @@ def _run_cases(device, cases):
             msg = str(e)
             kind = "OOM" if ("Out of Memory" in msg or "beyond max L1" in msg) else "ERROR"
             results[name] = f"{kind}: {msg.splitlines()[0][:140]}"
-        print(f"QPOOL-MATRIX: {name}: {results[name]}", flush=True)
-    print("\nQPOOL-MATRIX SUMMARY:")
+        logger.info(f"QPOOL-MATRIX: {name}: {results[name]}")
+    logger.info("\nQPOOL-MATRIX SUMMARY:")
     for name, _ in cases:
-        print(f"  {name:24s} {results[name]}")
+        logger.info(f"  {name:24s} {results[name]}")
     failures = {n: r for n, r in results.items() if not r.startswith("PASS")}
     assert not failures, f"{len(failures)}/{len(cases)} cases failed: {sorted(failures)}"
 
@@ -232,7 +232,7 @@ def test_qpool_c_sweep(mesh_device):
         skipped = [c for c in c_values if c >= 384]
         c_values = [c for c in c_values if c < 384]
         if skipped:
-            print(f"QPOOL-SWEEP: skipping {skipped} on the sim (craq-sim volume corruption class)", flush=True)
+            logger.info(f"QPOOL-SWEEP: skipping {skipped} on the sim (craq-sim volume corruption class)")
     cases = [(f"C{c}", dict(channels=c, in_h=16 if c < 128 else 8, in_w=8 if c < 128 else 4)) for c in c_values]
     _run_cases(mesh_device, cases)
 
