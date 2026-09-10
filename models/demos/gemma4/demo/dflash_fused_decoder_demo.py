@@ -27,8 +27,12 @@ Run:
     HF_MODEL=google/gemma-4-31B-it GEMMA4_DFLASH_SHARD_ARGMAX=1 pytest \
         models/demos/gemma4/demo/dflash_fused_decoder_demo.py -k 1x8 -s
 
-    # Different prompt / generation length:
-    GEMMA4_DFLASH_PROMPT="..." GEMMA4_DFLASH_MAX_NEW=128 pytest \
+    # Different prompt / generation length / ISL:
+    GEMMA4_DFLASH_PROMPT="..." GEMMA4_DFLASH_MAX_NEW=128 GEMMA4_DFLASH_MAX_SEQ_LEN=8192 pytest \
+        models/demos/gemma4/demo/dflash_fused_decoder_demo.py -k 1x8 -s
+
+    # A prompt too long for a single env var/argv string (Linux MAX_ARG_STRLEN, 128 KiB):
+    GEMMA4_DFLASH_PROMPT_FILE=/path/to/prompt.txt GEMMA4_DFLASH_MAX_SEQ_LEN=34816 pytest \
         models/demos/gemma4/demo/dflash_fused_decoder_demo.py -k 1x8 -s
 """
 
@@ -172,7 +176,17 @@ def test_demo_dflash_fused_decoder(mesh_device, device_params, reset_seeds):
             "multi-row broadcast limitation (see module docstring)"
         )
 
-    prompt = os.environ.get("GEMMA4_DFLASH_PROMPT", DEFAULT_PROMPT)
+    # GEMMA4_DFLASH_PROMPT_FILE takes priority: Linux caps a single env var/argv
+    # string at MAX_ARG_STRLEN (128 KiB) -- a real prompt long enough to exercise
+    # a large ISL (tens of thousands of tokens, well over that many bytes) TT_FATALs
+    # the shell itself ("Argument list too long") before ever reaching Python if
+    # passed via GEMMA4_DFLASH_PROMPT directly.
+    prompt_file = os.environ.get("GEMMA4_DFLASH_PROMPT_FILE")
+    if prompt_file:
+        with open(prompt_file) as f:
+            prompt = f.read()
+    else:
+        prompt = os.environ.get("GEMMA4_DFLASH_PROMPT", DEFAULT_PROMPT)
     max_new = int(os.environ.get("GEMMA4_DFLASH_MAX_NEW", 256))
 
     paged_attention_config = PagedAttentionConfig(

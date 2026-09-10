@@ -272,25 +272,125 @@ the z-lab dFlash drafter snapshot in the HF cache (auto-discovered) or `GEMMA4_D
 `GEMMA4_DFLASH_SHARD_ARGMAX=1` is required — it routes dFlash's own on-device argmax around a
 known TTSampling multi-row broadcast limitation (see the demo's module docstring).
 
+#### Op-level fixes (all default ON)
+
+Three op-level fixes to the target model's `decode_forward` / the drafter's own attention,
+each with a bit-exact hardware verification and an env-var escape hatch back to the
+previous behavior:
+
+| Flag | Default | What it does | Measured effect |
+|---|---|---|---|
+| `GEMMA4_ROPE_EXPAND_GATHER` | `1` | Decode RoPE via expand+gather instead of the previous construction. | 6.1% device-time reduction, one layer's `decode_forward`. |
+| `GEMMA4_KV_FUSED_WRITE` | `1` | `paged_fused_update_cache` (one launch, K+V together) instead of two separate `paged_update_cache` calls in the batch-alias verify write loop. | 10.2% device-time reduction (`PagedUpdateCacheDeviceOperation` 256 calls → `PagedFusedUpdateCacheDeviceOperation` 128 calls, call count halved). |
+| `GEMMA4_DFLASH_PAD_NOISE_CONCAT` | `1` | Pads the drafter's noise-block K/V to a 32-row tile boundary before `ttnn.concat`, avoiding `ttnn.concat`'s untilize→splice→retile fallback (~38.7µs/call) for its native tile-aligned path (~3µs/call). | ~13x faster per concat call, twice per drafter layer. |
+| `GEMMA4_DFLASH_KV_FILL_CACHE` | `0` (opt-in) | Replaces the drafter's KV-cache delta write's O(max_seq_len) slice/concat/copy with a bounded `ttnn.fill_cache`-based write. | 36% reduction at max_seq_len=512, 65% at max_seq_len=4096 — the win *grows* with context length, unlike the others. Off by default pending a wider rollout (see `_dflash_kv_fill_cache_enabled`'s docstring in `tt/dflash/attention.py`). |
+
+Set any of these to `0` to bisect a regression against the pre-fix path.
+
+#### Running it
+
 Baseline (no DFlash), for a same-hardware comparison:
 
 ```bash
-HF_MODEL=google/gemma-4-31B-it \
-  pytest models/demos/gemma4/tests/e2e/test_isl_sweep.py -k "batch-1" -s --timeout 1800
+HF_MODEL=google/gemma-4-31b-it \
+  pytest "models/demos/gemma4/demo/text_demo.py::test_demo" -k "1x8 and prefill_128" -s
 ```
 
 With DFlash (traced):
 
 ```bash
-HF_MODEL=google/gemma-4-31B-it \
+HF_MODEL=google/gemma-4-31b-it \
 MODEL_WEIGHTS_DIR=<path to the target snapshot dir, for the drafter's tied lm_head> \
 GEMMA4_DFLASH_SHARD_ARGMAX=1 \
   pytest models/demos/gemma4/demo/dflash_fused_decoder_demo.py -k 1x8 -s
 ```
 
-Measured on T3K (1×8): baseline 21.96 tok/s vs. DFlash 59.7–62.6 tok/s (~2.7–2.85x), on a
-code-completion prompt (DFlash's drafter is validated against chat/instruct-formatted
-prompts, and code prompts see notably higher draft-acceptance than prose).
+Different prompt / generation length / ISL:
+
+```bash
+GEMMA4_DFLASH_PROMPT="..." GEMMA4_DFLASH_MAX_NEW=128 GEMMA4_DFLASH_MAX_SEQ_LEN=8192 \
+  pytest models/demos/gemma4/demo/dflash_fused_decoder_demo.py -k 1x8 -s
+```
+
+`GEMMA4_DFLASH_PROMPT_FILE=<path>` reads the prompt from a file instead — Linux caps a single
+env var/argv string at `MAX_ARG_STRLEN` (128 KiB), which a real prompt long enough to exercise
+a large ISL will exceed (`GEMMA4_DFLASH_PROMPT` alone TT_FATALs the *shell*, "Argument list too
+long", before Python ever runs).
+
+Measured on T3K (1×8), a short coding-instruction prompt, all three default-on fixes enabled,
+across the ISL buckets DFlash currently supports:
+
+| Real prompt tokens | Baseline (no DFlash) | DFlash + trace | Speedup |
+|---|---|---|---|
+| ~112–128 | 22.9 tok/s/user | 75.8 tok/s (mean 6.6 accepted/iter) | 3.3x |
+| ~217–816 | 22.0 tok/s/user | 66.5–76.5 tok/s (mean 5.7–7.3 accepted/iter) | 3.0–3.5x |
+| ~8,200 | — | 36.6 tok/s (mean 2.9 accepted/iter) | — |
+| ~16,700 | — | 28.5 tok/s (mean 2.3 accepted/iter) | — |
+| ~24,700 | — | 21.7 tok/s (mean 1.7 accepted/iter) | — |
+
+Acceptance rate — not the op-level fixes — dominates DFlash's tok/s at every scale; the fixes
+shave the cost of the (up to) 31B-parameter verify pass itself, but don't change how often a
+draft is accepted. The large-ISL rows above use a synthetic multi-task prompt (needed just to
+reach that many real tokens) that's off-distribution from what the drafter was tuned on (short
+chat/instruct prompts) — expect a real deployment's acceptance rate at a given ISL to differ
+from these numbers; they demonstrate the *mechanism* works correctly at scale, not a
+production acceptance-rate forecast.
+
+#### Supported ISL range, and why it's not the full 262,144 HF declares
+
+Both `google/gemma-4-31b-it` and the z-lab DFlash drafter checkpoint declare
+`max_position_embeddings=262144` in their HF configs — but that's an architectural ceiling
+(what the RoPE math supports), not a memory guarantee for any particular piece of hardware.
+On T3K:
+
+| ISL | Baseline (no DFlash) | DFlash |
+|---|---|---|
+| 128 / 1024 / 4096 | works | works |
+| 32k / 64k / 128k | works (tok/s: 20.2 / 18.6 / 16.8 tok/s/user) | **OOM** (somewhere between ~24.7k and ~33.6k tokens) |
+| 256k | **OOM** (genuine DRAM exhaustion — see below) | not reached |
+
+Two separate, stacking memory constraints, neither of which is a bug:
+
+1. **Even the baseline can't fit 256k on T3K**, despite its own memory-saving policy already
+   engaging (`bounded_sliding_kv_cache=True` was active for the 256k run that OOM'd). Gemma4's
+   layer pattern is "5 sliding + 1 full, ×10 across 60 layers" — the 50 sliding-window layers
+   get capped by the bounded-sliding cache, but the 10 full-attention layers must hold the
+   *entire* history regardless of that setting. At 256k tokens, those 10 layers plus the 31B
+   weights already exhaust T3K's DRAM (observed: each bank at 96.7% full, ~34 MB free, when
+   the next allocation failed).
+2. **DFlash can never use that escape hatch at all.** It requires `bounded_sliding_kv_cache=False`
+   unconditionally for all 60 target layers (its context-tap mechanism needs to read arbitrarily
+   far back into the target's own cache), plus keeps 5 more fully-unbounded persistent caches of
+   its own (the drafter's). That compounding is why DFlash's OOM point is roughly 10x lower than
+   baseline's. Reaching the full 262,144 with DFlash would need the drafter's context mechanism
+   redesigned to tolerate a bounded/sliding cache (or another memory-reduction strategy) — a
+   materially larger project than an op-level fix.
+
+#### Fixed bugs (both real, both verified on real hardware)
+
+- **Growing-context sliding-window mask** (`tt/dflash/attention.py`'s
+  `build_attention_mask_additive_device_dynamic` / `DynamicMaskStaticParts` /
+  `combine_attention_mask_dynamic`; `tt/dflash/generate.py`'s module docstring has the full
+  writeup): the noise block's query position used to be
+  `ctx_len`-relative (the fixed buffer width) instead of `context_valid_len_tt`-relative (the
+  true absolute position) — correct for every previously-tested scale (where the drafter's
+  `sliding_window=2048` comfortably exceeded `ctx_len`), silently wrong once `ctx_len`
+  approaches or exceeds it. Verified against a host-torch reference at scales where the old
+  formula demonstrably diverges (`test_dflash_sliding_window_mask.py`), and confirmed
+  bit-exact-unchanged at every previously-passing scale.
+- **General (non-DFlash) long-context prefill trace bug**: Gemma4's own chunked multi-chunk
+  prefill trace-replay path (`generator.py`'s `use_traced_chunks`, auto-enabled by
+  `generator_trace.py`'s `maybe_auto_enable_chunked_prefill_trace` whenever batch=1, unbounded,
+  ISL > prefill chunk) TT_FATALs with "Input Tensor is not allocated" at large chunk counts
+  (confirmed at seq_len=32768). Its auto-enable is disabled pending a proper fix (root cause:
+  likely a sliding-tail tensor storage-sharing hazard, same class of bug this codebase has hit
+  before in `attention/prefill.py`'s KV-sharing tail machinery — see that function's docstring),
+  falling back to the already-correct eager per-chunk path. `GEMMA4_CHUNKED_PREFILL_TRACE=1`
+  still force-enables the traced path for anyone debugging it.
+- **`MAX_SEQ_LEN` must be a multiple of the target model's prefill chunk size** (2048 on WH
+  T3K in every config seen) when set via `GEMMA4_DFLASH_MAX_SEQ_LEN` — a non-aligned value can
+  make the eager chunk loop's rounded-up last chunk read past that width's RoPE table (hit a
+  real `TT_FATAL` this way: a 9216-row table sliced to row 10240).
 
 ### Single-layer smoke test
 
@@ -340,7 +440,7 @@ Every performance change on this path ships behind a switch, so any one of them 
 | `GEMMA4_BOUNDED_SLIDING`, `GEMMA4_GEN_PREFILL_CHUNK` | policy | Force bounded KV / prefill chunk size. |
 | `GEMMA4_DEMO_SINGLE_CHUNK` | off | **Leave off.** Known "la la / lapped" collapse on long ISL. |
 | `GEMMA4_PREFILL_TRACE_MAX_SEQ` | 4096 | Above this, prefill trace is off and decode stays traced. |
-| `GEMMA4_CHUNKED_PREFILL_TRACE` | auto | Trace multi-chunk prefill on long unbounded demos. |
+| `GEMMA4_CHUNKED_PREFILL_TRACE` | **off** (was auto) | Trace multi-chunk prefill on long unbounded demos. Auto-enable is disabled: the traced path TT_FATALs ("Input Tensor is not allocated") at large chunk counts (confirmed at seq_len=32768) — falls back to the eager per-chunk path until that's fixed. `=1` force-enables it anyway, for debugging. |
 | `GEMMA4_WARMUP_CHUNK_SPANS` | `all` for 31B at batch ≥ 32, else off | Warm the *row spans* chunked batched prefill lands on. Traces are keyed on row span, not user count, so without this every chunk past the first compiles its trace inside the measured prefill. 31B batch-32 auto-enables `all` because at row span ≥ 16 the in-band capture collides with L1 CBs on WH T3K — there the warmup is a correctness prerequisite, not a perf option. Any explicit value (including `0`) suppresses the auto path; the run logs which way it went. `1` warms only the first chunk boundary. |
 | `GEMMA4_TRACE_REGION_SIZE` | 192 MB (WH) / 256 MB (BH) | Must cover the **cumulative** size of every captured trace, not the largest one. |
 
@@ -395,6 +495,11 @@ Every performance change on this path ships behind a switch, so any one of them 
 | Fabric page-size warnings on every AllGather | Fabric's default packet is not a multiple of the CCL page size for this model. Handled by the `GEMMA4_CCL_PACKET_BYTES` default; a warning means the router config did not reach mesh open. |
 | Batched demo hangs above batch 4 | Known AllGather shard-height validation failure; `user_cap=4` exists for this ceiling. |
 | Two runs of identical code produce different completions | Expected — `text_demo_v2` batch-1 is **not** reproducible run to run. Gate on `test_full_model_decode` PCC (reproduces to 16 digits) plus an isolation `torch.equal`, and use the demo only for coherence and ms/token. A single-run text diff both raises false alarms and can pass a real regression. |
+| `TT_THROW: Statically allocated circular buffers ... clash with L1 buffers` during prefill warmup, at the 1024-token prefill bucket | CCL all_gather semaphores fragment the main L1 pool without an `l1_small_size` reservation. Fixed via `l1_small_size=8192` in `text_demo.py`'s and `dflash_fused_decoder_demo.py`'s device params — general Gemma4-31B TP=8 issue, not DFlash-specific (hit identically in the plain baseline). Note the value matters: `0` (no reservation) and `24576`+ (the earlier fix, before `DFlashDrafter`'s own L1 footprint grew) both regress one of the two buckets that need to work simultaneously — `8192` is the smallest value verified to fix both. |
+| `TT_FATAL: Input Tensor is not allocated` right after "Done Capturing Prefill Trace", at large (32k+) ISL, single user, unbounded KV | Gemma4's chunked multi-chunk prefill trace-replay path (auto-enabled whenever batch=1, unbounded, ISL > prefill chunk). Its auto-enable is disabled (`generator_trace.py`'s `maybe_auto_enable_chunked_prefill_trace`) pending a proper fix; falls back to the eager per-chunk path. `GEMMA4_CHUNKED_PREFILL_TRACE=1` re-enables the broken traced path if you're specifically debugging it. |
+| DFlash: `TT_FATAL: ... Ends N must be less than or equal to the shape of the tensor M` slicing a RoPE table, at a custom `GEMMA4_DFLASH_MAX_SEQ_LEN` | `MAX_SEQ_LEN` wasn't a multiple of the prefill chunk size (2048 on WH T3K) — the eager chunk loop's last chunk rounds up to a full chunk width, which can exceed a non-aligned `MAX_SEQ_LEN`'s RoPE table. Use a multiple of 2048. |
+| DFlash: `/bin/bash: Argument list too long` before pytest even starts, with a long `GEMMA4_DFLASH_PROMPT` | Linux caps a single env var/argv string at `MAX_ARG_STRLEN` (128 KiB) — a prompt long enough to exercise a large ISL exceeds it. Use `GEMMA4_DFLASH_PROMPT_FILE=<path>` instead. |
+| DFlash: `TT_FATAL: Out of Memory` at large ISL (tens of thousands of tokens) | Real DRAM exhaustion, not a bug — DFlash requires `bounded_sliding_kv_cache=False` unconditionally (all 60 target layers, plus 5 more unbounded drafter layers), unlike the plain baseline, which can fall back to a bounded/sliding cache at extreme ISL. See the [DFlash section](#dflash-speculative-decoding-31b-t3k) for the full explanation and DFlash's currently-verified ISL ceiling (~24.7k tokens on T3K). |
 
 ## Notes
 
