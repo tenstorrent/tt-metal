@@ -14,6 +14,7 @@
 #include <set>
 #include <string>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
@@ -52,6 +53,16 @@ public:
      * @param mesh_graph The mesh graph to construct the adjacency graph from
      */
     explicit AdjacencyGraph(const AdjacencyMap& adjacency_map);
+
+    /**
+     * @brief Construct adjacency graph by taking ownership of an adjacency map
+     *
+     * Same as the const-reference constructor without deep-copying the map. Use when the caller built
+     * the map solely to hand it over, e.g. a derived graph rebuilt per search node.
+     *
+     * @param adjacency_map The adjacency map to move from
+     */
+    explicit AdjacencyGraph(AdjacencyMap&& adjacency_map);
 
     /**
      * @brief Get all nodes in the graph
@@ -372,6 +383,28 @@ public:
      * @return true on success; false if the result is unsatisfiable or the same-rank partitions conflict
      */
     bool merge(const MappingConstraints& other);
+
+    // TODO: merge is the first of a family of constraint manipulations worth having. The anchored
+    // PGD->PSD solves in physical_grouping_descriptor_matching.cpp already work around the absence of
+    // the rest of it, so each of these has a caller waiting:
+    //
+    //  - snapshot() / restore(): a backtracking search anchors a solve, recurses, then undoes the anchor.
+    //    Doing that today means copying the whole object per node. A trail of the deltas would make
+    //    push/pop cost what actually changed instead of the size of the entire constraint set.
+    //  - remove_forbidden_constraint(): the direct inverse of the add. Without it, "stop forbidding these
+    //    chips" means rebuilding from scratch, which is exactly why the loops above copy rather than undo.
+    //  - project(target_subset): keep only the constraints mentioning a subset of targets, so a per-mesh
+    //    solve can be carved out of a whole-problem object rather than rebuilt for each mesh.
+    //  - remap_targets(): renumber target ids. An anchor (occupied chips, adjacency to a placed region) is
+    //    the same for every candidate grouping, but each grouping numbers its own nodes, so today the
+    //    global half of the anchor is reusable and the target half is not.
+    //  - operator== / hash(): let a caller memoize a solve on its constraint set, so a search that returns
+    //    to an equivalent context reuses the verdict instead of re-encoding and re-solving it.
+    //  - subsumes(): "is this at least as tight as that?". That is what turns a single UNSAT result into a
+    //    reusable nogood instead of a fact about one exact context.
+    //  - cardinality literal accounting: callers find out they exceeded the encoder's literal budget only
+    //    once they are inside the encoder. Exposing the count up front would let them pick a cheaper
+    //    encoding rather than build one that gets rejected.
 
     /**
      * @brief Get valid mappings for a specific target node

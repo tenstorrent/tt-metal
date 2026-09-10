@@ -10,6 +10,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -349,6 +350,26 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(
     const ::tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor);
 
 /**
+ * @brief Throw unless every descriptor about to be merged states the same inter-mesh channel policy
+ *
+ * Temporary restriction, and merging is what forces it. The merged solve applies one policy to every seam,
+ * as does the mapper's single inter_mesh_validation_mode, so a mixed set would quietly have one
+ * descriptor's policy applied to the other's seams -- the same reason MGD validation rejects mixing within
+ * a single descriptor. Rejecting it is the honest option until per-seam policy is supported.
+ *
+ * Descriptors that state no policy abstain rather than conflict, so a single-mesh MGD with no inter-mesh
+ * connection to carry one can still be merged with a descriptor that does state one.
+ *
+ * The multi-MGD build_physical_multi_mesh_adjacency_graph calls this for you, before it does any work, so
+ * a caller handing it a vector of descriptors does not have to remember to. Exposed for callers that
+ * assemble descriptors earlier and would rather fail then, while the paths the user named are still in
+ * hand. Consumers downstream of the merge assume it has passed.
+ * https://github.com/tenstorrent/tt-metal/issues/49960
+ */
+void validate_shared_inter_mesh_policy(
+    const std::vector<const ::tt::tt_fabric::MeshGraphDescriptor*>& mesh_graph_descriptors);
+
+/**
  * @brief Merge logical multi-mesh graphs into one with automatic MeshId renumbering
  *
  * Inputs are processed in order. For each part, all distinct MeshIds in that part (in fabric
@@ -459,7 +480,9 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
 /**
  * @brief Build a physical multi-mesh adjacency graph from physical system descriptor and physical grouping descriptor
  *
- * Creates a PhysicalMultiMeshGraph with:
+ * Places each MGD mesh instance with adjacency-guided DFS
+ * (PhysicalGroupingDescriptor::solve_adjacency_guided_placement), then splits the PSD ASIC graph
+ * into per-mesh adjacency graphs. Creates a PhysicalMultiMeshGraph with:
  * - Mesh-level adjacency graph (AdjacencyGraph<MeshId>) representing inter-mesh connectivity
  * - Map of mesh IDs to their internal adjacency graphs (AdjacencyGraph<AsicID>)
  *
@@ -480,9 +503,10 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
 /**
  * @brief Build a physical multi-mesh adjacency graph using multiple MGDs (one PSD, one PGD)
  *
- * For each MGD, collects valid MESH groupings (same as the single-MGD build), then merges results.
- * With multiple MGD files in one process, ensure PGD/MGD keys remain consistent (each descriptor may need distinct
- * instance names when \c DistributedContext::subcontext_id() uniquifies names per split rank).
+ * For each MGD, collects valid MESH groupings (same as the single-MGD build), then runs one
+ * adjacency-guided DFS over the merged mesh graph. With multiple MGD files in one process, ensure
+ * PGD/MGD keys remain consistent (each descriptor may need distinct instance names when
+ * \c DistributedContext::subcontext_id() uniquifies names per split rank).
  *
  * @param mesh_graph_descriptors  Const reference to the caller's `std::vector` (the container is not copied;
  *                                only a reference is passed). Elements are the loaded MGDs in order.
