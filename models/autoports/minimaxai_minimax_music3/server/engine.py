@@ -88,6 +88,10 @@ class Music3Engine:
 
         dts = {"bfp8": ttnn.bfloat8_b, "bf16": ttnn.bfloat16}
         defaults = self._defaults()
+        for comp in ("dit", "depth"):
+            if defaults.get(f"{comp}_fidelity"):
+                os.environ.setdefault(f"MUSIC3_{comp.upper()}_FIDELITY", defaults[f"{comp}_fidelity"])
+        self.log(f"defaults: {defaults}")
         self.log("Opening mesh device ...")
         self.handle = open_mesh()
         self.log(f"mesh {self.handle.shape} open ({self.handle.num_devices} device)")
@@ -120,6 +124,8 @@ class Music3Engine:
             "llm_dtype": os.environ.get("MUSIC3_LLM_DTYPE", "bfp8"),
             "depth_dtype": os.environ.get("MUSIC3_DEPTH_DTYPE", "bf16"),
             "dit_dtype": os.environ.get("MUSIC3_DIT_DTYPE", "bf16"),
+            "dit_fidelity": os.environ.get("MUSIC3_DIT_FIDELITY"),
+            "depth_fidelity": os.environ.get("MUSIC3_DEPTH_FIDELITY"),
         }
         p = Path(__file__).resolve().parents[1] / "tt" / "config_defaults.json"
         if p.exists():
