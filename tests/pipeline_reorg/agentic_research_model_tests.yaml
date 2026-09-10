@@ -29,6 +29,8 @@
     UV_TORCH_BACKEND=cpu uv pip install --python "$work/eval-env/bin/python" -r "$model_dir/tests/requirements-eval.txt"
     export NLTK_DATA="$work/nltk"
     "$work/eval-env/bin/python" -m nltk.downloader -d "$NLTK_DATA" punkt_tab
+    # Check the complete benchmark import path before starting the model server.
+    "$work/eval-env/bin/python" "$model_dir/tests/benchmark.py" --help >/dev/null
 
     tt_config=$(python - <<'PY'
     import json

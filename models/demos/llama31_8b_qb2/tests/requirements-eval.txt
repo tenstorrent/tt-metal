@@ -1,5 +1,5 @@
-# IFEval uses importlib.metadata in 0.4.7, allowing setuptools without pkg_resources.
-lm-eval[ifeval]==0.4.7
+# IFEval-only evaluation avoids importing unrelated model backends.
+lm-eval[ifeval]==0.4.11
 datasets==3.1.0
 setuptools==83.0.0
 httpx==0.28.1
