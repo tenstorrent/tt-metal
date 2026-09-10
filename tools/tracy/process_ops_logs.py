@@ -8,44 +8,45 @@
 #!/usr/bin/env -S python3 -m pdb
 
 import ast
-import copy
-import csv
-import json
 import os
-from collections import deque
-from datetime import datetime
-from itertools import chain
-from math import isnan, nan
+import csv
 from pathlib import Path
+import json
+import yaml
+from datetime import datetime
+import copy
+from collections import defaultdict, deque
 from typing import Any, Dict, List, Optional, Set, Tuple
+import pandas as pd
+from math import nan, isnan
+from itertools import chain
 
 import click
-import pandas as pd
-import yaml
 from loguru import logger
-from tracy import device_post_proc_config
+
+from tracy.process_device_log import import_log_run_stats
 from tracy.common import (
-    PROFILER_ARTIFACTS_DIR,
-    PROFILER_CPP_DEVICE_PERF_REPORT,
     PROFILER_DEVICE_SIDE_LOG,
+    PROFILER_CPP_DEVICE_PERF_REPORT,
+    PROFILER_ARTIFACTS_DIR,
     PROFILER_OUTPUT_DIR,
     TRACY_FILE_NAME,
-    TRACY_OPS_DATA_FILE_NAME,
     TRACY_OPS_TIMES_FILE_NAME,
+    TRACY_OPS_DATA_FILE_NAME,
     generate_logs_folder,
     generate_reports_folder,
 )
+from tracy import device_post_proc_config
 from tracy.perf_counter_analysis import (
     PERF_COUNTER_CSV_HEADERS,
     RATIO_LABELS,
     compute_device_only_metrics,
     compute_perf_counter_metrics,
     extract_perf_counters,
-    get_device_op_data,
     print_counter_statistics_summary,
     print_efficiency_metrics_summary,
+    get_device_op_data,
 )
-from tracy.process_device_log import import_log_run_stats
 
 yaml.SafeDumper.ignore_aliases = lambda *args: True
 
