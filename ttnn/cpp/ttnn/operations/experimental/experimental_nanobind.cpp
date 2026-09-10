@@ -107,6 +107,7 @@
 #include "ttnn/operations/experimental/deepseek/moe/fused_experts/fused_experts_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/hyperconnection/fused_hyperconnection_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/mix_streams/mix_streams_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek/csa_pool/csa_pool_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/all_gather_for_matmul/all_gather_for_matmul_nanobind.hpp"
 
 namespace ttnn::operations::experimental {
@@ -217,6 +218,7 @@ void py_module(nb::module_& mod) {
     deepseek::moe::detail::bind_fused_experts(mod);
     deepseek::detail::bind_fused_hyperconnection(mod);
     deepseek::detail::bind_mix_streams(mod);
+    deepseek::detail::bind_csa_pool_window(mod);
     deepseek::detail::bind_all_gather_for_matmul(mod);
     topk_large_indices::detail::bind_topk_large_indices(mod);
     topk_router_gpt::detail::bind_topk_router_gpt(mod);

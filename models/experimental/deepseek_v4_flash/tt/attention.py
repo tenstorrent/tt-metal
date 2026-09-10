@@ -3,7 +3,7 @@ from typing import Optional
 import ttnn
 import torch
 
-from .common import DeepSeekV4Module, _HIFI4_SDPA, _MASK_NEG, _profile, _signpost
+from .common import DeepSeekV4Module, _HIFI4_SDPA, _MASK_NEG, _profile, _signpost, width_sharded_l1_config
 from .decode_prefetch import (
     DECODE_LAYOUTS,
     HC_FN_GCB,
@@ -243,11 +243,13 @@ def host_decode_mask(
     max_seq: int,
     device: ttnn.MeshDevice,
 ) -> ttnn.Tensor:
-    """Host-built additive decode mask ``[1, 1, 1, Skv]`` for one absolute position ``pos``.
+    """Host-built additive decode mask ``[1, 1, 1, round_up(Skv, 32)]`` for position ``pos``.
 
     Mirrors the on-device mask in :meth:`DeepSeekV4Model._device_mask`: sliding
     columns mask slots with index ``> pos``; compressor columns mask windows with
-    index ``>= (pos+1)//cr``.
+    index ``>= (pos+1)//cr``. The tile-padding columns must also be negative:
+    SDPA processes K's padded tile width, and zero padding here would add fake
+    zero-valued KV logits to the softmax denominator.
 
     Batch-independent: the users of a step share an absolute position, and SDPA-decode
     broadcasts a mask whose leading dim is 1 over the batch, so one row serves them all.
@@ -262,12 +264,15 @@ def host_decode_mask(
         thr = (pos + 1) // compress_rate
         invalid = (a > pos) | (b >= thr)
         width = sliding_window + n_win_cap
-    mask = torch.zeros(1, 1, 1, width, dtype=torch.float32)
+    padded_width = ((width + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+    if padded_width != width:
+        invalid = torch.nn.functional.pad(invalid, (0, padded_width - width), value=True)
+    mask = torch.zeros(1, 1, 1, padded_width, dtype=torch.float32)
     mask.masked_fill_(invalid.view(1, 1, 1, -1), _MASK_NEG)
     return ttnn.from_torch(mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
 
-def sdpa_causal_ok(sliding_window: int, layer_type: str, pos: int) -> bool:
+def sdpa_causal_ok(sliding_window: int, layer_type: str, compress_rate: int | None, pos: int) -> bool:
     """Can this step's valid set be expressed as a single SDPA-decode ``cur_pos``?
 
     Sliding-only: the dense ring is written in order and wraps at ``W``. Valid slots
@@ -275,7 +280,9 @@ def sdpa_causal_ok(sliding_window: int, layer_type: str, pos: int) -> bool:
     uses absolute ``cur_pos`` plus ``sliding_window_size`` instead, inside
     :meth:`DeepSeekV4Attention.decode_static`.)
 
-    CSA/HCA: the KV axis is ``[sliding 0..W) | compressor 0..n_win_cap)`` and the
+    CSA/HCA: before the first compressor window closes, the valid set is just the
+    contiguous sliding prefix ``[0, pos]``. Afterwards, the KV axis is
+    ``[sliding 0..W) | compressor 0..n_win_cap)`` and the
     valid set (see :func:`host_decode_mask`) is sliding slot ``i <= pos`` plus
     compressor window ``j < (pos+1)//cr``. Once the ring is full every sliding slot
     is valid, so the union is the contiguous prefix ``[0, W + (pos+1)//cr)`` -- which
@@ -284,6 +291,9 @@ def sdpa_causal_ok(sliding_window: int, layer_type: str, pos: int) -> bool:
     steps must keep the additive mask.
     """
     if layer_type == "sliding_attention":
+        return True
+    assert compress_rate is not None
+    if (pos + 1) // compress_rate == 0:
         return True
     return pos + 1 >= sliding_window
 
@@ -301,6 +311,8 @@ def sdpa_causal_cur_pos(sliding_window: int, compress_rate: int | None, pos: int
     """
     if compress_rate is None:
         return min(pos, sliding_window - 1)
+    if (pos + 1) // compress_rate == 0:
+        return pos
     return sliding_window + (pos + 1) // compress_rate - 1
 
 
@@ -320,7 +332,7 @@ def decode_sdpa_bounds(
     (a ``Repeat`` of the ``[1,1,1,Skv]`` additive mask across ``H``). Early CSA/HCA
     steps whose sliding region still has a hole keep the mask.
     """
-    if sdpa_causal_ok(sliding_window, layer_type, pos):
+    if sdpa_causal_ok(sliding_window, layer_type, compress_rate, pos):
         return None, int32_pos_tensor(sdpa_causal_cur_pos(sliding_window, compress_rate, pos), device, batch)
     return host_decode_mask(sliding_window, layer_type, compress_rate, pos, max_seq, device), None
 
@@ -557,6 +569,18 @@ def _update_cache_at(
         )
 
 
+def _rm_width_sharded(tensor: ttnn.Tensor, height: int, width: int) -> ttnn.Tensor:
+    """ROW_MAJOR WIDTH_SHARDED ``[1, 1, height, width]`` in L1 (1-high faces)."""
+    if list(tensor.shape) != [1, 1, height, width]:
+        tensor = ttnn.reshape(tensor, [1, 1, height, width])
+    if tensor.layout != ttnn.ROW_MAJOR_LAYOUT:
+        tensor = ttnn.to_layout(ttnn.to_memory_config(tensor, ttnn.DRAM_MEMORY_CONFIG), ttnn.ROW_MAJOR_LAYOUT)
+    cfg = width_sharded_l1_config(height, width, tensor.device(), tile_height=1)
+    if tensor.memory_config() != cfg:
+        tensor = ttnn.to_memory_config(tensor, cfg)
+    return tensor
+
+
 def _softmax_weighted_sum(kv: ttnn.Tensor, gate: ttnn.Tensor, window_axis: int) -> ttnn.Tensor:
     """``sum_w softmax(gate, axis=w) * kv`` over the window axis.
 
@@ -780,6 +804,8 @@ class DeepSeekV4CSACompressor:
             device,
             cache_file_name=cache.file("compressor.position_bias"),
         )
+        if self.position_bias is not None:
+            self.position_bias = _rm_width_sharded(self.position_bias, self.compress_rate, 2 * self.head_dim)
 
     def prefetch_weights(self):
         """Stage the two projection weights ahead of the :meth:`decode_static` that uses them.
@@ -824,20 +850,17 @@ class DeepSeekV4CSACompressor:
         """
         dh = self.head_dim
         users = win_kv.shape[0]
-        prev_g = ttnn.add(prev_gate, self.position_bias)
-        cur_g = ttnn.add(win_gate, self.position_bias)
+        cr = self.compress_rate
+        feat = 2 * dh
+        rows = users * cr
+        prev_kv_s = _rm_width_sharded(prev_kv, rows, feat)
+        prev_gate_s = _rm_width_sharded(prev_gate, rows, feat)
+        win_kv_s = _rm_width_sharded(win_kv, rows, feat)
+        win_gate_s = _rm_width_sharded(win_gate, rows, feat)
+        compressed = ttnn.experimental.deepseek.csa_pool_window(
+            prev_kv_s, prev_gate_s, win_kv_s, win_gate_s, self.position_bias
+        )
         _profile(self.device)
-
-        ca_prev, _ = ttnn.split(prev_kv, dh, dim=3)
-        cag_prev, _ = ttnn.split(prev_g, dh, dim=3)
-        _, cb_cur = ttnn.split(win_kv, dh, dim=3)
-        _, cbg_cur = ttnn.split(cur_g, dh, dim=3)
-
-        new_kv = ttnn.concat([ca_prev, cb_cur], dim=2)  # [B, 1, 2*cr, Dh]
-        new_gate = ttnn.concat([cag_prev, cbg_cur], dim=2)
-        compressed = _softmax_weighted_sum(new_kv, new_gate, window_axis=2)
-        # Back onto packed rows for the norm + RoPE, which are per-token arithmetic.
-        compressed = ttnn.reshape(compressed, [1, 1, users, dh])
         compressed = self.kv_norm(compressed)
         compressed = _apply_rope(compressed, cos_row, sin_row, self.rot, self.rope_dim)
         return _one_row_per_user(compressed)
@@ -1608,25 +1631,19 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         all-reduces them. Column mode instead gathers all groups, computes N/TP
         hidden features per rank, and gathers the final hidden state.
         """
-        # SDPA-decode hands back its output in Q's layout, so a ROW_MAJOR q leaves ``attn``
-        # untilized and height-sharded on the B user cores. Its shard is the whole of that
-        # user's ``H*Dh`` run, so the group fold is a pure metadata view and o_a can consume the
-        # result straight from L1: the batched factory reads A as 1x32 tiles, and
-        # ``BatchedLinearDecode.forward`` reshards the view to the width-sharded A layout it
-        # needs. What the fold must not stay is HEIGHT_SHARDED -- ``matmul_decode`` reads a
-        # ROW_MAJOR height-sharded A as its replicated-A path, which is full-width only and
-        # rejects a batched weight. A tiled ``attn`` has no such view (the [H, Dh] and [g, K]
-        # tilings differ) and still folds through DRAM.
+        # SDPA-decode returns ROW_MAJOR data height-sharded by user. Do not reinterpret that
+        # shard as group-major and reshard the view: the physical row is H*Dh wide while the
+        # view claims each row is only K wide, so the sharded conversion uses the wrong row
+        # stride. Materialize the logical [H, Dh] tensor in tiled interleaved memory before
+        # folding heads into groups.
+        if attn.layout == ttnn.ROW_MAJOR_LAYOUT:
+            attn = ttnn.to_layout(ttnn.to_memory_config(attn, ttnn.DRAM_MEMORY_CONFIG), ttnn.TILE_LAYOUT)
         _, m, h, dh = attn.shape
         groups = self.local_o_groups
         in_per_group = (h * dh) // groups
         assert not self.sequential_o_a, "decode o_a is batched (M == 1); sequential is not wired"
         assert m == 1, f"batched o_a is decode-only (M == 1), got M={m}"
-        # if attn.layout == ttnn.ROW_MAJOR_LAYOUT:
-        attn.layout == ttnn.ROW_MAJOR_LAYOUT
-        x = ttnn.experimental.view(attn, [1, groups, 1, in_per_group])
-        # else:
-        #     x = ttnn.reshape(ttnn.to_memory_config(attn, ttnn.DRAM_MEMORY_CONFIG), [1, groups, 1, in_per_group])
+        x = ttnn.reshape(attn, [1, groups, 1, in_per_group])
         y = self.o_a_proj(x)  # DRAM-interleaved [1, g, 1, N]
         y = ttnn.reshape(y, [1, 1, 1, groups * self.o_lora_rank])
         if self.tp_size > 1 and not self.row_parallel_o_b:
