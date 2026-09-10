@@ -14,6 +14,10 @@
 
 namespace ttnn::operations::experimental::quasar {
 
+// Tile-native tiled factory holds one full output row in L1 scratch (`out_W * sh * sw * C * out_elem`);
+// if that overflows the per-core budget, composite untilize→RM does the same work with 1-stick scratch.
+bool tile_native_fold_scratch_fits_l1(const Tensor& input_tensor, uint32_t stride_h, uint32_t stride_w);
+
 struct Fold {
     struct operation_attributes_t {
         uint32_t stride_h{};
