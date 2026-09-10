@@ -906,3 +906,36 @@ def test_softmax_large_kernel_mask_padded(device, shape, dim):
         ulp_threshold=15,
         check_ulp=True,
     )
+
+@pytest.mark.parametrize("subblock_w, should_pass", [(4, True), (16, False)])
+def test_softmax_sharded_subblock_w_capacity_guard(device, subblock_w, should_pass):
+    """
+    The sharded compute kernel keeps subblock_w tiles live in Dest simultaneously.
+    Dest holds 8 tiles by default (fp32_dest_acc_en=False).
+    • subblock_w=4:  16 % 4 == 0, 4 ≤ 8 → validation passes.
+    • subblock_w=16: 16 % 16 == 0, 16 > 8 → the new TT_FATAL fires.
+    """
+    shape = (1, 16, 256, 512)
+    input_t = torch.randn(shape, dtype=torch.bfloat16) * 0.1
+    program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        subblock_w=subblock_w,
+        block_h=2,
+        block_w=16,
+    )
+    mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+            [64, 512],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    input_tensor = ttnn.from_torch(input_t, device=device, layout=ttnn.Layout.TILE, memory_config=mem_config)
+    if should_pass:
+        out = ttnn.softmax_in_place(input_tensor, program_config=program_config)
+        assert out is not None
+    else:
+        with pytest.raises(Exception, match="subblock_w"):
+            ttnn.softmax_in_place(input_tensor, program_config=program_config)
