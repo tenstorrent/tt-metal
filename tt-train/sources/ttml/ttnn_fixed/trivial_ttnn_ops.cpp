@@ -10,6 +10,7 @@
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/ops/gumbel_sample/gumbel_sample.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -99,6 +100,16 @@ ttnn::Tensor sample(
     // shares. std::nullopt (the default) seeds no axis, so every device draws the same noise.
     // Callers that need per-device sampling (e.g. GRPO, to avoid duplicate completions across data-
     // parallel ranks) MUST pass their sharded axes explicitly.
+
+    // The fused op stages mask tiles through a circular buffer whose data format is derived from
+    // the logits, so it requires the mask to match the logits dtype. The composite implementation
+    // this replaced accepted any dtype (ttnn::subtract converted on the fly), and the in-tree mask
+    // builders emit BFLOAT16 whatever the logits are -- keep those callers working by converting
+    // here. The typecast is one extra op on a [1 or B, 1, 1, V] tensor per call, so callers on a hot
+    // decode loop should build the mask in the logits dtype and skip it.
+    if (logits_mask.has_value() && logits_mask->dtype() != t.dtype()) {
+        logits_mask = ttnn::typecast(logits_mask.value(), t.dtype());
+    }
     return ttml::metal::gumbel_sample(
         t, temperature, seed, seed_axes.value_or(std::vector<uint32_t>{}), logits_mask, positions);
 }

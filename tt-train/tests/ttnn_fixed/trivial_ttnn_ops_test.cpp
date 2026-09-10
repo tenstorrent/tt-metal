@@ -469,6 +469,66 @@ TEST_F(TrivialTnnFixedTest, TestSamplingBroadcastPaddingMask) {
     }
 }
 
+TEST_F(TrivialTnnFixedTest, TestSamplingConvertsMismatchedMaskDtype) {
+    // Every in-tree mask builder (build_logits_mask in utils.py, _build_logits_mask in
+    // llama_completer.py, _sample_logits_mask in generate.py) emits a BFLOAT16 mask whatever the
+    // logits dtype, and the composite sample() this op replaced accepted that: ttnn::subtract
+    // converted on the fly. The fused op requires matching dtypes, so sample() must typecast a
+    // mismatched mask before dispatch rather than reject it. Cover both directions and both kernel
+    // variants (greedy and sampled): a decoy column that wins unmasked must lose once the mask lands.
+    constexpr uint32_t kRows = 32;
+    constexpr uint32_t kVocab = 64;
+    constexpr uint32_t kDecoy = kVocab - 1;  // the raw argmax; only the mask can dethrone it
+    constexpr uint32_t kBestRealId = 17;
+
+    xt::xarray<float>::shape_type logits_shape = {1, 1, kRows, kVocab};
+    xt::xarray<float> logits = xt::zeros<float>(logits_shape);
+    for (uint32_t r = 0; r < kRows; ++r) {
+        for (uint32_t c = 0; c < kVocab; ++c) {
+            logits(0, 0, r, c) = -1.0F;
+        }
+        logits(0, 0, r, kBestRealId) = -0.5F;
+        logits(0, 0, r, kDecoy) = 0.0F;
+    }
+    xt::xarray<float>::shape_type mask_shape = {1, 1, 1, kVocab};
+    xt::xarray<float> mask = xt::zeros<float>(mask_shape);
+    mask(0, 0, 0, kDecoy) = 1e4F;
+
+    auto* device = &ttml::autograd::ctx().get_device();
+    const std::vector<uint32_t> expected(kRows, kBestRealId);
+
+    auto check = [&](const ttnn::Tensor& tensor_logits, const ttnn::Tensor& tensor_mask, const char* what) {
+        const auto mask_dtype = tensor_mask.dtype();
+        ASSERT_NE(tensor_logits.dtype(), mask_dtype) << what << ": this test needs a dtype mismatch";
+
+        // Greedy: exact, so every row must land on the best real column.
+        auto greedy = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(tensor_logits, 0.0F, 42, tensor_mask));
+        EXPECT_EQ(greedy, expected) << what << ": greedy";
+
+        // Sampled: the noise may pick any real column, but the 1e4 penalty puts the decoy out of reach.
+        auto sampled =
+            ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(tensor_logits, 1.0F, 4242, tensor_mask));
+        ASSERT_EQ(sampled.size(), kRows) << what;
+        for (uint32_t r = 0; r < kRows; ++r) {
+            EXPECT_NE(sampled[r], kDecoy) << what << ": row " << r << " sampled the masked decoy";
+        }
+
+        // The conversion is out of place: the caller's mask is untouched.
+        EXPECT_EQ(tensor_mask.dtype(), mask_dtype) << what << ": mask operand must keep its dtype";
+    };
+
+    // FLOAT32 logits with the BFLOAT16 mask every existing caller builds.
+    check(
+        ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(logits, device),
+        ttml::core::from_xtensor(mask, device),
+        "fp32 logits, bf16 mask");
+    // And the other way round.
+    check(
+        ttml::core::from_xtensor(logits, device),
+        ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(mask, device),
+        "bf16 logits, fp32 mask");
+}
+
 TEST_F(TrivialTnnFixedTest, TestSamplingRaggedShapes) {
     // Every other sampling test uses tile-aligned dimensions (32 or 2048 tokens, 32/64 vocab) and a
     // single batch entry, which leaves three pieces of the op untested:

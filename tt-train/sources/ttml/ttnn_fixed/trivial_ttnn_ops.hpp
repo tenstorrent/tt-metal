@@ -30,6 +30,10 @@ ttnn::Tensor sum_ttnn(const ttnn::Tensor& t, int dim, bool keep_dim);
 // sharded with the SAME mapper as the batch. std::nullopt (default) samples every position and
 // returns [B, 1, tokens, 1]; supplying it returns [B, 1, 1, 1] and reads only the tiles those rows
 // live in.
+// `logits_mask` (optional): [1, 1, 1, V] or [B, 1, 1, V], subtracted from the scores (see
+// metal::gumbel_sample for the semantics). A mask whose dtype differs from the logits is typecast
+// to match before dispatch, so the BFLOAT16 masks existing callers build keep working on FLOAT32
+// logits; build the mask in the logits dtype to avoid that extra op.
 ttnn::Tensor sample(
     const ttnn::Tensor& t,
     float temperature,
