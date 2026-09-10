@@ -182,6 +182,20 @@ SHAPES = [
     (14400, 7168, 1344, 12, 9, True, "plain"),
     (14400, 5376, 7168, 12, 9, True, "ff1_swiglu"),
     (14400, 5376, 1792, 12, 9, True, "plain"),
+    # MiniMax-H3 *visual VAE* decoder: a 36-layer ViT, dim 2048, one 256 px tile per device. Its
+    # forward runs no CCL, so these are plain single-device matmuls on the 11x10 grid
+    # `get_matmul_core_grid` clamps a BH Galaxy to. M = 1824 is fixed by the architecture, not the
+    # request: a work unit is always a (1, 24, 7, 16, 16) latent -> 1792 patches plus a tile-padded
+    # 5-token suffix. Only the four per-layer shapes are listed; `proj_in` / `proj_out` run once per
+    # tile against 36 layers and are ~1% of the unit's matmul work.
+    #
+    # `to_out` and `ff2` reach `dit_minimal_matmul_addcmul_fused` in the model, which the runner has
+    # no arm for -- but the fusion changes only the write-back epilogue, and `get_matmul_config` is
+    # keyed on (M, K, N, grid) alone, so one table entry has to serve both ops regardless.
+    (1824, 2048, 6144, 11, 10, False, "plain"),  # to_qkv, fused Q/K/V in one projection
+    (1824, 2048, 2048, 11, 10, False, "plain"),  # to_out
+    (1824, 2048, 16384, 11, 10, False, "ff1_swiglu"),  # ff1, N doubled by the packed [gate|up] weight
+    (1824, 8192, 2048, 11, 10, False, "plain"),  # ff2
     # MiniMax-H3 fused MM+RS+addcmul (ff2). K = 14336 / tp = 3584 is already per-device. The core grid
     # is the *matmul* grid; the reduce-scatter takes the rows above it, so one entry per candidate grid.
     (4768, 3584, 5376, 12, 7, False, "mmrs"),
