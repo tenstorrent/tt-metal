@@ -55,9 +55,6 @@ void kernel_main() {
     Semaphore sender_sem(sem::in0_sender);
     Semaphore receiver_sem(sem::in0_receiver);
 
-    volatile tt_l1_ptr uint32_t* in0_mcast_receiver_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_sem.get_l1_addr());
-
     for (uint32_t b = 0; b < batch; ++b) {
         if constexpr (get_batch_from_reader) {
             // This means we have unstructured sparsity.
@@ -71,7 +68,9 @@ void kernel_main() {
             // wait on in0 semaphore value to become VALID (set by mcast sender after it multicasts data)
             receiver_sem.wait_min(VALID);
 
-            const auto is_batch_valid = *in0_mcast_receiver_semaphore_addr_ptr == VALID;
+            // Semaphore::get_l1_addr() is private (Quasar JIT build error); read the value through the public
+            // coherent accessor instead. The sender multicasts VALID or IGNORE_BATCH, so the read is load-bearing.
+            const auto is_batch_valid = receiver_sem.value() == VALID;
 
             // We need to pass the value to compute cores regardless of the value of is_batch_valid
 #if !defined(ARCH_QUASAR)

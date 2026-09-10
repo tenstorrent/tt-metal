@@ -292,6 +292,11 @@ void kernel_main() {
 
                 if constexpr (batch > 1 || num_blocks_h_dim > 1 || num_blocks_w_dim > 1) {
                     PACK((pack_reconfig_data_format(mm_partials_cb_id)));
+#ifdef ARCH_QUASAR
+                    // Quasar: the pack destination (BFD) is baked at pack_init; pack_reconfig_data_format is
+                    // gasket-only, so every output switch needs a pack_init (same idiom as conv_bmm_tilize_metal2).
+                    pack_init(mm_partials_cb_id);
+#endif
                 }
 
                 for (uint32_t block = 0; block < num_blocks_inner_dim; block++) {
@@ -308,6 +313,9 @@ void kernel_main() {
                         reconfig_data_format_srca(in1_cb_id, in0_transpose_cb_id);
                         transpose_init(in0_transpose_cb_id);
                         PACK((pack_reconfig_data_format(in0_cb_id)));
+#ifdef ARCH_QUASAR
+                        pack_init(in0_cb_id);
+#endif
 #ifdef PACKER_L1_ACC
                         pack_reconfig_l1_acc(0);
 #endif
@@ -316,12 +324,25 @@ void kernel_main() {
                         matmul_block_init(
                             in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
                         PACK((pack_reconfig_data_format(mm_partials_cb_id)));
+#ifdef ARCH_QUASAR
+                        pack_init(mm_partials_cb_id);
+#endif
                     }
 
                     // [DEBUG mcast2d compute stall] Which input wait does the unpacker (UPMW) block on?
                     // input waits, so the stall is later (partials reserve/wait, pack, or dest).
                     in0_cb.wait_front(in0_block_num_tiles);
                     in1_cb.wait_front(in1_block_num_tiles);
+
+#ifdef ARCH_QUASAR
+                    // Quasar: the final K-block packs into mm_out_cb instead of mm_partials_cb. The pack BFD is
+                    // baked at init (pack_reconfig_data_format alone does not retarget it), so without this the
+                    // final result lands in the partials ring (PCC 0 once cb_out and cb_intermed0 no longer alias).
+                    if (last_out && (mm_out_cb_id != mm_partials_cb_id)) {
+                        PACK((pack_reconfig_data_format(mm_out_cb_id)));
+                        pack_init(mm_out_cb_id);
+                    }
+#endif
 
                     int in0_index_subblock_offset = 0;
                     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
@@ -481,6 +502,10 @@ void kernel_main() {
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
                 PACK((pack_reconfig_data_format(out_cb_id)));
 #endif
+#ifdef ARCH_QUASAR
+                PACK((pack_reconfig_data_format(untilize_mode_out_cb_id)));
+                pack_init(untilize_mode_out_cb_id);
+#endif
 #ifdef PACKER_L1_ACC
                 pack_reconfig_l1_acc(0);
 #endif
@@ -551,6 +576,10 @@ void kernel_main() {
                     reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
                     PACK((pack_reconfig_data_format(out_cb_id)));
+#endif
+#ifdef ARCH_QUASAR
+                    PACK((pack_reconfig_data_format(out_cb_id)));
+                    pack_init(out_cb_id);
 #endif
 #ifdef PACKER_L1_ACC
                     pack_reconfig_l1_acc(0);

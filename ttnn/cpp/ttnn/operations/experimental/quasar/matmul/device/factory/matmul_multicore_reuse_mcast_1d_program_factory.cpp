@@ -5746,8 +5746,14 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
     // Metal 2.0 forbids on DM kernels), so no DataflowBuffer is needed here.
 
     // out / intermed0: separate or aliased (shared memory) — predicate matches the legacy CB-sharing.
+    // Quasar (craq-sim, 2026-09-10): aliasing the intra-tensix matmul-partials DFB (cb_intermed0, PACK->UNPACK
+    // on the same Neo) onto the DM-consumed output DFB (cb_out) trips the simulator's tile-counter check on the
+    // FIRST partials push ("tile counter occupancy=4 exceeds capacity=2 (posted=4 acked=0)", capacity ==
+    // out_block_tiles); the same shape with num_blocks == 1 (no partials traffic) passes. Recipe quasar_porting.md
+    // s7: never alias matmul partials onto the output on Quasar -- give cb_intermed0 its own L1 ring (costs one
+    // out-block of L1 per core). WH/BH keep the aliased (in-place) layout.
     const bool separate_out_interm = do_not_inplace_interm0_out_CB || (interm0_data_format != output_data_format) ||
-                                     (untilize_out && (in1_num_subblocks > 1));
+                                     (untilize_out && (in1_num_subblocks > 1)) || (device->arch() == tt::ARCH::QUASAR);
     {
         m2::DataflowBufferSpec out_dfb{
             .unique_id = RO_OUT_DFB,
@@ -6768,8 +6774,14 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
         dataflow_buffers.push_back(std::move(in1_dfb));
     }
 
+    // Quasar (craq-sim, 2026-09-10): aliasing the intra-tensix matmul-partials DFB (cb_intermed0, PACK->UNPACK
+    // on the same Neo) onto the DM-consumed output DFB (cb_out) trips the simulator's tile-counter check on the
+    // FIRST partials push ("tile counter occupancy=4 exceeds capacity=2 (posted=4 acked=0)", capacity ==
+    // out_block_tiles); the same shape with num_blocks == 1 (no partials traffic) passes. Recipe quasar_porting.md
+    // s7: never alias matmul partials onto the output on Quasar -- give cb_intermed0 its own L1 ring (costs one
+    // out-block of L1 per core). WH/BH keep the aliased (in-place) layout.
     const bool separate_out_interm = do_not_inplace_interm0_out_CB || (interm0_data_format != output_data_format) ||
-                                     (untilize_out && (in1_num_subblocks > 1));
+                                     (untilize_out && (in1_num_subblocks > 1)) || (device->arch() == tt::ARCH::QUASAR);
     {
         m2::DataflowBufferSpec out_dfb{
             .unique_id = RO_OUT_DFB,
