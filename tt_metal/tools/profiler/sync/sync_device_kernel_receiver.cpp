@@ -57,20 +57,46 @@ static constexpr uint32_t HANDSHAKE_ADDR = eth_l1_mem::address_map::ERISC_L1_UNR
 static constexpr uint32_t NUM_CHANNELS = get_compile_time_arg_val(0);
 static constexpr uint32_t NUM_MESSAGES = get_compile_time_arg_val(1);
 static constexpr uint32_t MESSAGE_SIZE = get_compile_time_arg_val(2);
+#if defined(PROFILE_STREAMING)
+// The streaming backend always runs resident; the stop word address arrives as a runtime arg (positional
+// compile args past index 2 do not reach this kernel). Set in kernel_main, read in the message waits.
+static uint32_t g_stop_addr = 0;
+#endif
 
 template <bool MEASURE>
-FORCE_INLINE void run_loop_iteration(
+FORCE_INLINE bool run_loop_iteration(
     std::array<uint32_t, NUM_CHANNELS> const& channel_addrs,
     std::array<volatile eth_channel_sync_t*, NUM_CHANNELS> const& channel_sync_addrs) {
     if constexpr (MEASURE) {
+#if defined(PROFILE_STREAMING)
+        // Resident receiver: break the message wait on the host's stop word (the sender stopped first, so no further
+        // message is coming) and exit without echoing. Non-streaming builds compile this out entirely.
+        volatile tt_l1_ptr uint32_t* stopw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(g_stop_addr);
+        while (channel_sync_addrs[0]->bytes_sent == 0 && *stopw == 0) {
+            invalidate_l1_cache();
+        }
+        if (*stopw != 0) {
+            return false;
+        }
+#else
         while (channel_sync_addrs[0]->bytes_sent == 0) {
             invalidate_l1_cache();
         }
+#endif
 
         for (uint32_t i = 0; i < NUM_CHANNELS; i++) {
+#if defined(PROFILE_STREAMING)
+            while (channel_sync_addrs[i]->bytes_sent == 0 && *stopw == 0) {
+                invalidate_l1_cache();
+            }
+            if (*stopw != 0) {
+                return false;
+            }
+#else
             while (channel_sync_addrs[i]->bytes_sent == 0) {
                 invalidate_l1_cache();
             }
+#endif
 #if !defined(PROFILE_STREAMING)
             DeviceZoneScopedN("SYNC-ZONE-RECEIVER");
 #endif
@@ -113,6 +139,7 @@ FORCE_INLINE void run_loop_iteration(
             }
         }
     }
+    return true;
 }
 
 static constexpr uint32_t MAX_CHANNELS = 8;
@@ -134,10 +161,18 @@ void kernel_main() {
     eth_setup_handshake(HANDSHAKE_ADDR, false);
 
     run_loop_iteration<false>(channel_addrs, channel_sync_addrs);
-    {
-        uint32_t i = 0;
-        for (uint32_t i = 0; i < NUM_MESSAGES; i++) {
-            run_loop_iteration<true>(channel_addrs, channel_sync_addrs);
+#if defined(PROFILE_STREAMING)
+    g_stop_addr = get_arg_val<uint32_t>(0);
+    volatile tt_l1_ptr uint32_t* stopw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(g_stop_addr);
+    while (*stopw == 0) {
+        if (!run_loop_iteration<true>(channel_addrs, channel_sync_addrs)) {
+            break;  // stopped mid-wait
         }
     }
+    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(g_stop_addr + 4) = 1;  // done, host polls this
+#else
+    for (uint32_t i = 0; i < NUM_MESSAGES; i++) {
+        run_loop_iteration<true>(channel_addrs, channel_sync_addrs);
+    }
+#endif
 }

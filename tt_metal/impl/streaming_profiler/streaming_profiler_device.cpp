@@ -74,6 +74,7 @@ static_assert(
 constexpr uint32_t kLinkSyncChannels = 1;
 constexpr uint32_t kLinkSyncSamples = 240;
 constexpr uint32_t kLinkSyncSampleSize = 16;
+constexpr uint32_t kLinkSyncPaceTicks = 50000;  // 1 ms at the eth tile's 50 MHz refclk: the resident 1 kHz cadence
 
 // Bring-up runs several MMIO paths and a hang in any of them reports only "MMIO per-op timeout"; this names
 // the stall site.
@@ -240,7 +241,7 @@ Devices::DeviceCtx::DeviceCtx() = default;
 Devices::DeviceCtx::~DeviceCtx() = default;
 Devices::DeviceCtx::DeviceCtx(DeviceCtx&&) noexcept = default;
 
-
+Devices::Devices() = default;
 Devices::~Devices() = default;
 
 std::vector<CapturedDevice> Devices::boot(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
@@ -287,7 +288,9 @@ std::vector<CapturedDevice> Devices::boot(const std::shared_ptr<distributed::Mes
     if (hal.has_programmable_core_type(HalProgrammableCoreType::ACTIVE_ETH)) {
         try {
             aeth_prof_l1_ = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::PROFILER);
-            aeth_ok_ = aeth_prof_l1_ != 0;
+            aeth_unreserved_ = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+            aeth_unres_size_ = hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+            aeth_ok_ = aeth_prof_l1_ != 0 && aeth_unres_size_ >= 64;
         } catch (const std::exception&) {
             aeth_ok_ = false;
         }
@@ -929,25 +932,41 @@ void Devices::plan_link_sync() {
 // deadlocked instead: the FIFO filled with no reader, the pusher parked in socket_reserve_pages, and the armed sync
 // kernels wedged an eth core (a board reset). A binary that failed to compile is never launched.
 void Devices::run_link_sync() {
+    auto& cluster = MetalContext::instance(context_id_).get_cluster();
+    // The stop/done words sit at the top of the active eth core's UNRESERVED region, clear of the sync kernel's eth
+    // channels (which start at its base) and its profiler ring: stop at -64, done at -60.
+    const uint32_t stop_addr = aeth_unreserved_ + aeth_unres_size_ - 64;
     for (const CaptureContext::Link& L : links_) {
         IDevice* dev_a = devices_[L.dev_a].device;
         IDevice* dev_b = devices_[L.dev_b].device;
+        const CoreCoord virt_a =
+            cluster.get_virtual_coordinate_from_logical_coordinates(L.chip_a, L.eth_a, CoreType::ETH);
+        const CoreCoord virt_b =
+            cluster.get_virtual_coordinate_from_logical_coordinates(L.chip_b, L.eth_b, CoreType::ETH);
+        const uint32_t zero[2] = {0, 0};  // stop + done, clear before launch
+        cluster.write_core(zero, sizeof(zero), tt_cxy_pair(L.chip_a, virt_a), stop_addr);
+        cluster.write_core(zero, sizeof(zero), tt_cxy_pair(L.chip_b, virt_b), stop_addr);
+        // resident = 1, plus the stop address and the 1 kHz pace; the receiver ignores the pace arg.
         const std::vector<uint32_t> ct = {kLinkSyncChannels, kLinkSyncSamples, kLinkSyncSampleSize};
-        Program ps = CreateProgram();
-        Program pr = CreateProgram();
-        CreateKernel(
-            ps,
+        auto ps = std::make_unique<Program>(CreateProgram());
+        auto pr = std::make_unique<Program>(CreateProgram());
+        const auto kid_s = CreateKernel(
+            *ps,
             "tt_metal/tools/profiler/sync/sync_device_kernel_sender.cpp",
             L.eth_a,
             EthernetConfig{.noc = NOC::RISCV_0_default, .compile_args = ct});
-        CreateKernel(
-            pr,
+        const auto kid_r = CreateKernel(
+            *pr,
             "tt_metal/tools/profiler/sync/sync_device_kernel_receiver.cpp",
             L.eth_b,
             EthernetConfig{.noc = NOC::RISCV_0_default, .compile_args = ct});
+        // The stop word and pace ride as RUNTIME args (positional compile args past index 2 do not reach an eth
+        // kernel here). Sender: {stop_addr, pace}; receiver: {stop_addr}.
+        SetRuntimeArgs(*ps, kid_s, L.eth_a, {stop_addr, kLinkSyncPaceTicks});
+        SetRuntimeArgs(*pr, kid_r, L.eth_b, {stop_addr});
         try {
-            detail::CompileProgram(dev_a, ps, /*force_slow_dispatch=*/true);
-            detail::CompileProgram(dev_b, pr, /*force_slow_dispatch=*/true);
+            detail::CompileProgram(dev_a, *ps, /*force_slow_dispatch=*/true);
+            detail::CompileProgram(dev_b, *pr, /*force_slow_dispatch=*/true);
         } catch (const std::exception& ex) {
             log_warning(
                 tt::LogMetal,
@@ -957,25 +976,79 @@ void Devices::run_link_sync() {
                 ex.what());
             continue;
         }
-        detail::LaunchProgram(dev_a, ps, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
-        detail::LaunchProgram(dev_b, pr, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
-        detail::WaitProgramDone(dev_a, ps, /*read_device_profiler_results=*/false);
-        detail::WaitProgramDone(dev_b, pr, /*read_device_profiler_results=*/false);
+        detail::WriteRuntimeArgsToDevice(dev_a, *ps, /*force_slow_dispatch=*/true);
+        detail::WriteRuntimeArgsToDevice(dev_b, *pr, /*force_slow_dispatch=*/true);
+        // Resident: launch and do NOT wait; they run at 1 kHz for the session and stop at quiesce.
+        detail::LaunchProgram(dev_a, *ps, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
+        detail::LaunchProgram(dev_b, *pr, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
+        link_syncs_.push_back(ResidentSync{
+            .ps = std::move(ps),
+            .pr = std::move(pr),
+            .dev_a = dev_a,
+            .dev_b = dev_b,
+            .virt_a = virt_a,
+            .virt_b = virt_b,
+            .chip_a = L.chip_a,
+            .chip_b = L.chip_b,
+            .stop_a = stop_addr,
+            .stop_b = stop_addr});
         log_info(
             tt::LogMetal,
-            "[streaming profiler] link sync {} eth({},{}) <-> {} eth({},{}): {} rounds",
+            "[streaming profiler] link sync {} eth({},{}) -> {} eth({},{}): RESIDENT at 1 kHz",
             L.chip_a,
             L.eth_a.x,
             L.eth_a.y,
             L.chip_b,
             L.eth_b.x,
-            L.eth_b.y,
-            kLinkSyncSamples);
+            L.eth_b.y);
     }
+}
+
+void Devices::stop_link_syncs(tt::Cluster& cluster) {
+    const auto poll_done = [&](uint32_t chip, const CoreCoord& virt, uint32_t done_addr, const char* which) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        for (;;) {
+            uint32_t done = 0;
+            cluster.read_core(&done, sizeof(done), tt_cxy_pair(chip, virt), done_addr);
+            if (done != 0) {
+                return;
+            }
+            if (std::chrono::steady_clock::now() >= deadline) {
+                log_warning(
+                    tt::LogMetal,
+                    "[streaming profiler] resident link sync {} on chip {} did not confirm stop within 2 s",
+                    which,
+                    chip);
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    };
+    const uint32_t one = 1;
+    for (const ResidentSync& r : link_syncs_) {
+        // Sender first: its current round still completes off the live receiver, then it exits between rounds.
+        cluster.write_core(&one, sizeof(one), tt_cxy_pair(r.chip_a, r.virt_a), r.stop_a);
+        poll_done(r.chip_a, r.virt_a, r.stop_a + 4, "sender");
+        uint32_t rounds = 0;
+        cluster.read_core(&rounds, sizeof(rounds), tt_cxy_pair(r.chip_a, r.virt_a), r.stop_a + 8);
+        uint32_t diag[2] = {0, 0};
+        cluster.read_core(diag, sizeof(diag), tt_cxy_pair(r.chip_a, r.virt_a), r.stop_a + 8);
+        log_info(
+            tt::LogMetal,
+            "[streaming profiler] resident link sync chip {} ran {} rounds over {} ms",
+            r.chip_a,
+            diag[0],
+            diag[1]);
+        // Now the receiver's message wait sees no further message; its stop breaks it.
+        cluster.write_core(&one, sizeof(one), tt_cxy_pair(r.chip_b, r.virt_b), r.stop_b);
+        poll_done(r.chip_b, r.virt_b, r.stop_b + 4, "receiver");
+    }
+    link_syncs_.clear();
 }
 
 void Devices::quiesce(const RelayStateFn& on_state) {
     auto& cluster = MetalContext::instance(context_id_).get_cluster();
+    stop_link_syncs(cluster);
     for (uint32_t di = 0; di < devices_.size(); di++) {
         const DeviceCtx& ctx = devices_[di];
         const auto write_stop = [&](uint32_t d, uint32_t word) {

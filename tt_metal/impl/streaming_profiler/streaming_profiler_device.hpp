@@ -50,7 +50,7 @@ using RelayStateFn = std::function<void(uint32_t device_index, uint32_t socket_i
 // own socket. Destruction releases the spool, so it must precede the mesh allocator's.
 class Devices {
 public:
-    Devices() = default;
+    Devices();
     ~Devices();
     Devices(const Devices&) = delete;
     Devices& operator=(const Devices&) = delete;
@@ -68,6 +68,9 @@ public:
     // Launch the planned boot-time eth link syncs. MUST be called after the host receiver's ingest threads
     // are draining the sockets, or the armed sync kernels wedge on a FIFO no reader empties.
     void run_link_sync();
+    // Stop every resident link sync at quiesce: the sender first (its final round still echoes off the live
+    // receiver), then the receiver, each confirmed by its done word.
+    void stop_link_syncs(tt::Cluster& cluster);
     // The eth link syncs launch_link_sync() ran at boot, for the consumers' CaptureContext.
     const std::vector<CaptureContext::Link>& links() const { return links_; }
 
@@ -168,6 +171,18 @@ private:
     uint32_t eth_cfg_ = 0, eth_ctrl_ = 0, eth_stage_ = 0, eth_scratch_ = 0;
     bool aeth_ok_ = false;  // ACTIVE_ETH profiler base resolved: the pusher can drain active eth cores
     uint64_t aeth_prof_l1_ = 0;
+    uint32_t aeth_unreserved_ = 0, aeth_unres_size_ = 0;  // ACTIVE_ETH unreserved region: the resident sync stop word
+    // Resident 1 kHz link sync programs (a sender+receiver pair per link), launched after the receiver is up and
+    // stopped at quiesce. Kept alive here so the Program objects outlive the run, like the relays and pushers.
+    struct ResidentSync {
+        std::unique_ptr<Program> ps, pr;
+        IDevice* dev_a = nullptr;
+        IDevice* dev_b = nullptr;
+        CoreCoord virt_a, virt_b;
+        uint32_t chip_a = 0, chip_b = 0;
+        uint32_t stop_a = 0, stop_b = 0;
+    };
+    std::vector<ResidentSync> link_syncs_;
     // GDDR spool: one replicated mesh buffer with one interleaved page per DRAM bank, so the same window is
     // reserved in every bank of every device. Bytes 0 = direct push.
     std::shared_ptr<distributed::MeshBuffer> spool_buffer_;
