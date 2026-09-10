@@ -167,11 +167,22 @@ static std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard
     // at (0,0)). Shift the activation shard grid onto that origin so the conv runs on the requested cores
     // — e.g. a 2-core sub-grid at logical y=1 on a small (emulated) device. For HEIGHT_SHARDED the output
     // parallel config == the input parallel config, so this offset propagates to the output shard (and
-    // thus the program factory's placement) automatically. No-op when core_grid is unset or starts at (0,0).
-    const CoreCoord core_grid_offset =
-        conv_config.core_grid.has_value() ? conv_config.core_grid.value().bounding_box().start_coord : CoreCoord{0, 0};
-    input_tensor_sharded_memory_config =
-        offset_sharded_mem_config_qsr(input_tensor_sharded_memory_config, core_grid_offset);
+    // thus the program factory's placement) automatically.
+    //
+    // Apply it ONLY on the path where the shared helper actually anchors at (0,0):
+    //   - Skip when override_sharding_config is set: get_conv_padded_input_shape_and_mem_config then builds
+    //     parallel_config directly from conv_config.core_grid (conv2d_utils.cpp), so the returned config is
+    //     ALREADY at the requested origin — offsetting again lands one grid-start too far (or off the device).
+    //   - Skip when !needs_shard_or_reshard: the helper returns the tensor's ACTUAL memory_config, so an
+    //     offset would describe a grid the input tensor is not on (no reshard is performed to move it).
+    // (#51270 item 1 — the offset was previously applied unconditionally, double-shifting both cases.)
+    if (needs_shard_or_reshard && !conv_config.override_sharding_config) {
+        const CoreCoord core_grid_offset = conv_config.core_grid.has_value()
+                                               ? conv_config.core_grid.value().bounding_box().start_coord
+                                               : CoreCoord{0, 0};
+        input_tensor_sharded_memory_config =
+            offset_sharded_mem_config_qsr(input_tensor_sharded_memory_config, core_grid_offset);
+    }
 
     ParallelConfig parallel_config = {
         .grid = input_tensor_sharded_memory_config.shard_spec().value().grid,

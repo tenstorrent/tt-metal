@@ -23,7 +23,7 @@ METALIUM_GUIDE.md @davorchap @tenstorrent/metalium-developers-infra
 .github/instructions/nanobind.instructions.md @tenstorrent/metalium-developers-ttnn-core @nsextonTT
 .github/instructions/python.instructions.md @tenstorrent/metalium-developers-infra
 .github/instructions/tt-stl.instructions.md @ayerofieiev-tt @akerteszTT @riverwuTT
-.github/instructions/tt-train.instructions.md @ayerofieiev-tt @philei-tt @jmalone-tt @kevinwuTT @abustamanteTT @mdragulaTT
+.github/instructions/tt-train.instructions.md @tenstorrent/tt-train @kevinwuTT @abustamanteTT
 .github/instructions/ttnn-core.instructions.md @tenstorrent/metalium-developers-ttnn-core @aliaksei-sala
 .github/instructions/ttnn-ops.instructions.md @tenstorrent/metalium-developers-ops-leads
 .github/instructions/ttnn.instructions.md @tenstorrent/metalium-developers-ttnn-core
@@ -649,18 +649,15 @@ docs/source/ttnn/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongji
 dockerfile/** @tenstorrent/metalium-developers-infra
 
 # tt-train
-# primary owners
-tt-train/** @ayerofieiev-tt @philei-tt @jmalone-tt
-tt-train/**/CMakeLists.txt @ayerofieiev-tt @philei-tt @jmalone-tt @tenstorrent/metalium-developers-infra
-# kernel development
-tt-train/sources/ttml/metal/** @mdragulaTT @vmelnykovTT @dyurshevichTT @zbaczewskiTT
-# ops
-tt-train/sources/ttml/ops/** @mdragulaTT @vmelnykovTT @dyurshevichTT
-# optimizers
-tt-train/sources/ttml/optimizers/** @tenstorrent/tt-train-optimizers
-# tests
-tt-train/tests/** @mdragulaTT @vmelnykovTT @dyurshevichTT @zbaczewskiTT @abustamanteTT
-tt-train/tests/**/CMakeLists.txt @mdragulaTT @vmelnykovTT @dyurshevichTT @zbaczewskiTT @abustamanteTT @tenstorrent/metalium-developers-infra
+# @tenstorrent/tt-train: owners with a broad view of the whole tree; any member can approve any change under tt-train.
+tt-train/** @tenstorrent/tt-train
+# Kernels, ops and tests: the team plus the people developing there day to day.
+tt-train/sources/ttml/metal/** @tenstorrent/tt-train @lgalasTT
+tt-train/sources/ttml/ops/** @tenstorrent/tt-train @lgalasTT
+tt-train/tests/** @tenstorrent/tt-train @lgalasTT @abustamanteTT
+# Last on purpose: CODEOWNERS is last-match-wins, so this must follow the directory rules
+# above for infra to keep co-ownership of every CMakeLists.txt.
+tt-train/**/CMakeLists.txt @tenstorrent/tt-train @lgalasTT @abustamanteTT @tenstorrent/metalium-developers-infra
 
 # .clang-tidy files - Metalium infra team owns all clang-tidy configuration files
 **/.clang-tidy @tenstorrent/metalium-developers-infra
