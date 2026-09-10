@@ -38,6 +38,11 @@ class DeepSeekV4ProConfig:
     # V4 replaces V3/Kimi's sigmoid router affinity with sqrt(softplus(.)).
     SCORE_FUNC = "sqrtsoftplus"
 
+    # Gate-test device-mode scores bar. pcc_scores sorts both sides, so this measures the
+    # selected-weight distribution rather than slot alignment; 384 experts, top-6, sqrtsoftplus floors at
+    # 0.9927 on a 2x4 Blackhole mesh, the tightest reachable shape.
+    GATE_SCORES_PCC_DEVICE = 0.982
+
     # Model architecture
     NUM_LAYERS = 61
     NUM_HASH_LAYERS = 3
