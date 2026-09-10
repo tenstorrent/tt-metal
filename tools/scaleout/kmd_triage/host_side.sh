@@ -1058,6 +1058,10 @@ build_json() {
 		json_add hostside_kernel_log SKIP \
 			"kernel log unreadable$( (( EUID == 0 )) || printf ' (not root)' ); PCIe, IOMMU and machine-check faults not examined" \
 			other
+	elif (( klog_fault_count > 0 )); then
+ 		json_add hostside_kernel_log WARN \
+ 			"$klog_fault_count PCIe/IOMMU/MCE fault line(s) found in $klog_records record(s)" other \
+ 			"$(printf '{"records": %s, "faults": %s}' "$klog_records" "$klog_fault_count")"
 	else
 		json_add hostside_kernel_log PASS \
 			"$klog_records kernel log record(s) examined" other \

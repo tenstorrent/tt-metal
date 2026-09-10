@@ -1800,6 +1800,8 @@ def run_triage(
                 raw = payload.get("checks") if isinstance(payload, dict) else None
                 if isinstance(raw, list):
                     checks = [normalize_triage_check(c, gating) for c in raw if isinstance(c, dict)]
+                    if not checks:
+                        parse_error = "JSON 'checks' list contains no usable checks"
                 else:
                     parse_error = "JSON has no 'checks' list"
             except (OSError, ValueError) as e:

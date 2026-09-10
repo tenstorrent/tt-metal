@@ -233,6 +233,11 @@ Containment, in layers:
   by hand: `-k` walks past silent nodes, `--stop-first` stops at any failure at
   all, `-s X,Y` skips a coordinate, and `-l` prints the whole address plan
   without issuing a single NOC read.
+- `nuke` never signals a bare pid. Each holder is pinned with a `pidfd` — or,
+  on kernels without one, guarded by its `/proc` start time — and re-confirmed
+  against the holder list before the `SIGKILL`. A pid that the kernel reissued
+  between reading the list and signalling cannot cost an unrelated process on
+  the host.
 
 ## Known gaps
 

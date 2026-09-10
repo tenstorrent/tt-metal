@@ -580,16 +580,32 @@ report_tool_outputs() {
 #
 # The severity split is the same judgement evaluate() makes for the text
 # report: what the chip says is a finding, what the tool says about itself is
-# lost coverage.  So a chip that answers nothing (2) or wedges the link
-# (124/137) is a FAIL, while an unexpected exit code is only a WARN -- it
-# tells us the probe broke, not that the hardware is bad.  Exit 3 is the
-# middle case, a chip that answers but whose firmware state is wrong, and is
-# reported as a WARN.
+# lost coverage.  So a chip that wedges the link (124/137) is a FAIL, while
+# an unexpected exit code is only a WARN -- it tells us the probe broke, not
+# that the hardware is bad.
 #
-# json_add_probe NAME IP RC...
+# Exit 2 and 3 are per-subcommand, so KIND says which reading applies:
+#
+#   chip  liveness, info, arc_scratch, telemetry.  2 is a chip that answers
+#         nothing (FAIL); 3 is a chip that answers but whose firmware state
+#         is wrong (WARN).
+#   noc   noc_sanity.  Both codes are the sweep's findings about the grid, so
+#         both are a FAIL: 2 is a node that answered wrongly, 3 is a node
+#         that went silent.  3 is the worse of the two, which is why this
+#         cannot share the chip reading -- that would file NOC silence as a
+#         firmware warning and let it pass the health check.
+#
+# json_add_probe NAME IP KIND RC...
 json_add_probe() {
-	local name=$1 ip=$2
-	shift 2
+	local name=$1 ip=$2 kind=$3
+	shift 3
+
+	case $kind in
+	chip|noc) ;;
+	*)
+		echo "$0: json_add_probe: unknown kind '$kind'" >&2
+		return 1 ;;
+	esac
 	local rcs=("$@")
 	local i rc ok=0 skipped=0 status details
 	local -a fail=() warn=()
@@ -599,9 +615,19 @@ json_add_probe() {
 		case $rc in
 		-)       (( skipped++ )) ;;
 		0)       (( ok++ )) ;;
-		2)       fail+=("${d_bdf[$i]} (not answering)") ;;
 		124|137) fail+=("${d_bdf[$i]} (timeout after ${TOOL_TIMEOUT}s)") ;;
-		3)       warn+=("${d_bdf[$i]} (firmware state)") ;;
+		2)
+			if [[ $kind == noc ]]; then
+				fail+=("${d_bdf[$i]} (node answered wrongly)")
+			else
+				fail+=("${d_bdf[$i]} (not answering)")
+			fi ;;
+		3)
+			if [[ $kind == noc ]]; then
+				fail+=("${d_bdf[$i]} (node stopped answering mid-sweep)")
+			else
+				warn+=("${d_bdf[$i]} (firmware state)")
+			fi ;;
 		*)       warn+=("${d_bdf[$i]} (probe exit $rc)") ;;
 		esac
 	done
@@ -650,11 +676,11 @@ build_json() {
 			"$(printf '{"devices": %s}' "$n")"
 	fi
 
-	json_add_probe deviceside_liveness    asic "${d_hung_rc[@]+"${d_hung_rc[@]}"}"
-	json_add_probe deviceside_info        board "${d_info_rc[@]+"${d_info_rc[@]}"}"
-	json_add_probe deviceside_arc_scratch fw "${d_scratch_rc[@]+"${d_scratch_rc[@]}"}"
-	json_add_probe deviceside_telemetry   fw "${d_telem_rc[@]+"${d_telem_rc[@]}"}"
-	json_add_probe deviceside_noc_sanity  asic "${d_noc_rc[@]+"${d_noc_rc[@]}"}"
+	json_add_probe deviceside_liveness    asic  chip "${d_hung_rc[@]+"${d_hung_rc[@]}"}"
+	json_add_probe deviceside_info        board chip "${d_info_rc[@]+"${d_info_rc[@]}"}"
+	json_add_probe deviceside_arc_scratch fw    chip "${d_scratch_rc[@]+"${d_scratch_rc[@]}"}"
+	json_add_probe deviceside_telemetry   fw    chip "${d_telem_rc[@]+"${d_telem_rc[@]}"}"
+	json_add_probe deviceside_noc_sanity  asic  noc  "${d_noc_rc[@]+"${d_noc_rc[@]}"}"
 }
 
 write_json() {

@@ -98,6 +98,7 @@
 #include <sys/mman.h>
 #include <sys/random.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <sys/sysmacros.h>
 #include <sys/types.h>
 #include <errno.h>
@@ -2924,6 +2925,117 @@ static char proc_state(pid_t pid) {
     return p[2];
 }
 
+#if defined(SYS_pidfd_open) && defined(SYS_pidfd_send_signal)
+#define HAVE_PIDFD 1
+#endif
+
+// Start time in clock ticks since boot, field 22 of /proc/<pid>/stat.  0 if
+// it cannot be read, which includes the process having already gone.
+static unsigned long long proc_start_time(pid_t pid) {
+    char path[64];
+    char buf[512];
+    const char* p;
+    int fd;
+    ssize_t n;
+
+    snprintf(path, sizeof(path), "/proc/%d/stat", pid);
+    fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+        return 0;
+    }
+    n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0) {
+        return 0;
+    }
+    buf[n] = '\0';
+
+    // As in proc_state: the comm is parenthesised and may contain anything,
+    // so the fields are counted from the last ')', which ends field 2.
+    p = strrchr(buf, ')');
+    if (p == NULL) {
+        return 0;
+    }
+    p++;
+    for (int field = 3; field <= 21; field++) {
+        while (*p == ' ') {
+            p++;
+        }
+        while (*p != '\0' && *p != ' ') {
+            p++;
+        }
+        if (*p == '\0') {
+            return 0;
+        }
+    }
+    return strtoull(p, NULL, 10);
+}
+
+struct nuke_victim {
+    pid_t pid;
+    int fd;                    // pidfd; -1 when the kernel does not have them
+    unsigned long long start;  // start time, the guard used when fd < 0
+};
+
+// Pins a holder so it can be signalled later without the number drifting to
+// another process.  0 on success, -1 with errno set; ESRCH means it exited
+// on its own, which needs no killing.
+static int victim_pin(struct nuke_victim* v, pid_t pid) {
+    v->pid = pid;
+    v->fd = -1;
+    v->start = 0;
+
+#ifdef HAVE_PIDFD
+    v->fd = (int)syscall(SYS_pidfd_open, pid, 0U);
+    if (v->fd >= 0) {
+        return 0;
+    }
+    if (errno != ENOSYS) {
+        return -1;
+    }
+#endif
+
+    v->start = proc_start_time(pid);
+    if (v->start == 0) {
+        errno = ESRCH;
+        return -1;
+    }
+    return 0;
+}
+
+// SIGKILLs the pinned process.  0 on success, -1 with errno set.  ESRCH is
+// the process having already gone -- or, on the fallback path, the number
+// now belonging to a different process, which is deliberately left alone.
+static int victim_kill(const struct nuke_victim* v) {
+#ifdef HAVE_PIDFD
+    if (v->fd >= 0) {
+        return (int)syscall(SYS_pidfd_send_signal, v->fd, SIGKILL, (siginfo_t*)NULL, 0U);
+    }
+#endif
+
+    if (proc_start_time(v->pid) != v->start) {
+        errno = ESRCH;
+        return -1;
+    }
+    return kill(v->pid, SIGKILL);
+}
+
+static void victim_unpin(struct nuke_victim* v) {
+    if (v->fd >= 0) {
+        close(v->fd);
+        v->fd = -1;
+    }
+}
+
+static int pid_listed(pid_t pid, const pid_t* list, int count) {
+    for (int i = 0; i < count; i++) {
+        if (list[i] == pid) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static void nuke_print_victim(const char* action, pid_t pid) {
     char dir[32];
     char comm[64];
@@ -3038,6 +3150,10 @@ static int nuke_main(int argc, char* argv[], const char* prog) {
 
     for (pass = 0; pass < NUKE_MAX_PASSES; pass++) {
         struct timespec wait = {0, NUKE_PASS_WAIT_NS};
+        struct nuke_victim victims[NUKE_MAX_PIDS];
+        pid_t still[NUKE_MAX_PIDS];
+        unsigned pinned = 0;
+        int still_count;
         int i;
 
         count = read_holder_pids(pids_path, pids, NUKE_MAX_PIDS);
@@ -3052,12 +3168,28 @@ static int nuke_main(int argc, char* argv[], const char* prog) {
             if (pids[i] == getpid()) {
                 continue;
             }
-            nuke_print_victim("killing", pids[i]);
-            if (kill(pids[i], SIGKILL) == 0) {
-                killed++;
+            if (victim_pin(&victims[pinned], pids[i]) == 0) {
+                pinned++;
             } else if (errno != ESRCH) {
-                printf("  kill pid %d failed: %s\n", pids[i], strerror(errno));
+                printf("  cannot take a handle on pid %d: %s\n", pids[i], strerror(errno));
             }
+        }
+
+        still_count = read_holder_pids(pids_path, still, NUKE_MAX_PIDS);
+        if (still_count < 0) {
+            DIE("cannot read %s", pids_path);
+        }
+
+        for (unsigned v = 0; v < pinned; v++) {
+            if (pid_listed(victims[v].pid, still, still_count)) {
+                nuke_print_victim("killing", victims[v].pid);
+                if (victim_kill(&victims[v]) == 0) {
+                    killed++;
+                } else if (errno != ESRCH) {
+                    printf("  kill pid %d failed: %s\n", victims[v].pid, strerror(errno));
+                }
+            }
+            victim_unpin(&victims[v]);
         }
         fflush(stdout);
 
