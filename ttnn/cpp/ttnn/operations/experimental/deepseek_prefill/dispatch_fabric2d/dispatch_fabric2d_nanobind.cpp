@@ -46,8 +46,28 @@ void bind_experimental_dispatch_fabric2d_operation(nb::module_& mod) {
         A token whose expert region is full is dropped while its counter still advances, so pages match
         what `dispatch` would have assigned.
 
-        BFLOAT16 ROW_MAJOR input only, and metadata_len must be 3: the fp8-scaled layout appends
-        per-block scales that do not fit the routing tail this op carries.
+        Constraints, all enforced:
+
+            topology              Ring or Torus, and `cluster_axis` must be WRAP-WIRED. This op relays
+                                  single hops around a ring; on a mesh or a line there is no ring to go
+                                  around. A galaxy cabled for TORUS_XY satisfies this on either axis, a
+                                  TORUS_Y one only on axis 0. Note that fabric auto-discovery silently
+                                  falls back when the requested wrap is not cabled, so asking for
+                                  FABRIC_2D_TORUS_XY does not guarantee you got it.
+            cluster_axis extent   even and at least 4. The schedule splits the diametrically opposite
+                                  chip across both directions, which needs a distinct opposite chip.
+            num_links             1 to 4, and the axis must actually have that many forwarding links.
+            num_routed_experts    a multiple of 16, so a row of the offsets table is a whole number of
+                                  64-byte lines: the reader reads row r to `control + r * W` words and a
+                                  DRAM read needs a 64-byte-aligned L1 destination.
+            all six inputs        ROW_MAJOR and interleaved DRAM; the output memory config must be
+                                  interleaved too.
+            dtypes                BFLOAT16 input, and metadata_len must be 3: the fp8-scaled layout
+                                  appends per-block scales that do not fit the routing tail this op
+                                  carries.
+
+        `cluster_axis` other than 0 is reachable but untested: it is only bounds-checked, and a
+        different axis gives a structurally different schedule.
         )doc",
         &dispatch_fabric2d,
         nb::arg("input_tensor"),
