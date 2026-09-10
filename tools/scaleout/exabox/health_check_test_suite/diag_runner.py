@@ -1647,7 +1647,7 @@ def run_tests(tt_metal: Path, tier: str, phase: Phase, dry_run: bool, logs_dir: 
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Phase 5 — external triage tools
+# Phase 5 — triage tools
 # ─────────────────────────────────────────────────────────────────────────────
 
 _TRIAGE_STATUSES = (PASS, WARN, FAIL, SKIP)
@@ -1882,7 +1882,7 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--skip-triage",
         action="store_true",
-        help="Skip the post-test reset and the external triage tools entirely.",
+        help="Skip the post-test reset and the triage tools entirely.",
     )
     ap.add_argument(
         "--triage-dir",
@@ -2117,7 +2117,7 @@ def run_diag(
             flush=True,
         )
 
-    # Phase 5: external triage tools (separate repo, cloned into the container).
+    # Phase 5: triage tools, from tools/scaleout/kmd_triage in this repo.
     triage_phase = Phase(name="triage")
     t0 = time.time()
     if skip_triage:

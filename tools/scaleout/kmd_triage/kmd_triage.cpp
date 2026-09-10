@@ -80,19 +80,19 @@
 #define _GNU_SOURCE
 #endif
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdint.h>
-#include <stdarg.h>
-#include <string.h>
+#include <cstdio>
+#include <cstdlib>
+#include <cstdint>
+#include <cstdarg>
+#include <cstring>
 #include <unistd.h>
 #include <fcntl.h>
 #include <dirent.h>
 #include <getopt.h>
 #include <pthread.h>
-#include <setjmp.h>
-#include <signal.h>
-#include <time.h>
+#include <csetjmp>
+#include <csignal>
+#include <ctime>
 #include <sys/wait.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -101,7 +101,7 @@
 #include <sys/syscall.h>
 #include <sys/sysmacros.h>
 #include <sys/types.h>
-#include <errno.h>
+#include <cerrno>
 #include <linux/mman.h>
 #include <linux/types.h>
 
@@ -292,7 +292,8 @@ struct tenstorrent_configure_tlb {
 // invocation, or its environment is broken.  Report where and die with
 // EXIT_SETUP_ERROR.  DIE appends strerror(errno) for the usual failed-
 // syscall case; DIEX is for a failure that is not a syscall's.
-[[noreturn]] static void die_at(const char* file, int line, int err, const char* fmt, ...) {
+[[noreturn]] __attribute__((format(printf, 4, 5))) static void die_at(
+    const char* file, int line, int err, const char* fmt, ...) {
     va_list ap;
 
     fflush(stdout);
@@ -315,7 +316,8 @@ static const char* device_path_arg(const char* arg) {
     static char buf[sizeof("/dev/tenstorrent/") + 24];
     const char* p;
 
-    for (p = arg; *p >= '0' && *p <= '9'; p++);
+    for (p = arg; *p >= '0' && *p <= '9'; p++) {
+    }
     if (p != arg && *p == '\0' && (size_t)(p - arg) < 24) {
         snprintf(buf, sizeof(buf), "/dev/tenstorrent/%s", arg);
         return buf;
@@ -413,7 +415,7 @@ static void noc_window_open_cache(struct noc_window* win, int fd, int wc) {
     }
 
     mmio = mmap(
-        NULL,
+        nullptr,
         TLB_SIZE,
         PROT_READ | PROT_WRITE,
         MAP_SHARED,
@@ -435,7 +437,7 @@ static void noc_window_open_wc(struct noc_window* win, int fd) { noc_window_open
 static void noc_window_close(struct noc_window* win) {
     struct tenstorrent_free_tlb free_tlb;
 
-    if (win->mmio == NULL) {
+    if (win->mmio == nullptr) {
         return;
     }
 
@@ -443,7 +445,7 @@ static void noc_window_close(struct noc_window* win) {
     if (munmap((void*)win->mmio, TLB_SIZE) != 0) {
         DIE("munmap of TLB window failed");
     }
-    win->mmio = NULL;
+    win->mmio = nullptr;
 
     memset(&free_tlb, 0, sizeof(free_tlb));
     free_tlb.in.id = win->tlb_id;
@@ -484,7 +486,7 @@ static void noc_write32(struct noc_window* win, unsigned x, unsigned y, uint64_t
 }
 
 // Emit the final [PASS] or [FAIL] line of a verdict-last subcommand.
-static void verdict(int pass, const char* fmt, ...) {
+__attribute__((format(printf, 2, 3))) static void verdict(int pass, const char* fmt, ...) {
     va_list ap;
 
     printf("%s ", pass ? "[PASS]" : "[FAIL]");
@@ -621,7 +623,7 @@ static void dump_bank(
         uint64_t addr = base_addr + (uint64_t)i * sizeof(uint32_t);
         uint32_t value = noc_read32(win, x, y, addr);
 
-        if (notes != NULL && notes[i] != NULL) {
+        if (notes != nullptr && notes[i] != nullptr) {
             printf("  [%2u] 0x%09llx = 0x%08x  %s\n", i, (unsigned long long)addr, value, notes[i]);
         } else {
             printf("  [%2u] 0x%09llx = 0x%08x\n", i, (unsigned long long)addr, value);
@@ -1052,7 +1054,7 @@ static int tag_encoding_is_firmware_dependent(const struct telemetry_arch* arch,
 // Wormhole tag space has a hole at 65..77, and those numbers are not tags that
 // happen to be unpublished; they are not tags.
 static int tag_is_defined(const struct telemetry_arch* arch, unsigned tag) {
-    return tag < arch->tag_count && arch->tag_names[tag] != NULL;
+    return tag < arch->tag_count && arch->tag_names[tag] != nullptr;
 }
 
 // Fills buf with the tag's symbolic name, or TAG_UNKNOWN_<n> for a tag a newer
@@ -2074,7 +2076,7 @@ static int hung_main(int argc, char* argv[], const char* prog) {
 
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = hung_alarm;
-    sigaction(SIGALRM, &sa, NULL);
+    sigaction(SIGALRM, &sa, nullptr);
     alarm(HUNG_DEADLINE_SECONDS);
 
     // The first four config bytes are vendor and device IDs.
@@ -2130,10 +2132,10 @@ static int hung_main(int argc, char* argv[], const char* prog) {
 
     // Read every exposed telemetry attribute in name order.
     dir = opendir(sysdir);
-    if (dir == NULL) {
+    if (dir == nullptr) {
         DIE("cannot enumerate %s", sysdir);
     }
-    while ((de = readdir(dir)) != NULL) {
+    while ((de = readdir(dir)) != nullptr) {
         if (strncmp(de->d_name, "tt_", 3) != 0) {
             continue;
         }
@@ -2193,7 +2195,7 @@ static int hung_main(int argc, char* argv[], const char* prog) {
     {
         struct timespec ts = {0, HUNG_HEARTBEAT_WAIT_NS};
 
-        nanosleep(&ts, NULL);
+        nanosleep(&ts, nullptr);
     }
     if (read_sysfs_attr(sysdir, "tt_heartbeat", hb2, sizeof(hb2)) != 0) {
         verdict(0, "re-reading tt_heartbeat failed: %s", strerror(errno));
@@ -2314,10 +2316,10 @@ static void format_bdf(char* buf, size_t bufsz, const struct tenstorrent_get_dev
 static void reset_sleep_ms(unsigned ms) {
     struct timespec ts = {ms / 1000, (long)(ms % 1000) * 1000000L};
 
-    nanosleep(&ts, NULL);
+    nanosleep(&ts, nullptr);
 }
 
-static long long reset_now_ms(void) {
+static long long reset_now_ms() {
     struct timespec now;
 
     clock_gettime(CLOCK_MONOTONIC, &now);
@@ -2325,7 +2327,7 @@ static long long reset_now_ms(void) {
 }
 
 // A suffix on the driver version string ("2.10.1-pre") is ignored.
-static void reset_check_kmd_version(void) {
+static void reset_check_kmd_version() {
     char value[64];
     unsigned major, minor, patch;
 
@@ -2571,10 +2573,10 @@ static unsigned reset_enumerate(struct reset_dev* devs, unsigned max) {
     unsigned count = 0;
 
     dir = opendir("/dev/tenstorrent");
-    if (dir == NULL) {
+    if (dir == nullptr) {
         DIE("cannot open /dev/tenstorrent");
     }
-    while ((de = readdir(dir)) != NULL) {
+    while ((de = readdir(dir)) != nullptr) {
         const char* p = de->d_name;
 
         if (*p < '0' || *p > '9') {
@@ -2592,7 +2594,7 @@ static unsigned reset_enumerate(struct reset_dev* devs, unsigned max) {
         if (count >= max) {
             break;
         }
-        devs[count].ordinal = (unsigned)strtoul(de->d_name, NULL, 10);
+        devs[count].ordinal = (unsigned)strtoul(de->d_name, nullptr, 10);
         count++;
     }
     closedir(dir);
@@ -2611,7 +2613,7 @@ static void* reset_thread(void* arg) {
     struct reset_dev* d = static_cast<struct reset_dev*>(arg);
 
     d->rc = reset_one(d);
-    return NULL;
+    return nullptr;
 }
 
 // The aggregate verdict and exit status for a multi-device run: 0 only if
@@ -2657,21 +2659,21 @@ static int reset_all(int sbr_only) {
         int err;
 
         devs[i].sbr_only = sbr_only;
-        err = pthread_create(&threads[i], NULL, reset_thread, &devs[i]);
+        err = pthread_create(&threads[i], nullptr, reset_thread, &devs[i]);
         if (err != 0) {
             errno = err;
             DIE("pthread_create failed");
         }
     }
     for (unsigned i = 0; i < count; i++) {
-        pthread_join(threads[i], NULL);
+        pthread_join(threads[i], nullptr);
     }
 
     return reset_verdict_all(devs, count, sbr_only);
 }
 
 // A chip that fails a step drops out of later steps; the tray reset proceeds.
-static int reset_glx(void) {
+static int reset_glx() {
     static struct reset_dev devs[RESET_MAX_DEVS];
     unsigned count;
     int st;
@@ -2763,10 +2765,10 @@ static void reset_usage(const char* prog) {
 
 static int reset_main(int argc, char* argv[], const char* prog) {
     static const struct option longopts[] = {
-        {"all", no_argument, NULL, 'a'},
-        {"sbr", no_argument, NULL, 's'},
-        {"glx", no_argument, NULL, 'g'},
-        {NULL, 0, NULL, 0},
+        {"all", no_argument, nullptr, 'a'},
+        {"sbr", no_argument, nullptr, 's'},
+        {"glx", no_argument, nullptr, 'g'},
+        {nullptr, 0, nullptr, 0},
     };
     struct reset_dev d;
     const char* ident;
@@ -2776,7 +2778,7 @@ static int reset_main(int argc, char* argv[], const char* prog) {
 
     memset(&d, 0, sizeof(d));
 
-    while ((opt = getopt_long(argc, argv, "d:h", longopts, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "d:h", longopts, nullptr)) != -1) {
         switch (opt) {
             case 'a': all = 1; break;
             case 's': sbr = 1; break;
@@ -2789,7 +2791,7 @@ static int reset_main(int argc, char* argv[], const char* prog) {
 
     // Accept either -d or one positional device, but not both.
     if (optind < argc) {
-        if (d.path != NULL) {
+        if (d.path != nullptr) {
             fprintf(stderr, "Error: device given both as -d %s and as '%s'\n", d.path, argv[optind]);
             reset_usage(prog);
             return EXIT_SETUP_ERROR;
@@ -2802,17 +2804,17 @@ static int reset_main(int argc, char* argv[], const char* prog) {
         d.path = device_path_arg(argv[optind]);
     }
 
-    if (glx && (all || sbr || d.path != NULL)) {
+    if (glx && (all || sbr || d.path != nullptr)) {
         fprintf(stderr, "Error: --glx stands alone\n");
         reset_usage(prog);
         return EXIT_SETUP_ERROR;
     }
-    if (all && d.path != NULL) {
+    if (all && d.path != nullptr) {
         fprintf(stderr, "Error: --all and a device are mutually exclusive\n");
         reset_usage(prog);
         return EXIT_SETUP_ERROR;
     }
-    if (!all && !glx && d.path == NULL) {
+    if (!all && !glx && d.path == nullptr) {
         fprintf(stderr, "Error: no device given; reset is destructive and has no default\n");
         reset_usage(prog);
         return EXIT_SETUP_ERROR;
@@ -2839,6 +2841,7 @@ static int reset_main(int argc, char* argv[], const char* prog) {
             verdict(0, sbr ? "%s not reachable after link reset" : "%s did not come back from reset", ident);
             break;
         case EXIT_RESET_FAILED: verdict(0, "%s answers but reset verification failed", ident); break;
+        default: break;  // reset_one returns only the three above
     }
     return rc;
 }
@@ -2872,12 +2875,12 @@ static int read_holder_pids(const char* pids_path, pid_t* pids, unsigned max) {
     unsigned count = 0;
 
     f = fopen(pids_path, "re");
-    if (f == NULL) {
+    if (f == nullptr) {
         return -1;
     }
 
-    while (fgets(line, sizeof(line), f) != NULL && count < max) {
-        pid_t pid = (pid_t)strtol(line, NULL, 10);
+    while (fgets(line, sizeof(line), f) != nullptr && count < max) {
+        pid_t pid = (pid_t)strtol(line, nullptr, 10);
         unsigned i;
 
         if (pid <= 1) {
@@ -2919,7 +2922,7 @@ static char proc_state(pid_t pid) {
     // The state field follows the comm, which is in parentheses and may
     // itself contain anything; parse from the last ')'.
     p = strrchr(buf, ')');
-    if (p == NULL || p[1] != ' ' || p[2] == '\0') {
+    if (p == nullptr || p[1] != ' ' || p[2] == '\0') {
         return '?';
     }
     return p[2];
@@ -2953,7 +2956,7 @@ static unsigned long long proc_start_time(pid_t pid) {
     // As in proc_state: the comm is parenthesised and may contain anything,
     // so the fields are counted from the last ')', which ends field 2.
     p = strrchr(buf, ')');
-    if (p == NULL) {
+    if (p == nullptr) {
         return 0;
     }
     p++;
@@ -2968,7 +2971,7 @@ static unsigned long long proc_start_time(pid_t pid) {
             return 0;
         }
     }
-    return strtoull(p, NULL, 10);
+    return strtoull(p, nullptr, 10);
 }
 
 struct nuke_victim {
@@ -3009,7 +3012,7 @@ static int victim_pin(struct nuke_victim* v, pid_t pid) {
 static int victim_kill(const struct nuke_victim* v) {
 #ifdef HAVE_PIDFD
     if (v->fd >= 0) {
-        return (int)syscall(SYS_pidfd_send_signal, v->fd, SIGKILL, (siginfo_t*)NULL, 0U);
+        return (int)syscall(SYS_pidfd_send_signal, v->fd, SIGKILL, (siginfo_t*)nullptr, 0U);
     }
 #endif
 
@@ -3082,7 +3085,7 @@ static void nuke_usage(const char* prog) {
 }
 
 static int nuke_main(int argc, char* argv[], const char* prog) {
-    const char* device_path = NULL;
+    const char* device_path = nullptr;
     struct stat st;
     char syspath[64];
     char link[256];
@@ -3104,7 +3107,7 @@ static int nuke_main(int argc, char* argv[], const char* prog) {
         }
     }
     if (optind < argc) {
-        if (device_path != NULL) {
+        if (device_path != nullptr) {
             fprintf(stderr, "Error: device given both as -d %s and as '%s'\n", device_path, argv[optind]);
             nuke_usage(prog);
             return EXIT_SETUP_ERROR;
@@ -3117,7 +3120,7 @@ static int nuke_main(int argc, char* argv[], const char* prog) {
         device_path = device_path_arg(argv[optind]);
     }
 
-    if (device_path == NULL) {
+    if (device_path == nullptr) {
         fprintf(stderr, "Error: no device given; nuke kills processes and has no default\n");
         nuke_usage(prog);
         return EXIT_SETUP_ERROR;
@@ -3193,7 +3196,7 @@ static int nuke_main(int argc, char* argv[], const char* prog) {
         }
         fflush(stdout);
 
-        nanosleep(&wait, NULL);
+        nanosleep(&wait, nullptr);
     }
 
     count = read_holder_pids(pids_path, pids, NUKE_MAX_PIDS);
@@ -3230,7 +3233,7 @@ static int nuke_main(int argc, char* argv[], const char* prog) {
 // Stable "key: value" lines, with host-side facts available even when
 // chip-side telemetry is not.
 
-static void info_line(const char* key, const char* fmt, ...) {
+__attribute__((format(printf, 2, 3))) static void info_line(const char* key, const char* fmt, ...) {
     char keycol[32];
     va_list ap;
 
@@ -3246,7 +3249,7 @@ static void info_line(const char* key, const char* fmt, ...) {
 // Maps a sysfs *_link_speed string ("16.0 GT/s PCIe"; older kernels drop
 // the suffix) to a PCIe generation.  0 if the string is not a defined rate.
 static int pcie_gen_from_speed(const char* speed) {
-    double gts = strtod(speed, NULL);
+    double gts = strtod(speed, nullptr);
 
     if (gts == 2.5) {
         return 1;
@@ -3314,7 +3317,7 @@ static const char* info_board_name(unsigned upi) {
         case 0x45: return "p300a";
         case 0x46: return "p300c";
         case 0x47: return "galaxy-blackhole";
-        default: return NULL;
+        default: return nullptr;
     }
 }
 
@@ -3694,8 +3697,8 @@ static int info_main(int argc, char* argv[], const char* prog) {
         };
 
         info_line("telemetry", "unavailable (%s)", telem.reason);
-        for (unsigned i = 0; i < sizeof(chip_keys) / sizeof(chip_keys[0]); ++i) {
-            info_line(chip_keys[i], "unavailable");
+        for (const auto* chip_key : chip_keys) {
+            info_line(chip_key, "unavailable");
         }
         rc = telem.status;
         goto out;
@@ -3713,7 +3716,7 @@ static int info_main(int argc, char* argv[], const char* prog) {
             unsigned upi = (hi >> 4) & 0xFFFF;
             const char* name = info_board_name(upi);
 
-            if (name != NULL) {
+            if (name != nullptr) {
                 info_line("board_type", "%s", name);
             } else {
                 info_line("board_type", "unknown (upi 0x%x)", upi);
@@ -3917,7 +3920,7 @@ static void discover_probe(struct discover_dev* d) {
 
     // Architecture from the PCI device id, so no fd is needed.
     if (read_sysfs_attr(devdir, "device", value, sizeof(value)) == 0) {
-        unsigned long id = strtoul(value, NULL, 0);
+        unsigned long id = strtoul(value, nullptr, 0);
 
         if (id == WORMHOLE_PCI_DEVICE_ID) {
             d->arch = "WH";
@@ -3930,13 +3933,13 @@ static void discover_probe(struct discover_dev* d) {
     // Both come from sysfs, so this needs no fd either.
     d->loc[0] = '\0';
     if (read_sysfs_attr(devdir, "subsystem_device", value, sizeof(value)) == 0) {
-        unsigned long ssid = strtoul(value, NULL, 0);
+        unsigned long ssid = strtoul(value, nullptr, 0);
         unsigned bus = 0;
 
         // d->bdf is "dddd:bb:dd.f"; the bus is the two hex digits after the
         // first colon.
         if (strlen(d->bdf) >= 7) {
-            bus = (unsigned)strtoul(d->bdf + 5, NULL, 16);
+            bus = (unsigned)strtoul(d->bdf + 5, nullptr, 16);
         }
         galaxy_loc((unsigned)ssid, bus, d->loc, sizeof(d->loc));
     }
@@ -4105,10 +4108,10 @@ static int discover_main(int argc, char* argv[], const char* prog) {
     // The numeric entries are the devices; by-id and by-bdf are symlink
     // directories and fail the all-digits test.
     dir = opendir("/dev/tenstorrent");
-    if (dir == NULL) {
+    if (dir == nullptr) {
         DIE("cannot open /dev/tenstorrent");
     }
-    while ((de = readdir(dir)) != NULL) {
+    while ((de = readdir(dir)) != nullptr) {
         const char* p = de->d_name;
 
         if (*p < '0' || *p > '9') {
@@ -4126,7 +4129,7 @@ static int discover_main(int argc, char* argv[], const char* prog) {
         if (count >= DISCOVER_MAX_DEVS) {
             break;
         }
-        devs[count].ordinal = (unsigned)strtoul(de->d_name, NULL, 10);
+        devs[count].ordinal = (unsigned)strtoul(de->d_name, nullptr, 10);
         snprintf(devs[count].path, sizeof(devs[count].path), "/dev/tenstorrent/%.10s", de->d_name);
         count++;
     }
@@ -4140,7 +4143,7 @@ static int discover_main(int argc, char* argv[], const char* prog) {
 
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = discover_alarm;
-    sigaction(SIGALRM, &sa, NULL);
+    sigaction(SIGALRM, &sa, nullptr);
 
     for (unsigned i = 0; i < count; i++) {
         discover_probe(&devs[i]);
@@ -4152,7 +4155,7 @@ static int discover_main(int argc, char* argv[], const char* prog) {
     if (need_wait) {
         struct timespec ts = {0, DISCOVER_HEARTBEAT_WAIT_NS};
 
-        nanosleep(&ts, NULL);
+        nanosleep(&ts, nullptr);
     }
     for (unsigned i = 0; i < count; i++) {
         if (devs[i].need_hb2) {
@@ -4176,7 +4179,7 @@ static int discover_main(int argc, char* argv[], const char* prog) {
     }
 
     {
-        int use_color = isatty(STDOUT_FILENO) && getenv("NO_COLOR") == NULL;
+        int use_color = isatty(STDOUT_FILENO) && getenv("NO_COLOR") == nullptr;
         const char* red = use_color ? "\033[31m" : "";
         const char* yellow = use_color ? "\033[33m" : "";
         const char* reset = use_color ? "\033[0m" : "";
@@ -4626,7 +4629,8 @@ struct noc_sanity_result {
 // cap; the verdict line still carries the true count.
 #define NOC_MAX_REPORTED_FAILURES 20
 
-static void noc_report_failure(struct noc_sanity_result* res, unsigned* reported, const char* fmt, ...) {
+__attribute__((format(printf, 3, 4))) static void noc_report_failure(
+    struct noc_sanity_result* res, unsigned* reported, const char* fmt, ...) {
     va_list ap;
     char line[192];
 
@@ -4805,7 +4809,7 @@ static int noc_sanity_run(struct chip* chip, const struct noc_sanity_opts* opts,
             // the hazard policy says not to do.  All three registers get
             // the test, so a node that answers NOC_NODE_ID but nothing
             // else is still classified silent rather than misconfigured.
-            silent_reg = NULL;
+            silent_reg = nullptr;
             r->node_id = noc_read32(&win, x, y, base + arch->node_id_offset);
             if (r->node_id == ALL_ONES) {
                 silent_reg = "NOC_NODE_ID";
@@ -4842,7 +4846,7 @@ static int noc_sanity_run(struct chip* chip, const struct noc_sanity_opts* opts,
             got_y = ID_Y(r->node_id);
             want_type = expected_endpoint_type(arch, tile);
             got_type = endpoint_type(arch, r->endpoint_id);
-            problem = NULL;
+            problem = nullptr;
 
             // y is never translated within the swept box, so it must come
             // back exactly.  x is only translated for Tensix, and then only
@@ -4982,8 +4986,8 @@ static void noc_sanity_usage(const char* prog) {
 
 static int noc_sanity_main(int argc, char* argv[], const char* prog) {
     static const struct option longopts[] = {
-        {"stop-first", no_argument, NULL, 'F'},
-        {NULL, 0, NULL, 0},
+        {"stop-first", no_argument, nullptr, 'F'},
+        {nullptr, 0, nullptr, 0},
     };
     const char* device_path = "/dev/tenstorrent/0";
     int device_path_set = 0;
@@ -4997,7 +5001,7 @@ static int noc_sanity_main(int argc, char* argv[], const char* prog) {
 
     memset(&opts, 0, sizeof(opts));
 
-    while ((opt = getopt_long(argc, argv, "d:lks:h", longopts, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "d:lks:h", longopts, nullptr)) != -1) {
         switch (opt) {
             case 'd':
                 device_path = device_path_arg(optarg);
@@ -5145,7 +5149,7 @@ static int dma_loopback_has_translated_iommu(const struct chip* chip) {
 
 static int dma_loopback_try_buffer(
     int fd, struct dma_loopback_buffer* buf, size_t backing_size, size_t transfer_size, int mmap_flags) {
-    buf->mem = static_cast<uint8_t*>(mmap(NULL, backing_size, PROT_READ | PROT_WRITE, mmap_flags, -1, 0));
+    buf->mem = static_cast<uint8_t*>(mmap(nullptr, backing_size, PROT_READ | PROT_WRITE, mmap_flags, -1, 0));
     if (buf->mem == MAP_FAILED) {
         return -1;
     }
@@ -5294,7 +5298,7 @@ static int dma_loopback_run(struct chip* chip, const char* prefix, size_t* trans
     dma_loopback_alloc_buffer(chip, &dest, prefix);
 
     pattern = static_cast<uint8_t*>(
-        mmap(NULL, dest.transfer_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+        mmap(nullptr, dest.transfer_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
     if (pattern == MAP_FAILED) {
         DIE("mmap of DMA source pattern failed");
     }
@@ -5458,8 +5462,8 @@ static void test_usage(const char* prog) {
     fprintf(stderr, "       %s --all [DEVICE]\n\n", prog);
     fprintf(stderr, "Tests:\n");
     fprintf(stderr, "  %-12s  run every test\n", "--all");
-    for (unsigned i = 0; i < TEST_SUBCOMMAND_COUNT; i++) {
-        fprintf(stderr, "  %-12s  %s\n", test_subcommands[i].name, test_subcommands[i].summary);
+    for (const auto& test_subcommand : test_subcommands) {
+        fprintf(stderr, "  %-12s  %s\n", test_subcommand.name, test_subcommand.summary);
     }
     fprintf(stderr, "\n%s <test> -h gives the test's own usage.\n", prog);
 }
@@ -5495,20 +5499,20 @@ static int test_all_main(int argc, char* argv[], const char* prog) {
         device_path = device_path_arg(argv[optind]);
     }
 
-    for (unsigned i = 0; i < TEST_SUBCOMMAND_COUNT; i++) {
+    for (const auto& test_subcommand : test_subcommands) {
         char test_prog[96];
         char* test_argv[] = {
-            (char*)test_subcommands[i].name,
+            (char*)test_subcommand.name,
             (char*)"-d",
             (char*)device_path,
-            NULL,
+            nullptr,
         };
         int rc;
 
-        printf("=== %s ===\n", test_subcommands[i].name);
-        snprintf(test_prog, sizeof(test_prog), "%s %s", prog, test_subcommands[i].name);
+        printf("=== %s ===\n", test_subcommand.name);
+        snprintf(test_prog, sizeof(test_prog), "%s %s", prog, test_subcommand.name);
         optind = 0;
-        rc = test_subcommands[i].run(3, test_argv, test_prog);
+        rc = test_subcommand.run(3, test_argv, test_prog);
         if (rc != EXIT_OK) {
             return rc;
         }
@@ -5533,10 +5537,10 @@ static int test_main(int argc, char* argv[], const char* prog) {
         return test_all_main(argc - 1, argv + 1, prog);
     }
 
-    for (unsigned i = 0; i < TEST_SUBCOMMAND_COUNT; i++) {
-        if (strcmp(argv[1], test_subcommands[i].name) == 0) {
-            snprintf(test_prog, sizeof(test_prog), "%s %s", prog, test_subcommands[i].name);
-            return test_subcommands[i].run(argc - 1, argv + 1, test_prog);
+    for (const auto& test_subcommand : test_subcommands) {
+        if (strcmp(argv[1], test_subcommand.name) == 0) {
+            snprintf(test_prog, sizeof(test_prog), "%s %s", prog, test_subcommand.name);
+            return test_subcommand.run(argc - 1, argv + 1, test_prog);
         }
     }
 
@@ -5571,8 +5575,8 @@ static const struct subcommand {
 static void multi_usage(const char* prog) {
     fprintf(stderr, "Usage: %s <subcommand> [options]\n\n", prog);
     fprintf(stderr, "Subcommands:\n");
-    for (unsigned i = 0; i < SUBCOMMAND_COUNT; i++) {
-        fprintf(stderr, "  %-10s  %s\n", subcommands[i].name, subcommands[i].summary);
+    for (const auto& subcommand : subcommands) {
+        fprintf(stderr, "  %-10s  %s\n", subcommand.name, subcommand.summary);
     }
     fprintf(stderr, "\n%s <subcommand> -h gives the subcommand's own usage.\n", prog);
 }
@@ -5594,10 +5598,10 @@ int main(int argc, char* argv[]) {
         return EXIT_OK;
     }
 
-    for (unsigned i = 0; i < SUBCOMMAND_COUNT; i++) {
-        if (strcmp(argv[1], subcommands[i].name) == 0) {
-            snprintf(prog, sizeof(prog), "%s %s", base, subcommands[i].name);
-            return subcommands[i].run(argc - 1, argv + 1, prog);
+    for (const auto& subcommand : subcommands) {
+        if (strcmp(argv[1], subcommand.name) == 0) {
+            snprintf(prog, sizeof(prog), "%s %s", base, subcommand.name);
+            return subcommand.run(argc - 1, argv + 1, prog);
         }
     }
 
