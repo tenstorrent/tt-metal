@@ -13,9 +13,9 @@ namespace generic = norm::kernel_util::generic;
 namespace layernorm_dataflow_utils = norm::layernorm::device::kernels::dataflow;
 
 void kernel_main() {
-    uint32_t NCHt = get_arg(args::NCHt);
-    uint32_t Wt = get_arg(args::Wt);
-    uint32_t tile_offset = get_arg(args::reader_start);
+    const uint32_t NCHt = get_arg(args::NCHt);
+    const uint32_t Wt = get_arg(args::Wt);
+    const uint32_t tile_offset = get_arg(args::reader_start);
 
     Noc noc;
     DataflowBuffer dfb_in0(dfb::in);

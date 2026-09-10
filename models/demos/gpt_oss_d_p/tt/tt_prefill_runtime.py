@@ -40,6 +40,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 
 from .attention import GptOssKVCache, allocate_kv_cache
+from .attention.kv_cache import bounded_blockcyclic_positions
 from .rope import build_indexed_rope
 
 
@@ -83,6 +84,10 @@ class TtPrefillRuntimeConfig:
     is_first_rank: bool = True
     is_last_rank: bool = True
     first_layer_idx: int = 0
+    # Sliding-attention layers use a small circular KV cache (2 chunk slabs) instead of a full
+    # max_seq_len slot; full-attention layers are unchanged. KV migration rejects the flag.
+    # Default off => allocation byte-identical to the single packed cache.
+    bounded_sliding_kv_cache: bool = False
 
     @property
     def sp_factor(self) -> int:
@@ -117,6 +122,7 @@ class TtPrefillRuntime:
         self.compiled = False
         self.kv_cache = None
         self._layer_completion_sink = None
+        self._slot_chunk_size = {}  # slot_id -> chunk size its current sequence started with
 
         self._build_model(state_dict)
         if config.owns_kv_cache:
@@ -160,6 +166,11 @@ class TtPrefillRuntime:
     def _allocate_kv_cache(self) -> None:
         # ONE cache holding num_users * num_layers slots (user-major); each (user, layer) slot is
         # filled per chunk. K/V heads shard on the TP cols; the sequence is SP-sharded block-cyclic.
+        # This rank's layer-type slice + the served chunk sizes; both ignored when the flag is off.
+        layer_types = getattr(self.hf_config, "layer_types", None)
+        if layer_types is not None:
+            first = self.config.first_layer_idx
+            layer_types = list(layer_types)[first : first + self.config.num_layers]
         self.kv_cache = allocate_kv_cache(
             self.mesh_device,
             num_layers=self.config.num_layers,
@@ -168,6 +179,10 @@ class TtPrefillRuntime:
             num_users=self.config.num_users,
             head_dim=self.hf_config.head_dim,
             cache_dtype=self.config.cache_dtype,
+            layer_types=layer_types,
+            bounded_sliding_kv_cache=self.config.bounded_sliding_kv_cache,
+            chunk_sizes=self.chunk_sizes,
+            sliding_window=getattr(self.hf_config, "sliding_window", 128),
         )
         self.kv_cache_allocated = True
 
@@ -330,6 +345,16 @@ class TtPrefillRuntime:
         assert (
             actual_start < actual_end <= actual_start + chunk_size
         ), f"[actual_start={actual_start}, actual_end={actual_end}) not within one chunk of {chunk_size}"
+        # One chunk size per sequence: the block-cyclic cache layout of every chunk (and the circular
+        # slab math of bounded sliding layers) assumes the size the sequence started with.
+        if actual_start == 0:
+            self._slot_chunk_size[slot_id] = chunk_size
+        else:
+            started_with = self._slot_chunk_size.get(slot_id)
+            assert started_with == chunk_size, (
+                f"slot {slot_id}: sequence started with chunk_size={started_with}, got {chunk_size} at "
+                f"actual_start={actual_start}; a sequence must use one chunk size throughout"
+            )
 
         if self.config.is_first_rank:
             x_embd = self._embed_tokens(input_tensor)
@@ -375,7 +400,9 @@ class TtPrefillRuntime:
     def kv_migration_base_address(self, kv_caches) -> int:
         """Stage KV base for the runner's device-map / stage-layout gather. The multi-config table
         builder uses each tensor's own ``buffer_address()``; this returns K's base (required hook)."""
-        return int(self._resolve_kv(kv_caches).k.buffer_address())
+        kv = self._resolve_kv(kv_caches)
+        assert not kv.bounded_sliding, "bounded_sliding_kv_cache is incompatible with KV migration"
+        return int(kv.k.buffer_address())
 
     def build_kv_chunk_table(
         self,
@@ -394,6 +421,7 @@ class TtPrefillRuntime:
         from models.demos.gpt_oss_d_p.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
 
         kv = self._resolve_kv(kv_caches)
+        assert not kv.bounded_sliding, "bounded_sliding_kv_cache is incompatible with KV migration"
         c = self.config
         return build_and_serialize_kv_chunk_table(
             mesh_device=self.mesh_device,
@@ -415,6 +443,7 @@ class TtPrefillRuntime:
         Used by pairwise migration validation (dst==src). ``DRAM_MEMORY_CONFIG`` on the slice is
         required — the cache is ND-sharded ROUND_ROBIN_1D."""
         kv = self._resolve_kv(kv_caches)
+        assert not kv.bounded_sliding, "bounded_sliding_kv_cache is incompatible with KV migration"
         mesh_device = self.mesh_device
         num_layers = self.config.num_layers
 
@@ -434,30 +463,48 @@ class TtPrefillRuntime:
 
         return [_block(kv.k), _block(kv.v)]
 
-    def gather_layer(self, slot_id: int, layer_idx: int, n_tokens: int, kv_caches=None, chunk_size=None):
-        """Read one layer's device K/V cache back to NATURAL token order (un-rotating the block-cyclic
-        SP layout). Returns (k, v) torch tensors in DEVICE convention: K is Meta-RoPE swizzled over the
-        (full) head_dim — the caller reconciles vs the HF golden; V is raw. Shapes:
-        k, v -> [1, num_kv_heads, n_tokens, head_dim]. No index_k (GQA)."""
+    def gather_layer(
+        self, slot_id: int, layer_idx: int, n_tokens: int, kv_caches=None, chunk_size=None, written_tokens=None
+    ):
+        """Read one layer's device K/V cache back in NATURAL token order (un-rotating the block-cyclic
+        SP layout). Returns ``(k, v, resident)``: K/V torch tensors in DEVICE convention (K is Meta-RoPE
+        swizzled over the full head_dim — the caller reconciles vs the HF golden; V is raw), shaped
+        ``[1, num_kv_heads, len(resident), head_dim]``, and ``resident`` = the sorted global positions
+        those rows hold. No index_k (GQA).
+
+        Full-attention layers hold every position: ``resident == arange(n_tokens)``. A BOUNDED sliding
+        layer (bounded_sliding_kv_cache) holds only its circular window: rows un-rotate via
+        ``bounded_blockcyclic_positions`` given ``written_tokens`` (TOTAL tokens written, pad tails of
+        every chunk included, i.e. n_chunks * chunk_size — required for bounded layers) and only the
+        resident positions below ``n_tokens`` are returned."""
         kv = self._resolve_kv(kv_caches)
         sp = self.config.sp_factor
         cols = self.config.tp_factor  # KV head c lives on col c
         nkv = self.hf_config.num_key_value_heads
-        slot = slot_id * self.config.num_layers + layer_idx
-        # shard-row -> natural global position (inverse of the update_padded_kv_cache writer).
+        k_cache, v_cache, batch_idx, capacity_tokens, bounded = kv.layer_view(slot_id, layer_idx)
         chunk_size = chunk_size if chunk_size is not None else self.config.default_chunk_size
-        p = blockcyclic_positions(sp, chunk_size, self.config.max_seq_len)
+        if bounded:
+            assert (
+                written_tokens is not None
+            ), "bounded sliding layer readback needs written_tokens (n_chunks * chunk_size)"
+            # shard-row -> the LAST global position written there (circular slabs); -1 = never written.
+            p = bounded_blockcyclic_positions(sp, chunk_size, capacity_tokens, int(written_tokens))
+        else:
+            # shard-row -> natural global position (inverse of the update_padded_kv_cache writer).
+            p = blockcyclic_positions(sp, chunk_size, capacity_tokens)
+        # Rows that hold a scored position, in ascending position order (all of [0, n_tokens) unbounded).
+        rows = torch.nonzero((p >= 0) & (p < n_tokens), as_tuple=True)[0]
+        rows = rows[torch.argsort(p[rows])]
+        resident = p[rows]
 
         def gather(cache_tensor, col):
             dts = ttnn.get_device_tensors(cache_tensor)
-            dev = torch.cat([ttnn.to_torch(dts[r * cols + col])[slot, 0].float() for r in range(sp)], dim=0)
-            nat = torch.empty_like(dev)
-            nat[p] = dev
-            return nat[:n_tokens]
+            dev = torch.cat([ttnn.to_torch(dts[r * cols + col])[batch_idx, 0].float() for r in range(sp)], dim=0)
+            return dev[rows]
 
-        k = torch.stack([gather(kv.k, c) for c in range(nkv)], dim=0).unsqueeze(0)
-        v = torch.stack([gather(kv.v, c) for c in range(nkv)], dim=0).unsqueeze(0)
-        return k, v
+        k = torch.stack([gather(k_cache, c) for c in range(nkv)], dim=0).unsqueeze(0)
+        v = torch.stack([gather(v_cache, c) for c in range(nkv)], dim=0).unsqueeze(0)
+        return k, v, resident
 
     def _kv_diag(self, gL, g_k, dev_k, g_v, dev_v, out_dir):
         """Bring-up diagnostic (gated by GPT_OSS_KV_DUMP) to localize a per-position K RoPE error.
@@ -530,6 +577,11 @@ class TtPrefillRuntime:
         ``n_chunks`` caps the compare to what this run actually wrote (``n_chunks * chunk_size``).
         ``real_len`` further caps to non-pad tokens. ``pt_path_override`` is unsupported
         (trace-dir goldens only) and rejected if set — required keyword for Gate 2b / validation.py.
+
+        Bounded sliding layers (bounded_sliding_kv_cache) hold only the circular resident window —
+        the last ``sliding_capacity`` positions of the ``n_chunks`` chunks written — so K/V and the
+        golden are BOTH sliced to the resident positions before the PCC (full layers unchanged).
+        This host readback is the validation instrument for the circular write.
         """
         from safetensors import safe_open
 
@@ -551,6 +603,10 @@ class TtPrefillRuntime:
         if real_len is not None:
             n_tokens = min(n_tokens, int(real_len))
         assert n_tokens > 0, f"kv_cache_pcc_check: n_tokens=0 (n_chunks={n_chunks}, chunk_size={chunk_size})"
+        kv = self._resolve_kv(kv_caches)
+        # TOTAL tokens written (every chunk is written whole, pad tail included) — drives the bounded
+        # slab-occupancy un-rotation; may exceed n_tokens when real_len/token count caps the compare.
+        written_tokens = n_chunks * chunk_size
 
         head_dim = self.hf_config.head_dim
         rotary_dim = getattr(self.hf_config, "rotary_dim", head_dim)
@@ -574,16 +630,27 @@ class TtPrefillRuntime:
         min_k, min_v = 1.0, 1.0
         for L in range(self.config.num_layers):
             gL = first_layer_idx + L
-            dev_k, dev_v = self.gather_layer(
-                slot_id=slot_id, layer_idx=L, n_tokens=n_tokens, kv_caches=kv_caches, chunk_size=chunk_size
+            dev_k, dev_v, resident = self.gather_layer(
+                slot_id=slot_id,
+                layer_idx=L,
+                n_tokens=n_tokens,
+                kv_caches=kv_caches,
+                chunk_size=chunk_size,
+                written_tokens=written_tokens,
             )
             with safe_open(str(kv_dir / f"layer_{gL}.safetensors"), framework="pt") as h:
                 g_k = h.get_tensor(f"key_cache_layer_{gL}").float()[:, :, :n_tokens, :][..., src]  # HF -> Meta
                 g_v = h.get_tensor(f"value_cache_layer_{gL}").float()[:, :, :n_tokens, :]
+            note = ""
+            if resident.numel() != n_tokens:
+                # Bounded sliding layer: only the circular window survives on device — the device rows
+                # came back compacted to the resident positions, slice the golden to match.
+                g_k, g_v = g_k[:, :, resident, :], g_v[:, :, resident, :]
+                note = f" (bounded: {resident.numel()}/{n_tokens} resident)"
             pcc_k = float(comp_pcc(g_k, dev_k, 0.0)[1])
             pcc_v = float(comp_pcc(g_v, dev_v, 0.0)[1])
             min_k, min_v = min(min_k, pcc_k), min(min_v, pcc_v)
-            logger.info(f"  layer {gL:>2}: K={pcc_k:.5f} V={pcc_v:.5f}")
+            logger.info(f"  layer {gL:>2}: K={pcc_k:.5f} V={pcc_v:.5f}{note}")
             if gL in _dump_set:
                 self._kv_diag(gL, g_k, dev_k, g_v, dev_v, _dump_dir)
         logger.info(f"[kv-pcc] min PCC across {self.config.num_layers} layers: K={min_k:.5f} V={min_v:.5f}")

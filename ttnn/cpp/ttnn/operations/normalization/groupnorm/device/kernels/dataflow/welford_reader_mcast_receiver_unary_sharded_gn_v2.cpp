@@ -41,15 +41,15 @@ void kernel_main() {
     constexpr uint32_t dfb_repack_out_id = tt::CBIndex::c_12;
     constexpr uint32_t dfb_out0_id = tt::CBIndex::c_16;
 
-    Noc noc;
+    const Noc noc;
     Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
     Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
     DataflowBuffer dfb_ex_global(dfb_ex_global_id);
-    DataflowBuffer dfb_in0(dfb_in0_id);
+    const DataflowBuffer dfb_in0(dfb_in0_id);
     DataflowBuffer dfb_repack(dfb_repack_id);
     DataflowBuffer dfb_repack_out(dfb_repack_out_id);
-    DataflowBuffer dfb_out0(dfb_out0_id);
+    const DataflowBuffer dfb_out0(dfb_out0_id);
 
     constexpr uint32_t single_tile_size_bytes = get_tile_size(dfb_ex_partial_id);
 
@@ -62,9 +62,9 @@ void kernel_main() {
     using stats_write_t = std::conditional_t<stats_is_fp32, float, uint16_t>;
 
 #if defined(READER_REPACK) and defined(TILIZE_IN)
-    uint32_t in0_l1_read_addr = dfb_in0.get_read_ptr();
+    const uint32_t in0_l1_read_addr = dfb_in0.get_read_ptr();
     uint32_t src_addr_in0 = in0_l1_read_addr;
-    UnicastEndpoint self_ep;
+    const UnicastEndpoint self_ep;
     for (uint32_t m = 0; m < per_core_M; ++m) {
         dfb_repack.reserve_back(per_core_N);
         uint32_t l1_write_addr_repack = dfb_repack.get_write_ptr();
@@ -95,15 +95,15 @@ void kernel_main() {
         auto global_vars_ptr = global_means_ptr + single_tile_size_bytes;
 
         for (uint32_t m = 0; m < num_groups; ++m) {
-            auto p_local_means = reinterpret_cast<stats_read_t*>(local_means_ptr);
-            auto p_local_vars = reinterpret_cast<stats_read_t*>(local_vars_ptr);
+            auto* p_local_means = reinterpret_cast<stats_read_t*>(local_means_ptr);
+            auto* p_local_vars = reinterpret_cast<stats_read_t*>(local_vars_ptr);
 
             auto local_result =
                 combine_welford_stats<tile_width, block_hw * tile_width, local_stride>(p_local_means, p_local_vars);
 
             // Write this to dfb_ex_global
-            auto p_global_means = reinterpret_cast<volatile stats_write_t*>(global_means_ptr);
-            auto p_global_vars = reinterpret_cast<volatile stats_write_t*>(global_vars_ptr);
+            auto* p_global_means = reinterpret_cast<volatile stats_write_t*>(global_means_ptr);
+            auto* p_global_vars = reinterpret_cast<volatile stats_write_t*>(global_vars_ptr);
             p_global_means[0] = local_result.mean;
             p_global_vars[0] = local_result.variance;
 
@@ -128,17 +128,17 @@ void kernel_main() {
     uint32_t l1_write_addr_repack = dfb_out0.get_write_ptr();
     for (uint32_t m = 0; m < per_core_M; ++m) {
         dfb_repack_out.wait_front(per_core_N);
-        uint32_t in0_l1_read_addr = dfb_repack_out.get_read_ptr();
-        uint32_t src_addr_in0 = in0_l1_read_addr;
-        UnicastEndpoint self_ep;
+        const uint32_t repack_l1_read_addr = dfb_repack_out.get_read_ptr();
+        uint32_t src_addr_repack = repack_l1_read_addr;
+        const UnicastEndpoint repack_self_ep;
         for (uint32_t i = 0; i < tile_height; ++i) {
             noc.async_read(
-                self_ep,
+                repack_self_ep,
                 CoreLocalMem<uint32_t>(l1_write_addr_repack),
                 per_core_N_bytes,
-                {.noc_x = my_x[0], .noc_y = my_y[0], .addr = src_addr_in0},
+                {.noc_x = my_x[0], .noc_y = my_y[0], .addr = src_addr_repack},
                 {});
-            src_addr_in0 += per_core_N_bytes_with_stride;
+            src_addr_repack += per_core_N_bytes_with_stride;
             l1_write_addr_repack += per_core_N_bytes;
         }
         noc.async_read_barrier();

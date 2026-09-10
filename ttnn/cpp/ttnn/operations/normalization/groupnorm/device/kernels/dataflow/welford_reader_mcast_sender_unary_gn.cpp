@@ -62,15 +62,15 @@ void kernel_main() {
         get_named_compile_time_arg_val("stats_is_fp32") == 0,
         "GN_DISTRIBUTED_AG requires bf16 stats CBs (stats_is_fp32 == 0)");
     // Appended after src0's positional accessor block.
-    constexpr auto stats_dram_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
+    constexpr auto stats_dram_args = TensorAccessorArgs<decltype(src0_args)::next_compile_time_args_offset()>();
 #endif
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t start_id = get_arg_val<uint32_t>(2);
     const uint32_t num_channels_tiles = get_arg_val<uint32_t>(4);
 
-    const bool has_mcast_first_group = get_arg_val<uint32_t>(5);
-    const bool has_mcast_last_group = get_arg_val<uint32_t>(6);
+    const bool has_mcast_first_group = get_arg_val<uint32_t>(5) == 1;
+    const bool has_mcast_last_group = get_arg_val<uint32_t>(6) == 1;
 
     // mid mcast group
     const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(7);
@@ -80,23 +80,23 @@ void kernel_main() {
     const uint32_t num_mcast_cores_mid_group = get_arg_val<uint32_t>(11);
 
     // first mcast group
-    uint32_t mcast_first_group_dest_noc_start_x;
-    uint32_t mcast_first_group_dest_noc_start_y;
-    uint32_t mcast_first_group_dest_noc_end_x;
-    uint32_t mcast_first_group_dest_noc_end_y;
+    uint32_t mcast_first_group_dest_noc_start_x = 0;
+    uint32_t mcast_first_group_dest_noc_start_y = 0;
+    uint32_t mcast_first_group_dest_noc_end_x = 0;
+    uint32_t mcast_first_group_dest_noc_end_y = 0;
     // last mcast group
-    uint32_t mcast_last_group_dest_noc_start_x;
-    uint32_t mcast_last_group_dest_noc_start_y;
-    uint32_t mcast_last_group_dest_noc_end_x;
-    uint32_t mcast_last_group_dest_noc_end_y;
+    uint32_t mcast_last_group_dest_noc_start_x = 0;
+    uint32_t mcast_last_group_dest_noc_start_y = 0;
+    uint32_t mcast_last_group_dest_noc_end_x = 0;
+    uint32_t mcast_last_group_dest_noc_end_y = 0;
 
     tt_l1_ptr uint32_t* noc_coord_x;
     tt_l1_ptr uint32_t* noc_coord_y;
     uint32_t noc_arg_base;
 
     // number of cores in mcast groups
-    uint32_t num_mcast_cores_first_group;
-    uint32_t num_mcast_cores_last_group;
+    uint32_t num_mcast_cores_first_group = 0;
+    uint32_t num_mcast_cores_last_group = 0;
 
     // first and last group mcast coordinates passed directly in async_write_multicast calls below
 
@@ -137,10 +137,10 @@ void kernel_main() {
         noc_arg_base = 12;
     }
 
-    noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(noc_arg_base));
-    noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(noc_arg_base + num_mcast_cores));
+    noc_coord_x = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(static_cast<int>(noc_arg_base)));
+    noc_coord_y = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(static_cast<int>(noc_arg_base + num_mcast_cores)));
 
-    Noc noc;
+    const Noc noc;
     Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
     Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
     reduce_sender_sem.set(VALID);
@@ -168,7 +168,7 @@ void kernel_main() {
     DataflowBuffer dfb_in0_welford(dfb_in0_welford_id);
     DataflowBuffer dfb_repack(dfb_repack_id);
     DataflowBuffer dfb_repack_out(dfb_repack_out_id);
-    DataflowBuffer dfb_out0(dfb_out0_id);
+    const DataflowBuffer dfb_out0(dfb_out0_id);
 
     constexpr uint32_t single_tile_size_bytes = get_tile_size(dfb_ex_partial_id);
     constexpr uint32_t src0_tile_bytes = get_tile_size(dfb_in0_id);
@@ -228,7 +228,7 @@ void kernel_main() {
 
     constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
     uint32_t num_out_blocks_padded = num_out_blocks;
-    uint32_t extra_out_block = false;
+    bool extra_out_block = false;
     uint32_t out_block_h_last = out_block_h_normal;
     if constexpr (block_h % num_out_blocks != 0) {
         extra_out_block = true;
@@ -302,8 +302,8 @@ void kernel_main() {
 
         for (uint32_t m = 0; m < num_groups; ++m) {
             // Read mean and variance arrays from dfb_ex_partial, then combine using Welford
-            auto p_local_means = reinterpret_cast<stats_read_t*>(local_means_ptr);
-            auto p_local_vars = reinterpret_cast<stats_read_t*>(local_vars_ptr);
+            auto* p_local_means = reinterpret_cast<stats_read_t*>(local_means_ptr);
+            auto* p_local_vars = reinterpret_cast<stats_read_t*>(local_vars_ptr);
 
             auto local_result = combine_welford_stats<
                 tile_width,
@@ -311,8 +311,8 @@ void kernel_main() {
                 local_stride>(p_local_means, p_local_vars);
 
             // Write this to dfb_ex_global
-            auto p_global_means = reinterpret_cast<volatile stats_write_t*>(global_means_ptr);
-            auto p_global_vars = reinterpret_cast<volatile stats_write_t*>(global_vars_ptr);
+            auto* p_global_means = reinterpret_cast<volatile stats_write_t*>(global_means_ptr);
+            auto* p_global_vars = reinterpret_cast<volatile stats_write_t*>(global_vars_ptr);
             p_global_means[0] = local_result.mean;
             p_global_vars[0] = local_result.variance;
 
@@ -325,16 +325,16 @@ void kernel_main() {
 #endif
 
                 for (uint32_t i = 1; i < num_mcast_cores; ++i) {
-                    UnicastEndpoint remote_ep;
+                    const UnicastEndpoint remote_ep;
                     noc.async_read(
                         remote_ep,
-                        CoreLocalMem<uint32_t>(global_means_ptr + i * NOC_L1_READ_ALIGNMENT_BYTES),
+                        CoreLocalMem<uint32_t>(global_means_ptr + (i * NOC_L1_READ_ALIGNMENT_BYTES)),
                         NOC_L1_READ_ALIGNMENT_BYTES,
                         {.noc_x = noc_coord_x[i], .noc_y = noc_coord_y[i], .addr = global_means_ptr},
                         {});
                     noc.async_read(
                         remote_ep,
-                        CoreLocalMem<uint32_t>(global_vars_ptr + i * NOC_L1_READ_ALIGNMENT_BYTES),
+                        CoreLocalMem<uint32_t>(global_vars_ptr + (i * NOC_L1_READ_ALIGNMENT_BYTES)),
                         NOC_L1_READ_ALIGNMENT_BYTES,
                         {.noc_x = noc_coord_x[i], .noc_y = noc_coord_y[i], .addr = global_vars_ptr},
                         {});
@@ -344,8 +344,8 @@ void kernel_main() {
 
             // Read dfb_ex_global through read-typed views; the writes below reuse the write-typed pointers (same L1
             // addresses).
-            auto p_global_means_read = reinterpret_cast<stats_read_t*>(global_means_ptr);
-            auto p_global_vars_read = reinterpret_cast<stats_read_t*>(global_vars_ptr);
+            auto* p_global_means_read = reinterpret_cast<stats_read_t*>(global_means_ptr);
+            auto* p_global_vars_read = reinterpret_cast<stats_read_t*>(global_vars_ptr);
             auto global_result =
                 combine_welford_stats<num_mcast_cores, num_channels_per_group * num_rows_per_group, global_stride>(
                     p_global_means_read, p_global_vars_read);
@@ -364,7 +364,7 @@ void kernel_main() {
 #ifndef GN_DISTRIBUTED_AG
             if constexpr (num_mcast_cores > 1) {
                 // mcast to other cores
-                MulticastEndpoint mcast_dst;
+                const MulticastEndpoint mcast_dst;
                 noc.async_write_multicast(
                     CoreLocalMem<uint32_t>(global_means_ptr),
                     mcast_dst,
@@ -387,7 +387,7 @@ void kernel_main() {
                     false);
 
                 if (has_mcast_first_group) {
-                    MulticastEndpoint mcast_first_group_dst;
+                    const MulticastEndpoint mcast_first_group_dst;
                     noc.async_write_multicast(
                         CoreLocalMem<uint32_t>(global_means_ptr),
                         mcast_first_group_dst,
@@ -411,7 +411,7 @@ void kernel_main() {
                 }
 
                 if (has_mcast_last_group) {
-                    MulticastEndpoint mcast_last_group_dst;
+                    const MulticastEndpoint mcast_last_group_dst;
                     noc.async_write_multicast(
                         CoreLocalMem<uint32_t>(global_means_ptr),
                         mcast_last_group_dst,
