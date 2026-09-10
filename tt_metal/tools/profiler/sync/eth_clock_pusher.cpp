@@ -206,7 +206,6 @@ void kernel_main() {
     set_sender_socket_page_size(sender, kPageBytes);
     noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
 
-    bool armed = false;  // PROFILER_TERMINATE observed clear at least once (a stale set from a past session)
     uint32_t strides = 0;
     uint64_t target = refclk64() + kStrideTicks;
     while (true) {
@@ -233,13 +232,10 @@ void kernel_main() {
             }
         }
 
-        // Teardown: the relay stop word, or the profiler own terminate flag (armed on a clear read first).
+        // Teardown: the relay stop word, written by the host at quiesce. The streaming control layout has no
+        // terminate slot; this word is the only stop signal a resident eth kernel gets.
         invalidate_l1_cache();
-        const uint32_t term = kp::profiler_control_buffer[kp::PROFILER_TERMINATE];
-        if (!armed) {
-            armed = (term == 0u);
-        }
-        if (*stop != 0u || (armed && term != 0u)) {
+        if (*stop != 0u) {
             break;
         }
     }
