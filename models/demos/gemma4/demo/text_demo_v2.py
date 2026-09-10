@@ -593,6 +593,11 @@ def test_demo_text(
         full_idxs = [i for i, is_sliding in enumerate(sliding_mask) if not is_sliding]
         if full_idxs:
             page_table = per_layer_pts[full_idxs[0]]
+        else:
+            # Reduced all-sliding models (GEMMA4_NUM_LAYERS <= 5) have no
+            # full-attention table; match against the first sliding table —
+            # with no full layers there is nothing it can mis-address.
+            page_table = per_layer_pts[0]
         logger.info(f"Bounded sliding: installed {len(per_layer_pts)} per-layer page tables")
 
     # ── Warmup (prefill compile + optional trace) ──────────────────────────

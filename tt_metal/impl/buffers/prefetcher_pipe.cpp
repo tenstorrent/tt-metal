@@ -7,6 +7,7 @@
 #include <buffer_types.hpp>
 #include <core_coord.hpp>
 #include <device.hpp>
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "impl/allocator/allocator.hpp"
 #include "impl/context/metal_context.hpp"
@@ -17,6 +18,8 @@
 #include <algorithm>
 #include <cstdint>
 #include <limits>
+#include <memory>
+#include <type_traits>
 #include <variant>
 #include <vector>
 
@@ -75,7 +78,7 @@ PrefetcherPipeConfigPageLayout compute_prefetcher_pipe_config_page_layout(
 
 }  // namespace
 
-PrefetcherPipe::PrefetcherPipe(
+PrefetcherPipeImpl::PrefetcherPipeImpl(
     distributed::MeshDevice* device,
     CoreCoord sender_core,
     const CoreRangeSet& receiver_cores,
@@ -91,7 +94,7 @@ PrefetcherPipe::PrefetcherPipe(
     }
 }
 
-void PrefetcherPipe::build_config_pages() {
+void PrefetcherPipeImpl::build_config_pages() {
     TT_FATAL(config_address_ != 0, "PrefetcherPipe config allocation must exist before building pages");
     TT_FATAL(data_address_ != 0, "PrefetcherPipe data address must be set before building config pages");
 
@@ -147,7 +150,7 @@ void PrefetcherPipe::build_config_pages() {
     }
 }
 
-void PrefetcherPipe::write_config_to_device() {
+void PrefetcherPipeImpl::write_config_to_device() {
     TT_FATAL(device_ != nullptr, "PrefetcherPipe device cannot be null");
     for (const auto& [core, page] : config_pages_) {
         for (IDevice* target_device : device_->get_devices()) {
@@ -161,7 +164,7 @@ void PrefetcherPipe::write_config_to_device() {
     }
 }
 
-void PrefetcherPipe::setup_buffers(BufferType buffer_type) {
+void PrefetcherPipeImpl::setup_buffers(BufferType buffer_type) {
     validate_ring_geometry(device_, ring_size_, buffer_type);
 
     const auto context_id = extract_context_id(device_);
@@ -206,9 +209,9 @@ void PrefetcherPipe::setup_buffers(BufferType buffer_type) {
     write_config_to_device();
 }
 
-PrefetcherPipe::~PrefetcherPipe() { release_allocations(); }
+PrefetcherPipeImpl::~PrefetcherPipeImpl() { release_allocations(); }
 
-void PrefetcherPipe::release_allocations() noexcept {
+void PrefetcherPipeImpl::release_allocations() noexcept {
     if (device_ == nullptr || !device_->is_initialized()) {
         config_allocation_id_ = 0;
         data_allocation_id_ = 0;
@@ -227,21 +230,66 @@ void PrefetcherPipe::release_allocations() noexcept {
     data_allocation_id_ = 0;
 }
 
-uint32_t PrefetcherPipe::buffer_address() const { return data_address_; }
+uint32_t PrefetcherPipeImpl::buffer_address() const { return data_address_; }
 
-uint32_t PrefetcherPipe::config_address() const { return config_address_; }
+uint32_t PrefetcherPipeImpl::config_address() const { return config_address_; }
 
-const std::vector<uint32_t>& PrefetcherPipe::config_page(const CoreCoord& core) const {
+const std::vector<uint32_t>& PrefetcherPipeImpl::config_page(const CoreCoord& core) const {
     auto it = config_pages_.find(core);
     TT_FATAL(it != config_pages_.end(), "PrefetcherPipe has no host config page for core {}", core.str());
     return it->second;
 }
 
-const CoreRangeSet& PrefetcherPipe::sender_cores() const { return sender_cores_; }
+const CoreRangeSet& PrefetcherPipeImpl::sender_cores() const { return sender_cores_; }
 
-const CoreRangeSet& PrefetcherPipe::receiver_cores() const { return receiver_cores_; }
+const CoreRangeSet& PrefetcherPipeImpl::receiver_cores() const { return receiver_cores_; }
 
-const CoreRangeSet& PrefetcherPipe::all_cores() const { return all_cores_; }
+const CoreRangeSet& PrefetcherPipeImpl::all_cores() const { return all_cores_; }
+
+PrefetcherPipe::PrefetcherPipe(
+    distributed::MeshDevice* device,
+    CoreCoord sender_core,
+    const CoreRangeSet& receiver_cores,
+    uint32_t ring_size,
+    BufferType buffer_type) :
+    pimpl_(std::make_unique<PrefetcherPipeImpl>(device, sender_core, receiver_cores, ring_size, buffer_type)) {}
+
+PrefetcherPipe::PrefetcherPipe(PrefetcherPipe&&) noexcept = default;
+
+// Defined here rather than in the header because assigning over a pipe destroys the
+// PrefetcherPipeImpl it held, which needs the complete type.
+PrefetcherPipe& PrefetcherPipe::operator=(PrefetcherPipe&&) noexcept = default;
+
+PrefetcherPipe::~PrefetcherPipe() = default;
+
+// A Program records an Attach by pointing at the PrefetcherPipeImpl, so relocating a handle has to
+// leave that object alone; holding it behind a pointer is what makes that true. Containers relocate
+// on growth, and a throwing move there would strand the ring, so require the move to be noexcept.
+static_assert(
+    std::is_nothrow_move_constructible_v<PrefetcherPipe> && !std::is_copy_constructible_v<PrefetcherPipe>,
+    "PrefetcherPipe must move without throwing and must not copy: two handles would free one ring");
+
+uint32_t PrefetcherPipe::buffer_address() const { return pimpl_->buffer_address(); }
+
+uint32_t PrefetcherPipe::config_address() const { return pimpl_->config_address(); }
+
+uint32_t PrefetcherPipe::ring_size() const { return pimpl_->ring_size(); }
+
+uint32_t PrefetcherPipe::config_page_size() const { return pimpl_->config_page_size(); }
+
+uint32_t PrefetcherPipe::credit_reset_offset() const { return pimpl_->credit_reset_offset(); }
+
+uint32_t PrefetcherPipe::credit_reset_size() const { return pimpl_->credit_reset_size(); }
+
+CoreCoord PrefetcherPipe::sender_core() const { return pimpl_->sender_core(); }
+
+const CoreRangeSet& PrefetcherPipe::sender_cores() const { return pimpl_->sender_cores(); }
+
+const CoreRangeSet& PrefetcherPipe::receiver_cores() const { return pimpl_->receiver_cores(); }
+
+const CoreRangeSet& PrefetcherPipe::all_cores() const { return pimpl_->all_cores(); }
+
+distributed::MeshDevice* PrefetcherPipe::get_device() const { return pimpl_->get_device(); }
 
 PrefetcherPipe CreatePrefetcherPipe(
     distributed::MeshDevice* device,
@@ -254,7 +302,7 @@ PrefetcherPipe CreatePrefetcherPipe(
 
 uint8_t AttachPrefetcherPipe(
     Program& program, PrefetcherPipe& prefetcher_pipe, const CoreRangeSet& cores, uint32_t entry_size) {
-    return program.impl().add_prefetcher_pipe_attachment(prefetcher_pipe, cores, entry_size);
+    return program.impl().add_prefetcher_pipe_attachment(prefetcher_pipe.impl(), cores, entry_size);
 }
 
 uint32_t CreatePrefetcherPipeRelayDataflowBuffer(
@@ -262,7 +310,7 @@ uint32_t CreatePrefetcherPipeRelayDataflowBuffer(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& receiver_core_spec,
     const dfb::DataflowBufferConfig& config,
     uint8_t prefetcher_pipe_id) {
-    const PrefetcherPipe& pipe = program.impl().get_prefetcher_pipe_attachment(prefetcher_pipe_id);
+    const PrefetcherPipeImpl& pipe = program.impl().get_prefetcher_pipe_attachment(prefetcher_pipe_id);
 
     CoreRangeSet receiver_cores;
     if (std::holds_alternative<CoreCoord>(receiver_core_spec)) {

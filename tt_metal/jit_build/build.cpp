@@ -217,10 +217,6 @@ void JitBuildEnv::init(
         this->defines_ += "-D" + device_kernel_define.first + "=" + device_kernel_define.second + " ";
     }
     this->defines_ += "-DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 ";
-    if (this->arch_ == tt::ARCH::QUASAR && rtoptions.get_simulator_enabled() &&
-        rtoptions.get_simulator_path().extension() == ".so") {
-        this->defines_ += "-DNOC_API_V1 ";
-    }
 
     if (rtoptions.get_profiler_enabled()) {
         uint32_t profiler_options = 1;
@@ -364,6 +360,7 @@ void JitBuildEnv::init(
         root_ + "tt_metal",
         root_ + "tt_metal/hw/inc",
         root_ + "tt_metal/tt-llk/common",
+        root_ + "tt_metal/tt-llk/tools/include",
         root_ + "tt_metal/hostdevcommon/api",
         root_ + "tt_metal/api/"};
 

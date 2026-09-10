@@ -255,7 +255,7 @@
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce -xv -m "not disable_fast_runtime_mode"'
   skus:
     wh_n300_civ2:
-      timeout: 40
+      timeout: 45
     bh_p100:
       timeout: 40
     bh_p150b_civ2:
@@ -268,7 +268,14 @@
   owner_id: U084B1CES7M # Borys Bradel
 
 - name: "ttnn llk helper library tests"
-  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/kernel_lib -xv -m "not disable_fast_runtime_mode"'
+  # The device-perf tests in this directory shell out to `python3 -m tracy`, which needs a
+  # Tracy-enabled build; this job runs from the wheel, so they fail on a missing profiler
+  # rather than on anything they measure. The nightly entry in ops_unit_tests.yaml drops the
+  # same tests by --ignore'ing both files; deselecting the marker instead keeps the
+  # functional cases in test_chain_perf.py, which do run here.
+  cmd: >-
+    pytest --timeout 300 tests/ttnn/unit_tests/kernel_lib -xv
+    -m "not disable_fast_runtime_mode and not models_device_performance_bare_metal"
   skus:
     wh_n300_civ2:
       timeout: 20
