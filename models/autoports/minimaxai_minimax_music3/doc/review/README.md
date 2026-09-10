@@ -138,14 +138,14 @@ decoder; `MM3_LLM_POLICY` is not set by the gate), not from the optimized headli
 ## Pull requests
 
 - tt-metal: branch `jashan/minimax-music3` pushed to `origin` (`tenstorrent/tt-metal`), draft pull request against
-  `main`: PR_URL_TT_METAL. The branch is stacked on `agentic-research/hous/multigoal-claude` plus the local Muse-Glimmer
+  `main`: `https://github.com/tenstorrent/tt-metal/pull/56043` (draft; base `main`, head `jashan/minimax-music3`). The branch is stacked on `agentic-research/hous/multigoal-claude` plus the local Muse-Glimmer
   commits the worktree was started from (the clone is shallow at `ecd7c64d0ff`), so the PR's commit list includes those
   parents; the MiniMax-Music3 change is exactly `models/autoports/minimaxai_minimax_music3/`. Decision: not rebased,
   because the stage work logs cite commit SHAs; stated in the PR body.
 - tt-model-manager: `https://github.com/tenstorrent/tt-model-manager/pull/89` (stage 09, `fix(container): match container
   names exactly in running()`), confirmed still a draft (`gh pr view 89 --json isDraft` -> true).
 - Both URLs are recorded in `~/mm3-bringup/state/10.prs.txt`.
-- Commits of this stage: REVIEW_COMMIT (review fixes, README, review log) and PR_COMMIT (PR URLs recorded).
+- Commits of this stage: `e4630c9c021` (review fixes, README, review log) and the follow-up commit that records the PR URLs in this log.
 
 ## Open risks
 
