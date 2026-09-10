@@ -5,6 +5,7 @@
 #include "dispatch_fabric2d.hpp"
 
 #include "device/dispatch_fabric2d_device_operation.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
 
@@ -25,6 +26,18 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
     const tt::tt_metal::MemoryConfig& memory_config) {
+    // Resolve the caller's topology against how this axis is actually wired, the way every other CCL
+    // front end does, and store the resolved value. Passing Ring on an axis whose closing link is not
+    // wired comes back as Linear, and this op has no Linear mode: it sends single hops around a ring.
+    const tt::tt_fabric::Topology usable = ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
+    TT_FATAL(
+        usable == tt::tt_fabric::Topology::Ring || usable == tt::tt_fabric::Topology::Torus,
+        "dispatch_fabric2d: axis {} resolves to {}, not a ring. This op relays single hops around one, so "
+        "the axis has to be wrap-wired and the topology has to be Ring or Torus; {} was requested.",
+        cluster_axis,
+        usable,
+        topology);
+
     return ttnn::prim::dispatch_fabric2d(
         input_tensor.device(),
         input_tensor,
@@ -41,7 +54,7 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
         seq_len_per_chip,
         cluster_axis,
         num_links,
-        topology,
+        usable,
         memory_config);
 }
 
