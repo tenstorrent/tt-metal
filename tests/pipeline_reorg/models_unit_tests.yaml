@@ -1379,7 +1379,7 @@
 
 - name: TT-DiT Wan2.2-T2V-A14B unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30
     unset HF_HUB_OFFLINE
     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
     pytest --timeout 1000 models/tt_dit/tests/models/wan2_2/test_rope.py
