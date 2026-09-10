@@ -393,12 +393,14 @@ void TracySink::plot_clock(uint32_t dev, uint32_t kind, uint64_t device_ticks) {
         static_cast<int64_t>(
             static_cast<double>(static_cast<int64_t>(device_ticks) - static_cast<int64_t>(eclk.anchor_ticks)) * 1e9 /
             hz);
-    // PlotDataAt writes tsc straight to the wire and the server multiplies it by m_timerMul (ns per timer tick) to
-    // get display ns -- so the argument must be in TIMER TICKS, not ns. to_timeline yields ns; divide by the same
-    // mul to invert the server step. (Device zones dodge this via a GPU context with period 1.0; a raw plot does
-    // not, which is why the curve was compressed by exactly the timer mul, ~0.42.)
+    // PlotDataAt writes tsc straight to the wire and the server displays it as (tsc - baseTime) * m_timerMul, i.e.
+    // it expects an ABSOLUTE timer-tick stamp like GetTime(). to_timeline() yields ns SINCE anchor_tracy_ (the
+    // capture map is anchored there), so the point must be re-expressed as absolute ticks: anchor_tracy_ + ns/mul.
+    // The device zones land at (anchor_tracy_ - baseTime)*mul + to_timeline_ns through their GPU context (calibrated
+    // on anchor_tracy_, period 1.0); this puts a plot point at exactly the same display time. Passing ns alone
+    // compressed the curve by the timer mul (~0.42), and passing ns/mul without the anchor put it ~30 h off-screen.
     const double timer_mul = TracyGetTimerMul() > 0.0 ? TracyGetTimerMul() : 1.0;
-    const int64_t tsc = static_cast<int64_t>(static_cast<double>(to_timeline(base_ns)) / timer_mul);
+    const int64_t tsc = anchor_tracy_ + static_cast<int64_t>(static_cast<double>(to_timeline(base_ns)) / timer_mul);
     if (kind == PP_CLOCK_LOCAL_REFCLK) {
         tracy::Profiler::PlotDataAt(plot_name(chip, false), SyncCorrections::lookup_local_ns(chip, base_ns), tsc);
     } else if (kind == PP_CLOCK_LINK_REFCLK) {
