@@ -65,9 +65,24 @@ grep -c "error:" /tmp/qbuild.log   # must print 0 (build_metal.sh exit code is u
 4. semaphore typing — `read_k` templated on the token-deduced type; call sites keep bare `Semaphore s(sem::name)` (`Semaphore<>` forces LOCAL_NONATOMIC and static_asserts).
 5. code size — compute `opt_level` O3→`Os` (trisc0 code region overflow 0x6924 > 0x6000).
 
-**CURRENT BLOCKER (architectural — awaiting op-owner decision):** Quasar caps intra-Tensix DFBs at **8** (16 tile counters, 2 per DFB), but flash-decode declares **11** compute intermediates — `qk_im, out_im, out_accumulate_im, max_1, max_2, sum_1, sum_2, exp_max_diff, prev_sum_2, exp_max_diff_2, out_accumulate_im_2` — all allocated unconditionally, all core online-softmax double-buffers (NOT sink/streaming-gated; verified). Reducing to ≤8 needs a real refactor: merge `_1`/`_2` paired buffers into single DFBs with 2 entries (counter cost is per-DFB, so 3 merges → 11→8), or convert some to scratchpads. The sentinel has NOT yet produced a PCC number.
+6. tile-counter budget — Quasar caps intra-Tensix DFBs at **8** (16 counters, 2 each); flash-decode declared **11**. The 3 tree-reduction temps (`prev_sum_2`/`exp_max_diff_2`/`out_accumulate_im_2`) run *after* the flash loop and now reuse `l_in`/`out_o`/`out_m` **in place** (child L/O already there; `out_m` idle until send-to-parent). 11→8. Committed `e987f004d93`; verified format-safe (`im_tile==stats_tile` always) + FIFO-balanced statically. (An earlier alias variant using `qk_im`/`out_im` was **reverted** per op-owner preference — `f1ebcbaed04`.)
 
-**Note:** Tasks 6–11 below are the *originally anticipated* Phase-2 work and did not occur as written; the real Phase-2 work is the chain above. The SDD ledger `.superpowers/sdd/2026-09-09-quasar-sdpa-decode-craqsim-bringup/progress.md` has the blow-by-blow. Commit SHAs move on rebase — match commits by subject line.
+**FULL sdpa_decode TEST STATUS (craq-sim, 2026-09-10):**
+- `ops/` + `prototype_ops/` **non-paged** `batch1`, `batch32`: ✅ compile + pass program-creation (8 DFBs); reach the shared `cur_pos` sim blocker (#1 below).
+- `ops/` + `prototype_ops/` **paged** `batch1`, `batch32`: ❌ fail at program-creation — `page_table` **DM self-loop** (reader producer+consumer), illegal on Gen2 (`program_spec.cpp:1500`). A real op bug, not a sim issue. **FIX (DEFERRED, noted — do not implement yet):** convert the non-sharded, single-entry `page_table` DFB → Scratchpad, exactly as the prefill op did (`sdpa/.../reader_interleaved.cpp`: `Scratchpad<volatile uint32_t> page_table_scratch` + factory `ScratchpadSpec{PAGE_TABLE_SCRATCH, page_table_stick_size}` + a reader `ScratchpadBinding`), mirroring decode's own `intermed_out` scratchpad. Touches factory + `reader_decode_all.cpp` + the `read_page_table_for_batch` call.
+- `graph_ops/` paged cases: not yet run; may include **sharded** page_table (the harder borrowed case).
+
+**CURRENT BLOCKERS:**
+1. **`cur_pos` sim gap (GH#50135) — blocks NUMERICS for ALL configs on craq-sim.** The op reads `cur_pos` via `read_tile_value`, which broadcasts through the TRISC mailbox (`t_tile_mmio_rd32 @ 0x811000 = TRISC_MAILBOX_BASE0`); libttsim doesn't implement that read. So no decode test can reach a PCC number on craq-sim — numerics need the **emulator** or a GH#50135 fix. **Op-owner directive: do NOT work around this in the op.**
+2. **`page_table` DM self-loop — blocks the paged tests at program-creation** (deferred fix above).
+
+**ROBUSTNESS FOLLOW-UPS (configs the current tests don't hit; not blockers now):**
+- **Sharded page_table** (borrowed self-loop) — peer-flagged STOP, needs API-owner input.
+- **`tilize_q`** (row-major Q) → `q_in` becomes a compute self-loop (+1 → 9). The tree-temp trick does NOT apply (`q_in` is live across the whole flash loop; no size-matched idle host) → forced to the merge-`_1`/`_2` route or a mixed-DFB reclassification.
+- **Non-causal + no user mask** → `mask_in` becomes a compute self-loop (+1). Mask is not applied in that config → eliminable by gating its allocation, BUT confirm the producer binding first (looked vestigial/suspicious).
+- **`fp32_dest_acc_en`→bf16 DEST** (fix #3) — accuracy unverified; check PCC once numerics run.
+
+**Note:** Tasks 6–11 below are the *originally anticipated* Phase-2 work and did not occur as written; the real Phase-2 work is the fix chain above. SDD ledger `.superpowers/sdd/2026-09-09-quasar-sdpa-decode-craqsim-bringup/progress.md` has the blow-by-blow. Commit SHAs move on rebase — match by subject line. ("sentinel" in older notes = the `ops/` non-paged `batch1` test.)
 
 ---
 
