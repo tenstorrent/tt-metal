@@ -751,11 +751,12 @@ def generate_sfpu_unary_combinations(*, is_perf=False):
         )
         for variant in format_variants:
             dest_sync_modes = (DestSync.Half,) if is_perf else cfg.dest_sync_modes
-            implied_math_formats = (
-                (ImpliedMathFormat.Yes,)
-                if is_perf
-                else (ImpliedMathFormat.No, ImpliedMathFormat.Yes)
-            )
+            if cfg.mathop == MathOperation.Typecast:
+                implied_math_formats = (ImpliedMathFormat.No,)
+            elif is_perf:
+                implied_math_formats = (ImpliedMathFormat.Yes,)
+            else:
+                implied_math_formats = (ImpliedMathFormat.No, ImpliedMathFormat.Yes)
             input_dims = (
                 select_perf_input_dimensions(cfg.input_dims)
                 if is_perf
