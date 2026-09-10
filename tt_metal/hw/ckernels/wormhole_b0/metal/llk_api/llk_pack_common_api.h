@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+
+#include "sanitizer/api.h"
 #include "ckernel.h"
 #include "ckernel_globals.h"
 #include "internal/circular_buffer_interface.h"
@@ -24,7 +26,10 @@
  *
  * @note Must be called together with llk_unpack_wait_fp32_dest_acc and llk_math_set_fp32_dest_acc.
  */
-inline void llk_pack_wait_fp32_dest_acc() { _llk_set_fp32_dest_acc_<ThreadId::PackThreadId>(); }
+inline void llk_pack_wait_fp32_dest_acc() {
+    SAN_HOOK(unsupported());
+    _llk_set_fp32_dest_acc_<ThreadId::PackThreadId>();
+}
 
 /**
  * Configure the packer hardware for the given output operand.
@@ -45,6 +50,15 @@ inline void llk_pack_hw_configure(std::uint32_t pack_output) {
 
     const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
 
+    SAN_HOOK(configure(
+        StateVal<Operand<Exu::Pack>::DestWidth32>(is_fp32_dest_acc_en),
+        StateVal<Operand<Exu::Pack>::InputFormat>(pack_src_format[output_id]),
+        StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
+        StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),
+        StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
+        StateVal<Operand<Exu::Pack>::PartialFace>(partial_face),
+        StateVal<Operand<Exu::Pack>::NarrowTile>(narrow_tile),
+        StateDiscard<std::uint32_t>(tile_size)));
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, PackMode::Default>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
@@ -178,6 +192,15 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     const bool partial_face = get_output_partial_face(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
+    SAN_HOOK(reconfigure(
+        StateVal<Operand<Exu::Pack>::DestWidth32>(is_fp32_dest_acc_en),
+        StateVal<Operand<Exu::Pack>::InputFormat>(pack_src_format[output_id]),
+        StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
+        StateVal<Operand<Exu::Pack>::FaceHeight>(face_r_dim),
+        StateVal<Operand<Exu::Pack>::NumFaces>(num_faces),
+        StateVal<Operand<Exu::Pack>::PartialFace>(partial_face),
+        StateVal<Operand<Exu::Pack>::NarrowTile>(narrow_tile),
+        StateDiscard<std::uint32_t>(get_local_cb_interface(output_id).fifo_page_size)));
     _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
@@ -215,6 +238,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const 
  * @param relu_config Relu mode/threshold configuration.
  */
 TT_ALWAYS_INLINE void llk_pack_relu_config(const ckernel::ReluConfig& relu_config) {
+    SAN_HOOK(unsupported());
     _llk_pack_relu_config_(relu_config);
 }
 
