@@ -48,8 +48,13 @@ _CMD_MISTRAL4_8X1 = f"pytest {_MISTRAL4_TEST_PATH} -k 'mistral4-5k-perf and toru
 # test_mla_perf.py: local, one run, DDR 14000 against baselines cut at 16000 -- and here also a
 # different fabric from every sibling row. Replace BOTH with the first CI result on this fabric.
 _MISTRAL4_MOE_NS_UNCALIBRATED = 2_661_495
-# Placeholder until the first CI LoudBox sample; see test_mistral4_moe_perf_loudbox.
-_MISTRAL4_MOE_LB_8X1_NS_UNCALIBRATED = 4_000_000
+# Cut 2026-09-09 on the CI LoudBox (bh_loudbox), run 34399947211. One sample, the way the DeepSeek
+# row above was cut. That run also re-measured DeepSeek's 8x1 proxy at 4,012,004 ns against its
+# committed 4,021,552 -- -0.24%, so a single sample on this box is worth a 3% band.
+# Breakdown: Other 5,133,978 / Matmul 310,647 / CCL 24,321. CCL is 0.44% here against ~21% at TP=4,
+# which is why the TP=4 lever ranking does not carry across.
+_MISTRAL4_MOE_LB_8X1_NS = 5_468_946
+_MISTRAL4_MOE_LB_8X1_MARGIN = 0.03
 _RECORD_ONLY_MARGIN = 10.0
 
 
@@ -181,17 +186,16 @@ def test_mistral4_moe_perf_loudbox():
     single-rank shape, and its lever ranking does not carry across: collectives are ~21% of a layer
     at TP=4 and 0.2% at TP=1, and MoE routing goes 26% -> 37%.
 
-    UNCALIBRATED: the threshold below is a placeholder and the margin admits any measurement, so this
-    reports rather than gates. Re-cut both from the first CI LoudBox sample and record the run number
-    here, the way the DeepSeek row above was cut.
+    Gated: threshold and margin cut from run 34399947211 (see the constants above). If this proves
+    noisy, widen the margin rather than chasing the centre.
     """
     run_model_device_perf_test_with_merge(
         command=_CMD_MISTRAL4_8X1,
-        expected_device_perf_ns_per_iteration=_MISTRAL4_MOE_LB_8X1_NS_UNCALIBRATED,
+        expected_device_perf_ns_per_iteration=_MISTRAL4_MOE_LB_8X1_NS,
         subdir="mistral4_moe",
         model_name="mistral4_moe_lb_8x1_torus_y",
         num_iterations=1,
         batch_size=1,
-        margin=_RECORD_ONLY_MARGIN,
+        margin=_MISTRAL4_MOE_LB_8X1_MARGIN,
         comments="isl5k_lb_8x1_torus_y",
     )
