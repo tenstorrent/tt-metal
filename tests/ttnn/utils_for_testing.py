@@ -216,6 +216,7 @@ def assert_allclose(
 
 
 def assert_with_ulp(
+    *,
     expected_result: Union[ttnn.Tensor, torch.Tensor],
     actual_result: Union[ttnn.Tensor, torch.Tensor],
     ulp_threshold=10,
@@ -232,6 +233,7 @@ def assert_with_ulp(
     Where ULP(expected) returns, for each element, the length of a single Unit of Least Precision (ULP).
 
     ``expected_result`` is the reference (golden) tensor and ``actual_result`` is the tensor under test.
+    All arguments are keyword-only because swapping the reference and actual tensors changes the metric.
     On failure the message reports the worst element as ``|calculated <actual> - golden <expected>| /
     ULP(golden)``, i.e. the first printed operand is ``actual_result`` and the divisor is the ULP of
     ``expected_result``.
@@ -927,7 +929,11 @@ def assert_div_by_zero_outputs(
     finite_mask = torch.isfinite(golden_tensor) & torch.isfinite(device_tensor)
     if finite_mask.any():
         # Safety net: not reached when golden is all ±inf after zero replacement.
-        assert_with_ulp(golden_tensor[finite_mask], device_tensor[finite_mask], ulp_threshold=ulp_threshold)
+        assert_with_ulp(
+            expected_result=golden_tensor[finite_mask],
+            actual_result=device_tensor[finite_mask],
+            ulp_threshold=ulp_threshold,
+        )
 
 
 # ---------------------------------------------------------------------------

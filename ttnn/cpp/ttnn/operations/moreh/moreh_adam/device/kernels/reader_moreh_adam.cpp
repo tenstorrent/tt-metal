@@ -56,9 +56,9 @@ void kernel_main() {
     constexpr uint32_t cb_id_one = tt::CBIndex::c_6;
 
     constexpr auto param_args = TensorAccessorArgs<0>();
-    constexpr auto grad_args = TensorAccessorArgs<param_args.next_compile_time_args_offset()>();
-    constexpr auto exp_avg_args = TensorAccessorArgs<grad_args.next_compile_time_args_offset()>();
-    constexpr auto exp_avg_sq_args = TensorAccessorArgs<exp_avg_args.next_compile_time_args_offset()>();
+    constexpr auto grad_args = TensorAccessorArgs<decltype(param_args)::next_compile_time_args_offset()>();
+    constexpr auto exp_avg_args = TensorAccessorArgs<decltype(grad_args)::next_compile_time_args_offset()>();
+    constexpr auto exp_avg_sq_args = TensorAccessorArgs<decltype(exp_avg_args)::next_compile_time_args_offset()>();
 
     const auto param_addrg = TensorAccessor(param_args, param_addr);
     const auto grad_addrg = TensorAccessor(grad_args, grad_addr);
@@ -68,7 +68,8 @@ void kernel_main() {
 #ifdef AMSGRAD
     constexpr uint32_t cb_id_max_exp_avg_sq = tt::CBIndex::c_4;
     const auto max_exp_avg_sq_addr = get_arg_val<uint32_t>(4);
-    constexpr auto max_exp_avg_sq_args = TensorAccessorArgs<exp_avg_sq_args.next_compile_time_args_offset()>();
+    constexpr auto max_exp_avg_sq_args =
+        TensorAccessorArgs<decltype(exp_avg_sq_args)::next_compile_time_args_offset()>();
     const auto max_exp_avg_sq_addrg = TensorAccessor(max_exp_avg_sq_args, max_exp_avg_sq_addr);
 #endif
 

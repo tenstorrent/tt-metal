@@ -113,7 +113,7 @@ def test_unary_row_major(input_shape, ttnn_op, device):
     )
 
     ttnn_output = ttnn.to_torch(ttnn_op(ttnn_input))
-    assert_with_ulp(ttnn_output, golden_tensor, ulp_threshold=5.0)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=ttnn_output, ulp_threshold=5.0)
 
 
 @pytest.mark.parametrize(
@@ -156,7 +156,7 @@ def test_unary_sub_core_grids(shape, sub_core_grid, ttnn_op, device):
     )
 
     ttnn_output = ttnn.to_torch(ttnn_op(ttnn_input, sub_core_grids=sub_core_grid))
-    assert_with_ulp(ttnn_output, golden_tensor, ulp_threshold=1.0)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=ttnn_output, ulp_threshold=1.0)
 
 
 @pytest.mark.parametrize("ttnn_op", [ttnn.abs])

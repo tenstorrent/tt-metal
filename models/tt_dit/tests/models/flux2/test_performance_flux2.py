@@ -14,12 +14,37 @@ from models.common.utility_functions import is_blackhole
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 from ....pipelines.flux2.pipeline_flux2 import Flux2Pipeline
-from .test_pipeline_flux2 import line_params_8k_flux2, line_params_flux2, ring_params_8k_flux2
+from .device_params import line_params_8k_flux2_perf, line_params_flux2_perf, ring_params_8k_flux2_perf
 
 NUM_INFERENCE_STEPS = 50
 NUM_PERF_RUNS = 3
 
+# Upper bounds in seconds, 1.5x the 1024x1024 / 50-step numbers
+# These are more like regression tripwires, not a-priori determined perf targets.
+#
+# The key is (mesh shape, width, topology, sp_axis, is_fsdp), which is what it takes to name one
+# parametrization uniquely.
+#
+# Configs absent from this table are reported but we don't asssert on any perf targets.
+PERF_THRESHOLDS = {
+    ((4, 8), 1024, ttnn.Topology.Ring, 0, False): {
+        "total_encoding_time": 0.13,  # measured 0.0971
+        "denoising_steps_time": 0.20 * NUM_INFERENCE_STEPS,  # measured 0.1476/step, 7.3997 total
+        "vae_decoding_time": 0.49,  # measured 0.1797
+        "total_time": 9.8125,  # measured 7.6956
+    },
+}
 
+# Profiler step name -> the PERF_THRESHOLDS key it is gated against.
+_STEP_TO_METRIC = {
+    "encoder": "total_encoding_time",
+    "denoising": "denoising_steps_time",
+    "vae": "vae_decoding_time",
+    "run": "total_time",
+}
+
+
+@pytest.mark.timeout(6000)
 @pytest.mark.parametrize(
     "width, height",
     [
@@ -38,12 +63,13 @@ NUM_PERF_RUNS = 3
 @pytest.mark.parametrize(
     "mesh_device, sp_axis, tp_axis, encoder_tp_axis, vae_tp_axis, topology, num_links, is_fsdp, dynamic_load, device_params",
     [
-        [(2, 2), 0, 1, 1, 1, ttnn.Topology.Linear, 2, True, False, line_params_flux2],
-        [(2, 4), 0, 1, 1, 1, ttnn.Topology.Linear, 2, False, False, line_params_flux2],
-        [(4, 8), 0, 1, 1, 1, ttnn.Topology.Linear, 2, False, False, line_params_8k_flux2],
-        [(4, 8), 0, 1, 1, 0, ttnn.Topology.Ring, 2, False, False, ring_params_8k_flux2],
-        [(4, 8), 1, 0, 1, 0, ttnn.Topology.Ring, 2, False, False, ring_params_8k_flux2],
-        [(4, 8), 0, 1, 1, 0, ttnn.Topology.Ring, 2, True, False, ring_params_8k_flux2],
+        # Without dynamic_load the encoder OOMs during weight conversion on 4 chips.
+        [(2, 2), 0, 1, 1, 1, ttnn.Topology.Linear, 2, True, True, line_params_flux2_perf],
+        [(2, 4), 0, 1, 1, 1, ttnn.Topology.Linear, 2, False, False, line_params_flux2_perf],
+        [(4, 8), 0, 1, 1, 0, ttnn.Topology.Linear, 2, False, False, line_params_8k_flux2_perf],
+        [(4, 8), 0, 1, 1, 0, ttnn.Topology.Ring, 2, False, False, ring_params_8k_flux2_perf],
+        [(4, 8), 1, 0, 1, 0, ttnn.Topology.Ring, 2, False, False, ring_params_8k_flux2_perf],
+        [(4, 8), 0, 1, 1, 0, ttnn.Topology.Ring, 2, True, False, ring_params_8k_flux2_perf],
     ],
     ids=[
         "bh_qb",
@@ -207,6 +233,20 @@ def test_flux2_performance(
 
     print("=" * 80)
 
+    measurements = {
+        "total_encoding_time": avg_encoding,
+        "denoising_steps_time": avg_denoising,
+        "vae_decoding_time": avg_vae,
+        "total_time": avg_total,
+    }
+    perf_key = (tuple(mesh_device.shape), width, topology, sp_axis, is_fsdp)
+    expected_metrics = PERF_THRESHOLDS.get(perf_key)
+    if expected_metrics is None:
+        logger.warning(
+            f"No perf thresholds for {perf_key}: reporting timings only. "
+            "Add a PERF_THRESHOLDS entry to gate this config against regressions."
+        )
+
     if is_ci_env:
         device_name_map = {
             (2, 2): "BH_QB",
@@ -217,13 +257,14 @@ def test_flux2_performance(
         benchmark_data = BenchmarkData()
         for i in range(NUM_PERF_RUNS):
             for step_name in ["encoder", "denoising", "vae", "run"]:
+                value = benchmark_profiler.get_duration(step_name, i)
                 benchmark_data.add_measurement(
                     profiler=benchmark_profiler,
                     iteration=i,
                     step_name=step_name,
                     name=step_name,
-                    value=benchmark_profiler.get_duration(step_name, i),
-                    target=benchmark_profiler.get_duration(step_name, i),  # No baseline targets yet
+                    value=value,
+                    target=(expected_metrics or {}).get(_STEP_TO_METRIC[step_name], value),
                 )
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
@@ -240,5 +281,13 @@ def test_flux2_performance(
                 "topology": str(topology),
             },
         )
+
+    if expected_metrics is not None:
+        regressions = [
+            f"  {k}: {measurements[k]:.4f}s exceeds threshold {expected_metrics[k]:.4f}s"
+            for k in expected_metrics
+            if measurements[k] > expected_metrics[k]
+        ]
+        assert not regressions, f"FLUX.2 performance regression for {perf_key}:\n" + "\n".join(regressions)
 
     logger.info("Performance test completed successfully!")

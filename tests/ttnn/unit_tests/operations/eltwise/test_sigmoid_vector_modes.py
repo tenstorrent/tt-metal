@@ -33,7 +33,7 @@ def run_unary_test_sharded(device, hw, out_channels, vector_mode, approx_mode, t
     if approx_mode == ttnn.SigmoidMode.FastApproximate:
         assert_with_pcc(torch_output_tensor, output_tensor, approx_pcc)
     else:
-        assert_with_ulp(torch_output_tensor, output_tensor, ulp)
+        assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=ulp)
 
 
 @pytest.mark.parametrize("h", [2048])

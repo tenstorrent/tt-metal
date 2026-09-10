@@ -28,9 +28,9 @@ void kernel_main() {
     const uint32_t dram_reader_index = get_arg_val<uint32_t>(5);
     const uint32_t num_shard_to_write_back = get_arg_val<uint32_t>(6);
     const uint32_t reshard_tensor_start_offset = get_arg_val<uint32_t>(7);
-    tt_l1_ptr uint32_t* per_core_N_reshard_bytes = (tt_l1_ptr uint32_t*)(get_arg_addr(8));
-    tt_l1_ptr uint32_t* in0_mcast_sender_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(9));
-    tt_l1_ptr uint32_t* in0_mcast_sender_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(10));
+    tt_l1_ptr uint32_t* per_core_N_reshard_bytes = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(8));
+    tt_l1_ptr uint32_t* in0_mcast_sender_noc_x = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(9));
+    tt_l1_ptr uint32_t* in0_mcast_sender_noc_y = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(10));
 
     // COMPILE TIME ARGS
     constexpr uint32_t in1_page_size = get_compile_time_arg_val(0);
@@ -70,10 +70,10 @@ void kernel_main() {
     const uint32_t shard_column_offset_tiles = dram_reader_index * tiles_per_k_row;
 #endif
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer dfb_in1(dfb_id_in1);
     DataflowBuffer dfb_out(dfb_id_out);
-    DataflowBuffer dfb_out_reshard(dfb_id_out_reshard);
+    const DataflowBuffer dfb_out_reshard(dfb_id_out_reshard);
 #ifdef FUSE_BIAS
     DataflowBuffer dfb_in3(dfb_id_in3);
 #endif
@@ -82,7 +82,7 @@ void kernel_main() {
     uint32_t l1_write_addr_in1;
     uint32_t l1_read_addr_in1 = 0;
 
-    AllocatorBank<AllocatorBankType::DRAM> dram_bank;
+    const AllocatorBank<AllocatorBankType::DRAM> dram_bank;
     noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
         dram_bank, in1_page_size, {.bank_id = dram_bank_id, .addr = in1_tensor_addr}, NocOptVals{.vc = vc});
 
@@ -121,7 +121,7 @@ void kernel_main() {
     constexpr uint32_t initial_reserved_blocks = (num_blocks > 1) ? 2 : 1;
     dfb_in1.reserve_back(in1_block_num_tiles * initial_reserved_blocks);
     uint32_t l1_write_addr_in1_offset = 0;
-    uint32_t l1_write_addr_in1_start = dfb_in1.get_write_ptr();
+    const uint32_t l1_write_addr_in1_start = dfb_in1.get_write_ptr();
     l1_write_addr_in1 = l1_write_addr_in1_start;
     for (uint32_t block = 0; block < num_blocks; ++block) {
 #ifdef SPLIT_DRAM_BANK
@@ -221,7 +221,7 @@ void kernel_main() {
             l1_write_addr_out_reshard += reshard_tensor_start_offset;
         }
 
-        UnicastEndpoint dst_ep;
+        const UnicastEndpoint dst_ep;
         uint32_t reshard_dest_local_addr = l1_write_addr_out_reshard;
 
         for (uint32_t h = 0; h < per_core_M; ++h) {
