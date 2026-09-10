@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from models.common._tttv2_moved import TTTV2_MOVED_MSG
-
-raise ImportError(TTTV2_MOVED_MSG)
+raise ImportError(
+    "TTTv2 left tt-metal. Import from https://github.com/tenstorrent/tt_transformers "
+    "(models.common.llm_runtime -> tt_transformers.llm_runtime). "
+    "Keepers: models.common.{lazy_weight, tt_ccl, moe}."
+)

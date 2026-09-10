@@ -1712,8 +1712,7 @@
       models/common/tests/test_lazy_weight.py \
       models/common/tests/test_mesh_fixture_policy.py \
       models/common/tests/test_device_lock.py \
-      models/common/tests/test_resume_offset_alignment.py \
-      models/common/tests/test_tttv2_moved.py
+      models/common/tests/test_resume_offset_alignment.py
   model: tt-transformers-common
   skus:
     wh_llmbox:

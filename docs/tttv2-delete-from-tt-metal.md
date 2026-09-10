@@ -357,8 +357,8 @@ first, then write the raising stubs / delete the rest. A raising
 4. Do **not** slim `models/common/tests/conftest.py` unless a remaining
    keeper test requires it.
 5. Delete the implementations in §4.1–§4.2.
-6. Write the three `ImportError` stubs in §7. One host test that each
-   old package import raises `ImportError` and mentions `tt_transformers`.
+6. Write the three `ImportError` stubs in §7. Inline the message.
+   No helper module. No stub test.
 7. Remove in-tree TTTv2 module/sweep jobs. Comment out the six TTTv2
    e2e pytest lines per §4.3. Do not add a `tt_transformers` setup
    script.
@@ -378,8 +378,8 @@ rg -n "models/common/(tests/demos|tests/llm_runtime|tests/models)" \
   tests/pipeline_reorg .github/workflows tests/scripts
 ```
 
-Allowed remaining hits: the three stub `__init__.py` files, the stub
-host test, `models.common.moe` / `.tt_ccl` / `.lazy_weight`, this plan,
+Allowed remaining hits: the three stub `__init__.py` files,
+`models.common.moe` / `.tt_ccl` / `.lazy_weight`, this plan,
 and comments that say “moved”.
 
 Verify: host pytest on keeper tests; no configure/build needed (Python
@@ -421,51 +421,13 @@ A raising parent `__init__.py` also catches deep imports
 `from models.common.models.llama3_8b.generator import Llama3Generator`)
 because Python loads the parent package first. No nested stub packages.
 
-Shared helper (keep it tiny, no imports of `tt_transformers`):
-
-```python
-# models/common/_tttv2_moved.py  (or inline the same string in each stub)
-_MSG = (
-    "TTTv2 left tt-metal. Install and import the tt_transformers package: "
-    "https://github.com/tenstorrent/tt_transformers\n"
-    "  models.common.modules      -> tt_transformers.modules\n"
-    "  models.common.llm_runtime  -> tt_transformers.llm_runtime\n"
-    "  models.common.models       -> tt_transformers.models\n"
-    "Keepers that used to live under models.common.modules:\n"
-    "  LazyWeight -> models.common.lazy_weight\n"
-    "  tt_ccl     -> models.common.tt_ccl\n"
-    "  MoE        -> models.common.moe\n"
-    "models.common.sampling is unchanged (not TTTv2)."
-)
-
-# each of the three __init__.py files:
-raise ImportError(_MSG)
-```
+Inline `raise ImportError(...)` in each of the three `__init__.py`
+files. No shared helper module. No host test for the stub.
 
 Do **not** use `__getattr__` forwarding. Do **not** `import tt_transformers`.
 
-Duration: one tt-metal release. A later PR deletes the three files (and
-the helper). After that, the same import is a plain `ModuleNotFoundError`.
-
-Host test (keeper suite, not `model_family: TTTv2`):
-
-```python
-import pytest
-
-@pytest.mark.parametrize(
-    "name",
-    [
-        "models.common.modules",
-        "models.common.llm_runtime",
-        "models.common.models",
-        "models.common.modules.mlp.mlp_1d",
-        "models.common.models.llama3_8b.generator",
-    ],
-)
-def test_tttv2_old_path_raises(name):
-    with pytest.raises(ImportError, match="tt_transformers"):
-        __import__(name)
-```
+Duration: one tt-metal release. A later PR deletes the three files.
+After that, the same import is a plain `ModuleNotFoundError`.
 
 ---
 
@@ -579,11 +541,8 @@ Answer these. Defaults in **bold**.
 Python-only change. No `copilot-build.sh`.
 
 ```bash
-# no implementation imports (stub + host test + this plan OK)
+# no implementation imports (stubs + this plan OK)
 rg -n "from models\.common\.(modules|llm_runtime|models)" --glob '*.py'
-
-# stub contract
-pytest models/common/tests/test_tttv2_moved.py
 
 # keeper tests still collected
 pytest models/common/tests/test_sampling.py \
@@ -614,7 +573,6 @@ together.
 - [ ] `models/common/models/` is only the stub `__init__.py`
 - [ ] `models/common/modules/` is only the stub `__init__.py` (moe / tt_ccl / lazy_weight already moved)
 - [ ] `models/common/modules/{attention,embedding,lm_head,mlp,rmsnorm,rope,sampling,lazy_buffer.py,README.md}` gone
-- [ ] stub host test `models/common/tests/test_tttv2_moved.py` exists
 - [ ] TTTv2 test trees in §4.2 gone
 - [ ] `models/tttv2_*` + `models/test_tttv2_validate_vllm_matrix.py` gone
 - [ ] pipeline YAML TTTv2 module/sweep jobs gone
