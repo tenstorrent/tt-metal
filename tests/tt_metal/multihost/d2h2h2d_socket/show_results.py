@@ -113,8 +113,7 @@ def load(paths):
                 ):
                     mismatch = False
                 if mismatch:
-                    problems.append(f"{where}: bandwidth column {file_bw:.6f} != "
-                                    f"{bw_formula} {bw:.6f}")
+                    problems.append(f"{where}: bandwidth column {file_bw:.6f} != " f"{bw_formula} {bw:.6f}")
                 # Check 2: the file's latency matches ours.
                 file_lat = to_float(row.get("latency_us"))
                 if lat is not None and file_lat is not None and abs(lat - file_lat) > 1e-3:
