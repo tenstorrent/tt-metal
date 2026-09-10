@@ -96,21 +96,10 @@ enumeration would otherwise leave no mark on the verdict.
 
 ### The interface
 
-The phase drives both scripts the same way, and reads one file back:
-
-```
-<script> --json <path> -o <path>
-```
-
-```json
-{"checks": [
-  {"name": "hostside_pcie_aer", "status": "WARN",
-   "details": "u2c6 RxErr=620, u4c5 RxErr=79", "ip": "pcie", "data": {}}
-]}
-```
-
-`status` is `PASS`/`WARN`/`FAIL`/`SKIP`; `ip` is one of the `IP_ORDER` groups. The
-shape and the emitter live in `kmd_triage/triage_json.sh`, which both scripts
+The phase drives both scripts the same way — `<script> --json <path> -o <path>` —
+and reads the JSON file back. Each check carries a `status` of
+`PASS`/`WARN`/`FAIL`/`SKIP` and an `ip` from the `IP_ORDER` groups. The shape and
+the emitter live in `kmd_triage/triage_json.sh`, which both scripts
 source — one copy, because two would let the shape drift and the consumer would
 have no way to tell which it was looking at. The `Phase` and its rollup are built
 on ingest, not in the scripts, so FAIL > WARN > PASS stays computed in one place.
@@ -313,14 +302,6 @@ Build with either:
 ninja -C build_Release unit_tests_deployment
 ```
 
-The triage binary needs nothing extra: `tools/scaleout` is part of the default
-target, so a plain `./build_metal.sh` produces
-`build/tools/scaleout/kmd_triage`. To build just it:
-
-```bash
-ninja -C build kmd_triage
-```
-
 ## Repo layout
 
 ```
@@ -349,18 +330,8 @@ spun up a nested Docker container to run the diag suite. Now that the harness sh
 in the same image as the diag suite, `run_health_check.py` invokes `diag_runner.py`
 directly as a subprocess (see `diag_execution.py`) instead of via docker-in-docker.
 
-The triage tools are a sibling directory, next to the other compiled scaleout
-tools rather than under the health check, because the binary is a CMake target
-and the tools are useful on their own when triaging a unit by hand:
-
-```
-tools/scaleout/
-├── CMakeLists.txt      # declares the kmd_triage target
-├── sources.cmake       # KMD_TRIAGE_SRCS
-└── kmd_triage/
-    ├── README.md       # what each probe checks, standalone CLI usage, exit codes, known gaps
-    ├── kmd_triage.cpp  # the multitool: tt-kmd ioctls, libc + pthread only
-    ├── host_side.sh    # host, PCIe and driver state, from sysfs
-    ├── device_side.sh  # drives kmd_triage over every chip
-    └── triage_json.sh  # shared --json emitter, sourced by both scripts
-```
+The triage tools are a sibling directory,
+[`tools/scaleout/kmd_triage/`](../../kmd_triage/README.md), next to the other
+compiled scaleout tools rather than under the health check, because the binary
+is a CMake target and the tools are useful on their own when triaging a unit by
+hand.
