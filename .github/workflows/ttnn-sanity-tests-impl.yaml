@@ -356,6 +356,7 @@ jobs:
             # host reference-tensor op spins up the OpenMP/MKL pool, whose workers
             # then busy-wait for the rest of the job — including while the device
             # does the much longer real work. That is most of the CPU burn.
+            export TT_METAL_JIT_PCH=1
             export OMP_NUM_THREADS=2
             export MKL_NUM_THREADS=2
             export OMP_WAIT_POLICY=passive
@@ -430,6 +431,7 @@ jobs:
             # host reference-tensor op spins up the OpenMP/MKL pool, whose workers
             # then busy-wait for the rest of the job — including while the device
             # does the much longer real work. That is most of the CPU burn.
+            export TT_METAL_JIT_PCH=1
             export OMP_NUM_THREADS=2
             export MKL_NUM_THREADS=2
             export OMP_WAIT_POLICY=passive
