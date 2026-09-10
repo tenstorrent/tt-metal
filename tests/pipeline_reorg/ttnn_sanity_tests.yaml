@@ -172,7 +172,7 @@
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 2 --group 1 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
   skus:
     wh_n300_civ2:
-      timeout: 40
+      timeout: 60  # Trial: allow cold kernel compilation after dev_msgs.h changes.
     bh_p100:
       timeout: 40
     bh_p150b_civ2:
@@ -188,7 +188,7 @@
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 2 --group 2 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
   skus:
     wh_n300_civ2:
-      timeout: 40
+      timeout: 60  # Trial: allow cold kernel compilation after dev_msgs.h changes.
     bh_p100:
       timeout: 40
     bh_p150b_civ2:
@@ -294,7 +294,7 @@
     authoritative_job_status: true
   skus:
     wh_n300_civ2:
-      timeout: 40
+      timeout: 60  # Trial: allow cold kernel compilation after dev_msgs.h changes.
     bh_p100:
       timeout: 40
     bh_p150b_civ2:

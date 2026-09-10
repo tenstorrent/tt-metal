@@ -78,7 +78,7 @@ ttnn:
     sim_wh_n150: 40
     sim_bh_p150: 40
   sanity:
-    wh_n300_civ2: 565
+    wh_n300_civ2: 625  # Trial: +20 each for core and both fused groups.
     bh_p100: 545
     bh_p150b_civ2: 565
     bh_quietbox_2: 65
