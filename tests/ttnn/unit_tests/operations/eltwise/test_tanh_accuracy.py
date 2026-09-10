@@ -74,6 +74,11 @@ def test_tanh_range(device, torch_dtype, ttnn_dtype, atol):
     # pcc_msg 0.9999663646890817, fast_and_approximate_mode=True pcc 0.9978378297942829
     # pcc_msg 0.9999583453515977 - fpu arithmetic, pcc_msg 0.9999669593009368 sfpu arithmetic
     # fp32 pcc_msg 0.9999829606828651 (fast_and_approximate_mode=False) , 0.9977552960423647 (fast_and_approximate_mode=True)
+    # STALE: both fast_and_approximate_mode=True figures above predate the SFPLUT retune
+    # (max abs error 0.1447 -> 0.0563, see APPROX_TANH_RETUNE.md) and should have improved.
+    # Not yet re-measured -- this test itself runs the accurate path, so it does not
+    # produce them; they need a device run of the approximate mode to refresh.
+    # The accurate-mode figures and the timing below are unaffected by the retune.
     # Single-tile tanh: accurate = 7886ns, approx = 1789ns (~77% faster)
     assert pcc
 

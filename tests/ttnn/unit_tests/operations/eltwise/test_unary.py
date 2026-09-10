@@ -2028,7 +2028,12 @@ def test_unary_tanh_approx_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
     golden_function = ttnn.get_golden_function(ttnn.tanh)
     golden_tensor = golden_function(in_data1)
 
-    assert_allclose(output_tensor, golden_tensor, rtol=1e-05, atol=0.15)
+    # The approximate path is a 3-segment SFPLUT with a max abs error of 0.0563 (see
+    # APPROX_TANH_RETUNE.md). atol was 0.15, sized for the 0.1447 of the pre-retune
+    # table, which left this test unable to notice a regression back to it. 0.08 is the
+    # LUT error plus room for output quantization -- bfloat8_b's shared-exponent step
+    # over a [-1, 1] block adds ~0.008 on top.
+    assert_allclose(output_tensor, golden_tensor, rtol=1e-05, atol=0.08)
 
 
 @pytest.mark.parametrize(
