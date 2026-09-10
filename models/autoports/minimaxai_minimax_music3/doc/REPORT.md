@@ -1,6 +1,6 @@
 # MiniMax Music 3 on one Blackhole chip — bring-up report
 
-generated 2026-09-10T02:12:49Z on qb2-120-p11t03
+generated 2026-09-10T02:15:02Z on qb2-120-p11t03
 
 Model: `MiniMaxAI/MiniMax-Music3` @ `fbdf52fb` (8B Qwen3 global LLM + 0.6B depth decoder + 2.4B flow-matching DiT + DAC vocoder). Target: ONE Blackhole chip (P150; chip 0 of a P300/QB2). Package: tt-model-manager CONTAINER v5.1, kind `tt-dit-server`, profile `p150`.
 
@@ -17,10 +17,10 @@ Model: `MiniMaxAI/MiniMax-Music3` @ `fbdf52fb` (8B Qwen3 global LLM + 0.6B depth
 - seeded generation is deterministic on the chip (identical codes for the same seed)
 - bare-metal server (launcher env, p150): API proof passed (17/17 critical checks); speech RTF 4.509
 - container `tt-model serve --profile p150` on this QB2: API proof passed (17/17 critical checks); speech RTF 3.718
+- clean `tt-model pull` from the Hub + serve (p150): API proof passed (11/11 critical checks); speech RTF 3.663
 
 ## Not verified
 
-- clean `tt-model pull` from the Hub + serve (p150): not run
 - stage 11-report-push: not passed (see STATUS.md)
 - multi-chip profiles (P300 / QB2 using >1 chip): not in scope; the package uses one chip everywhere
 - listening-test quality of the songs: only proxy metrics (audio sanity, spectral distance vs the CPU reference) were measured; WAVs are in artifacts/e2e/ and artifacts/prove/
@@ -74,7 +74,7 @@ Model: `MiniMaxAI/MiniMax-Music3` @ `fbdf52fb` (8B Qwen3 global LLM + 0.6B depth
 
 - manifest `/home/jashan/tt-model-builds/minimax-music3/tt_kernel_manifest.json` (schema 5.1, kind tt-dit-server, tt-metal 0.65.2.dev9785, image `tt-model/minimax-music3:6bf99951f162` sha256:6bf99951f162)
 - weights pointer `MiniMaxAI/MiniMax-Music3` @ `fbdf52fbaaca` (ignore patterns skip the 28 GB of unconverted originals)
-- HF push: huggingface_hub.errors.OfflineModeIsEnabled: Cannot reach https://huggingface.co/api/models/jashansinghTT/minimax-music3-blackhole: offline mode is enabled. To disable it, please unset the `HF_HUB_OFFLINE` environment variable.
+- HF push:   → consumers:  tt-model serve jashansinghTT/minimax-music3-blackhole
 - code: tt-metal worktree `~/tt-metal-music3`, branch `jashan/minimax-music3`, `models/autoports/minimaxai_minimax_music3`
 
 ## Artifacts

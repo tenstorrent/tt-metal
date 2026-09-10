@@ -263,6 +263,7 @@ class TTDiT:
                     k,
                     v,
                     cu_window_seqlens=st["cu"],
+                    is_causal=False,
                     program_config=st["sdpa_pc"],
                     compute_kernel_config=self.ck_sdpa,
                 )
