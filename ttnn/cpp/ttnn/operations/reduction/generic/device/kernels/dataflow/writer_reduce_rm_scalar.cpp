@@ -115,7 +115,7 @@ void reduce_rm_writer() {
 
         while (outputs_remaining > 0) {
             // Pick the largest chunk that stays within one (nc, slice) group and within remaining work.
-            const uint32_t wt_in_chunk = std::min({wt_tiles_per_chunk, Wt - wt_in_nc, outputs_remaining});
+            const uint32_t wt_in_chunk = std::min(wt_tiles_per_chunk, std::min(Wt - wt_in_nc, outputs_remaining));
 
             dfb_tile.wait_front(static_cast<uint16_t>(wt_in_chunk));
 

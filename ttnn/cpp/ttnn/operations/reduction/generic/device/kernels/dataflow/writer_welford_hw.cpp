@@ -51,11 +51,8 @@ constexpr std::uint32_t tree_levels_for(std::uint32_t num_blocks) {
 template <std::uint32_t COUNT>
 inline WelfordBlockStats finalize_block(
     float base_mean, float mean_delta_sum, float mean_delta_sq_sum, float partial_var_sum) {
-    // COUNT == 0 never runs: the tail call is guarded by `if constexpr (tail_size > 0)`. That guard
-    // cannot stop the *instantiation*, though -- kernel_main is not a template, so a discarded
-    // `if constexpr` substatement still instantiates what it names. Keep this instantiable at
-    // COUNT == 0 rather than static_asserting, or every no-tail config fails to compile.
-    constexpr float inv_count = COUNT > 0 ? 1.0f / static_cast<float>(COUNT) : 0.0f;
+    static_assert(COUNT > 0);
+    constexpr float inv_count = 1.0f / static_cast<float>(COUNT);
     const float mean_delta = mean_delta_sum * inv_count;
     const float raw_means_m2 = mean_delta_sq_sum - (mean_delta_sum * mean_delta);
     const float means_m2 = raw_means_m2 < 0.0f ? 0.0f : raw_means_m2;
@@ -224,17 +221,27 @@ void kernel_main() {
         }
 
         if constexpr (tail_size > 0) {
-            const auto tail = finalize_block<tail_size>(
-                block_base_mean, block_mean_delta_sum, block_mean_delta_sq_sum, block_partial_var_sum);
+            // finalize_block<tail_size> is deliberately not bound to a local. clang instantiates a
+            // specialization named in a discarded `if constexpr` branch when the call initialises a
+            // declaration (verified on clang 20; GCC 9 and clang 10 do not), which makes
+            // finalize_block's static_assert(COUNT > 0) fire for every config whose partial count
+            // divides evenly by the block size. In assignment position the guard holds and the
+            // assert keeps its value. Only one of the two branches below is ever compiled.
             if constexpr (num_full_blocks == 0) {
-                combined = tail;
+                combined = finalize_block<tail_size>(
+                    block_base_mean, block_mean_delta_sum, block_mean_delta_sq_sum, block_partial_var_sum);
             } else {
                 constexpr std::uint32_t full_count = num_full_blocks * welford_block_size;
                 constexpr float inv_num_partials = 1.0f / static_cast<float>(num_partials);
                 constexpr float tail_fraction = static_cast<float>(tail_size) * inv_num_partials;
                 constexpr float cross_weight =
                     static_cast<float>(full_count) * static_cast<float>(tail_size) * inv_num_partials;
-                combined = combine_known_counts(combined, tail, tail_fraction, cross_weight);
+                combined = combine_known_counts(
+                    combined,
+                    finalize_block<tail_size>(
+                        block_base_mean, block_mean_delta_sum, block_mean_delta_sq_sum, block_partial_var_sum),
+                    tail_fraction,
+                    cross_weight);
             }
         }
 

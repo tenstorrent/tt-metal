@@ -72,11 +72,11 @@ void kernel_main() {
     // reset variables are used to correctly return to the start column + repeat the process for each row
     // reset_col_start - resets col_start_tile_id to the starting column
     // reset_w - resets w to the column number in the batch of the starting column
-    const  // reset_curr_id - resets curr_id to the next tile in the starting column
-        for (uint32_t i = 0; i < num_cols; i += row_chunk) {
+    // reset_curr_id - resets curr_id to the next tile in the starting column
+    for (uint32_t i = 0; i < num_cols; i += row_chunk) {
         const uint32_t chunk_end = std::min(i + row_chunk, num_cols);
         uint32_t curr_id = col_start_tile_id;
-        uint32_t reset_curr_id = curr_id;
+        const uint32_t reset_curr_id = curr_id;
         const uint32_t reset_w = w;
         const uint32_t reset_col_start = col_start_tile_id;
         // Tail is shorter than the CB batch, so the reserve would not be contiguous.
