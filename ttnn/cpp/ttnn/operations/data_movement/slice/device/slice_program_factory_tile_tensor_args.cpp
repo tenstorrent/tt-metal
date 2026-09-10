@@ -32,9 +32,10 @@ struct TensorArgsSpecNames {
     KernelSpecName reader{"reader"};
     KernelSpecName writer{"writer"};
     DFBSpecName src0{"src0"};
-    // Single-entry staging buffer the reader fills and drains itself, once for the start tensor and
-    // once for the end tensor.
-    DFBSpecName tensor_stage{"tensor_stage"};
+    // Reader-private staging region for the start / end index pages. Formerly a single-entry DFB the
+    // reader bound as both PRODUCER and CONSUMER; nothing else ever touched it and no credit could be
+    // exchanged on it, so it is a scratchpad (Gen2 rejects DM self-loop DFBs outright).
+    ScratchpadSpecName tensor_stage{"tensor_stage"};
     TensorParamName input{"input"};
     TensorParamName start{"start"};
     TensorParamName end{"end"};
@@ -81,13 +82,14 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
         .num_entries = num_input_tiles,
         .data_format_metadata = dfb_data_format,
     };
-    // One toucher that already runs both halves of the handshake (reserve/push/wait/pop, twice), so
-    // the reader binds both endpoints.
-    const DataflowBufferSpec tensor_stage_dfb{
+    // --- Scratchpads ---
+    // The reader stages one page of the start tensor, then one page of the end tensor, through this
+    // region and reads the indices back out of it. Sized as the former DFB was: entry_size x
+    // num_entries (one tile).
+    constexpr uint32_t num_tensor_stage_entries = 1;
+    const ScratchpadSpec tensor_stage_scratch{
         .unique_id = names.tensor_stage,
-        .entry_size = single_tile_size,
-        .num_entries = 1,
-        .data_format_metadata = dfb_data_format,
+        .size_per_node = single_tile_size * num_tensor_stage_entries,
     };
 
     // --- Tensor parameters ---
@@ -138,16 +140,10 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
                     .accessor_name = "in0",
                     .endpoint_type = DFBEndpointType::PRODUCER,
                 },
-                DFBBinding{
-                    .dfb_spec_name = names.tensor_stage,
-                    .accessor_name = "tensor_stage",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = names.tensor_stage,
-                    .accessor_name = "tensor_stage",
-                    .endpoint_type = DFBEndpointType::CONSUMER,
-                },
+            },
+        .scratchpad_bindings =
+            {
+                ScratchpadBinding{.scratchpad_spec_name = names.tensor_stage, .accessor_name = "tensor_stage"},
             },
         .tensor_bindings =
             {
@@ -214,7 +210,8 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
     ProgramSpec spec{
         .name = "slice_tile_tensor_args",
         .kernels = {reader, writer},
-        .dataflow_buffers = {src0_dfb, tensor_stage_dfb},
+        .dataflow_buffers = {src0_dfb},
+        .scratchpads = {tensor_stage_scratch},
         .tensor_parameters = {input_param, start_param, end_param, output_param},
         .work_units = {WorkUnitSpec{
             .name = "slice",

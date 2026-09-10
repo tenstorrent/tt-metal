@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
@@ -36,7 +37,8 @@ void kernel_main() {
 
     // Create objects for Device 2.0 API
     DataflowBuffer dfb_in0(dfb::in0);
-    DataflowBuffer dfb_tensor(dfb::tensor_stage);
+    // Private staging region for the start / end index pages; the indices are read back as words.
+    Scratchpad<volatile uint32_t> tensor_stage(scratch::tensor_stage);
     Noc noc;
 
     // Get tile size from the DFB
@@ -50,39 +52,21 @@ void kernel_main() {
     uint32_t start_indices[num_dims];
     [[maybe_unused]] uint32_t end_indices[num_dims];
 
-    // Read start tensor data using separate dataflow buffer
-    dfb_tensor.reserve_back(1);
-    uint32_t start_buffer_l1_addr = dfb_tensor.get_write_ptr();
-    noc.async_read(start_tensor_accessor, dfb_tensor, tile_size, {.page_id = 0}, {.offset_bytes = 0});
+    // Stage the start tensor's page in the scratchpad and read the indices back out of it
+    noc.async_read(start_tensor_accessor, tensor_stage, tile_size, {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
-    // Complete the producer/consumer handshake (reserve -> push -> wait -> pop) so the scratch DFB
-    // is left balanced after this single-tile staging read.
-    dfb_tensor.push_back(1);
-    dfb_tensor.wait_front(1);
-
-    volatile tt_l1_ptr uint32_t* start_data = (volatile tt_l1_ptr uint32_t*)start_buffer_l1_addr;
 
     for (uint32_t i = 0; i < num_dims; i++) {
-        start_indices[i] = start_data[i];
+        start_indices[i] = tensor_stage[i];
     }
-    dfb_tensor.pop_front(1);
 
-    // Read end tensor data using separate dataflow buffer
-    dfb_tensor.reserve_back(1);
-    uint32_t end_buffer_l1_addr = dfb_tensor.get_write_ptr();
-    noc.async_read(end_tensor_accessor, dfb_tensor, tile_size, {.page_id = 0}, {.offset_bytes = 0});
+    // Stage the end tensor's page the same way (overwriting the start page, which is fully consumed)
+    noc.async_read(end_tensor_accessor, tensor_stage, tile_size, {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
-    // Complete the producer/consumer handshake (reserve -> push -> wait -> pop) so the scratch DFB
-    // is left balanced after this single-tile staging read.
-    dfb_tensor.push_back(1);
-    dfb_tensor.wait_front(1);
-
-    volatile tt_l1_ptr uint32_t* end_data = (volatile tt_l1_ptr uint32_t*)end_buffer_l1_addr;
 
     for (uint32_t i = 0; i < num_dims; i++) {
-        end_indices[i] = end_data[i];
+        end_indices[i] = tensor_stage[i];
     }
-    dfb_tensor.pop_front(1);
 
     uint32_t start_offset = 0;
 

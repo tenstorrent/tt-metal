@@ -223,7 +223,6 @@ namespace {
 // Function-local for the same unity-build reason as the other slice factories.
 struct ShardedSpecNames {
     KernelSpecName reader{"reader"};
-    DFBSpecName in_shard{"in_shard"};
     DFBSpecName out_shard{"out_shard"};
     TensorParamName input{"input"};
     TensorParamName output{"output"};
@@ -281,7 +280,6 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_pr
     log_debug(tt::LogOp, "all_cores_unpadded: {}", all_cores_unpadded);
     log_debug(tt::LogOp, "num_cores_unpadded: {}", num_cores_unpadded);
 
-    tt::DataFormat dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     tt::DataFormat dst_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
@@ -295,22 +293,16 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_pr
         "SliceRmShardedProgramFactory: width-begin ({} bytes) must be L1-aligned.",
         begins_bytes);
 
-    // Both DFBs borrow their backing memory from a tensor, so the framework re-points them from the
-    // corresponding TensorArgument on every dispatch — no address ever travels as an argument.
+    // The input shard is not a buffer of this program at all: the reader only needs its local L1 base
+    // address, which it uses as the address of reads aimed at *other* cores (correct because a sharded
+    // buffer lands at the same L1 offset on every core in the range). It is therefore bound as a plain
+    // tensor parameter and viewed through a LocalTensorAccessor in the kernel — no FIFO ops were ever
+    // made on it. (It was previously a sync-free borrowed DFB the reader self-looped.)
     //
-    // The reader is each one's only toucher, so it binds both endpoints of both (self-loop):
-    //  - in_shard is sync-free, touched only by a raw get_write_ptr() peek and no FIFO ops. Keeping
-    //    it borrowed from the input is load-bearing beyond addressing: the kernel uses that *local*
-    //    pointer as the address of reads aimed at *other* cores, which is only correct because a
-    //    sharded buffer lands at the same L1 offset on every core in the range.
-    //  - out_shard is a locked producer (reserve_back / push_back) that nothing drains.
-    const DataflowBufferSpec in_shard_dfb{
-        .unique_id = names.in_shard,
-        .entry_size = src_stride_bytes,
-        .num_entries = shard_height_padded,
-        .data_format_metadata = dfb_data_format,
-        .borrowed_from = names.input,
-    };
+    // out_shard borrows its backing memory from the output tensor, so the framework re-points it from
+    // the corresponding TensorArgument on every dispatch — no address ever travels as an argument. The
+    // reader is its only toucher, so it binds both endpoints (self-loop): a locked producer
+    // (reserve_back / push_back) that nothing drains.
     const DataflowBufferSpec out_shard_dfb{
         .unique_id = names.out_shard,
         .entry_size = dst_stride_bytes,
@@ -350,16 +342,6 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_pr
         .dfb_bindings =
             {
                 DFBBinding{
-                    .dfb_spec_name = names.in_shard,
-                    .accessor_name = "in_shard",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = names.in_shard,
-                    .accessor_name = "in_shard",
-                    .endpoint_type = DFBEndpointType::CONSUMER,
-                },
-                DFBBinding{
                     .dfb_spec_name = names.out_shard,
                     .accessor_name = "out_shard",
                     .endpoint_type = DFBEndpointType::PRODUCER,
@@ -369,6 +351,10 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_pr
                     .accessor_name = "out_shard",
                     .endpoint_type = DFBEndpointType::CONSUMER,
                 },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{.tensor_parameter_name = names.input, .accessor_name = "input"},
             },
         .compile_time_args =
             {
@@ -401,7 +387,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_pr
     ProgramSpec spec{
         .name = "slice_rm_sharded",
         .kernels = {reader},
-        .dataflow_buffers = {in_shard_dfb, out_shard_dfb},
+        .dataflow_buffers = {out_shard_dfb},
         .tensor_parameters = {input_param, output_param},
         .work_units = {WorkUnitSpec{
             .name = "slice",
@@ -425,8 +411,9 @@ tt::tt_metal::experimental::ProgramRunArgs SliceRmShardedProgramFactory::overrid
     const ShardedSpecNames names;
 
     // The legacy refresh for this factory re-pointed the two borrowed backing addresses and nothing
-    // else, matching them positionally. Both now resolve by name from their backing tensor, so the
-    // positional order that had to be kept in sync stops mattering.
+    // else, matching them positionally. Both now resolve by name from their backing tensor (the input
+    // through its tensor binding, the output through the borrowed out_shard DFB), so the positional
+    // order that had to be kept in sync stops mattering.
     ProgramRunArgs run_args;
     run_args.tensor_args = {{names.input, tensor_args.input.mesh_tensor()}, {names.output, output.mesh_tensor()}};
     return run_args;

@@ -8,6 +8,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "api/tensor/local_tensor_accessor.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
@@ -35,13 +36,13 @@ void kernel_main() {
     const uint32_t chunk_base = num_cores_read * 3;
 
     Noc noc;
-    // Create DataflowBuffers for Device 2.0 API. Both borrow their backing memory from a tensor:
-    // dfb_in views the input shard, dfb_out the output shard.
-    DataflowBuffer dfb_in(dfb::in_shard);
+    // in_shard is this core's own input shard, viewed only for its L1 base address (never dereferenced
+    // locally). dfb_out borrows its backing memory from the output shard.
+    LocalTensorAccessor<uint8_t> in_shard(tensor::input);
     DataflowBuffer dfb_out(dfb::out_shard);
 
     dfb_out.reserve_back(num_sticks_unpadded);
-    uint32_t l1_read_addr = dfb_in.get_write_ptr();
+    uint32_t l1_read_addr = in_shard.get_bank_base_address();
     uint32_t l1_write_addr = dfb_out.get_write_ptr();
 
     uint32_t chunk_ptr_offset = 0;
@@ -61,7 +62,7 @@ void kernel_main() {
                 uint32_t src_off = curr_start_id * src_stride_bytes;
                 uint32_t bytes = curr_num_sticks * stick_size_unpadded;
                 CoreLocalMem<uint32_t> dst(l1_write_addr);
-                // l1_read_addr is a pointer into this core's *own* borrowed input DFB, used as the
+                // l1_read_addr is the base address of this core's *own* input shard, used as the
                 // address of a read aimed at another core. That is only correct because a sharded
                 // buffer sits at the same L1 offset on every core in the range.
                 noc.async_read(
