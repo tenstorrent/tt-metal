@@ -1906,8 +1906,10 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
 # Selected by the plugin's TT_GEMMA4_SPEC env (arg/gemma4_spec_serving):
 # same HF checkpoint/architectures, different decode class. Speculation is
 # model-internal (draft + verify inside ONE device step); each decode_forward
-# call emits a VARIABLE 1..N token row padded to N with -1 (the plugin's
-# TT_SPEC_PAD_TOKEN_ID), which the runner strips (tt_spec_variable_output).
+# call emits exactly the step's contracted width: the full N-token block on a
+# solo decode step (EOS-filled at a genuine stop), or a width-1 row on batched
+# decode / prefill-anchor steps (the adaptive scheduler reserves one
+# placeholder there). No sentinel padding.
 # vLLM's speculative_config stays unset -- the platform assert is untouched.
 
 
@@ -1975,15 +1977,16 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         # perf comes from amortizing host overhead over the block, not async.
         "supports_async_decode": False,
         "supports_sample_on_device": True,  # decode returns TOKENS (host)
-        # A vLLM step commits up to _SPEC_BLOCK tokens (variable prefix, padded).
+        # A solo-decode vLLM step commits exactly _SPEC_BLOCK valid tokens
+        # (short blocks are EOS-filled at a genuine stop; upstream trims).
         # GEMMA4_DFLASH_SERVE_BLOCK=1 turns block-output OFF, so this impl can
         # also be deployed as a plain batched baseline (max_num_seqs>1) for the
         # concurrency>1 / throughput operating point -- see decode_forward.
         "output_tokens_per_step": _SPEC_BLOCK,
-        "tt_spec_variable_output": _SPEC_BLOCK > 1,
         # ADAPTIVE block-output: emit the spec block only when decoding ALONE
-        # (batch==1); batch>1 decodes as plain baseline (1 token/request, padded
-        # to the block width so the spec-variable runner strips it back to 1).
+        # (batch==1); batch>1 decodes as plain baseline (exactly 1 token per
+        # request, width-1 row -- the adaptive scheduler reserved exactly one
+        # placeholder for such steps; NO sentinel padding).
         # This lets ONE server run max_num_seqs>1 -- dFlash at conc-1, baseline
         # batched at conc>1 (never worse) -- instead of the static max_num_seqs=1
         # block-output deployment. The scheduler reserves the K-token block only
@@ -2245,12 +2248,13 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
                 except Exception:
                     pass
 
-    def _adaptive_pad_baseline(self, tt_out, num_reqs):
-        """Convert a batched baseline decode output into a host ``[num_reqs, K]``
-        block: one real token per request followed by ``TT_SPEC_PAD_TOKEN_ID``
-        pads (K = self._SPEC_BLOCK). The spec-variable runner strips the pad tail
-        back to one token/request, so a concurrency>1 step commits plain baseline
-        decode while satisfying the block-output width contract.
+    def _adaptive_baseline_row(self, tt_out, num_reqs):
+        """Convert a batched baseline decode output into a host ``[num_reqs, 1]``
+        row: exactly one valid token per request, NO padding. Non-block steps
+        (batched decodes, prefill anchors) reserve exactly one placeholder in
+        the adaptive scheduler, so the emitted row length IS the step contract
+        -- sentinel padding was rejected as a correctness hazard and removed
+        from the plugin.
         """
         import torch
 
@@ -2268,9 +2272,7 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         if toks.dim() >= 2 and toks.shape[-1] > 1:
             toks = toks.argmax(dim=-1)
         toks = toks.reshape(-1)
-        out = torch.full((num_reqs, self._SPEC_BLOCK), -1, dtype=torch.int32)
-        out[:, 0] = toks[:num_reqs].to(torch.int32)
-        return out
+        return toks[:num_reqs].to(torch.int32).reshape(num_reqs, 1)
 
     def decode_forward(self, *args, page_tables_per_layer=None, **kwargs):
         tokens = kwargs.get("tokens")
@@ -2288,7 +2290,7 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
             return super().decode_forward(*args, page_tables_per_layer=page_tables_per_layer, **kwargs)
         # Adaptive block-output: a BATCHED decode step (concurrency>1) runs plain
         # baseline and returns a host block padded to the reserved width K, so the
-        # spec-variable runner strips it back to one token/request. The scheduler
+        # width-1 row (one valid token per request, no padding). The scheduler
         # reserved a single placeholder for this batched step (see TTScheduler),
         # matching the one real token per row. A solo request that just joined a
         # batch drops its dFlash session first -- baseline then owns its KV from
@@ -2304,7 +2306,7 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
             except Exception:
                 pass
             tt_out = super().decode_forward(*args, page_tables_per_layer=page_tables_per_layer, **kwargs)
-            return self._adaptive_pad_baseline(tt_out, batch)
+            return self._adaptive_baseline_row(tt_out, batch)
         anchor_from_runner = int(tokens.reshape(-1)[0])
         if self._spec_pending is not None:
             start = int(start_pos.reshape(-1)[0]) if start_pos is not None else None
@@ -2325,7 +2327,7 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
             except Exception:
                 pass
             tt_out = super().decode_forward(*args, page_tables_per_layer=page_tables_per_layer, **kwargs)
-            return self._adaptive_pad_baseline(tt_out, batch)
+            return self._adaptive_baseline_row(tt_out, batch)
         dec = self._spec_decoder
         if not self._spec_first_step and anchor_from_runner != dec.anchor:
             logger.warning(
@@ -2366,7 +2368,11 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
             if eos_set & set(committed):
                 break
         block = block[: self._SPEC_BLOCK]
-        out = torch.full((1, self._SPEC_BLOCK), -1, dtype=torch.int32)
+        # Exactly-K valid tokens: a short block happens only at a genuine stop
+        # (EOS emitted or horizon exhausted), so fill the tail with EOS -- the
+        # scheduler trims committed tokens at the first stop token, and the
+        # plugin no longer accepts sentinel padding.
+        out = torch.full((1, self._SPEC_BLOCK), min(eos_set), dtype=torch.int32)
         out[0, : len(block)] = torch.tensor(block, dtype=torch.int32)
         return out
 
