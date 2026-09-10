@@ -996,6 +996,7 @@ class TOPK_XL(TemplateParameter):
     sort_mode: TopKXLSortMode = TopKXLSortMode.Dispatch
     lsb_row_major: bool = False
     reinit_after_copy: bool = False
+    blaze_compat: bool = False
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
@@ -1017,6 +1018,8 @@ class TOPK_XL(TemplateParameter):
             f"constexpr bool TOPK_XL_LSB_ROW_MAJOR = {str(self.lsb_row_major).lower()};",
             f"constexpr bool TOPK_XL_REINIT_AFTER_COPY = {str(self.reinit_after_copy).lower()};",
         ]
+        if self.blaze_compat:
+            lines.append("#define TOPK_XL_BLAZE_COMPAT 1")
         return "\n".join(lines)
 
 

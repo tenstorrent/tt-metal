@@ -21,6 +21,9 @@ std::uint32_t math_sync_tile_dst_index = 0;
 static constexpr ckernel::DstSync DST_SYNC = ckernel::DstSync::SyncHalf;
 
 static constexpr int LOGIT_SOFTCAP_ITERATIONS = 32;
+#ifndef LOGIT_SOFTCAP_POLYNOMIAL
+#define LOGIT_SOFTCAP_POLYNOMIAL false
+#endif
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -102,14 +105,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_dest_init_wrapper_<DST_SYNC, is_fp32_dest_acc_en, PackMode::Default>();
 
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
-    ckernel::sfpu::tanh_init<false /* APPROXIMATION_MODE */, true /* is_fp32_dest_acc_en */>();
+    ckernel::sfpu::tanh_init<false /* APPROXIMATION_MODE */, !LOGIT_SOFTCAP_POLYNOMIAL>();
 
     for (std::uint32_t tile = 0; tile < params.TILE_CNT; ++tile)
     {
         _llk_packer_wait_for_math_done_();
 
         _llk_math_eltwise_sfpu_start_(0 /* dst_index */);
-        ckernel::sfpu::calculate_logit_softcap<LOGIT_SOFTCAP_ITERATIONS>(SFPU_UNARY_SCALAR, 0 /* unread */);
+        if constexpr (LOGIT_SOFTCAP_POLYNOMIAL)
+        {
+            ckernel::sfpu::calculate_logit_softcap<is_fp32_dest_acc_en, LOGIT_SOFTCAP_ITERATIONS>(SFPU_UNARY_SCALAR);
+        }
+        else
+        {
+            ckernel::sfpu::calculate_logit_softcap<LOGIT_SOFTCAP_ITERATIONS>(SFPU_UNARY_SCALAR, 0 /* unread */);
+        }
         _llk_math_eltwise_sfpu_done_();
 
         _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /* tile_index */, L1_ADDRESS(params.buffer_Res[tile]));
