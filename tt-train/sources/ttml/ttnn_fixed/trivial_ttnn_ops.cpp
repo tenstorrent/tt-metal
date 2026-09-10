@@ -101,8 +101,7 @@ ttnn::Tensor sample(
     // Callers that need per-device sampling (e.g. GRPO, to avoid duplicate completions across data-
     // parallel ranks) MUST pass their sharded axes explicitly.
 
-    // The fused op needs mask and logits dtypes to match; the ttnn::subtract it replaced did not,
-    // and existing callers build BFLOAT16 masks regardless of the logits dtype. No-op when equal.
+    // The fused op needs mask and logits dtypes to match; No-op if dtypes are equal
     if (logits_mask.has_value() && logits_mask->dtype() != t.dtype()) {
         logits_mask = ttnn::typecast(logits_mask.value(), t.dtype());
     }
