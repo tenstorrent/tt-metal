@@ -264,13 +264,13 @@ TEST_F(MeshDevice2x4Test, WorkerCoreFromLogicalCoreUsesSelectedDevice) {
             mesh_device_->impl().get_fabric_node_id(mesh_coordinate));
         EXPECT_EQ(
             tt::tt_metal::experimental::Device::worker_core_from_logical_core(
-                mesh_device_.get(), mesh_coordinate, logical_core),
+                *mesh_device_, mesh_coordinate, logical_core),
             metal_context.get_cluster().get_virtual_coordinate_from_logical_coordinates(
                 physical_chip_id, logical_core, CoreType::WORKER));
     }
 
     EXPECT_ANY_THROW(tt::tt_metal::experimental::Device::worker_core_from_logical_core(
-        mesh_device_.get(), MeshCoordinate{mesh_device_->shape()[0], 0}, logical_core));
+        *mesh_device_, MeshCoordinate{mesh_device_->shape()[0], 0}, logical_core));
 }
 
 TEST(GetWorkerNocHopDistanceAPI, UnitMeshes) {

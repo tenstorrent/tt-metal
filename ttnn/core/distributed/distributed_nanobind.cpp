@@ -1421,7 +1421,7 @@ void py_module(nb::module_& mod) {
         "worker_core_from_logical_core",
         [](MeshDevice& mesh_device, const MeshCoordinate& mesh_coord, const CoreCoord& logical_core) {
             return tt::tt_metal::experimental::Device::worker_core_from_logical_core(
-                &mesh_device, mesh_coord, logical_core);
+                mesh_device, mesh_coord, logical_core);
         },
         nb::arg("mesh_device"),
         nb::arg("mesh_coord"),
