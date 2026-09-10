@@ -108,14 +108,18 @@ void D2dSyncConsumer::try_solve_links(bool final) {
             a.t0_lo = static_cast<uint32_t>(s0.wall);
             a.t2_hi = static_cast<uint32_t>(s2.wall >> 32);
             a.t2_lo = static_cast<uint32_t>(s2.wall);
-            a.rc_hi = static_cast<uint32_t>(s0.refclk >> 32);
-            a.rc_lo = static_cast<uint32_t>(s0.refclk);
+            // The solver's fit_local_ratio pairs the sender's refclk with t2 (round END) and the receiver's with t1
+            // (arrival). Pairing the sender's with t0 instead biased the link offset by the full round trip -- the
+            // synthetic test caught it as exactly 2x the one-way delay.
+            a.rc_hi = static_cast<uint32_t>(s2.refclk >> 32);
+            a.rc_lo = static_cast<uint32_t>(s2.refclk);
             eth_sync::EthSyncSample& b = rcv[i];
             b.t1_hi = static_cast<uint32_t>(r1.wall >> 32);
             b.t1_lo = static_cast<uint32_t>(r1.wall);
             b.rc_hi = static_cast<uint32_t>(r1.refclk >> 32);
             b.rc_lo = static_cast<uint32_t>(r1.refclk);
-            mid_acc += static_cast<long double>(s0.refclk);
+            // The burst midpoint the rate term is about: the mean trip midpoint, in the sender's refclk.
+            mid_acc += (static_cast<long double>(s0.refclk) + static_cast<long double>(s2.refclk)) / 2;
         }
         const eth_sync::RefclkSolution sol = eth_sync::solve_refclk_domain(snd, rcv);
         if (!sol.valid) {
@@ -191,7 +195,10 @@ D2dSyncConsumer::Frame D2dSyncConsumer::frame_of(uint32_t dev) const {
     }
     f.k_mean = ksum / static_cast<double>(nk);
     f.refclk_at_anchor = holder->refclk_of_wall(A);
-    f.period_ns = f.k_mean * 1e9 / static_cast<double>(baked_hz(clk));
+    // The refclk period consistent with the anchor: the boot fit measured the AICLK that applied AT the anchor, and
+    // the anchor bucket's slope is that same rate in wall ticks per refclk tick, so their ratio is the refclk period
+    // (20 ns nominal) independent of whatever DVFS does later. The session mean would skew it by any later change.
+    f.period_ns = holder->slope() * 1e9 / static_cast<double>(baked_hz(clk));
     f.ok = true;
     return f;
 }
