@@ -28,14 +28,14 @@ void kernel_main() {
     // Constants
     constexpr uint32_t onetile = 1;
 
-    Noc noc;
+    const Noc noc;
     Semaphore<> receiver_sem(receiver_sem_id);
     Semaphore<> sender_sem(sender_sem_id);
-    UnicastEndpoint remote;
+    const UnicastEndpoint remote;
     DataflowBuffer values_dfb(values_dfb_index);
     DataflowBuffer indices_dfb(output_ind_dfb_index);
-    DataflowBuffer final_values_dfb(final_values_dfb_index);
-    DataflowBuffer final_indices_dfb(final_indices_dfb_index);
+    const DataflowBuffer final_values_dfb(final_values_dfb_index);
+    const DataflowBuffer final_indices_dfb(final_indices_dfb_index);
 
     // Memory transfer configuration
     const uint32_t tile_bytes_values = values_dfb.get_entry_size();
@@ -46,8 +46,8 @@ void kernel_main() {
     const uint32_t final_indices_dfb_addr = final_indices_dfb.get_write_ptr();
 
     // Base addresses in final core's L1 memory with offset for this core's contribution
-    const uint32_t final_values_base = final_values_dfb_addr + start_wt * tile_bytes_values * Kt;
-    const uint32_t final_indices_base = final_indices_dfb_addr + start_wt * tile_bytes_ind * Kt;
+    const uint32_t final_values_base = final_values_dfb_addr + (start_wt * tile_bytes_values * Kt);
+    const uint32_t final_indices_base = final_indices_dfb_addr + (start_wt * tile_bytes_ind * Kt);
 
     // Send local TopK results to final core
     for (uint32_t j = 0; j < Ht; ++j) {  // For each height row
@@ -66,7 +66,7 @@ void kernel_main() {
                 remote,
                 tile_bytes_values,
                 {.offset_bytes = 0},
-                {.noc_x = noc_final_x, .noc_y = noc_final_y, .addr = final_values_base + i * tile_bytes_values});
+                {.noc_x = noc_final_x, .noc_y = noc_final_y, .addr = final_values_base + (i * tile_bytes_values)});
             // Drain the write's source-read before releasing the slot for reuse by the compute
             // producer: cb_pop_front only advances the read pointer, so without this barrier the
             // producer's next pack_tile could overwrite this slot while the NoC write is still
@@ -86,7 +86,7 @@ void kernel_main() {
                 remote,
                 tile_bytes_ind,
                 {.offset_bytes = 0},
-                {.noc_x = noc_final_x, .noc_y = noc_final_y, .addr = final_indices_base + i * tile_bytes_ind});
+                {.noc_x = noc_final_x, .noc_y = noc_final_y, .addr = final_indices_base + (i * tile_bytes_ind)});
             noc.async_write_barrier();  // drain before releasing the slot for producer reuse (WAR)
             indices_dfb.pop_front(onetile);
         }  // i loop

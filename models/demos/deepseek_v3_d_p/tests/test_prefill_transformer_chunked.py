@@ -22,6 +22,7 @@ Requires an 8x4 Blackhole mesh and (env from the task):
 Override the trace dir with PREFILL_TRACE_DIR.
 """
 
+import copy
 import gc
 import json
 import os
@@ -81,6 +82,10 @@ SEQ_CACHE = 55 * 1024  # 56320 KV cache length (1 user)
 # updated(seq_cache=...). Kept separate from SEQ_CACHE so the PCC tests (which assert against 55*1024)
 # are untouched.
 SEQ_CACHE_NOPCC = 100 * 1024  # 102400 KV cache length (1 user)
+
+# GLM rows only; the Kimi/Mistral rows keep their own device params.
+GLM_L1_SMALL_SIZE = 1216
+GLM_TRACE_REGION_SIZE = 512 * 1024 * 1024
 
 
 def _resolve_trace_dir(variant) -> Path:
@@ -243,6 +248,27 @@ KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
 # other chunks and the traced twin from the same run) before touching the number.
 TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
+
+# GLM-5.2 per-chunk baseline medians (seconds)
+GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
+    (78, 11, 10): [
+        0.585,
+        0.583,
+        0.598,
+        0.593,
+        0.608,
+        0.607,
+        0.605,
+        0.611,
+        0.627,
+        0.632,
+        0.644,
+    ],
+}
+# There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose (way too many CI oscilations).
+
+GLM_TRACED_PERF_MARGIN = TRACED_PERF_MARGIN
+GLM_PERF_GATED_VARIANT = "glm_5_2"
 
 # Deepest config whose per-layer PCC is asserted; deeper runs (L61) stay record-only until their
 # accumulation headroom is pinned.
@@ -801,9 +827,24 @@ def run_chunked_transformer(
         total_len <= SEQ_CACHE
     ), f"preload_isl {preload_isl} + {n_chunks} chunks ({measured_len}) = {total_len} exceed cache {SEQ_CACHE}"
 
+    # conftest's _resolve_config_only is lru_cache'd, so this object is shared process-wide: mutating
+    # max_seq_len / rope_scaling in place would leak into every later test of the same variant in the same
+    # session. Deep-copy first, as test_prefill_block_loop.py does for the same reason.
+    config = copy.deepcopy(config)
     emb_dim = config.hidden_size
     kvpe_dim = config.qk_rope_head_dim + config.kv_lora_rank
     config.max_seq_len = SEQ_CACHE
+
+    # YaRN-DISABLED variants only. GLM sets factor=1.0, where "disables YaRN" is not a full short-circuit:
+    # the two configs still produce cos/sin tables differing by up to 3.8e-6, which is why this test and the
+    # runner reported slightly different KV PCC (0.861237 vs 0.860911) on identical tokens and goldens.
+    # For a real YaRN config the rewrite is NOT harmless -- it moves yarn_find_correction_range and rescales
+    # most rope frequencies, while the goldens come from the untouched AutoConfig. DeepSeek (factor 40),
+    # Kimi (64) and Mistral (128) all reach these drivers, so gate on the factor rather than on the presence
+    # of a config_builder (Mistral has one and still runs real YaRN).
+    rope_scaling = getattr(config, "rope_scaling", None)
+    if isinstance(rope_scaling, dict) and rope_scaling.get("factor", 1.0) == 1.0:
+        rope_scaling["original_max_position_embeddings"] = SEQ_CACHE
 
     logger.info(
         f"chunked transformer: num_layers={num_layers} mesh={mesh_shape} n_chunks={n_chunks} "
@@ -1322,7 +1363,7 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
     )
 
 
-# GLM-5.1 variants
+# GLM variants
 # ---------------------------------------------------------------------------
 # Same chunked-prefill validation as the DeepSeek/Kimi tests, for the glm_5_1 / glm_5_2 variants and the
 # on-device gate (GateComputeMode.DEVICE_FP32 — GLM's noaux_tc gate uses the grouped-topk fp32 device path)
@@ -1330,8 +1371,22 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
 # chunk is one forward, so full layers recompute that chunk's top-k and shared layers reuse it within the
 # chunk. Golden = each variant's vLLM 55k structured trace (chunked_group_a_v1; via test_prefill_trace_default,
 # override with PREFILL_TRACE_DIR).
-
-
+#
+# ONE test, both trace modes, ONE driver — so the two modes do exactly the same device work and their PCCs
+# are directly comparable. WHAT EACH MODE CHECKS:
+#
+#   notrace : per-layer decoder-output PCC  +  KVPE cache PCC  +  indexer-K cache PCC (glm_5_2)
+#   traced  :                                 KVPE cache PCC  +  indexer-K cache PCC (glm_5_2)
+#
+# The per-layer check is untraced-only by construction, not by preference: it needs
+# return_intermediates=True, which snapshots each layer to host in the middle of forward(), and a host
+# readback inside begin_trace_capture() is a hard TT_FATAL ("Reads are not supported during trace
+# capture"). The traced arm's correctness claim therefore rests on the two CACHE PCCs, which are read back
+# after the run and so behave identically in both modes — and which are the actual product of chunked
+# prefill. This mirrors test_kimi_prefill_transformer_chunked, whose accuracy story is likewise cache-PCC
+# in both modes.
+# notrace/traced, not trace: "notrace" CONTAINS "trace", so `-k trace` would select both modes.
+@pytest.mark.parametrize("use_trace", [False, True], ids=["notrace", "traced"])
 @pytest.mark.parametrize(
     "n_chunks, preload_isl",
     [(1, 10 * CHUNK), (11, 0)],
@@ -1343,10 +1398,11 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
     [
         pytest.param(
             (8, 4),
-            # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores
-            # and retain the existing reserve for other needs. 1216 not 1152 so a tp_sharded run that
-            # falls back off the snake still fits: the fallback adds two gather programs, +64 B/bank.
-            torus_xy_device_params(fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE, l1_small_size=1216),
+            torus_xy_device_params(
+                fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE,
+                l1_small_size=GLM_L1_SMALL_SIZE,
+                trace_region_size=GLM_TRACE_REGION_SIZE,
+            ),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -1355,7 +1411,8 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
     indirect=["mesh_device", "device_params"],
 )
 # KV dedup end-to-end through the full chunked transformer: tp_sharded must match the sp_only PCC, since
-# the deduped caches reconstruct the same block-cyclic buffer via the TP-inner all-gather.
+# the deduped caches reconstruct the same block-cyclic buffer via the TP-inner all-gather. The 8x4 torus
+# always closes the snake ring, so this row covers the snake route only.
 @pytest.mark.parametrize("tp_shard_kv", [False, True], ids=["sp_only", "tp_sharded"])
 @pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm51", "glm52"])
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
@@ -1371,9 +1428,10 @@ def test_glm_prefill_transformer_chunked(
     preload_isl,
     num_links,
     tp_shard_kv,
+    use_trace,
 ):
     topology = per_axis_topology(device_params["fabric_config"])
-    run_chunked_transformer(
+    run_chunked_transformer_updated(
         variant,
         config_only,
         mesh_device,
@@ -1383,9 +1441,15 @@ def test_glm_prefill_transformer_chunked(
         GateComputeMode.DEVICE_FP32,
         num_links,
         topology,
+        1,  # num_iters: accuracy, not timing
         routing_use_l1_small_for_semaphores=True,
         preload_isl=preload_isl,
         tp_shard_kv=tp_shard_kv,
+        check_pcc=True,
+        check_layer_pcc=not use_trace,  # per-layer PCC needs a host readback, impossible under capture
+        use_trace=use_trace,
+        kv_pcc_threshold=KV_CACHE_PCC_THRESHOLD,
+        seq_cache=SEQ_CACHE,  # golden-trace length; changing it moves the indexer's key width
     )
 
 
@@ -1405,8 +1469,10 @@ def run_chunked_transformer_updated(
     perf_margin=None,
     preload_isl=0,
     check_pcc=False,
+    check_layer_pcc=False,
     use_trace=False,
     tp_shard_kv=False,
+    kv_pcc_threshold=None,
     seq_cache=None,
 ):
     """No-PCC perf/smoke variant of run_chunked_transformer: build the transformer ONCE, then drive the
@@ -1431,7 +1497,26 @@ def run_chunked_transformer_updated(
     from a known-good CI run), each chunk's measured median must stay within +/- `perf_margin` of its
     baseline; a single `perf_margin` covers every chunk. The table appends the baseline, tolerance band,
     and PASS/FAIL per chunk, and the run fails if any chunk is out of band. When no baseline is given the
-    table is record-only (perf-exploration combos)."""
+    table is record-only (perf-exploration combos).
+
+    `check_pcc` asserts the two CACHE PCCs (KVPE and, when the variant has one, the DSA indexer-K cache)
+    after the run. Works identically traced and untraced, because the caches are read back once the run
+    is over rather than mid-forward.
+
+    `check_layer_pcc` additionally asserts the per-layer decoder-output PCC against the golden trace, by
+    running the forward with return_intermediates=True. UNTRACED ONLY, and not by choice: that flag
+    snapshots every layer to host in the middle of forward(), and a host readback inside
+    begin_trace_capture() is a hard TT_FATAL ("Reads are not supported during trace capture"). So a
+    caller pairs it with `not use_trace` — the traced arm's correctness claim rests on the cache PCCs,
+    which are the actual product of chunked prefill. It also forces host readbacks into the timed region,
+    so the timing table from a check_layer_pcc run is not a perf number.
+
+    `seq_cache` is the allocated KV-cache / RoPE-table length. It defaults to the perf sweep's
+    SEQ_CACHE_NOPCC (100k) because that sweep measures depths up to preload95k; accuracy callers pass
+    SEQ_CACHE (55k), the golden-trace length. It is NOT a free knob: the length feeds max_seq_len (hence
+    the RoPE cos/sin tables) and _record_kv_cache_pcc's blockcyclic un-rotate, and it changes the
+    indexer's allocated key width -- so band/tile decomposition and accumulation order shift with it, and
+    PCCs are only comparable between runs that used the SAME value."""
     # The routing family this row drives must match the one the adapter declares; crossing
     # families applies a different affinity function with no error (see the assert).
     assert_gate_mode_matches_adapter(variant, gate_fallback_mode)
@@ -1514,8 +1599,39 @@ def run_chunked_transformer_updated(
         total_len <= seq_cache
     ), f"preload_isl {preload_isl} + {n_chunks} chunks ({measured_len}) = {total_len} exceed cache {seq_cache}"
 
+    # Per-layer PCC needs a host readback mid-forward, which begin_trace_capture() forbids outright.
+    assert not (check_layer_pcc and use_trace), (
+        "check_layer_pcc=True is incompatible with use_trace=True: return_intermediates snapshots each "
+        "layer to host inside forward(), and a read during trace capture is a hard TT_FATAL. Pair it with "
+        "not use_trace and let the cache PCCs carry the traced arm."
+    )
+    # The per-layer reference comes from the golden trace, so every measured position must lie inside it.
+    # Cache PCC has no such limit (depths past the trace are preloaded with random KV, which is fine for
+    # routing but is not a reference).
+    assert not check_layer_pcc or total_len <= SEQ_CACHE, (
+        f"check_layer_pcc=True needs every measured position inside the {SEQ_CACHE}-token golden trace, "
+        f"but preload_isl {preload_isl} + {n_chunks} chunks = {total_len}"
+    )
+
+    # conftest's _resolve_config_only is lru_cache'd, so this object is shared process-wide: mutating
+    # max_seq_len / rope_scaling in place would leak into every later test of the same variant in the same
+    # session. Deep-copy first, as test_prefill_block_loop.py does for the same reason.
+    config = copy.deepcopy(config)
     kvpe_dim = config.qk_rope_head_dim + config.kv_lora_rank
     config.max_seq_len = seq_cache
+    # Keep rope_scaling CONSISTENT with the length we actually run. config_builder() is called with no
+    # args, so original_max_position_embeddings stays at its 8192 default while max_seq_len is mutated here
+    # -- and the runner, which passes PREFILL_MAX_SEQ_LEN, gets the run length for both.
+    # YaRN-DISABLED variants only. GLM sets factor=1.0, where "disables YaRN" is not a full short-circuit:
+    # the two configs still produce cos/sin tables differing by up to 3.8e-6, which is why this test and the
+    # runner reported slightly different KV PCC (0.861237 vs 0.860911) on identical tokens and goldens.
+    # For a real YaRN config the rewrite is NOT harmless -- it moves yarn_find_correction_range and rescales
+    # most rope frequencies, while the goldens come from the untouched AutoConfig. DeepSeek (factor 40),
+    # Kimi (64) and Mistral (128) all reach these drivers, so gate on the factor rather than on the presence
+    # of a config_builder (Mistral has one and still runs real YaRN).
+    rope_scaling = getattr(config, "rope_scaling", None)
+    if isinstance(rope_scaling, dict) and rope_scaling.get("factor", 1.0) == 1.0:
+        rope_scaling["original_max_position_embeddings"] = seq_cache
 
     logger.info(
         f"chunked transformer (no-PCC): num_layers={num_layers} mesh={mesh_shape} n_chunks={n_chunks} "
@@ -1523,16 +1639,13 @@ def run_chunked_transformer_updated(
         f"num_iters={num_iters}"
     )
 
-    # Trace is DENSE-MLA ONLY. Asserted here (not just deep in set_trace_controller) so a sparse model
-    # fails before the multi-minute weight load. GLM (glm_5_1 / glm_5_2) carries the DSA indexer fields,
-    # whose ops have no per-element-tensor metadata overload yet — and the captured forward never threads
-    # index_kv_cache, so a traced sparse run would silently skip the indexer and write wrong KV.
-    if use_trace:
-        assert not resolve_has_indexer(config), (
-            "use_trace=True is not supported for sparse/DSA (indexer) attention — GLM (glm_5_1 / "
-            "glm_5_2) and friends. Supported traced models are the dense-MLA ones (deepseek_v3, "
-            "kimi_k2_6, kimi_k2_7); port the indexer ops to the metadata form first."
-        )
+    # Per-layer PCC state. `layout_layer_pcc` is resolved up front (unlike the cache-PCC block, which
+    # resolves it lazily) because it is needed inside the chunk loop.
+    emb_dim = config.hidden_size
+    # Filled lazily, keyed by the layers actually compared: kv_only_last_layer leaves the last layer with
+    # no output snapshot, and pre-seeding it with 1.0 would report a perfect score for a layer never checked.
+    layer_min_pcc: dict[int, float] = {}
+    layout_layer_pcc = variant.prefill_trace_layout if check_layer_pcc else None
 
     iteration_chunk_times: list[list[float]] = []
 
@@ -1581,7 +1694,7 @@ def run_chunked_transformer_updated(
         state_dict={},
         num_layers=num_layers,
         seq_len=CHUNK,  # per-chunk size -> MoE/FFN dispatch buffers
-        max_seq_len=seq_cache,  # KV ring buffer + RoPE cos/sin cache = full no-PCC cache (up to 100k)
+        max_seq_len=seq_cache,  # KV ring buffer + RoPE cos/sin cache = the caller's full cache length
         dispatch_buffer_capacity_factor=8,
         num_links=num_links,
         topology=topology,
@@ -1645,7 +1758,10 @@ def run_chunked_transformer_updated(
 
     # preload_isl > 0: seed the prior [0, preload_isl) KVPE + indexer-K from the golden trace so the measured
     # chunk attends to real KV (representative MoE routing) and the indexer scores a real prefix.
-    if preload_isl > 0:
+    # A closure because the traced arm re-seeds it after clearing the caches (see the capture block).
+    def _seed_preload():
+        if preload_isl <= 0:
+            return
         _preload_kvpe_prefix_from_trace(
             tt_kvpe_cache,
             trace_dir,
@@ -1680,14 +1796,21 @@ def run_chunked_transformer_updated(
                 tp_shard_kv=tp_shard_kv,
             )
 
+    _seed_preload()
+
     # Precompute per-chunk SP-sharded token tiles once (reused across iterations). Chunk-aligned offsets
     # make the block-cyclic rotation degenerate to a plain per-chip reshape.
     chunk_tok_host = []
+    # Per-chunk inverse of the block-cyclic rotation, needed only by the per-layer PCC comparison to put
+    # a layer's host snapshot back into natural chunk order. Built here alongside `flat` so the
+    # permutation has exactly one derivation.
+    chunk_local_pos = []
     for c in range(n_chunks):
         kv_actual = preload_isl + c * CHUNK
         positions = rotated_chip_positions(kv_actual, sp, chunk_local)
         flat = torch.tensor([positions[ch][r] for ch in range(sp) for r in range(chunk_local)], dtype=torch.long)
         chunk_tok_host.append(token_ids_full[flat].reshape(sp, 1, chunk_local))
+        chunk_local_pos.append(flat - kv_actual)  # permutation of [0, CHUNK)
 
     mesh_device.enable_program_cache()
 
@@ -1775,16 +1898,18 @@ def run_chunked_transformer_updated(
                 tt_kvpe_cache,
                 actual_isl=CHUNK,
                 actual_start=None,
-                actual_end=None,
+                actual_end=None,  # metadata carries the clamp; write_k rejects a host actual_end here
                 cache_user_id=0,
                 return_intermediates=False,
                 metadata=trace_metadata,
+                index_kv_cache=tt_index_kv_cache,
             )
 
         trace_controller = SubDeviceTraceController(mesh_device)
         transformer.set_trace_controller(trace_controller)
         _fwd_meta()  # warm/compile the metadata-variant programs before recording
         ttnn.synchronize_device(mesh_device)
+
         trace_controller.begin_capture()
         _fwd_meta()
         trace_controller.end_capture()
@@ -1819,7 +1944,13 @@ def run_chunked_transformer_updated(
                 chunk_start = time.time()
                 trace_controller.replay()
                 ttnn.synchronize_device(mesh_device)
-                chunk_times.append(time.time() - chunk_start)
+                chunk_seconds = time.time() - chunk_start
+                chunk_times.append(chunk_seconds)
+                # Per-(iter, chunk) sample. print_duration_table only reports the median over
+                # iterations[1:], so at num_iters=2 iteration 0's per-chunk times would otherwise be
+                # unrecoverable (only its total is logged) -- and the traced path reaches no other
+                # timing log at all. Emitted identically in both modes so the two are comparable.
+                logger.info(f"[chunk timing] iter={it} chunk={c} {chunk_seconds * 1000:.2f} ms")
                 continue
             tt_tokens = ttnn.from_torch(
                 chunk_tok_host[c],
@@ -1830,25 +1961,51 @@ def run_chunked_transformer_updated(
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, None)),
             )
             chunk_start = time.time()
-            # forward with return_intermediates=False: nothing is cloned to host, no PCC. Chunked
-            # prefill is full-chunk (all positions real) so actual_end is kv_actual + CHUNK; forward
-            # uses self.indexed_rope. The small (first_token) return is discarded.
+            # return_intermediates only when the caller asked for per-layer PCC: it clones every layer to
+            # host, which both costs time (so the timing table stops being a perf number) and is illegal
+            # under capture. Otherwise nothing is cloned. Chunked prefill is full-chunk (all positions
+            # real) so actual_end is kv_actual + CHUNK; forward uses self.indexed_rope. The small
+            # (first_token) return is discarded.
             reset_fused_ring_host_timing()
-            transformer.forward(
+            fwd_out = transformer.forward(
                 tt_tokens,
                 tt_kvpe_cache,
                 actual_isl=CHUNK,
                 actual_start=kv_actual,
                 actual_end=kv_actual + CHUNK,
                 cache_user_id=0,
-                return_intermediates=False,
+                return_intermediates=check_layer_pcc,
                 index_kv_cache=tt_index_kv_cache,
             )
             ttnn.synchronize_device(mesh_device)
+            if check_layer_pcc:
+                # min over every chunk (and iteration, though accuracy callers pass num_iters=1 since
+                # each iteration replays the same chunks into the same cache region).
+                layer_outputs = fwd_out[2]
+                local_pos = chunk_local_pos[c]
+                for i in range(num_layers):
+                    # kv_only_last_layer=True strips the LAST layer's output path (it writes KV and
+                    # nothing else), so no "layer_{num_layers-1}" snapshot exists. That stripping is what
+                    # makes the forward device-only and therefore capturable, and it is set for BOTH modes
+                    # so the two stay comparable -- so this is a structural gap, not a missing check. The
+                    # last layer's correctness is still covered, by the KVPE cache PCC below.
+                    if f"layer_{i}" not in layer_outputs:
+                        continue
+                    # host snapshot [1, CHUNK, emb] (SP-seq + TP-hidden concatenated); [0] -> [CHUNK, emb].
+                    out_flat = layer_outputs[f"layer_{i}"][0].to(torch.float32)
+                    natural = torch.zeros(CHUNK, emb_dim, dtype=torch.float32)
+                    natural[local_pos] = out_flat  # un-rotate block-cyclic -> natural chunk order
+                    ref = _ref_layer_slice(trace_dir, layout_layer_pcc, i, kv_actual, kv_actual + CHUNK)
+                    _, pcc = comp_pcc(ref, natural)
+                    layer_min_pcc[i] = min(layer_min_pcc.get(i, 1.0), pcc)
+                    logger.info(f"  chunk {c} layer {i} PCC: {pcc:.6f}")
+                    if pcc < LAYER_PCC_THRESHOLD:
+                        logger.warning(f"  chunk {c} layer {i} PCC {pcc:.6f} below {LAYER_PCC_THRESHOLD}")
             fused_host_calls, fused_host_seconds = get_fused_ring_host_timing()
             ttnn.deallocate(tt_tokens)
             chunk_seconds = time.time() - chunk_start
             chunk_times.append(chunk_seconds)
+            logger.info(f"[chunk timing] iter={it} chunk={c} {chunk_seconds * 1000:.2f} ms")
             if fused_host_calls:
                 logger.info(
                     f"[fused-indexer host timing] iter={it} chunk={c} calls={fused_host_calls} "
@@ -1955,6 +2112,30 @@ def run_chunked_transformer_updated(
     # Optional accuracy check on the same run that produced the timings, so a perf number is never
     # reported for a functionally wrong prefill. Off by default: this runner's whole point is to need no
     # golden trace, and enabling it makes one mandatory.
+
+    if check_layer_pcc:
+        # kv_only_last_layer strips the LAST layer's output, so exactly num_layers - 1 layers can be
+        # compared -- which is ZERO at num_layers == 1, where the only layer is also the last one. That is
+        # a structural property of the configuration, not a silently skipped comparison, so it must not
+        # assert. Anything between those two cases IS a real gap (a missing intermediate key) and does.
+        expected_compared = max(num_layers - 1, 0)
+        assert len(layer_min_pcc) == expected_compared, (
+            f"check_layer_pcc=True compared {len(layer_min_pcc)} layers but expected {expected_compared} "
+            f"(num_layers={num_layers} minus the kv_only last layer) -- an intermediate layer's output is "
+            f"missing, which would otherwise let the threshold check pass on a partial set"
+        )
+        if not layer_min_pcc:
+            logger.info(
+                f"Per-layer PCC skipped: num_layers={num_layers} and kv_only_last_layer leaves no layer "
+                "with a decoder output. The cache PCCs below still cover this run."
+            )
+        logger.info(f"Per-layer min PCC across chunks ({len(layer_min_pcc)}/{num_layers} layers compared):")
+        for i in sorted(layer_min_pcc):
+            logger.info(f"  layer {i}: {layer_min_pcc[i]:.6f}")
+        if layer_min_pcc:
+            overall_min = min(layer_min_pcc.values())
+            assert overall_min >= LAYER_PCC_THRESHOLD, f"min per-layer PCC {overall_min:.6f} < {LAYER_PCC_THRESHOLD}"
+
     if check_pcc:
         assert (
             trace_dir is not None and trace_dir.exists()
@@ -1969,15 +2150,43 @@ def run_chunked_transformer_updated(
             mesh_device,
             sp,
             num_layers,
-            # SEQ_CACHE_NOPCC, not SEQ_CACHE: this runner allocates the 100k cache, and
-            # _record_kv_cache_pcc derives blockcyclic_positions from this length — passing the 55k
+            # MUST be the same length the cache was actually allocated with (seq_cache):
+            # _record_kv_cache_pcc derives blockcyclic_positions from it, so passing a different
             # constant made the un-rotate scatter a [102400, 576] gather into a [56320, 576] index.
             seq_cache,
             total_len,
             config.kv_lora_rank,
-            assert_threshold=TRACE_KV_CACHE_PCC_THRESHOLD,
-            assert_layer_depth=GATED_LAYER_DEPTH,
+            # Calibrated floors are model-specific: Kimi's 0.96 sits ABOVE GLM-5.2's documented KVPE
+            # minimum (~0.86 @ L75), so applying it to GLM fails a perfectly good run.
+            assert_threshold=TRACE_KV_CACHE_PCC_THRESHOLD if kv_pcc_threshold is None else kv_pcc_threshold,
+            # FULL DEPTH for the accuracy driver. Gating at GATED_LAYER_DEPTH left the LAST layer with no
+            # asserted check at all on GLM-5.2 L78: its decoder-output snapshot does not exist
+            # (kv_only_last_layer strips it), the traced arm runs check_layer_pcc=False, layer 77 is a
+            # `shared` indexer layer so the indexer-K PCC does not cover it either, and 77 > 10 made the
+            # KVPE assertion recording-only. A regression confined to layers > 10 that left indexer-K
+            # intact passed unconditionally. The depth gate belongs to the perf sweeps, not here.
+            assert_layer_depth=None,
+            # Without this the readback un-rotates over sp stripes while a TP-deduped cache holds
+            # sp*tp, and the gather comes back 1/tp as tall: "value tensor of shape [14080, 576]
+            # cannot be broadcast to indexing result of shape [56320, 576]".
+            tp_shard_kv=tp_shard_kv,
         )
+        # GLM/DSA only: the indexer's own key cache. Read back after the run like the KVPE cache, so
+        # unlike the per-layer decoder PCC (which needs a mid-forward host readback and is therefore
+        # impossible under capture) this check works identically traced and untraced.
+        if tt_index_kv_cache is not None and (trace_dir / "dsa" / "indexer_k_layer_0").exists():
+            _record_indexer_k_cache_pcc(
+                trace_dir,
+                layout,
+                tt_index_kv_cache,
+                mesh_device,
+                sp,
+                num_layers,
+                seq_cache,
+                total_len,
+                config,
+                tp_shard_kv=tp_shard_kv,
+            )
 
     # Release the captured trace + the sub-device managers that own its buffers BEFORE the mesh
     # closes. Without this the MeshTraceBuffers are freed via SubDeviceManager's dtor after the
@@ -2016,6 +2225,52 @@ def kimi_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters, preload_i
     )
     baseline = table.get((num_layers, n_chunks, num_iters)) if preload_isl == 0 else None
     return baseline, (default_margin if perf_margin is None else perf_margin)
+
+
+def glm_chunked_perf_gate(variant, use_trace, num_layers, n_chunks, num_iters, preload_isl, perf_margin=None):
+    """GLM counterpart of kimi_chunked_perf_gate: returns ``(baseline_chunk_times_s, margin)``.
+
+    As in the Kimi gate, only preload_isl == 0 is gated, since the recorded runs start from an empty
+    cache. Two conditions differ:
+
+      use_trace -- only the TRACED path has a baseline. Unlike Kimi, GLM has no untraced table at all,
+                   so an untraced run is always record-only; the reasoning is in the long comment above
+                   GLM_TRACED_PERF_MARGIN (short version: the untraced per-chunk stddev is 9-25%, which
+                   swamps any band worth setting). This is a deliberate absence, not a gap to fill in
+                   passing -- read that comment before adding one back.
+      variant   -- the baseline was measured on GLM_PERF_GATED_VARIANT only. glm_5_1 shares this test's
+                   parametrization AND its layer count, so it would match the same (num_layers, n_chunks,
+                   num_iters) key and get silently gated against another model's numbers. It is a
+                   different model (different weights, its own golden trace), so any agreement would be
+                   luck; it stays record-only until it has a table of its own.
+
+    An all-zero row is also read as "not calibrated yet" and returns None. No such row ships today, but
+    the guard stays so that adding a placeholder key leaves the run record-only rather than arming a
+    zero-width band around a zero baseline and failing every chunk of it.
+    """
+    variant_name = getattr(variant, "name", None)
+    if variant_name != GLM_PERF_GATED_VARIANT:
+        logger.info(
+            f"[perf gate] variant {variant_name!r} has no calibrated GLM baseline "
+            f"(only {GLM_PERF_GATED_VARIANT!r} does) — run stays record-only"
+        )
+        return None, perf_margin
+    if not use_trace:
+        logger.info(
+            "[perf gate] GLM untraced runs are record-only by design: eager dispatch measures 9-25% "
+            "per-chunk stddev, so any band worth gating sits inside the noise — see the comment above "
+            "GLM_TRACED_PERF_MARGIN before adding an untraced baseline"
+        )
+        return None, perf_margin
+    baseline = GLM_TRACED_BASELINE_CHUNK_TIMES_S.get((num_layers, n_chunks, num_iters)) if preload_isl == 0 else None
+    if baseline is not None and not any(baseline):
+        logger.info(
+            f"[perf gate] GLM traced baseline for (L{num_layers}, {n_chunks} chunks, {num_iters} iters) "
+            "is an uncalibrated placeholder (all zeros) — run stays record-only; fill the table from the "
+            "printed per-chunk medians to arm the gate"
+        )
+        baseline = None
+    return baseline, (GLM_TRACED_PERF_MARGIN if perf_margin is None else perf_margin)
 
 
 # No-PCC perf/smoke variant: runs the full n_chunks-chunk prefill `num_iters` times with no golden
@@ -2271,6 +2526,8 @@ def test_ds_prefill_transformer_chunked_no_pcc(
 # the empty-cache case (preload0) needs no golden trace, preload_isl > 0 requires it. Uses the GLM fabric payload + on-device fp32 gate + L1_SMALL
 # routing semaphores, exactly like test_glm_prefill_transformer_chunked. glm_5_2 additionally exercises the
 # DSA cross-layer indexer reuse per chunk. Requires the GLM TTNN weight cache (set the variant's cache env).
+# notrace/traced, not trace: "notrace" CONTAINS "trace", so `-k trace` would select both modes.
+@pytest.mark.parametrize("use_trace", [False, True], ids=["notrace", "traced"])
 @pytest.mark.parametrize(
     "num_iters", [1, 2, 10, 20, 25], ids=["iters1", "two_iters", "ten_iters", "iters20", "iters25"]
 )
@@ -2296,10 +2553,11 @@ def test_ds_prefill_transformer_chunked_no_pcc(
     [
         pytest.param(
             (8, 4),
-            # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores
-            # and retain the existing reserve for other needs. 1216 not 1152 so a tp_sharded run that
-            # falls back off the snake still fits: the fallback adds two gather programs, +64 B/bank.
-            torus_xy_device_params(fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE, l1_small_size=1216),
+            torus_xy_device_params(
+                fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE,
+                l1_small_size=GLM_L1_SMALL_SIZE,
+                trace_region_size=GLM_TRACE_REGION_SIZE,
+            ),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -2308,9 +2566,9 @@ def test_ds_prefill_transformer_chunked_no_pcc(
         # since TORUS_XY always prefers the snake. Not comparable to the torus leg (all axes go Linear).
         pytest.param(
             (8, 4),
-            # 1216 like the torus legs: at 1152 the region is full, so the fallback's extra 64 B/bank
-            # makes the MoE routing's all_gather in offset_cumsum fail instead. Measured floor is 1168.
-            fabric2d_device_params(fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE, l1_small_size=1216),
+            fabric2d_device_params(
+                fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE, l1_small_size=GLM_L1_SMALL_SIZE
+            ),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="fabric2d-8x4",
@@ -2339,10 +2597,17 @@ def test_glm_prefill_transformer_chunked_no_pcc(
     num_links,
     preload_isl,
     tp_shard_kv,
+    use_trace,
 ):
     topology = per_axis_topology(device_params["fabric_config"])
     if preload_isl + n_chunks * CHUNK > SEQ_CACHE_NOPCC:
         pytest.skip(f"preload_isl {preload_isl} + {n_chunks} chunks exceeds the {SEQ_CACHE_NOPCC}-token cache")
+    # Only the TRACED mode is gated. Untraced resolves to None (record-only, prints the table and asserts
+    # nothing) because its per-chunk stddev is far wider than any band worth setting -- see
+    # glm_chunked_perf_gate and the comment above GLM_TRACED_PERF_MARGIN.
+    baseline_chunk_times_s, resolved_perf_margin = glm_chunked_perf_gate(
+        variant, use_trace, num_layers, n_chunks, num_iters, preload_isl
+    )
     run_chunked_transformer_updated(
         variant,
         config_only,
@@ -2355,8 +2620,11 @@ def test_glm_prefill_transformer_chunked_no_pcc(
         topology,
         num_iters,
         routing_use_l1_small_for_semaphores=True,
+        baseline_chunk_times_s=baseline_chunk_times_s,
+        perf_margin=resolved_perf_margin,
         preload_isl=preload_isl,
         tp_shard_kv=tp_shard_kv,
+        use_trace=use_trace,
     )
 
 

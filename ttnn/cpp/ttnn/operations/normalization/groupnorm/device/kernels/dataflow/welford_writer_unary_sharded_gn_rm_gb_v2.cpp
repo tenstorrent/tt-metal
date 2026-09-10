@@ -39,8 +39,8 @@ void kernel_main() {
     // compile_time_arg 12: reduce_factor_c (unused in welford path)
 
     constexpr auto gamma_args = TensorAccessorArgs<13>();
-    constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
-    constexpr auto input_mask_args = TensorAccessorArgs<beta_args.next_compile_time_args_offset()>();
+    constexpr auto beta_args = TensorAccessorArgs<decltype(gamma_args)::next_compile_time_args_offset()>();
+    constexpr auto input_mask_args = TensorAccessorArgs<decltype(beta_args)::next_compile_time_args_offset()>();
 
     const uint32_t gamma_addr = get_arg_val<uint32_t>(1);
     const uint32_t beta_addr = get_arg_val<uint32_t>(2);
@@ -56,7 +56,7 @@ void kernel_main() {
     constexpr uint32_t dfb_input_mask_id = tt::CBIndex::c_7;
     constexpr uint32_t dfb_ones_id = tt::CBIndex::c_26;
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer dfb_gamma(dfb_gamma_id);
     DataflowBuffer dfb_beta(dfb_beta_id);
     DataflowBuffer dfb_input_mask(dfb_input_mask_id);
@@ -134,7 +134,7 @@ void kernel_main() {
         // L1-L1 NOC transactions only need 16 byte alignment on BH, so this is legal after data is loaded
         // to L1
         for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
-            uint32_t tile_id = gamma_tile_start_id + w;
+            const uint32_t tile_id = gamma_tile_start_id + w;
 
             // Read the first 64 bytes of the tile into the first face
 #ifdef ARCH_BLACKHOLE
@@ -187,7 +187,7 @@ void kernel_main() {
         auto l1_write_addr_beta = dfb_beta.get_write_ptr();
 
         for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
-            uint32_t tile_id = beta_tile_start_id + w;
+            const uint32_t tile_id = beta_tile_start_id + w;
 
             // Read the first 64 bytes of the tile into the first face
 #ifdef ARCH_BLACKHOLE
