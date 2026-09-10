@@ -3479,8 +3479,18 @@ _COOL_BEGIN = "PERF_MCP_COOLING_BEGIN"
 _COOL_END = "PERF_MCP_COOLING_END"
 
 
-def _cooling_marker(which):
-    print(which, file=sys.stderr, flush=True)
+def _cooling_marker(which, cur_c=None):
+    """The watchdog heartbeat (run.py scans each line for the literal `which` substring). Optionally
+    carries the reading that produced this beat, so a long wait's repeated lines show the board
+    actually dropping instead of repeating one uninformative marker every poll."""
+    if cur_c is None:
+        print(which, file=sys.stderr, flush=True)
+        return
+    print(
+        "%s  [thermal-gate] cooling -- die %.1fC" % (which, cur_c),
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 _COOLDOWN_TO_C = float(os.environ.get("PERF_MCP_COOLDOWN_TO_C", "65"))
@@ -3629,16 +3639,18 @@ def _cooldown_after_clamp(target_c: float = 0.0, give_up_on_plateau: bool = True
         best, best_t = last, time.time()
         while True:
             time.sleep(_COOLDOWN_POLL_S)
+            cur = _read_die_temp_c()
             # RE-ASSERT, EVERY POLL. The watchdog credits the gap between consecutive beats and
             # nothing beyond them, so a wait that goes quiet stops being free -- which is what keeps
-            # a deadlock from buying itself unlimited time by claiming to be cooling.
-            _cooling_marker(_COOL_BEGIN)
-            cur = _read_die_temp_c()
+            # a deadlock from buying itself unlimited time by claiming to be cooling. Carries the
+            # reading so the repeated beats show the board actually dropping, not just a repeated
+            # identical line.
+            _cooling_marker(_COOL_BEGIN, cur)
             if cur is None:
                 return True, None  # telemetry we cannot read is not a board we refuse to use
             if cur <= target:
                 print(
-                    "  [thermal-gate] cooled to %.1fC after %.0fs" % (cur, time.time() - t0),
+                    "  [thermal-gate] cooled -- die %.1fC, resuming" % cur,
                     file=sys.stderr,
                     flush=True,
                 )
@@ -3646,11 +3658,6 @@ def _cooldown_after_clamp(target_c: float = 0.0, give_up_on_plateau: bool = True
             # PROGRESS, NOT A CLOCK, decides whether to keep waiting.
             if best is None or cur < best - 0.5:
                 best, best_t = cur, time.time()
-                print(
-                    "  [thermal-gate] cooling: %.1fC (target %.1fC, %.0fs elapsed)" % (cur, target, time.time() - t0),
-                    file=sys.stderr,
-                    flush=True,
-                )
             elif give_up_on_plateau and time.time() - best_t >= _COOLDOWN_PLATEAU_S:
                 print(
                     "  [thermal-gate] board has sat at %.1fC for %.0fs and is no longer cooling -- that "
@@ -3865,8 +3872,7 @@ def report_board_over_clamp(label: str = "") -> bool:
         if cur <= limit:
             return False
         print(
-            "  [thermal-watch] %s: board at %.1fC, above this board's clamp threshold %.1fC"
-            % (label or "device subprocess", cur, limit),
+            "  [thermal-watch] %s -- die %.1fC" % (label or "device subprocess", cur),
             file=sys.stderr,
             flush=True,
         )
@@ -3937,13 +3943,15 @@ def _headroom_poll(t0, limit, cur):
     """The polling half of _wait_for_thermal_headroom, split out so the wait can be bracketed."""
     while time.time() - t0 < _THERMAL_WAIT_S:
         time.sleep(_THERMAL_POLL_S)
-        _cooling_marker(_COOL_BEGIN)  # re-assert; the watchdog credits beats, not a single claim
         cur = _read_die_temp_c()
+        # re-assert; the watchdog credits beats, not a single claim -- carries the reading so 81
+        # identical lines become a visible trend instead of noise
+        _cooling_marker(_COOL_BEGIN, cur)
         if cur is None:
             return True, None
         if cur <= limit:
             print(
-                "  [thermal-gate] cooled to %.1fC after %.0fs" % (cur, time.time() - t0),
+                "  [thermal-gate] cooled -- die %.1fC, resuming" % cur,
                 file=sys.stderr,
                 flush=True,
             )

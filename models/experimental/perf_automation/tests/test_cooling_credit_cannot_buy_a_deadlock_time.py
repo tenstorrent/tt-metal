@@ -65,10 +65,10 @@ def test_the_child_re_asserts_every_poll():
     for fn in ("_cooldown_after_clamp", "_headroom_poll"):
         i = child.index("def %s(" % fn)
         body = child[i : child.index("\ndef ", i + 1)]
-        beats = body.count("_cooling_marker(_COOL_BEGIN)")
+        beats = body.count("_cooling_marker(_COOL_BEGIN")
         assert beats >= 1, "%s never re-asserts" % fn
         j = body.index("time.sleep(")
-        assert "_cooling_marker(_COOL_BEGIN)" in body[j : j + 400], "%s does not beat inside its loop" % fn
+        assert "_cooling_marker(_COOL_BEGIN" in body[j : j + 600], "%s does not beat inside its loop" % fn
 
 
 def test_the_heartbeat_window_is_wider_than_the_poll():
