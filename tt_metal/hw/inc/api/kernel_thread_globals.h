@@ -108,6 +108,7 @@ inline void tensix_global_sem_init(uint32_t idx, uint32_t value) { *tensix_globa
 inline uint32_t tensix_global_sem_read(uint32_t idx) { return *tensix_global_sem(idx); }
 
 // A read at +4*(inc+8) posts `inc` and returns the pre-increment value (same alias as the watcher ring buffer).
+// Only inc=1 is exercised; the upper bound the alias supports is not documented in tensix_neo_reg.h.
 inline uint32_t tensix_global_sem_fetch_add(uint32_t idx, uint32_t inc) {
     return *reinterpret_cast<volatile uint32_t*>(reinterpret_cast<uintptr_t>(tensix_global_sem(idx)) + 4 * (inc + 8));
 }
