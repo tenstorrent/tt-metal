@@ -528,10 +528,11 @@ void MeshGraph::initialize_from_mgd(
                     dim,
                     dim_len,
                     *mesh_id);
+                const bool axis_wraps = along_rows ? has_flag(effective_fabric_type, FabricType::TORUS_Y)
+                                                   : has_flag(effective_fabric_type, FabricType::TORUS_X);
                 const bool ring_wrap = express.wrap() != proto::TorusTopology::INVALID_TYPE
                                            ? express.wrap() == proto::TorusTopology::RING
-                                       : along_rows ? has_flag(effective_fabric_type, FabricType::TORUS_Y)
-                                                    : has_flag(effective_fabric_type, FabricType::TORUS_X);
+                                           : axis_wraps;
                 for (const auto& [a, b] :
                      expand_express_link_edges(mesh_shape, along_rows, express.pattern().start(), step, ring_wrap)) {
                     this->add_to_connectivity(mesh_id, a, mesh_id, b, RoutingDirection::Z);

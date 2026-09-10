@@ -2749,7 +2749,7 @@ TEST_F(ControlPlaneFixture, TestExpressPhysicalLowering8x4) {
         EXPECT_FALSE(expected_chans.empty()) << h.src << "->" << h.dst << " mapped to physically non-adjacent "
                                              << "chips " << phys_src << "," << phys_dst;
         for (auto c : fwd) {
-            EXPECT_TRUE(expected_chans.count(c) > 0)
+            EXPECT_TRUE(expected_chans.contains(c))
                 << "fwd chan " << static_cast<int>(c) << " for " << h.src << "->" << h.dst
                 << " does not physically connect chip " << phys_src << "->" << phys_dst;
         }
@@ -2791,6 +2791,7 @@ TEST_F(ControlPlaneFixture, TestExpressPhysicalLowering32x4) {
     // One direct express pair per rank, plus the wrapping span-4 chord.
     const std::vector<std::pair<int, int>> row_blocks = {{0, 7}, {8, 15}, {16, 23}, {24, 31}, {30, 1}};
     int local_sources_checked = 0;
+    int remote_sources_skipped = 0;
     for (const auto& [ra, rb] : row_blocks) {
         tt::tt_fabric::FabricNodeId src{tt::tt_fabric::MeshId{0}, static_cast<std::uint32_t>(ra * 4)};
         tt::tt_fabric::FabricNodeId dst{tt::tt_fabric::MeshId{0}, static_cast<std::uint32_t>(rb * 4)};
@@ -2804,9 +2805,10 @@ TEST_F(ControlPlaneFixture, TestExpressPhysicalLowering32x4) {
                 << "no physical Z channels at local chip " << (ra * 4);
             local_sources_checked++;
         } catch (const std::exception&) {
+            remote_sources_skipped++;
         }
     }
-    EXPECT_GT(local_sources_checked, 0);
+    EXPECT_GT(local_sources_checked, 0) << remote_sources_skipped << " express sources threw as remote on this rank";
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests
