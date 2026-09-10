@@ -11,10 +11,13 @@
 
 from __future__ import annotations
 
+import errno
 import os
 from pathlib import Path
 
 import ttnn
+
+_RO_ERRNOS = (errno.EROFS, errno.EACCES, errno.EPERM)
 
 
 def cache_root() -> Path | None:
@@ -25,6 +28,50 @@ def cache_root() -> Path | None:
 
 def cache_dir_is_set() -> bool:
     return cache_root() is not None
+
+
+def _writable_cache_mirror(preferred: Path) -> Path:
+    """Writable mirror for a preferred cache dir on read-only mounts (CI MLPerf :ro)."""
+    root = Path(os.environ.get("TT_METAL_HOME") or os.environ.get("HOME") or "/tmp")
+    tt_root = cache_root()
+    if tt_root is not None:
+        try:
+            return root / "generated" / "hunyuan_tt_cache" / preferred.relative_to(tt_root)
+        except ValueError:
+            pass
+    suffix = Path(*preferred.parts[-3:]) if len(preferred.parts) >= 3 else Path(preferred.name)
+    return root / "generated" / "hunyuan_tt_cache" / suffix
+
+
+def ensure_cache_dir(path: Path | str | None) -> Path | None:
+    """Return ``path``, creating it when possible.
+
+    CI mounts ``/mnt/MLPerf/huggingface`` read-only. ``Path.mkdir`` raises
+    ``OSError: [Errno 30] Read-only file system`` when the cache subdir is
+    missing. Reuse an existing dir; otherwise mirror under
+    ``$TT_METAL_HOME/generated/hunyuan_tt_cache/...`` so cold builds can write.
+    """
+    if path is None:
+        return None
+    path = Path(path)
+    if path.is_dir():
+        return path
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+    except OSError as e:
+        if e.errno not in _RO_ERRNOS:
+            raise
+        if path.is_dir():
+            return path
+        alt = _writable_cache_mirror(path)
+        if os.environ.get("HY_VERBOSE", "1") != "0":
+            print(
+                f"[cache] TT cache dir not writable ({path}): {e}; using {alt}",
+                flush=True,
+            )
+        alt.mkdir(parents=True, exist_ok=True)
+        return alt
 
 
 def _dtype_key(dtype: ttnn.DataType) -> str:

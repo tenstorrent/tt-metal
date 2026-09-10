@@ -101,7 +101,12 @@ class HunyuanTtMoEParallel(LightweightModule):
         # matches RoutedExpertActivation.Silu = silu(gate)*up.
         self._prefix = prefix
         self._cache_name_prefix = f"{prefix}.routed_expert"
-        self._weight_cache_path = Path(weight_cache_path) if weight_cache_path is not None else None
+        if weight_cache_path is not None:
+            from ..cache import ensure_cache_dir
+
+            self._weight_cache_path = ensure_cache_dir(Path(weight_cache_path))
+        else:
+            self._weight_cache_path = None
         self._inter = self._resolve_routed_intermediate(state_dict, prefix)
         self._expert_torch_weights = self._load_or_skip_host_experts(state_dict, prefix, num_experts)
         self.routed_expert = None  # TtRoutedExpert weight holder (built lazily, once)
@@ -119,7 +124,7 @@ class HunyuanTtMoEParallel(LightweightModule):
             f"{prefix}.gate.wg",
             norm_topk_prob=norm_topk_prob,
             weight_dtype=gate_dtype,
-            weight_cache_path=weight_cache_path,
+            weight_cache_path=self._weight_cache_path,
         )
         self.shared_mlp = None
         if use_mixed_mlp_moe:
@@ -129,7 +134,7 @@ class HunyuanTtMoEParallel(LightweightModule):
                 state_dict,
                 f"{prefix}.shared_mlp",
                 weight_dtype=weight_dtype,
-                weight_cache_path=weight_cache_path,
+                weight_cache_path=self._weight_cache_path,
             )
 
         # Expert matmuls are compute-bound on low-precision weights; HiFi2 (2 passes) +
@@ -162,7 +167,9 @@ class HunyuanTtMoEParallel(LightweightModule):
         from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
         from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 
-        self._weight_cache_path.mkdir(parents=True, exist_ok=True)
+        from ..cache import ensure_cache_dir
+
+        self._weight_cache_path = ensure_cache_dir(self._weight_cache_path)
         init_checker(self._weight_cache_path)
         return TtRoutedExpert.check_cache_complete(
             self._weight_cache_path, self._cache_name_prefix, self.experts_per_dev
@@ -227,7 +234,9 @@ class HunyuanTtMoEParallel(LightweightModule):
         self.dec_ids_experts = [dec_tt[el] for el in range(epc)]
 
         if self._weight_cache_path is not None:
-            self._weight_cache_path.mkdir(parents=True, exist_ok=True)
+            from ..cache import ensure_cache_dir
+
+            self._weight_cache_path = ensure_cache_dir(self._weight_cache_path)
             mode = "cache-load" if self._expert_torch_weights is None else "convert+cache"
             logger.info(
                 f"[moe] {self._cache_name_prefix}: building TtRoutedExpert ({mode}) -> {self._weight_cache_path}"
