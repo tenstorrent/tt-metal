@@ -1,9 +1,5 @@
 # 4-rank prefill runner launch commands
 
-Two ways to run: the CI script (runner + producer + PCC gate, what you want if
-you are validating a change) or the runner alone (a server that idles until
-some other producer connects).
-
 ## Prerequisites
 
 Per host, once:
@@ -55,7 +51,7 @@ Note the `MPI interface: <name>` line it prints — that interface name is what
 
 ```bash
 for h in ${HOSTS//,/ }; do
-  ssh -o BatchMode=yes $h 'rm -f /dev/shm/*prefill*; pkill -f prefill_runner; pkill -f prefill_producer; true'
+  ssh -o BatchMode=yes $h 'rm -f /dev/shm/*prefill*; pkill -f prefill_runner; true'
 done
 ```
 
@@ -64,35 +60,7 @@ rank-scoped names it can prove it owns, and the unlink is existence-based rather
 than staleness-based. A segment left by a `kill -9`'d run makes the next run
 unlink a ring another rank is already using.
 
-## 3a. Runner + producer + PCC gate
-
-```bash
-export TTRUN_DIR=$HOME/ttop
-export PREFILL_SUMMARIES=$HOME/prefill_summaries
-mkdir -p $TTRUN_DIR $PREFILL_SUMMARIES
-printf '%s\n' ${HOSTS//,/ } > $TTRUN_DIR/hostfile
-
-bash $TT_METAL_HOME/models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi27 sc4
-bash $TT_METAL_HOME/models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm52 sc4
-```
-
-Pass `sc1` instead of `sc4` for the single-galaxy leg. The script launches the
-runner under `ttrun`, waits for it to publish the KV chunk table, derives the
-producer's host order from `ttrun`'s own discovery, runs the producer, and exits
-non-zero unless every rank clears PCC 0.85.
-
-`PREFILL_SUMMARIES` should contain the literal string `prefill_summaries`: the
-script derives its per-model scratch directory by substituting into that path,
-so without it both models write to the same directory.
-
-Do not have `PREFILL_NUM_USERS` or `PREFILL_TP_SHARD_KV` exported in this shell.
-The script picks them up as deliberate overrides and silently runs a shape other
-than the manifest's.
-
-## 3b. Runner only
-
-No producer, no PCC gate. The runner allocates, captures its trace, warms up,
-logs `setup complete, entering request loop`, and then blocks forever.
+## 3. Launch the runner
 
 ```bash
 python3 $TT_METAL_HOME/ttnn/ttnn/distributed/ttrun.py \
@@ -109,6 +77,10 @@ python3 $TT_METAL_HOME/ttnn/ttnn/distributed/ttrun.py \
 
 For glm52, swap both paths to `glm52_sc4_mgd.textproto` and `glm52.json`.
 
+The runner allocates, captures its trace, warms up, logs `setup complete,
+entering request loop`, and then blocks there until requests arrive. That idle
+is by design: no device op completes for as long as it waits.
+
 Replace `ens5f0np0` with the interface `recover.sh` reported. `ttrun` writes its
 phase-1 discovery cache to `./generated/ttrun` under the launch directory, so
 run it somewhere writable.
@@ -123,6 +95,6 @@ A clean shutdown needs no recovery. A killed run does — go back to step 1.
 
 ```bash
 for h in ${HOSTS//,/ }; do
-  ssh -o BatchMode=yes $h 'pkill -f prefill_runner; pkill -f prefill_producer; rm -f /dev/shm/*prefill*; true'
+  ssh -o BatchMode=yes $h 'pkill -f prefill_runner; rm -f /dev/shm/*prefill*; true'
 done
 ```
