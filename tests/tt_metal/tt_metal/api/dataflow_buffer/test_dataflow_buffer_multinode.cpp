@@ -112,7 +112,7 @@ static void run_single_dfb_multicore_2_0(
     slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
     m2_writeshard_barrier_uint32(mesh_device, in_tensor, input);
 
-    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program));
 
     std::vector<uint32_t> output;
     slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
@@ -218,7 +218,7 @@ static void run_concurrent_dfbs_program_2_0(
     slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
     m2_writeshard_barrier_uint32(mesh_device, in_tensor, input);
 
-    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program));
 
     std::vector<uint32_t> output;
     slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
@@ -362,7 +362,7 @@ static void run_sequential_4_dfbs_2_0(
         m2_writeshard_barrier_uint32(mesh_device, in_tensors[i], inputs[i]);
     }
 
-    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program));
 
     for (uint32_t i = 0; i < 4; ++i) {
         std::vector<uint32_t> output;
@@ -555,7 +555,7 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
         slow_dispatch::WriteToL1(this->device(), CoreCoord(0, 0), dfb_l1_addr, inputs[i]);
     }
 
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
 
     for (uint32_t i = 0; i < num_dfbs; ++i) {
         std::vector<uint32_t> output;

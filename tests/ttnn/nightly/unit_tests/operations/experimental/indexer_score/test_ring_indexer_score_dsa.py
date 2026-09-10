@@ -22,6 +22,7 @@ import ttnn
 
 from tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_indexer_score import (
     assert_indexer_match,
+    to_device,
     glx_config,
     indexer_score_dsa_ref,
     _global_inputs,
@@ -82,7 +83,7 @@ def _fused_dev_inputs(submesh, q_g, w_g, k_host, *, k_dtype=ttnn.bfloat16):
     both k_local and k_gathered (the op requires them equal)."""
     shard = ttnn.ShardTensorToMesh(submesh, dim=2)
     q_dev = ttnn.from_torch(q_g, device=submesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=shard)
-    w_dev = ttnn.from_torch(w_g, device=submesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=shard)
+    w_dev = to_device(w_g, submesh, mesh_mapper=shard)
     k_local = _shard_k(submesh, k_host, dtype=k_dtype)  # [B,1,sll,D] per chip (the all-gather INPUT)
     # Indexed mode gathers one selected input slot into slot 0; batch-1 scratch also covers the ordinary B=1 path.
     k_gathered = _persistent_buffer(submesh, torch.zeros_like(k_host[:1]), dtype=k_dtype)
@@ -134,7 +135,7 @@ def _full_mesh_inputs(mesh, q_g, w_g, k_host, *, k_dtype=ttnn.bfloat16):
     """Canonical flat row-major sequence shards plus a complete-mesh replicated gather scratch."""
     shard = ttnn.ShardTensorToMesh(mesh, dim=2)
     q_dev = ttnn.from_torch(q_g, device=mesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=shard)
-    w_dev = ttnn.from_torch(w_g, device=mesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=shard)
+    w_dev = to_device(w_g, mesh, mesh_mapper=shard)
     k_local = ttnn.from_torch(k_host, device=mesh, layout=ttnn.TILE_LAYOUT, dtype=k_dtype, mesh_mapper=shard)
     k_gathered = ttnn.from_torch(
         torch.zeros_like(k_host[:1]),
@@ -312,6 +313,162 @@ def _run_fused_multiuser(heads, *, num_users, cache_batch_idx, num_links=1):
 def test_indexer_score_ring4_fused_indexed_cache():
     """cache_batch_idx=1 (2nd user slot). One representative case -- the slot offset is head-independent."""
     _run_fused_multiuser(16, num_users=2, cache_batch_idx=1)
+
+
+def test_indexer_score_ring4_fused_indexed_cache_slot_metadata(expect_error):
+    """Trace-safe slot select: cache_batch_idx_tensor + index_cache_num_layers/_layer_idx.
+
+    The cache is user-major, so the op recomposes the slot ON-DEVICE as user * num_layers + layer_idx.
+    The SCALAR path is the oracle: for each layer the same dispatch is run once with the host-computed
+    cache_batch_idx and once with the 1-element user tensor, and the two must agree.
+
+    Only index_cache_layer_idx moves between layers. It is a RUNTIME arg re-patched by
+    override_runtime_arguments (reader_slot_base + 2) and deliberately absent from the program hash, and
+    that patch is what this test exists for: dropping it degrades KV PCC silently with depth rather than
+    raising. Hence the third assertion -- the two layers must differ. A slot that never moved would match
+    layer 0 twice and slip past a per-layer check.
+
+    Slot metadata requires KV-extent metadata (one-directional), so chunk_start_idx_tensor rides along;
+    its scalar equivalent is chunk_start_idx + kv_len = chunk_start + sp * chunk_local.
+    """
+    heads, num_users, num_layers = 16, 2, 3
+    user = 1  # non-zero so a dropped user term is not masked by user * L == 0
+    # The query chunk sits AFTER the history (T == QB_HISTORY + CHUNK_GLOBAL), so the global chunk start is
+    # QB_HISTORY; each SP rank adds its own sp * QB_SQ. kv_len is what the metadata path derives on-device.
+    chunk_start = QB_HISTORY
+    kv_len = chunk_start + RING * QB_SQ
+
+    submesh, parent, ccl_semaphores, subdevice_id, stall_group = _open_ring4_ccl()
+    try:
+        q_g, _, w_g = _global_inputs(heads, CHUNK_GLOBAL, T, seed=42)
+        # Distinct K per (user, layer) slot in user-major order, so ANY slot-arithmetic error -- wrong user
+        # term, wrong layer term, or a stale layer from a missing patch -- lands on different keys.
+        k_slabs = [
+            _to_slab(_global_inputs(heads, CHUNK_GLOBAL, T, seed=100 + slot)[1], RING, CHUNK_GLOBAL)
+            for slot in range(num_users * num_layers)
+        ]
+        q_dev, w_dev, k_local, k_gathered = _fused_dev_inputs(submesh, q_g, w_g, torch.cat(k_slabs, dim=0))
+
+        slot_tensor = ttnn.from_torch(
+            torch.tensor([[[[user]]]], dtype=torch.int64),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+            device=submesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        chunk_start_tensor = ttnn.from_torch(
+            torch.tensor([[[[chunk_start]]]], dtype=torch.int64),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+            device=submesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        def run(layer_idx, *, metadata, scalar_slot=None):
+            slot_kwargs = (
+                {
+                    "cache_batch_idx_tensor": slot_tensor,
+                    "index_cache_num_layers": num_layers,
+                    "index_cache_layer_idx": layer_idx,
+                    "chunk_start_idx_tensor": chunk_start_tensor,
+                }
+                if metadata
+                else {
+                    "cache_batch_idx": user * num_layers + layer_idx if scalar_slot is None else scalar_slot,
+                    "chunk_start_idx": chunk_start,
+                    "kv_len": kv_len,
+                }
+            )
+            out = ttnn.experimental.ring_indexer_score_dsa(
+                q_dev,
+                k_gathered,
+                w_dev,
+                k_local,
+                ccl_semaphores,
+                cluster_axis=SP_AXIS,
+                topology=ttnn.Topology.Linear,
+                num_links=1,
+                ag_sub_device_id=subdevice_id,
+                block_cyclic_sp_axis=SP_AXIS,
+                block_cyclic_chunk_local=QB_SQ,
+                program_config=glx_config(heads),
+                **slot_kwargs,
+            )
+            ttnn.synchronize_device(submesh, sub_device_ids=stall_group)
+            return ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=2))
+
+        meta_out = {}
+        for layer_idx in (0, 1):
+            scalar_out = run(layer_idx, metadata=False)
+            meta_out[layer_idx] = run(layer_idx, metadata=True)
+            assert torch.equal(meta_out[layer_idx], scalar_out), (
+                f"layer {layer_idx}: cache_batch_idx_tensor (user={user}, num_layers={num_layers}) did not "
+                f"reproduce scalar cache_batch_idx={user * num_layers + layer_idx}"
+            )
+            logger.info(f"ring4 slot metadata: user={user} layer={layer_idx} matched the scalar slot")
+            if layer_idx == 0:
+                entries_after_first = submesh.num_program_cache_entries()
+
+        assert not torch.equal(meta_out[0], meta_out[1]), (
+            "layer 0 and layer 1 produced identical scores -- index_cache_layer_idx did not reach the reader "
+            "(check the override_runtime_arguments patch at reader_slot_base + 2)"
+        )
+        # index_cache_layer_idx is a runtime arg, not hashed: switching layers must reuse the program.
+        assert submesh.num_program_cache_entries() == entries_after_first, "switching index_cache_layer_idx recompiled"
+
+        # The USER id lives in the tensor, and the layer checks above never move it -- they vary only the
+        # plain runtime scalar. Rewrite the same buffer in place on the warm program: the slot must follow,
+        # which is what makes the value trace-safe (read on-device per dispatch, not captured once).
+        other_user = 0
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(
+                torch.tensor([[[[other_user]]]], dtype=torch.int64),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+            ),
+            slot_tensor,
+        )
+        meta_other = run(0, metadata=True)
+        scalar_other = run(0, metadata=False, scalar_slot=other_user * num_layers)
+        assert torch.equal(meta_other, scalar_other), (
+            f"after rewriting the slot tensor to user={other_user}, the metadata path did not reproduce scalar "
+            f"cache_batch_idx={other_user * num_layers} -- the user id is not being re-read on-device"
+        )
+        assert not torch.equal(meta_other, meta_out[0]), (
+            f"user {user} and user {other_user} produced identical scores at layer 0 -- the slot tensor's VALUE "
+            "was not re-read (a captured or cached user id would look exactly like this)"
+        )
+        assert submesh.num_program_cache_entries() == entries_after_first, "rewriting the slot tensor recompiled"
+        logger.info(f"ring4 slot metadata: in-place user rewrite {user} -> {other_user} tracked by the reader")
+
+        # The slot tensor needs the extent tensor: the factory forwards the slot to the all-gather but
+        # withholds kv_actual_isl without it, and the helper then fails at PROGRAM BUILD with a message
+        # naming neither this op nor the missing kwarg. Pin that it is rejected up front instead.
+        with expect_error(RuntimeError, "cache_batch_idx_tensor requires chunk_start_idx_tensor"):
+            ttnn.experimental.ring_indexer_score_dsa(
+                q_dev,
+                k_gathered,
+                w_dev,
+                k_local,
+                ccl_semaphores,
+                cluster_axis=SP_AXIS,
+                topology=ttnn.Topology.Linear,
+                num_links=1,
+                ag_sub_device_id=subdevice_id,
+                cache_batch_idx_tensor=slot_tensor,
+                index_cache_num_layers=num_layers,
+                index_cache_layer_idx=0,
+                chunk_start_idx=chunk_start,
+                kv_len=kv_len,
+                block_cyclic_sp_axis=SP_AXIS,
+                block_cyclic_chunk_local=QB_SQ,
+                program_config=glx_config(heads),
+            )
+    finally:
+        _close_ring4_ccl(parent, submesh, stall_group)
 
 
 @pytest.mark.parametrize("rows_per_shard", [32, 96], ids=["prod_rows32", "padded_rows96"])
@@ -1166,9 +1323,7 @@ def test_indexer_score_ring8_partial_readiness_reference_cache_hit(mesh_device):
         q_dev = ttnn.from_torch(
             q_g, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=sp_shard
         )
-        w_dev = ttnn.from_torch(
-            w_g, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=sp_shard
-        )
+        w_dev = to_device(w_g, mesh_device, mesh_mapper=sp_shard)
         k_local = ttnn.from_torch(
             k_bc,
             device=mesh_device,

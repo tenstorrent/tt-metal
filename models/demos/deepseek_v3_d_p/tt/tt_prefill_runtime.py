@@ -16,6 +16,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_drafter import TtDFlashDrafter
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.utils import load_drafter_state_dict
+from models.demos.deepseek_v3_d_p.tt.mla.rope import ChunkMetadata
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
@@ -414,18 +415,6 @@ class TtPrefillRuntime:
         chunk = self.config.chunk_size
         t0 = time.perf_counter()
         if self.config.use_trace:
-            # Cache-level companion to the config-level guard in TtPrefillTransformer.set_trace_controller
-            # (which rejects a sparse/DSA model outright). Checked separately because it catches the other
-            # direction: a sparse INDEX cache handed to a model that resolved as dense. _forward_traced
-            # never threads index_kv_cache, so such a run would replay without the indexer cache and
-            # produce wrong KV silently instead of failing.
-            assert kv_caches.index is None, (
-                "use_trace=True with a sparse/DSA index KV cache is not supported: the captured forward "
-                "does not thread index_kv_cache, so the indexer would be skipped silently. Supported "
-                "traced models are the dense-MLA ones (deepseek_v3, kimi_k2_6, kimi_k2_7); GLM and other "
-                "sparse variants need their indexer ops ported to the metadata form first — run them "
-                "with use_trace=False (PREFILL_USE_TRACE=0) until then."
-            )
             logger.info(
                 f"TtPrefillRuntime.compile() — warming traced {chunk}-token chunk (metadata path); capture deferred to capture_trace()"
             )
@@ -443,7 +432,7 @@ class TtPrefillRuntime:
         )
         self.compiled = True
 
-    def capture_trace(self, kv_cache: ttnn.Tensor) -> None:
+    def capture_trace(self, kv_caches: MlaKvCaches) -> None:
         """Record the segmented trace, ONCE, before the chunk loop opens.
 
         The driver must call this AFTER building any D2D pipeline endpoints (their receiver-socket L1 must
@@ -468,7 +457,7 @@ class TtPrefillRuntime:
         # the capture splits at each ack point. No ack (standalone) => nothing extra to warm.
         if self._on_layer_complete is not None:
             controller.set_layer_ack_callback(lambda _layer_idx: None)
-            self._forward_traced(kv_cache)  # compile zero_padded_kv_cache + ack path (no real ack fires)
+            self._forward_traced(kv_caches)  # compile zero_padded_kv_cache + ack path (no real ack fires)
             ttnn.synchronize_device(self.mesh_device)
             controller.set_layer_ack_callback(self._on_layer_complete)
         elif self._trace_d2h_service is not None:
@@ -476,11 +465,11 @@ class TtPrefillRuntime:
             # a capture cannot absorb a program-cache miss. The D2H ack has no no-op stand-in (it is a
             # device op, not a callback), so this warm pass emits num_layers REAL records. The caller is
             # required to drain them; see set_d2h_ack_service().
-            self._forward_traced(kv_cache)
+            self._forward_traced(kv_caches)
             ttnn.synchronize_device(self.mesh_device)
 
         controller.begin_capture()
-        out = self._forward_traced(kv_cache)
+        out = self._forward_traced(kv_caches)
         controller.end_capture()
         ttnn.synchronize_device(self.mesh_device)
         # Non-last rank: the persistent output activation the replay refreshes each chunk.
@@ -526,7 +515,9 @@ class TtPrefillRuntime:
         The per-element slices read from the persistent copy rather than metadata_msg so both forms are
         guaranteed to carry the same chunk's words."""
         ttnn.copy(metadata_msg, self._trace_metadata_msg)
-        for i, dst in enumerate(self._trace_metadata):
+        # .scalars, not the whole tuple: ChunkMetadata's 4th field (Mistral's llama4_scale) is
+        # persistent rather than per-chunk and has no word in the packed [1,1,1,3] message.
+        for i, dst in enumerate(self._trace_metadata.scalars):
             word = ttnn.slice(self._trace_metadata_msg, [0, 0, 0, i], [1, 1, 1, i + 1])
             ttnn.copy(word, dst)
             ttnn.deallocate(word)
@@ -540,14 +531,20 @@ class TtPrefillRuntime:
         ops read, so it holds the current chunk's words intact after replay. None off the traced path."""
         return self._trace_metadata_msg
 
-    def _forward_traced(self, kv_cache: ttnn.Tensor):
+    def _forward_traced(self, kv_caches: MlaKvCaches):
         """The captured/warmed metadata forward: per-chunk scalars come from the persistent metadata
         tensor on-device (actual_start/actual_end = None host-side). Writes user slot metadata[0].
         Returns the forward output — a hidden-state activation on a non-last rank (forwarded downstream
-        over D2D), or the last/single rank's ignored KV-only tuple."""
+        over D2D), or the last/single rank's ignored KV-only tuple.
+
+        index_kv_cache is threaded for the sparse/DSA path exactly as the eager prefill_chunk does;
+        omitting it would replay the indexer against no cache. This warm pass is also what memoizes
+        tt_ccl.get_indexer_ring_k_buffer, whose first call does a host ttnn.from_torch — a hard TT_FATAL
+        if it were to land inside begin_capture()."""
         return self.model.forward(
             self._trace_input,
-            kv_cache.kvpe,  # unwrap the engine-owned container to the primary MLA cache (mirrors prefill_chunk)
+            kv_caches.kvpe,  # unwrap the engine-owned container to the primary MLA cache (mirrors prefill_chunk)
+            index_kv_cache=kv_caches.index,
             # FULL chunk on purpose: downstream (TtMoe.forward) uses actual_isl only as the
             # padding-config GUARD on this path — a static capture-time "padding awareness is ON" —
             # while the real per-chunk bound is read on-device from `metadata` (actual_start/
@@ -563,7 +560,7 @@ class TtPrefillRuntime:
             metadata=self._trace_metadata,
         )
 
-    def _prepare_trace(self, kv_cache: ttnn.Tensor) -> None:
+    def _prepare_trace(self, kv_caches: MlaKvCaches) -> None:
         """Set up the persistent input + per-element metadata buffers and the controller, then warm-compile
         the metadata-variant programs (a full forward). Does NOT begin/end the capture — the driver calls
         capture_trace() later, once any ack/completion callback is registered. Called once from compile()."""
@@ -572,7 +569,14 @@ class TtPrefillRuntime:
         # non-first rank make_chunk_input yields a placeholder hidden-state activation (the D2D-received one).
         self._trace_input = self.make_chunk_input([0] * chunk)
         # Per-element metadata: (slot_id, actual_start, actual_end), seeded for chunk 0.
-        self._trace_metadata = (self._meta1_dev(0), self._meta1_dev(0), self._meta1_dev(chunk))
+        # ChunkMetadata, not a bare tuple: Mistral needs a 4th field (the llama4 query-scale buffer)
+        # whose lifetime matches these scalars. None elsewhere, and fields 0-2 are unchanged.
+        self._trace_metadata = ChunkMetadata(
+            self._meta1_dev(0),
+            self._meta1_dev(0),
+            self._meta1_dev(chunk),
+            self.model.rope_setup.make_llama4_scale_buffer(chunk),
+        )
         # Same three words packed, for the D2H ack record. Allocated whether or not the ack is wired:
         # set_d2h_ack_service() runs after compile(), and the capture needs an address that predates it.
         self._trace_metadata_msg = self._meta3_dev((0, 0, chunk))
@@ -581,7 +585,7 @@ class TtPrefillRuntime:
         self.model.set_trace_controller(controller)
         self._controller = controller
 
-        self._forward_traced(kv_cache)  # warm/compile the metadata-variant programs
+        self._forward_traced(kv_caches)  # warm/compile the metadata-variant programs
         ttnn.synchronize_device(self.mesh_device)
 
     def prefill_chunk(
@@ -696,6 +700,26 @@ class TtPrefillRuntime:
                 "on-device (the traced serving loop always carries it; the eager warm-up passes host ints)"
             )
             ttnn.copy(input_tensor, self._trace_input)
+            # The three scalars come off the device from metadata_msg -- on this path the host is
+            # not told the chunk offset at all (slot_id/actual_start/actual_end arrive None), which
+            # is the point of consuming them on-device.
+            #
+            # That is also why Mistral's query-scale buffer cannot ride along here: it is computed on
+            # host from actual_start, and there is no actual_start to compute it from. An unrefreshed
+            # buffer is ones-initialised, so the replay would silently apply a temperature of 1.0 --
+            # a wrong softmax scale that still produces plausible output. Fail instead; wiring the
+            # scale into the packed record (or deriving it on-device) is follow-up work
+            # (https://github.com/tenstorrent/tt-metal/issues/55126).
+            #
+            # An explicit raise rather than an assert, unlike most guards in this tree: `python -O`
+            # strips asserts, and stripping THIS one does not crash -- it re-enables the silent
+            # wrong-temperature path, which the chunked PCC gate cannot see (~0.002 against 0.98).
+            if self._trace_metadata.llama4_scale is not None:
+                raise RuntimeError(
+                    "the traced runtime path consumes chunk metadata on-device and cannot refresh the "
+                    "llama4 query-scale buffer, which is derived on host from actual_start; run Mistral "
+                    "through the host-scalar path until the scale is carried in the metadata record"
+                )
             self._metadata_from_msg(metadata_msg)
             self._controller.replay()
             ttnn.deallocate(input_tensor)
