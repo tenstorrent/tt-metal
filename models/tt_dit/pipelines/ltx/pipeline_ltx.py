@@ -113,7 +113,7 @@ class LTXTransformerState:
         self._tt_video_padding_mask = StateTensor()
 
     def __getattr__(self, name: str) -> ttnn.Tensor | None:
-        return object.__getattribute__(self, f"_{name}")._value
+        return object.__getattribute__(self, f"_{name}").value
 
 
 # =============================================================================
