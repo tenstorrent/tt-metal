@@ -548,6 +548,50 @@ uint8_t AttachPrefetcherPipe(
     return program.impl().add_prefetcher_pipe_attachment(prefetcher_pipe.impl(), cores, entry_size);
 }
 
+std::vector<uint8_t> AttachPrefetcherPipes(
+    Program& program, const std::vector<std::shared_ptr<PrefetcherPipe>>& pipes, uint32_t entry_size) {
+    std::vector<uint8_t> pipe_ids;
+    pipe_ids.reserve(pipes.size());
+    for (const auto& pipe : pipes) {
+        TT_FATAL(pipe != nullptr, "AttachPrefetcherPipes was given a null pipe at index {}", pipe_ids.size());
+        pipe_ids.push_back(AttachPrefetcherPipe(program, *pipe, pipe->receiver_cores(), entry_size));
+    }
+    return pipe_ids;
+}
+
+std::vector<std::pair<CoreCoord, CoreRangeSet>> prefetcher_pipe_sender_receiver_mapping(
+    const std::vector<std::shared_ptr<PrefetcherPipe>>& pipes) {
+    std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping;
+    mapping.reserve(pipes.size());
+    for (const auto& pipe : pipes) {
+        TT_FATAL(pipe != nullptr, "PrefetcherPipe list holds a null pipe at index {}", mapping.size());
+        mapping.emplace_back(pipe->sender_core(), pipe->receiver_cores());
+    }
+    return mapping;
+}
+
+CoreRangeSet prefetcher_pipe_receiver_cores(const std::vector<std::shared_ptr<PrefetcherPipe>>& pipes) {
+    // One merge over every pipe's ranges: CoreRangeSet::merge rasterizes the whole bounding box, so
+    // folding pipe by pipe would redo that work per pipe.
+    std::vector<CoreRange> ranges;
+    for (const auto& pipe : pipes) {
+        TT_FATAL(pipe != nullptr, "PrefetcherPipe list holds a null pipe");
+        const auto& receivers = pipe->receiver_cores().ranges();
+        ranges.insert(ranges.end(), receivers.begin(), receivers.end());
+    }
+    return CoreRangeSet().merge(ranges);
+}
+
+std::vector<uint32_t> prefetcher_pipe_config_addresses(const std::vector<std::shared_ptr<PrefetcherPipe>>& pipes) {
+    std::vector<uint32_t> config_addresses;
+    config_addresses.reserve(pipes.size());
+    for (const auto& pipe : pipes) {
+        TT_FATAL(pipe != nullptr, "PrefetcherPipe list holds a null pipe at index {}", config_addresses.size());
+        config_addresses.push_back(pipe->config_address());
+    }
+    return config_addresses;
+}
+
 uint32_t CreatePrefetcherPipeRelayDataflowBuffer(
     Program& program,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& receiver_core_spec,

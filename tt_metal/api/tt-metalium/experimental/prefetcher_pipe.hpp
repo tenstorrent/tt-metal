@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -97,6 +98,27 @@ public:
     // for on the first program. Later Attaches and later requests may use any size that divides the
     // ring. 0 for a worker-sender pipe, which is sized in bytes and resizes normally.
     uint32_t initial_entry_size() const;
+
+    // Reflection for op attribute hashing and serialization. These values identify *this* pipe, not
+    // merely a pipe of this shape: a consuming op bakes the config and ring addresses and the
+    // receiver placement into its program, so a same-geometry replacement must not hit that op's
+    // program cache. A shared_ptr to a pipe reflects as the pipe it points at (ttsl gives a
+    // reflective pointee that transparency), so a list of pipes held as an op attribute keys on
+    // their identities rather than on where they were allocated.
+    //
+    // Kept out of aggregate territory by the constructors above: tt_stl's json serializer has an
+    // attribute_names specialization and an aggregate one that are unconstrained against each other,
+    // and a type satisfying both is an ambiguous partial specialization.
+    // These attributes name the object, not its shape, so a shared_ptr to a pipe is traversed as the
+    // pipe rather than as its address.
+    static constexpr bool ttsl_reflect_through_shared_ptr = true;
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "sender_core", "receiver_cores", "config_address", "buffer_address", "initial_entry_size", "ring_size");
+    auto attribute_values() const {
+        // make_tuple, not forward_as_tuple: every accessor but receiver_cores() returns by value.
+        return std::make_tuple(
+            sender_core(), receiver_cores(), config_address(), buffer_address(), initial_entry_size(), ring_size());
+    }
 
     // Internal: adopt an already-built implementation. The DRAM-sender factory uses it; a
     // worker-sender pipe comes from the constructor above.
@@ -208,6 +230,46 @@ std::vector<TensorPrefetcherBankPipes> CreatePrefetcherPipesForTensorPrefetcher(
 // on it. Derive it here rather than re-walking the groups.
 std::vector<std::pair<CoreCoord, CoreRangeSet>> prefetcher_pipe_sender_receiver_mapping(
     const std::vector<TensorPrefetcherBankPipes>& banks);
+
+// The same mapping for a flat pipe list, which is the shape a caller that names pipes one at a time
+// -- a consumer op, Python -- holds them in. The group form delegates here.
+std::vector<std::pair<CoreCoord, CoreRangeSet>> prefetcher_pipe_sender_receiver_mapping(
+    const std::vector<std::shared_ptr<PrefetcherPipe>>& pipes);
+
+// Flatten a bank-major group list into one pipe per entry, keeping the order
+// CreatePrefetcherPipesForTensorPrefetcher fixed. This is the list a consumer names its delivery
+// target by, and the order matters: a pipe's position is what assigns its sender a bank-local slab
+// base, so an attach id, a mapping entry and a pipe share an index.
+std::vector<std::shared_ptr<PrefetcherPipe>> flatten_prefetcher_pipe_banks(
+    const std::vector<TensorPrefetcherBankPipes>& banks);
+
+// Regroup a flat pipe list into the per-bank groups the prefetcher's queue path takes. A pipe's bank
+// is its sender's DRAM-logical x, and pipes are grouped by *contiguous run* rather than by equal
+// bank id: a bank that reappears after its run has ended therefore yields a second group with that
+// bank id, which the queue path rejects, instead of being silently folded back into the first --
+// slab bases come from adjacency, so a list whose banks interleave numbers them wrong.
+//
+// A bank driven by two senders must present them in the order the factory placed them: the leading
+// pipe owns ceil(n/2) of the bank's receivers. Rejected here, since the split is what the two
+// senders' slab bases are derived from.
+std::vector<TensorPrefetcherBankPipes> group_prefetcher_pipes_by_bank(
+    const std::vector<std::shared_ptr<PrefetcherPipe>>& pipes);
+
+// Every receiver of every pipe: the core set a consumer program attaches and runs its receiver
+// kernel on.
+CoreRangeSet prefetcher_pipe_receiver_cores(const std::vector<std::shared_ptr<PrefetcherPipe>>& pipes);
+
+// Each pipe's config page address, in list order. Identity rather than geometry: two live pipes over
+// the same receivers never share one, which is what makes this usable in a consuming op's cache key.
+std::vector<uint32_t> prefetcher_pipe_config_addresses(const std::vector<std::shared_ptr<PrefetcherPipe>>& pipes);
+
+// Attach every pipe to `program` on its own receiver cores, at `entry_size` bytes per entry -- the
+// size that program's kernels consume, which need not be the size a pipe was created at: a differing
+// size makes the device-side constructor run the resize handshake against the sender. Returns one
+// program-local pipe id per pipe, positioned alongside `pipes` (and hence alongside the mapping), so
+// a receiver core's kernel can be handed the id of the one pipe it belongs to.
+std::vector<uint8_t> AttachPrefetcherPipes(
+    Program& program, const std::vector<std::shared_ptr<PrefetcherPipe>>& pipes, uint32_t entry_size);
 
 }  // namespace experimental
 }  // namespace tt::tt_metal
