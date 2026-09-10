@@ -38,16 +38,16 @@ inline WelfordStats<float> combine(const WelfordStats<float>& a, const WelfordSt
     WelfordStats<float> result;
     result.count = a.count + b.count;
 
-    const float count_a = static_cast<float>(a.count);
-    const float count_b = static_cast<float>(b.count);
-    const float count_total = static_cast<float>(result.count);
-
     const float delta = b.mean - a.mean;
-    result.mean = a.mean + delta * (count_b / count_total);
+    result.mean = a.mean + delta * (static_cast<float>(b.count) / static_cast<float>(result.count));
 
-    const float m2_a = a.variance * count_a;
-    const float m2_b = b.variance * count_b;
-    result.variance = (m2_a + m2_b + delta * delta * (count_a * count_b / count_total)) / count_total;
+    const float m2_a = a.variance * static_cast<float>(a.count);
+    const float m2_b = b.variance * static_cast<float>(b.count);
+    result.variance =
+        (m2_a + m2_b +
+         delta * delta *
+             (static_cast<float>(a.count) * static_cast<float>(b.count) / static_cast<float>(result.count))) /
+        static_cast<float>(result.count);
 
     return result;
 }
