@@ -74,6 +74,18 @@ ALWI void stream_pack_to_risc_sync() {
     });
 }
 
+// Same for the MATH RISC's software L1 reads, on PACK_DONE (initialized by the firmware, unused by the LLKs).
+ALWI void stream_pack_to_math_risc_sync() {
+    PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
+    MATH({
+        while (semaphore_read(semaphore::PACK_DONE) == 0) {
+        }
+        t6_semaphore_get<>(semaphore::PACK_DONE);
+        while (semaphore_read(semaphore::PACK_DONE) != 0) {
+        }
+    });
+}
+
 // DEST[idst] += scalar over the WHOLE tile (32 iterations, VectorMode::None). The face-looped SFPU forms
 // (add_unary_tile / the first-column exp: VectorMode RC / C) step 16 DEST rows per face, which in this
 // kernel's 16-bit DEST (8 rows per face) skips faces and spills into the neighbouring tile: measured as
@@ -244,6 +256,12 @@ void kernel_main() {
     };
     const uint32_t max_l1_base = get_tile_address(cb_max_res, 0);  // RAM CB: tile t at base + t * 2048
     const uint32_t corr_l1_base = get_tile_address(cb_corr, 0);
+    // Threshold-key cache for the lazy-max decision (see phase 2): per row slot, Sqt x 32 bf16 order keys,
+    // contiguous, in the otherwise unused cb_sum_res tile. Per-thread dirty bits (each TRISC has its own
+    // copy of every variable): a row's keys are reloaded from its threshold tile on that RISC's next use.
+    static_assert(R_MAX * Sqt * 64 <= 2048, "threshold-key cache must fit one tile");
+    const uint32_t thrkey_l1 = get_tile_address(cb_sum_res, 0);
+    uint32_t thr_dirty = 0xFFFFFFFFu;
     uint32_t vn = 0;
 
     // Deferred chunk: its probs live in the OTHER qk region; PV runs at the next chunk (or flush).
@@ -549,48 +567,83 @@ void kernel_main() {
                 g += ng;
             }
         }
-        stream_pack_to_unpack_sync();  // s2: candidates/thresholds visible to the unpacker
-        stream_pack_to_risc_sync();    // ... and to the UNPACK RISC's reads below
-        // Which visits move their anchor? Decided once on UNPACK: a visit moves when any row's candidate
-        // (column 0 of its corr-slot tile) exceeds the row's threshold tile, compared as order-preserving
-        // integer keys of the bf16 bits. Broadcast by mailbox so all three threads branch identically.
+        stream_pack_to_unpack_sync();     // s2: candidates/thresholds visible to the unpacker
+        stream_pack_to_risc_sync();       // ... to the UNPACK RISC (UNPACK_OPERAND_SYNC) ...
+        stream_pack_to_math_risc_sync();  // ... and to the MATH RISC (PACK_DONE): both decide below
+        // Which visits move their anchor? A visit moves when any row's candidate (column 0 of its corr-slot
+        // tile) exceeds the row's threshold, compared as order-preserving integer keys of the bf16 bits.
+        // The 64 strided L1 reads per visit for candidate AND threshold dominated phase 2 (skipping the
+        // decision measured 22.6 -> 18.9 ms), so the threshold keys are cached contiguously per row slot
+        // (refreshed only when the row's threshold changed: first visit or move) and the visits are split
+        // between the UNPACK and MATH RISCs (even / odd index), which exchange their masks by mailbox so all
+        // three threads branch on the same `updated`.
         uint32_t updated = 0;
-        UNPACK({
-            // the packer rewrote these L1 tiles since this RISC last read the same addresses: drop the
-            // RISC's L1 read cache first (stale candidates/thresholds gave path-dependent decisions)
-            invalidate_l1_cache();
-            auto bkey = [](uint32_t b) -> uint32_t {
-                return (b & 0x8000u) ? (0x7FFFu - (b & 0x7FFFu)) : (b | 0x8000u);
-            };
-            for (uint32_t i = 0; i < nv; ++i) {
+        const auto decide = [&](uint32_t parity) -> uint32_t {
+            invalidate_l1_cache();  // the packer rewrote these L1 tiles since this RISC last read them
+            auto bkey = [](uint32_t b) -> uint32_t { return b ^ (0x8000u | (0xFFFFu & (0u - (b >> 15)))); };
+            auto col0 = [](uint32_t r) -> uint32_t { return (r < 16 ? 0u : 512u) + (r & 15) * 16; };  // bf16 units
+            uint32_t mask = 0;
+            for (uint32_t i = parity; i < nv; i += 2) {
                 const Visit& v = vs[i];
                 if (v.flags & ROW_IS_FIRST) {
                     continue;
                 }
-                const uint32_t thr_st = (v.row_slot * 2 + 1) * Sqt;
+                const uint32_t rs = v.row_slot;
+                volatile tt_l1_ptr uint16_t* keys =
+                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(thrkey_l1 + rs * Sqt * 64);
                 bool moved = false;
-                for (uint32_t sr = 0; sr < Sqt && !moved; ++sr) {
-                    volatile tt_l1_ptr uint16_t* cand =
-                        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(corr_l1_base + (v.row_slot * Sqt + sr) * 2048);
-                    volatile tt_l1_ptr uint16_t* thr =
-                        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(max_l1_base + (thr_st + sr) * 2048);
-                    for (uint32_t r = 0; r < 32; ++r) {
-                        const uint32_t off = (r < 16 ? 0u : 512u) + (r & 15) * 16;  // column 0, face-major (bf16 units)
-                        if (bkey(cand[off]) > bkey(thr[off])) {
-                            moved = true;
-                            break;
+                if ((thr_dirty >> rs) & 1u) {
+                    // refresh pass: recompute every key from the threshold tile and compare on the way
+                    for (uint32_t sr = 0; sr < Sqt; ++sr) {
+                        volatile tt_l1_ptr uint16_t* cand =
+                            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(corr_l1_base + (rs * Sqt + sr) * 2048);
+                        volatile tt_l1_ptr uint16_t* thr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
+                            max_l1_base + ((rs * 2 + 1) * Sqt + sr) * 2048);
+                        for (uint32_t r = 0; r < 32; ++r) {
+                            const uint32_t k = bkey(thr[col0(r)]);
+                            keys[sr * 32 + r] = static_cast<uint16_t>(k);
+                            moved |= bkey(cand[col0(r)]) > k;
+                        }
+                    }
+                    thr_dirty &= ~(1u << rs);
+                } else {
+                    for (uint32_t sr = 0; sr < Sqt && !moved; ++sr) {
+                        volatile tt_l1_ptr uint16_t* cand =
+                            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(corr_l1_base + (rs * Sqt + sr) * 2048);
+                        for (uint32_t r = 0; r < 32; ++r) {
+                            if (bkey(cand[col0(r)]) > keys[sr * 32 + r]) {
+                                moved = true;
+                                break;
+                            }
                         }
                     }
                 }
                 if (moved) {
-                    updated |= 1u << i;
+                    mask |= 1u << i;
                 }
             }
-            mailbox_write(ckernel::ThreadId::MathThreadId, updated);
-            mailbox_write(ckernel::ThreadId::PackThreadId, updated);
+            return mask;
+        };
+        UNPACK({
+            const uint32_t mine = decide(0);
+            mailbox_write(ckernel::ThreadId::MathThreadId, mine);
+            mailbox_write(ckernel::ThreadId::PackThreadId, mine);
+            updated = mine | mailbox_read(ckernel::ThreadId::MathThreadId);
         })
-        MATH(updated = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
-        PACK(updated = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+        MATH({
+            const uint32_t mine = decide(1);
+            mailbox_write(ckernel::ThreadId::UnpackThreadId, mine);
+            mailbox_write(ckernel::ThreadId::PackThreadId, mine);
+            updated = mine | mailbox_read(ckernel::ThreadId::UnpackThreadId);
+        })
+        PACK(updated = mailbox_read(ckernel::ThreadId::UnpackThreadId) | mailbox_read(ckernel::ThreadId::MathThreadId);)
+        // Rows whose threshold changes in this chunk (first visit: packed in phase 2; move: packed in phase 3)
+        // are re-keyed on their next visit (the phase-3 pack precedes the next chunk's RISC syncs).
+        for (uint32_t i = 0; i < nv; ++i) {
+            if ((vs[i].flags & ROW_IS_FIRST) || ((updated >> i) & 1u)) {
+                thr_dirty |= 1u << vs[i].row_slot;
+            }
+        }
 #if defined(VSA_PROBE) && VSA_PROBE == 9
         n_moved += __builtin_popcount(updated & ((1u << nv) - 1u));
         n_nonfirst += nv;

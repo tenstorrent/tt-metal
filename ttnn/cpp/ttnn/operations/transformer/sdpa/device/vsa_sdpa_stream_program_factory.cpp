@@ -34,10 +34,10 @@ using RtArgs = std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>>;
 
 constexpr uint32_t kRMax = 10;         // resident rows per pass (<= 32 for the bitmasks); see kStreamDepth
 constexpr uint32_t kRowGroup = 8;      // rows fused per compute phase group
-constexpr uint32_t kStreamDepth =
-    16;  // 18 -> 16 funds the fp32 running-sum buffer (+80 KB) in the model's L1;  // KV blocks in flight (two window
-         // halves of 9). Rows-for-depth trade measured on REAL selections (2.4 blocks/visit): 15/12 -> 10/18 is -4%
-         // standalone, -2% median in the 15 s block; 10/20 is -6% but overflows the model's live L1 by 54 KB
+constexpr uint32_t kStreamDepth = 18;  // KV blocks in flight (two window halves of 9). Measured on the real 15 s shard
+                                       // with the cheap lazy-max decision (2026-09-09): 2x10 19.1 ms, 2x9 19.6,
+                                       // 2x8 19.7; depth 20 clashes with the model's live L1 buffers in the traced
+                                       // block by 15-25 KB (TT_VSA_DEPTH=20 standalone only), 24 overflows L1.
 constexpr uint32_t kLogDepth = 16;     // leader arrival-log ring (> leader depth + sentinel slack)
 constexpr uint32_t kMaxWorkers = 16;   // leader runtime-arg array bound
 constexpr uint32_t kRowChunk = 4;      // contiguous rows per placement chunk (matches the kernels)
@@ -308,7 +308,9 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
     cb(tile_bytes, stream_depth, bf);                          // cb_vmask (slot-indexed RAM)
     // distributed: messages carry up to 16 visits and credits (n_pulled + 1 per message) can queue
     // ahead of the reader's reclaim, so both rings are deepened (16 B pages: a few hundred bytes)
-    cb(ctrl_page_bytes, dist ? 32 : 8, bf);                    // cb_ctrl
+    // cb_ctrl: a window emits one VISIT per resident row plus a WINDOW message (up to rmax + 1 pages); the
+    // reader blocks in reserve_back until the compute pops, so 8 pages could stall a window's emission.
+    cb(ctrl_page_bytes, dist ? 32 : 64, bf);                   // cb_ctrl
     cb(16, dist ? 32 : stream_depth, bf);                      // cb_kreq
     cb(16, dist ? 32 : stream_depth, bf);                      // cb_kack
     cb(16, dist ? 128 : stream_depth + 2, bf);                 // cb_free
