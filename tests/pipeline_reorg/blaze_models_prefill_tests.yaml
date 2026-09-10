@@ -643,6 +643,8 @@
   skus:
     bh_sc1:
       timeout: 36
+      tier: 2
+      release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: sc1
@@ -707,7 +709,7 @@
 # TRACED twin of the perf job above: identical config except the use_trace axis, so the two are directly
 # comparable and each is gated against its own baseline table / band (glm_chunked_perf_gate). Traced
 # replays one captured chunk forward instead of re-dispatching every op from host, so it needs less wall
-# time than its untraced twin (CI measured 0.64-0.70 s/chunk traced vs ~1.68 s/chunk untraced).
+# time than its untraced twin.
 - name: "(GLM-5.2-744B) chunked prefill perf code_debug 55k@5k, traced"
   fabric_profile: torus_xy
   cmd: |
