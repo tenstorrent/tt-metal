@@ -200,6 +200,19 @@ Same roles as the DSV3 names above:
 
 ---
 
+## Mistral variant equivalents (only if you run the `mistral_small_4` variant)
+
+Same roles again:
+
+- `DEEPSEEK_V3_HF_MODEL` → `MISTRAL4_HF_MODEL`
+- `TT_DS_PREFILL_TTNN_CACHE` → `TT_MISTRAL4_PREFILL_TTNN_CACHE`
+- `TT_DS_PREFILL_HOST_REF_CACHE` → `TT_MISTRAL4_PREFILL_HOST_REF_CACHE`
+- `DEEPSEEK_V3_MLA_REF_CACHE` → `MISTRAL4_MLA_REF_CACHE`
+
+`TT_MISTRAL4_PREFILL_TTNN_CACHE` has no default — point it at a writable directory of your own.
+
+---
+
 ## NOT used by this test
 
 A large `PREFILL_*` family exists in this module

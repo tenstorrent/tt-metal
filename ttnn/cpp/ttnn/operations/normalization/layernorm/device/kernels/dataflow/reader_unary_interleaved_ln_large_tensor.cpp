@@ -132,13 +132,13 @@ void kernel_main() {
 #else
         for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::read_block_to_dfb(
-                noc, dfb_in0, src_a, src0_page_bytes, curr_tile_row * Wt + block.start(), block);
+                noc, dfb_in0, src_a, src0_page_bytes, (curr_tile_row * Wt) + block.start(), block);
         }
 #endif
 #ifdef FUSE_PRE_ADD
         for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::read_block_to_dfb(
-                noc, dfb_in1, src_b, src1_tile_bytes, curr_tile_row * Wt + block.start(), block);
+                noc, dfb_in1, src_b, src1_tile_bytes, (curr_tile_row * Wt) + block.start(), block);
         }
 #endif
 #endif
@@ -161,10 +161,10 @@ void kernel_main() {
 #else  // TILE path: interleaved per block
         for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::read_block_to_dfb(
-                noc, dfb_in0, src_a, src0_page_bytes, curr_tile_row * Wt + block.start(), block);
+                noc, dfb_in0, src_a, src0_page_bytes, (curr_tile_row * Wt) + block.start(), block);
 #ifdef FUSE_PRE_ADD
             layernorm_dataflow_utils::read_block_to_dfb(
-                noc, dfb_in1, src_b, src1_tile_bytes, curr_tile_row * Wt + block.start(), block);
+                noc, dfb_in1, src_b, src1_tile_bytes, (curr_tile_row * Wt) + block.start(), block);
 #endif
         }
 #endif
@@ -201,14 +201,14 @@ void kernel_main() {
                 block);
 #else
             layernorm_dataflow_utils::read_block_to_dfb(
-                noc, dfb_in0, src_a, src0_page_bytes, curr_tile_row * Wt + block.start(), block);
+                noc, dfb_in0, src_a, src0_page_bytes, (curr_tile_row * Wt) + block.start(), block);
 #endif
 
             // Gamma/beta and b-tensor for this block — pushed immediately after input so
             // compute finds them in the buffer when it reaches the per-block multiply step.
 #ifdef FUSE_PRE_ADD
             layernorm_dataflow_utils::read_block_to_dfb(
-                noc, dfb_in1, src_b, src1_tile_bytes, curr_tile_row * Wt + block.start(), block);
+                noc, dfb_in1, src_b, src1_tile_bytes, (curr_tile_row * Wt) + block.start(), block);
 #endif
 #ifdef FUSE_GAMMA
             layernorm_dataflow_utils::read_block_to_dfb(noc, dfb_gamma, addrg, gamma_tile_bytes, block.start(), block);

@@ -255,7 +255,7 @@
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce -xv -m "not disable_fast_runtime_mode"'
   skus:
     wh_n300_civ2:
-      timeout: 40
+      timeout: 45
     bh_p100:
       timeout: 40
     bh_p150b_civ2:

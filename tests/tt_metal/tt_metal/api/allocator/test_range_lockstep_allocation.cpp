@@ -10,6 +10,7 @@
 // PlacesBesideAPerCoreHogWhenScoped and RefusesToPlaceBesideAPerCoreHogWhenNotScoped are the same
 // scenario with the opt-in on and off, and are the pair to read to see what the flag changes.
 
+#include "impl/buffers/buffer_impl.hpp"
 #include <functional>
 #include <memory>
 #include <vector>
@@ -175,13 +176,13 @@ TEST_F(HybridAllocatorTest, ScopesDependenciesOnADirectBufferCreate) {
 
     auto hog_args = single_core_args(hogged_core);
     per_core::set_per_core_allocation(hog_args, true);
-    auto hog = Buffer::create(device, alloc_size, alloc_size, BufferType::L1, hog_args);
+    auto hog = BufferImpl::create(device, alloc_size, alloc_size, BufferType::L1, hog_args);
     ASSERT_TRUE(per_core::is_per_core_allocation(*hog));
 
     auto scoped_args = single_core_args(free_core);
     range_lockstep::set_range_lockstep_allocation(scoped_args, true);
     std::shared_ptr<Buffer> scoped;
-    ASSERT_NO_THROW(scoped = Buffer::create(device, alloc_size, alloc_size, BufferType::L1, scoped_args))
+    ASSERT_NO_THROW(scoped = BufferImpl::create(device, alloc_size, alloc_size, BufferType::L1, scoped_args))
         << "range lockstep on " << free_core.str() << " was blocked by a per-core allocation on " << hogged_core.str()
         << "; the dependency subtraction is not being scoped on the direct path";
     EXPECT_TRUE(scoped->is_allocated());
@@ -197,10 +198,11 @@ TEST_F(HybridAllocatorTest, SurvivesASubRegionView) {
         TensorMemoryLayout::WIDTH_SHARDED);
     range_lockstep::set_range_lockstep_allocation(args, true);
 
-    auto buffer = Buffer::create(device, kPages * HYBRID_TEST_PAGE_SIZE, HYBRID_TEST_PAGE_SIZE, BufferType::L1, args);
+    auto buffer =
+        BufferImpl::create(device, kPages * HYBRID_TEST_PAGE_SIZE, HYBRID_TEST_PAGE_SIZE, BufferType::L1, args);
     ASSERT_TRUE(range_lockstep::is_range_lockstep_allocation(*buffer));
 
-    auto view = buffer->view(BufferRegion(HYBRID_TEST_PAGE_SIZE, HYBRID_TEST_PAGE_SIZE));
+    auto view = buffer->impl().view(*buffer, BufferRegion(HYBRID_TEST_PAGE_SIZE, HYBRID_TEST_PAGE_SIZE));
     ASSERT_NE(view, buffer) << "expected a real sub-region view, not the parent back";
     EXPECT_TRUE(range_lockstep::is_range_lockstep_allocation(*view))
         << "the view reports default lockstep while sharing a range lockstep allocation";
@@ -214,7 +216,7 @@ TEST_F(HybridAllocatorTest, RejectsNonL1Buffers) {
         ShardSpecBuffer(CoreRangeSet(CoreCoord(0, 0)), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1}),
         TensorMemoryLayout::HEIGHT_SHARDED);
     range_lockstep::set_range_lockstep_allocation(args, true);
-    EXPECT_ANY_THROW(Buffer::create(device, HYBRID_TEST_PAGE_SIZE, HYBRID_TEST_PAGE_SIZE, BufferType::DRAM, args));
+    EXPECT_ANY_THROW(BufferImpl::create(device, HYBRID_TEST_PAGE_SIZE, HYBRID_TEST_PAGE_SIZE, BufferType::DRAM, args));
 }
 
 }  // namespace tt::tt_metal

@@ -29,8 +29,8 @@ namespace tt::tt_metal {
 namespace detail {
 
 // Per-fixture-chain shared MeshDevice state. Two distinct instances exist across
-// the file — one for LLKMeshDeviceFixture (all chips), one for
-// LLKMeshDeviceSingleCardFixture (MMIO chips only). Derived variants
+// the file — one for LLKMeshDeviceFixture (up to two MMIO chips), one for
+// LLKMeshDeviceSingleCardFixture (one MMIO chip). Derived variants
 // (LLKMeshDeviceFixtureSlowDispatchOnly, LLKBlackholeSingleCardFixture,
 // LLKQuasarMeshDeviceSingleCardFixture) inherit shared_state() without
 // overriding it, so they reuse their base class's handles.
@@ -156,6 +156,9 @@ protected:
 };
 
 class LLKMeshDeviceSingleCardFixture : public MeshDeviceSingleCardFixture {
+public:
+    distributed::MeshDevice& device() { return *devices_.front(); }
+
 protected:
     template <class F>
     friend void detail::apply_shared_state(F&, const detail::LLKSharedDevices&);
@@ -169,9 +172,8 @@ protected:
         if (s.initialized) {
             return;
         }
-        const auto& mmio = tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids();
-        std::vector<ChipId> ids(mmio.begin(), mmio.end());
-        detail::populate_shared_state(s, ids);
+        const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
+        detail::populate_shared_state(s, {mmio_device_id});
     }
 
     // Per-suite cleanup; keep the static shared state empty at process shutdown.

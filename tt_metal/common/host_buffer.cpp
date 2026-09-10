@@ -70,6 +70,4 @@ bool operator==(const HostBuffer& a, const HostBuffer& b) noexcept {
 
 bool operator!=(const HostBuffer& a, const HostBuffer& b) noexcept { return !(a == b); }
 
-void swap(HostBuffer& lhs, HostBuffer& rhs) noexcept { lhs.swap(rhs); }
-
 }  // namespace tt::tt_metal

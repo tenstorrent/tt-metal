@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <host_api.hpp>
+#include "impl/buffers/buffer_impl.hpp"
 #include <mesh_buffer.hpp>
 #include <mesh_coord.hpp>
 #include <tt_stl/overloaded.hpp>
@@ -227,7 +228,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
                 continue;
             }
             auto* device = mesh_device->impl().get_device(coord);
-            auto buffer = Buffer::create(
+            auto buffer = BufferImpl::create(
                 device,
                 device_local_size,
                 device_local_config.page_size,
@@ -269,7 +270,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
 
         // Rely on the MeshDevice allocator to provide the address for the entire mesh buffer.
         // The address provided to the backing buffer is used as the address for the MeshBuffer object.
-        std::shared_ptr<Buffer> backing_buffer = Buffer::create(
+        std::shared_ptr<Buffer> backing_buffer = BufferImpl::create(
             mesh_device,
             device_local_size,
             device_local_config.page_size,
@@ -295,7 +296,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
 
 void MeshBuffer::initialize_device_buffers() {
     auto init_device_buffer_at_address = [this](const MeshCoordinate& coord) {
-        std::shared_ptr<Buffer> buffer = Buffer::create(
+        std::shared_ptr<Buffer> buffer = BufferImpl::create(
             device()->impl().get_device(coord),
             address_,
             device_local_size_,
@@ -435,7 +436,7 @@ void MeshBuffer::deallocate() {
     // Special handling is required if MeshDevice is already deallocated
     if (std::holds_alternative<OwnedBufferState>(state_)) {
         auto& owned_state = std::get<OwnedBufferState>(state_);
-        owned_state.backing_buffer->mark_as_deallocated();
+        owned_state.backing_buffer->impl().mark_as_deallocated();
     }
     state_ = DeallocatedState{};
 }
@@ -519,11 +520,11 @@ AnyBuffer AnyBuffer::create(const tt::tt_metal::ShardedBufferConfig& config, std
     if (!mesh_device) {
         const auto sharding_args = BufferShardingArgs(config.shard_parameters, config.buffer_layout);
         if (address.has_value()) {
-            return AnyBuffer{Buffer::create(
+            return AnyBuffer{BufferImpl::create(
                 config.device, *address, config.size, config.page_size, config.buffer_type, sharding_args)};
         }
         return AnyBuffer{
-            Buffer::create(config.device, config.size, config.page_size, config.buffer_type, sharding_args)};
+            BufferImpl::create(config.device, config.size, config.page_size, config.buffer_type, sharding_args)};
     }
     MeshBufferConfig mesh_config = ReplicatedBufferConfig{
         .size = config.size,
@@ -542,9 +543,9 @@ AnyBuffer AnyBuffer::create(const tt::tt_metal::BufferConfig& config, std::optio
     if (!mesh_device) {
         if (address.has_value()) {
             return AnyBuffer{
-                Buffer::create(config.device, *address, config.size, config.page_size, config.buffer_type)};
+                BufferImpl::create(config.device, *address, config.size, config.page_size, config.buffer_type)};
         }
-        return AnyBuffer{Buffer::create(config.device, config.size, config.page_size, config.buffer_type)};
+        return AnyBuffer{BufferImpl::create(config.device, config.size, config.page_size, config.buffer_type)};
     }
     MeshBufferConfig mesh_config = ReplicatedBufferConfig{
         .size = config.size,

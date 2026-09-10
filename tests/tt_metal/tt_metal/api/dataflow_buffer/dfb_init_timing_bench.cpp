@@ -270,7 +270,7 @@ void LaunchAndLogDfbInitTiming(
     DfbInitTimingBenchContext& ctx, Program&& program, const CoreCoord& core, const char* benchmark_name) {
     ClearDfbInitTimingL1(ctx.device, core);
     const uint16_t used_slots_mask = DfbInitTimingUsedSlotsMask(program, core);
-    LaunchProgram(*ctx.mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(*ctx.mesh_device, std::move(program));
     LogDfbInitTimingFromL1(ctx.device, core, benchmark_name, used_slots_mask);
 }
 }  // namespace

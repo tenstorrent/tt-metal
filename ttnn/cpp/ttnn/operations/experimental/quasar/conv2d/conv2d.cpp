@@ -10,6 +10,7 @@
 #include <string>
 #include <utility>
 
+#include <tt-metalium/allocator.hpp>  // Allocator::get_bank_size (real L1 bank, not nominal l1_size_per_core)
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>  // tt::tile_size (DFB ring-extent cap for no-spill conv)
 #include <tt_stl/assert.hpp>
@@ -166,11 +167,22 @@ static std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard
     // at (0,0)). Shift the activation shard grid onto that origin so the conv runs on the requested cores
     // — e.g. a 2-core sub-grid at logical y=1 on a small (emulated) device. For HEIGHT_SHARDED the output
     // parallel config == the input parallel config, so this offset propagates to the output shard (and
-    // thus the program factory's placement) automatically. No-op when core_grid is unset or starts at (0,0).
-    const CoreCoord core_grid_offset =
-        conv_config.core_grid.has_value() ? conv_config.core_grid.value().bounding_box().start_coord : CoreCoord{0, 0};
-    input_tensor_sharded_memory_config =
-        offset_sharded_mem_config_qsr(input_tensor_sharded_memory_config, core_grid_offset);
+    // thus the program factory's placement) automatically.
+    //
+    // Apply it ONLY on the path where the shared helper actually anchors at (0,0):
+    //   - Skip when override_sharding_config is set: get_conv_padded_input_shape_and_mem_config then builds
+    //     parallel_config directly from conv_config.core_grid (conv2d_utils.cpp), so the returned config is
+    //     ALREADY at the requested origin — offsetting again lands one grid-start too far (or off the device).
+    //   - Skip when !needs_shard_or_reshard: the helper returns the tensor's ACTUAL memory_config, so an
+    //     offset would describe a grid the input tensor is not on (no reshard is performed to move it).
+    // (#51270 item 1 — the offset was previously applied unconditionally, double-shifting both cases.)
+    if (needs_shard_or_reshard && !conv_config.override_sharding_config) {
+        const CoreCoord core_grid_offset = conv_config.core_grid.has_value()
+                                               ? conv_config.core_grid.value().bounding_box().start_coord
+                                               : CoreCoord{0, 0};
+        input_tensor_sharded_memory_config =
+            offset_sharded_mem_config_qsr(input_tensor_sharded_memory_config, core_grid_offset);
+    }
 
     ParallelConfig parallel_config = {
         .grid = input_tensor_sharded_memory_config.shard_spec().value().grid,
@@ -713,7 +725,7 @@ Result conv2d_L1(
         // Program A's resident output = per-core tilized activation [per_core_M, full_K] tiles.
         const uint64_t tilized_act_bytes =
             static_cast<uint64_t>(per_core_m_ntiles) * full_inner_dim_k_ntiles * out_tile_bytes;
-        const uint64_t l1_bank = device->l1_size_per_core();
+        const uint64_t l1_bank = device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
         // Ceiling on the per-core tilized activation: L1 fit. The tilized-activation output alone crowds the
         // bank, so reserve ~20 % for the resident halo input, weights, matmul CBs and allocator fragmentation.
         // (A former uint16_t DFB ring-extent cap of ~1 MB -- Program A's borrowed DFB_OUT holds the WHOLE
@@ -722,7 +734,12 @@ Result conv2d_L1(
         // ring_size field to uint32_t, so the ring extent is no longer binding and only L1 fit matters. This
         // also keeps such convs off the DRAM slice path, whose slice_write can't consume the per-core
         // tile-padding a height-sharded conv output carries for non-tile-aligned per-core heights.)
-        const uint64_t fit_threshold = (l1_bank * 80) / 100;
+        // [#54488] Small banks have far less headroom for the tilized activation alongside the halo input,
+        // weights, matmul CBs and allocator fragmentation, so slice more aggressively (60%) there; full-size
+        // banks keep the validated ~80% ceiling. (60% of ~2.68 MB ~= 1.6 MB, below the ~1.7 MB layer1 conv2
+        // tilized activation, so it now DRAM-slices instead of OOMing 31 KB short.)
+        const bool small_bank = l1_bank < (3ull * 1024 * 1024);
+        const uint64_t fit_threshold = small_bank ? (l1_bank * 60) / 100 : (l1_bank * 80) / 100;
         if (tilized_act_bytes > fit_threshold) {
             // Number of output-height slices so each slice's tilized activation ((per_core_M/num_slices)*full_K)
             // stays under half the bank, leaving ample room for the slice's halo input, weights and matmul CBs.
@@ -1053,8 +1070,17 @@ Result conv2d_L1(
                     // K-spill when full-K weights EXCEED 512 tiles, and when spilling keep the resident block well
                     // under (<=256 tiles) by picking the largest divisor of full_K with in0_block_w*N <= 256.
                     uint32_t in0_blk_w_mm = full_k_ntiles_mm;
-                    constexpr uint32_t kSingleBlockFitTiles = 512;
-                    constexpr uint32_t kSpillTargetTiles = 256;
+                    // If have less memory to use per L1 bank (e.g. ~2.68 MB) the matmul's
+                    // weights + activation CBs, sized by in0_block_w, alongside the resident tilized activation
+                    // overflow / clash with L1 (validate_dataflow_buffer_region: static DFBs overlap an L1
+                    // buffer). Spill harder there -- lower single-block ceiling AND smaller resident K-block --
+                    // to shrink the matmul CB footprint below the bank. NOTE: more K-blocks = more DRAM-weights
+                    // K-spill-accumulate steps (watch for the 0x10000 tile-counter HW race, though layer4
+                    // already K-spills fine). Full-size banks keep the validated 512/256 tuning.
+                    const bool small_bank_mm =
+                        device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1) < (3ull * 1024 * 1024);
+                    const uint32_t kSingleBlockFitTiles = small_bank_mm ? 256u : 512u;
+                    const uint32_t kSpillTargetTiles = small_bank_mm ? 64u : 256u;
                     if (n_ntiles_mm * full_k_ntiles_mm > kSingleBlockFitTiles) {
                         uint32_t k_blk = full_k_ntiles_mm;
                         while (k_blk > 1 &&
@@ -1160,11 +1186,23 @@ Result conv2d_L1(
         // This is the plain matmul (no fused conv_bmm, no 0x19); its DRAM-weights K-spill accumulate is the
         // Blocker-A capability (DPRINT-masked). Small 1x1 (<=512t, e.g. 1024->512 at 512t) keep the full-K single
         // block, unchanged and still passing.
-        if (kernel_size[0] == 1 && kernel_size[1] == 1) {
+        //
+        // HEIGHT-SHARDED ONLY: block-sharded splits K across grid columns, so the per-core shard K is
+        // full_K / num_cores_c (< full_K). Forcing in0_block_w = full_K then exceeds the per-core K and trips
+        // the matmul divisibility check ((shard_K_tiles) % in0_block_w == 0) — e.g. WH block-sharded layer3
+        // 1x1 with shard_K=2 tiles vs in0_block_w=16. Block-sharded also keeps per-core K small, so no DRAM
+        // spill is needed there. This mirrors the split-path Program B K-spill above, which is likewise
+        // height-sharded-only. On block-sharded convs (WH/BH layer3/4) the matmul config from
+        // determine_matmul_op_config_from_conv_op_config_qsr is used unchanged.
+        if (height_sharded_conv && kernel_size[0] == 1 && kernel_size[1] == 1) {
             const uint32_t full_k_mm = full_inner_dim_k_ntiles;  // 1x1: = in_ch_padded/32
+            // [#54488] Same small-bank spill as the split-path Program B above: on a ~2.68 MB Quasar bank the
+            // wide 1x1 weights CB (conv3 256->1024 / 512->2048, downsample) clashes with L1, so spill harder.
+            const bool small_bank_mm =
+                device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1) < (3ull * 1024 * 1024);
+            const uint32_t kSingleBlockFitTiles = small_bank_mm ? 256u : 512u;
+            const uint32_t kSpillTargetTiles = small_bank_mm ? 64u : 256u;
             auto kspill_in0_bw = [&](uint32_t per_core_n) -> uint32_t {
-                constexpr uint32_t kSingleBlockFitTiles = 512;
-                constexpr uint32_t kSpillTargetTiles = 256;
                 if (per_core_n == 0 || per_core_n * full_k_mm <= kSingleBlockFitTiles) {
                     return full_k_mm;
                 }

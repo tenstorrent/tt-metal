@@ -5,6 +5,7 @@
 // Integration tests for per-core L1 allocation via experimental::per_core_allocation.
 // These tests require a real device (slow dispatch).
 
+#include "impl/buffers/buffer_impl.hpp"
 #include <cstdlib>
 #include <cstring>
 #include <functional>
@@ -31,7 +32,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include "tests/tt_metal/tt_metal/common/device_fixture.hpp"
 #include "impl/context/metal_context.hpp"
-#include "impl/dataflow_buffer/prefetcher_pipe.hpp"
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include "tt_metal/distributed/hd_socket_descriptor.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
@@ -65,7 +66,7 @@ TEST_F(PerCoreAllocationTest, BasicPerCoreAllocation) {
     auto shard_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
     experimental::per_core_allocation::set_per_core_allocation(shard_args, true);
 
-    auto buf = Buffer::create(device, total_size, PAGE_SIZE, BufferType::L1, shard_args);
+    auto buf = BufferImpl::create(device, total_size, PAGE_SIZE, BufferType::L1, shard_args);
 
     ASSERT_TRUE(per_core::is_per_core_allocation(*buf));
 
@@ -97,11 +98,11 @@ TEST_F(PerCoreAllocationTest, PerCoreAndLockstepCoexist) {
     // Create per-core buffer
     auto shard_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
     experimental::per_core_allocation::set_per_core_allocation(shard_args, true);
-    auto per_core_buf = Buffer::create(device, total_size, PAGE_SIZE, BufferType::L1, shard_args);
+    auto per_core_buf = BufferImpl::create(device, total_size, PAGE_SIZE, BufferType::L1, shard_args);
 
     // Create lockstep buffer on same cores
     auto lockstep_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
-    auto lockstep_buf = Buffer::create(device, total_size, PAGE_SIZE, BufferType::L1, lockstep_args);
+    auto lockstep_buf = BufferImpl::create(device, total_size, PAGE_SIZE, BufferType::L1, lockstep_args);
 
     // Both should be allocated successfully
     EXPECT_TRUE(per_core_buf->is_allocated());
@@ -133,7 +134,7 @@ TEST_F(PerCoreAllocationTest, PerCoreSkipsPersistentL1OnSameCore) {
     auto shard_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
     experimental::per_core_allocation::set_per_core_allocation(shard_args, true);
     // Allocate through the MeshDevice allocator that owns the pipe's persistent L1.
-    auto buf = Buffer::create(mesh_device, 2 * PAGE_SIZE, PAGE_SIZE, BufferType::L1, shard_args);
+    auto buf = BufferImpl::create(mesh_device, 2 * PAGE_SIZE, PAGE_SIZE, BufferType::L1, shard_args);
 
     const DeviceAddr per_core_size = buf->aligned_size_per_bank();
     const DeviceAddr ring_begin = pipe.buffer_address();
@@ -173,13 +174,13 @@ TEST_F(PerCoreAllocationTest, DeallocationFreesPerCoreSpace) {
 
     // Create and destroy a buffer
     {
-        auto buf1 = Buffer::create(device, total_size, PAGE_SIZE, BufferType::L1, shard_args);
+        auto buf1 = BufferImpl::create(device, total_size, PAGE_SIZE, BufferType::L1, shard_args);
         EXPECT_TRUE(per_core::is_per_core_allocation(*buf1));
         // buf1 destroyed here, freeing per-core allocations
     }
 
     // Create another buffer on same cores — should succeed (space was freed)
-    auto buf2 = Buffer::create(device, total_size, PAGE_SIZE, BufferType::L1, shard_args);
+    auto buf2 = BufferImpl::create(device, total_size, PAGE_SIZE, BufferType::L1, shard_args);
     EXPECT_TRUE(per_core::is_per_core_allocation(*buf2));
     EXPECT_TRUE(buf2->is_allocated());
 }
@@ -250,7 +251,7 @@ TEST_F(PerCoreAllocationTest, PerCoreSocketCoexistsWithLockstep) {
     CoreRange grid(CoreCoord(0, 0), CoreCoord(1, 0));
     ShardSpecBuffer shard_spec(CoreRangeSet(grid), {32, 32}, ShardOrientation::ROW_MAJOR, {32, 32}, {2, 1});
     auto lockstep_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
-    auto lockstep_buf = Buffer::create(device, 2 * PAGE_SIZE, PAGE_SIZE, BufferType::L1, lockstep_args);
+    auto lockstep_buf = BufferImpl::create(device, 2 * PAGE_SIZE, PAGE_SIZE, BufferType::L1, lockstep_args);
     EXPECT_TRUE(lockstep_buf->is_allocated());
     EXPECT_NE(lockstep_buf->address(), pc_addr) << "Lockstep buffer aliases the per-core socket FIFO";
 }
@@ -393,7 +394,7 @@ TEST_F(PerCoreAllocationTest, H2DSocketPerCoreFifoDoesNotAliasLockstep) {
     CoreRange grid(CoreCoord(0, 0), CoreCoord(0, 1));
     ShardSpecBuffer shard_spec(CoreRangeSet(grid), {32, 32}, ShardOrientation::ROW_MAJOR, {32, 32}, {2, 1});
     auto lockstep_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
-    auto lockstep_buf = Buffer::create(device, 2 * PAGE_SIZE, PAGE_SIZE, BufferType::L1, lockstep_args);
+    auto lockstep_buf = BufferImpl::create(device, 2 * PAGE_SIZE, PAGE_SIZE, BufferType::L1, lockstep_args);
     ASSERT_TRUE(lockstep_buf->is_allocated());
 
     const DeviceAddr lockstep_base = lockstep_buf->address();
