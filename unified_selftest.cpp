@@ -331,12 +331,22 @@ inline uint32_t dfb_num_entries(uint32_t dfb) { return buffer(dfb).get_total_num
 // CONSTEXPR, like the real tables, so the checks that read them can be static_asserts.
 // Every buffer is a full tile unless TT_U_SELFTEST_ROW_DFB names one -- which is how a probe
 // manufactures the host/kernel disagreement, at COMPILE time now rather than at run time.
-#define TT_U_HAVE_DFB_TILE_GEOMETRY 1
 #if !defined(TT_U_SELFTEST_ROW_DFB)
 #define TT_U_SELFTEST_ROW_DFB 0xffffffffu
 #endif
+#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+#define TT_U_HAVE_DFB_TILE_GEOMETRY 1
 inline constexpr uint32_t dfb_tile_rows(uint32_t dfb) { return dfb == TT_U_SELFTEST_ROW_DFB ? 1u : 32u; }
 inline constexpr uint32_t dfb_tile_cols(uint32_t) { return 32u; }
+inline constexpr uint32_t unpack_tile_geometry(uint32_t dfb) { return (dfb_tile_rows(dfb) << 16) | dfb_tile_cols(dfb); }
+template <bool Accumulate, typename... Args>
+inline void llk_unpack_hw_configure(Args... args) {
+    (void)Accumulate;
+    (void)sizeof...(args);
+    T("  llk_unpack_hw_configure");
+}
+#define UNPACK(expr) expr
+#endif
 
 // An L1 pointer attribute on device (risc_attribs.h); nothing on the host.
 #define tt_l1_ptr
@@ -495,6 +505,11 @@ constexpr bool DST_ACCUM_MODE = false;
 namespace tt {
 namespace unified {
 
+template <typename S, uint32_t DfbId>
+struct TestStorage : Storage<S> {
+    TestStorage() : Storage<S>(dfb<DfbId>) {}
+};
+
 // ===========================================================================
 //  Example kernels
 //
@@ -548,10 +563,10 @@ void example_eltwise() {
     auto t1 = TensorAccessor(FakeArgs{1}, 0);
     auto t2 = TensorAccessor(FakeArgs{2}, 0);
     using Row2 = Shape<1, 2>;
-    Storage<Row2> lhs_storage(0);
-    Storage<Row2> rhs_storage(1);
-    Storage<Row2> tmp_storage(2);
-    Storage<Row2> out_storage(3);
+    TestStorage<Row2, 0> lhs_storage;
+    TestStorage<Row2, 1> rhs_storage;
+    TestStorage<Row2, 2> tmp_storage;
+    TestStorage<Row2, 3> out_storage;
 
     for (int i = 0; i < 1; ++i) {
         ComputeBlock lhs = noc_load<0>(lhs_storage, t0, i).wait();
@@ -583,16 +598,16 @@ void example_fpu_eltwise() {
     auto t0 = TensorAccessor(FakeArgs{0}, 0);
     auto t3 = TensorAccessor(FakeArgs{3}, 0);
     using Row2 = Shape<1, 2>;
-    Storage<Row2> a_storage(0);
-    Storage<Row2> b_storage(1);
-    Storage<Row2> c_storage(2);
-    Storage<Row2> out_storage(3);
-    Storage<Row2> scratch(4);
+    TestStorage<Row2, 0> a_storage;
+    TestStorage<Row2, 1> b_storage;
+    TestStorage<Row2, 2> c_storage;
+    TestStorage<Row2, 3> out_storage;
+    TestStorage<Row2, 4> scratch;
     // The store-out buffer is its own, not scratch: a block handed to noc_store is
     // consumed by the writer thread, so on this projection it is pushed and never
     // waited on. Mixing that with blocks this thread does read would leave the buffer
     // with more pushes than waits, which is exactly what the balance check objects to.
-    Storage<Row2> sink(5);
+    TestStorage<Row2, 5> sink;
 
     ComputeBlock a = noc_load<1>(a_storage, t0, 0).wait();
     ComputeBlock b = noc_load<1>(b_storage, t0, 1).wait();
@@ -643,8 +658,8 @@ void example_unary() {
     auto t0 = TensorAccessor(FakeArgs{0}, 0);
     auto t2 = TensorAccessor(FakeArgs{2}, 0);
     using Row2 = Shape<1, 2>;
-    Storage<Row2> in_storage(0);
-    Storage<Row2> out_storage(3);
+    TestStorage<Row2, 0> in_storage;
+    TestStorage<Row2, 3> out_storage;
 
     ComputeBlock x = noc_load<1>(in_storage, t0, 0).wait();
     noc_store<0>(out_storage.store(x.exp()), t2, 0);
@@ -663,9 +678,9 @@ void example_reduce() {
     auto t2 = TensorAccessor(FakeArgs{2}, 0);
     using In = Shape<2, 2>;
     using Out = reduce_shape<In, ReduceAxis::Rows>;
-    Storage<In> in_storage(0);
-    Storage<Shape<1, 1>> scaler_storage(3);
-    Storage<Out> out_storage(4);
+    TestStorage<In, 0> in_storage;
+    TestStorage<Shape<1, 1>, 3> scaler_storage;
+    TestStorage<Out, 4> out_storage;
 
     ComputeBlock scaler = fill_reduce_scaler<1>(scaler_storage);
     ComputeBlock a = noc_load<1>(in_storage, t0, 0).wait();
@@ -683,10 +698,12 @@ void example_bcast() {
     using Col = reduce_shape<In, Axis::Cols>;  // Shape<2, 1>
     using Row = reduce_shape<In, Axis::Rows>;  // Shape<1, 3>
 
-    Storage<In> x_storage(0), e_storage(2), out_storage(4);
-    Storage<Col> m_storage(5);
-    Storage<Row> r_storage(6);
-    Storage<Shape<1, 1>> one_storage(3);
+    TestStorage<In, 0> x_storage;
+    TestStorage<In, 2> e_storage;
+    TestStorage<In, 4> out_storage;
+    TestStorage<Col, 5> m_storage;
+    TestStorage<Row, 6> r_storage;
+    TestStorage<Shape<1, 1>, 3> one_storage;
 
     ComputeBlock x = noc_load<1>(x_storage, t0, 0).wait();
 
@@ -717,7 +734,9 @@ void example_retained_state() {
     auto t0 = TensorAccessor(FakeArgs{0}, 0);
     auto t2 = TensorAccessor(FakeArgs{2}, 0);
     using Row2 = Shape<1, 2>;
-    Storage<Row2> in(0), state(1), out(3);
+    TestStorage<Row2, 0> in;
+    TestStorage<Row2, 1> state;
+    TestStorage<Row2, 3> out;
 
     RetainedBlock<Row2> carried;
     for (uint32_t j = 0; j < 2; ++j) {
@@ -739,9 +758,9 @@ void example_peer_hop() {
     auto t2 = TensorAccessor(FakeArgs{2}, 0);
     LogicalCoord peer = LogicalCoord::yx(0, 0);
     using Row2 = Shape<1, 2>;
-    Storage<Row2> in_storage(0);
-    Storage<Row2> hop_storage(1);
-    Storage<Row2> out_storage(3);
+    TestStorage<Row2, 0> in_storage;
+    TestStorage<Row2, 1> hop_storage;
+    TestStorage<Row2, 3> out_storage;
 
     ComputeBlock x = noc_load<1>(in_storage, t0, 0).wait();
     Block staged = hop_storage.store(x.exp());
@@ -770,10 +789,15 @@ void example_syntax_free() {
     using Sq2 = Shape<2, 2>;   // matmul operands and output block
     using Col2 = Shape<2, 1>;  // reduce input
     using One = Shape<1, 1>;   // scaler, and a rows-collapse result
-    Storage<Row2> in0(0), in1(1), out(2);
-    Storage<Sq2> mm_a(5), mm_b(6), mm_out(7);
-    Storage<Col2> red_in(8);
-    Storage<One> scaler(3), red_out(4);
+    TestStorage<Row2, 0> in0;
+    TestStorage<Row2, 1> in1;
+    TestStorage<Row2, 2> out;
+    TestStorage<Sq2, 5> mm_a;
+    TestStorage<Sq2, 6> mm_b;
+    TestStorage<Sq2, 7> mm_out;
+    TestStorage<Col2, 8> red_in;
+    TestStorage<One, 3> scaler;
+    TestStorage<One, 4> red_out;
 
     {  // Bin -- EVERY binary. Left-associated and non-commutative on purpose:
        // a swapped operand order shows up as swapped dst indices in the trace.
@@ -812,10 +836,15 @@ void example_syntax_method() {
     using Sq2 = Shape<2, 2>;   // matmul operands and output block
     using Col2 = Shape<2, 1>;  // reduce input
     using One = Shape<1, 1>;   // scaler, and a rows-collapse result
-    Storage<Row2> in0(0), in1(1), out(2);
-    Storage<Sq2> mm_a(5), mm_b(6), mm_out(7);
-    Storage<Col2> red_in(8);
-    Storage<One> scaler(3), red_out(4);
+    TestStorage<Row2, 0> in0;
+    TestStorage<Row2, 1> in1;
+    TestStorage<Row2, 2> out;
+    TestStorage<Sq2, 5> mm_a;
+    TestStorage<Sq2, 6> mm_b;
+    TestStorage<Sq2, 7> mm_out;
+    TestStorage<Col2, 8> red_in;
+    TestStorage<One, 3> scaler;
+    TestStorage<One, 4> red_out;
 
     {  // Bin -- EVERY binary. Left-associated and non-commutative on purpose:
        // a swapped operand order shows up as swapped dst indices in the trace.
@@ -900,13 +929,16 @@ void example_shim_storage() {
     using Col = reduce_shape<In, Axis::Cols>;
     using Sq = Shape<2, 2>;
 
-    Storage<In> x_storage(0), out_storage(2);
-    Storage<Shape<1, 1>> one_storage(3);
-    Storage<Sq> mm_a(5), mm_b(6), mm_out(7);
+    TestStorage<In, 0> x_storage;
+    TestStorage<In, 2> out_storage;
+    TestStorage<Shape<1, 1>, 3> one_storage;
+    TestStorage<Sq, 5> mm_a;
+    TestStorage<Sq, 6> mm_b;
+    TestStorage<Sq, 7> mm_out;
 
-    Storage<In> sq_storage(8);  // the three intermediates, the OLD way
-    Storage<Col> m_storage(9);
-    Storage<Sq> mm_i_storage(10);
+    TestStorage<In, 8> sq_storage;  // the three intermediates, the OLD way
+    TestStorage<Col, 9> m_storage;
+    TestStorage<Sq, 10> mm_i_storage;
 
     ComputeBlock one = fill_reduce_scaler<1>(one_storage);
     ComputeBlock x = noc_load<1>(x_storage, t0, 0).wait();
@@ -928,9 +960,12 @@ void example_shim_decl() {
     using Col = reduce_shape<In, Axis::Cols>;
     using Sq = Shape<2, 2>;
 
-    Storage<In> x_storage(0), out_storage(2);
-    Storage<Shape<1, 1>> one_storage(3);
-    Storage<Sq> mm_a(5), mm_b(6), mm_out(7);
+    TestStorage<In, 0> x_storage;
+    TestStorage<In, 2> out_storage;
+    TestStorage<Shape<1, 1>, 3> one_storage;
+    TestStorage<Sq, 5> mm_a;
+    TestStorage<Sq, 6> mm_b;
+    TestStorage<Sq, 7> mm_out;
 
     ComputeBlock one = fill_reduce_scaler<1>(one_storage);
     ComputeBlock x = noc_load<1>(x_storage, t0, 0).wait();
@@ -964,7 +999,9 @@ void example_drain_old() {
     auto t0 = TensorAccessor(FakeArgs{0}, 0);
     auto t2 = TensorAccessor(FakeArgs{2}, 0);
     using In = Shape<2, 3>;
-    Storage<In> in(0), out(2), out2(4);
+    TestStorage<In, 0> in;
+    TestStorage<In, 2> out;
+    TestStorage<In, 4> out2;
     {
         ComputeBlock a = noc_load<1>(in, t0, 0).wait();
         noc_store<0>(out.store(a.exp()), t2, 0);  // accessor form
@@ -979,7 +1016,9 @@ void example_drain_new() {
     auto t0 = TensorAccessor(FakeArgs{0}, 0);
     auto t2 = TensorAccessor(FakeArgs{2}, 0);
     using In = Shape<2, 3>;
-    Storage<In> in(0), out(2), out2(4);
+    TestStorage<In, 0> in;
+    TestStorage<In, 2> out;
+    TestStorage<In, 4> out2;
     {
         ComputeBlock a = noc_load<1>(in, t0, 0).wait();
         noc_store<0>(out, a.exp(), t2, 0);
@@ -998,9 +1037,9 @@ void example_matmul_single() {
     auto t2 = TensorAccessor(FakeArgs{2}, 0);
 
     using Sq2 = Shape<2, 2>;
-    Storage<Sq2> a_storage(0);
-    Storage<Sq2> b_storage(1);
-    Storage<Sq2> out_storage(3);
+    TestStorage<Sq2, 0> a_storage;
+    TestStorage<Sq2, 1> b_storage;
+    TestStorage<Sq2, 3> out_storage;
 
     ComputeBlock a = noc_load<1>(a_storage, t0, 0).wait();
     ComputeBlock b = noc_load<1>(b_storage, t1, 0).wait();
@@ -1020,10 +1059,10 @@ void example_matmul_add() {
     auto t2 = TensorAccessor(FakeArgs{2}, 0);
 
     using Sq2 = Shape<2, 2>;
-    Storage<Sq2> a_storage(0);
-    Storage<Sq2> b_storage(1);
-    Storage<Sq2> m_storage(2);
-    Storage<Sq2> out_storage(3);
+    TestStorage<Sq2, 0> a_storage;
+    TestStorage<Sq2, 1> b_storage;
+    TestStorage<Sq2, 2> m_storage;
+    TestStorage<Sq2, 3> out_storage;
 
     ComputeBlock a = noc_load<1>(a_storage, t0, 0).wait();
     ComputeBlock b = noc_load<1>(b_storage, t1, 0).wait();
@@ -1035,7 +1074,7 @@ void example_matmul_add() {
     // an omission is not a compile error, it silently drops the fused add and yields
     // relu(A@B) instead of relu(A@B + m). Five builders got that wrong until this case
     // existed, so what the trace has to show is add_reuse BEFORE relu, not relu alone.
-    Storage<Sq2> chained_storage(4);
+    TestStorage<Sq2, 4> chained_storage;
     Block chained = chained_storage.store(relu(matmul(a, b).add(m)));
     noc_store<0>(std::move(chained), t2, 1);
 }
@@ -1061,9 +1100,9 @@ void example_matmul_banded() {
 
     using A = Shape<4, 2>;
     using B = Shape<2, 8>;
-    Storage<A> a_storage(0);
-    Storage<B> b_storage(1);
-    Storage<Shape<4, 8>> out_storage(3);
+    TestStorage<A, 0> a_storage;
+    TestStorage<B, 1> b_storage;
+    TestStorage<Shape<4, 8>, 3> out_storage;
 
     ComputeBlock a = noc_load<1>(a_storage, t0, 0).wait();
     ComputeBlock b = noc_load<1>(b_storage, t1, 0).wait();
@@ -1080,10 +1119,10 @@ void example_matmul_acc() {
     constexpr uint32_t kBlocks = 2;  // a kernel loop bound, not a geometry
 
     using Sq2 = Shape<2, 2>;
-    Storage<Sq2> a_storage(0);
-    Storage<Sq2> b_storage(1);
-    Storage<Sq2> acc_storage(24);  // running total -- a different DFB from out
-    Storage<Sq2> out_storage(3);
+    TestStorage<Sq2, 0> a_storage;
+    TestStorage<Sq2, 1> b_storage;
+    TestStorage<Sq2, 24> acc_storage;  // running total -- a different DFB from out
+    TestStorage<Sq2, 3> out_storage;
 
     Accumulator<Sq2, AccumulatorMode::Dst> acc(acc_storage, out_storage);
     acc.clear();
