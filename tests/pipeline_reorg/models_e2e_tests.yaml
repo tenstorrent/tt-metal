@@ -1105,20 +1105,22 @@
   team: shield
 
 # ── HunyuanImage-3.0 ───────────────────────────────────────────────
-# Job timeout 25 min; pytest --timeout 1380 s leaves headroom. run_ci_pytest.sh
-# forces offline, validates the staged checkpoint, --maxfail=1, and fails on zero tests.
+# Smoke e2e (8L / 8 denoise steps): 32L×50-step production settings exceed the tier-3
+# budget once MoE expert .tensorbin conversion runs on NFS (cold TT_CACHE_PATH). Full
+# quality runs stay local (HY_NUM_LAYERS=32 HY_STEPS=50). Job 40 min; pytest 2100 s.
 - name: HunyuanImage-3.0 T2I e2e tests
   cmd: |
     export HF_HOME=/mnt/MLPerf/huggingface HUNYUAN_MODEL_DIR=/mnt/MLPerf/huggingface/tencent/HunyuanImage-3.0
     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tencent/HunyuanImage-3.0
-    export HY_STEPS=50
+    export HY_NUM_LAYERS=8
+    export HY_STEPS=8
     export HY_VERBOSE=1
     models/experimental/hunyuan_image_3_0/scripts/run_ci_pytest.sh e2e \
-      --timeout 1380 -s models/experimental/hunyuan_image_3_0/demo/test_demo.py
+      --timeout 2100 -s models/experimental/hunyuan_image_3_0/demo/test_demo.py
   model: hunyuan-image-3.0
   skus:
     bh_quietbox_2:
-      timeout: 25
+      timeout: 40
       tier: 3
   owner_id: D0B8130N4BW # Dalar Vartanians
   team: models
