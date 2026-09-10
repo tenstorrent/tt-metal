@@ -127,6 +127,16 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedRetileProgramFact
     // MID_VIEW the output tile shape so llk_unpack_tilize reads the correct number of RM rows. The
     // two share one allocation via advanced_options.alias_with, which requires equal total size.
     const uint32_t mid_total_size = 2 * mid_pages_per_out_block * mid_page_size;
+    // MID_VIEW's num_entries divides the shared allocation by the output-shaped tile size; this is
+    // exact for every dtype the op admits (tile size scales with tile height), but a block-float
+    // input would break it (fixed exponent header). Block-float inputs are rejected upstream
+    // (validate_on_program_cache_miss dtype whitelist), so this cannot fire today; the guard makes
+    // the assumption explicit for anyone widening the dtype list later.
+    TT_FATAL(
+        mid_total_size % out_tile_size_input_fmt == 0,
+        "retile intermediate ({} B) must hold a whole number of {}-byte output-shaped tiles",
+        mid_total_size,
+        out_tile_size_input_fmt);
     DataflowBufferSpec mid_dfb{
         .unique_id = MID_DFB,
         .entry_size = mid_page_size,
