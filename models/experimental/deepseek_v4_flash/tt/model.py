@@ -8,6 +8,7 @@ from loguru import logger
 
 from .attention import (
     _StaticLayerCache,
+    _scatter_window_rows,
     build_static_layer_cache,
     decode_sdpa_bounds,
     host_decode_mask,
@@ -1080,28 +1081,53 @@ class DeepSeekV4Model(DeepSeekV4Module):
         state = {}
         for sm, li, name in self._compressor_slots():
             buf = getattr(sm["scaches"][li], name)
-            state[(sm["index"], li, name)] = ttnn.from_torch(
+            held = ttnn.from_torch(
                 torch.full(list(buf.shape), self._empty_compressor_fill(name)),
                 dtype=buf.dtype,
-                layout=ttnn.TILE_LAYOUT,
+                layout=buf.layout,
                 device=sm["device"],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            state[(sm["index"], li, name)] = ttnn.to_memory_config(held, buf.memory_config())
         return state
 
     def _build_empty_rows(self) -> dict:
-        """One empty row per compressor buffer, the source for blanking a single slot."""
+        """One empty slot's worth of rows per compressor buffer, the source for blanking it.
+
+        A TILE DRAM window carries the batch on dim 0, so a slot is one row of it. A
+        packed CSA window (ROW_MAJOR L1 WIDTH_SHARDED ``[B*cr, 1, 1, F]``) is user-major,
+        so a slot is the ``cr`` rows of one user, and the source is INTERLEAVED because
+        that is what ``indexed_fill`` scatters from (see :meth:`_blank_window_slots`).
+        """
         rows = {}
         for sm, li, name in self._compressor_slots():
             buf = getattr(sm["scaches"][li], name)
+            slot_rows = buf.shape[0] // self._decode_batch if buf.is_sharded() else 1
             rows[(sm["index"], li, name)] = ttnn.from_torch(
-                torch.full([1, *list(buf.shape)[1:]], self._empty_compressor_fill(name)),
+                torch.full([slot_rows, *list(buf.shape)[1:]], self._empty_compressor_fill(name)),
                 dtype=buf.dtype,
-                layout=ttnn.TILE_LAYOUT,
+                layout=buf.layout,
                 device=sm["device"],
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         return rows
+
+    def _blank_window_slots(self, target: ttnn.Tensor, key: tuple, slots, device) -> None:
+        """Reset ``slots`` of a packed CSA window buffer to their empty values.
+
+        User ``u`` owns rows ``[u*cr, (u+1)*cr)``, so blanking a slot is a scatter of
+        that user's block rather than a whole-buffer fill (which would wipe the other
+        users) -- and ``ttnn.fill`` cannot write a ROW_MAJOR sharded tensor anyway.
+        """
+        cr = target.shape[0] // self._decode_batch
+        for slot in slots:
+            index = ttnn.from_torch(
+                torch.arange(cr, dtype=torch.int32) + slot * cr,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+            )
+            _scatter_window_rows(target, self._empty_row[key], index)
+            ttnn.deallocate(index)
 
     def _seat_group(self, sids: list[int]) -> dict:
         """The held-aside block for the group ``sids``, claiming a free one on first seat.
@@ -1141,7 +1167,10 @@ class DeepSeekV4Model(DeepSeekV4Module):
         """Blank a group's held-aside buffers in place, for a group of fresh sessions."""
         for sm, li, name in self._compressor_slots():
             key = (sm["index"], li, name)
-            ttnn.fill(state[key], self._empty_compressor_fill(name), output_tensor=state[key])
+            if state[key].is_sharded():
+                self._blank_window_slots(state[key], key, range(self._decode_batch), sm["device"])
+            else:
+                ttnn.fill(state[key], self._empty_compressor_fill(name), output_tensor=state[key])
 
     def _clear_compressor_slot(self, slot: int, state: Optional[dict]) -> None:
         """Reset one batch slot's compressor window rows to their empty values.
@@ -1152,7 +1181,10 @@ class DeepSeekV4Model(DeepSeekV4Module):
         for sm, li, name in self._compressor_slots():
             key = (sm["index"], li, name)
             target = getattr(sm["scaches"][li], name) if state is None else state[key]
-            ttnn.fill_cache(target, self._empty_row[key], slot)
+            if target.is_sharded():
+                self._blank_window_slots(target, key, (slot,), sm["device"])
+            else:
+                ttnn.fill_cache(target, self._empty_row[key], slot)
 
     def _save_group_state(self, state: dict) -> None:
         """Hold the resident batch's window buffers aside as ``state``."""
