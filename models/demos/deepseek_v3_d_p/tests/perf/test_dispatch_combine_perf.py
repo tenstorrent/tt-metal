@@ -3,10 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Device performance tests for DeepSeekv3/KimiK2.6/GLM5.2 MoE dispatch and combine operations.
+Device performance tests for DeepSeekv3/KimiK2.6/GLM5.2/Mistral Small 4 MoE dispatch and combine operations.
 
 Runs test_prefill_dispatch_combine.py::test_ttnn_dispatch_combine[perf_captured_<model>_chunk]
-(<model> in {dsv3, kimi26, glm52}) on the existing LB 8x1 proxy migrated to Fabric2D TorusY. It replays the hottest
+(<model> in {dsv3, kimi26, glm52, mistral4}) on the existing LB 8x1 proxy migrated to Fabric2D TorusY. It replays the hottest
 (layer, col) pairs from a real prefill capture. The operation sequence is the same as the
 production workflow.
 Tests that were ran in order to capture the routing data:
@@ -42,6 +42,15 @@ _GLM52_CHUNK_PICKS = [
     (8, 0),  # 38.5%
     (14, 2),  # 25.0%
     (10, 0),  # 25.0%
+]
+# Mistral Small 4 does not have its routing capture in-tree yet. These are temporary record-only
+# starting points matching the same phase-1 pattern used by the other models until the real
+# Mistral4 capture and ranked hot columns are added.
+_MISTRAL4_CHUNK_PICKS = [
+    (19, 2),  # 37.2%
+    (29, 0),  # 37.0%
+    (4, 2),  # 25.0%
+    (56, 3),  # 25.0%
 ]
 # Key is (layer, col). The retained values are the old ring-profile measurements and are
 # migration starting points for Fabric2D TorusY on the same LoudBox proxy.
@@ -82,6 +91,22 @@ _COMBINE_GLM52_CHUNK_EXPECTED_NS: dict[tuple[int, int], int] = {
     (14, 2): 692_124,
     (10, 0): 806_988,
 }
+# These are temporary record-only starting thresholds until a real Mistral4 capture is available and
+# the ranked hot picks are added to the capture. They intentionally use the same rough magnitudes as
+# the existing dispatch/combine stage for the Mistral4 prefill path, so the test can be activated once
+# the capture is present without changing the overall structure of the perf harness.
+_DISPATCH_MISTRAL4_CHUNK_EXPECTED_NS: dict[tuple[int, int], int] = {
+    (19, 2): 2_080_000,
+    (29, 0): 2_050_000,
+    (4, 2): 1_820_000,
+    (56, 3): 1_900_000,
+}
+_COMBINE_MISTRAL4_CHUNK_EXPECTED_NS: dict[tuple[int, int], int] = {
+    (19, 2): 2_160_000,
+    (29, 0): 2_120_000,
+    (4, 2): 1_940_000,
+    (56, 3): 2_020_000,
+}
 
 # model -> (picks, dispatch baselines, combine baselines).
 _MODELS = {
@@ -89,6 +114,11 @@ _MODELS = {
     # https://github.com/tenstorrent/tt-metal/issues/54972
     "kimi26": (_KIMI_CHUNK_PICKS, _DISPATCH_KIMI_CHUNK_EXPECTED_NS, _COMBINE_KIMI_CHUNK_EXPECTED_NS),
     "glm52": (_GLM52_CHUNK_PICKS, _DISPATCH_GLM52_CHUNK_EXPECTED_NS, _COMBINE_GLM52_CHUNK_EXPECTED_NS),
+    "mistral4": (
+        _MISTRAL4_CHUNK_PICKS,
+        _DISPATCH_MISTRAL4_CHUNK_EXPECTED_NS,
+        _COMBINE_MISTRAL4_CHUNK_EXPECTED_NS,
+    ),
 }
 
 
