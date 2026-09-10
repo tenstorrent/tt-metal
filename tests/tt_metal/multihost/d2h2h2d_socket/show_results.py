@@ -134,9 +134,11 @@ def load(paths):
                         problems.append(f"{where}: bandwidth {bw:.6f} != messages_per_second x "
                                         f"bytes_per_message/1e9 {closed:.6f}")
                 if per_msg and payload != samples * per_msg:
-                    problems.append(f"{where}: payload_bytes {payload} != samples {samples} "
-                                    f"x bytes_per_message {per_msg} "
-                                    f"(= {samples * per_msg}, off by {payload - samples * per_msg})")
+                    problems.append(
+                        f"{where}: payload_bytes {payload} != samples {samples} "
+                        f"x bytes_per_message {per_msg} "
+                        f"(= {samples * per_msg}, off by {payload - samples * per_msg})"
+                    )
                 cores = to_int(row.get("cores"))
                 if total and window and cores:
                     occ = total / (window * cores)
