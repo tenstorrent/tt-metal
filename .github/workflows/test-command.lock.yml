@@ -1336,7 +1336,6 @@ jobs:
                         "description": "Select model to test",
                         "enum": [
                           "all",
-                          "tttv2 modules",
                           "qwen3_vl"
                         ],
                         "type": "string"

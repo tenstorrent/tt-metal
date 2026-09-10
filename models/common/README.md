@@ -1,3 +1,5 @@
+TTTv2 modules/runtime/models live in https://github.com/tenstorrent/tt_transformers; old `models.common.{modules,llm_runtime,models}` imports raise.
+
 # TTNN Validation & Testing Utilities
 
 Helpers for validating TTNN computations against reference implementations and

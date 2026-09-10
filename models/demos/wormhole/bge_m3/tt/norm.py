@@ -4,8 +4,8 @@
 from dataclasses import dataclass, replace
 
 import ttnn
+from models.common.lazy_weight import LazyWeight, resolve_lazy_weight
 from models.common.lightweightmodule import LightweightModule
-from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
 from models.common.tensor_utils import TILE_SIZE
 
 SHARD_HEIGHT = TILE_SIZE

@@ -13,7 +13,7 @@ TensorSpec (logical) of all five tensors. The framework default hashes the whole
 tensor_args (which hold exactly those five tensors), i.e. the same distinctions and the same
 logical-shape keying (the op's own hash comment states it is "same as the framework's default hash").
 
-Setup mirrors models/common/tests/modules/moe/test_generalized_moe_gate.py (ungrouped, 256 experts,
+Setup mirrors models/common/tests/moe/test_generalized_moe_gate.py (ungrouped, 256 experts,
 one token/core, HEIGHT_SHARDED L1).
 
 - Same config -> reuse (1 entry).
@@ -29,7 +29,7 @@ import ttnn
 def run_gate(device, batch_size, topk, enable_sigmoid, output_softmax, seed=42):
     """Build the 5 height-sharded tensors, run generalized_moe_gate in the cache counter, return the
     sorted device-selected expert indices. (Exact top-k correctness is covered by the dedicated
-    reference suite models/common/tests/modules/moe/test_generalized_moe_gate.py; here we assert the
+    reference suite models/common/tests/moe/test_generalized_moe_gate.py; here we assert the
     op runs, selects valid experts, and is deterministic across a cache-reused program.)"""
     input_shape = (batch_size, 8, 32)
     reshaped_input_shape = (batch_size, 16, 16)

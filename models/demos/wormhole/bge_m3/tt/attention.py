@@ -8,8 +8,8 @@ from dataclasses import dataclass, replace
 from ttnn.device import is_blackhole as ttnn_is_blackhole
 
 import ttnn
+from models.common.lazy_weight import LazyWeight, resolve_lazy_weight
 from models.common.lightweightmodule import LightweightModule
-from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
 
 # SDPA chunk selection constants
 _SDPA_Q_CHUNK_MAIN = 128

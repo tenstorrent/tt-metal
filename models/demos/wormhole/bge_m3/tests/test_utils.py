@@ -7,7 +7,7 @@ import torch
 
 import ttnn
 from models.common.auto_compose import to_torch_auto_compose
-from models.common.modules.lazy_weight import LazyWeight
+from models.common.lazy_weight import LazyWeight
 from models.common.utility_functions import comp_allclose, comp_pcc
 
 SEQUENCE_LENGTHS = [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192]

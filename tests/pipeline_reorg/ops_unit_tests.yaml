@@ -130,7 +130,7 @@
   category: experimental
 
 - name: ttnn nightly experimental generalized MoE gate op tests
-  cmd: 'pytest models/common/tests/modules/moe/test_generalized_moe_gate.py -xv --timeout=600'
+  cmd: 'pytest models/common/tests/moe/test_generalized_moe_gate.py -xv --timeout=600'
   skus:
     wh_n150_civ2:
       timeout: 10
