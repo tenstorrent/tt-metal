@@ -225,7 +225,7 @@ KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
     # 55k / code_debug: per-chunk medians over nine post-warmup iterations on a Galaxy with
     # TT_METAL_SHM_TRACKING_DISABLED=1 and LOGURU_LEVEL=ERROR. Tolerance is 5%.
-    (61, 11, 10): [0.710, 0.708, 0.710, 0.709, 0.711, 0.717, 0.711, 0.713, 0.725, 0.763, 0.797],
+    (61, 11, 10): [0.62842, 0.61427, 0.61065, 0.60118, 0.60427, 0.60544, 0.60353, 0.61104, 0.65888, 0.69774, 0.73711],
 }
 
 # Per-mode +/- tolerance band around each baseline chunk median (fraction). Traced replays a captured
