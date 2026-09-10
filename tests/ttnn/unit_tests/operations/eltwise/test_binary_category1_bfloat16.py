@@ -5,7 +5,7 @@
 import torch
 import pytest
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_ulp, ulp_distance
+from tests.ttnn.utils_for_testing import assert_with_ulp, ulp_distance, flush_subnormal_values_to_zero
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     generate_bfloat16_binary_grid,
     flush_to_zero,
@@ -50,8 +50,8 @@ def test_addlike_ops(device, ttnn_op, fast_and_approximate_mode, ulp_threshold):
     result = ttnn.to_torch(tt_result)
 
     # Device flushes subnormal sums to zero.
-    result = flush_to_zero(result)
-    golden = flush_to_zero(golden)
+    result = flush_subnormal_values_to_zero(result)
+    golden = flush_subnormal_values_to_zero(golden)
 
     # FPU add (fast_and_approximate_mode=True, the default) can overflow to ±inf
     # where IEEE RNE stays at ±max bf16. SFPU add (False) rounds to max and does
@@ -98,9 +98,13 @@ def test_mul(device, fast_and_approximate_mode, ulp_threshold):
     tt_result = ttnn_op(tt_a, tt_b, fast_and_approximate_mode=fast_and_approximate_mode)
     result = ttnn.to_torch(tt_result)
 
-    # Device flushes subnormal products to zero.
-    result = flush_to_zero(result)
-    golden = flush_to_zero(golden)
+    # SFPU mul flush includes min-normal 2^{-126} to 0.
+    if not fast_and_approximate_mode:
+        result = flush_to_zero(result)
+        golden = flush_to_zero(golden)
+    else:
+        result = flush_subnormal_values_to_zero(result)
+        golden = flush_subnormal_values_to_zero(golden)
 
     # FPU mul (fast_and_approximate_mode=True) does not match IEEE RNE at the
     # ends of the product range. SFPU (False) does, so these masks are FPU-only.
@@ -153,8 +157,8 @@ def test_div(device, fast_and_approximate_mode, ulp_threshold):
     result = ttnn.to_torch(tt_result)
 
     # Device flushes subnormal quotients to zero.
-    result = flush_to_zero(result)
-    golden = flush_to_zero(golden)
+    result = flush_subnormal_values_to_zero(result)
+    golden = flush_subnormal_values_to_zero(golden)
 
     # Reciprocal flush: device computes a * recip(b). When recip(b) underflows
     # to 0, the quotient is +0 even if torch is a finite value (up to ~4) or
