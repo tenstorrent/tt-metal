@@ -3451,6 +3451,17 @@ constexpr int kStrictTierConflictBudget = 50000;
 // Conflict budget for the preferred-variant pass of each attempt (see encode: SeatVars::non_preferred).
 constexpr int kPreferredPassConflictBudget = 50000;
 
+// TODO(multi-solution): the master solve returns the FIRST model only. Make it enumerate placements the way
+// the inner solver does (TopologySatSolver::configure_for_blocking_clause_enumeration + a blocking clause
+// over the chosen seat literals after each model), so that:
+//   - a caller can ask for the next placement when the downstream inter-mesh mapping rejects this one,
+//     instead of failing the whole solve;
+//   - alternatives can be ranked (seam width, hosts spanned, preferred variants) rather than accepting
+//     whichever model CaDiCaL happens to find first;
+//   - "SAT" can be turned into "how many placements exist", which is what the plan's completeness
+//     reporting needs to be useful on a solvable descriptor.
+// Blocking on seat literals alone would re-enumerate the same footprint set under a different variant;
+// block on footprints (one literal per (mesh, footprint), or the dedup already in MasterCandidateLists).
 AssignedMeshes start_sat_placement(
     const std::map<GlobalMeshId, MasterCandidateLists::DefinitionKey>& definition_of,
     const AdjacencyGraph<GlobalMeshId>& mesh_level_graph,
