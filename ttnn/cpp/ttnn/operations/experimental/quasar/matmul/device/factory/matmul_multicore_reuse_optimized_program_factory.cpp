@@ -296,8 +296,11 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     // out / intermed0: separate buffers, or aliased (shared memory) when the legacy factory shared
     // one CB across c_4 and c_5. Total sizes of aliased DFBs must be equal; in the shared legacy
     // case the formats match so the out and interm0 entry sizes are equal by construction.
-    const bool separate_out_interm =
-        (interm0_data_format != output_data_format) || (untilize_out && (in1_num_subblocks > 1));
+    // Quasar: never alias the intra-tensix partials DFB (cb_intermed0) onto the DM-consumed output DFB -- see the
+    // note in matmul_multicore_reuse_mcast_1d_program_factory.cpp (craq-sim tile-counter overflow on the first
+    // partials push). Costs one out-block of L1 per core on Quasar only.
+    const bool separate_out_interm = (interm0_data_format != output_data_format) ||
+                                     (untilize_out && (in1_num_subblocks > 1)) || (device->arch() == tt::ARCH::QUASAR);
     {
         DataflowBufferSpec out_dfb{
             .unique_id = RO_OUT_DFB,
