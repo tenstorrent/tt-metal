@@ -1248,7 +1248,7 @@ int run_device(Options& o) {
     // This also makes the test runnable on ANY two nodes that each have a device, rather than
     // only on a pair wired into one fabric -- which is what a CI job needs.
     namespace mh = tt::tt_metal::distributed::multihost;
-    const mh::ContextPtr world = mh::DistributedContext::get_current_world();
+    const mh::ContextPtr& world = mh::DistributedContext::get_current_world();
     {
         const mh::ContextPtr solo =
             world->split(mh::Color{static_cast<int>(o.host_ident)}, mh::Key{0});
