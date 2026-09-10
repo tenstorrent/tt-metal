@@ -101,13 +101,22 @@ assert not (DFLASH_ENABLED and USE_TRACE), (
     "PREFILL_DFLASH=1 is incompatible with PREFILL_USE_TRACE=1: the DFlash drafter path is not "
     "trace-captured. Run DFlash with PREFILL_USE_TRACE=0."
 )
+assert not (USE_TRACE and not KV_ONLY_LAST_LAYER), (
+    "PREFILL_KV_ONLY_LAST_LAYER=0 is incompatible with PREFILL_USE_TRACE=1: without the kv-only last "
+    "layer the last rank runs the norm/LM-head tail, and TtLMHead.logit_to_host() calls "
+    "ttnn.synchronize_device() -- a host sync inside begin_trace_capture(), which TT_FATALs in "
+    "fd_mesh_command_queue as 'Event Synchronization is not supported during trace capture'. A prefill "
+    "runner ignores the emitted token anyway, so leave PREFILL_KV_ONLY_LAST_LAYER at its default 1 when "
+    "tracing (the kv-only last block still writes its KV cache)."
+)
 
-# Traced writes go through the metadata tensors, which cannot supply the host kv_actual_global the
-# TP-sharded reader needs to pick its 1/tp source window. Unreachable today (trace is already rejected for
-# every sparse/DSA model, and tp_shard_kv is sparse-only), so this is the tripwire for when that lifts.
-assert not (TP_SHARD_KV and USE_TRACE), (
-    "PREFILL_TP_SHARD_KV=1 is not supported with PREFILL_USE_TRACE=1: the traced metadata write path has "
-    "no host kv_actual_global, so the TP-sharded reader and the writer would disagree on the chunk start."
+_ALLOW_TP_SHARD_TRACE = os.environ.get("PREFILL_ALLOW_UNTESTED_TP_SHARD_TRACE", "0") == "1"
+assert not (TP_SHARD_KV and USE_TRACE) or _ALLOW_TP_SHARD_TRACE, (
+    "PREFILL_TP_SHARD_KV=1 with PREFILL_USE_TRACE=1 has no CI coverage: no job exercises the tp_axis "
+    "on-device kv_actual_global read, the key_stripe_split>1 indexer geometry, or the kv-dedup two-stage "
+    "KVPE gather. The combination works (hand-validated on 8x4) but nothing would catch a regression. "
+    "Set PREFILL_ALLOW_UNTESTED_TP_SHARD_TRACE=1 to run it anyway, or add a `tp_sharded and traced` CI row "
+    "and delete this tripwire."
 )
 
 os.environ.setdefault("PREFILL_TTNN_CACHE", ADAPTER.ttnn_cache_default)
