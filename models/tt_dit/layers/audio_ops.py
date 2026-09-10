@@ -307,15 +307,9 @@ def _tap_weight(taps, channels: int, dtype, mesh_device):
 def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
     """Valid depthwise filter (same K taps per channel) on padded ``(B, T_pad, C)`` ROW_MAJOR.
 
-    Returns ``(B, T_out, C)`` with ``T_out = (T_pad - K) / stride + 1`` via ``ttnn.conv1d`` (groups=C), with the
-    prepared weight cached in ``cache``. In fp32 conv1d's depthwise kernel matches the shift-multiply-add (MAC) form
-    bit-for-bit, so MAC is only the fallback for shapes conv1d cannot run.
-
-    The conv1d formulation (full C, or C in independent chunks because the ``C * K`` activation block does not fit
-    L1 at large C) and its DRAM slice count come from ``utils/tap_filter_configs.py``. Attempt order: the plan cached
-    for this exact shape; the tabled formulation with the derived explicit slice count; the same with auto slicing;
-    then every applicable formulation widest-first and MAC. A table-driven attempt that raises is logged once as
-    stale; an unknown shape is logged once with the row to add.
+    Returns ``(B, T_out, C)``, ``T_out = (T_pad - K) / stride + 1``. Runs ``ttnn.conv1d`` (groups=C) with the
+    formulation and slice count tabled in ``utils/tap_filter_configs.py``, falling back through the trial chain
+    (full C, chunked C, then the bit-equal MAC form) when a row is missing or stale.
     """
     B, T_pad, C = int(x_BTC.shape[0]), int(x_BTC.shape[1]), int(x_BTC.shape[2])
     K = len(taps)
