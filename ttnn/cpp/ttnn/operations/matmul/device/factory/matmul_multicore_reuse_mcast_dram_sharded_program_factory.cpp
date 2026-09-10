@@ -200,6 +200,40 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     // When no padding occurs (per_core_N_compute == per_core_N_in1_sender) this equals out_subblock_w.
     uint32_t last_subblock_w_valid = out_subblock_w - (per_core_N_compute - per_core_N_in1_sender);
 
+    uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
+    uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
+    uint32_t bias_single_tile_size = bias_tile.get_tile_size(bias_data_format);
+    uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
+
+    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    uint32_t in1_aligned_tile_size = tt::align(in1_single_tile_size, dram_alignment);
+    uint32_t bias_aligned_tile_size = tt::align(bias_single_tile_size, dram_alignment);
+
+    uint32_t in0_shard_width_in_tiles = in0_tensor.shard_spec()->shape[1] / in0_tile.get_tile_shape()[1];
+    // The activation multicast is one semaphore-gated block per sender, so its cost is the block
+    // count K / in0_block_w. A block may be wider than a storage shard: the sender then gathers
+    // shards_per_block consecutive shards over the NoC before multicasting (see the in0 sender
+    // kernel), which takes the block count off the storage-core count.
+    uint32_t shards_per_block = 1;
+    if (in0_block_w > in0_shard_width_in_tiles) {
+        TT_FATAL(
+            in0_block_w % in0_shard_width_in_tiles == 0,
+            "in0_block_w ({}) wider than the in0 shard ({} tiles) must be a multiple of it",
+            in0_block_w,
+            in0_shard_width_in_tiles);
+        // The sender stages a gathered block in the idle in1 CB of a storage core that does no
+        // compute, so the block only fits when the in1 block is at least as large. Whether it is
+        // depends on the two dtypes and on per_core_N, which the caller choosing in0_block_w does
+        // not know. Rather than make every caller carry the dtypes, fall back here: a block that
+        // cannot be staged reverts to one shard per block, which is the stock path.
+        const uint32_t staged_in1_CB_size = per_core_N_in1_sender * in0_block_w * 3 * in1_aligned_tile_size;
+        if (staged_in1_CB_size >= per_core_M * in0_block_w * in0_single_tile_size) {
+            shards_per_block = in0_block_w / in0_shard_width_in_tiles;
+        } else {
+            in0_block_w = in0_shard_width_in_tiles;
+        }
+    }
+
     uint32_t num_blocks = K / in0_block_w;
     bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
@@ -207,18 +241,11 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
                                              ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
                                              : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
 
-    uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
-    uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
-    uint32_t bias_single_tile_size = bias_tile.get_tile_size(bias_data_format);
-    uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
     // in1/bias are DRAM sharded with one tile per page; the allocator pads each page to the DRAM
     // alignment (e.g. bfp8 32x16 tile = 544B padded to 576B on Blackhole's 64B alignment). The
     // reader copies blocks contiguously from DRAM, so the CB must hold tiles at the padded stride.
-    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
-    uint32_t in1_aligned_tile_size = tt::align(in1_single_tile_size, dram_alignment);
-    uint32_t bias_aligned_tile_size = tt::align(bias_single_tile_size, dram_alignment);
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles;
@@ -242,7 +269,6 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     uint32_t out_reshard_CB_tiles = out_reshard_block_tiles;
     uint32_t out_reshard_CB_size = out_reshard_CB_tiles * output_single_tile_size;
 
-    uint32_t in0_shard_width_in_tiles = in0_tensor.shard_spec()->shape[1] / in0_tile.get_tile_shape()[1];
     uint32_t in2_block_tiles = per_core_M * in0_shard_width_in_tiles;
     uint32_t in2_CB_tiles = in2_block_tiles;
     uint32_t in2_CB_size = in2_CB_tiles * in0_single_tile_size;
@@ -310,7 +336,22 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     uint32_t in0_num_subblocks = (per_core_M / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
 
-    uint32_t num_blocks_per_shard = num_blocks / input_all_storage_cores_vec.size();
+    TT_FATAL(
+        num_blocks * shards_per_block == input_all_storage_cores_vec.size() *
+                                             std::max<uint32_t>(1, num_blocks / input_all_storage_cores_vec.size()) ||
+            shards_per_block == 1,
+        "in0 block count {} x shards_per_block {} must cover the {} storage cores",
+        num_blocks,
+        shards_per_block,
+        input_all_storage_cores_vec.size());
+    uint32_t num_blocks_per_shard = shards_per_block > 1 ? 1 : num_blocks / input_all_storage_cores_vec.size();
+    // A storage core that is not a worker stages its gathered block in its (idle) in1 CB. The
+    // width was narrowed above when that does not fit, so this only re-checks the invariant.
+    TT_FATAL(
+        shards_per_block == 1 || in1_CB_size >= in0_block_tiles * in0_single_tile_size,
+        "in1 CB ({} B) must hold one in0 block ({} B) to stage a multi-shard block",
+        in1_CB_size,
+        in0_block_tiles * in0_single_tile_size);
     if (per_core_M > 1) {
         TT_FATAL(
             num_blocks_per_shard == 1,
@@ -341,7 +382,9 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         (std::uint32_t)in0_mcast_sender_valid_semaphore_id,
         //
         (std::uint32_t)num_blocks_per_shard,
-        (std::uint32_t)in0_block_w};
+        (std::uint32_t)in0_block_w,
+        (std::uint32_t)shards_per_block,
+        (std::uint32_t)in0_shard_width_in_tiles * in0_single_tile_size};
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         (std::uint32_t)in1_buffer_page_size,
@@ -433,6 +476,7 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     in0_sender_kernel_desc.defines = map_to_defines(mm_kernel_in0_sender_define);
     in0_sender_kernel_desc.named_compile_time_args = {
         {"cb_in0", tt::CBIndex::c_0},
+        {"cb_in1", tt::CBIndex::c_1},
         {"cb_in0_sharded", tt::CBIndex::c_2},
     };
     in0_sender_kernel_desc.config =
@@ -694,8 +738,10 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
 
         mm_in0_sender_args.push_back((std::uint32_t)worker_core_type);
         mm_in0_sender_args.push_back((std::uint32_t)sender_id);
+        // The last K tile is padded by whoever sends the last block: the last storage core, or the
+        // first storage core of the last multi-shard block.
         mm_in0_sender_args.push_back(
-            (std::uint32_t)((core == input_all_storage_cores_vec.back()) and (in0_last_ktile_w > 0)));
+            (std::uint32_t)((sender_id + shards_per_block == mcast_senders_coords.size()) and (in0_last_ktile_w > 0)));
         mm_in0_sender_args.insert(
             mm_in0_sender_args.end(), in0_mcast_sender_noc_x.begin(), in0_mcast_sender_noc_x.end());
         mm_in0_sender_args.insert(
