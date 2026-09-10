@@ -62,12 +62,14 @@ def _build_profiler_cmd(
     sum_profiling,
     op_support_count,
     is_command_binary_exe,
+    mid_run_device_data=False,
 ):
     check_return_code = ""
     device_analysis_opt = ""
     python_post_process_opt = ""
     capture_perf_counters_opt = ""
     sum_profiling_opt = ""
+    mid_run_device_data_opt = "--dump-device-data-mid-run " if mid_run_device_data else ""
     op_support_count_opt = ""
     if python_post_process:
         python_post_process_opt = "-r"
@@ -90,7 +92,11 @@ def _build_profiler_cmd(
     cmd_call = "" if is_command_binary_exe else "-m"
     # Quote the embedded command so that arguments like `-k "expr with spaces"` survive through the outer shell
     quoted_command = command if is_command_binary_exe else shlex.quote(command)
-    return f"python3 -m tracy -p {python_post_process_opt} -o {output_profiler_dir} {check_return_code} {device_analysis_opt} {sum_profiling_opt} {op_support_count_opt} {capture_perf_counters_opt} -t 5000 {cmd_call} {quoted_command}"
+    return (
+        f"python3 -m tracy -p {python_post_process_opt} -o {output_profiler_dir} {check_return_code} "
+        f"{device_analysis_opt} {sum_profiling_opt} {mid_run_device_data_opt}{op_support_count_opt} "
+        f"{capture_perf_counters_opt} -t 5000 {cmd_call} {quoted_command}"
+    )
 
 
 def merge_pass_csv(pass1_csv_path, pass2_csv_path):
@@ -145,6 +151,7 @@ def run_multi_pass(
     sum_profiling,
     op_support_count,
     is_command_binary_exe,
+    mid_run_device_data=False,
 ):
     """Run profiler twice to capture both L1 banks, then merge results."""
     groups_pass1, groups_pass2 = get_multi_pass_configs(capture_perf_counters_groups)
@@ -161,6 +168,7 @@ def run_multi_pass(
         sum_profiling,
         op_support_count,
         is_command_binary_exe,
+        mid_run_device_data,
     )
     logger.info(f"L1 two-pass: running pass 1 (L1 bank 0) — {profiler_cmd}")
     subprocess.run([profiler_cmd], shell=True, check=True)
@@ -178,6 +186,7 @@ def run_multi_pass(
         sum_profiling,
         op_support_count,
         is_command_binary_exe,
+        mid_run_device_data,
     )
     logger.info(f"L1 two-pass: running pass 2 (L1 bank 1) — {profiler_cmd_pass2}")
     subprocess.run([profiler_cmd_pass2], shell=True, check=True)
@@ -200,6 +209,7 @@ def run_device_profiler(
     # 1.333x matches the reserve some model tests depend on.
     op_support_count=int(PROFILER_DEFAULT_OP_SUPPORT_COUNT * 1.333),
     is_command_binary_exe=False,
+    mid_run_device_data=False,
 ):
     if requires_multi_pass_profile(capture_perf_counters_groups):
         run_multi_pass(
@@ -212,6 +222,7 @@ def run_device_profiler(
             sum_profiling,
             op_support_count,
             is_command_binary_exe,
+            mid_run_device_data,
         )
     else:
         output_profiler_dir = get_profiler_folder(output_logs_subdir)
@@ -225,6 +236,7 @@ def run_device_profiler(
             sum_profiling,
             op_support_count,
             is_command_binary_exe,
+            mid_run_device_data,
         )
         logger.info(profiler_cmd)
         subprocess.run([profiler_cmd], shell=True, check=True)
