@@ -469,7 +469,10 @@ def test_demo_text(
     if request.config.getoption("--speculative"):
         draft_len = request.config.getoption("--spec-draft-len")
         if draft_len is None:
-            draft_len = int(os.environ.get("GEMMA4_SPEC_DRAFT_LEN", 3))
+            # auto-K: the optimum depends on available context (see
+            # spec_decode.auto_draft_len). Prompt length is known below, so
+            # defer to the resolver at call time.
+            draft_len = None
         if batch_size != 1:
             # Batched (B>1) spec-decode: drafts each user at batch=1 and runs ONE
             # batched packed verify over all users (KV-amortization win). Greedy,
@@ -573,6 +576,16 @@ def test_demo_text(
 
         n_layers = num_layers or model_args.num_hidden_layers
         sliding_mask = [model_args.layer_types[i] == "sliding_attention" for i in range(n_layers)]
+        # The page table MUST match the allocation: a layer the model exempted
+        # from bounding (Gemma4Model._spec_unbounded_layer) owns a full-length
+        # cache, so marking it sliding here hands it a 16-block table whose
+        # zero-padded tail clobbers block 0 past the window. Normally None here
+        # (the exemption is spec-decode opt-in) -- this keeps the two in sync if
+        # it is ever enabled on the plain path.
+        _exempt = getattr(generator.model[0], "_spec_unbounded_layer", None)
+        if _exempt is not None and 0 <= _exempt < n_layers:
+            sliding_mask[_exempt] = False
+            logger.info(f"Hybrid page tables: layer {_exempt} on the full pool (model exempted it from bounding)")
         per_layer_pts = build_hybrid_page_tables(
             n_layers,
             sliding_mask,
@@ -787,6 +800,63 @@ def test_demo_text(
 # ══════════════════════════════════════════════════════════════════════════
 
 
+def _spec_install_hybrid_page_tables(
+    generator, model_args, num_layers, batch_size, block_size, max_seq_len, page_table
+):
+    """Bounded sliding needs PER-LAYER page tables; mirrors the plain demo path.
+
+    Sliding layers index a small bounded pool (sliding_window/block_size blocks),
+    full-attention layers the full pool. Without these the paged ops see a table
+    sized for the full context and reject the ring
+    ("cache_position_modulo must fit in max_num_blocks_per_seq * block_size").
+
+    Returns the legacy page table to keep using (a FULL-attention per-layer
+    table, so user-row matching succeeds and full-attn addressing is unchanged).
+    """
+    from models.demos.gemma4.tt.attention.kv_cache_hybrid import build_hybrid_page_tables
+
+    # generator.model_args is a LIST (one per DP model); accept either form.
+    margs = model_args[0] if isinstance(model_args, (list, tuple)) else model_args
+    n_layers = num_layers or margs.num_hidden_layers
+    sliding_mask = [margs.layer_types[i] == "sliding_attention" for i in range(n_layers)]
+    # Keep the drafter-visible sliding layer on the FULL pool: the model exempts it
+    # from bounding (Gemma4Model._spec_unbounded_layer) so the KV-shared drafter
+    # reads unbounded positions, and its page table has to match that allocation.
+    exempt = getattr(generator.model[0], "_spec_unbounded_layer", None)
+    if exempt is not None and 0 <= exempt < n_layers:
+        sliding_mask[exempt] = False
+        logger.info(f"Hybrid page tables: layer {exempt} on the full pool (spec-decode drafter layer)")
+    per_layer_pts = build_hybrid_page_tables(
+        n_layers,
+        sliding_mask,
+        num_users=batch_size,
+        block_size=block_size,
+        max_seq_len=max_seq_len,
+        sliding_window=margs.sliding_window,
+    )
+    generator.model[0]._active_page_tables_per_layer = per_layer_pts
+    full_idxs = [i for i, is_sliding in enumerate(sliding_mask) if not is_sliding]
+    if full_idxs:
+        page_table = per_layer_pts[full_idxs[0]]
+    logger.info(f"Spec-decode bounded sliding: installed {len(per_layer_pts)} per-layer page tables")
+    return page_table
+
+
+def _spec_bounded_sliding(max_seq_len, mesh_device, model_path, paged_attention=True):
+    """Bounded-vs-unbounded sliding KV for the spec-decode path.
+
+    Defers to the same GEMMA4_LONG_CONTEXT_POLICY resolver the plain demo uses,
+    so long-context spec decode gets the memory profile the model needs (31B at
+    >=128k does not fit unbounded).
+    """
+    try:
+        lc = resolve_gemma4_demo_long_context(max_seq_len, mesh_device, model_path, paged_attention=paged_attention)
+        return bool(lc["bounded_sliding"])
+    except Exception as exc:  # policy unavailable -> previous behaviour
+        logger.warning(f"Spec-decode long-context policy unavailable ({exc}); using unbounded sliding KV")
+        return False
+
+
 def _run_spec_decode(
     prompt,
     instruct,
@@ -822,14 +892,40 @@ def _run_spec_decode(
     temperature = sampling_params.get("temperature", 0)
     top_p = sampling_params.get("top_p", 1.0)
     top_k = sampling_params.get("top_k", 0)
+    # auto-K resolved once the prompt is known (below, after tokenization);
+    # seed with the short-prompt default so anything reading it early is sane.
+    _draft_len_requested = draft_len
     if draft_len is None:
-        draft_len = int(os.environ.get("GEMMA4_SPEC_DRAFT_LEN", 3))
+        draft_len = int(os.environ.get("GEMMA4_SPEC_DRAFT_LEN", "3").replace("auto", "3"))
     batch_size = 1
 
     block_size = page_params["page_block_size"]
+    # KV mode for this ISL (policy-driven; the drafter inherits the ring modulo)
+    _spec_bounded = _spec_bounded_sliding(max_seq_len, mesh_device, model_path, paged_attention=True)
     paged_attention_config = PagedAttentionConfig(
         block_size=block_size, max_num_blocks=batch_size * math.ceil(max_seq_len / block_size)
     )
+    # Opt in to the last-sliding-layer exemption BEFORE the model is built: the
+    # KV-shared drafter cross-attends that layer, so it must hold unbounded
+    # positions. Off by default because it corrupts (and needlessly enlarges)
+    # plain bounded decode -- see Gemma4Model._spec_unbounded_layer.
+    if _spec_bounded:
+        # Ring headroom for the speculative writes at p+1..p+K: without it each
+        # draft evicts a still-in-window token (measured: K=5 corrupts from the
+        # first token at 32k, K=1 stays correct).
+        # 16 blocks (=1024) rather than the 1 block K needs: the ring must stay a
+        # POWER OF TWO. Chunk starts must be multiples of the ring (paged_fill_cache
+        # has no start offset) AND of SDPA's q_chunk_size; a 1088 ring (2^6*17)
+        # makes those mutually satisfiable only every 8704 tokens, and SDPA
+        # TT_FATALs on chunk_start_idx % q_chunk_size. 2048 satisfies both.
+        os.environ.setdefault("GEMMA4_SPEC_RING_HEADROOM_BLOCKS", "16")
+        # NOTE: the last-sliding-layer exemption (GEMMA4_SPEC_UNBOUNDED_DRAFTER_LAYER)
+        # is intentionally NOT enabled any more. The drafter inherits the ring
+        # modulo and reads the ring directly (measured equivalent: 1.86/5 vs
+        # 1.94/5 at 32k), and the PACKED verify requires uniform per-type pools:
+        # one sliding layer on the full pool would receive the ring-shaped mask
+        # and ring hot pages against an absolute cache. Uniform rings also save
+        # the exemption's 0.54 GB/device at 256k.
 
     generator, tt_kv_cache, tokenizer = Gemma4Generator.from_pretrained(
         mesh_device=mesh_device,
@@ -838,12 +934,24 @@ def _run_spec_decode(
         max_seq_len=max_seq_len,
         num_layers=num_layers,
         paged_attention_config=paged_attention_config,
-        bounded_sliding_kv_cache=False,  # spec-decode needs unbounded sliding KV
+        # Spec decode used to force UNBOUNDED sliding KV because the drafter
+        # cross-attends the target's caches with absolute positions. The drafter
+        # now inherits the target's ring modulo (assistant/model.py), so the
+        # normal long-context policy applies and >=128k (which requires bounded
+        # on 31B) is reachable. GEMMA4_BOUNDED_SLIDING still overrides.
+        bounded_sliding_kv_cache=_spec_bounded,
     )
     target = generator.model[0]
     model_args = generator.model_args
 
     page_table = create_tt_page_table(batch_size, paged_attention_config)
+    if _spec_bounded:
+        page_table = _spec_install_hybrid_page_tables(
+            generator, model_args, num_layers, batch_size, block_size, max_seq_len, page_table
+        )
+        # (The prefill-chunk floor for the bounded last-chunk expansion lives in
+        # resolve_gemma4_prefill_chunk_size: it must apply while model_args is
+        # built, not after -- setting the env here was too late to be read.)
 
     # Prefill tracing has ~no perf gain and OOMs the trace region at long context
     # (≥4K); gate it off above a threshold (decode/spec traces stay on), unless
@@ -877,6 +985,11 @@ def _run_spec_decode(
         prefill_logits.deallocate(True)
 
     prompt_len = int(decoding_pos[0])
+    if _draft_len_requested is None:
+        from models.demos.gemma4.tt.spec_decode import auto_draft_len
+
+        draft_len = auto_draft_len(prompt_len)
+        logger.info(f"Spec-decode auto-K: prompt_len={prompt_len} -> draft_len={draft_len}")
     anchor_pos = prompt_len - 1
     anchor_token = int(encoded_prompts[0][anchor_pos])
 
@@ -906,6 +1019,7 @@ def _run_spec_decode(
         mesh_config=target.mesh_config,
         ccl_manager=target.ccl_manager,
         assistant_path=assistant_path,
+        max_seq_len=max_seq_len,
     )
 
     spec = SpeculativeDecoder(
@@ -923,7 +1037,12 @@ def _run_spec_decode(
     # whole iteration is ONE metal trace replayed per step (K draft steps +
     # verify fused — avoids the distinct-CCL-trace interleave deadlock). Sampling
     # (temp>0) falls back to the host-readback generate for batch=1.
-    use_fused = batch_size == 1 and ((not temperature) or temperature <= 0)
+    # GEMMA4_SPEC_FUSED=0 forces the host generate() loop (draft + packed
+    # verify as separate calls) -- the validation vehicle for the packed
+    # verify's bounded-ring support before it is wired into the fused trace.
+    use_fused = (
+        batch_size == 1 and ((not temperature) or temperature <= 0) and os.environ.get("GEMMA4_SPEC_FUSED", "1") != "0"
+    )
     # The fused greedy path is HOST-DISPATCH bound when untraced (~10 tok/s/u —
     # SLOWER than plain decode); the single fused Metal trace removes that
     # overhead (>3x, exceeding plain decode). Default tracing to the demo's
@@ -1027,6 +1146,14 @@ def _run_spec_decode_batched(
     blocks_per_user = math.ceil(max_seq_len / block_size)
     paged_attention_config = PagedAttentionConfig(block_size=block_size, max_num_blocks=B * blocks_per_user)
 
+    _spec_bounded = _spec_bounded_sliding(max_seq_len, mesh_device, model_path, paged_attention=True)
+    if _spec_bounded:
+        # Same opt-in the single-user spec path takes (see _run_spec_decode):
+        # the verify's speculative writes at p+1..p+K need ring headroom or they
+        # evict still-in-window tokens. Must be set BEFORE the model is built.
+        # (The drafter-layer exemption is deliberately NOT set: packed verify
+        # needs uniform per-type pools -- see the note in _run_spec_decode.)
+        os.environ.setdefault("GEMMA4_SPEC_RING_HEADROOM_BLOCKS", "16")
     generator, tt_kv_cache, tokenizer = Gemma4Generator.from_pretrained(
         mesh_device=mesh_device,
         model_path=model_path,
@@ -1034,12 +1161,26 @@ def _run_spec_decode_batched(
         max_seq_len=max_seq_len,
         num_layers=num_layers,
         paged_attention_config=paged_attention_config,
-        bounded_sliding_kv_cache=False,  # spec-decode needs unbounded sliding KV
+        # Spec decode used to force UNBOUNDED sliding KV because the drafter
+        # cross-attends the target's caches with absolute positions. The drafter
+        # now inherits the target's ring modulo (assistant/model.py), so the
+        # normal long-context policy applies and >=128k (which requires bounded
+        # on 31B) is reachable. GEMMA4_BOUNDED_SLIDING still overrides.
+        bounded_sliding_kv_cache=_spec_bounded,
     )
     target = generator.model[0]
     model_args = generator.model_args
 
     page_table = create_tt_page_table(B, paged_attention_config)  # [B, blocks_per_user]
+    if _spec_bounded:
+        # Bounded sliding needs PER-LAYER page tables (sliding layers index the
+        # small ring pool, full layers the full pool). Without them the flat
+        # table does not span the ring and prefill dies in paged_fill_cache with
+        # a TT_FATAL. build_hybrid_page_tables(num_users=B) gives every user its
+        # OWN ring, which is what B>1 requires.
+        page_table = _spec_install_hybrid_page_tables(
+            generator, model_args, num_layers, B, block_size, max_seq_len, page_table
+        )
 
     # Prefill tracing has ~no perf gain and OOMs the trace region at long context
     # (≥4K); gate it off above a threshold (the batched decode trace stays on),
@@ -1087,12 +1228,29 @@ def _run_spec_decode_batched(
         )
         max_generated_tokens = max(1, _safe_gen)
 
+    # Batch-aware K: the verify's B*(K+1) rows hit a hard 32-row cliff and past
+    # the compute knee no K wins (see auto_draft_len_batched for the measured
+    # table). K == 0 => speculation cannot beat plain batched decode here.
+    from models.demos.gemma4.tt.spec_decode import auto_draft_len_batched
+
+    _auto_k = auto_draft_len_batched(max(prompt_lens) if prompt_lens else None, B)
+    if os.environ.get("GEMMA4_SPEC_DRAFT_LEN") is None and draft_len != _auto_k:
+        logger.info(f"Spec-decode batch-aware K: B={B} -> draft_len {draft_len} -> {_auto_k}")
+        draft_len = _auto_k
+    if draft_len < 1:
+        pytest.skip(
+            f"Speculative decode is a measured REGRESSION at B={B} (compute-bound; "
+            "aggregate 0.58-0.75x of plain batched decode at B=32 for every K). "
+            "Run plain batched decode instead, or force GEMMA4_SPEC_DRAFT_LEN."
+        )
+
     _, assistant = create_assistant_model(
         mesh_device=mesh_device,
         target_model=target,
         mesh_config=target.mesh_config,
         ccl_manager=target.ccl_manager,
         assistant_path=assistant_path,
+        max_seq_len=max_seq_len,
         max_local_batch_size=B,
     )
 

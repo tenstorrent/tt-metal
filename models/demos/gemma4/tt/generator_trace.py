@@ -647,8 +647,46 @@ def resolve_gemma4_prefill_chunk_size(
                 continue
             chunk = int(tier["chunk"])
             break
-        return min(chunk, max_seq_len)
-    return non_qb2_default if non_qb2_default is not None else max_seq_len
+        return min(_floor_chunk_for_spec_ring(chunk, policy), max_seq_len)
+    base = non_qb2_default if non_qb2_default is not None else max_seq_len
+    return min(_floor_chunk_for_spec_ring(base, policy), max_seq_len)
+
+
+def _floor_chunk_for_spec_ring(chunk: int, policy) -> int:
+    """Raise the prefill chunk to fit a bounded last-chunk expansion.
+
+    When the last chunk's remnant is shorter than the sliding window, the
+    generator expands it to cover a full window and aligns the start DOWN to the
+    ring (``paged_fill_cache`` writes row r to slot r % ring, so the origin must
+    be ring-aligned). Worst case that needs ``ring + window`` rows, which cannot
+    fit a smaller chunk: at 128k (chunk 2048, ring 2048) it raised
+    "Expanded bounded last chunk has 2489 rows, exceeding chunk_size=2048".
+
+    Only applies with speculative ring headroom on (ring > window); the
+    exact-window ring always fit. Verified no OOM at 256k with chunk 4096
+    (16.37 vs 16.35 tok/s/u at 2048).
+    """
+    from models.demos.gemma4.tt.attention import bounded_ring_modulo
+
+    window = None
+    try:
+        window = int(policy.get("sliding_window") or 0) or None
+    except (AttributeError, TypeError, ValueError):
+        window = None
+    if window is None:
+        window = int(os.environ.get("GEMMA4_SLIDING_WINDOW", "1024") or 1024)
+    ring = bounded_ring_modulo(window)
+    if not ring or ring <= window:
+        return chunk  # no headroom -> historical behaviour
+    need = ring + window
+    if chunk >= need:
+        return chunk
+    floored = 1 << (need - 1).bit_length()
+    logger.info(
+        f"Gemma4 prefill chunk floored {chunk} -> {floored} for the bounded "
+        f"last-chunk expansion (ring {ring} + window {window} = {need} rows)"
+    )
+    return floored
 
 
 def model_uses_pli(model) -> bool:
