@@ -568,6 +568,19 @@ void write_runtime_arg(RuntimeArgsData& args, uint32_t index, uint32_t value, co
     args[index] = value;
 }
 
+template <std::size_t N>
+void write_runtime_arg_block(
+    RuntimeArgsData& args, uint32_t index, const std::array<uint32_t, N>& values, const char* name) {
+    TT_FATAL(
+        index <= args.size() && N <= args.size() - index,
+        "Missing RingJoint runtime arg block {} at index {}; count={}; args.size()={}",
+        name,
+        index,
+        N,
+        args.size());
+    std::copy(values.begin(), values.end(), args.data() + index);
+}
+
 // Tile-rows of the latent KV the fused all-gather must move for this chunk: the first
 // ceil(logical_n / chunk_global) block-cyclic slabs (a contiguous per-device page prefix), so an
 // oversized (growing) KV cache only moves kv_actual-sized data. Returns nullopt when KV-pad rotation
@@ -796,6 +809,44 @@ void apply_ring_joint_scalar_runtime_args(
         }
     }
 
+    // Resolve each kernel's argument grid once per dispatch. Keep these references local:
+    // descriptor application may change the backing storage before the next cache hit.
+    auto& compute_grid_args = GetRuntimeArgs(program, kComputeKernelIndex);
+    auto& reader_grid_args = GetRuntimeArgs(program, kReaderKernelIndex);
+    auto* writer_grid_args = patch_kv_pad_rotation ? &GetRuntimeArgs(program, kWriterKernelIndex) : nullptr;
+    const auto validate_grid = [&](const auto& grid_args) {
+        TT_FATAL(grid_args.size() >= layout.grid_size.x, "RingJoint runtime argument grid is missing columns");
+        for (uint32_t x = 0; x < layout.grid_size.x; ++x) {
+            TT_FATAL(grid_args[x].size() >= layout.grid_size.y, "RingJoint runtime argument grid is missing rows");
+        }
+    };
+    validate_grid(compute_grid_args);
+    validate_grid(reader_grid_args);
+    if (writer_grid_args != nullptr) {
+        validate_grid(*writer_grid_args);
+    }
+    // These fields occupy adjacent slots in the descriptor. Validate the layout once,
+    // then check and write each complete block on every core, including inactive receivers.
+    TT_FATAL(
+        layout.reader_active_ring_iter_mask == layout.reader_logical_nt + 1 &&
+            layout.writer_active_ring_iter_mask == layout.writer_logical_nt + 1 &&
+            layout.writer_single_valid_kv_chunk_mask == layout.writer_logical_nt + 2 &&
+            layout.compute_q_pre_wrap_start_tile == layout.compute_logical_nt + 1 &&
+            layout.compute_q_pre_wrap_tile_count == layout.compute_logical_nt + 2 &&
+            layout.compute_q_post_wrap_start_tile == layout.compute_logical_nt + 3 &&
+            layout.compute_q_valid_tile_count == layout.compute_logical_nt + 4 &&
+            layout.compute_active_ring_iter_mask == layout.compute_logical_nt + 5,
+        "RingJoint scalar runtime argument blocks must be contiguous");
+    const std::array reader_values = {runtime_plan.logical_nt, ring_work_masks.active_ring_iter_mask};
+    const std::array writer_values = {
+        runtime_plan.logical_nt, ring_work_masks.active_ring_iter_mask, ring_work_masks.single_valid_kv_chunk_mask};
+    const std::array compute_values = {
+        runtime_plan.logical_nt,
+        runtime_plan.kv_pad_q_mapping.q_pre_wrap_start_tile,
+        runtime_plan.kv_pad_q_mapping.q_pre_wrap_tile_count,
+        runtime_plan.kv_pad_q_mapping.q_post_wrap_start_tile,
+        runtime_plan.kv_pad_q_mapping.q_valid_tile_count,
+        ring_work_masks.active_ring_iter_mask};
     for (uint32_t i = 0; i < num_cores; ++i) {
         const CoreCoord core = {i % layout.grid_size.x, i / layout.grid_size.x};
 
@@ -810,9 +861,9 @@ void apply_ring_joint_scalar_runtime_args(
         // logical_n. When logical_n grows across dispatches that reuse one cached program (chunked-prefill
         // accumulation), the create-miss mask is stale for later hits, deadlocking the mcast handshake
         // (RingJointSDPA hang, all-gather eth reads left undrained).
-        auto& compute_args = GetRuntimeArgs(program, kComputeKernelIndex, core);
+        auto& compute_args = compute_grid_args[core.x][core.y];
 
-        auto& reader_args = GetRuntimeArgs(program, kReaderKernelIndex, core);
+        auto& reader_args = reader_grid_args[core.x][core.y];
         if (patch_indexed_kv_cache) {
             write_runtime_arg(
                 reader_args, layout.reader_kv_cache_batch_idx, kv_cache_batch_idx, "reader.kv_cache_batch_idx");
@@ -821,52 +872,11 @@ void apply_ring_joint_scalar_runtime_args(
             continue;
         }
 
-        write_runtime_arg(reader_args, layout.reader_logical_nt, runtime_plan.logical_nt, "reader.logical_nt");
-        write_runtime_arg(
-            reader_args,
-            layout.reader_active_ring_iter_mask,
-            ring_work_masks.active_ring_iter_mask,
-            "reader.active_ring_iter_mask");
+        write_runtime_arg_block(reader_args, layout.reader_logical_nt, reader_values, "reader.scalars");
 
-        auto& writer_args = GetRuntimeArgs(program, kWriterKernelIndex, core);
-        write_runtime_arg(writer_args, layout.writer_logical_nt, runtime_plan.logical_nt, "writer.logical_nt");
-        write_runtime_arg(
-            writer_args,
-            layout.writer_active_ring_iter_mask,
-            ring_work_masks.active_ring_iter_mask,
-            "writer.active_ring_iter_mask");
-        write_runtime_arg(
-            writer_args,
-            layout.writer_single_valid_kv_chunk_mask,
-            ring_work_masks.single_valid_kv_chunk_mask,
-            "writer.single_valid_kv_chunk_mask");
-
-        write_runtime_arg(compute_args, layout.compute_logical_nt, runtime_plan.logical_nt, "compute.logical_nt");
-        write_runtime_arg(
-            compute_args,
-            layout.compute_q_pre_wrap_start_tile,
-            runtime_plan.kv_pad_q_mapping.q_pre_wrap_start_tile,
-            "compute.q_pre_wrap_start_tile");
-        write_runtime_arg(
-            compute_args,
-            layout.compute_q_pre_wrap_tile_count,
-            runtime_plan.kv_pad_q_mapping.q_pre_wrap_tile_count,
-            "compute.q_pre_wrap_tile_count");
-        write_runtime_arg(
-            compute_args,
-            layout.compute_q_post_wrap_start_tile,
-            runtime_plan.kv_pad_q_mapping.q_post_wrap_start_tile,
-            "compute.q_post_wrap_start_tile");
-        write_runtime_arg(
-            compute_args,
-            layout.compute_q_valid_tile_count,
-            runtime_plan.kv_pad_q_mapping.q_valid_tile_count,
-            "compute.q_valid_tile_count");
-        write_runtime_arg(
-            compute_args,
-            layout.compute_active_ring_iter_mask,
-            ring_work_masks.active_ring_iter_mask,
-            "compute.active_ring_iter_mask");
+        auto& writer_args = (*writer_grid_args)[core.x][core.y];
+        write_runtime_arg_block(writer_args, layout.writer_logical_nt, writer_values, "writer.scalars");
+        write_runtime_arg_block(compute_args, layout.compute_logical_nt, compute_values, "compute.scalars");
     }
 }
 
