@@ -41,6 +41,14 @@ struct CaptureContext {
         std::vector<uint32_t> core_xy;  // core index -> packed NoC (y << 16) | x, the identity a frame carries
     };
     std::vector<Device> devices;
+    // A boot-time eth link sync: the sender on device index dev_a at logical eth core eth_a, the receiver on dev_b
+    // at eth_b. The d2d-sync consumer pairs the two ends' PP_CLOCK(LINK) samples by round.
+    struct Link {
+        uint32_t dev_a = 0, dev_b = 0;
+        uint32_t chip_a = 0, chip_b = 0;
+        CoreCoord eth_a, eth_b;
+    };
+    std::vector<Link> links;
 };
 
 // The host<->device clock relation of one chip as the device layer measured it.

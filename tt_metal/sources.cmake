@@ -181,6 +181,7 @@ set(TT_METAL_SOURCES
     impl/streaming_profiler/streaming_profiler_ops_csv.cpp
     impl/streaming_profiler/streaming_profiler_receiver.cpp
     impl/streaming_profiler/streaming_profiler_service.cpp
+    impl/streaming_profiler/streaming_profiler_d2d_sync.cpp
     impl/streaming_profiler/streaming_profiler_tracy.cpp
     impl/streaming_profiler/streaming_profiler_zone_csv.cpp
     hal.cpp

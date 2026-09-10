@@ -189,6 +189,16 @@ using BatchCallback = std::function<void(
     const experimental::streaming_profiler::Batch<experimental::streaming_profiler::RecordType::All>&,
     uint64_t capture)>;
 
+struct ClockSample;
+// Optional hooks a consumer carries besides its batch callback, both run on the consumer's own thread.
+// clock_sink: every PP_CLOCK sample this consumer's decoders route (idle-eth trackers, link stamps); the other
+// consumers' decoders drop them. on_capture_end: once a producer's last frame is decoded, before its streams
+// are finished -- where a fit over the whole capture belongs.
+struct ConsumerHooks {
+    std::function<void(const ClockSample&)> clock_sink;
+    std::function<void(const CaptureContext&)> on_capture_end;
+};
+
 class Service {
 public:
     Service();
@@ -198,6 +208,7 @@ public:
     // The callback runs on the consumer's own thread, one call at a time, for every attached producer. Not from
     // inside a consumer callback.
     ConsumerHandle add_consumer(std::string name, BatchCallback cb);
+    ConsumerHandle add_consumer(std::string name, BatchCallback cb, ConsumerHooks hooks);
     // Returns once the callback can no longer run.
     void remove_consumer(ConsumerHandle handle);
 

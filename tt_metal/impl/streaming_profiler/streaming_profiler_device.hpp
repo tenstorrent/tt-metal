@@ -65,6 +65,8 @@ public:
     // After the relays swept to empty and the capture detached: the producer-owned stall counters, and every
     // worker lane's own tail against the consumed-words mirror `heads` (empty when nothing decoded the device).
     void verify_completeness(uint32_t device_index);
+    // The eth link syncs launch_link_sync() ran at boot, for the consumers' CaptureContext.
+    const std::vector<CaptureContext::Link>& links() const { return links_; }
 
 private:
     static constexpr uint32_t kMaxRelays = 8;
@@ -169,6 +171,7 @@ private:
     uint32_t spool_bytes_ = 0;
     uint32_t spool_addr_ = 0;
     std::vector<DeviceCtx> devices_;
+    std::vector<CaptureContext::Link> links_;
 };
 
 }  // namespace streaming_profiler

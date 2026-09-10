@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "impl/streaming_profiler/streaming_profiler_service.hpp"
+#include "impl/streaming_profiler/streaming_profiler_d2d_sync.hpp"
 
 #include <algorithm>
 #include <array>
@@ -52,6 +53,7 @@ constexpr uint32_t kBatchFrames = 64;
 struct Service::Consumer {
     std::string name;
     BatchCallback cb;
+    ConsumerHooks hooks;
     uint64_t captures = 0;  // producers attached so far; the capture number its callback sees
     ConsumerHandle handle = 0;
     std::thread thread;
@@ -84,11 +86,16 @@ void Service::wait_acks(std::unique_lock<std::mutex>& lk) {
 }
 
 ConsumerHandle Service::add_consumer(std::string name, BatchCallback cb) {
+    return add_consumer(std::move(name), std::move(cb), ConsumerHooks{});
+}
+
+ConsumerHandle Service::add_consumer(std::string name, BatchCallback cb, ConsumerHooks hooks) {
     TT_FATAL(!t_in_consumer, "streaming profiler: add_consumer must not be called from a consumer callback");
     std::lock_guard<std::mutex> topo(topology_mu_);
     auto c = std::make_unique<Consumer>();
     c->name = std::move(name);
     c->cb = std::move(cb);
+    c->hooks = std::move(hooks);
     Consumer& ref = *c;
     std::unique_lock<std::mutex> lk(mu_);
     ref.handle = next_handle_++;
@@ -175,6 +182,17 @@ void Service::register_builtin_consumers(const tt::llrt::RunTimeOptions& rtoptio
         if (rtoptions.get_streaming_profiler_tracy_enabled()) {
             tracy_ = std::make_unique<TracySink>(*this);
         }
+        {
+            // Device<->device sync: consumes only the PP_CLOCK samples (idle-eth trackers and link stamps), fits
+            // at capture end. Its batch callback is a no-op; the decode pass is what routes the samples to it.
+            auto c = std::make_shared<D2dSyncConsumer>();
+            add_consumer(
+                "d2d-sync",
+                [](const api::Batch<api::RecordType::All>&, uint64_t) {},
+                ConsumerHooks{
+                    .clock_sink = [c](const ClockSample& cs) { c->on_clock(cs); },
+                    .on_capture_end = [c](const CaptureContext& ctx) { c->on_capture_end(ctx); }});
+        }
         auto add_public = [&]<typename C>(const char* name, std::shared_ptr<C> c) {
             using B = typename C::Batch;
             add_consumer(name, [c](const api::Batch<api::RecordType::All>& full, uint64_t) {
@@ -227,6 +245,12 @@ void Service::consumer_thread(Consumer& c) {
             s->dec.st = &s->state;
             s->dec.lanes = s->lanes.data();
             s->dec.dev = ps.dev;  // stamped on ClockSamples the decoder routes to the clock sink
+            if (c.hooks.clock_sink) {
+                s->dec.clock_ctx = &c;
+                s->dec.clock_fn = [](void* ctx, const ClockSample& cs) {
+                    static_cast<Consumer*>(ctx)->hooks.clock_sink(cs);
+                };
+            }
             a.streams.push_back(std::move(s));
         }
         a.capture = ++c.captures;
@@ -306,6 +330,9 @@ void Service::consumer_thread(Consumer& c) {
         }
         Attached& a = *it;
         while (pass(a)) {
+        }
+        if (c.hooks.on_capture_end) {
+            c.hooks.on_capture_end(p->capture_context());
         }
         for (size_t i = 0; i < a.streams.size(); i++) {
             c.dropped.fetch_add(a.streams[i]->dropped, std::memory_order_relaxed);

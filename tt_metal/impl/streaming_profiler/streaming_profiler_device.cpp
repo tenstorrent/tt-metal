@@ -945,6 +945,13 @@ void Devices::launch_link_sync(const std::shared_ptr<distributed::MeshDevice>& m
             detail::WaitProgramDone(devices_[a].device, ps, /*read_device_profiler_results=*/false);
             detail::WaitProgramDone(devices_[b].device, pr, /*read_device_profiler_results=*/false);
             pairs++;
+            links_.push_back(CaptureContext::Link{
+                .dev_a = static_cast<uint32_t>(a),
+                .dev_b = static_cast<uint32_t>(b),
+                .chip_a = chip_a,
+                .chip_b = chip_b,
+                .eth_a = eth_sender,
+                .eth_b = eth_receiver});
             log_info(
                 tt::LogMetal,
                 "[streaming profiler] link sync {} eth({},{}) <-> {} eth({},{}): {} rounds",
