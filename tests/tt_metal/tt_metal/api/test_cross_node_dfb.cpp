@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "impl/buffers/buffer_impl.hpp"
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <array>
@@ -1198,7 +1199,7 @@ TEST_F(CrossNodeDFBFixture, CreateCrossNodeDFB_BorrowedMismatch_PageSize) {
     const CoreRangeSet receiver_cores(CoreRange({1, 0}, {1, 0}));
     CoreRangeSet all_cores = CoreRangeSet(CoreRange({0, 0}, {0, 0})).merge(receiver_cores);
 
-    auto bad = Buffer::create(
+    auto bad = BufferImpl::create(
         &device,
         128 * 2,
         128,  // should be entry_size * num_entries = 256 * 4
@@ -1216,7 +1217,7 @@ TEST_F(CrossNodeDFBFixture, CreateCrossNodeDFB_BorrowedMismatch_Cores) {
     const CoreCoord sender_core(0, 0);
     const CoreRangeSet receiver_cores(CoreRange({1, 0}, {1, 0}));
     CoreRangeSet wrong_cores = CoreRangeSet(CoreRange({2, 0}, {2, 0})).merge(CoreRangeSet(CoreRange({3, 0}, {3, 0})));
-    auto bad = Buffer::create(
+    auto bad = BufferImpl::create(
         &device,
         256 * 4 * 2,
         256 * 4,
@@ -1233,7 +1234,7 @@ TEST_F(CrossNodeDFBFixture, CreateCrossNodeDFB_BorrowedMismatch_BufferType) {
     const CoreCoord sender_core(0, 0);
     const CoreRangeSet receiver_cores(CoreRange({1, 0}, {1, 0}));
 
-    auto bad = Buffer::create(&device, 256 * 4, 256 * 4, BufferType::DRAM);
+    auto bad = BufferImpl::create(&device, 256 * 4, 256 * 4, BufferType::DRAM);
     EXPECT_THROW(experimental::CrossNodeDFB(&device, sender_core, receiver_cores, 256, 4, *bad), std::exception);
 }
 
@@ -1246,7 +1247,7 @@ TEST_F(CrossNodeDFBFixture, CreateCrossNodeDFB_BorrowedMismatch_Size) {
 
     // page_size and grid match, but size is larger than page_size * num_all_cores.
     const uint32_t ring_size = 256 * 4;
-    auto bad = Buffer::create(
+    auto bad = BufferImpl::create(
         &device,
         ring_size * 4,
         ring_size,
