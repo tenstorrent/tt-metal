@@ -1499,6 +1499,41 @@
   budget_type: demo
   sp_config: sc1
 
+# Four pipeline ranks share one galaxy (SP=8, TP=1 per rank). Probe its physical columns before
+# launching: the TT_VISIBLE_DEVICES mapping differs between galaxies. This checks the entire
+# 56,320-token golden KV window over 36 layers with traced execution; it is a correctness gate.
+- name: "Mistral-Small-4-119B PP4 prefill KV accuracy 55k@5k, SC1"
+  fabric_profile: torus_xy
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    # Gate the orchestration before exercising it on hardware. These 16 host-only tests stub
+    # mpirun/ttrun and cover what a green hardware run cannot distinguish: malformed PCC verdicts,
+    # a missing throughput figure, runner-failure propagation, and that kimi27/glm52 still launch
+    # through the same script. ~30 s against this leg's headroom, and they run FIRST so a broken
+    # gate fails in seconds rather than after a 12 min weight load. They sit here rather than on a
+    # CPU leg because the models team has no CPU budget bucket; that is the cleaner home once one
+    # exists.
+    python3 -m pytest models/demos/common/prefill/runners/ci/test_run_multirank_pcc.py -q --no-header
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh mistral4
+  test_type: mistral4_pp4_kv_pcc
+  test_tags: [mistral4, runner, kv_cache]
+  test_group: module
+  skus:
+    bh_sc1:
+      # 12 min on CI run 34660979358, the first completed hardware run; 30 is 2.5x. Deliberately
+      # looser than the 1.5-1.7x the siblings use: this leg also pays per-galaxy column probing and
+      # a 36-layer weight load, and tt_transformer_creation alone swings 1-17 min on page-cache
+      # warmth. The 60 it replaces was a placeholder sized before any run existed.
+      timeout: 30
+  owner_id: U08GEEEEC75 # ssalice
+  team: models
+  budget_type: demo
+  sp_config: sc1
 
 # ===== Llama-3.1-8B ===================================================================================
 
