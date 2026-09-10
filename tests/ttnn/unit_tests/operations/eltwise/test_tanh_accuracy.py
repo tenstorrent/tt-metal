@@ -71,14 +71,28 @@ def test_tanh_range(device, torch_dtype, ttnn_dtype, atol):
 
     assert_allclose(output_tensor, torch_output_tensor, rtol=1e-05, atol=atol)
     pcc, pcc_msg = assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
-    # pcc_msg 0.9999663646890817, fast_and_approximate_mode=True pcc 0.9978378297942829
-    # pcc_msg 0.9999583453515977 - fpu arithmetic, pcc_msg 0.9999669593009368 sfpu arithmetic
-    # fp32 pcc_msg 0.9999829606828651 (fast_and_approximate_mode=False) , 0.9977552960423647 (fast_and_approximate_mode=True)
-    # STALE: both fast_and_approximate_mode=True figures above predate the SFPLUT retune
-    # (max abs error 0.1447 -> 0.0563, see APPROX_TANH_RETUNE.md) and should have improved.
-    # Not yet re-measured -- this test itself runs the accurate path, so it does not
-    # produce them; they need a device run of the approximate mode to refresh.
-    # The accurate-mode figures and the timing below are unaffected by the retune.
+    # PCC and max abs error against torch.tanh over this test's 32-value input,
+    # measured on a Wormhole n150 (2026-09-10) after the approximate-tanh SFPLUT
+    # retune -- see APPROX_TANH_RETUNE.md:
+    #
+    #   bfloat16  approx=False  pcc 0.9999898975945355   max|err| 0.003906
+    #   bfloat16  approx=True   pcc 0.9992522964571828   max|err| 0.056641
+    #   float32   approx=False  pcc 0.9999999999999984   max|err| 0.000000
+    #   float32   approx=True   pcc 0.9992540536236625   max|err| 0.055867
+    #
+    # The retune lifted approximate mode from pcc 0.9978378297942829 (bfloat16) and
+    # 0.9977552960423647 (float32). Its max|err| here is set by x = -0.5, the sampled
+    # point nearest the fit's error peak (|x| = 0.4636, where the error is 0.056339):
+    # |tanh(0.5) - 0.8125*0.5| = 0.0558672, which the float32 row reproduces exactly.
+    #
+    # The accurate-path numbers also differ from the previously recorded
+    # 0.9999663646890817 (bfloat16) / 0.9999829606828651 (float32). That is NOT from
+    # the retune, which only touches the APPROXIMATION_MODE branch -- those predate
+    # later work on the accurate path, from the era of the fpu-vs-sfpu arithmetic
+    # split recorded as pcc 0.9999583453515977 (fpu) vs 0.9999669593009368 (sfpu).
+    #
+    # Not re-measured: the timing below. The retune moves two SFPLOADI immediates and
+    # changes no instructions, so it cannot affect it.
     # Single-tile tanh: accurate = 7886ns, approx = 1789ns (~77% faster)
     assert pcc
 
