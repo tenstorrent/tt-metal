@@ -38,8 +38,8 @@ void kernel_main() {
 
     for (std::uint32_t i = 0; i < entries_per_neo; ++i) {
         dfb.reserve_back(1);
-        // TEN-4746: the pack thread wrote L1 directly (no PACR) since reserve_back; a no-write dummy pack
-        // issues a real PACR to order push_back after reserve_back without clobbering the increments above.
+        // TEN-4746: issue a no-write PACR after reserve_back to order the later push_back.
+        // The PACK thread waits for it below before directly incrementing the reserved L1 entry.
         ckernel::dummy_pack(dfb::out);
 #ifdef UCK_CHLKC_PACK
         {
