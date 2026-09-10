@@ -618,6 +618,21 @@ inline auto invoke_binary_ng_impl(
     const auto is_32bit_int = [](DataType dt) { return dt == DataType::INT32 || dt == DataType::UINT32; };
     const bool is_float_arith = (binary_op_type == operations::binary::BinaryOpType::DIV) ||
                                 (binary_op_type == operations::binary::BinaryOpType::MUL);
+    // pack_scalar_runtime_arg encodes the scalar with a static_cast to int32_t/uint32_t, which is
+    // faithful only for a finite integer inside the destination's range. Fractional values are
+    // truncated, and out-of-range or non-finite ones are undefined: measured before this check,
+    // inf reached an int32 kernel as INT32_MIN and 2^32 reached a uint32 one as 0, both silently.
+    // The bounds are written as powers of two because those are exactly representable as floats,
+    // so the comparison cannot round the limit it is testing -- INT32_MAX is not a float32, 2^31 is.
+    const auto integer_path_is_exact = [](float value, DataType dt) {
+        if (!std::isfinite(value) || std::trunc(value) != value) {
+            return false;
+        }
+        if (dt == DataType::INT32) {
+            return value >= -2147483648.0f && value < 2147483648.0f;
+        }
+        return value >= 0.0f && value < 4294967296.0f;
+    };
 
     // A float scalar cannot survive pack_scalar_runtime_arg against a 32-bit integer tensor: it is
     // cast to int32/uint32 there, so 2.5 arrives as 2 and 0.5 as 0, silently. The tensor-tensor path
@@ -626,8 +641,8 @@ inline auto invoke_binary_ng_impl(
     //
     // Only a scalar that the integer path would actually corrupt is worth promoting. float32 carries
     // a 24-bit mantissa, so typecasting the tensor caps exact integers at 2^24 -- 16777217 * 2.0
-    // comes back as 33554432 rather than 33554434. An integral scalar reaches the kernel intact
-    // either way, so it stays on the integer path and keeps that exactness.
+    // comes back as 33554432 rather than 33554434. An in-range integral scalar reaches the kernel
+    // intact either way, so it stays on the integer path and keeps that exactness.
     const bool scalar_needs_promotion = [&] {
         if constexpr (requires { rhs.dtype(); }) {
             return false;
@@ -635,8 +650,7 @@ inline auto invoke_binary_ng_impl(
             if (!is_float_arith || !is_32bit_int(a_dtype) || !std::holds_alternative<float>(rhs)) {
                 return false;
             }
-            const float scalar_value = std::get<float>(rhs);
-            return std::trunc(scalar_value) != scalar_value;
+            return !integer_path_is_exact(std::get<float>(rhs), a_dtype);
         }
     }();
 
@@ -674,13 +688,14 @@ inline auto invoke_binary_ng_impl(
             // scalar they cannot represent has to be rejected too instead of being truncated.
             const float scalar_value = std::get<float>(rhs);
             TT_FATAL(
-                std::trunc(scalar_value) == scalar_value,
-                "Binary operation {} with a {} tensor cannot represent the scalar {}: it would be truncated to {}. "
-                "Typecast the input to a floating-point dtype first.",
+                integer_path_is_exact(scalar_value, a_dtype),
+                "Binary operation {} with a {} tensor cannot represent the scalar {}: only a finite integer within "
+                "the range of {} survives being packed as one, and this value would be changed silently. Typecast "
+                "the input to a floating-point dtype first.",
                 binary_op_type,
                 a_dtype,
                 scalar_value,
-                std::trunc(scalar_value));
+                a_dtype);
         }
     }
     if constexpr (requires { rhs.dtype(); }) {

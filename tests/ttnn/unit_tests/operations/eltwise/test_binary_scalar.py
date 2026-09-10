@@ -352,3 +352,87 @@ def test_int_tensor_integer_scalar_unchanged(device, ttnn_op, tensor_dtype):
 
     assert output.dtype == tensor_dtype
     assert torch.equal(ttnn.to_torch(output).float(), torch_golden.float())
+
+
+@pytest.mark.parametrize("rounding_mode", ["floor", "trunc"])
+@pytest.mark.parametrize("scalar", [2.5, 0.5, -1.5, 3e9])
+def test_int_tensor_float_scalar_rounded_division(device, rounding_mode, scalar):
+    # The DIV_FLOOR/DIV_TRUNC kernels are int32-only and take the divisor through the int32 scalar
+    # packing, so a divisor they cannot carry has to be divided in floating point and rounded after.
+    # These used to be rejected outright even though div(rounding_mode=None) accepted them. 3e9 is
+    # the integral-but-out-of-range case, which the fractional check alone would have missed.
+    torch_input = torch.tensor([[-13, -7, 6, 100]], dtype=torch.int32)
+    a = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.div(a, scalar, rounding_mode=rounding_mode)
+    quotient = torch_input.float() / scalar
+    torch_golden = torch.floor(quotient) if rounding_mode == "floor" else torch.trunc(quotient)
+
+    # Negative numerators are in the input on purpose: the quotient has to be rounded while it is
+    # still floating point, or floor(-13/2.5) comes back as -5 instead of -6.
+    assert output.dtype == ttnn.float32
+    assert_with_ulp(torch_golden, output, ulp_threshold=1)
+
+
+@pytest.mark.parametrize("rounding_mode", ["floor", "trunc"])
+@pytest.mark.parametrize("scalar", [2, 2.0])
+def test_int_tensor_integral_divisor_stays_on_integer_kernel(device, rounding_mode, scalar):
+    # The counterpart to the test above: a divisor the int32 kernels can carry must keep using them,
+    # so the fall-through to floating point does not quietly capture every rounded division.
+    torch_input = torch.tensor([[-13, -7, 6, 100]], dtype=torch.int32)
+    a = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.div(a, scalar, rounding_mode=rounding_mode)
+    quotient = torch_input.float() / 2
+    torch_golden = torch.floor(quotient) if rounding_mode == "floor" else torch.trunc(quotient)
+
+    assert output.dtype == ttnn.int32
+    assert ttnn.to_torch(output).flatten().tolist() == torch_golden.flatten().tolist()
+
+
+@pytest.mark.parametrize(
+    "tensor_dtype, scalar",
+    [
+        # Integral, so the old fractional-only check let these through to an undefined
+        # float-to-integer cast: inf arrived as INT32_MIN and 2**32 as 0.
+        (ttnn.int32, 2.0**31),  # one past INT32_MAX
+        (ttnn.int32, -(2.0**31) - 2048),  # one representable step below INT32_MIN
+        (ttnn.int32, float("inf")),
+        (ttnn.int32, float("-inf")),
+        (ttnn.uint32, -3.0),  # negative against an unsigned tensor
+        (ttnn.uint32, 2.0**32),  # one past UINT32_MAX
+        (ttnn.uint32, float("inf")),
+    ],
+)
+@pytest.mark.parametrize("ttnn_op", [ttnn.add, ttnn.subtract])
+def test_int_tensor_unrepresentable_scalar_rejected(device, ttnn_op, tensor_dtype, scalar, expect_error):
+    # Being integral is not enough: the value also has to be finite and inside the tensor dtype's
+    # range, or the cast in pack_scalar_runtime_arg is undefined and silently changes it.
+    torch_input = torch.tensor([[7, 6, 12, 100]], dtype=torch.int32)
+    a = ttnn.from_torch(torch_input, dtype=tensor_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    with expect_error(RuntimeError, "cannot represent the scalar"):
+        ttnn_op(a, scalar)
+
+
+@pytest.mark.parametrize(
+    "tensor_dtype, scalar",
+    [
+        (ttnn.int32, -(2.0**31)),  # INT32_MIN, must survive the lower bound
+        (ttnn.int32, 2147483520.0),  # largest float32 below INT32_MAX
+        (ttnn.uint32, 0.0),  # lower bound for an unsigned tensor
+        (ttnn.uint32, 4294965248.0),  # largest float32 below UINT32_MAX
+    ],
+)
+def test_int_tensor_boundary_scalar_accepted(device, tensor_dtype, scalar):
+    # The limits themselves have to stay on the integer path, since rejecting them would be as wrong
+    # as accepting the values past them. INT32_MAX and UINT32_MAX are not float32 values, so the
+    # check compares against powers of two and these are the largest floats below each limit.
+    # Added to zero so the sum itself cannot overflow the dtype and confuse the result.
+    torch_input = torch.zeros([1, 32], dtype=torch.int32)
+    a = ttnn.from_torch(torch_input, dtype=tensor_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.add(a, scalar)
+
+    assert output.dtype == tensor_dtype
+    assert ttnn.to_torch(output, dtype=torch.int64).flatten().tolist() == [int(scalar)] * torch_input.numel()
