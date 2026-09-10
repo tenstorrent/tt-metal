@@ -1,21 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Rank-stamped TopK with a NARROW tag field (TOPK_TAG_BITS < 16).
+"""Rank-stamped TopK with a narrow tag field (TOPK_TAG_BITS < 16).
 
-The rank-stamped engine tags each value word's low bits with a sign-conditioned local rank so the
-plain unstable network sorts ties by index. With bf16 values the whole low half is free and the
-default field is 16 bits. fp32 keys whose low mantissa bits are known to be zero (TF32-unpacked
-words: 13 zero bits) can only spare a narrow field; the MoE gate's k=32 chains use 6 bits.
-
-A narrow field changes the LLK mechanics: the stamp clears the stale field with an SFPAND against
-a programmed mask instead of SFPLOADI LOWER 0, the complement and clear masks (LREG12 / LREG14) are
-derived from the width, the merge's right-run complement 2K-1 must fit the field, and the strip
-clears only the field. This test runs the whole rank-stamped chain (stamp, local sort, re-stamping
-merge, rebuild, strip) with 6- and 8-bit fields on the adversarial tie classes and demands the
-exact result of the 16-bit engine: the canonical stable-argsort golden, indices and value bits.
-The tag never touches bits above the field, so with bf16 values every result must be bit-identical
-to the wide-tag engine; the fp32-key contract (field inside the TF32 zero bits) is pinned at the
-op level by the MoE gate tie-order suites.
+bf16 values leave the whole low half free (16-bit tags); fp32 keys unpacked as TF32 have 13 zero
+mantissa bits, and the MoE gate uses a 6-bit field there. A narrow field changes the LLK mechanics
+(SFPAND clear against a programmed mask, width-derived LREG12 / LREG14 masks, the merge's 2K-1
+complement must fit). This runs the whole chain (stamp, local sort, merge, rebuild, strip) with 6-
+and 8-bit fields on the adversarial tie classes and demands the exact canonical stable golden,
+indices and value bits. The fp32-key contract itself is pinned at op level by the MoE gate suites.
 """
 import pytest
 import torch
@@ -48,10 +40,8 @@ pytestmark = [skip_for_quasar]
 
 # Every class here plants exact ties, so the tag order is what decides the result.
 TIE_CLASSES = ["tie_straddle_k", "neg_ties", "mixed_sign_ties", "signed_zero"]
-INPUT_DIMENSIONS_2D = [
-    32,
-    128,
-]  # one 2-tile slab per stage, the rank-stamped harness width
+# One 2-tile slab per stage: the width the rank-stamped harness supports.
+INPUT_DIMENSIONS_2D = [32, 128]
 K = 32
 
 

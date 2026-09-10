@@ -28,7 +28,7 @@ def score_activation(logits: torch.Tensor, score_func: str) -> torch.Tensor:
 
 
 def select_descending(scores, n, stable):
-    """Indices of the top ``n`` scores. ``stable`` breaks ties by lowest index``"""
+    """Indices of the top ``n`` scores; ``stable`` breaks ties by lowest index."""
     if stable:
         return torch.argsort(scores, dim=-1, descending=True, stable=True)[..., :n]
     return torch.topk(scores, n, dim=-1, sorted=True).indices
@@ -242,15 +242,9 @@ def assert_index_domain(
     num_real: int = 0,
     apply_padding: bool = False,
 ) -> None:
-    """Reference-free domain invariants for a gate's expert-index output.
-
-    Every real token must select ``n_activated_experts`` DISTINCT valid expert ids, and every
-    padded token must carry the out-of-range sentinel (== ``total_experts``). Unlike recall or
-    PCC this needs no golden reference, so it holds for any input.
-
-    Worth asserting separately from selection accuracy: the wrong expert (or nothing at all)
-    may corrupt memory rather than the output numerics.
-    """
+    """Reference-free invariants of a gate's expert-index output: every real token selects
+    ``n_activated_experts`` distinct ids in range, every padded token carries the sentinel
+    (== ``total_experts``)."""
     idx = tt_indices.reshape(-1, n_activated_experts).long()
 
     if apply_padding:

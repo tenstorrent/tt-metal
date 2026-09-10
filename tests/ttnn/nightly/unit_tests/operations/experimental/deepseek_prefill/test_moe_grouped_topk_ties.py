@@ -231,6 +231,27 @@ def pattern_grouped_ties():
     return levels, 3
 
 
+# Anchor class per group: the four winners in sum order are groups 6, 1, 5, 3, which is not their id
+# order, so the final top-k sees its tiles out of index order. The other four groups lose clearly.
+INVERTED_GROUP_ANCHORS = {6: 0, 1: 1, 5: 2, 3: 3, 0: 4, 2: 5, 4: 6, 7: 7}
+GROUP_FLOOR_CLASS = 8
+
+
+def pattern_grouped_inverted_order():
+    """DeepSeek routing where the winning groups arrive at the final top-k in an order that is not
+    their id order, and the last slots are decided by a tie that spans those groups.
+
+    Every group has one anchor expert (position 9) of a distinct class, and all other experts share
+    the floor class, so each group sum is anchor + floor and the sums are at least one class gap
+    apart: the cut is unambiguous, whatever the datapath rounds. The four anchors take the first four
+    slots; the remaining four slots are contested by 124 tied floor experts across the winning groups
+    and must go to the lowest indices, which sit in group 1 even though its tile is not the first."""
+    levels = torch.full((TOKENS, DEEPSEEK[1]), GROUP_FLOOR_CLASS, dtype=torch.long)
+    for g, cls in INVERTED_GROUP_ANCHORS.items():
+        levels[:, g * GROUP_SIZE + 9] = cls
+    return levels, GROUP_FLOOR_CLASS + 1
+
+
 # --------------------------------------------------------------------------------------------
 # Tests
 # --------------------------------------------------------------------------------------------
@@ -320,6 +341,23 @@ def test_grouped_tie_order_matches_stable_golden(device):
     assert_ties_landed(biased, levels, context="[grouped] ")
     assert_index_domain(indices, K, DEEPSEEK[1])
     assert_indices_exact(indices, golden, K, context="[grouped] ")
+
+
+def test_grouped_inverted_group_order_ties(device):
+    """The final top-k of the grouped path receives the winning groups ordered by group sum, not by
+    group id. A tie-break that ranks candidates by their position in that chain instead of by their
+    index passes every test above (there the sum order happens to be the id order) and fails here."""
+    levels, num_levels = pattern_grouped_inverted_order()
+    logits, bias = levels_to_inputs(levels, num_levels)
+    golden = stable_golden(logits, bias, routing=DEEPSEEK)
+    # Construction check: the anchors of groups 6, 1, 5, 3 in that order, then the four lowest
+    # floor experts of the lowest-numbered winning group.
+    assert golden[0, 0, 0].tolist() == [201, 41, 169, 105, 32, 33, 34, 35]
+
+    _, indices, biased = run_gate(device, logits, bias, stable_sort=True, routing=DEEPSEEK)
+    assert_ties_landed(biased, levels, context="[grouped inverted] ")
+    assert_index_domain(indices, K, DEEPSEEK[1])
+    assert_indices_exact(indices, golden, K, context="[grouped inverted] ")
 
 
 # --------------------------------------------------------------------------------------------

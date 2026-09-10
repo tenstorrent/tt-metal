@@ -108,6 +108,7 @@ inline void calculate_topk_canonicalize_negzero() {
 template <bool APPROXIMATION_MODE, bool FUSED = false, bool RANK_STAMPED = false, std::uint32_t TAG_BITS = 16>
 inline void topk_init() {
     static_assert(!(FUSED && RANK_STAMPED), "fused and rank-stamped modes are mutually exclusive");
+    static_assert(RANK_STAMPED || TAG_BITS == 16, "TAG_BITS applies to the rank-stamped mode only");
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 32}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (FUSED) {

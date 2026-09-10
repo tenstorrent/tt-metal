@@ -808,9 +808,8 @@ class TOPK(TemplateParameter):
     # indices riding index tracking; the unstable network sorts the tagged keys (requires
     # dest_acc=Yes; mutually exclusive with both other stable modes).
     topk_rank_stamped: bool = False
-    # Rank-stamped only: width of the rank tag field in the value word's low bits. 16 for bf16
-    # values (the whole low half is free); a narrower field leaves the upper bits of the low half
-    # untouched, which is what fp32 keys with TF32-zeroed low mantissa bits need (the MoE gate uses 6).
+    # Rank-stamped only: rank tag field width in the value word's low bits (16 for bf16 values,
+    # narrower for fp32 keys whose low mantissa bits are zero).
     topk_tag_bits: int = 16
 
     def convert_to_cpp(self) -> str:

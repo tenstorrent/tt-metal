@@ -2,37 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Strict-bar tests for moe_grouped_topk's STABLE top-k path.
+"""Strict-bar tests for moe_grouped_topk's stable top-k path, as the Kimi / DeepSeek prefill MoE gate
+(``tt_moe_gate_prefill.py``) requests it on every gated layer.
 
-Companion to ``test_moe_grouped_topk.py``, which is deliberately tolerant: its bars are
-``recall >= 0.9`` and weights ``PCC >= 0.85``, and it never passes ``stable_sort`` at all, so it
-runs with the ``moe_grouped_topk.hpp`` default of ``false``. The ``if constexpr (stable_sort)``
-half of the kernel is therefore compiled by no test in the tree, while the one production caller
-of it -- the Kimi / DeepSeek prefill MoE gate, ``tt_moe_gate_prefill.py`` -- asks for
-``stable_sort=True`` on every gated layer. This file closes that gap on a single chip.
+- ``test_stable_matches_unstable``: stable and unstable must agree exactly wherever the sorted keys
+  are distinct; device against device, no golden needed.
+- ``test_stable_exact_vs_golden``: exact expert-set match against the torch reference on inputs with
+  a designed top-k boundary margin (``separated_gate_inputs``), swept over the blocks::topk chain depth.
+- ``test_index_domain``: every returned id valid and distinct, every padded row the sentinel.
 
-Three checks, each independent of the others:
-
-``test_stable_matches_unstable``
-    The two networks must agree EXACTLY. Stability only ever decides the order of *equal* keys,
-    so wherever the sorted keys are distinct the two are the same function. Comparing device
-    against device leaves no fp32-vs-torch boundary ambiguity to excuse a mismatch, and needs no
-    golden reference, which makes this the cheapest conclusive check available.
-
-``test_stable_exact_vs_golden``
-    Exact expert-set match against the torch reference on input whose top-k boundary carries a
-    designed margin (see ``separated_gate_inputs``), so no legitimate near-tie swap exists to
-    absorb an error. Swept over ``total_experts``, which sweeps the depth of the insertion-sort
-    chain inside ``blocks::topk``: at Kimi's 384 experts that is 12 width tiles and 10 merge
-    rounds against the accumulator, the deepest chain in production.
-
-``test_index_domain``
-    Every returned id valid and distinct, every padded row the sentinel. Targets the corrupt-index
-    failure mode -- which addresses the wrong expert downstream -- rather than a wrong-but-valid
-    selection.
-
-Selection accuracy is the only thing that can go wrong in this op: the returned scores are
-*gathered by* the selected indices, so a score can never desync from its own index.
+Exact tie ORDER is covered by test_moe_grouped_topk_ties.py.
 """
 
 import pytest
@@ -111,15 +90,9 @@ SORT_RESOLUTION = 2e-3
 def separated_gate_inputs(shape, k, score_func, margin=MARGIN, to_bf16=False):
     """``(logits, bias)`` whose biased scores have a designed top-k boundary margin.
 
-    The op sorts ``score_activation(logits) + bias``. The activation output is bounded, so the
-    bias can be solved for any target biased score at all: ``bias = target - activation(logits)``.
-    That makes the intended ordering explicit rather than incidental, which is what licenses an
-    exact comparison against the torch reference -- with a ``margin``-wide gap at the boundary,
-    no near-tie swap is available to explain away a mismatch.
-
-    Per token: ``k`` selected targets on a descending ladder starting at ``2 * margin``, the
-    remaining experts scattered below zero, and the whole row shuffled so the winners are not
-    simply the leading columns.
+    The op sorts ``score_activation(logits) + bias`` and the activation is bounded, so the bias is
+    solved for any target score: ``bias = target - activation(logits)``. Per token: ``k`` winners on
+    a descending ladder from ``2 * margin``, the rest scattered below zero, the row shuffled.
     """
     *lead, total_experts = shape
     rows = int(torch.tensor(lead).prod().item())
@@ -161,17 +134,9 @@ def realistic_gate_inputs(shape, score_func, to_bf16=False):
 
 
 def boundary_strict(biased, k, resolution=SORT_RESOLUTION):
-    """Tokens whose k-th and (k+1)-th largest biased scores are separated by more than the sort
-    network's comparison resolution.
-
-    Where they are, the top-k *set* is uniquely determined and cannot depend on tie-break policy,
-    so stable and unstable are required to select the same experts. Ties wholly inside or wholly
-    outside the selection change nothing, so only the boundary matters.
-
-    The separation test is a tolerance, not ``>``: keys closer than ``resolution`` are ties as far
-    as the network is concerned, even when fp32 can tell them apart. Comparing exactly here reports
-    a defect on main as readily as on any branch.
-    """
+    """Tokens whose k-th and (k+1)-th largest biased scores are more than ``resolution`` apart, so
+    the top-k set cannot depend on the tie-break policy. Keys closer than ``resolution`` are ties as
+    far as the network is concerned, even when fp32 can tell them apart."""
     top = torch.topk(biased, k + 1, dim=-1).values
     scale = top[..., k - 1].abs().clamp(min=1e-6)
     return (top[..., k - 1] - top[..., k]) > resolution * scale
@@ -188,14 +153,9 @@ def topk_strict(biased, k, resolution=SORT_RESOLUTION):
 
 
 def run_gate(device, logits, bias, routing, score_func, stable_sort, input_dtype, num_real=None):
-    """Invoke moe_grouped_topk once and return ``(weights, indices, biased_scores)`` as torch
-    tensors trimmed to the logical shape.
-
-    ``biased_scores`` is the op's own debug output -- the exact tensor top-k sorted -- so the
-    tie-freedom preconditions above are evaluated against what the hardware actually saw rather
-    than a host re-derivation. It is requested on every call in this module, including both halves
-    of the differential, so the two runs differ in ``stable_sort`` and nothing else.
-    """
+    """One moe_grouped_topk call; returns ``(weights, indices, biased_scores)`` trimmed to the logical
+    shape. ``biased_scores`` is the op's own debug output (the tensor the top-k sorted), so the
+    tie-freedom preconditions are evaluated against what the hardware saw."""
     n_groups, total_experts, summed, topk_groups, k, route_scale = routing
     num_batches, batch_size, seq_len, _ = logits.shape
 
@@ -254,13 +214,9 @@ def assert_same_selection(lhs_indices, rhs_indices, k, mask, lhs_name, rhs_name)
 @pytest.mark.parametrize("score_func", SCORE_FUNCS)
 @pytest.mark.parametrize("routing", DIFFERENTIAL_CONFIGS, ids=DIFFERENTIAL_CONFIG_IDS)
 def test_stable_matches_unstable(device, routing, score_func, input_dtype):
-    """stable_sort=True and stable_sort=False must agree exactly wherever keys are distinct.
-
-    No golden reference and no threshold: the two networks are the same function on distinct keys,
-    so any disagreement is a defect in whichever one changed. Run on the realistic (crowded)
-    input distribution, with the tie-freedom precondition evaluated per token against the op's own
-    biased_scores so a genuine tie is excluded rather than blamed.
-    """
+    """stable_sort=True and stable_sort=False must agree exactly wherever keys are distinct: the two
+    networks are the same function there. Realistic input distribution; the tie-freedom precondition
+    is evaluated per token against the op's own biased_scores."""
     torch.manual_seed(42)
     _, total_experts, _, _, k, _ = routing
     shape = (1, 1, SEQ_LEN, total_experts)
@@ -370,13 +326,8 @@ def test_stable_exact_vs_golden(device, total_experts, score_func, input_dtype):
 @pytest.mark.parametrize("padded_percent", [0, 50], ids=["pad0", "pad50"])
 @pytest.mark.parametrize("routing", ROUTING_CONFIGS, ids=ROUTING_CONFIG_IDS)
 def test_index_domain(device, routing, padded_percent, stable_sort, input_dtype):
-    """Index-domain invariants, with and without padding, on both networks.
-
-    Reference-free, so it runs on the realistic input distribution without any tie caveat. A
-    duplicate or out-of-range expert id is qualitatively worse than a wrong selection: it makes
-    the downstream dispatch address the wrong expert, which is the mechanism most consistent with
-    a KV-cache PCC that collapses to zero rather than merely degrading.
-    """
+    """Index-domain invariants, with and without padding, on both networks. Reference-free, so it
+    runs on the realistic input distribution without any tie caveat."""
     torch.manual_seed(7)
     _, total_experts, _, _, k, _ = routing
     shape = (1, 1, SEQ_LEN, total_experts)

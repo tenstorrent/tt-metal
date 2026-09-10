@@ -36,23 +36,75 @@ namespace blocks {
 constexpr uint32_t SCORE_FUNC_SIGMOID = 0;       // DeepSeek-V3 / Kimi
 constexpr uint32_t SCORE_FUNC_SQRTSOFTPLUS = 1;  // DeepSeek-V4: sqrt(softplus(x))
 
-// The gate sorts largest-first on fp32 keys; no block uses fused (bf16 + u16) keys.
+// The gate always sorts largest-first on fp32 keys and never uses fused (bf16 + u16) keys. Both stable
+// engines take their tie polarity from this one direction.
+constexpr bool GATE_TOPK_DESCENDING = true;
 constexpr bool GATE_TOPK_FUSED = false;
-constexpr ckernel::TopkTieOrder GATE_TOPK_TIE_ORDER = ckernel::TopkTieOrder::Descending;
+constexpr ckernel::TopkTieOrder GATE_TOPK_TIE_ORDER =
+    ckernel::topk_tie_order_from_global_direction(GATE_TOPK_DESCENDING);
 
-// Stable mode has two engines. The comparator (STABLE_SORT) works on any key. The rank-tag engine
-// (RANK_STAMPED) stamps a GATE_TAG_BITS-wide local-rank tag into the low bits of each fp32 key so the
-// plain unstable network sorts ties by index; it is lossless only while those low bits are zero in
-// every key it sees. The gate's keys are unpacked through SrcA as TF32 (10 mantissa bits, so mantissa
-// bits 12..0 are zero) whenever the factory leaves the sort-input CBs on the default unpack path; the
-// factory reports that as `sort_keys_tf32`, and topk() / topk_group_scores() take the rank-tag engine
-// only when stable_sort && sort_keys_tf32. Every other configuration keeps the comparator: slower,
-// never lossy. process_and_sort_tiles (grouped path, values consumed downstream) always uses the comparator.
-constexpr uint32_t GATE_TAG_BITS = 6;                 // the k=32 chains use ranks below 64
+// Stable engines: the comparator (STABLE_SORT) works on any key. The rank-tag engine (RANK_STAMPED)
+// stamps a GATE_TAG_BITS-wide chain-position tag into the low mantissa bits of each fp32 key and lets
+// the plain network order ties. It is lossless only while those bits are zero, which holds for keys
+// unpacked through SrcA as TF32 (mantissa bits 12..0 zero) and is certified by the factory as
+// sort_keys_tf32. It sorts stable-by-index only where candidates arrive in index order: the
+// single-group expert top-k and the group-score sort (column == group id), not the grouped path's
+// final top-k, whose winning-group tiles arrive in group-sum order. Everything else keeps the comparator.
+constexpr uint32_t GATE_TAG_BITS = 6;
 constexpr uint32_t TF32_ZERO_LOW_MANTISSA_BITS = 13;  // fp32 mantissa (23) - TF32 mantissa (10)
-static_assert(
-    GATE_TAG_BITS <= TF32_ZERO_LOW_MANTISSA_BITS,
-    "the rank tag must sit inside the TF32 zero bits of the key, otherwise it displaces value bits");
+static_assert((1u << GATE_TAG_BITS) >= 64, "a two-tile chain (ranks 0..63) must fit the tag field");
+static_assert(GATE_TAG_BITS <= TF32_ZERO_LOW_MANTISSA_BITS, "the rank tag must sit inside the TF32 zero bits");
+
+// The gate's TopK primitives in one place: stable_sort selects stable mode, rank_tag its engine
+// (rank tags, else the comparator). Every call site below goes through these.
+template <bool stable_sort, bool rank_tag>
+constexpr bool gate_comparator_stable() {
+    static_assert(!rank_tag || stable_sort, "rank_tag is a stable-mode engine choice");
+    return stable_sort && !rank_tag;
+}
+
+// tag_bits is a rank-stamped-only parameter; the other engines take the default.
+template <bool rank_tag>
+constexpr uint32_t gate_tag_bits() {
+    return rank_tag ? GATE_TAG_BITS : 16;
+}
+
+template <bool rank_tag>
+ALWI void gate_topk_init() {
+    ckernel::topk_tile_init<GATE_TOPK_FUSED, rank_tag, gate_tag_bits<rank_tag>()>();
+}
+
+template <bool stable_sort, bool rank_tag>
+ALWI void gate_topk_local_sort(uint32_t idst, bool ascending, int end_phase) {
+    ckernel::topk_local_sort<
+        gate_comparator_stable<stable_sort, rank_tag>(),
+        DST_ACCUM_MODE,
+        GATE_TOPK_FUSED,
+        rank_tag,
+        GATE_TOPK_TIE_ORDER>(idst, (int)ascending, end_phase);
+}
+
+template <bool stable_sort, bool rank_tag>
+ALWI void gate_topk_merge(uint32_t idst, int m_iter, int k) {
+    ckernel::topk_merge<
+        /*idir=*/false,
+        gate_comparator_stable<stable_sort, rank_tag>(),
+        DST_ACCUM_MODE,
+        GATE_TOPK_FUSED,
+        rank_tag,
+        GATE_TOPK_TIE_ORDER,
+        gate_tag_bits<rank_tag>()>(idst, m_iter, k);
+}
+
+template <bool stable_sort, bool rank_tag>
+ALWI void gate_topk_rebuild(uint32_t idst, bool ascending, int m_iter, int k, int logk, int skip_second) {
+    ckernel::topk_rebuild<
+        gate_comparator_stable<stable_sort, rank_tag>(),
+        DST_ACCUM_MODE,
+        GATE_TOPK_FUSED,
+        rank_tag,
+        GATE_TOPK_TIE_ORDER>(idst, ascending, m_iter, k, logk, skip_second);
+}
 
 // Widen width_tiles input tiles from their (possibly bf16) source format into an fp32 output CB.
 // The whole gate pipeline computes in fp32, and the downstream two-operand ops (e.g. add_bias) need
@@ -192,9 +244,7 @@ void process_and_sort_tiles(
         if constexpr (stable_sort) {
             ckernel::topk_canonicalize_negzero_values(0);
         }
-        ckernel::
-            topk_local_sort<stable_sort, DST_ACCUM_MODE, GATE_TOPK_FUSED, /*rank_stamped=*/false, GATE_TOPK_TIE_ORDER>(
-                0, (int)ascending, end_phase);
+        gate_topk_local_sort<stable_sort, /*rank_tag=*/false>(0 /*idst*/, ascending, end_phase);
 
         // pack sorted score tiles
         pack_reconfig_data_format(cb_sorted_group_scores_id);
@@ -252,7 +302,7 @@ void sum_top_experts_per_group(
     cb_top_experts_per_group.pop_front(summed_experts_per_group);
 }
 
-// rank_tag selects the rank-tag stable engine (see GATE_TAG_BITS); only meaningful with stable_sort.
+// rank_tag: the rank-tag stable engine is valid here because column j of the summed-scores tile is group j.
 template <bool stable_sort = false, bool rank_tag = false>
 void topk_group_scores(
     const uint32_t cb_group_summed_scores_id,
@@ -261,12 +311,10 @@ void topk_group_scores(
     bool switch_dir,
     bool ascending,
     int log_topk_groups) {
-    static_assert(!rank_tag || stable_sort, "rank_tag is a stable-mode engine choice");
-    constexpr bool comparator_stable = stable_sort && !rank_tag;
     CircularBuffer cb_group_summed_scores(cb_group_summed_scores_id);
     CircularBuffer cb_group_index_template(cb_group_index_template_id);
     CircularBuffer cb_sorted_group_order(cb_sorted_group_order_id);
-    topk_tile_init<GATE_TOPK_FUSED, rank_tag, GATE_TAG_BITS>();
+    gate_topk_init<rank_tag>();
     cb_sorted_group_order.reserve_back(1);
 
     // Sort single input and index tile that have already ben transposed.
@@ -284,14 +332,13 @@ void topk_group_scores(
 
     // llk_topk_sort -> inplace
     if constexpr (rank_tag) {
-        // Only tile 0 holds data: tag its 32 group scores with their positions, largest-first
-        // polarity (the gate always sorts descending). The stamp folds -0.0 into +0.0 itself.
-        ckernel::topk_stamp_tile_rank_range<true, GATE_TAG_BITS>(0, 0, 0);
-    } else if constexpr (comparator_stable) {
+        // Only tile 0 holds data. The stamp also folds -0.0 into +0.0.
+        ckernel::topk_stamp_tile_rank_range<GATE_TOPK_DESCENDING, GATE_TAG_BITS>(
+            0 /*idst*/, 0 /*dst_tile_index*/, 0 /*rank_base*/);
+    } else if constexpr (gate_comparator_stable<stable_sort, rank_tag>()) {
         ckernel::topk_canonicalize_negzero_values(0);
     }
-    ckernel::topk_local_sort<comparator_stable, DST_ACCUM_MODE, GATE_TOPK_FUSED, rank_tag, GATE_TOPK_TIE_ORDER>(
-        0, (int)ascending, log_topk_groups);
+    gate_topk_local_sort<stable_sort, rank_tag>(0 /*idst*/, ascending, log_topk_groups);
     ckernel::topk_finalize_uint16_indices(2);
 
     tile_regs_commit();
@@ -328,7 +375,8 @@ void transpose_and_pack(const uint32_t input_cb_index, const uint32_t output_cb_
     }
 }
 
-// rank_tag selects the rank-tag stable engine (see GATE_TAG_BITS); only meaningful with stable_sort.
+// rank_tag: the rank-tag stable engine is valid only when tile j holds indices above every index in
+// tiles 0..j-1 (single-group expert top-k: yes; the sum-ordered winning groups of the grouped path: no).
 template <bool stable_sort = false, bool indices_pretransposed = false, bool rank_tag = false>
 void topk(
     const uint32_t cb_winning_group_scores_id,
@@ -338,8 +386,6 @@ void topk(
     const uint32_t tiles,
     const uint32_t log_tiles,
     const uint32_t k) {
-    static_assert(!rank_tag || stable_sort, "rank_tag is a stable-mode engine choice");
-    constexpr bool comparator_stable = stable_sort && !rank_tag;
     CircularBuffer cb_winning_group_scores(cb_winning_group_scores_id);
     CircularBuffer cb_winning_group_indices(cb_winning_group_indices_id);
     CircularBuffer cb_final_indices_transposed(cb_final_indices_transposed_id);
@@ -347,7 +393,7 @@ void topk(
     bool ascending = false;
     int end_phase = (tiles <= 2) ? log_tiles - 1 : 5;
 
-    topk_tile_init<GATE_TOPK_FUSED, rank_tag, GATE_TAG_BITS>();
+    gate_topk_init<rank_tag>();
     tile_regs_acquire();
     cb_winning_group_scores.wait_front(tiles);
     cb_winning_group_indices.wait_front(tiles);
@@ -372,22 +418,13 @@ void topk(
     }
     // llk_topk_sort -> inplace
     if constexpr (rank_tag) {
-        // Both tiles are fresh: tag positions 0..63, largest-first polarity (the gate always sorts
-        // descending). The stamp folds -0.0 into +0.0 itself.
-        ckernel::topk_stamp_local_positions<true, GATE_TAG_BITS>(0);
-    } else if constexpr (comparator_stable) {
+        // Both tiles are fresh: positions 0..63. The stamp also folds -0.0 into +0.0.
+        ckernel::topk_stamp_local_positions<GATE_TOPK_DESCENDING, GATE_TAG_BITS>(0 /*idst*/);
+    } else if constexpr (gate_comparator_stable<stable_sort, rank_tag>()) {
         ckernel::topk_canonicalize_negzero_values(0);
     }
-    ckernel::topk_local_sort<comparator_stable, DST_ACCUM_MODE, GATE_TOPK_FUSED, rank_tag, GATE_TOPK_TIE_ORDER>(
-        0, (int)ascending, 4);
-    ckernel::topk_merge<
-        /*idir=*/false,
-        comparator_stable,
-        DST_ACCUM_MODE,
-        GATE_TOPK_FUSED,
-        rank_tag,
-        GATE_TOPK_TIE_ORDER,
-        GATE_TAG_BITS>(0, 0, 32);
+    gate_topk_local_sort<stable_sort, rank_tag>(0 /*idst*/, ascending, 4 /*end_phase*/);
+    gate_topk_merge<stable_sort, rank_tag>(0 /*idst*/, 0 /*m_iter*/, 32 /*k*/);
 
     // Use insertion sort; discard lower half and keep upper half
     // Compare upper half with the next tile; insert into correct position
@@ -406,25 +443,17 @@ void topk(
         }
 
         if constexpr (rank_tag) {
-            // The kept tile 0 carries the tags the previous merge gave it (the merge re-tags both
-            // runs by position), so only the fresh tile 1 is stamped, with the upper rank range.
-            ckernel::topk_stamp_tile_rank_range<true, GATE_TAG_BITS>(0, 1, 32);
-        } else if constexpr (comparator_stable) {
+            // The kept tile 0 was re-tagged by the previous merge; only the fresh tile 1 needs stamping.
+            ckernel::topk_stamp_tile_rank_range<GATE_TOPK_DESCENDING, GATE_TAG_BITS>(
+                0 /*idst*/, 1 /*dst_tile_index*/, 32 /*rank_base*/);
+        } else if constexpr (gate_comparator_stable<stable_sort, rank_tag>()) {
             ckernel::topk_canonicalize_negzero_values(0);
         }
-        ckernel::topk_local_sort<comparator_stable, DST_ACCUM_MODE, GATE_TOPK_FUSED, rank_tag, GATE_TOPK_TIE_ORDER>(
-            0, (int)ascending, 4);
-        ckernel::topk_merge<
-            /*idir=*/false,
-            comparator_stable,
-            DST_ACCUM_MODE,
-            GATE_TOPK_FUSED,
-            rank_tag,
-            GATE_TOPK_TIE_ORDER,
-            GATE_TAG_BITS>(0, 0, 32);
+        gate_topk_local_sort<stable_sort, rank_tag>(0 /*idst*/, ascending, 4 /*end_phase*/);
+        gate_topk_merge<stable_sort, rank_tag>(0 /*idst*/, 0 /*m_iter*/, 32 /*k*/);
     }
-    ckernel::topk_rebuild<comparator_stable, DST_ACCUM_MODE, GATE_TOPK_FUSED, rank_tag, GATE_TOPK_TIE_ORDER>(
-        0, (int)ascending, 0, 32, 5, true);
+    gate_topk_rebuild<stable_sort, rank_tag>(
+        0 /*idst*/, ascending, 0 /*m_iter*/, 32 /*k*/, 5 /*logk*/, true /*skip_second*/);
     ckernel::topk_finalize_uint16_indices(2);
     tile_regs_commit();
     tile_regs_wait();

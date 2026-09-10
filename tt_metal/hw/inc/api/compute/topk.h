@@ -139,6 +139,7 @@ template <
     TopkTieOrder tie_order = TopkTieOrder::Unset,
     std::uint32_t tag_bits = 16>
 ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
+    static_assert(rank_stamped || tag_bits == 16, "tag_bits applies to the rank-stamped mode only");
     static_assert(
         !stable_sort || tie_order != TopkTieOrder::Unset,
         "comparator-stable topk requires an explicit tie_order");
@@ -224,13 +225,13 @@ ALWI void topk_rebuild(uint32_t idst, bool idir, int m_iter, int k, int logk, in
  * Please refer to documentation for any_init. fused selects the fused-key init (index tracking
  * off; packed [bf16|u16] keys carry the index inside the sort word). rank_stamped selects the
  * rank-stamped init (index tracking ON — the true u32 indices ride the tracked swaps — plus the
- * rank-tag complement constant). tag_bits is the width of the rank tag field in the value word's
- * low bits: 16 for bf16 values (the whole low half is free); fp32 values whose low mantissa bits
- * are known to be zero can spare as few as 6, keeping the rest of the mantissa intact. Pass the
- * same tag_bits to every stamp / merge / strip call of that sort.
+ * rank-tag complement constant). tag_bits is the rank tag field width in the value word's low bits
+ * (16 for bf16 values, 6..15 for fp32 keys whose low mantissa bits are zero); every stamp / merge /
+ * strip call of that sort must use the same value.
  */
 template <bool fused = false, bool rank_stamped = false, std::uint32_t tag_bits = 16>
 ALWI void topk_tile_init() {
+    static_assert(rank_stamped || tag_bits == 16, "tag_bits applies to the rank-stamped mode only");
     MATH(SFPU_UNARY_INIT_FN(topk_local_sort, sfpu::topk_init, (true /* APPROXIMATE */, fused, rank_stamped, tag_bits)));
 }
 
@@ -376,12 +377,21 @@ ALWI void topk_canonicalize_negzero_values(uint32_t idst) {
         VectorMode::RC_custom));
 }
 
+// clang-format off
 /**
  * Clears the low tag_bits bits (stale rank tags) of one rank-stamped value tile in DST, leaving
  * exact value words (e.g. [bf16|0x0000] for tag_bits = 16) so the following pack cannot round on
  * tag bits. Must run on MATH while DEST is still acquired, after the final transpose back to row
  * layout (same calling convention as topk_uint16_move_dest_tile_to_pack_half).
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | tag_bits        | Rank tag field width in the value word's low bits; see topk_tile_init      | uint32_t | 6 to 16                                               | False    |
+ * | idst            | The index of the value tile in the DST register buffer                     | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
+// clang-format on
 template <std::uint32_t tag_bits = 16>
 ALWI void topk_strip_rank_tags(std::uint32_t idst) {
     MATH((ckernel::sfpu::_topk_strip_rank_tags_<tag_bits>(idst)));

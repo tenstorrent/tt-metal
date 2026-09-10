@@ -53,9 +53,7 @@ void kernel_main() {
     constexpr uint32_t log_n_groups = get_named_compile_time_arg_val("log_n_groups");
     constexpr uint32_t log_width_tiles = get_named_compile_time_arg_val("log_width_tiles");
     constexpr bool stable_sort = get_named_compile_time_arg_val("stable_sort") != 0;
-    // The factory certifies that every sort-input CB is unpacked through SrcA as TF32, so the keys'
-    // low 13 mantissa bits are zero and the rank-tag stable engine is lossless (GATE_TAG_BITS in
-    // moe_gate_common_compute.hpp). Without that certificate stable mode keeps the comparator.
+    // Rank-tag stable engine only when the factory certifies TF32 sort keys (see GATE_TAG_BITS).
     constexpr bool sort_keys_tf32 = get_named_compile_time_arg_val("sort_keys_tf32") != 0;
     constexpr bool rank_tag = stable_sort && sort_keys_tf32;
     constexpr uint32_t score_func = get_named_compile_time_arg_val("score_func");
@@ -106,7 +104,8 @@ void kernel_main() {
                 cb_top_experts_per_group, cb_group_summed_scores, summed_experts_per_group);
             blocks::topk_group_scores<stable_sort, rank_tag>(
                 cb_group_summed_scores, cb_group_index_template, cb_sorted_group_order, false, false, log_n_groups - 1);
-            blocks::topk<stable_sort, /*indices_pretransposed=*/false, rank_tag>(
+            // Winning-group tiles arrive in group-sum order, so positional rank tags are not an option here.
+            blocks::topk<stable_sort, /*indices_pretransposed=*/false, /*rank_tag=*/false>(
                 cb_winning_group_scores,
                 cb_winning_group_indices,
                 cb_final_indices_transposed,

@@ -125,9 +125,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 ckernel::sfpu::_init_topk();
             }
 
-            // A narrow tag field (TOPK_TAG_BITS < 16) makes the stamp and the merge program the tag
-            // clear mask into a constant register; this probe is what proves that register is not
-            // the shared -1.0 (LREG11).
             ckernel::sfpu::calculate_bitonic_topk_merge<
                 APPROX,
                 is_fp32_dest_acc_en,
