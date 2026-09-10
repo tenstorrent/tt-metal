@@ -12,7 +12,10 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
     const auto q = TensorAccessor(tensor::q);
     const auto k = TensorAccessor(tensor::k);
     const auto v = TensorAccessor(tensor::v);
+    const auto state_source = TensorAccessor(tensor::state_source);
+    const auto state = TensorAccessor(tensor::state);
     DataflowBuffer output(dfb::output);
+    DataflowBuffer state_copy(dfb::state_copy);
     Noc noc;
 
     const uint32_t tile_bytes = output.get_entry_size();
@@ -38,5 +41,33 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
         }
         noc.async_write_barrier();
         output.pop_front(block_ct);
+
+        if (mt == 0) {
+            constexpr uint32_t history_rows = 3;
+            constexpr uint32_t shard_channels = 64;
+            constexpr uint32_t row_bytes = shard_channels * sizeof(uint16_t);
+            constexpr uint32_t state_page_bytes = history_rows * row_bytes;
+            constexpr uint32_t pages_per_block = block_ct * 32 / shard_channels;
+            const uint32_t block = work % num_blocks;
+            for (uint32_t local_page = 0; local_page < pages_per_block; ++local_page) {
+                const uint32_t page = block * pages_per_block + local_page;
+                const uint32_t channel_offset = page * row_bytes;
+                state_copy.reserve_back(1);
+                for (uint32_t row = 0; row < history_rows; ++row) {
+                    noc.async_read(
+                        state_source,
+                        state_copy,
+                        row_bytes,
+                        {.page_id = row, .offset_bytes = channel_offset},
+                        {.offset_bytes = row * row_bytes});
+                }
+                noc.async_read_barrier();
+                state_copy.push_back(1);
+                state_copy.wait_front(1);
+                noc.async_write(state_copy, state, state_page_bytes, {}, {.page_id = page});
+                noc.async_write_barrier();
+                state_copy.pop_front(1);
+            }
+        }
     }
 }

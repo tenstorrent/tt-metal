@@ -255,11 +255,10 @@ class ttKDA:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         if self.sequence_parallel_size > 1:
-            convolution_history, new_state = exchange_convolution_carry(
+            convolution_history, state_source = exchange_convolution_carry(
                 qkv_row_major,
                 convolution_state,
                 sequence_parallel_axis=self.sequence_parallel_axis,
-                state_memory_config=self.convolution_state_memory_config,
             )
         else:
             convolution_history = convolution_state
@@ -269,30 +268,20 @@ class ttKDA:
                 (qkv_row_major.shape[0], sequence, channels),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            if isinstance(self.device, ttnn.MeshDevice):
-                new_state = ttnn.mesh_partition(
-                    local_tail,
-                    dim=1,
-                    cluster_axis=self.sequence_parallel_axis,
-                    memory_config=self.convolution_state_memory_config,
-                )
-            else:
-                new_state = ttnn.empty_like(
-                    convolution_state,
-                    memory_config=self.convolution_state_memory_config,
-                )
-                ttnn.slice(local_tail, (0, 0, 0), tuple(local_tail.shape), output_tensor=new_state)
+            state_source = local_tail
         # The replacement state is BF16 row-major ND DRAM [B, K - 1, Q_local + K_local + V_local],
         # channel-sharded across TP and replicated across SP.
-        q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
+        q, k, v, new_state = ttnn.experimental.kda.qkv_causal_conv1d_silu(
             qkv_row_major,
             convolution_history,
+            state_source,
             *self.weights.convolution_taps,
             config.q_dim,
             config.k_dim,
             config.v_dim,
             program_config=self.qkv_convolution_program_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            state_memory_config=self.convolution_state_memory_config,
         )
         return q, k, v, new_state
 

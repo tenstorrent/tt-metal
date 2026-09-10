@@ -16,9 +16,10 @@ struct QkvCausalConv1dSiluProgramConfig {
     uint32_t channel_chunk_size;
 };
 
-std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu(
+std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu(
     const ttnn::Tensor& input,
     const ttnn::Tensor& history,
+    const ttnn::Tensor& state_source,
     const ttnn::Tensor& tap0,
     const ttnn::Tensor& tap1,
     const ttnn::Tensor& tap2,
@@ -28,6 +29,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu(
     uint32_t v_width,
     const QkvCausalConv1dSiluProgramConfig& program_config,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<ttnn::MemoryConfig>& state_memory_config = std::nullopt,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 
 }  // namespace ttnn::experimental::kda

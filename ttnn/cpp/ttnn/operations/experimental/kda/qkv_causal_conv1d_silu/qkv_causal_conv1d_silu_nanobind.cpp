@@ -16,7 +16,8 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
         mod,
         R"doc(
         Apply a four-tap depthwise causal convolution with SiLU and split the
-        result directly into Q, K, and V tensors.
+        result directly into Q, K, and V tensors while storing the next
+        convolution state in the requested memory layout.
 
         Let ``x[-3:-1]`` be the supplied history and ``x[0:T]`` the current input.
         For each token and channel:
@@ -31,6 +32,8 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
             history (ttnn.Tensor): The three tokens preceding ``input``, shaped
                 ``[1, 3, Q+K+V]``. Must be an interleaved ROW_MAJOR BFLOAT16
                 device tensor.
+            state_source (ttnn.Tensor): The three current-input rows to store as
+                the replacement convolution state, shaped ``[1,3,Q+K+V]``.
             tap0, tap1, tap2, tap3 (ttnn.Tensor): Per-channel convolution taps.
                 Each must have logical volume ``Q+K+V`` and be an interleaved
                 TILE-layout BFLOAT16 device tensor.
@@ -43,12 +46,15 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
                 ``channel_chunk_size`` is expressed in logical channels.
             memory_config (ttnn.MemoryConfig, optional): Interleaved output memory
                 configuration. Defaults to DRAM.
+            state_memory_config (ttnn.MemoryConfig, optional): Replacement-state
+                memory configuration. Defaults to ``memory_config``.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):
                 Compute-kernel configuration.
 
         Returns:
-            tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: New TILE-layout BFLOAT16
-                tensors ``q[1,T,Q]``, ``k[1,T,K]``, and ``v[1,T,V]``.
+            tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: New
+                TILE-layout BFLOAT16 tensors ``q[1,T,Q]``, ``k[1,T,K]``, and
+                ``v[1,T,V]``, plus row-major ``state[1,3,Q+K+V]``.
 
         Note:
             ``T``, ``Q``, ``K``, and ``V`` must be positive and tile-aligned.
@@ -58,6 +64,7 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
         &ttnn::experimental::kda::qkv_causal_conv1d_silu,
         nb::arg("input").noconvert(),
         nb::arg("history").noconvert(),
+        nb::arg("state_source").noconvert(),
         nb::arg("tap0").noconvert(),
         nb::arg("tap1").noconvert(),
         nb::arg("tap2").noconvert(),
@@ -68,6 +75,7 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("program_config").noconvert(),
         nb::arg("memory_config") = nb::none(),
+        nb::arg("state_memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none());
 }
 }  // namespace ttnn::operations::experimental::kda::qkv_causal_conv1d_silu::detail

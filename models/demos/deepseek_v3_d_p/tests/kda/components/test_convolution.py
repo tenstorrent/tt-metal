@@ -89,11 +89,9 @@ def test_exchange_convolution_carry_preserves_causal_carries(
             qkv_tt,
             state_tt,
             sequence_parallel_axis=sp_axis,
-            state_memory_config=state_memory_config,
         )
-        assert final.memory_config().nd_shard_spec == state_memory_config.nd_shard_spec
-        # The generic determinism comparator requires tile-aligned shard heights.
-        return entry, ttnn.to_memory_config(final, ttnn.DRAM_MEMORY_CONFIG)
+        assert final.memory_config() == ttnn.DRAM_MEMORY_CONFIG
+        return entry, final
 
     (entry_tt, final_tt), mismatch_markers = collect_mesh_accuracy_and_determinism_results(run)
     actual_entries = _sp_carries(entry_tt, mesh_device, sp_axis, tensor_parallel_axis)

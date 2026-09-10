@@ -6,9 +6,10 @@
 
 namespace ttnn::experimental::kda {
 
-std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu(
+std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu(
     const ttnn::Tensor& input,
     const ttnn::Tensor& history,
+    const ttnn::Tensor& state_source,
     const ttnn::Tensor& tap0,
     const ttnn::Tensor& tap1,
     const ttnn::Tensor& tap2,
@@ -18,6 +19,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu(
     uint32_t v_width,
     const QkvCausalConv1dSiluProgramConfig& program_config,
     const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<ttnn::MemoryConfig>& state_memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
     TT_FATAL(
         input.storage_type() == StorageType::DEVICE && input.buffer() != nullptr,
@@ -33,6 +35,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu(
     auto outputs = ttnn::experimental::prim::qkv_causal_conv1d_silu(
         input,
         history,
+        state_source,
         tap0,
         tap1,
         tap2,
@@ -42,8 +45,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu(
         v_width,
         program_config.channel_chunk_size,
         output_memory_config,
+        state_memory_config.value_or(output_memory_config),
         kernel_config);
-    return {outputs[0], outputs[1], outputs[2]};
+    return {outputs[0], outputs[1], outputs[2], outputs[3]};
 }
 
 }  // namespace ttnn::experimental::kda
