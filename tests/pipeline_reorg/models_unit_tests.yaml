@@ -1990,7 +1990,10 @@
   model_family: XTTS
   skus:
     bh_p150b_civ2:
-      timeout: 25
+      # 25 min timed out at 46/47 tests. The suite is JIT-compile bound on CI's cold kernel
+      # cache: 25m11s measured cold on a P150b, x1.32 for the workflow's forced watcher. The
+      # 21 -> 46 test growth (PR review regressions) took it from 18m17s to over budget.
+      timeout: 45
       tier: 3
   owner_id: U087HGJ455E # Sudhanshu Singhal
   team: shield

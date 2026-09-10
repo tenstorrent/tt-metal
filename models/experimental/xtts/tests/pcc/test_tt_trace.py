@@ -285,7 +285,8 @@ EVAL_LONG_TEXT = (
 )
 
 # Gates for the nightly long-eval job (tests/pipeline_reorg/blackhole_demo_tests.yaml). Measured on
-# Blackhole P150b, 3/3 identical runs: 556 codes -> 26.17 s audio, CER 0.0000, SECS 0.6979. This test
+# Blackhole P150b, reproduced identically across two builds (either side of a tt-metal rebase):
+# 4 chunks of 151/145/129/133 -> 558 codes -> 26.26 s audio, CER 0.0022, SECS 0.6967. This test
 # samples off the host RNG (reset_seeds), so there is no run-to-run spread to absorb — the margin is
 # for a *re-sampled* render, since any numerical change shifts the sampled codes and yields different
 # audio. The bounds therefore encode "still intelligible, still the same speaker" rather than
