@@ -846,6 +846,38 @@ std::string FiberSchedulerImpl::dump_parked() {
     if (!quiescence_deferred_.empty()) {
         os << "  " << quiescence_deferred_.size() << " fiber(s) deferred to quiescence\n";
     }
+    // TEMPORARY DIAGNOSTIC (remove before commit): the exact quiescence terms.
+    {
+        os << "  [DIAG] idle_=" << idle_ << " W_=" << W_ << " running_=" << running_
+           << " active_=" << active_ << " any_ready=" << (any_ready() ? 1 : 0)
+           << " workers_done_=" << workers_done_ << " abort=" << (abort_flag_ ? 1 : 0)
+           << " socket_poll=" << socket_poll_waiters_ << " cb_poll=" << cb_poll_waiters_ << "\n";
+        os << "  [DIAG] per-home ready sizes:";
+        for (size_t i = 0; i < ready_.size(); ++i) {
+            if (!ready_[i].empty()) os << " q" << i << "=" << ready_[i].size();
+        }
+        os << "\n  [DIAG] deferred fiber homes:";
+        for (const Fiber* f : quiescence_deferred_) os << " " << f->home;
+        os << "\n  [DIAG] fiber states:";
+        unsigned st[8] = {0};
+        for (const auto& up : all_) {
+            unsigned s = static_cast<unsigned>(up->state);
+            if (s < 8) ++st[s];
+        }
+        for (unsigned i = 0; i < 8; ++i) if (st[i]) os << " s" << i << "=" << st[i];
+        os << "\n  [DIAG] RUNNING fibers (hold a worker, block quiescence):\n";
+        for (const auto& up : all_) {
+            const Fiber* f = up.get();
+            if (f->state != FiberState::Running) continue;
+            os << "    core(log " << f->id.logical_x << "," << f->id.logical_y << ") proc " << (unsigned)f->id.proc_id
+               << " home " << f->home << "  " << (f->id.kernel_src ? f->id.kernel_src : "?") << "\n";
+        }
+        os << "  [DIAG] DEFERRED fibers:\n";
+        for (const Fiber* f : quiescence_deferred_) {
+            os << "    core(log " << f->id.logical_x << "," << f->id.logical_y << ") proc " << (unsigned)f->id.proc_id
+               << " home " << f->home << "  " << (f->id.kernel_src ? f->id.kernel_src : "?") << "\n";
+        }
+    }
     if (socket_poll_waiters_ != 0) {
         // Split: a stale tag means the fiber left the loop, so reporting it sends triage after nothing.
         unsigned fresh = 0, stale = 0, peer = 0;
