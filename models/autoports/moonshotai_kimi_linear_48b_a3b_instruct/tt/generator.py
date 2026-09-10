@@ -192,6 +192,13 @@ class KimiGenerator(_ContractGenerator):
         if self._trace is not None:
             return
         m = self.model
+        # prefill warm-up first: compiles the prefill programs (a compile after capture can clobber the trace) and touches
+        # every lazily created buffer before the capture below
+        t0 = time.time()
+        warm = torch.full((64,), self.cfg.pad_token_id, dtype=torch.long)
+        m.prefill(warm, self.page_table, slot=0)
+        m.reset_slot(0)
+        logger.info(f"prefill warm-up in {time.time()-t0:.1f}s")
         tok = torch.tensor([self.cfg.pad_token_id])
         pos = torch.tensor([0], dtype=torch.int32)
         dev = [ttnn.to_device(h, m.mesh_device) for h in m._host_decode_inputs(tok, pos, self.page_table)]

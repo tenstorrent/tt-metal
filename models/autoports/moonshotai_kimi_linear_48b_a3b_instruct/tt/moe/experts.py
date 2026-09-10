@@ -85,6 +85,7 @@ class KimiExperts:
             packer_l1_acc=False,
         )
         self._ones = None
+        self._ones_sparsity()  # allocate before any trace capture: a later allocation can sit in a trace's scratch region
 
     # ---- shared group kernel ------------------------------------------------------------------
     def _group(self, x: ttnn.Tensor, routing: ttnn.Tensor, sparsity: ttnn.Tensor, nnz, mem) -> ttnn.Tensor:

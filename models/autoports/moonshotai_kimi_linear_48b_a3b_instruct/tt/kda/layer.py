@@ -113,6 +113,9 @@ class KimiKDA:
             cache_path=weight_cache_path,
         )
         self._masks: dict[tuple[int, int], tuple[ttnn.Tensor, ttnn.Tensor]] = {}
+        # long-lived device tensors must exist BEFORE the first trace capture (a later allocation can land in a trace's
+        # scratch region and be overwritten by every replay): allocate the exact-tail decode scratch now.
+        self._tail_ds = self.allocate_decode_state(batch=1) if self.exact_tail is not None else None
 
     # ---- state -------------------------------------------------------------------------------
     def allocate_prefill_state(self) -> KdaState:
@@ -307,7 +310,7 @@ class KimiKDA:
         return out, new_state
 
     def _tail_state(self) -> KDADecodeState:
-        if getattr(self, "_tail_ds", None) is None:
+        if self._tail_ds is None:
             self._tail_ds = self.allocate_decode_state(batch=1)
         return self._tail_ds
 
