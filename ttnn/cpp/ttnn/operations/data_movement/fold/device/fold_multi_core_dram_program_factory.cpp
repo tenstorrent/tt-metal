@@ -166,23 +166,19 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
 
-    // Compute kernel (untilize). Match legacy untilize op's fp32 setup — `UnpackToDest` + `DST_ACCUM_MODE=1`
-    // — else fp32 dest truncates mantissa and `torch.equal` fails vs the untilize→RM composite path.
+    // Compute kernel (untilize). fp32 needs `UnpackToDest` — packer truncates mantissa otherwise and
+    // `torch.equal` fails vs the untilize→RM composite path.
     const bool fp32_dest_acc_en = dfb_data_format == tt::DataFormat::Float32;
     auto make_compute_spec = [&](const KernelSpecName& id, uint32_t nblocks) {
         ComputeGen1Config compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
         if (fp32_dest_acc_en) {
             compute_cfg.unpack_modes.insert({SRC0, UnpackMode::UnpackToDest});
         }
-        KernelSpec::CompilerOptions::Defines compute_defines;
-        if (fp32_dest_acc_en) {
-            compute_defines.insert({"DST_ACCUM_MODE", "1"});
-        }
         return KernelSpec{
             .unique_id = id,
             .source = std::filesystem::path{COMPUTE_UNTILIZE},
             // KernelSpec defaults to O2; compute kernels use O3 (legacy KernelDescriptor default).
-            .compiler_options = {.defines = std::move(compute_defines), .opt_level = KernelBuildOptLevel::O3},
+            .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
             .dfb_bindings =
                 {DFBBinding{.dfb_spec_name = SRC0, .accessor_name = "src", .endpoint_type = DFBEndpointType::CONSUMER},
                  DFBBinding{.dfb_spec_name = SRC1, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
