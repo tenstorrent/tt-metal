@@ -18,7 +18,6 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
-#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "gtest/gtest.h"
 #include "llrt.hpp"
@@ -106,7 +105,7 @@ std::pair<std::shared_ptr<distributed::MeshBuffer>, std::vector<uint32_t>> l1_bu
     auto input =
         tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, test_config.size_bytes / sizeof(uint32_t));
 
-    slow_dispatch::WriteToBuffer(*buffer, input);
+    mesh_device->mesh_command_queue().enqueue_write_mesh_buffer(*buffer, input, /*blocking=*/true);
 
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(mesh_device->get_device_ids()[0]);
     return std::move(std::pair(buffer, input));
@@ -114,13 +113,13 @@ std::pair<std::shared_ptr<distributed::MeshBuffer>, std::vector<uint32_t>> l1_bu
 
 template <typename T>
 bool l1_buffer_read(
-    const std::shared_ptr<distributed::MeshDevice>& /*mesh_device*/,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const L1Config<T>& test_config,
     const auto& write_info) {
     auto buffer = write_info.first;
     auto input = write_info.second;
     auto output = std::vector<uint32_t>(input.size());
-    slow_dispatch::ReadFromBuffer(*buffer, output);
+    mesh_device->mesh_command_queue().enqueue_read_mesh_buffer(output, *buffer, /*blocking=*/true);
     bool pass = (output == input);
 
     if (!pass) {
@@ -202,7 +201,8 @@ TEST_F(MeshDeviceFixture, TestHeightShardFilteredWrite_WritesOnlyFilteredCores) 
         const uint32_t num_u32 = test_config.size_bytes / sizeof(uint32_t);
         std::vector<uint32_t> sentinel(num_u32, k_sentinel);
         std::vector<uint32_t> newest(num_u32, k_new);
-        slow_dispatch::WriteToBuffer(*buffer, sentinel);
+        auto& cq = mesh_device->mesh_command_queue();
+        cq.enqueue_write_mesh_buffer(*buffer, sentinel, /*blocking=*/true);
         CoreRangeSet filter(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
         tt::tt_metal::experimental::core_subset_write::WriteToBuffer(
             *buffer->get_reference_buffer(),
@@ -211,7 +211,7 @@ TEST_F(MeshDeviceFixture, TestHeightShardFilteredWrite_WritesOnlyFilteredCores) 
             filter);
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(mesh_device->get_device_ids()[0]);
         std::vector<uint32_t> output;
-        slow_dispatch::ReadFromBuffer(*buffer, output);
+        cq.enqueue_read_mesh_buffer(output, *buffer, /*blocking=*/true);
         auto expected =
             local_test_functions::expected_host_after_filtered_write(buffer, test_config, k_sentinel, k_new, filter);
         EXPECT_EQ(output, expected);
@@ -226,7 +226,8 @@ TEST_F(MeshDeviceFixture, TestHeightShardFilteredWrite_EmptyFilterIsNoop) {
         const uint32_t num_u32 = test_config.size_bytes / sizeof(uint32_t);
         std::vector<uint32_t> sentinel(num_u32, k_sentinel);
         std::vector<uint32_t> newest(num_u32, 0x99999999u);
-        slow_dispatch::WriteToBuffer(*buffer, sentinel);
+        auto& cq = mesh_device->mesh_command_queue();
+        cq.enqueue_write_mesh_buffer(*buffer, sentinel, /*blocking=*/true);
         CoreRangeSet empty_filter;
         tt::tt_metal::experimental::core_subset_write::WriteToBuffer(
             *buffer->get_reference_buffer(),
@@ -235,7 +236,7 @@ TEST_F(MeshDeviceFixture, TestHeightShardFilteredWrite_EmptyFilterIsNoop) {
             empty_filter);
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(mesh_device->get_device_ids()[0]);
         std::vector<uint32_t> output;
-        slow_dispatch::ReadFromBuffer(*buffer, output);
+        cq.enqueue_read_mesh_buffer(output, *buffer, /*blocking=*/true);
         EXPECT_EQ(output, sentinel);
     }
 }
@@ -248,9 +249,10 @@ TEST_F(MeshDeviceFixture, TestHeightShardFilteredWrite_FullFilterMatchesUnfilter
         auto buffer_b = local_test_functions::make_height_sharded_l1_buffer(mesh_device, test_config);
         const uint32_t num_u32 = test_config.size_bytes / sizeof(uint32_t);
         std::vector<uint32_t> data(num_u32, k_pattern);
-        slow_dispatch::WriteToBuffer(*buffer_a, data);
+        auto& cq = mesh_device->mesh_command_queue();
+        cq.enqueue_write_mesh_buffer(*buffer_a, data, /*blocking=*/true);
         std::vector<uint32_t> sentinel(num_u32, 0x01010101u);
-        slow_dispatch::WriteToBuffer(*buffer_b, sentinel);
+        cq.enqueue_write_mesh_buffer(*buffer_b, sentinel, /*blocking=*/true);
         CoreRangeSet full_filter = test_config.shard_spec().grid();
         tt::tt_metal::experimental::core_subset_write::WriteToBuffer(
             *buffer_b->get_reference_buffer(),
@@ -259,8 +261,8 @@ TEST_F(MeshDeviceFixture, TestHeightShardFilteredWrite_FullFilterMatchesUnfilter
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(mesh_device->get_device_ids()[0]);
         std::vector<uint32_t> out_a;
         std::vector<uint32_t> out_b;
-        slow_dispatch::ReadFromBuffer(*buffer_a, out_a);
-        slow_dispatch::ReadFromBuffer(*buffer_b, out_b);
+        cq.enqueue_read_mesh_buffer(out_a, *buffer_a, /*blocking=*/true);
+        cq.enqueue_read_mesh_buffer(out_b, *buffer_b, /*blocking=*/true);
         EXPECT_EQ(out_a, out_b);
     }
 }
@@ -337,7 +339,8 @@ TEST_F(MeshDeviceFixture, TestUnorderedHeightShardReadWrite) {
             distributed::ReplicatedBufferConfig{.size = total_size}, local_config, mesh_device.get());
         auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, total_size / sizeof(uint32_t));
 
-        slow_dispatch::WriteToBuffer(*buffer, input);
+        auto& cq = mesh_device->mesh_command_queue();
+        cq.enqueue_write_mesh_buffer(*buffer, input, /*blocking=*/true);
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(mesh_device->get_device_ids()[0]);
         auto input_it = input.begin();
         for (const auto& physical_core : physical_cores) {
@@ -347,7 +350,7 @@ TEST_F(MeshDeviceFixture, TestUnorderedHeightShardReadWrite) {
             input_it += tt::constants::TILE_HW;
         }
         std::vector<uint32_t> output;
-        slow_dispatch::ReadFromBuffer(*buffer, output);
+        cq.enqueue_read_mesh_buffer(output, *buffer, /*blocking=*/true);
         EXPECT_EQ(input, output);
     }
 }

@@ -125,6 +125,7 @@ static void run_dfb_size_override_test(
     const auto input =
         tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, workload * data_entry_size / sizeof(uint32_t));
 
+    auto& cq = mesh_device.mesh_command_queue();
     const experimental::NodeCoord node{0, 0};
     uint32_t eff_entry_size = entry_size_spec;
     uint32_t eff_num_entries = num_entries_spec;
@@ -163,19 +164,19 @@ static void run_dfb_size_override_test(
         EXPECT_EQ(dfb->config.entry_size, eff_entry_size);
         EXPECT_EQ(dfb->config.num_entries, eff_num_entries);
 
-        slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
+        cq.enqueue_write_mesh_buffer(in_tensor.mesh_buffer(), input, /*blocking=*/true);
         if (mesh_device.arch() == ARCH::QUASAR) {
             // TODO #38042: barrier not yet uplifted for Quasar; wait for the DRAM write to land.
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
             std::vector<uint32_t> rdback;
-            slow_dispatch::ReadFromBuffer(in_tensor.mesh_buffer(), rdback);
+            cq.enqueue_read_mesh_buffer(rdback, in_tensor.mesh_buffer(), /*blocking=*/true);
             tt_driver_atomics::mfence();
             ASSERT_EQ(rdback, input);
         }
         distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), mesh_workload, /*blocking=*/true);
 
         std::vector<uint32_t> output;
-        slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
+        cq.enqueue_read_mesh_buffer(output, out_tensor.mesh_buffer(), /*blocking=*/true);
         EXPECT_EQ(output, input);
     }
 }

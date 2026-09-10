@@ -293,18 +293,18 @@ static bool test_sdpa_reduce_c(
     auto qk_im_tilized = tiny ? tilize_16x32(qk_im_tensor.get_values(), q_chunk_size * tile_height, k_chunk_size * 32)
                               : tilize_nfaces(qk_im_tensor.get_values(), q_chunk_size * 32, k_chunk_size * 32);
     qk_im = pack_bfloat16_vec_into_uint32_vec(qk_im_tilized);
-    slow_dispatch::WriteToBuffer(*qk_im_buffer, qk_im);
+    cq.enqueue_write_mesh_buffer(*qk_im_buffer, qk_im, /*blocking=*/true);
 
     std::vector<bfloat16> prev_max_first_col;
     auto prev_max_rm = make_prev_max_matrix(q_chunk_size, 25.0f, 65.0f, prev_max_first_col, tile_height);
     auto prev_max_tilized = tiny ? tilize_16x32(prev_max_rm, q_chunk_size * tile_height, 32)
                                  : tilize_nfaces(prev_max_rm, q_chunk_size * 32, 32);
     auto prev_max_uint_vec = pack_bfloat16_vec_into_uint32_vec(prev_max_tilized);
-    slow_dispatch::WriteToBuffer(*prev_max_buffer, prev_max_uint_vec);
+    cq.enqueue_write_mesh_buffer(*prev_max_buffer, prev_max_uint_vec, /*blocking=*/true);
 
     auto identity_scale_tile = make_identity_scale_tile(tile_height);
     auto identity_scale_uint_vec = pack_bfloat16_vec_into_uint32_vec(identity_scale_tile);
-    slow_dispatch::WriteToBuffer(*identity_scale_buffer, identity_scale_uint_vec);
+    cq.enqueue_write_mesh_buffer(*identity_scale_buffer, identity_scale_uint_vec, /*blocking=*/true);
 
     // Execute program using MeshWorkload
     tt_metal::distributed::MeshWorkload workload;
@@ -318,7 +318,7 @@ static bool test_sdpa_reduce_c(
 
     // Read outputs
     std::vector<uint32_t> out_max_vec;
-    slow_dispatch::ReadFromBuffer(*out_max_buffer, out_max_vec);
+    cq.enqueue_read_mesh_buffer(out_max_vec, *out_max_buffer, /*blocking=*/true);
     auto out_max_bfp16 = unpack_uint32_vec_into_bfloat16_vec(out_max_vec);
     auto out_max_rm = tiny ? untilize_16x32(out_max_bfp16, q_chunk_size * tile_height, 32)
                            : untilize_nfaces(out_max_bfp16, q_chunk_size * 32, 32);
