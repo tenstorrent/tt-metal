@@ -53,6 +53,11 @@ void kernel_main() {
     constexpr uint32_t log_n_groups = get_named_compile_time_arg_val("log_n_groups");
     constexpr uint32_t log_width_tiles = get_named_compile_time_arg_val("log_width_tiles");
     constexpr bool stable_sort = get_named_compile_time_arg_val("stable_sort") != 0;
+    // The factory certifies that every sort-input CB is unpacked through SrcA as TF32, so the keys'
+    // low 13 mantissa bits are zero and the rank-tag stable engine is lossless (GATE_TAG_BITS in
+    // moe_gate_common_compute.hpp). Without that certificate stable mode keeps the comparator.
+    constexpr bool sort_keys_tf32 = get_named_compile_time_arg_val("sort_keys_tf32") != 0;
+    constexpr bool rank_tag = stable_sort && sort_keys_tf32;
     constexpr uint32_t score_func = get_named_compile_time_arg_val("score_func");
 
     constexpr uint32_t end_phase = log_group_size - 1;
@@ -78,7 +83,7 @@ void kernel_main() {
             // Single expert group: grouping is a no-op, so select the top-k directly over the full
             // expert axis. blocks::topk is a general cross-tile top-k; feed it all width_tiles of
             // biased scores together with the identity expert-index template (0..experts-1).
-            blocks::topk<stable_sort, /*indices_pretransposed=*/true>(
+            blocks::topk<stable_sort, /*indices_pretransposed=*/true, rank_tag>(
                 cb_biased_scores,
                 cb_expert_index_template,
                 cb_final_indices_transposed,
@@ -99,9 +104,9 @@ void kernel_main() {
                 end_phase);
             blocks::sum_top_experts_per_group(
                 cb_top_experts_per_group, cb_group_summed_scores, summed_experts_per_group);
-            blocks::topk_group_scores<stable_sort>(
+            blocks::topk_group_scores<stable_sort, rank_tag>(
                 cb_group_summed_scores, cb_group_index_template, cb_sorted_group_order, false, false, log_n_groups - 1);
-            blocks::topk<stable_sort>(
+            blocks::topk<stable_sort, /*indices_pretransposed=*/false, rank_tag>(
                 cb_winning_group_scores,
                 cb_winning_group_indices,
                 cb_final_indices_transposed,

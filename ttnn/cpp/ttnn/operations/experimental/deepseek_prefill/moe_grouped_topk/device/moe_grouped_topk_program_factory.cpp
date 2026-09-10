@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moe_grouped_topk_device_operation.hpp"
+#include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/cb_utils.hpp"
@@ -281,6 +282,21 @@ MoeGroupedTopkDeviceOperation::ProgramFactory::cached_program_t MoeGroupedTopkDe
 
     std::vector<uint32_t> compute_compile_time_args = {};
 
+    // Every CB stays on the default unpack path: fp32 tiles reach DEST through SrcA as TF32 (10
+    // mantissa bits), so the words the top-k compares have zero low 13 mantissa bits. The kernel's
+    // rank-tag stable engine puts its 6-bit rank tag inside those zero bits and is lossless only
+    // because of that; sort_keys_tf32 certifies it from the modes actually passed to the kernel.
+    // Switching a sort-input CB to UnpackToDestFp32 (exact fp32 keys) turns the certificate off and
+    // the kernel falls back to the comparator-stable engine: slower, never lossy.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    const auto default_unpack = [&](tt::CBIndex cb) {
+        return unpack_to_dest_mode[static_cast<uint32_t>(cb)] == tt::tt_metal::UnpackToDestMode::Default;
+    };
+    const bool sort_keys_tf32 = default_unpack(cb_biased_scores) && default_unpack(cb_group_summed_scores) &&
+                                default_unpack(cb_winning_group_scores);
+    compute_named_compile_time_args["sort_keys_tf32"] = static_cast<uint32_t>(sort_keys_tf32);
+
     bool fp32_dest_acc_en = true;
     auto compute_kernel_id = CreateKernel(
         program,
@@ -289,6 +305,7 @@ MoeGroupedTopkDeviceOperation::ProgramFactory::cached_program_t MoeGroupedTopkDe
         all_cores,
         ComputeConfig{
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .compile_args = compute_compile_time_args,
             .named_compile_args = compute_named_compile_time_args});
 
