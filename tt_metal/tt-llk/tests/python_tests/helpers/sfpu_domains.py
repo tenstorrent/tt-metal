@@ -165,29 +165,15 @@ _E5M2_AND_FLOAT16 = (DataFormat.Float16, DataFormat.MxFp8R)
 
 # ── Exp family: range on the registry, accuracy behind ApproximationMode.Yes ──
 #
-# Two ceilings bound the exp family's positive side, and they belong in different places:
+# Two separate ceilings bound the positive side. The range bound (exp overflows an 8-bit
+# exponent near x = 88.7) holds in both modes and lives in the registry entries below; the
+# approximation's accuracy ceiling holds in one mode only and lives in _APPROX_ACCURACY_MAX,
+# applied on top by for_op() at ApproximationMode.Yes. The ceilings are conservative rather
+# than measured -- the approximation stays well inside the default rtol below them.
 #
-#   * **Range** — exp overflows an 8-bit exponent near x = 88.7. True in both modes, so it
-#     lives in the registry entries below.
-#   * **Accuracy** — the *approximation* overshoots the golden by ~5.7% past ~8 (measured on
-#     Wormhole; see _APPROX_EXP_ACCURACY_XFAIL in test_eltwise_unary_sfpu). One mode only, so it
-#     lives in _APPROX_ACCURACY_MAX, applied by for_op() at ApproximationMode.Yes.
-#
-# The registry entry serves both modes, so an accuracy bound written there also withholds
-# (16, 80] from the *accurate* path — with it the exponent-overflow region and all large-exp
-# saturation into Float16_b and Bfp8_b.
-#
-# MEASURED on a Wormhole n300: the full unary sweep drives Exp, Exp2 and ExpWithBase over these
-# widened domains at ApproximationMode.No -- the only mode the accurate path runs in -- and passes
-# with no custom tolerance and no xfail. If it ever drifts, the fix is a mode-conditional
-# custom_rtol, not a re-narrowed registry entry, since the entry serves both modes.
-#
-# ExpWithBase's entry below is correct but currently unreachable: the op is in STANDARD_SWEEP_OPS,
-# which drives ApproximationMode.No only, so the ceiling never fires and the swept domain is the
-# range bound (high=160, argument 80). Kept rather than deleted so that enrolling it in
-# BROAD_SWEEP_OPS cannot silently hand the approximation an argument of 80, which is ten times the
-# ~8 where the overshoot starts. test_sfpu_domains pins the unreachability so the entry cannot be
-# mistaken for active coverage.
+# ExpWithBase's entry is currently unreachable (the op runs at ApproximationMode.No only) but
+# is kept so that enrolling it in BROAD_SWEEP_OPS cannot silently hand the approximation an
+# unbounded argument; test_sfpu_domains pins that unreachability.
 _APPROX_ACCURACY_MAX: Dict[MathOperation, float] = {
     MathOperation.Exp: 16.0,
     # exp2(x) = exp(x * ln2), so exp's argument ceiling of 16 lands at x = 16 / ln2 ~ 23.

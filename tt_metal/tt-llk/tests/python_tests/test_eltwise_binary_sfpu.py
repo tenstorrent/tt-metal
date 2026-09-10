@@ -680,17 +680,15 @@ def test_eltwise_binary_sfpu_float(
     _skip_fp32_no_dest_acc(formats, dest_acc)
     _skip_bh_float16_no_dest_acc(formats, dest_acc)
 
-    # POW/XLOGY are only covered on the float formats: under Bfp8_b the coarse
-    # quantization pushes small operands to values that produce -inf/NaN (log/pow),
-    # so Bfp8_b coverage for these ops is intentionally skipped. LOGADDEXP joins
-    # them: its +/-200 domain under Bfp8_b's shared-exponent quantization collapses
-    # most of the |a - b| < 20 correction band this sweep exists to exercise.
+    # Bfp8_b quantization can map small positive operands to zero, making xlogy's
+    # logarithm -inf. LOGADDEXP is skipped here too: its +/-200 domain under Bfp8_b's
+    # shared-exponent quantization collapses most of the |a - b| < 20 correction band
+    # this sweep exists to exercise.
     if formats.input_format == DataFormat.Bfp8_b and mathop in (
-        MathOperation.SfpuElwpow,
         MathOperation.SfpuXlogy,
         MathOperation.SfpuLogaddexp,
     ):
-        pytest.skip("Bfp8_b is not supported for POW/XLOGY/LOGADDEXP coverage")
+        pytest.skip("Bfp8_b input is not supported for XLOGY/LOGADDEXP coverage")
 
     if bcast_dim == LlkBroadcastType.Row and (
         dest_acc == DestAccumulation.Yes
@@ -757,13 +755,20 @@ def test_eltwise_binary_sfpu_float_extended(formats, dest_acc, mathop):
     _skip_fp32_no_dest_acc(formats, dest_acc)
     _skip_bh_float16_no_dest_acc(formats, dest_acc)
 
-    # fmod/remainder divide by b via a reciprocal; Bfp8_b's coarse quantization blows up
-    # the quotient for small divisors (mirrors the pow/xlogy Bfp8_b skip above).
-    if formats.input_format == DataFormat.Bfp8_b and mathop in (
-        MathOperation.SfpuBinaryFmod,
-        MathOperation.SfpuBinaryRemainder,
+    # fmod/remainder divide by b via a reciprocal, and Bfp8_b's coarse quantization blows up
+    # the quotient for small divisors. It only shows when the output is Bfp8_b as well: a
+    # Bfp8_b input into any of the float outputs passes, so the guard is scoped to
+    # Bfp8_b -> Bfp8_b rather than to every Bfp8_b input.
+    if (
+        formats.input_format == DataFormat.Bfp8_b
+        and formats.output_format == DataFormat.Bfp8_b
+        and mathop
+        in (
+            MathOperation.SfpuBinaryFmod,
+            MathOperation.SfpuBinaryRemainder,
+        )
     ):
-        pytest.skip("Bfp8_b is not supported for fmod/remainder coverage")
+        pytest.skip("Bfp8_b -> Bfp8_b is not supported for fmod/remainder coverage")
 
     sfpu_binary(
         formats,
@@ -1307,89 +1312,13 @@ assert _BINARY_EDGE_OPS, (
 )
 
 
-# What driving the poles found on Wormhole. Only one cause is left: the sign of a zero result
-# is lost, which is documented Wormhole SFPMAD behaviour ("flushed to positive zero") that
-# Blackhole is documented to fix. Every other class is asserted rather than tolerated -- the
-# indeterminate forms turned out to be the packer substituting an infinity for a NaN the
-# pipeline was too narrow to hold, which the golden now models, and what remains of them on
-# Wormhole is the substituted infinity's sign, handled per lane by
-# generated_nan_sign_is_asserted().
-#
-# Non-strict xfails, so a case still executes and reports XPASS if behaviour changes;
-# enumerated per (input, output, dest_acc) rather than by predicate so a combination drifting
-# in or out shows up here. Keyed by (op, edge class).
-_BINARY_EDGE_COMBINATIONS = {
-    MathOperation.SfpuElwdiv: (
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
-        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No),
-        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
-    ),
-    MathOperation.SfpuXlogy: (
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
-        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No),
-        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
-    ),
-    MathOperation.SfpuBinaryFmod: (
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
-        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No),
-        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
-    ),
-    MathOperation.SfpuBinaryRemainder: (
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
-        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No),
-        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
-    ),
-}
-
-_ZERO_SIGN_ISA_NOTE = (
-    "the lost zero sign is documented Wormhole SFPMAD behaviour ('flushed to positive "
-    "zero'); Blackhole is documented to preserve it, so expect XPASS there"
-)
-
-# Which classes of each op are expected to diverge, and why — one reason per class, so the
-# xfail says what it is waiting for. A class absent from an op's dict is asserted to pass:
-# the ±inf poles, the finite quotients and the exact remainders all agreed on Wormhole.
-_BINARY_EDGE_REASON = {
-    MathOperation.SfpuElwdiv: {
-        _EDGE_CLASS_NEGATIVE_ZERO: f"div(0, -x) returns +0.0, not -0.0 "
-        f"({_ZERO_SIGN_ISA_NOTE}).",
-    },
-    MathOperation.SfpuXlogy: {
-        _EDGE_CLASS_NEGATIVE_ZERO: f"xlogy(0, tiny) returns +0.0, not -0.0 "
-        f"({_ZERO_SIGN_ISA_NOTE}).",
-    },
-    MathOperation.SfpuBinaryFmod: {
-        _EDGE_CLASS_NEGATIVE_ZERO: f"fmod loses the sign of a zero result "
-        f"({_ZERO_SIGN_ISA_NOTE}).",
-    },
-    MathOperation.SfpuBinaryRemainder: {
-        _EDGE_CLASS_NEGATIVE_ZERO: f"remainder loses the sign of a zero result "
-        f"({_ZERO_SIGN_ISA_NOTE}).",
-    },
-}
-
-# both_zero and nan_golden carry no entries: the indeterminate forms are asserted now that the
-# golden models the pack substitution, and 0**0 is asserted since the pow kernel gained its
-# IEEE pow(x, 0) == 1 guard.
-
-# No op may claim a divergence without a combination list to apply it to, and none may
-# list combinations with nothing to apply them to.
-assert set(_BINARY_EDGE_REASON) == set(_BINARY_EDGE_COMBINATIONS), (
-    "_BINARY_EDGE_REASON and _BINARY_EDGE_COMBINATIONS disagree on which ops diverge: "
-    f"{set(_BINARY_EDGE_REASON) ^ set(_BINARY_EDGE_COMBINATIONS)}"
-)
-assert all(
-    cls in _EDGE_CLASSES for classes in _BINARY_EDGE_REASON.values() for cls in classes
-), "_BINARY_EDGE_REASON names an edge class that _classify_edge_pair never returns"
-
-# Edge classes whose divergence is a Wormhole limitation, so on Blackhole the case is asserted
-# rather than tolerated. Measured on a Blackhole p150b: the negative-zero class XPASSed on all
-# 16 cells it is claimed for and nothing else XPASSed.
-_WORMHOLE_ONLY_EDGE_CLASSES = frozenset({_EDGE_CLASS_NEGATIVE_ZERO})
+# Driving the poles found nothing left to tolerate on Wormhole. The negative-zero class used
+# to carry a non-strict xfail for div, xlogy, fmod and remainder on the grounds that SFPMAD
+# flushes a zero result to positive zero; all 16 cells XPASS, and passed_test compares with
+# torch.isclose, which cannot see a zero's sign in the first place. The indeterminate forms
+# are asserted too, now that the golden models the packer substituting an infinity for a NaN
+# the pipeline was too narrow to hold; what remains of them on Wormhole is that infinity's
+# sign, handled per lane by generated_nan_sign_is_asserted() rather than by an xfail.
 
 
 @pytest.mark.nightly
@@ -1401,7 +1330,7 @@ _WORMHOLE_ONLY_EDGE_CLASSES = frozenset({_EDGE_CLASS_NEGATIVE_ZERO})
     # else, so all four share one ELF instead of compiling the same kernel four times.
     edge_class=runtime(list(_EDGE_CLASSES)),
 )
-def test_eltwise_binary_sfpu_edges(request, formats, dest_acc, mathop, edge_class):
+def test_eltwise_binary_sfpu_edges(formats, dest_acc, mathop, edge_class):
     """Drive one class of each binary op's registered pole against its counterparts.
 
     One variant per (op, class) rather than per op: see the comment above _EDGE_CLASSES for
@@ -1409,24 +1338,6 @@ def test_eltwise_binary_sfpu_edges(request, formats, dest_acc, mathop, edge_clas
     """
     _skip_fp32_no_dest_acc(formats, dest_acc)
     _skip_bh_float16_no_dest_acc(formats, dest_acc)
-
-    # A Wormhole-only class is asserted on Blackhole, not tolerated — see
-    # _WORMHOLE_ONLY_EDGE_CLASSES for the measurement that established which those are.
-    arch_fixed = (
-        edge_class in _WORMHOLE_ONLY_EDGE_CLASSES
-        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-    )
-
-    reason = _BINARY_EDGE_REASON.get(mathop, {}).get(edge_class)
-    if (
-        reason is not None
-        and not arch_fixed
-        and (
-            (formats.input_format, formats.output_format, dest_acc)
-            in _BINARY_EDGE_COMBINATIONS[mathop]
-        )
-    ):
-        request.node.add_marker(pytest.mark.xfail(reason=reason, strict=False))
 
     # Cat B. Two independent gates, both must pass: BINARY_SPECIALS_READY_OPS says the golden
     # defines an answer for a non-finite operand, specials_safe() says the pipeline delivers one

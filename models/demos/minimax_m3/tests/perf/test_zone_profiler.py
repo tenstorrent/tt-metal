@@ -24,27 +24,27 @@ import visualize_zones as V  # noqa: E402
 class TestLeafDetection:
     """A zone is a parent only when a descendant is present in THIS capture.
 
-    A static parent list silently dropped `attn/cache_read` from the totals at LEVEL=2, where its
-    deshard/slice children are suppressed and it is therefore a leaf.
+    A static parent list silently dropped a zone from the totals at LEVEL=2 when its LEVEL=3 sub-split
+    children are suppressed and it is therefore a leaf (`attn/kv_write` stands in for such a zone here).
     """
 
     LEVEL2 = {
         "(layer total)",
         "attn",
         "mlp",
-        "attn/cache_read",
+        "attn/kv_write",
         "attn/sparse_sdpa",
         "mlp/experts_mm",
         "mlp/shared_expert",
         "mlp/shared_expert/tp_allreduce",
     }
-    LEVEL3 = LEVEL2 | {"attn/cache_read/deshard", "attn/cache_read/slice"}
+    LEVEL3 = LEVEL2 | {"attn/kv_write/k", "attn/kv_write/v"}
 
-    def test_cache_read_is_a_leaf_when_its_children_are_suppressed(self):
-        assert "attn/cache_read" not in V.parent_rels(self.LEVEL2)
+    def test_zone_is_a_leaf_when_its_children_are_suppressed(self):
+        assert "attn/kv_write" not in V.parent_rels(self.LEVEL2)
 
-    def test_cache_read_is_a_parent_when_its_children_are_captured(self):
-        assert "attn/cache_read" in V.parent_rels(self.LEVEL3)
+    def test_zone_is_a_parent_when_its_children_are_captured(self):
+        assert "attn/kv_write" in V.parent_rels(self.LEVEL3)
 
     def test_real_parents_are_always_excluded(self):
         for level in (self.LEVEL2, self.LEVEL3):
