@@ -319,19 +319,31 @@ inline void _topk_defuse_tile_(const int num_tiles)
 // below run while LREG4..7 are dead, so their load captures are harmless.
 
 // Stamp one value tile (dst tile 0 or 1) with sign-conditioned rank tags rank_base + [0, 32).
-// rank_base must be a multiple of 32 and rank_base + 31 must fit in 16 bits.
-// Clobbers LREG0..2 and leaves all lanes enabled.
-template <bool largest>
+// TAG_BITS is the width of the tag field in the value word's low bits: 16 for bf16 values (the
+// whole low half is free), fewer for fp32 values whose low mantissa bits are known to be zero
+// (TF32-unpacked words have 13 zero bits; the MoE gate's k=32 chains need 6). rank_base must be
+// a multiple of 32 and rank_base + 31 must fit in the tag field. Clobbers LREG0..2 and leaves
+// all lanes enabled.
+template <bool largest, std::uint32_t TAG_BITS = 16>
 inline void _topk_stamp_tile_rank_range_(std::uint32_t dst_tile_index, std::uint32_t rank_base)
 {
+    static_assert(TAG_BITS >= 6 && TAG_BITS <= 16, "rank tags need 6..16 bits");
+    constexpr std::uint32_t TAG_MASK = (1u << TAG_BITS) - 1;
     // Lanes-on FIRST -- the constant programming below goes through the
     // lane-PREDICATED SFPCONFIG path (see _topk_fuse_tile_).
     TOPK_SFPENCC_ALL_LANES_ON();
-    sfpi::vConstIntPrgm0 = 0x0000FFFF; // LREG12: tag complement operand
+    sfpi::vConstIntPrgm0 = TAG_MASK; // LREG12: tag complement operand
+    if constexpr (TAG_BITS != 16)
+    {
+        // A narrow field is cleared with SFPAND against this mask (the 16-bit field uses
+        // SFPLOADI LOWER 0). LREG14 is a programmable constant; LREG11 is the hardware -1.0
+        // and must never be used as scratch.
+        _sfpu_load_config32_(p_sfpu::LREG14, (~TAG_MASK) >> 16, (~TAG_MASK) & 0xFFFF);
+    }
 
     LLK_ASSERT(dst_tile_index <= 1, "stamp_tile_rank_range expects dst tile 0 or 1");
     LLK_ASSERT((rank_base & 31u) == 0u, "stamp_tile_rank_range expects rank_base to be a multiple of 32");
-    LLK_ASSERT(rank_base <= 0xFFFFu - 31u, "stamp_tile_rank_range expects rank_base + 31 to fit in 16 bits");
+    LLK_ASSERT(rank_base <= TAG_MASK - 31u, "stamp_tile_rank_range expects rank_base + 31 to fit in the tag field");
     set_dst_write_addr(dst_tile_index * 64); // one 32-bit tile = 64 SFPLOAD address units
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
@@ -352,7 +364,14 @@ inline void _topk_stamp_tile_rank_range_(std::uint32_t dst_tile_index, std::uint
         for (int parity = 0; parity < 2; parity++) // even / odd Dst columns
         {
             TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
-            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0); // clear stale lo16 -> [bf16|0]
+            if constexpr (TAG_BITS == 16)
+            {
+                TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0); // clear stale lo16 -> [bf16|0]
+            }
+            else
+            {
+                TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG0, 0); // clear the stale tag field only
+            }
             // -0.0 -> +0.0: (w << 1) == 0 exactly for the two zero encodings.
             TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
             TTI_SFPSHFT(1, 0, p_sfpu::LREG1, 1);
@@ -392,14 +411,14 @@ inline void _topk_stamp_tile_rank_range_(std::uint32_t dst_tile_index, std::uint
 // all -0.0 strictly below all +0.0). Every datum enters the sort through
 // exactly one local-sort call, so this single sweep canonicalizes the whole
 // sort. Clobbers LREG0..2 and the lane enables (left fully enabled).
-template <bool largest>
+template <bool largest, std::uint32_t TAG_BITS = 16>
 inline void _topk_stamp_local_positions_()
 {
-    _topk_stamp_tile_rank_range_<largest>(0 /*dst_tile_index*/, 0 /*rank_base*/);
-    _topk_stamp_tile_rank_range_<largest>(1 /*dst_tile_index*/, 32 /*rank_base*/);
+    _topk_stamp_tile_rank_range_<largest, TAG_BITS>(0 /*dst_tile_index*/, 0 /*rank_base*/);
+    _topk_stamp_tile_rank_range_<largest, TAG_BITS>(1 /*dst_tile_index*/, 32 /*rank_base*/);
 }
 
-// Clear the low 16 bits (stale rank tags) of one value tile, leaving exact
+// Clear the low TAG_BITS bits (stale rank tags) of one value tile, leaving exact
 // [bf16|0x0000] words so the following Float32->bf16 pack cannot RNE-round on
 // tag bits. Runs on MATH while DEST is acquired, after the final transpose
 // back to row layout has drained (same calling convention as
@@ -408,10 +427,12 @@ inline void _topk_stamp_local_positions_()
 // complementary mask in LREG12). LREG4..7 are dead here, so nothing tracked
 // is at risk. Leaves LREG12 holding the strip mask -- every stamp/merge/fuse
 // entry reprograms LREG12 defensively.
+template <std::uint32_t TAG_BITS = 16>
 inline void _topk_strip_rank_tags_(std::uint32_t dst_tile_index)
 {
+    static_assert(TAG_BITS >= 6 && TAG_BITS <= 16, "rank tags need 6..16 bits");
     TOPK_SFPENCC_ALL_LANES_ON();
-    sfpi::vConstIntPrgm0 = 0xFFFF0000; // keep the bf16 half, clear the rank tag
+    sfpi::vConstIntPrgm0 = ~((1u << TAG_BITS) - 1); // keep the value bits, clear the rank tag field
     TTI_SETC16(ADDR_MOD_SET_Base_ADDR32, 1);
     TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
     set_dst_write_addr(0);
@@ -1128,7 +1149,8 @@ template <
     bool STABLE_SORT       = false,
     bool FUSED             = false,
     bool RANK_STAMPED      = false,
-    TopkTieOrder TIE_ORDER = TopkTieOrder::Unset>
+    TopkTieOrder TIE_ORDER = TopkTieOrder::Unset,
+    std::uint32_t TAG_BITS = 16>
 inline void _bitonic_topk_merge(const int m_iter, const int k)
 {
     // UInt16-in-32b-DEST: clear garbage high bits before compare-swap (#50215).
@@ -1157,10 +1179,13 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
         // Lanes-on FIRST -- the constant programming below goes through the lane-PREDICATED
         // SFPCONFIG path and transiently clobbers LREG0 (see _topk_fuse_tile_), so it must
         // run before any load and under fully enabled lanes.
+        static_assert(TAG_BITS >= 6 && TAG_BITS <= 16, "rank tags need 6..16 bits");
+        constexpr std::uint32_t TAG_MASK = (1u << TAG_BITS) - 1;
         TOPK_SFPENCC_ALL_LANES_ON();
-        sfpi::vConstIntPrgm0 = 0x0000FFFF;                    // LREG12: tag complement operand
-        _sfpu_load_config32_(p_sfpu::LREG14, 0xFFFF, 0x0000); // lo16 clear mask (SFPAND -- no loads mid-stamp)
+        sfpi::vConstIntPrgm0 = TAG_MASK;                                               // LREG12: tag complement operand
+        _sfpu_load_config32_(p_sfpu::LREG14, (~TAG_MASK) >> 16, (~TAG_MASK) & 0xFFFF); // tag clear mask (SFPAND -- no loads mid-stamp)
         const std::uint32_t rank_span = 2 * static_cast<std::uint32_t>(k) - 1;
+        LLK_ASSERT(rank_span <= TAG_MASK, "merge rank span 2K-1 exceeds the tag field");
         _sfpu_load_config32_(p_sfpu::LREG13, rank_span >> 16, rank_span & 0xFFFF); // right-run complement (2K-1)
     }
 
@@ -1581,11 +1606,13 @@ inline void _init_topk()
 // topk in the same kernel cannot leak tracking OFF. The merge programs the
 // remaining stamp constants (LREG12/13/14) at each entry, since K and the
 // rank base are runtime values there.
+template <std::uint32_t TAG_BITS = 16>
 inline void _init_topk_rank_stamped_()
 {
+    static_assert(TAG_BITS >= 6 && TAG_BITS <= 16, "rank tags need 6..16 bits");
     topk_replay_init = 0;
-    _sfpu_load_config32_(0xF, 0x0, 0x4); // SFPU_CONTROL_REG: ENABLE_DEST_INDEX (bit 2) = 1
-    sfpi::vConstIntPrgm0 = 0x0000FFFF;   // LREG12: tag complement operand
+    _sfpu_load_config32_(0xF, 0x0, 0x4);         // SFPU_CONTROL_REG: ENABLE_DEST_INDEX (bit 2) = 1
+    sfpi::vConstIntPrgm0 = (1u << TAG_BITS) - 1; // LREG12: tag complement operand
 }
 
 // Fused-key init: index tracking stays OFF (the packed key carries the index; there is no
