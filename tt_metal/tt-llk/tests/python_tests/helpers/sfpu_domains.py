@@ -439,11 +439,28 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Relu: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     ),
+    # relu_max(x) = clamp(x, 0, RELU_MAX_THRESHOLD) -- two cutoffs, and the upper one is a
+    # strict `result > threshold`, so the bound has to clear the threshold for a *finite*
+    # input to reach it. At low=-5/high=5 against a threshold of 5.0 the sampler is
+    # half-open and only the relu knee at 0 ever fired; +inf from the edge sweep was the
+    # sole thing exercising the clamp. See _OP_EDGE_POINTS for the straddled cutoffs.
     MathOperation.ReluMax: OperandSpecs(
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM,
+            low=-5.0,
+            high=2.0 * RELU_MAX_THRESHOLD,
+        )
     ),
+    # relu_min(x) = max(x, RELU_MIN_THRESHOLD), so the upper bound has to clear the
+    # threshold or the op has no pass-through half: at low=-5/high=5 against a threshold of
+    # 5.0 the sampler is half-open, every input clamps, and the golden collapses to the
+    # constant 5.0 -- a kernel that ignored x entirely would have scored a perfect PCC.
     MathOperation.ReluMin: OperandSpecs(
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM,
+            low=-5.0,
+            high=2.0 * RELU_MIN_THRESHOLD,
+        )
     ),
     # lrelu: leaky ReLU with slope 0.1; span both signs so the negative
     # (scaled) branch and the positive (pass-through) branch are exercised.
@@ -1809,15 +1826,22 @@ _COMPARISON_EDGE_OPS = (
 
 _OP_EDGE_POINTS: Dict[MathOperation, Tuple[float, ...]] = {
     **{op: (0.0, -0.0) for op in _ZERO_EDGE_OPS},
-    # UnaryGt/Lt/Ge/Le reach the edge sweep through edge_spec(). UnaryEq and UnaryNe do not
-    # -- they are outside _OP_DOMAIN_REGISTRY, so their consumer is
-    # test_eltwise_unary_sfpu._threshold_op_stimuli_spec, which reads op_edge_points() directly to
-    # place the exact threshold in its stimuli, as the int32 comparison ops below do.
+    # UnaryGt/Lt/Ge/Le reach the edge sweep through edge_spec(), which is what consumes these.
+    #
+    # UnaryEq, UnaryNe and LogicalNot below have no consumer today, and are listed anyway.
+    # They are outside _OP_DOMAIN_REGISTRY, so sfpu_unary_ops() never puts them in an edge
+    # sweep and edge_spec() never sees them; their one reader used to be
+    # test_eltwise_unary_sfpu._threshold_op_stimuli_spec, which took the threshold from
+    # op_edge_points(op)[0] until that positional read was replaced by op_threshold() and
+    # _OP_COMPARISON_THRESHOLD (see the table below for why). Kept as the recorded cutoff so
+    # registering any of the three later gets a correct edge sweep for free -- but treat these
+    # three entries as documentation, not as something a test is reading. The threshold the
+    # sweeps actually use lives in _OP_COMPARISON_THRESHOLD, and moving one here alone moves
+    # nothing.
     **{op: (UNARY_COMP_THRESHOLD,) for op in _COMPARISON_EDGE_OPS},
     # logical_not(x) = (x == 0). Same shape as _ZERO_EDGE_OPS but it is a threshold op
     # rather than a sign op, so keep it named. (LogicalNotUnary is an alias of this
-    # member — see the note in llk_params.py — so listing both would be one key.) Also
-    # outside the registry, and read by _threshold_op_stimuli_spec as above.
+    # member — see the note in llk_params.py — so listing both would be one key.)
     MathOperation.LogicalNot: (0.0, -0.0),
     # unary max/min compare x against UNARY_MAX_MIN_VALUE. Keyed on the constant rather
     # than folded into _ZERO_EDGE_OPS: it happens to be 0.0 today, and if it moves the
@@ -1836,9 +1860,28 @@ _OP_EDGE_POINTS: Dict[MathOperation, Tuple[float, ...]] = {
     MathOperation.Hardmish: (-2.0, 0.0),
     # Below THRESHOLD_T the output jumps to THRESHOLD_V.
     MathOperation.Threshold: (THRESHOLD_T,),
-    # relu_max clamps above at its threshold, and keeps relu's own knee at 0.
-    MathOperation.ReluMax: (0.0, RELU_MAX_THRESHOLD),
-    MathOperation.ReluMin: (RELU_MIN_THRESHOLD,),
+    # relu_max clamps above at its threshold, and keeps relu's own knee at 0. Both cutoffs
+    # are strict compares (`> threshold`, `< 0`), so each needs a value on either side and
+    # not just the cutoff itself: at exactly the threshold the clamp does not fire, and at
+    # exactly 0 the relu does not. -0.0 is deliberately absent -- the relu branch is
+    # SFPSETCC, whose contract holds only "provided that VC is neither negative zero nor
+    # any kind of NaN", so that input is unspecified on hardware (see sfpu_relu_max).
+    MathOperation.ReluMax: (
+        -1.0,
+        0.0,
+        1.0,
+        RELU_MAX_THRESHOLD - 1.0,
+        RELU_MAX_THRESHOLD,
+        RELU_MAX_THRESHOLD + 1.0,
+    ),
+    # The threshold alone only proves the clamp branch. Straddle it so the edge face also
+    # carries a value that passes through unchanged; 4.0/5.0/6.0 are exact in every format
+    # this sweep runs, so the pair does not blur together in bf16.
+    MathOperation.ReluMin: (
+        RELU_MIN_THRESHOLD - 1.0,
+        RELU_MIN_THRESHOLD,
+        RELU_MIN_THRESHOLD + 1.0,
+    ),
     # softplus goes linear at its threshold.
     MathOperation.Softplus: (SOFTPLUS_THRESHOLD,),
     # Round-half-to-even ties, where the kernel's _round_even_ and a naive round differ.
@@ -1866,6 +1909,36 @@ _OP_EDGE_POINTS: Dict[MathOperation, Tuple[float, ...]] = {
     # _OP_OPERAND_EDGE_POINTS, these are the committed (base, -0.0) pairs.
     MathOperation.SfpuElwpow: (-2.0, 2.0),
 }
+
+
+# The scalar each threshold-driven op compares against, mirrored from the dispatch constants
+# the kernels read.
+#
+# Explicit rather than positional. Callers used to take the threshold as op_edge_points(op)[0],
+# which held only while an entry was exactly (threshold,). Several entries now *straddle* their
+# cutoff -- ReluMin is (4.0, 5.0, 6.0) and ReluMax leads with its relu knee -- so index 0 is a
+# probe beside the threshold rather than the threshold, and a positional read would place the
+# wrong value with nothing noticing. Consumers: test_eltwise_unary_sfpu._threshold_op_stimuli_spec.
+_OP_COMPARISON_THRESHOLD: Dict[MathOperation, float] = {
+    # logical_not(x) = (x == 0) ? 1 : 0.
+    MathOperation.LogicalNotUnary: 0.0,
+    **{op: UNARY_COMP_THRESHOLD for op in _COMPARISON_EDGE_OPS},
+    # The two clamps. relu_min clamps below at its threshold; relu_max clamps *above* at
+    # its own, and its relu knee at 0 is a second cutoff the random domain already covers.
+    MathOperation.ReluMin: RELU_MIN_THRESHOLD,
+    MathOperation.ReluMax: RELU_MAX_THRESHOLD,
+    # threshold(x) jumps to THRESHOLD_V below THRESHOLD_T.
+    MathOperation.Threshold: THRESHOLD_T,
+}
+
+
+def op_threshold(op: MathOperation) -> Optional[float]:
+    """The scalar *op* compares its input against, or None if it has no such scalar.
+
+    Use this rather than reading op_edge_points(op)[0]: the edge-point entries straddle
+    their cutoffs, so index 0 is not the threshold for every op that has one.
+    """
+    return _OP_COMPARISON_THRESHOLD.get(op)
 
 
 # Cat D for an operand other than A. _OP_EDGE_POINTS describes the op's own input, which for
@@ -2132,6 +2205,14 @@ SPECIALS_READY_OPS.update(
         "two share one golden by construction. The identity is pinned host-side.",
         MathOperation.ReluMax: "_relu_max_body_: a total-order `> threshold` replaces a NaN "
         "with the threshold, and the relu clamp then sees a finite value.",
+        MathOperation.ReluMin: "max(x, threshold) as a single SFPSWAP fold -- the same "
+        "total-order compare _relu_max_body_ opens with, minus the relu clamp after it. A "
+        "+NaN outranks the threshold and the fold keeps it, which is what IEEE propagation "
+        "gives too, so the golden agrees at every injected special. Read the scope narrowly: "
+        "FLOAT_SPECIALS carries only a positive NaN. A *negative* one folds to the threshold, "
+        "since -NaN ranks below -inf -- measured on n150 as 0xFFC00000 -> 5.0, against IEEE's "
+        "propagation -- so _relu_min's golden models the total order rather than torch.max and "
+        "is correct there too. That lane is not swept, so enrolment rests on the +NaN result.",
         MathOperation.Hardsigmoid: "x * (1/6) + 0.5 through the same _relu_max_body_ the "
         "kernel shares with ReluMax, so a NaN clamps to 1.0.",
     }

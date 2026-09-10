@@ -39,6 +39,7 @@ HF_MODELS=(
     "${QWEN_25_32B_DIR:-Qwen/Qwen2.5-32B-Instruct}"
     "${MIXTRAL_8X7B_DIR:-mistralai/Mixtral-8x7B-Instruct-v0.1}"
     "${QWEN_25_CODER_32B_DIR:-Qwen/Qwen2.5-Coder-32B-Instruct}"
+    "${EXAONE_45_33B_DIR:-LGAI-EXAONE/EXAONE-4.5-33B}"
 )
 
 # Create reference_outputs directory if it doesn't exist

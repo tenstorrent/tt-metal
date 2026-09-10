@@ -322,10 +322,6 @@ inline void calculate_cosine() {
         // ROUNDING_BIAS shifts mantissa bits to perform round-to-nearest.
         sfpi::vFloat j = __builtin_rvtt_sfpmad(v.get(), inv_pi.get(), half.get(), SFPMAD_MOD1_OFFSET_NONE);
 
-        // sfpi::vFloat rounding_bias;
-        // rounding_bias = sfpi::sFloat16b(0x1.8p23f);
-        // j = __builtin_rvtt_sfpmad(v.get(), one, rounding_bias.get(), SFPMAD_MOD1_OFFSET_NONE);
-
         j = j + ROUNDING_BIAS;
 
         // At this point, the mantissa bits of j contain the rounded integer.
