@@ -30,8 +30,8 @@ void kernel_main() {
     constexpr uint32_t in0_mcast_dest_noc_start_y = get_compile_time_arg_val(10);
     constexpr uint32_t in0_mcast_dest_noc_end_x = get_compile_time_arg_val(11);
     constexpr uint32_t in0_mcast_dest_noc_end_y = get_compile_time_arg_val(12);
-    constexpr uint32_t num_blocks_per_shard = get_compile_time_arg_val(14);
-    constexpr uint32_t in0_block_w = get_compile_time_arg_val(15);
+    constexpr uint32_t num_blocks_per_shard = get_compile_time_arg_val(13);
+    constexpr uint32_t in0_block_w = get_compile_time_arg_val(14);
     constexpr uint32_t in0_block_h = in0_block_num_tiles / in0_block_w;
     constexpr uint32_t num_storage_cores = num_blocks / num_blocks_per_shard;
 

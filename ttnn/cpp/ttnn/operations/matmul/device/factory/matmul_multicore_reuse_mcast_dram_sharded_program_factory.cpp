@@ -305,7 +305,6 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
     // Semaphore IDs (manually assigned, matching CreateSemaphore sequential allocation)
     uint32_t in0_mcast_sender_semaphore_id = 0;
     uint32_t in0_mcast_receiver_semaphore_id = 1;
-    uint32_t in0_mcast_sender_valid_semaphore_id = 2;
 
     uint32_t in0_num_subblocks = (per_core_M / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -320,28 +319,27 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
             num_blocks_per_shard);
     }
 
+    // Positional, and read back by index in reader_bmm_tile_layout_in0_sender_dram_sharded.cpp -
+    // the indices below are load-bearing, so keep them annotated and contiguous.
     std::vector<uint32_t> in0_sender_compile_time_args = {
-        (std::uint32_t)in0_block_num_tiles,                         // in0_block_num_tiles
-        (std::uint32_t)in0_block_num_tiles * in0_single_tile_size,  // in0_block_size_bytes
-        (std::uint32_t)in0_last_ktile_w,                            // in0_last_ktile_w
-        (std::uint32_t)0,                                           // in0_last_ktile_h (transpose not supported)
+        (std::uint32_t)in0_block_num_tiles,                         // [0]  in0_block_num_tiles
+        (std::uint32_t)in0_block_num_tiles * in0_single_tile_size,  // [1]  in0_block_size_bytes
+        (std::uint32_t)in0_last_ktile_w,                            // [2]  in0_last_ktile_w
+        (std::uint32_t)0,                                           // [3]  in0_last_ktile_h (transpose unsupported)
         // in0 mcast args
-        (std::uint32_t)in0_mcast_sender_semaphore_id,
-        (std::uint32_t)in0_mcast_receiver_semaphore_id,
-        (std::uint32_t)num_worker_cores,  // in0_mcast_num_dests
-        (std::uint32_t)num_mcast_cores,   // in0_mcast_num_cores
+        (std::uint32_t)in0_mcast_sender_semaphore_id,    // [4]
+        (std::uint32_t)in0_mcast_receiver_semaphore_id,  // [5]
+        (std::uint32_t)num_worker_cores,                 // [6]  in0_mcast_num_dests
+        (std::uint32_t)num_mcast_cores,                  // [7]  in0_mcast_num_cores
         // block
-        (std::uint32_t)num_blocks,
+        (std::uint32_t)num_blocks,  // [8]
         // mcast noc coords
-        (std::uint32_t)start_core_noc.x,
-        (std::uint32_t)start_core_noc.y,
-        (std::uint32_t)end_core_noc.x,
-        (std::uint32_t)end_core_noc.y,
-        // semaphore valid
-        (std::uint32_t)in0_mcast_sender_valid_semaphore_id,
-        //
-        (std::uint32_t)num_blocks_per_shard,
-        (std::uint32_t)in0_block_w};
+        (std::uint32_t)start_core_noc.x,      // [9]
+        (std::uint32_t)start_core_noc.y,      // [10]
+        (std::uint32_t)end_core_noc.x,        // [11]
+        (std::uint32_t)end_core_noc.y,        // [12]
+        (std::uint32_t)num_blocks_per_shard,  // [13]
+        (std::uint32_t)in0_block_w};          // [14]
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         (std::uint32_t)in1_buffer_page_size,
@@ -654,8 +652,6 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         .id = in0_mcast_sender_semaphore_id, .core_ranges = all_cores_in_rect_grid, .initial_value = INVALID});
     desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
         .id = in0_mcast_receiver_semaphore_id, .core_ranges = all_cores_in_rect_grid, .initial_value = INVALID});
-    desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
-        .id = in0_mcast_sender_valid_semaphore_id, .core_ranges = all_cores_in_rect_grid, .initial_value = VALID});
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Runtime Args (per-core loop)
