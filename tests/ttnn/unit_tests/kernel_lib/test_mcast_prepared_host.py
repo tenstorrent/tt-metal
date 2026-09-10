@@ -98,11 +98,21 @@ def test_mapped_counts_match_v16(device, noc, inside, kind):
         for x, y in expected_logical
     }
     actual = set()
+    size = device.compute_with_storage_grid_size()
+    workers = {
+        (c.x, c.y)
+        for y in range(size.y)
+        for x in range(size.x)
+        for c in [device.worker_core_from_logical_core(ttnn.CoreCoord(x, y))]
+    }
     remote_total = 0
+    mapped_sender = device.worker_core_from_logical_core(sender)
     start = 2 + 2 * (ct[6] or 1)
     for i in range(rt[0]):
         sx, sy, ex, ey, remote, loopback, mode = rt[start + 7 * i : start + 7 * (i + 1)]
         rectangle = {(x, y) for x in range(min(sx, ex), max(sx, ex) + 1) for y in range(min(sy, ey), max(sy, ey) + 1)}
+        rectangle &= workers
+        assert remote == len(rectangle) - int((mapped_sender.x, mapped_sender.y) in rectangle)
         remote_total += remote
         assert not actual.intersection(rectangle)
         actual.update(rectangle)
@@ -111,8 +121,7 @@ def test_mapped_counts_match_v16(device, noc, inside, kind):
     old_remote = len(expected) - int(inside)
     assert ct[8:10] == [old_remote, old_remote + 1]
     assert ct[4] == rt[1] == remote_total == old_remote
-    if device.arch() == ttnn.device.Arch.BLACKHOLE and len(expected) == 9:
-        assert rt[0] == 2  # The dense logical span crosses virtual columns 8 and 9.
+    assert rt[0] == 1  # Non-worker gaps do not split a logical rectangle.
 
 
 def test_group_sender_lists(expect_error):
@@ -170,3 +179,69 @@ def test_prepared_group_api(device, noc, expect_error):
 
     gc.collect()
     assert group.runtime_args(first) == expected  # The binding keeps the owning family alive.
+
+
+@pytest.mark.parametrize("noc", [ttnn.NOC.NOC_0, ttnn.NOC.NOC_1])
+def test_chain_family_host_contract(device, noc, expect_error):
+    def cores(values):
+        return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in values])
+
+    sender = ttnn.CoreCoord(2, 0)
+    receivers = cores([(0, 0), (2, 0), (0, 2)])
+    group = ttnn.McastGroup(receivers, [sender])
+    chain = ttnn.McastFamily(device, [group], ttnn.McastConfig(noc=noc), ttnn.IrregularReceiverSetMode.ChainLink)
+    multicast = ttnn.McastFamily(device, [group], ttnn.McastConfig(noc=noc))
+    ct = list(chain.compile_time_args())
+    # Same eleven-word block as multicast; only FLAGS (transport bits) and RECTANGLE_CAPACITY differ.
+    assert len(ct) == len(multicast.compile_time_args()) == 11
+    assert ct[5] == (5 if noc == ttnn.NOC.NOC_1 else 1) | (1 << 3)
+    assert ct[10] == 0 and multicast.compile_time_args()[10] == 3
+    assert ct[4] == 1  # One successor acknowledgment per hop; multicast reports the full fan-out.
+    assert multicast.compile_time_args()[4] == 2
+    assert chain.ack_count(sender) == 1 and chain.num_receivers(sender) == 2
+    assert chain.num_rectangles(sender) == 3 and chain.rectangle_capacity() == 0
+    # Sender first, then remaining receivers in logical row-major order.
+    order = [sender, ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 2)]
+    mapped = [device.worker_core_from_logical_core(c) for c in order]
+    none = 0xFFFFFFFF
+    for i, core in enumerate(order):
+        rt = list(chain.runtime_args(core))
+        assert len(rt) == 11
+        predecessor = mapped[i - 1] if i else None
+        successor = mapped[i + 1] if i + 1 < len(order) else None
+        assert rt[:4] == [0, 1 if i == 0 else 0, mapped[0].x, mapped[0].y]
+        assert rt[4:6] == ([predecessor.x, predecessor.y] if predecessor else [none, none])
+        assert rt[6:8] == ([successor.x, successor.y] if successor else [none, none])
+        assert rt[8] == 1  # The sender is one of the receivers.
+        assert rt[9:] == [1 if i == 0 else 2, 0 if i == 0 else none]
+    assert chain.runtime_args(ttnn.CoreCoord(7, 7)) == [0] * 10 + [none]
+    with expect_error(RuntimeError, "readiness handshakes"):
+        ttnn.McastFamily(
+            device,
+            [group],
+            ttnn.McastConfig(noc=noc, handshake=False),
+            ttnn.IrregularReceiverSetMode.ChainLink,
+        )
+    with expect_error(RuntimeError, "readiness handshakes"):
+        chain.compile_time_args(False)
+    with expect_error(RuntimeError, "overrides are not supported"):
+        ttnn.McastFamily(
+            device,
+            [group],
+            ttnn.McastConfig(noc=noc, ack_count_override=0),
+            ttnn.IrregularReceiverSetMode.ChainLink,
+        )
+    with expect_error(RuntimeError, "overrides are not supported"):
+        ttnn.McastFamily(
+            device,
+            [ttnn.McastGroup(receivers, [sender], 1)],
+            ttnn.McastConfig(noc=noc),
+            ttnn.IrregularReceiverSetMode.ChainLink,
+        )
+    with expect_error(RuntimeError, "one fixed sender"):
+        ttnn.McastFamily(
+            device,
+            [ttnn.McastGroup(receivers, [sender, ttnn.CoreCoord(0, 0)])],
+            ttnn.McastConfig(noc=noc),
+            ttnn.IrregularReceiverSetMode.ChainLink,
+        )

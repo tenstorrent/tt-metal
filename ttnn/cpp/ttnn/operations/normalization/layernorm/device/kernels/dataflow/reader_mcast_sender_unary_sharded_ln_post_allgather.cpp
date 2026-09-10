@@ -7,7 +7,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_args.hpp"
 
 // split REDUCE across cores
 void kernel_main() {

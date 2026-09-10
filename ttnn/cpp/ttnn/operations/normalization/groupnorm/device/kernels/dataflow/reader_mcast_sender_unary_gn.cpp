@@ -14,7 +14,7 @@
 #include "groupnorm_zero_fill.hpp"
 #include "groupnorm_reader_rm.hpp"
 #include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/groupnorm_constants.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_args.hpp"
 
 void kernel_main() {
     // clang-format off

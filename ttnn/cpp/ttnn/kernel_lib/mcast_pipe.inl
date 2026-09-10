@@ -6,7 +6,7 @@
 
 /**
  * @file mcast_pipe.inl
- * @brief Out-of-line definitions for SenderPipe, ReceiverPipe, and McastArgs.
+ * @brief Out-of-line definitions for SenderPipe and ReceiverPipe.
  *
  * NoC-multicast + semaphore-handshake helper. This file should only be included
  * by mcast_pipe.hpp.
@@ -35,7 +35,7 @@ SenderPipe<
     DATA_READY_SIGNAL,
     ROTATING_SENDER,
     TRANSFER_MODE,
-    MAX_RECTS>::SenderPipe(const Noc& noc, const RuntimeArguments& runtime_args) :
+    MAX_RECTS>::SenderPipe(const Noc& noc, const SenderRuntimeArgumentsFor<MAX_RECTS>& runtime_args) :
     noc_(noc), data_ready_(DATA_READY_SEM_ID), consumer_ready_(CONSUMER_READY_SEM_ID), args_(runtime_args) {
     ASSERT(noc_.get_noc_id() == NOC_ID);
     ASSERT(args_.num_rectangles >= 1 && args_.num_rectangles <= MAX_RECTS);
@@ -425,81 +425,5 @@ ReceiverPipe<DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DATA_READY
         return value;
     }
 }
-
-// =============================================================================
-// McastArgs
-// =============================================================================
-
-namespace detail {
-
-template <uint32_t CT_BASE, uint32_t RT_BASE>
-bool McastArgsImpl<true, CT_BASE, RT_BASE>::should_send(uint32_t round) const {
-    return can_send() &&
-           sender_index(round) == get_arg_val<uint32_t>(next_runtime_args_offset() - mcast_wire::PHASE_FROM_END);
-}
-
-template <uint32_t CT_BASE, uint32_t RT_BASE>
-typename McastArgsImpl<true, CT_BASE, RT_BASE>::SenderPipe McastArgsImpl<true, CT_BASE, RT_BASE>::sender(
-    const Noc& noc) const {
-    ASSERT(can_send());
-    static_assert(sender_noc == noc_index, "Host multicast NoC does not match sending kernel NoC");
-    return SenderPipe(noc, sender_runtime_arguments());
-}
-
-template <uint32_t CT_BASE, uint32_t RT_BASE>
-std::optional<typename McastArgsImpl<true, CT_BASE, RT_BASE>::SenderPipe>
-McastArgsImpl<true, CT_BASE, RT_BASE>::optional_sender(const Noc& noc) const {
-    if (!can_send()) {
-        return std::nullopt;
-    }
-    return sender(noc);
-}
-
-template <uint32_t CT_BASE, uint32_t RT_BASE>
-typename McastArgsImpl<true, CT_BASE, RT_BASE>::ReceiverPipe McastArgsImpl<true, CT_BASE, RT_BASE>::receiver(
-    const Noc& noc) const {
-    ASSERT(can_receive());
-    const uint32_t* coords =
-        reinterpret_cast<const uint32_t*>(get_arg_addr(RT_BASE + mcast_wire::sender_coords_offset(rotating_span)));
-    return ReceiverPipe(noc, coords);
-}
-
-template <uint32_t CT_BASE, uint32_t RT_BASE>
-std::optional<typename McastArgsImpl<true, CT_BASE, RT_BASE>::ReceiverPipe>
-McastArgsImpl<true, CT_BASE, RT_BASE>::optional_receiver(const Noc& noc) const {
-    if (!can_receive()) {
-        return std::nullopt;
-    }
-    return receiver(noc);
-}
-
-template <uint32_t CT_BASE, uint32_t RT_BASE>
-typename McastArgsImpl<true, CT_BASE, RT_BASE>::SenderPipe::RuntimeArguments
-McastArgsImpl<true, CT_BASE, RT_BASE>::sender_runtime_arguments() const {
-    // Every group has destinations, so capacity one guarantees exactly one record.
-    constexpr bool single_rectangle = rectangle_capacity == 1;
-    typename SenderPipe::RuntimeArguments prepared;
-    prepared.num_rectangles = single_rectangle ? 1u : get_arg_val<uint32_t>(RT_BASE + mcast_wire::NUM_RECTANGLES);
-    prepared.ack_count = ack_count != ACK_EQUALS_FANOUT ? ack_count : get_arg_val<uint32_t>(RT_BASE + mcast_wire::ACK);
-    ASSERT(prepared.num_rectangles >= 1 && prepared.num_rectangles <= rectangle_capacity);
-    for (uint32_t i = 0; i < prepared.num_rectangles; ++i) {
-        const uint32_t base = RT_BASE + mcast_wire::rectangles_offset(rotating_span) + i * mcast_wire::RECT_WORDS;
-        prepared.rectangles[i] = {
-            {get_arg_val<uint32_t>(base + mcast_wire::SX),
-             get_arg_val<uint32_t>(base + mcast_wire::SY),
-             get_arg_val<uint32_t>(base + mcast_wire::EX),
-             get_arg_val<uint32_t>(base + mcast_wire::EY)},
-            // At capacity one, positive uniform group counts are also this rectangle's counts.
-            single_rectangle && remote_count > 0 ? remote_count : get_arg_val<uint32_t>(base + mcast_wire::REMOTE),
-            single_rectangle && loopback_count > 0 ? loopback_count
-                                                   : get_arg_val<uint32_t>(base + mcast_wire::LOOPBACK),
-            mcast_wire::concrete(transfer_mode)
-                ? transfer_mode
-                : static_cast<SenderTransferMode>(get_arg_val<uint32_t>(base + mcast_wire::MODE))};
-    }
-    return prepared;
-}
-
-}  // namespace detail
 
 }  // namespace dataflow_kernel_lib

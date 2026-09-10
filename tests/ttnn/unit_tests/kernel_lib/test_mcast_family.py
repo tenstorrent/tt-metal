@@ -13,6 +13,16 @@ def _cores(coords):
     )
 
 
+@pytest.mark.parametrize("noc", [0, 1])
+@pytest.mark.parametrize("counter", [False, True])
+@pytest.mark.parametrize("chain_link", [False, True])
+def test_non_worker_gap_preserves_worker_holes(device, noc, counter, chain_link):
+    # Three logical row segments become four rectangles if the virtual NoC gap is treated
+    # as missing receivers. Spectators in the partial rows must still remain untouched.
+    receivers = [(x, 0) for x in range(2, 9)] + [(x, 1) for x in range(9)] + [(x, 2) for x in range(4)]
+    _run(device, [(receivers, [(2, 0)])], noc=noc, counter=counter, chain_link=chain_link, min_rectangles=3)
+
+
 def _run(
     device,
     specs,
@@ -26,6 +36,11 @@ def _run(
     rounds=6,
     zero_ack=False,
     adopted=False,
+    chain_link=False,
+    large=False,
+    mixed_events=False,
+    delayed=False,
+    min_rectangles=None,
 ):
     # specs are (exact logical receivers, ordered logical senders).
     all_coords = {c for receivers, senders in specs for c in receivers + senders}
@@ -47,20 +62,39 @@ def _run(
         ttnn.McastGroup(_cores(receivers), senders=[ttnn.CoreCoord(*c) for c in senders])
         for receivers, senders in specs
     ]
-    family = ttnn.McastFamily(device, groups, config)
+    family = ttnn.McastFamily(
+        device,
+        groups,
+        config,
+        ttnn.IrregularReceiverSetMode.ChainLink if chain_link else ttnn.IrregularReceiverSetMode.MultipleMcast,
+    )
+    if chain_link:
+        chained = any(family.num_rectangles(ttnn.CoreCoord(*senders[0])) > 1 for _, senders in specs)
+        assert (family.compile_time_args()[5] >> 3) & 3 == int(chained)
+        if chained:
+            assert family.rectangle_capacity() == 0
+        for _, senders in specs:
+            sender = ttnn.CoreCoord(*senders[0])
+            fanout = family.num_receivers(sender)
+            assert family.ack_count(sender) == (int(fanout > 0) if chained else fanout)
+    if min_rectangles is not None:
+        # Guard cases whose point is an irregular mapping: they must not degrade into dense sets on this grid.
+        for receivers, senders in specs:
+            assert family.num_rectangles(ttnn.CoreCoord(*senders[0])) >= min_rectangles
     barrier = ttnn.McastFamily(
         device,
         [ttnn.McastGroup(participants, [ttnn.CoreCoord(0, 0)])],
         ttnn.McastConfig(noc=config.noc, base_sem_id=2 if adopted else family.next_base_sem_id()),
     )
+    max_pages = 20 if large else 2
     payload = (
-        torch.arange(1, len(specs) * rounds * 2 + 1, dtype=torch.bfloat16)
+        torch.arange(1, len(specs) * rounds * max_pages + 1, dtype=torch.bfloat16)
         .reshape(-1, 1, 1, 1)
         .expand(-1, 1, 32, 32)
         .contiguous()
     )
     input_tensor = ttnn.from_torch(payload, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    stride = rounds * 2 + 1
+    stride = rounds * max_pages + 1
     output_tensor = ttnn.allocate_tensor_on_device(
         ttnn.Shape([len(dispatch) * stride, 1, 32, 32]),
         ttnn.bfloat16,
@@ -69,7 +103,7 @@ def _run(
         ttnn.DRAM_MEMORY_CONFIG,
     )
     ct = list(family.compile_time_args()) + [0] + list(barrier.compile_time_args())
-    ct += [rounds, int(control), int(caller_managed), int(dynamic)]
+    ct += [rounds, int(control), int(caller_managed), int(dynamic), max_pages, int(mixed_events), int(delayed)]
     ct += list(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     ct += list(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     rt = ttnn.RuntimeArgs()
@@ -79,7 +113,7 @@ def _run(
         rt[x][y] = [
             input_tensor.buffer_address(),
             output_tensor.buffer_address(),
-            (group_index or 0) * rounds * 2,
+            (group_index or 0) * rounds * max_pages,
             index * stride,
             int(inside),
             int(group_index is None),
@@ -117,7 +151,7 @@ def _run(
         ]
     cbs = [
         ttnn.CBDescriptor(
-            total_size=8192,
+            total_size=4096 * max_pages,
             core_ranges=participants,
             format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=i, data_format=ttnn.bfloat16, page_size=2048)],
         )
@@ -135,14 +169,17 @@ def _run(
             if coord not in receivers:
                 continue
             for r in range(rounds):
-                pages = 1 + r % 2 if dynamic else 1
-                if control:
-                    assert actual[index, 2 * r].contiguous().view(torch.int32).flatten()[0].item() == (
-                        r + 1 if counter else 7
+                pages = (max_pages if r % 2 else 1) if dynamic else 1
+                if control or (mixed_events and r % 2):
+                    assert actual[index, max_pages * r].contiguous().view(torch.int32).flatten()[0].item() == (
+                        r + 1 if counter else 7 + (r % 3 if mixed_events else 0)
                     )
                 else:
                     for p in range(pages):
-                        assert torch.equal(actual[index, 2 * r + p], payload[group_index * rounds * 2 + 2 * r + p]), (
+                        assert torch.equal(
+                            actual[index, max_pages * r + p],
+                            payload[group_index * rounds * max_pages + max_pages * r + p],
+                        ), (
                             coord,
                             r,
                             p,

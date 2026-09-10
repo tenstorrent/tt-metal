@@ -36,6 +36,9 @@ void py_module_types(nb::module_& mod) {
     nb::enum_<kh::DataReadyMode>(mod, "McastDataReady")
         .value("Flag", kh::DataReadyMode::Flag)
         .value("Counter", kh::DataReadyMode::Counter);
+    nb::enum_<kh::IrregularReceiverSetMode>(mod, "IrregularReceiverSetMode")
+        .value("MultipleMcast", kh::IrregularReceiverSetMode::MultipleMcast)
+        .value("ChainLink", kh::IrregularReceiverSetMode::ChainLink);
     nb::enum_<kh::Mcast1DShape>(mod, "Mcast1DShape")
         .value("PerRow", kh::Mcast1DShape::PerRow)
         .value("PerColumn", kh::Mcast1DShape::PerColumn);
@@ -165,10 +168,14 @@ void py_module(nb::module_& mod) {
             [](kh::McastFamily* self,
                MeshDevice* device,
                std::vector<kh::McastGroup> groups,
-               const kh::McastConfig& config) { new (self) kh::McastFamily(device, std::move(groups), config); },
+               const kh::McastConfig& config,
+               kh::IrregularReceiverSetMode irregular_receiver_set_mode) {
+                new (self) kh::McastFamily(device, std::move(groups), config, irregular_receiver_set_mode);
+            },
             nb::arg("device"),
             nb::arg("groups"),
-            nb::arg("config") = kh::McastConfig{})
+            nb::arg("config") = kh::McastConfig{},
+            nb::arg("irregular_receiver_set_mode") = kh::IrregularReceiverSetMode::MultipleMcast)
         .def("group", &kh::McastFamily::group, nb::arg("index"), nb::rv_policy::reference_internal)
         .def("compile_time_args", &kh::McastFamily::compile_time_args, nb::arg("pre_handshake") = nb::none())
         .def("runtime_args", &kh::McastFamily::runtime_args, nb::arg("core"))

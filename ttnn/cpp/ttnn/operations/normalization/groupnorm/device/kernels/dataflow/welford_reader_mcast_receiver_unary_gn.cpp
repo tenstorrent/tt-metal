@@ -12,7 +12,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_args.hpp"
 
 void kernel_main() {
     constexpr uint32_t num_batch_group = get_named_compile_time_arg_val("num_batch_group");

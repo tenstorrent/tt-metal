@@ -22,6 +22,13 @@ namespace ttnn::kernel_lib::host {
 // Data-ready signaling mode used by the kernel pipe.
 enum class DataReadyMode : uint32_t { Flag = 0, Counter = 1 };
 
+// Policy used only when at least one group in a family has a receiver set that is not a regular
+// logical rectangle. MultipleMcast covers each exact receiver set with multiple multicasts.
+// ChainLink instead selects chain-unicast forwarding for the entire family because every group
+// must share one compile-time McastMode. Regular families always use McastMode::Multicast,
+// regardless of this policy.
+enum class IrregularReceiverSetMode { MultipleMcast, ChainLink };
+
 // Indicates that no consumer-ready semaphore is configured.
 static constexpr uint32_t UNUSED_SEM_ID = 0xFFFFFFFFu;
 
@@ -109,7 +116,7 @@ private:
     // The family derives one common layout after preparing all groups.
     struct ArgumentLayout {
         uint32_t rotating_span = 0;
-        uint32_t rectangle_capacity = 1;
+        uint32_t rectangle_capacity = 0;
         uint32_t ack_count = 0;
         uint32_t uniform_remote_count = 0;
         uint32_t uniform_loopback_count = 0;
@@ -120,15 +127,28 @@ private:
         uint32_t consumer_ready_id = UNUSED_SEM_ID;
         uint32_t flags = 0;
     };
-    struct PreparedState {
-        std::vector<tt::tt_metal::CoreRange> rectangles;
-        std::vector<uint32_t> sender_coords;
+    struct PreparedMulticast {
         std::vector<std::vector<uint32_t>> sender_records;
-        std::vector<uint32_t> acks;
         dataflow_kernel_lib::SenderTransferMode transfer_mode =
             dataflow_kernel_lib::SenderTransferMode::TransferModeUnknown;
     };
-    void prepare_(tt::tt_metal::IDevice* device, const McastConfig& cfg);
+    struct PreparedChain {
+        std::vector<tt::tt_metal::CoreCoord> order;
+        std::vector<dataflow_kernel_lib::ChainRuntimeArguments> nodes;
+    };
+    struct PreparedRectangle {
+        tt::tt_metal::CoreRange logical;
+        tt::tt_metal::CoreRange noc;
+    };
+    struct PreparedState {
+        std::vector<PreparedRectangle> rectangles;
+        std::vector<uint32_t> sender_coords;
+        std::vector<uint32_t> acks;
+        std::variant<PreparedMulticast, PreparedChain> transport = PreparedMulticast{};
+    };
+    void prepare_(tt::tt_metal::IDevice* device, const McastConfig& cfg, dataflow_kernel_lib::McastMode mcast_mode);
+    PreparedMulticast prepare_multicast_(const McastConfig& cfg, PreparedState& state) const;
+    PreparedChain prepare_chain_(tt::tt_metal::IDevice* device, PreparedState& state) const;
     void set_argument_layout_(const ArgumentLayout& layout);
     const PreparedState& prepared_state_() const;
     const ArgumentLayout& argument_layout_() const;
@@ -143,10 +163,14 @@ private:
 };
 
 // Independent, disjoint groups sharing one protocol and semaphore allocation.
-// All groups use the same sender mode and number of sender rounds.
+// Groups share a sender mode, number of sender rounds, and McastMode.
 class McastFamily {
 public:
-    McastFamily(tt::tt_metal::IDevice* device, std::vector<McastGroup> groups, const McastConfig& cfg = {});
+    McastFamily(
+        tt::tt_metal::IDevice* device,
+        std::vector<McastGroup> groups,
+        const McastConfig& cfg = {},
+        IrregularReceiverSetMode irregular_receiver_set_mode = IrregularReceiverSetMode::MultipleMcast);
 
     // Prepared member in constructor order; rejects an out-of-range index.
     const McastGroup& group(uint32_t index) const;

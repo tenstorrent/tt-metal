@@ -5,7 +5,7 @@
 #include "conv3d_program_factory.hpp"
 #include "conv3d_device_operation_types.hpp"
 #include "kernels/conv3d_gather_tuning.hpp"
-#include "kernels/conv3d_weight_share.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/host/mcast_host.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -18,6 +18,8 @@
 #include <hostdevcommon/common_values.hpp>
 
 namespace ttnn::experimental::prim {
+
+namespace mcast = ttnn::kernel_lib::host;
 
 // Largest divisor of n that is <= cap. Always returns at least 1.
 static uint32_t largest_divisor_up_to(uint32_t n, uint32_t cap) {
@@ -599,38 +601,22 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     const uint32_t h_out_per_core = tt::div_up(H_out_blocks, h_out_parallel_factor);
     const uint32_t w_out_per_core = tt::div_up(W_out_blocks, w_out_parallel_factor);
 
-    // Weight sharing: all cores with the same (c_in_idx, c_out_idx) read identical weights.
-    // weight_share_mode (see WeightShareMode in conv3d_weight_share.hpp):
-    //   Disabled — single-core group: each active core reads its own weight slice.
-    //   Chain    — per-group forwarding chain (SDPA-style hop chain).
-    //   Mcast    — each group multicasts over its own row-strip rectangle.
-    //
-    // Layout for mcast: each group occupies a strip of contiguous full-width rows; the strips
-    // stack along Y. Within a strip, active cores fill row-major and the trailing slots of the
-    // last row become passive participants. This makes every group a clean rectangle, lets each
-    // one fire its own hardware multicast, and keeps reduction-pair members vertically aligned
-    // (same x, y differing by a multiple of strip height) so reduction reads stay short.
-    //
-    // Ceiling-sized chunks can leave the trailing slots of a dimension without work (e.g. 5 blocks
-    // over 4 slots = 2+2+1+0), so a group's active member count can be below its nominal slot
-    // count. Strips are sized from the active count, and so is the fit check. Every group has
-    // the same active count: C_in has no empty partitions (c_in_per_core == 1), and an empty C_out
-    // partition forces group_size == 1. Falls back to chain if the strips don't fit.
+    // Weight groups have the same (C_in, C_out) slice. Prefer one full-width row strip per
+    // group when all strips fit; otherwise pack active assignments consecutively in row-major
+    // order. The family chooses the transport from the resulting logical receiver sets.
+    // Ceiling-sized chunks can leave empty spatial partitions, so placement uses active counts.
     auto active_slots = [](uint32_t blocks, uint32_t factor) { return tt::div_up(blocks, tt::div_up(blocks, factor)); };
     const uint32_t group_size = active_slots(T_out_blocks, t_out_parallel_factor) *
                                 active_slots(H_out_blocks, h_out_parallel_factor) *
                                 active_slots(W_out_blocks, w_out_parallel_factor);
     const uint32_t num_groups = c_in_parallel_factor * c_out_parallel_factor;
-    WeightShareMode weight_share_mode = WeightShareMode::Disabled;
-    if (group_size > 1) {
-        const uint32_t rows_per_group = tt::div_up(group_size, (uint32_t)grid_size.x);
-        const bool mcast_fits = (uint64_t)num_groups * rows_per_group <= grid_size.y;
-        weight_share_mode = mcast_fits ? WeightShareMode::Mcast : WeightShareMode::Chain;
-    }
+    const bool share_weights = group_size > 1;
+    const uint32_t rows_per_group = tt::div_up(group_size, (uint32_t)grid_size.x);
+    const bool place_in_rectangles = share_weights && (uint64_t)num_groups * rows_per_group <= grid_size.y;
     log_debug(
         tt::LogOp,
-        "Weight share: mode={}, active group_size={}, num_groups={}",
-        static_cast<uint32_t>(weight_share_mode),
+        "Weight placement: row_strips={}, active group_size={}, num_groups={}",
+        place_in_rectangles,
         group_size,
         num_groups);
 
@@ -642,21 +628,6 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         .id = semaphore_id,
         .core_ranges = CoreRangeSet(core_grid),
         .initial_value = 0,
-    });
-
-    // Weight-mcast semaphores. Always created so writer kernel can take their ids as compile-time
-    // constants. They are only used when enable_weight_mcast is true at runtime.
-    uint32_t weights_mcast_sender_sem_id = static_cast<uint32_t>(desc.semaphores.size());
-    desc.semaphores.push_back(SemaphoreDescriptor{
-        .id = weights_mcast_sender_sem_id,
-        .core_ranges = CoreRangeSet(core_grid),
-        .initial_value = INVALID,
-    });
-    uint32_t weights_mcast_receiver_sem_id = static_cast<uint32_t>(desc.semaphores.size());
-    desc.semaphores.push_back(SemaphoreDescriptor{
-        .id = weights_mcast_receiver_sem_id,
-        .core_ranges = CoreRangeSet(core_grid),
-        .initial_value = INVALID,
     });
 
     // Trid-ring depth for gather_rows_to_shard.  Per-shape autotune (see
@@ -866,9 +837,6 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         C_out_block_bytes,
         (uint32_t)use_bias,
         semaphore_id,
-        static_cast<uint32_t>(weight_share_mode),
-        weights_mcast_sender_sem_id,
-        weights_mcast_receiver_sem_id,
         static_cast<uint32_t>(enable_streaming_output),
         operation_attributes.output_pad_h,
         operation_attributes.output_pad_w};
@@ -886,13 +854,12 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
 
     tt::tt_metal::Buffer* input_buffer = input_tensor.buffer();
     tt::tt_metal::Buffer* halo_buffer_ptr = halo_mode ? tensor_args.halo_buffer.value().buffer() : nullptr;
-    tt::tt_metal::Buffer* pad_offset_buffer_ptr =
-        mask_mode ? tensor_args.pad_offset_tensor.value().buffer() : nullptr;
+    tt::tt_metal::Buffer* pad_offset_buffer_ptr = mask_mode ? tensor_args.pad_offset_tensor.value().buffer() : nullptr;
     tt::tt_metal::Buffer* out_buffer = output_tensor.buffer();
     tt::tt_metal::Buffer* weight_buffer = weight_tensor.buffer();
     tt::tt_metal::Buffer* bias_buffer = bias_tensor.has_value() ? bias_tensor.value().buffer() : nullptr;
 
-    // Per-core work and weight-sharing metadata. See conv3d_weight_share.hpp for the role values.
+    // Per-core work assignments. Unassigned cores retain empty work ranges.
     struct CoreWork {
         bool has_work = false;
         bool is_reducer = false;
@@ -908,23 +875,12 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         uint32_t t_out_start = 0, t_out_end = 0;
         uint32_t h_out_start = 0, h_out_end = 0;
         uint32_t w_out_start = 0, w_out_end = 0;
-        WeightShareRole weight_share_role = WeightShareRole::Local;
-        // Where this core receives weights from: chain predecessor (chain roles) or mcast sender
-        // (mcast receiver/passive). McastSender carries its own coord for uniform runtime args.
-        uint32_t weight_src_noc_x = 0, weight_src_noc_y = 0;
-        // Chain forwarding target (chain injector/middle). Unused for other roles.
-        uint32_t chain_succ_noc_x = 0, chain_succ_noc_y = 0;
-        // Mcast bbox in physical NoC coords (already swapped for NOC_1). Sender role only.
-        uint32_t mcast_bbox_start_x = 0, mcast_bbox_start_y = 0;
-        uint32_t mcast_bbox_end_x = 0, mcast_bbox_end_y = 0;
-        uint32_t mcast_num_dests = 0;
-        // Iterations for passive participation: matches active receivers' loop count.
-        uint32_t mcast_num_iters = 0;
     };
 
     auto cores = corerange_to_cores(core_grid, num_cores, true);
     auto* device = input_tensor.device();
     std::vector<CoreWork> core_work;
+    std::vector<mcast::McastGroup> weights_mcast_groups;
 
     auto compute_block_ranges = [&](CoreWork& cw) {
         cw.c_in_block_start = cw.c_in_idx * c_in_per_core;
@@ -953,8 +909,8 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         cw.mcast_group_id = cw.c_in_idx * c_out_parallel_factor + cw.c_out_idx;
     };
 
-    // Collect active assignments in C_in -> C_out -> T -> H -> W order. Disabled/Chain retain this
-    // order; Mcast arranges each weight-sharing group into a full-row strip.
+    // Collect active assignments in C_in -> C_out -> T -> H -> W order. Compact placement retains
+    // this order; rectangular placement arranges each weight-sharing group into a full-row strip.
     const uint32_t hw_par = h_out_parallel_factor * w_out_parallel_factor;
     const uint32_t num_slots = c_in_parallel_factor * total_output_parallel;
     std::vector<CoreWork> active_work;
@@ -980,20 +936,15 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         active_work.size(),
         num_slots,
         num_cores);
-    if (weight_share_mode != WeightShareMode::Mcast) {
+    if (!place_in_rectangles) {
         core_work = std::move(active_work);
     }
-    // Runtime args are emitted for every physical core. Disabled/Chain append idle entries after
-    // their compact assignments; Mcast starts empty and fills its active/passive row strips below.
+    // Runtime args are emitted for every core. Compact placement appends idle entries;
+    // rectangular placement fills only the active slots in each row strip below.
     core_work.resize(num_cores);
 
-    // Per-mode setup: chain links each group's active cores (in core_id order) into a forwarding
-    // chain; mcast lays each group out as a row-strip rectangle and assigns roles to all cores
-    // within it (active and passive participants).
-    if (weight_share_mode == WeightShareMode::Chain) {
-        // Build per-group chain: order cores by core_id, link each one's predecessor and successor.
-        // Chain ordering by core_id keeps the chain "physically nearby" since core_id maps row-major
-        // onto the grid, which keeps each hop short on the NoC.
+    // Prepare exact logical receiver sets. Row-major groups retain their first member as sender.
+    if (share_weights && !place_in_rectangles) {
         std::vector<std::vector<uint32_t>> mcast_groups(num_groups);
         for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
             const CoreWork& cw = core_work[core_id];
@@ -1004,34 +955,21 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         }
         for (uint32_t gid = 0; gid < num_groups; ++gid) {
             const auto& members = mcast_groups[gid];
-            if (members.size() < 2) {
-                continue;  // single-core group: leave role=0 (local DRAM read).
+            if (members.empty()) {
+                continue;
             }
-            for (size_t i = 0; i < members.size(); ++i) {
-                const uint32_t cid = members[i];
-                CoreWork& cw = core_work[cid];
-                const bool is_injector = (i == 0);
-                const bool is_tail = (i + 1 == members.size());
-                cw.weight_share_role = is_injector
-                                           ? WeightShareRole::ChainInjector
-                                           : (is_tail ? WeightShareRole::ChainTail : WeightShareRole::ChainMiddle);
-                if (!is_injector) {
-                    const auto pred_phys = device->worker_core_from_logical_core(cores.at(members[i - 1]));
-                    cw.weight_src_noc_x = (uint32_t)pred_phys.x;
-                    cw.weight_src_noc_y = (uint32_t)pred_phys.y;
-                }
-                if (!is_tail) {
-                    const auto succ_phys = device->worker_core_from_logical_core(cores.at(members[i + 1]));
-                    cw.chain_succ_noc_x = (uint32_t)succ_phys.x;
-                    cw.chain_succ_noc_y = (uint32_t)succ_phys.y;
-                }
+            std::vector<CoreRange> receivers;
+            for (uint32_t cid : members) {
+                receivers.emplace_back(cores.at(cid), cores.at(cid));
             }
+            weights_mcast_groups.emplace_back(
+                CoreRangeSet(std::move(receivers)), std::vector<CoreCoord>{cores.at(members.front())});
         }
-    } else if (weight_share_mode == WeightShareMode::Mcast) {
+    } else if (place_in_rectangles) {
         // Row-strip placement: each (c_in_idx, c_out_idx) group occupies
         // ceil(members / grid.x) contiguous full-width rows; strips stack along Y in group order.
-        // Members fill their strip row-major and the slots left over in its last row become
-        // passive participants that only serve the multicast handshake. Every group has the same
+        // Members fill their strip row-major; unused tail slots receive writes but do not acknowledge.
+        // Every group has the same
         // member count by the partitioning invariants above, so reduction partners (same slot,
         // different c_in strip) stay vertically aligned. Cores beyond the last strip get no work
         // and no role.
@@ -1040,8 +978,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         // the bbox whose physical column is furthest from the columns already chosen by
         // previous groups' senders. This spreads DRAM weight reads (and ack convergence)
         // across columns / DRAM channels instead of stacking every sender on column 0. The
-        // chosen slot still runs compute as a normal mcast member (role 4 = sender + work).
-        const auto writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+        // chosen slot still runs compute as a normal group member.
 
         std::vector<std::vector<uint32_t>> group_members(num_groups);  // indices into active_work
         for (uint32_t i = 0; i < active_work.size(); ++i) {
@@ -1086,29 +1023,11 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
             const uint32_t c_in_idx = gid / c_out_parallel_factor;
             const uint32_t c_out_idx = gid % c_out_parallel_factor;
 
-            // Per-group iteration count must match active receivers' writer loop:
-            // N * this_c_in_blocks * this_c_out_blocks.  The c_in_per_core == 1 TT_FATAL
-            // currently pins that factor, but keeping the c_in factor here makes the
-            // passive handshake formula match the active loop if that invariant is
-            // relaxed later.  When C_out_num_blocks is ragged, this_c_out_blocks keeps
-            // trailing passive cores from running extra handshakes and deadlocking
-            // the sender's per-iteration ack wait.
-            const uint32_t this_c_in_blocks = std::min(c_in_per_core, C_in_num_blocks - c_in_idx * c_in_per_core);
-            const uint32_t this_c_out_blocks = std::min(c_out_per_core, C_out_num_blocks - c_out_idx * c_out_per_core);
-            const uint32_t mcast_iters = N * this_c_in_blocks * this_c_out_blocks;
-
             const uint32_t bbox_y_start_log = next_row;
             const uint32_t bbox_y_end_log = bbox_y_start_log + rows_this_group - 1;
             const uint32_t bbox_x_end_log = grid_size.x - 1;
             const uint32_t bbox_num_cores = grid_size.x * rows_this_group;
             next_row += rows_this_group;
-
-            auto bbox_start_phys = device->worker_core_from_logical_core(CoreCoord{0, bbox_y_start_log});
-            auto bbox_end_phys = device->worker_core_from_logical_core(CoreCoord{bbox_x_end_log, bbox_y_end_log});
-            // Conv2d-style swap so the multicast hardware sees the rect in NOC_1's orientation.
-            if (writer_noc == tt::tt_metal::NOC::NOC_1) {
-                std::swap(bbox_start_phys, bbox_end_phys);
-            }
 
             const uint32_t sender_within_idx = pick_sender_within_idx(bbox_y_start_log, num_members);
             const uint32_t sender_x_log = sender_within_idx % grid_size.x;
@@ -1116,39 +1035,24 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
             const auto sender_phys = device->worker_core_from_logical_core(CoreCoord{sender_x_log, sender_y_log});
             used_sender_phys_xs.push_back((uint32_t)sender_phys.x);
 
-            // Sender is inside the bbox; EXCLUDE_SRC mcast → num_dests = bbox_cores - 1.
-            const uint32_t num_receivers = bbox_num_cores - 1;
+            weights_mcast_groups.emplace_back(
+                CoreRangeSet(CoreRange({0, bbox_y_start_log}, {bbox_x_end_log, bbox_y_end_log})),
+                std::vector<CoreCoord>{{sender_x_log, sender_y_log}},
+                num_members - 1);  // Only active receivers acknowledge; the sender is an active member.
 
-            for (uint32_t within_idx = 0; within_idx < bbox_num_cores; ++within_idx) {
+            // Weight CB storage is allocated across core_grid, including the unused row tails.
+            // Leave those cores idle: hardware can land payloads there without a receiving kernel.
+            for (uint32_t within_idx = 0; within_idx < num_members; ++within_idx) {
                 const uint32_t x = within_idx % grid_size.x;
                 const uint32_t y = bbox_y_start_log + within_idx / grid_size.x;
                 const uint32_t target_core_id = y * grid_size.x + x;
-                CoreWork& cw = core_work[target_core_id];
-
-                if (within_idx < num_members) {
-                    cw = active_work[members[within_idx]];
-                    cw.weight_share_role =
-                        within_idx == sender_within_idx ? WeightShareRole::McastSender : WeightShareRole::McastReceiver;
-                } else {
-                    cw.weight_share_role = WeightShareRole::McastPassive;
-                }
-                // Receivers/passives source weights from the sender. Sender carries its own
-                // coord for uniform runtime args; writer.cpp ignores it for McastSender.
-                cw.weight_src_noc_x = (uint32_t)sender_phys.x;
-                cw.weight_src_noc_y = (uint32_t)sender_phys.y;
-                cw.mcast_bbox_start_x = (uint32_t)bbox_start_phys.x;
-                cw.mcast_bbox_start_y = (uint32_t)bbox_start_phys.y;
-                cw.mcast_bbox_end_x = (uint32_t)bbox_end_phys.x;
-                cw.mcast_bbox_end_y = (uint32_t)bbox_end_phys.y;
-                cw.mcast_num_dests = num_receivers;
-                cw.mcast_num_iters = mcast_iters;
+                core_work[target_core_id] = active_work[members[within_idx]];
             }
 
             log_debug(
                 tt::LogOp,
-                "Mcast group {} (c_in={}, c_out={}): {} members + {} passive; bbox logical(0,{})..({},{}); "
-                "phys swapped({},{})..({},{}); sender logical({},{}) phys_x={} within_idx={}; "
-                "num_receivers={}, mcast_iters={}",
+                "Weight group {} (c_in={}, c_out={}): {} members + {} passive; bbox logical(0,{})..({},{}); "
+                "sender logical({},{}) phys_x={} within_idx={}",
                 gid,
                 c_in_idx,
                 c_out_idx,
@@ -1157,17 +1061,26 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
                 bbox_y_start_log,
                 bbox_x_end_log,
                 bbox_y_end_log,
-                bbox_start_phys.x,
-                bbox_start_phys.y,
-                bbox_end_phys.x,
-                bbox_end_phys.y,
                 sender_x_log,
                 sender_y_log,
                 sender_phys.x,
-                sender_within_idx,
-                num_receivers,
-                mcast_iters);
+                sender_within_idx);
         }
+    }
+
+    std::optional<mcast::McastFamily> weights_mcast_family;
+    if (share_weights) {
+        mcast::McastConfig weight_config;
+        weight_config.noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+        weight_config.base_sem_id = desc.semaphores.size();
+        weights_mcast_family.emplace(
+            device, std::move(weights_mcast_groups), weight_config, mcast::IrregularReceiverSetMode::ChainLink);
+        for (const auto& semaphore : weights_mcast_family->owned_semaphores()) {
+            desc.semaphores.push_back(semaphore);
+        }
+        weights_mcast_family->append_compile_time_args_to(writer_desc.compile_time_args);
+    } else {
+        mcast::append_absent_mcast_compile_time_args_to(writer_desc.compile_time_args);
     }
 
     // Build reduction groups from logical reduction keys (c_out_idx, t_out_idx, h_out_idx, w_out_idx).
@@ -1276,7 +1189,9 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         // Writer pos[0..2] are the output, weight, and bias buffer addresses. nullptr bias becomes
         // an embedded 0 so the kernel-side address is still well-defined.
         KernelDescriptor::RTArgList writer_args;
-        writer_args.reserve(26 + (num_workers > 0 ? 2 + 2 * num_workers : 0));
+        writer_args.reserve(
+            15 + (weights_mcast_family ? weights_mcast_family->runtime_args(core).size() : 0) +
+            (num_workers > 0 ? 2 + 2 * num_workers : 0));
         writer_args.push_back(out_buffer);
         writer_args.push_back(weight_buffer);
         if (bias_buffer != nullptr) {
@@ -1295,18 +1210,10 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         writer_args.push_back(cw.w_out_start);
         writer_args.push_back(cw.w_out_end);
         writer_args.push_back((uint32_t)cw.is_reducer);
-        writer_args.push_back(static_cast<uint32_t>(cw.weight_share_role));
-        writer_args.push_back(cw.weight_src_noc_x);
-        writer_args.push_back(cw.weight_src_noc_y);
-        writer_args.push_back(cw.chain_succ_noc_x);
-        writer_args.push_back(cw.chain_succ_noc_y);
-        writer_args.push_back(cw.mcast_bbox_start_x);
-        writer_args.push_back(cw.mcast_bbox_start_y);
-        writer_args.push_back(cw.mcast_bbox_end_x);
-        writer_args.push_back(cw.mcast_bbox_end_y);
-        writer_args.push_back(cw.mcast_num_dests);
-        writer_args.push_back(cw.mcast_num_iters);
         writer_args.push_back(num_workers);
+        if (weights_mcast_family) {
+            weights_mcast_family->append_runtime_args_to(writer_args, core);
+        }
 
         if (num_workers > 0) {
             writer_args.push_back(reducer_core_physical_xs[group_id]);
@@ -1321,13 +1228,12 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
 
         log_debug(
             tt::LogOp,
-            "Core ({},{}): HasWork={}, IsReducer={}, ChainRole={}, "
+            "Core ({},{}): HasWork={}, IsReducer={}, "
             "ReductionGroup={}, C_in_idx={}, C_out_idx={}, NumWorkers={}",
             core.x,
             core.y,
             cw.has_work,
             cw.is_reducer,
-            static_cast<uint32_t>(cw.weight_share_role),
             group_id,
             cw.c_in_idx,
             cw.c_out_idx,

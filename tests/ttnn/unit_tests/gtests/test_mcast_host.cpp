@@ -17,6 +17,7 @@ using tt::tt_metal::CoreRange;
 using tt::tt_metal::CoreRangeSet;
 using tt::tt_metal::NOC;
 namespace wire = dataflow_kernel_lib::mcast_wire;
+using dataflow_kernel_lib::McastMode;
 using dataflow_kernel_lib::SenderTransferMode;
 class McastHostFixture : public ::ttnn::TTNNFixtureWithSuiteDevice<McastHostFixture> {};
 
@@ -30,9 +31,22 @@ CoreRangeSet cores(const std::vector<CoreCoord>& values) {
 }
 using Coordinates = std::set<std::pair<uint32_t, uint32_t>>;
 
+Coordinates worker_coordinates(tt::tt_metal::IDevice* device) {
+    Coordinates result;
+    const auto size = device->compute_with_storage_grid_size();
+    for (uint32_t y = 0; y < size.y; ++y) {
+        for (uint32_t x = 0; x < size.x; ++x) {
+            const auto w = device->worker_core_from_logical_core({x, y});
+            result.emplace(w.x, w.y);
+        }
+    }
+    return result;
+}
+
 // Independent oracle: enumerate the emitted destinations and compare with each mapped logical
 // receiver, without using the helper's decomposition or a bounding-box reference.
 void check_group(tt::tt_metal::IDevice* device, const McastFamily& family, const McastGroup& group) {
+    const auto workers = worker_coordinates(device);
     const auto ct = family.compile_time_args();
     ASSERT_EQ(ct.size(), 11u);
     ASSERT_EQ(ct[0], 1u);
@@ -66,6 +80,9 @@ void check_group(tt::tt_metal::IDevice* device, const McastFamily& family, const
             bool inside = false;
             for (uint32_t y = ylo; y <= yhi; ++y) {
                 for (uint32_t x = xlo; x <= xhi; ++x) {
+                    if (!workers.contains({x, y})) {
+                        continue;
+                    }
                     EXPECT_TRUE(actual.emplace(x, y).second) << "overlapping rectangles";
                     inside |= x == worker.x && y == worker.y;
                     ++area;
@@ -271,10 +288,34 @@ TEST_F(McastHostFixture, FullWidthMappedCoverage) {
         McastGroup group(receivers, std::vector<CoreCoord>{{0, 0}, {size.x - 1, 1}});
         McastFamily family(device_, {group}, cfg);
         check_group(device_, family, group);
-        const auto left = device_->worker_core_from_logical_core({0, 0});
-        const auto right = device_->worker_core_from_logical_core({size.x - 1, 0});
-        if (right.x - left.x + 1 > size.x) {
-            EXPECT_GE(family.rectangle_capacity(), 2u);
+        EXPECT_EQ(family.rectangle_capacity(), 1u);
+    }
+}
+
+TEST_F(McastHostFixture, CompactConv3dGroupsUseLogicalRectangles) {
+    const auto size = device_->compute_with_storage_grid_size();
+    if (size.x < 11 || size.y < 9) {
+        GTEST_SKIP() << "Requires the compact Conv3D 11-column placement";
+    }
+    for (auto noc : {NOC::NOC_0, NOC::NOC_1}) {
+        McastConfig cfg;
+        cfg.noc = noc;
+        std::vector<McastGroup> groups;
+        for (uint32_t group = 0; group < 4; ++group) {
+            std::vector<CoreCoord> members;
+            for (uint32_t slot = group * 24; slot < (group + 1) * 24; ++slot) {
+                members.emplace_back(slot % 11, slot / 11);
+            }
+            groups.emplace_back(cores(members), std::vector<CoreCoord>{members.front()});
+        }
+        const McastFamily multicast(device_, groups, cfg);
+        const McastFamily chain(device_, groups, cfg, IrregularReceiverSetMode::ChainLink);
+        EXPECT_EQ(multicast.rectangle_capacity(), 3u);
+        EXPECT_EQ(chain.rectangle_capacity(), 0u);
+        for (const auto& group : groups) {
+            check_group(device_, multicast, group);
+            EXPECT_LE(chain.num_rectangles(group.senders().front()), 3u);
+            EXPECT_EQ(chain.ack_count(group.senders().front()), 1u);
         }
     }
 }
@@ -291,6 +332,40 @@ TEST_F(McastHostFixture, LocalAndNonparticipantRoles) {
     EXPECT_TRUE(std::all_of(outside.begin(), outside.end(), [](auto v) { return v == 0; }));
     Mcast2D wrapper(device_, grid({3, 3}, {3, 3}), Mcast2DFixedSenderConfig{{3, 3}});
     check_wrapper(wrapper, McastFamily(device_, {local}));
+}
+
+TEST_F(McastHostFixture, IrregularReceiverSetPolicySelectsFamilyTransport) {
+    const McastGroup dense(grid({0, 0}, {2, 0}), {{1, 0}});
+    const McastGroup irregular(cores({{0, 2}, {2, 2}, {4, 2}}), {{2, 2}});
+    const McastGroup local(cores({{6, 0}}), {{6, 0}});
+    for (auto noc : {NOC::NOC_0, NOC::NOC_1}) {
+        McastConfig config;
+        config.noc = noc;
+        const McastFamily hardware(device_, {dense}, config, IrregularReceiverSetMode::ChainLink);
+        EXPECT_EQ(wire::mcast_mode(hardware.compile_time_args()[wire::FLAGS]), McastMode::Multicast);
+        check_group(device_, hardware, dense);
+        const McastFamily chain(device_, {irregular}, config, IrregularReceiverSetMode::ChainLink);
+        EXPECT_EQ(wire::mcast_mode(chain.compile_time_args()[wire::FLAGS]), McastMode::ChainUnicast);
+        const McastFamily rectangles(device_, {dense, local}, config, IrregularReceiverSetMode::ChainLink);
+        EXPECT_EQ(wire::mcast_mode(rectangles.compile_time_args()[wire::FLAGS]), McastMode::Multicast);
+        for (const auto& groups :
+             {std::vector<McastGroup>{dense, irregular, local}, std::vector<McastGroup>{irregular, local, dense}}) {
+            const McastFamily family(device_, groups, config, IrregularReceiverSetMode::ChainLink);
+            const McastFamily multiple_mcast(device_, groups, config, IrregularReceiverSetMode::MultipleMcast);
+            EXPECT_EQ(wire::mcast_mode(family.compile_time_args()[wire::FLAGS]), McastMode::ChainUnicast);
+            EXPECT_EQ(wire::mcast_mode(multiple_mcast.compile_time_args()[wire::FLAGS]), McastMode::Multicast);
+            EXPECT_EQ(family.rectangle_capacity(), 0u);
+            EXPECT_EQ(multiple_mcast.rectangle_capacity(), 3u);
+            EXPECT_EQ(family.ack_count({1, 0}), 1u);  // Dense group also uses per-hop readiness.
+            EXPECT_EQ(family.ack_count({2, 2}), 1u);
+            EXPECT_EQ(family.ack_count({6, 0}), 0u);
+            EXPECT_ANY_THROW(family.compile_time_args(false));
+            for (auto core : tt::tt_metal::corerange_to_cores(family.participating_cores())) {
+                EXPECT_EQ(family.runtime_args(core).size(), wire::runtime_words(0, 0, McastMode::ChainUnicast));
+            }
+            EXPECT_EQ(multiple_mcast.runtime_args({7, 7}).size(), wire::runtime_words(0, 3, McastMode::Multicast));
+        }
+    }
 }
 
 TEST_F(McastHostFixture, FlagsSemaphoresAndAckPrecedence) {
@@ -455,7 +530,7 @@ TEST_F(McastHostFixture, GroupSerializationAndStrictRouting) {
                     EXPECT_EQ(appended, expected_rt);
                     const auto start = wire::rectangles_offset(rotating ? 2u : 0u);
                     const auto padding = start + rt[wire::NUM_RECTANGLES] * wire::RECT_WORDS;
-                    const auto end = wire::roles_offset(rotating ? 2u : 0u, 3u);
+                    const auto end = wire::roles_offset(rotating ? 2u : 0u, 3u, McastMode::Multicast);
                     EXPECT_TRUE(
                         std::all_of(rt.begin() + padding, rt.begin() + end, [](auto word) { return word == 0; }));
                 }
@@ -588,7 +663,7 @@ TEST_F(McastHostFixture, GroupNormFactoryEmitsExactDestinations) {
                     ASSERT_LT(batch, batches);
                     // Nine contributors' X/Y coordinates precede the family's sender block.
                     constexpr uint32_t rt_base = 18;
-                    ASSERT_GE(args.size(), rt_base + wire::roles_offset(0, capacity) + 2u);
+                    ASSERT_GE(args.size(), rt_base + wire::roles_offset(0, capacity, McastMode::Multicast) + 2u);
                     const uint32_t rectangles = args[rt_base + wire::NUM_RECTANGLES];
                     ASSERT_GE(rectangles, 1u);
                     ASSERT_LE(rectangles, 3u);
@@ -608,6 +683,9 @@ TEST_F(McastHostFixture, GroupNormFactoryEmitsExactDestinations) {
                         const auto ex = args[base + wire::EX], ey = args[base + wire::EY];
                         for (uint32_t y = std::min(sy, ey); y <= std::max(sy, ey); ++y) {
                             for (uint32_t x = std::min(sx, ex); x <= std::max(sx, ex); ++x) {
+                                if (!worker_coordinates(device_).contains({x, y})) {
+                                    continue;
+                                }
                                 EXPECT_TRUE(actual.emplace(x, y).second) << "Overlapping multicast rectangles";
                             }
                         }
@@ -646,6 +724,154 @@ TEST_F(McastHostFixture, GroupNormUsesExactFamilies) {
         }
         EXPECT_ANY_THROW(ttnn::prim::make_group_norm_mcast_family(device_, {{}}, config));
     }
+}
+
+TEST_F(McastHostFixture, IrregularReceiverSetPolicyDoesNotAffectRegularFamilies) {
+    const McastGroup dense(grid({1, 1}, {3, 1}), {{1, 1}});
+    McastConfig config;
+    config.handshake = false;
+    config.ack_count_override = 0;
+    const McastFamily ordinary(device_, {dense}, config);
+    const McastFamily chain_link_policy(device_, {dense}, config, IrregularReceiverSetMode::ChainLink);
+    EXPECT_EQ(wire::mcast_mode(ordinary.compile_time_args()[wire::FLAGS]), dataflow_kernel_lib::McastMode::Multicast);
+    EXPECT_EQ(chain_link_policy.compile_time_args(), ordinary.compile_time_args());
+    EXPECT_EQ(chain_link_policy.runtime_args({1, 1}), ordinary.runtime_args({1, 1}));
+    config.handshake = true;
+    config.ack_count_override.reset();
+    const McastFamily requested(device_, {dense}, config, IrregularReceiverSetMode::ChainLink);
+    EXPECT_EQ(wire::mcast_mode(requested.compile_time_args()[wire::FLAGS]), dataflow_kernel_lib::McastMode::Multicast);
+    EXPECT_EQ(requested.rectangle_capacity(), 1u);
+    EXPECT_EQ(requested.num_rectangles({1, 1}), 1u);
+    EXPECT_EQ(requested.ack_count({1, 1}), 2u);
+    const McastFamily rotating(
+        device_, {McastGroup(dense.receiver_cores(), {{1, 1}, {2, 1}})}, {}, IrregularReceiverSetMode::ChainLink);
+    EXPECT_EQ(wire::mcast_mode(rotating.compile_time_args()[wire::FLAGS]), dataflow_kernel_lib::McastMode::Multicast);
+    const McastGroup irregular(cores({{0, 0}, {2, 0}, {4, 0}}), {{0, 0}});
+    const McastFamily multicast(device_, {irregular}, {}, IrregularReceiverSetMode::MultipleMcast);
+    EXPECT_EQ(multicast.rectangle_capacity(), 3u);
+    EXPECT_EQ(wire::mcast_mode(multicast.compile_time_args()[wire::FLAGS]), dataflow_kernel_lib::McastMode::Multicast);
+    check_group(device_, multicast, irregular);
+}
+
+TEST_F(McastHostFixture, ChainTopologyIsExactSenderFirstAndMapped) {
+    using dataflow_kernel_lib::NO_CHAIN_NEIGHBOR;
+    for (auto noc : {NOC::NOC_0, NOC::NOC_1}) {
+        McastConfig config;
+        config.noc = noc;
+        // Sender in the middle of row-major order, then outside the set.
+        const auto receivers = cores({{0, 1}, {2, 1}, {0, 2}});
+        for (auto sender : {CoreCoord{2, 1}, CoreCoord{4, 2}}) {
+            const McastFamily family(
+                device_, {McastGroup(receivers, {sender})}, config, IrregularReceiverSetMode::ChainLink);
+            EXPECT_EQ(family.rectangle_capacity(), 0u);
+            EXPECT_EQ(family.num_rectangles(sender), 2u);
+            EXPECT_EQ(family.ack_count(sender), 1u);
+            EXPECT_EQ(family.num_receivers(sender), receivers.num_cores() - receivers.contains(sender));
+            const auto ct = family.compile_time_args();
+            EXPECT_EQ(ct.size(), 11u);
+            EXPECT_EQ(wire::mcast_mode(ct[wire::FLAGS]), dataflow_kernel_lib::McastMode::ChainUnicast);
+            const std::vector<CoreCoord> expected = receivers.contains(sender)
+                                                        ? std::vector<CoreCoord>{sender, {0, 1}, {0, 2}}
+                                                        : std::vector<CoreCoord>{sender, {0, 1}, {2, 1}, {0, 2}};
+            for (size_t i = 0; i < expected.size(); ++i) {
+                auto rt = family.runtime_args(expected[i]);
+                ASSERT_EQ(rt.size(), 11u);  // Two header, two head coords, five chain, two roles.
+                auto mapped = [&](CoreCoord c) { return device_->worker_core_from_logical_core(c); };
+                const auto predecessor = i ? mapped(expected[i - 1]) : CoreCoord{NO_CHAIN_NEIGHBOR, NO_CHAIN_NEIGHBOR};
+                const auto successor =
+                    i + 1 < expected.size() ? mapped(expected[i + 1]) : CoreCoord{NO_CHAIN_NEIGHBOR, NO_CHAIN_NEIGHBOR};
+                EXPECT_EQ(rt[4], predecessor.x);
+                EXPECT_EQ(rt[5], predecessor.y);
+                EXPECT_EQ(rt[6], successor.x);
+                EXPECT_EQ(rt[7], successor.y);
+                EXPECT_EQ(rt[8], receivers.contains(sender));
+                EXPECT_EQ(rt[9], i == 0 ? wire::CAN_SEND : wire::CAN_RECEIVE);
+                EXPECT_EQ(rt[1], i == 0 ? 1u : 0u);
+                EXPECT_EQ(rt, family.group(0).runtime_args(expected[i]));
+            }
+            EXPECT_ANY_THROW(family.group(0).runtime_args({7, 7}));
+            const auto inactive = family.runtime_args({7, 7});
+            EXPECT_EQ(inactive.size(), 11u);
+            EXPECT_EQ(inactive[inactive.size() - 2], 0u);
+            EXPECT_EQ(inactive.back(), wire::NO_SENDER_ROUND);
+        }
+    }
+}
+
+TEST_F(McastHostFixture, ChainFamilyUsesOneCompileTimeTransportForEveryGeometry) {
+    const McastGroup dense(grid({0, 0}, {2, 0}), {{0, 0}});
+    const McastGroup irregular(cores({{0, 2}, {2, 2}, {4, 2}}), {{0, 2}});
+    const McastGroup local(cores({{6, 0}}), {{6, 0}});
+    const McastFamily family(device_, {dense, irregular, local}, {}, IrregularReceiverSetMode::ChainLink);
+    EXPECT_EQ(family.rectangle_capacity(), 0u);
+    const auto ct = family.compile_time_args();
+    EXPECT_EQ(wire::mcast_mode(ct[wire::FLAGS]), dataflow_kernel_lib::McastMode::ChainUnicast);
+    EXPECT_EQ(ct[wire::ACK_COUNT], ACK_EQUALS_FANOUT);  // One successor, except for the local-only group.
+    EXPECT_EQ(family.ack_count({6, 0}), 0u);
+    const auto local_rt = family.runtime_args({6, 0});
+    EXPECT_EQ(local_rt[4], dataflow_kernel_lib::NO_CHAIN_NEIGHBOR);
+    EXPECT_EQ(local_rt[6], dataflow_kernel_lib::NO_CHAIN_NEIGHBOR);
+    EXPECT_EQ(local_rt[8], 1u);
+    for (auto core : std::vector<CoreCoord>{{0, 0}, {1, 0}, {0, 2}, {2, 2}, {6, 0}, {7, 7}}) {
+        const auto rt = family.runtime_args(core);
+        ASSERT_EQ(rt.size(), 11u);  // Header, head coordinates, neighbors and roles; no transport selector.
+        std::vector<uint32_t> args{123};
+        family.append_runtime_args_to(args, core);
+        family.append_runtime_args_to(args, core);
+        EXPECT_EQ(args.size(), 1 + 2 * rt.size());
+        EXPECT_TRUE(std::equal(rt.begin(), rt.end(), args.begin() + 1));
+        EXPECT_TRUE(std::equal(rt.begin(), rt.end(), args.begin() + 1 + rt.size()));
+    }
+    for (uint32_t i = 0; i < 3; ++i) {
+        EXPECT_EQ(family.group(i).compile_time_args(), ct);
+        std::vector<uint32_t> appended;
+        family.group(i).append_compile_time_args_to(appended);
+        EXPECT_EQ(appended, ct);
+        EXPECT_ANY_THROW(family.group(i).compile_time_args(false));
+    }
+    EXPECT_ANY_THROW(family.compile_time_args(false));
+    EXPECT_EQ(family.owned_semaphores().size(), 2u);
+    EXPECT_EQ(family.owned_semaphores()[1].core_ranges, family.participating_cores());
+}
+
+TEST_F(McastHostFixture, ChainRejectsUnsupportedProtocolsAndGeometry) {
+    const auto receivers = cores({{0, 0}, {2, 0}});
+    const McastGroup group(receivers, {{0, 0}});
+    McastConfig config;
+    config.handshake = false;
+    EXPECT_ANY_THROW(McastFamily(device_, {group}, config, IrregularReceiverSetMode::ChainLink));
+    config.handshake = true;
+    for (uint32_t ack : {0u, 1u}) {
+        config.ack_count_override = ack;
+        EXPECT_ANY_THROW(McastFamily(device_, {group}, config, IrregularReceiverSetMode::ChainLink));
+        EXPECT_ANY_THROW(
+            McastFamily(device_, {McastGroup(receivers, {{0, 0}}, ack)}, {}, IrregularReceiverSetMode::ChainLink));
+    }
+    EXPECT_ANY_THROW(
+        McastFamily(device_, {McastGroup(receivers, {{0, 0}, {2, 0}})}, {}, IrregularReceiverSetMode::ChainLink));
+    EXPECT_ANY_THROW(McastFamily(
+        device_,
+        {McastGroup(cores({{0, 0}, {2, 0}, {4, 0}, {6, 0}}), {{0, 0}})},
+        {},
+        IrregularReceiverSetMode::ChainLink));
+    EXPECT_ANY_THROW(McastFamily(device_, {group, group}, {}, IrregularReceiverSetMode::ChainLink));
+    config.ack_count_override.reset();
+    config.sem_ids = std::vector<uint32_t>{3, 4};
+    const McastFamily adopted(device_, {group}, config, IrregularReceiverSetMode::ChainLink);
+    EXPECT_TRUE(adopted.owned_semaphores().empty());
+    EXPECT_EQ(adopted.compile_time_args()[wire::DATA_READY], 3u);
+    EXPECT_EQ(adopted.compile_time_args()[wire::CONSUMER_READY], 4u);
+}
+
+TEST_F(McastHostFixture, PreparedGroupCanChangeFamilyTransport) {
+    const McastGroup group(cores({{0, 0}, {2, 0}}), {{0, 0}});
+    const McastFamily chain(device_, {group}, {}, IrregularReceiverSetMode::ChainLink);
+    const McastFamily multicast(device_, {chain.group(0)});
+    EXPECT_EQ(multicast.compile_time_args(), McastFamily(device_, {group}).compile_time_args());
+    check_group(device_, multicast, multicast.group(0));
+    const McastFamily chain_again(device_, {multicast.group(0)}, {}, IrregularReceiverSetMode::ChainLink);
+    EXPECT_EQ(chain_again.compile_time_args(), chain.compile_time_args());
+    EXPECT_EQ(chain_again.runtime_args({2, 0}), chain.runtime_args({2, 0}));
 }
 
 }  // namespace ttnn::kernel_lib::host::test
