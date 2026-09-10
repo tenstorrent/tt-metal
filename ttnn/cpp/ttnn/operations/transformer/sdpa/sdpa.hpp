@@ -112,11 +112,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     std::optional<uint32_t> sliding_window_size = std::nullopt,
     const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_k = std::nullopt,
     const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_v = std::nullopt,
-    // Trace-safe metadata path, same contract as ring_mla's below: when slot_id and
-    // kv_actual_isl_tensor are both set, the per-chunk scalars are read on-device from these
-    // 1-element uint32 DRAM tensors instead of being patched into runtime args, so one captured
-    // trace replays across chunks. Chunked prefill needs this because kv_actual_isl / logical_n
-    // change every chunk, and a trace freezes whatever was live at capture.
+    // Metadata / cache-fold contract: ring_joint_scaled_dot_product_attention docstring (sdpa_nanobind.cpp).
+    // nullopt layers/idx resolve to 1/0.
     const std::optional<ttnn::Tensor>& slot_id = std::nullopt,
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor = std::nullopt,
     std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
@@ -143,16 +140,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
     std::optional<uint32_t> kv_cache_batch_idx = std::nullopt,
     std::optional<uint32_t> kv_actual_isl = std::nullopt,
-    // Trace-safe metadata path: when set (both together), the per-chunk scalars (kv_cache_batch_idx /
-    // kv_actual_isl / logical_n) are read on-device from these two 1-element uint32 DRAM tensors instead
-    // of being baked into the program, so one captured ttnn trace replays across chunks. slot_id holds
-    // the cache-user slot (was metadata[0]); kv_actual_isl_tensor holds the prior valid global KV length
-    // (was metadata[1]).
+    // Metadata / cache-fold contract: ring_joint_scaled_dot_product_attention docstring (sdpa_nanobind.cpp).
+    // nullopt layers/idx resolve to 1/0.
     const std::optional<ttnn::Tensor>& slot_id = std::nullopt,
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor = std::nullopt,
-    // (user, layer)-major KV-cache batch dim (metadata path only). The readers compute the cache slot
-    // on-device as slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx (mirrors
-    // update_padded_kv_cache). Resolve to 1/0 when nullopt -> slot = slot_id[0] (existing behavior).
     std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
     std::optional<uint32_t> kv_cache_layer_idx = std::nullopt);
 

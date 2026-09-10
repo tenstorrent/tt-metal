@@ -89,6 +89,13 @@ struct RingJointSDPAParams {
 
     bool has_indexed_kv_cache() const { return kv_cache_batch_idx.has_value(); }
 
+    // Host-path cache batch: the same (user, layer) fold the readers apply to slot_id[0]. Identity with the defaults.
+    std::optional<std::uint32_t> cache_batch_idx() const {
+        return kv_cache_batch_idx.has_value()
+                   ? std::optional<std::uint32_t>(*kv_cache_batch_idx * kv_cache_num_layers + kv_cache_layer_idx)
+                   : std::nullopt;
+    }
+
     bool has_kv_pad_rotation() const { return kv_actual_isl.has_value(); }
 
     bool has_sliding_window() const { return sliding_window_size.value_or(0) > 0; }
@@ -99,14 +106,14 @@ struct RingJointSDPAParams {
         "is_causal",
         "is_balanced",
         "is_cross",
-        "cache_key_logical_n",
+        "logical_n",
         "logical_l",
         "ring_size",
         "compute_kernel_config",
         "program_config",
         "ccl_core_grid_offset",
         "has_kv_cache_batch_idx",
-        "kv_pad_rotation_enabled",
+        "host_kv_pad_rotation",
         "latent_v_head_dim",
         "sliding_window_size",
         "all_gather_operation_attributes",
@@ -118,7 +125,8 @@ struct RingJointSDPAParams {
             std::cref(is_causal),
             std::cref(is_balanced),
             std::cref(is_cross),
-            has_kv_pad_rotation() ? std::size_t{0} : logical_n,
+            // Reflection only; the program hash is computed explicitly (kv_pad_rotation_active needs the tensors).
+            std::cref(logical_n),
             std::cref(logical_l),
             std::cref(ring_size),
             std::cref(compute_kernel_config),
@@ -149,13 +157,9 @@ struct RingJointSDPAInputs {
     std::optional<Tensor> gathered_joint_k;
     std::optional<Tensor> gathered_joint_v;
 
-    // Trace-safe metadata path (opt-in): two 1-element uint32 DRAM tensors holding the per-chunk
-    // scalars that would otherwise be host-computed and frozen by a ttnn trace. slot_id holds the
-    // cache-user slot (was metadata[0]); kv_actual_isl holds the prior valid global KV length (was
-    // metadata[1]). When present (both together), the readers/writer compute
-    // kv_cache_batch_idx = slot_id * kv_cache_num_layers + kv_cache_layer_idx and derive
-    // logical_nt / q-mapping / ring masks on-device from kv_actual_isl, so one captured program
-    // replays across chunks. std::nullopt => classic host-scalar path (unchanged).
+    // Trace-safe metadata path (both or neither): 1-element uint32 DRAM tensors the kernels read at start, slot_id[0]
+    // the cache-user slot and kv_actual_isl[0] the prior valid global KV length, so one captured program replays
+    // across chunks and users. Contract: ring_joint_scaled_dot_product_attention docstring (sdpa_nanobind.cpp).
     std::optional<Tensor> slot_id;
     std::optional<Tensor> kv_actual_isl;
 
@@ -166,6 +170,9 @@ struct RingJointSDPAInputs {
     uint32_t local_kv_seq_len() const { return static_cast<uint32_t>(input_k.logical_shape()[2]); }
 
     bool is_chunked() const { return input_q.logical_shape()[2] < local_kv_seq_len(); }
+
+    // The metadata path derives KV-pad rotation on-device only for chunked prefill.
+    bool kv_pad_from_metadata() const { return has_metadata() && is_chunked(); }
 
     // Latent-V optimization: absent V means the reader reuses K's buffer
     // and reads the first vDHt head-dim tiles (V's logical head dim).
@@ -184,6 +191,18 @@ struct RingJointSDPAInputs {
     // Derived from buffer presence so the flag and the buffer cannot drift out of sync.
     bool joint_is_sharded() const { return gathered_joint_k.has_value(); }
 };
+
+// KV-pad rotation: the host passes kv_actual_isl, or the chunked metadata path derives it on-device. Program hash,
+// compile-time zeroing and validation all go through this rule so they cannot disagree. The all-gather bound
+// (compute_gather_valid_Ht) is the deliberate exception: it needs a host length, so it is host-path only.
+inline bool kv_pad_rotation_active(const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
+    return args.has_kv_pad_rotation() || tensor_args.kv_pad_from_metadata();
+}
+
+// Single-slot indexed KV cache: the host passes kv_cache_batch_idx, or the metadata path supplies the slot on-device.
+inline bool indexed_kv_cache_active(const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
+    return args.has_indexed_kv_cache() || tensor_args.has_metadata();
+}
 
 // Index constants for RingJointSDPAResult vector
 constexpr size_t RING_JOINT_SDPA_OUTPUT_IDX = 0;

@@ -5,7 +5,7 @@
 // On-device port of the host KV-pad-rotation derivations (ring_joint_sdpa_program_factory.cpp:
 // build_kv_pad_q_mapping, build_ring_work_plan_impl, kv_global_tile_for_host_ring_plan, logical_nt /
 // gather_valid_Ht). The trace-safe metadata path computes these in the SDPA reader from the per-chunk
-// kv_actual_isl (metadata[1]) and hands them to the writer + compute via L1 (compute cannot NoC-read
+// kv_actual_isl[0] and hands them to the writer + compute via L1 (compute cannot NoC-read
 // DRAM). All inputs other than kv_actual_isl are static per program. The host functions are the
 // reference; the metadata==scalar bit-exact test guards against any divergence between them.
 //

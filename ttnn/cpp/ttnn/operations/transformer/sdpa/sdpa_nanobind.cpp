@@ -677,6 +677,12 @@ void bind_sdpa(nb::module_& mod) {
         to KV-pad-aware rotation: logical_n remains the total valid KV length after this iteration,
         while kv_actual_isl marks the prior valid cache length before the current chunk.
 
+        Metadata (trace-safe) path: slot_id / kv_actual_isl_tensor replace the host kv_cache_batch_idx /
+        kv_actual_isl (mixing the two forms is rejected) and the cache batch is slot * kv_cache_num_layers +
+        kv_cache_layer_idx on both forms. logical_n stays the real total valid length: on chunked shapes the
+        kernels derive it on-device as kv_actual_isl[0] + chunk and the program hash does not key it, so one
+        program serves every chunk depth.
+
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
               - The attention output for the original Q/K/V shape [b x nh x N/num_devices x dv].
@@ -770,6 +776,8 @@ void bind_sdpa(nb::module_& mod) {
                 slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx.
             kv_cache_layer_idx (int, optional): Layer within the cache-user slot. None uses 0 and the
                 value must be less than kv_cache_num_layers.
+
+        Metadata path and cache fold: as ring_joint_scaled_dot_product_attention (see its docstring).
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor):
