@@ -199,9 +199,15 @@ inline uint32_t pack_own_frame() {
     invalidate_l1_cache();
     copy_words(frame + kPrefix, cv + kp::SPSC_WIRE_CV_BASE, kWireCtrl);
     for (uint32_t r = 0; r < kNumRisc; r++) {
-        const uint32_t start = cv[kp::SPSC_RING_HEAD_0 + r];
+        uint32_t start = cv[kp::SPSC_RING_HEAD_0 + r];
         const uint32_t tail = r < kNumEthRisc ? cv[kp::SPSC_RING_TAIL_0 + r] : start;
-        const uint32_t take = tail - start;
+        uint32_t take = tail - start;
+        if (take > kRingWords) {
+            // Lapped: a producer wrote past its consumer. Only the last ring image is still intact; ship that and
+            // never index past it (an unclamped take would read beyond the image into this core's own L1).
+            start = tail - kRingWords;
+            take = kRingWords;
+        }
         frame[kp::SPSC_PREFIX_HEAD_0 + r] = start;
         if (take == 0) {
             continue;
@@ -226,9 +232,17 @@ inline uint32_t pack_linked_frame(uint32_t xy, uint32_t prof_l1) {
     noc_async_read(get_noc_addr(x, y, prof_l1), kCvScratch, kCvWords * 4u);
     noc_async_read_barrier();
     bool live = false;
+    uint32_t starts[kNumEthRisc];
     uint32_t takes[kNumEthRisc];
     for (uint32_t r = 0; r < kNumEthRisc; r++) {
-        takes[r] = cv[kp::SPSC_RING_TAIL_0 + r] - cv[kp::SPSC_RING_HEAD_0 + r];
+        const uint32_t tail = cv[kp::SPSC_RING_TAIL_0 + r];
+        starts[r] = cv[kp::SPSC_RING_HEAD_0 + r];
+        takes[r] = tail - starts[r];
+        if (takes[r] > kRingWords) {
+            // Lapped (see pack_own_frame): ship the last intact ring image, never index past it.
+            starts[r] = tail - kRingWords;
+            takes[r] = kRingWords;
+        }
         live = live || takes[r] != 0;
     }
     if (!live) {
@@ -245,7 +259,7 @@ inline uint32_t pack_linked_frame(uint32_t xy, uint32_t prof_l1) {
     uint32_t off = kPrefix + kWireCtrl;
     copy_words(frame + kPrefix, cv + kp::SPSC_WIRE_CV_BASE, kWireCtrl);
     for (uint32_t r = 0; r < kNumRisc; r++) {
-        const uint32_t start = cv[kp::SPSC_RING_HEAD_0 + r];
+        const uint32_t start = r < kNumEthRisc ? starts[r] : cv[kp::SPSC_RING_HEAD_0 + r];
         frame[kp::SPSC_PREFIX_HEAD_0 + r] = start;
         if (r >= kNumEthRisc || takes[r] == 0) {
             continue;
@@ -253,11 +267,9 @@ inline uint32_t pack_linked_frame(uint32_t xy, uint32_t prof_l1) {
         const volatile tt_l1_ptr uint32_t* img =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(img_base + r * kRingBytes);
         off = place_run(frame, img, start, takes[r], off);
-        // Head write-back: the producer on that core sees its ring drain, as it would from a relay.
-        noc_inline_dw_write(
-            get_noc_addr(x, y, prof_l1 + (kp::SPSC_RING_HEAD_0 + r) * 4u),
-            cv[kp::SPSC_RING_HEAD_0 + r] + takes[r],
-            0xF);
+        // Head write-back (to the tail observed above): the producer on that core sees its ring drain, as it
+        // would from a relay.
+        noc_inline_dw_write(get_noc_addr(x, y, prof_l1 + (kp::SPSC_RING_HEAD_0 + r) * 4u), start + takes[r], 0xF);
     }
     return finish_frame(frame, xy, off);
 }

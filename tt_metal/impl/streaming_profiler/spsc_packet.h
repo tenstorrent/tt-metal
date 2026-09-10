@@ -51,6 +51,7 @@
 #define PP_CLOCK_KIND_SHIFT 24u
 #define PP_CLOCK_VALUE_MASK 0xFFFFFFu
 #define PP_CLOCK_LOCAL_REFCLK 0u
+#define PP_CLOCK_LINK_REFCLK 1u
 
 /* 11 is retired (was ZONE_TOTAL); never reuse it. */
 

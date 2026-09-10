@@ -133,6 +133,7 @@ struct ppfmt {
     static constexpr uint32_t CLOCK_KIND_SHIFT = 24u;        // PP_CLOCK_KIND_SHIFT
     static constexpr uint32_t CLOCK_VALUE_MASK = 0xFFFFFFu;  // PP_CLOCK_VALUE_MASK
     static constexpr uint32_t CLOCK_LOCAL_REFCLK = 0u;       // this chip refclk vs its own wall clock
+    static constexpr uint32_t CLOCK_LINK_REFCLK = 1u;  // an eth sync round: this core refclk at its stamp (link half)
     static inline uint32_t w0(uint32_t type, uint32_t low27) {
         return ((type & TYPE_MASK) << TYPE_SHIFT) | (low27 & LOW27_MASK);
     }
