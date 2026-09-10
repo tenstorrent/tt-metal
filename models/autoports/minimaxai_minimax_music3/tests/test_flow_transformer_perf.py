@@ -46,16 +46,29 @@ def test_dit_forward_perf(mm3_mesh_device):
     noise, cond = g["noises"][0], g["conditions"][0]
     latents = noise.expand(BATCH, -1, -1).contiguous()
     timestep = torch.full((BATCH,), 0.5)
-    model = FlowTransformer.from_pretrained(mm3_mesh_device)
-    cond_proj = model.prepare_condition(torch.cat([cond, torch.zeros_like(cond)], 0))
+    # Stage 07 profiling knobs: weight dtype / matmul fidelity / reduced layer count (one block + in/out projections)
+    # and the traced step instead of the eager forward (default: the stage-05 eager bf16 configuration).
+    wd = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b}[os.environ.get("MM3_DIT_WEIGHT_DTYPE", "bf16")]
+    fidelity = os.environ.get("MM3_DIT_FIDELITY", "hifi2")
+    num_layers = int(os.environ.get("MM3_DIT_NUM_LAYERS", "36"))
+    traced = bool(os.environ.get("MM3_DIT_TRACED"))
+    model = FlowTransformer.from_pretrained(mm3_mesh_device, weight_dtype=wd, fidelity=fidelity, num_layers=num_layers)
+    cond_both = torch.cat([cond, torch.zeros_like(cond)], 0)
+    cond_proj = model.prepare_condition(cond_both)
+    if traced:
+        step = model.traced_step(latents.shape[-1])
+        step.set_condition(cond_both)
+        run = lambda: step.step(latents, timestep)  # noqa: E731
+    else:
+        run = lambda: model(latents, timestep, cond_proj=cond_proj)  # noqa: E731
     for _ in range(2):  # compile + warm
-        model(latents, timestep, cond_proj=cond_proj)
+        run()
     ttnn.synchronize_device(mm3_mesh_device)
     if _profiled():
         ttnn.ReadDeviceProfiler(mm3_mesh_device)  # drain the warm-up ops
     _signpost("PERF_DIT_FORWARD")
     t0 = time.time()
-    out = model(latents, timestep, cond_proj=cond_proj)
+    out = run()
     ttnn.synchronize_device(mm3_mesh_device)
     measured = time.time() - t0
     _signpost("PERF_DIT_FORWARD_END")

@@ -88,9 +88,14 @@ def _one_hot_gather(step: int) -> torch.Tensor:
 class DepthDecoder(LightweightModule):
     """``MiniMaxMusic3RVQDepthDecoder`` on device. See the module docstring for the layout."""
 
-    def __init__(self, mesh_device, state_dict: Dict[str, torch.Tensor], *, dtype=ttnn.bfloat16):
+    def __init__(self, mesh_device, state_dict: Dict[str, torch.Tensor], *, dtype=ttnn.bfloat16, weight_dtype=None):
+        """``dtype``: activation / output dtype (bf16). ``weight_dtype``: the transformer-weight dtype (``wqkv``,
+        ``wo``, gate / up / down, ``projection``, the fused heads); ``None`` = ``dtype``. Stage 07 runs bfp8 weights
+        (the depth step is DRAM-bound on 1.14 GB of bf16 weights, see doc/optimize/README.md); the embedding table,
+        the position embedding, the norm weights and the one-hot selectors stay bf16 (exact)."""
         self.mesh_device = mesh_device
         self.dtype = dtype
+        self.weight_dtype = weight_dtype if weight_dtype is not None else dtype
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -107,6 +112,13 @@ class DepthDecoder(LightweightModule):
         )
         self.mem = ttnn.DRAM_MEMORY_CONFIG
         self.l1 = ttnn.L1_MEMORY_CONFIG
+        # Stage 07: explicit 1D-mcast program configs for the weight matmuls with N <= 6144 (wo, gate / up, down,
+        # projection; M = 64 or 32 rows). The default program for these shapes uses in0_block_w = 2 on 64 cores and
+        # reaches 210-260 GB/s with bfp8 weights; a 100-core 1D config with in0_block_w = 4 reaches 290-320 GB/s
+        # (doc/optimize/sweeps/depth.json, depth12k.json). ``use_program_configs = False`` restores the defaults.
+        self.matmul_grid = ttnn.CoreCoord(10, 10)
+        self.matmul_in0_block_w = 4
+        self.use_program_configs = True
         # RMSNorm: the interleaved kernel parallelizes over tile rows and the padded sequence has
         # only two, so it ran on 2 cores (75 us). Width-sharding the [64, 4096] activation over a
         # 4x4 grid (shards [64, 256]) runs the norm on 16 cores in ~7 us plus two ~3 us resharding
@@ -130,20 +142,21 @@ class DepthDecoder(LightweightModule):
 
     # ------------------------------------------------------------------ construction
     @classmethod
-    def from_pretrained(cls, mesh_device, weights_dir, *, dtype=ttnn.bfloat16) -> "DepthDecoder":
+    def from_pretrained(cls, mesh_device, weights_dir, *, dtype=ttnn.bfloat16, weight_dtype=None) -> "DepthDecoder":
         """Load ``<weights_dir>/rvq_depth_decoder/diffusion_pytorch_model.safetensors``."""
         from safetensors.torch import load_file
 
         path = Path(weights_dir) / "rvq_depth_decoder" / "diffusion_pytorch_model.safetensors"
-        return cls(mesh_device, load_file(str(path)), dtype=dtype)
+        return cls(mesh_device, load_file(str(path)), dtype=dtype, weight_dtype=weight_dtype)
 
     def _weight(self, w: torch.Tensor, *, transpose: bool = True, dtype=None) -> ttnn.Tensor:
-        """A torch ``nn.Linear`` weight [out, in] -> device [in, out] tile tensor (or any 2D matrix)."""
+        """A torch ``nn.Linear`` weight [out, in] -> device [in, out] tile tensor in ``weight_dtype`` (or any 2D
+        matrix in the given ``dtype``)."""
         if transpose:
             w = w.transpose(0, 1)
         return ttnn.from_torch(
             w.contiguous(),
-            dtype=dtype or self.dtype,
+            dtype=dtype or self.weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=self.mem,
@@ -218,24 +231,62 @@ class DepthDecoder(LightweightModule):
 
         # Scatter / gather selectors for every supported step index.
         self.scatter = [
-            self._weight(_one_hot_scatter(s).reshape(1, 1, ROWS, TILE), transpose=False) for s in range(MAX_STEPS)
+            self._weight(_one_hot_scatter(s).reshape(1, 1, ROWS, TILE), transpose=False, dtype=self.dtype)
+            for s in range(MAX_STEPS)
         ]
         self.gather = [
-            self._weight(_one_hot_gather(s).reshape(1, 1, TILE, ROWS), transpose=False) for s in range(MAX_STEPS)
+            self._weight(_one_hot_gather(s).reshape(1, 1, TILE, ROWS), transpose=False, dtype=self.dtype)
+            for s in range(MAX_STEPS)
         ]
-        self.scatter_none = self._weight(torch.zeros(1, 1, ROWS, TILE), transpose=False)
+        self.scatter_none = self._weight(torch.zeros(1, 1, ROWS, TILE), transpose=False, dtype=self.dtype)
         ttnn.synchronize_device(self.mesh_device)
         return time.time() - t0
 
     # ------------------------------------------------------------------ small helpers
-    def _linear(self, x: ttnn.Tensor, w: ttnn.Tensor, activation: Optional[str] = None) -> ttnn.Tensor:
+    def _program_config(self, m: int, k: int, n: int, activation: Optional[str] = None):
+        """1D-mcast config: in0 broadcast to ``grid`` cores, N split across them (``per_core_N`` tiles each)."""
+        if not self.use_program_configs:
+            return None
+        cores = self.matmul_grid.x * self.matmul_grid.y
+        mt, kt, nt = -(-m // TILE), k // TILE, -(-n // TILE)
+        per_n = -(-nt // cores)
+        if per_n > 2:
+            # N = 12288 (wqkv) and 7168 (heads): the op default already reaches 320-340 GB/s; the 1D configs tie or
+            # lose (doc/optimize/sweeps/depth12k.json), so they keep the default program.
+            return None
+        blk = self.matmul_in0_block_w
+        while kt % blk:
+            blk //= 2
+        # fp32 accumulation leaves 4 destination tiles per subblock.
+        sw = max(w for w in (1, 2, 4) if per_n % w == 0)
+        sh = mt if mt * sw <= 4 else 1
+        fused = None
+        if activation == "silu":
+            fused = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=self.matmul_grid,
+            in0_block_w=blk,
+            out_subblock_h=sh,
+            out_subblock_w=sw,
+            per_core_M=mt,
+            per_core_N=per_n,
+            fuse_batch=True,
+            fused_activation=fused,
+            mcast_in0=True,
+        )
+
+    def _linear(
+        self, x: ttnn.Tensor, w: ttnn.Tensor, activation: Optional[str] = None, memory_config=None
+    ) -> ttnn.Tensor:
+        pc = self._program_config(x.shape[-2], x.shape[-1], w.shape[-1], activation)
         return ttnn.linear(
             x,
             w,
             compute_kernel_config=self.compute_config,
-            memory_config=self.mem,
+            memory_config=memory_config if memory_config is not None else self.mem,
             dtype=self.dtype,
-            activation=activation,
+            activation=None if (pc is not None and activation == "silu") else activation,
+            program_config=pc,
         )
 
     def _rms_norm(self, x: ttnn.Tensor, w: ttnn.Tensor) -> ttnn.Tensor:
@@ -351,9 +402,7 @@ class DepthDecoder(LightweightModule):
     def _attention(self, x: ttnn.Tensor, layer: dict) -> ttnn.Tensor:
         # The head split / merge ops also run on 2 cores (one per batch row's single tile row);
         # keeping their operands in L1 cuts them from 155 / 52 us to 113 / 38 us (Tracy).
-        qkv = ttnn.linear(
-            x, layer["wqkv"], compute_kernel_config=self.compute_config, memory_config=self.l1, dtype=self.dtype
-        )  # [1, 1, 64, 12288]
+        qkv = self._linear(x, layer["wqkv"], memory_config=self.l1)  # [1, 1, 64, 12288]
         qkv = ttnn.experimental.view(qkv, (LLM_BATCH, 1, SEQ_PAD, 3 * DEPTH_HIDDEN))  # zero-copy tile-aligned row split
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv, num_heads=DEPTH_HEADS, num_kv_heads=DEPTH_HEADS, transpose_k_heads=False, memory_config=self.l1

@@ -1,8 +1,8 @@
 {
   "hf_model_id": "MiniMaxAI/MiniMax-Music3",
   "component": "language_model (Qwen3ForCausalLM, 36 layers, hidden 4096, 32 q / 8 kv heads, head_dim 128, vocab 200000)",
-  "stage": "llm_backbone",
-  "stage_number": 2,
+  "stage": "optimize (stage 07) - supersedes the stage-02 llm_backbone entry",
+  "stage_number": 7,
   "hf_advertised_context": 10240,
   "hf_context_source": "language_model/config.json max_position_embeddings",
   "current_supported_context": 10240,
@@ -20,31 +20,37 @@
     "outputs": "final-RMSNorm hidden [B, 4096] and logits [B, 200000] (bf16 on device, fp32 on host)"
   },
   "dtype_policy": {
-    "name": "functional",
-    "source": "models.tt_transformers ModelOptimizations.accuracy for an unknown base model name (the checkpoint dir is 'language_model', resolved model_name 'snapshots'), LM-head output overridden to bf16",
+    "name": "optimized (tt/llm.py DTYPE_POLICIES; pipeline preset POLICY_PRESETS['optimized'])",
+    "source": "stage 07 datatype sweep, doc/optimize/README.md; 'functional' (stage 02-06) is kept as a named policy",
     "decoder_tensor_groups": {
-      "wqkv": "bfloat16",
-      "wo": "bfloat16",
-      "kv_cache": "bfloat16",
+      "wqkv": "bfloat8_b",
+      "wo": "bfloat8_b",
+      "kv_cache": "bfloat8_b",
       "ff1_3": "bfloat8_b",
       "ff2": "bfloat8_b",
       "activation": "input dtype (bfloat16)"
     },
     "embedding_weight": "bfloat16",
     "norm_weights": "bfloat16",
-    "lm_head_weight": "bfloat16",
-    "lm_head_output": "bfloat16 (stock default bfloat8_b overridden)",
+    "lm_head_weight": "bfloat8_b",
+    "lm_head_output": "bfloat16",
     "rope_tables": "bfloat16",
     "math_fidelity": {
-      "li_ff1_3": "hifi2fp16",
-      "li_ff2": "hifi2fp16",
-      "li_qkv_decode": "hifi4",
-      "li_o_decode": "hifi4",
-      "sdpa_decode": "hifi4",
-      "li_qkv_prefill": "hifi4",
-      "li_o_prefill": "hifi4",
+      "li_ff1_3": "lofi",
+      "li_ff2": "lofi",
+      "li_qkv_decode": "lofi",
+      "li_o_decode": "lofi",
+      "lm_head": "lofi (fp16 accumulation)",
+      "sdpa_decode": "hifi2",
+      "li_qkv_prefill": "hifi2",
+      "li_o_prefill": "hifi2",
       "sdpa_prefill": "hifi4",
-      "accuracy": "hifi4fp32"
+      "note": "LI_FF1_FF3 / LI_FF2 are shared by prefill and decode in tt_transformers, so the prefill MLP also runs LoFi"
+    },
+    "other_components": {
+      "depth_decoder": "bfp8 transformer weights (wqkv, wo, gate/up/down, projection, fused heads), bf16 embedding / position / norm / selectors, HiFi2 fp32-acc, explicit 1D-mcast program configs for N <= 6144",
+      "flow_dit": "bfp8 block matmul weights (wqkv, wo, ff_in, ff_out), bf16 norms / biases / folded in-out projections, HiFi2 with fp16 accumulation, SDPA HiFi4 256-wide chunks (S_pad % 256 == 0) else 128, one trace per window shape",
+      "vocoder": "host torch fp32 (the TTNN port is 2.3x slower, doc/optimize/README.md), overlapped with the next window's denoising"
     }
   },
   "device": {
@@ -57,7 +63,8 @@
       1
     ],
     "dram_total_bytes": 34178731008,
-    "trace_region_size": 90000000
+    "trace_region_size": 200000000,
+    "trace_region_note": "stage 07: backbone decode trace + depth traces + one 36-layer DiT step trace per window shape (200 MB; 90 MB sufficed for the AR traces alone)"
   },
   "kv_cache": {
     "paged": true,
@@ -65,17 +72,17 @@
     "max_num_blocks": 704,
     "blocks_per_user": 320,
     "page_table": "identity [2, 320] int32; user u owns blocks [320u, 320u+320); blocks 640..703 are shared prefill scratch for padded positions past 10240 (prompts longer than 8192)",
-    "dtype": "bfloat16",
+    "dtype": "bfloat8_b",
     "shape_per_tensor": [
       704,
       8,
       32,
       128
     ],
-    "bytes_per_token_per_layer": 4096,
-    "bytes_per_layer": 92274688,
-    "bytes_total_36_layers": 3321888768,
-    "comment": "8 KV heads x 128 head_dim x 2 bytes x 2 (K and V) = 4 KiB per token per layer; 10240 tokens x 2 users x 36 layers = 2.81 GiB plus 64 scratch blocks (0.28 GiB), resident for the life of the model. Weights: ~8.7 GB decoder (bf16 attention 84 MB + bfp8 MLP 160 MB per layer) + 1.64 GB embedding + 1.64 GB LM head.",
+    "bytes_per_token_per_layer": 2176,
+    "bytes_per_layer": 49020928,
+    "bytes_total_36_layers": 1764753408,
+    "comment": "8 KV heads x 128 head_dim x 1.0625 B (bfp8: 1024 mantissa bytes + 64 exponent bytes per 32x32 tile) x 2 (K and V) = 2176 B per token per layer; 10240 tokens x 2 users x 36 layers + 64 scratch blocks = 1.76 GB resident (3.32 GB in the stage-02 bf16 cache). Weights: ~7.3 GB decoder (bfp8 attention 42 MB + bfp8 MLP 160 MB per layer) + 1.64 GB bf16 embedding + 0.82 GB bfp8 LM head; whole pipeline resident 15.1 GB of 32.6 GB DRAM (21.7 GB in the functional policy).",
     "scratch_blocks": 64
   },
   "tested": {
@@ -180,6 +187,8 @@
     "Prefill is bounded by the pipeline's own 5000-token prompt cap, not by the device; longer prefills (up to 10240) would go through the same chunked path but are not tested.",
     "Chunked prefill inherits the tt_transformers constraints: padded length a power of two >= 2048 when chunked, one-row page table per user, user_id 0 inside the chunk.",
     "The RVQ depth decoder, the DiT and the vocoder are separate stages; this contract covers only the Qwen3 backbone.",
-    "Prefill of a 5000-token realistic prompt is within 0.982-0.999 hidden PCC of HF (fp32); the length-dependent part of the error is a precision (not a chunking) effect and is handed to the stage-07 datatype sweep with the fp32 control as baseline."
+    "Prefill of a 5000-token realistic prompt is within 0.982-0.999 hidden PCC of HF (fp32); the length-dependent part of the error is a precision (not a chunking) effect and is handed to the stage-07 datatype sweep with the fp32 control as baseline.",
+    "Stage 07: the KV cache is bfp8 (paged_fill_cache receives typecast K/V, paged_update_cache receives bf16 - tt_transformers' own fill / update path); the context stays 10240 positions, prefill / decode lengths unchanged (all stage 02-06 tests rerun green under the optimized pipeline default: doc/optimize/README.md).",
+    "Stage 07: every trace (backbone decode, depth seed / step, DiT Euler step for the 200-frame window) is captured after all weights and persistent buffers exist; DiT traces for other window shapes are captured per song and released with their RoPE / mask / selector tensors at the end of the song (FlowTransformer.clear_caches(keep_latents=...))."
   ]
 }

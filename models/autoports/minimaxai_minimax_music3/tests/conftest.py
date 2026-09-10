@@ -20,8 +20,9 @@ MODEL_DIR = Path(__file__).resolve().parents[1]
 DOC_DIR = MODEL_DIR / "doc"
 GENERATED_DIR = MODEL_DIR / "generated"
 
-# 8B decode step for batch 2 fits comfortably; the tt_transformers demos use 52-90 MB on P150.
-TRACE_REGION_SIZE = int(os.environ.get("MM3_TRACE_REGION_SIZE", 90_000_000))
+# Stage 07: backbone decode trace + depth traces + one 36-layer DiT step trace per window shape (two shapes per song
+# at most). 90 MB sufficed for the AR traces alone (stages 02-06); 200 MB is the stage-07 default (context contract).
+TRACE_REGION_SIZE = int(os.environ.get("MM3_TRACE_REGION_SIZE", 200_000_000))
 
 # Stage 05: the DiT's converted bf16 weights (4.6 GB) are cached by models.tt_dit.utils.cache.load_model
 # under TT_DIT_CACHE_DIR (cache hit: 0.7 s instead of 7 s of safetensors -> device conversion).
@@ -56,9 +57,18 @@ def mm3_mesh_device():
 
 @pytest.fixture(scope="session")
 def music_llm(mm3_mesh_device):
+    """The backbone in the stage-02 "functional" policy (the stage 02-04 tests' reference bars were set for it).
+
+    ``MM3_LLM_POLICY`` selects another ``tt/llm.py`` policy and ``MM3_LLM_NUM_LAYERS`` a reduced-layer variant
+    (stage 07 profiling harness: tt-perf-report on one decoder layer + norm + LM head; not for correctness tests)."""
     from models.autoports.minimaxai_minimax_music3.tt.llm import MusicLLM
 
-    llm = MusicLLM(mm3_mesh_device)
+    kwargs = {}
+    if os.environ.get("MM3_LLM_POLICY"):
+        kwargs["dtype_policy"] = os.environ["MM3_LLM_POLICY"]
+    if os.environ.get("MM3_LLM_NUM_LAYERS"):
+        kwargs["num_layers"] = int(os.environ["MM3_LLM_NUM_LAYERS"])
+    llm = MusicLLM(mm3_mesh_device, **kwargs)
     yield llm
     llm.release()
 

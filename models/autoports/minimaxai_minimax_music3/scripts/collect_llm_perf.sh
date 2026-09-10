@@ -31,7 +31,7 @@ PERF_REPORT="$(dirname "${PY}")/tt-perf-report"
 TRACY_TOOLS="${MM3_TRACY_TOOLS:-${MM3_METAL_MAIN:-$HOME/tt-metal}/build_Release/tools/profiler/bin}"
 case "${MODE}" in
   prefill) START=PERF_PREFILL; END=PERF_PREFILL_END; SELECTOR="test_prefill_perf[${SIZE:?prefill seq_len}]"; OUT="${MODEL_DIR}/doc/llm/tracy/prefill_${SIZE}" ;;
-  decode)  START=PERF_DECODE;  END=PERF_DECODE_END;  SELECTOR="test_decode_perf"; OUT="${MODEL_DIR}/doc/llm/tracy/decode" ;;
+  decode)  START=PERF_DECODE;  END=PERF_DECODE_END;  SELECTOR="test_decode_perf"; OUT="${MM3_PERF_OUT:-${MODEL_DIR}/doc/llm/tracy/decode}" ;;
   *) echo "unknown mode ${MODE}" >&2; exit 2 ;;
 esac
 mkdir -p "${OUT}"

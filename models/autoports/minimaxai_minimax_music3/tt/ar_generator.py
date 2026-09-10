@@ -65,7 +65,10 @@ FRAME_HIDDEN = NUM_CODEBOOKS * LLM_HIDDEN  # 32768
 
 
 def sample_top_k(logits: torch.Tensor, generator: Optional[torch.Generator]) -> torch.Tensor:
-    """diffusers ``_sample_top_k``: top-50 (ties kept) multinomial sample per row, drawn on the generator's device."""
+    """diffusers ``_sample_top_k``: top-50 (ties kept) multinomial sample per row, drawn on the generator's device.
+
+    Literal transcription (the multinomial runs over the whole row, so the draw for a given seed depends on the
+    row length); the AR loop uses :func:`sample_top_k_candidates` instead (stage 07)."""
     values = torch.nan_to_num(logits.float(), nan=-1e9, posinf=1e9, neginf=-1e9)
     top_k = min(AR_SAMPLING_TOP_K, values.shape[-1])
     threshold = torch.topk(values, top_k, dim=-1).values[..., -1, None]
@@ -74,6 +77,24 @@ def sample_top_k(logits: torch.Tensor, generator: Optional[torch.Generator]) -> 
     probs = probs / probs.sum(dim=-1, keepdim=True).clamp_min(1e-12)
     sample_device = generator.device if generator is not None else probs.device
     return torch.multinomial(probs.to(sample_device), 1, generator=generator).squeeze(-1).to(probs.device)
+
+
+def sample_top_k_candidates(logits: torch.Tensor, generator: Optional[torch.Generator]) -> int:
+    """``_sample_top_k`` for one row with the same candidate set and probabilities, but the multinomial drawn over
+    the candidates only (stage 07: the "final 50-way multinomial on host" of the stage prompt).
+
+    Same semantics as :func:`sample_top_k`: ``nan_to_num``, every value >= the 50th largest is a candidate (ties
+    kept), softmax over the candidates, one multinomial draw. Only the random-number consumption differs (one
+    draw over <= 50 categories instead of one over the whole row), so the sampled sequences for a given seed differ
+    from :func:`sample_top_k`'s while the distribution is identical. Returns the sampled column index."""
+    values = torch.nan_to_num(logits.reshape(-1).float(), nan=-1e9, posinf=1e9, neginf=-1e9)
+    top_k = min(AR_SAMPLING_TOP_K, values.shape[-1])
+    threshold = torch.topk(values, top_k).values[-1]
+    candidates = torch.nonzero(values >= threshold).reshape(-1)
+    probs = torch.nan_to_num(F.softmax(values[candidates], dim=-1), nan=0.0)
+    probs = probs / probs.sum().clamp_min(1e-12)
+    pick = torch.multinomial(probs, 1, generator=generator)
+    return int(candidates[pick].item())
 
 
 class ARGenerator:
@@ -132,6 +153,10 @@ class ARGenerator:
         self.vocab_mask = torch.ones(llm.vocab_size, dtype=torch.bool)
         self.vocab_mask[AUDIO_CODE_OFFSET : AUDIO_CODE_OFFSET + SEMANTIC_VOCAB_SIZE] = False
         self.vocab_mask[AUDIO_END_TOKEN_ID] = False
+        # The same mask on the read-back window (column i = vocabulary id WINDOW_START + i): the hot path works on
+        # the 16389-wide window instead of a 200k-wide tensor (stage 07; identical candidate sets and probabilities,
+        # see sample_top_k_candidates).
+        self.window_mask = self.vocab_mask[WINDOW_START:WINDOW_END].clone()
         self._codebook_offsets = (torch.arange(NUM_CODEBOOKS - 1) * AUDIO_VOCAB_SIZE).unsqueeze(0)
 
     # ------------------------------------------------------------------ prompt
@@ -161,8 +186,17 @@ class ARGenerator:
         guided = guided.masked_fill(conditional < threshold, -float("inf"))
         return guided.masked_fill(self.vocab_mask.unsqueeze(0), -float("inf"))
 
+    def _guided_window(self, window_logits: torch.Tensor) -> torch.Tensor:
+        """``_guided_logits`` on the window only: ``[W]`` fp32 guided logits, -inf outside the candidate set."""
+        logits = window_logits.float().masked_fill(self.window_mask, -float("inf"))
+        conditional, unconditional = logits[0], logits[1]
+        guided = unconditional + (conditional - unconditional) * AR_CFG_SCALE
+        threshold = torch.topk(conditional, AR_CFG_TOP_K).values[-1]
+        return guided.masked_fill(conditional < threshold, -float("inf")).masked_fill(self.window_mask, -float("inf"))
+
     def _sample_semantic(self, window_logits: torch.Tensor, generator: torch.Generator) -> int:
-        return int(sample_top_k(self._guided_logits(window_logits), generator).item())
+        """The sampled vocabulary id (end token or ``AUDIO_CODE_OFFSET + code``)."""
+        return WINDOW_START + sample_top_k_candidates(self._guided_window(window_logits), generator)
 
     def end_token_stats(self, window_logits: torch.Tensor) -> Dict[str, float]:
         """Diagnostics: rank of the end token in the conditional row and its probability under the sampling distribution."""
@@ -225,9 +259,9 @@ class ARGenerator:
                 code = int(teacher[index])
             else:
                 logits = self.depth_trace.logits_for(index)  # [2, 1024] fp32
-                conditional, unconditional = logits[:1], logits[1:2]
+                conditional, unconditional = logits[0], logits[1]
                 guided = unconditional + (conditional - unconditional) * AR_CFG_SCALE
-                code = int(sample_top_k(guided, generator).item())
+                code = sample_top_k_candidates(guided, generator)
             codes.append(code)
             prev = torch.tensor([code, code])  # the sampled code is repeated for both CFG rows
         frame_codes = torch.tensor(codes, dtype=torch.int64).unsqueeze(0).expand(self.batch, -1)

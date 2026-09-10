@@ -1,0 +1,78 @@
+[
+  {
+    "variant": "q128_k128_hifi4",
+    "us": 392.26454973686486,
+    "pcc_vs_first": 1.0
+  },
+  {
+    "variant": "q128_k128_hifi2",
+    "us": 388.98555212654173,
+    "pcc_vs_first": 0.9999321449779673
+  },
+  {
+    "variant": "q256_k256_hifi4",
+    "us": 323.0319998692721,
+    "pcc_vs_first": 0.9999184415166582
+  },
+  {
+    "variant": "q256_k256_hifi2",
+    "us": 316.74402416683733,
+    "pcc_vs_first": 0.9998776407040271
+  },
+  {
+    "variant": "q128_k256_hifi4",
+    "us": 383.7087511783466,
+    "pcc_vs_first": 0.9999245845693401
+  },
+  {
+    "variant": "q128_k256_hifi2",
+    "us": 381.06142601463944,
+    "pcc_vs_first": 0.9998817531022945
+  },
+  {
+    "variant": "q256_k128_hifi4",
+    "us": 343.685649568215,
+    "pcc_vs_first": 1.0
+  },
+  {
+    "variant": "q256_k128_hifi2",
+    "us": 338.43212586361915,
+    "pcc_vs_first": 0.9999321449779673
+  },
+  {
+    "variant": "q384_k384_hifi4",
+    "us": 326.44077436998487,
+    "pcc_vs_first": 0.9998685835081341
+  },
+  {
+    "variant": "q384_k384_hifi2",
+    "us": 314.58265148103237,
+    "pcc_vs_first": 0.9998334114511249
+  },
+  {
+    "variant": "q768_k768_hifi4",
+    "error": "RuntimeError('TT_THROW @ /home/jashan/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\\ninfo:\\nStatically allocated circular buffers on core range [0-0 - 10-9] grow to 4606720 B which is"
+  },
+  {
+    "variant": "q768_k768_hifi2",
+    "error": "RuntimeError('TT_THROW @ /home/jashan/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\\ninfo:\\nStatically allocated circular buffers on core range [0-0 - 10-9] grow to 4606720 B which is"
+  },
+  {
+    "variant": "q64_k128_hifi4",
+    "us": 697.1614726353437,
+    "pcc_vs_first": 1.0
+  },
+  {
+    "variant": "q64_k128_hifi2",
+    "us": 695.7763514947146,
+    "pcc_vs_first": 0.9999321449779673
+  },
+  {
+    "variant": "q256_k768_hifi4",
+    "error": "RuntimeError('TT_THROW @ /home/jashan/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\\ninfo:\\nStatically allocated circular buffers on core range [0-0 - 10-9] grow to 1919744 B which is"
+  },
+  {
+    "variant": "q256_k768_hifi2",
+    "error": "RuntimeError('TT_THROW @ /home/jashan/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\\ninfo:\\nStatically allocated circular buffers on core range [0-0 - 10-9] grow to 1919744 B which is"
+  }
+]

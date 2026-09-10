@@ -1,10 +1,10 @@
 {
   "end_token_short_lyric": {
     "_meta": {
-      "commit": "02974adfdb6",
-      "loadavg_1m": 2.03515625,
-      "log_hint": "generated/gate04_final.log (idle host, CPU control SIGSTOPped)",
-      "recorded_at": "2026-09-09 19:14:21"
+      "commit": "132cb900aca",
+      "loadavg_1m": 2.8837890625,
+      "log_hint": "",
+      "recorded_at": "2026-09-09 21:07:59"
     },
     "distinct_semantic_codes": 1331,
     "frames": 2782,
@@ -18,10 +18,10 @@
   },
   "free_running": {
     "_meta": {
-      "commit": "02974adfdb6",
-      "loadavg_1m": 7.61279296875,
-      "log_hint": "generated/gate04_final.log (idle host, CPU control SIGSTOPped)",
-      "recorded_at": "2026-09-09 19:10:50"
+      "commit": "132cb900aca",
+      "loadavg_1m": 1.36181640625,
+      "log_hint": "",
+      "recorded_at": "2026-09-09 21:04:28"
     },
     "deterministic_same_seed": true,
     "differs_other_seed": true,
@@ -37,21 +37,21 @@
         "trace_captures": 1,
         "trace_replays": 400
       },
-      "depth_loop_ms": 33.26337047231694,
+      "depth_loop_ms": 33.43973584660311,
       "frames": 50,
-      "frames_per_s_warm": 13.551267731468673,
-      "host_sampling_embed_ms": 3.6077171714757297,
-      "llm_step_ms": 37.763798902742565,
+      "frames_per_s_warm": 13.49290083137185,
+      "host_sampling_embed_ms": 3.6255467463942135,
+      "llm_step_ms": 37.77785619953647,
       "llm_steps": 50,
-      "ms_per_frame_all": 73.89487782219315,
-      "ms_per_frame_warm": 73.79383389185101,
-      "prefill_s": 0.13280118198599666,
+      "ms_per_frame_all": 74.1028870631685,
+      "ms_per_frame_warm": 74.11304748308359,
+      "prefill_s": 0.13424684695200995,
       "realtime_frames_per_s": 25.0,
-      "realtime_gap_x": 1.8448458472962754,
+      "realtime_gap_x": 1.8528261870770897,
       "section_share": {
-        "depth": 0.45014725762390345,
-        "host": 0.048822592778865394,
-        "llm_step": 0.5010301495972311
+        "depth": 0.45126389185314797,
+        "host": 0.04892617400982155,
+        "llm_step": 0.49980993413703045
       }
     },
     "seed7_codes_head": [
@@ -149,10 +149,10 @@
   },
   "prompt_edge_cases": {
     "_meta": {
-      "commit": "02974adfdb6",
-      "loadavg_1m": 4.72509765625,
+      "commit": "132cb900aca",
+      "loadavg_1m": 0.3408203125,
       "log_hint": "",
-      "recorded_at": "2026-09-09 20:56:37"
+      "recorded_at": "2026-09-09 21:03:48"
     },
     "markdown": true,
     "max_prompt_tokens": 5000,
@@ -160,10 +160,10 @@
   },
   "teacher_forced_golden": {
     "_meta": {
-      "commit": "02974adfdb6",
-      "loadavg_1m": 8.205078125,
-      "log_hint": "generated/gate04_final.log (idle host, CPU control SIGSTOPped)",
-      "recorded_at": "2026-09-09 19:10:38"
+      "commit": "132cb900aca",
+      "loadavg_1m": 1.42822265625,
+      "log_hint": "",
+      "recorded_at": "2026-09-09 21:04:16"
     },
     "backbone_part_min": 0.9917587261462499,
     "bar": 0.99,
@@ -433,20 +433,20 @@
       0.9995485503011778
     ],
     "timings": {
-      "depth": 7.811418854456861,
-      "host": 0.09300229785731062,
-      "llm_step": 9.590405594499316,
+      "depth": 7.842879345989786,
+      "host": 0.09941626782529056,
+      "llm_step": 9.60152915935032,
       "llm_steps": 250,
-      "prefill": 0.15956228598952293
+      "prefill": 0.16209696198347956
     },
-    "wall_seconds": 17.661496984015685
+    "wall_seconds": 17.713260347023606
   },
   "text_ids": {
     "_meta": {
-      "commit": "02974adfdb6",
-      "loadavg_1m": 4.72509765625,
+      "commit": "132cb900aca",
+      "loadavg_1m": 0.3408203125,
       "log_hint": "",
-      "recorded_at": "2026-09-09 20:56:37"
+      "recorded_at": "2026-09-09 21:03:48"
     },
     "exact_match": true,
     "shape": [

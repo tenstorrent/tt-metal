@@ -17,7 +17,7 @@ PERF_REPORT="$(dirname "${PY}")/tt-perf-report"
 [ -x "${PERF_REPORT}" ] || PERF_REPORT="tt-perf-report"
 TRACY_TOOLS="${MM3_TRACY_TOOLS:-${MM3_METAL_MAIN:-$HOME/tt-metal}/build_Release/tools/profiler/bin}"
 START=PERF_DIT_FORWARD; END=PERF_DIT_FORWARD_END; SELECTOR="test_dit_forward_perf"
-OUT="${MODEL_DIR}/doc/flow_dit/tracy/forward"
+OUT="${MM3_PERF_OUT:-${MODEL_DIR}/doc/flow_dit/tracy/forward}"
 mkdir -p "${OUT}"
 BEFORE_CSV="$(ls -t generated/profiler/reports/*/ops_perf_results_*.csv 2>/dev/null | head -1 || true)"
 if ! timeout 1800 "${PY}" -m tracy -r -p -v --tracy-tools-folder "${TRACY_TOOLS}" -m pytest \

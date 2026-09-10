@@ -53,7 +53,9 @@ def _write(name: str, payload: dict) -> None:
 
 @pytest.fixture(scope="module")
 def depth_decoder(mm3_mesh_device):
-    return DepthDecoder.from_pretrained(mm3_mesh_device, R.weights_dir())
+    """``MM3_DEPTH_WEIGHT_DTYPE=bfp8`` profiles the stage-07 bfp8-weight variant (default bf16 = stage 03)."""
+    wd = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b}[os.environ.get("MM3_DEPTH_WEIGHT_DTYPE", "bf16")]
+    return DepthDecoder.from_pretrained(mm3_mesh_device, R.weights_dir(), weight_dtype=wd)
 
 
 @pytest.fixture(scope="module")

@@ -1,0 +1,13 @@
+{
+  "weight_dtype": "bfp8",
+  "layers": 36,
+  "latents": 689,
+  "fidelity": "hifi2_fp16",
+  "silu_mode": "unary",
+  "matmul_configs": "swept",
+  "eager_ms": 85.56716290768236,
+  "traced_ms": 85.76047850074247,
+  "replay_only_ms": 84.44539681077003,
+  "traced_vs_eager_pcc": 1.0,
+  "traced_vs_eager_max_abs": 0.0
+}

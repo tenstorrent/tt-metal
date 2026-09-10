@@ -28,7 +28,7 @@ from typing import Callable, List, Optional, Sequence
 
 import torch
 
-from models.autoports.minimaxai_minimax_music3.tt.condition_encoder import ConditionEncoder
+from models.autoports.minimaxai_minimax_music3.tt.condition_encoder import ConditionEncoder, latent_length
 from models.autoports.minimaxai_minimax_music3.tt.flow_transformer import BATCH, FlowTransformer
 from models.autoports.minimaxai_minimax_music3.tt.scheduler import FlowMatchEulerScheduler
 
@@ -71,6 +71,24 @@ class ChunkDenoiser:
         self.condition_encoder = condition_encoder
         self.num_inference_steps = num_inference_steps
         self.cfg_scale = cfg_scale
+        # Stage 07: replay the DiT forward as a trace per window shape (``FlowTransformer.traced_step``). The
+        # 200-frame window's shape is persistent (allocated by ``prepare_persistent_shapes`` before the AR traces
+        # exist, captured on first use); every other shape is captured on first use in a song and released by
+        # ``end_of_song`` together with its RoPE / mask / selector tensors (stage-04 trace-lifetime rule).
+        self.use_trace = True
+        self.persistent_latents = {latent_length(CHUNK_FRAMES)}
+
+    def prepare_persistent_shapes(self) -> None:
+        """Allocate the persistent DiT trace buffers of the full 200-frame window (call before other traces are captured)."""
+        for t in self.persistent_latents:
+            self.transformer.prepare_traced_shape(t)
+
+    def end_of_song(self) -> None:
+        """Free every per-shape DiT tensor / trace except the persistent window shape."""
+        self.transformer.clear_caches(keep_latents=self.persistent_latents)
+
+    def release(self) -> None:
+        self.transformer.clear_caches(keep_latents=())
 
     # ------------------------------------------------------------------ one window
     def denoise_chunk(
@@ -104,8 +122,14 @@ class ChunkDenoiser:
 
         scheduler = FlowMatchEulerScheduler(steps)
         cond_both = torch.cat([condition, torch.zeros_like(condition)], dim=0)  # [2, L, 2048]
-        cond_proj = self.transformer.prepare_condition(cond_both)
         log: List[dict] = []
+        if self.use_trace:
+            traced = self.transformer.traced_step(num_latents)
+            traced.set_condition(cond_both)
+            cond_proj = None
+        else:
+            traced = None
+            cond_proj = self.transformer.prepare_condition(cond_both)
         try:
             for i, t in enumerate(scheduler.timesteps):
                 if overlap > 0:
@@ -114,7 +138,11 @@ class ChunkDenoiser:
                         ..., :overlap
                     ]
                 timestep = t.reshape(1).expand(BATCH)
-                velocity = self.transformer(latents.expand(BATCH, -1, -1).contiguous(), timestep, cond_proj=cond_proj)
+                both = latents.expand(BATCH, -1, -1).contiguous()
+                if traced is not None:
+                    velocity = traced.step(both, timestep)
+                else:
+                    velocity = self.transformer(both, timestep, cond_proj=cond_proj)
                 v_cond, v_uncond = velocity[0:1], velocity[1:2]
                 velocity = v_uncond + self.cfg_scale * (v_cond - v_uncond)
                 latents = scheduler.step(velocity, t, latents)
@@ -122,9 +150,10 @@ class ChunkDenoiser:
                 if on_step is not None:
                     on_step(i, float(t), latents)
         finally:
-            import ttnn
+            if cond_proj is not None:
+                import ttnn
 
-            ttnn.deallocate(cond_proj)
+                ttnn.deallocate(cond_proj)
 
         if overlap > 0:
             latents[..., :overlap] = previous_latent[..., :overlap]

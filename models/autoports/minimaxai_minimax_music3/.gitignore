@@ -10,3 +10,7 @@ generated/
 doc/flow_dit/tracy/*/ops.csv.gz
 doc/flow_dit/tracy/*/*.png
 doc/flow_dit/tracy/*/*.console.log
+# Stage 07 Tracy runs: raw ops dumps, pytest / run logs and console logs are local-only; the report txt/csv/summary are committed.
+doc/optimize/tracy/*/ops.csv.gz
+doc/optimize/tracy/*/*.log
+!doc/optimize/tracy/*/perf_report.csv

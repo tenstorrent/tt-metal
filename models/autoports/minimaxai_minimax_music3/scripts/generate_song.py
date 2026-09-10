@@ -62,7 +62,7 @@ def main():
     ap.add_argument("--steps", type=int, default=30)
     ap.add_argument("--name")
     ap.add_argument("--threads", type=int, default=max(8, (os.cpu_count() or 8) - 4))
-    ap.add_argument("--trace-region", type=int, default=int(os.environ.get("MM3_TRACE_REGION_SIZE", 90_000_000)))
+    ap.add_argument("--trace-region", type=int, default=int(os.environ.get("MM3_TRACE_REGION_SIZE", 200_000_000)))
     args = ap.parse_args()
     prompt, lyrics = PRESETS[args.preset]
     prompt = args.prompt or prompt

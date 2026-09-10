@@ -1,0 +1,70 @@
+{
+  "after": {
+    "ar_frames_per_s": 21.655952261019763,
+    "commit": "b8bac93ba28",
+    "depth_loop_ms": 23.955918195939425,
+    "dit_chunk_s": 2.5128951729275286,
+    "dit_chunk_s_all": [
+      2.5128951729275286,
+      2.386314914911054
+    ],
+    "golden_replay": {
+      "frame_hiddens_backbone_pcc_min": 0.9845897368923088,
+      "frame_hiddens_depth_pcc_min": 0.9770141286281209,
+      "frame_hiddens_pcc": 0.999030413195188,
+      "frame_hiddens_pcc_min": 0.9789488035119572,
+      "frames": 250,
+      "latent_pcc": [
+        0.9990257879352005,
+        0.998678025296894
+      ],
+      "log_mel_mean_abs_db": 0.917697012424469,
+      "log_mel_rms_db": 1.2673242092132568,
+      "wall_s": 27.079359738039784,
+      "wav_pcc": 0.9985527730336222
+    },
+    "host_ms": 0.36752162235918867,
+    "label": "after",
+    "llm_step_ms": 21.744219434913248,
+    "load_kwargs": {
+      "dtype_policy": "optimized"
+    },
+    "recorded_at": "2026-09-10 00:09:19",
+    "total_10s_clip_s": 27.213007983984426,
+    "vocoder_chunk_s": 8.221868811990134
+  },
+  "before": {
+    "ar_frames_per_s": 13.317548677882412,
+    "commit": "b8bac93ba28",
+    "depth_loop_ms": 33.11582441966743,
+    "dit_chunk_s": 3.509024358005263,
+    "dit_chunk_s_all": [
+      3.509024358005263,
+      2.77374197402969
+    ],
+    "golden_replay": {
+      "frame_hiddens_backbone_pcc_min": 0.9917587261462499,
+      "frame_hiddens_depth_pcc_min": 0.9964658267076568,
+      "frame_hiddens_pcc": 0.9994114655019438,
+      "frame_hiddens_pcc_min": 0.9951154379775552,
+      "frames": 250,
+      "latent_pcc": [
+        0.99951192045154,
+        0.9992274665380922
+      ],
+      "log_mel_mean_abs_db": 0.5299819707870483,
+      "log_mel_rms_db": 0.7535362839698792,
+      "wall_s": 35.660063949995674,
+      "wav_pcc": 0.9987459301698627
+    },
+    "host_ms": 3.8598185846678525,
+    "label": "before",
+    "llm_step_ms": 37.95319454371929,
+    "load_kwargs": {
+      "dtype_policy": "functional"
+    },
+    "recorded_at": "2026-09-09 23:06:11",
+    "total_10s_clip_s": 37.06916143198032,
+    "vocoder_chunk_s": 6.767688581952825
+  }
+}

@@ -1,0 +1,87 @@
+{
+  "workload": {
+    "profile": "single_request_text_to_music",
+    "clip_seconds": 10.0,
+    "frames": 250,
+    "windows": [
+      689,
+      516
+    ],
+    "euler_steps": 30,
+    "batch": 1,
+    "cfg_rows": 2
+  },
+  "before": {
+    "ar_frames_per_s": 13.318,
+    "llm_step_ms": 37.95,
+    "depth_loop_ms": 33.12,
+    "host_ms": 3.86,
+    "dit_window_s": [
+      3.509,
+      2.774
+    ],
+    "vocoder_window_s": [
+      6.768,
+      5.111
+    ],
+    "total_s": 37.07,
+    "dram_gb": 21.74
+  },
+  "after": {
+    "ar_frames_per_s": 21.656,
+    "llm_step_ms": 21.74,
+    "depth_loop_ms": 23.96,
+    "host_ms": 0.37,
+    "dit_window_s": [
+      2.513,
+      2.386
+    ],
+    "vocoder_window_s_in_thread": [
+      8.222,
+      4.809
+    ],
+    "dit_plus_vocoder_phase_s": 15.54,
+    "total_s": 27.21,
+    "dram_gb": 15.13
+  },
+  "ar_frame_ms_e2e": 46.2,
+  "ar_frame_ms_device_estimate": 42.4,
+  "ar_frame_ms_roofline_estimate": 23.8,
+  "llm_step": {
+    "ms_e2e": 21.74,
+    "ms_roofline_512gbps": 16.0,
+    "bytes_per_step_gb": 8.2,
+    "matmul_dram_utilisation": "85-89 % (tracy/llm_decode_1layer_optimized_lofi)"
+  },
+  "depth_frame": {
+    "ms_e2e": 23.96,
+    "ms_device": 20.69,
+    "ms_roofline_512gbps": 7.8,
+    "bytes_per_frame_gb": 4.0,
+    "note": "matmuls 56-68 % DRAM; nlp_create_qkv_heads + nlp_concat_heads 4.2 ms on 2 cores"
+  },
+  "dit_step": {
+    "ms_e2e_per_step_after": 83.8,
+    "ms_e2e_per_step_before": 117.0,
+    "ms_device_1block_after": 2.68,
+    "note": "compute-bound; fp16 accumulation + full-grid configs + fused SiLU + 256-wide SDPA"
+  },
+  "accuracy_golden_replay_after": {
+    "frame_hiddens_pcc": 0.99903,
+    "frame_hiddens_pcc_min": 0.97895,
+    "latent_pcc": [
+      0.99903,
+      0.99868
+    ],
+    "log_mel_rms_db": 1.267,
+    "wav_pcc": 0.99855
+  },
+  "named_limitations": [
+    "tt_transformers decode matmuls are DRAM-sharded on 12 cores (one per bank); this tt-metal build has no num_workers_per_dram_bank, LoFi is what makes them bandwidth-bound",
+    "ttnn.topk over a non-power-of-two 16416-wide window costs 5 ms and ttnn.gather 5 ms; a 1 MB read-back costs 0.18 ms, so CFG/top-k stay on the host",
+    "nlp_create_qkv_heads / nlp_concat_heads parallelise over tile rows: 2 cores for the depth decoder's 2 x 32 rows (4.2 ms per frame)",
+    "fp32 destination accumulation halves the matmul subblock capacity; the DiT runs fp16 accumulation (log-mel 0.98 -> 1.27 dB with in0_block_w 4)",
+    "ttnn.experimental.conv3d in fp32 with the default 1D blocking runs the 31 vocoder convs in 16 s per window (host: 7.3 s); bf16 conv3d exceeds L1; tt_dit padding helpers write host tensors inside the graph so the vocoder cannot be traced",
+    "bf16 MLP weights do not fit the prefill MLP matmul's circular buffers on P150 (1.82 MB > 1.5 MB)"
+  ]
+}

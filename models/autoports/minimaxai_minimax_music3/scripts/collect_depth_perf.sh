@@ -22,7 +22,7 @@ case "${MODE}" in
   traced) START=PERF_DEPTH_TRACED; END=PERF_DEPTH_TRACED_END; SELECTOR="test_traced_frame_perf" ;;
   *) echo "unknown mode ${MODE}" >&2; exit 2 ;;
 esac
-OUT="${MODEL_DIR}/doc/depth_decoder/tracy/${MODE}"
+OUT="${MM3_PERF_OUT:-${MODEL_DIR}/doc/depth_decoder/tracy/${MODE}}"
 mkdir -p "${OUT}"
 BEFORE_CSV="$(ls -t generated/profiler/reports/*/ops_perf_results_*.csv 2>/dev/null | head -1 || true)"
 if ! timeout 1800 "${PY}" -m tracy -r -p -v --tracy-tools-folder "${TRACY_TOOLS}" -m pytest \

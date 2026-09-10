@@ -45,8 +45,9 @@ fp32, SDPA HiFi4. The weight tensors live in ``models.tt_dit`` ``Parameter`` obj
 from __future__ import annotations
 
 import math
+import os
 import time
-from typing import Dict, Optional, Tuple, Union
+from typing import Dict, Optional, Sequence, Tuple, Union
 
 import torch
 
@@ -141,20 +142,21 @@ def rope_transformation_matrix() -> torch.Tensor:
 
 # ----------------------------------------------------------------------------- device weights
 class _BlockWeights(Module):
-    def __init__(self, mesh_device, dtype):
+    def __init__(self, mesh_device, dtype, weight_dtype=None):
         super().__init__()
+        wd = weight_dtype if weight_dtype is not None else dtype
         p = lambda *shape, dt=dtype: Parameter(total_shape=shape, device=mesh_device, dtype=dt)  # noqa: E731
         self.ln1_w = p(1, 1, 1, DIM)
         self.ln1_b = p(1, 1, 1, DIM)
-        self.wqkv = p(DIM, 3 * DIM)
-        self.wo = p(DIM, DIM)
+        self.wqkv = p(DIM, 3 * DIM, dt=wd)
+        self.wo = p(DIM, DIM, dt=wd)
         self.ln2_w = p(1, 1, 1, DIM)
         self.ln2_b = p(1, 1, 1, DIM)
-        self.w_in_a = p(DIM, FF_INNER)
+        self.w_in_a = p(DIM, FF_INNER, dt=wd)
         self.b_in_a = p(1, FF_INNER)
-        self.w_in_g = p(DIM, FF_INNER)
+        self.w_in_g = p(DIM, FF_INNER, dt=wd)
         self.b_in_g = p(1, FF_INNER)
-        self.w_out = p(FF_INNER, DIM)
+        self.w_out = p(FF_INNER, DIM, dt=wd)
         self.b_out = p(1, DIM)
 
     def _prepare_torch_state(self, state: Dict[str, torch.Tensor]) -> None:
@@ -185,13 +187,14 @@ class _BlockWeights(Module):
 class _FlowTransformerWeights(Module):
     """All device-resident weights of the DiT, with the input/output folds applied in ``_prepare_torch_state``."""
 
-    def __init__(self, mesh_device, dtype, num_layers: int):
+    def __init__(self, mesh_device, dtype, num_layers: int, weight_dtype=None):
         super().__init__()
         p = lambda *shape, dt=dtype: Parameter(total_shape=shape, device=mesh_device, dtype=dt)  # noqa: E731
+        # The folded input / output projections stay bf16 (small; they bound the latent precision).
         self.w_in_latent = p(IN_CHANNELS, DIM)
         self.w_in_condition = p(CONDITION_DIM, DIM)
         self.w_out = p(DIM, IN_CHANNELS)
-        self.blocks = ModuleList(_BlockWeights(mesh_device, dtype) for _ in range(num_layers))
+        self.blocks = ModuleList(_BlockWeights(mesh_device, dtype, weight_dtype) for _ in range(num_layers))
 
     def _prepare_torch_state(self, state: Dict[str, torch.Tensor]) -> None:
         if "preprocess_conv.weight" in state:
@@ -226,20 +229,22 @@ class FlowTransformer(LightweightModule):
         num_layers: int = NUM_LAYERS,
         get_state_dict=None,
         model_name: str = "minimax-music3",
+        weight_dtype=None,
+        fidelity: str = "hifi2",
     ):
         """``state_dict`` (fp32 diffusers keys) or a lazy ``get_state_dict`` callable (lets ``load_model`` skip
-        reading the safetensors when the ``TT_DIT_CACHE_DIR`` cache already holds the converted tensors)."""
+        reading the safetensors when the ``TT_DIT_CACHE_DIR`` cache already holds the converted tensors).
+        ``dtype`` is the activation dtype (bf16); ``weight_dtype`` the dtype of the 36 blocks' matmul weights
+        (``None`` = ``dtype``; stage 07 runs ``ttnn.bfloat8_b``, see doc/optimize/README.md). ``fidelity`` selects
+        the block-matmul compute config: ``"hifi2"`` (fp32 accumulation, stage 05), ``"hifi2_fp16"`` (fp16
+        accumulation: the destination registers hold twice the tiles, the big matmuls run 25 % faster) or ``"lofi"``."""
         self.mesh_device = mesh_device
         self.dtype = dtype
+        self.weight_dtype = weight_dtype if weight_dtype is not None else dtype
         self.num_layers = num_layers
         self.mem = ttnn.DRAM_MEMORY_CONFIG
-        self.compute_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
+        self.fidelity = fidelity
+        self.compute_config = self.matmul_compute_config(mesh_device, fidelity)
         self.norm_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -255,12 +260,24 @@ class FlowTransformer(LightweightModule):
             packer_l1_acc=False,
         )
         grid = mesh_device.compute_with_storage_grid_size()
-        self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(grid.x, grid.y),
-            q_chunk_size=SEQ_PAD,
-            k_chunk_size=SEQ_PAD,
-            exp_approx_mode=False,
-        )
+        self.grid = grid
+        # Stage 07: 256-wide q/k chunks when S_pad allows (323 us vs 392 us per SDPA at S_pad 768, HiFi4, same
+        # numerics; doc/optimize/sweeps/sdpa.json), else the 128-wide stage-05 chunks.
+        self._sdpa_configs: Dict[int, ttnn.SDPAProgramConfig] = {}
+        self.sdpa_program_config = self._sdpa_config(SEQ_PAD)
+        # Stage 07: explicit 2D-mcast program configs for the block matmuls (``None`` entry = op default);
+        # keyed by (M, K, N) and filled by ``_matmul_config``. ``matmul_config_policy`` selects the family.
+        # "swept" = explicit full-grid configs (measured with fp16 accumulation: 96.4 -> 82 ms per 36-block step,
+        # doc/optimize/dit/step_timing_*.json); "default" = op defaults (in0_block_w = 1), kept for the fp32-accumulating
+        # stage-05 configuration whose subblock cap (4 tiles) was not swept on the full grid.
+        fp32_acc = self.MATMUL_FIDELITIES[fidelity][1]
+        self.matmul_config_policy = os.environ.get("MM3_DIT_MATMUL_CONFIGS") or ("default" if fp32_acc else "swept")
+        self.mm_in0_block_w = int(os.environ.get("MM3_DIT_IN0_BLOCK_W", "4"))  # 8: -2 % time, +0.08 dB log-mel (README)
+        # SiLU placement for a * silu(g): "multiply" = fused into the multiply as an input activation (81.8 ms per
+        # step), "matmul" = fused into the g matmul's program config (82.4 ms), "unary" = the separate stage-05 unary
+        # (85.6 ms with the swept configs, 96.4 ms with the defaults).
+        self.silu_mode = os.environ.get("MM3_DIT_SILU_MODE") or ("unary" if fp32_acc else "multiply")
+        self._mm_configs: Dict[Tuple[int, int, int, Optional[str]], object] = {}
 
         t0 = time.time()
         if state_dict is None and get_state_dict is None:
@@ -270,49 +287,123 @@ class FlowTransformer(LightweightModule):
         # the safetensors are read once here in every case (about 1 s per shard from the page cache).
         sd = get_sd()
         self.time_embedder = TimestepEmbedder(sd)
-        self.weights = _FlowTransformerWeights(mesh_device, dtype, num_layers)
+        self.weights = _FlowTransformerWeights(mesh_device, dtype, num_layers, self.weight_dtype)
         load_model(
             self.weights,
             model_name=model_name,
             subfolder=f"transformer_l{num_layers}",
             parallel_config=DiTParallelConfig.from_tuples(cfg=(1, 0), sp=(1, 0), tp=(1, 0)),
             mesh_shape=tuple(mesh_device.shape),
-            dtype="bf16" if dtype == ttnn.bfloat16 else str(dtype).split(".")[-1],
+            dtype="bf16" if self.weight_dtype == ttnn.bfloat16 else str(self.weight_dtype).split(".")[-1],
             get_torch_state_dict=lambda: sd,
         )
         self.trans_mat = self._to_device(rope_transformation_matrix())
         self._rope_cache: Dict[int, Tuple[ttnn.Tensor, ttnn.Tensor]] = {}
         self._mask_cache: Dict[Tuple[int, int], ttnn.Tensor] = {}
         self._time_selector_cache: Dict[int, ttnn.Tensor] = {}
+        self._traces: Dict[int, "DiTStepTrace"] = {}
         ttnn.synchronize_device(mesh_device)
         self.load_seconds = time.time() - t0
 
     @classmethod
-    def from_pretrained(cls, mesh_device, weights_dir=None, *, dtype=ttnn.bfloat16, num_layers: int = NUM_LAYERS):
+    def from_pretrained(
+        cls,
+        mesh_device,
+        weights_dir=None,
+        *,
+        dtype=ttnn.bfloat16,
+        num_layers: int = NUM_LAYERS,
+        weight_dtype=None,
+        fidelity: str = "hifi2",
+    ):
         from models.autoports.minimaxai_minimax_music3.reference.flow_transformer_ref import load_transformer_state_dict
 
         return cls(
             mesh_device,
             dtype=dtype,
             num_layers=num_layers,
+            weight_dtype=weight_dtype,
+            fidelity=fidelity,
             get_state_dict=lambda: load_transformer_state_dict(weights_dir),
         )
 
     # ------------------------------------------------------------------ helpers
+    MATMUL_FIDELITIES = {
+        "hifi2": (ttnn.MathFidelity.HiFi2, True),
+        "hifi2_fp16": (ttnn.MathFidelity.HiFi2, False),
+        "lofi": (ttnn.MathFidelity.LoFi, False),
+    }
+
+    @classmethod
+    def matmul_compute_config(cls, mesh_device, fidelity: str):
+        fid, fp32 = cls.MATMUL_FIDELITIES[fidelity]
+        return ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(), math_fidelity=fid, math_approx_mode=False, fp32_dest_acc_en=fp32, packer_l1_acc=True
+        )
+
+    def _sdpa_config(self, s_pad: int) -> ttnn.SDPAProgramConfig:
+        chunk = 256 if s_pad % 256 == 0 else SEQ_PAD
+        if chunk not in self._sdpa_configs:
+            self._sdpa_configs[chunk] = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(self.grid.x, self.grid.y),
+                q_chunk_size=chunk,
+                k_chunk_size=chunk,
+                exp_approx_mode=False,
+            )
+        return self._sdpa_configs[chunk]
+
+    def _matmul_config(self, m: int, k: int, n: int, activation: Optional[str] = None):
+        """Explicit program config for a block matmul ``[m, k] @ [k, n]``: 2D mcast over the full compute grid with
+        padded per-core blocks (as the op default does) but ``in0_block_w = 8`` and the largest legal output subblock
+        (8 destination tiles with fp16 accumulation, 4 with fp32); SiLU fused into the matmul when asked. Values from
+        ``scripts/dit_grid_sweep.py`` (doc/optimize/sweeps/dit_grid.json): -11 % to -35 % per matmul vs the default.
+        Shapes with fewer than 10 tile rows (short windows) keep the op default."""
+        if self.matmul_config_policy != "swept":
+            return None
+        key = (m, k, n, activation)
+        if key in self._mm_configs:
+            return self._mm_configs[key]
+        mt, kt, nt = -(-m // TILE), k // TILE, -(-n // TILE)
+        gx, gy = self.grid.x, self.grid.y
+        pc = None
+        if mt >= gy:
+            per_m, per_n = -(-mt // gy), -(-nt // gx)
+            blk = next((b for b in (self.mm_in0_block_w, 4, 2, 1) if kt % b == 0), 1)
+            cap = 4 if self.MATMUL_FIDELITIES[self.fidelity][1] else 8
+            sw = max(w for w in (8, 6, 4, 3, 2, 1) if per_n % w == 0 and w <= cap)
+            sh = max(h for h in (1, 2, 4) if per_m % h == 0 and h * sw <= cap)
+            fused = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU) if activation == "silu" else None
+            pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(gx, gy),
+                in0_block_w=blk,
+                out_subblock_h=sh,
+                out_subblock_w=sw,
+                per_core_M=per_m,
+                per_core_N=per_n,
+                transpose_mcast=False,
+                fused_activation=fused,
+            )
+        self._mm_configs[key] = pc
+        return pc
+
     def _to_device(self, t: torch.Tensor, dtype=None, layout=ttnn.TILE_LAYOUT) -> ttnn.Tensor:
         return ttnn.from_torch(
             t.contiguous(), dtype=dtype or self.dtype, layout=layout, device=self.mesh_device, memory_config=self.mem
         )
 
-    def _linear(self, x, w, bias=None, activation=None) -> ttnn.Tensor:
+    def _linear(self, x, w, bias=None, activation=None, block: bool = False) -> ttnn.Tensor:
+        """``block=True`` for the 36 blocks' matmuls (explicit program config, fused SiLU where asked)."""
+        pc = self._matmul_config(x.shape[-2], x.shape[-1], w.shape[-1], activation) if block else None
+        fused_in_pc = pc is not None and getattr(pc, "fused_activation", None) is not None
         return ttnn.linear(
             x,
             w,
             bias=bias,
-            activation=activation,
+            activation=None if fused_in_pc else activation,
             compute_kernel_config=self.compute_config,
             memory_config=self.mem,
             dtype=self.dtype,
+            program_config=pc,
         )
 
     def _rope(self, s_pad: int) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -362,21 +453,20 @@ class FlowTransformer(LightweightModule):
         ttnn.deallocate(x)
         return out
 
-    def embed_inputs(self, latents: torch.Tensor, timestep: torch.Tensor, cond_proj: ttnn.Tensor) -> ttnn.Tensor:
-        """``[1, 1, B * S_pad, 2048]`` block input: folded latent projection + condition projection + timestep token."""
-        b, c, t = latents.shape
-        assert b == BATCH and c == IN_CHANNELS, tuple(latents.shape)
-        s_pad = padded_seq_len(t)
-        assert cond_proj.shape[-2] == BATCH * s_pad, (cond_proj.shape, s_pad)
-        x_lat = self._to_device(self._pad_rows(latents.transpose(1, 2), s_pad))
-        x_lat_proj = self._linear(x_lat, self.weights.w_in_latent.data)
-        ttnn.deallocate(x_lat)
-        x = ttnn.add(x_lat_proj, cond_proj, memory_config=self.mem)
-        ttnn.deallocate(x_lat_proj)
+    def timestep_rows(self, timestep: torch.Tensor) -> torch.Tensor:
+        """Host ``[1, 1, 32, 2048]`` bf16 rows: row ``b`` = ``time_embed(fourier(t_b))`` (fp32 on the host)."""
         temb = self.time_embedder(timestep.expand(BATCH) if timestep.numel() == 1 else timestep)  # [B, 2048] fp32
         rows = torch.zeros(TILE, DIM)
         rows[:BATCH] = temb
-        rows_d = self._to_device(rows.reshape(1, 1, TILE, DIM))
+        return rows.reshape(1, 1, TILE, DIM).to(torch.bfloat16)
+
+    def embed_inputs_device(
+        self, x_lat: ttnn.Tensor, rows_d: ttnn.Tensor, cond_proj: ttnn.Tensor, s_pad: int
+    ) -> ttnn.Tensor:
+        """Device half of :meth:`embed_inputs`: ``x_lat @ w_in_latent + cond_proj + selector @ rows`` (inputs kept)."""
+        x_lat_proj = self._linear(x_lat, self.weights.w_in_latent.data)
+        x = ttnn.add(x_lat_proj, cond_proj, memory_config=self.mem)
+        ttnn.deallocate(x_lat_proj)
         tok = ttnn.matmul(
             self._time_selector(s_pad),
             rows_d,
@@ -384,14 +474,26 @@ class FlowTransformer(LightweightModule):
             memory_config=self.mem,
             dtype=self.dtype,
         )
-        ttnn.deallocate(rows_d)
         out = ttnn.add(x, tok, memory_config=self.mem)
         ttnn.deallocate(tok)
         ttnn.deallocate(x)
         return out
 
+    def embed_inputs(self, latents: torch.Tensor, timestep: torch.Tensor, cond_proj: ttnn.Tensor) -> ttnn.Tensor:
+        """``[1, 1, B * S_pad, 2048]`` block input: folded latent projection + condition projection + timestep token."""
+        b, c, t = latents.shape
+        assert b == BATCH and c == IN_CHANNELS, tuple(latents.shape)
+        s_pad = padded_seq_len(t)
+        assert cond_proj.shape[-2] == BATCH * s_pad, (cond_proj.shape, s_pad)
+        x_lat = self._to_device(self._pad_rows(latents.transpose(1, 2), s_pad))
+        rows_d = self._to_device(self.timestep_rows(timestep))
+        out = self.embed_inputs_device(x_lat, rows_d, cond_proj, s_pad)
+        ttnn.deallocate(x_lat)
+        ttnn.deallocate(rows_d)
+        return out
+
     def _attention(self, x_norm: ttnn.Tensor, blk: _BlockWeights, s_pad: int, s_real: int) -> ttnn.Tensor:
-        qkv = self._linear(x_norm, blk.wqkv.data)  # [1, 1, B*S_pad, 6144]
+        qkv = self._linear(x_norm, blk.wqkv.data, block=True)  # [1, 1, B*S_pad, 6144]
         qkv = ttnn.experimental.view(qkv, (BATCH, 1, s_pad, 3 * DIM))
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv, num_heads=HEADS, num_kv_heads=HEADS, transpose_k_heads=False, memory_config=self.mem
@@ -413,7 +515,7 @@ class FlowTransformer(LightweightModule):
             v,
             attn_mask=self._mask(s_pad, s_real),
             is_causal=False,
-            program_config=self.sdpa_program_config,
+            program_config=self._sdpa_config(s_pad),
             compute_kernel_config=self.sdpa_compute_config,
             memory_config=self.mem,
         )
@@ -423,17 +525,29 @@ class FlowTransformer(LightweightModule):
         merged = ttnn.experimental.nlp_concat_heads(attn, memory_config=self.mem)  # [B, 1, S_pad, 2048]
         ttnn.deallocate(attn)
         merged = ttnn.experimental.view(merged, (1, 1, BATCH * s_pad, DIM))
-        out = self._linear(merged, blk.wo.data)
+        out = self._linear(merged, blk.wo.data, block=True)
         ttnn.deallocate(merged)
         return out
 
     def _mlp(self, x_norm: ttnn.Tensor, blk: _BlockWeights) -> ttnn.Tensor:
-        a = self._linear(x_norm, blk.w_in_a.data, bias=blk.b_in_a.data)
-        g = self._linear(x_norm, blk.w_in_g.data, bias=blk.b_in_g.data, activation="silu")
-        h = ttnn.multiply(a, g, memory_config=self.mem)
+        a = self._linear(x_norm, blk.w_in_a.data, bias=blk.b_in_a.data, block=True)
+        if self.silu_mode == "multiply":
+            g = self._linear(x_norm, blk.w_in_g.data, bias=blk.b_in_g.data, block=True)
+            h = ttnn.multiply(a, g, input_tensor_b_activations=[ttnn.UnaryOpType.SILU], memory_config=self.mem)
+        else:
+            g = self._linear(
+                x_norm,
+                blk.w_in_g.data,
+                bias=blk.b_in_g.data,
+                activation="silu" if self.silu_mode == "matmul" else None,
+                block=True,
+            )
+            if self.silu_mode == "unary":
+                g = ttnn.silu(g)
+            h = ttnn.multiply(a, g, memory_config=self.mem)
         ttnn.deallocate(a)
         ttnn.deallocate(g)
-        out = self._linear(h, blk.w_out.data, bias=blk.b_out.data)
+        out = self._linear(h, blk.w_out.data, bias=blk.b_out.data, block=True)
         ttnn.deallocate(h)
         return out
 
@@ -498,17 +612,130 @@ class FlowTransformer(LightweightModule):
         ttnn.deallocate(x)
         return out
 
-    def clear_caches(self) -> None:
-        """Free the per-shape RoPE / mask / timestep-selector tensors (they are re-created on demand).
+    def traced_step(self, num_latents: int) -> "DiTStepTrace":
+        """The traced Euler-step program for windows of ``num_latents`` latents (captured on first use)."""
+        tr = self._traces.get(num_latents)
+        if tr is None:
+            tr = DiTStepTrace(self, num_latents)
+            self._traces[num_latents] = tr
+        if tr.trace_id is None:
+            tr.capture()
+        return tr
 
-        The pipeline calls this after every song: these tensors are allocated lazily while the AR traces already
-        exist, so they must not stay alive across the next AR run (a trace replay may reuse their addresses)."""
-        for cache in (self._rope_cache, self._mask_cache, self._time_selector_cache):
-            for v in cache.values():
+    def prepare_traced_shape(self, num_latents: int) -> "DiTStepTrace":
+        """Allocate the persistent buffers of a window shape now (before other components capture their traces)
+        without capturing yet; ``traced_step`` captures on first use."""
+        tr = self._traces.get(num_latents)
+        if tr is None:
+            tr = DiTStepTrace(self, num_latents)
+            self._traces[num_latents] = tr
+        return tr
+
+    def clear_caches(self, keep_latents: Optional[Sequence[int]] = None) -> None:
+        """Free the per-shape RoPE / mask / timestep-selector tensors and the traced steps, except those of the window
+        shapes in ``keep_latents`` (their traces reference these tensors).
+
+        The pipeline calls this after every song: shapes seen only in that song were allocated while the AR traces
+        already existed, so they must not stay alive across the next AR run (a trace replay may reuse their
+        addresses). The persistent 200-frame-window shape is allocated before the AR traces and stays."""
+        keep = set(keep_latents or ())
+        for t in list(self._traces):
+            if t not in keep:
+                self._traces.pop(t).release()
+        keep_pad = {padded_seq_len(t) for t in keep}
+        keep_mask = {(padded_seq_len(t), t + 1) for t in keep}
+        for cache, keep_keys in (
+            (self._rope_cache, keep_pad),
+            (self._mask_cache, keep_mask),
+            (self._time_selector_cache, keep_pad),
+        ):
+            for k in list(cache):
+                if k in keep_keys:
+                    continue
+                v = cache.pop(k)
                 for tt in v if isinstance(v, tuple) else (v,):
                     ttnn.deallocate(tt)
-            cache.clear()
 
     def release(self) -> None:
-        self.weights.deallocate_weights()
         self.clear_caches()
+        self.weights.deallocate_weights()
+
+
+class DiTStepTrace:
+    """One DiT forward (both CFG rows, fixed window shape) as a trace over persistent device buffers.
+
+    Per Euler step the host writes the padded latents (``[1, 1, B * S_pad, 128]`` bf16, 393 KB for the 200-frame
+    window) and the timestep rows (``[1, 1, 32, 2048]``), replays, and reads the velocity buffer back. The folded
+    condition projection is written once per window (``set_condition``). The graph is exactly ``FlowTransformer
+    .forward`` minus the host transfers: latent projection + condition + timestep token -> 36 blocks -> ``w_out``.
+
+    Trace-lifetime contract (stage 04 rule): the four persistent buffers and the shape's RoPE / mask / selector
+    tensors are allocated in ``__init__``; the trace is captured later (``capture``) after a compile run of the same
+    graph. ``set_condition`` allocates a temporary projection after the capture and frees it before the next replay.
+    """
+
+    def __init__(self, model: FlowTransformer, num_latents: int):
+        self.m = model
+        self.num_latents = num_latents
+        self.s_pad = padded_seq_len(num_latents)
+        self.s_real = num_latents + 1
+        m = model
+        self.lat_in = m._to_device(torch.zeros(1, 1, BATCH * self.s_pad, IN_CHANNELS))
+        self.temb_rows = m._to_device(torch.zeros(1, 1, TILE, DIM))
+        self.cond_proj = m._to_device(torch.zeros(1, 1, BATCH * self.s_pad, DIM))
+        self.y_out = m._to_device(torch.zeros(1, 1, BATCH * self.s_pad, IN_CHANNELS))
+        m._rope(self.s_pad)
+        m._mask(self.s_pad, self.s_real)
+        m._time_selector(self.s_pad)
+        self.trace_id = None
+        self.replays = 0
+
+    def _graph(self) -> None:
+        m = self.m
+        x = m.embed_inputs_device(self.lat_in, self.temb_rows, self.cond_proj, self.s_pad)
+        x = m.blocks(x, self.s_pad, self.s_real)
+        y = m._linear(x, m.weights.w_out.data)
+        ttnn.deallocate(x)
+        ttnn.copy(y, self.y_out)
+        ttnn.deallocate(y)
+
+    def capture(self) -> None:
+        dev = self.m.mesh_device
+        self._graph()  # compile run: every program of the graph is in the program cache before the capture
+        ttnn.synchronize_device(dev)
+        self.trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
+        self._graph()
+        ttnn.end_trace_capture(dev, self.trace_id, cq_id=0)
+        ttnn.synchronize_device(dev)
+
+    def _write(self, buf: ttnn.Tensor, host: torch.Tensor) -> None:
+        ttnn.copy_host_to_device_tensor(ttnn.from_torch(host, dtype=self.m.dtype, layout=ttnn.TILE_LAYOUT), buf)
+
+    def set_condition(self, condition_both: torch.Tensor) -> None:
+        """``[B, T, 2048]`` host fp32 (row 1 zeros) -> the persistent folded condition projection (once per window)."""
+        assert condition_both.shape[1] == self.num_latents, (condition_both.shape, self.num_latents)
+        proj = self.m.prepare_condition(condition_both)
+        ttnn.copy(proj, self.cond_proj)
+        ttnn.deallocate(proj)
+
+    def step(self, latents: torch.Tensor, timestep: torch.Tensor) -> torch.Tensor:
+        """``latents [B, 128, T]`` (host fp32), ``timestep [B]`` -> velocity ``[B, 128, T]`` (host fp32)."""
+        assert self.trace_id is not None, "capture() first"
+        b, c, t = latents.shape
+        assert b == BATCH and c == IN_CHANNELS and t == self.num_latents, (tuple(latents.shape), self.num_latents)
+        self._write(self.lat_in, FlowTransformer._pad_rows(latents.transpose(1, 2), self.s_pad))
+        self._write(self.temb_rows, self.m.timestep_rows(timestep))
+        ttnn.execute_trace(self.m.mesh_device, self.trace_id, cq_id=0, blocking=False)
+        self.replays += 1
+        out = ttnn.to_torch(self.y_out).float().reshape(BATCH, self.s_pad, IN_CHANNELS)[:, 1 : t + 1]
+        return out.transpose(1, 2).contiguous()
+
+    def release(self) -> None:
+        if self.trace_id is not None:
+            ttnn.release_trace(self.m.mesh_device, self.trace_id)
+            self.trace_id = None
+        for name in ("lat_in", "temb_rows", "cond_proj", "y_out"):
+            t = getattr(self, name, None)
+            if t is not None:
+                ttnn.deallocate(t)
+                setattr(self, name, None)

@@ -1,0 +1,10 @@
+{
+  "weight_dtype": "bfp8",
+  "layers": 36,
+  "latents": 689,
+  "eager_ms": 113.60110039822757,
+  "traced_ms": 113.53191859088838,
+  "replay_only_ms": 112.87423550384119,
+  "traced_vs_eager_pcc": 1.0,
+  "traced_vs_eager_max_abs": 0.0
+}

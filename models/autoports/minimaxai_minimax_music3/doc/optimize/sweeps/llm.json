@@ -1,0 +1,578 @@
+[
+  {
+    "shape": [
+      32,
+      4096,
+      12288
+    ],
+    "variant": "default",
+    "us": 152.40962675306946,
+    "weight_gbps": 350.8792530975934,
+    "pcc_vs_default": 1.0
+  },
+  {
+    "shape": [
+      32,
+      4096,
+      12288
+    ],
+    "variant": "default_lofi",
+    "us": 151.82477654889226,
+    "weight_gbps": 352.23088889433427,
+    "pcc_vs_default": 0.9999065900545361
+  },
+  {
+    "shape": [
+      32,
+      4096,
+      12288
+    ],
+    "variant": "1d_c100_k2",
+    "us": 150.4228770500049,
+    "weight_gbps": 355.51358309828487,
+    "pcc_vs_default": 1.0
+  },
+  {
+    "shape": [
+      32,
+      4096,
+      12288
+    ],
+    "variant": "1d_c100_k2_lofi",
+    "us": 149.9617239460349,
+    "weight_gbps": 356.60683668350146,
+    "pcc_vs_default": 0.9999065900545361
+  },
+  {
+    "shape": [
+      32,
+      4096,
+      12288
+    ],
+    "variant": "1d_c100_k4",
+    "us": 152.25959941744804,
+    "weight_gbps": 351.22498814266424,
+    "pcc_vs_default": 0.9999993216701364
+  },
+  {
+    "shape": [
+      32,
+      4096,
+      12288
+    ],
+    "variant": "1d_c100_k4_lofi",
+    "us": 151.63467614911497,
+    "weight_gbps": 352.67247148278443,
+    "pcc_vs_default": 0.9999066294965124
+  },
+  {
+    "shape": [
+      32,
+      4096,
+      12288
+    ],
+    "variant": "1d_c100_k8",
+    "us": 155.65982612315565,
+    "weight_gbps": 343.5528442495466,
+    "pcc_vs_default": 0.9999993036942613
+  },
+  {
+    "shape": [
+      32,
+      4096,
+      12288
+    ],
+    "variant": "1d_c100_k8_lofi",
+    "us": 155.257573351264,
+    "weight_gbps": 344.4429462967941,
+    "pcc_vs_default": 0.9999066107039728
+  },
+  {
+    "shape": [
+      32,
+      4096,
+      12288
+    ],
+    "variant": "1d_c100_k16",
+    "us": 153.3156231744215,
+    "weight_gbps": 348.80578308161574,
+    "pcc_vs_default": 0.9999993055503203
+  },
+  {
+    "shape": [
+      32,
+      4096,
+      12288
+    ],
+    "variant": "1d_c100_k16_lofi",
+    "us": 154.03249999508262,
+    "weight_gbps": 347.18241930571287,
+    "pcc_vs_default": 0.999906606158828
+  },
+  {
+    "shape": [
+      32,
+      4096,
+      12288
+    ],
+    "variant": "1d_c100_k32",
+    "us": 152.39337517414242,
+    "weight_gbps": 350.9166716656188,
+    "pcc_vs_default": 0.9999992752157755
+  },
+  {
+    "shape": [
+      32,
+      4096,
+      12288
+    ],
+    "variant": "1d_c100_k32_lofi",
+    "us": 154.0625497000292,
+    "weight_gbps": 347.1147018151022,
+    "pcc_vs_default": 0.9999065936290671
+  },
+  {
+    "shape": [
+      32,
+      4096,
+      12288
+    ],
+    "variant": "1d_c64_k2",
+    "error": "RuntimeError('TT_FATAL @ /home/jashan/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:156: program_config.out_block_w % program_config.out_subblock_w == 0\\ninfo:\\nout_block"
+  },
+  {
+    "shape": [
+      32,
+      4096,
+      12288
+    ],
+    "variant": "1d_c64_k2_lofi",
+    "error": "RuntimeError('TT_FATAL @ /home/jashan/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:156: program_config.out_block_w % program_config.out_subblock_w == 0\\ninfo:\\nout_block"
+  },
+  {
+    "shape": [
+      32,
+      4096,
+      12288
+    ],
+    "variant": "1d_c64_k4",
+    "error": "RuntimeError('TT_FATAL @ /home/jashan/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:156: program_config.out_block_w % program_config.out_subblock_w == 0\\ninfo:\\nout_block"
+  },
+  {
+    "shape": [
+      32,
+      4096,
+      12288
+    ],
+    "variant": "1d_c64_k4_lofi",
+    "error": "RuntimeError('TT_FATAL @ /home/jashan/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:156: program_config.out_block_w % program_config.out_subblock_w == 0\\ninfo:\\nout_block"
+  },
+  {
+    "shape": [
+      32,
+      4096,
+      12288
+    ],
+    "variant": "1d_c64_k8",
+    "error": "RuntimeError('TT_FATAL @ /home/jashan/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:156: program_config.out_block_w % program_config.out_subblock_w == 0\\ninfo:\\nout_block"
+  },
+  {
+    "shape": [
+      32,
+      4096,
+      12288
+    ],
+    "variant": "1d_c64_k8_lofi",
+    "error": "RuntimeError('TT_FATAL @ /home/jashan/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:156: program_config.out_block_w % program_config.out_subblock_w == 0\\ninfo:\\nout_block"
+  },
+  {
+    "shape": [
+      32,
+      4096,
+      12288
+    ],
+    "variant": "1d_c64_k16",
+    "error": "RuntimeError('TT_FATAL @ /home/jashan/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:156: program_config.out_block_w % program_config.out_subblock_w == 0\\ninfo:\\nout_block"
+  },
+  {
+    "shape": [
+      32,
+      4096,
+      12288
+    ],
+    "variant": "1d_c64_k16_lofi",
+    "error": "RuntimeError('TT_FATAL @ /home/jashan/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:156: program_config.out_block_w % program_config.out_subblock_w == 0\\ninfo:\\nout_block"
+  },
+  {
+    "shape": [
+      32,
+      4096,
+      12288
+    ],
+    "variant": "1d_c64_k32",
+    "error": "RuntimeError('TT_FATAL @ /home/jashan/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:156: program_config.out_block_w % program_config.out_subblock_w == 0\\ninfo:\\nout_block"
+  },
+  {
+    "shape": [
+      32,
+      4096,
+      12288
+    ],
+    "variant": "1d_c64_k32_lofi",
+    "error": "RuntimeError('TT_FATAL @ /home/jashan/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:156: program_config.out_block_w % program_config.out_subblock_w == 0\\ninfo:\\nout_block"
+  },
+  {
+    "shape": [
+      32,
+      12288,
+      4096
+    ],
+    "variant": "default",
+    "us": 218.55327358935028,
+    "weight_gbps": 244.6880576151016,
+    "pcc_vs_default": 1.0
+  },
+  {
+    "shape": [
+      32,
+      12288,
+      4096
+    ],
+    "variant": "default_lofi",
+    "us": 218.55905069969594,
+    "weight_gbps": 244.6815898440137,
+    "pcc_vs_default": 0.9999073505531733
+  },
+  {
+    "shape": [
+      32,
+      12288,
+      4096
+    ],
+    "variant": "1d_c100_k2",
+    "us": 218.95452518947423,
+    "weight_gbps": 244.23964726795612,
+    "pcc_vs_default": 1.0
+  },
+  {
+    "shape": [
+      32,
+      12288,
+      4096
+    ],
+    "variant": "1d_c100_k2_lofi",
+    "us": 218.95504905842245,
+    "weight_gbps": 244.23906290341336,
+    "pcc_vs_default": 0.9999073505531733
+  },
+  {
+    "shape": [
+      32,
+      12288,
+      4096
+    ],
+    "variant": "1d_c100_k4",
+    "us": 168.9043507212773,
+    "weight_gbps": 316.6133718381674,
+    "pcc_vs_default": 0.9999993292737073
+  },
+  {
+    "shape": [
+      32,
+      12288,
+      4096
+    ],
+    "variant": "1d_c100_k4_lofi",
+    "us": 164.38550082966685,
+    "weight_gbps": 325.3168663300314,
+    "pcc_vs_default": 0.999907437055638
+  },
+  {
+    "shape": [
+      32,
+      12288,
+      4096
+    ],
+    "variant": "1d_c100_k8",
+    "us": 169.14180014282465,
+    "weight_gbps": 316.16889470753705,
+    "pcc_vs_default": 0.9999992930667966
+  },
+  {
+    "shape": [
+      32,
+      12288,
+      4096
+    ],
+    "variant": "1d_c100_k8_lofi",
+    "us": 168.52887638378888,
+    "weight_gbps": 317.3187714028104,
+    "pcc_vs_default": 0.9999073930054411
+  },
+  {
+    "shape": [
+      32,
+      12288,
+      4096
+    ],
+    "variant": "1d_c100_k16",
+    "us": 171.6806524200365,
+    "weight_gbps": 311.4933176579586,
+    "pcc_vs_default": 0.9999993042976076
+  },
+  {
+    "shape": [
+      32,
+      12288,
+      4096
+    ],
+    "variant": "1d_c100_k16_lofi",
+    "us": 171.74124950543046,
+    "weight_gbps": 311.3834105318364,
+    "pcc_vs_default": 0.9999073977115971
+  },
+  {
+    "shape": [
+      32,
+      12288,
+      4096
+    ],
+    "variant": "1d_c100_k32",
+    "us": 170.05552363116294,
+    "weight_gbps": 314.4700910508983,
+    "pcc_vs_default": 0.9999992755239705
+  },
+  {
+    "shape": [
+      32,
+      12288,
+      4096
+    ],
+    "variant": "1d_c100_k32_lofi",
+    "us": 167.82929887995124,
+    "weight_gbps": 318.6414789127643,
+    "pcc_vs_default": 0.9999073948559294
+  },
+  {
+    "shape": [
+      32,
+      12288,
+      4096
+    ],
+    "variant": "1d_c64_k2",
+    "us": 218.32484926562756,
+    "weight_gbps": 244.9440646810483,
+    "pcc_vs_default": 1.0
+  },
+  {
+    "shape": [
+      32,
+      12288,
+      4096
+    ],
+    "variant": "1d_c64_k2_lofi",
+    "us": 218.4398239478469,
+    "weight_gbps": 244.81513962750617,
+    "pcc_vs_default": 0.9999073505531733
+  },
+  {
+    "shape": [
+      32,
+      12288,
+      4096
+    ],
+    "variant": "1d_c64_k4",
+    "us": 179.8409502953291,
+    "weight_gbps": 297.35928281173534,
+    "pcc_vs_default": 0.9999993292737073
+  },
+  {
+    "shape": [
+      32,
+      12288,
+      4096
+    ],
+    "variant": "1d_c64_k4_lofi",
+    "us": 180.44085009023547,
+    "weight_gbps": 296.3706720138863,
+    "pcc_vs_default": 0.999907437055638
+  },
+  {
+    "shape": [
+      32,
+      12288,
+      4096
+    ],
+    "variant": "1d_c64_k8",
+    "us": 187.34752666205168,
+    "weight_gbps": 285.444793175549,
+    "pcc_vs_default": 0.9999992930667966
+  },
+  {
+    "shape": [
+      32,
+      12288,
+      4096
+    ],
+    "variant": "1d_c64_k8_lofi",
+    "us": 186.69175042305142,
+    "weight_gbps": 286.44745083174803,
+    "pcc_vs_default": 0.9999073930054411
+  },
+  {
+    "shape": [
+      32,
+      12288,
+      4096
+    ],
+    "variant": "1d_c64_k16",
+    "us": 188.13152564689517,
+    "weight_gbps": 284.2552613981981,
+    "pcc_vs_default": 0.9999993042976076
+  },
+  {
+    "shape": [
+      32,
+      12288,
+      4096
+    ],
+    "variant": "1d_c64_k16_lofi",
+    "us": 189.340824726969,
+    "weight_gbps": 282.4397542215991,
+    "pcc_vs_default": 0.9999073977115971
+  },
+  {
+    "shape": [
+      32,
+      12288,
+      4096
+    ],
+    "variant": "1d_c64_k32",
+    "us": 185.8028263086453,
+    "weight_gbps": 287.8178823349348,
+    "pcc_vs_default": 0.9999992755239705
+  },
+  {
+    "shape": [
+      32,
+      12288,
+      4096
+    ],
+    "variant": "1d_c64_k32_lofi",
+    "us": 185.42309990152717,
+    "weight_gbps": 288.4073021559896,
+    "pcc_vs_default": 0.9999073948559294
+  },
+  {
+    "shape": [
+      32,
+      4096,
+      16032
+    ],
+    "variant": "default",
+    "us": 193.18665144965053,
+    "weight_gbps": 361.1598600443893,
+    "pcc_vs_default": 1.0
+  },
+  {
+    "shape": [
+      32,
+      4096,
+      16032
+    ],
+    "variant": "default_lofi",
+    "us": 193.26455076225102,
+    "weight_gbps": 361.0142870216834,
+    "pcc_vs_default": 0.9999071951506573
+  },
+  {
+    "shape": [
+      32,
+      4096,
+      16032
+    ],
+    "variant": "1d_c100_k2",
+    "error": "RuntimeError('TT_FATAL @ /home/jashan/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:156: program_config.out_block_w % program_config.out_subblock_w == 0\\ninfo:\\nout_block"
+  },
+  {
+    "shape": [
+      32,
+      4096,
+      16032
+    ],
+    "variant": "1d_c100_k2_lofi",
+    "error": "RuntimeError('TT_FATAL @ /home/jashan/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:156: program_config.out_block_w % program_config.out_subblock_w == 0\\ninfo:\\nout_block"
+  },
+  {
+    "shape": [
+      32,
+      4096,
+      16032
+    ],
+    "variant": "1d_c100_k4",
+    "error": "RuntimeError('TT_FATAL @ /home/jashan/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:156: program_config.out_block_w % program_config.out_subblock_w == 0\\ninfo:\\nout_block"
+  },
+  {
+    "shape": [
+      32,
+      4096,
+      16032
+    ],
+    "variant": "1d_c100_k4_lofi",
+    "error": "RuntimeError('TT_FATAL @ /home/jashan/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:156: program_config.out_block_w % program_config.out_subblock_w == 0\\ninfo:\\nout_block"
+  },
+  {
+    "shape": [
+      32,
+      4096,
+      16032
+    ],
+    "variant": "1d_c100_k8",
+    "error": "RuntimeError('TT_FATAL @ /home/jashan/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:156: program_config.out_block_w % program_config.out_subblock_w == 0\\ninfo:\\nout_block"
+  },
+  {
+    "shape": [
+      32,
+      4096,
+      16032
+    ],
+    "variant": "1d_c100_k8_lofi",
+    "error": "RuntimeError('TT_FATAL @ /home/jashan/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:156: program_config.out_block_w % program_config.out_subblock_w == 0\\ninfo:\\nout_block"
+  },
+  {
+    "shape": [
+      32,
+      4096,
+      16032
+    ],
+    "variant": "1d_c100_k16",
+    "error": "RuntimeError('TT_FATAL @ /home/jashan/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:156: program_config.out_block_w % program_config.out_subblock_w == 0\\ninfo:\\nout_block"
+  },
+  {
+    "shape": [
+      32,
+      4096,
+      16032
+    ],
+    "variant": "1d_c100_k16_lofi",
+    "error": "RuntimeError('TT_FATAL @ /home/jashan/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:156: program_config.out_block_w % program_config.out_subblock_w == 0\\ninfo:\\nout_block"
+  },
+  {
+    "shape": [
+      32,
+      4096,
+      16032
+    ],
+    "variant": "1d_c100_k32",
+    "error": "RuntimeError('TT_FATAL @ /home/jashan/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:156: program_config.out_block_w % program_config.out_subblock_w == 0\\ninfo:\\nout_block"
+  },
+  {
+    "shape": [
+      32,
+      4096,
+      16032
+    ],
+    "variant": "1d_c100_k32_lofi",
+    "error": "RuntimeError('TT_FATAL @ /home/jashan/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:156: program_config.out_block_w % program_config.out_subblock_w == 0\\ninfo:\\nout_block"
+  }
+]

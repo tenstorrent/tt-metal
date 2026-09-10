@@ -1,0 +1,1264 @@
+[
+  {
+    "shape": [
+      1536,
+      2048,
+      8192
+    ],
+    "variant": "default",
+    "us": 457.0086020976305,
+    "weight_gbps": 39.00537521215385,
+    "pcc_vs_default": 1.0
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      8192
+    ],
+    "variant": "default_lofi",
+    "us": 433.2633252488449,
+    "weight_gbps": 41.14309003597697,
+    "pcc_vs_default": 0.9999071252857715
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      8192
+    ],
+    "variant": "default_fp16acc",
+    "us": 339.8139728233218,
+    "weight_gbps": 52.45750153207531,
+    "pcc_vs_default": 0.9999449319733803
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      8192
+    ],
+    "variant": "2d_g8x8_k2_s2x2",
+    "us": 477.5199486175552,
+    "weight_gbps": 37.32994202987034,
+    "pcc_vs_default": 0.9999993144483084
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      8192
+    ],
+    "variant": "2d_g8x8_k2_s2x2_lofi",
+    "us": 404.4303728733212,
+    "weight_gbps": 44.076293957238306,
+    "pcc_vs_default": 0.99990712621456
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      8192
+    ],
+    "variant": "2d_g8x8_k4_s2x2",
+    "error": "RuntimeError('TT_THROW @ /home/jashan/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\\ninfo:\\nStatically allocated circular buffers on core range [0-0 - 7-7] grow to 1667840 B which is "
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      8192
+    ],
+    "variant": "2d_g8x8_k4_s2x2_lofi",
+    "error": "RuntimeError('TT_THROW @ /home/jashan/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\\ninfo:\\nStatically allocated circular buffers on core range [0-0 - 7-7] grow to 1667840 B which is "
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      8192
+    ],
+    "variant": "2d_g8x8_k8_s2x2",
+    "error": "RuntimeError('TT_THROW @ /home/jashan/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\\ninfo:\\nStatically allocated circular buffers on core range [0-0 - 7-7] grow to 2044672 B which is "
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      8192
+    ],
+    "variant": "2d_g8x8_k8_s2x2_lofi",
+    "error": "RuntimeError('TT_THROW @ /home/jashan/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\\ninfo:\\nStatically allocated circular buffers on core range [0-0 - 7-7] grow to 2044672 B which is "
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      8192
+    ],
+    "variant": "2d_g8x6_k2_s2x2",
+    "error": "RuntimeError('TT_THROW @ /home/jashan/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\\ninfo:\\nStatically allocated circular buffers on core range [0-0 - 7-5] grow to 1889024 B which is "
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      8192
+    ],
+    "variant": "2d_g8x6_k2_s2x2_lofi",
+    "error": "RuntimeError('TT_THROW @ /home/jashan/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\\ninfo:\\nStatically allocated circular buffers on core range [0-0 - 7-5] grow to 1889024 B which is "
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      8192
+    ],
+    "variant": "2d_g8x6_k4_s2x2",
+    "error": "RuntimeError('TT_THROW @ /home/jashan/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\\ninfo:\\nStatically allocated circular buffers on core range [0-0 - 7-5] grow to 2093824 B which is "
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      8192
+    ],
+    "variant": "2d_g8x6_k4_s2x2_lofi",
+    "error": "RuntimeError('TT_THROW @ /home/jashan/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\\ninfo:\\nStatically allocated circular buffers on core range [0-0 - 7-5] grow to 2093824 B which is "
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      8192
+    ],
+    "variant": "2d_g8x6_k8_s2x2",
+    "error": "RuntimeError('TT_THROW @ /home/jashan/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\\ninfo:\\nStatically allocated circular buffers on core range [0-0 - 7-5] grow to 2503424 B which is "
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      8192
+    ],
+    "variant": "2d_g8x6_k8_s2x2_lofi",
+    "error": "RuntimeError('TT_THROW @ /home/jashan/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\\ninfo:\\nStatically allocated circular buffers on core range [0-0 - 7-5] grow to 2503424 B which is "
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      8192
+    ],
+    "variant": "2d_g8x4_k2_s2x2",
+    "error": "RuntimeError('TT_THROW @ /home/jashan/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\\ninfo:\\nStatically allocated circular buffers on core range [0-0 - 7-3] grow to 2708224 B which is "
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      8192
+    ],
+    "variant": "2d_g8x4_k2_s2x2_lofi",
+    "error": "RuntimeError('TT_THROW @ /home/jashan/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\\ninfo:\\nStatically allocated circular buffers on core range [0-0 - 7-3] grow to 2708224 B which is "
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      8192
+    ],
+    "variant": "2d_g8x4_k4_s2x2",
+    "error": "RuntimeError('TT_THROW @ /home/jashan/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\\ninfo:\\nStatically allocated circular buffers on core range [0-0 - 7-3] grow to 2945792 B which is "
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      8192
+    ],
+    "variant": "2d_g8x4_k4_s2x2_lofi",
+    "error": "RuntimeError('TT_THROW @ /home/jashan/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\\ninfo:\\nStatically allocated circular buffers on core range [0-0 - 7-3] grow to 2945792 B which is "
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      8192
+    ],
+    "variant": "2d_g8x4_k8_s2x2",
+    "error": "RuntimeError('TT_THROW @ /home/jashan/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\\ninfo:\\nStatically allocated circular buffers on core range [0-0 - 7-3] grow to 3420928 B which is "
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      8192
+    ],
+    "variant": "2d_g8x4_k8_s2x2_lofi",
+    "error": "RuntimeError('TT_THROW @ /home/jashan/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\\ninfo:\\nStatically allocated circular buffers on core range [0-0 - 7-3] grow to 3420928 B which is "
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      8192
+    ],
+    "variant": "2d_g8x8_k2_s2x4_fp16acc",
+    "us": 448.26767698396,
+    "weight_gbps": 39.76595439567651,
+    "pcc_vs_default": 0.9999602395038258
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      8192
+    ],
+    "variant": "2d_g8x8_k4_s2x4_fp16acc",
+    "us": 433.0253752414137,
+    "weight_gbps": 41.16569840754029,
+    "pcc_vs_default": 0.9999569090274979
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      8192
+    ],
+    "variant": "2d_g8x8_k8_s2x4_fp16acc",
+    "us": 416.14345100242645,
+    "weight_gbps": 42.83569033000609,
+    "pcc_vs_default": 0.999930821365899
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      8192
+    ],
+    "variant": "2d_g8x6_k2_s2x4_fp16acc",
+    "us": 558.4777478361502,
+    "weight_gbps": 31.918535821824445,
+    "pcc_vs_default": 0.9999602395038258
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      8192
+    ],
+    "variant": "2d_g8x6_k4_s2x4_fp16acc",
+    "us": 535.8225753298029,
+    "weight_gbps": 33.268086901766104,
+    "pcc_vs_default": 0.9999569090274979
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      8192
+    ],
+    "variant": "2d_g8x6_k8_s2x4_fp16acc",
+    "us": 515.2120254933834,
+    "weight_gbps": 34.598943964728804,
+    "pcc_vs_default": 0.999930821365899
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      8192
+    ],
+    "variant": "2d_g8x4_k2_s2x4_fp16acc",
+    "us": 785.5182746425271,
+    "weight_gbps": 22.693032836329802,
+    "pcc_vs_default": 0.9999602395038258
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      8192
+    ],
+    "variant": "2d_g8x4_k4_s2x4_fp16acc",
+    "us": 745.2780759194866,
+    "weight_gbps": 23.918309924798788,
+    "pcc_vs_default": 0.9999569090274979
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      8192
+    ],
+    "variant": "2d_g8x4_k8_s2x4_fp16acc",
+    "error": "RuntimeError('TT_THROW @ /home/jashan/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\\ninfo:\\nStatically allocated circular buffers on core range [0-0 - 7-3] grow to 1848064 B which is "
+  },
+  {
+    "shape": [
+      1536,
+      8192,
+      2048
+    ],
+    "variant": "default",
+    "us": 455.3581995423883,
+    "weight_gbps": 39.14674649081538,
+    "pcc_vs_default": 1.0
+  },
+  {
+    "shape": [
+      1536,
+      8192,
+      2048
+    ],
+    "variant": "default_lofi",
+    "us": 437.19482491724193,
+    "weight_gbps": 40.77310842683077,
+    "pcc_vs_default": 0.999907036053609
+  },
+  {
+    "shape": [
+      1536,
+      8192,
+      2048
+    ],
+    "variant": "default_fp16acc",
+    "us": 381.6341777564958,
+    "weight_gbps": 46.70910793365542,
+    "pcc_vs_default": 0.999813452377102
+  },
+  {
+    "shape": [
+      1536,
+      8192,
+      2048
+    ],
+    "variant": "2d_g8x8_k2_s2x2",
+    "us": 418.4255754807964,
+    "weight_gbps": 42.60206126147304,
+    "pcc_vs_default": 0.9999993104215874
+  },
+  {
+    "shape": [
+      1536,
+      8192,
+      2048
+    ],
+    "variant": "2d_g8x8_k2_s2x2_lofi",
+    "us": 349.75892631337047,
+    "weight_gbps": 50.9659387049604,
+    "pcc_vs_default": 0.9999070445294024
+  },
+  {
+    "shape": [
+      1536,
+      8192,
+      2048
+    ],
+    "variant": "2d_g8x8_k4_s2x2",
+    "us": 389.698549406603,
+    "weight_gbps": 45.74251566279493,
+    "pcc_vs_default": 0.9999993043929555
+  },
+  {
+    "shape": [
+      1536,
+      8192,
+      2048
+    ],
+    "variant": "2d_g8x8_k4_s2x2_lofi",
+    "us": 266.098472638987,
+    "weight_gbps": 66.98945628366708,
+    "pcc_vs_default": 0.9999070467756106
+  },
+  {
+    "shape": [
+      1536,
+      8192,
+      2048
+    ],
+    "variant": "2d_g8x8_k8_s2x2",
+    "us": 372.60422541294247,
+    "weight_gbps": 47.84108924219628,
+    "pcc_vs_default": 0.9999992953582478
+  },
+  {
+    "shape": [
+      1536,
+      8192,
+      2048
+    ],
+    "variant": "2d_g8x8_k8_s2x2_lofi",
+    "us": 215.24552430491894,
+    "weight_gbps": 82.81608668781334,
+    "pcc_vs_default": 0.9999070267506587
+  },
+  {
+    "shape": [
+      1536,
+      8192,
+      2048
+    ],
+    "variant": "2d_g8x6_k2_s2x2",
+    "us": 529.3592490488663,
+    "weight_gbps": 33.674280806519846,
+    "pcc_vs_default": 0.9999993104215874
+  },
+  {
+    "shape": [
+      1536,
+      8192,
+      2048
+    ],
+    "variant": "2d_g8x6_k2_s2x2_lofi",
+    "us": 435.2871997980401,
+    "weight_gbps": 40.951794604276486,
+    "pcc_vs_default": 0.9999070445294024
+  },
+  {
+    "shape": [
+      1536,
+      8192,
+      2048
+    ],
+    "variant": "2d_g8x6_k4_s2x2",
+    "us": 501.0946246329695,
+    "weight_gbps": 35.57370429398765,
+    "pcc_vs_default": 0.9999993043929555
+  },
+  {
+    "shape": [
+      1536,
+      8192,
+      2048
+    ],
+    "variant": "2d_g8x6_k4_s2x2_lofi",
+    "us": 329.2000008514151,
+    "weight_gbps": 54.14882124513024,
+    "pcc_vs_default": 0.9999070467756106
+  },
+  {
+    "shape": [
+      1536,
+      8192,
+      2048
+    ],
+    "variant": "2d_g8x6_k8_s2x2",
+    "us": 478.0722490977496,
+    "weight_gbps": 37.28681602758169,
+    "pcc_vs_default": 0.9999992953582478
+  },
+  {
+    "shape": [
+      1536,
+      8192,
+      2048
+    ],
+    "variant": "2d_g8x6_k8_s2x2_lofi",
+    "us": 279.04437738470733,
+    "weight_gbps": 63.881566677920524,
+    "pcc_vs_default": 0.9999070267506587
+  },
+  {
+    "shape": [
+      1536,
+      8192,
+      2048
+    ],
+    "variant": "2d_g8x4_k2_s2x2",
+    "us": 746.5034228516743,
+    "weight_gbps": 23.87904925057775,
+    "pcc_vs_default": 0.9999993104215874
+  },
+  {
+    "shape": [
+      1536,
+      8192,
+      2048
+    ],
+    "variant": "2d_g8x4_k2_s2x2_lofi",
+    "us": 631.1923760222271,
+    "weight_gbps": 28.24145645157836,
+    "pcc_vs_default": 0.9999070445294024
+  },
+  {
+    "shape": [
+      1536,
+      8192,
+      2048
+    ],
+    "variant": "2d_g8x4_k4_s2x2",
+    "us": 703.438074560836,
+    "weight_gbps": 25.340954157377446,
+    "pcc_vs_default": 0.9999993043929555
+  },
+  {
+    "shape": [
+      1536,
+      8192,
+      2048
+    ],
+    "variant": "2d_g8x4_k4_s2x2_lofi",
+    "us": 430.14190159738064,
+    "weight_gbps": 41.4416543326793,
+    "pcc_vs_default": 0.9999070467756106
+  },
+  {
+    "shape": [
+      1536,
+      8192,
+      2048
+    ],
+    "variant": "2d_g8x4_k8_s2x2",
+    "us": 680.2168005378917,
+    "weight_gbps": 26.206044875551424,
+    "pcc_vs_default": 0.9999992953582478
+  },
+  {
+    "shape": [
+      1536,
+      8192,
+      2048
+    ],
+    "variant": "2d_g8x4_k8_s2x2_lofi",
+    "us": 383.1067238934338,
+    "weight_gbps": 46.52957227907719,
+    "pcc_vs_default": 0.9999070267506587
+  },
+  {
+    "shape": [
+      1536,
+      8192,
+      2048
+    ],
+    "variant": "2d_g8x8_k2_s2x4_fp16acc",
+    "us": 407.8511497937143,
+    "weight_gbps": 43.706612103499154,
+    "pcc_vs_default": 0.99989521751798
+  },
+  {
+    "shape": [
+      1536,
+      8192,
+      2048
+    ],
+    "variant": "2d_g8x8_k4_s2x4_fp16acc",
+    "us": 383.8792006717995,
+    "weight_gbps": 46.4359412252718,
+    "pcc_vs_default": 0.9999260714853285
+  },
+  {
+    "shape": [
+      1536,
+      8192,
+      2048
+    ],
+    "variant": "2d_g8x8_k8_s2x4_fp16acc",
+    "us": 368.12692414969206,
+    "weight_gbps": 48.42295097315802,
+    "pcc_vs_default": 0.9999202724298624
+  },
+  {
+    "shape": [
+      1536,
+      8192,
+      2048
+    ],
+    "variant": "2d_g8x6_k2_s2x4_fp16acc",
+    "us": 512.7593758516014,
+    "weight_gbps": 34.764438915221305,
+    "pcc_vs_default": 0.99989521751798
+  },
+  {
+    "shape": [
+      1536,
+      8192,
+      2048
+    ],
+    "variant": "2d_g8x6_k4_s2x4_fp16acc",
+    "us": 486.517624813132,
+    "weight_gbps": 36.63956060553152,
+    "pcc_vs_default": 0.9999260714853285
+  },
+  {
+    "shape": [
+      1536,
+      8192,
+      2048
+    ],
+    "variant": "2d_g8x6_k8_s2x4_fp16acc",
+    "us": 470.25035019032657,
+    "weight_gbps": 37.90702546587214,
+    "pcc_vs_default": 0.9999202724298624
+  },
+  {
+    "shape": [
+      1536,
+      8192,
+      2048
+    ],
+    "variant": "2d_g8x4_k2_s2x4_fp16acc",
+    "us": 719.6332007879391,
+    "weight_gbps": 24.770663694340705,
+    "pcc_vs_default": 0.99989521751798
+  },
+  {
+    "shape": [
+      1536,
+      8192,
+      2048
+    ],
+    "variant": "2d_g8x4_k4_s2x4_fp16acc",
+    "us": 688.7069990625605,
+    "weight_gbps": 25.882983655260844,
+    "pcc_vs_default": 0.9999260714853285
+  },
+  {
+    "shape": [
+      1536,
+      8192,
+      2048
+    ],
+    "variant": "2d_g8x4_k8_s2x4_fp16acc",
+    "us": 670.9564244374633,
+    "weight_gbps": 26.567734283109857,
+    "pcc_vs_default": 0.9999202724298624
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      6144
+    ],
+    "variant": "default",
+    "us": 364.12982444744557,
+    "weight_gbps": 36.7158719291602,
+    "pcc_vs_default": 1.0
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      6144
+    ],
+    "variant": "default_lofi",
+    "us": 343.5433260165155,
+    "weight_gbps": 38.91603471102589,
+    "pcc_vs_default": 0.9999072803627312
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      6144
+    ],
+    "variant": "default_fp16acc",
+    "us": 254.9344499129802,
+    "weight_gbps": 52.4422807688938,
+    "pcc_vs_default": 0.9999450757520886
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      6144
+    ],
+    "variant": "2d_g8x8_k2_s2x2",
+    "us": 355.4615250322968,
+    "weight_gbps": 37.61122669685637,
+    "pcc_vs_default": 0.999999316788677
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      6144
+    ],
+    "variant": "2d_g8x8_k2_s2x2_lofi",
+    "us": 304.07134909182787,
+    "weight_gbps": 43.9677859815807,
+    "pcc_vs_default": 0.9999072795028493
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      6144
+    ],
+    "variant": "2d_g8x8_k4_s2x2",
+    "us": 335.490723955445,
+    "weight_gbps": 39.85011520549677,
+    "pcc_vs_default": 0.9999993069367038
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      6144
+    ],
+    "variant": "2d_g8x8_k4_s2x2_lofi",
+    "us": 225.931650493294,
+    "weight_gbps": 59.17428554525087,
+    "pcc_vs_default": 0.9999072829086331
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      6144
+    ],
+    "variant": "2d_g8x8_k8_s2x2",
+    "error": "RuntimeError('TT_THROW @ /home/jashan/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\\ninfo:\\nStatically allocated circular buffers on core range [0-0 - 7-7] grow to 1610496 B which is "
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      6144
+    ],
+    "variant": "2d_g8x8_k8_s2x2_lofi",
+    "error": "RuntimeError('TT_THROW @ /home/jashan/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\\ninfo:\\nStatically allocated circular buffers on core range [0-0 - 7-7] grow to 1610496 B which is "
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      6144
+    ],
+    "variant": "2d_g8x6_k2_s2x2",
+    "us": 446.33174838963896,
+    "weight_gbps": 29.953827054061193,
+    "pcc_vs_default": 0.999999316788677
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      6144
+    ],
+    "variant": "2d_g8x6_k2_s2x2_lofi",
+    "us": 380.04990201443434,
+    "weight_gbps": 35.17786461497951,
+    "pcc_vs_default": 0.9999072795028493
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      6144
+    ],
+    "variant": "2d_g8x6_k4_s2x2",
+    "error": "RuntimeError('TT_THROW @ /home/jashan/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\\ninfo:\\nStatically allocated circular buffers on core range [0-0 - 7-5] grow to 1630976 B which is "
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      6144
+    ],
+    "variant": "2d_g8x6_k4_s2x2_lofi",
+    "error": "RuntimeError('TT_THROW @ /home/jashan/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\\ninfo:\\nStatically allocated circular buffers on core range [0-0 - 7-5] grow to 1630976 B which is "
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      6144
+    ],
+    "variant": "2d_g8x6_k8_s2x2",
+    "error": "RuntimeError('TT_THROW @ /home/jashan/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\\ninfo:\\nStatically allocated circular buffers on core range [0-0 - 7-5] grow to 1970944 B which is "
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      6144
+    ],
+    "variant": "2d_g8x6_k8_s2x2_lofi",
+    "error": "RuntimeError('TT_THROW @ /home/jashan/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\\ninfo:\\nStatically allocated circular buffers on core range [0-0 - 7-5] grow to 1970944 B which is "
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      6144
+    ],
+    "variant": "2d_g8x4_k2_s2x2",
+    "error": "RuntimeError('TT_THROW @ /home/jashan/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\\ninfo:\\nStatically allocated circular buffers on core range [0-0 - 7-3] grow to 2083584 B which is "
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      6144
+    ],
+    "variant": "2d_g8x4_k2_s2x2_lofi",
+    "error": "RuntimeError('TT_THROW @ /home/jashan/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\\ninfo:\\nStatically allocated circular buffers on core range [0-0 - 7-3] grow to 2083584 B which is "
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      6144
+    ],
+    "variant": "2d_g8x4_k4_s2x2",
+    "error": "RuntimeError('TT_THROW @ /home/jashan/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\\ninfo:\\nStatically allocated circular buffers on core range [0-0 - 7-3] grow to 2286336 B which is "
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      6144
+    ],
+    "variant": "2d_g8x4_k4_s2x2_lofi",
+    "error": "RuntimeError('TT_THROW @ /home/jashan/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\\ninfo:\\nStatically allocated circular buffers on core range [0-0 - 7-3] grow to 2286336 B which is "
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      6144
+    ],
+    "variant": "2d_g8x4_k8_s2x2",
+    "error": "RuntimeError('TT_THROW @ /home/jashan/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\\ninfo:\\nStatically allocated circular buffers on core range [0-0 - 7-3] grow to 2691840 B which is "
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      6144
+    ],
+    "variant": "2d_g8x4_k8_s2x2_lofi",
+    "error": "RuntimeError('TT_THROW @ /home/jashan/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception\\ninfo:\\nStatically allocated circular buffers on core range [0-0 - 7-3] grow to 2691840 B which is "
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      6144
+    ],
+    "variant": "2d_g8x8_k2_s2x4_fp16acc",
+    "us": 340.5135765206069,
+    "weight_gbps": 39.262293552606494,
+    "pcc_vs_default": 0.9999602657511714
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      6144
+    ],
+    "variant": "2d_g8x8_k4_s2x4_fp16acc",
+    "us": 328.43252702150494,
+    "weight_gbps": 40.7065162553909,
+    "pcc_vs_default": 0.999956946983971
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      6144
+    ],
+    "variant": "2d_g8x8_k8_s2x4_fp16acc",
+    "us": 314.76097647100687,
+    "weight_gbps": 42.47459183121282,
+    "pcc_vs_default": 0.9999308268474215
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      6144
+    ],
+    "variant": "2d_g8x6_k2_s2x4_fp16acc",
+    "us": 422.4427248118445,
+    "weight_gbps": 31.647707996284442,
+    "pcc_vs_default": 0.9999602657511714
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      6144
+    ],
+    "variant": "2d_g8x6_k4_s2x4_fp16acc",
+    "us": 405.7601763634011,
+    "weight_gbps": 32.9488815778371,
+    "pcc_vs_default": 0.999956946983971
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      6144
+    ],
+    "variant": "2d_g8x6_k8_s2x4_fp16acc",
+    "us": 387.74182612542063,
+    "weight_gbps": 34.480015049177325,
+    "pcc_vs_default": 0.9999308268474215
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      6144
+    ],
+    "variant": "2d_g8x4_k2_s2x4_fp16acc",
+    "us": 589.9808224057779,
+    "weight_gbps": 22.6606416552381,
+    "pcc_vs_default": 0.9999602657511714
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      6144
+    ],
+    "variant": "2d_g8x4_k4_s2x4_fp16acc",
+    "us": 562.1575517579913,
+    "weight_gbps": 23.782201196428115,
+    "pcc_vs_default": 0.999956946983971
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      6144
+    ],
+    "variant": "2d_g8x4_k8_s2x4_fp16acc",
+    "us": 539.4314735895023,
+    "weight_gbps": 24.784137846161034,
+    "pcc_vs_default": 0.9999308268474215
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      2048
+    ],
+    "variant": "default",
+    "us": 132.52909993752837,
+    "weight_gbps": 33.62618475565504,
+    "pcc_vs_default": 1.0
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      2048
+    ],
+    "variant": "default_lofi",
+    "us": 127.53987684845924,
+    "weight_gbps": 34.941605011074905,
+    "pcc_vs_default": 0.9999072018014112
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      2048
+    ],
+    "variant": "default_fp16acc",
+    "us": 114.32792525738478,
+    "weight_gbps": 38.97952306899005,
+    "pcc_vs_default": 0.9999449934719931
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      2048
+    ],
+    "variant": "2d_g8x8_k2_s2x2",
+    "us": 128.25194862671196,
+    "weight_gbps": 34.747604599528266,
+    "pcc_vs_default": 0.9999993077041818
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      2048
+    ],
+    "variant": "2d_g8x8_k2_s2x2_lofi",
+    "us": 110.11887399945408,
+    "weight_gbps": 40.46942942789347,
+    "pcc_vs_default": 0.9999072037339485
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      2048
+    ],
+    "variant": "2d_g8x8_k4_s2x2",
+    "us": 120.3438761876896,
+    "weight_gbps": 37.03094948553656,
+    "pcc_vs_default": 0.9999992968447154
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      2048
+    ],
+    "variant": "2d_g8x8_k4_s2x2_lofi",
+    "us": 93.30059983767569,
+    "weight_gbps": 47.76440888647366,
+    "pcc_vs_default": 0.9999071904233685
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      2048
+    ],
+    "variant": "2d_g8x8_k8_s2x2",
+    "us": 114.1678512794897,
+    "weight_gbps": 39.034175996624036,
+    "pcc_vs_default": 0.9999992884527371
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      2048
+    ],
+    "variant": "2d_g8x8_k8_s2x2_lofi",
+    "us": 78.73960130382329,
+    "weight_gbps": 56.59728937163938,
+    "pcc_vs_default": 0.9999071953066836
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      2048
+    ],
+    "variant": "2d_g8x6_k2_s2x2",
+    "us": 156.39435150660574,
+    "weight_gbps": 28.494942157880747,
+    "pcc_vs_default": 0.9999993077041818
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      2048
+    ],
+    "variant": "2d_g8x6_k2_s2x2_lofi",
+    "us": 134.26192454062402,
+    "weight_gbps": 33.19219514577716,
+    "pcc_vs_default": 0.9999072037339485
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      2048
+    ],
+    "variant": "2d_g8x6_k4_s2x2",
+    "us": 148.3044499764219,
+    "weight_gbps": 30.049320844442,
+    "pcc_vs_default": 0.9999992968447154
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      2048
+    ],
+    "variant": "2d_g8x6_k4_s2x2_lofi",
+    "us": 109.75144978147,
+    "weight_gbps": 40.60491236219103,
+    "pcc_vs_default": 0.9999071904233685
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      2048
+    ],
+    "variant": "2d_g8x6_k8_s2x2",
+    "us": 140.4915499733761,
+    "weight_gbps": 31.720398848503844,
+    "pcc_vs_default": 0.9999992884527371
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      2048
+    ],
+    "variant": "2d_g8x6_k8_s2x2_lofi",
+    "us": 92.70772279705852,
+    "weight_gbps": 48.06986802766551,
+    "pcc_vs_default": 0.9999071953066836
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      2048
+    ],
+    "variant": "2d_g8x4_k2_s2x2",
+    "us": 212.11857674643397,
+    "weight_gbps": 21.00923015963485,
+    "pcc_vs_default": 0.9999993077041818
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      2048
+    ],
+    "variant": "2d_g8x4_k2_s2x2_lofi",
+    "us": 179.81025157496333,
+    "weight_gbps": 24.784170874384746,
+    "pcc_vs_default": 0.9999072037339485
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      2048
+    ],
+    "variant": "2d_g8x4_k4_s2x2",
+    "us": 202.19517464283854,
+    "weight_gbps": 22.040328152597883,
+    "pcc_vs_default": 0.9999992968447154
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      2048
+    ],
+    "variant": "2d_g8x4_k4_s2x2_lofi",
+    "us": 135.33044839277864,
+    "weight_gbps": 32.930120700300584,
+    "pcc_vs_default": 0.9999071904233685
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      2048
+    ],
+    "variant": "2d_g8x4_k8_s2x2",
+    "us": 191.21897348668426,
+    "weight_gbps": 23.305469738390418,
+    "pcc_vs_default": 0.9999992884527371
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      2048
+    ],
+    "variant": "2d_g8x4_k8_s2x2_lofi",
+    "us": 123.43077396508305,
+    "weight_gbps": 36.104837204218384,
+    "pcc_vs_default": 0.9999071953066836
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      2048
+    ],
+    "variant": "2d_g8x8_k2_s2x4_fp16acc",
+    "us": 125.29907689895481,
+    "weight_gbps": 35.56648708269273,
+    "pcc_vs_default": 0.9999602186094538
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      2048
+    ],
+    "variant": "2d_g8x8_k4_s2x4_fp16acc",
+    "us": 118.41772648040205,
+    "weight_gbps": 37.633284580392065,
+    "pcc_vs_default": 0.9999569007271466
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      2048
+    ],
+    "variant": "2d_g8x8_k8_s2x4_fp16acc",
+    "us": 112.80552425887436,
+    "weight_gbps": 39.505582986991115,
+    "pcc_vs_default": 0.9999307724897346
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      2048
+    ],
+    "variant": "2d_g8x6_k2_s2x4_fp16acc",
+    "us": 153.0477253254503,
+    "weight_gbps": 29.11802831779126,
+    "pcc_vs_default": 0.9999602186094538
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      2048
+    ],
+    "variant": "2d_g8x6_k4_s2x4_fp16acc",
+    "us": 145.5106248613447,
+    "weight_gbps": 30.626272165668283,
+    "pcc_vs_default": 0.9999569007271466
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      2048
+    ],
+    "variant": "2d_g8x6_k8_s2x4_fp16acc",
+    "us": 139.3155485857278,
+    "weight_gbps": 31.988159579027354,
+    "pcc_vs_default": 0.9999307724897346
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      2048
+    ],
+    "variant": "2d_g8x4_k2_s2x4_fp16acc",
+    "us": 206.80419984273612,
+    "weight_gbps": 21.54911749079031,
+    "pcc_vs_default": 0.9999602186094538
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      2048
+    ],
+    "variant": "2d_g8x4_k4_s2x4_fp16acc",
+    "us": 198.18150030914694,
+    "weight_gbps": 22.486700287606592,
+    "pcc_vs_default": 0.9999569007271466
+  },
+  {
+    "shape": [
+      1536,
+      2048,
+      2048
+    ],
+    "variant": "2d_g8x4_k8_s2x4_fp16acc",
+    "us": 190.50412229262292,
+    "weight_gbps": 23.39292161434016,
+    "pcc_vs_default": 0.9999307724897346
+  }
+]

@@ -1,0 +1,300 @@
+{
+  "commit": "b8bac93ba28",
+  "dram_after": {
+    "allocated_bytes": 21741178368,
+    "banks": 8,
+    "free_bytes": 11717552640,
+    "largest_free_block_bytes_per_bank": 1464560960,
+    "total_bytes": 33458731008
+  },
+  "free_running": {
+    "ar_frames_per_s": 13.317548677882412,
+    "ar_ms_per_frame": 75.08889392390847,
+    "audio_stats": {
+      "adjacent_window_logmel_corr_max": 0.9842646223179959,
+      "adjacent_window_logmel_corr_mean": 0.8692740371985911,
+      "band_energy_mean": [
+        0.3408602722755077,
+        0.5294127578417563,
+        0.11239146098319473,
+        0.017335507861784547
+      ],
+      "band_energy_per_window": [
+        [
+          0.0058,
+          0.8292,
+          0.1508,
+          0.0142
+        ],
+        [
+          0.7517,
+          0.2397,
+          0.0078,
+          0.0009
+        ],
+        [
+          0.0263,
+          0.8949,
+          0.0731,
+          0.0056
+        ],
+        [
+          0.0534,
+          0.69,
+          0.2225,
+          0.034
+        ],
+        [
+          0.0414,
+          0.5895,
+          0.336,
+          0.0331
+        ],
+        [
+          0.4532,
+          0.5002,
+          0.0099,
+          0.0367
+        ],
+        [
+          0.8927,
+          0.1011,
+          0.0057,
+          0.0005
+        ],
+        [
+          0.8184,
+          0.1559,
+          0.0199,
+          0.0058
+        ],
+        [
+          0.0248,
+          0.7642,
+          0.1858,
+          0.0252
+        ]
+      ],
+      "band_hz": [
+        [
+          0,
+          250
+        ],
+        [
+          250,
+          2000
+        ],
+        [
+          2000,
+          8000
+        ],
+        [
+          8000,
+          22050
+        ]
+      ],
+      "clipped_fraction": 2.381859756097561e-05,
+      "nan_count": 0,
+      "peak": 0.9999867081642151,
+      "rms": 0.0926834265818811,
+      "rms_dbfs": -20.6599583671864,
+      "samples": 440832,
+      "seconds": 9.996190476190476,
+      "silence_fraction_1s": 0.0,
+      "spectral_flatness_mean": 0.0064980743404803405,
+      "stereo_correlation": 0.5452785671509262,
+      "window_rms_dbfs": [
+        -31.008891656998344,
+        -27.66912617499212,
+        -21.921924414603637,
+        -22.80355771585027,
+        -26.47921575767899,
+        -25.140731216048707,
+        -18.03194531453275,
+        -14.653289805048384,
+        -18.861390882358716
+      ]
+    },
+    "code_stats": {
+      "adjacent_full_frame_repeat_rate": 0.0,
+      "adjacent_semantic_repeat_rate": 0.10441767068273092,
+      "distinct_semantic_codes": 178,
+      "frames": 250,
+      "longest_semantic_run": 5,
+      "most_common_semantic_share": 0.028,
+      "repeated_4gram_rate": 0.004048582995951417,
+      "residual_distinct_per_codebook": [
+        192,
+        190,
+        176,
+        174,
+        193,
+        203,
+        208
+      ],
+      "top_semantic_codes": [
+        [
+          2624,
+          7
+        ],
+        [
+          2117,
+          6
+        ],
+        [
+          2782,
+          5
+        ],
+        [
+          15677,
+          5
+        ],
+        [
+          11832,
+          4
+        ]
+      ]
+    },
+    "decode_stats": {},
+    "depth_loop_ms": 33.11582441966743,
+    "dit_per_chunk_s": [
+      3.509024358005263,
+      2.77374197402969
+    ],
+    "dit_per_step_ms": [
+      116.96747860017543,
+      92.45806580098967
+    ],
+    "frames": 250,
+    "host_ms": 3.8598185846678525,
+    "llm_step_ms": 37.95319454371929,
+    "seconds": 9.996190476190476,
+    "stopped_by": "max_frames",
+    "timings": {
+      "ar": 18.90723163599614,
+      "ar_detail": {
+        "depth": 8.312071929336525,
+        "host": 0.968814464751631,
+        "llm_step": 9.488298635929823,
+        "llm_steps": 250,
+        "prefill": 0.13500815501902252
+      },
+      "ar_frames_per_s": 13.317548677882412,
+      "dit": 6.282766332034953,
+      "dit_per_chunk": [
+        3.509024358005263,
+        2.77374197402969
+      ],
+      "dit_per_step_ms": [
+        116.96747860017543,
+        92.45806580098967
+      ],
+      "prefill": 0.13500815501902252,
+      "total": 37.06916143198032,
+      "vocoder": 11.878273407928646,
+      "vocoder_per_chunk": [
+        6.767688581952825,
+        5.11058482597582
+      ]
+    },
+    "total_s": 37.06916143198032,
+    "vocoder_per_chunk_s": [
+      6.767688581952825,
+      5.11058482597582
+    ]
+  },
+  "golden_replay": {
+    "frame_hiddens_backbone_pcc_min": 0.9917587261462499,
+    "frame_hiddens_depth_pcc_min": 0.9964658267076568,
+    "frame_hiddens_pcc": 0.9994114655019438,
+    "frame_hiddens_pcc_min": 0.9951154379775552,
+    "frames": 250,
+    "latent_pcc": [
+      0.99951192045154,
+      0.9992274665380922
+    ],
+    "log_mel_mean_abs_db": 0.5299819707870483,
+    "log_mel_rms_db": 0.7535362839698792,
+    "timings": {
+      "ar": 17.62453763501253,
+      "ar_detail": {
+        "depth": 7.820103945676237,
+        "host": 0.17025548359379172,
+        "llm_step": 9.49787671258673,
+        "llm_steps": 250,
+        "prefill": 0.1332985849585384
+      },
+      "ar_frames_per_s": 14.292869663754798,
+      "dit": 6.312167413998395,
+      "dit_per_chunk": [
+        3.502986476989463,
+        2.8091809370089322
+      ],
+      "dit_per_step_ms": [
+        116.76621589964877,
+        93.6393645669644
+      ],
+      "prefill": 0.1332985849585384,
+      "total": 35.65957970696036,
+      "vocoder": 11.722347151022404,
+      "vocoder_per_chunk": [
+        6.791597813018598,
+        4.930749338003807
+      ]
+    },
+    "wall_s": 35.660063949995674,
+    "wav_pcc": 0.9987459301698627
+  },
+  "label": "before",
+  "load_kwargs": {
+    "dtype_policy": "functional"
+  },
+  "load_log": {
+    "ar_init_s": 0.5808720359345898,
+    "depth_load_s": 1.119116214918904,
+    "dit_dtype": "bf16",
+    "dit_load_s": 0.7942303599556908,
+    "dram_after_depth": {
+      "allocated_bytes": 16769727488,
+      "banks": 8,
+      "free_bytes": 16689003520,
+      "largest_free_block_bytes_per_bank": 2086125440,
+      "total_bytes": 33458731008
+    },
+    "dram_after_dit": {
+      "allocated_bytes": 21722823680,
+      "banks": 8,
+      "free_bytes": 11735907328,
+      "largest_free_block_bytes_per_bank": 1466988416,
+      "total_bytes": 33458731008
+    },
+    "dram_after_llm": {
+      "allocated_bytes": 15415966720,
+      "banks": 8,
+      "free_bytes": 18042764288,
+      "largest_free_block_bytes_per_bank": 2255345536,
+      "total_bytes": 33458731008
+    },
+    "dram_resident": {
+      "allocated_bytes": 21741178368,
+      "banks": 8,
+      "free_bytes": 11717552640,
+      "largest_free_block_bytes_per_bank": 1464560960,
+      "total_bytes": 33458731008
+    },
+    "dtype_policy": "functional",
+    "llm_load_s": 6.570842436980456,
+    "load_total_s": 9.771264484967105,
+    "vocoder_load_s": 0.14667287399061024,
+    "warm_ar_s": 0.39089482103008777,
+    "warm_dit_s": 0.16722484293859452,
+    "weights_dir": "/home/jashan/.cache/huggingface/hub/models--MiniMaxAI--MiniMax-Music3/snapshots/fbdf52fbaaca799592917417eb05f1899f1255ec"
+  },
+  "load_s": 9.771471348940395,
+  "loadavg_1m": 0.43212890625,
+  "policy_report": {},
+  "recorded_at": "2026-09-09 23:06:11",
+  "steps": 30,
+  "torch_threads": 12,
+  "trace_region": 90000000
+}

@@ -1,0 +1,12 @@
+{
+  "nlp_create_qkv_heads_us": 113.47457475494593,
+  "slice_reshape_permute_us": 159.01214792393148,
+  "permute_matches": true,
+  "split_qkv_and_split_heads_us": 113.3498502895236,
+  "split_qkv_matches": true,
+  "nlp_concat_heads_us": 38.45179744530469,
+  "permute_merge_us": 57.4625504668802,
+  "permute_merge_matches": true,
+  "concatenate_heads_us": 38.38292323052883,
+  "concatenate_heads_matches": true
+}

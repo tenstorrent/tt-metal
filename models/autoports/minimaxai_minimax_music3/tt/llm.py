@@ -80,18 +80,87 @@ _HIFI4_ATTENTION = {
     OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI4,
     OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI4,
 }
+_PREC = {"bf16": PrecisionSetting.BF16, "bfp8": PrecisionSetting.BFP8, "bfp4": PrecisionSetting.BFP4}
+
+
+_LOFI_DECODE = {
+    OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI,
+    OpGroup.LI_FF2: MathFidelitySetting.LOFI,
+    OpGroup.LI_QKV_DECODE: MathFidelitySetting.LOFI,
+    OpGroup.LI_O_DECODE: MathFidelitySetting.LOFI,
+}
+
+
+def _policy(attn: str, mlp: str, kv: str, lm_head: str = "bfp8", decode_fidelity: str = "hifi2") -> dict:
+    """A stage-07 policy: per-group weight dtypes; fidelities follow tt_transformers' defaults (HiFi2 with fp32
+    accumulation) except bf16 attention (HiFi4, as in "functional") and bfp4 MLP weights (LoFi, as in the stock
+    ``performance`` policy). ``lm_head`` is the LM-head weight dtype (the embedding stays bf16, the LM-head
+    output bf16)."""
+    tp = {
+        TensorGroup.WQKV: _PREC[attn],
+        TensorGroup.WO: _PREC[attn],
+        TensorGroup.KV_CACHE: _PREC[kv],
+        TensorGroup.FF1_FF3: _PREC[mlp],
+        TensorGroup.FF2: _PREC[mlp],
+    }
+    of = {}
+    if attn == "bf16":
+        of.update(_HIFI4_ATTENTION)
+    if mlp == "bfp4":
+        of[OpGroup.LI_FF1_FF3] = MathFidelitySetting.LOFI
+    if decode_fidelity == "lofi":
+        # The DRAM-sharded decode matmuls run on 12 cores (one per DRAM bank) and are compute-bound at HiFi2 with
+        # bfp8 weights (53 % of DRAM bandwidth, doc/optimize/README.md); LoFi halves the math passes. Note
+        # LI_FF1_FF3 / LI_FF2 also cover the prefill MLP matmuls (tt_transformers has no separate prefill group).
+        of.update(_LOFI_DECODE)
+    return {
+        "TensorPrecision": tp,
+        "OpFidelity": of,
+        "lm_head": lm_head,
+        "lm_head_fidelity": decode_fidelity,
+        "groups": {"attn": attn, "mlp": mlp, "kv": kv, "decode_fidelity": decode_fidelity},
+    }
+
+
 DTYPE_POLICIES = {
-    "functional": {"TensorPrecision": dict(_BF16_ATTENTION), "OpFidelity": dict(_HIFI4_ATTENTION)},
+    # Stage 02-06 default: bf16 attention weights + KV cache at HiFi4, bfp8 MLP, bf16 LM head.
+    "functional": {**_policy("bf16", "bfp8", "bf16", lm_head="bf16")},
     # + bf16 activations everywhere (prefill SDPA Q, MLP intermediate) instead of the bfp8 op defaults.
     "functional_bf16_act": {
         "TensorPrecision": {**_BF16_ATTENTION, TensorGroup.ACTIVATION: PrecisionSetting.BF16},
         "OpFidelity": dict(_HIFI4_ATTENTION),
+        "lm_head": "bf16",
+        "groups": {"attn": "bf16", "mlp": "bfp8", "kv": "bf16", "act": "bf16"},
     },
+    # Stage 07 default: bfp8 attention + MLP + LM-head weights, bfp8 KV cache, bf16 embedding / norms / activations,
+    # LoFi decode matmuls + LM head (HiFi2 stays for the prefill attention matmuls and SDPA), see doc/optimize/README.md.
+    "optimized": _policy("bfp8", "bfp8", "bfp8", decode_fidelity="lofi"),
+    # The same weights at HiFi2 everywhere (the stage-07 first candidate; 17.9 vs 22.5 teacher-forced frames/s).
+    "optimized_hifi2": _policy("bfp8", "bfp8", "bfp8"),
 }
+DTYPE_POLICIES["optimized_lofi"] = DTYPE_POLICIES["optimized"]  # name used by the first sweep runs
+# Stage 07 datatype sweep: {MLP bfp4 / bfp8 / bf16} x {KV bfp8 / bf16} with bfp8 attention + LM head, LoFi decode.
+for _mlp in ("bfp4", "bfp8", "bf16"):
+    for _kv in ("bfp8", "bf16"):
+        DTYPE_POLICIES[f"opt_mlp-{_mlp}_kv-{_kv}"] = _policy("bfp8", _mlp, _kv, decode_fidelity="lofi")
+
+_TT_DTYPE = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}
+
+
+def policy_cache_key(policy: str) -> str:
+    """Converted-weight cache directory for a policy: keyed by the weight dtypes only (the KV-cache dtype does not
+    change any stored weight), so sweep policies that share weight dtypes share one conversion."""
+    p = DTYPE_POLICIES[policy]
+    g = p["groups"]
+    key = f"attn-{g['attn']}_mlp-{g['mlp']}_lmhead-{p['lm_head']}"  # fidelity does not change stored weights
+    if g.get("act"):
+        key += f"_act-{g['act']}"
+    return key
 
 
 def decoders_precision_for(policy: str, num_decoders: int, model_name: str) -> DecodersPrecision:
-    conf = ModelOptimizations(DTYPE_POLICIES[policy])
+    p = DTYPE_POLICIES[policy]
+    conf = ModelOptimizations({"TensorPrecision": p["TensorPrecision"], "OpFidelity": p["OpFidelity"]})
     conf.__name__ = policy
     return DecodersPrecision(num_decoders, model_name, conf)
 
@@ -222,6 +291,7 @@ class MusicLLM:
         hf_model_dir: Optional[str] = None,
         weight_cache_root: Optional[str] = None,
         logits_window: Optional[Tuple[int, int]] = None,
+        num_layers: Optional[int] = None,
     ):
         if dtype_policy not in DTYPE_POLICIES:
             raise ValueError(f"unknown dtype_policy {dtype_policy!r}; supported: {sorted(DTYPE_POLICIES)}")
@@ -233,14 +303,20 @@ class MusicLLM:
         # ModelArgs joins "model_cache" with HF_MODEL; with an absolute HF_MODEL that would drop the
         # converted-weight cache *inside* the HF snapshot. Pin it to a dedicated directory instead.
         cache_root = Path(weight_cache_root) if weight_cache_root else _default_weight_cache_root()
-        os.environ["TT_CACHE_PATH"] = str(cache_root / dtype_policy)
+        # Stage 02-06 caches keep their policy-named directories; the stage-07 policies share one directory per
+        # weight-dtype combination (the KV-cache dtype does not change any stored weight).
+        cache_dir = dtype_policy if dtype_policy.startswith("functional") else policy_cache_key(dtype_policy)
+        os.environ["TT_CACHE_PATH"] = str(cache_root / cache_dir)
 
         self.mesh_device = mesh_device
         self.max_batch_size = max_batch_size
         self.max_seq_len = max_seq_len
         self.dtype_policy = dtype_policy
         self.block_size = block_size
-        self.weight_dtype = ttnn.bfloat16  # LM head / embedding weights; decoder groups follow the policy
+        # LM-head weight dtype (tt_transformers' Transformer(dtype=...) reaches the LM head only; the embedding is
+        # always bf16 and the decoder groups follow the policy above).
+        self.weight_dtype = _TT_DTYPE[DTYPE_POLICIES[dtype_policy]["lm_head"]]
+        self.num_layers_override = num_layers
 
         t0 = time.time()
         self.args = ModelArgs(
@@ -255,6 +331,11 @@ class MusicLLM:
             cache_hf=False,
         )
         assert self.args.dim == LLM_HIDDEN, self.args.dim
+        if num_layers is not None:
+            # Reduced-layer variant for profiling only (tt-perf-report on one decoder layer + norm + LM head);
+            # numerically meaningless, never used by the pipeline.
+            assert 1 <= num_layers <= self.args.n_layers, (num_layers, self.args.n_layers)
+            self.args.n_layers = num_layers
         # bf16 logits: the stock bfp8 LM-head output is too coarse for CFG over the 16384 semantic codes.
         self.args.lm_head_dtype = ttnn.bfloat16
         self.vocab_size = self.args.vocab_size
@@ -303,6 +384,11 @@ class MusicLLM:
         del state_dict
         logger.info(f"MusicLLM: device model built in {time.time() - t1:.0f}s")
         self.kv_cache = [layer.attention.layer_past for layer in self.model.layers]
+        if DTYPE_POLICIES[dtype_policy].get("lm_head_fidelity") == "lofi":
+            # tt_transformers' LMHead hard-codes HiFi2; the LM head is the largest single decode matmul group.
+            self.model.lm_head.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=True
+            )
 
         # Per-slot logical prompt lengths (bookkeeping for callers; the KV cache itself is positional).
         self.prefill_lens: List[Optional[int]] = [None] * max_batch_size
@@ -334,6 +420,8 @@ class MusicLLM:
             "embedding_weight": "bfloat16",
             "norm_weights": "bfloat16",
             "lm_head_weight": str(self.weight_dtype),
+            "groups": DTYPE_POLICIES[self.dtype_policy]["groups"],
+            "weight_cache_dir": os.environ.get("TT_CACHE_PATH"),
             "lm_head_output": str(self.args.lm_head_dtype),
             "rope_tables": "bfloat16",
             "activations": "bfloat16 (ACTIVATION group unset -> input dtype)",

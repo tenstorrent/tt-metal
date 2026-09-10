@@ -1,0 +1,153 @@
+{
+  "commit": "b8bac93ba28",
+  "dram_after": {
+    "allocated_bytes": 17399025152,
+    "banks": 8,
+    "free_bytes": 15179705856,
+    "largest_free_block_bytes_per_bank": 1897330112,
+    "total_bytes": 32578731008
+  },
+  "golden_replay": {
+    "frame_hiddens_backbone_pcc_min": 0.9845897368923088,
+    "frame_hiddens_depth_pcc_min": 0.9770141286281209,
+    "frame_hiddens_pcc": 0.999030413195188,
+    "frame_hiddens_pcc_min": 0.9789488035119572,
+    "frames": 250,
+    "latent_pcc": [
+      0.9988994224716269,
+      0.9988266458235429
+    ],
+    "log_mel_mean_abs_db": 0.6861616373062134,
+    "log_mel_rms_db": 0.9912362098693848,
+    "timings": {
+      "ar": 11.25679444510024,
+      "ar_detail": {
+        "depth": 5.598310630302876,
+        "host": 0.09358201606664807,
+        "llm_step": 5.438074366073124,
+        "llm_steps": 250,
+        "prefill": 0.12376687303185463
+      },
+      "ar_frames_per_s": 22.455706534601973,
+      "dit": 7.542803972959518,
+      "dit_and_vocoder_phase": 17.30445333593525,
+      "dit_per_chunk": [
+        2.9420331919100136,
+        4.600770781049505
+      ],
+      "dit_per_step_ms": [
+        98.06777306366712,
+        153.3590260349835
+      ],
+      "prefill": 0.12376687303185463,
+      "total": 28.56193677498959,
+      "vocoder": 14.362127186032012,
+      "vocoder_overlapped": true,
+      "vocoder_per_chunk": [
+        9.419197370065376,
+        4.942929815966636
+      ]
+    },
+    "wall_s": 28.5639894179767,
+    "wav_pcc": 0.9983696271618051
+  },
+  "label": "sweep_mlp-bfp8_kv-bfp8_dit-bf16",
+  "load_kwargs": {
+    "dit_dtype": "bf16",
+    "dtype_policy": "optimized",
+    "llm_policy": "opt_mlp-bfp8_kv-bfp8"
+  },
+  "load_log": {
+    "ar_init_s": 0.5797780450666323,
+    "depth_dtype": "bfp8",
+    "depth_load_s": 5.267087689950131,
+    "dit_dtype": "bf16",
+    "dit_fidelity": "hifi2_fp16",
+    "dit_load_s": 0.8015554959420115,
+    "dit_trace": true,
+    "dram_after_depth": {
+      "allocated_bytes": 12418792448,
+      "banks": 8,
+      "free_bytes": 20159938560,
+      "largest_free_block_bytes_per_bank": 2519992320,
+      "total_bytes": 32578731008
+    },
+    "dram_after_dit": {
+      "allocated_bytes": 17371888640,
+      "banks": 8,
+      "free_bytes": 15206842368,
+      "largest_free_block_bytes_per_bank": 1900855296,
+      "total_bytes": 32578731008
+    },
+    "dram_after_llm": {
+      "allocated_bytes": 11670584320,
+      "banks": 8,
+      "free_bytes": 20908146688,
+      "largest_free_block_bytes_per_bank": 2613518336,
+      "total_bytes": 32578731008
+    },
+    "dram_resident": {
+      "allocated_bytes": 17399025152,
+      "banks": 8,
+      "free_bytes": 15179705856,
+      "largest_free_block_bytes_per_bank": 1897330112,
+      "total_bytes": 32578731008
+    },
+    "dtype_policy": "optimized",
+    "llm_load_s": 6.486476575955749,
+    "llm_policy": "opt_mlp-bfp8_kv-bfp8",
+    "load_total_s": 15.039823165046982,
+    "vocoder": "host",
+    "vocoder_load_s": 0.15267358405981213,
+    "warm_ar_s": 0.3376791999908164,
+    "warm_dit_s": 1.4019870599731803,
+    "weights_dir": "/home/jashan/.cache/huggingface/hub/models--MiniMaxAI--MiniMax-Music3/snapshots/fbdf52fbaaca799592917417eb05f1899f1255ec"
+  },
+  "load_s": 15.040059125050902,
+  "loadavg_1m": 2.66162109375,
+  "policy_report": {
+    "components": {
+      "depth_dtype": "bfp8",
+      "dit_dtype": "bf16",
+      "dit_fidelity": "hifi2_fp16",
+      "llm_policy": "opt_mlp-bfp8_kv-bfp8",
+      "vocoder": "host"
+    },
+    "depth_weight_dtype": "DataType.BFLOAT8_B",
+    "dit_fidelity": "hifi2_fp16",
+    "dit_trace": true,
+    "dit_weight_dtype": "DataType.BFLOAT16",
+    "llm": {
+      "activations": "bfloat16 (ACTIVATION group unset -> input dtype)",
+      "decoder_tensor_groups": {
+        "activation": "None",
+        "ff1_3": "DataType.BFLOAT8_B",
+        "ff2": "DataType.BFLOAT8_B",
+        "kv_cache": "DataType.BFLOAT8_B",
+        "wo": "DataType.BFLOAT8_B",
+        "wqkv": "DataType.BFLOAT8_B"
+      },
+      "embedding_weight": "bfloat16",
+      "groups": {
+        "attn": "bfp8",
+        "decode_fidelity": "lofi",
+        "kv": "bfp8",
+        "mlp": "bfp8"
+      },
+      "kv_cache_tensor_dtype": "DataType.BFLOAT8_B",
+      "lm_head_output": "DataType.BFLOAT16",
+      "lm_head_weight": "DataType.BFLOAT8_B",
+      "math_fidelity": "li_ff1_3: lofi, li_ff2: lofi, li_qkv_decode: lofi, li_o_decode: lofi, sdpa_decode: hifi2, li_qkv_prefill: hifi2, li_o_prefill: hifi2, sdpa_prefill: hifi4, accuracy: hifi4fp32",
+      "norm_weights": "bfloat16",
+      "policy": "opt_mlp-bfp8_kv-bfp8",
+      "rope_tables": "bfloat16",
+      "weight_cache_dir": "/home/jashan/.cache/tt-metal-cache-mm3/minimax_music3_llm/attn-bfp8_mlp-bfp8_lmhead-bfp8"
+    },
+    "preset": "optimized",
+    "vocoder": "MiniMaxMusic3Vocoder"
+  },
+  "recorded_at": "2026-09-09 23:43:52",
+  "steps": 30,
+  "torch_threads": 12,
+  "trace_region": 200000000
+}

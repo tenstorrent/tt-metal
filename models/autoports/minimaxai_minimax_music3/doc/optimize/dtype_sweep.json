@@ -1,0 +1,191 @@
+[
+  {
+    "label": "sweep_mlp-bfp4_kv-bf16_dit-bf16",
+    "llm_policy": "opt_mlp-bfp4_kv-bf16",
+    "dit_dtype": "bf16",
+    "frame_hiddens_pcc": 0.9906219382842796,
+    "frame_hiddens_pcc_min": 0.9140702378778974,
+    "latent_pcc": [
+      0.9935091875762142,
+      0.995669755752208
+    ],
+    "log_mel_rms_db": 1.1815029382705688,
+    "wav_pcc": 0.9927142804260933,
+    "ar_frames_per_s_teacher_forced": 22.763141354157288,
+    "dit_chunk0_s": 2.9817063090158626,
+    "total_s": 28.650588987977244,
+    "dram_allocated_gb": 16.23825152,
+    "passes": true,
+    "within_control": false,
+    "commit": "b8bac93ba28",
+    "recorded_at": "2026-09-09 23:57:54"
+  },
+  {
+    "label": "sweep_mlp-bfp4_kv-bf16_dit-bfp8",
+    "llm_policy": "opt_mlp-bfp4_kv-bf16",
+    "dit_dtype": "bfp8",
+    "frame_hiddens_pcc": 0.9906219382842796,
+    "frame_hiddens_pcc_min": 0.9140702378778974,
+    "latent_pcc": [
+      0.9937020627484855,
+      0.9952771909932996
+    ],
+    "log_mel_rms_db": 1.1826388835906982,
+    "wav_pcc": 0.9926578632283509,
+    "ar_frames_per_s_teacher_forced": 22.783125258609285,
+    "dit_chunk0_s": 2.9298142299521714,
+    "total_s": 28.25909796205815,
+    "dram_allocated_gb": 13.973360128,
+    "passes": true,
+    "within_control": false,
+    "commit": "b8bac93ba28",
+    "recorded_at": "2026-09-09 23:56:56"
+  },
+  {
+    "label": "sweep_mlp-bfp4_kv-bfp8_dit-bf16",
+    "llm_policy": "opt_mlp-bfp4_kv-bfp8",
+    "dit_dtype": "bf16",
+    "frame_hiddens_pcc": 0.9905038690911869,
+    "frame_hiddens_pcc_min": 0.9180009671442292,
+    "latent_pcc": [
+      0.993402523953763,
+      0.9860899677019489
+    ],
+    "log_mel_rms_db": 1.208701729774475,
+    "wav_pcc": 0.9909196877182411,
+    "ar_frames_per_s_teacher_forced": 22.763486794067997,
+    "dit_chunk0_s": 2.9846437820233405,
+    "total_s": 28.537187607958913,
+    "dram_allocated_gb": 14.68111616,
+    "passes": true,
+    "within_control": false,
+    "commit": "b8bac93ba28",
+    "recorded_at": "2026-09-09 23:53:18"
+  },
+  {
+    "label": "sweep_mlp-bfp4_kv-bfp8_dit-bfp8",
+    "llm_policy": "opt_mlp-bfp4_kv-bfp8",
+    "dit_dtype": "bfp8",
+    "frame_hiddens_pcc": 0.9905038690911869,
+    "frame_hiddens_pcc_min": 0.9180009671442292,
+    "latent_pcc": [
+      0.9924414525756202,
+      0.9855515552170413
+    ],
+    "log_mel_rms_db": 1.234274983406067,
+    "wav_pcc": 0.9902003252050832,
+    "ar_frames_per_s_teacher_forced": 22.761397680283743,
+    "dit_chunk0_s": 2.9301044220337644,
+    "total_s": 28.43951061309781,
+    "dram_allocated_gb": 12.416224768,
+    "passes": true,
+    "within_control": false,
+    "commit": "b8bac93ba28",
+    "recorded_at": "2026-09-09 23:47:18"
+  },
+  {
+    "label": "sweep_mlp-bfp8_kv-bf16_dit-bf16",
+    "llm_policy": "opt_mlp-bfp8_kv-bf16",
+    "dit_dtype": "bf16",
+    "frame_hiddens_pcc": 0.9991365379681566,
+    "frame_hiddens_pcc_min": 0.9843591152610386,
+    "latent_pcc": [
+      0.9992737721103276,
+      0.9989803432776361
+    ],
+    "log_mel_rms_db": 0.9736138582229614,
+    "wav_pcc": 0.9986883083184664,
+    "ar_frames_per_s_teacher_forced": 22.45238795156037,
+    "dit_chunk0_s": 2.941497128107585,
+    "total_s": 28.860545811941847,
+    "dram_allocated_gb": 18.956160512,
+    "passes": true,
+    "within_control": true,
+    "commit": "b8bac93ba28",
+    "recorded_at": "2026-09-09 23:46:14"
+  },
+  {
+    "label": "sweep_mlp-bfp8_kv-bf16_dit-bfp8",
+    "llm_policy": "opt_mlp-bfp8_kv-bf16",
+    "dit_dtype": "bfp8",
+    "frame_hiddens_pcc": 0.9991365379681566,
+    "frame_hiddens_pcc_min": 0.9843591152610386,
+    "latent_pcc": [
+      0.9992158790787642,
+      0.998891356812172
+    ],
+    "log_mel_rms_db": 0.9747286438941956,
+    "wav_pcc": 0.9986174444786047,
+    "ar_frames_per_s_teacher_forced": 22.471879685982888,
+    "dit_chunk0_s": 2.930994005058892,
+    "total_s": 28.469002841971815,
+    "dram_allocated_gb": 16.69126912,
+    "passes": true,
+    "within_control": true,
+    "commit": "b8bac93ba28",
+    "recorded_at": "2026-09-09 23:45:00"
+  },
+  {
+    "label": "sweep_mlp-bfp8_kv-bfp8_dit-bf16",
+    "llm_policy": "opt_mlp-bfp8_kv-bfp8",
+    "dit_dtype": "bf16",
+    "frame_hiddens_pcc": 0.999030413195188,
+    "frame_hiddens_pcc_min": 0.9789488035119572,
+    "latent_pcc": [
+      0.9988994224716269,
+      0.9988266458235429
+    ],
+    "log_mel_rms_db": 0.9912362098693848,
+    "wav_pcc": 0.9983696271618051,
+    "ar_frames_per_s_teacher_forced": 22.455706534601973,
+    "dit_chunk0_s": 2.9420331919100136,
+    "total_s": 28.56193677498959,
+    "dram_allocated_gb": 17.399025152,
+    "passes": true,
+    "within_control": true,
+    "commit": "b8bac93ba28",
+    "recorded_at": "2026-09-09 23:43:52"
+  },
+  {
+    "label": "sweep_mlp-bfp8_kv-bfp8_dit-bfp8",
+    "llm_policy": "opt_mlp-bfp8_kv-bfp8",
+    "dit_dtype": "bfp8",
+    "frame_hiddens_pcc": 0.999030413195188,
+    "frame_hiddens_pcc_min": 0.9789488035119572,
+    "latent_pcc": [
+      0.9988711195630249,
+      0.9987846638728702
+    ],
+    "log_mel_rms_db": 0.9816287755966187,
+    "wav_pcc": 0.9982667870864326,
+    "ar_frames_per_s_teacher_forced": 22.530926003797337,
+    "dit_chunk0_s": 2.910082819056697,
+    "total_s": 28.435359551920556,
+    "dram_allocated_gb": 15.13413376,
+    "passes": true,
+    "within_control": true,
+    "commit": "b8bac93ba28",
+    "recorded_at": "2026-09-09 23:43:05"
+  },
+  {
+    "label": "before",
+    "llm_policy": "functional",
+    "dit_dtype": "bf16",
+    "frame_hiddens_pcc": 0.9994114655019438,
+    "frame_hiddens_pcc_min": 0.9951154379775552,
+    "latent_pcc": [
+      0.99951192045154,
+      0.9992274665380922
+    ],
+    "log_mel_rms_db": 0.7535362839698792,
+    "wav_pcc": 0.9987459301698627,
+    "ar_frames_per_s_teacher_forced": 14.292869663754798,
+    "dit_chunk0_s": 3.502986476989463,
+    "total_s": 35.65957970696036,
+    "dram_allocated_gb": 21.741178368,
+    "passes": true,
+    "within_control": true,
+    "commit": "b8bac93ba28",
+    "recorded_at": "2026-09-09 23:06:11"
+  }
+]

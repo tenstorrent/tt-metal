@@ -31,6 +31,7 @@ before ``generate`` returns, so no buffer allocated after a capture is alive dur
 from __future__ import annotations
 
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
@@ -64,6 +65,31 @@ WARMUP_PROMPT = "Genre: ambient. A quiet pad."
 WARMUP_LYRICS = "[verse]\nla la la"
 
 DIT_DTYPES = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b}
+DEPTH_DTYPES = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b}
+VOCODER_MODES = ("host", "device")
+
+# Pipeline dtype-policy presets (stage 07). Each names the backbone policy (``tt/llm.py`` DTYPE_POLICIES), the depth
+# decoder / DiT transformer-weight dtypes and where the vocoder runs; ``load`` accepts per-component overrides for
+# the datatype sweep (``doc/optimize/README.md``).
+POLICY_PRESETS = {
+    # Stage 02-06: bf16 attention + KV cache, bfp8 MLP, bf16 depth decoder and DiT, host fp32 vocoder.
+    "functional": {
+        "llm_policy": "functional",
+        "depth_dtype": "bf16",
+        "dit_dtype": "bf16",
+        "dit_fidelity": "hifi2",
+        "vocoder": "host",
+    },
+    # Stage 07 default: bfp8 backbone weights (attention, MLP, LM head) + bfp8 KV cache, bfp8 depth-decoder and DiT
+    # transformer weights (bf16 activations, norms, embeddings), traced DiT step, on-device CFG + top-k.
+    "optimized": {
+        "llm_policy": "optimized",
+        "depth_dtype": "bfp8",
+        "dit_dtype": "bfp8",
+        "dit_fidelity": "hifi2_fp16",
+        "vocoder": "host",
+    },
+}
 
 
 def dram_usage_bytes(mesh_device) -> Dict[str, int]:
@@ -98,6 +124,7 @@ class MiniMaxMusic3Pipeline:
         weights_dir: Path,
         dtype_policy: str,
         load_log: Optional[dict] = None,
+        denoiser: Optional[ChunkDenoiser] = None,
     ):
         self.mesh_device = mesh_device
         self.llm = llm
@@ -108,11 +135,13 @@ class MiniMaxMusic3Pipeline:
         self.vocoder = vocoder
         self.weights_dir = Path(weights_dir)
         self.dtype_policy = dtype_policy
-        self.denoiser = ChunkDenoiser(transformer, condition_encoder)
+        self.denoiser = denoiser if denoiser is not None else ChunkDenoiser(transformer, condition_encoder)
         self.sampling_rate = int(vocoder.sampling_rate)
         self.latent_hop_length = int(vocoder.hop_length)
         self.frame_rate = FRAME_RATE
         self.load_log = load_log or {}
+        # Stage 07: overlap the host vocoder of window k with the denoising of window k + 1 (host vocoder only).
+        self.overlap_vocoder = not hasattr(vocoder, "mesh_device")
 
     # ------------------------------------------------------------------ construction
     @classmethod
@@ -121,50 +150,91 @@ class MiniMaxMusic3Pipeline:
         mesh_device,
         weights_dir: Optional[str] = None,
         *,
-        dtype_policy: str = "functional",
-        dit_dtype: str = "bf16",
+        dtype_policy: str = "optimized",
+        llm_policy: Optional[str] = None,
+        depth_dtype: Optional[str] = None,
+        dit_dtype: Optional[str] = None,
+        dit_fidelity: Optional[str] = None,
+        vocoder: Optional[str] = None,
         warm: bool = True,
         vocoder_threads: Optional[int] = None,
+        dit_trace: bool = True,
     ) -> "MiniMaxMusic3Pipeline":
         """Load every component onto ``mesh_device`` (1x1 mesh) and warm the traces.
 
         Args:
             weights_dir: the HF snapshot directory (default ``$MM3_WEIGHTS``).
-            dtype_policy: the backbone's ``MusicLLM`` policy (``"functional"``: bf16 attention / KV, bfp8 MLP).
-            dit_dtype: ``"bf16"`` (default) or ``"bfp8"`` for the DiT weights (the fallback if DRAM is short).
-            warm: run a 1-frame song and one full-length DiT step so the AR traces exist and the DiT
-                programs are compiled before the first real request.
+            dtype_policy: preset name (``POLICY_PRESETS``: ``"optimized"`` default, ``"functional"`` = stages 02-06).
+            llm_policy / depth_dtype / dit_dtype / vocoder: per-component overrides of the preset (``tt/llm.py``
+                ``DTYPE_POLICIES`` name; ``"bf16"`` / ``"bfp8"`` transformer-weight dtype; ``"host"`` / ``"device"``).
+            warm: run a 1-frame song and one full-length DiT step so the AR traces exist and the DiT programs (and
+                the 200-frame-window DiT trace) are ready before the first real request.
             vocoder_threads: torch intra-op threads for the host vocoder (default: leave torch's setting).
+            dit_trace: capture / replay the DiT Euler step as a trace per window shape (``False`` = eager, stage 05 path).
         """
         from models.autoports.minimaxai_minimax_music3.reference.hf_llm import weights_dir as default_weights_dir
 
         weights_dir = Path(weights_dir) if weights_dir is not None else default_weights_dir()
-        if dit_dtype not in DIT_DTYPES:
-            raise ValueError(f"dit_dtype must be one of {sorted(DIT_DTYPES)}, got {dit_dtype!r}")
+        if dtype_policy not in POLICY_PRESETS:
+            raise ValueError(f"dtype_policy must be one of {sorted(POLICY_PRESETS)}, got {dtype_policy!r}")
+        preset = dict(POLICY_PRESETS[dtype_policy])
+        for key, value in (
+            ("llm_policy", llm_policy),
+            ("depth_dtype", depth_dtype),
+            ("dit_dtype", dit_dtype),
+            ("dit_fidelity", dit_fidelity),
+            ("vocoder", vocoder),
+        ):
+            if value is not None:
+                preset[key] = value
+        if preset["dit_dtype"] not in DIT_DTYPES:
+            raise ValueError(f"dit_dtype must be one of {sorted(DIT_DTYPES)}, got {preset['dit_dtype']!r}")
+        if preset["depth_dtype"] not in DEPTH_DTYPES:
+            raise ValueError(f"depth_dtype must be one of {sorted(DEPTH_DTYPES)}, got {preset['depth_dtype']!r}")
+        if preset["vocoder"] not in VOCODER_MODES:
+            raise ValueError(f"vocoder must be one of {VOCODER_MODES}, got {preset['vocoder']!r}")
         if vocoder_threads:
             torch.set_num_threads(int(vocoder_threads))
-        log: Dict[str, object] = {"weights_dir": str(weights_dir), "dtype_policy": dtype_policy, "dit_dtype": dit_dtype}
+        log: Dict[str, object] = {
+            "weights_dir": str(weights_dir),
+            "dtype_policy": dtype_policy,
+            **preset,
+            "dit_trace": dit_trace,
+        }
         t_all = time.perf_counter()
 
         # 1. weights on device, largest first; every persistent buffer exists before any trace is captured.
         t0 = time.perf_counter()
-        llm = MusicLLM(mesh_device, dtype_policy=dtype_policy, hf_model_dir=str(weights_dir / "language_model"))
+        llm = MusicLLM(mesh_device, dtype_policy=preset["llm_policy"], hf_model_dir=str(weights_dir / "language_model"))
         log["llm_load_s"] = time.perf_counter() - t0
         log["dram_after_llm"] = dram_usage_bytes(mesh_device)
         t0 = time.perf_counter()
-        depth = DepthDecoder.from_pretrained(mesh_device, weights_dir)
+        depth = DepthDecoder.from_pretrained(mesh_device, weights_dir, weight_dtype=DEPTH_DTYPES[preset["depth_dtype"]])
         log["depth_load_s"] = time.perf_counter() - t0
         log["dram_after_depth"] = dram_usage_bytes(mesh_device)
         t0 = time.perf_counter()
-        transformer = FlowTransformer.from_pretrained(mesh_device, weights_dir, dtype=DIT_DTYPES[dit_dtype])
+        transformer = FlowTransformer.from_pretrained(
+            mesh_device, weights_dir, weight_dtype=DIT_DTYPES[preset["dit_dtype"]], fidelity=preset["dit_fidelity"]
+        )
         condition_encoder = ConditionEncoder.from_pretrained(mesh_device, weights_dir)
         log["dit_load_s"] = time.perf_counter() - t0
         log["dram_after_dit"] = dram_usage_bytes(mesh_device)
         t0 = time.perf_counter()
-        vocoder = V.load_vocoder(weights_dir, dtype=torch.float32)
+        if preset["vocoder"] == "device":
+            from models.autoports.minimaxai_minimax_music3.tt.vocoder import TTVocoder
+
+            vocoder_model = TTVocoder.from_pretrained(mesh_device, weights_dir)
+            log["dram_after_vocoder"] = dram_usage_bytes(mesh_device)
+        else:
+            vocoder_model = V.load_vocoder(weights_dir, dtype=torch.float32)
         log["vocoder_load_s"] = time.perf_counter() - t0
 
-        # 2. AR generator: decode inputs + depth traces (the backbone trace is captured on the first decode).
+        # 2. Persistent DiT trace buffers of the 200-frame window (allocated before any trace is captured), then the
+        #    AR generator: decode inputs + depth traces (the backbone trace is captured on the first decode).
+        denoiser = ChunkDenoiser(transformer, condition_encoder)
+        denoiser.use_trace = dit_trace
+        if dit_trace:
+            denoiser.prepare_persistent_shapes()
         t0 = time.perf_counter()
         ar = ARGenerator(llm, depth, tokenizer_dir=str(weights_dir / "tokenizer"))
         log["ar_init_s"] = time.perf_counter() - t0
@@ -175,17 +245,32 @@ class MiniMaxMusic3Pipeline:
             ar=ar,
             transformer=transformer,
             condition_encoder=condition_encoder,
-            vocoder=vocoder,
+            vocoder=vocoder_model,
             weights_dir=weights_dir,
             dtype_policy=dtype_policy,
             load_log=log,
+            denoiser=denoiser,
         )
+        pipe.preset = preset
         if warm:
             pipe.warm()
         log["dram_resident"] = dram_usage_bytes(mesh_device)
         log["load_total_s"] = time.perf_counter() - t_all
         logger.info(f"MiniMaxMusic3Pipeline ready in {log['load_total_s']:.0f}s; DRAM {log['dram_resident']}")
         return pipe
+
+    def policy_report(self) -> dict:
+        """The dtypes actually configured on every component (work log / context contract evidence)."""
+        return {
+            "preset": self.dtype_policy,
+            "components": dict(getattr(self, "preset", {})),
+            "llm": self.llm.dtype_report(),
+            "depth_weight_dtype": str(self.depth.weight_dtype),
+            "dit_weight_dtype": str(self.transformer.weight_dtype),
+            "dit_fidelity": self.transformer.fidelity,
+            "dit_trace": self.denoiser.use_trace,
+            "vocoder": type(self.vocoder).__name__,
+        }
 
     def warm(self) -> None:
         """Capture the backbone trace (1-frame song) and compile the DiT at the full 200-frame window."""
@@ -199,7 +284,7 @@ class MiniMaxMusic3Pipeline:
         try:
             self.denoiser.denoise_chunk(fake_hiddens, None, None, noise, 1)
         finally:
-            self.transformer.clear_caches()
+            self.denoiser.end_of_song()
         self.load_log["warm_dit_s"] = time.perf_counter() - t0
 
     # ------------------------------------------------------------------ generation
@@ -298,7 +383,14 @@ class MiniMaxMusic3Pipeline:
             assert len(noises) == len(starts), (len(noises), len(starts))
         results: List[ChunkResult] = []
         dit_times: List[float] = []
+        voc_futures: List[Future] = []
         prev_lat = prev_cond = None
+        # Stage 07: the host vocoder of window k runs in a worker thread while the device denoises window k + 1
+        # (torch releases the GIL inside its kernels; the DiT loop's host side is trace replays and small axpys).
+        # Both stay in program order, the device is never touched from the worker, and the vocoder itself is
+        # unchanged, so the audio is bit-identical to the sequential path (test_same_seed_determinism).
+        executor = ThreadPoolExecutor(max_workers=1) if self.overlap_vocoder else None
+        t_dit_phase = time.perf_counter()
         try:
             for k, start in enumerate(starts):
                 end = min(start + CHUNK_FRAMES, frames)
@@ -316,8 +408,10 @@ class MiniMaxMusic3Pipeline:
                 dit_times.append(time.perf_counter() - t0)
                 prev_lat, prev_cond = r.previous_latent, r.previous_condition
                 results.append(r)
+                if executor is not None:
+                    voc_futures.append(executor.submit(self._vocode_timed, r.latents.float()))
         finally:
-            self.transformer.clear_caches()
+            self.denoiser.end_of_song()
         timings["dit_per_chunk"] = dit_times
         timings["dit"] = float(sum(dit_times))
         timings["dit_per_step_ms"] = [1e3 * t / steps for t in dit_times]
@@ -325,13 +419,22 @@ class MiniMaxMusic3Pipeline:
         # ---- 4. vocoder + crop + stitch
         waveforms: List[torch.Tensor] = []
         voc_times: List[float] = []
-        for r in results:
-            t0 = time.perf_counter()
-            waveforms.append(self.vocoder(r.latents.float()))
-            voc_times.append(time.perf_counter() - t0)
+        if executor is not None:
+            for fut in voc_futures:
+                wav, dt = fut.result()
+                waveforms.append(wav)
+                voc_times.append(dt)
+            executor.shutdown(wait=True)
+        else:
+            for r in results:
+                wav, dt = self._vocode_timed(r.latents.float())
+                waveforms.append(wav)
+                voc_times.append(dt)
+        timings["dit_and_vocoder_phase"] = time.perf_counter() - t_dit_phase
         audio = V.stitch_waveforms(waveforms, self.latent_hop_length)  # [1, 2, S]
         timings["vocoder_per_chunk"] = voc_times
         timings["vocoder"] = float(sum(voc_times))
+        timings["vocoder_overlapped"] = executor is not None
         timings["total"] = time.perf_counter() - t_all
         timings["ar_detail"] = {k: v for k, v in ar_out["timings"].items() if k != "per_frame"}
 
@@ -363,9 +466,18 @@ class MiniMaxMusic3Pipeline:
         )
         return out
 
+    def _vocode_timed(self, latents: torch.Tensor):
+        t0 = time.perf_counter()
+        with torch.no_grad():
+            wav = self.vocoder(latents)
+        return wav, time.perf_counter() - t0
+
     # ------------------------------------------------------------------ housekeeping
     def release(self) -> None:
         self.ar.release()
+        self.denoiser.release()
         self.transformer.release()
+        if hasattr(self.vocoder, "release"):
+            self.vocoder.release()
         self.condition_encoder.release()
         self.llm.release()
