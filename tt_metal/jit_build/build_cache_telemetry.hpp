@@ -49,6 +49,8 @@ public:
 private:
     friend class BuildCacheTelemetry;
     void set_recording_enabled(bool enabled);
+    // Replace a cumulative window's snapshot instead of appending overlapping samples.
+    void set_single_sample(double value);
 
     std::string name_;
     std::string unit_{"ms"};
@@ -95,9 +97,10 @@ public:
     uint32_t get_jit_once_dedup_count() const;
 
     // Extend the process-wide JIT build window with [start, end]. The window is the wall-clock
-    // span from the earliest build entry to the latest build exit, recorded as a single sample
-    // into the "jit_build_window" metric by dump_metrics(). It is the parallelism-aware companion
-    // to the per-call build metrics: summing those over-counts when builds run on the thread pool,
+    // span from the earliest build entry to the latest build exit. dump_metrics() replaces the
+    // single sample in "jit_build_window", so repeated dumps do not accumulate overlapping spans.
+    // It is the parallelism-aware companion to the per-call build metrics: summing those
+    // over-counts when builds run on the thread pool,
     // whereas the window is what a wall clock next to the process would show. A workload that
     // compiles lazily in bursts folds the idle gaps between bursts into the span.
     void note_build_window(std::chrono::steady_clock::time_point start, std::chrono::steady_clock::time_point end);
@@ -144,8 +147,7 @@ private:
 // The delta is recorded even when the scope is left by an exception.
 class ScopedTelemetryTimer {
 public:
-    explicit ScopedTelemetryTimer(TelemetryToken& token) :
-        token_(token), start_(std::chrono::steady_clock::now()) {}
+    explicit ScopedTelemetryTimer(TelemetryToken& token) : token_(token), start_(std::chrono::steady_clock::now()) {}
 
     ~ScopedTelemetryTimer() {
         token_.record(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start_).count());

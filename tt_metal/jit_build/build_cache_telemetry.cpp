@@ -45,6 +45,14 @@ TelemetryTokenData TelemetryToken::snapshot() const {
     return data_;
 }
 
+void TelemetryToken::set_single_sample(double value) {
+    if (!recording_enabled_.load(std::memory_order_relaxed)) {
+        return;
+    }
+    std::lock_guard lk(data_mutex_);
+    data_ = {.count = 1, .total = value, .min_val = value, .max_val = value};
+}
+
 // --- BuildCacheTelemetry ---
 
 struct BuildCacheTelemetryImpl {
@@ -304,16 +312,16 @@ void BuildCacheTelemetry::dump_metrics() const {
 
     log_compile_summary();
 
-    // Collapse the window endpoints into the one sample the metric carries. Done here rather than
-    // per build so the value is the whole span, not a running maximum, and so the token is
-    // populated before the loop below reads it.
+    // Serialize dumps before reading the endpoints so an older snapshot cannot overwrite a
+    // newer one. Replace the single window sample: appending it would count the same build
+    // activity again on each explicit dump and once more at process exit.
+    std::lock_guard lk(impl_->token_registry_mutex);
     const int64_t first_ns = impl_->build_window_first_ns.load(std::memory_order_relaxed);
     const int64_t last_ns = impl_->build_window_last_ns.load(std::memory_order_relaxed);
     if (build_window_token_ != nullptr && last_ns >= first_ns) {
-        build_window_token_->record(static_cast<double>(last_ns - first_ns) / 1e6);
+        build_window_token_->set_single_sample(static_cast<double>(last_ns - first_ns) / 1e6);
     }
 
-    std::lock_guard lk(impl_->token_registry_mutex);
     log_info(tt::LogBuildKernels, "JIT telemetry: {} registered TelemetryTokens", impl_->registered_tokens.size());
 
     // One info line per token, and the per-target metrics register dozens of them, so every
