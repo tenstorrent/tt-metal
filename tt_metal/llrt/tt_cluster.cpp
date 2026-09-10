@@ -870,7 +870,7 @@ bool Cluster::supports_dma_operations(ChipId chip_id, uint32_t sz_in_bytes) cons
 void Cluster::write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const {
     const ChipId chip_id = core.chip;
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
-    if (rtoptions_.get_watcher_enabled()) {
+    if (rtoptions_.get_watcher_enabled() && !rtoptions_.watcher_noc_sanitize_disabled()) {
         TT_FATAL(this->hal_ != nullptr, "HAL must be set before host NOC sanitization");
         tt::watcher_sanitize_host_noc_write(
             *this->hal_,
@@ -902,7 +902,7 @@ void Cluster::read_core(void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core,
     const ChipId chip_id = core.chip;
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
 
-    if (rtoptions_.get_watcher_enabled()) {
+    if (rtoptions_.get_watcher_enabled() && !rtoptions_.watcher_noc_sanitize_disabled()) {
         TT_FATAL(this->hal_ != nullptr, "HAL must be set before host NOC sanitization");
         tt::watcher_sanitize_host_noc_read(
             *this->hal_,
