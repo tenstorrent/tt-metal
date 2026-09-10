@@ -14,9 +14,13 @@ from helpers.llk_params import (
     StochasticRounding,
 )
 from helpers.matmul_sweep import (
+    DEST_HALF_BFP_PACK_HANG_REASON,
+    DEST_RT_CT_BLOCKS,
     MatmulConfig,
     generate_face_layout_config_sweep,
     generate_tile_dims,
+    is_dest_half_bfp_pack_hang,
+    mid_fill_rt_ct_pairs,
     skip_matmul_combination,
     sweep_tiny_tiles_matmul,
 )
@@ -71,35 +75,6 @@ def _dest_capacity(dest_sync, dest_acc) -> int:
     )
 
 
-# Dest occupancy (rt, ct) through dest Half 16-bit (8 tiles): 1×N, 2×N, 4×1 / 4×2.
-# Filtered by dest capacity. Dest-fill vectors/square and mid-fill stay separate.
-DEST_RT_CT_BLOCKS = (
-    (1, 1),
-    (1, 2),
-    (1, 3),
-    (1, 4),
-    (1, 5),
-    (1, 6),
-    (1, 7),
-    (1, 8),
-    (2, 1),
-    (2, 2),
-    (2, 3),
-    (2, 4),
-    (4, 1),
-    (4, 2),
-)
-
-
-def _mid_fill_rt_ct_pairs(max_tiles):
-    """Half-dest occupancy: 2×2, 1×(cap/2), (cap/2)×1 when they fit."""
-    half = max_tiles // 2
-    pairs = ((2, 2), (1, half), (half, 1))
-    return [
-        (rt, ct) for rt, ct in pairs if rt >= 1 and ct >= 1 and rt * ct <= max_tiles
-    ]
-
-
 def _dest_fill_rt_ct_pairs(max_tiles):
     """Power-of-two dest-fill (rt, ct) pairs, dest occupancy blocks, and mid-fill when they fit dest."""
     pairs = []
@@ -109,7 +84,7 @@ def _dest_fill_rt_ct_pairs(max_tiles):
             pairs.append((rt_dim, max_tiles // rt_dim))
         rt_dim *= 2
     pairs.extend((rt, ct) for rt, ct in DEST_RT_CT_BLOCKS if rt * ct <= max_tiles)
-    pairs.extend(_mid_fill_rt_ct_pairs(max_tiles))
+    pairs.extend(mid_fill_rt_ct_pairs(max_tiles))
     return list(dict.fromkeys(pairs))
 
 
@@ -140,6 +115,9 @@ def generate_perf_matmul_combinations():
         for dest_acc in DEST_ACC_MODES:
             if is_dest_acc_needed(fmt) and dest_acc == DestAccumulation.No:
                 continue
+            # Don't add invalid variants. If these variants are added LLK_ASSERTs are hit in math_matmul and unpack_matmul tests.
+            # In test_config.py, when compiling the test itself, dest_acc is changed to DestAccumulation.Yes, which causes the assert to be hit.
+            # Furthermore, this combo is not valid because Float16_b has 8-bit exponent and Float16 has 5-bit exponent which, when doing calculations with these formats it needs to be expanded to Float32, which requires dest_acc to be true
             if (
                 dest_acc == DestAccumulation.No
                 and fmt.input_format == DataFormat.Float16_b
@@ -250,6 +228,11 @@ def test_perf_math_matmul(
 
     if is_dest_acc_needed(formats) and matmul_config.dest_acc == DestAccumulation.No:
         pytest.skip("Dest accumulation must be enabled for this format")
+
+    if is_dest_half_bfp_pack_hang(
+        matmul_config.dest_sync, matmul_config.dest_acc, formats
+    ):
+        pytest.skip(DEST_HALF_BFP_PACK_HANG_REASON)
 
     run_types = [
         PerfRunType.L1_TO_L1,

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List
+from typing import Callable, List, Union
 
 import pytest
 from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
@@ -13,7 +13,15 @@ from helpers.llk_params import (
     PerfRunType,
     Transpose,
 )
-from helpers.matmul_sweep import generate_tile_dims
+from helpers.matmul_sweep import (
+    DEST_HALF_BFP_PACK_HANG_REASON,
+    DEST_RT_CT_BLOCKS,
+    PERF_RING_TILES,
+    generate_tile_dims,
+    is_dest_half_bfp_pack_hang,
+    mid_fill_rt_ct_pairs,
+    unpack_matmul_fits_perf_ring,
+)
 from helpers.param_config import (
     DEST_SYNC_TILE_LIMITS,
     input_output_formats,
@@ -37,41 +45,12 @@ KT_DIMS = [1, 4, 32]
 DEST_SYNC_MODES = [DestSync.Half, DestSync.Full]
 
 
-# Dest occupancy (rt, ct) through dest Half 16-bit (8 tiles): 1×N, 2×N, 4×1 / 4×2.
-# Filtered by dest capacity. Dest-fill vectors/square and mid-fill stay separate.
-DEST_RT_CT_BLOCKS = (
-    (1, 1),
-    (1, 2),
-    (1, 3),
-    (1, 4),
-    (1, 5),
-    (1, 6),
-    (1, 7),
-    (1, 8),
-    (2, 1),
-    (2, 2),
-    (2, 3),
-    (2, 4),
-    (4, 1),
-    (4, 2),
-)
-
-
-def _mid_fill_rt_ct_pairs(max_tiles: int) -> List[tuple]:
-    """Half-dest occupancy: 2×2, 1×(cap/2), (cap/2)×1 when they fit."""
-    half = max_tiles // 2
-    pairs = ((2, 2), (1, half), (half, 1))
-    return [
-        (rt, ct) for rt, ct in pairs if rt >= 1 and ct >= 1 and rt * ct <= max_tiles
-    ]
-
-
 def dest_corner_mn(max_tiles: int) -> List[tuple]:
     """1×1, dest-fill vectors/square, dest occupancy blocks, and half-dest mid-fill when they fit."""
     square = int(max_tiles**0.5)
     corners = [(1, 1), (1, max_tiles), (max_tiles, 1), (square, square)]
     corners.extend((rt, ct) for rt, ct in DEST_RT_CT_BLOCKS if rt * ct <= max_tiles)
-    corners.extend(_mid_fill_rt_ct_pairs(max_tiles))
+    corners.extend(mid_fill_rt_ct_pairs(max_tiles))
     return list(dict.fromkeys(corners))
 
 
@@ -83,12 +62,15 @@ def generate_dest_corner_combinations(max_tiles: int, kt_dims=KT_DIMS) -> List[t
         )
         for mt_dim, nt_dim in dest_corner_mn(max_tiles)
         for kt_dim in kt_dims
+        if unpack_matmul_fits_perf_ring(mt_dim, nt_dim, kt_dim)
     ]
 
 
 def matmul_combos(
     formats: List[FormatConfig],
-    dest_acc,
+    dest_acc: Union[
+        List[DestAccumulation], Callable[[FormatConfig], List[DestAccumulation]]
+    ],
 ):
     def _acc_modes(fmt: FormatConfig) -> List[DestAccumulation]:
         return dest_acc(fmt) if callable(dest_acc) else dest_acc
@@ -153,20 +135,8 @@ def test_perf_matmul(
 
     formats, dest_acc, dest_sync, (matrix_a, matrix_b) = combos
 
-    # BFP pack from 16-bit dest still holds dest on THCON after PACK looks idle.
-    # Dest Half + LOOP_FACTOR(64) ping-pongs: ZEROACC CLR_HALF then races math
-    # writing the other half. Dest Full serializes math off dest during the
-    # clear; dest_acc=Yes uses a different packer dest-read path. Functional
-    # test_matmul uses these same combos at LOOP_FACTOR(1), so math never starts
-    # the second half and the stall does not deadlock. Unskip after #56073.
-    if (
-        dest_sync == DestSync.Half
-        and dest_acc == DestAccumulation.No
-        and formats.output_format.is_block_float()
-    ):
-        pytest.skip(
-            "Dest Half + dest_acc=No + BFP pack hangs in _llk_pack_dest_section_done_ (#56073)"
-        )
+    if is_dest_half_bfp_pack_hang(dest_sync, dest_acc, formats):
+        pytest.skip(DEST_HALF_BFP_PACK_HANG_REASON)
 
     run_types = [
         PerfRunType.L1_TO_L1,
@@ -180,9 +150,9 @@ def test_perf_matmul(
     dims = generate_tile_dims((matrix_a, matrix_b))
 
     variant_tile_count = dims.rt_dim * dims.ct_dim * dims.kt_dim
-    # PERF_ADDRESS rings are 16 tiles (tests/helpers/include/perf.h). Cap L1
-    # stimuli so K=32 dest-fill Float32 does not overflow Tensix L1.
-    PERF_RING_TILES = 16
+    # PERF_ADDRESS rings are PERF_RING_TILES (tests/helpers/include/perf.h).
+    # Cap L1 stimuli so K=32 dest-fill Float32 does not overflow Tensix L1.
+    # Unpack MOP occupancy is filtered in generate_dest_corner_combinations.
     stimuli_tiles = min(variant_tile_count, PERF_RING_TILES)
 
     configuration = PerfConfig(

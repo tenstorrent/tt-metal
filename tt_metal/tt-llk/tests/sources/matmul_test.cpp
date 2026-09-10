@@ -81,16 +81,28 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t j = 0; j < KT_DIM; j++)
                 {
-                    // Golden (LOOP_FACTOR==1) reads unique stimuli tiles. Perf reuses the
-                    // 16-tile PERF_ADDRESS ring: unpack adds tile_index * tile_size to the
-                    // base, so pass the ring base and zero indices. PERF_ADDRESS(..., j)
-                    // plus index j * CT_DIM walks off L1 when CT*KT exceeds 16 (Full dest
-                    // 1x16, K=32, Float32).
+                    // Golden (LOOP_FACTOR==1) reads unique stimuli tiles. Perf
+                    // (LOOP_FACTOR>1) programs the PERF_ADDRESS ring base with tile
+                    // index 0. That only removes the caller-side offset;
+                    // _llk_unpack_AB_matmul_ still MOP-strides the THCON base (A by
+                    // kt per extra output row, B by 1 per extra output column). The
+                    // sweep keeps that walk inside PERF_RING_TILES.
                     const bool perf_ring       = LOOP_FACTOR > 1;
                     const std::uint32_t addr_a = perf_ring ? PERF_ADDRESS(PERF_INPUT_A, 0) : L1_ADDRESS(buffer_A[0]);
                     const std::uint32_t addr_b = perf_ring ? PERF_ADDRESS(PERF_INPUT_B, 0) : L1_ADDRESS(buffer_B[0]);
                     const std::uint32_t tile_a = perf_ring ? 0 : j;
                     const std::uint32_t tile_b = perf_ring ? 0 : j * CT_DIM;
+                    const std::uint32_t last_a = tile_a + (RT_DIM - 1) * KT_DIM;
+                    const std::uint32_t last_b = tile_b + CT_DIM - 1;
+                    if (perf_ring)
+                    {
+                        LLK_ASSERT(last_a < PERF_RING_TILES && last_b < PERF_RING_TILES, "unpack MOP walk exceeds the 16-tile PERF_ADDRESS ring");
+                    }
+                    else
+                    {
+                        LLK_ASSERT(ckernel::is_valid_L1_address(L1_ADDRESS(buffer_A[last_a])), "unpack A real-buffer top address is outside L1");
+                        LLK_ASSERT(ckernel::is_valid_L1_address(L1_ADDRESS(buffer_B[last_b])), "unpack B real-buffer top address is outside L1");
+                    }
                     _llk_unpack_AB_matmul_<>(
                         addr_a,
                         addr_b,
@@ -124,10 +136,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
-    const std::uint32_t CT_DIM      = params.CT_DIM;
-    const std::uint32_t RT_DIM      = params.RT_DIM;
-    const std::uint32_t KT_DIM      = params.KT_DIM;
+    const std::uint32_t LOOP_FACTOR   = params.LOOP_FACTOR;
+    const std::uint32_t CT_DIM        = params.CT_DIM;
+    const std::uint32_t RT_DIM        = params.RT_DIM;
+    const std::uint32_t KT_DIM        = params.KT_DIM;
+    const bool UNPACK_TRANSPOSE_FACES = params.UNPACK_TRANSPOSE_FACES;
 #endif
 
     {
@@ -139,7 +152,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             /* tile B */ TILE_R_DIM,
             /* tile B */ TILE_C_DIM,
             /* partial face */ false,
-            /* transpose */ false,
+            UNPACK_TRANSPOSE_FACES,
             CT_DIM,
             RT_DIM);
         _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
@@ -250,6 +263,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     // Golden packs unique result tiles. Perf K=32 dest-fill Float32
                     // places buffer_Res past L1; use the PERF_ADDRESS ring like matmul_perf.
                     const std::uint32_t addr = LOOP_FACTOR > 1 ? PERF_ADDRESS(PERF_OUTPUT, i) : L1_ADDRESS(buffer_Res[i]);
+                    if (LOOP_FACTOR == 1)
+                    {
+                        LLK_ASSERT(ckernel::is_valid_L1_address(L1_ADDRESS(buffer_Res[i])), "pack result real-buffer address is outside L1");
+                    }
                     _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, addr);
                 }
                 _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();

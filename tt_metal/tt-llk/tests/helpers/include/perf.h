@@ -17,10 +17,11 @@
 // counters are compiled (the counter machinery in counters.h is gated by the same flag).
 
 // FIXME: this shouldn't be statically allocated
-constexpr std::uint32_t PERF_INPUT_A = 0x21000;
-constexpr std::uint32_t PERF_INPUT_B = PERF_INPUT_A + 16 * 4096;
-constexpr std::uint32_t PERF_INPUT_C = PERF_INPUT_B + 16 * 4096;
-constexpr std::uint32_t PERF_OUTPUT  = PERF_INPUT_C + 16 * 4096;
+constexpr std::uint32_t PERF_RING_TILES = 16; // Keep in sync with helpers/matmul_sweep.py
+constexpr std::uint32_t PERF_INPUT_A    = 0x21000;
+constexpr std::uint32_t PERF_INPUT_B    = PERF_INPUT_A + PERF_RING_TILES * 4096;
+constexpr std::uint32_t PERF_INPUT_C    = PERF_INPUT_B + PERF_RING_TILES * 4096;
+constexpr std::uint32_t PERF_OUTPUT     = PERF_INPUT_C + PERF_RING_TILES * 4096;
 
 #ifdef PERF_COUNTERS_COMPILED
 // Perf-counter shared config + per-zone data. Must stay below the profiler boundary at
@@ -33,8 +34,8 @@ constexpr std::uint32_t PERF_OUTPUT  = PERF_INPUT_C + 16 * 4096;
 
 constexpr std::uint32_t PERF_ADDRESS(std::uint32_t buffer, std::uint32_t tile)
 {
-    std::uint32_t address = buffer + (tile % 16) * 4096; // Loop every 16 tiles, to prevent escaping memory
-    return address / 16 - 1;                             // Correct the L1 Address for Tensix
+    std::uint32_t address = buffer + (tile % PERF_RING_TILES) * 4096; // Loop every 16 tiles, to prevent escaping memory
+    return address / 16 - 1;                                          // Correct the L1 Address for Tensix
 }
 
 enum class PerfRunType
