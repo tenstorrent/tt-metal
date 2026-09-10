@@ -101,7 +101,9 @@ class MiniMaxH3TokenRefinerBlock(Module):
         )
         self.use_fused_agmm = ccl_manager.topology == ttnn.Topology.Ring and self.tp_factor > 1
         # ff1 packs gate and up together for the fused SwiGLU, so its per-device N is 2 * ffn_dim / tp.
-        self.ff1_block_size = agmm_block_size(hidden_size, 2 * ffn_dim // self.tp_factor)
+        # Its block depends on per_core_M, hence on M -- the sequence length, known only at forward
+        # time -- so only (K, N) can be stashed here.
+        self._ff1_kn = (hidden_size, 2 * ffn_dim // self.tp_factor)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "ff.net.0.proj", "ff.ff1")
@@ -120,7 +122,7 @@ class MiniMaxH3TokenRefinerBlock(Module):
             normed,
             compute_kernel_config=self.mm_compute_kernel_config,
             parallel_config=self.parallel_config if self.use_fused_agmm else None,
-            default_block_size=self.ff1_block_size,
+            default_block_size=agmm_block_size(*self._ff1_kn, normed.padded_shape[-2]),
         )
         return ttnn.add(prompt_1BLP, ff_out)
 
