@@ -58,6 +58,12 @@ constexpr uint32_t kCfgReserve = 8 * 1024;
 constexpr uint32_t kMiscBytes = 1024;  // done(64) + stop(64), with headroom
 constexpr uint32_t kPageSize = kernel_profiler::SPSC_SPAN_PAGE_WORDS * 4;
 constexpr uint32_t kNRisc = kernel_profiler::PROFILER_SPSC_TENSIX_RISC;
+// Idle-eth clock pushers: one socket per idle-eth core. A 2-3 word PP_CLOCK sample every 3 us is well under 1 MB/s,
+// so 1 MiB of host FIFO (a single 2 MiB-aligned carve of the host channel) is generous; the relays' budget is
+// untouched.
+constexpr uint32_t kEthFifoBytes = 1u << 20;
+constexpr uint32_t kEthStrideUs = 3;
+constexpr uint32_t kEthCtrlBytes = 128;  // done(+0)/heartbeat(+4) at 0, stop at 64
 
 // Bring-up runs several MMIO paths and a hang in any of them reports only "MMIO per-op timeout"; this names
 // the stall site.
@@ -263,6 +269,31 @@ std::vector<CapturedDevice> Devices::boot(const std::shared_ptr<distributed::Mes
     l1_.cfg = drisc_l1_base_ + region - kCfgReserve;
     TT_FATAL(l1_.stop + kernel_profiler::kRelayCtrlWordStride <= l1_.cfg, "DRISC L1 layout overlaps the socket config");
 
+    // Idle-eth pushers: carved from the top of IDLE_ETH UNRESERVED down -- socket config, ctrl words, one frame slot
+    // (the same slot geometry as a relay, since the eth core is enumerated as a standard 5-lane core). Too small a
+    // region, or no such core type, disables the eth pushers only; the relays are unaffected.
+    eth_ok_ = false;
+    if (hal.has_programmable_core_type(HalProgrammableCoreType::IDLE_ETH)) {
+        eth_prof_l1_ = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::PROFILER);
+        const uint32_t ebase = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
+        const uint32_t esize = hal.get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
+        const uint32_t need = kCfgReserve + kEthCtrlBytes + slot_bytes_ + kPageSize;
+        if (esize >= need) {
+            eth_cfg_ = ebase + esize - kCfgReserve;
+            eth_ctrl_ = eth_cfg_ - kEthCtrlBytes;
+            eth_stage_ = (eth_ctrl_ - slot_bytes_) & ~(kPageSize - 1u);  // the pack pads assume a page-aligned slot
+            eth_ok_ = eth_stage_ >= ebase;
+        }
+        if (!eth_ok_) {
+            log_warning(
+                tt::LogMetal,
+                "[streaming profiler] idle-eth L1 too small for a clock pusher ({} B unreserved, {} needed); eth clock "
+                "tracking is OFF",
+                esize,
+                need);
+        }
+    }
+
     std::vector<CapturedDevice> out;
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
         if (!mesh_device->is_local(coord)) {
@@ -300,6 +331,9 @@ bool Devices::boot_device(
     DeviceCtx& ctx,
     const distributed::MeshCoordinate& coord) {
     enumerate_worker_grid(mesh_device, ctx);
+    if (eth_ok_) {
+        enumerate_eth_cores(mesh_device, ctx);
+    }
     if (!choose_relay_cores(mesh_device, ctx)) {
         return false;
     }
@@ -307,6 +341,15 @@ bool Devices::boot_device(
     for (uint32_t d = 0; d < ctx.n_relays; d++) {
         if (!launch_relay(mesh_device, ctx, coord, d)) {
             return false;
+        }
+    }
+    // Idle-eth pushers come up after the relays so their sockets follow the relay sockets (the receiver indexes
+    // sockets as a contiguous prefix in launch order). A pusher that fails is dropped and the capture continues.
+    for (uint32_t k = 0; k < ctx.eth.size();) {
+        if (launch_eth_pusher(mesh_device, ctx, coord, k)) {
+            k++;
+        } else {
+            ctx.eth.erase(ctx.eth.begin() + k);
         }
     }
     set_producers_armed(ctx, true);
@@ -650,12 +693,118 @@ bool Devices::launch_relay(
     return true;
 }
 
+void Devices::write_eth_ctrl_word(const DeviceCtx& ctx, const CoreCoord& virt, uint32_t index, uint32_t value) {
+    MetalContext::instance(context_id_)
+        .get_cluster()
+        .write_core(&value, sizeof(value), tt_cxy_pair(ctx.chip_id, virt), eth_prof_l1_ + index * sizeof(uint32_t));
+}
+
+// One idle ethernet core per chip joins the DECODE roster as a standard 5-lane core: its DM0 lane carries the PP_CLOCK
+// tracker, every other lane is always empty, and the decoder skips a lane whose extent is 0 exactly as it does an idle
+// TRISC. It never joins the relay roster (ctx.cores): the core pushes its own ring over its own socket. The lowest
+// (y, x) idle core, so the choice is stable run to run (the set is unordered).
+void Devices::enumerate_eth_cores(const std::shared_ptr<distributed::MeshDevice>& mesh_device, DeviceCtx& ctx) {
+    (void)mesh_device;
+    auto& cluster = MetalContext::instance(context_id_).get_cluster();
+    const uint32_t chip = ctx.chip_id;
+    const auto idle = ctx.device->get_inactive_ethernet_cores();
+    if (idle.empty()) {
+        log_warning(
+            tt::LogMetal, "[streaming profiler] Device {}: no idle ethernet core; eth clock tracking is OFF", chip);
+        return;
+    }
+    const CoreCoord logical = *std::min_element(idle.begin(), idle.end(), [](const CoreCoord& a, const CoreCoord& b) {
+        return a.y != b.y ? a.y < b.y : a.x < b.x;
+    });
+    EthPusher e;
+    e.logical = logical;
+    e.virt = cluster.get_virtual_coordinate_from_logical_coordinates(chip, logical, CoreType::ETH);
+    e.phys = cluster.get_physical_coordinate_from_logical_coordinates(chip, logical, CoreType::ETH, /*no_warn=*/true);
+    // Zero its control vector and boot it unarmed, exactly as the worker grid is.
+    const std::vector<uint8_t> zero_ctrl(kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE, 0);
+    cluster.write_core(
+        zero_ctrl.data(), static_cast<uint32_t>(zero_ctrl.size()), tt_cxy_pair(chip, e.virt), eth_prof_l1_);
+    CaptureContext::Device& cap = ctx.out.ctx;
+    cap.core_xy.push_back(packed_xy(e.virt));
+    for (uint32_t r = 0; r < kNRisc; r++) {
+        cap.lanes.push_back(experimental::streaming_profiler::Core{
+            .logical = logical,
+            .physical = e.phys,
+            .chip_id = chip,
+            .risc = static_cast<experimental::streaming_profiler::Risc>(r)});
+    }
+    ctx.eth.push_back(std::move(e));
+}
+
+bool Devices::launch_eth_pusher(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    DeviceCtx& ctx,
+    const distributed::MeshCoordinate& coord,
+    uint32_t k) {
+    auto& cluster = MetalContext::instance(context_id_).get_cluster();
+    const uint32_t chip = ctx.chip_id;
+    EthPusher& e = ctx.eth[k];
+    try {
+        // Same pattern as the relay socket: an external config buffer in the sender's own L1, the sender addressed
+        // by its physical NoC coordinate and core type (d2h_socket applies that type's L1 NoC offset).
+        auto socket = std::make_unique<distributed::D2HSocket>(
+            mesh_device,
+            distributed::MeshCoreCoord{coord, e.phys},
+            kEthFifoBytes,
+            distributed::D2HSocket::ExternalConfigBuffer{
+                .address = eth_cfg_, .sender_core_type = HalProgrammableCoreType::IDLE_ETH},
+            distributed::D2HSocket::ProcessScope::InProcess);
+        socket->set_page_size(kPageSize);
+
+        // A stale done, heartbeat or stop word from the previous run reads as this run's live state.
+        uint32_t zero_words[kEthCtrlBytes / sizeof(uint32_t)] = {};
+        cluster.write_core(zero_words, sizeof(zero_words), tt_cxy_pair(chip, e.virt), eth_ctrl_);
+
+        auto program = std::make_unique<Program>(CreateProgram());
+        const std::vector<uint32_t> ca = {kEthStrideUs * 50u, eth_cfg_, eth_stage_, eth_ctrl_, packed_xy(e.virt)};
+        CreateKernel(
+            *program,
+            "tt_metal/tools/profiler/sync/eth_clock_pusher.cpp",
+            e.logical,
+            EthernetConfig{
+                .eth_mode = Eth::IDLE,
+                .noc = NOC::RISCV_0_default,
+                .processor = DataMovementProcessor::RISCV_0,
+                .compile_args = ca});
+        // A binary that failed to compile must NEVER reach LaunchProgram: launching onto an idle eth core holding no
+        // valid binary once wedged the core and took the box down. CompileProgram throws into the catch below, and
+        // the pusher is dropped instead.
+        detail::CompileProgram(ctx.device, *program, /*force_slow_dispatch=*/true);
+        detail::LaunchProgram(ctx.device, *program, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
+        if (!relay_heartbeat_advanced(cluster, chip, e.virt, eth_ctrl_ + 4, 100 + k)) {
+            return false;
+        }
+        e.sock_idx = static_cast<uint32_t>(ctx.out.sockets.size());
+        ctx.out.sockets.push_back(std::move(socket));
+        e.program = std::move(program);
+    } catch (const std::exception& ex) {
+        log_warning(
+            tt::LogMetal,
+            "[streaming profiler] Device {}: idle-eth clock pusher on eth ({},{}) FAILED ({}); eth clock tracking is "
+            "OFF for this device, the capture continues without it",
+            chip,
+            e.logical.x,
+            e.logical.y,
+            ex.what());
+        return false;
+    }
+    return true;
+}
+
 // Producers boot unarmed (enumerate_worker_grid() clears PROFILER_ARMED on every Tensix core of the device) and
 // only block on a full ring once armed, so a core no relay drains can never wedge device close. Arming follows the
 // relays coming up; a relay that fails leaves the whole device unarmed and its markers are overwritten instead.
 void Devices::set_producers_armed(const DeviceCtx& ctx, bool armed) {
     for (const WorkerCore& c : ctx.cores) {
         write_ctrl_word(ctx, c.virt, kernel_profiler::PROFILER_ARMED, armed ? 1u : 0u);
+    }
+    for (const EthPusher& e : ctx.eth) {
+        write_eth_ctrl_word(ctx, e.virt, kernel_profiler::PROFILER_ARMED, armed ? 1u : 0u);
     }
 }
 
@@ -695,6 +844,39 @@ void Devices::quiesce(const RelayStateFn& on_state) {
                 // done follows the relay's socket barrier, so the host has already acked every byte this socket will
                 // carry.
                 on_state(di, d, RelayState::Done);
+            }
+        }
+        // Idle-eth pushers: the relay's stop word and done protocol, minus the NIU release (eth L1 never leaves the
+        // host's view). One that does not finish is a fault, like a relay that does not.
+        for (uint32_t k = 0; k < ctx.eth.size(); k++) {
+            const EthPusher& e = ctx.eth[k];
+            const tt_cxy_pair core(ctx.chip_id, e.virt);
+            const uint32_t stop_word = kernel_profiler::kRelayStopQuiesce;
+            cluster.write_core(&stop_word, sizeof(stop_word), core, eth_ctrl_ + 64);
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+            bool drained = false;
+            for (;;) {
+                uint32_t state = 0;
+                cluster.read_core(&state, sizeof(state), core, eth_ctrl_);
+                state &= kernel_profiler::kRelayDoneMask;
+                if (state == kernel_profiler::kRelayDoneWord) {
+                    break;
+                }
+                if (!drained && on_state && state == kernel_profiler::kRelayDrainedWord) {
+                    on_state(di, e.sock_idx, RelayState::Drained);
+                    drained = true;
+                }
+                TT_FATAL(
+                    std::chrono::steady_clock::now() < deadline,
+                    "streaming profiler: device {} idle-eth pusher {} did not finish within 10 s of its stop (state "
+                    "{:#x})",
+                    ctx.chip_id,
+                    k,
+                    state);
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            if (on_state) {
+                on_state(di, e.sock_idx, RelayState::Done);
             }
         }
         // Nothing drains the rings any more: a producer blocked on a full one is released and overwrites from here on.

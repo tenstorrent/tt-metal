@@ -79,6 +79,13 @@ private:
     struct WorkerCore {
         CoreCoord logical, physical, virt;
     };
+    // An idle-eth core that pushes its own profiler ring (and its linked active eth core) over its own socket.
+    // Out of the relay roster entirely; enumerated to the decoder as a standard 5-lane core with idle siblings.
+    struct EthPusher {
+        CoreCoord logical, virt, phys;
+        std::unique_ptr<Program> program;
+        uint32_t sock_idx = 0;  // index into out.sockets, after the relays
+    };
     struct DeviceCtx {
         uint32_t chip_id = 0;
         IDevice* device = nullptr;
@@ -86,6 +93,7 @@ private:
         std::vector<WorkerCore> cores;  // the compute grid, row-major, so a relay's band is a contiguous run
         Relay relays[kMaxRelays];
         uint32_t n_relays = 0;
+        std::vector<EthPusher> eth;  // idle-eth clock pushers, one socket each
 
         DeviceCtx();
         ~DeviceCtx();
@@ -113,6 +121,16 @@ private:
         DeviceCtx& ctx,
         const distributed::MeshCoordinate& coord,
         uint32_t d);
+    // Idle-eth cores as padded standard cores in the decode roster (never the relay roster); false = none.
+    void enumerate_eth_cores(const std::shared_ptr<distributed::MeshDevice>& mesh_device, DeviceCtx& ctx);
+    // Builds the eth core socket, launches the pusher and confirms its heartbeat. False: this pusher is dropped;
+    // the capture continues without it.
+    bool launch_eth_pusher(
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+        DeviceCtx& ctx,
+        const distributed::MeshCoordinate& coord,
+        uint32_t k);
+    void write_eth_ctrl_word(const DeviceCtx& ctx, const CoreCoord& virt, uint32_t index, uint32_t value);
     // PROFILER_ARMED on every core the relays drain: set once they are up (producers boot unarmed and never block on
     // a full ring until then), cleared once every relay is done so a producer blocked on a full ring is released.
     void set_producers_armed(const DeviceCtx& ctx, bool armed);
@@ -126,6 +144,11 @@ private:
     uint64_t drisc_l1_noc_ = 0;
     uint32_t slot_bytes_ = 0;  // staging slot; mirrors the relay kernel's kSlotWords
     RelayL1 l1_;
+    // Idle-eth pusher L1 (IDLE_ETH): the profiler base, and carved from the top of UNRESERVED: socket config,
+    // ctrl words (done/heartbeat, stop), one frame slot.
+    bool eth_ok_ = false;
+    uint64_t eth_prof_l1_ = 0;
+    uint32_t eth_cfg_ = 0, eth_ctrl_ = 0, eth_stage_ = 0;
     // GDDR spool: one replicated mesh buffer with one interleaved page per DRAM bank, so the same window is
     // reserved in every bank of every device. Bytes 0 = direct push.
     std::shared_ptr<distributed::MeshBuffer> spool_buffer_;

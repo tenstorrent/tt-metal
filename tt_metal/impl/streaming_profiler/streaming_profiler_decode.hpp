@@ -192,7 +192,7 @@ inline StreamDecoder::Produced StreamDecoder::decode_frame(const uint32_t* frame
     // The two point offsets share one register, data's in the high half: an array indexed by the packet kind would
     // live in memory and put every update on a store-to-load chain.
     uint64_t pt_off = 0;
-    uint64_t zm = 0, sz = 0, oreg = 0, rc = 0, fixes = 0;
+    uint64_t zm = 0, sz = 0, oreg = 0, rc = 0, fixes = 0, ck = 0;
     uint64_t lane_ts = 0;
     uint8_t* lane_rec = nullptr;
     bool lane_rec_zone = false;
@@ -352,6 +352,7 @@ inline StreamDecoder::Produced StreamDecoder::decode_frame(const uint32_t* frame
                                 low27 & PP_CLOCK_VALUE_MASK,
                                 lc.th_hi | src[1]});
                     }
+                    ck++;
                     got = 2;
                 }
             } else if ((kSpscPointTypes >> t) & 1u) {
@@ -478,6 +479,7 @@ inline StreamDecoder::Produced StreamDecoder::decode_frame(const uint32_t* frame
     stats.records += rc;
     stats.order_regressions += oreg;
     stats.epoch_fixes += fixes;
+    stats.clock_samples += ck;
     stall_zones += sz;
     return Produced{
         static_cast<uint32_t>(zoff / kSpscRecBytes),
