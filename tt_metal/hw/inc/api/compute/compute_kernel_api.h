@@ -915,6 +915,9 @@ ALWI void sfpu_reduce(uint32_t idst, uint32_t ct_dim = 1, uint32_t rt_dim = 1) {
         "Unsupported pool type. Supported pool types: SUM, AVG, MAX, MIN");
 
     // This kernel is optimized for 32x32 tiles and uses RC_custom vector mode for custom reduction
+#ifdef ARCH_QUASAR
+    // Quasar's calculate_reduce takes the Dest sync mode as its fifth template parameter, so the
+    // kernel sizes its Dest section to match the program. On WH/BH that slot is the output format.
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -924,6 +927,17 @@ ALWI void sfpu_reduce(uint32_t idst, uint32_t ct_dim = 1, uint32_t rt_dim = 1) {
         VectorMode::RC_custom,
         ct_dim,
         rt_dim));
+#else
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_reduce,
+        (pool_type, reduce_dim, format, is_fp32_dest_acc_en),
+        idst,
+        VectorMode::RC_custom,
+        ct_dim,
+        rt_dim));
+#endif
 }
 
 /**
