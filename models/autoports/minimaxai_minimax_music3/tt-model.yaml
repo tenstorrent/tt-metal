@@ -1,0 +1,124 @@
+# tt-model CONTAINER (v5.1) manifest for MiniMax-Music3 on one Tenstorrent Blackhole chip.
+# Build:   tt-model package --container models/autoports/minimaxai_minimax_music3/tt-model.yaml --out <dir>
+# Serve:   tt-model serve <dir>/minimax-music3/tt_kernel_manifest.json --profile p150 --follow
+# Publish: tt-model push <dir>/minimax-music3 --private
+#
+# The manifest records what was VALIDATED (stage 08 on this tree, one p300c chip), not what is current.
+schema: "5.1"
+
+repo: jashansinghTT/MiniMax-Music3-tt
+name: minimax-music3
+
+# A pointer, never baked in: downloaded into the consumer's HF cache. Pinned to the revision the
+# bring-up validated against; the raw MiniMax checkpoints the diffusers layout does not use (~20 GB)
+# are excluded.
+weights:
+  repo: MiniMaxAI/MiniMax-Music3
+  revision: fbdf52fbaaca799592917417eb05f1899f1255ec
+  ignore_patterns: ["flowmatching_vae.pth", "dav.pth", "qwen_7B/*", "assets/*", "figures/*"]
+
+# A hybrid AR + diffusion model behind its own FastAPI app (server/app.py): no vLLM, no KV-cache engine.
+kind: tt-dit-server
+arch: blackhole
+
+source:
+  # The git worktree the model was brought up in (branch jashan/minimax-music3); packaged as-is.
+  tt_metal: /home/jashan/tt-metal-mm3
+  # EXACTLY what ships as the image's `models` package. Computed from the runtime import closure of
+  # server.app + tt.pipeline + tt_transformers.tt.model (59 models.* modules, all inside these paths).
+  # The autoport dir itself is listed by subpath: generated/ (7.7 GB of wav/pt dumps), doc/ (15 MB of
+  # evidence), tests/ and scripts/ are bring-up artifacts and do not ship.
+  code:
+    - models/common
+    - models/tt_transformers
+    - models/tt_dit
+    - models/autoports/minimaxai_minimax_music3/__init__.py
+    - models/autoports/minimaxai_minimax_music3/tt
+    - models/autoports/minimaxai_minimax_music3/server
+    - models/autoports/minimaxai_minimax_music3/reference
+    - models/autoports/minimaxai_minimax_music3/tt-model.yaml
+  ubuntu: "22.04"
+  python: "3.12"
+
+runtime:
+  app: "models.autoports.minimaxai_minimax_music3.server.app:app"
+  # The app reads the launcher-resolved mesh SHAPE from this variable (v1 is single-chip and only logs it).
+  mesh_shape_env: MM3_MESH_SHAPE
+  # The HTTP stack plus the model's own host-side dependencies. The image has no torch/transformers by
+  # default; the launcher prepends tt-metal's pinned CPU torch (2.11.0). No diffusers at runtime.
+  # pillow, pytest and tqdm are imported at module level by models/tt_transformers + models/common.
+  packages:
+    - fastapi
+    - uvicorn
+    - "pydantic>=2"
+    - "transformers>=5.10"
+    - safetensors
+    - soundfile
+    - huggingface_hub
+    - "numpy<2"
+    - pillow
+    - pytest
+    - tqdm
+
+serve:
+  port: 8000
+  env:
+    # server/app.py resolves HF_MODEL (the weights repo id the launcher exports) with snapshot_download
+    # at this revision, so the container loads exactly the pinned weights even with a floating HF cache.
+    # Keep in step with weights.revision above.
+    MM3_HF_REVISION: fbdf52fbaaca799592917417eb05f1899f1255ec
+
+# v1 is single-chip: every profile opens a 1x1 mesh on device 0 and only logs the board / mesh shape it
+# was given. The profiles exist so one image serves each Blackhole board a consumer may have.
+serve_profiles:
+  - name: p150
+    description: One p150 board (1 chip). Validated configuration - the model uses exactly one chip.
+    hardware: p150
+    mesh_device: P150
+  - name: p300
+    description: One p300 board (2 chips); the server uses chip 0 only.
+    hardware: p300
+    mesh_device: P300
+  - name: p300x2
+    description: Two p300 boards (4 chips, e.g. a QB2); the server uses chip 0 only.
+    hardware: p300x2
+    mesh_device: P300x2
+default_profile: p150
+
+# Build-time assertions run inside the finished image (on top of the launcher's own app import check).
+verify:
+  - "import models.autoports.minimaxai_minimax_music3.server.app as m; assert m.app is not None"
+  - "import models.autoports.minimaxai_minimax_music3.tt.pipeline as m; assert m.MiniMaxMusic3Pipeline"
+  - "import models.tt_transformers.tt.model as m; assert m.Transformer"
+  - "import transformers, safetensors, soundfile, huggingface_hub, numpy; assert int(numpy.__version__.split('.')[0]) < 2, numpy.__version__"
+
+card:
+  quickstart: |
+    ### Generate a song
+
+    The server speaks the OpenAI-style audio endpoint from the MiniMax-Music3 model card
+    (`input` = lyrics, `instructions` = music description, `max_new_tokens` = audio frames at 25 fps).
+    `tt-model serve jashansinghTT/MiniMax-Music3-tt --follow` reports ready once the pipeline is loaded and
+    warm (a cold first boot converts weights and JIT-compiles kernels; later boots reuse the mounted caches).
+
+    ```bash
+    curl http://127.0.0.1:8000/v1/audio/speech \
+      -H 'Content-Type: application/json' \
+      -d '{
+        "model": "MiniMaxAI/MiniMax-Music3",
+        "input": "[Verse]\nMorning light filtering through the pine\n[Chorus]\nSoftly the world begins to breathe",
+        "instructions": "A warm acoustic pop song with intimate female vocals, fingerpicked guitar, soft piano, and a gradual emotional build into a wide final chorus.",
+        "response_format": "wav",
+        "seed": 7,
+        "max_new_tokens": 750,
+        "stream": false
+      }' \
+      --output minimax_music3.wav
+    ```
+
+    The response is 44.1 kHz stereo 16-bit PCM WAV (`X-MM3-*` headers carry frames, seed, stop reason and
+    generation time). `GET /health` reports `warm` / `busy`; one song is generated at a time.
+
+    v1 runs on ONE Blackhole chip: all three profiles (`p150`, `p300`, `p300x2`) open a 1x1 mesh on
+    device 0 and only log the board and mesh shape they were launched with. Pick the profile that matches
+    the board(s) in your machine so tt-model's chip-count check passes.
