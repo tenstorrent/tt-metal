@@ -30,8 +30,6 @@ import os
 import sys
 from pathlib import Path
 
-from .roofline import floor_is_physical
-
 _PA = Path(__file__).resolve().parents[1]
 if str(_PA) not in sys.path:
     sys.path.insert(0, str(_PA))
@@ -162,9 +160,7 @@ def collect(run_dir: Path, model: str = "", task: str = "main") -> dict:
                     "peak_flops_now": r.get("peak_flops_now"),
                     # THE CHECK THE MEMORY ROOF GETS FOR FREE. A floor above the measurement claims a
                     # rate above the hardware's, which is the shape every roofline defect took.
-                    # The rule itself now lives in agent.roofline, so the report asks it the same
-                    # way -- this was the only copy, in a CLI nobody runs on a normal day.
-                    "physical": r.get("physical", floor_is_physical(roof, ms)),
+                    "physical": (None if not (roof and ms) else bool(roof <= ms)),
                 }
             )
     else:

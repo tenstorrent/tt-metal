@@ -36,26 +36,6 @@ def _facts(env: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
-def floor_is_physical(floor_ms, measured_ms):
-    """Is this (floor, measurement) pair possible at all? None when either side is missing.
-
-    THE CHECK EVERY ROOF GETS FOR FREE, and the one nothing was making. A floor above the
-    measurement claims the model ran faster than the hardware allows, which is the shape every
-    roofline defect in this tool has taken -- a placeholder byte width, a census total counted at
-    the wrong depth, a peak pinned at a precision the build no longer serves. Each was found by
-    hand, months apart, and each printed a plausible-looking table until someone divided it out.
-
-    Lives here so the report and the provenance dump ask it the same way; roofline_provenance had
-    the only copy, in a CLI nobody runs on a normal day.
-    """
-    if not floor_ms or not measured_ms:
-        return None
-    try:
-        return bool(float(floor_ms) <= float(measured_ms))
-    except (TypeError, ValueError):
-        return None
-
-
 def parse_matmul_shape(shape: str):
     """'32x1024 @ 1024x1024' -> (M=32, K=1024, N=1024); None if not a matmul fingerprint
     or any dim is non-numeric ('?')."""

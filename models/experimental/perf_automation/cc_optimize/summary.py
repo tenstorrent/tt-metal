@@ -989,8 +989,14 @@ def _peak_for_stage(stage, profile, model: str = "", task: str = ""):
     except Exception:  # noqa: BLE001
         pass
     try:
-        _obs, _dom = _observed_peak_for_stage(stage, profile)
-        if not _dom:
+        _sb = ((profile or {}).get("stage_buckets") or {}).get(stage)
+        if not _sb:
+            return 0.0, ""
+        _rows, _ = _fidelity_breakdown({"buckets": _sb})
+        if not _rows:
+            return 0.0, ""
+        _top = max(_rows, key=lambda r: r[1])
+        if not _top[1]:
             return 0.0, ""
         # NO PER-STAGE ANCHOR: TAKE THE PINNED WHOLE-MODEL PEAK BEFORE DERIVING ONE.
         # Deriving here reads the fidelity the build runs at TODAY, so the roof rises the moment the
@@ -1006,32 +1012,6 @@ def _peak_for_stage(stage, profile, model: str = "", task: str = ""):
         _whole = _pinned_peak_flops(_unit_key(""), model=model, task=task)
         if _whole and float(_whole) > 0:
             return float(_whole), ""
-        return _obs, _dom
-    except Exception:  # noqa: BLE001
-        return 0.0, ""
-
-
-def _observed_peak_for_stage(stage, profile):
-    """(peak FLOP/s, dominant fidelity) THIS CAPTURE implies for one stage -- no pin consulted.
-
-    Split out of _peak_for_stage, which prefers the anchor and so can never return this. Both
-    numbers are wanted and they answer different questions: the pinned one is the baseline the run
-    is scored against, this one is the floor the build could actually reach at the precision it is
-    serving right now. While they were one function only the first was reachable, and the report
-    printed it in a column headed THEORETICAL beside a measurement taken at the other.
-
-    (0.0, "") when the capture did not mark this stage, exactly as before.
-    """
-    try:
-        _sb = ((profile or {}).get("stage_buckets") or {}).get(stage)
-        if not _sb:
-            return 0.0, ""
-        _rows, _ = _fidelity_breakdown({"buckets": _sb})
-        if not _rows:
-            return 0.0, ""
-        _top = max(_rows, key=lambda r: r[1])
-        if not _top[1]:
-            return 0.0, ""
         from agent.environment import ARCH_FACTS
         from agent.perf_target import chip_peak_flops as _cpf
 
@@ -1757,19 +1737,6 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
 
     Returns {stage: {memory_ms, compute_ms, flops, bytes, tokens, binds}} for the stages it can answer.
     """
-    # GUARDED LIKE EVERY OTHER `agent.` IMPORT IN THIS FILE -- they resolve because the tool puts the
-    # perf_automation dir on sys.path, which an importer reaching this module another way has not.
-    try:
-        from agent.roofline import floor_is_physical
-    except Exception:  # noqa: BLE001
-        try:
-            from models.experimental.perf_automation.agent.roofline import floor_is_physical
-        except Exception:  # noqa: BLE001
-
-            def floor_is_physical(_floor, _measured):
-                """Unresolvable: the pair cannot be checked, which is not the same as it being fine."""
-                return None
-
     out = {}
     mf = _model_facts()
     if not (active_bytes and peak_bw_gbps):
@@ -2047,10 +2014,6 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
         # One variable shared by three stacks was only ever a consequence of there being one number.
         _stage_peak, _stage_dom = _peak_for_stage(name, profile, model, task)
         _pk_use = _stage_peak or peak_flops
-        # THE SAME QUESTION AT THE PRECISION BEING SERVED. _pk_use answers "what was the roof when
-        # this run started"; this answers "what is the roof now". Both are wanted, and conflating
-        # them is what let a HiFi4 roof be printed beside a LoFi measurement.
-        _pk_now = _observed_peak_for_stage(name, profile)[0] or _peak_now
         # THE PINNED peak for this stage, distinct from _stage_peak: _peak_for_stage returns the
         # pinned value on one path and a capture-derived one on the other, and the caller cannot tell
         # which it got. Only the anchor is a baseline.
@@ -2103,8 +2066,6 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
         # instantiate and returned 0 for every stage of every run for two days, and nothing on the
         # page disagreed, because the estimate fallback kept printing plausible numbers.
         mem_ms = (_b / (float(peak_bw_gbps) * 1e9)) * 1000.0 if _b else None
-        _mem_now = ((_b_now / (float(peak_bw_gbps) * 1e9)) * 1000.0) if _b_now else mem_ms
-        _comp_now = ((flops / _pk_now) * 1000.0) if (flops and _pk_now > 0) else comp_ms
         out[name] = {
             "share_basis": _share_bases.get(name, ""),
             "memory_ms": mem_ms,
@@ -2150,34 +2111,6 @@ def _stage_roofs(active_bytes, peak_bw_gbps, tp_degree, unit, profile=None, stag
                 "compute"
                 if (comp_ms is not None and mem_ms is not None and comp_ms > mem_ms)
                 else ("memory" if mem_ms else ("compute" if comp_ms else None))
-            ),
-            # THE SAME TWO ROOFS AT THE PRECISION THIS BUILD SERVES, beside the pinned pair rather
-            # than instead of it. Every input above is pinned on purpose -- the THEORETICAL column
-            # must not move while the ladder works, or a run is scored against a target that
-            # retreats as fast as the measurement improves. That is right, and it is not the whole
-            # job: after a few dtype and fidelity wins the pinned pair describes a model that no
-            # longer exists, and it is being read as though it bounded this one. On
-            # voxtral_mini_3b_2507 the pinned decode roof is 2.0 B/param over 512 GB/s while the
-            # build serves bf8_b and bf4_b, so the report printed a 16.92 ms floor under a 9.99 ms
-            # measurement -- 867 GB/s on a 512 GB/s part.
-            #
-            # So: pinned stays the baseline and the progress reference, and these are the floor the
-            # build could actually reach today. Each falls back to its pinned twin when the current
-            # input is absent, so a run with no observed read set and no marked capture reports
-            # exactly what it reported before.
-            "memory_ms_now": _mem_now,
-            "compute_ms_now": _comp_now,
-            "binds_now": (
-                "compute"
-                if (_comp_now is not None and _mem_now is not None and _comp_now > _mem_now)
-                else ("memory" if _mem_now else ("compute" if _comp_now else None))
-            ),
-            # IS THE PINNED PAIR EVEN POSSIBLE? A floor above the measurement is not a stage doing
-            # well, it is two numbers that cannot both be true. Recorded per stage so the report can
-            # decline to draw a ratio it cannot honestly draw, and say why.
-            "physical": floor_is_physical(
-                comp_ms if (comp_ms is not None and mem_ms is not None and comp_ms > mem_ms) else mem_ms,
-                (stage_ms or {}).get(name),
             ),
         }
     return out
@@ -2814,49 +2747,6 @@ def _roofline_tables(
             # pessimistic (HiFi4, punishing LoFi work already done). Every rung prints, present or
             # not, so the reader sees the whole ladder the stage could sit on rather than only where
             # it sits today -- and the rung actually in use is marked.
-
-        # THE FLOOR AT THE PRECISION THIS BUILD SERVES, under the pinned column rather than in it.
-        #
-        # Every number in the THEORETICAL column is pinned to the baseline on purpose: a ceiling
-        # recomputed each round retreats by exactly the factor the measurement improves, and the run
-        # is then scored against a target it can never close. That is right. What it does not
-        # survive is a run that WORKS -- after a few dtype and fidelity wins the pinned pair
-        # describes a model that no longer exists, and it is still being read as this one's floor.
-        # Measured on voxtral_mini_3b_2507: pinned decode is 2.0 B/param over 512 GB/s, the build
-        # serves bf8_b and bf4_b, and the table printed a 16.92 ms floor beneath a 9.99 ms
-        # measurement. Encode read "in band" against a HiFi4 roof while running LoFi, where its real
-        # floor is 3.25 ms against 15.47 measured -- finished, on a stage 4.8x off its wall.
-        #
-        # So both, labelled: the pinned pair stays the baseline and the progress reference, and this
-        # states the floor the build could actually reach today. Printed only when they differ
-        # enough to change the reading, so a model still at its baseline says nothing new.
-        _nb = _rf.get("binds_now")
-        _nc = _rf.get("%s_ms_now" % _nb) if _nb else None
-        _pc = _rf.get("%s_ms" % _rf.get("binds")) if _rf.get("binds") else None
-        if _nc and _pc and abs(_nc - _pc) > 0.02 * _pc:
-            _txt = "at the precision now served: %s binds at %.2f ms (band %.2f - %.2f)" % (
-                _nb,
-                _nc,
-                _nc / _HIF,
-                _nc / _LOF,
-            )
-            _pk_n, _by_n = _rf.get("peak_flops_now"), _rf.get("bytes_now")
-            if _nb == "compute" and _pk_n:
-                _txt += ", at %.1f TFLOPS" % (_pk_n / 1e12)
-            elif _nb == "memory" and _by_n:
-                _txt += ", over a %.2f GB read set" % (_by_n / 1e9)
-            _txt += ". The column above is pinned at this run's baseline and is the progress reference."
-            for _ln in _wrap_note(_txt, 92):
-                out.append("   " + _ln)
-        # A FLOOR ABOVE THE MEASUREMENT IS NOT A GOOD SCORE, it is two numbers that cannot both be
-        # true -- and nothing in this report has ever said so. Every roofline defect the tool has had
-        # took this shape and each was found by hand, months apart, because a wrong ceiling still
-        # renders as a plausible table. Stated where the pair is printed, not in a CLI nobody runs.
-        if _rf.get("physical") is False and _ms:
-            _bad = "the pinned %s floor %.2f ms is above the %.2f ms measured" % (_rf.get("binds"), _pc or 0.0, _ms)
-            _bad += ", so the pinned inputs describe the baseline build and not this one"
-            for _ln in _wrap_note("IMPOSSIBLE PAIR: " + _bad + ".", 92):
-                out.append("   " + _ln)
 
         if int((_rf or {}).get("tokens") or 0) != 1:
             out.append(_rule4())
