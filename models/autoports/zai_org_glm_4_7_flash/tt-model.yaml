@@ -87,8 +87,10 @@ serve:
   block_size: 64
   max_model_len: 202752 # == doc/context_contract.json, capability_reduction: none
 
-  # GLM-4.7-Flash thinks by default. Without the parser every response is the raw
-  # reasoning trace, which is what made the first release run's scores meaningless.
+  # The parser stays even though `args:` turns thinking OFF by default below: a client
+  # that opts reasoning back in per request still needs the trace split out of
+  # message.content. Without it such a response is the raw reasoning trace, which is what
+  # made the first release run's scores meaningless.
   capabilities:
     reasoning_parser: glm47
 
@@ -103,13 +105,37 @@ serve:
   env:
     ARCH_NAME: blackhole
     VLLM_CONFIGURE_LOGGING: "1"
-    VLLM_RPC_TIMEOUT: "900000"
     TORCHDYNAMO_DISABLE: "1"
 
-  # No args: here on purpose. The release run spec listed max_num_batched_tokens=202752,
-  # but that spec documents a configuration rather than launching one, and no stage
-  # record shows the flag was ever passed to a server that served. vLLM's own default
-  # applies instead. Add it back only with evidence from a run that used it.
+  # max_num_batched_tokens is deliberately NOT here. The release run spec listed 202752,
+  # but that spec documents a configuration rather than launching one, and no stage record
+  # shows the flag was ever passed to a server that served. vLLM's own default applies
+  # instead. Add it back only with evidence from a run that used it.
+  #
+  # The two flags below are both bounds on the same failure, measured on this chip:
+  # GLM-4.7-Flash can enter a verbatim repeating draft inside its own <think> block on
+  # constraint-heavy prompts, run to the token cap without ever emitting </think>, and
+  # leave the reasoning parser nothing to put in message.content, so the client sees an
+  # empty response after burning a full budget. See doc/reasoning_loop/README.md for the
+  # evidence, including the bf16 CPU reference completing the same prompt under greedy
+  # where this build does not.
+  args:
+    # Thinking OFF by default. This removes the block the loop happens in, and on the
+    # measured prompt it also answered correctly in 465 tokens at 32.5 t/s where the
+    # thinking default looped to the 16384 cap and returned nothing. Request-level
+    # chat_template_kwargs OVERRIDE this, so a client that wants reasoning asks for it:
+    #   "chat_template_kwargs": {"enable_thinking": true}
+    # Not a quality claim about reasoning in general: it is off because it is not safe
+    # to leave on by default until the loop is fixed.
+    - ["--default-chat-template-kwargs", '{"enable_thinking": false}']
+    # A ceiling on any single runaway. The checkpoint's generation_config.json sets no
+    # max_new_tokens, so a client that omits max_tokens inherits max_model_len (202752)
+    # and one stuck request holds a decode slot for over two hours at ~30 t/s. 32768
+    # bounds that to roughly 17 minutes. This MERGES into the checkpoint's generation
+    # config (vllm/config/model.py, `config.update(...)`), so its temperature: 1.0
+    # survives and the served default stays sampled rather than greedy. Greedy must not
+    # become the default: it loops 100% of the time on the measured prompt.
+    - ["--override-generation-config", '{"max_new_tokens": 32768}']
 
 # Assertions run INSIDE the finished image, after the user switch. These are what make the
 # code allowlist above trustworthy.
