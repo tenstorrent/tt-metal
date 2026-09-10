@@ -362,7 +362,7 @@ def run_typecast_row_major_test(shape, memory_config, input_dtype, output_dtype,
         assert_integer_typecast_equal(torch_expected, torch_output)
     else:
         torch_expected = torch_input.to(get_ttnn_torch_dtype(output_dtype))
-        assert_with_ulp(torch_expected, torch_output, ulp_threshold=2)
+        assert_with_ulp(expected_result=torch_expected, actual_result=torch_output, ulp_threshold=2)
 
 
 @pytest.mark.parametrize(
@@ -555,7 +555,7 @@ def test_typecast_row_major_vs_tile_layout(input_dtype, output_dtype, shape, dev
             torch_output_rm, torch_output_tile
         ), "Row-major and tile layouts should produce identical integer results"
     else:
-        assert_with_ulp(torch_output_rm, torch_output_tile, ulp_threshold=2)
+        assert_with_ulp(expected_result=torch_output_rm, actual_result=torch_output_tile, ulp_threshold=2)
 
     # Verify layouts are preserved
     assert output_rm.layout == ttnn.ROW_MAJOR_LAYOUT, "Row-major output should maintain ROW_MAJOR_LAYOUT"
@@ -613,4 +613,4 @@ def test_typecast_host_tensor(output_dtype, preferred_layout, device):
         assert_integer_typecast_equal(torch_expected, torch_output)
     elif output_dtype == ttnn.bfloat16:
         torch_expected = torch_tensor.to(tt_dtype_to_torch_dtype[output_dtype])
-        assert_with_ulp(torch_expected, torch_output, ulp_threshold=2)
+        assert_with_ulp(expected_result=torch_expected, actual_result=torch_output, ulp_threshold=2)

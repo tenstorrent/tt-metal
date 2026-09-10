@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 import pytest
@@ -13,6 +13,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
+from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
@@ -43,9 +44,107 @@ _PERFORMANCE_MARGIN = 0.05
 _PRODUCTION_OUTPUT_BF16_MASK = 0x26
 _PRODUCTION_EXPECTED_DURATION_NS = 816_534
 _T_INV_MAX_ABS = 0.01
-_NUMERICAL_STRESS_T_INV_MAX_ABS = 0.05
 _UNIT_TEST_CASE = _TestCase("unit-h2-n4-k32-v64", 2, 4, 32, 64)
 _PRODUCTION_CASE = _TestCase("sp2-tp4-h24-n80-k128-v128", 24, 80, 128, 128)
+
+
+def _prepare_chunk_recurrence_ops(
+    inputs: Sequence[torch.Tensor | ttnn.Tensor],
+    outputs: Sequence[torch.Tensor | ttnn.Tensor],
+) -> tuple[perf_model.FpuOps, perf_model.SfpuOps]:
+    if len(inputs) != 5 or len(outputs) != 7:
+        raise ValueError("chunk-recurrence preparation requires five inputs and seven outputs")
+    tensors = (*inputs, *outputs)
+    if any(any(dimension <= 0 for dimension in tensor.shape) for tensor in tensors):
+        raise ValueError("chunk-recurrence preparation tensor shapes must be positive")
+
+    q, k, v, g, beta = inputs
+    if len(q.shape) != 3 or len(v.shape) != 3 or len(beta.shape) != 4:
+        raise ValueError("chunk-recurrence preparation tensor shapes are inconsistent")
+    num_heads, num_chunks, chunk_size, trailing = beta.shape
+    if chunk_size != CHUNK_SIZE or trailing != 1 or q.shape[-1] % num_heads or v.shape[-1] % num_heads:
+        raise ValueError("chunk-recurrence preparation tensor shapes are inconsistent")
+    key_dim = q.shape[-1] // num_heads
+    value_dim = v.shape[-1] // num_heads
+    if (
+        q.shape != (1, num_chunks * CHUNK_SIZE, num_heads * key_dim)
+        or k.shape != q.shape
+        or g.shape != q.shape
+        or v.shape != (1, num_chunks * CHUNK_SIZE, num_heads * value_dim)
+    ):
+        raise ValueError("chunk-recurrence preparation tensor shapes are inconsistent")
+    expected_output_shapes = (
+        (num_heads, num_chunks, CHUNK_SIZE, value_dim),
+        (num_heads, num_chunks, CHUNK_SIZE, key_dim),
+        (num_heads, num_chunks, CHUNK_SIZE, key_dim),
+        (num_heads, num_chunks, CHUNK_SIZE, CHUNK_SIZE),
+        (num_heads, num_chunks, key_dim, CHUNK_SIZE),
+        (num_heads, num_chunks, key_dim, 1),
+        (num_heads, num_chunks, CHUNK_SIZE, CHUNK_SIZE),
+    )
+    if any(output.shape != expected for output, expected in zip(outputs, expected_output_shapes, strict=True)):
+        raise ValueError("chunk-recurrence preparation tensor shapes are inconsistent")
+
+    instances = num_heads * num_chunks
+    inverse_flops = CHUNK_SIZE * (CHUNK_SIZE - 1) * (CHUNK_SIZE + 1) // 3
+    return (
+        perf_model.FpuOps(
+            matrix_flops=instances * (4 * CHUNK_SIZE**2 * key_dim + inverse_flops),
+            multiply_ops=instances * (10 * CHUNK_SIZE * key_dim + CHUNK_SIZE * value_dim),
+            add_ops=instances * (2 * CHUNK_SIZE + (CHUNK_SIZE - 1) * key_dim + CHUNK_SIZE * key_dim + CHUNK_SIZE**2),
+            reduction_ops=instances * 2 * CHUNK_SIZE * (key_dim - 1),
+        ),
+        perf_model.SfpuOps(
+            exp_ops=instances * (3 * CHUNK_SIZE * key_dim + key_dim),
+            rsqrt_ops=instances * 2 * CHUNK_SIZE,
+        ),
+    )
+
+
+def _prepare_chunk_recurrence_performance(
+    inputs: Sequence[ttnn.Tensor],
+    outputs: Sequence[ttnn.Tensor],
+    *,
+    measured_ns: float,
+    math_fidelity: ttnn.MathFidelity,
+) -> perf_model.KdaPerformance:
+    fpu, sfpu = _prepare_chunk_recurrence_ops(inputs, outputs)
+    return perf_model.performance(
+        fpu=fpu,
+        sfpu=sfpu,
+        inputs=inputs,
+        outputs=outputs,
+        measured_ns=measured_ns,
+        math_fidelity=math_fidelity,
+    )
+
+
+def test_prepare_chunk_recurrence_work_golden() -> None:
+    inputs = (
+        torch.empty((1, 32, 2)),
+        torch.empty((1, 32, 2)),
+        torch.empty((1, 32, 1)),
+        torch.empty((1, 32, 2)),
+        torch.empty((1, 1, 32, 1)),
+    )
+    outputs = (
+        torch.empty((1, 1, 32, 1)),
+        torch.empty((1, 1, 32, 2)),
+        torch.empty((1, 1, 32, 2)),
+        torch.empty((1, 1, 32, 32)),
+        torch.empty((1, 1, 2, 32)),
+        torch.empty((1, 1, 2, 1)),
+        torch.empty((1, 1, 32, 32)),
+    )
+
+    fpu, sfpu = _prepare_chunk_recurrence_ops(inputs, outputs)
+    assert fpu == perf_model.FpuOps(
+        matrix_flops=19104,
+        multiply_ops=672,
+        add_ops=1214,
+        reduction_ops=64,
+    )
+    assert sfpu == perf_model.SfpuOps(exp_ops=194, rsqrt_ops=64)
 
 
 def _host_inputs(
@@ -92,13 +191,11 @@ def _oracle(
     k = k * torch.rsqrt(k.square().sum(dim=-1, keepdim=True) + 1e-6)
     cumulative_g = torch.cumsum(g, dim=2)
     decay = torch.exp(cumulative_g)
-    inverse_decay = torch.exp(-cumulative_g)
     final_g = cumulative_g[:, :, -1]
 
     v_beta = beta * v
     kd = beta * k * decay
     q_decay = q * decay
-    intra = torch.matmul(q_decay, (k * inverse_decay).transpose(-1, -2)).tril()
     k_dec_t = (k * torch.exp(final_g.unsqueeze(2) - cumulative_g)).transpose(-1, -2)
     final_decay = torch.exp(final_g).unsqueeze(-1)
     k_fp64 = k.double()
@@ -107,6 +204,16 @@ def _oracle(
     akk = torch.matmul(
         beta.double() * k_fp64 * torch.exp(cumulative_g_fp64 - anchor_g),
         (k_fp64 * torch.exp(anchor_g - cumulative_g_fp64)).transpose(-1, -2),
+    )
+    # The unused upper triangle can exceed FP32 range for real gates near -5.
+    # Mask in FP64 before converting the causal reference to the output dtype.
+    intra = (
+        torch.matmul(
+            q.double() * torch.exp(cumulative_g_fp64 - anchor_g),
+            (k_fp64 * torch.exp(anchor_g - cumulative_g_fp64)).transpose(-1, -2),
+        )
+        .tril()
+        .float()
     )
     identity = torch.eye(CHUNK_SIZE, dtype=torch.float64).reshape(1, 1, CHUNK_SIZE, CHUNK_SIZE)
     t_inv = torch.linalg.inv(identity + torch.tril(akk, diagonal=-1)).float()
@@ -157,10 +264,18 @@ def _case_host_inputs(case: _TestCase, *, seed: int) -> tuple[torch.Tensor, ...]
 
 
 def _t_inv_numerical_stress_inputs() -> tuple[torch.Tensor, ...]:
-    inputs = list(_host_inputs(2, 2, 128, 128, seed=54813))
-    inputs[1] = torch.full_like(inputs[1], 0.25)
-    inputs[3] = torch.full_like(inputs[3], -0.01).to(torch.bfloat16).float()
-    inputs[4] = torch.full_like(inputs[4], 0.5)
+    """Reproduce the captured inverse instability without loading captured values."""
+    inputs = list(_host_inputs(1, 1, 128, 128, seed=0))
+    generator = torch.Generator().manual_seed(0)
+    # Layer 13's failing chunk has cosine similarity around 0.997, key norm
+    # around 0.36, and beta around 0.918. A shared Gaussian direction plus
+    # small independent noise approximates that geometry; exact gate values
+    # are unnecessary to expose the inverse's cancellation.
+    direction = torch.randn(1, 1, 128, generator=generator)
+    noise = torch.randn(1, CHUNK_SIZE, 128, generator=generator)
+    inputs[1] = ((0.36 / 128**0.5) * (direction + 0.07 * noise)).to(torch.bfloat16).float()
+    inputs[3] = torch.full_like(inputs[3], -0.05).to(torch.bfloat16).float()
+    inputs[4] = 0.90 + 0.03 * torch.rand(1, 1, CHUNK_SIZE, 1, generator=generator)
     return tuple(inputs)
 
 
@@ -174,14 +289,40 @@ def _production_compute_config(device: ttnn.Device) -> ttnn.DeviceComputeKernelC
     )
 
 
-def _assert_outputs_accurate(
-    expected: tuple[torch.Tensor, ...],
-    actual: list[ttnn.Tensor],
+def _assert_output_accurate(
+    name: str,
+    expected: torch.Tensor,
+    actual: torch.Tensor,
     *,
     context: str,
+    t_inv_max_abs_threshold: float = _T_INV_MAX_ABS,
 ) -> None:
-    for name, expected_output, actual_tt in zip(OUTPUT_NAMES, expected, actual, strict=True):
-        assert_accurate(expected_output, ttnn.to_torch(actual_tt), name=f"{context} {name}", pcc_threshold=0.999)
+    assert torch.isfinite(actual).all(), f"{context} {name} contains nonfinite values"
+    assert_accurate(expected, actual, name=f"{context} {name}", pcc_threshold=0.999)
+    if name == "t_inv":
+        _assert_t_inv_strict_lower_accurate(
+            expected,
+            actual,
+            context=context,
+            max_abs_threshold=t_inv_max_abs_threshold,
+        )
+
+
+def _assert_outputs_accurate(
+    expected: Sequence[torch.Tensor],
+    actual: Sequence[torch.Tensor],
+    *,
+    context: str,
+    t_inv_max_abs_threshold: float = _T_INV_MAX_ABS,
+) -> None:
+    for name, expected_output, actual_output in zip(OUTPUT_NAMES, expected, actual, strict=True):
+        _assert_output_accurate(
+            name,
+            expected_output,
+            actual_output,
+            context=context,
+            t_inv_max_abs_threshold=t_inv_max_abs_threshold,
+        )
 
 
 def _assert_t_inv_strict_lower_accurate(
@@ -261,19 +402,7 @@ def test_prepare_chunk_recurrence_contract_accuracy_and_determinism(
         output_addresses.add(output.buffer_address())
     assert len(output_addresses) == 7
 
-    for name, expected_output, actual_output in zip(OUTPUT_NAMES, expected, actual, strict=True):
-        assert_accurate(
-            expected_output,
-            actual_output,
-            name=f"{case.case_id} {name} invocation 0",
-            pcc_threshold=0.999,
-        )
-    _assert_t_inv_strict_lower_accurate(
-        expected[-1],
-        actual[-1],
-        context=case.case_id,
-        max_abs_threshold=_T_INV_MAX_ABS,
-    )
+    _assert_outputs_accurate(expected, actual, context=f"{case.case_id} invocation 0")
     for output in reference_outputs:
         ttnn.deallocate(output)
 
@@ -291,13 +420,13 @@ def test_prepare_chunk_recurrence_t_inv_is_stable_for_correlated_keys(device: tt
     assert_equal(
         torch.zeros_like(mismatch_marker),
         mismatch_marker,
-        name="numerical-stress outputs device-side exact-value determinism marker",
+        name="correlated keys outputs device-side exact-value determinism marker",
     )
-    _assert_t_inv_strict_lower_accurate(
+    _assert_output_accurate(
+        "t_inv",
         expected[-1],
         outputs[-1],
         context="correlated keys",
-        max_abs_threshold=_NUMERICAL_STRESS_T_INV_MAX_ABS,
     )
     for output in reference:
         ttnn.deallocate(output)
@@ -319,8 +448,16 @@ def test_prepare_chunk_recurrence_cache_hit_rebinds_fresh_tensors(device: ttnn.D
     assert device.num_program_cache_entries() == entries
     assert all(a.buffer_address() != b.buffer_address() for a, b in zip(inputs_a, inputs_b, strict=True))
     assert all(a.buffer_address() != b.buffer_address() for a, b in zip(outputs_a, outputs_b, strict=True))
-    _assert_outputs_accurate(_oracle(host_a, case.num_heads, 0), outputs_a, context="cache miss tensors")
-    _assert_outputs_accurate(_oracle(host_b, case.num_heads, 0), outputs_b, context="cache hit fresh tensors")
+    _assert_outputs_accurate(
+        _oracle(host_a, case.num_heads, 0),
+        tuple(ttnn.to_torch(output) for output in outputs_a),
+        context="cache miss tensors",
+    )
+    _assert_outputs_accurate(
+        _oracle(host_b, case.num_heads, 0),
+        tuple(ttnn.to_torch(output) for output in outputs_b),
+        context="cache hit fresh tensors",
+    )
     assert not torch.equal(ttnn.to_torch(outputs_a[0]), ttnn.to_torch(outputs_b[0]))
 
 
@@ -356,8 +493,16 @@ def test_prepare_chunk_recurrence_precise_math_uses_distinct_accurate_program(de
     precise = _run(inputs, case.num_heads, compute_kernel_config=precise_config)
     assert device.num_program_cache_entries() == entries + 1
     expected = _oracle(host_inputs, case.num_heads, 0)
-    _assert_outputs_accurate(expected, approximate, context="default approximate math")
-    _assert_outputs_accurate(expected, precise, context="explicit precise math")
+    _assert_outputs_accurate(
+        expected,
+        tuple(ttnn.to_torch(output) for output in approximate),
+        context="default approximate math",
+    )
+    _assert_outputs_accurate(
+        expected,
+        tuple(ttnn.to_torch(output) for output in precise),
+        context="explicit precise math",
+    )
 
 
 def test_prepare_chunk_recurrence_rejects_unsupported_compute_config(
@@ -397,9 +542,20 @@ def test_prepare_chunk_recurrence_production_performance(device: ttnn.Device) ->
     duration_ns = perf_record["duration_ns"]
     assert len(outputs) == 7
     assert tuple(outputs[0].shape) == (case.num_heads, case.num_chunks, CHUNK_SIZE, case.value_dim)
+    performance = _prepare_chunk_recurrence_performance(
+        inputs,
+        outputs,
+        measured_ns=duration_ns,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+    )
     logger.info(
-        f"chunk-recurrence preparation {case.case_id}: duration={duration_ns:.0f} ns, "
-        f"profiler_runtime_id={perf_record['runtime_id']}"
+        f"chunk-recurrence preparation {case.case_id}: measured_ns={duration_ns:.0f}, "
+        f"runtime_id={perf_record['runtime_id']}, work={performance.work}, "
+        f"ideal_fpu_ns={performance.ideal_fpu_ns:.2f}, ideal_dram_ns={performance.ideal_dram_ns:.2f}, "
+        f"ideal_ns={performance.ideal_ns:.2f}, "
+        f"fpu_utilization_pct={performance.fpu_utilization_pct:.2f}, "
+        f"dram_utilization_pct={performance.dram_utilization_pct:.2f}, "
+        f"utilization_pct={performance.utilization_pct:.2f}"
     )
     upper = _PRODUCTION_EXPECTED_DURATION_NS * (1 + _PERFORMANCE_MARGIN)
     assert duration_ns <= upper, (
@@ -506,3 +662,30 @@ def test_prepare_chunk_recurrence_rejects_invalid_options(device: ttnn.Device, e
     sharded = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
     with expect_error(RuntimeError, "output memory layout must be INTERLEAVED, got HEIGHT_SHARDED"):
         _run(inputs, 2, memory_config=sharded)
+
+
+@pytest.mark.parametrize("output_bf16_mask", [0x00, 0x20, 0x26], ids=["all-fp32", "decay-bf16", "production"])
+def test_prepare_chunk_recurrence_scratch_wrap(device: ttnn.Device, output_bf16_mask: int) -> None:
+    """Keep row transactions contiguous after inverse scratch advances its DFB cursors."""
+    grid = device.compute_with_storage_grid_size()
+    work_items_per_core = 32
+    chunks = grid.x * grid.y * work_items_per_core
+    chunk = _t_inv_numerical_stress_inputs()
+    inputs = tuple(x.repeat(1, chunks, 1) for x in chunk[:4]) + (chunk[4].repeat(1, chunks, 1, 1),)
+    key_dim = chunk[3].shape[-1]
+    expected = torch.exp(chunk[3].sum(dim=1)).reshape(1, 1, key_dim, 1).repeat(1, chunks, 1, 1)
+    if output_bf16_mask & (1 << 5):
+        expected = expected.to(torch.bfloat16).float()
+    outputs = _run(
+        _device_inputs(inputs, device),
+        1,
+        output_bf16_mask=output_bf16_mask,
+        compute_kernel_config=_production_compute_config(device),
+    )
+    actual = ttnn.to_torch(outputs[5]).float()
+    # final_decay does not depend on the inverse. The old inverse used single-tile
+    # transactions in row-sized DFBs, leaving their cursors offset for the next
+    # work item; the subsequent row reservation crossed the ring end and corrupted
+    # adjacent storage, which surfaced here as a final_decay mismatch.
+    assert torch.isfinite(actual).all()
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0.004)

@@ -104,12 +104,12 @@ void kernel_main() {
     constexpr uint32_t Kt = get_compile_time_arg_val(9);
     constexpr uint32_t logk = get_compile_time_arg_val(10);
     constexpr uint32_t logWt = get_compile_time_arg_val(11);
-    constexpr uint32_t largest = get_compile_time_arg_val(12);
+    constexpr bool largest = get_compile_time_arg_val(12) == 1;
     constexpr uint32_t sorted = get_compile_time_arg_val(13);
     constexpr bool stable_sort = get_compile_time_arg_val(14) == 1;  // Ties keep the lowest index
 
     // Runtime args
-    uint32_t direction_init = get_arg_val<uint32_t>(0);
+    const bool direction_init = get_arg_val<uint32_t>(0) == 1;
 
     // Constants
     // Dest indices for where to unpack the tiles for the llk
@@ -121,7 +121,7 @@ void kernel_main() {
     constexpr uint32_t tiles_per_seq = (K + 31) / 32;
 
     // Supports K only up to 64
-    int end_phase = (K <= 64) ? logk - 1 : 5;
+    const int end_phase = (K <= 64) ? logk - 1 : 5;
 
     compute_kernel_hw_startup(input_dfb_index, index_dfb_index, input_transposed_dfb_index);
     ckernel::topk_tile_init();
@@ -131,8 +131,8 @@ void kernel_main() {
     DataflowBuffer values_dfb(values_dfb_index);
     DataflowBuffer output_ind_dfb(output_ind_dfb_index);
 
-    bool switch_dir = (K == 64);
-    int seq_per_2tiles = std::max((2 * 32) / K, (uint32_t)2);
+    const bool switch_dir = (K == 64);
+    uint32_t seq_per_2tiles = std::max<uint32_t>((2 * 32) / K, 2);
 
     // Process each height row independently
     for (uint32_t ht = 0; ht < Ht; ++ht) {

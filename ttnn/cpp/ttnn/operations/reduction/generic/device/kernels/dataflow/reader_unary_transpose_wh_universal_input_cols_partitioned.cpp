@@ -15,8 +15,8 @@
 void kernel_main() {
     // Start id in column major order. This should be the start of a column.
     uint32_t col_start_tile_id = get_arg(args::col_start_tile_id);
-    uint32_t curr_col_in_batch = get_arg(args::curr_col_in_batch);
-    uint32_t num_cols = get_arg(args::num_cols);  // number of cols to read
+    const uint32_t curr_col_in_batch = get_arg(args::curr_col_in_batch);
+    const uint32_t num_cols = get_arg(args::num_cols);  // number of cols to read
 
     constexpr auto Ht = get_arg(args::Ht);
     constexpr auto Wt = get_arg(args::Wt);
@@ -25,6 +25,7 @@ void kernel_main() {
     constexpr auto scaler_bits = get_arg(args::scaler_bits);
     constexpr bool use_welford = get_arg(args::use_welford) != 0;
     constexpr auto fp32_mode = get_arg(args::enable_fp32_sfpu) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
+    constexpr uint32_t tiles_per_batch = get_arg(args::tiles_per_batch);
 
     // Welford must process one column at a time because the SFPU can only maintain
     // a single running mean/M2 state. DEST_AUTO_LIMIT interleaves multiple columns
@@ -36,18 +37,21 @@ void kernel_main() {
     // constructor is not constexpr, so no such object is usable in a constant expression.
     constexpr DataFormat reduce_format = get_dataformat(dfb::in0);
     constexpr bool use_sfpu_reduce_path = is_sfpu_reduce_path<REDUCE_OP, REDUCE_DIM, reduce_format, fp32_mode>();
-    constexpr uint32_t row_chunk = use_welford ? 1
-                                               : (use_sfpu_reduce_path ? (compute_kernel_lib::DEST_AUTO_LIMIT - 1)
-                                                                       : compute_kernel_lib::DEST_AUTO_LIMIT);
+    constexpr uint32_t dest_row_chunk =
+        use_sfpu_reduce_path ? (compute_kernel_lib::DEST_AUTO_LIMIT - 1) : compute_kernel_lib::DEST_AUTO_LIMIT;
+    constexpr uint32_t row_chunk = use_welford ? 1 : dest_row_chunk;
 
     constexpr uint32_t onetile = 1;
 
-    Noc noc;
+    // Batch only when row_chunk matches the host's tiles_per_batch; SFPU shortens the chunk.
+    constexpr bool batch_reads = (row_chunk == tiles_per_batch);
+
+    const Noc noc;
     // dfb::in0 is the reduce input pipe: this kernel fills it, the compute kernel drains it.
     DataflowBuffer dfb_in0(dfb::in0);
     const uint32_t tile_bytes = dfb_in0.get_tile_size();
 
-    float scaler_f = __builtin_bit_cast(float, scaler_bits);
+    const float scaler_f = __builtin_bit_cast(float, scaler_bits);
     dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, REDUCE_OP, REDUCE_DIM>(scaler_f);
 
     auto tensor_accessor = TensorAccessor(tensor::src);
@@ -70,20 +74,36 @@ void kernel_main() {
     // reset_w - resets w to the column number in the batch of the starting column
     // reset_curr_id - resets curr_id to the next tile in the starting column
     for (uint32_t i = 0; i < num_cols; i += row_chunk) {
-        uint32_t chunk_end = std::min(i + row_chunk, num_cols);
+        const uint32_t chunk_end = std::min(i + row_chunk, num_cols);
         uint32_t curr_id = col_start_tile_id;
-        uint32_t reset_curr_id = curr_id;
-        uint32_t reset_w = w;
-        uint32_t reset_col_start = col_start_tile_id;
+        const uint32_t reset_curr_id = curr_id;
+        const uint32_t reset_w = w;
+        const uint32_t reset_col_start = col_start_tile_id;
+        // Tail is shorter than the CB batch, so the reserve would not be contiguous.
+        const bool batch_chunk = batch_reads && ((chunk_end - i) == row_chunk);
 
         for (uint32_t j = 0; j < Ht; ++j) {
             w = reset_w;
             col_start_tile_id = reset_col_start;
+            if (batch_chunk) {
+                dfb_in0.reserve_back(row_chunk);
+            }
+            uint32_t slot = 0;
             for (uint32_t k = i; k < chunk_end; ++k) {
-                dfb_in0.reserve_back(onetile);
-                noc.async_read(tensor_accessor, dfb_in0, tile_bytes, {.page_id = curr_id}, {.offset_bytes = 0});
-                noc.async_read_barrier();
-                dfb_in0.push_back(onetile);
+                if (batch_chunk) {
+                    noc.async_read(
+                        tensor_accessor,
+                        dfb_in0,
+                        tile_bytes,
+                        {.page_id = curr_id},
+                        {.offset_bytes = slot * tile_bytes});
+                    ++slot;
+                } else {
+                    dfb_in0.reserve_back(onetile);
+                    noc.async_read(tensor_accessor, dfb_in0, tile_bytes, {.page_id = curr_id}, {.offset_bytes = 0});
+                    noc.async_read_barrier();
+                    dfb_in0.push_back(onetile);
+                }
 
                 ++w;
 
@@ -95,6 +115,10 @@ void kernel_main() {
                     ++curr_id;
                     ++col_start_tile_id;
                 }
+            }
+            if (batch_chunk) {
+                noc.async_read_barrier();
+                dfb_in0.push_back(row_chunk);
             }
             curr_id = reset_curr_id + (j + 1) * Wt;  // stride in H
         }

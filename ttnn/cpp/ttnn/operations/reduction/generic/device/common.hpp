@@ -33,6 +33,16 @@ enum class ReduceOpParallelizationStrategy { MULTI_CORE_H, MULTI_CORE_W, MULTI_C
 
 namespace ttnn::prim {
 
+// Tiles the universal reduce reader fetches per NoC barrier.
+inline constexpr uint32_t kReduceReaderTilesPerBatch = 4;
+
+inline uint32_t reduce_reader_batch(uint32_t min_tiles_per_core) {
+    return min_tiles_per_core < kReduceReaderTilesPerBatch ? 1u : kReduceReaderTilesPerBatch;
+}
+
+// Depth is a multiple of the batch so a reserve never straddles fifo_limit.
+inline uint32_t reduce_reader_input_cb_tiles(uint32_t tiles_per_batch) { return 2 * tiles_per_batch; }
+
 // Identity element for the given reduction math op: -inf for MAX, +inf for MIN, 0 otherwise.
 // Used by the dense RM paths to pad partial chunks without disturbing the result.
 inline float get_reduce_pad_value(tt::tt_metal::ReduceOpMath reduce_math) {
@@ -152,14 +162,12 @@ tt::tt_metal::experimental::KernelSpec::CompileTimeArgs build_rm_compute_ct_args
 tt::tt_metal::ReduceOpParallelizationStrategy get_parallelization_strategy(
     const ttnn::Tensor& input_tensors, tt::tt_metal::ReduceOpDim reduce_dim);
 
-// Returns true if the fused-negate H reduce path's CBs fit in available L1.
-// The reduce_h_neg compute kernel pushes ntiles tiles per inner-loop iteration;
-// to make the FIFO write pointer wrap cleanly across all push sizes, c_4 (acc)
-// and c_5 (ineg) are each sized at Ht * lcm(Wt_per_core_g1, Wt_per_core_g2)
-// tiles.  For wide reductions this can exceed L1, in which case callers must
-// fall back to external negation around a non-fused (regular) reduce.
+// True when fused-negate CBs (acc and ineg, each Ht * lcm of the two per-core Wts) fit in L1.
+// Per-core Wt depends on the H factory's width-sharded path, so output_mem_config is required.
 bool h_reduce_negate_fits_in_l1(
-    const ttnn::Tensor& input_tensor, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
+    const ttnn::Tensor& input_tensor,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
 
 // Builds a tt::tt_metal::TensorSpec for a reduction-style op output, given the already
 // shape-adjusted output shape and the dimension that was reduced.
@@ -186,13 +194,8 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
     tt::tt_metal::ReduceOpDim reduce_dim,
     tt::tt_metal::Layout output_layout = tt::tt_metal::Layout::TILE);
 
-// Enforces the documented contract that, for reduction-style ops, any sharded
-// participant (input or output) must live in L1.  Sharded layouts and DRAM
-// buffers use disjoint coordinate spaces (worker cores vs DRAM bank cores), so
-// silently borrowing a grid across buffer types — as the shard-spec fallback
-// in `build_reduce_output_tensor_spec` would otherwise allow — produces an
-// invalid spec.  Pass an `op_name` (e.g. "reduce", "Std/Var reduction") for a
-// readable error message.
+// Sharded I/O must be L1 or DRAM; DRAM BLOCK_SHARDED is unsupported.
+// Grid borrowing and DRAM's 1D bank grid are checked elsewhere.
 void validate_reduce_sharded_buffer_types(
     const tt::tt_metal::MemoryConfig& input_mem_config,
     const tt::tt_metal::MemoryConfig& output_mem_config,
