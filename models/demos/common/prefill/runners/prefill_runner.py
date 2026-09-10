@@ -102,6 +102,13 @@ assert not (DFLASH_ENABLED and USE_TRACE), (
     "trace-captured. Run DFlash with PREFILL_USE_TRACE=0."
 )
 
+assert KV_ONLY_LAST_LAYER or not USE_TRACE, (
+    "PREFILL_KV_ONLY_LAST_LAYER=0 is incompatible with PREFILL_USE_TRACE=1: the last rank then builds the "
+    "norm/LM-head tail, whose logit read-back synchronizes the device, and event synchronization is "
+    "rejected during trace capture. The runner emits no token, so run it headless (the default) or with "
+    "PREFILL_USE_TRACE=0."
+)
+
 # Traced writes go through the metadata tensors, which cannot supply the host kv_actual_global the
 # TP-sharded reader needs to pick its 1/tp source window. Unreachable today (trace is already rejected for
 # every sparse/DSA model, and tp_shard_kv is sparse-only), so this is the tripwire for when that lifts.
