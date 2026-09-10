@@ -33,6 +33,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
 from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
+from models.demos.gpt_oss_d_p.utils.profiler_utils import FINE, zone
 
 
 class TtGptOssMoE(LightweightModule):
@@ -174,52 +175,60 @@ class TtGptOssMoE(LightweightModule):
         )
         indices, scores = topk_indices, topk_weights
 
-        tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = self.routing_setup(
-            ttnn_top_k_experts_indices=indices,
-            num_routed_experts=self.num_routed_experts,
-            num_experts_per_tok=self.num_experts_per_tok,
-        )
-        indices = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)
-        scores = ttnn.to_layout(scores, ttnn.ROW_MAJOR_LAYOUT)
-        b, s = x.shape[0], x.shape[1]
-        scores = ttnn.reshape(scores, (b, s, scores.shape[-1]))
-        indices = ttnn.reshape(indices, (b, s, indices.shape[-1]))
+        with zone("routing_setup", FINE):
+            tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = self.routing_setup(
+                ttnn_top_k_experts_indices=indices,
+                num_routed_experts=self.num_routed_experts,
+                num_experts_per_tok=self.num_experts_per_tok,
+            )
+            indices = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)
+            scores = ttnn.to_layout(scores, ttnn.ROW_MAJOR_LAYOUT)
+            b, s = x.shape[0], x.shape[1]
+            scores = ttnn.reshape(scores, (b, s, scores.shape[-1]))
+            indices = ttnn.reshape(indices, (b, s, indices.shape[-1]))
 
         # Dispatch needs full emb per chip. All-gather across TP only if emb is sharded; if the input
         # is already full emb (replicated, e.g. from the decoder layer), skip.
         if self.mesh_device.shape[1] > 1 and x.shape[-1] < self.emb_dim:
-            x = ttnn.all_gather(
-                x, dim=-1, cluster_axis=1, num_links=self.reduce_module.num_links, topology=ttnn.Topology.Linear
-            )
+            with zone("pre_dispatch_allgather"):
+                x = ttnn.all_gather(
+                    x, dim=-1, cluster_axis=1, num_links=self.reduce_module.num_links, topology=ttnn.Topology.Linear
+                )
 
         # Dispatch -> per-expert buffers (NO shared expert)
-        dispatched_buffer, metadata = self.dispatch_module(
-            x, scores, indices, tt_expert_offsets, self.tt_expert_dispatch_table
-        )
-        ttnn.deallocate(x)
-        scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
-        indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
+        with zone("dispatch"):
+            dispatched_buffer, metadata = self.dispatch_module(
+                x, scores, indices, tt_expert_offsets, self.tt_expert_dispatch_table
+            )
+            ttnn.deallocate(x)
+            scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
+            indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
 
-        dispatched_buffer_tiled = ttnn.to_layout(
-            ttnn.squeeze(ttnn.squeeze(dispatched_buffer, dim=0), dim=0),
-            ttnn.TILE_LAYOUT,
-            dtype=self.routed_expert.activations_dtype,
-        )
-        ttnn.deallocate(dispatched_buffer)
+        with zone("experts_mm"):
+            dispatched_buffer_tiled = ttnn.to_layout(
+                ttnn.squeeze(ttnn.squeeze(dispatched_buffer, dim=0), dim=0),
+                ttnn.TILE_LAYOUT,
+                dtype=self.routed_expert.activations_dtype,
+            )
+            ttnn.deallocate(dispatched_buffer)
 
-        expert_outputs = self.routed_expert(dispatched_buffer_tiled, tt_expert_token_counts, tt_expert_region_offsets)
-        expert_outputs = ttnn.unsqueeze(ttnn.unsqueeze(expert_outputs, dim=0), dim=0)
+            expert_outputs = self.routed_expert(
+                dispatched_buffer_tiled, tt_expert_token_counts, tt_expert_region_offsets
+            )
+            expert_outputs = ttnn.unsqueeze(ttnn.unsqueeze(expert_outputs, dim=0), dim=0)
 
-        combined_output = self.combine_module(
-            expert_outputs,
-            metadata,
-            tt_expert_token_counts,
-            tt_expert_region_offsets,
-            seq_len_per_chip=s,
-        )
+        with zone("combine"):
+            combined_output = self.combine_module(
+                expert_outputs,
+                metadata,
+                tt_expert_token_counts,
+                tt_expert_region_offsets,
+                seq_len_per_chip=s,
+            )
         # Fused weighted-sum over topk + reduce-scatter across TP
-        routed_output = self.reduce_module(
-            combined_output, weights=scores, indices=indices, expert_dispatch_table=self.tt_expert_dispatch_table
-        )
-        routed_output = ttnn.squeeze(routed_output, dim=0)
+        with zone("moe_reduce"):
+            routed_output = self.reduce_module(
+                combined_output, weights=scores, indices=indices, expert_dispatch_table=self.tt_expert_dispatch_table
+            )
+            routed_output = ttnn.squeeze(routed_output, dim=0)
         return routed_output
