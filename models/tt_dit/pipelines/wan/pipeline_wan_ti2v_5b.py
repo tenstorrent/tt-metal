@@ -11,6 +11,7 @@ dim=3072 / ffn=14336 / TP=4. Sweep before claiming perf.
 import ttnn
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
 from models.tt_dit.utils.matmul import FusedMMRSConfig, register_fused_mmrs_configs, register_matmul_configs
+from models.tt_dit.utils.conv3d import register_conv3d_configs
 
 _5B_CHECKPOINT = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
 
@@ -56,7 +57,35 @@ def _register_5b_matmul_tables() -> None:
     )
 
 
+
+def _register_5b_conv3d_tables() -> None:
+    """BH Galaxy 4x8, Wan2.2 TI2V-5B VAE decoder conv3d blockings.
+
+    Swept via bruteforce_conv3d_sweep.py (bh_4x8_5b_480p_t7). Keyed by
+    (C_in, C_out, kernel_size) -> (C_in_block, C_out_block, T_out_block,
+    H_out_block, W_out_block). Without these every 5B VAE conv3d fell to the
+    worst-case (<=256, 32, 1, 1, 1) fallback. For channel-keys used at multiple
+    T/H/W the blocking chosen is L1-safe for (and measured on) the LARGEST 480p
+    variant of that key.
+    """
+    register_conv3d_configs(
+        {
+            (64, 1024, (3, 3, 3)): (64, 256, 1, 8, 4),      # conv_in
+            (1024, 1024, (3, 3, 3)): (128, 64, 7, 16, 2),   # res_deep (t9/t16); sized for t16
+            (1024, 2048, (3, 1, 1)): (512, 128, 3, 8, 4),   # tconv (t9/t16); conservative C_out
+            (1024, 1024, (1, 3, 3)): (256, 128, 1, 16, 2),  # spatial_deep/spatial_mid; sized for mid
+            (1024, 512, (3, 3, 3)): (64, 256, 2, 16, 2),    # up_512
+            (512, 512, (3, 3, 3)): (64, 256, 2, 16, 2),     # res_512
+            (512, 512, (1, 3, 3)): (256, 128, 1, 16, 2),    # spatial_512
+            (512, 256, (3, 3, 3)): (64, 256, 2, 8, 4),      # up_256
+            (256, 256, (3, 3, 3)): (64, 256, 2, 8, 4),      # res_256
+            (256, 12, (3, 3, 3)): (128, 32, 4, 8, 4),       # conv_out
+        }
+    )
+
+
 _register_5b_matmul_tables()
+_register_5b_conv3d_tables()
 
 
 class WanTI2V5BPipeline(WanPipeline):
