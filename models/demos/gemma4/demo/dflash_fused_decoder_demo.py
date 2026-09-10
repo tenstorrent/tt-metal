@@ -76,7 +76,23 @@ def _unwrap_kv_layers(kv_cache):
     return kv_layers
 
 
-@parametrize_mesh_with_fabric([(1, 8)], device_params_extra={"trace_region_size": 256_000_000})
+@parametrize_mesh_with_fabric(
+    [(1, 8)],
+    device_params_extra={
+        "trace_region_size": 256_000_000,
+        # CCL all_gather allocates semaphores in L1_SMALL when this is > 0 --
+        # without it, they fragment the main L1 pool. At the 1024-token
+        # prefill bucket (anything >128 real tokens rounds up to it) this was
+        # observed to TT_THROW "Statically allocated circular buffers...
+        # clash with L1 buffers" during prefill warmup -- a general
+        # Gemma4-31B TP=8 issue, not specific to dFlash's own tap-capture
+        # (confirmed: the plain, non-dFlash text_demo.py::test_demo hit the
+        # identical TT_THROW at the identical L1 addresses at this bucket
+        # before the same fix was applied there too). Same fix/value as
+        # text_demo_v2.py's ``_device_params``.
+        "l1_small_size": int(os.environ.get("GEMMA4_L1_SMALL_SIZE", 24576)),
+    },
+)
 def test_demo_dflash_fused_decoder(mesh_device, device_params, reset_seeds):
     from models.demos.gemma4.demo.text_demo_v2 import create_tt_page_table
     from models.demos.gemma4.tt.dflash_drafter import DFlashDrafter, DFlashFusedDecoder

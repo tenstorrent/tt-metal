@@ -137,6 +137,46 @@ def _rope_expand_gather_enabled() -> bool:
     return os.environ.get("GEMMA4_ROPE_EXPAND_GATHER", "1").lower() not in ("0", "false", "no")
 
 
+def _kv_fused_write_enabled() -> bool:
+    """Use ``ttnn.experimental.paged_fused_update_cache`` (one launch covering
+    both K and V) instead of two separate ``paged_update_cache`` calls in the
+    per-position batch-alias write loop below (``sequential_kv_write and
+    batch > 1`` — DFlash's speculative verify: B candidates aliased to one
+    page-table row, written one at a time to avoid a same-tile read-modify-write
+    race across candidates).
+
+    The fused op is already used elsewhere in this file for the unrelated
+    packed-verify KV write (``_write_packed_kv_sequential`` /
+    ``_packed_fused_kv_enabled``, default on there) — this reuses the identical
+    kernel and the identical K/V-on-separate-single-cores memory layout
+    (``_packed_kv_user_mem``) for DFlash's own batch-alias loop, which still
+    used the older two-call form.
+
+    Only valid when the cache's own allocation view already matches this
+    layer's view (``eff_bs == cache.padded_shape[2]`` and ``num_local_kv_heads
+    == cache.padded_shape[1]``) — verified true for gemma4-31B's real per-layer
+    caches (both sliding and full layer types, TP=8) via direct on-device
+    allocation + effective_block_size check, not assumed — and only when no
+    bounded-sliding-window modulo is in play (``paged_modulo_kwargs`` empty),
+    since the fused op's signature has no modulo-equivalent argument to verify
+    against. The call site checks both conditions and falls back to the
+    unfused path when either fails, regardless of this flag.
+
+    Default ON. Verified bit-exact on real hardware — both the attention
+    output AND the raw K/V cache content after the write (max abs diff 0.0 on
+    all three) — against the unfused two-call path, at DFlash's real batch=16
+    batch-alias shape. Measured 10.2% total device-time reduction for one
+    layer's decode_forward call (Tracy): PagedUpdateCacheDeviceOperation
+    (256 calls, 2,061,531ns) -> PagedFusedUpdateCacheDeviceOperation (128
+    calls, 1,056,578ns) — call count exactly halved and the fused kernel is
+    also faster per call, with no offsetting new cost (unlike
+    GEMMA4_DFLASH_PAD_NOISE_CONCAT's ttnn.pad, this introduces nothing
+    expensive). ``GEMMA4_KV_FUSED_WRITE=0`` restores the previous unfused
+    path, as an escape hatch.
+    """
+    return os.environ.get("GEMMA4_KV_FUSED_WRITE", "1").lower() not in ("0", "false", "no")
+
+
 def _rope_expanded_broadcast(position_idx, cos_cache, sin_cache, batch, heads):
     """``(cos_b, sin_b)`` at ``[1, batch, heads, head_dim]``, gathered directly at
     the broadcast width instead of gathered-then-``ttnn.repeat``'d. See
@@ -397,34 +437,61 @@ def decode_forward(
                         ttnn.BufferType.L1,
                         ttnn.ShardSpec(_one_core, _shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
                     )
+                    # One paged_fused_update_cache launch instead of two separate
+                    # paged_update_cache calls per position -- see
+                    # _kv_fused_write_enabled. Reuses _packed_kv_user_mem (already
+                    # used for this exact fused op elsewhere in this file, for the
+                    # unrelated packed-verify KV write) for the K/V-on-separate-cores
+                    # layout the fused kernel needs; the plain path keeps K and V on
+                    # the same single core, as it always has.
+                    use_fused_kv = (
+                        _kv_fused_write_enabled()
+                        and not paged_modulo_kwargs
+                        and eff_bs == int(k_cache.padded_shape[2])
+                        and num_local_kv_heads == int(k_cache.padded_shape[1])
+                    )
+                    if use_fused_kv:
+                        k_mem, v_mem = _packed_kv_user_mem(q_sharded_mem)
+                    else:
+                        k_mem = v_mem = single_user_mem
                     k_seq = ttnn.to_memory_config(tt_k, ttnn.DRAM_MEMORY_CONFIG)
                     v_seq = ttnn.to_memory_config(tt_v, ttnn.DRAM_MEMORY_CONFIG)
                     nkv, hd = k_seq.shape[2], k_seq.shape[3]
                     for b in range(batch):
                         kb = ttnn.slice(k_seq, [0, b, 0, 0], [1, b + 1, nkv, hd])
                         vb = ttnn.slice(v_seq, [0, b, 0, 0], [1, b + 1, nkv, hd])
-                        kb = ttnn.to_memory_config(kb, single_user_mem)
-                        vb = ttnn.to_memory_config(vb, single_user_mem)
+                        kb = ttnn.to_memory_config(kb, k_mem)
+                        vb = ttnn.to_memory_config(vb, v_mem)
                         pos_b = ttnn.slice(cache_pos, [b], [b + 1])
                         pt_b = ttnn.slice(page_table, [b, 0], [b + 1, page_table.shape[1]])
-                        ttnn.experimental.paged_update_cache(
-                            k_cache,
-                            kb,
-                            update_idxs_tensor=pos_b,
-                            page_table=pt_b,
-                            block_size=eff_bs,
-                            num_kv_heads=num_local_kv_heads,
-                            **paged_modulo_kwargs,
-                        )
-                        ttnn.experimental.paged_update_cache(
-                            v_cache,
-                            vb,
-                            update_idxs_tensor=pos_b,
-                            page_table=pt_b,
-                            block_size=eff_bs,
-                            num_kv_heads=num_local_kv_heads,
-                            **paged_modulo_kwargs,
-                        )
+                        if use_fused_kv:
+                            ttnn.experimental.paged_fused_update_cache(
+                                k_cache,
+                                kb,
+                                v_cache,
+                                vb,
+                                update_idxs_tensor=pos_b,
+                                page_table=pt_b,
+                            )
+                        else:
+                            ttnn.experimental.paged_update_cache(
+                                k_cache,
+                                kb,
+                                update_idxs_tensor=pos_b,
+                                page_table=pt_b,
+                                block_size=eff_bs,
+                                num_kv_heads=num_local_kv_heads,
+                                **paged_modulo_kwargs,
+                            )
+                            ttnn.experimental.paged_update_cache(
+                                v_cache,
+                                vb,
+                                update_idxs_tensor=pos_b,
+                                page_table=pt_b,
+                                block_size=eff_bs,
+                                num_kv_heads=num_local_kv_heads,
+                                **paged_modulo_kwargs,
+                            )
                         for t in (kb, vb, pos_b, pt_b):
                             t.deallocate(True)
                     k_seq.deallocate(True)

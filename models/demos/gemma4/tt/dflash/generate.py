@@ -58,7 +58,11 @@ from __future__ import annotations
 import torch
 
 import ttnn
-from models.demos.gemma4.tt.dflash.attention import build_attention_mask_static_parts
+from models.demos.gemma4.tt.dflash.attention import (
+    _dflash_pad_noise_concat_enabled,
+    _tile_pad_len,
+    build_attention_mask_static_parts,
+)
 from models.demos.gemma4.tt.dflash.context import ContextAccumulator, split_fc_slices
 from models.demos.gemma4.tt.dflash.drafter import dflash_drafter_forward, dflash_drafter_update_kv_caches
 from models.demos.gemma4.tt.dflash.lm_head import argmax_last_dim, compute_dflash_argmax
@@ -578,9 +582,14 @@ def _traced_steady_state(
     # every call -- each does a host->device write, which begin_trace_capture rejects
     # (TT_FATAL: Writes are not supported during trace capture) -- confirmed as the actual
     # cause of this trace's first capture failure.
+    # Must match dflash_attention_forward's own K/V pad decision exactly (same flag,
+    # see attention.py's _dflash_pad_noise_concat_enabled) -- otherwise this mask's
+    # key axis silently disagrees with the width dflash_attention_forward's ttnn.concat
+    # actually produces.
+    _q_len_padded = _tile_pad_len(block_size) if _dflash_pad_noise_concat_enabled() else None
     distinct_configs = set(layer_configs)
     mask_static_parts = {
-        cfg: build_attention_mask_static_parts(mesh_device, max_seq_len, block_size, cfg[0], cfg[1])
+        cfg: build_attention_mask_static_parts(mesh_device, max_seq_len, block_size, cfg[0], cfg[1], _q_len_padded)
         for cfg in distinct_configs
     }
 

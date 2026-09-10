@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import ttnn
 from models.demos.gemma4.tt.dflash.attention import (
+    _dflash_pad_noise_concat_enabled,
+    _tile_pad_len,
     build_attention_mask_additive_device,
     build_attention_mask_additive_device_dynamic,
     combine_attention_mask_dynamic,
@@ -60,6 +62,11 @@ def dflash_drafter_forward(
     (non-traced) callers can omit it."""
     ctx_len = max_seq_len
     q_len = noise.shape[-2]
+    # Must match dflash_attention_forward's own pad decision exactly (same flag) --
+    # see _dflash_pad_noise_concat_enabled. When mask_static_parts is given, whoever
+    # built it (generate.py, outside trace capture) is responsible for having already
+    # passed the same q_len_padded to build_attention_mask_static_parts.
+    q_len_padded = _tile_pad_len(q_len) if _dflash_pad_noise_concat_enabled() else None
 
     mask_cache: dict[tuple[bool, int | None], ttnn.Tensor] = {}
 
@@ -70,11 +77,11 @@ def dflash_drafter_forward(
                 mask_cache[key] = combine_attention_mask_dynamic(mask_static_parts[key], context_valid_len_tt)
             elif context_valid_len_tt is not None:
                 mask_cache[key] = build_attention_mask_additive_device_dynamic(
-                    mesh_device, ctx_len, q_len, is_causal, sliding_window, context_valid_len_tt
+                    mesh_device, ctx_len, q_len, is_causal, sliding_window, context_valid_len_tt, q_len_padded
                 )
             else:
                 mask_cache[key] = build_attention_mask_additive_device(
-                    mesh_device, ctx_len, q_len, is_causal, sliding_window
+                    mesh_device, ctx_len, q_len, is_causal, sliding_window, q_len_padded
                 )
         return mask_cache[key]
 
