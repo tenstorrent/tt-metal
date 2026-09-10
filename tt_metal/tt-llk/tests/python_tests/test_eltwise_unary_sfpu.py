@@ -113,6 +113,14 @@ STANDARD_SWEEP_OPS = sorted(
     key=lambda op: op.name,
 )
 
+# Approximate tanh is a 3-segment SFPLUT, and its error clears the default 5% rtol only
+# where the output format's own tolerance is looser than the LUT is coarse. MEASURED on a
+# Wormhole n150: all 24 Bfp8_b/Bfp4_b-output cases pass over eleven runs (unseeded stimuli,
+# so each run is a fresh sample), while all 56 Float16/Float16_b/Float32-output cases fail.
+# So the skip below is keyed on the output format rather than withholding the op outright.
+_APPROX_TANH_TOLERANT_OUTPUTS = (DataFormat.Bfp8_b, DataFormat.Bfp4_b)
+
+
 # Per-op (atol, rtol) overrides for coarse LUT/polynomial ops; others use the
 # per-format default in passed_test.
 CUSTOM_TOLERANCES = {
@@ -365,10 +373,14 @@ def test_eltwise_unary_sfpu(
 
     _skip_coverage_unsupported(mathop)
 
-    if mathop == MathOperation.Tanh and approx_mode == ApproximationMode.Yes:
+    if (
+        mathop == MathOperation.Tanh
+        and approx_mode == ApproximationMode.Yes
+        and formats.output_format not in _APPROX_TANH_TOLERANT_OUTPUTS
+    ):
         # An approximation path does exist -- a 3-segment SFPLUT in calculate_tanh -- so
-        # this is an accuracy limit, not a missing kernel. It clears the default 5% rtol
-        # only on Bfp8_b and Bfp4_b outputs, where the format's own tolerance is looser.
+        # this is an accuracy limit, not a missing kernel. Narrowed to the outputs that
+        # actually fail; see _APPROX_TANH_TOLERANT_OUTPUTS for the measurement.
         pytest.skip(
             reason="Approximate tanh is a 3-segment LUT whose error exceeds the default "
             "5% rtol on Float16/Float16_b/Float32 outputs; it needs an approx-mode "

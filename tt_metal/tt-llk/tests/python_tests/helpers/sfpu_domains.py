@@ -169,11 +169,24 @@ _E5M2_AND_FLOAT16 = (DataFormat.Float16, DataFormat.MxFp8R)
 #
 #   * **Range** — exp overflows an 8-bit exponent near x = 88.7. True in both modes, so it
 #     lives in the registry entries below.
-#   * **Accuracy** — the *approximation* overshoots the golden past ~8 (measured on
-#     Wormhole). One mode only, so it lives in _APPROX_ACCURACY_MAX, applied by for_op() at
-#     ApproximationMode.Yes. The ceiling is what holds the approximation inside the default
-#     5% rtol: test_eltwise_unary_sfpu sweeps approximate exp with no xfail and no custom
-#     tolerance, so widening it puts those cases straight into failure.
+#   * **Accuracy** — the *approximation* overshoots the golden by a roughly scale-invariant
+#     margin. One mode only, so it lives in _APPROX_ACCURACY_MAX, applied by for_op() at
+#     ApproximationMode.Yes.
+#
+#     RE-MEASURED on a Wormhole n150, deterministic ramp over the whole exp domain, every
+#     float output and both dest_acc settings: peak +3.55% and mean +1.9% relative error,
+#     flat from x = 0 out to each output's representable limit (x = 88.7 for Float32 and
+#     Float16_b, x ~ 11 for Float16). The accurate path over the same sweep is 0.00%-0.78%.
+#
+#     Two things that follow, both of which contradict what this comment used to say. There
+#     is no threshold near x = 8 -- the relative error does not grow with the argument, so
+#     the earlier "overshoots by ~5.7%, peak 6.75%, past ~8" does not reproduce at all, which
+#     is also why the approximate-exp xfail table could be retired. And the 16.0 ceiling is
+#     *not* what holds the approximation inside the default 5% rtol: at a 3.55% peak there is
+#     ~1.4 percentage points of headroom all the way to the range bound. Treat the ceiling as
+#     a conservative bound rather than a measured one. Widening it looks safe on this
+#     evidence but is a separate change, and wants its own sweep over the non-Float32 input
+#     formats before anyone makes it.
 #
 # The registry entry serves both modes, so an accuracy bound written there also withholds
 # (16, 80] from the *accurate* path — with it the exponent-overflow region and all large-exp
@@ -187,8 +200,8 @@ _E5M2_AND_FLOAT16 = (DataFormat.Float16, DataFormat.MxFp8R)
 # ExpWithBase's entry below is correct but currently unreachable: the op is in STANDARD_SWEEP_OPS,
 # which drives ApproximationMode.No only, so the ceiling never fires and the swept domain is the
 # range bound (high=160, argument 80). Kept rather than deleted so that enrolling it in
-# BROAD_SWEEP_OPS cannot silently hand the approximation an argument of 80, which is ten times the
-# ~8 where the overshoot starts. test_sfpu_domains pins the unreachability so the entry cannot be
+# BROAD_SWEEP_OPS cannot silently hand the approximation an argument of 80, well past the ceiling
+# the other two entries hold. test_sfpu_domains pins the unreachability so the entry cannot be
 # mistaken for active coverage.
 _APPROX_ACCURACY_MAX: Dict[MathOperation, float] = {
     MathOperation.Exp: 16.0,
