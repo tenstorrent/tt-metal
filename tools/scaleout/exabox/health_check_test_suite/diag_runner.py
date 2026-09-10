@@ -1154,6 +1154,7 @@ def reset_loop(
     dry_run: bool,
     snapshot_out: Path | None = None,
     post_reset_phases: list | None = None,
+    logs_dir: Path | None = None,
 ) -> None:
     """Per SYS-4365: first -r, then stick to -glx_reset for subsequent iterations.
 
@@ -1185,6 +1186,20 @@ def reset_loop(
         t0 = time.time()
         cp = run([tt_smi, flag], dry_run=dry_run, capture_output=True, text=True)
         dt = time.time() - t0
+
+        log_path = logs_dir / f"{check_name}.log" if logs_dir is not None else None
+        if log_path is not None and not dry_run:
+            try:
+                logs_dir.mkdir(parents=True, exist_ok=True)
+                log_path.write_text(
+                    f"$ {tt_smi} {flag}\nrc={cp.returncode}  duration={dt:.1f}s\n"
+                    f"\n--- stdout ---\n{cp.stdout or '(empty)'}"
+                    f"\n--- stderr ---\n{cp.stderr or '(empty)'}\n"
+                )
+                log(f"  log:  {log_path}")
+            except OSError as e:
+                log(f"  could not write {log_path}: {e!r}")
+
         # Quick post-reset enum check
         if dry_run:
             post_count = EXPECTED_CHIP_COUNT
@@ -1198,6 +1213,13 @@ def reset_loop(
                 post_count = -1
         status = PASS if (dry_run or (cp.returncode == 0 and post_count == EXPECTED_CHIP_COUNT)) else FAIL
         _emit_result(check_name, status, suffix=f"({dt:.1f}s, post_pcie={post_count})")
+
+        # A failed reset is the one case where the console should say why
+        # without the reader having to go and open the log.
+        if status == FAIL and not dry_run:
+            text = (cp.stderr or "").strip() or (cp.stdout or "").strip()
+            for line in text.splitlines()[-5:]:
+                log(f"  ! {line}")
         phase.add(
             Check(
                 name=check_name,
@@ -1689,6 +1711,12 @@ def run_diag(
     report["phases"]["snapshot"] = asdict(snap_phase)
     print_phase_summary("snapshot", report["phases"]["snapshot"])
 
+    # Where every phase drops its raw tool output. Derived once: the reset
+    # and gtest phases both write here, and collect_run_artifacts() attaches
+    # whatever it finds, so a phase that writes elsewhere silently loses its
+    # logs off the ticket.
+    logs_dir = output.resolve().parent / "logs"
+
     # Phase 2: reset loop + per-reset snapshot revalidations
     reset_phase = Phase(name="reset_loop")
     post_reset_phases: list = []
@@ -1707,6 +1735,7 @@ def run_diag(
                 dry_run,
                 snapshot_out=snap_out_for_resets,
                 post_reset_phases=post_reset_phases,
+                logs_dir=logs_dir,
             )
         except Exception as e:
             reset_phase.error = repr(e)
@@ -1775,7 +1804,6 @@ def run_diag(
         test_phase.add(Check(name="tests", status=SKIP, details="--skip-tests"))
     else:
         try:
-            logs_dir = output.resolve().parent / "logs"
             run_tests(tt_metal_path, tier, test_phase, dry_run, logs_dir)
         except Exception as e:
             test_phase.error = repr(e)
