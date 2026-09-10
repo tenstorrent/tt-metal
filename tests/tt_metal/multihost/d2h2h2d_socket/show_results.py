@@ -118,8 +118,7 @@ def load(paths):
                 # Check 2: the file's latency matches ours.
                 file_lat = to_float(row.get("latency_us"))
                 if lat is not None and file_lat is not None and abs(lat - file_lat) > 1e-3:
-                    problems.append(f"{where}: latency column {file_lat:.3f} != "
-                                    f"total_ns/samples/1000 {lat:.3f}")
+                    problems.append(f"{where}: latency column {file_lat:.3f} != " f"total_ns/samples/1000 {lat:.3f}")
                 # Check 2b: and the messages/second column, where the file carries one. Absent on
                 # files written before 2026-09-07, which is not a defect -- .get() returns None
                 # and the check does not run.
