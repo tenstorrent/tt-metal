@@ -13,7 +13,11 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
 
-// One unit of work for one stream, in execution order.
+// One unit of work for one stream.
+//
+// The reader runs all own assignments and then all relays; that order is fixed in the kernel, not
+// carried here. It is also load-bearing: the own phase is the slack a relay has between the upstream
+// chunk being written and this stream consuming it.
 //
 // A relay pushes an incoming forwarding chunk one hop further, whole. Otherwise the work is this chip's
 // own tokens for ONE destination chip, narrowed to a fraction of what it owes that chip: halved between
@@ -25,7 +29,6 @@ namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
 // destination and the share.
 struct Assignment {
     bool is_relay = false;
-    uint32_t relay_chunk = 0;  // is_relay: which chunk of this stream's region
     uint32_t dst_chip_id = 0;  // !is_relay: fabric name of the destination chip
     uint32_t dst_row = 0;      // !is_relay: that chip's position on the dispatch axis
     uint32_t split_idx = 0;

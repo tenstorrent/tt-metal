@@ -234,7 +234,7 @@ std::map<StreamId, std::vector<Assignment>> generate_assignments(
             }
             const uint32_t relays = relay_chunks_per_stream(extent);
             for (uint32_t c = 0; c < relays; c++) {
-                list.push_back(Assignment{.is_relay = true, .relay_chunk = c});
+                list.push_back(Assignment{.is_relay = true});
             }
             TT_FATAL(
                 list.size() == m + relays,

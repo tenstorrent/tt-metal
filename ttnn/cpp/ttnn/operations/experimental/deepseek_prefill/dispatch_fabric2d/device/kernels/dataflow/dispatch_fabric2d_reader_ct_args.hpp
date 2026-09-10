@@ -64,7 +64,6 @@ struct ReaderCtArgs {
         // added without renumbering anything the kernel already reads.
         kRingChipIdsBase,
         kAssignmentBase,
-        kScheduleBase,
         // (origin_row, dst_row, split_idx, split_count) per descriptor. `in` is what this stream reads
         // out of its own region; `out` is what it writes into the downstream chip's. They are different
         // lists, and validate_chunk_agreement proves `out` here equals `in` on the downstream chip -- in
@@ -105,7 +104,6 @@ struct ReaderCtArgs {
     uint32_t num_relay;
     uint32_t ring_chip_ids_base;
     uint32_t assignment_base;
-    uint32_t schedule_base;
     uint32_t in_chunks_base;
     uint32_t out_chunks_base;
 
@@ -150,16 +148,15 @@ struct ReaderCtArgs {
         num_relay(relay_count),
         ring_chip_ids_base(kCount),
         assignment_base(kCount + args.device->shape()[args.axis]),
-        schedule_base(kCount + args.device->shape()[args.axis] + own_count * ASSIGNMENT_WORDS),
-        in_chunks_base(schedule_base + own_count + relay_count),
+        in_chunks_base(assignment_base + own_count * ASSIGNMENT_WORDS),
         out_chunks_base(in_chunks_base + relay_count * ASSIGNMENT_WORDS) {}
 
-    // Scalars, then ring_chip_ids, then the assignments, then the schedule. The three base indices above
-    // are what the kernel walks these with, so they are computed from the same expressions.
+    // Scalars, then ring_chip_ids, then the assignments, then the two chunk-descriptor blocks. The
+    // base indices above are what the kernel walks these with, so they are computed from the same
+    // expressions.
     std::vector<uint32_t> to_ct_word_arr(
         const std::vector<uint32_t>& ring_chip_ids,
         const std::vector<uint32_t>& assignment_words,
-        const std::vector<uint32_t>& schedule,
         const std::vector<uint32_t>& in_chunks,
         const std::vector<uint32_t>& out_chunks) const {
         constexpr uint32_t kUnset = 0xDEADBEEFu;
@@ -192,22 +189,18 @@ struct ReaderCtArgs {
         w[kNumRelay] = num_relay;
         w[kRingChipIdsBase] = ring_chip_ids_base;
         w[kAssignmentBase] = assignment_base;
-        w[kScheduleBase] = schedule_base;
         w[kInChunksBase] = in_chunks_base;
         w[kOutChunksBase] = out_chunks_base;
         for (uint32_t i = 0; i < kCount; i++) {
             TT_FATAL(w[i] != kUnset, "dispatch_fabric2d: reader compile-time arg {} was never assigned", i);
         }
         TT_FATAL(
-            ring_chip_ids.size() == extent && assignment_words.size() == num_own * ASSIGNMENT_WORDS &&
-                schedule.size() == num_own + num_relay,
-            "dispatch_fabric2d: reader blocks are {}/{}/{} words but the kernel indexes {}/{}/{}",
+            ring_chip_ids.size() == extent && assignment_words.size() == num_own * ASSIGNMENT_WORDS,
+            "dispatch_fabric2d: reader blocks are {}/{} words but the kernel indexes {}/{}",
             ring_chip_ids.size(),
             assignment_words.size(),
-            schedule.size(),
             extent,
-            num_own * ASSIGNMENT_WORDS,
-            num_own + num_relay);
+            num_own * ASSIGNMENT_WORDS);
         TT_FATAL(
             in_chunks.size() == num_relay * ASSIGNMENT_WORDS && out_chunks.size() == num_relay * ASSIGNMENT_WORDS,
             "dispatch_fabric2d: chunk descriptor blocks are {}/{} words but the kernel indexes {} each",
@@ -216,7 +209,6 @@ struct ReaderCtArgs {
             num_relay * ASSIGNMENT_WORDS);
         w.insert(w.end(), ring_chip_ids.begin(), ring_chip_ids.end());
         w.insert(w.end(), assignment_words.begin(), assignment_words.end());
-        w.insert(w.end(), schedule.begin(), schedule.end());
         w.insert(w.end(), in_chunks.begin(), in_chunks.end());
         w.insert(w.end(), out_chunks.begin(), out_chunks.end());
         return w;
@@ -251,7 +243,6 @@ struct ReaderCtArgs {
         num_relay(get_compile_time_arg_val(kNumRelay)),
         ring_chip_ids_base(get_compile_time_arg_val(kRingChipIdsBase)),
         assignment_base(get_compile_time_arg_val(kAssignmentBase)),
-        schedule_base(get_compile_time_arg_val(kScheduleBase)),
         in_chunks_base(get_compile_time_arg_val(kInChunksBase)),
         out_chunks_base(get_compile_time_arg_val(kOutChunksBase)) {}
 #endif
