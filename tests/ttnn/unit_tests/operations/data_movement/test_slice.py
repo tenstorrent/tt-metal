@@ -196,9 +196,8 @@ def test_slice_rm_sharded_with_program_cache(device, n, c, h, w):
 def test_slice_rm_sharded_shard_grid_placement(device, shard_grid, n, c, h, w):
     """A height-sharded row-major slice must give the same result whichever cores the shards live
     on. A shard grid may be several rectangles rather than one, and it need not include core
-    (0, 0). The cores a shard grid leaves out are available for other work, so the slice must
-    leave them untouched. Each parameter here is the shard grid of both the input and the
-    output."""
+    (0, 0). Each parameter here is the shard grid of both the input and the output, and each is
+    checked against the same PyTorch reference, which does not depend on the shard grid."""
     run_slice_rm_sharded(device, n, c, h, w, input_shard_grid=shard_grid, output_shard_grid=shard_grid)
 
 

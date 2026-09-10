@@ -54,9 +54,8 @@ inline std::vector<std::vector<uint32_t>> group_contiguous_values_sharded(std::v
 // positional layout the reader kernel decodes:
 //   [0] num_cores_read, then (noc_x,noc_y) pairs, then num_stick_chunks, then (start_id,len) chunk pairs.
 // input_cores lists the cores of the input tensor's shard grid in shard order, so input_cores[k] is the
-// core holding input shard k. Every core address written into a vararg vector comes from input_cores.
-// num_padded_sticks is how many rows the input holds, so a row id at or past num_padded_sticks has no
-// source.
+// logical coordinate of the core holding input shard k. Every NOC coordinate written into a vararg
+// vector is converted from an input_cores entry. num_padded_sticks is how many rows the input holds.
 inline std::vector<std::vector<uint32_t>> get_slice_runtime_varargs_rm_sharded(
     const Tensor& input_tensor,
     Tensor& output_tensor,
@@ -134,20 +133,21 @@ inline std::vector<std::vector<uint32_t>> get_slice_runtime_varargs_rm_sharded(
 
         // Group this core's source rows by the input shard holding them. Keying on the shard index puts the
         // groups in increasing shard index order, which is what the reader needs: it fills the output shard
-        // front to back as it walks the list of cores to read from, and within each of those cores its chunk
-        // list. Row ids only grow as stick_ids_per_core is built above, so increasing shard index order is
-        // also increasing output row order.
+        // front to back, one source core at a time in the order listed, and within a source core the rows
+        // in the order listed. Row ids only grow as stick_ids_per_core is built above, so increasing shard
+        // index order is also increasing output row order.
         std::map<uint32_t, std::vector<uint32_t>> shard_stick_map;
         for (uint32_t s = 0; s < num_sticks_per_core_unpadded; ++s) {
             uint32_t stick_id = stick_ids_per_core[s];
             uint32_t shard_id = stick_id / num_sticks_per_core_padded;
             uint32_t stick_id_in_shard = stick_id - (shard_id * num_sticks_per_core_padded);
 
-            // A shard height that does not divide the output evenly leaves the last output shard only
-            // partly inside the output tensor. Rows past the end of the output tensor have no source,
-            // because the stick_ids_per_core walk runs them off the end of the input. That walk only ever
-            // increases the row id, so the rows with no source are the tail of this core's list; stopping
-            // keeps every row that does have a source at its own position in the output shard.
+            // A core's output shard has room for shard_height_unpadded rows. When the core count does not
+            // divide the output row count, the shards together have room for more rows than the output
+            // holds, so the last slots lie past the final output row and have no source row. For those,
+            // stick_ids_per_core can return an input row id at or past num_padded_sticks. Row ids only
+            // rise, so the ids past the input's end are the tail of this core's list, and leaving them out
+            // shifts none of the rows that do have a source.
             if (stick_id >= num_padded_sticks) {
                 break;
             }
