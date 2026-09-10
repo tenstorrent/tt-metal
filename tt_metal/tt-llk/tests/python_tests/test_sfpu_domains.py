@@ -19,7 +19,7 @@ import math
 import struct
 
 import pytest
-from helpers.format_config import DataFormat, InputOutputFormat
+from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
