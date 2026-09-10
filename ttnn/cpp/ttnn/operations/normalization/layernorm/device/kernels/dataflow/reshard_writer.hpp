@@ -14,7 +14,7 @@
 // address of the output tensor's shard, which is the same on every core it is sharded across, so it
 // doubles as the destination address on each storage core.
 inline void write_resharded_data(
-    Noc& noc,
+    const Noc& noc,
     DataflowBuffer& dfb_out,
     uint32_t output_base_addr,
     uint32_t num_segments_to_write_back,
