@@ -25,6 +25,58 @@ PCC_TOLERANCE = 0.99
 HIGH_PRECISION_PCC = 0.9999
 
 
+@pytest.mark.parametrize(
+    "expected_arch,input_shape,out_channels,grid_size,blocking",
+    [
+        # 8x8 Wormhole: H is split as 2+2+1+0 for each (C_out, T) pair, leaving 15 interleaved
+        # H-partition assignments with no work. The 45 active assignments use Chain placement.
+        pytest.param(
+            ttnn.device.Arch.WORMHOLE_B0,
+            (1, 64, 5, 5, 5),
+            160,
+            (8, 8),
+            (64, 32, 1, 1, 1),
+        ),
+        # 11x10 Blackhole: H is split as 2+2+2+2+2+2+0+0+0+0 for each T partition, leaving
+        # 44 H-partition assignments with no work. Mcast packs the 66 active assignments into six rows.
+        pytest.param(
+            ttnn.device.Arch.BLACKHOLE,
+            (1, 64, 13, 12, 5),
+            32,
+            (11, 10),
+            (64, 32, 1, 1, 1),
+        ),
+    ],
+)
+def test_conv3d_core_placement_with_idle_partitions(
+    device, expected_arch, input_shape, out_channels, grid_size, blocking
+):
+    if device.arch() != expected_arch:
+        pytest.skip(f"Case targets {expected_arch}, running on {device.arch()}")
+
+    C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = blocking
+    config = create_conv3d_config(
+        T_out_block=T_out_block,
+        H_out_block=H_out_block,
+        W_out_block=W_out_block,
+        C_out_block=C_out_block,
+        C_in_block=C_in_block,
+        compute_with_storage_grid_size=grid_size,
+    )
+    run_conv3d_test(
+        device,
+        input_shape,
+        out_channels,
+        kernel_size=(3, 3, 3),
+        stride=(1, 1, 1),
+        groups=1,
+        padding=(0, 1, 1),
+        padding_mode="zeros",
+        grid_size=grid_size,
+        config=config,
+    )
+
+
 def compute_conv3d_tensor_2d_shape(input_shape):
     """Compute the 2D physical shape of a Conv3D input tensor.
 
