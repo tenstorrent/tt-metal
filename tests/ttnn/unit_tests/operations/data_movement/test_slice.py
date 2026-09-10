@@ -194,11 +194,58 @@ def test_slice_rm_sharded_with_program_cache(device, n, c, h, w):
 @pytest.mark.parametrize("h", [128])
 @pytest.mark.parametrize("w", [16])
 def test_slice_rm_sharded_shard_grid_placement(device, shard_grid, n, c, h, w):
-    """A height-sharded row-major slice must give the same result whichever cores the shards live
-    on. A shard grid may be several rectangles rather than one, and it need not include core
-    (0, 0). Each parameter here is the shard grid of both the input and the output, and each is
-    checked against the same PyTorch reference, which does not depend on the shard grid."""
+    """ttnn.slice must give the same result whichever cores the shards live on, for a row-major
+    input and output that are both height sharded. A shard grid may be several rectangles rather
+    than one, and it need not include core (0, 0). Each parameter here is the shard grid of both
+    the input and the output, and each is checked against the same PyTorch reference, which does
+    not depend on the shard grid."""
     run_slice_rm_sharded(device, n, c, h, w, input_shard_grid=shard_grid, output_shard_grid=shard_grid)
+
+
+@pytest.mark.parametrize(
+    "shard_grid",
+    [
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1)),
+                ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(4, 1)),
+            ]
+        ),
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1)),
+                ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 1)),
+            ]
+        ),
+    ],
+    ids=["origin_with_gap", "origin_no_gap"],
+)
+@pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+@pytest.mark.parametrize("n", [1])
+@pytest.mark.parametrize("c", [128])
+@pytest.mark.parametrize("h", [128])
+@pytest.mark.parametrize("w", [16])
+def test_slice_rm_sharded_shard_grid_order(device, shard_grid, orientation, n, c, h, w):
+    """Checks that ttnn.slice matches the same slice taken in PyTorch exactly, for an input and output
+    sharing one height sharded layout: rows are cut into equal blocks (shards), one per core, and the
+    cores holding them form a shard grid of two rectangles, each given by two (x, y) corner cores.
+    Shards fill the grid in its own order: rectangle by rectangle, then row by row or column by column
+    inside a rectangle, as the shard orientation selects. The test runs two grids in both orientations.
+    Row-major on {(0,0)-(1,1), (2,0)-(3,1)} puts the third shard on core (0,1), not on (2,0), where a
+    row by row scan of the enclosing rectangle (0,0)-(3,1) would put the third shard. The grid
+    {(0,0)-(1,1), (3,0)-(4,1)} skips (2,0) and (2,1), so it holds 8 of the 10 cores of its enclosing
+    rectangle (0,0)-(4,1), and a scan of that rectangle reaches two cores that hold no shard."""
+    run_slice_rm_sharded(
+        device,
+        n,
+        c,
+        h,
+        w,
+        input_shard_grid=shard_grid,
+        output_shard_grid=shard_grid,
+        input_shard_orientation=orientation,
+        output_shard_orientation=orientation,
+    )
 
 
 @pytest.mark.parametrize("input_shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
@@ -209,7 +256,7 @@ def test_slice_rm_sharded_shard_grid_placement(device, shard_grid, n, c, h, w):
 @pytest.mark.parametrize("w", [16])
 def test_slice_rm_sharded_shard_orientation(device, input_shard_orientation, output_shard_orientation, n, c, h, w):
     """A shard spec's orientation says which core holds which shard, and it belongs to one tensor.
-    The input tensor and the output tensor each carry their own orientation, so a slice must read
+    The input tensor and the output tensor each carry their own orientation, so ttnn.slice must read
     the input according to the input's orientation and write the output according to the output's
     orientation, including when the input's orientation and the output's orientation differ. The
     shard grid is the same origin-anchored rectangle in every case here, so which core holds which
