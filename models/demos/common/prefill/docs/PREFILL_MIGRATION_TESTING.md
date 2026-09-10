@@ -596,19 +596,13 @@ runner supplies the first two, then waits — it cannot distinguish a slow worke
 
 ---
 
-## Troubleshooting: the runner does not see `WORKER_READY`
+## Troubleshooting: the runner times out in `wait_ready`
 
 ```
-[migration] WORKER_READY not observed within 120000 ms (MigrationLayerClient::wait_ready: timeout after 120000ms); entering the request loop anyway.
+RuntimeError: MigrationLayerClient::wait_ready: timeout after 120000ms
 ```
 
-The runner logs this as a warning and keeps serving (earlier versions raised and exited). Two causes:
-
-1. Another client of the same endpoint drained the ack. The resp queue is SPMC with competing consumers, so a
-   dgen prefill worker attached to `/mig_ep0_resp` can take the one-shot `WORKER_READY` before the runner
-   polls it. Readiness is then confirmed by the migration worker log (`[ctrl 0] WORKER_READY`) and the dgen
-   worker (`migration kv client: ready`); the runner needs nothing from the ack itself.
-2. The two workers were never started, so nothing can answer. Confirm in the endpoint log
+Almost always: the two workers were never started, so nothing can answer. Confirm in the endpoint log
 (`/tmp/launch_mig_ep_<id>_*.log`; it holds binary bytes, so `grep` needs `-a`):
 
 ```bash
