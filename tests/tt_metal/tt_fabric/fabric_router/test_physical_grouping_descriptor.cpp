@@ -14,6 +14,7 @@
 #include <fstream>
 #include <chrono>
 #include <cstdlib>
+#include <optional>
 
 #include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
@@ -2919,6 +2920,32 @@ std::string grid_psd(std::size_t rows, std::size_t cols) {
     return out.str();
 }
 
+// Sets one environment variable for the enclosing scope and restores whatever was there before.
+// TT_METAL_PLACEMENT_SOLVER selects the placement search (sat | dfs | auto), which is how the tests
+// below pin down which path they exercise.
+class ScopedEnv {
+public:
+    ScopedEnv(const char* name, const char* value) : name_(name) {
+        if (const char* previous = std::getenv(name)) {
+            previous_ = previous;
+        }
+        setenv(name, value, /*overwrite=*/1);
+    }
+    ~ScopedEnv() {
+        if (previous_.has_value()) {
+            setenv(name_, previous_->c_str(), /*overwrite=*/1);
+        } else {
+            unsetenv(name_);
+        }
+    }
+    ScopedEnv(const ScopedEnv&) = delete;
+    ScopedEnv& operator=(const ScopedEnv&) = delete;
+
+private:
+    const char* name_;
+    std::optional<std::string> previous_;
+};
+
 tt::tt_metal::PhysicalSystemDescriptor load_psd_from_text(const std::string& text) {
     const auto path = std::filesystem::temp_directory_path() /
                       ("pgd_placement_strain_" +
@@ -3944,6 +3971,8 @@ TEST(AdjacencyGuidedPlacement, PgdGroupingThatCannotCoverEveryInstanceShouldDown
 // and DFS otherwise, so a 4x4 mesh on an 8x8 system starts on SAT and finishes on DFS as occupancy
 // shrinks. Stats are the thing to watch when changing the looping.
 TEST(AdjacencyGuidedPlacement, StrainManyMeshesReportsDfsStats) {
+    // The counters asserted below are the DFS's own; the SAT joint placement runs first by default.
+    ScopedEnv dfs_only("TT_METAL_PLACEMENT_SOLVER", "dfs");
     auto run_case = [](std::size_t mesh_rows,
                        std::size_t mesh_cols,
                        std::size_t fabric_rows,
@@ -3972,6 +4001,125 @@ TEST(AdjacencyGuidedPlacement, StrainManyMeshesReportsDfsStats) {
     // 8 linked 2x2 meshes on a 4x8 chip grid: 4 * remaining_chips < 512, so the inner calls stay on DFS.
     run_case(2, 2, 2, 4, "8x 2x2 meshes on 4x8");
     // 4 linked 4x4 meshes on an 8x8 chip grid: first inner call is 16*64 >= 512 (SAT), last is 16*16 (DFS).
+    run_case(4, 4, 2, 2, "4x 4x4 meshes on 8x8");
+}
+
+// ----- two-layer SAT joint placement (Plan 4) --------------------------------------------------
+//
+// Same descriptors as the DFS tests above, forced onto the SAT path. A SAT model is a real placement,
+// so the footprints must be the ones the DFS found; the stats must say the master solve ran.
+
+// The unique seating on the 4-chip line is found by the master solve, with every candidate list
+// exhausted (the 1x2 grouping has exactly three seats on a line of four).
+TEST(SatJointPlacement, LinkedMeshesPlaceAdjacentlyOnLine) {
+    ScopedEnv sat_only("TT_METAL_PLACEMENT_SOLVER", "sat");
+    PhysicalGroupingDescriptor pgd{
+        std::filesystem::path("tests/tt_metal/tt_fabric/physical_groupings/test_1x2_mesh_grouping.textproto")};
+    MeshGraphDescriptor mgd{
+        std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x2_meshes_linked.textproto")};
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_line.textproto");
+    const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
+
+    PlacementSolveStats stats;
+    const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd, /*node_budget=*/0, &stats);
+    ASSERT_EQ(placements.size(), 2u) << stats.to_string();
+    EXPECT_THAT(
+        footprints_of(placements),
+        ::testing::UnorderedElementsAre(std::set<uint64_t>{100, 101}, std::set<uint64_t>{102, 103}))
+        << "the only disjoint adjacent seating of two 1x2 meshes on 100-101-102-103";
+    EXPECT_TRUE(stats.master_solve_attempted) << stats.to_string();
+    EXPECT_TRUE(stats.master_solve_success) << stats.to_string();
+    EXPECT_TRUE(stats.candidate_lists_complete) << stats.to_string();
+    EXPECT_EQ(stats.adjacency_nodes_expanded, 0u) << "the DFS must not have run\n" << stats.to_string();
+    EXPECT_GT(stats.master_sat_vars, 0u) << stats.to_string();
+    EXPECT_GT(stats.master_sat_clauses, 0u) << stats.to_string();
+}
+
+// Two disjoint pairs cannot carry the seam. With every candidate list exhausted the UNSAT verdict is
+// trustworthy, so `auto` mode must NOT fall back to the DFS, and the stats must say why.
+TEST(SatJointPlacement, LinkedMeshesFailOnDisconnectedPairsWithTrustworthyUnsat) {
+    ScopedEnv auto_mode("TT_METAL_PLACEMENT_SOLVER", "auto");
+    PhysicalGroupingDescriptor pgd{
+        std::filesystem::path("tests/tt_metal/tt_fabric/physical_groupings/test_1x2_mesh_grouping.textproto")};
+    MeshGraphDescriptor mgd{
+        std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x2_meshes_linked.textproto")};
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_2mesh.textproto");
+    const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
+
+    PlacementSolveStats stats;
+    const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd, /*node_budget=*/0, &stats);
+    EXPECT_TRUE(placements.empty()) << "no link joins the two pairs, so the seam cannot be satisfied";
+    EXPECT_TRUE(stats.master_solve_attempted) << stats.to_string();
+    EXPECT_FALSE(stats.master_solve_success) << stats.to_string();
+    EXPECT_TRUE(stats.candidate_lists_complete) << "every 1x2 seat on 4 chips must have been enumerated\n"
+                                                << stats.to_string();
+    EXPECT_EQ(stats.adjacency_nodes_expanded, 0u) << "a trustworthy UNSAT must not fall back to the DFS\n"
+                                                  << stats.to_string();
+}
+
+// Under a RELAXED policy the strict seam tier is solved first, so the full channel count wins when it
+// is available -- the same preference next_step_pool expresses per seam, here as a global one.
+TEST(SatJointPlacement, RelaxedSeamPrefersTheFullChannelCount) {
+    ScopedEnv sat_only("TT_METAL_PLACEMENT_SOLVER", "sat");
+    PhysicalGroupingDescriptor pgd{
+        std::filesystem::path("tests/tt_metal/tt_fabric/physical_groupings/test_ring_mesh_groupings.textproto")};
+    MeshGraphDescriptor mgd{
+        std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x1_relaxed_seam.textproto")};
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_3asic_uneven_line.textproto");
+    const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
+
+    PlacementSolveStats stats;
+    const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd, /*node_budget=*/0, &stats);
+    ASSERT_EQ(placements.size(), 2u) << stats.to_string();
+    EXPECT_THAT(
+        footprints_of(placements),
+        ::testing::UnorderedElementsAre(std::set<uint64_t>({101}), std::set<uint64_t>({102})))
+        << "the 4-channel link is the only seam wide enough, so the 2-channel pair should be left alone";
+    EXPECT_TRUE(stats.master_solve_success) << stats.to_string();
+}
+
+// Trait-free (unpinned) groupings are deferred to the second tier and enumerated in batches, so the
+// grid descriptors exercise column generation: the first master attempt has no candidates at all,
+// the fallback tier is enabled, and the solve completes from those lists.
+TEST(SatJointPlacement, StrainManyMeshesPlacesFromTraitFreeTier) {
+    ScopedEnv sat_only("TT_METAL_PLACEMENT_SOLVER", "sat");
+    auto run_case = [](std::size_t mesh_rows,
+                       std::size_t mesh_cols,
+                       std::size_t fabric_rows,
+                       std::size_t fabric_cols,
+                       const char* label) {
+        PhysicalGroupingDescriptor pgd{unspecified_mesh_pgd(mesh_rows, mesh_cols)};
+        MeshGraphDescriptor mgd{mesh_grid_mgd(mesh_rows, mesh_cols, fabric_rows, fabric_cols)};
+        auto psd = load_psd_from_text(grid_psd(mesh_rows * fabric_rows, mesh_cols * fabric_cols));
+
+        const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
+        ASSERT_TRUE(valid_groupings.contains("MESH")) << label;
+
+        PlacementSolveStats stats;
+        const auto placements =
+            pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd, /*node_budget=*/0, &stats);
+
+        const std::size_t expected_meshes = fabric_rows * fabric_cols;
+        EXPECT_EQ(placements.size(), expected_meshes) << label << "\n" << stats.to_string();
+        EXPECT_TRUE(stats.success) << label << "\n" << stats.to_string();
+        EXPECT_TRUE(stats.master_solve_attempted) << label << "\n" << stats.to_string();
+        EXPECT_TRUE(stats.master_solve_success) << label << "\n" << stats.to_string();
+        EXPECT_EQ(stats.adjacency_nodes_expanded, 0u) << label << "\n" << stats.to_string();
+        EXPECT_GE(stats.master_candidates_enumerated, expected_meshes) << label << "\n" << stats.to_string();
+        // Every placement must be a disjoint footprint of the right size.
+        std::set<uint64_t> seen;
+        for (const auto& placement : placements) {
+            EXPECT_EQ(placement.asics.size(), mesh_rows * mesh_cols) << label;
+            for (const auto& asic : placement.asics) {
+                EXPECT_TRUE(seen.insert(*asic).second) << label << ": ASIC " << *asic << " placed twice";
+            }
+        }
+    };
+
+    run_case(2, 2, 2, 4, "8x 2x2 meshes on 4x8");
     run_case(4, 4, 2, 2, "4x 4x4 meshes on 8x8");
 }
 

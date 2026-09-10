@@ -3,9 +3,19 @@
 **Hoist the inner solve out of the search.** Enumerate each PGD grouping variant's placements once
 against the full fabric, then choose one seat per mesh with a single SAT solve over those candidates.
 
-**Status: proposed.** Nothing here is implemented. Plan 3's adjacency-guided DFS
-(`PhysicalGroupingDescriptor::solve_adjacency_guided_placement`) is the current path and stays the
-fallback throughout; every phase below is gated behind a flag and validated against it.
+**Status: §3–§5 implemented** (`start_sat_placement` in `physical_grouping_descriptor_matching.cpp`),
+and the default path. `TT_METAL_PLACEMENT_SOLVER` selects `sat`, `dfs`, or `auto` (default: SAT first, the
+Plan 3 adjacency-guided DFS only when SAT fails without a trustworthy UNSAT, i.e. with truncated candidate
+lists). Phase 2/3 (rewiring the DFS onto the master list, MRV) are not done; the DFS is unchanged.
+
+Implementation notes that differ from the sketches below:
+- Candidates are deduplicated by footprint *across variants of one definition*, first variant wins
+  (torus variants of one pinning share a footprint and would otherwise be pure symmetry for the solver).
+- Seam link counts are computed once per unordered pair of *definitions* (`SeamLinkMatrices`) and
+  reused by every mesh-level edge joining instances of those definitions.
+- Trait-free variants (the MGD fallback, or an unpinned PGD grouping) are detected structurally
+  (`variant_is_trait_free`) rather than by list position, and capped at 8192 candidates per definition.
+- Under a RELAXED policy the strict-seam tier is solved with a conflict budget; the relaxed tier is not.
 
 **Priority: 1 if Plan 3 cannot place Gemma; 3 otherwise.** §1 is the evidence.
 
