@@ -7,6 +7,8 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace tt::tt_metal::streaming_profiler {
@@ -40,6 +42,19 @@ public:
     static int64_t lookup_local_ns(uint32_t chip_id, int64_t host_ns) noexcept;
     // How many segments a chip currently has published (0 = none).
     static size_t published(uint32_t chip_id) noexcept;
+};
+
+// A named (host ns, value) series a consumer computes once a capture is complete -- the d2d sync's running
+// cross-chip rate estimates -- for a plotting sink to place on the device timeline. Not a hot path: published once at
+// capture end, drained once by the sink.
+struct SyncPlotPoint {
+    int64_t host_ns = 0;
+    double value = 0.0;
+};
+class SyncPlots {
+public:
+    static void publish(std::string name, std::vector<SyncPlotPoint> points);
+    static std::vector<std::pair<std::string, std::vector<SyncPlotPoint>>> drain();
 };
 
 }  // namespace tt::tt_metal::streaming_profiler

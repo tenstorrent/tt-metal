@@ -18,6 +18,7 @@
 #include <client/TracyProfiler.hpp>
 #endif
 
+#include "impl/streaming_profiler/spsc_packet.h"
 #include "impl/streaming_profiler/streaming_profiler_service.hpp"
 #include "impl/streaming_profiler/streaming_profiler_decode.hpp"
 #include "impl/streaming_profiler/streaming_profiler_sync_correction.hpp"
@@ -84,7 +85,10 @@ TracySink::TracySink(Service& service) : service_(service), srcloc_table_(kSrclo
                     }
                 },
             .clock_sink =
-                [this](const ClockSample& cs) { plot_samples_.push_back(PlotSample{cs.dev, cs.kind, cs.ts}); },
+                [this](const ClockSample& cs) {
+                    plot_samples_.push_back(
+                        PlotSample{cs.dev, cs.kind, cs.lane / profiler::kSpscNRiscDecode, cs.ts, cs.value24});
+                },
             .on_capture_end = [this](const CaptureContext&) { emit_plots(); }});
 }
 
@@ -340,10 +344,21 @@ void TracySink::push_marker(
 #endif
 }
 
+// The stamp PlotDataAt needs for a point at host time host_ns. The server displays (tsc - baseTime) * m_timerMul --
+// an absolute timer-tick stamp like GetTime() -- while to_timeline() yields ns since anchor_tracy_; so
+// anchor_tracy_ + ns / mul, which is exactly where the device zones land through their GPU context.
+int64_t TracySink::plot_stamp(int64_t host_ns) const {
+#if defined(TRACY_ENABLE)
+    const double timer_mul = TracyGetTimerMul() > 0.0 ? TracyGetTimerMul() : 1.0;
+    return anchor_tracy_ + static_cast<int64_t>(static_cast<double>(to_timeline(host_ns)) / timer_mul);
+#else
+    return to_timeline(host_ns);
+#endif
+}
+
 void TracySink::emit_plots() {
-    // PP_CLOCK samples arrive in decode order, not time order; PlotDataAt wants each plot's points in increasing
-    // time. Sort per stream (dev,kind) by the eth wall timestamp -- a full-width, monotonic per-core counter -- so
-    // the curve is emitted in order and lands across the whole session instead of collapsing.
+    // Samples arrive in decode order; group them into streams (device, kind, eth core) in time order. Each stream is
+    // one refclk counter, unwrapped and differenced on its own.
     std::sort(plot_samples_.begin(), plot_samples_.end(), [](const PlotSample& a, const PlotSample& b) {
         if (a.dev != b.dev) {
             return a.dev < b.dev;
@@ -351,65 +366,103 @@ void TracySink::emit_plots() {
         if (a.kind != b.kind) {
             return a.kind < b.kind;
         }
+        if (a.core != b.core) {
+            return a.core < b.core;
+        }
         return a.ts < b.ts;
     });
-    for (const PlotSample& p : plot_samples_) {
-        plot_clock(p.dev, p.kind, p.ts);
+    for (size_t i = 0; i < plot_samples_.size();) {
+        size_t j = i + 1;
+        while (j < plot_samples_.size() && plot_samples_[j].dev == plot_samples_[i].dev &&
+               plot_samples_[j].kind == plot_samples_[i].kind && plot_samples_[j].core == plot_samples_[i].core) {
+            j++;
+        }
+        emit_frequency(i, j);
+        i = j;
     }
+    // Series the d2d consumer computed at capture end (the cross-chip refclk scale regression), placed the same way.
+#if defined(TRACY_ENABLE)
+    for (auto& [name, pts] : SyncPlots::drain()) {
+        const char* nm = intern_name(name);
+        for (const SyncPlotPoint& p : pts) {
+            tracy::Profiler::PlotDataAt(nm, p.value, plot_stamp(p.host_ns));
+        }
+    }
+#else
+    SyncPlots::drain();
+#endif
     plot_samples_.clear();
     plot_samples_.shrink_to_fit();
 }
 
-const char* TracySink::plot_name(uint32_t chip, bool linked) {
-    auto& m = linked ? plot_linked_ : plot_local_;
-    auto it = m.find(chip);
-    if (it == m.end()) {
-        it = m.emplace(chip, fmt::format("d2d {} ns chip{}", linked ? "linked" : "local", chip)).first;
-    }
-    return it->second.c_str();
-}
+// PlotDataAt keys a plot by its name POINTER, so every name lives for the sink's lifetime.
+const char* TracySink::intern_name(const std::string& name) { return plot_names_.insert(name).first->c_str(); }
 
-// A PP_CLOCK sample's correction, plotted at the sample's device time on the chip's timeline. The device tick is
-// mapped to the same steady-clock ns a zone at that tick would use, then through to_timeline onto Tracy's timeline
-// (PlotDataAt carries the time on the wire -- plain PlotData/TracyPlot would stamp decode-time and pile every point
-// at one instant). LOCAL samples feed the local-only plot, LINK samples the linked plot.
-void TracySink::plot_clock(uint32_t dev, uint32_t kind, uint64_t device_ticks) {
+// One stream of PP_CLOCK samples [begin, end) -> that chip's applied AICLK in GHz at every sample: the sliding
+// dwall/drefclk over the trailing window (the refclk is a fixed 50 MHz, so wall ticks per refclk tick x 50 MHz is
+// the AICLK), plotted at the sample's device time. The window is set in REFCLK ticks so a dropped sample only widens
+// it: ~100 us for the 3 us local tracker (0.02 % quantisation), >= 1 ms for the 1 ms link stamps (2e-5). The link
+// sender emits two stamps per round a few us apart, which the >= 1 ms window steps over.
+void TracySink::emit_frequency(size_t begin, size_t end) {
 #if defined(TRACY_ENABLE)
-    if (dev >= clocks_.size()) {
+    if (end <= begin) {
         return;
     }
-    const DeviceClock& eclk =
-        (dev < eth_clocks_.size() && eth_clocks_[dev].frequency_ghz > 0.0) ? eth_clocks_[dev] : clocks_[dev];
+    const PlotSample& s0 = plot_samples_[begin];
+    if (s0.dev >= clocks_.size()) {
+        return;
+    }
+    const DeviceClock& eclk = (s0.dev < eth_clocks_.size() && eth_clocks_[s0.dev].frequency_ghz > 0.0)
+                                  ? eth_clocks_[s0.dev]
+                                  : clocks_[s0.dev];
     if (eclk.frequency_ghz <= 0.0) {
         return;
     }
-    const uint32_t chip = eclk.chip_id;
-    const double hz = eclk.frequency_ghz * 1e9;
-    // The eth wall clock is a different counter from the workers, but the same AICLK rate. Take the eth TICK delta
-    // since the eth anchor (session-relative, in the eth domain) and place it via the WORKER host anchor -- the
-    // reliable steady-clock reference the zones use -- so plots and zones share one timeline.
-    const int64_t base_ns =
-        eclk.anchor_host_ns +
-        static_cast<int64_t>(
-            static_cast<double>(static_cast<int64_t>(device_ticks) - static_cast<int64_t>(eclk.anchor_ticks)) * 1e9 /
-            hz);
-    // PlotDataAt writes tsc straight to the wire and the server displays it as (tsc - baseTime) * m_timerMul, i.e.
-    // it expects an ABSOLUTE timer-tick stamp like GetTime(). to_timeline() yields ns SINCE anchor_tracy_ (the
-    // capture map is anchored there), so the point must be re-expressed as absolute ticks: anchor_tracy_ + ns/mul.
-    // The device zones land at (anchor_tracy_ - baseTime)*mul + to_timeline_ns through their GPU context (calibrated
-    // on anchor_tracy_, period 1.0); this puts a plot point at exactly the same display time. Passing ns alone
-    // compressed the curve by the timer mul (~0.42), and passing ns/mul without the anchor put it ~30 h off-screen.
-    const double timer_mul = TracyGetTimerMul() > 0.0 ? TracyGetTimerMul() : 1.0;
-    const int64_t tsc = anchor_tracy_ + static_cast<int64_t>(static_cast<double>(to_timeline(base_ns)) / timer_mul);
-    if (kind == PP_CLOCK_LOCAL_REFCLK) {
-        tracy::Profiler::PlotDataAt(plot_name(chip, false), SyncCorrections::lookup_local_ns(chip, base_ns), tsc);
-    } else if (kind == PP_CLOCK_LINK_REFCLK) {
-        tracy::Profiler::PlotDataAt(plot_name(chip, true), SyncCorrections::lookup_ns(chip, base_ns), tsc);
+    const bool link = s0.kind == PP_CLOCK_LINK_REFCLK;
+    if (!link && s0.kind != PP_CLOCK_LOCAL_REFCLK) {
+        return;
+    }
+    const char* name =
+        intern_name(fmt::format("d2d AICLK GHz chip{} {}", eclk.chip_id, link ? "link 1ms" : "local 3us"));
+    constexpr double kRefclkHz = 50.0e6;
+    const uint64_t window = link ? 50'000 : 5'000;  // refclk ticks: 1 ms / 100 us
+    std::vector<uint64_t> refclk(end - begin);
+    {
+        bool seeded = false;
+        uint32_t last = 0;
+        uint64_t wraps = 0;
+        for (size_t i = begin; i < end; i++) {
+            const uint32_t v = plot_samples_[i].value24;
+            if (seeded && v < last && (last - v) > (1u << 23)) {
+                wraps++;
+            }
+            seeded = true;
+            last = v;
+            refclk[i - begin] = (wraps << 24) | v;
+        }
+    }
+    size_t j = 0;  // trailing edge: the LATEST sample still >= window behind, for the tightest window over target
+    for (size_t i = 0; i < end - begin; i++) {
+        while (j + 1 < i && refclk[i] - refclk[j + 1] >= window) {
+            j++;
+        }
+        if (i == j || refclk[i] - refclk[j] < window) {
+            continue;
+        }
+        const double dr = static_cast<double>(refclk[i] - refclk[j]);
+        const double dw =
+            static_cast<double>(plot_samples_[begin + i].ts) - static_cast<double>(plot_samples_[begin + j].ts);
+        const double ghz = (dw / dr) * kRefclkHz * 1e-9;
+        const int64_t base_ns =
+            eclk.anchor_host_ns +
+            static_cast<int64_t>(
+                (static_cast<double>(plot_samples_[begin + i].ts) - static_cast<double>(eclk.anchor_ticks)) /
+                eclk.frequency_ghz);
+        tracy::Profiler::PlotDataAt(name, ghz, plot_stamp(base_ns));
     }
 #else
-    (void)dev;
-    (void)kind;
-    (void)device_ticks;
+    (void)begin;
+    (void)end;
 #endif
 }
 

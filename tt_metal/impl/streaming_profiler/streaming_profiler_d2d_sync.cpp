@@ -11,6 +11,9 @@
 #include <tt-logger/tt-logger.hpp>
 #include <cstdlib>
 #include <cstdio>
+#include <string>
+
+#include <fmt/format.h>
 
 #include "impl/streaming_profiler/spsc_packet.h"
 #include "impl/streaming_profiler/streaming_profiler_sync_correction.hpp"
@@ -486,10 +489,149 @@ void D2dSyncConsumer::dump_csv() const {
         err_max);
 }
 
+// The cross-chip refclk SCALE (chip b's refclk rate over chip a's -- the crystal ratio) as a RUNNING linear
+// regression over the link rounds, for the Tracy sink: each point is the regression over every round up to its time,
+// so the curve shows the estimate converging. Each round's wall stamps are converted to refclk through the chip's 1 ms
+// LocalClockFit bucket (the 3 us tracker), NOT the solver's single linear ratio per end: over a long baseline DVFS
+// moves that ratio by percent and the solver's conversion error leaks relative DVFS into the rate (measured: +/-1000
+// ppm over 4 s), while the per-ms buckets track it and stay at the ~ppm crystal ratio. Same rounds and the solver's
+// shortest-25%-round-trip keep rule, regressing (receiver refclk - sender midpoint refclk) on the sender midpoint.
+void D2dSyncConsumer::publish_rate_plots() {
+    // Sorted wall spans of a chip's fitted buckets, for wall -> refclk lookups (the buckets are keyed by refclk).
+    struct Span {
+        double w_lo, w_hi;
+        const LocalClockFit::Accum* b;
+    };
+    const auto spans_of = [](const LocalClockFit& fit) {
+        std::vector<Span> v;
+        for (const auto& [key, b] : fit.buckets) {
+            if (b.n < 2 || b.slope() <= 0.0) {
+                continue;
+            }
+            const double r_lo = static_cast<double>(key * LocalClockFit::kBucketTicks);
+            const double r_hi = static_cast<double>((key + 1) * LocalClockFit::kBucketTicks);
+            v.push_back(Span{b.wall_of_refclk(r_lo), b.wall_of_refclk(r_hi), &b});
+        }
+        std::sort(v.begin(), v.end(), [](const Span& a, const Span& c) { return a.w_lo < c.w_lo; });
+        return v;
+    };
+    // The last span starting at or before w; the nearest line if w falls in a gap or outside the fitted range.
+    const auto refclk_at = [](const std::vector<Span>& v, double w) -> double {
+        auto it = std::upper_bound(v.begin(), v.end(), w, [](double x, const Span& sp) { return x < sp.w_lo; });
+        if (it != v.begin()) {
+            --it;
+        }
+        return it->b->refclk_of_wall(w);
+    };
+    for (size_t li = 0; li < ctx_.links.size(); li++) {
+        const CaptureContext::Link& L = ctx_.links[li];
+        const int64_t ca = core_index(L.dev_a, L.eth_a);
+        const int64_t cb = core_index(L.dev_b, L.eth_b);
+        if (ca < 0 || cb < 0 || L.dev_a >= ctx_.devices.size()) {
+            continue;
+        }
+        const auto ia = link_.find({L.dev_a, static_cast<uint32_t>(ca)});
+        const auto ib = link_.find({L.dev_b, static_cast<uint32_t>(cb)});
+        const auto la = local_.find(L.dev_a);
+        const auto lb = local_.find(L.dev_b);
+        if (ia == link_.end() || ib == link_.end() || la == local_.end() || lb == local_.end()) {
+            continue;
+        }
+        const DeviceClock& eclk = ctx_.devices[L.dev_a].eth_clock;
+        if (eclk.frequency_ghz <= 0.0) {
+            continue;
+        }
+        const auto& snd_s = ia->second.samples;
+        const auto& rcv_s = ib->second.samples;
+        const size_t n = std::min(snd_s.size() / 2, rcv_s.size());
+        if (n < 16) {
+            continue;
+        }
+        const std::vector<Span> sa = spans_of(la->second.fit);
+        const std::vector<Span> sb = spans_of(lb->second.fit);
+        if (sa.empty() || sb.empty()) {
+            continue;
+        }
+        struct Rnd {
+            uint64_t t0, t2, t1;
+        };
+        std::vector<Rnd> rounds(n);
+        for (size_t i = 0; i < n; i++) {
+            rounds[i] = Rnd{snd_s[2 * i].wall, snd_s[2 * i + 1].wall, rcv_s[i].wall};
+        }
+        const std::string name = fmt::format("d2d refclk scale chip{}/chip{}", L.chip_b, L.chip_a);
+        std::vector<SyncPlotPoint> pts;
+        const size_t stride = std::max<size_t>(8, n / 250);
+        for (size_t m = std::max<size_t>(16, stride); m <= n; m += stride) {
+            // This point's host time: the sender's eth clock at the last round's end.
+            const double H =
+                static_cast<double>(eclk.anchor_host_ns) +
+                (static_cast<double>(rounds[m - 1].t2) - static_cast<double>(eclk.anchor_ticks)) / eclk.frequency_ghz;
+            struct RT {
+                double off, mid;
+                uint64_t rtt;
+            };
+            std::vector<RT> rts;
+            rts.reserve(m);
+            for (size_t i = 0; i < m; i++) {
+                const Rnd& r = rounds[i];
+                if (r.t0 == 0 || r.t1 == 0 || r.t2 == 0 || r.t2 < r.t0) {
+                    continue;
+                }
+                const double r0 = refclk_at(sa, static_cast<double>(r.t0));
+                const double r2 = refclk_at(sa, static_cast<double>(r.t2));
+                const double r1 = refclk_at(sb, static_cast<double>(r.t1));
+                const double mid = 0.5 * (r0 + r2);
+                rts.push_back(RT{r1 - mid, mid, r.t2 - r.t0});
+            }
+            if (rts.size() < 4) {
+                continue;
+            }
+            std::sort(rts.begin(), rts.end(), [](const RT& a, const RT& b) { return a.rtt < b.rtt; });
+            const size_t keep =
+                std::clamp<size_t>(static_cast<size_t>(static_cast<double>(rts.size()) * 0.25), size_t{4}, rts.size());
+            rts.resize(keep);
+            double mid0 = rts[0].mid;
+            const double off0 = rts[0].off;
+            for (const auto& r : rts) {
+                mid0 = std::min(mid0, r.mid);
+            }
+            long double sx = 0, sy = 0, sxx = 0, sxy = 0;
+            const long double nn = static_cast<long double>(keep);
+            for (const auto& r : rts) {
+                const long double x = r.mid - mid0, y = r.off - off0;
+                sx += x;
+                sy += y;
+                sxx += x * x;
+                sxy += x * y;
+            }
+            const long double den = nn * sxx - sx * sx;
+            if (std::abs(static_cast<double>(den)) < 1e-9) {
+                continue;
+            }
+            const double slope = static_cast<double>((nn * sxy - sx * sy) / den);
+            pts.push_back(SyncPlotPoint{static_cast<int64_t>(H), 1.0 + slope});
+        }
+        if (pts.empty()) {
+            continue;
+        }
+        log_info(
+            tt::LogMetal,
+            "[streaming profiler] d2d sync {}: {} points over {} rounds; final scale {:.9f} ({:+.3f} ppm)",
+            name,
+            pts.size(),
+            n,
+            pts.back().value,
+            (pts.back().value - 1.0) * 1e6);
+        SyncPlots::publish(name, std::move(pts));
+    }
+}
+
 void D2dSyncConsumer::on_capture_end(const CaptureContext& ctx) {
     (void)ctx;
     try_solve_links(/*final=*/true);
     publish_all(/*final=*/true);
+    publish_rate_plots();
     log_summary();
     dump_csv();
     // The published corrections stay for the sinks that write at process end; the next attach starts fresh.

@@ -145,6 +145,7 @@ private:
     void publish_all(bool final);
     void log_summary() const;
     void dump_csv() const;
+    void publish_rate_plots();
 
     CaptureContext ctx_;
     std::map<uint32_t, LocalState> local_;                     // device index -> local fit

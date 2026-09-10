@@ -9,6 +9,10 @@
 
 #include <tt-metalium/experimental/streaming_profiler.hpp>
 
+#include <mutex>
+#include <string>
+#include <utility>
+
 namespace tt::tt_metal::streaming_profiler {
 
 namespace {
@@ -92,6 +96,36 @@ int64_t lookup_in(std::array<Slot, SyncCorrections::kMaxChips>& sl, uint32_t chi
     return static_cast<int64_t>(d);
 }
 }  // namespace
+
+namespace {
+std::mutex& plots_mutex() {
+    static std::mutex m;
+    return m;
+}
+std::vector<std::pair<std::string, std::vector<SyncPlotPoint>>>& plots_store() {
+    static std::vector<std::pair<std::string, std::vector<SyncPlotPoint>>> v;
+    return v;
+}
+}  // namespace
+
+void SyncPlots::publish(std::string name, std::vector<SyncPlotPoint> points) {
+    std::lock_guard<std::mutex> g(plots_mutex());
+    auto& v = plots_store();
+    for (auto& e : v) {
+        if (e.first == name) {
+            e.second = std::move(points);
+            return;
+        }
+    }
+    v.emplace_back(std::move(name), std::move(points));
+}
+
+std::vector<std::pair<std::string, std::vector<SyncPlotPoint>>> SyncPlots::drain() {
+    std::lock_guard<std::mutex> g(plots_mutex());
+    auto out = std::move(plots_store());
+    plots_store().clear();
+    return out;
+}
 
 }  // namespace tt::tt_metal::streaming_profiler
 
