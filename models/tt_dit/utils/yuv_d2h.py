@@ -11,6 +11,7 @@ d2h internals; reuses the shard-extraction primitives it already exposes.
 from __future__ import annotations
 
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -69,6 +70,7 @@ def _yuv_planar_d2h(
     out_W: int | None = None,
     view=None,
     pool: ThreadPoolExecutor | None = None,
+    timings: dict | None = None,
 ) -> np.ndarray:
     """Batched D2H of three YUV ttnn tensors into ffmpeg yuv420p planar uint8.
 
@@ -111,10 +113,14 @@ def _yuv_planar_d2h(
     out_W = W if out_W is None else out_W
 
     # Async D2H all 3 outputs, single sync — overlaps three D2H reads.
+    mark = time.perf_counter()
     host_Y = tt_Y.cpu(blocking=False)
     host_Cb = tt_Cb.cpu(blocking=False)
     host_Cr = tt_Cr.cpu(blocking=False)
     ttnn.synchronize_device(mesh_device)
+    if timings is not None:
+        timings["yuv_dma"] = timings.get("yuv_dma", 0.0) + (time.perf_counter() - mark)
+        mark = time.perf_counter()
 
     if view is not None:
         # --- Multi-host: extract local shards via host_buffer/get_shard ---
@@ -182,7 +188,7 @@ def _yuv_planar_d2h(
         out_Hu, out_Wu = out_H // 2, out_W // 2
         out_row = out_H * out_W + 2 * out_Hu * out_Wu
         out = _get_planar_out_buf(T, out_row)
-        return _planar_concat_cpp_impl(
+        assembled = _planar_concat_cpp_impl(
             [t[1] for t in triples],
             [t[2] for t in triples],
             [t[3] for t in triples],
@@ -192,6 +198,9 @@ def _yuv_planar_d2h(
             out_H=out_H,
             out_W=out_W,
         )
+        if timings is not None:
+            timings["yuv_scatter"] = timings.get("yuv_scatter", 0.0) + (time.perf_counter() - mark)
+        return assembled
 
     # --- Python fallback (torch_threaded scatter) ------------------------ Assemble directly into the logical-sized
     out_Hu, out_Wu = out_H // 2, out_W // 2
@@ -230,6 +239,8 @@ def _yuv_planar_d2h(
     for f in futures:
         f.result()
 
+    if timings is not None:
+        timings["yuv_scatter"] = timings.get("yuv_scatter", 0.0) + (time.perf_counter() - mark)
     return out
 
 
@@ -244,6 +255,7 @@ def fast_device_to_host_yuv(
     debug: bool = False,
     logical_h: int | None = None,
     logical_w: int | None = None,
+    timings: dict | None = None,
 ) -> np.ndarray | None:
     """On-device YUV 4:2:0 conversion + batched D2H + planar uint8 concat.
 
@@ -290,6 +302,10 @@ def fast_device_to_host_yuv(
             per-channel weights and offsets.  Defaults to BT.601 limited range.
         pool: Optional ``ThreadPoolExecutor`` for the host-side reassembly.
             If ``None``, the module-level lazy default pool is used.
+        timings: Optional dict accumulating a ``yuv_convert`` / ``yuv_dma`` /
+            ``yuv_scatter`` breakdown in seconds.  Separating the on-device
+            conversion from the transfer needs a ``synchronize_device``
+            between them, which also serializes them, so it is opt-in.
         debug: If ``True``, print diagnostic shape information.
         logical_h: Optional logical (un-padded) height of the output.  When
             the VAE pads ``H`` to a coarser size, pass the true logical height
@@ -404,6 +420,7 @@ def fast_device_to_host_yuv(
     ), f"per-shard H and W must be even for 4:2:0 (got h_per={h_per}, w_per={w_per})"
 
     # 1. Reorder BCTHW -> CHWT for the YUV kernel.  Shapes here are per-shard.
+    mark = time.perf_counter()
     tt_BCHWT = ttnn.permute(tt_video_BCTHW, (0, 1, 3, 4, 2))
     if debug:
         print(f"  [yuv-d2h] after permute(0,1,3,4,2) per-shard: {list(tt_BCHWT.shape)}")
@@ -420,9 +437,26 @@ def fast_device_to_host_yuv(
         print(f"  [yuv-d2h]   Cb: {list(tt_Cb.shape)}")
         print(f"  [yuv-d2h]   Cr: {list(tt_Cr.shape)}")
 
+    if timings is not None:
+        ttnn.synchronize_device(mesh_device)
+        timings["yuv_convert"] = timings.get("yuv_convert", 0.0) + (time.perf_counter() - mark)
+
     # 3+4
     new_H = logical_h if logical_h is not None else H
     new_W = logical_w if logical_w is not None else W
-    out = _yuv_planar_d2h(tt_Y, tt_Cb, tt_Cr, mesh_device, H, W, T, out_H=new_H, out_W=new_W, view=d2h_view, pool=pool)
+    out = _yuv_planar_d2h(
+        tt_Y,
+        tt_Cb,
+        tt_Cr,
+        mesh_device,
+        H,
+        W,
+        T,
+        out_H=new_H,
+        out_W=new_W,
+        view=d2h_view,
+        pool=pool,
+        timings=timings,
+    )
 
     return out

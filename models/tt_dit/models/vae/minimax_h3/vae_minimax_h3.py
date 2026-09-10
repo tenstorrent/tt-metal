@@ -419,8 +419,10 @@ class MiniMaxH3Vae:
         # host path only: `device_stitch` reads back a canvas and never calls `_read_wave_units`,
         # so the two are alternatives, not a combination.
         self.readback_uint8 = readback_uint8
-        # Synchronize after each decode forward so `device` and `readback` are separable in the
-        # profile -- which also serializes them, so it is opt-in.
+        # Synchronize between decode phases so they are separable in the profile -- which also
+        # serializes them, so it is opt-in. On the host-blend path it splits `device` from
+        # `readback`; on the device-stitch paths it additionally splits the decoder from the
+        # assembly and the YUV conversion from its transfer.
         self.profile = profile
         # Decode tiles per device per wave: each device runs a `waves_per_device`-sized batch, so a
         # full wave covers `num_devices * waves_per_device` tiles. >1 trades activation memory for
@@ -557,6 +559,13 @@ class MiniMaxH3Vae:
             # comparing a mean against someone else's min-of-N is how a 2x phantom appears.
             "readback_each": [],
             "device_each": [],
+            # Only populated under `profile`: each needs a synchronize to be separable.
+            "decoder": 0.0,
+            "assemble": 0.0,
+            "yuv_prep": 0.0,
+            "yuv_convert": 0.0,
+            "yuv_dma": 0.0,
+            "yuv_scatter": 0.0,
         }
 
     def _read_wave_units(self, wave: ttnn.Tensor) -> torch.Tensor:
@@ -623,6 +632,13 @@ class MiniMaxH3Vae:
             f"({self.mesh_device.get_num_devices()} devices, "
             f"{units / waves if waves else 0:.1f} units/wave)"
         )
+        phases = ("decoder", "assemble", "yuv_prep", "yuv_convert", "yuv_dma", "yuv_scatter")
+        if any(p.get(name) for name in phases):
+            logger.info("    phase split (profile=True serializes these; shares, not a warm total):")
+            for name in phases:
+                share = 100 * p[name] / total if total else 0.0
+                per_wave = p[name] / waves * 1000 if waves else 0.0
+                logger.info(f"      {name:<12} {p[name]:6.2f} s  ({share:4.1f} %)  {per_wave:6.1f} ms/wave")
         for name in ("device", "readback", "stitch", "unpatchify", "tiling", "upload", "host_prep", "residual"):
             share = 100 * p[name] / total if total else 0.0
             per_wave = f"  {p[name] / waves * 1000:6.0f} ms/wave" if waves and name in ("device", "readback") else ""
@@ -1041,6 +1057,12 @@ class MiniMaxH3Vae:
 
             mark = time.perf_counter()
             decoded = decoder(tokens)
+            if self.profile:
+                ttnn.synchronize_device(self.mesh_device)
+                elapsed = time.perf_counter() - mark
+                profile["decoder"] += elapsed
+                profile["device"] += elapsed
+                mark = time.perf_counter()
             # fp32 before anything downstream touches the tiles: the mixed bf16-tile x fp32-ramp
             # ROW_MAJOR blend in `DeviceTileStitcher` mis-executes on current ttnn (garbage-scale
             # output; the seam gate only covers fp32 tiles, which is exactly the path this keeps us
@@ -1064,6 +1086,9 @@ class MiniMaxH3Vae:
             # Co-locate every tile on every device. Two gathers, one per mesh axis.
             gathered = ttnn.all_gather(pixels, 0, cluster_axis=0, topology=ttnn.Topology.Ring)
             gathered = ttnn.all_gather(gathered, 0, cluster_axis=1, topology=ttnn.Topology.Ring)
+            if self.profile:
+                ttnn.synchronize_device(self.mesh_device)
+                profile["assemble"] += time.perf_counter() - mark
             elapsed = time.perf_counter() - mark
             profile["device"] += elapsed
             profile["waves"] += 1
@@ -1083,6 +1108,8 @@ class MiniMaxH3Vae:
                 offset = chunk_index * tiles_per_chunk
                 rows = [[tile_at(offset, i, j) for j in range(grid_cols)] for i in range(grid_rows)]
                 canvas = self._stitcher.stitch(rows, y_overlaps, x_overlaps)
+                if self.profile:
+                    ttnn.synchronize_device(self.mesh_device)
                 elapsed = time.perf_counter() - mark
                 profile["device"] += elapsed
                 profile["device_each"].append(elapsed)
@@ -1196,8 +1223,12 @@ class MiniMaxH3Vae:
             )
             profile["upload"] += time.perf_counter() - mark
 
-            mark = time.perf_counter()
+            wave_mark = mark = time.perf_counter()
             decoded = decoder(tokens)
+            if self.profile:
+                ttnn.synchronize_device(self.mesh_device)
+                profile["decoder"] += time.perf_counter() - mark
+                mark = time.perf_counter()
             decoded = ttnn.to_layout(decoded, ttnn.ROW_MAJOR_LAYOUT)
             pixels = unpatchify_device(
                 decoded,
@@ -1216,7 +1247,10 @@ class MiniMaxH3Vae:
                 x_overlaps=x_overlaps,
                 chunks_per_wave=chunks_per_wave,
             )
-            elapsed = time.perf_counter() - mark
+            if self.profile:
+                ttnn.synchronize_device(self.mesh_device)
+                profile["assemble"] += time.perf_counter() - mark
+            elapsed = time.perf_counter() - wave_mark
             profile["device"] += elapsed
             profile["device_each"].append(elapsed)
             profile["waves"] += 1
@@ -1230,7 +1264,15 @@ class MiniMaxH3Vae:
                 tiles = ttnn.clamp(blended, min=-1.0, max=1.0)
                 tiles = ttnn.typecast(tiles, ttnn.bfloat16)
                 tiles = ttnn.to_layout(tiles, ttnn.ROW_MAJOR_LAYOUT)
-                planar = fast_device_to_host_yuv(tiles, self.mesh_device, ccl_manager=self.ccl_manager)
+                if self.profile:
+                    ttnn.synchronize_device(self.mesh_device)
+                    profile["yuv_prep"] += time.perf_counter() - mark
+                planar = fast_device_to_host_yuv(
+                    tiles,
+                    self.mesh_device,
+                    ccl_manager=self.ccl_manager,
+                    timings=profile if self.profile else None,
+                )
                 elapsed = time.perf_counter() - mark
                 profile["readback"] += elapsed
                 profile["readback_each"].append(elapsed)
@@ -1356,6 +1398,7 @@ class MiniMaxH3Vae:
         link instead of one -- the same repeat/partition trick `fast_device_to_host` uses to spread
         a multi-host read.
         """
+        mark = time.perf_counter()
         canvas = ttnn.clamp(canvas, min=-1.0, max=1.0)
         canvas = ttnn.typecast(canvas, ttnn.bfloat16)
         canvas = ttnn.to_layout(canvas, ttnn.ROW_MAJOR_LAYOUT)
@@ -1373,7 +1416,16 @@ class MiniMaxH3Vae:
         canvas = ttnn.mesh_partition(canvas, dim=-2, cluster_axis=0)
         canvas = ttnn.mesh_partition(canvas, dim=-1, cluster_axis=1)
 
-        planar = fast_device_to_host_yuv(canvas, self.mesh_device, ccl_manager=self.ccl_manager)
+        if self.profile:
+            ttnn.synchronize_device(self.mesh_device)
+            self._profile["yuv_prep"] += time.perf_counter() - mark
+
+        planar = fast_device_to_host_yuv(
+            canvas,
+            self.mesh_device,
+            ccl_manager=self.ccl_manager,
+            timings=self._profile if self.profile else None,
+        )
         return planar.reshape(planar.shape[0], height * 3 // 2, width)
 
     def decode_clip(self, z_BCTHW: torch.Tensor) -> torch.Tensor:

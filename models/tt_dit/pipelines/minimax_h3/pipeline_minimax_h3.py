@@ -307,6 +307,8 @@ class MiniMaxH3Pipeline:
         audio_split_mode: str = "full",
         audio_t_factor: int | None = None,
         vae_output_type: str = "float",
+        vae_stitch_exchange: str = "gather",
+        vae_profile: bool = False,
     ) -> None:
         # VSA (video sparse attention, VSA_SCOPE.md): None (default) leaves the dense paths
         # untouched; a MiniMaxH3VSAConfig selects the sparse path and runs the whole packed
@@ -409,6 +411,12 @@ class MiniMaxH3Pipeline:
         if vae_output_type not in ("float", "uint8", "yuv420"):
             raise ValueError(f"vae_output_type must be 'float', 'uint8' or 'yuv420', got {vae_output_type!r}")
         self.vae_output_type = vae_output_type
+        # How a device-stitched wave shares tiles: `"gather"` all-gathers the wave to every device
+        # and blends whole canvases; `"neighbor"` exchanges only the overlap strips. See
+        # `MiniMaxH3Vae`. `vae_profile` serializes the decode's phases so they are separable, which
+        # inflates the stage -- diagnostics only, never a measurement configuration.
+        self.vae_stitch_exchange = vae_stitch_exchange
+        self.vae_profile = bool(vae_profile)
         self._video_processor = None
         self._vision_tower = None
         self._vision_config = None
@@ -449,6 +457,8 @@ class MiniMaxH3Pipeline:
         audio_split_mode: str = "full",
         audio_t_factor: int | None = None,
         vae_output_type: str = "float",
+        vae_stitch_exchange: str = "gather",
+        vae_profile: bool = False,
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
 
@@ -482,6 +492,8 @@ class MiniMaxH3Pipeline:
             audio_split_mode=audio_split_mode,
             audio_t_factor=audio_t_factor,
             vae_output_type=vae_output_type,
+            vae_stitch_exchange=vae_stitch_exchange,
+            vae_profile=vae_profile,
         )
 
     @staticmethod
@@ -1315,6 +1327,8 @@ class MiniMaxH3Pipeline:
                 weight_loader=self._cache_submodel,
                 ccl_manager=self.ccl_manager,
                 device_stitch=yuv,
+                stitch_exchange=self.vae_stitch_exchange,
+                profile=self.vae_profile,
                 # Folded into `proj_out`, so the decoder emits the `[-1, 1]` both the colour kernel
                 # and the uint8 cast take, and `_decode_video` is left with at most a range shift.
                 pixel_denorm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD) if unit_pixels else None,
