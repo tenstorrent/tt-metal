@@ -698,12 +698,12 @@ class _DeviceSampler:
     ``_SAMPLING_NEG``, so the same tile that carries the randomness also applies the
     top-k truncation for free.
 
-    Accuracy on 600 real CP logit vectors, total-variation distance against an exact
-    top-50 softmax(T=0.9): 0.041, against a Monte-Carlo floor of 0.019 at the same
-    draw count (codec0: 0.014 vs 0.006). Cost, traced on N300: ~600 us/call.
+    Validated on real CP logit vectors: the total-variation distance from an exact
+    top-k softmax draw sits at the Monte-Carlo floor for the same number of draws, i.e.
+    this is a correct sampler, not an approximation of one.
 
-    Per-frame host cost is one ``torch.rand`` and one 4 KB H2D of the noise tile,
-    replacing 14 CPU topk+softmax+multinomial calls (11.3 ms/frame measured).
+    Per-frame host cost is one ``torch.rand`` and one small H2D of the noise tile,
+    replacing the per-code-group CPU topk+softmax+multinomial calls.
     """
 
     def __init__(self, device, top_k: int, temperature: float, seed: int = 1):
@@ -844,9 +844,9 @@ class _DeviceSampler:
         """Draw and tilize every frame's Gumbel tile up front.
 
         ``refresh_noise`` did the draw AND the ``ttnn.from_torch`` (which tilizes and
-        replicates across the mesh on the host) inside the AR loop: 0.32 + 0.35 ms per
-        frame on N300, against 0.19 ms for the H2D that actually had to be there. None
-        of it depends on anything the frame computes, so it all moves to setup.
+        replicates across the mesh on the host) inside the AR loop, both of them costing
+        more than the H2D that actually had to be there. None of it depends on anything
+        the frame computes, so it all moves to setup.
 
         The draws come from a private generator seeded off the global RNG, so a run is
         still reproducible from ``--seed`` and the tile sequence no longer depends on
@@ -1032,9 +1032,9 @@ def build_trailing_row_h2d(
 
     Past ``trailing_len`` every step uploads the SAME pad row, so those entries are one
     shared host tensor: the loop compares identity and skips the H2D when it would
-    rewrite bytes the device buffer already holds. An H2D costs ~0.3 ms of wall on this
-    host whatever its size, and a long utterance spends most of its frames past the
-    trailing text.
+    rewrite bytes the device buffer already holds. An H2D costs about the same wall time
+    whatever its size, and a long utterance spends most of its frames past the trailing
+    text.
     """
     trailing_len = int(trailing_text_hidden.shape[1])
 
@@ -1802,9 +1802,9 @@ def generate_codes_ttnn(
             _trace_logits = model.talker.get_codec_logits(_trace_h)
         finally:
             ttnn.end_trace_capture(device, _trace_id, cq_id=0)
-        # Execute once after capture to warm up trace dispatch. Without this,
-        # the timed prefill in STEP 4 runs the trace cold (dispatch-path miss)
-        # adding ~10-15 ms of variance to the prefill measurement.
+        # Execute once after capture to warm up trace dispatch. Without this, the timed
+        # prefill in STEP 4 runs the trace cold (dispatch-path miss), which adds real
+        # variance to the prefill measurement.
         ttnn.execute_trace(device, _trace_id, cq_id=0, blocking=True)
         ttnn.synchronize_device(device)
         # These live inside this bucket's trace, so they are "unsafe" for the other

@@ -75,14 +75,12 @@ def prepare_fused_sdpa_mask(mask):
 def decode_sdpa_k_chunk(k_len: int, max_chunk: int = 672) -> int:
     """k_chunk_size for a single-token query over a ``k_len`` KV cache.
 
-    Measured on wormhole (Sq=1, dh=128, kv 352 and 1312, 8 and 16 local heads): SDPA
-    device time tracks the *chunk-padded* KV length ``ceil(k_len/k) * k`` plus ~1.2 us
-    per chunk iteration. So a chunk that divides the cache exactly is always best, and
-    among those the largest wins — kv=352 went 38.4 us (k=64, 6 chunks) -> 26.8 us
-    (k=352, 1 chunk), while k=320 (2 chunks, 640 padded rows) cost 60.9 us. The 20-rows
-    -per-chunk penalty below encodes that overhead; it picks 352 for kv=352, 416 for
-    kv=800 and 672 for kv=1312 (chunks are tile-aligned, so kv=800 cannot be halved
-    exactly).
+    SDPA device time tracks the *chunk-padded* KV length ``ceil(k_len/k) * k`` plus a
+    fixed cost per chunk iteration. So a chunk that divides the cache exactly is always
+    best, and among those the largest wins; a near-divisor that pads a whole extra
+    chunk is the worst case. The 20-rows-per-chunk penalty below encodes that
+    trade-off; it picks 352 for kv=352, 416 for kv=800 and 672 for kv=1312 (chunks are
+    tile-aligned, so kv=800 cannot be halved exactly).
 
     ``max_chunk`` caps the single-chunk case: k_chunk=1312 exceeds the program size
     limit (``program.cpp`` TT_THROW), 672 is the largest value verified to build.

@@ -317,11 +317,10 @@ def apply_rope_qk(
     """Rotate Q ``[1, n_q, seq, head_dim]`` and K ``[1, n_kv, seq, head_dim]``.
 
     Single-token Q/K route to ``is_decode_mode=True``, which is far cheaper. The prefill
-    kernel loops once per head — measured on wormhole at ~9 us fixed + ~2 us/head, i.e.
-    41 us for 16 heads and 26 us for 8, regardless of memory config or math fidelity —
-    while the decode kernel rotates every head inside one tile in 3.4 us. Reaching that
-    layout costs one transpose in and one out at ~2 us each, so a 16-head Q goes
-    41 us -> 8 us and an 8-head Q 26 us -> 7 us. cos/sin are reshared once for Q and K.
+    kernel loops once per head, at a cost that scales with head count and is insensitive
+    to memory config and math fidelity; the decode kernel rotates every head inside one
+    tile. Reaching that layout costs one transpose in and one out, which the saved
+    per-head loop pays for several times over. cos/sin are reshared once for Q and K.
 
     The two kernels are bit-identical on the same input (max|diff| == 0), so this
     is a dispatch change with no numerical effect, and it is a win on every
