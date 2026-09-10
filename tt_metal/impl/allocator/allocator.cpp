@@ -268,6 +268,11 @@ void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
     allocated_buffers_.erase(buffer);
 }
 
+void AllocatorImpl::untrack_buffer(Buffer* buffer) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    allocated_buffers_.erase(buffer);
+}
+
 void AllocatorImpl::deallocate_buffers() {
     std::lock_guard<std::mutex> lock(mutex_);
     dram_manager_->deallocate_all();
@@ -580,6 +585,13 @@ AllocatorImpl::~AllocatorImpl() {
     l1_manager_->clear();
     l1_small_manager_->clear();
     trace_buffer_manager_->clear();
+    // Mark live buffers deallocated before their non-owning allocator pointer dangles.
+    // A tracked Buffer must be removed through deallocate_buffer() or untrack_buffer() before
+    // destruction; mark_as_deallocated() may only be called while its allocator is tearing down
+    // or after it is gone.
+    for (auto* buffer : allocated_buffers_) {
+        buffer->mark_as_deallocated();
+    }
     allocated_buffers_.clear();
 }
 

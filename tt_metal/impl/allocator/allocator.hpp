@@ -70,6 +70,9 @@ public:
     void deallocate_buffer(Buffer* buffer);
     void deallocate_buffers();
 
+    // Stop tracking a buffer without deallocating its banks.
+    void untrack_buffer(Buffer* buffer);
+
     std::unordered_set<Buffer*> get_allocated_buffers() const;
     size_t get_num_allocated_buffers() const;
 

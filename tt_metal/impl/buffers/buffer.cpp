@@ -652,7 +652,7 @@ void Buffer::deallocate_impl() {
         return;
     }
 
-    if (device_->is_initialized() && size_ != 0) {
+    if (size_ != 0 && device_->is_initialized()) {
         // address_ is only modified from this thread, no sync required
         GraphTracker::instance().track_deallocate(this);
         if (!GraphTracker::instance().hook_deallocate(this) && !hooked_allocation_) {
@@ -674,6 +674,10 @@ void Buffer::deallocate_impl() {
                 }
             }
             allocator_->deallocate_buffer(this);
+        } else if (!hooked_allocation_) {
+            // The hook suppresses bank deallocation, but this real allocation must still be
+            // untracked before the Buffer is destroyed.
+            allocator_->untrack_buffer(this);
         }
 
         // Capture deallocates here instead of higher levels.
