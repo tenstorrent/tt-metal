@@ -141,8 +141,10 @@ def load(paths):
                 if total and window and cores:
                     occ = total / (window * cores)
                     if occ > 1.0:
-                        problems.append(f"{where}: occupancy {occ:.2f} > 1 -- total_ns exceeds "
-                                        f"window_ns x cores; window or samples are wrong")
+                        problems.append(
+                            f"{where}: occupancy {occ:.2f} > 1 -- total_ns exceeds "
+                            f"window_ns x cores; window or samples are wrong"
+                        )
 
                 key = (per_msg if per_msg else 0, cores if cores else 0)
                 prev = data[key].get(stage)
