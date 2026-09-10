@@ -45,8 +45,9 @@ def open_device(device_config) -> Any:
     return the ``ttnn.MeshDevice``. Pair with :func:`close_device`.
 
     Only enables fabric when it isn't already configured. Under tt-run the
-    grpo_remote_rollout ``conftest.py`` autouse fixture sets FABRIC_2D on every
-    rank before any test body runs; calling ``enable_fabric`` again from just
+    grpo_remote_rollout ``conftest.py`` ``_set_fabric_2d`` fixture, which must
+    be requested via ``pytest.mark.usefixtures``, sets FABRIC_2D
+    on every rank before the test body runs; calling ``enable_fabric`` again from just
     this rank (asymmetrically with the peer rank, which reaches the same
     ControlPlane through ``ttnn.open_mesh_device``) triggers the non-idempotent
     ``SetFabricConfig`` reinit branch in ``MetalEnvImpl::set_fabric_config``.

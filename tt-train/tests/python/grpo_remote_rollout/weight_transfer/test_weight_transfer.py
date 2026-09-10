@@ -37,15 +37,18 @@ from transformers import AutoTokenizer  # noqa: E402
 
 from grpo_remote_rollout.utils.weight_bridge import TTML_RANK, TTT_RANK  # noqa: E402
 
+# Pin fabric FABRIC_2D before either rank opens a device (both ranks must match).
+pytestmark = pytest.mark.usefixtures("_set_fabric_2d")
+
 # Skipped pending BH bring-up: after ``push_weights``, one batch slot on one
 # submesh produces a different completion than the others despite identical
 # prompt/weights/greedy decode ("post-push completion 5 diverged from
 # completion 0"). Deterministic and reproducible; needs weight-bridge /
 # per-submesh model-state investigation. Re-enable by removing the
 # ``@pytest.mark.skip`` decorator on the test function below.
-# (The earlier ttml-vs-ttnn asymmetric fabric-init deadlock is fixed in
-# ``_completer_utils.open_device`` by only calling ``enable_fabric`` when
-# fabric is currently ``DISABLED``.)
+# (The earlier ttml-vs-ttnn asymmetric fabric-init deadlock is fixed by the
+# ``_set_fabric_2d`` fixture above plus ``_completer_utils.open_device`` only
+# calling ``enable_fabric`` when fabric is currently ``DISABLED``.)
 _SKIP_REASON = (
     "test_weight_transfer: per-submesh determinism regression on BH after " "push_weights — see module docstring."
 )
