@@ -506,7 +506,7 @@ void call_unary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::remainder)
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(init_remainder<APPROX_MODE>, 0x40000000u /* 2.0f */, 0x3f000000u /* 0.5f */);
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(init_remainder<APPROX_MODE>);
     }
     else if constexpr (OPERATION == SfpuType::rpow)
     {
@@ -1372,9 +1372,16 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::remainder)
     {
-        // Unlike calculate_fmod, calculate_remainder() takes no runtime args: it reads vConstFloatPrgm0/1 programmed
-        // by init_remainder() (see call_unary_sfpu_operation_init above), so the call must not pass value/recip.
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_remainder, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+        // Shares _sfpu_binary_remainder_ with tensor-tensor remainder. Init loads the reciprocal
+        // polynomial; the float divisor bit pattern is passed here (2.0f).
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_remainder,
+            (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS),
+            dst_index,
+            vector_mode,
+            0x40000000u /* value = 2.0f */);
     }
     else if constexpr (OPERATION == SfpuType::unary_gt)
     {

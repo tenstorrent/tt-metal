@@ -350,11 +350,8 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     fmt::format("remainder_tile_uint32({}, {}u);", idst, static_cast<uint32_t>(param0_raw))};
             }
             return {
-                fmt::format(
-                    "remainder_tile_init({:#x}u, {:#x}u);",
-                    std::bit_cast<uint32_t>(param0),
-                    std::bit_cast<uint32_t>(1.0f / param0)),
-                fmt::format("remainder_tile({});", idst)};
+                "remainder_tile_init();",
+                fmt::format("remainder_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
         case UnaryOpType::FMOD:
             return {
                 fmt::format(
