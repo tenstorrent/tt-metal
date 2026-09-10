@@ -664,7 +664,7 @@ def test_validator_pipe_dual_single_receiver_bank(device, K, N, dtype):
     tt_weight, pipes, _push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
         device, K, N, dtype, recv_per_bank=1, dual_senders=True
     )
-    assert pipes.num_pipes() == pipes.num_banks(), "a single-receiver bank must fall back to one sender"
+    assert len({p.sender_core().x for p in pipes}) == len(pipes), "a single-receiver bank must fall back to one sender"
     with tensor_prefetcher_session(device):
         _queue_and_validate_pipes(device, tt_weight, pipes, ring_size)
 
@@ -713,6 +713,59 @@ def test_validator_pipe_mixed_num_receivers(device):
         _queue_and_validate_pipes(device, tt_weight_a, pipes_a, ring_a)
         _queue_and_validate_pipes(device, tt_weight_b, pipes_b, ring_b)
         _queue_and_validate_pipes(device, tt_weight_a, pipes_a, ring_a)
+
+
+@pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(2048, 3584, ttnn.bfloat8_b, 2)])
+def test_pipe_list_order_is_enforced(device, K, N, dtype, recv_per_bank, expect_error):
+    """A delivery target is a list of pipes, so a caller can hand over one the factory never built.
+
+    Order is not decoration: a pipe's position in the list is what assigns its sender a bank-local
+    slab base, derived by accumulating receiver counts within a run of one bank. Each list below
+    would silently deliver a tensor's blocks to the wrong receivers, so queueing has to reject it.
+    """
+    tt_weight, pipes, _push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
+        device, K, N, dtype, recv_per_bank, dual_senders=True
+    )
+    assert len(pipes) > len({p.sender_core().x for p in pipes}), "this case needs a bank with two senders"
+
+    def queue(pipe_list):
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)], prefetcher_pipes=pipe_list)
+
+    with tensor_prefetcher_session(device):
+        # Every bank appears twice, so its second run duplicates a bank already delivered to.
+        with expect_error(RuntimeError, "appear once"):
+            queue(pipes + pipes)
+        # Interleaved: each bank's two senders are split apart, so no bank's pipes are adjacent,
+        # and every bank opens a second run.
+        with expect_error(RuntimeError, "appear once"):
+            queue(pipes[::2] + pipes[1::2])
+        # One bank's senders swapped: the trailing pipe would take slab base 0.
+        swapped = list(pipes)
+        swapped[0], swapped[1] = swapped[1], swapped[0]
+        with expect_error(RuntimeError, "not in sender order"):
+            queue(swapped)
+        # The list as the factory returned it still works, on the same prefetcher.
+        _queue_and_validate_pipes(device, tt_weight, pipes, ring_size)
+
+
+@pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(448, 1792, ttnn.bfloat8_b, 1)])
+def test_pipe_outlives_the_list_it_came_in(device, K, N, dtype, recv_per_bank):
+    """A pipe kept out of the returned list still holds its device, and the rest still deliver.
+
+    A pipe's destructor frees its ring out of the device's persistent L1, so each pipe keeps the
+    device alive on its own rather than relying on the list that carried it.
+    """
+    tt_weight, pipes, push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
+        device, K, N, dtype, recv_per_bank
+    )
+    kept = pipes[0]
+    assert kept.sender_core_type() == "dram"
+    assert kept.ring_size() == push_page_size * _GCB_DEPTH_PAGES
+    with tensor_prefetcher_session(device):
+        _queue_and_validate_pipes(device, tt_weight, pipes, ring_size)
+    # Reading through the surviving handle after the list is gone must not touch freed device state.
+    del pipes
+    assert kept.config_address() > 0
 
 
 @pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(2048, 3584, ttnn.bfloat8_b, 2)])

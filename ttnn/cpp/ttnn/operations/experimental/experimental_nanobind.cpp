@@ -191,8 +191,11 @@ void py_module(nb::module_& mod) {
     gelu_backward::detail::bind_experimental_gelu_backward_operation(mod);
 
     test::bind_test_hang_device_operation(mod);
-    test::bind_test_dram_prefetcher_consumer(mod);
+    // Before the consumer bench: bind_tensor_prefetcher registers the PrefetcherPipe class the
+    // consumer's and validator's signatures name, so binding it first is what makes those
+    // signatures print the Python type rather than a mangled C++ one.
     bind_tensor_prefetcher(mod);
+    test::bind_test_dram_prefetcher_consumer(mod);
 
     // CCL ops
     auto m_experimental_ccl = mod.def_submodule("ccl_experimental", "experimental collective communication operations");
