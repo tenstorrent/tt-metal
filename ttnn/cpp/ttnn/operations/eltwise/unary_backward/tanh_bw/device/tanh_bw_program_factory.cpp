@@ -17,12 +17,16 @@ using namespace tt::tt_metal;
 
 ProgramDescriptor TanhBwProgramFactory::create_descriptor(
     const TanhBwParams& /*args*/, const TanhBwInputs& tensor_args, Tensor& output) {
-    const auto& input = tensor_args.input;              // src0
-    const auto& grad_output = tensor_args.grad_output;  // src1
+    const auto& input = tensor_args.input;
+    const auto& grad_output = tensor_args.grad_output;
 
-    tt::DataFormat src0_cb_data_format = datatype_to_dataformat_converter(input.dtype());
+    // src0 is grad_output and src1 is input, in the CB formats as well as in the buffers bound
+    // to them below. Deriving a CB's format from the other operand leaves both CBs with the
+    // wrong page size whenever the two dtypes differ, which the reader then walks as if they
+    // matched.
+    tt::DataFormat src0_cb_data_format = datatype_to_dataformat_converter(grad_output.dtype());
     uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
-    tt::DataFormat src1_cb_data_format = datatype_to_dataformat_converter(grad_output.dtype());
+    tt::DataFormat src1_cb_data_format = datatype_to_dataformat_converter(input.dtype());
     uint32_t src1_single_tile_size = tt::tile_size(src1_cb_data_format);
     tt::DataFormat dst_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
@@ -89,13 +93,21 @@ ProgramDescriptor TanhBwProgramFactory::create_descriptor(
     std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(output_cb_index)};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
-    bool fp32_dest_acc_en = (dst_cb_data_format == tt::DataFormat::Float32) ||
-                            (dst_cb_data_format == tt::DataFormat::Int32) ||
-                            (dst_cb_data_format == tt::DataFormat::UInt32);
+    // A float32 operand needs a float32 DEST just as much as a float32 output does: the
+    // unpacker is asked for float32 DEST values below, and a 16-bit DEST cannot hold them.
+    bool fp32_dest_acc_en =
+        (dst_cb_data_format == tt::DataFormat::Float32) || (dst_cb_data_format == tt::DataFormat::Int32) ||
+        (dst_cb_data_format == tt::DataFormat::UInt32) || (src0_cb_data_format == tt::DataFormat::Float32) ||
+        (src1_cb_data_format == tt::DataFormat::Float32);
 
+    // Request float32 DEST values only where they can be held, i.e. when DEST is accumulating
+    // in float32. Asking unconditionally widens an operand into a DEST that cannot represent
+    // it, which for a float32 grad_output against a bfloat16 input returned inf.
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-    unpack_to_dest_mode[src1_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    if (fp32_dest_acc_en) {
+        unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[src1_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    }
 
     // ---- Reader kernel ----
 
