@@ -42,7 +42,10 @@ TOPK_MATRIX_WIDTH = 128
 
 
 def _templates(poison: str) -> list:
-    """Template parameters for one poison variant."""
+    """Template parameters for one poison variant. ``rank_stamped_narrow`` uses a 6-bit tag field,
+    the width the MoE gate uses on fp32 keys: the stamp and the merge then program a tag clear mask
+    into a constant register, and this probe checks that register is not the shared -1.0.
+    """
     return [
         TOPK(
             topk_k=TOPK_K,
@@ -50,14 +53,15 @@ def _templates(poison: str) -> list:
             topk_sort_direction=TopKSortDirection.Descending,
             topk_stable_sort=False,
             topk_fused_stable=False,
-            topk_rank_stamped=(poison == "rank_stamped"),
+            topk_rank_stamped=poison.startswith("rank_stamped"),
+            topk_tag_bits=6 if poison == "rank_stamped_narrow" else 16,
         )
     ]
 
 
 @parametrize(
     formats=FORMATS,
-    poison=["unstable", "rank_stamped"],
+    poison=["unstable", "rank_stamped", "rank_stamped_narrow"],
 )
 def test_topk_const_leak(formats, poison):
     torch.manual_seed(0)

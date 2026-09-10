@@ -118,16 +118,25 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if constexpr (TOPK_RANK_STAMPED)
             {
-                ckernel::sfpu::_init_topk_rank_stamped_();
+                ckernel::sfpu::_init_topk_rank_stamped_<TOPK_TAG_BITS>();
             }
             else
             {
                 ckernel::sfpu::_init_topk();
             }
 
-            ckernel::sfpu::
-                calculate_bitonic_topk_merge<APPROX, is_fp32_dest_acc_en, TOPK_SORT_DIRECTION, NETWORK_STABLE_SORT, TOPK_FUSED_STABLE, TOPK_RANK_STAMPED>(
-                    0 /* m_iter */, TOPK_K);
+            // A narrow tag field (TOPK_TAG_BITS < 16) makes the stamp and the merge program the tag
+            // clear mask into a constant register; this probe is what proves that register is not
+            // the shared -1.0 (LREG11).
+            ckernel::sfpu::calculate_bitonic_topk_merge<
+                APPROX,
+                is_fp32_dest_acc_en,
+                TOPK_SORT_DIRECTION,
+                NETWORK_STABLE_SORT,
+                TOPK_FUSED_STABLE,
+                TOPK_RANK_STAMPED,
+                ckernel::sfpu::TopkTieOrder::Unset,
+                TOPK_TAG_BITS>(0 /* m_iter */, TOPK_K);
         },
         0 /* dst_index */,
         VectorMode::None);
