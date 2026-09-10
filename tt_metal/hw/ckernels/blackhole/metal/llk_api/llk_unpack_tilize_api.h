@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+
+#include "sanitizer/api.h"
 #include <cstdint>
 #include "llk_unpack_common_api.h"
 #include "llk_unpack_tilize.h"
@@ -21,6 +23,14 @@ inline void llk_unpack_tilize_init_impl(
     const std::uint32_t face_r_dim,
     const bool narrow_tile,
     const std::uint32_t num_faces) {
+    SAN_HOOK(init<OperationUnpackTilize>(
+        StateVal<OperationUnpackTilize::BlockCtDim>(ct_dim),
+        StateVal<OperationUnpackTilize::NarrowTile>(narrow_tile),
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(src_format),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(dst_format),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(face_r_dim),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(num_faces)));
+
     _llk_unpack_tilize_init_(src_format, dst_format, ct_dim, face_r_dim, narrow_tile, num_faces);
 }
 
@@ -33,6 +43,14 @@ inline void llk_unpack_tilize_impl(
     const std::uint32_t num_faces,
     const bool narrow_tile) {
     WAYPOINT("UPTW");
+    SAN_HOOK(execute<OperationUnpackTilize>(
+        StateVal<OperationUnpackTilize::NarrowTile>(narrow_tile),
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(src_format),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(dst_format),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(face_r_dim),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(num_faces),
+        StateDiscard<std::uint32_t>(tile_index)));
+
     _llk_unpack_tilize_(base_address, tile_index, src_format, dst_format, face_r_dim, num_faces, narrow_tile);
     WAYPOINT("UPTD");
 }
@@ -65,6 +83,11 @@ inline void llk_unpack_tilize_init(const std::uint32_t operand, const std::uint3
  * @param operand Input circular buffer / operand index.
  */
 inline void llk_unpack_tilize_uninit_impl(const std::uint32_t dst_format, const ckernel::TensorShape tensor_shape) {
+    SAN_HOOK(uninit<OperationUnpackTilize>(
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(dst_format),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(tensor_shape.face_r_dim),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(tensor_shape.total_num_faces())));
+
     _llk_unpack_tilize_uninit_(dst_format, tensor_shape);
 }
 
@@ -135,6 +158,7 @@ inline void llk_unpack_tilize_block(std::uint32_t operand, std::uint32_t block_c
 // TODO: add support for all the template parameters
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void llk_unpack_tilizeA_B_mop_config(const std::uint32_t num_faces = 4) {
+    SAN_HOOK(unsupported());
     _llk_unpack_tilizeA_B_mop_config_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(num_faces);
 }
 
@@ -156,6 +180,7 @@ inline void llk_unpack_tilizeA_B_mop_config(const std::uint32_t num_faces = 4) {
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
 inline void llk_unpack_tilizeA_B_init(
     const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t ct_dim) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
     const std::uint32_t num_faces = get_operand_num_faces(operandA_id);
@@ -204,6 +229,7 @@ inline void llk_unpack_tilizeA_B(
     std::uint32_t tile_index_a,
     std::uint32_t tile_index_b,
     std::uint32_t block_ct_dim) {
+    SAN_HOOK(unsupported());
     std::uint32_t operandA_id = get_operand_id(operandA);
     std::uint32_t operandB_id = get_operand_id(operandB);
 
@@ -262,6 +288,7 @@ inline void llk_unpack_tilizeA_B_block(
     std::uint32_t operandB,
     std::uint32_t block_c_tiles_a,
     std::uint32_t tile_idx_b) {
+    SAN_HOOK(unsupported());
     for (std::uint32_t tile_idx_a = 0; tile_idx_a < block_c_tiles_a; tile_idx_a++) {
         llk_unpack_tilizeA_B<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(
             operandA, operandB, tile_idx_a, tile_idx_b, block_c_tiles_a);
@@ -275,6 +302,7 @@ inline void llk_unpack_tilizeA_B_block(
  * @param operand Input circular buffer / operand index.
  */
 inline void llk_unpack_tilizeA_B_uninit(const std::uint32_t operand) {
+    SAN_HOOK(unsupported());
     std::uint32_t operand_id = get_operand_id(operand);
     _llk_unpack_tilizeA_B_uninit_((std::uint32_t)unpack_dst_format[operand_id]);
 }

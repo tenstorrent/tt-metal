@@ -12,13 +12,8 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 
 from ....pipelines.flux2.pipeline_flux2 import Flux2Pipeline
-from ....utils.test import line_params, line_params_8k, ring_params, ring_params_8k
-
-# Flux2 VAE uses conv2d which needs L1_SMALL buffers.
-line_params_flux2 = {**line_params, "l1_small_size": 65536}
-ring_params_flux2 = {**ring_params, "l1_small_size": 65536}
-ring_params_8k_flux2 = {**ring_params_8k, "l1_small_size": 65536}
-line_params_8k_flux2 = {**line_params_8k, "l1_small_size": 65536}
+from ....utils.test import skip_if_unsupported_num_links
+from .device_params import line_params_flux2
 
 
 @pytest.mark.parametrize(
@@ -32,16 +27,20 @@ line_params_8k_flux2 = {**line_params_8k, "l1_small_size": 65536}
 )
 @pytest.mark.parametrize(("width", "height", "num_inference_steps"), [(1024, 1024, 12)])
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis, encoder_tp_factor, vae_tp_factor, topology, num_links, is_fsdp, dynamic_load, traced",
+    "mesh_device, sp_axis, tp_axis, encoder_tp_axis, vae_tp_axis, topology, num_links, is_fsdp, dynamic_load, traced",
     [
-        [(1, 8), 0, 1, 8, 8, ttnn.Topology.Linear, 1, False, True, False],
-        [(4, 8), 0, 1, 8, 8, ttnn.Topology.Linear, 4, True, False, True],
-        [(4, 8), 0, 1, 8, 8, ttnn.Topology.Linear, 2, False, False, True],
+        # is_fsdp and dynamic_load are both mandatory for 2x2 -- the 32B transformer, the 24B encoder and the VAE
+        # cannot be co-resident on 4 chips.
+        [(2, 2), 0, 1, 1, 1, ttnn.Topology.Linear, 2, True, True, False],
+        [(1, 8), 0, 1, 1, 1, ttnn.Topology.Linear, 1, False, True, False],
+        [(4, 8), 0, 1, 1, 0, ttnn.Topology.Linear, 4, True, False, True],
+        [(4, 8), 0, 1, 1, 0, ttnn.Topology.Linear, 2, False, False, True],
     ],
     ids=[
-        "1x8tp1",
-        "wh_4x8",
-        "bh_4x8",
+        "2x2sp0tp1vaetp1nl2_linear_is_fsdp1",
+        "1x8sp0tp1vaetp1nl1_linear_is_fsdp0",
+        "4x8sp0tp1vaetp0nl4_linear_is_fsdp1",
+        "4x8sp0tp1vaetp0nl2_linear_is_fsdp0",
     ],
     indirect=["mesh_device"],
 )
@@ -53,8 +52,8 @@ def test_pipeline(
     num_inference_steps: int,
     sp_axis: int,
     tp_axis: int,
-    encoder_tp_factor: int,
-    vae_tp_factor: int,
+    encoder_tp_axis: int,
+    vae_tp_axis: int,
     topology: ttnn.Topology,
     num_links: int,
     no_prompt: bool,
@@ -64,13 +63,17 @@ def test_pipeline(
     model_location_generator,
     is_ci_env: bool,
 ) -> None:
+    skip_if_unsupported_num_links(mesh_device, num_links)
+
     pipeline = Flux2Pipeline.create_pipeline(
         mesh_device=mesh_device,
         checkpoint_name=model_location_generator("black-forest-labs/FLUX.2-dev"),
         sp_axis=sp_axis,
         tp_axis=tp_axis,
-        encoder_tp_factor=encoder_tp_factor,
-        vae_tp_factor=vae_tp_factor,
+        encoder_tp_axis=encoder_tp_axis,
+        vae_tp_axis=vae_tp_axis,
+        vae_h_axis=1 - vae_tp_axis,
+        vae_w_axis=None,
         num_links=num_links,
         topology=topology,
         width=width,
@@ -78,6 +81,7 @@ def test_pipeline(
         is_fsdp=is_fsdp,
         dynamic_load=dynamic_load,
         trace_warmup=traced,
+        shard_prompt=True,
     )
 
     prompts = [

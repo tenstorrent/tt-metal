@@ -28,7 +28,7 @@ def test_multiply_not_4D(device, scalar):
     output = input_tensor_a * input_tensor_b * scalar
     output = ttnn.to_torch(output, torch_rank=1)
 
-    assert_with_ulp(torch_output_tensor, output, 0)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output, ulp_threshold=0)
 
 
 @pytest.mark.parametrize("h", [32])
@@ -43,7 +43,7 @@ def test_mul_4D(device, h, w):
     output = ttnn.mul(input_tensor_a, input_tensor_b)
     output = ttnn.to_torch(output)
 
-    assert_with_ulp(torch_output_tensor, output, 0)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output, ulp_threshold=0)
 
 
 # fmt: off
@@ -57,7 +57,7 @@ def test_multiply_with_scalar(device, scalar):
     output = scalar * input_tensor_a
     output = ttnn.to_torch(output)
 
-    assert_with_ulp(torch_output_tensor, output, 0)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output, ulp_threshold=0)
 
 
 @pytest.mark.parametrize("output_memory_config", [ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
@@ -81,7 +81,7 @@ def test_multiply_with_scalar_sharded(device, scalar, input_shard_orientation, o
     output = ttnn.mul(input_tensor_a, scalar, memory_config=output_memory_config)
     output = ttnn.to_torch(output)
 
-    assert_with_ulp(torch_output_tensor, output, 0)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output, ulp_threshold=0)
 
 
 @pytest.mark.skip(reason="Unable to multiply scalar to tensor with int")
@@ -116,7 +116,7 @@ def test_multiply_float32_with_scalar_sharded(device, scalar, batch_size, output
     output = ttnn.mul(input_tensor_a, scalar, memory_config=output_memory_config)
     output = ttnn.to_torch(output)
 
-    assert_with_ulp(torch_output_tensor, output, 0)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output, ulp_threshold=0)
 
 
 def test_binary_mul_div_bf16(device):
@@ -137,8 +137,8 @@ def test_binary_mul_div_bf16(device):
     tt_out_mul = ttnn.to_torch(z_tt_mul)
     tt_out_div = ttnn.to_torch(z_tt_div)
 
-    assert_with_ulp(z_torch_mul, tt_out_mul, 0)
-    assert_with_ulp(z_torch_div, tt_out_div, 0)
+    assert_with_ulp(expected_result=z_torch_mul, actual_result=tt_out_mul, ulp_threshold=0)
+    assert_with_ulp(expected_result=z_torch_div, actual_result=tt_out_div, ulp_threshold=0)
 
 
 @pytest.mark.parametrize("a,b", [(508, 748), (17, 17)])
@@ -160,8 +160,8 @@ def test_binary_mul_div_bf16_scalar(device, a, b):
     tt_out_mul = ttnn.to_torch(z_tt_mul)
     tt_out_div = ttnn.to_torch(z_tt_div)
 
-    assert_with_ulp(z_torch_mul, tt_out_mul, 0)
-    assert_with_ulp(z_torch_div, tt_out_div, 0)
+    assert_with_ulp(expected_result=z_torch_mul, actual_result=tt_out_mul, ulp_threshold=0)
+    assert_with_ulp(expected_result=z_torch_div, actual_result=tt_out_div, ulp_threshold=0)
 
 
 @pytest.mark.parametrize("fast_and_approximate_mode, ulp_threshold", [(False, 0), (True, 2)])
@@ -179,7 +179,7 @@ def test_multiply_modes(device, fast_and_approximate_mode, ulp_threshold, high, 
     output = ttnn.multiply(input_tensor_a, input_tensor_b, fast_and_approximate_mode=fast_and_approximate_mode)
     output = ttnn.to_torch(output)
 
-    assert_with_ulp(torch_output_tensor, output, ulp_threshold)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output, ulp_threshold=ulp_threshold)
 
 
 def test_binary_mul_bf16_scalar(device):
@@ -208,4 +208,4 @@ def test_binary_mul_bf16_scalar(device):
 
     tt_out_mul = ttnn.to_torch(z_tt_mul)
 
-    assert_with_ulp(z_torch_mul, tt_out_mul, 0)
+    assert_with_ulp(expected_result=z_torch_mul, actual_result=tt_out_mul, ulp_threshold=0)
