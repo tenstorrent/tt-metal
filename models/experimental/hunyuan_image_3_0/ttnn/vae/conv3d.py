@@ -51,6 +51,45 @@ _KERNEL_H = 3
 _TUNED_H_STRIP = 128
 
 
+def _neighbor_pad_safe_num_links(x: ttnn.Tensor, dim: int, requested: int) -> int:
+    """Clamp ``num_links`` for ``neighbor_pad_async`` so outer_dim_size >= num_links.
+
+    Hunyuan VAE sharded conv uses ``[B,T,H,W,C]`` with ``B=T=1``; H-pad (dim=2) may
+    only allow ``num_links=1`` even when the CCL manager prefers multi-link.
+    """
+    outer = 1
+    for d in range(dim):
+        outer *= int(x.shape[d])
+    return max(1, min(int(requested), outer))
+
+
+def _hunyuan_vae_neighbor_pad(
+    ccl_manager,
+    x: ttnn.Tensor,
+    *,
+    cluster_axis: int,
+    dim: int,
+    padding_left: int,
+    padding_right: int,
+    padding_mode: str,
+) -> ttnn.Tensor:
+    neighbor_semaphore = ccl_manager.get_np_ping_pong_semaphore(cluster_axis)
+    barrier_semaphore = ccl_manager.get_barrier_semaphore(cluster_axis)
+    n_links = _neighbor_pad_safe_num_links(x, dim, ccl_manager.num_links)
+    return ttnn.experimental.neighbor_pad_async(
+        x,
+        [dim],
+        [padding_left],
+        [padding_right],
+        padding_mode,
+        [cluster_axis],
+        [neighbor_semaphore],
+        [barrier_semaphore],
+        num_links=[n_links],
+        topology=ttnn.Topology.Linear,
+    )
+
+
 def conv3d_valid_input_h_chunk(output_h_chunk: int) -> int:
     """Input-H strip height matching a valid-conv output strip (kH=3)."""
     return output_h_chunk + (_KERNEL_H - 1)
@@ -268,8 +307,6 @@ class HunyuanSymmetricConv3d(Module):
         field it would in the replicated conv. With padding=(kH-1)/2 etc., conv with
         H/W padding 0 returns the original local spatial size.
         """
-        from models.tt_dit.parallel.config import neighbor_pad_safe_num_links, vae_neighbor_pad
-
         pT, pH, pW = self.padding
         x = x_bthwc
         need_w = self.w_mesh_axis is not None and pW > 0
@@ -284,8 +321,8 @@ class HunyuanSymmetricConv3d(Module):
             sem_h = self.ccl.get_np_ping_pong_semaphore(self.h_mesh_axis)
             sem_w = self.ccl.get_np_ping_pong_semaphore(self.w_mesh_axis)
             barrier_semaphore = self.ccl.get_barrier_semaphore(self.h_mesh_axis)
-            n_h = neighbor_pad_safe_num_links(x, 2, self.ccl.num_links)
-            n_w = neighbor_pad_safe_num_links(x, 3, self.ccl.num_links)
+            n_h = _neighbor_pad_safe_num_links(x, 2, self.ccl.num_links)
+            n_w = _neighbor_pad_safe_num_links(x, 3, self.ccl.num_links)
             x = ttnn.experimental.neighbor_pad_async(
                 x,
                 [2, 3],
@@ -299,7 +336,7 @@ class HunyuanSymmetricConv3d(Module):
                 topology=ttnn.Topology.Linear,
             )
         elif need_w:
-            x = vae_neighbor_pad(
+            x = _hunyuan_vae_neighbor_pad(
                 self.ccl,
                 x,
                 cluster_axis=self.w_mesh_axis,
@@ -309,7 +346,7 @@ class HunyuanSymmetricConv3d(Module):
                 padding_mode="zeros",
             )
         elif need_h:
-            xp = vae_neighbor_pad(
+            xp = _hunyuan_vae_neighbor_pad(
                 self.ccl,
                 x,
                 cluster_axis=self.h_mesh_axis,
