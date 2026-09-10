@@ -52,6 +52,15 @@
 #      nil -- but 1.3.4 is a patch bump holding omegaconf<2.4,>=2.2, the same range
 #      1.3.2 held, so there is no reason to carry the finding.
 #
+#      lightning 2.3.3 -> 2.6.6 clears CVE-2026-58659 (GHSA-qqmf-gpg7-g8gw, HIGH:
+#      LightningModule.load_from_checkpoint runs an _instantiator import path stored in
+#      the checkpoint, even under weights_only=True). 2.6.6 is the release that adds the
+#      _ALLOWED_INSTANTIATORS allowlist; every earlier 2.x is affected. The reference
+#      never calls load_from_checkpoint -- lightning is here only because
+#      matcha/utils/pylogger.py imports rank_zero_only from lightning.pytorch -- so the
+#      exposure was already nil, and a logging decorator has no numeric surface for a
+#      bump to move.
+#
 #      transformers goes to 5.5.0, clearing all eight of its advisories. The reference
 #      touches two corners of it -- Qwen2ForCausalLM in cosyvoice/llm/llm.py, and
 #      AutoFeatureExtractor/WavLMForXVector in scripts/eval_wer_sim.py -- and both import
@@ -119,7 +128,7 @@ hydra-core==1.3.4
 HyperPyYAML==1.2.3
 inflect==7.3.1
 librosa==0.10.2
-lightning==2.3.3
+lightning==2.6.6
 matplotlib==3.7.5
 modelscope==1.27.0
 numpy==1.26.4
