@@ -625,6 +625,62 @@ claim. And this is one run of each point, not a distribution.
 
 ## CI
 
+### How long the benchmark sweep takes, and why the decode win barely moves it
+
+The `benchmarks` workflow runs a sweep of `(isl, osl, max_concurrency)` points,
+each with a **hard 7200 s timeout** — `"exceeded timeout of 7200s and was
+killed"` appears three times in the baseline log, for the three points below. So
+the sweep's wall time is set by how many points hit that cap and by the
+prefill-bound long-ISL points, **not** by decode speed.
+
+Measured per point, from both job logs (which *are* fetchable while the run is in
+progress via `gh api .../actions/jobs/<id>/logs` — the handoff's claim that
+in-progress logs return `BlobNotFound` holds for the run-level log, not this one):
+
+| point | baseline `38153c48c8a` | this branch | speedup |
+| --- | ---: | ---: | ---: |
+| load + warmup | 8m17s | 9m24s | 0.88x |
+| isl 128 / osl 128 / conc 1 | 6m19s | 3m25s | 1.85x |
+| isl 128 / osl 128 / conc 32 | 15m54s | 13m06s | 1.21x |
+| isl 128 / **osl 1024** / conc 1 | 21m35s | 8m35s | **2.51x** |
+| isl 128 / **osl 1024** / conc 32 | 27m00s | 14m04s | **1.92x** |
+| isl 1024 / osl 128 / conc 1 | 4m36s | 2m59s | 1.54x |
+| isl 1024 / osl 128 / conc 32 | 45m57s | 44m43s | **1.03x** |
+| isl 2048 / osl 128 / conc 1 | 6m14s | 4m39s | 1.34x |
+| isl 2048 / osl 128 / conc 32 | 1h29m | *running* | |
+| isl 4096 / osl 128 / conc 32 | **2h00m — KILLED at 33/128** | | |
+| isl 8192 / osl 128 / conc 32 | **2h00m — KILLED at 1/64** | | |
+| isl 8192 / osl 1024 / conc 32 | **2h00m — KILLED at 1/64** | | |
+| **through isl 2048 / osl 128 / conc 1** | **2h15m** | **1h40m** | **1.35x** |
+
+The per-point speedups line up exactly with the shape argument in "Serving":
+**2.5x where osl is 1024 and 1.03x where osl is 128 and isl is long.** Decode
+work is what got faster; prefill did not, and it dominates the long points.
+
+**Estimate for the whole sweep: ~13.5 h on this branch against ~15 h on the
+baseline**, both inside the 18 h job budget (`timeout-minutes: 1080`). Built from
+the measured points above plus the remaining ones scaled by the measured
+per-shape ratio, so the tail is an extrapolation, not a measurement:
+
+| remaining | basis | estimate |
+| --- | --- | ---: |
+| isl 2048 / osl 128 / conc 32 | 1h29m at 1.03x | ~1h27m |
+| isl 4096 / osl 128 / conc 1 | 9m34s at ~1.3x | ~7m |
+| isl 4096 / osl 128 / conc 32 | killed at the cap either way | 2h00m |
+| isl 8192 / osl 128 / conc 1 | 22m08s at ~1.3x | ~17m |
+| isl 8192 / osl 128 / conc 32 | killed at the cap | 2h00m |
+| isl 8192 / osl 1024 / conc 1 | 1h17m at ~1.5x | ~52m |
+| isl 8192 / osl 1024 / conc 32 | killed at the cap | 2h00m |
+| isl 10000 / osl 1024 / conc 1 | baseline still running at >1h27m | ~1h |
+| isl 10000 / osl 1024 / conc 32 | expected to hit the cap | 2h00m |
+| **total with the 1h40m already measured** | | **~13h25m** |
+
+Four of the points are expected to be killed at 7200 s on this branch as well,
+because the shape they fail on (`osl 128`, long `isl`, `conc 32`) is the one that
+measured 1.03x. **8 hours of a ~13.5 h sweep is four capped points**, so the
+sweep will not get materially shorter until prefill does — which is the same
+conclusion the throughput row in "Serving" reaches from a different direction.
+
 ### Evals: quality is unchanged, and the eval does 1.6x more decode work
 
 `34414429853` on `e970b4f966d` is the first **genuine** eval run of this branch:
