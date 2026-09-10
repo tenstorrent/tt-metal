@@ -250,7 +250,9 @@ class KimiLinearForCausalLM(Generator):
         model = self.model[0]
         B = model.max_batch_size
         blocks = self._num_blocks or 1
-        max_blocks = int(kwargs.get("max_num_blocks_per_req", 0)) or min(blocks, 8)
+        # the plugin passes the decode block-table width as ``num_blocks`` (= its max_num_blocks_per_req); the traced
+        # decode inputs are captured at this shape and every later page table is padded/sliced to it
+        max_blocks = int(kwargs.get("num_blocks") or kwargs.get("max_num_blocks_per_req") or 0) or min(blocks, 8)
         pt = torch.zeros(B, max_blocks, dtype=torch.int32)
         toks = torch.full((B, 1), model.cfg.pad_token_id, dtype=torch.long)
         pos = torch.full((B,), -1, dtype=torch.int32)  # idle rows: skipped by the paged ops
