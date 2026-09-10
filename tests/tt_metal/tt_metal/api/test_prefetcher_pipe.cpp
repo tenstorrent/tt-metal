@@ -655,6 +655,13 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CursorSurvivesCreditCounterWrap) {
     // only survives the 2^32 wrap when ring_units divides 2^32. This ring is 384 KiB = 24576
     // units, which does not. The spin below runs the pipe up to the last lap boundary before the
     // wrap; the data phase then writes and verifies a full ring across it.
+    if (MetalContext::instance().rtoptions().get_simulator_enabled()) {
+        // 2^32 units of credit is half a million NoC round trips. Under half a second on
+        // silicon, six and a half minutes under simulation, where it would be the longest
+        // test in the binary by two orders of magnitude. The property is architecture-
+        // independent, so the hardware SKUs cover it.
+        GTEST_SKIP() << "credit-wrap spin is too slow to be worth its runtime under simulation";
+    }
     auto mesh_device = devices_[0];
     constexpr uint32_t entry_size = 128 * 1024;
     constexpr uint32_t num_entries = 3;
