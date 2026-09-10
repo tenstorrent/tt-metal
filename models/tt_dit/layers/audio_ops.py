@@ -307,26 +307,15 @@ def _tap_weight(taps, channels: int, dtype, mesh_device):
 def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
     """Valid depthwise filter (same K taps per channel) on padded ``(B, T_pad, C)`` ROW_MAJOR.
 
-    Returns ``(B, T_out, C)`` with ``T_out = (T_pad - K) / stride + 1`` via ``ttnn.conv1d`` (groups=C) with the
-    prepared weight cached in ``cache``. For fp32 operands conv1d's depthwise kernel accumulates on the SFPU (see
-    compute_depthwise_conv1d.cpp), so it matches the exact shift-multiply-add form bit-for-bit -- the MAC form
-    survives only as the fallback for shapes conv1d cannot run.
+    Returns ``(B, T_out, C)`` with ``T_out = (T_pad - K) / stride + 1`` via ``ttnn.conv1d`` (groups=C), with the
+    prepared weight cached in ``cache``. In fp32 conv1d's depthwise kernel matches the shift-multiply-add (MAC) form
+    bit-for-bit, so MAC is only the fallback for shapes conv1d cannot run.
 
-    Which conv1d formulation to run (the full C at once, or C split into independent chunks, because the
-    activation block is ``C * K`` wide and does not fit L1 at large C however finely T is sliced) and how many
-    DRAM slices to run it with come from ``utils/tap_filter_configs.py``, measured per device class. The
-    lookup is a hint with a trial chain behind it, in this order:
-
-    1. the plan this process already ran for the exact shape (``cache``);
-    2. the tabled formulation with an explicit slice count derived from its measured reference -- the slicer
-       never searches, so it can never fail;
-    3. the tabled formulation with conv1d's own auto-slicing;
-    4. every applicable formulation in turn, widest first, then the MAC form -- exactly the probing the filter
-       did before the table existed, so a device class with no rows behaves as it always has.
-
-    A table-driven attempt that raises is logged once as a stale row; a shape the table does not know is
-    logged once with the row to add. Every step keeps the numerics: the formulations are all the same
-    depthwise conv (chunking is exact), and MAC is bit-equal to conv1d in fp32.
+    The conv1d formulation (full C, or C in independent chunks because the ``C * K`` activation block does not fit
+    L1 at large C) and its DRAM slice count come from ``utils/tap_filter_configs.py``. Attempt order: the plan cached
+    for this exact shape; the tabled formulation with the derived explicit slice count; the same with auto slicing;
+    then every applicable formulation widest-first and MAC. A table-driven attempt that raises is logged once as
+    stale; an unknown shape is logged once with the row to add.
     """
     B, T_pad, C = int(x_BTC.shape[0]), int(x_BTC.shape[1]), int(x_BTC.shape[2])
     K = len(taps)
@@ -343,10 +332,8 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
         if formulation == "mac":
             return _depthwise_tap_mac(x_BTC, taps, stride, T_out=T_out, dtype=dtype)
         channels = C if formulation == "direct" else formulation
-        # The prepared (tilized/sharded) weight is specific to the parallelization conv1d runs with -- the
-        # geometry (B, T_pad) and the slice config -- and a weight prepared for another one decodes to garbage
-        # without raising (that was every 15 s MiniMax-H3 clip after a shorter warm-up clip). Key on all of it;
-        # (K, taps) because the upsampler reuses one cache for distinct sub-tap vectors.
+        # conv1d prepares the weight for the parallelization it runs with ((B, T_pad) and the slice config); a
+        # weight prepared for another one decodes to garbage without raising.
         wkey = ("w", channels, stride, K, tuple(taps), B, T_pad, slice_signature(slice_config))
         weight = cache.get(wkey)
         prepared = weight is not None
@@ -370,8 +357,7 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
             return _depthwise_tap_conv1d(x_BTC, weight, C=C, prepared=prepared, **common)
         return _depthwise_tap_conv1d_chunked(x_BTC, weight, C=C, chunk=channels, prepared=prepared, **common)
 
-    # The attempt list: (formulation, slice config or None for auto, where it came from).
-    attempts: list[tuple] = []
+    attempts: list[tuple] = []  # (formulation, slice config or None for auto, source)
     seen: set = set()
 
     def add(formulation, slice_config, source):

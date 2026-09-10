@@ -2,35 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Measured ``ttnn.conv1d`` configurations for the depthwise tap filter (``audio_ops.depthwise_tap_filter``).
+"""Measured ``ttnn.conv1d`` configurations for the depthwise tap filter (``audio_ops.depthwise_tap_filter``), per
+device class ``(arch, compute grid)``, like the tables in ``utils/matmul.py``, ``utils/conv3d.py`` and
+``layers/conv2d.py``.
 
-The tap filter is the anti-alias resampler of the MiniMax-H3 / LTX audio decoders: a depthwise ``K``-tap conv1d
-over ``(B, T_pad, C)``. ``conv1d`` runs it through conv2d's DRAM slicer, and whether a formulation fits L1 depends
-on the activation block width ``C * K`` (the ``K`` sticks of a depthwise conv are laid out contiguously), so at
-large ``C`` the full-channel conv never fits however finely ``T`` is sliced and the channels have to be split
-into independent chunks. Until this module existed the filter *discovered* the fitting formulation by trial: each
-miss was a failed op with a ``TT_FATAL`` log (18 per MiniMax-H3 decoder build at 15 s).
+* ``_FORMULATIONS``: ``(C, K, stride) -> "direct" | chunk width``. Whether the full-C conv fits L1 depends on the
+  activation block width ``C * K``, not on ``T``, so one row covers every clip length.
+* ``_SLICES``: ``(channels_run, K, stride) -> (T_out_ref, num_slices_ref)``, the DRAM slice count the conv is fastest
+  with at one length; other lengths scale it up proportionally (``derive_num_slices``) and pass it as an explicit
+  ``slice_config``, so the slicer never searches.
 
-This module records the answers, the way ``utils/matmul.py`` (matmul blockings), ``utils/conv3d.py`` (conv3d
-blockings) and ``layers/conv2d.py`` (conv2d DRAM slice counts) record theirs -- one table per device class,
-measured by ``models/tt_dit/tests/models/minimax_h3/tools/sweep_tap_filter_configs.py``:
-
-* ``_FORMULATIONS``: ``(C, K, stride) -> "direct" | chunk width``. Which formulation to run; independent of ``T``.
-* ``_SLICES``: ``(channels_run, K, stride) -> (T_out_ref, num_slices_ref)``. The slice count the conv is fastest
-  with at one measured length. Per-slice L1 use scales with the slice's output length, so the count for any
-  other length is ``ceil(num_slices_ref * T_out / T_out_ref)`` (``derive_num_slices``): more slices than
-  needed is always safe, merely a little slower, so the derivation rounds up. Handing conv1d this count as an
-  explicit ``slice_config`` skips the slicer's search entirely -- it never runs, so it can never fail.
-
-The tables are hints, never the authority: ``depthwise_tap_filter`` keeps its trial chain (direct, then the
-chunk widths, then the shift-multiply-add fallback) behind every lookup, so a missing or stale row costs one
-warning and one retry, never a failed call. Do not borrow rows across shapes -- a *fit* does not interpolate
-the way a performance choice does; ``matmul.py``'s nearest-neighbour lookup is deliberately absent here.
-
-Rows are keyed by ``tap_device_key`` = (architecture, compute grid); L1 per core differs between devices, so
-a device class with no table simply probes as before. Regenerate a table with the sweep tool whenever the
-conv1d/slicing implementation changes, and let ``tests/unit/test_audio_tap_path.py`` (which walks every
-row on the device) tell you when a row has gone stale.
+The tables are hints: ``depthwise_tap_filter`` keeps its trial chain behind every lookup, so a missing or stale row
+costs one warning and one retry. Rows are never borrowed across shapes (a fit does not interpolate). Regenerate with
+``tests/models/minimax_h3/tools/sweep_tap_filter_configs.py``; ``tests/unit/test_audio_tap_path.py`` walks every row
+on the device.
 """
 
 from __future__ import annotations
@@ -40,8 +25,7 @@ from typing import Any
 
 import ttnn
 
-# Conv1d formulations of the filter, widest first (the trial order); "mac" (shift-multiply-add) is appended by
-# the caller as the last resort and is never tabled -- it is what runs when nothing here fits.
+# Trial order, widest first; the caller appends the shift-multiply-add fallback, which is never tabled.
 TAP_FORMULATIONS: tuple[Any, ...] = ("direct", 128, 64, 32)
 
 DeviceKey = tuple[str, int, int]  # (arch, grid_x, grid_y)
@@ -60,18 +44,11 @@ def applicable_formulations(C: int) -> list[Any]:
     return [f for f in TAP_FORMULATIONS if f == "direct" or (C % f == 0 and f < C)]
 
 
-# ---------------------------------------------------------------------------------------------- tables
-# Filled from sweep_tap_filter_configs.py; see the module docstring for the key/value meanings. Keep the
-# sweep's provenance comment (date, host, l1_small_size, clip lengths) with every block so a row's origin is
-# knowable when it goes stale.
+# Keep each block's provenance (date, host, l1_small_size, clip lengths) so a stale row can be traced.
 
 _FORMULATIONS: dict[DeviceKey, dict[ShapeKey, Any]] = {
-    # Blackhole Galaxy (P150-class chips, 12x10 compute grid). Swept 2026-09-10 on bh-glx-120-c03u02, one device,
-    # l1_small_size 65536, with the 14 shapes the MiniMax-H3 audio decoder calls the filter with at 5 s (207 latent
-    # frames) and 15 s (603): batch 2, K=7 stride-1 up-sampler and K=12 stride-2 anti-alias filter per band, C 512 -> 8.
-    # Only the two widest K=7 filters want chunking (C*K = 3584 / 1792 rows of activation block); at C=512 the
-    # full-channel conv never fits, at C=256 it fits from 3 slices but the 128-chunk is 20-25 % faster.
-    # tools/sweep_tap_filter_configs.py --merge-json tap_sweep_5s_f1_*.json tap_sweep_15s_f1_*.json
+    # Blackhole Galaxy, swept 2026-09-10 on bh-glx-120-c03u02 (l1_small_size 65536) over the MiniMax-H3 audio
+    # decoder's 5 s and 15 s shapes. Only the two widest K=7 filters chunk; the 128-chunk beats full C at 256 by 20-25 %.
     ("blackhole", 12, 10): {
         (512, 12, 2): "direct",
         (512, 7, 1): 128,
@@ -90,10 +67,8 @@ _FORMULATIONS: dict[DeviceKey, dict[ShapeKey, Any]] = {
     },
 }
 _SLICES: dict[DeviceKey, dict[ShapeKey, tuple[int, int]]] = {
-    # Same sweep. A row exists only where the explicit count beat conv1d's auto-slicing by >= 10 % at the reference
-    # length (the 15 s one): the auto-slicer's L1 estimate over-slices the long, narrow filters (11-24 % slower).
-    # For the wide filters (C >= 128) explicit and auto were within noise, so conv1d keeps slicing those itself.
-    # Every derived count was checked against the smallest fitting count at all eight swept lengths (5 s and 15 s).
+    # Same sweep; rows only where the explicit count beat conv1d's auto-slicing by >= 10 % (the long, narrow filters;
+    # for C >= 128 the two tied). Derived counts checked against the smallest fitting count at all swept lengths.
     ("blackhole", 12, 10): {
         (64, 12, 2): (60300, 8),
         (64, 7, 1): (60300, 5),
@@ -143,20 +118,17 @@ def tap_formulation(device_key: DeviceKey, C: int, K: int, stride: int) -> Any:
 
 
 def derive_num_slices(T_out: int, T_out_ref: int, num_slices_ref: int) -> int:
-    """Slice count for ``T_out`` from a reference measured at ``T_out_ref``: proportional, rounded up, at least 1,
-    at most one slice per output row."""
-    if T_out <= 0:
-        raise ValueError(f"T_out must be positive, got {T_out}")
+    """Slice count for ``T_out`` scaled from the reference: rounded up, at least 1, at most one per output row."""
+    if T_out <= 0 or T_out_ref <= 0 or num_slices_ref <= 0:
+        raise ValueError(
+            f"T_out, T_out_ref and num_slices_ref must be positive, got {(T_out, T_out_ref, num_slices_ref)}"
+        )
     return max(1, min(T_out, math.ceil(num_slices_ref * T_out / T_out_ref)))
 
 
 def slice_config_for(num_slices: int):
-    """The explicit conv slice config for a count, along the sequence (conv1d's only sliceable dimension).
-
-    One slice is passed as ``num_slices=1``, not as ``L1_FULL``: inside the slicer a provided count of 1 takes the
-    same single-L1-op route the auto path converts a one-slice answer to, whereas an explicit ``L1_FULL`` selects
-    conv2d's separate L1 execution path (measured 2x slower for the 512-channel, 128-chunk filter, 2026-09-09).
-    """
+    """Explicit width slicing with ``num_slices`` (never ``L1_FULL``: that selects conv2d's separate L1 path,
+    measured 2x slower than a single DRAM slice)."""
     return ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceWidth, num_slices=max(1, int(num_slices)))
 
 

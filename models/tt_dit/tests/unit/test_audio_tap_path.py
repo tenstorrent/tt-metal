@@ -28,10 +28,8 @@ from ...utils.tap_filter_configs import (
     tap_device_key,
 )
 
-# (C, K, stride, T_pad): every depthwise resample filter the MiniMax-H3 audio decoder runs for a 5 s clip on one
-# device (recorded 2026-09-09 with tools/sweep_tap_filter_configs.py --record --frames 207): the K=7 stride-1
-# up-sampler and the K=12 stride-2 anti-alias filter of each of the seven bands, C halving from 512 to 8 as T grows.
-# Batch 2 (stereo). At C=512 the full-channel conv never fits L1 (C*K activation block) and C is chunked.
+# (C, K, stride, T_pad): the filters the MiniMax-H3 audio decoder runs for a 5 s clip on one device, recorded with
+# tools/sweep_tap_filter_configs.py --record --frames 207 (batch 2, seven bands, C halving from 512 to 8).
 BATCH = 2
 SHAPES = [
     (512, 7, 1, 1041),
@@ -70,9 +68,10 @@ def test_derive_num_slices(T_out, T_ref, n_ref, expected):
     assert derive_num_slices(T_out, T_ref, n_ref) == expected
 
 
-def test_derive_num_slices_rejects_empty_output(expect_error):
-    with expect_error(ValueError, "T_out must be positive"):
-        derive_num_slices(0, 160, 4)
+@pytest.mark.parametrize("args", [(0, 160, 4), (160, 0, 4), (160, 160, 0), (160, -1, 4)])
+def test_derive_num_slices_rejects_non_positive_inputs(expect_error, args):
+    with expect_error(ValueError, "must be positive"):
+        derive_num_slices(*args)
 
 
 def test_slice_config_for_one_slice_is_a_single_width_slice():

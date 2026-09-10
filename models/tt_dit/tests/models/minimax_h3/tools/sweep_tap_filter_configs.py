@@ -257,8 +257,7 @@ def sweep_shape(mesh_device, shape, *, max_slices: int, repeat: int, time_mac: b
     return result
 
 
-# A slice row is worth recording only when the explicit count beats conv1d's own auto-slicing by this margin at the
-# reference length; otherwise the table leaves slicing to the op (the formulation row alone removes the failed probes).
+# A slice row is recorded only when the explicit count beats auto-slicing by this margin at the reference length.
 EXPLICIT_WIN_RATIO = 0.9
 
 
