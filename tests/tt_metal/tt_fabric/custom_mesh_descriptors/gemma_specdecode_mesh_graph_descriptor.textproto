@@ -1,7 +1,8 @@
 # --- Mesh Descriptors ------------------------------------------------------
-# Mesh-per-stage router pipeline: every pipeline stage is its OWN mesh (host [1,1],
-# one rank each), so stage shapes are free to differ -- unlike a single BigMesh carved
-# by host_topology, which deals one identical slice shape to every rank.
+# Gemma spec-decode mesh-per-stage router pipeline: every pipeline stage is its OWN
+# mesh (host [1,1], one rank each), so stage shapes are free to differ -- unlike a
+# single BigMesh carved by host_topology, which deals one identical slice shape to
+# every rank.
 #
 # Topology (both branches loop back to the router):
 #

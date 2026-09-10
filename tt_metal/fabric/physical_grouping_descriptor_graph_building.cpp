@@ -1069,10 +1069,14 @@ std::vector<tt::tt_fabric::GroupingInfo> flattened_mesh_to_topology_variants(
             info.adjacency_graph = mesh.graph;
         } else if (can_add_torus_wrap) {
             std::vector<bool> ring_dims(ring_dims_template.begin(), ring_dims_template.end());
+            // Drop wrap only on axes of size 2 or less; keep any genuine wrap on the other axis.
             if (ring_dims[0] && !is_genuine_torus_dimension(node_grid_dims[0])) {
-                continue;
+                ring_dims[0] = false;
             }
             if (ring_dims.size() > 1 && ring_dims[1] && !is_genuine_torus_dimension(node_grid_dims[1])) {
+                ring_dims[1] = false;
+            }
+            if (!ring_dims[0] && (ring_dims.size() < 2 || !ring_dims[1])) {
                 continue;
             }
             info.adjacency_graph = add_torus_wrap_edges(mesh, ring_dims);

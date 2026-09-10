@@ -856,9 +856,9 @@ fi # bh-ring-stress
 # Mesh graphs whose meshes do NOT all share one shape, so the mapper has to place each mesh
 # individually instead of dealing identical host_topology slices out of a single BigMesh.
 #
-# 1. bh_glx_2branch_mesh_per_stage_router_pipeline on the full SC36 mock: 69 single-rank meshes
-#    (4x1 / 4x2 / 4x4, row axis RING) forming a two-branch FABRIC-return fork off a degree-4 router
-#    mesh -- 352 chips = 11 of the 36 SC36 galaxies. Multi-mesh placement at the largest mock scale.
+# 1. gemma_specdecode on the full SC36 mock: 70 single-rank meshes (4x1 / 4x2 / 4x4, row axis RING)
+#    forming a two-branch FABRIC-return fork off a degree-4 router mesh -- 368 chips = 11.5 of the
+#    36 SC36 galaxies. Multi-mesh placement at the largest mock scale.
 # 2. llama_8b_4galaxy_unpinned on the four SC4 single-pod (128-ASIC quad) mocks: the llama + audio
 #    7-mesh ring (3x 4x8 + 2x 4x2 + 2x 2x2 audio, STRICT inter-mesh links) with the tray-4 audio
 #    pinnings removed, so the mapper places every mesh free of the audio-tray constraint. The pinned
@@ -870,7 +870,7 @@ fi # bh-ring-stress
 if run_group "bh-heterogeneous"; then
 
 ROUTER_PIPELINE_TIMEOUT=600
-run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${ROUTER_PIPELINE_TIMEOUT} tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/bh_glx_2branch_mesh_per_stage_router_pipeline.textproto" --mock-cluster-rank-binding "${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}:${GTEST_GALAXY_CORNER_PINS}"
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${ROUTER_PIPELINE_TIMEOUT} tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/gemma_specdecode_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}:${GTEST_GALAXY_CORNER_PINS}"
 
 # Corner-pin checks are not run for the llama ring: the corner-fold invariant does not hold for its
 # 4x2 / 2x2 mesh endpoints (same reason as the pinned variant in bh-subtorus).

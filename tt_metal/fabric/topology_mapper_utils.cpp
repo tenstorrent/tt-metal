@@ -1293,6 +1293,12 @@ std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> build_asic_positions_map(
         }
     }
 
+    // TODO: Constrain each logical mesh to physical meshes that came from a matching PGD grouping
+    // type (MGD instance type -> PGD grouping type). Type matching currently happens only in
+    // get_valid_groupings_for_mgd / adjacency-guided placement when the physical graph is built, not
+    // as an inter-mesh required constraint, so the SAT can still pair a logical mesh with a
+    // different-type physical mesh when connectivity/pinnings/host-cover allow it.
+
     add_inter_mesh_minimal_host_cover_from_hostname_map(
         config, physical_graph, logical_multi_mesh_graph, inter_mesh_constraints);
     return inter_mesh_constraints;
