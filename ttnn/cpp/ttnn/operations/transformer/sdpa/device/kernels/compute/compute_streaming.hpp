@@ -2333,7 +2333,8 @@ void sdpa_ring_v2(
     // True (unpadded) joint length in tiles; joint K chunks starting at/after it are pure padding.
     const uint32_t logical_lt = 0,
     // Tile offset of this call's Q chunk within cb_q_in (head-serial passes; 0 otherwise).
-    const uint32_t q_base_tiles = 0) {
+    const uint32_t q_base_tiles = 0,
+    const bool rotated_sliding = false) {
     init_sdpa_streaming_semaphores();
 
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
@@ -2512,6 +2513,23 @@ void sdpa_ring_v2(
                 local_padded_Nt,
                 Sk_chunk_t,
                 logical_nt);
+            if (rotated_sliding) {
+                sliding_q_plan = ttnn::operations::transformer::sdpa::ring_joint::build_rotated_sliding_q_work_plan(
+                    q_chunk * Sq_chunk_t,
+                    Sq_chunk_t,
+                    chunked.ring_index,
+                    q_local_padded_Nt,
+                    ring_size,
+                    sliding_window_size,
+                    TILE_HEIGHT,
+                    local_padded_Nt,
+                    Sk_chunk_t,
+                    logical_nt,
+                    chunked.kv_pad_rotation.q_pre_wrap_start_tile,
+                    chunked.kv_pad_rotation.q_pre_wrap_tile_count,
+                    chunked.kv_pad_rotation.q_post_wrap_start_tile,
+                    chunked.kv_pad_rotation.q_valid_tile_count);
+            }
             ASSERT(sliding_q_plan.is_valid);
             ASSERT(sliding_q_plan.total_k_chunk_count > 0);
         }

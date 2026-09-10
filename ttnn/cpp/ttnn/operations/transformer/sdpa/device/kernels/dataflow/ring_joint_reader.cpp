@@ -463,6 +463,7 @@ void kernel_main() {
     constexpr uint32_t cb_attention_sink = get_compile_time_arg_val(cb_arg_offset + 3);
     constexpr uint32_t cb_kv_pad_derived = get_compile_time_arg_val(cb_arg_offset + 4);
 
+    ring_joint::KvPadQMapping sliding_q_mapping{};
     if constexpr (slot_from_metadata || kv_pad_from_metadata) {
         Noc meta_noc;
         CircularBuffer cb_q_scratch(cb_q_in);
@@ -489,6 +490,7 @@ void kernel_main() {
                     fused_op_receiver.seq.ring_index, mesh_rows, mesh_cols, snake_orientation);
             const auto qmap = ring_joint::build_kv_pad_q_mapping_device(
                 kv_actual_tile_count, logical_nt, ring_size, q_local_padded_Nt, tensor_rank);
+            sliding_q_mapping = qmap;
             const auto masks = ring_joint::build_ring_work_masks_device<full_mesh_rank_mapping>(
                 fused_op_receiver.seq.ring_index,
                 ring_size,
@@ -848,6 +850,23 @@ void kernel_main() {
                     kv_local_padded_Nt,
                     Sk_chunk_t,
                     logical_nt);
+                if constexpr (kv_pad_from_metadata && gathered_padded_Nt >= 2 * q_local_padded_Nt) {
+                    sliding_q_plan = ring_joint::build_rotated_sliding_q_work_plan(
+                        q_chunk * Sq_chunk_t,
+                        Sq_chunk_t,
+                        ring_index,
+                        q_local_padded_Nt,
+                        ring_size,
+                        sliding_window_size,
+                        tt::constants::TILE_HEIGHT,
+                        kv_local_padded_Nt,
+                        Sk_chunk_t,
+                        logical_nt,
+                        sliding_q_mapping.q_pre_wrap_start_tile,
+                        sliding_q_mapping.q_pre_wrap_tile_count,
+                        sliding_q_mapping.q_post_wrap_start_tile,
+                        sliding_q_mapping.q_valid_tile_count);
+                }
                 ASSERT(sliding_q_plan.is_valid);
                 ASSERT(sliding_q_plan.total_k_chunk_count > 0);
             }

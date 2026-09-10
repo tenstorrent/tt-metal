@@ -52,10 +52,12 @@ static void run_reader() {
         const auto s_slot = TensorAccessor(meta_args, slot_idx_addr);
         noc.async_read(s_slot, cb_meta, 4, {.page_id = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
+        invalidate_l1_cache();
         const uint32_t slot = CoreLocalMem<volatile uint32_t>(cb_meta.get_write_ptr())[0];
         const auto s_valid = TensorAccessor(meta_args, valid_global_addr);
         noc.async_read(s_valid, cb_meta, 4, {.page_id = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
+        invalidate_l1_cache();
         const uint32_t valid_global = CoreLocalMem<volatile uint32_t>(cb_meta.get_write_ptr())[0];
         cb_meta.push_back(1);
         w = zero_pad_compute_chip_work(slot, valid_global);
@@ -64,7 +66,7 @@ static void run_reader() {
     }
 
     const auto s = TensorAccessor(cache_args, cache_addr, cache_tile_bytes);
-    const uint32_t base_page = w.batch_page_base + w.base_local_tile * w.Wt;
+    const uint32_t base_page = w.batch_page_base + get_arg_val<uint32_t>(1) + w.base_local_tile * w.Wt;
 
     // Read the Wt width-tiles of this chip's boundary seq-tile into the src CB. When this chip has no
     // pad work (count==0 -> base_local_tile==0) this reads the slot's base tile; the writer discards it.

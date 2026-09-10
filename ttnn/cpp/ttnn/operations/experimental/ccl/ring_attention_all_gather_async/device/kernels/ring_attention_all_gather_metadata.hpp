@@ -14,6 +14,8 @@
 
 #pragma once
 
+#include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -141,6 +143,20 @@ inline uint32_t compute_halo_tail_start_Ht(
     uint32_t source_device,
     uint32_t cache_local_tile_rows) {
     const uint32_t q_group_tile_rows = q_local_tile_rows * ring_size;
+    if (q_group_tile_rows != 0 && halo_tile_rows > q_local_tile_rows) {
+        const uint32_t receiver = (source_device + 1) % ring_size;
+        const uint32_t start_tile = kv_actual_isl / 32;
+        uint32_t group = start_tile / q_group_tile_rows;
+        if (receiver < (start_tile / q_local_tile_rows) % ring_size) {
+            ++group;
+        }
+        return ttnn::operations::transformer::sdpa::ring_joint::rotated_sliding_halo_start(
+            group * q_group_tile_rows + receiver * q_local_tile_rows,
+            receiver,
+            q_local_tile_rows,
+            ring_size,
+            cache_local_tile_rows);
+    }
     if (q_group_tile_rows == 0 || halo_tile_rows > q_local_tile_rows) {
         return 0;
     }

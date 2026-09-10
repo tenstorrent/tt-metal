@@ -30,7 +30,7 @@ void kernel_main() {
     noc.async_write_zeros(zero, row_page_bytes);
     noc.write_zeros_l1_barrier();
 
-    const uint32_t first_page = w.batch_page_base + w.base_local_row;
+    const uint32_t first_page = w.batch_page_base + get_arg_val<uint32_t>(1) + w.base_local_row;
     const uint32_t last_page = first_page + w.count;
     for (uint32_t page = first_page; page < last_page; ++page) {
         noc.async_write_zeros(cache, row_page_bytes, {.page_id = page}, zero);

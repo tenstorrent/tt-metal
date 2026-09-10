@@ -5,6 +5,7 @@
 #include "zero_padded_kv_cache_device_operation.hpp"
 
 #include <cstdint>
+#include <set>
 #include <utility>
 #include <vector>
 
@@ -22,7 +23,7 @@ using namespace tt::constants;
 
 namespace {
 
-// Three kernels on a single core per chip: the reader brings the boundary (partial) tile in from the
+// Three kernels on one core per head per chip: the reader brings the boundary (partial) tile in from the
 // cache and builds the row-mask tile in L1; the compute multiplies them; the writer writes the masked
 // partial back and zeros the full pad tiles from the L1 zeros buffer. Each chip computes its share of
 // the global pad window on-device from `my_sp_coord` + the per-call `valid_global` (patched scalar),
@@ -216,7 +217,12 @@ void ZeroPaddedKvCacheDeviceOperation::validate_on_program_cache_miss(
     }
     const auto& cache_shape = cache.padded_shape();
     TT_FATAL(cache_shape.rank() == 4, "cache must be 4D (got rank {})", cache_shape.rank());
-    TT_FATAL(cache_shape[1] == 1, "cache num-heads dim must be 1 (got {})", cache_shape[1]);
+    const auto grid = cache.device()->compute_with_storage_grid_size();
+    TT_FATAL(
+        cache_shape[1] > 0 && cache_shape[1] <= grid.x * grid.y,
+        "cache head count {} must fit the compute grid ({} cores)",
+        cache_shape[1],
+        grid.x * grid.y);
     TT_FATAL(args.num_layers > 0, "num_layers must be positive");
     TT_FATAL(
         cache_shape[0] % args.num_layers == 0,
@@ -298,8 +304,17 @@ tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory
     const uint32_t my_sp_coord = ::ttnn::ccl::get_linearized_index_from_physical_coord(cache, coord, args.cluster_axis);
     const uint32_t chunk_local = args.chunk_size_global / sp_factor;  // tokens
 
-    // Single core per chip: the pad window is at most pad_align tokens (a few tiles).
-    CoreRangeSet all_cores(CoreRange({0, 0}, {0, 0}));
+    // One independent core per head. Keep the cache's original ND-sharded
+    // shape: folding heads into batch through a tensor view is not supported.
+    const auto grid = device->compute_with_storage_grid_size();
+    std::vector<CoreCoord> head_cores;
+    std::set<CoreRange> head_ranges;
+    for (uint32_t head = 0; head < cache_shape[1]; ++head) {
+        CoreCoord core{head % grid.x, head / grid.x};
+        head_cores.push_back(core);
+        head_ranges.emplace(core, core);
+    }
+    CoreRangeSet all_cores(head_ranges);
 
     tt::tt_metal::ProgramDescriptor desc;
 
@@ -348,7 +363,9 @@ tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory
         TensorAccessorArgs(cache.buffer()).append_to(writer.compile_time_args);
         writer.config = WriterConfigDescriptor{};
         writer.common_runtime_args = common_runtime_args;
-        writer.emplace_runtime_args(CoreCoord{0, 0}, {cache.buffer()});
+        for (uint32_t head = 0; head < head_cores.size(); ++head) {
+            writer.emplace_runtime_args(head_cores[head], {cache.buffer(), head * cache_H_pages});
+        }
         desc.kernels.push_back(std::move(writer));
         return desc;
     }
@@ -398,7 +415,9 @@ tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory
     }
     reader.config = ReaderConfigDescriptor{};
     reader.common_runtime_args = common_runtime_args;
-    reader.emplace_runtime_args(CoreCoord{0, 0}, {cache.buffer()});
+    for (uint32_t head = 0; head < head_cores.size(); ++head) {
+        reader.emplace_runtime_args(head_cores[head], {cache.buffer(), head * cache_H_pages});
+    }
 
     // Compute: partial x mask -> out.
     KernelDescriptor compute;
@@ -408,7 +427,9 @@ tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory
     compute.compile_time_args = {kSrcCbIndex, kMaskCbIndex, kOutCbIndex};
     compute.config = ComputeConfigDescriptor{};
     compute.common_runtime_args = common_runtime_args;
-    compute.emplace_runtime_args(CoreCoord{0, 0}, {0u});  // compute reads only common args; dummy per-core arg
+    for (const auto& core : head_cores) {
+        compute.emplace_runtime_args(core, {0u});  // compute reads only common args
+    }
 
     // Writer: masked partial back + zero full tiles from the zero scratch.
     KernelDescriptor writer;
@@ -431,7 +452,9 @@ tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory
     }
     writer.config = WriterConfigDescriptor{};
     writer.common_runtime_args = common_runtime_args;
-    writer.emplace_runtime_args(CoreCoord{0, 0}, {cache.buffer()});
+    for (uint32_t head = 0; head < head_cores.size(); ++head) {
+        writer.emplace_runtime_args(head_cores[head], {cache.buffer(), head * cache_H_pages});
+    }
     desc.kernels.push_back(std::move(reader));
     desc.kernels.push_back(std::move(compute));
     desc.kernels.push_back(std::move(writer));

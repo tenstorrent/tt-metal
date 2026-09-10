@@ -46,7 +46,8 @@ void bind_zero_padded_kv_cache(nb::module_& mod) {
                 host dispatch path. This form is trace-safe.
 
             Args:
-                cache (ttnn.Tensor): 4D, DRAM-backed KV cache tensor with head dim 1. Supports
+                cache (ttnn.Tensor): 4D, DRAM-backed KV cache tensor [users * layers, heads, sequence, width].
+                    All heads are cleared; one compute core is used per head. Supports
                     TILE layout with the standard 32x32 tile, or ROW_MAJOR layout with BF16 or FP8_E4M3
                     dtype. The per-element-tensor (metadata) form of slot_idx/valid_global below is
                     TILE-only; ROW_MAJOR uses scalars.

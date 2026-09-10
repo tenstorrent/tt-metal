@@ -1091,10 +1091,15 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // prefill supersedes it via absolute-coords stamps). Both are derived once in build_runtime_plan.
     const bool kernel_chunked = runtime_plan.kernel_chunked;
     const bool kernel_is_causal = runtime_plan.kernel_is_causal;
+    const bool rotated_sliding =
+        has_sliding_window && kv_pad_from_metadata && gathered_padded_Nt >= 2 * q_local_padded_Nt;
     ring_joint::ChunkedSlidingHaloLayout chunked_sliding_halo_layout;
     if (has_sliding_window) {
         chunked_sliding_halo_layout = ring_joint::build_chunked_sliding_halo_layout(
             q_local_padded_Nt, Sk_chunk_t, sliding_window_size, tt::constants::TILE_HEIGHT, ring_size, logical_nt);
+        if (rotated_sliding) {
+            chunked_sliding_halo_layout.halo_tile_rows = std::min(2 * q_local_padded_Nt, kv_local_padded_Nt);
+        }
         TT_FATAL(
             kernel_chunked && chunked_sliding_halo_layout.uses_neighbor_halo(),
             "Sliding K/V requires neighbor-halo geometry; gathered rows={}, global rows={}",
@@ -1752,11 +1757,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // Slot 53: true (unpadded) joint length in tiles (twins spatial logical_nt). Drives the
         // per-ring-iteration joint tail mask and the joint out-of-bounds K-chunk skip.
         logical_lt,
-        // Slots 54-57: transport-to-tensor rank mapping. CB block starts at 58.
+        // Slots 54-57: rank mapping; slot 58 selects the two-slab rotated sliding halo.
         static_cast<uint32_t>(rank_mapping.full_mesh),
         static_cast<uint32_t>(rank_mapping.orientation),
         rank_mapping.mesh_rows,
-        rank_mapping.mesh_cols};
+        rank_mapping.mesh_cols,
+        static_cast<uint32_t>(rotated_sliding)};
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);

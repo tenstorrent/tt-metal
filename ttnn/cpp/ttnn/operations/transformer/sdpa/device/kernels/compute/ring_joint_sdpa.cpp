@@ -161,9 +161,11 @@ void kernel_main() {
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
     // Compute fixed slot 51: trace-safe KV-pad derivation flag. Slots 52/53 are the sharded-joint
-    // scalars (joint_is_sharded, logical_lt) and rank mapping are declared above, so the CB block starts at 58.
+    // scalars (joint_is_sharded, logical_lt) and rank mapping are declared above, so the rotated-sliding flag is at 58
+    // and the CB block starts at 59.
     constexpr bool kv_pad_from_metadata = get_compile_time_arg_val(51) == 1;
-    constexpr uint32_t cb_arg_offset = 58;
+    constexpr bool rotated_sliding = get_compile_time_arg_val(58) == 1;
+    constexpr uint32_t cb_arg_offset = 59;
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
@@ -458,7 +460,9 @@ void kernel_main() {
                 use_zigzag_balancing,
                 chunked_context,
                 is_first_active_iter,
-                logical_lt);
+                logical_lt,
+                0,  // q_base_tiles
+                rotated_sliding);
         } else {
             assert_kv_pad_rotation_streaming_only<kv_pad_rotation_enabled>();
             sdpa_ring<

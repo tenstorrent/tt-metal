@@ -60,7 +60,7 @@ constexpr uint32_t chunked_sliding_halo_source_start_tile(
 // touches at most the Q-owned region and its predecessor, so two fixed ranges
 // cover the chunked layout without a dynamic container.
 struct SlidingQWorkPlan {
-    static constexpr uint32_t max_source_ranges = 2;
+    static constexpr uint32_t max_source_ranges = 4;
 
     std::array<SlidingKVSourceRange, max_source_ranges> source_ranges{};
     uint32_t source_range_count = 0;
@@ -182,6 +182,96 @@ constexpr SlidingQWorkPlan build_sliding_q_work_plan(
         plan.total_k_chunk_count += range.k_chunk_count();
     }
     plan.is_valid = plan.total_k_chunk_count != 0;
+    return plan;
+}
+
+// A rotated local Q slab can span two global groups. Exchange two consecutive
+// predecessor slabs so both windows remain available, including the wrap rank.
+constexpr uint32_t rotated_sliding_halo_start(
+    uint32_t first_q_tile, uint32_t receiver, uint32_t local_tiles, uint32_t ring_size, uint32_t cache_tiles) {
+    const uint32_t count = cache_tiles < 2 * local_tiles ? cache_tiles : 2 * local_tiles;
+    uint32_t group = first_q_tile / (local_tiles * ring_size);
+    if (receiver == 0 && group > 0) {
+        --group;
+    }
+    const uint32_t origin = group * local_tiles;
+    return origin < cache_tiles - count ? origin : cache_tiles - count;
+}
+
+// Union of the windows for the pre/post-wrap portions of one compute Q chunk.
+// The mask still evaluates each query's absolute position independently.
+constexpr SlidingQWorkPlan build_rotated_sliding_q_work_plan(
+    uint32_t q_start,
+    uint32_t q_count,
+    uint32_t receiver,
+    uint32_t local_tiles,
+    uint32_t ring_size,
+    uint32_t window_tokens,
+    uint32_t tile_height,
+    uint32_t cache_tiles,
+    uint32_t k_chunk_tiles,
+    uint32_t logical_tiles,
+    uint32_t pre_start,
+    uint32_t pre_count,
+    uint32_t post_start,
+    uint32_t valid_count) {
+    SlidingQWorkPlan plan;
+    const uint32_t first_q = pre_count ? pre_start : post_start;
+    const uint32_t halo_start = rotated_sliding_halo_start(first_q, receiver, local_tiles, ring_size, cache_tiles);
+    const uint32_t left = (window_tokens - 1 + tile_height - 1) / tile_height;
+    for (uint32_t segment = 0; segment < 2; ++segment) {
+        const uint32_t begin = segment == 0 ? 0 : pre_count;
+        const uint32_t end = segment == 0 ? pre_count : valid_count;
+        const uint32_t start = q_start > begin ? q_start : begin;
+        const uint32_t stop = q_start + q_count < end ? q_start + q_count : end;
+        if (stop <= start) {
+            continue;
+        }
+        const uint32_t absolute = (segment == 0 ? pre_start : post_start) + start - begin;
+        const uint32_t window_start = absolute > left ? absolute - left : 0;
+        const uint32_t window_end = absolute + stop - start;
+        for (uint32_t slab = window_start / local_tiles; slab <= (window_end - 1) / local_tiles; ++slab) {
+            const uint32_t slab_start = slab * local_tiles;
+            const uint32_t lo = window_start > slab_start ? window_start - slab_start : 0;
+            const uint32_t hi = window_end < slab_start + local_tiles ? window_end - slab_start : local_tiles;
+            const uint32_t source = slab % ring_size;
+            const uint32_t base = (slab / ring_size) * local_tiles;
+            const uint32_t first = (base + lo) / k_chunk_tiles;
+            const uint32_t last = (base + hi + k_chunk_tiles - 1) / k_chunk_tiles;
+            if (base + lo >= cache_tiles || slab_start >= logical_tiles) {
+                continue;
+            }
+            bool merged = false;
+            for (uint32_t i = 0; i < plan.source_range_count; ++i) {
+                auto& range = plan.source_ranges[i];
+                if (range.source_ring_id == source && first <= range.last_k_chunk && last >= range.first_k_chunk) {
+                    plan.total_k_chunk_count -= range.k_chunk_count();
+                    range.first_k_chunk = first < range.first_k_chunk ? first : range.first_k_chunk;
+                    range.last_k_chunk = last > range.last_k_chunk ? last : range.last_k_chunk;
+                    range.first_compact_k_chunk =
+                        source == receiver ? 0 : (range.first_k_chunk * k_chunk_tiles - halo_start) / k_chunk_tiles;
+                    plan.total_k_chunk_count += range.k_chunk_count();
+                    merged = true;
+                    break;
+                }
+            }
+            if (!merged) {
+                if (plan.source_range_count == SlidingQWorkPlan::max_source_ranges) {
+                    return SlidingQWorkPlan{};
+                }
+                plan.source_ranges[plan.source_range_count++] = SlidingKVSourceRange{
+                    source, first, last, source == receiver ? 0 : (first * k_chunk_tiles - halo_start) / k_chunk_tiles};
+                plan.total_k_chunk_count += last - first;
+            }
+        }
+    }
+    // Entirely padded Q chunks must still drain the fixed reader/compute protocol.
+    if (plan.total_k_chunk_count == 0) {
+        plan.source_ranges[0] = SlidingKVSourceRange{receiver, 0, 1, 0};
+        plan.source_range_count = 1;
+        plan.total_k_chunk_count = 1;
+    }
+    plan.is_valid = true;
     return plan;
 }
 
