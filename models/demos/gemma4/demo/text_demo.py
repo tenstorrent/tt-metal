@@ -1627,9 +1627,16 @@ _LONG_CONTEXT_CASES = [
         # prefill bucket this was observed to TT_THROW "Statically allocated
         # circular buffers... clash with L1 buffers" during prefill warmup --
         # a general Gemma4-31B TP=8 issue, not specific to any one demo (hit
-        # identically in dflash_fused_decoder_demo.py). Same fix/value as
-        # text_demo_v2.py's ``_device_params``.
-        "l1_small_size": int(os.environ.get("GEMMA4_L1_SMALL_SIZE", 24576)),
+        # identically in dflash_fused_decoder_demo.py).
+        #
+        # 8192, not text_demo_v2.py's 24576: see
+        # dflash_fused_decoder_demo.py's identical comment -- 24576 (that
+        # file's original value, matching text_demo_v2.py) later started
+        # clashing at the 128-token bucket too, once DFlashDrafter's own L1
+        # footprint grew (7c183561a7d). 8192 is the smallest value that
+        # resolved both buckets there; verified here too (both prefill_128
+        # and prefill_1024 pass at 8192 on real hardware).
+        "l1_small_size": int(os.environ.get("GEMMA4_L1_SMALL_SIZE", 8192)),
     }
 )
 @pytest.mark.parametrize("prefill_len", _DEMO_PREFILL_LENGTHS, ids=[f"prefill_{b}" for b in _DEMO_PREFILL_LENGTHS])

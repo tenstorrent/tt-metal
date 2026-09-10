@@ -395,10 +395,21 @@ def dflash_context_hidden_norm(rmsnorm: RMSNorm, x: ttnn.Tensor) -> ttnn.Tensor:
 
     Set ``GEMMA4_DFLASH_HIDDEN_NORM_L1=1`` for the L1-out experiment path.
     ``GEMMA4_DFLASH_HIDDEN_NORM_LEGACY=1`` is an alias for the DRAM default.
+
+    The default branch did not actually pass ``interleaved_memory_config=
+    ttnn.DRAM_MEMORY_CONFIG`` despite this docstring's claim -- it left
+    ``ttnn.rms_norm`` to pick its own output memory config, which follows the
+    input's own placement rather than being forced to DRAM. That was harmless
+    at the (small, always-DRAM-resident) decode-time context-commit call this
+    was tuned against, but at PREFILL's tap-capture call to the same function
+    (``compute_context``/``ContextAccumulator.finalize()``, a much wider
+    activation) it produced a ``TT_THROW: Statically allocated circular
+    buffers... clash with L1 buffers`` -- fixed by actually forcing DRAM
+    output here, matching the documented intent.
     """
     if os.environ.get("GEMMA4_DFLASH_HIDDEN_NORM_L1", "0").lower() in ("1", "true", "yes"):
         return rmsnorm(x, skip_sharded_path=True, interleaved_memory_config=ttnn.L1_MEMORY_CONFIG)
-    return rmsnorm(x, skip_sharded_path=True)
+    return rmsnorm(x, skip_sharded_path=True, interleaved_memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
 def dflash_ctx_kv_hidden_norm(rmsnorm: RMSNorm, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -412,11 +423,11 @@ def dflash_ctx_kv_hidden_norm(rmsnorm: RMSNorm, x: ttnn.Tensor) -> ttnn.Tensor:
 
     mode = dflash_ctx_kv_hidden_norm_mode()
     if mode in ("", "default", "prod", "production", "legacy", "dram"):
-        return rmsnorm(x, skip_sharded_path=True)
+        return rmsnorm(x, skip_sharded_path=True, interleaved_memory_config=ttnn.DRAM_MEMORY_CONFIG)
     if mode == "l1":
         return rmsnorm(x, skip_sharded_path=True, interleaved_memory_config=ttnn.L1_MEMORY_CONFIG)
     if mode == "sharded":
         return rmsnorm(x, keep_sharded=False)
     if mode == "sharded_l1":
         return rmsnorm(x, keep_sharded=True)
-    return rmsnorm(x, skip_sharded_path=True)
+    return rmsnorm(x, skip_sharded_path=True, interleaved_memory_config=ttnn.DRAM_MEMORY_CONFIG)

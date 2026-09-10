@@ -125,25 +125,49 @@ def maybe_auto_enable_chunked_prefill_trace(
     prefill_chunk: int,
     bounded_sliding: bool,
 ) -> bool:
-    """Auto-enable traced multi-chunk when it can win; leave env overrides alone.
+    """Would auto-enable traced multi-chunk when it can win; leave env overrides alone.
 
-    Conditions (all required when the env var is unset):
+    KNOWN BUG, auto-enable DISABLED pending a real fix: the conditions below
+    (batch_size==1, unbounded, max_seq_len > prefill_chunk) are exactly what
+    ``test_demo_long_context``'s 32k+ rows satisfy, and running through the
+    resulting traced-chunk path (``generator.py``'s ``use_traced_chunks`` ->
+    repeated ``sp0_mc``-capture / ``sp1_mc``-replay transitions with no
+    ``synchronize_device`` between chunks) TT_FATALs with "Input Tensor is
+    not allocated" partway through prefill (confirmed at seq_len=32768,
+    chunk=2048, 16 chunks). Likely a sliding-tail tensor storage-sharing
+    hazard in the tail-reset dance ``_capture_trace_prefill`` does between
+    capture and replay (this codebase has hit the same TT_FATAL from a
+    ttnn.slice-shares-storage-then-deallocate hazard in the sliding-window
+    tail machinery before -- see attention/prefill.py's keep_kv comment) --
+    but the tight, syncless multi-chunk loop is a code path the previously-
+    fixed single-transition case never exercised, and pinning the exact freed
+    tensor needs a live TT_FATAL stack trace this investigation didn't have.
+
+    Until that's fixed, this returns False unconditionally (regardless of the
+    conditions below) so long-ISL single-user generation falls back to the
+    already-correct eager per-chunk path (``_prefill_forward_single_user_text_eager``)
+    -- slower (no warm-TTFT win from trace reuse), but doesn't crash.
+    ``GEMMA4_CHUNKED_PREFILL_TRACE=1`` still force-enables the traced path
+    for anyone deliberately debugging/fixing it; this function just stops
+    silently turning it on in production runs that would otherwise hit the
+    bug blind.
+
+    Original conditions (all required when the env var is unset, before this
+    fix; kept here for whoever fixes the underlying bug and re-enables this):
       * ``batch_size == 1`` (traced multi-chunk is B=1 only)
       * not ``bounded_sliding`` (bounded final-chunk KV cannot safely replay)
       * ``max_seq_len > prefill_chunk`` (otherwise a single chunk is enough)
-
-    Tracing buys a small warm-TTFT win here. Needs WH ``trace_region_size``
-    ≥ ~68 MB so decode capture still fits after the extra prefill traces.
     """
     if "GEMMA4_CHUNKED_PREFILL_TRACE" in os.environ:
         return chunked_prefill_trace_enabled()
     if batch_size == 1 and (not bounded_sliding) and max_seq_len > int(prefill_chunk):
-        os.environ["GEMMA4_CHUNKED_PREFILL_TRACE"] = "1"
         logger.info(
-            "Auto-enabled GEMMA4_CHUNKED_PREFILL_TRACE "
-            f"(max_seq_len={max_seq_len} > chunk={prefill_chunk}, unbounded batch-1)"
+            "NOT auto-enabling GEMMA4_CHUNKED_PREFILL_TRACE "
+            f"(max_seq_len={max_seq_len} > chunk={prefill_chunk}, unbounded batch-1 -- "
+            "would otherwise qualify, but the traced multi-chunk path has a known "
+            "TT_FATAL at large chunk counts; falling back to the eager per-chunk path. "
+            "Set GEMMA4_CHUNKED_PREFILL_TRACE=1 to force it anyway.)"
         )
-        return True
     return False
 
 
