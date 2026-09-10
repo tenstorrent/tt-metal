@@ -832,7 +832,7 @@ async def main():
         args = [f"--gtest_filter={filters}"]
 
         env = os.environ.copy()
-        env["ETH_TEST_EXPECTED_LINKS"] = str(10)
+        env["ETH_TEST_EXPECTED_LINKS"] = os.environ.get("ETH_TEST_EXPECTED_LINKS", str(10))
         if not opts.v:
             env["TT_LOGGER_TYPES"] = "Test"
 

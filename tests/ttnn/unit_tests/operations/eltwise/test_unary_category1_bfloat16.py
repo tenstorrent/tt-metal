@@ -236,7 +236,7 @@ def test_trig_ops(device, ttnn_op, low, high):
     tt_result = ttnn_op(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert_with_ulp(golden, result, 1)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -270,7 +270,7 @@ def test_trig_ops_out_ftz(device, ttnn_op, low, high):
     result = flush_to_zero(result)
     golden = flush_to_zero(golden)
 
-    assert_with_ulp(golden, result, 1)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -319,7 +319,7 @@ def test_angle_conversion_ops(device, ttnn_op, low, high):
     result = flush_to_zero(result)
     golden = flush_to_zero(golden)
 
-    assert_with_ulp(golden, result, 1)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -372,7 +372,7 @@ def test_reciprocal(device):
     result = torch.where(torch.abs(result) <= threshold, torch.zeros_like(result), result)
     golden = torch.where(torch.abs(golden) <= threshold, torch.zeros_like(golden), golden)
 
-    assert_with_ulp(golden, result, 1)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -395,7 +395,7 @@ def test_square(device):
     result = torch.where(torch.abs(result) <= threshold, torch.zeros_like(result), result)
     golden = torch.where(torch.abs(golden) <= threshold, torch.zeros_like(golden), golden)
 
-    assert_with_ulp(golden, result, 1)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -420,7 +420,7 @@ def test_cbrt(device):
     tt_result = ttnn.cbrt(tt_in)
     result = ttnn.to_torch(tt_result).to(torch.bfloat16)
 
-    assert_with_ulp(golden, result, 1)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -450,7 +450,7 @@ def test_exp_ops(device, ttnn_op, low, high):
     tt_result = ttnn_op(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert_with_ulp(golden, result, 1)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -478,7 +478,7 @@ def test_digamma_multigammaln(device, ttnn_op, low, high, ulp):
     tt_result = ttnn_op(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert_with_ulp(golden, result, ulp)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=ulp)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -531,4 +531,4 @@ def test_bessel_ops(device, ttnn_op, low, high):
     result = flush_to_zero(result)
     golden = flush_to_zero(golden)
 
-    assert_with_ulp(golden, result, 1)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)

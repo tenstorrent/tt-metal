@@ -210,7 +210,7 @@ FdsProgramResult run_fds_program(IDevice* dev, FdsProgram spec) {
                 .num_threads_per_cluster = 1, .named_compile_args = group.args});
     }
 
-    detail::LaunchProgram(dev, program, /*wait_until_cores_done=*/true);
+    detail::LaunchProgram(dev, program);
     MetalContext::instance().get_cluster().l1_barrier(dev->id());
 
     FdsProgramResult result;
