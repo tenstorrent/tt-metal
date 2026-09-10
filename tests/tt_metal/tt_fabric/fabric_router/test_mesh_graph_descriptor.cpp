@@ -2562,7 +2562,7 @@ TEST(MeshGraphDescriptorTests, ExpressLinks8x4) {
     for (const auto& [a, b] : expected_express_edges) {
         EXPECT_EQ(m0[a].count(b), 1u) << "missing express edge " << a << " -> " << b;
         EXPECT_EQ(m0[b].count(a), 1u) << "missing reverse express edge " << b << " -> " << a;
-        if (m0[a].count(b) && m0[b].count(a)) {
+        if (m0[a].contains(b) && m0[b].contains(a)) {
             EXPECT_EQ(m0[a].at(b).port_direction, tt::tt_fabric::RoutingDirection::Z);
             EXPECT_EQ(m0[b].at(a).port_direction, tt::tt_fabric::RoutingDirection::Z);
         }
@@ -2646,7 +2646,7 @@ TEST(MeshGraphDescriptorTests, ExpressLinks32x4) {
             const int b = rb * 4 + col;
             EXPECT_EQ(m0[a].count(b), 1u) << "missing express edge " << a << " -> " << b;
             EXPECT_EQ(m0[b].count(a), 1u) << "missing reverse express edge " << b << " -> " << a;
-            if (m0[a].count(b) && m0[b].count(a)) {
+            if (m0[a].contains(b) && m0[b].contains(a)) {
                 EXPECT_EQ(m0[a].at(b).port_direction, tt::tt_fabric::RoutingDirection::Z);
                 EXPECT_EQ(m0[b].at(a).port_direction, tt::tt_fabric::RoutingDirection::Z);
             }

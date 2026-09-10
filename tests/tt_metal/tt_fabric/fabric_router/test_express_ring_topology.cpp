@@ -239,6 +239,7 @@ TEST_F(ControlPlaneFixture, TestExpressCanonicalRoute8x4) {
     const auto node = [](int chip) { return FabricNodeId{MeshId{0}, static_cast<std::uint32_t>(chip)}; };
     const auto chips = [&](const std::vector<FabricNodeId>& route) {
         std::vector<int> out;
+        out.reserve(route.size());
         for (const auto& n : route) {
             out.push_back(static_cast<int>(n.chip_id));
         }

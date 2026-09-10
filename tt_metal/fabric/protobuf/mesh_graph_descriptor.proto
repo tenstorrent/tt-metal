@@ -229,9 +229,8 @@ message ExpressLink {
     // Tiling pattern (start offset + block width) along `dim_idx`.
     Pattern pattern = 2;
 
-    // Optional lane count/policy for these express links. If omitted, the express links
-    // inherit the mesh's `channels`.
-    Channels channels = 3;
+    // Express links carry the mesh's `channels` count and policy; there is no per-pattern override.
+    reserved 3;
 
     // Whether the tiling wraps around the mesh boundary. Defaults to the dimension's dim_type.
     TorusTopology.Type wrap = 4;
