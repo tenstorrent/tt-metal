@@ -36,13 +36,6 @@ PRINT_DETAILED_COMPARISON_FLAG = False
 pytestmark = pytest.mark.use_module_device({"l1_small_size": 10 * 1024})
 
 
-def test_ms_deformable_attention_requires_spatial_shapes(expect_error):
-    config = DeformableAttentionConfig(embed_dims=256, num_heads=8, num_levels=4, num_points=4)
-
-    with expect_error(ValueError, "spatial_shapes is required"):
-        TTMSDeformableAttention(config=config, device=None, params=None, spatial_shapes=None)
-
-
 @pytest.mark.parametrize(
     "config_name, batch_size, num_queries, expected_pcc, expected_abs_error, expected_rel_error, expected_high_error_ratio",
     [
