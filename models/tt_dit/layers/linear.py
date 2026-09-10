@@ -378,8 +378,11 @@ class ColParallelLinear(Module):
                 raise ValueError(msg)
 
         x = maybe_cast_activation(x, self.activation_dtype)
-        if self.pin_output_bf16:
-            dtype = resolve_output_dtype(dtype, x)
+        # Pin a block-float-fed output back to bf16 unconditionally: the LTX serving path quantizes its
+        # projections post-construction (pipelines/ltx set_quant_config) without setting pin_output_bf16,
+        # so a bf8 activation must still be pinned here or it reaches DistributedRMSNorm (bf16-only). A
+        # no-op for bf16/fp32 inputs, so non-quantized models are unaffected.
+        dtype = resolve_output_dtype(dtype, x)
 
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
             unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
