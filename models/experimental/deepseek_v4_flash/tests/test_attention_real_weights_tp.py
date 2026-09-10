@@ -89,7 +89,7 @@ def _rope_rows(cos_half: torch.Tensor, sin_half: torch.Tensor, device) -> tuple:
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
     indirect=True,
 )
-@pytest.mark.parametrize("layer_idx,seq_len", ((1, 2), (5, 128)))
+@pytest.mark.parametrize("layer_idx,seq_len", ((2, 6), (5, 128)))
 @pytest.mark.timeout(14400)
 @torch.no_grad()
 def test_attention_real_weights_decode_tp4(mesh_device, reset_seeds, tmp_path, layer_idx: int, seq_len: int) -> None:
@@ -108,7 +108,7 @@ def test_attention_real_weights_decode_tp4(mesh_device, reset_seeds, tmp_path, l
     cfg = types.SimpleNamespace(**bundle["config"])
     layer_type = bundle["layer_type"]
     compress_rate = cfg.compress_rates[layer_type] if layer_type != "sliding_attention" else None
-
+    print("Compress rate:", compress_rate)
     loader = DeepseekV4WeightLoader(_DEFAULT_MODEL_DIR)
     qkv_tp_strategy = os.environ.get("DEEPSEEK_QKV_TP_STRATEGY", "replicated")
     o_b_tp_strategy = os.environ.get("DEEPSEEK_OB_TP_STRATEGY", "row")
@@ -160,6 +160,7 @@ def test_attention_real_weights_decode_tp4(mesh_device, reset_seeds, tmp_path, l
             if compress_rate is not None:
                 window = max((pos + 1) // compress_rate - 1, 0)
                 pool = (pos + 1) % compress_rate == 0
+                print("Pool:", pool, "compress_rate:", compress_rate, "pos:", pos)
                 win_cos, win_sin = make_rope_table(
                     bundle["cos_win"][window : window + 1],
                     bundle["sin_win"][window : window + 1],
