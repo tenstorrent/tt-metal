@@ -37,6 +37,9 @@ constexpr auto kMaxSizePerBank = "max_size_per_bank";
 constexpr auto kProgramFactoryType = "program_factory_type";
 constexpr auto kProgramFactoryIndex = "program_factory_index";
 constexpr auto kProgramCacheHit = "program_cache_hit";
+// Set on a function_end that closes a scope left by an exception rather than by returning.
+constexpr auto kAborted = "aborted";
+constexpr auto kAbortReason = "abort_reason";
 
 // node names
 constexpr auto kNodeBuffer = "buffer";

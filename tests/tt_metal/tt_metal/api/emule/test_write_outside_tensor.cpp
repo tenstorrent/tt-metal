@@ -64,7 +64,7 @@ TEST_F(UnitMeshFixture, OOB_Tensor_Gap_L1_SanityCheck) {
     SetRuntimeArgs(program, kernel, logical_core, {oob_addr});
 
     EXPECT_DEATH(
-        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
+        LaunchProgram(this->device(), std::move(program)),
         ".*Out-of-Bounds Write: Attempted to access address.*not part of any allocated tensor.*");
 }
 
@@ -112,7 +112,7 @@ TEST_F(UnitMeshFixture, OOB_Tensor_Gap_DRAM_SanityCheck) {
     SetRuntimeArgs(program, kernel, logical_core, {oob_addr});
 
     EXPECT_DEATH(
-        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
+        LaunchProgram(this->device(), std::move(program)),
         ".*Out-of-Bounds Write: Attempted to access DRAM address.*not part of any allocated tensor.*");
 }
 
@@ -157,7 +157,7 @@ TEST_F(UnitMeshFixture, OOB_Tensor_HostPoke_JustPast_SanityCheck) {
     SetRuntimeArgs(program, kernel, logical_core, {past_addr});
 
     EXPECT_DEATH(
-        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
+        LaunchProgram(this->device(), std::move(program)),
         ".*Out-of-Bounds Write: Attempted to access address.*not part of any allocated tensor.*");
 }
 
@@ -195,7 +195,7 @@ TEST_F(UnitMeshFixture, OOB_Tensor_InBounds_L1_NoViolation) {
     SetRuntimeArgs(program, kernel, logical_core, {in_addr});
 
     // Must NOT abort — the address is inside an allocated tensor.
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");
@@ -233,14 +233,14 @@ TEST_F(UnitMeshFixture, OOB_Tensor_InBounds_DRAM_NoViolation) {
     SetRuntimeArgs(program, kernel, logical_core, {in_addr});
 
     // Must NOT abort — the offset is inside an allocated DRAM tensor.
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");
 }
 
 // Positive control for live-range lifetime identity. Same-address wrappers are
-// routine (Buffer::view subviews, the mesh workload's kernel-binary view buffers):
+// routine (MeshBuffer views, the mesh workload's kernel-binary view buffers):
 // a temporary non-owning buffer created at a live owner's address — usually with a
 // SMALLER size — registers a second range with the same start. Its destruction must
 // remove ITS range, not the owner's: a start-keyed removal would erase the owner's
@@ -263,8 +263,11 @@ TEST_F(UnitMeshFixture, OOB_Tensor_SameAddressTempBuffer_NoViolation) {
         // on the PHYSICAL device: that id's registry is the one the launch snapshot
         // consumes, where the owner's per-device buffer is registered.
         constexpr uint32_t temp_size = buffer_size / 4;
-        auto temp =
-            Buffer::create(this->device().get_devices()[0], owner->address(), temp_size, temp_size, BufferType::DRAM);
+        [[maybe_unused]] auto temp = distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = temp_size},
+            {.page_size = temp_size, .buffer_type = BufferType::DRAM},
+            &this->device(),
+            owner->address());
     }
     // Access the owner PAST the temporary's extent — valid, must stay registered.
     uint32_t in_addr = static_cast<uint32_t>(owner->address()) + buffer_size / 2;
@@ -286,7 +289,7 @@ TEST_F(UnitMeshFixture, OOB_Tensor_SameAddressTempBuffer_NoViolation) {
     SetRuntimeArgs(program, kernel, logical_core, {in_addr});
 
     // Must NOT abort — the owner's full range is still live.
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");
@@ -335,7 +338,7 @@ TEST_F(UnitMeshFixture, OOB_Tensor_HostPoke_Accept_NoViolation) {
     SetRuntimeArgs(program, kernel, logical_core, {poke_addr});
 
     // Must NOT abort — the address is inside a host-designated raw-L1 region.
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");

@@ -104,7 +104,7 @@ ALWI void process_tile(
     // for llk_post, so this is belt-and-suspenders on the LHS side.)
     pack_init(dfb_llk_post_id);
 #endif
-    compute_kernel_hw_startup(dfb_bcast_id, dfb_llk_post_id);
+    reconfig_data_format(dfb_bcast_id, dfb_bcast_id);
     unary_bcast_init<BroadcastType::COL>(dfb_bcast_id);
 
     tile_regs_acquire();
@@ -122,11 +122,6 @@ ALWI void process_tile(
     // gasket-only pack_reconfig above leaves the ring on llk_post and pack_tile(0, out) writes the wrong
     // buffer (the ~constant-output symptom). Mirrors eltwise_utils_dfb.hpp.
     pack_init(dfb_out_id);
-#endif
-#if defined(ARCH_BLACKHOLE)
-    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_out_id)));
-#elif defined(ARCH_QUASAR)
-    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(dfb_out_id)));
 #endif
 
     // Broadcast operand's activation chain runs ONCE (its expanded tile is reused across the row).
@@ -239,7 +234,7 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_post_lhs_id, dfb_out_id);
     copy_init(dfb_post_lhs_id);
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluConfig::zero())));
+    pack_relu_config(ReluConfig::zero());
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))

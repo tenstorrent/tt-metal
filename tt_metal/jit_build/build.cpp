@@ -38,7 +38,7 @@
 #include "env_lib.hpp"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
-#include "hostdevcommon/profiler_common.h"
+#include "hostdev/profiler_common.h"
 #include "llrt/rtoptions.hpp"
 #include "jit_build/kernel_args.hpp"
 #include "jit_build/depend.hpp"
@@ -360,6 +360,7 @@ void JitBuildEnv::init(
         root_ + "tt_metal",
         root_ + "tt_metal/hw/inc",
         root_ + "tt_metal/tt-llk/common",
+        root_ + "tt_metal/tt-llk/tools/include",
         root_ + "tt_metal/hostdevcommon/api",
         root_ + "tt_metal/api/"};
 

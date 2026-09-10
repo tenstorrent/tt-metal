@@ -1,24 +1,18 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-"""Render the two end-of-run matrices for the disaggregated-prefill CI leg from the durable per-rank
-ranklogs (mpirun --output-filename), which survive the teardown race that truncates forwarded stdout:
-
-  * per-layer x per-cache PCC vs golden  -- from the producer ranks' "slot .. layer .. PCC" lines
-  * per-rank x per-chunk start/end time  -- from the runner ranks' CHUNK_START / CHUNK_COMPUTE lines
-
-Each producer rank validates only its own host's layers, so the PCC rows are the union across ranklogs.
-Runner timing is meaningful only with PREFILL_SYNC_PER_CHUNK=1 (else CHUNK_COMPUTE is never emitted). The
-measured request is the last --real-chunks chunks per rank; any earlier chunks are the discarded warmup.
-"""
 import argparse
+import json
 import os
 import re
-import sys
 
 _KV = re.compile(r"slot\s+(\d+)\s+layer\s+(\d+)\s+KV PCC:\s+nope=([-\d.]+)\s+pe=([-\d.]+)")
 _INDEX = re.compile(r"slot\s+(\d+)\s+layer\s+(\d+)\s+\(index rank\s+(\d+)\)\s+index PCC:\s+([-\d.]+)")
 _CHUNK_START = re.compile(r"\[pp rank (\d+)\] CHUNK_START c=(\d+) compute_start=([\d.]+)")
 _CHUNK_COMPUTE = re.compile(r"\[pp rank (\d+)\] CHUNK_COMPUTE c=(\d+) compute_ms=([\d.]+)")
+
+# Chunks spanned by a throughput probe. A single chunk can run half again as long as its neighbours,
+# so one interval is too noisy to be a rate; eight is still under 5% of the shortest measured request.
+_TPUT_WINDOW = 8
 
 
 def _iter_lines(root):
@@ -136,77 +130,142 @@ def _cell_metrics(kept, disp):
         s0 = [kept[r][inv[0]][0] for r in kept if inv[0] in kept[r] and kept[r][inv[0]][0] is not None]
         t0 = min(s0) if s0 else None
     ttft = {d: end[d] - t0 for d in end} if t0 is not None else {}
-    return ct, ttft
+    return ct, ttft, end
+
+
+def _occupancy(kept):
+    spans, busy = {}, {}
+    for rank, cells in kept.items():
+        cs = [c for c in sorted(cells) if cells[c][0] is not None and cells[c][1] is not None]
+        # A single measured chunk makes the span identically the compute, so occupancy is 1 by construction.
+        if len(cs) < 2:
+            return [], {}
+        # Span and busy are both single-host deltas, so these ratios carry no inter-host clock skew,
+        # and each rank's own fill and drain fall outside its own span.
+        spans[rank] = _end(cells[cs[-1]]) - cells[cs[0]][0]
+        busy[rank] = sum(cells[c][1] for c in cs) / 1000.0
+    if len(spans) < 2 or min(spans.values()) <= 0:
+        return [], {}
+
+    b = max(busy, key=lambda r: busy[r])
+    rec = {
+        "balance": (sum(busy.values()) / len(busy)) / busy[b],
+        "bottleneck_saturation": busy[b] / spans[b],
+        "global_occupancy": sum(busy.values()) / sum(spans.values()),
+        "bottleneck_rank": b,
+        "rank_span_s": {str(r): spans[r] for r in sorted(spans)},
+        "rank_busy_s": {str(r): busy[r] for r in sorted(busy)},
+    }
+    out = [
+        "occupancy: span = a rank's own first measured chunk start -> its own last measured chunk end;"
+        " busy = its summed device compute",
+        f"  balance               = {rec['balance']:.4f}",
+        f"  bottleneck_saturation = {rec['bottleneck_saturation']:.4f}",
+        f"  global_occupancy      = {rec['global_occupancy']:.4f}",
+    ]
+    return out, rec
 
 
 def _publish(lines, name):
-    """Print the perf block, and when named also drop it where the CI publish step globs for it."""
-    title = f"disaggregated prefill perf -- {name or 'run'}"
-    if name:
-        home = os.environ.get("TT_METAL_HOME")
-        if home and home not in sys.path:
-            sys.path.insert(0, home)
-        try:
-            from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_summary
-
-            emit_summary("perf", name, title, lines)
-            return
-        except Exception as exc:  # publishing is a reporting nicety; never lose the block over it
-            print(f"perf summary not published ({exc})")
-    print(title)
+    print(f"disaggregated prefill perf -- {name or 'run'}")
     print("\n".join(lines))
 
 
-def _perf_metrics(kept, cs_sorted, disp, chunk_size, win_chunks):
+def _publish_json(rec, name):
+    if not rec or not name:
+        return
+    root = os.environ.get("PREFILL_SUMMARIES")
+    if not root:
+        print("perf metrics not persisted (PREFILL_SUMMARIES unset)")
+        return
+    model, _, config = name.rpartition("_")
+    rec = {"name": name, "model": model or name, "config": config or "unknown", **rec}
+    try:
+        out = os.path.join(root, "perf_json")
+        os.makedirs(out, exist_ok=True)
+        path = os.path.join(out, f"{name}.json")
+        with open(path, "w") as fh:
+            json.dump(rec, fh, indent=2, sort_keys=True)
+            fh.write("\n")
+        print(f"perf metrics -> {path}")
+    except OSError as exc:
+        print(f"perf metrics not persisted ({exc})")
+
+
+def _perf_metrics(kept, cs_sorted, disp, chunk_size, probe_chunks=None):
     n = len(cs_sorted)
     if n == 0:
-        return []
+        return [], {}
     max_seq = n * chunk_size
-    ct, ttft = _cell_metrics(kept, disp)
+    ranks = len(kept)
+    ct, ttft, end = _cell_metrics(kept, disp)
+    rec = {
+        "chunk_size": chunk_size,
+        "num_chunks": n,
+        "max_seq": max_seq,
+        "pipeline_ranks": ranks,
+        "chunk_index": {},
+        "chunk_time_ms": {},
+        "ttft_s": {},
+        "throughput_tok_s": {},
+    }
 
-    def idx(tok):
-        return max(0, min(n - 1, tok // chunk_size))
+    def probes(offsets, *, skip_first_chunk=False):
+        if probe_chunks is None:
+            picked = {max(0, min(n - 1, tok // chunk_size)) for tok in offsets}
+        else:
+            picked = {d for d in probe_chunks if 0 <= d < n}
+        if skip_first_chunk:
+            picked.discard(0)
+        picked = sorted(picked)
+        toks = [(d + 1) * chunk_size for d in picked]
+        labels = [f"@{round(t / 1048576)}M" if t >= 1048576 else f"@{round(t / 1024)}k" for t in toks]
+        if len(set(labels)) != len(labels):
+            labels = [f"@{t}" for t in toks]
+        return list(zip(labels, picked))
 
     out = ["==================== perf metrics (measured request, warmup excluded) ===================="]
-    out.append(f"max_seq={max_seq} tok ({n} chunks x {chunk_size}); offsets snapped to the containing chunk")
+    out.append(f"max_seq={max_seq} tok ({n} chunks x {chunk_size})")
+    out.append("labels are tokens prefilled through that chunk, in units of 1024 (M past 1Mi); probes snap to chunks")
     out.append("chunk_time = first-rank start -> last-rank finish (cross-rank; assumes NTP-comparable clocks)")
-    for lbl, tok in (
-        ("5k@0", 0),
-        ("5k@50k", 50000),
-        ("5k@max_seq/2", max_seq // 2),
-        ("5k@max_seq-5k", max_seq - chunk_size),
-    ):
-        d = idx(tok)
+    for lbl, d in probes((0, 50000, max_seq // 2, max_seq - chunk_size)):
+        rec["chunk_index"][lbl] = d
         val = f"{ct[d]:>12.3f}" if d in ct else f"{'-':>12}"
         out.append(f"  chunk_time {lbl:>14} (chunk {d:>3}): {val} ms")
+        if d in ct:
+            rec["chunk_time_ms"][lbl] = ct[d]
     out.append("ttft = request start -> chunk finish")
-    for lbl, tok in (("@50k", 50000), ("@max_seq/2", max_seq // 2), ("@max_seq", max_seq)):
-        d = idx(tok)
+    for lbl, d in probes((50000, max_seq // 2, max_seq), skip_first_chunk=True):
+        rec["chunk_index"][lbl] = d
         val = f"{ttft[d]:>12.3f}" if d in ttft else f"{'-':>12}"
         out.append(f"  ttft       {lbl:>14} (chunk {d:>3}): {val} s")
+        if d in ttft:
+            rec["ttft_s"][lbl] = ttft[d]
 
-    rank0 = min(kept)
-    inv = {i: c for c, i in disp.items()}
-    out.append(f"throughput = rank{rank0} start->start rate over the {win_chunks} chunks ending at the offset")
-    for lbl, tok in (("@50k", 50000), ("@max_seq/2", max_seq // 2), ("@max_seq", max_seq)):
-        d = idx(tok)
-        first = max(0, d - win_chunks + 1)
-        ca, cb = inv.get(first), inv.get(d)
-        usable = first < d and ca is not None and cb is not None and ca in kept[rank0] and cb in kept[rank0]
-        sa = kept[rank0][ca][0] if usable else None
-        sb = kept[rank0][cb][0] if usable else None
-        span = f"chunks {first:>3}..{d:>3}"
-        if sa is None or sb is None or sb <= sa:
-            out.append(f"  throughput {lbl:>14} ({span}): {'-':>12}")
+    out.append(f"throughput = tokens / wall time across up to {_TPUT_WINDOW} chunk completions centred on the probe")
+    for lbl, d in probes((0, 50000, max_seq // 2, max_seq)):
+        # The rate is the completion cadence. A chunk's own latency covers every stage at once and so
+        # carries no information about how many chunks are in flight; only the interval between
+        # completions does. The window absorbs one slow chunk while staying short enough that the
+        # attention cost, which grows with depth, barely drifts across it.
+        lo, hi = max(0, d - _TPUT_WINDOW // 2), min(n - 1, d + _TPUT_WINDOW // 2)
+        if hi - lo < 1 or end.get(lo) is None or end.get(hi) is None or end[hi] <= end[lo]:
+            out.append(f"  throughput {lbl:>14} (chunk {d:>3}): {'-':>12}")
             continue
-        # start->start spans (d - first) inter-chunk intervals, i.e. that many chunks dispatched in dt.
-        dt = sb - sa
-        tokens = (d - first) * chunk_size
-        out.append(f"  throughput {lbl:>14} ({span}): {tokens / dt:>12,.1f} tok/s  ({dt:.3f} s)")
-    return out
+        span = end[hi] - end[lo]
+        tput = (hi - lo) * chunk_size / span
+        out.append(f"  throughput {lbl:>14} (chunk {d:>3}): {tput:>12,.1f} tok/s")
+        rec["throughput_tok_s"][lbl] = tput
+
+    # Occupancy compares a rank against its own timeline, so it is meaningless without a pipeline.
+    if ranks >= 2:
+        occ_lines, occ_rec = _occupancy(kept)
+        out.extend(occ_lines)
+        rec.update(occ_rec)
+    return out, rec
 
 
-def _timing_matrix(root, real_chunks, timing_dir=None, chunk_size=0, win_chunks=4):
+def _timing_matrix(root, real_chunks, timing_dir=None, chunk_size=0, probe_chunks=None):
     ranks = _timing_from_csvs(timing_dir)
     if ranks is None:
         ranks = _timing_from_ranklogs(root)
@@ -214,12 +273,12 @@ def _timing_matrix(root, real_chunks, timing_dir=None, chunk_size=0, win_chunks=
     print("==================== per-rank x per-chunk timing (measured request) ====================")
     if not ranks:
         print("no timing rows found (set PREFILL_SYNC_PER_CHUNK=1 on the runner; timing CSVs / CHUNK_* logs absent)")
-        return []
+        return [], {}
     kept, cs_sorted, disp = _select_measured(ranks, real_chunks)
     all_starts = [c[0] for r in kept.values() for c in r.values() if c[0] is not None]
     if not all_starts:
         print("timing rows present but no compute_start timestamps parsed")
-        return []
+        return [], {}
     t0 = min(all_starts)
     print(f"start/end are seconds relative to the earliest chunk start ({t0:.6f} epoch); ms = device compute time")
     print(f"{'rank':>4}  {'chunk':>5}  {'start_s':>10}  {'end_s':>10}  {'ms':>9}")
@@ -232,8 +291,8 @@ def _timing_matrix(root, real_chunks, timing_dir=None, chunk_size=0, win_chunks=
             print(f"{rank:>4}  {disp[c]:>5}  {start_s}  {end_s}  {ms_s}")
 
     if chunk_size > 0:
-        return _perf_metrics(kept, cs_sorted, disp, chunk_size, win_chunks)
-    return []
+        return _perf_metrics(kept, cs_sorted, disp, chunk_size, probe_chunks)
+    return [], {}
 
 
 def main():
@@ -242,18 +301,26 @@ def main():
     ap.add_argument("--timing-dir", default=None, help="per-rank timing CSV dir (preferred timing source)")
     ap.add_argument("--real-chunks", type=int, default=0, help="chunks in the measured request (0 => all)")
     ap.add_argument("--chunk-size", type=int, default=0, help="tokens per chunk (0 => skip throughput)")
-    ap.add_argument("--perf-window-chunks", type=int, default=4, help="chunks per throughput window at each offset")
     ap.add_argument(
-        "--summary-name", default=None, help="publish the perf block under PREFILL_SUMMARIES/perf/<name>.md"
+        "--probe-chunks",
+        default=None,
+        help="comma-separated chunk indices to probe, shared across configs (default: derived from this request)",
+    )
+    ap.add_argument(
+        "--summary-name", default=None, help="<model>_<config>; names the metrics sidecar the scaling job reads"
     )
     args = ap.parse_args()
     if not os.path.isdir(args.ranklogs):
         print(f"ranklogs dir {args.ranklogs} not found; nothing to summarize")
         return
     _pcc_matrix(args.ranklogs)
-    lines = _timing_matrix(args.ranklogs, args.real_chunks, args.timing_dir, args.chunk_size, args.perf_window_chunks)
+    probe_chunks = None
+    if args.probe_chunks:
+        probe_chunks = {int(tok) for tok in args.probe_chunks.split(",") if tok.strip()}
+    lines, rec = _timing_matrix(args.ranklogs, args.real_chunks, args.timing_dir, args.chunk_size, probe_chunks)
     if lines:
         _publish(lines, args.summary_name)
+    _publish_json(rec, args.summary_name)
 
 
 if __name__ == "__main__":
