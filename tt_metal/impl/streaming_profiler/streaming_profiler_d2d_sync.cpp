@@ -214,6 +214,44 @@ void D2dSyncConsumer::publish_all(bool final) {
         return;
     }
     const DeviceClock& rclk = ctx_.devices[root].clock;
+
+    // Compose each device's refclk onto the root's along the solved-link tree, so a chip with no DIRECT link to the
+    // root still lands on the fleet timeline through its neighbours. A link solves receiver = sender*(1+rate) +
+    // (offset - rate*mid), an affine in the sender's refclk, and an affine's inverse and composition are affine, so
+    // each reachable device carries one { scale, shift } with root_refclk = scale * dev_refclk + shift. A breadth
+    // relaxation over the links (few devices, so O(links^2) is nothing) fills them from the root outward; a device
+    // no path reaches keeps its own anchor and the local term alone.
+    struct RootXf {
+        double scale = 1.0, shift = 0.0;
+        bool ok = false;
+    };
+    std::map<uint32_t, RootXf> to_root;
+    to_root[root] = RootXf{1.0, 0.0, true};
+    for (bool progress = true; progress;) {
+        progress = false;
+        for (const LinkSolution& s : solved_) {
+            if (!s.ok) {
+                continue;
+            }
+            const double m = 1.0 + s.rate;  // receiver = m * sender + o
+            const double o = s.offset_ticks - s.rate * s.mid;
+            const auto rs = to_root.find(s.dev_rcv);
+            const auto ss = to_root.find(s.dev_snd);
+            const bool r_ok = rs != to_root.end() && rs->second.ok;
+            const bool s_ok = ss != to_root.end() && ss->second.ok;
+            if (s_ok && !r_ok) {
+                // root = A_s * sender + B_s, and sender = (receiver - o) / m.
+                const RootXf& S = ss->second;
+                to_root[s.dev_rcv] = RootXf{S.scale / m, S.shift - S.scale * o / m, true};
+                progress = true;
+            } else if (r_ok && !s_ok) {
+                // root = A_r * receiver + B_r, and receiver = m * sender + o.
+                const RootXf& R = rs->second;
+                to_root[s.dev_snd] = RootXf{R.scale * m, R.scale * o + R.shift, true};
+                progress = true;
+            }
+        }
+    }
     for (const auto& [dev, st] : local_) {
         const Frame fd = frame_of(dev);
         if (!fd.ok) {
@@ -224,45 +262,18 @@ void D2dSyncConsumer::publish_all(bool final) {
         const double A_d = static_cast<double>(dclk.anchor_ticks);
         // Host anchors differ by a small amount (ms): keep it in integers, then double.
         const double dH = static_cast<double>(rclk.anchor_host_ns - dclk.anchor_host_ns);
-        // The link that puts this chip on the root's refclk, if it is not the root. Direct links only: a chip with
-        // no solved link to the root keeps its own anchor and gets the local term alone.
-        const LinkSolution* link = nullptr;
-        bool d_is_receiver = false;
-        if (dev != root) {
-            for (const LinkSolution& s : solved_) {
-                if (!s.ok) {
-                    continue;
-                }
-                if (s.dev_snd == root && s.dev_rcv == dev) {
-                    link = &s;
-                    d_is_receiver = true;
-                    break;
-                }
-                if (s.dev_rcv == root && s.dev_snd == dev) {
-                    link = &s;
-                    d_is_receiver = false;
-                    break;
-                }
-            }
-        }
-        // Root's refclk of this chip's refclk R: receiver = sender + offset + rate * (sender - mid).
-        const auto to_root_refclk = [&](double R) -> double {
-            if (dev == root || link == nullptr) {
-                return R;
-            }
-            if (d_is_receiver) {
-                // Solve sender from receiver: R_s (1 + rate) = R - offset + rate * mid.
-                return (R - link->offset_ticks + link->rate * link->mid) / (1.0 + link->rate);
-            }
-            return R + link->offset_ticks + link->rate * (R - link->mid);
-        };
+        // This chip's refclk onto the root's, from the composed transform (identity for the root itself); a chip no
+        // link path reaches keeps its own anchor and the local term alone.
+        const auto xf = to_root.find(dev);
+        const bool on_root = xf != to_root.end() && xf->second.ok;
+        const double xf_scale = on_root ? xf->second.scale : 1.0;
+        const double xf_shift = on_root ? xf->second.shift : 0.0;
         // The corrected host time of wall tick T, relative to this chip's own anchor host time (so the frame stays
-        // small): (link(R_d(T)) - R_r(A_r)) * P_r + (H_r - H_d), if on the root timeline; else its own refclk frame.
-        const bool on_root = dev == root || link != nullptr;
+        // small): (root_refclk(R_d(T)) - R_r(A_r)) * P_r + (H_r - H_d) on the root timeline; else its own refclk frame.
         const auto corrected_rel = [&](const LocalClockFit::Accum& b, double T) -> double {
             const double R = b.refclk_of_wall(T);
             if (on_root) {
-                return (to_root_refclk(R) - fr.refclk_at_anchor) * fr.period_ns + dH;
+                return (xf_scale * R + xf_shift - fr.refclk_at_anchor) * fr.period_ns + dH;
             }
             return (R - fd.refclk_at_anchor) * fd.period_ns;
         };
