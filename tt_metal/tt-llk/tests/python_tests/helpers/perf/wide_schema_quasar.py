@@ -17,7 +17,15 @@ dtype/nullability/origin are the contract the Parquet writer enforces.
 Imports no device libraries, so it loads without hardware.
 """
 
-from .schema import MEAN, METRIC_BASES, RUN_TYPE_NAMES, STD, metric_column, stat_column
+from .schema import (
+    MEAN,
+    METRIC_BASES,
+    PERF_METRICS_COMMON,
+    RUN_TYPE_NAMES,
+    STD,
+    metric_column,
+    stat_column,
+)
 from .wide_schema import Column
 
 # Same PerfRunType timing grid as WH/BH, plus the 4-TRISC parallel FPU/SFPU
@@ -130,15 +138,34 @@ MANDATORY = [c.name for c in DB_SCHEMA if not c.nullable]
 # Columns a Quasar test emits but the published table intentionally drops.
 # TEXT_SIZE(...) is per-stage ELF code size; not used by the gate. SFPU_ISOLATE
 # is 4-TRISC-only (#53072) and must not live on the WH/BH dropped set.
-DROPPED_COLUMNS = {
-    "TEXT_SIZE(L1_TO_L1)",
-    "TEXT_SIZE(MATH_ISOLATE)",
-    "TEXT_SIZE(PACK_ISOLATE)",
-    "TEXT_SIZE(UNPACK_ISOLATE)",
-    "TEXT_SIZE(SFPU_ISOLATE)",
-} | {
-    metric_column(run_type, base)
-    for run_type in RUN_TYPE_NAMES
-    for metric in METRIC_BASES
-    for base in (metric, stat_column(metric, MEAN), stat_column(metric, STD))
-}
+_L1_CLIENT_METRIC_KEYS = tuple(
+    PERF_METRICS_COMMON.l1_client_metric_key(
+        PERF_METRICS_COMMON.quasar_l1_client_label(sel)
+    )
+    for sel in range(PERF_METRICS_COMMON.QUASAR_L1_CLIENT_NUM_SUBPORTS * 8)
+    if PERF_METRICS_COMMON.quasar_l1_client_selection_is_valid(sel)
+)
+
+DROPPED_COLUMNS = (
+    {
+        "TEXT_SIZE(L1_TO_L1)",
+        "TEXT_SIZE(MATH_ISOLATE)",
+        "TEXT_SIZE(PACK_ISOLATE)",
+        "TEXT_SIZE(UNPACK_ISOLATE)",
+        "TEXT_SIZE(SFPU_ISOLATE)",
+    }
+    | {
+        metric_column(run_type, base)
+        for run_type in RUN_TYPE_NAMES
+        for metric in METRIC_BASES
+        for base in (metric, stat_column(metric, MEAN), stat_column(metric, STD))
+    }
+    | {
+        # The l1_client metric is named after the run's LLK_PERF_L1_CLIENT_SEL, one column per
+        # selection that can carry data; like the other metrics it stays in the CSV only.
+        metric_column(run_type, base)
+        for run_type in RUN_TYPE_NAMES
+        for metric in _L1_CLIENT_METRIC_KEYS
+        for base in (metric, stat_column(metric, MEAN), stat_column(metric, STD))
+    }
+)

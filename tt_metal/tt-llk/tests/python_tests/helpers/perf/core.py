@@ -697,10 +697,7 @@ def assert_zones_dont_overlap(profiler_data: ProfilerData) -> None:
     how the perf kernels are written, not of the profiler, so it lives here and runs once per run.
 
     Within a thread a zone that contains another is a wrapper (trisc.cpp's KERNEL), not a phase.
-    Quasar has no entry rendezvous yet.
     """
-    if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR:
-        return
     # The profiler view pairs every ZONE_START with the ZONE_END that follows it.
     zones = profiler_data.zones().frame()
     if zones.empty:
@@ -1013,13 +1010,9 @@ class PerfConfig(TestConfig):
 
             get_stats = Profiler.STATS_FUNCTION[run_type]
             stats_df = get_stats(ProfilerData.concat(variant_raw_data))
-            # A WC build intentionally suppresses ZONE_SCOPED timing events and
-            # emits counter metrics instead. Quasar excludes the WC TRISC flag,
-            # so it still requires wall-clock stats even when counters are requested.
-            counter_only_build = (
-                TestConfig.ENABLE_PERF_COUNTERS
-                and TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR
-            )
+            # A counter build may come back with counters and no wall-clock stats; only the
+            # no-counter build is required to produce timing.
+            counter_only_build = TestConfig.ENABLE_PERF_COUNTERS
             if not stats_df.empty or not counter_only_build:
                 PerfConfig._validate_profiler_stats(stats_df, run_type)
                 results.append(stats_df)

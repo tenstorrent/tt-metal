@@ -10,17 +10,24 @@ from loguru import logger
 
 from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .device_io import read_words_from_device
+from .perf.schema import PERF_METRICS_COMMON
 from .test_config import TestConfig
 
 COUNTER_SLOT_COUNT = TestConfig._PERF_COUNTERS_CONFIG_WORDS
 
+_IS_QUASAR = get_chip_architecture() == ChipArchitecture.QUASAR
+
+# Bank ids as counters.h numbers them. Quasar has no L1 counter bank, so slot 3 carries the
+# l1_client event CSR there; its counter_sel field is the subport*8 + event selection.
 COUNTER_BANK_NAMES = {
     0: "INSTRN_THREAD",
     1: "FPU",
     2: "TDMA_UNPACK",
-    3: "L1",
+    3: "L1_CLIENT" if _IS_QUASAR else "L1",
     4: "TDMA_PACK",
 }
+# Banks hw_counters.h can name (L1 only exists on tt-1xx).
+_NAMED_BANKS = ("INSTRN_THREAD", "FPU", "TDMA_UNPACK", "TDMA_PACK", "L1")
 
 
 # --- Counter id -> name tables, parsed live from the canonical metal hw_counters.h ---
@@ -32,8 +39,9 @@ _ARRAY_TO_BANK = {
     "pack_counters": "TDMA_PACK",
 }
 _ARCH_DIR = {
-    ChipArchitecture.WORMHOLE: "wormhole",
-    ChipArchitecture.BLACKHOLE: "blackhole",
+    ChipArchitecture.WORMHOLE: "tt-1xx/wormhole",
+    ChipArchitecture.BLACKHOLE: "tt-1xx/blackhole",
+    ChipArchitecture.QUASAR: "tt-2xx/quasar",
 }
 
 
@@ -78,9 +86,10 @@ PERF_CFG_BANK_MASK = _PERF_CFG["BANK_MASK"]
 
 def _parse_hw_counters(text: str) -> dict:
     """Parse one hw_counters.h into {bank: {id: name}}; L1 is keyed by (id, mux)."""
-    banks = {bank: {} for bank in COUNTER_BANK_NAMES.values()}
+    banks = {bank: {} for bank in _NAMED_BANKS}
 
-    decls = list(re.finditer(r"(\w+_counters)\s*=", text))
+    # Quasar's arrays carry a section attribute macro between the name and the "=".
+    decls = list(re.finditer(r"(\w+_counters)(?:\s+[A-Z_]+)?\s*=", text))
     for i, decl in enumerate(decls):
         name = decl.group(1)
         start = decl.end()
@@ -111,16 +120,13 @@ def _parse_hw_counters(text: str) -> dict:
 
 def _load_counter_names(arch: ChipArchitecture) -> dict:
     arch_dir = _ARCH_DIR.get(arch)
-    if arch_dir is None:  # Quasar / unsupported: no hw_counters.h yet.
-        return {bank: {} for bank in COUNTER_BANK_NAMES.values()}
-    header = _metal_root() / f"tt_metal/hw/inc/internal/tt-1xx/{arch_dir}/hw_counters.h"
+    if arch_dir is None:
+        return {bank: {} for bank in _NAMED_BANKS}
+    header = _metal_root() / f"tt_metal/hw/inc/internal/{arch_dir}/hw_counters.h"
     banks = _parse_hw_counters(header.read_text())
     # Silently, every column becomes UNKNOWN and metrics.py turns the misses into a page of zeros.
-    missing = [
-        b
-        for b in ("INSTRN_THREAD", "FPU", "TDMA_UNPACK", "TDMA_PACK", "L1")
-        if not banks.get(b)
-    ]
+    expected = [b for b in _NAMED_BANKS if b != "L1" or arch != ChipArchitecture.QUASAR]
+    missing = [b for b in expected if not banks.get(b)]
     if missing:
         raise RuntimeError(
             f"Could not parse counter names from {header}: empty banks {missing}. "
@@ -218,29 +224,9 @@ def _read_zone_counters(location: str, zone: int, zone_name: str) -> list[dict]:
         if (config_word & PERF_CFG_VALID_BIT) == 0:
             continue
 
-        bank_id = config_word & PERF_CFG_BANK_MASK
-        counter_id = (config_word >> PERF_CFG_COUNTER_SHIFT) & PERF_CFG_COUNTER_MASK
-        l1_mux = (config_word >> PERF_CFG_L1_MUX_SHIFT) & PERF_CFG_L1_MUX_MASK
-
-        bank_name = COUNTER_BANK_NAMES.get(bank_id, f"UNKNOWN_{bank_id}")
-
-        if bank_name == "L1" and l1_mux != TestConfig.PERF_L1_MUX_GROUP:
-            # The group is baked into brisc.elf and nothing keys a rebuild on it, so a stale ELF
-            # would otherwise return a self-consistently mislabelled dataset.
-            raise RuntimeError(
-                f"L1 counters were captured with mux group {l1_mux}, but "
-                f"LLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP} was requested. The ELF predates "
-                "the change; recompile the producer (the group is a compile-time constant)."
-            )
-
-        if bank_name == "L1":
-            counter_name = COUNTER_NAMES["L1"].get(
-                (counter_id, l1_mux), f"L1_UNKNOWN_{counter_id}_{l1_mux}"
-            )
-        else:
-            counter_name = COUNTER_NAMES.get(bank_name, {}).get(
-                counter_id, f"{bank_name}_UNKNOWN_{counter_id}"
-            )
+        bank_id, bank_name, counter_id, counter_name, l1_mux = decode_config_word(
+            config_word
+        )
 
         cycles = bank_cycles[bank_id] if bank_id < bank_cycles_words else 0
         count = counter_counts[count_idx]
@@ -254,11 +240,52 @@ def _read_zone_counters(location: str, zone: int, zone_name: str) -> list[dict]:
                 "counter_id": counter_id,
                 "cycles": cycles,
                 "count": count,
-                "l1_mux": l1_mux if bank_name == "L1" else None,
+                "l1_mux": l1_mux,
             }
         )
 
     return results
+
+
+def decode_config_word(config_word: int) -> tuple:
+    """(bank_id, bank_name, counter_id, counter_name, l1_mux) for one valid config word.
+
+    l1_mux is None outside the tt-1xx L1 bank. Quasar's slot 3 is the l1_client CSR, whose
+    counter_sel is the subport*8 + event selection and names itself through the shared engine.
+    """
+    bank_id = config_word & PERF_CFG_BANK_MASK
+    counter_id = (config_word >> PERF_CFG_COUNTER_SHIFT) & PERF_CFG_COUNTER_MASK
+    l1_mux = (config_word >> PERF_CFG_L1_MUX_SHIFT) & PERF_CFG_L1_MUX_MASK
+
+    bank_name = COUNTER_BANK_NAMES.get(bank_id, f"UNKNOWN_{bank_id}")
+
+    if bank_name == "L1" and l1_mux != TestConfig.PERF_L1_MUX_GROUP:
+        # The group is baked into brisc.elf and nothing keys a rebuild on it, so a stale ELF
+        # would otherwise return a self-consistently mislabelled dataset.
+        raise RuntimeError(
+            f"L1 counters were captured with mux group {l1_mux}, but "
+            f"LLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP} was requested. The ELF predates "
+            "the change; recompile the producer (the group is a compile-time constant)."
+        )
+
+    if bank_name == "L1":
+        counter_name = COUNTER_NAMES["L1"].get(
+            (counter_id, l1_mux), f"L1_UNKNOWN_{counter_id}_{l1_mux}"
+        )
+    elif bank_name == "L1_CLIENT":
+        counter_name = PERF_METRICS_COMMON.quasar_l1_client_label(counter_id)
+    else:
+        counter_name = COUNTER_NAMES.get(bank_name, {}).get(
+            counter_id, f"{bank_name}_UNKNOWN_{counter_id}"
+        )
+
+    return (
+        bank_id,
+        bank_name,
+        counter_id,
+        counter_name,
+        l1_mux if bank_name == "L1" else None,
+    )
 
 
 def read_counters(location: str = "0,0") -> pd.DataFrame:
