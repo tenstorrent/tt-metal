@@ -927,7 +927,7 @@ static void run_a1_threaded_pipeline(
     slow_dispatch::WriteToBuffer(out_tensor.mesh_buffer(), poison);
     m2_writeshard_barrier_uint32(mesh_device, out_tensor, poison);
 
-    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program));
 
     std::vector<uint32_t> output;
     slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
