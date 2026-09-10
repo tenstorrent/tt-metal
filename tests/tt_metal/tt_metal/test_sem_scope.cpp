@@ -122,8 +122,7 @@ protected:
                     {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"},
                       .accessor_name = "counter"}},
                 .runtime_arg_schema =
-                    {.runtime_arg_names =
-                         {"report_addr", "increment_times", "is_reporter", "barrier_idx", "wait_min_total"}},
+                    {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter", "wait_min_total"}},
                 .hw_config = experimental::DataMovementGen2Config{},
             });
             work_units.push_back(experimental::WorkUnitSpec{
@@ -157,7 +156,6 @@ protected:
                     {{"report_addr", report_addr},
                      {"increment_times", 0u},
                      {"is_reporter", 0u},
-                     {"barrier_idx", 0u},
                      {"wait_min_total", 0u}}),
             });
         }
@@ -451,10 +449,6 @@ protected:
 
         std::vector<experimental::KernelSpec> kernel_specs;
         experimental::ProgramRunArgs params;
-        EXPECT_LE(kernels.size(), 2u) << "run_census supports at most 2 kernels (barrier slots)";
-        if (kernels.size() > 2u) {
-            return {kNoReport, 0u};
-        }
         std::vector<std::pair<experimental::NodeCoord, std::vector<experimental::KernelSpecName>>> by_node;
         for (size_t i = 0; i < kernels.size(); i++) {
             const auto& k = kernels[i];
@@ -467,8 +461,7 @@ protected:
                     {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"},
                       .accessor_name = "counter"}},
                 .runtime_arg_schema =
-                    {.runtime_arg_names =
-                         {"report_addr", "increment_times", "is_reporter", "barrier_idx", "wait_min_total"}},
+                    {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter", "wait_min_total"}},
                 .hw_config = experimental::DataMovementGen2Config{},
             });
             bool placed = false;
@@ -489,8 +482,6 @@ protected:
                     {{"report_addr", report_addr},
                      {"increment_times", k.increments},
                      {"is_reporter", k.reporter ? 1u : 0u},
-                     // Distinct barrier slot per kernel (see the cap's safety note above).
-                     {"barrier_idx", static_cast<uint32_t>(i)},
                      {"wait_min_total", k.wait_min_total}}),
             });
         }
@@ -815,8 +806,7 @@ TEST_F(SemScopeFixture, TestCensusTwoCachedSemsOneNodeBothCached) {
             .num_threads = threads,
             .semaphore_bindings = {{.semaphore_spec_name = sem_name, .accessor_name = "counter"}},
             .runtime_arg_schema =
-                {.runtime_arg_names =
-                     {"report_addr", "increment_times", "is_reporter", "barrier_idx", "wait_min_total"}},
+                {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter", "wait_min_total"}},
             .hw_config = experimental::DataMovementGen2Config{},
         };
     };
@@ -837,7 +827,6 @@ TEST_F(SemScopeFixture, TestCensusTwoCachedSemsOneNodeBothCached) {
                 {{"report_addr", report_addr},
                  {"increment_times", concurrent_iterations},
                  {"is_reporter", 1u},
-                 {"barrier_idx", 0u},
                  {"wait_min_total", 0u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
@@ -847,7 +836,6 @@ TEST_F(SemScopeFixture, TestCensusTwoCachedSemsOneNodeBothCached) {
                 {{"report_addr", report_addr},
                  {"increment_times", concurrent_iterations},
                  {"is_reporter", 0u},
-                 {"barrier_idx", 1u},
                  {"wait_min_total", 0u}}),
         },
     };
@@ -910,8 +898,10 @@ TEST_F(SemScopeFixture, TestCachedSelfRestoresAcrossLaunches) {
     }
 }
 
-// Making sure cached seeding needs no barrier at all by having a user kernel
-// pick a barrier slot that the cached seeder never rendezvoused with.
+// Making sure cached seeding needs no barrier at all by running a user kernel that
+// rendezvouses on its own barrier, which the cached seeder never took part in.
+// Firmware hands the two kernels separate slots, so the user barrier cannot touch
+// whatever the seeder relies on.
 TEST_F(SemScopeFixture, TestCachedSeederImmuneToUserBarrierSlots) {
     if (num_dms_ < 5) {
         GTEST_SKIP() << "needs >= 5 user DMs for two multi-threaded kernels with different thread counts";
@@ -927,7 +917,7 @@ TEST_F(SemScopeFixture, TestCachedSeederImmuneToUserBarrierSlots) {
     experimental::SemaphoreSpec sem_a{.unique_id = SEM_A, .target_nodes = core};
     experimental::SemaphoreSpec sem_b{.unique_id = SEM_B, .target_nodes = experimental::NodeRange{core, second_node()}};
     const experimental::KernelSpecName KA{"cached_binder"};
-    const experimental::KernelSpecName KB{"slot1_user"};
+    const experimental::KernelSpecName KB{"barrier_user"};
     const uint32_t threads_a = 2;
     const uint32_t threads_b = num_dms_ - threads_a;
 
@@ -940,8 +930,7 @@ TEST_F(SemScopeFixture, TestCachedSeederImmuneToUserBarrierSlots) {
             .num_threads = threads,
             .semaphore_bindings = {{.semaphore_spec_name = sem_name, .accessor_name = "counter"}},
             .runtime_arg_schema =
-                {.runtime_arg_names =
-                     {"report_addr", "increment_times", "is_reporter", "barrier_idx", "wait_min_total"}},
+                {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter", "wait_min_total"}},
             .hw_config = experimental::DataMovementGen2Config{},
         };
     };
@@ -962,7 +951,6 @@ TEST_F(SemScopeFixture, TestCachedSeederImmuneToUserBarrierSlots) {
                 {{"report_addr", report_addr},
                  {"increment_times", concurrent_iterations},
                  {"is_reporter", 1u},
-                 {"barrier_idx", 0u},
                  {"wait_min_total", 0u}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
@@ -972,7 +960,6 @@ TEST_F(SemScopeFixture, TestCachedSeederImmuneToUserBarrierSlots) {
                 {{"report_addr", report_addr},
                  {"increment_times", concurrent_iterations},
                  {"is_reporter", 0u},
-                 {"barrier_idx", 1u},  // a user array slot with no seeder rendezvous to collide with
                  {"wait_min_total", 0u}}),
         },
     };
@@ -1134,7 +1121,7 @@ TEST_F(SemScopeFixture, TestDoubleBindingRejected) {
             {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter"},
              {.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter_again"}},
         .runtime_arg_schema =
-            {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter", "barrier_idx", "wait_min_total"}},
+            {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter", "wait_min_total"}},
         .hw_config = experimental::DataMovementGen2Config{},
     };
     experimental::WorkUnitSpec wu{.name = "main", .kernels = {K}, .target_nodes = core};
