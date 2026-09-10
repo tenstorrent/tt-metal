@@ -22,12 +22,59 @@ GQA internally (no manual KV-head repeat needed).
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
 from models.demos.gemma4.tt.attention.weights import AttentionWeights
 from models.demos.gemma4.tt.ccl import ccl_allreduce
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_attention import rotate_half_ttnn
+
+_TILE_HEIGHT = 32
+
+
+def _dflash_pad_noise_concat_enabled() -> bool:
+    """Pad the noise block's K/V to a TILE_HEIGHT (32) multiple before
+    ``ttnn.concat``-ing them onto the (already tile-aligned) context cache,
+    instead of concatenating at the drafter's raw ``block_size`` (16) width.
+
+    ``ttnn.concat`` falls back to a generic untilize -> splice -> retile
+    composite whenever either operand's row count isn't a multiple of 32 (the
+    checkpoint's ``block_size=16`` guarantees this every call) -- confirmed on
+    real hardware via an isolated repro matching the real op names/core counts
+    seen in ``test_dflash_drafter_tracy.py`` captures (UntilizeWithUnpadding
+    x2, Concat, TilizeWithValPadding; ~16.6us + 9.6us + 3.3us + 9.2us =
+    ~38.7us/device per concat call). Padding both operands to a 32-row
+    boundary first lets ``ttnn.concat`` take its native tile-aligned path
+    instead: same isolated repro measured ~3us/device -- roughly 13x less,
+    twice per layer (K and V) times every drafter layer.
+
+    The padding rows are never real content -- they must be masked out of
+    attention entirely, which is why this flag also changes
+    ``build_attention_mask_additive_device``/``_dynamic``/
+    ``build_attention_mask_static_parts``: every mask-building call site needs
+    the SAME padded width, or the mask's last dim silently no longer matches
+    K's sequence length. ``dflash_drafter_forward``'s ``mask_for`` closure is
+    the only caller of those builders and passes this same flag through, so
+    producer (the K/V pad here) and consumer (the mask width) can't disagree.
+
+    Default ON. Beyond the isolated bit-exact check above, also run end-to-end
+    in ``demo/dflash_fused_decoder_demo.py`` alongside
+    ``GEMMA4_ROPE_EXPAND_GATHER``/``GEMMA4_KV_FUSED_WRITE`` (66.4 tok/s, 260
+    tokens over 39 iterations, mean 5.67 accepted drafts/iteration, coherent
+    generated output) — real speculative-decoding traffic through this flag,
+    not just the isolated concat repro. That demo run checks liveness and
+    output plausibility, not a token-for-token match against the flag
+    disabled; a strict bit-exact diff of full-sequence output with this flag
+    on vs. off has NOT been run. ``GEMMA4_DFLASH_PAD_NOISE_CONCAT=0`` restores
+    the previous unpadded-concat path, as an escape hatch.
+    """
+    return os.environ.get("GEMMA4_DFLASH_PAD_NOISE_CONCAT", "1").lower() not in ("0", "false", "no")
+
+
+def _tile_pad_len(n: int, tile: int = _TILE_HEIGHT) -> int:
+    return ((n + tile - 1) // tile) * tile
 
 
 def build_attention_mask_additive(
@@ -58,16 +105,25 @@ def build_attention_mask_additive(
 
 
 def build_attention_mask_additive_device(
-    mesh_device, ctx_len: int, q_len: int, is_causal: bool, sliding_window: int | None
+    mesh_device, ctx_len: int, q_len: int, is_causal: bool, sliding_window: int | None, q_len_padded: int | None = None
 ) -> ttnn.Tensor:
     """On-device equivalent of ``build_attention_mask_additive`` -- same formula, built
     entirely with ttnn ops (``ttnn.arange``/``le``/``lt``/``logical_and``/``where``), no
     host torch computation or upload. Confirmed exact match (bf16) against the host-torch
     version, cast to bf16 the same way the caller would (``ttnn.from_torch(...,
     dtype=bfloat16)``), for every (ctx_len, q_len, is_causal, sliding_window) combination
-    this pipeline actually uses. Returns [1,1,q_len,ctx_len+q_len] bf16, replicated."""
-    total = ctx_len + q_len
-    query_position = ttnn.arange(total - q_len, total, 1, device=mesh_device, dtype=ttnn.int32)
+    this pipeline actually uses. Returns [1,1,q_len,ctx_len+q_len] bf16, replicated.
+
+    ``q_len_padded``: when given (> q_len), the mask's key axis extends to
+    ``ctx_len + q_len_padded`` instead of ``ctx_len + q_len``, with the extra
+    trailing ``q_len_padded - q_len`` columns forced invisible for every query
+    row regardless of causal/sliding rules. Matches
+    ``_dflash_pad_noise_concat_enabled``'s K/V padding in
+    ``dflash_attention_forward`` -- those trailing columns are where the
+    padding rows land after ``ttnn.concat``, and they carry no real content."""
+    total_real = ctx_len + q_len
+    total = ctx_len + (q_len_padded if q_len_padded else q_len)
+    query_position = ttnn.arange(total_real - q_len, total_real, 1, device=mesh_device, dtype=ttnn.int32)
     key_position = ttnn.arange(0, total, 1, device=mesh_device, dtype=ttnn.int32)
     query_col = ttnn.reshape(query_position, [q_len, 1])
     key_row = ttnn.reshape(key_position, [1, total])
@@ -81,6 +137,8 @@ def build_attention_mask_additive_device(
         visible = ttnn.logical_and(visible, ttnn.lt(ttnn.subtract(query_full, key_full), sliding_window))
         if not is_causal:
             visible = ttnn.logical_and(visible, ttnn.lt(ttnn.subtract(key_full, query_full), sliding_window))
+    if total > total_real:
+        visible = ttnn.logical_and(visible, ttnn.lt(key_full, total_real))
 
     visible = ttnn.to_layout(ttnn.typecast(visible, ttnn.bfloat16), ttnn.TILE_LAYOUT)
     zero = ttnn.zeros([q_len, total], dtype=ttnn.bfloat16, device=mesh_device, layout=ttnn.TILE_LAYOUT)
@@ -96,6 +154,7 @@ def build_attention_mask_additive_device_dynamic(
     is_causal: bool,
     sliding_window: int | None,
     context_valid_len_tt: ttnn.Tensor,
+    q_len_padded: int | None = None,
 ) -> ttnn.Tensor:
     """Same as ``build_attention_mask_additive_device``, plus one more masking condition:
     context columns whose index is >= ``context_valid_len_tt`` are ALSO marked invisible.
@@ -121,9 +180,14 @@ def build_attention_mask_additive_device_dynamic(
     ``build_attention_mask_static_parts`` (once, outside capture) +
     ``combine_attention_mask_dynamic`` (inside the captured body, per replay) instead --
     identical result, split so only the ``context_valid_len_tt``-dependent combine step
-    re-runs on every replay."""
-    total = ctx_len + q_len
-    query_position = ttnn.arange(total - q_len, total, 1, device=mesh_device, dtype=ttnn.int32)
+    re-runs on every replay.
+
+    ``q_len_padded``: same meaning as ``build_attention_mask_additive_device`` -- extends
+    the key axis to ``ctx_len + q_len_padded`` with the trailing padding columns forced
+    invisible, independent of (and applied after) the context-validity condition below."""
+    total_real = ctx_len + q_len
+    total = ctx_len + (q_len_padded if q_len_padded else q_len)
+    query_position = ttnn.arange(total_real - q_len, total_real, 1, device=mesh_device, dtype=ttnn.int32)
     key_position = ttnn.arange(0, total, 1, device=mesh_device, dtype=ttnn.int32)
     query_col = ttnn.reshape(query_position, [q_len, 1])
     key_row = ttnn.reshape(key_position, [1, total])
@@ -143,6 +207,8 @@ def build_attention_mask_additive_device_dynamic(
     is_valid_context_col = ttnn.lt(key_full, valid_len_full)  # key_position < context_valid_len
     is_noise_col = ttnn.ge(key_full, ctx_len)  # noise columns are unaffected by context padding
     visible = ttnn.logical_and(visible, ttnn.logical_or(is_valid_context_col, is_noise_col))
+    if total > total_real:
+        visible = ttnn.logical_and(visible, ttnn.lt(key_full, total_real))
 
     visible = ttnn.to_layout(ttnn.typecast(visible, ttnn.bfloat16), ttnn.TILE_LAYOUT)
     zero = ttnn.zeros([q_len, total], dtype=ttnn.bfloat16, device=mesh_device, layout=ttnn.TILE_LAYOUT)
@@ -172,7 +238,7 @@ class DynamicMaskStaticParts:
 
 
 def build_attention_mask_static_parts(
-    mesh_device, ctx_len: int, q_len: int, is_causal: bool, sliding_window: int | None
+    mesh_device, ctx_len: int, q_len: int, is_causal: bool, sliding_window: int | None, q_len_padded: int | None = None
 ) -> DynamicMaskStaticParts:
     """One-time setup (call OUTSIDE ``begin_trace_capture``): builds every piece of
     ``build_attention_mask_additive_device_dynamic`` that's independent of
@@ -180,9 +246,15 @@ def build_attention_mask_static_parts(
     visibility, the noise-column exemption, and the bf16 zero/neg constants. Uses
     ``ttnn.arange``/``ones``/``zeros``/``full`` (host-write ops), which is fine here since
     this runs once, before capture begins -- see ``combine_attention_mask_dynamic`` for the
-    per-replay half that's actually inside the trace."""
-    total = ctx_len + q_len
-    query_position = ttnn.arange(total - q_len, total, 1, device=mesh_device, dtype=ttnn.int32)
+    per-replay half that's actually inside the trace.
+
+    ``q_len_padded``: same meaning as ``build_attention_mask_additive_device``. The
+    trailing-padding-columns-invisible condition is independent of
+    ``context_valid_len_tt``, so it's folded into ``visible_base`` here rather than
+    needing any change in ``combine_attention_mask_dynamic``."""
+    total_real = ctx_len + q_len
+    total = ctx_len + (q_len_padded if q_len_padded else q_len)
+    query_position = ttnn.arange(total_real - q_len, total_real, 1, device=mesh_device, dtype=ttnn.int32)
     key_position = ttnn.arange(0, total, 1, device=mesh_device, dtype=ttnn.int32)
     query_col = ttnn.reshape(query_position, [q_len, 1])
     key_row = ttnn.reshape(key_position, [1, total])
@@ -196,6 +268,8 @@ def build_attention_mask_static_parts(
         visible_base = ttnn.logical_and(visible_base, ttnn.lt(ttnn.subtract(query_full, key_full), sliding_window))
         if not is_causal:
             visible_base = ttnn.logical_and(visible_base, ttnn.lt(ttnn.subtract(key_full, query_full), sliding_window))
+    if total > total_real:
+        visible_base = ttnn.logical_and(visible_base, ttnn.lt(key_full, total_real))
 
     is_noise_col = ttnn.ge(key_full, ctx_len)  # noise columns are unaffected by context padding
 
@@ -227,6 +301,86 @@ def _apply_rope_single(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> tt
     return ttnn.add(ttnn.multiply(x, cos), ttnn.multiply(rotate_half_ttnn(x), sin))
 
 
+def _dflash_kv_fill_cache_enabled() -> bool:
+    """Write the drafter's per-layer K/V cache delta via ``ttnn.fill_cache`` (one
+    in-place device write covering only the touched rows) instead of
+    ``_write_seq_slice``'s current slice-head + slice-tail + concat-the-whole-buffer +
+    copy-the-whole-buffer dance.
+
+    ``_write_seq_slice`` currently reconstructs and rewrites the ENTIRE
+    ``[1,heads,max_seq_len,head_dim]`` cache on every single delta commit, no matter how
+    small ``length`` is -- O(max_seq_len) data movement (2 slices + 1 concat + 1
+    full-buffer copy) to write ``length`` rows. ``ttnn.fill_cache(cache, input,
+    batch_idx=0, update_idx=...)`` (``ttnn/cpp/ttnn/operations/kv_cache/kv_cache.cpp``)
+    is a purpose-built in-place write that only touches ``[update_idx : update_idx +
+    input.shape[-2]]`` -- no read/rewrite of the untouched tail at all -- but its device
+    op (``update_cache_device_operation.cpp``) hard-requires ``update_idx % TILE_HEIGHT
+    (32) == 0``.
+
+    ``offset`` here is NOT tile-aligned in general: generate.py's ``context_len``
+    (this function's ``offset``) advances by ``produced = min(accept + 1, block_size)``
+    every drafting iteration -- a variable count of accepted speculative tokens, not a
+    32-multiple. So a plain drop-in swap would ``TT_FATAL`` after the first iteration in
+    real use (confirmed by reading ``generate.py``'s call sites, not assumed). This
+    rounds ``offset`` DOWN to its containing tile boundary and reads back the <=31-row
+    in-tile prefix that exposes (``[aligned_start:offset]`` -- already real content,
+    rewritten with its own unchanged values, not new data).
+
+    A second, initially-missed constraint applies at the OTHER end too: the device op
+    (``fill_cache_multi_core_program_factory.cpp``) sizes its write from the input
+    tensor's PADDED row count (``input_tensor.padded_shape()[-2] / TILE_HEIGHT``), which
+    rounds ``length`` UP to the next tile multiple -- not the logical ``length`` itself.
+    A first version of this that only fixed the start alignment was caught by
+    ``test_dflash_kv_fill_cache.py``'s bit-exact check: at ``length=16`` (not a
+    32-multiple), the input tensor's tile padding (zero-filled by ``ttnn.from_torch``)
+    got written into the next 16 real cache rows past ``offset+length``, corrupting
+    them. So this also reads back a <=31-row in-tile SUFFIX (``[offset+length :
+    aligned_end]``, ``aligned_end`` = ``offset+length`` rounded up) and appends it
+    before the ``fill_cache`` call, so every row actually written -- including the
+    tile-padding rows the kernel touches regardless -- has real, correct content.
+
+    Total touched width is bounded by ``31 + length + 31`` (<=78 for DFlash's
+    block_size=16), independent of ``max_seq_len`` -- vs. the current path's full
+    ``max_seq_len``. Verified bit-exact against ``_write_seq_slice`` for both aligned
+    and unaligned offsets, aligned and unaligned lengths, and a write crossing a tile
+    boundary (``test_dflash_kv_fill_cache.py``).
+
+    Default OFF (``GEMMA4_DFLASH_KV_FILL_CACHE=1`` to enable) pending bit-exact +
+    device-time verification on real hardware, same rollout convention as this file's
+    ``GEMMA4_DFLASH_PAD_NOISE_CONCAT`` and ``attention/decode.py``'s
+    ``GEMMA4_ROPE_EXPAND_GATHER`` / ``GEMMA4_KV_FUSED_WRITE``.
+    """
+    return os.environ.get("GEMMA4_DFLASH_KV_FILL_CACHE", "0").lower() in ("1", "true", "yes")
+
+
+def _write_seq_slice_fill_cache(buf: ttnn.Tensor, new_rows: ttnn.Tensor, offset: int, length: int) -> None:
+    b, h, max_len, d = buf.shape
+    aligned_start = (offset // _TILE_HEIGHT) * _TILE_HEIGHT
+    write_end = offset + length
+    aligned_end = min(_tile_pad_len(write_end), max_len)
+    prefix_len = offset - aligned_start
+    suffix_len = aligned_end - write_end
+
+    pieces = []
+    prefix = suffix = None
+    if prefix_len > 0:
+        prefix = ttnn.slice(buf, [0, 0, aligned_start, 0], [b, h, offset, d])
+        pieces.append(prefix)
+    pieces.append(new_rows)
+    if suffix_len > 0:
+        suffix = ttnn.slice(buf, [0, 0, write_end, 0], [b, h, aligned_end, d])
+        pieces.append(suffix)
+
+    combined = ttnn.concat(pieces, dim=2) if len(pieces) > 1 else pieces[0]
+    ttnn.fill_cache(buf, combined, batch_idx=0, update_idx=aligned_start)
+    if len(pieces) > 1:
+        ttnn.deallocate(combined)
+    if prefix is not None:
+        ttnn.deallocate(prefix)
+    if suffix is not None:
+        ttnn.deallocate(suffix)
+
+
 def _write_seq_slice(buf: ttnn.Tensor, new_rows: ttnn.Tensor, offset: int, length: int) -> None:
     """Write ``new_rows`` (exactly ``length`` rows along the sequence axis, dim=2) into
     ``buf`` at [offset:offset+length], leaving every other row untouched -- an
@@ -234,7 +388,14 @@ def _write_seq_slice(buf: ttnn.Tensor, new_rows: ttnn.Tensor, offset: int, lengt
     generic: works for a per-layer K/V cache ([1,heads,seq,head_dim]) or any other
     [B,H,seq,D]-shaped persistent buffer. Runs eagerly (offset/length are only known
     after each iteration's own host-side accept decision), so plain python-int slice
-    bounds are fine -- see generate.py's module docstring."""
+    bounds are fine -- see generate.py's module docstring.
+
+    See ``_dflash_kv_fill_cache_enabled`` for a faster (``ttnn.fill_cache``-based)
+    opt-in alternative to this function's default slice/concat/full-buffer-copy path.
+    """
+    if _dflash_kv_fill_cache_enabled():
+        _write_seq_slice_fill_cache(buf, new_rows, offset, length)
+        return
     b, h, max_len, d = buf.shape
     pieces = []
     head = tail = None
@@ -358,7 +519,21 @@ def dflash_attention_forward(
     v_noise = ttnn.reshape(v_noise, [1, q_len, num_local_kv_heads, head_dim])
     v_noise = ttnn.transpose(v_noise, 1, 2)
 
-    k = ttnn.concat([k_cache, k_noise], dim=2)  # [1,num_local_kv_heads,ctx_len+q_len,head_dim]
+    if _dflash_pad_noise_concat_enabled():
+        # See _dflash_pad_noise_concat_enabled: ttnn.concat falls back to an
+        # untilize/splice/retile composite whenever either operand's row count
+        # isn't a TILE_HEIGHT (32) multiple -- block_size=16 guarantees that
+        # every call. Padding both operands up to 32 first lets concat take
+        # its native tile-aligned path. The padding rows are never attended
+        # to: attn_mask's caller (dflash_drafter_forward's mask_for) must pad
+        # its own key axis to the identical width with the same flag, or this
+        # concat's output width silently disagrees with attn_mask's last dim.
+        pad_len = _tile_pad_len(q_len) - q_len
+        if pad_len:
+            k_noise = ttnn.pad(k_noise, [(0, 0), (0, 0), (0, pad_len), (0, 0)], value=0.0)
+            v_noise = ttnn.pad(v_noise, [(0, 0), (0, 0), (0, pad_len), (0, 0)], value=0.0)
+
+    k = ttnn.concat([k_cache, k_noise], dim=2)  # [1,num_local_kv_heads,ctx_len+q_len(_padded),head_dim]
     v = ttnn.concat([v_cache, v_noise], dim=2)
     ttnn.deallocate(k_noise)
     ttnn.deallocate(v_noise)

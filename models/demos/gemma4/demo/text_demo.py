@@ -1620,7 +1620,18 @@ _LONG_CONTEXT_CASES = [
 ]
 
 
-@parametrize_mesh_with_fabric()
+@parametrize_mesh_with_fabric(
+    device_params_extra={
+        # CCL all_gather allocates semaphores in L1_SMALL when this is > 0 --
+        # without it, they fragment the main L1 pool. At the 1024-token
+        # prefill bucket this was observed to TT_THROW "Statically allocated
+        # circular buffers... clash with L1 buffers" during prefill warmup --
+        # a general Gemma4-31B TP=8 issue, not specific to any one demo (hit
+        # identically in dflash_fused_decoder_demo.py). Same fix/value as
+        # text_demo_v2.py's ``_device_params``.
+        "l1_small_size": int(os.environ.get("GEMMA4_L1_SMALL_SIZE", 24576)),
+    }
+)
 @pytest.mark.parametrize("prefill_len", _DEMO_PREFILL_LENGTHS, ids=[f"prefill_{b}" for b in _DEMO_PREFILL_LENGTHS])
 def test_demo(mesh_device, model_path, prefill_len, request):
     """Full model demo — runs on any multi-device mesh, parametrized over a
