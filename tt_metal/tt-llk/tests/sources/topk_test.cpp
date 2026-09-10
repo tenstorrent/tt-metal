@@ -243,7 +243,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int NUM_VALUE_TILES_PER_ROW = params.FULL_CT_DIM / NUM_STAGES;
 
     /* TOPK api constants. */
-    constexpr bool APPROX             = false;
+    constexpr bool APPROX = false;
+    // Fused-key stable mode packs [bf16|u16] keys and runs the plain UNSTABLE network on them.
+    constexpr bool NETWORK_STABLE_SORT = TOPK_STABLE_SORT && !TOPK_FUSED_STABLE;
+    constexpr bool TOPK_LARGEST        = (TOPK_SORT_DIRECTION == 0); // 0 = Descending / largest-first
+    static_assert(!(TOPK_FUSED_STABLE && TOPK_STABLE_SORT), "fused and comparator stable modes are mutually exclusive");
+    static_assert(!TOPK_FUSED_STABLE || is_fp32_dest_acc_en, "fused stable topk requires 32-bit DEST (dest_acc)");
+    static_assert(
+        !TOPK_FUSED_STABLE || TOPK_NUM_ITERATIONS == 1,
+        "fused stable topk covers single-iteration widths only (packed words must not round-trip L1 in this test)");
+    static_assert(!(TOPK_RANK_STAMPED && TOPK_STABLE_SORT), "rank-stamped and comparator stable modes are mutually exclusive");
+    static_assert(!(TOPK_RANK_STAMPED && TOPK_FUSED_STABLE), "rank-stamped and fused-key modes are mutually exclusive");
+    static_assert(!TOPK_RANK_STAMPED || is_fp32_dest_acc_en, "rank-stamped stable topk requires 32-bit DEST (dest_acc)");
+    static_assert(
+        !TOPK_RANK_STAMPED || TOPK_NUM_ITERATIONS == 1,
+        "rank-stamped stable topk covers single-iteration widths only in this test (the bf16 L1 round-trip between "
+        "iterations strips the tags a fresh-from-L1 rebuild would need; the ttnn pipeline re-stamps inside the merge "
+        "and moves value words through raw Float32 CBs instead)");
     constexpr std::uint32_t dst_index = 0;             // base DEST index for the 4-tile group.
     const int end_phase               = TOPK_LOGK - 1; // same as other TopK call sites.
     constexpr int start_phase         = 0;
@@ -259,7 +275,29 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // After Datacopy, we do topk SFPU.
     // These two calls are essentially the same as calling ckernel::llk_math_eltwise_unary_sfpu_topk_init<APPROX>(); from metal.
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::topk_local_sort>();
-    ckernel::sfpu::_init_topk();
+    if constexpr (TOPK_FUSED_STABLE)
+    {
+        // Fused keys carry the index inside the packed word: index tracking stays OFF.
+        ckernel::sfpu::_init_topk_fused_();
+    }
+    else if constexpr (TOPK_RANK_STAMPED)
+    {
+        // Rank tags ride the value words' lo16; the true indices keep riding index tracking.
+        ckernel::sfpu::_init_topk_rank_stamped_();
+    }
+    else
+    {
+        ckernel::sfpu::_init_topk();
+    }
+
+    if constexpr (TOPK_STABLE_SORT)
+    {
+        // Stable tie-break polarity is a global property of the sort order, set once per kernel
+        // (deliberately not reset by _init_topk). TOPK_SORT_DIRECTION binds to top_min/idir at
+        // the call sites below (0 = Descending / largest-first, 1 = Ascending), so descending
+        // mode is TOPK_SORT_DIRECTION == 0.
+        ckernel::sfpu::set_topk_stable_descending_mode(TOPK_SORT_DIRECTION == 0);
+    }
 
     for (int current_tile_row = 0; current_tile_row < NUM_TOPK_PIPELINE_EXECUTIONS; ++current_tile_row) // Iterates over tile_rows.
     {
@@ -317,6 +355,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                 } // Stage loop.
 
+                if constexpr (TOPK_FUSED_STABLE)
+                {
+                    // Pack [bf16 value | u16 index'] keys once per freshly loaded slab, with the
+                    // GLOBAL sort order's polarity; the network calls below run plain unstable on
+                    // the packed words.
+                    SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, calculate_topk_fuse, (APPROX, TOPK_LARGEST), dst_index, vector_mode);
+                }
+
+                if constexpr (TOPK_RANK_STAMPED)
+                {
+                    // Stamp the slab's value lo16 with sign-conditioned sequence positions (and
+                    // fold -0.0 into +0.0) so the unstable network below sorts distinct keys
+                    // whose tie order is the torch-stable index order; the merge re-stamps its
+                    // runs internally.
+                    SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, calculate_topk_stamp_local_positions, (APPROX, TOPK_LARGEST), dst_index, vector_mode);
+                }
+
                 // Pick the first operation.
                 if (first_iteration)
                 {
@@ -325,7 +380,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         dest_sync,
                         is_fp32_dest_acc_en,
                         calculate_bitonic_topk_phases_steps,
-                        (APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT),
+                        (APPROX, is_fp32_dest_acc_en, NETWORK_STABLE_SORT, TOPK_FUSED_STABLE, TOPK_RANK_STAMPED),
                         dst_index,
                         vector_mode,
                         TOPK_SORT_DIRECTION,
@@ -341,7 +396,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         dest_sync,
                         is_fp32_dest_acc_en,
                         calculate_bitonic_topk_rebuild,
-                        (APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT),
+                        (APPROX, is_fp32_dest_acc_en, NETWORK_STABLE_SORT, TOPK_FUSED_STABLE, TOPK_RANK_STAMPED),
                         dst_index,
                         vector_mode,
                         TOPK_SORT_DIRECTION,
@@ -356,7 +411,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     dest_sync,
                     is_fp32_dest_acc_en,
                     calculate_bitonic_topk_merge,
-                    (APPROX, is_fp32_dest_acc_en, TOPK_SORT_DIRECTION, TOPK_STABLE_SORT),
+                    (APPROX, is_fp32_dest_acc_en, TOPK_SORT_DIRECTION, NETWORK_STABLE_SORT, TOPK_FUSED_STABLE, TOPK_RANK_STAMPED),
                     dst_index,
                     vector_mode,
                     current_iteration,
@@ -370,7 +425,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         dest_sync,
                         is_fp32_dest_acc_en,
                         calculate_bitonic_topk_rebuild,
-                        (APPROX, is_fp32_dest_acc_en, TOPK_STABLE_SORT),
+                        (APPROX, is_fp32_dest_acc_en, NETWORK_STABLE_SORT, TOPK_FUSED_STABLE, TOPK_RANK_STAMPED),
                         dst_index,
                         vector_mode,
                         TOPK_SORT_DIRECTION,
@@ -378,6 +433,37 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         TOPK_K,
                         TOPK_LOGK,
                         1 /*skip_second*/);
+                }
+
+                if constexpr (TOPK_RANK_STAMPED)
+                {
+                    if (last_iteration)
+                    {
+                        // Clear the stale rank tags off the surviving value tile (DEST 0) so the
+                        // Float16_b pack is exact, and move the u16 indices (DEST 2) into the
+                        // packer-visible high half -- this harness carries u16 indices in 32-bit
+                        // DEST (#50215 layout); the ttnn path packs raw u32 index words instead.
+                        ckernel::sfpu::_topk_strip_rank_tags_(0);
+                        ckernel::sfpu::_topk_uint16_move_dest_tile_to_pack_half_(2);
+                    }
+                }
+
+                if constexpr (TOPK_FUSED_STABLE)
+                {
+                    if (last_iteration)
+                    {
+                        // Split the packed keys back into [bf16|0x0000] value words (DEST tiles
+                        // 0,1) and u16 indices (tiles 2,3). Mode-9 index store: the packer reads
+                        // UInt16 from the HIGH half of a 32-bit DEST word.
+                        SFPU_UNARY_CALL(
+                            dest_sync,
+                            is_fp32_dest_acc_en,
+                            calculate_topk_defuse,
+                            (APPROX, TOPK_LARGEST, ckernel::sfpu::TOPK_SFPSTORE_MODE_PACK_UINT16),
+                            dst_index,
+                            vector_mode,
+                            2 /*num_tiles*/);
+                    }
                 }
 
                 _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();

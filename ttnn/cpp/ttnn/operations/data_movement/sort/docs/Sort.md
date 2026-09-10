@@ -17,7 +17,7 @@ The operation returns both the sorted tensor and the indices representing the or
 - input_tensor (Tensor): The input tensor to be sorted.
 - dim (int, optional): The dimension along which to sort. Defaults to -1 (last dimension).
 - descending (bool, optional): If True, sorts in descending order. Defaults to False.
-- stable (bool, optional): If True, ensures stable sorting (preserves order of equal elements). Defaults to False. Note: Currently not supported.
+- stable (bool, optional): If True, ensures stable sorting (preserves order of equal elements, matching `torch.sort(stable=True)`). Defaults to False.
 - memory_config (MemoryConfig, optional): Specifies memory configuration for the output tensor. Defaults to None.
 - out (tuple of Tensors, optional): Preallocated tensors for the sorted values and indices. Defaults to None.
 
@@ -34,6 +34,8 @@ requires; users do not need to pre-format inputs.
 | -------- | ----------------------------- |
 | Values   | `bfloat16`, `float32`, `uint16` |
 | Indices  | `uint16`, `uint32` (auto-promoted to `uint32` when the sort dim ≥ 65 535) |
+
+**NaN input is unsupported (undefined ordering) for `bfloat16`.** The `bfloat16` datapath canonicalizes NaN to same-sign infinity before any comparison (measured on silicon: NaN merges into the `+inf`/`-inf` tie class), so NaN placement deviates from `torch.sort`'s NaN-last ordering in both values and indices. Callers who need torch NaN semantics must mask or replace NaNs before sorting.
 
 #### Supported layouts
 
@@ -63,7 +65,14 @@ Both `ROW_MAJOR` and `COL_MAJOR` shard orientations are accepted.
   layer transposes the chosen dim to the innermost position before invoking
   the kernel and reverses the transpose on output.
 - Logical shapes need not be tile-aligned; the composite layer pads with
-  ±∞ sentinels and slices back to the original size after sorting.
+  ±∞ sentinels and slices back to the original size after sorting. `uint16`
+  inputs have no ±inf: their pad sentinels are 65 535 (ascending) / 0
+  (descending), which are valid `uint16` values — full-range `uint16` inputs
+  containing the sentinel value may see incorrect indices for tied values at
+  the padded boundary.
+- Zero-size tensors (any dimension of size 0) early-exit with empty
+  values/indices of the input shape, matching `torch.sort`. Scalar and
+  dim-size-1 inputs early-exit with the input and zero indices.
 - The minimum effective sort dim is 2 tiles (64 elements). Smaller dims are
   padded up internally.
 
@@ -83,8 +92,32 @@ Both `ROW_MAJOR` and `COL_MAJOR` shard orientations are accepted.
 - `descending` (bool): ascending (default) or descending order.
 - `memory_config` (optional): output memory config when `out=` is omitted.
   Defaults to the input's memory config.
-- `stable` (bool): **not supported** in this implementation. Passing
-  `stable=True` raises a `TT_FATAL` error.
+- `stable` (bool): preserve the original (ascending-index) order of equal
+  elements, matching `torch.sort(stable=True)`. Implemented in all three
+  program factories by the index-aware comparator-stable network: on exact
+  value ties each compare-exchange also compare-exchanges the paired index
+  tiles, with the tie-break polarity programmed once from the *global* sort
+  order (never the per-block bitonic direction). Roughly doubles the SFPU
+  cost of each compare-exchange; the data-movement-heavy phases of sort are
+  unaffected.
+
+#### Unstable index contract (`stable=False`)
+
+- Unstable indices are a valid per-row permutation: gathering the input by
+  the returned indices reproduces the sorted values, and no index repeats or
+  leaves the logical range. Known exception: on the MultiCore DRAM factory,
+  wide `float32` descending sorts can still emit padding indices past the
+  logical row (issue #53326). The CrossCore factory runs the
+  index-aware comparator for **both** stabilities (issue #54043: the raw
+  positional tie decision was not consistent between the two cores sharing a
+  spanning tile pair, so ties could duplicate indices) — its unstable output
+  is therefore exactly the torch-stable permutation. The single-core and
+  MultiCore-DRAM factories decide ties within one instruction stream and
+  never had the hazard.
+- One observable side effect on the CrossCore path: `float32` values are
+  canonicalized `-0.0` → `+0.0` on entry (the comparator's 32-bit-DEST tie
+  sweep, previously applied only under `stable=True`). Numerically equal;
+  bit-exact consumers of signed zeros (`copysign`, `1/x`) see `+0.0`.
 
 ## Tensor Transformations
 
