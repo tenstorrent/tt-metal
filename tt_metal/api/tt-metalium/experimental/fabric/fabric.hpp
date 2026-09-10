@@ -115,6 +115,11 @@ uint32_t append_routing_plane_connection_manager_rt_args(
 std::vector<uint32_t> get_forwarding_link_indices(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id);
 
+// returns the logical ethernet core on src that link_idx forwards through toward dst, for a link index
+// from get_forwarding_link_indices
+tt::tt_metal::CoreCoord get_forwarding_eth_core(
+    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, uint32_t link_idx);
+
 FabricNodeId get_fabric_node_id_from_physical_chip_id(ChipId physical_chip_id);
 
 std::vector<chan_id_t> get_active_fabric_eth_routing_planes_in_direction(
@@ -141,7 +146,7 @@ struct FabricEriscDatamoverKernelConfig {
 tt::tt_metal::KernelHandle generate_erisc_datamover_kernel(const FabricEriscDatamoverKernelConfig& edm_kernel_config);
 
 /**
- * Call before CreateDevices to enable fabric, which uses the specified number of routing planes.
+ * Call before creating unit meshes to enable fabric with the specified number of routing planes.
  * Currently, setting num_routing_planes dictates how many routing planes the fabric should be active on
  * for that init sequence. The number of routing planes fabric will be initialized on will be the max
  * of all the values specified by different clients. If a client wants to initialize fabric on all the

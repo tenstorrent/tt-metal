@@ -9,7 +9,13 @@ import torch
 import ttnn
 from models.common.utility_functions import is_blackhole
 
-from ..utils.matmul import get_fabric_agmm_config, get_fused_mmrs_config, get_matmul_config, get_matmul_core_grid
+from ..utils.matmul import (
+    get_agmm_config,
+    get_fabric_agmm_config,
+    get_fused_mmrs_config,
+    get_matmul_config,
+    get_matmul_core_grid,
+)
 from ..utils.tensor import prepare_for_fused_swiglu
 from .module import Module, Parameter
 
@@ -348,6 +354,7 @@ class ColParallelLinear(Module):
         addcmul_scalar: float = 1.0,
         core_grid=None,
         use_heuristic_mmcfg=False,
+        force_transpose: bool = True,
     ) -> ttnn.Tensor | list[ttnn.Tensor]:
         """
         Expects x to be replicated.
@@ -356,8 +363,7 @@ class ColParallelLinear(Module):
 
         `addcmul_a` / `addcmul_b` fuse a gated residual into the matmul epilogue, returning
         `addcmul_a + addcmul_scalar * matmul_result * addcmul_b`. Both must already be at the
-        per-TP-device output slice. Only the all-gather-matmul path supports it, so it requires
-        `parallel_config`; callers on the unfused path should apply the addcmul themselves.
+        per-TP-device output slice, and require `parallel_config`.
         """
         if addcmul_a is not None or addcmul_b is not None:
             if (addcmul_a is None) != (addcmul_b is None):
@@ -400,8 +406,26 @@ class ColParallelLinear(Module):
             if fabric_cfg is not None and self.chunks in (None, 1) and has_unit_batch and addcmul_a is None:
                 return self._forward_fabric_agmm(x, weight, fabric_cfg, parallel_config, compute_kernel_config, dtype)
 
-            core_grid = core_grid or ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
-            matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size, use_heuristic=use_heuristic_mmcfg)
+            # The op transposes the core grid when force_transpose is set or the output is wide
+            # (M > N), and puts its in0 muxes on whichever axis the worker grid leaves free -- so
+            # the grid has to reserve the matching one (row when transposed, column when not).
+            # get_agmm_config resolves grid, blocking and workers together: an explicit core_grid /
+            # default_block_size and swept (M, K, N) table entries keep the legacy derivation,
+            # unswept shapes go through the v3 rule engine (see utils/agmm_rules.py).
+            core_grid, matmul_config, num_workers_per_link = get_agmm_config(
+                M,
+                K,
+                N,
+                full_grid=full_grid,
+                cluster_size=parallel_config.tensor_parallel.factor,
+                num_links=self.ccl_manager.num_links,
+                core_grid=core_grid,
+                default_block_size=default_block_size,
+                use_heuristic=use_heuristic_mmcfg,
+                fuse_swiglu=self.fuse_swiglu,
+                use_addcmul=addcmul_a is not None,
+                force_transpose=force_transpose,
+            )
 
             ag_persistent_buffer = self.ccl_manager.get_ag_ping_pong_buffer(
                 x.shape, -1, parallel_config.tensor_parallel.mesh_axis, dtype=x.get_dtype()
@@ -422,7 +446,8 @@ class ColParallelLinear(Module):
                 topology=self.ccl_manager.topology,
                 cluster_axis=parallel_config.tensor_parallel.mesh_axis,
                 barrier_semaphore=None,
-                num_workers_per_link=full_grid.x // self.ccl_manager.num_links,
+                force_transpose=force_transpose,
+                num_workers_per_link=num_workers_per_link,
                 num_buffers_per_channel=48 if not is_blackhole() else 24,
                 chunks=self.chunks if self.chunks is not None else 1,
                 # Op's N is per-device, so pass per-device widths (each global width is % TP == 0).
@@ -465,17 +490,36 @@ class ColParallelLinear(Module):
                     fuse_swiglu=self.fuse_swiglu,
                 )
                 return [_apply_activation_fn(o, self.activation_fn) for o in outputs]
-            matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
-            output = ttnn.experimental.minimal_matmul(
-                input_tensor=x,
-                weight_tensor=weight,
-                bias_tensor=self.bias.data if self.bias is not None else None,
-                config=matmul_config,
-                fused_activation=self.fused_activation_fn,
-                compute_kernel_config=compute_kernel_config or self.compute_config,
-                dtype=dtype,
-                fuse_swiglu=self.fuse_swiglu,
-            )
+            if addcmul_a is not None:
+                # This op has no fused-activation support, so reject the combination rather
+                # than compute the wrong thing.
+                if self.fused_activation_fn is not None or self.fuse_swiglu:
+                    msg = "fused addcmul is not supported alongside a fused activation on the minimal_matmul path"
+                    raise ValueError(msg)
+                matmul_config = get_matmul_config(M, x.padded_shape[-1], N, core_grid, default_block_size)
+                output = ttnn.experimental.dit_minimal_matmul_addcmul_fused(
+                    x,
+                    weight,
+                    addcmul_scalar,
+                    addcmul_a,
+                    addcmul_b,
+                    bias_tensor=self.bias.data if self.bias is not None else None,
+                    config=matmul_config,
+                    compute_kernel_config=compute_kernel_config or self.compute_config,
+                    dtype=dtype,
+                )
+            else:
+                matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
+                output = ttnn.experimental.minimal_matmul(
+                    input_tensor=x,
+                    weight_tensor=weight,
+                    bias_tensor=self.bias.data if self.bias is not None else None,
+                    config=matmul_config,
+                    fused_activation=self.fused_activation_fn,
+                    compute_kernel_config=compute_kernel_config or self.compute_config,
+                    dtype=dtype,
+                    fuse_swiglu=self.fuse_swiglu,
+                )
 
         return _apply_activation_fn(output, self.activation_fn)
 
@@ -660,14 +704,24 @@ class RowParallelLinear(Module):
         _, rs_output_buffer = self.ccl_manager.get_rs_ping_pong_buffer(
             pre_rs_shape, 3, self.mesh_axis, return_intermediate=False
         )
+        # The MM output is scratch here (only the RS output is returned), so hand it to the RS
+        # through the rolling L1 window instead of a DRAM round-trip whenever the blocking config
+        # carries a window (the default). The window bounds the resident shard, and the credit
+        # array is the RS->MM return path that lets the matmul recycle window slots. A config
+        # with mm_window_blocks=None opts out and falls back to self.mm_memory_config (the op
+        # rejects an L1 MM output without a window).
+        mmrs_params = get_fused_mmrs_config(M, K, N, core_grid, self.ccl_manager.num_links)
+        use_l1_handoff = mmrs_params["mm_window_blocks"] is not None
         _, output = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
             input_tensor=[x, x_second] if x_second is not None else x,
             weight_tensor=weight,
             dim=3,
             multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore(self.mesh_axis),
-            **get_fused_mmrs_config(M, K, N, core_grid, self.ccl_manager.num_links),
+            **mmrs_params,
             bias=self.bias.data if self.bias is not None else None,
-            memory_config_mm=self.mm_memory_config,
+            memory_config_mm=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+            if use_l1_handoff
+            else self.mm_memory_config,
             rs_intermediate_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             rs_output_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             topology=self.ccl_manager.topology,
@@ -680,6 +734,7 @@ class RowParallelLinear(Module):
             addcmul_input_tensor2=addcmul_b,
             dtype=dtype,
             mm_progress_counters=self.ccl_manager.get_mm_progress_counters_buffer(),
+            mm_credit_counters=self.ccl_manager.get_mm_credit_counters_buffer() if use_l1_handoff else None,
         )
         if needs_reshape:
             output = ttnn.squeeze(output, 0)

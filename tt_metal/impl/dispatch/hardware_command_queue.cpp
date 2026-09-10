@@ -29,22 +29,22 @@ HWCommandQueue::HWCommandQueue(Device* device, uint32_t id, NOC /*noc_index*/) :
     id_(id), manager_(device->sysmem_manager()), device_(device) {
     TTZoneScopedDN(DISPATCH, "CommandQueue_constructor");
 
-    uint16_t channel =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
+    MetalContext& metal_ctx = MetalContext::instance(device_->get_context_id());
+    uint16_t channel = metal_ctx.get_cluster().get_assigned_channel_for_device(device_->id());
 
     CoreCoord enqueue_program_dispatch_core;
-    CoreType core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-    if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
+    CoreType core_type = metal_ctx.get_dispatch_core_manager().get_dispatch_core_type();
+    if (metal_ctx.get_dispatch_query_manager().dispatch_s_enabled()) {
         // dispatch_s exists with this configuration. Workers write to dispatch_s.
         enqueue_program_dispatch_core =
-            MetalContext::instance().get_dispatch_core_manager().dispatcher_s_core(device_->id(), channel, id);
+            metal_ctx.get_dispatch_core_manager().dispatcher_s_core(device_->id(), channel, id);
     } else {
         if (device_->is_mmio_capable()) {
             enqueue_program_dispatch_core =
-                MetalContext::instance().get_dispatch_core_manager().dispatcher_core(device_->id(), channel, id);
+                metal_ctx.get_dispatch_core_manager().dispatcher_core(device_->id(), channel, id);
         } else {
             enqueue_program_dispatch_core =
-                MetalContext::instance().get_dispatch_core_manager().dispatcher_d_core(device_->id(), channel, id);
+                metal_ctx.get_dispatch_core_manager().dispatcher_d_core(device_->id(), channel, id);
         }
     }
     this->virtual_enqueue_program_dispatch_core_ =

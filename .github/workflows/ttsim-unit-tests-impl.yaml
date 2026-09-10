@@ -25,6 +25,15 @@ on:
         required: false
         type: boolean
         default: false
+      summary-scope:
+        required: false
+        type: string
+        default: ""
+        description: "Discriminator for the AI summaries when the calling workflow is invoked more than once per run"
+    outputs:
+      matrix:
+        description: "Filtered matrix of legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)"
+        value: ${{ jobs.load-test-matrix.outputs.matrix }}
 
 jobs:
   load-test-matrix:
@@ -150,12 +159,31 @@ jobs:
           sku: ${{ matrix.test-group.sku }}
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        run: |
-          ${{ matrix.test-group.cmd }}
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: generated/test_logs/${{ matrix.test-group.name }}.log
+          run: |
+            ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
+      - name: 🤖 AI job summary
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE/docker-job",
+              "input_dirs": ["generated/test_logs"],
+              "output_dir": "generated/ai_summaries",
+              "scope": "${{ inputs.summary-scope }}"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          job-name: ${{ matrix.test-group.name }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

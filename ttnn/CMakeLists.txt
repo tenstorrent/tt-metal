@@ -34,7 +34,7 @@ target_link_libraries(
         fmt::fmt-header-only
 )
 target_include_directories(ttnn_pch_lean PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/api)
-# tt_disable_ccache_for_pch already applied to TT::CommonPCH in root CMakeLists.txt.
+# tt_configure_ccache_for_pch already applied to TT::CommonPCH in root CMakeLists.txt.
 
 # ── Full PCH: lean + volatile TT headers — for targets with device operations ──
 # Invalidated on any TT::Metalium change; only use for targets that actually
@@ -74,8 +74,8 @@ target_link_libraries(
         fmt::fmt-header-only
 )
 target_include_directories(ttnn_pch_full PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/api)
-if(COMMAND tt_disable_ccache_for_pch)
-    tt_disable_ccache_for_pch(ttnn_pch_full)
+if(COMMAND tt_configure_ccache_for_pch)
+    tt_configure_ccache_for_pch(ttnn_pch_full)
 endif()
 
 # NOTE: Legacy TTNN::PCH alias removed — all consumers migrated to PCHLean or PCHFull.
@@ -99,6 +99,7 @@ add_library(TTNN::Core ALIAS ttnn_core)
 TT_ENABLE_UNITY_BUILD(ttnn_core)
 
 target_compile_definitions(ttnn_core PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
+target_compile_definitions(ttnn_core PRIVATE "TT_METAL_BUILD_TYPE=\"$<CONFIG>\"")
 
 # Descriptor cache-hit fast-path parity check (opt-in via -DENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK).
 # The #ifdef lives in ttnn/api/ttnn/mesh_device_operation_adapter.hpp, so scope the definition to the
@@ -153,7 +154,11 @@ target_include_directories(
         api/ttnn
         core
         cpp # FIXME: Depend on the Ops needed (make the circular obvious)
+        ${PROJECT_BINARY_DIR}/generated
 )
+if(TARGET tt_metal_version_header)
+    add_dependencies(ttnn_core tt_metal_version_header)
+endif()
 target_include_directories(ttnn_core SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)
 target_link_libraries(
     ttnn_core

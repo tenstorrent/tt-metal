@@ -24,11 +24,13 @@ on:
           - gemma-4-26b-a4b
           - gemma-4-31b
           - dit-common
+          - dit-encoders
           - wan-2.2-t2v
           - wan-2.2-i2v
           - llama3.3-70b-galaxy
           - flux.1-schnell
           - flux.1-dev
+          - flux.2-dev
           - ltx-2.3
           - z-image-turbo
           - resnet50
@@ -50,9 +52,9 @@ on:
           - "bh_p300 (P300)"
           - "bh_quietbox_2 (BH QB2)"
           - "bh_galaxy (BH Galaxy)"
-          # Exabox multihost SKUs - routed to the models-unit-tests-multihost job. Dispatch-only:
-          # deliberately excluded from the scheduled ALL_SKUS set so cron runs don't allocate
-          # scarce exabox hardware.
+          # Exabox multihost SKUs - routed to the models-unit-tests-multihost job. bh_sc1 and
+          # bh_sc4 are in the scheduled ALL_SKUS set; bh_sc16 stays dispatch-only so cron never
+          # allocates the scarcest exabox hardware.
           - "bh_sc1 (BH Single Galaxy)"
           - "bh_sc4 (BH Supercluster 4)"
           - "bh_sc16 (BH Supercluster 16)"
@@ -104,7 +106,7 @@ jobs:
       - name: Resolve SKU and model selection
         id: resolve
         run: |
-          ALL_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf,bh_p150,bh_p300,bh_quietbox_2,bh_galaxy,bh_sc4"
+          ALL_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf,bh_p150,bh_p300,bh_quietbox_2,bh_galaxy,bh_sc1,bh_sc4"
           EVENT="${{ github.event_name }}"
           if [[ "$EVENT" == "workflow_dispatch" ]]; then
             SKU_INPUT="${{ inputs.sku || 'all' }}"

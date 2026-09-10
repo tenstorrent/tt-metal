@@ -38,8 +38,8 @@ target_link_libraries(
         test_common_libs
         TTNN::CPP
 )
-if(COMMAND tt_disable_ccache_for_pch)
-    tt_disable_ccache_for_pch(ttnn_test_pch)
+if(COMMAND tt_configure_ccache_for_pch)
+    tt_configure_ccache_for_pch(ttnn_test_pch)
 endif()
 
 add_library(test_common_utils STATIC)

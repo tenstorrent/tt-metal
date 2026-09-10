@@ -57,8 +57,8 @@ target_precompile_headers(
         ${PROJECT_SOURCE_DIR}/tt_metal/llrt/tt_cluster.hpp
 )
 target_link_libraries(metal_test_pch PRIVATE test_common_libs)
-if(COMMAND tt_disable_ccache_for_pch)
-    tt_disable_ccache_for_pch(metal_test_pch)
+if(COMMAND tt_configure_ccache_for_pch)
+    tt_configure_ccache_for_pch(metal_test_pch)
 endif()
 
 if(TT_METAL_BUILD_TESTS)

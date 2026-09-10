@@ -23,6 +23,7 @@ from models.common.llm_runtime.tensor_resources import (
     TensorResourceOrphan,
     attach_cleanup_failures,
     best_effort_deallocate_owned_tensors,
+    raise_cleanup_failures,
     release_orphans,
 )
 
@@ -90,10 +91,14 @@ class TraceCapturePlan:
     schema_fingerprint: Any = None
     prepare_workspace: Callable[[], Any] | None = None
     workspace_fingerprint: Any = None
+    prime: Callable[[PersistentInputs], Any] | None = None
+    release_prime_output: Callable[[Any], list[BaseException]] | None = None
 
     def __post_init__(self) -> None:
         if self.operation not in ("prefill", "decode"):
             raise ValueError(f"Unsupported trace operation: {self.operation!r}")
+        if (self.prime is None) is not (self.release_prime_output is None):
+            raise ValueError("trace capture prime and output releaser must be configured together")
 
 
 @dataclass
@@ -258,7 +263,6 @@ class TraceCompiler:
 
         prepared: dict[TraceKey, tuple[PersistentInputs, TraceCapturePlan]] = {}
         captured_keys: set[TraceKey] = set()
-        self.program_compiler.set_trace_capture_in_progress(True)
         self._capture_in_progress = True
         try:
             for trace_key, plan in self._plans.items():
@@ -278,21 +282,42 @@ class TraceCompiler:
             for trace_key in capture_order:
                 persistent, plan = prepared[trace_key]
                 record = self._traces[trace_key]
+                # Program signatures intentionally describe padded trace
+                # identity, not active-row cardinality. Selected operation
+                # plans therefore prime their exact persistent-input body
+                # immediately before capturing that same body. No unrelated
+                # trace can perturb allocator/program state between the prime
+                # and ``begin_trace_capture``.
+                if plan.prime is not None:
+                    prime_output = None
+                    try:
+                        prime_output = plan.prime(persistent)
+                        ttnn.synchronize_device(self.mesh_device)
+                    except BaseException as primary:
+                        cleanup_failures = plan.release_prime_output(prime_output)
+                        try:
+                            ttnn.synchronize_device(self.mesh_device)
+                        except BaseException as error:
+                            cleanup_failures.append(error)
+                        attach_cleanup_failures(primary, cleanup_failures)
+                        raise
+                    release_failures = plan.release_prime_output(prime_output)
+                    try:
+                        ttnn.synchronize_device(self.mesh_device)
+                    except BaseException as error:
+                        release_failures.append(error)
+                    if release_failures:
+                        raise_cleanup_failures(release_failures)
+                    logger.info(f"Primed {plan.operation} trace capture body: signature={plan.trace_signature!r}")
+
+                self.program_compiler.set_trace_capture_in_progress(True)
                 trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
                 outputs = None
-                capture_ended = False
                 try:
                     outputs = plan.capture(persistent)
                     ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
-                    capture_ended = True
                     ttnn.synchronize_device(self.mesh_device)
                 except BaseException as primary:
-                    cleanup_failures = []
-                    if not capture_ended:
-                        try:
-                            ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
-                        except BaseException as error:
-                            cleanup_failures.append(error)
                     record.artifact = TraceArtifact(
                         trace_id=trace_id,
                         persistent_inputs=persistent,
@@ -300,8 +325,7 @@ class TraceCompiler:
                         refresh_policy=plan.refresh_policy,
                     )
                     captured_keys.add(trace_key)
-                    cleanup_failures.extend(self._release_trace(record))
-                    attach_cleanup_failures(primary, cleanup_failures)
+                    attach_cleanup_failures(primary, self._release_trace(record))
                     raise
                 record.artifact = TraceArtifact(
                     trace_id=trace_id,
@@ -309,8 +333,9 @@ class TraceCompiler:
                     outputs=outputs,
                     refresh_policy=plan.refresh_policy,
                 )
-                logger.info(f"Captured {plan.operation} trace")
+                logger.info(f"Captured {plan.operation} trace: signature={plan.trace_signature!r}")
                 captured_keys.add(trace_key)
+                self.program_compiler.set_trace_capture_in_progress(False)
 
             ttnn.synchronize_device(self.mesh_device)
             self._capture_in_progress = False

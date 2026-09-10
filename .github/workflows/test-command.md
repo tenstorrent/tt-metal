@@ -98,6 +98,10 @@ pre-agent-steps:
       PR_NUMBER: ${{ github.event.issue.number }}
       EXPR_GITHUB_REPOSITORY: ${{ github.repository }}
       PR_DIFF_MAX_LINES: "3000"
+      # Passed as an environment variable, never interpolated into the script body:
+      # the comment is attacker-controlled text and ${{ }} inside `run:` is a shell
+      # injection. Used only to record the *Mandatory selections* opt-out as a fact.
+      COMMENT_BODY: ${{ github.event.comment.body }}
     run: |
       set -euo pipefail
       mkdir -p /tmp/gh-aw/agent
@@ -175,6 +179,20 @@ pre-agent-steps:
       printf '%s\n' "$HEAD_REF" > "$FACTS_DIR/pr-head-ref.txt"
       printf '%s\n' "$IS_FORK"  > "$FACTS_DIR/pr-is-fork.txt"
 
+      # Same reasoning for the changed-file list: the enforcement step derives the
+      # mandatory nightly categories from it, so it must be the host's copy and not
+      # one the agent could have rewritten.
+      cp /tmp/gh-aw/agent/pr-files.txt "$FACTS_DIR/pr-files.txt"
+
+      # The *Mandatory selections* opt-out (`/test skip nightly`) is a prompt rule, so
+      # record whether it was asked for as a fact too — otherwise enforcing the rule
+      # would mean trusting the agent's own account of whether it was waived.
+      if printf '%s' "${COMMENT_BODY:-}" | grep -qiE 'skip[[:space:]]+nightly'; then
+        printf 'true\n' > "$FACTS_DIR/nightly-optout.txt"
+      else
+        printf 'false\n' > "$FACTS_DIR/nightly-optout.txt"
+      fi
+
       echo "PR #${PR_NUMBER}: head=${HEAD_REF} fork=${IS_FORK} files=$(wc -l < /tmp/gh-aw/agent/pr-files.txt) diff_lines=$(wc -l < /tmp/gh-aw/agent/pr-diff.patch)"
 
 # Deterministic enforcement of *The ref rule* (see the prompt below). The rule is
@@ -200,7 +218,7 @@ pre-agent-steps:
 # agent sandbox cannot write (see the pre-agent step): the /tmp/gh-aw copies exist
 # only as model context and are treated as untrusted here.
 post-steps:
-  - name: Enforce PR head ref on dispatch_workflow items
+  - name: Enforce dispatch ref and mandatory nightly categories
     if: always()
     run: |
       set -euo pipefail
@@ -222,7 +240,7 @@ post-steps:
         echo '{"items":[]}' > "$OUT" || true
       }
       finish_ok=0
-      trap '[ "$finish_ok" = 1 ] || { echo "::error::Ref enforcement did not complete; discarding all safe-output items." >&2; neutralize; }' EXIT
+      trap '[ "$finish_ok" = 1 ] || { echo "::error::Dispatch enforcement did not complete; discarding all safe-output items." >&2; neutralize; }' EXIT
 
       # gh-aw's placeholder step (which writes '{"items":[]}' when the agent
       # produced nothing) runs before post-steps, so this file normally exists
@@ -274,6 +292,105 @@ post-steps:
       mv "$OUT.tmp" "$OUT"
       echo "dispatch_workflow refs as emitted by the agent: $BEFORE"
       echo "All dispatch_workflow items now target: $HEAD_REF"
+
+      # Deterministic enforcement of *Mandatory selections*. Same failure mode as the
+      # ref rule above: the path -> category table is executed by a model, so a change
+      # under an op directory can still come back with no tt-metal-l2-nightly dispatch
+      # at all, or with one naming only the first category it matched. Recompute the
+      # required set here from the host-owned changed-file list and merge it in, so the
+      # prompt table is a description of what happens rather than a request.
+      FILES_FILE="$FACTS_DIR/pr-files.txt"
+      OPTOUT="$(cat "$FACTS_DIR/nightly-optout.txt" 2>/dev/null || echo unknown)"
+
+      if [ "$OPTOUT" = "true" ]; then
+        echo "Comment asked to skip nightly; leaving tt-metal-l2-nightly selection to the agent."
+      elif [ ! -s "$FILES_FILE" ]; then
+        # An empty list means the pre-agent step changed shape; the diff is never
+        # genuinely empty on a PR. Fail into the EXIT trap rather than conclude
+        # "no categories required" from missing data.
+        echo "::error::pr-files.txt is missing or empty; cannot enforce nightly categories." >&2
+        exit 1
+      else
+        # One row per row of the prompt's path -> category table, in the same order.
+        # Emitted in a fixed order so the input string is stable across runs.
+        REQ="$(awk '
+          /^ttnn\/cpp\/ttnn\/operations\/eltwise\//                     { c["eltwise"]=1 }
+          /^tests\/ttnn\/(nightly\/)?unit_tests\/operations\/eltwise\// { c["eltwise"]=1 }
+          /^ttnn\/cpp\/ttnn\/operations\/(data_movement|copy|index_fill|point_to_point)\// { c["data_movement"]=1 }
+          /^tests\/ttnn\/(nightly\/)?unit_tests\/operations\/(data_movement|point_to_point)\// { c["data_movement"]=1 }
+          /^ttnn\/cpp\/ttnn\/operations\/(conv|sliding_window)\//        { c["conv"]=1 }
+          /^tests\/ttnn\/nightly\/unit_tests\/operations\/conv\//       { c["conv"]=1 }
+          /^ttnn\/cpp\/ttnn\/operations\/matmul\//                       { c["matmul"]=1 }
+          /^tests\/ttnn\/nightly\/unit_tests\/operations\/matmul\//     { c["matmul"]=1 }
+          /^ttnn\/cpp\/ttnn\/operations\/pool\//                         { c["pool"]=1 }
+          /^tests\/ttnn\/nightly\/unit_tests\/operations\/pool\//       { c["pool"]=1 }
+          /^ttnn\/cpp\/ttnn\/operations\/reduction\//                    { c["reduction"]=1 }
+          /^tests\/ttnn\/nightly\/unit_tests\/operations\/reduction\//  { c["reduction"]=1 }
+          /^ttnn\/cpp\/ttnn\/operations\/normalization\//                { c["fused"]=1 }
+          /^tests\/ttnn\/nightly\/unit_tests\/operations\/fused\//      { c["fused"]=1 }
+          /^ttnn\/cpp\/ttnn\/operations\/transformer\/sdpa/              { c["sdpa"]=1; next }
+          /^tests\/ttnn\/nightly\/unit_tests\/operations\/sdpa\//       { c["sdpa"]=1; next }
+          /^ttnn\/cpp\/ttnn\/operations\/(transformer|kv_cache)\//       { c["transformers"]=1 }
+          /^tests\/ttnn\/nightly\/unit_tests\/operations\/transformers\// { c["transformers"]=1 }
+          /^ttnn\/cpp\/ttnn\/operations\/ccl\//                          { c["ccl"]=1 }
+          /^tests\/(ttnn\/unit_tests\/operations|nightly\/tg)\/ccl\//   { c["ccl"]=1 }
+          /^ttnn\/cpp\/ttnn\/operations\/moreh\//                        { c["moreh"]=1 }
+          /^tests\/ttnn\/nightly\/unit_tests\/operations\/moreh\//      { c["moreh"]=1 }
+          /^ttnn\/cpp\/ttnn\/operations\/experimental\//                 { c["experimental"]=1 }
+          /^tests\/ttnn\/nightly\/unit_tests\/operations\/experimental\// { c["experimental"]=1 }
+          /^ttnn\/cpp\/ttnn\/operations\/(rand|randn|uniform|bernoulli)\// { c["misc"]=1 }
+          /^tests\/ttnn\/nightly\/unit_tests\/operations\/(rand|ssm)\// { c["misc"]=1 }
+          /^ttnn\/cpp\/ttnn\/kernel_lib\//                                { c["kernel_lib"]=1 }
+          /^tests\/ttnn\/unit_tests\/kernel_lib\//                        { c["kernel_lib"]=1 }
+          END {
+            n = split("eltwise data_movement conv matmul pool reduction fused transformers sdpa ccl moreh experimental misc kernel_lib", order, " ")
+            out = ""
+            for (i = 1; i <= n; i++) if (order[i] in c) out = out (out == "" ? "" : ",") order[i]
+            print out
+          }' "$FILES_FILE")"
+
+        if [ -z "$REQ" ]; then
+          echo "No changed path maps to an l2-nightly op category; nothing to enforce."
+        else
+          BEFORE_CATS="$(jq -r '[.items[]? | select(.type == "dispatch_workflow" and .workflow_name == "tt-metal-l2-nightly") | (.inputs.additional_test_categories // "MISSING")] | @json' "$OUT")"
+          # Merge rather than overwrite: the agent may legitimately have added a
+          # category the table does not cover (docs_examples, cpp_accessor, ...).
+          # `unique` also collapses a duplicated or reordered list to one canonical form.
+          jq --arg ref "$HEAD_REF" --arg cats "$REQ" '
+            def merged(existing):
+              ((existing // "") | split(",") | map(select(length > 0)))
+              + ($cats | split(","))
+              | unique | join(",");
+            if ([.items[]? | select(.type == "dispatch_workflow" and .workflow_name == "tt-metal-l2-nightly")] | length) > 0
+            then .items = [ .items[]?
+                   | if .type == "dispatch_workflow" and .workflow_name == "tt-metal-l2-nightly"
+                     then .inputs = ((.inputs // {}) + {additional_test_categories: merged(.inputs.additional_test_categories)})
+                     else . end ]
+            else .items += [{type: "dispatch_workflow", workflow_name: "tt-metal-l2-nightly", ref: $ref,
+                             inputs: {additional_test_categories: ($cats | split(",") | unique | join(","))}}]
+            end' "$OUT" > "$OUT.tmp"
+          mv "$OUT.tmp" "$OUT"
+
+          # The cap is applied at ingestion, which has already run — an injected item
+          # can therefore push the count to 9. Trim the agent's own selection rather
+          # than the mandatory one, keeping its order, and say which ones went.
+          DISPATCHES="$(jq '[.items[]? | select(.type == "dispatch_workflow")] | length' "$OUT")"
+          if [ "$DISPATCHES" -gt 8 ]; then
+            DROPPED="$(jq -c '[.items[]? | select(.type == "dispatch_workflow" and .workflow_name != "tt-metal-l2-nightly") | .workflow_name][7:]' "$OUT")"
+            echo "::warning::Mandatory tt-metal-l2-nightly dispatch pushed the selection to ${DISPATCHES}; dropped ${DROPPED} to stay within the cap of 8."
+            jq '
+              ([.items[]? | select(.type == "dispatch_workflow" and .workflow_name != "tt-metal-l2-nightly")][:7]) as $others
+              | ([.items[]? | select(.type == "dispatch_workflow" and .workflow_name == "tt-metal-l2-nightly")]) as $required
+              | .items = ([.items[]? | select(.type != "dispatch_workflow")] + $others + $required)' "$OUT" > "$OUT.tmp"
+            mv "$OUT.tmp" "$OUT"
+          fi
+
+          echo "Required nightly categories from changed paths: $REQ"
+          echo "additional_test_categories as emitted by the agent: $BEFORE_CATS"
+          echo "additional_test_categories after enforcement: $(jq -r '[.items[]? | select(.type == "dispatch_workflow" and .workflow_name == "tt-metal-l2-nightly") | .inputs.additional_test_categories] | @json' "$OUT")"
+        fi
+      fi
+
       finish_ok=1
 
 safe-outputs:
@@ -296,9 +413,6 @@ safe-outputs:
 
       - galaxy-profiler-tests
       - galaxy-multi-user-isolation-tests
-      - galaxy-deepseek-tests
-      - galaxy-perf-tests
-      - galaxy-demo-tests
       - galaxy-unit-tests
       - galaxy-integration-tests
       - galaxy-stress-tests
@@ -442,6 +556,55 @@ match that reality: never describe a pipeline as dispatched on a fork PR.
    catch a regression in what changed. Ask of each candidate: *if this change is broken,
    would this pipeline fail?* If you cannot answer yes, drop it.
 
+   **Mandatory selections.** The path rules below are not judgement calls; when a rule
+   matches, the pipeline it names is always dispatched with the inputs it specifies, on
+   top of whatever else you select. Count it toward the cap of 8.
+
+   `tt-metal-l2-nightly` is mandatory whenever the diff reaches an op family that has an
+   `additional_test_categories` selector. Match **every** row of the table below against the
+   changed paths, collect the categories of all rows that match, and dispatch the pipeline
+   **once** with them comma-joined. A PR touching both
+   `ttnn/cpp/ttnn/operations/eltwise/**` and `ttnn/cpp/ttnn/operations/data_movement/**`
+   gets `additional_test_categories: eltwise,data_movement` — one dispatch carrying two
+   categories, not two dispatches, and not just the first row that matched.
+
+   | If any changed path matches — op implementation (C++ or kernels) | …or tests | Category |
+   |---|---|---|
+   | `ttnn/cpp/ttnn/operations/eltwise/**` | `tests/ttnn/unit_tests/operations/eltwise/**`, `tests/ttnn/nightly/unit_tests/operations/eltwise/**` | `eltwise` |
+   | `ttnn/cpp/ttnn/operations/data_movement/**`, `.../copy/**`, `.../index_fill/**`, `.../point_to_point/**` | `tests/ttnn/unit_tests/operations/data_movement/**`, `tests/ttnn/nightly/unit_tests/operations/data_movement/**`, `tests/ttnn/unit_tests/operations/point_to_point/**` | `data_movement` |
+   | `ttnn/cpp/ttnn/operations/conv/**`, `.../sliding_window/**` | `tests/ttnn/nightly/unit_tests/operations/conv/**` | `conv` |
+   | `ttnn/cpp/ttnn/operations/matmul/**` | `tests/ttnn/nightly/unit_tests/operations/matmul/**` | `matmul` |
+   | `ttnn/cpp/ttnn/operations/pool/**` | `tests/ttnn/nightly/unit_tests/operations/pool/**` | `pool` |
+   | `ttnn/cpp/ttnn/operations/reduction/**` | `tests/ttnn/nightly/unit_tests/operations/reduction/**` | `reduction` |
+   | `ttnn/cpp/ttnn/operations/normalization/**` | `tests/ttnn/nightly/unit_tests/operations/fused/**` (layernorm, rmsnorm, groupnorm, softmax) | `fused` |
+   | `ttnn/cpp/ttnn/operations/transformer/**` except `sdpa*`, `.../kv_cache/**` | `tests/ttnn/nightly/unit_tests/operations/transformers/**` | `transformers` |
+   | `ttnn/cpp/ttnn/operations/transformer/sdpa/**`, `.../transformer/sdpa_decode/**` | `tests/ttnn/nightly/unit_tests/operations/sdpa/**` | `sdpa` |
+   | `ttnn/cpp/ttnn/operations/ccl/**` | `tests/ttnn/unit_tests/operations/ccl/**`, `tests/nightly/tg/ccl/**` | `ccl` |
+   | `ttnn/cpp/ttnn/operations/moreh/**` | `tests/ttnn/nightly/unit_tests/operations/moreh/**` | `moreh` |
+   | `ttnn/cpp/ttnn/operations/experimental/**` | `tests/ttnn/nightly/unit_tests/operations/experimental/**` | `experimental` |
+   | `ttnn/cpp/ttnn/operations/rand/**`, `.../randn/**`, `.../uniform/**`, `.../bernoulli/**` | `tests/ttnn/nightly/unit_tests/operations/rand/**`, `tests/ttnn/nightly/unit_tests/operations/ssm/**` | `misc` |
+   | `ttnn/cpp/ttnn/kernel_lib/**` | `tests/ttnn/unit_tests/kernel_lib/**` | `kernel_lib` |
+
+   `tests/pipeline_reorg/ops_unit_tests.yaml` is the source of truth: each entry's
+   `category:` is exactly what this input selects, and its `cmd:` is what that category
+   actually runs. If a changed directory has no row above, look it up there and use the
+   category whose `cmd` covers its tests rather than skipping the rule. Three further
+   categories (`docs_examples`, `cpp_accessor`, `cpp_lab_examples`) map to no
+   `operations/` path — pass those only when the diff touches what they test.
+
+   None of these suites are covered by a pr-gate or post-commit job, so a change under
+   those paths that skips this rule is not tested where it is most likely to break. A hint
+   in the comment that names other hardware (e.g. `/test blackhole`) narrows the *rest* of
+   your selection, not this rule; only an explicit `/test skip nightly` (or equivalent)
+   opts out, and say so in the comment.
+
+   This rule is enforced deterministically after you run, for the same reason as *The ref
+   rule*: a post-step recomputes the required categories from the changed-file list and
+   merges them into your `tt-metal-l2-nightly` item, adding the item outright if you
+   omitted it. Apply the table anyway — an injected dispatch can push the selection over
+   the cap of 8 and silently drop the last pipeline you chose, and your summary comment
+   will not match what actually ran.
+
 5. **Narrow each survivor to the relevant platforms _and suites_** via its inputs (next
    section). Running `runtime-unit-tests` across every SKU when only Blackhole code
    changed wastes hours of scarce silicon — and so does running the fabric and T3000
@@ -459,19 +622,18 @@ match that reality: never describe a pipeline as dispatched on a fork PR.
 
 | Pipeline | Hardware | Reach for it when |
 |---|---|---|
-| `sanity-tests` | WH + BH + simulator | First-line signal on core `tt_metal/` or `ttnn/` changes. Bundles seven independent suites — select them, do not take the default of all seven |
+| `sanity-tests` | WH + BH + simulator | First-line signal on core `tt_metal/` or `ttnn/` changes. Bundles nine independent suites, eight of them on by default (the LLK leg is opt-in) — select them, do not take the default of all eight |
 | `blackhole-e2e-tests` | Blackhole (P150/P300/BH QuietBox) | Anything under a `blackhole/` path or BH-specific HAL/SoC descriptor |
 | `galaxy-sanity`, `galaxy-health` | Galaxy (WH/BH) | Quick Galaxy-reachability check before committing to the heavier Galaxy suites |
 | `galaxy-unit-tests`, `galaxy-integration-tests`, `galaxy-e2e-tests` | Galaxy | Fabric, CCL, multi-device, or large-mesh code paths |
-| `galaxy-demo-tests`, `galaxy-deepseek-tests` | Galaxy | Model-level Galaxy demos; DeepSeek-specific model code |
-| `galaxy-perf-tests`, `galaxy-profiler-tests` | Galaxy | Galaxy performance or profiler instrumentation changes |
+| `galaxy-profiler-tests` | Galaxy | Galaxy profiler instrumentation changes |
 | `galaxy-stress-tests`, `galaxy-multi-user-isolation-tests` | Galaxy | Stability, long-run, or multi-tenant isolation behaviour |
 | `t3000-unit-tests`, `t3000-integration-tests`, `t3000-e2e-tests` | T3000 (8×WH) | Multi-chip work that does not need a full Galaxy |
 | `t3000-profiler-tests`, `single-card-profiler-tests`, `pipeline-select-profiler` | T3K / single card / selectable | `tt_metal/tools/profiler/**`, tracy, or profiling instrumentation |
 | `models-t1-*` | Selectable SKU | Tier-1 (highest-priority) model changes under `models/` |
 | `models-t2-*`, `models-t3-*` | Selectable SKU | Tier-2/3 model changes |
 | `perf-device-models` | Single card | Device-perf regressions from op or kernel changes |
-| `tt-metal-l2-nightly` | WH + BH | Broad L2 coverage for wide-reaching `tt_metal/` changes |
+| `tt-metal-l2-nightly` | WH + BH | Broad L2 coverage for wide-reaching `tt_metal/` changes. **Mandatory** for any change under a `ttnn/cpp/ttnn/operations/` family or its tests, with `additional_test_categories` naming every category the change reaches (see *Mandatory selections*) |
 | `ttnn-run-sweeps` | Selectable | `ttnn/` op changes where sweep coverage is the real signal |
 | `vllm-model-tests` | Selectable SKU | vLLM serving integration |
 | `metal-run-microbenchmarks` | Single card | Low-level metal performance primitives |
@@ -522,12 +684,13 @@ The defaults are usually *maximal*, and that is where the waste is. Recurring sh
   pipelines, both defaulting to `all`. If the change touches one model, name it. SKU
   values carry a human-readable suffix — use the option string exactly as written
   (e.g. `wh_n150 (N150)`, `bh_p150 (P150)`).
-- **Suite and board toggles: `run-<something>` booleans that default to `true`.** Three
-  pipelines bundle independent suites this way, and taking the defaults runs all of them:
+- **Suite and board toggles: `run-<something>` booleans, defaulting to `true` unless marked
+  otherwise below.** Three pipelines bundle independent suites this way, and taking the
+  defaults runs all of them:
 
-  | Pipeline | Toggles (all default `true`) |
+  | Pipeline | Toggles (default `true` unless noted) |
   |---|---|
-  | `sanity-tests` | `run-ttnn-sanity-tests`, `run-ops-sanity-tests`, `run-fabric-sanity-tests`, `run-t3000-sanity-tests`, `run-umd-sanity-tests`, `run-ttsim-sanity-tests`, `run-blackhole-multi-card-sanity-tests` |
+  | `sanity-tests` | `run-ttnn-sanity-tests`, `run-ops-sanity-tests`, `run-fabric-sanity-tests`, `run-t3000-sanity-tests`, `run-umd-sanity-tests`, `run-ttsim-sanity-tests`, `run-blackhole-multi-card-sanity-tests`, `run-models-sanity-tests`, `run-llk-sanity-tests` (default `false`) |
   | `single-card-profiler-tests` | `run-n150-profiler`, `run-n300-profiler`, `run-blackhole-profiler` |
   | `pipeline-select-profiler` | `run-n150-profiler`, `run-n300-profiler`, `run-blackhole-profiler`, `run-t3k-profiler` |
 
@@ -537,6 +700,22 @@ The defaults are usually *maximal*, and that is where the waste is. Recurring sh
   `false`. Leaving all seven on is the same mistake as dispatching seven pipelines when one
   would do — it is just hidden inside a single dispatch.
 
+  A toggle marked default `false` works the other way round: it is off unless you ask for
+  it. Pass `run-llk-sanity-tests: true` when the change reaches `tt_metal/tt-llk/**` (it
+  runs the tt-llk python_tests on WH + BH and the Quasar compile check), and leave it out
+  otherwise — the same reasoning as above, just inverted.
+
+- **`additional_test_categories` on `tt-metal-l2-nightly` is a comma-separated string**
+  (e.g. `eltwise`, or `eltwise,data_movement`), not a boolean toggle. Its default is `""`,
+  which under `workflow_dispatch` runs *no* op category — so a bare dispatch of this
+  pipeline tests almost nothing. Always pass the categories you mean: every category the
+  mandatory table above matched, comma-joined without spaces, in a single dispatch. Do not
+  pad the list with categories the diff does not reach — each one is a full nightly suite
+  on scarce silicon.
+  `run_wormhole` / `run_blackhole` both default to `true`; set one to `false` only when
+  the change is provably confined to the other architecture. Leave the other
+  `run_*` toggles (`run_cpp_tests`, `run_ccl_tests`, `run_didt_tests`, …) at their
+  defaults unless the change reaches that suite.
 - **Do not touch inputs that change behaviour rather than scope.** `mlperf-read-only`,
   `mlperf-write-access`, `upload_results`, `skip_on_timeout`, `build-inplace-wheel`,
   `enable-watcher`, `enable-llk-asserts`, and `run_triage_tests` are not narrowing knobs;

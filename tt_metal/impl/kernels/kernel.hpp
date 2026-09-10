@@ -90,10 +90,25 @@ KernelHandle CreateKernelFromString(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const DramConfig& config);
 
-// Metal 2.0: DFB accessor names -> logical DFB ids
-using DataflowBufferBindingHandleMap = std::unordered_map<std::string, uint16_t>;
-// Metal 2.0: semaphore accessor names -> semaphore ids
-using SemaphoreBindingHandleMap = std::unordered_map<std::string, uint16_t>;
+// Metal 2.0: DFB accessor names -> device-slot binding (optionally typed as relay).
+// prefetcher_pipe_id is 0xFF (RelayDFBBindingToken::NO_PREFETCHER_PIPE) except for
+// PrefetcherPipe relays, where it names the persistent slot baked into the token so
+// the TRISC constructor can O(1)-align the borrowed iface to the durable checkpoint.
+struct DataflowBufferBindingHandle {
+    uint16_t logical_dfb_id = 0;
+    bool is_relay = false;
+    uint8_t prefetcher_pipe_id = 0xFF;
+};
+using DataflowBufferBindingHandleMap = std::unordered_map<std::string, DataflowBufferBindingHandle>;
+
+// Metal 2.0: per-binding semaphore handle -> id and the host-baked scope; kernel code sees only a uint32_t id.
+struct SemaphoreBindingHandle {
+    uint16_t id = 0;
+    SemScope scope = SemScope::LOCAL_NONATOMIC;
+    uint32_t total_binder_harts = 0;
+};
+// Metal 2.0: semaphore accessor names -> {semaphore id, scope}
+using SemaphoreBindingHandleMap = std::unordered_map<std::string, SemaphoreBindingHandle>;
 
 // Metal 2.0: per-kernel resolved TensorBinding.
 // Carries the offsets the kernel-side codegen needs to emit a token, plus the program-level
@@ -136,6 +151,12 @@ struct ScratchpadBindingHandle {
     uint32_t size_bytes = 0;         // per-node size; emitted as the accessor's compile-time size
     uint32_t addr_crta_word = 0;     // word index of the base-address slot within the kernel's CRTA buffer
     uint32_t allocated_address = 0;  // L1 base address; filled by allocate_scratchpads (0 until allocated)
+};
+
+// Metal 2.0: ordered TensorBinding tokens (KernelAdvancedOptions::tensor_binding_sequences).
+struct TensorBindingSequenceHandle {
+    std::string sequence_name;
+    std::vector<std::string> members;
 };
 
 class Kernel : public JitBuildSettings {
@@ -219,9 +240,13 @@ public:
     void process_named_compile_time_args(
         std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const override;
     void process_dataflow_buffer_binding_handles(
-        std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const override;
+        std::function<
+            void(const std::string& accessor_name, uint16_t logical_dfb_id, bool is_relay, uint8_t prefetcher_pipe_id)>)
+        const override;
     void process_semaphore_binding_handles(
-        std::function<void(const std::string& accessor_name, uint16_t semaphore_id)>) const override;
+        std::function<
+            void(const std::string& accessor_name, uint16_t semaphore_id, SemScope scope, uint32_t total_binder_harts)>)
+        const override;
     void process_tensor_binding_handles(std::function<void(
                                             const std::string& accessor_name,
                                             uint32_t cta_offset,
@@ -239,6 +264,11 @@ public:
     std::vector<ScratchpadBindingHandle>& scratchpad_binding_handles() { return scratchpad_binding_handles_; }
     void set_scratchpad_binding_handles(std::vector<ScratchpadBindingHandle> handles) {
         scratchpad_binding_handles_ = std::move(handles);
+    }
+    void process_tensor_binding_sequences(
+        std::function<void(const std::string& sequence_name, const std::vector<std::string>& members)>) const override;
+    void set_tensor_binding_sequences(std::vector<TensorBindingSequenceHandle> sequences) {
+        tensor_binding_sequences_ = std::move(sequences);
     }
     // Metal 2.0: length of the CTA-vararg prefix in compile_time_args_.
     // Values live in compile_time_args_.
@@ -344,6 +374,8 @@ protected:
     // and allocate_scratchpads fills each handle's allocated_address after L1 allocation.
     // NOTE: Scratchpad allocated addresses can change between enqueues if DFB size overrides are used.
     std::vector<ScratchpadBindingHandle> scratchpad_binding_handles_;
+    // Metal 2.0: tensor binding sequences (set post-construction, like scratchpads).
+    std::vector<TensorBindingSequenceHandle> tensor_binding_sequences_;
     // Metal 2.0: number of user CTA-vararg words at the start of compile_time_args_.
     uint32_t compile_time_vararg_count_{0};
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;

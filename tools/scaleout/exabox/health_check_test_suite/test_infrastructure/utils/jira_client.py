@@ -22,7 +22,30 @@ from .grafana import telemetry_dashboard_url
 log = logging.getLogger(__name__)
 
 
-def _build_failure_body(
+def _telemetry_section(telemetry_summary: str) -> str:
+    """The ``{noformat}`` telemetry block, shared by failure and recovery bodies."""
+    if not telemetry_summary:
+        return ""
+    return f"\n*Telemetry Metrics:*\n{{noformat}}\n{telemetry_summary}\n{{noformat}}\n"
+
+
+def _grafana_section(*, node: str, when: datetime, grafana_base_url: str) -> str:
+    """A Grafana deep link time-boxed around ``when`` (fail or pass time)."""
+    if not grafana_base_url:
+        return ""
+    url = telemetry_dashboard_url(base_url=grafana_base_url, node=node, fail_time=when)
+    return f"\n*Telemetry dashboard:* [Grafana {node}|{url}]\n"
+
+
+def _attachment_section(attachment_names: list[str] | None) -> str:
+    """Inline ``[^name]`` links so JIRA renders the attached artifacts."""
+    if not attachment_names:
+        return ""
+    links = "\n".join(f"[^{name}]" for name in attachment_names)
+    return f"\n*Attachments:*\n{links}\n"
+
+
+def build_failure_body(
     *,
     node: str,
     slurm_job_id: str,
@@ -53,20 +76,6 @@ def _build_failure_body(
             f"*Self-heal reboot: FAILED* - node was NOT rebooted or requeued. " f"Reason: {{{{{reboot_failure}}}}}\n"
         )
 
-    telemetry_section = ""
-    if telemetry_summary:
-        telemetry_section = f"\n*Telemetry Metrics:*\n" f"{{noformat}}\n{telemetry_summary}\n{{noformat}}\n"
-
-    grafana_section = ""
-    if grafana_base_url:
-        url = telemetry_dashboard_url(base_url=grafana_base_url, node=node, fail_time=fail_time)
-        grafana_section = f"\n*Telemetry dashboard:* [Grafana {node}|{url}]\n"
-
-    attachment_section = ""
-    if attachment_names:
-        links = "\n".join(f"[^{name}]" for name in attachment_names)
-        attachment_section = f"\n*Attachments:*\n{links}\n"
-
     return (
         f"*Node:* {node}\n"
         f"*Date:* {fail_date}\n"
@@ -77,9 +86,51 @@ def _build_failure_body(
         f"*TT-SMI Version:* {versions['tt_smi']}\n"
         f"*TT-KMD Version:* {versions['tt_kmd']}\n"
         f"*Firmware Version:* {versions['fw_bundle']}\n"
-        f"{telemetry_section}"
-        f"{grafana_section}"
-        f"{attachment_section}\n"
+        f"{_telemetry_section(telemetry_summary)}"
+        f"{_grafana_section(node=node, when=fail_time, grafana_base_url=grafana_base_url)}"
+        f"{_attachment_section(attachment_names)}\n"
+        f"*Last lines of output:*\n"
+        f"{{noformat}}\n{log_tail}\n{{noformat}}"
+    )
+
+
+def build_recovery_body(
+    *,
+    node: str,
+    slurm_job_id: str,
+    versions: dict[str, str],
+    telemetry_summary: str,
+    test_output: str,
+    attachment_names: list[str] | None = None,
+    restart_count: int = 0,
+    grafana_base_url: str = "",
+) -> str:
+    """Detail block for the auto-close comment when a node recovers.
+
+    Same telemetry / Grafana / attachment / log sections as a failure so the
+    closed ticket carries the passing evidence, framed as a PASS instead of a
+    failure.
+    """
+    pass_time = datetime.now(timezone.utc)
+    pass_date = pass_time.strftime("%Y-%m-%d %H:%M:%S UTC")
+    log_tail = test_output[-4096:]
+
+    recovery_line = ""
+    if restart_count > 0:
+        recovery_line = f"*Slurm requeues before recovery:* {restart_count}\n"
+
+    return (
+        f"*Node:* {node}\n"
+        f"*Date:* {pass_date}\n"
+        f"*Slurm Job ID:* {slurm_job_id}\n"
+        f"*Result:* PASS\n"
+        f"{recovery_line}"
+        f"*TT-SMI Version:* {versions['tt_smi']}\n"
+        f"*TT-KMD Version:* {versions['tt_kmd']}\n"
+        f"*Firmware Version:* {versions['fw_bundle']}\n"
+        f"{_telemetry_section(telemetry_summary)}"
+        f"{_grafana_section(node=node, when=pass_time, grafana_base_url=grafana_base_url)}"
+        f"{_attachment_section(attachment_names)}\n"
         f"*Last lines of output:*\n"
         f"{{noformat}}\n{log_tail}\n{{noformat}}"
     )
@@ -151,7 +202,7 @@ def add_comment_to_jira(
         "Content-Type": "application/json",
     }
 
-    log.info("Adding recurring-failure comment to %s ...", ticket_key)
+    log.info("Adding comment to %s ...", ticket_key)
     try:
         resp = requests.post(url, headers=headers, json={"body": body}, timeout=30)
     except requests.RequestException as exc:
@@ -236,7 +287,7 @@ def create_jira_ticket(
 ) -> str | None:
     """Create a JIRA ticket for a failed health check. Returns ticket key or None."""
 
-    description = f"Fabric System Health Check failed on node {node}.\n\n" + _build_failure_body(
+    description = f"Fabric System Health Check failed on node {node}.\n\n" + build_failure_body(
         node=node,
         slurm_job_id=slurm_job_id,
         exit_code=exit_code,

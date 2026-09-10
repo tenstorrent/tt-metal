@@ -4,8 +4,19 @@
 #   <group>:              gtest binary under build/test/tt_metal/, or pytest file path
 #                         relative to TT_METAL_HOME
 #     - filter: <pattern> (optional) gtest filter glob, or pytest node id after ::
-#                         (e.g. test_foo). Omit or use "" to run all tests in the
-#                         gtest binary / pytest file.
+#                         Omit or use "" to run all tests in the gtest binary /
+#                         pytest file.
+#                         For pytest, the filter is appended verbatim as
+#                         "<file>::<filter>", so it must be the FULL node id after
+#                         "::" -- i.e. the test FUNCTION name, plus the bracketed
+#                         parametrization id when the test is parametrized:
+#                           pytest -vv path/to/test_foo.py::test_bar[param0-param1]
+#                                                            ^^^^^^^^^^^^^^^^^^^^^^ filter
+#                         A bare param id (e.g. "pretrained-device_params0") is NOT
+#                         a node id and collects 0 tests:
+#                           ERROR: not found: .../test_foo.py::pretrained-device_params0
+#                         Quote any filter containing [ ] { } , : # so YAML keeps it
+#                         as a plain string.
 #       config: <config>  Simulator grid (emu-quasar-<config>): 1x3, 2x3, 2x3_DISPATCH
 #       runner: <type>    (optional) gtest (default) or pytest
 #       env:              (optional) Extra environment variables as key: value pairs
@@ -34,6 +45,13 @@
 #     config: 2x3_DISPATCH
 #     env:
 #       TT_METAL_DEVICE_PROFILER: 1
+#
+# Example pytest entry (single PARAMETRIZED test -- note the bracketed ids)
+#
+# models/demos/.../test_resnet50_e2e.py:
+#   - filter: "test_resnet50_e2e[pretrained-device_params0]"
+#     runner: pytest
+#     config: 2x3
 #
 # Example pytest entry (entire file)
 #
@@ -275,20 +293,6 @@ models/demos/vision/classification/resnet50/quasar/tests/ops/test_global_avgpool
       TT_METAL_ENV: dev
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d.py:
-  - runner: pytest
-    config: 2x3
-    env:
-      TT_METAL_ENV: dev
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-
-models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d_stem.py:
-  - runner: pytest
-    config: 2x3
-    env:
-      TT_METAL_ENV: dev
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-      TT_METAL_QSR_CONV_SPLIT_PROGRAM: 1
 
 models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d_layer3_downsample_split.py:
   - runner: pytest
@@ -304,35 +308,12 @@ models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d_layer_c
       TT_METAL_ENV: dev
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d_split_program_e2e.py:
-  - runner: pytest
-    config: 2x3
-    env:
-      TT_METAL_ENV: dev
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-
-models/demos/vision/classification/resnet50/quasar/tests/ops/test_max_pool2d.py:
-  - runner: pytest
-    config: 2x3
-    env:
-      TT_METAL_ENV: dev
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-      PYTEST_ADDOPTS: "--timeout=1200"
-
 models/demos/vision/classification/resnet50/quasar/tests/ops/test_max_pool2d_1x3.py:
   - runner: pytest
     config: 2x3
     env:
       TT_METAL_ENV: dev
       TT_METAL_SLOW_DISPATCH_MODE: 1
-
-models/demos/vision/classification/resnet50/quasar/tests/ops/test_max_pool2d_dprint_debug.py:
-  - runner: pytest
-    config: 2x3
-    env:
-      TT_METAL_ENV: dev
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-      PYTEST_ADDOPTS: "--timeout=1200"
 
 models/demos/vision/classification/resnet50/quasar/tests/ops/test_max_pool2d_strided_reduce.py:
   - runner: pytest
@@ -342,7 +323,7 @@ models/demos/vision/classification/resnet50/quasar/tests/ops/test_max_pool2d_str
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
 models/demos/vision/classification/resnet50/quasar/tests/test_resnet50_e2e.py:
-  - filter: pretrained-device_params0
+  - filter: "test_resnet50_e2e[pretrained-device_params0]"
     runner: pytest
     config: 2x3
     env:

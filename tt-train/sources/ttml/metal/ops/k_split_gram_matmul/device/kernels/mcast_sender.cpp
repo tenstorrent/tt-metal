@@ -17,6 +17,12 @@
 //   The sender itself "keeps" one parity locally (its own compute path) and discards
 //   the other from its CB after the multicast. `injector_keeps_odd` runtime arg picks.
 //
+// The two parity groups consume sub-blocks in different orders: even-parity compute
+// (lower triangle + diagonal) iterates column-major (m_sub fast) so its transposed
+// reduce partials arrive in the odd-parity partner's row-major consume order; odd-parity
+// compute (upper triangle + helpers) iterates row-major (n_sub fast). The DRAM row each
+// K-block is read from therefore depends on the block's parity.
+//
 // Loopback: sender at the corner of a multicast group needs loopback-src to also receive
 // its own data; others use plain multicast. `lower_loopback` runtime arg picks.
 //
@@ -48,7 +54,8 @@ void kernel_main() {
     constexpr uint32_t num_m_blocks = get_compile_time_arg_val(13);
     constexpr uint32_t M_block = get_compile_time_arg_val(14);
     constexpr uint32_t num_n_blocks = get_compile_time_arg_val(15);
-    constexpr auto tensor_args = TensorAccessorArgs<16>();
+    const uint32_t reduce_ack_sem_addr = get_semaphore(get_compile_time_arg_val(16));
+    constexpr auto tensor_args = TensorAccessorArgs<17>();
 #else
     constexpr uint32_t num_m_blocks = get_compile_time_arg_val(9);
     constexpr uint32_t num_n_blocks = get_compile_time_arg_val(10);
@@ -100,16 +107,23 @@ void kernel_main() {
 
     const uint32_t recv_cb_base = get_write_ptr(cb_id);
 
+    // Landing offsets into the receivers' CBs. Receivers push block_size per received
+    // block into a cb_size_tiles ring, so their write pointer advances across the whole
+    // run; these offsets must advance in the same modulus and never reset per pass.
+    uint32_t lower_recv_offset = 0;
+    uint32_t upper_recv_offset = 0;
+
     for (uint32_t m_sub = 0; m_sub < num_m_blocks; m_sub++) {
         for (uint32_t n_sub = 0; n_sub < num_n_blocks; n_sub++) {
-            // Row sender (c_0): reads rows m_sub*M_block+m; col sender (c_1): reads rows n_sub*N_block+n
-            const uint32_t row_base = (cb_id == 0) ? m_sub * rows_per_block : n_sub * rows_per_block;
-
-            uint32_t lower_recv_offset = 0;
-            uint32_t upper_recv_offset = 0;
+            // Even-parity consumers iterate column-major (m_sub = inner loop var, n_sub =
+            // outer); odd-parity consumers row-major. Row sender (c_0) supplies m_sub's
+            // rows, col sender (c_1) supplies n_sub's rows — pick per block parity.
+            const uint32_t lower_row_base = ((cb_id == 0) ? n_sub : m_sub) * rows_per_block;
+            const uint32_t upper_row_base = ((cb_id == 0) ? m_sub : n_sub) * rows_per_block;
 
             for (uint32_t blk = 0; blk < num_blocks; blk++) {
                 bool is_lower_block = (blk % 2 == 0);
+                const uint32_t row_base = is_lower_block ? lower_row_base : upper_row_base;
 
                 const uint32_t batch_idx = blk / 2;
                 const uint32_t first_k_col = batch_idx * K_block_tiles * 2 + (is_lower_block ? 0 : 1);
@@ -214,22 +228,32 @@ void kernel_main() {
 
 #ifdef SENDER_REDUCE_SEND
             {
+                // This core's compute iterates column-major ((m_sub, n_sub) swapped vs
+                // this loop), but M_block == N_block makes the edge-block extents
+                // symmetric in the two indices, so block_tiles is correct either way.
                 const uint32_t M_start = m_sub * rows_per_block;
                 const uint32_t current_M_block = std::min(rows_per_block, Mpc - M_start);
                 const uint32_t N_start = n_sub * rows_per_block;
                 const uint32_t current_N = std::min(rows_per_block, Mpc - N_start);
                 const uint32_t block_tiles = current_M_block * current_N;
+                const uint32_t reduce_block_capacity = rows_per_block * rows_per_block;
 
+                volatile tt_l1_ptr uint32_t* reduce_ack_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_ack_sem_addr);
                 const uint32_t partner_reduce_addr = get_write_ptr(reduce_cb);
                 const uint64_t partner_sem_noc = get_noc_addr(partner_noc_x, partner_noc_y, reduce_sem_addr);
 
-                cb_wait_front(cb_out, block_tiles);
+                cb_wait_front(cb_out, reduce_block_capacity);
+                // Wait for the partner's credit: its c_5 slot is free
+                noc_semaphore_wait_min(reduce_ack_ptr, 1);
+                noc_semaphore_set(reduce_ack_ptr, 0);
                 const uint32_t l1_read_addr = get_read_ptr(cb_out);
                 uint64_t partner_noc_addr = get_noc_addr(partner_noc_x, partner_noc_y, partner_reduce_addr);
+                // Only the valid prefix carries data; the padding tail is never read
                 noc_async_write(l1_read_addr, partner_noc_addr, block_tiles * out_tile_size);
                 noc_async_write_barrier();
                 noc_semaphore_inc(partner_sem_noc, 1);
-                cb_pop_front(cb_out, block_tiles);
+                cb_pop_front(cb_out, reduce_block_capacity);
             }
 #endif
         }

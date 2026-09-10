@@ -35,6 +35,17 @@ def _make_large_index_input(num_rows: int, n: int, k: int) -> torch.Tensor:
     return values
 
 
+def _make_spread_large_index_input(n: int, k: int) -> torch.Tensor:
+    """Place k unique winners across the row so index decoding is checked in every segment."""
+    values = torch.zeros((1, n), dtype=torch.bfloat16)
+    stride = n // k
+    winner_indices = torch.arange(k, dtype=torch.int64) * stride + stride // 2
+    hi16 = (0x3F80 + np.arange(k, dtype=np.uint32)).astype(np.uint32)
+    winner_values = torch.from_numpy((hi16 << 16).view(np.float32).copy()).to(torch.bfloat16)
+    values[0, winner_indices] = winner_values
+    return values
+
+
 def _to_device(torch_input: torch.Tensor, device) -> ttnn.Tensor:
     return ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
@@ -106,6 +117,76 @@ def test_topk_large_indices_random_bfloat16_ties_return_distinct_indices(device)
     actual_values = torch.gather(torch_input.float()[0, 0], dim=-1, index=indices)
     ref_values, _ = torch.topk(torch_input.float()[0, 0], k, dim=-1, largest=True, sorted=True)
     assert_equal(actual_values.sort(dim=-1).values, ref_values.sort(dim=-1).values)
+
+
+@pytest.mark.parametrize(
+    "k,num_chunks,tail_trim",
+    [
+        (512, 1, 0),
+        (512, 2, 0),
+        (512, 31, 0),
+        (512, 32, 17),  # chunk id 31 and a partial final chunk
+        (512, 33, 0),  # first width that keeps the classic body for small K
+        (1024, 1, 0),
+        (1024, 31, 0),
+        (1024, 32, 0),
+        (1024, 33, 0),
+        (1024, 64, 0),
+        (1024, 65, 0),
+        (2048, 1, 0),
+        (2048, 25, 0),  # GLM warm-context chunk count
+        (2048, 31, 0),
+        (2048, 32, 0),
+        (2048, 33, 1),
+        (2048, 64, 0),
+        (2048, 65, 0),
+        (2048, 250, 0),  # GLM long-context chunk count
+    ],
+)
+def test_topk_large_indices_fused_segment_boundaries(device, k, num_chunks, tail_trim):
+    # The input has num_chunks K-wide chunks; tail_trim shortens the final chunk.
+    n = num_chunks * k - tail_trim
+    torch_input = _make_large_index_input(num_rows=1, n=n, k=k)
+    tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k)
+
+    _assert_topk_matches_torch(torch_input, tt_indices, k)
+
+
+@pytest.mark.parametrize(
+    "k,llk_k,num_chunks,tail_trim",
+    [
+        (512, 512, 32, 7),  # fused end-to-end: winners span all chunk stamps
+        (768, 1024, 40, 7),  # snapped K: segmented mode and a multi-chunk partial final segment
+        (2048, 2048, 40, 7),  # direct segmented mode with winners in both segments
+    ],
+)
+def test_topk_large_indices_spread_winners_decode_global_indices(device, k, llk_k, num_chunks, tail_trim):
+    n = num_chunks * llk_k - tail_trim
+    torch_input = _make_spread_large_index_input(n=n, k=k)
+    tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k)
+
+    _assert_topk_matches_torch(torch_input, tt_indices, k)
+
+
+def test_topk_large_indices_program_cache_separates_compute_body_modes(device):
+    k = 512
+    fused_input = _make_large_index_input(num_rows=1, n=32 * k, k=k)
+    classic_input = _make_large_index_input(num_rows=1, n=33 * k, k=k)
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+    try:
+        fused = ttnn.experimental.topk_large_indices(_to_device(fused_input, device), k=k)
+        entries_after_fused = device.num_program_cache_entries()
+        classic = ttnn.experimental.topk_large_indices(_to_device(classic_input, device), k=k)
+        entries_after_classic = device.num_program_cache_entries()
+
+        assert entries_after_fused > 0
+        assert entries_after_classic == entries_after_fused + 1
+        _assert_topk_matches_torch(fused_input, fused, k)
+        _assert_topk_matches_torch(classic_input, classic, k)
+    finally:
+        device.disable_and_clear_program_cache()
 
 
 @pytest.mark.parametrize(
@@ -181,8 +262,8 @@ TOPK_LARGE_INDICES_PERF_MARGIN = 0.01
 # regressions and unexpected speedups that should trigger baseline review.
 TOPK_LARGE_INDICES_PRODUCTION_PERF_CONFIGS = [
     # (case_id, num_rows, allocated_length, valid_length, k, expected_duration_ns)
-    ("prefill", 640, 51200, None, 1536, 1_652_800),
-    ("bounded_cache", 2, 102400, 56320, 1536, 310_724),
+    ("prefill", 640, 51200, None, 1536, 1_286_400),
+    ("bounded_cache", 2, 102400, 56320, 1536, 242_560),
 ]
 
 
@@ -232,6 +313,65 @@ def test_topk_large_indices_production_perf_check(
         f"[{lower / 1e6:.3f}, {upper / 1e6:.3f}] ms "
         f"(expected {expected_duration_ns / 1e6:.3f} ms, "
         f"margin +/- {TOPK_LARGE_INDICES_PERF_MARGIN * 100:.1f}%)"
+    )
+
+
+@pytest.mark.requires_host_iommu
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+def test_topk_large_indices_metadata_trace_production_perf(device):
+    """Compare traced scalar and metadata bounds for the production decode shape."""
+    if not ttnn.device.IsProgramRealtimeProfilerActive():
+        pytest.fail("Real-time profiler must be active for topk_large_indices perf checks (needs IOMMU)")
+
+    num_rows = 160
+    n = 512 * 1024
+    k = 2048
+    torch_input = _make_large_index_input(num_rows=num_rows, n=n, k=k)
+    tt_input = _to_device(torch_input, device)
+    metadata = _make_valid_length_metadata(device, n)
+
+    ttnn.experimental.topk_large_indices(tt_input, k=k, valid_length=n)
+    ttnn.experimental.topk_large_indices(tt_input, k=k, valid_length_tensor=metadata)
+    ttnn.synchronize_device(device)
+
+    def capture_and_measure(run_op):
+        trace_id = None
+        trace_capture_ended = False
+        try:
+            trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+            output = run_op()
+            ttnn.end_trace_capture(device, trace_id, cq_id=0)
+            trace_capture_ended = True
+            ttnn.synchronize_device(device)
+            _, record = profile_realtime_program(
+                device, lambda: ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
+            )
+            _assert_index_metadata(output, [num_rows, k])
+            return record
+        finally:
+            if trace_id is not None:
+                try:
+                    if not trace_capture_ended:
+                        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+                finally:
+                    ttnn.release_trace(device, trace_id)
+
+    scalar_record = capture_and_measure(lambda: ttnn.experimental.topk_large_indices(tt_input, k=k, valid_length=n))
+    metadata_record = capture_and_measure(
+        lambda: ttnn.experimental.topk_large_indices(tt_input, k=k, valid_length_tensor=metadata)
+    )
+    scalar_duration_ns = scalar_record["duration_ns"]
+    metadata_duration_ns = metadata_record["duration_ns"]
+    ratio = metadata_duration_ns / scalar_duration_ns
+    logger.info(
+        f"topk_large_indices trace perf: scalar={scalar_duration_ns / 1e6:.3f} ms, "
+        f"metadata={metadata_duration_ns / 1e6:.3f} ms, ratio={ratio:.4f}, "
+        f"shape=({num_rows}, {n}), valid_length={n}, k={k}"
+    )
+    assert abs(ratio - 1.0) <= TOPK_LARGE_INDICES_PERF_MARGIN, (
+        f"metadata trace duration differs from scalar by {abs(ratio - 1.0) * 100:.2f}% "
+        f"(allowed {TOPK_LARGE_INDICES_PERF_MARGIN * 100:.1f}%)"
     )
 
 
@@ -434,9 +574,10 @@ def test_topk_large_indices_valid_length_mixed_prefix_ignores_finite_tail(device
 
 def test_topk_large_indices_valid_length_program_cache_reuse_while_growing(device):
     # A serving loop grows valid_length each step; because valid_length is a runtime arg (hash-excluded),
-    # every step must reuse a single cached program.
-    k = 1536
-    n = 102400
+    # every step must reuse a single cached program. Exercise the exact fused-segment boundary and the
+    # first partial chunk of the next segment while high-valued stale data remains at the physical row's end.
+    k = 2048
+    n = 65 * k
     torch_input = _make_large_index_input(num_rows=2, n=n, k=k)
     tt_input = _to_device(torch_input, device)
 
@@ -444,9 +585,16 @@ def test_topk_large_indices_valid_length_program_cache_reuse_while_growing(devic
     device.clear_program_cache()
     try:
         entries = []
-        for valid_length in (2048, 20480, 56320, n):
-            ttnn.experimental.topk_large_indices(tt_input, k=k, valid_length=valid_length)
+        for valid_length in (31 * k, 32 * k, 32 * k + 17, 33 * k, n):
+            tt_indices = ttnn.experimental.topk_large_indices(tt_input, k=k, valid_length=valid_length)
             entries.append(device.num_program_cache_entries())
+
+            indices = ttnn.to_torch(tt_indices, dtype=torch.uint32).to(torch.int64)
+            assert indices.min() >= 0
+            assert indices.max() < valid_length
+            for row_indices in indices:
+                assert row_indices.unique().numel() == k
+
         assert entries[0] > 0
         assert max(entries) == min(entries)  # no recompile as valid_length grew
     finally:
@@ -487,3 +635,150 @@ def test_topk_large_indices_valid_length_out_of_range_raises(device, expect_erro
     torch_input = _make_bf16_exact_input(num_rows=1, n=n)
     with expect_error(RuntimeError, "valid_length"):
         ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, valid_length=valid_length)
+
+
+def _make_valid_length_metadata(device, value: int, *, on_device: bool = True):
+    tensor = torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1)
+    kwargs = dict(dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    if on_device:
+        kwargs.update(device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return ttnn.from_torch(tensor, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "k,n,valid_length",
+    [(1024, 4096, 1024), (256, 2048, 600), (512, 4096, 513)],
+    ids=["k1024_n4096_v1024", "k256_n2048_v600", "k512_n4096_v513"],
+)
+@pytest.mark.parametrize("offset", [0, 128], ids=["off0", "off128"])
+def test_topk_large_indices_metadata_matches_scalar(device, k, n, valid_length, offset):
+    num_rows = 2
+    torch_input = _make_bf16_exact_input(num_rows, n)
+
+    scalar = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, valid_length=valid_length)
+    metadata = ttnn.experimental.topk_large_indices(
+        _to_device(torch_input, device),
+        k=k,
+        valid_length_tensor=_make_valid_length_metadata(device, valid_length - offset),
+        valid_length_offset=offset,
+    )
+    assert_equal(
+        ttnn.to_torch(metadata, dtype=torch.uint32).to(torch.int64),
+        ttnn.to_torch(scalar, dtype=torch.uint32).to(torch.int64),
+    )
+
+    _, expected = torch.topk(torch_input[:, :valid_length].float(), k, dim=-1, largest=True, sorted=True)
+    _assert_indices(metadata, expected, [num_rows, k])
+
+
+def test_topk_large_indices_metadata_zero_length_does_not_hang(device):
+    """A metadata tensor holding 0 with the default offset=0 must not hang the device.
+
+    search_len = valid_length + offset is zero only when both are, and calculate_topk_bounds(0, K) yields
+    num_chunks = 0 with a wrapped tail_elements ((0 - 1) * K underflows). The reader would then push zero
+    chunks while the Classic / FusedEndToEnd compute bodies unconditionally cb_wait_front on the first one.
+    Nothing on the host rejects it: the scalar path has TT_FATAL(valid_length > 0), the tensor path cannot
+    see the value, and the reader's structural check is a watcher-gated ASSERT that compiles out.
+
+    The reader therefore clamps search_len to input_width when the metadata is malformed, so this degrades
+    to a full-row search instead of hanging. Asserting completion is the point -- a regression here shows up
+    as a timeout, not a wrong answer, which is why no existing case covers it (they all use
+    valid_length - offset >= 385).
+    """
+    k, n, num_rows = 256, 2048, 2
+    torch_input = _make_bf16_exact_input(num_rows, n)
+
+    out = ttnn.experimental.topk_large_indices(
+        _to_device(torch_input, device),
+        k=k,
+        valid_length_tensor=_make_valid_length_metadata(device, 0),
+    )
+    ttnn.synchronize_device(device)
+
+    # Clamped to the full row, so the result must match a scalar full-width search rather than be garbage.
+    scalar = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, valid_length=n)
+    ttnn.synchronize_device(device)
+    assert_equal(
+        ttnn.to_torch(out, dtype=torch.uint32).to(torch.int64),
+        ttnn.to_torch(scalar, dtype=torch.uint32).to(torch.int64),
+    )
+
+
+def test_topk_large_indices_metadata_rejects_scalar_alongside_tensor(device, expect_error):
+    torch_input = _make_bf16_exact_input(2, 2048)
+    with expect_error(RuntimeError, "mutually exclusive"):
+        ttnn.experimental.topk_large_indices(
+            _to_device(torch_input, device),
+            k=256,
+            valid_length=600,
+            valid_length_tensor=_make_valid_length_metadata(device, 600),
+        )
+
+
+def test_topk_large_indices_rejects_offset_without_metadata(device, expect_error):
+    torch_input = _make_bf16_exact_input(1, 2048)
+    with expect_error(RuntimeError, "valid_length_offset requires valid_length_tensor"):
+        ttnn.experimental.topk_large_indices(
+            _to_device(torch_input, device),
+            k=256,
+            valid_length=1024,
+            valid_length_offset=128,
+        )
+
+
+def test_topk_large_indices_metadata_trace_replay(device):
+    num_rows, n, k = 2, 4096, 1024
+    bounds = [1024, 2048, 1536, 4096]
+    torch_input = _make_bf16_exact_input(num_rows, n)
+
+    refs = {}
+    for valid_length in bounds:
+        output = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, valid_length=valid_length)
+        refs[valid_length] = ttnn.to_torch(output, dtype=torch.uint32).to(torch.int64)
+
+    tt_input = _to_device(torch_input, device)
+    metadata = _make_valid_length_metadata(device, bounds[0])
+    host_metadata = {
+        valid_length: _make_valid_length_metadata(device, valid_length, on_device=False) for valid_length in bounds
+    }
+
+    ttnn.experimental.topk_large_indices(tt_input, k=k, valid_length_tensor=metadata)
+    ttnn.synchronize_device(device)
+
+    trace_id = None
+    trace_capture_ended = False
+    try:
+        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        traced_output = ttnn.experimental.topk_large_indices(tt_input, k=k, valid_length_tensor=metadata)
+        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        trace_capture_ended = True
+        ttnn.synchronize_device(device)
+
+        order = bounds + bounds[::-1] + [bounds[-1], bounds[0]]
+        for replay, valid_length in enumerate(order):
+            ttnn.copy_host_to_device_tensor(host_metadata[valid_length], metadata)
+            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+            actual = ttnn.to_torch(traced_output, dtype=torch.uint32).to(torch.int64)
+            if not torch.equal(actual, refs[valid_length]):
+                matches = [bound for bound in bounds if torch.equal(actual, refs[bound])]
+                raise AssertionError(
+                    f"replay {replay} (valid_length={valid_length}) does not match its eager reference; "
+                    f"it matches bound(s) {matches or 'none'} instead -- "
+                    f"{'stale metadata read' if matches else 'unrelated divergence'}"
+                )
+    finally:
+        if trace_id is not None:
+            try:
+                if not trace_capture_ended:
+                    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+            finally:
+                ttnn.release_trace(device, trace_id)
+
+
+def test_topk_large_indices_metadata_rejects_l1(device, expect_error):
+    torch_input = _make_bf16_exact_input(1, 2048)
+    tt_input = _to_device(torch_input, device)
+    metadata = ttnn.to_memory_config(_make_valid_length_metadata(device, 1024), ttnn.L1_MEMORY_CONFIG)
+
+    with expect_error(RuntimeError, "must be in DRAM"):
+        ttnn.experimental.topk_large_indices(tt_input, k=512, valid_length_tensor=metadata)

@@ -306,7 +306,8 @@ FORCE_INLINE void matmul_phase(
     (void)down_bias_cb_id;
     // matmul puts in1 → SrcA, in0 → SrcB. Reconfigure SrcA from in1 to
     // partials so copy_tile reads partials.
-    copy_tile_to_dst_init_short_with_dt(in1_cb_id, partials_cb_id);
+    reconfig_data_format_srca(in1_cb_id, partials_cb_id);
+    copy_init(partials_cb_id);
 #endif
 
     const uint32_t eff_subblocks = EFF_OUT / out_subblock_num_tiles;
@@ -607,7 +608,8 @@ FORCE_INLINE void matmul_phase_fused_gu(
     pack_reconfig_data_format(gate_intermed_cb_id);
     // SrcA was last configured for the up matmul's in1 (up_cb_id). Switch
     // to partials_gu so copy_tile reads the accumulator.
-    copy_tile_to_dst_init_short_with_dt(up_cb_id, partials_gu_cb_id);
+    reconfig_data_format_srca(up_cb_id, partials_gu_cb_id);
+    copy_init(partials_gu_cb_id);
     for (uint32_t sb = 0; sb < (EFF_OUT / out_subblock_num_tiles); ++sb) {
         tile_regs_acquire();
         partials_gu_cb.wait_front(out_subblock_num_tiles);
@@ -736,7 +738,8 @@ FORCE_INLINE void binary_activation_phase(
 #else
     (void)gate_bias_cb_id;
     (void)up_bias_cb_id;
-    copy_tile_to_dst_init_short_with_dt(prev_srcA_cb_id, gate_partials_cb_id);
+    reconfig_data_format_srca(prev_srcA_cb_id, gate_partials_cb_id);
+    copy_init(gate_partials_cb_id);
 #endif
 
     for (uint32_t base = 0; base < EFF_OUT; base += kActChunk) {
@@ -907,6 +910,8 @@ void kernel_main() {
     // is what lets the reader and writer leave the padded down weights and the
     // padded hidden (gate/up N-OOB) columns unwritten: nothing ever reduces them.
     constexpr uint32_t d_K_down_tiles = get_compile_time_arg_val(34);
+    constexpr uint32_t min_active_tokens = get_compile_time_arg_val(35);
+    constexpr uint32_t max_active_tokens = get_compile_time_arg_val(36);
 
     // CBs
     constexpr uint32_t cb_in0_x = get_named_compile_time_arg_val("cb_in0_x");
@@ -984,7 +989,10 @@ void kernel_main() {
             const volatile tt_l1_ptr uint32_t* idx_ptr =
                 reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(idx_l1_addr);
             const uint32_t global_expert_id = idx_ptr[local_expert_id];
-            count_value = counts_ptr[global_expert_id];
+            // Hybrid dispatch: experts outside this op's band belong to the other
+            // routed-expert op and are dropped here exactly like a zero count.
+            count_value =
+                adaptive_chunk::count_in_band(counts_ptr[global_expert_id], min_active_tokens, max_active_tokens);
             ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, count_value);
             ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, count_value);
         }));

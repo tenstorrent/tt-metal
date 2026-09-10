@@ -625,7 +625,7 @@ void kernel_main() {
                         reconfig_data_format_srca(dfb_x_id);
                     }
                     reconfig_data_format_srcb(do_beta ? dfb_beta_id : dfb_xmm_id, dfb_x_id);
-                    copy_tile_init(dfb_x_id);
+                    copy_init(dfb_x_id);
 
                     dfb_x.wait_front(1);
                     tile_regs_acquire();

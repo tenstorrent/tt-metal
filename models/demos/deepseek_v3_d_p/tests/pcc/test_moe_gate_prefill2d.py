@@ -17,13 +17,14 @@ from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as Refe
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
-from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss.modeling_gpt_oss import GptOssTopKRouter
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
-from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7.modeling_minimax_m2 import MiniMaxM2SparseMoeBlock
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
+from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     GATE_KEY_PREFIX_DEEPSEEK,
@@ -50,6 +51,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
 )
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_validation_results
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 from models.demos.deepseek_v3_d_p.utils.test_utils import adjust_shapes_for_testing, get_input_mem_config
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import GOLDEN_LONGBOOK_TRACE, load_trace_gate_input
 
@@ -57,19 +59,33 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import GOLDEN_LONGBO
 # routing from n_expert_groups (Kimi / V4 have a single group) and sigmoid vs sqrtsoftplus from
 # SCORE_FUNC, so each model is fully described by its config class.
 GATE_MODELS = {
-    "deepseek_v3": DeepSeekV3Config,
-    "kimi": KimiK26Config,
+    "dsv3": DeepSeekV3Config,
+    "kimi_k2_7": KimiK27Config,
     "kimi_k3": KimiK3Config,
-    "glm_5_1": GLM51Config,
+    "glm_5_2": GLM52Config,
     "minimax_m2_7": MiniMaxM27Config,
     "gpt_oss_120b": GptOss120BConfig,
     "dsv4_pro": DeepSeekV4ProConfig,
     "dsv4_flash": DeepSeekV4FlashConfig,
+    "mistral_small_4": MistralSmall4Config,
 }
+
+
+def _zero_bias_if_bias_free(gate_model: str, gate_w: dict) -> dict:
+    """Zero the correction bias for a router that has none, so the golden matches the real model.
+
+    create_gate_weights always synthesizes a random bias. With a nonzero one the GPT_* path
+    validates GPT-OSS routing (top-k on BIASED logits) rather than Mistral's softmax -> top-k ->
+    renormalize; zeroing it makes the two coincide, which is why Mistral can reuse the GPT modes.
+    """
+    if not getattr(GATE_MODELS[gate_model], "ROUTER_HAS_CORRECTION_BIAS", True):
+        gate_w["e_score_correction_bias"] = torch.zeros_like(gate_w["e_score_correction_bias"])
+    return gate_w
+
 
 # Per-chip sequence every gate case runs at. Must be passed at construction: TtMoEGateConfig keeps
 # only the tuned matmul configs keyed to sp_dim, so assigning it afterwards drops to default tiling.
-GATE_SP_DIM = 640
+GATE_SP_DIM = PREFILL_CHUNK_TOKENS_PER_CHIP
 
 
 def _gate_config(gate_model: str) -> TtMoEGateConfig:
@@ -113,7 +129,7 @@ class _RealGateSource(NamedTuple):
 
 # Models with loadable real router weights; anything absent falls back to seeded random weights.
 _REAL_GATE_SOURCES = {
-    "deepseek_v3": _RealGateSource(
+    "dsv3": _RealGateSource(
         env_var="DEEPSEEK_V3_HF_MODEL",
         fallbacks=(
             "models/demos/deepseek_v3/reference",
@@ -239,20 +255,26 @@ GALAXY_TP4_MESH_CONFIG = pytest.param(
 # (gate_model id, gate compute mode). Sigmoid models (V3/Kimi) exercise both the host and on-device
 # gates; V4 (sqrtsoftplus) runs the regular gate on device, where the kernel applies the activation.
 REGULAR_GATE_CASES = [
-    pytest.param("deepseek_v3", GateComputeMode.HOST_ALL, id="deepseek_v3-host_all"),
-    pytest.param("deepseek_v3", GateComputeMode.DEVICE_FP32, id="deepseek_v3-device_fp32"),
-    pytest.param("kimi", GateComputeMode.HOST_ALL, id="kimi-host_all"),
-    pytest.param("kimi", GateComputeMode.DEVICE_FP32, id="kimi-device_fp32"),
+    pytest.param("dsv3", GateComputeMode.HOST_ALL, id="dsv3-host_all"),
+    pytest.param("dsv3", GateComputeMode.DEVICE_FP32, id="dsv3-device_fp32"),
+    pytest.param("kimi_k2_7", GateComputeMode.HOST_ALL, id="kimi_k2_7-host_all"),
+    pytest.param("kimi_k2_7", GateComputeMode.DEVICE_FP32, id="kimi_k2_7-device_fp32"),
     pytest.param("kimi_k3", GateComputeMode.HOST_ALL, id="kimi_k3-host_all"),
     pytest.param("kimi_k3", GateComputeMode.DEVICE_FP32, id="kimi_k3-device_fp32"),
-    pytest.param("glm_5_1", GateComputeMode.HOST_ALL, id="glm_5_1-host_all"),
-    pytest.param("glm_5_1", GateComputeMode.DEVICE_FP32, id="glm_5_1-device_fp32"),
+    pytest.param("glm_5_2", GateComputeMode.HOST_ALL, id="glm_5_2-host_all"),
+    pytest.param("glm_5_2", GateComputeMode.DEVICE_FP32, id="glm_5_2-device_fp32"),
     pytest.param("minimax_m2_7", GateComputeMode.HOST_ALL, id="minimax_m2_7-host_all"),
     pytest.param("minimax_m2_7", GateComputeMode.DEVICE_FP32, id="minimax_m2_7-device_fp32"),
     pytest.param("gpt_oss_120b", GateComputeMode.GPT_HOST, id="gpt_oss_120b-gpt_host"),
     pytest.param("gpt_oss_120b", GateComputeMode.GPT_DEVICE, id="gpt_oss_120b-gpt_device"),
     pytest.param("dsv4_pro", GateComputeMode.DEVICE_FP32, id="dsv4_pro-device_fp32"),
     pytest.param("dsv4_flash", GateComputeMode.DEVICE_FP32, id="dsv4_flash-device_fp32"),
+    # Mistral's router is softmax -> top-4 -> renormalize, which is the GPT-OSS rule: softmax is
+    # monotonic, so top-k on logits equals top-k on softmax, and renormalizing the selected k equals
+    # softmaxing them. The sigmoid device gate cannot express it (moe_grouped_topk.cpp's
+    # parse_score_func takes only sigmoid/sqrtsoftplus), which is why the adapter picks GPT_DEVICE.
+    pytest.param("mistral_small_4", GateComputeMode.GPT_HOST, id="mistral_small_4-gpt_host"),
+    pytest.param("mistral_small_4", GateComputeMode.GPT_DEVICE, id="mistral_small_4-gpt_device"),
 ]
 
 
@@ -499,14 +521,15 @@ def test_forward_pass(
     # DeepSeek-V3's weights can't be reshaped to other expert counts or activations, so that path
     # stays pinned to 256 experts + sigmoid; K3 loads its own 896-expert router.
     use_real_weights = (
-        gate_model == "deepseek_v3" and config.n_routed_experts == 256 and config.score_func == "sigmoid"
+        gate_model == "dsv3" and config.n_routed_experts == 256 and config.score_func == "sigmoid"
     ) or gate_model == "kimi_k3"
     gate_w = _try_load_real_gate_weights(gate_model, config.n_routed_experts, config.dim) if use_real_weights else None
     if gate_w is None:
         gate_w = create_gate_weights(config.n_routed_experts, config.dim)
+    gate_w = _zero_bias_if_bias_free(gate_model, gate_w)
 
     # The real gate input is a DeepSeek-V3 prefill trace, so it is only meaningful for that model.
-    use_real = gate_model == "deepseek_v3" and use_real_weights
+    use_real = gate_model == "dsv3" and use_real_weights
 
     n_sp_devices = mesh_device.shape[0]
     total_seq_len = config.sp_dim * n_sp_devices
@@ -701,6 +724,7 @@ def test_forward_pass_interleaved(mesh_device, num_links, topology, gate_model, 
     # Scaling the dim to EMB_SIZE / 4 puts every model off its real router's width, so the checkpoint
     # weights cannot be loaded here and the golden is built from seeded synthetic weights instead.
     gate_w = create_gate_weights(config.n_routed_experts, config.dim)
+    gate_w = _zero_bias_if_bias_free(gate_model, gate_w)
     torch_input = _make_gate_input(config, config.sp_dim * n_sp_devices, allow_real_input=False)
     reference_logits = torch_input @ gate_w["weight"].T
     reference_topk_indices, reference_topk_scores = _reference_topk(
