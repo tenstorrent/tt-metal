@@ -1,5 +1,4 @@
-# Emule CTest registrations — reuses existing test executables with emule env vars.
-# No source compilation; just CTest entries with --gtest_filter and ENVIRONMENT.
+# Emule-specific host test target and CTest registrations for existing executables.
 
 set(EMULE_ENV
     "TT_METAL_RUNTIME_ROOT=${PROJECT_SOURCE_DIR}"
@@ -9,6 +8,31 @@ set(EMULE_ENV
 )
 
 set(EMULE_LABEL "emule")
+
+# --- Tier 1: host-only tt-emule state tests ---
+
+if(TT_METAL_BUILD_TESTS)
+    add_executable(unit_tests_emule_host host/test_cb_sync_consumer_reset.cpp)
+    target_link_libraries(
+        unit_tests_emule_host
+        PRIVATE
+            gtest_main
+            tt-emule::headers
+    )
+    set_target_properties(
+        unit_tests_emule_host
+        PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY
+                ${PROJECT_BINARY_DIR}/test/emule
+    )
+    gtest_discover_tests(
+        unit_tests_emule_host
+        TEST_PREFIX "emule/"
+        PROPERTIES
+            LABELS
+                "${EMULE_LABEL}"
+    )
+endif()
 
 # --- Tier 2: tt_metal API buffer tests (from unit_tests_api) ---
 
