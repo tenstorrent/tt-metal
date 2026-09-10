@@ -1134,6 +1134,7 @@ __attribute__((noinline)) void trace_only_init() {
 // null macros when perf counters are disabled
 #define StartPerfCounters()
 #define StopPerfCounters()
+#define ReadPerfCounters()
 #define RecordPerfCounters()
 
 #endif
