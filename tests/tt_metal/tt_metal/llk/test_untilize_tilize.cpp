@@ -1663,7 +1663,11 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixCustomPackUntilizeExplicitGeometry) 
     // Three rows exercise half-sync bank reuse. Width 12 requires several DEST
     // sections, so block column offsets are checked as well as face geometry.
     for (const auto num_faces : {1u, 2u, 4u}) {
-        for (const auto face_rows : {1u, 8u}) {
+        // copy_tile populates full 16x16 face slots. One/two-face tiny tiles
+        // select their leading rows; the four-face case uses the full shape.
+        // Short four-face SDPA layouts require a different DEST producer.
+        const auto face_heights = num_faces == 4 ? vector<std::uint32_t>{16} : vector<std::uint32_t>{1, 8};
+        for (const auto face_rows : face_heights) {
             for (const auto width : {1u, 12u}) {
                 for (const bool full_sync : {false, true}) {
                     SCOPED_TRACE(fmt::format(
