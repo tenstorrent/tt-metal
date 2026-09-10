@@ -70,6 +70,48 @@ def test_nextafter_direction_and_equality(device, dtype):
     assert_with_ulp(expected_result=expected[in_scope], actual_result=actual[in_scope], ulp_threshold=0)
 
 
+def test_nextafter_signed_zeros(device):
+    """Zeros take the sign of the target, including nextafter(+0, -0) == -0.
+
+    The results here are zeros rather than the true subnormal neighbours, which the SFPU flushes,
+    so only the sign is checked. Signs are compared through copysign because 0.0 == -0.0.
+
+    float32 only: a bfloat16 tile does not carry a negative zero through the compute path at all,
+    independently of this op. ttnn.neg on a bfloat16 +0.0 returns +0.0, where the same call on
+    float32 returns -0.0, so there is no sign for this op to preserve in that format.
+    """
+    dtype, torch_dtype = ttnn.float32, torch.float32
+
+    zeros = torch.tensor([0.0, -0.0, 0.0, -0.0], dtype=torch_dtype)
+    targets = torch.tensor([-0.0, 0.0, -1.0, 1.0], dtype=torch_dtype)
+    a = zeros.repeat(8).reshape(1, 1, 1, -1).expand(1, 1, 32, 32).contiguous()
+    b = targets.repeat(8).reshape(1, 1, 1, -1).expand(1, 1, 32, 32).contiguous()
+
+    ttnn_a = ttnn.from_torch(a, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_b = ttnn.from_torch(b, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn.nextafter(ttnn_a, ttnn_b))
+
+    assert torch.equal(actual.abs(), torch.zeros_like(actual)), f"expected zeros, got {actual.unique()}"
+    expected_sign = torch.copysign(torch.ones_like(b), b)
+    actual_sign = torch.copysign(torch.ones_like(actual), actual)
+    assert torch.equal(actual_sign, expected_sign), "zero results must carry the target's sign"
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+def test_nextafter_rejects_block_float(device, dtype, expect_error):
+    """A bfloat16 ULP is not the next representable block-float value, so these are not accepted.
+
+    Unrestricted, the step rounded away when the tile was packed against its shared exponent and
+    the op returned its input: bfloat4_b was a no-op for every element.
+    """
+    a = torch.rand((1, 1, 32, 32), dtype=torch.float32) * 200 - 100
+    ttnn_a = ttnn.from_torch(a, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_b = ttnn.from_torch(a + 50.0, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    with expect_error(RuntimeError, "is not supported for binary operation BinaryOpType::NEXTAFTER"):
+        ttnn.nextafter(ttnn_a, ttnn_b)
+
+
 @pytest.mark.parametrize("toward", ["up", "down"])
 def test_nextafter_exhaustive_bfloat16(device, toward):
     """Walk every normal bfloat16 value one ULP up and one ULP down."""

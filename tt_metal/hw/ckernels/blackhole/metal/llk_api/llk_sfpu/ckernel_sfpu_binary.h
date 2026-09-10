@@ -155,11 +155,23 @@ inline void calculate_sfpu_binary(
             v_if(in0 > in1 && in0 <= 0.0f) { step = kUlpStep; }
             v_endif;
             result = sfpi::as<sfpi::vFloat>(bits + step);
-            // Both zeros share the magnitude 0 but not the sign bit, so neither reaches the correct
-            // neighbour by stepping its own pattern. Set them from the target's sign instead.
-            v_if(in0 == 0.0f && in1 > 0.0f) { result = tiny; }
+            // Zeros need their own path: neither zero reaches its neighbour by stepping its own
+            // pattern, and the sign of the answer comes from the target rather than from in0.
+            // The guards test the magnitudes, not in0 and in1 directly, because SFPSETCC is
+            // specified only for a comparand that is not negative zero (VectorUnit.md), and
+            // in0 == 0.0f tests in0 - 0.0f, which is negative zero exactly when in0 is. Clearing
+            // the sign first is what brings -0.0 into the guard; ckernel_sfpu_rsqrt_compat.h
+            // carries the same construction for the same reason.
+            sfpi::vFloat mag_a = sfpi::setsgn(in0, 0);
+            sfpi::vFloat mag_b = sfpi::setsgn(in1, 0);
+            v_if(mag_a == 0.0f && in1 > 0.0f) { result = tiny; }
             v_endif;
-            v_if(in0 == 0.0f && in1 < 0.0f) { result = -tiny; }
+            v_if(mag_a == 0.0f && in1 < 0.0f) { result = -tiny; }
+            v_endif;
+            // Equal operands return the target, so two zeros return in1's zero, which is not
+            // always in0's: nextafter(+0, -0) is -0. This runs last because the two guards above
+            // compare in1 against zero, which is itself unspecified when in1 is negative zero.
+            v_if(mag_a == 0.0f && mag_b == 0.0f) { result = in1; }
             v_endif;
         }
 
