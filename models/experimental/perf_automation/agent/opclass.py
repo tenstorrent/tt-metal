@@ -94,3 +94,8 @@ def classify_op(op_code: str) -> str:
 def is_classified(op_code: str) -> bool:
     """True if the op_code matched a known class (i.e. did not fall to `other`)."""
     return classify_op(op_code) != UNCLASSIFIED
+
+
+# The class the FLOP-bearing dense ops land in. Read back through the classifier so OP_CLASS_MAP
+# stays the single source: this can never name a class the map has stopped emitting.
+MATMUL_OP_CLASS = classify_op(OP_CLASS_MAP[0][0][0])
