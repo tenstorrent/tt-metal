@@ -16,17 +16,15 @@
 
 // SPLIT REDUCE across Cores
 void kernel_main() {
-    constexpr auto num_blocks_first_stage = get_arg(args::num_blocks_first_stage);
     constexpr auto block_w = get_arg(args::block_w);
     constexpr auto block_h_const = get_arg(args::block_h);
-    volatile uint32_t block_h_volatile = get_arg(args::block_h);
+    const volatile uint32_t block_h_volatile = get_arg(args::block_h);
     constexpr auto subblock_w_const = get_arg(args::subblock_w);
-    volatile uint32_t subblock_w_volatile = get_arg(args::subblock_w);
+    const volatile uint32_t subblock_w_volatile = get_arg(args::subblock_w);
     constexpr auto num_subblocks_w = get_arg(args::num_subblocks_w);
     constexpr auto num_tiles_per_block = get_arg(args::num_tiles_per_block);
     constexpr bool FLOAT32_DTYPE = get_arg(args::float32_dtype) == 1;
     constexpr bool LEGACY_RSQRT = get_arg(args::legacy_rsqrt) == 1;
-    constexpr auto num_blocks_second_stage = get_arg(args::num_blocks_second_stage);
     // gamma and beta each gate a buffer that only exists when their tensor was supplied, so the flag
     // has to reach the preprocessor as well as `if constexpr`.
 #ifdef FUSE_GAMMA
@@ -51,19 +49,7 @@ void kernel_main() {
     const bool is_second_stage_reader = get_arg(args::is_second_stage_reader) == 1;
     const uint32_t num_distributed_blocks = get_arg(args::num_distributed_blocks);
 
-    uint32_t num_blocks_reduce;
-    if (is_second_stage_reader) {
-        num_blocks_reduce = num_blocks_first_stage + num_blocks_second_stage - 1;
-    } else {
-        num_blocks_reduce = num_blocks_first_stage;
-    }
-
-    bool enable_sqrt;
-    if (use_two_stage_reduce and not is_second_stage_reader) {
-        enable_sqrt = false;
-    } else {
-        enable_sqrt = true;
-    }
+    const bool enable_sqrt = not(use_two_stage_reduce and not is_second_stage_reader);
 #endif
 
     constexpr uint32_t dst0 = 0;
@@ -140,11 +126,11 @@ void kernel_main() {
     const uint32_t block_h = (block_w == 1) ? block_h_volatile : block_h_const;
     const uint32_t subblock_w = (block_w <= 2) ? subblock_w_volatile : subblock_w_const;
 
-    int index_subblock_w_offset = 0;
-    int index_h_offset = 0;
-    int index = 0;
+    uint32_t index_subblock_w_offset = 0;
+    uint32_t index_h_offset = 0;
+    uint32_t index = 0;
 
-    constexpr uint32_t dfb_im = (do_gamma | do_beta) ? dfb_ex_sqr : dfb_out;
+    constexpr uint32_t dfb_im = (do_gamma || do_beta) ? dfb_ex_sqr : dfb_out;
     DataflowBuffer dfb_im_obj(dfb_im);
     constexpr uint32_t dfb_outgamma = do_beta ? dfb_fusion : dfb_out;
     DataflowBuffer dfb_outgamma_obj(dfb_outgamma);
@@ -266,8 +252,8 @@ void kernel_main() {
             }
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t i = 0; i < subblock_w; i++) {
-                pack_tile(i, dfb_xmm);
+            for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
+                pack_tile(dst_i, dfb_xmm);
             }
             tile_regs_release();
             index_subblock_w_offset += subblock_w;
@@ -278,7 +264,7 @@ void kernel_main() {
     dfb_xmm_obj.push_back(num_tiles_per_block);
 #endif
 
-    if constexpr (do_gamma == 0 && do_beta == 0) {
+    if constexpr (!do_gamma && !do_beta) {
         pack_reconfig_data_format(dfb_out);
     } else {
         pack_reconfig_data_format(dfb_im);
@@ -304,8 +290,8 @@ void kernel_main() {
             tile_regs_commit();
 
             tile_regs_wait();
-            for (uint32_t i = 0; i < subblock_w; i++) {
-                pack_tile(i, dfb_im);
+            for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
+                pack_tile(dst_i, dfb_im);
             }
             tile_regs_release();
 
@@ -322,7 +308,7 @@ void kernel_main() {
 #ifdef FUSE_GAMMA
     {
         reconfig_data_format(dfb_im, dfb_gamma);
-        if constexpr (do_beta == 0) {
+        if constexpr (!do_beta) {
             pack_reconfig_data_format(dfb_out);
         }
         mul_bcast_rows_init(dfb_im, dfb_gamma);
@@ -339,8 +325,8 @@ void kernel_main() {
                 }
                 tile_regs_commit();
                 tile_regs_wait();
-                for (uint32_t i = 0; i < subblock_w; i++) {
-                    pack_tile(i, dfb_outgamma);
+                for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
+                    pack_tile(dst_i, dfb_outgamma);
                 }
                 tile_regs_release();
                 index_subblock_w_offset += subblock_w;
