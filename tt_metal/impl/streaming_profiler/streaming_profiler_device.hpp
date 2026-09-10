@@ -25,7 +25,6 @@ namespace distributed {
 class MeshDevice;
 class MeshCoordinate;
 class D2HSocket;
-class MeshBuffer;
 }  // namespace distributed
 class Program;
 class IDevice;
@@ -105,7 +104,7 @@ private:
     // Relay count, each relay's DRAM view and core, then every relay's NIU into stream mode. False: no relay can
     // run on this device.
     bool choose_relay_cores(const std::shared_ptr<distributed::MeshDevice>& mesh_device, DeviceCtx& ctx);
-    void reserve_spool(const std::shared_ptr<distributed::MeshDevice>& mesh_device, IDevice* device);
+    void reserve_spool();
     // Configures the relay's TLB window, builds its socket, launches it and confirms its heartbeat. False means
     // capture must be abandoned for this device.
     bool launch_relay(
@@ -126,9 +125,8 @@ private:
     uint64_t drisc_l1_noc_ = 0;
     uint32_t slot_bytes_ = 0;  // staging slot; mirrors the relay kernel's kSlotWords
     RelayL1 l1_;
-    // GDDR spool: one replicated mesh buffer with one interleaved page per DRAM bank, so the same window is
-    // reserved in every bank of every device. Bytes 0 = direct push.
-    std::shared_ptr<distributed::MeshBuffer> spool_buffer_;
+    // GDDR spool: the HAL's PROFILER DRAM region, which MetalEnv sizes for the spool when the streaming profiler
+    // is on, so it lies below every allocator's unreserved base. Bytes 0 = direct push.
     uint32_t spool_bytes_ = 0;
     uint32_t spool_addr_ = 0;
     std::vector<DeviceCtx> devices_;
