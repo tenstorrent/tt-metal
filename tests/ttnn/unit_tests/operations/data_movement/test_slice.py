@@ -25,7 +25,34 @@ def random_torch_tensor(dtype, shape):
     return torch.rand(shape).bfloat16().float()
 
 
-def run_slice_rm_sharded(device, n, c, h, w):
+def height_sharded_l1_mem_config(shard_grid, num_rows, row_width, orientation=ttnn.ShardOrientation.ROW_MAJOR):
+    """Height-shard num_rows rows of row_width elements over shard_grid, one shard per core in the grid."""
+    num_cores = shard_grid.num_cores()
+    shard_h = (num_rows + num_cores - 1) // num_cores
+    shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, row_width), orientation)
+    return ttnn.MemoryConfig(ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec)
+
+
+def full_grid_core_range_set(num_cores_x, num_cores_y):
+    """The single rectangle of cores from (0, 0) to (num_cores_x - 1, num_cores_y - 1)."""
+    return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))])
+
+
+def run_slice_rm_sharded(
+    device,
+    n,
+    c,
+    h,
+    w,
+    input_shard_grid=None,
+    output_shard_grid=None,
+    input_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    output_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
+):
+    if input_shard_grid is None:
+        input_shard_grid = full_grid_core_range_set(8, 7)
+    if output_shard_grid is None:
+        output_shard_grid = full_grid_core_range_set(8, 7)
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     n_unpadded = n
     c_unpadded = 115
@@ -40,29 +67,13 @@ def run_slice_rm_sharded(device, n, c, h, w):
     )
 
     # shard config
-    num_cores_x = 8
-    num_cores_y = 7
-    shard_h = (n * c * h + (num_cores_x * num_cores_y) - 1) // (num_cores_x * num_cores_y)
-    grid_size = ttnn.CoreGrid(y=num_cores_y, x=num_cores_x)
-    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
-    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-    shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, w), ttnn.ShardOrientation.ROW_MAJOR)
-    sharded_mem_config = ttnn.MemoryConfig(
-        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
-    )
+    sharded_mem_config = height_sharded_l1_mem_config(input_shard_grid, n * c * h, w, input_shard_orientation)
     with device.cache_entries_counter.measure():
         tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, sharded_mem_config)
 
     # output shard config
-    num_cores_x = 8
-    num_cores_y = 7
-    shard_h = (n_unpadded * c_unpadded * h_unpadded + (num_cores_x * num_cores_y) - 1) // (num_cores_x * num_cores_y)
-    grid_size = ttnn.CoreGrid(y=num_cores_y, x=num_cores_x)
-    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
-    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-    shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, w), ttnn.ShardOrientation.ROW_MAJOR)
-    output_mem_config = ttnn.MemoryConfig(
-        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    output_mem_config = height_sharded_l1_mem_config(
+        output_shard_grid, n_unpadded * c_unpadded * h_unpadded, w, output_shard_orientation
     )
 
     with device.cache_entries_counter.measure():
@@ -162,6 +173,57 @@ def test_slice_rm_sharded_with_program_cache(device, n, c, h, w):
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
     assert device.cache_entries_counter.total == 3
+
+
+@pytest.mark.parametrize(
+    "shard_grid",
+    [
+        full_grid_core_range_set(8, 7),
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(5, 6))]),
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
+            ]
+        ),
+    ],
+    ids=["origin_rectangle", "offset_rectangle", "two_rectangles"],
+)
+@pytest.mark.parametrize("n", [16])
+@pytest.mark.parametrize("c", [128])
+@pytest.mark.parametrize("h", [128])
+@pytest.mark.parametrize("w", [16])
+def test_slice_rm_sharded_shard_grid_placement(device, shard_grid, n, c, h, w):
+    """A height-sharded row-major slice must give the same result whichever cores the shards live
+    on. A shard grid may be several rectangles rather than one, and it need not include core
+    (0, 0). The cores a shard grid leaves out are available for other work, so the slice must
+    leave them untouched. Each parameter here is the shard grid of both the input and the
+    output."""
+    run_slice_rm_sharded(device, n, c, h, w, input_shard_grid=shard_grid, output_shard_grid=shard_grid)
+
+
+@pytest.mark.parametrize("input_shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+@pytest.mark.parametrize("output_shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+@pytest.mark.parametrize("n", [16])
+@pytest.mark.parametrize("c", [128])
+@pytest.mark.parametrize("h", [128])
+@pytest.mark.parametrize("w", [16])
+def test_slice_rm_sharded_shard_orientation(device, input_shard_orientation, output_shard_orientation, n, c, h, w):
+    """A shard spec's orientation says which core holds which shard, and it belongs to one tensor.
+    The input tensor and the output tensor each carry their own orientation, so a slice must read
+    the input according to the input's orientation and write the output according to the output's
+    orientation, including when the input's orientation and the output's orientation differ. The
+    shard grid is the same origin-anchored rectangle in every case here, so which core holds which
+    shard is the only thing that varies."""
+    run_slice_rm_sharded(
+        device,
+        n,
+        c,
+        h,
+        w,
+        input_shard_orientation=input_shard_orientation,
+        output_shard_orientation=output_shard_orientation,
+    )
 
 
 @pytest.mark.parametrize("n", [16])

@@ -8,7 +8,9 @@
 
 #include <map>
 #include <optional>
+#include <vector>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
@@ -57,18 +59,19 @@ inline std::vector<std::vector<uint32_t>> group_contiguous_values(std::vector<ui
     return chunks;
 }
 
+// input_cores lists the cores of the input tensor's shard grid in shard order, so input_cores[k] is the
+// core holding input shard k. Every core address written into an argument list comes from input_cores.
+// num_padded_sticks is how many rows the input holds, so a row id at or past num_padded_sticks has no
+// source.
 inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_slice_runtime_args_rm_sharded(
     const Tensor& input_tensor,
     Tensor& output_tensor,
     const ttnn::Shape& output_tensor_start,
+    const std::vector<CoreCoord>& input_cores,
     uint32_t num_cores_unpadded,
-    bool row_major,
-    uint32_t num_cores_x_unpadded,
-    uint32_t num_cores_y_unpadded,
     uint32_t shard_height_unpadded,
     uint32_t shard_height_padded,
-    uint32_t num_cores_x_padded,
-    uint32_t num_cores_y_padded) {
+    uint32_t num_padded_sticks) {
     tt::tt_metal::IDevice* device = input_tensor.device();
 
     auto input_shape = input_tensor.padded_shape();
@@ -100,12 +103,6 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
     uint32_t start_offset = ttnn::operations::data_movement::get_rm_start_offset(input_tensor, output_tensor_start);
     for (uint32_t i = 0, num_sticks_written = 0; i < num_cores_unpadded; i++) {
-        CoreCoord core;
-        if (row_major) {
-            core = {i % num_cores_x_unpadded, i / num_cores_x_unpadded};
-        } else {
-            core = {i / num_cores_y_unpadded, i % num_cores_y_unpadded};
-        }
         uint32_t num_sticks_per_core_unpadded = shard_height_unpadded;
         uint32_t num_sticks_per_core_padded = shard_height_padded;
 
@@ -140,51 +137,54 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
             }
         }
 
-        // figure out the stick id in a shard, and the core id for the stick.
-        std::map<std::pair<uint32_t, uint32_t>, std::vector<uint32_t>> core_stick_map;
+        // Group this core's source rows by the input shard holding them. Keying on the shard index puts the
+        // groups in increasing shard index order, which is what the reader needs: it fills the output shard
+        // front to back as it walks the list of cores to read from, and within each of those cores its chunk
+        // list. Row ids only grow as stick_ids_per_core is built above, so increasing shard index order is
+        // also increasing output row order.
+        std::map<uint32_t, std::vector<uint32_t>> shard_stick_map;
         for (uint32_t i = 0; i < num_sticks_per_core_unpadded; ++i) {
             uint32_t stick_id = stick_ids_per_core[i];
             uint32_t shard_id = stick_id / num_sticks_per_core_padded;
             uint32_t stick_id_in_shard = stick_id - (shard_id * num_sticks_per_core_padded);
 
-            uint32_t shard_grid_inner_dim = row_major ? num_cores_x_padded : num_cores_y_padded;
-            uint32_t shard_grid_outer_dim_id = shard_id / shard_grid_inner_dim;
-            uint32_t shard_grid_inner_dim_id = shard_id - (shard_grid_outer_dim_id * shard_grid_inner_dim);
-
-            uint32_t worker_y_logical = row_major ? shard_grid_outer_dim_id : shard_grid_inner_dim_id;
-            uint32_t worker_x_logical = row_major ? shard_grid_inner_dim_id : shard_grid_outer_dim_id;
-
-            if (worker_x_logical < num_cores_x_padded and worker_y_logical < num_cores_y_padded) {
-                auto core_physical =
-                    device->worker_core_from_logical_core(CoreCoord{worker_x_logical, worker_y_logical});
-                // save stick id in a shard, and core coord into a map
-                std::pair<uint32_t, uint32_t> xy_pair = row_major ? std::make_pair(core_physical.y, core_physical.x)
-                                                                  : std::make_pair(core_physical.x, core_physical.y);
-                core_stick_map[xy_pair].push_back(stick_id_in_shard);
+            // A shard height that does not divide the output evenly leaves the last output shard only
+            // partly inside the output tensor. Rows past the end of the output tensor have no source,
+            // because the stick_ids_per_core walk runs them off the end of the input. That walk only ever
+            // increases the row id, so the rows with no source are the tail of this core's list; stopping
+            // keeps every row that does have a source at its own position in the output shard.
+            if (stick_id >= num_padded_sticks) {
+                break;
             }
+            // Every input row lies in one of the input's own shards, so the row-id bound above already
+            // puts the shard index inside input_cores. A shard index outside input_cores would mean the
+            // input's shard height, shard grid and row count do not describe the same tensor.
+            TT_FATAL(
+                shard_id < input_cores.size(),
+                "SliceRmShardedProgramFactory: input row {} falls in shard {}, but the input shard grid holds "
+                "only {} shards.",
+                stick_id,
+                shard_id,
+                input_cores.size());
+            shard_stick_map[shard_id].push_back(stick_id_in_shard);
         }
 
         // reader rt args
         std::vector<uint32_t> reader_kernel_args;
-        reader_kernel_args.reserve(1 + 3 * core_stick_map.size() + 2 * num_sticks_per_core_unpadded);
-        reader_kernel_args.push_back(core_stick_map.size());  // num_cores
+        reader_kernel_args.reserve(1 + 3 * shard_stick_map.size() + 2 * num_sticks_per_core_unpadded);
+        reader_kernel_args.push_back(shard_stick_map.size());  // num_cores
 
-        for (const auto& core_stick_pair : core_stick_map) {
-            auto xy_pair = core_stick_pair.first;
-            if (row_major) {
-                reader_kernel_args.push_back(xy_pair.second);  // noc x
-                reader_kernel_args.push_back(xy_pair.first);   // noc y
-            } else {
-                reader_kernel_args.push_back(xy_pair.first);   // noc x
-                reader_kernel_args.push_back(xy_pair.second);  // noc y
-            }
+        for (const auto& shard_stick_pair : shard_stick_map) {
+            auto core_physical = device->worker_core_from_logical_core(input_cores[shard_stick_pair.first]);
+            reader_kernel_args.push_back(core_physical.x);  // noc x
+            reader_kernel_args.push_back(core_physical.y);  // noc y
         }
 
         // coalesce the sticks into chunks
         std::vector<std::vector<std::vector<uint32_t>>> stick_chunks_per_core;
-        stick_chunks_per_core.reserve(core_stick_map.size());
-        for (auto core_stick_pair : core_stick_map) {
-            auto stick_chunks = group_contiguous_values(core_stick_pair.second);
+        stick_chunks_per_core.reserve(shard_stick_map.size());
+        for (auto shard_stick_pair : shard_stick_map) {
+            auto stick_chunks = group_contiguous_values(shard_stick_pair.second);
             reader_kernel_args.push_back(stick_chunks.size());  // num_chunks for current core
 
             stick_chunks_per_core.push_back(std::move(stick_chunks));
@@ -214,7 +214,7 @@ tt::tt_metal::ProgramDescriptor SliceRmShardedProgramFactory::create_descriptor(
     const auto& input = tensor_args.input;
     ProgramDescriptor desc;
 
-    [[maybe_unused]] uint32_t num_padded_sticks = input.physical_volume() / input.padded_shape()[-1];
+    uint32_t num_padded_sticks = input.physical_volume() / input.padded_shape()[-1];
     [[maybe_unused]] uint32_t num_unpadded_sticks = output.physical_volume() / output.padded_shape()[-1];
 
     uint32_t W_unpadded = output.logical_shape()[-1];
@@ -224,12 +224,16 @@ tt::tt_metal::ProgramDescriptor SliceRmShardedProgramFactory::create_descriptor(
     auto shard_spec_padded = input.shard_spec().value();
     uint32_t shard_height_padded = shard_spec_padded.shape[0];
 
-    [[maybe_unused]] auto& all_cores_padded = shard_spec_padded.grid;
+    auto& all_cores_padded = shard_spec_padded.grid;
     [[maybe_unused]] uint32_t num_cores_padded = shard_spec_padded.num_cores();
-    auto bbox_padded = shard_spec_padded.grid.bounding_box();
-    CoreCoord grid_size_padded = {bbox_padded.end_coord.x + 1, bbox_padded.end_coord.y + 1};
-    uint32_t num_cores_x_padded = grid_size_padded.x;
-    uint32_t num_cores_y_padded = grid_size_padded.y;
+    // Which core holds which shard follows from a tensor's shard grid and its shard orientation, and the
+    // input and the output each carry their own. The input's shard grid and orientation are read here; the
+    // output's are read further down. corerange_to_cores walks the shard grid itself instead of the bounding
+    // box around it, so a grid of several rectangles, or one placed away from core (0, 0), is listed
+    // correctly. A sharded buffer builds its page mapping with the same call, so input_cores holds the input
+    // buffer's own shard-to-core assignment.
+    const bool row_major_padded = shard_spec_padded.orientation == ShardOrientation::ROW_MAJOR;
+    const std::vector<CoreCoord> input_cores = corerange_to_cores(all_cores_padded, std::nullopt, row_major_padded);
 
     if (args.sub_core_grids.has_value()) {
         log_warning(tt::LogOp, "sub_core_grids is not used when input tensor is sharded");
@@ -243,14 +247,12 @@ tt::tt_metal::ProgramDescriptor SliceRmShardedProgramFactory::create_descriptor(
     // output shard spec
     auto shard_spec_unpadded = output.shard_spec().value();
     uint32_t shard_height_unpadded = shard_spec_unpadded.shape[0];
-    bool row_major = shard_spec_unpadded.orientation == ShardOrientation::ROW_MAJOR;
+    const bool row_major_unpadded = shard_spec_unpadded.orientation == ShardOrientation::ROW_MAJOR;
 
     auto& all_cores_unpadded = shard_spec_unpadded.grid;
     uint32_t num_cores_unpadded = shard_spec_unpadded.num_cores();
-    auto bbox_unpadded = all_cores_unpadded.bounding_box();
-    CoreCoord grid_size_unpadded = {bbox_unpadded.end_coord.x + 1, bbox_unpadded.end_coord.y + 1};
-    uint32_t num_cores_x_unpadded = grid_size_unpadded.x;
-    uint32_t num_cores_y_unpadded = grid_size_unpadded.y;
+    const std::vector<CoreCoord> output_cores =
+        corerange_to_cores(all_cores_unpadded, std::nullopt, row_major_unpadded);
 
     log_debug(tt::LogOp, "num_unpadded_sticks: {}", num_unpadded_sticks);
     log_debug(tt::LogOp, "shard_height_unpadded: {}", shard_height_unpadded);
@@ -313,14 +315,11 @@ tt::tt_metal::ProgramDescriptor SliceRmShardedProgramFactory::create_descriptor(
         input,
         output,
         args.slice_start,
+        input_cores,
         num_cores_unpadded,
-        row_major,
-        num_cores_x_unpadded,
-        num_cores_y_unpadded,
         shard_height_unpadded,
         shard_height_padded,
-        num_cores_x_padded,
-        num_cores_y_padded);
+        num_padded_sticks);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -331,15 +330,12 @@ tt::tt_metal::ProgramDescriptor SliceRmShardedProgramFactory::create_descriptor(
     reader_desc.compile_time_args = std::move(reader_ct_args);
     reader_desc.config = ReaderConfigDescriptor{};
 
+    // The reader runs on all_cores_unpadded, so every argument list must go to a core of that set.
+    // get_slice_runtime_args_rm_sharded builds list i for output shard i, and output_cores[i] is the core
+    // holding that shard.
     reader_desc.runtime_args.reserve(num_cores_unpadded);
     for (uint32_t i = 0; i < num_cores_unpadded; ++i) {
-        CoreCoord core;
-        if (row_major) {
-            core = {i % num_cores_x_unpadded, i / num_cores_x_unpadded};
-        } else {
-            core = {i / num_cores_y_unpadded, i % num_cores_y_unpadded};
-        }
-        reader_desc.runtime_args.emplace_back(core, std::move(all_runtime_args[i].first));
+        reader_desc.runtime_args.emplace_back(output_cores[i], std::move(all_runtime_args[i].first));
     }
 
     desc.kernels.push_back(std::move(reader_desc));
