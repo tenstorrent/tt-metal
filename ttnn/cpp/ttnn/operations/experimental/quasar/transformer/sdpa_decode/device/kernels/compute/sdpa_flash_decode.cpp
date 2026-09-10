@@ -118,9 +118,14 @@ void kernel_main() {
     constexpr auto dfb_sum_1 = dfb::sum_1;
     constexpr auto dfb_sum_2 = dfb::sum_2;
     constexpr auto dfb_exp_max_diff = dfb::exp_max_diff;
-    constexpr auto dfb_prev_sum_2 = dfb::prev_sum_2;
-    constexpr auto dfb_exp_max_diff_2 = dfb::exp_max_diff_2;
-    constexpr auto dfb_out_accumulate_im_2 = dfb::out_accumulate_im_2;
+    // Quasar tile-counter budget (max 8 intra-Tensix DFBs): these 3 tree-reduction temps reuse buffers
+    // that already carry the needed data or are idle during the tree phase, in place (no copy) — the
+    // child's L is already in l_in and the child's O in out_o (both same bf16 tile layout as the temps),
+    // and out_m is unwritten until send-to-parent (after all exp_max_diff_2 uses). Drops the intra-Tensix
+    // DFB count 11 -> 8; the factory stops allocating the originals.
+    constexpr auto dfb_prev_sum_2 = dfb::l_in;
+    constexpr auto dfb_exp_max_diff_2 = dfb::out_m;
+    constexpr auto dfb_out_accumulate_im_2 = dfb::out_o;
 
     constexpr auto dfb_out_o = dfb::out_o;
     constexpr auto dfb_out_worker = dfb::out_worker;
@@ -594,8 +599,8 @@ void kernel_main() {
                     // Data arrives in order: l, m, o
 
                     // Combine child with existing local/accumulated data
-                    // Move child's L to dfb_prev_sum_2 for correction
-                    move_block<true>(dfb_l_in, dfb_prev_sum_2, Sq_chunk_t);
+                    // Child's L is already in l_in (== dfb_prev_sum_2 alias); correction_block consumes it
+                    // directly as worker_sum (it wait_fronts + pops it), so no copy is needed.
                     // Fused Softmax Correction
                     // * Fused Correction is a fused operation that performs the following steps:
                     // * 1. CUR_MAX = max(PREV_MAX, WORKER_MAX)
@@ -615,8 +620,8 @@ void kernel_main() {
                         dfb_exp_max_diff_2,
                         Sq_chunk_t);
 
-                    // OUT_ACC_2 <- CHILD_OUT
-                    move_block<true>(dfb_out_o, dfb_out_accumulate_im_2, out_chunk_tiles);
+                    // Child's O is already in out_o (== dfb_out_accumulate_im_2 alias, same bf16 layout);
+                    // it is scaled (mul below) and accumulated into out_accumulate_im in place (no copy).
 
                     // OUT_ACC *= EXP_MAX_DIFF (scale local accumulator)
                     // OUT_ACC_2 *= EXP_MAX_DIFF_2 (scale child's accumulator)
