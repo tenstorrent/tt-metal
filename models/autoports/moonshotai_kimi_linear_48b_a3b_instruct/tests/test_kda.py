@@ -53,12 +53,14 @@ def test_decode_step_matches_reference(mesh_device, B):
     beta = torch.rand(B, 1, H)
     state = torch.randn(B, H, K, V) * 0.1
     ref_o, ref_s = kda_recurrent_reference(q, k, v, g, beta, state)  # [B,1,H,V], [B,H,K,V]
-    dev = lambda t, dt=ttnn.bfloat16: ttnn.from_torch(t, dtype=dt, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    dev = lambda t, dt=ttnn.bfloat16: replicated(
+        mesh_device, t, dtype=dt
+    )  # per-head op: replicated inputs, read one shard
     o, s = recurrent_kda_decode_ttnn(
         dev(q), dev(k), dev(v), dev(beta, ttnn.float32), dev(g), dev(state, ttnn.float32), device=mesh_device
     )
-    assert_pcc(ref_o, ttnn.to_torch(o), 0.999, f"decode step output B={B}")
-    assert_pcc(ref_s, ttnn.to_torch(s), 0.999, f"decode step state B={B}")
+    assert_pcc(ref_o, first_shard(o), 0.999, f"decode step output B={B}")
+    assert_pcc(ref_s, first_shard(s), 0.999, f"decode step state B={B}")
 
 
 def _real_hidden(goldens, n):
