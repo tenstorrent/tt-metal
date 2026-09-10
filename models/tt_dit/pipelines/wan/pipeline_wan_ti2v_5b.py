@@ -11,7 +11,7 @@ dim=3072 / ffn=14336 / TP=4. Sweep before claiming perf.
 import ttnn
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
 from models.tt_dit.utils.matmul import FusedMMRSConfig, register_fused_mmrs_configs, register_matmul_configs
-from models.tt_dit.utils.conv3d import register_conv3d_configs
+from models.tt_dit.utils.conv3d import register_conv3d_configs, _BLOCKINGS
 
 _5B_CHECKPOINT = "Wan-AI/Wan2.2-TI2V-5B-Diffusers"
 
@@ -86,6 +86,21 @@ def _register_5b_conv3d_tables() -> None:
 
 _register_5b_matmul_tables()
 _register_5b_conv3d_tables()
+
+# 720p exact-shape conv3d winners (measured on 4x8, 720p t=7; keyed by full shape tuple so the
+# 480p channel-keyed table is untouched). Partial (7/13 swept before handover); the remaining
+# 720p shapes fall back to the channel-keyed table above (L1-safe, just not yet speed-tuned).
+_BLOCKINGS.update(
+    {
+        (4, 8, 64, 1024, (3, 3, 3), 9, 11, 10): (64, 256, 1, 4, 8),
+        (4, 8, 1024, 1024, (3, 3, 3), 16, 22, 20): (128, 64, 7, 8, 4),
+        (4, 8, 1024, 1024, (3, 3, 3), 9, 11, 10): (128, 64, 7, 4, 8),
+        (4, 8, 1024, 1024, (1, 3, 3), 14, 22, 20): (256, 128, 1, 4, 8),
+        (4, 8, 1024, 1024, (1, 3, 3), 28, 44, 40): (256, 128, 1, 4, 8),
+        (4, 8, 1024, 2048, (3, 1, 1), 16, 22, 20): (512, 256, 2, 8, 4),
+        (4, 8, 1024, 2048, (3, 1, 1), 9, 11, 10): (512, 128, 7, 4, 8),
+    }
+)
 
 
 class WanTI2V5BPipeline(WanPipeline):
