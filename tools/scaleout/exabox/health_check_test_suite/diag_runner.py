@@ -1715,7 +1715,9 @@ def run_diag(
     # and gtest phases both write here, and collect_run_artifacts() attaches
     # whatever it finds, so a phase that writes elsewhere silently loses its
     # logs off the ticket.
-    logs_dir = output.resolve().parent / "logs"
+    output_dir = output.resolve().parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+    logs_dir = output_dir / "logs"
 
     # Phase 2: reset loop + per-reset snapshot revalidations
     reset_phase = Phase(name="reset_loop")
