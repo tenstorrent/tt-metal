@@ -602,7 +602,8 @@ template <
     std::uint32_t num_blocks,
     bool untilize = false,
     bool dense = false,
-    bool manage_cbs = false>
+    bool manage_cbs = false,
+    bool explicit_untilize_geometry = false>
 ALWI void sdpa_tail_l_block(
     std::uint32_t cb_l1,
     std::uint32_t cb_l2,
@@ -628,8 +629,13 @@ ALWI void sdpa_tail_l_block(
     tile_regs_commit();
     tile_regs_wait();
     if constexpr (untilize) {
-        pack_untilize_dest<block_size, block_size * num_blocks, false, false, TILE_C_DIM, 0, dense>(
-            cb_l_out, 1, block_index);
+        if constexpr (explicit_untilize_geometry) {
+            custom_pack_untilize_dest<block_size, block_size * num_blocks, dense>(
+                cb_l_out, 8, dense ? 2 : 4, 1, block_index);
+        } else {
+            pack_untilize_dest<block_size, block_size * num_blocks, false, false, TILE_C_DIM, 0, dense>(
+                cb_l_out, 1, block_index);
+        }
     } else {
         pack_block_contiguous(0, cb_l_out, block_size);
     }
@@ -735,10 +741,12 @@ ALWI void sdpa_tail(
     }
     // When normalize=true, first block uses regs still held from MS phase
     if constexpr (normalize) {
-        sdpa_tail_l_block<block_size, num_blocks, untilize, dense, true>(cb_l1, cb_l2, cb_l_out, 0, 0, false);
+        sdpa_tail_l_block<block_size, num_blocks, untilize, dense, true, explicit_untilize_geometry>(
+            cb_l1, cb_l2, cb_l_out, 0, 0, false);
     }
     for (std::uint32_t i = (normalize ? 1 : 0); i < num_blocks; i++) {
-        sdpa_tail_l_block<block_size, num_blocks, untilize, dense, true>(cb_l1, cb_l2, cb_l_out, 0, i, true);
+        sdpa_tail_l_block<block_size, num_blocks, untilize, dense, true, explicit_untilize_geometry>(
+            cb_l1, cb_l2, cb_l_out, 0, i, true);
     }
     if constexpr (untilize) {
         cb_push_back(cb_l_out, block_size * num_blocks);

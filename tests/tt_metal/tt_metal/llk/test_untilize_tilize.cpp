@@ -88,6 +88,8 @@ struct TestConfig {
     // UntilizeType::PACK only: use fast_untilize_* (api/compute/experimental/fast_untilize.h) instead of
     // plain pack_untilize_*.
     bool fast_untilize = false;
+    // Exercise explicit geometry while the output metadata describes a full tile.
+    bool explicit_untilize_geometry = false;
     // UNPACK_A tilize only: tilize the whole block with a nonzero input_tile_index per tile-row
     // (via tilize_across_tile_rows.cpp) so the cross-tile-row stride in llk_unpack_tilize_block is
     // exercised, instead of the default tilize.cpp which uses input_tile_index=0 + pop_front.
@@ -244,7 +246,8 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
         .num_entries = num_tiles,
         .data_format_metadata = output_buf_format,
     };
-    if (test_config.untilize_type.has_value() && test_config.untilize_type == UntilizeType::DST) {
+    if (test_config.untilize_type.has_value() && test_config.untilize_type == UntilizeType::DST &&
+        !test_config.explicit_untilize_geometry) {
         // DST untilize reads face geometry from the output CB metadata (no explicit kernel args).
         output_dfb_spec.unpack_face_geometry_metadata =
             tt::tt_metal::FaceGeometry{test_config.face_r_dim, test_config.num_faces_per_tile};
@@ -323,6 +326,9 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
             return std::tolower(c);
         });
         compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/" + untilize_type + "_untilize.cpp";
+        if (test_config.explicit_untilize_geometry) {
+            compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/custom_dst_untilize.cpp";
+        }
     } else if (is_unpack_a_tilize) {
         compute_kernel = test_config.tilize_cross_tile_rows
                              ? "tests/tt_metal/tt_metal/test_kernels/compute/tilize_across_tile_rows.cpp"
@@ -332,6 +338,10 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
     }
 
     experimental::KernelSpec::CompilerOptions::Defines compute_defines;
+    if (test_config.explicit_untilize_geometry) {
+        compute_defines.emplace("EXPLICIT_FACE_R_DIM", std::to_string(test_config.face_r_dim));
+        compute_defines.emplace("EXPLICIT_NUM_FACES", std::to_string(test_config.num_faces_per_tile));
+    }
     if (test_config.fp32_dest_acc_en) {
         compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
@@ -1645,6 +1655,33 @@ TEST_F(LLKMeshDeviceFixture, TensixComputePackUntilizeDstTinyTile) {
                 .output_fmt = tt::DataFormat::Float16_b,
                 .golden_function = ::unit_tests::compute::gold_standard_untilize};
             unit_tests::compute::tilize::run_single_core_tilize_program(*this->devices_.at(0), test_config);
+        }
+    }
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, TensixCustomPackUntilizeExplicitGeometry) {
+    // Three rows exercise half-sync bank reuse. Width 12 requires several DEST
+    // sections, so block column offsets are checked as well as face geometry.
+    for (const auto num_faces : {1u, 2u, 4u}) {
+        for (const auto face_rows : {1u, 8u}) {
+            for (const auto width : {1u, 12u}) {
+                for (const bool full_sync : {false, true}) {
+                    SCOPED_TRACE(fmt::format(
+                        "faces={}, rows={}, width={}, full_sync={}", num_faces, face_rows, width, full_sync));
+                    unit_tests::compute::tilize::TestConfig config{
+                        .dst_full_sync_en = full_sync,
+                        .explicit_untilize_geometry = true,
+                        .input_single_tile_size = 2048,
+                        .output_single_tile_size = 2 * num_faces * face_rows * 16,
+                        .num_tiles_r = 3,
+                        .num_tiles_c = width,
+                        .num_faces_per_tile = num_faces,
+                        .face_r_dim = face_rows,
+                        .untilize_type = unit_tests::compute::tilize::UntilizeType::DST,
+                        .golden_function = ::unit_tests::compute::gold_standard_untilize};
+                    unit_tests::compute::tilize::run_single_core_tilize_program(*devices_.at(0), config);
+                }
+            }
         }
     }
 }
