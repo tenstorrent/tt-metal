@@ -629,6 +629,22 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     }
 
     // Worker cores: in1 sender/writer runtime args.
+    //
+    // The three constants below index mm_in1_sender_writer_args, the flat vector built in the loop
+    // that follows. Its layout, in push order, is:
+    //   [0]   is_worker_core
+    //   [1]   in1 base address  - pushed as 0u, the real value arrives via a TensorBinding
+    //   [2]   bias base address - pushed as 0u, likewise
+    //   [3]   dram_bank_id
+    //   [4]   vc
+    //   [5]   dram_reader_index
+    //   [6]   num_shard_to_write_back - pushed directly on the narrow-worker write-back path,
+    //         spliced in at this index on the other path once the count is known
+    //   [7]   reshard_tensor_start_offset
+    //   [8..] the write-back (bytes, noc_x, noc_y) triples, one per storage-core shard
+    // Slots [1] and [2] are kept as placeholders precisely so that [6] and [8] land where they do
+    // whether or not the bias is fused. fixed_writer_arg_count is those eight named slots plus one
+    // triple, the length a worker with no storage shard of its own is padded up to.
     constexpr std::size_t num_shards_to_write_back_arg_index = 6;
     constexpr std::size_t fixed_writer_arg_count = 11;
     constexpr std::size_t writer_varargs_begin = 8;
@@ -953,6 +969,11 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
         .compiler_options =
             {
                 .defines = KernelSpec::CompilerOptions::Defines(mm_kernel_defines),
+                // Explicit, not a copied default: Metal 2.0's type-agnostic CompilerOptions
+                // defaults to O2, while the legacy ComputeConfigDescriptor this replaces defaulted
+                // compute kernels to O3. Left unset, the kernel would quietly drop a level. The
+                // two data movement specs carry no opt_level for the same reason - their legacy
+                // default was already O2.
                 .opt_level = KernelBuildOptLevel::O3,
             },
         .dfb_bindings =

@@ -203,9 +203,10 @@ void kernel_main() {
     // This boolean is set when the number of batches is only known at runtime, typically based on a sparsity tensor.
     constexpr bool get_batch_from_reader = (bool)get_arg(args::get_batch_from_reader);
     // Whether in0 arrives needing a tile transpose. This arrives as a define rather than an
-    // argument because the in0 buffer is selected just below in a parse-time ternary, so both
-    // operands are name-looked-up regardless of the condition — and the transposed buffer is only
-    // bound when the transpose is actually wanted.
+    // argument because dfb::in0_transposed is only bound when the transpose is actually wanted:
+    // selecting the buffer with a ternary would name-look-up both operands regardless of the
+    // condition and fail on the unbound one, so the #ifdef just below drops the token entirely
+    // instead. Future factories adopting this fork must keep the #ifdef, not restore a ternary.
 #ifdef IN0_TRANSPOSE_TILE
     constexpr bool in0_transpose_tile = true;
 #else
