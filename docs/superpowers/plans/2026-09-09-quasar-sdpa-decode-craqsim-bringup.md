@@ -34,17 +34,40 @@ export TT_METAL_HOME=/localdev/gchoudhary/tt-metal PYTHONPATH=/localdev/gchoudha
 export TT_METAL_SIMULATOR=/localdev/gchoudhary/sim/libttsim.so \
        TT_UMD_SIMULATOR_PATH=/localdev/gchoudhary/sim TT_SIMULATOR_LOCALHOST=1 && \
 export CHIP_ARCH=quasar ARCH_NAME=quasar TT_METAL_SLOW_DISPATCH_MODE=1 && \
-pytest "<test-id>" -vv --timeout=600
+export TT_METAL_CACHE=/localdev/gchoudhary/.qsr-sdpa-cache && rm -rf /localdev/gchoudhary/.qsr-sdpa-cache && \
+pytest "<test-id>" -vv --timeout=600 -p no:xdist
 ```
+Use a PRIVATE `TT_METAL_CACHE` (not the shared `/tmp/craq-ttnn-ops-cache`, which races peer runs); clear it each run since kernels JIT from source. `-p no:xdist` avoids CoordinateTranslationError on Quasar's 8x4 layout. Sim sanity (once): `strings "$TT_METAL_SIMULATOR" | grep libttsim_pci_mem_wr_bytes` must hit.
 
-**Quasar build (`$QBUILD`):** (confirm exact invocation against the active craq-sim peer sessions / docs on first use)
+**Build (`$QBUILD`)** — per the op owner, ALWAYS `./build_metal.sh --build-all`. It runs the install/copy step itself, so the freshly built libs land in the runtime locations; a targeted `ninja`/`cmake --build` compiles but does NOT install, silently leaving a stale lib (this cost several confusing iterations).
 ```bash
-cd /localdev/gchoudhary/tt-metal && export ARCH_NAME=quasar CHIP_ARCH=quasar && \
-./build_metal.sh --build-tests 2>&1 | tee /tmp/qbuild.log ; \
-ninja -C build install 2>&1 | tee -a /tmp/qbuild.log ; \
-grep -c "error:" /tmp/qbuild.log   # must print 0
+cd /localdev/gchoudhary/tt-metal && \
+./build_metal.sh --build-all 2>&1 | tee /tmp/qbuild.log ; \
+grep -c "error:" /tmp/qbuild.log   # must print 0 (build_metal.sh exit code is unreliable)
 ```
-Kernel-only changes (compute/dataflow `.cpp`/`.hpp`) are JIT-compiled at test time — they need only `ninja -C build install` to refresh the Python lib, not a full rebuild. Host-side changes (`*_device_operation.cpp`, `*_program_factory.cpp`) require `$QBUILD`.
+`CHIP_ARCH=quasar` is a RUN-time var, NOT a build flag. Device kernels JIT-compile from source at RUN time and are cached, so a kernel-only edit needs only a JIT-cache clear + rerun (no rebuild); only HOST C++ (`*_device_operation.cpp`, `*_program_factory.cpp`) needs `$QBUILD`.
+
+---
+
+## Execution progress (updated 2026-09-10)
+
+**Phase 1 — COMPLETE.** The op compiles cleanly for Quasar and loads on craq-sim.
+- Task 1 ✅ cherry-picked `wait_front` + `read_tile_value` (test-only commit dropped; the 3 stale DFB test files later reverted to main — do NOT re-patch `test_dataflow_buffer_apis.cpp`, it's correct on current main).
+- Task 2 ✅ stash applied + vetted (semaphore-API migration, `out_o`/`out_worker` split, `col_identity` drop, `intermed_out` scratchpad).
+- Task 3 ✅ SFPU swap — survived a Critical fix round: apply exp scale via `mul_unary_tile` + unscaled `exp_tile_init<approx>()`, NOT `exp_tile_init<…, scale_fp32>()` (Quasar `exp_init` static_asserts on non-default scale).
+- Task 4 ✅ dtype validation gated to bf16/Int32 on Quasar (robustness; sentinel is bf16/non-paged, so not load-bearing).
+- Task 5 ✅ build. **Op-owner directive: ALWAYS `./build_metal.sh --build-all`** (see `$QBUILD`). A targeted `ninja` build compiles but skips the install step, silently leaving a stale runtime lib — this masqueraded as phantom bugs (e.g. an `out_o` multi-binding error from pre-fix code).
+
+**Phase 2 — IN PROGRESS.** The plan's anticipated failure catalog (Tasks 6–11: `pack_init`/all-zero/tree-reduction) did NOT materialize. Instead the first real JIT compiles surfaced a chain of pre-existing Quasar LLK-compat gaps, each fixed + committed:
+1. `datacopy_init` — Quasar LLK has no `PackMode` template arg (arch-branch).
+2. `log_tile` — SFPU log not wired on Quasar; guarded in the sink-only `log_block`.
+3. `fp32_dest_acc_en` `reduce_max` — Quasar can't do 32-bit-DEST block `reduce_max`; forced bf16 DEST on Quasar. ⚠️ **May affect PCC — unverified; the sentinel has not yet reached a numerics result.**
+4. semaphore typing — `read_k` templated on the token-deduced type; call sites keep bare `Semaphore s(sem::name)` (`Semaphore<>` forces LOCAL_NONATOMIC and static_asserts).
+5. code size — compute `opt_level` O3→`Os` (trisc0 code region overflow 0x6924 > 0x6000).
+
+**CURRENT BLOCKER (architectural — awaiting op-owner decision):** Quasar caps intra-Tensix DFBs at **8** (16 tile counters, 2 per DFB), but flash-decode declares **11** compute intermediates — `qk_im, out_im, out_accumulate_im, max_1, max_2, sum_1, sum_2, exp_max_diff, prev_sum_2, exp_max_diff_2, out_accumulate_im_2` — all allocated unconditionally, all core online-softmax double-buffers (NOT sink/streaming-gated; verified). Reducing to ≤8 needs a real refactor: merge `_1`/`_2` paired buffers into single DFBs with 2 entries (counter cost is per-DFB, so 3 merges → 11→8), or convert some to scratchpads. The sentinel has NOT yet produced a PCC number.
+
+**Note:** Tasks 6–11 below are the *originally anticipated* Phase-2 work and did not occur as written; the real Phase-2 work is the chain above. The SDD ledger `.superpowers/sdd/2026-09-09-quasar-sdpa-decode-craqsim-bringup/progress.md` has the blow-by-blow. Commit SHAs move on rebase — match commits by subject line.
 
 ---
 
