@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <variant>
 #include <vector>
@@ -98,7 +99,7 @@ void test_tensor_prefetcher_pipe_validator(
     const ttnn::Tensor& source_tensor,
     uint32_t num_layers,
     uint32_t print_stride,
-    const ttnn::operations::experimental::TensorPrefetcherPipes& prefetcher_pipes,
+    const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes,
     bool streaming = false,
     const std::vector<uint32_t>& rotation = {});
 
