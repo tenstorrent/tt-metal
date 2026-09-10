@@ -32,6 +32,28 @@ inline void configure_explicit_geometry(std::uint32_t ocb, std::uint32_t face_r_
     _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense>(
         pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, num_faces);
 }
+
+template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim, bool dense>
+inline void pack_explicit_geometry(
+    std::uint32_t ocb,
+    std::uint32_t face_r_dim,
+    std::uint32_t num_faces,
+    std::uint32_t block_rt_dim,
+    std::uint32_t block_c_index,
+    std::uint32_t tile_dst_rt_offset) {
+    SAN_HOOK(unsupported());
+    const std::uint32_t output_id = get_output_id(ocb);
+    llk_pack_untilize_impl<block_ct_dim, full_ct_dim, false, TILE_C_DIM, 0, dense>(
+        block_rt_dim,
+        get_local_cb_interface(output_id).fifo_wr_ptr - 1,
+        pack_src_format[output_id],
+        pack_dst_format[output_id],
+        full_ct_dim * get_local_cb_interface(output_id).fifo_page_size,
+        face_r_dim,
+        num_faces,
+        block_c_index,
+        tile_dst_rt_offset);
+}
 }  // namespace pack_untilize_detail
 #endif
 
@@ -57,6 +79,20 @@ ALWI void custom_pack_untilize_dest_init(
         pack_untilize_detail::configure_explicit_geometry<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense>(
             ocb, face_r_dim, num_faces)));
     PACK((llk_init_packer_dest_offset_registers<PackMode::Untilize, false>(ocb)));
+}
+
+// Pair with custom_pack_untilize_dest_init using the same face geometry.
+// The ordinary pack_untilize_dest reads num_faces from CB metadata again.
+template <std::uint32_t block_ct_dim = 8, std::uint32_t full_ct_dim = block_ct_dim, bool dense = false>
+ALWI void custom_pack_untilize_dest(
+    std::uint32_t ocb,
+    std::uint32_t face_r_dim,
+    std::uint32_t num_faces,
+    std::uint32_t block_rt_dim = 1,
+    std::uint32_t block_c_index = 0,
+    std::uint32_t tile_dst_rt_offset = 0) {
+    PACK((pack_untilize_detail::pack_explicit_geometry<block_ct_dim, full_ct_dim, dense>(
+        ocb, face_r_dim, num_faces, block_rt_dim, block_c_index, tile_dst_rt_offset)));
 }
 
 #endif  // ARCH_BLACKHOLE
