@@ -68,6 +68,12 @@ void RotateDeviceOperation::validate_inputs(
     if (operation_attributes.interpolation_mode == "bilinear") {
         constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
         const uint32_t input_channels = input.padded_shape()[-1];
+        TT_FATAL(
+            input_channels % tt::constants::TILE_WIDTH == 0,
+            "Input tensor last dimension must be divisible by TILE_WIDTH ({}), but got {} in padded shape {}",
+            tt::constants::TILE_WIDTH,
+            input_channels,
+            input.padded_shape());
         const uint32_t in_ntiles_c =
             static_cast<uint32_t>(std::ceil(static_cast<float>(input_channels) / tt::constants::TILE_WIDTH));
         TT_FATAL(

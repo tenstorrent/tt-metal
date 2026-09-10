@@ -245,6 +245,15 @@ def test_channel_alignment(device, channels):
     ), f"90-degree rotation should be exact for {channels} channels"
 
 
+@pytest.mark.parametrize("channels", [16, 48])
+def test_bilinear_rejects_non_tile_width_channels(device, channels, expect_error):
+    ttnn_input = ttnn.from_torch(
+        torch.randn(1, 32, 32, channels, dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "divisible by TILE_WIDTH"):
+        ttnn.rotate(ttnn_input, angle=45.0, interpolation_mode="bilinear")
+
+
 # ============================================================================
 # Memory Configuration Tests
 # ============================================================================
