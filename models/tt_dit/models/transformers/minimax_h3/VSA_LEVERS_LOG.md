@@ -197,3 +197,12 @@ Kept: decision rewrite, 2x9 ring (depth 18), cb_ctrl 64, e2e perf test, bstride 
 identity), docs. Removed: dataflow probe-9 timers, probe 10 (vsa_trace.hpp, vsa_timeline.py), probe 3, TT_VSA_STAGES,
 TT_VSA_LEADER_ROWS/SHARE/DEPTH, TT_VSA_DEEP_LEADER + cb_roles + CB reorder, TT_VSA_FETCH_LAG, TT_VSA_V_ON_WRITER,
 generator DRAM reads, stuck probe. Reader and writer are the checkpoint (259c14821bc) files again.
+
+## Leader/worker hang root cause + stream-order e2e verdict (2026-09-10, late)
+Stuck probe on the failing kernels: leader published arrival 560 with slowest worker at consumed 532 (lead 28 >
+log_depth 26) -> log ring wrapped, worker spins forever on an overwritten entry. Cause: the cached gate slack
+(gate_ok_min) let the leader publish on a stale worker-progress snapshot instead of a fresh min read, so it ran
+past stream_depth (18) ahead of the slowest consumer. Fix (verified, 50 steps clean): fresh min-worker read every
+gate, no cache; keep the drain (permuted orders need it) + eager acks (drain needs them). BUT bstride is e2e-NEUTRAL:
+3.058 s/step vs identity 3.033 -- block gated by slowest of 32 devices, reorder doesn't move the laggard. NOT shipped;
+branch keeps the simple checkpoint gate + identity. Real slowest-device levers: per-device balance, K/V gather overlap.

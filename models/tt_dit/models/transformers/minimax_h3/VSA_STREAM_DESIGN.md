@@ -657,3 +657,30 @@ leader-share, leader-rows, fetch-lag, V-on-writer and deep-leader knobs, and the
 (the reader and writer are back to the checkpoint versions byte for byte). `bstride4.16` remains in the geometry,
 parked, with `identity` as the default. Re-verified after the cleanup: unit suite, determinism / precision / trace,
 attention oracle, traced 15 s block and the 50-step e2e (numbers in the README).
+
+## 12. The leader/worker hang: root cause and the e2e-neutral verdict on stream order (2026-09-10)
+
+The intermittent first-step pipeline hang (section 11 correction) was root-caused with a stuck-state DPRINT
+probe on the failing kernels. Signature at the hang (real capture): the leader of one head group is in
+`wait_all_workers_at`, having published `arrival=560` while its slowest worker has `consumed=532` -- a lead
+of 28. The log ring is `log_depth = stream_depth + 8 = 26` entries, so the leader wrapped it: the slow
+worker spins on its log slot waiting for the entry it needs (seq 534), but that slot already holds a later
+entry (seq 560, the same slot 26 arrivals on). The worker waits forever for an entry that was overwritten.
+
+The slot gate exists to hold the leader at most `stream_depth` (18) arrivals ahead of the *slowest*
+consumer, which also keeps published log entries inside the 26-entry ring (18 < 26). The **cached gate
+slack** (`gate_ok_min`) this session added broke that: it let the leader keep fetching and publishing on a
+stale progress snapshot instead of a fresh min-worker read, so the lead reached 28 > 26 and wrapped the
+ring. Fix (verified): evaluate the gate on a fresh progress read every fetch, no cache; keep the
+publish-before-gate drain (the permuted stream orders deadlock without it) and the writer's eager K acks
+(the drain deadlocks without them). With that fix, `bstride4.16` runs 50 steps clean.
+
+**But the stream order is e2e-neutral, so none of this ships.** The blocked-stride order is 9.5 % faster on
+the device-5 shard standalone, yet end to end it is 3.058 s/step against identity's 3.033 s -- neutral to
+slightly worse. The block period waits for the slowest of the 32 devices; each device streams a different
+shard's selection, the reorder helps each by a variable amount, and it does not move the laggard. The
+standalone win never reaches the metric that matters. The branch therefore keeps the simple checkpoint gate
+(no drain, no cache -- there is no permuted order to protect) and `identity` as the default; the gate-cache
+pattern is documented here so it is not reintroduced, and `bstride` stays in the geometry, parked, labelled
+e2e-neutral. The real lever for the slowest-device-gated block is per-device load balance and the K/V
+all-gather overlap, not the stream order.

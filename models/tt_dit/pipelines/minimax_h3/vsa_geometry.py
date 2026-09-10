@@ -171,8 +171,10 @@ class MiniMaxH3VSAGeometry:
                 # of R consecutive slots (segment 0 run 0, segment 1 run 0, ..., segment 0 run 1, ...). Runs
                 # keep spatially adjacent blocks adjacent (multi-block visits), while a streaming window
                 # then carries work for rows from S different regions, i.e. for several cores at once.
-                # Measured on the real 15 s shard: identity 19.5 ms, bstride4.16 17.7 ms (the leader/consumer
-                # convoy, VSA_STREAM_DESIGN.md 11).
+                # Measured on the real 15 s shard: identity 19.5 ms, bstride4.16 17.7 ms standalone (the
+                # leader/consumer convoy, VSA_STREAM_DESIGN.md 11). NOTE: e2e-NEUTRAL -- the block waits for
+                # the slowest of 32 devices and this reorder helps each shard by a variable amount that does
+                # not move the laggard (identity 3.033 vs bstride 3.058 s/step). Parked; default is identity.
                 r_len, n_seg = (int(x) for x in kind[len("bstride") :].split("."))
                 seg_len = (n + n_seg - 1) // n_seg
                 seg, off = slot // seg_len, slot % seg_len
