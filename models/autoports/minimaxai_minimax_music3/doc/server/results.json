@@ -1,9 +1,9 @@
 {
   "bad_requests": {
     "_meta": {
-      "commit": "c99882f6877",
-      "loadavg_1m": 2.630859375,
-      "recorded_at": "2026-09-10 01:10:01"
+      "commit": "fd28ebad279",
+      "loadavg_1m": 4.06884765625,
+      "recorded_at": "2026-09-10 01:14:04"
     },
     "status_codes": {
       "empty_lyrics": 422,
@@ -19,61 +19,61 @@
   },
   "concurrent_requests": {
     "_meta": {
-      "commit": "c99882f6877",
-      "loadavg_1m": 2.26904296875,
-      "recorded_at": "2026-09-10 01:10:15"
+      "commit": "fd28ebad279",
+      "loadavg_1m": 5.46337890625,
+      "recorded_at": "2026-09-10 01:14:18"
     },
     "client_wall_s": [
-      4.4,
-      8.78
+      4.48,
+      9.01
     ],
     "generation_s": [
-      4.39,
-      4.38
+      4.48,
+      4.53
     ],
     "requests_served": 4,
-    "wall_s": 8.78
+    "wall_s": 9.01
   },
   "model_card_curl": {
     "_meta": {
-      "commit": "c99882f6877",
-      "loadavg_1m": 7.2470703125,
-      "recorded_at": "2026-09-10 01:11:38"
+      "commit": "fd28ebad279",
+      "loadavg_1m": 6.13134765625,
+      "recorded_at": "2026-09-10 01:15:42"
     },
     "bytes": 5296172,
     "channels": 2,
-    "command": "curl http://127.0.0.1:35245/v1/audio/speech \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"model\": \"MiniMaxAI/MiniMax-Music3\",\n    \"input\": \"[Verse]\\nMorning light filtering through the pine\\n[Chorus]\\nSoftly the world begins to breathe\",\n    \"instructions\": \"A warm acoustic pop song with intimate female vocals, fingerpicked guitar, soft piano, and a gradual emotional build into a wide final chorus.\",\n    \"response_format\": \"wav\",\n    \"seed\": 7,\n    \"max_new_tokens\": 750,\n    \"stream\": false\n  }' \\\n  --output /home/jashan/tt-metal-mm3/models/autoports/minimaxai_minimax_music3/generated/minimax_music3_model_card_curl.wav",
+    "command": "curl http://127.0.0.1:33861/v1/audio/speech \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"model\": \"MiniMaxAI/MiniMax-Music3\",\n    \"input\": \"[Verse]\\nMorning light filtering through the pine\\n[Chorus]\\nSoftly the world begins to breathe\",\n    \"instructions\": \"A warm acoustic pop song with intimate female vocals, fingerpicked guitar, soft piano, and a gradual emotional build into a wide final chorus.\",\n    \"response_format\": \"wav\",\n    \"seed\": 7,\n    \"max_new_tokens\": 750,\n    \"stream\": false\n  }' \\\n  --output /home/jashan/tt-metal-mm3/models/autoports/minimaxai_minimax_music3/generated/minimax_music3_model_card_curl.wav",
     "frames_seen": 751,
     "peak": 0.9998779296875,
     "rms": 0.10869714769961582,
     "seconds": 30.023,
     "sr": 44100,
     "subtype": "PCM_16",
-    "wall_s": 83.19,
+    "wall_s": 83.58,
     "wav": "generated/minimax_music3_model_card_curl.wav"
   },
   "shutdown": {
     "_meta": {
-      "commit": "c99882f6877",
-      "loadavg_1m": 7.2470703125,
-      "recorded_at": "2026-09-10 01:11:39"
+      "commit": "fd28ebad279",
+      "loadavg_1m": 5.72021484375,
+      "recorded_at": "2026-09-10 01:15:43"
     },
     "device_closed": true,
     "exit_code": -15
   },
   "speech_10s": {
     "_meta": {
-      "commit": "c99882f6877",
-      "loadavg_1m": 2.630859375,
-      "recorded_at": "2026-09-10 01:10:01"
+      "commit": "fd28ebad279",
+      "loadavg_1m": 4.06884765625,
+      "recorded_at": "2026-09-10 01:14:04"
     },
     "bytes": 1763372,
     "channels": 2,
     "frames": 250,
-    "generation_s": 26.25,
+    "generation_s": 26.46,
     "health_during_generation": {
-      "max_ms": 81.5,
-      "mean_ms": 13.8,
+      "max_ms": 84.3,
+      "mean_ms": 15.7,
       "n": 52
     },
     "peak": 0.865966796875,
@@ -83,18 +83,18 @@
     "seed": 7,
     "sr": 44100,
     "stopped_by": "max_frames",
-    "wall_s": 26.72,
+    "wall_s": 26.82,
     "wav": "generated/server_speech_seed7_10s.wav"
   },
   "speech_2s_alias": {
     "_meta": {
-      "commit": "c99882f6877",
-      "loadavg_1m": 2.5,
-      "recorded_at": "2026-09-10 01:10:06"
+      "commit": "fd28ebad279",
+      "loadavg_1m": 4.5439453125,
+      "recorded_at": "2026-09-10 01:14:09"
     },
     "channels": 2,
     "frames": 50,
-    "generation_s": 4.45,
+    "generation_s": 4.48,
     "peak": 0.2410888671875,
     "requests_served": 2,
     "rms": 0.012592363107854408,
@@ -103,9 +103,9 @@
   },
   "startup": {
     "_meta": {
-      "commit": "c99882f6877",
-      "loadavg_1m": 1.37548828125,
-      "recorded_at": "2026-09-10 01:09:34"
+      "commit": "fd28ebad279",
+      "loadavg_1m": 2.244140625,
+      "recorded_at": "2026-09-10 01:13:37"
     },
     "health": {
       "busy": false,
@@ -129,6 +129,6 @@
       "warm": true,
       "weights_dir": "/home/jashan/.cache/huggingface/hub/models--MiniMaxAI--MiniMax-Music3/snapshots/fbdf52fbaaca799592917417eb05f1899f1255ec"
     },
-    "startup_s": 22.039828538894653
+    "startup_s": 22.038854837417603
   }
 }

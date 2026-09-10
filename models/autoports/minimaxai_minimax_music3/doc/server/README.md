@@ -108,6 +108,9 @@ $ ~/mm3-bringup/checks/08.sh
 GATE_OK tests/test_server.py
 ```
 
+The gate was run again on the committed code (`1f3a581da33`, after the pre-commit black / isort reformat) at 01:13-01:15:
+`7 passed in 148.36s`, `GATE_OK`; `doc/server/results.json` holds this final run (10 s song 26.46 s, curl 83.6 s, `/health` fine during generation).
+
 ## Open risks
 
 - Not tested here: the 504 timeout path, SIGTERM while a song is generating, `MM3_MESH_SHAPE` other than `1x1`
