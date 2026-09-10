@@ -1,0 +1,42 @@
+traffic_shape_ceiling -- DEVICE KERNEL DURATION [ns], Wormhole B0 n150, 8x8=64/64 cores, 1 GHz, 12 DRAM banks.
+Two --profile runs, interleaved rep-by-rep within each process (rep 0 dropped as the warm rung):
+  run A = reports/2026_09_10_02_01_45  (4 reps -> 3 measured)
+  run B = reports/2026_09_10_02_03_15  (7 reps -> 6 measured)
+Bytes per rung: rw = 2 x 64 x 16384 = 2,097,152 B; one-sided = 1,048,576 B. GB/s = bytes/ns.
+
+rung             runA measured reps           runB measured reps                                  pooled median   GB/s
+chained          11613 11630 11816            11638 11873 11973 12065 12339 12753                 11873           176.6
+chained_2k       11987 12776 12884            11590 11938 12126 12172 12194 12620                 12172           172.3
+independent      11049 11081 11158            11014 11018 11152 11293 11296 11547                 11152           188.1
+independent_2k   10541 10938 10979            10469 10623 10721 10751 11023 11848                 10751           195.1
+reads_only_512    5703  5749  5978             5708  5775  5850  5865  5889  5920                  5850           179.2
+reads_only_2k     5296  5332  5653             5384  5602  5610  5658  5666  5774                  5610           186.9
+writes_only       7520  8024  8280             7632  7677  7696  7736  8154  8487                  7736           135.5
+
+Reference points measured elsewhere on this tree (coordinator's numbers, for the reconstruction check):
+  tilize op, focus shape [1,1,32,16384]        12356 / 12399 / 12639 ns   (167 GB/s)
+  op reads-only payload ablation                5420 ns                    (193 GB/s)
+  op writes-only payload ablation               7382 ns                    (142 GB/s)
+  op compute (tilize<8>)                         951 ns
+  64-core [1,1,2048,2048] same op              87452 ns for 16.78 MB       (192 GB/s)
+  examples/double_buffer/report.md 64-core DRAM->DRAM copy, 2048 B pages    190.8 GB/s
+
+Per-core *-KERNEL spans (run B, last measured rep of each rung; ns):
+rung             NCRISC mean/max  m/m   BRISC mean/max   m/m   start spread (64 cores)
+chained          6253 / 9065      1.45  8421 / 11781     1.40  190 ns
+chained_2k       5256 / 7720      1.47  8961 / 12480     1.39  ~190 ns
+independent      9042 / 11234     1.24  6950 / 10548     1.52  178 ns
+independent_2k   8188 /  9823     1.20  7363 / 10868     1.48  ~180 ns
+reads_only_512   4503 /  5710     1.27    29 /    32     1.09  204 ns
+reads_only_2k    4532 /  5563     1.23    29 /    30     1.03  ~200 ns
+writes_only        18 /    19     1.05  4943 /  7497     1.52  184 ns
+  (op baseline for comparison: NCRISC 5288/7588, BRISC 9710/12048)
+
+Positional-gradient correlations vs physical grid ROW y (run B, last measured rep):
+rung             r(start,row)  NCRISC r(dur,row)  BRISC r(dur,row)
+independent      +0.67         -0.91              +0.83
+reads_only_512   +0.64         -0.95              (no writes)
+writes_only      +0.61         (no reads)         +0.89
+chained          +0.68         -0.94              -0.91   <-- writer gradient INVERTED by the dependency
+Start spread is 178-205 ns over all 64 cores on every rung, i.e. dispatch skew is <2% of the wall:
+the gradient is a DURATION gradient, not a launch-skew artifact.

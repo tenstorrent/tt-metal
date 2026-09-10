@@ -1,0 +1,32 @@
+# DEVICE KERNEL DURATION [ns] per dispatch, WH B0 n150 8x8 64/64 cores, bf16 RM DRAM -> TILE DRAM
+# rep0 of each case is the compile/allocate pass and is dropped; every rep was bit-identical (torch.equal)
+baseline_focus_r1        [1,1,32,16384]   reps=[13136, 12388, 13138] median=13136 cores=64
+baseline_focus_r2        [1,1,32,16384]   reps=[13751, 12753, 12826] median=12826 cores=64
+baseline_focus_r3        [1,1,32,16384]   reps=[12753, 12430, 12714] median=12714 cores=64
+baseline_sweep           [1,1,32,16384]   reps=[12790, 12246, 12356] median=12356 cores=64
+baseline_sweep           [1,1,32,32768]   reps=[23701, 24147, 23930] median=23930 cores=64
+baseline_sweep           [1,1,1024,1024]  reps=[24539, 22880, 23823] median=23823 cores=64
+baseline_sweep           [1,1,2048,2048]  reps=[86027, 85844, 87951] median=86027 cores=64
+baseline_sweep           [1,1,16384,32]   reps=[17275, 17925, 17323] median=17323 cores=64
+baseline_sweep           [1,1,2048,64]    reps=[5312, 4947, 5155] median=5155 cores=64
+bitrev_focus             [1,1,32,16384]   reps=[12528, 12539, 12708] median=12539 cores=64
+bitrev_sweep             [1,1,32,16384]   reps=[12733, 12548, 12270] median=12548 cores=64
+bitrev_sweep             [1,1,32,32768]   reps=[23741, 23521, 24263] median=23741 cores=64
+bitrev_sweep             [1,1,1024,1024]  reps=[22826, 23210, 23625] median=23210 cores=64
+bitrev_sweep             [1,1,2048,2048]  reps=[89892, 88369, 88145] median=88369 cores=64
+bitrev_sweep             [1,1,16384,32]   reps=[17552, 18452, 17694] median=17694 cores=64
+bitrev_sweep             [1,1,2048,64]    reps=[5219, 5236, 5304] median=5236 cores=64
+colmajor_focus           [1,1,32,16384]   reps=[12571, 12682, 12171] median=12571 cores=64
+diag_focus               [1,1,32,16384]   reps=[12508, 11859, 12865] median=12508 cores=64
+diag_focus_r2            [1,1,32,16384]   reps=[12401, 12683, 11845] median=12401 cores=64
+diag_focus_r3            [1,1,32,16384]   reps=[12439, 12193, 12400] median=12400 cores=64
+diag_sweep               [1,1,32,16384]   reps=[12062, 12739, 12431] median=12431 cores=64
+diag_sweep               [1,1,32,32768]   reps=[23207, 23358, 23724] median=23358 cores=64
+diag_sweep               [1,1,1024,1024]  reps=[22576, 22560, 22884] median=22576 cores=64
+diag_sweep               [1,1,2048,2048]  reps=[87303, 88997, 86949] median=87303 cores=64
+diag_sweep               [1,1,16384,32]   reps=[16775, 17615, 17225] median=17225 cores=64
+diag_sweep               [1,1,2048,64]    reps=[5325, 5173, 5177] median=5177 cores=64
+reverse_focus            [1,1,32,16384]   reps=[12285, 12774, 12845] median=12774 cores=64
+snake_focus              [1,1,32,16384]   reps=[12709, 12956, 12523] median=12709 cores=64
+stride5_focus            [1,1,32,16384]   reps=[13099, 13131, 13083] median=13099 cores=64
+stride9_focus            [1,1,32,16384]   reps=[12909, 12634, 13066] median=12909 cores=64

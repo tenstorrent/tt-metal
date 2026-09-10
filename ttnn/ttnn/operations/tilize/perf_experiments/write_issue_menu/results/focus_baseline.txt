@@ -1,0 +1,8 @@
+# baseline  <- generated/profiler/reports/2026_09_10_01_34_49/ops_perf_results_2026_09_10_01_34_49.csv
+  row00            ?x?x?  kernel=    8419  brisc=    8149  ncrisc=     335
+  row01            ?x?x?  kernel=    8398  brisc=    8176  ncrisc=     323
+  row02            ?x?x?  kernel=    9099  brisc=    8881  ncrisc=     343
+  row03            ?x?x?  kernel=   12191  brisc=   11925  ncrisc=    8078
+  row04            ?x?x?  kernel=   12559  brisc=   12287  ncrisc=    7835
+  row05            ?x?x?  kernel=   13197  brisc=   12938  ncrisc=    7757
+  n=6

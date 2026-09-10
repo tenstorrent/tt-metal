@@ -1,0 +1,10 @@
+
+  === WRITE-STAGE (paired, 9 reps interleaved) ===
+    baseline       med=    8315  ( +0.0% vs baseline)  reps=[8269, 8293, 8139, 8148, 8335, 8690, 8315, 8382, 8567]
+    flush_only     med=    8697  ( +4.6% vs baseline)  reps=[8347, 8697, 8235, 8398, 8900, 8974, 8649, 8893, 9218]
+    posted         med=    8308  ( -0.1% vs baseline)  reps=[8099, 8363, 7977, 7813, 8239, 8308, 8317, 8555, 8404]
+
+  === WHOLE-OP (paired, 9 reps interleaved) ===
+    baseline       med=   12452  ( +0.0% vs baseline)  reps=[12218, 12131, 13086, 12532, 12527, 12359, 12452, 12401, 13456]
+    flush_only     med=   12413  ( -0.3% vs baseline)  reps=[12413, 12138, 12525, 12575, 12873, 12191, 12353, 12262, 12928]
+    posted         med=   12289  ( -1.3% vs baseline)  reps=[12289, 12257, 11977, 12386, 12924, 11660, 12879, 12209, 12333]

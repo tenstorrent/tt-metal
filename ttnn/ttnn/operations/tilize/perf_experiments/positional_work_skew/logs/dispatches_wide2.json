@@ -1,0 +1,2368 @@
+{
+ "dispatches": [
+  {
+   "phase": "warm",
+   "mode": "baseline",
+   "label": "short_wide_wide"
+  },
+  {
+   "phase": "warm",
+   "mode": "uniform8",
+   "label": "short_wide_wide"
+  },
+  {
+   "phase": "warm",
+   "mode": "half97",
+   "label": "short_wide_wide"
+  },
+  {
+   "phase": "warm",
+   "mode": "half97_rev",
+   "label": "short_wide_wide"
+  },
+  {
+   "phase": "warm",
+   "mode": "grad_brisc",
+   "label": "short_wide_wide"
+  },
+  {
+   "phase": "warm",
+   "mode": "grad_brisc_rev",
+   "label": "short_wide_wide"
+  },
+  {
+   "phase": "warm",
+   "mode": "edge98",
+   "label": "short_wide_wide"
+  },
+  {
+   "phase": "measure",
+   "mode": "baseline",
+   "label": "short_wide_wide",
+   "rep": 0
+  },
+  {
+   "phase": "measure",
+   "mode": "uniform8",
+   "label": "short_wide_wide",
+   "rep": 0
+  },
+  {
+   "phase": "measure",
+   "mode": "half97",
+   "label": "short_wide_wide",
+   "rep": 0
+  },
+  {
+   "phase": "measure",
+   "mode": "half97_rev",
+   "label": "short_wide_wide",
+   "rep": 0
+  },
+  {
+   "phase": "measure",
+   "mode": "grad_brisc",
+   "label": "short_wide_wide",
+   "rep": 0
+  },
+  {
+   "phase": "measure",
+   "mode": "grad_brisc_rev",
+   "label": "short_wide_wide",
+   "rep": 0
+  },
+  {
+   "phase": "measure",
+   "mode": "edge98",
+   "label": "short_wide_wide",
+   "rep": 0
+  },
+  {
+   "phase": "measure",
+   "mode": "uniform8",
+   "label": "short_wide_wide",
+   "rep": 1
+  },
+  {
+   "phase": "measure",
+   "mode": "half97",
+   "label": "short_wide_wide",
+   "rep": 1
+  },
+  {
+   "phase": "measure",
+   "mode": "half97_rev",
+   "label": "short_wide_wide",
+   "rep": 1
+  },
+  {
+   "phase": "measure",
+   "mode": "grad_brisc",
+   "label": "short_wide_wide",
+   "rep": 1
+  },
+  {
+   "phase": "measure",
+   "mode": "grad_brisc_rev",
+   "label": "short_wide_wide",
+   "rep": 1
+  },
+  {
+   "phase": "measure",
+   "mode": "edge98",
+   "label": "short_wide_wide",
+   "rep": 1
+  },
+  {
+   "phase": "measure",
+   "mode": "baseline",
+   "label": "short_wide_wide",
+   "rep": 1
+  },
+  {
+   "phase": "measure",
+   "mode": "half97",
+   "label": "short_wide_wide",
+   "rep": 2
+  },
+  {
+   "phase": "measure",
+   "mode": "half97_rev",
+   "label": "short_wide_wide",
+   "rep": 2
+  },
+  {
+   "phase": "measure",
+   "mode": "grad_brisc",
+   "label": "short_wide_wide",
+   "rep": 2
+  },
+  {
+   "phase": "measure",
+   "mode": "grad_brisc_rev",
+   "label": "short_wide_wide",
+   "rep": 2
+  },
+  {
+   "phase": "measure",
+   "mode": "edge98",
+   "label": "short_wide_wide",
+   "rep": 2
+  },
+  {
+   "phase": "measure",
+   "mode": "baseline",
+   "label": "short_wide_wide",
+   "rep": 2
+  },
+  {
+   "phase": "measure",
+   "mode": "uniform8",
+   "label": "short_wide_wide",
+   "rep": 2
+  },
+  {
+   "phase": "measure",
+   "mode": "half97_rev",
+   "label": "short_wide_wide",
+   "rep": 3
+  },
+  {
+   "phase": "measure",
+   "mode": "grad_brisc",
+   "label": "short_wide_wide",
+   "rep": 3
+  },
+  {
+   "phase": "measure",
+   "mode": "grad_brisc_rev",
+   "label": "short_wide_wide",
+   "rep": 3
+  },
+  {
+   "phase": "measure",
+   "mode": "edge98",
+   "label": "short_wide_wide",
+   "rep": 3
+  },
+  {
+   "phase": "measure",
+   "mode": "baseline",
+   "label": "short_wide_wide",
+   "rep": 3
+  },
+  {
+   "phase": "measure",
+   "mode": "uniform8",
+   "label": "short_wide_wide",
+   "rep": 3
+  },
+  {
+   "phase": "measure",
+   "mode": "half97",
+   "label": "short_wide_wide",
+   "rep": 3
+  },
+  {
+   "phase": "measure",
+   "mode": "grad_brisc",
+   "label": "short_wide_wide",
+   "rep": 4
+  },
+  {
+   "phase": "measure",
+   "mode": "grad_brisc_rev",
+   "label": "short_wide_wide",
+   "rep": 4
+  },
+  {
+   "phase": "measure",
+   "mode": "edge98",
+   "label": "short_wide_wide",
+   "rep": 4
+  },
+  {
+   "phase": "measure",
+   "mode": "baseline",
+   "label": "short_wide_wide",
+   "rep": 4
+  },
+  {
+   "phase": "measure",
+   "mode": "uniform8",
+   "label": "short_wide_wide",
+   "rep": 4
+  },
+  {
+   "phase": "measure",
+   "mode": "half97",
+   "label": "short_wide_wide",
+   "rep": 4
+  },
+  {
+   "phase": "measure",
+   "mode": "half97_rev",
+   "label": "short_wide_wide",
+   "rep": 4
+  },
+  {
+   "phase": "measure",
+   "mode": "grad_brisc_rev",
+   "label": "short_wide_wide",
+   "rep": 5
+  },
+  {
+   "phase": "measure",
+   "mode": "edge98",
+   "label": "short_wide_wide",
+   "rep": 5
+  },
+  {
+   "phase": "measure",
+   "mode": "baseline",
+   "label": "short_wide_wide",
+   "rep": 5
+  },
+  {
+   "phase": "measure",
+   "mode": "uniform8",
+   "label": "short_wide_wide",
+   "rep": 5
+  },
+  {
+   "phase": "measure",
+   "mode": "half97",
+   "label": "short_wide_wide",
+   "rep": 5
+  },
+  {
+   "phase": "measure",
+   "mode": "half97_rev",
+   "label": "short_wide_wide",
+   "rep": 5
+  },
+  {
+   "phase": "measure",
+   "mode": "grad_brisc",
+   "label": "short_wide_wide",
+   "rep": 5
+  },
+  {
+   "phase": "measure",
+   "mode": "edge98",
+   "label": "short_wide_wide",
+   "rep": 6
+  },
+  {
+   "phase": "measure",
+   "mode": "baseline",
+   "label": "short_wide_wide",
+   "rep": 6
+  },
+  {
+   "phase": "measure",
+   "mode": "uniform8",
+   "label": "short_wide_wide",
+   "rep": 6
+  },
+  {
+   "phase": "measure",
+   "mode": "half97",
+   "label": "short_wide_wide",
+   "rep": 6
+  },
+  {
+   "phase": "measure",
+   "mode": "half97_rev",
+   "label": "short_wide_wide",
+   "rep": 6
+  },
+  {
+   "phase": "measure",
+   "mode": "grad_brisc",
+   "label": "short_wide_wide",
+   "rep": 6
+  },
+  {
+   "phase": "measure",
+   "mode": "grad_brisc_rev",
+   "label": "short_wide_wide",
+   "rep": 6
+  }
+ ],
+ "plans": [
+  {
+   "mode": "baseline",
+   "label": "short_wide_wide",
+   "shape": [
+    1,
+    1,
+    32,
+    32768
+   ],
+   "cores_used": 64,
+   "num_groups": 1,
+   "reason_not_applied": null,
+   "groups": [
+    {
+     "width": 8,
+     "cores": 64,
+     "col_offset": 0,
+     "row_bytes": 512,
+     "core_xy": [
+      [
+       0,
+       0
+      ],
+      [
+       0,
+       1
+      ],
+      [
+       0,
+       2
+      ],
+      [
+       0,
+       3
+      ],
+      [
+       0,
+       4
+      ],
+      [
+       0,
+       5
+      ],
+      [
+       0,
+       6
+      ],
+      [
+       0,
+       7
+      ],
+      [
+       1,
+       0
+      ],
+      [
+       1,
+       1
+      ],
+      [
+       1,
+       2
+      ],
+      [
+       1,
+       3
+      ],
+      [
+       1,
+       4
+      ],
+      [
+       1,
+       5
+      ],
+      [
+       1,
+       6
+      ],
+      [
+       1,
+       7
+      ],
+      [
+       2,
+       0
+      ],
+      [
+       2,
+       1
+      ],
+      [
+       2,
+       2
+      ],
+      [
+       2,
+       3
+      ],
+      [
+       2,
+       4
+      ],
+      [
+       2,
+       5
+      ],
+      [
+       2,
+       6
+      ],
+      [
+       2,
+       7
+      ],
+      [
+       3,
+       0
+      ],
+      [
+       3,
+       1
+      ],
+      [
+       3,
+       2
+      ],
+      [
+       3,
+       3
+      ],
+      [
+       3,
+       4
+      ],
+      [
+       3,
+       5
+      ],
+      [
+       3,
+       6
+      ],
+      [
+       3,
+       7
+      ],
+      [
+       4,
+       0
+      ],
+      [
+       4,
+       1
+      ],
+      [
+       4,
+       2
+      ],
+      [
+       4,
+       3
+      ],
+      [
+       4,
+       4
+      ],
+      [
+       4,
+       5
+      ],
+      [
+       4,
+       6
+      ],
+      [
+       4,
+       7
+      ],
+      [
+       5,
+       0
+      ],
+      [
+       5,
+       1
+      ],
+      [
+       5,
+       2
+      ],
+      [
+       5,
+       3
+      ],
+      [
+       5,
+       4
+      ],
+      [
+       5,
+       5
+      ],
+      [
+       5,
+       6
+      ],
+      [
+       5,
+       7
+      ],
+      [
+       6,
+       0
+      ],
+      [
+       6,
+       1
+      ],
+      [
+       6,
+       2
+      ],
+      [
+       6,
+       3
+      ],
+      [
+       6,
+       4
+      ],
+      [
+       6,
+       5
+      ],
+      [
+       6,
+       6
+      ],
+      [
+       6,
+       7
+      ],
+      [
+       7,
+       0
+      ],
+      [
+       7,
+       1
+      ],
+      [
+       7,
+       2
+      ],
+      [
+       7,
+       3
+      ],
+      [
+       7,
+       4
+      ],
+      [
+       7,
+       5
+      ],
+      [
+       7,
+       6
+      ],
+      [
+       7,
+       7
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "mode": "uniform8",
+   "label": "short_wide_wide",
+   "shape": [
+    1,
+    1,
+    32,
+    32768
+   ],
+   "cores_used": 64,
+   "num_groups": 1,
+   "reason_not_applied": null,
+   "groups": [
+    {
+     "width": 8,
+     "cores": 64,
+     "col_offset": 0,
+     "row_bytes": 512,
+     "core_xy": [
+      [
+       0,
+       0
+      ],
+      [
+       0,
+       1
+      ],
+      [
+       0,
+       2
+      ],
+      [
+       0,
+       3
+      ],
+      [
+       0,
+       4
+      ],
+      [
+       0,
+       5
+      ],
+      [
+       0,
+       6
+      ],
+      [
+       0,
+       7
+      ],
+      [
+       1,
+       0
+      ],
+      [
+       1,
+       1
+      ],
+      [
+       1,
+       2
+      ],
+      [
+       1,
+       3
+      ],
+      [
+       1,
+       4
+      ],
+      [
+       1,
+       5
+      ],
+      [
+       1,
+       6
+      ],
+      [
+       1,
+       7
+      ],
+      [
+       2,
+       0
+      ],
+      [
+       2,
+       1
+      ],
+      [
+       2,
+       2
+      ],
+      [
+       2,
+       3
+      ],
+      [
+       2,
+       4
+      ],
+      [
+       2,
+       5
+      ],
+      [
+       2,
+       6
+      ],
+      [
+       2,
+       7
+      ],
+      [
+       3,
+       0
+      ],
+      [
+       3,
+       1
+      ],
+      [
+       3,
+       2
+      ],
+      [
+       3,
+       3
+      ],
+      [
+       3,
+       4
+      ],
+      [
+       3,
+       5
+      ],
+      [
+       3,
+       6
+      ],
+      [
+       3,
+       7
+      ],
+      [
+       4,
+       0
+      ],
+      [
+       4,
+       1
+      ],
+      [
+       4,
+       2
+      ],
+      [
+       4,
+       3
+      ],
+      [
+       4,
+       4
+      ],
+      [
+       4,
+       5
+      ],
+      [
+       4,
+       6
+      ],
+      [
+       4,
+       7
+      ],
+      [
+       5,
+       0
+      ],
+      [
+       5,
+       1
+      ],
+      [
+       5,
+       2
+      ],
+      [
+       5,
+       3
+      ],
+      [
+       5,
+       4
+      ],
+      [
+       5,
+       5
+      ],
+      [
+       5,
+       6
+      ],
+      [
+       5,
+       7
+      ],
+      [
+       6,
+       0
+      ],
+      [
+       6,
+       1
+      ],
+      [
+       6,
+       2
+      ],
+      [
+       6,
+       3
+      ],
+      [
+       6,
+       4
+      ],
+      [
+       6,
+       5
+      ],
+      [
+       6,
+       6
+      ],
+      [
+       6,
+       7
+      ],
+      [
+       7,
+       0
+      ],
+      [
+       7,
+       1
+      ],
+      [
+       7,
+       2
+      ],
+      [
+       7,
+       3
+      ],
+      [
+       7,
+       4
+      ],
+      [
+       7,
+       5
+      ],
+      [
+       7,
+       6
+      ],
+      [
+       7,
+       7
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "mode": "half97",
+   "label": "short_wide_wide",
+   "shape": [
+    1,
+    1,
+    32,
+    32768
+   ],
+   "cores_used": 64,
+   "num_groups": 2,
+   "reason_not_applied": null,
+   "groups": [
+    {
+     "width": 7,
+     "cores": 32,
+     "col_offset": 0,
+     "row_bytes": 448,
+     "core_xy": [
+      [
+       0,
+       0
+      ],
+      [
+       0,
+       1
+      ],
+      [
+       0,
+       2
+      ],
+      [
+       0,
+       3
+      ],
+      [
+       1,
+       0
+      ],
+      [
+       1,
+       1
+      ],
+      [
+       1,
+       2
+      ],
+      [
+       1,
+       3
+      ],
+      [
+       2,
+       0
+      ],
+      [
+       2,
+       1
+      ],
+      [
+       2,
+       2
+      ],
+      [
+       2,
+       3
+      ],
+      [
+       3,
+       0
+      ],
+      [
+       3,
+       1
+      ],
+      [
+       3,
+       2
+      ],
+      [
+       3,
+       3
+      ],
+      [
+       4,
+       0
+      ],
+      [
+       4,
+       1
+      ],
+      [
+       4,
+       2
+      ],
+      [
+       4,
+       3
+      ],
+      [
+       5,
+       0
+      ],
+      [
+       5,
+       1
+      ],
+      [
+       5,
+       2
+      ],
+      [
+       5,
+       3
+      ],
+      [
+       6,
+       0
+      ],
+      [
+       6,
+       1
+      ],
+      [
+       6,
+       2
+      ],
+      [
+       6,
+       3
+      ],
+      [
+       7,
+       0
+      ],
+      [
+       7,
+       1
+      ],
+      [
+       7,
+       2
+      ],
+      [
+       7,
+       3
+      ]
+     ]
+    },
+    {
+     "width": 9,
+     "cores": 32,
+     "col_offset": 448,
+     "row_bytes": 576,
+     "core_xy": [
+      [
+       0,
+       4
+      ],
+      [
+       0,
+       5
+      ],
+      [
+       0,
+       6
+      ],
+      [
+       0,
+       7
+      ],
+      [
+       1,
+       4
+      ],
+      [
+       1,
+       5
+      ],
+      [
+       1,
+       6
+      ],
+      [
+       1,
+       7
+      ],
+      [
+       2,
+       4
+      ],
+      [
+       2,
+       5
+      ],
+      [
+       2,
+       6
+      ],
+      [
+       2,
+       7
+      ],
+      [
+       3,
+       4
+      ],
+      [
+       3,
+       5
+      ],
+      [
+       3,
+       6
+      ],
+      [
+       3,
+       7
+      ],
+      [
+       4,
+       4
+      ],
+      [
+       4,
+       5
+      ],
+      [
+       4,
+       6
+      ],
+      [
+       4,
+       7
+      ],
+      [
+       5,
+       4
+      ],
+      [
+       5,
+       5
+      ],
+      [
+       5,
+       6
+      ],
+      [
+       5,
+       7
+      ],
+      [
+       6,
+       4
+      ],
+      [
+       6,
+       5
+      ],
+      [
+       6,
+       6
+      ],
+      [
+       6,
+       7
+      ],
+      [
+       7,
+       4
+      ],
+      [
+       7,
+       5
+      ],
+      [
+       7,
+       6
+      ],
+      [
+       7,
+       7
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "mode": "half97_rev",
+   "label": "short_wide_wide",
+   "shape": [
+    1,
+    1,
+    32,
+    32768
+   ],
+   "cores_used": 64,
+   "num_groups": 2,
+   "reason_not_applied": null,
+   "groups": [
+    {
+     "width": 9,
+     "cores": 32,
+     "col_offset": 0,
+     "row_bytes": 576,
+     "core_xy": [
+      [
+       0,
+       0
+      ],
+      [
+       0,
+       1
+      ],
+      [
+       0,
+       2
+      ],
+      [
+       0,
+       3
+      ],
+      [
+       1,
+       0
+      ],
+      [
+       1,
+       1
+      ],
+      [
+       1,
+       2
+      ],
+      [
+       1,
+       3
+      ],
+      [
+       2,
+       0
+      ],
+      [
+       2,
+       1
+      ],
+      [
+       2,
+       2
+      ],
+      [
+       2,
+       3
+      ],
+      [
+       3,
+       0
+      ],
+      [
+       3,
+       1
+      ],
+      [
+       3,
+       2
+      ],
+      [
+       3,
+       3
+      ],
+      [
+       4,
+       0
+      ],
+      [
+       4,
+       1
+      ],
+      [
+       4,
+       2
+      ],
+      [
+       4,
+       3
+      ],
+      [
+       5,
+       0
+      ],
+      [
+       5,
+       1
+      ],
+      [
+       5,
+       2
+      ],
+      [
+       5,
+       3
+      ],
+      [
+       6,
+       0
+      ],
+      [
+       6,
+       1
+      ],
+      [
+       6,
+       2
+      ],
+      [
+       6,
+       3
+      ],
+      [
+       7,
+       0
+      ],
+      [
+       7,
+       1
+      ],
+      [
+       7,
+       2
+      ],
+      [
+       7,
+       3
+      ]
+     ]
+    },
+    {
+     "width": 7,
+     "cores": 32,
+     "col_offset": 576,
+     "row_bytes": 448,
+     "core_xy": [
+      [
+       0,
+       4
+      ],
+      [
+       0,
+       5
+      ],
+      [
+       0,
+       6
+      ],
+      [
+       0,
+       7
+      ],
+      [
+       1,
+       4
+      ],
+      [
+       1,
+       5
+      ],
+      [
+       1,
+       6
+      ],
+      [
+       1,
+       7
+      ],
+      [
+       2,
+       4
+      ],
+      [
+       2,
+       5
+      ],
+      [
+       2,
+       6
+      ],
+      [
+       2,
+       7
+      ],
+      [
+       3,
+       4
+      ],
+      [
+       3,
+       5
+      ],
+      [
+       3,
+       6
+      ],
+      [
+       3,
+       7
+      ],
+      [
+       4,
+       4
+      ],
+      [
+       4,
+       5
+      ],
+      [
+       4,
+       6
+      ],
+      [
+       4,
+       7
+      ],
+      [
+       5,
+       4
+      ],
+      [
+       5,
+       5
+      ],
+      [
+       5,
+       6
+      ],
+      [
+       5,
+       7
+      ],
+      [
+       6,
+       4
+      ],
+      [
+       6,
+       5
+      ],
+      [
+       6,
+       6
+      ],
+      [
+       6,
+       7
+      ],
+      [
+       7,
+       4
+      ],
+      [
+       7,
+       5
+      ],
+      [
+       7,
+       6
+      ],
+      [
+       7,
+       7
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "mode": "grad_brisc",
+   "label": "short_wide_wide",
+   "shape": [
+    1,
+    1,
+    32,
+    32768
+   ],
+   "cores_used": 64,
+   "num_groups": 4,
+   "reason_not_applied": null,
+   "groups": [
+    {
+     "width": 7,
+     "cores": 32,
+     "col_offset": 0,
+     "row_bytes": 448,
+     "core_xy": [
+      [
+       0,
+       0
+      ],
+      [
+       0,
+       1
+      ],
+      [
+       0,
+       2
+      ],
+      [
+       0,
+       3
+      ],
+      [
+       1,
+       0
+      ],
+      [
+       1,
+       1
+      ],
+      [
+       1,
+       2
+      ],
+      [
+       1,
+       3
+      ],
+      [
+       2,
+       0
+      ],
+      [
+       2,
+       1
+      ],
+      [
+       2,
+       2
+      ],
+      [
+       2,
+       3
+      ],
+      [
+       3,
+       0
+      ],
+      [
+       3,
+       1
+      ],
+      [
+       3,
+       2
+      ],
+      [
+       3,
+       3
+      ],
+      [
+       4,
+       0
+      ],
+      [
+       4,
+       1
+      ],
+      [
+       4,
+       2
+      ],
+      [
+       4,
+       3
+      ],
+      [
+       5,
+       0
+      ],
+      [
+       5,
+       1
+      ],
+      [
+       5,
+       2
+      ],
+      [
+       5,
+       3
+      ],
+      [
+       6,
+       0
+      ],
+      [
+       6,
+       1
+      ],
+      [
+       6,
+       2
+      ],
+      [
+       6,
+       3
+      ],
+      [
+       7,
+       0
+      ],
+      [
+       7,
+       1
+      ],
+      [
+       7,
+       2
+      ],
+      [
+       7,
+       3
+      ]
+     ]
+    },
+    {
+     "width": 8,
+     "cores": 16,
+     "col_offset": 448,
+     "row_bytes": 512,
+     "core_xy": [
+      [
+       0,
+       4
+      ],
+      [
+       0,
+       5
+      ],
+      [
+       1,
+       4
+      ],
+      [
+       1,
+       5
+      ],
+      [
+       2,
+       4
+      ],
+      [
+       2,
+       5
+      ],
+      [
+       3,
+       4
+      ],
+      [
+       3,
+       5
+      ],
+      [
+       4,
+       4
+      ],
+      [
+       4,
+       5
+      ],
+      [
+       5,
+       4
+      ],
+      [
+       5,
+       5
+      ],
+      [
+       6,
+       4
+      ],
+      [
+       6,
+       5
+      ],
+      [
+       7,
+       4
+      ],
+      [
+       7,
+       5
+      ]
+     ]
+    },
+    {
+     "width": 9,
+     "cores": 8,
+     "col_offset": 704,
+     "row_bytes": 576,
+     "core_xy": [
+      [
+       0,
+       6
+      ],
+      [
+       1,
+       6
+      ],
+      [
+       2,
+       6
+      ],
+      [
+       3,
+       6
+      ],
+      [
+       4,
+       6
+      ],
+      [
+       5,
+       6
+      ],
+      [
+       6,
+       6
+      ],
+      [
+       7,
+       6
+      ]
+     ]
+    },
+    {
+     "width": 11,
+     "cores": 8,
+     "col_offset": 848,
+     "row_bytes": 704,
+     "core_xy": [
+      [
+       0,
+       7
+      ],
+      [
+       1,
+       7
+      ],
+      [
+       2,
+       7
+      ],
+      [
+       3,
+       7
+      ],
+      [
+       4,
+       7
+      ],
+      [
+       5,
+       7
+      ],
+      [
+       6,
+       7
+      ],
+      [
+       7,
+       7
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "mode": "grad_brisc_rev",
+   "label": "short_wide_wide",
+   "shape": [
+    1,
+    1,
+    32,
+    32768
+   ],
+   "cores_used": 64,
+   "num_groups": 4,
+   "reason_not_applied": null,
+   "groups": [
+    {
+     "width": 11,
+     "cores": 8,
+     "col_offset": 0,
+     "row_bytes": 704,
+     "core_xy": [
+      [
+       0,
+       0
+      ],
+      [
+       1,
+       0
+      ],
+      [
+       2,
+       0
+      ],
+      [
+       3,
+       0
+      ],
+      [
+       4,
+       0
+      ],
+      [
+       5,
+       0
+      ],
+      [
+       6,
+       0
+      ],
+      [
+       7,
+       0
+      ]
+     ]
+    },
+    {
+     "width": 9,
+     "cores": 8,
+     "col_offset": 176,
+     "row_bytes": 576,
+     "core_xy": [
+      [
+       0,
+       1
+      ],
+      [
+       1,
+       1
+      ],
+      [
+       2,
+       1
+      ],
+      [
+       3,
+       1
+      ],
+      [
+       4,
+       1
+      ],
+      [
+       5,
+       1
+      ],
+      [
+       6,
+       1
+      ],
+      [
+       7,
+       1
+      ]
+     ]
+    },
+    {
+     "width": 8,
+     "cores": 16,
+     "col_offset": 320,
+     "row_bytes": 512,
+     "core_xy": [
+      [
+       0,
+       2
+      ],
+      [
+       0,
+       3
+      ],
+      [
+       1,
+       2
+      ],
+      [
+       1,
+       3
+      ],
+      [
+       2,
+       2
+      ],
+      [
+       2,
+       3
+      ],
+      [
+       3,
+       2
+      ],
+      [
+       3,
+       3
+      ],
+      [
+       4,
+       2
+      ],
+      [
+       4,
+       3
+      ],
+      [
+       5,
+       2
+      ],
+      [
+       5,
+       3
+      ],
+      [
+       6,
+       2
+      ],
+      [
+       6,
+       3
+      ],
+      [
+       7,
+       2
+      ],
+      [
+       7,
+       3
+      ]
+     ]
+    },
+    {
+     "width": 7,
+     "cores": 32,
+     "col_offset": 576,
+     "row_bytes": 448,
+     "core_xy": [
+      [
+       0,
+       4
+      ],
+      [
+       0,
+       5
+      ],
+      [
+       0,
+       6
+      ],
+      [
+       0,
+       7
+      ],
+      [
+       1,
+       4
+      ],
+      [
+       1,
+       5
+      ],
+      [
+       1,
+       6
+      ],
+      [
+       1,
+       7
+      ],
+      [
+       2,
+       4
+      ],
+      [
+       2,
+       5
+      ],
+      [
+       2,
+       6
+      ],
+      [
+       2,
+       7
+      ],
+      [
+       3,
+       4
+      ],
+      [
+       3,
+       5
+      ],
+      [
+       3,
+       6
+      ],
+      [
+       3,
+       7
+      ],
+      [
+       4,
+       4
+      ],
+      [
+       4,
+       5
+      ],
+      [
+       4,
+       6
+      ],
+      [
+       4,
+       7
+      ],
+      [
+       5,
+       4
+      ],
+      [
+       5,
+       5
+      ],
+      [
+       5,
+       6
+      ],
+      [
+       5,
+       7
+      ],
+      [
+       6,
+       4
+      ],
+      [
+       6,
+       5
+      ],
+      [
+       6,
+       6
+      ],
+      [
+       6,
+       7
+      ],
+      [
+       7,
+       4
+      ],
+      [
+       7,
+       5
+      ],
+      [
+       7,
+       6
+      ],
+      [
+       7,
+       7
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "mode": "edge98",
+   "label": "short_wide_wide",
+   "shape": [
+    1,
+    1,
+    32,
+    32768
+   ],
+   "cores_used": 64,
+   "num_groups": 3,
+   "reason_not_applied": null,
+   "groups": [
+    {
+     "width": 7,
+     "cores": 16,
+     "col_offset": 0,
+     "row_bytes": 448,
+     "core_xy": [
+      [
+       0,
+       0
+      ],
+      [
+       0,
+       1
+      ],
+      [
+       1,
+       0
+      ],
+      [
+       1,
+       1
+      ],
+      [
+       2,
+       0
+      ],
+      [
+       2,
+       1
+      ],
+      [
+       3,
+       0
+      ],
+      [
+       3,
+       1
+      ],
+      [
+       4,
+       0
+      ],
+      [
+       4,
+       1
+      ],
+      [
+       5,
+       0
+      ],
+      [
+       5,
+       1
+      ],
+      [
+       6,
+       0
+      ],
+      [
+       6,
+       1
+      ],
+      [
+       7,
+       0
+      ],
+      [
+       7,
+       1
+      ]
+     ]
+    },
+    {
+     "width": 8,
+     "cores": 32,
+     "col_offset": 224,
+     "row_bytes": 512,
+     "core_xy": [
+      [
+       0,
+       2
+      ],
+      [
+       0,
+       3
+      ],
+      [
+       0,
+       4
+      ],
+      [
+       0,
+       5
+      ],
+      [
+       1,
+       2
+      ],
+      [
+       1,
+       3
+      ],
+      [
+       1,
+       4
+      ],
+      [
+       1,
+       5
+      ],
+      [
+       2,
+       2
+      ],
+      [
+       2,
+       3
+      ],
+      [
+       2,
+       4
+      ],
+      [
+       2,
+       5
+      ],
+      [
+       3,
+       2
+      ],
+      [
+       3,
+       3
+      ],
+      [
+       3,
+       4
+      ],
+      [
+       3,
+       5
+      ],
+      [
+       4,
+       2
+      ],
+      [
+       4,
+       3
+      ],
+      [
+       4,
+       4
+      ],
+      [
+       4,
+       5
+      ],
+      [
+       5,
+       2
+      ],
+      [
+       5,
+       3
+      ],
+      [
+       5,
+       4
+      ],
+      [
+       5,
+       5
+      ],
+      [
+       6,
+       2
+      ],
+      [
+       6,
+       3
+      ],
+      [
+       6,
+       4
+      ],
+      [
+       6,
+       5
+      ],
+      [
+       7,
+       2
+      ],
+      [
+       7,
+       3
+      ],
+      [
+       7,
+       4
+      ],
+      [
+       7,
+       5
+      ]
+     ]
+    },
+    {
+     "width": 9,
+     "cores": 16,
+     "col_offset": 736,
+     "row_bytes": 576,
+     "core_xy": [
+      [
+       0,
+       6
+      ],
+      [
+       0,
+       7
+      ],
+      [
+       1,
+       6
+      ],
+      [
+       1,
+       7
+      ],
+      [
+       2,
+       6
+      ],
+      [
+       2,
+       7
+      ],
+      [
+       3,
+       6
+      ],
+      [
+       3,
+       7
+      ],
+      [
+       4,
+       6
+      ],
+      [
+       4,
+       7
+      ],
+      [
+       5,
+       6
+      ],
+      [
+       5,
+       7
+      ],
+      [
+       6,
+       6
+      ],
+      [
+       6,
+       7
+      ],
+      [
+       7,
+       6
+      ],
+      [
+       7,
+       7
+      ]
+     ]
+    }
+   ]
+  }
+ ]
+}

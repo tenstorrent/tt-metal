@@ -1,0 +1,198 @@
+[
+ {
+  "rep": 0,
+  "variant": "chained"
+ },
+ {
+  "rep": 0,
+  "variant": "chained_2k"
+ },
+ {
+  "rep": 0,
+  "variant": "independent"
+ },
+ {
+  "rep": 0,
+  "variant": "independent_2k"
+ },
+ {
+  "rep": 0,
+  "variant": "reads_only_512"
+ },
+ {
+  "rep": 0,
+  "variant": "reads_only_2k"
+ },
+ {
+  "rep": 0,
+  "variant": "writes_only"
+ },
+ {
+  "rep": 1,
+  "variant": "chained"
+ },
+ {
+  "rep": 1,
+  "variant": "chained_2k"
+ },
+ {
+  "rep": 1,
+  "variant": "independent"
+ },
+ {
+  "rep": 1,
+  "variant": "independent_2k"
+ },
+ {
+  "rep": 1,
+  "variant": "reads_only_512"
+ },
+ {
+  "rep": 1,
+  "variant": "reads_only_2k"
+ },
+ {
+  "rep": 1,
+  "variant": "writes_only"
+ },
+ {
+  "rep": 2,
+  "variant": "chained"
+ },
+ {
+  "rep": 2,
+  "variant": "chained_2k"
+ },
+ {
+  "rep": 2,
+  "variant": "independent"
+ },
+ {
+  "rep": 2,
+  "variant": "independent_2k"
+ },
+ {
+  "rep": 2,
+  "variant": "reads_only_512"
+ },
+ {
+  "rep": 2,
+  "variant": "reads_only_2k"
+ },
+ {
+  "rep": 2,
+  "variant": "writes_only"
+ },
+ {
+  "rep": 3,
+  "variant": "chained"
+ },
+ {
+  "rep": 3,
+  "variant": "chained_2k"
+ },
+ {
+  "rep": 3,
+  "variant": "independent"
+ },
+ {
+  "rep": 3,
+  "variant": "independent_2k"
+ },
+ {
+  "rep": 3,
+  "variant": "reads_only_512"
+ },
+ {
+  "rep": 3,
+  "variant": "reads_only_2k"
+ },
+ {
+  "rep": 3,
+  "variant": "writes_only"
+ },
+ {
+  "rep": 4,
+  "variant": "chained"
+ },
+ {
+  "rep": 4,
+  "variant": "chained_2k"
+ },
+ {
+  "rep": 4,
+  "variant": "independent"
+ },
+ {
+  "rep": 4,
+  "variant": "independent_2k"
+ },
+ {
+  "rep": 4,
+  "variant": "reads_only_512"
+ },
+ {
+  "rep": 4,
+  "variant": "reads_only_2k"
+ },
+ {
+  "rep": 4,
+  "variant": "writes_only"
+ },
+ {
+  "rep": 5,
+  "variant": "chained"
+ },
+ {
+  "rep": 5,
+  "variant": "chained_2k"
+ },
+ {
+  "rep": 5,
+  "variant": "independent"
+ },
+ {
+  "rep": 5,
+  "variant": "independent_2k"
+ },
+ {
+  "rep": 5,
+  "variant": "reads_only_512"
+ },
+ {
+  "rep": 5,
+  "variant": "reads_only_2k"
+ },
+ {
+  "rep": 5,
+  "variant": "writes_only"
+ },
+ {
+  "rep": 6,
+  "variant": "chained"
+ },
+ {
+  "rep": 6,
+  "variant": "chained_2k"
+ },
+ {
+  "rep": 6,
+  "variant": "independent"
+ },
+ {
+  "rep": 6,
+  "variant": "independent_2k"
+ },
+ {
+  "rep": 6,
+  "variant": "reads_only_512"
+ },
+ {
+  "rep": 6,
+  "variant": "reads_only_2k"
+ },
+ {
+  "rep": 6,
+  "variant": "writes_only"
+ }
+]

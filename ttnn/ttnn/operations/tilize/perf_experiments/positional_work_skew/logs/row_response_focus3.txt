@@ -1,0 +1,58 @@
+
+===== NCRISC: row mean span (ns) per mode, and the response to width =====
+mode               y=0      y=1      y=2      y=3      y=4      y=5      y=6      y=7
+baseline             7319    7601    7396    6292    4654    4049    3619    2910
+uniform8             7291    7389    7201    6015    4671    3974    3640    2953
+half97               6896    6952    6818    6186    5057    4368    3834    3006
+grad_brisc           6506    7019    6652    5773    4757    4290    3832    3385
+grad_brisc_rev       7175    7341    6692    5491    4714    3975    3716    3057
+edge98               6716    6588    6404    5305    4801    4480    4094    3190
+edge98_rev           7189    7090    6915    5705    4713    4242    3828    2976
+width w[y]
+  baseline              8       8       8       8       8       8       8       8
+  uniform8              8       8       8       8       8       8       8       8
+  half97                7       7       7       7       9       9       9       9
+  grad_brisc            7       7       7       7       8       8       9      11
+  grad_brisc_rev       11       9       8       8       7       7       7       7
+  edge98                7       7       8       8       8       8       9       9
+  edge98_rev            9       9       8       8       8       8       7       7
+
+  per-row least squares  duration ~ a + b*w   (a = the part work does NOT buy back)
+   row    a (ns)  b (ns/tile)  a share at w=8
+     0      6011          123             86%
+     1      5502          208             77%
+     2      5430          186             78%
+     3      7507         -218            130%
+     4      3395          171             71%
+     5      2624          197             63%
+     6      3086           87             82%
+     7      2266           95             75%
+
+===== BRISC: row mean span (ns) per mode, and the response to width =====
+mode               y=0      y=1      y=2      y=3      y=4      y=5      y=6      y=7
+baseline            10501   11144   11355   10551    8875    9268    8406    5775
+uniform8            10470   11126   11454   10194    9469    9462    9162    6481
+half97               9946   10494   11032   10877   10576   10522    9163    6087
+grad_brisc           9507   10355   10777   10485   10594   10803   11043   11199
+grad_brisc_rev      11202   11455   11200    9567    9013    9350    9795    6078
+edge98               9709   10361   11041   10336   10470   11088   11225    6074
+edge98_rev          10304   11064   11238   10267    9505    9617    9341    5365
+width w[y]
+  baseline              8       8       8       8       8       8       8       8
+  uniform8              8       8       8       8       8       8       8       8
+  half97                7       7       7       7       9       9       9       9
+  grad_brisc            7       7       7       7       8       8       9      11
+  grad_brisc_rev       11       9       8       8       7       7       7       7
+  edge98                7       7       8       8       8       8       9       9
+  edge98_rev            9       9       8       8       8       8       7       7
+
+  per-row least squares  duration ~ a + b*w   (a = the part work does NOT buy back)
+   row    a (ns)  b (ns/tile)  a share at w=8
+     0      7374          351             72%
+     1      7353          446             67%
+     2      8434          353             75%
+     3     14164         -498            139%
+     4      3531          782             36%
+     5      5327          586             53%
+     6      5440          527             56%
+     7     -3455         1208            -56%

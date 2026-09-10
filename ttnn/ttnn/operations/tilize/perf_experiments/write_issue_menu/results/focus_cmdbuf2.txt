@@ -1,0 +1,8 @@
+# cmdbuf2  <- generated/profiler/reports/2026_09_10_01_37_52/ops_perf_results_2026_09_10_01_37_52.csv
+  row00            ?x?x?  kernel=    8765  brisc=    8460  ncrisc=     350
+  row01            ?x?x?  kernel=    8304  brisc=    8059  ncrisc=     349
+  row02            ?x?x?  kernel=    8868  brisc=    8633  ncrisc=     349
+  row03            ?x?x?  kernel=   12411  brisc=   12092  ncrisc=    7423
+  row04            ?x?x?  kernel=   12601  brisc=   12311  ncrisc=    8053
+  row05            ?x?x?  kernel=   12778  brisc=   12463  ncrisc=    7681
+  n=6

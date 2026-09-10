@@ -1,0 +1,25 @@
+  row64            ?x?x?  kernel=   14614  brisc=   14319  ncrisc=    7710
+  row65            ?x?x?  kernel=   12222  brisc=   11952  ncrisc=    7840
+  row66            ?x?x?  kernel=   13126  brisc=   12855  ncrisc=    7416
+  row67            ?x?x?  kernel=   12423  brisc=   12160  ncrisc=    7313
+  row68            ?x?x?  kernel=   12835  brisc=   12545  ncrisc=    7619
+  row69            ?x?x?  kernel=   12406  brisc=   12145  ncrisc=    8249
+  n=70
+
+  === WRITE-STAGE (paired, 5 reps interleaved) ===
+    baseline       med=    8412  ( +0.0% vs baseline)  reps=[8412, 8892, 8142, 8614, 8403]
+    rot_none       med=    8795  ( +4.6% vs baseline)  reps=[8795, 8480, 8806, 8772, 9418]
+    rot_bankunif   med=    8726  ( +3.7% vs baseline)  reps=[8726, 8757, 8255, 8989, 8507]
+    flush_half     med=    8569  ( +1.9% vs baseline)  reps=[8569, 8740, 8588, 8548, 8438]
+    barrier_half   med=    8693  ( +3.3% vs baseline)  reps=[8595, 8693, 8507, 8890, 9470]
+    cmdbuf2        med=    8356  ( -0.7% vs baseline)  reps=[8356, 8499, 8197, 8526, 8102]
+    posted         med=    8193  ( -2.6% vs baseline)  reps=[8496, 8081, 7952, 8193, 8243]
+
+  === WHOLE-OP (paired, 5 reps interleaved) ===
+    baseline       med=   12475  ( +0.0% vs baseline)  reps=[12299, 12265, 12475, 12653, 12939]
+    rot_none       med=   13910  (+11.5% vs baseline)  reps=[13334, 13306, 13918, 13910, 14614]
+    rot_bankunif   med=   12329  ( -1.2% vs baseline)  reps=[12329, 12389, 11985, 12921, 12222]
+    flush_half     med=   12533  ( +0.5% vs baseline)  reps=[12784, 12335, 12488, 12533, 13126]
+    barrier_half   med=   12714  ( +1.9% vs baseline)  reps=[12714, 12460, 13329, 13115, 12423]
+    cmdbuf2        med=   12597  ( +1.0% vs baseline)  reps=[11981, 12491, 12597, 12664, 12835]
+    posted         med=   12151  ( -2.6% vs baseline)  reps=[12151, 11905, 12618, 11841, 12406]

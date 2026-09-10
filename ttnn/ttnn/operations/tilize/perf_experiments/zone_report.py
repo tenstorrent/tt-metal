@@ -15,6 +15,15 @@ Reads `generated/profiler/.logs/profile_log_device.csv` (written by any
     is clear of the 250 cap. See .claude/references/device-zone-scope-attribution.md.
 
     python3 ttnn/ttnn/operations/tilize/perf_experiments/zone_report.py [--run N]
+
+COMPANION TOOL (Perf 2). This script aggregates over cores, so it reports a
+mean and a max and cannot show WHICH cores are slow. When the mean/max spread
+is the thing under investigation, use
+`block_to_core_mapping/percore_map.py` instead: it prints the per-core
+*-KERNEL duration / start / end as 8x8 grid maps plus correlations against grid
+row, grid column and block id. That is what established Perf 2's central
+mechanism -- the core-time tail is a monotone gradient in the PHYSICAL GRID ROW,
+attached to the core and not to the block, with OPPOSITE sign on the two NoCs.
 """
 import argparse
 import collections

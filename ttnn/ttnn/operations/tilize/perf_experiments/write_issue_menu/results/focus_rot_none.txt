@@ -1,0 +1,8 @@
+# rot_none  <- generated/profiler/reports/2026_09_10_01_35_19/ops_perf_results_2026_09_10_01_35_19.csv
+  row00            ?x?x?  kernel=    8969  brisc=    8693  ncrisc=     334
+  row01            ?x?x?  kernel=    9120  brisc=    8892  ncrisc=     337
+  row02            ?x?x?  kernel=    8851  brisc=    8631  ncrisc=     329
+  row03            ?x?x?  kernel=   12361  brisc=   12093  ncrisc=    8202
+  row04            ?x?x?  kernel=   12602  brisc=   12333  ncrisc=    8011
+  row05            ?x?x?  kernel=   13240  brisc=   12974  ncrisc=    8179
+  n=6

@@ -1224,3 +1224,305 @@ breakdown is not truncated.
 |---|---|---|---|---|---|
 | `dataflow_kernel_lib::read_sticks_for_tilize` | capability | Its TILE-mode inner loop is `for (row = 0; row < rows_this_block; row++)` over `start_page + block_row + row` (`tilize_helpers_dataflow.inl:121`), and its signature carries no order, start-row or permutation parameter — so no call-site argument can express a rotated start row, which is the whole lever. The helper's own overhead is NOT the gap: a raw ascending loop ties it (5572 vs 5545 ns), so this is one missing optional `start_row_offset` parameter away from being closable, after which this file goes back to being a call. | 5545 (helper, ascending) | 4694 (raw, rotated) | `kernels/tilize_stick_read.hpp:read_sticks_rotated`, called from `tilize_reader.cpp:411` and `tilize_writer.cpp:141` |
 | *(none — no tiled-side write helper exists)* | capability | The writer was already raw before this round and stays raw; this round only permuted its issue order. The gap is the one the kernel head has recorded since Phase 0 — `write_tile_pages_for_tilize<cb>(accessor, num_tile_rows, tiles_per_row, tensor_col_tiles, start_tile_row, col_offset, rows_per_barrier)`, the symmetric counterpart to `read_sticks_for_tilize` on the tiled side — now with **one more parameter**: an issue-order rotation, without which a materialized helper would re-introduce the lockstep this round removed. `write_sticks_after_untilize` addresses by stick index into a ROW_MAJOR destination and `local_copy_helpers_dataflow` requires an `AddressType::LOCAL_L1` destination; neither can address an interleaved TILE tensor. | n/a (no helper to call) | 22767 (`[1,1,1024,1024]`, vs 24404 unrotated) | `kernels/tilize_writer.cpp:205-235` |
+
+## Perf 2 — Tournament on the flagged `attention` profile (round 2 of 2)
+
+**Target**: `LOOSE_CASES[0]`, the entry carrying the `attention:` PERF FOCUS note —
+`[1,1,32,16384]`, `bfloat16 -> bfloat16`, interleaved DRAM -> interleaved DRAM, rank 4,
+tile-aligned, 32x32 tile, default compute config. Every knob of that config is in
+`SUPPORTED`, so it was measured exactly and never through a proxy. Nothing was added to
+`SUPPORTED`.
+
+**Outcome, stated up front: all seven ideas were measured, NONE graduated, and the op's
+source is byte-identical to `HEAD` (Perf 1).** That is the honest result, not a shortfall —
+and the round is not empty, because the measurement that would have licensed "the op is
+done" turned out to be *wrong*, and the one that replaced it is a much sharper statement
+about where the remaining 1.11x lives and why every lever this op has reaches for cannot
+get it.
+
+Box for every number below: **Wormhole B0 `n150 L`, 8x8 = 64/64 cores, 1 GHz, 12 DRAM banks.**
+Run-to-run spread on this box is **+-8% across processes** and **~+-5% within one process**;
+a further **~3% is the dispatch SLOT** inside an interleaved paired run (a byte-identical
+program read 0.970x purely by sitting one slot later — `positional_work_skew` found this and
+the fix is to rotate the mode order every rep; any future paired measurement on this op
+should do the same).
+
+### The measured breakdown (Step 1) — re-run on the post-Perf-1 critical path
+
+Perf 1's permanent instrumentation was reused unchanged: `MaybeDeviceZoneScope` in all three
+kernels and the `TILIZE_ABLATE=reads,writes,compute` payload switches. No zone was added or
+removed this round; the marker budget is **10 / 250** on the busiest RISC and the zones cover
+the whole kernel span, so the breakdown is not truncated.
+
+Plan on the focus shape (unchanged): `R=1`, `C=512`, `block_width_tiles=8`, `num_w_chunks=64`,
+64 blocks over 64 cores, **one block = ONE wave per core**. Per core: 32 reads of 512 B behind
+one barrier, one `tilize<8>` over one tile-row, 8 writes of 2048 B behind one barrier.
+
+Cumulative payload peel (device kernel ns; peeled cumulatively because the stages overlap):
+
+| peel | ns | stage cost | share |
+|---|---|---|---|
+| full | 12509 | — | — |
+| minus compute | 11558 | compute **951** | 7.6% |
+| minus compute + reads | 8315 | reads **3243** | 25.9% |
+| minus compute + reads + writes | 933 | writes **7382** | **59.0%** |
+| floor — every payload stubbed at once, sync + dispatch only | 933 | — | 7.5% |
+
+Isolated stages (the other ablation order, which the peel alone does not give):
+**reads-only 5420 ns (193 GB/s)**, **writes-only 7382 ns (142 GB/s)**. Serial-sum
+5420 + 7382 + 951 + 933 = 14686 against a measured 12509, so **2177 ns of overlap IS being
+harvested** — up from ~0 in Perf 1, because the graduated rotation de-synchronized the grid.
+Whole-op repeats: 12356 / 12399 / 12639 (guard harness) and 12509 / 12622 / 12534 (ablation
+harness).
+
+Per-stage zones, mean over 64 cores:
+
+| RISC | zone | mean ns | max ns | %span |
+|---|---|---|---|---|
+| NCRISC (span 5288 / max 7588) | `reader_read_block` | 5159 | 7458 | 97.6% |
+| BRISC (span 9710 / max 12048) | `writer_wait_out` | 5952 | 8271 | **61.3% (starved)** |
+| BRISC | `writer_issue` | 2112 | 6935 | 21.8% |
+| BRISC | `writer_barrier` | 1364 | 4366 | 14.1% |
+| TRISC_0/1/2 (spans 5630 / 5842 / 6348) | `compute_tilize_block` | 5276 / 5570 / 5910 | — | 93-95% |
+
+Versus Perf 1's exit numbers the critical path moved exactly as expected: reads
+4678 -> 3243 (the rotation), writes 7840 -> 7382, and **writes went from 55% to 59% of the
+wall**. The naive round-2 ranking off this table is "writes, then reads, then nothing".
+
+### The roofline gate (Step 1, part 2) — and why the naive ranking was wrong
+
+Both stage RATES look finished: reads at 193 GB/s and writes at 142 GB/s, against the op's
+own best anywhere (`[1,1,2048,2048]`: 208 GB/s read-only, 148.5 GB/s write-only, **192 GB/s
+combined = the box's DRAM peak**, which independently matches
+`ttnn/ttnn/operations/examples/double_buffer/report.md`'s 190.8 GB/s for a 64-core DRAM->DRAM
+copy). At 4-7% off its own best on both halves, the tempting conclusion was "the focus shape
+is at the roofline for its traffic shape; the round has nothing to chase".
+
+**That conclusion was tested and it is false.** The `traffic_shape_ceiling` bench rebuilds the
+focus shape's NoC traffic EXACTLY — 64 cores, 32 x 512 B reads at the same per-core page
+offsets, 8 x 2048 B writes to the same output page ids, verified by asserting the host's
+per-core (page, offset, length) triples *tile* each tensor exactly once — with the read->write
+dependency **removed** (writes source from a pre-filled scratch buffer, so the two streams
+coexist for the whole kernel):
+
+| rung | ns | GB/s | what it is |
+|---|---|---|---|
+| op (measured) | 12356 | 167 | — |
+| `chained` | 11873 | 176.6 | op's traffic + op's dependency, compute deleted |
+| `chained_2k` | 12172 | 172.3 | same, but 8 x 2048 B reads — **slower**; under the dependency a 4x wider read buys nothing |
+| **`independent`** | **11152** | **188.1** | same reads, same writes, **no dependency** — the reachable target |
+| `independent_2k` | 10751 | 195.1 | ditto at 2 KB reads — the absolute, bytes-limited roofline |
+| `reads_only_512` / `writes_only` | 5850 / 7736 | 179.2 / 135.5 | calibration (op's own ablations: 5420 / 7382) |
+
+**The roofline for this op's traffic shape is 11152 ns / 188 GB/s, and the op is 1.108x off
+it.** The 1605 ns gap to the absolute roofline decomposes as:
+
+| term | ns | share | reachable? |
+|---|---|---|---|
+| **read -> write dependency** | **721** | **45%** | in principle — this round's real target |
+| compute + the second CB hop | 483 | 30% | it is the op's actual work |
+| transaction size 512 B -> 2 KB | 401 | 25% | **inexpressible** — a 2 KB column slice is `block_width_tiles = 32`, i.e. `C/32 = 16` chunks over 64 cores, so 48 cores idle |
+
+The mechanism, and it is the round's best finding: **the two NoCs' positional service
+gradients have OPPOSITE sign.** Per-core kernel spans correlate with the *physical grid row*
+at r = **-0.91** on NCRISC (reads served last at low grid row) and **+0.83** on BRISC (writes
+served last at high grid row). In the dependency-free rung the read tail and the write tail
+therefore land on **different** cores and interleave — which is how it reaches 188 GB/s *with
+the gradient fully present*. In the `chained` rung the BRISC gradient **inverts to -0.91**:
+the dependency forces the writer to inherit the reader's positional order, so both tails stack
+on the same cores. **That inversion is the 721 ns.**
+
+**Ranked bottleneck for this round: the read->write dependency (45% of the gap) > the op's own
+compute + CB hop (30%) > transaction size (25%, inexpressible).** Both per-stage RATES are
+gated out — the op's reads (193 GB/s) and writes (142 GB/s) are at or *above* the bare
+reconstruction's own rungs (179.2 / 135.5), so there is nothing left in either stage
+considered alone. Compute at 951 ns is gated out by size.
+
+The **core-time tail** (BRISC mean 9710 vs max 12048 = 1.24x; NCRISC 5288 vs 7588 = 1.43x on
+perfectly uniform work) was ranked as a candidate and then **gated out by measurement**: it
+survives undiminished in the dependency-free bare copy that runs at 188 GB/s, so it is a NoC
+topology gradient and not recoverable slack. Start spread across all 64 cores is 178-205 ns
+against a 4.6-7.6 us end spread, so it is not dispatch skew either.
+
+### The portfolio floated (Step 2), and every verdict (Steps 3-4)
+
+Seven ideas, one `perf-part-optimizer` each. Five went out in one parallel wave off the
+per-stage ranking; the last two went out in a second wave once the first five's *diagnoses*
+had reframed the problem — the roofline discriminator (which asked whether there was anything
+to chase at all) and the one mechanism the first wave had explicitly left open. Deliberately
+overlapping: two ways to buy a pipeline wave, two ends of the writer's starvation.
+
+| # | idea | verdict | measured |
+|---|---|---|---|
+| 1 | `wave_ladder_v2` — re-solve `PIPELINE_WAVES_PER_CORE` / `MIN_BLOCK_ROW_BYTES` against the post-rotation critical path (they were calibrated when reads were 33-46% of the wall; reads are now 26%) | **REGRESSION** | focus w1/w2/w4/w8 = **12515** / 13048 / 15539 / 27040 (12 samples per rung, 4 independent sessions, w2 lost in all four). The premise is **confirmed** — a second wave really does de-starve the writer, `writer_wait_out` 6117 -> 4356 (-29%, share 64.5% -> 40.6%) — and it is priced above what it delivers: halving the read doubles the NoC command count for the same bytes (`reader_read_block` +1935 ns) and narrows the write batch (`writer_barrier` +2180 ns). **The shipped rule already selects the measured-best rung on all seven geometries**, and 512 is pinned from BOTH sides (<= 512 or `[1,1,1024,1024]` and `[1,1,32,32768]` lose their 512 B rung; > 256 or the focus shape takes a 4%-slower rung and `[1,1,2048,64]` a 26%-slower one). **No constant changes.** |
+| 2 | `core_count_vs_waves` — buy the wave from the CORE axis instead, keeping the 512 B read (per-core rate is 3.0 GB/s against a ~17.9 GB/s single-core limit, so the grid looked 6x over-provisioned) | **REGRESSION** | focus at 64/48/32/24/16/8 cores = **12368** / 12954 / 13061 / 14111 / 13346 / 18082. Both promised effects are **real and worthless**: at 32 cores `writer_wait_out` drops 63.7% -> 41.9% of span and BOTH tails collapse (NCRISC 1.44x -> 1.05x, BRISC 1.24x -> 1.11x) — but `writer_issue` scales **linearly** with blocks/core (1924 -> 4051 ns), so the recovered idle time is more than repaid in serial issue. As a rule it costs **0.81x on `[1,1,2048,64]` and 0.72x on `[1,1,32,2048]`**. |
+| 3 | `write_issue_menu` — a menu against the 142 GB/s write rate and the 2112/1364 ns issue/barrier split | **5 NULL, 1 BLOCKED, 1 WIN-but-unsafe** | write-stage ns: baseline 8412; `rot_bankunif` 8726; `flush_half` 8569; `barrier_half` 8693; `cmdbuf2` 8356; `flush_only` 8697; **`posted` 8100 (-4.0%)**. `cmdbuf4` **hung the device** (BRISC/NoC1 buffers 3 and 1 do not take a raw `ncrisc_noc_fast_write`; buffers 0 and 2 do). Two findings outlive the nulls — see below. |
+| 4 | `writer_starvation` — finer compute->writer push and/or split read barriers, to attack `writer_wait_out` at 61.3% of the BRISC span | **NULL (fine push) / REGRESSION (split read)** | The decisive number is a zone split of the wait: **`writer_wait_first` 6091 ns ~= `reader_read_block` 5300 ns, `writer_wait_rest` 37 ns.** The trailing tiles of the row are *already packed* by the time the writer finishes issuing the first group — so the finer push does exactly what it was meant to and its entire budget is **66-89 ns of a 12.4 us wall**. **The writer is starved by the READ, not by the push quantum.** `fine_half` 12288-12396 ns is the same size as both controls; `fine_min` (push=2) is -3.9%; split read barriers are **-19.0% on `[1,1,16384,32]`** and -9.5% on `[1,1,2048,64]` (a single-barrier read already has maximal issue/drain overlap; two barriers serialize it). |
+| 5 | `block_to_core_mapping` — re-map block -> core to flatten the 1.24-1.43x core-time tail | **NULL, with the round's key diagnosis** | 8 permutations, all within +-3% and inside the baseline's own 12% rep spread (`diag` 12416, `bitrev` 12539, `colmajor` 12571, `snake` 12709, `reverse` 12774, `stride9` 12909, `stride5` 13099 vs baseline 12753). The tail is **attached to the physical core, not to the block**: under `reverse`, `corr(duration, grid_row)` stays **-0.97** while `corr(duration, block_id)` flips -0.96 -> +0.98; `max/mean` is permutation-invariant across all 8 modes. Not dispatch skew (START spread ~190 ns vs END spread 4.6-7.6 us); not bank phase (`corr(duration, block_id % 12)` = -0.01). |
+| 6 | `traffic_shape_ceiling` — the roofline discriminator: rebuild the focus shape's exact traffic with the dependency removed, and find out whether there is anything to chase | **ROOFLINE ESTABLISHED** | See the section above. Rejects "the op is at its roofline" (which the per-stage rates alone would have supported) and localizes the residue to 721 ns of read->write dependency. This is the idea that made the round's conclusion a claim rather than an assumption. |
+| 7 | `positional_work_skew` — give the systematically-late grid rows LESS block width, using the ragged-column-tail machinery generalized to a deliberate skew | **NULL / REGRESSION** | `grad_brisc` (sized directly off the measured BRISC row means) **0.944x**; `grad_full` 0.950x; the gentle skews are flat (`half97` 1.006x, `edge98` 0.998x). The intervention **worked** — `grad_full` flattened the read side (NCRISC max/mean 1.46 -> 1.30, end spread 5105 -> 3352 ns) — and the wall got worse. Mechanism, from regressing each grid row's BRISC span on the width it was handed (`duration[y] ~ a[y] + b[y]*w[y]`): the slow rows are **waiting, not working** — the constant term is 67-75% of their span — so moving one tile of width from row 0 to row 7 saves 351 ns there and costs 1208 ns here, a **3.4x losing exchange**. Polarity is irrelevant: the wide-to-SLOW control ties or beats wide-to-fast, which is decisive against a demand-collapse model. |
+
+**Aggregation.** There is nothing to aggregate. Six ideas are null or regressions; the seventh
+is a measurement, not a change. The one candidate that measured faster is blocked on
+correctness, not on perf — next section.
+
+Read together, the six negative results are a single coherent statement, and it is worth more
+than any of them alone: **on this geometry the pipeline-depth lever is exhausted from every
+direction.** Ideas 1 and 2 buy a wave from the two available axes and both confirm the
+mechanism works (`writer_wait_out` falls 22-29 points of share) while both lose the wall to
+the price. Idea 4 shows the wait is not downstream of the push at all. Ideas 5 and 7 show the
+core-time tail is topology, not schedule. Idea 6 shows the residue is the dependency itself —
+and a core cannot write a tile it has not tilized from bytes it has not read.
+
+### The one measured win, and why it did NOT graduate
+
+`posted` — issuing the writer's stores as **posted** NoC writes (`noc_async_write<size, true,
+true>`), which removes the acknowledgement packets from the return path — is faster
+everywhere it was measured:
+
+| shape | whole-op | write stage |
+|---|---|---|
+| `[1,1,32,16384]` (focus) | **-1.5%** (12452 -> 12370, 12 paired reps) | -4.0% (8315 -> 8100) |
+| `[1,1,2048,64]` | **-6.3% / -7.4%** (5222 -> 4835) | -9.9% / -8.6% |
+| `[1,1,32,32768]` | -3.2% (23945 -> 23180) | +1.2% |
+| `[1,1,1024,1024]` | -2.5% (23076 -> 22509) | -2.2% |
+| `[1,1,16384,32]` | -1.9% / -3.1% | -2.0% / -7.8% |
+| `[1,1,2048,2048]` | flat (-1.0% / +1.6%) | flat |
+
+It is bit-identical on all six shapes over ~60 dispatches. **It is still not graduated, and
+the reason is a correctness contract, not a measurement.** A posted write is acknowledged as
+SENT, never as LANDED, and **the API has no fence that closes the difference**:
+`noc_async_posted_writes_flushed` waits on `ncrisc_noc_posted_writes_sent` and its own header
+says it "waits for all outstanding enqueued posted `noc_async_write` calls **to depart, but
+will not wait for them to complete**" (`tt_metal/hw/inc/api/dataflow/dataflow_api.h:1825-1848`);
+`noc_async_full_barrier` ends with the same `ncrisc_noc_posted_writes_sent` spin
+(`:1887-1924`). So with posted stores, **the program's completion would no longer imply that
+the output DRAM buffer is complete** — for the host read-back, and much more sharply for the
+next op in a model, whose reader kernels start within microseconds of the done signal. Every
+production user of posted writes found in this tree (`prefetcher/.../writer_l1.cpp`,
+`tensor_prefetcher.cpp`, deepseek `dm1.cpp`) is a core-to-core L1 push ordered by a
+*subsequent* credit or semaphore on the same NoC — never a program's final DRAM output. The
+60 clean dispatches are a race that happens to be won, not a guarantee, and a faster
+unguaranteed answer is a regression.
+
+**Recorded as an option with its cost, exactly as it stands: 1-3% on this op (up to 7% on a
+small many-batch shape) is available the day the dataflow API grows a landing fence for
+posted writes.** The distinction the round nailed down, and the reason this is a genuine API
+gap rather than an op-level choice, is the `flush_only` control: keeping the ack and merely
+deferring the *wait* for it (per-batch `noc_async_writes_flushed`, one real barrier at kernel
+end — fully correct) is **NULL everywhere**. The saving is fabric traffic that has to be
+*removed*, not a RISC wait that can be *moved*. There is no correct way to spend it today.
+
+### Two findings that outlive their nulls
+
+* **Perf 1's issue-order rotation is load-bearing, and now has a control.** `write_issue_menu`
+  ran `rot_none` — the shipped kernels with `rotation` forced to 0 — as its control:
+  **+11.5% and +6.0% whole-op on the focus shape** (two runs, opposite mode orderings) and
+  +2.3..+7.4% on the write stage of *every* other shape. Do not remove it.
+* **The starting-bank premise this round floated for idea 3(a) was wrong, and enumerating it
+  beat measuring it.** With `bw = 8` and 12 banks, `col_rot = block_id % 8` already reaches
+  **all twelve** banks at 4-6 cores each (ideal 5.33), because `b mod 8` and `b mod 3` are
+  independent — only `8b mod 12` on its own is confined to {0,4,8}. The provably-flat
+  `rot_bankunif` then measured NULL, as the enumeration predicted.
+* **A larger write transaction is INEXPRESSIBLE, checked rather than assumed.** `tensor_accessor.h`
+  (`get_bank_and_offset_from_page_id`: `bank_id = page_id % num_banks`) means a core's batch of
+  *consecutive* output page ids is 8 different banks = 8 different NoC endpoints, and no single
+  `noc_async_write` spans two. Coalescing would need bank-strided page ownership, which turns
+  the 512 B read into eight 64 B reads — a regime already measured at 26947 ns on this shape.
+* **The N-group generalization of the ragged-column-tail machinery works.** `positional_work_skew`
+  ran arbitrarily many core ranges with per-range `block_width_tiles` / `col_tile_offset`,
+  bit-identically, with **zero kernel changes** — the kernels' `w_chunk = block_id % num_w_chunks`
+  and `col_base = col_tile_offset + w_chunk * block_width_tiles` already generalize. Recorded
+  because a future refinement that needs heterogeneous column extents for some other reason has
+  an open path.
+
+### What graduated, and how widely
+
+**Nothing.** `tilize.py`, `tilize_program_descriptor.py` and all four files under `kernels/`
+are **byte-identical to Perf 1's commit** (`git diff HEAD -- <those paths>` is empty). No
+predicate was added, no path was fenced off, no code was deleted, and no carve-out was
+created — there was no win to spread and therefore no exception to earn. `SUPPORTED` is
+untouched, as it must be.
+
+The round's deliverables are the measurement and the artifacts: seven experiment directories
+under `perf_experiments/` (a measured null is a completed investigation and round 3, if there
+ever is one, must not re-run them), the roofline number, and one new durable tool —
+`perf_experiments/block_to_core_mapping/percore_map.py`, which prints per-core `*-KERNEL`
+duration / start / end as 8x8 grid maps with correlations against grid row, grid column and
+block id. `zone_report.py` aggregates over cores and structurally cannot show which core is
+slow; `percore_map.py` is what established this round's central mechanism, and `zone_report.py`
+now points at it.
+
+### Whole-op before/after and the guard-set no-regression result
+
+Before == after **by construction** — the op's source did not change — so the table below is
+one measurement of the shipped tree taken this round, medians of 3 profiled reps, and it is
+the round's no-regression evidence in the only form that is honest here:
+
+| guard-set case | shape | ns (3 reps) | median | GB/s |
+|---|---|---|---|---|
+| **attention (FOCUS)** | `[1,1,32,16384]` | 12356 / 12399 / 12639 | **12399** | 167 |
+| grid2d_full_width | `[1,1,2048,64]` | 5379 / 5251 / 5139 | 5251 | 100 |
+| grid2d_width_chunked | `[1,1,32,2048]` | 3668 / 3683 / 3736 | 3683 | 71 |
+| square_large | `[1,1,2048,2048]` | 87452 / 86408 / 89157 | 87452 | **192 (at the DRAM peak)** |
+| tall_narrow (split reader) | `[1,1,16384,32]` | 17358 / 17626 / 17504 | 17504 | 120 |
+| square_mid | `[1,1,1024,1024]` | 23343 / 23857 / 23515 | 23515 | 178 |
+| short_wide_wide | `[1,1,32,32768]` | 23900 / 24151 / 23699 | 23900 | 175 |
+| padded (segmented+fill reader) | `[8,1,249,2048]` | 86298 / 86390 / 88737 | 86390 | — |
+| sharded (native, no writer kernel) | `[1,1,2048,2048]` HEIGHT | 4981 / 4959 / 5001 | 4981 | — |
+
+Every case is inside +-4% of Perf 1's exit table, which is inside the +-8% band. No cell
+regressed; no cell earned a carve-out, because no change was made that could have caused one.
+
+- **Accuracy achieved**: **bit-identical** (`torch.equal`) — tilize does no arithmetic, so PCC
+  is not the bar. All 9 guard-set cases assert `torch.equal` and pass, and every one of the
+  seven experiments gated its own variants the same way (the two ablation-style rungs in
+  `traffic_shape_ceiling` are values-garbage by design and are instead gated by asserting the
+  host's per-core (page, offset, length) triples tile each tensor exactly once, plus a
+  first-and-last-4-byte marker per destination page).
+- **Golden test progress**: `scripts/run_safe_pytest.sh --run-all eval/golden_tests/tilize/`
+  gives **59 failed, 1775 passed, 2696 skipped, 14 xfailed, 4 errors** — exactly the committed
+  baseline Perf 1 recorded, and **all 59 failures are in `test_translated.py`** (the
+  pre-existing structural-reject set: unpadded non-tile-aligned inputs and rank-0/1 forms that
+  need generality refinements, not perf). The golden suite proper is green. The op's source is
+  unchanged, so this is a confirmation rather than a comparison.
+- **Issues encountered**: (1) one subagent **hung the device** issuing raw
+  `ncrisc_noc_fast_write` on NoC1 command buffers 3 and 1 (buffers 0 and 2 are fine) —
+  recorded because it is part of why option 3(c) could not win; the harness's own reset
+  recovered it. (2) The dispatch-slot effect described at the top of this entry (~3% purely
+  from position in an interleaved rep) was found the hard way and is why several of the tables
+  above use order-rotated paired dispatch.
+- **Tests added**: none to the op's own test set — nothing changed, so there is nothing new to
+  pin. All seven benches live under `perf_experiments/{wave_ladder_v2, core_count_vs_waves,
+  write_issue_menu, writer_starvation, block_to_core_mapping, traffic_shape_ceiling,
+  positional_work_skew}/`, each carrying its measured table in its module docstring.
+
+### Helper bypasses
+
+**None.** No path graduated this round, so no new helper bypass was admitted, and Perf 1's two
+recorded bypasses (`dataflow_kernel_lib::read_sticks_for_tilize`, and the missing tiled-side
+write helper) stand unchanged and unmodified.
+
+Three gaps were nevertheless *discovered* by experiments that did not graduate. They are
+recorded separately below because they are feedback to the library, but they are explicitly
+**not** rows of the bypass table above — nothing in the op bypasses these today, and given the
+NULL verdicts none of them is worth closing for this op:
+
+| API / helper | kind | what was missing / hard | helper ns | raw ns | found by |
+|---|---|---|---|---|---|
+| `noc_async_write` posted mode + `noc_async_posted_writes_flushed` | ergonomics | The posted flag is reachable (`noc_async_write<size, true, true>`) but the matching drain is a **differently named function with strictly weaker semantics** — "flushed" means *sent*, not *landed* — and **no API provides a landing fence at all** (`noc_async_full_barrier` also ends on `ncrisc_noc_posted_writes_sent`). Nothing in either signature warns the caller that the landed-before-completion guarantee has been dropped, so the mode reads as a free 1-7% and is in fact unusable for a program's final DRAM output. Needed: either a `noc_async_posted_writes_landed()` fence, or a name/doc that makes the dropped guarantee impossible to miss at the call site. | 8412 (non-posted) | 8100 (posted) | `write_issue_menu` |
+| `dataflow_api.h` write family | capability | **No** `noc_async_write` overload takes a `cmd_buf` argument — it is hard-wired to `write_cmd_buf` everywhere, so the issue spin is on one command buffer while three sit idle. Closing it needs a per-buffer init contract too: raw `ncrisc_noc_fast_write` on NoC1 buffers 0 and 2 works, on 3 and 1 it hangs the core (it writes only `NOC_TARG_ADDR_LO`/`NOC_RET_ADDR_LO`/`NOC_RET_ADDR_COORDINATE` and inherits whatever `noc_local_state_init` left in that buffer's other fields). | 8412 | 8356 (`cmdbuf2`, i.e. NULL) | `write_issue_menu` |
+| `compute_kernel_lib::tilize` / `ckernel::fast_tilize_block` | capability | Sub-tile-row output push is inexpressible at any argument combination. `tilize_helpers.inl:236-241` hardcodes `reserve_back(block_width_tiles) / fast_tilize_block(...) / push_back(block_width_tiles)` with no push-granularity parameter; one level down, `fast_tilize_block(icb, block, ocb, ...)` opens with `full_dim = block`, so the source **row stride** is derived from the tile count requested and "tilize tiles [0,4) of an 8-wide row" cannot be asked for — even though the LLK underneath already separates them (`llk_unpack_fast_tilize_block(icb, tile_index, unit_dim, num_units, full_dim)`). Needed: `full_dim` as a parameter independent of `block`, plus an output-push-granularity parameter on the helper. | 12521 | 12288 (`fine_half`, i.e. NULL — the raw control ties the helper at 0.982-1.007x on every shape, so the helper carries no tax) | `writer_starvation` |
+
+### Where a round 3 would have to start
+
+Not with a knob. Every host-plan knob (`PIPELINE_WAVES_PER_CORE`, `MIN_BLOCK_ROW_BYTES`,
+`WRITE_BATCH_MIN_TILES`, the core count, the block->core map, the column-width partition) is
+now measured optimal or measured harmful on this geometry, and the writer's own issue path is
+measured fabric-bound. The remaining **721 ns (1.061x)** is the read->write dependency
+inverting BRISC's positional gradient onto NCRISC's, and breaking it requires decoupling *which
+core writes a block* from *which core read it* — i.e. paying an on-chip L1->L1 hop for bytes
+that currently never leave the core. That is a real idea and it is a T3 restructure whose cost
+(1 MB of extra on-chip traffic on the focus shape) plausibly exceeds its 721 ns prize; it was
+not floated this round because the roofline that motivates it only existed after idea 6
+reported.

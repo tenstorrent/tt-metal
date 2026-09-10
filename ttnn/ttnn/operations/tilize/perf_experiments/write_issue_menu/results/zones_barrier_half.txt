@@ -1,0 +1,12 @@
+  BRISC    writer_barrier                 795      2000   14.1%      1
+  BRISC    writer_issue                  4395      7423   77.9%      1
+  BRISC    writer_barrier                 775      1600   13.7%      1
+  BRISC    writer_issue                  4433      7708   78.4%      1
+  BRISC    writer_barrier                 753      1488   13.4%      1
+  BRISC    writer_issue                  4406      7489   78.5%      1
+  BRISC    writer_barrier                1156      5352   11.7%      1
+  BRISC    writer_issue                  2227      5748   22.5%      1
+  BRISC    writer_barrier                1244      6657   12.2%      1
+  BRISC    writer_issue                  2742      7612   26.9%      1
+  BRISC    writer_barrier                1244      4208   12.7%      1
+  BRISC    writer_issue                  2353      5611   23.9%      1

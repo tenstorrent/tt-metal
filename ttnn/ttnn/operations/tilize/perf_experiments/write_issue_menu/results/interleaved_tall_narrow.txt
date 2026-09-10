@@ -1,0 +1,12 @@
+
+  === WRITE-STAGE (paired, 5 reps interleaved) ===
+    baseline       med=    8714  ( +0.0% vs baseline)  reps=[8479, 9042, 8768, 8714, 8521]
+    posted         med=    8540  ( -2.0% vs baseline)  reps=[8325, 8538, 8764, 8540, 8594]
+    rot_none       med=    9357  ( +7.4% vs baseline)  reps=[9030, 9216, 9440, 9357, 9450]
+    rot_bankunif   med=    8936  ( +2.5% vs baseline)  reps=[9358, 8651, 8936, 8664, 9228]
+
+  === WHOLE-OP (paired, 5 reps interleaved) ===
+    baseline       med=   17422  ( +0.0% vs baseline)  reps=[18012, 17808, 17422, 17266, 16616]
+    posted         med=   17088  ( -1.9% vs baseline)  reps=[17320, 16942, 17088, 16386, 17324]
+    rot_none       med=   18131  ( +4.1% vs baseline)  reps=[18131, 17905, 18376, 18230, 17515]
+    rot_bankunif   med=   17521  ( +0.6% vs baseline)  reps=[16934, 18003, 17921, 17372, 17521]

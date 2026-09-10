@@ -1,0 +1,8 @@
+# posted  <- generated/profiler/reports/2026_09_10_01_38_07/ops_perf_results_2026_09_10_01_38_07.csv
+  row00            ?x?x?  kernel=    8153  brisc=    7871  ncrisc=     326
+  row01            ?x?x?  kernel=    7870  brisc=    7649  ncrisc=     343
+  row02            ?x?x?  kernel=    7876  brisc=    7692  ncrisc=     340
+  row03            ?x?x?  kernel=   12220  brisc=   11958  ncrisc=    7802
+  row04            ?x?x?  kernel=   12107  brisc=   11853  ncrisc=    7622
+  row05            ?x?x?  kernel=   12318  brisc=   12044  ncrisc=    8131
+  n=6

@@ -1,0 +1,30 @@
+  BRISC    KERNEL span  mean      5471 ns   max      8031 ns  (64 cores)
+  BRISC    writer_barrier                 839      1743   15.3%      1
+  BRISC    writer_issue                  4177      7064   76.4%      1
+  BRISC    writer_wait_out                167       192    3.0%      1
+  marker budget: worst (core,RISC) = ('1', '1') BRISC at 10/250 markers
+  BRISC    KERNEL span  mean      5466 ns   max      8056 ns  (64 cores)
+  BRISC    writer_barrier                 813      1806   14.9%      1
+  BRISC    writer_issue                  4205      7040   76.9%      1
+  BRISC    writer_wait_out                164       240    3.0%      1
+  marker budget: worst (core,RISC) = ('1', '1') BRISC at 10/250 markers
+  BRISC    KERNEL span  mean      5604 ns   max      8746 ns  (64 cores)
+  BRISC    writer_barrier                 816      1875   14.6%      1
+  BRISC    writer_issue                  4332      7812   77.3%      1
+  BRISC    writer_wait_out                173       260    3.1%      1
+  marker budget: worst (core,RISC) = ('1', '1') BRISC at 10/250 markers
+  BRISC    KERNEL span  mean      9167 ns   max     11806 ns  (64 cores)
+  BRISC    writer_barrier                1020      3918   11.1%      1
+  BRISC    writer_issue                  1648      4052   18.0%      1
+  BRISC    writer_wait_out               6216      8669   67.8%      1
+  marker budget: worst (core,RISC) = ('1', '1') BRISC at 10/250 markers
+  BRISC    KERNEL span  mean      9598 ns   max     12124 ns  (64 cores)
+  BRISC    writer_barrier                1226      5039   12.8%      1
+  BRISC    writer_issue                  1983      6906   20.7%      1
+  BRISC    writer_wait_out               6107      8447   63.6%      1
+  marker budget: worst (core,RISC) = ('1', '1') BRISC at 10/250 markers
+  BRISC    KERNEL span  mean      9770 ns   max     12846 ns  (64 cores)
+  BRISC    writer_barrier                1366      5103   14.0%      1
+  BRISC    writer_issue                  2040      7540   20.9%      1
+  BRISC    writer_wait_out               6082      8285   62.3%      1
+  marker budget: worst (core,RISC) = ('1', '1') BRISC at 10/250 markers

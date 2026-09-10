@@ -1,0 +1,8 @@
+# barrier_half  <- generated/profiler/reports/2026_09_10_01_37_37/ops_perf_results_2026_09_10_01_37_37.csv
+  row00            ?x?x?  kernel=    8897  brisc=    8621  ncrisc=     331
+  row01            ?x?x?  kernel=    9031  brisc=    8812  ncrisc=     327
+  row02            ?x?x?  kernel=    8771  brisc=    8559  ncrisc=     340
+  row03            ?x?x?  kernel=   12830  brisc=   12551  ncrisc=    8112
+  row04            ?x?x?  kernel=   13327  brisc=   13080  ncrisc=    7290
+  row05            ?x?x?  kernel=   12726  brisc=   12442  ncrisc=    7783
+  n=6

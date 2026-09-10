@@ -1,0 +1,113 @@
+
+### baseline_focus NCRISC: 64 cores, wall 7997 ns
+  core-ns of work        = 347711   (mean per-core busy 5433 ns)
+  concurrency-flat wall  = 5433 ns  -> M2 upside 1.472x
+  time with < 100.0% cores active:     5291 ns  ( 66.2% of wall)
+  time with <  90.0% cores active:     4911 ns  ( 61.4% of wall)
+  time with <  75.0% cores active:     4282 ns  ( 53.5% of wall)
+  time with <  50.0% cores active:     2517 ns  ( 31.5% of wall)
+  time with <  25.0% cores active:      777 ns  (  9.7% of wall)
+  mean active cores: first 80% of wall = 50.35 | last 20% = 16.01
+  timeline (deciles of wall -> mean active cores):
+     57.1  64.0  64.0  63.0  51.7  39.3  35.1  28.6  24.5   7.5
+
+### baseline_focus BRISC: 64 cores, wall 12870 ns
+  core-ns of work        = 629342   (mean per-core busy 9833 ns)
+  concurrency-flat wall  = 9833 ns  -> M2 upside 1.309x
+  time with < 100.0% cores active:     7843 ns  ( 60.9% of wall)
+  time with <  90.0% cores active:     6014 ns  ( 46.7% of wall)
+  time with <  75.0% cores active:     4737 ns  ( 36.8% of wall)
+  time with <  50.0% cores active:     2511 ns  ( 19.5% of wall)
+  time with <  25.0% cores active:     1137 ns  (  8.8% of wall)
+  mean active cores: first 80% of wall = 56.78 | last 20% = 17.37
+  timeline (deciles of wall -> mean active cores):
+     59.7  64.0  64.0  64.0  61.3  55.8  47.1  38.4  26.3   8.5
+
+### baseline_focus NCRISC+BRISC union (DM demand proxy): 128 cores, wall 12870 ns
+  core-ns of work        = 977053   (mean per-core busy 7633 ns)
+  concurrency-flat wall  = 7633 ns  -> M2 upside 1.686x
+  time with < 100.0% cores active:    10166 ns  ( 79.0% of wall)
+  time with <  90.0% cores active:     9306 ns  ( 72.3% of wall)
+  time with <  75.0% cores active:     7542 ns  ( 58.6% of wall)
+  time with <  50.0% cores active:     5595 ns  ( 43.5% of wall)
+  time with <  25.0% cores active:     2478 ns  ( 19.3% of wall)
+  mean active cores: first 80% of wall = 90.55 | last 20% = 17.37
+  timeline (deciles of wall -> mean active cores):
+    119.4 128.0 121.7 103.1  91.9  74.1  47.8  38.4  26.3   8.5
+
+##### same measure under the skew variants (this experiment's own run, logs/dev_focus2.csv) #####
+----- baseline (run 44032) -----
+
+### run 44032 NCRISC: 64 cores, wall 7941 ns
+  core-ns of work        = 347117   (mean per-core busy 5424 ns)
+  concurrency-flat wall  = 5424 ns  -> M2 upside 1.464x
+  time with < 100.0% cores active:     5309 ns  ( 66.9% of wall)
+  time with <  90.0% cores active:     4888 ns  ( 61.6% of wall)
+  time with <  75.0% cores active:     4034 ns  ( 50.8% of wall)
+  time with <  50.0% cores active:     2685 ns  ( 33.8% of wall)
+  time with <  25.0% cores active:      671 ns  (  8.4% of wall)
+  mean active cores: first 80% of wall = 50.44 | last 20% = 16.79
+  timeline (deciles of wall -> mean active cores):
+     55.5  64.0  64.0  62.9  53.3  41.4  34.4  28.1  24.0   9.6
+
+### run 44032 BRISC: 64 cores, wall 12447 ns
+  core-ns of work        = 636085   (mean per-core busy 9939 ns)
+  concurrency-flat wall  = 9939 ns  -> M2 upside 1.252x
+  time with < 100.0% cores active:     7471 ns  ( 60.0% of wall)
+  time with <  90.0% cores active:     5745 ns  ( 46.2% of wall)
+  time with <  75.0% cores active:     3458 ns  ( 27.8% of wall)
+  time with <  50.0% cores active:     1956 ns  ( 15.7% of wall)
+  time with <  25.0% cores active:     1031 ns  (  8.3% of wall)
+  mean active cores: first 80% of wall = 58.67 | last 20% = 20.82
+  timeline (deciles of wall -> mean active cores):
+     58.7  64.0  64.0  64.0  62.0  57.9  53.8  45.0  31.5  10.2
+----- half97 (run 34816) -----
+
+### run 34816 NCRISC: 64 cores, wall 7035 ns
+  core-ns of work        = 337209   (mean per-core busy 5269 ns)
+  concurrency-flat wall  = 5269 ns  -> M2 upside 1.335x
+  time with < 100.0% cores active:     4292 ns  ( 61.0% of wall)
+  time with <  90.0% cores active:     3948 ns  ( 56.1% of wall)
+  time with <  75.0% cores active:     3038 ns  ( 43.2% of wall)
+  time with <  50.0% cores active:     1097 ns  ( 15.6% of wall)
+  time with <  25.0% cores active:      375 ns  (  5.3% of wall)
+  mean active cores: first 80% of wall = 54.09 | last 20% = 23.31
+  timeline (deciles of wall -> mean active cores):
+     43.2  64.0  64.0  64.0  62.8  53.8  44.9  36.0  31.2  15.4
+
+### run 34816 BRISC: 64 cores, wall 12432 ns
+  core-ns of work        = 630933   (mean per-core busy 9858 ns)
+  concurrency-flat wall  = 9858 ns  -> M2 upside 1.261x
+  time with < 100.0% cores active:     7331 ns  ( 59.0% of wall)
+  time with <  90.0% cores active:     5885 ns  ( 47.3% of wall)
+  time with <  75.0% cores active:     3198 ns  ( 25.7% of wall)
+  time with <  50.0% cores active:     1905 ns  ( 15.3% of wall)
+  time with <  25.0% cores active:     1214 ns  (  9.8% of wall)
+  mean active cores: first 80% of wall = 58.53 | last 20% = 19.62
+  timeline (deciles of wall -> mean active cores):
+     51.7  64.0  64.0  64.0  62.9  57.8  54.6  49.3  32.0   7.3
+----- grad_full (run 40960) -----
+
+### run 40960 NCRISC: 64 cores, wall 7030 ns
+  core-ns of work        = 341535   (mean per-core busy 5336 ns)
+  concurrency-flat wall  = 5336 ns  -> M2 upside 1.317x
+  time with < 100.0% cores active:     3866 ns  ( 55.0% of wall)
+  time with <  90.0% cores active:     3067 ns  ( 43.6% of wall)
+  time with <  75.0% cores active:     2366 ns  ( 33.7% of wall)
+  time with <  50.0% cores active:     1779 ns  ( 25.3% of wall)
+  time with <  25.0% cores active:      961 ns  ( 13.7% of wall)
+  mean active cores: first 80% of wall = 57.27 | last 20% = 13.82
+  timeline (deciles of wall -> mean active cores):
+     52.3  64.0  64.0  64.0  64.0  62.4  52.7  34.8  20.4   7.3
+
+### run 40960 BRISC: 64 cores, wall 12944 ns
+  core-ns of work        = 653362   (mean per-core busy 10209 ns)
+  concurrency-flat wall  = 10209 ns  -> M2 upside 1.268x
+  time with < 100.0% cores active:     6056 ns  ( 46.8% of wall)
+  time with <  90.0% cores active:     5028 ns  ( 38.8% of wall)
+  time with <  75.0% cores active:     3975 ns  ( 30.7% of wall)
+  time with <  50.0% cores active:     2959 ns  ( 22.9% of wall)
+  time with <  25.0% cores active:     1136 ns  (  8.8% of wall)
+  mean active cores: first 80% of wall = 59.11 | last 20% = 15.92
+  timeline (deciles of wall -> mean active cores):
+     57.7  64.0  64.0  64.0  64.0  63.6  56.7  38.9  22.4   9.5

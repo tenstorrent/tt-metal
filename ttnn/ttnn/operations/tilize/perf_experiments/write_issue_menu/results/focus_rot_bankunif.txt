@@ -1,0 +1,8 @@
+# rot_bankunif  <- generated/profiler/reports/2026_09_10_01_36_14/ops_perf_results_2026_09_10_01_36_14.csv
+  row00            ?x?x?  kernel=    9077  brisc=    8812  ncrisc=     305
+  row01            ?x?x?  kernel=    8016  brisc=    7783  ncrisc=     359
+  row02            ?x?x?  kernel=    8525  brisc=    8291  ncrisc=     323
+  row03            ?x?x?  kernel=   12769  brisc=   12507  ncrisc=    8048
+  row04            ?x?x?  kernel=   12531  brisc=   12242  ncrisc=    8002
+  row05            ?x?x?  kernel=   12765  brisc=   12511  ncrisc=    7959
+  n=6

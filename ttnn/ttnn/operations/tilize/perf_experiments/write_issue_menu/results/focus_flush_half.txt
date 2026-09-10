@@ -1,0 +1,8 @@
+# flush_half  <- generated/profiler/reports/2026_09_10_01_37_07/ops_perf_results_2026_09_10_01_37_07.csv
+  row00            ?x?x?  kernel=    8324  brisc=    8057  ncrisc=     353
+  row01            ?x?x?  kernel=    8637  brisc=    8437  ncrisc=     355
+  row02            ?x?x?  kernel=    8217  brisc=    8001  ncrisc=     321
+  row03            ?x?x?  kernel=   12807  brisc=   12526  ncrisc=    8097
+  row04            ?x?x?  kernel=   12763  brisc=   12503  ncrisc=    7273
+  row05            ?x?x?  kernel=   12475  brisc=   12214  ncrisc=    8159
+  n=6

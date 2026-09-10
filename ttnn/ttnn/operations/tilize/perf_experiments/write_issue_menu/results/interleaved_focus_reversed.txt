@@ -1,0 +1,14 @@
+  row55            ?x?x?  kernel=   11870  brisc=   11601  ncrisc=    7905
+  n=56
+
+  === WRITE-STAGE (paired, 7 reps interleaved) ===
+    posted         med=    8037  ( +0.0% vs posted)  reps=[7972, 7930, 8541, 8085, 8128, 7935, 8037]
+    rot_none       med=    8927  (+11.1% vs posted)  reps=[9188, 8965, 8671, 8597, 8927, 8644, 9110]
+    cmdbuf2        med=    8437  ( +5.0% vs posted)  reps=[8092, 8149, 8772, 8200, 8437, 8599, 8450]
+    baseline       med=    8401  ( +4.5% vs posted)  reps=[8562, 8130, 8206, 8748, 8746, 8385, 8401]
+
+  === WHOLE-OP (paired, 7 reps interleaved) ===
+    posted         med=   12600  ( +0.0% vs posted)  reps=[11902, 13011, 12243, 12740, 12259, 12600, 12616]
+    rot_none       med=   13449  ( +6.7% vs posted)  reps=[13492, 13449, 14133, 13406, 12689, 12460, 13640]
+    cmdbuf2        med=   12612  ( +0.1% vs posted)  reps=[12197, 13307, 12620, 13136, 12060, 12526, 12612]
+    baseline       med=   12691  ( +0.7% vs posted)  reps=[12600, 12219, 12978, 12691, 12897, 13062, 11870]

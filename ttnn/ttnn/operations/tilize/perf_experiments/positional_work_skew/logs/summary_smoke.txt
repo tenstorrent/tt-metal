@@ -1,0 +1,6 @@
+
+=== attention_focus [1, 1, 32, 16384]  (2.097 MB moved) ===
+mode              median ns    GB/s  vs base  cores  reps
+baseline              12699   165.1   1.000x   [64]  [12699]
+half97                12403   169.1   1.024x   [64]  [12403]
+half97_rev            12296   170.6   1.033x   [64]  [12296]
