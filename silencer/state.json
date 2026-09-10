@@ -1,5 +1,5 @@
 {
-  "last_scan_date": "2026-09-09",
+  "last_scan_date": "2026-09-10",
   "scanned_run_ids": [
     "30227858718",
     "30387358745",
@@ -45,7 +45,8 @@
     "34182246734",
     "34079232201",
     34310201941,
-    "34189578249"
+    "34189578249",
+    "31720311397"
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
@@ -381,11 +382,31 @@
       "category": 5,
       "validation_workflow_dispatched": "models-t3-e2e-tests",
       "dispatched": "2026-09-09",
+      "status": "dispatched-queued",
+      "reported": false,
+      "nonterminal_reported": true,
+      "note": "PR #56011: dispatched run 34404305350 (models-e2e-tests) still queued as of 2026-09-10 check. Posted interim 'still running' comment naming Gemma-2-2B e2e test-execution logs as where to re-grep for the L1/DRAM downgrade warning once complete. mark-ready-for-review budget (max 1/run) was already spent on PR #55903 this run, so #56011 remains in draft; will retry marking ready next run once terminal outcome is available. Stays in flight.",
+      "number": 56011,
+      "last_state": "queued"
+    },
+    {
+      "branch": "silencer/matmul-bmm-unused-tensoraccessor-args",
+      "title": "[silencer] Mark unused TensorAccessorArgs in matmul bmm kernels",
+      "pattern": "-Wunused-but-set-variable: out_args (reader_writer_bmm_tile_layout_in1.cpp, 67x) and in0_args (reader_bmm_tile_layout_in0.cpp, 20x) - only used in #ifndef IN0_SHARDED/OUT_SHARDED blocks",
+      "source_run_id": "31720311397",
+      "source_job_ids": [
+        "94520781009",
+        "94520780994"
+      ],
+      "source_workflow": "blackhole-sanity-tests.yaml",
+      "category": 2,
+      "validation_workflow_dispatched": "sanity-tests",
+      "dispatched": "2026-09-10",
       "status": "dispatched",
       "reported": false,
       "nonterminal_reported": false,
-      "note": "PR opened this run (gated both log_warning calls in ttnn/cpp/ttnn/operations/data_movement/split/split.cpp with static std::once_flag/std::call_once, same idiom as groupnorm.cpp). Dispatched models-t3-e2e-tests for validation; awaiting run outcome next scan."
+      "note": "PR opened this run: added [[maybe_unused]] to in0_args/out_args TensorAccessorArgs in two matmul dataflow kernels, matching existing idiom used in moe_gpt/moe_compute dm0.cpp/dm1.cpp. Dispatched sanity-tests (run-blackhole, run-ttnn-sanity-tests, run-ops-sanity-tests) for validation; awaiting run outcome next scan."
     }
   ],
-  "backlog_cursor": "Rotated to models-t3-e2e-tests (run 34189578249): found ttnn.split L1-budget/migration warning spam (500x each in Gemma-2-2B job sample) - fixed, PR opened branch silencer/dedupe-split-l1-dram-downgrade-warnings. Noted matmul mem-config-mismatch spam still present (Falcon-7B job, 2703x sample) but already tracked under PR #51894 (inconclusive) - not re-targeting. Next: continue models-t3-e2e-tests other jobs, then blackhole-sanity-tests (stale since Aug 13), then models-t1/t2-e2e-tests."
+  "backlog_cursor": "Scanned blackhole-sanity-tests run 31720311397 (main, stale since Aug 13) - found and fixed -Wunused-but-set-variable in matmul bmm kernels (in0_args/out_args, 87x combined in job sample), PR opened branch silencer/matmul-bmm-unused-tensoraccessor-args. Next: continue blackhole-sanity-tests other jobs, then models-t1/t2-e2e-tests per prior cursor. Also reconciled PR #55903 (pytest-collection, failure unrelated to fix, confirmed resolved, ready-for-review) and PR #56011 (split-l1-dram, still queued, ready-for-review budget spent on #55903 this run - retry marking ready next run)."
 }
