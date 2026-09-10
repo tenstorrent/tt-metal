@@ -1,0 +1,98 @@
+QB2 Model Support Requirements - qwen3.8-27b (agentic coding)   ·   Rev 0.11,,,,,,
+"Actual requirements for qwen3.8-27b on TT-QuietBox 2, scoped to the agentic coding use-case. Targets are mildly aggressive: set ~10% better than a measured single-accelerator reference and held within QB2's decode roofline. Every eval number is from the HF model card; every perf anchor is from the cited benchmark or an explicitly labeled roofline derivation. Numbers labeled 'target' are requirements, not measurements.",,,,,,
+,,,,,,
+Model identity,,,,,,
+Model name,qwen3.8-27b,,,,,
+HF weights repo,Qwen/Qwen3.8-27B (serve FP8: Qwen/Qwen3.8-27B-FP8) [1],,,,,
+Param count,27B dense (28B incl. vision encoder); causal LM + native vision encoder [1],,,,,
+Architecture,"Hybrid: 64 layers = 16 x (3x Gated DeltaNet + 1x Gated Attention). Only the 16 full-attention layers carry a context-growing KV cache (4 KV heads, head dim 256); the 48 DeltaNet layers use fixed-size state. [1]",,,,,
+Model type / modalities,"VLM; text + image + video in, text out (coding use-case is text-dominant) [1]",,,,,
+Native context length,"262,144 tokens native; extensible to ~1,000,000 via YaRN [1]",,,,,
+Target device,TT-QuietBox 2 (Blackhole); serve FP8 weights [3],,,,,
+,,,,,,
+1 - Target use-case: agentic coding,,,,,,
+"Agent-harness coding loop: read repository context, call tools, apply edits over multiple steps. Workload basis: TraceLab (arXiv:2606.30560) Table 8 / sec 5.2 - per-step median output 252 tokens for Claude (184 for Codex), p90 < 1.7k; ~8 tool-steps per request; each step replays a large cached prefix (Claude P50 ~126K) and appends < 1K new tokens. Implication: prefix caching is mandatory (see Section 3 notes), and steady-state latency is decode-bound once the prefix is cached. [2]",,,,,,
+Primary use-case,Agentic coding (agent harness) [2],,,,,
+Concurrency profile,Batch 1 = agentic coding without subagents (single request). Batch 8-16 = agentic coding with subagents (agent fans out to parallel subagent calls) at short/mid context (<=32K); taper to <=8 for long (>=128K) sessions. [2][4],,,,,
+,,,,,,
+2 - Accuracy eval targets (pass / fail),,,,,,
+"Pass if the QB2-served FP8 checkpoint scores within tolerance of the HF model-card reference. Tolerance: -5% relative to the reference (e.g. 61.7 -> pass at >= 58.6). CAVEAT: all card numbers are Alibaba-reported and, per public reporting as of Aug 2026, not independently reproduced - treat as provisional references to be confirmed on QB2. [1][5]",,,,,,
+Eval task (CI),Metric,HF-card reference [1],Tolerance,Pass condition,,
+swe_bench_verified *,"resolve rate, Claude Code harness",61.7,-5% rel,PASS if >= 58.6,,
+terminal_bench_2_1,pass@1 (Terminus),73.0,-5% rel,PASS if >= 69.4,,
+livecodebench,pass@1 (v6),90.3,-5% rel,PASS if >= 85.8,,
+r1_gpqa_diamond,exact match (Diamond),89.2,-5% rel,PASS if >= 84.7,,
+(reference) QwenSWEBench,"avg@3, in-house",79.0,n/a,"in-house benchmark, not in CI; context only",,
+"* The card reports SWE-bench Pro (61.7); the tt-inference-server CI task is SWE-bench Verified. Align the variant before gating: either run Pro to match the 61.7 reference, or obtain the card's Verified score. Terminal-Bench 2.1, LiveCodeBench v6, and GPQA-Diamond map directly to CI tasks. [1]",,,,,,
+,,,,,,
+3 - Performance targets: token generation (agentic coding),,,,,,
+Batch 1 - agentic coding without subagents (single request),,,,,,
+ISL,OSL,batch,"TTFT target (ms, cold)",decode t/s/u,tput agg (t/s),"E2EL (ms, derived)"
+128,252,1,60,50,50,5100
+1024,252,1,150,50,50,5190
+4096,252,1,500,49,49,5643
+16384,252,1,1800,47,47,7162
+32768,252,1,3500,46,46,8978
+65536,252,1,8000,43,43,13860
+131072,252,1,22000,40,40,28300
+262144,252,1,60000,34,34,67412
+,,,,,,
+"Warm-prefill TTFT targets - batch 1, agentic coding without subagents (APC hit: <= 1K appended over cached prefix)",,,,,,
+ISL (cached prefix),Warm-prefill TTFT target (ms),"Cold TTFT (ms, ref)",Speedup vs cold,,,
+128,60,60,1.0x,,,
+1024,150,150,1.0x,,,
+4096,150,500,3.3x,,,
+16384,160,1800,11x,,,
+32768,170,3500,21x,,,
+65536,190,8000,42x,,,
+131072,220,22000,100x,,,
+262144,300,60000,200x,,,
+"Warm-prefill TTFT = TTFT when the prefix is already cached (APC) and only the appended tokens (<1K, per TraceLab) are prefilled. It tracks the ~1K-ISL cold row, roughly flat vs cached-prefix size, with a modest rise at long ISL from attention over the longer cached KV. Grounded in the reference caching note: adding ~1K new tokens to a long cached context yields TTFT near the 1K result, not the full-ISL result. Measure via the vLLM prefix_repetition benchmark at concurrency 1 (Section 3 cache-efficiency block). [4][7]",,,,,,
+,,,,,,
+Batch 8 - agentic coding with subagents (agent + parallel subagents),,,,,,
+ISL,OSL,batch,"TTFT target (ms, cold)",decode t/s/u,tput agg (t/s),"E2EL (ms, derived)"
+4096,252,8,500,34,272,7912
+32768,252,8,3500,28,224,12500
+131072,252,8,22000,22,176,33455
+"Batch-8 requirement (agentic coding with subagents): sustain 8 concurrent requests (agent + parallel subagents) with per-user decode >= 20 t/s (the reference's agentic-coding usability floor) at coding-typical context. Per-user targets 34/28/22 t/s (at 4K/32K/128K) sit under the QB2 roofline below and above the floor; aggregate = per-user x 8. Cold TTFT under load also carries queue wait (chunked prefill, Section 4, bounds its p99); APC keeps warm-step TTFT at the 128-ISL value. [4]",,,,,,
+,,,,,,
+"Batch 16 - agentic coding with subagents, max concurrency (short/mid context)",,,,,,
+ISL,OSL,batch,"TTFT target (ms, cold)",decode t/s/u,tput agg (t/s),"E2EL (ms, derived)"
+4096,252,16,500,32,512,8375
+32768,252,16,3500,24,384,14000
+"Batch-16 requirement: viable for short/mid context - per-user decode 32/24 t/s at 4K/32K (aggregate 512/384), above the 20 t/s floor. At 128K, per-user decode approaches the ~22 t/s roofline and realistically falls below the floor, and KV for 16 x 128K (~64 GB) + weights (27 GB) = ~91 GB leaves little headroom; cap concurrency at <=8 for long (>=128K) sessions. [3][4]",,,,,,
+,,,,,,
+Cache-efficiency benchmark (vLLM prefix_repetition) - warm vs cold prefill,,,,,,
+Metric,,How to benchmark (vLLM),,,What good looks like,
+Warm-prefill TTFT (cached prefix),,"vllm bench serve --dataset-name prefix_repetition --prefix-repetition-prefix-len 131072 (shared, cached) --prefix-repetition-suffix-len 1024 (unique append) --prefix-repetition-output-len 252 --prefix-repetition-num-prefixes N --max-concurrency 8. TTFT reported by the run reflects prefix reuse with APC on (live telemetry: vllm:prefix_cache_hit_rate [6]). [7]",,,Warm TTFT: >= 50% E2EL reduction vs the cold latency-sweep numbers (Section 3 batch tables).,
+Cold-prefill TTFT (baseline),,"Same benchmark with prefix caching disabled (vllm serve --no-enable-prefix-caching), or benchmark_prefix_caching.py: no reuse, full-ISL prefill. [7]",,,Governed by the Section 3 batch tables (that is the requirement).,
+,,,,,,
+4 - Serving requirements,,,,,,
+Requirement,Setting / why it's needed,,,,,
+Automatic prefix caching,"REQUIRED. >90% of coding steps append <1K over a large cached prefix; without APC, long-context cold TTFT (up to ~60s @256K) makes agentic loops unusable. [2][4]",,,,,
+Chunked prefill,"REQUIRED. Interleave long prefills with decode so a cache-miss prefill does not stall other users; heavily impacts user-observed TTFT p99, especially at batch 8. [4]",,,,,
+max_model_len,"262,144 (native). Extend toward 1M via YaRN only when the workload needs it (static YaRN can dent short-context quality). [1]",,,,,
+max_num_batched_tokens,Size to the chunked-prefill chunk so one long prefill does not monopolize a step; tune against the TTFT targets above. [4],,,,,
+Speculative decoding (MTP),"REQUIRED. The card ships MTP weights; enable to lift per-user decode above the memory-bandwidth roofline (spec decode verifies multiple tokens per weight-read). Section 3 decode targets are set WITHOUT spec-decode credit (from the no-MTP reference + roofline), so MTP is headroom toward and above them; verify token acceptance rate and realized speedup on QB2. [1][4]",,,,,
+,,,,,,
+Roof-line feasibility check (targets vs QB2 limits),,,,,,
+"Decode is bandwidth-bound. Per step the device reads the 27 GB FP8 weights once (amortized across the batch) plus the KV cache for all active sequences; per-user ceiling = batch / (bytes-per-step / 2,048 GB/s) / batch. KV lives only in the 16 full-attention layers = 2 x 4 KV heads x 256 head dim x 16 = 32 KB/token (FP8), ~4 GB per 128K sequence. [1][3]",,,,,,
+Config,Bytes read/step,Step time,Aggregate ceiling,Per-user ceiling,Target t/s/u,% of ceiling
+"Batch 1, 4K",27 GB,13.2 ms,76 t/s,76 t/s,50,66%
+"Batch 1, 128K",27+4=31 GB,15.2 ms,66 t/s,66 t/s,40,61%
+"Batch 8, 4K",27+1=28 GB,13.7 ms,584 t/s,73 t/s,34,47%
+"Batch 8, 32K",27+8=35 GB,17.3 ms,463 t/s,58 t/s,28,48%
+"Batch 8, 128K",27+32=59 GB,29.5 ms,278 t/s,35 t/s,22,63%
+"Batch 16, 4K",27+2=29 GB,14.2 ms,1130 t/s,71 t/s,32,45%
+"Batch 16, 32K",27+17=44 GB,21.5 ms,744 t/s,47 t/s,24,51%
+"Rows are supported operating points. Batch 16 is capped at short/mid context (<= 32K); at 128K, per-user decode cannot clear the 20 t/s floor, so >= 128K is served at <= batch 8 (see Section 3 batch-16 note).",,,,,,
+"Memory fit: batch 8 @128K = 27 GB weights + 8 x 4 GB KV = ~59 GB, inside 128 GB GDDR6 (excludes small fixed DeltaNet state and activations); this is why batch 8 at long context is viable on QB2. Cold TTFT tracks the reference's ~9,850 t/s peak prefill; QB2 (2,654 TFLOPS BlockFP8) is the same class, and APC removes cold prefill from the steady-state path. Ceilings above are non-spec-decode; required MTP (Section 4) verifies multiple tokens per weight-read and can push per-user decode above them. [1][3][4]",,,,,,
+,,,,,,
+References,,,,,,
+[1] Qwen3.8-27B model card (Hugging Face),,"Eval scores, architecture (hybrid DeltaNet + attention, KV heads), context, MTP, YaRN.",,,,
+"[2] TraceLab, arXiv:2606.30560",,"Table 8 / sec 5.2 per-step output distribution (Claude P50 252, P90 1,671, P99 6,571; Codex P50 184); ~8 tool-steps per response (sec 4.1).",,,,
+[3] TT-QuietBox 2 (Blackhole) specifications,,"128 GB GDDR6 @ ~2,048 GB/s, 2,654 TFLOPS BlockFP8.",,,,
+[4] Millstone AI: Qwen3.6-27B FP8 on 1x RTX Pro 6000 Blackwell,,"Single-request decode/TTFT, prefill peak, concurrency scaling, caching note (96 GB, vLLM, May 27 2026). Closest single-accelerator analog to QB2.",,,,
+[5] Reproduction caveat,,Public reporting notes the card's headline coding scores are Alibaba-reported and not yet independently reproduced (as of Aug 2026).,,,,
+[6] vLLM metrics (prefix cache),,Live-serving telemetry: vllm:prefix_cache_hit_rate gauge and prefix_cache_hits_total / prefix_cache_queries_total counters.,,,,
+[7] vLLM prefix-caching benchmark,,Benchmarkable warm/cold prefill: vllm bench serve --dataset-name prefix_repetition (prefix/suffix/num-prefixes/output-len flags) and benchmark_prefix_caching.py.,,,,
