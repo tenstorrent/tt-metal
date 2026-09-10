@@ -127,7 +127,18 @@ def run(
             pass
         elif isinstance(scalar_value, int):
             scalar_value = float(scalar_value)
-        torch_output_tensor = torch.mul(torch_input_tensor_a, scalar_value)
+        # The device materializes the scalar in the operand dtype before multiplying,
+        # so a scalar that is not representable there is rounded first. Master traces
+        # -FLT_MAX (3.4028e38) as an attention-mask value, and that is above
+        # bfloat16's max (3.3895e38), so the device operand becomes -inf. A golden
+        # that keeps the scalar in fp32 instead computes a finite product for every
+        # |x| < 1 and disagrees with the device on exactly those positions. Round the
+        # scalar the same way the device does -- verified bit-exact against device
+        # output for both representable and non-representable scalars.
+        golden_scalar = scalar_value
+        if torch_input_tensor_a.is_floating_point() and isinstance(scalar_value, float):
+            golden_scalar = torch.tensor(scalar_value, dtype=torch_input_tensor_a.dtype)
+        torch_output_tensor = torch.mul(torch_input_tensor_a, golden_scalar)
         is_scalar_multiply = True
     else:
         # Tensor-tensor multiply: generate second tensor

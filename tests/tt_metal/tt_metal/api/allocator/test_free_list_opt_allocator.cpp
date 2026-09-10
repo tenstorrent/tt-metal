@@ -164,6 +164,26 @@ TEST(FreeListOptTest, CPU_RejectFullCapacityShrink) {
     EXPECT_EQ(allocator.get_memory_block_table(), blocks);
 }
 
+// Full-capacity shrink is rejected, so pin 1_KiB at the top and consume the entire leading free
+// block. That takes the size-becomes-0 unlink path (the original OOB wrote through a -1 next-block
+// sentinel when that block also had no successor).
+TEST(FreeListOptTest, CPU_ShrinkEntireLeadingFreeBlockAndReset) {
+    auto allocator = tt::tt_metal::allocator::FreeListOpt(1_GiB, 0, 1_KiB, 1_KiB);
+
+    auto pinned = allocator.allocate(1_KiB, /*bottom_up=*/false);
+    ASSERT_TRUE(pinned.has_value());
+    ASSERT_EQ(pinned.value(), 1_GiB - 1_KiB);
+
+    allocator.shrink_size(1_GiB - 1_KiB);
+    auto a = allocator.allocate(1_KiB);
+    ASSERT_FALSE(a.has_value());
+
+    allocator.reset_size();
+    auto b = allocator.allocate(1_GiB - 1_KiB);
+    ASSERT_TRUE(b.has_value());
+    ASSERT_EQ(b.value(), 0);
+}
+
 TEST(FreeListOptTest, CPU_Statistics) {
     auto allocator = tt::tt_metal::allocator::FreeListOpt(1_GiB, 0, 1_KiB, 1_KiB);
     auto a = allocator.allocate(1_KiB);

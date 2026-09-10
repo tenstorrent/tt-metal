@@ -36,7 +36,7 @@
 #include "buffer.hpp"
 #include "core_coord.hpp"
 #include "hal_types.hpp"
-#include "hostdevcommon/profiler_common.h"
+#include "hostdev/profiler_common.h"
 #include "context/context_types.hpp"
 #include "context/metal_context.hpp"
 #include "context/metal_env_accessor.hpp"
@@ -64,6 +64,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <impl/debug/noc_debugging.hpp>
+#include "tools/profiler/noc_event_profiler_utils.hpp"
 
 #if !defined(TRACY_ENABLE) && defined(__clang__)
 #pragma clang diagnostic push
@@ -94,14 +95,12 @@ void setControlBuffer(
     // classic guaranteed-slot layout + finish (accumulate is worker-core-only).
     // Computed once here; otherwise the flag stays zero and behavior is unchanged.
     std::vector<CoreCoord> dispatch_virtual_cores;
-    const bool tag_dispatch_cores = MetalContext::instance(context_id).rtoptions().get_profiler_accumulate();
+    auto& metal_ctx = MetalContext::instance(context_id);
+    const bool tag_dispatch_cores = metal_ctx.rtoptions().get_profiler_accumulate();
     if (tag_dispatch_cores) {
-        const auto& dispatch_core_config = get_dispatch_core_config();
+        const auto& dispatch_core_config = metal_ctx.get_dispatch_core_config();
         for (const CoreCoord& core : tt::get_logical_dispatch_cores(
-                 MetalEnvAccessor(MetalContext::instance(context_id).get_env()).impl(),
-                 device_id,
-                 device->num_hw_cqs(),
-                 dispatch_core_config)) {
+                 MetalEnvAccessor(metal_ctx.get_env()).impl(), device_id, device->num_hw_cqs(), dispatch_core_config)) {
             dispatch_virtual_cores.push_back(
                 device->virtual_core_from_logical_core(core, get_core_type_from_config(dispatch_core_config)));
         }
@@ -814,8 +813,8 @@ void InitDeviceProfiler(IDevice* device) {
     setControlBuffer(nullptr, device, control_buffer);
 
     if (MetalContext::instance().rtoptions().get_profiler_noc_events_enabled()) {
-        profiler.dumpRoutingInfo();
-        profiler.dumpClusterCoordinates();
+        tt::tt_metal::dumpRoutingInfo(device, profiler.getNocTraceDataOutputDir());
+        tt::tt_metal::dumpSocDescriptor(device, profiler.getNocTraceDataOutputDir());
     }
 #endif
 }
@@ -823,20 +822,14 @@ void InitDeviceProfiler(IDevice* device) {
 bool areAllCoresDispatchCores(IDevice* device, const std::vector<CoreCoord>& virtual_cores) {
     const ChipId device_id = device->id();
     const uint8_t device_num_hw_cqs = device->num_hw_cqs();
-    const auto& dispatch_core_config = get_dispatch_core_config();
-    const CoreType dispatch_core_type =
-        resolve_dispatch_core_type(
-            MetalEnvAccessor(tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_env()).impl(),
-            device_id,
-            dispatch_core_config);
+    auto& metal_ctx = tt::tt_metal::MetalContext::instance(extract_context_id(device));
+    const auto& dispatch_core_config = metal_ctx.get_dispatch_core_config();
+    auto& env = MetalEnvAccessor(metal_ctx.get_env()).impl();
+    const CoreType dispatch_core_type = resolve_dispatch_core_type(env, device_id, dispatch_core_config);
     std::vector<CoreCoord> dispatch_cores;
-    for (const CoreCoord& core : tt::get_logical_dispatch_cores(
-             MetalEnvAccessor(tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_env()).impl(),
-             device_id,
-             device_num_hw_cqs,
-             dispatch_core_config)) {
-        const CoreCoord virtual_dispatch_core =
-            device->virtual_core_from_logical_core(core, dispatch_core_type);
+    for (const CoreCoord& core :
+         tt::get_logical_dispatch_cores(env, device_id, device_num_hw_cqs, dispatch_core_config)) {
+        const CoreCoord virtual_dispatch_core = device->virtual_core_from_logical_core(core, dispatch_core_type);
         dispatch_cores.push_back(virtual_dispatch_core);
     }
 
@@ -888,18 +881,20 @@ static void ReadDeviceProfilerResultsImpl(
         constexpr uint8_t maxLoopCount = 10;
         constexpr uint32_t loopDuration_us = 10000;
 
-        const auto& hal = MetalContext::instance().hal();
+        auto& context = MetalContext::instance(extract_context_id(device));
+        const auto& hal = context.hal();
         for (const CoreCoord& core : virtual_cores) {
             bool is_core_done = false;
 
-            const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device->id(), core);
+            const HalProgrammableCoreType core_type =
+                tt::llrt::get_core_type(MetalEnvAccessor(context.get_env()).impl(), device->id(), core);
 
             DeviceAddr profiler_msg_addr = hal.get_dev_addr(core_type, HalL1MemAddrType::PROFILER);
             DeviceAddr control_vector_addr =
                 profiler_msg_addr + hal.get_dev_msgs_factory(core_type).offset_of<dev_msgs::profiler_msg_t>(
                                         dev_msgs::profiler_msg_t::Field::control_vector);
             for (int i = 0; i < maxLoopCount; i++) {
-                const std::vector<std::uint32_t> control_buffer = MetalContext::instance().get_cluster().read_core(
+                const std::vector<std::uint32_t> control_buffer = context.get_cluster().read_core(
                     device->id(), core, control_vector_addr, kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
                 if (control_buffer[kernel_profiler::PROFILER_DONE] == 1) {
                     is_core_done = true;
@@ -1055,9 +1050,9 @@ std::vector<CoreCoord> getVirtualCoresForProfiling(const IDevice* device, const 
 
     const ChipId device_id = device->id();
     const uint8_t device_num_hw_cqs = device->num_hw_cqs();
-    const auto& dispatch_core_config = get_dispatch_core_config();
-
-    auto& env = MetalEnvAccessor(tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_env()).impl();
+    auto& metal_ctx = tt::tt_metal::MetalContext::instance(extract_context_id(device));
+    const auto& dispatch_core_config = metal_ctx.get_dispatch_core_config();
+    auto& env = MetalEnvAccessor(metal_ctx.get_env()).impl();
 
     if (!onlyProfileDispatchCores(state)) {
         for (const CoreCoord& core :
@@ -1231,9 +1226,12 @@ void ReadMeshDeviceProfilerResults(
         if (auto& noc_debug_state = MetalContext::instance(context_id).noc_debug_state()) {
             noc_debug_state->process_accumulated_events_all_chips();
             noc_debug_state->finish_cores();
-            // Only print when called by the user (state == normal) to avoid duplicate printing
             if (state != ProfilerReadState::LAST_FD_READ) {
+                // User-initiated read: print the full aggregated summary.
                 noc_debug_state->print_aggregated_errors();
+            } else {
+                // Device close / final read: no full summary.
+                noc_debug_state->report_new_issues();
             }
         }
         return;

@@ -55,6 +55,7 @@ set(SOURCES
     ops/distributed/comm_ops_test.cpp
     ops/distributed/ring_shift_test.cpp
     ops/distributed/ring_sdpa_test.cpp
+    ops/distributed/ring_sdpa_schedule_test.cpp
     ops/distributed/vocab_parallel_cross_entropy_loss_test.cpp
     ops/linear_op_test.cpp
     ops/profiler_no_op_test.cpp

@@ -88,6 +88,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/per_core_allocation/buffer.hpp
     api/tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp
     api/tt-metalium/experimental/pinned_memory.hpp
+    api/tt-metalium/experimental/prefetcher_pipe.hpp
     api/tt-metalium/experimental/profiler.hpp
     api/tt-metalium/experimental/program_descriptor_patching.hpp
     api/tt-metalium/experimental/sockets/d2h_socket.hpp
@@ -131,6 +132,7 @@ set(TT_METAL_PUBLIC_API
     api/internal/cluster_noc_helpers.hpp
     api/internal/disaggregation/kv_chunk_address_table.hpp
     api/internal/fabric.hpp
+    api/internal/graph_function_abort.hpp
     api/tt-metalium/kernel_types.hpp
     api/tt-metalium/math.hpp
     api/tt-metalium/maybe_remote.hpp

@@ -43,7 +43,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_post_lhs, cb_post_rhs, cb_out);
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluConfig::zero())));
+    pack_relu_config(ReluConfig::zero());
 #endif
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
@@ -51,7 +51,6 @@ void kernel_main() {
         exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
         pack_reconfig_data_format(cb_out, cb_llk_post);
         reconfig_data_format(cb_bcast, cb_bcast);
-        pack_reconfig_data_format(cb_llk_post);
         unary_bcast_init<BroadcastType::ROW>(cb_bcast);
 
         tile_regs_acquire();
@@ -65,9 +64,6 @@ void kernel_main() {
         exp_cb_bcast.pop_front(num_tiles_per_cycle);
         // unary_bcast_uninit<BroadcastType::ROW>(cb_bcast);
         pack_reconfig_data_format(cb_llk_post, cb_out);
-#ifdef ARCH_BLACKHOLE
-        PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));
-#endif
 
         PREPROCESS(LHS, CircularBuffer(cb_pre_lhs), exp_cb_post_lhs, exp_cb_out, num_tiles_per_cycle);
         exp_cb_post_lhs.wait_front(num_tiles_per_cycle);

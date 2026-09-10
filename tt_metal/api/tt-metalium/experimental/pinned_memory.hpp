@@ -32,10 +32,16 @@ class ShardDataTransfer;
 namespace experimental {
 class PinnedMemoryImpl;
 
+enum class PinnedMemoryDeviceAccess {
+    ReadWrite,
+    ReadOnly,
+};
+
 struct MemoryPinningParameters {
     uint32_t max_pins;
     uint64_t max_total_pin_size;
     bool can_map_to_noc;
+    bool supports_read_only;
 };
 
 /**
@@ -105,6 +111,13 @@ public:
     size_t get_buffer_size() const;
 
     /**
+     * @brief Get the device permissions of this mapping.
+     *
+     * ReadOnly prevents device writes; it does not make the host pointer const.
+     */
+    PinnedMemoryDeviceAccess get_device_access() const;
+
+    /**
      * @brief Get all device IDs managed by this PinnedMemory
      * @return Vector of device IDs
      */
@@ -169,13 +182,16 @@ public:
      * @param coordinate_range_set Set of mesh coordinates to pin memory for
      * @param host_buffer Existing host memory to map (must not be null)
      * @param map_to_noc Whether to map the buffer to the NOC
+     * @param access Device permissions for the mapping. Requesting ReadOnly throws unless
+     *               GetMemoryPinningParameters(mesh_device).supports_read_only is true, so check that first.
      * @return Unique pointer to the created PinnedMemory instance
      */
     static std::shared_ptr<PinnedMemory> Create(
         distributed::MeshDevice& mesh_device,
         const distributed::MeshCoordinateRangeSet& coordinate_range_set,
         HostBuffer& host_buffer,
-        bool map_to_noc = false);
+        bool map_to_noc = false,
+        PinnedMemoryDeviceAccess access = PinnedMemoryDeviceAccess::ReadWrite);
 
 private:
     friend class distributed::MeshDevice;
@@ -187,7 +203,12 @@ private:
      * @param buffer_size Size of buffer to map
      * @param map_to_noc Whether to map the buffer to the NOC
      */
-    PinnedMemory(const std::vector<IDevice*>& devices, void* host_buffer, size_t buffer_size, bool map_to_noc = false);
+    PinnedMemory(
+        const std::vector<IDevice*>& devices,
+        void* host_buffer,
+        size_t buffer_size,
+        bool map_to_noc = false,
+        PinnedMemoryDeviceAccess access = PinnedMemoryDeviceAccess::ReadWrite);
 
     std::unique_ptr<PinnedMemoryImpl> pImpl;
 };

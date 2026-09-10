@@ -138,7 +138,7 @@ To capture performance counters alongside profiling data, use the ``python -m tr
 
 ..  code-block:: sh
 
-    python -m tracy --profiler-capture-perf-counters=fpu,pack,unpack,l1_0,instrn \
+    python -m tracy --profiler-capture-perf-counters=all --perf-counter-multipass \
         -m "pytest your_test.py -x -v"
 
 Available counter groups:
@@ -151,9 +151,9 @@ Available counter groups:
 - ``instrn`` — per-thread instruction availability, stalls, and issue counts
 - ``all`` — all of the above (recommended starting point)
 
-**Note**: ``l1_0`` and ``l1_1`` share a hardware mux and cannot be captured simultaneously in a single ``python -m tracy`` run. To capture both, run them in separate passes. Automatic two-pass capture and merge is supported by the model-log wrapper (``process_model_log.run_device_profiler``).
+**Note**: the BRISC firmware fits the readout code for 3 counter groups per run and the L1 banks share one mux, so ``all`` needs several passes. Without ``--perf-counter-multipass`` the run stops and prints the pass plan; with it the workload is replayed once per pass and the device logs are merged.
 
-Blackhole-only groups: ``l1_2``, ``l1_3``, ``l1_4`` (additional NOC ring ports).
+Blackhole-only groups: ``l1_2``, ``l1_3``, ``l1_4``, ``l1_5`` (additional L1 client ports).
 
 **Output**
 
@@ -242,12 +242,6 @@ The following metrics are automatically computed from raw counters. Each metric 
 - **NOC vs Compute Balance (%)**: NOC cycles as a fraction of NOC + FPU cycles. >50% = NOC-bound, <50% = compute-bound.
 - **TDMA vs NOC L1 Share (%)**: RISC/TDMA traffic as a fraction of all L1 traffic. Shows how much bandwidth goes to firmware vs NOC.
 
-*Fidelity Metrics*
-
-- **Fidelity Stall Rate (%)**: Fraction of math-valid cycles spent in a fidelity phase (multi-HF-cycle math instruction). 0% = pure LoFi; >0% = HiFi math is active.
-- **HiFi Fraction (%)**: Fraction of issued math instructions that took more than 1 HF cycle (HiFi2 + HiFi4 over total).
-- **Avg HF Cycles Per Instrn** (raw number): Weighted average of HF cycles per issued math instruction. 1.0 = all LoFi, 2.0 = all HiFi2, 4.0 = all HiFi4.
-
 *Wormhole-Only Metrics*
 
 These metrics depend on per-pack-engine hardware signals that don't exist on Blackhole (``PACK_COUNT=1``).
@@ -270,7 +264,7 @@ These metrics depend on per-pack-engine hardware signals that don't exist on Bla
 Wormhole and Blackhole expose different raw hardware signals:
 
 - ``PACK_COUNT=1`` on Blackhole ties the per-engine packer busy and dest-read signals for engines 1-3 to constants, so per-engine packer metrics (Packer Engine 0/1/2 Util, Packer Load Imbalance) are WH-only.
-- Blackhole has additional L1 mux positions (3 extra for Tensix) providing deeper memory visibility through ``l1_2``, ``l1_3``, ``l1_4`` counter groups.
+- Blackhole has additional L1 mux positions (4 extra for Tensix) providing deeper memory visibility through the ``l1_2`` to ``l1_5`` counter groups.
 - ``Packer Efficiency`` and ``Math-to-Pack Handoff Ratio`` fall back to alternative formulas when ``PACKER_BUSY = 0`` on a given op (e.g. pure-SFPU ops that don't drive the packer).
 
 For the authoritative per-architecture metric list, raw counter set, register maps, and signal definitions, see ``tech_reports/PerfCounters/perf-counters.md``.

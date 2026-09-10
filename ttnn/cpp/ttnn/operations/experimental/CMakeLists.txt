@@ -37,6 +37,7 @@ add_subdirectory(kda)
 add_subdirectory(topk_large_indices)
 
 # metallium-maintainers-llama-models
+add_subdirectory(indexed_page_cache)
 add_subdirectory(paged_cache)
 
 # metalium-developers-external-experience
@@ -62,6 +63,7 @@ add_subdirectory(deepseek/moe/generalized_moe_gate)
 add_subdirectory(deepseek/moe/moe_gate_mm)
 add_subdirectory(deepseek_moe_post_combine_tilize)
 add_subdirectory(dropout)
+add_subdirectory(fft)
 add_subdirectory(multi_scale_deformable_attn)
 add_subdirectory(plusone)
 add_subdirectory(reshape)
@@ -93,6 +95,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::IndexerScore
         TTNN::Ops::Experimental::KDA
         TTNN::Ops::Experimental::TopkLargeIndices
+        TTNN::Ops::Experimental::IndexedPageCache
         TTNN::Ops::Experimental::PagedCache
         TTNN::Ops::Experimental::IsIn
         TTNN::Ops::Experimental::MinimalMatmul
@@ -107,6 +110,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeek::MoE::MoEGateMM
         TTNN::Ops::Experimental::DeepseekMoEPostCombineTilize
         TTNN::Ops::Experimental::Dropout
+        TTNN::Ops::Experimental::FFT
         TTNN::Ops::Experimental::MultiScaleDeformableAttn
         TTNN::Ops::Experimental::PlusOne
         TTNN::Ops::Experimental::Reshape
@@ -143,6 +147,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::HighBwAllGather>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::IndexerScore>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::TopkLargeIndices>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::IndexedPageCache>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::PagedCache>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::IsIn>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::MinimalMatmul>
@@ -157,6 +162,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::MoE::MoEGateMM>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepseekMoEPostCombineTilize>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Dropout>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::FFT>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::MultiScaleDeformableAttn>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::PlusOne>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Reshape>
