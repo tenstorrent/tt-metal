@@ -32,7 +32,12 @@ target_compile_definitions(
         TT_DIRECT_KERNEL_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
 )
 
-target_link_libraries(d2h2h2d_socket_test PRIVATE test_metal_common_libs OpenMPI::MPI)
+target_link_libraries(
+    d2h2h2d_socket_test
+    PRIVATE
+        test_metal_common_libs
+        OpenMPI::MPI
+)
 
 add_executable(d2h2h2d_socket_oneway_volume)
 set_target_properties(
