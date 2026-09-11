@@ -382,6 +382,18 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
             shard_spec.shape[0] = shard_volume / shard_spec.shape[1];
             output_memory_config =
                 MemoryConfig{input_memory_config.memory_layout(), input_memory_config.buffer_type(), shard_spec};
+        } else if (
+            input_memory_config.is_sharded() && input_memory_config.shard_spec().has_value() &&
+            input_memory_config.nd_shard_spec().has_value() &&
+            input_memory_config.nd_shard_spec()->shard_shape.rank() > new_padded_shape.rank()) {
+            // A config built from an ND shard spec that normalizes to a 2D layout keeps the
+            // higher-rank nd_shard_spec attached. After the rank drop it would exceed the tensor
+            // rank (BufferDistributionSpec requires shard rank <= tensor rank), so drop it and
+            // keep only the equivalent 2D shard_spec.
+            output_memory_config = MemoryConfig{
+                input_memory_config.memory_layout(),
+                input_memory_config.buffer_type(),
+                input_memory_config.shard_spec().value()};
         }
     }
 
