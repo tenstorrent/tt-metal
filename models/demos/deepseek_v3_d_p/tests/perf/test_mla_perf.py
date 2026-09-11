@@ -78,6 +78,37 @@ _CMD_MISTRAL4_CHUNKED_8X4 = (
 _MISTRAL4_MLA_CHUNKED_NS_UNCALIBRATED = 3_301_775
 _RECORD_ONLY_MARGIN = 10.0
 
+# This worker has a single scenario and no reference/metadata/determinism sweep. It measures the
+# actual SP8/TP1 shape; approximate_mla_galaxy_perf keeps TP=4 and must not be used for this row.
+_CMD_MISTRAL4_CHUNKED_8X1 = (
+    "pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral4_mla_chunked_prefill_loudbox "
+    "--wrapper-invocation"
+)
+
+
+@pytest.mark.timeout(0)
+def test_mistral4_mla_chunked_perf_loudbox():
+    """Record the unapproximated PP4-stage MLA budget on eight Blackhole devices.
+
+    No threshold is assigned until a real LoudBox measurement is available. The reported number
+    sums merged operation durations inside one forward, not elapsed end-to-end request latency.
+    """
+    galaxy = _is_galaxy_env()
+    visible_devices = os.environ.get("TT_VISIBLE_DEVICES", "").split(",")
+    if galaxy and (len(visible_devices) != 8 or len(set(visible_devices)) != 8):
+        pytest.skip("Expose one eight-device Galaxy ring with TT_VISIBLE_DEVICES, or use a Blackhole LoudBox")
+    platform = "glx_column" if galaxy else "lb"
+    run_model_device_perf_test_with_merge(
+        command=_CMD_MISTRAL4_CHUNKED_8X1,
+        expected_device_perf_ns_per_iteration=None,
+        subdir="mistral4_mla",
+        model_name=f"mistral4_mla_chunked_{platform}_8x1_torus_y",
+        num_iterations=1,
+        batch_size=1,
+        between_signposts=("MLA_START", "MLA_END"),
+        comments=f"mistral4_chunked_50k+5k_{platform}_8x1_torus_y_record_only",
+    )
+
 
 @_REQUIRE_HIGH_POWER
 @pytest.mark.timeout(0)
