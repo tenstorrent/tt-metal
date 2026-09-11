@@ -34,7 +34,29 @@
 #include "sparse_sdpa_msa_gather.hpp"
 #include "dataflow_common.hpp"
 #ifdef VSA_RING
+#ifdef VSA_RING_DPRINT
+#include "api/debug/dprint.h"
+#endif
 #include "fused_op_receiver.hpp"  // RingSDPAOpReceiver: the fused all-gather's per-shard arrival protocol
+// RingSDPAOpReceiver's constructor parses UNIQUE runtime args; the ring leaders keep the receiver args in
+// COMMON runtime args (identical on every core), so mirror the constructor's layout here:
+// ring_size, ring_index, forward_expected, backward_expected, sem0, sem1, split flag, split shard, split wait.
+inline RingSDPAOpReceiver make_ring_receiver(uint32_t crt) {
+    RingSDPAOpReceiver rx;
+    rx.wait_for_op_signal = true;
+    const uint32_t ring_size = get_common_arg_val<uint32_t>(crt + 0);
+    const uint32_t ring_index = get_common_arg_val<uint32_t>(crt + 1);
+    const uint32_t forward_expected = get_common_arg_val<uint32_t>(crt + 2);
+    const uint32_t backward_expected = get_common_arg_val<uint32_t>(crt + 3);
+    rx.signal_op_semaphore_ids[1] = get_common_arg_val<uint32_t>(crt + 4);  // the all-gather's BWD semaphore
+    rx.signal_op_semaphore_ids[0] = get_common_arg_val<uint32_t>(crt + 5);  // the all-gather's FWD semaphore
+    rx.split_forwarding_enabled = get_common_arg_val<uint32_t>(crt + 6) == 1;
+    rx.split_shard_id = get_common_arg_val<uint32_t>(crt + 7);
+    rx.split_second_half_wait = get_common_arg_val<uint32_t>(crt + 8);
+    rx.seq = RingIdSequencer(ring_index, ring_size, backward_expected, forward_expected);
+    rx.initialized = true;
+    return rx;
+}
 #endif
 
 constexpr uint32_t sentinel = 0xFFFFFFFFu;
@@ -260,22 +282,48 @@ void kernel_main() {
         argi += 2 * n_workers;
 #ifdef VSA_RING
         // Ring mode (vsa_ring_sdpa): K/V arrive shard by shard over the SP ring. Blocks of this device's
-        // own shard are read from the local V tensor (`v`, the op's k/v inputs); every other shard from the
-        // gathered buffer once the fused all-gather has landed it. The sequence is streamed shard-major in
-        // the ring-arrival order the RingSDPAOpReceiver yields (own shard first, then alternating
-        // directions), each shard gated on its arrival semaphore. Deterministic per (device, ring_size).
-        const uint32_t gv_addr = get_arg_val<uint32_t>(argi++);              // gathered V (all shards' rows)
-        const uint32_t ring_index = get_arg_val<uint32_t>(argi++);           // this device's SP shard
-        const uint32_t blocks_per_shard = get_arg_val<uint32_t>(argi++);     // T_local / block_size
-        const uint32_t v_local_head_stride = get_arg_val<uint32_t>(argi++);  // tiles per head in local v
-        const uint32_t ring_rt_argi = argi;  // RingSDPAOpReceiver args (9 words), re-parsed per pass
-        argi += 9;
+        // own shard are read from the local concatenated K/V tensor (`v`: V of head h at head v_head_offset + h);
+        // every other shard from the gathered buffer once the fused all-gather has landed it. The sequence is
+        // streamed shard-major in the ring-arrival order the RingSDPAOpReceiver yields (own shard first, then
+        // alternating directions), each shard gated on its arrival semaphore. Deterministic per (device, ring).
+        // The per-device constants are COMMON runtime args (identical on every core; the gathered address is
+        // re-applied on program-cache hits): see kRingCommonArg* in vsa_sdpa_stream_descriptor.hpp.
         constexpr auto gv_args = TensorAccessorArgs<
             counts_args.next_compile_time_args_offset(),
             counts_args.next_common_runtime_args_offset()>();
+        constexpr uint32_t ring_crt = gv_args.next_common_runtime_args_offset();
+        const uint32_t gv_addr = get_common_arg_val<uint32_t>(ring_crt + 0);              // gathered K/V (2H heads)
+        const uint32_t ring_index = get_common_arg_val<uint32_t>(ring_crt + 1);           // this device's SP shard
+        const uint32_t blocks_per_shard = get_common_arg_val<uint32_t>(ring_crt + 2);     // T_local / block_size
+        const uint32_t v_local_head_stride = get_common_arg_val<uint32_t>(ring_crt + 3);  // tiles per head, local
+        const uint32_t v_head_offset = get_common_arg_val<uint32_t>(ring_crt + 4);        // V heads start here
+        // RingSDPAOpReceiver args (9 words) follow; they are re-parsed per pass through a copy of this index.
+        const uint32_t ring_rt_argi = ring_crt + 5;
         const auto gv = TensorAccessor(gv_args, gv_addr);
-        const uint32_t v_local_base = head * v_local_head_stride;
-        const uint32_t ring_size = get_arg_val<uint32_t>(ring_rt_argi);
+        const uint32_t v_local_base = (v_head_offset + head) * v_local_head_stride;
+        const uint32_t v_gath_base = (v_head_offset + head) * v_head_stride;
+        const uint32_t ring_size = get_common_arg_val<uint32_t>(ring_rt_argi);
+#ifdef VSA_RING_DPRINT
+        DPRINT(
+            "VSARING leader head{} crt{} gv_addr={} ring_index={} bps={} vstride={} voff={} | rx: ring={} idx={} "
+            "fwd={} bwd={} sem0={} sem1={} split={} sshard={} swait={}\n",
+            head,
+            ring_crt,
+            gv_addr,
+            ring_index,
+            blocks_per_shard,
+            v_local_head_stride,
+            v_head_offset,
+            get_common_arg_val<uint32_t>(ring_rt_argi + 0),
+            get_common_arg_val<uint32_t>(ring_rt_argi + 1),
+            get_common_arg_val<uint32_t>(ring_rt_argi + 2),
+            get_common_arg_val<uint32_t>(ring_rt_argi + 3),
+            get_common_arg_val<uint32_t>(ring_rt_argi + 4),
+            get_common_arg_val<uint32_t>(ring_rt_argi + 5),
+            get_common_arg_val<uint32_t>(ring_rt_argi + 6),
+            get_common_arg_val<uint32_t>(ring_rt_argi + 7),
+            get_common_arg_val<uint32_t>(ring_rt_argi + 8));
+#endif
 #endif
         pass_argi = argi;  // the leader's pass counts and row list follow its strips and worker coords
         rows_argi = argi + n_passes;
@@ -592,7 +640,7 @@ void kernel_main() {
                             {.offset_bytes = (slot * v_tiles_per_block + i) * v_tile_bytes});
                     }
                 } else {  // remote shard: gathered buffer, global block id
-                    const uint32_t v_tile0 = v_base + bs[j] * v_tiles_per_block;
+                    const uint32_t v_tile0 = v_gath_base + bs[j] * v_tiles_per_block;
                     for (uint32_t i = 0; i < v_tiles_per_block; ++i) {
                         noc.async_read(
                             gv,
@@ -688,18 +736,28 @@ void kernel_main() {
                 // later passes (thresholds already met): only pass 0 overlaps the ring.
 #ifdef VSA_RING_WAIT_ALL  // triage knob (TT_VSA_RING_WAIT_ALL=1): land every shard before streaming
                 {
-                    uint32_t a = ring_rt_argi;
-                    RingSDPAOpReceiver r0(true, a);
+                    RingSDPAOpReceiver r0 = make_ring_receiver(ring_rt_argi);
                     for (uint32_t step = 0; step < ring_size; ++step) {
                         r0.get_next_ring_id_and_sync();
                     }
                 }
 #endif
-                uint32_t rx_argi = ring_rt_argi;
-                RingSDPAOpReceiver rx(/*wait_for_op_signal=*/true, rx_argi);
+                RingSDPAOpReceiver rx = make_ring_receiver(ring_rt_argi);
                 for (uint32_t step = 0; step < ring_size; ++step) {
                     WAYPOINT("LRNG");
                     const uint32_t sigma = rx.get_next_ring_id_and_sync();
+#ifdef VSA_RING_DPRINT
+                    DPRINT(
+                        "VSARING leader head{} pass{} step{} shard{} sem{}={} sem{}={}\n",
+                        head,
+                        pass,
+                        step,
+                        sigma,
+                        rx.signal_op_semaphore_ids[0],
+                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(rx.signal_op_semaphore_ids[0])),
+                        rx.signal_op_semaphore_ids[1],
+                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(rx.signal_op_semaphore_ids[1])));
+#endif
                     const uint32_t b0 = sigma * blocks_per_shard;
                     for (uint32_t b = b0; b < b0 + blocks_per_shard; ++b) {
                         stream_block(b);

@@ -70,6 +70,7 @@ class MiniMaxH3VSAConfig:
     # forwarded around the ring while the attention consumes the shards already landed, replacing the two
     # blocking all-gathers (~8 ms/block at 15 s). Needs streaming, not distributed, identity stream order.
     ring: bool = False
+    ring_workers_per_link: int = 2  # all-gather workers per direction per link inside vsa_ring_sdpa
 
 
 def compute_topk(sparsity: float, num_candidates: int) -> int:

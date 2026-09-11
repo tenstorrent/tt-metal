@@ -605,20 +605,20 @@ class MiniMaxH3Attention(Module):
                 # all-gather ping-pong buffers and the semaphores the all-gather's own pair.
                 assert self.vsa_config.streaming and not self.vsa_config.distributed
                 assert self.vsa_config.stream_order == "identity", "vsa_ring_sdpa streams in ring-arrival order"
+                # K and V travel as one tensor (K heads, then V heads): one gather, one set of sender cores.
+                kv_BHNE = ttnn.concat([k_BHNE, v_BHNE], dim=1)
                 spatial_BHNE = ttnn.transformer.vsa_ring_sdpa(
                     q_BHNE,
-                    k_BHNE,
-                    v_BHNE,
+                    kv_BHNE,
                     vsa_indices,
                     self.vsa_stage.block_counts_tensor(),
-                    self.ccl_manager.get_ag_ping_pong_buffer(k_BHNE.shape, 2, self.sp_mesh_axis, dtype=k_BHNE.dtype),
-                    self.ccl_manager.get_ag_ping_pong_buffer(v_BHNE.shape, 2, self.sp_mesh_axis, dtype=v_BHNE.dtype),
+                    self.ccl_manager.get_ag_ping_pong_buffer(kv_BHNE.shape, 2, self.sp_mesh_axis, dtype=kv_BHNE.dtype),
                     multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.sp_mesh_axis),
                     num_links=self.ccl_manager.num_links,
                     cluster_axis=self.sp_mesh_axis,
                     mesh_device=self.mesh_device,
                     topology=self.ccl_manager.topology,
-                    ccl_core_grid_offset=(0, 0),
+                    num_workers_per_link=self.vsa_config.ring_workers_per_link,
                     subdevice_id=self.ccl_manager.ccl_sub_device_id,
                     list_len=self.vsa_stage.k,
                     exempt_ids=self.vsa_stage.exempt_ids,
@@ -627,6 +627,7 @@ class MiniMaxH3Attention(Module):
                     coarse_real_per_shard=self.vsa_stage.geometry.tiles_per_shard,
                     dense_row_hint=self.vsa_stage.dense_row_hint,
                 )
+                ttnn.deallocate(kv_BHNE)
                 ttnn.deallocate(vsa_indices)
                 k_gathered = v_gathered = None
             else:

@@ -721,7 +721,7 @@ numerics across ring steps.
 ## 14. vsa_ring_sdpa built (2026-09-11)
 
 The fused ring all-gather + VSA fine stage exists and is correct (VSA_RING_SDPA_SPEC.md sections 10-11 have the
-plan, status, root-cause notes and measurements). At the 15 s shape it is at parity with the two-op path
-(23.7 vs 23.3 ms with 2 passes; 26.3 with the default 3 passes): the embedded single-worker all-gather helper is
-~50 % slower than the standalone multi-worker gather, and only pass 0 overlaps. The follow-up is the
-multi-worker forwarder + 2 passes (expected ~4-5 ms/block).
+plan, status, root-cause notes and measurements). With the multi-worker forwarder (the standalone
+all_gather_async's kernels fused into the program, K/V concatenated per device) and 2 passes it beats the two-op
+path by ~1.1 ms/block including the 0.6 ms concat (21.7 vs 23.3 + 0.6 at 15 s). It is comm-bound in pass 0
+(in-program gather ~11.5 ms vs ~8 ms of pass-0 compute); spec section 12 lists the remaining headroom.

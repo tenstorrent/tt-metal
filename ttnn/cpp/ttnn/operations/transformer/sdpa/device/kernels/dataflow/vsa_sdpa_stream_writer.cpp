@@ -97,15 +97,16 @@ void kernel_main() {
 #endif
         const uint32_t k_base = head * k_head_stride;
 #ifdef VSA_RING
-        // Ring mode: own-shard blocks come from the local K tensor (`k`), remote shards from the gathered
-        // buffer (see the reader's leader for the protocol). The ring args follow the pass counts and rows.
-        const uint32_t kRingArg = kRowsArg + row_count;
-        const uint32_t gk_addr = get_arg_val<uint32_t>(kRingArg);
-        const uint32_t ring_index = get_arg_val<uint32_t>(kRingArg + 1);
-        const uint32_t blocks_per_shard = get_arg_val<uint32_t>(kRingArg + 2);
-        const uint32_t k_local_head_stride = get_arg_val<uint32_t>(kRingArg + 3);
+        // Ring mode: own-shard blocks come from the local concatenated K/V tensor (`k`, K heads first), remote
+        // shards from the gathered buffer (see the reader's leader for the protocol). Ring constants are COMMON
+        // runtime args after the accessor common args (vsa_sdpa_stream_descriptor.hpp kRingCommonArg*).
         constexpr auto gk_args =
             TensorAccessorArgs<q_args.next_compile_time_args_offset(), q_args.next_common_runtime_args_offset()>();
+        constexpr uint32_t ring_crt = gk_args.next_common_runtime_args_offset();
+        const uint32_t gk_addr = get_common_arg_val<uint32_t>(ring_crt + 0);
+        const uint32_t ring_index = get_common_arg_val<uint32_t>(ring_crt + 1);
+        const uint32_t blocks_per_shard = get_common_arg_val<uint32_t>(ring_crt + 2);
+        const uint32_t k_local_head_stride = get_common_arg_val<uint32_t>(ring_crt + 3);
         const auto gk = TensorAccessor(gk_args, gk_addr);
         const uint32_t k_local_base = head * k_local_head_stride;
 #endif

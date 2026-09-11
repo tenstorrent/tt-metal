@@ -36,12 +36,10 @@ struct VsaRingSdpaOperation {
 
 Tensor vsa_ring_sdpa(
     const Tensor& q,
-    const Tensor& k,
-    const Tensor& v,
+    const Tensor& kv,  // local concatenated K/V shard [1, 2H, T_local, d]
     const Tensor& indices,
     const Tensor& block_counts,
-    const Tensor& persistent_output_buffer_k,
-    const Tensor& persistent_output_buffer_v,
+    const Tensor& persistent_output_buffer_kv,  // [1, 2H, T_local*ring_size, d]
     float scale,
     uint32_t block_size,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
@@ -56,7 +54,7 @@ Tensor vsa_ring_sdpa(
     uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     ttnn::ccl::Topology topology,
-    tt::tt_metal::CoreCoord ccl_core_grid_offset,
+    uint32_t num_workers_per_link,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id);
 
 }  // namespace ttnn::prim

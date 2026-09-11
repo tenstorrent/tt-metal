@@ -4,38 +4,20 @@
 
 #pragma once
 
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
 #include "ttnn/device_operation.hpp"
-#include "ttnn/mesh_device_operation_adapter.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_default_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/vsa_ring_sdpa_device_operation_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::prim {
 
-namespace detail {
-struct VsaRingSdpaDescriptorAdapterOperation {
-    using operation_attributes_t = VsaRingSdpaParams;
-    using tensor_args_t = VsaRingSdpaInputs;
-    using spec_return_value_t = tt::tt_metal::TensorSpec;
-    using tensor_return_value_t = Tensor;
-};
-}  // namespace detail
-
-// One ProgramDescriptor per mesh coordinate: the device's ring position, its neighbors and the number of
-// shards each chain delivers all depend on the coordinate.
-struct VsaRingSdpaProgramFactory {
-    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
-        const VsaRingSdpaParams& args,
-        const VsaRingSdpaInputs& tensor_args,
-        Tensor& output,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords);
-};
-
+// One Program per mesh coordinate (the device's ring position, neighbors and per-chain shard counts depend on
+// it): the VSA streaming descriptor is materialized into a Program, then the multi-worker all-gather's
+// fusable builder adds the sender cores that forward the concatenated K/V shard around the ring and signal
+// the VSA leaders per landed shard.
 struct VsaRingSdpaMeshWorkloadFactory {
-    using descriptor_adapter_t = ttnn::device_operation::MeshDeviceOperationAdapter<
-        detail::VsaRingSdpaDescriptorAdapterOperation>::DescriptorMeshWorkloadAdapter<VsaRingSdpaProgramFactory>;
-    using cached_mesh_workload_t = typename descriptor_adapter_t::cached_mesh_workload_t;
+    using shared_variables_t = ttnn::AllGatherProgramArtifacts;
+    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
     static cached_mesh_workload_t create_mesh_workload(
         const VsaRingSdpaParams& args,
@@ -43,9 +25,8 @@ struct VsaRingSdpaMeshWorkloadFactory {
         const VsaRingSdpaInputs& tensor_args,
         Tensor& output);
 
-    // Cache hit: buffers are re-bound by the adapter; this re-applies the VSA kernels' raw address args and
-    // the all-gather's GlobalSemaphore addresses (excluded from the program hash, so a hit with the other
-    // ping-pong semaphore set must not keep the address frozen at the first miss).
+    // Cache hit: the all-gather's own override re-applies its buffer and GlobalSemaphore addresses (excluded
+    // from the program hash); the VSA patch re-applies the VSA kernels' addresses and the gathered address.
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_workload,
         const VsaRingSdpaParams& args,

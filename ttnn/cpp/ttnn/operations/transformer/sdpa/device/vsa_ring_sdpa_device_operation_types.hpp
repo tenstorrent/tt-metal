@@ -18,19 +18,21 @@ namespace ttnn::prim {
 // at `ccl_core_grid_offset`, which must be the first row of the grid's last column.
 struct VsaRingSdpaParams {
     VsaSdpaParams vsa;
-    ttnn::experimental::prim::RingAttentionAllGatherAsyncParams ag;
-    tt::tt_metal::CoreCoord ccl_core_grid_offset{0, 0};
+    ttnn::experimental::prim::RingAttentionAllGatherAsyncParams ag;  // ring geometry: links, topology, axis, semaphores
+    uint32_t num_workers_per_link = 2;  // all-gather workers per direction per link (senders = 2*links*(w+1) cores)
 
     // Explicit reflection: `ag` is not an aggregate (constructor-only), so the framework's automatic
     // member introspection cannot describe this struct; the hash is custom (compute_program_hash).
-    static constexpr auto attribute_names = std::forward_as_tuple("vsa", "ag", "ccl_core_grid_offset");
-    auto attribute_values() const { return std::forward_as_tuple(vsa, ag, ccl_core_grid_offset); }
+    static constexpr auto attribute_names = std::forward_as_tuple("vsa", "ag", "num_workers_per_link");
+    auto attribute_values() const { return std::forward_as_tuple(vsa, ag, num_workers_per_link); }
 };
 
 struct VsaRingSdpaInputs {
-    VsaSdpaInputs vsa;  // k/v are THIS device's shard [1,H,T_local,d]; indices/counts index the global sequence
-    Tensor gathered_k;  // [1,H,T_local*ring_size,d] persistent all-gather ping-pong buffers (shard s at rows
-    Tensor gathered_v;  //   [s*T_local, (s+1)*T_local)); the local shard is never written into them
+    // vsa.k and vsa.v are BOTH the local concatenated K/V shard [1, 2H, T_local, d] (K heads first): the
+    // kernels read K at head h and V at head H + h. indices/counts index the global sequence.
+    VsaSdpaInputs vsa;
+    Tensor gathered_kv;  // [1, 2H, T_local*ring_size, d] persistent all-gather buffer (shard s at rows
+                         //   [s*T_local, (s+1)*T_local)); the local shard is never written into it
 };
 
 }  // namespace ttnn::prim

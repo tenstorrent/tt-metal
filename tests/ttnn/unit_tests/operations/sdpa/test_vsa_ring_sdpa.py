@@ -111,18 +111,26 @@ def _run(
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
     )
     tt_q = to_dev(q, shard_qkv, ttnn.TILE_LAYOUT, ttnn.bfloat16)
-    tt_k = to_dev(k, shard_qkv, ttnn.TILE_LAYOUT, ttnn.bfloat16)
-    tt_v = to_dev(v, shard_qkv, ttnn.TILE_LAYOUT, ttnn.bfloat16)
+    # the ring op takes each device's K/V concatenated on the head dim (K heads, then V): interleave per TP shard
+    # so that sharding dim 1 across the TP devices hands every device [k_local, v_local]
+    kv = torch.cat(
+        [
+            torch.cat([k[:, t * heads_local : (t + 1) * heads_local], v[:, t * heads_local : (t + 1) * heads_local]], 1)
+            for t in range(tp)
+        ],
+        dim=1,
+    )
+    tt_kv = to_dev(kv, shard_qkv, ttnn.TILE_LAYOUT, ttnn.bfloat16)
     tt_idx = to_dev(idx.to(torch.uint32).view(torch.int32), shard_qkv, ttnn.ROW_MAJOR_LAYOUT, ttnn.uint32)
     replicate = [None, None]
     tt_counts = to_dev(counts, replicate, ttnn.ROW_MAJOR_LAYOUT, ttnn.uint32)
     tt_mask = to_dev(mask.to(torch.int32).reshape(1, 1, 1, dense_words), replicate, ttnn.ROW_MAJOR_LAYOUT, ttnn.uint32)
-    # gathered buffers: [1, heads_local, t_total, d] per device (heads sharded, sequence replicated)
-    tt_gk = to_dev(
-        torch.zeros(1, heads_total, t_total, DIM, dtype=torch.bfloat16), shard_heads, ttnn.TILE_LAYOUT, ttnn.bfloat16
-    )
-    tt_gv = to_dev(
-        torch.zeros(1, heads_total, t_total, DIM, dtype=torch.bfloat16), shard_heads, ttnn.TILE_LAYOUT, ttnn.bfloat16
+    # gathered K/V buffer: [1, 2*heads_local, t_total, d] per device (heads sharded, sequence replicated)
+    tt_gkv = to_dev(
+        torch.zeros(1, 2 * heads_total, t_total, DIM, dtype=torch.bfloat16),
+        shard_heads,
+        ttnn.TILE_LAYOUT,
+        ttnn.bfloat16,
     )
     # plain vsa_sdpa reference input: the full K/V on every device
     tt_kfull = to_dev(k, shard_heads, ttnn.TILE_LAYOUT, ttnn.bfloat16)
@@ -141,18 +149,16 @@ def _run(
     def ring(sems):
         return ttnn.transformer.vsa_ring_sdpa(
             tt_q,
-            tt_k,
-            tt_v,
+            tt_kv,
             tt_idx,
             tt_counts,
-            tt_gk,
-            tt_gv,
+            tt_gkv,
             multi_device_global_semaphore=sems,
             num_links=num_links,
             cluster_axis=sp_axis,
             mesh_device=mesh_device,
             topology=ttnn.Topology.Ring,
-            ccl_core_grid_offset=(0, 0),
+            num_workers_per_link=int(os.environ.get("VSA_RING_WORKERS", "2")),
             **common,
         )
 
@@ -160,6 +166,9 @@ def _run(
     out_a = ring(sem_sets[0])
     ttnn.synchronize_device(mesh_device)
     out_a_t = ttnn.to_torch(out_a, mesh_composer=compose).float()
+    if os.environ.get("VSA_RING_TEST_SINGLE") == "1":  # triage: first call only (no program-cache hit)
+        logger.info("single call finished: max|out|=%s", out_a_t.abs().max().item())
+        return
     out_b = ring(sem_sets[1])  # program-cache hit with the other semaphore set
     ttnn.synchronize_device(mesh_device)
     out_b_t = ttnn.to_torch(out_b, mesh_composer=compose).float()

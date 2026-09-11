@@ -14,18 +14,16 @@ namespace ttnn::transformer {
 
 ttnn::Tensor vsa_ring_sdpa(
     const ttnn::Tensor& q,
-    const ttnn::Tensor& k,
-    const ttnn::Tensor& v,
+    const ttnn::Tensor& kv,
     const ttnn::Tensor& indices,
     const ttnn::Tensor& block_counts,
-    const ttnn::Tensor& persistent_output_buffer_k,
-    const ttnn::Tensor& persistent_output_buffer_v,
+    const ttnn::Tensor& persistent_output_buffer_kv,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     uint32_t num_links,
     uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     ttnn::ccl::Topology topology,
-    tt::tt_metal::CoreCoord ccl_core_grid_offset,
+    uint32_t num_workers_per_link,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<float> scale,
     uint32_t block_size,
@@ -48,12 +46,10 @@ ttnn::Tensor vsa_ring_sdpa(
         /*default_l1_acc=*/false);
     return ttnn::prim::vsa_ring_sdpa(
         q,
-        k,
-        v,
+        kv,
         indices,
         block_counts,
-        persistent_output_buffer_k,
-        persistent_output_buffer_v,
+        persistent_output_buffer_kv,
         resolved_scale,
         block_size,
         kernel_config,
@@ -68,7 +64,7 @@ ttnn::Tensor vsa_ring_sdpa(
         cluster_axis,
         mesh_device,
         topology,
-        ccl_core_grid_offset,
+        num_workers_per_link,
         subdevice_id);
 }
 

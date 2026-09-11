@@ -1,7 +1,7 @@
 # vsa_ring_sdpa: fused ring all-gather + VSA fine-stage attention
 
-Status: IMPLEMENTED and correct (2026-09-11); at perf parity with the two-op path -- see section 11 for the
-measured breakdown and the fast-forwarder follow-up that turns it into a win. Companion to `VSA_STREAM_DESIGN.md` (section 13 has
+Status: IMPLEMENTED, correct, and a (small) win over the two-op path with the multi-worker forwarder and 2 passes
+(section 12). Section 11 records the first (parity) version's breakdown. Companion to `VSA_STREAM_DESIGN.md` (section 13 has
 the motivating measurements).
 
 ## 1. Problem
@@ -225,3 +225,44 @@ Next (the win): replace the forwarder with the multi-worker all-gather's fusable
 (`build_all_gather_async_minimal_default_program_artifacts`, Program-based, same OpSignaler protocol) over a
 concatenated K/V tensor with 2 workers/direction/link (12 sender cores = row 0), run 2 passes, and reclaim the
 idle sender-row cores. Expected: ~max(AG 10, pass0 7.6) + pass1 7.6 ~ 18-19 ms vs 23.3 (~4-5 ms/block).
+
+## 12. Multi-worker forwarder (2026-09-11): the win
+
+Forwarder swapped for the standalone `all_gather_async`'s fusable builder
+(`build_all_gather_async_minimal_default_program_artifacts`, Program-based; the ring factory materializes the VSA
+descriptor into a Program and adds the all-gather's reader/writer to it). K and V travel as ONE tensor: the model
+concatenates them on the head dim (`kv = concat([k, v], 1)`, 0.6 ms at 15 s) and the kernels read V of head h at
+head H + h in both the local and the gathered buffer (`v_head_offset`). Sender cores: 2 links x 2 directions x
+(workers + 1 MUX); with the default 2 workers/link that is exactly row 0, the VSA grid is rows 1..9 (108 cores).
+The per-device ring constants are COMMON runtime args (the gathered address is re-applied on cache hits); the
+receiver runs WITHOUT split forwarding because the fused all-gather disables it (`if constexpr (topology == Ring &&
+!fuse_op)` in its reader) -- expecting the second-half signal deadlocked the last shard. Ring-mode defaults: 2 passes
+(rmax 15, ring depth 14), which also fits the traced 15 s block's L1.
+
+Perf at the 15 s shape (slowest device, ms per call; `test_vsa_ring_sdpa_perf.py`):
+
+| variant | ms |
+|---|---|
+| concat(k, v) (the fused path's extra op) | 0.6 |
+| all_gather_async x2 alone | 8.4 |
+| vsa_sdpa alone (120 cores, default 3 passes) | 15.3 |
+| two-op path (gather x2 + vsa_sdpa) | 23.3-23.5 |
+| vsa_ring_sdpa, 3 passes (10/18), 2 workers | 24.3 |
+| vsa_ring_sdpa, 2 passes (15/12) | 22.0 |
+| vsa_ring_sdpa, 2 passes (15/14) = default | 21.7-21.8 |
+| vsa_ring_sdpa, 2 passes, no overlap (WAIT_ALL) | 28.2 |
+
+Net: ~1.1 ms/block including the concat (~1.7 without). The fused op is comm-bound in pass 0: the in-program
+all-gather takes ~11.5 ms (28.2 - ~16.7 of 108-core attention) against ~8 ms of pass-0 compute, so the overlap hides
+~6.5 ms and the model is max(11.5, 8) + 8 + ~1.7 overhead. Headroom: (a) fuse the concat away (emit K/V
+concatenated upstream), (b) a faster in-program gather: 4 workers/link needs 20 sender cores (spills into row 1 and
+currently HANGS -- parked; the fix is an irregular VSA core set that reclaims the rest of row 1), (c) finer overlap
+(let pass 1 start on early shards).
+
+Correctness: 6 unit variants pass (1/2 links, eager, traced replay with the alternate semaphore set, medium shape
+with dense rows), bit-exact run to run, PCC 0.9997 vs vsa_sdpa on gathered K/V and vs torch; traced 15 s block test
+passes with `VSA_RING_BLOCK=1` (PCC 100 %).
+
+Gotchas hit: kernel handles == push order but `collect_kernel_meta` is unordered (never index it as a handle);
+`dense_row_hint` rows are local; consecutive CCLs must alternate semaphore sets; K/V must be concatenated PER
+DEVICE (per TP shard) -- concatenating over all heads and then sharding hands device 0 only K heads.
