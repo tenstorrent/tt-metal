@@ -8,6 +8,7 @@
 #include "api/compute/eltwise_unary/typecast.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "api/debug/dprint.h"  // [TC-DBG #51270] remove after typecast multi-tile isolation
 
 void kernel_main() {
     constexpr uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
@@ -21,7 +22,14 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb::in, dfb::out);
     copy_init(dfb::in);
+    // [TC-DBG #51270] per_core_block_cnt distinguishes the two grids: it is 2 on the single-compute-node
+    // 1x3 grid (both tiles on one core -> the failing path) and 1 on the 2x3 grid (one tile per core).
+    // Unguarded DPRINT (matches the eltwise compute-kernel idiom); may print once per active TRISC.
+    DPRINT("TC_CMP cnt={}\n", per_core_block_cnt);
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
+        // [TC-DBG #51270] block marker: confirms the loop runs twice on 1x3 and correlates the per-tile
+        // TYPECAST_LLK_INIT below with the tile the writer reports as wrong.
+        DPRINT("TC_CMP blk={}\n", block_index);
         dfb_out.reserve_back(per_core_block_dim);
         for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
             tile_regs_acquire();

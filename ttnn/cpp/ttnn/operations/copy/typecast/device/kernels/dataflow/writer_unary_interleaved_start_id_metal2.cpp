@@ -16,6 +16,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "api/debug/dprint_pages.h"  // [TC-DBG #51270] remove after typecast multi-tile isolation
 
 void kernel_main() {
     const uint32_t num_pages = get_arg(args::num_pages);
@@ -45,6 +46,12 @@ void kernel_main() {
     for (uint32_t i = start_id; i < end_id; ++i) {
 #endif
         dfb.wait_front(onepage);
+        // [TC-DBG #51270] output page ready (fp32); first 8 datums of tile row 0. Compare against the
+        // reader's TC_RD for the same id: tile 0 should match its input exactly, and the suspect is
+        // tile 1 (the 2nd tile of the single-core loop) being wrong on Quasar.
+        const uint32_t dbg_rd_addr = dfb.get_read_ptr();
+        DPRINT("TC_WR id={}\n", i);
+        print_f32_pages(dbg_rd_addr, 8, 1);
         noc.async_write(dfb, s, page_bytes, {}, {.page_id = i});
         noc.async_writes_flushed();
         dfb.pop_front(onepage);

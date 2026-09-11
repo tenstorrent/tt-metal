@@ -15,6 +15,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "api/debug/dprint_pages.h"  // [TC-DBG #51270] remove after typecast multi-tile isolation
 
 void kernel_main() {
     const uint32_t num_pages = get_arg(args::num_pages);
@@ -41,8 +42,13 @@ void kernel_main() {
     for (uint32_t i = start_id; i < end_id; ++i) {
 #endif
         dfb.reserve_back(onepage);
+        const uint32_t dbg_wr_addr = dfb.get_write_ptr();  // [TC-DBG] uncached alias of the reserved slot
         noc.async_read(s, dfb, page_bytes, {.page_id = i}, {.offset_bytes = 0});
         noc.async_read_barrier();
+        // [TC-DBG #51270] input page just landed (bf16); first 8 datums of tile row 0. Confirms the
+        // reader delivers the correct source for BOTH tiles when 2 tiles run on one core (1x3 grid).
+        DPRINT("TC_RD id={}\n", i);
+        print_bf16_pages(dbg_wr_addr, 8, 1);
         dfb.push_back(onepage);
     }
 }
