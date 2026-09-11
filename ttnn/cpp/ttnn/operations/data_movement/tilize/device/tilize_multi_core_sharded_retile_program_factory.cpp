@@ -5,6 +5,8 @@
 #include "tilize_multi_core_sharded_retile_program_factory.hpp"
 #include "ttnn/operations/data_movement/tilize/device/tilize_device_operation.hpp"
 
+#include <algorithm>
+
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
@@ -295,36 +297,46 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedRetileProgramFact
     KernelRunArgs compute_ra{.kernel = COMPUTE};
 
     if (output_is_interleaved) {
-        // HEIGHT_SHARDED with ROW_MAJOR orientation: each core's shard maps to a contiguous tile
-        // range in the output, so start_id = i * num_tiles_per_shard_out.
+        // HEIGHT_SHARDED with ROW_MAJOR orientation: each core's shard maps to a contiguous output
+        // tile range at start_id = i * num_tiles_per_shard_out. The interleaved output is padded only
+        // to the output tile height, so when the logical height is not a multiple of the shard height
+        // its total tile count is smaller than num_tiles_per_shard_out * num_cores. Clamp each core's
+        // output pages (writer) and output tile-rows (compute cap) to the real output so the writer
+        // does not run past the interleaved buffer -- the clamp the interleaved retile factory applies
+        // via num_real_output_tile_rows. (num_input_blocks / num_real_input_rows stay full: the input
+        // shard is stored as whole tiles, so this is a shrink-only concern on the output side.)
+        const uint32_t real_output_tiles_total = output.physical_volume() / (out_tile_height * out_tile_width);
         const auto cores = corerange_to_cores(all_cores, std::nullopt, /*row_wise=*/true);
         uint32_t tile_start_id = 0;
         for (const auto& core : cores) {
+            const uint32_t real_pages =
+                tile_start_id >= real_output_tiles_total
+                    ? 0u
+                    : std::min(num_tiles_per_shard_out, real_output_tiles_total - tile_start_id);
             AddRuntimeArgsForNode(reader_ra.runtime_arg_values, core, {{"num_tiles_per_core", num_tiles_per_shard_in}});
             AddRuntimeArgsForNode(
-                writer_ra.runtime_arg_values,
+                writer_ra.runtime_arg_values, core, {{"num_pages", real_pages}, {"start_id", tile_start_id}});
+            AddRuntimeArgsForNode(
+                compute_ra.runtime_arg_values,
                 core,
-                {{"num_pages", num_tiles_per_shard_out}, {"start_id", tile_start_id}});
+                {{"num_input_blocks", num_input_tile_rows},
+                 {"num_real_input_rows", num_input_tile_rows},
+                 {"num_real_output_rows", real_pages / tiles_per_block}});
             tile_start_id += num_tiles_per_shard_out;
         }
     } else {
+        // Sharded output: each core writes into its own borrowed output shard buffer, so there is no
+        // interleaved overrun and every output tile-row of the shard is real.
         for (const auto& core : corerange_to_cores(all_cores)) {
             AddRuntimeArgsForNode(reader_ra.runtime_arg_values, core, {{"num_tiles_per_core", num_tiles_per_shard_in}});
             AddRuntimeArgsForNode(writer_ra.runtime_arg_values, core, {{"num_units", num_tiles_per_shard_out}});
+            AddRuntimeArgsForNode(
+                compute_ra.runtime_arg_values,
+                core,
+                {{"num_input_blocks", num_input_tile_rows},
+                 {"num_real_input_rows", num_input_tile_rows},
+                 {"num_real_output_rows", num_output_tile_rows}});
         }
-    }
-
-    // All shards are the same size, so every core does identical work; num_input_blocks is in input
-    // tile-rows and all rows are real (no grow-case height padding within a shard). retile.cpp uses
-    // num_real_output_rows only as an output-row cap; in the sharded case every output row is real, so
-    // num_output_tile_rows is the correct (non-limiting) value.
-    for (const auto& core : corerange_to_cores(all_cores)) {
-        AddRuntimeArgsForNode(
-            compute_ra.runtime_arg_values,
-            core,
-            {{"num_input_blocks", num_input_tile_rows},
-             {"num_real_input_rows", num_input_tile_rows},
-             {"num_real_output_rows", num_output_tile_rows}});
     }
 
     run_args.kernel_run_args = {std::move(reader_ra), std::move(writer_ra), std::move(compute_ra)};
