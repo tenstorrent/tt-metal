@@ -1025,17 +1025,15 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         active_work.size(),
         num_slots,
         num_cores);
-    if (weight_share_mode != WeightShareMode::Mcast) {
-        core_work = std::move(active_work);
-    }
-    // Runtime args are emitted for every physical core. Disabled/Chain append idle entries after
-    // their compact assignments; Mcast starts empty and fills its active/passive row strips below.
-    core_work.resize(num_cores);
 
     // Per-mode setup: chain links each group's active cores (in core_id order) into a forwarding
     // chain; mcast lays each group out as a row-strip rectangle and assigns roles to all cores
-    // within it (active and passive participants).
+    // within it (active and passive participants). Runtime args are emitted for every physical
+    // core, so each mode pads or initializes core_work to num_cores.
     if (weight_share_mode == WeightShareMode::Chain) {
+        core_work = std::move(active_work);
+        core_work.resize(num_cores);
+
         // Build per-group chain: order cores by core_id, link each one's predecessor and successor.
         // Chain ordering by core_id keeps the chain "physically nearby" since core_id maps row-major
         // onto the grid, which keeps each hop short on the NoC.
@@ -1073,6 +1071,8 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
             }
         }
     } else if (weight_share_mode == WeightShareMode::Mcast) {
+        core_work.resize(num_cores);
+
         // Row-strip placement: each (c_in_idx, c_out_idx) group occupies
         // ceil(members / grid.x) contiguous full-width rows; strips stack along Y in group order.
         // Members fill their strip row-major and the slots left over in its last row become
@@ -1213,6 +1213,9 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
                 num_receivers,
                 mcast_iters);
         }
+    } else {
+        core_work = std::move(active_work);
+        core_work.resize(num_cores);
     }
 
     // Build reduction groups from logical reduction keys (c_out_idx, t_out_idx, h_out_idx, w_out_idx).
