@@ -206,7 +206,11 @@ void kernel_main() {
     constexpr uint32_t q_num_subblocks = Sq_chunk_t / qk_subblock_h;
     constexpr bool use_q_subblock_push = (q_num_subblocks > 1);
 
+#if SDPA_ABL_BARRIER_THR > 0
+    constexpr uint32_t barrier_threshold = SDPA_ABL_BARRIER_THR;
+#else
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_cores>();
+#endif
 
     const auto q_reader = TensorAccessor(q_args, q_addr);
     const auto k_reader = TensorAccessor(k_args, k_addr);
@@ -292,6 +296,7 @@ void kernel_main() {
         uint32_t per_head_q_iter = 0;
         uint32_t mask_batch_offset = 0;
         for (uint32_t global_q_iter = 0; global_q_iter < global_q_count; ++global_q_iter) {
+            SDPA_ZRAW("R_QCHUNK");
             const auto decoded =
                 decompose_global_q_index(global_q_start + global_q_iter, q_num_chunks, NQH, use_zigzag_balancing);
             if (decoded.nb != prev_nb) {
@@ -397,6 +402,7 @@ void kernel_main() {
 
             // loop while k_low < q_high
             for (uint32_t k_chunk = k_loop_start; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
+                SDPA_ZACC(5);
                 const uint32_t kv_row_start_tile = std::min(k_chunk * Sk_chunk_t, valid_Skt_bound);
                 const uint32_t kv_row_end_tile = std::min(kv_row_start_tile + Sk_chunk_t, valid_Skt_bound);
                 const uint32_t kv_row_tile_count = kv_row_end_tile - kv_row_start_tile;
@@ -448,6 +454,11 @@ void kernel_main() {
                                 Sk_chunk_t,
                                 DHt);
                         } else {
+                            SDPA_ZACC(0);
+#if SDPA_ABL_READER_STUB
+                            cb_k.reserve_back(k_chunk_tiles);
+                            cb_k.push_back(k_chunk_tiles);
+#else
                             read_chunk_with_padding<k_tile_bytes>(
                                 k_reader,
                                 cb_k_in,
@@ -459,6 +470,7 @@ void kernel_main() {
                                 barrier_threshold,
                                 true  // transpose=true for K reads
                             );
+#endif
                         }
                     }
                 }
@@ -580,6 +592,7 @@ void kernel_main() {
                 // when NOC writes are in-flight).
                 if constexpr (use_q_subblock_push) {
                     if (k_chunk == k_loop_start) {
+                        SDPA_ZACC(2);
                         for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
                             read_q_subblock<q_tile_bytes>(
                                 q_reader,
@@ -642,6 +655,11 @@ void kernel_main() {
                                 vDHt,
                                 skip_src_cols);
                         } else {
+                            SDPA_ZACC(1);
+#if SDPA_ABL_READER_STUB
+                            cb_v.reserve_back(v_chunk_tiles);
+                            cb_v.push_back(v_chunk_tiles);
+#else
                             read_chunk_with_padding<v_tile_bytes>(
                                 v_reader,
                                 cb_v_in,
@@ -653,6 +671,7 @@ void kernel_main() {
                                 barrier_threshold,
                                 false,
                                 skip_src_cols);
+#endif
                         }
                     }
                 }
@@ -712,4 +731,10 @@ void kernel_main() {
             }
         }
     }  // close phase
+    SDPA_ZFLUSH(0, "R_K_READ");
+    SDPA_ZFLUSH(1, "R_V_READ");
+    SDPA_ZFLUSH(2, "R_Q_READ");
+    SDPA_ZFLUSH(3, "R_RESERVE");
+    SDPA_ZFLUSH(4, "R_BARRIER");
+    SDPA_ZFLUSH(5, "R_KCHUNK");
 }

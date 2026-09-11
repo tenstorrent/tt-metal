@@ -21,6 +21,7 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sdpa_zones.hpp"
 
 // Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
 // When ENABLED=true: RAII profileScope writes timestamps (same as DeviceZoneScopedN)
@@ -505,12 +506,17 @@ void sub_exp_block_bcast_cols(
     PACK((llk_pack_relu_config(ReluConfig::zero())));
     {
         MaybeDeviceZoneScopedN(profiling_enabled, "EXP");
+        SDPA_ZACC(6);
         uint32_t dst_index = 0;
         constexpr int iterations = 32;
         constexpr VectorMode vector_mode_exp = VectorMode::None;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             for (uint32_t j = 0; j < tiles_per_column; j++) {
+#if !SDPA_ABL_EXP_STUB
                 exp_packthread_tile<true, false, InputClamping::None, iterations>(dst_index++, vector_mode_exp);
+#else
+                dst_index++;
+#endif
             }
         }
         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
@@ -1268,6 +1274,7 @@ static void sdpa_inner_loop_step(
     const KVPadRotationContext& kv_pad_rotation = {}) {
     // Callers guarantee active_Sk is evenly divisible by actual_sbw (via largest_factor_le).
     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
+    SDPA_ZACC(0);
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
     constexpr uint32_t in0_block_w = DHt;
     constexpr uint32_t q_num_subblocks = Sq_chunk_t / qkt_subblock_h;
@@ -1281,26 +1288,39 @@ static void sdpa_inner_loop_step(
     uint32_t q_index_offset = 0;
     uint32_t kt_index_offset = 0;
 
-    exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
+    {
+        SDPA_ZACC(21);
+        exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
+    }
 
     // Use KT_stride for cb_qkt_im layout to keep CB pointers aligned across iterations
-    CircularBuffer(cb_qkt_im).reserve_back(Sq_chunk_t * KT_stride);
-
-    CircularBuffer(cur.sum).reserve_back(Sq_chunk_t);
-    if (save_max_cb != INVALID_CB) {
-        CircularBuffer(save_max_cb).reserve_back(Sq_chunk_t);
+    {
+        SDPA_ZACC(3);
+        CircularBuffer(cb_qkt_im).reserve_back(Sq_chunk_t * KT_stride);
+        CircularBuffer(cur.sum).reserve_back(Sq_chunk_t);
+        if (save_max_cb != INVALID_CB) {
+            CircularBuffer(save_max_cb).reserve_back(Sq_chunk_t);
+        }
     }
 
     // ========== PHASE 1: Q@KT directly into cb_qkt_im ==========
     // All matmul output goes to cb_qkt_im at absolute offsets via pack_tile<true>.
     // cb_push_back_hold_wr_ptr makes each row visible to UNPACK without advancing wr_ptr.
-    CircularBuffer(cb_kt_in).wait_front(DHt * KT_stride);
+    {
+        SDPA_ZACC(1);
+        CircularBuffer(cb_kt_in).wait_front(DHt * KT_stride);
+    }
 
     for (uint32_t q_subblock = 0; q_subblock < q_num_subblocks; q_subblock++) {
         MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)");
-        CircularBuffer(cb_q_in).wait_front(q_wait_tiles);
+        {
+            SDPA_ZACC(2);
+            CircularBuffer(cb_q_in).wait_front(q_wait_tiles);
+        }
         kt_index_offset = 0;
 
+        {
+        SDPA_ZACC(4);
         sdpa_maybe_pack_reconfig_data_format<cb_normalized_out, cb_qkt_im>();
         sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_kt_in, cb_identity_scale_in, cb_q_in>();
         mm_no_mop_init_short(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
@@ -1310,11 +1330,12 @@ static void sdpa_inner_loop_step(
         // so blocked_matmul_and_pack must reconfigure when q_subblock > 0.
         // When q_subblock == 0, no sub_exp → global stays set → skip there too.
         configure_row_pack_width(cb_qkt_im, actual_sbw);
+        }
 
         // Mask plan for this q_subblock (single source of truth; reused by the mask stamp below).
         constexpr bool uses_lightweight_mask =
             sdpa_uses_lightweight_mask<ring_mode, is_causal_sdpa, use_padded_mask, sliding_window_size>();
-        const bool should_apply_lightweight_mask = sdpa_lightweight_mask_stamped(
+        const bool should_apply_lightweight_mask = (SDPA_ABL_MASK_OFF == 0) && sdpa_lightweight_mask_stamped(
             kv_pad_rotation_enabled,
             is_causal_sdpa && apply_causal,
             apply_sliding_window,
@@ -1346,7 +1367,12 @@ static void sdpa_inner_loop_step(
         for (uint32_t kt_subblock = 0; kt_subblock < kt_num_full_subblocks; ++kt_subblock) {
             if (q_subblock > 0) {
                 uint32_t prev_q_subblock = q_subblock - 1;
-                sdpa_maybe_reconfig_data_format<cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im>();
+                {
+                    SDPA_ZACC(4);
+                    sdpa_maybe_reconfig_data_format<cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im>();
+                }
+                {
+                SDPA_ZACC(5);
                 sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
                     cb_qkt_im,
                     cur.max,
@@ -1357,12 +1383,17 @@ static void sdpa_inner_loop_step(
                     qkt_subblock_h,
                     actual_sbw,
                     /*skip_pack_configure=*/true);
-                sdpa_maybe_pack_reconfig_data_format<cb_recip_scratch, cb_qkt_im>();
-                sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in>();
-                mm_no_mop_reinit_short(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
+                }
+                {
+                    SDPA_ZACC(4);
+                    sdpa_maybe_pack_reconfig_data_format<cb_recip_scratch, cb_qkt_im>();
+                    sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in>();
+                    mm_no_mop_reinit_short(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
+                }
             }
             {
                 MaybeDeviceZoneScopedN(profiling_enabled, "Q@KT MM+Pack");
+                SDPA_ZACC(7);
                 blocked_matmul_and_pack<true, KT_stride, KT_stride>(
                     cb_q_in,
                     cb_kt_in,
@@ -1385,7 +1416,10 @@ static void sdpa_inner_loop_step(
             }
         }
         // Restore float16b for mask/reduce after Q@KT.
-        sdpa_maybe_reconfig_data_format<cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im>();
+        {
+            SDPA_ZACC(4);
+            sdpa_maybe_reconfig_data_format<cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im>();
+        }
 
         // Mask stamp/apply: L1-accumulate the mask onto cb_qkt_im for this row group. A dense
         // user-provided mask and the structured lightweight palette are mutually exclusive — the
@@ -1417,6 +1451,7 @@ static void sdpa_inner_loop_step(
             // non-causal padded with a partial-tile mask (single-chip streaming partial-K case).
             // should_apply_lightweight_mask hoisted above the kt loop.
             if (should_apply_lightweight_mask) {
+                SDPA_ZACC(is_last_iter ? 20u : 8u);
                 begin_mask_l1_accumulate<false>(cb_qkt_im, cb_mask_in);
                 apply_lightweight_mask_streaming<
                     KT_stride,
@@ -1451,7 +1486,10 @@ static void sdpa_inner_loop_step(
         }
 
         // Push row (visible for UNPACK reads) but keep wr_ptr stable
-        cb_push_back_hold_wr_ptr(cb_qkt_im, row_tiles);
+        {
+            SDPA_ZACC(18);
+            cb_push_back_hold_wr_ptr(cb_qkt_im, row_tiles);
+        }
 
         // reduce_trigger barrier. Posted after pack + mask + push so it dominates every
         // cb_qkt_im writer; gates run()#2 (and run()#1 on the non-overlap path). STALL_PACK drains
@@ -1463,6 +1501,7 @@ static void sdpa_inner_loop_step(
         // Max reduce: reads from cb_qkt_im at q_subblock position
         {
             MaybeDeviceZoneScopedN(profiling_enabled, "Reduce max");
+            SDPA_ZACC(9);
             CircularBuffer(cur.max).reserve_back(qkt_subblock_h);
             configure_single_tile_pack(cur.max);
             // Use reduce_trigger to enable early reduce start (before all matmul output is ready).
@@ -1490,7 +1529,10 @@ static void sdpa_inner_loop_step(
     // In-place latent-V reads K^T again in Phase 2, so defer the K^T pop until after the
     // softmax@V matmul (handled where the materialized-V pop would normally fire).
     if constexpr (!kt_inplace_v) {
-        CircularBuffer(cb_kt_in).pop_front(DHt * KT_stride);
+        {
+            SDPA_ZACC(19);
+            CircularBuffer(cb_kt_in).pop_front(DHt * KT_stride);
+        }
     }
 
     // Q is no longer needed after Phase 1. On the last K chunk, pop early so the
@@ -1498,6 +1540,7 @@ static void sdpa_inner_loop_step(
     // In ring_mode, is_last_iter is always false — skip entirely.
     if constexpr (!ring_mode) {
         if (is_last_iter) {
+            SDPA_ZACC(19);
             sdpa_cb_pop_front_out_of_line(cb_q_in, Sq_chunk_t * DHt);
         }
     }
@@ -1531,7 +1574,10 @@ static void sdpa_inner_loop_step(
 
         // V wait deferred: don't block here. The sub_exp drain loop below
         // doesn't touch V, so the reader's V DMA can overlap with the drain.
-        CircularBuffer(out_cb).reserve_back(qktv_output_num_tiles);
+        {
+            SDPA_ZACC(10);
+            CircularBuffer(out_cb).reserve_back(qktv_output_num_tiles);
+        }
 
         // q_subblock 0: drain last row's sub_exp in-place + first QKT@V matmul
         {
@@ -1547,6 +1593,8 @@ static void sdpa_inner_loop_step(
                 // Split-drain (common, materialized-V path): interleave each column-subblock's
                 // sub_exp with its partial V matmul; partial products accumulate across kt_sub via L1.
                 for (uint32_t kt_sub = 0; kt_sub < kt_num_full_subblocks; ++kt_sub) {
+                    {
+                    SDPA_ZACC(5);
                     sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
                         cb_qkt_im,
                         cur.max,
@@ -1556,14 +1604,21 @@ static void sdpa_inner_loop_step(
                         kt_sub * actual_sbw,
                         qkt_subblock_h,
                         actual_sbw);
+                    }
                     if constexpr (q_num_subblocks == 1) {
                         PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
                         UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
                         UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
                     }
                     if (kt_sub == 0) {
-                        CircularBuffer(cb_qkt_im).wait_front(qktv_in0_wait_tiles);
-                        CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
+                        {
+                            SDPA_ZACC(11);
+                            CircularBuffer(cb_qkt_im).wait_front(qktv_in0_wait_tiles);
+                        }
+                        {
+                            SDPA_ZACC(12);
+                            CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
+                        }
                     }
                     if (kt_sub > 0) {
                         PACK((llk_pack_reconfig_l1_acc(1)));
@@ -1572,13 +1627,20 @@ static void sdpa_inner_loop_step(
                     {
                         MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
                         uint32_t v_index_offset = 0;
-                        sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
-                            out_cb, out_cb);
+                        {
+                            SDPA_ZACC(4);
+                            sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(out_cb, out_cb);
+                        }
                         // cb_qkt_im rows are laid out at KT_stride even when this kt_sub only consumes a
                         // narrower logical width. Keep unpack init on the physical stride; inner_dim below
                         // still limits how many V rows are multiplied.
-                        mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
-                        configure_row_pack_width(out_cb, qktv_subblock_w);
+                        {
+                            SDPA_ZACC(4);
+                            mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
+                            configure_row_pack_width(out_cb, qktv_subblock_w);
+                        }
+                        {
+                        SDPA_ZACC(13);
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                             const uint32_t qktv_in1_index = kt_sub * matmul_inner * vDHt + v_index_offset;
                             blocked_matmul_and_pack<false, vDHt, vDHt>(
@@ -1596,7 +1658,11 @@ static void sdpa_inner_loop_step(
                                 /*skip_pack_configure=*/true);
                             v_index_offset += qktv_subblock_w;
                         }
-                        sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
+                        }
+                        {
+                            SDPA_ZACC(4);
+                            sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
+                        }
                     }
 
                     if (kt_sub > 0) {
@@ -1624,11 +1690,16 @@ static void sdpa_inner_loop_step(
                     UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
                     UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
                 }
-                CircularBuffer(cb_qkt_im).wait_front(qktv_in0_wait_tiles);
+                {
+                    SDPA_ZACC(11);
+                    CircularBuffer(cb_qkt_im).wait_front(qktv_in0_wait_tiles);
+                }
                 {
                     MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
-                    sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
-                        out_cb, out_cb);
+                    {
+                        SDPA_ZACC(4);
+                        sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(out_cb, out_cb);
+                    }
                     mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
                     inplace_v_matmul_pack_batched<vDHt, dst_size, qktv_h>(
                         cb_qkt_im,
@@ -1637,7 +1708,10 @@ static void sdpa_inner_loop_step(
                         qktv_in0_index_offset,
                         /*inner_dim=*/kt_num_full_subblocks * matmul_inner,
                         KT_stride);
-                    sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
+                    {
+                        SDPA_ZACC(4);
+                        sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
+                    }
                 }
             }
             qktv_in0_index_offset += qktv_h * KT_stride;
@@ -1649,15 +1723,19 @@ static void sdpa_inner_loop_step(
         // (PACK writes); the upcoming V matmul (UNPACK reads) targets those same positions.
         // Without an explicit handshake, UNPACK can see stale L1 bytes — observed as wildly
         // wrong V matmul output (rmse > 1) on small-DHt + small-chunk causal shapes.
-        PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
-        UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
-        UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+        {
+            SDPA_ZACC(14);
+            PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
+            UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+            UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+        }
 
         // Per-row normalization lambda — fires on last K chunk (standard or deferred norm).
         // Takes sbh so it works for both full subblocks (qktv_h) and remainder (qktv_remainder_h).
         [[maybe_unused]] uint32_t sink_row_offset = 0;
         [[maybe_unused]] auto normalize_row = [&](uint32_t& pushed, uint32_t sbh) {
             MaybeDeviceZoneScopedN(profiling_enabled, "ROW_NORM");
+            SDPA_ZACC(17);
             CircularBuffer(cur.sum).push_back(sbh);
             CircularBuffer(out_cb).push_back(sbh * vDHt);
             normalize_row_streaming<
@@ -1680,6 +1758,7 @@ static void sdpa_inner_loop_step(
         // remainder (sbh=qktv_remainder_h). Normalization is independently guarded at call sites.
         // prev.out is consumed row-by-row: always read from CB front, then pop after use.
         auto salad_correct_row = [&](uint32_t salad_row, uint32_t w_salad, uint32_t sbh) {
+            SDPA_ZACC(16);
             PACK((llk_pack_reconfig_l1_acc(1)));
             {
                 MaybeDeviceZoneScopedN(profiling_enabled, "S_CORR_FUSED");
@@ -1707,7 +1786,10 @@ static void sdpa_inner_loop_step(
         // When Sq_chunk_t is not divisible by qktv_h, the last iteration handles the
         // remainder row(s) with a smaller V matmul height.
         constexpr uint32_t total_v_row_groups = qktv_q_num_subblocks + (has_qktv_remainder ? 1 : 0);
-        exp_packthread_tile_init<EXP_APPROX_MODE>();
+        {
+            SDPA_ZACC(21);
+            exp_packthread_tile_init<EXP_APPROX_MODE>();
+        }
         for (uint32_t q_subblock = 1; q_subblock < total_v_row_groups; ++q_subblock) {
             MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)@V");
             const bool is_remainder_iter = has_qktv_remainder && (q_subblock == qktv_q_num_subblocks);
@@ -1722,6 +1804,7 @@ static void sdpa_inner_loop_step(
 
             // SALAD for previous group (always a full group, h=qktv_h)
             if (!is_first_iter) {
+                SDPA_ZACC(15);
                 CircularBuffer(cb_exp_max_diff).reserve_back(qktv_h);
                 sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
                     prev.max, cur.max, cb_exp_max_diff, salad_row, qktv_h);
@@ -1730,20 +1813,30 @@ static void sdpa_inner_loop_step(
 
             // V matmul for current row group — cur_h adapts for remainder
             if (is_remainder_iter) {
+                SDPA_ZACC(11);
                 CircularBuffer(cb_qkt_im).wait_front(Sq_chunk_t * KT_stride);
             } else {
-                CircularBuffer(cb_qkt_im).wait_front(qktv_in0_wait_tiles);
+                {
+                    SDPA_ZACC(11);
+                    CircularBuffer(cb_qkt_im).wait_front(qktv_in0_wait_tiles);
+                }
             }
             {
                 MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
                 uint32_t v_index_offset = 0;
-                sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
-                    out_cb, out_cb);
+                {
+                    SDPA_ZACC(4);
+                    sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(out_cb, out_cb);
+                }
                 // See the q_subblock-0 V matmul above: active_Sk can be narrower than the physical
                 // cb_qkt_im row stride, but the unpacker is configured for the physical layout.
-                mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, KT_stride);
-                // Configure once before v_subblock loop; skip inside.
-                configure_row_pack_width(out_cb, qktv_subblock_w);
+                {
+                    SDPA_ZACC(4);
+                    mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, KT_stride);
+                    configure_row_pack_width(out_cb, qktv_subblock_w);
+                }
+                {
+                SDPA_ZACC(13);
                 for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                     // Same in-place-vs-materialized V addressing as the q_subblock-0 drain above.
                     // kt_inplace_v is constexpr-true only when Sq_chunk_t == 1, which yields a
@@ -1766,7 +1859,11 @@ static void sdpa_inner_loop_step(
                         /*skip_pack_configure=*/true);
                     v_index_offset += qktv_subblock_w;
                 }
-                sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
+                }
+                {
+                    SDPA_ZACC(4);
+                    sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
+                }
             }
 
             // SALAD corrections for previous group (always full, h=qktv_h) + row-by-row push
@@ -1778,17 +1875,23 @@ static void sdpa_inner_loop_step(
                     const uint32_t drain_salad_row =
                         has_qktv_remainder ? (qktv_q_num_subblocks * qktv_h) : (qktv_q_num_subblocks - 1);
 
+                    {
+                    SDPA_ZACC(15);
                     CircularBuffer(cb_exp_max_diff).reserve_back(drain_h);
                     sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
                         prev.max, cur.max, cb_exp_max_diff, drain_salad_row, drain_h);
                     CircularBuffer(cb_exp_max_diff).push_back(drain_h);
+                    }
 
                     salad_correct_row(salad_row, w_salad, qktv_h);
                     if (is_last_iter) {
                         normalize_row(pushed_rows, qktv_h);
                     } else {
-                        CircularBuffer(cur.sum).push_back(qktv_h);
-                        CircularBuffer(out_cb).push_back(qktv_h * vDHt);
+                        {
+                            SDPA_ZACC(22);
+                            CircularBuffer(cur.sum).push_back(qktv_h);
+                            CircularBuffer(out_cb).push_back(qktv_h * vDHt);
+                        }
                         pushed_rows++;
                     }
 
@@ -1798,8 +1901,11 @@ static void sdpa_inner_loop_step(
                     if (is_last_iter) {
                         normalize_row(pushed_rows, drain_h);
                     } else {
-                        CircularBuffer(cur.sum).push_back(drain_h);
-                        CircularBuffer(out_cb).push_back(drain_h * vDHt);
+                        {
+                            SDPA_ZACC(22);
+                            CircularBuffer(cur.sum).push_back(drain_h);
+                            CircularBuffer(out_cb).push_back(drain_h * vDHt);
+                        }
                         pushed_rows++;
                     }
                 } else {
@@ -1807,16 +1913,22 @@ static void sdpa_inner_loop_step(
                     if (is_last_iter) {
                         normalize_row(pushed_rows, qktv_h);
                     } else {
-                        CircularBuffer(cur.sum).push_back(qktv_h);
-                        CircularBuffer(out_cb).push_back(qktv_h * vDHt);
+                        {
+                            SDPA_ZACC(22);
+                            CircularBuffer(cur.sum).push_back(qktv_h);
+                            CircularBuffer(out_cb).push_back(qktv_h * vDHt);
+                        }
                         pushed_rows++;
                     }
                 }
             } else if (is_last_iter) {
                 normalize_row(pushed_rows, qktv_h);
             } else {
-                CircularBuffer(cur.sum).push_back(qktv_h);
-                CircularBuffer(out_cb).push_back(qktv_h * vDHt);
+                {
+                    SDPA_ZACC(22);
+                    CircularBuffer(cur.sum).push_back(qktv_h);
+                    CircularBuffer(out_cb).push_back(qktv_h * vDHt);
+                }
                 pushed_rows++;
             }
 
@@ -1832,17 +1944,23 @@ static void sdpa_inner_loop_step(
                 // perform the full SALAD correction (sub_exp + correct) here.
                 if (!is_first_iter) {
                     constexpr uint32_t drain_salad_row = 0;
+                    {
+                    SDPA_ZACC(15);
                     CircularBuffer(cb_exp_max_diff).reserve_back(drain_h);
                     sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
                         prev.max, cur.max, cb_exp_max_diff, drain_salad_row, drain_h);
                     CircularBuffer(cb_exp_max_diff).push_back(drain_h);
+                    }
                     salad_correct_row(drain_salad_row, 0, drain_h);
                 }
                 if (is_last_iter) {
                     normalize_row(pushed_rows, drain_h);
                 } else {
-                    CircularBuffer(cur.sum).push_back(drain_h);
-                    CircularBuffer(out_cb).push_back(drain_h * vDHt);
+                    {
+                        SDPA_ZACC(22);
+                        CircularBuffer(cur.sum).push_back(drain_h);
+                        CircularBuffer(out_cb).push_back(drain_h * vDHt);
+                    }
                     pushed_rows++;
                 }
             } else {
@@ -1852,8 +1970,11 @@ static void sdpa_inner_loop_step(
                     if (is_last_iter) {
                         normalize_row(pushed_rows, drain_h);
                     } else {
-                        CircularBuffer(cur.sum).push_back(drain_h);
-                        CircularBuffer(out_cb).push_back(drain_h * vDHt);
+                        {
+                            SDPA_ZACC(22);
+                            CircularBuffer(cur.sum).push_back(drain_h);
+                            CircularBuffer(out_cb).push_back(drain_h * vDHt);
+                        }
                         pushed_rows++;
                     }
                 }
@@ -1865,8 +1986,11 @@ static void sdpa_inner_loop_step(
         // For kt_inplace_v this is the deferred K^T pop: cb_v_in aliases cb_kt_in (v_shares_k_buffer),
         // and v_cb_physical_width_t == DHt, so this pops the same Sk_chunk_t*DHt entry that Phase 1
         // skipped. For the materialized path it pops the V entry as usual. Either way: one entry/chunk.
-        CircularBuffer(cb_v_in).pop_front(KT_stride * v_cb_physical_width_t);
-        CircularBuffer(cb_qkt_im).pop_front(Sq_chunk_t * KT_stride);
+        {
+            SDPA_ZACC(19);
+            CircularBuffer(cb_v_in).pop_front(KT_stride * v_cb_physical_width_t);
+            CircularBuffer(cb_qkt_im).pop_front(Sq_chunk_t * KT_stride);
+        }
     }
 }
 
@@ -1959,6 +2083,7 @@ void sdpa_standard_v2(
     constexpr uint32_t last_chunk_Sk = Sk_chunk_t - padded_k_tiles_inner;
 
     for (uint32_t q = 0; q < q_chunks_per_core; q++) {
+        SDPA_ZRAW("QCHUNK");
         AccumulatorHalf prev = {cb_sum_A, cb_max_A, cb_out_im_A};
         AccumulatorHalf cur = {cb_sum_B, cb_max_B, cb_out_im_B};
 
@@ -2385,7 +2510,10 @@ void sdpa_ring_v2(
                 sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
                 // In-place latent-V never pushes a V entry, so only K^T needs draining.
                 if constexpr (!kt_inplace_v) {
-                    CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
+                    {
+                        SDPA_ZACC(12);
+                        CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
+                    }
                     sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
                 }
                 KV_chunks_processed_in_iter++;
@@ -2732,7 +2860,10 @@ void sdpa_ring_v2(
         sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
         // In-place latent-V never pushes a V entry, so there is nothing extra to drain.
         if constexpr (!kt_inplace_v) {
-            CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
+            {
+                SDPA_ZACC(12);
+                CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
+            }
             sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
         }
     }

@@ -193,6 +193,29 @@ void kernel_main() {
             lw_mask,
             q_num_chunks,
             use_zigzag_balancing);
+        SDPA_ZFLUSH(0, "STEP");
+        SDPA_ZFLUSH(1, "K_WAIT");
+        SDPA_ZFLUSH(2, "Q_WAIT");
+        SDPA_ZFLUSH(3, "RESERVE_QKT");
+        SDPA_ZFLUSH(4, "RECONFIG");
+        SDPA_ZFLUSH(5, "SUBEXP");
+        SDPA_ZFLUSH(6, "EXP");
+        SDPA_ZFLUSH(7, "QK_MM");
+        SDPA_ZFLUSH(8, "MASK");
+        SDPA_ZFLUSH(9, "REDUCE");
+        SDPA_ZFLUSH(10, "OUT_RESERVE");
+        SDPA_ZFLUSH(11, "QKTIM_WAIT");
+        SDPA_ZFLUSH(12, "V_WAIT");
+        SDPA_ZFLUSH(13, "PV_MM");
+        SDPA_ZFLUSH(14, "PACK_DONE");
+        SDPA_ZFLUSH(15, "SALAD_EXP");
+        SDPA_ZFLUSH(16, "SALAD_CORR");
+        SDPA_ZFLUSH(17, "NORM");
+        SDPA_ZFLUSH(18, "PUSH_HOLD");
+        SDPA_ZFLUSH(19, "POPS");
+        SDPA_ZFLUSH(20, "MASK_DIAG");
+        SDPA_ZFLUSH(21, "EXP_INIT");
+        SDPA_ZFLUSH(22, "PUSHES");
     } else {
         // Standard SDPA path (causal, masked, chunked, etc.)
         constexpr bool use_lightweight_causal_mask = is_causal && !use_provided_mask && (sliding_window_size == 0);

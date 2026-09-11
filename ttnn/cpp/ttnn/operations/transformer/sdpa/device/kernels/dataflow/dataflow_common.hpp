@@ -16,6 +16,7 @@
 #include "api/debug/assert.h"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sdpa_zones.hpp"
 
 template <uint32_t tile_bytes, uint32_t num_readers>
 constexpr uint32_t get_barrier_read_threshold() {
@@ -87,7 +88,10 @@ volatile tt_l1_ptr uint32_t* read_page_table_for_batch(
         page_table_stick_size,
         {.page_id = batch_idx},
         {});
-    noc.async_read_barrier();
+    {
+        SDPA_ZACC(4);
+        noc.async_read_barrier();
+    }
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
 }
 
@@ -155,7 +159,10 @@ uint32_t read_chunk_with_padding(
     Noc noc;
     const uint32_t num_tiles = dst_rows * dst_cols;
     CircularBuffer cb(cb_id);
-    cb.reserve_back(num_tiles);
+    {
+        SDPA_ZACC(3);
+        cb.reserve_back(num_tiles);
+    }
     const uint32_t base_write_ptr = cb.get_write_ptr();
     uint32_t outer_ptr_stride = transpose ? tile_bytes : dst_cols * tile_bytes;
     uint32_t inner_ptr_stride = transpose ? tile_bytes * dst_rows : tile_bytes;
@@ -169,7 +176,10 @@ uint32_t read_chunk_with_padding(
             write_ptr += inner_ptr_stride;
 
             if (++barrier_count == barrier_threshold) {
-                noc.async_read_barrier();
+                {
+                    SDPA_ZACC(4);
+                    noc.async_read_barrier();
+                }
                 barrier_count = 0;
             }
         }
@@ -188,7 +198,10 @@ uint32_t read_chunk_with_padding(
     }
     // NOC reads and async_write_zeros use the same completion path on WH/BH but different
     // paths on Quasar (NOC channels vs iDMA). Issue both — second is a no-op on WH/BH.
-    noc.async_read_barrier();
+    {
+        SDPA_ZACC(4);
+        noc.async_read_barrier();
+    }
     noc.write_zeros_l1_barrier();
 
     if constexpr (push_num_tiles) {
@@ -216,7 +229,10 @@ FORCE_INLINE void read_q_subblock(
     Noc noc;
     const uint32_t sb_tiles = subblock_h * dst_cols;
     CircularBuffer cb(cb_id);
-    cb.reserve_back(sb_tiles);
+    {
+        SDPA_ZACC(3);
+        cb.reserve_back(sb_tiles);
+    }
     const uint32_t base_write_ptr = cb.get_write_ptr();
 
     uint32_t barrier_count = 0;
@@ -229,7 +245,10 @@ FORCE_INLINE void read_q_subblock(
                 noc.async_read(reader, CoreLocalMem<uint32_t>(write_ptr), tile_bytes, {.page_id = start_tile_id++}, {});
                 write_ptr += tile_bytes;
                 if (++barrier_count == barrier_threshold) {
-                    noc.async_read_barrier();
+                    {
+                        SDPA_ZACC(4);
+                        noc.async_read_barrier();
+                    }
                     barrier_count = 0;
                 }
             }
@@ -247,7 +266,10 @@ FORCE_INLINE void read_q_subblock(
 
     // NOC reads and async_write_zeros use the same completion path on WH/BH but different
     // paths on Quasar (NOC channels vs iDMA). Issue both — second is a no-op on WH/BH.
-    noc.async_read_barrier();
+    {
+        SDPA_ZACC(4);
+        noc.async_read_barrier();
+    }
     noc.write_zeros_l1_barrier();
     cb.push_back(sb_tiles);
 }
@@ -270,7 +292,10 @@ void read_paged_chunk_with_padding(
     Noc noc;
     const uint32_t num_tiles = dst_rows * dst_cols;
     CircularBuffer cb(cb_id);
-    cb.reserve_back(num_tiles);
+    {
+        SDPA_ZACC(3);
+        cb.reserve_back(num_tiles);
+    }
     const uint32_t base_write_ptr = cb.get_write_ptr();
 
     // Stride calculation based on transpose flag
@@ -290,7 +315,10 @@ void read_paged_chunk_with_padding(
             write_ptr += inner_ptr_stride;
 
             if (++barrier_count == barrier_threshold) {
-                noc.async_read_barrier();
+                {
+                    SDPA_ZACC(4);
+                    noc.async_read_barrier();
+                }
                 barrier_count = 0;
             }
         }
@@ -309,7 +337,10 @@ void read_paged_chunk_with_padding(
     }
     // NOC reads and async_write_zeros use the same completion path on WH/BH but different
     // paths on Quasar (NOC channels vs iDMA). Issue both — second is a no-op on WH/BH.
-    noc.async_read_barrier();
+    {
+        SDPA_ZACC(4);
+        noc.async_read_barrier();
+    }
     noc.write_zeros_l1_barrier();
     cb.push_back(num_tiles);
 }
@@ -1017,7 +1048,10 @@ void generate_causal_sliding_window_mask(
             }
         }
     }
-    noc.async_read_barrier();
+    {
+        SDPA_ZACC(4);
+        noc.async_read_barrier();
+    }
     cb.push_back(mask_size_tiles);
 }
 
@@ -1070,7 +1104,10 @@ void generate_noncausal_padded_mask(Noc noc, uint32_t Sq_chunk_t, uint32_t Sk_ch
             }
         }
     }
-    noc.async_read_barrier();
+    {
+        SDPA_ZACC(4);
+        noc.async_read_barrier();
+    }
     cb.push_back(mask_size_tiles);
 }
 
@@ -1107,7 +1144,10 @@ inline void issue_block_reads(
             ++tile_id;
             dst += inner_stride;
             if (barrier_threshold > 0 && ++barrier_count == barrier_threshold) {
-                noc.async_read_barrier();
+                {
+                    SDPA_ZACC(4);
+                    noc.async_read_barrier();
+                }
                 barrier_count = 0;
             }
         }
@@ -1500,7 +1540,10 @@ __attribute__((noinline)) void fetch_block(
     // issue_reads internally emits noc.async_read (NOC) AND zero_fill_block → async_write_zeros
     // (iDMA on Quasar). NOC reads and async_write_zeros use the same completion path on WH/BH
     // but different paths on Quasar. Issue both — second is a no-op on WH/BH.
-    noc.async_read_barrier();
+    {
+        SDPA_ZACC(4);
+        noc.async_read_barrier();
+    }
     noc.write_zeros_l1_barrier();
 }
 
@@ -1515,7 +1558,10 @@ void read_block(
     const uint32_t barrier_threshold = 0) {
     const uint32_t num_tiles = src_slice.get_d2_size() * src_slice.get_d3_size();
     CircularBuffer cb(cb_id);
-    cb.reserve_back(num_tiles);
+    {
+        SDPA_ZACC(3);
+        cb.reserve_back(num_tiles);
+    }
     fetch_block(
         cat_addr_generator,
         src_slice,
@@ -1618,7 +1664,10 @@ void write_block_row_grouped(
     for (uint32_t rg = 0; rg < num_groups; ++rg) {
         const uint32_t rows_this_group = (rg < num_full_groups) ? sbh : remainder_rows;
         const uint32_t tiles_this_group = rows_this_group * cols;
-        cb.wait_front(tiles_this_group);
+        {
+            SDPA_ZACC(0);
+            cb.wait_front(tiles_this_group);
+        }
         for (uint32_t r = 0; r < rows_this_group; ++r) {
             const uint32_t row = rg * sbh + r;
             if (row < write_rows) {
@@ -1668,7 +1717,10 @@ void write_block_row_grouped_trid(
     for (uint32_t rg = 0; rg < num_groups; ++rg) {
         const uint32_t rows_this_group = (rg < num_full_groups) ? sbh : remainder_rows;
         const uint32_t tiles_this_group = rows_this_group * cols;
-        cb.wait_front(tiles_this_group);
+        {
+            SDPA_ZACC(0);
+            cb.wait_front(tiles_this_group);
+        }
         const Slice group_slice(
             dst_slice.d0,
             dst_slice.d1,

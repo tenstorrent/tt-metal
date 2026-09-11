@@ -147,6 +147,7 @@ void kernel_main() {
             write_offset = write_offset_phase_2;
         }
         for (uint32_t global_q_iter = 0; global_q_iter < global_q_count; ++global_q_iter) {
+            SDPA_ZRAW("W_QCHUNK");
             const auto decoded =
                 decompose_global_q_index(global_q_start + global_q_iter, q_num_chunks, NQH, use_zigzag_balancing);
             const uint32_t nb = decoded.nb;
@@ -193,6 +194,7 @@ void kernel_main() {
             const uint32_t out_row_tile_count = out_row_end_tile - out_row_start_tile;
             uint32_t out_tile_id = out_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
             if constexpr (use_streaming_compute) {
+                SDPA_ZACC(1);
                 // Streaming: drain per row-group (cb_out is a 2-slot ping-pong).
                 // Compute always pushes Sq_chunk_t rows; rows past out_row_tile_count
                 // are padding and get popped without being written.
@@ -221,4 +223,6 @@ void kernel_main() {
             }
         }
     }  // close phase
+    SDPA_ZFLUSH(0, "W_WAIT");
+    SDPA_ZFLUSH(1, "W_DRAIN");
 }
