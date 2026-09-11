@@ -68,6 +68,21 @@
 #define NUM_PAIRS 1
 #endif
 
+// SEED_DQ: the accumulator starts from a previous dQ rather than from zero,
+// which is what Algorithm 2 needs at every timestep and the relay needs at
+// every streak start. The reader puts that value in its own buffer and this
+// kernel copies it into the accumulator with pack_tiles_to_output.
+//
+// The copy is not a formality. sdpa_bw's accumulate path packs without
+// reserving, which relies on the packer's write pointer already being where
+// the previous cycle left it -- and only a reserve/push cycle *by this kernel*
+// does that. A push from the reader does not: the write pointers are per
+// RISC. Packing straight onto reader-pushed tiles leaves the packer stalled
+// and the result zero.
+#ifndef SEED_DQ
+#define SEED_DQ 0
+#endif
+
 namespace {
 
 constexpr uint32_t qWt = get_compile_time_arg_val(0);          // Q/K width in tiles
@@ -95,6 +110,7 @@ constexpr uint32_t cb_probe = tt::CBIndex::c_15;       // the stage's intermedia
 constexpr uint32_t cb_grad_query = tt::CBIndex::c_16;  // dQ_i
 constexpr uint32_t cb_grad_key = tt::CBIndex::c_17;    // dK_j
 constexpr uint32_t cb_grad_value = tt::CBIndex::c_18;  // dV_j
+constexpr uint32_t cb_grad_query_seed = tt::CBIndex::c_19;  // previous dQ_i
 
 // Copy one tile from a CB to the probe output, leaving the source in place.
 //
@@ -200,6 +216,10 @@ void kernel_main() {
     copy_init(cb_query);
     matmul_init(cb_query, cb_key);
 
+#if SEED_DQ
+    pack_tiles_to_output(cb_grad_query_seed, cb_grad_query, qWt);
+#endif
+
     for (uint32_t pair = 0; pair < NUM_PAIRS; ++pair) {
     const bool accumulate = pair > 0;
     cb_wait_front(cb_query, qWt);
@@ -263,7 +283,8 @@ void kernel_main() {
     return;
 #else
     // ---- the three gradients
-    update_grad_query(cb_grad_scores, cb_key, cb_grad_query, qWt, block_size, accumulate);
+    update_grad_query(
+        cb_grad_scores, cb_key, cb_grad_query, qWt, block_size, accumulate || (SEED_DQ != 0));
     cb_wait_front(cb_grad_query, qWt);
 
     update_grad_value(

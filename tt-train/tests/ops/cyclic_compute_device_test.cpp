@@ -468,7 +468,12 @@ xt::xarray<float> stack_blocks(const std::vector<xt::xarray<float>>& blocks, uin
     return out;
 }
 
-Outputs run_pairs(const Blocks& b, const std::vector<std::pair<uint32_t, uint32_t>>& pairs) {
+// seed_dq: a previous dQ the accumulator starts from, as Algorithm 2 loads
+// from DRAM every timestep and the relay reloads at a streak start.
+Outputs run_pairs(
+    const Blocks& b,
+    const std::vector<std::pair<uint32_t, uint32_t>>& pairs,
+    const xt::xarray<float>* seed_dq = nullptr) {
     using namespace tt::tt_metal;
     auto* device = &ttml::autograd::ctx().get_device();
 
@@ -527,12 +532,25 @@ Outputs run_pairs(const Blocks& b, const std::vector<std::pair<uint32_t, uint32_
     make_cb(tt::CBIndex::c_16, qWt, tt::DataFormat::Float32);
     make_cb(tt::CBIndex::c_17, qWt, tt::DataFormat::Float32);
     make_cb(tt::CBIndex::c_18, vWt, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_19, qWt, tt::DataFormat::Float32);  // previous dQ
+
+    // A dQ to start the accumulator from, stacked so the first pair's row
+    // block names it.
+    std::vector<xt::xarray<float>> seed_blocks(b.n, xt::zeros<float>({b.B, b.d}));
+    if (seed_dq != nullptr) {
+        seed_blocks[pairs.front().first] = *seed_dq;
+    }
+    const auto seed = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(
+        stack_blocks(seed_blocks, b.B, b.d), device);
 
     std::map<std::string, std::string> defines = {
         {"COMPUTE_STAGE", "5"}, {"NUM_PAIRS", std::to_string(pairs.size())}};
+    if (seed_dq != nullptr) {
+        defines["SEED_DQ"] = "1";
+    }
 
     std::vector<uint32_t> reader_args = {qWt, vWt};
-    for (const auto* t : {&query, &key, &value, &grad_output, &lse, &u_scalar}) {
+    for (const auto* t : {&query, &key, &value, &grad_output, &lse, &u_scalar, &seed}) {
         tt::tt_metal::TensorAccessorArgs(*t->buffer()).append_to(reader_args);
     }
     const auto reader = CreateKernel(
@@ -576,6 +594,7 @@ Outputs run_pairs(const Blocks& b, const std::vector<std::pair<uint32_t, uint32_
         args.push_back(row);
         args.push_back(col);
     }
+    args.push_back(seed.buffer()->address());
     SetRuntimeArgs(program, reader, core, args);
     SetRuntimeArgs(
         program, writer, core,
@@ -627,4 +646,33 @@ TEST(CyclicPairComputeTest, ColumnGradientsAccumulateAcrossAResidency) {
     }
     expect_close(out.dK, want_dk, 0.05F, "dK accumulated over four rows");
     expect_close(out.dV, want_dv, 0.05F, "dV accumulated over four rows");
+}
+
+// The mechanism Algorithm 2 uses at every timestep and the relay uses at
+// every streak start: the accumulator does not start at zero, it starts at
+// the dQ loaded from DRAM. Isolated here, with one pair and then several, so
+// that a failure is in the seeding rather than in the schedule, the barrier,
+// or the handoff between three RISCs.
+TEST(CyclicPairComputeTest, DqAccumulatesOntoASeedFromMemory) {
+    const auto b = make_blocks(4, 64);
+    const xt::xarray<float> seed = random_matrix(b.B, b.d, 99) * 0.5F;
+    const std::vector<std::pair<uint32_t, uint32_t>> pairs = {{2, 0}};
+    const auto out = run_pairs(b, pairs, &seed);
+
+    xt::xarray<float> want = seed;
+    want += pair_contribution(b, 2, 0).dQ;
+    expect_close(out.dQ, want, 0.05F, "dQ onto a seed, one pair");
+}
+
+TEST(CyclicPairComputeTest, DqAccumulatesOntoASeedAcrossAStreak) {
+    const auto b = make_blocks(4, 64);
+    const xt::xarray<float> seed = random_matrix(b.B, b.d, 98) * 0.5F;
+    const std::vector<std::pair<uint32_t, uint32_t>> pairs = {{1, 0}, {1, 1}, {1, 2}};
+    const auto out = run_pairs(b, pairs, &seed);
+
+    xt::xarray<float> want = seed;
+    for (const auto& [row, col] : pairs) {
+        want += pair_contribution(b, row, col).dQ;
+    }
+    expect_close(out.dQ, want, 0.05F, "dQ onto a seed, three pairs");
 }
