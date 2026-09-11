@@ -64,7 +64,7 @@ jobs:
           if [[ "$CHANGED_ONLY" != "true" ]]; then
             echo "base-sha=" >> "$GITHUB_OUTPUT"
             echo "mode=full" >> "$GITHUB_OUTPUT"
-            echo "shards=5" >> "$GITHUB_OUTPUT"
+            echo "shards=15" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -109,11 +109,11 @@ jobs:
               <<< "$selection"
           )
 
-          # Keep the matrix fixed; raise this to 15 when that many machines are available.
+          # Use the full fixed matrix whenever there is work.
           count=${#selected_tests[@]}
           if [[ "$count" -gt 0 ]]; then
             mode=changed
-            shards=5
+            shards=15
           else
             mode=none
             shards=0

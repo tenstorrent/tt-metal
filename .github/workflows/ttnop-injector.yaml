@@ -1,6 +1,16 @@
 name: "TTNOP Injector"
 
 on:
+  workflow_call:
+    inputs:
+      architecture:
+        required: false
+        default: all
+        type: string
+      test_selection:
+        required: false
+        default: changed
+        type: string
   workflow_dispatch:
     inputs:
       architecture:
