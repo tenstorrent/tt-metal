@@ -23,9 +23,8 @@ namespace ttnn::experimental::deepseek::mix_streams {
 //     new_streams = placement + mixed   reshaped back to [B, S, hc, D]
 //
 // where ``T == B*S``. This runs as a single device op (``ttnn::prim::mix_streams``):
-// one kernel packs ROW_MAJOR inputs into 32x32 tiles, computes both terms as two
-// single-tile matmuls accumulated into the same destination register, and unpacks
-// ROW_MAJOR output -- so the whole step costs one dispatch instead of four.
+// post / comb / streams stay TILE 32x32; sublayer_out is ROW_MAJOR and is packed as
+// 1x32 faces into the placement matmul. Output is TILE, matching ``streams``.
 //
 // The composite fallback below is kept for the shapes the kernel does not cover
 // (hc > 32, D not tile-aligned, non-bfloat16 inputs). In that path, when ``streams``
@@ -47,8 +46,7 @@ namespace ttnn::experimental::deepseek::mix_streams {
 //   compute_kernel_config: optional matmul compute-kernel config (defaults to
 //                 HiFi4 / fp32 dest acc / packer-l1-acc, matching ``_HIFI4``).
 //
-// Returns: new residual-stream stack, [B, S, hc, D], ROW_MAJOR when the fused
-//          kernel runs (all inputs ROW_MAJOR, hc <= 32, D % 32 == 0, bfloat16).
+// Returns: new residual-stream stack, [B, S, hc, D], TILE (same layout as ``streams``).
 Tensor mix_streams(
     const Tensor& post,
     const Tensor& comb,

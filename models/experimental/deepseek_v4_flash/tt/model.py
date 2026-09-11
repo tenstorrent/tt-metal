@@ -1,5 +1,7 @@
 import contextlib
 import math
+import queue
+import threading
 from typing import Optional
 
 import torch
@@ -1743,6 +1745,8 @@ class DeepSeekV4Model(DeepSeekV4Module):
         # head output, which it streams to the host over the D2H socket below.
         self._output_sm_index = self.pipeline_submesh_ids.index(ids[self.num_layers - 1])
         self._traced_captured = False
+        self._replay_queue: queue.Queue = queue.Queue()
+        self._replay_thread: Optional[threading.Thread] = None
 
         # The step output's return path. The page size is only known once the trace
         # builds the output tensor, so it is set on first use (see
@@ -2276,11 +2280,9 @@ class DeepSeekV4Model(DeepSeekV4Module):
         """Dispatch one traced decode step without waiting for its output.
 
         Captures the per-submesh traces lazily on the first call, then (every call)
-        pushes this step's input packet onto the H2D socket and replays each submesh's
-        trace in order. The packet receive, the residual-stream handoffs between
-        submeshes and the output send all happen from *inside* the traces, so a step
-        dispatches no device ops from the host at all — the only host work is the two
-        socket transfers.
+        queues ``execute_trace`` on the replay thread *before* pushing this step's
+        input packet onto the H2D socket. The packet receive, residual-stream handoffs
+        and output send all happen from inside the traces.
 
         Nothing is returned: the output is in flight to the host, to be picked up by
         :meth:`read_decoded_output`. Every dispatched step must be read back exactly
@@ -2312,13 +2314,35 @@ class DeepSeekV4Model(DeepSeekV4Module):
         # replay below.
         if not self._traced_captured:
             self._capture_traces(token_id, pos)
-        self.write_step_packet(token_id, pos)
+        # Kick the traces before the host packet so execute_trace is already on the
+        # command queue (device parked on in-trace recv) while this thread writes PCIe.
         self.replay_traced(pos)
+        self.write_step_packet(token_id, pos)
 
     # A step's three host-side stages, each split out so a pipelined caller can drive
     # them independently — they touch disjoint state, so they can run concurrently (on
     # separate threads) for different steps: push step n+1's packet while step n's
     # traces replay and step n-1's output is read back.
+    def _ensure_replay_thread(self) -> None:
+        if self._replay_thread is not None:
+            return
+
+        def _run() -> None:
+            for pos in iter(self._replay_queue.get, None):
+                self._execute_traces(pos)
+
+        self._replay_thread = threading.Thread(target=_run, name="decode-replay", daemon=True)
+        self._replay_thread.start()
+
+    def _execute_traces(self, pos: int) -> None:
+        if self._paged is not None:
+            self.ensure_session_capacity(pos)
+            for sid in self._resident:
+                self._session_pos[sid] = pos + 1
+        variant = self._variant_key(pos)
+        for sm in self.submeshes_io:
+            ttnn.execute_trace(sm["device"], sm["tids"][variant], cq_id=0, blocking=False)
+
     def write_step_packet(self, token_id, pos: int) -> None:
         """Stage 1 of a step: push its input packet to the device.
 
@@ -2328,31 +2352,28 @@ class DeepSeekV4Model(DeepSeekV4Module):
         self._write_packet(token_id, pos)
 
     def replay_traced(self, pos: int) -> None:
-        """Stage 2 of a step: replay the traces for a step at ``pos``.
+        """Stage 2 of a step: queue the traces for a step at ``pos`` on the replay thread.
 
-        The only stage that touches the command queue (and, in paged mode, the session
-        state), so a pipelined caller must keep it on a single thread. Expects the
-        step's packet from :meth:`write_step_packet` — pushed before or after this call,
-        since the trace's receive just waits for it — and its output to be picked up by
-        :meth:`read_decoded_output`.
+        Returns immediately; ``execute_trace`` runs on that thread (``blocking=False``
+        on the device). Call this *before* :meth:`write_step_packet` so the traces can
+        already be waiting on in-trace recv when the packet lands.
 
-        Requires the traces to already be captured, which a pipelined caller cannot do
-        mid-flight: dispatch one blocking :meth:`decode_traced` first.
+        Requires the traces to already be captured: dispatch one blocking
+        :meth:`decode_traced` first (the compile/capture path).
         """
         if not self._traced_captured:
             raise RuntimeError("call decode_traced() once to capture the traces before replay_traced()")
-        if self._paged is not None:
-            self.ensure_session_capacity(pos)
-            # One step advances every resident user, which is what lets
-            # :meth:`activate_sessions` tell a batch that has drifted apart from one
-            # that can share a trace.
-            for sid in self._resident:
-                self._session_pos[sid] = pos + 1
-        # Pick the variant whose baked-in compressor-pool schedule and SDPA mode match
-        # this position (see :meth:`_capture_traces`).
-        variant = self._variant_key(pos)
-        for sm in self.submeshes_io:
-            ttnn.execute_trace(sm["device"], sm["tids"][variant], cq_id=0, blocking=False)
+        self._ensure_replay_thread()
+        self._replay_queue.put(pos)
+
+    def replay_traced_ahead(self, positions) -> None:
+        """Queue ``execute_trace`` for every ``pos`` in ``positions`` on the replay thread.
+
+        Call once before feeding packets so the command queues already hold the
+        traces (device parked on in-trace recv) while the host writes H2D data.
+        """
+        for pos in positions:
+            self.replay_traced(int(pos))
 
     def decode_sampled_burst(self, first_token_id: int, start_pos: int, n_steps: int) -> list[int]:
         """Unsupported while the per-step packet arrives over the H2D socket.
