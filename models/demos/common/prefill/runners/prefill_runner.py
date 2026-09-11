@@ -420,7 +420,7 @@ def _print_config() -> None:
         ("PREFILL_NUM_USERS", str(NUM_USERS)),
         ("PREFILL_CAPACITY_FACTOR", str(CAPACITY_FACTOR)),
         ("PREFILL_GATE_FALLBACK_MODE", _gate_mode_name),
-        ("PREFILL_FABRIC_MODE", os.environ.get("PREFILL_FABRIC_MODE", "<auto: 1d if sp<=8 else 2d>")),
+        ("PREFILL_FABRIC_MODE", os.environ.get("PREFILL_FABRIC_MODE", "2d_torus_xy")),
         ("PREFILL_PP_D2D_FIFO_BYTES", str(D2D_FIFO_SIZE_BYTES)),
         ("PREFILL_H2D_SERVICE_ID", os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")),
         ("PREFILL_TRACE_DIR", os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default)),
