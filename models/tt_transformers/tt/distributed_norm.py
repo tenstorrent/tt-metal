@@ -93,6 +93,59 @@ class DistributedNorm(LightweightModule):
                 packer_l1_acc=False,
             )
         self.TG = TG
+        # Lazily-built block-shard configs for the interleaved prefill norm, keyed by input shape.
+        self._prefill_shard_cfg_cache = {}
+
+    def _prefill_block_shard_cfg(self, x):
+        """Block-shard configs for a prefill ``[1, 1, S, D]`` norm input, or ``(None, None)``.
+
+        An interleaved ``rms_norm`` only parallelises over tile ROWS, so a 128-token
+        prefill chunk runs its reduction on ``S/32 = 4`` cores of a 130-core grid --
+        that is the ``grid=tiny`` tag on this op. Block-sharding the activation into
+        L1 gives every core an ``(S/gy, D/gx)`` slice instead. The grid comes from the
+        shape's tile factors (never hard-coded); if that grid is no wider than the
+        ``S/32`` cores the interleaved kernel already gets, the reshard is not worth
+        paying for and we stay interleaved.
+        """
+        key = tuple(x.shape)
+        cached = self._prefill_shard_cfg_cache.get(key)
+        if cached is not None:
+            return cached
+
+        cfg = (None, None)
+        seq, dim = int(x.shape[-2]), int(x.shape[-1])
+        if seq % 32 == 0 and dim % 32 == 0:
+            grid = self.args.mesh_device.compute_with_storage_grid_size()
+            m_tiles, n_tiles = seq // 32, dim // 32
+            gy = max((y for y in range(1, min(grid.y, m_tiles) + 1) if m_tiles % y == 0), default=1)
+            gx = max((c for c in range(1, min(grid.x, n_tiles) + 1) if n_tiles % c == 0), default=1)
+            if gy * gx > m_tiles:
+                block_h, block_w = m_tiles // gy, n_tiles // gx
+                # fp32 dest accumulation (mandatory for norms) halves the dest register
+                # budget, so cap the math subblock at 4 tiles.
+                subblock_w = max(
+                    (s for s in range(1, block_w + 1) if block_w % s == 0 and s * block_h <= 4),
+                    default=1,
+                )
+                cfg = (
+                    ttnn.create_sharded_memory_config(
+                        shape=(seq // gy, dim // gx),
+                        core_grid=ttnn.CoreGrid(y=gy, x=gx),
+                        strategy=ttnn.ShardStrategy.BLOCK,
+                        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                        use_height_and_width_as_shard_shape=True,
+                    ),
+                    ttnn.LayerNormShardedMultiCoreProgramConfig(
+                        compute_with_storage_grid_size=(gx, gy),
+                        subblock_w=subblock_w,
+                        block_h=block_h,
+                        block_w=block_w,
+                        inplace=False,
+                    ),
+                )
+
+        self._prefill_shard_cfg_cache[key] = cfg
+        return cfg
 
     def update(self, *, weight: ttnn.Tensor) -> None:
         """Pass-through to the wrapped ``RMSNorm.update`` (``DistributedNorm``
@@ -164,13 +217,36 @@ class DistributedNorm(LightweightModule):
             x = ttnn.to_memory_config(x, input_mem_cfg)
 
         if self.norm is not None:
-            x = self.norm(
-                x,
-                mode=mode,
-                in_sharded=(mode == Mode.DECODE),
-                out_sharded=(mode == Mode.DECODE),
-                norm_config=norm_config,
+            shard_mem_cfg, shard_prg_cfg = (
+                self._prefill_block_shard_cfg(x)
+                if (mode == Mode.PREFILL and not self.args.is_distributed_norm(mode))
+                else (None, None)
             )
+            if shard_mem_cfg is not None:
+                # Occupy the grid: run the prefill norm block-sharded in L1, then hand
+                # DRAM-interleaved back to the projection that consumes it.
+                x_sharded = ttnn.to_memory_config(x, shard_mem_cfg)
+                y = self.norm(
+                    x_sharded,
+                    mode=mode,
+                    in_sharded=True,
+                    out_sharded=True,
+                    norm_config={
+                        "sharded_program_config": shard_prg_cfg,
+                        "sharded_output_config": shard_mem_cfg,
+                    },
+                )
+                ttnn.deallocate(x_sharded)
+                x = ttnn.sharded_to_interleaved(y, ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(y)
+            else:
+                x = self.norm(
+                    x,
+                    mode=mode,
+                    in_sharded=(mode == Mode.DECODE),
+                    out_sharded=(mode == Mode.DECODE),
+                    norm_config=norm_config,
+                )
 
         # Distributed norm requires a gather
         if self.args.is_distributed_norm(mode) and self.enable_all_gather:
