@@ -651,6 +651,99 @@ def test_requantize_uint8_upper_saturation(device):
     assert torch.equal(result, expected), f"got {result.tolist()} expected {expected.tolist()}"
 
 
+def test_quantize_uint8_lower_saturation(device):
+    """Negative pre-quant values must saturate to 0, not return |x| (#56290)."""
+    input_tr = torch.tensor([[-10.0, -5.0, -1.0, -0.5, -0.01, 0.0, 0.4, 1.0]], dtype=torch.float32)
+    scale, zero_point = 1.0, 0
+    expected = torch.clamp(torch.round(input_tr / scale + zero_point), 0, 255).to(torch.uint8)
+
+    input_tt = ttnn.from_torch(input_tr, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    out_tt = ttnn.quantize(input_tt, scale, zero_point, dtype=ttnn.uint8)
+    assert out_tt.dtype == ttnn.uint8
+    result = ttnn.to_torch(out_tt)
+    assert torch.equal(result, expected), f"got {result.tolist()} expected {expected.tolist()}"
+    # The SFPU FP32_TO_UINT8 bug returns |x| for negatives, so -5 and 5 collide.
+    assert int(result[0, 1]) == 0, f"negative input saturated to {int(result[0, 1])}, not 0"
+
+
+def test_quantize_uint8_full_range(device):
+    """In-range uint8 quantize stays exact; x and -x must not collide."""
+    input_tr = torch.tensor([[-3.0, -1.0, 0.0, 1.0, 3.0, 127.0, 200.0, 255.0]], dtype=torch.float32)
+    scale, zero_point = 1.0, 0
+    expected = torch.clamp(torch.round(input_tr / scale + zero_point), 0, 255).to(torch.uint8)
+
+    input_tt = ttnn.from_torch(input_tr, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    out_tt = ttnn.quantize(input_tt, scale, zero_point, dtype=ttnn.uint8)
+    result = ttnn.to_torch(out_tt)
+    assert torch.equal(result, expected), f"got {result.tolist()} expected {expected.tolist()}"
+    assert int(result[0, 0]) == 0 and int(result[0, 4]) == 3
+
+
+def test_requantize_uint8_lower_saturation(device):
+    """Requantize uint8 must saturate below 0 to 0, not return the magnitude."""
+    q_in = torch.tensor([[-1000, -200, -50, -1, 0, 50, 200, 255]], dtype=torch.int32)
+    in_scale, in_zp, out_scale, out_zp = 1.0, 0, 1.0, 0
+    expected = torch.clamp(torch.round((q_in.to(torch.float32) - in_zp) * in_scale / out_scale + out_zp), 0, 255).to(
+        torch.uint8
+    )
+
+    q_in_tt = ttnn.from_torch(q_in, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    out_tt = ttnn.requantize(q_in_tt, in_scale, in_zp, out_scale, out_zp, dtype=ttnn.uint8)
+    assert out_tt.dtype == ttnn.uint8
+    result = ttnn.to_torch(out_tt)
+    assert torch.equal(result, expected), f"got {result.tolist()} expected {expected.tolist()}"
+
+
+def test_requantize_uint8_full_range(device):
+    """In-range requantize uint8 stays exact, including a non-zero output zp."""
+    q_in = torch.tensor([[0, 10, 64, 127, 200, 255]], dtype=torch.int32)
+    in_scale, in_zp, out_scale, out_zp = 2.0, 10, 1.0, 5
+    expected = torch.clamp(torch.round((q_in.to(torch.float32) - in_zp) * in_scale / out_scale + out_zp), 0, 255).to(
+        torch.uint8
+    )
+
+    q_in_tt = ttnn.from_torch(q_in, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    out_tt = ttnn.requantize(q_in_tt, in_scale, in_zp, out_scale, out_zp, dtype=ttnn.uint8)
+    result = ttnn.to_torch(out_tt)
+    assert torch.equal(result, expected), f"got {result.tolist()} expected {expected.tolist()}"
+
+
+@pytest.mark.parametrize("in_dtype,q_values", [(ttnn.int8, [-128, -64, -1, 0, 1, 64, 127])])
+def test_requantize_uint8_lower_saturation_int8_input(device, in_dtype, q_values):
+    """int8 -> uint8 requantize saturates negatives to 0 and preserves in-range values."""
+    q_in = torch.tensor([q_values], dtype=torch.int8)
+    in_scale, in_zp, out_scale, out_zp = 1.0, 0, 1.0, 0
+    expected = torch.clamp(torch.round((q_in.to(torch.float32) - in_zp) * in_scale / out_scale + out_zp), 0, 255).to(
+        torch.uint8
+    )
+
+    q_in_tt = ttnn.from_torch(q_in, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    out_tt = ttnn.requantize(q_in_tt, in_scale, in_zp, out_scale, out_zp, dtype=ttnn.uint8)
+    assert out_tt.dtype == ttnn.uint8
+    result = ttnn.to_torch(out_tt)
+    assert torch.equal(result, expected), f"got {result.tolist()} expected {expected.tolist()}"
+
+
+@pytest.mark.parametrize("shape", [(32, 128), (64, 96)])
+@pytest.mark.parametrize("scale", [0.5, 1.0])
+def test_quantize_uint8_tensor_zero_point_saturates(device, shape, scale):
+    """quantize -> uint8 through the composite must saturate at 0, not return |x|."""
+    torch.manual_seed(0)
+    x = torch.linspace(-300.0, 300.0, shape[0] * shape[1], dtype=torch.float32).reshape(shape)
+    xt = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    zp_t = ttnn.from_torch(
+        torch.tensor([3], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    composite = ttnn.to_torch(ttnn.quantize(xt, scale, zp_t, dtype=ttnn.uint8))
+    fast = ttnn.to_torch(ttnn.quantize(xt, scale, 3, dtype=ttnn.uint8))
+    assert torch.equal(composite, fast), "tensor-zero-point quantize diverges from the fast path"
+
+    got = composite.to(torch.int32)
+    assert int(got.min()) >= 0 and int(got.max()) <= 255
+    assert len(torch.unique(got)) > 3, f"output collapsed to {torch.unique(got).tolist()}"
+
+
 @pytest.mark.parametrize("x0", [32, 128])
 @pytest.mark.parametrize("x1", [32, 128])
 @pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16])
