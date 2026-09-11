@@ -335,6 +335,7 @@ class ModelOptimizations:
                 settings["OpFidelity"][OpGroup.LI_QKV_DECODE] = MathFidelitySetting.LOFI
                 settings["OpFidelity"][OpGroup.LI_O_DECODE] = MathFidelitySetting.LOFI
                 settings["OpFidelity"][OpGroup.LI_FF2] = MathFidelitySetting.LOFI
+                settings["OpFidelity"][OpGroup.SDPA_DECODE] = MathFidelitySetting.LOFI
             if model_name.startswith("Phi-3-mini"):  # TODO: Only do this for N150
                 logger.info(
                     f"Model {model_name} is running out of L1 memory under standard high-performance settings, using FP16 accumulate in attention prefill QKV Matmul"
