@@ -300,7 +300,7 @@ def test_int_tensor_float_scalar_promotes(device, ttnn_op, tensor_dtype, scalar)
     torch_golden = (torch_input.float() * scalar) if ttnn_op is ttnn.multiply else (torch_input.float() / scalar)
 
     assert output.dtype == ttnn.float32
-    assert_with_ulp(torch_golden, output, ulp_threshold=1)
+    assert_with_ulp(expected_result=torch_golden, actual_result=output, ulp_threshold=1)
 
 
 @pytest.mark.parametrize("tensor_dtype", [ttnn.int32, ttnn.uint32])
@@ -371,14 +371,16 @@ def test_int_tensor_float_scalar_rounded_division(device, rounding_mode, scalar)
     # Negative numerators are in the input on purpose: the quotient has to be rounded while it is
     # still floating point, or floor(-13/2.5) comes back as -5 instead of -6.
     assert output.dtype == ttnn.float32
-    assert_with_ulp(torch_golden, output, ulp_threshold=1)
+    assert_with_ulp(expected_result=torch_golden, actual_result=output, ulp_threshold=1)
 
 
 @pytest.mark.parametrize("rounding_mode", ["floor", "trunc"])
-@pytest.mark.parametrize("scalar", [2, 2.0])
-def test_int_tensor_integral_divisor_stays_on_integer_kernel(device, rounding_mode, scalar):
-    # The counterpart to the test above: a divisor the int32 kernels can carry must keep using them,
-    # so the fall-through to floating point does not quietly capture every rounded division.
+@pytest.mark.parametrize("scalar, expected_dtype", [(2, ttnn.int32), (2.0, ttnn.float32)])
+def test_int_tensor_rounded_division_dtype_follows_scalar_type(device, rounding_mode, scalar, expected_dtype):
+    # ttnn.div decides from the divisor's type rather than its value: an integer 2 keeps exact int32
+    # division, while 2.0 promotes the tensor and divides in floating point. Worth pinning because it
+    # is the opposite of what multiply does -- multiply(int32, 2.0) stays int32, since an integral
+    # scalar reaches the kernel intact and promoting would cap exact integers at 2**24.
     torch_input = torch.tensor([[-13, -7, 6, 100]], dtype=torch.int32)
     a = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -386,8 +388,8 @@ def test_int_tensor_integral_divisor_stays_on_integer_kernel(device, rounding_mo
     quotient = torch_input.float() / 2
     torch_golden = torch.floor(quotient) if rounding_mode == "floor" else torch.trunc(quotient)
 
-    assert output.dtype == ttnn.int32
-    assert ttnn.to_torch(output).flatten().tolist() == torch_golden.flatten().tolist()
+    assert output.dtype == expected_dtype
+    assert ttnn.to_torch(output).float().flatten().tolist() == torch_golden.flatten().tolist()
 
 
 @pytest.mark.parametrize(
