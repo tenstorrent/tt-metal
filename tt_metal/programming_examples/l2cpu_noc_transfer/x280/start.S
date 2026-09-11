@@ -33,6 +33,16 @@ _start:
     la      t1, trap_handler
     csrw    mtvec, t1
     la      sp, _stack_top
+    // Zero .bss: the image is loaded as raw bytes into GDDR, so nothing else clears
+    // the statics that C assumes start at zero.
+    la      t1, _bss_start
+    la      t2, _bss_end
+1:
+    bgeu    t1, t2, 2f
+    sd      zero, 0(t1)
+    addi    t1, t1, 8
+    j       1b
+2:
     call    fw_main
 park:
     wfi

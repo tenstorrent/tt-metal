@@ -5,7 +5,10 @@
 
 **Branch:** `vsureshTT/L2CPU`
 **Date:** 2026-09-03
-**Status:** design approved (direction), spec under review
+**Status:** implemented 2026-09-11 with a different structure (reusable `x280/l2cpu_fabric.h`
+library, Tensix setup kernel for connection params, L2CPU-to-L2CPU inbox/echo). The
+current source of truth is `tt_metal/programming_examples/l2cpu_fabric_forward/README.md`;
+this document is kept for the rationale.
 
 ## Goal
 
@@ -24,8 +27,9 @@ milestone. A tiny stream-register probe is the fallback if credits misbehave.
 Three stages exist on this branch (see `tt_metal/programming_examples/l2cpu_noc_transfer/README.md`):
 
 - **Stage 1** — Tensix ↔ L2CPU LIM round-trip. Established: inbound **plain**
-  reads/writes and inline-dw writes to the L2CPU work; inbound **NOC atomics**
-  to the L2CPU hang (unsupported).
+  reads/writes and inline-dw writes to the L2CPU work. (Inbound NOC atomics are
+  measured separately with `metal_example_l2cpu_atomic_probe`; the fabric worker
+  path does not depend on them.)
 - **Stage 2** — x280 hart booted, runs firmware, and does an **x280-initiated
   NOC write** back into a Tensix via a **TLB window** (config regs at
   `0x2000_0000`, aperture at `0x0430_0000_00`). The x280 has no NOC command
@@ -39,9 +43,9 @@ reset release per chip).
 ## Key feasibility result (why Option 1 works)
 
 The `WorkerToFabricEdmSender` worker→EDM protocol
-(`tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp`) uses **zero
-NOC atomics** (`grep noc_semaphore_inc` → none). Every step maps to a primitive
-the L2CPU has already been shown to do:
+(`tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp`) is built from
+plain writes plus one stream-register write. Every step maps to a primitive the
+L2CPU has already been shown to do:
 
 | Protocol step | Mechanism | x280 capability | Proven? |
 |---|---|---|---|
@@ -50,10 +54,11 @@ the L2CPU has already been shown to do:
 | Learn EDM free-slots (EDM→worker) | in the **worker** config (`IS_WORKER = !I_USE_STREAM_REG_FOR_CREDIT_RECEIVE`), EDM writes the count to a **plain L1 address on the worker's tile** (adapter L203–207) | inbound plain write to LIM | **stage-1 proved** ✅ |
 | Read EDM producer cursor at open | plain NOC reads ← eth-core L1 | window reads | stage-2 proved ✅ |
 
-The EDM→x280 direction — where "no inbound atomics" could have bitten — is a
-**plain write to a plain L1 address** in the worker configuration, exactly what
-stage 1 validated. The only genuinely unproven primitive is the **x280→EDM
-stream-register credit write**.
+The EDM→x280 credit return is a **plain write to a plain address** in the worker
+configuration, exactly what stage 1 validated (the router's teardown ack uses
+`noc_semaphore_inc`; close is optional and bounded in the implementation). The only
+genuinely unproven primitive at design time was the **x280→EDM stream-register
+credit write**.
 
 ## The x280's input contract (connection parameters)
 

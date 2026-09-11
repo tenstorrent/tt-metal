@@ -1,10 +1,16 @@
 # x280 Fabric Worker — Implementation Plan
 
+> **Status (2026-09-11):** historical. The implementation landed with a different file
+> structure (see `tt_metal/programming_examples/l2cpu_fabric_forward/README.md`):
+> connection parameters come from a Tensix setup kernel running the real
+> `WorkerToFabricEdmSender::build_from_args`, host↔x280 memory access goes through
+> Tensix kernels, and the worker protocol is a reusable header (`x280/l2cpu_fabric.h`).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** A Tensix kernel hands a payload to the on-die L2CPU (x280) on Device A, and the x280 — acting as a from-scratch fabric worker feeding the standard EDM router — forwards it over one ethernet link to a Tensix receiver on Device B.
 
-**Architecture:** Reuse the unmodified fabric EDM router and `FABRIC_1D` config. The novelty is confined to x280 firmware that reimplements the `WorkerToFabricEdmSender` open/send/close protocol using only TLB-window MMIO (plain loads/stores + one stream-register write) — no NOC atomics, no forwarder Tensix. The host boots the x280, sources the EDM connection parameters, and delivers them to the x280 mailbox.
+**Architecture:** Reuse the unmodified fabric EDM router and `FABRIC_1D` config. The novelty is confined to x280 firmware that reimplements the `WorkerToFabricEdmSender` open/send/close protocol using only TLB-window MMIO (plain loads/stores + one stream-register write) — no forwarder Tensix. The host boots the x280, sources the EDM connection parameters, and delivers them to the x280 mailbox.
 
 **Tech Stack:** C++ host (tt-metalium + raw UMD), Tensix data-movement kernels, bare-metal RV64 x280 firmware (clang, `build_fw.sh`), tt-metal fabric (`FABRIC_1D`).
 
@@ -14,7 +20,7 @@
 
 - **Hardware required:** two fabric-connected Blackhole chips that actually train `FABRIC_1D`. No device is attached during planning; every "run on HW" step is gated on that. Confirm the A↔B link trains before Task 5+.
 - **x280 hart release is one-shot per chip reset.** Firmware must never wedge: every poll loop is bounded with a timeout that faults to the mailbox and parks with a heartbeat. Recovery is `tt-smi -r`.
-- **No NOC atomics anywhere** (inbound to L2CPU is unsupported; the fabric worker path needs none). Credits use stream-register writes / plain L1 writes only.
+- **Plain writes only on the worker path.** Credits use stream-register writes / plain L1 writes; whether inbound NOC atomics into the L2CPU land is measured with `metal_example_l2cpu_atomic_probe`, not assumed either way.
 - **No forwarder Tensix in the data path.** The producer Tensix only stages the payload + pokes the x280; a Tensix never touches the fabric.
 - **Single packet first cut:** payload ≤ one EDM buffer slot (`buffer_size_bytes`). One worker, one link, one direction (A→B), one packet in flight.
 - **License header** on every new file: `// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC` / `// SPDX-License-Identifier: Apache-2.0`.
@@ -214,7 +220,7 @@ Expected: match. If the receiver never sees data, isolate with Task 8 (stream-re
 
 - [ ] **Step 1:** Minimal firmware: aim window at eth core A, write `pack_value_for_inc_on_write_stream_reg_write(-1)` to `get_stream_reg_write_addr(stream_id)`, then window-read the stream reg's value back (`get_stream_reg_read_addr`) into the mailbox.
 - [ ] **Step 2: Run on HW:** confirm the register reflects the increment. This isolates "does an x280 window store reach a NOC stream register with inc-on-write semantics" from the full protocol.
-- [ ] **Step 3:** If it fails: the stream-reg-through-window primitive is unsupported → escalate to the spec's raw-eth Plan B (`eth_send_bytes`, atomics-free) as a separate design change. Document the finding in the README and a memory note.
+- [ ] **Step 3:** If it fails: the stream-reg-through-window primitive is unsupported → escalate to the spec's raw-eth Plan B (`eth_send_bytes`) as a separate design change. Document the finding in the README and a memory note.
 - [ ] **Step 4: Commit** `git commit -m "l2cpu_fabric_forward: standalone x280 stream-register probe"`
 
 ---

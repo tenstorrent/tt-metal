@@ -20,13 +20,12 @@
 //  * The L2CPU tiles are not in tt-metal's Blackhole SoC descriptor, so their NOC0
 //    coordinates are supplied here directly. Blackhole's coordinate translation maps
 //    L2CPU translated coords 1:1 to NOC0, so raw (8,3)/(8,5)/(8,7)/(8,9) route correctly.
-//  * Env overrides: L2CPU_X, L2CPU_Y (default 8,3), TT_L2CPU_TEST_ATOMIC=1 enables a
-//    noc_semaphore_inc probe against LIM.
+//  * Env overrides: L2CPU_X, L2CPU_Y (default 8,3), TT_L2CPU_TEST_ATOMIC=1 adds a
+//    noc_semaphore_inc + blocking noc_async_atomic_barrier() against LIM. For a
+//    bounded, non-blocking measurement of NOC atomics use l2cpu_atomic_probe.cpp.
 //
-// Measured on a p100a: all four tiles pass the bulk + inline-write round-trip.
-// The atomic probe HANGS (no atomic response from the L2CPU bridge) — NOC atomics
-// are not supported inbound; protocols against the L2CPU must be built from plain
-// reads/writes. The hang is recoverable: the next device init resets the Tensix.
+// Measured on a p100a (2026-09-01) and a p150b (2026-09-11): all four tiles pass the
+// bulk + inline-write round-trip.
 
 #include <fmt/base.h>
 #include <cstdint>
@@ -170,8 +169,8 @@ int main() {
                 atomic_word_idx,
                 input[atomic_word_idx],
                 result[atomic_word_idx],
-                result[atomic_word_idx] == input[atomic_word_idx] + 5 ? "NOC atomics work"
-                                                                      : "NOC atomics NOT confirmed");
+                result[atomic_word_idx] == input[atomic_word_idx] + 5 ? "atomic increment landed"
+                                                                      : "atomic increment did not land");
         }
 
         if (!mesh_device->close()) {

@@ -10,6 +10,16 @@ add_executable(metal_example_l2cpu_noc_transfer)
 target_sources(metal_example_l2cpu_noc_transfer PRIVATE l2cpu_noc_transfer.cpp)
 target_link_libraries(metal_example_l2cpu_noc_transfer PUBLIC TT::Metalium)
 
+# NOC atomic-increment probe against the L2CPU tile (bounded wait, no barrier).
+add_executable(metal_example_l2cpu_atomic_probe)
+target_sources(metal_example_l2cpu_atomic_probe PRIVATE l2cpu_atomic_probe.cpp)
+target_link_libraries(metal_example_l2cpu_atomic_probe PUBLIC TT::Metalium)
+
+# NOC alignment probe: where do Tensix<->L2CPU transfers land for mismatched 64 B offsets?
+add_executable(metal_example_l2cpu_align_probe)
+target_sources(metal_example_l2cpu_align_probe PRIVATE l2cpu_align_probe.cpp)
+target_link_libraries(metal_example_l2cpu_align_probe PUBLIC TT::Metalium)
+
 # Stage 2: host driver for the x280 echo demo (Tensix polls; x280 writes back).
 # Run AFTER x280/x280_boot has released the hart with x280/build/echo.bin.
 add_executable(metal_example_l2cpu_x280_echo)

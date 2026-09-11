@@ -46,10 +46,10 @@ void kernel_main() {
     noc_inline_dw_write(get_noc_addr(l2cpu_x, l2cpu_y, lim_addr + patch_word_idx * 4), 0xC0FFEE55);
     noc_async_write_barrier();
 
-    // 4. Optional: NOC atomic increment against LIM. Off by default: measured on a
-    //    p100a (BH), the L2CPU bridge does NOT implement NOC atomics — the atomic
-    //    response never arrives and the barrier below hangs (recoverable by rerunning,
-    //    device init resets this core).
+    // 4. Optional: NOC atomic increment against LIM, followed by a BLOCKING barrier
+    //    (off by default). If no atomic response arrives the barrier spins until the
+    //    host times out; the next device init resets this core. Use
+    //    l2cpu_atomic_probe.cpp for a bounded measurement instead.
     if (do_atomic) {
         noc_semaphore_inc(get_noc_addr(l2cpu_x, l2cpu_y, lim_addr + atomic_word_idx * 4), 5);
         noc_async_atomic_barrier();

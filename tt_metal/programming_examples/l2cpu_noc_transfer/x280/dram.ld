@@ -13,8 +13,11 @@ SECTIONS {
     .text : { *(.text.start) *(.text*) } > DRAM
     .rodata : { *(.rodata*) *(.srodata*) } > DRAM
     .data : { *(.data*) *(.sdata*) } > DRAM
+    . = ALIGN(16);
+    _bss_start = .;
     .bss : { *(.bss*) *(.sbss*) *(COMMON) } > DRAM
     . = ALIGN(16);
+    _bss_end = .;
     . = . + 0x4000;
     _stack_top = .;
 }

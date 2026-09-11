@@ -8,21 +8,12 @@ if(NOT TARGET TT::Metalium)
     find_package(TT-Metalium REQUIRED)
 endif()
 
-# Host orchestrator: a Tensix producer stages a payload into the L2CPU (x280),
-# which forwards it over FABRIC_1D to a Tensix receiver on a second chip.
+# Host orchestrator: boots the x280 on each chip (via the sibling boot tool), resolves
+# the fabric router connection with a Tensix setup kernel, and drives L2CPU -> fabric
+# -> L2CPU / Tensix transfers. All L2CPU memory access goes through Tensix kernels.
 add_executable(metal_example_l2cpu_fabric_forward)
 target_sources(metal_example_l2cpu_fabric_forward PRIVATE l2cpu_fabric_forward.cpp)
 target_link_libraries(metal_example_l2cpu_fabric_forward PUBLIC TT::Metalium)
 
-# Raw UMD is used only to reach the passive L2CPU tile mailbox (same mechanism as
-# the sibling x280_boot tool). It is only present in an in-tree metalium build (not
-# the standalone find_package(TT-Metalium) path), so guard on it; the host compiles
-# without it (the mailbox path becomes an inert HARDWARE-marked stub).
-if(TARGET umd::tt-umd)
-    target_link_libraries(metal_example_l2cpu_fabric_forward PUBLIC umd::tt-umd)
-    target_compile_definitions(metal_example_l2cpu_fabric_forward PRIVATE FF_HAVE_UMD=1)
-endif()
-
-# NOTE: the x280 hart boot tool (metal_example_l2cpu_x280_boot) is reused from the
-# sibling l2cpu_noc_transfer example — it is NOT redefined here. Build the fabric
-# firmware it loads with x280/build_fw.sh (authored separately, plan Task 1).
+# The x280 boot tool (metal_example_l2cpu_x280_boot) is built by the sibling
+# l2cpu_noc_transfer example. Build the firmware this example loads with x280/build_fw.sh.
