@@ -185,7 +185,7 @@ GroupNorm (specified as boolean input to `ttnn.group_norm`):
 output_tensor = ttnn.group_norm(<other inputs>, use_welford=True)
 ```
 
-GroupNorm uses compile-time reciprocal constants in its shifted two-pass path and does not require a reciprocals tensor. LayerNorm's selected SFPU statistics path uses a reciprocal lookup table; the tile-reduction path does not. The lookup table can be created as follows:
+GroupNorm's shifted two-pass kernel accumulates each local group with a compile-time-known population, so its final scaling uses a reciprocal constant and needs no reciprocals tensor. LayerNorm's blockwise SFPU kernels also combine statistics from successive blocks: they look up reciprocals for the block population, the accumulated population (including a partial final block) and the final width. Distributed LayerNorm additionally uses reciprocals for online Welford updates. These LayerNorm kernels retain the lookup table to avoid runtime division; the compact interleaved SFPU kernel and the tile-reduction kernels do not consume it. Replacing the blockwise lookups with compile-time merge weights would require a separate kernel change, rather than simply removing the tensor. Where required, the table is created automatically if it is not supplied, or can be supplied explicitly as follows:
 
 LayerNorm:
 
