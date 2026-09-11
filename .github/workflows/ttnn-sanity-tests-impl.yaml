@@ -17,6 +17,15 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      prebuilt-image:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Env image carrying the source tree and build output at /work. When set,
+          the job mounts no /work, checks out only .github, and fetches no
+          artifact. Empty falls back to the artifact path, which is what forks and
+          a failed bake get.
       enable-watcher:
         required: false
         type: boolean
@@ -66,6 +75,14 @@ on:
         type: string
         default: ""
         description: "Discriminator for the AI summaries when the calling workflow is invoked more than once per run"
+      enable-kernel-clang-tidy:
+        required: false
+        type: boolean
+        default: false
+        description: >-
+          On every HW leg, capture that leg's runtime JIT kernel compiles and run clang-tidy on them post-hoc
+          via CodeChecker, uploading one capture artifact per leg. Non-blocking. The capture defeats all
+          kernel-compile caches, so legs run slower. Default off, no overhead when disabled.
     outputs:
       matrix:
         description: "Filtered matrix of legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)"
@@ -176,14 +193,18 @@ jobs:
     runs-on: ${{ matrix.test-group.runs_on }}
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
-      image: ${{ (startsWith(matrix.test-group.sku, 'sim_') || matrix.test-group.sku == 'bh_p100') && (inputs.docker-image || 'docker-image-unresolved!') || format('{0}{1}', inputs.harbor-prefix, inputs.docker-image) }}
+      # The prebuilt ref comes first so it short-circuits the harbor-prefix
+      # expression below: a per-commit image is canonical ghcr and never prefixed.
+      image: ${{ inputs.prebuilt-image || ((startsWith(matrix.test-group.sku, 'sim_') || matrix.test-group.sku == 'bh_p100') && (inputs.docker-image || 'docker-image-unresolved!') || format('{0}{1}', inputs.harbor-prefix, inputs.docker-image)) }}
       env:
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
         TT_LOGGER_LEVEL: warn
         TTNN_CONFIG_OVERRIDES: '{"validate_program_args": true}'
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        # The image owns /work, so no bind mount: one would mask the payload. A
+        # single-path entry is an anonymous volume on an unused path.
+        - ${{ inputs.prebuilt-image != '' && '/no_work_mount' || format('{0}/docker-job:/work', github.workspace) }}
         - /dev/hugepages-1G:/dev/hugepages-1G
       options: ${{ startsWith(matrix.test-group.sku, 'sim_') && '--label runner-mode=sim' || (inputs.enable-perf-host-profiling && matrix.test-group.name == format('{0} [{1}]', inputs.perf-target-group, matrix.test-group.sku)) && '--cap-add CAP_PERFMON --device /dev/tenstorrent -e TT_GH_CI_INFRA' || '--device /dev/tenstorrent -e TT_GH_CI_INFRA' }}
     defaults:
@@ -197,13 +218,17 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.sha }}
           filter: blob:none
-          submodules: recursive
+          # With an image the source is already at /work; the workspace copy only
+          # has to satisfy `uses: ./docker-job/...`, which resolves against it.
+          submodules: ${{ inputs.prebuilt-image == '' && 'recursive' || 'false' }}
+          sparse-checkout: ${{ inputs.prebuilt-image != '' && '.github' || '' }}
           path: docker-job
       - name: ⬇️  Setup Job
         uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          env-from-image: ${{ inputs.prebuilt-image != '' }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
@@ -316,6 +341,22 @@ jobs:
           fi
           echo "perf_ready=$perf_ready" >> "$GITHUB_OUTPUT"
 
+      # Kernel clang-tidy (opt-in, non-blocking): every HW leg captures its own
+      # JIT kernel compiles and lints them, like collect-coverage does.
+      # See tech_reports/code-indexing/kernel-clang-tidy.md.
+      - name: Install clang-tidy + CodeChecker (kernel clang-tidy)
+        if: ${{ inputs.enable-kernel-clang-tidy && !startsWith(matrix.test-group.sku, 'sim_') }}
+        continue-on-error: true
+        run: |
+          # The image ships clang-20/clang-tidy-20 under versioned names only.
+          # CodeChecker needs to resolve `clang` even though only clang-tidy runs:
+          # ClangSA.analyzer_binary() is consulted unconditionally, and None
+          # crashes compilation-database parsing.
+          for tool in clang clang++ clang-tidy; do
+            update-alternatives --install "/usr/bin/$tool" "$tool" "/usr/bin/${tool}-20" 100
+          done
+          uv pip install codechecker==6.27.1
+
       - name: ${{ matrix.test-group.name }} tests
         if: ${{ !startsWith(matrix.test-group.sku, 'sim_') }}
         timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
@@ -348,8 +389,8 @@ jobs:
             )
             # Non-profiled path (default): run the group cmd directly under the power sidecar.
             # Profiled path (experiment): wrap the group cmd in `perf record -g -F <freq> -o <out>`,
-            # writing perf.data to /work so the host mount at ${{ github.workspace }}/docker-job can
-            # upload it. Only wrap when the recording-capability probe (perf-probe step) succeeded;
+            # writing perf.data to /work, which the upload step reads. Only wrap when the
+            # recording-capability probe (perf-probe step) succeeded;
             # otherwise fall back to running the cmd unwrapped so the group still tests.
             #
             # The whole group cmd is wrapped in `bash -c "$TEST_GROUP_CMD"` so that a group command
@@ -366,6 +407,21 @@ jobs:
                 echo "::warning::perf recording not available; running '$TEST_GROUP_NAME' without profiling."
               fi
               RUNNER=(bash -c "$TEST_GROUP_CMD")
+            fi
+
+            # The JIT build logs each kernel compile command into this leg's
+            # run log; every kernel-compile cache layer is defeated so each
+            # compile, and its logged command, actually happens.
+            KERNEL_TIDY_THIS="${{ inputs.enable-kernel-clang-tidy }}"
+            if [ "$KERNEL_TIDY_THIS" = "true" ]; then
+              echo "kernel clang-tidy capture ENABLED for '$TEST_GROUP_NAME'"
+              export TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1
+              export TT_LOGGER_LEVEL=info
+              export TT_METAL_FORCE_JIT_COMPILE=1
+              unset TT_METAL_CCACHE_KERNEL_SUPPORT
+              export CCACHE_DISABLE=1
+              export CCACHE_REMOTE_STORAGE=
+              unset CCACHE_REMOTE_ONLY
             fi
 
             python3 tools/tt-power-sidecar/tt_power_sidecar.py \
@@ -421,15 +477,99 @@ jobs:
                 exit 1
               '
 
+      # Translate the captured SFPI-GCC compile commands for clang and run
+      # clang-tidy through CodeChecker, exporting an HTML report. Non-blocking.
+      - name: Run clang-tidy via CodeChecker on captured JIT kernel compiles (kernel clang-tidy)
+        if: ${{ !cancelled() && inputs.enable-kernel-clang-tidy && !startsWith(matrix.test-group.sku, 'sim_') }}
+        continue-on-error: true
+        timeout-minutes: 45
+        env:
+          KERNEL_TIDY_GROUP: ${{ matrix.test-group.name }}
+        run: |
+          RUN_LOG="generated/test_logs/${KERNEL_TIDY_GROUP}.log"
+          if [ ! -s "$RUN_LOG" ]; then
+            echo "::warning::run log '$RUN_LOG' missing/empty; skipping clang-tidy."
+            exit 0
+          fi
+          mkdir -p /work/kernel_tidy
+          python3 scripts/build_kernel_clang_tidy_commands.py \
+            --input-log "$RUN_LOG" \
+            --output-dir /work/kernel_tidy | tee /work/kernel_tidy/summary.txt
+          # An empty capture is '[]', which is non-empty as a file.
+          n_entries=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' \
+            /work/kernel_tidy/compile_commands.json 2>/dev/null || echo 0)
+          if [ "$n_entries" -eq 0 ]; then
+            echo "::warning::no kernel compile commands captured; skipping clang-tidy."
+            exit 0
+          fi
+          # Checkers, check options and scoping all come from codechecker.json.
+          CodeChecker analyze /work/kernel_tidy/compile_commands.json \
+            --config tt_metal/jit_build/kernel_clang_tidy/codechecker.json \
+            --jobs 8 \
+            --output /work/kernel_tidy/reports || echo "::warning::CodeChecker analyze reported failures (continuing)"
+          # Counts only; the browsable report is rendered once by the
+          # consolidate job from every leg's merged plists.
+          CodeChecker parse /work/kernel_tidy/reports --export json \
+            --output /work/kernel_tidy/reports.json >/dev/null 2>&1 || true
+          python3 - <<'PY' | tee -a /work/kernel_tidy/summary.txt
+          import collections, json, pathlib
+          p = pathlib.Path("/work/kernel_tidy/reports.json")
+          reports = json.loads(p.read_text()).get("reports", []) if p.is_file() else []
+          by_severity = collections.Counter(r.get("severity") for r in reports)
+          print(f"findings: {len(reports)}")
+          for name in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "STYLE", "UNSPECIFIED"):
+              if by_severity.get(name):
+                  print(f"  {name}: {by_severity[name]}")
+          PY
+          # Suggested-fix YAMLs are ~35% of the artifact and unused downstream.
+          rm -rf /work/kernel_tidy/reports/fixit
+          # The consolidate job renders HTML, which needs every analyzed source
+          # on its original path. Generated JIT sources exist only in this
+          # runner's kernel cache, and CodeChecker skips a whole plist if any of
+          # its sources are missing, so ship the ones the reports reference.
+          python3 - <<'PY' | tee -a /work/kernel_tidy/summary.txt
+          import pathlib, plistlib, tarfile
+          want = set()
+          for p in pathlib.Path("/work/kernel_tidy/reports").glob("*.plist"):
+              for f in plistlib.loads(p.read_bytes()).get("files", []):
+                  if "tt-metal-cache" in f and pathlib.Path(f).is_file():
+                      want.add(f)
+          out = pathlib.Path("/work/kernel_tidy/generated-sources.tar.gz")
+          with tarfile.open(out, "w:gz") as tar:
+              for f in sorted(want):
+                  tar.add(f, arcname=f.lstrip("/"))
+          print(f"generated sources shipped: {len(want)} files, {out.stat().st_size/1e6:.1f} MB")
+          PY
+          {
+            echo '<details><summary>Kernel clang-tidy (non-blocking)</summary>'
+            echo ''
+            echo '```'
+            cat /work/kernel_tidy/summary.txt 2>/dev/null || echo "no summary produced"
+            echo '```'
+            echo ''
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload kernel clang-tidy capture (kernel clang-tidy)
+        if: ${{ !cancelled() && inputs.enable-kernel-clang-tidy && !startsWith(matrix.test-group.sku, 'sim_') }}
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: kernel-clang-tidy-${{ matrix.test-group.name }}
+          # Single glob on purpose: the runner's host->container path
+          # translation only handles the first line of a multiline path.
+          path: ${{ github.workspace }}/docker-job/kernel_tidy/*
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Upload power report
         if: ${{ !cancelled() && !startsWith(matrix.test-group.sku, 'sim_') }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: power-report-${{ matrix.test-group.name }}
-          # /docker-job/ is the host-side mount of the Docker runner's /work/ directory.
-          # The power sidecar writes --out /work/power_report.json inside the container;
-          # this host path is what the upload-artifact action reads.
-          path: ${{ github.workspace }}/docker-job/power_report.json
+          # The sidecar's --out path. Steps run inside the container, so this holds
+          # whether or not /work is a bind mount.
+          path: /work/power_report.json
           if-no-files-found: warn
           retention-days: 30
 
@@ -502,12 +642,12 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: perf-host-profile-${{ matrix.test-group.name }}
-          # /docker-job/ is the host-side mount of the container's /work/ directory. The profiled
-          # test step writes perf_<sanitized>.data (and an optional .report.txt / .svg) to /work.
+          # The profiled test step writes perf_<sanitized>.data (and an optional
+          # .report.txt / .svg) to /work.
           path: |
-            ${{ github.workspace }}/docker-job/perf_*.data
-            ${{ github.workspace }}/docker-job/perf_*.report.txt
-            ${{ github.workspace }}/docker-job/perf_*.svg
+            /work/perf_*.data
+            /work/perf_*.report.txt
+            /work/perf_*.svg
           if-no-files-found: warn
           retention-days: 14
 
@@ -516,10 +656,8 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: mem-report-${{ matrix.test-group.name }}
-          # Sim analogue of the HW power report: the host-load sidecar writes its CPU/memory/
-          # disk/network usage report to --output /work/mem_report.json inside the container;
-          # this host path is what the upload-artifact action reads.
-          path: ${{ github.workspace }}/docker-job/mem_report.json
+          # Sim analogue of the HW power report: the host-load sidecar's --output path.
+          path: /work/mem_report.json
           if-no-files-found: warn
           retention-days: 30
 
@@ -539,7 +677,7 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: profdata-ttnn-${{ matrix.test-group.name }}
-          path: ${{ github.workspace }}/docker-job/coverage/job.profdata
+          path: /work/coverage/job.profdata
           if-no-files-found: ignore
           retention-days: 1
 
@@ -580,7 +718,7 @@ jobs:
           config: |
             {
               "model": "${{ vars.AI_SUMMARY_MODEL }}",
-              "workspace": "$GITHUB_WORKSPACE/docker-job",
+              "workspace": "/work",
               "input_dirs": ["generated/test_logs"],
               "output_dir": "generated/ai_summaries",
               "scope": "${{ inputs.summary-scope }}",

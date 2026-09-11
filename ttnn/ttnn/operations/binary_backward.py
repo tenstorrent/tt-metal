@@ -283,10 +283,16 @@ def _golden_function_bw(grad, a, b, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.rsub_bw, golden_function=_golden_function_bw)
 
 
-def _golden_function_bw(grad, a, b, value="none", *args, **kwargs):
+def _golden_function_bw(grad, a, b, variant=None, approximate=None, *args, **kwargs):
     import torch
 
-    return _golden_function_backward_with_string("bias_gelu_bw", grad, a, b, value, *args, **kwargs)
+    if approximate is None:
+        approximate = kwargs.pop("value", variant)
+    if approximate is None:
+        approximate = "none"
+    if isinstance(approximate, ttnn.GeluVariant):
+        approximate = "tanh" if approximate == ttnn.GeluVariant.Tanh else "none"
+    return _golden_function_backward_with_string("bias_gelu_bw", grad, a, b, approximate, *args, **kwargs)
 
 
 ttnn.attach_golden_function(ttnn.bias_gelu_bw, golden_function=_golden_function_bw)

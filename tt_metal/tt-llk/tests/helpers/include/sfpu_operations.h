@@ -39,73 +39,73 @@
 // calculate_nez_uint32, calculate_comp_unary_int + their *_init). Distinct from
 // the tt-llk sfpu/ckernel_sfpu_comp.h (_calculate_zero_comp_ etc.) included
 // below; the two share no symbol names so both can coexist.
+#include "llk_sfpu/ckernel_sfpu_binop_with_unary.h"
+#include "llk_sfpu/ckernel_sfpu_celu.h"
 #include "llk_sfpu/ckernel_sfpu_comp.h"
 #include "llk_sfpu/ckernel_sfpu_digamma.h"
 #include "llk_sfpu/ckernel_sfpu_div_int32.h"
 #include "llk_sfpu/ckernel_sfpu_div_int32_floor.h"
+#include "llk_sfpu/ckernel_sfpu_elu.h"
 #include "llk_sfpu/ckernel_sfpu_erf.h"
 #include "llk_sfpu/ckernel_sfpu_erfc.h"
+#include "llk_sfpu/ckernel_sfpu_erfinv.h"
+#include "llk_sfpu/ckernel_sfpu_exp.h"
+#include "llk_sfpu/ckernel_sfpu_exp2.h"
 #include "llk_sfpu/ckernel_sfpu_expm1.h"
 #include "llk_sfpu/ckernel_sfpu_fmod.h"
 #include "llk_sfpu/ckernel_sfpu_gcd.h"
+#include "llk_sfpu/ckernel_sfpu_gelu.h"
 #include "llk_sfpu/ckernel_sfpu_hardmish.h"
 #include "llk_sfpu/ckernel_sfpu_hardshrink.h"
 #include "llk_sfpu/ckernel_sfpu_hardtanh.h"
+#include "llk_sfpu/ckernel_sfpu_heaviside.h"
+#include "llk_sfpu/ckernel_sfpu_i0.h"
 #include "llk_sfpu/ckernel_sfpu_i1.h"
 #include "llk_sfpu/ckernel_sfpu_identity.h"
 #include "llk_sfpu/ckernel_sfpu_isclose.h"
 #include "llk_sfpu/ckernel_sfpu_lcm.h"
+#include "llk_sfpu/ckernel_sfpu_lerp.h"
 #include "llk_sfpu/ckernel_sfpu_lgamma.h"
 #include "llk_sfpu/ckernel_sfpu_log.h"
+#include "llk_sfpu/ckernel_sfpu_log1p.h"
 #include "llk_sfpu/ckernel_sfpu_logical_not.h"
 #include "llk_sfpu/ckernel_sfpu_logsigmoid.h"
 #include "llk_sfpu/ckernel_sfpu_mask.h"
+#include "llk_sfpu/ckernel_sfpu_mish.h"
 #include "llk_sfpu/ckernel_sfpu_mul_int32.h"
 #include "llk_sfpu/ckernel_sfpu_negative.h"
 #include "llk_sfpu/ckernel_sfpu_polygamma.h"
 #include "llk_sfpu/ckernel_sfpu_prelu.h"
+#include "llk_sfpu/ckernel_sfpu_rdiv.h"
+#include "llk_sfpu/ckernel_sfpu_recip.h"
 #include "llk_sfpu/ckernel_sfpu_remainder.h"
 #include "llk_sfpu/ckernel_sfpu_rpow.h"
+#include "llk_sfpu/ckernel_sfpu_rsqrt.h"
 #include "llk_sfpu/ckernel_sfpu_rsub_int32.h"
+#include "llk_sfpu/ckernel_sfpu_selu.h"
+#include "llk_sfpu/ckernel_sfpu_shift.h"
+#include "llk_sfpu/ckernel_sfpu_sigmoid.h"
 #include "llk_sfpu/ckernel_sfpu_sigmoid_appx.h"
 #include "llk_sfpu/ckernel_sfpu_sign.h"
 #include "llk_sfpu/ckernel_sfpu_signbit.h"
 #include "llk_sfpu/ckernel_sfpu_silu.h"
+#include "llk_sfpu/ckernel_sfpu_snake_beta.h"
 #include "llk_sfpu/ckernel_sfpu_softplus.h"
+#include "llk_sfpu/ckernel_sfpu_softshrink.h"
+#include "llk_sfpu/ckernel_sfpu_softsign.h"
+#include "llk_sfpu/ckernel_sfpu_sqrt.h"
 #include "llk_sfpu/ckernel_sfpu_sqrt_custom.h"
+#include "llk_sfpu/ckernel_sfpu_square.h"
+#include "llk_sfpu/ckernel_sfpu_tanh.h"
 #include "llk_sfpu/ckernel_sfpu_tanh_derivative.h"
+#include "llk_sfpu/ckernel_sfpu_tanhshrink.h"
+#include "llk_sfpu/ckernel_sfpu_trigonometry.h"
+#include "llk_sfpu/ckernel_sfpu_typecast.h"
 #include "llk_sfpu/ckernel_sfpu_unary_comp.h"
 #include "llk_sfpu/ckernel_sfpu_unary_max_min.h"
 #include "llk_sfpu/ckernel_sfpu_unary_power.h"
 #include "llk_sfpu/ckernel_sfpu_unary_shift.h"
 #include "llk_sfpu/ckernel_sfpu_xielu.h"
-#include "llk_sfpu/ckernel_sfpu_binop_with_unary.h"
-#include "llk_sfpu/ckernel_sfpu_celu.h"
-#include "llk_sfpu/ckernel_sfpu_elu.h"
-#include "llk_sfpu/ckernel_sfpu_erfinv.h"
-#include "llk_sfpu/ckernel_sfpu_exp.h"
-#include "llk_sfpu/ckernel_sfpu_exp2.h"
-#include "llk_sfpu/ckernel_sfpu_gelu.h"
-#include "llk_sfpu/ckernel_sfpu_heaviside.h"
-#include "llk_sfpu/ckernel_sfpu_i0.h"
-#include "llk_sfpu/ckernel_sfpu_lerp.h"
-#include "llk_sfpu/ckernel_sfpu_log1p.h"
-#include "llk_sfpu/ckernel_sfpu_mish.h"
-#include "llk_sfpu/ckernel_sfpu_rdiv.h"
-#include "llk_sfpu/ckernel_sfpu_recip.h"
-#include "llk_sfpu/ckernel_sfpu_rsqrt.h"
-#include "llk_sfpu/ckernel_sfpu_selu.h"
-#include "llk_sfpu/ckernel_sfpu_shift.h"
-#include "llk_sfpu/ckernel_sfpu_sigmoid.h"
-#include "llk_sfpu/ckernel_sfpu_snake_beta.h"
-#include "llk_sfpu/ckernel_sfpu_softshrink.h"
-#include "llk_sfpu/ckernel_sfpu_softsign.h"
-#include "llk_sfpu/ckernel_sfpu_sqrt.h"
-#include "llk_sfpu/ckernel_sfpu_square.h"
-#include "llk_sfpu/ckernel_sfpu_tanh.h"
-#include "llk_sfpu/ckernel_sfpu_tanhshrink.h"
-#include "llk_sfpu/ckernel_sfpu_trigonometry.h"
-#include "llk_sfpu/ckernel_sfpu_typecast.h"
 #include "sfpu/ckernel_sfpu_add_int.h"
 #include "sfpu/ckernel_sfpu_comp.h"
 #include "sfpu/ckernel_sfpu_expm1_cw.h"
@@ -734,6 +734,18 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
 #else
     constexpr std::uint32_t SHIFT_AMOUNT = 3u;
 #endif
+    // Integer threshold for relu_min's vInt branch, as a two's-complement uint32 (_relu_min_
+    // declares the parameter std::uint32_t and immediately static_casts it to int). Overridable
+    // via the SFPU_RELU_MIN_INT_THRESHOLD template parameter, on the same #ifdef arrangement as
+    // SHIFT_AMOUNT, so the int32 sweep can drive a *negative* threshold -- the only way to reach
+    // the sign+magnitude re-encoding branch in _relu_min_, which no production caller triggers.
+    // A test that does not set it keeps the fixed 5. The golden reads the same value through
+    // UnarySFPUGolden's relu_min_int_threshold argument, so the two sides move together.
+#ifdef SFPU_RELU_MIN_INT_THRESHOLD
+    constexpr std::uint32_t RELU_MIN_INT_THRESHOLD = SFPU_RELU_MIN_INT_THRESHOLD;
+#else
+    constexpr std::uint32_t RELU_MIN_INT_THRESHOLD = 5u;
+#endif
     // Integer scalar that unary_eq/unary_ne (Int32) compare against via metal
     // calculate_comp_unary_int. Shared with the golden (golden_generators.py:
     // _unary_comp_int_scalar); the two sides must move together.
@@ -1118,7 +1130,13 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
         if (math_format == ckernel::to_underlying(DataFormat::Int32))
         {
             SFPU_UNARY_CALL(
-                DST_SYNC_MODE, DST_ACCUM_MODE, _relu_min_, (sfpi::vInt, APPROX_MODE, ITERATIONS, std::uint32_t), dst_index, vector_mode, 5u /* threshold */);
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                _relu_min_,
+                (sfpi::vInt, APPROX_MODE, ITERATIONS, std::uint32_t),
+                dst_index,
+                vector_mode,
+                RELU_MIN_INT_THRESHOLD /* threshold */);
         }
         else
         {

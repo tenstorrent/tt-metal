@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 import pytest
@@ -13,6 +13,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
+from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_scan_test_utils import (
     BF16_ALLOWED,
@@ -69,6 +70,89 @@ _PRODUCTION_CASE = _PerformanceCase(
     expected_duration_ns=363_886,
 )
 _PRODUCTION_BF16 = frozenset({"kd", "q_decay", "final_decay"})
+
+
+def _recurrent_chunk_scan_ops(
+    inputs: Sequence[torch.Tensor | ttnn.Tensor],
+    state: torch.Tensor | ttnn.Tensor,
+    outputs: Sequence[torch.Tensor | ttnn.Tensor],
+) -> tuple[perf_model.FpuOps, perf_model.SfpuOps]:
+    if len(inputs) != 7 or len(outputs) != 2:
+        raise ValueError("recurrent chunk scan requires seven protocol inputs and two outputs")
+    tensors = (*inputs, state, *outputs)
+    if any(any(dimension <= 0 for dimension in tensor.shape) for tensor in tensors):
+        raise ValueError("recurrent chunk-scan tensor shapes must be positive")
+    if any(len(tensor.shape) != 4 for tensor in inputs) or len(state.shape) != 3:
+        raise ValueError("recurrent chunk-scan tensor shapes are inconsistent")
+
+    batch_heads, num_chunks, chunk_size, value_dim = inputs[0].shape
+    key_dim = inputs[1].shape[-1]
+    expected_input_shapes = (
+        (batch_heads, num_chunks, CHUNK_SIZE, value_dim),
+        (batch_heads, num_chunks, CHUNK_SIZE, key_dim),
+        (batch_heads, num_chunks, CHUNK_SIZE, key_dim),
+        (batch_heads, num_chunks, CHUNK_SIZE, CHUNK_SIZE),
+        (batch_heads, num_chunks, key_dim, CHUNK_SIZE),
+        (batch_heads, num_chunks, key_dim, 1),
+        (batch_heads, num_chunks, CHUNK_SIZE, CHUNK_SIZE),
+    )
+    if (
+        chunk_size != CHUNK_SIZE
+        or any(tensor.shape != expected for tensor, expected in zip(inputs, expected_input_shapes, strict=True))
+        or state.shape != (batch_heads, key_dim, value_dim)
+        or outputs[0].shape != (batch_heads, num_chunks, CHUNK_SIZE, value_dim)
+        or outputs[1].shape != state.shape
+    ):
+        raise ValueError("recurrent chunk-scan tensor shapes are inconsistent")
+
+    instances = batch_heads * num_chunks
+    return (
+        perf_model.FpuOps(
+            matrix_flops=instances * (6 * CHUNK_SIZE * key_dim * value_dim + 4 * CHUNK_SIZE**2 * value_dim),
+            multiply_ops=instances * key_dim * value_dim,
+            add_ops=instances * (2 * CHUNK_SIZE * value_dim + key_dim * value_dim),
+        ),
+        perf_model.SfpuOps(),
+    )
+
+
+def _recurrent_chunk_scan_performance(
+    inputs: Sequence[ttnn.Tensor],
+    state: ttnn.Tensor,
+    outputs: Sequence[ttnn.Tensor],
+    *,
+    measured_ns: float,
+    math_fidelity: ttnn.MathFidelity,
+) -> perf_model.KdaPerformance:
+    fpu, sfpu = _recurrent_chunk_scan_ops(inputs, state, outputs)
+    return perf_model.performance(
+        fpu=fpu,
+        sfpu=sfpu,
+        inputs=(*inputs, state),
+        outputs=outputs,
+        measured_ns=measured_ns,
+        math_fidelity=math_fidelity,
+    )
+
+
+def test_recurrent_chunk_scan_work_golden() -> None:
+    inputs = (
+        torch.empty((1, 1, 32, 1)),
+        torch.empty((1, 1, 32, 2)),
+        torch.empty((1, 1, 32, 2)),
+        torch.empty((1, 1, 32, 32)),
+        torch.empty((1, 1, 2, 32)),
+        torch.empty((1, 1, 2, 1)),
+        torch.empty((1, 1, 32, 32)),
+    )
+    fpu, sfpu = _recurrent_chunk_scan_ops(
+        inputs,
+        torch.empty((1, 2, 1)),
+        (torch.empty((1, 1, 32, 1)), torch.empty((1, 2, 1))),
+    )
+
+    assert fpu == perf_model.FpuOps(matrix_flops=4480, multiply_ops=2, add_ops=66)
+    assert sfpu == perf_model.SfpuOps()
 
 
 @pytest.mark.parametrize(
@@ -311,9 +395,21 @@ def test_recurrent_chunk_scan_regression_performance(device: ttnn.Device) -> Non
         CHUNK_SIZE,
         case.value_dim,
     )
+    performance = _recurrent_chunk_scan_performance(
+        inputs,
+        state,
+        outputs,
+        measured_ns=duration_ns,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+    )
     logger.info(
-        f"recurrent chunk scan regression {case.case_id}: duration={duration_ns:.0f} ns, "
-        f"profiler_runtime_id={perf_record['runtime_id']}"
+        f"recurrent chunk scan regression {case.case_id}: measured_ns={duration_ns:.0f}, "
+        f"runtime_id={perf_record['runtime_id']}, work={performance.work}, "
+        f"ideal_fpu_ns={performance.ideal_fpu_ns:.2f}, ideal_dram_ns={performance.ideal_dram_ns:.2f}, "
+        f"ideal_ns={performance.ideal_ns:.2f}, "
+        f"fpu_utilization_pct={performance.fpu_utilization_pct:.2f}, "
+        f"dram_utilization_pct={performance.dram_utilization_pct:.2f}, "
+        f"utilization_pct={performance.utilization_pct:.2f}"
     )
     upper = case.expected_duration_ns * (1 + _PERF_REGRESSION_MARGIN)
     assert duration_ns <= upper, (
@@ -349,9 +445,21 @@ def test_recurrent_chunk_scan_production_performance(device: ttnn.Device) -> Non
         case.value_dim,
     )
     assert outputs[0].memory_config() == ttnn.DRAM_MEMORY_CONFIG
+    performance = _recurrent_chunk_scan_performance(
+        inputs,
+        state,
+        outputs,
+        measured_ns=duration_ns,
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+    )
     logger.info(
-        f"recurrent chunk scan production {case.case_id}: duration={duration_ns:.0f} ns, "
-        f"profiler_runtime_id={perf_record['runtime_id']}"
+        f"recurrent chunk scan production {case.case_id}: measured_ns={duration_ns:.0f}, "
+        f"runtime_id={perf_record['runtime_id']}, work={performance.work}, "
+        f"ideal_fpu_ns={performance.ideal_fpu_ns:.2f}, ideal_dram_ns={performance.ideal_dram_ns:.2f}, "
+        f"ideal_ns={performance.ideal_ns:.2f}, "
+        f"fpu_utilization_pct={performance.fpu_utilization_pct:.2f}, "
+        f"dram_utilization_pct={performance.dram_utilization_pct:.2f}, "
+        f"utilization_pct={performance.utilization_pct:.2f}"
     )
     upper = case.expected_duration_ns * (1 + _PERF_REGRESSION_MARGIN)
     assert duration_ns <= upper, (

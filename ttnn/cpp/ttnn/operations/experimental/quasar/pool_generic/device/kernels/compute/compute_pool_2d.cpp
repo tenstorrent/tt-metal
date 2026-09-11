@@ -263,7 +263,7 @@ void kernel_main() {
                             ((in_nblocks_c - 1) * max_tiles_per_iter + partial_iter_output_tiles);
                         pre_tilize_cb.push_back(filler_stick_tiles);
                     }
-                    PACK((pack_untilize_uninit(pre_tilize_cb_id)));
+                    pack_untilize_uninit(pre_tilize_cb_id);
 
                     unpack_tilizeA_B_uninit(curr_in_cb_id);
                     pack_reconfig_data_format(out_cb_id);

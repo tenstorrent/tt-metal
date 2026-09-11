@@ -139,7 +139,7 @@ class CCLManager:
         self._barrier_semaphores = []
         for _ in range(2):
             self._rs_semaphores.append([ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(3)])
-            self._ag_semaphores.append([ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(2)])
+            self._ag_semaphores.append([ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(3)])
             self._barrier_semaphores.append(ttnn.create_global_semaphore(mesh_device, core_range_set, 0))
         ttnn.synchronize_device(mesh_device)
 
@@ -158,7 +158,7 @@ class CCLManager:
         return sems
 
     def get_ag_semaphore(self):
-        """Returns list of 2 semaphores for all_gather (cycles double-buffer)."""
+        """Returns list of 3 semaphores for all_gather (cycles double-buffer)."""
         sems = self._ag_semaphores[self._ag_idx]
         self._ag_idx = (self._ag_idx + 1) % 2
         return sems
@@ -284,7 +284,8 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
             scattered,
             persistent_output_buffer=None,
             dim=3,
-            multi_device_global_semaphore=ccl_manager.get_ag_semaphore(),
+            # Default async all-gather requires only the first two pre-created semaphores.
+            multi_device_global_semaphore=ccl_manager.get_ag_semaphore()[:2],
             num_links=ccl_manager.num_links,
             cluster_axis=tp_axis,
             topology=topology,
@@ -327,7 +328,8 @@ def ccl_allgather(tensor, mesh_config, ccl_manager, dim=3, memory_config=None):
             tensor,
             persistent_output_buffer=None,
             dim=dim,
-            multi_device_global_semaphore=ccl_manager.get_ag_semaphore(),
+            # Default async all-gather requires only the first two pre-created semaphores.
+            multi_device_global_semaphore=ccl_manager.get_ag_semaphore()[:2],
             num_links=ccl_manager.num_links,
             cluster_axis=tp_axis,
             topology=topology,

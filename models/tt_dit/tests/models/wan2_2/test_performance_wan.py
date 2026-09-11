@@ -65,26 +65,38 @@ def t2v_metrics(mesh_device, height):
                 "total": 850.0,
             }
     elif tuple(mesh_device.shape) == (4, 8) and height == 480:
-        expected_metrics = {
-            "encoder": 0.1,
-            "denoising": 163.0,
-            "vae": 18.2,
-            "total": 192.0,
-        }
-    elif tuple(mesh_device.shape) == (4, 8) and height == 720:
+        # 30% headroom over measured, 100% on encoder, for now.
+        # Ring measurements only; linear needs remeasuring.
         if is_blackhole():
             expected_metrics = {
-                "encoder": 0.1,
-                "denoising": 140.0,
-                "vae": 2.0,
-                "total": 142.1,
+                "encoder": 0.21,
+                "denoising": 75.0,
+                "vae": 0.42,
+                "total": 76.0,
             }
         else:
             expected_metrics = {
-                "encoder": 0.2,
-                "denoising": 370.0,
-                "vae": 7.0,
-                "total": 375.2,
+                "encoder": 0.23,
+                "denoising": 142.0,
+                "vae": 1.55,
+                "total": 144.0,
+            }
+    elif tuple(mesh_device.shape) == (4, 8) and height == 720:
+        # 30% headroom over measured, 100% on encoder, for now.
+        # Ring measurements only; linear needs remeasuring.
+        if is_blackhole():
+            expected_metrics = {
+                "encoder": 0.22,
+                "denoising": 205.0,
+                "vae": 0.85,
+                "total": 206.0,
+            }
+        else:
+            expected_metrics = {
+                "encoder": 0.22,
+                "denoising": 449.0,
+                "vae": 3.4,
+                "total": 452.0,
             }
     elif tuple(mesh_device.shape) == (2, 2):
         assert height == 480, "2x2 is only supported for 480p"

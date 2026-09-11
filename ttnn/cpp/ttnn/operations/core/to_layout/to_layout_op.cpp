@@ -184,6 +184,10 @@ Tensor to_layout_impl(
                 // workaround by applying padding and then tilizing
                 // Pad only the last two dims (height/width), sized to the tensor's rank.
                 int padding_rank = padded_output_shape.rank();
+                // Unreachable below rank 2 -- a rank <2 sharded tensor is (1, N) once promoted, so its
+                // shard height of 1 fails the tile-alignment check upstream. Assert rather than rely on
+                // that: at rank 1 the indexing below would be padding[-1].
+                TT_FATAL(padding_rank >= 2, "Height-sharded tilize needs rank >= 2, got {}", padding_rank);
                 ttsl::SmallVector<std::array<uint32_t, 2>> padding(padding_rank, {0, 0});
                 padding[padding_rank - 2] = {0, padded_output_shape[-2] - output_shape[-2]};
                 padding[padding_rank - 1] = {0, padded_output_shape[-1] - output_shape[-1]};

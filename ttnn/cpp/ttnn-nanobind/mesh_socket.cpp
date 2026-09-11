@@ -181,7 +181,7 @@ void py_module_types(nb::module_& mod) {
         .def(
             "get_config_buffer_address",
             [](const tt::tt_metal::distributed::MeshSocket& socket) {
-                return static_cast<uint32_t>(socket.get_config_buffer()->address());
+                return static_cast<uint32_t>(socket.get_config_buffer_address());
             },
             R"doc(
                 Returns the L1 address of the socket configuration buffer on the device.

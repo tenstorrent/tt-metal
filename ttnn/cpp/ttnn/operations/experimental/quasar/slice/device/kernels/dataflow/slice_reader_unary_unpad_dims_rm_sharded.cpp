@@ -41,8 +41,8 @@ void kernel_main() {
     // (no borrowed self-loop CBs).
     const auto s_in = TensorAccessor(tensor::input);
     const auto s_out = TensorAccessor(tensor::output);
-    uint32_t l1_read_addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(s_in.get_noc_addr(0));
-    uint32_t l1_write_addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(s_out.get_noc_addr(0));
+    uint32_t l1_read_addr = noc_address_backend::extract_local_address(s_in.get_noc_addr(0));
+    uint32_t l1_write_addr = noc_address_backend::extract_local_address(s_out.get_noc_addr(0));
 
     // The (noc_x, noc_y) pairs occupy [1 .. 1 + 2*num_cores_read); the num_stick_chunks block
     // begins right after, and the (start_id, num_sticks) chunk pairs after that. We read the noc

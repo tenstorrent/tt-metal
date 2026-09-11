@@ -57,7 +57,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& attention_sink,
     std::optional<uint32_t> sliding_window_size,
     const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_k,
-    const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_v) {
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_v,
+    const std::optional<ttnn::Tensor>& slot_id,
+    const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
+    std::optional<uint32_t> kv_cache_num_layers,
+    std::optional<uint32_t> kv_cache_layer_idx) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
 
@@ -93,7 +97,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         attention_sink,
         sliding_window_size,
         persistent_output_buffer_joint_k,
-        persistent_output_buffer_joint_v);
+        persistent_output_buffer_joint_v,
+        slot_id,
+        kv_actual_isl_tensor,
+        kv_cache_num_layers,
+        kv_cache_layer_idx);
     return outputs;
 }
 
@@ -387,6 +395,8 @@ void bind_sdpa(nb::module_& mod) {
             block_cyclic_chunk_local (int, optional): the per-shard chunk length (chunk_size_global / sp).
                 Required iff block_cyclic_sp_axis is set. Cross-checked against q's per-chip seq length: must be
                 q_isl or tp*q_isl (tp = mesh_size/sp) — the only two values it can legally take.
+            block_cyclic_cache_tp_sharded (bool): True = the cache is striped across ALL sp*tp devices (linear chip =
+                sp_coord*tp + tp_coord), so stripes = sp*tp and per-stripe chunk = block_cyclic_chunk_local/tp.
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8).
         )doc",
@@ -402,7 +412,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("cache_batch_idx") = nb::none(),
         nb::arg("block_cyclic_sp_axis") = nb::none(),
-        nb::arg("block_cyclic_chunk_local") = nb::none());
+        nb::arg("block_cyclic_chunk_local") = nb::none(),
+        nb::arg("block_cyclic_cache_tp_sharded") = false);
 
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.transformer.">(
         mod,
@@ -642,6 +653,18 @@ void bind_sdpa(nb::module_& mod) {
                 gathered joint K tensor [b x nhv x L x dv]. Allocated internally when omitted.
             persistent_output_buffer_joint_v (ttnn.Tensor, optional): Persistent buffer for the
                 gathered joint V tensor [b x nhv x L x dv]. Allocated internally when omitted.
+            slot_id (ttnn.Tensor, optional): Cache-user slot read on-device during trace replay.
+                Must be a one-element UINT32 ROW_MAJOR DRAM tensor on the same mesh device as Q.
+                Must be supplied together with kv_actual_isl_tensor. Defaults to None.
+            kv_actual_isl_tensor (ttnn.Tensor, optional): Prior valid global KV length read on-device
+                during trace replay. Has the same one-element UINT32 ROW_MAJOR DRAM contract as slot_id
+                and must be supplied together with it. Its value must be tile-aligned and leave enough
+                cache capacity for the current chunk. Defaults to None.
+            kv_cache_num_layers (int, optional): Number of layers packed into each cache-user slot.
+                None uses 1. The selected cache batch is
+                slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx.
+            kv_cache_layer_idx (int, optional): Layer within the cache-user slot. None uses 0 and the
+                value must be less than kv_cache_num_layers.
 
         Chunked-prefill mode is entered implicitly when input_tensor_q's per-device seq
         length is less than input_tensor_k's (Q is the latest slab; K is the populated
@@ -697,7 +720,11 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("attention_sink") = nb::none(),
         nb::arg("sliding_window_size") = nb::none(),
         nb::arg("persistent_output_buffer_joint_k").noconvert() = nb::none(),
-        nb::arg("persistent_output_buffer_joint_v").noconvert() = nb::none());
+        nb::arg("persistent_output_buffer_joint_v").noconvert() = nb::none(),
+        nb::arg("slot_id").noconvert() = nb::none(),
+        nb::arg("kv_actual_isl_tensor").noconvert() = nb::none(),
+        nb::arg("kv_cache_num_layers").noconvert() = nb::none(),
+        nb::arg("kv_cache_layer_idx").noconvert() = nb::none());
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.
@@ -731,6 +758,18 @@ void bind_sdpa(nb::module_& mod) {
             kv_actual_isl (int, optional): Prior valid global KV length before this fixed-size chunk.
                 When passed, enables KV-pad-aware rotation and derives current valid tokens as
                 logical_n - kv_actual_isl.
+            slot_id (ttnn.Tensor, optional): Cache-user slot read on-device during trace replay.
+                Must be a one-element UINT32 ROW_MAJOR DRAM tensor on the same mesh device as Q.
+                Must be supplied together with kv_actual_isl_tensor. Defaults to None.
+            kv_actual_isl_tensor (ttnn.Tensor, optional): Prior valid global KV length read on-device
+                during trace replay. Has the same one-element UINT32 ROW_MAJOR DRAM contract as slot_id
+                and must be supplied together with it. Its value must be tile-aligned and leave enough
+                cache capacity for the current chunk. Defaults to None.
+            kv_cache_num_layers (int, optional): Number of layers packed into each cache-user slot.
+                None uses 1. The selected cache batch is
+                slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx.
+            kv_cache_layer_idx (int, optional): Layer within the cache-user slot. None uses 0 and the
+                value must be less than kv_cache_num_layers.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor):

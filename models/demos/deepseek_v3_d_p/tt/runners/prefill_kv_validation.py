@@ -165,6 +165,13 @@ def kv_cache_pcc_check(
     from tests.ttnn.utils_for_testing import comp_pcc
 
     cfg = pipeline.config
+    # Assumes TP-REPLICATED twice over: `_to_host` keeps one TP column, and blockcyclic_positions
+    # un-rotates with an SP-only period. Under KV dedup both are wrong, so the PCC would be meaningless.
+    assert not getattr(cfg, "tp_shard_kv", False), (
+        "kv_cache_pcc_check has no TP-sharded reconstruction: it keeps one TP column and un-rotates with an "
+        "SP-only block-cyclic period. Validate a TP-sharded cache with the mock-migration producer "
+        "read-back (PREFILL_MOCK_MIGRATION=1) instead of PREFILL_STANDALONE_PCC / PREFILL_VALIDATE_MIGRATION."
+    )
     mesh_device = pipeline.mesh_device
     sp = cfg.sp_factor
     chunk_size = cfg.chunk_size

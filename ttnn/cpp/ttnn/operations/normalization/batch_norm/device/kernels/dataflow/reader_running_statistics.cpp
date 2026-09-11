@@ -15,36 +15,36 @@
 
 void kernel_main() {
     const auto momentum = get_arg(args::momentum);
-    uint32_t start_tile_id = get_arg(args::start_tile_id);
-    uint32_t num_tiles = get_arg(args::num_tiles);
-    uint32_t HtWt = get_arg(args::HtWt);
-    uint32_t n_stride = get_arg(args::n_stride);
-    uint32_t c_stride = get_arg(args::c_stride);
-    uint32_t N = get_arg(args::N);
-    uint32_t C = get_arg(args::C);
+    const uint32_t start_tile_id = get_arg(args::start_tile_id);
+    const uint32_t num_tiles = get_arg(args::num_tiles);
+    const uint32_t HtWt = get_arg(args::HtWt);
+    const uint32_t n_stride = get_arg(args::n_stride);
+    const uint32_t c_stride = get_arg(args::c_stride);
+    const uint32_t N = get_arg(args::N);
+    const uint32_t C = get_arg(args::C);
 
     constexpr bool fill_momentum_fp32 = get_arg(args::fill_momentum_fp32) == 1;
     constexpr uint32_t onetile = 1;
     constexpr uint32_t k_tile_face_elems = 1024;
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer dfb_src(dfb::src);            // batch_mean tiles, streamed on to the compute kernel
     DataflowBuffer dfb_momentum(dfb::momentum);  // a single tile of momentum, held for the whole kernel
 
     const uint32_t src_tile_bytes = dfb_src.get_entry_size();
     const auto src = TensorAccessor(tensor::batch_mean);
 
-    uint32_t tiles_per_batch = HtWt * C;
-    uint32_t start_n = start_tile_id / tiles_per_batch;
-    uint32_t start_remaining = start_tile_id % tiles_per_batch;
+    const uint32_t tiles_per_batch = HtWt * C;
+    const uint32_t start_n = start_tile_id / tiles_per_batch;
+    const uint32_t start_remaining = start_tile_id % tiles_per_batch;
     uint32_t start_c = start_remaining / HtWt;
     uint32_t start_t = start_remaining % HtWt;
 
     // this is the INPUT tile offset
-    uint32_t tile_offset = start_n * n_stride + start_c * c_stride + start_t;
+    uint32_t tile_offset = (start_n * n_stride) + (start_c * c_stride) + start_t;
 
-    uint32_t next_channel_shift = c_stride - HtWt;
-    uint32_t next_batch_shift = n_stride - c_stride * C;
+    const uint32_t next_channel_shift = c_stride - HtWt;
+    const uint32_t next_batch_shift = n_stride - (c_stride * C);
 
     uint32_t one_u = 0;
     const float one_f = 1.0f;

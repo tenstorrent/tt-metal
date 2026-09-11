@@ -180,7 +180,7 @@ public:
             ASSERT(false);  // the host census never bakes CACHED for this platform
 #endif
         } else if constexpr (SCOPE == SemScope::EXTERNAL) {
-#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC) && !defined(TT_EMULE_USE_L1_POOL)
+#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC) && !defined(TT_EMULE_USE_L1_POOL) && !defined(NOC_API_V1)
             // Only consumers need to lock; producers can NoC-increment without contention.
             noc_async_atomic_barrier();  // Wait until all prior NoC atomics have completed.
             const uint64_t sem_noc = ::get_noc_addr(l1_offset_);

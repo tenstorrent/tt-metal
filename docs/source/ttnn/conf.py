@@ -19,6 +19,7 @@ import sys
 import collections
 
 sys.path.insert(0, os.path.abspath(".."))
+sys.path.append(os.path.abspath("../common/_ext"))
 sys.path.append(os.path.abspath("./_ext"))
 
 MetalSphinxConfig = collections.namedtuple("MetalSphinxConfig", ["fullname", "shortname"])
@@ -56,6 +57,8 @@ extensions = [
     "myst_parser",
     "op_documenter",
     "doc_modifier",
+    "sphinx_copybutton",
+    "tt_api_build",
 ]
 
 # For markdown and RST files
@@ -107,6 +110,20 @@ html_baseurl = f"/tt-metal/" + os.environ["DOCS_VERSION"] + f"/{metal_sphinx_con
 # so a file named "default.css" will overwrite the builtin "default.css".
 html_static_path = ["_static"]
 html_js_files = ["posthog.js"]
+
+# Drop the "View page source" link from the breadcrumb bar at build time,
+# instead of removing it in the browser. The theme still renders the (now
+# empty) .wy-breadcrumbs-aside slot, which tt_theme.css hides.
+html_show_sourcelink = False
+
+# Copy buttons on code examples and signatures come from sphinx-copybutton
+# rather than a hand-written DOM pass. The selector adds the signature box to
+# the extension's default of code blocks; the exclusions keep the theme's
+# permalink glyph and the >>> prompts out of what lands on the clipboard.
+copybutton_selector = "div.highlight pre, .rst-content dl.py > dt.sig, .rst-content dl.cpp > dt.sig"
+copybutton_exclude = ".linenos, .gp, .headerlink"
+copybutton_prompt_text = r">>> |\.\.\. "
+copybutton_prompt_is_regexp = True
 
 html_context = {"logo_link_url": "https://docs.tenstorrent.com/"}
 

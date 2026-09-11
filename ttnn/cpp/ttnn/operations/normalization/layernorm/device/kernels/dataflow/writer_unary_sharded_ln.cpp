@@ -44,10 +44,10 @@ void kernel_main() {
     for (uint32_t i = 0; i < 3 * num_segments_to_write_back; ++i) {
         segment_values[i] = get_vararg(i);
     }
-    tt_l1_ptr uint32_t* segment_args = (tt_l1_ptr uint32_t*)segment_values;
+    tt_l1_ptr uint32_t* segment_args = reinterpret_cast<tt_l1_ptr uint32_t*>(segment_values);
 #endif
 
-    Noc noc;
+    const Noc noc;
 #ifdef FUSE_GAMMA
     DataflowBuffer dfb_gamma_obj(dfb::gamma);
 #endif
@@ -61,7 +61,7 @@ void kernel_main() {
 #ifndef USE_WELFORD
     {
         const uint32_t scalar_w_bits = get_arg(args::scalar_w);
-        float scalar_w_f = __builtin_bit_cast(float, scalar_w_bits);
+        const float scalar_w_f = __builtin_bit_cast(float, scalar_w_bits);
         dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
             scalar_w_f);
 
@@ -75,7 +75,7 @@ void kernel_main() {
 
         if constexpr (is_all_to_all_worker) {
             const uint32_t scalar_c_bits = get_arg(args::scalar_c);
-            float scalar_c_f = __builtin_bit_cast(float, scalar_c_bits);
+            const float scalar_c_f = __builtin_bit_cast(float, scalar_c_bits);
             dataflow_kernel_lib::
                 prepare_reduce_scaler<dfb::scaler_global, ckernel::PoolType::AVG, ckernel::ReduceDim::REDUCE_ROW>(
                     scalar_c_f);
@@ -90,7 +90,7 @@ void kernel_main() {
 
         dfb_gamma_obj.reserve_back(block_w);
         for (uint32_t w = 0; w < block_w; w++) {
-            uint32_t tile_id = width_shard_tile_start_id + w;
+            const uint32_t tile_id = width_shard_tile_start_id + w;
             noc.async_read(
                 gamma, dfb_gamma_obj, gamma_tile_bytes, {.page_id = tile_id}, {.offset_bytes = w * gamma_tile_bytes});
         }

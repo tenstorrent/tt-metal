@@ -19,9 +19,53 @@ from models.common.sampling import (
     scatter_sampling_params_to_slots,
 )
 from models.common.sampling._utils import topk_would_route_to_large_indices
-from models.common.sampling.generator import _hash_request_seed_to_device_seed, _mark_trace_buffers_corruptible
+from models.common.sampling.generator import (
+    MAX_UINT32,
+    _hash_request_seed_to_device_seed,
+    _mark_trace_buffers_corruptible,
+)
 from models.common.sampling.tt_log_probs import MAX_TOP_LOGPROBS, LogProbsResult
 from models.common.utility_functions import comp_pcc, is_blackhole
+
+
+@pytest.mark.parametrize("all_configs", [False, True])
+def test_sampling_precompile_preserves_logits_and_request_state(monkeypatch, all_configs):
+    """Compiling an in-place penalty path must not penalize the next real replay."""
+    logits = torch.tensor([1.0, 2.0, 3.0])
+    original = logits.clone()
+    monkeypatch.setattr(ttnn, "clone", torch.clone)
+    log_probs = SimpleNamespace(logprobs_enabled=[False], num_logprobs=[0], enable_log_probs=False)
+
+    def set_log_probs_mode(enabled, num_logprobs):
+        log_probs.logprobs_enabled = enabled if isinstance(enabled, list) else [enabled]
+        log_probs.num_logprobs = num_logprobs if isinstance(num_logprobs, list) else [num_logprobs]
+        log_probs.enable_log_probs = any(log_probs.logprobs_enabled)
+
+    log_probs.set_log_probs_mode = set_log_probs_mode
+    sampling = SamplingGenerator.__new__(SamplingGenerator)
+    sampling.sub_core_grids = None
+    sampling._penalties_active = True
+    sampling._trace_states = {}
+    sampling.tt_sampling = SimpleNamespace(
+        log_probs_calculator=log_probs, _force_argmax_sampling=True, _allow_force_argmax_sampling=True
+    )
+    compiled = []
+
+    def run_sampling(scratch, *, penalties_on, tt_out_tok, count_tokens):
+        assert not count_tokens, "Warmup must not add dummy samples to request history"
+        if penalties_on:
+            scratch.sub_(2.0)
+        compiled.append(penalties_on)
+
+    sampling._run_sampling = run_sampling
+    sampling.precompile(logits, all_configs=all_configs)
+
+    assert compiled
+    torch.testing.assert_close(logits, original, rtol=0, atol=0)
+    assert sampling._penalties_active is True
+    assert sampling.tt_sampling._force_argmax_sampling is True
+    assert log_probs.logprobs_enabled == [False]
+    assert log_probs.num_logprobs == [0]
 
 
 def test_sampling_trace_buffer_reuse_is_bucket_only(monkeypatch):
@@ -119,7 +163,34 @@ def test_seed_manager_seed_params_do_not_fallback_to_slot_zero():
     assert seed_manager._seed_from_slot_params([11], 0) == 11
     assert seed_manager._seed_from_slot_params([11], 1) is None
     assert seed_manager._seed_from_slot_params(torch.tensor([22]), 1) is None
+    assert seed_manager._seed_from_slot_params((44,), 0) == 44
     assert seed_manager._seed_from_slot_params(33, 3) == 33
+
+
+def test_seed_manager_updates_lazy_buffer_with_request_position_hash_and_preserves_default_source():
+    class Buffer:
+        def __init__(self):
+            self.source = torch.arange(4, dtype=torch.int64)
+            self.updates = []
+
+        def update(self, source):
+            self.source = source
+            self.updates.append(source.clone())
+
+    buffer = Buffer()
+    defaults = buffer.source.clone()
+    seed_manager = SeedManager(max_batch_size=4, seed_buffer=buffer)
+    seed_manager.reset_seed_from_slots((707, None, None, None), range(4))
+    seed_manager.align_seed_counters_to_positions((707, None, None, None), [0], [13], offset=1)
+
+    values = seed_manager.get_new_values([0])
+
+    assert values == (_hash_request_seed_to_device_seed(707, 14), MAX_UINT32, MAX_UINT32, MAX_UINT32)
+    assert torch.equal(buffer.updates[-1], torch.tensor(values))
+    assert torch.equal(buffer.source, defaults)
+
+    seed_manager.restore_default_device_values()
+    assert torch.equal(buffer.updates[-1], defaults)
 
 
 def test_seed_counter_position_alignment_skips_out_of_bounds_slots():
@@ -181,6 +252,21 @@ def test_duplicate_request_seeds_get_distinct_device_streams():
     assert sorted(seed_manager.seed_salts) == [0, 1, 2, 3]
     first_draws = [seed_manager._next_device_seed_for_slot(slot) for slot in range(4)]
     assert len(set(first_draws)) == 4, f"duplicate-seed slots drew identical device seeds: {first_draws}"
+
+
+def test_duplicate_request_seeds_can_share_one_stream_when_salting_is_disabled():
+    """Independent vLLM requests with the same seed remain bit-identical."""
+
+    seed_manager = SeedManager(
+        SimpleNamespace(_sampling_dp=1),
+        max_batch_size=4,
+        salt_duplicate_seeds=False,
+    )
+    seed_manager.reset_seed([1234, 1234, 1234, 1234], [0, 1, 2, 3])
+
+    assert seed_manager.seed_salts == [0, 0, 0, 0]
+    first_draws = [seed_manager._next_device_seed_for_slot(slot) for slot in range(4)]
+    assert len(set(first_draws)) == 1
 
 
 def test_unique_seed_stream_is_unchanged_and_slot_independent():
@@ -1080,10 +1166,26 @@ def test_num_single_device_vocab_splits(padded_vocab_size, expected_splits):
         (151936, 4),  # Qwen3
         (256000, 4),  # Gemma-2
         (262144, 4),  # 4*TOPK_MAX_WIDTH exactly
+        (262208, 5),  # Gemma-3: 8194 tiles has no even tile-aligned cut in 5..10 -> minimum count, uneven
     ],
 )
 def test_untilize_chunk_count(width, expected):
     assert TTSampling._untilize_chunk_count(width) == expected
+
+
+@pytest.mark.parametrize(
+    "width, num_chunks, expected_split, expected_last",
+    [
+        (151936, 4, 37984, 37984),  # even cut: split size is the exact chunk width
+        (262208, 5, 52448, 52416),  # uneven cut: tile-aligned split, shorter tile-aligned remainder
+    ],
+)
+def test_untilize_chunk_width(width, num_chunks, expected_split, expected_last):
+    split = TTSampling._untilize_chunk_width(width, num_chunks)
+    assert split == expected_split
+    assert split % 32 == 0
+    assert -(-width // split) == num_chunks
+    assert width - split * (num_chunks - 1) == expected_last
 
 
 @pytest.mark.parametrize(
@@ -1115,6 +1217,15 @@ def test_ttsampling_force_argmax_matches_row_max_on_wide_vocab(vocab_size, mesh_
     assert sampler.force_argmax_sampling, "greedy params must take the argmax fast path"
 
     logits_host = torch.randn(1, 1, batch_size, vocab_size)
+    # Exercise both sides of every chunk boundary, including the last element.
+    # Negative logits make accidental zero padding observable as a wrong argmax.
+    logits_host = -logits_host.abs() - 2
+    split = TTSampling._untilize_chunk_width(vocab_size, TTSampling._untilize_chunk_count(vocab_size))
+    boundary_indices = [0, vocab_size - 1]
+    for boundary in range(split, vocab_size, split):
+        boundary_indices.extend((boundary - 1, boundary))
+    for user in range(batch_size):
+        logits_host[0, 0, user, boundary_indices[user % len(boundary_indices)]] = -1
     logits_tt = ttnn.from_torch(logits_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
     logits_bf16 = ttnn.to_torch(logits_tt).float().reshape(batch_size, vocab_size)
 
@@ -1129,6 +1240,47 @@ def test_ttsampling_force_argmax_matches_row_max_on_wide_vocab(vocab_size, mesh_
             f"user {user}: token {token} has logit {logits_bf16[user, token].item():.6f}, "
             f"but the row maximum is {row_max[user].item():.6f}"
         )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 2_000_000}], indirect=True)
+def test_uneven_untilize_preserves_logits_and_argmax_under_trace(mesh_device):
+    # Isolate the argmax conversion: the single-device constructor also validates
+    # a top-k split, which deliberately does not support this padded width.
+    sampler = TTSampling.__new__(TTSampling)
+    sampler._force_argmax_sub_core_grids = None
+    width = 262208
+    split = sampler._untilize_chunk_width(width, sampler._untilize_chunk_count(width))
+    boundaries = [0, width - 1]
+    for boundary in range(split, width, split):
+        boundaries.extend((boundary - 1, boundary))
+    expected = torch.tensor([boundaries[row % len(boundaries)] for row in range(32)])
+    logits = torch.full((1, 1, 32, width), -2.0, dtype=torch.bfloat16)
+    logits[0, 0, torch.arange(32), expected] = -1.0
+    device_logits = ttnn.from_torch(logits, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    untilized = sampler._untilize_for_argmax(device_logits)
+    assert torch.equal(ttnn.to_torch(untilized), logits)
+    tokens = ttnn.argmax(untilized, dim=-1, keepdim=False)
+    assert torch.equal(ttnn.to_torch(tokens).flatten().long(), expected)
+    ttnn.deallocate(tokens)
+    ttnn.deallocate(untilized)
+
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    untilized = sampler._untilize_for_argmax(device_logits)
+    tokens = ttnn.argmax(untilized, dim=-1, keepdim=False)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    try:
+        # Reuse the capture with different maxima to detect stale inputs/outputs.
+        for expected in (expected.flip(0), expected):
+            logits.fill_(-2)
+            logits[0, 0, torch.arange(32), expected] = -1
+            host_logits = ttnn.from_torch(logits, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            ttnn.copy_host_to_device_tensor(host_logits, device_logits)
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+            assert torch.equal(ttnn.to_torch(tokens).flatten().long(), expected)
+    finally:
+        ttnn.release_trace(mesh_device, trace_id)
 
 
 def _single_device_sampling_args(mesh_device, vocab_size, max_top_k=32, max_batch_size=32):

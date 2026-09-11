@@ -81,9 +81,9 @@ def test_resolve_trace_region_size_matches_yaml(model_name, sku, expected_size):
 @pytest.mark.parametrize(
     "model_name,legacy_sku,expected_size",
     [
-        ("Llama-3.1-8B", "N150", 0),  # dynamic allocation, see #48636
-        ("Llama-3.1-8B", "T3K", 60000000),
-        ("Llama-3.3-70B", "P150x4", 96000000),
+        ("Llama-3.1-8B", "N150", 60000000),
+        ("Llama-3.1-8B", "T3K", 65000000),
+        ("Llama-3.3-70B", "P150x4", 224000000),
         ("meta-llama/Llama-3.1-8B-Instruct", "bh_quietbox_2", 52000000),
     ],
 )
@@ -175,7 +175,7 @@ def test_resolve_gemma4_config_path_aliases(model_path, sku, expected_size):
         (
             "/mnt/MLPerf/huggingface/hub/models--google--gemma-3-27b-it/snapshots/005ad3404e59d6023443cb575daa05336842228a",
             "wh_llmbox_perf",
-            30000000,
+            34000000,
         ),
         (
             "/mnt/MLPerf/huggingface/hub/models--google--gemma-3-4b-it/snapshots/093f9f388b31de276ce2de164bdc2081324b9767",

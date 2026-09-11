@@ -36,6 +36,8 @@ from ...parallel.manager import CCLManager
 from ...utils.tensor import local_device_to_torch
 from ...utils.tracing import traced_function
 
+TILE_HEIGHT = ttnn.TILE_SIZE  # 32; the per-shard T-height floor for HEIGHT_SHARDED convs
+
 
 class DilatedConv1d(_AlignedOutConv1d):
     """Symmetric ("same") zeros-pad ``Conv1dViaConv3d`` with ``dilation``. For the AMP
@@ -425,17 +427,16 @@ class Vocoder(Module):
         x_BTC_torch = x_BCT.transpose(1, 2).float().contiguous()
 
         sharded = self.parallel_config is not None and self.parallel_config.factor > 1
-        # Pad T to a multiple of (TILE_HEIGHT * factor) for tile-aligned per-chip shards;
-        # the extras propagate and get cropped from the final waveform.
+        # Pad T so each shard holds >= one tile: a short clip (T=207 at factor 8 -> 26 rows/shard,
+        # under a tile) starves the HEIGHT_SHARDED depthwise conv1d's DRAM slicer. Long clips are
+        # unchanged (already >> a tile/shard). Pad rows are masked and cropped from the waveform later.
         t_pad = 0
         if sharded:
             factor = self.parallel_config.factor
-            # `factor` alone, not `32 * factor`: partitioning happens in ROW_MAJOR, which needs no
-            # tile-aligned split offset. See audio_ops.py's `_partition_t` header.
-            align = factor
-            rem = x_BTC_torch.shape[1] % align
-            if rem != 0:
-                t_pad = align - rem
+            t_rows = x_BTC_torch.shape[1]
+            per_shard = max(-(-t_rows // factor), TILE_HEIGHT)  # ceil(t_rows / factor), floored at a tile
+            t_pad = per_shard * factor - t_rows
+            if t_pad:
                 x_BTC_torch = torch.nn.functional.pad(x_BTC_torch, (0, 0, 0, t_pad))
         self._t_pad = t_pad
 
@@ -471,6 +472,7 @@ class Vocoder(Module):
                 mesh_device=self.mesh_device,
                 parallel_config=self.parallel_config,
                 cache=self._tpad_mask_cache,
+                ccl_manager=self.ccl_manager,
             )
 
         cumrate = 1

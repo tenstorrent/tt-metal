@@ -83,6 +83,11 @@ on:
         default: true
         type: boolean
         description: "Run model sanity tests (WH Galaxy)"
+      run-llk-sanity-tests:
+        required: false
+        default: false
+        type: boolean
+        description: "Run LLK sanity tests: tt-llk python_tests smoke (WH+BH) and the Quasar compile check. Opt-in — unlike the other run-* toggles this defaults to false, so an omitted input means off."
       enable-watcher:
         required: false
         type: boolean
@@ -197,6 +202,11 @@ on:
         default: true
         type: boolean
         description: "Run model sanity tests (WH Galaxy)"
+      run-llk-sanity-tests:
+        required: false
+        default: false
+        type: boolean
+        description: "Run LLK sanity tests: tt-llk python_tests smoke (WH+BH) and the Quasar compile check"
       enable-watcher:
         required: false
         default: false
@@ -247,11 +257,71 @@ jobs:
     uses: ./.github/workflows/check-harbor.yaml
   # NOTE: build-artifact.yaml handles platform parsing internally.
   # Just pass platform and enable-lto inputs directly.
+  # `ref` is documented as a commit SHA, but nothing enforces that and
+  # actions/checkout accepts a branch or tag. The producer requires a full
+  # 40-character SHA for source-ref, because a ref that can move would recompute
+  # the same image tag over different source. Resolve once here so build-artifact
+  # and both bakes pin the identical immutable commit; resolving separately per job
+  # would reintroduce the mismatch on a branch that moves mid-run.
+  resolve-ref:
+    name: "Resolve the ref to a commit"
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    # Only a read-only commits lookup happens here, so drop the workflow-wide
+    # write grants: naming one scope sets every other to none.
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REF: ${{ inputs.ref }}
+          FALLBACK: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Percent-encode the whole ref, not just its slashes. Each of these is a
+          # legal branch name and each fails silently with a valid sha for the
+          # wrong commit, which the 40-character check below cannot catch:
+          #   `main#foo`   -> '#' starts a URL fragment, so this addresses `main`
+          #   `foo%2Fbar`  -> the '%' is decoded, so this addresses `foo/bar`
+          #   `x/comments` -> reaches the /commits/{ref}/comments sub-resource
+          # Written out rather than shelling to jq so the job needs nothing extra.
+          encode_ref() {
+            # LC_ALL=C so the loop walks bytes rather than characters: percent
+            # encoding is defined over the UTF-8 bytes, and a character-wise loop
+            # emits the code point instead, turning `café` into caf%E9 rather than
+            # caf%C3%A9. ASCII refs encode identically either way.
+            local LC_ALL=C s="$1" out="" i c
+            for (( i = 0; i < ${#s}; i++ )); do
+              c="${s:i:1}"
+              case "$c" in
+                [a-zA-Z0-9.~_-]) out+="$c" ;;
+                *) out+=$(printf '%%%02X' "'$c") ;;
+              esac
+            done
+            printf '%s' "$out"
+          }
+          if [ -z "$REF" ]; then
+            SHA="$FALLBACK"
+          else
+            SHA=$(gh api "repos/${REPO}/commits/$(encode_ref "$REF")" --jq '.sha')
+          fi
+          printf '%s' "$SHA" | grep -qE '^[0-9a-f]{40}$' \
+            || { echo "::error::could not resolve '${REF:-HEAD}' to a full commit sha, got '${SHA}'"; exit 1; }
+          echo "sha=${SHA}" | tee -a "$GITHUB_OUTPUT"
+
   build-artifact:
-    needs: check-harbor
+    needs: [check-harbor, resolve-ref]
     # A failed/errored check-harbor must not skip the whole pipeline: an empty
     # harbor-prefix output already means "fall back to direct GHCR pulls".
-    if: ${{ !cancelled() }}
+    # resolve-ref is the opposite: its output is the commit everything else is
+    # pinned to, so an empty one would silently build this workflow's own sha
+    # instead of the requested ref and burn the whole build and hardware budget
+    # against the wrong commit.
+    if: ${{ !cancelled() && needs.resolve-ref.result == 'success' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -272,7 +342,7 @@ jobs:
       # CI-internal only: consumers of these packages all run in docker images that
       # already stage SFPI, so skip the redundant download. Never set for release builds.
       use-system-sfpi: true
-      ref: ${{ inputs.ref || github.sha }}
+      ref: ${{ needs.resolve-ref.outputs.sha }}
       checkout-filter: tree:0
 
   resolve-docker-pull-refs:
@@ -286,6 +356,48 @@ jobs:
       ci-test-docker-image: ${{ needs.build-artifact.outputs.ci-test-docker-image }}
       basic-docker-image: ${{ needs.build-artifact.outputs.basic-dev-docker-image }}
       test-docker-image: ${{ needs.build-artifact.outputs.ci-test-docker-image }}
+      llk-ci-docker-image: ${{ needs.build-artifact.outputs.llk-ci-docker-image }}
+
+  bake-env-ci-test-wheel:
+    needs: [build-artifact, resolve-ref]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      # Canonical, never a resolve-docker-pull-refs output: that one is
+      # Harbor-prefixed and the producer runs GitHub-hosted with no Harbor access.
+      base-image: ${{ needs.build-artifact.outputs.ci-test-docker-image }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-env
+      image-name: prebuilt-tests-env-image
+      checkout-source: true
+      build-args: PROFILE=wheel
+      # Must match what build-artifact was given, or src/ and the wheel disagree.
+      source-ref: ${{ needs.resolve-ref.outputs.sha }}
+
+  bake-env-dev-full:
+    needs: [build-artifact, resolve-ref]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      # Canonical, never a resolve-docker-pull-refs output: that one is
+      # Harbor-prefixed and the producer runs GitHub-hosted with no Harbor access.
+      base-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-env
+      image-name: prebuilt-tests-env-image
+      checkout-source: true
+      build-args: PROFILE=full
+      source-ref: ${{ needs.resolve-ref.outputs.sha }}
 
   # Single SKU list that gates every suite (L2-nightly style). Each impl filters this list against
   # its own tests yaml via prepare_test_matrix.py, so an empty intersection just yields no jobs.
@@ -379,6 +491,7 @@ jobs:
               "sim_wh_galaxy"
               "sim_bh_p150"
               "sim_bh_galaxy"
+              "sim_quasar"
             )
             sanity_skus+=("${sim_skus[@]}")
           fi
@@ -400,7 +513,10 @@ jobs:
 
   # TTNN sanity tests
   ttnn-sanity-tests:
-    needs: [build-artifact, generate-sku-matrix]
+    # The bake feeds prebuilt-image but is deliberately absent from `if`: a failed
+    # bake yields an empty ref and the legs fall back to the artifact path, rather
+    # than skipping and counting as success in workflow-status.
+    needs: [build-artifact, generate-sku-matrix, bake-env-ci-test-wheel, resolve-ref]
     secrets: inherit
     if: ${{ always() && !cancelled() && needs.build-artifact.result == 'success' && needs.generate-sku-matrix.outputs.sanity-skus != '' && toJSON(inputs.run-ttnn-sanity-tests) != 'false' }}
     uses: ./.github/workflows/ttnn-sanity-tests-impl.yaml
@@ -415,11 +531,15 @@ jobs:
       timeout-minutes-override: ${{ inputs.enable-watcher && 240 || 0 }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-      ref: ${{ inputs.ref || github.sha }}
+      ref: ${{ needs.resolve-ref.outputs.sha }}
+      prebuilt-image: ${{ needs.bake-env-ci-test-wheel.outputs.image }}
 
   t3000-sanity-tests:
     if: ${{ always() && !cancelled() && needs.build-artifact.result == 'success' && needs.generate-sku-matrix.outputs.run-wormhole == 'true' && toJSON(inputs.run-t3000-sanity-tests) != 'false' }}
-    needs: [build-artifact, generate-sku-matrix]
+    # bake-env-dev-full is in needs but deliberately absent from the if: above.
+    # A failed bake leaves the ref empty and the leg falls back to the artifact
+    # path, which a gate on the bake would turn into a skipped suite instead.
+    needs: [build-artifact, generate-sku-matrix, bake-env-dev-full, resolve-ref]
     secrets: inherit
     uses: ./.github/workflows/t3000-sanity-tests-impl.yaml
     with:
@@ -432,49 +552,61 @@ jobs:
       # SKU set lacking a wh_llmbox entry.
       enabled-skus: ${{ needs.generate-sku-matrix.outputs.sanity-skus }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      prebuilt-image: ${{ needs.bake-env-dev-full.outputs.image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       timeout-minutes-override: ${{ inputs.enable-watcher && 80 || 0 }}
-      ref: ${{ inputs.ref || github.sha }}
+      ref: ${{ needs.resolve-ref.outputs.sha }}
 
   # Fabric sanity (via fabric_sanity_tests.yaml).
   # Single source of truth for fabric coverage in the sanity pipeline.
   fabric-sanity-tests:
     if: ${{ always() && !cancelled() && needs.build-artifact.result == 'success' && (needs.generate-sku-matrix.outputs.run-wormhole == 'true' || needs.generate-sku-matrix.outputs.run-blackhole == 'true') && toJSON(inputs.run-fabric-sanity-tests) != 'false' }}
-    needs: [build-artifact, generate-sku-matrix]
+    # bake-env-dev-full is in needs but deliberately absent from the if: above.
+    # A failed bake leaves the ref empty and the leg falls back to the artifact
+    # path, which a gate on the bake would turn into a skipped suite instead.
+    needs: [build-artifact, generate-sku-matrix, bake-env-dev-full, resolve-ref]
     secrets: inherit
     uses: ./.github/workflows/fabric-sanity-tests-impl.yaml
     with:
       enabled-skus: ${{ format('{0}{1}', needs.generate-sku-matrix.outputs.sanity-skus, needs.generate-sku-matrix.outputs.run-wormhole == 'true' && ',wh_llmbox_civ2' || '') }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      prebuilt-image: ${{ needs.bake-env-dev-full.outputs.image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
-      ref: ${{ inputs.ref || github.sha }}
+      ref: ${{ needs.resolve-ref.outputs.sha }}
 
   # Ops sanity (Wormhole + Blackhole via ops_sanity_tests.yaml)
   ops-sanity-tests:
-    needs: [resolve-docker-pull-refs, build-artifact, generate-sku-matrix]
+    # bake-env-dev-full is in needs but deliberately absent from the if: above.
+    # A failed bake leaves the ref empty and the leg falls back to the artifact
+    # path, which a gate on the bake would turn into a skipped suite instead.
+    needs: [resolve-docker-pull-refs, build-artifact, generate-sku-matrix, bake-env-dev-full, resolve-ref]
     secrets: inherit
     if: ${{ always() && !cancelled() && needs.resolve-docker-pull-refs.result == 'success' && needs.build-artifact.result == 'success' && (needs.generate-sku-matrix.outputs.run-wormhole == 'true' || needs.generate-sku-matrix.outputs.run-blackhole == 'true') && toJSON(inputs.run-ops-sanity-tests) != 'false' }}
     uses: ./.github/workflows/ops-sanity-impl.yaml
     with:
       summary-scope: ${{ inputs.platform }}
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      prebuilt-image: ${{ needs.bake-env-dev-full.outputs.image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.generate-sku-matrix.outputs.sanity-skus }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-      ref: ${{ inputs.ref || github.sha }}
+      ref: ${{ needs.resolve-ref.outputs.sha }}
 
   # UMD sanity (Blackhole only)
   umd-sanity-tests:
-    needs: [resolve-docker-pull-refs, build-artifact, generate-sku-matrix]
+    # bake-env-dev-full is in needs but deliberately absent from the if: above.
+    # A failed bake leaves the ref empty and the leg falls back to the artifact
+    # path, which a gate on the bake would turn into a skipped suite instead.
+    needs: [resolve-docker-pull-refs, build-artifact, generate-sku-matrix, bake-env-dev-full, resolve-ref]
     secrets: inherit
     if: ${{ always() && !cancelled() && needs.resolve-docker-pull-refs.result == 'success' && needs.build-artifact.result == 'success' && needs.generate-sku-matrix.outputs.run-blackhole == 'true' && toJSON(inputs.run-umd-sanity-tests) != 'false' }}
     uses: ./.github/workflows/umd-sanity-tests-impl.yaml
@@ -482,13 +614,14 @@ jobs:
       summary-scope: ${{ inputs.platform }}
       enabled-skus: ${{ needs.generate-sku-matrix.outputs.bh-skus }}
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      prebuilt-image: ${{ needs.bake-env-dev-full.outputs.image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-      ref: ${{ inputs.ref || github.sha }}
+      ref: ${{ needs.resolve-ref.outputs.sha }}
 
   ttsim-sanity-tests:
-    needs: [build-artifact, generate-sku-matrix]
+    needs: [build-artifact, generate-sku-matrix, resolve-ref]
     if: ${{ !cancelled() && needs.build-artifact.result == 'success' && needs.generate-sku-matrix.outputs.run-sim == 'true' && toJSON(inputs.run-ttsim-sanity-tests) != 'false' }}
     uses: ./.github/workflows/ttsim-sanity-tests-impl.yaml
     secrets: inherit
@@ -496,10 +629,10 @@ jobs:
       summary-scope: ${{ inputs.platform }}
       basic-docker-image: ${{ needs.build-artifact.outputs.basic-dev-docker-image }}
       package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
-      ref: ${{ inputs.ref || github.sha }}
+      ref: ${{ needs.resolve-ref.outputs.sha }}
 
   runtime-sim-sanity-tests:
-    needs: [build-artifact, generate-sku-matrix]
+    needs: [build-artifact, generate-sku-matrix, resolve-ref]
     if: ${{ !cancelled() && needs.build-artifact.result == 'success' && needs.generate-sku-matrix.outputs.run-sim == 'true' && toJSON(inputs.run-ttsim-sanity-tests) != 'false' }}
     uses: ./.github/workflows/runtime-sanity-tests-impl.yaml
     secrets: inherit
@@ -510,36 +643,91 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       # runtime_sanity_tests.yaml also covers HW SKUs; this job is the sim half only.
       enabled-skus: ${{ needs.generate-sku-matrix.outputs.sim-skus }}
-      ref: ${{ inputs.ref || github.sha }}
+      ref: ${{ needs.resolve-ref.outputs.sha }}
 
   # Blackhole multi-card post-commit tests (QB2/P300 box).
   blackhole-multi-card-fast-sanity-tests:
     if: ${{ always() && !cancelled() && needs.build-artifact.result == 'success' && needs.generate-sku-matrix.outputs.run-blackhole == 'true' && toJSON(inputs.run-blackhole-multi-card-sanity-tests) != 'false' }}
-    needs: [build-artifact, generate-sku-matrix]
+    # bake-env-dev-full is in needs but deliberately absent from the if: above.
+    # A failed bake leaves the ref empty and the leg falls back to the artifact
+    # path, which a gate on the bake would turn into a skipped suite instead.
+    needs: [build-artifact, generate-sku-matrix, bake-env-dev-full, resolve-ref]
     secrets: inherit
     uses: ./.github/workflows/blackhole-multi-card-sanity-tests-impl.yaml
     with:
       summary-scope: ${{ inputs.platform }}
       enabled-skus: ${{ needs.generate-sku-matrix.outputs.sanity-skus }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      prebuilt-image: ${{ needs.bake-env-dev-full.outputs.image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-      ref: ${{ inputs.ref || github.sha }}
+      ref: ${{ needs.resolve-ref.outputs.sha }}
 
   # Model sanity tests (WH Galaxy). The gate requires an explicit true, so a push to
   # main and the scheduled runs leave this leg out: `inputs` is null on those events.
   models-sanity-tests:
     if: ${{ always() && !cancelled() && needs.build-artifact.result == 'success' && needs.generate-sku-matrix.outputs.run-wormhole == 'true' && toJSON(inputs.run-models-sanity-tests) == 'true' }}
-    needs: [build-artifact, generate-sku-matrix]
+    # bake-env-dev-full is in needs but deliberately absent from the if: above.
+    # A failed bake leaves the ref empty and the leg falls back to the artifact
+    # path, which a gate on the bake would turn into a skipped suite instead.
+    needs: [build-artifact, generate-sku-matrix, bake-env-dev-full, resolve-ref]
     secrets: inherit
     uses: ./.github/workflows/models-sanity-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      prebuilt-image: ${{ needs.bake-env-dev-full.outputs.image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      ref: ${{ inputs.ref || github.sha }}
+      ref: ${{ needs.resolve-ref.outputs.sha }}
       summary-scope: ${{ inputs.platform }}
+
+  # LLK sanity (tt-llk python_tests smoke, WH + BH). Opt-in: run-llk-sanity-tests defaults
+  # to false, so this leg is off unless a caller asks for it. The `== 'true'` gate is the
+  # same shape models-sanity-tests uses — note that input defaults to true, so for it the
+  # gate only excludes push/schedule, where `inputs` is null; here it excludes those events
+  # *and* every call that does not opt in.
+  llk-sanity-tests:
+    needs: [resolve-docker-pull-refs, generate-sku-matrix, resolve-ref]
+    if: ${{ always() && !cancelled() && needs.resolve-docker-pull-refs.result == 'success' &&
+     (needs.generate-sku-matrix.outputs.run-wormhole == 'true' || needs.generate-sku-matrix.outputs.run-blackhole == 'true') &&
+     toJSON(inputs.run-llk-sanity-tests) == 'true' }}
+    secrets: inherit
+    uses: ./.github/workflows/llk-smoke-impl.yaml
+    with:
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
+      # sanity-skus, same as ttnn-sanity-tests. llk_pr_gate_tests.yaml references only
+      # wh_n150_civ2 and bh_p150b_civ2_viommu, so every other SKU in the list produces no
+      # matrix row, and a sim-only run yields none at all (the arch gate above also stops
+      # that case before the impl is reached).
+      enabled-skus: ${{ needs.generate-sku-matrix.outputs.sanity-skus }}
+      # Deliberately the PR gate's marker set, so this leg starts out as coverage the LLK
+      # team already keeps green. Widening it here (dropping `not nightly` / `not accuracy`)
+      # is a separate call about sanity's time budget, not a side effect of wiring it up.
+      pytest-markers: "not perf and not nightly and not quasar and not accuracy"
+      per-test-timeout: 15
+      # Charge this run against sanity's own allowance (llk.sanity in time_budget.yaml),
+      # as every other sanity impl does, rather than the PR gate's — otherwise widening
+      # one pipeline's markers would silently eat into the other's budget.
+      test-category: sanity
+      ref: ${{ needs.resolve-ref.outputs.sha }}
+
+  # LLK Quasar build check (compile-only, no hardware). Mirrors pr-gate's llk-build-quasar.
+  llk-build-quasar:
+    needs: [resolve-docker-pull-refs, resolve-ref]
+    if: ${{ always() && !cancelled() && needs.resolve-docker-pull-refs.result == 'success' && toJSON(inputs.run-llk-sanity-tests) == 'true' }}
+    runs-on: tt-ubuntu-2204-xlarge-stable
+    timeout-minutes: 20
+    container:
+      image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          ref: ${{ needs.resolve-ref.outputs.sha }}
+      - uses: ./.github/actions/llk-compile-quasar
+        with:
+          pytest-markers: "quasar"
 
   # ── AI run summary ────────────────────────────────────────────────
   # Aggregates the per-leg ai-job-summary artifacts from the sanity impls this
@@ -567,6 +755,12 @@ jobs:
       - runtime-sim-sanity-tests
       - blackhole-multi-card-fast-sanity-tests
       - models-sanity-tests
+      # The two LLK legs are deliberately absent, as fabric-sanity-tests already is: an
+      # impl belongs here only once it uploads per-leg ai_summary/job artifacts, and
+      # llk-smoke-impl uploads none (it publishes JUnit instead). Reconciliation flags an
+      # expected leg with no artifact as INFRA_FAILURE, so exposing `matrix` from
+      # llk-smoke-impl on its own would report every passing LLK leg as infra-failed.
+      # Both halves — the artifact upload and the `matrix` output — have to land together.
     # Reports on a run that failed — the case the summary exists for — but not
     # on one that was cancelled: an aborted run has no outcome to summarize, and
     # asking for one spends an LLM call to say it stopped early.
