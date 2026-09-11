@@ -342,6 +342,12 @@ def test_tanh_ulp_sweep(cfg: Config):
     s = _summarize(cfg, x, ref, hw)
     _print_summary(s)
 
+    # Full per-point arrays, for plotting the curve rather than summarising it.
+    if os.getenv("TANH_SWEEP_DUMP"):
+        d = Path(os.getenv("TANH_SWEEP_DUMP"))
+        d.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(d / f"{TAG}__{cfg.slug}.npz", x=x, ref=ref, hw=hw)
+
     if OUT_DIR is not None:
         OUT_DIR.mkdir(parents=True, exist_ok=True)
         path = OUT_DIR / f"{TAG}__{cfg.slug}.json"
