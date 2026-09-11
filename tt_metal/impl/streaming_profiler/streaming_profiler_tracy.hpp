@@ -5,8 +5,10 @@
 #pragma once
 
 #include <array>
+#include <deque>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <span>
 #include <string>
 #include <string_view>
@@ -56,6 +58,22 @@ private:
     };
 
     void on_batch(const Batch& batch, uint64_t capture);
+    // Records wait here until the d2d corrections cover them (SyncCorrections::published_until_ns for their chip),
+    // so each is placed against nodes on both sides of it instead of the last segment extended; the final publish
+    // at capture end releases the rest. TimestampedData carries its payload, so it is held as bytes.
+    struct Held {
+        std::deque<experimental::streaming_profiler::Zone> zones;
+        std::deque<experimental::streaming_profiler::Event> events;
+        std::deque<std::vector<std::byte>> data;
+    };
+    std::map<uint16_t, Held> held_;
+    void flush_held(bool all);
+    // TT_METAL_STREAMING_PROFILER_TRACY_PLOTS_ONLY: the trace carries the clock and d2d sync plots and no records,
+    // so an hours-long stress capture stays a few MB.
+    const bool plots_only_ = std::getenv("TT_METAL_STREAMING_PROFILER_TRACY_PLOTS_ONLY") != nullptr;
+    void emit_zone(const experimental::streaming_profiler::Zone& z);
+    void emit_data(const experimental::streaming_profiler::TimestampedData& d);
+    void emit_event(const experimental::streaming_profiler::Event& e);
     // Records are placed by their steady_clock time through a continuous piecewise-linear map onto Tracy's timeline:
     // a fresh segment per capture, then one per second whose slope is the two clocks' rate ratio measured over the
     // whole baseline since construction. Continuity keeps order and containment exact across segments.
@@ -98,12 +116,20 @@ private:
     // (lookup returns 0) and the timeline map has no segments (points land at raw, hours-off timestamps).
     void emit_plots();
     int64_t plot_stamp(int64_t host_ns) const;  // the PlotDataAt stamp for a point at this host time
+    void plot_point(const char* name, double value, int64_t host_ns);
 
     Service& service_;
     ConsumerHandle handle_ = 0;
     uint64_t capture_ = 0;      // the capture the map holds for; a new one starts a new map
     // Read only from the Tracy-enabled paths below, so it is unused in a build without Tracy.
     [[maybe_unused]] int64_t anchor_tracy_ = 0;  // Tracy timer at construction; every context's cpuTime
+    // The GPU contexts' origin sits this far before anchor_tracy_, so a record or clock sample from device bring-up,
+    // or one moved a little earlier by its d2d correction, keeps its real place instead of falling off the front.
+    // Corrections are bounded to a second by the consumer, so nothing legitimate can reach the origin.
+    int64_t origin_margin_ns_ = 0;
+    // Records the origin still could not hold (a correction beyond its bound): clamped to the origin and counted;
+    // nonzero means a defect upstream, never expected in a healthy capture.
+    uint64_t clamped_zones_ = 0, clamped_markers_ = 0, clamped_plot_points_ = 0;
     Probe base_{};              // taken at construction; every slope is measured against it
     std::vector<Segment> segments_;
     int64_t next_refine_ns_ = 0;
@@ -121,7 +147,7 @@ private:
         uint32_t kind;
         uint32_t core;  // eth core index on the device: one refclk counter per stream
         uint64_t ts;
-        uint32_t value24;  // the 24-bit refclk reading
+        uint64_t value;  // the refclk reading
     };
     std::vector<PlotSample> plot_samples_;  // accumulated during the capture, drained in emit_plots()
     std::unordered_set<std::string> plot_names_;  // interned: PlotDataAt keys a plot by its name pointer
