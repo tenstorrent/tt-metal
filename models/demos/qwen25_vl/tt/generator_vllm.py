@@ -114,10 +114,12 @@ class TT_Qwen2_5_VLProcessingInfo(Qwen2_5_VLProcessingInfo):
     dummy_inputs=Qwen2_5_VLDummyInputsBuilder,
 )
 class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
+    decode_input_update_contract = 1
+
     # Class-level capabilities
     model_capabilities = {
         "supports_prefix_caching": False,
-        "supports_async_decode": True,
+        "supports_async_decode": False,
     }
 
     def __init__(self, *args, **kwargs):
@@ -305,7 +307,19 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         rope_deltas_list: list = kwargs.pop(
             "rope_deltas_all_users", None
         )  # [INFO] update the cos/sin matrices for the current users in the batch
+        slot_remap = kwargs.pop("slot_remap", None)
         if rope_deltas_list is not None:
+            # This is an authoritative list in the new compacted layout, so a
+            # further remap would apply the move twice.
             super().update_rope_deltas(rope_deltas_list)
+        elif slot_remap is not None:
+            # With no new request, vLLM may only provide the old->new layout
+            # mapping. RoPE deltas are persistent per-slot model state and must
+            # move before decode uses them, including during host sampling.
+            super().remap_rope_deltas(slot_remap)
+        if slot_remap is not None:
+            # RoPE consumes the mapping above, while the shared generator must
+            # independently move dormant/on-device sampling RNG state.
+            kwargs["slot_remap"] = slot_remap
 
         return super().decode_forward(*args, **kwargs)
