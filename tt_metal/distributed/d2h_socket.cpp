@@ -257,12 +257,10 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
 
     const auto& cluster = MetalContext::instance().get_cluster();
 
-    // Mock/emulated chips have no device to map, so create_io_window() returns nullptr for them,
-    // sender_core_window_ stays null and we fall through to the cluster.write_core() dynamic writer.
+    // Mock/emulated chips have no device to map, so they skip the window creation below (guarded by
+    // !is_mock_or_emulated()) and fall through to the cluster.write_core() dynamic writer.
     // SWEmuleChip backs that with real memory-backed I/O; MockChip never invokes pcie_writer_ at
     // runtime (only socket construction / JIT), so the installed writer is harmless there.
-
-    const auto arch = MetalContext::instance().hal().get_arch();
 
     if (is_l2cpu_) {
         // sender_core_.core_coord is already a TRANSLATED L2CPU NOC coord, so no
@@ -271,17 +269,19 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
         TT_FATAL(mesh_device, "L2CPU D2H sockets require a mesh_device for TLB setup.");
         sender_device_id = mesh_device->get_device(sender_core_.device_coord)->id();
         sender_virtual_core = sender_core_.core_coord;
-        sender_core_window_ = cluster.get_driver()->create_io_window(
-            sender_device_id,
-            cluster.get_soc_desc(sender_device_id).get_coord_at(sender_virtual_core, tt::CoordSystem::TRANSLATED),
-            ll_api::kL2cpuLimBase,
-            {.size = ll_api::kL2cpuLimTlbSize});
+        if (!cluster.is_mock_or_emulated()) {
+            sender_core_window_ = cluster.get_driver()->create_io_window(
+                sender_device_id,
+                cluster.get_soc_desc(sender_device_id).get_coord_at(sender_virtual_core, tt::CoordSystem::TRANSLATED),
+                ll_api::kL2cpuLimBase,
+                {.size = ll_api::kL2cpuLimTlbSize});
+        }
     } else if (mesh_device) {
         sender_device_id = mesh_device->get_device(sender_core_.device_coord)->id();
         sender_virtual_core = mesh_device->worker_core_from_logical_core(sender_core_.core_coord);
-        if (arch == tt::ARCH::BLACKHOLE) {
-            // Anchored at 0, so a write addresses the core's L1 by its device address. Only
-            // Blackhole maps L1 this way; see the writer selection below.
+        if (!cluster.is_mock_or_emulated()) {
+            // Anchored at 0, so a write addresses the core's L1 by its device address. Only the
+            // Blackhole writer below uses this window; see the writer selection.
             sender_core_window_ = cluster.get_driver()->create_io_window(
                 sender_device_id,
                 cluster.get_soc_desc(sender_device_id).get_coord_at(sender_virtual_core, tt::CoordSystem::TRANSLATED),
@@ -293,7 +293,8 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
             sender_device_id, sender_core_.core_coord, CoreType::TENSIX);
     }
 
-    if (is_l2cpu_ && sender_core_window_ != nullptr) {
+    auto arch = MetalContext::instance().hal().get_arch();
+    if (is_l2cpu_ && !cluster.is_mock_or_emulated()) {
         // The L2CPU window is anchored at the LIM base, so absolute addresses are
         // converted to window-relative offsets before write_block(). Mock/emule
         // have no window and fall through to the write_core() path below.
@@ -301,7 +302,7 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
         pcie_writer_ = [this, l2cpu_window_base](void* data, uint32_t num_bytes, uint64_t device_addr) {
             sender_core_window_->write_block(device_addr - l2cpu_window_base, data, num_bytes);
         };
-    } else if (sender_core_window_ != nullptr) {
+    } else if (arch == tt::ARCH::BLACKHOLE && mesh_device && !cluster.is_mock_or_emulated()) {
         // This process owns a mesh_device, so it holds a window onto the sender core anchored at 0,
         // and Blackhole reaches the whole L1 through it — no driver reconfig per write.
         pcie_writer_ = [this](void* data, uint32_t num_bytes, uint64_t device_addr) {
