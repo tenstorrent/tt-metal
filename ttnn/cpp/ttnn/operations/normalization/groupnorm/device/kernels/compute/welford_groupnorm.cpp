@@ -108,6 +108,8 @@ void kernel_main() {
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t input_dst = 0;
     constexpr uint32_t mean_dst = 1;
+    // Global statistics store each group's mean followed by its variance.
+    constexpr uint32_t stats_tiles_per_group = 2;
 
     // input cbs
     constexpr uint32_t dfb_in0_id = tt::CBIndex::c_0;
@@ -455,7 +457,7 @@ void kernel_main() {
         add_init(dfb_ex_global_id, dfb_eps_id);
         for (uint32_t g = 0; g < num_groups; ++g) {
             tile_regs_acquire();
-            add_tiles(dfb_ex_global_id, dfb_eps_id, 1 + (g << 1), 0, dst0);
+            add_tiles(dfb_ex_global_id, dfb_eps_id, g * stats_tiles_per_group + 1, 0, dst0);
 
             // 1/[sqrt(Var + eps)]
             rsqrt_tile_init<true>();
@@ -534,7 +536,7 @@ void kernel_main() {
 #endif
                             reconfig_data_format_srca(dfb_normalize_in_fp32_id, dfb_ex_global_fp32_id);
                             copy_init(dfb_ex_global_fp32_id);
-                            copy_tile(dfb_ex_global_fp32_id, g << 1, mean_dst);
+                            copy_tile(dfb_ex_global_fp32_id, g * stats_tiles_per_group, mean_dst);
                             reconfig_data_format_srca(dfb_ex_global_fp32_id, dfb_ex2pe_fp32_id);
                             copy_init(dfb_ex2pe_fp32_id);
                             copy_tile(dfb_ex2pe_fp32_id, g, inv_std_dst);
@@ -558,7 +560,7 @@ void kernel_main() {
                             sub_bcast_scalar_init(dfb_in0_id, dfb_ex_global_id);
 
                             tile_regs_acquire();
-                            sub_tiles_bcast_scalar(dfb_in0_id, dfb_ex_global_id, 0, 0 + (g << 1), dst0);
+                            sub_tiles_bcast_scalar(dfb_in0_id, dfb_ex_global_id, 0, g * stats_tiles_per_group, dst0);
                             tile_regs_commit();
                             tile_regs_wait();
                             pack_tile(dst0, dfb_xmm_id);

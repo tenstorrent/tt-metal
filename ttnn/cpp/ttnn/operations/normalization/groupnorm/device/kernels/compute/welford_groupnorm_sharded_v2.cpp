@@ -69,6 +69,8 @@ void kernel_main() {
     constexpr std::uint32_t dst0 = 0;
     constexpr std::uint32_t input_dst = 0;
     constexpr std::uint32_t mean_dst = 1;
+    // Global statistics store each group's mean followed by its variance.
+    constexpr std::uint32_t stats_tiles_per_group = 2;
 
     // input cbs
     constexpr std::uint32_t dfb_in0_id = tt::CBIndex::c_0;
@@ -369,7 +371,7 @@ void kernel_main() {
         add_init(dfb_ex_global_id, dfb_eps_id);
         for (std::uint32_t g = 0; g < num_groups; ++g) {
             tile_regs_acquire();
-            add_tiles(dfb_ex_global_id, dfb_eps_id, 1 + (g << 1), 0, dst0);
+            add_tiles(dfb_ex_global_id, dfb_eps_id, g * stats_tiles_per_group + 1, 0, dst0);
 
             // 1/[sqrt(Var + eps)]
             rsqrt_tile_init<true>();
@@ -435,7 +437,7 @@ void kernel_main() {
 #endif
                         reconfig_data_format_srca(dfb_in0_welford_id, dfb_ex_global_fp32_id);
                         copy_init(dfb_ex_global_fp32_id);
-                        copy_tile(dfb_ex_global_fp32_id, g << 1, mean_dst);
+                        copy_tile(dfb_ex_global_fp32_id, g * stats_tiles_per_group, mean_dst);
                         reconfig_data_format_srca(dfb_ex_global_fp32_id, dfb_ex2pe_fp32_id);
                         copy_init(dfb_ex2pe_fp32_id);
                         copy_tile(dfb_ex2pe_fp32_id, g, inv_std_dst);
@@ -453,9 +455,9 @@ void kernel_main() {
 
                         tile_regs_acquire();
 #ifdef TILIZE_IN
-                        sub_tiles_bcast_scalar(dfb_in_id, dfb_ex_global_id, tile_id, 0 + (g << 1), dst0);
+                        sub_tiles_bcast_scalar(dfb_in_id, dfb_ex_global_id, tile_id, g * stats_tiles_per_group, dst0);
 #else
-                        sub_tiles_bcast_scalar(dfb_in0_id, dfb_ex_global_id, tile_id, 0 + (g << 1), dst0);
+                        sub_tiles_bcast_scalar(dfb_in0_id, dfb_ex_global_id, tile_id, g * stats_tiles_per_group, dst0);
 #endif
                         tile_regs_commit();
                         tile_regs_wait();
