@@ -930,6 +930,12 @@ void move_block(uint32_t in_dfb, uint32_t out_dfb, uint32_t num_tiles) {
  * front — re-basing the ring so the next chunk starts at rd_ptr==0. Merging sum (not max) avoids the
  * reduce_c prev==out in-place hazard.
  *
+ * DECISION RULE (shared with the sdpa_decode fork's fma_block_merged_sum): a merged-sum fma uses the
+ * simpler 2-deep pop-both-repush-to-front form (computes all running[i] in DST, one cur scratch reg)
+ * when statistics_tiles + 1 <= dst_size (= fp32_dest_acc_en ? 4 : 8); otherwise it must use THIS
+ * 3-deep DST-frugal form. decode qualifies for 2-deep (bf16 dst_size=8, statistics_tiles=1); prefill
+ * does NOT (fp32 dst_size=4, Sq_chunk_t=4 => 5 > 4), so it uses this one.
+ *
  * DST-frugal (unlike the sdpa_decode fork's fma, which holds num_tiles+1 DST tiles): prefill uses
  * Sq_chunk_t (up to 8) statistics tiles and runs fp32_dest_acc_en on WH, where DST holds only 4 fp32
  * tiles (sdpa_program_factory.cpp: dst_size = fp32?4:8). Holding num_tiles+1 tiles overflows DST and
