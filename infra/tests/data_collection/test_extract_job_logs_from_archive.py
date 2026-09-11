@@ -106,9 +106,9 @@ def test_extract_writes_job_id_named_files_with_the_entry_contents(tmp_path):
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir()
 
-    written = extractor.extract(archive_path, _jobs((11, "build"), (22, "test / run")), logs_dir)
+    written, resolved = extractor.extract(archive_path, _jobs((11, "build"), (22, "test / run")), logs_dir)
 
-    assert written == 2
+    assert (written, resolved) == (2, 2)
     assert (logs_dir / "11.log").read_text() == "first body"
     assert (logs_dir / "22.log").read_text() == "second body"
     # Nothing named after an archive entry reaches disk.
@@ -122,8 +122,56 @@ def test_ambiguous_job_gets_no_file_so_the_caller_falls_back(tmp_path):
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir()
 
-    assert extractor.extract(archive_path, _jobs((1, "matrix leg"), (2, "matrix leg")), logs_dir) == 0
+    assert extractor.extract(archive_path, _jobs((1, "matrix leg"), (2, "matrix leg")), logs_dir) == (0, 0)
     assert list(logs_dir.iterdir()) == []
+
+
+def test_an_existing_log_is_not_overwritten_by_an_older_attempt(tmp_path):
+    # The caller walks attempts newest-first, so a job re-run in attempt 3 must keep
+    # attempt 3's log when attempt 1's archive is opened afterwards.
+    archive_path = tmp_path / "older.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("0_flaky job.txt", "stale log from the first attempt")
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "77.log").write_text("fresh log from the latest attempt")
+
+    written, resolved = extractor.extract(archive_path, _jobs((77, "flaky job")), logs_dir)
+
+    assert (written, resolved) == (0, 1)
+    assert (logs_dir / "77.log").read_text() == "fresh log from the latest attempt"
+
+
+def test_an_empty_log_is_replaced_rather_than_kept(tmp_path):
+    # A zero-byte file is what a failed earlier write leaves behind; it carries no data,
+    # so an older attempt's real log is better than keeping it.
+    archive_path = tmp_path / "older.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("0_job.txt", "real content")
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "88.log").write_bytes(b"")
+
+    written, resolved = extractor.extract(archive_path, _jobs((88, "job")), logs_dir)
+
+    assert (written, resolved) == (1, 1)
+    assert (logs_dir / "88.log").read_text() == "real content"
+
+
+def test_archive_that_adds_nothing_new_still_succeeds(tmp_path):
+    # Every attempt after the one that supplied a job's log resolves it again and writes
+    # nothing. That must not read as "archive unusable", or the walk would treat a normal
+    # step as a failure.
+    archive_path = tmp_path / "logs.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("0_job.txt", "body")
+    jobs_path = tmp_path / "jobs.json"
+    jobs_path.write_text(json.dumps({"jobs": _jobs((5, "job"))}))
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "5.log").write_text("already here")
+
+    assert _run_main(tmp_path, archive_path, jobs_path, logs_dir) == 0
 
 
 def test_malformed_archive_is_reported_rather_than_raising(tmp_path, capsys):

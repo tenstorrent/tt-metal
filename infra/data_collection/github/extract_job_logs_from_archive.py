@@ -107,16 +107,32 @@ def resolve_entries(archive: zipfile.ZipFile, jobs: list) -> dict:
     return {entry: job_id for entry, job_id in resolved.items() if job_id not in claimed_more_than_once}
 
 
-def extract(archive_path: pathlib.Path, jobs: list, logs_dir: pathlib.Path) -> int:
+def extract(archive_path: pathlib.Path, jobs: list, logs_dir: pathlib.Path) -> tuple:
+    """Write each resolved entry to <job_id>.log, leaving any that already exists alone.
+
+    An existing file is never overwritten because the caller walks attempts newest-first:
+    a job re-run in a later attempt must keep that attempt's log, not the stale one from
+    the attempt it originally ran in.
+
+    Returns (written, resolved) so a walk can tell an unusable archive from one that was
+    read fine but had nothing new to add -- the normal case for every attempt after the
+    first one that covers a job.
+    """
+    written = 0
+    resolved = 0
     with zipfile.ZipFile(archive_path) as archive:
-        resolved = resolve_entries(archive, jobs)
-        for entry_name, job_id in resolved.items():
+        for entry_name, job_id in resolve_entries(archive, jobs).items():
+            resolved += 1
+            target_path = logs_dir / f"{job_id}.log"
+            if target_path.exists() and target_path.stat().st_size > 0:
+                continue
             # Written under an id we chose, so no archive-supplied name -- and no emoji
             # or overlong path -- ever reaches the filesystem.
-            with archive.open(entry_name) as source, open(logs_dir / f"{job_id}.log", "wb") as target:
+            with archive.open(entry_name) as source, open(target_path, "wb") as target:
                 while chunk := source.read(1024 * 1024):
                     target.write(chunk)
-    return len(resolved)
+            written += 1
+    return written, resolved
 
 
 def main() -> int:
@@ -137,18 +153,19 @@ def main() -> int:
         return 1
 
     try:
-        written = extract(args.archive, jobs, args.logs_dir)
+        written, resolved = extract(args.archive, jobs, args.logs_dir)
     except (OSError, zipfile.BadZipFile) as exc:
         print(f"[Warning] could not unpack the attempt log archive: {exc}", file=sys.stderr)
         return 1
 
-    # No logs at all means the archive was not usable; let the caller fall back rather
-    # than proceed with an empty logs dir, which the parsers downstream assert against.
-    if written == 0:
+    # Nothing recognizable at all means the archive was not usable, so say so and let the
+    # caller move on. Resolving entries but writing none is different and expected during
+    # an attempt walk: a later attempt already supplied those logs.
+    if resolved == 0:
         print("[Warning] attempt log archive contained no recognizable job logs", file=sys.stderr)
         return 1
 
-    print(f"[info] recovered {written} job logs from the archive in 1 request")
+    print(f"[info] recovered {written} job logs from the archive in 1 request ({resolved - written} already present)")
     return 0
 
 
