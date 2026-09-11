@@ -6,7 +6,7 @@ Each report is produced by **one** pytest test that spawns its own Tracy capture
 the test re-executes its own file as a plain script under ``python -m tracy``
 (running that file's ``main()``), then turns the resulting
 ``ops_perf_results_*.csv`` into the report artifacts. So ``pytest <file>`` is the
-whole command — no separate tracy invocation, no hand-run ``tt-perf-report``.
+whole command — no separate tracy invocation, no hand-run report step.
 
 Why a subprocess at all: the device profiler writes its CSV only when the
 profiled process exits, so a test can never read its own capture. The multi-window
@@ -24,6 +24,8 @@ the layer setup goes stale: it profiled bfloat16 gate/up at 116 us against the
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import re
@@ -45,7 +47,6 @@ except ModuleNotFoundError:  # plain pytest run: the outer driver never signpost
 REPO_ROOT = Path(__file__).resolve().parents[5]
 PERF_DIR = Path(__file__).resolve().parent
 REPORTS_DIR = PERF_DIR / "reports"
-_OPSLIST = PERF_DIR / "qwen3_tts_perf_report_opslist.py"
 
 # The profiler's DRAM buffer holds TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT programs
 # and DROPS markers past it with no error, leaving a partial CSV. A single layer is
@@ -57,21 +58,26 @@ _OP_SUPPORT_COUNT = int(os.environ.get("QWEN3_TTS_PERF_OP_SUPPORT_COUNT", "2000"
 # splits the heads) and this folder is a measurement tool, not a CI golden.
 _BUDGET_ENV = "QWEN3_TTS_PERF_BUDGET_US"
 
-# Argv hygiene for the three report subprocesses below. Each is invoked with an argv
-# list and never through a shell, but the window name, the block and signpost names
-# and the free-text report label all originate outside this file (env vars, caller
-# strings) and reach both an argv and a filesystem path, so each is clamped at the
-# call that uses it. `_SAFE_NAME` is also what keeps a `..` or a `/` out of the report
-# paths built from a window or block name; `_UNPRINTABLE` only strips control
-# characters from the label, so every label this folder passes is unchanged.
+# A window or block name originates outside this file (caller strings, env vars) and
+# becomes a directory and a filename, so it is clamped where it is used — this is what
+# keeps a `..` or a `/` out of the report paths built from it. Every name this folder
+# passes (`decode_single_step`, `prefill_single_layer_64`, `cp_decode`) is unchanged.
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]")
-_UNPRINTABLE = re.compile(r"[^\x20-\x7e]")
+
+# The only scripts this module will hand to tracy. `capture_tracy_report` takes a key
+# into this table rather than a path, so the file tracy executes is fixed here and a
+# caller cannot name one — and neither can anything a caller read out of the env.
+_PROFILED_SCRIPTS = {
+    "decode_single_step": PERF_DIR / "test_qwen3_tts_perf_decode_single_step.py",
+    "prefill_single_layer": PERF_DIR / "test_qwen3_tts_perf_prefill_single_layer.py",
+}
 
 
 # ── the profiled windows ─────────────────────────────────────────────────────
 # Imported, not reimplemented — see the module docstring. ``qwen3_tts_perf_layers``
 # owns every device graph these reports profile.
 from models.demos.qwen3_tts.tests.perf import qwen3_tts_perf_layers as _layers
+from models.demos.qwen3_tts.tests.perf import qwen3_tts_perf_report_opslist as _opslist
 
 
 def open_perf_device():
@@ -233,20 +239,22 @@ def _latest_ops_csv(profiler_dir: Path) -> Path:
 
 
 def _emit_ops_list(out: Path, csv: Path, name: str, label: str, start: str, stop: str) -> dict:
-    """Run the per-op report over one signpost window; returns its totals.
+    """Write the per-op report for one signpost window; returns its totals.
 
-    Every argv element is clamped or checked in this function rather than through a
-    shared helper, so the check sits at the call it protects: the block and signpost
-    names to `_SAFE_NAME`, the free-text label to printable ASCII, and both paths to
-    somewhere under `reports/` — a `..` in a block name would otherwise write the
-    report outside the perf tree. Lexical `abspath` and not `resolve()`, because a
-    report dir is a symlink on some machines and resolving would make it look like an
-    escape; `commonpath` and not `startswith`, which would accept `<root>-evil`.
+    ``qwen3_tts_perf_report_opslist.main`` is called in-process. It is a pure CSV
+    reader — no device, no profiler — so the second interpreter this used to spawn
+    bought nothing and cost one process per sub-window (five on a decode report).
+    Its documented CLI still works: ``main`` now just takes the argv it used to be
+    handed on the command line.
+
+    The block name becomes a filename, so it is clamped, and both report paths are
+    required to stay under ``reports/`` — a ``..`` in a block name would otherwise
+    write outside the perf tree. Lexical ``abspath`` and not ``resolve()``, because
+    a report dir is a symlink on some machines and resolving would make it look like
+    an escape; ``commonpath`` and not ``startswith``, which would accept
+    ``<root>-evil``.
     """
     safe_name = _SAFE_NAME.sub("_", name)
-    safe_start = _SAFE_NAME.sub("_", start)
-    safe_stop = _SAFE_NAME.sub("_", stop)
-    safe_label = _UNPRINTABLE.sub(" ", label)[:200]
     suffix = "" if safe_name == "" else f"_{safe_name}"
 
     reports_root = os.path.abspath(str(REPORTS_DIR))
@@ -256,66 +264,54 @@ def _emit_ops_list(out: Path, csv: Path, name: str, label: str, start: str, stop
         if os.path.commonpath([path, reports_root]) != reports_root:
             raise ValueError(f"refusing path outside {reports_root}: {path!r}")
 
-    r = subprocess.run(
-        [
-            sys.executable,
-            str(_OPSLIST),
-            "--window",
-            safe_label,
-            "--start",
-            safe_start,
-            "--end",
-            safe_stop,
-            "--json",
-            totals_path,
-            csv_path,
-        ],
-        cwd=str(REPO_ROOT),
-        capture_output=True,
-        text=True,
-        shell=False,
-    )
-    # Exits 1 with "no ops between signposts ..." when the window never opened —
-    # which is the failure that matters here, so it is fatal.
-    assert r.returncode == 0, f"per-op report for '{safe_start}'->'{safe_stop}' failed: {r.stderr.strip()}"
-    (out / f"ops_list{suffix}.md").write_text(r.stdout)
+    report = io.StringIO()
+    with contextlib.redirect_stdout(report):
+        rc = _opslist.main(["--window", label, "--start", start, "--end", stop, "--json", totals_path, csv_path])
+    # Returns 1 with "no ops between signposts ..." on stderr when the window never
+    # opened — which is the failure that matters here, so it is fatal.
+    assert rc == 0, f"per-op report for '{start}'->'{stop}' failed; see the error above"
+    (out / f"ops_list{suffix}.md").write_text(report.getvalue())
     return json.loads(Path(totals_path).read_text())
 
 
 def capture_tracy_report(
     window: str,
-    script: Path,
+    profiled: str,
     *,
     min_ops: int,
     label: str = "",
     sub_windows: dict | None = None,
 ) -> dict:
-    """Profile ``script`` under Tracy and write this window's report artifacts.
+    """Profile the ``profiled`` script under Tracy and write this window's artifacts.
+
+    ``profiled`` is a key into ``_PROFILED_SCRIPTS``, not a path: nothing a caller
+    passes reaches tracy's command line.
 
     Writes to ``perf/reports/<window>/``:
 
-      ``run.log``            the tracy run, stdout + stderr
-      ``ops.csv``            the raw ops_perf_results CSV, every column, every op
-      ``ops_list.md``        full per-op list + rollups (the primary artifact)
-      ``totals.json``        ops / device_ms / gap_ms / chips for the window
-      ``tt-perf-report.txt`` the ranked view, when ``tt-perf-report`` is installed
+      ``run.log``     the tracy run, stdout + stderr
+      ``ops.csv``     the raw ops_perf_results CSV, every column, every op
+      ``ops_list.md`` full per-op list + rollups (the primary artifact)
+      ``totals.json`` ops / device_ms / gap_ms / chips for the window
 
     Returns the ``totals.json`` dict.
     """
-    # `window` names both output directories and reaches tracy's argv, and `script`
-    # is the file tracy is told to execute, so both are clamped here at the call
-    # rather than in a helper. `_SAFE_NAME` leaves every window this folder uses
-    # (`decode_single_step`, `prefill_single_layer_64`) untouched.
+    # `window` becomes a directory name, so it is clamped here — `_SAFE_NAME` leaves
+    # every window this folder uses (`decode_single_step`, `prefill_single_layer_64`)
+    # untouched. It no longer reaches the command line at all.
     window = _SAFE_NAME.sub("_", window)
     out = REPORTS_DIR / window
     out.mkdir(parents=True, exist_ok=True)
     profiler_dir = REPO_ROOT / "generated" / "profiler" / f"qwen3_tts_perf_{window}"
+    profiler_dir.mkdir(parents=True, exist_ok=True)
 
-    repo_root = os.path.abspath(str(REPO_ROOT))
-    script_path = os.path.abspath(str(script))
-    if os.path.commonpath([script_path, repo_root]) != repo_root or not os.path.isfile(script_path):
-        raise ValueError(f"refusing to profile {script_path!r}: not a file under {repo_root}")
-
+    # Every element below is a literal or a module constant. The two values that used
+    # to be passed as flags are pure environment setters on tracy's side, so they are
+    # set directly on the child instead: `-o DIR` only does
+    # `os.environ["TT_METAL_PROFILER_DIR"] = DIR` plus the mkdir above (tools/tracy/
+    # __main__.py, and common.py reads it back), and `--op-support-count N` only does
+    # `os.environ["TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT"] = str(N)`. The port is an
+    # int this process got from the kernel, never a caller or an env var.
     cmd = [
         sys.executable,
         "-m",
@@ -323,20 +319,18 @@ def capture_tracy_report(
         "-p",
         "-v",
         "-r",
-        "-o",
-        os.path.abspath(str(profiler_dir)),
-        "--op-support-count",
-        str(int(_OP_SUPPORT_COUNT)),
         "-t",
         str(int(_free_port())),
-        script_path,
+        str(_PROFILED_SCRIPTS[profiled]),
     ]
     env = dict(os.environ)
     env.setdefault("TT_METAL_HOME", str(REPO_ROOT))
     env["PYTHONPATH"] = os.pathsep.join(p for p in (str(REPO_ROOT), env.get("PYTHONPATH", "")) if p)
+    env["TT_METAL_PROFILER_DIR"] = str(profiler_dir)
+    env["TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT"] = str(int(_OP_SUPPORT_COUNT))
 
     started = time.time()
-    proc = subprocess.run(cmd, cwd=repo_root, env=env, capture_output=True, text=True, shell=False)
+    proc = subprocess.run(cmd, cwd=str(REPO_ROOT), env=env, capture_output=True, text=True, shell=False)
     log = f"$ {' '.join(cmd)}\n\n{proc.stdout}\n{proc.stderr}"
     (out / "run.log").write_text(log)
     assert "No profiling data could be captured" not in log, (
@@ -367,32 +361,6 @@ def capture_tracy_report(
         for name, (sp_start, sp_stop) in (sub_windows or {}).items()
     }
 
-    # tt-perf-report is a nice-to-have second view and is NOT allowed to fail the
-    # test: it is installed separately from the repo and trails it (it currently dies
-    # with "Unknown math fidelity: HiFi3" on any CodePredictor window). ops_list.md is
-    # the primary artifact and reads the same CSV.
-    # PATH decides which binary `which` hands back, so pin it to an absolute path to a
-    # real file, and require the CSV to be the one inside this window's report dir —
-    # both checked here at the call. A miss degrades to the "not installed" note
-    # rather than raising, because this second view is never allowed to fail the test.
-    tpr = shutil.which("tt-perf-report")
-    tpr_path = os.path.abspath(tpr) if tpr else None
-    if tpr_path and os.path.isfile(tpr_path):
-        reports_root = os.path.abspath(str(REPORTS_DIR))
-        ops_csv = os.path.abspath(str(out / "ops.csv"))
-        if os.path.commonpath([ops_csv, reports_root]) != reports_root:
-            raise ValueError(f"refusing path outside {reports_root}: {ops_csv!r}")
-        r = subprocess.run(
-            [tpr_path, "--start-signpost", "start", "--end-signpost", "stop", "--no-stacked-report", ops_csv],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            shell=False,
-        )
-        (out / "tt-perf-report.txt").write_text(r.stdout + r.stderr)
-    else:
-        (out / "tt-perf-report.txt").write_text("tt-perf-report is not installed; see ops_list.md\n")
-
     assert totals["ops"] >= min_ops, (
         f"only {totals['ops']} ops in the {window} window (expected >= {min_ops}) — "
         f"the capture looks truncated; see {out / 'ops_list.md'}"
@@ -414,7 +382,6 @@ def report_summary(window: str, totals: dict, **extra) -> str:
         )
         + "\n"
         f"[{window}] report: {out / 'ops_list.md'}\n"
-        f"[{window}]         {out / 'tt-perf-report.txt'}\n"
         f"[{window}]         {out / 'ops.csv'}"
     )
 

@@ -32,7 +32,6 @@ Optional regression gate on device kernel time for the window::
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 import pytest
 
@@ -47,7 +46,6 @@ from models.demos.qwen3_tts.tests.perf.qwen3_tts_perf_common import (
     run_prefill_single_layer_window,
 )
 
-_SCRIPT = Path(__file__).resolve()
 # The Japanese demo sample pads to 64; it is the bucket the deployed prefill runs.
 _DEFAULT_BUCKET = 64
 
@@ -76,7 +74,7 @@ def test_prefill_single_layer_tracy_report():
 
     totals = capture_tracy_report(
         window,
-        _SCRIPT,
+        "prefill_single_layer",
         # One Talker prefill layer is ~23 device ops per chip. A capture well under
         # that is truncated, not fast.
         min_ops=15,

@@ -265,7 +265,7 @@ def table(headers, rows_, aligns=None):
     return "\n".join(out) + "\n"
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("csv_path")
     ap.add_argument("--window", default="", help="label for the report heading")
@@ -273,7 +273,7 @@ def main() -> int:
     ap.add_argument("--end", default="stop", help="end signpost (default: stop)")
     ap.add_argument("--top", type=int, default=40, help="rows in the ranked tables")
     ap.add_argument("--json", default="", help="also write the window totals to this JSON path")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     with open(args.csv_path, newline="") as f:
         rows = list(csv.DictReader(f))
