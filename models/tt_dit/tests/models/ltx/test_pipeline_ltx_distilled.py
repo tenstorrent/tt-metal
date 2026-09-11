@@ -820,6 +820,7 @@ def test_pipeline_distilled_bucket_multi_rung(
         num_frames=hot_frames,
         height=hot_h,
         width=hot_w,
+        fps=hot_fps,
     )
     logger.info(f"pipeline + warmup: {time.time() - t0:.1f}s")
 

@@ -213,6 +213,8 @@ class LTXPipeline:
     # be the last one taken, or a later capture reclaims its activation region. See
     # ``GemmaTokenizerEncoderPair.defer_trace_capture``.
     DEFERS_ENCODE_TRACE: bool = False
+    # Bucketed distilled routing binds FPS into RoPE and audio length during construction warmup.
+    WARMUP_USES_FPS: bool = False
 
     def __init__(
         self,
@@ -237,6 +239,7 @@ class LTXPipeline:
         num_frames: int = 0,
         height: int = 0,
         width: int = 0,
+        fps: int = 24,
         run_warmup: bool = False,
         traced: bool = False,
         extra_transformer_variants: list[tuple[str, list[LoraSpec]]] | None = None,
@@ -338,7 +341,10 @@ class LTXPipeline:
             if (run_warmup or traced) and valid_shape:
                 if traced and not run_warmup:
                     logger.info("traced=True: forcing warmup (trace capture requires precompiled kernels)")
-                self.warmup_buffers(num_frames=num_frames, height=height, width=width)
+                warmup_kwargs = {"num_frames": num_frames, "height": height, "width": width}
+                if self.WARMUP_USES_FPS:
+                    warmup_kwargs["fps"] = fps
+                self.warmup_buffers(**warmup_kwargs)
             elif traced:
                 logger.warning(
                     f"traced=True but invalid shape ({num_frames=}, {height=}, {width=}); "
@@ -416,6 +422,7 @@ class LTXPipeline:
         num_frames: int = 0,
         height: int = 0,
         width: int = 0,
+        fps: int = 24,
         **extra_pipeline_kwargs,
     ) -> "LTXPipeline":
         """Auto-configure mesh-shape defaults and forward into ``__init__``.
@@ -506,6 +513,7 @@ class LTXPipeline:
             num_frames=num_frames,
             height=height,
             width=width,
+            fps=fps,
             run_warmup=run_warmup,
             traced=traced,
             **extra_pipeline_kwargs,

@@ -57,9 +57,10 @@ waveform cropped to the clip duration.
 
 ### Knobs
 
-- `LTX_SERVED_CONFIGS` (env) / `served_configs=` (`warmup_buffers`): `"all"` (traced default:
-  every rung, ~1 min and ~110 MB of trace region each on the 4x8), `"hot"` (only the warmup
-  shape), or `"canvas:fps:dur,canvas:fps:dur,..."`.
+- `LTX_SERVED_CONFIGS` (env) / `served_configs=` (`warmup_buffers`): `"hot"` (default: only
+  the warmup shape), `"all"` (every rung, ~1 min and ~110 MB of trace region each on the 4x8),
+  or `"canvas:fps:dur,canvas:fps:dur,..."`. Use `"hot"` while validating one configuration;
+  opt into `"all"` for the final console startup once every rung is validated.
 - `exact_hot_rungs` (default on): the warmup shape's own SP-padded lengths are added to the
   ladder as rungs, so the primary config pays nothing for bucketing.
 - `trace_region_size`: ~108 MB per resident rung trace (5 rungs measured 543 MB). The traced
@@ -149,8 +150,8 @@ What to look for in the log:
   rung that was not warmed: add its config to `LTX_SERVED_CONFIGS`.
 
 Note the test warms only the listed configs' rungs (it sets `LTX_SERVED_CONFIGS` itself). To
-exercise the console's real startup path, run the normal traced pipeline with no
-`LTX_SERVED_CONFIGS` set (defaults to `"all"`, 13 rungs) and then request two different configs.
+exercise the full console startup path, run the normal traced pipeline with
+`LTX_SERVED_CONFIGS=all` (13 rungs) and then request two different configs.
 
 ### 5. Console-style run
 
@@ -161,9 +162,9 @@ LTX_TRACED=1 RUN_WARMUP=1 NO_PROMPT=1 pytest models/tt_dit/tests/models/ltx/test
   -k "test_pipeline_distilled and 4x8sp1tp0nl2_ring_is_fsdp0" -s --timeout 7200
 ```
 
-Startup is longer than before (one compile pass + capture per rung, ~1 min each) and then any
-configuration in the envelope is a replay. Restrict with `LTX_SERVED_CONFIGS=hot` for the old
-single-shape behaviour.
+With the default `LTX_SERVED_CONFIGS=hot`, startup builds only the requested shape's two stage
+traces. Set `LTX_SERVED_CONFIGS=all` to pay the longer startup cost once and make every
+configuration in the envelope a replay.
 
 ## Validation status (Sep 10, 2026, 4x8 Galaxy)
 
@@ -182,6 +183,12 @@ single-shape behaviour.
     decode is chunked and/or DRAM is freed (below).
   - No `capturing trace...` after warmup; every rung's trace I/O address unchanged after all
     requests.
+- 720p flat-output regression fixed: persistent upsampler/VAE/audio buffers are now allocated
+  before DiT trace capture, so denoise replay cannot overwrite them. Video VAE tracing also
+  honors `LTX_VAE_TRACE=0`; the validated path traces only the two DiT stages.
+- Construction warmup now receives the requested FPS. For example, 1080p/50/20 routes its
+  1001 frames as 50 FPS (`audio N=500`) instead of incorrectly treating them as 24 FPS
+  (`audio N=1043`, above the 512 audio bucket).
 - Rungs 186368 and 261120 have not yet been exercised on hardware.
 
 ### DRAM budget

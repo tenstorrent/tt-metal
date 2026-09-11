@@ -58,6 +58,7 @@ class LTXDistilledPipeline(LTXPipeline):
 
     HAS_UPSAMPLER = True
     DEFERS_ENCODE_TRACE = True
+    WARMUP_USES_FPS = True
 
     @staticmethod
     def _post_process_latent_tt(
@@ -162,12 +163,13 @@ class LTXDistilledPipeline(LTXPipeline):
         Accepted forms: ``"all"`` (the full served grid: 720p/1080p x all fps x all durations),
         ``"hot"`` (only the warmup shape), or an iterable / comma-separated string of
         ``canvas:fps:duration`` entries. ``None`` reads ``LTX_SERVED_CONFIGS`` and otherwise defaults
-        to ``"all"`` when traced -- the console pays for every rung once at startup so a resolution
-        or duration change is a trace replay, never a capture -- and to ``"hot"`` untraced (nothing
-        is captured, so there is nothing to pre-warm). The warmup shape itself is always served.
+        to ``"hot"``: only the warmup shape's own rungs are built, which keeps a single-config run
+        as cheap as before bucketing. A console that must answer any resolution / fps / duration
+        change with a replay (never a capture) sets ``LTX_SERVED_CONFIGS=all`` (or lists the configs
+        it serves) and pays for every rung once at startup. The warmup shape itself is always served.
         """
         if served_configs is None:
-            served_configs = os.environ.get("LTX_SERVED_CONFIGS") or ("all" if self._traced else "hot")
+            served_configs = os.environ.get("LTX_SERVED_CONFIGS") or "hot"
         if isinstance(served_configs, str):
             served_configs = served_configs.strip()
             served_configs = served_configs if served_configs in ("all", "hot") else served_configs.split(",")
@@ -285,6 +287,24 @@ class LTXDistilledPipeline(LTXPipeline):
             self.gemma_encoder_pair.ensure_loaded()
             self.encode_prompts(["warmup"], use_cache=False)
 
+        # Allocate every long-lived stage-2 buffer before capturing any DiT trace. Trace replay
+        # may overwrite allocator space that was free during capture, so persistent upsampler,
+        # VAE halo/padding, and audio buffers created after capture would sit in its activation
+        # region and be corrupted by the first denoise replay.
+        if "s2" in stages:
+            logger.info(f"warmup upsample → {height}x{width}")
+            self._ensure_upsampler_shape(num_frames, height, width)
+            self._upsampler_hot_shape = self._upsampler_shape
+            self._warmup_upsample(num_frames, height, width)
+
+            self._warmup_decode(num_frames, height, width)
+
+            logger.info("warmup audio decode (on-device, eager)")
+            self._warmup_audio_decode(torch.zeros(1, self.audio_n_bucket, self.in_channels), num_frames, fps=fps)
+
+            # Audio/decoder warmup may swap modules in dynamic-load configurations.
+            self._prepare_transformer(0)
+
         # Real distilled sigmas so warmup hits the same branches (incl. sigma_next == 0 final step).
         stage_sigmas = {
             "s1": list(DISTILLED_SIGMA_VALUES)[:num_inference_steps] + [0.0],
@@ -319,28 +339,15 @@ class LTXDistilledPipeline(LTXPipeline):
                     compile_only=compile_only,
                 )
 
-        if "s2" in stages:
-            # Upsample runs between stage 1 and stage 2; compile its kernels at the hot shape.
-            logger.info(f"warmup upsample → {height}x{width}")
-            self._ensure_upsampler_shape(num_frames, height, width)
-            self._upsampler_hot_shape = self._upsampler_shape
-            self._warmup_upsample(num_frames, height, width)
-
-            # Compile VAE decode at the hot full-res shape (only s2 feeds decode in generate).
-            self._warmup_decode(num_frames, height, width)
-
-            # Programs are now compiled; the first real decode at a hot shape captures its trace.
-            if self._traced and self.vae_decoder is not None:
-                self.vae_decoder._vae_traced = True
-
-            # Warm the on-device audio decode eagerly at the bucketed latent shape: compiles kernels,
-            # initializes lazy device state, and frees back to a deterministic allocator free-list,
-            # so the first real (traced) decode captures cleanly on warm state. The audio latent is
-            # always decoded at the bucket length and the waveform cropped to the clip duration.
-            logger.info("warmup audio decode (on-device, eager)")
-            self._warmup_audio_decode(torch.zeros(1, self.audio_n_bucket, self.in_channels), num_frames, fps=fps)
-
-            self._prepare_transformer(0)
+        if (
+            "s2" in stages
+            and self._traced
+            and self.vae_decoder is not None
+            and os.environ.get("LTX_VAE_TRACE", "0") != "0"
+        ):
+            # Programs are compiled; optionally let the first real hot-shape decode capture a
+            # trace. The default console path keeps this off and traces only the DiT.
+            self.vae_decoder._vae_traced = True
 
         # Warm the image encoder only for an I2V build. Pure T2V constructs the encoder shell from
         # the checkpoint too, but its transformer is not built for image conditioning and cannot
@@ -956,7 +963,7 @@ class LTXDistilledPipeline(LTXPipeline):
         )
         t_stage1 = time.time() - t0
         timings.append(("Stage 1 denoise", t_stage1))
-        logger.info(f"Stage 1 denoise: {t_stage1:.1f}s")
+        logger.info(f"Stage 1 denoise: {t_stage1:.1f}s; latent std={s1_video.float().std():.4f}")
 
         latent_frames = (num_frames - 1) // TEMPORAL_COMPRESSION + 1
         s1_h, s1_w = s1_height // SPATIAL_COMPRESSION, s1_width // SPATIAL_COMPRESSION
@@ -971,7 +978,7 @@ class LTXDistilledPipeline(LTXPipeline):
             self.upsampler.deallocate_weights()
         t_upsample = time.time() - t0
         timings.append(("Latent upsample", t_upsample))
-        logger.info(f"Latent upsample: {t_upsample:.1f}s")
+        logger.info(f"Latent upsample: {t_upsample:.1f}s; latent std={upsampled.float().std():.4f}")
         upsampled_flat = upsampled.permute(0, 2, 3, 4, 1).reshape(
             1, latent_frames * (height // SPATIAL_COMPRESSION) * (width // SPATIAL_COMPRESSION), 128
         )
@@ -997,7 +1004,7 @@ class LTXDistilledPipeline(LTXPipeline):
         )
         t_stage2 = time.time() - t0
         timings.append(("Stage 2 denoise", t_stage2))
-        logger.info(f"Stage 2 denoise: {t_stage2:.1f}s")
+        logger.info(f"Stage 2 denoise: {t_stage2:.1f}s; latent std={s2_video.float().std():.4f}")
 
         t0 = time.time()
         self._prepare_vae()
@@ -1013,9 +1020,10 @@ class LTXDistilledPipeline(LTXPipeline):
         # VAE decode is traced per exact latent shape, so only the warmed (hot) shapes replay a trace;
         # any other served config decodes eagerly rather than capturing a trace per request.
         vae_hot = any(shape[:3] == (num_frames, height, width) for shape in self._hot_shapes)
+        vae_traced = self._traced and vae_hot and os.environ.get("LTX_VAE_TRACE", "0") != "0"
         saved_vae_traced = getattr(self.vae_decoder, "_vae_traced", None)
         if self.vae_decoder is not None and self._traced:
-            self.vae_decoder._vae_traced = vae_hot
+            self.vae_decoder._vae_traced = vae_traced
         try:
             video_pixels = self.decode_latents(s2_video, latent_frames, latent_h, latent_w, output_type=decode_type)
         finally:
@@ -1023,7 +1031,11 @@ class LTXDistilledPipeline(LTXPipeline):
                 self.vae_decoder._vae_traced = saved_vae_traced
         t_vae_decode = time.time() - t0
         timings.append(("VAE decode", t_vae_decode))
-        logger.info(f"VAE decode (forward): {t_vae_decode:.1f}s — {tuple(video_pixels.shape)}")
+        pix_std = float(torch.as_tensor(video_pixels).float().std()) if hasattr(video_pixels, "shape") else float("nan")
+        logger.info(
+            f"VAE decode (forward, {'traced' if vae_traced else 'eager'}): {t_vae_decode:.1f}s — "
+            f"{tuple(video_pixels.shape)}, pixel std={pix_std:.4f}"
+        )
 
         t0 = time.time()
         # Decode the audio latent at the bucket length (one traced decode shape for every config;
