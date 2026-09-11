@@ -20,6 +20,7 @@ import pytest
 from loguru import logger
 
 from models.demos.gemma4.demo.text_demo import _batch_prefill_hits_ceiling, _maybe_xfail_batch_prefill_dram
+from models.demos.gemma4.tt.common import get_gemma4_padded_prefill_len
 from models.demos.gemma4.tt.generator_trace import (
     GEMMA4_MAX_TRACE_BATCHED_PREFILL_TOKENS,
     GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN,
@@ -27,7 +28,6 @@ from models.demos.gemma4.tt.generator_trace import (
     can_gemma4_enable_prefill_trace,
 )
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.common import get_padded_prefill_len
 from models.tt_transformers.tt.generator import SUPPORTED_PREFILL_BATCH_SIZES
 
 from ..test_factory import TestFactory, _get_model_path, parametrize_mesh_with_fabric
@@ -58,7 +58,7 @@ def test_prefill_trace_perf(batch_size, prefill_len, mesh_device, reset_seeds, r
     if int(getattr(hf_config, "hidden_size_per_layer_input", 0) or 0) > 0:
         pytest.skip("PLI models disable prefill trace")
 
-    kernel_len = get_padded_prefill_len(prefill_len)
+    kernel_len = get_gemma4_padded_prefill_len(prefill_len)
     if _batch_prefill_hits_ceiling(batch_size, prefill_len):
         pytest.skip(
             f"batch {batch_size} x kernel {kernel_len} meets 128k batched-prefill ceiling "

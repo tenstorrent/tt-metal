@@ -16,6 +16,8 @@ on:
           - llama3.3-70b
           - qwen3-32b
           - gemma-3-4b
+          - gemma-4-12b
+          - gemma-4-31b
       sku:
         description: "Select SKU to test"
         required: false

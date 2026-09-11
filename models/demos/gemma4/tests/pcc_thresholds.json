@@ -53,19 +53,33 @@
       "test_attention_decode_paged[blackhole-cache512-global-1x1]": 0.98,
       "_comment_batched_decode": "Same #47311 reduce-precision gap as decode_paged; batched node name previously fell through to default 0.99.",
       "test_attention_decode_paged_batched[blackhole-cache512-batch1-global-1x1]": 0.989,
+      "_comment_batched_decode_wh": "Wormhole twins of the two rows above, both at 0.98. Same node, same layer, same cache reached through two entry points: WH measures 0.983648 for BOTH, so the blackhole pair's 0.98/0.989 split does not reproduce here and one gate covers them. Not the reduce depth (a 4x k_chunk_size sweep moves these <1e-4) — bfp8 attention weights are the bulk of it: at bf16 both read 0.989143, and decode-SDPA HiFi4 (the shipped default) 0.989203. No configuration reaches 0.99, so this is the one 12B decode node that stays below the default even at full precision.",
+      "test_attention_decode_paged[wormhole_b0-cache512-global-1x1]": 0.98,
+      "test_attention_decode_paged_batched[wormhole_b0-cache512-batch1-global-1x1]": 0.98,
+      "_comment_decode_paged_wh_12b": "WH 1x1 measured 0.982388 (real-weights cache512 global) and 0.985300 (random-init cache1023 sliding) under shipped bfp8 + decode-SDPA HiFi4; both missed the 0.99 default. Gate matched to the existing cache512-global 0.98 row. HiFi4 does not clear 0.99 here (516d7c13).",
+      "test_attention_decode_paged_real_weights[wormhole_b0-cache512-global-1x1]": 0.98,
+      "test_attention_decode_paged[wormhole_b0-cache1023-sliding-1x1]": 0.98,
       "test_attention_decode_bounded_vs_unbounded_parity[blackhole-cache1500-1x1]": 0.97,
+      "_comment_bounded_parity_wh_12b": "Wormhole twin of the blackhole row above, same 0.97. WH 1x1 measures 0.975838 bounded-vs-HF and 0.989349 bounded-vs-unbounded (unbounded-vs-HF clears the default at 0.994463), so only the bounded path misses 0.99 — bit-reproducible across reruns. 12B is the only variant that diverges here: 31B runs the bounded path bit-identical to unbounded (pair PCC exactly 1.0) and needs no WH row. Not exercised by CI, whose 12B unit job is bh_quietbox_2-only; this row unblocks local WH runs.",
+      "test_attention_decode_bounded_vs_unbounded_parity[wormhole_b0-cache1500-1x1]": 0.97,
       "test_attention_prefill[blackhole-seq4096-global-1x1]": 0.98,
       "_comment_full_model": "Real-weight (gemma4_unified) full-model PCC ~0.94 at 1x1 (single chip measures lower than 1x4's ~0.96); known 12B unified-arch backbone-accumulation gap. Threshold set below measured.",
       "test_full_model[blackhole-1x1]": 0.92
     },
     "1x8": {
-      "_comment_via_harness_full": "Same #47311 SDPA-reduce precision gap as E2B (pcc_thresholds ~0.986); measured ~0.985 on 12B/P150x8 full-attention via_harness. Tier-1 unit test \u2014 gate below measured.",
+      "_comment_full_model_wh": "Wormhole twin of QuietBox test_full_model[blackhole-1x4] 0.935. WH T3K 1x8 measured 0.9379 vs HF (same unified-arch gap); no prior 12B WH 1x8 row so it fell through to 0.99.",
+      "test_full_model[wormhole_b0-1x8]": 0.935,
+      "_comment_attn_prefill_wh_4096": "WH T3K 1x8 global seq4096 measured 0.9873 under the default 0.99. Same 0.98 gate as 31B/26B WH 1x8 and 12B BH seq4096.",
+      "test_attention_prefill[wormhole_b0-seq4096-global-1x8]": 0.98,
+      "_comment_via_harness_full": "Same #47311 SDPA-reduce precision gap as E2B (pcc_thresholds ~0.986); measured ~0.985 on 12B/P150x8 full-attention via_harness. Tier-1 unit test — gate below measured.",
       "test_attention_paged_decode_via_harness[blackhole-full-1x8]": 0.984,
       "test_attention_paged_decode_via_harness[blackhole-sliding-1x8]": 0.98,
       "test_sampling_log_probs_pcc[blackhole-1x8]": 0.999,
-      "_comment_full_model": "12B is gemma4_unified with num_global_key_value_heads=1 (GQA 16:1). 31B is gemma4 with 4 global KV heads and measures ~0.997 on the same 1x8 stack \u2014 not a missing 12B if-branch. With product GeLU=Accurate, LB P150x8 full_model measures ~0.980 (last-token ~0.983) and full_model_decode ~0.978; earlier non-Accurate stacks were ~0.94\u20130.95. Same unified-arch accumulation gap as 1x1/1x4. Linear HiFi4/fp32 can push prefill ~0.989 but regresses decode (unicode garbage) \u2014 do not re-enable. Gate ~0.01 below measured.",
+      "_comment_full_model": "12B is gemma4_unified with num_global_key_value_heads=1 (GQA 16:1). With product GeLU=Accurate, LB P150x8 full_model measures ~0.980 and full_model_decode ~0.978. Gate ~0.01 below measured.",
       "test_full_model[blackhole-1x8]": 0.97,
-      "test_full_model_decode[blackhole-1x8]": 0.97
+      "test_full_model_decode[blackhole-1x8]": 0.97,
+      "_comment_teacher_forcing_e2e": "Rebased at this key's own length. Measured WH T3K 1x8 at prefill_512/max_new_tokens_500 with the optimization configuration (prefill SDPA hifi4_nodest, lm_head hifi3_destacc, GEMMA4_OPROJ_TUNED off): worst step 0.573780 at decode[62], mean 0.967505, bit-reproducible across repeats, test PASSES. 0.55 is unchanged in value but is now a measurement at this length rather than a value inherited from the 31B p128 gate — worst step less ~3% margin lands on 0.55. Same caveats as the 31B note: this is a regression detector for this measured configuration at this length, not a correctness target, and the mean is the better accuracy signal than a single step. Note 12B's floor is far above 31B's (0.55 vs 0.34) because its worst step is genuinely better, not because the two were calibrated differently.",
+      "test_e2e_logits_pcc[wormhole_b0-prefill_512-max_new_tokens_500-1x8]": 0.55
     },
     "1x4": {
       "test_attention_prefill[blackhole-seq1024-global-1x4]": 0.98,
@@ -126,6 +140,7 @@
       "test_full_model[blackhole-1x8]": 0.83,
       "test_layer_forward[wormhole_b0-prefill_128-sliding-1x8]": 0.98,
       "test_layer_forward[wormhole_b0-prefill_1024-sliding-1x8]": 0.98,
+      "test_layer_forward[wormhole_b0-prefill_2048-sliding-1x8]": 0.98,
       "test_layer_forward[wormhole_b0-prefill_4096-sliding-1x8]": 0.98,
       "test_layer_forward[blackhole-prefill_128-sliding-1x8]": 0.97,
       "test_layer_forward[blackhole-prefill_1024-sliding-1x8]": 0.97,
@@ -147,6 +162,10 @@
       "test_attention_decode_paged_batched[blackhole-cache1500-batch1-global-1x4]": 0.96,
       "test_attention_decode_paged_batched[blackhole-cache1500-batch16-global-1x4]": 0.96,
       "test_attention_decode_paged_batched[blackhole-cache1500-batch32-global-1x4]": 0.96,
+      "_comment_batched_decode_wh": "Same #47311 SDPA-reduce precision gap as the blackhole rows above; the wormhole_b0 twins had no entry and fell through to the default 0.99. Measured on WH T3K (1x8 host, 1x4 mesh): batch1 0.976978, batch16 0.987770, batch32 0.988788 — gate matched to the blackhole 0.96 rather than set per-measurement. Not the reduce depth: a 4x k_chunk_size sweep (32/64/128) moves these by <1e-4, and bf16 attention weights instead of bfp8 move batch1 the wrong way (0.969735). Do NOT 'fix' this with fp32_dest_acc_en=True on the decode SDPA the way the prefill sites do — measured 0.336055 at batch1 / 0.953376 at batch32. Proper LLK fp32-accumulation fix tracked in #48746.",
+      "test_attention_decode_paged_batched[wormhole_b0-cache1500-batch1-global-1x4]": 0.96,
+      "test_attention_decode_paged_batched[wormhole_b0-cache1500-batch16-global-1x4]": 0.96,
+      "test_attention_decode_paged_batched[wormhole_b0-cache1500-batch32-global-1x4]": 0.96,
       "test_prefill_trace_eager_hf_parity[blackhole-batch1-prefill_128-1x4]": 0.99,
       "test_prefill_trace_eager_hf_parity[blackhole-batch4-prefill_128-1x4]": 0.99,
       "test_prefill_trace_eager_hf_parity[blackhole-batch32-prefill_128-1x4]": 0.99,
@@ -156,7 +175,9 @@
       "test_prefill_trace_eager_hf_parity[blackhole-batch16-prefill_2048-1x4]": 0.99,
       "test_prefill_trace_eager_hf_parity[blackhole-batch16-prefill_4096-1x4]": 0.99,
       "test_lm_head[blackhole-1x4]": 0.999,
-      "test_lm_head_decode_batch32[blackhole-1x4]": 0.999
+      "test_lm_head_decode_batch32[blackhole-1x4]": 0.999,
+      "test_lm_head_bfp8_weight_decode_batch32[wormhole_b0-1x8]": 0.99,
+      "test_lm_head_bfp8_weight_decode_batch32[blackhole-1x8]": 0.99
     },
     "1x8": {
       "test_attention_prefill[wormhole_b0-seq1024-global-1x8]": 0.98,
@@ -170,12 +191,17 @@
       "test_attention_paged_decode_via_harness[blackhole-sliding-1x8]": 0.98,
       "test_full_model[wormhole_b0-1x8]": 0.98,
       "test_full_model[blackhole-1x8]": 0.97,
+      "test_layer_forward[wormhole_b0-prefill_2048-sliding-1x8]": 0.98,
       "test_lm_head[wormhole_b0-1x8]": 0.999,
       "test_lm_head[blackhole-1x8]": 0.999,
       "test_lm_head_decode_batch32[wormhole_b0-1x8]": 0.999,
       "test_lm_head_decode_batch32[blackhole-1x8]": 0.999,
+      "test_lm_head_bfp8_weight_decode_batch32[wormhole_b0-1x8]": 0.99,
+      "test_lm_head_bfp8_weight_decode_batch32[blackhole-1x8]": 0.99,
       "test_sampling_log_probs_pcc[wormhole_b0-1x8]": 0.999,
-      "test_sampling_log_probs_pcc[blackhole-1x8]": 0.999
+      "test_sampling_log_probs_pcc[blackhole-1x8]": 0.999,
+      "_comment_teacher_forcing_e2e": "Rebased at this key's own length. Measured WH T3K 1x8 at prefill_512/max_new_tokens_500 with the optimization configuration (prefill SDPA hifi4_nodest, lm_head hifi3_destacc, GEMMA4_OPROJ_TUNED off): worst step 0.351333 at decode[348], mean 0.949157, and bit-reproducible across repeats. Floor is the worst step less ~3% margin, the same convention the p128 floor used (0.5628 -> 0.55). It replaces 0.55, which was measured at p128_n128 and was never rebased when the default case became 512/500 — that gate had been failing at this length before any of the accuracy work (0.423845 at the same decode[348]) and had simply never been selected in a run. This is a REGRESSION DETECTOR at the measured configuration, not a correctness target: it is only valid for this configuration and this length, and other fidelity settings move it a lot (hifi4 0.423845, hifi3 0.458874, hifi4_nodest 0.351333). Read the mean, not the floor, as the accuracy signal — a per-step full-vocab PCC is weak here because 262k entries under tanh final_logit_softcapping(30.0) means row variance, not device error, dominates a single step. Prefer the KL / max|dlogit| block that test_teacher_forcing_e2e prints. test_full_model 0.98 is a ~6-token prompt, not this e2e path.",
+      "test_e2e_logits_pcc[wormhole_b0-prefill_512-max_new_tokens_500-1x8]": 0.34
     }
   }
 }

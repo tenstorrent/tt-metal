@@ -31,6 +31,10 @@ import time
 import torch
 
 import ttnn
+from models.demos.gemma4.tt.ccl import ccl_allgather
+
+# Local top-k width for TP-sharded greedy draft ids (tile-friendly; TTSampling uses 32).
+_SHARD_ARGMAX_K = 32
 
 
 def _to_probs(logits_row, temperature, top_p, top_k):
@@ -99,6 +103,12 @@ class SpeculativeDecoder:
         self._is_mesh = hasattr(mesh_device, "shape")
         self._mapper = target_model._replicate_to_mesh_mapper()
         self._tp = target_model.mesh_config.tp if target_model.mesh_config else 1
+        self._shard_argmax_enabled = self._tp > 1 and os.environ.get("GEMMA4_SPEC_SHARD_ARGMAX", "1").lower() not in (
+            "0",
+            "false",
+            "no",
+            "off",
+        )
         # The drafter cross-attends to the target's last full / last sliding KV.
         self._shared_kv = target_model.get_shared_kv_caches()
         # Tracing: persistent I/O buffers + execute_trace replace per-op host
@@ -114,30 +124,106 @@ class SpeculativeDecoder:
         # the next draft *token* round-trips (host argmax -> tok_in), which is a
         # read + tiny scalar copy (no device allocation -> trace-safe).
         self._draft_trace = None
-        # Single FUSED per-iteration trace (K drafter steps + verify in ONE
-        # CCL-bearing trace). Replaying ONE trace per iter avoids interleaving
-        # distinct CCL traces (the draft/verify-alternation deadlock). Requires
-        # on-device argmax + re-embed for the draft recurrence and verify-input
-        # assembly (see _fused_iter / _capture_fused_trace).
+        # Single FUSED per-iteration trace (K drafter steps + packed verify in
+        # ONE CCL-bearing trace). Replaying ONE trace per iter avoids
+        # interleaving distinct CCL traces (the draft/verify-alternation
+        # deadlock). Requires on-device argmax + re-embed for the draft
+        # recurrence and verify-input assembly (see _fused_iter /
+        # _capture_fused_trace).
         self._fused_trace = None
+        self._fused_graph_key = None
+        self._fused_setup_key = None
+        self._last_fused_reused = False
         # Single FUSED batched (B>1) per-iteration trace (batched drafter chain +
         # batched packed verify). Captured once, replayed per iter (prefill never
         # traced). See _capture_fused_trace_batched / _generate_fused_traced_batched.
         self._fused_trace_batched = None
-        # Seed mode for the fused greedy trace. "shift" (default) is the fast
-        # production mode: it reuses the previous verify hidden row as an
-        # approximate drafter seed and repairs the anchor KV at the next verify.
-        # "reseed" is the exact assistant contract: run a batch=1 target seed
-        # inside the fused trace before drafting, so the drafter sees the current
-        # anchor's exact target hidden/KV. It raises acceptance, but the extra
-        # target forward currently costs more than it saves; keep it as an A/B
-        # correctness/reference mode via GEMMA4_SPEC_FUSED_RESEED=1.
+        # Seed mode for the fused greedy trace.
+        #
+        # The drafter fuses concat(emb(token), target_hidden) through
+        # pre_projection (assistant/model.py step()) and wants BOTH at the same
+        # position t: the exact target hidden for the token it is drafting from.
+        #
+        # "reseed" (GEMMA4_SPEC_FUSED_RESEED=1) gets that exactly, with a
+        # batch=1 target forward at the new anchor before drafting. "shift"
+        # (default) avoids that forward by reusing a row of the previous verify.
+        # The exact hidden for the new anchor is NOT recoverable from that
+        # verify: the new anchor at p+m+1 is target_ids[m], but the verify row
+        # at p+m+1 processed the REJECTED draft d_m, so its hidden belongs to
+        # the wrong token. Row m (position p+m) is the nearest row that carries
+        # a committed token, which is why `current` is the default.
+        #
+        # Measured on T3K at K=6 (mean accepted /6, tok/s/user):
+        #     reseed KV-only  3.78     -     KV repair, shift's hidden
+        #     reseed          3.75   38.23   KV repair + exact h_t
+        #     shift current   3.38   51.12   no KV repair, hidden one back
+        #     shift last_acc  3.07     -     hidden two back
+        #     shift next      2.98     -     hidden of the REJECTED draft
+        #     shift + bound   3.07     -     hide the stale row from the drafter
+        #
+        # So reseed genuinely does raise acceptance (+8% tokens/iter) and still
+        # loses badly on throughput: the extra 31B forward adds ~42 ms to an
+        # ~82 ms iteration. Keep it as the A/B reference, not the default.
+        #
+        # The ablation (GEMMA4_SPEC_RESEED_KV_ONLY=1) pins down WHICH half of
+        # reseed earns that: discarding the exact hidden and keeping only the KV
+        # repair scores 3.78 -- the whole gain, and if anything better than the
+        # full mode. The exact hidden is worth nothing; the drafter only wants
+        # the ONE stale cache row at the new anchor fixed.
+        #
+        # That row is expensive on purpose. The committed token at p+m+1 is
+        # produced BY the verify, so the same verify cannot also write its KV,
+        # and any K/V for it needs a real forward. The free alternative -- just
+        # bounding the drafter's attention one position earlier to skip the
+        # stale row -- measures WORSE (3.07): the drafter would rather
+        # cross-attend to a stale anchor than to no anchor at all. If this gain
+        # is ever to be had cheaply it has to come from writing that one row,
+        # not from hiding it.
+        #
+        # Two bugs had to be fixed before any of that was measurable (it used to
+        # score 0.20/6 and emit different text than shift):
+        #   * the traced path dropped the anchor from the packed verify (P=K),
+        #     on the theory that its batch=1 seed had already covered p. But the
+        #     verify never reads the committed cache -- it merges its resident
+        #     staging block and paged_fill_cache's that back over the cache -- so
+        #     the seed's KV repair was invisible to it AND immediately clobbered,
+        #     leaving staging at p holding the previous iteration's rejected
+        #     draft. Both modes now verify [anchor, d0..dK-1] at p..p+K.
+        #   * generate_fused re-seeded from `anchor_token`, which the loop never
+        #     re-bound (only the device tensor anchor_tok_tt), so every reseed
+        #     after the first used the prompt's last token at the current
+        #     position.
         self._fused_reseed = os.environ.get("GEMMA4_SPEC_FUSED_RESEED", "0") == "1"
-        # Cheap approximate seed-row selection for fused shift mode. `next` is
-        # the original position-aligned row p+m+1. `current` uses row m (usually
-        # the last matched target row), and `last_accepted` uses row m-1 when at
-        # least one draft was accepted. These are A/B knobs for acceptance vs
-        # seed quality without paying a full target reseed.
+        # Ablation for WHY reseed raises acceptance. Reseed does two things at
+        # once: (a) hands the drafter the exact hidden at the new anchor, and
+        # (b) repairs that anchor's KV in the committed cache before the drafter
+        # cross-attends -- in shift mode position p+m+1 still holds the REJECTED
+        # draft d_m's KV until the next verify rewrites it. With
+        # GEMMA4_SPEC_RESEED_KV_ONLY=1 the seed forward still runs (so (b)
+        # happens) but its hidden is discarded in favour of the shift row (so
+        # (a) does not). Splitting the two says which one is worth chasing a
+        # cheap implementation for.
+        self._reseed_kv_only = os.environ.get("GEMMA4_SPEC_RESEED_KV_ONLY", "0") == "1"
+        # FREE alternative to the reseed forward. The ablation above shows the
+        # whole reseed gain is the KV repair, not the exact hidden -- and only
+        # ONE cache row is ever wrong: at the new anchor p+m+1 the verify left
+        # the REJECTED draft d_m's KV, and the drafter cross-attends before the
+        # next verify rewrites it. The drafter already receives emb(anchor_token)
+        # through its pre_projection input, so it may not need to attend to that
+        # row at all. Its SDPA upper bound (pos_int32) is a SEPARATE argument
+        # from its RoPE position (pos_uint32), so bounding attention one position
+        # earlier excludes the stale row while keeping RoPE correct -- no extra
+        # forward, no extra bytes. GEMMA4_SPEC_DRAFT_KV_BOUND=prev enables it.
+        #
+        # MEASURED WORSE -- 3.07/6 vs 3.38/6 baseline at K=6 (47.7 vs 51.3
+        # tok/s/user). The drafter would rather cross-attend to a stale anchor
+        # row than to no anchor row at all. Kept default-off as a recorded
+        # negative so the idea is not re-tried.
+        self._draft_kv_bound_prev = os.environ.get("GEMMA4_SPEC_DRAFT_KV_BOUND", "") == "prev"
+        # Seed-row selection for fused shift mode, as offsets from the new anchor
+        # at p+m+1. See the table above: `current` (row m, hidden at p+m) wins
+        # because it is the closest row whose hidden belongs to a COMMITTED
+        # token; `next` has the right position but the rejected draft's hidden.
         self._fused_shift_seed = os.environ.get("GEMMA4_SPEC_FUSED_SHIFT_SEED", "current")
         # Persistent anchor-hidden buffer for the traced loop (allocated once).
         # The traced loop MUST be allocation-free: any ttnn.clone/slice between
@@ -149,15 +235,27 @@ class SpeculativeDecoder:
         # batch=1 forward (one QKV/norm/RoPE over K+1 rows, one masked SDPA per
         # layer, loop-free staging KV write) instead of K+1 pseudo-users with
         # sequential per-candidate KV writes. This is the default multi-token
-        # verify; single-token calls (seed/reseed) keep the plain batch=1 path.
-        # (The fused single-trace paths keep the batch-dim verify.)
-        # S_k (mask key length) is padded to this bucket so the verify trace
-        # shape stays stable as the context grows; a new trace is captured when
-        # the bucket rolls.
+        # verify, including the fused greedy trace (K drafts + verify in one
+        # Metal trace). Single-token calls (seed/reseed) keep the plain batch=1
+        # path. S_k (mask key length) is padded to this bucket so the verify
+        # trace shape stays stable as the context grows; a new fused trace is
+        # captured when the bucket rolls.
         self._pv_sk_bucket = 1024
         self._pv_ready = False
         self._pv_a_prev = -1  # last hot block index (-1 ⇒ staging unseeded)
         self._pv_traces = {}  # (P, S_k) -> persistent trace inputs/outputs
+        # Host-observable time split between the target verify forward and the
+        # MTP/drafter forwards, accumulated across the whole generate() call.
+        # Only measurable when draft and verify are SEPARATE host dispatches
+        # (untraced, or the eager fused iter): each already ends in a host
+        # readback (argmax/logits), which forces the device queue to drain, so
+        # a plain wall-clock wrap around the call is accurate without an extra
+        # explicit synchronize. In the fully-traced fused path the whole
+        # iteration (K drafts + verify) is ONE opaque `execute_trace` replay,
+        # so this split is NOT observable here — both accumulators stay 0 and
+        # the caller should fall back to device-side (tracy) op profiling.
+        self._verify_time_s = 0.0
+        self._draft_time_s = 0.0
 
     def _fused_shift_seed_row(self, accepted, K):
         if self._fused_shift_seed == "current":
@@ -355,6 +453,210 @@ class SpeculativeDecoder:
         )
         self._pv_ready = True
 
+    def _seq_kv_enabled(self):
+        """Serialized ``paged_update_cache`` instead of staging fill (default)."""
+        return os.environ.get("GEMMA4_PACKED_VERIFY_SEQ_KV", "1").lower() not in (
+            "0",
+            "false",
+            "no",
+            "off",
+        )
+
+    def _batch_sdpa_enabled(self):
+        """Native decode-batch SDPA for packed verify (default). Set
+        ``GEMMA4_PACKED_VERIFY_BATCH_SDPA=0`` for the packed-head + mask path."""
+        return os.environ.get("GEMMA4_PACKED_VERIFY_BATCH_SDPA", "1").lower() not in (
+            "0",
+            "false",
+            "no",
+            "off",
+        )
+
+    def _pv_page_table_batch(self, P):
+        """Batch-SDPA and sequential KV writes both need P replicated page-table rows."""
+        if self._batch_sdpa_enabled() or self._seq_kv_enabled():
+            return P
+        return 1
+
+    def _fast_host_enabled(self):
+        """One packed H2D + one accept D2H per fused iter (default).
+
+        Production packed verify (batch-SDPA + seq-KV) has no TILE masks / embed /
+        hot pages to refresh, so the inter-replay host path only needs the next
+        token and the P consecutive positions. ``GEMMA4_SPEC_FAST_HOST=0``
+        restores the older per-tensor copies and dual ``to_torch`` reads.
+        """
+        if os.environ.get("GEMMA4_SPEC_FAST_HOST", "1").lower() in ("0", "false", "no", "off"):
+            return False
+        return self._batch_sdpa_enabled() and self._seq_kv_enabled()
+
+    def _mesh0_to_torch(self, tensor):
+        if self._tp > 1:
+            return ttnn.to_torch(ttnn.get_device_tensors(tensor)[0])
+        return ttnn.to_torch(tensor)
+
+    def _io_pack_torch(self, token, pos, P, buf=None):
+        n = 1 + P
+        if buf is None or buf.shape[-1] != n:
+            buf = torch.zeros(1, n, dtype=torch.int64)
+        buf[0, 0] = int(token)
+        buf[0, 1:] = torch.arange(int(pos), int(pos) + P, dtype=torch.int64)
+        return buf
+
+    def _unpack_fused_io(self, tr):
+        """Derive fused inputs from ``tr['io_pack']`` [1, 1+P] uint32: token + v_pos."""
+        pack = tr["io_pack"]
+        P = int(tr["P"])
+        anchor_tok = ttnn.slice(pack, [0, 0], [1, 1])
+        pos_u = ttnn.slice(pack, [0, 1], [1, 2])
+        v_pos = ttnn.slice(pack, [0, 1], [1, 1 + P])
+        d_pu = ttnn.concat([pos_u, tr["d_pu_tail"]], dim=1)
+        d_pi = ttnn.typecast(ttnn.reshape(pos_u, (1,)), ttnn.int32)
+        v_pos_cache = ttnn.typecast(ttnn.reshape(v_pos, (P,)), ttnn.int32)
+        return anchor_tok, d_pu, d_pi, v_pos, v_pos_cache
+
+    def _copy_host_u32(self, torch_buf, dest):
+        host = self._pv_from_torch(torch_buf, ttnn.uint32, device=False)
+        ttnn.copy_host_to_device_tensor(host, dest)
+        host.deallocate(True)
+
+    def _copy_host_i32(self, torch_buf, dest):
+        host = self._pv_from_torch(torch_buf, ttnn.int32, device=False)
+        ttnn.copy_host_to_device_tensor(host, dest)
+        host.deallocate(True)
+
+    def _stage_fused_shaped(self, tr, token, pos):
+        """H2D of native-shaped fused inputs (no in-graph slice/typecast unpack).
+
+        In-trace unpack of ``io_pack`` was ~10 ms of tiny kernels on WH 1×8.
+        Persistent buffers + ``copy_host_to_device_tensor`` keep host glue small
+        without those device ops. ``GEMMA4_SPEC_IO_PACK=1`` restores unpack.
+        """
+        P = int(tr["P"])
+        tok = tr.get("_tok_torch")
+        if tok is None:
+            tok = torch.zeros(1, 1, dtype=torch.int64)
+        tok[0, 0] = int(token)
+        tr["_tok_torch"] = tok
+        pu = tr.get("_pu_torch")
+        if pu is None:
+            pu = torch.zeros(1, 32, dtype=torch.int64)
+        else:
+            pu.zero_()
+        pu[0, 0] = int(pos)
+        tr["_pu_torch"] = pu
+        pi = tr.get("_pi_torch")
+        if pi is None:
+            pi = torch.zeros(1, dtype=torch.int32)
+        pi[0] = int(pos)
+        tr["_pi_torch"] = pi
+        vp = tr.get("_vp_torch")
+        if vp is None or vp.shape[-1] != P:
+            vp = torch.zeros(1, P, dtype=torch.int64)
+        vp[0] = torch.arange(int(pos), int(pos) + P, dtype=torch.int64)
+        tr["_vp_torch"] = vp
+        vpc = tr.get("_vpc_torch")
+        if vpc is None or vpc.numel() != P:
+            vpc = torch.zeros(P, dtype=torch.int32)
+        vpc[:] = torch.arange(int(pos), int(pos) + P, dtype=torch.int32)
+        tr["_vpc_torch"] = vpc
+        self._copy_host_u32(tok, tr["anchor_tok"])
+        self._copy_host_u32(pu, tr["d_pu"])
+        self._copy_host_i32(pi, tr["d_pi"])
+        self._copy_host_u32(vp, tr["v_pos"])
+        self._copy_host_i32(vpc, tr["v_pos_cache"])
+
+    def _stage_fused_io_pack(self, tr, token, pos):
+        buf = self._io_pack_torch(token, pos, int(tr["P"]), tr.get("_io_torch"))
+        tr["_io_torch"] = buf
+        host = self._pv_from_torch(buf, ttnn.uint32, device=False)
+        ttnn.copy_host_to_device_tensor(host, tr["io_pack"])
+        host.deallocate(True)
+
+    def _fused_trace_graph_key(self):
+        """Identity of the fused Metal program, independent of prompt token/pos."""
+        _c, P = self._fused_verify_c_p(0)
+        return (
+            int(self.draft_len),
+            int(P),
+            bool(self._fused_reseed),
+            bool(self._reseed_kv_only),
+            bool(self._draft_kv_bound_prev),
+            bool(self._fast_host_enabled()),
+            bool(self._io_pack_in_graph_enabled()),
+            bool(self._batch_sdpa_enabled()),
+            bool(self._seq_kv_enabled()),
+        )
+
+    def _stage_fused_inputs(self, tr, token, pos):
+        """H2D the persistent fused inputs for ``(token, pos)`` (no recapture)."""
+        if "io_pack" in tr:
+            self._stage_fused_io_pack(tr, token, pos)
+            return
+        if self._fast_host_enabled():
+            self._stage_fused_shaped(tr, token, pos)
+            return
+        c, P, h = self._fused_pv_prepare(pos)
+        if h["S_k"] != tr.get("S_k") and not self._batch_sdpa_enabled():
+            raise RuntimeError(
+                f"fused trace S_k bucket {tr.get('S_k')} != {h['S_k']}; recapture required "
+                "(disable GEMMA4_PACKED_VERIFY_BATCH_SDPA or recapture at max_seq_len)"
+            )
+        h_tok = self._host_tokens([token])
+        ttnn.copy_host_to_device_tensor(h_tok, tr["anchor_tok"])
+        h_tok.deallocate(True)
+        d_hpu, d_hpi = self._host_pos([pos])
+        ttnn.copy_host_to_device_tensor(d_hpu, tr["d_pu"])
+        ttnn.copy_host_to_device_tensor(d_hpi, tr["d_pi"])
+        d_hpu.deallocate(True)
+        d_hpi.deallocate(True)
+        self._copy_pv_into_tr(tr, h)
+        tr["c"] = c
+        tr["P"] = P
+
+    def _bind_fused_trace(self, tr, token, pos, hidden):
+        """Point an existing fused trace at a new prompt (seed hidden + I/O)."""
+        ttnn.copy(hidden, tr["h"])
+        self._pv_a_prev = -1
+        self._stage_fused_inputs(tr, token, pos)
+
+    def _release_fused_trace(self):
+        tr = self._fused_trace
+        if tr is None:
+            return
+        tid = tr.get("id")
+        if tid is not None:
+            ttnn.release_trace(self.mesh_device, tid)
+        self._fused_trace = None
+        self._fused_graph_key = None
+        self._fused_setup_key = None
+        self._last_fused_reused = False
+
+    def _io_pack_in_graph_enabled(self):
+        """In-graph unpack of one uint32 blob. Default on (previous fast-host).
+
+        ``GEMMA4_SPEC_SHAPED_IO=1`` instead H2Ds native-shaped token/pos tensors
+        and skips slice/typecast in the fused trace (A/B for the ~10 ms fused tax).
+        """
+        if os.environ.get("GEMMA4_SPEC_SHAPED_IO", "0").lower() in ("1", "true", "yes"):
+            return False
+        return True
+
+    def _accept_ids_from_trace(self, tr):
+        """One D2H of concat([verify_x, vidx]) → (vx_flat, target_ids)."""
+        K = self.draft_len
+        nv = int(tr["accept_n_vx"])
+        host = tr.get("accept_host")
+        if host is not None:
+            ttnn.copy_device_to_host_tensor(tr["accept"], host)
+            t = self._mesh0_to_torch(host)
+        else:
+            t = self._mesh0_to_torch(tr["accept"])
+        flat = t.reshape(-1)
+        vx = flat[:nv]
+        target_ids = [int(flat[nv + j]) for j in range(K + 1)]
+        return vx, target_ids
+
     def _pv_seed_staging(self, c):
         """Seed every layer's staging block-slot 0 with the committed content of
         the hot block at position ``c`` (read from the cache — the only
@@ -390,50 +692,51 @@ class SpeculativeDecoder:
         bs, S2, BLK = self._pv_bs, self._pv_s2, self._pv_blk
         a, off = c // bs, c % bs
         roll = 1 if a == self._pv_a_prev + 1 else 0
-        H, W = self._pv_h_local, self._pv_window
 
         pos = torch.arange(c, c + P, dtype=torch.int32).reshape(1, P)
 
         # Additive masks, head-major rows h*P+p: causal upper bound c+p; sliding
         # adds the window lower bound. S_k is bucket-padded for trace stability.
-        NEG = -1e9
+        # Batch-SDPA uses cur_pos + the decode sliding-window kwarg instead, so
+        # skip the TILE mask build/H2D (the bulk of host glue).
         S_k = ((c + P + self._pv_sk_bucket - 1) // self._pv_sk_bucket) * self._pv_sk_bucket
-        j = torch.arange(S_k)
-        rows_full = torch.empty(P, S_k)
-        rows_slide = torch.empty(P, S_k)
-        for p in range(P):
-            upper = c + p
-            rows_full[p] = torch.where(j <= upper, 0.0, NEG)
-            rows_slide[p] = torch.where((j <= upper) & (j > upper - W), 0.0, NEG)
-        mask_full = rows_full.repeat(H, 1).reshape(1, 1, H * P, S_k).to(torch.bfloat16)
-        mask_slide = rows_slide.repeat(H, 1).reshape(1, 1, H * P, S_k).to(torch.bfloat16)
+        if self._batch_sdpa_enabled():
+            mask_full = mask_slide = None
+        else:
+            NEG = -1e9
+            H, W = self._pv_h_local, self._pv_window
+            j = torch.arange(S_k)
+            rows_full = torch.empty(P, S_k)
+            rows_slide = torch.empty(P, S_k)
+            for p in range(P):
+                upper = c + p
+                rows_full[p] = torch.where(j <= upper, 0.0, NEG)
+                rows_slide[p] = torch.where((j <= upper) & (j > upper - W), 0.0, NEG)
+            mask_full = rows_full.repeat(H, 1).reshape(1, 1, H * P, S_k).to(torch.bfloat16)
+            mask_slide = rows_slide.repeat(H, 1).reshape(1, 1, H * P, S_k).to(torch.bfloat16)
 
         # merge_idx over staging positions: committed prefix from staging
         # (identity, or +bs on a rollover — the prefix came from the spill
         # block), the P new rows from new_seq (concat index S2+p), stale tail
         # identity. embed_idx bakes the per-head flattened row offset in
         # (new_seq is padded to 32 rows in packed_decode_forward).
-        m = torch.arange(S2, dtype=torch.int64)
-        if roll:
-            m[:off] += bs
-        m[off : off + P] = S2 + torch.arange(P)
-        p_pad = ((P + 31) // 32) * 32
-        src_seq = S2 + p_pad
-        embed = {}
-        for lt, nkv in self._pv_nkv.items():
-            off_h = (torch.arange(nkv, dtype=torch.int64) * src_seq).unsqueeze(1)
-            embed[lt] = (m.unsqueeze(0) + off_h).reshape(1, nkv * S2).to(torch.int32)
-
-        # -1, not 0: ``hot_pt`` feeds ``paged_fill_cache`` with no ``valid_seq_len``
-        # cap (see attention/decode.py ``_packed_fill_kv_loopfree_embed``), so its
-        # contract is "-1 = skip". Metal reserves no null page, so a 0 here makes
-        # every idle slot write staging KV into physical page 0 and corrupts the
-        # committed cache. Chunked prefill can pad with 0 because valid_seq_len
-        # bounds that fill; this path has no such bound.
-        hot = torch.full((1, BLK), -1, dtype=torch.int32)
-        hot[0, 0] = int(self._pv_pages[a])
-        if off + P > bs:
-            hot[0, 1] = int(self._pv_pages[a + 1])
+        if self._seq_kv_enabled():
+            embed, hot = {}, None
+        else:
+            m = torch.arange(S2, dtype=torch.int64)
+            if roll:
+                m[:off] += bs
+            m[off : off + P] = S2 + torch.arange(P)
+            p_pad = ((P + 31) // 32) * 32
+            src_seq = S2 + p_pad
+            embed = {}
+            for lt, nkv in self._pv_nkv.items():
+                off_h = (torch.arange(nkv, dtype=torch.int64) * src_seq).unsqueeze(1)
+                embed[lt] = (m.unsqueeze(0) + off_h).reshape(1, nkv * S2).to(torch.int32)
+            hot = torch.full((1, BLK), -1, dtype=torch.int32)
+            hot[0, 0] = int(self._pv_pages[a])
+            if off + P > bs:
+                hot[0, 1] = int(self._pv_pages[a + 1])
 
         return {"pos": pos, "mask_full": mask_full, "mask_slide": mask_slide, "embed": embed, "hot": hot, "S_k": S_k}
 
@@ -448,19 +751,31 @@ class SpeculativeDecoder:
 
     def _pv_device_inputs(self, tokens, h):
         """Device tensors for one packed verify from host dict ``h``."""
-        return {
+        dev = {
             "x": self._tokens_tensor(tokens),
             "pos": self._pv_from_torch(h["pos"], ttnn.uint32),
-            "mask_full": self._pv_from_torch(h["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
-            "mask_slide": self._pv_from_torch(h["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+            "mask_full": (
+                self._pv_from_torch(h["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+                if h["mask_full"] is not None
+                else None
+            ),
+            "mask_slide": (
+                self._pv_from_torch(h["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+                if h["mask_slide"] is not None
+                else None
+            ),
             "embed": {lt: self._pv_from_torch(e, ttnn.uint32) for lt, e in h["embed"].items()},
-            "hot": self._pv_from_torch(h["hot"], ttnn.int32),
+            "hot": self._pv_from_torch(h["hot"], ttnn.int32) if h["hot"] is not None else None,
         }
+        if self._batch_sdpa_enabled() or self._seq_kv_enabled():
+            dev["pos_cache"] = self._pv_from_torch(h["pos"].reshape(-1), ttnn.int32)
+        return dev
 
     def _pv_call(self, dev, P):
         return self.target.ttnn_packed_verify_forward(
             x=dev["x"],
             position_idx=dev["pos"],
+            position_idx_cache=dev.get("pos_cache"),
             attn_mask_full=dev["mask_full"],
             attn_mask_sliding=dev["mask_slide"],
             packed_p=P,
@@ -471,22 +786,112 @@ class SpeculativeDecoder:
             hot_pt=dev["hot"],
         )
 
+    def _fused_verify_c_p(self, anchor_pos):
+        """Packed-verify (c, P) for one fused greedy iteration at ``anchor_pos``.
+
+        Both modes verify [anchor, d0..dK-1] at p..p+K. Reseed used to verify
+        only the K drafts at p+1..p+K on the grounds that its batch=1 seed had
+        already covered the anchor -- but that seed writes the COMMITTED cache
+        while the verify reads and rewrites its own staging block, so dropping
+        the anchor row corrupted the verify's history. See _fused_body.
+        """
+        return anchor_pos, self.draft_len + 1
+
+    def _fused_pv_prepare(self, anchor_pos):
+        """Host packed-verify tensors for the fused greedy graph at ``anchor_pos``."""
+        c, P = self._fused_verify_c_p(anchor_pos)
+        self._pv_setup()
+        if self._pv_a_prev < 0 and not self._seq_kv_enabled():
+            self._pv_seed_staging(c)
+        return c, P, self._pv_host_inputs(c, P)
+
+    def _copy_pv_into_tr(self, tr, h):
+        """Refresh persistent fused-trace packed inputs from host dict ``h``."""
+        pairs = [
+            (self._pv_from_torch(h["pos"], ttnn.uint32, device=False), tr["v_pos"]),
+        ]
+        if tr.get("hot") is not None and h["hot"] is not None:
+            pairs.append((self._pv_from_torch(h["hot"], ttnn.int32, device=False), tr["hot"]))
+        if tr.get("mask_full") is not None and h["mask_full"] is not None:
+            pairs.append(
+                (
+                    self._pv_from_torch(h["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=False),
+                    tr["mask_full"],
+                )
+            )
+            pairs.append(
+                (
+                    self._pv_from_torch(h["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=False),
+                    tr["mask_slide"],
+                )
+            )
+        for src, dst in pairs:
+            ttnn.copy_host_to_device_tensor(src, dst)
+            src.deallocate(True)
+        if "v_pos_cache" in tr:
+            src = self._pv_from_torch(h["pos"].reshape(-1), ttnn.int32, device=False)
+            ttnn.copy_host_to_device_tensor(src, tr["v_pos_cache"])
+            src.deallocate(True)
+        for lt, e in h["embed"].items():
+            src = self._pv_from_torch(e, ttnn.uint32, device=False)
+            ttnn.copy_host_to_device_tensor(src, tr["embed"][lt])
+            src.deallocate(True)
+
+    def _fused_packed_verify(self, verify_x, c, P):
+        """Eager packed verify of in-graph ``verify_x`` [1, P] at anchor ``c``."""
+        self._pv_setup()
+        if self._pv_a_prev < 0 and not self._seq_kv_enabled():
+            self._pv_seed_staging(c)
+        h = self._pv_host_inputs(c, P)
+        dev = {
+            "x": verify_x,
+            "pos": self._pv_from_torch(h["pos"], ttnn.uint32),
+            "mask_full": (
+                self._pv_from_torch(h["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+                if h["mask_full"] is not None
+                else None
+            ),
+            "mask_slide": (
+                self._pv_from_torch(h["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+                if h["mask_slide"] is not None
+                else None
+            ),
+            "embed": {lt: self._pv_from_torch(e, ttnn.uint32) for lt, e in h["embed"].items()},
+            "hot": self._pv_from_torch(h["hot"], ttnn.int32) if h["hot"] is not None else None,
+            "pt": self._page_table(self._pv_page_table_batch(P)),
+        }
+        if self._batch_sdpa_enabled() or self._seq_kv_enabled():
+            dev["pos_cache"] = self._pv_from_torch(h["pos"].reshape(-1), ttnn.int32)
+        logits, hidden = self._pv_call(dev, P)
+        self._pv_a_prev = c // self._pv_bs
+        for t in (dev["pos"], dev["mask_full"], dev["mask_slide"], dev["hot"], dev["pt"]):
+            if t is not None:
+                t.deallocate(True)
+        if "pos_cache" in dev:
+            dev["pos_cache"].deallocate(True)
+        for e in dev["embed"].values():
+            e.deallocate(True)
+        return logits, hidden
+
     def _verify_packed(self, tokens, positions):
         """Packed verify (eager). Same contract as ``_verify``."""
         self._pv_setup()
         P = len(tokens)
         c = positions[0]
-        if self._pv_a_prev < 0:
+        if self._pv_a_prev < 0 and not self._seq_kv_enabled():
             self._pv_seed_staging(c)
         h = self._pv_host_inputs(c, P)
         dev = self._pv_device_inputs(tokens, h)
-        dev["pt"] = self._page_table(1)
+        dev["pt"] = self._page_table(self._pv_page_table_batch(P))
         logits, hidden = self._pv_call(dev, P)
         self._pv_a_prev = c // self._pv_bs
         lh = self._logits_to_host(logits).reshape(P, -1)
         logits.deallocate(True)
         for t in (dev["x"], dev["pos"], dev["mask_full"], dev["mask_slide"], dev["hot"], dev["pt"]):
-            t.deallocate(True)
+            if t is not None:
+                t.deallocate(True)
+        if "pos_cache" in dev:
+            dev["pos_cache"].deallocate(True)
         for e in dev["embed"].values():
             e.deallocate(True)
         return lh, hidden
@@ -498,14 +903,14 @@ class SpeculativeDecoder:
         self._pv_setup()
         P = len(tokens)
         c = positions[0]
-        if self._pv_a_prev < 0:
+        if self._pv_a_prev < 0 and not self._seq_kv_enabled():
             self._pv_seed_staging(c)
         h = self._pv_host_inputs(c, P)
         key = (P, h["S_k"])
         tr = self._pv_traces.get(key)
         if tr is None:
             dev = self._pv_device_inputs(tokens, h)
-            dev["pt"] = self._page_table(1)
+            dev["pt"] = self._page_table(self._pv_page_table_batch(P))
             # Compile run (warm program cache), then capture. Both runs write
             # the SAME tokens to the SAME positions, so KV writes are idempotent.
             logits, hidden = self._pv_call(dev, P)
@@ -519,18 +924,27 @@ class SpeculativeDecoder:
             self._pv_traces[key] = dev
         else:
             ttnn.copy_host_to_device_tensor(self._host_tokens(tokens), tr["x"])
-            for src, dst in (
+            pairs = [
                 (self._pv_from_torch(h["pos"], ttnn.uint32, device=False), tr["pos"]),
-                (
-                    self._pv_from_torch(h["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=False),
-                    tr["mask_full"],
-                ),
-                (
-                    self._pv_from_torch(h["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=False),
-                    tr["mask_slide"],
-                ),
-                (self._pv_from_torch(h["hot"], ttnn.int32, device=False), tr["hot"]),
-            ):
+            ]
+            if tr.get("hot") is not None and h["hot"] is not None:
+                pairs.append((self._pv_from_torch(h["hot"], ttnn.int32, device=False), tr["hot"]))
+            if tr.get("pos_cache") is not None:
+                pairs.append((self._pv_from_torch(h["pos"].reshape(-1), ttnn.int32, device=False), tr["pos_cache"]))
+            if tr.get("mask_full") is not None and h["mask_full"] is not None:
+                pairs.extend(
+                    (
+                        (
+                            self._pv_from_torch(h["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=False),
+                            tr["mask_full"],
+                        ),
+                        (
+                            self._pv_from_torch(h["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=False),
+                            tr["mask_slide"],
+                        ),
+                    )
+                )
+            for src, dst in pairs:
                 ttnn.copy_host_to_device_tensor(src, dst)
             for lt, e in h["embed"].items():
                 ttnn.copy_host_to_device_tensor(self._pv_from_torch(e, ttnn.uint32, device=False), tr["embed"][lt])
@@ -747,6 +1161,90 @@ class SpeculativeDecoder:
             idx = sliced
         return idx
 
+    def _use_shard_argmax(self):
+        """Skip the drafter's full-vocab all-gather; reduce per-shard then gather scalars."""
+        return self._shard_argmax_enabled
+
+    def _shard_offset_tables(self, shard_w, tp, k):
+        """Replicated TILE tables for gathered local-topk: per-slot vocab offsets and column ids."""
+        key = (shard_w, tp, k)
+        if getattr(self, "_sa_key", None) == key:
+            return self._sa_off, self._sa_cols
+        n = k * tp
+        off = torch.zeros(1, 1, 1, n, dtype=torch.int32)
+        cols = torch.arange(n, dtype=torch.int32).reshape(1, 1, 1, n)
+        for d in range(tp):
+            off[0, 0, 0, d * k : (d + 1) * k] = d * shard_w
+        self._sa_off = ttnn.from_torch(
+            off, device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.int32, mesh_mapper=self._mapper
+        )
+        self._sa_cols = ttnn.from_torch(
+            cols, device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.int32, mesh_mapper=self._mapper
+        )
+        self._sa_key = key
+        return self._sa_off, self._sa_cols
+
+    def _shard_argmax(self, logits, rows):
+        """Global greedy token ids from TP-sharded vocab logits (no 262k all-gather).
+
+        Same reduction as TTSampling's local-topk + gather: each device keeps
+        its ``V/tp`` shard, ``topk(k=32)`` (tile-width, no width-1 TILE slices),
+        all-gather those 32 values/indices, add ``device * (V/tp)``, then argmax
+        the gathered scores. Matches a full-vocab greedy argmax whenever the
+        winning logit is unique; exact bf16 ties follow gather/device order.
+        """
+        k = _SHARD_ARGMAX_K
+        tp = self._tp
+        shard_w = int(logits.shape[-1])
+        vals, idxs = ttnn.topk(logits, k=k, dim=-1)
+        if int(vals.shape[2]) != rows:
+            vals_s = ttnn.slice(vals, [0, 0, 0, 0], [1, 1, rows, k])
+            idxs_s = ttnn.slice(idxs, [0, 0, 0, 0], [1, 1, rows, k])
+            vals.deallocate(True)
+            idxs.deallocate(True)
+            vals, idxs = vals_s, idxs_s
+        mesh_config = self.target.mesh_config
+        ccl = self.target.ccl_manager
+        gvals = ccl_allgather(vals, mesh_config, ccl)
+        gidxs = ccl_allgather(idxs, mesh_config, ccl)
+        off, cols = self._shard_offset_tables(shard_w, tp, k)
+        gidxs_i = ttnn.typecast(gidxs, ttnn.int32)
+        gidxs.deallocate(True)
+        global_i = ttnn.add(gidxs_i, off)
+        gidxs_i.deallocate(True)
+        win = self._argmax_last(gvals, rows)  # [1,1,rows] column in the gathered k*tp row
+        gvals.deallocate(True)
+        win4 = ttnn.to_layout(ttnn.reshape(win, (1, 1, rows, 1)), ttnn.TILE_LAYOUT)
+        win.deallocate(True)
+        win_i = ttnn.typecast(win4, ttnn.int32)
+        win4.deallocate(True)
+        mask = ttnn.eq(cols, win_i)
+        win_i.deallocate(True)
+        zeros = ttnn.subtract(global_i, global_i)
+        picked = ttnn.where(mask, global_i, zeros)
+        mask.deallocate(True)
+        global_i.deallocate(True)
+        zeros.deallocate(True)
+        sel = ttnn.sum(picked, dim=3, keepdim=True)
+        picked.deallocate(True)
+        sel_u = ttnn.typecast(sel, ttnn.uint32)
+        sel.deallocate(True)
+        out = ttnn.reshape(sel_u, (1, 1, rows))
+        sel_u.deallocate(True)
+        if out.layout != ttnn.ROW_MAJOR_LAYOUT:
+            rm = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
+            out.deallocate(True)
+            out = rm
+        return out
+
+    def _greedy_draft_idx(self, tok, h, page_tables, pu, pi, rows):
+        """One drafter step + greedy token id on device ([1,1,rows] uint32 RM)."""
+        gather = not self._use_shard_argmax()
+        logits, h_next = self.assistant.step(tok, h, self._shared_kv, page_tables, pu, pi, gather_logits=gather)
+        idx = self._argmax_last(logits, rows) if gather else self._shard_argmax(logits, rows)
+        logits.deallocate(True)
+        return idx, h_next
+
     def _id_to_host(self, id_tt):
         """[*,1] uint32 device id -> python int (TP: read device-0 replica)."""
         t = ttnn.to_torch(ttnn.get_device_tensors(id_tt)[0]) if self._tp > 1 else ttnn.to_torch(id_tt)
@@ -762,10 +1260,10 @@ class SpeculativeDecoder:
         """ONE greedy speculative iteration, fully on-device.
 
         Chains K drafter steps with ON-DEVICE argmax + re-embed (no per-step host
-        round-trip), assembles the verify batch ``[anchor, d0..d_{K-1}]`` on
-        device, runs the batched verify, and argmaxes the verify logits on device.
-        Only the ``2K+1`` token ids are read to host (acceptance is a host int
-        compare). This is the eager twin of the fused single-iteration trace.
+        round-trip), assembles ``[anchor, d0..d_{K-1}]`` on device, runs packed
+        verify, and argmaxes the verify logits on device. Only the ``2K+1`` token
+        ids are read to host (acceptance is a host int compare). This is the
+        eager twin of the fused single-iteration trace.
 
         Args:
             anchor_tok_tt: [1,1] uint32 device token id to draft from (= committed token).
@@ -785,34 +1283,36 @@ class SpeculativeDecoder:
         tok_tt = anchor_tok_tt
         h = anchor_hidden
         owns_h = False
+        _t0 = time.perf_counter()
         for _ in range(K):
-            logits, h_next = self.assistant.step(tok_tt, h, self._shared_kv, page_tables, d_pu, d_pi)
+            idx, h_next = self._greedy_draft_idx(tok_tt, h, page_tables, d_pu, d_pi, rows=1)
             if owns_h:
                 h.deallocate(True)
             h, owns_h = h_next, True
-            idx = self._argmax_last(logits, rows=1)  # [1,1,1] uint32 RM (fast multicore argmax)
-            logits.deallocate(True)
             tok_tt = ttnn.reshape(idx, (1, 1))  # [1,1] uint32 RM
             draft_id_tts.append(tok_tt)
         if owns_h:
             h.deallocate(True)
+        # Force the drafter chain to drain before starting the verify clock:
+        # the loop above enqueues K steps without a host readback in between.
+        ttnn.synchronize_device(self.mesh_device)
+        self._draft_time_s += time.perf_counter() - _t0
 
-        # Verify input = [anchor, d0..d_{K-1}] at positions p..p+K.
+        # Verify input = [anchor, d0..d_{K-1}] at positions p..p+K. Packed
+        # query-head verify: one batch=1 forward + loop-free staging KV write
+        # (not K+1 pseudo-users with sequential paged_update_cache).
+        _t0 = time.perf_counter()
         verify_x = ttnn.concat([anchor_tok_tt] + draft_id_tts, dim=1)  # [1, K+1] uint32 RM
-        v_pos = [anchor_pos + j for j in range(K + 1)]
-        v_pu, v_pi = self._pos_tensors(v_pos)
-        v_pt = self._page_table(K + 1)
-        vlogits, vhidden = self.target.ttnn_verify_forward(
-            x=verify_x, current_pos=v_pu, current_pos_cache=v_pi, page_table=v_pt, kv_cache=self.tt_kv_cache
-        )
+        vlogits, vhidden = self._fused_packed_verify(verify_x, anchor_pos, K + 1)
         vidx = self._argmax_last(vlogits, rows=K + 1)  # [1,1,K+1] uint32 RM (fast multicore argmax)
 
         drafts = [self._id_to_host(t) for t in draft_id_tts]
         target_ids = self._ids_to_host(vidx, K + 1)
+        self._verify_time_s += time.perf_counter() - _t0
 
         for t in draft_id_tts:
             t.deallocate(True)
-        for t in (verify_x, v_pu, v_pi, v_pt, d_pu, d_pi, d_pt, vlogits, vidx):
+        for t in (verify_x, d_pu, d_pi, d_pt, vlogits, vidx):
             t.deallocate(True)
         return drafts, target_ids, vhidden
 
@@ -898,6 +1398,13 @@ class SpeculativeDecoder:
         anchor_tok_tt = self._tokens_tensor([anchor_token])
         while len(out) < max_new_tokens:
             if self._fused_reseed:
+                # Re-seed at the CURRENT anchor. ``anchor_token`` is re-bound at
+                # the end of every iteration below; before that fix this read the
+                # prompt's last token forever (the loop only re-bound the device
+                # tensor ``anchor_tok_tt``), so every reseed after the first
+                # produced the hidden for a long-stale token at the current
+                # position — the drafter was seeded from the wrong row and
+                # acceptance collapsed.
                 new_anchor_hidden = self.seed(anchor_token, anchor_pos)
                 anchor_hidden.deallocate(True)
                 anchor_hidden = new_anchor_hidden
@@ -926,6 +1433,7 @@ class SpeculativeDecoder:
             anchor_hidden = new_anchor_hidden
             anchor_tok_tt.deallocate(True)
             anchor_tok_tt = self._tokens_tensor([new_token])
+            anchor_token = new_token
             anchor_pos = new_pos
 
             for tok in committed:
@@ -947,104 +1455,267 @@ class SpeculativeDecoder:
         """The fused-iteration op graph over persistent buffers (capture + compile).
 
         Reads tr["anchor_tok"]/tr["h"] (persistent inputs) and the position /
-        page-table buffers; returns the persistent OUTPUT handles
-        (verify_x [1,K+1], vidx [1,1,K+1], vhidden [1,1,K+1,backbone]). Drafts are
-        verify_x[1:]. All argmax/re-embed/concat are on device, so the K drafter
-        steps chain in-graph (no inter-replay copy)."""
+        page-table / packed-verify buffers; returns the persistent OUTPUT handles
+        (verify_x [1,K+1], vidx [1,1,K+1], vhidden [1,1,K+1,backbone], h_rows).
+        Drafts are verify_x[1:]. All argmax/re-embed/concat are on device, so the
+        K drafter steps chain in-graph (no inter-replay copy). Verify is packed
+        (query-head dim + loop-free staging KV write), not K+1 pseudo-users.
+        ``h_rows`` are captured 1-row slices of vhidden for the allocation-free
+        shift-seed copy between replays."""
         K = self.draft_len
         page_tables = {lt: tr["d_pt"] for lt in self._shared_kv}
-        tok = tr["anchor_tok"]
+        if "io_pack" in tr:
+            anchor_tok, d_pu, d_pi, v_pos, v_pos_cache = self._unpack_fused_io(tr)
+        else:
+            anchor_tok, d_pu, d_pi = tr["anchor_tok"], tr["d_pu"], tr["d_pi"]
+            v_pos, v_pos_cache = tr["v_pos"], tr.get("v_pos_cache")
+        tok = anchor_tok
         if self._fused_reseed:
-            seed_logits, h = self.target.ttnn_verify_forward(
-                x=tr["anchor_tok"],
-                current_pos=tr["d_pu"],
-                current_pos_cache=tr["d_pi"],
+            # EXACT drafter seed: one batch=1 target forward at the anchor gives
+            # the true post-norm hidden for (anchor_tok, p), instead of reusing a
+            # verify row from the previous iteration -- which necessarily belongs
+            # to either an earlier position or a rejected draft. It also repairs
+            # the anchor's KV in the COMMITTED cache before the drafter
+            # cross-attends to it. Measured +8% tokens/iter at K=6, but the extra
+            # 31B forward costs far more than that; see __init__ for the numbers.
+            #
+            # It must NOT be used to shrink the packed verify. The verify never
+            # reads the committed cache -- it merges its resident `staging` hot
+            # block and then paged_fill_cache's that block back over the cache
+            # (see attention/decode._packed_fill_kv_loopfree_embed). So this
+            # forward's repair is invisible to the verify AND is immediately
+            # overwritten by it. Dropping the anchor from the verify (P=K,
+            # drafts only) therefore left staging position p holding the PREVIOUS
+            # iteration's rejected draft, and the verify scored every candidate
+            # against a corrupted history -- wrong target_ids, wrong output text,
+            # and acceptance collapsing to ~0.2/6 at K=6.
+            #
+            # Keeping the anchor at verify row 0 (P=K+1, exactly as shift mode)
+            # routes the repair through staging, which is the only path the
+            # verify actually reads. Reseed then differs from shift in precisely
+            # one thing -- the quality of the drafter's seed hidden -- which is
+            # what the mode is for.
+            seed_logits, seed_h = self.target.ttnn_verify_forward(
+                x=anchor_tok,
+                current_pos=d_pu,
+                current_pos_cache=d_pi,
                 page_table=tr["d_pt"],
                 kv_cache=self.tt_kv_cache,
             )
-            seed_idx = self._argmax_last(seed_logits, rows=1)
             seed_logits.deallocate(True)
+            # KV-only ablation: keep the forward (and its KV repair) but seed the
+            # drafter from the shift row instead. See _reseed_kv_only.
+            h = tr["h"] if self._reseed_kv_only else seed_h
         else:
             h = tr["h"]
+        # See _draft_kv_bound_prev: exclude the one stale cache row (the rejected
+        # draft at the anchor position) from the drafter's attention window.
+        # RoPE still uses d_pu, i.e. the true anchor position.
+        d_pi_draft = ttnn.subtract(d_pi, 1) if self._draft_kv_bound_prev else d_pi
         draft_ids = []
         for _ in range(K):
-            logits, h = self.assistant.step(tok, h, self._shared_kv, page_tables, tr["d_pu"], tr["d_pi"])
-            idx = self._argmax_last(logits, rows=1)  # [1,1,1] uint32 RM (fast multicore argmax)
-            logits.deallocate(True)
+            idx, h = self._greedy_draft_idx(tok, h, page_tables, d_pu, d_pi_draft, rows=1)
             tok = ttnn.reshape(idx, (1, 1))  # [1,1] uint32 RM
             draft_ids.append(tok)
-        # In exact-reseed mode, the seed forward already computed row 0
-        # (target logits for the anchor) and repaired the anchor KV before the
-        # drafter reads shared KV. Verify only the draft tokens at p+1..p+K and
-        # prepend seed_idx to form target_ids[0..K]. In shift mode, keep the old
-        # single verify batch [anchor, d0..dK-1].
-        verify_inputs = draft_ids if self._fused_reseed else [tr["anchor_tok"]] + draft_ids
-        verify_x = ttnn.concat(verify_inputs, dim=1)  # reseed: [1,K], shift: [1,K+1]
-        vlogits, vhidden = self.target.ttnn_verify_forward(
+        # Both modes verify [anchor, d0..dK-1] at p..p+K. The anchor row is what
+        # repairs its own KV through the verify's staging buffer, so it stays in
+        # even under exact reseed (see the seed block above).
+        verify_x = ttnn.concat([anchor_tok] + draft_ids, dim=1)  # [1, K+1]
+        P = K + 1
+        vlogits, vhidden = self.target.ttnn_packed_verify_forward(
             x=verify_x,
-            current_pos=tr["v_pu"],
-            current_pos_cache=tr["v_pi"],
+            position_idx=v_pos,
+            position_idx_cache=v_pos_cache,
+            attn_mask_full=tr.get("mask_full"),
+            attn_mask_sliding=tr.get("mask_slide"),
+            packed_p=P,
             page_table=tr["v_pt"],
             kv_cache=self.tt_kv_cache,
+            embed_idx_full=tr["embed"].get("full_attention"),
+            embed_idx_sliding=tr["embed"].get("sliding_attention"),
+            hot_pt=tr["hot"],
         )
-        tail_rows = K if self._fused_reseed else K + 1
-        tail_idx = self._argmax_last(vlogits, rows=tail_rows)  # [1,1,K or K+1] uint32 RM
-        if self._fused_reseed:
-            vidx = ttnn.concat([seed_idx, tail_idx], dim=2)  # [1,1,K+1]
-            seed_idx.deallocate(True)
-            tail_idx.deallocate(True)
-        else:
-            vidx = tail_idx
+        tail_rows = K + 1
+        vidx = self._argmax_last(vlogits, rows=tail_rows)  # [1,1,K+1] uint32 RM
         vlogits.deallocate(True)
-        return verify_x, vidx, vhidden
+        # Persistent per-row hidden outputs (captured slices). The next iter's
+        # shift seed is ``ttnn.copy(h_rows[m], tr["h"])`` — no slice between
+        # replays, which can alias trace scratch. Capture unrolls these P slices
+        # into the same graph as the K drafter steps.
+        hd = int(vhidden.shape[-1])
+        h_rows = [ttnn.slice(vhidden, [0, 0, r, 0], [1, 1, r + 1, hd]) for r in range(tail_rows)]
+        vx_f = ttnn.reshape(verify_x, (1, int(verify_x.shape[-1])))
+        vidx_f = ttnn.reshape(vidx, (1, int(vidx.shape[-1])))
+        accept = ttnn.concat([vx_f, vidx_f], dim=1)
+        return verify_x, vidx, vhidden, h_rows, accept
 
     def _capture_fused_trace(self, anchor_token, anchor_hidden, anchor_pos):
         """Capture ONE fused iteration at the real first-call inputs.
 
         Allocates persistent input buffers (anchor token, recurrent hidden, the
-        drafter + verify position tensors, page tables), runs a compile pass, then
-        captures the fused body. The compile + capture write the SAME KV positions
-        with the SAME tokens (deterministic), so the writes are idempotent."""
+        drafter + verify position tensors, page tables), optionally runs a compile
+        pass, then captures the fused body.
+
+        ``GEMMA4_SPEC_TRACE_EAGER_COMPILE=0`` skips the extra eager fused_body
+        before capture (JIT inside ``begin_trace_capture``). Default keeps the
+        compile run — required for a stable CCL trace on Wormhole."""
         from loguru import logger as _lg
 
-        K = self.draft_len
-        v_pos = [anchor_pos + 1 + j for j in range(K)] if self._fused_reseed else [anchor_pos + j for j in range(K + 1)]
-        d_pu, d_pi = self._pos_tensors([anchor_pos])
-        v_pu, v_pi = self._pos_tensors(v_pos)
-        tr = {
-            "anchor_tok": self._tokens_tensor([anchor_token]),
-            "h": ttnn.clone(anchor_hidden),
-            "d_pu": d_pu,
-            "d_pi": d_pi,
-            "d_pt": self._page_table(1),
-            "v_pu": v_pu,
-            "v_pi": v_pi,
-            "v_pt": self._page_table(K if self._fused_reseed else K + 1),
-        }
-        _lg.info("[spec-trace] capture fused: compile run")
-        vx, vidx, vh = self._fused_body(tr)
-        ttnn.synchronize_device(self.mesh_device)
-        vx.deallocate(True)
-        vidx.deallocate(True)
-        vh.deallocate(True)
+        if self._fused_trace is not None:
+            self._release_fused_trace()
+
+        if self._fast_host_enabled():
+            c, P = self._fused_verify_c_p(anchor_pos)
+            self._pv_setup()
+            if self._io_pack_in_graph_enabled():
+                io_torch = self._io_pack_torch(anchor_token, anchor_pos, P)
+                tr = {
+                    "h": ttnn.clone(anchor_hidden),
+                    "d_pt": self._page_table(1),
+                    "io_pack": self._pv_from_torch(io_torch, ttnn.uint32),
+                    "d_pu_tail": self._pv_from_torch(torch.zeros(1, 31, dtype=torch.int64), ttnn.uint32),
+                    "mask_full": None,
+                    "mask_slide": None,
+                    "embed": {},
+                    "hot": None,
+                    "v_pt": self._page_table(self._pv_page_table_batch(P)),
+                    "S_k": 0,
+                    "P": P,
+                    "c": c,
+                    "_io_torch": io_torch,
+                }
+            else:
+                d_pu, d_pi = self._pos_tensors([anchor_pos])
+                pos_u = torch.arange(int(anchor_pos), int(anchor_pos) + P, dtype=torch.int64).reshape(1, P)
+                pos_i = pos_u.reshape(-1).to(torch.int32)
+                tr = {
+                    "anchor_tok": self._tokens_tensor([anchor_token]),
+                    "h": ttnn.clone(anchor_hidden),
+                    "d_pu": d_pu,
+                    "d_pi": d_pi,
+                    "d_pt": self._page_table(1),
+                    "v_pos": self._pv_from_torch(pos_u, ttnn.uint32),
+                    "v_pos_cache": self._pv_from_torch(pos_i, ttnn.int32),
+                    "mask_full": None,
+                    "mask_slide": None,
+                    "embed": {},
+                    "hot": None,
+                    "v_pt": self._page_table(self._pv_page_table_batch(P)),
+                    "S_k": 0,
+                    "P": P,
+                    "c": c,
+                }
+        else:
+            c, P, h = self._fused_pv_prepare(anchor_pos)
+            d_pu, d_pi = self._pos_tensors([anchor_pos])
+            tr = {
+                "anchor_tok": self._tokens_tensor([anchor_token]),
+                "h": ttnn.clone(anchor_hidden),
+                "d_pu": d_pu,
+                "d_pi": d_pi,
+                "d_pt": self._page_table(1),
+                "v_pos": self._pv_from_torch(h["pos"], ttnn.uint32),
+                "mask_full": (
+                    self._pv_from_torch(h["mask_full"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+                    if h["mask_full"] is not None
+                    else None
+                ),
+                "mask_slide": (
+                    self._pv_from_torch(h["mask_slide"], ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+                    if h["mask_slide"] is not None
+                    else None
+                ),
+                "embed": {lt: self._pv_from_torch(e, ttnn.uint32) for lt, e in h["embed"].items()},
+                "hot": self._pv_from_torch(h["hot"], ttnn.int32) if h["hot"] is not None else None,
+                "v_pt": self._page_table(self._pv_page_table_batch(P)),
+                "S_k": h["S_k"],
+                "P": P,
+                "c": c,
+            }
+            if self._batch_sdpa_enabled() or self._seq_kv_enabled():
+                tr["v_pos_cache"] = self._pv_from_torch(h["pos"].reshape(-1), ttnn.int32)
+        eager_compile = os.environ.get("GEMMA4_SPEC_TRACE_EAGER_COMPILE", "1").lower() not in (
+            "0",
+            "false",
+            "no",
+            "off",
+        )
+        if eager_compile:
+            _lg.info("[spec-trace] capture fused: compile run")
+            vx, vidx, vh, h_rows, accept = self._fused_body(tr)
+            ttnn.synchronize_device(self.mesh_device)
+            vx.deallocate(True)
+            vidx.deallocate(True)
+            vh.deallocate(True)
+            accept.deallocate(True)
+            for r in h_rows:
+                r.deallocate(True)
         _lg.info("[spec-trace] capture fused: begin_trace_capture")
         tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-        vx, vidx, vh = self._fused_body(tr)
+        vx, vidx, vh, h_rows, accept = self._fused_body(tr)
         ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
         _lg.info("[spec-trace] capture fused: DONE")
         tr["id"] = tid
         tr["verify_x"] = vx
         tr["vidx"] = vidx
         tr["vhidden"] = vh
+        tr["h_rows"] = h_rows
+        tr["accept"] = accept
+        tr["accept_n_vx"] = int(vx.shape[-1])
+        tr["accept_host"] = ttnn.allocate_tensor_on_host(accept.spec, self.mesh_device)
         self._fused_trace = tr
+        self._fused_graph_key = self._fused_trace_graph_key()
+        # Capture (and optional eager compile) already wrote this iteration's
+        # packed KV; keep the staging rollover index in sync with a real packed verify.
+        self._pv_a_prev = c // self._pv_bs
+
+    def _device_seed_enabled(self) -> bool:
+        """Whether the recurrent seed is carried device-side (default) or via host.
+
+        ``GEMMA4_SPEC_DEVICE_SEED=0`` restores the host round trip. Kept as an
+        escape hatch because the host path is allocation-free on device. The
+        device path copies a captured per-row hidden (see
+        :meth:`_hidden_row_to_device`).
+        """
+        return os.environ.get("GEMMA4_SPEC_DEVICE_SEED", "1").lower() not in ("0", "false", "no")
 
     def _hidden_row_to_device(self, row):
-        """Read the verify hidden, slice row `row`, and copy it into tr["h"].
+        """Copy verify-hidden row ``row`` into tr["h"] -- on device.
 
-        Host round-trip for the recurrent seed: small ([1,1,1,backbone]) and
-        allocation-free on device (copy_host_to_device into the persistent buffer),
-        so it stays trace-safe (no device clone/slice that could alias trace
-        scratch on a re-replay)."""
+        The recurrent drafter seed used to make a full host round trip per
+        iteration: read ``vhidden`` back, slice one row in torch, upload it again.
+        The tensor is small ([1,1,1,backbone]) but the read is *blocking* and sits
+        between the trace replay and the next submit, so it serialised every
+        spec-decode iteration -- the one place in this file where a host hop is on
+        the critical path rather than beside it.
+
+        The fused graph writes one persistent tensor per verify row (captured
+        slices in ``tr["h_rows"]``). Between replays we only
+        ``ttnn.copy(h_rows[row], tr["h"])`` — the same allocation-free idiom as
+        the draft-trace ``h_next → h_in`` copy. A fresh ``ttnn.slice`` of
+        ``vhidden`` between replays can alias trace scratch on a re-replay.
+
+        Dtype is handled the same way the host path handled it: the old upload
+        forced ``dtype=tr["h"].dtype`` through ``from_torch``, and ``ttnn.copy``
+        likewise converts into the destination's dtype (checked on device: bf16
+        source into bf16/fp32 destinations is exact, into bfp8_b it quantises,
+        never raises). So a ``vhidden``/``tr["h"]`` dtype mismatch behaves as
+        before rather than silently reinterpreting bits.
+        """
+        if not self._device_seed_enabled():
+            return self._hidden_row_to_device_host(row)
+        tr = self._fused_trace
+        rows = tr.get("h_rows")
+        if rows is not None:
+            ttnn.copy(rows[row], tr["h"])
+            return
+        vh = tr["vhidden"]
+        sel = ttnn.slice(vh, [0, 0, row, 0], [1, 1, row + 1, int(vh.shape[-1])])
+        ttnn.copy(sel, tr["h"])
+        sel.deallocate(True)
+
+    def _hidden_row_to_device_host(self, row):
+        """``GEMMA4_SPEC_DEVICE_SEED=0`` fallback: the original host round trip."""
         tr = self._fused_trace
         vh = tr["vhidden"]
         vh_t = ttnn.to_torch(ttnn.get_device_tensors(vh)[0]) if self._tp > 1 else ttnn.to_torch(vh)
@@ -1053,24 +1724,47 @@ class SpeculativeDecoder:
         ttnn.copy_host_to_device_tensor(host_h, tr["h"])
         host_h.deallocate(True)
 
+    def prepare_fused_trace(self, anchor_token, anchor_pos):
+        """Seed + capture (or reuse) the fused greedy trace.
+
+        Capture is keyed on the Metal graph (K, P, I/O path), not on the prompt
+        token/position. A second request in the same process restages seed + I/O
+        (~one 31B seed) instead of another multi-second capture. Idempotent for
+        the same ``(token, pos)`` so the demo + ``generate_fused`` do not double-seed.
+        """
+        from loguru import logger as _lg
+
+        key = (int(anchor_token), int(anchor_pos))
+        graph_key = self._fused_trace_graph_key()
+        if self._fused_trace is not None and self._fused_graph_key == graph_key and self._fused_setup_key == key:
+            return
+        setup_t0 = time.perf_counter()
+        saved_trace = self._use_trace
+        # Eager seed must be untraced so we do not capture a separate batch=1
+        # verify trace (that would collide with the fused CCL trace).
+        self._use_trace = False
+        self._pv_a_prev = -1
+        anchor_hidden = self.seed(anchor_token, anchor_pos)
+        self._use_trace = True
+        if self._fused_trace is not None and self._fused_graph_key == graph_key:
+            _lg.info("[spec-trace] reuse fused trace (restage seed + I/O, no recapture)")
+            self._bind_fused_trace(self._fused_trace, anchor_token, anchor_pos, anchor_hidden)
+            self._last_fused_reused = True
+        else:
+            self._capture_fused_trace(anchor_token, anchor_hidden, anchor_pos)
+            self._last_fused_reused = False
+        anchor_hidden.deallocate(True)
+        self._use_trace = saved_trace
+        self._fused_setup_key = key
+        self._last_fused_setup_s = time.perf_counter() - setup_t0
+
     def _generate_fused_traced(self, anchor_token, anchor_pos, max_new_tokens):
         """Greedy spec-decode via the single fused trace (one replay per iter)."""
         from loguru import logger as _lg
 
         K = self.draft_len
-        # Eager seed (once, before the loop). Force the UNTRACED verify so we do
-        # NOT capture a separate batch=1 verify trace — an active verify trace
-        # would collide with the fused trace's eager compile-run allocations and
-        # hang. The loop then replays ONLY the single fused trace (no interleaving
-        # of distinct CCL traces).
-        setup_t0 = time.perf_counter()
-        self._use_trace = False
-        anchor_hidden = self.seed(anchor_token, anchor_pos)
-        self._use_trace = True
-        self._capture_fused_trace(anchor_token, anchor_hidden, anchor_pos)
-        anchor_hidden.deallocate(True)
+        self.prepare_fused_trace(anchor_token, anchor_pos)
         tr = self._fused_trace
-        self._last_fused_setup_s = time.perf_counter() - setup_t0
 
         out, accepts = [], []
         cur_token, cur_pos = anchor_token, anchor_pos
@@ -1078,22 +1772,21 @@ class SpeculativeDecoder:
         replay_t0 = time.perf_counter()
         while len(out) < max_new_tokens:
             if not first:
-                h_tok = self._host_tokens([cur_token])
-                ttnn.copy_host_to_device_tensor(h_tok, tr["anchor_tok"])
-                h_tok.deallocate(True)
-                d_hpu, d_hpi = self._host_pos([cur_pos])
-                ttnn.copy_host_to_device_tensor(d_hpu, tr["d_pu"])
-                ttnn.copy_host_to_device_tensor(d_hpi, tr["d_pi"])
-                d_hpu.deallocate(True)
-                d_hpi.deallocate(True)
-                v_pos = (
-                    [cur_pos + 1 + j for j in range(K)] if self._fused_reseed else [cur_pos + j for j in range(K + 1)]
-                )
-                v_hpu, v_hpi = self._host_pos(v_pos)
-                ttnn.copy_host_to_device_tensor(v_hpu, tr["v_pu"])
-                ttnn.copy_host_to_device_tensor(v_hpi, tr["v_pi"])
-                v_hpu.deallocate(True)
-                v_hpi.deallocate(True)
+                if "io_pack" in tr:
+                    self._stage_fused_io_pack(tr, cur_token, cur_pos)
+                elif self._fast_host_enabled():
+                    self._stage_fused_shaped(tr, cur_token, cur_pos)
+                else:
+                    c, P, h = self._fused_pv_prepare(cur_pos)
+                    if h["S_k"] != tr["S_k"] and not self._batch_sdpa_enabled():
+                        # Mask key-length bucket rolled; recapture at the new shape.
+                        # Batch-SDPA has no S_k-shaped masks, so skip this cliff.
+                        # tr["h"] already holds this iter's shift seed.
+                        self._capture_fused_trace(cur_token, tr["h"], cur_pos)
+                        tr = self._fused_trace
+                        self._fused_setup_key = (int(cur_token), int(cur_pos))
+                    else:
+                        self._stage_fused_inputs(tr, cur_token, cur_pos)
                 # In reseed mode the trace computes the exact seed internally.
                 # Otherwise tr["h"] already holds this iter's approximate seed
                 # (set at the end of the previous iteration).
@@ -1101,22 +1794,21 @@ class SpeculativeDecoder:
 
             _lg.debug(f"[spec-trace] fused replay pos={cur_pos} execute")
             ttnn.execute_trace(self.mesh_device, tr["id"], cq_id=0, blocking=False)
+            c, _P = self._fused_verify_c_p(cur_pos)
+            self._pv_a_prev = c // self._pv_bs
 
-            vx = (
-                ttnn.to_torch(ttnn.get_device_tensors(tr["verify_x"])[0])
-                if self._tp > 1
-                else ttnn.to_torch(tr["verify_x"])
-            )
+            vx, target_ids = self._accept_ids_from_trace(tr)
             vx = vx.reshape(-1)
-            drafts = [int(vx[j if self._fused_reseed else 1 + j]) for j in range(K)]
-            target_ids = self._ids_to_host(tr["vidx"], K + 1)
+            drafts = [int(vx[1 + j]) for j in range(K)]  # vx = [anchor, d0..dK-1]
             m = next((i for i in range(K) if drafts[i] != target_ids[i]), K)
             committed = drafts[:m] + [target_ids[m]]
             accepts.append(m)
 
-            if not self._fused_reseed:
+            if (not self._fused_reseed) or self._reseed_kv_only:
                 # Shift seed: choose one of the verified hidden rows as a cheap
                 # approximate seed for the next anchor (see _fused_shift_seed).
+                # The KV-only ablation reseeds the CACHE but not the hidden, so
+                # it still needs this row copied for the next replay.
                 self._hidden_row_to_device(self._fused_shift_seed_row(m, K))
             cur_pos = cur_pos + m + 1
             cur_token = committed[-1]
@@ -1290,9 +1982,7 @@ class SpeculativeDecoder:
         h = tr["h"]  # [1,1,B,backbone]
         draft_cols = []
         for _ in range(K):
-            logits, h = self.assistant.step(tok, h, self._shared_kv, page_tables, tr["d_pu"], tr["d_pi"])
-            idx = self._argmax_last(logits, rows=B)  # [1,1,B] uint32 RM
-            logits.deallocate(True)
+            idx, h = self._greedy_draft_idx(tok, h, page_tables, tr["d_pu"], tr["d_pi"], rows=B)
             tok = ttnn.reshape(idx, (1, B))
             draft_cols.append(tok)
         # Assemble user-major x [1,B*P] (row u*P+p) from the P columns [1,B]:
@@ -1372,7 +2062,33 @@ class SpeculativeDecoder:
 
     def _hidden_rows_to_device_batched(self, rows_b):
         """Shift-seed: gather packed-verify hidden row ``b*P+rows_b[b]`` per user
-        into the persistent batched recurrent buffer tr["h"] (host round-trip)."""
+        into the persistent batched recurrent buffer tr["h"] -- on device.
+
+        Batched counterpart of :meth:`_hidden_row_to_device`: one slice per user
+        plus a concat, then a device copy into the persistent buffer, replacing the
+        blocking read + ``torch.cat`` + upload that ran between every replay. The
+        untraced batched path already selects these rows with
+        ``ttnn.clone(ttnn.slice(vhidden, ...))``, so the op mix is not new here.
+        """
+        if not self._device_seed_enabled():
+            return self._hidden_rows_to_device_batched_host(rows_b)
+        tr = self._fused_trace_batched
+        B, P = tr["B"], tr["P"]
+        vh = tr["vhidden"]
+        backbone = int(vh.shape[-1])
+        sel = []
+        for b in range(B):
+            r = b * P + rows_b[b]
+            sel.append(ttnn.slice(vh, [0, 0, r, 0], [1, 1, r + 1, backbone]))
+        combined = ttnn.concat(sel, dim=2) if B > 1 else sel[0]
+        ttnn.copy(combined, tr["h"])
+        for t in sel:
+            t.deallocate(True)
+        if B > 1:
+            combined.deallocate(True)
+
+    def _hidden_rows_to_device_batched_host(self, rows_b):
+        """``GEMMA4_SPEC_DEVICE_SEED=0`` fallback: the original host round trip."""
         tr = self._fused_trace_batched
         B, P = tr["B"], tr["P"]
         vh = tr["vhidden"]
@@ -1525,15 +2241,19 @@ class SpeculativeDecoder:
         _draft_mode = os.environ.get("GEMMA4_SPEC_DRAFT_MODE", "batched")
 
         while not all(done):
+            _t0 = time.perf_counter()
             if _draft_mode == "loop":
                 drafts_b = [self._draft(toks[b], anchor_h[b], pos[b], temperature=0.0, user_idx=b)[0] for b in range(B)]
             else:
                 anchor_hb = ttnn.concat(anchor_h, dim=2)  # [1,1,B,backbone]
                 drafts_b = self._draft_batched(toks, anchor_hb, pos)
                 anchor_hb.deallocate(True)
+            self._draft_time_s += time.perf_counter() - _t0
 
             tokens_b = [[toks[b]] + drafts_b[b] for b in range(B)]
+            _t0 = time.perf_counter()
             vlogits, vhidden = self._verify_packed_batched(tokens_b, [pos[b] for b in range(B)])
+            self._verify_time_s += time.perf_counter() - _t0
 
             for b in range(B):
                 row_logits = [vlogits[b * P + j] for j in range(P)]
@@ -1627,13 +2347,17 @@ class SpeculativeDecoder:
             anchor_hidden = self.seed(anchor_token, anchor_pos)
         draft_fn = self._draft_traced if self._use_trace else self._draft
         while len(out) < max_new_tokens:
+            _t0 = time.perf_counter()
             drafts, draft_logits = draft_fn(
                 anchor_token, anchor_hidden, anchor_pos, temperature=temperature, top_p=top_p, top_k=top_k
             )
+            self._draft_time_s += time.perf_counter() - _t0
 
             verify_tokens = [anchor_token] + drafts
             verify_pos = [anchor_pos + j for j in range(len(verify_tokens))]
+            _t0 = time.perf_counter()
             verify_logits, hidden = self._verify(verify_tokens, verify_pos)
+            self._verify_time_s += time.perf_counter() - _t0
 
             if greedy:
                 m, committed = self._accept_greedy(drafts, verify_logits)
