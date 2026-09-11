@@ -134,10 +134,11 @@ void bind_matmul_decode_operation(nb::module_& mod) {
                 union of the source and compute grids instead of the two-hub gather.
                 Full- and partial-width L1-resident paths only (plain or packed_weight).
                 Not supported with `global_cb` or the batched factory. Defaults to False.
-            output_core_grid (ttnn.CoreRangeSet, optional): full-width only. Multicast a
-                replica of ``[M, N]`` onto every core of this filled rectangle. Mutually
-                exclusive with `output_mem_config`, `all_gather`, and `ring_gather`.
-                All-core mcast (the default) requires the weight cores to sit on this grid.
+            output_core_grid (ttnn.CoreRangeSet, optional): multicast a replica of the
+                full output row onto every core of this filled rectangle (HEIGHT_SHARDED).
+                Full-width: ``[M, N]``. Batched (``M == 1``, ``Bc == 1``): packed
+                ``[M, b_blocks * N]``. Mutually exclusive with `output_mem_config`,
+                `all_gather`, and `ring_gather`.
             output_mcast_two_hub (bool, optional): with `output_core_grid`, gather each
                 producer's N-shard onto bbox-corner hubs then mcast; hub0 uses NOC0 and
                 hub1 uses NOC1, matching the in0 two-hub gather. Defaults to False.

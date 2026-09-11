@@ -22,6 +22,7 @@ from models.experimental.deepseek_v4_flash.tests.test_sdpa_decode_pcc import (
     PCC_THRESHOLD,
     _make_attention,
 )
+from models.experimental.deepseek_v4_flash.tt.common import width_sharded_l1_config
 
 TP_SIZE = 4
 SUBMESH_SHAPE = (1, TP_SIZE)
@@ -88,8 +89,18 @@ def test_sdpa_decode_pcc_tp4(mesh_device, reset_seeds, skv: int, bounds: str) ->
         )
 
     attn = _make_attention(submesh, NUM_HEADS, HEAD_DIM, sinks, tp_size=TP_SIZE)
+    packed_q = q.reshape(1, 1, batch, NUM_HEADS * HEAD_DIM)
+    q_tt = ttnn.from_torch(
+        packed_q,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=submesh,
+        mesh_mapper=ttnn.ShardTensorToMesh(submesh, dim=3),
+    )
+    local_width = attn.local_num_heads * HEAD_DIM
+    q_tt = ttnn.to_memory_config(q_tt, width_sharded_l1_config(batch, local_width, submesh, tile_height=1))
     output = attn._sdpa_decode(
-        _to_tt(q, submesh, shard_dim=2),
+        q_tt,
         _to_tt(kv, submesh),
         None if cur_pos is not None else _to_tt(mask, submesh),
         cur_pos=cur_pos,
