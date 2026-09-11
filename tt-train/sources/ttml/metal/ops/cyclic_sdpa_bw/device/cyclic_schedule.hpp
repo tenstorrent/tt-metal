@@ -178,6 +178,19 @@ public:
         return {start, end};
     }
 
+    // True if row i is active at some timestep after t. At a streak end this
+    // says whether the spill is an inter-streak one, which is what decides
+    // whether the endpoint publishes its progress: a final spill needs
+    // completion but no publication (main.tex, Algorithm 4).
+    constexpr bool has_later_active(uint32_t i, uint32_t t) const {
+        for (uint32_t s = t + 1u; s <= T(); ++s) {
+            if (is_active(i, s)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // ------------------------------------------- endpoint relay (Algorithm 4)
     // e(i, t): the core whose inter-streak spill the reload at t waits on.
     // By the endpoint spill property (main.tex, Lemma "Endpoint spill

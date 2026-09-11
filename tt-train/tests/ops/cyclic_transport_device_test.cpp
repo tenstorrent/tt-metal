@@ -71,6 +71,8 @@ enum Stat : uint32_t {
     kForwardsReceived = 3,
     kSelfForwards = 4,
     kColumnChanges = 5,
+    kPublications = 6,
+    kReloadErrors = 7,
 };
 
 uint32_t stat_total(const Result& result, uint32_t C, Stat field) {
@@ -85,12 +87,19 @@ uint32_t stat_total(const Result& result, uint32_t C, Stat field) {
 struct Options {
     uint32_t skew_iters = 0;      // spin at the top of each timestep on odd cores
     uint32_t rmw_spin_iters = 0;  // spin between reading a packet and writing it back
-    uint32_t rmw_spin_core = 0;   // restrict that spin to one core (0 = all)
+    uint32_t rmw_spin_core = 0;     // restrict that spin to one core (0 = all)
+    uint32_t spill_spin_iters = 0;  // spin before a streak-end spill's DRAM write
+    uint32_t spill_spin_core = 0;   // restrict that spin to one core (0 = all)
     bool no_barrier = false;      // drop the chip-wide barrier
-    bool relay = false;           // forward packets over the NoC instead of via DRAM
+    // Modes.
+    bool relay = false;     // forward packets over the NoC instead of via DRAM
+    bool endpoint = false;  // Algorithm 4: endpoint counters, no barrier
+    // Faults.
     bool stale_tag_ok = false;    // accept any positive readiness tag
     bool no_credit_wait = false;  // forward without the receiver's permission
     bool readiness_before_payload = false;  // publish readiness before the payload lands
+    bool no_endpoint_wait = false;          // reload without waiting for the preceding spill
+    bool endpoint_wait_t = false;           // wait for t instead of t_prev + 1; deadlocks
 };
 
 Result run_transport(uint32_t C, uint32_t grid_w, uint32_t grid_h, const Options& options = {}) {
@@ -147,16 +156,22 @@ Result run_transport(uint32_t C, uint32_t grid_w, uint32_t grid_h, const Options
     const uint32_t credit_prev_sem = CreateSemaphore(program, region, 0);
     const uint32_t credit_next_sem = CreateSemaphore(program, region, 0);
     const uint32_t credit_self_sem = CreateSemaphore(program, region, 0);
+    const uint32_t endpoint1_sem = CreateSemaphore(program, region, 0);
+    const uint32_t endpoint2_sem = CreateSemaphore(program, region, 0);
 
     std::vector<uint32_t> compile_args = {
         C, arrive_sem, release_sem, ready0_sem, ready1_sem,
-        credit_prev_sem, credit_next_sem, credit_self_sem};
+        credit_prev_sem, credit_next_sem, credit_self_sem, endpoint1_sem, endpoint2_sem};
     tt::tt_metal::TensorAccessorArgs(*packets->get_reference_buffer()).append_to(compile_args);
     tt::tt_metal::TensorAccessorArgs(*columns->get_reference_buffer()).append_to(compile_args);
     tt::tt_metal::TensorAccessorArgs(*stats->get_reference_buffer()).append_to(compile_args);
 
     std::map<std::string, std::string> defines;
-    defines[options.relay ? "TRANSPORT_RELAY" : "TRANSPORT_DRAM"] = "1";
+    if (options.endpoint) {
+        defines["TRANSPORT_ENDPOINT"] = "1";
+    } else {
+        defines[options.relay ? "TRANSPORT_RELAY" : "TRANSPORT_DRAM"] = "1";
+    }
     if (options.skew_iters != 0) {
         defines["SKEW_ITERS"] = std::to_string(options.skew_iters);
     }
@@ -165,6 +180,12 @@ Result run_transport(uint32_t C, uint32_t grid_w, uint32_t grid_h, const Options
     }
     if (options.rmw_spin_core != 0) {
         defines["RMW_SPIN_CORE"] = std::to_string(options.rmw_spin_core);
+    }
+    if (options.spill_spin_iters != 0) {
+        defines["SPILL_SPIN_ITERS"] = std::to_string(options.spill_spin_iters);
+    }
+    if (options.spill_spin_core != 0) {
+        defines["SPILL_SPIN_CORE"] = std::to_string(options.spill_spin_core);
     }
     if (options.no_barrier) {
         defines["FAULT_NO_BARRIER"] = "1";
@@ -177,6 +198,12 @@ Result run_transport(uint32_t C, uint32_t grid_w, uint32_t grid_h, const Options
     }
     if (options.readiness_before_payload) {
         defines["FAULT_READINESS_BEFORE_PAYLOAD"] = "1";
+    }
+    if (options.no_endpoint_wait) {
+        defines["FAULT_NO_ENDPOINT_WAIT"] = "1";
+    }
+    if (options.endpoint_wait_t) {
+        defines["FAULT_ENDPOINT_WAIT_T"] = "1";
     }
 
     const auto kernel = CreateKernel(
@@ -253,6 +280,9 @@ Result run_transport(uint32_t C, uint32_t grid_w, uint32_t grid_h, const Options
 bool transport_is_correct(uint32_t C, const Result& result) {
     const CyclicSchedule sched(C);
     const uint32_t T = sched.T();
+    if (!result.stats.empty() && stat_total(result, C, kReloadErrors) != 0u) {
+        return false;
+    }
     for (uint32_t i = 1; i <= T; ++i) {
         const uint32_t* page = result.packets.data() + (i - 1u) * kPacketWords;
         uint32_t expected_sum = 0;
@@ -284,7 +314,7 @@ bool grid_fits(uint32_t grid_w, uint32_t grid_h) {
 // The traffic counters the paper predicts. These are structural: they hold
 // whatever the payload is, and they catch a relay that quietly falls back to
 // DRAM or forwards a packet nobody consumes.
-void check_counters(uint32_t C, const Result& result, bool relay) {
+void check_counters(uint32_t C, const Result& result, bool relay, bool endpoint = false) {
     const CyclicSchedule sched(C);
     const uint32_t T = sched.T();
 
@@ -324,6 +354,25 @@ void check_counters(uint32_t C, const Result& result, bool relay) {
     }
     // Three residency intervals per core, so two changes each.
     EXPECT_EQ(stat_total(result, C, kColumnChanges), 2u * C);
+
+    if (endpoint) {
+        // One publication per inter-streak spill, and only cores 1 and 2 ever
+        // perform one -- the endpoint spill property the whole scheme rests on.
+        uint32_t inter_streak_spills = 0;
+        for (uint32_t i = 1; i <= T; ++i) {
+            for (uint32_t t = 0; t <= T; ++t) {
+                if (sched.is_active(i, t) && sched.streak_at(i, t).end == t &&
+                    sched.has_later_active(i, t)) {
+                    ++inter_streak_spills;
+                }
+            }
+        }
+        EXPECT_EQ(stat_total(result, C, kPublications), inter_streak_spills);
+        for (uint32_t c = 3; c <= C; ++c) {
+            EXPECT_EQ(result.stats[(c - 1u) * kPacketWords + kPublications], 0u)
+                << "core " << c << " published endpoint progress; only cores 1 and 2 may";
+        }
+    }
 }
 
 void check_transport(uint32_t C, uint32_t grid_w, uint32_t grid_h, const Options& options = {}) {
@@ -359,11 +408,19 @@ void check_transport(uint32_t C, uint32_t grid_w, uint32_t grid_h, const Options
                                     << ": first visit read gradients from DRAM";
     }
 
-    check_counters(C, result, options.relay);
+    EXPECT_EQ(stat_total(result, C, kReloadErrors), 0u)
+        << "a row packet was reloaded from DRAM without the updates the schedule says it should "
+           "already carry: the preceding streak's spill was not visible yet";
+    check_counters(C, result, options.relay || options.endpoint, options.endpoint);
 }
 
 void check_relay(uint32_t C, uint32_t grid_w, uint32_t grid_h, Options options = {}) {
     options.relay = true;
+    check_transport(C, grid_w, grid_h, options);
+}
+
+void check_endpoint(uint32_t C, uint32_t grid_w, uint32_t grid_h, Options options = {}) {
+    options.endpoint = true;
     check_transport(C, grid_w, grid_h, options);
 }
 
@@ -513,4 +570,109 @@ TEST(CyclicTransportRelayTest, UnderTheBarrierTheCreditIsImplied) {
 // across NoCs -- the O9 experiment -- is what would make ordering matter.
 TEST(CyclicTransportRelayTest, ReadinessCannotOvertakePayloadOnOneNoc) {
     check_relay(8, 4, 2, Options{.readiness_before_payload = true});
+}
+
+// ------------------------------------------------ Algorithm 4: no barrier
+// Within a streak the packet is itself the ordering token: a consumer cannot
+// update it before the previous consumer forwards it. Across a gap, the two
+// endpoint counters order a reload after the preceding streak's spill. No
+// chip-wide barrier remains.
+TEST(CyclicTransportEndpointTest, FourCores) {
+    check_endpoint(4, 2, 2);
+}
+
+TEST(CyclicTransportEndpointTest, EightCores) {
+    check_endpoint(8, 4, 2);
+}
+
+TEST(CyclicTransportEndpointTest, SixteenCores) {
+    check_endpoint(16, 4, 4);
+}
+
+TEST(CyclicTransportEndpointTest, ThirtyTwoCores) {
+    check_endpoint(32, 8, 4);
+}
+
+TEST(CyclicTransportEndpointTest, SixtyFourCores) {
+    check_endpoint(64, 8, 8);
+}
+
+// Nothing couples the cores now except the packets themselves, so skew and a
+// long update window are the real test of the slot protocol.
+TEST(CyclicTransportEndpointTest, SkewedCoresStillAgree) {
+    check_endpoint(8, 4, 2, Options{.skew_iters = 20000});
+}
+
+TEST(CyclicTransportEndpointTest, OneSlowCoreStillAgrees) {
+    check_endpoint(8, 4, 2, Options{.rmw_spin_iters = 400000, .rmw_spin_core = 1});
+}
+
+// ------------------------------------- Algorithm 4: the faults now bite
+// Under the barrier, the credit and the readiness tag were implied by the
+// step order and removing them changed nothing. Nothing implies them here.
+// These are the same three faults as in the relay suite, and they must now
+// corrupt -- otherwise the protocol is not what is making Algorithm 4 work.
+
+TEST(CyclicTransportEndpointTest, AStaleTagNowCorruptsThePackets) {
+    if (!grid_fits(4, 2)) {
+        GTEST_SKIP() << "needs a 4x2 region";
+    }
+    const auto broken = run_transport(
+        8, 4, 2, Options{.rmw_spin_iters = 400000, .rmw_spin_core = 1, .endpoint = true,
+                         .stale_tag_ok = true});
+    EXPECT_FALSE(transport_is_correct(8, broken))
+        << "accepting a tag from the slot's previous use did no harm even without a barrier";
+}
+
+TEST(CyclicTransportEndpointTest, DroppingTheCreditNowCorruptsThePackets) {
+    if (!grid_fits(4, 2)) {
+        GTEST_SKIP() << "needs a 4x2 region";
+    }
+    const auto broken = run_transport(
+        8, 4, 2, Options{.rmw_spin_iters = 400000, .rmw_spin_core = 1, .endpoint = true,
+                         .no_credit_wait = true});
+    EXPECT_FALSE(transport_is_correct(8, broken))
+        << "forwarding without the receiver's permission did no harm even without a barrier";
+}
+
+// The positive half of the same experiment: with the wait in place, a
+// deliberately late spill is absorbed.
+TEST(CyclicTransportEndpointTest, ALateSpillIsAbsorbedByTheEndpointWait) {
+    check_endpoint(8, 4, 2, Options{.spill_spin_iters = 400000});
+}
+
+// The one ordering Algorithm 4 cannot get from the packets: a reload must
+// follow the preceding streak's spill. Core 2 is an endpoint, so slowing it
+// makes its spill late and any reload that does not wait reads a stale page.
+TEST(CyclicTransportEndpointTest, ReloadingWithoutTheEndpointWaitCorruptsThePackets) {
+    if (!grid_fits(4, 2)) {
+        GTEST_SKIP() << "needs a 4x2 region";
+    }
+    const auto broken = run_transport(
+        8, 4, 2, Options{.spill_spin_iters = 400000, .endpoint = true, .no_endpoint_wait = true});
+    EXPECT_FALSE(transport_is_correct(8, broken))
+        << "reloading a row without waiting for the preceding spill did no harm";
+}
+
+// Waiting for t instead of t_prev + 1 deadlocks: the row is inactive at
+// t - 1 at every later streak start, and progress is published only for spill
+// events, so the value t never arrives. main_human.tex has this threshold
+// wrong; main.tex's remark works the T = 16 case through.
+//
+// Disabled because it hangs by design. It needs an operation timeout to come
+// back, and it leaves the run to be torn down rather than completed:
+//
+//   TT_METAL_OPERATION_TIMEOUT_SECONDS=30 TT_METAL_WATCHER=5 \
+//     ./build_Release/tt-train/tests/ttml_tests \
+//     --gtest_also_run_disabled_tests \
+//     --gtest_filter=CyclicTransportEndpointTest.DISABLED_WaitingForTDeadlocks
+//
+// The watcher log then shows the waiting cores parked in a semaphore wait.
+TEST(CyclicTransportEndpointTest, DISABLED_WaitingForTDeadlocks) {
+    if (!grid_fits(4, 2)) {
+        GTEST_SKIP() << "needs a 4x2 region";
+    }
+    run_transport(8, 4, 2, Options{.endpoint = true, .endpoint_wait_t = true});
+    FAIL() << "waiting for t rather than t_prev + 1 completed; the threshold that main.tex "
+              "warns about is not actually being exercised";
 }
