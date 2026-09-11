@@ -122,10 +122,10 @@ def _golden_function_all_broadcast(
     input_tensor,
     *args,
     cluster_axis=None,
+    _ttnn_golden_mesh_shape=None,
+    _ttnn_golden_mesh_shard_dims=None,
     **kwargs,
 ):
-    _ttnn_golden_mesh_shape = kwargs.get("_ttnn_golden_mesh_shape")
-    _ttnn_golden_mesh_shard_dims = kwargs.get("_ttnn_golden_mesh_shard_dims")
     if _ttnn_golden_mesh_shape is None or _ttnn_golden_mesh_shard_dims is None:
         return None
 
@@ -160,12 +160,12 @@ def _golden_function_all_gather(
     dim,
     *args,
     cluster_axis=None,
+    _ttnn_golden_mesh_shape=None,
+    _ttnn_golden_mesh_shard_dims=None,
     **kwargs,
 ):
     import torch
 
-    _ttnn_golden_mesh_shape = kwargs.get("_ttnn_golden_mesh_shape")
-    _ttnn_golden_mesh_shard_dims = kwargs.get("_ttnn_golden_mesh_shard_dims")
     if _ttnn_golden_mesh_shape is None or _ttnn_golden_mesh_shard_dims is None:
         return None
 
@@ -190,12 +190,12 @@ def _golden_function_all_reduce(
     input_tensor,
     *args,
     cluster_axis=None,
+    _ttnn_golden_mesh_shape=None,
+    _ttnn_golden_mesh_shard_dims=None,
     **kwargs,
 ):
     import torch
 
-    _ttnn_golden_mesh_shape = kwargs.get("_ttnn_golden_mesh_shape")
-    _ttnn_golden_mesh_shard_dims = kwargs.get("_ttnn_golden_mesh_shard_dims")
     if _ttnn_golden_mesh_shape is None or _ttnn_golden_mesh_shard_dims is None:
         return None
 
@@ -225,12 +225,12 @@ def _golden_function_reduce_scatter(
     dim,
     *args,
     cluster_axis=None,
+    _ttnn_golden_mesh_shape=None,
+    _ttnn_golden_mesh_shard_dims=None,
     **kwargs,
 ):
     import torch
 
-    _ttnn_golden_mesh_shape = kwargs.get("_ttnn_golden_mesh_shape")
-    _ttnn_golden_mesh_shard_dims = kwargs.get("_ttnn_golden_mesh_shard_dims")
     if _ttnn_golden_mesh_shape is None or _ttnn_golden_mesh_shard_dims is None:
         return None
 
@@ -264,9 +264,9 @@ def _golden_function_point_to_point(
     sender_coord,
     receiver_coord,
     *args,
+    _ttnn_golden_mesh_shape=None,
     **kwargs,
 ):
-    _ttnn_golden_mesh_shape = kwargs.get("_ttnn_golden_mesh_shape")
     if _ttnn_golden_mesh_shape is None:
         return None
 
@@ -408,11 +408,11 @@ def _golden_function_reduce_to_root(
     root_coord,
     *args,
     scale_fp32=1.0,
+    _ttnn_golden_mesh_shape=None,
     **kwargs,
 ):
     import torch
 
-    _ttnn_golden_mesh_shape = kwargs.get("_ttnn_golden_mesh_shape")
     if _ttnn_golden_mesh_shape is None:
         return None
     if len(input_tensor_l) != 4 or len(input_tensor_s) != 4 or len(input_tensor_m) != 4:
@@ -559,13 +559,13 @@ def _golden_function_moe_routing_remap(
     expert_parallel_size,
     cluster_axis,
     *args,
+    _ttnn_golden_mesh_shape=None,
     **kwargs,
 ):
     import math
 
     import torch
 
-    _ttnn_golden_mesh_shape = kwargs.get("_ttnn_golden_mesh_shape")
     if _ttnn_golden_mesh_shape is None:
         return None
 

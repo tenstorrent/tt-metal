@@ -874,16 +874,12 @@ def _decompose_global_golden_mesh_tensor(input_tensor, golden_tensor):
     return shards
 
 
-def preprocess_global_golden_function_inputs(function_args, function_kwargs, *, local_golden_inputs=None):
-    """Resolve stored global goldens while preserving each operation's local preprocessing shape."""
-
+def preprocess_global_golden_function_inputs(function_args, function_kwargs, *, mesh_tensors_as_shards=False):
     if ttnn.CONFIG.report_path is None:
         return None
     input_index = 0
-    local_args, local_kwargs = local_golden_inputs or ((), {})
-    mesh_tensors_as_shards = bool(local_kwargs.get("_ttnn_global_golden_mesh_shards", False))
 
-    def preprocess(object_value, local_value=None):
+    def recursive_preprocess_golden_function_inputs(object_value):
         nonlocal input_index
         if isinstance(object_value, ttnn.Tensor):
             if object_value.tensor_id is None:
@@ -908,21 +904,14 @@ def preprocess_global_golden_function_inputs(function_args, function_kwargs, *, 
         if isinstance(object_value, ttnn.Shape):
             return tuple(object_value)
         if isinstance(object_value, (list, tuple)):
-            local_values = local_value if isinstance(local_value, (list, tuple)) else ()
-            return type(object_value)(
-                preprocess(element, local_values[index] if index < len(local_values) else None)
-                for index, element in enumerate(object_value)
-            )
+            new_object_value = [recursive_preprocess_golden_function_inputs(element) for element in object_value]
+            return type(object_value)(new_object_value)
         return object_value
 
     try:
-        return (
-            [
-                preprocess(arg, local_args[index] if index < len(local_args) else None)
-                for index, arg in enumerate(function_args)
-            ],
-            {key: preprocess(value, local_kwargs.get(key)) for key, value in function_kwargs.items()},
-        )
+        new_args = [recursive_preprocess_golden_function_inputs(arg) for arg in function_args]
+        new_kwargs = {key: recursive_preprocess_golden_function_inputs(value) for key, value in function_kwargs.items()}
+        return new_args, new_kwargs
     except Exception as error:
         logger.warning(f"Failed to preprocess global golden function inputs: {error}")
         return None
@@ -1312,10 +1301,16 @@ class Operation:
                             f"{self.python_fully_qualified_name}: Failed to preprocess local golden inputs: {e}. "
                             "Local comparison will be skipped"
                         )
+                    mesh_tensors_as_shards = False
+                    if local_golden_function_args_and_kwargs is not None:
+                        _, local_golden_function_kwargs = local_golden_function_args_and_kwargs
+                        mesh_tensors_as_shards = bool(
+                            local_golden_function_kwargs.get("_ttnn_global_golden_mesh_shards", False)
+                        )
                     global_golden_function_args_and_kwargs = preprocess_global_golden_function_inputs(
                         function_args,
                         function_kwargs,
-                        local_golden_inputs=local_golden_function_args_and_kwargs,
+                        mesh_tensors_as_shards=mesh_tensors_as_shards,
                     )
                     if (
                         local_golden_function_args_and_kwargs is not None
@@ -1395,8 +1390,9 @@ class Operation:
                             "Global comparison will be skipped"
                         )
 
-                if local_golden_function_output is not None and should_compare_tensor_outputs(
-                    local_golden_function_output, output
+                if local_golden_function_output is not None and (
+                    should_compare_tensor_outputs(local_golden_function_output, output)
+                    or should_compare_scalar_outputs(local_golden_function_output, output)
                 ):
                     try:
                         for golden_tensor in get_all_tensors(local_golden_function_output):
@@ -1414,32 +1410,13 @@ class Operation:
                             raise
                         local_golden_function_output = None
                         logger.warning(
-                            f"{self.python_fully_qualified_name}: Failed local tensor comparison: {e}. "
-                            "Local comparison will be skipped"
-                        )
-                elif local_golden_function_output is not None and should_compare_scalar_outputs(
-                    local_golden_function_output, output
-                ):
-                    try:
-                        local_tensor_comparison_records = compare_tensors_using_pcc(
-                            self.python_fully_qualified_name,
-                            local_golden_function_output,
-                            output,
-                            desired_pcc=ttnn.CONFIG.comparison_mode_pcc,
-                            level="locally",
-                            fail_on_bad_comparison=ttnn.CONFIG.comparison_mode_should_raise_exception,
-                        )
-                    except Exception as e:
-                        if ttnn.CONFIG.comparison_mode_should_raise_exception:
-                            raise
-                        local_golden_function_output = None
-                        logger.warning(
-                            f"{self.python_fully_qualified_name}: Failed local scalar comparison: {e}. "
+                            f"{self.python_fully_qualified_name}: Failed local comparison: {e}. "
                             "Local comparison will be skipped"
                         )
 
-                if global_golden_function_output is not None and should_compare_tensor_outputs(
-                    global_golden_function_output, output
+                if global_golden_function_output is not None and (
+                    should_compare_tensor_outputs(global_golden_function_output, output)
+                    or should_compare_scalar_outputs(global_golden_function_output, output)
                 ):
                     try:
                         for golden_tensor in get_all_tensors(global_golden_function_output):
@@ -1458,27 +1435,7 @@ class Operation:
                             raise
                         global_golden_function_output = None
                         logger.warning(
-                            f"{self.python_fully_qualified_name}: Failed global tensor comparison: {e}. "
-                            "Global comparison will be skipped"
-                        )
-                elif global_golden_function_output is not None and should_compare_scalar_outputs(
-                    global_golden_function_output, output
-                ):
-                    try:
-                        global_tensor_comparison_records = compare_tensors_using_pcc(
-                            self.python_fully_qualified_name,
-                            global_golden_function_output,
-                            output,
-                            desired_pcc=ttnn.CONFIG.comparison_mode_pcc,
-                            level="globally",
-                            fail_on_bad_comparison=ttnn.CONFIG.comparison_mode_should_raise_exception,
-                        )
-                    except Exception as e:
-                        if ttnn.CONFIG.comparison_mode_should_raise_exception:
-                            raise
-                        global_golden_function_output = None
-                        logger.warning(
-                            f"{self.python_fully_qualified_name}: Failed global scalar comparison: {e}. "
+                            f"{self.python_fully_qualified_name}: Failed global comparison: {e}. "
                             "Global comparison will be skipped"
                         )
 
