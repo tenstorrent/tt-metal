@@ -484,8 +484,9 @@ def weights_dir(*required_subdirs: str) -> Path:
 
 
 def artifact_dir(name: str) -> Path:
-    """The gate's artifact directory `~/{name}`, created if absent."""
-    directory = Path.home() / name
+    """The gate's artifact directory: `$MINIMAX_H3_ARTIFACT_DIR/{name}` when set, else `~/{name}`; created if absent."""
+    base = os.environ.get("MINIMAX_H3_ARTIFACT_DIR")
+    directory = (Path(base) if base else Path.home()) / name
     directory.mkdir(parents=True, exist_ok=True)
     return directory
 
