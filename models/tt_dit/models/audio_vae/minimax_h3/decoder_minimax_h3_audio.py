@@ -69,6 +69,7 @@ class MiniMaxH3AudioDecoder(Module):
         split_mode: str = "full",
         max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK,
         pack_bands: dict[int, int] | None = None,
+        resampler_split_mode: str | None = None,
     ) -> None:
         super().__init__()
         self.mesh_device = mesh_device
@@ -88,6 +89,7 @@ class MiniMaxH3AudioDecoder(Module):
         self.split_mode = split_mode
         self.max_c_in_block = max_c_in_block
         self.pack_bands = dict(pack_bands or {})
+        self.resampler_split_mode = resampler_split_mode
         self._pad_masks: dict = {}
 
         # H3's audio channel schedule differs from LTX's at both ends, so every conv misses
@@ -126,6 +128,7 @@ class MiniMaxH3AudioDecoder(Module):
             # H3-only opt-in: LTX's vocoder keeps its default single-conv weights.
             split_mode=split_mode,
             pack_bands=pack_bands,
+            resampler_split_mode=resampler_split_mode,
         )
 
     def _project_latents_device(self, latents_BCT: torch.Tensor) -> torch.Tensor:
