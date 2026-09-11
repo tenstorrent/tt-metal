@@ -7,7 +7,9 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <initializer_list>
 #include <map>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -68,6 +70,22 @@ constexpr uint32_t CB_X_RM = tt::CBIndex::c_16;
 constexpr uint32_t CB_GATE_BIAS = tt::CBIndex::c_17;
 constexpr uint32_t CB_UP_BIAS = tt::CBIndex::c_18;
 constexpr uint32_t CB_DOWN_BIAS = tt::CBIndex::c_19;
+
+// Tile columns per DRAM ND shard of a weight tensor, or 0 when it is not ND-sharded (the
+// interleaved default). The kernels take this as a compile-time arg and coalesce a shard row into
+// one NoC transaction; see kernels/weight_runs.hpp. A shard whose width is not a whole number of
+// tiles reports 0, so an unusable spec degrades to the per-tile read instead of misaddressing.
+uint32_t nd_shard_n_tiles(const ttnn::Tensor& w) {
+    const auto& mem = w.memory_config();
+    if (mem.buffer_type() != tt::tt_metal::BufferType::DRAM || !mem.created_with_nd_shard_spec()) {
+        return 0;
+    }
+    const auto& spec = mem.nd_shard_spec();
+    if (!spec.has_value() || spec->shard_shape.rank() < 2 || spec->shard_shape[-1] % TILE != 0) {
+        return 0;
+    }
+    return static_cast<uint32_t>(spec->shard_shape[-1]) / TILE;
+}
 }  // namespace
 
 UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnProgramFactory::create(
@@ -190,6 +208,31 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const uint32_t per_core_N_d = (N_down_tiles_full + GRID_X - 1) / GRID_X;
     const uint32_t N_gate_tiles_padded = per_core_N_gu * GRID_X;
     const uint32_t K_down_tiles_padded = N_gate_tiles_padded;  // down K = gate N
+
+    // DRAM ND-sharded weights (opt-in; 0 = the DRAM-interleaved default). The shard width must be
+    // exactly a core's N slice, because that is what makes the slice ONE shard and therefore one
+    // contiguous NoC transaction per K-row instead of per_core_N of them. A wider or narrower
+    // shard would still read correctly through the run loop but would split or straddle the slice,
+    // losing the point, so it fails host-side instead. gate and up are pinned equal: the reader
+    // and the writer read them through a single shared compile-time width.
+    const uint32_t gate_shard_w = nd_shard_n_tiles(t.gate_projs[0]);
+    const uint32_t up_shard_w = nd_shard_n_tiles(t.up_projs[0]);
+    const uint32_t d_shard_w = nd_shard_n_tiles(t.down_projs[0]);
+    TT_FATAL(
+        gate_shard_w == up_shard_w,
+        "gate_proj and up_proj must share a weight layout: ND shard widths {} and {} tiles",
+        gate_shard_w,
+        up_shard_w);
+    const uint32_t gu_shard_w = gate_shard_w;
+    for (const auto& [name, shard_w, per_core_n] : std::initializer_list<std::tuple<const char*, uint32_t, uint32_t>>{
+             {"gate_proj/up_proj", gu_shard_w, per_core_N_gu}, {"down_proj", d_shard_w, per_core_N_d}}) {
+        TT_FATAL(
+            shard_w == 0 || shard_w == per_core_n,
+            "{}: DRAM ND shard width must be per_core_N ({} tiles) so a K-row slice is one shard, got {}",
+            name,
+            per_core_n,
+            shard_w);
+    }
 
     (void)K_down_tiles;  // actual K_down; used by reader for OOB; suppress unused warning here
 
@@ -738,14 +781,18 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         tt::datum_size(tt::DataFormat::Float16_b),
         // DOWN_SPLIT: K-rows of each down block this RISC keeps; the writer reads the
         // rest on NoC 1. Equals in0_block_w_d when the split is off.
-        down_split_k,                             // 30
+        down_split_k,  // 30
         // IN1_WRITER_MCAST: 1 => the writer runs the gate/up multicast on NoC 1.
         static_cast<uint32_t>(kWriterMcastsIn1),  // 31
         // Active-token band. Experts outside it are dropped like a zero count, so a
         // hybrid dispatch can hand this op one load regime and moe_fused_swiglu the other
         // over the SAME counts vector. Wide open by default.
-        op.min_active_tokens,                     // 32
-        op.max_active_tokens,                     // 33
+        op.min_active_tokens,  // 32
+        op.max_active_tokens,  // 33
+        // DRAM ND shard width in tiles per weight stream, 0 when interleaved. Drives the
+        // kernels' read coalescing only — both layouts run the same code path.
+        gu_shard_w,  // 34
+        d_shard_w,   // 35
     };
     tt::tt_metal::TensorAccessorArgs(x_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_ct_args);
@@ -826,8 +873,11 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         CB_IN1_GATE,                              // 26
         static_cast<uint32_t>(kWriterMcastsIn1),  // 27 writer_mcasts_in1
         // Active-token band, after the DOWN_SPLIT block rather than at 20/21.
-        op.min_active_tokens,                     // 28
-        op.max_active_tokens,                     // 29
+        op.min_active_tokens,  // 28
+        op.max_active_tokens,  // 29
+        // DRAM ND shard widths, matching the reader's args 34/35.
+        gu_shard_w,  // 30
+        d_shard_w,   // 31
     };
     // Accessor compile-arg stream order MUST match the writer kernel:
     // out, then start, then up (UP_SPLIT).
