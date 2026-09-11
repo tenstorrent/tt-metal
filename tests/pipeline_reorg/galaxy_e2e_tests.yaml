@@ -85,3 +85,17 @@
       timeout: 10
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
+
+# BH galaxy is the only Blackhole SKU in CI whose firmware bundle clears the DRAM-programmable-cores
+# floor (19.12.0.0), so it is the only place these tests run instead of skipping. Single-device
+# suites: they cover the DRAM-core/GCB/prefetcher path itself, not multi-device sharding.
+- id: bh-galaxy-tensor-prefetcher
+  name: BH Galaxy tensor prefetcher unit tests
+  cmd: |
+    pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH_validator.py
+    pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH_tensor_large.py
+  skus:
+    bh_galaxy:
+      timeout: 25
+  owner_id: U07R05K4WGJ # John Bauman
+  team: ttnn
