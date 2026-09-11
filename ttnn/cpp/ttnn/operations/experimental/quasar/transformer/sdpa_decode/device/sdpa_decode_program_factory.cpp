@@ -585,8 +585,11 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     // behind it [statistics_tiles, 2*statistics_tiles). Merging max_1/max_2 into one DFB frees an
     // intra-Tensix tile-counter slot (Quasar cap is 8). See the kernel for the offset scheme.
     const DFBSpecName DFB_MAX{"max"};
-    const DFBSpecName DFB_SUM_1{"sum_1"};
-    const DFBSpecName DFB_SUM_2{"sum_2"};
+    // Single merged sum buffer (depth 2*statistics_tiles): the online-softmax ping-pong keeps the
+    // "prev" sum block at the ring front [0, statistics_tiles) and appends the "cur" sum block behind
+    // it [statistics_tiles, 2*statistics_tiles). Merging sum_1/sum_2 into one DFB frees another
+    // intra-Tensix tile-counter slot (Quasar cap is 8). Direct analog of the max merge above.
+    const DFBSpecName DFB_SUM{"sum"};
     const DFBSpecName DFB_EXP_MAX_DIFF{"exp_max_diff"};
 
     // ---- DFB specs + per-kernel endpoint bindings ----
@@ -807,8 +810,8 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     add_compute_intermediate(DFB_OUT_ACC_IM, "out_accumulate_im", im_tile_size, out_tiles, im_df, &im_tile);
     // Merged max buffer: depth 2*statistics_tiles holds the prev block (front) + cur block (behind).
     add_compute_intermediate(DFB_MAX, "max", stats_tile_size, 2 * statistics_tiles, stats_df, &stats_tile);
-    add_compute_intermediate(DFB_SUM_1, "sum_1", stats_tile_size, statistics_tiles, stats_df, &stats_tile);
-    add_compute_intermediate(DFB_SUM_2, "sum_2", stats_tile_size, statistics_tiles, stats_df, &stats_tile);
+    // Merged sum buffer: depth 2*statistics_tiles holds the prev block (front) + cur block (behind).
+    add_compute_intermediate(DFB_SUM, "sum", stats_tile_size, 2 * statistics_tiles, stats_df, &stats_tile);
     add_compute_intermediate(
         DFB_EXP_MAX_DIFF, "exp_max_diff", stats_tile_size, statistics_tiles, stats_df, &stats_tile);
     // Tile-counter budget (Quasar cap 8): the 3 tree-reduction temps are NOT allocated — the compute
