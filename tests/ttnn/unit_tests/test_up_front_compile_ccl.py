@@ -87,7 +87,8 @@ def test_all_gather_up_front_compile(mesh_device):
     # Parallel compile warms the cache, error-free. A CCL op's MeshWorkload holds multiple
     # programs (sender/receiver), so compile builds >= the unique workload count — unlike a
     # homogeneous op where one program covers the whole mesh.
-    num_programs, num_errors, _, wall = ttnn.graph.up_front_compile(mesh_device, 4)
+    num_programs, num_errors, _, wall, num_already = ttnn.graph.up_front_compile(mesh_device, 4)
+    assert num_already == 0, f"{num_already}/{num_programs} arrived already compiled (compiled inline during collect)"
     print(
         f"CCL parallel compile: {num_programs} programs in {wall:.2f}s (errors={num_errors}, unique workloads={n_unique})"
     )
