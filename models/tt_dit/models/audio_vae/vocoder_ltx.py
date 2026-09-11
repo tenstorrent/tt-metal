@@ -102,6 +102,7 @@ class AMPBlock1(Module):
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
         pack: int | None = None,
+        resampler_split_mode: str | None = None,
     ) -> None:
         super().__init__()
         self.channels = channels
@@ -142,7 +143,13 @@ class AMPBlock1(Module):
         def act():
             if pack is not None:
                 assert activation == "snakebeta", "packed blocks implement SnakeBeta only"
-                return PackedActivation1d(channels=channels, pack=pack, split_mode=split_mode, **common)
+                return PackedActivation1d(
+                    channels=channels,
+                    pack=pack,
+                    split_mode=split_mode,
+                    resampler_split_mode=resampler_split_mode,
+                    **common,
+                )
             return Activation1d(
                 channels=channels,
                 activation=act_cls(
@@ -217,11 +224,14 @@ class Vocoder(Module):
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
         pack_bands: dict[int, int] | None = None,
+        resampler_split_mode: str | None = None,
     ) -> None:
         super().__init__()
         # band index -> time steps packed per row for that band's AMP blocks (layers/audio_pack.py); the
         # narrow late bands (8-16 channels) run ~2x faster per op on 32-wide packed rows.
         self.pack_bands = dict(pack_bands or {})
+        # split mode of the packed bands' anti-alias resamplers (None = same as the convs)
+        self.resampler_split_mode = resampler_split_mode
 
         if resblock_kernel_sizes is None:
             resblock_kernel_sizes = [3, 7, 11]
@@ -311,6 +321,7 @@ class Vocoder(Module):
                         ccl_manager=ccl_manager,
                         split_mode=split_mode,
                         pack=self.pack_bands.get(i),
+                        resampler_split_mode=resampler_split_mode,
                     )
                 )
 
