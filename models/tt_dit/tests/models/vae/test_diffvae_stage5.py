@@ -740,9 +740,13 @@ def test_stage5_parity_w_sharded_bricked(*, mesh_device, device_params, sp_axis,
     # (brick_window_is_unclamped short-circuits when window >= volume on an axis).
     #
     # Reference cost measured on this host at 64 threads, ~133 us/site: w480_h64 is ~2 min,
-    # w480_h272 is ~10 min. Select with -k if the long one is not wanted.
-    [Grid(batch=1, t=24, h=64, w=480), Grid(batch=1, t=24, h=272, w=480)],
-    ids=["w480_h64", "w480_h272"],
+    # w480_h272 is ~10 min. Select with -k if the long one is not wanted. The 272 row carries its
+    # own timeout: the reference alone exceeds pytest.ini's 300 s default, which is how it "timed
+    # out" in the gate runner (jobs 426/427, 2026-09-11) while sitting healthy in the CPU forward.
+    [
+        pytest.param(Grid(batch=1, t=24, h=64, w=480), id="w480_h64"),
+        pytest.param(Grid(batch=1, t=24, h=272, w=480), id="w480_h272", marks=pytest.mark.timeout(1800)),
+    ],
 )
 @pytest.mark.parametrize("backend", ["bricked_sp_w_sharded"], ids=["bricked"])
 @pytest.mark.diffvae_gate

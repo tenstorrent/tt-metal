@@ -1,7 +1,7 @@
 # Plan: retire `block_permute.py` by moving stages 2-5 onto the bricked neighborhood attention
 
-Status: PHASE 4 DONE, 2026-09-11. Branch `na-integration`. Owner: James Lee.
-Phase 0 done; Phase 1 B2 done; D1 priced (axis swap rejected); Phase 4 (deletion) done and verified.
+Status: PHASE 4 DONE AND FULLY VERIFIED, 2026-09-11 21:25. Branch `na-integration`. Owner: James Lee.
+Phase 0 done; Phase 1 B2 done; D1 priced (axis swap rejected); Phase 4 (deletion) done; every gate green.
 Block order was found to be unused in production (Phase 1 notes). Remaining, optional: Phases 1 (B1),
 2, 3 and 5 = the "bricked deterministic stages" speed project; everything is uncommitted in the tree.
 
@@ -21,7 +21,28 @@ Block order was found to be unused in production (Phase 1 notes). Remaining, opt
   captured; single-case rerun is job 430).
 - Pre-commit on the deletion commit: isort/autoflake fixups committed as cb8e1ffb2dd.
 
-## PICKUP 2026-09-11 20:55 -- deletion verified except two items (read this first)
+## PICKUP 2026-09-11 21:25 -- deletion fully verified, nothing open (read this first)
+
+The two items left open at 20:55 both closed on device:
+1. `test_stage5_gna_parity_w_sharded` (job 439): **5 passed**. Stride-1 rows at 99.9936 % / 99.9932 % PCC;
+   strides (1,2,2) / (1,4,4) / (2,4,8) logged end-to-end PCC 0.999925 / 0.999912 / 0.999884. The
+   (2,4,8) row replaces the (11,4,8) row that a (2,4,4) brick cannot represent.
+2. `test_stage5_bricked_matches_upstream_at_production_width[w480_h272]` (job 440): **PASSED at 99.9936 %**
+   (RMSE/sigma 1.1 %), call time 501 s. The "timeout" in jobs 426/427 was pytest.ini's 300 s default
+   against the ~10 min host reference (which the test's own comment already priced), not a hang. The row
+   now carries `pytest.mark.timeout(1800)`. The 2026-08-31 PCC failure (jobs 876/885) predates the
+   Phase-0 HiFi2/exact-exp numerics fix and does not reproduce.
+
+Broker note for this gate: a job silent for 300 s is reaped, so run it with a stdout heartbeat
+(`(while true; do echo heartbeat; sleep 60; done) & ...; kill $!`) and a `timeout_sec` of 1500.
+
+Still to decide (James): the bricked gates are all "new, not baselined" in the ledger. A
+`RECORD_BASELINE=1 run_diffvae_gates.sh` run would pin them; it needs >= 1500 s because of the h272 row.
+
+Next levers (optional, unchanged): Phase 5 per-stage brick hoist; stage 1 (index 0, replicated gather
+backend, ~1000 ms per decode).
+
+## PICKUP 2026-09-11 20:55 -- deletion verified except two items (superseded by the note above)
 
 Commits on na-integration, oldest first: ddc59cd71ed (bricked deterministic stages), 396f54b6956 (misc),
 ee209de41d5 (Tier-2 deletion of the general-SDPA executors), 955898dba2b (pickup note), cb8e1ffb2dd
