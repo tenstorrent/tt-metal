@@ -87,11 +87,11 @@
     if [ "$ARCH_NAME" = "blackhole" ]; then
       GOLDEN=tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/profiler_overhead_blackhole_golden.json
     fi
-    # ARMED: metrics with a numeric real_time in the golden are gated at +/-tolerance; metrics
-    # with real_time=null are record-only (measured value printed, not gated). Currently gated:
-    # Wormhole BM_profiler_read (real wh_n300_civ2 capture). Record-only: profiled_dispatch on
-    # both SKUs (too noisy) and all Blackhole metrics (no real bh_p150_perf capture yet -- arm by
-    # populating the Blackhole golden from the numbers this job prints).
+    # ARMED: metrics with a numeric real_time in the golden are gated at +/-tolerance_pct (defined
+    # in the golden); metrics with real_time=null are record-only (measured value printed, not
+    # gated). Gated: BM_profiler_read on both SKUs (real wh_n300_civ2 and bh_p150_perf captures).
+    # Record-only: BM_profiled_dispatch on both SKUs (host-side jitter too high to gate, especially
+    # on Wormhole). See each golden's tolerance_pct and _comment for details.
     ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_profiler_overhead_ci.py \
       profiler_overhead_bench.json --golden "$GOLDEN"
   skus:

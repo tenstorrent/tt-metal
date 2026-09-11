@@ -9,12 +9,17 @@
 These benchmarks report host-side latency via Google Benchmark manual time (the
 ``real_time`` field, in nanoseconds): the cost of ``ReadMeshDeviceProfilerResults`` (the
 profiler-buffer writeout) and of profiler-enabled dispatch. A result is a regression if it
-is more than ``--tolerance`` percent slower than the golden. Being faster only prints an
+is more than the tolerance percent slower than the golden. Being faster only prints an
 advisory to refresh the golden. A golden entry with ``real_time`` set to ``null`` is
 record-only: its measured value is reported but never gated (used for metrics that are too
 noisy to gate on a given SKU, or SKUs without a real CI capture yet). ``--ignore-times``
 performs a structural check only (names must match, no benchmark errored), useful while a
 new benchmark's timings are still being characterized on a given SKU.
+
+The regression tolerance is defined in the golden JSON via a top-level ``tolerance_pct``
+field (mirroring the op-to-op latency goldens), so each SKU's gate lives next to its
+numbers; ``--tolerance`` overrides it on the command line, and ``DEFAULT_TOLERANCE_PCT`` is
+the fallback if neither is set.
 """
 
 import argparse
@@ -38,7 +43,12 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Compare profiler-overhead benchmark JSON to golden")
     parser.add_argument("json", type=argparse.FileType("r"), help="JSON file to compare")
     parser.add_argument("-g", "--golden", type=argparse.FileType("r"), default=None, help="Golden JSON file")
-    parser.add_argument("--tolerance", type=float, default=DEFAULT_TOLERANCE_PCT, help="Regression tolerance percent")
+    parser.add_argument(
+        "--tolerance",
+        type=float,
+        default=None,
+        help="Regression tolerance percent; overrides the golden's tolerance_pct (default: %d)" % DEFAULT_TOLERANCE_PCT,
+    )
     parser.add_argument("--ignore-times", action="store_true", help="Structural check only; do not fail on timings")
     return parser.parse_args()
 
@@ -75,8 +85,14 @@ def main():
     args = parse_args()
     golden_file = args.golden or open(DEFAULT_GOLDEN_FILE, "r")
 
-    golden_times, golden_errors = collect(json.load(golden_file))
+    golden_json = json.load(golden_file)
+    golden_times, golden_errors = collect(golden_json)
     result_times, result_errors = collect(json.load(args.json))
+
+    # Tolerance precedence: explicit --tolerance > golden's tolerance_pct > DEFAULT_TOLERANCE_PCT.
+    tolerance = args.tolerance
+    if tolerance is None:
+        tolerance = float(golden_json.get("tolerance_pct", DEFAULT_TOLERANCE_PCT))
 
     assert not golden_errors, f"Golden should not contain errored benchmarks: {list(golden_errors)}"
 
@@ -100,14 +116,14 @@ def main():
             print(f"[record only] {name}: measured {shown} (not gated)")
             continue
         diff_pct = result_ns / golden_ns * 100 - 100
-        if diff_pct > args.tolerance:
+        if diff_pct > tolerance:
             msg = f"Test {name} expected {golden_ns:.0f}ns but got {result_ns:.0f}ns ({diff_pct:.2f}% worse)"
             if args.ignore_times:
                 print(f"Advisory (times ignored): {msg}")
             else:
                 print(f"Error: {msg}")
                 exit_code = 1
-        elif diff_pct < -args.tolerance:
+        elif diff_pct < -tolerance:
             print(
                 f"Consider adjusting baselines. Test {name} got {result_ns:.0f}ns but expected "
                 f"{golden_ns:.0f}ns ({-diff_pct:.2f}% better)."
