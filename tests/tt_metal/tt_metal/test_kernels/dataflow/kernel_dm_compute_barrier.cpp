@@ -27,7 +27,7 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(post_addr + MEM_L1_UNCACHED_BASE);
     (void)observed_addr;  // the compute kernel's TRISC 0 is the observer
 
-    dm_compute_barrier(num_dm_threads, num_tensixes);
+    sync_dm_compute_threads(num_dm_threads, num_tensixes);
 
     for (uint32_t r = 0; r < rounds; r++) {
         uint32_t delay = (participant + 1) * skew_iters;
@@ -36,12 +36,12 @@ void kernel_main() {
         }
 
         arrivals[r * max_participants + participant] = 1;
-        dm_compute_barrier(num_dm_threads, num_tensixes);
+        sync_dm_compute_threads(num_dm_threads, num_tensixes);
 
         // Matches the observer's barrier in the compute kernel, so both sides stay in lockstep.
-        dm_compute_barrier(num_dm_threads, num_tensixes);
+        sync_dm_compute_threads(num_dm_threads, num_tensixes);
 
         post[r * max_participants + participant] = 1;
-        dm_compute_barrier(num_dm_threads, num_tensixes);
+        sync_dm_compute_threads(num_dm_threads, num_tensixes);
     }
 }
