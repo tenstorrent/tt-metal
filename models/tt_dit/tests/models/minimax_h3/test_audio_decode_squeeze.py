@@ -62,8 +62,12 @@ RECIPES = {
     "full_pack34": {"pack": {3: 1, 4: 1, 5: 2, 6: 4}},
     "off_pack34": {"all": "off", "pack": {3: 1, 4: 1, 5: 2, 6: 4}},
     "act_off_ge3_pack34": {"all": "act", "bands_ge": (3, "off"), "post": "off", "pack": {3: 1, 4: 1, 5: 2, 6: 4}},
+    # stacked split (same arithmetic as full, one conv3d over 3x input channels): set at construction
+    "stack": {"build": "stack"},
+    "stack_pack": {"build": "stack", "pack": {5: 2, 6: 4}},
 }
 PACK_KEY = "pack"
+BUILD_KEY = "build"  # split_mode passed to the constructor (needed when it changes the weight shapes)
 
 
 def _conv_modules_by_band(decoder):
@@ -86,6 +90,8 @@ def apply_recipe(decoder, recipe: dict) -> dict:
     counts = {}
     if PACK_KEY in recipe:
         counts["pack"] = dict(recipe[PACK_KEY])
+    if BUILD_KEY in recipe:
+        recipe = {k: v for k, v in recipe.items() if k not in (PACK_KEY, BUILD_KEY)}
     for band, conv in _conv_modules_by_band(decoder):
         mode = None
         if "all" in recipe:
@@ -154,7 +160,8 @@ def test_audio_decode_squeeze(mesh_device, num_latent_frames, batch):
     rows = []
     baseline_out = None
     for name, recipe in _selected_recipes():
-        decoder, _ = _load(mesh_device, pack_bands=recipe.get(PACK_KEY))
+        build = {"split_mode": recipe[BUILD_KEY]} if BUILD_KEY in recipe else {}
+        decoder, _ = _load(mesh_device, pack_bands=recipe.get(PACK_KEY), **build)
         counts = apply_recipe(decoder, recipe)
         eager, _ = _best(lambda: decoder(latents), mesh_device, n=1)
         try:
