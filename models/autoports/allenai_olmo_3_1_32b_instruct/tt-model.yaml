@@ -38,11 +38,13 @@ serve:
   capabilities:
     tool_parser: olmo3
   # Olmo 3 ends a tool-call turn with <|im_end|> (100265): in its chat template a function_calls turn is always followed by
-  # an environment turn, so the model never learned to emit eos (<|endoftext|>, 100257) there. generation_config.json lists
-  # only 100257, so after </function_calls> generation ran on and hallucinated the environment/user/assistant turns
-  # (OpenCode T7: read(...) delivered as content, no tool call). Declaring <|im_end|> as a stop token ends the turn cleanly.
+  # an environment turn, so the model never learned to emit eos (<|endoftext|>, 100257) there. The upstream
+  # generation_config.json lists only 100257, so after </function_calls> generation ran on and hallucinated the
+  # environment/user/assistant turns (OpenCode T7: read(...) delivered as content, no tool call). vllm_bundle/olmo3/
+  # generation_config.json is the upstream file plus 100265; it must come in via --generation-config <dir> because vLLM
+  # 0.26's --override-generation-config only reaches the sampling defaults, not the eos list.
   args:
-    - [--override-generation-config, '{"eos_token_id": [100257, 100265]}']
+    - [--generation-config, /opt/tt-metal/models/autoports/allenai_olmo_3_1_32b_instruct/vllm_bundle/olmo3]
   additional_config:
     tt:
       trace_region_size: 160000000
