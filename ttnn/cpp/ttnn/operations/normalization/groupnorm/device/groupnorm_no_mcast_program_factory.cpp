@@ -110,67 +110,77 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
 
     // tensor shape
     const auto& shape = a.padded_shape();
-    uint32_t H = shape[1] * shape[2] * num_batches;
-    uint32_t Ht = H / tile_height;
-    uint32_t W = shape[3];
-    uint32_t Wt = W / tile_width;
+    const uint32_t H = shape[1] * shape[2] * num_batches;
+    const uint32_t W = shape[3];
 
     // Compute optimal core grid
     TT_FATAL(W % tile_width == 0, "W (channels): {} must be divisible by {}", W, tile_width);
     TT_FATAL(W % num_groups == 0, "W (channels): {} must be divisible by num_groups: {}", W, num_groups);
-    uint32_t num_virtual_cols = std::min<uint32_t>(grid_size.x, num_groups);
-    while ((W / num_virtual_cols) % tile_width != 0 || (num_groups % num_virtual_cols) != 0) {
-        num_virtual_cols -= 1;
-    }
-
-    uint32_t num_actual_cols =
-        (grid_size.x / num_virtual_cols) * num_virtual_cols;  // Largest multiple of virtual cols < 8
-    uint32_t num_actual_rows = grid_size.y;
-    uint32_t num_virtual_rows = (grid_size.x / num_virtual_cols) * num_actual_rows;
-    uint32_t num_cores = num_actual_cols * num_actual_rows;
-    const bool row_wise = false;
-    auto all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, grid_size, row_wise);
+    const auto geometry =
+        derive_groupnorm_interleaved_geometry(H, W, num_batches, num_groups, grid_size, tile_height, tile_width);
+    TT_FATAL(
+        geometry.num_virtual_cols > 0,
+        "No valid virtual column count for W={}, num_groups={}, grid_x={}, and tile_width={}",
+        W,
+        num_groups,
+        grid_size.x,
+        tile_width);
+    TT_FATAL(geometry.num_virtual_rows > 0, "The GroupNorm core grid must contain at least one virtual row");
 
     TT_FATAL(
-        Ht >= num_virtual_rows,
+        geometry.height_tiles >= geometry.num_virtual_rows,
         "Height in tiles (Ht={}) must be >= num_virtual_rows ({}). "
         "The core grid (x={}, y={}) is too large for the input spatial dimensions (H={}). "
         "Use a smaller core_grid or increase the input spatial size.",
-        Ht,
-        num_virtual_rows,
+        geometry.height_tiles,
+        geometry.num_virtual_rows,
         grid_size.x,
         grid_size.y,
         H);
     TT_FATAL(
-        Ht % num_virtual_rows == 0,
+        geometry.height_tiles % geometry.num_virtual_rows == 0,
         "Height in tiles (Ht={}) must be divisible by num_virtual_rows ({}). "
         "Remainder tiles would be silently dropped, producing incorrect results. "
         "core_grid=({},{}), num_virtual_cols={}, rows_per_y={}.",
-        Ht,
-        num_virtual_rows,
+        geometry.height_tiles,
+        geometry.num_virtual_rows,
         grid_size.x,
         grid_size.y,
-        num_virtual_cols,
-        grid_size.x / num_virtual_cols);
+        geometry.num_virtual_cols,
+        grid_size.x / geometry.num_virtual_cols);
+    if (!geometry.equal_batches_per_core) {
+        TT_FATAL(
+            geometry.height_tiles % num_batches == 0,
+            "Ht ({}) needs to be divisible by the number of batches ({})",
+            geometry.height_tiles,
+            num_batches);
+    }
+    TT_FATAL(geometry.valid, "Failed to derive a valid interleaved GroupNorm geometry");
 
-    uint32_t per_core_Mt_group_1 = Ht / num_virtual_rows;
-    uint32_t per_core_M_group_1 = per_core_Mt_group_1 * tile_height;
-    uint32_t per_core_Mt_group_2 = 0;
-    uint32_t per_core_M_group_2 = 0;
-    uint32_t per_core_N = W / num_virtual_cols;
-    uint32_t per_core_Nt = (per_core_N + tile_width - 1) / tile_width;
-    uint32_t num_channels_per_group = W / num_groups;
-    uint32_t num_channels_per_group_mod_tile_w =
-        num_channels_per_group % tile_width == 0 ? tile_width : num_channels_per_group % tile_width;
-    // split each batch into multiple cores
-    uint32_t num_shards_r = H / per_core_M_group_1;
-    uint32_t num_cores_per_batch = num_batches > num_shards_r ? 1 : num_shards_r / num_batches;
-    uint32_t num_shards_c = W / per_core_N;
-    uint32_t num_cores_per_group = num_groups > num_shards_c ? 1 : num_shards_c / num_groups;
-    // each core contains multiple batches
-    uint32_t num_batches_per_core_group_1 = num_batches > num_shards_r ? num_batches / num_shards_r : 1;
-    uint32_t num_batches_per_core_group_2 = num_batches_per_core_group_1;  // need this to be non-zero even if unused
-    uint32_t num_groups_per_core = num_groups > num_shards_c ? num_groups / num_shards_c : 1;
+    const uint32_t Ht = geometry.height_tiles;
+    const uint32_t Wt = geometry.width_tiles;
+    const uint32_t num_virtual_cols = geometry.num_virtual_cols;
+    const uint32_t num_actual_cols = geometry.num_actual_cols;
+    const uint32_t num_actual_rows = geometry.num_actual_rows;
+    const uint32_t num_virtual_rows = geometry.num_virtual_rows;
+    const uint32_t num_cores = geometry.num_cores;
+    const uint32_t per_core_Mt_group_1 = geometry.per_core_height_tiles_group_1;
+    const uint32_t per_core_M_group_1 = geometry.per_core_height_group_1;
+    const uint32_t per_core_Mt_group_2 = geometry.per_core_height_tiles_group_2;
+    const uint32_t per_core_M_group_2 = geometry.per_core_height_group_2;
+    const uint32_t per_core_N = geometry.per_core_width;
+    const uint32_t per_core_Nt = geometry.per_core_width_tiles;
+    const uint32_t num_channels_per_group = geometry.channels_per_group;
+    const uint32_t num_channels_per_group_mod_tile_w = geometry.channels_per_group_mod_tile_width;
+    const uint32_t num_shards_r = geometry.num_row_shards;
+    const uint32_t num_cores_per_batch = geometry.num_cores_per_batch;
+    const uint32_t num_shards_c = geometry.num_col_shards;
+    const uint32_t num_cores_per_group = geometry.num_cores_per_group;
+    const uint32_t num_batches_per_core_group_1 = geometry.batches_per_core_group_1;
+    const uint32_t num_batches_per_core_group_2 = geometry.batches_per_core_group_2;
+    const uint32_t num_groups_per_core = geometry.groups_per_core;
+    const bool row_wise = false;
+    auto all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, grid_size, row_wise);
 
     TT_FATAL(
         (!use_welford) || (num_groups_per_core <= 16),
@@ -186,44 +196,17 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     }
 
     // subblock
-    uint32_t num_rows_per_batch_per_core_group_1 = per_core_M_group_1 / num_batches_per_core_group_1;
-    uint32_t num_rows_per_batch_per_core_group_2 = 0;
-    auto [block_wt, num_groups_per_reset] = find_max_tile_span(per_core_N, num_channels_per_group);
-    uint32_t block_ht_group_1 = per_core_Mt_group_1 / num_batches_per_core_group_1;
-    uint32_t block_ht_group_2 = 0;
+    const uint32_t num_rows_per_batch_per_core_group_1 = geometry.rows_per_batch_per_core_group_1;
+    const uint32_t num_rows_per_batch_per_core_group_2 = geometry.rows_per_batch_per_core_group_2;
+    const uint32_t block_wt = geometry.block_width_tiles;
+    const uint32_t num_groups_per_reset = geometry.num_groups_per_reset;
+    const uint32_t block_ht_group_1 = geometry.block_height_tiles_group_1;
+    const uint32_t block_ht_group_2 = geometry.block_height_tiles_group_2;
     uint32_t subblock_wt = get_max_subblock(block_wt, 8);
     uint32_t num_subblocks_w = block_wt / subblock_wt;
-    uint32_t block_wt_last = (per_core_Nt + num_groups_per_core - 1) / num_groups_per_core;
-
-    // support for uneven batches across rows
-    bool equal_batches_per_core = true;
-    uint32_t last_row_with_extra_batch = 0;
-    if (num_batches >= num_shards_r) {
-        last_row_with_extra_batch = (num_batches % num_shards_r);
-        equal_batches_per_core = (last_row_with_extra_batch == 0);
-        if (!equal_batches_per_core) {
-            last_row_with_extra_batch--;  // zero based index
-        }
-    }
-
-    // Have first group (each row has 1 extra batch compared to second group), and second group
-    if (!equal_batches_per_core) {
-        num_batches_per_core_group_2 = num_batches / num_shards_r;
-        num_batches_per_core_group_1 = num_batches_per_core_group_2 + 1;
-
-        TT_FATAL(Ht % num_batches == 0, "Ht ({}) needs to be divisible by the number of batches ({})", Ht, num_batches);
-        uint32_t per_batch_tiles = Ht / num_batches;
-        per_core_Mt_group_1 = num_batches_per_core_group_1 * per_batch_tiles;
-        per_core_Mt_group_2 = num_batches_per_core_group_2 * per_batch_tiles;
-        per_core_M_group_1 = per_core_Mt_group_1 * tile_height;
-        per_core_M_group_2 = per_core_Mt_group_2 * tile_height;
-
-        num_rows_per_batch_per_core_group_1 = per_batch_tiles * tile_height;
-        num_rows_per_batch_per_core_group_2 = per_batch_tiles * tile_height;
-
-        block_ht_group_1 = per_batch_tiles;
-        block_ht_group_2 = per_batch_tiles;
-    }
+    const uint32_t block_wt_last = geometry.last_block_width_tiles;
+    const bool equal_batches_per_core = geometry.equal_batches_per_core;
+    const uint32_t last_row_with_extra_batch = geometry.last_row_with_extra_batch;
 
     TT_FATAL(
         block_ht_group_1 > 0,

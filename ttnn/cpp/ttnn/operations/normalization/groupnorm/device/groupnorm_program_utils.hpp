@@ -58,6 +58,53 @@ bool groupnorm_needs_fp32_reconfig(std::initializer_list<tt::DataFormat> reconfi
 // Blackhole. Keep Wormhole on the existing dataflow-RISC combiner until it is profiled separately.
 bool groupnorm_use_sfpu_local_combine(bool use_welford, tt::ARCH arch, bool fp32_dest_acc_en, uint32_t tile_width);
 
+// Geometry shared by the interleaved program factories and their replay selector. Keeping these
+// values together ensures the program hash prices the same per-core workload that the descriptor
+// eventually constructs.
+struct GroupNormInterleavedGeometry {
+    bool valid = false;
+    uint32_t height_tiles = 0;
+    uint32_t width_tiles = 0;
+    uint32_t num_virtual_cols = 0;
+    uint32_t num_actual_cols = 0;
+    uint32_t num_actual_rows = 0;
+    uint32_t num_virtual_rows = 0;
+    uint32_t num_cores = 0;
+    uint32_t per_core_height_tiles_group_1 = 0;
+    uint32_t per_core_height_tiles_group_2 = 0;
+    uint32_t per_core_height_group_1 = 0;
+    uint32_t per_core_height_group_2 = 0;
+    uint32_t per_core_width = 0;
+    uint32_t per_core_width_tiles = 0;
+    uint32_t channels_per_group = 0;
+    uint32_t channels_per_group_mod_tile_width = 0;
+    uint32_t num_row_shards = 0;
+    uint32_t num_cores_per_batch = 0;
+    uint32_t num_col_shards = 0;
+    uint32_t num_cores_per_group = 0;
+    uint32_t batches_per_core_group_1 = 0;
+    uint32_t batches_per_core_group_2 = 0;
+    uint32_t groups_per_core = 0;
+    uint32_t rows_per_batch_per_core_group_1 = 0;
+    uint32_t rows_per_batch_per_core_group_2 = 0;
+    uint32_t block_width_tiles = 0;
+    uint32_t num_groups_per_reset = 0;
+    uint32_t block_height_tiles_group_1 = 0;
+    uint32_t block_height_tiles_group_2 = 0;
+    uint32_t last_block_width_tiles = 0;
+    bool equal_batches_per_core = true;
+    uint32_t last_row_with_extra_batch = 0;
+};
+
+GroupNormInterleavedGeometry derive_groupnorm_interleaved_geometry(
+    uint32_t height,
+    uint32_t width,
+    uint32_t num_batches,
+    uint32_t num_groups,
+    tt::tt_metal::CoreCoord grid,
+    uint32_t tile_height,
+    uint32_t tile_width);
+
 // Two-pass interleaved replay footprint; tile-reduction-only buffers are not allocated.
 struct GroupNormInterleavedCbFootprint {
     std::uint64_t output = 0;
