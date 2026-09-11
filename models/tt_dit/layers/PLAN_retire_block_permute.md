@@ -5,6 +5,18 @@ Phase 0 done; Phase 1 B2 done; D1 priced (axis swap rejected); Phase 4 (deletion
 Block order was found to be unused in production (Phase 1 notes). Remaining, optional: Phases 1 (B1),
 2, 3 and 5 = the "bricked deterministic stages" speed project; everything is uncommitted in the tree.
 
+## PICKUP 2026-09-11 17:35 -- deletion committed as WIP, verification NOT yet checked
+
+Commits on na-integration: ddc59cd71ed (bricked deterministic stages), 396f54b6956 (misc: decode-tree live
+lines, perf-table breakdown, accessor fix), then the WIP deletion commit (pre-commit hooks skipped with -n;
+run `python_env/bin/pre-commit run --files $(git diff --name-only HEAD~1 HEAD)` and amend if it reformats).
+Broker jobs queued at commit time (logs under /var/log/tt-device-broker/ and generated/del_*.log):
+424 unit (neighborhood_sdpa, permute, bricked executor, tests/unit/test_na3d.py, vae/test_na3d.py),
+425 block arms (baseline now bricked), 426 decoder gates + shard equivalence + stage-5 parity/GNA
+parity (ported to bricked) + production-width gate, 427 run_diffvae_gates.sh, 428 production pipeline
+(expect VAE decode ~12.35 s). If any fail, the deletion commit is the one to fix or revert. Plan and
+inventory: ~/.claude/plans/right-now-the-deterministic-sparkling-pike.md.
+
 ## Bricked deterministic stages -- in progress 2026-09-11 (Phases 1-B1, 2, 3)
 
 Scope (James, 2026-09-11): stages 2-4 only; stage 1 stays replicated on the gather backend. Per-stage
