@@ -31,33 +31,41 @@ void kernel_main() {
     std::uint32_t trisc_id = ckernel::csr_read<ckernel::CSR::TRISC_ID>();
 #endif
 
+    // dummy_pack's PACR_STRIDE validates a pack-partition bd_table entry; compute_kernel_hw_startup
+    // is what runs llk_pack_init and programs that entry. copy_init is not needed: dummy_unpack is
+    // UNPACR_NOP and does not fetch a descriptor.
+    compute_kernel_hw_startup(dfb::out, dfb::out);
+
     for (std::uint32_t i = 0; i < entries_per_neo; ++i) {
         dfb.reserve_back(1);
+        // TEN-4746: issue a no-write PACR after reserve_back to order the later push_back.
+        // The PACK thread waits for it below before directly incrementing the reserved L1 entry.
+        ckernel::dummy_pack(dfb::out);
 #ifdef UCK_CHLKC_PACK
         {
+            ckernel::tensix_sync();
             volatile std::uint32_t* entry = reinterpret_cast<volatile std::uint32_t*>(dfb.get_write_ptr() << 4);
             for (std::uint32_t w = 0; w < words_per_entry; ++w) {
                 entry[w] += 1;
             }
         }
 #endif
-        // TEN-4746: the pack thread wrote L1 directly (no PACR) since reserve_back; a no-write dummy pack
-        // issues a real PACR to order push_back after reserve_back without clobbering the increments above.
-        ckernel::dummy_pack(dfb::out);
         dfb.push_back(1);
 
         dfb.wait_front(1);
+        // TEN-4746: a real UNPACR must sit between wait_front and pop_front. dummy_unpack also
+        // gates the unpacker on WAIT_TILES; tensix_sync then blocks this RISC until that UNPACR
+        // retires, so the scalar increments below cannot race an unwritten slot.
+        ckernel::dummy_unpack(dfb::out);
 #ifdef UCK_CHLKC_UNPACK
         if (trisc_id == 0) {
+            ckernel::tensix_sync();
             volatile std::uint32_t* entry = reinterpret_cast<volatile std::uint32_t*>(dfb.get_read_ptr() << 4);
             for (std::uint32_t w = 0; w < words_per_entry; ++w) {
                 entry[w] += 1;
             }
         }
 #endif
-        // TEN-4746: the unpack thread read/modified L1 directly (no UNPACR) since wait_front; a dummy
-        // unpack issues a real UNPACR to order pop_front after wait_front. Reads nothing from L1.
-        ckernel::dummy_unpack(dfb::out);
         dfb.pop_front(1);
     }
     dfb.finish();
