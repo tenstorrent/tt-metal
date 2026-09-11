@@ -57,15 +57,17 @@ the compile plus the pipeline fill, paid once. From about 43 s every rank is den
 white between chunks, because with a second request in flight a rank always has work queued behind
 the one it is finishing.
 
-| rank | layers | 1 user | 2 users |
-|---|---|---|---|
-| 0 | 0-23 | 947 ms | 707 ms |
-| 1 | 24-47 | 956 ms | 699 ms |
-| 2 | 48-71 | 962 ms | 714 ms |
-| 3 | 72-92 | 822 ms | 568 ms |
+| rank | layers | 1 user | 2 users | delta |
+|---|---|---|---|---|
+| 0 | 0-23 | 829 ms | 707 ms | -122 |
+| 1 | 24-47 | 853 ms | 699 ms | -154 |
+| 2 | 48-71 | 858 ms | 714 ms | -144 |
+| 3 | 72-92 | 706 ms | 568 ms | -138 |
 
-Steady-state per-chunk compute, cold chunks excluded. Two slots is faster per chunk than one on every
-rank: one slot pays a fill and drain bubble on every chunk, two slots hide it.
+Both columns are per-rank MEDIAN `CHUNK_COMPUTE` with the first two chunks per rank dropped, so they
+are comparable to each other but NOT to the `pipeline_4rank_93L_rebased` table above, which reports
+means over every chunk including the cold ones. Two slots is faster per chunk than one on every rank:
+one slot pays a fill and drain bubble on every chunk, two slots hide it.
 
 ## The KDA inverse, after #55626
 
