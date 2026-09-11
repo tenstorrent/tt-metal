@@ -1171,11 +1171,23 @@ _TYPECAST_EXACT_CASES = (
     (65535.0, 65535),
 )
 
+# Inputs beyond the UInt16 range saturate to 65535 rather than wrapping modulo 65536, matching
+# TypecastGolden and ttnn.typecast, both of which clamp UInt16 results.
+_TYPECAST_SATURATION_CASES = (
+    (65535.5, 65535),
+    (65536.0, 65535),
+    (65537.0, 65535),
+    (70000.0, 65535),
+    (1000000.0, 65535),
+    (1000000000.0, 65535),
+)
+
 _TYPECAST_EDGE_GROUPS = (
     ("negative clamp", _TYPECAST_NEGATIVE_CASES),
     ("fractional rounding", _TYPECAST_FRACTIONAL_CASES),
     ("round-nearest-even ties", _TYPECAST_TIE_CASES),
     ("exact values", _TYPECAST_EXACT_CASES),
+    ("upper saturation", _TYPECAST_SATURATION_CASES),
 )
 
 _TYPECAST_EDGE_CASES = tuple(
@@ -1186,7 +1198,7 @@ _TYPECAST_EDGE_CASES = tuple(
 def _typecast_edge_case_tile() -> tuple:
     """Tile the edge cases over a full 32x32 tile, plus the matching expected tensor.
 
-    The case list is repeated rather than front-loaded and padded: 23 cases into 1024
+    The case list is repeated rather than front-loaded and padded: 29 cases into 1024
     elements is coprime with the 16-wide face row, so each case lands on a different SFPU
     lane, column parity and face on successive repeats. A clamp that is wrong on only some
     lanes (the failure mode a mis-set CC enable produces) survives a front-loaded stimulus.
@@ -1207,8 +1219,8 @@ def _typecast_edge_case_tile() -> tuple:
 @parametrize(dest_sync=[DestSync.Half, DestSync.Full])
 def test_typecast_fp32_to_uint16_edge_cases_quasar(dest_sync):
     """
-    Deterministic proof that Float32 -> UInt16 clamps negatives to 0 and rounds
-    nearest-even, neither of which the randomised Typecast sweep can observe.
+    Deterministic proof that Float32 -> UInt16 clamps negatives to 0, rounds nearest-even and
+    saturates above 65535, none of which the randomised Typecast sweep can observe.
     """
     dest_sync = dest_sync[0]
 
