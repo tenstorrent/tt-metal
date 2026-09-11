@@ -1067,9 +1067,9 @@ void Devices::stop_link_syncs(tt::Cluster& cluster) {
         // Sender first: its current round still completes off the live receiver, then it exits between rounds.
         cluster.write_core(&one, sizeof(one), tt_cxy_pair(r.chip_a, r.virt_a), r.stop_a);
         poll_done(r.chip_a, r.virt_a, r.stop_a + 4, "sender");
-        uint32_t rounds = 0;
-        cluster.read_core(&rounds, sizeof(rounds), tt_cxy_pair(r.chip_a, r.virt_a), r.stop_a + 8);
-        uint32_t diag[2] = {0, 0};
+        // Kernel diagnostics past the stop and done words: rounds, duration in ms, and the 1588 timer word (0 no
+        // hardware path, 1 ran, 2 never acknowledged its rate, in which case that end emitted no hardware stamps).
+        uint32_t diag[3] = {0, 0, 0};
         cluster.read_core(diag, sizeof(diag), tt_cxy_pair(r.chip_a, r.virt_a), r.stop_a + 8);
         log_info(
             tt::LogMetal,
@@ -1080,6 +1080,17 @@ void Devices::stop_link_syncs(tt::Cluster& cluster) {
         // Now the receiver's message wait sees no further message; its stop breaks it.
         cluster.write_core(&one, sizeof(one), tt_cxy_pair(r.chip_b, r.virt_b), r.stop_b);
         poll_done(r.chip_b, r.virt_b, r.stop_b + 4, "receiver");
+        uint32_t timer_b = 0;
+        cluster.read_core(&timer_b, sizeof(timer_b), tt_cxy_pair(r.chip_b, r.virt_b), r.stop_b + 16);
+        for (const auto& [chip, word] : {std::pair{r.chip_a, diag[2]}, std::pair{r.chip_b, timer_b}}) {
+            if (word == 2) {
+                log_warning(
+                    tt::LogMetal,
+                    "[streaming profiler] link sync chip {}: the 1588 timer never acknowledged its rate; this end sent "
+                    "no hardware stamps and the link falls back to software stamps",
+                    chip);
+            }
+        }
     }
     link_syncs_.clear();
 }

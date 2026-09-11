@@ -237,6 +237,18 @@ inline __attribute__((always_inline)) void ring_write_sticky_timer(uint32_t hi) 
     }
 }
 
+// A PP_CLOCK record: the sticky timer if the wall high half moved, then the four clock words (spsc_packet.h).
+static constexpr uint32_t CLOCK_RECORD_WORDS = 1 + 4;
+inline __attribute__((always_inline)) void ring_write_clock(
+    uint32_t kind, uint64_t value, uint32_t wall_lo, uint32_t wall_hi, uint32_t round, uint32_t role) {
+    ring_write_sticky_timer(wall_hi);
+    ring_write_word(ppfmt::clock_w0(kind, value));
+    ring_write_word(wall_lo);
+    ring_write_word(ppfmt::clock_w2(value));
+    ring_write_word(ppfmt::clock_w3(round, role));
+    publish_tail();
+}
+
 // ZONE_ATOMIC packet size: word0 (type|id) + end timer_low + 32-bit duration.
 static constexpr uint32_t SPSC_ATOMIC_ZONE_WORDS = 3;
 
@@ -290,6 +302,13 @@ __attribute__((noinline)) void ring_ensure_room_slow(uint32_t nwords) {
         }
     }
     g_head_cache = profiler_control_buffer[HEAD_INDEX];
+}
+
+// Whether nwords fit now, against the relay's live head; never waits. For a producer that must not stall (the eth
+// cores): a record it has no room for is skipped, not delayed.
+inline __attribute__((always_inline)) bool ring_has_room(uint32_t nwords) {
+    invalidate_l1_cache();
+    return (wIndex - profiler_control_buffer[HEAD_INDEX]) <= (RING_USABLE - nwords);
 }
 
 // One local compare against the cached head, bound RING_USABLE (the difference to capacity is the reserve).
