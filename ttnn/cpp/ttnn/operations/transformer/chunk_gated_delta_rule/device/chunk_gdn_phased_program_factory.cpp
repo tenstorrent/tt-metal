@@ -194,6 +194,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     const uint32_t Vt = attrs.val_dim / TILE_WIDTH;
 
     const uint32_t cc = Ct * Ct, ck = Ct * Kt, cv = Ct * Vt, kv = Kt * Vt, kc = Kt * Ct;
+    // Packed WY-inverse quadrant masks the prep reader always loads into the cb_u/cb_mask slot.
+    constexpr uint32_t kPrepMaskTiles = 3;
     uint32_t scr = std::max({cc, ck, cv, kv, kc});
 
     const tt::DataFormat df_io = tt::DataFormat::Float16_b;  // bf16 q/k/v
@@ -237,7 +239,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     add_cb(pcb::vbeta, cv);
     add_cb(pcb::kbeta, ck);
     add_cb(pcb::out, cv, 2, df_io);
-    add_cb(pcb::u, cv);
+    // Take the max so the aliased cb_u always fits both users: v_beta or masks_c.
+    add_cb(pcb::u, std::max(cv, kPrepMaskTiles));
     add_cb(pcb::w, ck);
     add_cb(pcb::qdecay, ck);
     add_cb(pcb::intra, cc);

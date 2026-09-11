@@ -61,25 +61,29 @@ def _const_tiles(device, chunk_size=CHUNK):
 
 @pytest.mark.skipif(not is_blackhole(), reason="phased chunk_gated_delta_rule is Blackhole-only")
 @pytest.mark.parametrize(
-    "batch, num_k_heads, num_v_heads",
+    "batch, num_k_heads, num_v_heads, key_dim, val_dim",
     [
-        (1, 4, 12),  # Qwen3.6-27B per-device shape at TP-4 (GQA group 3)
-        (1, 16, 48),  # Qwen3.6-27B single-device shape (GQA group 3)
-        (1, 12, 12),  # no GQA: group 1, so the head-map is the identity
-        (2, 4, 12),  # batch > 1: BH = 24 independent scans
+        (1, 4, 12, 128, 128),  # Qwen3.6-27B per-device shape at TP-4 (GQA group 3)
+        (1, 16, 48, 128, 128),  # Qwen3.6-27B single-device shape (GQA group 3)
+        (1, 12, 12, 128, 128),  # no GQA: group 1, so the head-map is the identity
+        (2, 4, 12, 128, 128),  # batch > 1: BH = 24 independent scans
+        (1, 4, 12, 128, 64),  # Small V: V=64
+        (1, 4, 12, 128, 32),  # Small V: V=32
     ],
-    ids=lambda v: str(v),
+    ids=["tp4", "single_dev", "no_gqa", "batch2", "v64", "v32"],
 )
 @pytest.mark.parametrize("seq_len", [CHUNK, 128, 256], ids=lambda v: f"T{v}")
 @pytest.mark.parametrize("with_initial_state", [False, True], ids=["s0=0", "s0=rand"])
-def test_chunk_vs_recurrent_reference(device, batch, num_k_heads, num_v_heads, seq_len, with_initial_state):
+def test_chunk_vs_recurrent_reference(
+    device, batch, num_k_heads, num_v_heads, key_dim, val_dim, seq_len, with_initial_state
+):
     """Chunk-parallel device op vs the token-by-token torch recurrence."""
     torch.manual_seed(20260910)
-    B, T, Dk, Dv = batch, seq_len, 128, 128
+    B, T, Dk, Dv = batch, seq_len, key_dim, val_dim
     G = num_v_heads // num_k_heads
-    assert num_v_heads % num_k_heads == 0, (
-        f"num_v_heads ({num_v_heads}) must be a multiple of num_k_heads ({num_k_heads}) for the GQA head-map"
-    )
+    assert (
+        num_v_heads % num_k_heads == 0
+    ), f"num_v_heads ({num_v_heads}) must be a multiple of num_k_heads ({num_k_heads}) for the GQA head-map"
 
     grid = device.compute_with_storage_grid_size()
     if B * num_v_heads > grid.x * grid.y:
@@ -212,6 +216,7 @@ def _run_op(device, tensors, const_tiles, initial_state, chunk_size, use_mcast):
         (1, 4, 12, 64, 128, 256, 32, True),  # K != V: kd/q_decay/k_dec_t shrink, v_beta does not
         (1, 4, 12, 128, 128, 256, 64, True),  # chunk_size=64 -> Ct=2: two tile-rows per chunk
         (1, 4, 12, 128, 128, 32, 32, True),  # T == chunk_size -> NC==1: single-chunk handshake
+        (1, 4, 12, 128, 64, 256, 32, True),  # small V: Ct*Vt < 3, the prep mask-slot capacity regime
     ],
     ids=[
         "tp4",
@@ -220,6 +225,7 @@ def _run_op(device, tensors, const_tiles, initial_state, chunk_size, use_mcast):
         "k_ne_v",
         "chunk64_ct2",
         "nc1",
+        "small_v",
     ],
 )
 @pytest.mark.parametrize("with_initial_state", [False, True])
