@@ -25,16 +25,12 @@ inline void calculate_heaviside(uint value) {
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
 
-        // SFPSETCC is unspecified for -0.0 (VectorUnit.md), so (v < 0.0f) can capture it
-        // and report 0 where -0.0 == 0 makes the answer s. SFPABS clears the sign bit.
-        // The trailing v_else still catches NaN, whose behaviour is unchanged.
-        v_if(sfpi::abs(v) == 0.0f) { v = s; }
-        v_elseif(v < 0.0f) { v = 0.0f; }
-        v_elseif(v > 0.0f) { v = 1.0f; }
-        v_else { v = s; }
+        vFloat r = sfpi::copysgn(vFloat(0.5f), v) + 0.5f;
+        // SFPSETCC is unspecified for -0.0 (VectorUnit.md), so a bare v == 0.0f can miss it.
+        v_if(sfpi::abs(v) == 0.0f) { r = s; }
         v_endif;
 
-        dst_reg[0] = v;
+        dst_reg[0] = r;
 
         dst_reg++;
     }
