@@ -5,7 +5,11 @@
                 "FF1_FF3": "BFP8"
             },
             "fidelity_cfg": {
-                "LI_FF1_FF3": "LOFI"
+                "LI_FF1_FF3": "LOFI",
+                "LI_FF2": "LOFI",
+                "LI_QKV_DECODE": "LOFI",
+                "LI_O_DECODE": "LOFI",
+                "SDPA_DECODE": "LOFI"
             }
         }
     }
