@@ -35,6 +35,7 @@ on:
           - z-image-turbo
           - resnet50
           - tt-transformers-common
+          - pr51646-decode-diagnostic
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false
@@ -92,7 +93,7 @@ permissions:
   packages: write
   contents: write
 
-run-name: "(Tier 1) Models Unit${{ github.event_name == 'schedule' && ' [scheduled]' || '' }}"
+run-name: "Diagnostic PR51646 decode and sampling${{ github.event_name == 'schedule' && ' [scheduled]' || '' }}"
 
 jobs:
   check-harbor:
@@ -134,6 +135,7 @@ jobs:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       build-inplace-wheel: true
+      use-artifacts-from-run: '34606091118'
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   models-unit-tests:

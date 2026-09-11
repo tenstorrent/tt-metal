@@ -1693,12 +1693,12 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
-- name: TT-Transformers common unit tests
+- name: PR51646 decode contract and shared sampling diagnostic
   cmd: |
     unset TT_METAL_WATCHER
     export HF_HOME=/mnt/MLPerf/huggingface
-    pytest --tb=short --ignore=models/common/tests/modules models/common/tests
-  model: tt-transformers-common
+    pytest --tb=short models/common/tests/test_decode_update_contract.py models/common/tests/test_sampling.py models/common/tests/test_tt_sampling.py models/common/tests/test_sampling_vocab_padding.py
+  model: pr51646-decode-diagnostic
   model_family: TTTv2
   skus:
     wh_llmbox:
@@ -1838,23 +1838,11 @@
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
 
-- name: TT-Transformers sampling module unit tests
+- name: PR51646 remaining Sampling1D diagnostic
   cmd: |
     unset TT_METAL_WATCHER
     export HF_HOME=/mnt/MLPerf/huggingface
     fail=0
-    pytest models/common/tests/modules/sampling/test_penalties_1d.py \
-      -m "not slow" \
-      --tb=short \
-      --durations=10 \
-      --cov=models.common.modules.sampling.penalties_1d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg || fail=1
-    pytest models/common/tests/modules/sampling/test_params.py \
-      -m "not slow" \
-      --tb=short \
-      --durations=10 \
-      --deselect "models/common/tests/modules/sampling/test_params.py::test_legacy_device_sampling_capabilities_declare_the_exact_limit[models/tt_transformers/tt/generator_vllm.py]" || fail=1
     pytest models/common/tests/modules/sampling/test_sampling_1d.py \
       -m "not slow" \
       --tb=short \
@@ -1863,7 +1851,7 @@
       --cov-report=term-missing \
       --cov-config=models/common/tests/setup.cfg || fail=1
     exit $fail
-  model: tt-transformers-common
+  model: pr51646-decode-diagnostic
   model_family: TTTv2
   skus:
     wh_llmbox:
