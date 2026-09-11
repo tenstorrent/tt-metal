@@ -6,6 +6,8 @@ Dispatch and Combine account for **85.2% of the historical MoE cost gap between 
 
 Owner: Sonnet. Draft for review with Alina; not posted.
 
+Reports and evidence branch: [`ssalice/mistral4-b1-investigation`](https://github.com/tenstorrent/tt-metal/tree/ssalice/mistral4-b1-investigation).
+
 ## Evidence
 
 The September 8 eager 36-layer PP4 capture shows MoE costs of 6.129–10.377 ms (+69.31%). L18 and L23, on the same devices, differ by 4.005 ms; Dispatch and Combine account for 3.413 ms (85.2%). These values sum each operation's maximum device duration; they are not elapsed layer times. The plan's original +54% came from a different capture or metric.
