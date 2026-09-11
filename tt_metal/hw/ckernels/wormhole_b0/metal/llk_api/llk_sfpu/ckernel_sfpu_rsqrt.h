@@ -15,15 +15,15 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-template <bool fp32_dest_acc_en, int ITERATIONS = 8, bool FAST_APPROX = false>
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool fp32_dest_acc_en, bool FAST_APPROX>
 inline void calculate_rsqrt() {
-    _calculate_sqrt_internal_<!fp32_dest_acc_en, ITERATIONS, fp32_dest_acc_en, true, FAST_APPROX>();
+    _calculate_sqrt_internal_<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en, true, FAST_APPROX>();
 }
 
-template <bool fp32_dest_acc_en>
+template <bool APPROXIMATION_MODE>
 void rsqrt_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    sqrt_init<fp32_dest_acc_en>();
+    sqrt_init<APPROXIMATION_MODE>();
 }
 
 }  // namespace sfpu

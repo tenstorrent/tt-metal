@@ -52,10 +52,10 @@ sfpi_inline sfpi::vFloat _sfpu_reciprocal_(const sfpi::vFloat x) {
     return y;
 }
 
-// Programs vConstFloatPrgm0 = 2.0f, the Newton-Raphson constant read only by the FP32 path.
-template <bool EN_32BIT_DEST>
+// Programs vConstFloatPrgm0 = 2.0f, the Newton-Raphson constant read only by the non-approximate path.
+template <bool APPROXIMATION_MODE>
 inline void _init_reciprocal_() {
-    if constexpr (EN_32BIT_DEST) {
+    if constexpr (!APPROXIMATION_MODE) {
         sfpi::vConstFloatPrgm0 = 2.0f;
     }
 }
@@ -66,16 +66,19 @@ inline void _init_reciprocal_() {
  * Quasar exposes exactly two implementations: an approximate reciprocal from the HW nonlinear
  * lookup table (sfpi::approx_recip), and a full-precision result that refines the LUT seed with
  * Newton-Raphson. The LUT is already ~1 ULP once the result lands in a bf16 Dest, so the Newton
- * path only runs for a 32-bit Dest; every bf16 case uses the LUT alone.
+ * path only runs for a 32-bit Dest in non-approximate mode; every bf16 case (and any explicit
+ * approx request) uses the LUT alone.
  *
- * @tparam EN_32BIT_DEST: is_fp32_dest_acc_en; selects Newton-Raphson refinement.
+ * @tparam APPROXIMATION_MODE: Force the LUT-only path (skip Newton refinement), values = <true/false>
+ * @tparam EN_32BIT_DEST: is_fp32_dest_acc_en; when true and not APPROXIMATION_MODE, run the
+ *         Newton-Raphson refinement for a full-precision 32-bit Dest result.
  * @tparam ITERATIONS: Number of SFPU loop iterations over the Dest tile.
  * @note Call @ref recip_init with matching template args first — it programs the Newton-Raphson
  *       constant (vConstFloatPrgm0) that @ref _sfpu_reciprocal_ refines with.
  */
-template <bool EN_32BIT_DEST, int ITERATIONS = SFPU_ITERATIONS>
+template <bool APPROXIMATION_MODE, bool EN_32BIT_DEST, int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_reciprocal() {
-    constexpr int max_iter = EN_32BIT_DEST ? 2 : 0;
+    constexpr int max_iter = (!EN_32BIT_DEST || APPROXIMATION_MODE) ? 0 : 2;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat val = sfpi::dst_reg[0];  // load x from dest (SFPLOAD)
@@ -84,11 +87,11 @@ inline void calculate_reciprocal() {
     }
 }
 
-template <bool EN_32BIT_DEST>
+template <bool APPROXIMATION_MODE, bool EN_32BIT_DEST /*maybe_unused*/>
 void recip_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::reciprocal>();
     // Program the Newton-Raphson constant the non-approximate reciprocal refines with.
-    _init_reciprocal_<EN_32BIT_DEST>();
+    _init_reciprocal_<APPROXIMATION_MODE>();
 }
 
 }  // namespace sfpu

@@ -50,7 +50,7 @@ sfpi_inline sfpi::vFloat _sfpu_sqrt_endpoint_(sfpi::vFloat x) {
 template <bool is_fp32_dest_acc_en>
 void asin_acos_init() {
     if constexpr (is_fp32_dest_acc_en) {
-        sqrt_init<true>();
+        sqrt_init<false>();
     }
 }
 

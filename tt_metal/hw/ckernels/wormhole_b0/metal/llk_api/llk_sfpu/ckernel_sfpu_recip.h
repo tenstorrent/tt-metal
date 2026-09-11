@@ -75,14 +75,16 @@ sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat in) {
     return y;
 }
 
-template <bool is_fp32_dest_acc_en, int ITERATIONS>
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void _calculate_reciprocal_internal_(const int iterations) {
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
         sfpi::vFloat out;
 
-        if constexpr (is_fp32_dest_acc_en) {
+        if constexpr (APPROXIMATION_MODE) {
+            out = sfpu_reciprocal_iter<0>(in);
+        } else if constexpr (is_fp32_dest_acc_en) {
             out = sfpu_reciprocal_iter<2>(in);
         } else {
             out = sfpu_reciprocal_iter<1>(in);
@@ -107,12 +109,12 @@ sfpi_inline void sfpu_reciprocal_init() {
     sfpi::vConstFloatPrgm2 = 2.121212482452392578125f;
 }
 
-template <bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_reciprocal() {
-    _calculate_reciprocal_internal_<is_fp32_dest_acc_en, ITERATIONS>(ITERATIONS);
+    _calculate_reciprocal_internal_<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(ITERATIONS);
 }
 
-template <bool is_fp32_dest_acc_en>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en /*maybe_unused*/>
 void recip_init() {
     // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + counter reset), then the op-specific
     // reciprocal setup below -- one self-contained init, matching exp_init. SDPA runs reciprocal in its
@@ -121,7 +123,7 @@ void recip_init() {
     sfpu::_init_sfpu_config_reg();
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
     math::reset_counters(p_setrwc::SET_ABD_F);
-    sfpu_reciprocal_init<false>();
+    sfpu_reciprocal_init<APPROXIMATION_MODE>();
 }
 
 }  // namespace sfpu

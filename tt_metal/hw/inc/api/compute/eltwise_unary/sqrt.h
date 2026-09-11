@@ -14,7 +14,7 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void sqrt_tile_init() { MATH(SFPU_UNARY_INIT_FN(sqrt, sfpu::sqrt_init, (DST_ACCUM_MODE))); }
+ALWI void sqrt_tile_init() { MATH(SFPU_UNARY_INIT_FN(sqrt, sfpu::sqrt_init, (APPROX))); }
 
 // clang-format off
 /**
@@ -36,7 +36,7 @@ ALWI void sqrt_tile(uint32_t idst) {
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_sqrt,
-        (is_fp32_dest_acc_en, 8 /*ITERATIONS*/, FAST_APPROX),
+        (APPROX, 8 /*ITERATIONS*/, is_fp32_dest_acc_en, FAST_APPROX),
         idst,
         VectorMode::RC));
 }

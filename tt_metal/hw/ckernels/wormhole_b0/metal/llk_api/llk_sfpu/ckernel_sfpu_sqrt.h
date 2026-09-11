@@ -97,21 +97,21 @@ inline void _calculate_sqrt_internal_() {
     }
 }
 
-template <bool fp32_dest_acc_en, int ITERATIONS = 8, bool FAST_APPROX = false>
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool fp32_dest_acc_en, bool FAST_APPROX>
 inline void calculate_sqrt() {
-    _calculate_sqrt_internal_<!fp32_dest_acc_en, ITERATIONS, fp32_dest_acc_en, false, FAST_APPROX>();
+    _calculate_sqrt_internal_<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en, false, FAST_APPROX>();
 }
 
-template <bool fp32_dest_acc_en>
+template <bool APPROXIMATION_MODE>
 void sqrt_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    if constexpr (fp32_dest_acc_en) {
+    if constexpr (APPROXIMATION_MODE) {
+        sfpi::vConstIntPrgm0 = 0x5f0b3892;
+        sfpi::vConstFloatPrgm1 = 1.89099014875f;
+    } else {
         sfpi::vConstIntPrgm0 = 0x5f1110a0;
         sfpi::vConstFloatPrgm1 = 2.2825186f;
         sfpi::vConstFloatPrgm2 = 2.2533049f;
-    } else {
-        sfpi::vConstIntPrgm0 = 0x5f0b3892;
-        sfpi::vConstFloatPrgm1 = 1.89099014875f;
     }
 }
 
