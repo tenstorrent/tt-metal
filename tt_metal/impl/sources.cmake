@@ -71,6 +71,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/l1_banking_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/trace_allocation_tracker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/program/kernel_prewarm.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/kernel_compile_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program_descriptors.cpp

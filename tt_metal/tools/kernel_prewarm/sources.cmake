@@ -1,0 +1,1 @@
+set(KERNEL_PREWARM_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/kernel_prewarm_tool.cpp)

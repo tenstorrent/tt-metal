@@ -4,6 +4,7 @@ add_subdirectory(lightmetal_runner)
 add_subdirectory(mem_bench)
 add_subdirectory(precompile_fw)
 add_subdirectory(jit_compile_server)
+add_subdirectory(kernel_prewarm)
 
 include(sources.cmake)
 

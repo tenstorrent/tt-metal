@@ -29,6 +29,7 @@
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/build_env_manager.hpp"
+#include "impl/program/kernel_prewarm.hpp"
 #include "llrt/llrt.hpp"
 #include "common/executor.hpp"
 #include <experimental/fabric/control_plane.hpp>
@@ -209,6 +210,23 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
 
     for (auto& fut : futures) {
         fut.get();
+    }
+
+    // Self-bootstrapping parallel kernel prewarm (opt-in; TT_METAL_KERNEL_PREWARM=1 opts in):
+    // every device's build env and firmware ELFs now exist, and the host has not yet started
+    // weight_load. Arm capture and, on a warm cache, kick off the manifest-driven JIT-cache batch here
+    // so recompiles overlap that host-idle window. Homogeneous meshes share one build_key/cache, so
+    // any device's env suffices; launches once per process. Skipped on mock/emule: emule JIT uses an
+    // x86 toolchain, and neither is the fast-iteration target. Default-off until proven safe on main;
+    // the kernel_prewarm tool is invoked explicitly to compile outside the device reservation.
+    if (!device_ids.empty() && !cluster_.is_mock_or_emulated()) {
+        const ContextId ctx_id = descriptor_->metal_context().get_context_id();
+        const auto& device_build_env = BuildEnvManager::get_instance(ctx_id).get_device_build_env(*device_ids.begin());
+        kernel_prewarm::maybe_launch_prewarm(
+            device_build_env.build_env.get_out_kernel_root_path(),
+            device_build_env.build_env.get_firmware_binary_root(),
+            device_build_env.build_key(),
+            device_build_env.build_env.get_root_path());
     }
 }
 
