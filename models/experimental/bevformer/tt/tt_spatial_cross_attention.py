@@ -243,8 +243,7 @@ class TTSpatialCrossAttention:
         query,
         reference_points_cam,
         bev_mask,
-        key=None,
-        value=None,
+        value,
         residual=None,
         query_pos=None,
         key_padding_mask=None,
@@ -259,8 +258,10 @@ class TTSpatialCrossAttention:
             query: Bfloat16 BEV queries [B, num_queries, embed_dims].
             reference_points_cam: Bfloat16 camera projected reference points [num_cams, B, num_queries, D, 2].
             bev_mask: Valid mask for camera projections [num_cams, B, num_queries, D].
-            key: Multi-camera features [num_cams, H*W, B, embed_dims].
-            value: Same as key.
+            value: Multi-camera features [num_cams, H*W, B, embed_dims]. Attention here takes
+                no key: deformable attention never scores query against one. Two Linears on
+                query predict where to sample and with what weight, replacing Q*K^T, so
+                ``value`` is the only feature tensor the device path needs.
             residual: Residual connection input.
             query_pos: Query positional encoding.
             key_padding_mask: Key padding mask.
@@ -274,11 +275,9 @@ class TTSpatialCrossAttention:
         if use_signpost:
             signpost(header="TTNN SCA Forward Start")
 
+        assert value is not None, "value is required"
+
         # Handle input defaults
-        if key is None:
-            key = ttnn.clone(query)
-        if value is None:
-            value = ttnn.clone(key)
         if residual is None:
             inp_residual = ttnn.clone(query)
         else:
@@ -332,11 +331,9 @@ class TTSpatialCrossAttention:
         if ENABLE_LOGGING:
             logger.info("SCA Rebatching Complete")
 
-        _, L, _, _ = key.shape
+        _, L, _, _ = value.shape
 
         # [num_cams, L, bs, embed_dims] -> [bs * num_cams, L, embed_dims]
-        key_reshaped = ttnn.permute(key, (2, 0, 1, 3))  # [bs, num_cams, L, embed_dims]
-        key_reshaped = ttnn.reshape(key_reshaped, (bs * self.num_cams, L, self.embed_dims))
         value_reshaped = ttnn.permute(value, (2, 0, 1, 3))  # [bs, num_cams, L, embed_dims]
         value_reshaped = ttnn.reshape(value_reshaped, (bs * self.num_cams, L, self.embed_dims))
 
@@ -344,7 +341,6 @@ class TTSpatialCrossAttention:
             logger.info("SCA Calling Deformable Attention")
         queries_output = self.deformable_attention(
             query=queries_batched,
-            key=key_reshaped,
             value=value_reshaped,
             reference_points=reference_points_batched,
             level_start_index=level_start_index,
