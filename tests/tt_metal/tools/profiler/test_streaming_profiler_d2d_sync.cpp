@@ -49,6 +49,7 @@ constexpr double kF0 = 1.35e9;        // AICLK at boot on every chip; the boot a
 constexpr double kSlow = 0.99;        // chip 0's AICLK after its DVFS switch
 constexpr double kTauSwitch = 0.300;  // s, when chip 0 slows
 constexpr double kOneWay = 1.0e-6;    // s, symmetric link one-way delay
+constexpr double kTurn = 350e-9;      // s, the receiver's turnaround: its echo leaves this long after the frame arrived
 // chip c refclk = kDref[c] + 50 MHz * tau (the offsets the links must recover); wall origin kW0[c].
 constexpr double kDref[3] = {0.0, 1.0e6, 3.0e6};
 constexpr double kW0[3] = {1.0e9, 7.0e9, 4.0e9};
@@ -64,13 +65,9 @@ double wall(int chip, double tau) {
 }
 double host_ns(double tau) { return kHostBase + tau * 1e9; }
 
-ClockSample sample(uint32_t dev, uint32_t lane, uint32_t kind, double rc, double w) {
+ClockSample sample(uint32_t dev, uint32_t lane, uint32_t kind, uint32_t round, uint32_t role, double rc, double w) {
     return ClockSample{
-        dev,
-        lane,
-        kind,
-        static_cast<uint32_t>(static_cast<uint64_t>(std::llround(rc)) & 0xFFFFFFu),
-        static_cast<uint64_t>(std::llround(w))};
+        dev, lane, kind, round, role, static_cast<uint64_t>(std::llround(rc)), static_cast<uint64_t>(std::llround(w))};
 }
 
 int main() {
@@ -95,6 +92,7 @@ int main() {
             }
             d.core_xy.push_back(0);
         }
+        d.n_eth_cores = static_cast<uint32_t>(eth[c].size());
         d.clock.chip_id = static_cast<uint32_t>(c);
         d.clock.frequency_ghz = kF0 * 1e-9;
         d.clock.anchor_ticks = static_cast<uint64_t>(std::llround(wall(c, tau_anchor[c])));
@@ -112,26 +110,63 @@ int main() {
 
     D2dSyncConsumer sync;
     sync.on_attach(ctx);
-    // Trackers: a LOCAL sample every 3 us on all three chips over one second; the 24-bit refclk payload wraps ~3x.
+    // Trackers: a LOCAL sample every 3 us on all three chips over one second, except that chip 1 goes silent from
+    // 0.40 to 0.75 s: longer than the refclk's 24-bit period, so a stream reassembled from its neighbours would come
+    // back a wrap off, and the check at 0.5 s lies inside the hole.
     for (double tau = 0.0; tau < 1.0; tau += 3e-6) {
         for (int c = 0; c < 3; c++) {
-            sync.on_clock(sample(static_cast<uint32_t>(c), 0, PP_CLOCK_LOCAL_REFCLK, refclk(c, tau), wall(c, tau)));
+            if (c == 1 && tau > 0.40 && tau < 0.75) {
+                continue;
+            }
+            sync.on_clock(
+                sample(static_cast<uint32_t>(c), 0, PP_CLOCK_LOCAL_REFCLK, 0, 0, refclk(c, tau), wall(c, tau)));
         }
     }
-    // Two boot-time link bursts, 240 rounds each, 10 us apart. For (snd_dev, snd_lane) sender and (rcv_dev, rcv_lane)
-    // receiver: sender stamps round start and end, receiver the arrival, in the order the kernels emit them.
+    // Two boot-time link bursts, 300 rounds each, 10 us apart. For (snd_dev, snd_lane) sender and (rcv_dev, rcv_lane)
+    // receiver: sender stamps round start and end, receiver the arrival and its echo. The streams are damaged the way
+    // a lapped
+    // consumer or a full ring damages them: the receiver's stamp is missing for every seventh round, the sender's end
+    // stamp for every eleventh, and one receiver stamp arrives five rounds late.
     const auto burst = [&](uint32_t snd_dev, uint32_t snd_lane, uint32_t rcv_dev, uint32_t rcv_lane) {
-        for (int k = 0; k < 240; k++) {
+        const auto receiver = [&](uint32_t k) {
             const double t = 0.020 + k * 10e-6;
-            sync.on_clock(sample(snd_dev, snd_lane, PP_CLOCK_LINK_REFCLK, refclk(snd_dev, t), wall(snd_dev, t)));
             sync.on_clock(sample(
-                snd_dev,
-                snd_lane,
+                rcv_dev,
+                rcv_lane,
                 PP_CLOCK_LINK_REFCLK,
-                refclk(snd_dev, t + 2 * kOneWay),
-                wall(snd_dev, t + 2 * kOneWay)));
+                k,
+                PP_CLOCK_ROLE_T1,
+                refclk(rcv_dev, t + kOneWay),
+                wall(rcv_dev, t + kOneWay)));
             sync.on_clock(sample(
-                rcv_dev, rcv_lane, PP_CLOCK_LINK_REFCLK, refclk(rcv_dev, t + kOneWay), wall(rcv_dev, t + kOneWay)));
+                rcv_dev,
+                rcv_lane,
+                PP_CLOCK_LINK_REFCLK,
+                k,
+                PP_CLOCK_ROLE_T1B,
+                refclk(rcv_dev, t + kOneWay + kTurn),
+                wall(rcv_dev, t + kOneWay + kTurn)));
+        };
+        for (uint32_t k = 0; k < 300; k++) {
+            const double t = 0.020 + k * 10e-6;
+            sync.on_clock(sample(
+                snd_dev, snd_lane, PP_CLOCK_LINK_REFCLK, k, PP_CLOCK_ROLE_T0, refclk(snd_dev, t), wall(snd_dev, t)));
+            if (k % 11 != 5) {
+                sync.on_clock(sample(
+                    snd_dev,
+                    snd_lane,
+                    PP_CLOCK_LINK_REFCLK,
+                    k,
+                    PP_CLOCK_ROLE_T2,
+                    refclk(snd_dev, t + 2 * kOneWay + kTurn),
+                    wall(snd_dev, t + 2 * kOneWay + kTurn)));
+            }
+            if (k % 7 != 3 && k != 100) {
+                receiver(k);
+            }
+            if (k == 105) {
+                receiver(100);
+            }
         }
     };
     burst(/*snd*/ 0, 0 * kN, /*rcv*/ 1, 0 * kN);  // link (0 e0 -> 1 e0): chip 1's e0 is core index 0
