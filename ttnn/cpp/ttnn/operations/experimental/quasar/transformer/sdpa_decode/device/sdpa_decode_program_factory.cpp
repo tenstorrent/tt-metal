@@ -580,11 +580,12 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     const DFBSpecName DFB_QK_IM{"qk_im"};
     const DFBSpecName DFB_OUT_IM{"out_im"};
     const DFBSpecName DFB_OUT_ACC_IM{"out_accumulate_im"};
-    // Single merged max buffer (depth 2*statistics_tiles): the flash/tree ping-pong keeps the
-    // "prev" max block at the ring front [0, statistics_tiles) and appends the "cur" max block
-    // behind it [statistics_tiles, 2*statistics_tiles). Merging max_1/max_2 into one DFB frees an
-    // intra-Tensix tile-counter slot (Quasar cap is 8). See the kernel for the offset scheme.
-    const DFBSpecName DFB_MAX{"max"};
+    // Max ping-pong: two separate DFBs (each depth statistics_tiles). Kept split (not merged into one
+    // 2-deep DFB) because the merged cur-offset read desyncs multi-chunk (no ring wrap in tile
+    // addressing) and reduce_c's prev==out eltwise-max would self-alias. The 8-DFB Quasar budget is met
+    // by merging SUM instead (below), which has no such hazard.
+    const DFBSpecName DFB_MAX_1{"max_1"};
+    const DFBSpecName DFB_MAX_2{"max_2"};
     // Single merged sum buffer (depth 2*statistics_tiles): the online-softmax ping-pong keeps the
     // "prev" sum block at the ring front [0, statistics_tiles) and appends the "cur" sum block behind
     // it [statistics_tiles, 2*statistics_tiles). Merging sum_1/sum_2 into one DFB frees another
@@ -808,15 +809,21 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     add_compute_intermediate(DFB_KT, "kt", k_tile_size, k_tiles, k_df, nullptr);
     add_compute_intermediate(DFB_OUT_IM, "out_im", im_tile_size, out_tiles, im_df, &im_tile);
     add_compute_intermediate(DFB_OUT_ACC_IM, "out_accumulate_im", im_tile_size, out_tiles, im_df, &im_tile);
-    // Merged max buffer: depth 2*statistics_tiles holds the prev block (front) + cur block (behind).
-    add_compute_intermediate(DFB_MAX, "max", stats_tile_size, 2 * statistics_tiles, stats_df, &stats_tile);
+    // Max ping-pong: two separate depth-statistics_tiles buffers (cur/prev), swapped by move_block.
+    add_compute_intermediate(DFB_MAX_1, "max_1", stats_tile_size, statistics_tiles, stats_df, &stats_tile);
+    add_compute_intermediate(DFB_MAX_2, "max_2", stats_tile_size, statistics_tiles, stats_df, &stats_tile);
     // Merged sum buffer: depth 2*statistics_tiles holds the prev block (front) + cur block (behind).
     add_compute_intermediate(DFB_SUM, "sum", stats_tile_size, 2 * statistics_tiles, stats_df, &stats_tile);
     add_compute_intermediate(
         DFB_EXP_MAX_DIFF, "exp_max_diff", stats_tile_size, statistics_tiles, stats_df, &stats_tile);
-    // Tile-counter budget (Quasar cap 8): the 3 tree-reduction temps are NOT allocated — the compute
-    // kernel reuses qk_im / out_im (dead after the flash loop) and out_m (compute-produced, idle until
-    // send-to-parent) for prev_sum_2 / out_accumulate_im_2 / exp_max_diff_2. 11 -> 8. See the kernel.
+    // Tile-counter budget (Quasar cap 8). The 8 compute self-loop DFBs are: qk_im, kt, out_im,
+    // out_accumulate_im, max_1, max_2, sum, exp_max_diff. Two levers keep the count at 8:
+    //   (1) the 3 tree-reduction temps are NOT allocated — the compute kernel reuses qk_im / out_im
+    //       (dead after the flash loop) and out_m (compute-produced, idle until send-to-parent) for
+    //       prev_sum_2 / out_accumulate_im_2 / exp_max_diff_2 (would be 11 -> 8); and
+    //   (2) SUM is merged into one depth-2*statistics_tiles DFB (its fma re-bases the ring each chunk),
+    //       reclaiming the slot the kt transpose DFB needed. MAX is kept split (max_1/max_2) — merging
+    //       it desyncs multi-chunk and hits the reduce_c prev==out hazard. See the kernel.
 
     // ---- Tensor parameters + bindings ----
     Group<TensorParameter> tensor_params;
