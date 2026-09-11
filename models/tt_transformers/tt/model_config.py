@@ -3037,15 +3037,13 @@ class ModelArgs:
                 "Qwen2.5-7B and Qwen2.5-VL-7B is only supported on 2 or 4 devices, run on an N300 or use MESH_DEVICE=N150x4"
             )
 
-        if self.num_devices > 0 and self.cluster_shape != [1, 1]:
-            # A/B: padding 32064 -> 32768 costs a Pad program and hands ttnn.topk a
-            # width whose core split leaves half the grid idle; measure the unpadded
-            # width instead.
-            self.pad_logits_to_power_of_2 = False
-            # Off on [1, 1]: an A/B on the multi-step split path (PR #53167)
-            # measured no end-to-end decode benefit from padding the topk chunks
-            # to a power of two, so the flag stays multi-device only.
-            self.pad_logits_to_power_of_2 = False
+        # Off everywhere. On [1, 1] an A/B on the multi-step split path (PR #53167)
+        # measured no end-to-end decode benefit from padding the topk chunks to a
+        # power of two. On a multi-device mesh the same holds and the pad is a net
+        # loss: rounding the 32064-wide per-device logits up to 32768 costs a whole
+        # Pad program and buys the top-k nothing (measured on Llama-3.1-8B, P150 x4,
+        # trace+1cq: 8.144 -> 8.123 ms/token, prefill 22.30 -> 22.28 ms).
+        self.pad_logits_to_power_of_2 = False
 
         self.unpadded_hidden_dim = self.hidden_dim
         # Don't need to pad for CPU runs
