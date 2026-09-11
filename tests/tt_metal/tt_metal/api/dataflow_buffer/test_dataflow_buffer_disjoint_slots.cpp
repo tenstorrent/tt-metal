@@ -98,9 +98,7 @@ m2::KernelSpec make_touch_consumer(
 
 uint32_t touch_result_l1_addr(distributed::MeshDevice& mesh_device, uint32_t num_dfbs) {
     const uint32_t bytes = num_dfbs * 3 * sizeof(uint32_t);
-    const uint32_t align = mesh_device.allocator()->get_alignment(BufferType::L1);
-    const uint32_t aligned = (bytes + align - 1) / align * align;
-    return static_cast<uint32_t>(mesh_device.l1_size_per_core()) - aligned;
+    return top_of_l1_scratch_addr(mesh_device, bytes);
 }
 
 void expect_touch_results(
