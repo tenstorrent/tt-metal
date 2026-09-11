@@ -54,6 +54,31 @@
 #include "tt-train/sources/ttml/metal/ops/cyclic_sdpa_bw/device/cyclic_schedule.hpp"
 #include "tt-train/sources/ttml/metal/ops/cyclic_sdpa_bw/device/parity_snake.hpp"
 
+// ENDPOINT_SYNC selects Algorithm 4: no chip-wide barrier. Within a streak
+// the packet is itself the ordering token -- a consumer cannot update dQ_i
+// before the previous consumer forwards it. Across a gap, two endpoint
+// counters order a reload after the preceding streak's spill: every streak
+// followed by a later streak ends on core 1 or core 2, so those two cores
+// publish a monotone progress value after an inter-streak spill and a
+// consumer waits for it.
+//
+// The threshold is t_prev + 1, never t. The row is inactive at t - 1 at every
+// later streak start and progress is published only for spill events, so
+// waiting for t waits for a publication that never comes.
+//
+// Publication is a set of ordered unicast writes rather than a multicast,
+// which the paper explicitly allows. A multicast issued from this RISC hung
+// in its write barrier: this kernel runs on the data-movement RISC whose
+// default NoC is 1, the two NoCs have mirrored coordinates, and retargeting
+// the multicast would mean recomputing the rectangle in the other NoC's
+// frame. Unicast writes need none of that and use the same primitive the
+// readiness tags already use here. They also satisfy the ordering rule the
+// paper asks for, being issued in increasing value order on one NoC from one
+// thread.
+#ifndef ENDPOINT_SYNC
+#define ENDPOINT_SYNC 0
+#endif
+
 void kernel_main() {
     uint32_t arg = 0;
     const uint32_t my_core = get_arg_val<uint32_t>(arg++);
@@ -71,6 +96,9 @@ void kernel_main() {
     const uint32_t prev_noc_y = get_arg_val<uint32_t>(arg++);
     const uint32_t next_noc_x = get_arg_val<uint32_t>(arg++);
     const uint32_t next_noc_y = get_arg_val<uint32_t>(arg++);
+    // Every participating core's coordinates, for publishing endpoint
+    // progress: (x, y) per core, cores 1..C in order.
+    const uint32_t core_coords_arg = arg;
 
     constexpr uint32_t kCores = get_compile_time_arg_val(0);
     constexpr uint32_t qWt = get_compile_time_arg_val(1);
@@ -85,7 +113,9 @@ void kernel_main() {
     constexpr uint32_t credit_prev_sem_id = get_compile_time_arg_val(6);
     constexpr uint32_t credit_next_sem_id = get_compile_time_arg_val(7);
     constexpr uint32_t credit_self_sem_id = get_compile_time_arg_val(8);
-    constexpr auto query_args = TensorAccessorArgs<9>();
+    constexpr uint32_t endpoint1_sem_id = get_compile_time_arg_val(9);
+    constexpr uint32_t endpoint2_sem_id = get_compile_time_arg_val(10);
+    constexpr auto query_args = TensorAccessorArgs<11>();
     constexpr auto key_args = TensorAccessorArgs<query_args.next_compile_time_args_offset()>();
     constexpr auto value_args = TensorAccessorArgs<key_args.next_compile_time_args_offset()>();
     constexpr auto grad_output_args = TensorAccessorArgs<value_args.next_compile_time_args_offset()>();
@@ -108,8 +138,9 @@ void kernel_main() {
     constexpr uint32_t cb_grad_value_seed = tt::CBIndex::c_21;
     // The compute kernel's updated dQ, which travels on with the packet.
     constexpr uint32_t cb_grad_query_out = tt::CBIndex::c_17;
-    // A local word to publish readiness tags from.
+    // A local word to publish readiness tags and endpoint progress from.
     constexpr uint32_t cb_scratch = tt::CBIndex::c_24;
+    constexpr uint32_t cb_column_progress = tt::CBIndex::c_26;
 
     using namespace ttml::metal::ops::cyclic_sdpa_bw;
     constexpr CyclicSchedule sched(kCores);
@@ -156,6 +187,18 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(credit_next_sem_id));
     volatile tt_l1_ptr uint32_t* credit_from_self =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(credit_self_sem_id));
+
+#if ENDPOINT_SYNC
+    // Every core holds a local copy of both endpoint counters, so a consumer
+    // polls its own L1 rather than a remote word.
+    volatile tt_l1_ptr uint32_t* endpoint_sem[2] = {
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(endpoint1_sem_id)),
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(endpoint2_sem_id))};
+    const uint32_t endpoint_sem_ids[2] = {endpoint1_sem_id, endpoint2_sem_id};
+    // This core's write kernel says when the column gradients have landed.
+    volatile tt_l1_ptr uint32_t* column_progress =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_column_progress));
+#endif
 
     uint32_t sent_to_prev = 0;
     uint32_t sent_to_next = 0;
@@ -218,15 +261,21 @@ void kernel_main() {
         read_tiles_by_row(cb_key, key, (j - 1u) * qWt, qWt, tile_bytes, qWt);
         read_tiles_by_row(cb_value, value, (j - 1u) * vWt, vWt, tile_bytes, vWt);
 
-        // The column gradients this core wrote at an earlier timestep. Its own
-        // write kernel produced them, so the release of t - 1 is what says
-        // they have landed.
+        // The column gradients this core wrote at an earlier timestep. Only
+        // this core's own write kernel produces them, so with the barrier
+        // gone a local word is enough.
         if (t > 0u) {
-            WAYPOINT("BARW");
+            WAYPOINT("COLW");
+#if ENDPOINT_SYNC
+            do {
+                invalidate_l1_cache();
+            } while ((*column_progress) < t);
+#else
             do {
                 invalidate_l1_cache();
             } while ((*release_sem) < t);
-            WAYPOINT("BARD");
+#endif
+            WAYPOINT("COLD");
         }
         read_tiles_by_row(cb_grad_key_seed, grad_key, (j - 1u) * qWt, qWt, grad_bytes, qWt);
         read_tiles_by_row(cb_grad_value_seed, grad_value, (j - 1u) * vWt, vWt, grad_bytes, vWt);
@@ -254,8 +303,22 @@ void kernel_main() {
             } while ((*ready_sem[slot]) < t + 1u);
             WAYPOINT("RDYD");
         } else {
-            // A streak start: load the packet from DRAM. dQ_i must carry every
-            // earlier update, which the release of t - 1 above certifies.
+            // A streak start: load the packet from DRAM. dQ_i must carry
+            // every earlier update.
+#if ENDPOINT_SYNC
+            if (sched.is_later_streak_start(i, t)) {
+                // Order this reload after the preceding streak's spill. The
+                // threshold certifies that actual spill, not the inactive
+                // timestep t - 1.
+                const uint32_t e = sched.spill_endpoint(i, t);
+                const uint32_t want = sched.endpoint_threshold(i, t);
+                WAYPOINT("ENDW");
+                do {
+                    invalidate_l1_cache();
+                } while ((*endpoint_sem[e - 1u]) < want);
+                WAYPOINT("ENDD");
+            }
+#endif
             const uint32_t qs = base_query + slot * stride_query;
             const uint32_t os = base_grad_output + slot * stride_grad_output;
             const uint32_t ls = base_lse + slot * stride_interm;
@@ -339,6 +402,30 @@ void kernel_main() {
                 noc_async_write_page((i - 1u) * qWt + k, grad_query, dq_out + k * grad_bytes);
             }
             noc_async_write_barrier();
+#if ENDPOINT_SYNC
+            // An inter-streak spill certifies itself for the later streak's
+            // reload. By the endpoint spill property this core is 1 or 2, and
+            // the loopback multicast writes its own copy too -- which matters,
+            // since a later streak of this row may well be consumed here.
+            if (sched.has_later_active(i, t)) {
+                const uint32_t sem_id = endpoint_sem_ids[my_core - 1u];
+                *scratch = t + 1u;
+                for (uint32_t r = 1; r <= kCores; ++r) {
+                    if (r == my_core) {
+                        // Its own copy, which matters: a later streak of this
+                        // row may well be consumed here.
+                        noc_semaphore_set(endpoint_sem[my_core - 1u], t + 1u);
+                        continue;
+                    }
+                    const uint32_t x = get_arg_val<uint32_t>(core_coords_arg + 2u * (r - 1u));
+                    const uint32_t y = get_arg_val<uint32_t>(core_coords_arg + 2u * (r - 1u) + 1u);
+                    noc_semaphore_set_remote(scratch_l1, get_noc_addr(x, y, get_semaphore(sem_id)));
+                }
+                // The value is a 4-byte write out of that word: complete every
+                // publication before the word is reused.
+                noc_async_write_barrier();
+            }
+#endif
         }
 
         cb_pop_front(cb_grad_query_out, qWt);

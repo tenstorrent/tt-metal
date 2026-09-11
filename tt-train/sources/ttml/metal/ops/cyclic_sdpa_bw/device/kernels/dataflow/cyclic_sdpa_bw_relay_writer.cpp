@@ -10,6 +10,18 @@
 // streak-start reload after the preceding streak's spill.
 //
 // The mask tile is generated here, once, as sdpa_bw's writer does.
+//
+// ENDPOINT_SYNC selects Algorithm 4: no chip-wide barrier at all. What the
+// barrier did here was tell this core's reader that the column gradients it
+// is about to load have been written -- an ordering between two RISCs of the
+// same core, which needs no chip-wide anything. A local progress word does
+// it. The other thing the barrier did, ordering a streak-start reload after
+// the preceding streak's spill, is the reader's business and becomes the
+// endpoint counters.
+//
+// The column gradients only pass through DRAM at all because this step has
+// not yet restored the paper's column residency; with them resident, this
+// handoff disappears too.
 
 #include <cstdint>
 
@@ -17,6 +29,10 @@
 #include "api/debug/waypoint.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 #include "tt-train/sources/ttml/metal/ops/cyclic_sdpa_bw/device/cyclic_schedule.hpp"
+
+#ifndef ENDPOINT_SYNC
+#define ENDPOINT_SYNC 0
+#endif
 
 void kernel_main() {
     uint32_t arg = 0;
@@ -43,6 +59,7 @@ void kernel_main() {
     constexpr uint32_t cb_grad_key = tt::CBIndex::c_20;
     constexpr uint32_t cb_grad_value = tt::CBIndex::c_23;
     constexpr uint32_t cb_scratch = tt::CBIndex::c_25;
+    constexpr uint32_t cb_column_progress = tt::CBIndex::c_26;
 
     using ttml::metal::ops::cyclic_sdpa_bw::CyclicSchedule;
     constexpr CyclicSchedule sched(kCores);
@@ -53,6 +70,12 @@ void kernel_main() {
     const uint32_t grad_bytes = get_tile_size(cb_grad_key);
     const auto grad_key = TensorAccessor(grad_key_args, grad_key_addr, grad_bytes);
     const auto grad_value = TensorAccessor(grad_value_args, grad_value_addr, grad_bytes);
+
+#if ENDPOINT_SYNC
+    volatile tt_l1_ptr uint32_t* column_progress =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_column_progress));
+    *column_progress = 0u;
+#endif
 
     volatile tt_l1_ptr uint32_t* arrive_sem =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(arrive_sem_id));
@@ -68,6 +91,10 @@ void kernel_main() {
         write_tiles_by_row(cb_grad_key, grad_key, (pair.j - 1u) * qWt, qWt, grad_bytes, qWt);
         write_tiles_by_row(cb_grad_value, grad_value, (pair.j - 1u) * vWt, vWt, grad_bytes, vWt);
 
+#if ENDPOINT_SYNC
+        // This core's own reader is the only thing waiting on these writes.
+        *column_progress = t + 1u;
+#else
         noc_semaphore_inc(arrive_noc_addr, 1u);
 
         if (is_coordinator != 0u) {
@@ -86,5 +113,6 @@ void kernel_main() {
                 noc_async_write_barrier();
             }
         }
+#endif
     }
 }
