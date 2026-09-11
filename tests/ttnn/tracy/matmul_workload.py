@@ -84,6 +84,7 @@ def main():
                     "start_timestamp": record.start_timestamp,
                     "end_timestamp": record.end_timestamp,
                     "frequency_ghz": record.frequency,
+                    "core_count": record.core_count,
                     "kernel_sources": list(record.kernel_sources),
                 }
             )
