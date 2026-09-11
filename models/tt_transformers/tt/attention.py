@@ -681,12 +681,15 @@ class Attention(LightweightModule):
         return q_heads_1BQD, k_heads_1BKD
 
     def _mllama_rope_prefill(self, q_heads_1QSD_pre_rot, k_heads_1KSD_pre_rot, rot_mats):
+        # These two ran at ttnn's HiFi4 default (no config was passed) -- 4x the math
+        # for a bf16 rotation-matrix product, where HiFi2 is the matched fidelity.
         q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
             q_heads_1QSD_pre_rot,
             rot_mats[0],
             rot_mats[1],
             self.transformation_mats["prefill"],
             is_decode_mode=False,
+            compute_kernel_config=self.compute_kernel_config_hifi2,
         )
 
         k_heads_1KSD = ttnn.experimental.rotary_embedding_llama(
@@ -695,6 +698,7 @@ class Attention(LightweightModule):
             rot_mats[1],
             self.transformation_mats["prefill"],
             is_decode_mode=False,
+            compute_kernel_config=self.compute_kernel_config_hifi2,
         )
 
         return q_heads_1QSD, k_heads_1KSD
