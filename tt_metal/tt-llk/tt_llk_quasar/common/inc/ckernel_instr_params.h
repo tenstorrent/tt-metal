@@ -62,10 +62,13 @@ struct p_unpacr
     constexpr static std::uint32_t TILE3_CFG_CONTEXT     = (0); // Config context for tile 3
     constexpr static std::uint32_t AUTO_INC_CONTEXT      = (1); // Auto increment config context (max value set through unpacker config command)
 
-    constexpr static std::uint32_t UNP_POP           = 0x0;
-    constexpr static std::uint32_t UNP_CLRSRC        = 0x1;
-    constexpr static std::uint32_t UNP_NOP           = 0x2;
-    constexpr static std::uint32_t UNP_POP_STREAM    = 0x3;
+    // UNPACR_NOP Nop_type field. The values differ from Blackhole, which numbers this
+    // field for a nine-operand instruction carrying two pop flavours as well; Quasar has
+    // no pop flavour, puts the clear at 0, and adds a set-data-valid with no clear.
+    // Src_ClrVal_Ctrl, Bank_Clr_Ctrl and Stall_Cntrl are honoured only by UNP_CLRSRC.
+    constexpr static std::uint32_t UNP_CLRSRC        = 0x0;
+    constexpr static std::uint32_t UNP_NOP           = 0x1;
+    constexpr static std::uint32_t UNP_NOP_SETDVALID = 0x2;
     constexpr static std::uint32_t UNP_CLRSRC_ZERO   = 0x0;
     constexpr static std::uint32_t UNP_CLRSRC_NEGINF = 0x1;
     constexpr static std::uint32_t UNP_CLRSRC_ONE    = 0x2;
