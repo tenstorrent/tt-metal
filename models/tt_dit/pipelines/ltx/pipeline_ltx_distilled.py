@@ -496,10 +496,10 @@ class LTXDistilledPipeline(LTXPipeline):
             # it compiles kernels (cold ~64s otherwise), inits the lazy device state, and frees back
             # to a deterministic allocator free-list. The vocoder/mel decoder are
             # @traced_function(prep_run=False) and so never self-warm — this eager pass (trace flags
-            # forced off) is what inits them. The first real decode then captures, with the video
-            # trace's own buffers already allocated, so the free-list it bakes is the one every later
-            # replay sees; capturing here instead would bake a free-list that gen#0's denoise-trace
-            # buffers then shift out from under the replay (flat, clipped, zero-voiceband audio).
+            # forced off) is what inits them. The audio trace itself is then captured here too, while
+            # the video traces' held inputs are still the only thing pinned below the activation
+            # regions: a capture deferred to the first real generate lays its activations over those
+            # baked inputs and every video replay after it decodes to blank frames.
             if video_only:
                 logger.info("LTX_VIDEO_ONLY=1: skipping warmup audio decode (generate() decodes no audio)")
             elif denoise_only:
@@ -511,6 +511,9 @@ class LTXDistilledPipeline(LTXPipeline):
             else:
                 logger.info("warmup audio decode (on-device, eager)")
                 self._warmup_audio_decode(torch.zeros(1, als.frames, self.in_channels), num_frames)
+                if self._traced:
+                    logger.info("warmup audio decode (capture pass)")
+                    self.decode_audio(torch.zeros(1, als.frames, self.in_channels), num_frames, fps=24.0)
 
         # Warm the encoders last: they coresident-evict the VAE decoder (which already evicted the
         # DiT), so they never disturb the denoise/decode kernels compiled above.
