@@ -22,9 +22,10 @@ enum class GroupNormMode : uint32_t { TILE_REDUCTION = 0, TWO_PASS = 1 };
 // and the padding rows must be excluded from both accumulation passes. The interleaved kernels do
 // that by switching to a row-masked set of input-mask tiles on each batch's final row-tile, of
 // which `rows_in_last_tile` are real; the sharded kernels compose that row mask on device from a
-// rowvalid tile (c_18) and the column selector. Shared by all three two-pass factories. Kernels
-// re-derive `active` from (padded_hw != logical_hw), hence kernel_logical_hw reporting padded_hw
-// when off.
+// rowvalid tile (c_18) and the column selector. This correction is shared by the tile-reduction
+// route in all three GroupNorm factories; the SFPU two-pass route accepts only tile-aligned H*W.
+// Kernels re-derive `active` from (padded_hw != logical_hw), hence kernel_logical_hw reporting
+// padded_hw when off.
 struct GroupNormPadCorrection {
     bool active = false;
     uint32_t logical_hw = 0;
