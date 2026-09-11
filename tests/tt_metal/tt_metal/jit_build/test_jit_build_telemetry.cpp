@@ -264,7 +264,8 @@ TEST_F(JitBuildWindowTest, ConcurrentDumpsRetainOneWindowSample) {
     tel.note_build_window(t0, t0 + 50ms);
 
     std::vector<std::thread> threads;
-    for (int i = 0; i < 16; ++i) {
+    threads.reserve(16);
+for (int i = 0; i < 16; ++i) {
         threads.emplace_back([&] { tel.dump_metrics(); });
     }
     for (auto& thread : threads) {
