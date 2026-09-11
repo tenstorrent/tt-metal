@@ -5,10 +5,11 @@
 """The one GlobalCircularBuffer every prefetched decode weight streams through.
 
 A device gets a single GCB, shared by every :class:`~.layers.LinearDecode` and
-:class:`~.layers.BatchedLinearDecode` on it: the attention block's four projections, its
-grouped output projection, its compressor's pair, and the MoE block's shared expert. The
-router gate cannot join that ring (16-tile slabs vs a 32-tile page) and streams through
-:data:`HC_FN_GCB` instead. This module owns the two things that has to be agreed on
+:class:`~.layers.BatchedLinearDecode` on it: the attention block's q_b and grouped
+output projection, and the MoE block's shared expert. q_a, kv and the compressor
+pair use private full-width rings (32- or 16-receiver); CSA rides q_a's ring and HCA
+rides kv's. The router gate cannot join the shared ring (16-tile slabs vs a 32-tile page)
+and streams through :data:`HC_FN_GCB` instead. This module owns the two things that has to be agreed on
 model-wide -- the weight layouts and the order the matmuls consume them -- so no single
 block can size a buffer against a layout another block does not use.
 
@@ -95,20 +96,10 @@ DECODE_LAYOUTS = {
     "q_b_proj": {"K": 1024, "N": 32768, "n_blocks": 64},
     "kv_proj": {"K": 4096, "N": 512, "n_blocks": 16},
     "o_b_proj": {"K": 8192, "N": 4096},
-    "compressed_sparse_attention": {
-        "K": 4096,
-        "N": 1024,
-        "partial_width_sharded": True,
-        "k_blocks": 2,
-        "n_blocks": 32,
-    },
-    "heavily_compressed_attention": {
-        "K": 4096,
-        "N": 512,
-        "partial_width_sharded": True,
-        "k_blocks": 4,
-        "n_blocks": 16,
-    },
+    # Full-width hub mode so both projections consume the decode all-gather replica
+    # (ROW_MAJOR HEIGHT_SHARDED A). CSA matches q_a (32 cores); HCA matches kv (16).
+    "compressed_sparse_attention": {"K": 4096, "N": 1024, "n_blocks": 32},
+    "heavily_compressed_attention": {"K": 4096, "N": 512, "n_blocks": 16},
     # The grouped output projection (o_a of DeepseekV4GroupedLinear): batched over o_groups,
     # folded along both batch and N into a b_blocks x n_blocks grid (see
     # BatchedLinearDecode). 8x8 is what falls out of the model's o_groups=8, o_lora_rank=1024
@@ -134,20 +125,36 @@ DECODE_LAYOUTS = {
 }
 
 # The order one layer's matmuls consume the buffer, which is the order the requests must be
-# queued in. q_a and kv have private FIFOs (32- and 16-receiver); this shared FIFO starts
-# with q_b from ``_qkv``, then the compressor (it runs after ``_qkv`` and before ``_attend``),
-# then ``_attend``'s grouped output projection (o_a_proj before o_b_proj -- see
-# ``DeepSeekV4Attention._grouped_output``). The MoE block follows.
+# queued in. q_a has a private 32-receiver FIFO (CSA kv/gate share it, after q_a); kv has a
+# private 16-receiver FIFO (HCA kv/gate share it, after kv). This shared FIFO starts with
+# q_b from ``_qkv``, then ``_attend``'s grouped output projection (o_a_proj before o_b_proj
+# -- see ``DeepSeekV4Attention._grouped_output``). The MoE block follows.
 DECODE_GCB_GROUP = (
     "q_b_proj",
-    "compressed_sparse_attention",
-    "heavily_compressed_attention",
     "o_a_proj",
     "o_b_proj",
     "shared_gate_proj",
     "shared_up_proj",
     "shared_down_proj",
 )
+
+# Not a consumer: pins the shared ring at a 32-tile page (the GCD while HCA's
+# partial 32-tile slab was in the group). Without it the remaining 128/512-tile
+# slabs gcd to 128 tiles, and 16 pages of that (~1.2 MB/core) leave no room for
+# the 16-core kv ring.
+_SHARED_GCB_PAGE_PIN = {
+    "K": 4096,
+    "N": 512,
+    "partial_width_sharded": True,
+    "k_blocks": 4,
+    "n_blocks": 16,
+}
+
+
+def decode_gcb_group_specs() -> list:
+    """Layouts that size the shared decode GCB: consumers plus the 32-tile page pin."""
+    return [DECODE_LAYOUTS[name] for name in DECODE_GCB_GROUP] + [_SHARED_GCB_PAGE_PIN]
+
 
 # Extra GCBs attached to the per-device prefetch mapping under TP. Not in
 # ``DECODE_GCB_GROUP``: different receiver counts, independent FIFOs.
@@ -260,7 +267,7 @@ def decode_prefetch_page_bytes(weight_dtype: ttnn.DataType) -> int:
     can each derive it independently and cannot disagree -- which matters because a layer
     streaming at a page size the ring was not built for is a hang.
     """
-    return decode_gcb_page_bytes([DECODE_LAYOUTS[name] for name in DECODE_GCB_GROUP], weight_dtype)
+    return decode_gcb_page_bytes(decode_gcb_group_specs(), weight_dtype)
 
 
 def hc_fn_page_bytes(weight_dtype: ttnn.DataType) -> int:
@@ -309,7 +316,7 @@ def make_decode_prefetch_buffers(
         num_prefetch_pages = active_system_config().prefetcher.num_prefetch_pages
     global_cb = make_shared_decode_gcb(
         device,
-        [DECODE_LAYOUTS[name] for name in DECODE_GCB_GROUP],
+        decode_gcb_group_specs(),
         weight_dtype,
         num_pages=num_prefetch_pages,
     )

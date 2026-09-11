@@ -38,22 +38,62 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
         input_tensor.buffer() != nullptr && cache_tensor.buffer() != nullptr,
         "Operands to update_cache need to be allocated in buffers on device!");
 
+    const bool rm_width_sharded_cache = is_rm_width_sharded_l1_cache(cache_tensor);
+
     // Layout and data type validation
     TT_FATAL(
         input_tensor.layout() == Layout::TILE || input_tensor.layout() == Layout::ROW_MAJOR,
         "Input tensor in paged_update_cache must be TILE or ROW_MAJOR");
-    TT_FATAL(cache_tensor.layout() == Layout::TILE, "Cache tensor in update_cache must be tilized");
-    TT_FATAL(
-        cache_tensor.dtype() == DataType::FLOAT32 || cache_tensor.dtype() == DataType::BFLOAT16 ||
-            cache_tensor.dtype() == DataType::BFLOAT8_B || cache_tensor.dtype() == DataType::BFLOAT4_B,
-        "Data type of cache tensor must be FLOAT32, BFLOAT16, BFLOAT8_B, or BFLOAT4_B and is {}",
-        cache_tensor.dtype());
+    if (rm_width_sharded_cache) {
+        TT_FATAL(
+            input_tensor.layout() == Layout::ROW_MAJOR,
+            "ROW_MAJOR WIDTH_SHARDED cache requires ROW_MAJOR input (no untilize/tilize on this path)");
+        TT_FATAL(
+            cache_tensor.dtype() == input_tensor.dtype(),
+            "ROW_MAJOR WIDTH_SHARDED cache dtype ({}) must match input dtype ({})",
+            cache_tensor.dtype(),
+            input_tensor.dtype());
+        TT_FATAL(
+            cache_tensor.dtype() == DataType::FLOAT32 || cache_tensor.dtype() == DataType::BFLOAT16,
+            "ROW_MAJOR WIDTH_SHARDED cache dtype must be FLOAT32 or BFLOAT16, got {}",
+            cache_tensor.dtype());
+        TT_FATAL(!page_table.has_value(), "Paged page_table is not supported with ROW_MAJOR WIDTH_SHARDED cache");
+        TT_FATAL(!operation_attributes.share_cache, "share_cache is not supported with ROW_MAJOR WIDTH_SHARDED cache");
+        TT_FATAL(
+            !operation_attributes.block_size_override.has_value() &&
+                !operation_attributes.num_kv_heads_override.has_value() &&
+                !operation_attributes.cache_position_modulo.has_value(),
+            "Paged-mode overrides are not supported with ROW_MAJOR WIDTH_SHARDED cache");
+        const auto& cache_shard = cache_tensor.shard_spec().value();
+        TT_FATAL(
+            cache_shard.orientation == ShardOrientation::ROW_MAJOR,
+            "ROW_MAJOR WIDTH_SHARDED cache must use ROW_MAJOR shard orientation");
+        const uint32_t cache_width = cache_tensor.padded_shape()[-1];
+        TT_FATAL(
+            cache_shard.shape[1] * cache_shard.grid.num_cores() == cache_width,
+            "WIDTH_SHARDED cache shard width ({}) * num cores ({}) must equal padded last dim ({})",
+            cache_shard.shape[1],
+            cache_shard.grid.num_cores(),
+            cache_width);
+        const uint32_t shard_width_bytes = cache_shard.shape[1] * cache_tensor.element_size();
+        TT_FATAL(
+            shard_width_bytes % 16 == 0,
+            "WIDTH_SHARDED cache shard width in bytes ({}) must be 16-byte aligned for NoC writes",
+            shard_width_bytes);
+    } else {
+        TT_FATAL(cache_tensor.layout() == Layout::TILE, "Cache tensor in update_cache must be tilized");
+        TT_FATAL(
+            cache_tensor.dtype() == DataType::FLOAT32 || cache_tensor.dtype() == DataType::BFLOAT16 ||
+                cache_tensor.dtype() == DataType::BFLOAT8_B || cache_tensor.dtype() == DataType::BFLOAT4_B,
+            "Data type of cache tensor must be FLOAT32, BFLOAT16, BFLOAT8_B, or BFLOAT4_B and is {}",
+            cache_tensor.dtype());
+        TT_FATAL(
+            cache_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Only interleaved cache is supported");
+    }
 
     // Shape validation
     TT_FATAL(input_tensor.padded_shape()[0] == 1, "Dim 0 of input tensor must be 1");
-    TT_FATAL(
-        cache_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-        "Only interleaved cache is supported");
 
     // Overrides are paged-mode only: in non-paged mode cache.shape[2] is the
     // sequence length, and a "geometry mismatch" error there would be misleading.
@@ -141,7 +181,7 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
         if (operation_attributes.share_cache) {
             TT_FATAL(
                 cache_tensor.padded_shape()[0] == 1, "Share cache feature expects cache tensor to have batch of 1");
-        } else {
+        } else if (!rm_width_sharded_cache) {
             TT_FATAL(
                 input_tensor.padded_shape()[1] == cache_tensor.padded_shape()[0],
                 "Expect batch in input tensor match the batch in cache tensor");

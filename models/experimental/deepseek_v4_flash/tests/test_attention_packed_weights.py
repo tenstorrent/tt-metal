@@ -133,7 +133,8 @@ def test_attention_galaxy32_packed_l1_projections(device):
     grouped_ref = torch.matmul(grouped_x.reshape(8, 1, 4096).float(), grouped_weight.float())
     grouped_tt = ttnn.from_torch(grouped_x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     grouped_out = attention.o_a_proj(grouped_tt)
-    assert_with_pcc(grouped_ref, ttnn.to_torch(grouped_out).float().reshape(8, 1, 1024), 0.99)
+    got = ttnn.to_torch(grouped_out).float().reshape(-1, 8 * 1024)[0].reshape(8, 1, 1024)
+    assert_with_pcc(grouped_ref, got, 0.99)
     assert attention.o_a_proj.packed_weight_spec.tile_offset == layout.region(0, "o_a_proj").tile_offset
 
 

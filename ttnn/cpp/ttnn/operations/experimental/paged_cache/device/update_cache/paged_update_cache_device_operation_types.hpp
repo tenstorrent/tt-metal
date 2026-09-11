@@ -55,4 +55,13 @@ struct PagedUpdateCacheInputs {
     std::optional<Tensor> page_table;
 };
 
+inline bool is_rm_width_sharded_l1_cache(const Tensor& cache) {
+    if (cache.layout() != ttnn::Layout::ROW_MAJOR || !cache.is_sharded()) {
+        return false;
+    }
+    const auto& memory_config = cache.memory_config();
+    return memory_config.memory_layout() == ttnn::TensorMemoryLayout::WIDTH_SHARDED &&
+           memory_config.buffer_type() == tt::tt_metal::BufferType::L1;
+}
+
 }  // namespace ttnn::experimental::prim
