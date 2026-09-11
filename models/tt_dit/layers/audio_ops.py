@@ -329,7 +329,7 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
 
     # Cache the prepared (tilized/sharded) weight to keep the on-device path; key on
     # (C, stride, taps) since the upsampler reuses one cache for distinct sub-tap vectors.
-    wkey = ("w", C, stride, K, tuple(taps))
+    wkey = ("w", C, stride, K, tuple(taps), B, T_pad)
     weight = cache.get(wkey)
     prepared = weight is not None
     if weight is None:
@@ -459,7 +459,7 @@ def _depthwise_tap_conv1d_chunked(
     the mantissa to TF32.
     """
     assert (chunk * 4) % 64 == 0, f"C-chunk {chunk} would make ttnn.concat(dim=-1) lossy in fp32"
-    wkey = ("w", chunk, stride, K, tuple(taps))
+    wkey = ("w", chunk, stride, K, tuple(taps), B, T_pad)
     weight = cache.get(wkey)
     prepared = weight is not None
     if weight is None:
