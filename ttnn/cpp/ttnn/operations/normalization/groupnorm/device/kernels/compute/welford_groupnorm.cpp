@@ -547,10 +547,8 @@ void kernel_main() {
                             reconfig_data_format_srca(dfb_ex2pe_fp32_id, dfb_normalize_in_fp32_id);
                             copy_init(dfb_normalize_in_fp32_id);
                         } else {
-                            // // a. x-u
-                            // fp32: SrcA needs dfb_in0 (fp32 input), SrcB needs dfb_ex_global (fp32 mean); the prior
-                            // group's mul_tiles(dfb_xmm) left SrcA on dfb_xmm. Use the unconditional 1-arg form: the
-                            // old 2-arg srcb(dfb_eps -> dfb_ex_global) never reset SrcA at all.
+                            // a. x-u: the previous group's multiply leaves SrcA on dfb_xmm.
+                            // Configure both sources for the input and mean before subtracting.
                             if constexpr (enable_fp32_reconfig) {
                                 reconfig_data_format_srca(dfb_in0_id);
                                 reconfig_data_format_srcb(dfb_ex_global_id);
