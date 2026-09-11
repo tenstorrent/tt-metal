@@ -35,8 +35,10 @@ FORCE_INLINE void lightweight_assert_trap() { asm("ebreak"); }
 
 #else
 
-// Avoid unused variable warnings here.
-#define ASSERT(condition, ...) (void(sizeof(not(condition))))
+// Avoid unused variable warnings here. sizeof() the condition's *type*: sizeof() of the
+// expression itself folds to an integer constant at ASSERT(0)-style call sites, which
+// clang-tidy reports as bugprone-sizeof-expression.
+#define ASSERT(condition, ...) (void(sizeof(decltype(not(condition)))))
 
 #define ASSERT_ENABLED 0
 #define LIGHTWEIGHT_ASSERT_ENABLED 0
