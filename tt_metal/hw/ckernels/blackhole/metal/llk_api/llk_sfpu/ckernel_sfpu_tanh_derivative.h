@@ -45,21 +45,9 @@ inline void calculate_tanh_derivative() {
 template <bool APPROXIMATION_MODE>
 inline void tanh_derivative_init() {
     // A 3-segment SFPLUT table, breakpoints |x| = 1 and 2. calculate_tanh_derivative computes
-    // 1 - lut(x)^2, so this table IS this deprecated kernel's approximation.
-    //
-    // It used to be the same table as tanh_init<APPROXIMATION_MODE=true> and was kept in step
-    // with it. It no longer is: tanh_init moved to the 6-entry SFPLUTFP32 table to cut ULP
-    // error, and this kernel keeps its own 3-entry table. That is deliberate rather than
-    // overlooked -- the objective here is sech^2, not tanh, so the tanh-optimal coefficients
-    // are not automatically right for 1 - lut^2, and this entry point is superseded by
-    // calculate_tanh_derivative_sech2. Fitting it properly is separate work.
-    //
-    // The cancellation blow-up for |x| > ~3.4 in the warning above comes from segment 2
-    // returning exactly 1.0, so 1 - 1 = 0 against a small nonzero sech^2. Segment 2 is exact
-    // rather than fitted, so no retune of this table helps it.
-    //
-    // UnarySFPUGolden._tanh_derivative_lut models this table by hand and must be updated
-    // whenever these three pairs change.
+    // 1 - lut(x)^2, so this table IS this kernel's approximation -- independent of tanh_init,
+    // which fits tanh rather than sech^2. UnarySFPUGolden._tanh_derivative_lut mirrors these
+    // three pairs by hand; test_tanh_derivative_lut_consistency.py holds the copies together.
     sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut8si(0.8125f, 0.0f);
     sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vLut8si(0.1875f, 0.625f);
     sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vLut8si(0.0f, 1.0f);

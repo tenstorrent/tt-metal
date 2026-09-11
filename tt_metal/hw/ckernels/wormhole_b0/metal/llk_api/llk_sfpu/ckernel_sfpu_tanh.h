@@ -153,9 +153,8 @@ sfpi_inline void _sfpu_tanh_polynomial_x2_(
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_tanh() {
     if constexpr (APPROXIMATION_MODE) {
-        // SFPU microcode: 6-entry SFPLUTFP32 FP16 table (TABLE1), breakpoints |x| = 0.5/1/1.5/2/3.
-        // Slopes live in LReg0/1/2 packed hi/lo, intercepts in LReg4/5/6, which is where WH and BH
-        // keep this table; gelu_appx uses the same six registers the same way.
+        // Slopes in LReg0/1/2 packed hi/lo, intercepts in LReg4/5/6 -- where WH and BH keep a
+        // 6-entry SFPLUTFP32 table. gelu_appx uses the same six registers the same way.
         sfpi::vLut16ss s01 = l_reg[sfpi::LRegs::LReg0];
         sfpi::vLut16ss s23 = l_reg[sfpi::LRegs::LReg1];
         sfpi::vLut16ss s45 = l_reg[sfpi::LRegs::LReg2];
