@@ -33,28 +33,21 @@ FLAGS = (
     "DIFFVAE_DET_FUSED_QKV",
     "DIFFVAE_DET_COLPAR_QKV",
     "DIFFVAE_DET_FUSED_ROPE",
-    "DIFFVAE_DET_FLAT_SEQ",
     "DIFFVAE_DET_FUSED_SWIGLU",
     "DIFFVAE_DET_TP_MLP",
 )
 
-STRIDED, BRICKED = "op_sp_w_sharded", "bricked_sp_w_sharded"
+BRICKED = "bricked_sp_w_sharded"
 RECOMMENDED = ("DIFFVAE_DET_COLPAR_QKV", "DIFFVAE_DET_FUSED_ROPE", "DIFFVAE_DET_FUSED_SWIGLU")
-FLAT_SEQ = (*RECOMMENDED, "DIFFVAE_DET_FLAT_SEQ")
 
-#: arm -> (flags, W-sharded attention executor). The baseline is the unflagged block on the
-#: strided executor; the ``bricked*`` arms swap in the bricked executor (halo exchange, 32-site
-#: bricks, the neighborhood op) with and without the flat (B, NH, S, HD) handoff, so they check
-#: both of its input forms against the same reference.
+#: arm -> flags. Every arm and the baseline run the bricked W-sharded executor (the only one left);
+#: ``recommended`` is the production flag set.
 ARMS = {
-    "fused_qkv": (("DIFFVAE_DET_FUSED_QKV",), STRIDED),
-    "colpar_qkv": (("DIFFVAE_DET_COLPAR_QKV",), STRIDED),
-    "fused_swiglu": (("DIFFVAE_DET_FUSED_SWIGLU",), STRIDED),
-    "tp_mlp": (("DIFFVAE_DET_TP_MLP",), STRIDED),
-    "recommended": (RECOMMENDED, STRIDED),
-    "flat_seq": (FLAT_SEQ, STRIDED),
-    "bricked": (FLAT_SEQ, BRICKED),
-    "bricked_volume": (RECOMMENDED, BRICKED),
+    "fused_qkv": ("DIFFVAE_DET_FUSED_QKV",),
+    "colpar_qkv": ("DIFFVAE_DET_COLPAR_QKV",),
+    "fused_swiglu": ("DIFFVAE_DET_FUSED_SWIGLU",),
+    "tp_mlp": ("DIFFVAE_DET_TP_MLP",),
+    "recommended": RECOMMENDED,
 }
 
 #: (label, dim, kernel, full dims, blocks in that stage) for the W-sharded deterministic stages.
@@ -92,7 +85,7 @@ def _state(dim: int, seed: int) -> dict[str, torch.Tensor]:
     }
 
 
-def _build(mesh, dim, kernel, enabled: tuple[str, ...], backend: str = STRIDED):
+def _build(mesh, dim, kernel, enabled: tuple[str, ...], backend: str = BRICKED):
     """An NABlock with exactly ``enabled`` set on ``backend``, asserting the flags actually took."""
     for flag in FLAGS:
         os.environ[flag] = "1" if flag in enabled else "0"
@@ -111,7 +104,6 @@ def _build(mesh, dim, kernel, enabled: tuple[str, ...], backend: str = STRIDED):
     assert block.attn.colpar_qkv is colpar
     assert block.attn.fused_qkv is (colpar or "DIFFVAE_DET_FUSED_QKV" in enabled)
     assert block.attn.fused_rope is ("DIFFVAE_DET_FUSED_ROPE" in enabled)
-    assert block.attn.flat_seq is ("DIFFVAE_DET_FLAT_SEQ" in enabled)
     assert block.mlp.tp_mlp is tp_mlp
     assert block.mlp.fused is (tp_mlp or "DIFFVAE_DET_FUSED_SWIGLU" in enabled)
     assert block.attn.na3d_backend == backend
@@ -139,8 +131,8 @@ def test_det_nablock_arm_matches_baseline(*, mesh_device, device_params, arm, st
     tokens, local, cos, sin = _inputs(mesh_device, dim, dims)
     x_t = torch.randn(tokens, dim, generator=torch.Generator().manual_seed(5))
 
-    def run(enabled, backend=STRIDED):
-        block = _build(mesh_device, dim, kernel, enabled, backend)
+    def run(enabled):
+        block = _build(mesh_device, dim, kernel, enabled)
         block.load_torch_state_dict(dict(state))
         x = ttnn.from_torch(x_t, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         out = block(x, dims=local, cos=cos, sin=sin, device_plan=None)
@@ -148,7 +140,7 @@ def test_det_nablock_arm_matches_baseline(*, mesh_device, device_params, arm, st
         return ttnn.to_torch(ttnn.get_device_tensors(out)[0]).float()
 
     reference = run(())
-    assert_quality(reference, run(*ARMS[arm]), pcc=0.999)
+    assert_quality(reference, run(ARMS[arm]), pcc=0.999)
 
 
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True, ids=["1d"])
@@ -157,10 +149,10 @@ def test_det_nablock_arm_matches_baseline(*, mesh_device, device_params, arm, st
 def test_det_nablock_arm_timing(*, mesh_device, device_params, arm):
     """Per-block device time for one arm, summed over the W-sharded stages. Run with ``-s``."""
     iters = int(os.environ.get("ITERS", 10))
-    enabled, backend = ((), STRIDED) if arm == "baseline" else ARMS[arm]
+    enabled = () if arm == "baseline" else ARMS[arm]
     total = 0.0
     for label, dim, kernel, dims, depth in STAGES:
-        block = _build(mesh_device, dim, kernel, enabled, backend)
+        block = _build(mesh_device, dim, kernel, enabled)
         for name, param in _named_params(block):
             param.load_torch_tensor(_seeded(name, tuple(param.total_shape)))
         tokens, local, cos, sin = _inputs(mesh_device, dim, dims)
@@ -233,7 +225,6 @@ def _build_stage1(mesh, enabled: tuple[str, ...]):
     assert block.attn.fused_qkv is ("DIFFVAE_DET_FUSED_QKV" in enabled)
     assert block.attn.fused_rope is ("DIFFVAE_DET_FUSED_ROPE" in enabled)
     assert block.attn.colpar_qkv is False, "colpar needs a tp_axis to shard the weight over"
-    assert block.attn.flat_seq is False, "flat_seq exists only in the W-sharded attention"
     assert block.mlp.fused is ("DIFFVAE_DET_FUSED_SWIGLU" in enabled)
     return block
 

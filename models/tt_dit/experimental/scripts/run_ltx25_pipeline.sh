@@ -32,10 +32,7 @@ export WIDTH=${WIDTH:-1920}
 export OUTPUT_PATH="${OUTPUT_PATH:-$HOME/ltx25_diffvae_1080p.mp4}"
 
 export DIFFVAE_SLAB_FRAMES=${DIFFVAE_SLAB_FRAMES:-78}
-export DIFFVAE_SP_FUSED=1
 export DIFFVAE_STAGES_WSP=1
-export DIFFVAE_SDPA_KCHUNK=256
-export DIFFVAE_PAD_GATHER=1
 export DIFFVAE_DEVICE_NOISE=1
 export DIFFVAE_DEVICE_PREPROC=1
 export DIFFVAE_DEVICE_UNPATCHIFY=1
@@ -43,18 +40,14 @@ export DIFFVAE_TRIM_PAD_CHANNELS=1
 export DIFFVAE_DET_COLPAR_QKV=1
 export DIFFVAE_DET_FUSED_ROPE=1
 export DIFFVAE_DET_FUSED_SWIGLU=1
-export DIFFVAE_DET_FLAT_SEQ=1
 export DIFFVAE_STAGE_TIMING=1
 # Stream one "[stage HH:MM:SS] > label" / "< label  N ms" line per decode span so a hang is visible
 # while it happens (the last ">" with no "<" names it) instead of at the timeout. Tree unchanged.
 export DIFFVAE_STAGE_LOG=${DIFFVAE_STAGE_LOG:-1}
-# Stage 5 runs the bricked executor (Phase 0 of layers/PLAN_retire_block_permute.md). These used to
-# be set only under PROFILE=1, so a plain run silently selected the older op_sp_w_sharded executor,
-# which cannot fit the pipeline's DRAM. DIFFVAE_STAGE5_BACKEND=op_sp_w_sharded selects it again.
+# Stage 5 and the W-sharded deterministic stages 1-3 run the bricked executor
+# (bricked_sp_w_sharded). The general-SDPA executors were deleted on 2026-09-11; the only other
+# value either knob accepts is "gather" (replicated), which does not fit the pipeline's memory.
 export DIFFVAE_STAGE5_BACKEND=${DIFFVAE_STAGE5_BACKEND:-bricked_sp_w_sharded}
-# Deterministic stages 1-3 (W-sharded by DIFFVAE_STAGES_WSP) run the bricked executor too since
-# 2026-09-11: faster on every stage at 1080p (-470 ms per decode) at matching PCC. The older strided
-# "op_sp_w_sharded" stays selectable as the reference, per stage as "1:..,2:..,3:..".
 export DIFFVAE_STAGES_BACKEND=${DIFFVAE_STAGES_BACKEND:-bricked_sp_w_sharded}
 export DIFFVAE_S5_GNA_STRIDE=${DIFFVAE_S5_GNA_STRIDE:-1,1,1}
 export DIFFVAE_TP_HEADS=${DIFFVAE_TP_HEADS:-1}

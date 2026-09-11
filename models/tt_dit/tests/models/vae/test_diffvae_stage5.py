@@ -519,7 +519,7 @@ def test_resolved_gna_stride(monkeypatch):
     monkeypatch.setenv("DIFFVAE_S5_GNA_STRIDE", "")
     assert DiffVAEStage5Config().resolved_gna_stride == (1, 1, 1)
 
-    # The global knob is na3d's, for every stage. It is deliberately NOT a stage-5 fallback any more.
+    # No other knob reaches this: the na3d-wide DIFFVAE_GNA_STRIDE went with the executors that read it.
     monkeypatch.delenv("DIFFVAE_S5_GNA_STRIDE", raising=False)
     monkeypatch.setenv("DIFFVAE_GNA_STRIDE", "2,4,4")
     assert DiffVAEStage5Config().resolved_gna_stride == (1, 1, 1)
@@ -553,9 +553,8 @@ def test_resolved_gna_stride(monkeypatch):
 def test_stage5_gna_parity_w_sharded(*, mesh_device, device_params, sp_axis, grid, stride, pcc):
     """Stage 5 on the PRODUCTION W-sharded backend against the ltx_core reference, per GNA stride.
 
-    The other parity tests here run the replicated or NA3DShard paths, and ``gna_stride`` is only
-    plumbed through ``op_sp_w_sharded`` -- so without this the shipped stage-5 configuration has no
-    upstream reference at all, at any stride.
+    The other parity tests here run the replicated or NA3DShard paths at stride 1; this is the only
+    upstream reference for the shipped W-sharded configuration at a real stride.
 
     Stride 1 is the regression guard: it must match the reference like every other arm, which proves
     the stride plumbing left standard NA alone end-to-end and not merely per-op. Stride > 1 is a
@@ -565,16 +564,15 @@ def test_stage5_gna_parity_w_sharded(*, mesh_device, device_params, sp_axis, gri
 
     # A stride that never reaches the op yields the stride-1 result, which would read as "GNA is free"
     # rather than as a plumbing failure. Observing the kwarg at the op boundary is the only check that
-    # cannot drift from na3d's own resolution logic.
-    seen: set[tuple[int, ...] | None] = set()
-    _sdpa = ttnn.transformer.scaled_dot_product_attention
+    # cannot drift from the executor's own resolution logic.
+    seen: set[tuple[int, ...]] = set()
+    _op = ttnn.transformer.neighborhood_scaled_dot_product_attention
 
     def _probe(*args, **kwargs):
-        observed = kwargs.get("neighborhood_stride")
-        seen.add(tuple(observed) if observed is not None else None)
-        return _sdpa(*args, **kwargs)
+        seen.add(tuple(kwargs["stride"]))
+        return _op(*args, **kwargs)
 
-    ttnn.transformer.scaled_dot_product_attention = _probe
+    ttnn.transformer.neighborhood_scaled_dot_product_attention = _probe
 
     sp = int(list(mesh_device.shape)[sp_axis])
     assert grid.w % sp == 0, f"W={grid.w} not divisible by sp={sp}"
@@ -595,7 +593,7 @@ def test_stage5_gna_parity_w_sharded(*, mesh_device, device_params, sp_axis, gri
         mesh_device=mesh_device,
         dtype=dtype,
         ccl_manager=ccl_manager,
-        na3d_backend="op_sp_w_sharded",
+        na3d_backend="bricked_sp_w_sharded",
         sp_axis=sp_axis,
     )
     model.load_torch_state_dict(state)
@@ -613,13 +611,10 @@ def test_stage5_gna_parity_w_sharded(*, mesh_device, device_params, sp_axis, gri
     try:
         tt_pixels = model.forward(tt_context, x_t, tt_t, grid)
     finally:
-        ttnn.transformer.scaled_dot_product_attention = _sdpa
+        ttnn.transformer.neighborhood_scaled_dot_product_attention = _op
 
-    # The op receives the stride permuted into op-axis order (W outer, T inner), matching how the
-    # kernel is permuted alongside it.
-    st, sh, sw = stride
-    expected = None if stride == (1, 1, 1) else (sw, sh, st)
-    assert seen == {expected}, f"stride {stride} reached the op as {seen}, expected {{{expected}}}"
+    # The bricked op takes the stride in physical (t, h, w) order, unpermuted.
+    assert seen == {tuple(stride)}, f"stride {stride} reached the op as {seen}"
 
     if pcc is not None:
         assert_quality(ref_pixels, tt_pixels, pcc=pcc)
@@ -644,12 +639,12 @@ def test_stage5_parity_w_sharded_bricked(*, mesh_device, device_params, sp_axis,
     """Stage 5 on the BRICKED W-sharded backend against the ltx_core reference.
 
     Until this existed, no committed gate covered ``bricked_sp_w_sharded`` at all: every gate here
-    and in test_diffvae_decoder.py hardcodes ``op_sp_w_sharded``, so the bricked op's only oracle was
+    and in test_diffvae_decoder.py ran the since-deleted strided executor, so the bricked op's only oracle was
     models/tt_dit/tests/unit/test_neighborhood_sdpa.py on a 16x24x24 volume. That leaves the shipped
     stage-5 executor -- halo exchange, bricked layout, in-kernel gather, the uploaded relative mask
     table -- with no upstream reference and no PCC ledger entry.
 
-    W is 64 rather than the 32 the op_sp_w_sharded tests use, and that is load-bearing: the bricked
+    W is 64 rather than the 32 the older executor tests used, and that is load-bearing: the bricked
     path halo-exchanges whole bricks, ``halo_sites(11, 2) == 6``, and ``_choose_sharded_brick`` skips
     every candidate whose halo exceeds the local width. At w=32 on sp=8 the local width is 4, no
     brick qualifies, and the plan cannot be built. 64 gives a local width of 8.
@@ -744,15 +739,7 @@ def test_stage5_parity_w_sharded_bricked(*, mesh_device, device_params, sp_axis,
     [Grid(batch=1, t=24, h=64, w=480), Grid(batch=1, t=24, h=272, w=480)],
     ids=["w480_h64", "w480_h272"],
 )
-@pytest.mark.parametrize(
-    # op_sp_w_sharded is the CONTROL, not a second subject: it is the shipped default with its own
-    # upstream evidence, so if it scores here and bricked does not, the difference is the backend
-    # and not the grid, the harness or the reference. Running them as one parametrisation is what
-    # makes that a matched comparison rather than two numbers from different tests.
-    "backend",
-    ["op_sp_w_sharded", "bricked_sp_w_sharded"],
-    ids=["reference_backend", "bricked"],
-)
+@pytest.mark.parametrize("backend", ["bricked_sp_w_sharded"], ids=["bricked"])
 @pytest.mark.diffvae_gate
 def test_stage5_bricked_matches_upstream_at_production_width(
     *, mesh_device, device_params, sp_axis, grid, pcc, backend
@@ -764,8 +751,8 @@ def test_stage5_bricked_matches_upstream_at_production_width(
     test_decode_wsp_shard_equivalence compares bricked against bricked, so both arms can be wrong
     together; and test_decode_wsp_timing runs the real 145-frame geometry while asserting nothing.
 
-    ltx_core is the reference rather than op_sp_w_sharded deliberately. A device-vs-device check
-    says the two disagree without saying which is wrong; upstream names the culprit.
+    ltx_core is the reference rather than another device executor deliberately. A device-vs-device
+    check says two executors disagree without saying which is wrong; upstream names the culprit.
     """
 
     from models.tt_dit.parallel.manager import CCLManager

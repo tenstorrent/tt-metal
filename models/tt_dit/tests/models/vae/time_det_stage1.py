@@ -54,16 +54,15 @@ def time_stage1(mesh) -> float:
     fill(block)
 
     # Reachability, not configuration: a run that believes it enabled a flag the stage cannot reach
-    # is silently measuring the unflagged path. colpar and flat_seq stay out of reach here -- the
-    # first needs a TP axis to shard the weight over, the second exists only in the W-sharded
-    # attention -- while fused qkv, fused RoPE and fused SwiGLU all apply to a replicated stage.
+    # is silently measuring the unflagged path. colpar stays out of reach here -- it needs a TP axis
+    # to shard the weight over -- while fused qkv, fused RoPE and fused SwiGLU all apply to a
+    # replicated stage.
     want_qkv = os.environ.get("DIFFVAE_DET_FUSED_QKV") == "1"
     want_rope = want_qkv and os.environ.get("DIFFVAE_DET_FUSED_ROPE") == "1"
     want_fused = os.environ.get("DIFFVAE_DET_FUSED_SWIGLU") == "1" or os.environ.get("DIFFVAE_DET_TP_MLP") == "1"
     assert block.attn.fused_qkv is want_qkv, f"fused_qkv={block.attn.fused_qkv} != {want_qkv}"
     assert block.attn.fused_rope is want_rope, f"fused_rope={block.attn.fused_rope} != {want_rope}"
     assert block.attn.colpar_qkv is False, "colpar_qkv needs a tp_axis, which stage 1 has none"
-    assert block.attn.flat_seq is False, "flat_seq is W-sharded only; stage 1 runs the gather backend"
     assert block.mlp.fused is want_fused, f"mlp.fused={block.mlp.fused} != {want_fused}"
     assert block.attn.tp == 1, f"stage 1 must be replicated; tp={block.attn.tp}"
 

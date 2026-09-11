@@ -108,7 +108,7 @@ from ...layers.embeddings import TimestepEmbedding, Timesteps
 from ...layers.linear import Linear
 from ...layers.module import Module, ModuleList, Parameter
 from ...layers.na3d import neighborhood_attention_3d as na3d_on_device
-from ...layers.na3d import neighborhood_attention_3d_op_sp_w_sharded, window_bounds
+from ...layers.na3d import window_bounds
 from ...layers.neighborhood_permute import (
     SITES_PER_BRICK,
     brick_count,
@@ -200,8 +200,8 @@ class DiffVAEStage5Config:
         and the attention executors take it as an argument rather than reading the environment
         themselves.
 
-        The knob is stage-5 scoped rather than the global ``DIFFVAE_GNA_STRIDE`` (which na3d reads
-        for EVERY stage) because the deterministic stages have smaller kernels: a stride legal for
+        The knob is stage-5 scoped rather than decoder-wide because the deterministic stages have
+        smaller kernels: a stride legal for
         stage 5's 11^3 window is rejected by a stage whose kernel is 7 ("neighborhood_stride t=8
         must not exceed the effective kernel t=7"). That check reports OP-order axes, so a width
         stride surfaces as `t`, which makes the message doubly confusing.
@@ -257,23 +257,15 @@ class NAKernel:
     bricked: bool = False
     #: Hoist the brick conversion to stage entry/exit instead of paying it per block.
     keep_bricked: bool = False
-    #: Wants the flat (B, NH, S, HD) sequence the projections already produce, rather than the 6-D
-    #: volume its to_seq would tear straight back down. Only honoured where the preconditions hold
-    #: (see ``_NeighborhoodAttention3D.forward``); the executor asserts them too.
-    prefers_flat_seq: bool = False
 
 
 _NA_KERNELS: dict[str, NAKernel] = {
     kernel.name: kernel
     for kernel in (
         NAKernel("gather"),
-        NAKernel("op"),
-        NAKernel("fused"),
-        NAKernel("op_sp"),
         NAKernel("bricked", bricked=True),
-        NAKernel("op_sp_w_sharded", w_sharded=True, prefers_flat_seq=True),
-        # No flat sequence: the bricked op re-bricks the sites itself, so the flat form buys it
-        # nothing and its 4-D branch has to reconstruct the volume shape anyway.
+        # The executors that drove the general SDPA op's neighborhood mode ("op", "fused", "op_sp",
+        # "op_sp_w_sharded") were deleted on 2026-09-11; the bricked executor is the W-sharded path.
         NAKernel("bricked_sp_w_sharded", w_sharded=True, bricked=True, keep_bricked=True),
     )
 }
@@ -921,7 +913,7 @@ class _NeighborhoodAttention3D(Module):
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         # Which NA3D executor runs: "gather"/"op" run the attention replicated (whole volume on
-        # every chip); "op_sp_w_sharded" and "bricked_sp_w_sharded" keep this chip's W-shard of the
+        # every chip); "bricked_sp_w_sharded" keeps this chip's W-shard of the
         # sequence through the whole attention (K/V reached internally), for full-stage spatial-W SP.
         # Resolved by the stage and handed down, so the three levels cannot pick different backends.
         self.kernel = resolve_na_kernel(na3d_backend)
@@ -1046,7 +1038,7 @@ class _NeighborhoodAttention3D(Module):
     ) -> ttnn.Tensor:
         """``y``: ``(1, batch, sites, dim)``. Returns the same shape.
 
-        ``grid`` is always the FULL ``(T, H, W)``. Under spatial-W SP (``op_sp_w_sharded``) ``y`` is
+        ``grid`` is always the FULL ``(T, H, W)``. Under spatial-W SP (``bricked_sp_w_sharded``) ``y`` is
         this chip's W-shard, so the local W extent is ``W/sp``; the shapes below use that while the
         attention is still told the full W (its executor gathers the missing columns). ``tables``
         must be W-sharded to match ``y`` in that mode (frame piece over this chip's H×(W/sp) rows).
@@ -1088,21 +1080,6 @@ class _NeighborhoodAttention3D(Module):
                 ttnn.deallocate(x)
             return out
 
-        def to_flat(x: ttnn.Tensor) -> ttnn.Tensor:
-            """Merge the frame axis into the rows, giving the (B, NH, S, HD) the flat path wants.
-
-            A view rather than a retile: rows per frame is ``H*(W/sp)``, a whole number of tiles, so
-            the tile grid only grows taller and no tile is re-cut.
-            """
-            return ttnn.reshape(x, (grid.batch, heads, sites_local, cfg.head_dim))
-
-        # The flat (B, NH, S, HD) sequence, where the kernel wants it AND the shape allows it. One
-        # head per chip is the hard part: above that a frame's rows are site-major with heads inner,
-        # so the flat form would want a real permute rather than a frame-axis merge -- which is only
-        # reachable under column-parallel qkv with heads == tp, i.e. TP_HEADS=1. Both preconditions
-        # are runtime facts about this call rather than properties of the kernel, so they stay here;
-        # the executor asserts heads_presharded for the flat path too.
-        flat_seq = self.kernel.prefers_flat_seq and self.tp_proj and heads == 1
         if brick is not None:
             # Already bricked: RoPE output is (1, 1, sites*heads, hd); fold back to (B, heads, sites, hd).
             # A RELABEL, not a copy -- the executor reads the same site-major buffer back out as
@@ -1120,7 +1097,7 @@ class _NeighborhoodAttention3D(Module):
 
             prep = to_bricked_seq
         else:
-            prep = to_flat if flat_seq else to_volume
+            prep = to_volume
 
         # Built and consumed one at a time. Holding q, k and v plus each one's untilized copy
         # and RoPE temporaries is what exhausts DRAM at full resolution -- which is also why the
@@ -1186,21 +1163,6 @@ class _NeighborhoodAttention3D(Module):
                     already_bricked=brick is not None,
                     brick=brick,
                     stride=cfg.resolved_gna_stride,
-                )
-            case "op_sp_w_sharded":
-                out = neighborhood_attention_3d_op_sp_w_sharded(
-                    q,
-                    k,
-                    v,
-                    dims=(grid.t, grid.h, grid.w),
-                    kernel_size=cfg.kernel_size,
-                    sp_axis=self.sp_axis,
-                    ccl_manager=self.ccl_manager,
-                    scale=1.0,
-                    tp_axis=self.tp_axis,
-                    heads_presharded=self.tp_proj,
-                    flat_seq=flat_seq,
-                    gna_stride=cfg.resolved_gna_stride,
                 )
             case _:
                 # Replicated: the whole volume on every chip. na3d's own dispatcher picks the
@@ -1757,10 +1719,7 @@ class DiffVAEStage5(Module):
             tables = self.rope_tables(grid)
             band_tables = tuple(tables.frames(band.pad_lo, band.pad_hi) for band in bands)
         log_dram(self.mesh_device, f"stage5 entry ({len(bands)} band(s))")
-        from ...layers.na3d import SP_W_PROF
-
         _BLOCK_PROF.clear()
-        SP_W_PROF.clear()
         for index, block in enumerate(self.diff_blocks):
             with stage_timer(self.mesh_device, f"  stage5 block {index}"):
                 x = block(x, context, modulation, grid, bands, band_tables, brick=brick)

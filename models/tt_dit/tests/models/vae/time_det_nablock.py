@@ -64,7 +64,7 @@ def time_stage(mesh, label, dim, kernel, dims, depth) -> tuple[float, int]:
         kernel,
         head_dim=HEAD_DIM,
         mesh_device=mesh,
-        na3d_backend="op_sp_w_sharded",
+        na3d_backend="bricked_sp_w_sharded",
         ccl_manager=ccl,
         sp_axis=SP_AXIS,
         tp_axis=TP_AXIS,

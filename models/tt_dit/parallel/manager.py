@@ -37,7 +37,6 @@ class CCLManager:
         # Ping-pong pool of persistent stats buffers for the fused distributed-norm op,
         # keyed by the caller's shape/config key. See get_fused_norm_stats_buffer.
         self._fused_norm_stats_buffer_cache = {}
-        self._shard_offset_cache = {}
 
         # Lazily-allocated ping-pong pool of semaphore lists for the strided all-gather-matmul op
         self._strided_ag_mm_sem_cache = {}
@@ -141,25 +140,6 @@ class CCLManager:
         self.np_fused_ping_pong_semaphores = None
         self.barrier_fused_semaphores = None
         self.np_region_progress_semaphores = None
-
-    def get_shard_offsets(self, sp, stride, mesh_axis):
-        """Per-device shard origin along ``mesh_axis``: chip at position ``p`` gets ``p * stride``.
-
-        Cached rather than uploaded per call because a ttnn trace refuses host-to-device writes
-        during capture, which put every attention backend that needs an origin out of reach of
-        tracing. The value depends only on the shard geometry, so one tensor serves every call.
-        """
-        key = (sp, stride, mesh_axis)
-        if key not in self._shard_offset_cache:
-            offsets = torch.arange(sp, dtype=torch.int32) * stride
-            self._shard_offset_cache[key] = from_torch(
-                offsets,
-                device=self.mesh_device,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_axes=[mesh_axis],
-            )
-        return self._shard_offset_cache[key]
 
     def get_dim(self, dim, shape):
         if dim < 0:

@@ -1615,12 +1615,10 @@ class LTXVideoVAEAdapter:
             # "gather" backend, so none of the sharded fast path could be exercised end to end.
             # These read the same environment the harness does and fall back to the previous
             # replicated construction when nothing is set, so an existing pipeline run is
-            # unchanged. DIFFVAE_STAGE5_BACKEND selects the stage-5 executor
-            # ("bricked_sp_w_sharded" for the neighborhood op, "op_sp_w_sharded" for the
-            # reference); DIFFVAE_STAGES_WSP=1 W-shards the deterministic stages too, on the
-            # executor DIFFVAE_STAGES_BACKEND names (one name, or per stage as "1:..,2:..,3:..";
-            # default the strided op_sp_w_sharded); DIFFVAE_TP_HEADS=1 adds TP-over-heads on the
-            # rows axis.
+            # unchanged. DIFFVAE_STAGE5_BACKEND selects the stage-5 executor ("bricked_sp_w_sharded",
+            # the default, or the replicated "gather"); DIFFVAE_STAGES_WSP=1 W-shards the
+            # deterministic stages too, on the executor DIFFVAE_STAGES_BACKEND names;
+            # DIFFVAE_TP_HEADS=1 adds TP-over-heads on the rows axis.
             from .diffvae_ltx import stages_backend_from_env
 
             stage5_backend = os.environ.get("DIFFVAE_STAGE5_BACKEND")
@@ -1632,7 +1630,7 @@ class LTXVideoVAEAdapter:
                 diffvae_config(checkpoint_path),
                 mesh_device=mesh_device,
                 ccl_manager=vae_ccl_manager,
-                stage5_na3d_backend=(stage5_backend or "op_sp_w_sharded") if sharded else None,
+                stage5_na3d_backend=(stage5_backend or "bricked_sp_w_sharded") if sharded else None,
                 stage5_sp_axis=1 if sharded else None,
                 stage5_tp_axis=tp_axis if sharded else None,
                 stages_na3d_backend=stages_backend,
@@ -1642,7 +1640,7 @@ class LTXVideoVAEAdapter:
             if sharded:
                 logger.info(
                     f"VAE config: DiffVAE diffusion decoder, W-sharded "
-                    f"stage5={stage5_backend or 'op_sp_w_sharded'} "
+                    f"stage5={stage5_backend or 'bricked_sp_w_sharded'} "
                     f"det_stages={f'W-sharded on {stages_backend}' if stages_wsp else 'replicated'} "
                     f"tp_heads={'on' if tp_axis is not None else 'off'}"
                 )

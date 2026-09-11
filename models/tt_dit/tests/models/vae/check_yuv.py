@@ -29,10 +29,10 @@ def main() -> None:
             config,
             mesh_device=mesh,
             ccl_manager=ccl,
-            stage5_na3d_backend="op_sp_w_sharded",
+            stage5_na3d_backend="bricked_sp_w_sharded",
             stage5_sp_axis=1,
             stage5_tp_axis=0,
-            stages_na3d_backend="op_sp_w_sharded",
+            stages_na3d_backend="bricked_sp_w_sharded",
             stages_sp_axis=1,
             stages_tp_axis=0,
         )

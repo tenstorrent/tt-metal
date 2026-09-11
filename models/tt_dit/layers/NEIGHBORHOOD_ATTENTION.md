@@ -514,10 +514,11 @@ The op test's parametrisation is where the coverage lives:
 
 
 
-### `models/tt_dit/layers/na3d.py` (~1530 lines)
+### `models/tt_dit/layers/na3d.py` (~680 lines)
 
-The hub. Contains the torch reference, the planner, the sharding descriptors, and **six**
-device executors selected by string.
+The torch reference, the planner, the sharding descriptors, and the dispatcher for the two device
+executors that remain: the replicated `gather` backend (stage 1) and the unsharded `bricked` one.
+The six executors that drove the general SDPA op's neighborhood mode were deleted on 2026-09-11.
 
 
 | symbol                                                          | is                                                            |
@@ -526,7 +527,6 @@ device executors selected by string.
 | `plan_na3d`, `NA3DPlan`, `TileGroup`                            | group queries into tiles, build masks                         |
 | `na3d_torch`                                                    | torch reference                                               |
 | `NA3DShard`, `NA3DGroup`, `NA3DDevicePlan`, `build_device_plan` | multi-device query sharding                                   |
-| `_pick_block(t_full, h_full, w_local, kmax, gna)`               | **the block/stride chooser**                                  |
 | `neighborhood_attention_3d(...)`                                | the dispatcher; `backend=` selects one of the below           |
 
 
@@ -536,80 +536,7 @@ Executors, in rough order of specialisation:
 | backend                                | function                                                                          |
 | -------------------------------------- | --------------------------------------------------------------------------------- |
 | `"gather"`                             | the grouped gather + dense masked attention (default)                             |
-| `"op"`                                 | `neighborhood_attention_3d_op` — mask synthesised inside SDPA, no gather          |
-| `"fused"`                              | `neighborhood_attention_3d_op_fused`                                              |
-| `"op_sp"`                              | `..._op_sp` — attention split over T                                              |
-| `"op_sp_w_sharded"`                    | `..._op_sp_w_sharded` — **the fast path**; W-sharded, fused kernel, block permute |
 | `"bricked"` / `"bricked_sp_w_sharded"` | **ours**                                                                          |
-
-
-`_pick_block` **is worth reading in full.** It searches `(bt,bh,bw)` where each divides its axis,
-`vol` is a multiple of 32 in `[128, 512]`, and with `gna=True` each dim is capped at `kmax`. The
-objective inverts between modes:
-
-```python
-key = (-vol, box) if gna else (box, -vol)
-```
-
-With GNA the box is the kernel on every axis regardless of block shape, so volume — which sets
-the chunk count — becomes the whole objective. Its docstring carries a **measured quality
-warning**:
-
-> *"This objective is purely a speed objective and it is not free… block (11,4,8) vs stride-1
-> attention: PCC 0.51 on iid Q/K/V, 0.72 at a spatial correlation length of 8 tokens… A network
-> trained at stride 1 cannot absorb the picked block — constrain the stride, or leave GNA off,
-> unless retraining."*
-
-**Axis order.** `op_stride = (sw, sh, st) if t_inner else (sw, st, sh)`. The kernel works in
-`(W,H,T)` order. This is why a `TT_FATAL` about `stride t=8` can actually be about *width*.
-
-### `models/tt_dit/models/vae/diffvae_ltx_stage5.py` (~1600 lines)
-
-Stage 5: 8 diffusion NA blocks on the largest grid, where almost all decode compute lives.
-
-
-| symbol                                              | is                                                                |
-| --------------------------------------------------- | ----------------------------------------------------------------- |
-| `Grid`                                              | `(batch, t, h, w)` — always the **full** grid, even when sharded  |
-| `DiffVAEStage5Config`                               | includes `kernel_size` and `gna_stride`                           |
-| `_Band`, `_bands(t, frames, kernel)`                | frame banding for peak memory; halo from `window_bounds`          |
-| `_RopeTables`, `_build_rope_tables`, `_apply_rope`  | RoPE, stored **factored**                                         |
-| `_NeighborhoodAttention3D.forward(y, grid, tables)` | the per-block attention; one `match` on `self.kernel.name`        |
-| `DiffusionNABlock`                                  | context inject → AdaLN residual attention → AdaLN residual SwiGLU |
-| `DiffVAEStage5.forward_diff_step(...)`              | the 8-block loop, per band                                        |
-| `NAKernel`, `_NA_KERNELS`, `resolve_na_kernel()`    | the backend record: W-shard, bricking, flat sequence              |
-
-
-**The RoPE factorisation is a real constraint on any future work.** A row of the fused table is
-`[T-lanes | H-lanes | W-lanes]`, so the H/W lanes repeat every frame and the T lanes repeat at
-every site within a frame. Storing the two pieces rather than their combination keeps the table
-off the critical memory path: the volume form is **9.7 GB per table** at 6 s 1920×1088.
-`_apply_rope` evaluates `x*cos` as `x*frame.cos + x*time.cos`.
-
-Consequence: **a brick two deep in time mixes two frames into one tile row and destroys that
-factorisation.** Any hoist of the brick permute out of the per-block loop needs a *time-flat*
-brick like `(1,4,8)`.
-
-`_wshard_context` reshards the replicated context to W-sharded. Its own docstring notes the
-replicated form is 9.7 GiB at 6 s — that allocation is what OOMs a 145-frame 1080p decode when
-banding is off.
-
-### `models/tt_dit/models/vae/diffvae_ltx.py` (~1340 lines)
-
-The decoder around stage 5.
-
-
-| symbol                       | is                                                               |
-| ---------------------------- | ---------------------------------------------------------------- |
-| `decoder_config(path)`       | reads shapes from the checkpoint                                 |
-| `rope_tables`, `apply_rope`  | the deterministic stages' RoPE                                   |
-| `NeighborhoodAttention`      | the det-stage attention block                                    |
-| `NABlock`, `SwiGLU`          | det-stage transformer block                                      |
-| `LinearPixelShuffleUpsample` | between stages; slabs its projection to bound the widened copy   |
-| `DeterministicStages`        | stages 1–4 plus `conv_in` (latent denormalisation folded in)     |
-| `DiffVAEDecoder`             | the whole decoder; `stages_na3d_backend` / `stage5_na3d_backend` |
-
-
 
 
 ### `models/tt_dit/layers/block_permute.py` -- RETIRED 2026-09-10
@@ -617,8 +544,8 @@ The decoder around stage 5.
 Was their equivalent of our bricking (reorder tokens so a block is contiguous). Deleted along
 with `na3d.py::_pick_block`, `DIFFVAE_BLOCK` / `DIFFVAE_GNA` and the SDPA op's `neighborhood_block`
 argument: at the production shard widths no legal block ever existed, so the reference executor
-always ran its strided mode. See `PLAN_retire_block_permute.md`. `DIFFVAE_GNA_STRIDE` (explicit
-stride) survives.
+always ran its strided mode. See `PLAN_retire_block_permute.md`. The strided executor itself
+followed on 2026-09-11.
 
 ### `models/tt_dit/utils/decode_tree.py` (~275 lines)
 
@@ -658,18 +585,14 @@ stride larger than its kernel, reported in **op-order axes**.
 
 | variable                    | does                                                                                          |
 | --------------------------- | --------------------------------------------------------------------------------------------- |
-| `DIFFVAE_STAGE5_BACKEND`    | selects the stage-5 executor. `bricked_sp_w_sharded` is ours; unset gives the reference `op_sp_w_sharded` |
+| `DIFFVAE_STAGE5_BACKEND`    | selects the stage-5 executor: `bricked_sp_w_sharded` (default) or the replicated `gather` |
 | `DIFFVAE_DET_NA3D_BACKEND`  | same choice for the deterministic stages 1–4 only — **separate knob**, does not reach stage 5  |
-| `DIFFVAE_STAGES_BACKEND`    | the W-sharded executor for deterministic stages 1–3 when `DIFFVAE_STAGES_WSP=1`: `bricked_sp_w_sharded` (default since 2026-09-11, faster on every stage) or the strided reference `op_sp_w_sharded`; per stage as `1:..,2:..,3:..`. Read by the pipeline adapter and `test_decode_timing.py` |
+| `DIFFVAE_STAGES_BACKEND`    | the executor for the W-sharded deterministic stages 1–3 when `DIFFVAE_STAGES_WSP=1`; `bricked_sp_w_sharded` (default) is the only W-sharded one left. Read by the pipeline adapter and `test_decode_timing.py` |
 | `DIFFVAE_S5_GNA_STRIDE`     | stage-5 stride, physical `(t,h,w)`; read only by `DiffVAEStage5Config.resolved_gna_stride`, which feeds every stage-5 backend. An explicit `gna_stride=` on the config wins over it. |
-| `DIFFVAE_GNA_STRIDE`        | global stride; read by `na3d` for every stage                                                 |
 | `DIFFVAE_NA_WINDOW`         | overrides the architectural context window                                                    |
 | `DIFFVAE_NA_BRICK`          | overrides the derived brick: `bt,bh,bw` for every volume, or keyed by full volume `T,H,W:bt,bh,bw;...` so one stage can be forced without moving the others |
 | `DIFFVAE_NA_KV_CHUNK_TILES` | tiles per flash step; 8 = 256 tokens                                                          |
 
-Note that `DIFFVAE_GNA` (theirs, below) and `DIFFVAE_S5_GNA_STRIDE` (ours) are different knobs
-reaching different executors, so one command line can put the two backends at different strides.
-To put the **reference** at stride 1 for a like-for-like comparison, use `DIFFVAE_GNA=0`.
 
 ### Ours — diagnostics
 
@@ -692,15 +615,11 @@ never render a shipped frame.
 
 
 
-### Theirs
+### Shared decode knobs
 
 
 | variable                                     | does                                                     |
 | -------------------------------------------- | -------------------------------------------------------- |
-| `DIFFVAE_GNA=1`                              | take the stride from the picked block (`b == s`)         |
-| `DIFFVAE_BLOCK=1`                            | 3D block-permuted Q                                      |
-| `DIFFVAE_SP_FUSED=1`                         | the fused kernel instead of the streamed op              |
-| `DIFFVAE_SP_TINNER`                          | make T the innermost flatten axis (default 1)            |
 | `DIFFVAE_TP_PROJ`, `DIFFVAE_TP_HEADS`        | tensor-parallel over heads                               |
 | `DIFFVAE_STAGES_WSP=1`                       | W-shard the deterministic stages too                     |
 | `DIFFVAE_SLAB_FRAMES`                        | frame banding. **Off by default**; required at 6 s 1080p |
@@ -713,7 +632,7 @@ never render a shipped frame.
 
 * `neighbor_pad_async` deadlocks on `Topology.Ring`. `_halo_exchange` pins that one call to Linear
   while everything else still runs ring; its docstring records what was ruled out (channel width,
-  link count, persistent buffer). The reference never hits this — it uses `all_gather`.
+  link count, persistent buffer).
 * Exact NA at 6 s 1080p does not fit co-resident with the DiT. Either band harder
   (`DIFFVAE_SLAB_FRAMES=48`) or fall back to exclusive residency (`DIFFVAE_EXCLUSIVE=1`). The
   decode-only timing test runs fine at the default banding because nothing else is resident.
@@ -737,7 +656,6 @@ latent
             for block in 8 x DiffusionNABlock:
               context-inject -> AdaLN -> attention -> residual
                                   |
-                                  ├─ "op_sp_w_sharded"     -> na3d.py, fused, block-permuted
                                   └─ "bricked_sp_w_sharded" -> neighborhood_attention.py
                                        ├─ neighbor_pad          (halo exchange)
                                        ├─ to_bricked            (natural -> bricked)
@@ -759,5 +677,4 @@ latent
 3. `neighborhood_reference.py` — the same rules in torch, executable.
 4. `test_neighborhood_sdpa.py` — what correct means, and which shapes break it.
 5. `neighborhood_reader.cpp` — where geometry becomes memory traffic.
-6. `na3d.py::_pick_block` — the reference's cost model, and its quality warning.
-7. `diffvae_ltx_stage5.py::_build_rope_tables` — the constraint that shapes everything else.
+6. `diffvae_ltx_stage5.py::_build_rope_tables` — the constraint that shapes everything else.

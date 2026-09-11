@@ -1,12 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""TEMP profile + correctness harness (uncommitted): neighborhood attention, op vs gather.
-
-Feeds the SAME q/k/v to both device backends and to the na3d_torch host reference. Asserts each
-matches the reference (correctness), then times the warmed-up executor (perf). Single chip,
-replicated — isolates the attention kernel/algorithm difference, which is where the ~1000× lives.
-Add "fused" as a third backend value later.
+"""Profile + correctness harness: the replicated gather backend against the na3d_torch host reference,
+plus a probe of the general SDPA op's windowed_q_token_offset. Single chip, replicated.
 """
 
 from __future__ import annotations
@@ -80,34 +76,7 @@ def test_fused_q_offset(*, mesh_device, grid, kernel):
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
-@pytest.mark.parametrize(
-    "grid, kernel, heads, head_dim",
-    [
-        ((4, 4, 4), (3, 3, 3), 1, 64),
-        ((6, 8, 8), (3, 5, 5), 2, 64),
-        ((13, 68, 120), (11, 11, 11), 4, 64),
-    ],
-    ids=["tiny", "mid", "small"],
-)
-def test_na3d_fused(*, mesh_device, grid, kernel, heads, head_dim):
-    """Fused-gather NA3D backend, standalone correctness (B2.2 bring-up). Feeds the same q/k/v to the
-    fused backend and the na3d_torch reference; asserts PCC 0.999. Tiny grids iterate fast on device."""
-    T, H, W = grid
-    torch.manual_seed(0)
-    q, k, v = (torch.randn(1, T, H, W, heads, head_dim, dtype=torch.float32) for _ in range(3))
-    ref = na3d_torch(q, k, v, kernel, scale=1.0).reshape(1, T, H, W, heads * head_dim)
-
-    q_tt, k_tt, v_tt = (
-        ttnn.from_torch(x, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) for x in (q, k, v)
-    )
-    out = neighborhood_attention_3d(q_tt, k_tt, v_tt, kernel_size=kernel, scale=1.0, backend="fused")
-    assert tuple(out.shape) == tuple(ref.shape), f"{tuple(out.shape)} != {tuple(ref.shape)}"
-    assert_quality(ref, ttnn.to_torch(out).float(), pcc=0.999)
-    ttnn.deallocate(out)
-
-
-@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
-@pytest.mark.parametrize("backend", ["op", "gather", "fused"], ids=["op", "gather", "fused"])
+@pytest.mark.parametrize("backend", ["gather"], ids=["gather"])
 @pytest.mark.parametrize("grid", [(13, 68, 120), (13, 136, 240)], ids=["small", "big4x"])
 def test_na3d_op_vs_gather(*, mesh_device, backend, grid):
     T, H, W = grid

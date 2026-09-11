@@ -32,14 +32,14 @@ def _topology():
     return ttnn.Topology.Linear
 
 
-# (deterministic-stages backend, stage-5 backend). "gather+fused5" is the interesting mixed config:
-# fast gather where it fits (the smaller early stages) and the memory-light fused only for stage 5,
-# the stage that OOMs gather at 1080p. Set DIFFVAE_STAGE_TIMING=1 for the per-stage breakdown.
+# (deterministic-stages backend, stage-5 backend), single chip, replicated. "gather+bricked5" runs
+# the gather backend where it fits (the smaller early stages) and the unsharded bricked executor for
+# stage 5. Set DIFFVAE_STAGE_TIMING=1 for the per-stage breakdown.
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize(
     "backends",
-    [("gather", "gather"), ("fused", "fused"), ("gather", "fused")],
-    ids=["gather", "fused", "gather+fused5"],
+    [("gather", "gather"), ("gather", "bricked")],
+    ids=["gather", "gather+bricked5"],
 )
 @pytest.mark.parametrize("latent_hw", [(16, 16), (34, 60)], ids=["s16", "s34x60"])
 def test_decode_timing(*, mesh_device, backends, latent_hw):
@@ -66,8 +66,7 @@ def test_decode_timing(*, mesh_device, backends, latent_hw):
     print(f"\n[decode {tag}] latent(1,{config['in_channels']},4,{lh},{lw}) -> {px_shape}: {dt * 1000:8.0f} ms\n")
 
 
-# Stage-5 spatial-W SP across the mesh: shards Q/output over W (sp-way). DIFFVAE_SP_FUSED=1 runs the fast
-# fused kernel per shard instead of the streamed op. Times op-sharded vs fused-sharded on the same mesh.
+# Stage-5 spatial-W SP across the mesh: shards Q/output over W (sp-way) on the bricked executor.
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
 )
@@ -94,11 +93,11 @@ def test_decode_wsp_timing(*, mesh_device, latent_hw, decode_tree):
     # DIFFVAE_STAGES_WSP=1 also W-shards the deterministic stages (stage 0 stays replicated), so the
     # whole decode runs 1/sp instead of only stage 5 -- reclaiming the replicated det-stage time.
     stages_wsp = os.environ.get("DIFFVAE_STAGES_WSP") == "1"
-    # DIFFVAE_STAGE5_BACKEND selects the stage-5 executor so the same harness times ours against
-    # theirs. "bricked" does not W-shard (its op takes the shard origin at compile time, so it is
-    # uniform across the mesh), which means stage 5 runs the FULL volume on every chip rather than
-    # 1/sp of it -- the comparison is honest about speed but not about memory.
-    stage5_b = os.environ.get("DIFFVAE_STAGE5_BACKEND", "op_sp_w_sharded")
+    # DIFFVAE_STAGE5_BACKEND selects the stage-5 executor. "bricked" does not W-shard (its op takes
+    # the shard origin at compile time, so it is uniform across the mesh), which means stage 5 runs
+    # the FULL volume on every chip rather than 1/sp of it -- the comparison is honest about speed
+    # but not about memory.
+    stage5_b = os.environ.get("DIFFVAE_STAGE5_BACKEND", "bricked_sp_w_sharded")
     # DIFFVAE_STAGES_SP_AXIS / DIFFVAE_STAGES_TP_AXIS move the deterministic stages' W-shard and
     # head-TP onto the other mesh axes (0 = the size-4 rows, 1 = the size-8 cols) without touching
     # stage 5. Prices PLAN_retire_block_permute.md D1 option 1: W over the size-4 axis gives a local
@@ -113,8 +112,7 @@ def test_decode_wsp_timing(*, mesh_device, latent_hw, decode_tree):
         stage5_na3d_backend=stage5_b,
         stage5_sp_axis=1,
         stage5_tp_axis=tp_axis,
-        # DIFFVAE_STAGES_BACKEND picks the deterministic stages' W-sharded executor (one name or
-        # per stage "1:..,2:..,3:.."); default is the strided op_sp_w_sharded.
+        # DIFFVAE_STAGES_BACKEND picks the deterministic stages' W-sharded executor.
         stages_na3d_backend=stages_backend_from_env() if stages_wsp else None,
         stages_sp_axis=stages_sp_axis if stages_wsp else None,
         stages_tp_axis=stages_tp_axis if stages_wsp else None,  # 2-D SP x TP for the det stages too
@@ -128,9 +126,7 @@ def test_decode_wsp_timing(*, mesh_device, latent_hw, decode_tree):
     px = dec.decode(latent, seed=0)
     ttnn.synchronize_device(mesh_device)
     dt = time.perf_counter() - t0
-    backend = (
-        stage5_b if stage5_b != "op_sp_w_sharded" else ("fused" if os.environ.get("DIFFVAE_SP_FUSED") == "1" else "op")
-    )
+    backend = stage5_b
     tp = "+TP4" if tp_axis is not None else ""
     det = f"+detSP({stages_backend_from_env()},sp_axis={stages_sp_axis},tp_axis={stages_tp_axis})" if stages_wsp else ""
     print(
@@ -180,8 +176,8 @@ def _pcc(a, b):
 # Individual PCC + runtime at 1080p 25-frame, for the no-TP sharded path and the TP+col-qkv sharded path,
 # each measured against the GATHER-mesh decode as the reference (the dense-masked-attention NA3D backend --
 # the highest-fidelity path that fits at 1080p; single-chip replicated OOMs at the tail). All three run on
-# the same 4x8 mesh. The two sharded configs share the full lever stack (fused W-SP, det-SP, q_chunk,
-# T-inner) and differ only in TP (stage-5 heads + column-parallel qkv, and TP-heads on the det stages).
+# the same 4x8 mesh. The two sharded configs share the bricked W-SP stack and differ only in TP
+# (stage-5 heads + column-parallel qkv, and TP-heads on the det stages).
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
 )
@@ -207,16 +203,15 @@ def test_decode_1080p_tp_pcc(*, mesh_device):
         return px.float(), (time.perf_counter() - t0) * 1000.0
 
     def sharded(tp_axis, tp_proj):
-        os.environ["DIFFVAE_SP_FUSED"] = "1"
         os.environ["DIFFVAE_TP_PROJ"] = "1" if tp_proj else "0"
         dec = DiffVAEDecoder(
             config,
             mesh_device=mesh_device,
             ccl_manager=ccl,
-            stage5_na3d_backend="op_sp_w_sharded",
+            stage5_na3d_backend="bricked_sp_w_sharded",
             stage5_sp_axis=1,
             stage5_tp_axis=tp_axis,
-            stages_na3d_backend="op_sp_w_sharded",
+            stages_na3d_backend="bricked_sp_w_sharded",
             stages_sp_axis=1,
             stages_tp_axis=tp_axis,
         )

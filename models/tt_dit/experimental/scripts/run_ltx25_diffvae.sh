@@ -93,11 +93,8 @@ export OUTPUT_PATH="${OUTPUT_PATH:-$HOME/ltx25_diffvae_1080p.mp4}"
 # 73 OOMs on the W-SP path: band 0 spans 78 frames -> the full-W K/V gather is 651.8 MB/bank against
 # a 582.2 MB largest free block. 48 -> band 53 -> 442.9 MB/bank. (~8.36 MB/bank per band frame.)
 export DIFFVAE_SLAB_FRAMES=${DIFFVAE_SLAB_FRAMES:-78} # changing to 48 fixes the issue!!
-export DIFFVAE_SP_FUSED=${DIFFVAE_SP_FUSED:-1}
 export DIFFVAE_STAGES_WSP=${DIFFVAE_STAGES_WSP:-1}
-export DIFFVAE_STAGES_BACKEND=${DIFFVAE_STAGES_BACKEND:-bricked_sp_w_sharded}  # or the strided reference op_sp_w_sharded; per stage "1:..,2:..,3:.."
-export DIFFVAE_SDPA_KCHUNK=${DIFFVAE_SDPA_KCHUNK:-256}
-export DIFFVAE_PAD_GATHER=${DIFFVAE_PAD_GATHER:-1}
+export DIFFVAE_STAGES_BACKEND=${DIFFVAE_STAGES_BACKEND:-bricked_sp_w_sharded}
 export DIFFVAE_DEVICE_NOISE=${DIFFVAE_DEVICE_NOISE:-1}
 export DIFFVAE_DEVICE_PREPROC=${DIFFVAE_DEVICE_PREPROC:-1}
 export DIFFVAE_DEVICE_UNPATCHIFY=${DIFFVAE_DEVICE_UNPATCHIFY:-1}
@@ -108,7 +105,6 @@ export DIFFVAE_DET_COLPAR_QKV=${DIFFVAE_DET_COLPAR_QKV:-1}
 export DIFFVAE_DET_FUSED_QKV=${DIFFVAE_DET_FUSED_QKV:-1}
 export DIFFVAE_DET_FUSED_ROPE=${DIFFVAE_DET_FUSED_ROPE:-1}
 export DIFFVAE_DET_FUSED_SWIGLU=${DIFFVAE_DET_FUSED_SWIGLU:-1}
-export DIFFVAE_DET_FLAT_SEQ=${DIFFVAE_DET_FLAT_SEQ:-1}
 export DIFFVAE_STAGE_TIMING=${DIFFVAE_STAGE_TIMING:-1}
 # Live progress: one "[stage HH:MM:SS] > label" line to stdout as each span opens and a "<" line
 # with its ms as it closes. Otherwise a decode is silent from the stage-5 plan line to the tree at

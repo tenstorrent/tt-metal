@@ -64,7 +64,7 @@ def main() -> None:
             mesh_device=mesh,
             dtype=ttnn.bfloat16,
             ccl_manager=ccl,
-            na3d_backend="op_sp_w_sharded",
+            na3d_backend="bricked_sp_w_sharded",
             sp_axis=SP_AXIS,
             tp_axis=TP_AXIS,
         )
@@ -134,11 +134,10 @@ def main() -> None:
         # The module's own section counters. forward_diff_step prints these; a single-block harness
         # has to read them itself. Values accumulate over every call, so divide by the calls made.
         if os.environ.get("DIFFVAE_STAGE_TIMING", "") not in ("", "0"):
-            from models.tt_dit.layers.na3d import SP_W_PROF
             from models.tt_dit.models.vae.diffvae_ltx_stage5 import _BLOCK_PROF
 
             calls = ITERS + 2
-            merged = {**_BLOCK_PROF, **SP_W_PROF}
+            merged = dict(_BLOCK_PROF)
             total = sum(merged.values()) or 1.0
             print(f"{'section':44s} {'ms/block':>10} {'share':>7}")
             for key, ms in sorted(merged.items(), key=lambda kv: -kv[1]):

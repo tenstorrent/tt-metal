@@ -136,110 +136,12 @@ def test_band_halo_covers_every_window(t: int, frames: int):
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
 )
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
-@pytest.mark.parametrize("sp_axis", [0, 1], ids=["sp_rows", "sp_cols"])
-def test_decode_stage5_wsp_matches_replicated(*, mesh_device, sp_axis):
-    """Full decode with stage 5 run under spatial-W SP matches the replicated decode, on shipped
-    weights. The deterministic stages are identical (replicated) in both; only stage 5 differs --
-    its sequence, context and RoPE are W-sharded and the output gathered back -- so this is the
-    end-to-end check that the full-stage-SP forward plumbing (reshard, sharded upload, gather)
-    reassembles to the same pixels. Same latent and seed, so both draw the same x0 noise.
-    """
-
-    if not CHECKPOINT.exists():
-        pytest.skip(f"missing {CHECKPOINT}")
-    config = decoder_config(CHECKPOINT)
-    torch.manual_seed(0)
-    latent = torch.randn(1, config["in_channels"], 2, 8, 8)
-
-    replicated = DiffVAEDecoder(config, mesh_device=mesh_device)
-    replicated.load_checkpoint(CHECKPOINT)
-    pixels_rep = replicated.decode(latent, seed=0)
-
-    ccl_manager = _gate_ccl(mesh_device)
-    sharded = DiffVAEDecoder(
-        config,
-        mesh_device=mesh_device,
-        ccl_manager=ccl_manager,
-        stage5_na3d_backend="op_sp_w_sharded",
-        stage5_sp_axis=sp_axis,
-    )
-    sharded.load_checkpoint(CHECKPOINT)
-    pixels_sp = sharded.decode(latent, seed=0)
-
-    assert tuple(pixels_sp.shape) == tuple(pixels_rep.shape), f"{tuple(pixels_sp.shape)} != {tuple(pixels_rep.shape)}"
-    assert_quality(pixels_rep, pixels_sp, pcc=0.999)
-
-
-@pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
-)
-@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
-@pytest.mark.parametrize("sp_axis", [0, 1], ids=["sp_rows", "sp_cols"])
-def test_decode_full_wsp_matches_replicated(*, mesh_device, sp_axis):
-    """Full decode with BOTH the deterministic stages and stage 5 W-sharded matches the replicated
-    decode, on shipped weights. The det stages shard from stage 1 (stage 0 replicated) and hand the
-    context to stage 5 W-sharded directly (same sp_axis) -- no gather-to-replicated round trip. Same
-    latent and seed, so both draw the same x0 noise. End-to-end check of det-stage SP + the handoff."""
-
-    if not CHECKPOINT.exists():
-        pytest.skip(f"missing {CHECKPOINT}")
-    config = decoder_config(CHECKPOINT)
-    torch.manual_seed(0)
-    latent = torch.randn(1, config["in_channels"], 2, 8, 8)
-
-    replicated = DiffVAEDecoder(config, mesh_device=mesh_device)
-    replicated.load_checkpoint(CHECKPOINT)
-    pixels_rep = replicated.decode(latent, seed=0)
-
-    ccl_manager = _gate_ccl(mesh_device)
-    # DIFFVAE_TP_HEADS=1 also enables TP-over-heads on the orthogonal (size-4) axis -- only valid when
-    # W shards the size-8 axis (sp_axis=1), since num_heads=4 must divide the TP axis size.
-    tp_axis = 0 if (os.environ.get("DIFFVAE_TP_HEADS") == "1" and sp_axis == 1) else None
-    sharded = DiffVAEDecoder(
-        config,
-        mesh_device=mesh_device,
-        ccl_manager=ccl_manager,
-        stage5_na3d_backend="op_sp_w_sharded",
-        stage5_sp_axis=sp_axis,
-        stage5_tp_axis=tp_axis,
-        stages_na3d_backend="op_sp_w_sharded",
-        stages_sp_axis=sp_axis,
-        stages_tp_axis=tp_axis,
-    )
-    sharded.load_checkpoint(CHECKPOINT)
-    pixels_sp = sharded.decode(latent, seed=0)
-
-    assert tuple(pixels_sp.shape) == tuple(pixels_rep.shape), f"{tuple(pixels_sp.shape)} != {tuple(pixels_rep.shape)}"
-    assert_quality(pixels_rep, pixels_sp, pcc=0.999)
-
-
-@pytest.mark.diffvae_gate
-def test_decode_matches_upstream(*, decoder):
-    """Latent to pixels through the whole decoder, against upstream's own pixels."""
-    latent, noise, expected = _captured("input.latent", "stage5.noise", "output.pixels")
-
-    pixels = decoder.decode(latent, noise=noise)
-
-    assert tuple(pixels.shape) == tuple(expected.shape), f"{tuple(pixels.shape)} != {tuple(expected.shape)}"
-    if out := os.environ.get("DIFFVAE_DUMP_PIXELS"):
-        # A PCC number says the port is right; it does not say the video looks right. Keeping
-        # the device pixels lets them be viewed against the reference and the conv decoder.
-        Path(out).parent.mkdir(parents=True, exist_ok=True)
-        torch.save(pixels.cpu(), out)
-        print(f"\nwrote device pixels {tuple(pixels.shape)} to {out}")
-    assert_quality(expected, pixels, pcc=0.99)
-
-
-@pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
-)
-@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
 @pytest.mark.parametrize("tp", [False, True], ids=["tp_off", "tp4"])
 def test_decode_full_bricked_matches_replicated(*, mesh_device, tp):
     """Full decode with the deterministic stages AND stage 5 on the BRICKED executor matches the
     replicated decode, on shipped weights.
 
-    The companion of test_decode_full_wsp_matches_replicated for ``bricked_sp_w_sharded``: stages
+    Both deterministic stages and stage 5 on ``bricked_sp_w_sharded``: stages
     1-3 shard over W from stage 1 on, run the halo exchange + neighborhood op with a width-1 brick
     where the shard is 15 wide, hand the W-band straight to stage 5 (same sp_axis), and stage 5 runs
     its own bricked path. ``tp4`` adds TP over heads on the size-4 axis, which is production and puts
@@ -310,8 +212,7 @@ def test_decode_stage5_bricked_matches_replicated(*, mesh_device, sp_axis, laten
     """Full decode with stage 5 on the BRICKED backend matches the replicated decode.
 
     The end-to-end companion to test_stage5_parity_w_sharded_bricked. Same shape as
-    test_decode_stage5_wsp_matches_replicated -- deterministic stages replicated and identical in
-    both arms, only stage 5 differs -- but exercising ``bricked_sp_w_sharded``: halo exchange
+    the deterministic stages replicated and identical in both arms, only stage 5 differs, exercising ``bricked_sp_w_sharded``: halo exchange
     instead of a full-W all-gather, the bricked layout, and the in-kernel neighborhood gather.
 
     sp_axis is fixed to 1. The bricked path halo-exchanges whole bricks and needs a local width of

@@ -509,8 +509,10 @@ should not.
 
 ## Out of scope
 - Stage 1 (index 0) stays on the replicated `gather` backend.
-- `neighborhood_attention_3d_op_sp_w_sharded` itself is not deleted; without `DIFFVAE_BLOCK` it
-  is the same op in strided order and remains a fallback/reference executor.
+- (Superseded 2026-09-11.) `neighborhood_attention_3d_op_sp_w_sharded` and every other executor of
+  the general SDPA op's neighborhood mode (`op`, `fused`, `op_sp`, `op_sp_w`, `op_sp_sharded`) were
+  deleted once stages 2-5 all ran the bricked executor; `na3d.py` keeps the gather backend, the
+  planner, `na3d_torch` and `window_bounds`. The general op's C++ neighborhood mode itself stays.
 - The `DIFFVAE_S5_KERNEL` window-override reader is not in the tree (only in `git stash@{0}`);
   unrelated to this plan but will bite any window experiment run alongside it.
 
