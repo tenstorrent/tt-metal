@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 """Japanese STT on tt-metal: Whisper large-v3, language=ja, one N150 chip.
 
 See japanese_demo_readme.md in this folder.

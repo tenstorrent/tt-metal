@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -55,6 +56,16 @@ _OP_SUPPORT_COUNT = int(os.environ.get("QWEN3_TTS_PERF_OP_SUPPORT_COUNT", "2000"
 # Left opt-in because the number is per-SKU (N150 has no collectives, N300 TP=2
 # splits the heads) and this folder is a measurement tool, not a CI golden.
 _BUDGET_ENV = "QWEN3_TTS_PERF_BUDGET_US"
+
+# Argv hygiene for the three report subprocesses below. Each is invoked with an argv
+# list and never through a shell, but the window name, the block and signpost names
+# and the free-text report label all originate outside this file (env vars, caller
+# strings) and reach both an argv and a filesystem path, so each is clamped at the
+# call that uses it. `_SAFE_NAME` is also what keeps a `..` or a `/` out of the report
+# paths built from a window or block name; `_UNPRINTABLE` only strips control
+# characters from the label, so every label this folder passes is unchanged.
+_SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]")
+_UNPRINTABLE = re.compile(r"[^\x20-\x7e]")
 
 
 # ── the profiled windows ─────────────────────────────────────────────────────
@@ -222,32 +233,53 @@ def _latest_ops_csv(profiler_dir: Path) -> Path:
 
 
 def _emit_ops_list(out: Path, csv: Path, name: str, label: str, start: str, stop: str) -> dict:
-    """Run the per-op report over one signpost window; returns its totals."""
-    suffix = "" if name == "" else f"_{name}"
-    totals_path = out / f"totals{suffix}.json"
+    """Run the per-op report over one signpost window; returns its totals.
+
+    Every argv element is clamped or checked in this function rather than through a
+    shared helper, so the check sits at the call it protects: the block and signpost
+    names to `_SAFE_NAME`, the free-text label to printable ASCII, and both paths to
+    somewhere under `reports/` — a `..` in a block name would otherwise write the
+    report outside the perf tree. Lexical `abspath` and not `resolve()`, because a
+    report dir is a symlink on some machines and resolving would make it look like an
+    escape; `commonpath` and not `startswith`, which would accept `<root>-evil`.
+    """
+    safe_name = _SAFE_NAME.sub("_", name)
+    safe_start = _SAFE_NAME.sub("_", start)
+    safe_stop = _SAFE_NAME.sub("_", stop)
+    safe_label = _UNPRINTABLE.sub(" ", label)[:200]
+    suffix = "" if safe_name == "" else f"_{safe_name}"
+
+    reports_root = os.path.abspath(str(REPORTS_DIR))
+    totals_path = os.path.abspath(str(out / f"totals{suffix}.json"))
+    csv_path = os.path.abspath(str(csv))
+    for path in (totals_path, csv_path):
+        if os.path.commonpath([path, reports_root]) != reports_root:
+            raise ValueError(f"refusing path outside {reports_root}: {path!r}")
+
     r = subprocess.run(
         [
             sys.executable,
             str(_OPSLIST),
             "--window",
-            label,
+            safe_label,
             "--start",
-            start,
+            safe_start,
             "--end",
-            stop,
+            safe_stop,
             "--json",
-            str(totals_path),
-            str(csv),
+            totals_path,
+            csv_path,
         ],
-        cwd=REPO_ROOT,
+        cwd=str(REPO_ROOT),
         capture_output=True,
         text=True,
+        shell=False,
     )
     # Exits 1 with "no ops between signposts ..." when the window never opened —
     # which is the failure that matters here, so it is fatal.
-    assert r.returncode == 0, f"per-op report for '{start}'->'{stop}' failed: {r.stderr.strip()}"
+    assert r.returncode == 0, f"per-op report for '{safe_start}'->'{safe_stop}' failed: {r.stderr.strip()}"
     (out / f"ops_list{suffix}.md").write_text(r.stdout)
-    return json.loads(totals_path.read_text())
+    return json.loads(Path(totals_path).read_text())
 
 
 def capture_tracy_report(
@@ -270,9 +302,19 @@ def capture_tracy_report(
 
     Returns the ``totals.json`` dict.
     """
+    # `window` names both output directories and reaches tracy's argv, and `script`
+    # is the file tracy is told to execute, so both are clamped here at the call
+    # rather than in a helper. `_SAFE_NAME` leaves every window this folder uses
+    # (`decode_single_step`, `prefill_single_layer_64`) untouched.
+    window = _SAFE_NAME.sub("_", window)
     out = REPORTS_DIR / window
     out.mkdir(parents=True, exist_ok=True)
     profiler_dir = REPO_ROOT / "generated" / "profiler" / f"qwen3_tts_perf_{window}"
+
+    repo_root = os.path.abspath(str(REPO_ROOT))
+    script_path = os.path.abspath(str(script))
+    if os.path.commonpath([script_path, repo_root]) != repo_root or not os.path.isfile(script_path):
+        raise ValueError(f"refusing to profile {script_path!r}: not a file under {repo_root}")
 
     cmd = [
         sys.executable,
@@ -282,19 +324,19 @@ def capture_tracy_report(
         "-v",
         "-r",
         "-o",
-        str(profiler_dir),
+        os.path.abspath(str(profiler_dir)),
         "--op-support-count",
-        str(_OP_SUPPORT_COUNT),
+        str(int(_OP_SUPPORT_COUNT)),
         "-t",
-        str(_free_port()),
-        str(script),
+        str(int(_free_port())),
+        script_path,
     ]
     env = dict(os.environ)
     env.setdefault("TT_METAL_HOME", str(REPO_ROOT))
     env["PYTHONPATH"] = os.pathsep.join(p for p in (str(REPO_ROOT), env.get("PYTHONPATH", "")) if p)
 
     started = time.time()
-    proc = subprocess.run(cmd, cwd=REPO_ROOT, env=env, capture_output=True, text=True)
+    proc = subprocess.run(cmd, cwd=repo_root, env=env, capture_output=True, text=True, shell=False)
     log = f"$ {' '.join(cmd)}\n\n{proc.stdout}\n{proc.stderr}"
     (out / "run.log").write_text(log)
     assert "No profiling data could be captured" not in log, (
@@ -329,13 +371,23 @@ def capture_tracy_report(
     # test: it is installed separately from the repo and trails it (it currently dies
     # with "Unknown math fidelity: HiFi3" on any CodePredictor window). ops_list.md is
     # the primary artifact and reads the same CSV.
+    # PATH decides which binary `which` hands back, so pin it to an absolute path to a
+    # real file, and require the CSV to be the one inside this window's report dir —
+    # both checked here at the call. A miss degrades to the "not installed" note
+    # rather than raising, because this second view is never allowed to fail the test.
     tpr = shutil.which("tt-perf-report")
-    if tpr:
+    tpr_path = os.path.abspath(tpr) if tpr else None
+    if tpr_path and os.path.isfile(tpr_path):
+        reports_root = os.path.abspath(str(REPORTS_DIR))
+        ops_csv = os.path.abspath(str(out / "ops.csv"))
+        if os.path.commonpath([ops_csv, reports_root]) != reports_root:
+            raise ValueError(f"refusing path outside {reports_root}: {ops_csv!r}")
         r = subprocess.run(
-            [tpr, "--start-signpost", "start", "--end-signpost", "stop", "--no-stacked-report", str(out / "ops.csv")],
-            cwd=REPO_ROOT,
+            [tpr_path, "--start-signpost", "start", "--end-signpost", "stop", "--no-stacked-report", ops_csv],
+            cwd=repo_root,
             capture_output=True,
             text=True,
+            shell=False,
         )
         (out / "tt-perf-report.txt").write_text(r.stdout + r.stderr)
     else:

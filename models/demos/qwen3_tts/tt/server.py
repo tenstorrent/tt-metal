@@ -229,20 +229,31 @@ def encode_reference_audio(
 
     print("\nEncoding reference audio (first run - will cache result)...")
 
-    # Load audio — convert to WAV via ffmpeg first so soundfile can read any format
+    # Load audio — convert to WAV via ffmpeg first so soundfile can read any format.
+    # The input path is user-supplied, so it is re-checked here at the call rather
+    # than relying only on `_user_path_no_dotdot` above: an absolute path to a file
+    # that exists, handed to an argv list and never to a shell. `ffmpeg` itself comes
+    # off PATH, so it is pinned to an absolute path to a real file the same way.
+    import shutil
     import subprocess
     import tempfile
+
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg or not os.path.isfile(os.path.abspath(ffmpeg)):
+        raise FileNotFoundError("ffmpeg is required to decode the reference audio, but is not on PATH")
+    src_wav = os.path.abspath(str(audio_p))
+    if not os.path.isfile(src_wav):
+        raise FileNotFoundError(audio_path)
 
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         tmp_wav = tmp.name
     subprocess.run(
-        ["ffmpeg", "-y", "-i", str(audio_p), "-ac", "1", "-ar", "24000", "-f", "wav", tmp_wav],
+        [os.path.abspath(ffmpeg), "-y", "-i", src_wav, "-ac", "1", "-ar", "24000", "-f", "wav", tmp_wav],
         check=True,
         capture_output=True,
+        shell=False,
     )
     audio_data, sr = sf.read(tmp_wav)
-    import os
-
     os.unlink(tmp_wav)
     audio_data = torch.from_numpy(audio_data.astype(np.float32))
     if audio_data.dim() == 2:
