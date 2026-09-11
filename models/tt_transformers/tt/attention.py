@@ -1011,6 +1011,10 @@ class Attention(LightweightModule):
                 sharded=True,
                 dtype=self.ccl_dtype,
                 use_composite=True if self.hidden_size == 8192 else False,
+                # Decode reduce-scatter carries one token; take the latency-optimal sync
+                # granularity rather than tt_all_reduce's prefill-sized defaults.
+                chunks_per_sync=self.args.ccl_sync_params(Mode.DECODE)[0],
+                num_workers_per_link=self.args.ccl_sync_params(Mode.DECODE)[1],
                 subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
             )
 

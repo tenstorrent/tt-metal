@@ -1207,10 +1207,13 @@ class ModelArgs:
             # model specific CCL configs
             default_ln_ag = {"num_links": 1, "chunks_per_sync": 10, "num_workers_per_link": 2}
             default_agmm = {"num_links": 1, "chunks_per_sync": 10, "num_workers_per_link": 2}
+            # MLP_RS_CONFIG's sync fields are read by MLP.forward only in DECODE (prefill takes
+            # its own 10/2 literals there), so they carry the decode granularity.
+            _mlp_rs_chunks, _mlp_rs_workers = self.ccl_sync_params(Mode.DECODE)
             default_mlp_rs = {
                 "num_links": self.num_reduce_scatter_links,
-                "chunks_per_sync": 10,
-                "num_workers_per_link": 2,
+                "chunks_per_sync": _mlp_rs_chunks,
+                "num_workers_per_link": _mlp_rs_workers,
                 "rs_memory_config": ttnn.DRAM_MEMORY_CONFIG,
             }
             default_sampling_force_argmax = {
@@ -2703,6 +2706,22 @@ class ModelArgs:
         else:
             local_params = None
         return local_params
+
+    def ccl_sync_params(self, mode: Mode):
+        """``(chunks_per_sync, num_workers_per_link)`` for a collective run in ``mode``.
+
+        A DECODE collective carries one token: a fractured ``[32, dim/num_devices]`` slice,
+        tens of KB. Splitting a payload that small across several workers per link, and
+        re-synchronising every few chunks, costs more coordination than it overlaps -- the
+        transfer is latency-bound, not bandwidth-bound, so the minimum of both wins. Prefill
+        carries the whole prompt and keeps the multi-worker defaults.
+
+        Measured on Llama-3.1-8B, P150 x4, trace+1cq, 128 decode tokens: dropping decode to
+        (1, 1) took the per-token time from 9.821 to 9.532 ms (-2.9%). Doubling each collective
+        in turn attributes 0.80 ms/token to the two norm all-gathers and 0.92 ms/token to the
+        two reduce-scatters, so ~17% of the token is in these four ops per layer.
+        """
+        return (1, 1) if mode == Mode.DECODE else (10, 2)
 
     def is_distributed_norm(self, mode: Mode):
         if not self.is_multichip:

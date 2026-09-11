@@ -134,6 +134,12 @@ class DistributedNorm(LightweightModule):
 
         # Distributed norm already performs a gather
         if self.args.is_multichip and not self.args.is_distributed_norm(mode):
+            # NOTE: the `mode == "decode"` tests below are comparing a Mode enum member against
+            # a str, so they are always False and the per-model *_LN_AG_CONFIG has never been
+            # read here. Left as-is: the only configs it would select are the Galaxy-tuned ones
+            # (num_links=4), which cannot be validated on this board. The fallbacks are what
+            # actually run, so they are what is tuned -- see ModelArgs.ccl_sync_params.
+            ag_chunks_per_sync, ag_num_workers = self.args.ccl_sync_params(mode)
             x = ttnn.experimental.all_gather_async(
                 x,
                 persistent_output_buffer=None,
@@ -147,10 +153,10 @@ class DistributedNorm(LightweightModule):
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                 chunks_per_sync=self.args.model_config[self.ag_config_key]["chunks_per_sync"]
                 if self.ag_config_key and mode == "decode"
-                else 10,
+                else ag_chunks_per_sync,
                 num_workers_per_link=self.args.model_config[self.ag_config_key]["num_workers_per_link"]
                 if self.ag_config_key and mode == "decode"
-                else 2,
+                else ag_num_workers,
                 num_buffers_per_channel=2,
                 subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
             )
