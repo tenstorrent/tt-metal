@@ -21,7 +21,6 @@ ttnn::Tensor paged_update_cache(
     const std::optional<const Tensor>& page_table,
     uint32_t batch_offset,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords,
     std::optional<uint32_t> block_size_override,
     std::optional<uint32_t> num_kv_heads_override,
     std::optional<uint32_t> cache_position_modulo) {
@@ -34,7 +33,6 @@ ttnn::Tensor paged_update_cache(
         page_table,
         batch_offset,
         compute_kernel_config,
-        mesh_coords,
         block_size_override,
         num_kv_heads_override,
         cache_position_modulo);

@@ -19,7 +19,6 @@ struct PagedUpdateCacheParams {
     const uint32_t batch_offset;
     const ttnn::DeviceComputeKernelConfig compute_kernel_config;
     const bool share_cache;
-    const std::optional<std::set<ttnn::MeshCoordinate>> mesh_coords;
     // Optional per-call block_size, overriding cache.padded_shape[2]. Lets a single
     // physical buffer be addressed with different (block_size, head_dim) views as long
     // as num_kv_heads * block_size * head_dim is preserved (checked in

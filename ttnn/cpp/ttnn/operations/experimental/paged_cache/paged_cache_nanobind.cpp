@@ -25,6 +25,9 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
         R"doc(
          Paged update cache operation. This operation expects the following inputs: cache_tensor of shape [B, 1, kv_len, head_dim] and input_tensor of shape [1, B, 1[32], head_dim] where input_tensor is height sharded on B cores. update_idxs will specify for each batch element which token to update in the cache.
 
+         Updates run on every device holding the tensors. Set entries in
+         ``update_idxs_tensor`` to -1 to skip individual users.
+
          ``head_dim`` is read from ``input_tensor.padded_shape[-1]``. ``block_size``
          defaults to ``cache_tensor.padded_shape[2]``; pass the kwarg to override it for
          callers that reinterpret one physical buffer with different
@@ -64,7 +67,6 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
         nb::arg("page_table").noconvert() = nb::none(),
         nb::arg("batch_offset") = 0,
         nb::arg("compute_kernel_config").noconvert() = nb::none(),
-        nb::arg("mesh_coords").noconvert() = nb::none(),
         nb::arg("block_size") = nb::none(),
         nb::arg("num_kv_heads") = nb::none(),
         nb::arg("cache_position_modulo") = nb::none());

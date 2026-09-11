@@ -481,7 +481,6 @@ def test_paged_flash_mla_verify_aliasing_two_step_mesh_sharded_pos_idxs(mesh_dev
         packer_l1_acc=False,
     )
 
-    mesh_coords = {ttnn.MeshCoordinate(r, c) for r in range(mesh_shape[0]) for c in range(mesh_shape[1])}
     ref_cache_by_device = [torch_cache.clone() for _ in range(num_devices)]
     step_positions = [
         torch.tensor([1, 2, 1, 2], dtype=torch.int32),
@@ -543,14 +542,12 @@ def test_paged_flash_mla_verify_aliasing_two_step_mesh_sharded_pos_idxs(mesh_dev
             tt_update,
             update_idxs_tensor=tt_prompt_update_idxs,
             page_table=tt_page_table,
-            mesh_coords=mesh_coords,
         )
         ttnn.experimental.paged_update_cache(
             tt_cache,
             tt_update,
             update_idxs_tensor=tt_spec_update_idxs,
             page_table=tt_page_table,
-            mesh_coords=mesh_coords,
         )
         ttnn.synchronize_device(mesh_device)
 

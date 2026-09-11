@@ -440,39 +440,17 @@ ProgramDescriptor PagedUpdateCacheProgramFactory::create_descriptor(
     return desc;
 }
 
-ProgramDescriptor PagedUpdateCacheMeshWorkloadFactory::create_descriptor(
-    const PagedUpdateCacheParams& operation_attributes,
-    const PagedUpdateCacheInputs& tensor_args,
-    Tensor& tensor_return_value,
-    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    if (operation_attributes.mesh_coords.has_value() && mesh_dispatch_coordinate.has_value()) {
-        const auto& mesh_coords_set = operation_attributes.mesh_coords.value();
-        if (!mesh_coords_set.contains(mesh_dispatch_coordinate.value())) {
-            return ProgramDescriptor{};
-        }
-    }
-    return PagedUpdateCacheProgramFactory::create_descriptor(operation_attributes, tensor_args, tensor_return_value);
-}
-
 void PagedUpdateCacheProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
     const PagedUpdateCacheParams& operation_attributes,
     const PagedUpdateCacheInputs& tensor_args,
     Tensor& /*tensor_return_value*/,
-    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     // Patch the cached program in place — no descriptor rebuild. This runs on EVERY cache hit, so it must
     // re-derive only per-dispatch state: buffer addresses (this hook supersedes resolve_bindings, so all
     // addresses are ours) and the update_idxs-derived offsets the program hash excludes. Everything else
     // is a function of hashed inputs (shapes/dtypes/memory configs/share_cache/overrides) and is identical
     // by construction on a hit.
-    //
-    // Both factories build the same program body (PagedUpdateCacheMeshWorkloadFactory delegates to
-    // PagedUpdateCacheProgramFactory), so one patch covers both; the only mesh-specific behaviour is the
-    // empty descriptor for coords excluded from the dispatch — those programs have no kernels to patch.
-    if (operation_attributes.mesh_coords.has_value() && mesh_dispatch_coordinate.has_value() &&
-        !operation_attributes.mesh_coords.value().contains(mesh_dispatch_coordinate.value())) {
-        return;
-    }
 
     // Kernel push order in create_descriptor: reader(0), writer(1), compute(2). Compute takes no runtime args.
     constexpr uint32_t kReaderKernelIdx = 0;
@@ -517,16 +495,6 @@ void PagedUpdateCacheProgramFactory::override_runtime_arguments(
 
     tt::tt_metal::UpdateDynamicCircularBufferAddress(
         program, program.circular_buffers().at(kInputCbPos)->id(), *tensor_args.input_tensor.buffer());
-}
-
-void PagedUpdateCacheMeshWorkloadFactory::override_runtime_arguments(
-    tt::tt_metal::Program& program,
-    const PagedUpdateCacheParams& operation_attributes,
-    const PagedUpdateCacheInputs& tensor_args,
-    Tensor& tensor_return_value,
-    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    PagedUpdateCacheProgramFactory::override_runtime_arguments(
-        program, operation_attributes, tensor_args, tensor_return_value, mesh_dispatch_coordinate);
 }
 
 }  // namespace ttnn::experimental::prim
