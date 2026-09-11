@@ -156,7 +156,7 @@ MAX_SHIFT_ANCHOR = 4096
 # floors are calibrated against it, so a bare run must get it without env plumbing. LTX_QUANT="" opts
 # back to the bf16 baseline. The weight-cache name derives from the same value, so both readers must
 # resolve the default identically or a run dtype-clashes on a stale-precision cache hit.
-LTX_QUANT_DEFAULT = "all_bf8_lofi"
+LTX_QUANT_DEFAULT = ""
 
 
 def compute_sigmas(
