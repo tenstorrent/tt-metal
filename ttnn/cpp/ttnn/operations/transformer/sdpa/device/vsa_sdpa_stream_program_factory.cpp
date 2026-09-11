@@ -7,10 +7,15 @@
 // the WORKERS hold resident query rows as CONTIGUOUS runs (real VSA index sets are spatially
 // correlated and every row lists the exempt prefix, so contiguity maximizes how many resident rows
 // each arriving block visits -- the multi-row batching that amortizes per-visit overhead), pull
-// blocks from the leader's L1 over the NoC, and run the fused multi-row online-softmax engine. DRAM reads the head's KV exactly n_passes times per group instead
-// of once per (row, listed block) -- the redundancy that made v1/v2 DRAM-bound.
+// blocks from the leader's L1 over the NoC, and run the fused multi-row online-softmax engine. DRAM reads the head's KV
+// exactly n_passes times per group instead of once per (row, listed block) -- the redundancy that made v1/v2
+// DRAM-bound.
 
 #include "ttnn/operations/transformer/sdpa/device/vsa_sdpa_device_operation.hpp"
+#include "ttnn/operations/transformer/sdpa/device/vsa_sdpa_stream_descriptor.hpp"
+#include "ttnn/operations/transformer/sdpa/device/ring_fusion.hpp"
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_multi_core_with_workers_program_factory.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/constants.hpp>
@@ -161,6 +166,20 @@ VsaSdpaOperation::program_factory_t VsaSdpaOperation::select_program_factory(
 
 tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::create_descriptor(
     const VsaSdpaParams& attrs, const VsaSdpaInputs& t, Tensor& output) {
+    return build_vsa_sdpa_stream_descriptor(attrs, t, output, /*ring=*/nullptr);
+}
+
+// Shared descriptor builder. `ring == nullptr` is the single-device streaming op (byte-identical to the
+// committed behavior). With a ring context (vsa_ring_sdpa) the grid gives its last column to the fused
+// all-gather's sender cores, the leader kernels are compiled with VSA_RING and get the gathered K/V
+// accessors + the RingSDPAOpReceiver args, and the ring_attention_all_gather helper is appended after the
+// five VSA kernels (see VSA_RING_SDPA_SPEC.md).
+tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
+    const VsaSdpaParams& attrs, const VsaSdpaInputs& t, Tensor& output, const VsaRingContext* ring) {
+    const bool ring_mode = ring != nullptr;
+    TT_FATAL(
+        !ring_mode || (attrs.streaming && !attrs.distributed && !t.stream_order.has_value()),
+        "vsa_ring_sdpa: streaming kernel only, no distributed mode, no stream_order (the ring order is the order)");
     // Function-scoped to avoid unity-build collisions with the v1 factory's enum.
     enum StreamCB : uint32_t {
         cb_q_res = 0,      // resident Q rows [R_MAX, Sqt*DHt] (RAM-mode)
@@ -196,7 +215,8 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
     const uint32_t H = t.q.logical_shape()[1];
     const uint32_t S = t.q.logical_shape()[2];
     const uint32_t d = t.q.logical_shape()[3];
-    const uint32_t T = t.k.logical_shape()[2];
+    const uint32_t T = ring_mode ? ring->gathered_k->logical_shape()[2] : t.k.logical_shape()[2];
+    const uint32_t T_local = t.k.logical_shape()[2];  // == T unless ring_mode
     const uint32_t W = t.indices.logical_shape()[3];
     const uint32_t block_size = attrs.block_size;
 
@@ -256,16 +276,35 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
     const uint32_t out_tile_bytes = tt::tile_size(out_df);
 
     auto* device = t.q.device();
-    const tt::tt_metal::CoreCoord grid = device->compute_with_storage_grid_size();
+    tt::tt_metal::CoreCoord grid = device->compute_with_storage_grid_size();
+    if (ring_mode) {
+        // The fused all-gather's 2*num_links sender cores take the LAST ROW (ROW_MAJOR placement from
+        // ccl_core_grid_offset = (0, grid.y-1), as the ring_joint tests place them); the VSA grid is every
+        // row above it.
+        TT_FATAL(
+            grid.y >= 3 && grid.x >= 2 * ring->ag->num_links,
+            "vsa_ring_sdpa: grid {}x{} cannot host {} sender cores in one row plus the VSA grid",
+            grid.x,
+            grid.y,
+            2 * ring->ag->num_links);
+        TT_FATAL(
+            ring->ccl_core_grid_offset.x == 0 && ring->ccl_core_grid_offset.y == 0,
+            "vsa_ring_sdpa: ccl_core_grid_offset must be (0, 0), got ({}, {})",
+            ring->ccl_core_grid_offset.x,
+            ring->ccl_core_grid_offset.y);
+        grid.y -= 1;  // the VSA grid is rows [1, grid.y): row 0 hosts the senders (standalone all-gather placement)
+    }
     const uint32_t num_cores = grid.x * grid.y;
     TT_FATAL(num_cores >= 2 * H, "vsa_sdpa streaming needs >= 2 cores per head (H {}, cores {})", H, num_cores);
-    auto core_grid = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
+    const uint32_t gy0 = ring_mode ? 1u : 0u;  // first VSA row (row 0 is the senders' in ring mode)
+    const auto lcore = [&](uint32_t i) { return tt::tt_metal::CoreCoord{i % grid.x, gy0 + i / grid.x}; };
+    auto core_grid = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange({0, gy0}, {grid.x - 1, gy0 + grid.y - 1}));
     // The reader/writer kernels compile their LEADER and WORKER halves separately (both bodies in
     // one binary overflow the Tensix kernel-config buffer), so each is instantiated twice on
     // disjoint core sets with the role fixed by a define.
     std::set<tt::tt_metal::CoreRange> leader_ranges, worker_ranges;
     for (uint32_t i = 0; i < num_cores; ++i) {
-        const tt::tt_metal::CoreCoord c = {i % grid.x, i / grid.x};
+        const tt::tt_metal::CoreCoord c = lcore(i);
         if (core_schedule(i, num_cores, H).is_leader) {
             leader_ranges.insert(tt::tt_metal::CoreRange(c, c));
         } else {
@@ -290,42 +329,41 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
         });
         return idx;
     };
-    cb(q_tile_bytes, rmax * q_tiles_per_row, q_df);           // cb_q_res
+    cb(q_tile_bytes, rmax * q_tiles_per_row, q_df);            // cb_q_res
     cb(k_tile_bytes, stream_depth * k_tiles_per_block, k_df);  // cb_k_stream
     cb(v_tile_bytes, stream_depth * v_tiles_per_block, v_df);  // cb_v_stream
-    cb(tile_bytes, rmax * out_tiles_per_row, bf);             // cb_o_res
-    cb(tile_bytes, rmax * 2 * Sqt, bf);                       // cb_max_res
+    cb(tile_bytes, rmax * out_tiles_per_row, bf);              // cb_o_res
+    cb(tile_bytes, rmax * 2 * Sqt, bf);                        // cb_max_res
     // cb_sum_res: legacy slot (the row sum is accumulated on the writer core, see vsa_sum_service.hpp)
     cb(tile_bytes, 1, bf);  // cb_sum_res (placeholder)
     // corr slots are indexed by the visit's position in its compute chunk, and a chunk can hold up
     // to half_slots single-block visits.
-    cb(tile_bytes, rmax * Sqt, bf);  // cb_corr: per-row-slot candidate max tile (corr after a move)
-    cb(tile_bytes, 2 * chunk_slots * Skt * Sqt, bf);           // cb_qk (two ping-pong chunk regions)
-    cb(tile_bytes, 1, bf);                                     // cb_scale
-    cb(tile_bytes, 1, bf);                                     // cb_col_identity
-    cb(tile_bytes, 1, bf);                                     // cb_recip_scratch
-    cb(tile_bytes, 1, bf);                                     // cb_neginf
-    cb(tile_bytes, stream_depth, bf);                          // cb_vmask (slot-indexed RAM)
+    cb(tile_bytes, rmax * Sqt, bf);                   // cb_corr: per-row-slot candidate max tile (corr after a move)
+    cb(tile_bytes, 2 * chunk_slots * Skt * Sqt, bf);  // cb_qk (two ping-pong chunk regions)
+    cb(tile_bytes, 1, bf);                            // cb_scale
+    cb(tile_bytes, 1, bf);                            // cb_col_identity
+    cb(tile_bytes, 1, bf);                            // cb_recip_scratch
+    cb(tile_bytes, 1, bf);                            // cb_neginf
+    cb(tile_bytes, stream_depth, bf);                 // cb_vmask (slot-indexed RAM)
     // distributed: messages carry up to 16 visits and credits (n_pulled + 1 per message) can queue
     // ahead of the reader's reclaim, so both rings are deepened (16 B pages: a few hundred bytes)
     // cb_ctrl: a window emits one VISIT per resident row plus a WINDOW message (up to rmax + 1 pages); the
     // reader blocks in reserve_back until the compute pops, so 8 pages could stall a window's emission.
-    cb(ctrl_page_bytes, dist ? 32 : 64, bf);                   // cb_ctrl
-    cb(16, dist ? 32 : stream_depth, bf);                      // cb_kreq
-    cb(16, dist ? 32 : stream_depth, bf);                      // cb_kack
-    cb(16, dist ? 128 : stream_depth + 2, bf);                 // cb_free
-    cb(16, 2, bf);                                             // cb_qdone
-    cb(out_tile_bytes, 2 * out_tiles_per_row, out_df);         // cb_out
-    cb(idx_row_bytes, 1, bf);                                  // cb_idxrow
-    cb(counts_row_bytes, 1, bf);                               // cb_counts
-    cb(bitmap_bytes, 1, bf);                                   // cb_bitmap
-    cb(16, dist ? 256 : log_depth, bf);                        // cb_log (dist: ready board + pending-message ring)
-    cb(4 * 2 * kMaxWorkers, 1, bf);                            // cb_ackbox: [0,16) progress, [16,32) READY flags
+    cb(ctrl_page_bytes, dist ? 32 : 64, bf);            // cb_ctrl
+    cb(16, dist ? 32 : stream_depth, bf);               // cb_kreq
+    cb(16, dist ? 32 : stream_depth, bf);               // cb_kack
+    cb(16, dist ? 128 : stream_depth + 2, bf);          // cb_free
+    cb(16, 2, bf);                                      // cb_qdone
+    cb(out_tile_bytes, 2 * out_tiles_per_row, out_df);  // cb_out
+    cb(idx_row_bytes, 1, bf);                           // cb_idxrow
+    cb(counts_row_bytes, 1, bf);                        // cb_counts
+    cb(bitmap_bytes, 1, bf);                            // cb_bitmap
+    cb(16, dist ? 256 : log_depth, bf);                 // cb_log (dist: ready board + pending-message ring)
+    cb(4 * 2 * kMaxWorkers, 1, bf);                     // cb_ackbox: [0,16) progress, [16,32) READY flags
     // one page of the dense-row mask tensor (its whole row) when given; a 32 B placeholder otherwise
-    const uint32_t dense_bytes = t.dense_row_mask.has_value()
-                                     ? t.dense_row_mask->logical_shape()[3] * t.dense_row_mask->element_size()
-                                     : 32u;
-    const uint32_t cb_dense = cb(dense_bytes, 1, bf);          // cb_dense: raw-selection dense-row bitmask (one page)
+    const uint32_t dense_bytes =
+        t.dense_row_mask.has_value() ? t.dense_row_mask->logical_shape()[3] * t.dense_row_mask->element_size() : 32u;
+    const uint32_t cb_dense = cb(dense_bytes, 1, bf);  // cb_dense: raw-selection dense-row bitmask (one page)
     // stream order row (leader only): the whole permutation, one page; 32 B placeholder when absent
     const uint32_t order_bytes = t.stream_order.has_value() ? ((n_kv_blocks * 4 + 31) / 32) * 32 : 32u;
     const uint32_t cb_order = cb(order_bytes, 1, bf);  // cb_order
@@ -352,8 +390,18 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
         k_tile_bytes,
         v_tile_bytes};
     for (uint32_t id :
-         {cb_k_stream, cb_v_stream, cb_idxrow, cb_counts, cb_bitmap, cb_log, cb_ctrl, cb_kreq, cb_kack, cb_free,
-          cb_vmask, cb_ackbox}) {
+         {cb_k_stream,
+          cb_v_stream,
+          cb_idxrow,
+          cb_counts,
+          cb_bitmap,
+          cb_log,
+          cb_ctrl,
+          cb_kreq,
+          cb_kack,
+          cb_free,
+          cb_vmask,
+          cb_ackbox}) {
         reader_ct.push_back(id);
     }
     reader_ct.push_back(sem_arrivals);
@@ -361,6 +409,9 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
     tt::tt_metal::TensorAccessorArgs(t.v.buffer()).append_to(reader_ct, reader_crt);
     tt::tt_metal::TensorAccessorArgs(t.indices.buffer()).append_to(reader_ct, reader_crt);
     tt::tt_metal::TensorAccessorArgs(t.block_counts.buffer()).append_to(reader_ct, reader_crt);
+    if (ring_mode) {
+        tt::tt_metal::TensorAccessorArgs(ring->gathered_v->buffer()).append_to(reader_ct, reader_crt);
+    }
 
     std::vector<uint32_t> writer_ct = {
         n_q_tiles,
@@ -372,7 +423,8 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
         q_tile_bytes,
         k_tile_bytes,
         out_tile_bytes};
-    for (uint32_t id : {cb_q_res, cb_k_stream, cb_scale, cb_col_identity, cb_neginf, cb_kreq, cb_kack, cb_qdone, cb_out}) {
+    for (uint32_t id :
+         {cb_q_res, cb_k_stream, cb_scale, cb_col_identity, cb_neginf, cb_kreq, cb_kack, cb_qdone, cb_out}) {
         writer_ct.push_back(id);
     }
     for (uint32_t v : {cb_shdr, cb_stiles, cb_sumback, cb_sacc, Sqt}) {  // row-sum service (args 18..22)
@@ -382,6 +434,9 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_ct, writer_crt);
     tt::tt_metal::TensorAccessorArgs(t.k.buffer()).append_to(writer_ct, writer_crt);
     tt::tt_metal::TensorAccessorArgs(t.q.buffer()).append_to(writer_ct, writer_crt);
+    if (ring_mode) {
+        tt::tt_metal::TensorAccessorArgs(ring->gathered_k->buffer()).append_to(writer_ct, writer_crt);
+    }
 
     std::vector<uint32_t> compute_ct = {
         DHt,
@@ -437,6 +492,12 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
         const char* sl = std::getenv("TT_VSA_SLICE");  // owned blocks per peer per window
         probe_defines["VSA_SLICE"] = (sl != nullptr && sl[0] != '\0') ? std::string(sl) : std::string("4");
     }
+    if (ring_mode) {
+        probe_defines["VSA_RING"] = "1";
+        if (const char* e = std::getenv("TT_VSA_RING_WAIT_ALL"); e != nullptr && e[0] == '1') {
+            probe_defines["VSA_RING_WAIT_ALL"] = "1";  // triage: land every shard before streaming (no overlap)
+        }
+    }
     auto leader_defines = probe_defines;
     leader_defines["VSA_IS_LEADER"] = "1";
 
@@ -480,8 +541,8 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
         get_compute_kernel_config_args(tt::tt_metal::hal::get_arch(), attrs.compute_kernel_config);
     (void)packer_l1_acc;
     const uint32_t dst_size = fp32_acc ? 4u : 8u;
-    TT_FATAL(Sqt * vDHt <= dst_size, "vsa_sdpa streaming needs the PV subblock ({}) to fit DEST ({})",
-             Sqt * vDHt, dst_size);
+    TT_FATAL(
+        Sqt * vDHt <= dst_size, "vsa_sdpa streaming needs the PV subblock ({}) to fit DEST ({})", Sqt * vDHt, dst_size);
 
     tt::tt_metal::KernelDescriptor compute_desc;
     compute_desc.kernel_source = kdir + "compute/vsa_sdpa_stream_compute.cpp";
@@ -500,6 +561,50 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
         cdefs.insert(probe_defines.begin(), probe_defines.end());
     }
     compute_desc.defines = tt::tt_metal::KernelDescriptor::Defines(cdefs.begin(), cdefs.end());
+
+    // ---- ring mode: per-shard arrival signaling from the fused all-gather to the leaders ----
+    // Two program semaphores (direction 0 = backward chain, 1 = forward chain) on the VSA grid; the H
+    // leader cores are the receivers (workers never wait). The all-gather readers bump the direction's
+    // semaphore on every receiver when a shard lands; the forward writer pre-signals the local slice.
+    // The leader consumes them with RingSDPAOpReceiver (fused_op_receiver.hpp) from the rt args
+    // push_ring_sdpa_fused_op_rt_args emits -- the dense ring's exact protocol, nothing re-derived.
+    std::optional<RingSDPAFusedOpSignaler> ring_signaler;
+    std::vector<uint32_t> ring_receiver_rt;
+    uint32_t blocks_per_shard = 0, k_local_head_stride = 0, v_local_head_stride = 0;
+    if (ring_mode) {
+        blocks_per_shard = T_local / block_size;
+        k_local_head_stride = (T_local / tt::constants::TILE_HEIGHT) * DHt;
+        v_local_head_stride = (T_local / tt::constants::TILE_HEIGHT) * vDHt;
+        TT_FATAL(
+            blocks_per_shard * ring->ring_size == n_kv_blocks,
+            "vsa_ring_sdpa: gathered blocks ({}) != ring_size ({}) x local blocks ({})",
+            n_kv_blocks,
+            ring->ring_size,
+            blocks_per_shard);
+        ring_signaler.emplace();
+        ring_signaler->init_all_gather(
+            ring->ring_size, ring->device_index, ring->forward_writes_expected, ring->backward_writes_expected);
+        ring_signaler->fused_op_signaler_mode = ttnn::experimental::ccl::FusedOpSignalerMode::MULTI;
+        ring_signaler->fused_op_receiver_cores_noc.clear();
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            if (core_schedule(i, num_cores, H).is_leader) {
+                ring_signaler->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(lcore(i)));
+            }
+        }
+        for (uint32_t d = 0; d < 2; ++d) {
+            const uint32_t id = static_cast<uint32_t>(desc.semaphores.size());
+            desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+                .id = id, .core_type = tt::CoreType::WORKER, .core_ranges = core_grid, .initial_value = 0});
+            ring_signaler->fused_op_receiver_signal_semaphores.push_back(id);
+        }
+        ring_signaler->num_fused_op_cores_to_signal = ring_signaler->fused_op_receiver_cores_noc.size();
+        ring_signaler->initialized_fused_op = true;
+        // Even-ring split forwarding: the diametric shard is relayed half per direction (the all-gather's
+        // default protocol; the receiver implements the second-half wait). Must match the helper call below.
+        ring_signaler->split_forwarding_enabled =
+            ring->ag->topology == ttnn::ccl::Topology::Ring && ring->ring_size % 2 == 0 && ring->ring_size > 2;
+        ring_signaler->push_ring_sdpa_fused_op_rt_args(ring_receiver_rt);
+    }
 
     auto* q_buf = t.q.buffer();
     auto* k_buf = t.k.buffer();
@@ -621,7 +726,7 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
     };
 
     for (uint32_t i = 0; i < num_cores; ++i) {
-        tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
+        tt::tt_metal::CoreCoord core = lcore(i);
         const auto sched = core_schedule(i, num_cores, H);
         if (dist) {
             const uint32_t my_peer = sched.is_leader ? 0u : sched.worker_index + 1;
@@ -660,7 +765,7 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
             // peers: the group's first dist_n_peers cores (consecutive logical ids), NoC coords
             for (uint32_t p = 0; p < dist_n_peers; ++p) {
                 const uint32_t pc = sched.group_first + p;
-                const auto phys = device->worker_core_from_logical_core({pc % grid.x, pc / grid.x});
+                const auto phys = device->worker_core_from_logical_core(lcore(pc));
                 reader_rt.push_back(static_cast<uint32_t>(phys.x));
                 reader_rt.push_back(static_cast<uint32_t>(phys.y));
             }
@@ -699,7 +804,7 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
         const uint32_t n_active = active_workers(sched.n_workers, n_q_tiles);
         const bool is_idle = !sched.is_leader && sched.worker_index >= n_active;
 
-        const tt::tt_metal::CoreCoord leader_logical = {sched.group_first % grid.x, sched.group_first / grid.x};
+        const tt::tt_metal::CoreCoord leader_logical = lcore(sched.group_first);
         const tt::tt_metal::CoreCoord leader_phys = device->worker_core_from_logical_core(leader_logical);
         // The leader computes too (its K/V are local and its TRISCs are otherwise idle), so rows
         // are dealt over n_active workers PLUS the leader; the leader is consumer n_active.
@@ -748,7 +853,8 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
         reader_rt.push_back(cb_dense);
         reader_rt.push_back(dense_bytes);
         reader_rt.push_back(attrs.coarse_slots_shift);
-        reader_rt.push_back(attrs.coarse_slots_shift ? (1u << attrs.coarse_slots_shift) - attrs.coarse_real_per_shard : 0u);
+        reader_rt.push_back(
+            attrs.coarse_slots_shift ? (1u << attrs.coarse_slots_shift) - attrs.coarse_real_per_shard : 0u);
         reader_rt.push_back(static_cast<uint32_t>(attrs.exempt_ids.size()));
         for (uint32_t b : attrs.exempt_ids) {
             reader_rt.push_back(b);
@@ -773,8 +879,8 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
                 while (w + n_seg < n_active && (wc + n_seg) / grid.x == row) {
                     ++n_seg;
                 }
-                const auto p0 = device->worker_core_from_logical_core({wc % grid.x, row});
-                const auto p1 = device->worker_core_from_logical_core({(wc + n_seg - 1) % grid.x, row});
+                const auto p0 = device->worker_core_from_logical_core(lcore(wc));
+                const auto p1 = device->worker_core_from_logical_core(lcore(wc + n_seg - 1));
                 strips.push_back(
                     {static_cast<uint32_t>(p0.x),
                      static_cast<uint32_t>(p0.y),
@@ -794,9 +900,18 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
             // per-worker NoC coords: the log is published by unicast writes (strips kept for the layout)
             for (uint32_t w = 0; w < n_active; ++w) {
                 const uint32_t wc = sched.group_first + 1 + w;
-                const auto phys = device->worker_core_from_logical_core({wc % grid.x, wc / grid.x});
+                const auto phys = device->worker_core_from_logical_core(lcore(wc));
                 reader_rt.push_back(static_cast<uint32_t>(phys.x));
                 reader_rt.push_back(static_cast<uint32_t>(phys.y));
+            }
+            if (ring_mode) {  // parsed by the leader under VSA_RING (see the reader): 4 words + receiver args
+                reader_rt.push_back(ring->gathered_v->buffer());
+                reader_rt.push_back(ring->device_index);
+                reader_rt.push_back(blocks_per_shard);
+                reader_rt.push_back(v_local_head_stride);
+                for (uint32_t w : ring_receiver_rt) {
+                    reader_rt.push_back(w);
+                }
             }
         }
         for (uint32_t pr : my_pass_rows) {
@@ -830,6 +945,12 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
         for (uint32_t r : my_rows) {
             writer_rt.push_back(r);
         }
+        if (ring_mode && sched.is_leader) {  // parsed by the leader under VSA_RING at 12 + n_passes + row_count
+            writer_rt.push_back(ring->gathered_k->buffer());
+            writer_rt.push_back(ring->device_index);
+            writer_rt.push_back(blocks_per_shard);
+            writer_rt.push_back(k_local_head_stride);
+        }
         if (sched.is_leader) {
             writer_leader_desc.emplace_runtime_args(core, writer_rt);
         } else {
@@ -852,37 +973,89 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
         desc.kernels.push_back(std::move(writer_leader_desc));
     }
     desc.kernels.push_back(std::move(compute_desc));
+    if (ring_mode) {
+        static_assert(
+            kVsaStreamKernelCount == 5,
+            "kernel push order above: reader, writer, reader_leader, writer_leader, compute");
+        TT_FATAL(desc.kernels.size() == kVsaStreamKernelCount, "vsa_ring_sdpa: unexpected VSA kernel count");
+        std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> ag_signaler =
+            ttnn::experimental::ccl::AllGatherFusedOpSignaler();
+        ag_signaler->init_fused_op(
+            ring_signaler->fused_op_receiver_cores_noc,
+            ring_signaler->fused_op_receiver_signal_semaphores,
+            ring_signaler->fused_op_signaler_mode);
+        std::vector<Tensor> ag_inputs = {t.k, t.v};
+        std::vector<Tensor> ag_outputs = {*ring->gathered_k, *ring->gathered_v};
+        // The helper forwards each device's local K/V shard around the ring into the gathered buffers
+        // (rows [s*T_local, (s+1)*T_local) for shard s; the local shard is NOT copied -- the leaders read
+        // it from k/v) and signals the leaders per landed shard. Both links are used (a forward and a
+        // backward chain); split forwarding is off, matching the receiver args above.
+        ttnn::ring_attention_all_gather_async_multi_core_with_workers_helper(
+            desc,
+            ag_inputs,
+            ring->coord,
+            ring->forward_coord,
+            ring->backward_coord,
+            ag_outputs,
+            /*dim=*/2,
+            ring->ag->num_links,
+            ring->ring_size,
+            ring->device_index,
+            ring->ag->topology,
+            ring->ag->semaphore,
+            ring->ag->sub_device_id,
+            ag_signaler,
+            ring->ccl_core_grid_offset,
+            ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
+            /*input_batch_slice_idx=*/std::nullopt,
+            /*gather_valid_Ht=*/std::nullopt,
+            /*slot_id=*/std::nullopt,
+            /*kv_actual_isl=*/std::nullopt,
+            /*chunk_local_tiles=*/T_local / tt::constants::TILE_HEIGHT,
+            /*kv_cache_num_layers=*/1,
+            /*kv_cache_layer_idx=*/0,
+            /*split_forwarding_enabled=*/ring_signaler->split_forwarding_enabled);
+    }
     return desc;
 }
 
 void VsaSdpaOperation::VsaSdpaStreamProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program, const VsaSdpaParams& attrs, const VsaSdpaInputs& t, Tensor& tensor_return_value) {
+    patch_vsa_sdpa_stream_runtime_args(program, attrs, t, tensor_return_value, /*ring=*/false);
+}
+
+void patch_vsa_sdpa_stream_runtime_args(
     tt::tt_metal::Program& program,
     const VsaSdpaParams& attrs,
     const VsaSdpaInputs& t,
-    Tensor& tensor_return_value) {
-    // The reader and writer are each instantiated per ROLE on disjoint core sets, so a core's
-    // buffer args live in whichever instance is placed on it. Resolve instances by kernel NAME
-    // (collect_kernel_meta) and by which instance actually holds args for the core, rather than
-    // trusting kernel indices -- an index assumption here silently corrupted the leaders' V/idx
-    // addresses on every program-cache hit (traced model hang).
+    Tensor& tensor_return_value,
+    bool ring) {
+    // The reader and writer are each instantiated per ROLE on disjoint core sets, so a core's buffer args
+    // live in whichever instance is placed on it. Handles are the descriptor push order (see the header);
+    // the kernel NAME SET is checked so a reordered push fails loudly instead of patching the wrong kernel.
     const auto metas = tt::tt_metal::detail::collect_kernel_meta(program, nullptr);
-    std::vector<uint32_t> reader_ids, writer_ids;
-    for (uint32_t k = 0; k < metas.size(); ++k) {
-        const std::string_view name = metas[k].name;
-        if (name.find("vsa_sdpa_stream_reader") != std::string_view::npos ||
-            name.find("vsa_sdpa_dist_reader") != std::string_view::npos) {
-            reader_ids.push_back(k);
-        } else if (
-            name.find("vsa_sdpa_stream_writer") != std::string_view::npos ||
-            name.find("vsa_sdpa_dist_writer") != std::string_view::npos) {
-            writer_ids.push_back(k);
-        }
+    uint32_t n_readers = 0, n_writers = 0;
+    for (const auto& m : metas) {
+        const std::string_view name = m.name;
+        n_readers +=
+            (name.find("vsa_sdpa_stream_reader") != std::string_view::npos ||
+             name.find("vsa_sdpa_dist_reader") != std::string_view::npos);
+        n_writers +=
+            (name.find("vsa_sdpa_stream_writer") != std::string_view::npos ||
+             name.find("vsa_sdpa_dist_writer") != std::string_view::npos);
     }
     TT_FATAL(
-        reader_ids.size() == (attrs.distributed ? 1u : 2u) && writer_ids.size() == reader_ids.size(),
-        "vsa_sdpa stream: unexpected kernel set");
-    const tt::tt_metal::CoreCoord grid = t.q.device()->compute_with_storage_grid_size();
-    const uint32_t num_cores = grid.x * grid.y;
+        n_readers == (attrs.distributed ? 1u : 2u) && n_writers == n_readers,
+        "vsa_sdpa stream: unexpected kernel set ({} readers, {} writers)",
+        n_readers,
+        n_writers);
+    const std::vector<uint32_t> reader_ids =
+        attrs.distributed ? std::vector<uint32_t>{kVsaReaderWorkerKernel}
+                          : std::vector<uint32_t>{kVsaReaderWorkerKernel, kVsaReaderLeaderKernel};
+    const std::vector<uint32_t> writer_ids =
+        attrs.distributed ? std::vector<uint32_t>{kVsaWriterWorkerKernel}
+                          : std::vector<uint32_t>{kVsaWriterWorkerKernel, kVsaWriterLeaderKernel};
+    (void)ring;  // every instance's own per-core argument table is patched, so no grid assumption is needed
     const uint32_t v_addr = t.v.buffer()->address();
     const uint32_t idx_addr = t.indices.buffer()->address();
     const uint32_t counts_addr = t.block_counts.buffer()->address();
@@ -894,34 +1067,34 @@ void VsaSdpaOperation::VsaSdpaStreamProgramFactory::override_runtime_arguments(
     const uint32_t order_addr = t.stream_order.has_value() ? t.stream_order->buffer()->address() : 0u;
     const uint32_t n_exempt = static_cast<uint32_t>(attrs.exempt_ids.size());
     const uint32_t kOrderArg = attrs.distributed ? 0u : 20u + n_exempt;  // streaming reader only
-    const auto patch = [&](const std::vector<uint32_t>& ids,
-                           const tt::tt_metal::CoreCoord& core,
-                           uint32_t a0,
-                           uint32_t a1,
-                           uint32_t a2,
-                           bool is_reader = false) {
+    // Each role instance holds args only on its own cores (the per-core table is empty elsewhere), so
+    // walking every instance's table patches exactly the cores it is placed on.
+    const auto patch = [&](const std::vector<uint32_t>& ids, uint32_t a0, uint32_t a1, uint32_t a2, bool is_reader) {
+        uint32_t patched = 0;
         for (uint32_t id : ids) {
-            auto& args = tt::tt_metal::GetRuntimeArgs(program, id, core);
-            if (args.size() >= 3) {  // the instance placed on this core
-                args[0] = a0;
-                args[1] = a1;
-                args[2] = a2;
-                if (is_reader) {
-                    args[kDenseMaskArg] = dense_addr;
-                    if (kOrderArg != 0) {
-                        args[kOrderArg] = order_addr;
+            auto& by_core = tt::tt_metal::GetRuntimeArgs(program, id);
+            for (auto& by_y : by_core) {
+                for (auto& args : by_y) {
+                    if (args.size() < 3) {
+                        continue;
                     }
+                    args[0] = a0;
+                    args[1] = a1;
+                    args[2] = a2;
+                    if (is_reader) {
+                        args[kDenseMaskArg] = dense_addr;
+                        if (kOrderArg != 0) {
+                            args[kOrderArg] = order_addr;
+                        }
+                    }
+                    ++patched;
                 }
-                return;
             }
         }
-        TT_FATAL(false, "vsa_sdpa stream: no kernel instance holds runtime args on core {}", core.str());
+        TT_FATAL(patched > 0, "vsa_sdpa stream: no kernel instance holds runtime args");
     };
-    for (uint32_t i = 0; i < num_cores; ++i) {
-        const tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
-        patch(reader_ids, core, v_addr, idx_addr, counts_addr, /*is_reader=*/true);
-        patch(writer_ids, core, out_addr, k_addr, q_addr);
-    }
+    patch(reader_ids, v_addr, idx_addr, counts_addr, /*is_reader=*/true);
+    patch(writer_ids, out_addr, k_addr, q_addr, /*is_reader=*/false);
 }
 
 }  // namespace ttnn::prim

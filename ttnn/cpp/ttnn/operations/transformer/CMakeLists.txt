@@ -34,6 +34,7 @@ target_sources(
             sdpa/sparse_sdpa.hpp
             sdpa/sparse_sdpa_msa.hpp
             sdpa/vsa_sdpa.hpp
+            sdpa/vsa_ring_sdpa.hpp
             sdpa_decode/sdpa_decode.hpp
             split_query_key_value_and_split_heads/split_query_key_value_and_split_heads.hpp
         FILE_SET kernels

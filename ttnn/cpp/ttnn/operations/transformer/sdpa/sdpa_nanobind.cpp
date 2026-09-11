@@ -18,6 +18,7 @@
 #include "sparse_sdpa.hpp"
 #include "sparse_sdpa_msa.hpp"
 #include "vsa_sdpa.hpp"
+#include "vsa_ring_sdpa.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -524,6 +525,62 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("distributed") = false,
         nb::arg("dense_row_hint") = std::vector<uint32_t>{},
         nb::arg("stream_order") = nb::none());
+
+    ttnn::bind_function<"vsa_ring_sdpa", "ttnn.transformer.">(
+        mod,
+        R"doc(
+        VSA fine-stage attention fused with the SP-ring all-gather of K/V (Blackhole mesh). Equivalent to
+        ``vsa_sdpa(q, all_gather(k, dim=2), all_gather(v, dim=2), ...)`` in raw-selection streaming mode, up
+        to bf16 rounding order: the K/V shards are forwarded around the ring (both links) while the attention
+        consumes the shards that have already landed. One program per device: the 2*num_links sender cores
+        take the compute grid's last column, the VSA leader/worker engine the rest.
+
+        Args:
+            q: [1, H, S_local, d] bf16 TILE, this device's query rows.
+            k, v: [1, H, T_local, d] bf16 TILE, this device's K/V shard (T_local a multiple of block_size).
+            indices: [1, H, S_local/64, W] uint32 ROW_MAJOR global block ids (padded-per-shard numbering
+                with coarse_slots_shift), exactly as vsa_sdpa raw-selection mode.
+            block_counts: [1, 1, 1, Wc] uint32 ROW_MAJOR, global.
+            persistent_output_buffer_k, persistent_output_buffer_v: [1, H, T_local*ring_size, d] all-gather
+                ping-pong buffers (shard s at rows [s*T_local, (s+1)*T_local)); the local shard is read from
+                k/v and never written into them.
+
+        Keyword args:
+            multi_device_global_semaphore: two GlobalSemaphores [backward, forward] for the all-gather.
+            num_links, cluster_axis, mesh_device, topology (Ring): the ring geometry.
+            ccl_core_grid_offset: (grid.x-1, 0).
+            subdevice_id: optional sub-device the sender cores are chosen from.
+            scale, block_size, compute_kernel_config, list_len, exempt_ids, dense_row_mask,
+            coarse_slots_shift, coarse_real_per_shard, dense_row_hint: as vsa_sdpa.
+
+        Returns:
+            ttnn.Tensor: [1, H, S_local, d] TILE, dtype = q.
+        )doc",
+        &ttnn::transformer::vsa_ring_sdpa,
+        nb::arg("q").noconvert(),
+        nb::arg("k").noconvert(),
+        nb::arg("v").noconvert(),
+        nb::arg("indices").noconvert(),
+        nb::arg("block_counts").noconvert(),
+        nb::arg("persistent_output_buffer_k").noconvert(),
+        nb::arg("persistent_output_buffer_v").noconvert(),
+        nb::kw_only(),
+        nb::arg("multi_device_global_semaphore"),
+        nb::arg("num_links"),
+        nb::arg("cluster_axis"),
+        nb::arg("mesh_device"),
+        nb::arg("topology"),
+        nb::arg("ccl_core_grid_offset"),
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("scale") = nb::none(),
+        nb::arg("block_size") = 64,
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("list_len") = 0,
+        nb::arg("exempt_ids") = std::vector<uint32_t>{},
+        nb::arg("dense_row_mask") = nb::none(),
+        nb::arg("coarse_slots_shift") = 0,
+        nb::arg("coarse_real_per_shard") = 0,
+        nb::arg("dense_row_hint") = std::vector<uint32_t>{});
 
     const auto* const chunked_doc =
         R"doc(

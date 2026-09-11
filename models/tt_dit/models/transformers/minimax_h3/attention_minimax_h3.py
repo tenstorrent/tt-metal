@@ -594,41 +594,82 @@ class MiniMaxH3Attention(Module):
             if os.environ.get("VSA_DUMP_INDICES"):  # offline selection-statistics dumps (first calls only)
                 self._dump_vsa_indices(vsa_indices)
 
-            # R2: gathered K/V equal the concatenation of all shards' local K/V.
-            if self.parallel_config.sequence_parallel.factor > 1:
-                k_gathered = self.ccl_manager.all_gather_persistent_buffer(k_BHNE, dim=2, mesh_axis=self.sp_mesh_axis)
-                v_gathered = self.ccl_manager.all_gather_persistent_buffer(v_BHNE, dim=2, mesh_axis=self.sp_mesh_axis)
+            use_ring = (
+                self.vsa_config.ring and raw and self.parallel_config.sequence_parallel.factor > 1
+            )  # VSA_RING=0 forces the two-op path for A/B comparisons
+            if use_ring and os.environ.get("VSA_RING", "1") != "1":
+                use_ring = False
+            if use_ring:
+                # vsa_ring_sdpa: the K/V all-gather is fused into the fine stage (shards forwarded around the SP
+                # ring while the attention consumes the landed ones); the gathered buffers are the CCL manager's
+                # all-gather ping-pong buffers and the semaphores the all-gather's own pair.
+                assert self.vsa_config.streaming and not self.vsa_config.distributed
+                assert self.vsa_config.stream_order == "identity", "vsa_ring_sdpa streams in ring-arrival order"
+                spatial_BHNE = ttnn.transformer.vsa_ring_sdpa(
+                    q_BHNE,
+                    k_BHNE,
+                    v_BHNE,
+                    vsa_indices,
+                    self.vsa_stage.block_counts_tensor(),
+                    self.ccl_manager.get_ag_ping_pong_buffer(k_BHNE.shape, 2, self.sp_mesh_axis, dtype=k_BHNE.dtype),
+                    self.ccl_manager.get_ag_ping_pong_buffer(v_BHNE.shape, 2, self.sp_mesh_axis, dtype=v_BHNE.dtype),
+                    multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.sp_mesh_axis),
+                    num_links=self.ccl_manager.num_links,
+                    cluster_axis=self.sp_mesh_axis,
+                    mesh_device=self.mesh_device,
+                    topology=self.ccl_manager.topology,
+                    ccl_core_grid_offset=(0, 0),
+                    subdevice_id=self.ccl_manager.ccl_sub_device_id,
+                    list_len=self.vsa_stage.k,
+                    exempt_ids=self.vsa_stage.exempt_ids,
+                    dense_row_mask=self.vsa_stage.dense_row_mask_tensor(),
+                    coarse_slots_shift=self.vsa_stage.coarse_slots_shift,
+                    coarse_real_per_shard=self.vsa_stage.geometry.tiles_per_shard,
+                    dense_row_hint=self.vsa_stage.dense_row_hint,
+                )
+                ttnn.deallocate(vsa_indices)
+                k_gathered = v_gathered = None
             else:
-                k_gathered, v_gathered = k_BHNE, v_BHNE
-
-            spatial_BHNE = ttnn.transformer.vsa_sdpa(
-                q_BHNE,
-                k_gathered,
-                v_gathered,
-                vsa_indices,
-                self.vsa_stage.block_counts_tensor(),
-                k_chunk_blocks=self.vsa_config.k_chunk_blocks,
-                streaming=self.vsa_config.streaming,
-                distributed=self.vsa_config.distributed,
-                **(
-                    dict(
-                        list_len=self.vsa_stage.k,
-                        exempt_ids=self.vsa_stage.exempt_ids,
-                        dense_row_mask=self.vsa_stage.dense_row_mask_tensor(),
-                        coarse_slots_shift=self.vsa_stage.coarse_slots_shift,
-                        coarse_real_per_shard=self.vsa_stage.geometry.tiles_per_shard,
-                        dense_row_hint=self.vsa_stage.dense_row_hint,  # cost-aware row dealing (both kernels)
-                        **(
-                            dict(stream_order=self.vsa_stage.stream_order_tensor(self.vsa_config.stream_order))
-                            if self.vsa_config.stream_order != "identity" and not self.vsa_config.distributed
-                            else {}
-                        ),
+                # R2: gathered K/V equal the concatenation of all shards' local K/V.
+                if self.parallel_config.sequence_parallel.factor > 1:
+                    k_gathered = self.ccl_manager.all_gather_persistent_buffer(
+                        k_BHNE, dim=2, mesh_axis=self.sp_mesh_axis
                     )
-                    if raw
-                    else {}
-                ),
-            )
-            ttnn.deallocate(vsa_indices)
+                    v_gathered = self.ccl_manager.all_gather_persistent_buffer(
+                        v_BHNE, dim=2, mesh_axis=self.sp_mesh_axis
+                    )
+                else:
+                    k_gathered, v_gathered = k_BHNE, v_BHNE
+
+            if not use_ring:
+                spatial_BHNE = ttnn.transformer.vsa_sdpa(
+                    q_BHNE,
+                    k_gathered,
+                    v_gathered,
+                    vsa_indices,
+                    self.vsa_stage.block_counts_tensor(),
+                    k_chunk_blocks=self.vsa_config.k_chunk_blocks,
+                    streaming=self.vsa_config.streaming,
+                    distributed=self.vsa_config.distributed,
+                    **(
+                        dict(
+                            list_len=self.vsa_stage.k,
+                            exempt_ids=self.vsa_stage.exempt_ids,
+                            dense_row_mask=self.vsa_stage.dense_row_mask_tensor(),
+                            coarse_slots_shift=self.vsa_stage.coarse_slots_shift,
+                            coarse_real_per_shard=self.vsa_stage.geometry.tiles_per_shard,
+                            dense_row_hint=self.vsa_stage.dense_row_hint,  # cost-aware row dealing (both kernels)
+                            **(
+                                dict(stream_order=self.vsa_stage.stream_order_tensor(self.vsa_config.stream_order))
+                                if self.vsa_config.stream_order != "identity" and not self.vsa_config.distributed
+                                else {}
+                            ),
+                        )
+                        if raw
+                        else {}
+                    ),
+                )
+                ttnn.deallocate(vsa_indices)
 
             gate_1BNF = None
             if use_gate:

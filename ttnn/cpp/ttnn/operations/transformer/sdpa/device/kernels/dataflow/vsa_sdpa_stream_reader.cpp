@@ -33,6 +33,9 @@
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include "sparse_sdpa_msa_gather.hpp"
 #include "dataflow_common.hpp"
+#ifdef VSA_RING
+#include "fused_op_receiver.hpp"  // RingSDPAOpReceiver: the fused all-gather's per-shard arrival protocol
+#endif
 
 constexpr uint32_t sentinel = 0xFFFFFFFFu;
 
@@ -197,8 +200,7 @@ void kernel_main() {
     // counts row: resident for the whole kernel on both roles.
     counts_cb.reserve_back(1);
     noc.async_read(counts, counts_cb, counts_row_bytes, {.page_id = 0}, {.offset_bytes = 0});
-    volatile tt_l1_ptr uint32_t* counts_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counts_cb.get_write_ptr());
+    volatile tt_l1_ptr uint32_t* counts_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counts_cb.get_write_ptr());
     noc.async_read_barrier();
     invalidate_l1_cache();  // NOC landed a fresh row in a reused page: drop the stale cached line
 
@@ -226,8 +228,18 @@ void kernel_main() {
         // runtime args; log entries are published with one multicast write per strip.
         const uint32_t n_strips = get_arg_val<uint32_t>(argi++);
 #if defined(VSA_PROBE) && VSA_PROBE == 7  // TT_VSA_PROBE=7: print parsed args
-        DPRINT("VSA_ARGS leader head={} n_workers={} row_count={} list_len={} cb_dense={} dense_bytes={} n_exempt={} n_strips={} argi={}\n",
-            head, n_workers, row_count, list_len, cb_dense, dense_bytes, n_exempt, n_strips, argi);
+        DPRINT(
+            "VSA_ARGS leader head={} n_workers={} row_count={} list_len={} cb_dense={} dense_bytes={} n_exempt={} "
+            "n_strips={} argi={}\n",
+            head,
+            n_workers,
+            row_count,
+            list_len,
+            cb_dense,
+            dense_bytes,
+            n_exempt,
+            n_strips,
+            argi);
 #endif
         uint32_t strip_sx[4], strip_sy[4], strip_ex[4], strip_ey[4], strip_n[4];
         for (uint32_t st = 0; st < n_strips; ++st) {
@@ -246,14 +258,33 @@ void kernel_main() {
         // VSA_STREAM_DESIGN.md 5d). The strip args stay in the layout, unused.
         const uint32_t wcoord_argi = argi;
         argi += 2 * n_workers;
+#ifdef VSA_RING
+        // Ring mode (vsa_ring_sdpa): K/V arrive shard by shard over the SP ring. Blocks of this device's
+        // own shard are read from the local V tensor (`v`, the op's k/v inputs); every other shard from the
+        // gathered buffer once the fused all-gather has landed it. The sequence is streamed shard-major in
+        // the ring-arrival order the RingSDPAOpReceiver yields (own shard first, then alternating
+        // directions), each shard gated on its arrival semaphore. Deterministic per (device, ring_size).
+        const uint32_t gv_addr = get_arg_val<uint32_t>(argi++);              // gathered V (all shards' rows)
+        const uint32_t ring_index = get_arg_val<uint32_t>(argi++);           // this device's SP shard
+        const uint32_t blocks_per_shard = get_arg_val<uint32_t>(argi++);     // T_local / block_size
+        const uint32_t v_local_head_stride = get_arg_val<uint32_t>(argi++);  // tiles per head in local v
+        const uint32_t ring_rt_argi = argi;  // RingSDPAOpReceiver args (9 words), re-parsed per pass
+        argi += 9;
+        constexpr auto gv_args = TensorAccessorArgs<
+            counts_args.next_compile_time_args_offset(),
+            counts_args.next_common_runtime_args_offset()>();
+        const auto gv = TensorAccessor(gv_args, gv_addr);
+        const uint32_t v_local_base = head * v_local_head_stride;
+        const uint32_t ring_size = get_arg_val<uint32_t>(ring_rt_argi);
+#endif
         pass_argi = argi;  // the leader's pass counts and row list follow its strips and worker coords
         rows_argi = argi + n_passes;
         const auto worker_x = [&](uint32_t w) { return get_arg_val<uint32_t>(wcoord_argi + 2 * w); };
         const auto worker_y = [&](uint32_t w) { return get_arg_val<uint32_t>(wcoord_argi + 2 * w + 1); };
         uint64_t strip_base[4];
         for (uint32_t st = 0; st < n_strips; ++st) {
-            strip_base[st] = get_noc_multicast_addr(
-                strip_sx[st], strip_sy[st], strip_ex[st], strip_ey[st], 0, noc.get_noc_id());
+            strip_base[st] =
+                get_noc_multicast_addr(strip_sx[st], strip_sy[st], strip_ex[st], strip_ey[st], 0, noc.get_noc_id());
         }
         const uint32_t v_base = head * v_head_stride;
         volatile tt_l1_ptr uint32_t* log_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(log_l1);
@@ -307,7 +338,8 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_cb.get_write_ptr());
         experimental::CB bitmap_cb(cb_bitmap);
         bitmap_cb.reserve_back(1);
-        volatile tt_l1_ptr uint32_t* bitmaps = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(bitmap_cb.get_write_ptr());
+        volatile tt_l1_ptr uint32_t* bitmaps =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(bitmap_cb.get_write_ptr());
         uint32_t own_row_parity = 0, own_row_seen = 0;
         constexpr uint32_t kOwnWin = stream_depth / 2;
         uint32_t own_pending[32][kOwnWin > 0 ? kOwnWin : 1];
@@ -373,7 +405,8 @@ void kernel_main() {
             }
             ctrl_cb.reserve_back(1);
             {
-                volatile tt_l1_ptr uint32_t* cp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl_cb.get_write_ptr());
+                volatile tt_l1_ptr uint32_t* cp =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl_cb.get_write_ptr());
                 cp[0] = MSG_WINDOW;
                 cp[1] = own_wslots;
             }
@@ -436,7 +469,8 @@ void kernel_main() {
             }
             ctrl_cb.reserve_back(1);
             {
-                volatile tt_l1_ptr uint32_t* cp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl_cb.get_write_ptr());
+                volatile tt_l1_ptr uint32_t* cp =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl_cb.get_write_ptr());
                 cp[0] = MSG_WINDOW;
                 cp[1] = 0;
             }
@@ -447,9 +481,9 @@ void kernel_main() {
             }
         };
 
-        uint32_t arrival = 0;   // published arrivals, monotonic across passes (gates slot reuse)
-        uint32_t fetched = 0;   // fetches issued; runs up to kFetchLag ahead of `arrival`
-        uint32_t log_n = 0;     // log entries emitted (arrivals + sentinels)
+        uint32_t arrival = 0;  // published arrivals, monotonic across passes (gates slot reuse)
+        uint32_t fetched = 0;  // fetches issued; runs up to kFetchLag ahead of `arrival`
+        uint32_t log_n = 0;    // log entries emitted (arrivals + sentinels)
         // Fetches are pipelined kFetchLag blocks deep: every tile read of block N is tagged with
         // trid (N % 8) + 1, so publishing N costs one per-block trid barrier (long since landed
         // with the pipeline full) instead of a full DRAM round trip. Blocks are pumped in PAIRS:
@@ -546,12 +580,39 @@ void kernel_main() {
             for (uint32_t j = 0; j < k; ++j) {
                 const uint32_t slot = fetched % stream_depth;
                 experimental::set_read_trid(noc, (fetched % 8) + 1);
+#ifdef VSA_RING
+                if (bs[j] / blocks_per_shard == ring_index) {  // own shard: local tensor, local block id
+                    const uint32_t v_tile0 = v_local_base + (bs[j] - ring_index * blocks_per_shard) * v_tiles_per_block;
+                    for (uint32_t i = 0; i < v_tiles_per_block; ++i) {
+                        noc.async_read(
+                            v,
+                            v_cb,
+                            v_tile_bytes,
+                            {.page_id = v_tile0 + i},
+                            {.offset_bytes = (slot * v_tiles_per_block + i) * v_tile_bytes});
+                    }
+                } else {  // remote shard: gathered buffer, global block id
+                    const uint32_t v_tile0 = v_base + bs[j] * v_tiles_per_block;
+                    for (uint32_t i = 0; i < v_tiles_per_block; ++i) {
+                        noc.async_read(
+                            gv,
+                            v_cb,
+                            v_tile_bytes,
+                            {.page_id = v_tile0 + i},
+                            {.offset_bytes = (slot * v_tiles_per_block + i) * v_tile_bytes});
+                    }
+                }
+#else
                 const uint32_t v_tile0 = v_base + bs[j] * v_tiles_per_block;
                 for (uint32_t i = 0; i < v_tiles_per_block; ++i) {
                     noc.async_read(
-                        v, v_cb, v_tile_bytes, {.page_id = v_tile0 + i},
+                        v,
+                        v_cb,
+                        v_tile_bytes,
+                        {.page_id = v_tile0 + i},
                         {.offset_bytes = (slot * v_tiles_per_block + i) * v_tile_bytes});
                 }
+#endif
                 experimental::set_read_trid(noc, 0);
                 pend_b[fetched % kFetchLag] = bs[j];
                 pend_slot[fetched % kFetchLag] = slot;
@@ -620,6 +681,32 @@ void kernel_main() {
                 issue_pair(pair, 2);
                 np = 0;
             };
+#ifdef VSA_RING
+            {
+                // Program semaphores are re-initialized per launch and count arrivals monotonically, so a
+                // fresh receiver per pass gates pass 0 on the real arrivals and returns immediately on
+                // later passes (thresholds already met): only pass 0 overlaps the ring.
+#ifdef VSA_RING_WAIT_ALL  // triage knob (TT_VSA_RING_WAIT_ALL=1): land every shard before streaming
+                {
+                    uint32_t a = ring_rt_argi;
+                    RingSDPAOpReceiver r0(true, a);
+                    for (uint32_t step = 0; step < ring_size; ++step) {
+                        r0.get_next_ring_id_and_sync();
+                    }
+                }
+#endif
+                uint32_t rx_argi = ring_rt_argi;
+                RingSDPAOpReceiver rx(/*wait_for_op_signal=*/true, rx_argi);
+                for (uint32_t step = 0; step < ring_size; ++step) {
+                    WAYPOINT("LRNG");
+                    const uint32_t sigma = rx.get_next_ring_id_and_sync();
+                    const uint32_t b0 = sigma * blocks_per_shard;
+                    for (uint32_t b = b0; b < b0 + blocks_per_shard; ++b) {
+                        stream_block(b);
+                    }
+                }
+            }
+#else
             if (order_ptr == nullptr) {
                 for (uint32_t b = 0; b < n_kv_blocks; ++b) {
                     stream_block(b);
@@ -629,6 +716,7 @@ void kernel_main() {
                     stream_block(order_ptr[bi]);
                 }
             }
+#endif
             if (np == 1) {
                 if (fetched - arrival + 1 > kFetchLag) {
                     publish_pending(fetched - arrival + 1 - kFetchLag);
@@ -767,9 +855,10 @@ void kernel_main() {
         }
         experimental::set_read_trid(noc, trid);
         noc_async_read(
-            get_noc_addr(leader_x, leader_y, v_l1_base + leader_slot * v_tiles_per_block * v_tile_bytes,
-                         noc.get_noc_id()),
-            v_l1_base + slot * v_tiles_per_block * v_tile_bytes, v_tiles_per_block * v_tile_bytes,
+            get_noc_addr(
+                leader_x, leader_y, v_l1_base + leader_slot * v_tiles_per_block * v_tile_bytes, noc.get_noc_id()),
+            v_l1_base + slot * v_tiles_per_block * v_tile_bytes,
+            v_tiles_per_block * v_tile_bytes,
             noc.get_noc_id());
         experimental::set_read_trid(noc, 0);
     };
@@ -790,8 +879,8 @@ void kernel_main() {
     };
     PendingWin pendq[2];
     uint32_t pend_head = 0, pend_tail = 0;
-    uint32_t half = 0;              // the half the OPEN window fills
-    uint32_t window_slots = 0;      // pulled blocks in the open window
+    uint32_t half = 0;          // the half the OPEN window fills
+    uint32_t window_slots = 0;  // pulled blocks in the open window
     uint32_t window_first_listed = 0xFFFFFFFFu;
     uint32_t cur_pass_rows = 0;
     uint32_t pass_base_acc = 0;

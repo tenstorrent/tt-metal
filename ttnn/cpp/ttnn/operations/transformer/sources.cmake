@@ -27,7 +27,10 @@ set(TTNN_OP_TRANSFORMER_SRCS
     sdpa/device/vsa_sdpa_device_operation.cpp
     sdpa/device/vsa_sdpa_program_factory.cpp
     sdpa/device/vsa_sdpa_stream_program_factory.cpp
+    sdpa/device/vsa_ring_sdpa_device_operation.cpp
+    sdpa/device/vsa_ring_sdpa_program_factory.cpp
     sdpa/vsa_sdpa.cpp
+    sdpa/vsa_ring_sdpa.cpp
     sdpa_decode/device/sdpa_decode_device_operation.cpp
     sdpa_decode/device/sdpa_decode_program_factory.cpp
     sdpa_decode/sdpa_decode.cpp

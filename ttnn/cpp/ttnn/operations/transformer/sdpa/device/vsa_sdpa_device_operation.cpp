@@ -85,11 +85,12 @@ void validate_common(const VsaSdpaParams& attrs, const VsaSdpaInputs& t) {
             n_kv_blocks,
             so);
     }
+    // dense_row_hint rows index THIS device's q tiles (the dealing indexes per-row tables with them).
+    for (uint32_t r : attrs.dense_row_hint) {
+        TT_FATAL(r < n_q_tiles, "dense_row_hint row {} out of range (S/64 = {})", r, n_q_tiles);
+    }
     if (attrs.distributed) {
         TT_FATAL(attrs.streaming, "vsa_sdpa distributed=True needs streaming=True");
-        for (uint32_t r : attrs.dense_row_hint) {
-            TT_FATAL(r < n_q_tiles, "dense_row_hint row {} out of range (S/64 = {})", r, n_q_tiles);
-        }
     }
     if (raw_selection) {
         TT_FATAL(attrs.streaming, "vsa_sdpa raw-selection inputs (list_len/exempt_ids/dense_rows) need streaming=True");

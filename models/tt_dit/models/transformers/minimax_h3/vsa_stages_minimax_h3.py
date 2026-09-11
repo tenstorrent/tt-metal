@@ -66,6 +66,10 @@ class MiniMaxH3VSAConfig:
     # convoy, VSA_STREAM_DESIGN.md 11; measured 19.5 -> 17.7 ms on the real 15 s shard) | "identity" |
     # "canonical" | "zorder" (see MiniMaxH3VSAGeometry.stream_order). Deterministic for a given order.
     stream_order: str = "identity"  # bstride4.16 is -9.5% standalone but needs the leader protocol fix (log)
+    # vsa_ring_sdpa: fuse the SP-ring all-gather of K/V into the fine stage (VSA_RING_SDPA_SPEC.md). Shards are
+    # forwarded around the ring while the attention consumes the shards already landed, replacing the two
+    # blocking all-gathers (~8 ms/block at 15 s). Needs streaming, not distributed, identity stream order.
+    ring: bool = False
 
 
 def compute_topk(sparsity: float, num_candidates: int) -> int:

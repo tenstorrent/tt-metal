@@ -717,3 +717,11 @@ visited each step; the streaming leader/worker engine and exact online-softmax s
 Effort: a large new fused CCL+compute op (op-level project, not a tweak), the highest-value next build. Risk:
 NoC/DRAM vs fabric contention (mitigated by exp_ring's dedicated MUX columns) and preserving determinism/exact
 numerics across ring steps.
+
+## 14. vsa_ring_sdpa built (2026-09-11)
+
+The fused ring all-gather + VSA fine stage exists and is correct (VSA_RING_SDPA_SPEC.md sections 10-11 have the
+plan, status, root-cause notes and measurements). At the 15 s shape it is at parity with the two-op path
+(23.7 vs 23.3 ms with 2 passes; 26.3 with the default 3 passes): the embedded single-worker all-gather helper is
+~50 % slower than the standalone multi-worker gather, and only pass 0 overlaps. The follow-up is the
+multi-worker forwarder + 2 passes (expected ~4-5 ms/block).

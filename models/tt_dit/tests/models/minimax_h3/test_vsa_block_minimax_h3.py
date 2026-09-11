@@ -118,6 +118,7 @@ def test_vsa_block_15s_768p(mesh_device, sp_axis, tp_axis, num_links, is_fsdp, t
         placement=placement,
         padded_pooling=os.environ.get("VSA_PADDED_POOLING", "1") == "1",
         distributed=os.environ.get("VSA_DIST", "0") == "1",  # distributed-window vsa_sdpa kernel
+        ring=os.environ.get("VSA_RING_BLOCK", "0") == "1",  # vsa_ring_sdpa: fused K/V ring all-gather
     )
     tt_block = MiniMaxH3TransformerBlock(
         **TT_BLOCK_CONFIG,

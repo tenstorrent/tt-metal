@@ -96,6 +96,19 @@ void kernel_main() {
         return;  // probe 7: no K fetches, no acks (the reader skips its kack waits too)
 #endif
         const uint32_t k_base = head * k_head_stride;
+#ifdef VSA_RING
+        // Ring mode: own-shard blocks come from the local K tensor (`k`), remote shards from the gathered
+        // buffer (see the reader's leader for the protocol). The ring args follow the pass counts and rows.
+        const uint32_t kRingArg = kRowsArg + row_count;
+        const uint32_t gk_addr = get_arg_val<uint32_t>(kRingArg);
+        const uint32_t ring_index = get_arg_val<uint32_t>(kRingArg + 1);
+        const uint32_t blocks_per_shard = get_arg_val<uint32_t>(kRingArg + 2);
+        const uint32_t k_local_head_stride = get_arg_val<uint32_t>(kRingArg + 3);
+        constexpr auto gk_args =
+            TensorAccessorArgs<q_args.next_compile_time_args_offset(), q_args.next_common_runtime_args_offset()>();
+        const auto gk = TensorAccessor(gk_args, gk_addr);
+        const uint32_t k_local_base = head * k_local_head_stride;
+#endif
         uint32_t nfetch = 0, nacked = 0;
         const auto ack_oldest = [&]() {
             experimental::async_read_barrier_with_trid(noc, (nacked % 8) + 1);
@@ -106,12 +119,39 @@ void kernel_main() {
         constexpr uint32_t kNoBlock = 0xFFFFFFFEu;
         const auto fetch_one = [&](uint32_t block_id, uint32_t slot) {
             experimental::set_read_trid(noc, (nfetch % 8) + 1);
+#ifdef VSA_RING
+            if (block_id / blocks_per_shard == ring_index) {  // own shard: local tensor, local block id
+                const uint32_t k_tile0 = k_local_base + (block_id - ring_index * blocks_per_shard) * k_tiles_per_block;
+                for (uint32_t i = 0; i < k_tiles_per_block; ++i) {
+                    noc.async_read(
+                        k,
+                        k_cb,
+                        k_tile_bytes,
+                        {.page_id = k_tile0 + i},
+                        {.offset_bytes = (slot * k_tiles_per_block + i) * k_tile_bytes});
+                }
+            } else {  // remote shard: gathered buffer, global block id
+                const uint32_t k_tile0 = k_base + block_id * k_tiles_per_block;
+                for (uint32_t i = 0; i < k_tiles_per_block; ++i) {
+                    noc.async_read(
+                        gk,
+                        k_cb,
+                        k_tile_bytes,
+                        {.page_id = k_tile0 + i},
+                        {.offset_bytes = (slot * k_tiles_per_block + i) * k_tile_bytes});
+                }
+            }
+#else
             const uint32_t k_tile0 = k_base + block_id * k_tiles_per_block;
             for (uint32_t i = 0; i < k_tiles_per_block; ++i) {
                 noc.async_read(
-                    k, k_cb, k_tile_bytes, {.page_id = k_tile0 + i},
+                    k,
+                    k_cb,
+                    k_tile_bytes,
+                    {.page_id = k_tile0 + i},
                     {.offset_bytes = (slot * k_tiles_per_block + i) * k_tile_bytes});
             }
+#endif
             experimental::set_read_trid(noc, 0);
             ++nfetch;
             if (nfetch - nacked > kAckLag) {
@@ -170,7 +210,10 @@ void kernel_main() {
                     for (uint32_t i = 0; i < q_tiles_per_row; ++i) {
                         // cb_q_res is RAM-mode: never reserved/pushed here, offsets from the base.
                         noc.async_read(
-                            q, q_cb, q_tile_bytes, {.page_id = page0 + i},
+                            q,
+                            q_cb,
+                            q_tile_bytes,
+                            {.page_id = page0 + i},
                             {.offset_bytes = (r * q_tiles_per_row + i) * q_tile_bytes});
                     }
                 }
@@ -217,8 +260,8 @@ void kernel_main() {
     // marker kreq {0xFFFFFFFF, half} queues a LAZY ack: it is pushed, in marker order, once a
     // non-blocking check says that half's pulls landed -- never a blocking drain (the reader's
     // symmetric V-side blocking drain measured 60% of its wall time).
-    uint32_t pull_idx[2] = {0, 0};       // pulls issued in the open window of each half
-    uint32_t ack_pending[4];             // FIFO of marker halves awaiting their lazy ack
+    uint32_t pull_idx[2] = {0, 0};  // pulls issued in the open window of each half
+    uint32_t ack_pending[4];        // FIFO of marker halves awaiting their lazy ack
     uint32_t ack_head = 0, ack_tail = 0;
     const auto khalf_landed = [&](uint32_t h) {
         for (uint32_t t = 0; t < 4; ++t) {
@@ -261,9 +304,9 @@ void kernel_main() {
             experimental::set_read_trid(noc, trid);
             noc_async_read(
                 get_noc_addr(
-                    leader_x, leader_y, k_l1_base + leader_slot * k_tiles_per_block * k_tile_bytes,
-                    noc.get_noc_id()),
-                k_l1_base + slot * k_tiles_per_block * k_tile_bytes, k_tiles_per_block * k_tile_bytes,
+                    leader_x, leader_y, k_l1_base + leader_slot * k_tiles_per_block * k_tile_bytes, noc.get_noc_id()),
+                k_l1_base + slot * k_tiles_per_block * k_tile_bytes,
+                k_tiles_per_block * k_tile_bytes,
                 noc.get_noc_id());
             experimental::set_read_trid(noc, 0);
         }
@@ -278,7 +321,10 @@ void kernel_main() {
                 for (uint32_t i = 0; i < q_tiles_per_row; ++i) {
                     // cb_q_res is RAM-mode: never reserved/pushed here, offsets from the base.
                     noc.async_read(
-                        q, q_cb, q_tile_bytes, {.page_id = page0 + i},
+                        q,
+                        q_cb,
+                        q_tile_bytes,
+                        {.page_id = page0 + i},
                         {.offset_bytes = (r * q_tiles_per_row + i) * q_tile_bytes});
                 }
                 serve_kreq_if_any();
