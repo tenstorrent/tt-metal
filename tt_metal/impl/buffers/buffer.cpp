@@ -644,7 +644,7 @@ std::shared_ptr<Buffer> BufferImpl::view(Buffer& self, const BufferRegion& regio
     }
 
     auto buffer = BufferImpl::create(
-        device_, address_, region.size, page_size_, buffer_type_, std::move(sharding_args), bottom_up_, sub_device_id_);
+        device_, address_, region.size, page_size_, buffer_type_, sharding_args, bottom_up_, sub_device_id_);
 
     std::shared_ptr<const BufferPageMapping> new_page_mapping;
     if (is_sharded(buffer_layout_)) {
