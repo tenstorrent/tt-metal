@@ -21,6 +21,21 @@
 //                       streak and is forwarded to the next consumer over the
 //                       NoC; DRAM is touched only at a streak start (load) and
 //                       a streak end (spill). Algorithm 3, barrier variant.
+//   TRANSPORT_ENDPOINT  the same relay with no chip-wide barrier at all.
+//                       Within a streak the packet is itself the ordering
+//                       token; across a gap, two endpoint counters order a
+//                       reload after the preceding streak's spill. Algorithm 4.
+//
+// Algorithm 4 needs no barrier because of the endpoint spill property: every
+// streak that is followed by a later streak ends on core 1 or core 2. Each of
+// those two cores publishes a monotone progress value after completing an
+// inter-streak spill at t -- E_c <- t + 1, to every core's local copy, its own
+// included -- and a consumer beginning a later streak of row i at t waits for
+// E_e(i,t) to reach t_prev(i,t) + 1 before issuing its reload.
+//
+// The threshold is t_prev + 1 and not t. The row is inactive at t - 1 at every
+// later streak start, and progress is published only for spill events, so
+// waiting for t waits for a publication that never comes.
 //
 // The relay implements the paper's communication contract:
 //
@@ -50,6 +65,13 @@
 // Column state, one page per column block, same shape:
 //   0 column id   1 number of visits   2 checksum over column_term(i, j)
 //
+// Every DRAM reload is checked on the spot, the way the simulator checks one
+// when a transfer lands: a packet loaded at a streak start must already carry
+// exactly the updates of the row's earlier active timesteps, which the
+// schedule knows. A reload that runs ahead of the preceding streak's spill is
+// then caught where it happens, instead of being left to show up -- or not --
+// in a final checksum. The count of violations goes in the stats page.
+//
 // The column pages are poisoned by the host, because the column-state rules
 // say a first visit initialises the gradients locally and must not read them
 // from DRAM. A kernel that reads them anyway accumulates poison.
@@ -72,6 +94,11 @@
 //   RMW_SPIN_ITERS    spin between reading a row packet and writing it back,
 //                     widening the read-modify-write window.
 //   RMW_SPIN_CORE     restrict that widening to one core (0 = every core).
+//   SPILL_SPIN_ITERS  spin immediately before a streak-end spill's DRAM write,
+//                     on SPILL_SPIN_CORE (0 = every core). Unlike RMW_SPIN,
+//                     this delays only the spill, not the forwards, so the
+//                     spilling core's snake successors are not held up behind
+//                     it and a reloader elsewhere can run ahead of the spill.
 //
 // The last one needs explaining, because the obvious fault design does not
 // work. This checksum accumulates commutatively, so a read-modify-write that
@@ -122,6 +149,14 @@ using Words = volatile tt_l1_ptr uint32_t*;
 #define RMW_SPIN_CORE 0
 #endif
 
+#ifndef SPILL_SPIN_ITERS
+#define SPILL_SPIN_ITERS 0
+#endif
+
+#ifndef SPILL_SPIN_CORE
+#define SPILL_SPIN_CORE 0
+#endif
+
 // A portable busy wait. riscv_wait() lives in an internal arch header, and
 // this only has to be long, not precise.
 inline void spin(uint32_t iterations) {
@@ -164,7 +199,9 @@ void kernel_main() {
     constexpr uint32_t credit_prev_sem_id = get_compile_time_arg_val(5);
     constexpr uint32_t credit_next_sem_id = get_compile_time_arg_val(6);
     constexpr uint32_t credit_self_sem_id = get_compile_time_arg_val(7);
-    constexpr auto packet_args = TensorAccessorArgs<8>();
+    constexpr uint32_t endpoint1_sem_id = get_compile_time_arg_val(8);
+    constexpr uint32_t endpoint2_sem_id = get_compile_time_arg_val(9);
+    constexpr auto packet_args = TensorAccessorArgs<10>();
     constexpr auto column_args = TensorAccessorArgs<packet_args.next_compile_time_args_offset()>();
     constexpr auto stats_args = TensorAccessorArgs<column_args.next_compile_time_args_offset()>();
 
@@ -203,8 +240,10 @@ void kernel_main() {
     uint32_t n_forwards_received = 0;
     uint32_t n_self_forwards = 0;
     uint32_t n_column_changes = 0;
+    uint32_t n_publications = 0;
+    uint32_t n_reload_errors = 0;
 
-#ifdef TRANSPORT_RELAY
+#if defined(TRANSPORT_RELAY) || defined(TRANSPORT_ENDPOINT)
     using ttml::metal::ops::cyclic_sdpa_bw::kNoCore;
     using ttml::metal::ops::cyclic_sdpa_bw::snake_neighbors;
 
@@ -265,6 +304,32 @@ void kernel_main() {
         }
     };
 
+#ifdef TRANSPORT_ENDPOINT
+    // Every core holds a local copy of both endpoint counters, so a consumer
+    // polls its own L1 rather than a remote word.
+    volatile tt_l1_ptr uint32_t* endpoint_sem[2] = {
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(endpoint1_sem_id)),
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(endpoint2_sem_id))};
+    const uint64_t endpoint_mcast_addr[2] = {
+        get_noc_multicast_addr(
+            mcast_x_start, mcast_y_start, mcast_x_end, mcast_y_end, get_semaphore(endpoint1_sem_id)),
+        get_noc_multicast_addr(
+            mcast_x_start, mcast_y_start, mcast_x_end, mcast_y_end, get_semaphore(endpoint2_sem_id))};
+
+    // Publish this endpoint's progress after an inter-streak spill. The
+    // loopback multicast writes the sender too, which matters: a later streak
+    // of the row may well be consumed here -- row 15 at t = 16 on core 2 in
+    // the paper's remark waits on core 2's own copy.
+    const auto publish_progress = [&](uint32_t value) {
+        *scratch = value;
+        noc_semaphore_set_multicast_loopback_src(
+            scratch_l1, endpoint_mcast_addr[my_core - 1u], kCores);
+        // The value is a 4-byte write out of scratch; complete it before that
+        // word is reused, and before this core advances.
+        noc_async_write_barrier();
+    };
+#endif
+
     // Initial permissions, for destination timesteps 0 and 1 only. A slot
     // whose producer is this core itself needs none: it loads from DRAM.
     for (uint32_t u = 0; u < 2u && u < kTimesteps; ++u) {
@@ -323,7 +388,7 @@ void kernel_main() {
         // ---- row packet
         const uint32_t slot = slot_addr[t % 2u];
         Words packet = reinterpret_cast<Words>(slot);
-#ifdef TRANSPORT_RELAY
+#if defined(TRANSPORT_RELAY) || defined(TRANSPORT_ENDPOINT)
         const auto producer = sched.producer(my_core, t);
         if (producer.internal) {
             // Inside a streak: the packet arrives over the NoC, or as a local
@@ -346,9 +411,37 @@ void kernel_main() {
             // A streak start: this core loads the packet itself. Its own slot
             // was released at t - 2 and its loop is sequential, so the
             // permission is local and implicit.
+#ifdef TRANSPORT_ENDPOINT
+            if (sched.is_later_streak_start(pair.i, t)) {
+                // Order the reload after the preceding streak's spill. The
+                // threshold certifies that actual spill, not the inactive
+                // timestep t - 1.
+                const uint32_t e = sched.spill_endpoint(pair.i, t);
+#ifdef FAULT_ENDPOINT_WAIT_T
+                const uint32_t want = t;  // main_human.tex's threshold; deadlocks
+#else
+                const uint32_t want = sched.endpoint_threshold(pair.i, t);
+#endif
+#ifndef FAULT_NO_ENDPOINT_WAIT
+                noc_semaphore_wait_min(endpoint_sem[e - 1u], want);
+#endif
+            }
+#endif
             noc_async_read_page(pair.i - 1u, packets, slot);
             noc_async_read_barrier();
             ++n_row_loads;
+            // The reloaded packet must already hold every update scheduled
+            // before t. Fewer means the preceding streak's spill was not
+            // visible; more means one was applied twice.
+            uint32_t expected_updates = 0;
+            for (uint32_t s = 0; s < t; ++s) {
+                if (sched.is_active(pair.i, s)) {
+                    ++expected_updates;
+                }
+            }
+            if (reinterpret_cast<Words>(slot)[1] != expected_updates) {
+                ++n_reload_errors;
+            }
         }
 #else
         noc_async_read_page(pair.i - 1u, packets, slot);
@@ -369,7 +462,7 @@ void kernel_main() {
         packet[1] = updates + 1u;
         packet[2] = checksum + row_term(pair.i, pair.j);
 
-#ifndef TRANSPORT_RELAY
+#if !defined(TRANSPORT_RELAY) && !defined(TRANSPORT_ENDPOINT)
         // The write must be visible before this core arrives, so that the
         // consumer of row i at a later timestep sees it.
         noc_async_write_page(pair.i - 1u, packets, slot);
@@ -377,7 +470,7 @@ void kernel_main() {
 #endif
 
         // ---- barrier arrive
-#ifndef FAULT_NO_BARRIER
+#if !defined(FAULT_NO_BARRIER) && !defined(TRANSPORT_ENDPOINT)
         noc_semaphore_inc(arrive_noc_addr, 1u);
 #endif
 
@@ -386,7 +479,7 @@ void kernel_main() {
         column[2] = column[2] + column_term(pair.i, pair.j);
 
         // ---- release timestep t once every core has arrived
-#ifndef FAULT_NO_BARRIER
+#if !defined(FAULT_NO_BARRIER) && !defined(TRANSPORT_ENDPOINT)
         if (is_coordinator != 0u) {
             noc_semaphore_wait_min(arrive_sem, kCores * (t + 1u));
             *scratch = t + 1u;
@@ -398,7 +491,7 @@ void kernel_main() {
         noc_semaphore_wait_min(release_sem, t + 1u);
 #endif
 
-#ifdef TRANSPORT_RELAY
+#if defined(TRANSPORT_RELAY) || defined(TRANSPORT_ENDPOINT)
         // ---- forward to the next consumer, or spill at a streak end
         const uint32_t receiver = sched.next_consumer(pair.i, t);
         if (receiver != kNoCore) {
@@ -434,9 +527,22 @@ void kernel_main() {
         } else {
             // Streak end: spill the packet and complete the write, so the
             // reload at the next streak start observes it.
+            if constexpr (SPILL_SPIN_ITERS > 0) {
+                if (SPILL_SPIN_CORE == 0u || my_core == SPILL_SPIN_CORE) {
+                    spin(SPILL_SPIN_ITERS);
+                }
+            }
             noc_async_write_page(pair.i - 1u, packets, slot);
             noc_async_write_barrier();
             ++n_row_spills;
+#ifdef TRANSPORT_ENDPOINT
+            // An inter-streak spill certifies itself for the later streak's
+            // reload. By the endpoint spill property this core is 1 or 2.
+            if (sched.has_later_active(pair.i, t)) {
+                publish_progress(t + 1u);
+                ++n_publications;
+            }
+#endif
         }
 
         // ---- release this slot for destination timestep t + 2
@@ -463,8 +569,8 @@ void kernel_main() {
     stats_page[3] = n_forwards_received;
     stats_page[4] = n_self_forwards;
     stats_page[5] = n_column_changes;
-    stats_page[6] = kTimesteps;
-    stats_page[7] = my_core;
+    stats_page[6] = n_publications;
+    stats_page[7] = n_reload_errors;
     noc_async_write_page(my_core - 1u, stats, get_write_ptr(cb_stats));
     noc_async_write_barrier();
 }

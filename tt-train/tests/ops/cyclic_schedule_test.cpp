@@ -417,6 +417,39 @@ TEST(CyclicScheduleTest, PlacementIsNearestNeighborForEveryLadderShape) {
     }
 }
 
+TEST(CyclicScheduleTest, HasLaterActiveAgreesWithTheStreaks) {
+    // It decides whether a spill is inter-streak, and so whether an endpoint
+    // publishes. Saying "no" too early strands a later reload forever; saying
+    // "yes" at a final spill publishes a value nobody waits for.
+    for (uint32_t k = 0; k < golden::kNumConfigs; ++k) {
+        const uint32_t C = golden::kConfigs[k].C;
+        const CyclicSchedule s(C);
+        for (uint32_t i = 1; i <= s.T(); ++i) {
+            const auto st = streaks(s, i);
+            for (uint32_t t = 0; t <= s.T(); ++t) {
+                bool expected = false;
+                for (const auto& iv : st) {
+                    if (iv.start > t) {
+                        expected = true;
+                    }
+                }
+                // At a streak end, "a later streak exists" and "the row is
+                // active later" are the same statement.
+                if (s.is_active(i, t) && s.streak_at(i, t).end == t) {
+                    EXPECT_EQ(s.has_later_active(i, t), expected)
+                        << "C=" << C << " i=" << i << " t=" << t;
+                }
+                bool any_active_later = false;
+                for (uint32_t u = t + 1u; u <= s.T(); ++u) {
+                    any_active_later = any_active_later || s.is_active(i, u);
+                }
+                EXPECT_EQ(s.has_later_active(i, t), any_active_later)
+                    << "C=" << C << " i=" << i << " t=" << t;
+            }
+        }
+    }
+}
+
 TEST(CyclicScheduleTest, ThePapersWorkedEndpointExample) {
     // main.tex's remark: with T = 16, row 15's final streak starts at t = 16
     // on core 2, its preceding spill is at t = 14, so the threshold is 15.
