@@ -266,6 +266,21 @@ def test_run_devices_proc_calls_it():
     assert "agent.probes" in inspect.getsource(R._available_memory_gb)
 
 
+def test_adaptive_run_calls_it_too():
+    """The SIXTH launch point, found late: perf_mcp._adaptive_run drives the BEFORE/AFTER
+    full-pipeline bookend, which explicitly builds the model at full uncapped depth -- the exact
+    operation that OOM-killed every other full-depth launch point -- and had neither the wait nor
+    the cap until this test was written. Same streaming-Popen shape as _run_device_proc, so the
+    auto-retry stays out of scope here too, for the same reason."""
+    import models.experimental.perf_automation.cc_optimize.perf_mcp as M
+
+    src = inspect.getsource(M._adaptive_run)
+    i = src.index("wait_for_memory_headroom_before_device_work(")
+    k = src.index("_sp.Popen(", i)
+    assert k > i, "the wait does not run before the process launches"
+    assert "preexec_fn=memory_cap_preexec_fn()" in src[k : k + 400], "the launch carries no hard cap"
+
+
 def test_stack_survey_calls_it_at_both_build_sites():
     """stack_survey builds the model via TWO separate functions (survey_model + survey), each with
     its OWN subprocess.run, independent of _run_device_proc -- the incident this test file is named
