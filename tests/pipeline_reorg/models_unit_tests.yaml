@@ -1849,6 +1849,11 @@
       --cov=models.common.modules.sampling.penalties_1d \
       --cov-report=term-missing \
       --cov-config=models/common/tests/setup.cfg || fail=1
+    pytest models/common/tests/modules/sampling/test_params.py \
+      -m "not slow" \
+      --tb=short \
+      --durations=10 \
+      --deselect "models/common/tests/modules/sampling/test_params.py::test_legacy_device_sampling_capabilities_declare_the_exact_limit[models/tt_transformers/tt/generator_vllm.py]" || fail=1
     pytest models/common/tests/modules/sampling/test_sampling_1d.py \
       -m "not slow" \
       --tb=short \

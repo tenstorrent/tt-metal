@@ -18,7 +18,7 @@
 
 // PrefetcherPipe-relay checkpoint align, called from the RelayDFBBindingToken constructor on
 // TRISC (unpack/pack). DM aligns in PrefetcherPipe::bind_relay().
-#if defined(COMPILE_FOR_TRISC) && !defined(ARCH_QUASAR) && !defined(UCK_CHLKC_MATH)
+#if defined(COMPILE_FOR_TRISC) && !defined(UCK_CHLKC_MATH)
 #include "internal/prefetcher_pipe_init.h"
 #endif
 
@@ -37,6 +37,10 @@ struct noc_traits_t<DataflowBuffer>;
 #include "api/lock.h"
 #include "api/core_local_mem.h"
 #include <type_traits>
+
+namespace experimental {
+class PrefetcherPipe;
+}
 
 #if __has_include("chlkc_descriptors.h")
 #include "chlkc_descriptors.h"
@@ -93,7 +97,7 @@ public:
     // For PrefetcherPipe relays on TRISC, construction snaps the borrowed local iface to the
     // durable checkpoint via a launch-msg slot lookup keyed by token.prefetcher_pipe_id()
     DataflowBuffer(RelayDFBBindingToken token) : DataflowBuffer(static_cast<uint16_t>(token)) {
-#if defined(COMPILE_FOR_TRISC) && !defined(ARCH_QUASAR) && !defined(UCK_CHLKC_MATH)
+#if defined(COMPILE_FOR_TRISC) && !defined(UCK_CHLKC_MATH)
         if (token.prefetcher_pipe_id() != RelayDFBBindingToken::NO_PREFETCHER_PIPE) {
             experimental::align_local_dfb_to_prefetcher_pipe_slot(logical_dfb_id_, token.prefetcher_pipe_id());
         }
@@ -395,12 +399,19 @@ private:
 
 #ifndef COMPILE_FOR_TRISC
     friend class Noc;  // grants Noc::async_read/write access to prepare_*/commit_*
+    // PrefetcherPipe::pop_front waits on relay consumer acks by calling wait_relay_consumer_caught_up
+    friend class experimental::PrefetcherPipe;
 
     uint32_t prepare_implicit_read();
     void commit_implicit_read();
 
     uint32_t prepare_implicit_write();
     void commit_implicit_write();
+
+    // Relay handoff (pipe-private): spin until consumer acked has caught producer posted
+    // on every RR TC this object owns. After push_back(N) in the relay loop, the
+    // outstanding gap is those N entries.
+    void wait_relay_consumer_caught_up() const;
 #endif // !COMPILE_FOR_TRISC
 #endif // ARCH_QUASAR
 
