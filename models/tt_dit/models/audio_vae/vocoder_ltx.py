@@ -101,21 +101,23 @@ class AMPBlock1(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
-        pack: int = 1,
+        pack: int | None = None,
     ) -> None:
         super().__init__()
         self.channels = channels
         self.kernel_size = kernel_size
         self.num_branches = len(dilation)
         self.mesh_device = mesh_device
-        # pack > 1: the block runs on time-packed rows (B, T/pack, pack*C); see layers/audio_pack.py.
+        # pack (layers/audio_pack.py): None = the depthwise resamplers and dilated convs as they are; 1 = the
+        # anti-alias resamplers as dense convs on unpacked rows; > 1 = everything on time-packed rows
+        # (B, T/pack, pack*C).
         self.pack = pack
 
         act_cls = SnakeBeta if activation == "snakebeta" else Snake
         common = dict(mesh_device=mesh_device, dtype=dtype, parallel_config=parallel_config, ccl_manager=ccl_manager)
 
         def conv(dil):
-            if pack > 1:
+            if pack is not None and pack > 1:
                 return PackedConv1d(
                     channels,
                     channels,
@@ -138,7 +140,7 @@ class AMPBlock1(Module):
 
         # alpha_logscale=True: checkpoint stores log α / log β, collapsed at load time.
         def act():
-            if pack > 1:
+            if pack is not None:
                 assert activation == "snakebeta", "packed blocks implement SnakeBeta only"
                 return PackedActivation1d(channels=channels, pack=pack, split_mode=split_mode, **common)
             return Activation1d(
@@ -308,7 +310,7 @@ class Vocoder(Module):
                         parallel_config=parallel_config,
                         ccl_manager=ccl_manager,
                         split_mode=split_mode,
-                        pack=self.pack_bands.get(i, 1),
+                        pack=self.pack_bands.get(i),
                     )
                 )
 
