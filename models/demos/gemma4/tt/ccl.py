@@ -48,6 +48,12 @@ def default_ccl_packet_bytes():
     6144 B is three 2048 B tiles (the SharedMLP / all-gather page size).
     Blackhole stays on Fabric's 4352 B default: matching page width was
     slower end-to-end on P150x8. Override with ``GEMMA4_CCL_PACKET_BYTES``.
+
+    Applies to every Wormhole model, not just 31B. The hazard this avoids is a
+    packet NARROWER than the page: overriding 12B to 3840 B once hung the vocab
+    all-gather after the first prefill-trace capture (4096 B pages). 6144 B is
+    wider than both the 4096 B and 5376 B pages seen here, so it is safe where
+    3840 B was not.
     """
     if is_blackhole():
         return None
@@ -96,21 +102,80 @@ def ccl_persistent_buffers_enabled() -> bool:
     return os.environ.get("GEMMA4_CCL_PERSISTENT_BUF", "1").lower() not in ("0", "false", "no")
 
 
-def default_ccl_topology(mesh_device=None):
+_CCL_ASYNC_MIN_HEIGHT = 2048
+
+
+def _physical_tile_padded_height(tensor) -> int:
+    """Flatten B*S-style leading dimensions and tile-pad the collective height."""
+    height = 1
+    for index in range(len(tensor.shape) - 1):
+        height *= int(tensor.shape[index])
+    return ((height + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+
+
+def ccl_sync_split_enabled() -> bool:
+    """Use tunable sync reduce-scatter + all-gather for TP all-reduce."""
+    return os.environ.get("GEMMA4_CCL_SPLIT", "1").lower() not in ("0", "false", "no")
+
+
+_PREFILL_RS_TALL_HEIGHT = 2048
+
+
+def ccl_sync_rs_workers(padded_height: int | None = None) -> int:
+    """Workers per link for the sync reduce-scatter half.
+
+    Decode / short prefill stay latency-bound at ``w=1``. Tall prefill
+    (``h >= 2048``) is bandwidth-bound and wants ``w=2``. Override with
+    ``GEMMA4_CCL_SYNC_RS_WORKERS``.
+    """
+    env = os.environ.get("GEMMA4_CCL_SYNC_RS_WORKERS")
+    if env is not None and str(env).strip() != "":
+        return max(1, int(env))
+    if padded_height is not None and int(padded_height) >= _PREFILL_RS_TALL_HEIGHT:
+        return 2
+    return 1
+
+
+def ccl_sync_rs_chunks(padded_height: int | None = None) -> int:
+    """Chunks per sync for the sync reduce-scatter half.
+
+    Decode / short prefill stay at ``c=1``; tall prefill uses ``c=2``.
+    Override with ``GEMMA4_CCL_SYNC_RS_CHUNKS``.
+    """
+    env = os.environ.get("GEMMA4_CCL_SYNC_RS_CHUNKS")
+    if env is not None and str(env).strip() != "":
+        return max(1, int(env))
+    if padded_height is not None and int(padded_height) >= _PREFILL_RS_TALL_HEIGHT:
+        return 2
+    return 1
+
+
+def ccl_sync_rs_buffers() -> int:
+    """Buffers per channel for the sync reduce-scatter half."""
+    return max(1, int(os.environ.get("GEMMA4_CCL_SYNC_RS_BUFFERS", "4")))
+
+
+def ccl_l1_gather_enabled() -> bool:
+    """Allow decode all-reduce to gather into its consumer's L1 layout."""
+    return os.environ.get("GEMMA4_CCL_L1_GATHER", "1").lower() not in ("0", "false", "no")
+
+
+def default_ccl_topology(mesh_device=None, is_moe: bool = True):
     """Default CCL topology for Gemma4 TP collectives.
 
     Override with ``GEMMA4_CCL_TOPOLOGY=ring|linear``.
 
     Policy (when env unset):
-      * **Ring** only on **Blackhole** meshes with **≥8 devices** (P150x8 TTFT
+      * **Ring** on **Blackhole** meshes with **≥8 devices** (P150x8 TTFT
         sweep: Ring+sync ~28.8s vs Linear+sync ~31.0s @ 31B/128k).
-      * **Linear** everywhere else — including Wormhole T3K 1x8. Ring on WH
-        drops 26B-A4B ``test_full_model`` PCC below the TEMP 0.76 gate
-        (~0.7505 vs ~0.77/0.94 with Linear / main). Ring on 4-device BH also
-        drops 12B full-model PCC (~0.97 → ~0.90).
-
-    Async RS+AG is correct but slower than sync on P150x8 — keep
-    ``GEMMA4_CCL_ASYNC=0`` unless re-swept.
+      * **Ring** on **Wormhole** meshes with **≥8 devices** for **dense**
+        models. Use sync Ring under ``FABRIC_1D``; ``num_links=2`` raises an
+        Event Order Issue (see default_num_links).
+      * **Linear** for **MoE** models on WH: Ring drops 26B-A4B
+        ``test_full_model`` PCC below the TEMP 0.76 gate (~0.7505 vs
+        ~0.77/0.94 with Linear / main).
+      * **Linear** everywhere else. Ring on 4-device BH drops 12B full-model
+        PCC (~0.97 → ~0.90).
     """
     override = os.environ.get("GEMMA4_CCL_TOPOLOGY", "").strip().lower()
     if override in ("ring", "r"):
@@ -119,10 +184,8 @@ def default_ccl_topology(mesh_device=None):
         return ttnn.Topology.Linear
 
     n = mesh_device.get_num_devices() if mesh_device is not None else 0
-    # Ring TTFT win was swept on BH P150x8 only. WH T3K is also n=8 but must
-    # stay Linear for MoE PCC (matches main's hardcoded Linear all-reduce).
     if n:
-        if n >= 8 and is_blackhole():
+        if n >= 8 and (is_blackhole() or not is_moe):
             return ttnn.Topology.Ring
         return ttnn.Topology.Linear
 
@@ -142,13 +205,14 @@ def default_ccl_topology(mesh_device=None):
     return ttnn.Topology.Linear
 
 
-def ccl_async_enabled() -> bool:
-    """True when prefill/decode allreduce should use async RS+AG.
-
-    Default off until measured green on the target board; enable with
-    ``GEMMA4_CCL_ASYNC=1``.
-    """
-    return os.environ.get("GEMMA4_CCL_ASYNC", "0").lower() in ("1", "true", "yes")
+def ccl_async_enabled(padded_height: int | None = None) -> bool:
+    """Auto-enable async RS+AG only for bandwidth-bound tall prefill."""
+    override = os.environ.get("GEMMA4_CCL_ASYNC")
+    if override is not None:
+        return override.lower() in ("1", "true", "yes")
+    if padded_height is not None and int(padded_height) >= _CCL_ASYNC_MIN_HEIGHT:
+        return os.environ.get("GEMMA4_CCL_ASYNC_PREFILL", "1").lower() not in ("0", "false", "no")
+    return False
 
 
 class CCLManager:
@@ -160,11 +224,11 @@ class CCLManager:
     so repeated collectives of the same activation shape skip realloc+barrier.
     """
 
-    def __init__(self, mesh_device, num_links=None, topology=None):
+    def __init__(self, mesh_device, num_links=None, topology=None, is_moe: bool = True):
         if num_links is None:
             num_links = default_num_links()
         if topology is None:
-            topology = default_ccl_topology(mesh_device)
+            topology = default_ccl_topology(mesh_device, is_moe=is_moe)
         self.mesh_device = mesh_device
         self.num_links = num_links
         self.topology = topology
@@ -185,7 +249,7 @@ class CCLManager:
         self._barrier_semaphores = []
         for _ in range(2):
             self._rs_semaphores.append([ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(3)])
-            self._ag_semaphores.append([ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(3)])
+            self._ag_semaphores.append([ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(2)])
             self._barrier_semaphores.append(ttnn.create_global_semaphore(mesh_device, core_range_set, 0))
         ttnn.synchronize_device(mesh_device)
 
@@ -204,7 +268,7 @@ class CCLManager:
         return sems
 
     def get_ag_semaphore(self):
-        """Returns list of 3 semaphores for all_gather (cycles double-buffer)."""
+        """Returns list of 2 semaphores for all_gather (cycles double-buffer)."""
         sems = self._ag_semaphores[self._ag_idx]
         self._ag_idx = (self._ag_idx + 1) % 2
         return sems
@@ -287,6 +351,35 @@ class CCLManager:
         return [inter, out]
 
 
+def _short_seq_l1_gather_memcfg(tensor, ccl_manager):
+    """Width-sharded L1 gather layout for decode and short-prefill all-reduce."""
+    if not ccl_l1_gather_enabled():
+        return None
+    try:
+        shape = tensor.shape
+        if len(shape) != 4:
+            return None
+        from models.demos.gemma4.tt.rms_norm import (
+            activation_physical_height,
+            prefill_mlp_island_enabled,
+            sharded_norm_enabled,
+            width_shard_input_memcfg,
+        )
+
+        if not sharded_norm_enabled():
+            return None
+        padded_height = activation_physical_height(shape)
+        # Decode always gathers into the one-tile residual island. Short
+        # prefill (M<=128) does the same when the LN/residual island is on.
+        # Gathering at height<=1024 without the island hung T3K warmup.
+        if padded_height != ttnn.TILE_SIZE and not prefill_mlp_island_enabled(padded_height):
+            return None
+        return width_shard_input_memcfg(ccl_manager.mesh_device, shape[-1], padded_height)
+    except (AttributeError, RuntimeError, TypeError, ValueError) as error:
+        logger.debug(f"Gemma4 L1 gather unavailable ({error}); using caller layout")
+        return None
+
+
 def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
     """All-reduce across TP devices.
 
@@ -297,14 +390,19 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
     if mesh_config is None or mesh_config.tp <= 1:
         return tensor
 
+    caller_memory_config = memory_config
     memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
     tp_axis = mesh_config.tp_axis
     topology = ccl_manager.topology
+    gather_memory_config = memory_config
+    if caller_memory_config is None:
+        gather_memory_config = _short_seq_l1_gather_memcfg(tensor, ccl_manager) or memory_config
 
     chunks = ccl_chunks_per_sync()
     workers = ccl_num_workers_per_link()
     nbuf = ccl_num_buffers_per_channel()
-    if ccl_async_enabled():
+    padded_height = _physical_tile_padded_height(tensor)
+    if ccl_async_enabled(padded_height):
         tp = mesh_config.tp
         rs_bufs = ccl_manager.get_persistent_rs_buffers(tensor, memory_config, tp)
         scattered = ttnn.experimental.reduce_scatter_minimal_async(
@@ -344,8 +442,29 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
             scattered.deallocate(True)
         return gathered
 
-    # Sync all_reduce: omit deprecated num_links/topology (Sep-2026 removal);
-    # Fabric / cluster_axis supply those defaults (same as sync all_gather).
+    if ccl_sync_split_enabled():
+        scattered = ttnn.reduce_scatter(
+            tensor,
+            dim=3,
+            cluster_axis=tp_axis,
+            num_links=ccl_manager.num_links,
+            topology=topology,
+            memory_config=memory_config,
+            num_workers_per_link=ccl_sync_rs_workers(padded_height),
+            chunks_per_sync=ccl_sync_rs_chunks(padded_height),
+            num_buffers_per_channel=ccl_sync_rs_buffers(),
+        )
+        tensor.deallocate(True)
+        result = ttnn.all_gather(
+            scattered,
+            dim=3,
+            cluster_axis=tp_axis,
+            memory_config=gather_memory_config,
+        )
+        scattered.deallocate(True)
+        return result
+
+    # Fused fallback: omit deprecated num_links/topology.
     result = ttnn.all_reduce(
         tensor,
         cluster_axis=tp_axis,
@@ -367,7 +486,8 @@ def ccl_allgather(tensor, mesh_config, ccl_manager, dim=3, memory_config=None):
     workers = ccl_num_workers_per_link()
     nbuf = ccl_num_buffers_per_channel()
 
-    if ccl_async_enabled():
+    padded_height = _physical_tile_padded_height(tensor)
+    if ccl_async_enabled(padded_height):
         # Fresh AG output each call (caller-owned); see ccl_allreduce note.
         gathered = ttnn.experimental.all_gather_async(
             tensor,

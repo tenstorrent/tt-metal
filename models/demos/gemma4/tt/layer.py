@@ -45,10 +45,36 @@ import ttnn
 from models.demos.gemma4.tt.attention import Gemma4Attention, Gemma4AttentionConfig
 from models.demos.gemma4.tt.gemma4_attention_config import get_attention_program_config
 from models.demos.gemma4.tt.moe import MoEBlock
-from models.demos.gemma4.tt.rms_norm import RMSNorm
+from models.demos.gemma4.tt.rms_norm import (
+    RMSNorm,
+    activation_physical_height,
+    decode_width_shard_memcfg,
+    prefill_mlp_island_enabled,
+    width_shard_input_memcfg,
+)
 from models.demos.gemma4.tt.shared_mlp import SharedMLP
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 from models.demos.gemma4.utils.substate import substate
+
+
+def _prefill_park_l1_interleaved_only(tensor):
+    """Move interleaved L1 activations to DRAM before input_layernorm.
+
+    Width-sharded L1 from the prior layer's post-MLP island stays in place.
+    Interleaved L1 (post-embed Tilize) parks so sharded-norm CBs are not
+    competing with a second L1 buffer before QKV.
+    """
+    if tensor is None:
+        return tensor
+    try:
+        buf = tensor.memory_config().buffer_type
+    except (AttributeError, RuntimeError):
+        return tensor
+    if buf != ttnn.BufferType.L1 or tensor.is_sharded():
+        return tensor
+    parked = ttnn.to_memory_config(tensor, ttnn.DRAM_MEMORY_CONFIG)
+    tensor.deallocate(True)
+    return parked
 
 
 class Gemma4DecoderLayer:
@@ -236,9 +262,43 @@ class Gemma4DecoderLayer:
         Returns:
             hidden_states: [1, 1, seq_len, hidden_size] on device
         """
+        # Dense decode without per-layer inputs keeps the residual stream in the
+        # exact width-sharded L1 layout shared by RMSNorm and TP all-reduce.
+        stream_memcfg = None
+        if is_decode and not self.enable_moe_block and not self.hidden_size_per_layer_input:
+            stream_memcfg = decode_width_shard_memcfg(self.mesh_device, hidden_states.shape[-1])
+            if stream_memcfg is not None and not hidden_states.is_sharded():
+                sharded_hidden_states = ttnn.to_memory_config(hidden_states, stream_memcfg)
+                hidden_states.deallocate(True)
+                hidden_states = sharded_hidden_states
+        elif not is_decode and prefill_mlp_island_enabled(
+            activation_physical_height(hidden_states.shape),
+            batch_size=batch_size,
+            enable_moe=self.enable_moe_block,
+        ):
+            stream_memcfg = width_shard_input_memcfg(
+                self.mesh_device,
+                hidden_states.shape[-1],
+                activation_physical_height(hidden_states.shape),
+            )
+            if stream_memcfg is not None and not hidden_states.is_sharded():
+                sharded_hidden_states = ttnn.to_memory_config(hidden_states, stream_memcfg)
+                hidden_states.deallocate(True)
+                hidden_states = sharded_hidden_states
+        shard_stream = (
+            stream_memcfg is not None and hidden_states.is_sharded() and hidden_states.memory_config() == stream_memcfg
+        )
+        if not is_decode:
+            parked = _prefill_park_l1_interleaved_only(hidden_states)
+            if parked is not hidden_states:
+                hidden_states = parked
+
         # 1. Attention block: norm -> attn -> post_attn_norm -> residual add
         residual = hidden_states
-        normed = self.input_layernorm.forward(hidden_states)
+        normed = self.input_layernorm.forward(
+            hidden_states,
+            interleaved_memory_config=ttnn.L1_MEMORY_CONFIG if shard_stream else None,
+        )
         if not is_decode and batch_size > 1:
             attn_in = ttnn.reshape(normed, [batch_size, 1, normed.shape[-2] // batch_size, -1])
         else:
@@ -268,18 +328,26 @@ class Gemma4DecoderLayer:
         if isinstance(attn_output, torch.Tensor):
             hidden_states = residual
         else:
-            attn_output = self.post_attention_layernorm.forward(attn_output)
+            attn_output = self.post_attention_layernorm.forward(attn_output, keep_sharded=shard_stream)
             if not is_decode and batch_size > 1:
                 residual = ttnn.reshape(
                     residual, [1, 1, residual.shape[-2] * residual.shape[-3] * residual.shape[0], -1]
                 )
-            hidden_states = ttnn.add(residual, attn_output)
+            hidden_states = ttnn.add(
+                residual,
+                attn_output,
+                memory_config=stream_memcfg if shard_stream else None,
+            )
             residual.deallocate(True)
             attn_output.deallocate(True)
 
         # 2. MLP + MoE block
         residual = hidden_states
-        normed = self.pre_feedforward_layernorm.forward(hidden_states)
+        normed = self.pre_feedforward_layernorm.forward(
+            hidden_states,
+            keep_sharded=shard_stream,
+            interleaved_memory_config=ttnn.L1_MEMORY_CONFIG if shard_stream else None,
+        )
         mlp_output = self.shared_mlp(normed)
         normed.deallocate(True)
 
@@ -309,8 +377,12 @@ class Gemma4DecoderLayer:
             hidden_states = mlp_output
 
         # post_feedforward_layernorm -> residual add
-        hidden_states = self.post_feedforward_layernorm.forward(hidden_states)
-        combined = ttnn.add(residual, hidden_states)
+        hidden_states = self.post_feedforward_layernorm.forward(hidden_states, keep_sharded=shard_stream)
+        combined = ttnn.add(
+            residual,
+            hidden_states,
+            memory_config=stream_memcfg if shard_stream else None,
+        )
         residual.deallocate(True)
         hidden_states.deallocate(True)
 
@@ -332,6 +404,10 @@ class Gemma4DecoderLayer:
 
         # Layer scalar — AFTER PLI (matching HF order)
         if self.layer_scalar != 1.0:
-            hidden_states = ttnn.mul(hidden_states, self.layer_scalar)
+            hidden_states = ttnn.mul(
+                hidden_states,
+                self.layer_scalar,
+                memory_config=hidden_states.memory_config() if hidden_states.is_sharded() else None,
+            )
 
         return hidden_states
