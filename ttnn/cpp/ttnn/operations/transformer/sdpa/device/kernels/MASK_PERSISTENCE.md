@@ -6,7 +6,9 @@ Branch `mask-persistence` (off `na-integration` 26e9c99), 2026-09-04. Commits `f
 ## Result
 
 1080p DiffVAE stage-5 decode, 145 frames, 4x8 mesh, `bricked_sp_w_sharded`, the shipped
-`DIFFVAE_NA_CHUNK_BRICKS=2,1,1 DIFFVAE_NA_UNSAFE_CHUNK=1 DIFFVAE_NA_PER_BRICK_MASK=1`
+`DIFFVAE_NA_CHUNK_BRICKS=2,1,1 DIFFVAE_NA_UNSAFE_CHUNK=1` (the `DIFFVAE_NA_PER_BRICK_MASK=1` this
+was measured with is no longer a knob: since 2026-09-11 per-brick mode is derived from the chunk
+being wider than the stride, which these two flags make true)
 (`test_decode_wsp_timing -k s34x60`, timed pass of the decode tree):
 
 | | before | after |

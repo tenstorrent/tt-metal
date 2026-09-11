@@ -65,8 +65,13 @@ Results (2026-09-11 23:06, host rebuilt with `./build_metal.sh --release`, `_ttn
   (identical to pre-excision); stage-5 `parity_w_sharded_bricked` 99.9936 % + GNA parity 5/5, **6 passed**.
 - Job 443 (production pipeline, SLAB 78): PASSED, ANOMALIES none, **VAE decode 12.20 s** (12.31 s before),
   output `~/ltx25_diffvae_1080p.mp4`.
-**Tier 3 DONE.** Still untouched by choice: item 4 (untracked scratch: root diagrams,
-kernel NOTES/figs, `NA_SDPA_KV_COALESCING.patch`), `DIFFVAE_STAGES_WSP` (live fallback), the three untracked
+Kernel-directory notes (2026-09-11 23:30, James asked, then approved): `NOTES_windowed_loop_geometry.md`,
+`dataflow/NOTES_neighborhood_gather_wrun.md`, `dataflow/NOTES_windowed_mask.md`, both `*_figs/` directories and
+the two root diagram scripts that drew them were deleted -- they annotated the excised neighborhood mode.
+`NA_SDPA_PROBES_2026-09-10.md` moved to `models/tt_dit/layers/` beside `SDPA_FUSED_VS_NEIGHBORHOOD.md` (both
+untracked historical records). `MASK_PERSISTENCE.md` stays (live reader mechanism); its flag line now says the
+`PER_BRICK_MASK` override is gone. James separately removed the 44 MB `h` dump and `models/demos/t3000/llama2_70b/`.
+**Tier 3 DONE.** Still untouched by choice: item 4 (untracked scratch: root diagrams, `NA_SDPA_KV_COALESCING.patch`), `DIFFVAE_STAGES_WSP` (live fallback), the three untracked
 tests worth committing (`test_brick_activation.py`, `test_halo_exchange_geometry.py`, `test_gemma4_cache_roundtrip.py`).
 
 ## PICKUP 2026-09-11 21:25 -- deletion fully verified, nothing open (superseded by the Tier 3 note above)
@@ -595,8 +600,9 @@ Once no configuration sets `DIFFVAE_BLOCK`:
       94 % ONLY under the pipeline's exported `DIFFVAE_*` flags and fails identically on the pre-change
       file; passes with a clean env. Pre-existing, environment-induced, unrelated to Phase 4 (noted,
       not fixed).
-- [ ] Scripts/docs: `DIFFVAE_BLOCK=1` export in `run_ltx25_pipeline.sh`; the block figure in
-      `windowed_loop_geometry_diagrams.py` and `NOTES_windowed_loop_geometry.md`; `block_permutation_diagram.py`.
+- [x] Scripts/docs (2026-09-11): the `DIFFVAE_BLOCK=1` export was dropped with the Python step; the block figure
+      went with `windowed_loop_geometry_diagrams.py` / `NOTES_windowed_loop_geometry.md` (deleted in Tier 3).
+      Only the untracked root-level `block_permutation_diagram.py`/`.png` remain.
 - [x] Gate (2026-09-11, job 411, rebuilt library + kernels): stage-5 gate on `op_sp_w_sharded`
       99.9961 % both axes (identical to pre-deletion); deterministic-stage arms 99.9984/99.9981/99.9981 %
       (identical); decode s34x60 **13859 ms**, deterministic stages 2301 ms (pre-deletion range
@@ -637,5 +643,6 @@ should not.
 
 ## Related notes
 - `layers/SDPA_FUSED_VS_NEIGHBORHOOD.md`, `layers/NEIGHBORHOOD_MASK_GENERATION.md`
-- `ttnn/.../sdpa/device/kernels/NOTES_windowed_loop_geometry.md` (block section to be removed in Phase 4)
+- `ttnn/.../sdpa/device/kernels/NOTES_windowed_loop_geometry.md` -- deleted 2026-09-11 with the mode it described;
+  `MASK_PERSISTENCE.md` is the only note left in that directory
 - `DIFFVAE_TIMING_ANALYSIS.md`, `diffvae_bricked_timing_tree.txt` (baseline numbers above)
