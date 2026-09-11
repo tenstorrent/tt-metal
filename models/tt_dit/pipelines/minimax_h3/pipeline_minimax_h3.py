@@ -459,8 +459,8 @@ class MiniMaxH3Pipeline:
         # operands for the fp32-exact kernels' best accuracy (~67 dB vs CPU); "off" skips the split
         # for a lower-fidelity decode (~42 dB). Keys the device-weight cache via `weights_variant`.
         # audio_t_factor=4 timings: 2.2 s (full) / 1.6 s (off) on 4x8; default is 8 (~1.4 s full).
-        if audio_split_mode not in ("off", "weight", "full"):
-            raise ValueError(f"audio_split_mode must be 'off', 'weight', or 'full', got {audio_split_mode!r}")
+        if audio_split_mode not in ("off", "weight", "act", "full"):
+            raise ValueError(f"audio_split_mode must be 'off', 'weight', 'act' or 'full', got {audio_split_mode!r}")
         self.audio_split_mode = audio_split_mode
         audio_t_factor, self._audio_t_factor_from_env = _requested_audio_t_factor(
             audio_t_factor, default=preset.get("audio_t_factor", _DEFAULT_AUDIO_T_FACTOR)
