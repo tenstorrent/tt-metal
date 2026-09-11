@@ -28,6 +28,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.perf.core import PerfConfig
+from helpers.perf.relevance import MATMUL_RELEVANCE
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
@@ -182,6 +183,7 @@ def test_perf_matmul(
             tile_count_res=min(dims.rt_dim * dims.ct_dim, PERF_RING_TILES),
         ),
         dest_acc=dest_acc,
+        relevance=MATMUL_RELEVANCE,
     )
 
     configuration.run(perf_report)

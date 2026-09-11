@@ -26,6 +26,12 @@ from ..profiler import Profiler, ProfilerData
 from ..stimuli_config import StimuliConfig
 from ..test_config import BuildMode, ProfilerBuild, TestConfig
 from ..test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplateParameter
+from .relevance import (
+    RunTypeRelevance,
+    execute_key,
+    project_runtimes,
+    project_templates,
+)
 from .schema import (
     FLAG_HEADERS,
     FORMAT_HEADERS,
@@ -85,15 +91,33 @@ _CODE_SIZE_COMPONENTS = {
 # Common postprocessing
 
 
+# Pack TILE_LOOP iterates RT×CT tiles, not KT. When dest-corner dims are in the
+# frame, those columns use loop_factor * r_dimm * c_dimm; everything else keeps
+# loop_factor * tile_cnt (matmul tile_cnt is RT×CT×KT).
+_PACK_WALL_CLOCK_BASES = ("PACK_ISOLATE", "L1_CONGESTION[PACK]")
+
+
+def _pack_wall_clock_columns(columns) -> list[str]:
+    names = []
+    for base in _PACK_WALL_CLOCK_BASES:
+        for kind in (MEAN, STD):
+            name = f"{stat_prefix(kind)}{base})"
+            if name in columns:
+                names.append(name)
+    return names
+
+
 def postprocess_tile_loop(frame: pd.DataFrame) -> pd.DataFrame:
     """Derive per-tile TILE_LOOP figures from a raw report frame.
 
     Divides each TILE_LOOP row's un-prefixed ``mean(...)``/``std(...)`` wall-clock
     columns by ``loop_factor * tile_cnt`` (run-type-prefixed ``*_pct`` metric
-    columns are deliberately left untouched). Pure ``DataFrame -> DataFrame``, no
-    hardware — so it is the canonical way to turn the RAW stored table (a CSV or a
-    Parquet batch) into per-tile values downstream. Non-TILE_LOOP rows pass through
-    unchanged.
+    columns are deliberately left untouched). ``PACK_ISOLATE`` and
+    ``L1_CONGESTION[PACK]`` use ``loop_factor * r_dimm * c_dimm`` when those dim
+    columns are present, because pack iterates RT×CT tiles, not KT. Pure
+    ``DataFrame -> DataFrame``, no hardware — so it is the canonical way to turn
+    the RAW stored table (a CSV or a Parquet batch) into per-tile values
+    downstream. Non-TILE_LOOP rows pass through unchanged.
     """
     if frame.empty:
         return pd.DataFrame()
@@ -112,6 +136,13 @@ def postprocess_tile_loop(frame: pd.DataFrame) -> pd.DataFrame:
 
     # Compute divisor as Series aligned with masked rows
     divisor = frame.loc[mask, LOOP_FACTOR_COLUMN] * frame.loc[mask, TILE_CNT_COLUMN]
+    pack_divisor = divisor
+    if "r_dimm" in frame.columns and "c_dimm" in frame.columns:
+        pack_divisor = (
+            frame.loc[mask, LOOP_FACTOR_COLUMN]
+            * frame.loc[mask, "r_dimm"].fillna(1)
+            * frame.loc[mask, "c_dimm"].fillna(1)
+        )
 
     # Select only the un-prefixed wall-clock mean/std columns. The startswith is
     # prefix-anchored on purpose: run-type-prefixed metric columns from
@@ -120,11 +151,15 @@ def postprocess_tile_loop(frame: pd.DataFrame) -> pd.DataFrame:
     # only because metric_column puts the run type first.
     mean_columns = [c for c in frame.columns if c.startswith(stat_prefix(MEAN))]
     std_columns = [c for c in frame.columns if c.startswith(stat_prefix(STD))]
+    pack_columns = set(_pack_wall_clock_columns(frame.columns))
 
-    # Apply division
     for cols in (mean_columns, std_columns):
-        if cols:
-            frame.loc[mask, cols] = frame.loc[mask, cols].div(divisor, axis=0)
+        other = [c for c in cols if c not in pack_columns]
+        pack = [c for c in cols if c in pack_columns]
+        if other:
+            frame.loc[mask, other] = frame.loc[mask, other].div(divisor, axis=0)
+        if pack:
+            frame.loc[mask, pack] = frame.loc[mask, pack].div(pack_divisor, axis=0)
 
     return frame
 
@@ -751,6 +786,9 @@ class PerfConfig(TestConfig):
     # === STATIC VARIABLES ===
     TEST_COUNTER: ClassVar[int] = 0
     COUNTER_REPORT: ClassVar[Any] = None  # Set by counter_report fixture
+    # Process-local TILE_LOOP results keyed by execute_key. Pytest builds a new
+    # PerfConfig per case, so hits only happen across cases in the same worker.
+    EXECUTE_CACHE: ClassVar[dict[tuple, dict[str, Any]]] = {}
 
     def __init__(
         self,
@@ -767,6 +805,7 @@ class PerfConfig(TestConfig):
         l1_acc=L1Accumulation.No,
         skip_build_header: bool = False,
         compile_time_formats: bool = False,
+        relevance: dict[PerfRunType, RunTypeRelevance] | None = None,
     ):
 
         # Initialize passed templates and runtimes here so we don't get variant hash issues
@@ -774,6 +813,7 @@ class PerfConfig(TestConfig):
         self.passed_templates = templates.copy()
         self.passed_runtimes = runtimes.copy()
         self.current_run_type = None
+        self.relevance = relevance
 
         # TODO Add check here for all selected runs, to see if the profiler/counter supports them
         self.run_configs = [
@@ -928,6 +968,42 @@ class PerfConfig(TestConfig):
                 f"zone handshakes."
             )
 
+    @classmethod
+    def clear_relevance_cache(cls) -> None:
+        """Drop process-local isolate measurements. Tests must call this."""
+        cls.EXECUTE_CACHE.clear()
+
+    def _relevance_spec(self, run_type: PerfRunType) -> RunTypeRelevance | None:
+        if not self.relevance:
+            return None
+        return self.relevance.get(run_type)
+
+    def _apply_run_config(self, templates, runtimes, run_type: PerfRunType) -> None:
+        """Project unused templates (and SoL runtimes) then refresh variant_id."""
+        spec = self._relevance_spec(run_type)
+        projected_templates = project_templates(templates, spec)
+        self.current_run_type = run_type
+        if TestConfig.SPEED_OF_LIGHT:
+            self.templates = projected_templates + project_runtimes(runtimes, spec)
+            self.runtimes = []
+            self.compile_time_formats = True
+        else:
+            self.templates = projected_templates
+            self.runtimes = runtimes
+        self.generate_variant_hash()
+
+    def _execute_cache_key(self, templates, runtimes, run_type: PerfRunType) -> tuple:
+        return execute_key(
+            test_name=self.test_name,
+            run_type=run_type,
+            dest_acc=self.dest_acc,
+            templates=templates,
+            runtimes=runtimes,
+            formats=self.formats_config,
+            speed_of_light=TestConfig.SPEED_OF_LIGHT,
+            spec=self._relevance_spec(run_type),
+        )
+
     def run(self, perf_report: PerfReport, run_count=1):
         results = []
         counter_results_list = []
@@ -935,17 +1011,9 @@ class PerfConfig(TestConfig):
 
         if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
             for templates, runtimes, run_type in self.run_configs:
-                self.current_run_type = run_type
                 # We need to manually assign different modified templates here if the speed of light is set,
                 # because we run TestConfig constructor only once
-                if TestConfig.SPEED_OF_LIGHT:
-                    self.templates = templates + runtimes
-                    self.runtimes = []
-                    self.compile_time_formats = True
-                else:
-                    self.templates = templates
-                    self.runtimes = runtimes
-                self.generate_variant_hash()
+                self._apply_run_config(templates, runtimes, run_type)
                 self.build_elfs()
 
         if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
@@ -954,17 +1022,26 @@ class PerfConfig(TestConfig):
         PerfConfig.TEST_COUNTER += 1
 
         for templates, runtimes, run_type in self.run_configs:
-            self.current_run_type = run_type
+            cache_key = None
+            cached = None
+            if self.relevance is not None:
+                cache_key = self._execute_cache_key(templates, runtimes, run_type)
+                cached = PerfConfig.EXECUTE_CACHE.get(cache_key)
+
+            if cached is not None:
+                if cached["code_size"] is not None:
+                    code_sizes[run_type] = cached["code_size"]
+                if cached["stats_appended"]:
+                    results.append(cached["stats_df"].copy())
+                if cached["metrics_df"] is not None:
+                    results.append(cached["metrics_df"].copy())
+                if cached["counter_df"] is not None:
+                    counter_results_list.append(cached["counter_df"].copy())
+                continue
+
             # We need to manually assign different modified templates here if the speed of light is set,
             # because we run TestConfig constructor only once
-            if TestConfig.SPEED_OF_LIGHT:
-                self.templates = templates + runtimes
-                self.runtimes = []
-                self.compile_time_formats = True
-            else:
-                self.templates = templates
-                self.runtimes = runtimes
-            self.generate_variant_hash()
+            self._apply_run_config(templates, runtimes, run_type)
 
             elf_dir = (
                 TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
@@ -975,11 +1052,13 @@ class PerfConfig(TestConfig):
                 rt == PerfRunType.SFPU_ISOLATE for _, _, rt in self.run_configs
             ):
                 components = ["unpack", "math", "pack", "sfpu"]
+            code_size = None
             if components is not None:
-                code_sizes[run_type] = sum(
+                code_size = sum(
                     TestConfig.get_elf_text_size(elf_dir / f"{c}.elf")
                     for c in components
                 )
+                code_sizes[run_type] = code_size
 
             variant_raw_data = []
             variant_counter_results = []
@@ -1020,9 +1099,13 @@ class PerfConfig(TestConfig):
                 TestConfig.ENABLE_PERF_COUNTERS
                 and TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR
             )
+            metrics_df = None
+            counter_df = None
+            stats_appended = False
             if not stats_df.empty or not counter_only_build:
                 PerfConfig._validate_profiler_stats(stats_df, run_type)
                 results.append(stats_df)
+                stats_appended = True
 
             if variant_counter_results:
                 all_counters = pd.concat(variant_counter_results, ignore_index=True)
@@ -1041,6 +1124,7 @@ class PerfConfig(TestConfig):
                     zone_names=zone_names,
                 )
                 if not csv_df.empty:
+                    metrics_df = csv_df
                     results.append(csv_df)
 
                 # Export raw counter values to the separate counters CSV
@@ -1054,7 +1138,17 @@ class PerfConfig(TestConfig):
                         zone_names=zone_names,
                     )
                     if not counter_csv_df.empty:
+                        counter_df = counter_csv_df
                         counter_results_list.append(counter_csv_df)
+
+            if cache_key is not None:
+                PerfConfig.EXECUTE_CACHE[cache_key] = {
+                    "stats_df": stats_df,
+                    "stats_appended": stats_appended,
+                    "metrics_df": metrics_df,
+                    "counter_df": counter_df,
+                    "code_size": code_size,
+                }
 
         # Assemble the per-test report frame (pure — see build_report_frame).
         combined = PerfConfig.build_report_frame(

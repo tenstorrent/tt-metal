@@ -417,6 +417,35 @@ def test_postprocess_tile_loop_derives_per_tile_from_raw():
     assert tl["L1_TO_L1_mean(fpu_utilization_pct)"] == 60.0
 
 
+def test_postprocess_tile_loop_pack_uses_rt_ct_not_kt():
+    raw = pd.DataFrame(
+        {
+            MARKER: ["INIT", "TILE_LOOP"],
+            "loop_factor": [1, 2],
+            "tile_cnt": [32, 32],  # RT×CT×KT = 2×2×8
+            "r_dimm": [2, 2],
+            "c_dimm": [2, 2],
+            "k_dimm": [8, 8],
+            stat_column("MATH_ISOLATE", MEAN): [100.0, 128.0],
+            stat_column("PACK_ISOLATE", MEAN): [80.0, 40.0],
+            stat_column("L1_CONGESTION[PACK]", MEAN): [80.0, 24.0],
+            "L1_TO_L1_mean(fpu_utilization_pct)": [50.0, 60.0],
+        }
+    )
+
+    out = postprocess_tile_loop(raw.copy())
+    tl = out[out[MARKER] == "TILE_LOOP"].iloc[0]
+    init = out[out[MARKER] == "INIT"].iloc[0]
+
+    # MATH still uses loop_factor * tile_cnt: 128 / (2*32) = 2
+    assert tl[stat_column("MATH_ISOLATE", MEAN)] == 2.0
+    # PACK uses loop_factor * r_dimm * c_dimm: 40 / (2*2*2) = 5
+    assert tl[stat_column("PACK_ISOLATE", MEAN)] == 5.0
+    assert tl[stat_column("L1_CONGESTION[PACK]", MEAN)] == 3.0
+    assert init[stat_column("PACK_ISOLATE", MEAN)] == 80.0
+    assert tl["L1_TO_L1_mean(fpu_utilization_pct)"] == 60.0
+
+
 def test_combine_perf_reports_emits_parquet_alongside_csv(tmp_path, monkeypatch):
     # A run publishes both CSV and a run-level Parquet batch (raw frames), with
     # provenance stamped from the CI environment.
