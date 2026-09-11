@@ -7,11 +7,11 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "dm_common.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
-#include <distributed/mesh_device_impl.hpp>
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 
@@ -66,8 +66,7 @@ void print_detailed_comparison(const vector<uint32_t>& packed_golden, const vect
 /// @param mesh_device - MeshDevice to run the test on
 /// @param test_config - Configuration of the test
 /// @return true if test passes
-bool run_dm_neighbour(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramNeighbourConfig& test_config) {
-    IDevice* device = mesh_device->impl().get_device(0);
+bool run_dm_neighbour(distributed::MeshDevice& mesh_device, const DramNeighbourConfig& test_config) {
     Program program = CreateProgram();
 
     uint32_t num_pages = test_config.num_banks * test_config.pages_per_bank;
@@ -104,8 +103,7 @@ bool run_dm_neighbour(const shared_ptr<distributed::MeshDevice>& mesh_device, co
         .shard_orientation = ShardOrientation::ROW_MAJOR,
     };
 
-    auto mesh_buffer =
-        distributed::MeshBuffer::create(sharded_buffer_config, per_device_buffer_config, mesh_device.get());
+    auto mesh_buffer = distributed::MeshBuffer::create(sharded_buffer_config, per_device_buffer_config, &mesh_device);
     uint32_t input_buffer_address = mesh_buffer->address();  // need to read from different dram starting point
 
     // Generate input
@@ -145,7 +143,7 @@ bool run_dm_neighbour(const shared_ptr<distributed::MeshDevice>& mesh_device, co
     // We only use the coordinator's semaphore - all cores increment it via NOC and poll until num_cores.
     // Creating on all cores ensures get_semaphore(id) works correctly on every core.
     CoreCoord coordinator_core = worker_cores[0];
-    CoreCoord coordinator_phys = device->worker_core_from_logical_core(coordinator_core);
+    CoreCoord coordinator_phys = mesh_device.worker_core_from_logical_core(coordinator_core);
 
     uint32_t reader_barrier_sem_id = 0;
     reader_barrier_sem_id = CreateSemaphore(program, core_range_set, 0);
@@ -178,7 +176,7 @@ bool run_dm_neighbour(const shared_ptr<distributed::MeshDevice>& mesh_device, co
     program.set_runtime_id(runtime_host_id++);
 
     // LAUNCH PROGRAM - Use mesh workload approach
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue();
     distributed::EnqueueWriteMeshBuffer(cq, mesh_buffer, packed_input);
 
     auto mesh_workload = distributed::MeshWorkload();
@@ -202,7 +200,7 @@ bool run_dm_neighbour(const shared_ptr<distributed::MeshDevice>& mesh_device, co
             packed_output.push_back(packed_golden[j]);
         }
 
-        detail::ReadFromDeviceL1(device, worker_cores[i], l1_addr[i], per_core_output_size_bytes, cur_output);
+        slow_dispatch::ReadFromL1(mesh_device, worker_cores[i], l1_addr[i], per_core_output_size_bytes, cur_output);
 
         // Verify results
         bool is_equal = (packed_output == cur_output);
@@ -234,11 +232,10 @@ bool run_dm_neighbour(const shared_ptr<distributed::MeshDevice>& mesh_device, co
     return true;
 }
 
-std::map<uint32_t, uint32_t> core_dram_mapping_ideal(
-    const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t num_dram_banks) {
+std::map<uint32_t, uint32_t> core_dram_mapping_ideal(distributed::MeshDevice& mesh_device, uint32_t num_dram_banks) {
     map<uint32_t, uint32_t> mapping;
     const vector<CoreCoord> dram_bank2core_coords =
-        mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
+        mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
 
     for (uint32_t i = 0; i < dram_bank2core_coords.size(); i++) {
         if (i == num_dram_banks) {
@@ -275,9 +272,9 @@ std::map<uint32_t, IndexRange> get_golden_index_ranges(
 }
 
 std::map<uint32_t, uint32_t> add_neighbour_cores_dram_mapping(
-    const std::map<uint32_t, uint32_t>& core_dram_map, const shared_ptr<distributed::MeshDevice>& mesh_device) {
+    const std::map<uint32_t, uint32_t>& core_dram_map, distributed::MeshDevice& mesh_device) {
     std::map<uint32_t, uint32_t> updated_map = core_dram_map;
-    CoreCoord grid_size = mesh_device->logical_grid_size();
+    CoreCoord grid_size = mesh_device.logical_grid_size();
 
     const auto& dispatch_cores =
         tt::tt_metal::MetalContext::instance().get_dispatch_query_manager().get_logical_dispatch_cores_on_user_chips();
@@ -307,9 +304,9 @@ std::map<uint32_t, uint32_t> add_neighbour_cores_dram_mapping(
     return updated_map;
 }
 
-std::map<uint32_t, uint32_t> add_single_row_cores_dram_mapping(const shared_ptr<distributed::MeshDevice>& mesh_device) {
+std::map<uint32_t, uint32_t> add_single_row_cores_dram_mapping(distributed::MeshDevice& mesh_device) {
     std::map<uint32_t, uint32_t> mapping = core_dram_mapping_ideal(mesh_device, 1);
-    CoreCoord grid_size = mesh_device->logical_grid_size();
+    CoreCoord grid_size = mesh_device.logical_grid_size();
 
     const auto& dispatch_cores =
         tt::tt_metal::MetalContext::instance().get_dispatch_query_manager().get_logical_dispatch_cores_on_user_chips();
@@ -334,7 +331,7 @@ std::map<uint32_t, uint32_t> add_single_row_cores_dram_mapping(const shared_ptr<
 }
 
 bool run_single_test(
-    const shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     uint32_t test_id,
     uint32_t num_of_transactions,
     uint32_t num_banks,
@@ -359,7 +356,7 @@ bool run_single_test(
 }
 
 bool run_sweep_test(
-    const shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     uint32_t test_id,
     uint32_t max_transactions,
     uint32_t num_banks,
@@ -384,7 +381,7 @@ bool run_sweep_test(
 }
 
 bool run_bank_sweep_test(
-    const shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     uint32_t test_id,
     uint32_t max_transactions,
     uint32_t max_num_banks,
@@ -419,19 +416,17 @@ using unit_tests::dm::dram_neighbour::run_single_test;
 using unit_tests::dm::dram_neighbour::run_sweep_test;
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDramNeighbourDirectedIdeal) {
-    shared_ptr<distributed::MeshDevice> mesh_device = get_mesh_device();
-
     uint32_t test_id = 502;
     uint32_t num_of_transactions = 1;
-    uint32_t num_banks = mesh_device->num_dram_channels();
+    uint32_t num_banks = this->device().num_dram_channels();
     uint32_t pages_per_bank = 1;
     DataFormat l1_data_format = DataFormat::Float16_b;
     uint32_t page_size_bytes = tt::tile_size(l1_data_format);
     std::map<uint32_t, uint32_t> core_dram_map =
-        add_neighbour_cores_dram_mapping(core_dram_mapping_ideal(mesh_device, num_banks), mesh_device);
+        add_neighbour_cores_dram_mapping(core_dram_mapping_ideal(this->device(), num_banks), this->device());
 
     EXPECT_TRUE(run_single_test(
-        mesh_device,
+        this->device(),
         test_id,
         num_of_transactions,
         num_banks,
@@ -442,19 +437,17 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDramNeighbourDirectedIdeal
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDramNeighbourNumPagesSweep) {
-    shared_ptr<distributed::MeshDevice> mesh_device = get_mesh_device();
-
     uint32_t test_id = 503;
-    uint32_t num_banks = mesh_device->num_dram_channels();
+    uint32_t num_banks = this->device().num_dram_channels();
     uint32_t max_num_pages = 32;
     uint32_t max_transactions = 256;
     DataFormat l1_data_format = DataFormat::Float16_b;
     uint32_t page_size_bytes = tt::tile_size(l1_data_format);
     std::map<uint32_t, uint32_t> core_dram_map =
-        add_neighbour_cores_dram_mapping(core_dram_mapping_ideal(mesh_device, num_banks), mesh_device);
+        add_neighbour_cores_dram_mapping(core_dram_mapping_ideal(this->device(), num_banks), this->device());
 
     EXPECT_TRUE(run_sweep_test(
-        mesh_device,
+        this->device(),
         test_id,
         max_transactions,
         num_banks,
@@ -465,22 +458,18 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDramNeighbourNumPagesSweep
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDramNeighbourNumBankSweep) {
-    shared_ptr<distributed::MeshDevice> mesh_device = get_mesh_device();
-
     uint32_t test_id = 504;
-    uint32_t max_num_banks = mesh_device->num_dram_channels();
+    uint32_t max_num_banks = this->device().num_dram_channels();
     uint32_t num_pages = 32;
     uint32_t max_transactions = 256;
     DataFormat l1_data_format = DataFormat::Float16_b;
     uint32_t page_size_bytes = tt::tile_size(l1_data_format);
 
     EXPECT_TRUE(run_bank_sweep_test(
-        mesh_device, test_id, max_transactions, max_num_banks, num_pages, page_size_bytes, l1_data_format));
+        this->device(), test_id, max_transactions, max_num_banks, num_pages, page_size_bytes, l1_data_format));
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDramNeighbourSingleRowSweep) {
-    shared_ptr<distributed::MeshDevice> mesh_device = get_mesh_device();
-
     uint32_t test_id = 505;
     uint32_t num_banks = 1;
     uint32_t max_num_pages = 32;
@@ -488,10 +477,10 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDramNeighbourSingleRowSwee
     DataFormat l1_data_format = DataFormat::Float16_b;
     uint32_t page_size_bytes = tt::tile_size(l1_data_format);
 
-    std::map<uint32_t, uint32_t> core_dram_map = add_single_row_cores_dram_mapping(mesh_device);
+    std::map<uint32_t, uint32_t> core_dram_map = add_single_row_cores_dram_mapping(this->device());
 
     EXPECT_TRUE(run_sweep_test(
-        mesh_device,
+        this->device(),
         test_id,
         max_transactions,
         num_banks,
@@ -502,9 +491,7 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDramNeighbourSingleRowSwee
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDramNeighbourOneHopSweep) {
-    shared_ptr<distributed::MeshDevice> mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
-    auto logical_grid_size = device->logical_grid_size();
+    auto logical_grid_size = this->device().logical_grid_size();
 
     uint32_t test_id = 508;
     uint32_t num_banks = 1;
@@ -512,14 +499,14 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDramNeighbourOneHopSweep) 
     uint32_t max_transactions = 256;
     DataFormat l1_data_format = DataFormat::Float16_b;
     uint32_t page_size_bytes = tt::tile_size(l1_data_format);
-    std::map<uint32_t, uint32_t> core_dram_map = core_dram_mapping_ideal(mesh_device, num_banks);
+    std::map<uint32_t, uint32_t> core_dram_map = core_dram_mapping_ideal(this->device(), num_banks);
     CoreCoord singleCore = CoreCoord{core_dram_map.begin()->first >> 16, core_dram_map.begin()->first & 0xFFFF};
     core_dram_map
         [(static_cast<uint32_t>((singleCore.x + 1) % logical_grid_size.x) << 16) |
          static_cast<uint32_t>(singleCore.y)] = core_dram_map.begin()->second;
 
     EXPECT_TRUE(run_sweep_test(
-        mesh_device,
+        this->device(),
         test_id,
         max_transactions,
         num_banks,
@@ -530,9 +517,7 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDramNeighbourOneHopSweep) 
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDramNeighbourLoopBackSweep) {
-    shared_ptr<distributed::MeshDevice> mesh_device = get_mesh_device();
-    auto* device = mesh_device->impl().get_device(0);
-    auto logical_grid_size = device->logical_grid_size();
+    auto logical_grid_size = this->device().logical_grid_size();
 
     uint32_t test_id = 509;
     uint32_t num_banks = 1;
@@ -540,14 +525,14 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDramNeighbourLoopBackSweep
     uint32_t max_transactions = 256;
     DataFormat l1_data_format = DataFormat::Float16_b;
     uint32_t page_size_bytes = tt::tile_size(l1_data_format);
-    std::map<uint32_t, uint32_t> core_dram_map = core_dram_mapping_ideal(mesh_device, num_banks);
+    std::map<uint32_t, uint32_t> core_dram_map = core_dram_mapping_ideal(this->device(), num_banks);
     CoreCoord singleCore = CoreCoord{core_dram_map.begin()->first >> 16, core_dram_map.begin()->first & 0xFFFF};
     core_dram_map
         [(static_cast<uint32_t>((singleCore.x == 0) ? logical_grid_size.x - 2 : singleCore.x - 1) << 16) |
          static_cast<uint32_t>(singleCore.y)] = core_dram_map.begin()->second;
 
     EXPECT_TRUE(run_sweep_test(
-        mesh_device,
+        this->device(),
         test_id,
         max_transactions,
         num_banks,

@@ -5,6 +5,7 @@
 #include "kernel_types.hpp"
 #include "device_fixture.hpp"
 #include "dm_common.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
@@ -47,11 +48,7 @@ struct NocApiLatencyConfig {
 /// @param mesh_device - MeshDevice to run the test on
 /// @param test_config - Configuration of the test -- see struct
 /// @return true if test passes
-bool run_noc_api_latency_test(
-    const shared_ptr<distributed::MeshDevice>& mesh_device, const NocApiLatencyConfig& test_config) {
-    // Get the actual device for this single-device test
-    IDevice* device = mesh_device->get_device(0);
-
+bool run_noc_api_latency_test(distributed::MeshDevice& mesh_device, const NocApiLatencyConfig& test_config) {
     /* ================ SETUP ================ */
 
     // (Logical) Core coordinates and ranges
@@ -71,12 +68,12 @@ bool run_noc_api_latency_test(
     uint32_t l1_base_address = source_l1_info.base_address;
 
     // Physical Core Coordinates
-    CoreCoord physical_dest_core = device->worker_core_from_logical_core(test_config.dest_core_coord);
+    CoreCoord physical_dest_core = mesh_device.worker_core_from_logical_core(test_config.dest_core_coord);
     uint32_t packed_dest_core_coordinates = physical_dest_core.x << 16 | (physical_dest_core.y & 0xFFFF);
 
     // For multicast tests, use configured multicast rectangle
-    CoreCoord physical_mcast_dest_start = device->worker_core_from_logical_core(test_config.mcast_dest_core_start);
-    CoreCoord physical_mcast_dest_end = device->worker_core_from_logical_core(test_config.mcast_dest_core_end);
+    CoreCoord physical_mcast_dest_start = mesh_device.worker_core_from_logical_core(test_config.mcast_dest_core_start);
+    CoreCoord physical_mcast_dest_end = mesh_device.worker_core_from_logical_core(test_config.mcast_dest_core_end);
     uint32_t packed_dest_core_end_coordinates = physical_mcast_dest_end.x << 16 | (physical_mcast_dest_end.y & 0xFFFF);
 
     // For non-multicast tests, override with unicast destination
@@ -134,7 +131,7 @@ bool run_noc_api_latency_test(
     }
 
     DataMovementHardwareConfig noc_kernel_hw_config;
-    if (device->arch() == tt::ARCH::QUASAR) {
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
         noc_kernel_hw_config = DataMovementGen2Config{};
     } else {
         noc_kernel_hw_config = DataMovementGen1Config{
@@ -155,7 +152,7 @@ bool run_noc_api_latency_test(
                 static_cast<uint32_t>(test_config.source_core_coord.x),
                 static_cast<uint32_t>(test_config.source_core_coord.y)}}}};
 
-    Program program = MakeProgramFromSpec(*mesh_device, spec);
+    Program program = MakeProgramFromSpec(mesh_device, spec);
 
     // Assign unique id
     log_info(LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
@@ -163,14 +160,14 @@ bool run_noc_api_latency_test(
 
     /* ================ RUNNING THE PROGRAM ================ */
 
-    MetalContext::instance().get_cluster().l1_barrier(device->id());
+    MetalContext::instance().get_cluster().l1_barrier(mesh_device.get_device_ids().front());
 
     auto mesh_workload = distributed::MeshWorkload();
     vector<uint32_t> coord_data = {0, 0};
     auto target_devices = distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));
     mesh_workload.add_program(target_devices, std::move(program));
 
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = mesh_device.mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     Finish(cq);
 
@@ -180,15 +177,13 @@ bool run_noc_api_latency_test(
 }
 
 // Sweep test for unicast write and read
-void unicast_sweep_test(
-    const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_id, KernelType kernel_type) {
-    auto* device = mesh_device->get_device(0);
+void unicast_sweep_test(distributed::MeshDevice& mesh_device, uint32_t test_id, KernelType kernel_type) {
     for (uint32_t transaction_size = 32; transaction_size <= 4096; transaction_size *= 2) {
         for (uint32_t num_transactions = 1; num_transactions <= 256; num_transactions *= 2) {
             NocApiLatencyConfig test_config = {
                 .test_id = test_id,
                 .source_core_coord = {0, 0},
-                .dest_core_coord = {0, device->compute_with_storage_grid_size().y - 1},
+                .dest_core_coord = {0, mesh_device.compute_with_storage_grid_size().y - 1},
                 .num_transactions = num_transactions,
                 .transaction_size = transaction_size,
                 .kernel_type = kernel_type,
@@ -201,11 +196,7 @@ void unicast_sweep_test(
 
 // Sweep test for multicast write with configurable grid
 void multicast_write_sweep_test(
-    const shared_ptr<distributed::MeshDevice>& mesh_device,
-    uint32_t test_id,
-    CoreCoord mcast_start,
-    CoreCoord mcast_end,
-    bool loopback) {
+    distributed::MeshDevice& mesh_device, uint32_t test_id, CoreCoord mcast_start, CoreCoord mcast_end, bool loopback) {
     for (uint32_t transaction_size = 32; transaction_size <= 4096; transaction_size *= 2) {
         for (uint32_t num_transactions = 1; num_transactions <= 256; num_transactions *= 2) {
             NocApiLatencyConfig test_config = {
@@ -232,51 +223,50 @@ TEST_F(UnitMeshFastDispatchFixture, TensixNocApiLatencyUnicastWrite) {
     GTEST_SKIP() << "Skipping test";
     uint32_t test_case_id = 700;
     tt::tt_metal::unit_tests::dm::noc_api_latency::unicast_sweep_test(
-        this->get_mesh_device(), test_case_id, unit_tests::dm::noc_api_latency::KernelType::UNICAST_WRITE);
+        this->device(), test_case_id, unit_tests::dm::noc_api_latency::KernelType::UNICAST_WRITE);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixNocApiLatencyUnicastRead) {
     GTEST_SKIP() << "Skipping test";
     uint32_t test_case_id = 701;
     tt::tt_metal::unit_tests::dm::noc_api_latency::unicast_sweep_test(
-        this->get_mesh_device(), test_case_id, unit_tests::dm::noc_api_latency::KernelType::UNICAST_READ);
+        this->device(), test_case_id, unit_tests::dm::noc_api_latency::KernelType::UNICAST_READ);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixNocApiLatencyStatefulWrite) {
     GTEST_SKIP() << "Skipping test";
     uint32_t test_case_id = 702;
     tt::tt_metal::unit_tests::dm::noc_api_latency::unicast_sweep_test(
-        this->get_mesh_device(), test_case_id, unit_tests::dm::noc_api_latency::KernelType::STATEFUL_WRITE);
+        this->device(), test_case_id, unit_tests::dm::noc_api_latency::KernelType::STATEFUL_WRITE);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixNocApiLatencyStatefulRead) {
     GTEST_SKIP() << "Skipping test";
     uint32_t test_case_id = 703;
     tt::tt_metal::unit_tests::dm::noc_api_latency::unicast_sweep_test(
-        this->get_mesh_device(), test_case_id, unit_tests::dm::noc_api_latency::KernelType::STATEFUL_READ);
+        this->device(), test_case_id, unit_tests::dm::noc_api_latency::KernelType::STATEFUL_READ);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixNocApiLatencyMulticastWrite2x2) {
     GTEST_SKIP() << "Skipping test";
     uint32_t test_case_id = 704;
     tt::tt_metal::unit_tests::dm::noc_api_latency::multicast_write_sweep_test(
-        this->get_mesh_device(), test_case_id, {0, 1}, {1, 2}, false);
+        this->device(), test_case_id, {0, 1}, {1, 2}, false);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixNocApiLatencyMulticastWrite5x5) {
     GTEST_SKIP() << "Skipping test";
     uint32_t test_case_id = 705;
     tt::tt_metal::unit_tests::dm::noc_api_latency::multicast_write_sweep_test(
-        this->get_mesh_device(), test_case_id, {0, 1}, {4, 5}, false);
+        this->device(), test_case_id, {0, 1}, {4, 5}, false);
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixNocApiLatencyMulticastWriteAll) {
     GTEST_SKIP() << "Skipping test";
     uint32_t test_case_id = 706;
-    auto* device = this->get_mesh_device()->get_device(0);
-    CoreCoord grid_size = device->compute_with_storage_grid_size();
+    CoreCoord grid_size = this->device().compute_with_storage_grid_size();
     tt::tt_metal::unit_tests::dm::noc_api_latency::multicast_write_sweep_test(
-        this->get_mesh_device(), test_case_id, {0, 0}, {grid_size.x - 1, grid_size.y - 1}, true);
+        this->device(), test_case_id, {0, 0}, {grid_size.x - 1, grid_size.y - 1}, true);
 }
 
 }  // namespace tt::tt_metal

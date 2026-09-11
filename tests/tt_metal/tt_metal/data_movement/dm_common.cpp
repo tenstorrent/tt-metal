@@ -3,11 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dm_common.hpp"
-#include "device_fixture.hpp"
 #include "hal_types.hpp"
 #include <tt-metalium/mesh_device.hpp>
 #include <tuple>
-#include <distributed/mesh_device_impl.hpp>
 #include "impl/emulation/emule_live_ranges.hpp"
 #include "impl/emulation/host_sanitizers.hpp"
 
@@ -22,15 +20,12 @@ uint32_t runtime_host_id = 0;
 // Static function for internal use only
 static uint32_t obtain_page_size_bytes(ARCH arch) { return (arch == ARCH::BLACKHOLE) ? 64 : 32; }
 
-L1AddressInfo get_l1_address_and_size(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const CoreCoord& core_coord) {
+L1AddressInfo get_l1_address_and_size(distributed::MeshDevice& mesh_device, const CoreCoord& core_coord) {
     // Obtaining L1 address and size for a specific core //
-    const IDevice* device = mesh_device->impl().get_device(0);
-
-    CoreCoord physical_core = device->worker_core_from_logical_core(core_coord);
+    CoreCoord physical_core = mesh_device.worker_core_from_logical_core(core_coord);
 
     const auto& hal = MetalContext::instance().hal();
-    HalProgrammableCoreType core_type = device->get_programmable_core_type(physical_core);
+    HalProgrammableCoreType core_type = mesh_device.get_programmable_core_type(physical_core);
     uint64_t core_l1_base_address = hal.get_dev_addr(core_type, HalL1MemAddrType::DEFAULT_UNRESERVED);
     uint64_t core_l1_size = hal.get_dev_size(core_type, HalL1MemAddrType::DEFAULT_UNRESERVED);
 
@@ -43,7 +38,7 @@ L1AddressInfo get_l1_address_and_size(
     if constexpr (emule::kEmuleAsanBuild) {
         if (emule::emule_asan_enabled()) {
             emule::LiveL1HostPokeRanges::add(
-                device->id(),
+                mesh_device.get_device_ids().front(),
                 static_cast<uint32_t>(core_l1_base_address),
                 static_cast<uint32_t>(core_l1_base_address + core_l1_size));
         }
@@ -61,10 +56,8 @@ DramAddressInfo get_dram_address_and_size() {
     return {dram_base_address, dram_size};
 }
 
-std::tuple<uint32_t, uint32_t, uint32_t> compute_physical_constraints(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    const IDevice* device = mesh_device->impl().get_device(0);
-    ARCH arch = device->arch();
+std::tuple<uint32_t, uint32_t, uint32_t> compute_physical_constraints(distributed::MeshDevice& mesh_device) {
+    ARCH arch = mesh_device.arch();
 
     // Use core {0,0} as representative core for computing physical constraints
     CoreCoord representative_core = {0, 0};
