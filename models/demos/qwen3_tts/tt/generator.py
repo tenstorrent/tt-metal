@@ -77,11 +77,23 @@ class StreamingAudioDecoder:
         logger.info("Streaming audio decoder started")
 
     def stop(self):
-        """Stop the decoder thread and decode remaining tokens."""
-        self.stop_event.set()
-        self.token_queue.put(None)  # Signal to stop
-        if self.decoder_thread is not None:
+        """Finish every token already submitted, then stop the decoder thread.
+
+        The sentinel is what ends the loop, NOT ``stop_event``: setting the event first
+        let the worker exit while tokens it had never dequeued were still in the queue,
+        dropping that audio. ``stop_event`` stays as the emergency brake for a worker
+        that is wedged in ``decoder_fn``. Idempotent — safe to call twice.
+        """
+        if self.decoder_thread is None:
+            return
+        self.token_queue.put(None)  # drain-then-exit sentinel
+        self.decoder_thread.join(timeout=30.0)
+        if self.decoder_thread.is_alive():
+            logger.warning("Streaming audio decoder did not finish in 30s; forcing it down")
+            self.stop_event.set()
             self.decoder_thread.join(timeout=5.0)
+        self.decoder_thread = None
+        self.stop_event.set()
         logger.info("Streaming audio decoder stopped")
 
     def add_tokens(self, tokens: torch.Tensor):
@@ -112,6 +124,13 @@ class StreamingAudioDecoder:
         Returns:
             Full audio tensor [batch, 1, num_samples]
         """
+        # Take ownership first. The worker publishes a chunk and bumps decoded_up_to as
+        # two separate steps, so reading its state while it runs can miss a chunk that
+        # lands between the drain below and the decoded_up_to check — a whole chunk of
+        # audio. stop() is idempotent, and waiting for the sentinel means every token
+        # submitted before this call has been decoded.
+        self.stop()
+
         # Collect any remaining chunks
         chunks = []
         while True:
@@ -134,35 +153,38 @@ class StreamingAudioDecoder:
         return torch.tensor([])
 
     def _decode_loop(self):
-        """Background decode loop."""
-        while not self.stop_event.is_set():
+        """Background decode loop.
+
+        Ends on the ``None`` sentinel, so everything submitted before ``stop()`` is
+        decoded. ``stop_event`` only breaks an otherwise idle wait.
+        """
+        while True:
             try:
                 tokens = self.token_queue.get(timeout=0.1)
-                if tokens is None:
-                    break
-
-                self.all_tokens.append(tokens)
-
-                # Check if we have enough tokens for a chunk
-                num_tokens = len(self.all_tokens)
-                if num_tokens - self.decoded_up_to >= self.chunk_size:
-                    # Decode chunk
-                    chunk_tokens = self.all_tokens[self.decoded_up_to : self.decoded_up_to + self.chunk_size]
-                    chunk_tensor = torch.stack(chunk_tokens, dim=-1)  # [16, chunk_size]
-                    chunk_tensor = chunk_tensor.unsqueeze(0)  # [1, 16, chunk_size]
-
-                    try:
-                        audio_chunk = self.decoder_fn(chunk_tensor)
-                        self.audio_queue.put(audio_chunk.squeeze())
-                        self.decoded_up_to += self.chunk_size
-                        logger.debug(
-                            f"Decoded chunk: tokens {self.decoded_up_to - self.chunk_size}-{self.decoded_up_to}"
-                        )
-                    except Exception as e:
-                        logger.error(f"Error decoding chunk: {e}")
-
             except queue_module.Empty:
+                if self.stop_event.is_set():
+                    break
                 continue
+            if tokens is None:
+                break
+
+            self.all_tokens.append(tokens)
+
+            # Check if we have enough tokens for a chunk
+            num_tokens = len(self.all_tokens)
+            if num_tokens - self.decoded_up_to >= self.chunk_size:
+                # Decode chunk
+                chunk_tokens = self.all_tokens[self.decoded_up_to : self.decoded_up_to + self.chunk_size]
+                chunk_tensor = torch.stack(chunk_tokens, dim=-1)  # [16, chunk_size]
+                chunk_tensor = chunk_tensor.unsqueeze(0)  # [1, 16, chunk_size]
+
+                try:
+                    audio_chunk = self.decoder_fn(chunk_tensor)
+                    self.audio_queue.put(audio_chunk.squeeze())
+                    self.decoded_up_to += self.chunk_size
+                    logger.debug(f"Decoded chunk: tokens {self.decoded_up_to - self.chunk_size}-{self.decoded_up_to}")
+                except Exception as e:
+                    logger.error(f"Error decoding chunk: {e}")
 
 
 class Qwen3TTSGenerator2CQ:

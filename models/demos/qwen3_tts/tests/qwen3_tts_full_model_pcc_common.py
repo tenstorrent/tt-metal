@@ -331,6 +331,7 @@ from models.demos.qwen3_tts.tests.qwen3_tts_profile_demo_common import (
     hf_id,
 )
 from models.demos.qwen3_tts.tt.mesh_utils import to_torch as mesh_to_torch
+from models.demos.qwen3_tts.tt.utils import last_real_hidden_row
 
 # -----------------------------------------------------------------------------
 # Expected PCC per stage, per prefill case. Threshold is the entry minus TOLERANCE, the
@@ -817,7 +818,8 @@ def run_full_model_pcc(device, model_and_weights, prefill_case, *, phase: str):
         lg_dev = mesh_to_torch(logits_tt).squeeze(1).float()[:, real_seq_len - 1, :]
     # Padding sits after every real token and attention is causal, so the real
     # positions are unaffected by the bucket and the reference runs unpadded.
-    h_dev = mesh_to_torch(hidden_tt).squeeze(1).float()[:, :real_seq_len, :]
+    h_dev_padded = mesh_to_torch(hidden_tt).squeeze(1).float()
+    h_dev = h_dev_padded[:, :real_seq_len, :]
     ttnn.deallocate(pf_cos)
     ttnn.deallocate(pf_sin)
 
@@ -893,7 +895,18 @@ def run_full_model_pcc(device, model_and_weights, prefill_case, *, phase: str):
     # the drift measured below is the transformer's alone.
     embed_seq_ref = icl_embeds.clone()
     h_ref_last = h_ref[:, -1, :]
-    h_dev_last = h_dev[:, -1, :]  # last REAL position, both prefill paths
+    # THE PRODUCTION HANDOFF. Not `h_dev[:, -1, :]`: that reads the trimmed view, so it
+    # is right by construction and cannot fail no matter what the demo does. Ask
+    # production's own `last_real_hidden_row` for the row, against the PADDED prefill
+    # tensor it is given at runtime, and feed the CP that. If the selection ever goes
+    # back to the padded last row, the CP is handed a padding token's hidden state here
+    # exactly as it was in the demo, and cp_logits collapses instead of passing.
+    _prod_row = last_real_hidden_row(int(h_dev_padded.shape[1]), real_seq_len)
+    assert _prod_row == real_seq_len - 1, (
+        f"production would condition the CodePredictor on row {_prod_row} of "
+        f"{int(h_dev_padded.shape[1])}, but code 0 came from row {real_seq_len - 1}"
+    )
+    h_dev_last = h_dev_padded[:, _prod_row, :]
 
     for f in range(frames if wants_decode else 1):
         # ---- CodePredictor: codes 1..15 -------------------------------------

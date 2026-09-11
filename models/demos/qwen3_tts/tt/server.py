@@ -50,6 +50,7 @@ import ttnn
 from models.demos.qwen3_tts.tt.mesh_utils import to_torch as _mesh_to_torch
 from models.demos.qwen3_tts.tt.mesh_utils import to_torch_chip0 as _mesh_to_torch_chip0
 from models.demos.qwen3_tts.tt.model_config import PREFILL_SEQS
+from models.demos.qwen3_tts.tt.utils import last_real_hidden_row
 
 
 def _user_path_no_dotdot(path: str) -> Path:
@@ -1362,8 +1363,8 @@ def generate_codes_ttnn(
         tts_pad_embed: Padding embedding
         code_pred_embeds: List of CodePredictor embedding weights (for codes 1-15)
         config: TTS configuration
-        use_kv_cache: Whether to use KV cache optimization (default True)
-        use_trace: Whether to use trace (default True)
+        use_kv_cache: Must be True — False raises NotImplementedError (no cacheless path)
+        use_trace: Must be True — False raises NotImplementedError (no untraced path)
         use_2cq: If True, issue H2D copies on CQ1 and overlap with trace on CQ0 (requires
             device opened with num_command_queues=2; see tech_reports/AdvancedPerformanceOptimizationsForModels).
 
@@ -1374,11 +1375,23 @@ def generate_codes_ttnn(
     """
     from models.demos.qwen3_tts.tt.rope import compute_rope_frequencies, get_rope_tensors, get_transformation_mat
 
-    mode_str = "with KV cache" if use_kv_cache else "without KV cache"
-    print(f"\nGenerating codes with TTNN ({mode_str})...")
-    if use_2cq and not use_trace:
-        print("  Note: 2 CQ mode requires trace; ignoring --use-2cq")
-        use_2cq = False
+    # Neither switch was ever honoured: this path allocates the Talker/CP KV caches and
+    # captures and replays the prefill, Talker and CP traces unconditionally, so a caller
+    # asking for either mode silently got the traced, cached one anyway. Refuse the value
+    # rather than accept and ignore it — building real untraced / cacheless paths is a
+    # separate piece of work, and until then the honest answer is "not supported".
+    if not use_kv_cache:
+        raise NotImplementedError(
+            "use_kv_cache=False (--no-kv-cache) is not supported: this path always uses the Talker and "
+            "CodePredictor KV caches."
+        )
+    if not use_trace:
+        raise NotImplementedError(
+            "use_trace=False (--no-trace) is not supported: this path always captures and replays the "
+            "prefill, Talker and CodePredictor traces."
+        )
+
+    print("\nGenerating codes with TTNN (with KV cache)...")
     if use_2cq:
         print("2 CQ: H2D on CQ1, traces on CQ0 (AdvancedPerformanceOptimizationsForModels §2.3.2)")
 
@@ -2058,7 +2071,13 @@ def generate_codes_ttnn(
     #
     # fused_sampler and fused_tok_bufs are allocated before ANY trace capture (see the
     # unsafe-allocation note where they are created), so both are safe to bake in here.
-    codec0_in_talker_trace = fused_sampler is not None and not config.greedy
+    #
+    # Not when a repetition penalty is asked for: the device sampler sees only logits,
+    # top-k and Gumbel noise — it has no token history — so sampling codec0 in the
+    # trace would silently drop the penalty for every frame after prefill. Fall back to
+    # the host sampler, which applies it. The fused CP frame stays on either way; it
+    # takes code 0 through the tok_bufs[0] H2D that the non-device path already does.
+    codec0_in_talker_trace = fused_sampler is not None and not config.greedy and config.repetition_penalty == 1.0
     if codec0_in_talker_trace:
         fused_sampler.append_sampling(_wu_codec_logits, slot=_TALKER_NOISE_SLOT, out_tok_tt=fused_tok_bufs[0])
     ttnn.synchronize_device(device)
@@ -2120,9 +2139,12 @@ def generate_codes_ttnn(
         # fused CP trace is therefore unsafe. Copy it into a buffer allocated the
         # normal way and read that instead; the copy happens between the two trace
         # replays, which is exactly where the old code's D2H of it used to sit.
+        #
+        # Last REAL row, not the last row — see ``last_real_hidden_row``.
         _pf_seq = int(talker_hidden_tt.shape[2])
+        _pf_row = last_real_hidden_row(_pf_seq, real_seq_len)
         _pf_last = (
-            ttnn.slice(talker_hidden_tt, [0, 0, _pf_seq - 1, 0], [1, 1, _pf_seq, talker_h])
+            ttnn.slice(talker_hidden_tt, [0, 0, _pf_row, 0], [1, 1, _pf_row + 1, talker_h])
             if _pf_seq > 1
             else talker_hidden_tt
         )

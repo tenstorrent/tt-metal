@@ -301,11 +301,10 @@ def run_full_ttnn_tts(
         print(f"  Decoding: {ref_codes_len} ref (original) + {len(codes)} gen = {total_codes_len} total frames")
 
         decode_start = time.time()
-        _drain_t0 = time.time()
-        while not streaming_decoder.token_queue.empty() and time.time() - _drain_t0 < 5.0:
-            time.sleep(0.001)
+        # get_all_audio() stops the worker and waits for it, so every token submitted is
+        # decoded before it collects. An empty token_queue was never that signal: it only
+        # means the last token was dequeued, not that its chunk had been published.
         audio = streaming_decoder.get_all_audio()
-        streaming_decoder.stop()
         timings["decode"] = time.time() - decode_start
 
         audio_np = audio.squeeze().detach().cpu().float().numpy()
@@ -490,8 +489,10 @@ def main():
         default=4,
         help="Codec frames to trim from start (removes reference echo, default: 4)",
     )
-    parser.add_argument("--no-kv-cache", action="store_true", help="Disable KV cache (slower)")
-    parser.add_argument("--no-trace", action="store_true", help="Disable trace (use non-traced KV cache decode)")
+    # Kept so an existing command line still parses, but the generator refuses them:
+    # it has no untraced or cacheless path to fall back to.
+    parser.add_argument("--no-kv-cache", action="store_true", help="Not supported; the KV cache is always used")
+    parser.add_argument("--no-trace", action="store_true", help="Not supported; traces are always captured")
     parser.add_argument(
         "--use-2cq",
         action="store_true",
