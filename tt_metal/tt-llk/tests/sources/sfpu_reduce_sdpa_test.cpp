@@ -86,7 +86,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
-#include "ckernel_sfpu_reduce_custom.h"
+#include "llk_sfpu/ckernel_sfpu_reduce_custom.h"
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -109,11 +109,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_packer_wait_for_math_done_();
 
         _llk_math_eltwise_unary_sfpu_init_<SfpuType::reduce>();
-        ckernel::sfpu::_init_reduce_max_col_subblock_4x2_<DataFormat::Float16_b>();
+        ckernel::sfpu::reduce_max_col_subblock_4x2_init<DataFormat::Float16_b>();
         _llk_math_eltwise_sfpu_start_(0);
-        ckernel::sfpu::_reduce_max_col_subblock_4x2_prologue_();
-        ckernel::sfpu::_calculate_reduce_max_col_subblock_4x2_<PoolType::MAX, ReduceDim::REDUCE_COL, DataFormat::Float16_b>(BLOCK_RT_DIM);
-        ckernel::sfpu::_reduce_max_col_subblock_4x2_epilogue_();
+        ckernel::sfpu::reduce_max_col_subblock_4x2_prologue();
+        ckernel::sfpu::calculate_reduce_max_col_subblock_4x2<PoolType::MAX, ReduceDim::REDUCE_COL, DataFormat::Float16_b>(BLOCK_RT_DIM);
+        ckernel::sfpu::reduce_max_col_subblock_4x2_epilogue();
         _llk_math_eltwise_sfpu_done_();
 
         for (std::uint32_t tile = 0; tile < params.NUM_TILES_IN_BLOCK; ++tile)

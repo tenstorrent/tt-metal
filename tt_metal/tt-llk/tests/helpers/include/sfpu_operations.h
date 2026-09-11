@@ -17,10 +17,10 @@
 // 1. Include the metal header below: #include "llk_sfpu/<operation>.h"
 // 2. Add the operation enum to SfpuType in llk_sfpu_types.h
 // 3. Add the if constexpr branches in call_unary_sfpu_operation_init() and call_unary_sfpu_operation() below
-#include "ckernel_sfpu_where.h"
 #include "llk_sfpu/ckernel_sfpu_abs.h"
 #include "llk_sfpu/ckernel_sfpu_activations.h"
 #include "llk_sfpu/ckernel_sfpu_add1.h"
+#include "llk_sfpu/ckernel_sfpu_add_int.h"
 #include "llk_sfpu/ckernel_sfpu_addcdiv.h"
 #include "llk_sfpu/ckernel_sfpu_addcmul.h"
 #include "llk_sfpu/ckernel_sfpu_atan2.h"
@@ -63,6 +63,7 @@
 #include "llk_sfpu/ckernel_sfpu_i1.h"
 #include "llk_sfpu/ckernel_sfpu_identity.h"
 #include "llk_sfpu/ckernel_sfpu_isclose.h"
+#include "llk_sfpu/ckernel_sfpu_isinf_isnan.h"
 #include "llk_sfpu/ckernel_sfpu_lcm.h"
 #include "llk_sfpu/ckernel_sfpu_lerp.h"
 #include "llk_sfpu/ckernel_sfpu_lgamma.h"
@@ -79,6 +80,7 @@
 #include "llk_sfpu/ckernel_sfpu_rdiv.h"
 #include "llk_sfpu/ckernel_sfpu_recip.h"
 #include "llk_sfpu/ckernel_sfpu_remainder.h"
+#include "llk_sfpu/ckernel_sfpu_rounding_ops.h"
 #include "llk_sfpu/ckernel_sfpu_rpow.h"
 #include "llk_sfpu/ckernel_sfpu_rsqrt.h"
 #include "llk_sfpu/ckernel_sfpu_rsub_int32.h"
@@ -96,26 +98,24 @@
 #include "llk_sfpu/ckernel_sfpu_sqrt.h"
 #include "llk_sfpu/ckernel_sfpu_sqrt_custom.h"
 #include "llk_sfpu/ckernel_sfpu_square.h"
+#include "llk_sfpu/ckernel_sfpu_sub_int.h"
 #include "llk_sfpu/ckernel_sfpu_tanh.h"
 #include "llk_sfpu/ckernel_sfpu_tanh_derivative.h"
 #include "llk_sfpu/ckernel_sfpu_tanhshrink.h"
+#include "llk_sfpu/ckernel_sfpu_threshold.h"
 #include "llk_sfpu/ckernel_sfpu_trigonometry.h"
 #include "llk_sfpu/ckernel_sfpu_typecast.h"
 #include "llk_sfpu/ckernel_sfpu_unary_comp.h"
 #include "llk_sfpu/ckernel_sfpu_unary_max_min.h"
 #include "llk_sfpu/ckernel_sfpu_unary_power.h"
 #include "llk_sfpu/ckernel_sfpu_unary_shift.h"
+#include "llk_sfpu/ckernel_sfpu_where.h"
 #include "llk_sfpu/ckernel_sfpu_xielu.h"
-#include "sfpu/ckernel_sfpu_add_int.h"
 #include "sfpu/ckernel_sfpu_comp.h"
 #include "sfpu/ckernel_sfpu_expm1_cw.h"
 #include "sfpu/ckernel_sfpu_fill.h"
-#include "sfpu/ckernel_sfpu_isinf_isnan.h"
 #include "sfpu/ckernel_sfpu_relu.h"
-#include "sfpu/ckernel_sfpu_rounding_ops.h"
-#include "sfpu/ckernel_sfpu_sub_int.h"
 #include "sfpu/ckernel_sfpu_tanh_derivative.h"
-#include "sfpu/ckernel_sfpu_threshold.h"
 
 // Test-only SFPU loop/adapter wrappers (calculate_sqrt_custom, calculate_expm1_cw,
 // calculate_mask_binary) used by the dispatch below.
@@ -1021,23 +1021,23 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::floor)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_floor_, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_floor, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::round)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_round_, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, 0 /* decimals */);
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_round, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, 0 /* decimals */);
     }
     else if constexpr (OPERATION == SfpuType::ceil)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_ceil_, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_ceil, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::trunc)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_trunc_, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_trunc, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::frac)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_frac_, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_frac, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::sine)
     {
@@ -1071,7 +1071,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
         SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
-            _calculate_threshold_,
+            calculate_threshold,
             (APPROX_MODE, ITERATIONS, float),
             dst_index,
             vector_mode,
@@ -1282,7 +1282,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     {
         // Predicate ops: write 1.0f where the (isinf/isposinf/isneginf/isnan/isfinite)
         // test holds, else 0.0f. The concrete predicate is selected by OPERATION.
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_sfpu_isinf_isnan_, (OPERATION, APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sfpu_isinf_isnan, (OPERATION, APPROX_MODE, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::erfinv)
     {
@@ -1821,7 +1821,7 @@ void call_binary_sfpu_operation(
             SFPU_BINARY_CALL(
                 DST_SYNC_MODE,
                 DST_ACCUM_MODE,
-                _add_int_,
+                add_int,
                 (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, true /* SIGN_MAGNITUDE_FORMAT */),
                 dst_index_in0,
                 dst_index_in1,
@@ -1830,13 +1830,13 @@ void call_binary_sfpu_operation(
         }
         else if constexpr (BINOP == BinaryOp::SUB && MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Int32))
         {
-            // Int32 SUB must use the integer path (_sub_int_); otherwise it would
+            // Int32 SUB must use the integer path (sub_int); otherwise it would
             // fall through to calculate_sfpu_binary and subtract the raw integer
             // bit-patterns as floats. Mirrors the Int32 ADD path above.
             SFPU_BINARY_CALL(
                 DST_SYNC_MODE,
                 DST_ACCUM_MODE,
-                _sub_int_,
+                sub_int,
                 (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, true /* SIGN_MAGNITUDE_FORMAT */),
                 dst_index_in0,
                 dst_index_in1,
@@ -2203,7 +2203,7 @@ void call_ternary_sfpu_operation_init()
 {
     if constexpr (OPERATION == SfpuType::where)
     {
-        SFPU_TERNARY_INIT_FN(where, sfpu::_init_where_, (APPROX_MODE));
+        SFPU_TERNARY_INIT_FN(where, sfpu::where_init, (APPROX_MODE));
     }
     else if constexpr (OPERATION == SfpuType::addcmul)
     {
@@ -2258,7 +2258,7 @@ void call_ternary_sfpu_operation(
         SFPU_TERNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
-            _calculate_where_,
+            calculate_where,
             (APPROX_MODE, MATH_FORMAT, ITERATIONS),
             dst_index_in0,
             dst_index_in1,

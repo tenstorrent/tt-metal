@@ -9,7 +9,7 @@
 #ifdef ARCH_QUASAR
 #include "llk_math_eltwise_ternary_sfpu_where.h"
 #else
-#include "sfpu/ckernel_sfpu_where.h"
+#include "ckernel_sfpu_where.h"
 #include "llk_math_eltwise_ternary_sfpu_macros.h"
 #endif
 #endif
@@ -43,7 +43,7 @@ ALWI void where_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t od
     MATH((SFPU_TERNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
-        _calculate_where_,
+        calculate_where,
         (APPROX, data_format, 8 /* ITERATIONS */),
         idst0,
         idst1,
@@ -60,7 +60,7 @@ ALWI void where_tile_init() {
 #ifdef ARCH_QUASAR
     MATH((llk_math_eltwise_ternary_sfpu_where_init<APPROX>()));
 #else
-    MATH((SFPU_TERNARY_INIT_FN(where, sfpu::_init_where_, (APPROX))));
+    MATH((SFPU_TERNARY_INIT_FN(where, sfpu::where_init, (APPROX))));
 #endif
 }
 

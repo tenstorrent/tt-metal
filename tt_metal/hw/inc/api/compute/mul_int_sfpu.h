@@ -10,7 +10,7 @@
 #include "llk_math_eltwise_binary_sfpu_mul_int.h"
 #else
 #include "ckernel_sfpu_mul_int32.h"
-#include "sfpu/ckernel_sfpu_mul_int.h"
+#include "ckernel_sfpu_mul_int.h"
 #include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
 #endif
@@ -55,7 +55,7 @@ ALWI void mul_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         MATH((SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
-            _mul_int_,
+            mul_int,
             (APPROX, 8 /* ITERATIONS */),
             idst0,
             idst1,
@@ -81,7 +81,7 @@ ALWI void mul_int_tile_init() {
         data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
         "Unsupported data format for mul_int. Supported data formats are: Int32, UInt32, UInt16");
     if constexpr (data_format == DataFormat::UInt16) {
-        MATH((SFPU_BINARY_INIT_FN(mul_uint16, sfpu::_init_mul_int_, (APPROX))));
+        MATH((SFPU_BINARY_INIT_FN(mul_uint16, sfpu::mul_int_init, (APPROX))));
     } else {
         MATH((SFPU_BINARY_INIT_FN(mul_int32, sfpu::mul_int32_init, (APPROX))));
     }
