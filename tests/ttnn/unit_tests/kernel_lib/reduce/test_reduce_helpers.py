@@ -435,11 +435,13 @@ def _sharded_memory_config(
     )
 
 
-def _scratch_cb(cb_id: int, dtype: ttnn.DataType, num_tiles: int) -> ttnn.CBDescriptor:
+def _scratch_cb(
+    cb_id: int, dtype: ttnn.DataType, num_tiles: int, *, core_ranges: ttnn.CoreRangeSet | None = None
+) -> ttnn.CBDescriptor:
     page_size = ttnn.tile_size(dtype)
     return ttnn.CBDescriptor(
         total_size=page_size * num_tiles,
-        core_ranges=_single_core(),
+        core_ranges=_single_core() if core_ranges is None else core_ranges,
         format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=cb_id, data_format=dtype, page_size=page_size)],
     )
 
@@ -857,12 +859,15 @@ def test_reduce_local_blocks_on_multiple_cores(device, dim, pool):
     local_shapes = ((96, 256), (64, 135), (32, 17)) if dim == "REDUCE_ROW" else ((288, 160), (135, 96), (17, 32))
     physical = torch.full((core_count, allocation_rows * TILE, row_stride * TILE), 128, dtype=torch.bfloat16)
     expected = []
-    kernels, auxiliary_cbs = [], []
+    kernels, plans = [], []
+    resident_bytes = allocation_rows * row_stride * ttnn.tile_size(ttnn.bfloat16) + output_capacity * ttnn.tile_size(
+        ttnn.float32
+    )
     hardware = _PLANNER.ReduceHardwareConfig(
         arch=device.arch(),
         fp32_dest_acc_en=True,
         dst_full_sync_en=False,
-        available_l1_bytes=ttnn.get_max_worker_l1_unreserved_size(),
+        available_l1_bytes=ttnn.get_max_worker_l1_unreserved_size() - resident_bytes,
     )
     scalar = 1.0 / TILE if pool == "SUM" else 1.0
     for core_index, (height, width) in enumerate(local_shapes):
@@ -906,22 +911,10 @@ def test_reduce_local_blocks_on_multiple_cores(device, dim, pool):
         )
         assert sequence.calls[0].plan.batches == batches
         assert sequence.calls[0].plan.input_row_stride_tiles == row_stride
+        plans.append(sequence)
         compute_args, auxiliary_args = _serialize_plan(sequence)
         core = ttnn.CoreCoord(core_index, 0)
         core_range = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
-        auxiliary_cbs.append(
-            ttnn.CBDescriptor(
-                total_size=len(sequence.auxiliary.tiles) * ttnn.tile_size(ttnn.bfloat16),
-                core_ranges=core_range,
-                format_descriptors=[
-                    ttnn.CBFormatDescriptor(
-                        buffer_index=CB_SCALER,
-                        data_format=ttnn.bfloat16,
-                        page_size=ttnn.tile_size(ttnn.bfloat16),
-                    )
-                ],
-            )
-        )
         kernels.extend(
             [
                 ttnn.KernelDescriptor(
@@ -938,6 +931,10 @@ def test_reduce_local_blocks_on_multiple_cores(device, dim, pool):
                 ),
             ]
         )
+
+    # Reserve one common capacity even when the per-core recipes use fewer pages.
+    auxiliary_tiles = max(len(plan.auxiliary.tiles) for plan in plans)
+    assert auxiliary_tiles * ttnn.tile_size(ttnn.bfloat16) <= hardware.available_l1_bytes
 
     def memory(shard_shape):
         return ttnn.create_sharded_memory_config(
@@ -970,7 +967,7 @@ def test_reduce_local_blocks_on_multiple_cores(device, dim, pool):
             cbs=[
                 ttnn.cb_descriptor_from_sharded_tensor(CB_INPUT, input_tensor),
                 ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT, output),
-                *auxiliary_cbs,
+                _scratch_cb(CB_SCALER, ttnn.bfloat16, auxiliary_tiles, core_ranges=grid),
             ],
         ),
     )
@@ -999,7 +996,7 @@ def test_reduce_local_blocks_on_multiple_cores(device, dim, pool):
 )
 @pytest.mark.parametrize("fp32_dest", (False, True))
 def test_reduce_runtime_tail_cores(device, dim, pool, algorithm, calls, fp32_dest):
-    """One static core and two cores sharing a tail kernel; only tails receive shape RTAs."""
+    """Common CB capacities across one static core and two tails; only tails receive shape RTAs."""
     core_count, max_batches = 3, 2
     max_h, max_w, row_stride = 288, 256, 10
     allocation_rows = max_batches * (max_h // TILE)
@@ -1007,11 +1004,14 @@ def test_reduce_runtime_tail_cores(device, dim, pool, algorithm, calls, fp32_des
     output_dtype = ttnn.float32 if fp32_dest else ttnn.bfloat16
     grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))])
     groups = ((0,), (1, 2))
+    input_bytes = allocation_rows * row_stride * ttnn.tile_size(ttnn.bfloat16)
+    output_bytes = output_capacity * ttnn.tile_size(output_dtype)
+    accumulator_bytes = output_bytes if calls > 1 else 0
     hardware = _PLANNER.ReduceHardwareConfig(
         arch=device.arch(),
         fp32_dest_acc_en=fp32_dest,
         dst_full_sync_en=False,
-        available_l1_bytes=ttnn.get_max_worker_l1_unreserved_size(),
+        available_l1_bytes=ttnn.get_max_worker_l1_unreserved_size() - input_bytes - output_bytes - accumulator_bytes,
     )
     reduced_extent = max_w if dim == "REDUCE_ROW" else max_h
     scalar = 1.0 / reduced_extent if pool == "AVG" else (1.0 / TILE if pool == "SUM" else 1.0)
@@ -1052,6 +1052,10 @@ def test_reduce_runtime_tail_cores(device, dim, pool, algorithm, calls, fp32_des
     assert plans[0].calls[0].plan.tail is None
     assert plans[1].calls[0].plan.tail is not None
     assert len(plans[1].calls[0].plan.auxiliary_tiles) > len(plans[0].calls[0].plan.auxiliary_tiles)
+    # A tail changes the recipe used, not the physical allocation on that core.
+    # Budget the largest aggregate recipe on every core, including full cores.
+    auxiliary_tiles = max(len(plan.auxiliary.tiles) for plan in plans)
+    assert auxiliary_tiles * ttnn.tile_size(ttnn.bfloat16) <= hardware.available_l1_bytes
 
     def memory(shard_shape):
         return ttnn.create_sharded_memory_config(
@@ -1091,7 +1095,7 @@ def test_reduce_runtime_tail_cores(device, dim, pool, algorithm, calls, fp32_des
                 core_expected.append(golden)
             expected.append(torch.stack(core_expected))
 
-        kernels, auxiliary_cbs = [], []
+        kernels = []
         for indices, sequence in zip(groups, plans):
             cores = [ttnn.CoreCoord(i, 0) for i in indices]
             core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(cores[0], cores[-1])])
@@ -1104,17 +1108,6 @@ def test_reduce_runtime_tail_cores(device, dim, pool, algorithm, calls, fp32_des
                     )
                     compute_runtime.append((core, [111, 222] + shape_args))
                     auxiliary_runtime.append((core, [111, 222, 333, 444] + shape_args))
-            auxiliary_cbs.append(
-                ttnn.CBDescriptor(
-                    total_size=len(sequence.auxiliary.tiles) * ttnn.tile_size(ttnn.bfloat16),
-                    core_ranges=core_ranges,
-                    format_descriptors=[
-                        ttnn.CBFormatDescriptor(
-                            buffer_index=CB_SCALER, data_format=ttnn.bfloat16, page_size=ttnn.tile_size(ttnn.bfloat16)
-                        )
-                    ],
-                )
-            )
             kernels.extend(
                 [
                     ttnn.KernelDescriptor(
@@ -1157,24 +1150,12 @@ def test_reduce_runtime_tail_cores(device, dim, pool, algorithm, calls, fp32_des
                 cbs=[
                     ttnn.cb_descriptor_from_sharded_tensor(CB_INPUT, input_tensor),
                     ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT, output),
+                    _scratch_cb(CB_SCALER, ttnn.bfloat16, auxiliary_tiles, core_ranges=grid),
                     *(
-                        [
-                            ttnn.CBDescriptor(
-                                total_size=output_capacity * ttnn.tile_size(output_dtype),
-                                core_ranges=grid,
-                                format_descriptors=[
-                                    ttnn.CBFormatDescriptor(
-                                        buffer_index=CB_ACCUMULATOR,
-                                        data_format=output_dtype,
-                                        page_size=ttnn.tile_size(output_dtype),
-                                    )
-                                ],
-                            )
-                        ]
+                        [_scratch_cb(CB_ACCUMULATOR, output_dtype, output_capacity, core_ranges=grid)]
                         if calls > 1
                         else []
                     ),
-                    *auxiliary_cbs,
                 ],
             ),
         )
