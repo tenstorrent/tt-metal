@@ -70,6 +70,15 @@ void kernel_main() {
     UnicastEndpoint remote;
 #ifdef FUSE_BIAS
     CircularBuffer cb_in3(cb_id_in3);
+    cb_in3.reserve_back(in3_block_tiles);
+    noc.async_read(
+        dram_bank,
+        cb_in3,
+        in3_block_tiles * get_tile_size(cb_id_in3),
+        {.bank_id = dram_bank_id, .addr = in3_tensor_addr},
+        {.offset_bytes = 0});
+    noc.async_read_barrier();
+    cb_in3.push_back(in3_block_tiles);
 #endif
 
     // Process each batch
@@ -103,19 +112,6 @@ void kernel_main() {
             cb_in1.push_back(in1_block_num_tiles);
             l1_read_addr_in1 += in1_block_size_bytes;
         }
-
-#ifdef FUSE_BIAS
-        // Read bias for this batch (if fused)
-        cb_in3.reserve_back(in3_block_tiles);
-        noc.async_read(
-            dram_bank,
-            cb_in3,
-            in3_block_tiles * get_tile_size(cb_id_in3),
-            {.bank_id = dram_bank_id, .addr = in3_tensor_addr},
-            {.offset_bytes = 0});
-        noc.async_read_barrier();
-        cb_in3.push_back(in3_block_tiles);
-#endif
 
         // Wait for compute to finish this batch
         cb_out.wait_front(out_block_num_tiles);
