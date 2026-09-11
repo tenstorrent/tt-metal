@@ -46,15 +46,18 @@ FORCE_INLINE void read_expected_block_tiles(
     noc_async_read_barrier();
 }
 
+// One word of an L1 buffer, for reporting the bytes a mismatch was found on.
+FORCE_INLINE uint32_t l1_word(uint32_t base_addr, uint32_t word_index) {
+    return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_addr)[word_index];
+}
+
 // Index of the first word where the delivered block differs from the expected one, or the word
 // count when they match. Word-strided so a mismatch reports where it starts rather than just that
 // it happened.
 FORCE_INLINE uint32_t first_mismatching_word(uint32_t received_addr, uint32_t expected_addr, uint32_t page_bytes) {
-    volatile tt_l1_ptr uint32_t* received = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(received_addr);
-    volatile tt_l1_ptr uint32_t* expected = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(expected_addr);
     const uint32_t words = page_bytes / sizeof(uint32_t);
     for (uint32_t w = 0; w < words; ++w) {
-        if (received[w] != expected[w]) {
+        if (l1_word(received_addr, w) != l1_word(expected_addr, w)) {
             return w;
         }
     }

@@ -111,8 +111,8 @@ void kernel_main() {
                     bank_id,
                     recv_idx_in_bank,
                     mismatch_word,
-                    (uint32_t)received[mismatch_word],
-                    (uint32_t)expected[mismatch_word]);
+                    prefetcher_validator::l1_word(page_addr, mismatch_word),
+                    prefetcher_validator::l1_word(scratch_addr, mismatch_word));
                 // Hang so the dispatch timeout surfaces this core.
                 while (true) {
                     ;
