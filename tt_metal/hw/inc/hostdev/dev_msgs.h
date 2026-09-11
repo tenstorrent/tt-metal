@@ -418,7 +418,10 @@ struct core_info_msg_t {
     volatile uint8_t absolute_logical_y;  // Logical Y coordinate of this core
     volatile uint32_t l1_unreserved_start;
     volatile CoreMagicNumber core_magic_number;
-    uint8_t pad;  // CODEGEN:skip
+    // DRAM cores only (0 elsewhere). Bit N is set when this core is a DRAM view's preferred
+    // endpoint on NOC N, i.e. that NIU forwards DRAM accesses over AXI and must stay in NOC2AXI
+    // mode. DRISC firmware puts every other NIU in stream mode. See experimental/drisc_mode.h.
+    volatile uint8_t noc2axi_niu_mask;
 };
 
 constexpr uint32_t launch_msg_buffer_num_entries = 8;

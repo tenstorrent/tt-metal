@@ -139,6 +139,61 @@ TEST_F(DramKernelFixture, DramKernelWriteToL1) {
     EXPECT_EQ(result[0], kMagicValue);
 }
 
+// Firmware owns the NIU modes: a NIU that a DRAM view routes DRAM accesses through stays in NOC2AXI,
+// every other NIU on the core goes to stream mode so a DRISC kernel there can initiate NOC traffic.
+// Kernels never switch either one, so the modes must read the same on a second run as on the first.
+//
+// The expectation is built from the DRAM view's preferred endpoints rather than from
+// get_dram_endpoint_noc_mask, so this checks the mask the host computed, not just that the device
+// agrees with it.
+TEST_F(DramKernelFixture, DramKernelNiuModesSetByFirmware) {
+    constexpr uint32_t kNoc2Axi = 1;
+    constexpr uint32_t kStream = 0;
+    constexpr uint32_t bank = 0;
+
+    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device_->build_id());
+    const CoreCoord noc1_worker_ep = logical_dram_endpoint_for_noc(soc_desc, bank, NOC::NOC_1);
+    const CoreCoord noc1_eth_ep = soc_desc.get_logical_dram_core_from_translated(
+        soc_desc.get_preferred_eth_core_for_dram_view(bank, static_cast<uint8_t>(NOC::NOC_1)));
+
+    uint32_t num_noc1_stream = 0;
+    for (const uint32_t sub : usable_dram_endpoints(bank)) {
+        CoreCoord logical_dram_core{bank, sub};
+        auto virtual_dram_core = mesh_device_->virtual_core_from_logical_core(logical_dram_core, CoreType::DRAM);
+        // NOC1 forwards this bank's DRAM accesses to AXI only on its preferred endpoints.
+        const bool is_noc1_endpoint = (sub == noc1_worker_ep.y) || (sub == noc1_eth_ep.y);
+        const uint32_t expected_noc1 = is_noc1_endpoint ? kNoc2Axi : kStream;
+        num_noc1_stream += (expected_noc1 == kStream);
+
+        for (uint32_t run = 0; run < 2; run++) {
+            Program program = CreateProgram();
+            CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/misc/drisc_read_niu_modes.cpp",
+                logical_dram_core,
+                DramConfig{.noc = NOC::NOC_0, .compile_args = {drisc_l1_base_}});
+            run_workload(std::move(program));
+
+            std::vector<uint32_t> modes(2, 0xFFFFFFFF);
+            MetalContext::instance().get_cluster().read_core(
+                modes.data(),
+                2 * sizeof(uint32_t),
+                tt_cxy_pair(mesh_device_->build_id(), virtual_dram_core),
+                drisc_l1_noc_addr_);
+
+            // get_metal_dram_cores excludes the NOC0 endpoints, so NOC0 is free on every core here.
+            EXPECT_EQ(modes[0], kStream) << "NOC0 NIU not in stream mode on endpoint " << sub << ", run " << run;
+            EXPECT_EQ(modes[1], expected_noc1)
+                << "NOC1 NIU in the wrong mode on endpoint " << sub << ", run " << run << " (this core "
+                << (is_noc1_endpoint ? "is" : "is not") << " a NOC1 DRAM view endpoint)";
+        }
+    }
+
+    // The point of the per-core mask: an endpoint that serves neither NOC gets both NIUs streaming,
+    // rather than NOC1 sitting in NOC2AXI for nothing.
+    EXPECT_GT(num_noc1_stream, 0u) << "No DRISC endpoint of bank " << bank << " has a free NOC1 NIU";
+}
+
 // Run the same kernel across multiple DRAM cores.
 TEST_F(DramKernelFixture, DramKernelOnMultipleCores) {
     constexpr uint32_t kMagicBase = 0xCAFE0000;
@@ -709,26 +764,18 @@ INSTANTIATE_TEST_SUITE_P(
     testing::Values(2048u, 4096u, 8192u, 16384u, 32768u, 65536u),
     [](const testing::TestParamInfo<uint32_t>& info) { return std::to_string(info.param / 1024) + "KB"; });
 
-struct DRISCNocModeParams {
-    NOC drisc_noc;   // DRISC drives this NIU in stream mode (DMA reads + multicast)
-    NOC tensix_noc;  // opposite NIU, left in NOC2AXI mode for the concurrent Tensix DRAM read
-};
-
-class DramKernelDRISCNocModeFixture : public DramKernelFixture,
-                                      public testing::WithParamInterface<DRISCNocModeParams> {};
-
-// Exercises both NIUs of a single DRISC simultaneously: its drisc_noc NIU runs in stream mode
-// (DRISC-initiated DMA reads from GDDR + multicast to a 4x3 Tensix grid) while its tensix_noc NIU
-// stays in NOC2AXI mode servicing a concurrent Tensix DRAM read.
+// Exercises both NIUs of a single DRISC simultaneously: its NOC0 NIU runs in stream mode
+// (DRISC-initiated DMA reads from GDDR + multicast to a 4x3 Tensix grid) while its NOC1 NIU
+// stays in NOC2AXI mode servicing a concurrent Tensix DRAM read. Firmware assigns both modes at
+// boot and no kernel changes them, so this is the only assignment there is: NOC1-stream would need
+// the DRISC kernel on the NOC0 endpoint, which is owned by the syseng firmware and runs none.
 //
-// A bank's read on tensix_noc deterministically routes to that bank's preferred DRAM endpoint for that
-// NOC (NOC0 and NOC1 use different endpoints), so the DRISC kernel is placed on that same endpoint,
-// guaranteeing both NIUs belong to one DRISC. The Tensix reader sits just below the mcast grid.
-//
-// Only tensix_noc == NOC1 is exercised: tensix_noc == NOC0 would place the DRISC kernel on the NOC0
-// endpoint, which is owned by the syseng firmware and runs no DRISC kernel (guarded below).
-TEST_P(DramKernelDRISCNocModeFixture, DramKernelDRISCNocModeStress) {
-    auto [drisc_noc, tensix_noc] = GetParam();
+// A bank's read on NOC1 deterministically routes to that bank's preferred DRAM endpoint for that
+// NOC, so the DRISC kernel is placed on that same endpoint, guaranteeing both NIUs belong to one
+// DRISC. The Tensix reader sits just below the mcast grid.
+TEST_F(DramKernelFixture, DramKernelDRISCNocModeStress) {
+    constexpr NOC drisc_noc = NOC::NOC_0;
+    constexpr NOC tensix_noc = NOC::NOC_1;
 
     const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device_->build_id());
 
@@ -827,15 +874,3 @@ TEST_P(DramKernelDRISCNocModeFixture, DramKernelDRISCNocModeStress) {
         result.data(), bytes_per_iter, tt_cxy_pair(mesh_device_->build_id(), reader_v), tensix_l1_base_);
     EXPECT_EQ(result, last_chunk) << "Tensix DRAM read via NOC2AXI NIU last-chunk mismatch";
 }
-
-// Only the NOC0-stream / NOC1-NOC2AXI configuration is exercised: it places the DRISC kernel on the
-// NOC1 endpoint. The mirror config (NOC1 stream / NOC0 NOC2AXI) would route the Tensix read to the
-// NOC0 endpoint and thus require the DRISC kernel there, but that endpoint is owned by the syseng
-// firmware and runs no DRISC kernel, so that case is no longer supported.
-INSTANTIATE_TEST_SUITE_P(
-    NocModeSweep,
-    DramKernelDRISCNocModeFixture,
-    testing::Values(DRISCNocModeParams{NOC::NOC_0, NOC::NOC_1}),  // NOC0 = stream, NOC1 = NOC2AXI
-    [](const testing::TestParamInfo<DRISCNocModeParams>& info) {
-        return info.param.drisc_noc == NOC::NOC_0 ? "Noc0StreamNoc1Noc2Axi" : "Noc1StreamNoc0Noc2Axi";
-    });
