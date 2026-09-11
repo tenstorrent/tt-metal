@@ -29,7 +29,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* post =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(post_addr + MEM_L1_UNCACHED_BASE);
 
-    dm_compute_barrier(num_dm_threads, num_tensixes);
+    sync_dm_compute_threads(num_dm_threads, num_tensixes);
 
     for (uint32_t r = 0; r < rounds; r++) {
         uint32_t delay = (participant + 1) * skew_iters;
@@ -38,7 +38,7 @@ void kernel_main() {
         }
 
         arrivals[r * max_participants + participant] = 1;
-        dm_compute_barrier(num_dm_threads, num_tensixes);
+        sync_dm_compute_threads(num_dm_threads, num_tensixes);
 
         // One observer counts arrivals. Every DM hart and TRISC is past the barrier above, so a
         // short count here means the barrier released early.
@@ -49,10 +49,10 @@ void kernel_main() {
             }
             observed[r] = count;
         }
-        dm_compute_barrier(num_dm_threads, num_tensixes);
+        sync_dm_compute_threads(num_dm_threads, num_tensixes);
 
         post[r * max_participants + participant] = 1;
-        dm_compute_barrier(num_dm_threads, num_tensixes);
+        sync_dm_compute_threads(num_dm_threads, num_tensixes);
     }
 
     if (thread_id == 0 && trisc_id == 0) {
