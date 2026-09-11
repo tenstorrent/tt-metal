@@ -96,12 +96,6 @@ def run_model(
     # The routing family this row drives must match the one the adapter declares; crossing
     # families applies a different affinity function with no error (see the assert).
     assert_gate_mode_matches_adapter(variant, gate_fallback_mode)
-    # Mistral parametrizes no `balanced` entry, so this skip would zero out its CI coverage -- which is
-    # what happened before the exemption: the leg reported 36 skipped, 0 passed, and read as green.
-    # It cannot add one: RotarySetup asserts indexed rotated rope is incompatible with is_balanced.
-    if (is_ci_env or is_ci_v2_env) and not is_balanced and variant.name != "mistral_small_4":
-        pytest.skip("Skip non_balanced variant in CI — runnable locally for non_balanced-mode validation")
-
     # host_gate_all is a local testing aid for sub-256-expert configs (e.g. the 4x4 sub-torus,
     # where the device grouped-gate's hard 256-expert requirement forces the host gate). It is not CI
     # coverage; the real device gate already covers the 256-expert meshes that run in CI.

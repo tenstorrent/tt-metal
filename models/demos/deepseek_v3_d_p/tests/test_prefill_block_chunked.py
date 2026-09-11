@@ -313,6 +313,7 @@ def run_chunked_block(
     # Repeating the sweep is both the stress run and the determinism check: every pass rewrites the
     # identical cache rows at identical offsets, so no cache reset is needed, and every pass must come
     # back bit-identical to pass 0.
+    assert not determinism_check or num_iterations >= 2, "determinism_check needs num_iterations >= 2"
     passes = num_iterations if determinism_check else 1
     log_every = 100 if passes > 100 else 1
     baseline, repeat_failures = None, []
@@ -368,7 +369,7 @@ def run_chunked_block(
                 ).to(torch.float32)[0, 0]
 
             ttnn.synchronize_device(mesh_device)
-            if passes == 1:
+            if it == 0:
                 logger.info(f"  chunk {c} done (kv_actual={kv_actual})")
         profiler.end("tt_forward")
 
