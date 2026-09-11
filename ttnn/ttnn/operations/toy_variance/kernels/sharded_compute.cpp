@@ -105,7 +105,7 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb::in_shard, dfb::scaler, dfb::partial);
 
     constexpr auto reduce_shape = ckl::ReduceInputBlockShape::of(Ht, Wt_local, /*NC=*/1);
-    constexpr auto block_shape = ckl::IterationShape::of(Ht, Wt_local);
+    constexpr auto block_shape = ckl::IterationShape::grid(Ht, Wt_local);
 
     // ---------- round 1: this core's share of the mean ----------
     // WaitUpfrontNoPop: the shard is resident and gets read again in round 2, so the reduce indexes
@@ -126,9 +126,13 @@ void kernel_main() {
     // dfb::mean is the broadcast result, one tile per output row, re-read for every column (Col).
     // dfb::in_shard is the resident block, indexed by the walk and never popped (Block).
     ckl::sub<
-        ckl::input(dfb::in_shard, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Block),
+        ckl::input(dfb::in_shard, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
         ckl::input(
-            dfb::mean, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Col),
+            dfb::mean,
+            ckl::BroadcastDim::Col,
+            ckl::WaitPolicy::Upfront,
+            ckl::PopPolicy::None,
+            ckl::InputTileMapping::Col),
         ckl::output(dfb::centered_sq)>(block_shape);
 
     ckl::square<ckl::input(dfb::centered_sq), ckl::output(dfb::centered_sq)>(block_shape);
