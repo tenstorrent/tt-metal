@@ -12,6 +12,9 @@
 
 // Gathers this core's batch-block rows of width(K)-sharded A into full_in0 (sender-major layout).
 //
+// IN0_REPLICATED: A is ROW_MAJOR HEIGHT_SHARDED and already holds the full [batch * M, K] on this
+// core. Copy the [Bc, M, K] slice at b_idx instead of the width-sharded gather.
+//
 // in1 (weights) arrive one of two ways:
 //   - default: the in1 CB is globally allocated over the L1-resident weight shard, so the
 //     reader only has to declare its tiles available.
@@ -66,7 +69,12 @@ void kernel_main() {
 
     // in0 shard is at the same L1 offset on every core.
     const uint32_t src_addr = in0_cb.get_read_ptr() + b_idx * block_slice_bytes;
-#ifdef USE_CUSTOM_MM
+#ifdef IN0_REPLICATED
+    // A is already the full [batch * M, K] replica on this core (ROW_MAJOR, 1x32 faces).
+    // Copy this core's [Bc, M, K] slice; custom_mm and matmul_block both consume it as
+    // [bc][m][k] when inA_K_tiles_per_core is the full K.
+    noc_async_write(src_addr, get_noc_addr(full_in0_cb.get_write_ptr()), block_slice_bytes);
+#elif defined(USE_CUSTOM_MM)
     // Restripe sender-major [sender][bc][k_local] into [bc][k_global] so custom_mm sees
     // kt_dim consecutive K tiles per batch.
     for (uint32_t s = 0; s < num_senders; ++s) {
@@ -93,7 +101,11 @@ void kernel_main() {
             {.offset_bytes = s * block_slice_bytes});
     }
 #endif
+#ifdef IN0_REPLICATED
+    noc.async_write_barrier();
+#else
     noc.async_read_barrier();
+#endif
 
     full_in0_cb.push_back(num_senders * block_slice_tiles);
 

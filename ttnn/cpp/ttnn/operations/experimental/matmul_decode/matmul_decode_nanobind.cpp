@@ -58,13 +58,13 @@ void bind_matmul_decode_operation(nb::module_& mod) {
         Returns the matrix product of two tensors.
 
         Args:
-            input_tensor_a (ttnn.Tensor): the first tensor to be multiplied. A rank-4 tensor
-                ([d0, d1, M, K]) whose leading dims multiply to a batch > 1 selects the batched
-                program factory; the fold geometry is inferred from the operand shapes.
-                Full-width decode also accepts ROW_MAJOR HEIGHT_SHARDED A on B's core grid:
-                A is replicated on every core, M is the shard height, and compute treats each
-                row as a 1x32 tile. That output is ROW_MAJOR as well, so it can feed the next
-                decode without a relayout.
+            input_tensor_a (ttnn.Tensor): the first tensor to be multiplied. Batched mode is
+                selected from the weight: `packed_weight.batch > 1`, or a rank-4 folded B when
+                A is rank-4 with leading dims that multiply to a batch > 1. A ROW_MAJOR
+                HEIGHT_SHARDED replica is also accepted: shard shape is the actual 2D operand
+                (`[M, K]`, or `[batch * M, K]` when batched), M is `shard_height / batch`, and
+                compute treats each row as a 1x32 tile. That output is ROW_MAJOR as well, so it
+                can feed the next decode without a relayout.
             input_tensor_b (ttnn.Tensor): the second tensor to be multiplied.
 
         Keyword Args:
