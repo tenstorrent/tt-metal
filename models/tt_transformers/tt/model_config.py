@@ -1606,7 +1606,11 @@ class ModelArgs:
             else:
                 return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            # L1 island for the gated pair. ff1 and ff3 both feed one elementwise
+            # multiply and nothing else, so writing them out to DRAM and reading them
+            # back is ~3.6 MB of avoidable traffic per layer. Interleaved L1 (not a
+            # shard spec) keeps the layout contract the multiply and ff2 already accept.
+            return ttnn.DRAM_MEMORY_CONFIG if self.is_galaxy else ttnn.L1_MEMORY_CONFIG
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
