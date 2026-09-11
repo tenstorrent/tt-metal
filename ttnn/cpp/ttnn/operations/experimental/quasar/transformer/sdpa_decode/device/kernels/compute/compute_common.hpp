@@ -25,6 +25,7 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/bcast.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/transpose.h"
 #include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
 #include "api/compute/reduce_custom.h"
@@ -1208,6 +1209,32 @@ ALWI void matmul_blocks(
         dfb_out.push_back(in0_subblock_all_cols_num_tiles);
     }
     dfb_in1.pop_front(K * N);
+}
+
+/**
+ * out_dfb[i] = transpose(in_dfb[i]) for i in [0, num_tiles): physical per-tile 32x32 transpose of a block.
+ *
+ * Builds K^T for architectures whose matmul unpacker cannot transpose SrcA (Quasar): transpose the whole
+ * K-chunk in place (each tile transposed, same grid position), so a plain matmul_blocks(transpose=false)
+ * reading the result computes Q @ K^T. in_dfb is consumed; out_dfb receives num_tiles.
+ */
+ALWI void transpose_block(uint32_t in_dfb, uint32_t out_dfb, uint32_t num_tiles) {
+    DataflowBuffer dfb_in(in_dfb);
+    DataflowBuffer dfb_out(out_dfb);
+    dfb_in.wait_front(num_tiles);
+    dfb_out.reserve_back(num_tiles);
+    transpose_init(in_dfb);
+    pack_reconfig_data_format(out_dfb);
+    for (uint32_t i = 0; i < num_tiles; ++i) {
+        tile_regs_acquire();
+        transpose_tile(in_dfb, i, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile<true>(0, out_dfb, i);
+        tile_regs_release();
+    }
+    dfb_out.push_back(num_tiles);
+    dfb_in.pop_front(num_tiles);
 }
 
 template <uint32_t M>
