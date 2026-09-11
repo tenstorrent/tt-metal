@@ -3,13 +3,17 @@
 
 import ast
 import inspect
-import random
 from pathlib import Path
 from types import SimpleNamespace
 
 import torch
 
-from models.common.sampling.generator import SamplingGenerator, SamplingParams, SeedManager
+from models.common.sampling.generator import (
+    SamplingGenerator,
+    SamplingParams,
+    SeedManager,
+    _hash_request_seed_to_device_seed,
+)
 from models.common.warmup.warmup_utils import WarmupForwardMixin
 from models.tt_transformers.tt.common import Mode
 
@@ -211,6 +215,21 @@ def test_sampling_update_commands_are_required_and_have_no_legacy_alias():
     assert params["reload_sampling_params"].default is inspect.Parameter.empty
     assert params["reset_sampling_state"].default is inspect.Parameter.empty
     assert "reset_batch" not in params
+
+
+def test_deepseek_rejects_partial_forward_reload_before_decode(expect_error):
+    from models.demos.deepseek_v3.tt.generator_vllm import DeepseekV3ForCausalLM
+
+    generator = SimpleNamespace(model_run_config_decode=object())
+    for reload_inputs, reload_page_table in ((False, False), (False, True), (True, True)):
+        with expect_error(ValueError, "requires a full host-input reload"):
+            DeepseekV3ForCausalLM.decode_forward(
+                generator,
+                reload_inputs=reload_inputs,
+                reload_page_table=reload_page_table,
+                reload_sampling_params=False,
+                reset_sampling_state=False,
+            )
 
 
 def test_decode_warmup_does_not_reset_absent_request_history():
@@ -510,6 +529,120 @@ def test_gemma4_pli_explicitly_disables_decode_token_feedback():
     assert "self._tt_supports_decode_token_feedback = not self._tt_vllm_always_refresh_decode_trace_inputs" in source
 
 
+def test_explicit_trace_reloads_select_mode_and_gemma4_bucket_buffers(monkeypatch):
+    from models.demos.gemma4.tt import generator as gemma4_generator
+    from models.tt_transformers.tt import common
+    from models.tt_transformers.tt import generator as shared_generator
+
+    copies = []
+
+    def copy_inputs(*, host_tensors, device_tensors):
+        copies.append("full")
+        for host, device in zip(host_tensors, device_tensors):
+            device.copy_(host)
+
+    def copy_page(host, device):
+        copies.append("page")
+        device.copy_(host)
+
+    monkeypatch.setattr(common, "copy_host_to_device", copy_inputs)
+    monkeypatch.setattr(shared_generator, "copy_host_to_device", copy_inputs)
+    monkeypatch.setattr(shared_generator.ttnn, "copy_host_to_device_tensor", copy_page)
+    monkeypatch.setattr(shared_generator.ttnn, "execute_trace", lambda *args, **kwargs: None)
+
+    for cls, buckets in (
+        (shared_generator.Generator, (1,)),
+        (gemma4_generator.ChunkedPrefillPageTableGuardMixin, (1, 32)),
+    ):
+
+        def key(mode, batch):
+            return (mode, batch) if len(buckets) > 1 else mode
+
+        keys = [key(mode, batch) for mode in (False, True) for batch in buckets]
+        buffers = {k: [[torch.full((1,), -1) for _ in range(4)]] for k in keys}
+        fake = SimpleNamespace(
+            data_parallel=1,
+            model=[
+                SimpleNamespace(
+                    prepare_decode_inputs_host=lambda tokens, positions, page: [
+                        tokens[0],
+                        positions[:1],
+                        positions[:1],
+                        page[0],
+                    ]
+                )
+            ],
+            model_args=[SimpleNamespace(mesh_device=object())],
+            trace_ids_decode={k: {0: object()} for k in keys},
+            trace_inputs_decode=buffers,
+            trace_output_decode={k: object() for k in keys},
+        )
+        # The plugin commands a full reload on mode/layout transitions. Switch
+        # back to an existing bucket too, where stale resident inputs matter.
+        for mode, batch in [(True, 1), (False, 1), (True, buckets[-1]), (True, 1)]:
+            selected = buffers[key(mode, batch)][0]
+            kwargs = dict(
+                tokens=[torch.full((batch, 1), 11)],
+                current_pos=[torch.full((batch,), 12)],
+                page_table=[torch.full((batch, 1), 13)],
+                on_device_sampling=mode,
+            )
+            copies.clear()
+            cls._decode_forward_trace_text(fake, **kwargs, reload_inputs=True, reload_page_table=False)
+            assert [int(t.item()) for t in selected] == [11, 12, 12, 13]
+            assert copies == ["full"]
+            selected[0].fill_(21)
+            selected[1].fill_(22)
+            copies.clear()
+            cls._decode_forward_trace_text(fake, **kwargs, reload_inputs=False, reload_page_table=True)
+            assert [int(t.item()) for t in selected] == [21, 22, 12, 13]
+            assert copies == ["page"]
+            copies.clear()
+            cls._decode_forward_trace_text(fake, **kwargs, reload_inputs=False, reload_page_table=False)
+            assert [int(t.item()) for t in selected] == [21, 22, 12, 13]
+            assert copies == []
+
+
+def test_gemma4_decode_restores_full_layer_page_tables_after_sequential_prefill():
+    from models.demos.gemma4.tt.generator import ChunkedPrefillPageTableGuardMixin
+
+    full_tables = [torch.tensor([[1], [2]])]
+    model = SimpleNamespace(
+        _active_page_tables_per_layer=[full_tables[0][:1]],
+        _sequential_batch_page_tables=full_tables,
+        switch_mode=lambda mode: None,
+    )
+
+    def decode(**kwargs):
+        assert model._active_page_tables_per_layer is full_tables
+        assert not hasattr(model, "_sequential_batch_page_tables")
+        return "logits"
+
+    fake = SimpleNamespace(
+        mode=Mode.PREFILL,
+        model=[model],
+        data_parallel=1,
+        _decode_forward_trace_text=decode,
+        _apply_sampling_slot_remap=lambda remap: None,
+    )
+    fake._clear_sequential_batch_page_tables = (
+        lambda: ChunkedPrefillPageTableGuardMixin._clear_sequential_batch_page_tables(fake)
+    )
+    assert (
+        ChunkedPrefillPageTableGuardMixin.decode_forward(
+            fake,
+            tokens=torch.zeros((2, 1), dtype=torch.int32),
+            start_pos=torch.ones(2, dtype=torch.int32),
+            read_from_device=False,
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
+        )
+        == "logits"
+    )
+
+
 def test_galaxy_reset_only_formats_seed_slots(monkeypatch):
     from models.demos.llama3_70b_galaxy.tt import generator as galaxy_generator
 
@@ -561,6 +694,7 @@ def test_galaxy_reset_only_formats_seed_slots(monkeypatch):
         tt_logits="logits",
         sampling_params=SimpleNamespace(seed=[17]),
         start_pos=torch.tensor([0, -1, -1, -1]),
+        reload_inputs=True,
         reload_sampling_params=False,
         reset_sampling_state=True,
     )
@@ -597,6 +731,7 @@ def test_galaxy_generator_routes_slot_remap_to_exactly_one_sampling_owner():
             reload_sampling_params=False,
             reset_sampling_state=False,
         )
+        assert fake._decode_reload_inputs is True
         return events, result
 
     host_events, _ = run()
@@ -635,20 +770,60 @@ def test_galaxy_slot_remap_moves_parameter_shadow_with_seed_state():
     }
 
 
+def test_galaxy_seed_stream_realigns_only_on_authoritative_input_reload():
+    from models.demos.llama3_70b_galaxy.tt.generator import Generator
+
+    class RecordingSeedManager(SeedManager):
+        def write_device_seed_values(self, values):
+            pushed.append(values[0])
+
+    pushed = []
+    events = []
+    manager = RecordingSeedManager(SimpleNamespace(_sampling_dp=1), max_batch_size=32)
+    sampling = SimpleNamespace(
+        seed_manager=manager,
+        validate_decode_state_commands=lambda **kwargs: None,
+        commit_decode_state_commands=lambda **kwargs: None,
+        reset_sampling_params=lambda params: events.append("params"),
+        reset_prompt_tokens=lambda tokens: events.append("prompt"),
+        reset_output_state=lambda tokens: events.append("output"),
+        sample=lambda **kwargs: "tokens",
+    )
+    generator = SimpleNamespace(
+        trace_inputs_decode={True: None},
+        model=SimpleNamespace(sampling=sampling),
+        model_args=SimpleNamespace(max_batch_size=32),
+        _apply_sampling_slot_remap=lambda remap: None,
+        _remember_slot_params=lambda params: None,
+    )
+    params = SamplingParams(temperature=[1.0] * 32, top_k=[32] * 32, top_p=[1.0] * 32, seed=[7] + [None] * 31)
+
+    def step(position, *, reload_inputs, reset=False):
+        Generator.sample_decode_on_device(
+            generator,
+            "logits",
+            sampling_params=params,
+            start_pos=torch.tensor([position] + [-1] * 31),
+            reload_inputs=reload_inputs,
+            reload_sampling_params=reset,
+            reset_sampling_state=reset,
+        )
+
+    step(100, reload_inputs=True, reset=True)
+    for stale_position in (100, 101, 101):
+        step(stale_position, reload_inputs=False)
+    # An authoritative full reload can move the position without changing
+    # sampling parameters or resetting penalty history.
+    step(200, reload_inputs=True)
+
+    assert pushed == [_hash_request_seed_to_device_seed(7, pos) for pos in (101, 102, 103, 104, 201)]
+    assert events == ["params", "prompt", "output"]
+
+
 def test_unseeded_decode_reset_loads_fresh_device_seed(monkeypatch):
-    manager = SeedManager.__new__(SeedManager)
-    manager.max_batch_size = 1
-    manager.seeds = [None]
-    manager.seed_counters = [4]
-    manager.seed_salts = [0]
-    manager.rngs = [random.Random(1)]
-    manager._seed_active = False
-    manager._reseted = False
-    manager._needs_skip = False
-    manager._active_request_seed = False
-    manager._seed_mapper = None
     seed_buffer = object()
-    manager.tt_sampling = SimpleNamespace(seeds_tt_tensor=seed_buffer)
+    manager = SeedManager(SimpleNamespace(_sampling_dp=1, seeds_tt_tensor=seed_buffer), max_batch_size=1)
+    manager.seed_counters = [4]
     before = manager.rngs[0].getstate()
     host_seed_tensor = object()
     uploads = []

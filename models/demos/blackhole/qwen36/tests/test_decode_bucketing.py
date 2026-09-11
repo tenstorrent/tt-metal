@@ -100,6 +100,10 @@ def test_positional_slot_remap_moves_gdn_state_and_keeps_full_width(monkeypatch)
         None,
         None,
         slot_remap,
+        reload_inputs=True,
+        reload_page_table=False,
+        reload_sampling_params=False,
+        reset_sampling_state=False,
     )
 
     assert result == "output"
