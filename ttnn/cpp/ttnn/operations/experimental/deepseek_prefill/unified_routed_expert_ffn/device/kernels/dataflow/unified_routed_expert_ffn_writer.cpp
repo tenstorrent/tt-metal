@@ -40,6 +40,7 @@
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
 #include "../adaptive_chunk.hpp"
+#include "../weight_runs.hpp"
 
 constexpr uint32_t TILE_HEIGHT = 32;
 
@@ -129,8 +130,24 @@ void kernel_main() {
     // those slots carry the down-weight args this branch added, so the band moved instead.
     constexpr uint32_t min_active_tokens = get_compile_time_arg_val(28);
     constexpr uint32_t max_active_tokens = get_compile_time_arg_val(29);
+    // Tile columns per DRAM ND shard of the weight tensors, 0 when they are DRAM-interleaved;
+    // see the reader and weight_runs.hpp. Must match the reader's values — both RISCs read the
+    // same tensors.
+    constexpr uint32_t GU_SHARD_W = get_compile_time_arg_val(30);
+    constexpr uint32_t D_SHARD_W = get_compile_time_arg_val(31);
+    using GuRuns = unified_routed_expert_ffn::WeightRuns<GU_SHARD_W>;
+    using DRuns = unified_routed_expert_ffn::WeightRuns<D_SHARD_W>;
 
-    constexpr uint32_t out_accessor_offset = 30;
+    // This core's weight tile-column window, clipped to the tensor's real N. Both weight reads
+    // below walk the same window on every K-row, so it is computed once.
+    const uint32_t up_col0 = my_nt_gu * per_core_N_gu;
+    const uint32_t up_col_end =
+        (up_col0 + per_core_N_gu < N_gate_tiles_full) ? up_col0 + per_core_N_gu : N_gate_tiles_full;
+    const uint32_t down_col0 = my_nt_d * per_core_N_d;
+    const uint32_t down_col_end =
+        (down_col0 + per_core_N_d < N_down_tiles_full) ? down_col0 + per_core_N_d : N_down_tiles_full;
+
+    constexpr uint32_t out_accessor_offset = 32;
     constexpr auto out_args = TensorAccessorArgs<out_accessor_offset>();
     const auto out_acc = TensorAccessor(out_args, output_addr, cb_out_buf.get_tile_size());
 
@@ -260,24 +277,20 @@ void kernel_main() {
                         up_go_sem.wait_min(up_seq);
                         const uint32_t l1_w_up_block_start = up_cb_base + ((up_seq - 1) % kUpNumSlots) * up_slot_bytes;
                         uint32_t l1_w_up = l1_w_up_block_start;
+                        // N-OOB hidden padding columns left UNWRITTEN: their up output lands on
+                        // a down K position the down matmul never reduces (the compute bounds
+                        // its K-loop by real_k_tiles), so stale L1 is dropped.
                         for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
-                            for (uint32_t n = 0; n < per_core_N_gu; ++n) {
-                                const uint32_t row = kb * in0_block_w_gu + k;
-                                const uint32_t col = my_nt_gu * per_core_N_gu + n;
-                                // N-OOB hidden padding column left UNWRITTEN: its up output lands
-                                // on a down K position the down matmul never reduces (the compute
-                                // bounds its K-loop by real_k_tiles), so stale L1 is dropped.
-                                if (col < N_gate_tiles_full) {
-                                    const uint32_t tile_idx = row * N_gate_tiles_full + col;
-                                    noc_up.async_read(
-                                        up_acc,
-                                        CoreLocalMem<uint32_t>(l1_w_up),
-                                        up_tile_bytes,
-                                        {.page_id = tile_idx},
-                                        {});
-                                }
-                                l1_w_up += up_tile_bytes;
-                            }
+                            GuRuns::read(
+                                noc_up,
+                                up_acc,
+                                kb * in0_block_w_gu + k,
+                                N_gate_tiles_full,
+                                up_col0,
+                                up_col_end,
+                                l1_w_up,
+                                up_tile_bytes);
+                            l1_w_up += per_core_N_gu * up_tile_bytes;
                         }
                         noc_up.async_read_barrier();
                         up_done_sem.set(up_seq);
@@ -369,24 +382,23 @@ void kernel_main() {
                         uint32_t l1_w = down_cb_base + (down_blk % kDownNumSlots) * down_slot_bytes +
                                         down_split_k * per_core_N_d * down_tile_bytes;
                         ++down_blk;
+                        // Both OOB directions left UNWRITTEN, matching the reader: the compute
+                        // bounds its down K-loop by real_k_tiles and the writer's col guard drops
+                        // phantom output columns.
                         for (uint32_t k = down_split_k; k < in0_block_w_d; ++k) {
-                            for (uint32_t n = 0; n < per_core_N_d; ++n) {
-                                const uint32_t row = kb * in0_block_w_d + k;
-                                const uint32_t col = my_nt_d * per_core_N_d + n;
-                                // Both OOB directions left UNWRITTEN, matching the reader: the
-                                // compute bounds its down K-loop by real_k_tiles and the writer's
-                                // col guard drops phantom output columns.
-                                if (row < K_down_tiles && col < N_down_tiles_full) {
-                                    const uint32_t tile_idx = row * N_down_tiles_full + col;
-                                    noc_up.async_read(
-                                        down_acc,
-                                        CoreLocalMem<uint32_t>(l1_w),
-                                        down_tile_bytes,
-                                        {.page_id = tile_idx},
-                                        {});
-                                }
-                                l1_w += down_tile_bytes;
+                            const uint32_t row = kb * in0_block_w_d + k;
+                            if (row < K_down_tiles) {
+                                DRuns::read(
+                                    noc_up,
+                                    down_acc,
+                                    row,
+                                    N_down_tiles_full,
+                                    down_col0,
+                                    down_col_end,
+                                    l1_w,
+                                    down_tile_bytes);
                             }
+                            l1_w += per_core_N_d * down_tile_bytes;
                         }
                         noc_up.async_read_barrier();
                         down_done_sem.set(down_seq);

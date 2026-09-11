@@ -31,6 +31,7 @@
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
 #include "../adaptive_chunk.hpp"
+#include "../weight_runs.hpp"
 
 void kernel_main() {
     // -------------------------- runtime args ------------------------------
@@ -168,8 +169,16 @@ void kernel_main() {
     constexpr bool writer_mcasts_in1 = get_compile_time_arg_val(31) != 0;
     constexpr uint32_t min_active_tokens = get_compile_time_arg_val(32);
     constexpr uint32_t max_active_tokens = get_compile_time_arg_val(33);
+    // Tile columns per DRAM ND shard of the weight tensors, 0 when they are DRAM-interleaved.
+    // A core's per_core_N-wide slice of one K-row is exactly one shard, so it reads as a single
+    // NoC transaction instead of per_core_N of them; see weight_runs.hpp. gate and up share one
+    // value (the program factory pins them equal), down carries its own.
+    constexpr uint32_t GU_SHARD_W = get_compile_time_arg_val(34);
+    constexpr uint32_t D_SHARD_W = get_compile_time_arg_val(35);
+    using GuRuns = unified_routed_expert_ffn::WeightRuns<GU_SHARD_W>;
+    using DRuns = unified_routed_expert_ffn::WeightRuns<D_SHARD_W>;
 
-    constexpr uint32_t x_accessor_offset = 34;
+    constexpr uint32_t x_accessor_offset = 36;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
     const auto x_acc = TensorAccessor(x_args, x_addr, get_tile_size(cb_in0_x));
     // Row-major x accessor (x_is_row_major): x is a ROW_MAJOR bf16 buffer whose
@@ -711,26 +720,24 @@ void kernel_main() {
                 // DRAM read gate region first.
                 uint32_t l1_w_gate = cb_in1_gate_obj.get_write_ptr();
                 const uint32_t gate_block_start = l1_w_gate;
+                // N-OOB hidden padding columns (col >= N_gate_tiles_full == down's K_down_tiles)
+                // are left UNWRITTEN: their gate output lands on a down K position the down
+                // matmul never reduces (see the compute's real_k_tiles bound), so the stale L1
+                // is dropped. Mirrors the down-weight K-OOB skip below.
+                const uint32_t gate_col0 = my_nt_gu * per_core_N_gu;
+                const uint32_t gate_col_end =
+                    (gate_col0 + per_core_N_gu < N_gate_tiles_full) ? gate_col0 + per_core_N_gu : N_gate_tiles_full;
                 for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
-                    for (uint32_t n = 0; n < per_core_N_gu; ++n) {
-                        const uint32_t row = kb * in0_block_w_gu + k;
-                        const uint32_t col = my_nt_gu * per_core_N_gu + n;
-                        // N-OOB hidden padding column (col >= N_gate_tiles_full == down's
-                        // K_down_tiles) is left UNWRITTEN: its gate output lands on a down
-                        // K position the down matmul never reduces (see the compute's
-                        // real_k_tiles bound), so the stale L1 is dropped. Mirrors the
-                        // down-weight K-OOB skip below.
-                        if (col < N_gate_tiles_full) {
-                            const uint32_t tile_idx = row * N_gate_tiles_full + col;
-                            noc_read.async_read(
-                                gate_acc,
-                                CoreLocalMem<uint32_t>(l1_w_gate),
-                                gate_tile_bytes,
-                                {.page_id = tile_idx},
-                                {});
-                        }
-                        l1_w_gate += gate_tile_bytes;
-                    }
+                    GuRuns::read(
+                        noc_read,
+                        gate_acc,
+                        kb * in0_block_w_gu + k,
+                        N_gate_tiles_full,
+                        gate_col0,
+                        gate_col_end,
+                        l1_w_gate,
+                        gate_tile_bytes);
+                    l1_w_gate += per_core_N_gu * gate_tile_bytes;
                 }
                 // `up` slot. LEGACY: reader reads it on NoC 0. UP_SPLIT: writer
                 // already read it on NoC 1; reader just takes the L1 start and
@@ -741,19 +748,19 @@ void kernel_main() {
                 }
                 if constexpr (reader_reads_up) {
                     uint32_t l1_w_up = up_block_start;
+                    // N-OOB hidden padding columns left unwritten: same rationale as the gate
+                    // read above, and `up` shares gate's N split so it shares the bounds.
                     for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
-                        for (uint32_t n = 0; n < per_core_N_gu; ++n) {
-                            const uint32_t row = kb * in0_block_w_gu + k;
-                            const uint32_t col = my_nt_gu * per_core_N_gu + n;
-                            // N-OOB hidden padding column left unwritten: same rationale as
-                            // the gate read above.
-                            if (col < N_gate_tiles_full) {
-                                const uint32_t tile_idx = row * N_gate_tiles_full + col;
-                                noc_read.async_read(
-                                    up_acc, CoreLocalMem<uint32_t>(l1_w_up), up_tile_bytes, {.page_id = tile_idx}, {});
-                            }
-                            l1_w_up += up_tile_bytes;
-                        }
+                        GuRuns::read(
+                            noc_read,
+                            up_acc,
+                            kb * in0_block_w_gu + k,
+                            N_gate_tiles_full,
+                            gate_col0,
+                            gate_col_end,
+                            l1_w_up,
+                            up_tile_bytes);
+                        l1_w_up += per_core_N_gu * up_tile_bytes;
                     }
                 }
                 noc_read.async_read_barrier();
@@ -921,24 +928,23 @@ void kernel_main() {
                 in1_block_start = l1_w;
                 // DOWN_SPLIT: only the rows this RISC keeps; the writer reads the rest on
                 // NoC 1 into the upper part of the same slot.
+                // Both OOB directions are left UNWRITTEN.
+                //   * K-OOB (row >= K_down_tiles, reduction dim): the compute bounds its K-loop
+                //     by real_k_tiles, so these are never reduced. Were they reduced, stale L1
+                //     decoding to Inf would NaN every valid output column — the bound is what
+                //     makes the skip safe.
+                //   * N-OOB (col >= N_down_tiles_full, free dim): the output column is dropped
+                //     by the writer's col guard.
+                const uint32_t down_col0 = my_nt_d * per_core_N_d;
+                const uint32_t down_col_end =
+                    (down_col0 + per_core_N_d < N_down_tiles_full) ? down_col0 + per_core_N_d : N_down_tiles_full;
                 for (uint32_t k = 0; k < down_split_k; ++k) {
-                    for (uint32_t n = 0; n < per_core_N_d; ++n) {
-                        const uint32_t row = kb * in0_block_w_d + k;
-                        const uint32_t col = my_nt_d * per_core_N_d + n;
-                        // Both OOB directions are left UNWRITTEN.
-                        //   * K-OOB (row >= K_down_tiles, reduction dim): the compute bounds
-                        //     its K-loop by real_k_tiles, so these are never reduced. Were
-                        //     they reduced, stale L1 decoding to Inf would NaN every valid
-                        //     output column — the bound is what makes the skip safe.
-                        //   * N-OOB (col >= N_down_tiles_full, free dim): the output column
-                        //     is dropped by the writer's col guard.
-                        if (row < K_down_tiles && col < N_down_tiles_full) {
-                            const uint32_t tile_idx = row * N_down_tiles_full + col;
-                            noc_read.async_read(
-                                down_acc, CoreLocalMem<uint32_t>(l1_w), down_tile_bytes, {.page_id = tile_idx}, {});
-                        }
-                        l1_w += down_tile_bytes;
+                    const uint32_t row = kb * in0_block_w_d + k;
+                    if (row < K_down_tiles) {
+                        DRuns::read(
+                            noc_read, down_acc, row, N_down_tiles_full, down_col0, down_col_end, l1_w, down_tile_bytes);
                     }
+                    l1_w += per_core_N_d * down_tile_bytes;
                 }
             }
 
