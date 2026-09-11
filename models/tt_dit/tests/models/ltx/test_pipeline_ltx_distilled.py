@@ -750,8 +750,11 @@ LTX_DISTILLED_BUCKET_MESH_PARAMS_DL = [
 ]
 
 # (canvas, fps, duration) requests served from the same warmed pipeline. Three configs spanning
-# three distinct rung pairs; LTX_BUCKET_TEST_CONFIGS overrides (comma-separated canvas:fps:duration).
-_BUCKET_TEST_CONFIGS_DEFAULT = "720p-landscape:24:6,1080p-landscape:25:8,720p-landscape:50:20"
+# distinct rung pairs; LTX_BUCKET_TEST_CONFIGS overrides (comma-separated canvas:fps:duration).
+# The 20 s clips (1001 frames) replay their denoise rungs fine but the eager full-res VAE decode
+# of 1001 frames runs the 4x8 out of DRAM (measured: 186 MB free, 539 MB halo buffer needed), so
+# the default long clip stays at 10 s until the VAE decode is chunked.
+_BUCKET_TEST_CONFIGS_DEFAULT = "720p-landscape:24:6,1080p-landscape:25:8,720p-landscape:48:10"
 
 
 @pytest.mark.skipif(

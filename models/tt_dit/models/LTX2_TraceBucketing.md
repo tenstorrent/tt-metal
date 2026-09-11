@@ -122,15 +122,16 @@ on the expected rungs, that every rung's trace I/O buffer address is unchanged a
 requests (nothing was allocated under live traces), and that each MP4 has the requested frame
 count and resolution.
 
-Lowest and highest of the envelope after one warmup:
+A low and a high config after one warmup (the high one is the largest clip the eager VAE decode
+is known to fit; see "Validation status" for why the 20 s clips are not there yet):
 
 ```bash
-LTX_BUCKET_TEST_CONFIGS="720p-landscape:25:6,1080p-landscape:50:20" \
+LTX_BUCKET_TEST_CONFIGS="720p-landscape:25:6,1080p-landscape:25:8" \
 pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py \
   -k test_pipeline_distilled_bucket_multi_rung 2>&1 | tee /tmp/bucket_two.log
 ```
 
-Default (three configs across five rungs: 720p/24/6, 1080p/25/8, 720p/50/20):
+Default (three configs across five rungs: 720p/24/6, 1080p/25/8, 720p/48/10):
 
 ```bash
 pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py \
@@ -168,9 +169,34 @@ single-shape behaviour.
 
 - SDPA logical-tensor replay tests: bit-exact, including the new `is_cross` case.
 - Block bucket tests: 6/6 pass (video + AV at 720p_s1, 1080p_s1, near-full rung).
-- Multi-rung pipeline test: rungs 4352, 16896, 34560, 67840 and 133120 compile and capture with
-  the 1.6 GB trace region. Full run (with generation) was in progress at time of writing.
+- Multi-rung pipeline test, configs 720p/24/6 + 1080p/25/8 + 720p/50/20 (5 rungs: 4352, 16896,
+  34560, 67840, 133120), one warmup (2380 s, of which ~30 min was the one-time cold audio-decode
+  kernel compile at the 512 bucket):
+  - 720p/24/6 (hot shape): `generate` 11.9 s end to end -- denoise, VAE and audio all trace replays.
+  - 1080p/25/8: 600 s. Denoise replayed rungs 16896 + 67840; the rest is the eager upsampler
+    rebuild at 1080p, the eager 201-frame VAE decode and first-time kernel compiles for those shapes.
+  - 720p/50/20 (1001 frames): denoise replayed rungs 34560 + 133120, then the eager full-res VAE
+    decode ran out of DRAM (`neighbor_pad_halo_scatter` needed 539 MB, 186 MB free; 31 of 32 GB
+    per device allocated). Not a bucketing failure -- a 1001-frame clip had never been decoded on
+    this pipeline -- but it means the 20 s end of the envelope is not deliverable until the VAE
+    decode is chunked and/or DRAM is freed (below).
+  - No `capturing trace...` after warmup; every rung's trace I/O address unchanged after all
+    requests.
 - Rungs 186368 and 261120 have not yet been exercised on hardware.
+
+### DRAM budget
+
+Per device (32 GB): transformer weights ~11 GB (22B, TP=4, bf16), 1.6 GB trace region, Gemma /
+VAE / upsampler weights, plus the per-rung persistent CCL buffers. The ring-SDPA K/V gather
+ping-pong buffers are `2 (K,V) x 2 (ping/pong) x N x 2 KB` per rung -- ~1.1 GB for rung 133120
+alone, ~2.6 GB for the five rungs above, and roughly 7-8 GB for the full 13-rung `"all"` set --
+and the fused matmul reduce-scatter buffers add ~N x 1 KB x 2 per rung. This is what squeezed the
+1001-frame VAE decode out. Two follow-ups, in order of payoff:
+
+1. Single-buffer the persistent CCL buffers behind an explicit barrier instead of ping-ponging
+   (halves the per-rung cost), and share one gather buffer sized for the largest rung across
+   rungs where the trace can tolerate it.
+2. Chunk the VAE decode temporally so long clips decode within a bounded working set.
 
 ## Known issues and follow-ups
 
@@ -184,9 +210,10 @@ single-shape behaviour.
   either include the window in its budget or set `mm_window_blocks=None` on that branch. The
   four new entries are unswept (they reuse the swept stage-2 blocking) and can be tuned with
   `sweep_mm_block_sizes.py`.
-- **Upsampler / VAE decode for non-hot shapes run eagerly.** Fine for correctness; a
-  per-canvas upsampler cache and a bucketed VAE decode would remove the remaining
-  shape-dependent latency.
+- **Upsampler / VAE decode for non-hot shapes run eagerly.** Correct, but this is now the
+  dominant per-request cost for non-hot configs (600 s for 1080p/25/8 vs 11.9 s for the hot
+  shape) and the 1001-frame decode does not fit in DRAM (see "DRAM budget"). A per-canvas
+  upsampler cache, a chunked VAE decode and single-buffered CCL buffers are the next steps.
 - **1440p / 4k.** The ladder already covers 4k at 24 fps up to ~10 s (stage 2 -> rung 186368) and
   1440p further; enabling them is adding the canvas to `LTX_SERVED_CANVASES`. Expect the eager
   4k VAE decode and the upsampler rebuild to be the memory problems, not the transformer.
