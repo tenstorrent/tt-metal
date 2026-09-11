@@ -85,15 +85,7 @@ inline void fill_neighborhood_3d_tile(
     uint32_t sh,
     uint32_t sw,
     uint32_t W_full,
-    int32_t w_origin,
-    // Block-permuted Q (bt==0 => strided decode): a query's physical coord comes from its block-order
-    // index (qc = q/vol, within = q%vol) via block_query_coord. K stays strided, so the key decode below
-    // is unchanged. hb/wb are the block counts (H/bh, W/bw).
-    uint32_t bt = 0,
-    uint32_t bh = 0,
-    uint32_t bw = 0,
-    uint32_t hb = 0,
-    uint32_t wb = 0) {
+    int32_t w_origin) {
     fill_neginf_tile<tile_bytes>(cb_mask_in, tile_id);
     constexpr uint32_t FH = tt::constants::FACE_HEIGHT;
     constexpr uint32_t FW = tt::constants::FACE_WIDTH;
@@ -109,22 +101,11 @@ inline void fill_neighborhood_3d_tile(
         if (q >= sites) {
             continue;
         }
-        uint32_t qt, qh;
-        int32_t qw_g;
-        if (bt != 0) {  // block-permuted Q: physical coord from the block-order index
-            const uint32_t vol = bt * bh * bw;
-            const BlockCoord bc =
-                block_query_coord(q / vol, q % vol, bt, bh, bw, hb, wb, static_cast<uint32_t>(w_origin));
-            qt = bc.t;
-            qh = bc.h;
-            qw_g = static_cast<int32_t>(bc.w);  // block_query_coord already folds in w_origin
-        } else {
-            const uint32_t qrem = q % HW;
-            qt = q / HW;
-            qh = qrem / W;
-            // Global W coordinate of this query column (local == global when not W-sharded).
-            qw_g = w_origin + static_cast<int32_t>(qrem % W);
-        }
+        const uint32_t qrem = q % HW;
+        const uint32_t qt = q / HW;
+        const uint32_t qh = qrem / W;
+        // Global W coordinate of this query column (local == global when not W-sharded).
+        const int32_t qw_g = w_origin + static_cast<int32_t>(qrem % W);
         if (qw_g < 0 || qw_g >= static_cast<int32_t>(w_span)) {
             continue;  // fake-halo query row; its output is cropped, so leave it -inf
         }
@@ -180,10 +161,7 @@ inline void generate_windowed_mask_for_q_chunk(
     uint32_t nb_sh,
     uint32_t nb_sw,
     uint32_t nb_W_full,
-    int32_t nb_w_origin,
-    uint32_t nb_bt = 0,
-    uint32_t nb_bh = 0,
-    uint32_t nb_bw = 0) {
+    int32_t nb_w_origin) {
     // 3D-neighborhood mode (nb_T != 0): per-element mask over the ACTIVE K chunks only. The T band
     // bounds the outer loop; within it the H band makes the in-window K a set of runs (frames are
     // HW apart), so we pack -- masks are emitted only for chunks the box touches, by their real k
@@ -194,33 +172,9 @@ inline void generate_windowed_mask_for_q_chunk(
     if (nb_T != 0) {
         const uint32_t q_row_start_tile = std::min(q_chunk * Sq_chunk_t, valid_Sqt);
         const uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
-        // Block-permuted Q (nb_bt != 0): the box is one (bt,bh,bw) block dilated, the k-range spans its
-        // strided K cells. Reader computes these identically (shared header) so the active sets agree.
-        const uint32_t hb = nb_bt != 0 ? nb_H / nb_bh : 0;
-        const uint32_t wb = nb_bt != 0 ? nb_W / nb_bw : 0;
         NeighborhoodBox box;
         WindowedKChunkRange nbr_range;
-        if (nb_bt != 0) {
-            box = neighborhood_box_block(
-                q_chunk,
-                nb_bt,
-                nb_bh,
-                nb_bw,
-                hb,
-                wb,
-                nb_T,
-                nb_H,
-                nb_W,
-                nb_kt,
-                nb_kh,
-                nb_kw,
-                nb_st,
-                nb_sh,
-                nb_sw,
-                static_cast<uint32_t>(nb_w_origin));
-            nbr_range =
-                neighborhood_box_k_chunk_range(box, nb_H, nb_W, Sk_chunk_t * tt::constants::TILE_HEIGHT, k_num_chunks);
-        } else {
+        {
             nbr_range = neighborhood_t_k_chunk_range(
                 q_chunk,
                 Sq_chunk_t,
@@ -277,12 +231,7 @@ inline void generate_windowed_mask_for_q_chunk(
                         nb_sh,
                         nb_sw,
                         nb_W_full,
-                        nb_w_origin,
-                        nb_bt,
-                        nb_bh,
-                        nb_bw,
-                        hb,
-                        wb);
+                        nb_w_origin);
                 }
             }
             noc.async_read_barrier();
@@ -457,11 +406,6 @@ inline void compute_nbr_row_windows(
     uint32_t sw,
     uint32_t W_full,
     int32_t w_origin,
-    uint32_t bt,  // block-permuted Q (bt==0 => strided decode); hb/wb = block counts
-    uint32_t bh,
-    uint32_t bw,
-    uint32_t hb,
-    uint32_t wb,
     NbrRowWindows& rw) {
     const uint32_t HW = H * W;
     const uint32_t sites = T * HW;
@@ -473,21 +417,10 @@ inline void compute_nbr_row_windows(
         if (q >= sites) {
             continue;
         }
-        uint32_t qt, qh;
-        int32_t qw_g;
-        if (bt != 0) {  // block-permuted Q: physical coord from the block-order index
-            const uint32_t vol = bt * bh * bw;
-            const BlockCoord bc =
-                block_query_coord(q / vol, q % vol, bt, bh, bw, hb, wb, static_cast<uint32_t>(w_origin));
-            qt = bc.t;
-            qh = bc.h;
-            qw_g = static_cast<int32_t>(bc.w);
-        } else {
-            const uint32_t qrem = q % HW;
-            qt = q / HW;
-            qh = qrem / W;
-            qw_g = w_origin + static_cast<int32_t>(qrem % W);
-        }
+        const uint32_t qrem = q % HW;
+        const uint32_t qt = q / HW;
+        const uint32_t qh = qrem / W;
+        const int32_t qw_g = w_origin + static_cast<int32_t>(qrem % W);
         if (qw_g < 0 || qw_g >= static_cast<int32_t>(w_span)) {
             continue;  // fake-halo query row: its output is cropped, leave -inf
         }
@@ -499,16 +432,10 @@ inline void compute_nbr_row_windows(
         rw.t1[r] = t1;
         rw.h0[r] = h0;
         rw.h1[r] = h1;
-        // Block mode keeps the box in GLOBAL W (box.w_lo folds in w_origin), so fill_packed compares
-        // global key w to a GLOBAL window -- store w0/w1 directly. Strided mode's box.w_lo is LOCAL, so
-        // it stores the LOCAL image w0-w_origin (fake-halo KEY test then subsumed: global w in [0,w_span)).
-        if (bt != 0) {
-            rw.wl0[r] = static_cast<int32_t>(w0);
-            rw.wl1[r] = static_cast<int32_t>(w1);
-        } else {
-            rw.wl0[r] = static_cast<int32_t>(w0) - w_origin;
-            rw.wl1[r] = static_cast<int32_t>(w1) - w_origin;
-        }
+        // box.w_lo is LOCAL, so store the LOCAL image w0-w_origin (the fake-halo KEY test is then
+        // subsumed: global w in [0, w_span)).
+        rw.wl0[r] = static_cast<int32_t>(w0) - w_origin;
+        rw.wl1[r] = static_cast<int32_t>(w1) - w_origin;
     }
 }
 
@@ -658,56 +585,31 @@ inline void generate_neighborhood_gather_mask_for_q_chunk(
     uint32_t nb_sh,
     uint32_t nb_sw,
     uint32_t nb_W_full,
-    int32_t nb_w_origin,
-    uint32_t nb_bt = 0,
-    uint32_t nb_bh = 0,
-    uint32_t nb_bw = 0) {
+    int32_t nb_w_origin) {
     const uint32_t q_row_start_tile = std::min(q_chunk * Sq_chunk_t, valid_Sqt);
-    // Block counts over THIS shard: nb_W is full W (K gather/clamp); the shard's local W = S_local/(T*H).
-    // Block mode uses a LOCAL q index and the per-device W origin (which rides q_tok_offset under W-SP).
-    const uint32_t hb = nb_bt != 0 ? nb_H / nb_bh : 0;
-    const uint32_t wb = nb_bt != 0 ? nb_W / nb_bw : 0;  // op-T-sharded: op-W is the full (non-sharded) axis
-    const uint32_t w_origin_eff = nb_bt != 0 ? q_tok_offset : static_cast<uint32_t>(nb_w_origin);
-    const auto box = nb_bt != 0 ? neighborhood_box_block(
-                                      q_chunk,
-                                      nb_bt,
-                                      nb_bh,
-                                      nb_bw,
-                                      hb,
-                                      wb,
-                                      nb_T,
-                                      nb_H,
-                                      nb_W,
-                                      nb_kt,
-                                      nb_kh,
-                                      nb_kw,
-                                      nb_st,
-                                      nb_sh,
-                                      nb_sw,
-                                      w_origin_eff)
-                                : neighborhood_box(
-                                      q_chunk,
-                                      Sq_chunk_t,
-                                      valid_Sqt,
-                                      q_tok_offset,
-                                      nb_T,
-                                      nb_H,
-                                      nb_W,
-                                      nb_kt,
-                                      nb_kh,
-                                      nb_kw,
-                                      nb_st,
-                                      nb_sh,
-                                      nb_sw,
-                                      tt::constants::TILE_HEIGHT);
+    const auto box = neighborhood_box(
+        q_chunk,
+        Sq_chunk_t,
+        valid_Sqt,
+        q_tok_offset,
+        nb_T,
+        nb_H,
+        nb_W,
+        nb_kt,
+        nb_kh,
+        nb_kw,
+        nb_st,
+        nb_sh,
+        nb_sw,
+        tt::constants::TILE_HEIGHT);
     const neighborhood_gather::BoxDims d = neighborhood_gather::box_dims(box);
     const uint32_t n_box = d.n_box;
     // Under a GNA stride that matches the Q block the box collapses to one shared window, and the mask
     // degenerates to "real key, real query" -- see fill_neighborhood_3d_tile_single_window. Restricted to
-    // block mode or an unsharded W because only there is a packed key guaranteed to be a real global
-    // position: strided W-SP keeps a LOCAL box whose columns still need the per-element halo test.
+    // an unsharded W because only there is a packed key guaranteed to be a real global position:
+    // W-SP keeps a LOCAL box whose columns still need the per-element halo test.
     const bool single_window =
-        neighborhood_box_is_single_window(box, nb_T, nb_H, nb_W, nb_kt, nb_kh, nb_kw) && (nb_bt != 0 || nb_W_full == 0);
+        neighborhood_box_is_single_window(box, nb_T, nb_H, nb_W, nb_kt, nb_kh, nb_kw) && nb_W_full == 0;
     const uint32_t n_packed_t = (n_box + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
     uint32_t n_packed_chunks = (n_packed_t + Sk_chunk_t - 1) / Sk_chunk_t;
     if (n_packed_chunks == 0) {
@@ -718,30 +620,10 @@ inline void generate_neighborhood_gather_mask_for_q_chunk(
     for (uint32_t pc = 0; pc < n_packed_chunks; ++pc) {
         cb_mask.reserve_back(mask_chunk_tiles);
         for (uint32_t row = 0; row < Sq_chunk_t; ++row) {
-            // Block mode: LOCAL q index (the block-order position is q/vol,q%vol); the per-device W origin
-            // is w_origin_eff, applied via compute_nbr_row_windows' block branch.
-            const uint32_t q_base =
-                (nb_bt != 0 ? 0u : q_tok_offset) + (q_row_start_tile + row) * tt::constants::TILE_HEIGHT;
+            const uint32_t q_base = q_tok_offset + (q_row_start_tile + row) * tt::constants::TILE_HEIGHT;
             NbrRowWindows rw;  // this Q row-tile's per-row windows (reused across the Sk_chunk_t col tiles)
             compute_nbr_row_windows(
-                q_base,
-                nb_T,
-                nb_H,
-                nb_W,
-                nb_kt,
-                nb_kh,
-                nb_kw,
-                nb_st,
-                nb_sh,
-                nb_sw,
-                nb_W_full,
-                static_cast<int32_t>(w_origin_eff),
-                nb_bt,
-                nb_bh,
-                nb_bw,
-                hb,
-                wb,
-                rw);
+                q_base, nb_T, nb_H, nb_W, nb_kt, nb_kh, nb_kw, nb_st, nb_sh, nb_sw, nb_W_full, nb_w_origin, rw);
             for (uint32_t col = 0; col < Sk_chunk_t; ++col) {
                 const uint32_t packed_col_base = (pc * Sk_chunk_t + col) * tt::constants::TILE_HEIGHT;
                 if (single_window) {
@@ -778,10 +660,7 @@ inline void neighborhood_gather_generate_if_enabled(
     uint32_t nb_sh,
     uint32_t nb_sw,
     uint32_t nb_W_full,
-    int32_t nb_w_origin,
-    uint32_t nb_bt = 0,
-    uint32_t nb_bh = 0,
-    uint32_t nb_bw = 0) {
+    int32_t nb_w_origin) {
     if constexpr (GATHER) {
         constexpr uint32_t mask_tile_bytes = get_tile_size(cb_mask_in);
         generate_neighborhood_gather_mask_for_q_chunk<mask_tile_bytes, cb_mask_in>(
@@ -801,10 +680,7 @@ inline void neighborhood_gather_generate_if_enabled(
             nb_sh,
             nb_sw,
             nb_W_full,
-            nb_w_origin,
-            nb_bt,
-            nb_bh,
-            nb_bw);
+            nb_w_origin);
     }
 }
 

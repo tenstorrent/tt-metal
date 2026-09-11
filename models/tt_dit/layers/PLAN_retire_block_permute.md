@@ -1,0 +1,441 @@
+# Plan: retire `block_permute.py` by moving stages 2-5 onto the bricked neighborhood attention
+
+Status: PHASE 4 DONE, 2026-09-11. Branch `na-integration`. Owner: James Lee.
+Phase 0 done; Phase 1 B2 done; D1 priced (axis swap rejected); Phase 4 (deletion) done and verified.
+Block order was found to be unused in production (Phase 1 notes). Remaining, optional: Phases 1 (B1),
+2, 3 and 5 = the "bricked deterministic stages" speed project; everything is uncommitted in the tree.
+
+## Pickup -- state as of 2026-09-11 00:40 (read this first)
+
+**Where things stand.** Phase 0 (bricked executor is the stage-5 pipeline default, numerics fixed),
+Phase 1 B2 (multi-head TP permute in the bricked executor) and Phase 4 (block-permute path deleted,
+Python + C++) are done and device-verified. D1 was priced and the axis swap rejected. Nothing is
+committed. Phases 1 (B1), 2, 3 and 5 are optional: they migrate the deterministic stages onto the
+bricked executor for speed only, since both paths run stride-1 attention today.
+
+**Uncommitted tree, this work (26 files; `neighborhood_sdpa_nanobind.cpp` joined for follow-up 2):**
+```
+M models/tt_dit/experimental/scripts/run_ltx25_diffvae.sh
+M models/tt_dit/experimental/scripts/run_ltx25_pipeline.sh
+M models/tt_dit/layers/NEIGHBORHOOD_ATTENTION.md
+D models/tt_dit/layers/block_permute.py
+M models/tt_dit/layers/na3d.py
+M models/tt_dit/layers/neighborhood_attention.py
+D models/tt_dit/tests/models/vae/ab_gna_decode.py
+D models/tt_dit/tests/models/vae/ab_gna_stage5.py
+M models/tt_dit/tests/models/vae/test_decode_timing.py
+M models/tt_dit/tests/models/vae/test_diffvae_decoder.py
+D models/tt_dit/tests/unit/test_block_permute.py
+D models/tt_dit/tests/unit/test_block_permute_device.py
+D models/tt_dit/tests/unit/test_block_sdpa_op.py
+M models/tt_dit/tests/unit/test_na3d_op_sp.py
+M ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/reader_interleaved.cpp
+M ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/windowed_mask_gen.hpp
+M ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/writer_interleaved.cpp
+M ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/windowed_loop_geometry.hpp
+M ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_device_operation.cpp
+M ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp
+M ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_device_operation_types.hpp
+M ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp
+M ttnn/cpp/ttnn/operations/transformer/sdpa/sdpa.cpp
+M ttnn/cpp/ttnn/operations/transformer/sdpa/sdpa.hpp
+M ttnn/cpp/ttnn/operations/transformer/sdpa/sdpa_nanobind.cpp
+```
+Also modified but NOT this work (James's, pre-existing): `models/tt_dit/pipelines/ltx/pipeline_ltx_distilled.py`, `models/tt_dit/utils/ltx.py`, `ttnn/cpp/ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/strided_all_gather_common.hpp`.
+Untracked scratch left alone: root-level diagram scripts/pngs, `NOTES_*.md` (the kernel geometry
+notes had their block section retired), `neighborhood_gather_figs/`, `windowed_loop_geometry_figs/`.
+
+**Suggested commit split (all on `na-integration`; pre-commit's clang-format may reformat once):**
+1. `neighborhood_attention.py` compute config (HiFi2/exact exp) + decoder gate `latent_w`/dump +
+   `run_ltx25_pipeline.sh` stage-5 defaults -- "Phase 0: bricked stage 5 by default, matched numerics".
+2. `neighborhood_attention.py` TP permute + `test_na3d_op_sp.py::test_bricked_w_sharded_tp_matches_host`
+   + `test_decode_timing.py` axis knobs -- "bricked executor: TP with >1 head per chip".
+3. Everything else (deletions, `na3d.py`, scripts, SDPA C++/kernels, docs) -- "retire block_permute".
+   A rebuild is required for this one: `./build_metal.sh --release` (~15 min here; it installs).
+
+**Re-verify (device, via the broker; workspace `/home/jameslee`, prefix `cd /home/jameslee/tt-metal &&`):**
+```
+export DIFFVAE_CHECKPOINT=/mnt/MLPerf/huggingface/hub/models--Lightricks--LTX-2.5/snapshots/28dac7acdc1f78a70e98687db261a949754f8941/vae/ltx-2.5-video-vae-bf16.safetensors
+# kernels (129 tests, ~4 min; keep stdout flowing -- the broker reaps 300 s of silence)
+python_env/bin/python -u -m pytest tests/ttnn/unit_tests/operations/sdpa/test_windowed_sdpa.py tests/ttnn/unit_tests/operations/sdpa/test_neighborhood_3d_sdpa.py models/tt_dit/tests/unit/test_na3d_op_sp.py -q --timeout=0
+# stage-5 gates (~5 min): bricked (4 params, expect >= 99.995 pct) and strided op_sp_w_sharded (expect 99.996 pct)
+python_env/bin/python -u -m pytest models/tt_dit/tests/models/vae/test_diffvae_decoder.py -k 'bricked_matches_replicated or stage5_wsp_matches_replicated' -q --timeout=0
+# decode timing (expect ~13.8-14.0 s, deterministic stages ~2.3 s)
+eval "$(grep '^export DIFFVAE_' models/tt_dit/experimental/scripts/run_ltx25_pipeline.sh | grep -v PROFILE)"; DIFFVAE_SLAB_FRAMES=73 python_env/bin/python -u -m pytest models/tt_dit/tests/models/vae/test_decode_timing.py -k 'test_decode_wsp_timing and s34x60' -s -q --timeout=0
+# pipeline (~11 min; expect VAE decode ~12.6 s at the script's SLAB 78)
+LTX_VAE_TIME=1 bash models/tt_dit/experimental/scripts/run_ltx25_pipeline.sh
+```
+Stage-5-only parity against upstream needs `LTX_CORE_SRC=/home/noblewoodall/LTX-2/packages/ltx-core/src`
+(`test_diffvae_stage5.py -k parity_w_sharded_bricked`, expect 99.9936 pct).
+
+**Open follow-ups, in priority order:**
+1. DONE 2026-09-11 01:32 (job 413): full 1080p pipeline on the rebuilt library + kernels, VAE decode
+   **12.58 s** (12.56 s before the C++ step), output `generated/phase4_final.mp4`.
+2. DONE 2026-09-11 01:40 (rebuilt; job 414: `test_neighborhood_sdpa.py` + `test_neighborhood_permute.py`
+   pass calling the op without a config, stage-5 parity 99.9936 %, 4-way decoder gate 99.9946-99.9958 %):
+   `neighborhood_sdpa_nanobind.cpp` now resolves the default via `init_device_compute_kernel_config(arch,
+   cfg, HiFi2, approx=false, fp32_acc=false, l1_acc=false)` like `sdpa.cpp`, instead of
+   `DeviceComputeKernelConfig{}` (LoFi/approx). Host unit syntax-checks clean.
+3. `test_na3d_op_sp_w_sharded_matches_host[dims2-kernel2-sp_cols]` (12-token shard) fails at 94 pct
+   under the pipeline's exported `DIFFVAE_*` flags, on old and new code alike; passes clean. Either
+   the flags are invalid for tiny shards (likely `DIFFVAE_PAD_GATHER` / `DIFFVAE_SDPA_KCHUNK=256`) or a
+   real bug in `op_sp_w_sharded` at sub-tile shards. Not production geometry.
+4. `DIFFVAE_S5_KERNEL` window-override reader exists only in `git stash@{0}` while
+   `run_ltx25_window.sh` still exports it (memory note `s5-window-sweep-2026-09-10`).
+5. Weight cache dir is keyed by mesh only (`CP1_0_TP4_0_SP8_1_mesh4x8_bf16`), so a TP-off run
+   collides with the TP-on layout; workaround used: `TT_DIT_CACHE_DIR=~/.cache/tt-dit-tpoff`
+   (hardlink copy, deletable).
+6. Optional project, Phases 1-3/5: B1 via brick width 1 in `_choose_sharded_brick` (the axis swap
+   costs 2.2 s/decode, rejected), then wire `bricked_sp_w_sharded` into `NeighborhoodAttention`
+   for stages 2-4 and measure against the strided executor at GNA=0 (~290 ms of K/V gather +
+   retile on the table vs small-window gather waste).
+
+**Gotchas learned this round:**
+- Kernel sources are JIT-only: the unity host syntax check never sees them. After a kernel edit, run
+  the exact JIT command (printed on a compile failure, or via `TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1`)
+  from the cached kernel dir with `-fsyntax-only` before touching the device.
+- Do not export the pipeline's `DIFFVAE_*` set into unit tests; it changes executor paths.
+- A `grep | tail` filter on a broker job hides errors AND goes silent: tee the full log to a file.
+- Both stage-5 executors fuse the gather into the kernel; say "block-permute executor" (older,
+  now deleted) and "bricked executor" (newer), never "fused".
+
+## Goal
+
+Delete `models/tt_dit/layers/block_permute.py` and everything that exists only to serve it. Today it
+and `neighborhood_permute.py` implement the same 3-D token permutation twice (same 8-D reshape,
+same permute order `(0,1,3,5,2,4,6,7)`, same ceil-padding-by-concat, same index formula with
+`bt*bh*bw` in place of the literal 32). Rather than unify the two, retire the older one: every
+consumer of block order moves to the bricked op, and the block path is removed end to end.
+
+## Naming
+
+- **block-permute executor** -- the OLDER implementation: `neighborhood_attention_3d_op_sp_w_sharded`
+  (`layers/na3d.py`, kernel name `op_sp_w_sharded`): full-W K/V all-gather + `wrow` retile, Q in block
+  order via `block_permute.py`, runs the general `ttnn.transformer.scaled_dot_product_attention` with
+  its neighborhood arguments.
+- **bricked executor** -- the NEWER implementation: `neighborhood_attention_3d_bricked_w_sharded`
+  (`layers/neighborhood_attention.py`, kernel name `bricked_sp_w_sharded`): halo exchange, bricked order
+  via `neighborhood_permute.py`, runs the dedicated `ttnn.transformer.neighborhood_scaled_dot_product_attention`.
+
+"Fused" is not used for either: both fuse the gather into the kernel, and the word already names
+`DIFFVAE_SP_FUSED`, fused RoPE/qkv and the `fused-sdpa` timing-tree row.
+
+## Where block order is live today
+
+`block_permute` has exactly one production caller, `neighborhood_attention_3d_op_sp_w_sharded`
+in `layers/na3d.py`, gated by `DIFFVAE_BLOCK=1 && DIFFVAE_SP_FUSED=1`. Both are exported by
+`experimental/scripts/run_ltx25_pipeline.sh`. That executor is used by:
+
+| Consumer | Selected by | Uses block order in production? |
+|---|---|---|
+| Deterministic stages 2-4 (`diffvae_ltx.py::DeterministicStages`, `block_backend(stage)`) | `DIFFVAE_STAGES_WSP=1` | **no** -- `_pick_block` finds no legal block at W_local 15/30 (found 2026-09-10 evening), so the executor runs its strided mode; see Phase 1 notes |
+| Stage 5 (`diffvae_ltx_stage5.py`, `NAKernel "op_sp_w_sharded"`) | was the default when `DIFFVAE_STAGE5_BACKEND` was unset; Phase 0 made `bricked_sp_w_sharded` the script default | was reachable, but the executor OOMs in the full pipeline (Phase 0 notes) -- only decode-only harnesses ever ran it |
+| Deterministic stage 1 (index 0) | replicated `gather` backend (W=60 does not divide the size-8 mesh axis) | no, untouched by this plan |
+
+Downstream of the Python, the block dims travel as `neighborhood_block` through
+`ttnn.transformer.scaled_dot_product_attention` -> `sdpa.cpp` -> `sdpa_program_factory.cpp` ->
+`windowed_loop_geometry.hpp` (`BlockCoord`, `block_index_of_chunk`, `neighborhood_box_block`,
+`block_query_coord`). All of that becomes dead once no caller sets `DIFFVAE_BLOCK`.
+
+## Deterministic-stage geometry the migration must fit (1080p, mesh 4x8, SP on the size-8 axis, TP4 on the size-4 axis)
+
+From `diffvae_bricked_timing_tree.txt` and `tests/models/vae/test_det_nablock_arms.py`:
+
+| Stage | Volume in (T,H,W) | dim / heads (head_dim 64) | heads per chip @TP4 | Kernel | W_local @sp=8 |
+|---|---|---|---|---|---|
+| 2 | 21, 68, 120 | 1024 / 16 | 4 | (3,7,7) | 15 |
+| 3 | 41, 68, 120 | 512 / 8 | 2 | (3,5,5) | 15 |
+| 4 | 81, 136, 240 | 512 / 8 | 2 | (3,5,5) | 30 |
+| 5 (reference) | ~25 latent -> 272x480 | 256 / 4 | 1 | (11,11,11) | 60 |
+
+Deterministic-stage attention cost per decode today (ms, from the same tree; row labels as in the tree): fused-sdpa 410, kv-wrow
+retile 203, kv-allgather 90, attn-unflatten 81. Deterministic stages total 1767 ms = 13.5% of the decode.
+This is a code-deletion migration, not a speed one; the gate is "no regression".
+
+## Blockers found
+
+### B1. Shard width is not brick-aligned at stages 2 and 3
+
+`neighborhood_plan.cpp` requires `shard_origin` to be brick-aligned. `_choose_sharded_brick`
+only tries even brick widths (odd widths were excluded for a `neighbor_pad` stick-size hang in
+natural order). With W_local = 15, `index * 15 - halo` is odd for odd shard indices, so every
+candidate is rejected and the executor cannot build a plan. Stage 4 (W_local 30) is fine.
+
+Options, preferred first:
+
+1. **Shard the deterministic stages over the size-4 axis** (W_local 30 at stages 2-3), TP over heads on the
+   size-8 axis. Also lands stages 3-4 at one head per chip (see B2). Changes the mesh layout
+   the deterministic stages run on; `_wshard`/`_wgather`/`mesh_partition` of cos/sin all take `sp_axis`, so
+   it is a config change, but `DIFFVAE_TP_HEADS` / `tp_axis` plumbing in `NeighborhoodAttention`
+   and `SwiGLU` must be checked for hard-coded axes.
+2. **Allow brick width 1** in `_choose_sharded_brick`. In bricked order the halo stick is
+   `32 * channels` wide, so the 128 B hang that motivated the exclusion may not apply. Needs a
+   device check of `_halo_exchange` at brick width 1, and the gather waste at (t,h,1) bricks.
+3. Teach the planner non-aligned shard origins. Kernel work; do not start here.
+
+### B2. The bricked TP-over-heads path asserts one head per chip
+
+`neighborhood_attention_3d_bricked_w_sharded` (TP block, ~line 975) asserts `head_count == 1`
+because it reshapes the site-major output `(sites, heads*hd)` to `(heads, sites, hd)` as a view.
+Stages 2-4 have 4/2/2 heads per chip at TP4. Fix: permute site-major -> head-major before the
+head all-gather when `head_count > 1` (the block-permute executor's `attn-unflatten` does exactly this).
+Python only. The op itself already takes `head_count > 1`.
+
+### B3. Performance at small windows is unmeasured
+
+(3,7,7) = 147 sites and (3,5,5) = 75 sites; the op gathers whole 32-site bricks, so the waste
+factor is several times worse than at 11^3 (where gather is 147 bricks for 1331 sites). Against
+that, the bricked path drops the full-W K/V all-gather and the `kv-wrow` retile (~290 ms).
+Net sign unknown until measured (Phase 3).
+
+### B0 (precondition). Bricked stage 5 has two open PCC gate failures on baseline
+
+Memory note `bricked-stage5-gates-fail-on-baseline`: two stage-5 PCC misses predate the recent
+work. Making bricked the production default for stage 5 (Phase 0) requires closing or
+explicitly waiving them.
+
+## Phases
+
+### Phase 0 -- bricked becomes the stage-5 production default
+- [x] Reproduce the two failing stage-5 bricked gates on baseline (2026-09-10, broker jobs 353/354):
+  - `test_decode_wsp_shard_equivalence` now PASSES at stride (1,1,1) (PCC 1.000000, 0.14 % mean
+    diff, different bricks per arm) and at stride (1,2,2) (bit-identical, same brick both arms).
+    The memory note's 0.9779 failure no longer reproduces post main-merge. Closed.
+  - `test_decode_stage5_bricked_matches_replicated` still misses: 99.8999 % (t_at_window) and
+    99.8882 % (t_clear_of_window) vs 99.9 %, RMSE/sigma ~5 %. History from the broker logs: the
+    same test shape and the same brick (8,2,2) scored 99.9935 % on 2026-08-31 17:55 (job 869) and
+    99.9909 % at 21:31 (job 907); the first miss is 2026-09-01 16:26 (job 944). The only commit
+    in that window touching the path is 5f5039bef1a (`_halo_split` sub-column halo exchange,
+    `_release_intermediates`, chooser degenerate-brick skip). Calibration: the PRODUCTION block-permute
+    executor with `DIFFVAE_GNA=1 DIFFVAE_BLOCK=1` scores 99.8436 % on the sibling test (job 943), so
+    bricked is already closer to the replicated reference than what ships today.
+  - Not the brick chooser: forcing (2,4,4) cannot even plan at local width 8 (shards gather
+    120 vs 150 bricks; job 356).
+  - Ruled out by the `latent_w` param + pixel dump (job 360): local width 8 vs 16 makes no
+    difference (99.886-99.901 % across all four), and the error is flat across columns and frames
+    (band-edge/interior ratio 0.94-1.08) -- a uniform ~5 % RMSE/sigma floor, not a seam.
+  - **Root cause (job 369/370):** `neighborhood_scaled_dot_product_attention` was called without a
+    `compute_kernel_config`, so the binding's `value_or(DeviceComputeKernelConfig{})` gave it
+    **LoFi** matmuls and the **approximate exp** (`ComputeKernelConfig` defaults). The general
+    `scaled_dot_product_attention` op that the replicated reference and the block-permute executor run
+    defaults to **HiFi2** (`init_device_compute_kernel_config`
+    in `sdpa.cpp`) with exact exp (`SDPAProgramConfig(exp_approx_mode=False)`). Fix: pass a matching
+    `WormholeComputeKernelConfig(HiFi2, math_approx_mode=False)` at both op call sites
+    (`_compute_kernel_config()` in `neighborhood_attention.py`; `DIFFVAE_NA_FIDELITY` /
+    `DIFFVAE_NA_APPROX_EXP` are A/B knobs). Stage-5-only parity vs ltx_core: 99.9899 -> 99.9936 %
+    (block-permute executor: 99.9935 %). Gate A: 99.9946-99.9958 % on all four params, RMSE/sigma 0.9-1.1 %.
+    Why the 08-31 runs passed with the same default is unexplained; the default was already LoFi then.
+- [x] Fix the gate-A miss (compute config, above). Gate-test additions kept: `latent_w` param and
+      `DIFFVAE_DUMP_PIXELS` dump of both arms.
+- [x] Cost of HiFi2 vs LoFi on the bricked op (job 371, `test_decode_wsp_timing -k s34x60`, 4x8,
+      TP4, W-SP deterministic stages): decode 13916 vs 13911 ms, stage-5 attention 1132-1139 vs
+      1134-1146 ms per block. No measurable cost -- the op is gather-bound, not matmul-bound.
+- [ ] Follow-up (C++, not blocking): make the op's own default HiFi2/exact like `sdpa.cpp` does via
+      `init_device_compute_kernel_config(arch, cfg, HiFi2, ...)`, so no caller can fall into LoFi
+      silently. Needs a ttnn rebuild (~25 min); the Python-side config covers production meanwhile.
+- [x] `run_ltx25_pipeline.sh`: `DIFFVAE_STAGE5_BACKEND`, `DIFFVAE_S5_GNA_STRIDE=1,1,1` and
+      `DIFFVAE_TP_HEADS=1` moved from the PROFILE block into the common exports (2026-09-10).
+- [x] Pipeline timing, same script and tree, one untraced generation each (VAE decode row; the
+      DiffVAE decode is untraced either way so it compares across trace modes). Summary: new
+      default 12.56 s (SLAB 78) / 13.35 s (SLAB 73); fidelity fix free (12.58 s at LoFi); the block-permute
+      executor (old default) OOMs in every configuration on today's tree (TP4 at 78 and 73, TP off at 73) and
+      there is no record of it ever completing the 1080p pipeline on this branch since
+      2026-08-20 (see arm B notes) -- the full-W K/V retile does not fit beside the resident
+      transformer + encoder (~4.0 of 4.2 GB/bank). The evening `pipeline_ltx_distilled.py` /
+      `utils/ltx.py` edits are reporting-only and are NOT the cause. **Phase 0 verdict: bricked default is faster or equal,
+      fits where the block-permute executor no longer does, and passes every gate. Proceed to Phase 1.**
+  - Arm A, new default (bricked, HiFi2, TP4, SLAB 78): **12.56 s** decode, job 372, PASSED.
+  - Arm B, old default (block-permute executor, `op_sp_w_sharded`) at the script's SLAB 78: **OOM** -- 1.39 GB DRAM
+    buffer in the block-permute executor's K/V retile (`na3d.py:1217 wrow`), 4.04 of 4.21 GB/bank
+    allocated (job 373). The block-permute executor only ever ran the pipeline at SLAB 73; the bricked path
+    fits at 78 because the halo exchange replaces the full-W K/V gather. Re-run as
+    `DIFFVAE_STAGE5_BACKEND=op_sp_w_sharded DIFFVAE_TP_HEADS=0 DIFFVAE_SLAB_FRAMES=73` (job 376).
+  - Arm C, bricked at the old op numerics (LoFi, approx exp), SLAB 78: **12.58 s**, job 374,
+    PASSED. Fidelity is free at pipeline level too (vs arm A's 12.56 s).
+  - Arm A73, new default at SLAB 73: **13.35 s**, job 377, PASSED (SLAB 78 -> 73 costs ~0.8 s,
+    matching the decode-only note in [[diffvae-slab78-pipeline-ooms]]).
+  - Arm B at SLAB 73 with TP4 on: **OOM again**, same site (`na3d.py:1217 wrow`), 1.29 GB with
+    4.04 GB/bank allocated (job 379). On today's tree the block-permute executor does not fit the pipeline's
+    DRAM budget with TP on at either slab size. CORRECTION: this morning's 13.29 s "baseline" (job 281) was the
+    BRICKED executor (TP4, SLAB 73, traced) -- its launcher script says so; the memory note that
+    called it the "standard prefix" was misread. There is NO full-pipeline run with the
+    block-permute executor for stage 5 in the broker history since 2026-08-20 (decode 107-120 s,
+    pre-W-sharding era); every 1080p pipeline run since then set `bricked_sp_w_sharded`. The
+    block-permute executor was only ever exercised by decoder/timing tests (decode-only, no
+    transformer/encoder resident), where its 1.3 GB (TP4) / 5.2 GB (TP off) full-W K/V retile fits.
+    Traced mode does not rescue it either: traced, TP off, SLAB 73 OOMs on a 2.7 GB buffer at the
+    same retile (`na3d.py:1213 wrow`, job 383). Hypothesis closed.
+  - **Why the block-permute executor was never pipeline-checked for stage 5, and why we stop here
+    (decided 2026-09-10, James):** the switch itself exists (`DIFFVAE_STAGE5_BACKEND`), but the
+    executor's `wrow` step copies the full-W gathered K and V from TILE to ROW_MAJOR, ~1.3 GB per
+    tensor per band at TP4 with the tiled original still alive, against ~170 MB free once the
+    transformer + encoder are resident. It only ever ran in decode-only harnesses where nothing
+    else is resident. Making it fit would take smaller bands (`DIFFVAE_SLAB_FRAMES` ~30-40, slower),
+    gathering straight into ROW_MAJOR (`DIFFVAE_KV_RM_GATHER=1`, measured to inflate memory),
+    freeing the transformer around the decode (~85 s of reloads per run), or giving it the halo
+    exchange the bricked executor already has (kernel work that re-derives the bricked design).
+    None of that serves a plan whose goal is to retire the executor, and the decode-only timing test
+    already compares the two stage-5 executors cleanly. Not pursued.
+  - Arm B with TP off (separate weight cache `TT_DIT_CACHE_DIR=~/.cache/tt-dit-tpoff`, a hardlink
+    copy with the diffvae entries dropped): **OOM in warmup**, 5.2 GB K/V retile (4x the TP4
+    buffer, as expected) at `na3d.py:1208 wrow` (job 381). So the block-permute executor cannot complete
+    the pipeline on today's tree in any configuration reachable here; the bricked path completes
+    in all of them.
+  - Arm B with `DIFFVAE_TP_HEADS=0` cannot run from the shared weight cache: the cache dir
+    (`CP1_0_TP4_0_SP8_1_mesh4x8_bf16`) is keyed by mesh only, was written by TP-on runs (column-parallel
+    fused-qkv weights), and TP-off wants `stages.det_stages.*.attn.to_q.weight` (job 376). Pre-existing;
+    not this plan's problem, but it means the "old default" is measured with TP on (job 379).
+- [ ] Gate: `test_decode_stage5_bricked_matches_replicated`, `test_stage5_parity_w_sharded_bricked`,
+      and a pipeline gen-0 output within the usual PCC of the current `op_sp_w_sharded` run.
+- After this phase, stage 5 no longer needs `DIFFVAE_BLOCK`. Stages 2-4 still do.
+
+### Phase 1 -- generalize the bricked W-sharded executor (`layers/neighborhood_attention.py`)
+- [x] B2: multi-head TP path (2026-09-10). `neighborhood_attention_3d_bricked_w_sharded` now
+      reshapes the site-major output to `(b, sites, heads, hd)` (a view) and permutes to
+      `(b, heads, sites, hd)` before the head all-gather when heads per chip > 1; one head per chip
+      keeps the old view. New test `test_na3d_op_sp.py::test_bricked_w_sharded_tp_matches_host`
+      (4x8, W over the size-8 axis, heads presharded over the size-4 axis, 1 and 2 heads per chip,
+      W_local 8 and 16, windows (3,3,3)/(3,5,5)) -- 4 passed, PCC 99.982/99.982 % and
+      99.970/99.971 % (one vs two heads per chip, per geometry; job 385). Stage-5 parity control
+      unchanged at 99.9936 %. The bricked executor does NOT slice heads itself under TP
+      (`heads_presharded` is documentation only); the caller must hand it its own heads, which the
+      column-parallel qkv does in production.
+- [ ] B1: implement the chosen option (decision D1 below).
+  - D1 pricing (2026-09-10, `test_decode_wsp_timing -k s34x60`, bricked stage 5, TP4, SLAB 73,
+    deterministic stages on the block-permute executor; knobs `DIFFVAE_STAGES_SP_AXIS` /
+    `DIFFVAE_STAGES_TP_AXIS` added to the test): today's axes (W over size-8, TP over size-4) =
+    **13993 ms** at the script's `DIFFVAE_GNA=1`. The swapped axes (W over size-4, TP over size-8)
+    **cannot run at GNA=1**: `_pick_block(t=81, h=136, w_local=30, gna=True)` picks a block with
+    bh=8 and the executor sets the GNA stride to the block, but stage 4's kernel is (3,5,5), so the
+    fused SDPA rejects "neighborhood_stride h=8 must not exceed the effective kernel h=5" (job 386).
+    A latent bug in the block-permute executor -- `_pick_block`'s `kmax` defaults to 11 (the stage-5
+    window) regardless of the stage's kernel -- that only surfaces at non-default shard widths.
+    Re-priced at `DIFFVAE_GNA=0` for both arms (job 388) so the comparison isolates the axis swap:
+    today's axes **13814 ms** (deterministic stages 2291 ms); swapped axes **15994 ms**
+    (deterministic stages 4244 ms, of which `det -> replicated context gather` 1781 ms, plus a
+    66 ms `stage5: context reshard`). **Option 1 costs ~2.2 s per decode (+16 %)**, almost all of
+    it the lost same-axis W-sharded handoff, which re-materialises the replicated stage-5 context
+    on every chip. Not viable as-is; it would need an axis-0 -> axis-1 reshard collective that
+    moves 1/8 of the context per chip instead of gathering all of it. Option 2 (brick width 1) is
+    now the recommended B1 fix.
+  - **Block order is DEAD in production at 1080p (host check of `_pick_block`, job 388 logs).**
+    At the production layout (W over the size-8 axis) `_pick_block` returns None for every
+    deterministic stage -- (21,68,15), (41,68,15), (81,136,30) -- with GNA on or off: a legal block
+    needs a volume that is a multiple of 32 and none of those shard widths carries the factors.
+    So `op_sp_w_sharded` runs its STRIDED mode there, `DIFFVAE_GNA=1` is a no-op (no block, no
+    stride), and the deterministic stages already run true stride-1 attention. The profiled decode
+    trees (jobs 351/352, `diffvae_bricked_timing_tree.txt`) contain no `block-permute` span. Block
+    order was reachable only for stage 4 at W over the size-4 axis ((9,8,4)) and for stage 5 on the
+    block-permute executor -- which Phase 0 replaced and which cannot run in the pipeline anyway.
+    **Consequence: retiring `block_permute.py` does not depend on migrating the deterministic
+    stages.** Phase 4 can run now against the strided `op_sp_w_sharded`; Phases 1-3 become a
+    separate "bricked deterministic stages" project whose case is quality-neutral (both stride 1)
+    and speed-only (drop the full-W K/V gather + `wrow` retile, ~290 ms, against the small-window
+    gather waste of B3). The earlier "GNA caveat" written here was wrong and has been removed.
+  - **History check (git + every broker log):** block order DID work, for stage 5 only. Built
+    2026-08-18 (`a10861f3815` .. `de5bda545c7`, "6s 35.7 s -> 25.0 s -> 22.3 s") for the 6-second
+    1080p stage 5, where W_local 60 and H 272 admit blocks (6,8,10) / (11,8,4) / (4,8,4); those are
+    the only non-None picks in the logs apart from the small decoder-gate grids (11,64,8/16) and
+    today's axis-swap run. The picker's constraints (divisor dims, volume a multiple of 32 in
+    [128, 512]) are unchanged since that first commit. Stage 5 moved to the bricked executor on
+    2026-08-25/26 (`59873aa1713`, `5577f125079`), which is when block order stopped being exercised.
+    The deterministic stages were W-sharded from 2026-08-17 but have never produced a block
+    (>3300 `_blk=None` log lines at (21,68,15), (41,68,15), (81,136,30); zero non-None).
+- [ ] Tests in `tests/unit/test_neighborhood_sdpa.py`: windows (3,5,5) and (3,7,7) at stride 1;
+      an odd shard index at W_local 30 (or W_local 15 if option 2); TP with two heads per chip.
+- [ ] Gate: all existing `test_neighborhood_sdpa.py` and `test_neighborhood_permute.py` cases still pass.
+
+### Phase 2 -- wire the deterministic stages (`models/vae/diffvae_ltx.py`)
+- [ ] `NeighborhoodAttention.forward`: add a `bricked_sp_w_sharded` arm that calls the bricked
+      executor with the flat `(1, heads_local, tokens, head_dim)` q/k/v the fused-rope path already
+      produces (`heads_presharded=True`, `already_bricked=False`, `stride=(1,1,1)`). RoPE stays in
+      natural order before the call; nothing else in the block changes. The executor returns a
+      5-D volume (no TP) or `(1,1,sites,C)` TILE (TP); the existing `reshape -> TILE -> proj` tail
+      handles both.
+- [ ] `DeterministicStages.block_backend(stage)`: return `bricked_sp_w_sharded` for stages > 0
+      when W-sharded (`_w_sharded` currently keys off the string `"op_sp_w_sharded"`; make it a
+      set of W-sharded backend names).
+- [ ] Selection: extend `stages_na3d_backend` in `vae_ltx.py` (currently hard-coded to
+      `op_sp_w_sharded` when `DIFFVAE_STAGES_WSP=1`) with a `DIFFVAE_STAGES_BACKEND` override,
+      default bricked once Phase 3 passes.
+- [ ] Tests: a `bricked` arm in `test_det_nablock_arms.py` (PCC 0.999 vs baseline, plus the timing
+      test) at all three STAGES; a `test_decode_full_bricked_matches_replicated` beside the stage-5
+      one in `test_diffvae_decoder.py`.
+
+### Phase 3 -- measure and decide
+- [ ] `test_det_nablock_arm_timing` for `bricked` vs `flat_seq` at stages 2, 3, 4.
+- [ ] One full 1080p decode with the decode tree (`PROFILE=1 run_ltx25_pipeline.sh`); compare
+      deterministic-stage totals against the 1767 ms baseline and gen-0 output against Phase 0's.
+- [ ] Decision D2: if deterministic-stage time regresses, either keep `op_sp_w_sharded` in strided mode
+      (`DIFFVAE_BLOCK=0`, no block permute) for the small-window stages, or invest in the op (e.g. smaller effective
+      brick / chunk tuning for small windows). Either outcome still frees block_permute.
+
+### Phase 4 -- delete
+Once no configuration sets `DIFFVAE_BLOCK`:
+- [x] Python (2026-09-10): `git rm` of `layers/block_permute.py`, `tests/unit/test_block_permute.py`,
+      `test_block_permute_device.py`, `test_block_sdpa_op.py`, and the GNA-from-block A/B harnesses
+      `tests/models/vae/ab_gna_stage5.py` / `ab_gna_decode.py` (meaningless without a block). In
+      `layers/na3d.py`: `_pick_block`, the `DIFFVAE_BLOCK`/`op_block` config, the `q-block-permute` /
+      `unblock-permute` spans, the `neighborhood_block=` kwarg, the block-sized `q_chunk_size`, and the
+      `DIFFVAE_GNA` block-stride branch removed; `DIFFVAE_GNA_STRIDE` / `gna_stride` (explicit stride)
+      kept. `DIFFVAE_GNA=1` / `DIFFVAE_BLOCK=1` exports dropped from `run_ltx25_pipeline.sh` and
+      `run_ltx25_diffvae.sh`. `NEIGHBORHOOD_ATTENTION.md` block_permute section marked retired.
+- [x] C++ (2026-09-11; rebuilt, `test_windowed_sdpa.py` + `test_neighborhood_3d_sdpa.py` + `test_na3d_op_sp.py` = 129 passed, job 410; one JIT fix on the way -- a leftover ternary line in `windowed_mask_gen.hpp` that the unity host check cannot see, caught by the writer's own JIT command run offline): `neighborhood_block` removed
+      from `sdpa.hpp/.cpp`, `sdpa_nanobind.cpp`, `sdpa_device_operation*.{hpp,cpp}` and the
+      `operation_attributes_t`; the factory no longer pushes the {bt,bh,bw} slots (reader tail is now
+      `w_origin, st, sh, sw`; writer slots 22-24 are the GNA stride, previously 25-27); the block
+      section of `windowed_loop_geometry.hpp` (`BlockCoord`, `block_index_of_chunk`,
+      `neighborhood_box_block`, `block_query_coord`, `neighborhood_box_k_chunk_range`) deleted; the
+      `bt/bh/bw/hb/wb` parameters and `nb_bt != 0` branches removed from `windowed_mask_gen.hpp`
+      (five functions), `reader_interleaved.cpp` and `writer_interleaved.cpp`; the packed mask's
+      single-window shortcut now requires an unsharded W only. `compute_common.hpp` had no block use.
+      Host units syntax-checked clean (unity recipe). `NOTES_windowed_loop_geometry.md` section 5 retired.
+- [x] Python-step device checks (jobs 389/390/392/394/395): decode 13924 ms (vs 13814-13993),
+      deterministic stages 2296 ms (vs 2291); stage-5 gate on `op_sp_w_sharded` 99.9961 % both axes;
+      deterministic-stage arms 99.998 % x3; `test_na3d_op_sp.py` 32/33 -- the one miss
+      (`test_na3d_op_sp_w_sharded_matches_host[dims2-kernel2-sp_cols]`, a 12-token shard) fails at
+      94 % ONLY under the pipeline's exported `DIFFVAE_*` flags and fails identically on the pre-change
+      file; passes with a clean env. Pre-existing, environment-induced, unrelated to Phase 4 (noted,
+      not fixed).
+- [ ] Scripts/docs: `DIFFVAE_BLOCK=1` export in `run_ltx25_pipeline.sh`; the block figure in
+      `windowed_loop_geometry_diagrams.py` and `NOTES_windowed_loop_geometry.md`; `block_permutation_diagram.py`.
+- [x] Gate (2026-09-11, job 411, rebuilt library + kernels): stage-5 gate on `op_sp_w_sharded`
+      99.9961 % both axes (identical to pre-deletion); deterministic-stage arms 99.9984/99.9981/99.9981 %
+      (identical); decode s34x60 **13859 ms**, deterministic stages 2301 ms (pre-deletion range
+      13814-13993 / 2291-2296). Performance-neutral, as predicted. The full pipeline was not re-run
+      after the C++ step: the Python step's pipeline is unchanged and the kernels are covered by the
+      129-test SDPA suite plus the stage-5 gate; run it before committing if you want the belt too.
+      **Phase 4 complete.** `block_permute.py` and the `neighborhood_block` path are gone.
+
+### Phase 5 (optional) -- per-stage brick hoist for the deterministic stages
+Brick once at stage entry as stage 5 does (`_brick_activation` / `_unbrick_activation`,
+bricked RoPE tables via `rope_tables(..., brick=)`), passing `already_bricked=True`, and unbrick
+before each `LinearPixelShuffleUpsample` (needs natural order). Only if Phase 3 shows the
+per-block brick/unbrick permutes matter; at deterministic-stage sizes (stage 5 measured 0.48 ms per 52 MB) they
+should not.
+
+## Decisions
+
+- **B2 fix (decided 2026-09-10, James):** keep TP over heads for the deterministic stages and
+  generalize the bricked executor's head reassembly -- a real site-major -> head-major permute
+  before the head all-gather when heads per chip > 1 (mirrors the block-permute executor's unflatten).
+  Dropping TP was rejected: up to 4x attention compute per chip (~1.2 s upper bound) to save a
+  10-line change.
+- **D1 (B1 fix), still open:** swap SP/TP axes for the deterministic stages (recommended), allow
+  brick width 1, or extend the planner. Owner: James. Note option 1 loses the W-sharded
+  deterministic->stage-5 band handoff (stage 5 cannot move axes: 4 heads do not TP 8 ways), so
+  it needs one timing run with `stages_sp_axis=0` to price the extra context gather + reshard.
+- **D2 (Phase 3 fallback):** is keeping `op_sp_w_sharded` in strided mode for small-window stages
+  acceptable if bricked is slower there, or must bricked win everywhere before deletion?
+
+## Out of scope
+- Stage 1 (index 0) stays on the replicated `gather` backend.
+- `neighborhood_attention_3d_op_sp_w_sharded` itself is not deleted; without `DIFFVAE_BLOCK` it
+  is the same op in strided order and remains a fallback/reference executor.
+- The `DIFFVAE_S5_KERNEL` window-override reader is not in the tree (only in `git stash@{0}`);
+  unrelated to this plan but will bite any window experiment run alongside it.
+
+## Related notes
+- `layers/SDPA_FUSED_VS_NEIGHBORHOOD.md`, `layers/NEIGHBORHOOD_MASK_GENERATION.md`
+- `ttnn/.../sdpa/device/kernels/NOTES_windowed_loop_geometry.md` (block section to be removed in Phase 4)
+- `DIFFVAE_TIMING_ANALYSIS.md`, `diffvae_bricked_timing_tree.txt` (baseline numbers above)

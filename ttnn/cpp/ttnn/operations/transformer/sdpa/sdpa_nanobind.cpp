@@ -366,7 +366,6 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("neighborhood_3d") = nb::none(),
         nb::arg("neighborhood_w_shard") = nb::none(),
         nb::arg("neighborhood_gather") = false,
-        nb::arg("neighborhood_block") = nb::none(),
         nb::arg("neighborhood_stride") = nb::none());
 
     ttnn::bind_function<"sparse_sdpa", "ttnn.transformer.">(

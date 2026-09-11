@@ -29,7 +29,6 @@ import time
 from dataclasses import dataclass
 
 import torch
-from loguru import logger
 
 import ttnn
 
@@ -867,49 +866,6 @@ def neighborhood_attention_3d_op_sp_w(
     return ttnn.permute(full, (0, 2, 3, 1, 4))  # (B, T, H, W, width)
 
 
-def _pick_block(t_full: int, h_full: int, w_local: int, kmax: int = 11, gna: bool = False):
-    """Largest tile-legal (bt,bh,bw) block for this shard's (T, H, w_local): each dim divides its axis,
-    block_vol is a multiple of 32 and in [128, 512]. Ties broken by the smallest neighborhood box. Returns
-    None if no legal block exists (caller falls back to the strided path). See box_model.py / Phase 0.
-
-    ``gna`` picks for a GNA stride equal to the block instead. That inverts the objective: the box is then
-    the kernel on every axis no matter how the block is shaped, so the box term is constant and volume --
-    which sets the chunk count -- becomes the whole objective. It also caps each block dim at ``kmax``,
-    since a stride above its kernel is rejected host-side (the group would outgrow the window it shares).
-
-    This objective is purely a speed objective and it is not free. It optimizes toward block dims AT
-    ``kmax``, i.e. stride == kernel, which is the largest window displacement a group can have. MEASURED
-    at the 1080p stage-5 grid, block (11,4,8) vs stride-1 attention on the same inputs: PCC 0.51 on iid
-    Q/K/V, 0.72 at a spatial correlation length of 8 tokens; fused-sdpa 6.8x faster (181->27 ms), whole
-    block 1.95x. T carries almost all of the error (stride_t alone is PCC 0.72/0.85) because 11 == the
-    kernel; (1,2,2) holds 0.97. A network trained at stride 1 cannot absorb the picked block -- constrain
-    the stride, or leave GNA off, unless retraining.
-    """
-
-    def divs(n):
-        return [d for d in range(1, n + 1) if n % d == 0]
-
-    best = None
-    for bt in divs(t_full):
-        for bh in divs(h_full):
-            for bw in divs(w_local):
-                vol = bt * bh * bw
-                if vol % 32 or not (128 <= vol <= 512):
-                    continue
-                if gna and max(bt, bh, bw) > kmax:
-                    continue
-                box = (bt + kmax - 1) * (bh + kmax - 1) * (bw + kmax - 1)
-                # MEASURED (6s sweep, 2026-08-18): fused-sdpa cost tracks the BOX, not q_chunk/vol -- the
-                # box's outer-axis (W,H) extent sets how far apart the reader's k-segments are, so a small
-                # box beats a large-vol block even at 3x the chunk count (the block reorder is per-call, not
-                # per-chunk). Minimize box, tie-break LARGER vol (fewer chunks). (5,8,4) over (5,8,12): fused
-                # 10.2s->7.6s, 6s decode 25.0s->~22s. Old key (-vol, box) picked the slow large-vol block.
-                key = (-vol, box) if gna else (box, -vol)
-                if best is None or key < best[0]:
-                    best = (key, (bt, bh, bw))
-    return best[1] if best else None
-
-
 def _deep_prof(mesh, key: str, *, category: str | None = None):
     """_sp_w_prof, but only under DIFFVAE_BLOCK_PROF -- see decode_tree.DEEP."""
     if not decode_tree.DEEP:
@@ -998,30 +954,6 @@ def neighborhood_attention_3d_op_sp_w_sharded(
         scale = head_dim**-0.5
     kt, kh, kw = (min(kk, d) for kk, d in zip(kernel_size, dims))
 
-    # DIFFVAE_BLOCK=1 (block-permute v1.1): 3-D block-permuted Q on TOP of the cheap t_inner K/V path.
-    # to_seq already emits the W-outer (op) order, so a q_chunk block tiles (w_local, H, T) with op dims
-    # (bw, bh, bt); the K/V prep and the output un-flatten below are reused UNCHANGED (the win was lost in
-    # v1 by reordering K/V to plain-strided -- an 18x costlier gather). The compact block box is what fixes
-    # the fused-sdpa super-linearity. The per-device global-W origin rides the offset tensor, applied to the
-    # op OUTER (T) axis in the kernel (windowed_loop_geometry.hpp). RoPE commutes with the permute.
-    # DIFFVAE_GNA=1 additionally sets the GNA stride to the Q block, which is the setting that collapses
-    # each chunk's box to a single shared window (perfectly block-sparse). The block picker then optimizes
-    # for that regime instead. This changes the ATTENTION, not just the schedule: queries inside a block
-    # share one window rather than each being centered, so expect a quality delta -- measure it.
-    _gna = os.environ.get("DIFFVAE_GNA") == "1"
-    op_block = None
-    if os.environ.get("DIFFVAE_BLOCK") == "1" and os.environ.get("DIFFVAE_SP_FUSED", "0") == "1":
-        logger.info(f"""DIFFVAE_BLOCK={os.environ.get("DIFFVAE_BLOCK")}""")
-        logger.info(f"""DIFFVAE_SP_FUSED={os.environ.get("DIFFVAE_SP_FUSED", "0")}""")
-
-        _blk = _pick_block(t_full, h_full, w_local, gna=_gna)
-        if _blk is not None:
-            op_block = (_blk[2], _blk[1], _blk[0])  # op-order (w_local, H, T) block dims = (bw, bh, bt)
-        logger.info(
-            f"NA3D block config: _blk={_blk}, op_block={op_block}, gna={_gna}, "
-            f"t_full={t_full}, h_full={h_full}, w_local={w_local}"
-        )
-
     # Flatten W-outer so a contiguous sequence is a W-band; heads merged then re-split so the spatial
     # reorder is one 5D permute. ``w_`` is this chip's W extent (K/V and Q are the same shard here).
     #
@@ -1033,16 +965,13 @@ def neighborhood_attention_3d_op_sp_w_sharded(
     # a pure host reorder: the op decodes coords from the grid arg, agnostic to which axis is which.
     t_inner = os.environ.get("DIFFVAE_SP_TINNER", "1") == "1"
 
-    # GNA stride in OP-axis order, matching how neighborhood_3d and op_block are permuted below. An
-    # explicit gna_stride (or DIFFVAE_GNA_STRIDE="st,sh,sw") is PHYSICAL (t,h,w) and permutes the same way
-    # the kernel does; DIFFVAE_GNA=1 instead takes the stride straight from the block, already op-order.
+    # GNA stride in OP-axis order, matching how neighborhood_3d is permuted below. An explicit gna_stride
+    # (or DIFFVAE_GNA_STRIDE="st,sh,sw") is PHYSICAL (t,h,w) and permutes the same way the kernel does.
     _stride_env = os.environ.get("DIFFVAE_GNA_STRIDE")
 
     # (1,1,1) is NOT a choice -- it is the shipped architecture, i.e. no stride at all. Normalizing
-    # it to None here is what lets a caller pass its resolved stride unconditionally: DIFFVAE_GNA
-    # and DIFFVAE_GNA_STRIDE still apply underneath a trivial one, exactly as they do when the
-    # argument is omitted. Without this, a caller that always passes a value silently turns the
-    # DIFFVAE_GNA block stride off, and nothing fails to say so. TODO: REMOVE THIS HACK!
+    # it to None here is what lets a caller pass its resolved stride unconditionally: DIFFVAE_GNA_STRIDE
+    # still applies underneath a trivial one, exactly as it does when the argument is omitted.
     if gna_stride == (1, 1, 1):
         gna_stride = None
     if gna_stride is None and _stride_env:
@@ -1050,8 +979,6 @@ def neighborhood_attention_3d_op_sp_w_sharded(
     if gna_stride is not None:
         _st, _sh, _sw = gna_stride
         op_stride = (_sw, _sh, _st) if t_inner else (_sw, _st, _sh)
-    elif _gna and op_block is not None:
-        op_stride = op_block
     else:
         op_stride = None
 
@@ -1186,15 +1113,8 @@ def neighborhood_attention_3d_op_sp_w_sharded(
         tv = gathered(v)
     with _deep_prof(mesh, "q-to-seq", category=decode_tree.RESHAPE):
         tq = to_seq(q, w_local)
-    if op_block is not None:
-        from .block_permute import to_block_order_tt
-
-        with _deep_prof(mesh, "q-block-permute", category=decode_tree.RESHAPE):
-            tq = to_block_order_tt(tq, (w_local, h_full, t_full), op_block)  # W-outer op order -> block order
-
-    # Block mode: the offset tensor carries the per-device global-W origin (shard*w_local) for the box;
-    # strided mode: the per-device global token position (shard*seq_local).
-    off_tt = ccl_manager.get_shard_offsets(sp, w_local if op_block is not None else seq_local, sp_axis)
+    # The offset tensor carries the per-device global token position (shard*seq_local) for the window.
+    off_tt = ccl_manager.get_shard_offsets(sp, seq_local, sp_axis)
 
     # DIFFVAE_SP_FUSED=1 runs the fast fused (neighborhood_gather) kernel instead of the streamed op:
     # K/V become the W-row-paged ROW_MAJOR layout the fused reader gathers from (grid is W-outer, so a
@@ -1229,11 +1149,7 @@ def neighborhood_attention_3d_op_sp_w_sharded(
         prog_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(grid_dev.x, grid_dev.y),
             exp_approx_mode=False,
-            q_chunk_size=(
-                op_block[0] * op_block[1] * op_block[2]
-                if op_block is not None
-                else int(os.environ.get("DIFFVAE_SDPA_QCHUNK", 128))
-            ),
+            q_chunk_size=int(os.environ.get("DIFFVAE_SDPA_QCHUNK", 128)),
             k_chunk_size=int(os.environ.get("DIFFVAE_SDPA_KCHUNK", 32)),
         )
 
@@ -1246,9 +1162,6 @@ def neighborhood_attention_3d_op_sp_w_sharded(
             # Grid axis order must match the flatten (innermost last): (w,h,t) when t_inner else (w,t,h).
             neighborhood_3d=((w_full, h_full, t_full, kw, kh, kt) if t_inner else (w_full, t_full, h_full, kw, kt, kh)),
             neighborhood_gather=use_fused,
-            # Block-permuted Q: op-order block dims + the per-device W origin on the offset tensor (above).
-            # No neighborhood_w_shard: the block path clamps each op axis with nb_T / nb_W directly.
-            neighborhood_block=op_block,
             # GNA: op-order stride. None => stride 1 on every axis, i.e. standard neighborhood attention.
             neighborhood_stride=op_stride,
             scale=scale,
@@ -1269,13 +1182,6 @@ def neighborhood_attention_3d_op_sp_w_sharded(
             )
         heads = full_heads
         width = heads * head_dim
-
-    # Block mode: un-permute block order back to the W-outer (op) sequence, then the same un-flatten runs.
-    if op_block is not None:
-        from .block_permute import from_block_order_tt
-
-        with _deep_prof(mesh, "unblock-permute", category=decode_tree.RESHAPE):
-            attended = from_block_order_tt(attended, (w_local, h_full, t_full), op_block)
 
     if flat_seq:
         # Straight to (tokens, NH*HD): one permute puts T,H,W back in order and heads next to

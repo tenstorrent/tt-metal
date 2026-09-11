@@ -87,10 +87,8 @@ void kernel_main() {
     // W-sharded (mask uses local == global W).
     uint32_t nb_W_full = 0;
     int32_t nb_w_origin = 0;
-    // Block-permuted Q descriptor {bt,bh,bw} (bt==0 => strided). Reader/mask decode Q coords from it.
-    uint32_t nb_bt = 0, nb_bh = 0, nb_bw = 0;
     // GNA query-group stride {st,sh,sw}; 1 is standard neighborhood attention (never 0: the kernels divide
-    // by it). Appended after the block descriptor so the older slots keep their indices.
+    // by it).
     uint32_t nb_st = 1, nb_sh = 1, nb_sw = 1;
     if constexpr (use_windowed_mask) {
         q_tok_offset = get_arg_val<uint32_t>(12);
@@ -103,12 +101,9 @@ void kernel_main() {
         nb_kw = get_arg_val<uint32_t>(19);
         nb_W_full = get_arg_val<uint32_t>(20);
         nb_w_origin = static_cast<int32_t>(get_arg_val<uint32_t>(21));
-        nb_bt = get_arg_val<uint32_t>(22);
-        nb_bh = get_arg_val<uint32_t>(23);
-        nb_bw = get_arg_val<uint32_t>(24);
-        nb_st = get_arg_val<uint32_t>(25);
-        nb_sh = get_arg_val<uint32_t>(26);
-        nb_sw = get_arg_val<uint32_t>(27);
+        nb_st = get_arg_val<uint32_t>(22);
+        nb_sh = get_arg_val<uint32_t>(23);
+        nb_sw = get_arg_val<uint32_t>(24);
     }
 
     constexpr uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
@@ -263,10 +258,7 @@ void kernel_main() {
                 nb_sh,
                 nb_sw,
                 nb_W_full,
-                nb_w_origin,
-                nb_bt,
-                nb_bh,
-                nb_bw);
+                nb_w_origin);
             windowed_generate_if_enabled<use_windowed_mask && !neighborhood_gather, cb_mask_in, cb_cu_window_in>(
                 noc,
                 q_chunk,

@@ -612,10 +612,13 @@ The decoder around stage 5.
 
 
 
-### `models/tt_dit/layers/block_permute.py` (~150 lines)
+### `models/tt_dit/layers/block_permute.py` -- RETIRED 2026-09-10
 
-Their equivalent of our bricking: reorder tokens so a block is contiguous.
-`to_block_order` / `from_block_order` (torch) and `_tt` variants (device).
+Was their equivalent of our bricking (reorder tokens so a block is contiguous). Deleted along
+with `na3d.py::_pick_block`, `DIFFVAE_BLOCK` / `DIFFVAE_GNA` and the SDPA op's `neighborhood_block`
+argument: at the production shard widths no legal block ever existed, so the reference executor
+always ran its strided mode. See `PLAN_retire_block_permute.md`. `DIFFVAE_GNA_STRIDE` (explicit
+stride) survives.
 
 ### `models/tt_dit/utils/decode_tree.py` (~275 lines)
 
