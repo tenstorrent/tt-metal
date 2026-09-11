@@ -47,6 +47,26 @@ Per-rank mean, against the same run before the rebase:
 Rank 3 is fastest because it holds 21 layers, not 24. The shape is the expected one: a four-deep
 fill bubble, every rank busy through the middle, and a staggered drain.
 
+## pipeline_4rank_93L_2users
+
+The same 93-layer 24/24/24/21 split with TWO user slots in flight, 11 chunks of 5120 each, untraced,
+`PREFILL_SYNC_PER_CHUNK=1`.
+
+The shape is the point. The four wide blocks at the left are chunk 0 on each rank, staggered: that is
+the compile plus the pipeline fill, paid once. From about 43 s every rank is densely packed with no
+white between chunks, because with a second request in flight a rank always has work queued behind
+the one it is finishing.
+
+| rank | layers | 1 user | 2 users |
+|---|---|---|---|
+| 0 | 0-23 | 947 ms | 707 ms |
+| 1 | 24-47 | 956 ms | 699 ms |
+| 2 | 48-71 | 962 ms | 714 ms |
+| 3 | 72-92 | 822 ms | 568 ms |
+
+Steady-state per-chunk compute, cold chunks excluded. Two slots is faster per chunk than one on every
+rank: one slot pays a fill and drain bubble on every chunk, two slots hide it.
+
 ## The KDA inverse, after #55626
 
 Kimi-K3 carried a workaround commit that pinned the pre-#54937 KDA inverse, because
