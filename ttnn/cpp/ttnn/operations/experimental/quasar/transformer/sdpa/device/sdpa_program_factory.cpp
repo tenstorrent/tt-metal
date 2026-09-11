@@ -700,6 +700,20 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
         DataflowBufferSpec{
             .unique_id = OUT, .entry_size = out_tile_size, .num_entries = out0_t, .data_format_metadata = out_df},
     };
+    if (device->arch() == tt::ARCH::QUASAR) {
+        // Quasar has a fixed intra-Tensix tile-counter budget (max 8 compute self-loop DFBs). Adding
+        // the kt transpose DFB would make 9, so merge the max ping-pong (MAX_A/MAX_B) into a single
+        // 2-deep DFB bound to MAX_A (depth 2*statistics_tiles): the kernel keeps prev at the ring
+        // front [0,statistics_tiles) and appends cur behind it, offset-reading cur. MAX_B is dropped,
+        // reclaiming one self-loop counter. WH keeps the two separate DFBs (both compute paths use
+        // them), so this is Quasar-only. See compute_common.hpp sdpa_inner_loop (ARCH_QUASAR).
+        for (auto& dfb : dfbs) {
+            if (dfb.unique_id == MAX_A) {
+                dfb.num_entries = 2 * statistics_tiles;
+            }
+        }
+        std::erase_if(dfbs, [&](const DataflowBufferSpec& dfb) { return dfb.unique_id == MAX_B; });
+    }
     if (needs_mask_cb) {
         // Lightweight mask: Float16_b palette; legacy: full Sq×Sk matrix in mask_df.
         const tt::DataFormat actual_mask_df = lightweight_mask ? tt::DataFormat::Float16_b : mask_df;
@@ -1640,8 +1654,6 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
         DFBBinding{.dfb_spec_name = OUT_IM_B, .accessor_name = "out_im_B", .endpoint_type = DFBEndpointType::CONSUMER},
         DFBBinding{.dfb_spec_name = MAX_A, .accessor_name = "max_A", .endpoint_type = DFBEndpointType::PRODUCER},
         DFBBinding{.dfb_spec_name = MAX_A, .accessor_name = "max_A", .endpoint_type = DFBEndpointType::CONSUMER},
-        DFBBinding{.dfb_spec_name = MAX_B, .accessor_name = "max_B", .endpoint_type = DFBEndpointType::PRODUCER},
-        DFBBinding{.dfb_spec_name = MAX_B, .accessor_name = "max_B", .endpoint_type = DFBEndpointType::CONSUMER},
         DFBBinding{.dfb_spec_name = SUM_A, .accessor_name = "sum_A", .endpoint_type = DFBEndpointType::PRODUCER},
         DFBBinding{.dfb_spec_name = SUM_A, .accessor_name = "sum_A", .endpoint_type = DFBEndpointType::CONSUMER},
         DFBBinding{.dfb_spec_name = SUM_B, .accessor_name = "sum_B", .endpoint_type = DFBEndpointType::PRODUCER},
@@ -1651,6 +1663,15 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
         DFBBinding{
             .dfb_spec_name = EXP_MAX_DIFF, .accessor_name = "exp_max_diff", .endpoint_type = DFBEndpointType::CONSUMER},
     };
+    if (device->arch() != tt::ARCH::QUASAR) {
+        // WH/BH keep max as two separate ping-pong DFBs. On Quasar MAX_B is merged into MAX_A (see the
+        // dfbs MAX_B erase above), so its binding is omitted and the kernel aliases dfb::max_B onto
+        // dfb::max_A.
+        compute_dfbs.push_back(
+            DFBBinding{.dfb_spec_name = MAX_B, .accessor_name = "max_B", .endpoint_type = DFBEndpointType::PRODUCER});
+        compute_dfbs.push_back(
+            DFBBinding{.dfb_spec_name = MAX_B, .accessor_name = "max_B", .endpoint_type = DFBEndpointType::CONSUMER});
+    }
     KernelSpec::CompilerOptions::Defines compute_defines = base_defines;
     if (needs_mask_cb) {
         compute_dfbs.push_back(DFBBinding{
