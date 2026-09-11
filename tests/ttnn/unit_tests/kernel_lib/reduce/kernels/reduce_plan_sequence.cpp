@@ -65,9 +65,6 @@ ALWI void issue_calls() {
 
 void kernel_main() {
     using First = CallAt<0>;
-    constexpr std::uint32_t startup_src_b = First::algorithm == compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd
-                                                ? First::input_cb_id
-                                                : First::auxiliary_cb_id;
-    compute_kernel_hw_startup(First::input_cb_id, startup_src_b, First::output_cb_id);
+    compute_kernel_hw_startup(First::input_cb_id, First::output_cb_id);
     issue_calls();
 }

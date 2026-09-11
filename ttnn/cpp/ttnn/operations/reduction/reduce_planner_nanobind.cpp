@@ -29,6 +29,7 @@ void bind_reduce_planner(nb::module_& mod) {
     auto planner = mod.def_submodule(
         "planner",
         "Host-side reduction planning and compile-time argument serialization. Planning never executes a kernel.");
+    planner.attr("NO_CB_ID") = host::no_cb_id;
 
     nb::enum_<tt::tt_metal::ReduceOpMath>(planner, "ReduceMath")
         .value("SUM", tt::tt_metal::ReduceOpMath::SUM)
@@ -270,7 +271,8 @@ void bind_reduce_planner(nb::module_& mod) {
                uint32_t input_row_stride_tiles,
                std::optional<uint32_t> resident_input_tiles,
                std::optional<uint32_t> resident_output_tiles,
-               std::optional<host::ReduceTailConfig> tail) {
+               std::optional<host::ReduceTailConfig> tail,
+               bool allow_empty_auxiliary) {
                 auto block =
                     host::ReduceBlockSpec::tiled(logical_h, logical_w, input_dtype, output_dtype, batches, input_tile);
                 block.padded_h = padded_h.value_or(block.padded_h);
@@ -282,6 +284,7 @@ void bind_reduce_planner(nb::module_& mod) {
                 block.resident_input_tiles = resident_input_tiles;
                 block.resident_output_tiles = resident_output_tiles;
                 block.tail = tail;
+                block.allow_empty_auxiliary = allow_empty_auxiliary;
                 new (self) host::ReduceBlockSpec(std::move(block));
             },
             nb::arg("logical_h"),
@@ -300,6 +303,7 @@ void bind_reduce_planner(nb::module_& mod) {
             nb::arg("resident_input_tiles") = nb::none(),
             nb::arg("resident_output_tiles") = nb::none(),
             nb::arg("tail") = nb::none(),
+            nb::arg("allow_empty_auxiliary") = false,
             "Local work for one reduction call on one core. Padding defaults to whole tiles; no tensor placement is "
             "inferred.")
         .def_rw("logical_h", &host::ReduceBlockSpec::logical_h)
@@ -316,7 +320,8 @@ void bind_reduce_planner(nb::module_& mod) {
         .def_rw("input_row_stride_tiles", &host::ReduceBlockSpec::input_row_stride_tiles)
         .def_rw("resident_input_tiles", &host::ReduceBlockSpec::resident_input_tiles)
         .def_rw("resident_output_tiles", &host::ReduceBlockSpec::resident_output_tiles)
-        .def_rw("tail", &host::ReduceBlockSpec::tail);
+        .def_rw("tail", &host::ReduceBlockSpec::tail)
+        .def_rw("allow_empty_auxiliary", &host::ReduceBlockSpec::allow_empty_auxiliary);
 
     nb::class_<host::ReduceCallConfig>(planner, "ReduceCallConfig")
         .def(

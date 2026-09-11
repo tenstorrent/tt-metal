@@ -333,6 +333,10 @@ ALWI void reduce_accumulate_via_add(
     if constexpr (reconfig_out) {
         pack_reconfig_data_format(output_dfb_id);
     }
+#ifdef ARCH_QUASAR
+    // Quasar binds the output descriptor at op init, even when buffer formats match.
+    ckernel::pack_init(output_dfb_id);
+#endif
     // Light: (re)load the SFPU reduce macro (persists across the adds). Skipped under ReduceWithinTile::Skip —
     // there is no sfpu_reduce to arm. The later AVG scale initializes its scalar op when needed, but a caller's
     // SFPU post_reduce_op should still follow the normal contract and run its own <op>_tile_init.
@@ -402,12 +406,17 @@ ALWI void reduce_accumulate_via_add(
     // input-CB index of that tile (absolute into the resident block, or front-relative 0 for streaming).
     // Referenced from a runtime `if (has_partial)` in every instantiation, so it is never truly unused.
     [[maybe_unused]] auto fold_partial_last = [&](uint32_t last_idx, uint32_t dst_idx = 0) {
+        // BF16/FP32 inputs already match their auxiliary tiles, but compressed
+        // inputs use a floating-point mask. Switch SrcB for the actual operand
+        // and restore it before the next output resumes input/input addition.
+        reconfig_data_format_srcb(input_dfb_id, scaler_dfb_id);
         MATH((llk_math_eltwise_binary_init<ckernel::EltwiseBinaryType::ELWMUL, MASK_BCAST, MATH_FIDELITY>(
             input_dfb_id, scaler_dfb_id, 1)));
         UNPACK((llk_unpack_AB_init<MASK_BCAST>(input_dfb_id, scaler_dfb_id)));
         UNPACK((llk_unpack_AB<MASK_BCAST>(input_dfb_id, scaler_dfb_id, last_idx, mask_idx)));
         MATH((llk_math_eltwise_binary<ckernel::EltwiseBinaryType::ELWMUL, MASK_BCAST, DST_ACCUM_MODE, MATH_FIDELITY>(
             dst_idx, false)));
+        reconfig_data_format_srcb(scaler_dfb_id, input_dfb_id);
     };
 
     // Finalize a raw cross-tile sum only on the last cross-call accumulation step. Keeping this indexed by
@@ -498,10 +507,12 @@ ALWI void reduce_accumulate_via_add(
                         if (dst_seeded) {
                             if constexpr (has_accum) {
                                 if (accumulate.reload == AccumulateReloadMode::CopySeedZeroPair) {
+                                    reconfig_data_format_srcb(input_dfb_id, scaler_dfb_id);
                                     add_tiles_init(input_dfb_id, scaler_dfb_id, true);
                                     for (uint32_t out = 0; out < current_outputs; ++out) {
                                         add_tiles(input_dfb_id, scaler_dfb_id, out, zero_idx, out);
                                     }
+                                    reconfig_data_format_srcb(scaler_dfb_id, input_dfb_id);
                                 } else {
                                     binary_dest_reuse_tiles_init<
                                         ckernel::EltwiseBinaryType::ELWADD,
@@ -643,8 +654,10 @@ ALWI void reduce_accumulate_via_add(
                     if (loaded_accumulator) {
                         if constexpr (has_accum) {
                             if (accumulate.reload == AccumulateReloadMode::CopySeedZeroPair) {
+                                reconfig_data_format_srcb(input_dfb_id, scaler_dfb_id);
                                 add_tiles_init(input_dfb_id, scaler_dfb_id, true);
                                 add_tiles(input_dfb_id, scaler_dfb_id, 0, zero_idx, 0);
+                                reconfig_data_format_srcb(scaler_dfb_id, input_dfb_id);
                             } else {
                                 binary_dest_reuse_tiles_init<
                                     ckernel::EltwiseBinaryType::ELWADD,
@@ -801,7 +814,7 @@ ALWI void reduce_accumulate_via_add(
                         // CopySeed*: reload the accumulator into DST via copy_tile — the ONLY access a
                         // UnpackToDestFp32 acc_cb allows (the accumulator is never an FPU operand). copy_tile
                         // uses SrcA (or unpack-direct-to-dest when tagged), so reconfig SRCA around it; SrcB is
-                        // left untouched (== input from the per-call reconfig), which the partial fold needs.
+                        // left at input from the per-call reconfig; the zero/mask folds switch it as needed.
                         reconfig_data_format_srca(input_dfb_id, acc_cb);
                         copy_tile_init(acc_cb);
                         copy_tile(acc_cb, 0, 0);  // DST = accumulator
@@ -824,8 +837,10 @@ ALWI void reduce_accumulate_via_add(
                             // truncation, no SFPU). The zero follows any partial mask in the auxiliary CB.
                             uint32_t k = 0;
                             if (full_cnt & 1u) {
+                                reconfig_data_format_srcb(input_dfb_id, scaler_dfb_id);
                                 add_tiles_init(input_dfb_id, scaler_dfb_id, true);
                                 add_tiles(input_dfb_id, scaler_dfb_id, start, zero_idx, 0);
+                                reconfig_data_format_srcb(scaler_dfb_id, input_dfb_id);
                                 k = 1;
                             }
                             add_tiles_init(input_dfb_id, input_dfb_id, true);
@@ -1049,7 +1064,7 @@ template <
     PoolType reduce_type,
     ReduceDim reduce_dim,
     uint32_t input_dfb_id,
-    uint32_t scaler_dfb_id,
+    uint32_t auxiliary_dfb_id,
     uint32_t output_dfb_id,
     ReduceInputPolicy input_policy,
     ReduceDataFormatReconfigMode reconfig_mode,
@@ -1069,6 +1084,11 @@ ALWI void reduce(
     uint32_t auxiliary_tile_offset) {
     // Int32 and Accurate fp32 route to the SFPU via is_sfpu_reduce_path<>(); others use FPU/GMPOOL.
     constexpr DataFormat reduce_format = static_cast<DataFormat>(unpack_src_format[input_dfb_id]);
+    constexpr bool has_auxiliary = auxiliary_dfb_id != ttnn::kernel_lib::reduce_plan_args::no_cb_id;
+    // The unused native/mask branches are still instantiated on the additive
+    // path. Give those branches valid metadata without ever accessing a missing
+    // CB. Assertions below prohibit any tile read through this fallback ID.
+    constexpr uint32_t scaler_dfb_id = has_auxiliary ? auxiliary_dfb_id : input_dfb_id;
     // =============================================================================
     // Static Assertions (compile-time validation)
     // =============================================================================
@@ -1113,6 +1133,15 @@ ALWI void reduce(
     // anything it cannot express is rejected here (compile-time where possible) and must use ReduceTile.
     // =============================================================================
     constexpr bool is_sfpu = is_sfpu_reduce_path<reduce_type, reduce_dim, reduce_format, fp32_mode>();
+    static_assert(
+        has_auxiliary || algorithm == ReduceAlgorithm::AccumulateViaAdd || is_sfpu,
+        "Native reduction requires an auxiliary scaler CB");
+    if constexpr (!has_auxiliary) {
+        ASSERT(partial_mode == ReducePartialMode::None);
+        if constexpr (is_accumulate_v<AccumulateT>) {
+            ASSERT(accumulate.reload != AccumulateReloadMode::CopySeedZeroPair);
+        }
+    }
     static_assert(
         reduce_type != PoolType::AVG || !(algorithm == ReduceAlgorithm::AccumulateViaAdd || is_sfpu) ||
             reduce_factor != 1,
@@ -1207,12 +1236,16 @@ ALWI void reduce(
     // Runtime Assertions (parameter validation)
     // =============================================================================
     ASSERT(input_dfb_id != output_dfb_id);
-    ASSERT(input_dfb_id != scaler_dfb_id);
-    ASSERT(output_dfb_id != scaler_dfb_id);
+    if constexpr (has_auxiliary) {
+        ASSERT(input_dfb_id != scaler_dfb_id);
+        ASSERT(output_dfb_id != scaler_dfb_id);
+    }
 #ifndef ARCH_QUASAR
     // is_valid_dfb_tile_page_size() is a debug validator only defined on WH/BH
     UNPACK(ASSERT(is_valid_dfb_tile_page_size(input_dfb_id, (DataFormat)unpack_src_format[input_dfb_id])));
-    UNPACK(ASSERT(is_valid_dfb_tile_page_size(scaler_dfb_id, (DataFormat)unpack_src_format[scaler_dfb_id])));
+    if constexpr (has_auxiliary) {
+        UNPACK(ASSERT(is_valid_dfb_tile_page_size(scaler_dfb_id, (DataFormat)unpack_src_format[scaler_dfb_id])));
+    }
     PACK(ASSERT(is_valid_dfb_tile_page_size(output_dfb_id, (DataFormat)pack_dst_format[output_dfb_id])));
 #endif
     ASSERT(input_block_shape.rows > 0);
@@ -1256,6 +1289,10 @@ ALWI void reduce(
     if constexpr (reconfig_output(reconfig_mode)) {
         pack_reconfig_data_format(output_dfb_id);
     }
+#ifdef ARCH_QUASAR
+    // Format reconfiguration alone does not bind a different Quasar output buffer.
+    ckernel::pack_init(output_dfb_id);
+#endif
     // Initialization
     if constexpr (is_sfpu) {
         // The datacopy path into DEST; the one compute_kernel_hw_startup in kernel_main plus the
@@ -1279,7 +1316,9 @@ ALWI void reduce(
     const uint32_t scaler_tile_count = has_partial_scaler ? 2u : 1u;
     const uint32_t full_scaler_idx = auxiliary_tile_offset;
     const uint32_t partial_scaler_idx = auxiliary_tile_offset + (has_partial_scaler ? 1u : 0u);
-    scaler_dfb.wait_front(auxiliary_tile_offset + scaler_tile_count);
+    if constexpr (has_auxiliary) {
+        scaler_dfb.wait_front(auxiliary_tile_offset + scaler_tile_count);
+    }
     if constexpr (is_sfpu) {
         // Every pack in this call targets the same reduced output layout.
         detail::configure_reduced_output_mask<reduce_dim, output_dfb_id>();
@@ -1693,7 +1732,9 @@ ALWI void reduce(
     if constexpr (is_sfpu) {
         PACK((llk_pack_reduce_mask_clear()));
     } else {
-        reduce_uninit();
+        // Quasar uses the input metadata to restore its MXFP4 source-format
+        // override. The actual input need not occupy the default buffer 0.
+        reduce_uninit(input_dfb_id);
     }
 }
 

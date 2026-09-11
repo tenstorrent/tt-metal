@@ -70,6 +70,7 @@ class ReduceCase:
     partial_elements: int = 0
     max_identity_only: bool = False
     scalar: float = 1.0
+    allow_empty_auxiliary: bool = False
 
     @property
     def logical_height(self) -> int:
@@ -110,7 +111,7 @@ class ReduceCase:
             reduced_tiles = self.rows * self.cols
         additive = (
             self.pool in ("SUM", "AVG")
-            and self.input_dtype in ("bf16", "fp32")
+            and self.input_dtype in ("bf16", "fp32", "bf8", "bf4")
             and self.fp32_mode != "Accurate"
             and reduced_tiles * self.calls >= (4 if self.dim == "REDUCE_ROW" else 8)
         )
@@ -447,7 +448,13 @@ def _scratch_cb(
 
 
 def _ttnn_dtype(name: str) -> ttnn.DataType:
-    return {"bf16": ttnn.bfloat16, "fp32": ttnn.float32, "int32": ttnn.int32}[name]
+    return {
+        "bf16": ttnn.bfloat16,
+        "fp32": ttnn.float32,
+        "int32": ttnn.int32,
+        "bf8": ttnn.bfloat8_b,
+        "bf4": ttnn.bfloat4_b,
+    }[name]
 
 
 def _scaler_dtype(case: ReduceCase) -> ttnn.DataType:
@@ -508,6 +515,7 @@ def _make_plan(
         padded_w=case.cols * TILE,
         resident_input_tiles=case.rows * case.cols * case.batches if case.input_mode == "alias" else None,
         resident_output_tiles=case.output_tiles if case.dim != "REDUCE_SCALAR" else None,
+        allow_empty_auxiliary=case.allow_empty_auxiliary,
     )
     reductions = [
         (
@@ -543,8 +551,23 @@ def _make_plan(
 
 def _assert_plan(case: ReduceCase, plan, input_cb_ids: list[int]) -> None:
     assert len(plan) == plan.call_count == len(plan.calls) == case.calls
-    assert plan.auxiliary.cb_id == CB_SCALER
-    assert len(plan.auxiliary.tiles) > 0
+    assert plan.auxiliary.cb_id == (CB_SCALER if plan.auxiliary.tiles else _PLANNER.NO_CB_ID)
+    assert plan.auxiliary.tiles or case.allow_empty_auxiliary
+    if case.family == "empty-auxiliary":
+        assert not plan.auxiliary.tiles
+        assert all(
+            requirement.role != _PLANNER.ReduceCbRole.AUXILIARY
+            for call in plan.calls
+            for requirement in call.plan.cb_requirements
+        )
+    elif case.family == "empty-then-zero":
+        assert not plan.calls[0].plan.auxiliary_tiles
+        assert len(plan.calls[1].plan.auxiliary_tiles) == 1
+        assert plan.calls[1].plan.reload_mode == _PLANNER.AccumulateReloadMode.COPY_SEED_ZERO_PAIR
+        assert plan.auxiliary.tiles[0].type == _PLANNER.ReduceAuxiliaryTileType.ZERO
+    if case.family == "mixed-auxiliary-format" and case.calls > 1:
+        assert any(call.plan.reload_mode == _PLANNER.AccumulateReloadMode.COPY_SEED_ZERO_PAIR for call in plan.calls)
+        assert any(tile.type == _PLANNER.ReduceAuxiliaryTileType.ZERO for tile in plan.auxiliary.tiles)
 
     expected_partial = _PLANNER.ReducePartialMode.NONE
     if case.partial_elements and case.pool in ("SUM", "AVG"):
@@ -558,7 +581,7 @@ def _assert_plan(case: ReduceCase, plan, input_cb_ids: list[int]) -> None:
 
     for index, (call, input_cb_id) in enumerate(zip(plan.calls, input_cb_ids)):
         assert call.input_cb_id == input_cb_id
-        assert call.auxiliary_cb_id == CB_SCALER
+        assert call.auxiliary_cb_id == (CB_SCALER if call.plan.auxiliary_tiles else _PLANNER.NO_CB_ID)
         assert call.plan.input_policy == _INPUT_POLICY[case.input_mode]
         assert call.plan.algorithm == _ALGORITHM[case.expected_algorithm]
         assert call.plan.partial_mode == expected_partial
@@ -661,6 +684,16 @@ def _make_logical_chunks(case: ReduceCase) -> list[torch.Tensor]:
     for call in range(case.calls):
         if case.input_dtype == "int32":
             chunk = torch.randint(-16, 17, shape, generator=generator, dtype=torch.int32) + call
+        elif case.input_dtype in ("bf8", "bf4"):
+            # Exactly representable in both compressed formats, including the
+            # nonzero padding which a partial reduction must exclude.
+            chunk = torch.randint(1, 4, shape, generator=generator).float()
+        elif case.family == "empty-auxiliary":
+            # Small integer-valued floats keep these folds exact, so removing
+            # a CB is checked independently of Fast-mode rounding differences.
+            chunk = torch.randint(-16, 17, shape, generator=generator).float()
+            if case.input_dtype == "bf16":
+                chunk = chunk.to(torch.bfloat16)
         else:
             chunk = torch.rand(shape, generator=generator, dtype=torch.float32) + 0.125 * call
             if case.input_dtype == "bf16":
@@ -769,7 +802,7 @@ def _meaningful_output(case: ReduceCase, output: torch.Tensor) -> torch.Tensor:
     return output.reshape(case.batches, TILE, TILE)[:, 0, 0]
 
 
-def _run_case(device, case: ReduceCase) -> tuple[torch.Tensor, torch.Tensor]:
+def _run_case(device, case: ReduceCase, *, keep_empty_auxiliary_cb=False) -> tuple[torch.Tensor, torch.Tensor]:
     input_dtype = _ttnn_dtype(case.input_dtype)
     output_dtype = _ttnn_dtype(case.output_dtype)
     input_shape = (case.batches * case.rows * TILE, case.cols * TILE)
@@ -808,12 +841,9 @@ def _run_case(device, case: ReduceCase) -> tuple[torch.Tensor, torch.Tensor]:
     )
 
     cbs = [ttnn.cb_descriptor_from_sharded_tensor(cb_id, tensor) for cb_id, tensor in zip(input_cb_ids, device_inputs)]
-    cbs.extend(
-        [
-            ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT, output),
-            _scratch_cb(CB_SCALER, _scaler_dtype(case), len(plan.auxiliary.tiles)),
-        ]
-    )
+    cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT, output))
+    if plan.auxiliary.tiles or keep_empty_auxiliary_cb:
+        cbs.append(_scratch_cb(CB_SCALER, _scaler_dtype(case), max(1, len(plan.auxiliary.tiles))))
     if case.calls > 1:
         cbs.append(_scratch_cb(CB_ACCUMULATOR, output_dtype, case.output_tiles))
 
@@ -1373,6 +1403,98 @@ def test_reduce_plan_sequence_repeated_input_cb(device):
     )
     actual = ttnn.to_torch(result)[:, 0].to(torch.float32)
     torch.testing.assert_close(actual, torch.full_like(actual, 2.0 * input_shape[1]), rtol=0, atol=0)
+
+
+@pytest.mark.parametrize(
+    "dtype,fp32_mode,pool", (("bf16", "Fast", "SUM"), ("int32", "Fast", "MAX"), ("fp32", "Accurate", "SUM"))
+)
+@pytest.mark.parametrize("dim", ("REDUCE_ROW", "REDUCE_COL"))
+@pytest.mark.parametrize("calls", (1, 2))
+def test_reduce_helpers_empty_auxiliary(device, dtype, fp32_mode, pool, dim, calls):
+    if "QUASAR" in str(device.arch()).upper():
+        pytest.skip("The planner's auxiliary-free additive and SFPU backends are not enabled on Quasar")
+    case = ReduceCase(
+        name=f"empty-aux-{dtype}-{dim}-{calls}",
+        family="empty-auxiliary",
+        dim=dim,
+        rows=8 if dim == "REDUCE_COL" else 2,
+        cols=8 if dim == "REDUCE_ROW" else 3,
+        batches=2,
+        pool=pool,
+        input_mode="alias" if calls == 1 else "chunked",
+        calls=calls,
+        input_dtype=dtype,
+        output_dtype="int32" if dtype == "int32" else "fp32",
+        fp32_mode=fp32_mode,
+        allow_empty_auxiliary=True,
+    )
+    actual, expected = _run_case(device, case)
+    torch.testing.assert_close(actual.to(torch.float64), expected.to(torch.float64), rtol=0, atol=0)
+
+
+def test_reduce_helpers_empty_auxiliary_with_existing_cb(device):
+    if "QUASAR" in str(device.arch()).upper():
+        pytest.skip("AccumulateViaAdd is not enabled on Quasar")
+    case = ReduceCase(
+        name="empty-aux-kept-cb",
+        family="empty-auxiliary",
+        dim="REDUCE_ROW",
+        rows=2,
+        cols=8,
+        input_mode="alias",
+        output_dtype="fp32",
+        allow_empty_auxiliary=True,
+    )
+    actual, expected = _run_case(device, case, keep_empty_auxiliary_cb=True)
+    torch.testing.assert_close(actual.to(torch.float64), expected.to(torch.float64), rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("dim", ("REDUCE_ROW", "REDUCE_COL"))
+def test_reduce_helpers_empty_auxiliary_then_zero_pair(device, dim):
+    if "QUASAR" in str(device.arch()).upper():
+        pytest.skip("AccumulateViaAdd is not enabled on Quasar")
+    case = ReduceCase(
+        name=f"empty-then-zero-{dim}",
+        family="empty-then-zero",
+        dim=dim,
+        rows=9 if dim == "REDUCE_COL" else 2,
+        cols=9 if dim == "REDUCE_ROW" else 3,
+        input_mode="alias",
+        calls=2,
+        input_dtype="bf8",
+        output_dtype="fp32",
+        allow_empty_auxiliary=True,
+    )
+    actual, expected = _run_case(device, case)
+    torch.testing.assert_close(actual.to(torch.float64), expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("dtype", ("bf8", "bf4"))
+@pytest.mark.parametrize("dim", ("REDUCE_ROW", "REDUCE_COL"))
+@pytest.mark.parametrize(
+    "input_mode,partial,calls",
+    (("alias", 0, 2), ("alias", 15, 2), ("chunked", 0, 2), ("chunked", 15, 2), ("alias", 15, 1)),
+)
+def test_reduce_helpers_mixed_auxiliary_format(device, dtype, dim, input_mode, partial, calls):
+    """Compressed input alternates with BF16 zero/mask tiles after input-only startup."""
+    if "QUASAR" in str(device.arch()).upper() and calls > 1:
+        pytest.skip("The planner does not select AccumulateViaAdd on Quasar")
+    axis_tiles = 9 + bool(partial) if calls > 1 else 3
+    case = ReduceCase(
+        name=f"mixed-aux-{dtype}-{dim}-{input_mode}-partial{partial}-calls{calls}",
+        family="mixed-auxiliary-format",
+        dim=dim,
+        rows=axis_tiles if dim == "REDUCE_COL" else 2,
+        cols=axis_tiles if dim == "REDUCE_ROW" else 3,
+        batches=2,
+        input_mode=input_mode,
+        calls=calls,
+        input_dtype=dtype,
+        output_dtype="fp32",
+        partial_elements=partial,
+    )
+    actual, expected = _run_case(device, case)
+    torch.testing.assert_close(actual.to(torch.float64), expected, rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("case", ALL_CASES, ids=lambda case: case.name)
