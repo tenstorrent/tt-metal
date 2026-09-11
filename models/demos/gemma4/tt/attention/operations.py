@@ -19,7 +19,19 @@ import os
 
 import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allreduce
-from models.demos.gemma4.tt.dram_sharded import DramShardedLinear, matmul_rows
+from models.demos.gemma4.tt.dram_sharded import (
+    TILE_SIZE,
+    DramShardedLinear,
+    in_prefill_l1_matmul_band,
+    interleaved_o_proj_prefill_config,
+    interleaved_prefill_config,
+    linear_l1_safe,
+    matmul_rows,
+    prefill_linear_above_cutoff,
+    prefill_lofi_ckc,
+    prefill_matmul_lofi_enabled,
+    should_prefill_long_2d,
+)
 
 from .weights import AttentionWeights
 
@@ -66,6 +78,70 @@ def prefill_short_lived_memcfg() -> ttnn.MemoryConfig:
     return ttnn.DRAM_MEMORY_CONFIG
 
 
+_DEFAULT_PREFILL_L1_TENSOR_MAX_BYTES = 4 * 1024 * 1024
+
+
+def prefill_tensor_memcfg(numel: int, dtype_bytes: int = 2) -> ttnn.MemoryConfig:
+    """L1 if ``numel * dtype_bytes`` fits the prefill L1 budget, else DRAM.
+
+    Used for post-embed Tilize and RoPE slice outputs so short ISL stays in L1
+    without OOMing long prefill. ``GEMMA4_PREFILL_L1_TENSOR_MAX_BYTES`` overrides
+    the 4 MiB default; ``0`` forces DRAM.
+    """
+    max_bytes = int(os.environ.get("GEMMA4_PREFILL_L1_TENSOR_MAX_BYTES", str(_DEFAULT_PREFILL_L1_TENSOR_MAX_BYTES)))
+    if max_bytes <= 0:
+        return ttnn.DRAM_MEMORY_CONFIG
+    if int(numel) * int(dtype_bytes) <= max_bytes:
+        return ttnn.L1_MEMORY_CONFIG
+    return ttnn.DRAM_MEMORY_CONFIG
+
+
+def prefill_tilize_memcfg(seq_len: int, hidden_size: int, dtype_bytes: int = 2) -> ttnn.MemoryConfig:
+    """Memory config for the post-embed ``to_layout(TILE)`` activation."""
+    return prefill_tensor_memcfg(int(seq_len) * int(hidden_size), dtype_bytes=dtype_bytes)
+
+
+def prefill_matmul_in0_memcfg(rows: int, k: int) -> ttnn.MemoryConfig:
+    """L1 interleaved when ``[rows, k]`` bf16 fits the prefill activation budget, else DRAM."""
+    return prefill_tensor_memcfg(int(rows) * int(k))
+
+
+def should_hoist_prefill_matmul_in0(rows: int, k: int, program_config) -> bool:
+    """Whether to move matmul in0 from DRAM to L1 interleaved before the op."""
+    if prefill_matmul_in0_memcfg(rows, k) != ttnn.L1_MEMORY_CONFIG:
+        return False
+    if program_config is not None:
+        return True
+    return in_prefill_l1_matmul_band(rows)
+
+
+def hoist_prefill_matmul_in0_if_needed(tensor, program_config=None):
+    rows = matmul_rows(tensor)
+    k = int(tensor.shape[-1])
+    if not should_hoist_prefill_matmul_in0(rows, k, program_config):
+        return tensor, None
+    if tensor.is_sharded() or tensor.memory_config().buffer_type == ttnn.BufferType.L1:
+        return tensor, None
+    activation = ttnn.to_memory_config(tensor, ttnn.L1_MEMORY_CONFIG)
+    return activation, activation
+
+
+def o_proj_input_memcfg(sdpa_out, hidden_size: int, default_memcfg=None):
+    """Destination for prefill ``concat_heads`` when it feeds the o_proj matmul."""
+    del hidden_size
+    shape = [int(sdpa_out.shape[i]) for i in range(len(sdpa_out.shape))]
+    if len(shape) < 3:
+        return default_memcfg
+    heads, seq, head_dim = shape[-3], shape[-2], shape[-1]
+    rows = seq
+    for dim in shape[:-3]:
+        rows *= dim
+    k = heads * head_dim
+    if should_hoist_prefill_matmul_in0(rows, k, None):
+        return ttnn.L1_MEMORY_CONFIG
+    return default_memcfg
+
+
 def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config=None, decode=False):
     """Fused QKV matmul (no bias for Gemma4).
 
@@ -80,16 +156,27 @@ def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config
     """
     if isinstance(weights.wqkv, DramShardedLinear):
         return weights.wqkv(hidden_states, out_memory_config=memory_config)
-    program_config = compute_kernel_config = None
-    if decode and weights.qkv_decode_config is not None and matmul_rows(hidden_states) <= ttnn.TILE_SIZE:
+    tuned_out_memcfg = None
+    if decode and weights.qkv_decode_config is not None and matmul_rows(hidden_states) <= TILE_SIZE:
         program_config, compute_kernel_config = weights.qkv_decode_config
-    return ttnn.linear(
-        hidden_states,
+    else:
+        rows = matmul_rows(hidden_states)
+        program_config, tuned_out_memcfg, compute_kernel_config = interleaved_prefill_config(
+            rows, int(hidden_states.shape[-1]), int(weights.wqkv.shape[-1])
+        )
+        if program_config is None and compute_kernel_config is None and prefill_matmul_lofi_enabled(rows):
+            compute_kernel_config = prefill_lofi_ckc()
+    activation, owned_activation = hoist_prefill_matmul_in0_if_needed(hidden_states, program_config)
+    output = linear_l1_safe(
+        activation,
         weights.wqkv,
-        memory_config=memory_config,
         program_config=program_config,
+        memory_config=memory_config if memory_config is not None else tuned_out_memcfg,
         compute_kernel_config=compute_kernel_config,
     )
+    if owned_activation is not None:
+        owned_activation.deallocate(True)
+    return output
 
 
 def split_qkv_heads_decode(xqkv_fused, config, is_global: bool, tp: int = 1, kv_replicated: bool = False):
@@ -588,8 +675,29 @@ def apply_output_projection(tensor, weights: AttentionWeights, memory_config=Non
     """
     if isinstance(weights.o_proj, DramShardedLinear):
         out = weights.o_proj(tensor, out_memory_config=memory_config)
-    else:
-        out = ttnn.linear(tensor, weights.o_proj, memory_config=memory_config)
+        tensor.deallocate(True)
+        return out
+
+    rows = matmul_rows(tensor)
+    program_config, tuned_out_memcfg, compute_kernel_config = interleaved_o_proj_prefill_config(
+        rows, int(tensor.shape[-1]), int(weights.o_proj.shape[-1])
+    )
+    if program_config is None and should_prefill_long_2d(rows):
+        out = prefill_linear_above_cutoff(tensor, weights.o_proj, out_memory_config=memory_config)
+        tensor.deallocate(True)
+        return out
+    if memory_config is None and tuned_out_memcfg is None and rows <= TILE_SIZE:
+        memory_config = ttnn.L1_MEMORY_CONFIG
+    activation, owned_activation = hoist_prefill_matmul_in0_if_needed(tensor, program_config)
+    out = linear_l1_safe(
+        activation,
+        weights.o_proj,
+        program_config=program_config,
+        memory_config=memory_config if memory_config is not None else tuned_out_memcfg,
+        compute_kernel_config=compute_kernel_config,
+    )
+    if owned_activation is not None:
+        owned_activation.deallocate(True)
     tensor.deallocate(True)
     return out
 
