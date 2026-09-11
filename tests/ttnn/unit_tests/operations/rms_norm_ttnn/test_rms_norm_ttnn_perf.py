@@ -32,8 +32,23 @@ import torch
 
 import ttnn
 
-from ttnn.operations.rms_norm import rms_norm as rms_norm_seed
 from ttnn.operations.rms_norm_ttnn import rms_norm_ttnn
+
+# The seed is a generated Python package present only on the branch this op was
+# generated from. Seed-parity cases skip where it is absent; operand-cost cases
+# do not need it.
+try:
+    from ttnn.operations.rms_norm import rms_norm as rms_norm_seed
+except ModuleNotFoundError:
+    rms_norm_seed = None
+
+_NO_SEED = "the seed op ttnn.operations.rms_norm is not present in this tree"
+
+
+def _require_seed():
+    if rms_norm_seed is None or seed_descriptor is None:
+        pytest.skip(_NO_SEED)
+
 
 # (rows, hidden) — one decode profile and one prefill profile, both at the
 # precision corner the feature spec's perf cases pin (bf16 / HiFi2 / 16-bit
@@ -69,6 +84,8 @@ def test_seed_parity(device, rows, hidden, op, mode):
     divide: anything materially above 1.0 for `ttnn` is a regression against the
     seed on a configuration that is supposed to build the same program.
     """
+    if op == "seed":
+        _require_seed()
     x, g = _tensors(device, rows, hidden)
     kwargs = {"epsilon": 1e-12, "compute_kernel_config": _config()}
     if op == "seed":
@@ -132,7 +149,6 @@ def test_operand_cost(device, rows, hidden, mode):
 # window), so it is where that carve-out's cost would show.
 
 from eval.sharding import shard_config  # noqa: E402
-
 
 _SHARDED_PERF = [
     ((1, 1, 7168, 1024), ([896, 128], (8, 8)), ttnn.TensorMemoryLayout.BLOCK_SHARDED, False),
@@ -203,6 +219,8 @@ def test_sharded_seed_parity(device, shape, shard, memory_layout, fp32_dest, op)
     the L1 solve (the BLOCK_ROWS / rounds trade) would show up as a different
     number for the same program.
     """
+    if op == "seed":
+        _require_seed()
     torch.manual_seed(0)
     width = shape[-1]
     x = torch.randn(shape, dtype=torch.float32).to(torch.bfloat16)
@@ -244,9 +262,12 @@ def test_sharded_seed_parity(device, shape, shard, memory_layout, fp32_dest, op)
 # Both descriptors are built on the host from the same tensors; nothing is
 # dispatched, so this is cheap enough to sweep over every scheme.
 
-from ttnn.operations.rms_norm.rms_norm_program_descriptor import (  # noqa: E402
-    create_program_descriptor as seed_descriptor,
-)
+try:
+    from ttnn.operations.rms_norm.rms_norm_program_descriptor import (  # noqa: E402
+        create_program_descriptor as seed_descriptor,
+    )
+except ModuleNotFoundError:
+    seed_descriptor = None
 from ttnn.operations.rms_norm_ttnn.rms_norm_ttnn_program_descriptor import (  # noqa: E402
     _PC_NONE,
     READER_CT_SCALARS,
@@ -394,6 +415,7 @@ def _tree_ring_bytes(descriptor):
 @pytest.mark.parametrize("shape, layout, memory_layout, shard", _PARITY_CASES, ids=_PARITY_IDS)
 @pytest.mark.parametrize("mode", ["no_gamma", "gamma"])
 def test_program_is_structurally_the_seeds(device, shape, layout, memory_layout, shard, mode):
+    _require_seed()
     from eval.sharding import auto_shard_config, shard_config
 
     dtype = ttnn.bfloat16
@@ -495,6 +517,7 @@ def test_program_is_structurally_the_seeds(device, shape, layout, memory_layout,
     SEED_READER_SCALARS = 21  # rms_norm_reader.cpp reads TensorAccessorArgs<21>()
     seed_reader = list(seed.kernels[0].compile_time_args)
     my_reader = list(mine.kernels[0].compile_time_args)
+
     def _mask_reader(args):
         return [a for i, a in enumerate(args[:SEED_READER_SCALARS]) if i not in _BLOCK_READER_CT]
 
