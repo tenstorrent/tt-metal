@@ -41,7 +41,6 @@ Optional regression gate on total device kernel time for the whole window::
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 import pytest
 
@@ -61,7 +60,6 @@ from models.demos.qwen3_tts.tests.perf.qwen3_tts_perf_common import (
     signpost,
 )
 
-_SCRIPT = Path(__file__).resolve()
 _WINDOW = "decode_single_step"
 
 # block -> (start signpost, stop signpost)
@@ -115,7 +113,7 @@ def test_decode_single_step_tracy_report():
     """Capture one Tracy report covering every block a decode frame repeats."""
     totals = capture_tracy_report(
         _WINDOW,
-        _SCRIPT,
+        "decode_single_step",
         # Talker decode ~30 + CP prefill ~30 + CP decode ~33 + sampling ~7 = ~100 on
         # N150. Well under that means a block's window never opened.
         min_ops=60,
