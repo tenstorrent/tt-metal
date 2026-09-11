@@ -554,6 +554,10 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
 
     const DFBSpecName DFB_Q_IN{"q_in"};
     const DFBSpecName DFB_K_IN{"k_in"};
+    // K^T staging: Quasar's matmul unpacker cannot transpose SrcA, so compute physically transposes the
+    // K-chunk into this dedicated buffer, then matmul_blocks(transpose=false) reads it. (Extra DFB for now;
+    // to be compressed later.)
+    const DFBSpecName DFB_KT{"kt"};
     const DFBSpecName DFB_V_IN{"v_in"};
     const DFBSpecName DFB_MASK_IN{"mask_in"};
     const DFBSpecName DFB_ATTN_SINK{"attention_sink"};
@@ -794,6 +798,8 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
         bind(compute_dfb, name, std::move(accessor), DFBEndpointType::CONSUMER);
     };
     add_compute_intermediate(DFB_QK_IM, "qk_im", im_tile_size, qk_tiles, im_df, &im_tile);
+    // K^T staging buffer (compute transposes K into it), same tile size/format as k_in.
+    add_compute_intermediate(DFB_KT, "kt", k_tile_size, k_tiles, k_df, nullptr);
     add_compute_intermediate(DFB_OUT_IM, "out_im", im_tile_size, out_tiles, im_df, &im_tile);
     add_compute_intermediate(DFB_OUT_ACC_IM, "out_accumulate_im", im_tile_size, out_tiles, im_df, &im_tile);
     add_compute_intermediate(DFB_MAX_1, "max_1", stats_tile_size, statistics_tiles, stats_df, &stats_tile);
