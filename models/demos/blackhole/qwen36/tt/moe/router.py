@@ -50,20 +50,27 @@ class Qwen36Router:
         expert_scores.deallocate(True)
 
         top_k_values, top_k_indices = ttnn.topk(router_probs, k=self.top_k, dim=-1)
-
-        # Sum-normalize the top-k weights so they sum to 1 per token (HF norm_topk_prob).
-        if self.norm_topk_prob:
-            top_k_sum = ttnn.sum(top_k_values, dim=-1, keepdim=True)
-            top_k_values = ttnn.div(top_k_values, top_k_sum)
-            top_k_sum.deallocate(True)
-
-        dense_routing = ttnn.scatter(
-            ttnn.zeros_like(router_probs),
-            dim=-1,
-            index=top_k_indices,
-            src=top_k_values,
-        )
-        router_probs.deallocate(True)
-        top_k_values.deallocate(True)
         top_k_indices.deallocate(True)
+
+        # Build the dense [1,1,S,E] routing by thresholding at the k-th largest probability
+        # rather than scattering the top-k values back by index. ttnn.scatter only runs in
+        # ROW_MAJOR, so the scatter form costs three untilize + one tilize around it (and a
+        # pad-fill for the narrow top-k reduce); thresholding stays in TILE the whole way.
+        kth = ttnn.slice(
+            top_k_values,
+            [0, 0, 0, self.top_k - 1],
+            [1, 1, top_k_values.shape[-2], self.top_k],
+        )  # [1,1,S,1] — topk returns descending, so element k-1 is the cutoff
+        top_k_values.deallocate(True)
+        above = ttnn.ge(router_probs, kth)
+        kth.deallocate(True)
+        dense_routing = ttnn.mul(router_probs, above)
+        above.deallocate(True)
+        router_probs.deallocate(True)
+
+        # Sum-normalize the selected weights so they sum to 1 per token (HF norm_topk_prob).
+        if self.norm_topk_prob:
+            denom = ttnn.sum(dense_routing, dim=-1, keepdim=True)
+            dense_routing = ttnn.div(dense_routing, denom)
+            denom.deallocate(True)
         return dense_routing
