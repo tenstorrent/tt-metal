@@ -84,8 +84,11 @@ GroupNormInterleavedGeometry derive_groupnorm_interleaved_geometry(
     geometry.channels_per_group_mod_tile_width =
         geometry.channels_per_group % tile_width == 0 ? tile_width : geometry.channels_per_group % tile_width;
     geometry.num_row_shards = height / geometry.per_core_height_group_1;
-    geometry.num_cores_per_batch = num_batches > geometry.num_row_shards ? 1 : geometry.num_row_shards / num_batches;
     geometry.num_col_shards = width / geometry.per_core_width;
+    if (geometry.num_row_shards == 0 || geometry.num_col_shards == 0) {
+        return geometry;
+    }
+    geometry.num_cores_per_batch = num_batches > geometry.num_row_shards ? 1 : geometry.num_row_shards / num_batches;
     geometry.num_cores_per_group = num_groups > geometry.num_col_shards ? 1 : geometry.num_col_shards / num_groups;
     geometry.batches_per_core_group_1 =
         num_batches > geometry.num_row_shards ? num_batches / geometry.num_row_shards : 1;
