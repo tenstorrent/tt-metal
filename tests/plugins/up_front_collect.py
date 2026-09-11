@@ -522,12 +522,22 @@ def pytest_sessionfinish(session, exitstatus):
             device.enable_program_cache()
         except Exception:
             pass
-        n_prog, n_err, used, wall = ttnn.graph.up_front_compile(device, _WORKERS, True)
+        n_prog, n_err, used, wall, n_already = ttnn.graph.up_front_compile(device, _WORKERS, True)
+        n_built = n_prog - n_already
         print(
-            f"UP_FRONT_COLLECT: compiled {n_prog} programs in {wall:.1f}s "
-            f"(workers={used}, errors={n_err}) -> on-disk JIT cache warm",
+            f"UP_FRONT_COLLECT: {n_prog} collected · {n_built} built · {n_already} already compiled "
+            f"in {wall:.1f}s (workers={used}, errors={n_err}) -> on-disk JIT cache warm",
             flush=True,
         )
+        if n_already:
+            # Every already-compiled program was JIT'd inline and serially during the
+            # collect pass -- the exact cost this pass exists to remove. Not fatal, but
+            # it must not look like a fast, healthy run.
+            print(
+                f"UP_FRONT_COLLECT: WARNING {n_already}/{n_prog} programs arrived already "
+                f"compiled; those were built serially during collect, not in parallel here.",
+                flush=True,
+            )
         if n_err == 0 and n_prog == n_unique:
             result_status = "ok"
             result_reason = "ok"

@@ -2940,6 +2940,8 @@ void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_
     this->compile_and_allocate_device_ = device;
 }
 
+bool Program::is_compiled() const { return internal_->is_compiled(); }
+
 void detail::ProgramImpl::set_runtime_id(ProgramId id) { this->runtime_id = id; }
 
 void Program::set_runtime_id(ProgramId id) { internal_->set_runtime_id(id); }

@@ -21,6 +21,7 @@
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama/device/rotary_embedding_llama_metal2_common.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/up_front_compile.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::rotary_embedding_indexed {
 
@@ -613,7 +614,11 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
         run_args.tensor_args.emplace(METADATA_PARAM, TensorArgument{tensor_args.metadata->mesh_tensor()});
     }
 
-    auto program = MakeProgramFromSpec(*mesh_device, spec);
+    // Defer the compile while the up-front precompile collect pass is active: the
+    // workload is stashed and discarded, never dispatched, and its kernels are
+    // JIT-compiled in bulk later. See ttnn/up_front_compile.hpp.
+    const bool defer_compile = ttnn::up_front_compile::should_defer_compile();
+    auto program = MakeProgramFromSpec(*mesh_device, spec, /*skip_validation=*/false, defer_compile);
     SetProgramRunArgs(program, run_args);
     return {std::move(program), SharedVariables{}};
 }
