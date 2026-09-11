@@ -97,18 +97,22 @@ void kernel_main() {
 #endif
         const uint32_t k_base = head * k_head_stride;
 #ifdef VSA_RING
-        // Ring mode: own-shard blocks come from the local concatenated K/V tensor (`k`, K heads first), remote
-        // shards from the gathered buffer (see the reader's leader for the protocol). Ring constants are COMMON
-        // runtime args after the accessor common args (vsa_sdpa_stream_descriptor.hpp kRingCommonArg*).
+        // Ring mode: own-shard blocks come from the local flat K|V tensor (`k`), remote shards from the gathered
+        // buffer; K of head h is the column tiles [h*DHt, (h+1)*DHt) of the token-major rows (see the reader's
+        // leader for the protocol). Ring constants are COMMON runtime args after the accessor common args
+        // (vsa_sdpa_stream_descriptor.hpp kRingCommonArg*).
         constexpr auto gk_args =
             TensorAccessorArgs<q_args.next_compile_time_args_offset(), q_args.next_common_runtime_args_offset()>();
         constexpr uint32_t ring_crt = gk_args.next_common_runtime_args_offset();
         const uint32_t gk_addr = get_common_arg_val<uint32_t>(ring_crt + 0);
         const uint32_t ring_index = get_common_arg_val<uint32_t>(ring_crt + 1);
         const uint32_t blocks_per_shard = get_common_arg_val<uint32_t>(ring_crt + 2);
-        const uint32_t k_local_head_stride = get_common_arg_val<uint32_t>(ring_crt + 3);
+        const uint32_t kv_wt = get_common_arg_val<uint32_t>(ring_crt + 3);
+        const uint32_t dht = get_common_arg_val<uint32_t>(ring_crt + 4);
+        const uint32_t skt = get_common_arg_val<uint32_t>(ring_crt + 6);
         const auto gk = TensorAccessor(gk_args, gk_addr);
-        const uint32_t k_local_base = head * k_local_head_stride;
+        const uint32_t k_col0 = head * dht;
+        (void)k_base;
 #endif
         uint32_t nfetch = 0, nacked = 0;
         const auto ack_oldest = [&]() {
@@ -121,25 +125,31 @@ void kernel_main() {
         const auto fetch_one = [&](uint32_t block_id, uint32_t slot) {
             experimental::set_read_trid(noc, (nfetch % 8) + 1);
 #ifdef VSA_RING
-            if (block_id / blocks_per_shard == ring_index) {  // own shard: local tensor, local block id
-                const uint32_t k_tile0 = k_local_base + (block_id - ring_index * blocks_per_shard) * k_tiles_per_block;
-                for (uint32_t i = 0; i < k_tiles_per_block; ++i) {
+            // flat K|V: the block's Skt x DHt K tiles sit at (row0 + r) * Wt + k_col0 + c; the own shard comes from
+            // the local tensor (local rows), every other shard from the gathered buffer (global rows)
+            const bool own = block_id / blocks_per_shard == ring_index;
+            uint32_t page = (own ? block_id - ring_index * blocks_per_shard : block_id) * skt * kv_wt + k_col0;
+            for (uint32_t i = 0, c = 0; i < k_tiles_per_block; ++i) {
+                if (own) {
                     noc.async_read(
                         k,
                         k_cb,
                         k_tile_bytes,
-                        {.page_id = k_tile0 + i},
+                        {.page_id = page},
                         {.offset_bytes = (slot * k_tiles_per_block + i) * k_tile_bytes});
-                }
-            } else {  // remote shard: gathered buffer, global block id
-                const uint32_t k_tile0 = k_base + block_id * k_tiles_per_block;
-                for (uint32_t i = 0; i < k_tiles_per_block; ++i) {
+                } else {
                     noc.async_read(
                         gk,
                         k_cb,
                         k_tile_bytes,
-                        {.page_id = k_tile0 + i},
+                        {.page_id = page},
                         {.offset_bytes = (slot * k_tiles_per_block + i) * k_tile_bytes});
+                }
+                if (++c == dht) {
+                    c = 0;
+                    page += kv_wt - dht + 1;
+                } else {
+                    ++page;
                 }
             }
 #else

@@ -13,7 +13,7 @@ namespace ttnn::prim {
 
 // One Program per mesh coordinate (the device's ring position, neighbors and per-chain shard counts depend on
 // it): the VSA streaming descriptor is materialized into a Program, then the multi-worker all-gather's
-// fusable builder adds the sender cores that forward the concatenated K/V shard around the ring and signal
+// fusable builder adds the sender cores that forward the flat K|V shard around the ring and signal
 // the VSA leaders per landed shard.
 struct VsaRingSdpaMeshWorkloadFactory {
     using shared_variables_t = ttnn::AllGatherProgramArtifacts;

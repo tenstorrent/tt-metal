@@ -531,17 +531,17 @@ void bind_sdpa(nb::module_& mod) {
         R"doc(
         VSA fine-stage attention fused with the SP-ring all-gather of K/V (Blackhole mesh). Equivalent to
         ``vsa_sdpa(q, all_gather(k, dim=2), all_gather(v, dim=2), ...)`` in raw-selection streaming mode, up
-        to bf16 rounding order: the concatenated K/V shard is forwarded around the ring by the multi-worker
+        to bf16 rounding order: the flat K|V shard is forwarded around the ring by the multi-worker
         all-gather's kernels while the attention consumes the shards that have already landed. One program per
         device: the sender cores fill the compute grid's first rows, the VSA leader/worker engine the rest.
 
         Args:
             q: [1, H, S_local, d] bf16 TILE, this device's query rows.
-            kv: [1, 2H, T_local, d] bf16 TILE, this device's K/V shard: K heads then V heads (ttnn.concat([k, v], 1)).
+            kv: [1, 1, T_local, 2*H*d] bf16 TILE, this device's flat K|V shard: K of head h at columns [h*d, (h+1)*d), V at (H+h)*d (ttnn.concat([nlp_concat_heads(k), v_flat], 3);[k, v], 1)).
             indices: [1, H, S_local/64, W] uint32 ROW_MAJOR global block ids (padded-per-shard numbering
                 with coarse_slots_shift), exactly as vsa_sdpa raw-selection mode.
             block_counts: [1, 1, 1, Wc] uint32 ROW_MAJOR, global.
-            persistent_output_buffer_kv: [1, 2H, T_local*ring_size, d] all-gather ping-pong buffer for kv
+            persistent_output_buffer_kv: [1, 1, T_local*ring_size, 2*H*d] all-gather ping-pong buffer for kv
                 (shard s at rows [s*T_local, (s+1)*T_local)); the local shard is read from kv, never written here.
 
         Keyword args:

@@ -605,14 +605,18 @@ class MiniMaxH3Attention(Module):
                 # all-gather ping-pong buffers and the semaphores the all-gather's own pair.
                 assert self.vsa_config.streaming and not self.vsa_config.distributed
                 assert self.vsa_config.stream_order == "identity", "vsa_ring_sdpa streams in ring-arrival order"
-                # K and V travel as one tensor (K heads, then V heads): one gather, one set of sender cores.
-                kv_BHNE = ttnn.concat([k_BHNE, v_BHNE], dim=1)
+                # K and V travel as one FLAT tensor [1, 1, N, 2*H*d] (K of head h at columns [h*d, (h+1)*d), V at
+                # (H+h)*d): one gather whose token-major tiles land every head's blocks progressively, so the fine
+                # stage overlaps the whole ring instead of waiting per shard.
+                k_1BNF_rope = ttnn.experimental.nlp_concat_heads(k_BHNE)
+                kv_1BNF = ttnn.concat([k_1BNF_rope, v_1BNF], dim=3)
+                ttnn.deallocate(k_1BNF_rope)
                 spatial_BHNE = ttnn.transformer.vsa_ring_sdpa(
                     q_BHNE,
-                    kv_BHNE,
+                    kv_1BNF,
                     vsa_indices,
                     self.vsa_stage.block_counts_tensor(),
-                    self.ccl_manager.get_ag_ping_pong_buffer(kv_BHNE.shape, 2, self.sp_mesh_axis, dtype=kv_BHNE.dtype),
+                    self.ccl_manager.get_ag_ping_pong_buffer(kv_1BNF.shape, 2, self.sp_mesh_axis, dtype=kv_1BNF.dtype),
                     multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.sp_mesh_axis),
                     num_links=self.ccl_manager.num_links,
                     cluster_axis=self.sp_mesh_axis,
@@ -627,7 +631,7 @@ class MiniMaxH3Attention(Module):
                     coarse_real_per_shard=self.vsa_stage.geometry.tiles_per_shard,
                     dense_row_hint=self.vsa_stage.dense_row_hint,
                 )
-                ttnn.deallocate(kv_BHNE)
+                ttnn.deallocate(kv_1BNF)
                 ttnn.deallocate(vsa_indices)
                 k_gathered = v_gathered = None
             else:

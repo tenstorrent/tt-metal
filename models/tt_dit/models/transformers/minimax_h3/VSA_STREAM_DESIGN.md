@@ -725,3 +725,18 @@ plan, status, root-cause notes and measurements). With the multi-worker forwarde
 all_gather_async's kernels fused into the program, K/V concatenated per device) and 2 passes it beats the two-op
 path by ~1.1 ms/block including the 0.6 ms concat (21.7 vs 23.3 + 0.6 at 15 s). It is comm-bound in pass 0
 (in-program gather ~11.5 ms vs ~8 ms of pass-0 compute); spec section 12 lists the remaining headroom.
+
+Later the same day (VSA_RING_SDPA_SPEC.md section 13): flat token-major K|V (`[1, 1, T, 2*H*d]`) so the gather lands
+every head progressively, a per-block landing gate in the leader (polls the all-gather workers' landed-tile counters,
+per-shard signal as the fallback), and 20 resident rows (cap lifted from 16; ring default 20/8). At 15 s the fused op
+runs 19.5 ms against a never-waiting compute of 18.9 (the gather is hidden to within 0.6 ms) vs 24.5 + 0.9 for the
+two-op path: ~4.1 ms/block net. The op is compute-bound on its 108-core grid; sections 4 and 10 still describe the
+compute's own ceiling.
+
+Evening (spec section 14): in the real block the op-level win did not appear (tracy: ring 25.7 ms vs two-op 27.1
+incl. the extra ops) because the block's 4 dense rows landed in pass-1 bins and the one-block landing order scattered
+the real selections' neighbouring blocks. Ring-mode dealing now puts dense rows into pass 0 (lifting it past the
+gather) and balances the later passes by cost; the leader streams runs of 32 consecutive blocks per stream; default
+18/10. In-block ring op 23.5 ms (compute floor ~22, gather hidden to within ~1.5 ms) vs 27.1 for the two-op path;
+traced block period 62.36 -> 60.50 ms. The remaining gap to the plain op's 18.3 ms compute is the 108-core grid, the
+two-pass depth-10 structure and gather contention -- compute, not overlap.

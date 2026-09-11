@@ -259,7 +259,8 @@ void kernel_main() {
     // Threshold-key cache for the lazy-max decision (see phase 2): per row slot, Sqt x 32 bf16 order keys,
     // contiguous, in the otherwise unused cb_sum_res tile. Per-thread dirty bits (each TRISC has its own
     // copy of every variable): a row's keys are reloaded from its threshold tile on that RISC's next use.
-    static_assert(R_MAX * Sqt * 64 <= 2048, "threshold-key cache must fit one tile");
+    // (the host gives cb_sum_res two tiles when R_MAX > 16)
+    static_assert(R_MAX * Sqt * 64 <= 2 * 2048, "threshold-key cache must fit two tiles");
     const uint32_t thrkey_l1 = get_tile_address(cb_sum_res, 0);
     uint32_t thr_dirty = 0xFFFFFFFFu;
     uint32_t vn = 0;

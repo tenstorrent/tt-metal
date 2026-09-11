@@ -189,6 +189,20 @@ def test_vsa_block_15s_768p(mesh_device, sp_axis, tp_axis, num_links, is_fsdp, t
         logger.info("executing trace")
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(mesh_device)
+        # VSA_BLOCK_PERF_ITERS=n: time n more replays (the block period inside the real block graph, one sync at
+        # the end), printed as VSA_BLOCK_PERF for ring-vs-two-op comparisons
+        perf_iters = int(os.environ.get("VSA_BLOCK_PERF_ITERS", "0"))
+        if perf_iters > 0:
+            import time
+
+            t0 = time.perf_counter()
+            for _ in range(perf_iters):
+                ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            ms = (time.perf_counter() - t0) * 1e3 / perf_iters
+            print(
+                f"\nVSA_BLOCK_PERF ring={os.environ.get('VSA_RING_BLOCK', '0')} iters={perf_iters} ms_per_block={ms:.2f}"
+            )
         ttnn.release_trace(mesh_device, trace_id)
 
     local = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()

@@ -28,10 +28,11 @@ struct VsaRingSdpaParams {
 };
 
 struct VsaRingSdpaInputs {
-    // vsa.k and vsa.v are BOTH the local concatenated K/V shard [1, 2H, T_local, d] (K heads first): the
-    // kernels read K at head h and V at head H + h. indices/counts index the global sequence.
+    // vsa.k and vsa.v are BOTH the local flat K|V shard [1, 1, T_local, 2*H*d] (K of head h at columns
+    // [h*d, (h+1)*d), V at (H+h)*d): token-major tiles, so the gather lands every head progressively.
+    // indices/counts index the global sequence.
     VsaSdpaInputs vsa;
-    Tensor gathered_kv;  // [1, 2H, T_local*ring_size, d] persistent all-gather buffer (shard s at rows
+    Tensor gathered_kv;  // [1, 1, T_local*ring_size, 2*H*d] persistent all-gather buffer (shard s at rows
                          //   [s*T_local, (s+1)*T_local)); the local shard is never written into it
 };
 

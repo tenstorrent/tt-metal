@@ -1,8 +1,10 @@
 # vsa_ring_sdpa: fused ring all-gather + VSA fine-stage attention
 
-Status: IMPLEMENTED, correct, and a (small) win over the two-op path with the multi-worker forwarder and 2 passes
-(section 12). Section 11 records the first (parity) version's breakdown. Companion to `VSA_STREAM_DESIGN.md` (section 13 has
-the motivating measurements).
+Status: IMPLEMENTED, correct, overlapped. The flat token-major K|V layout, the per-block landing gate (section 13),
+dense rows dealt into pass 0 and landing-order runs (section 14) hide the K/V gather to within ~1.5 ms in the real
+15 s block: fused op 23.5 ms vs 27.1 (+0.9 of extra ops) for the two-op path, block period 62.4 -> 60.5 ms, denoise
+2.692 -> 2.553 s/step (-5.2 %). The op is now compute-bound (~22 ms on its 108-core grid). Sections 11-12 record the
+earlier (parity, then small-win) versions. Companion to `VSA_STREAM_DESIGN.md` (section 13 has the motivating measurements).
 
 ## 1. Problem
 
@@ -54,6 +56,10 @@ Tensors (all DRAM interleaved, TILE unless noted):
 | q | [1,H,S_local,d] bf16 | this device's query rows (S_local multiple of 64) |
 | k, v | [1,H,T_local,d] bf16 | this device's K/V shard, T_local multiple of block_size |
 | persistent_output_buffer_k/v | [1,H,T_local*ring_size,d] | the CCL manager's all-gather ping-pong buffers; shard s occupies rows [s*T_local, (s+1)*T_local). The local shard is NOT written into it (fused all-gather semantics); the kernel reads it from k/v. |
+
+As built (sections 12-13): K and V are ONE tensor `kv` and it is FLAT, `[1, 1, T_local, 2*H*d]` with K of head h at
+columns `[h*d, (h+1)*d)` and V at `(H+h)*d`; `persistent_output_buffer_kv` is `[1, 1, T_local*ring_size, 2*H*d]`.
+The token-major tiles are what lets the fine stage gate per block (section 13).
 | indices | [1,H,S_local/64,W] uint32 ROW_MAJOR | global (padded-per-shard) block ids, exactly as `vsa_sdpa` raw-selection mode |
 | block_counts, dense_row_mask | as `vsa_sdpa` | global |
 
@@ -266,3 +272,104 @@ passes with `VSA_RING_BLOCK=1` (PCC 100 %).
 Gotchas hit: kernel handles == push order but `collect_kernel_meta` is unordered (never index it as a handle);
 `dense_row_hint` rows are local; consecutive CCLs must alternate semaphore sets; K/V must be concatenated PER
 DEVICE (per TP shard) -- concatenating over all heads and then sharding hands device 0 only K heads.
+
+## 13. Token-major landing and the per-block gate (2026-09-11, later): near-full overlap
+
+Where section 12 left it, pass 0 waited per SHARD and the K/V were gathered head-major (`[1, 2H, T, d]`), so within a
+shard the last head's data lands last and that head's group still holds a full shard of pass-0 work after the final
+arrival (~P0/8 ~ 1.3 ms); pass 0 (15 rows) was also shorter than the gather (~8 vs ~11.5 ms), which left pass 1 fully
+exposed: total ~ C + P0/8 + P1 ~ 21.7 ms. Three changes:
+
+1. **Flat K|V layout** `[1, 1, T, 2*H*d]`: K of head h at columns `[h*d, (h+1)*d)`, V at `(H+h)*d`. Its tiles are
+   token-major, so the all-gather (dim 2, one batch-head, `Wt = 2*H*d/32` = 112 at H = 14) lands every head's blocks
+   progressively; each all-gather worker forwards a contiguous quarter of the slice's rows, four streams in parallel.
+   The model builds it with `nlp_concat_heads(K)` + `concat([K_flat, V_flat], 3)` (0.9 ms; V is flat for free from the
+   projection). The leaders address tile (row, col) at `row * Wt + col`: own shard from the local tensor (local rows),
+   every other shard from the gathered buffer (global rows). Validators require the flat shapes.
+2. **Per-block landing gate** (`RingGate` in the reader's leader): the upstream sender bumps each all-gather worker's
+   `out_ready_sem` after every `chunks_per_sync` packets, in tile order within the worker's slice range and with Flush
+   ordering behind the data, so slice k's packet c is covered once the count reaches
+   `k * n_syncs + min(c / cps + 1, n_syncs)`. The leader polls those counters over the NoC (16 B read, full barrier,
+   monotonic high-water mark per worker) and waits, per block, for the last V tile of each of its rows (and the
+   straddled worker's tail when a row's span crosses a worker boundary). The per-shard fused signal is checked first
+   on every spin and is the authoritative fallback -- it always arrives, so the gate cannot hang, and it also covers
+   the counters' end-of-ring reset. The host replicates the all-gather's tile split (poll table in the common args,
+   filled by the ring factory once the all-gather has placed its cores; `chunks_per_sync` passed explicitly so both
+   sides agree). Blocks stream in landing order: own shard, then one shard per direction at a time with their
+   blocks interleaved across the workers' quarters. Deterministic (the schedule is fixed; gating only delays).
+3. **Resident rows**: the host cap of 16 lifted to 32 (the kernel arrays were already sized 32; the threshold-key
+   cache gets a second tile past 16 rows) and the ring default set to 20 rows / depth 8. L1: rows cost ~45 KB, stream
+   slots ~43 KB; 22/8 and 20/10 exceed the L1 the traced block leaves (behind the 64 KB `l1_small` region) by ~60 KB.
+
+Measurements (15 s per-device shape, slowest device, ms per call; this session's machine ran ~1 ms slower than
+section 12's, so compare within the table):
+
+| variant | ms |
+|---|---|
+| two-op path (all_gather x2 + vsa_sdpa) | 24.5 |
+| K to flat + [K \| V] concat (the fused path's extra ops) | 0.9 |
+| vsa_sdpa alone, 120 cores, pre-gathered | 16.6 |
+| ring 15/14, per-shard gate (section 12 default; earlier session) | 21.7 |
+| ring 20/8, per-shard gate (`TT_VSA_RING_COARSE=1`) | 20.2 |
+| **ring 20/8, per-block gate (default)** | **19.5** |
+| ring 18/10, per-block gate | 20.0 |
+| ring 20/8, serialized (`TT_VSA_RING_WAIT_ALL=1`: gather, then compute) | 29.2 |
+| ring 20/8, gate held open (`TT_VSA_RING_GATE_OPEN=1`: compute racing the gather, timing only) | 18.9 |
+
+Reading: the fused op runs 0.6 ms over its never-waiting compute (18.9), i.e. the ~11 ms gather is hidden to within
+that slack; the op is compute-bound. 18.9 = vsa_sdpa on the 108-core grid (16.6 x 120/108 = 18.4) + ~0.5 of DRAM/NoC
+contention with the gather. Net against the two-op path: 24.5 - 19.5 - 0.9 = ~4.1 ms/block (~5.0 without the extra
+ops), up from ~1.1 in section 12. Correctness: 6 unit variants (1/2 links, eager, traced replay with the alternate
+semaphore set, dense rows) pass bit-exact run to run with PCC 1.0 vs vsa_sdpa on the gathered K/V; the traced 15 s
+block passes with `VSA_RING_BLOCK=1` (PCC 100 % vs the untraced reference).
+
+Development note: the first per-block gate raced. It detected the workers' end-of-ring counter reset as "a value
+below the high-water mark" -- a stale or other-worker value read back from the shared scratch matched that test and
+opened the gate early (one head group per run came out wrong, nondeterministically). The reset detection was
+unnecessary (the per-shard signal covers the post-reset case) and is gone; polls are a monotonic maximum behind a
+full read barrier. `TT_VSA_RING_GATE_SLICE=1` (fine order, per-shard gate) isolated the poll as the culprit.
+
+Headroom (small, in order): (a) 22/8 or 20/10 need ~60 KB of L1 back (single-buffering `cb_out` and a shallower
+row-sum tile ring give ~32 KB; the rest would come from the compute kernel's per-row tiles); (b) the 12 sender cores
+cost ~1.8 ms of compute -- the price of the in-program gather; (c) the flat K could come straight from the norm/RoPE
+op (-0.3 ms of the 0.9).
+
+## 14. In the block: dense rows, real selections, and what the fused op actually saves (2026-09-11, evening)
+
+Section 13's numbers were op-level, with random selections and no dense rows. The first end-to-end run (8 steps) gave
+ring 2.680 s/step vs vsa 2.692 -- 12 ms/step, not the ~230 that the op-level gap x 50 layers predicted. Tracy on the
+untraced 15 s block (per-op device time, slowest device): two-op path = 8.7 (K and V gathers) + 18.3 (vsa_sdpa) =
+27.1 ms; ring op 25.7 + 0.9 (K to flat + concat) -- a ~0.5 ms saving. Two causes, both invisible to the op-level test:
+
+1. **Dense rows.** The block has 4 dense (exempt-token) q rows per device; each costs ~7 sparse rows of work for one
+   L1 slot. The ring's dealer, with pass 0 full at `rmax`, put them into pass-1 bins that already held their share of
+   sparse rows: pass 1 ran at 19 units against a 16 average on the lockstep critical path, while pass 0 (20 sparse units
+   ~ 9.6 ms) stayed shorter than the ~10.5 ms gather. Fix (ring mode; `TT_VSA_DEAL_DENSE_PASS1=1` keeps the plain op's
+   placement): a dense row goes into the least-loaded PASS-0 bin, evicting one of its sparse rows into the lightest
+   later bin, and every later pass is then balanced by cost across consumers. Pass 0 becomes 19 sparse + 1 dense = 26
+   units on four consumers (compute-bound, past the gather) and pass 1 shrinks to 12-13 rows everywhere
+   (`TT_VSA_DEAL_LOG=1` prints the layout). In-block ring op 25.7 -> 24.5 ms; standalone with 4 dense rows 21.8 ->
+   20.85.
+2. **Real selections list neighbouring blocks** (adjacent-list Jaccard 0.55, VSA_STREAM_DESIGN.md section 5d), which
+   the engine's windows batch on; the one-block round-robin over the eight (shard, worker-quarter) streams scattered
+   them. Runs of consecutive blocks per stream (`VSA_RING_RUN`, default 32; `TT_VSA_RING_RUN` tunes): 24.5 -> 23.7.
+   With that locality back, depth beats rows in the block: 20/8 23.7 / 23.0 ms (slowest device / median), 18/10
+   23.5 / 22.3, 16/12 (three passes) 24.5 / 23.4 -> the ring default is now 18/10.
+
+The perf test now carries 4 dense rows too (`VSA_RING_PERF_DENSE`, default 4) and reproduces the block's two-op time.
+
+Where the in-block op stands (18/10, runs of 32; tracy, slowest device): serialized (`TT_VSA_RING_WAIT_ALL=1`) 32.8 ms,
+gate held open 22.7 (at 20/8), fused 23.5 -- the ~10.5 ms gather is hidden to within ~1-1.5 ms and the op is
+compute-bound at ~22 ms. Against the two-op path: 27.1 - 23.5 - 0.9 ~ 2.7 ms/block of op time; the traced block period
+(20 replays, `VSA_BLOCK_PERF_ITERS`) 62.36 -> 60.50 ms (-1.9 ms, 3 %). End to end (15 s / 768p, real weights, 8 steps):
+denoise 2.553 s/step in ring mode vs 2.692 in vsa mode (-139 ms/step, -5.2 %; the first ring version measured 2.680).
+
+Why the in-block compute (~22 ms) sits above the plain op's 18.3: 108 cores instead of 120 (~1.8 ms), the pass
+structure (two passes of 18 rows at depth 10 vs three of 10 at depth 22 -- real selections favour deep windows), and
+~0.5 ms of DRAM/NoC contention with the gather. Those are the price of hosting the gather on the same chip; the overlap
+itself is done. Standalone (random lists, 4 dense rows, slowest device): two-op 26.35, extra ops 0.92, ring 20.32
+(-5.1 ms/block).
+
+Headroom now lives in the compute, not the overlap: (a) L1 for depth 12+ at 18 rows (~60 KB: `cb_out` single-buffering
+and a shallower row-sum tile ring give ~32 KB; the rest from the compute kernel's per-row tiles); (b) the 12 sender
+cores; (c) the flat K straight from the norm/RoPE op (-0.3 ms of the 0.9).

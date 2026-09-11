@@ -57,6 +57,117 @@ inline RingSDPAOpReceiver make_ring_receiver(uint32_t crt) {
     rx.initialized = true;
     return rx;
 }
+
+// Pass-0 landing gate for the blocks of a remote shard (vsa_ring_sdpa). All-gather worker g of direction d
+// forwards the tile range [first_g, end_g) of every slice it carries in tile order, in packets of `tpp` tiles, and
+// the upstream sender bumps out_ready_sem on g's core after every `cps` packets (plus once for a trailing partial
+// group); the count accumulates over that direction's slices -- slice k's packet c is covered once it reaches
+// k * n_syncs_g + min(c / cps + 1, n_syncs_g) -- and is reset to 0 only after the worker's last slice. The gate
+// polls the count over the NoC (16 B into `scratch`, a full read barrier) and keeps the highest value seen per
+// worker, so a stale or reset value can only delay it, never open it. The per-shard fused-op signal (the leader's
+// own semaphore, the sequencer's (dir, val)) is checked first on every spin and is the authoritative fallback: it
+// always arrives, so the gate cannot hang even when the whole ring finished (and the counts were reset) before the
+// leader looked.
+constexpr uint32_t kRingMaxPollWorkers = 16;
+struct RingGate {
+    uint32_t table = 0;  // common-arg index of the poll table: [d * G + g] x {noc x | y << 16, first tile, end tile}
+    uint32_t G = 1, tpp = 1, cps = 1, wt = 1;
+    uint32_t sem_addr[2] = {0, 0};  // out_ready_sem L1 address on the workers of all-gather direction 0 / 1
+    uint32_t scratch = 0;           // 16 B-aligned L1 scratch for the polled value
+    uint32_t seen[2][kRingMaxPollWorkers];
+    // the shard being gated
+    uint32_t dir = 0, slice = 0, local_sem_id = 0, local_val = 0;
+    bool active = true;
+
+    void init(
+        uint32_t table_,
+        uint32_t G_,
+        uint32_t tpp_,
+        uint32_t cps_,
+        uint32_t wt_,
+        uint32_t sem0,
+        uint32_t sem1,
+        uint32_t scratch_) {
+        table = table_;
+        G = G_ < kRingMaxPollWorkers ? G_ : kRingMaxPollWorkers;
+        tpp = tpp_ ? tpp_ : 1;
+        cps = cps_ ? cps_ : 1;
+        wt = wt_;
+        sem_addr[0] = sem0;
+        sem_addr[1] = sem1;
+        scratch = scratch_;
+        for (uint32_t d = 0; d < 2; ++d) {
+            for (uint32_t g = 0; g < kRingMaxPollWorkers; ++g) {
+                seen[d][g] = 0;
+            }
+        }
+    }
+    uint32_t first_tile(uint32_t g) const { return get_common_arg_val<uint32_t>(table + 3 * (dir * G + g) + 1); }
+    uint32_t end_tile(uint32_t g) const { return get_common_arg_val<uint32_t>(table + 3 * (dir * G + g) + 2); }
+    uint32_t worker_of(uint32_t t) const {
+        for (uint32_t g = 0; g + 1 < G; ++g) {
+            if (t < end_tile(g)) {
+                return g;
+            }
+        }
+        return G - 1;
+    }
+    // all-gather direction `ag_dir`'s slice `k`; the fused signal for it is local semaphore `sem_id` >= `val`
+    void begin_shard(uint32_t ag_dir, uint32_t k, uint32_t sem_id, uint32_t val) {
+        dir = ag_dir;
+        slice = k;
+        local_sem_id = sem_id;
+        local_val = val;
+    }
+    bool slice_signaled() const {
+        return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(local_sem_id)) >= local_val;
+    }
+    // blocks until tile `t` (index within the slice) of the current shard has landed
+    void wait_tile(uint32_t t) {
+        const uint32_t g = worker_of(t);
+        const uint32_t first = first_tile(g);
+        const uint32_t n_tiles = end_tile(g) - first;
+        const uint32_t n_syncs = (n_tiles + tpp * cps - 1) / (tpp * cps);
+        uint32_t cover = (t - first) / (tpp * cps) + 1;
+        if (cover > n_syncs) {
+            cover = n_syncs;
+        }
+        const uint32_t need = slice * n_syncs + cover;
+        while (seen[dir][g] < need) {
+            if (slice_signaled()) {  // the whole slice landed
+                return;
+            }
+            const uint32_t xy = get_common_arg_val<uint32_t>(table + 3 * (dir * G + g));
+            noc_async_read(get_noc_addr(xy & 0xFFFFu, xy >> 16, sem_addr[dir]), scratch, 16);
+            noc_async_read_barrier();
+            const uint32_t v = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
+            if (v > seen[dir][g]) {
+                seen[dir][g] = v;
+            }
+        }
+    }
+    // blocks until the Skt x (K, V) tiles of local block `b_local` (rows b_local*skt ..) for column tiles
+    // [k_col0, k_col0 + dht) and [v_col0, v_col0 + dht) have landed
+    void wait_block(uint32_t b_local, uint32_t skt, uint32_t dht, uint32_t k_col0, uint32_t v_col0) {
+        if (!active) {
+            return;
+        }
+#ifdef VSA_RING_GATE_SLICE  // triage knob (TT_VSA_RING_GATE_SLICE=1): the fine order with the per-shard gate
+        while (!slice_signaled()) {
+        }
+        return;
+#endif
+        for (uint32_t r = b_local * skt; r < (b_local + 1) * skt; ++r) {
+            const uint32_t t_first = r * wt + k_col0;
+            const uint32_t t_last = r * wt + v_col0 + dht - 1;
+            wait_tile(t_last);
+            const uint32_t g0 = worker_of(t_first);
+            if (g0 != worker_of(t_last)) {  // the row's span straddles two workers: the first one's tail too
+                wait_tile(end_tile(g0) - 1);
+            }
+        }
+    }
+};
 #endif
 
 constexpr uint32_t sentinel = 0xFFFFFFFFu;
@@ -281,48 +392,60 @@ void kernel_main() {
         const uint32_t wcoord_argi = argi;
         argi += 2 * n_workers;
 #ifdef VSA_RING
-        // Ring mode (vsa_ring_sdpa): K/V arrive shard by shard over the SP ring. Blocks of this device's
-        // own shard are read from the local concatenated K/V tensor (`v`: V of head h at head v_head_offset + h);
-        // every other shard from the gathered buffer once the fused all-gather has landed it. The sequence is
-        // streamed shard-major in the ring-arrival order the RingSDPAOpReceiver yields (own shard first, then
-        // alternating directions), each shard gated on its arrival semaphore. Deterministic per (device, ring).
-        // The per-device constants are COMMON runtime args (identical on every core; the gathered address is
-        // re-applied on program-cache hits): see kRingCommonArg* in vsa_sdpa_stream_descriptor.hpp.
+        // Ring mode (vsa_ring_sdpa): K/V arrive shard by shard over the SP ring into the gathered buffer; the own
+        // shard is read from the local tensor. Both are FLAT K|V ([1, 1, T, 2*H*d]: K of head h at column tiles
+        // [h*DHt, (h+1)*DHt), V at (H+h)*DHt), so the all-gather's token-major tile stream lands every head's blocks
+        // progressively and pass 0 can gate per block (RingGate) instead of per shard. The per-device constants are
+        // COMMON runtime args (identical on every core; the addresses are re-applied on program-cache hits): see
+        // kRingCommonArg* in vsa_sdpa_stream_descriptor.hpp.
         constexpr auto gv_args = TensorAccessorArgs<
             counts_args.next_compile_time_args_offset(),
             counts_args.next_common_runtime_args_offset()>();
         constexpr uint32_t ring_crt = gv_args.next_common_runtime_args_offset();
-        const uint32_t gv_addr = get_common_arg_val<uint32_t>(ring_crt + 0);              // gathered K/V (2H heads)
-        const uint32_t ring_index = get_common_arg_val<uint32_t>(ring_crt + 1);           // this device's SP shard
-        const uint32_t blocks_per_shard = get_common_arg_val<uint32_t>(ring_crt + 2);     // T_local / block_size
-        const uint32_t v_local_head_stride = get_common_arg_val<uint32_t>(ring_crt + 3);  // tiles per head, local
-        const uint32_t v_head_offset = get_common_arg_val<uint32_t>(ring_crt + 4);        // V heads start here
-        // RingSDPAOpReceiver args (9 words) follow; they are re-parsed per pass through a copy of this index.
-        const uint32_t ring_rt_argi = ring_crt + 5;
+        const uint32_t gv_addr = get_common_arg_val<uint32_t>(ring_crt + 0);           // gathered flat K|V
+        const uint32_t ring_index = get_common_arg_val<uint32_t>(ring_crt + 1);        // this device's SP shard
+        const uint32_t blocks_per_shard = get_common_arg_val<uint32_t>(ring_crt + 2);  // T_local / block_size
+        const uint32_t kv_wt = get_common_arg_val<uint32_t>(ring_crt + 3);             // tiles per flat K|V row
+        const uint32_t dht = get_common_arg_val<uint32_t>(ring_crt + 4);               // d / 32
+        const uint32_t n_heads = get_common_arg_val<uint32_t>(ring_crt + 5);           // H
+        const uint32_t skt = get_common_arg_val<uint32_t>(ring_crt + 6);               // block_size / 32
+        const uint32_t poll_tpp = get_common_arg_val<uint32_t>(ring_crt + 7);          // tiles per fabric packet
+        const uint32_t poll_cps = get_common_arg_val<uint32_t>(ring_crt + 8);          // packets per count step
+        const uint32_t poll_G = get_common_arg_val<uint32_t>(ring_crt + 9);            // workers per direction
+        const uint32_t poll_table = ring_crt + 12;
+        // RingSDPAOpReceiver args (9 words) follow the poll table; re-parsed per pass through a copy of this index.
+        const uint32_t ring_rt_argi = ring_crt + 12 + 6 * poll_G;
         const auto gv = TensorAccessor(gv_args, gv_addr);
-        const uint32_t v_local_base = (v_head_offset + head) * v_local_head_stride;
-        const uint32_t v_gath_base = (v_head_offset + head) * v_head_stride;
+        const uint32_t k_col0 = head * dht;              // this head's K column tile
+        const uint32_t v_col0 = (n_heads + head) * dht;  // and V column tile
         const uint32_t ring_size = get_common_arg_val<uint32_t>(ring_rt_argi);
+        RingGate ring_gate;
+        ring_gate.init(
+            poll_table,
+            poll_G,
+            poll_tpp,
+            poll_cps,
+            kv_wt,
+            get_common_arg_val<uint32_t>(ring_crt + 10),
+            get_common_arg_val<uint32_t>(ring_crt + 11),
+            get_write_ptr(cb_order));  // the stream-order page is unused in ring mode: poll scratch
 #ifdef VSA_RING_DPRINT
         DPRINT(
-            "VSARING leader head{} crt{} gv_addr={} ring_index={} bps={} vstride={} voff={} | rx: ring={} idx={} "
-            "fwd={} bwd={} sem0={} sem1={} split={} sshard={} swait={}\n",
+            "VSARING leader head{} crt{} gv_addr={} ring_index={} bps={} wt={} dht={} H={} skt={} tpp={} cps={} G={} "
+            "ring={}\n",
             head,
             ring_crt,
             gv_addr,
             ring_index,
             blocks_per_shard,
-            v_local_head_stride,
-            v_head_offset,
-            get_common_arg_val<uint32_t>(ring_rt_argi + 0),
-            get_common_arg_val<uint32_t>(ring_rt_argi + 1),
-            get_common_arg_val<uint32_t>(ring_rt_argi + 2),
-            get_common_arg_val<uint32_t>(ring_rt_argi + 3),
-            get_common_arg_val<uint32_t>(ring_rt_argi + 4),
-            get_common_arg_val<uint32_t>(ring_rt_argi + 5),
-            get_common_arg_val<uint32_t>(ring_rt_argi + 6),
-            get_common_arg_val<uint32_t>(ring_rt_argi + 7),
-            get_common_arg_val<uint32_t>(ring_rt_argi + 8));
+            kv_wt,
+            dht,
+            n_heads,
+            skt,
+            poll_tpp,
+            poll_cps,
+            poll_G,
+            ring_size);
 #endif
 #endif
         pass_argi = argi;  // the leader's pass counts and row list follow its strips and worker coords
@@ -629,25 +752,31 @@ void kernel_main() {
                 const uint32_t slot = fetched % stream_depth;
                 experimental::set_read_trid(noc, (fetched % 8) + 1);
 #ifdef VSA_RING
-                if (bs[j] / blocks_per_shard == ring_index) {  // own shard: local tensor, local block id
-                    const uint32_t v_tile0 = v_local_base + (bs[j] - ring_index * blocks_per_shard) * v_tiles_per_block;
-                    for (uint32_t i = 0; i < v_tiles_per_block; ++i) {
+                // flat K|V: the block's Skt x DHt V tiles sit at (row0 + r) * Wt + v_col0 + c; the own shard is read
+                // from the local tensor (local rows), every other shard from the gathered buffer (global rows)
+                const bool own = bs[j] / blocks_per_shard == ring_index;
+                uint32_t page = (own ? bs[j] - ring_index * blocks_per_shard : bs[j]) * skt * kv_wt + v_col0;
+                for (uint32_t i = 0, c = 0; i < v_tiles_per_block; ++i) {
+                    if (own) {
                         noc.async_read(
                             v,
                             v_cb,
                             v_tile_bytes,
-                            {.page_id = v_tile0 + i},
+                            {.page_id = page},
                             {.offset_bytes = (slot * v_tiles_per_block + i) * v_tile_bytes});
-                    }
-                } else {  // remote shard: gathered buffer, global block id
-                    const uint32_t v_tile0 = v_gath_base + bs[j] * v_tiles_per_block;
-                    for (uint32_t i = 0; i < v_tiles_per_block; ++i) {
+                    } else {
                         noc.async_read(
                             gv,
                             v_cb,
                             v_tile_bytes,
-                            {.page_id = v_tile0 + i},
+                            {.page_id = page},
                             {.offset_bytes = (slot * v_tiles_per_block + i) * v_tile_bytes});
+                    }
+                    if (++c == dht) {  // next tile row of the block
+                        c = 0;
+                        page += kv_wt - dht + 1;
+                    } else {
+                        ++page;
                     }
                 }
 #else
@@ -731,9 +860,12 @@ void kernel_main() {
             };
 #ifdef VSA_RING
             {
-                // Program semaphores are re-initialized per launch and count arrivals monotonically, so a
-                // fresh receiver per pass gates pass 0 on the real arrivals and returns immediately on
-                // later passes (thresholds already met): only pass 0 overlaps the ring.
+                // Pass 0 streams the shards in ring-arrival order (own shard first, then the directions alternate
+                // as RingIdSequencer yields), one shard per direction at a time with their blocks interleaved
+                // across the all-gather workers' slice ranges in landing order, each remote block gated on the
+                // landed counts (RingGate). Later passes keep the order with the gate open (everything landed).
+                // Program semaphores are re-initialized per launch and count arrivals monotonically, so a fresh
+                // receiver per pass yields the same sequence every pass. Deterministic per (device, ring).
 #ifdef VSA_RING_WAIT_ALL  // triage knob (TT_VSA_RING_WAIT_ALL=1): land every shard before streaming
                 {
                     RingSDPAOpReceiver r0 = make_ring_receiver(ring_rt_argi);
@@ -743,25 +875,107 @@ void kernel_main() {
                 }
 #endif
                 RingSDPAOpReceiver rx = make_ring_receiver(ring_rt_argi);
-                for (uint32_t step = 0; step < ring_size; ++step) {
+                ring_gate.active = (pass == 0);
+#ifdef VSA_RING_GATE_OPEN  // timing probe (TT_VSA_RING_GATE_OPEN=1): no gating at all (results are garbage)
+                ring_gate.active = false;
+#endif
+                uint32_t step = 0;
+                // step 0: the own shard, nothing to wait for
+                {
+                    uint32_t d0 = 0, v0 = 0;
+                    const uint32_t sigma = rx.seq.get_next_ring_id([&](uint32_t d, uint32_t v) {
+                        d0 = d;
+                        v0 = v;
+                    });
+                    (void)d0;
+                    (void)v0;
+                    const uint32_t b0 = sigma * blocks_per_shard;
+                    for (uint32_t b = b0; b < b0 + blocks_per_shard; ++b) {
+                        stream_block(b);
+                    }
+                    ++step;
+                }
+                // block ranges per all-gather worker (by the worker carrying the block's first tile row); the
+                // ranges are identical for both directions (the all-gather splits tiles by global worker id)
+                uint32_t blo[kRingMaxPollWorkers], bhi[kRingMaxPollWorkers];
+                const uint32_t Gp = ring_gate.G;
+                for (uint32_t g = 0; g < Gp; ++g) {
+                    blo[g] = get_common_arg_val<uint32_t>(poll_table + 3 * g + 1) / (kv_wt * skt);
+                }
+                for (uint32_t g = 0; g < Gp; ++g) {
+                    bhi[g] = (g + 1 < Gp) ? blo[g + 1] : blocks_per_shard;
+                }
+                while (step < ring_size) {
                     WAYPOINT("LRNG");
-                    const uint32_t sigma = rx.get_next_ring_id_and_sync();
+                    // one shard from each direction (the sequencer alternates; the last round may have one)
+                    uint32_t sig[2], ag_dir[2], slice_k[2], sem_id[2], sem_val[2];
+                    uint32_t n = 0;
+                    for (; n < 2 && step < ring_size; ++n, ++step) {
+                        uint32_t d = 0, v = 0;
+                        sig[n] = rx.seq.get_next_ring_id([&](uint32_t dd, uint32_t vv) {
+                            d = dd;
+                            v = vv;
+                        });
+                        // sequencer dir 0 = shards from higher ring ids = all-gather direction 1 (its semaphore
+                        // also counts that chain's local pre-signal, hence val = k + 2); dir 1 = direction 0
+                        ag_dir[n] = 1 - d;
+                        slice_k[n] = (d == 0) ? v - 2 : v - 1;
+                        sem_id[n] = rx.signal_op_semaphore_ids[d];
+                        sem_val[n] = v;
+                    }
 #ifdef VSA_RING_DPRINT
                     DPRINT(
-                        "VSARING leader head{} pass{} step{} shard{} sem{}={} sem{}={}\n",
+                        "VSARING leader head{} pass{} step{} shards {} {} (n={}) sem{}={} sem{}={}\n",
                         head,
                         pass,
                         step,
-                        sigma,
+                        sig[0],
+                        n > 1 ? sig[1] : 0xFFFFu,
+                        n,
                         rx.signal_op_semaphore_ids[0],
                         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(rx.signal_op_semaphore_ids[0])),
                         rx.signal_op_semaphore_ids[1],
                         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(rx.signal_op_semaphore_ids[1])));
 #endif
-                    const uint32_t b0 = sigma * blocks_per_shard;
-                    for (uint32_t b = b0; b < b0 + blocks_per_shard; ++b) {
-                        stream_block(b);
+#ifdef VSA_RING_COARSE  // triage knob (TT_VSA_RING_COARSE=1): the per-shard gate, ascending blocks
+                    for (uint32_t x = 0; x < n; ++x) {
+                        if (ring_gate.active) {
+                            while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_id[x])) <
+                                   sem_val[x]) {
+                            }
+                        }
+                        const uint32_t b0 = sig[x] * blocks_per_shard;
+                        for (uint32_t b = b0; b < b0 + blocks_per_shard; ++b) {
+                            stream_block(b);
+                        }
                     }
+#else
+                    // landing order at RUN-block granularity: runs of consecutive blocks keep the adjacent-block
+                    // locality the engine's windows batch on (real selections list neighbouring blocks), the
+                    // round-robin over (shard, worker quarter) follows the arrival front
+#ifndef VSA_RING_RUN  // in-block (real selections): 1 -> 24.5 ms, 8 -> 23.8, 32 -> 23.7 (TT_VSA_RING_RUN tunes)
+#define VSA_RING_RUN 32
+#endif
+                    constexpr uint32_t kRun = VSA_RING_RUN;
+                    bool more = true;
+                    for (uint32_t i = 0; more; i += kRun) {
+                        more = false;
+                        for (uint32_t x = 0; x < n; ++x) {
+                            for (uint32_t g = 0; g < Gp; ++g) {
+                                for (uint32_t j = 0; j < kRun; ++j) {
+                                    const uint32_t bl = blo[g] + i + j;
+                                    if (bl >= bhi[g]) {
+                                        break;
+                                    }
+                                    more = true;
+                                    ring_gate.begin_shard(ag_dir[x], slice_k[x], sem_id[x], sem_val[x]);
+                                    ring_gate.wait_block(bl, skt, dht, k_col0, v_col0);
+                                    stream_block(sig[x] * blocks_per_shard + bl);
+                                }
+                            }
+                        }
+                    }
+#endif
                 }
             }
 #else

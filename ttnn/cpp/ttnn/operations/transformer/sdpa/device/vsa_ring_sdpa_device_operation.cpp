@@ -46,14 +46,17 @@ void validate_ring(const VsaRingSdpaParams& attrs, const VsaRingSdpaInputs& t) {
     const auto gs = gkv.logical_shape();
     TT_FATAL(qs.rank() == 4 && ks.rank() == 4 && gs.rank() == 4, "vsa_ring_sdpa: q, kv and gathered kv must be rank 4");
     const uint32_t H = qs[1];
+    const uint32_t d = qs[3];
+    // Flat K|V: K of head h at columns [h*d, (h+1)*d), V at (H+h)*d. Token-major tiles let the fused all-gather land
+    // every head's blocks progressively (VSA_RING_SDPA_SPEC.md section 13).
     TT_FATAL(
-        ks[0] == 1 && ks[1] == 2 * H && ks[3] == qs[3],
-        "vsa_ring_sdpa: kv must be [1, 2H, T_local, d] (got {} for q {})",
+        ks[0] == 1 && ks[1] == 1 && ks[3] == 2 * H * d,
+        "vsa_ring_sdpa: kv must be flat [1, 1, T_local, 2*H*d] (got {} for q {})",
         ks,
         qs);
     TT_FATAL(
-        gs[0] == 1 && gs[1] == 2 * H && gs[3] == qs[3],
-        "vsa_ring_sdpa: gathered kv must be [1, 2H, T, d] (got {})",
+        gs[0] == 1 && gs[1] == 1 && gs[3] == 2 * H * d,
+        "vsa_ring_sdpa: gathered kv must be flat [1, 1, T, 2*H*d] (got {})",
         gs);
     TT_FATAL(kv.dtype() == gkv.dtype(), "vsa_ring_sdpa: local and gathered K/V dtypes must match");
     TT_FATAL(attrs.ag.ring_size >= 2, "vsa_ring_sdpa: ring_size must be >= 2 (got {})", attrs.ag.ring_size);

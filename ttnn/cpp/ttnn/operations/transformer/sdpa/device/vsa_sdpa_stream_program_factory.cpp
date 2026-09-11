@@ -28,6 +28,8 @@
 #include <map>
 #include <set>
 #include <string>
+
+#include <fmt/format.h>
 #include <variant>
 #include <vector>
 
@@ -242,12 +244,15 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
     uint32_t rmax = kRMax;
     uint32_t stream_depth = kStreamDepth;
     if (ring_mode) {
-        // Ring mode: only pass 0 overlaps the ring, so fewer, larger passes hide more of the all-gather. Measured
-        // at 15 s on the mesh (2 workers/link): 3 passes (10/18) 24.3 ms, 2 passes (15/12) 22.0, (15/14) 21.7 vs
-        // 23.3 + 0.6 (concat) for the two-op path. The plain op also runs ~0.6 ms faster at 15/14 but its L1
-        // budget in the traced block is tighter (VSA_STREAM_DESIGN.md), so the default changes here only.
-        rmax = 15;
-        stream_depth = 14;
+        // Ring mode: only pass 0 overlaps the ring, so pass 0 must be at least as long as the gather. The dense
+        // (exempt-token) rows go into pass 0 (see the dealer: ~7 sparse rows of work for one L1 slot), which lifts
+        // pass 0 past the gather at 18 rows; the freed L1 buys stream depth, which real (spatially clustered)
+        // selections batch on. Measured in the 15 s block (tracy, slowest device / median, per-block landing gate,
+        // runs of 32): 20/8 23.7 / 23.0 ms, 18/10 23.5 / 22.3, 16/12 (3 passes) 24.5 / 23.4; the two-op path's
+        // vsa_sdpa alone is 18.3 there plus 8.7 of K/V gathers. Rows cost ~45 KB of L1, slots ~43 KB; 18/12 and
+        // 20/10 do not fit next to the block's live L1 buffers.
+        rmax = 18;
+        stream_depth = 10;
     }
     if (attrs.distributed) {
         // 2 x 4 owned (double-buffered slice) + 12 gather slots; the 5 fewer resident rows pay for the
@@ -261,7 +266,8 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
     if (const char* e = std::getenv("TT_VSA_DEPTH"); e != nullptr && e[0] != '\0') {
         stream_depth = static_cast<uint32_t>(std::atoi(e));
     }
-    TT_FATAL(rmax >= 1 && rmax <= 16 && stream_depth >= 8 && stream_depth % 2 == 0, "bad rmax/depth");
+    // Kernel row arrays (pending/listing/own_np, the dirty mask, the 8-bit row_slot) hold 32 resident rows.
+    TT_FATAL(rmax >= 1 && rmax <= 32 && stream_depth >= 8 && stream_depth % 2 == 0, "bad rmax/depth");
     const uint32_t log_depth = stream_depth + 8;  // arrival-log ring must exceed the slot ring + sentinel slack
     const bool dist = attrs.distributed;
     // widest visit (blocks) = qk region width; the streaming kernel's windows are half the ring, the
@@ -337,7 +343,8 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
     cb(tile_bytes, rmax * out_tiles_per_row, bf);              // cb_o_res
     cb(tile_bytes, rmax * 2 * Sqt, bf);                        // cb_max_res
     // cb_sum_res: legacy slot (the row sum is accumulated on the writer core, see vsa_sum_service.hpp)
-    cb(tile_bytes, 1, bf);  // cb_sum_res (placeholder)
+    // (the compute kernel keeps its threshold-key cache here: Sqt x 64 B per resident row -> two tiles past 16 rows)
+    cb(tile_bytes, rmax > 16 ? 2 : 1, bf);  // cb_sum_res
     // corr slots are indexed by the visit's position in its compute chunk, and a chunk can hold up
     // to half_slots single-block visits.
     cb(tile_bytes, rmax * Sqt, bf);                   // cb_corr: per-row-slot candidate max tile (corr after a move)
@@ -371,7 +378,7 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
     const uint32_t cb_order = cb(order_bytes, 1, bf);  // cb_order
     // exact row-sum service (compute -> writer): headers, partial/corr tiles, sums back, int64 accumulators
     const uint32_t cb_shdr = cb(16, 64, bf);                               // cb_shdr
-    const uint32_t cb_stiles = cb(tile_bytes, 16, bf);                     // cb_stiles
+    const uint32_t cb_stiles = cb(tile_bytes, 14, bf);                     // cb_stiles (14: fits 22 resident rows)
     const uint32_t cb_sumback = cb(tile_bytes, 2 * Sqt, bf);               // cb_sumback
     const uint32_t cb_sacc = cb(((rmax * 64 * 8 + 31) / 32) * 32, 1, bf);  // cb_sacc: int64[rmax][64]
 
@@ -502,6 +509,18 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
         if (const char* e = std::getenv("TT_VSA_RING_WAIT_ALL"); e != nullptr && e[0] == '1') {
             probe_defines["VSA_RING_WAIT_ALL"] = "1";  // triage: land every shard before streaming (no overlap)
         }
+        if (const char* e = std::getenv("TT_VSA_RING_COARSE"); e != nullptr && e[0] == '1') {
+            probe_defines["VSA_RING_COARSE"] = "1";  // A/B: gate per shard (the fused signal) instead of per block
+        }
+        if (const char* e = std::getenv("TT_VSA_RING_GATE_SLICE"); e != nullptr && e[0] == '1') {
+            probe_defines["VSA_RING_GATE_SLICE"] = "1";  // triage: fine block order, per-shard gate
+        }
+        if (const char* e = std::getenv("TT_VSA_RING_RUN"); e != nullptr && e[0] != '\0') {
+            probe_defines["VSA_RING_RUN"] = e;  // tuning: consecutive blocks per (shard, worker quarter) turn
+        }
+        if (const char* e = std::getenv("TT_VSA_RING_GATE_OPEN"); e != nullptr && e[0] == '1') {
+            probe_defines["VSA_RING_GATE_OPEN"] = "1";  // timing probe: no gate (compute under the gather's contention)
+        }
     }
     auto leader_defines = probe_defines;
     leader_defines["VSA_IS_LEADER"] = "1";
@@ -575,22 +594,27 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
     // push_ring_sdpa_fused_op_rt_args emits -- the dense ring's exact protocol, nothing re-derived.
     std::optional<RingSDPAFusedOpSignaler> ring_signaler;
     std::vector<uint32_t> ring_receiver_rt;
-    uint32_t blocks_per_shard = 0, v_local_head_stride = 0;  // local K and V share the head stride
+    uint32_t blocks_per_shard = 0;
     if (ring_mode) {
         blocks_per_shard = T_local / block_size;
-        v_local_head_stride = (T_local / tt::constants::TILE_HEIGHT) * vDHt;
         TT_FATAL(
             blocks_per_shard * ring->ring_size == n_kv_blocks,
             "vsa_ring_sdpa: gathered blocks ({}) != ring_size ({}) x local blocks ({})",
             n_kv_blocks,
             ring->ring_size,
             blocks_per_shard);
+        // Flat K|V: [1, 1, T, 2*H*d], K of head h at columns [h*d, (h+1)*d), V at (H+h)*d. Its tiles are token-major,
+        // so the all-gather lands every head's blocks progressively (VSA_RING_SDPA_SPEC.md section 13).
+        const auto ks = t.k.logical_shape();
+        const auto gs = ring->gathered_kv->logical_shape();
         TT_FATAL(
-            ring->gathered_kv->logical_shape()[1] == H + ring->v_head_offset,
-            "vsa_ring_sdpa: gathered K/V heads ({}) must be H ({}) + v_head_offset ({})",
-            ring->gathered_kv->logical_shape()[1],
+            ks[1] == 1 && ks[3] == 2 * H * d && gs[1] == 1 && gs[3] == 2 * H * d,
+            "vsa_ring_sdpa: local ({}) and gathered ({}) K/V must be flat [1, 1, T, 2*H*d] (H {}, d {})",
+            ks,
+            gs,
             H,
-            ring->v_head_offset);
+            d);
+        TT_FATAL(ring->workers_per_direction >= 1, "vsa_ring_sdpa: workers_per_direction must be >= 1");
         ring_signaler.emplace();
         ring_signaler->init_all_gather(
             ring->ring_size, ring->device_index, ring->forward_writes_expected, ring->backward_writes_expected);
@@ -601,7 +625,7 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
                 ring_signaler->fused_op_receiver_cores_noc.push_back(device->worker_core_from_logical_core(lcore(i)));
             }
         }
-        for (uint32_t d = 0; d < 2; ++d) {
+        for (uint32_t d2 = 0; d2 < 2; ++d2) {
             const uint32_t id = static_cast<uint32_t>(desc.semaphores.size());
             desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
                 .id = id, .core_type = tt::CoreType::WORKER, .core_ranges = core_grid, .initial_value = 0});
@@ -616,14 +640,27 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
         ring_signaler->push_ring_sdpa_fused_op_rt_args(ring_receiver_rt);
         ring->receiver_cores_noc = ring_signaler->fused_op_receiver_cores_noc;
         ring->receiver_semaphores = ring_signaler->fused_op_receiver_signal_semaphores;
-        // Ring constants as COMMON runtime args (kRingCommonArg* layout), after the accessor common args.
-        // The gathered address is a raw uint32 here: the ring factory re-applies it on cache hits.
-        for (uint32_t w :
-             {static_cast<uint32_t>(ring->gathered_kv->buffer()->address()),
-              ring->device_index,
-              blocks_per_shard,
-              v_local_head_stride,
-              ring->v_head_offset}) {
+        // Ring constants as COMMON runtime args (kRingCommonArg* layout), after the accessor common args. The
+        // gathered address is a raw uint32 here (re-applied on cache hits); the packet geometry, the workers'
+        // out_ready_sem addresses and the poll table are zeros the ring factory fills once the all-gather's
+        // cores are placed.
+        const uint32_t G = ring->workers_per_direction;
+        std::vector<uint32_t> ring_common = {
+            static_cast<uint32_t>(ring->gathered_kv->buffer()->address()),
+            ring->device_index,
+            blocks_per_shard,
+            2 * H * DHt,
+            DHt,
+            H,
+            Skt,
+            0,
+            0,
+            G,
+            0,
+            0};
+        TT_FATAL(ring_common.size() == kRingCommonArgPollTable, "vsa_ring_sdpa: ring common-arg layout drifted");
+        ring_common.resize(kRingCommonArgPollTable + 2 * G * kRingPollWordsPerWorker, 0);
+        for (uint32_t w : ring_common) {
             reader_crt.push_back(w);
             writer_crt.push_back(w);
         }
@@ -732,27 +769,125 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
             }
         }
         (void)n_sparse;
+        // Ring mode (VSA_RING_SDPA_SPEC.md section 14): pass 0 is the only pass that overlaps the all-gather and
+        // its L1 cap (rmax rows) leaves it shorter than the gather, while a dense row costs ~7 sparse rows for one
+        // L1 slot. So a dense row goes into the least-loaded PASS-0 bin (evicting one of its sparse rows into the
+        // least-loaded pass-1 bin when full): pass 0 grows past the gather on those consumers and every consumer's
+        // pass 1 shrinks. Pass 1 is then balanced by cost across consumers (the lockstep pass runs at its slowest
+        // core). TT_VSA_DEAL_DENSE_PASS1=1 keeps the plain op's placement (A/B).
+        bool dense_to_pass0 = ring_mode && d.n_passes >= 2;
+        if (const char* e = std::getenv("TT_VSA_DEAL_DENSE_PASS1"); e != nullptr && e[0] == '1') {
+            dense_to_pass0 = false;
+        }
+        // least-loaded bin of passes [p0, p1) (need_room: with a free L1 row slot)
+        const auto least_loaded = [&](uint32_t p0, uint32_t p1, bool need_room) {
+            uint32_t best = UINT32_MAX;
+            for (uint32_t pass = p0; pass < p1; ++pass) {
+                for (uint32_t c = 0; c < n_consumers; ++c) {
+                    const uint32_t b = pass * n_consumers + c;
+                    if (need_room && d.bins[pass][c].size() >= rmax) {
+                        continue;
+                    }
+                    if (best == UINT32_MAX || load[b] < load[best]) {
+                        best = b;
+                    }
+                }
+            }
+            return best;
+        };
         for (uint32_t r = 0; r < n_q_tiles; ++r) {
             if (!dense[r]) {
                 continue;
             }
             uint32_t best = UINT32_MAX;
-            for (uint32_t b = 0; b < load.size(); ++b) {
-                if (d.bins[b / n_consumers][b % n_consumers].size() >= rmax) {
-                    continue;
+            if (dense_to_pass0) {
+                best = least_loaded(0, 1, /*need_room=*/false);
+                auto& bin0 = d.bins[0][best % n_consumers];
+                if (bin0.size() >= rmax) {  // evict this bin's last sparse row into the lightest later bin
+                    uint32_t s = static_cast<uint32_t>(bin0.size());
+                    while (s > 0 && dense[bin0[s - 1]]) {
+                        --s;
+                    }
+                    TT_FATAL(s > 0, "vsa_sdpa dealing: pass-0 bin holds only dense rows");
+                    const uint32_t evicted = bin0[s - 1];
+                    bin0.erase(bin0.begin() + (s - 1));
+                    load[best] -= sparse_cost;
+                    const uint32_t to = least_loaded(1, d.n_passes, /*need_room=*/true);
+                    TT_FATAL(to != UINT32_MAX, "vsa_sdpa dealing: no room in the later passes for an evicted row");
+                    d.bins[to / n_consumers][to % n_consumers].push_back(evicted);
+                    load[to] += sparse_cost;
                 }
-                if (best == UINT32_MAX || load[b] < load[best]) {
-                    best = b;
+            } else {
+                for (uint32_t b = 0; b < load.size(); ++b) {
+                    if (d.bins[b / n_consumers][b % n_consumers].size() >= rmax) {
+                        continue;
+                    }
+                    if (best == UINT32_MAX || load[b] < load[best]) {
+                        best = b;
+                    }
                 }
             }
             TT_FATAL(best != UINT32_MAX, "vsa_sdpa dealing: no room for dense row {}", r);
             d.bins[best / n_consumers][best % n_consumers].push_back(r);
             load[best] += 7ull * sparse_cost;
         }
+        if (dense_to_pass0) {  // balance every later pass by cost: sparse rows from its heaviest bin to its lightest
+            for (uint32_t pass = 1; pass < d.n_passes; ++pass) {
+                for (uint32_t iter = 0; iter < 4 * n_q_tiles; ++iter) {
+                    uint32_t hi = pass * n_consumers, lo = pass * n_consumers;
+                    for (uint32_t c = 0; c < n_consumers; ++c) {
+                        const uint32_t b = pass * n_consumers + c;
+                        if (load[b] > load[hi]) {
+                            hi = b;
+                        }
+                        if (load[b] < load[lo]) {
+                            lo = b;
+                        }
+                    }
+                    if (load[hi] - load[lo] <= sparse_cost || d.bins[pass][lo % n_consumers].size() >= rmax) {
+                        break;
+                    }
+                    auto& src = d.bins[pass][hi % n_consumers];
+                    uint32_t s = static_cast<uint32_t>(src.size());
+                    while (s > 0 && dense[src[s - 1]]) {
+                        --s;
+                    }
+                    if (s == 0) {
+                        break;  // the heaviest bin is all dense rows: nothing movable
+                    }
+                    const uint32_t row = src[s - 1];
+                    src.erase(src.begin() + (s - 1));
+                    d.bins[pass][lo % n_consumers].push_back(row);
+                    load[hi] -= sparse_cost;
+                    load[lo] += sparse_cost;
+                }
+            }
+        }
         for (auto& pass : d.bins) {
             for (auto& bin : pass) {
                 std::sort(bin.begin(), bin.end());
             }
+        }
+        if (const char* e = std::getenv("TT_VSA_DEAL_LOG"); e != nullptr && e[0] == '1') {  // triage: the layout
+            std::string msg;
+            for (uint32_t p = 0; p < d.n_passes; ++p) {
+                msg += fmt::format(" pass{}:", p);
+                for (const auto& bin : d.bins[p]) {
+                    uint32_t nd = 0;
+                    for (uint32_t r : bin) {
+                        nd += dense[r] ? 1u : 0u;
+                    }
+                    msg += fmt::format(" {}+{}d", bin.size() - nd, nd);
+                }
+            }
+            log_info(
+                tt::LogOp,
+                "vsa_sdpa dealing: consumers {} q_tiles {} dense {} rmax {} ->{}",
+                n_consumers,
+                n_q_tiles,
+                n_q_tiles - n_sparse,
+                rmax,
+                msg);
         }
         return stream_deal.emplace(n_consumers, std::move(d)).first->second;
     };

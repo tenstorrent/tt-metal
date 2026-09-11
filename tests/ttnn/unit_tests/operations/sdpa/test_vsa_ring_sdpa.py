@@ -111,24 +111,39 @@ def _run(
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
     )
     tt_q = to_dev(q, shard_qkv, ttnn.TILE_LAYOUT, ttnn.bfloat16)
-    # the ring op takes each device's K/V concatenated on the head dim (K heads, then V): interleave per TP shard
-    # so that sharding dim 1 across the TP devices hands every device [k_local, v_local]
+
+    # the ring op takes each device's K/V as one FLAT tensor [1, 1, T_local, 2*H_local*d] (K of head h at columns
+    # [h*d, (h+1)*d), V at (H_local+h)*d): build it per TP shard so that sharding dim 3 across the TP devices hands
+    # every device its own [k_local | v_local]
+    def flat(x):  # [1, Hl, T, d] -> [1, 1, T, Hl*d]
+        return x.permute(0, 2, 1, 3).reshape(1, 1, x.shape[2], x.shape[1] * x.shape[3])
+
     kv = torch.cat(
         [
-            torch.cat([k[:, t * heads_local : (t + 1) * heads_local], v[:, t * heads_local : (t + 1) * heads_local]], 1)
+            torch.cat(
+                [
+                    flat(k[:, t * heads_local : (t + 1) * heads_local]),
+                    flat(v[:, t * heads_local : (t + 1) * heads_local]),
+                ],
+                dim=3,
+            )
             for t in range(tp)
         ],
-        dim=1,
+        dim=3,
     )
-    tt_kv = to_dev(kv, shard_qkv, ttnn.TILE_LAYOUT, ttnn.bfloat16)
+    shard_kv = [None, None]
+    shard_kv[tp_axis] = 3
+    shard_kv[sp_axis] = 2
+    tt_kv = to_dev(kv, shard_kv, ttnn.TILE_LAYOUT, ttnn.bfloat16)
     tt_idx = to_dev(idx.to(torch.uint32).view(torch.int32), shard_qkv, ttnn.ROW_MAJOR_LAYOUT, ttnn.uint32)
     replicate = [None, None]
     tt_counts = to_dev(counts, replicate, ttnn.ROW_MAJOR_LAYOUT, ttnn.uint32)
     tt_mask = to_dev(mask.to(torch.int32).reshape(1, 1, 1, dense_words), replicate, ttnn.ROW_MAJOR_LAYOUT, ttnn.uint32)
-    # gathered K/V buffer: [1, 2*heads_local, t_total, d] per device (heads sharded, sequence replicated)
+    shard_gkv = [None, None]
+    shard_gkv[tp_axis] = 3  # gathered flat K|V: [1, 1, t_total, 2*H_local*d] per device (sequence replicated)
     tt_gkv = to_dev(
-        torch.zeros(1, 2 * heads_total, t_total, DIM, dtype=torch.bfloat16),
-        shard_heads,
+        torch.zeros(1, 1, t_total, 2 * heads_total * DIM, dtype=torch.bfloat16),
+        shard_gkv,
         ttnn.TILE_LAYOUT,
         ttnn.bfloat16,
     )
@@ -172,6 +187,13 @@ def _run(
     out_b = ring(sem_sets[1])  # program-cache hit with the other semaphore set
     ttnn.synchronize_device(mesh_device)
     out_b_t = ttnn.to_torch(out_b, mesh_composer=compose).float()
+    if not torch.equal(out_a_t, out_b_t):  # triage detail: where the two runs differ (per head / q-row of 64)
+        diff = (out_a_t != out_b_t).any(dim=-1)  # [1, H_total, S_total]
+        rows = diff.reshape(diff.shape[0], diff.shape[1], -1, 64).any(dim=-1)
+        for h in range(rows.shape[1]):
+            bad = rows[0, h].nonzero().flatten().tolist()
+            if bad:
+                logger.error(f"nondeterministic head {h}: q-rows {bad[:40]}{' ...' if len(bad) > 40 else ''}")
     assert torch.equal(out_a_t, out_b_t), "vsa_ring_sdpa is not deterministic across runs / semaphore sets"
 
     # (b) plain vsa_sdpa on the full K/V, same indices: identical math up to visit order

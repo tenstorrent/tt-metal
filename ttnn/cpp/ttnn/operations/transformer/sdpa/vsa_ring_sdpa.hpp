@@ -17,14 +17,16 @@ namespace ttnn::transformer {
 
 // VSA fine-stage attention fused with the SP-ring all-gather of K/V (Blackhole mesh, non-causal).
 // Equivalent to vsa_sdpa(q, all_gather(k, dim=2), all_gather(v, dim=2), ...) in raw-selection streaming
-// mode, up to bf16 rounding order: the concatenated K/V shard is forwarded around the ring by the
+// mode, up to bf16 rounding order: the flat K|V shard is forwarded around the ring by the
 // multi-worker all-gather's kernels while the attention consumes the shards already landed. One program per
 // device; no sub-devices. See VSA_RING_SDPA_SPEC.md.
 //   q                            [1, H, S_local, d]              bf16 TILE, this device's query rows
-//   kv                           [1, 2H, T_local, d]             bf16 TILE, this device's K/V shard, K heads then V
+//   kv                           [1, 1, T_local, 2*H*d]          bf16 TILE, this device's flat K|V shard: K of head h
+//                                                                at columns [h*d, (h+1)*d), V at (H+h)*d (token-major
+//                                                                tiles, so the gather lands every head progressively)
 //   indices                      [1, H, S_local/64, W]           uint32 ROW_MAJOR global (padded-per-shard) block ids
 //   block_counts                 [1, 1, 1, Wc]                   uint32 ROW_MAJOR, global
-//   persistent_output_buffer_kv  [1, 2H, T_local*ring_size, d]   the all-gather ping-pong buffer for kv
+//   persistent_output_buffer_kv  [1, 1, T_local*ring_size, 2*H*d] the all-gather ping-pong buffer for kv
 // multi_device_global_semaphore: two GlobalSemaphores [backward, forward] for the all-gather.
 // num_workers_per_link: all-gather workers per direction per link; the senders (2*links*(workers+1) cores)
 // fill the compute grid's first rows, the VSA engine the rest.
