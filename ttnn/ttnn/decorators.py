@@ -89,6 +89,9 @@ def _copy_golden_comparison_config(source, destination):
     comparison_config = getattr(source, "_ttnn_comparison_config", None)
     if comparison_config is not None:
         destination._ttnn_comparison_config = comparison_config
+    mesh_coord = getattr(source, "_ttnn_mesh_coord", None)
+    if mesh_coord is not None:
+        destination._ttnn_mesh_coord = mesh_coord
     return destination
 
 
@@ -117,21 +120,6 @@ def compare_tensors_using_pcc(
 
     if golden_outputs is None or outputs is None:
         return list(_structured_output_pairs(golden_outputs, outputs))
-
-    if isinstance(golden_outputs, ttnn.DistributedGolden):
-        comparison_records = []
-        for golden_shard, output_shard in _distributed_comparison_pairs(golden_outputs, outputs):
-            comparison_records.extend(
-                compare_tensors_using_pcc(
-                    python_fully_qualified_name,
-                    golden_shard,
-                    output_shard,
-                    desired_pcc,
-                    level,
-                    fail_on_bad_comparison,
-                )
-            )
-        return comparison_records
 
     if isinstance(golden_outputs, numbers.Number) or isinstance(outputs, numbers.Number):
         if not isinstance(golden_outputs, numbers.Number) or not isinstance(outputs, numbers.Number):
@@ -254,18 +242,15 @@ def compare_tensors_using_pcc(
     else:
         matches, actual_pcc = comp_pcc(comparison_golden, comparison_output, desired_pcc)
 
-    mesh_coord = getattr(output, "_ttnn_mesh_coord", None)
     comparison_record = {
         "tensor_id": int(output.tensor_id),
         "golden_tensor_id": int(golden_output.tensor_id),
-        "mesh_coord": mesh_coord,
         "matches": bool(matches),
         "desired_pcc": float(desired_pcc),
         "actual_pcc": float(actual_pcc),
     }
     if not matches:
-        mesh_coord_message = f" at mesh coordinate {mesh_coord}" if mesh_coord is not None else ""
-        error_message = f"{python_fully_qualified_name}: Comparing output tensor 0{mesh_coord_message} against CPU {level} failed: pcc is {actual_pcc} but should be >={desired_pcc}"
+        error_message = f"{python_fully_qualified_name}: Comparing output tensor 0 against CPU {level} failed: pcc is {actual_pcc} but should be >={desired_pcc}"
         if fail_on_bad_comparison:
             raise RuntimeError(error_message)
         logger.error(error_message)
@@ -378,11 +363,6 @@ def get_tensors(object_value, tensor_type):
     tensors = []
     if isinstance(object_value, tensor_type):
         tensors.append(object_value)
-    elif isinstance(object_value, ttnn.DistributedGolden):
-        if object_value.global_value is not None:
-            tensors += get_tensors(object_value.global_value, tensor_type)
-        if object_value.shards is not None:
-            tensors += get_tensors(object_value.shards, tensor_type)
     elif isinstance(object_value, (list, tuple)):
         for element in object_value:
             tensors += get_tensors(element, tensor_type)
@@ -485,12 +465,6 @@ def set_tensor_id(tensor, force=False):
         if not force and hasattr(tensor, "tensor_id") and tensor.tensor_id is not None:
             return
         tensor.tensor_id = ttnn._ttnn.fetch_and_increment_tensor_id()
-    elif isinstance(tensor, ttnn.DistributedGolden):
-        if tensor.global_value is not None:
-            set_tensor_id(tensor.global_value, force)
-        if tensor.shards is not None:
-            for shard in tensor.shards.values():
-                set_tensor_id(shard, force)
     elif isinstance(tensor, (list, tuple)):
         for element in tensor:
             set_tensor_id(element, force)
@@ -511,74 +485,14 @@ def get_output_tensor_ids(output):
     return ids
 
 
-def _convert_ttnn_to_torch_for_comparison(tensor):
+def _convert_ttnn_to_torch_for_comparison(tensor, **kwargs):
     if tensor.dtype == ttnn.DataType.FP8_E4M3:
         # Torch 2.7 cannot import FP8 DLPack tensors; compare through host FLOAT32 instead.
         # This matches the FP8 golden's dequantized torch.float32 representation.
         if ttnn.is_tensor_storage_on_device(tensor):
             tensor = ttnn.from_device(tensor)
         tensor = ttnn.to_dtype(tensor, ttnn.float32)
-    return ttnn.to_torch(tensor)
-
-
-def distributed_golden_for_comparison(tensor, golden_value=None):
-    """Represent a mesh tensor as a global value plus coordinate-keyed Torch shards."""
-
-    try:
-        device_tensors = list(ttnn.get_device_tensors(tensor))
-        topology = tensor.tensor_topology()
-    except (RuntimeError, TypeError) as error:
-        raise ValueError("Distributed golden conversion requires a tensor with mesh topology") from error
-
-    if not device_tensors:
-        raise ValueError("Distributed golden conversion requires at least one mesh shard")
-    topology = ttnn.TensorTopologySnapshot.from_topology(topology)
-    mesh_coords = ttnn.mesh_coords_for_shards(topology, len(device_tensors), tensor.device())
-    shard_shapes_by_mesh_coord = {
-        mesh_coord: tuple(int(dimension) for dimension in device_tensor.shape)
-        for mesh_coord, device_tensor in zip(mesh_coords, device_tensors)
-    }
-
-    if isinstance(golden_value, ttnn.DistributedGolden):
-        return golden_value
-    if golden_value is not None:
-        shards = ttnn.decompose_mesh_value(
-            golden_value,
-            topology=topology,
-            shard_shapes_by_mesh_coord=shard_shapes_by_mesh_coord,
-        )
-        return ttnn.DistributedGolden(
-            topology=topology,
-            global_value=golden_value,
-            shards=shards,
-            compare_coords=frozenset(mesh_coords),
-        )
-
-    shards = {
-        mesh_coord: _convert_ttnn_to_torch_for_comparison(device_tensor)
-        for mesh_coord, device_tensor in zip(mesh_coords, device_tensors)
-    }
-    try:
-        global_value = ttnn.compose_mesh_value(shards_by_mesh_coord=shards, topology=topology)
-    except ttnn.MeshValueIncompleteError:
-        global_value = None
-    return ttnn.DistributedGolden(
-        topology=topology,
-        global_value=global_value,
-        shards=shards,
-        compare_coords=frozenset(mesh_coords),
-    )
-
-
-def _distributed_golden_global_value(distributed_golden):
-    if distributed_golden.global_value is not None:
-        return distributed_golden.global_value
-    if distributed_golden.shards is None:
-        raise ValueError("Distributed golden does not contain a global value or shards")
-    return ttnn.compose_mesh_value(
-        shards_by_mesh_coord=distributed_golden.shards,
-        topology=distributed_golden.topology,
-    )
+    return ttnn.to_torch(tensor, **kwargs)
 
 
 def to_torch_for_comparison(tensor, golden_tensor=None):
@@ -590,60 +504,125 @@ def to_torch_for_comparison(tensor, golden_tensor=None):
     if not isinstance(tensor, ttnn.Tensor):
         raise RuntimeError(f"Unsupported tensor type for comparison: {type(tensor)}")
 
-    topology = ttnn.TensorTopologySnapshot.from_topology(tensor.tensor_topology())
-    if math.prod(topology.distribution_shape) == 1:
-        return _convert_ttnn_to_torch_for_comparison(tensor)
-    return _distributed_golden_global_value(distributed_golden_for_comparison(tensor))
+    mesh_coord = getattr(golden_tensor, "_ttnn_mesh_coord", None)
+    if mesh_coord is not None:
+        device_tensors = list(ttnn.get_device_tensors(tensor))
+        mesh_coords = list(tensor.tensor_topology().mesh_coords())
+        if len(mesh_coords) != len(device_tensors):
+            raise ValueError(
+                f"Cannot map {len(device_tensors)} mesh shards to {len(mesh_coords)} tensor topology coordinates"
+            )
+        requested_coord = tuple(int(value) for value in mesh_coord)
+        for tensor_coord, device_tensor in zip(mesh_coords, device_tensors):
+            if tuple(int(value) for value in tensor_coord) == requested_coord:
+                return _convert_ttnn_to_torch_for_comparison(device_tensor)
+        raise ValueError(f"Runtime output has no shard at mesh coordinate {requested_coord}")
 
+    try:
+        topology = tensor.tensor_topology()
+        placements = list(topology.placements())
+        distribution_shape = [int(dim) for dim in list(topology.distribution_shape())]
+    except Exception:
+        placements = []
+        distribution_shape = []
 
-def _distributed_comparison_pairs(golden, output):
-    import torch
+    def get_shape(value):
+        try:
+            return tuple(int(dim) for dim in value.shape)
+        except Exception:
+            return None
 
-    if not isinstance(output, ttnn.Tensor):
-        if golden.shards is not None or golden.compare_coords is not None:
-            raise TypeError("Per-coordinate distributed comparison requires a TTNN mesh tensor output")
-        if not isinstance(output, torch.Tensor):
-            raise TypeError(f"Expected a tensor output for DistributedGolden, got {type(output)}")
-        return [(_distributed_golden_global_value(golden), output)]
+    def compose_device_tensors():
+        try:
+            device_tensors = ttnn.get_device_tensors(tensor)
+        except Exception:
+            return None
 
-    device_tensors = list(ttnn.get_device_tensors(output))
-    output_topology = output.tensor_topology()
-    output_coords = ttnn.mesh_coords_for_shards(output_topology, len(device_tensors), output.device())
-    actual_shards_by_key = {
-        tuple(int(value) for value in mesh_coord): _convert_ttnn_to_torch_for_comparison(device_tensor)
-        for mesh_coord, device_tensor in zip(output_coords, device_tensors)
-    }
-    shard_shapes = {
-        mesh_coord: tuple(actual_shards_by_key[tuple(int(value) for value in mesh_coord)].shape)
-        for mesh_coord in golden.topology.mesh_coords
-        if tuple(int(value) for value in mesh_coord) in actual_shards_by_key
-    }
-    expected_shards = golden.shards
-    if expected_shards is None:
-        expected_shards = ttnn.decompose_mesh_value(
-            golden.global_value,
-            topology=golden.topology,
-            shard_shapes_by_mesh_coord=shard_shapes,
-        )
+        if not device_tensors:
+            return None
 
-    compare_coords_are_explicit = golden.compare_coords is not None
-    compare_coords = golden.compare_coords if compare_coords_are_explicit else frozenset(expected_shards)
-    pairs = []
-    for mesh_coord in golden.topology.mesh_coords:
-        if mesh_coord not in compare_coords:
-            continue
-        mesh_coord_key = tuple(int(value) for value in mesh_coord)
-        if mesh_coord not in expected_shards:
-            raise ValueError(f"Distributed golden has no shard for comparison coordinate {mesh_coord_key}")
-        if mesh_coord_key not in actual_shards_by_key:
-            if compare_coords_are_explicit:
-                raise ValueError(f"Runtime output has no shard for comparison coordinate {mesh_coord_key}")
-            continue
-        actual_shard = actual_shards_by_key[mesh_coord_key]
-        actual_shard.tensor_id = output.tensor_id
-        actual_shard._ttnn_mesh_coord = mesh_coord_key
-        pairs.append((expected_shards[mesh_coord], actual_shard))
-    return pairs
+        torch_shards = [_convert_ttnn_to_torch_for_comparison(device_tensor) for device_tensor in device_tensors]
+        if len(torch_shards) == 1:
+            return torch_shards[0]
+
+        target_shape = get_shape(golden_tensor) or get_shape(tensor)
+        first_shape = tuple(torch_shards[0].shape)
+
+        if target_shape is not None and first_shape == target_shape:
+            return torch_shards[0]
+
+        candidate_dims = []
+        for dim in range(len(first_shape)):
+            if any(len(shard.shape) != len(first_shape) for shard in torch_shards):
+                break
+            if any(
+                tuple(shard.shape[:dim]) != first_shape[:dim] or tuple(shard.shape[dim + 1 :]) != first_shape[dim + 1 :]
+                for shard in torch_shards
+            ):
+                continue
+
+            composed_shape = list(first_shape)
+            composed_shape[dim] = sum(shard.shape[dim] for shard in torch_shards)
+            if target_shape is None or tuple(composed_shape) == target_shape:
+                candidate_dims.append(dim)
+
+        if candidate_dims:
+            return torch.cat(torch_shards, dim=candidate_dims[0])
+
+        return None
+
+    if placements and math.prod(distribution_shape) > 1:
+        has_shard = any(isinstance(placement, ttnn.PlacementShard) for placement in placements)
+        try:
+            device_tensors = ttnn.get_device_tensors(tensor)
+        except Exception:
+            device_tensors = []
+
+        if has_shard and device_tensors:
+            try:
+                per_device_rank = len(device_tensors[0].shape)
+            except Exception:
+                per_device_rank = None
+            if per_device_rank is not None and any(
+                isinstance(placement, ttnn.PlacementShard) and placement.dim >= per_device_rank
+                for placement in placements
+            ):
+                return _convert_ttnn_to_torch_for_comparison(device_tensors[0])
+
+        if not has_shard:
+            composed = compose_device_tensors()
+            if composed is not None:
+                return composed
+
+        mesh_device = tensor.device()
+        if mesh_device is None:
+            mesh_device = ttnn.GetDefaultDevice()
+
+        if mesh_device is not None:
+            composer_dims = []
+            composer_shape = []
+            for placement, dim_size in zip(placements, distribution_shape):
+                if isinstance(placement, ttnn.PlacementShard):
+                    composer_dims.append(placement.dim)
+                    composer_shape.append(dim_size)
+                else:
+                    composer_dims.append(0)
+                    composer_shape.append(1)
+
+            mesh_composer = ttnn.create_mesh_composer(
+                mesh_device,
+                ttnn.MeshComposerConfig(
+                    dims=composer_dims,
+                    mesh_shape_override=ttnn.MeshShape(composer_shape),
+                ),
+            )
+            return _convert_ttnn_to_torch_for_comparison(tensor, mesh_composer=mesh_composer)
+
+    composed = compose_device_tensors()
+    if composed is not None:
+        return composed
+
+    return _convert_ttnn_to_torch_for_comparison(tensor)
 
 
 def _structured_output_pairs(golden_outputs, outputs):
@@ -830,17 +809,60 @@ TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR = {}
 TENSOR_IDS_PRODUCED_BY_OPERATION = set()
 
 
-def preprocess_global_golden_function_inputs(function_args, function_kwargs, *, local_golden_inputs=None):
-    """Resolve stored global goldens while preserving each operation's local preprocessing shape.
-
-    A matching ``local_value`` is the locally preprocessed argument, not a device-local shard.
-    Its type determines whether a cached mesh golden stays distributed for the global golden.
+def _decompose_global_golden_mesh_tensor(input_tensor, golden_tensor):
+    """Decompose a global golden tensor into mesh-aligned device shards.
+    Replicates unsharded values and validates reconstructed shard shapes.
     """
+
+    import math
+    import torch
+
+    device_tensors = list(ttnn.get_device_tensors(input_tensor))
+    if len(device_tensors) <= 1:
+        return [golden_tensor]
+
+    topology = input_tensor.tensor_topology()
+    placements = list(topology.placements())
+    distribution_shape = [int(dimension) for dimension in topology.distribution_shape()]
+    shard_shapes = [tuple(int(dimension) for dimension in tensor.shape) for tensor in device_tensors]
+    if not placements or not distribution_shape:
+        return [golden_tensor] * len(device_tensors)
+    has_sharded_placement = any(isinstance(placement, ttnn.PlacementShard) for placement in placements)
+    if all(shape == tuple(golden_tensor.shape) for shape in shard_shapes):
+        if not has_sharded_placement:
+            return [golden_tensor] * len(device_tensors)
+        raise ValueError("Cannot reconstruct sharded mesh inputs from a single-shard global golden")
+
+    distribution_size = math.prod(distribution_shape)
+    shards = []
+    for shard_index in range(len(device_tensors)):
+        coordinate_index = shard_index % distribution_size
+        coordinates = [0] * len(distribution_shape)
+        for axis in range(len(distribution_shape) - 1, -1, -1):
+            coordinates[axis] = coordinate_index % distribution_shape[axis]
+            coordinate_index //= distribution_shape[axis]
+
+        shard = golden_tensor
+        for axis, placement in enumerate(placements):
+            if isinstance(placement, ttnn.PlacementShard):
+                shard = torch.tensor_split(shard, distribution_shape[axis], dim=placement.dim)[coordinates[axis]]
+        if tuple(shard.shape) != shard_shapes[shard_index]:
+            raise ValueError(
+                f"Global golden shard shape {tuple(shard.shape)} does not match mesh shard shape "
+                f"{shard_shapes[shard_index]}"
+            )
+        shards.append(shard)
+    return shards
+
+
+def preprocess_global_golden_function_inputs(function_args, function_kwargs, *, local_golden_inputs=None):
+    """Resolve stored global goldens while preserving each operation's local preprocessing shape."""
 
     if ttnn.CONFIG.report_path is None:
         return None
     input_index = 0
     local_args, local_kwargs = local_golden_inputs or ((), {})
+    mesh_tensors_as_shards = bool(local_kwargs.get("_ttnn_global_golden_mesh_shards", False))
 
     def preprocess(object_value, local_value=None):
         nonlocal input_index
@@ -861,10 +883,8 @@ def preprocess_global_golden_function_inputs(function_args, function_kwargs, *, 
             else:
                 golden_tensor = TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[object_value.tensor_id]
             input_index += 1
-            if isinstance(local_value, ttnn.DistributedGolden):
-                return distributed_golden_for_comparison(object_value, golden_tensor)
-            if isinstance(golden_tensor, ttnn.DistributedGolden):
-                return _distributed_golden_global_value(golden_tensor)
+            if mesh_tensors_as_shards:
+                return _decompose_global_golden_mesh_tensor(object_value, golden_tensor)
             return golden_tensor
         if isinstance(object_value, ttnn.Shape):
             return tuple(object_value)
@@ -902,14 +922,10 @@ def postprocess_global_golden_function_outputs(outputs, golden_outputs):
             )
         if not isinstance(output, (ttnn.Tensor, torch.Tensor)):
             raise TypeError(f"Expected a tensor output, got {type(output)}")
-        if not isinstance(golden_output, (torch.Tensor, ttnn.DistributedGolden)):
-            raise TypeError(f"Expected torch.Tensor or DistributedGolden, got {type(golden_output)}")
+        if not isinstance(golden_output, torch.Tensor):
+            raise TypeError(f"Expected torch.Tensor, got {type(golden_output)}")
         if output.tensor_id is None:
             raise RuntimeError("Output tensor does not have a tensor_id")
-        if isinstance(output, ttnn.Tensor) and not isinstance(golden_output, ttnn.DistributedGolden):
-            device_tensor_count = len(ttnn.get_device_tensors(output))
-            if device_tensor_count > 1:
-                golden_output = distributed_golden_for_comparison(output, golden_output)
         TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[output.tensor_id] = _clone_golden_value(golden_output)
 
 
@@ -920,19 +936,6 @@ def _clone_golden_value(value):
 
     if isinstance(value, torch.Tensor):
         return _copy_golden_comparison_config(value, value.clone())
-    if isinstance(value, ttnn.DistributedGolden):
-        global_value = _clone_golden_value(value.global_value) if value.global_value is not None else None
-        shards = (
-            {mesh_coord: _clone_golden_value(shard) for mesh_coord, shard in value.shards.items()}
-            if value.shards is not None
-            else None
-        )
-        return ttnn.DistributedGolden(
-            topology=value.topology,
-            global_value=global_value,
-            shards=shards,
-            compare_coords=value.compare_coords,
-        )
     raise TypeError(f"Unsupported global golden value type: {type(value)}")
 
 
