@@ -18,16 +18,18 @@
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/experimental/allocation_context.hpp>
 #include <tracy/Tracy.hpp>
 #include "ttnn/graph/graph_serialization.hpp"
 
-#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
+#include <tt-metalium/tensor/tensor_apis.hpp>
+#include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
+#include <tt-metalium/experimental/tensor_host_pad_apis.hpp>
+#include <tt-metalium/experimental/byte_based_tensor_transfers.hpp>
 
 using tt::tt_metal::BufferRegion;
 using tt::tt_metal::DataType;
 using tt::tt_metal::DistributedHostBuffer;
-using tt::tt_metal::enqueue_read_tensor;
-using tt::tt_metal::enqueue_write_tensor;
 using tt::tt_metal::GraphTracker;
 using tt::tt_metal::HostTensor;
 using tt::tt_metal::is_uniform_write;
@@ -35,8 +37,6 @@ using tt::tt_metal::Layout;
 using tt::tt_metal::MemoryConfig;
 using tt::tt_metal::MeshTensor;
 using tt::tt_metal::PageConfig;
-using tt::tt_metal::QueueId;
-using tt::tt_metal::raw_optional;
 using tt::tt_metal::Shape;
 using tt::tt_metal::TensorLayout;
 using tt::tt_metal::TensorSpec;
@@ -59,17 +59,25 @@ Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, tt::tt_metal::dist
 
     distributed_host_buffer.emplace_shards(
         coords,
-        [&](const auto&) { return tt::tt_metal::tensor_impl::allocate_host_buffer(tensor_spec); },
+        [&](const auto&) {
+            auto shard = HostTensor::allocate_for_overwrite(tensor_spec)
+                             .buffer()
+                             .get_shard(tt::tt_metal::distributed::MeshCoordinate(0, 0));
+            TT_FATAL(shard.has_value(), "HostTensor::allocate_for_overwrite must produce a shard at (0, 0)");
+            return std::move(*shard);
+        },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
     // TODO (#25340): Implement correct logic and add test for this
-    return Tensor(HostTensor::from_buffer(std::move(distributed_host_buffer), tensor_spec, TensorTopology{}));
+    return Tensor(
+        host_tensor_from_buffer_with_topology(std::move(distributed_host_buffer), tensor_spec, TensorTopology{}));
 }
 
 Tensor create_device_tensor(
     const TensorSpec& tensor_spec,
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     std::optional<TensorTopology> tensor_topology) {
+    auto guard = tt::tt_metal::make_allocation_context_guard("ttnn.allocate_tensor_on_device");
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::create_device_tensor",
         tensor_spec.logical_shape(),
@@ -101,7 +109,7 @@ Tensor create_device_tensor(
         return TensorTopology{mesh_shape, placements, std::move(coordinates)};
     });
 
-    output = Tensor(MeshTensor::allocate_on_device(*mesh_device, tensor_spec, topology));
+    output = Tensor(allocate_mesh_tensor_on_device_with_topology(*mesh_device, tensor_spec, topology));
     output = ttnn::set_tensor_id(output);
 
     GraphTracker::instance().track_function_end(output);
@@ -115,6 +123,7 @@ namespace tt::tt_metal {
 
 using ttnn::DeviceStorage;
 using ttnn::is_cpu_tensor;
+using ttnn::QueueId;
 using ttnn::StorageType;
 using ttnn::Tensor;
 
@@ -123,6 +132,7 @@ Tensor to_device(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     ttsl::optional_reference<const MemoryConfig> mem_config,
     std::optional<QueueId> cq_id) {
+    auto guard = make_allocation_context_guard("ttnn.to_device");
     GraphTracker::instance().track_function_start("Tensor::to_device", input_tensor, mesh_device, mem_config);
     if (input_tensor.storage_type() == StorageType::DEVICE) {
         TT_ASSERT(input_tensor.device() == mesh_device, "Currently do not support moving between devices");
@@ -132,7 +142,11 @@ Tensor to_device(
     auto& cq = mesh_device->mesh_command_queue(raw_optional(cq_id));
     Tensor device_tensor;
     if (is_uniform_write(input_tensor.host_tensor(), *mesh_device)) {
-        device_tensor = Tensor(enqueue_write_tensor(cq, input_tensor.host_tensor(), *mesh_device, mem_config));
+        if (mem_config) {
+            device_tensor = Tensor(cq.enqueue_write_tensor(input_tensor.host_tensor(), *mem_config));
+        } else {
+            device_tensor = Tensor(cq.enqueue_write_tensor(input_tensor.host_tensor()));
+        }
     } else {
         auto [mesh_tensor, coords] = tt::tt_metal::non_uniform_data_movement::enqueue_write_tensor(
             cq, input_tensor.host_tensor(), *mesh_device, mem_config);
@@ -156,11 +170,11 @@ Tensor to_layout(const Tensor& input_tensor, Layout target_layout) {
 
 namespace ttnn {
 
-void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<tt::tt_metal::QueueId> cq_id) {
+void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<QueueId> cq_id) {
     GraphTracker::instance().track_function_start("tt::tt_metal::copy_to_device", host_tensor, device_tensor, cq_id);
     auto& cq = device_tensor.device()->mesh_command_queue(raw_optional(cq_id));
     if (is_uniform_write(host_tensor.host_tensor(), *device_tensor.device())) {
-        enqueue_write_tensor(cq, host_tensor.host_tensor(), device_tensor.device_storage().get_mesh_tensor());
+        cq.enqueue_write_tensor(host_tensor.host_tensor(), device_tensor.device_storage().get_mesh_tensor());
     } else {
         auto coords = tt::tt_metal::non_uniform_data_movement::enqueue_write_tensor(
             cq, host_tensor.host_tensor(), device_tensor.device_storage().get_mesh_tensor());
@@ -197,7 +211,7 @@ void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blockin
         "tt::tt_metal::copy_to_host", device_tensor, host_tensor, blocking, cq_id);
     auto& cq = device_tensor.device()->mesh_command_queue(raw_optional(cq_id));
     if (device_tensor.device_storage().is_uniform_storage()) {
-        enqueue_read_tensor(cq, device_tensor.mesh_tensor(), host_tensor.host_storage().host_tensor(), blocking);
+        cq.enqueue_read_tensor(device_tensor.mesh_tensor(), host_tensor.host_storage().host_tensor(), blocking);
     } else {
         auto coords = device_tensor.device_storage().get_coords();
         tt::tt_metal::non_uniform_data_movement::enqueue_read_tensor(
@@ -216,7 +230,7 @@ Tensor cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_
     auto& cq = input_tensor.device()->mesh_command_queue(raw_optional(cq_id));
     Tensor output;
     if (input_tensor.device_storage().is_uniform_storage()) {
-        output = Tensor(enqueue_read_tensor(cq, input_tensor.mesh_tensor(), blocking));
+        output = Tensor(cq.enqueue_read_tensor(input_tensor.mesh_tensor(), blocking));
     } else {
         auto coords = input_tensor.device_storage().get_coords();
         output = Tensor(tt::tt_metal::non_uniform_data_movement::enqueue_read_tensor(
@@ -390,8 +404,8 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
             input_buffer.device(),
             input_buffer.address());
 
-        MeshTensor view_mesh_tensor =
-            MeshTensor::from_buffer(std::move(*view_mesh_buffer), new_spec, input_tensor.tensor_topology());
+        MeshTensor view_mesh_tensor = mesh_tensor_from_buffer_with_topology(
+            std::move(*view_mesh_buffer), new_spec, input_tensor.tensor_topology());
         DeviceStorage view_storage(input_tensor.device_storage(), std::move(view_mesh_tensor));
         return Tensor(std::move(view_storage));
     }
@@ -404,8 +418,8 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
         auto view_mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
             input_buffer.global_config(), new_device_config, input_buffer.device(), input_buffer.address());
 
-        MeshTensor view_mesh_tensor =
-            MeshTensor::from_buffer(std::move(*view_mesh_buffer), new_spec, input_tensor.tensor_topology());
+        MeshTensor view_mesh_tensor = mesh_tensor_from_buffer_with_topology(
+            std::move(*view_mesh_buffer), new_spec, input_tensor.tensor_topology());
         DeviceStorage view_storage(input_tensor.device_storage(), std::move(view_mesh_tensor));
         return Tensor(std::move(view_storage));
     }
@@ -442,7 +456,7 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
 
     ttnn::DeviceStorage view_storage(
         input_tensor.device_storage(),
-        MeshTensor::from_buffer(std::move(*view_mesh_buffer), new_spec, input_tensor.tensor_topology()));
+        mesh_tensor_from_buffer_with_topology(std::move(*view_mesh_buffer), new_spec, input_tensor.tensor_topology()));
     return Tensor(std::move(view_storage));
 }
 
@@ -482,7 +496,7 @@ Tensor unchecked_reinterpret_layout(const Tensor& input_tensor, Layout target_la
     const auto& topology = input_tensor.tensor_topology();
 
     if (is_cpu_tensor(input_tensor)) {
-        return Tensor(HostTensor::from_buffer(input_tensor.host_tensor().buffer(), new_spec, topology));
+        return Tensor(host_tensor_from_buffer_with_topology(input_tensor.host_tensor().buffer(), new_spec, topology));
     }
 
     const auto& input_buffer = input_tensor.device_storage().get_mesh_buffer();
@@ -492,7 +506,7 @@ Tensor unchecked_reinterpret_layout(const Tensor& input_tensor, Layout target_la
         input_buffer.device(),
         input_buffer.address());
 
-    MeshTensor reinterpreted = MeshTensor::from_buffer(std::move(*new_mesh_buffer), new_spec, topology);
+    MeshTensor reinterpreted = mesh_tensor_from_buffer_with_topology(std::move(*new_mesh_buffer), new_spec, topology);
     DeviceStorage reinterpreted_storage(input_tensor.device_storage(), std::move(reinterpreted));
     return Tensor(std::move(reinterpreted_storage));
 }

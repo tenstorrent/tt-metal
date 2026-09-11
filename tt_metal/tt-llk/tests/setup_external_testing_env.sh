@@ -5,6 +5,8 @@
 
 # --- Configuration ---
 VENV_DIR=".venv"
+# Minimum supported Python version; newer versions are allowed.
+PYTHON_MIN_VERSION="3.10"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # --- Functions ---
@@ -30,12 +32,12 @@ check_deps() {
 
 # Check for supported Python version
 check_python_version() {
-    PYTHON_VERSION=$(python3 --version 2>&1 | cut -d' ' -f2)
-    if [[ "$PYTHON_VERSION" != "3.10"* ]]; then
-        echo "Error: Only Python 3.10 is supported. Detected: $PYTHON_VERSION" >&2
+    PYTHON_VERSION=$(python3 -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])')
+    if ! python3 -c "import sys; sys.exit(sys.version_info[:2] < tuple(map(int, '$PYTHON_MIN_VERSION'.split('.'))))"; then
+        echo "Error: Python $PYTHON_MIN_VERSION or newer is required. Detected: $PYTHON_VERSION" >&2
         exit 1
     fi
-    echo "Supported Python version detected: $PYTHON_VERSION"
+    echo "Supported Python version detected: $PYTHON_VERSION (minimum: $PYTHON_MIN_VERSION)"
 }
 
 # --- Main Script ---

@@ -374,7 +374,7 @@ def test_rotary_embedding_row_major(W, Z, Y, X, cache_size, device):
         (128, 64),
     ],
 )
-def test_rotary_embedding_rejects_cos_seq_smaller_than_input_seq(input_seq, head_dim, device):
+def test_rotary_embedding_rejects_cos_seq_smaller_than_input_seq(input_seq, head_dim, device, expect_error):
     torch.manual_seed(0)
     batch, n_heads = 1, 32
     x = torch.randn([batch, n_heads, input_seq, head_dim]).bfloat16().float()
@@ -385,13 +385,13 @@ def test_rotary_embedding_rejects_cos_seq_smaller_than_input_seq(input_seq, head
     cost = ttnn.Tensor(cos, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
     sint = ttnn.Tensor(sin, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
-    with pytest.raises(RuntimeError, match="Cosine cache must cover the input sequence length"):
+    with expect_error(RuntimeError, "Cosine cache must cover the input sequence length"):
         ttnn.experimental.rotary_embedding(xt, cost, sint)
 
 
 @pytest.mark.parametrize("token_idx", [0, 5, 31])
 @pytest.mark.parametrize("head_dim", [32, 64])
-def test_rotary_embedding_rejects_cos_seq_not_covering_token_index(token_idx, head_dim, device):
+def test_rotary_embedding_rejects_cos_seq_not_covering_token_index(token_idx, head_dim, device, expect_error):
     torch.manual_seed(0)
     batch, n_heads = 1, 32
     x = torch.randn([1, batch, n_heads, head_dim]).bfloat16().float()
@@ -405,5 +405,114 @@ def test_rotary_embedding_rejects_cos_seq_not_covering_token_index(token_idx, he
     if token_idx == 0:
         ttnn.experimental.rotary_embedding(xt, cost, sint, token_idx)
     else:
-        with pytest.raises(RuntimeError, match="Cosine cache must cover the token index"):
+        with expect_error(RuntimeError, "Cosine cache must cover the token index"):
             ttnn.experimental.rotary_embedding(xt, cost, sint, token_idx)
+
+
+def _run_rotary_decode_once(device, input_shape, cache_size, token_idx, in_sharded, out_sharded):
+    """Run one decode-mode rotary_embedding call and return whether the PCC check passed."""
+    W, Z, Y, X = input_shape
+    sin_cos_shape = [1, 1, cache_size, X]
+    x = torch.randn(input_shape).bfloat16().float()
+    cos_cached = torch.randn(sin_cos_shape).bfloat16().float()
+    sin_cached = torch.randn(sin_cos_shape).bfloat16().float()
+
+    out_mem_config = (
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
+        if out_sharded
+        else ttnn.MemoryConfig()
+    )
+
+    xt = ttnn.Tensor(x, ttnn.bfloat16).to(ttnn.TILE_LAYOUT)
+
+    if in_sharded or out_sharded:
+        num_blocks = xt.volume() // xt.padded_shape[-1] // 32
+        compute_grid_size = device.compute_with_storage_grid_size()
+        num_cores = 1
+        for i in range(compute_grid_size.x * compute_grid_size.y, 0, -1):
+            if num_blocks % i == 0:
+                num_cores = i
+                break
+        if in_sharded:
+            Ht = divup(num_blocks, num_cores)
+            shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
+            input_shard_spec = ttnn.ShardSpec(
+                shard_grid, [Ht * 32, xt.padded_shape[-1]], ttnn.ShardOrientation.ROW_MAJOR
+            )
+            input_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
+            )
+            xt = xt.to(device, input_mem_config)
+        else:
+            xt = xt.to(device)
+    else:
+        xt = xt.to(device)
+
+    cost = ttnn.Tensor(cos_cached, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+    sint = ttnn.Tensor(sin_cached, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+    xtt = ttnn.experimental.rotary_embedding(xt, cost, sint, token_idx, memory_config=out_mem_config)
+    if out_sharded:
+        xtt = ttnn.sharded_to_interleaved(xtt)
+
+    tt_got_back = xtt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    pt_out = apply_rotary_pos_emb(x, cos_cached, sin_cached, token_idx)
+    p, o = comp_pcc(pt_out, tt_got_back)
+    logger.info(f"token_idx={token_idx}: {o}")
+    return p
+
+
+# Regression: decode-mode rotary_embedding derives cos_sin_start_id / cos_sin_offset from token_idx
+# and bakes them into static reader/writer runtime args, but token_idx is (correctly) excluded from
+# the program-cache hash so successive decode positions cache-hit the SAME program.  Those offsets
+# must be re-applied on every hit via get_dynamic_runtime_args; without that, the cached program keeps
+# the first token's offsets and every later token reads the wrong cos/sin rows (silent PCC drop).
+#
+# The pre-existing test_rotary_embedding_decode parametrizes token_idx, so each position runs as a
+# separate invocation and never reuses the cached program -- it cannot catch this class of bug.  This
+# test drives multiple token positions THROUGH ONE cached program in a single test body, and also
+# asserts exactly one program-cache entry so a regression that re-keys on token_idx (rebuild-per-token
+# perf cliff) is caught too.
+#
+# X == 64 exercises the multi-tile path (Wt == 2); X == 32 the single-tile path (Wt == 1).  A sharded
+# case is included because the reader carries cos_sin_start_id at a different runtime-arg index than
+# the interleaved reader.
+@pytest.mark.parametrize(
+    "W, Z, Y, X",
+    [
+        [1, 1, 32, 64],
+        [1, 1, 32, 32],
+        [1, 8, 32, 64],
+    ],
+)
+@pytest.mark.parametrize("cache_size", [2048])
+@pytest.mark.parametrize(
+    "in_sharded, out_sharded",
+    [
+        (False, False),
+        (True, False),
+        (True, True),
+    ],
+)
+def test_rotary_embedding_decode_program_cache_reuse(W, Z, Y, X, cache_size, in_sharded, out_sharded, device):
+    torch.manual_seed(0)
+    input_shape = [W, Z, Y, X]
+
+    # Positions span multiple cos/sin tiles: cos_sin_offset = token_idx % 32 (varies within a tile),
+    # cos_sin_start_id = token_idx // 32 (changes at tile boundaries 32, 64, 128).  If the cached
+    # program froze the first token's offsets, positions after the first (esp. across tile boundaries)
+    # would fail the PCC check.
+    token_indices = [0, 1, 31, 32, 40, 63, 64, 128]
+
+    for token_idx in token_indices:
+        passed = _run_rotary_decode_once(device, input_shape, cache_size, token_idx, in_sharded, out_sharded)
+        assert passed, f"decode rotary_embedding wrong on cache-hit at token_idx={token_idx} (stale cos/sin offset)"
+
+    # All decode positions must share ONE rotary_embedding program (token_idx is not part of the
+    # cache key); more than that would mean token_idx leaked into the hash -> a rebuild-per-token perf
+    # regression.  The out-sharded path additionally runs sharded_to_interleaved (a second, shape-
+    # stable op), so it contributes exactly one extra entry.
+    expected_entries = 2 if out_sharded else 1
+    assert device.num_program_cache_entries() == expected_entries, (
+        f"expected {expected_entries} program-cache entry/entries, got {device.num_program_cache_entries()} "
+        f"(token_idx must not be hashed)"
+    )

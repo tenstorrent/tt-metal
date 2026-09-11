@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "llk_math_common_api.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_math_unary_broadcast.h"
@@ -30,8 +31,8 @@ template <
     bool EN_32BIT_DEST,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool unpack_to_dest = false,
-    [[maybe_unused]] bool is_int_fpu_en = false,
-    [[maybe_unused]] bool tilize = false>
+    bool is_int_fpu_en /*maybe_unused*/ = false,
+    bool tilize /*maybe_unused*/ = false>
 inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
@@ -50,9 +51,18 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
         }
     } else {
         static_assert(type == DataCopyType::B2D);
+        static_assert(
+            !(EN_32BIT_DEST && !unpack_to_dest),
+            "32BIT_DEST is not supported for broadcast when unpack_to_dest is false");
+        static_assert(!unpack_to_dest, "unpack_to_dest is not supported for unary broadcast");
+
         const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand);
-        _llk_math_eltwise_unary_broadcast_init_<src_b_bcast_type, false /*unpack_to_dest*/, EN_32BIT_DEST>(
-            tensor_shape);
+        LLK_ASSERT(
+            tensor_shape.face_r_dim == MAX_FACE_R_DIM && tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM &&
+                tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM,
+            "Unary broadcast currently only supports 32x32 tiles (face_r_dim=16, 2x2 faces)");
+
+        _llk_math_eltwise_unary_broadcast_init_<src_b_bcast_type, false /*unpack_to_dest*/>(tensor_shape);
     }
 }
 
@@ -82,7 +92,7 @@ inline void llk_math_eltwise_unary_datacopy(const std::uint32_t dst_index, const
     if constexpr (src_b_bcast_type != BroadcastType::NONE && !unpack_to_dest) {
         static_assert(type == DataCopyType::B2D, "Unary broadcast math path requires DataCopyType::B2D");
         const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand);
-        _llk_math_eltwise_unary_broadcast_<src_b_bcast_type, false, EN_32BIT_DEST>(dst_index, tensor_shape);
+        _llk_math_eltwise_unary_broadcast_(dst_index);
     } else {
         // 32-bit unpack-to-dest: math is a sync-only forwarder (unpacker wrrites DEST), no MOP to run.
         if constexpr (!unpack_to_dest) {
@@ -122,6 +132,6 @@ inline void llk_math_eltwise_unary_datacopy_block(
 }
 
 template <
-    [[maybe_unused]] BroadcastType src_b_bcast_type = BroadcastType::NONE,
-    [[maybe_unused]] bool unpack_to_dest = false>
+    BroadcastType src_b_bcast_type /*maybe_unused*/ = BroadcastType::NONE,
+    bool unpack_to_dest /*maybe_unused*/ = false>
 inline void llk_math_eltwise_unary_datacopy_uninit() {}

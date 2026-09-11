@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
+#include "impl/buffers/buffer_impl.hpp"
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt_stl/assert.hpp>
@@ -10,12 +11,6 @@
 #include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal::experimental::per_core_allocation {
-
-DeviceAddr get_per_core_address(const distributed::MeshBuffer& mesh_buffer, const CoreCoord& core) {
-    auto* buffer = mesh_buffer.get_reference_buffer();
-    TT_FATAL(is_per_core_allocation(*buffer), "Buffer does not use per-core allocation");
-    return get_per_core_address(*buffer, core);
-}
 
 DeviceAddr get_per_core_address(
     const distributed::MeshBuffer& mesh_buffer,
@@ -59,7 +54,7 @@ std::shared_ptr<distributed::MeshBuffer> create_on_single_device(
     // Only allocate on the target device.
     TT_FATAL(mesh_device->impl().is_local(coord), "Target device coordinate must be local");
     auto* device = mesh_device->impl().get_device(coord);
-    auto buffer = Buffer::create(
+    auto buffer = BufferImpl::create(
         device,
         device_local_size,
         device_local_config.page_size,

@@ -88,7 +88,7 @@ inline void reblock_and_untilize(
         int block_offset = 0;
 
         // Reblock
-        copy_tile_to_dst_init_short(interm_cb_id);
+        copy_init(interm_cb_id);
         cb_reserve_back(reblock_cb_id, out_block_w);
         for (uint32_t n = 0; n < num_out_subblocks_in_col; n++) {
             for (uint32_t w = 0; w < out_subblock_w; w++) {
@@ -160,7 +160,7 @@ void kernel_main() {
 #endif
 
     // compute_kernel_hw_startup must be the first compute API call. The bias broadcast-add is
-    // initialized by add_bcast_rows_init_short right before it in the loop, so the full init_bcast
+    // initialized by add_bcast_rows_init right before it in the loop, so the full init_bcast
     // here is redundant and was removed.
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, out_cb_id);
     matmul_init(in0_cb_id, in1_cb_id);
@@ -187,7 +187,8 @@ void kernel_main() {
                         tile_regs_acquire();
                         if (enable_reload) {
                             // Reconfigure input
-                            copy_tile_to_dst_init_short_with_dt(in1_cb_id, matmul_partials_cb);
+                            reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
+                            copy_init(matmul_partials_cb);
                             cb_wait_front(matmul_partials_cb, out_subblock_num_tiles);
                             for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
                                 copy_tile(matmul_partials_cb, i, i);
@@ -230,7 +231,7 @@ void kernel_main() {
                             // bcast add data from bias_cb_id
                             cb_wait_front(bias_cb_id, bias_ntiles_w);
                             cb_wait_front(out_for_bias_cb_id, out_subblock_num_tiles);
-                            add_bcast_rows_init_short(out_for_bias_cb_id, bias_cb_id);
+                            add_bcast_rows_init(out_for_bias_cb_id, bias_cb_id);
                             // reconfig packer df for out
                             // pack_reconfig_data_format(out_cb_id);
                             tile_regs_acquire();

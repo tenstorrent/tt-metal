@@ -312,7 +312,7 @@ def main():
             sys.exit(1)
 
     if options.processLogsOnly:
-        generate_report(generate_logs_folder(outputFolder), binaryFolder, "", None, options.collect_noc_traces)
+        generate_report(outputFolder, binaryFolder, "", None, options.collect_noc_traces)
         sys.exit(0)
 
     if options.port:
@@ -575,8 +575,10 @@ def main():
             else:
                 run_workload(envVars)
 
+            # Large model traces can take over 15 seconds to save after the test exits.
+            capture_timeout = 120
             try:
-                captureProcess.communicate(timeout=15)
+                captureProcess.communicate(timeout=capture_timeout)
                 # Copy the generated .tracy file to the server's traces folder with a unique name
                 import datetime
 
@@ -628,7 +630,8 @@ def main():
                 captureProcess.terminate()
                 captureProcess.communicate()
                 logger.error(
-                    f"No profiling data could be captured. Please make sure you are on a Tracy-enabled build (default)."
+                    f"Tracy capture did not finish within {capture_timeout} seconds after the test exited. "
+                    "Run with -v to see capture output."
                 )
                 sys.exit(1)
 

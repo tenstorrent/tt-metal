@@ -34,6 +34,10 @@
 #include "internal/circular_buffer_interface.h"
 #endif
 #include "risc_common.h"
+#if defined(ARCH_QUASAR)
+// USER_TXN_ID_MAX: Quasar user vs DFB txn-id pool split.
+#include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
+#endif
 
 // A couple defines for specifying read/write and multi/unicast
 #define DEBUG_SANITIZE_NOC_READ true
@@ -206,15 +210,19 @@ inline uint16_t debug_valid_worker_addr(uint64_t addr, uint64_t len, bool write,
 #endif
 
 #if !defined(DISPATCH_KERNEL) || (DISPATCH_KERNEL == 0)
-    if (write && (addr < MEM_MAP_READ_ONLY_END)) {
+#if defined(COMPILE_FOR_DISPATCH_ENGINE)
+    constexpr uint32_t read_only_end = DISPATCH_MEM_MAP_END;
+#else
+    constexpr uint32_t read_only_end = MEM_MAP_READ_ONLY_END;
+#endif
+    if (write && (addr < read_only_end)) {
         return DebugSanitizeNocAddrMailbox;
     }
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
     // The read-only region is aliased into the uncached view; a write there hits the same reserved
     // memory. Only local buffers use the alias (remote targets are physical, bounded above). Raw
     // address kept for reporting.
-    if (is_local_buffer && write && addr >= MEM_L1_UNCACHED_BASE &&
-        addr < MEM_L1_UNCACHED_BASE + MEM_MAP_READ_ONLY_END) {
+    if (is_local_buffer && write && addr >= MEM_L1_UNCACHED_BASE && addr < MEM_L1_UNCACHED_BASE + read_only_end) {
         return DebugSanitizeNocAddrMailbox;
     }
 #endif
@@ -506,7 +514,7 @@ uint32_t debug_sanitize_noc_addr(
     // Reg-space targets (on DRAM/ETH/TENSIX overlay) bypass the type specific addr validator and
     // use reg alignment instead
     if ((core_type == AddressableCoreType::DRAM || core_type == AddressableCoreType::ETH ||
-         core_type == AddressableCoreType::TENSIX) &&
+         core_type == AddressableCoreType::TENSIX || core_type == AddressableCoreType::DISPATCH) &&
         debug_valid_reg_addr(noc_local_addr, noc_len, core_type)) {
         alignment_mask = NOC_REG_ALIGNMENT_BYTES - 1;
     } else if (core_type == AddressableCoreType::PCIE) {
@@ -543,7 +551,7 @@ uint32_t debug_sanitize_noc_addr(
             dir,
             DEBUG_SANITIZE_NOC_TARGET,
             debug_valid_eth_addr(noc_local_addr, noc_len, dir == DEBUG_SANITIZE_NOC_WRITE));
-    } else if (core_type == AddressableCoreType::TENSIX) {
+    } else if (core_type == AddressableCoreType::TENSIX || core_type == AddressableCoreType::DISPATCH) {
         debug_sanitize_post_addr_and_hang(
             noc_id,
             noc_addr,
@@ -836,6 +844,29 @@ void debug_sanitize_eth(uint32_t src_addr, uint32_t dst_addr, uint32_t len) {
 #define DEBUG_SANITIZE_L1_ADDR(addr, l) debug_sanitize_l1_access(addr, l);
 #define DEBUG_SANITIZE_ETH(src_addr, dst_addr, l) debug_sanitize_eth(src_addr, dst_addr, l)
 
+// Validate a user-stamped NoC transaction id.
+// WH/BH: [0, NOC_MAX_TRANSACTION_ID]. Quasar: [0, USER_TXN_ID_MAX] (DFB owns the upper pool).
+// On failure, l1_addr holds the bad trid and len holds the max allowed.
+inline void debug_sanitize_noc_txn_id(uint8_t noc_id, uint32_t trid) {
+#if defined(ARCH_QUASAR)
+    constexpr uint32_t max_trid = USER_TXN_ID_MAX;
+#else
+    constexpr uint32_t max_trid = NOC_MAX_TRANSACTION_ID;
+#endif
+    if (trid > max_trid) {
+        debug_sanitize_post_addr_and_hang(
+            noc_id,
+            0,
+            trid,
+            max_trid,
+            DEBUG_SANITIZE_NOC_UNICAST,
+            DEBUG_SANITIZE_NOC_WRITE,
+            DEBUG_SANITIZE_NOC_TARGET,
+            DebugSanitizeNocInvalidTxnId);
+    }
+}
+#define DEBUG_SANITIZE_NOC_TXN_ID(noc_id, trid) debug_sanitize_noc_txn_id(noc_id, trid)
+
 // Delay for debugging purposes
 inline void debug_insert_delay(uint8_t transaction_type) {
 #if defined(WATCHER_DEBUG_DELAY)
@@ -886,5 +917,6 @@ inline void debug_insert_delay(uint8_t transaction_type) {
 
 #define DEBUG_SANITIZE_L1_ADDR(addr, l)
 #define DEBUG_SANITIZE_ETH(src_addr, dst_addr, l)
+#define DEBUG_SANITIZE_NOC_TXN_ID(noc_id, trid)
 
 #endif  // WATCHER_ENABLED

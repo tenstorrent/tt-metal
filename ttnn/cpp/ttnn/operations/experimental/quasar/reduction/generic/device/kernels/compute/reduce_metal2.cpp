@@ -12,11 +12,19 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
+    compute_kernel_hw_startup(dfb::in, dfb::scaler, dfb::out);
+
     uint32_t Ht = get_arg(args::Ht);
     uint32_t Wt = get_arg(args::Wt);
     uint32_t NC = get_arg(args::NC);
 
-    compute_kernel_hw_startup(dfb::in, dfb::scaler, dfb::out);
+    // the right post_mul bits? JIT kernel, so this shows on rerun with no ninja. If RPM_OFF prints
+    // (or bits != 0x3ca72f05) while the host factory said use_post_mul=true, the compiled kernel is
+    // stale/wrong (hash/cache). If RPM_ON with correct bits but output is still x1.15, the bug is in
+    // the reduce/GAPOOL sum, not the post-mul.
+#ifdef REDUCE_POST_MUL
+#else
+#endif
 
     compute_kernel_lib::reduce<
         REDUCE_OP,

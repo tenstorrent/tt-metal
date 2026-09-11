@@ -3,21 +3,23 @@
 
 """
 Qwen3-32B — native TTTv2 stack (``Embedding1D``, ``RMSNorm1D``,
-``Attention1D``, ``MLP1D``, ``RotarySetup1D``, ``LMHead1D``). Targets T3K (mesh ``(1, 8)``).
+``Attention1D``, ``MLP1D``, ``RotarySetup1D``, ``LMHead1D``). Targets Wormhole
+T3K (mesh ``(1, 8)``) and BlackHole P150x4 (mesh ``(1, 4)``).
 
 Tensor layout contracts:
   - **Prefill** hidden states: ``[1, 1, S, dim]`` TILE, ``S % 128 == 0``.
   - **Decode** hidden states: ``[1, 1, B, dim]`` TILE (``B`` padded to tile in modules).
 
-Executor contract (``EagerLLMExecutor`` / ``TracedLLMExecutor``): pre-embedded forwards,
-``set_kv_cache``, ``rope_setup``, ``page_table`` through attention, ``model_args`` holds a
+Model-owned executor contract: pre-embedded forwards, ``set_kv_cache``,
+``rope_setup``, ``page_table`` through attention, ``model_args`` holds a
 :class:`Qwen3_32BExecutorRuntimeConfig` (not v1 ``ModelArgs``).
 """
 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, List
 
@@ -41,11 +43,37 @@ from models.common.modules.mlp.mlp_1d import MLP1D, MLP1DConfig, _dram_shard_cor
 from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1D, RMSNorm1DConfig, _create_sharded_norm_program_config
 from models.common.modules.rope.rope_1d import Rope1DConfig, RotarySetup1D, prepare_rot_idxs
 from models.common.modules.sampling.sampling_1d import Sampling1D
-from models.common.modules.tt_ccl import default_topology, get_tt_ccl
+from models.common.modules.tt_ccl import get_tt_ccl
 from models.common.tensor_utils import TILE_SIZE, get_padded_hidden_dim
 
 # Pinned HF revision SHA for Qwen/Qwen3-32B (resolved 2026-06-03).
 DEFAULT_HF_REVISION = "9216db5781bf21249d130ec9da846c4624c16137"
+QWEN3_32B_INTERMEDIATE_SIZE = 25600
+
+# Both physical Blackhole four-die products expose the canonical logical
+# ``P150x4`` Qwen SKU.  Keep this product admission and its CCL recipe owned by
+# the model: the shared CCL fallback does not know that P300_X2 has a physical
+# Ring and would otherwise select Linear.
+QWEN3_32B_BH_TP4_CLUSTER_TYPES = (
+    ttnn.cluster.ClusterType.P150_X4,
+    ttnn.cluster.ClusterType.P300_X2,
+)
+
+
+def _qwen3_ccl_topology(mesh_device) -> ttnn.Topology:
+    """Return the fail-closed CCL topology for an admitted Qwen3-32B mesh."""
+
+    arch = mesh_device.arch()
+    cluster_type = ttnn.cluster.get_cluster_type()
+    num_devices = mesh_device.get_num_devices()
+    if (arch == ttnn.device.Arch.WORMHOLE_B0 and cluster_type == ttnn.cluster.ClusterType.T3K and num_devices == 8) or (
+        arch == ttnn.device.Arch.BLACKHOLE and cluster_type in QWEN3_32B_BH_TP4_CLUSTER_TYPES and num_devices == 4
+    ):
+        return ttnn.Topology.Ring
+    raise ValueError(
+        "Qwen3-32B CCL supports physical Wormhole T3K or BlackHole P150_X4/P300_X2; "
+        f"got arch={arch}, cluster_type={cluster_type}, num_devices={num_devices}"
+    )
 
 
 def _lazy(
@@ -68,7 +96,7 @@ class Qwen3_32BPagedAttentionConfig:
 
 @dataclass
 class Qwen3_32BExecutorRuntimeConfig:
-    """Engine-facing runtime knobs. Exposed as ``model.model_args`` for shared ``EagerLLMExecutor``."""
+    """Engine-facing runtime knobs exposed as ``model.model_args``."""
 
     n_layers: int
     n_kv_heads: int
@@ -80,15 +108,33 @@ class Qwen3_32BExecutorRuntimeConfig:
     model_cache_path: Path | None = None
     kv_cache_dtype: ttnn.DataType = ttnn.bfloat8_b
     optimizations: Any = None
+    # Batched prefill (parity caveat #12): fuse equal-length users into batched passes to close the
+    # batch-32 TTFT gap. ``supports_batched_prefill`` is the per-model opt-in (the shared engine only
+    # batches models whose prefill_forward threads ``batch_size`` — Qwen3-32B does, below). Qwen3's
+    # per-head QK-norm is a row-independent RMSNorm on ``[B, n_heads, S, head_dim]`` (each user's rows
+    # normalized independently), so the batched fold is bit-safe. ``max_prefill_batch_size`` is the
+    # largest supported padded wave; 32 folds the whole batch-32 prefill in ONE 32-user pass (TTTv1 structural parity,
+    # generator.py:679-700) so the eager norm+lm_head tail + full-vocab readback run once instead of 4×.
+    # At S=128 the fold is 32*128=4096=2*2048, an exact multiple of MAX_QKV_MM_SEQ_LEN (reshape-safe).
+    # ``disable_batched_prefill`` is the escape hatch back to the sequential loop;
+    # ``max_prefill_chunk_size`` (above) drives the #45234 decline.
+    supports_batched_prefill: bool = True
+    max_prefill_batch_size: int = 32
+    disable_batched_prefill: bool = False
+    # When True (default), batched prefill runs norm+lm_head ONCE per group over the gathered last-token
+    # rows (TTTv1 parity); False falls back to the bit-identical per-slot path (one lm_head per user).
+    batched_prefill_batched_extract: bool = True
+    # Both supported Qwen products preserve the TTTv1 Q128/Q1024 prefill trace
+    # buckets.  Keep this material explicit because the executor snapshots it
+    # independently from ``can_enable_trace`` when constructing warmup coverage.
+    trace_prefill_supported_seq_lens: tuple[int, ...] = (128, 1024)
 
     def can_enable_trace(self, prefill_seq_len: int, num_cached_tokens: int = 0) -> bool:
-        # Only trace the seq lens TTTv1 traces; bigger ones have small op2op gaps so tracing buys
-        # nothing. Qwen3-32B has no model-specific entry, so it uses the T3K family default
-        # [128, 1024]. Decode trace stays enabled at the engine layer regardless.
-        num_devices = int(self.cluster_shape[0]) * int(self.cluster_shape[1])
-        allowed = {1: (128,), 2: (128, 1024), 8: (128, 1024)}.get(num_devices, (128,))
+        # Only trace the sequence lengths retained by the model-owned product.
+        # Decode trace stays enabled at the engine layer regardless.
         return (
-            prefill_seq_len in allowed
+            num_cached_tokens == 0
+            and prefill_seq_len in self.trace_prefill_supported_seq_lens
             and prefill_seq_len <= self.max_prefill_chunk_size
             and prefill_seq_len <= self.max_seq_len
         )
@@ -111,13 +157,22 @@ class Qwen3_32BConfig:
     max_batch_size: int
     max_seq_len: int
     rope_table_len: int
+    num_devices: int = 8
+    mesh_device: ttnn.MeshDevice | None = None
+    n_layers: int | None = None
+    block_configs: list[Any] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.n_layers is None:
+            self.n_layers = self.num_hidden_layers
 
 
-_QWEN_ATTN_HIFI4_FP32_KERNEL = ttnn.WormholeComputeKernelConfig(
+_HIFI4_FP32_KERNEL = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4,
     math_approx_mode=False,
     fp32_dest_acc_en=True,
     packer_l1_acc=True,
+    dst_full_sync_en=False,
 )
 """HiFi4 + fp32 dest acc for Qwen3-32B attention matmuls (LI_QKV, LI_O, SDPA).
 
@@ -129,11 +184,36 @@ on the Qwen2.5-7B port). Used in ``QWEN3_32B_ACCURACY``.
 """
 
 
+_HIFI2_FP32_APPROX_KERNEL = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi2,
+    math_approx_mode=True,
+    fp32_dest_acc_en=True,
+    packer_l1_acc=True,
+    dst_full_sync_en=False,
+)
+
+_HIFI2_FP32_KERNEL = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi2,
+    math_approx_mode=False,
+    fp32_dest_acc_en=True,
+    packer_l1_acc=True,
+    dst_full_sync_en=False,
+)
+
+_HIFI2_FP16_KERNEL = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi2,
+    math_approx_mode=False,
+    fp32_dest_acc_en=False,
+    packer_l1_acc=True,
+    dst_full_sync_en=False,
+)
+
 _LOFI_COMPUTE_KERNEL_CFG = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.LoFi,
     math_approx_mode=False,
     fp32_dest_acc_en=False,
     packer_l1_acc=True,
+    dst_full_sync_en=False,
 )
 """LoFi + packer L1 acc for the MLP FF1/FF3 matmuls in performance mode.
 
@@ -145,7 +225,7 @@ branch at ``model_config.py:208-218`` sets ``FF1_FF3 → BFP4`` and
 
 @dataclass(frozen=True)
 class Qwen3_32BPrecisionConfig:
-    """Per-layer precision + math-fidelity recipe for Qwen3-32B on T3K.
+    """Per-layer precision + math-fidelity recipe for Qwen3-32B.
 
     Mirrors the fields TTTv1's ``DecodersPrecision`` distinguishes for Qwen3-32B.
     The base model name resolves to ``Qwen3-32B`` (via ``common.get_base_model_name``),
@@ -165,9 +245,9 @@ class Qwen3_32BPrecisionConfig:
     customize a single field. Defaults below mirror the accuracy recipe so ``Qwen3_32BPrecisionConfig()``
     is equivalent to :data:`QWEN3_32B_ACCURACY`.
 
-    The ``mlp_w2_dtype`` / ``mlp_ff2_compute_kernel_cfg`` fields are absent because TTTv1 leaves
-    them at engine defaults (``BFP8`` / ``HIFI2_FP16``) in *both* recipes for this model, and
-    those defaults coincide with the TTTv2 ``MLP1D`` defaults.
+    Every parity-critical compute slot is explicit even when its value equals a
+    shared default, so a later shared-module change cannot silently alter this
+    validated model profile.
     """
 
     # Attention weight / KV-cache dtypes. Accuracy overrides BF16; performance keeps BFP8 default.
@@ -178,14 +258,21 @@ class Qwen3_32BPrecisionConfig:
     # MLP FF1/FF3 weight dtype. Accuracy keeps BFP8 default; performance overrides BFP4.
     mlp_w1_w3_dtype: ttnn.DataType = ttnn.bfloat8_b
 
-    # MLP FF1/FF3 compute kernel. ``None`` → MLP1D default (HIFI2_FP16); performance overrides LOFI.
-    mlp_ff1_3_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
+    # Four explicit MLP operation slots. Accuracy uses the TTTv1 HIFI2_FP16
+    # baseline; performance changes only FF1/FF3 to LOFI.
+    mlp_prefill_ff1_ff3_kernel: ttnn.DeviceComputeKernelConfig = _HIFI2_FP16_KERNEL
+    mlp_prefill_ff2_kernel: ttnn.DeviceComputeKernelConfig = _HIFI2_FP16_KERNEL
+    mlp_decode_ff1_ff3_kernel: ttnn.DeviceComputeKernelConfig = _HIFI2_FP16_KERNEL
+    mlp_decode_ff2_kernel: ttnn.DeviceComputeKernelConfig = _HIFI2_FP16_KERNEL
 
-    # Attention compute kernels. Accuracy sets HIFI4 + fp32 dest acc on every stage; performance
-    # leaves them at the Attention1D default (HIFI2 fp16 dest acc).
-    attn_li_qkv_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = _QWEN_ATTN_HIFI4_FP32_KERNEL
-    attn_sdpa_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = _QWEN_ATTN_HIFI4_FP32_KERNEL
-    attn_li_o_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = _QWEN_ATTN_HIFI4_FP32_KERNEL
+    # Six explicit attention slots. Accuracy is HIFI4/FP32 throughout. The
+    # performance profile below spells out TTTv1's asymmetric default table.
+    attn_decode_qkv_kernel: ttnn.DeviceComputeKernelConfig = _HIFI4_FP32_KERNEL
+    attn_decode_sdpa_kernel: ttnn.DeviceComputeKernelConfig = _HIFI4_FP32_KERNEL
+    attn_decode_wo_kernel: ttnn.DeviceComputeKernelConfig = _HIFI4_FP32_KERNEL
+    attn_prefill_qkv_kernel: ttnn.DeviceComputeKernelConfig = _HIFI4_FP32_KERNEL
+    attn_prefill_sdpa_kernel: ttnn.DeviceComputeKernelConfig = _HIFI4_FP32_KERNEL
+    attn_prefill_wo_kernel: ttnn.DeviceComputeKernelConfig = _HIFI4_FP32_KERNEL
 
     # LM-head weight dtype. Both Qwen3-32B recipes use BFP8 (== TTTv1, which never upgrades the
     # LM head). The bf16 "accuracy tightening" the Mistral / Coder-32B ports added regresses
@@ -216,10 +303,14 @@ QWEN3_32B_PERFORMANCE = Qwen3_32BPrecisionConfig(
     wo_dtype=ttnn.bfloat8_b,
     kv_cache_dtype=ttnn.bfloat8_b,
     mlp_w1_w3_dtype=ttnn.bfloat4_b,
-    mlp_ff1_3_compute_kernel_cfg=_LOFI_COMPUTE_KERNEL_CFG,
-    attn_li_qkv_kernel_cfg=None,
-    attn_sdpa_kernel_cfg=None,
-    attn_li_o_kernel_cfg=None,
+    mlp_prefill_ff1_ff3_kernel=_LOFI_COMPUTE_KERNEL_CFG,
+    mlp_decode_ff1_ff3_kernel=_LOFI_COMPUTE_KERNEL_CFG,
+    attn_decode_qkv_kernel=_HIFI2_FP32_APPROX_KERNEL,
+    attn_decode_sdpa_kernel=_HIFI2_FP32_APPROX_KERNEL,
+    attn_decode_wo_kernel=_HIFI2_FP32_APPROX_KERNEL,
+    attn_prefill_qkv_kernel=_HIFI2_FP32_APPROX_KERNEL,
+    attn_prefill_sdpa_kernel=_HIFI4_FP32_KERNEL,
+    attn_prefill_wo_kernel=_HIFI2_FP32_APPROX_KERNEL,
     lm_head_dtype=ttnn.bfloat8_b,
 )
 
@@ -260,6 +351,8 @@ def _all_gather_rmsnorm_tensor(
 ) -> ttnn.Tensor:
     cfg = norm.config
     if cfg.mesh_device.get_num_devices() == 1 or x.shape[-1] == cfg.weight.source.numel():
+        if memory_config is not None:
+            return ttnn.to_memory_config(x, memory_config)
         return x
 
     if memory_config is None:
@@ -272,7 +365,7 @@ def _all_gather_rmsnorm_tensor(
         dim=3,
         multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
         num_links=1,
-        topology=default_topology(cfg.mesh_device),
+        topology=_qwen3_ccl_topology(cfg.mesh_device),
         memory_config=memory_config,
         barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
         chunks_per_sync=24,
@@ -281,37 +374,119 @@ def _all_gather_rmsnorm_tensor(
     )
 
 
-@dataclass
-class _Qwen3_32BWHTuning:
-    """Wormhole-specific L1 / cutoff tuning resolved at build time.
+@dataclass(frozen=True, slots=True)
+class _Qwen3_32BSKUOverlay:
+    """Effective WH-T3K or BH-P150x4 topology and geometry policy."""
 
-    Precision-vs-fidelity knobs live on :class:`Qwen3_32BPrecisionConfig`. This
-    dataclass only carries non-mode-dependent L1 footprint controls: MLP prefill cutoff
-    and the optional W1→DRAM spill on decode.
-    """
-
-    mlp_prefill_len_cutoff: int | None = None
+    architecture: str
+    topology: ttnn.Topology
+    dram_shard_grid_width: int
+    mlp_prefill_len_cutoff: int
+    mlp_prefill_grid: tuple[int, int]
     mlp_decode_spill_w1_to_dram: bool = False
+    prefill_minimal_matmul: bool = True
+    attention_prefill_qkv_grid: tuple[int, int] = (8, 8)
+    attention_decode_create_qkv_head_grid: ttnn.CoreGrid | None = None
+    attention_decode_transformation_grid: ttnn.CoreCoord | None = None
+    lm_head_core_grid: ttnn.CoreGrid | None = None
+    lm_head_max_columns_per_device: int = 8192
+    distributed_rmsnorm_min_dim_exclusive: int | None = None
+    disable_batched_prefill: bool = False
 
 
-def _resolve_qwen3_32b_wh_tuning(*, num_dev: int, max_batch_size: int) -> _Qwen3_32BWHTuning:
-    """Pick WH L1 tuning knobs for Qwen3-32B on T3K.
-
-    Mirrors the 7B port's empirical L1 cutoff (``mlp_prefill_len_cutoff=256`` for the wide FF
-    matmul on Wormhole). ``mlp_decode_spill_w1_to_dram`` is currently off on T3K because per-device
-    FF shards (5120×3456 per chip) are smaller than 7B-on-N300; re-evaluate if decode batch-32
-    trips L1 circular-buffer validation.
-    """
-    t = _Qwen3_32BWHTuning(
-        mlp_prefill_len_cutoff=256,
-        mlp_decode_spill_w1_to_dram=False,
-    )
+def _resolve_qwen3_32b_sku_overlay(*, arch, cluster_type, num_dev: int, mesh_device) -> _Qwen3_32BSKUOverlay:
+    """Select the approved Qwen3-32B WH-T3K or BH-P150x4 overlay."""
+    minimal = not os.environ.get("DISABLE_MINIMAL_MATMUL")
+    if arch == ttnn.device.Arch.WORMHOLE_B0 and cluster_type == ttnn.cluster.ClusterType.T3K and num_dev == 8:
+        overlay = _Qwen3_32BSKUOverlay(
+            architecture="wormhole",
+            topology=ttnn.Topology.Ring,
+            # Preserve the established WH recipe, which shards over 8 DRAM
+            # banks even though Wormhole physically exposes 12 DRAM cores.
+            dram_shard_grid_width=8,
+            mlp_prefill_len_cutoff=1024,
+            mlp_prefill_grid=(8, 8),
+            prefill_minimal_matmul=minimal,
+            attention_prefill_qkv_grid=(8, 8),
+            attention_decode_transformation_grid=mesh_device.compute_with_storage_grid_size(),
+        )
+    elif arch == ttnn.device.Arch.BLACKHOLE and cluster_type in QWEN3_32B_BH_TP4_CLUSTER_TYPES and num_dev == 4:
+        overlay = _Qwen3_32BSKUOverlay(
+            architecture="blackhole",
+            topology=ttnn.Topology.Ring,
+            dram_shard_grid_width=mesh_device.dram_grid_size().x,
+            mlp_prefill_len_cutoff=512,
+            mlp_prefill_grid=(8, 5),
+            prefill_minimal_matmul=minimal,
+            attention_prefill_qkv_grid=(8, 4),
+            attention_decode_create_qkv_head_grid=ttnn.CoreGrid(x=8, y=4),
+            attention_decode_transformation_grid=ttnn.CoreCoord(8, 8),
+            lm_head_core_grid=ttnn.CoreGrid(x=8, y=5),
+            lm_head_max_columns_per_device=4008,
+            distributed_rmsnorm_min_dim_exclusive=4096,
+            disable_batched_prefill=True,
+        )
+    else:
+        raise ValueError(
+            "Qwen3-32B supports Wormhole T3K (8 devices) or BlackHole P150_X4/P300_X2 (4 devices); "
+            f"got arch={arch}, cluster_type={cluster_type}, num_devices={num_dev}"
+        )
     logger.info(
-        f"L1 tuning for Qwen3-32B on {num_dev} device(s): "
-        f"prefill_len_cutoff={t.mlp_prefill_len_cutoff}, "
-        f"decode_spill_w1_to_dram={t.mlp_decode_spill_w1_to_dram}"
+        f"Qwen3-32B {overlay.architecture} SKU overlay on {num_dev} devices: "
+        f"topology={overlay.topology}, mlp_grid={overlay.mlp_prefill_grid}, "
+        f"attention_grid={overlay.attention_prefill_qkv_grid}, "
+        f"cutoff={overlay.mlp_prefill_len_cutoff}, minimal_matmul={overlay.prefill_minimal_matmul}"
     )
-    return t
+    return overlay
+
+
+def _qwen3_rmsnorm_config(common: RMSNorm1DConfig) -> RMSNorm1DConfig:
+    """Apply the model-owned RMSNorm recipe without mutating the caller config."""
+    return replace(common, compute_kernel_config=_HIFI2_FP32_KERNEL)
+
+
+def _qwen3_attention_config(
+    common: Attention1DConfig,
+    *,
+    sku: _Qwen3_32BSKUOverlay,
+    precision: Qwen3_32BPrecisionConfig,
+) -> Attention1DConfig:
+    return replace(
+        common,
+        li_qkv_decode_compute_kernel_cfg=precision.attn_decode_qkv_kernel,
+        sdpa_decode_compute_kernel_cfg=precision.attn_decode_sdpa_kernel,
+        li_o_decode_compute_kernel_cfg=precision.attn_decode_wo_kernel,
+        li_qkv_prefill_compute_kernel_cfg=precision.attn_prefill_qkv_kernel,
+        sdpa_prefill_compute_kernel_cfg=precision.attn_prefill_sdpa_kernel,
+        li_o_prefill_compute_kernel_cfg=precision.attn_prefill_wo_kernel,
+        prefill_qkv_grid=sku.attention_prefill_qkv_grid,
+        dram_shard_grid_width=sku.dram_shard_grid_width,
+        decode_create_qkv_head_grid=sku.attention_decode_create_qkv_head_grid,
+        decode_transformation_core_grid=sku.attention_decode_transformation_grid,
+    )
+
+
+def _qwen3_mlp_config(
+    common: MLP1DConfig,
+    *,
+    sku: _Qwen3_32BSKUOverlay,
+    precision: Qwen3_32BPrecisionConfig,
+) -> MLP1DConfig:
+    return replace(
+        common,
+        ff1_3_compute_kernel_cfg=precision.mlp_prefill_ff1_ff3_kernel,
+        ff2_compute_kernel_cfg=precision.mlp_prefill_ff2_kernel,
+        decode_ff1_3_compute_kernel_cfg=precision.mlp_decode_ff1_ff3_kernel,
+        decode_ff2_compute_kernel_cfg=precision.mlp_decode_ff2_kernel,
+        prefill_len_cutoff=sku.mlp_prefill_len_cutoff,
+        prefill_dram_shard_grid_width=sku.dram_shard_grid_width,
+        prefill_ff1_ff3_grid=sku.mlp_prefill_grid,
+        prefill_ff2_grid=sku.mlp_prefill_grid,
+    )
+
+
+def _qwen3_lm_head_config(common: LMHead1DConfig) -> LMHead1DConfig:
+    return replace(common, compute_kernel_config=_HIFI2_FP16_KERNEL)
 
 
 def _build_decoder_layer(
@@ -328,7 +503,7 @@ def _build_decoder_layer(
     executor_mode: bool,
     paged_cfg: Qwen3_32BPagedAttentionConfig | None,
     cache_path: Path | None,
-    wh: _Qwen3_32BWHTuning,
+    sku: _Qwen3_32BSKUOverlay,
 ) -> Qwen3_32BDecoderLayer:
     """Construct one decoder layer (attention + MLP + the two RMSNorms) from an HF layer."""
     prefix = f"layer{idx}"
@@ -339,7 +514,7 @@ def _build_decoder_layer(
     )
     lazy_wo = _lazy(wo, dtype=precision.wo_dtype, cache=(cache_path / "attn", f"{prefix}_wo") if cache_path else None)
 
-    def _qk_norm_cfg(weight: torch.Tensor | None, name: str) -> RMSNorm1DConfig | None:
+    def _qk_norm_cfg(weight: torch.Tensor | None, name: str):
         if weight is None:
             return None
         lw = _lazy(
@@ -347,7 +522,7 @@ def _build_decoder_layer(
             dtype=ttnn.bfloat16,
             cache=(cache_path / "attn", f"{prefix}_{name}") if cache_path else None,
         )
-        return RMSNorm1DConfig(
+        common = RMSNorm1DConfig(
             weight=lw,
             mesh_device=mesh_device,
             eps=qcfg.rms_norm_eps,
@@ -356,6 +531,7 @@ def _build_decoder_layer(
             prefill_distributed=False,
             tt_ccl=tt_ccl,
         )
+        return _qwen3_rmsnorm_config(common)
 
     bias_lw = (
         LazyWeight(
@@ -367,53 +543,58 @@ def _build_decoder_layer(
         else None
     )
 
-    attn = Attention1D.from_config(
-        Attention1DConfig(
-            wqkv=lazy_wqkv,
-            wo=lazy_wo,
-            mesh_device=mesh_device,
-            tt_ccl=tt_ccl,
-            topology=topology,
-            n_heads=qcfg.n_heads,
-            n_kv_heads=qcfg.n_kv_heads,
-            head_dim=qcfg.head_dim,
-            max_batch_size=qcfg.max_batch_size,
-            max_seq_len=qcfg.max_seq_len,
-            q_norm_config=_qk_norm_cfg(qn, "qn"),
-            k_norm_config=_qk_norm_cfg(kn, "kn"),
-            wqkv_bias=bias_lw,
-            use_vllm_paged_kv_cache=executor_mode,
-            paged_attention_config=paged_cfg,
-            kv_cache=None,
-            kv_cache_dtype=precision.kv_cache_dtype,
-            li_qkv_prefill_compute_kernel_cfg=precision.attn_li_qkv_kernel_cfg,
-            li_qkv_decode_compute_kernel_cfg=precision.attn_li_qkv_kernel_cfg,
-            sdpa_decode_compute_kernel_cfg=precision.attn_sdpa_kernel_cfg,
-            li_o_prefill_compute_kernel_cfg=precision.attn_li_o_kernel_cfg,
-            li_o_decode_compute_kernel_cfg=precision.attn_li_o_kernel_cfg,
-        )
+    attention_common = Attention1DConfig(
+        wqkv=lazy_wqkv,
+        wo=lazy_wo,
+        mesh_device=mesh_device,
+        tt_ccl=tt_ccl,
+        topology=topology,
+        n_heads=qcfg.n_heads,
+        n_kv_heads=qcfg.n_kv_heads,
+        head_dim=qcfg.head_dim,
+        max_batch_size=qcfg.max_batch_size,
+        max_seq_len=qcfg.max_seq_len,
+        q_norm_config=_qk_norm_cfg(qn, "qn"),
+        k_norm_config=_qk_norm_cfg(kn, "kn"),
+        wqkv_bias=bias_lw,
+        use_vllm_paged_kv_cache=executor_mode,
+        paged_attention_config=paged_cfg,
+        kv_cache=None,
+        kv_cache_dtype=precision.kv_cache_dtype,
+        prefill_qkv_minimal_matmul=sku.prefill_minimal_matmul,
     )
+    attention_config = _qwen3_attention_config(
+        attention_common,
+        sku=sku,
+        precision=precision,
+    )
+    attn = Attention1D.from_config(attention_config)
 
     w1, w2, w3 = weight_utils.mlp_weights_from_hf_layer(hf_layer.mlp)
+    mlp_common = MLP1DConfig(
+        w1=_lazy(
+            w1, dtype=precision.mlp_w1_w3_dtype, cache=(cache_path / "mlp", f"{prefix}_w1") if cache_path else None
+        ),
+        w2=_lazy(w2, dtype=ttnn.bfloat8_b, cache=(cache_path / "mlp", f"{prefix}_w2") if cache_path else None),
+        w3=_lazy(
+            w3, dtype=precision.mlp_w1_w3_dtype, cache=(cache_path / "mlp", f"{prefix}_w3") if cache_path else None
+        ),
+        mesh_device=mesh_device,
+        tt_ccl=tt_ccl,
+        topology=topology,
+        dim=qcfg.dim,
+        hidden_dim=qcfg.hidden_dim,
+        max_batch_size=qcfg.max_batch_size,
+        w1_w3_dtype=precision.mlp_w1_w3_dtype,
+        w2_dtype=ttnn.bfloat8_b,
+        decode_spill_w1_to_dram_before_w3=sku.mlp_decode_spill_w1_to_dram,
+        prefill_w2_minimal_matmul=sku.prefill_minimal_matmul,
+    )
     mlp = MLP1D.from_config(
-        MLP1DConfig(
-            w1=_lazy(
-                w1, dtype=precision.mlp_w1_w3_dtype, cache=(cache_path / "mlp", f"{prefix}_w1") if cache_path else None
-            ),
-            w2=_lazy(w2, dtype=ttnn.bfloat8_b, cache=(cache_path / "mlp", f"{prefix}_w2") if cache_path else None),
-            w3=_lazy(
-                w3, dtype=precision.mlp_w1_w3_dtype, cache=(cache_path / "mlp", f"{prefix}_w3") if cache_path else None
-            ),
-            mesh_device=mesh_device,
-            tt_ccl=tt_ccl,
-            topology=topology,
-            max_batch_size=qcfg.max_batch_size,
-            prefill_len_cutoff=wh.mlp_prefill_len_cutoff,
-            w1_w3_dtype=precision.mlp_w1_w3_dtype,
-            w2_dtype=ttnn.bfloat8_b,
-            ff1_3_compute_kernel_cfg=precision.mlp_ff1_3_compute_kernel_cfg,
-            decode_ff1_3_compute_kernel_cfg=precision.mlp_ff1_3_compute_kernel_cfg,
-            decode_spill_w1_to_dram_before_w3=wh.mlp_decode_spill_w1_to_dram,
+        _qwen3_mlp_config(
+            mlp_common,
+            sku=sku,
+            precision=precision,
         )
     )
 
@@ -431,16 +612,17 @@ def _build_decoder_layer(
             dtype=ttnn.bfloat16,
             cache=(cache_path / "norm", f"{prefix}_{name}") if cache_path else None,
         )
-        return RMSNorm1D.from_config(
-            RMSNorm1DConfig(
-                weight=lw,
-                mesh_device=mesh_device,
-                eps=qcfg.rms_norm_eps,
-                max_batch_size=qcfg.max_batch_size,
-                tt_ccl=tt_ccl,
-                **extra,
-            )
+        common = RMSNorm1DConfig(
+            weight=lw,
+            mesh_device=mesh_device,
+            eps=qcfg.rms_norm_eps,
+            max_batch_size=qcfg.max_batch_size,
+            tt_ccl=tt_ccl,
+            **extra,
         )
+        if sku.distributed_rmsnorm_min_dim_exclusive is not None:
+            common.prefill_distributed = qcfg.dim > sku.distributed_rmsnorm_min_dim_exclusive
+        return RMSNorm1D.from_config(_qwen3_rmsnorm_config(common))
 
     return Qwen3_32BDecoderLayer(
         input_layernorm=_build_norm(hf_layer.input_layernorm, "pre_attn"),
@@ -462,6 +644,7 @@ def _build_lm_head(
     qcfg: Qwen3_32BConfig,
     lm_head_dtype: ttnn.DataType,
     cache_path: Path | None,
+    sku: _Qwen3_32BSKUOverlay,
 ) -> LMHead1D:
     """Build the vocab-sharded LM head with DRAM-matmul program configs.
 
@@ -474,10 +657,11 @@ def _build_lm_head(
         lm_w,
         dim=qcfg.dim,
         vocab_size=qcfg.vocab_size,
+        max_columns_per_device=sku.lm_head_max_columns_per_device,
         dtype=lm_head_dtype,
         cache_dir=cache_path / "lm_head" if cache_path else None,
     )
-    lm_head_core_grid = _dram_shard_core_grid(qcfg.dim)
+    lm_head_core_grid = sku.lm_head_core_grid or _dram_shard_core_grid(qcfg.dim)
     tile = ttnn.TILE_SIZE
     tile_padded_batch_rows = tile * math.ceil(qcfg.max_batch_size / tile)
     lm_prog_configs = [
@@ -490,18 +674,18 @@ def _build_lm_head(
         ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-    return LMHead1D.from_config(
-        LMHead1DConfig(
-            output_weights=lm_splits,
-            mesh_device=mesh_device,
-            dim=qcfg.dim,
-            max_batch_size=qcfg.max_batch_size,
-            lm_head_dtype=lm_head_dtype,
-            program_configs=lm_prog_configs,
-            input_memcfg=lm_input_memcfg,
-            weights_memcfgs=lm_weights_memcfgs,
-        )
+    common = LMHead1DConfig(
+        output_weights=lm_splits,
+        mesh_device=mesh_device,
+        dim=qcfg.dim,
+        max_batch_size=qcfg.max_batch_size,
+        lm_head_dtype=lm_head_dtype,
+        program_configs=lm_prog_configs,
+        output_split_sizes=lm_split_sizes,
+        input_memcfg=lm_input_memcfg,
+        weights_memcfgs=lm_weights_memcfgs,
     )
+    return LMHead1D.from_config(_qwen3_lm_head_config(common))
 
 
 class Qwen3_32BDecoderLayer(LightweightModule):
@@ -518,6 +702,10 @@ class Qwen3_32BDecoderLayer(LightweightModule):
         self.self_attn = self_attn
         self.post_attention_layernorm = post_attention_layernorm
         self.mlp = mlp
+        self.attention_norm = input_layernorm
+        self.attention = self_attn
+        self.ff_norm = post_attention_layernorm
+        self.feed_forward = mlp
 
     def prefill_forward(
         self,
@@ -528,20 +716,25 @@ class Qwen3_32BDecoderLayer(LightweightModule):
         page_table: ttnn.Tensor | None = None,
         chunk_page_table: ttnn.Tensor | None = None,
         chunk_start_idx: int | None = None,
+        batch_size: int = 1,
+        chunk_start_idx_tensor: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
+        # For batched prefill (batch_size > 1) x is the folded [1,1,B*S,dim] hidden state; norm,
+        # residual add and MLP are row-independent so they treat B*S as one long sequence unchanged.
+        # Only attention unfolds the batch axis internally (see Attention1D.prefill_forward).
         # Match Llama ``TransformerBlock1D``: fractured embed / norm activations must be
         # all-gathered to full ``dim`` before Attention1D / MLP1D (QKV matmul expects width ``dim``).
         r = self.input_layernorm.prefill_forward(x)
         r = _all_gather_rmsnorm_tensor(self.input_layernorm, r)
-        r = self.self_attn.forward(
+        r = self.self_attn.prefill_forward(
             r,
-            None,
             rot_mats,
-            mode="prefill",
             user_id=user_id,
             page_table=page_table,
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
+            batch_size=batch_size,
+            chunk_start_idx_tensor=chunk_start_idx_tensor,
         )
         h = ttnn.add(x, r, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         r2 = self.post_attention_layernorm.prefill_forward(h)
@@ -572,9 +765,9 @@ class Qwen3_32BDecoderLayer(LightweightModule):
 
 class Qwen3_32B(LightweightModule):
     """
-    Full decoder for Qwen3-32B (TTTv2 modules only) on T3K.
+    Full decoder for Qwen3-32B (TTTv2 modules only) on WH T3K or BH P150x4.
 
-    Prefill/decode on **embedded** activations match ``EagerLLMExecutor``. Token embedding
+    Prefill/decode on **embedded** activations match the model-owned executor surface. Token embedding
     is ``embed_prefill`` / ``embed_decode``. Bind KV with ``set_kv_cache`` before first forward.
     """
 
@@ -592,7 +785,10 @@ class Qwen3_32B(LightweightModule):
     ):
         super().__init__()
         self.cfg = cfg
+        self.config = cfg
+        self.config.mesh_device = mesh_device
         self.embed = embed
+        self.embedding = self.embed
         self.rope_setup = rope_setup
         self.layers = layers
         self.norm = norm
@@ -604,6 +800,11 @@ class Qwen3_32B(LightweightModule):
         self.n_layers = cfg.num_hidden_layers
         self.num_devices = mesh_device.get_num_devices()
         self.tt_ccl = get_tt_ccl(mesh_device) if self.num_devices > 1 else None
+        self.config.num_devices = self.num_devices
+        self.config.n_layers = cfg.num_hidden_layers
+        self.config.block_configs = [
+            type("_BlockConfig", (), {"attention_config": layer.self_attn.config})() for layer in self.layers
+        ]
         # Same padded width the LM head uses (weight_utils is the single source of truth). The
         # sampler runs per-device top-k on the LM head's tile-aligned shards, so it MUST share this
         # width or its index_offsets (device_id * vocab // num_devices) miss the real shard boundary.
@@ -612,9 +813,8 @@ class Qwen3_32B(LightweightModule):
         # The model owns its sampler (replacing the self.sampling = None placeholder); callers pick
         # behavior per request via sampling_params. Buffers are lazy (nothing materializes until the
         # first on-device sampled decode), so this is harmless when sampling_params is None (the
-        # host-argmax path, which stays the demo default). Qwen3-32B is T3K-only (from_pretrained
-        # rejects non-8 meshes), so the vocab always shards 8-ways and on-device top-k is always the
-        # cheap path — build the sampler unconditionally (no num_devices gate to mislead readers).
+        # host-argmax path, which stays the demo default). Both supported SKUs
+        # are multi-device, so build the sampler unconditionally.
         self.supports_on_device_sampling = True
         self.sampling = Sampling1D(
             # Padded width for the per-device top-k offset math; valid_vocab_size carries the
@@ -624,11 +824,9 @@ class Qwen3_32B(LightweightModule):
             mesh_device=mesh_device,
             tt_ccl=self.tt_ccl,
             max_batch_size=_nearest_32(cfg.max_batch_size),
-            # Clone TTTv1's decision: allow_force_argmax=False for all non-Galaxy meshes (only
-            # Llama-3.1-8B on TG flips it True). The perf recipe (temp=0, top_k=32, top_p=0.08)
-            # routes through the cheap top-k op path — per-device ttnn.topk -> all-gather of the
-            # [*,32] tuples -> ttnn.sampling — never the full-vocab argmax all-gather.
-            allow_force_argmax=False,
+            # Qwen3's valid vocabulary is tile-aligned, so greedy argmax can slice
+            # away the padded tail instead of invoking the unsupported tail mask.
+            allow_force_argmax=True,
             pad_to_power_of_2=True,
         )
 
@@ -650,12 +848,13 @@ class Qwen3_32B(LightweightModule):
         precision: Qwen3_32BPrecisionConfig = QWEN3_32B_ACCURACY,
         block_size: int = 32,
         executor_mode: bool = False,
+        disable_batched_prefill: bool | None = None,
     ) -> Qwen3_32B:
         """
         Load HF weights on host and build TTNN modules (weights materialize on first forward).
 
         Args:
-            mesh_device: Open mesh device — must be T3K ``(1, 8)``.
+            mesh_device: Open Wormhole T3K ``(1, 8)`` or BlackHole P150x4 ``(1, 4)`` mesh.
             hf_model_id: Hugging Face hub id.
             revision: HF revision SHA (default pins to ``DEFAULT_HF_REVISION``).
             max_batch_size: Decode batch / KV allocation (tile-padded internally).
@@ -673,15 +872,21 @@ class Qwen3_32B(LightweightModule):
         ttnn.SetDefaultDevice(mesh_device)
         cache_path = Path(cache_dir) if cache_dir else None
         num_dev = mesh_device.get_num_devices()
-        if num_dev != 8:
-            raise ValueError(
-                f"Qwen3-32B port targets T3K (mesh (1, 8) = 8 devices) only. "
-                f"Got mesh_device with {num_dev} device(s). Open a T3K mesh with MESH_DEVICE=T3K."
-            )
+        arch = mesh_device.arch()
+        sku = _resolve_qwen3_32b_sku_overlay(
+            arch=arch,
+            cluster_type=ttnn.cluster.get_cluster_type(),
+            num_dev=num_dev,
+            mesh_device=mesh_device,
+        )
         tt_ccl = get_tt_ccl(mesh_device)
-        topology = default_topology(mesh_device)
+        topology = sku.topology
 
-        hf_cfg = AutoConfig.from_pretrained(hf_model_id, revision=revision)
+        local_files_only = any(
+            os.getenv(name, "").lower() in {"1", "true", "yes"}
+            for name in ("CI", "HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")
+        )
+        hf_cfg = AutoConfig.from_pretrained(hf_model_id, revision=revision, local_files_only=local_files_only)
         n_heads_hf = hf_cfg.num_attention_heads
         n_kv_hf = hf_cfg.num_key_value_heads
         if n_heads_hf % num_dev != 0 or n_kv_hf % num_dev != 0:
@@ -692,7 +897,12 @@ class Qwen3_32B(LightweightModule):
             )
         torch_dtype = torch.bfloat16
         logger.info(f"Loading HF weights: {hf_model_id} (revision={revision})")
-        hf = AutoModelForCausalLM.from_pretrained(hf_model_id, revision=revision, torch_dtype=torch_dtype)
+        hf = AutoModelForCausalLM.from_pretrained(
+            hf_model_id,
+            revision=revision,
+            torch_dtype=torch_dtype,
+            local_files_only=local_files_only,
+        )
         hf.eval()
         base = hf.model
         n_layers = num_layers if num_layers is not None else hf_cfg.num_hidden_layers
@@ -703,6 +913,11 @@ class Qwen3_32B(LightweightModule):
         # Always prefer the explicit config field; fall back to the Llama/Qwen2.5 coupled formula.
         head_dim = getattr(hf_cfg, "head_dim", None) or (dim // n_heads)
         inter = hf_cfg.intermediate_size
+        if inter != QWEN3_32B_INTERMEDIATE_SIZE:
+            raise ValueError(
+                "Qwen3-32B requires the checked-in intermediate_size=25600 profile; "
+                f"the loaded checkpoint reports {inter}"
+            )
         vocab = hf_cfg.vocab_size
         rope_len = max(max_seq_len * 2, 8192)
         rope_len = (rope_len + 127) // 128 * 128
@@ -729,6 +944,8 @@ class Qwen3_32B(LightweightModule):
             max_batch_size=max_batch_size,
             max_seq_len=max_seq_len,
             rope_table_len=rope_len,
+            num_devices=num_dev,
+            mesh_device=mesh_device,
         )
 
         emb_src = weight_utils.embed_tokens_torch(base.embed_tokens)
@@ -755,10 +972,9 @@ class Qwen3_32B(LightweightModule):
                 head_dim=head_dim,
                 device=mesh_device,
                 use_qk_fused=False,
+                core_grid=sku.attention_decode_transformation_grid,
             )
         )
-
-        wh = _resolve_qwen3_32b_wh_tuning(num_dev=num_dev, max_batch_size=max_batch_size)
 
         layers: list[Qwen3_32BDecoderLayer] = [
             _build_decoder_layer(
@@ -774,7 +990,7 @@ class Qwen3_32B(LightweightModule):
                 executor_mode=executor_mode,
                 paged_cfg=paged_cfg,
                 cache_path=cache_path,
-                wh=wh,
+                sku=sku,
             )
             for idx in range(n_layers)
         ]
@@ -784,15 +1000,16 @@ class Qwen3_32B(LightweightModule):
             dtype=ttnn.bfloat16,
             cache=(cache_path / "norm", "final") if cache_path else None,
         )
-        final_norm = RMSNorm1D.from_config(
-            RMSNorm1DConfig(
-                weight=norm_lw,
-                mesh_device=mesh_device,
-                eps=hf_cfg.rms_norm_eps,
-                max_batch_size=max_batch_size,
-                tt_ccl=tt_ccl,
-            )
+        final_norm_common = RMSNorm1DConfig(
+            weight=norm_lw,
+            mesh_device=mesh_device,
+            eps=hf_cfg.rms_norm_eps,
+            max_batch_size=max_batch_size,
+            tt_ccl=tt_ccl,
         )
+        if sku.distributed_rmsnorm_min_dim_exclusive is not None:
+            final_norm_common.prefill_distributed = dim > sku.distributed_rmsnorm_min_dim_exclusive
+        final_norm = RMSNorm1D.from_config(_qwen3_rmsnorm_config(final_norm_common))
 
         lm = _build_lm_head(
             mesh_device=mesh_device,
@@ -800,6 +1017,7 @@ class Qwen3_32B(LightweightModule):
             qcfg=qcfg,
             lm_head_dtype=precision.lm_head_dtype,
             cache_path=cache_path,
+            sku=sku,
         )
 
         del hf
@@ -815,15 +1033,92 @@ class Qwen3_32B(LightweightModule):
                 cluster_shape=list(mesh_device.shape),
                 model_cache_path=cache_path,
                 kv_cache_dtype=precision.kv_cache_dtype,
+                # Match TTTv1's P150x4 policy. The cross-cardinality experiment in the
+                # approval plan must pass before this construction-time guard is removed.
+                disable_batched_prefill=(
+                    sku.disable_batched_prefill if disable_batched_prefill is None else disable_batched_prefill
+                )
+                or bool(os.environ.get("DISABLE_BATCHED_PREFILL")),
+                # A/B escape hatch: DISABLE_BATCHED_EXTRACT=1 forces the per-slot last-token extract
+                # (one lm_head per user, bit-identical to the sequential path) instead of the default
+                # gathered extract (one lm_head over the whole group).
+                batched_prefill_batched_extract=not os.environ.get("DISABLE_BATCHED_EXTRACT"),
             )
         return model
 
-    def set_kv_cache(self, kv_cache: list) -> None:
-        assert len(kv_cache) == len(
-            self.layers
-        ), f"kv_cache has {len(kv_cache)} entries but model has {len(self.layers)} layers"
-        for i, layer in enumerate(self.layers):
-            layer.self_attn.config.kv_cache = tuple(kv_cache[i])
+    def iter_executor_named_modules(self):
+        if not hasattr(self, "layers"):
+            return
+        for index, layer in enumerate(self.layers):
+            for suffix, submodule in (
+                ("attn_norm", getattr(layer, "attention_norm", None)),
+                ("attention", getattr(layer, "attention", None)),
+                ("ff_norm", getattr(layer, "ff_norm", None)),
+                ("mlp", getattr(layer, "feed_forward", None)),
+            ):
+                if submodule is not None:
+                    yield f"layer[{index}].{suffix}", submodule
+        if hasattr(self, "norm"):
+            yield "final_norm", self.norm
+        if hasattr(self, "lm_head"):
+            yield "lm_head", self.lm_head
+
+    def configure_paged_attention(self, *, block_size: int, max_num_blocks: int) -> None:
+        for name, value in (("block_size", block_size), ("max_num_blocks", max_num_blocks)):
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+        live_configs = tuple(layer.self_attn.config for layer in self.layers)
+        for layer_index, config in enumerate(live_configs):
+            if not getattr(config, "use_vllm_paged_kv_cache", False):
+                raise RuntimeError("Cannot configure paged attention on a model built without executor_mode=True")
+            if config.kv_cache is not None or getattr(self.layers[layer_index].self_attn, "kv_cache", None) is not None:
+                raise RuntimeError(f"Model layer {layer_index} already has a bound KV cache")
+        construction_configs = tuple(block.attention_config for block in getattr(self.config, "block_configs", ()))
+        for config in tuple({id(item): item for item in (*construction_configs, *live_configs)}.values()):
+            config.paged_attention_config = Qwen3_32BPagedAttentionConfig(
+                block_size=block_size,
+                max_num_blocks=max_num_blocks,
+            )
+
+    def prepare_prefill_rot_mats(self, position_indices: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        self.rope_setup.load_device_weights()
+        cos = None
+        sin = None
+        try:
+            cos = ttnn.embedding(position_indices, self.rope_setup.cos_matrix, layout=ttnn.TILE_LAYOUT)
+            sin = ttnn.embedding(position_indices, self.rope_setup.sin_matrix, layout=ttnn.TILE_LAYOUT)
+            return ttnn.unsqueeze_to_4D(cos), ttnn.unsqueeze_to_4D(sin)
+        except BaseException:
+            for tensor in (sin, cos):
+                if tensor is not None:
+                    try:
+                        ttnn.deallocate(tensor)
+                    except BaseException:
+                        pass
+            raise
+
+    def set_kv_cache(self, kv_cache: list | None) -> None:
+        if kv_cache is None:
+            for layer in self.layers:
+                layer.self_attn.config.kv_cache = None
+                if hasattr(layer.self_attn, "kv_cache"):
+                    layer.self_attn.kv_cache = None
+            return
+        if len(kv_cache) != len(self.layers):
+            raise ValueError(f"kv_cache has {len(kv_cache)} entries but model has {len(self.layers)} layers")
+        cache_pairs = []
+        for index, value in enumerate(kv_cache):
+            try:
+                pair = tuple(value)
+            except TypeError as error:
+                raise TypeError(f"kv_cache layer {index} must provide an iterable K/V tensor pair") from error
+            if len(pair) != 2:
+                raise ValueError(f"kv_cache layer {index} must contain exactly two K/V tensors")
+            cache_pairs.append(pair)
+        for layer, pair in zip(self.layers, cache_pairs):
+            layer.self_attn.config.kv_cache = pair
+            if hasattr(layer.self_attn, "kv_cache"):
+                layer.self_attn.kv_cache = pair
 
     def embed_decode(self, tokens: ttnn.Tensor) -> ttnn.Tensor:
         x = self.embed.forward(tokens)
@@ -838,13 +1133,19 @@ class Qwen3_32B(LightweightModule):
         self,
         x_embed: ttnn.Tensor,
         rot_mats: tuple[ttnn.Tensor, ttnn.Tensor],
-        *,
         user_id: int = 0,
         page_table: ttnn.Tensor | None = None,
         chunk_page_table: ttnn.Tensor | None = None,
         chunk_start_idx: int | None = None,
         get_last_token: int = -1,
+        batch_size: int = 1,
+        chunk_start_idx_tensor: ttnn.Tensor | None = None,
+        last_token_slice: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
+        last_token_index: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
+        # batch_size > 1: x_embed is the folded [1,1,B*S,dim] tensor (B users). The batched path always
+        # returns the full hidden state (get_last_token == -1); the executor does per-slot last-token
+        # extraction + norm/lm_head so those stages stay bit-identical to the single-user path.
         x = x_embed
         for layer in self.layers:
             x = layer.prefill_forward(
@@ -854,6 +1155,8 @@ class Qwen3_32B(LightweightModule):
                 page_table=page_table,
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
+                batch_size=batch_size,
+                chunk_start_idx_tensor=chunk_start_idx_tensor,
             )
 
         if get_last_token == -1:
@@ -861,12 +1164,81 @@ class Qwen3_32B(LightweightModule):
 
         # Slice + deallocate the full-sequence buffer before norm/LM head reduces peak L1.
         old = x
-        x_tile = _slice_last_token_tile(old, get_last_token)
+        if last_token_slice is None:
+            x_tile = _slice_last_token_tile(old, get_last_token)
+        else:
+            x_tile = ttnn.slice(
+                old,
+                last_token_slice[0],
+                last_token_slice[1],
+                slice_dim=2,
+                num_devices=int(old.shape[2]) // 32,
+            )
         ttnn.deallocate(old)
+        if last_token_index is not None:
+            if x_tile.dtype != ttnn.bfloat16:
+                old = x_tile
+                x_tile = ttnn.typecast(x_tile, ttnn.bfloat16)
+                ttnn.deallocate(old)
+            old = x_tile
+            x_tile = ttnn.embedding(last_token_index, x_tile, layout=ttnn.TILE_LAYOUT)
+            x_tile = ttnn.unsqueeze_to_4D(x_tile)
+            ttnn.deallocate(old)
         return self._last_tile_logits(x_tile)
 
-    def post_process_prefill_output(self, hidden_states: ttnn.Tensor, last_token_idx: int) -> ttnn.Tensor:
-        return self._last_tile_logits(_slice_last_token_tile(hidden_states, last_token_idx))
+    def post_process_prefill_output(
+        self,
+        hidden_states: ttnn.Tensor,
+        last_token_idx: int,
+        last_token_slice: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
+        last_token_index: ttnn.Tensor | None = None,
+    ) -> ttnn.Tensor:
+        if last_token_slice is None:
+            x = _slice_last_token_tile(hidden_states, last_token_idx)
+        else:
+            x = ttnn.slice(
+                hidden_states,
+                last_token_slice[0],
+                last_token_slice[1],
+                slice_dim=2,
+                num_devices=int(hidden_states.shape[2]) // 32,
+            )
+        if last_token_index is not None:
+            if x.dtype != ttnn.bfloat16:
+                old = x
+                x = ttnn.typecast(x, ttnn.bfloat16)
+                ttnn.deallocate(old)
+            old = x
+            x = ttnn.embedding(last_token_index, x, layout=ttnn.TILE_LAYOUT)
+            x = ttnn.unsqueeze_to_4D(x)
+            ttnn.deallocate(old)
+        return self._last_tile_logits(x)
+
+    def post_process_batched_prefill_output(
+        self,
+        hidden_states: ttnn.Tensor,
+        last_token_idx_list: list[int],
+        padded_batch: int,
+        prefill_seq_len: int,
+        last_token_slice: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
+        last_token_index: ttnn.Tensor | None = None,
+    ) -> ttnn.Tensor:
+        del last_token_slice, last_token_index
+        fold_len = padded_batch * prefill_seq_len
+        selector = torch.zeros(1, 1, 32, fold_len, dtype=torch.bfloat16)
+        for local_row, last_token_idx in enumerate(last_token_idx_list):
+            selector[0, 0, local_row, local_row * prefill_seq_len + last_token_idx] = 1.0
+        selector = ttnn.from_torch(
+            selector,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
+        )
+        x = ttnn.matmul(selector, hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(selector)
+        return self._last_tile_logits(x)
 
     def _last_tile_logits(self, x_tile: ttnn.Tensor) -> ttnn.Tensor:
         """Final-norm + all-gather + LM-head on a 32-row tile. ``x_tile`` shape ``[1, 1, 32, dim]``."""
@@ -890,6 +1262,9 @@ class Qwen3_32B(LightweightModule):
             x = layer.decode_forward(x, current_pos, rot_mats, page_table=page_table)
         x = _all_gather_rmsnorm_tensor(self.norm, x, memory_config=self.norm.config.decode_memory_config)
         x = self.norm.decode_forward(x)
+        lm_head_memcfg = self.lm_head.config.input_memcfg
+        if lm_head_memcfg is not None and lm_head_memcfg.is_sharded() and x.memory_config() != lm_head_memcfg:
+            x = ttnn.reshard(x, lm_head_memcfg)
         return self.lm_head.forward(x)
 
     def gather_and_untilize_logits(self, logits: ttnn.Tensor) -> ttnn.Tensor:
@@ -901,7 +1276,7 @@ class Qwen3_32B(LightweightModule):
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                 num_links=1,
                 memory_config=logits.memory_config(),
-                topology=default_topology(self.mesh_device),
+                topology=_qwen3_ccl_topology(self.mesh_device),
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                 chunks_per_sync=24,
                 num_workers_per_link=4,

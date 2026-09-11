@@ -8,6 +8,10 @@ set(UNIT_TESTS_DISPATCH_SMOKE_SOURCES
     dispatch_program/test_dispatch_stress.cpp
     dispatch_program/test_sub_device.cpp
     dispatch_program/test_kernel_config_buffer.cpp
+    # Host-only (no-silicon) suites; their test cases carry the CPU_ prefix and run
+    # on the github_hosted_cpu leg of the smoke pipeline instead of device runners.
+    dispatch_buffer/test_BufferCorePageMapping_Iterator.cpp
+    dispatch_util/test_ringbuffer_cache.cpp
     dispatch_util/test_device_command.cpp
     dispatch_util/test_dispatch_telemetry.cpp
     dispatch_util/test_dispatch_settings.cpp
@@ -17,19 +21,17 @@ set(UNIT_TESTS_DISPATCH_SMOKE_SOURCES
 set(UNIT_TESTS_DISPATCH_BASIC_SOURCES
     test_service_core_manager.cpp
     dispatch_buffer/test_sub_device.cpp
-    dispatch_buffer/test_BufferCorePageMapping_Iterator.cpp
     dispatch_program/test_dispatch.cpp
     dispatch_program/test_dataflow_cb.cpp
     dispatch_program/test_global_circular_buffers.cpp
     dispatch_program/test_realtime_profiler_sanity.cpp
-    dispatch_program/test_realtime_profiler_stress.cpp
     dispatch_trace/test_sub_device.cpp
-    dispatch_util/test_ringbuffer_cache.cpp
 )
 
 set(UNIT_TESTS_DISPATCH_SLOW_SOURCES
     dispatch_buffer/test_EnqueueWriteBuffer_and_EnqueueReadBuffer.cpp
     dispatch_buffer/test_large_mesh_buffer.cpp
     dispatch_program/test_EnqueueProgram.cpp
+    dispatch_program/test_realtime_profiler_stress.cpp
     dispatch_trace/test_EnqueueTrace.cpp
 )

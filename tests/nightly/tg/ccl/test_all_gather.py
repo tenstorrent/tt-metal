@@ -29,6 +29,58 @@ def get_max_chunks_per_sync(num_devices, ag_output_shape, num_links, packet_size
 
 
 @skip_for_blackhole("This test is for wormhole")
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters",
+    [
+        ([1, 1, 32, 2048], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10),
+        ([1, 1, 32, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1),
+    ],
+    ids=["perf", "check"],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_ag",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        )
+    ],
+    ids=["DRAM_memconfig"],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D, "trace_region_size": 90112}],
+    indirect=True,
+    ids=["fabric_2d"],
+)
+def test_all_gather(
+    mesh_device,
+    ag_output_shape,
+    dim,
+    layout,
+    ag_input_dtype,
+    enable_trace,
+    num_iters,
+    mem_config_input,
+    mem_config_ag,
+):
+    run_all_gather_impl(
+        mesh_device,
+        ag_output_shape,
+        dim,
+        ag_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_ag,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        cluster_axis=None,
+        use_persistent_buffers=False,
+    )
+
+
+@skip_for_blackhole("This test is for wormhole")
 @pytest.mark.parametrize("num_links", [3], ids=["3links"])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters",

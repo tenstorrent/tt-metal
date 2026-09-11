@@ -232,19 +232,21 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         const auto DH = q_shape[3];
         const auto k_page_size_cache = k_shape[2];
         const uint32_t num_pages_per_user = page_table.logical_shape()[1];
-        // Geometry overrides for an HMA-shared paged buffer (see PagedCacheGeometryOverride):
+        // Geometry override for an HMA-shared paged buffer (see PagedCacheGeometryOverride):
         // the cache's declared (num_kv_heads, block_size, head_dim) describe another layer's
-        // view of the shared physical buffer. Q's last dim drives head_dim; these overrides
-        // supply this call's block_size / num_kv_heads so kv_length, the GQA ratio, and the
-        // reader's block addressing use the right geometry. Unset ⇒ use the cache's declared
-        // values. Not supported with MLA (same contract as paged decode).
+        // view of the shared physical buffer. Q's last dim drives head_dim; the override
+        // supplies this call's block_size / num_kv_heads so kv_length, the GQA ratio, and the
+        // reader's block addressing use the right geometry. Inactive (default) ⇒ cache shape.
+        // Not supported with MLA (same contract as paged decode).
         const auto& geo = attrs.paged_cache_geometry;
         const bool has_geometry_override = geo.active();
         if (has_geometry_override) {
             TT_FATAL(!use_mla, "PagedCacheGeometryOverride is not supported with multi-latent attention");
+            TT_FATAL(geo.block_size > 0, "PagedCacheGeometryOverride.block_size must be > 0");
+            TT_FATAL(geo.num_kv_heads > 0, "PagedCacheGeometryOverride.num_kv_heads must be > 0");
         }
-        const uint32_t nkv = geo.num_kv_heads.value_or(nkv_cache);
-        const uint32_t k_page_size = geo.block_size.value_or(k_page_size_cache);
+        const uint32_t nkv = has_geometry_override ? geo.num_kv_heads : nkv_cache;
+        const uint32_t k_page_size = has_geometry_override ? geo.block_size : k_page_size_cache;
         if (!use_mla) {
             // K and V share a per-layer allocation, so their *declared* page sizes must match
             // (independent of any view override).
@@ -462,6 +464,49 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
             "cu_window_seqlens must have between 2 and {} elements, got {}.",
             max_cu_window_seqlens,
             cu_eles);
+        // A sharded Q must start on a tile boundary -- the mask generator offsets whole tiles -- and its
+        // rows must lie inside the sequence the windows describe. The row-count bound holds for any
+        // offset >= 0, so it is checked in both offset forms.
+        const auto q_rows = static_cast<uint32_t>(q.logical_shape()[-2]);
+        const auto k_rows = static_cast<uint32_t>(k.logical_shape()[-2]);
+        TT_FATAL(
+            q_rows <= k_rows,
+            "windowed Q shard has {} rows, more than the K sequence length {}.",
+            q_rows,
+            k_rows);
+        if (!tensors.windowed_q_token_offset_tensor.has_value()) {
+            // Scalar form. (When the tensor is supplied it overrides the scalar on device, and its
+            // per-device values cannot be validated here without a readback -- tile alignment and
+            // offset + q_rows <= Sk are the caller's responsibility in that form.)
+            TT_FATAL(
+                attrs.windowed_q_token_offset % tt::constants::TILE_HEIGHT == 0,
+                "windowed_q_token_offset must be a multiple of {}, got {}.",
+                tt::constants::TILE_HEIGHT,
+                attrs.windowed_q_token_offset);
+            // q_rows <= k_rows was checked above, so the subtraction cannot wrap.
+            TT_FATAL(
+                attrs.windowed_q_token_offset <= k_rows - q_rows,
+                "windowed Q shard [{}, {} + {}) does not fit in the K sequence length {}.",
+                attrs.windowed_q_token_offset,
+                attrs.windowed_q_token_offset,
+                q_rows,
+                k_rows);
+        }
+        if (tensors.windowed_q_token_offset_tensor.has_value()) {
+            const auto& off = tensors.windowed_q_token_offset_tensor.value();
+            TT_FATAL(off.storage_type() == StorageType::DEVICE, "windowed_q_token_offset_tensor must be on device.");
+            TT_FATAL(off.buffer() != nullptr, "windowed_q_token_offset_tensor must be allocated on device.");
+            TT_FATAL(q.device() == off.device(), "windowed_q_token_offset_tensor must be on the same device as Q/K/V.");
+            TT_FATAL(
+                off.dtype() == DataType::INT32 || off.dtype() == DataType::UINT32,
+                "windowed_q_token_offset_tensor must be INT32/UINT32, got {}.",
+                off.dtype());
+            TT_FATAL(off.layout() == Layout::ROW_MAJOR, "windowed_q_token_offset_tensor must be ROW_MAJOR.");
+            TT_FATAL(
+                off.logical_shape().volume() == 1,
+                "windowed_q_token_offset_tensor must hold exactly 1 element, got {}.",
+                off.logical_shape().volume());
+        }
     };
 
     check_conditions();
@@ -600,8 +645,9 @@ Tensor sdpa(
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     const std::optional<Tensor>& cu_window_seqlens,
-    std::optional<uint32_t> block_size_override,
-    std::optional<uint32_t> num_kv_heads_override) {
+    uint32_t windowed_q_token_offset,
+    const std::optional<Tensor>& windowed_q_token_offset_tensor,
+    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry) {
     using OperationType = ttnn::prim::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -616,11 +662,9 @@ Tensor sdpa(
             .head_dim_v = head_dim_v,
             .sliding_window_size = sliding_window_size,
             .is_windowed = cu_window_seqlens.has_value(),
+            .windowed_q_token_offset = windowed_q_token_offset,
             .paged_cache_geometry =
-                ttnn::operations::transformer::PagedCacheGeometryOverride{
-                    .block_size = block_size_override,
-                    .num_kv_heads = num_kv_heads_override,
-                },
+                paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
         },
         OperationType::tensor_args_t{
             .q = input_tensor_q,
@@ -631,6 +675,7 @@ Tensor sdpa(
             .chunk_start_idx_tensor = chunk_start_idx_tensor,
             .attention_sink = attention_sink,
             .cu_window_seqlens = cu_window_seqlens,
+            .windowed_q_token_offset_tensor = windowed_q_token_offset_tensor,
         });
 }
 }  // namespace ttnn::prim

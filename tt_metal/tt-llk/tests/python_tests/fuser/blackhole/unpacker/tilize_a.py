@@ -5,17 +5,16 @@
 from typing import List, Tuple
 
 import torch
+from fuser.base_unpacker import Unpacker
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
-from fuser.fused_loop import FusedLoop, LoopTileByTile
-from fuser.fused_operation import FusedOperation
-from fuser.fused_unpacker import Unpacker
 from fuser.fuser_config import GlobalConfig
-from helpers.tilize_untilize import tilize_block
+from fuser.l1_operation import L1Operation
+from fuser.tile_loop import LoopTileByTile, TileLoop
 
 
 class UnpackerTilizeA(Unpacker):
-    loop: FusedLoop = LoopTileByTile()
+    loop: TileLoop = LoopTileByTile()
 
     def get_headers(self) -> List[str]:
         return [
@@ -25,7 +24,7 @@ class UnpackerTilizeA(Unpacker):
 
     def perf_set_valid(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
@@ -35,7 +34,7 @@ class UnpackerTilizeA(Unpacker):
 
     def perf_clear_valid(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
@@ -47,26 +46,18 @@ class UnpackerTilizeA(Unpacker):
         self,
         tensor_a: torch.Tensor,
         tensor_b: torch.Tensor,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        tilized_a = tilize_block(
-            tensor_a,
-            compute_unit.src_a.dimensions,
-            compute_unit.src_a.data_format,
-            compute_unit.src_a.tile_shape.total_num_faces(),
-            tile_dimensions=(
-                compute_unit.src_a.tile_shape.total_row_dim(),
-                compute_unit.src_a.tile_shape.total_col_dim(),
-            ),
+        return (
+            self.tilize_golden(tensor_a, config, operation, compute_unit),
+            None,
         )
-
-        return tilized_a, None
 
     def init(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
@@ -74,11 +65,11 @@ class UnpackerTilizeA(Unpacker):
         face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
         block_ct_dim = compute_unit.src_a.tile_count_x
 
-        return f"    _llk_unpack_tilize_init_({config.sentinel.unpack_a_src_format}, {config.sentinel.unpack_a_dst_format}, {block_ct_dim}, {face_r_dim}, false);\n"
+        return f"_llk_unpack_tilize_init_({config.sentinel.unpack_a_src_format}, {config.sentinel.unpack_a_dst_format}, {block_ct_dim}, {face_r_dim}, false);\n"
 
     def unpack(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
@@ -96,15 +87,11 @@ class UnpackerTilizeA(Unpacker):
 
     def uninit(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        tile_shape = compute_unit.src_a.tile_shape
+        tensor_shape = compute_unit.src_a.tile_shape.cpp_value
 
-        return (
-            f"    _llk_unpack_tilize_uninit_({config.sentinel.unpack_a_dst_format}, "
-            f"ckernel::TensorShape{{{tile_shape.face_r_dim}, {tile_shape.face_c_dim}, "
-            f"{tile_shape.num_faces_r_dim}, {tile_shape.num_faces_c_dim}}});\n"
-        )
+        return f"_llk_unpack_tilize_uninit_({config.sentinel.unpack_a_dst_format}, {tensor_shape});\n"

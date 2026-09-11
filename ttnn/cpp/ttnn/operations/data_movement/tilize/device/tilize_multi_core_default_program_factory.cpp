@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tilize_multi_core_default_program_factory.hpp"
+#include "ttnn/operations/data_movement/tilize/device/tilize_device_operation.hpp"
+
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 
@@ -30,7 +33,8 @@ ProgramDescriptor TilizeMultiCoreDefaultProgramFactory::create_descriptor(
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = operation_attributes.tile.get_tile_size(output_cb_data_format);
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
-                        output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
+                        output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B ||
+                        a.dtype() == DataType::UINT8;
 
     Buffer* src0_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();
@@ -125,7 +129,8 @@ ProgramDescriptor TilizeMultiCoreDefaultProgramFactory::create_descriptor(
     std::vector<uint32_t> compute_args_cliff = {nblocks_per_core_cliff, ntiles_per_block};
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    if (fp32_llk_acc) {
+    // UInt8 uses 32-bit dest as integer (not float): do not enable FP32 unpack-to-dest mode.
+    if (fp32_llk_acc && a.dtype() != DataType::UINT8) {
         unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
     }
 
@@ -226,6 +231,18 @@ ProgramDescriptor TilizeMultiCoreDefaultProgramFactory::create_descriptor(
     }
 
     return desc;
+}
+
+void TilizeMultiCoreDefaultProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const TilizeParams& /*operation_attributes*/,
+    const TilizeInputs& tensor_args,
+    Tensor& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Every shape-derived arg is keyed, so only the reader/writer buffer addresses move on a hit.
+    // Reader is pushed first, writer second, each taking its buffer at slot 0.
+    patch_tilize_kernel_slot0(program, 0, tensor_args.input_tensor.buffer()->address());
+    patch_tilize_kernel_slot0(program, 1, tensor_return_value.buffer()->address());
 }
 
 }  // namespace ttnn::prim

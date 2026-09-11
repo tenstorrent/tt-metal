@@ -2,36 +2,33 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-import ttnn
-import torch
 import math
 
-
-def get_types_from_binding_framework():
-    if hasattr(ttnn.DataType, "_member_map_"):
-        # nanobind
-        ALL_TYPES = [dtype for _, dtype in ttnn.DataType._member_map_.items() if dtype != ttnn.DataType.INVALID]
-    else:
-        raise Exception("test_rand.py: ttnn.DataType has unexpected way of holding values. Not matching nanobind.")
-
-    return ALL_TYPES
+import pytest
+import torch
+import ttnn
 
 
 DEFAULT_SHAPE = (32, 32)
 SHAPES = [tuple([32] * i) for i in range(6)]
-ALL_TYPES = get_types_from_binding_framework()
+SUPPORTED_DTYPES = (ttnn.bfloat16, ttnn.float32)
+LEGACY_DTYPES = (ttnn.bfloat4_b, ttnn.bfloat8_b)
+LEGACY_INTEGER_DTYPES = (
+    (ttnn.int8, torch.int8, -100, 100),
+    (ttnn.int32, torch.int32, -100, 100),
+    (ttnn.uint16, torch.uint16, 0, 100),
+    (ttnn.uint32, torch.uint32, 0, 100),
+)
+UNSUPPORTED_DTYPES = (ttnn.uint8, ttnn.fp8_e4m3, ttnn.DataType.INVALID)
+TEST_SEED = 17
+FLOAT32_MIN_NORMAL = torch.finfo(torch.float32).tiny
+FLOAT32_MIN_SUBNORMAL = torch.nextafter(torch.tensor(0.0), torch.tensor(1.0)).item()
+FLOAT32_MIN_NORMAL_PLUS_TWO_ULPS = torch.nextafter(
+    torch.nextafter(torch.tensor(FLOAT32_MIN_NORMAL), torch.tensor(math.inf)), torch.tensor(math.inf)
+).item()
 
 
-def is_ttnn_float_type(tt_dtype) -> bool:
-    match tt_dtype:
-        case ttnn.bfloat16 | ttnn.float32 | ttnn.bfloat8_b | ttnn.bfloat4_b:
-            return True
-        case _:
-            return False
-
-
-def check_uniform_distribution(data, value_range=(0, 1), is_discrete=False):
+def check_uniform_distribution(data, value_range=(0, 1)):
     n = data.numel()
 
     if n < 1000:
@@ -41,17 +38,10 @@ def check_uniform_distribution(data, value_range=(0, 1), is_discrete=False):
             return False
 
     start_value, end_value = value_range
-    if is_discrete:
-        min_val, max_val = start_value, end_value
-    else:
-        min_val, max_val = torch.aminmax(data)
-        min_val = min_val.item()
-        max_val = max_val.item()
-
-    if min_val == max_val:
+    if torch.any(data < start_value) or torch.any(data >= end_value):
         return False
 
-    # torch ops don't suport integer data types, convert to list
+    # torch ops don't support integer data types, convert to list
     data = data.detach().cpu().flatten().tolist()
 
     # Calculate sample statistics
@@ -59,16 +49,13 @@ def check_uniform_distribution(data, value_range=(0, 1), is_discrete=False):
     sample_variance = sum([(x - sample_mean) ** 2 for x in data]) / n
     sample_std_dev = math.sqrt(sample_variance)
 
-    # Calculate theoretical statistics
-    if is_discrete:
-        theoretical_mean = (start_value + end_value) / 2
-        N = end_value - start_value + 1
-        theoretical_std_dev = math.sqrt((N**2 - 1) / 12)
-    else:
-        theoretical_mean = (min_val + max_val) / 2
-        theoretical_std_dev = (max_val - min_val) / math.sqrt(12)
+    # Calculate theoretical statistics from the requested half-open interval,
+    # not from the observed extrema.
+    theoretical_mean = (start_value + end_value) / 2
+    theoretical_std_dev = (end_value - start_value) / math.sqrt(12)
 
-    mean_diff = abs(sample_mean - theoretical_mean) / theoretical_mean * 100 if theoretical_mean != 0 else 0
+    mean_scale = abs(theoretical_mean) if theoretical_mean != 0 else end_value - start_value
+    mean_diff = abs(sample_mean - theoretical_mean) / mean_scale * 100
     std_dev_diff = (
         abs(sample_std_dev - theoretical_std_dev) / theoretical_std_dev * 100 if theoretical_std_dev != 0 else 0
     )
@@ -80,23 +67,13 @@ def check_uniform_distribution(data, value_range=(0, 1), is_discrete=False):
     return False
 
 
-@pytest.mark.xfail(reason="BFLOAT4_B/UINT8 and `uint32/int32/BFLOAT8_B` for row major layout are not supported.")
-@pytest.mark.parametrize("dtype", ALL_TYPES)
+@pytest.mark.parametrize("dtype", SUPPORTED_DTYPES)
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 def test_tensor_dtype_and_value_range(device, dtype, layout):
     shape = (1024, 1024)
-    if is_ttnn_float_type(dtype):
-        tensor = ttnn.rand(shape, dtype=dtype, device=device, layout=layout)
-        low = 0
-        high = 1
-    elif dtype == ttnn.int32:
-        low = -100
-        high = 100
-        tensor = ttnn.rand(shape, low=low, high=high, dtype=dtype, device=device, layout=layout)
-    else:
-        low = 0
-        high = 100
-        tensor = ttnn.rand(shape, low=low, high=high, dtype=dtype, device=device, layout=layout)
+    low = 0
+    high = 1
+    tensor = ttnn.rand(shape, dtype=dtype, device=device, layout=layout)
 
     assert tensor.layout == layout
     assert tensor.dtype == dtype
@@ -106,8 +83,33 @@ def test_tensor_dtype_and_value_range(device, dtype, layout):
 
     assert not torch.isnan(torch_tensor).any(), "Tensor contains NaN values!"
     assert check_uniform_distribution(
-        torch_tensor, value_range=(low, high), is_discrete=not is_ttnn_float_type(dtype)
+        torch_tensor, value_range=(low, high)
     ), "The distribution of random values is not uniform!"
+
+
+@pytest.mark.parametrize("dtype", UNSUPPORTED_DTYPES)
+def test_rand_rejects_unsupported_dtype(device, dtype, expect_error):
+    with expect_error(RuntimeError, "Output dtype"):
+        ttnn.rand(DEFAULT_SHAPE, dtype=dtype, device=device)
+
+
+@pytest.mark.parametrize("dtype", LEGACY_DTYPES)
+def test_rand_preserves_legacy_low_precision_dtypes(device, dtype):
+    tensor = ttnn.rand(DEFAULT_SHAPE, dtype=dtype, device=device, seed=TEST_SEED)
+
+    assert tensor.dtype == dtype
+    assert torch.isfinite(ttnn.to_torch(tensor)).all()
+
+
+@pytest.mark.parametrize("dtype, torch_dtype, low, high", LEGACY_INTEGER_DTYPES)
+def test_rand_preserves_legacy_integer_dtypes(device, dtype, torch_dtype, low, high):
+    tensor = ttnn.rand(DEFAULT_SHAPE, dtype=dtype, device=device, low=low, high=high, seed=TEST_SEED)
+    data = ttnn.to_torch(tensor)
+
+    assert tensor.dtype == dtype
+    assert data.dtype == torch_dtype
+    assert tuple(data.shape) == DEFAULT_SHAPE
+    assert torch.unique(data.to(torch.int64)).numel() > 1
 
 
 def test_rand_defaults(device):
@@ -164,7 +166,7 @@ def test_rand_different_from_to_values(device):
     for torch_tensor, value_range in ((data_1, (low_1, high_1)), (data_2, (low_2, high_2))):
         assert not torch.isnan(torch_tensor).any(), "Tensor contains NaN values!"
         assert check_uniform_distribution(
-            torch_tensor, value_range=value_range, is_discrete=False
+            torch_tensor, value_range=value_range
         ), "The distribution of random values is not uniform!"
 
     device.disable_and_clear_program_cache()
@@ -217,6 +219,140 @@ def test_rand_different_seed_values(device):
     )
 
     device.disable_and_clear_program_cache()
+
+
+def test_rand_tiles_have_iid_dispersion_and_low_lane_correlation(device):
+    """Guard against correlated SFPU lanes distorting within-tile statistics."""
+    shape = (1024, 1024)
+    data = ttnn.to_torch(ttnn.rand(shape, device=device, dtype=ttnn.float32, seed=1)).float()
+    assert torch.isfinite(data).all()
+    assert abs(data.mean().item() - 0.5) < 0.01
+
+    tiles = data.unfold(0, 32, 32).unfold(1, 32, 32).reshape(-1, 32, 32)
+    tile_means = tiles.mean(dim=(1, 2))
+    observed_std = tile_means.std(unbiased=False).item()
+    iid_std = 1.0 / math.sqrt(12 * 32 * 32)
+
+    assert 0.75 * iid_std < observed_std < 1.25 * iid_std, (
+        f"tile-mean std {observed_std:.6f} is not close to the IID expectation {iid_std:.6f}; "
+        "random elements may remain correlated within tiles"
+    )
+
+    adjacent_lane_correlations = torch.stack(
+        [
+            torch.corrcoef(torch.stack((tiles[:, :, lane].flatten(), tiles[:, :, lane + 1].flatten())))[0, 1]
+            for lane in range(31)
+        ]
+    )
+    worst_lane_correlation = adjacent_lane_correlations.abs().max().item()
+    assert worst_lane_correlation < 0.06, f"worst adjacent-lane correlation {worst_lane_correlation:.6f} exceeds 0.06"
+
+    assert (
+        torch.unique(tiles.reshape(-1, 32 * 32), dim=0).shape[0] == tiles.shape[0]
+    ), "generated RNG tiles were not unique"
+
+
+@pytest.mark.parametrize("low, high", [(0.0, 5e-7), (2.0, 2.0000005), (-1.0, 0.0)])
+def test_rand_respects_narrow_fp32_ranges(device, low, high):
+    data = ttnn.to_torch(
+        ttnn.rand((256, 256), device=device, dtype=ttnn.float32, low=low, high=high, seed=TEST_SEED)
+    ).float()
+
+    assert torch.isfinite(data).all()
+    assert torch.all(data >= low)
+    assert torch.all(data < high)
+    assert torch.unique(data).numel() > 1
+
+
+@pytest.mark.parametrize("low, high", [(-2.0, -1.0), (1.001, 2.0)])
+def test_rand_respects_bfloat16_ranges(device, low, high):
+    data = ttnn.to_torch(
+        ttnn.rand((256, 256), device=device, dtype=ttnn.bfloat16, low=low, high=high, seed=TEST_SEED)
+    ).float()
+
+    assert torch.isfinite(data).all()
+    assert torch.all(data >= low)
+    assert torch.all(data < high)
+    assert torch.unique(data).numel() > 1
+
+
+def test_rand_rejects_range_without_bfloat16_value(device, expect_error):
+    with expect_error(RuntimeError, "contains no value representable"):
+        ttnn.rand((32, 32), device=device, dtype=ttnn.bfloat16, low=1.001, high=1.002, seed=TEST_SEED)
+
+
+@pytest.mark.parametrize("dtype", SUPPORTED_DTYPES)
+@pytest.mark.parametrize(
+    "low, high, expected",
+    [
+        (0.0, FLOAT32_MIN_NORMAL, 0.0),
+        (-FLOAT32_MIN_NORMAL, 0.0, -FLOAT32_MIN_NORMAL),
+    ],
+)
+def test_rand_respects_flush_to_zero_ranges(device, dtype, low, high, expected):
+    data = ttnn.to_torch(ttnn.rand((32, 32), device=device, dtype=dtype, low=low, high=high, seed=TEST_SEED)).float()
+
+    assert torch.all(data == expected)
+    assert torch.all(data >= low)
+    assert torch.all(data < high)
+
+
+@pytest.mark.parametrize("dtype", SUPPORTED_DTYPES)
+def test_rand_rejects_all_subnormal_range(device, dtype, expect_error):
+    with expect_error(RuntimeError, "contains no value representable"):
+        ttnn.rand(
+            (32, 32),
+            device=device,
+            dtype=dtype,
+            low=FLOAT32_MIN_SUBNORMAL,
+            high=FLOAT32_MIN_NORMAL,
+            seed=TEST_SEED,
+        )
+
+
+@pytest.mark.parametrize(
+    "low, high, error",
+    [
+        (math.nan, 1.0, "endpoints must be finite"),
+        (0.0, math.inf, "endpoints must be finite"),
+        (1.0, 1.0, "lower bound must be less than upper bound"),
+        (1.0, 0.0, "lower bound must be less than upper bound"),
+        (-torch.finfo(torch.float32).max, torch.finfo(torch.float32).max, "too wide"),
+        (FLOAT32_MIN_NORMAL, FLOAT32_MIN_NORMAL_PLUS_TWO_ULPS, "subnormal scale"),
+    ],
+)
+def test_rand_rejects_invalid_range(device, expect_error, low, high, error):
+    with expect_error(RuntimeError, error):
+        ttnn.rand((32, 32), device=device, dtype=ttnn.float32, low=low, high=high, seed=TEST_SEED)
+
+
+def test_rand_all_ones_seed_does_not_lock_prng(device):
+    data = ttnn.to_torch(ttnn.rand((32, 32), device=device, dtype=ttnn.float32, seed=0xFFFFFFFF)).float()
+
+    # A single tile runs on one core, so other cores cannot mask an XNOR LFSR
+    # left in the all-ones lock state. A locked state can produce at most one
+    # constant value per lane, independent of how lanes map into tile rows.
+    assert torch.unique(data).numel() > 32
+
+
+def test_rand_decorrelates_neighboring_core_seeds(device):
+    """Neighboring host seeds must not collapse to the same per-core RNG stream."""
+    output = ttnn.to_torch(ttnn.rand((64, 32), device=device, dtype=ttnn.float32, seed=0xFFFFFFFE)).reshape(2, 32, 32)
+
+    # Two tiles run on two cores with host seeds 0xFFFFFFFE and 0xFFFFFFFF.
+    # rand_init remaps the all-ones lock state, so omitting the work-range
+    # stream ID would make both cores start from the same effective seed.
+    assert not torch.equal(output[0], output[1]), "neighboring cores emitted duplicate random tiles"
+
+
+def test_rand_fp32_uses_both_mantissa_parities(device):
+    data = ttnn.to_torch(ttnn.rand((256, 256), device=device, dtype=ttnn.float32, seed=1)).float()
+    top_binade = data[(data >= 0.5) & (data < 1.0)]
+    odd_mantissa_fraction = (top_binade.contiguous().view(torch.int32) & 1).float().mean().item()
+
+    # SFPCAST's round-to-nearest-even conversion uses the discarded source
+    # bits, so both mantissa parities should occur evenly in [0.5, 1).
+    assert 0.45 < odd_mantissa_fraction < 0.55
 
 
 @pytest.mark.parametrize(
@@ -318,27 +454,27 @@ def test_rand_invalid_args(device):
     Passing invalid args should raise TypeError.
     """
 
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError):  # allow-pytest.raises: pre-existing binding validation test
         # expected list or tuple
         ttnn.rand(5, device=device)
 
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError):  # allow-pytest.raises: pre-existing binding validation test
         # expected positive dim values
         ttnn.rand([2, -1], device=device)
 
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError):  # allow-pytest.raises: pre-existing binding validation test
         # expected ttnn.LAYOUT type
         ttnn.rand([2, 2], device=device, layout="ROW_MAJOR")
 
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError):  # allow-pytest.raises: pre-existing binding validation test
         # expected  ttnn.MemoryConfig type
         ttnn.rand([2, 2], device=device, memory_config="DRAM")
 
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError):  # allow-pytest.raises: pre-existing binding validation test
         # expected  ttnn.Device type
         ttnn.rand([2, 2], device="WORMHOLE")
 
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError):  # allow-pytest.raises: pre-existing binding validation test
         # expected  ttnn.DataType type
         ttnn.rand([2, 2], device=device, dtype="ttnn.bfloat16")
 
@@ -358,6 +494,113 @@ def _shard_placements(mesh_shape, shard_dim):
 
 def _replicate_placements(mesh_shape):
     return [ttnn.PlacementReplicate() for _ in range(len(mesh_shape))]
+
+
+@pytest.mark.parametrize("mesh_device", [pytest.param((2, 2), id="2x2_grid")], indirect=True)
+def test_rand_mesh_shape_override_reshape(mesh_device):
+    """A logical 1x4 distribution must map to the four physical devices in row-major order."""
+    if mesh_device.get_num_devices() < 4:
+        pytest.skip("Need at least 4 devices")
+
+    seed = 77
+    shard_shape = (256, 256)
+    distribution_shape = ttnn.MeshShape(1, 4)
+    expected_mesh_coords = [(0, 0), (0, 1), (1, 0), (1, 1)]
+    sharded_mapper = ttnn.MeshMapperConfig(
+        [ttnn.PlacementReplicate(), ttnn.PlacementShard(0)],
+        mesh_shape_override=distribution_shape,
+    )
+    replicated_mapper = ttnn.MeshMapperConfig(
+        [ttnn.PlacementReplicate(), ttnn.PlacementReplicate()],
+        mesh_shape_override=distribution_shape,
+    )
+
+    mesh_device.enable_program_cache()
+    mesh_device.clear_program_cache()
+
+    sharded = ttnn.rand(
+        (shard_shape[0] * 4, shard_shape[1]),
+        mesh_device,
+        dtype=ttnn.float32,
+        seed=seed,
+        mesh_mapper=sharded_mapper,
+    )
+    cache_entries = mesh_device.num_program_cache_entries()
+    replicated = ttnn.rand(
+        shard_shape,
+        mesh_device,
+        dtype=ttnn.float32,
+        seed=seed,
+        mesh_mapper=replicated_mapper,
+    )
+    sharded_again = ttnn.rand(
+        (shard_shape[0] * 4, shard_shape[1]),
+        mesh_device,
+        dtype=ttnn.float32,
+        seed=seed,
+        mesh_mapper=sharded_mapper,
+    )
+
+    assert mesh_device.num_program_cache_entries() == cache_entries
+    for tensor in (sharded, replicated, sharded_again):
+        topology = tensor.tensor_topology()
+        assert tuple(topology.distribution_shape()) == (1, 4)
+        assert [tuple(coord) for coord in topology.mesh_coords()] == expected_mesh_coords
+
+    sharded_data = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(sharded)]
+    replicated_data = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(replicated)]
+    sharded_again_data = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(sharded_again)]
+
+    assert len(sharded_data) == 4
+    assert len(replicated_data) == len(sharded_again_data) == 4
+    composed = ttnn.to_torch(sharded, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).float()
+    assert torch.equal(composed, torch.cat(sharded_data, dim=0))
+    for i in range(4):
+        assert torch.equal(sharded_data[i], sharded_again_data[i])
+        assert torch.equal(replicated_data[0], replicated_data[i])
+        for j in range(i + 1, 4):
+            assert not torch.equal(
+                sharded_data[i], sharded_data[j]
+            ), f"Logical shards {i} and {j} received the same random stream"
+
+    mesh_device.disable_and_clear_program_cache()
+
+
+@pytest.mark.parametrize("mesh_device", [pytest.param((2, 2), id="2x2_grid")], indirect=True)
+def test_rand_mesh_shape_override_submesh(mesh_device):
+    """A smaller logical distribution must expose and dispatch only on its mapped devices."""
+    if mesh_device.get_num_devices() < 4:
+        pytest.skip("Need at least 4 devices")
+
+    mapper = ttnn.MeshMapperConfig(
+        [ttnn.PlacementReplicate(), ttnn.PlacementShard(0)],
+        mesh_shape_override=ttnn.MeshShape(1, 2),
+    )
+    kwargs = {
+        "shape": (512, 256),
+        "device": mesh_device,
+        "dtype": ttnn.float32,
+        "seed": 91,
+        "mesh_mapper": mapper,
+    }
+
+    mesh_device.enable_program_cache()
+    mesh_device.clear_program_cache()
+    tensor = ttnn.rand(**kwargs)
+    cache_entries = mesh_device.num_program_cache_entries()
+    tensor_again = ttnn.rand(**kwargs)
+
+    assert mesh_device.num_program_cache_entries() == cache_entries
+    assert tuple(tensor.tensor_topology().distribution_shape()) == (1, 2)
+    assert [tuple(coord) for coord in tensor.tensor_topology().mesh_coords()] == [(0, 0), (0, 1)]
+
+    shards = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(tensor)]
+    shards_again = [ttnn.to_torch(t).float() for t in ttnn.get_device_tensors(tensor_again)]
+    assert len(shards) == len(shards_again) == 2
+    assert not torch.equal(shards[0], shards[1])
+    assert all(torch.equal(lhs, rhs) for lhs, rhs in zip(shards, shards_again))
+
+    mesh_device.disable_and_clear_program_cache()
 
 
 @pytest.mark.parametrize(

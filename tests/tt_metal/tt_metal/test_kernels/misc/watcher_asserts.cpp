@@ -28,8 +28,8 @@ void kernel_main() {
         volatile tt_l1_ptr go_msg_t* go_message_in = GET_MAILBOX_ADDRESS_DEV(go_messages[0]);
 
         // Signal completion to dispatcher before assert hangs the kernel
-        // SD signaling: IDLE_ERISC, DRISC (SD only) require RUN_MSG_DONE
-#if defined(COMPILE_FOR_IDLE_ERISC) or defined(COMPILE_FOR_DRISC)
+        // SD signaling: IDLE_ERISC, DRISC, and dispatch-engine DMs require RUN_MSG_DONE
+#if defined(COMPILE_FOR_IDLE_ERISC) or defined(COMPILE_FOR_DRISC) or defined(COMPILE_FOR_DISPATCH_ENGINE)
         go_message_in->signal = RUN_MSG_DONE;
 #else
         // FD: ACTIVE_ETH notifies dispatcher via NOC

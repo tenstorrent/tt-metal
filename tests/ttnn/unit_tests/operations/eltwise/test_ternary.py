@@ -12,6 +12,17 @@ from math import isnan
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, assert_equal
 
 
+def test_where_golden_treats_negative_predicates_as_true():
+    predicate = torch.tensor([-2, 0, 3, -1], dtype=torch.int32)
+    true_values = torch.tensor([10, 20, 30, 40], dtype=torch.int32)
+    false_values = torch.tensor([1, 2, 3, 4], dtype=torch.int32)
+    golden_function = ttnn.get_golden_function(ttnn.where)
+
+    output = golden_function(predicate, true_values, false_values)
+
+    assert torch.equal(output, torch.tensor([10, 2, 30, 40], dtype=torch.int32))
+
+
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_mac_all_tensors(device, h, w):
@@ -35,7 +46,7 @@ def test_mac_all_tensors(device, h, w):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=2)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -60,7 +71,7 @@ def test_mac_tensor_with_2_scalaras(device, h, w, scalar1, scalar2):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=2)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2)
 
 
 def assert_where_exact(torch_input_tensor, torch_input1, torch_input2, device):
@@ -269,7 +280,7 @@ def test_addcmul(device, torch_dtype, ttnn_dtype, value, in_data1_shape, in_data
     golden_fn = ttnn.get_golden_function(ttnn.addcmul)
     golden_tensor = golden_fn(in_data1, in_data2, in_data3, value=value)
 
-    assert_with_ulp(output_tensor, golden_tensor)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -376,7 +387,7 @@ def test_addcdiv(device, torch_dtype, ttnn_dtype, value, in_data1_shape, in_data
             output_tensor,
         )
 
-    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1, allow_nonfinite=True)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=1, allow_nonfinite=True)
 
 
 def test_ternary_scalar_distinguishes_cache_entries(device):
@@ -430,5 +441,62 @@ def test_ternary_scalar_distinguishes_cache_entries(device):
         "a different scalar must change the output (scalar re-patched on the fast path). Identical "
         "output here means the cache hit reused the first call's frozen scalar runtime arg."
     )
+
+    device.disable_and_clear_program_cache()
+
+
+def test_ternary_addcmul_cache_hit_refreshes_operand_addresses(device):
+    """Regression guard for the ternary buffer-address static/dynamic contract (cache-hit bug).
+
+    Two same-shaped addcmul calls reuse the same cached program (correct), but the cache-hit path
+    must re-patch the runtime args holding the operand/output buffer ADDRESSES. Before the fix, the
+    second same-shaped call whose operand lived in a DIFFERENT buffer ran against the first call's
+    stale addresses and returned silent garbage (PCC ~0). Here the operands are distinct
+    ttnn.chunk() slices of a single parent tensor, so they are the same shape but different buffers.
+    TernaryDeviceOperation::get_dynamic_runtime_args() must refresh reader slots 0/1/2 and writer
+    slot 0 on every dispatch.
+    """
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    torch.manual_seed(0)
+    N, H = 32, 64
+
+    base_t = torch.rand((1, 1, N, H), dtype=torch.bfloat16)
+    chunks_t = torch.rand((1, 1, 1, 4 * H), dtype=torch.bfloat16)
+
+    base = ttnn.from_torch(base_t, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    chunks = ttnn.from_torch(chunks_t, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    chunk = ttnn.chunk(chunks, 4, -1)  # 4 shape-identical operands in different buffers
+
+    def reference(i):
+        return base_t + base_t * chunks_t[..., i * H : (i + 1) * H]
+
+    # Pre-allocate BOTH outputs and keep them alive across both calls, passing each via
+    # output_tensor. This forces the two dispatches to write to DISTINCT, simultaneously-live output
+    # buffers, so the second call's writer slot 0 must be re-patched to out1's address -- otherwise it
+    # writes into out0 and out1 stays zero. Without two live outputs the allocator could hand the
+    # second call out0's just-freed address, masking a missing writer-address patch.
+    out0 = ttnn.from_torch(
+        torch.zeros((1, 1, N, H), dtype=torch.bfloat16), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    )
+    out1 = ttnn.from_torch(
+        torch.zeros((1, 1, N, H), dtype=torch.bfloat16), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    )
+
+    # First call compiles the addcmul program.
+    ttnn.addcmul(base, base, chunk[0], value=1.0, output_tensor=out0)
+    entries_after_first = device.num_program_cache_entries()
+
+    # Cache hit with a different-buffer operand AND a different output buffer of identical shape: the
+    # addcmul program must be reused (no new cache entry), yet the stale-address regression made this
+    # return ~0 PCC.
+    ttnn.addcmul(base, base, chunk[2], value=1.0, output_tensor=out1)
+    assert (
+        device.num_program_cache_entries() == entries_after_first
+    ), "same-shaped addcmul must reuse the cached program (no new cache entry)"
+
+    assert_with_pcc(reference(0), ttnn.to_torch(out0).float(), 0.99)
+    assert_with_pcc(reference(2), ttnn.to_torch(out1).float(), 0.99)
 
     device.disable_and_clear_program_cache()

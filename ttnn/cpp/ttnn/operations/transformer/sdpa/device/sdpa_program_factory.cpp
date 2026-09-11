@@ -125,11 +125,7 @@ EffectiveKvGeometry resolve_effective_kv_geometry(
     if (use_mla || !geo.active()) {
         return {k_num_heads, v_num_heads, k_block_size};
     }
-    return {
-        geo.num_kv_heads.value_or(k_num_heads),
-        geo.num_kv_heads.value_or(v_num_heads),
-        geo.block_size.value_or(k_block_size),
-    };
+    return {geo.num_kv_heads, geo.num_kv_heads, geo.block_size};
 }
 
 // Chunked prefill parameters collected from page table layout.
@@ -172,6 +168,81 @@ ChunkedParams compute_chunked_params(
             "page table page size in bytes must be a multiple of 32 due to address alignment");
     }
     return p;
+}
+
+tt::DataFormat fp32_dest_intermediate_dataformat(bool fp32_dest_acc_en) {
+    return fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+}
+
+uint32_t attention_sink_tile_count(bool use_attention_sink, bool use_streaming_compute, uint32_t q_chunk_tiles) {
+    if (!use_attention_sink) {
+        return 0;
+    }
+    return use_streaming_compute ? 1 : q_chunk_tiles;
+}
+
+// TensorAccessorArgs placeholder rule for optional tensors: nullptr when absent, so the accessor
+// chain stays intact and kernels compile against it but never read it.
+tt::tt_metal::Buffer* buffer_or_null(const std::optional<Tensor>& t) {
+    return t.has_value() ? t.value().buffer() : nullptr;
+}
+
+// Windowed (block-diagonal) CB allocation and runtime values, split out of create_descriptor (which
+// sits at clang-tidy's cognitive-complexity limit). The allocators are create_descriptor's CB lambdas.
+struct WindowedSetup {
+    tt::tt_metal::Buffer* cu_window_buffer = nullptr;
+    tt::tt_metal::Buffer* q_offset_buffer = nullptr;
+    uint32_t cu_window_seqlens_eles = 0;
+    // Global row index of Q row 0. Non-zero only when Q is a sequence-parallel shard of a longer
+    // sequence: Q and the output are addressed locally, while cu_window_seqlens and K/V stay global,
+    // so the writer's mask generator needs the shard's origin to find the right windows.
+    uint32_t q_token_offset = 0;
+};
+
+template <typename AllocateTileCb, typename AllocateCb>
+WindowedSetup setup_windowed_cbs(
+    const SDPAParams& attrs,
+    const SDPAInputs& tensors,
+    sdpa_cb::CBIds& cb_ids,
+    const AllocateTileCb& allocate_tile_cb,
+    const AllocateCb& allocate_cb) {
+    WindowedSetup w;
+    // When NOT windowed, fall back to a valid CB id (q_in): the writer's windowed block is gated by
+    // `if constexpr`, but in a non-template function the discarded branch is still compiled, so
+    // get_tile_size/get_dataformat on this id must be well-formed (an inactive id would
+    // constexpr-fault on unpack_tile_size[-1]).
+    cb_ids.cu_window_seqlens = cb_ids.q_in;
+    cb_ids.windowed_q_offset = cb_ids.q_in;
+    cb_ids.windowed_cu_reader = cb_ids.q_in;
+    cb_ids.windowed_k_range = cb_ids.q_in;
+    if (!attrs.is_windowed) {
+        return w;
+    }
+    // 1-tile CB holding cu_window_seqlens, loaded once by the writer.
+    const auto& cu = tensors.cu_window_seqlens.value();
+    tt::DataFormat cu_df = tt::tt_metal::datatype_to_dataformat_converter(cu.dtype());
+    cb_ids.cu_window_seqlens = allocate_tile_cb(1, tt::tile_size(cu_df), cu_df);
+    // K-range narrowing: the reader gets its OWN cu_window copy (sharing the writer's CB would put
+    // two producers on one CB), and a small reader->compute ctrl CB carrying each Q chunk's
+    // {k_lo, k_hi} (double-buffered so the reader can run a Q chunk ahead; sparse_sdpa precedent).
+    cb_ids.windowed_cu_reader = allocate_tile_cb(1, tt::tile_size(cu_df), cu_df);
+    constexpr uint32_t k_range_page_size = 16;
+    cb_ids.windowed_k_range = allocate_cb(k_range_page_size, 2, tt::DataFormat::Int32);
+    w.cu_window_buffer = cu.buffer();
+    w.cu_window_seqlens_eles = cu.logical_shape()[-1];
+    w.q_token_offset = attrs.windowed_q_token_offset;
+    if (tensors.windowed_q_token_offset_tensor.has_value()) {
+        // Per-device form: the writer reads the value at runtime, so the scalar baked into the
+        // program is unused. Kept identical across devices, which is the point -- one program.
+        // The offset gets its own 1-tile CB: every other CB has a producer/consumer contract with
+        // another kernel that a writer-side reserve/push would break (borrowing the reader-produced
+        // chunk_start_idx_writer CB deadlocked).
+        const auto& off = tensors.windowed_q_token_offset_tensor.value();
+        tt::DataFormat off_df = tt::tt_metal::datatype_to_dataformat_converter(off.dtype());
+        cb_ids.windowed_q_offset = allocate_tile_cb(1, tt::tile_size(off_df), off_df);
+        w.q_offset_buffer = off.buffer();
+    }
+    return w;
 }
 
 }  // namespace
@@ -438,8 +509,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     uint32_t out_im_tiles = Sq_chunk_t * vDHt;
     uint32_t out0_t = Sq_chunk_t * vDHt;  // finalized below once out_out_subblock_h is known
     uint32_t scale_tiles = 1;
-    uint32_t statistics_tiles = Sq_chunk_t;                               // Single column of values in each iteration
-    uint32_t attention_sink_tiles = use_attention_sink ? Sq_chunk_t : 0;  // One column vector per Q chunk
+    uint32_t statistics_tiles = Sq_chunk_t;  // Single column of values in each iteration
+    // Streaming compute broadcasts the per-head scalar directly; legacy compute consumes one
+    // expanded first-column tile per Q row.
+    uint32_t attention_sink_tiles = attention_sink_tile_count(use_attention_sink, use_streaming_compute, Sq_chunk_t);
 
     // log all values
     log_debug(tt::LogOp, "q_tiles: {}", q_tiles);
@@ -556,6 +629,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     reader_compile_time_args.push_back(0);  // valid_semaphore_id placeholder
     reader_compile_time_args.push_back(0);  // mcast_enabled placeholder
     reader_compile_time_args.push_back(static_cast<uint32_t>(use_zigzag_balancing));  // arg 33
+    reader_compile_time_args.push_back(static_cast<uint32_t>(is_windowed));           // arg 34: K-range narrowing
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -565,6 +639,11 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     TensorAccessorArgs(attention_sink.has_value() ? attention_sink->buffer() : nullptr)
         .append_to(reader_compile_time_args);
     TensorAccessorArgs(flexible_chunked ? tensor_args.chunk_start_idx_tensor.value().buffer() : nullptr)
+        .append_to(reader_compile_time_args);
+    // Windowed K-range narrowing: the reader needs its own view of cu_window_seqlens and the per-device
+    // Q-offset tensor to compute each Q chunk's [k_lo, k_hi) — same placeholder rule as the writer's pair.
+    TensorAccessorArgs(buffer_or_null(tensor_args.cu_window_seqlens)).append_to(reader_compile_time_args);
+    TensorAccessorArgs(buffer_or_null(tensor_args.windowed_q_token_offset_tensor))
         .append_to(reader_compile_time_args);
 
     // Set up semaphore IDs for KV chain forwarding (non-causal only).
@@ -625,7 +704,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // out accessor, then the cu_window accessor chained right after it (before the CB-id block) so the
     // accessor offset chain stays intact. nullptr when not windowed (consistent placeholder).
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
-    TensorAccessorArgs(is_windowed ? tensor_args.cu_window_seqlens.value().buffer() : nullptr)
+    TensorAccessorArgs(buffer_or_null(tensor_args.cu_window_seqlens)).append_to(writer_compile_time_args);
+    // Then the per-device Q-offset accessor. Same chain, same placeholder rule: nullptr when the caller
+    // passed the offset as a scalar (or is not windowed), in which case the writer never reads it.
+    TensorAccessorArgs(buffer_or_null(tensor_args.windowed_q_token_offset_tensor))
         .append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_compile_time_args = {
@@ -664,6 +746,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         valid_Skt,                                    // arg 31: unpadded K tile count for streaming padded_k_tiles
         k_partial_col,                                // arg 32: K partial-tile col (0 = no partial)
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 33: unified zigzag remap
+        static_cast<uint32_t>(is_windowed),           // arg 34: K-range narrowing (bounds from the ctrl CB)
     };
 
     std::map<std::string, std::string> defines_map;
@@ -694,12 +777,16 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df =
         (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
-                                                       // tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat im_df =
+        tt::DataFormat::Float16_b;  // Keep most intermediates in bf16 to save L1; opt-in fp32 per-CB below.
     tt::DataFormat stats_df = im_df;
+    tt::DataFormat qk_im_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);
+    tt::DataFormat sum_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);
     // salad_correct_fused inits mul_bcast_cols with out CB and applies it to sum CB too —
     // both must share the same data format for the unpack config to be correct.
-    TT_ASSERT(im_df == stats_df, "SDPA fused SALAD correction requires out and sum CBs to share data format");
+    TT_ASSERT(
+        !use_streaming_compute || sum_df == im_df,
+        "SDPA fused SALAD correction requires out and sum CBs to share data format");
 
     uint32_t q_tile_size = tt::tile_size(q_df);
     uint32_t k_tile_size = tt::tile_size(k_df);
@@ -708,6 +795,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     uint32_t scalar_tile_size = tt::tile_size(scalar_df);
     uint32_t im_tile_size = tt::tile_size(im_df);
     uint32_t stats_tile_size = tt::tile_size(stats_df);
+    uint32_t qk_im_tile_size = tt::tile_size(qk_im_df);
+    uint32_t sum_tile_size = tt::tile_size(sum_df);
 
     log_debug(tt::LogOp, "q_data_format: {}", q_df);
     log_debug(tt::LogOp, "k_data_format: {}", k_df);
@@ -717,6 +806,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     log_debug(tt::LogOp, "scalar_data_format: {}", scalar_df);
     log_debug(tt::LogOp, "intermediate_data_format: {}", im_df);
     log_debug(tt::LogOp, "statistics_data_format: {}", stats_df);
+    log_debug(tt::LogOp, "qk_im_data_format: {}", qk_im_df);
+    log_debug(tt::LogOp, "sum_data_format: {}", sum_df);
 
     sdpa_cb::CBIds cb_ids;
     uint32_t next_cb_index = 0;
@@ -752,20 +843,13 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         cb_ids.mask_in = allocate_tile_cb(mask_tiles, actual_mask_tile_size, actual_mask_df);
     }
 
-    // Windowed: 1-tile CB holding cu_window_seqlens, loaded once by the writer. When NOT windowed, fall
-    // back to a valid CB id (q_in): the writer's windowed block is gated by `if constexpr`, but in a
-    // non-template function the discarded branch is still compiled, so get_tile_size/get_dataformat on
-    // this id must be well-formed (an inactive id would constexpr-fault on unpack_tile_size[-1]).
-    tt::tt_metal::Buffer* cu_window_buffer = nullptr;
-    uint32_t cu_window_seqlens_eles = 0;
-    cb_ids.cu_window_seqlens = cb_ids.q_in;
-    if (is_windowed) {
-        const auto& cu = tensor_args.cu_window_seqlens.value();
-        tt::DataFormat cu_df = tt::tt_metal::datatype_to_dataformat_converter(cu.dtype());
-        cb_ids.cu_window_seqlens = allocate_tile_cb(1, tt::tile_size(cu_df), cu_df);
-        cu_window_buffer = cu.buffer();
-        cu_window_seqlens_eles = cu.logical_shape()[-1];
-    }
+    // Windowed (block-diagonal) CBs and runtime values; see setup_windowed_cbs above.
+    const WindowedSetup windowed =
+        setup_windowed_cbs(operation_attributes, tensor_args, cb_ids, allocate_tile_cb, allocate_cb);
+    tt::tt_metal::Buffer* const cu_window_buffer = windowed.cu_window_buffer;
+    tt::tt_metal::Buffer* const windowed_q_offset_buffer = windowed.q_offset_buffer;
+    const uint32_t cu_window_seqlens_eles = windowed.cu_window_seqlens_eles;
+    const uint32_t windowed_q_token_offset = windowed.q_token_offset;
 
     cb_ids.identity_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
     cb_ids.col_identity = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
@@ -794,13 +878,13 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         cb_ids.recip_scratch = allocate_tile_cb(1, im_tile_size, im_df);
     }
 
-    cb_ids.qk_im = allocate_tile_cb(qk_tiles, im_tile_size, im_df);
+    cb_ids.qk_im = allocate_tile_cb(qk_tiles, qk_im_tile_size, qk_im_df);
     cb_ids.out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
     cb_ids.out_im_B = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
     cb_ids.max_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
     cb_ids.max_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
-    cb_ids.sum_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
-    cb_ids.sum_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    cb_ids.sum_A = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
+    cb_ids.sum_B = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
     cb_ids.exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
     cb_ids.out = allocate_tile_cb(out0_t, out_tile_size, out_df);
 
@@ -855,7 +939,11 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     std::vector<std::vector<HeadSegmentRef>> head_segments;
     uint32_t mcast_chains = 0;
 
-    if (!is_causal && !is_chunked && !has_sliding_window) {
+    // Windowed is excluded like sliding-window: both narrow the per-Q-chunk K range, and chains
+    // lock-step-forward K between cores whose Q chunks now need DIFFERENT K ranges — the semaphore
+    // handshake counts diverge and the cores deadlock. Narrowing saves far more K reads than
+    // forwarding did.
+    if (!is_causal && !is_chunked && !has_sliding_window && !is_windowed) {
         head_segments.resize(total_heads);
 
         log_debug(tt::LogOp, "=== Building KV chain forwarding topology ===");
@@ -928,6 +1016,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         uint32_t chains_skipped = 0;
         // Track injector physical X columns for DRAM channel spreading
         std::vector<uint32_t> injector_phys_x;
+        injector_phys_x.reserve(head_segments.size());
 
         for (uint32_t head_id = 0; head_id < head_segments.size(); ++head_id) {
             auto& segments = head_segments[head_id];
@@ -973,6 +1062,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             // Build chain in wrap order: start, start+1, ..., N-1, 0, 1, ..., start-1.
             // Break on conflict (core already in a different chain).
             std::vector<std::size_t> chain_order;
+            chain_order.reserve(segments.size());
             for (std::size_t step = 0; step < segments.size(); ++step) {
                 std::size_t idx = (start + step) % segments.size();
                 const auto& seg = segments[idx];
@@ -1127,6 +1217,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             uint32_t ref_q_chunks;
         };
         std::vector<McastCandidate> candidates;
+        candidates.reserve(head_segments.size());
         bool all_eligible = true;
         uint32_t total_multi_core_chains = 0;
 
@@ -1138,6 +1229,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
 
             // Collect chain core indices that actually participate in this head's chain
             std::vector<uint32_t> chain_core_indices;
+            chain_core_indices.reserve(segments.size());
             for (const auto& seg : segments) {
                 if (seg.core_idx < core_chain_info.size() && core_chain_info[seg.core_idx].participates &&
                     core_chain_info[seg.core_idx].batch == (head_id / NQH) &&
@@ -1417,6 +1509,13 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         reader_args.push_back(global_q_start);
         reader_args.push_back(global_q_count);
 
+        // Windowed K-range narrowing tail: same four values the writer gets at slots 10-13, so the
+        // reader resolves each Q chunk's global row range and windows identically.
+        reader_args.push_back(cu_window_buffer);
+        reader_args.push_back(cu_window_seqlens_eles);
+        reader_args.push_back(windowed_q_token_offset);
+        reader_args.push_back(windowed_q_offset_buffer);
+
         reader_desc.emplace_runtime_args(core, reader_args);
 
         writer_desc.emplace_runtime_args(
@@ -1432,7 +1531,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
              global_q_start,                                   // 8
              global_q_count,                                   // 9
              cu_window_buffer,                                 // 10: windowed mask src (nullptr if unused)
-             cu_window_seqlens_eles});                         // 11: window count + 1
+             cu_window_seqlens_eles,                           // 11: window count + 1
+             windowed_q_token_offset,                          // 12: global origin of this Q shard (scalar)
+             windowed_q_offset_buffer});                       // 13: same, per-device (nullptr => use 12)
 
         compute_desc.emplace_runtime_args(
             core,

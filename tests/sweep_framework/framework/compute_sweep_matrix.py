@@ -27,6 +27,20 @@ from collections import defaultdict
 from pathlib import Path
 
 from constants import get_mesh_shape_string, parse_hardware_suffix, strip_grouping_suffix, strip_mesh_suffix
+
+# split_vectors_by_device_key lives one level up (it is a runnable CI script, not framework
+# internals). Import it rather than re-deriving the partition here: the run job executes that
+# same module to materialise the batch directories, so sharing the planner is what guarantees
+# the matrix's batch names and the directories on disk agree.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from split_vectors_by_device_key import (  # noqa: E402
+    DEVICE_OPEN_MINUTES,
+    SECONDS_PER_VECTOR,
+    VECTORS_BATCH_ROOT,
+    group_vectors,
+    plan_batches,
+)
 from matrix_runner_config import (
     DEFAULT_MODEL_TRACED_GROUPING_MODE,
     GENERATION_MANIFEST_FILENAME,
@@ -34,17 +48,26 @@ from matrix_runner_config import (
     LEAD_MODELS_BATCH_POLICY,
     LEAD_MODELS_DEFAULT_TEST_GROUP,
     LEAD_MODELS_SUITE_NAME,
+    MAX_BATCH_MODULES,
     MODEL_TRACED_BATCH_POLICY,
     SCHEDULE_TYPES,
     SUPPORTED_VECTOR_GROUPING_MODES,
     SWEEP_TYPES,
+    get_batch_timeout,
     get_lead_models_test_group_name_for_hardware_group,
     get_mesh_test_group_map,
     get_runner_config,
+    get_sku_total_budget,
     get_test_group_name_for_hardware_group,
+    get_weighted_batch_timeout,
 )
 
 DEFAULT_PRETTY_MATRIX_PATH = "tests/sweep_framework/framework/sweep_matrix.json"
+
+# Safety factor on the per-vector time term when deriving a batch timeout. See where
+# _sizing_minutes is set: the splitter's SECONDS_PER_VECTOR is measured on a light op, so the
+# un-margined estimate lands exactly on the observed need for a heavy batch.
+_VECTOR_TIME_MARGIN = 1.5
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -71,9 +94,11 @@ def _hw_label(hardware_group):
 def _log_module_groups(header, modules, groups):
     """Print a summary of module grouping to stderr."""
     total_base = len(set(strip_grouping_suffix(m) for m in modules))
+    # `groups` is one entry per routed group, each holding that group's module list -- so the
+    # group COUNT is the number of matrix entries. Summing the module lists (as this used to)
+    # reported "183 matrix entries" for a 16-entry run, which reads as a job count and is not one.
     print(
-        f"{header}: {len(modules)} vector files ({total_base} unique modules), "
-        f"{sum(1 for g in groups for _ in g[1])} matrix entries",
+        f"{header}: {len(modules)} vector files ({total_base} unique modules), " f"{len(groups)} matrix entries",
         file=sys.stderr,
     )
     for label, entries in groups:
@@ -203,6 +228,11 @@ def _batch_modules_for_test_group(base_modules, batch_size, batch_policy=None):
 
     Modules listed in LEAD_MODELS_BATCH_POLICY["solo_modules"] are pulled out
     and given their own dedicated 1-module batch before the rest are chunked.
+
+    A ``parallel_jobs`` policy fixes the job count and lets the batch width grow
+    with the module set, so it is capped at MAX_BATCH_MODULES: past that the job
+    count rises instead, keeping any single timeout from taking down a very wide
+    batch (see MAX_BATCH_MODULES for the run that motivated the cap).
     """
     solo_set = set(LEAD_MODELS_BATCH_POLICY.get("solo_modules", []))
     solo = [m for m in base_modules if m in solo_set]
@@ -210,10 +240,10 @@ def _batch_modules_for_test_group(base_modules, batch_size, batch_policy=None):
 
     parallel_jobs = (batch_policy or {}).get("parallel_jobs")
     if parallel_jobs:
-        size = max(1, -(-len(rest) // parallel_jobs))
+        size = min(MAX_BATCH_MODULES, max(1, -(-len(rest) // parallel_jobs)))
         batches = chunk_modules(rest, size)
     else:
-        batches = chunk_modules(rest, batch_size)
+        batches = chunk_modules(rest, min(batch_size, MAX_BATCH_MODULES))
 
     for sm in solo:
         batches.append(sm)
@@ -352,6 +382,121 @@ def compute_model_traced_matrix(modules, batch_size, suite_name, grouping_mode=N
     return include_entries, batches
 
 
+def _route_modules_to_lanes(module_stems, run_type, grouping_mode):
+    """Map vector-file stems to the CI lanes that own them.
+
+    Same routing the module-batched path uses (mesh suffix, else hardware suffix), just
+    applied to one batch's files instead of the whole run.
+    """
+    mesh_test_groups = get_mesh_test_group_map(run_type)
+    is_lead = run_type == "lead_models"
+    preference = "mesh" if is_lead else grouping_mode
+    mesh_modules, hw_modules, unmatched = _group_modules_by_preference(module_stems, preference)
+
+    lanes = defaultdict(list)
+    for mesh_shape, mods in mesh_modules.items():
+        # lead_models keeps strict ownership (unmapped mesh -> skipped, with a warning);
+        # model_traced falls back to the n150 lane. Preserved from the per-run functions.
+        lane = _get_test_group_for_mesh_shape(
+            mesh_shape, mesh_test_groups, run_type, None if is_lead else "wormhole-n150-sweeps"
+        )
+        if lane is not None:
+            lanes[lane].extend(mods)
+
+    for hw_group, mods in hw_modules.items():
+        lane = (
+            get_lead_models_test_group_name_for_hardware_group(hw_group)
+            if is_lead
+            else get_test_group_name_for_hardware_group(hw_group)
+        )
+        lanes[lane].extend(mods)
+
+    if unmatched:
+        lane = LEAD_MODELS_DEFAULT_TEST_GROUP if is_lead else get_test_group_name_for_hardware_group(None)
+        lanes[lane].extend(unmatched)
+
+    return lanes
+
+
+def compute_device_key_matrix(vectors_path, run_type, suite_name, grouping_mode, manifest=None):
+    """Compute a matrix whose unit of work is a DEVICE-KEY batch, not a set of modules.
+
+    A batch holds only vectors that need the same (mesh shape, dispatch axis, fabric), so
+    the job declares that device up front, opens it once, and never switches. Previously a
+    job was "3 modules", its vectors spanned several mesh shapes, and whatever shape
+    auto-detect picked was inherited by all of them -- vectors traced at another shape
+    silently fell back to ReplicateTensorToMesh instead of their traced placement, and the
+    runtime attempts to correct for that are what produced mid-job device reopens (the
+    Galaxy dispatch-wedge risk).
+
+    A batch can still span lanes (a 1x1 batch holds both wormhole and blackhole files), so
+    each batch fans out to one entry per owning lane, each carrying only that lane's
+    modules. The batch directory is shared; --module-name keeps the jobs disjoint.
+    """
+    plan = plan_batches(group_vectors(vectors_path, manifest))
+
+    # Share of each op's vectors per batch, for the timeout weighting below.
+    op_totals = defaultdict(int)
+    for batch in plan:
+        for file_name, count in batch["file_vectors"].items():
+            op_totals[strip_grouping_suffix(Path(file_name).stem)] += count
+
+    include_entries = []
+    batches = []
+    log_groups = []
+    all_stems = []
+
+    for batch in plan:
+        stems = [Path(name).stem for name in batch["vector_files"]]
+        all_stems.extend(stems)
+        mesh = batch["mesh_shape"]
+        mesh_label = f"{mesh[0]}x{mesh[1]}" if mesh else ""
+
+        for lane, mods in sorted(_route_modules_to_lanes(stems, run_type, grouping_mode).items()):
+            base = sorted(set(strip_grouping_suffix(m) for m in mods))
+            selector = ",".join(base)
+            vectors = sum(batch["file_vectors"].get(f"{m}.json", 0) for m in mods)
+            shares = defaultdict(float)
+            for module in mods:
+                token = strip_grouping_suffix(module)
+                total = op_totals.get(token, 0)
+                if total:
+                    shares[token] += batch["file_vectors"].get(f"{module}.json", 0) / total
+
+            batches.append(selector)
+            include_entries.append(
+                {
+                    **_get_runner(lane),
+                    "module_selector": selector,
+                    "batch_display": f"{batch['name']}:{lane}",
+                    "suite_name": suite_name,
+                    "mesh_dims": "",
+                    # Declared, not auto-detected -- see the docstring.
+                    "mesh_shape": mesh_label,
+                    "dispatch_axis": batch["dispatch_axis"],
+                    "fabric": batch["fabric"],
+                    "vectors_dir": f"{VECTORS_BATCH_ROOT}/{batch['name']}",
+                    "_op_shares": dict(shares),
+                    # What the splitter's time model says this lane's slice of the batch costs.
+                    # Timing it by op-shares alone under-budgets big batches (see
+                    # get_weighted_batch_timeout); the batch was SIZED by this model.
+                    #
+                    # The per-vector term carries a margin because SECONDS_PER_VECTOR is the
+                    # splitter's own admittedly-optimistic figure ("comes from slice, a light
+                    # op"). Un-margined it lands exactly on the observed need -- model_traced
+                    # run 30702189957 mesh1x2_row_1d passed 432 of 562 vectors in 29.2 min,
+                    # extrapolating to ~38 min against a computed 38. A timeout is a ceiling,
+                    # not a target: a job that finishes early releases its runner, while one
+                    # killed at the wall throws away everything it had done.
+                    "_sizing_minutes": DEVICE_OPEN_MINUTES + _VECTOR_TIME_MARGIN * vectors * SECONDS_PER_VECTOR / 60.0,
+                }
+            )
+            log_groups.append((f"{batch['name']} -> {lane} ({vectors} vectors)", mods))
+
+    _log_module_groups(f"Device-key run ({run_type}, {len(plan)} batches)", all_stems, log_groups)
+    return include_entries, batches
+
+
 def compute_standard_matrix(modules, batch_size, suite_name):
     """Compute matrix for nightly/comprehensive runs."""
     base_modules = sorted(set(strip_grouping_suffix(m) for m in modules))
@@ -396,6 +541,8 @@ def main():
     sweep_name = os.environ.get("SWEEP_NAME", "")
     measure_device_perf = os.environ.get("MEASURE_DEVICE_PERF", "false")
     vectors_dir = os.environ.get("VECTORS_DIR", "/tmp/vectors")
+    # Kill switch back to module-count batching, for bisecting a bad run without a revert.
+    device_key_batching = os.environ.get("SWEEP_DEVICE_KEY_BATCHING", "1").strip() != "0"
 
     vectors_path = Path(vectors_dir)
     if not vectors_path.exists():
@@ -417,14 +564,77 @@ def main():
 
     # Compute matrix
     ccl_batches = []
-    if run_type == "lead_models":
+    grouping_mode = manifest.get("vector_grouping_mode")
+    if run_type in ("lead_models", "model_traced") and device_key_batching:
+        suite = LEAD_MODELS_SUITE_NAME if run_type == "lead_models" else "model_traced"
+        include_entries, batches = compute_device_key_matrix(vectors_path, run_type, suite, grouping_mode, manifest)
+    elif run_type == "lead_models":
         include_entries, batches = compute_lead_models_matrix(modules, batch_size)
     elif run_type == "model_traced":
-        grouping_mode = manifest.get("vector_grouping_mode")
         include_entries, batches = compute_model_traced_matrix(modules, batch_size, "model_traced", grouping_mode)
     else:
         suite_name = None if run_type == "comprehensive" else run_type  # "nightly" or None
         include_entries, batches, ccl_batches = compute_standard_matrix(modules, batch_size, suite_name)
+
+    # Stamp the per-batch timeout (minutes) onto every matrix entry so the workflow
+    # enforces it at the GitHub job level (timeout-minutes). Each batch's ceiling is
+    # the sum of its ops' per-op ceilings, sourced from the batch policy in
+    # tests/pipeline_reorg/ttnn_sweep_tests.yaml keyed by (target=run_type, sku).
+    # A device-key batch holds a fraction of each of its ops' vectors, so it is charged the
+    # matching fraction of each per-op ceiling (get_weighted_batch_timeout). Module-sized
+    # batches hold all of an op's vectors and keep the full per-op sum.
+    for entry in include_entries:
+        op_shares = entry.pop("_op_shares", None)
+        if op_shares is None:
+            entry.pop("_sizing_minutes", None)
+            entry["timeout"] = get_batch_timeout(run_type, entry.get("sku"), entry.get("module_selector", ""))
+        else:
+            entry["timeout"] = get_weighted_batch_timeout(
+                run_type, entry.get("sku"), op_shares, sizing_minutes=entry.pop("_sizing_minutes", 0)
+            )
+
+    # Budget enforcement: the sum of a SKU's per-batch timeouts is that SKU's total
+    # time for this run. Check it against the per-run budget declared for the
+    # (target, sku) in ttnn_sweep_tests.yaml (skus.<sku>.timeout) — the same number
+    # verify_time_budget.py enforces (statically) against .github/time_budget.yaml.
+    # Because the batch count is dynamic, the live sum can only be checked here, not
+    # statically; this enforces it per run. Untracked (target, sku) pairs
+    # (nightly/comprehensive) have no declared budget and are skipped. Exceeding the
+    # budget is fatal: the static verify_time_budget.py step caps the declared per-run
+    # numbers, and this caps the run that is actually about to be dispatched.
+    sku_totals = defaultdict(int)
+    for entry in include_entries:
+        sku_totals[entry.get("sku")] += entry["timeout"]
+    over_budget_skus = []
+    for sku, requested in sorted(sku_totals.items()):
+        budget = get_sku_total_budget(run_type, sku)
+        if budget is None:
+            continue
+        over_budget = requested > budget
+        status = "OVER BUDGET" if over_budget else "OK"
+        print(
+            f"[budget] {run_type} sku={sku}: this run needs {requested} min across "
+            f"its batches, per-run budget is {budget} min -> {status}",
+            file=sys.stderr,
+        )
+        if over_budget:
+            over_budget_skus.append(sku)
+            print(
+                f"[budget][ERROR] {run_type} / {sku}: the sum of this run's per-batch "
+                f"timeouts ({requested} min) exceeds the per-run budget of {budget} min "
+                f"declared in tests/pipeline_reorg/ttnn_sweep_tests.yaml. Raise "
+                f"skus.{sku}.timeout there (and the matching .github/time_budget.yaml "
+                f"ttnn.sweep entry) or lower the per-op ceilings.",
+                file=sys.stderr,
+            )
+    # Report every offending SKU before failing so one run surfaces all of them.
+    if over_budget_skus:
+        print(
+            f"[budget][ERROR] {run_type}: over budget on {len(over_budget_skus)} sku(s): "
+            f"{', '.join(over_budget_skus)}. Refusing to dispatch.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     # Validate GitHub Actions limits
     for label, count in [("batch", len(batches)), ("matrix entry", len(include_entries))]:
@@ -454,9 +664,18 @@ def main():
 
     print("matrix=" + json.dumps(result, **compact))
 
+    active_hw = []
     for hw_key, group_names in HW_GROUP_MATRIX_KEYS.items():
         hw_entries = [e for e in include_entries if e.get("test_group_name", "") in group_names]
         print(f"{hw_key}-matrix=" + json.dumps({"include": hw_entries}, **compact))
+        if hw_entries:
+            active_hw.append(hw_key)
+
+    # Hardware groups that actually have at least one batch this run. The dispatcher
+    # fans out one reusable-workflow leg per active group (strategy.matrix over this
+    # list), so empty groups are never scheduled and no leg is ever handed an empty
+    # matrix — replacing the seven hand-maintained per-hardware caller jobs.
+    print("active-hw=" + json.dumps(active_hw, **compact))
 
 
 if __name__ == "__main__":

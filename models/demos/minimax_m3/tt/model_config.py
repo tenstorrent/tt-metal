@@ -177,18 +177,23 @@ class ModelArgs:
         _ln = os.getenv("M3_LOAD_NLAYERS")
         if _ln:
             kln = int(_ln)
+            # M3_LOAD_LAYER_START=S loads the GLOBAL layer window [S, S+kln) instead of [0, kln). A
+            # pipeline-parallel rank owns layers [first_layer_idx, first_layer_idx+num_layers), so its
+            # adapter sets S=first_layer_idx to load exactly that slice (keys stay global-indexed).
+            start = int(os.getenv("M3_LOAD_LAYER_START", "0"))
             keep = set()
             for k, shard in weight_map.items():
                 kk = k[len("language_model.") :] if k.startswith("language_model.") else k
                 if kk.startswith("model.layers."):
                     li = int(kk.split(".")[2])
-                    if li < kln:
+                    if start <= li < start + kln:
                         keep.add(shard)
                 else:  # embed / norm / lm_head / non-layer
                     keep.add(shard)
             shards = sorted(keep)
             logger.info(
-                f"M3_LOAD_NLAYERS={kln}: loading {len(shards)} shards (of {len(set(weight_map.values()))}) for layers 0..{kln-1}"
+                f"M3_LOAD_NLAYERS={kln} M3_LOAD_LAYER_START={start}: loading {len(shards)} shards "
+                f"(of {len(set(weight_map.values()))}) for layers {start}..{start + kln - 1}"
             )
         else:
             shards = sorted(set(weight_map.values()))

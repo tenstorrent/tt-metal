@@ -19,8 +19,10 @@
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <optional>
 #include <set>
@@ -47,7 +49,7 @@ bool find_device_with_neighbor_in_multi_direction(
     // Find a device with enough neighbours in the specified direction
     bool connection_found = false;
     for (const auto& device : devices) {
-        src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->get_devices()[0]->id());
+        src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->get_device_ids()[0]);
         if (incoming_direction.has_value()) {
             if (control_plane.get_intra_chip_neighbors(src_fabric_node_id, incoming_direction.value()).empty()) {
                 // This potential source will not have the requested incoming direction, skip
@@ -80,7 +82,7 @@ bool find_device_with_neighbor_in_multi_direction(
             }
         }
         if (connection_found) {
-            src_physical_device_id = device->get_devices()[0]->id();
+            src_physical_device_id = device->get_device_ids()[0];
             dst_fabric_node_ids_by_dir = std::move(temp_end_fabric_node_ids_by_dir);
             dst_physical_device_ids_by_dir = std::move(temp_physical_end_device_ids_by_dir);
             break;
@@ -99,12 +101,12 @@ bool find_device_with_neighbor_in_direction(
     auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
     auto devices = fixture->get_devices();
     for (const auto& device : devices) {
-        src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->get_devices()[0]->id());
+        src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->get_device_ids()[0]);
 
         // Get neighbours within a mesh in the given direction
         auto neighbors = control_plane.get_intra_chip_neighbors(src_fabric_node_id, direction);
         if (!neighbors.empty()) {
-            src_physical_device_id = device->get_devices()[0]->id();
+            src_physical_device_id = device->get_device_ids()[0];
             dst_fabric_node_id = FabricNodeId(src_fabric_node_id.mesh_id, neighbors[0]);
             dst_physical_device_id = control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id);
             return true;
@@ -470,7 +472,7 @@ void check_asic_mapping_against_golden(const std::string& test_name, const std::
     int rank = *distributed_context->rank();
 
     std::filesystem::path root_dir = rtoptions.get_root_dir();
-    std::filesystem::path generated_dir = root_dir / "generated" / "fabric";
+    std::filesystem::path generated_dir = std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "fabric";
     std::filesystem::path golden_dir = root_dir / "tests" / "tt_metal" / "tt_fabric" / "golden_mapping_files";
 
     // Check this rank's generated file
@@ -530,6 +532,134 @@ void check_asic_mapping_against_golden(const std::string& test_name, const std::
     if (!comparison_result) {
         FAIL() << "ASIC mapping file mismatch detected on rank " << rank
                << ". Test must fail when mappings don't match golden reference.";
+    }
+}
+
+bool compare_intermesh_port_assignment_files(
+    const std::filesystem::path& generated_file, const std::filesystem::path& golden_file) {
+    if (!std::filesystem::exists(generated_file) || !std::filesystem::exists(golden_file)) {
+        return false;
+    }
+    try {
+        // Both files are pre-sorted and host-independent, so a canonical YAML re-emit + string compare is
+        // sufficient (and robust to insignificant whitespace differences).
+        YAML::Emitter gen_emitter;
+        gen_emitter << YAML::LoadFile(generated_file.string());
+        YAML::Emitter gold_emitter;
+        gold_emitter << YAML::LoadFile(golden_file.string());
+        return std::string(gen_emitter.c_str()) == std::string(gold_emitter.c_str());
+    } catch (const std::exception& e) {
+        log_error(tt::LogTest, "Failed to compare inter-mesh port assignment files: {}", e.what());
+        return false;
+    }
+}
+
+void check_intermesh_port_assignment_against_golden(const std::string& golden_name) {
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    // Only compare in mock tests (real-device port assignment is hardware-specific).
+    if (!rtoptions.get_mock_enabled()) {
+        return;
+    }
+    const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    int world_size = *distributed_context->size();
+    int rank = *distributed_context->rank();
+
+    std::filesystem::path root_dir = rtoptions.get_root_dir();
+    std::filesystem::path fabric_dir = std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "fabric";
+
+    // Each rank writes only its own local mesh's channels. Wait for every rank to finish before rank 0
+    // aggregates the per-rank files into the complete, all-mesh assignment (mock runs place all ranks on one
+    // node, so rank 0 can read every sibling file).
+    distributed_context->barrier();
+    if (rank != 0) {
+        return;
+    }
+
+    // Merge every per-rank file into one all-mesh map, covering both the inter-mesh port assignment and (if
+    // present) the intra-mesh channel assignment. A single mesh can span multiple host ranks, and each such rank
+    // writes the same "M{a}->M{b}" key holding only its own chips' ports. Overwriting on collision would keep just
+    // the last file read and silently drop every other rank's ports, so concatenate the inner sequences instead,
+    // then sort + dedup for a deterministic result independent of file-read order.
+    auto merge_seq_into = [](YAML::Node& dst_map, const std::string& key, const YAML::Node& src_seq) {
+        if (!src_seq.IsSequence()) {
+            return;
+        }
+        std::vector<std::string> entries;
+        if (YAML::Node existing = dst_map[key]; existing && existing.IsSequence()) {
+            for (const auto& e : existing) {
+                entries.push_back(e.as<std::string>());
+            }
+        }
+        for (const auto& e : src_seq) {
+            entries.push_back(e.as<std::string>());
+        }
+        std::sort(entries.begin(), entries.end());
+        entries.erase(std::unique(entries.begin(), entries.end()), entries.end());
+        YAML::Node merged(YAML::NodeType::Sequence);
+        // Match the per-rank writer's flow style so the merged/regoldened file stays byte-stable.
+        merged.SetStyle(YAML::EmitterStyle::Flow);
+        for (const auto& e : entries) {
+            merged.push_back(e);
+        }
+        dst_map[key] = merged;
+    };
+
+    YAML::Node merged_intermesh(YAML::NodeType::Map);
+    YAML::Node merged_intramesh(YAML::NodeType::Map);
+    for (int r = 1; r <= world_size; ++r) {
+        std::filesystem::path f = fabric_dir / ("intermesh_port_assignment_rank_" + std::to_string(r) + "_of_" +
+                                                std::to_string(world_size) + ".yaml");
+        if (!std::filesystem::exists(f)) {
+            continue;
+        }
+        YAML::Node doc = YAML::LoadFile(f.string());
+        if (YAML::Node inter = doc["intermesh_port_assignment"]; inter && inter.IsMap()) {
+            for (auto it = inter.begin(); it != inter.end(); ++it) {
+                merge_seq_into(merged_intermesh, it->first.as<std::string>(), it->second);
+            }
+        }
+        if (YAML::Node intra = doc["intramesh_channel_assignment"]; intra && intra.IsMap()) {
+            for (auto it = intra.begin(); it != intra.end(); ++it) {
+                merge_seq_into(merged_intramesh, it->first.as<std::string>(), it->second);
+            }
+        }
+    }
+    YAML::Node combined(YAML::NodeType::Map);
+    combined["intermesh_port_assignment"] = merged_intermesh;
+    if (merged_intramesh.size() > 0) {
+        combined["intramesh_channel_assignment"] = merged_intramesh;
+    }
+    std::filesystem::path combined_file =
+        fabric_dir / ("intermesh_port_assignment_ALL_of_" + std::to_string(world_size) + ".yaml");
+    {
+        YAML::Emitter em;
+        em << combined;
+        std::ofstream o(combined_file);
+        o << em.c_str();
+    }
+
+    std::filesystem::path golden_file =
+        root_dir / "tests" / "tt_metal" / "tt_fabric" / "golden_mapping_files" / (golden_name + ".yaml");
+
+    // Regolden mode (TT_METAL_REGOLDEN=1): overwrite the golden with this run's merged all-mesh assignment.
+    if (const char* regolden_env = std::getenv("TT_METAL_REGOLDEN");
+        regolden_env != nullptr && regolden_env[0] != '\0') {
+        std::filesystem::create_directories(golden_file.parent_path());
+        std::filesystem::copy_file(combined_file, golden_file, std::filesystem::copy_options::overwrite_existing);
+        log_info(tt::LogTest, "Regoldened {} -> {}", combined_file.string(), golden_file.string());
+        return;
+    }
+
+    if (!std::filesystem::exists(golden_file)) {
+        FAIL() << "Golden inter-mesh port assignment file does not exist: " << golden_file.string()
+               << ". See tests/tt_metal/tt_fabric/golden_mapping_files/README.md.";
+    }
+    bool comparison_result = compare_intermesh_port_assignment_files(combined_file, golden_file);
+    EXPECT_TRUE(comparison_result) << "Inter-mesh port assignment mismatch vs golden " << golden_name
+                                   << ". This usually means the port-determination result changed (or became "
+                                      "host-dependent).";
+    if (!comparison_result) {
+        FAIL() << "Inter-mesh port assignment mismatch detected (golden: " << golden_name << ").";
     }
 }
 
@@ -841,10 +971,14 @@ void expect_galaxy_rank_group_2x4_check(const ControlPlane& control_plane, MeshI
     EXPECT_EQ(trays.size(), 2u) << "mesh " << *mesh_id << " host_rank " << *host_rank
                                 << " 2x4 rank group must sit on one tray or exactly two trays";
 
-    const auto& valid_tray_pairs = psd.is_bh_galaxy_rev_c() ? rev_c_tray_pairs : rev_ab_tray_pairs;
+    // Wormhole galaxy shares Blackhole rev-C's tray-pair mapping; only Blackhole rev-A/B differs.
+    const bool is_wormhole_galaxy =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::GALAXY;
+    const bool use_rev_c_tray_pairs = is_wormhole_galaxy || psd.is_bh_galaxy_rev_c();
+    const auto& valid_tray_pairs = use_rev_c_tray_pairs ? rev_c_tray_pairs : rev_ab_tray_pairs;
     EXPECT_TRUE(valid_tray_pairs.contains(trays))
         << "mesh " << *mesh_id << " host_rank " << *host_rank << " 2x4 rank group tray pair must be "
-        << (psd.is_bh_galaxy_rev_c() ? "{1,2} or {3,4}" : "{1,3} or {2,4}");
+        << (use_rev_c_tray_pairs ? "{1,2} or {3,4}" : "{1,3} or {2,4}");
 
     for (const auto& [tray_id, asic_locations] : asic_locations_by_tray) {
         EXPECT_EQ(asic_locations.size(), 4u) << "mesh " << *mesh_id << " host_rank " << *host_rank
@@ -860,6 +994,66 @@ void expect_galaxy_rank_group_2x4_check(const ControlPlane& control_plane, MeshI
         EXPECT_EQ(asic_locations, all_asic_locations)
             << "mesh " << *mesh_id << " host_rank " << *host_rank << " 2x4 rank group tray " << tray_id
             << " must use the same half-tray asic location group as the rank group";
+    }
+}
+
+void expect_galaxy_rank_group_4x1_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank) {
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto& psd = control_plane.get_physical_system_descriptor();
+    const auto chip_ids = mesh_graph.get_chip_ids(mesh_id, host_rank);
+    ASSERT_EQ(chip_ids.size(), 4u) << "mesh " << *mesh_id << " host_rank " << *host_rank
+                                   << " 4x1 rank group must contain exactly 4 chips";
+
+    // A 4x1 column spans a tray pair's shared column: asic locations {1,5}, {2,6}, {3,7}, or {4,8}
+    // (2 chips per tray). The tray pair is rev-dependent: rev C {1,2} or {3,4}; rev A/B {1,3} or {2,4}.
+    static const std::set<std::set<uint32_t>> valid_column_asic_location_groups = {{1, 5}, {2, 6}, {3, 7}, {4, 8}};
+    static const std::set<std::set<uint32_t>> rev_c_tray_pairs = {{1, 2}, {3, 4}};
+    static const std::set<std::set<uint32_t>> rev_ab_tray_pairs = {{1, 3}, {2, 4}};
+
+    std::set<uint32_t> all_asic_locations;
+    std::set<uint32_t> trays;
+    std::set<std::string> hostnames;
+    std::map<uint32_t, std::set<uint32_t>> asic_locations_by_tray;
+
+    for (const auto chip_id : chip_ids.values()) {
+        const FabricNodeId fabric_node_id(mesh_id, static_cast<std::uint32_t>(chip_id));
+        const auto asic_id = control_plane.get_asic_id_from_fabric_node_id(fabric_node_id);
+        const uint32_t tray_id_value = *psd.get_tray_id(asic_id);
+        const uint32_t asic_location_value = *psd.get_asic_location(asic_id);
+
+        hostnames.insert(psd.get_host_name_for_asic(asic_id));
+        trays.insert(tray_id_value);
+        all_asic_locations.insert(asic_location_value);
+        asic_locations_by_tray[tray_id_value].insert(asic_location_value);
+    }
+
+    EXPECT_EQ(hostnames.size(), 1u) << "mesh " << *mesh_id << " host_rank " << *host_rank
+                                    << " 4x1 rank group fabric nodes must be on the same host";
+
+    EXPECT_EQ(trays.size(), 2u) << "mesh " << *mesh_id << " host_rank " << *host_rank
+                                << " 4x1 rank group must sit on exactly two trays";
+
+    // Wormhole galaxy shares Blackhole rev-C's tray-pair mapping ({1,2}/{3,4}); only Blackhole rev-A/B uses
+    // {1,3}/{2,4}.
+    const bool is_wormhole_galaxy =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::GALAXY;
+    const bool use_rev_c_tray_pairs = is_wormhole_galaxy || psd.is_bh_galaxy_rev_c();
+    const auto& valid_tray_pairs = use_rev_c_tray_pairs ? rev_c_tray_pairs : rev_ab_tray_pairs;
+    EXPECT_TRUE(valid_tray_pairs.contains(trays))
+        << "mesh " << *mesh_id << " host_rank " << *host_rank << " 4x1 rank group tray pair must be "
+        << (use_rev_c_tray_pairs ? "{1,2} or {3,4}" : "{1,3} or {2,4}");
+
+    // All 4 chips share one column asic-location pair ({1,5}, {2,6}, {3,7}, or {4,8}).
+    EXPECT_TRUE(valid_column_asic_location_groups.contains(all_asic_locations))
+        << "mesh " << *mesh_id << " host_rank " << *host_rank
+        << " 4x1 rank group must use asic locations {1,5}, {2,6}, {3,7}, or {4,8}, got a different set";
+
+    for (const auto& [tray_id, asic_locations] : asic_locations_by_tray) {
+        EXPECT_EQ(asic_locations.size(), 2u) << "mesh " << *mesh_id << " host_rank " << *host_rank
+                                             << " 4x1 rank group tray " << tray_id << " must contain exactly 2 chips";
+        EXPECT_EQ(asic_locations, all_asic_locations)
+            << "mesh " << *mesh_id << " host_rank " << *host_rank << " 4x1 rank group tray " << tray_id
+            << " must use the same column asic location group as the rank group";
     }
 }
 
@@ -890,10 +1084,14 @@ void expect_galaxy_rank_group_2x8_check(const ControlPlane& control_plane, MeshI
     EXPECT_EQ(trays.size(), 2u) << "mesh " << *mesh_id << " host_rank " << *host_rank
                                 << " 2x8 rank group must sit on exactly two trays";
 
-    const auto& valid_tray_pairs = psd.is_bh_galaxy_rev_c() ? rev_c_tray_pairs : rev_ab_tray_pairs;
+    // Wormhole galaxy shares Blackhole rev-C's tray-pair mapping; only Blackhole rev-A/B differs.
+    const bool is_wormhole_galaxy =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::GALAXY;
+    const bool use_rev_c_tray_pairs = is_wormhole_galaxy || psd.is_bh_galaxy_rev_c();
+    const auto& valid_tray_pairs = use_rev_c_tray_pairs ? rev_c_tray_pairs : rev_ab_tray_pairs;
     EXPECT_TRUE(valid_tray_pairs.contains(trays))
         << "mesh " << *mesh_id << " host_rank " << *host_rank << " 2x8 rank group tray pair must be "
-        << (psd.is_bh_galaxy_rev_c() ? "{1,3} or {2,4}" : "{1,2} or {3,4}");
+        << (use_rev_c_tray_pairs ? "{1,3} or {2,4}" : "{1,2} or {3,4}");
 }
 
 void expect_galaxy_rank_group_4x4_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank) {
@@ -923,10 +1121,15 @@ void expect_galaxy_rank_group_4x4_check(const ControlPlane& control_plane, MeshI
     EXPECT_EQ(trays.size(), 2u) << "mesh " << *mesh_id << " host_rank " << *host_rank
                                 << " 4x4 rank group must sit on exactly two trays";
 
-    const auto& valid_tray_pairs = psd.is_bh_galaxy_rev_c() ? rev_c_tray_pairs : rev_ab_tray_pairs;
+    // Wormhole galaxy shares Blackhole rev-C's tray-pair mapping ({1,2}/{3,4}); only Blackhole rev-A/B uses
+    // {1,3}/{2,4}.
+    const bool is_wormhole_galaxy =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::GALAXY;
+    const bool use_rev_c_tray_pairs = is_wormhole_galaxy || psd.is_bh_galaxy_rev_c();
+    const auto& valid_tray_pairs = use_rev_c_tray_pairs ? rev_c_tray_pairs : rev_ab_tray_pairs;
     EXPECT_TRUE(valid_tray_pairs.contains(trays))
         << "mesh " << *mesh_id << " host_rank " << *host_rank << " 4x4 rank group tray pair must be "
-        << (psd.is_bh_galaxy_rev_c() ? "{1,2} or {3,4}" : "{1,3} or {2,4}");
+        << (use_rev_c_tray_pairs ? "{1,2} or {3,4}" : "{1,3} or {2,4}");
 }
 
 void expect_galaxy_rank_group_4x8_check(const ControlPlane& control_plane, MeshId mesh_id, MeshHostRankId host_rank) {
@@ -1022,6 +1225,10 @@ void expect_galaxy_rank_group_checks(const ControlPlane& control_plane) {
             } else if (rank_group_shape_is(rank_shape, 2, 8)) {
                 expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 2, 8);
                 expect_galaxy_rank_group_2x8_check(control_plane, mesh_id, host_rank);
+            } else if (rank_group_shape_is(rank_shape, 4, 1)) {
+                // 4x1 (or 1x4) column slice: e.g. a 4x4 mesh split across hosts with host_topology [1,4].
+                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 4, 1);
+                expect_galaxy_rank_group_4x1_check(control_plane, mesh_id, host_rank);
             } else if (rank_group_shape_is(rank_shape, 4, 4)) {
                 expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 4, 4);
                 expect_galaxy_rank_group_4x4_check(control_plane, mesh_id, host_rank);
@@ -1074,9 +1281,13 @@ void expect_galaxy_4x4_split_host_mesh_checks(const ControlPlane& control_plane)
                     expect_galaxy_rank_group_4x4_4x4split_check(control_plane, mesh_id, host_rank);
                     ran_4x4split_check = true;
                 }
+            } else if (rank_group_shape_is(rank_shape, 4, 1)) {
+                // 4x1 (or 1x4) column slice: e.g. a 4x4 mesh split across hosts with host_topology [1,4].
+                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 4, 1);
+                expect_galaxy_rank_group_4x1_check(control_plane, mesh_id, host_rank);
             } else {
                 ADD_FAILURE() << "mesh " << *mesh_id << " host_rank " << *host_rank
-                              << " split-host 4x4 layout rank shape must be 1x1, 1x2, 2x2, 2x4, or 4x4, got "
+                              << " split-host 4x4 layout rank shape must be 1x1, 1x2, 2x2, 2x4, 4x1, or 4x4, got "
                               << rank_shape;
             }
         }

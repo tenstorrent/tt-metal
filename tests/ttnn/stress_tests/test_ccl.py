@@ -92,7 +92,6 @@ def test_ccl_ddr_smoke_test(
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
-        allowed_pcc=0.9999,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
 
@@ -201,7 +200,6 @@ def test_ccl_other_smoke_test(
             enable_trace=enable_trace,
             num_iters=num_iters,
             cluster_axis=cluster_axis,
-            allowed_pcc=0.9999,
             num_l1_banks=120,
         )
     ttnn.ReadDeviceProfiler(submesh_device)

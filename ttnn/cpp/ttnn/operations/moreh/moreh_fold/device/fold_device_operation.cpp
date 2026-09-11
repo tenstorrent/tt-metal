@@ -9,6 +9,12 @@
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::moreh::moreh_fold {
+
+MorehFoldOperation::program_factory_t MorehFoldOperation::select_program_factory(
+    const operation_attributes_t&, const tensor_args_t&) {
+    return MultiCore{};
+}
+
 void MorehFoldOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;

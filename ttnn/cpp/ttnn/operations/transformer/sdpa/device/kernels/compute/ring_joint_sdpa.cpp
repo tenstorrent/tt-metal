@@ -7,12 +7,17 @@
 #define REDUCE_OP (PoolType::MAX)
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 
+// This kernel reconfigs ~30x; inlining the LLK Src zero-flag DEFAULT configurator at each site pushes
+// the program over the kernel-config buffer. Force it out-of-line here.
+#define LLK_ZEROFLAG_OUTLINE 1
+
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include <tt-metalium/constants.hpp>
 #include "compute_common.hpp"
 #include "compute_streaming.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_indexer.hpp"
+#include "cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_rank_mapping.hpp"
 
 template <bool kv_pad_rotation_enabled>
 constexpr void assert_kv_pad_rotation_streaming_only() {
@@ -75,6 +80,20 @@ void kernel_main() {
     constexpr uint32_t active_ring_iter_mask_compile [[maybe_unused]] = get_compile_time_arg_val(46);
     constexpr uint32_t last_active_ring_iter_compile [[maybe_unused]] = get_compile_time_arg_val(47);
     constexpr bool v_shares_k_buffer = get_compile_time_arg_val(48) == 1;
+    constexpr bool use_attention_sink = get_compile_time_arg_val(49) == 1;
+    constexpr uint32_t sliding_window_size = get_compile_time_arg_val(50);
+    constexpr bool has_sliding_window = sliding_window_size > 0;
+    // Slot 52: sharded-joint flag (appended after upstream's kv_pad_from_metadata at slot 51, which is
+    // declared further down next to cb_arg_offset). When true, one L/P shard arrives per ring iteration
+    // and do_joint_kv fires on every iteration rather than only the last active iteration.
+    constexpr bool joint_is_sharded = get_compile_time_arg_val(52) == 1;
+    // Slot 53: true (unpadded) joint length in tiles (similar to spatial logical_nt). Drives the
+    // per-ring-iteration joint tail mask and the joint out-of-bounds K-chunk skip.
+    constexpr uint32_t logical_lt = get_compile_time_arg_val(53);
+    constexpr bool full_mesh_rank_mapping = get_compile_time_arg_val(54) == 1;
+    constexpr auto snake_orientation = static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(55));
+    constexpr uint32_t mesh_rows = get_compile_time_arg_val(56);
+    constexpr uint32_t mesh_cols = get_compile_time_arg_val(57);
     constexpr uint32_t v_cb_physical_width_t = v_shares_k_buffer ? DHt : vDHt;
     // In-place latent-V (single-tile Q): read V straight from K^T instead of materializing it.
     // Shared with the program factory and reader via kt_inplace_v_enabled().
@@ -82,24 +101,36 @@ void kernel_main() {
     // Diagonal-mask tile slot is shared by the kernel's is_causal path and the chunked-prefill
     // path. kernel_is_causal is masked off by the program factory when chunked is on, so only
     // one of the two paths drives the stamp per program — but they share the CB slot layout.
-    constexpr bool diag_tile_enabled = is_causal || chunked_enabled;
+    constexpr bool diag_tile_enabled = (is_causal || chunked_enabled) && !has_sliding_window;
+    // Sharded joint: num_joint_k_chunks is the per-shard count (L_local / k_chunk). Replicated: full L.
+    constexpr bool has_joint_k = num_joint_k_chunks > 0;
+    constexpr bool has_gathered_joint_k = joint_is_sharded && has_joint_k;
+
+    // Per-device joint shard length in tiles (used for the per-ring-iteration joint tail boundary).
+    constexpr uint32_t Lt_local = has_gathered_joint_k ? Lt / ring_size : Lt;
 
     // Lightweight mask: all mask tiles live in cb_mask_in.
     // Layout: [neginf(0)] [causal_diag?(1)] [global_n_partial?] [joint_l_partial?]
     constexpr bool local_n_has_padding = kv_local_padded_Nt % Sk_chunk_t != 0;
     constexpr bool global_n_has_padding = logical_n_compile % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
-    constexpr bool joint_has_padding = L > 0 && L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
+    // Joint needs a mask when either the per-device joint shard is not a whole number of K-chunks
+    // (Lt_local % Sk_chunk_t != 0 -> fully-padded trailing tiles, the local_n analogue), or real tokens
+    // do not fill the last real shard's chunk (logical_lt % Sk_chunk_t != 0 or a sub-tile partial
+    // column, the global_n analogue).
+    constexpr bool joint_has_padding =
+        L > 0 && ((Lt_local % Sk_chunk_t != 0) || (logical_lt % Sk_chunk_t != 0) || (joint_l_partial_col != 0));
     constexpr bool needs_lightweight_mask =
-        (local_n_has_padding || global_n_has_padding || joint_has_padding) || diag_tile_enabled;
+        (local_n_has_padding || global_n_has_padding || joint_has_padding) || diag_tile_enabled || has_sliding_window;
 
     constexpr uint32_t neginf_tile_idx = 0;
     constexpr uint32_t causal_diag_tile_idx = diag_tile_enabled ? 1 : 0;
-    constexpr uint32_t base_partial_offset = 1 + (diag_tile_enabled ? 1 : 0);
+    constexpr uint32_t edge_mask_tiles = has_sliding_window ? kSlidingWindowEdgeTiles : (diag_tile_enabled ? 1 : 0);
+    constexpr uint32_t base_partial_offset = 1 + edge_mask_tiles;
     constexpr uint32_t global_n_partial_tile_idx = (global_n_partial_col > 0) ? base_partial_offset : 0;
     constexpr uint32_t joint_l_partial_tile_idx =
         (joint_l_partial_col > 0) ? (base_partial_offset + (global_n_partial_col > 0 ? 1 : 0)) : 0;
     constexpr uint32_t total_mask_tiles =
-        1 + (diag_tile_enabled ? 1 : 0) + (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
+        1 + edge_mask_tiles + (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
 
     constexpr uint32_t q_start_idx_t =
         chunked_enabled && !kv_pad_rotation_enabled ? logical_nt_compile - q_local_padded_Nt * ring_size : 0;
@@ -113,12 +144,12 @@ void kernel_main() {
     const uint32_t ring_index_runtime = get_arg_val<uint32_t>(argidx++);
     const uint32_t forward_writes_expected = get_arg_val<uint32_t>(argidx++);
     const uint32_t backward_writes_expected = get_arg_val<uint32_t>(argidx++);
-    const uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
-    const uint32_t kv_pad_q_pre_wrap_start_tile = get_arg_val<uint32_t>(argidx++);
-    const uint32_t kv_pad_q_pre_wrap_tile_count = get_arg_val<uint32_t>(argidx++);
-    const uint32_t kv_pad_q_post_wrap_start_tile = get_arg_val<uint32_t>(argidx++);
-    const uint32_t kv_pad_q_valid_tile_count = get_arg_val<uint32_t>(argidx++);
-    const uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
+    uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
+    uint32_t kv_pad_q_pre_wrap_start_tile = get_arg_val<uint32_t>(argidx++);
+    uint32_t kv_pad_q_pre_wrap_tile_count = get_arg_val<uint32_t>(argidx++);
+    uint32_t kv_pad_q_post_wrap_start_tile = get_arg_val<uint32_t>(argidx++);
+    uint32_t kv_pad_q_valid_tile_count = get_arg_val<uint32_t>(argidx++);
+    uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
 
     RingSDPAOpIndexer fused_op_indexer(
         ring_size_runtime, ring_index_runtime, forward_writes_expected, backward_writes_expected);
@@ -129,7 +160,10 @@ void kernel_main() {
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
-    constexpr uint32_t cb_arg_offset = 49;
+    // Compute fixed slot 51: trace-safe KV-pad derivation flag. Slots 52/53 are the sharded-joint
+    // scalars (joint_is_sharded, logical_lt) and rank mapping are declared above, so the CB block starts at 58.
+    constexpr bool kv_pad_from_metadata = get_compile_time_arg_val(51) == 1;
+    constexpr uint32_t cb_arg_offset = 58;
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
@@ -156,6 +190,20 @@ void kernel_main() {
     constexpr uint32_t cb_sum_A = get_compile_time_arg_val(cb_arg_offset + 20);
     constexpr uint32_t cb_sum_B = get_compile_time_arg_val(cb_arg_offset + 21);
     constexpr uint32_t cb_exp_max_diff = get_compile_time_arg_val(cb_arg_offset + 22);
+    constexpr uint32_t cb_kv_pad_derived = get_compile_time_arg_val(cb_arg_offset + 23);
+    constexpr uint32_t cb_attention_sink = get_compile_time_arg_val(cb_arg_offset + 24);
+
+    if constexpr (kv_pad_from_metadata) {
+        CircularBuffer cb_derived(cb_kv_pad_derived);
+        cb_derived.wait_front(1);
+        logical_nt = ckernel::read_tile_value(cb_kv_pad_derived, 0, 0);
+        kv_pad_q_pre_wrap_start_tile = ckernel::read_tile_value(cb_kv_pad_derived, 0, 1);
+        kv_pad_q_pre_wrap_tile_count = ckernel::read_tile_value(cb_kv_pad_derived, 0, 2);
+        kv_pad_q_post_wrap_start_tile = ckernel::read_tile_value(cb_kv_pad_derived, 0, 3);
+        kv_pad_q_valid_tile_count = ckernel::read_tile_value(cb_kv_pad_derived, 0, 4);
+        active_ring_iter_mask = ckernel::read_tile_value(cb_kv_pad_derived, 0, 5);
+        cb_derived.pop_front(1);
+    }
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_qk_im);
     matmul_init(cb_q_in, cb_k_in);
@@ -172,10 +220,11 @@ void kernel_main() {
         cb_mask_in_obj.wait_front(total_mask_tiles);
     }
 
-    // Precompute padded tile counts that are constant across ring iterations
+    // Precompute padded tile counts that are constant across ring iterations.
     constexpr uint32_t local_n_padded_tiles =
         (kv_local_padded_Nt % Sk_chunk_t != 0) ? (Sk_chunk_t - (kv_local_padded_Nt % Sk_chunk_t)) : 0;
-    constexpr uint32_t joint_n_padded_tiles = (Lt % Sk_chunk_t != 0) ? (Sk_chunk_t - (Lt % Sk_chunk_t)) : 0;
+    // joint_n_padded_tiles is per-ring-iter (the joint tail lands in a different shard each iteration),
+    // so it is resolved inside the ring loop and stamped onto lw_mask, mirroring global_n_padded_tiles.
 
     using Straddle = KCausalStraddleInfo<kv_local_padded_Nt, Sk_chunk_t>;
     constexpr bool has_straddle = Straddle::has_straddle;
@@ -187,7 +236,9 @@ void kernel_main() {
         {cb_sum_B, cb_max_B, cb_out_im_B},  // cur
     };
 
-    const uint32_t ring_index = fused_op_indexer.seq.ring_index;
+    const uint32_t ring_index =
+        ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+            fused_op_indexer.seq.ring_index, mesh_rows, mesh_cols, snake_orientation);
     const uint32_t half_sequence = num_q_chunks / 2;
     const ChunkedContext chunked_context{
         q_start_idx_t,
@@ -199,47 +250,100 @@ void kernel_main() {
             kv_pad_q_valid_tile_count}};
     // The first active iter starts with fresh accumulators; restoring would read stale staging.
     bool seen_active_iter = false;
-    for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
-        uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
+    constexpr uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size;
+    for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
+        // Sliding folds all local/halo source ranges into one synthetic local iteration.
+        // The dataflow reader has already waited for the required halo completion signals.
+        const uint32_t ring_id =
+            has_sliding_window
+                ? ring_index
+                : ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                      fused_op_indexer.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
         // still advances above so compute stays aligned with reader, writer, and all-gather.
-        if (((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
+        if (!has_sliding_window && ((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
             continue;
         }
-        const bool do_joint_kv = ring_id == ring_size - 1;
+        // Sharded joint: one L/P shard per ring iteration — process joint K/V on every iteration.
+        // Replicated joint: All data already present process joint when ring_id == ring_size-1
+        const bool do_joint_kv = has_gathered_joint_k ? true : (ring_id == ring_size - 1);
         const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
         const bool is_first_active_iter = !seen_active_iter;
         seen_active_iter = true;
 
-        // Tile-aligned form. Chunked: real region ends on a per-chunk-region boundary
-        // (k-chunk-aligned via q_local_padded_Nt % Sk_chunk_t TT_FATAL), so the per-k_chunk-
-        // start skip handles it.
+        // Spatial global_n tail mask. Anchor on the LAST REAL tile (within - 1), like the joint_l
+        // derivation below, so a chunk-final sub-tile partial column is masked, not just whole trailing
+        // pad tiles. Unlike joint, do NOT clamp a beyond-shard boundary: trailing per-shard pad tiles in
+        // a wider chunk are handled by the separate local_n mask, so global_n fires only when the
+        // boundary lands in this shard (<= kv_local_padded_Nt). Chunked mode ends on a k-chunk-aligned
+        // boundary, so the per-k_chunk-start skip handles it instead.
         const int32_t global_nt_within_ring_iter =
             static_cast<int32_t>(logical_nt) - static_cast<int32_t>(ring_id * kv_local_padded_Nt);
         const bool global_n_is_within_ring_iter =
             !chunked_enabled &&
             (global_nt_within_ring_iter > 0 && global_nt_within_ring_iter <= (int32_t)kv_local_padded_Nt);
-        const bool global_n_needs_masking = (global_nt_within_ring_iter % (int32_t)Sk_chunk_t) != 0;
-        const bool ring_iter_needs_global_n_mask = global_n_is_within_ring_iter && global_n_needs_masking;
-        const uint32_t global_n_mask_chunk_id = global_nt_within_ring_iter / Sk_chunk_t;
+        // Shard-relative chunk holding the last real spatial tile.
+        const uint32_t global_n_mask_chunk_id =
+            global_n_is_within_ring_iter ? (uint32_t)(global_nt_within_ring_iter - 1) / Sk_chunk_t : 0;
+        // Fully-padded tiles trailing the last real tile within that chunk (0 when tile-aligned).
+        const uint32_t global_n_valid_tiles_in_chunk =
+            global_n_is_within_ring_iter ? (uint32_t)global_nt_within_ring_iter - global_n_mask_chunk_id * Sk_chunk_t
+                                         : 0;
+        const uint32_t global_n_padded_tiles_iter =
+            global_n_is_within_ring_iter ? Sk_chunk_t - global_n_valid_tiles_in_chunk : 0;
+        // Sub-tile partial column exists only on the boundary shard (never a fully-real earlier one).
+        const bool global_n_apply_partial_col = global_n_is_within_ring_iter && (global_n_partial_col > 0);
+        const bool ring_iter_needs_global_n_mask =
+            global_n_is_within_ring_iter && (global_n_padded_tiles_iter > 0 || global_n_apply_partial_col);
 
         // LOCAL N MASK
         const bool local_n_needs_masking = kv_local_padded_Nt % Sk_chunk_t != 0;
         const uint32_t local_n_mask_chunk_id = kv_local_padded_Nt / Sk_chunk_t;
 
-        // JOINT L MASK
-        const bool joint_n_needs_masking = L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
-        const bool ring_iter_needs_joint_n_mask = joint_n_needs_masking && do_joint_kv;
-        const uint32_t joint_n_mask_chunk_id = L / (Sk_chunk_t * tt::constants::TILE_HEIGHT);
+        // JOINT L MASK — keyed off the true logical joint tile count, mirroring the spatial global_n
+        // derivation. Sharded joint: this iteration serves shard `ring_id`, whose joint tiles begin at
+        // ring_id * Lt_local. Replicated joint: full L is consumed on the last active iteration, so the
+        // boundary is measured from tile 0 over the whole joint region (Lt tiles), independent of ring_id.
+        // Anchor on the LAST REAL tile (within - 1) so a tile-aligned boundary with a sub-tile partial
+        // column is masked too; the boundary chunk carries both trailing pad tiles and the partial column.
+        const uint32_t joint_shard_base_tiles = has_gathered_joint_k ? (ring_id * Lt_local) : 0u;
+        const uint32_t joint_shard_tiles = has_gathered_joint_k ? Lt_local : Lt;
+        const int32_t joint_nt_within_ring_iter =
+            static_cast<int32_t>(logical_lt) - static_cast<int32_t>(joint_shard_base_tiles);
+        // Does the global logical boundary (last real joint tile) land inside THIS shard? Only then is
+        // there a sub-tile partial column to mask; a fully-real earlier shard must not apply it.
+        const bool joint_boundary_in_shard =
+            (joint_nt_within_ring_iter > 0 && joint_nt_within_ring_iter <= (int32_t)joint_shard_tiles);
+        // Real joint tiles present in this shard's chunk region: the boundary clamped to the shard's tile
+        // span. 0 => pure-padding shard (skipped upstream). Beyond the boundary the shard is fully real
+        // (joint_shard_tiles tiles), but a wider K chunk (Sk_chunk_t > joint_shard_tiles) still carries
+        // trailing pad tiles that must be masked.
+        const uint32_t joint_real_tiles_in_shard =
+            joint_nt_within_ring_iter <= 0
+                ? 0u
+                : (joint_boundary_in_shard ? (uint32_t)joint_nt_within_ring_iter : joint_shard_tiles);
+        const bool joint_n_is_within_ring_iter = joint_real_tiles_in_shard > 0;
+        // Shard-relative chunk holding the last real joint tile.
+        const uint32_t joint_n_mask_chunk_id =
+            joint_n_is_within_ring_iter ? (joint_real_tiles_in_shard - 1) / Sk_chunk_t : 0;
+        // Fully-padded tiles trailing the last real tile within that chunk (0 when tile-aligned).
+        const uint32_t joint_valid_tiles_in_chunk =
+            joint_n_is_within_ring_iter ? joint_real_tiles_in_shard - joint_n_mask_chunk_id * Sk_chunk_t : 0;
+        const uint32_t joint_n_padded_tiles_iter =
+            joint_n_is_within_ring_iter ? Sk_chunk_t - joint_valid_tiles_in_chunk : 0;
+        // Partial sub-tile column exists only on the boundary shard, never on a fully-real earlier one.
+        const bool joint_apply_partial_col = joint_boundary_in_shard && (joint_l_partial_col > 0);
+        const bool ring_iter_needs_joint_n_mask =
+            do_joint_kv && joint_n_is_within_ring_iter && (joint_n_padded_tiles_iter > 0 || joint_apply_partial_col);
 
         // is_causal: diagonal only on iter 0 (K is local-frame). Chunked: every iter (absolute coords).
-        // The 9 compile-time-constant mask fields are template params (static constexpr, no stack
-        // storage); only the 3 per-iter runtime fields are set below.
+        // The compile-time-constant mask fields are template params (static constexpr, no stack
+        // storage); only the per-iter runtime fields (global/joint padded tiles, straddle, causal) are
+        // set below.
         RingStreamingMaskCtx<
             neginf_tile_idx,
             causal_diag_tile_idx,
             local_n_padded_tiles,
-            joint_n_padded_tiles,
             global_n_partial_col,
             joint_l_partial_col,
             global_n_partial_tile_idx,
@@ -252,12 +356,15 @@ void kernel_main() {
         const bool ring_iter_needs_straddle_mask = has_straddle && is_causal && is_balanced && (ring_index > ring_id);
         lw_mask.straddle_num_padded_tiles = ring_iter_needs_straddle_mask ? straddle_num_padded_tiles : 0;
         if (ring_iter_needs_global_n_mask) {
-            // Tile-aligned: valid_tiles == global_nt_within_ring_iter % Sk_chunk_t
-            const uint32_t valid_tiles = global_nt_within_ring_iter % Sk_chunk_t;
-            lw_mask.global_n_padded_tiles = Sk_chunk_t - valid_tiles;
+            // Precomputed with the last-real-tile anchor above (mirrors joint_n_padded_tiles_iter);
+            // 0 on a chunk-final partial tile, where only the partial column is stamped.
+            lw_mask.global_n_padded_tiles = global_n_padded_tiles_iter;
+        }
+        if (ring_iter_needs_joint_n_mask) {
+            lw_mask.joint_n_padded_tiles = joint_n_padded_tiles_iter;
         }
 
-        const bool is_last_ring_iter = is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
+        const bool is_last_ring_iter = has_sliding_window || is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
 
         // Per-ring-iter K-chunk count and Q-skip flag — shared by v1 (sdpa_ring) and v2
         // (sdpa_ring_v2) paths.
@@ -266,14 +373,16 @@ void kernel_main() {
         //     late-half columns are -inf-masked via lw_mask.straddle_*).
         //   rix < rid && balanced (Case 2): skip first-half (L) Q-chunks.
         uint32_t iter_num_kv_chunks = num_kv_chunks;
-        if (is_causal && is_balanced && ring_index > ring_id) {
-            if constexpr (has_straddle) {
-                iter_num_kv_chunks = straddle_chunk_id + 1;
-            } else {
-                iter_num_kv_chunks /= 2;
+        if constexpr (!has_sliding_window) {
+            if (is_causal && is_balanced && ring_index > ring_id) {
+                if constexpr (has_straddle) {
+                    iter_num_kv_chunks = straddle_chunk_id + 1;
+                } else {
+                    iter_num_kv_chunks /= 2;
+                }
             }
         }
-        const bool skip_first_half_q = (ring_index >= ring_id ? false : is_balanced);
+        const bool skip_first_half_q = !has_sliding_window && (ring_index >= ring_id ? false : is_balanced);
 
         if constexpr (use_streaming_compute) {
             sdpa_ring_v2<
@@ -316,10 +425,17 @@ void kernel_main() {
                 local_n_has_padding,
                 joint_has_padding,
                 has_straddle && is_causal && is_balanced,
+                false,  // use_l1_state_fifo — compile-time off: no FIFO branch overhead here
                 kv_pad_rotation_enabled,
                 v_cb_physical_width_t,
                 v_shares_k_buffer,
-                kt_inplace_v>(
+                kt_inplace_v,
+                sliding_window_size,
+                ring_size,
+                use_attention_sink,
+                cb_attention_sink,
+                has_gathered_joint_k,
+                Lt_local>(
                 global_q_start,
                 global_q_end,
                 iter_num_kv_chunks,
@@ -341,7 +457,8 @@ void kernel_main() {
                 skip_first_half_q,
                 use_zigzag_balancing,
                 chunked_context,
-                is_first_active_iter);
+                is_first_active_iter,
+                logical_lt);
         } else {
             assert_kv_pad_rotation_streaming_only<kv_pad_rotation_enabled>();
             sdpa_ring<

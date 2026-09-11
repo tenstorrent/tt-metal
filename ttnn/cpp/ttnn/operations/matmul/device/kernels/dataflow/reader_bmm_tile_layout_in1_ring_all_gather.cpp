@@ -10,7 +10,7 @@
 #include "api/debug/dprint.h"
 #include "api/debug/dprint_tile.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
@@ -21,7 +21,7 @@ enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 template <typename TensorAccessorType>
 void read_block_from_dram(
     const Noc& noc,
-    CircularBuffer& cb,
+    DataflowBuffer& dfb,
     const TensorAccessorType& s1,
     uint32_t tensor_width_in_tiles,
     uint32_t block_w_idx,
@@ -32,31 +32,31 @@ void read_block_from_dram(
     uint32_t write_offset = 0;
 
     // Horizontal idx + vertical idx * width = row major index
-    uint32_t block_tile_id = block_w_idx * block_w_t + (block_h_idx * block_h_t) * tensor_width_in_tiles;
+    const uint32_t block_tile_id = (block_w_idx * block_w_t) + ((block_h_idx * block_h_t) * tensor_width_in_tiles);
     for (uint32_t h = 0; h < block_h_t; ++h) {
-        uint32_t tile_id = block_tile_id + h * tensor_width_in_tiles;
+        const uint32_t tile_id = block_tile_id + (h * tensor_width_in_tiles);
         for (uint32_t w = 0; w < block_w_t; ++w) {
-            noc.async_read(s1, cb, tile_size_bytes, {.page_id = tile_id + w}, {.offset_bytes = write_offset});
+            noc.async_read(s1, dfb, tile_size_bytes, {.page_id = tile_id + w}, {.offset_bytes = write_offset});
             write_offset += tile_size_bytes;
         }
     }
     noc.async_read_barrier();
 }
 
-void do_signaling(const Noc& noc, uint32_t& rt_args_idx) {
-    const uint32_t pv_core_x = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t pv_core_y = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t pv_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
+static void do_signaling(const Noc& noc, uint32_t& rt_args_idx) {
+    const uint32_t pv_core_x = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t pv_core_y = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t pv_semaphore_id = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
     Semaphore<> pv_sem(pv_semaphore_id);
-    const bool is_privilaged = get_arg_val<uint32_t>(rt_args_idx++) == 1;
+    const bool is_privilaged = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++)) == 1;
     if (is_privilaged) {
-        const uint32_t target_sem_value = get_arg_val<uint32_t>(rt_args_idx++);
-        const uint32_t multicast_start_x = get_arg_val<uint32_t>(rt_args_idx++);
-        const uint32_t multicast_start_y = get_arg_val<uint32_t>(rt_args_idx++);
-        const uint32_t multicast_end_x = get_arg_val<uint32_t>(rt_args_idx++);
-        const uint32_t multicast_end_y = get_arg_val<uint32_t>(rt_args_idx++);
-        const uint32_t num_signalling_semaphores = get_arg_val<uint32_t>(rt_args_idx++);
-        const uint32_t signalling_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
+        const uint32_t target_sem_value = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+        const uint32_t multicast_start_x = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+        const uint32_t multicast_start_y = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+        const uint32_t multicast_end_x = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+        const uint32_t multicast_end_y = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+        const uint32_t num_signalling_semaphores = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+        const uint32_t signalling_semaphore_id = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
         Semaphore<> sig_sem(signalling_semaphore_id);
         pv_sem.wait(target_sem_value);
         pv_sem.set(1);
@@ -85,44 +85,44 @@ void kernel_main() {
 
     uint32_t rt_args_idx = 0;
     constexpr bool needs_signaler = get_compile_time_arg_val(11) == 1;
-    uint32_t core_type = get_arg_val<uint32_t>(rt_args_idx++);
-    if (core_type == (uint32_t)CORE_TYPE::IDLE_CORE || core_type == (uint32_t)CORE_TYPE::HOP_CORE) {
+    const uint32_t core_type = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    if (core_type == static_cast<uint32_t>(CORE_TYPE::IDLE_CORE) ||
+        core_type == static_cast<uint32_t>(CORE_TYPE::HOP_CORE)) {
         if constexpr (needs_signaler) {
-            Noc early_noc;
+            const Noc early_noc;
             do_signaling(early_noc, rt_args_idx);
             early_noc.async_write_barrier();
         }
         return;
     }
-    const uint32_t in1_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t ring_idx = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t in1_tensor_addr = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t ring_idx = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
     uint32_t dram_bank_id = 0;
     uint32_t vc = 0;
     uint32_t dram_read_offset = 0;
 
     if constexpr (in1_is_dram_sharded) {
-        dram_bank_id = get_arg_val<uint32_t>(rt_args_idx++);
-        vc = get_arg_val<uint32_t>(rt_args_idx++);
-        dram_read_offset = get_arg_val<uint32_t>(rt_args_idx++);
+        dram_bank_id = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+        vc = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+        dram_read_offset = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
     }
 
-    constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_in1");
-    constexpr uint32_t sync_cb = get_named_compile_time_arg_val("cb_sync");
-    constexpr uint32_t sync_cb2 = get_named_compile_time_arg_val("cb_sync2");
+    constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("cb_in1");
+    constexpr uint32_t sync_dfb = get_named_compile_time_arg_val("cb_sync");
+    constexpr uint32_t sync_dfb2 = get_named_compile_time_arg_val("cb_sync2");
     constexpr uint32_t remote_cb_id = get_named_compile_time_arg_val("cb_remote");
     constexpr auto in1_args = TensorAccessorArgs<12>();
 
     const uint32_t in1_block_num_tiles = in1_block_height_in_tiles * in1_block_width_in_tiles;
 
     // Address setup
-    constexpr const uint32_t in1_tile_hw = get_tile_hw(cb_id_in1);
-    constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
+    constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(dfb_id_in1);
     const auto s1 = TensorAccessor(in1_args, in1_tensor_addr);
 
-    Noc noc;
-    CircularBuffer cb_in1(cb_id_in1);
-    CircularBuffer cb_sync(sync_cb);
-    CircularBuffer cb_sync2(sync_cb2);
+    const Noc noc;
+    DataflowBuffer dfb_in1(dfb_id_in1);
+    DataflowBuffer dfb_sync(sync_dfb);
+    DataflowBuffer dfb_sync2(sync_dfb2);
 
     uint32_t in1_shard_width_offset_bytes = 0;
     uint32_t in1_dram_shard_block_size_bytes = 0;
@@ -141,7 +141,7 @@ void kernel_main() {
         // Streaming: the prefetcher delivers blocks in ring-rotated FIFO order, so the in1 CB
         // (aligned to the GCB ring) is consumed strictly front-to-back. Drive it as a normal local
         // CB — once the prefetcher lands a block, hand it to compute via the standard
-        // reserve_back/push_back credit on cb_in1 itself, and compute reads it with
+        // reserve_back/push_back credit on dfb_in1 itself, and compute reads it with
         // wait_front/pop_front instead of manual rd_ptr math. So the GCB only needs to hold a small
         // live window instead of the whole tensor. (in1 is never DRAM-resident on the GCB path, so
         // this fully replaces the batched wait_front(num_blocks) gate below.)
@@ -164,15 +164,15 @@ void kernel_main() {
         // it holds `in1_fifo_tiles / in1_block_num_tiles` blocks, so right after pushing block
         // `pushed`, "block pushed-1 fully drained" == at most one block still unacked == all but one
         // block reservable at the back.
-        const uint32_t in1_fifo_tiles = get_local_cb_interface(cb_id_in1).fifo_num_pages;
+        const uint32_t in1_fifo_tiles = get_local_cb_interface(dfb_id_in1).fifo_num_pages;
         for (uint32_t pushed = 0; pushed < num_blocks; ++pushed) {
             // Stage block `pushed` to compute (it may still be working on block `pushed - 1`).
-            cb_in1.reserve_back(in1_block_num_tiles);
+            dfb_in1.reserve_back(in1_block_num_tiles);
             experimental::remote_cb_wait_front(remote_cb_id, pushed == 0 ? 1u : 2u);
-            cb_in1.push_back(in1_block_num_tiles);
+            dfb_in1.push_back(in1_block_num_tiles);
             // Retire block `pushed - 1` once the unpacker has drained it, freeing its GCB slot.
             if (pushed >= 1) {
-                while (!cb_in1.pages_reservable_at_back(in1_fifo_tiles - in1_block_num_tiles)) {
+                while (!dfb_in1.pages_reservable_at_back(in1_fifo_tiles - in1_block_num_tiles)) {
                     invalidate_l1_cache();
                 }
                 experimental::remote_cb_pop_front(remote_cb_id, 1);
@@ -180,7 +180,7 @@ void kernel_main() {
         }
         if (num_blocks > 0) {
             // Epilogue: retire the last block once compute has drained everything (all reservable).
-            while (!cb_in1.pages_reservable_at_back(in1_fifo_tiles)) {
+            while (!dfb_in1.pages_reservable_at_back(in1_fifo_tiles)) {
                 invalidate_l1_cache();
             }
             experimental::remote_cb_pop_front(remote_cb_id, 1);
@@ -192,21 +192,21 @@ void kernel_main() {
         }
         continue;
 #endif
-        cb_sync2.reserve_back(1);
+        dfb_sync2.reserve_back(1);
 #ifdef ENABLE_GLOBAL_CB
         experimental::remote_cb_wait_front(remote_cb_id, num_blocks);
 #endif
 
-        cb_sync2.push_back(1);
+        dfb_sync2.push_back(1);
 
         if constexpr (in1_is_dram_interleaved) {
             for (uint32_t block = 0; block < num_blocks; ++block) {
-                uint32_t block_idx = (ring_idx + block) % num_blocks;
+                const uint32_t block_idx = (ring_idx + block) % num_blocks;
 
-                cb_in1.reserve_back(in1_block_num_tiles);
+                dfb_in1.reserve_back(in1_block_num_tiles);
                 read_block_from_dram(
                     noc,
-                    cb_in1,
+                    dfb_in1,
                     s1,
                     in1_tensor_width_in_tiles,
                     ring_idx,
@@ -214,22 +214,22 @@ void kernel_main() {
                     in1_block_width_in_tiles,
                     in1_block_height_in_tiles,
                     in1_single_tile_size_bytes);
-                cb_in1.push_back(in1_block_num_tiles);
+                dfb_in1.push_back(in1_block_num_tiles);
             }
         } else if constexpr (in1_is_dram_sharded) {  // when in1 is sharded in DRAM, each core reads from its own bank,
                                                      // two cores on the same row share one bank.
             for (uint32_t block = 0; block < num_blocks; ++block) {
-                uint32_t block_idx = (ring_idx + block) % num_blocks;
+                const uint32_t block_idx = (ring_idx + block) % num_blocks;
                 l1_read_addr_in1 = block_idx * in1_dram_shard_block_size_bytes + dram_read_offset_bytes;
                 // Operand 1
-                cb_in1.reserve_back(in1_block_num_tiles);
-                l1_write_addr_in1 = cb_in1.get_write_ptr();
+                dfb_in1.reserve_back(in1_block_num_tiles);
+                l1_write_addr_in1 = dfb_in1.get_write_ptr();
 
-                AllocatorBank<AllocatorBankType::DRAM> dram_bank;
+                const AllocatorBank<AllocatorBankType::DRAM> dram_bank;
                 for (uint32_t h = 0; h < in1_block_height_in_tiles; ++h) {
                     uint32_t curr_l1_read_addr_in1 = l1_read_addr_in1;
                     for (uint32_t w = 0; w < in1_block_width_num_pages; ++w) {
-                        uint32_t curr_page_size =
+                        const uint32_t curr_page_size =
                             w == in1_block_width_num_pages - 1 ? in1_block_page_size_last : in1_block_page_size;
                         noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
                             dram_bank, curr_page_size, {.bank_id = dram_bank_id, .addr = in1_tensor_addr},
@@ -248,14 +248,14 @@ void kernel_main() {
                 }
 
                 noc.async_read_barrier();
-                cb_in1.push_back(in1_block_num_tiles);
+                dfb_in1.push_back(in1_block_num_tiles);
             }
         }
 
 #ifdef ENABLE_GLOBAL_CB
-        cb_sync.wait_front(1);
+        dfb_sync.wait_front(1);
         experimental::remote_cb_pop_front(remote_cb_id, num_blocks);
-        cb_sync.pop_front(1);
+        dfb_sync.pop_front(1);
 #endif
         // Signal Here
         if constexpr (needs_signaler) {

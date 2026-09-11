@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 #include <filesystem>
 #include <vector>
 
@@ -103,13 +104,20 @@ TrayID get_tray_id_for_chip(
     }
     if (!mobo_to_bus_ids.contains(mobo_name)) {
         auto bus_id = tt::tt_fabric::get_bus_id(cluster_desc, chip_id);
-        log_warning(
-            tt::LogAlways,
-            "Unknown motherboard '{}' for chip_id={} (bus_id=0x{:x}) — falling back to bus_id as tray_id. "
-            "Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.",
-            mobo_name,
-            chip_id,
-            bus_id);
+        // All chips on a host share the same motherboard, so this fires once per chip in
+        // get_asic_position()'s per-chip loop (run_local_discovery iterates chip_unique_ids).
+        // Warn only once per distinct unknown motherboard name per process to avoid identical
+        // repeated log spam, while still surfacing the actionable message at least once.
+        static std::unordered_set<std::string> warned_mobo_names;
+        if (warned_mobo_names.insert(mobo_name).second) {
+            log_warning(
+                tt::LogAlways,
+                "Unknown motherboard '{}' for chip_id={} (bus_id=0x{:x}) — falling back to bus_id as tray_id. "
+                "Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp.",
+                mobo_name,
+                chip_id,
+                bus_id);
+        }
         return TrayID{static_cast<uint32_t>(bus_id)};
     }
 
@@ -138,10 +146,6 @@ std::pair<TrayID, ASICLocation> get_asic_position(
     std::unordered_map<uint32_t, ASICLocation>& pcie_id_to_asic_location) {
     if (cluster_desc.get_board_type(chip_id) == BoardType::UBB_WORMHOLE ||
         cluster_desc.get_board_type(chip_id) == BoardType::UBB_BLACKHOLE) {
-        constexpr std::string_view ubb_mobo_name = "S7T-MB";
-
-        TT_FATAL(
-            using_mock_cluster_desc || get_mobo_name() == ubb_mobo_name, "UBB systems must use S7T-MB motherboard.");
         auto ubb_id = tt::tt_fabric::get_ubb_id(cluster_desc, chip_id);
         auto pcie_id = cluster_desc.get_chips_with_mmio().at(chip_id);
         pcie_devices_per_tray[ubb_id.tray_id].insert(pcie_id);
@@ -248,7 +252,7 @@ uint32_t get_chip_id_for_asic(const umd::ClusterDescriptor& cluster_desc, AsicID
 
 void validate_eth_fw_versions(
     PhysicalSystemDescriptor& psd,
-    const tt::umd::semver_t& peer_ethernet_firmware_version,
+    const tt::umd::SemVer& peer_ethernet_firmware_version,
     const std::string& my_host_name,
     const std::string& peer_host_name) {
     TT_FATAL(
@@ -746,7 +750,7 @@ PhysicalSystemDescriptor run_local_discovery(
 
     psd.get_system_graph().host_connectivity_graph[hostname_key] = {};
     // Get Ethernet Firmware Version from the driver - Initialize to 0 if not available
-    psd.get_ethernet_firmware_version() = cluster_desc.get_cluster_eth_fw_version().value_or(tt::umd::semver_t(0, 0, 0));
+    psd.get_ethernet_firmware_version() = cluster_desc.get_cluster_eth_fw_version().value_or(tt::umd::SemVer(0, 0, 0));
     // Get Firmware Bundle Version from the driver
     psd.get_firmware_bundle_version() = cluster_desc.get_cluster_firmware_bundle_version();
 

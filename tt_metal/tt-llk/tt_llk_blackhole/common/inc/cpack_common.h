@@ -332,12 +332,8 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
 
 inline void reconfigure_packer_l1_acc(const std::uint32_t pack_l1_acc)
 {
-    // Stall to avoid clobbering current packer configuration
+    // Stall to avoid clobbering current packer configuration, then enable/disable L1 accumulation
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
-
-    // While packing, if all datums of a face are 0s, the packer will automatically set the zflags. For L1 accumulation mode, even if we pack out an entire face
-    // of 0s, because the data we are accumulating with is unknown, we don't want to set the zflags.
-    cfg_reg_rmw_tensix<THCON_SEC0_REG1_Disable_pack_zero_flags_RMW>(pack_l1_acc);
     cfg_reg_rmw_tensix<THCON_SEC0_REG1_Pack_L1_Acc_RMW>(pack_l1_acc);
 }
 
@@ -610,6 +606,14 @@ inline void configure_pack(
 
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG2_Dstacc_RMW>(is_fp8_e4m3 ? to_underlying(DataFormat::Float16) : pack_output_src_format);
 
+    // Establish the no-override baseline for the Dstacc ALU format-select fields (ADDR32=0), consumed
+    // by the packer: clear Dstacc_val/override so the base REG2_Dstacc format programmed above is
+    // used. The SrcA/SrcB override fields in the same word are owned by the math thread
+    // (_llk_math_hw_configure_); the two writers touch disjoint bits and rely on per-byte RMWCIB
+    // atomicity, so this write does not depend on the surrounding REG_RMW mutex for cross-thread safety.
+    constexpr std::uint32_t dstacc_fmt_override_mask = ALU_FORMAT_SPEC_REG_Dstacc_val_MASK | ALU_FORMAT_SPEC_REG_Dstacc_override_MASK;
+    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_Dstacc_val_ADDR32, 0, dstacc_fmt_override_mask>(0);
+
     // Config RELU
     relu_config_u hw_relu_config;
     hw_relu_config.r.STACC_RELU_ApplyRelu     = relu_config & 0xffff;
@@ -673,11 +677,11 @@ inline void select_packer_dest_registers()
 {
     if constexpr (Dst == DstSync::SyncFull)
     {
-        TTI_WRCFG(p_gpr_pack::DEST_OFFSET_LO, p_cfg::WRCFG_128b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
+        TTI_WRCFG(p_gpr_pack::DEST_OFFSET_LO, p_cfg::WRCFG_32b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
     }
     else
     {
-        TT_WRCFG(get_packer_dest_offset_index(), p_cfg::WRCFG_128b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
+        TT_WRCFG(get_packer_dest_offset_index(), p_cfg::WRCFG_32b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
     }
     TTI_DMANOP;
     TTI_DMANOP;

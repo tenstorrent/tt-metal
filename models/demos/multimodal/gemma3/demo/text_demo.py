@@ -16,6 +16,7 @@ from loguru import logger
 import ttnn
 from models.common.sampling import SamplingParams
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
+from models.common.weight_cache import build_cached_state_dict, mark_weight_cache_complete, weight_cache_is_complete
 from models.demos.multimodal.gemma3.tt.gemma_e2e_model import TtGemmaModel
 from models.demos.multimodal.gemma3.tt.gemma_multimodal_generator import GemmaMultimodalGenerator as Generator
 from models.demos.utils.device_sku import get_current_device_sku_name
@@ -70,7 +71,7 @@ def create_tt_model(
     dummy_weights: bool = False,
     enable_program_trace: bool = False,
 ):
-    from models.demos.multimodal.gemma3.tt.model_config import ModelArgs
+    from models.demos.multimodal.gemma3.tt.model_config import ModelArgs, is_gemma3_host_weight
     from models.tt_transformers.tt.model import Transformer
 
     tt_model_args = ModelArgs(
@@ -112,10 +113,41 @@ def create_tt_model(
             for decoder_id in range(tt_model_args.n_layers):
                 tt_model_args.optimizations.set_decoder_conf(decoder_id, gemma_text_perf)
             tt_model_args.model_config["DECODERS_OPTIMIZATIONS"] = tt_model_args.optimizations
+            if tt_model_args.num_devices == 1:
+                # Turn off fp32_dest_acc_en to not trigger L1 OOM
+                tt_model_args._force_sdpa_prefill_hifi4_fp16()
 
-    # Avoid loading state_dict for every DP model
-    if not state_dict:
-        state_dict = tt_model_args.load_state_dict()
+    # Warm ttnn cache => skip the HF from_pretrained host load and build from .tensorbin. Text and
+    # vision share one cache dir and gemma3's load_state_dict returns the full multimodal dict, so
+    # both paths use the shared hybrid helper with the SAME host-weight set (the text Transformer
+    # consumes none of the 5 vision host keys, but they must be captured to the sidecar for the
+    # vision path). None=decide, placeholder=skip/DP-reuse, populated=reuse.
+    #
+    # components="text": this build constructs ONLY the text Transformer, so it only writes the
+    # text tensorbins. The marker records that, and vision_demo (components="text+vision") will not
+    # accept it -- otherwise the vision tower would be built from placeholders and as_tensor would
+    # dump them to disk as real cache entries. (#45400 review)
+    cache_dir = tt_model_args.weight_cache_path(dtype)
+    cache_identity = dict(
+        model_name=tt_model_args.model_name,
+        n_layers=tt_model_args.n_layers,
+        mesh_shape=tuple(tt_model_args.mesh_device.shape),
+        components=["text"],
+        # gemma3 inherits the tt_transformers ModelArgs, so its cache filenames move with the
+        # same knobs (precision config, prefetcher, batch, rope mode). Key the marker on them the
+        # same way create_tt_model does. (#45400 review, finding B2)
+        build_variant=tt_model_args._weight_cache_build_variant(),
+    )
+    loaded_real_weights = False
+    if state_dict is None:
+        if not tt_model_args.dummy_weights and weight_cache_is_complete(cache_dir, **cache_identity):
+            logger.info("Warm ttnn weight cache detected -- building state_dict from cache (no HF load).")
+            state_dict = build_cached_state_dict(
+                cache_dir, args=tt_model_args, build_variant=cache_identity["build_variant"]
+            )
+        else:
+            state_dict = tt_model_args.load_state_dict()
+            loaded_real_weights = bool(state_dict) and not tt_model_args.dummy_weights
 
     model = Transformer(
         args=tt_model_args,
@@ -127,6 +159,9 @@ def create_tt_model(
     )
 
     tt_kv_cache = [l.attention.layer_past for l in model.layers] if paged_attention_config else None
+
+    if loaded_real_weights and num_layers is None:
+        mark_weight_cache_complete(cache_dir, state_dict, is_host_weight=is_gemma3_host_weight, **cache_identity)
 
     return tt_model_args, model, tt_kv_cache, state_dict
 
@@ -830,7 +865,11 @@ def test_demo_text(
     page_params = request.config.getoption("--page_params") or page_params
     if isinstance(page_params, str):  # Required for proper load of a dictionary from the override command
         page_params = json.loads(page_params)
-    sampling_params = request.config.getoption("--sampling_params") or sampling_params
+    cli_sampling_params = request.config.getoption("--sampling_params")
+    if cli_sampling_params:
+        # Merge onto the parametrized defaults so a partial override (e.g. only
+        # temperature) keeps the remaining keys the demo indexes unconditionally.
+        sampling_params = {**sampling_params, **cli_sampling_params}
     json_config_file = request.config.getoption("--decoder_config_file")
     token_accuracy = request.config.getoption("--token_accuracy") or token_accuracy
     stress_test = request.config.getoption("--stress_test") or stress_test

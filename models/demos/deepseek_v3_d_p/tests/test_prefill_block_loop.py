@@ -34,15 +34,17 @@ from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tests.conftest import FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS, PREFILL_CHUNK_TOKENS_PER_CHIP
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     PROMPT_1K_PATH,
-    PROMPT_25K_PATH,
+    PROMPT_5K_PATH,
     create_hf_model_with_weights,
     get_4d_causal_mask,
     tokenize_prompt_to_isl,
@@ -54,6 +56,26 @@ DSV3 = get_adapter("deepseek_v3_d_p")
 PLOT_DIR = "models/demos/deepseek_v3_d_p/tests"
 
 
+# Each mesh carries the isl_total that lands PREFILL_CHUNK_TOKENS_PER_CHIP on every one of its chips, so there
+# is one ISL per mesh instead of a cross product to prune. The id carries it because
+# perf/test_prefill_block_perf.py selects rows by it.
+def _with_isl(param):
+    isl_total = PREFILL_CHUNK_TOKENS_PER_CHIP * param.values[0][0]
+    return pytest.param(*param.values, isl_total, marks=param.marks, id=f"{param.id}-isl_{isl_total}")
+
+
+def _ci_unsupported_param_combos(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+    gate_fallback_mode = params["gate_fallback_mode"]
+
+    if not on_ci:
+        return False
+    if gate_fallback_mode != GateComputeMode.DEVICE:
+        return True
+    return False
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.parametrize(
     "gate_fallback_mode",
     [GateComputeMode.DEVICE, GateComputeMode.HOST_ALL],
@@ -77,58 +99,29 @@ PLOT_DIR = "models/demos/deepseek_v3_d_p/tests"
         "layer8",
     ],
 )
-@pytest.mark.parametrize(
-    "isl_total",
-    [1024, 2560, 5120, 6400, 12800, 25 * 1024],
-    ids=["isl_1k", "isl_2k56", "isl_5k", "isl_6k4", "isl_12k8", "isl_25k"],
-)
 @pytest.mark.parametrize("skip_reference", [False, True], ids=["with_ref", "no_ref"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links, isl_total",
     [
-        pytest.param(
-            (1, 1),
-            {},
-            1,
-            ttnn.Topology.Linear,
-            id="mesh-1x1",
-        ),
-        pytest.param(
-            (2, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="mesh-2x4",
-        ),
-        pytest.param(
-            (2, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
-            },
-            2,  # num_links = 2
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="mesh-2x4-2link",
-        ),
-        pytest.param(
-            (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
-            },
-            2,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
-        ),
-        # FABRIC_2D variants — shared list defined in conftest.py (also used by
-        # test_prefill_transformer.py). Covers (4,2) BH LoudBox, (2,4) asymmetric, (8,4) BH Galaxy.
-        *FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS,
+        _with_isl(param)
+        for param in (
+            pytest.param(
+                (1, 1),
+                {},
+                1,
+                id="mesh-1x1",
+            ),
+            pytest.param(
+                (2, 4),
+                fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.EMB_SIZE),
+                2,
+                marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+                id="fabric2d-mesh-2x4-2link",
+            ),
+            # FABRIC_2D variants — shared list defined in conftest.py (also used by
+            # test_prefill_transformer.py). Covers (4,2) BH LoudBox, (2,4) asymmetric, (8,4) BH Galaxy.
+            *FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS,
+        )
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -141,12 +134,12 @@ def test_prefill_block_loop(
     skip_reference,
     gate_fallback_mode,
     num_links,
-    topology,
     model_path,
     hf_config,
     state_dict,
     tokenizer,
 ):
+    topology = per_axis_topology(device_params.get("fabric_config", ttnn.FabricConfig.DISABLED))
     # Perf runs (skip_reference=True) measure once; PCC/divergence runs loop for 30 iters
     num_iters = 1 if skip_reference else 30
     # --- Validate fixtures ---
@@ -155,10 +148,9 @@ def test_prefill_block_loop(
     if state_dict is None:
         pytest.skip("State dict not available (no pretrained weights)")
 
-    # isl_2k56 / isl_12k8 exist only for the 4x4 sub-torus sweep and are not part of CI coverage on
-    # any mesh; skip them under CI.
-    if (os.getenv("CI") == "true" or "TT_GH_CI_INFRA" in os.environ) and isl_total in (2560, 12800):
-        pytest.skip("isl_2k56 / isl_12k8 are subtorus-4x4-only; not run in CI")
+    # The 4x4 subtorus sweep is intentionally local/experimental until a dedicated CI owner exists.
+    if (os.getenv("CI") == "true" or "TT_GH_CI_INFRA" in os.environ) and tuple(mesh_device.shape) == (4, 4):
+        pytest.skip("the 4x4 subtorus sweep is local/experimental; not run in CI")
 
     # Deep-copy the HF config: hf_config returns a process-wide lru_cache'd object, so mutating it in
     # place (max_seq_len here, n_routed_experts below) would leak into later tests in the same session.
@@ -173,16 +165,11 @@ def test_prefill_block_loop(
     emb_dim = config.hidden_size
     first_k_dense = config.first_k_dense_replace  # 3
     n_routed = config.n_routed_experts  # 256
-    # The 4x4 sub-torus has 16 chips vs the 8x4 galaxy's 32, so the full 256 experts pack
-    # 256/16=16 experts/chip. Halve to 128 so each chip holds 128/16=8 experts, matching the 8x4
-    # (256/32=8). The device grouped-gate kernels (deepseek_grouped_gate / moe_grouped_topk) hard-
-    # require exactly 256 experts, so the 128-expert path MUST use the host gate — forced below.
-    # The first n_routed experts (gate rows + expert weights) are kept; applies to the (4,4) mesh.
-    # Opt out with DS_4X4_FULL_EXPERTS=1 to keep all 256 experts (16/chip) and honor the requested
-    # gate (e.g. real device gate) — viable at small ISL where 256 experts still fit L1.
+    # Preserve the existing 4x4 diagnostic's per-chip expert load: 128/16 == 256/32. The device
+    # grouped-gate kernels require 256 experts, so this path uses the host gate below.
     halve_experts_4x4 = mesh_shape == [4, 4] and not os.environ.get("DS_4X4_FULL_EXPERTS")
     if halve_experts_4x4:
-        n_routed = config.n_routed_experts // 2  # 128
+        n_routed = config.n_routed_experts // 2
         config.n_routed_experts = n_routed
         logger.info(f"[4x4 sub-torus] Using half the routed experts: {n_routed} (8 experts/chip)")
     # Synthetic expert modes:
@@ -212,10 +199,6 @@ def test_prefill_block_loop(
     else:
         layer_type = "dense" if is_dense else "MoE"
 
-    # 4x4 sub-torus runs 128 routed experts, but the device grouped-gate kernels require exactly
-    # 256 — so 128 experts can only route through the HOST gate. Drive the MoE run from the
-    # gate_device param (forced to HOST_ALL) and skip the redundant gate_host param so the matrix
-    # doesn't double-run the identical host-gate config.
     if halve_experts_4x4 and not is_dense:
         if gate_fallback_mode == GateComputeMode.HOST_ALL:
             pytest.skip(
@@ -289,8 +272,8 @@ def test_prefill_block_loop(
             }
             logger.info(f"Zeroed gate weights: weight={gate_shape}, bias={bias_shape}")
         else:
-            # [:n_routed] is a no-op at the full 256 and keeps the first 128 gate rows/biases on
-            # the 4x4 sub-torus, matching the first 128 routed_expert_weights loaded below.
+            # At 128 routed experts, keep the first 128 gate rows/biases in lockstep with the
+            # routed-expert weights loaded below.
             layer_sd["gate_weights"] = {
                 "weight": layer_dequant["mlp.gate.weight"][:n_routed],
                 "e_score_correction_bias": layer_dequant["mlp.gate.e_score_correction_bias"][:n_routed],
@@ -427,8 +410,8 @@ def test_prefill_block_loop(
         # repeats the 1K prompt. Never pad — pad tokens all have the same embedding and
         # collapse gate routing onto a handful of experts, distorting expert-load
         # measurements.
-        if isl_total == 25 * 1024:
-            prompt_path = PROMPT_25K_PATH
+        if isl_total == PREFILL_CHUNK_TOKENS:
+            prompt_path = PROMPT_5K_PATH
         else:
             prompt_path = PROMPT_1K_PATH
         prompts = load_prompts_from_json(str(prompt_path))
@@ -467,8 +450,6 @@ def test_prefill_block_loop(
     # ------------------------------------------------------------------
     # 3. Create TT block & infrastructure
     # ------------------------------------------------------------------
-    # The block reads the routed-expert count from model_cfg.NUM_ROUTED_EXPERTS. Mirror the 4x4
-    # halving via a subclass so the shared DeepSeekV3Config class is left untouched.
     if halve_experts_4x4:
 
         class _SubtorusHalfExperts(DeepSeekV3Config):
@@ -509,8 +490,6 @@ def test_prefill_block_loop(
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=True)
     rope_tensors = rope_setup.get_rope_tensors(isl_total)
     position_ids = torch.arange(isl_total, dtype=torch.long).unsqueeze(0)
-    kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank
-
     # Shard initial input to device
     h_tt = ttnn.from_torch(
         h0.unsqueeze(0),  # [1, 1, 1024, 7168]
@@ -563,8 +542,9 @@ def test_prefill_block_loop(
 
     for iteration in range(1, num_iters + 1):
         # Fresh KV cache each iteration (prefill writes full seq range)
-        tt_kvpe_cache = init_kvpe_cache(
-            kvpe_cache_head_dim=kvpe_cache_head_dim,
+        tt_kvpe_cache = init_mla_kv_cache(
+            cache_format=MlaKvCacheFormat.BFP8_TILE,
+            hf_config=config,
             mesh_device=mesh_device,
             seq_len=isl_total,
             mesh_shape=mesh_shape,
@@ -592,7 +572,7 @@ def test_prefill_block_loop(
         if skip_reference:
             logger.info(f"  Iter {iteration:>3d}/{num_iters}  TT forward done (perf-only, no PCC)")
             h_tt = h_tt_next
-            ttnn.deallocate(tt_kvpe_cache)
+            ttnn.deallocate(tt_kvpe_cache.storage)
             continue
 
         # --- PCC ---
@@ -643,7 +623,7 @@ def test_prefill_block_loop(
         h_tt = h_tt_next
 
         # --- Cleanup KV cache ---
-        ttnn.deallocate(tt_kvpe_cache)
+        ttnn.deallocate(tt_kvpe_cache.storage)
 
     if skip_reference:
         logger.info("skip_reference=True: perf-only run complete (no PCC/plot/summary)")

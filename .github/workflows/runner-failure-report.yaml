@@ -15,8 +15,16 @@ on:
         required: false
         type: boolean
         default: true
+      run_enrichment:
+        description: "Fetch live GitHub active-run enrichment when no enrichment_jobs_json is supplied"
+        required: false
+        type: boolean
+        default: true
       triggering_failures_json:
         description: "Optional JSON array of triggering failures from the scan workflow."
+        required: false
+      enrichment_jobs_json:
+        description: "Optional JSON array of precomputed live GitHub jobs from the scan workflow."
         required: false
   workflow_call:
     inputs:
@@ -31,7 +39,15 @@ on:
         required: false
         type: boolean
         default: true
+      run_enrichment:
+        required: false
+        type: boolean
+        default: true
       triggering_failures_json:
+        required: false
+        type: string
+        default: ""
+      enrichment_jobs_json:
         required: false
         type: string
         default: ""
@@ -83,13 +99,33 @@ jobs:
           TARGET_RUNNER_NAME: ${{ inputs.runner_name }}
           HOURS: ${{ inputs.hours || '24' }}
           RUNNER_FAILURE_API_BASE_URL: ${{ secrets.DATA_API_ROUTE_BASE }}
+          TRIGGERING_FAILURES_JSON: ${{ inputs.triggering_failures_json }}
+          ENRICHMENT_JOBS_JSON: ${{ inputs.enrichment_jobs_json }}
+          RUN_ENRICHMENT: ${{ inputs.run_enrichment }}
         run: |
           mkdir -p out
-          python3 .github/scripts/runner_failure_report.py \
-            --hours "$HOURS" \
-            --runner-name "$TARGET_RUNNER_NAME" \
-            --report-json out/runner_failure_report.json \
+          args=(
+            --hours "$HOURS"
+            --runner-name "$TARGET_RUNNER_NAME"
+            --report-json out/runner_failure_report.json
             --report-md out/runner_failure_report.md
+          )
+          if [[ -n "$TRIGGERING_FAILURES_JSON" && "$TRIGGERING_FAILURES_JSON" != "[]" ]]; then
+            printf '%s' "$TRIGGERING_FAILURES_JSON" > out/triggering_failures.json
+            args+=(
+              --triggering-failures-json out/triggering_failures.json
+            )
+          fi
+          if [[ -n "$ENRICHMENT_JOBS_JSON" && "$ENRICHMENT_JOBS_JSON" != "[]" ]]; then
+            printf '%s' "$ENRICHMENT_JOBS_JSON" > out/enrichment_jobs.json
+            args+=(
+              --live-jobs-json out/enrichment_jobs.json
+            )
+          fi
+          if [[ "$RUN_ENRICHMENT" != "true" ]]; then
+            args+=(--no-run-enrichment)
+          fi
+          python3 .github/scripts/runner_failure_report.py "${args[@]}"
 
       - name: Post Slack notification
         if: always() && hashFiles('out/runner_failure_report.json') != ''
@@ -121,7 +157,9 @@ jobs:
             --slack-channel "$DEFAULT_SLACK_CHANNEL"
           )
           if [[ -n "$TRIGGERING_FAILURES_JSON" && "$TRIGGERING_FAILURES_JSON" != "[]" ]]; then
-            printf '%s' "$TRIGGERING_FAILURES_JSON" > out/triggering_failures.json
+            if [[ ! -f out/triggering_failures.json ]]; then
+              printf '%s' "$TRIGGERING_FAILURES_JSON" > out/triggering_failures.json
+            fi
             args+=(
               --triggering-failures-json out/triggering_failures.json
             )

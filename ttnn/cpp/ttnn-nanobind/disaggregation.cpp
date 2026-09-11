@@ -12,7 +12,7 @@
 #include <map>
 #include <span>
 
-#include <tt-metalium/internal/disaggregation/kv_chunk_address_table.hpp>
+#include <internal/disaggregation/kv_chunk_address_table.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
 #include "ttnn/experimental/disaggregation/tensor_helpers.hpp"
@@ -175,27 +175,24 @@ void bind_disaggregation_api(nb::module_& mod) {
         // Accessors
         .def(
             "lookup",
-            static_cast<const KvCacheLocation& (KvChunkAddressTable::*)(uint32_t, uint32_t, uint32_t, uint32_t) const>(
+            static_cast<KvCacheLocation (KvChunkAddressTable::*)(uint32_t, uint32_t, uint32_t, uint32_t) const>(
                 &KvChunkAddressTable::lookup),
             nb::arg("layer"),
             nb::arg("position"),
             nb::arg("slot"),
             nb::arg("config_id") = 0,
-            nb::rv_policy::reference_internal,
             R"(
             Lookup a single entry by (layer, position, slot, config_id). Position is in tokens (chunk-aligned).
-            config_id defaults to 0. Returns a reference to the KvCacheLocation.
+            config_id defaults to 0. Returns the KvCacheLocation by value.
             )")
         .def(
             "lookup",
-            static_cast<
-                const KvCacheLocation& (KvChunkAddressTable::*)(uint32_t, uint32_t, uint32_t, const std::string&) const>(
+            static_cast<KvCacheLocation (KvChunkAddressTable::*)(uint32_t, uint32_t, uint32_t, const std::string&) const>(
                 &KvChunkAddressTable::lookup),
             nb::arg("layer"),
             nb::arg("position"),
             nb::arg("slot"),
             nb::arg("config"),
-            nb::rv_policy::reference_internal,
             "Lookup a single entry by (layer, position, slot, config-name).")
         .def(
             "lookup_range",
@@ -205,9 +202,12 @@ void bind_disaggregation_api(nb::module_& mod) {
                uint32_t end_pos,
                uint32_t slot,
                uint32_t config_id) {
-                auto span = table.lookup_range(layer, start_pos, end_pos, slot, config_id);
-                // Convert span to vector for Python
-                return std::vector<KvCacheLocation>(span.begin(), span.end());
+                std::vector<KvCacheLocation> out;
+                table.visit_range(layer, start_pos, end_pos, slot, config_id, [&out](const auto& range) {
+                    out.reserve(range.size());
+                    out.insert(out.end(), range.begin(), range.end());
+                });
+                return out;
             },
             nb::arg("layer"),
             nb::arg("start_pos"),
@@ -228,8 +228,12 @@ void bind_disaggregation_api(nb::module_& mod) {
                uint32_t end_pos,
                uint32_t slot,
                const std::string& config) {
-                auto span = table.lookup_range(layer, start_pos, end_pos, slot, config);
-                return std::vector<KvCacheLocation>(span.begin(), span.end());
+                std::vector<KvCacheLocation> out;
+                table.visit_range(layer, start_pos, end_pos, slot, table.config_id_of(config), [&out](const auto& range) {
+                    out.reserve(range.size());
+                    out.insert(out.end(), range.begin(), range.end());
+                });
+                return out;
             },
             nb::arg("layer"),
             nb::arg("start_pos"),

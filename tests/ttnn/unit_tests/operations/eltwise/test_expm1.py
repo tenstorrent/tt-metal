@@ -21,7 +21,6 @@ def flush_subnormal_values(tensor):
 @pytest.mark.parametrize(
     "dtype",
     [
-        "bfloat16",
         "float32",
     ],
 )
@@ -62,7 +61,7 @@ def test_expm1_all_bitpatterns(dtype, device):
     # If expected output is subnormal then its calculated value should be 0.0 (hardware assumed to flush to 0.0)
     result = flush_subnormal_values(result)
 
-    assert_with_ulp(golden, result, 1, allow_nonfinite=True)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize(

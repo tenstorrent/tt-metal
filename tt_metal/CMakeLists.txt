@@ -66,6 +66,7 @@ file(
 file(
     GLOB_RECURSE TT_LLK_HEADERS
     tt-llk/common/*.h
+    tt-llk/tools/include/**/*.h
     tt-llk/tt_llk_wormhole_b0/**/*.h
     tt-llk/tt_llk_blackhole/**/*.h
     tt-llk/tt_llk_quasar/**/*.h
@@ -145,7 +146,7 @@ set_target_properties(
     tt_metal
     PROPERTIES
         INSTALL_RPATH
-            "/opt/openmpi-v5.0.7-ulfm/lib;${PROJECT_BINARY_DIR}/lib;$ORIGIN"
+            "/opt/openmpi-v5.0.7-ulfm/lib;$ORIGIN"
         ADDITIONAL_CLEAN_FILES
             "${PROJECT_BINARY_DIR}/lib;${PROJECT_BINARY_DIR}/obj"
 )

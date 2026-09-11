@@ -18,6 +18,7 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/where.h"
 #include "api/compute/eltwise_unary/lerp.h"
+#include "api/compute/eltwise_unary/mac.h"
 #include "api/compute/eltwise_unary/snake_beta.h"
 #include "api/compute/bcast.h"
 #include "api/compute/tile_move_copy.h"
@@ -53,14 +54,17 @@ void kernel_main() {
 #endif
 
     // Initialize pack/format for SFPU-style ternary kernels (matches existing ternary SFPU kernels)
-    unary_op_init_common(dfb_eff_a.get_id(), dfb_out.get_id());
+    compute_kernel_hw_startup(dfb_eff_a.get_id(), dfb_out.get_id());
+    copy_init(dfb_eff_a.get_id());
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
 #if BCAST_A
         {
             dfb_pre_a.wait_front(num_tiles_per_cycle);
             dfb_bcast_a.reserve_back(num_tiles_per_cycle);
-            unary_bcast_init<BroadcastType::ROW>(dfb_pre_a.get_id(), dfb_bcast_a.get_id());
+            reconfig_data_format(dfb_pre_a.get_id(), dfb_pre_a.get_id());
+            pack_reconfig_data_format(dfb_bcast_a.get_id());
+            unary_bcast_init<BroadcastType::ROW>(dfb_pre_a.get_id());
 
             tile_regs_acquire();
             unary_bcast<BroadcastType::ROW>(dfb_pre_a.get_id(), 0, 0);
@@ -79,7 +83,9 @@ void kernel_main() {
         {
             dfb_pre_b.wait_front(num_tiles_per_cycle);
             dfb_bcast_b.reserve_back(num_tiles_per_cycle);
-            unary_bcast_init<BroadcastType::ROW>(dfb_pre_b.get_id(), dfb_bcast_b.get_id());
+            reconfig_data_format(dfb_pre_b.get_id(), dfb_pre_b.get_id());
+            pack_reconfig_data_format(dfb_bcast_b.get_id());
+            unary_bcast_init<BroadcastType::ROW>(dfb_pre_b.get_id());
 
             tile_regs_acquire();
             unary_bcast<BroadcastType::ROW>(dfb_pre_b.get_id(), 0, 0);
@@ -98,7 +104,9 @@ void kernel_main() {
         {
             dfb_pre_c.wait_front(num_tiles_per_cycle);
             dfb_bcast_c.reserve_back(num_tiles_per_cycle);
-            unary_bcast_init<BroadcastType::ROW>(dfb_pre_c.get_id(), dfb_bcast_c.get_id());
+            reconfig_data_format(dfb_pre_c.get_id(), dfb_pre_c.get_id());
+            pack_reconfig_data_format(dfb_bcast_c.get_id());
+            unary_bcast_init<BroadcastType::ROW>(dfb_pre_c.get_id());
 
             tile_regs_acquire();
             unary_bcast<BroadcastType::ROW>(dfb_pre_c.get_id(), 0, 0);
@@ -125,13 +133,13 @@ void kernel_main() {
         tile_regs_acquire();
 
         // Load A -> DST[0], B -> DST[1], C -> DST[2]
-        copy_tile_to_dst_init_short(dfb_eff_a.get_id());
+        copy_init(dfb_eff_a.get_id());
         copy_tile(dfb_eff_a.get_id(), 0, 0);
 
-        copy_tile_to_dst_init_short(dfb_eff_b.get_id());
+        copy_init(dfb_eff_b.get_id());
         copy_tile(dfb_eff_b.get_id(), 0, 1);
 
-        copy_tile_to_dst_init_short(dfb_eff_c.get_id());
+        copy_init(dfb_eff_c.get_id());
         copy_tile(dfb_eff_c.get_id(), 0, 2);
 
         // Execute configured ternary SFPU op

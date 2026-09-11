@@ -59,6 +59,7 @@ MorehAdamOperation::spec_return_value_t MorehAdamOperation::compute_output_specs
     auto dtype = tensor_args.param_in.dtype();
 
     std::vector<std::optional<tt::tt_metal::TensorSpec>> ret;
+    ret.reserve(4);
     tt::tt_metal::TensorSpec out_spec(
         output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), operation_attributes.memory_config));
     for (int idx = 0; idx < 3; idx++) {
@@ -85,6 +86,7 @@ MorehAdamOperation::tensor_return_value_t MorehAdamOperation::create_output_tens
     auto* device = tensor_args.param_in.device();
 
     std::vector<std::optional<Tensor>> ret;
+    ret.reserve(output_specs.size());
     auto memory_config = operation_attributes.memory_config;
 
     for (size_t idx = 0; idx < output_specs.size(); idx++) {

@@ -12,7 +12,7 @@
 #include <cstdint>
 
 /**
- * One pass over the tile already in the CB: for each in-tile column `in_tile_w`, update
+ * One pass over the tile already in the DFB: for each in-tile column `in_tile_w`, update
  * max_vals[in_tile_w] / arg_maxs[in_tile_w] (argmax along global H for that global_w column).
  * Matches face indexing and padding handling of process_input_tile (W reader).
  *
@@ -24,7 +24,7 @@
 template <typename DTYPE, DataFormat format>
 void process_loaded_tile_all_h_columns(
     const InputContext& ctx, uint32_t w_tile, uint32_t h_tile, DTYPE max_vals[], uint32_t arg_maxs[]) {
-    auto src_ptr = get_tt_l1_ptr_based_on_data_format<format>(ctx.cb_addr);
+    auto src_ptr = get_tt_l1_ptr_based_on_data_format<format>(ctx.dfb_addr);
 
     constexpr uint32_t faces_per_tile = 4;
     for (uint32_t face_id = 0; face_id < faces_per_tile; face_id++) {
@@ -48,7 +48,7 @@ void process_loaded_tile_all_h_columns(
         const uint32_t col_offset = is_left_face ? 0 : face_width;
         // Base row-within-tile for this face (bottom faces start at face_height).
         const uint32_t base_row_in_tile = (face_id < 2) ? 0 : face_height;
-        const uint32_t base_global_h = h_tile * ctx.tile_height + base_row_in_tile;
+        const uint32_t base_global_h = (h_tile * ctx.tile_height) + base_row_in_tile;
 
         // Outer loop: column — load accumulator once into a register, scan all rows,
         // store back once.  This matches the register-caching pattern of the width

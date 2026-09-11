@@ -20,9 +20,13 @@ import torch
 
 from models.demos.deepseek_v3_d_p.utils.test_utils import (
     _dequantize_packed_int4_weight,
+    _dequantize_per_tensor_fp8_state_dict,
     _pack_quant_params,
+    _scale_to,
+    convert_state_dict,
     dequantize_state_dict,
     is_pack_quantized_int4,
+    is_per_tensor_fp8,
 )
 
 pytestmark = pytest.mark.t3k_compat
@@ -123,3 +127,181 @@ def test_dequantize_state_dict_int4_pack_quant_round_trip():
     # fp32 passthrough must NOT be downcast to bf16 (router-bias precision).
     assert out[bias].dtype == torch.float32
     torch.testing.assert_close(out[bias], bias_val, rtol=0, atol=0)
+
+
+def test_convert_state_dict_passes_through_dequantized_checkpoint():
+    """A dequantized checkpoint has no `quantization_config`, so nothing may reach the dequantizer --
+    it reads quantization metadata up front and would raise (the Kimi prefill-block CI failure)."""
+    weight = torch.tensor([[1.25, -0.75]], dtype=torch.bfloat16)
+    bias = torch.tensor([1.5, -2.5], dtype=torch.float32)  # router bias -- must stay fp32
+    hf_config = SimpleNamespace()  # no quantization_config at all
+
+    out = convert_state_dict({"mlp.gate.weight": weight, "mlp.gate.e_score_correction_bias": bias}, hf_config)
+
+    assert set(out) == {"mlp.gate.weight", "mlp.gate.e_score_correction_bias"}
+    assert out["mlp.gate.weight"].dtype == torch.bfloat16
+    torch.testing.assert_close(out["mlp.gate.weight"], weight, rtol=0, atol=0)
+    # Source dtype preserved, matching the INT4 path's passthrough (no bf16 downcast of the router bias).
+    assert out["mlp.gate.e_score_correction_bias"].dtype == torch.float32
+    torch.testing.assert_close(out["mlp.gate.e_score_correction_bias"], bias, rtol=0, atol=0)
+
+
+def test_convert_state_dict_dequantizes_int4_pack_quantized_checkpoint():
+    """With a `quantization_config` present, convert_state_dict must take the INT4 dequant path."""
+    levels = torch.tensor([[-8, -1, 0, 7, 3, -4, 5, -2]], dtype=torch.int64)
+    group_size = 8
+    scale = torch.tensor([[0.25]], dtype=torch.float32)
+
+    weight = "model.layers.0.mlp.experts.0.gate_proj.weight"
+    state_dict = {
+        f"{weight}_packed": _pack_int4_offset_binary(levels),
+        f"{weight}_scale": scale,
+        f"{weight}_shape": torch.tensor([levels.shape[0], levels.shape[1]]),
+    }
+    hf_config = SimpleNamespace(quantization_config=_int4_quant_config(group_size))
+
+    out = convert_state_dict(state_dict, hf_config, dtype=torch.bfloat16)
+
+    assert set(out) == {weight}
+    expected = (levels.to(torch.float32) * scale.repeat_interleave(group_size, dim=1)).to(torch.bfloat16)
+    torch.testing.assert_close(out[weight], expected, rtol=0, atol=0)
+
+
+def test_convert_state_dict_reads_quantization_config_nested_under_text_config():
+    """Kimi's multimodal checkpoint nests the LM config; missing it would pass INT4 payload through raw."""
+    levels = torch.tensor([[-8, -1, 0, 7, 3, -4, 5, -2]], dtype=torch.int64)
+    group_size = 8
+    weight = "model.layers.0.mlp.experts.0.gate_proj.weight"
+    state_dict = {
+        f"{weight}_packed": _pack_int4_offset_binary(levels),
+        f"{weight}_scale": torch.tensor([[0.25]], dtype=torch.float32),
+        f"{weight}_shape": torch.tensor([levels.shape[0], levels.shape[1]]),
+    }
+    hf_config = SimpleNamespace(text_config=SimpleNamespace(quantization_config=_int4_quant_config(group_size)))
+
+    out = convert_state_dict(state_dict, hf_config, dtype=torch.bfloat16)
+
+    assert set(out) == {weight}  # dequantized, not passed through as raw _packed/_scale/_shape
+
+
+def test_convert_state_dict_rejects_quantized_payload_without_quantization_config(expect_error):
+    """Quantized weights whose config lost its metadata must fail loudly, not pass through as garbage."""
+    hf_config = SimpleNamespace()
+
+    with expect_error(ValueError, "no `quantization_config`"):
+        convert_state_dict({"w.weight_packed": torch.zeros(1, 1, dtype=torch.int32)}, hf_config)
+
+    with expect_error(ValueError, "no `quantization_config`"):
+        convert_state_dict({"w.weight": torch.zeros(1, 1).to(torch.float8_e4m3fn)}, hf_config)
+
+
+# --- per-tensor fp8 -------------------------------------------------------------------------------
+# The third dequant branch, beside block-wise fp8 and the INT4 pack-quant path above. This is what the
+# whole Mistral Small 4 checkpoint load depends on, and both of its shape cases fail silently rather
+# than loudly: a wrong broadcast produces plausible weights, not an error.
+
+
+@pytest.mark.parametrize(
+    "quantization_config, expected",
+    [
+        ({"quant_method": "fp8", "weight_block_size": None}, True),  # Mistral ships null
+        ({"quant_method": "fp8"}, True),  # key absent entirely
+        ({"quant_method": "fp8", "weight_block_size": []}, True),  # empty is not a block shape
+        ({"quant_method": "fp8", "weight_block_size": [128, 128]}, False),  # block-wise
+        ({"quant_method": "awq"}, False),
+        (None, False),
+        ("fp8", False),  # not a dict
+    ],
+)
+def test_is_per_tensor_fp8(quantization_config, expected):
+    assert is_per_tensor_fp8(quantization_config) is expected
+
+
+def test_scale_to_rank0_scale_matches_the_one_expression_form():
+    """Dense weight: a rank-0 scalar scale broadcasts over the whole tensor."""
+    tensor = torch.randn(4, 6)
+    scale = torch.tensor(0.25)
+    torch.testing.assert_close(
+        _scale_to(tensor, scale, torch.float32), (tensor.float() * scale.float()).to(torch.float32)
+    )
+
+
+def test_scale_to_per_slice_scale_is_bit_identical_to_the_one_expression_form():
+    """Stacked experts: [E,1,1] against [E,out,in] takes the slice-by-slice branch, which exists only
+    to bound transient host RAM. It must be arithmetically identical, not merely close."""
+    tensor = torch.randn(5, 3, 4)
+    scale = torch.rand(5, 1, 1) + 0.5
+    got = _scale_to(tensor, scale, torch.bfloat16)
+    want = (tensor.float() * scale.float()).to(torch.bfloat16)
+    assert torch.equal(got, want), "slice-by-slice branch diverged from the one-expression form"
+
+
+def test_scale_to_applies_each_experts_own_scale():
+    """A scale-to-expert misalignment (off-by-one, or a transposed broadcast) still yields plausible
+    weights, so pin the mapping with per-expert scales that cannot be confused."""
+    tensor = torch.ones(3, 2, 2)
+    scale = torch.tensor([2.0, 4.0, 8.0]).reshape(3, 1, 1)
+    got = _scale_to(tensor, scale, torch.float32)
+    for i, s in enumerate((2.0, 4.0, 8.0)):
+        assert torch.equal(got[i], torch.full((2, 2), s)), f"expert {i} did not get its own scale"
+
+
+def test_dequantize_per_tensor_fp8_handles_both_scale_ranks():
+    dense = torch.randn(4, 8)
+    experts = torch.randn(3, 2, 4)
+    state_dict = {
+        "model.layers.0.self_attn.q_proj.weight": dense,
+        "model.layers.0.self_attn.q_proj.weight_scale_inv": torch.tensor(0.5),
+        "model.layers.0.mlp.experts.gate_up_proj": experts,
+        "model.layers.0.mlp.experts.gate_up_proj_scale_inv": torch.tensor([1.5, 2.5, 3.5]).reshape(3, 1, 1),
+    }
+    out = _dequantize_per_tensor_fp8_state_dict(state_dict, dtype=torch.float32)
+
+    assert set(out) == {
+        "model.layers.0.self_attn.q_proj.weight",
+        "model.layers.0.mlp.experts.gate_up_proj",
+    }, "scale_inv entries must not survive as weights"
+    torch.testing.assert_close(out["model.layers.0.self_attn.q_proj.weight"], dense * 0.5)
+    for i, s in enumerate((1.5, 2.5, 3.5)):
+        torch.testing.assert_close(out["model.layers.0.mlp.experts.gate_up_proj"][i], experts[i] * s)
+
+
+def test_dequantize_per_tensor_fp8_drops_activation_scales():
+    """``*_activation_scale`` feeds a static activation-quantization scheme; emitting it as a weight
+    would put a stray tensor into the model's state dict."""
+    state_dict = {
+        "model.layers.0.mlp.down_proj.weight": torch.randn(2, 2),
+        "model.layers.0.mlp.down_proj.weight_scale_inv": torch.tensor(1.0),
+        "model.layers.0.mlp.down_proj.input_activation_scale": torch.tensor(0.125),
+    }
+    out = _dequantize_per_tensor_fp8_state_dict(state_dict, dtype=torch.float32)
+    assert set(out) == {"model.layers.0.mlp.down_proj.weight"}
+
+
+def test_dequantize_per_tensor_fp8_passes_unquantized_tensors_through():
+    """Norms and biases carry no scale and must survive unchanged, not be dropped."""
+    norm = torch.randn(8)
+    ids = torch.arange(4)
+    out = _dequantize_per_tensor_fp8_state_dict(
+        {"model.norm.weight": norm, "model.some_index": ids}, dtype=torch.float32
+    )
+    torch.testing.assert_close(out["model.norm.weight"], norm)
+    assert torch.equal(out["model.some_index"], ids), "non-float tensors must pass through unconverted"
+
+
+def test_dequantize_per_tensor_fp8_rejects_fp8_without_a_scale(expect_error):
+    """An fp8 tensor whose scale key is missing would otherwise be emitted as raw fp8 garbage."""
+    state_dict = {"model.layers.0.mlp.down_proj.weight": torch.zeros(2, 2, dtype=torch.float8_e4m3fn)}
+    with expect_error(ValueError, "without matching inverse scale"):
+        _dequantize_per_tensor_fp8_state_dict(state_dict)
+
+
+def test_dequantize_per_tensor_fp8_rejects_an_unexpected_scale_rank(expect_error):
+    """Rank must be 0 or the tensor's own; anything else means the scale does not mean what the
+    dequantizer assumes, and broadcasting would quietly produce wrong weights."""
+    state_dict = {
+        "w": torch.randn(3, 2, 4),
+        "w_scale_inv": torch.rand(3, 1),  # ndim 2 against a rank-3 tensor
+    }
+    with expect_error(ValueError, "expected 0"):
+        _dequantize_per_tensor_fp8_state_dict(state_dict)

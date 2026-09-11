@@ -1,11 +1,13 @@
 import pytest
 import pathlib
+from datetime import datetime
 
 from infra.data_collection.github import workflows
 from infra.data_collection.cicd import create_cicd_json_for_data_analysis
-from infra.data_collection.models import InfraErrorV1, TestErrorV1
+from infra.data_collection.models import InfraErrorV1, TestErrorV1, CodeQualityErrorV1
 from infra.data_collection.github.utils import (
     get_job_failure_signature_,
+    get_job_row_from_github_job,
     _card_type_from_job_labels,
     _generic_runner_labels,
     _load_sku_config_skus,
@@ -171,11 +173,41 @@ def test_create_pipeline_json_for_gtest_testcases(
         assert len([x for x in job.tests if not x.success]) > 0
 
 
+def test_gtest_disabled_tests_do_not_get_epoch_timestamp():
+    """gtest stamps not-run suites (e.g. all-DISABLED_ suites) with a 1970-01-01 epoch sentinel.
+    The producer should substitute the job start timestamp instead of emitting epoch timestamps."""
+    report_path = (INFRA_TESTS_DIR / "_data/data_collection/cicd/gtest_disabled_epoch_timestamp/report.xml").resolve()
+
+    job_start_timestamp = datetime.fromisoformat("2026-07-30T13:00:00")
+    tests = workflows.get_tests_from_test_report_path(report_path, job_start_timestamp)
+
+    assert len(tests) == 3
+    for test in tests:
+        assert test.test_start_ts != workflows.GTEST_NOT_RUN_TIMESTAMP
+        assert test.test_end_ts != workflows.GTEST_NOT_RUN_TIMESTAMP
+
+    # The two not-run (disabled) suites fall back to the job start timestamp. Note DISABLED_ can
+    # sit on the testcase name (DISABLED_L1Usage) or on the fixture/suite (DISABLED_MemoryUtilsTest).
+    disabled_tests = [t for t in tests if t.test_case_name in ("DISABLED_L1Usage", "SnapshotFeature")]
+    assert len(disabled_tests) == 2
+    for test in disabled_tests:
+        assert test.test_start_ts == job_start_timestamp
+        assert test.test_end_ts == job_start_timestamp
+
+    # A real (run) test keeps its own suite timestamp, not the job start fallback.
+    real_test = next(t for t in tests if t.test_case_name == "RunsForReal")
+    assert real_test.test_start_ts == datetime.fromisoformat("2026-07-30T13:24:31.500")
+
+
 def test_empty_gtest_xml(workflow_run_gh_environment):
     github_runner_environment = workflow_run_gh_environment
     workflow_outputs_dir = (INFRA_TESTS_DIR / "_data/data_collection/cicd/all_post_commit_job_37712709106/").resolve()
+    job_start_timestamp = datetime.fromisoformat("2026-07-30T13:00:00")
     assert (
-        workflows.get_tests_from_test_report_path(workflow_outputs_dir / "distributed_unit_tests_wormhole_b0.xml") == []
+        workflows.get_tests_from_test_report_path(
+            workflow_outputs_dir / "distributed_unit_tests_wormhole_b0.xml", job_start_timestamp
+        )
+        == []
     )
 
 
@@ -319,6 +351,105 @@ def test_non_checkout_git_failure_stays_generic():
     assert result == str(InfraErrorV1.GENERIC_FAILURE)
 
 
+@pytest.mark.parametrize(
+    "failure_description,expected_signature",
+    [
+        # MINFRA-1082: these all previously fell into the GENERIC_FAILURE catch-all
+        ("Value cannot be null. (Parameter 'ContainerId')", InfraErrorV1.DOCKER_CONTAINER_ID_NULL_FAILURE),
+        (
+            "Failed to download archive 'https://codeload.github.com/tenstorrent/tt-metal/tar.gz/9b8a6b5' after 3 attempts.",
+            InfraErrorV1.ACTION_DOWNLOAD_FAILURE,
+        ),
+        (
+            "Failed to download action 'https://codeload.github.com/actions/checkout/tar.gz/de0fac2'. "
+            "Error: Response status code does not indicate success: 429 (Too Many Requests).",
+            InfraErrorV1.ACTION_DOWNLOAD_FAILURE,
+        ),
+        (
+            "Action 'https://codeload.github.com/tenstorrent/tt-metal/tar.gz/b788cf2ffdc5389026bd4878376d11a9a0facac7' "
+            "download has timed out. Error: The request was canceled due to the configured HttpClient.Timeout "
+            "of 100 seconds elapsing.",
+            InfraErrorV1.ACTION_DOWNLOAD_FAILURE,
+        ),
+        (
+            "Failed tests were found and 'fail-on-error' option is set to true",
+            InfraErrorV1.TEST_REPORTER_FAILURE,
+        ),
+        ("No test report files were found", InfraErrorV1.TEST_REPORTER_NO_REPORTS_FAILURE),
+        ("The process '/usr/bin/git' failed with exit code 128", InfraErrorV1.GIT_PROCESS_FAILURE),
+        (
+            "Failed to FinalizeArtifact: Unable to make request: ECONNRESET",
+            InfraErrorV1.ARTIFACT_FINALIZE_FAILURE,
+        ),
+        (
+            "Unable to download artifact(s): Failed to GetSignedArtifactURL: Unable to make request: ECONNRESET",
+            InfraErrorV1.ARTIFACT_DOWNLOAD_CONNECTION_FAILURE,
+        ),
+        (
+            "Unable to download artifact(s): Failed to GetSignedArtifactURL: Received non-retryable error: "
+            "Failed request: (404) Not Found: workflow run not found",
+            InfraErrorV1.ARTIFACT_DOWNLOAD_NOT_FOUND_FAILURE,
+        ),
+        (
+            "Unable to download artifact(s): Failed to ListArtifacts: Received non-retryable error: "
+            'Failed request: (403) Forbidden: Error from intermediary with HTTP status code 403 "Forbidden"',
+            InfraErrorV1.ARTIFACT_DOWNLOAD_FORBIDDEN_FAILURE,
+        ),
+        ("Upload progress stalled.", InfraErrorV1.ARTIFACT_UPLOAD_STALLED_FAILURE),
+        ("Request was cancelled.", InfraErrorV1.REQUEST_CANCELLED_FAILURE),
+        (
+            "We received a malformed request from your client. Sorry about that. "
+            "Please try resubmitting your request and contact us if the problem persists.",
+            InfraErrorV1.GITHUB_API_MALFORMED_REQUEST_FAILURE,
+        ),
+        ("Process completed with exit code 1.", InfraErrorV1.GENERIC_EXIT_CODE_FAILURE),
+    ],
+)
+def test_new_infra_error_signatures_classified_uniquely(failure_description, expected_signature):
+    """Each of these gets its own bucket instead of collapsing into GENERIC_FAILURE (MINFRA-1082)."""
+    mock_job = _make_mock_job(step_name="Run something", step_conclusion="success")
+    result = get_job_failure_signature_(mock_job, failure_description, workflow_outputs_dir=None)
+    assert result == str(expected_signature)
+
+
+@pytest.mark.parametrize(
+    "step_name,expected_signature",
+    [
+        # The generic "Process completed with exit code N" annotation must NOT shadow the
+        # step-specific classifiers: a failed checkout / clang-tidy step keeps its own signature.
+        ("Checkout", InfraErrorV1.CHECKOUT_FAILURE),
+        ("Analyze code with clang-tidy", CodeQualityErrorV1.CLANG_TIDY_VIOLATION),
+    ],
+)
+def test_generic_exit_code_does_not_shadow_step_classifiers(step_name, expected_signature):
+    """GENERIC_EXIT_CODE_FAILURE is a fallback checked after step classifiers, not before (MINFRA-1082)."""
+    mock_job = _make_mock_job(step_name=step_name, step_conclusion="failure")
+    result = get_job_failure_signature_(mock_job, "Process completed with exit code 1.", workflow_outputs_dir=None)
+    assert result == str(expected_signature)
+
+
+@pytest.mark.parametrize(
+    "failure_description",
+    [
+        # A non-connection cause on GetSignedArtifactURL must not land in the connection bucket...
+        "Unable to download artifact(s): Failed to GetSignedArtifactURL: Received non-retryable error: "
+        'Failed request: (403) Forbidden: Error from intermediary with HTTP status code 403 "Forbidden"',
+        # ...and a connection error on ListArtifacts must not land in the forbidden bucket.
+        "Unable to download artifact(s): Failed to ListArtifacts: Unable to make request: ECONNRESET",
+    ],
+)
+def test_artifact_download_bucket_matches_cause_not_operation(failure_description):
+    """Artifact-download buckets key on the failure cause, not just the operation name (MINFRA-1082)."""
+    mock_job = _make_mock_job(step_name="Run something", step_conclusion="success")
+    result = get_job_failure_signature_(mock_job, failure_description, workflow_outputs_dir=None)
+    # Neither should be mislabeled as the other's cause-specific bucket.
+    assert result not in (
+        str(InfraErrorV1.ARTIFACT_DOWNLOAD_CONNECTION_FAILURE),
+        str(InfraErrorV1.ARTIFACT_DOWNLOAD_FORBIDDEN_FAILURE),
+    )
+    assert result == str(InfraErrorV1.GENERIC_FAILURE)
+
+
 @pytest.fixture(autouse=True)
 def clear_sku_config_cache():
     from infra.data_collection.github.utils import _generic_runner_labels, _root_sku_for, _sku_config_sku_names
@@ -374,12 +505,167 @@ def test_generic_runner_labels_derived_from_sim_skus():
         # legacy partial wh_n300 labels
         (["N300", "in-service"], "wh_n300"),
         (["build", "in-service"], None),
-        (["ubuntu-latest"], "ubuntu-latest"),
+        (["tt-ubuntu-2204-medium-stable"], "cpu_medium"),
         (["tt-ubuntu-2204-large-stable"], "tt-ubuntu-2204-large-stable"),
     ],
 )
 def test_card_type_from_job_labels(labels, expected_card_type):
     assert _card_type_from_job_labels(labels) == expected_card_type
+
+
+def test_get_civ2_node_name_and_serial_from_annotations():
+    # Card runner: both node name and (possibly composite) serial present
+    annotations = [
+        {"title": "k8s-node-name", "message": "CIV2 runner foo is running on Kubernetes node: aus-glx-03"},
+        {"title": "tt-card-serial", "message": "CIV2 runner foo has serial number(s): TT-BH-00111:TT-BH-00222"},
+        {"title": "", "message": "some unrelated infra annotation"},
+    ]
+    assert workflows.get_civ2_node_name_and_serial_from_annotations(annotations) == (
+        "aus-glx-03",
+        "TT-BH-00111:TT-BH-00222",
+    )
+
+    # CPU-only runner: a tt-card-serial notice is still emitted, but with a
+    # "Not a Tenstorrent card runner" message that carries no serial
+    cpu_annotations = [
+        {
+            "title": "tt-card-serial",
+            "message": "Not a Tenstorrent card runner (runner name: tt-ubuntu-2204-large-stable-w77km-runner-djpn9)",
+        },
+        {
+            "title": "k8s-node-name",
+            "message": "CIV2 runner tt-ubuntu-2204-large-stable-w77km-runner-djpn9 is running on Kubernetes node: f10-cpu-01",
+        },
+    ]
+    assert workflows.get_civ2_node_name_and_serial_from_annotations(cpu_annotations) == ("f10-cpu-01", None)
+
+    # No annotations at all
+    assert workflows.get_civ2_node_name_and_serial_from_annotations(None) == (None, None)
+
+
+def _make_completed_civ2_job(job_id, runner_name, labels):
+    return {
+        "id": job_id,
+        "run_id": 999,
+        "runner_name": runner_name,
+        "labels": labels,
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-07-10T00:00:00Z",
+        "started_at": "2026-07-10T00:01:00Z",
+        "completed_at": "2026-07-10T00:05:00Z",
+        "name": "some test job",
+        "html_url": "https://github.com/tenstorrent/tt-metal/actions/runs/999/job/1",
+        "run_attempt": 1,
+        "steps": [],
+    }
+
+
+def test_civ2_host_name_replaced_with_node_and_serial():
+    job = _make_completed_civ2_job(
+        1,
+        "tt-ubuntu-2204-n300-viommu-stable-abcde-runner-fghij",
+        ["tt-ubuntu-2204-n300-viommu-stable"],
+    )
+    annotations = {
+        1: [
+            {
+                "title": "k8s-node-name",
+                "message": "CIV2 runner foo is running on Kubernetes node: aus-glx-03",
+                "annotation_level": "notice",
+                "path": ".github",
+            },
+            {
+                "title": "tt-card-serial",
+                "message": "CIV2 runner foo has serial number(s): TT-BH-02345",
+                "annotation_level": "notice",
+                "path": ".github",
+            },
+        ]
+    }
+    row = get_job_row_from_github_job(job, annotations, INFRA_TESTS_DIR)
+    assert row["host_name"] == "aus-glx-03_TT-BH-02345"
+
+
+def test_civ2_host_name_falls_back_to_truncation_without_annotations():
+    job = _make_completed_civ2_job(
+        2,
+        "tt-ubuntu-2204-n300-viommu-stable-abcde-runner-fghij",
+        ["tt-ubuntu-2204-n300-viommu-stable"],
+    )
+    # No node/serial annotations and no matching job log -> keep ephemeral-suffix truncation
+    row = get_job_row_from_github_job(job, {}, INFRA_TESTS_DIR)
+    assert row["host_name"] == "tt-ubuntu-2204-n300-viommu-stable-abcde-runner"
+
+
+def test_get_civ2_node_name_and_serial_from_job_log(tmp_path):
+    logs_dir = tmp_path / "777" / "logs"
+    logs_dir.mkdir(parents=True)
+
+    # Card runner: plain stdout lines plus the ::notice duplicates
+    (logs_dir / "9.log").write_text(
+        "2026-07-10T00:01:02.1Z CIV2 runner foo is running on Kubernetes node: f06cs19\n"
+        "2026-07-10T00:01:02.2Z ::notice title=k8s-node-name::CIV2 runner foo is running on Kubernetes node: f06cs19\n"
+        "2026-07-10T00:01:03.1Z CIV2 runner with ephemeral name foo has serial number(s): 010001451172A025\n"
+    )
+    assert workflows.get_civ2_node_name_and_serial_from_job_log(tmp_path, 777, 9) == ("f06cs19", "010001451172A025")
+
+    # CPU-only runner: node present, serial line reports it is not a TT card
+    (logs_dir / "10.log").write_text(
+        "2026-07-10T00:01:02.1Z CIV2 runner bar is running on Kubernetes node: cpu-node-1\n"
+        "2026-07-10T00:01:03.1Z Not a Tenstorrent card runner (runner name: bar)\n"
+    )
+    assert workflows.get_civ2_node_name_and_serial_from_job_log(tmp_path, 777, 10) == ("cpu-node-1", None)
+
+    # Missing log file
+    assert workflows.get_civ2_node_name_and_serial_from_job_log(tmp_path, 777, 999) == (None, None)
+
+
+def test_civ2_host_name_uses_job_log_when_annotations_missing(tmp_path):
+    run_id, job_id = 555, 3
+    logs_dir = tmp_path / str(run_id) / "logs"
+    logs_dir.mkdir(parents=True)
+    (logs_dir / f"{job_id}.log").write_text(
+        "2026-07-10T00:01:02.1Z CIV2 runner tt-ubuntu-2204-n300-stable-88b76-runner-clpfm "
+        "is running on Kubernetes node: f06cs19\n"
+        "2026-07-10T00:01:03.1Z CIV2 runner with ephemeral name tt-ubuntu-2204-n300-stable-88b76-runner-clpfm "
+        "has serial number(s): 010001451172A025\n"
+    )
+
+    job = _make_completed_civ2_job(
+        job_id,
+        "tt-ubuntu-2204-n300-stable-88b76-runner-clpfm",
+        ["tt-ubuntu-2204-n300-stable"],
+    )
+    job["run_id"] = run_id
+
+    # Empty annotations -> falls back to the job log
+    row = get_job_row_from_github_job(job, {}, tmp_path)
+    assert row["host_name"] == "f06cs19_010001451172A025"
+
+
+def test_civ2_host_name_uses_node_name_only_when_serial_missing(tmp_path):
+    # CPU-only runner: node name present but no card serial -> use node name alone,
+    # never "<node>_None".
+    run_id, job_id = 666, 4
+    logs_dir = tmp_path / str(run_id) / "logs"
+    logs_dir.mkdir(parents=True)
+    (logs_dir / f"{job_id}.log").write_text(
+        "2026-07-10T00:01:02.1Z CIV2 runner tt-ubuntu-2204-large-stable-w77km-runner-djpn9 "
+        "is running on Kubernetes node: f10-cpu-01\n"
+        "2026-07-10T00:01:03.1Z Not a Tenstorrent card runner "
+        "(runner name: tt-ubuntu-2204-large-stable-w77km-runner-djpn9)\n"
+    )
+
+    job = _make_completed_civ2_job(
+        job_id,
+        "tt-ubuntu-2204-large-stable-w77km-runner-djpn9",
+        ["tt-ubuntu-2204-large-stable"],
+    )
+    job["run_id"] = run_id
+
+    row = get_job_row_from_github_job(job, {}, tmp_path)
+    assert row["host_name"] == "f10-cpu-01"
 
 
 def test_create_pipeline_json_assigns_sku_card_type_to_n300_job(workflow_run_gh_environment):

@@ -155,6 +155,7 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
     uint32_t num_cols_per_output_block = output_page_width;
 
     std::vector<uint32_t> writer_common_runtime_args;
+    writer_common_runtime_args.reserve(output.padded_shape().size() + input.padded_shape().size());
     for (const auto dim : output.padded_shape()) {
         writer_common_runtime_args.push_back(dim);
     }

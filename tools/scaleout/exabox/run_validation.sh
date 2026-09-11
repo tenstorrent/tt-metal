@@ -97,7 +97,7 @@ HOSTS=""
 DOCKER_IMAGE=""
 # Default image used when --image is omitted (or passed with no value). Bump to the current
 # last-known-good tag as needed (see tools/scaleout/exabox/README.md).
-DOCKER_IMAGE_DEFAULT="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.66.0-dev20260115-28-g6eccf7061a"
+DOCKER_IMAGE_DEFAULT="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.79.0-dev20260903-20-gcc9c295fdf0"
 SKIP_VERSION_CHECK=false
 CABLING_DESCRIPTOR_PATH="/data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto"
 DEPLOYMENT_DESCRIPTOR_PATH="/data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto"
@@ -415,18 +415,12 @@ fi
 echo ""
 
 # Assert minimum tt-smi / KMD / firmware versions on every host before validation (see
-# check_cluster_versions in utils/host_utils.sh). Host-level check, always via plain mpirun.
+# run_version_check_gate in utils/host_utils.sh). Host-level check, always via plain mpirun. A
+# version below the minimum aborts; versions that can't be read only warn and continue.
 if [[ "$SKIP_VERSION_CHECK" == false ]]; then
-    echo "Checking tt-smi/KMD/firmware versions on all hosts..."
-    if ! check_cluster_versions "$HOSTS" "$MPI_IF" "${MPI_EXTRA_ARGS[@]}"; then
-        echo ""
-        echo "Error: version check failed on one or more hosts (see above)."
-        echo "       Required: tt-smi >= $TT_SMI_MIN_VERSION, KMD >= $KMD_MIN_VERSION, firmware >= $FW_MIN_VERSION."
-        echo "       Re-run with --skip-version-check to bypass."
+    if ! run_version_check_gate "$HOSTS" "$MPI_IF" "${MPI_EXTRA_ARGS[@]}"; then
         exit 1
     fi
-    echo "Version check passed on all hosts."
-    echo ""
 fi
 
 # Create output directory if it doesn't exist and resolve to an absolute path so

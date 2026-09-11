@@ -27,12 +27,13 @@ FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t in0_block_w) {
     const uint32_t mm_partials_cb_id = cb_mm_partials.get_cb_id();
     // Reconfigure input
-    copy_tile_to_dst_init_short_with_dt(in1_cb_id, mm_partials_cb_id);
+    reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
+    copy_init(mm_partials_cb_id);
     cb_mm_partials.wait_front(out_subblock_num_tiles);
 
     uint32_t start_dst_index = 0;
     uint32_t start_tile_index = 0;
-    copy_block_matmul_partials(mm_partials_cb_id, start_tile_index, start_dst_index, out_subblock_num_tiles);
+    copy_block(mm_partials_cb_id, start_tile_index, start_dst_index, out_subblock_num_tiles);
 
     cb_mm_partials.pop_front(out_subblock_num_tiles);
     // Reconfigure srcA back
@@ -355,7 +356,7 @@ void kernel_main() {
                         if constexpr (untilize_out) {
                             pack_untilize_dest<out_subblock_num_tiles>(mm_out_cb_id);
                         } else {
-                            pack_tile_block(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
+                            pack_block(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
                         }
 
                         tile_regs_release();
@@ -379,7 +380,7 @@ void kernel_main() {
 #endif
 
                         uint32_t start_dst_index = 0;
-                        pack_tile_block(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
+                        pack_block(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
 
                         tile_regs_release();
                         cb_mm_partials.push_back(out_subblock_num_tiles);

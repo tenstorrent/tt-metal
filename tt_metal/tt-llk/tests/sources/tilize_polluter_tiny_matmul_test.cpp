@@ -56,7 +56,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // ---- Run 0: regular tilize "polluter" (output discarded to scratch) ----
     int run                              = 0;
     const std::uint32_t pol_block_ct_dim = _llk_unpack_tilize_block_ct_dim_wrapper_(1);
-    const std::uint32_t pol_tilize_nf    = _llk_unpack_tilize_num_faces_wrapper_(POLLUTER_NUM_FACES);
+    const std::uint32_t pol_tilize_nf    = POLLUTER_NUM_FACES;
 
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats_array[run].unpack_A_src,

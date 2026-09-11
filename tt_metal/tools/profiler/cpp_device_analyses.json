@@ -94,9 +94,9 @@
             "end_timestamp_header": "DEVICE KERNEL DM END CYCLE"
         },
         "start_config": {
-            "risc": ["BRISC", "NCRISC", "ERISC"],
+            "risc": ["BRISC", "NCRISC", "ERISC", "QUASAR_DM0", "QUASAR_DM1", "QUASAR_DM2", "QUASAR_DM3", "QUASAR_DM4", "QUASAR_DM5", "QUASAR_DM6", "QUASAR_DM7"],
             "marker_type": "ZONE_START",
-            "marker_name_keywords": ["BRISC-KERNEL", "NCRISC-KERNEL", "ERISC-KERNEL"]
+            "marker_name_keywords": ["BRISC-KERNEL", "NCRISC-KERNEL", "ERISC-KERNEL", "DM-KERNEL"]
         },
         "end_config": {
             "marker_type": "ZONE_END",
