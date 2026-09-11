@@ -9,10 +9,8 @@ on:
 jobs:
   parse-comment:
     name: Resolve Target
-    # Automatic runs are skipped for PRs from forks — secrets (BUG_CHECKER_API_KEY,
-    # the PAT) are unavailable and the GITHUB_TOKEN is read-only in that context, so
-    # the scan would fail. Forks can still be checked via a maintainer's /bug-check
-    # comment, which runs in the base repo's Actions context.
+    # Automatic runs are limited to non-draft PRs from this repository.
+    # Fork PRs can still be checked via a maintainer's /bug-check comment.
     if: >-
       (
         github.event_name == 'issue_comment' &&
@@ -24,7 +22,7 @@ jobs:
         )
       ) ||
       (
-        github.event_name == 'pull_request' &&
+        github.event_name == 'pull_request_target' &&
         !github.event.pull_request.draft &&
         github.event.pull_request.head.repo.full_name == github.repository
       )
@@ -56,7 +54,7 @@ jobs:
           ISSUE_NUM: ${{ github.event.issue.number }}
           PR_NUM_FROM_EVENT: ${{ github.event.pull_request.number }}
         run: |
-          if [ "$EVENT_NAME" = "pull_request" ]; then
+          if [ "$EVENT_NAME" = "pull_request_target" ]; then
             # Automatic run triggered by the PR itself (not a /bug-check comment):
             # always the "run" subcommand against every matching rule.
             echo "pr-number=$PR_NUM_FROM_EVENT" >> "$GITHUB_OUTPUT"
@@ -136,7 +134,7 @@ jobs:
 
     steps:
       - name: Post running notice
-        # Automatic (pull_request-triggered) runs skip this: an "I'm running" ack
+        # Automatic (pull_request_target-triggered) runs skip this: an "I'm running" ack
         # with no findings yet is noise. Manual /bug-check comment runs keep it as
         # confirmation the command was received.
         if: github.event_name == 'issue_comment'
@@ -209,11 +207,11 @@ jobs:
           if [ "$SUBCOMMAND" = "run" ] || [ "$SUBCOMMAND" = "check-rule" ]; then
             cmd+=(--sarif .github/bug-checker-results.sarif)
           fi
-          # Automatic (pull_request-triggered) runs shouldn't post a comment when
+          # Automatic (pull_request_target-triggered) runs shouldn't post a comment when
           # there's nothing to report — that's noise without signal. Manual
           # /bug-check comment runs keep posting "no issues found" etc. as
           # confirmation the command ran.
-          if [ "$EVENT_NAME" = "pull_request" ]; then
+          if [ "$EVENT_NAME" = "pull_request_target" ]; then
             cmd+=(--quiet-if-clean)
           fi
           cmd+=(--post-comments --verbose)
