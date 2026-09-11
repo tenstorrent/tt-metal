@@ -1,4 +1,4 @@
-# B3: add direct SP8/TP1 MLA coverage and report operation priorities
+# Add direct SP8/TP1 MLA coverage and report operation priorities
 
 ## TL;DR
 
@@ -6,9 +6,11 @@ The requested eight-device MLA perf test is implemented and passed on a Galaxy c
 
 Draft completion summary; not posted.
 
+Reports and evidence branch: [`ssalice/mistral4-b3-findings`](https://github.com/tenstorrent/tt-metal/tree/ssalice/mistral4-b3-findings).
+
 ## Deliverable
 
-The existing MLA perf rows measure TP=4, while a PP4 stage uses TP=1. B3 adds an eight-device SP8/TP1 MLA row and reports its measured operation durations directly. It does not use `approximate_mla_galaxy_perf`, which assumes TP=4.
+The existing MLA perf rows measure TP=4, while a PP4 stage uses TP=1. The new test adds an eight-device SP8/TP1 MLA row and reports its measured operation durations directly. It does not use `approximate_mla_galaxy_perf`, which assumes TP=4.
 
 The test runs one MLA forward with a 51,200-token KV prefix and 5,120 new tokens. It supports LoudBox and a topology-checked eight-device Galaxy column. The wrapper labels the Galaxy result separately and records results without a performance threshold.
 
@@ -43,7 +45,7 @@ Start with MoE Dispatch/Combine and SDPA, then inspect projection matmuls and ex
 
 ## Remaining work
 
-B3 has the requested test row, direct local result and TP=1 ranking. A calibrated LoudBox threshold remains unverified. Useful follow-ups are repeated warm measurements across KV depths and correctness checks before changing SDPA or projection code.
+The requested test row, direct local result and TP=1 ranking are available. A calibrated LoudBox threshold remains unverified. Useful follow-ups are repeated warm measurements across KV depths and correctness checks before changing SDPA or projection code.
 
 ## Supporting material
 
