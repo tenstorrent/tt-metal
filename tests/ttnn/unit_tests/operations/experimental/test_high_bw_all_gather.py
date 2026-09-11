@@ -558,6 +558,51 @@ def test_high_bw_all_gather_glm_topk_uint32_page_larger_than_fabric_payload(mesh
 @run_for_blackhole("high_bw_all_gather requires Blackhole fabric")
 @pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "layout,dtype", [(ttnn.TILE_LAYOUT, ttnn.bfloat8_b), (ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16)], ids=["tile", "rm"]
+)
+def test_high_bw_all_gather_interleaves_repeated_stripes(mesh_device, layout, dtype):
+    """An input carrying more than one stripe must interleave them, not concatenate whole buffers.
+
+    Dense MLA's TP-deduped KVPE cache rides on this: its per-chip buffer is one narrow region of EVERY
+    block-cyclic chunk, so gathering it as [1, n_chunks, R, W] has to land rank t's chunk c at
+    c*(tp*R) + t*R. Concatenating the buffers instead would land it at t*(n_chunks*R) -- t-major, which
+    is a different sequence order and silently wrong. Verified against an SP-only sharding of the same
+    host tensor, so the expected placement is stated independently of this op.
+    """
+    sp, tp = tuple(mesh_device.shape)
+    n_chunks, rows_dev, width = 4, 32, 64
+    chunk_global = rows_dev * sp * tp
+
+    torch.manual_seed(0)
+    host = torch.rand((1, n_chunks, chunk_global, width), dtype=torch.bfloat16)
+
+    # A host mesh mapper cannot shard one tensor dim on both axes ("dims must be unique"), so shard it
+    # flat over the 8 devices row-major -- device s*tp+t gets rows [s*C/sp + t*R, +R) of every chunk,
+    # which IS the sp*tp block-cyclic assignment -- and stamp the 2D topology the cache declares.
+    source = _make_tensor(mesh_device, host, dtype, layout, ttnn.ShardTensorToMesh(mesh_device, dim=2))
+    dist_shape = ttnn.MeshShape(sp, tp)
+    source.update_tensor_topology(
+        ttnn.TensorTopology(
+            dist_shape,
+            [ttnn.PlacementShard(2), ttnn.PlacementShard(2)],
+            [ttnn.MeshCoordinate([c[i] for i in range(c.dims())]) for c in ttnn.MeshCoordinateRange(dist_shape)],
+        )
+    )
+
+    sp_only = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(sp, tp), dims=[2, None])
+    expected = _make_tensor(mesh_device, host, dtype, layout, sp_only)
+    output = _make_tensor(mesh_device, torch.zeros_like(host), dtype, layout, sp_only)
+
+    output = ttnn.experimental.high_bw_all_gather(source, dim=2, output_tensor=output, cluster_axis=1)
+
+    for got, want in zip(ttnn.get_device_tensors(output), ttnn.get_device_tensors(expected)):
+        assert torch.equal(got.cpu().to_torch(), want.cpu().to_torch())
+
+
+@run_for_blackhole("high_bw_all_gather requires Blackhole fabric")
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 def test_high_bw_all_gather_preserves_same_dim_sharding_on_other_axis(mesh_device, expect_error):
     """Gathering TP must preserve SP when both mesh axes shard the same tensor dimension."""
     global_shape = (1, 4, 256, 32)

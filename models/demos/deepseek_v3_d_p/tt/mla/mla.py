@@ -462,6 +462,9 @@ class ttMLA:
         self.tt_ccl = get_tt_ccl(mesh_device)
         self.tp_factor = mesh_device.shape[self.tp_axis]
         self.sp_factor = mesh_device.shape[self.sp_axis]
+        self._kv_dedup = self.tp_shard_kv and self.tp_factor > 1
+        self._kvpe_tp_gather_buffer = None
+        self._kv_dedup_chunks = 0
         assert (
             self.active_seq_len % self.sp_factor == 0
         ), f"active_seq_len ({self.active_seq_len}) must divide SP factor ({self.sp_factor})"
@@ -535,6 +538,29 @@ class ttMLA:
                 seq_len=seq_len,
                 kvpe_dim=self.kv_lora_rank + self.qk_rope_head_dim,
             )
+            if self._kv_dedup:
+                # KV dedup, ag-before: output of the TP gather that rebuilds one SP rank's slab
+                # (see _gather_kvpe_tp_to_sp). dim 1 is the chunk index, which is what makes the
+                # gather interleave the tp stripes per chunk instead of concatenating them t-major.
+                assert seq_len % self.active_seq_len == 0, (
+                    f"tp_shard_kv needs the cache to hold a whole number of chunks: seq_len {seq_len} "
+                    f"is not a multiple of chunk {self.active_seq_len}"
+                )
+                assert (
+                    self.active_seq_len_local % (self.tp_factor * ttnn.TILE_SIZE) == 0
+                ), f"tp_shard_kv needs a tile-aligned per-chip chunk stripe: {self.active_seq_len_local} / tp {self.tp_factor}"
+                self._kv_dedup_chunks = seq_len // self.active_seq_len
+                self._kvpe_tp_gather_buffer = self.tt_ccl.get_mla_high_bw_all_gather_buffer(
+                    name="kvpe_tp_ag_before",
+                    shape=[
+                        1,
+                        self._kv_dedup_chunks,
+                        self.active_seq_len_local,
+                        self.kv_lora_rank + self.qk_rope_head_dim,
+                    ],
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                )
         else:
             # All-gather K/V outputs + dummy joint_q/kv/v placeholders are uniform across layers
             # (config + seq_len + mesh), so they're owned once per model by TT_CCL and shared by every
@@ -593,7 +619,6 @@ class ttMLA:
         self._sparse_kv_gather_buffer = None
         self._kvpe_tp_stage_buffer = None
         # KV dedup shards the cache over BOTH axes, so its gather needs the scratch even at sp == 1.
-        self._kv_dedup = self.tp_shard_kv and self.tp_factor > 1
         if self._has_indexer and not self.kv_only and (self.sp_factor > 1 or self._kv_dedup):
             kvpe_row_width = self.sparse_kv_cache_format.storage_width(self.kv_cache_geometry)
             self._sparse_kv_gather_buffer = self.tt_ccl.get_mla_sparse_kv_gather_buffer(
@@ -680,6 +705,13 @@ class ttMLA:
     @staticmethod
     def kv_cache_to_host(kvpe_cache: MlaKvCache, mesh_device: ttnn.MeshDevice, sp_axis: int = 0):
         """Read and decode the logical KVPE cache in natural SP order."""
+        # A TP-deduped cache has no TP replica to collapse -- every tp coord holds a distinct stripe, so
+        # this composer would silently drop 1 - 1/tp of the sequence. gather_cache_natural reads that one.
+        stripes = mesh_device.shape[0] * mesh_device.shape[1]
+        assert ttMLA._declared_seq_shard_factor(kvpe_cache.storage) != stripes, (
+            "kv_cache_to_host reads an SP-sharded, TP-replicated cache; this one is TP-deduped "
+            "(dim 2 sharded across both axes). Use utils.test_utils.gather_cache_natural(tp_shard_kv=True)."
+        )
         host = ttnn.to_torch(
             kvpe_cache.storage,
             mesh_composer=ttnn.create_mesh_composer(
@@ -941,6 +973,50 @@ class ttMLA:
             is_decode_mode=False,
         )
 
+    def _gather_kvpe_tp_to_sp(self, kvpe_cache: MlaKvCache, cache_batch_idx: int, seq_len_local: int) -> ttnn.Tensor:
+        """Rebuild one SP rank's KVPE slab from its tp stripes, for a TP-deduped dense cache.
+
+        The cache is block-cyclic over sp*tp: chip (s,t) owns rows [c*C + s*C/sp + t*R, +R) of EVERY
+        chunk c, R = C/(sp*tp). Concatenating whole local buffers would land t-major -- all of t=0's
+        chunks, then all of t=1's -- which is not the order ring_mla reads. Gathering a
+        [1, n_chunks, R, W] view instead makes the chunk index its own stripe, so rank t's chunk c
+        lands at c*(tp*R) + t*R: the SP-only block-cyclic slab, byte for byte.
+
+        The slot select is spent on the slice rather than in the gather, because the op's
+        input_batch_index requires singleton dims between the batch and the gather dim and this view
+        carries the chunk count there. That also costs the gather its gathered_dim_size prefix bound,
+        so it moves whole cache capacity rather than the populated prefix.
+        """
+        storage = kvpe_cache.storage
+        slot_lo = cache_batch_idx if storage.shape[0] > 1 else 0
+        seq_dev, row_width = storage.shape[2], storage.shape[3]
+        rows_dev = seq_len_local // self.tp_factor
+        assert self._kvpe_tp_gather_buffer is not None
+        assert seq_dev == self._kv_dedup_chunks * rows_dev, (
+            f"tp_shard_kv gather view {self._kv_dedup_chunks} x {rows_dev} does not cover the "
+            f"{seq_dev}-row per-chip cache; chunk {seq_len_local} differs from the allocated "
+            f"{self.active_seq_len_local}"
+        )
+        slot = ttnn.slice(
+            storage,
+            [slot_lo, 0, 0, 0],
+            [slot_lo + 1, 1, seq_dev, row_width],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        slot = ttnn.reshape(slot, [1, self._kv_dedup_chunks, rows_dev, row_width])
+        # Both reshapes are pure views over a row-major-in-tiles buffer, but a reshape need not carry the
+        # distribution with it. Restamp the cache's: dim 2 is still the axis both mesh axes shard.
+        slot.update_tensor_topology(storage.tensor_topology())
+        gathered = ttnn.experimental.high_bw_all_gather(
+            slot,
+            dim=2,
+            output_tensor=self._kvpe_tp_gather_buffer,
+            num_links=self.ccl_num_links,
+            cluster_axis=self.tp_axis,
+        )
+        ttnn.deallocate(slot)
+        return ttnn.reshape(gathered, [1, 1, self._kv_dedup_chunks * seq_len_local, row_width])
+
     def _chunked_attn(
         self,
         *,
@@ -979,8 +1055,6 @@ class ttMLA:
 
         # Write this chunk into the cache. update_padded_kv_cache derives each chip's local write
         # offset on-device from kv_actual_global (chunk-aligned kv_actual -> uniform per-chip write).
-        # The dense ring_mla cache is still TP-replicated; only _sparse_chunked_attn is TP-dedup wired.
-        assert not self.tp_shard_kv, "tp_shard_kv is only supported on the sparse (DSA) path, not dense ring_mla"
         # Metadata (trace-safe) path reads slot_idx/kv_actual_global on-device from the metadata tensor.
         self._update_kv_cache(
             kvpe_cache,
@@ -990,7 +1064,25 @@ class ttMLA:
             kv_actual_isl=kv_actual_isl,
             actual_end=actual_end,
             metadata=metadata,
+            tp_axis=self.tp_shard_kv_axis,  # KV dedup: write only this chip's 1/tp window
         )
+
+        # KV dedup (ag-before): ring_mla's ring is the SP axis alone, so it cannot read a cache that is
+        # also split across TP. One TP gather rebuilds this SP rank's slab first and hands the op the
+        # same block-cyclic layout it consumes without dedup -- batch-1, so the slot select is spent here.
+        if self._kv_dedup:
+            # The slot select happens host-side in the slice, so a captured trace would bake this
+            # chunk's slot. The write op reads its slot from metadata[0] on-device and is trace-safe;
+            # this gather is not, so refuse rather than replay a trace pinned to one user.
+            assert metadata is None, (
+                "tp_shard_kv on the dense path is not trace-safe: _gather_kvpe_tp_to_sp slices the cache "
+                "slot host-side, which a captured trace would bake. Run with PREFILL_USE_TRACE=0."
+            )
+            ring_kv = self._gather_kvpe_tp_to_sp(kvpe_cache, cache_batch_idx, seq_len_local)
+            ring_cache_batch_idx = 0
+        else:
+            ring_kv = kvpe_cache.storage
+            ring_cache_batch_idx = cache_batch_idx
 
         # K and V are the single latent kvpe cache (V = first kv_lora_rank columns, materialized
         # in-op). logical_n = prior valid length + this chunk; cache_batch_idx selects this
@@ -1009,15 +1101,15 @@ class ttMLA:
                 "kv_cache_num_layers": self.layer_num,
                 "kv_cache_layer_idx": cache_layer_idx,
             }
-            ring_logical_n = kvpe_cache.storage.shape[2] * self.sp_factor  # global cache capacity
+            ring_logical_n = ring_kv.shape[2] * self.sp_factor  # global cache capacity
         else:
-            meta_slot_kwargs = {"kv_cache_batch_idx": cache_batch_idx, "kv_actual_isl": kv_actual_isl}
+            meta_slot_kwargs = {"kv_cache_batch_idx": ring_cache_batch_idx, "kv_actual_isl": kv_actual_isl}
             # Capped at the capacity ring_mla accepts: the last chunk's pad rows can sit past the cache
             # end, and only pad rows read them.
-            ring_logical_n = min(kv_actual_isl + chunk_size_global, kvpe_cache.storage.shape[2] * self.sp_factor)
+            ring_logical_n = min(kv_actual_isl + chunk_size_global, ring_kv.shape[2] * self.sp_factor)
         attn_out, _ = ttnn.transformer.ring_mla(
             tt_q,
-            kvpe_cache.storage,
+            ring_kv,
             persistent_output_buffer_kv=self._chunked_kv_buf,
             head_dim_v=self.kv_lora_rank,
             logical_n=ring_logical_n,
@@ -1591,6 +1683,10 @@ class ttMLA:
 
     def _dense_single_attn(self, *, tt_q, tt_kvpe, tt_kv_nope, kvpe_cache, cache_layer_idx, seq_len_local, **_):
         # Single-shot prefill: materialize V before causal ring SDPA.
+        assert not self._kv_dedup, (
+            "tp_shard_kv needs the chunked (block-cyclic) cache write; single-shot _write_kvpe fills a "
+            "TP-replicated cache and would write tp copies into a deduped allocation"
+        )
         self._write_kvpe(kvpe_cache, tt_kvpe, cache_layer_idx)
         tt_v_embedding = self._apply_wkv_b2(tt_kv_nope, seq_len_local)
         attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(

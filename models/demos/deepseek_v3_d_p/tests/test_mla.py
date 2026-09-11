@@ -48,6 +48,7 @@ from models.demos.deepseek_v3_d_p.utils.chunked_prefill_utils import (
 )
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
+from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_natural, tp_stripe_major_cache
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -550,6 +551,7 @@ def _run_chunked_prefill(
     determinism_check=False,
     profile=False,
     tight_cache=False,
+    tp_shard_kv=False,
 ):
     """Unified chunked-prefill scenario, decoupled from the reference.
 
@@ -700,6 +702,7 @@ def _run_chunked_prefill(
         active_seq_len=chunk_size_global,
         slot_num=num_users,
         layer_num=1,
+        tp_shard_kv=tp_shard_kv,
     )
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
     indexed_rope = rope_setup.get_rope_tensors_indexed(
@@ -720,6 +723,15 @@ def _run_chunked_prefill(
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
         num_users=num_users,
+        tp_axis=tp_axis if tp_shard_kv else None,
+    )
+    tp = mesh_shape[tp_axis]
+    cache_stripes = sp * tp if tp_shard_kv else sp
+    # Pin that dedup reached the allocator: without it the tp_sharded arm would silently be the sp_only
+    # one, and every PCC below would agree for the wrong reason.
+    assert tt_kvpe_cache.storage.shape[2] == seq_len_cache // cache_stripes, (
+        f"cache is {tt_kvpe_cache.storage.shape[2]} rows/chip, expected {seq_len_cache // cache_stripes} "
+        f"for {cache_stripes} stripes (tp_shard_kv={tp_shard_kv})"
     )
 
     hidden_shard_dims = [None, None]
@@ -730,11 +742,21 @@ def _run_chunked_prefill(
     out_concat_dims[sp_axis] = -2
     cache_shard_dims = [None, None]
     cache_shard_dims[sp_axis] = 2
+    if tp_shard_kv:
+        # TP-deduped: each tp coord owns a distinct stripe, laid out leading on dim 1 by
+        # tp_stripe_major_cache. A mesh mapper cannot shard one tensor dim on both axes.
+        cache_shard_dims[tp_axis] = 1
 
     # ---- preload the prior prefix (trace or random) into each slot, block-cyclic ----
     if prefill_len > 0:
         logger.info(f"Preloading {prefill_len}-token prefix into {num_users} slot(s) (block-cyclic host->device)...")
-        cache_host = torch.zeros(num_users, 1, seq_len_cache, kvpe_dim, dtype=torch.bfloat16)
+        cache_host = torch.zeros(
+            num_users,
+            tp if tp_shard_kv else 1,
+            seq_len_cache // (tp if tp_shard_kv else 1),
+            kvpe_dim,
+            dtype=torch.bfloat16,
+        )
         for u in range(num_users):
             kv_prior = users[u]["kv_prior"]
             if trace_pe_interleave:
@@ -746,7 +768,8 @@ def _run_chunked_prefill(
                 kv_prior[:, config.kv_lora_rank :] = torch.stack([pe[:, : d // 2], pe[:, d // 2 :]], dim=-1).reshape(
                     pe.shape[0], d
                 )
-            cache_host[u, 0] = blockcyclic_cache_host(kv_prior, sp, chunk_size_global, seq_len_cache, kvpe_dim)[0, 0]
+            bc = blockcyclic_cache_host(kv_prior, cache_stripes, chunk_size_global, seq_len_cache, kvpe_dim)[0, 0]
+            cache_host[u] = tp_stripe_major_cache(bc, sp, tp) if tp_shard_kv else bc
         cache_host_tt = ttnn.from_torch(
             cache_host,
             dtype=ttnn.bfloat8_b,
@@ -921,20 +944,17 @@ def _run_chunked_prefill(
     #      chunks). k_nope is compared directly; k_pe is direct for the CPU ref (mla_reference is
     #      Meta-style) and for NoPE, re-interleaved for a roped GPU trace -- see trace_pe_interleave. ----
     if any(users[u]["kv_post"] is not None for u in range(num_users)):
-        cache_sr = ttnn.to_torch(
-            tt_kvpe_cache.storage,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
-        ).to(torch.float32)[
-            :, :1
-        ]  # TP replica 0 -> [num_users, 1, seq_cache, kvpe]
-        p = blockcyclic_positions(sp, chunk_size_global, seq_len_cache)
+        # TP-replicated: replica 0 is the whole cache. TP-deduped: flatten the tp coords into linear
+        # chip order, which is the sp*tp block-cyclic sequence.
+        cache_flat, stripes = gather_cache_natural(tt_kvpe_cache.storage, mesh_device, tp_shard_kv)
+        p = blockcyclic_positions(stripes, chunk_size_global, seq_len_cache)
         kv_lora = config.kv_lora_rank
         d = kvpe_dim - kv_lora
         for u in range(num_users):
             if users[u]["kv_post"] is None:
                 continue
             nat = torch.empty(seq_len_cache, kvpe_dim, dtype=torch.float32)
-            nat[p] = cache_sr[u, 0]
+            nat[p] = cache_flat[u]
             dev = nat[prefill_len : users[u]["total_len"]]
             ref = users[u]["kv_post"][prefill_len:].to(torch.float32)
             ref_pe = ref[:, kv_lora:]
@@ -946,6 +966,43 @@ def _run_chunked_prefill(
             logger.info(f"  user {u} KV cache PCC -- k_nope: {nope_msg}  k_pe[{basis}]: {pe_msg}")
 
     logger.success(f"✓ Chunked prefill passed ({'trace' if use_trace else 'cpu'} ref, {num_users} user(s))")
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(l1_small_size=1152),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        )
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("tp_shard_kv", [False, True], ids=["sp_only", "tp_sharded"])
+@pytest.mark.parametrize("variant", ["kimi_k2_7"], indirect=True, ids=["k2_7"])
+@pytest.mark.skipif(not is_blackhole(), reason="kimi_k2_7 and the realtime profiler are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_mla_chunked_tp_shard_kv_perf(request, mesh_device, device_params, variant, tp_shard_kv):
+    """What TP-deduping the KVPE cache costs the dense chunked path: 50k prefix + one 5k chunk.
+
+    Reports rather than gates -- there is no recorded baseline for either arm. Run both ids and diff
+    the two numbers; the delta is the ag-before TP gather plus the slot slice, since the ring_mla call
+    itself is bit-identical between the arms (same slab, same ring, same program config).
+    """
+    total_ns = _run_chunked_prefill(
+        request,
+        mesh_device,
+        reference=None,
+        topology=per_axis_topology(device_params["fabric_config"]),
+        profile=True,
+        iters_isl=[5120],
+        prefill_len=50 * 1024,
+        tp_shard_kv=tp_shard_kv,
+    )
+    arm = "tp_sharded" if tp_shard_kv else "sp_only"
+    logger.info(f"kimi_k2_7 chunked 50k+5k MLA, {arm}: {total_ns:,.0f} ns ({total_ns / 1e6:.3f} ms)")
 
 
 # ---------------------------------------------------------------------------------------------------
@@ -1399,6 +1456,48 @@ def test_mla_chunked_prefill(
         topology=topology,
         use_metadata_tensor=use_metadata_tensor,
         determinism_check=determinism_check,
+        **kwargs,
+    )
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [
+        pytest.param((2, 4), fabric2d_device_params(l1_small_size=1152), id="fabric2d-2x4"),
+        pytest.param((8, 4), torus_xy_device_params(l1_small_size=1152), id="torus-xy-8x4"),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        dict(iters_isl=[5120] * 4),
+        dict(iters_isl=[2560, 2592, 5120]),
+        dict(iters_isl=[5120] * 2, num_users=2),
+        dict(iters_isl=[5120], prefill_len=20 * 1024),
+    ],
+    ids=["fullchunk-1u", "maxedge-1u", "fullchunk-2u", "deep-20k"],
+)
+@pytest.mark.parametrize("tp_shard_kv", [False, True], ids=["sp_only", "tp_sharded"])
+@pytest.mark.parametrize("variant", ["kimi_k2_7"], indirect=True, ids=["k2_7"])
+@pytest.mark.skipif(not is_blackhole(), reason="kimi_k2_7 is validated on Blackhole only")
+@pytest.mark.timeout(0)
+def test_mla_chunked_prefill_tp_shard_kv(request, mesh_device, kwargs, device_params, variant, tp_shard_kv):
+    """Dense chunked prefill with the KVPE cache ALSO sharded across TP (1/(sp*tp) per chip).
+
+    ring_mla rings the SP axis alone and cannot read a cache split across TP, so _chunked_attn rebuilds
+    each SP rank's slab with a TP all-gather first (ag-before) and hands the op the layout it always
+    consumed. Both arms run the same scenario against the same CPU reference: the sp_only arm is the
+    control, so a tp_sharded-only failure is the dedup, not the scenario.
+    """
+    if tp_shard_kv and mesh_device.shape[1] == 1:
+        pytest.skip("tp_shard_kv needs tp > 1")
+    _run_chunked_prefill(
+        request,
+        mesh_device,
+        reference="cpu",
+        topology=per_axis_topology(device_params["fabric_config"]),
+        tp_shard_kv=tp_shard_kv,
         **kwargs,
     )
 

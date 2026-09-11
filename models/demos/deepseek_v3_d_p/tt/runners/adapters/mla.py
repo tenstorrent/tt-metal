@@ -57,6 +57,10 @@ def unwrap_multimodal_config(cfg):
 class MLAPrefillAdapter(PrefillModelAdapter):
     """DeepSeek-V3-family prefill adapter (MLA + MoE over TtPrefillRuntime)."""
 
+    # allocate_kv_cache below forwards params.tp_shard_kv. The dense (ring_mla) path rebuilds each
+    # SP rank's slab with a TP all-gather before attention, so the op sees the layout it always saw.
+    supports_tp_shard_kv = True
+
     # ------------------------------------------------------------------
     # HF config
     # ------------------------------------------------------------------
@@ -104,6 +108,7 @@ class MLAPrefillAdapter(PrefillModelAdapter):
                 sp_axis=params.sp_axis,
                 num_layers=params.num_layers,
                 num_users=params.num_users,
+                tp_axis=params.tp_axis if params.tp_shard_kv else None,
             )
         )
 
