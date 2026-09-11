@@ -37,8 +37,11 @@ _EXPECTED = [
     ("T3K", "google/gemma-4-31B-it", 8192, False, 2048),
     ("T3K", "google/gemma-4-31B-it", 16384, False, 2048),
     # Unbounded ceiling re-measured at 32768; bounded now starts at 65536 so the
-    # multi-request sliding remap stays out of the served range.
+    # multi-request sliding remap stays out of the served range. Full HF 256k
+    # metal demo uses the same bounded + chunk-2048 path (unbounded 256k KV
+    # cannot fit ~96 GB T3K DRAM).
     ("T3K", "google/gemma-4-31B-it", 131072, True, 2048),
+    ("T3K", "google/gemma-4-31B-it", 262144, True, 2048),
     # ── 12B: stay unbounded through 128k on multi-chip BH for perf ────────
     ("P150x8", "google/gemma-4-12B-it", 131072, False, 4096),
     ("P150x8", "google/gemma-4-12B-it", 262144, False, 4096),
