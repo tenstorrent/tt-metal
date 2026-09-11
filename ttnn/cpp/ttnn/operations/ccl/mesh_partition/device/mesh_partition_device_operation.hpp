@@ -34,6 +34,12 @@ struct MeshPartitionDeviceOperation {
 
     using tensor_return_value_t = ttnn::Tensor;
 
+    // mesh_partition splits the tensor along cluster_axis, so the output's placement on that axis
+    // must record Shard(dim). Without this the output inherits the input's placement (typically
+    // Replicate) and the spec contradicts the data: consumers reading tensor_dim_shard_factor see
+    // a smaller shard count than the tensor actually has.
+    using topology_return_value_t = std::vector<tt::tt_metal::TensorTopology>;
+
     struct MeshPartition {
         using OverrideRuntimeArgsCallback = std::function<void(
             const void*,
@@ -79,6 +85,9 @@ struct MeshPartitionDeviceOperation {
 
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+
+    // Record the partition in the output topology (see topology_return_value_t above).
+    static topology_return_value_t compute_output_topologies(const operation_attributes_t&, const tensor_args_t&);
 };
 
 namespace detail {

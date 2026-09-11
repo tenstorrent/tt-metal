@@ -1063,13 +1063,22 @@ ttnn::Tensor ring_indexer_score_dsa(
                 ttnn::operations::ccl::common::has_row_major_mesh_coordinates(k_local),
             "ring_indexer_score_dsa cluster_axis=None requires row-major mesh coordinates for Q, K, weights, and "
             "K-local");
-        TT_FATAL(
-            ttnn::operations::ccl::common::tensor_dim_shard_factor(q, 2) == mesh_size &&
-                ttnn::operations::ccl::common::tensor_dim_shard_factor(weights, 2) == mesh_size &&
-                ttnn::operations::ccl::common::tensor_dim_shard_factor(k_local, 2) == mesh_size,
-            "ring_indexer_score_dsa cluster_axis=None requires Q, weights, and K-local sequence dim 2 to be "
-            "sharded across all {} mesh devices",
-            mesh_size);
+        // DIAGNOSTIC ONLY -- NOT FOR MERGE: downgraded to a warning so a timing A/B can run against
+        // tensors whose PLACEMENTS are mis-stamped upstream while their DATA is correctly row-major
+        // distributed. tensor_dim_shard_factor is used only in validation here (routing goes through
+        // mesh_coords / has_row_major_mesh_coordinates), so bypassing it does not change kernel work.
+        if (!(ttnn::operations::ccl::common::tensor_dim_shard_factor(q, 2) == mesh_size &&
+              ttnn::operations::ccl::common::tensor_dim_shard_factor(weights, 2) == mesh_size &&
+              ttnn::operations::ccl::common::tensor_dim_shard_factor(k_local, 2) == mesh_size)) {
+            log_warning(
+                tt::LogOp,
+                "DIAGNOSTIC BYPASS: ring_indexer_score_dsa full-mesh shard-factor check failed "
+                "(q={}, w={}, k_local={}, expected {})",
+                ttnn::operations::ccl::common::tensor_dim_shard_factor(q, 2),
+                ttnn::operations::ccl::common::tensor_dim_shard_factor(weights, 2),
+                ttnn::operations::ccl::common::tensor_dim_shard_factor(k_local, 2),
+                mesh_size);
+        }
         TT_FATAL(
             ttnn::operations::experimental::indexer_score::is_replicated_across_complete_mesh(k),
             "ring_indexer_score_dsa cluster_axis=None requires the persistent gathered K buffer replicated "

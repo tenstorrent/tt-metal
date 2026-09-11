@@ -95,6 +95,31 @@ MeshPartitionDeviceOperation::tensor_return_value_t MeshPartitionDeviceOperation
     return tensor;
 }
 
+MeshPartitionDeviceOperation::topology_return_value_t MeshPartitionDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& input_topology = tensor_args.input_tensor.tensor_topology();
+    auto output_placements = input_topology.placements();
+    const uint32_t rank = tensor_args.input_tensor.logical_shape().rank();
+    const int32_t shard_dim = static_cast<int32_t>(operation_attributes.dim);
+
+    if (operation_attributes.cluster_axis.has_value()) {
+        const uint32_t axis = *operation_attributes.cluster_axis;
+        // Only patch when the axes line up; a mismatched distribution rank is left alone rather
+        // than silently writing a placement that does not correspond to a real mesh axis.
+        if (axis < output_placements.size() && axis < input_topology.distribution_shape().dims()) {
+            output_placements[axis] = tt::tt_metal::distributed::MeshMapperConfig::Shard{shard_dim};
+        }
+    } else {
+        // No cluster axis: the partition consumed every axis, so each one shards `dim`.
+        for (auto& placement : output_placements) {
+            placement = tt::tt_metal::distributed::MeshMapperConfig::Shard{shard_dim};
+        }
+    }
+    (void)rank;
+    return {tt::tt_metal::TensorTopology(
+        input_topology.distribution_shape(), std::move(output_placements), input_topology.mesh_coords())};
+}
+
 }  // namespace ttnn::operations::ccl
 
 namespace ttnn::prim {

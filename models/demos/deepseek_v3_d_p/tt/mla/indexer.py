@@ -837,27 +837,63 @@ class TtIndexer:
         # scoring rather than running as a blocking pre-pass. The rebuilt slab is batch-1, so the in-kernel
         # slot select is not needed (cache_batch_idx=None); everything else is identical to the dense path.
         kv_deduped = self.tp_shard_kv and self.tp_factor > 1
-        k_local = self._tp_replicate_index_kbuf(index_kv_cache, cache_batch_idx) if kv_deduped else index_kv_cache
-        k_full = self.tt_ccl.get_indexer_ring_k_buffer(local_k=k_local, sp_axis=self.sp_axis)
+        # DIAGNOSTIC A/B (TT_GLM52_INDEXER_FUSED_FULLMESH=1): skip the TP-inner all-gather and let ONE
+        # full-mesh (sp*tp) fused ring gather the deduped cache directly. Full-mesh expresses the same
+        # striping through sp = mesh_size, so the tp-dedup flag and the SP/TP axis roles must all be unset.
+        fused_fullmesh = kv_deduped and os.environ.get("TT_GLM52_INDEXER_FUSED_FULLMESH") == "1"
+        if fused_fullmesh:
+            k_local = index_kv_cache
+            if os.environ.get("TT_GLM52_INDEXER_TOPO_DEBUG") == "1":
+                for _nm, _t in (("q_dev", q_dev), ("weights", weights), ("k_local", k_local)):
+                    _tp = _t.tensor_topology()
+                    _ds = tuple(int(d) for d in _tp.distribution_shape())
+                    _pl = [str(x) for x in _tp.placements()]
+                    logger.error(f"TOPO {_nm}: shape={tuple(_t.shape)} dist={_ds} placements={_pl}")
+            _ms = self.mesh_device.shape
+            k_full = self.tt_ccl.get_indexer_ring_k_buffer(
+                local_k=k_local, sp_axis=self.sp_axis, shards=_ms[0] * _ms[1]
+            )
+        else:
+            k_local = (
+                self._tp_replicate_index_kbuf(index_kv_cache, cache_batch_idx) if kv_deduped else index_kv_cache
+            )
+            k_full = self.tt_ccl.get_indexer_ring_k_buffer(local_k=k_local, sp_axis=self.sp_axis)
         host_start = time.perf_counter() if _fused_ring_host_timing_enabled() else None
-        logits = ttnn.experimental.ring_indexer_score_dsa(
-            q_dev,
-            k_full,
-            weights,
-            k_local,
-            self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.sp_axis),
-            cluster_axis=self.sp_axis,
-            topology=self.sp_ccl_topology,
-            num_links=self.ccl_num_links,
-            chunk_start_idx=start_pos,
-            program_config=cfg,
-            seq_subshard_axis=self.tp_axis if tpsp else None,
-            cache_batch_idx=None if kv_deduped else cache_batch_idx,
-            block_cyclic_sp_axis=self.sp_axis,
-            block_cyclic_chunk_local=seq_len,  # cache slab == chunk_size_global / sp (== Sq'·tp when TP-split)
-            block_cyclic_cache_tp_sharded=kv_deduped,  # rebuilt slab is TP-stripe-major: decode sp*tp stripes
-            kv_len=valid_pos,
-        )
+        if fused_fullmesh:
+            logits = ttnn.experimental.ring_indexer_score_dsa(
+                q_dev,
+                k_full,
+                weights,
+                k_local,
+                self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=None),
+                cluster_axis=None,
+                topology=self.sp_ccl_topology,
+                num_links=self.ccl_num_links,
+                chunk_start_idx=start_pos,
+                program_config=cfg,
+                cache_batch_idx=cache_batch_idx,
+                block_cyclic_chunk_local=q_dev.shape[2],
+                kv_len=valid_pos,
+            )
+        else:
+            logits = ttnn.experimental.ring_indexer_score_dsa(
+                q_dev,
+                k_full,
+                weights,
+                k_local,
+                self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.sp_axis),
+                cluster_axis=self.sp_axis,
+                topology=self.sp_ccl_topology,
+                num_links=self.ccl_num_links,
+                chunk_start_idx=start_pos,
+                program_config=cfg,
+                seq_subshard_axis=self.tp_axis if tpsp else None,
+                cache_batch_idx=None if kv_deduped else cache_batch_idx,
+                block_cyclic_sp_axis=self.sp_axis,
+                block_cyclic_chunk_local=seq_len,  # cache slab == chunk_size_global / sp (== Sq'·tp when TP-split)
+                block_cyclic_cache_tp_sharded=kv_deduped,  # rebuilt slab is TP-stripe-major: decode sp*tp stripes
+                kv_len=valid_pos,
+            )
         if host_start is not None:
             _fused_ring_host_timing["calls"] += 1
             _fused_ring_host_timing["seconds"] += time.perf_counter() - host_start

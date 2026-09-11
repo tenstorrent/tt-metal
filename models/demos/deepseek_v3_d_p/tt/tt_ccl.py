@@ -268,7 +268,7 @@ class TT_CCL:
             )
         return self.mla_high_bw_all_gather_buffers[key]
 
-    def get_indexer_ring_k_buffer(self, *, local_k, sp_axis):
+    def get_indexer_ring_k_buffer(self, *, local_k, sp_axis, shards=None):
         """Return the persistent full-K output buffer for the fused ring indexer.
 
         ``local_k`` is the persistent local cache [B,1,T/sp,D]. In indexed mode the fused op gathers
@@ -280,8 +280,11 @@ class TT_CCL:
         import torch
 
         local_shape = tuple(local_k.shape)
-        global_seq_len = local_shape[2] * self.mesh_device.shape[sp_axis]
-        key = (global_seq_len, local_shape[3], local_k.dtype, sp_axis)
+        # shards overrides the SP-axis extent: a full-mesh fused gather spans every device, so the
+        # gathered width is local * mesh_size rather than local * shape[sp_axis].
+        ring = shards if shards is not None else self.mesh_device.shape[sp_axis]
+        global_seq_len = local_shape[2] * ring
+        key = (global_seq_len, local_shape[3], local_k.dtype, sp_axis, ring)
         if key not in self.indexer_ring_k_buffers:
             self.indexer_ring_k_buffers[key] = ttnn.from_torch(
                 torch.zeros(1, 1, global_seq_len, local_shape[3]),
