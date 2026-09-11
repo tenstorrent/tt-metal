@@ -1893,11 +1893,16 @@ void sdpa_inner_loop(
              *
              * matmul_blocks internally waits on both inputs
              */
-            reconfig_data_format(dfb_k_in, dfb_q_in);
+            // QK = Q @ K^T. Quasar's matmul unpacker cannot transpose SrcA (K), so physically transpose the
+            // K-chunk into dfb::kt then run the standard matmul with transpose=false. Reuse matmul_blocks
+            // (ct=N); do NOT hand-roll a per-column matmul (ct=1 silently gives wrong PCC ~0.2). Ungated so
+            // WH validates the same path; the extra kt DFB is offset by the max_A/max_B merge to stay <= 8.
+            transpose_block(dfb_k_in, dfb::kt, Sk_chunk_t * DHt);
+            reconfig_data_format(dfb::kt, dfb_q_in);
             pack_reconfig_data_format(dfb_qk_im);
             matmul_blocks(
                 dfb_q_in,
-                dfb_k_in,
+                dfb::kt,
                 dfb_qk_im,
                 Sq_chunk_t,
                 Sk_chunk_t,
@@ -1908,7 +1913,7 @@ void sdpa_inner_loop(
                 qk_in0_block_w,
                 qk_subblock_h,
                 qk_subblock_w,
-                true /*transpose*/);
+                false /*transpose*/);
 
             /**
              * Note
