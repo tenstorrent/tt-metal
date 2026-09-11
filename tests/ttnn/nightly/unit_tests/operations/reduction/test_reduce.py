@@ -189,9 +189,10 @@ def test_rm_reduce_h_axis_split(device, reduce_op, dtype, keepdim, shape):
     assert tt_output.layout == ttnn.ROW_MAJOR_LAYOUT
 
     if dtype == ttnn.float32:
-        # Only mean has an accurate fp32 SFPU reduce; sum goes through the TF32-truncating FPU.
-        rtol = 0.002 if reduce_op == "mean" else 0.004
-        pcc_threshold, atol, frobenius_threshold = 0.999, 1e-3, 0.003
+        # Accurate FP32 uses SFPU; Quasar has no SFPU reduce LLKs and uses the tf32 FPU bound.
+        fpu = device.arch() == ttnn.device.Arch.QUASAR
+        rtol, atol = (0.004, 1e-3) if fpu else (1e-5, 1e-5)
+        pcc_threshold, frobenius_threshold = 0.999, 0.003
     else:
         pcc_threshold, rtol, atol, frobenius_threshold = 0.97, 0.01, 0.02, 0.005
     assert_numeric_metrics(
@@ -205,7 +206,7 @@ def test_rm_reduce_h_axis_split(device, reduce_op, dtype, keepdim, shape):
     )
 
 
-# Tall-H TILE reduces: Ht >= 32 splits the H reduce into ROW_MAJOR FP32 partials collapsed by a
+# Tall-H TILE reduces: Ht >= 20 splits the H reduce into ROW_MAJOR FP32 partials collapsed by a
 # second stage. Post-commit covers the shape matrix at keepdim=False; the very tall Wt=1 cases and
 # the keepdim variants live here.
 @pytest.mark.parametrize("reduce_op", ["mean", "sum"])
@@ -239,9 +240,10 @@ def test_tile_reduce_h_axis_split(device, reduce_op, dtype, keepdim, shape):
     assert tt_output.layout == ttnn.TILE_LAYOUT
 
     if dtype == ttnn.float32:
-        # Only mean has an accurate fp32 SFPU reduce; sum goes through the TF32-truncating FPU.
-        rtol = 0.002 if reduce_op == "mean" else 0.004
-        pcc_threshold, atol, frobenius_threshold = 0.999, 1e-3, 0.003
+        # Accurate FP32 uses SFPU; Quasar has no SFPU reduce LLKs and uses the tf32 FPU bound.
+        fpu = device.arch() == ttnn.device.Arch.QUASAR
+        rtol, atol = (0.004, 1e-3) if fpu else (1e-5, 1e-5)
+        pcc_threshold, frobenius_threshold = 0.999, 0.003
     else:
         # See the RM variant above: reducing torch.rand leaves the output near-constant, so bf16
         # quantization dominates the variance PCC measures. Relative error carries the check.

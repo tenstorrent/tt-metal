@@ -450,25 +450,34 @@ Tensor reduce(
                 /*post_mul_scaler=*/1.0f,
                 /*row_major_w_dense_path=*/false,
                 /*row_major_h_dense_path=*/false,
-                /*use_sfpu_reduce=*/use_sfpu_fp32_mean,
+                /*use_sfpu_reduce=*/use_sfpu_fp32_reduce,
                 /*num_h_slices=*/num_h_slices,
                 /*output_layout=*/tt::tt_metal::Layout::ROW_MAJOR);
+
+            // Stage 2 folds FP32 partials on SFPU even if stage 1 used the FPU; FPU would round each to tf32.
+            // Scaler vs post-mul follows the partial dtype: SFPU ignores the scaler CB.
+            const bool s2_use_sfpu = !tt::tt_metal::is_block_float(input_tensor.dtype()) && arch != tt::ARCH::QUASAR &&
+                                     config.fp32_dest_acc_en;
+            const bool s2_post_mul =
+                ttnn::prim::requires_post_mul(tt::tt_metal::ReduceOpMath::SUM, partials.dtype(), scaler, s2_use_sfpu);
+            const float s2_scaler = s2_post_mul ? 1.0f : scaler;
+            const float s2_mul = s2_post_mul ? scaler : 1.0f;
 
             // Stage 2: collapse the slice axis. TILE in defaults to TILE out.
             return ttnn::prim::reduce(
                 partials,
                 tt::tt_metal::ReduceOpMath::SUM,
                 tt::tt_metal::ReduceOpDim::H,
-                reduce_scaler,
+                s2_scaler,
                 output_mem_config,
                 output_dtype.value_or(input_tensor.dtype()),
                 config,
                 sub_core_grids,
                 /*negate=*/false,
-                /*post_mul_scaler=*/post_mul,
+                /*post_mul_scaler=*/s2_mul,
                 /*row_major_w_dense_path=*/false,
                 /*row_major_h_dense_path=*/true,
-                /*use_sfpu_reduce=*/use_sfpu_fp32_mean,
+                /*use_sfpu_reduce=*/s2_use_sfpu,
                 /*num_h_slices=*/1,
                 /*output_layout=*/output_layout == tt::tt_metal::Layout::ROW_MAJOR ? tt::tt_metal::Layout::ROW_MAJOR
                                                                                    : tt::tt_metal::Layout::TILE);

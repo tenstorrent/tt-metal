@@ -566,13 +566,11 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
         [&](auto& compute_cfg) {
             compute_cfg.sfpu_precision_mode = Precision::Precise;  // legacy math_approx_mode = false
             if (fp32_sfpu_reduce) {
-                // Legacy: unpack_to_dest_mode[src0_cb_index] = UnpackToDestFp32 — unpacks the reduce
-                // input straight into the fp32 DEST, bypassing the SrcA tf32 truncation. The RM
-                // path's chunk accumulator (legacy c_5) gets the same treatment so partials
-                // round-trip in fp32.
+                // Unpack FP32 inputs, RM rows, and partials to DEST so SrcA does not truncate them to tf32.
                 compute_cfg.unpack_modes.emplace(IN_DFB, UnpackMode::UnpackToDest);
                 if (rm_path) {
                     compute_cfg.unpack_modes.emplace(ACC_DFB, UnpackMode::UnpackToDest);
+                    compute_cfg.unpack_modes.emplace(RM_DFB, UnpackMode::UnpackToDest);
                 }
             }
             // Legacy left every other entry at Default (= UnpackToSrc). Metal 2.0 nonetheless requires an
