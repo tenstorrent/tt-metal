@@ -47,6 +47,17 @@ MAX_BATCHED_PREFILL_SEQ_LEN = 128 * 1024
 SUPPORTED_PREFILL_BATCH_SIZES = (1, 2, 4, 8, 16, 32)
 
 
+def batched_prefill_fits_token_budget(padded_batch, seq_len, max_prefill_chunk_size):
+    """Bound the combined activation footprint by the model/device's prefill budget.
+
+    The MLP flattens the batch and sequence dimensions. Checking each sequence
+    alone admits e.g. 32 x 1024 on Llama-8B N150, whose single-pass budget is
+    4096 tokens, and runs out of DRAM even before capturing a trace.
+    """
+    total_tokens = padded_batch * seq_len
+    return total_tokens <= max_prefill_chunk_size and total_tokens < MAX_BATCHED_PREFILL_SEQ_LEN
+
+
 def batched_prefill_padded_batch(batch_size, empty_slots, max_batch_size):
     """Rows the batched-prefill device batch needs for ``empty_slots``.
 
@@ -405,13 +416,15 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 ):
                     continue
 
-                # Token-limit guard below skips combinations that would
-                # exceed MAX_BATCHED_PREFILL_SEQ_LEN.
+                # Use the same combined-token budget as runtime routing. Warming
+                # larger batches would OOM on shapes runtime handles sequentially.
                 for batch_size in warmup_batch_sizes:
-                    if batch_size > 1 and batch_size * supported_length >= MAX_BATCHED_PREFILL_SEQ_LEN:
+                    if batch_size > 1 and not batched_prefill_fits_token_budget(
+                        batch_size, supported_length, self.model_args[model_id].max_prefill_chunk_size
+                    ):
                         logger.info(
                             f"Skipping batched prefill warmup for batch_size={batch_size}, "
-                            f"seq_len={supported_length}: exceeds token limit"
+                            f"seq_len={supported_length}: exceeds model/device token budget"
                         )
                         continue
 
@@ -725,6 +738,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         logger.info(f"Recording {len(self._pending_prefill_traces)} deferred prefill trace(s)")
         for trace_key, prepared in self._pending_prefill_traces.items():
             if prepared["forward_kwargs"].get("batch_size", 1) > 1:
+                # Compilation and persistent allocation have already finished.
                 # Capture this bucket only when requested so unused batch sizes
                 # do not consume the model's reserved trace region.
                 self._prepared_prefill_traces[trace_key] = prepared
@@ -1273,10 +1287,13 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     f"max_batch_size {self.model_args[0].max_batch_size}"
                 )
                 use_batched_prefill = False
-            elif padded_batch * prefill_seq_lens[0] >= MAX_BATCHED_PREFILL_SEQ_LEN:
+            elif not batched_prefill_fits_token_budget(
+                padded_batch, prefill_seq_lens[0], self.model_args[0].max_prefill_chunk_size
+            ):
                 logger.info(
                     f"Batched prefill disabled: {padded_batch} x {prefill_seq_lens[0]} = "
-                    f"{padded_batch * prefill_seq_lens[0]} tokens exceeds limit {MAX_BATCHED_PREFILL_SEQ_LEN}"
+                    f"{padded_batch * prefill_seq_lens[0]} tokens exceeds model/device token budget "
+                    f"{self.model_args[0].max_prefill_chunk_size} or reaches kernel limit {MAX_BATCHED_PREFILL_SEQ_LEN}"
                 )
                 use_batched_prefill = False
 

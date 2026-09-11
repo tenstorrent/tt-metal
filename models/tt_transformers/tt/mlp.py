@@ -168,6 +168,19 @@ class MLP(LightweightModule):
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
         seq_len = x.shape[-2]
+        chunk_size = self.model_config.get("MLP_PREFILL_CHUNK_SIZE", seq_len)
+        if mode == Mode.PREFILL and seq_len > chunk_size:
+            # The MLP is independent across tokens. Bound its gate/up/product intermediates
+            # without splitting attention, which may require a complete sliding window.
+            outputs = [
+                self.forward(x[..., start : min(start + chunk_size, seq_len), :], mode)
+                for start in range(0, seq_len, chunk_size)
+            ]
+            ttnn.deallocate(x)
+            output = ttnn.concat(outputs, dim=-2, memory_config=outputs[0].memory_config())
+            for chunk in outputs:
+                ttnn.deallocate(chunk)
+            return output
         TG = self.args.is_galaxy
         layer_num = max(self.layer_num, 0)  # cross_block uses the configuration of the first decoder
         activation_dtype = self.decoders_optimizations.get_tensor_dtype(

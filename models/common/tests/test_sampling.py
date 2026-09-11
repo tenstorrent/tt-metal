@@ -43,6 +43,7 @@ def test_sampling_precompile_preserves_logits_and_request_state(monkeypatch, all
 
     log_probs.set_log_probs_mode = set_log_probs_mode
     sampling = SamplingGenerator.__new__(SamplingGenerator)
+    sampling.sub_core_grids = None
     sampling._penalties_active = True
     sampling._trace_states = {}
     sampling.tt_sampling = SimpleNamespace(

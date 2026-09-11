@@ -33,15 +33,24 @@ from models.tt_transformers.tt.prefetcher import Prefetcher
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "seq_len",
-    (64 * 1024, 32 * 1024, 512, 128, 32),
+    "seq_len,mlp_prefill_chunk_size",
+    [
+        (64 * 1024, None),
+        (32 * 1024, None),
+        (512, None),
+        (128, None),
+        (32, None),
+        pytest.param(768, 512, id="chunked-prefill-with-tail"),
+    ],
 )
 @pytest.mark.parametrize(
     "batch_size",
     (1,),
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
-def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc, use_prefetcher):
+def test_mlp_inference(
+    seq_len, mlp_prefill_chunk_size, batch_size, mesh_device, reset_seeds, ensure_gc, use_prefetcher
+):
     dtype = ttnn.bfloat8_b
     mode = Mode.DECODE if seq_len <= 32 else Mode.PREFILL
 
@@ -60,6 +69,10 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc,
         prefetcher=prefetcher,
     )
     model_args.n_layers = 1
+    if mlp_prefill_chunk_size is not None:
+        if model_args.num_devices != 1:
+            pytest.skip("MLP prefill chunking is used on a single device")
+        model_args.model_config["MLP_PREFILL_CHUNK_SIZE"] = mlp_prefill_chunk_size
     state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
