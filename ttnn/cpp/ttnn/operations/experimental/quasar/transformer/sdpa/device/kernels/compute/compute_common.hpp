@@ -329,7 +329,9 @@ template <
     bool write_result_inplace = true,
     bool do_reduce = true,
     VectorMode vector_mode = VectorMode::RC>
-void sub_exp_block_bcast_cols_inplace(uint32_t in1_dfb, uint32_t reduce_dfb, uint32_t cols) {
+void sub_exp_block_bcast_cols_inplace(uint32_t in1_dfb, uint32_t reduce_dfb, uint32_t cols, uint32_t in1_offset = 0) {
+    // in1_offset: ring-front offset of the in1 (max) block. 0 unless in1 is the "cur" half of a merged
+    // 2-deep ping-pong DFB, where prev sits at the front [0,rows) and cur behind it [rows,2*rows).
     DataflowBuffer dfb_in0(in0_dfb);
     DataflowBuffer dfb_in1(in1_dfb);
     DataflowBuffer dfb_reduce(reduce_dfb);
@@ -356,7 +358,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_dfb, uint32_t reduce_dfb, uin
     PACK((llk_pack_relu_config(ReluConfig::zero())));
 
     dfb_in0.wait_front(rows * cols);
-    dfb_in1.wait_front(rows);
+    dfb_in1.wait_front(rows + in1_offset);
     if constexpr (do_reduce) {
         dfb_reduce.reserve_back(rows);
     }
@@ -379,7 +381,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_dfb, uint32_t reduce_dfb, uin
             // reissue); mul and exp are both SFPU op families, so each family's _init is issued once,
             // immediately before its own loop over j, rather than interleaved per-tile.
             for (uint32_t j = 0; j < dst_tiles; ++j) {
-                sub_tiles_bcast_cols(in0_dfb, in1_dfb, j, i, j);
+                sub_tiles_bcast_cols(in0_dfb, in1_dfb, j, in1_offset + i, j);
             }
             binop_with_scalar_tile_init();
             for (uint32_t j = 0; j < dst_tiles; ++j) {
@@ -391,7 +393,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_dfb, uint32_t reduce_dfb, uin
             }
 #else
             for (uint32_t j = 0; j < dst_tiles; ++j) {
-                sub_tiles_bcast_cols(in0_dfb, in1_dfb, j, i, j);
+                sub_tiles_bcast_cols(in0_dfb, in1_dfb, j, in1_offset + i, j);
                 constexpr int iterations = (vector_mode == VectorMode::RC) ? 32 /*ITER*/ : 8 /*ITER*/;
                 constexpr VectorMode vector_mode_exp = (vector_mode == VectorMode::RC) ? VectorMode::None : vector_mode;
                 exp_tile<true /* approx */, false /* scale_en */, InputClamping::None, iterations>(j, vector_mode_exp);
@@ -732,7 +734,9 @@ void exp_tile_first_column(uint32_t idst) {
  * out_dfb = exp((in0_dfb - in1_dfb) * scale_fp32)
  */
 template <uint32_t scale_fp32>
-void sub_exp_block(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_t num_tiles) {
+void sub_exp_block(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_t num_tiles, uint32_t in1_offset = 0) {
+    // in1_offset: ring-front offset of the in1 block. 0 unless in1 is the "cur" half of a merged 2-deep
+    // ping-pong DFB (prev at front [0,num_tiles), cur behind [num_tiles, 2*num_tiles)).
     DataflowBuffer dfb_in0(in0_dfb);
     DataflowBuffer dfb_in1(in1_dfb);
     DataflowBuffer dfb_out(out_dfb);
@@ -745,7 +749,7 @@ void sub_exp_block(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_
     exp_tile_init<EXP_APPROX_MODE>();
 #endif
     dfb_in0.wait_front(num_tiles);
-    dfb_in1.wait_front(num_tiles);
+    dfb_in1.wait_front(num_tiles + in1_offset);
     dfb_out.reserve_back(num_tiles);
 
 #ifndef ARCH_QUASAR
@@ -756,7 +760,7 @@ void sub_exp_block(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_
     for (uint32_t i = 0; i < num_tiles; i++) {
         invalidate_l1_cache();
         tile_regs_acquire();
-        sub_tiles(in0_dfb, in1_dfb, i, i, 0);
+        sub_tiles(in0_dfb, in1_dfb, i, in1_offset + i, 0);
 #ifdef ARCH_QUASAR
         // No fused exp_tile_first_column on Quasar, and Quasar's exp only supports scale=1.0 (see
         // exp_init's static_assert), so scale_fp32 (already fp32-encoded) is applied via a separate
@@ -1821,8 +1825,18 @@ void sdpa_inner_loop(
         // Set up ping pong buffers
         uint32_t alias_prev_sum = dfb_sum_A;
         uint32_t alias_cur_sum = dfb_sum_B;
+#ifdef ARCH_QUASAR
+        // Quasar tile-counter budget (8 self-loop DFBs): merge the max ping-pong into a single 2-deep
+        // DFB (dfb_max_A, depth 2*Sq_chunk_t; dfb_max_B is unused on Quasar). prev occupies the ring
+        // front [0,Sq_chunk_t), cur is appended behind it [Sq_chunk_t,2*Sq_chunk_t). reduce_c reserves
+        // cur at the back and reads prev at the front; the pop_front(prev) in the correction branch
+        // rotates cur down to the front to become the next prev. No std::swap.
+        uint32_t alias_prev_max = dfb_max_A;
+        uint32_t alias_cur_max = dfb_max_A;
+#else
         uint32_t alias_prev_max = dfb_max_A;
         uint32_t alias_cur_max = dfb_max_B;
+#endif
         uint32_t alias_mm2_prev_out = dfb_out_im_A;
         uint32_t alias_mm2_cur_out = dfb_out_im_B;
 
@@ -2062,7 +2076,16 @@ void sdpa_inner_loop(
              * outside of the loop over K chunks.
              */
             sub_exp_block_bcast_cols_inplace<dfb_qk_im, Sq_chunk_t, scale_fp32, true>(
-                alias_cur_max, alias_cur_sum, Sk_chunk_t);
+                alias_cur_max,
+                alias_cur_sum,
+                Sk_chunk_t,
+#ifdef ARCH_QUASAR
+                // cur lives behind prev in the merged max DFB once prev exists.
+                (processed_k_chunks > 0) ? Sq_chunk_t : 0
+#else
+                0
+#endif
+            );
 
             // Reconfigure unpackers: srcA (context 0) = dfb_v_in, srcB (context 1) = dfb_qk_im (operands are swapped in
             // matmul)
@@ -2094,7 +2117,14 @@ void sdpa_inner_loop(
                  * dfb_exp_max_diff = torch.exp((dfb_prev_max - dfb_cur_max) * scale)
                  * Scale is fused into exp again since max is the max of unscaled scores.
                  */
+#ifdef ARCH_QUASAR
+                // Merged max DFB: prev at front [0,Sq_chunk_t), cur at [Sq_chunk_t,2*Sq_chunk_t).
+                sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, dfb_exp_max_diff, Sq_chunk_t, Sq_chunk_t);
+#else
                 sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, dfb_exp_max_diff, Sq_chunk_t);
+#endif
+                // Rotate: drop prev from the front. On Quasar this shifts cur down to become the next
+                // prev; on WH the subsequent std::swap does the ping-pong instead.
                 DataflowBuffer(alias_prev_max).pop_front(Sq_chunk_t);
 
                 /**
@@ -2115,10 +2145,14 @@ void sdpa_inner_loop(
                     alias_mm2_prev_out, dfb_exp_max_diff, alias_mm2_cur_out);
             }
 
-            // Swap DFB handles to prepare for next iteration
+            // Swap DFB handles to prepare for next iteration.
             std::swap(alias_prev_sum, alias_cur_sum);
             std::swap(alias_mm2_prev_out, alias_mm2_cur_out);
+#ifndef ARCH_QUASAR
+            // On WH the max ping-pong is two separate DFBs, swapped here. On Quasar both aliases point
+            // at the single merged dfb_max, rotated by the pop_front(prev) above — no swap.
             std::swap(alias_prev_max, alias_cur_max);
+#endif
 
             processed_k_chunks++;
         }
@@ -2151,7 +2185,13 @@ void sdpa_inner_loop(
                 alias_cur_max, alias_prev_max, true);
 
             // 2. Compute exp((prev_max - cur_max) * scale) to rescale previous statistics
+#ifdef ARCH_QUASAR
+            // Merged max DFB: reduce_c above appended cur behind prev, so cur is at offset Sq_chunk_t.
+            sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, dfb_exp_max_diff, Sq_chunk_t, Sq_chunk_t);
+#else
             sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, dfb_exp_max_diff, Sq_chunk_t);
+#endif
+            // Rotate cur to the front (Quasar); the no-op swap below keeps WH's two-DFB ping-pong.
             DataflowBuffer(alias_prev_max).pop_front(Sq_chunk_t);
 
             // 3. Rescale previous sum: prev_sum *= exp(prev_max - cur_max)
