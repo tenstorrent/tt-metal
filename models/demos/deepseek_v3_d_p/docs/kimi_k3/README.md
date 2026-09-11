@@ -74,3 +74,35 @@ Measured on one Blackhole Galaxy, real Kimi-K3 weights:
 `test_kda_prepare_vs_scan.py`, `test_kda_decay_magnitude.py`, `test_kda_stage_bisect.py` and
 `test_layer0_stages.py` -- were deleted once these numbers were taken; their durable content is the
 op-level coverage under `tests/ttnn/nightly/unit_tests/operations/experimental/kda/`.
+
+## How many concurrent users fit
+
+Two allocations scale with `num_users`, and only one of them scales with context:
+
+| | what | per slot per chip, one rank | scales with context |
+|---|---|---|---|
+| KV | `num_users * mla_layers` user-major slots of `max_seq_len` rows, 576 wide, bfloat8_b, SP-sharded | 24.7 MiB at 56320 | yes |
+| KDA | one carry per (slot, KDA layer): recurrent `[1, heads/TP, 128, 128]` FLOAT32 + a bf16 convolution history | 27.9 MiB | **no** |
+
+A rank of the 93-layer split holds 6 MLA slabs and 18 KDA carries, so at 56320 a slot costs
+52.6 MiB/chip and the KDA half of that does not shrink when the request does.
+
+Measured by allocating against a 16.8 GiB/chip ballast standing in for one rank's weights, bisected
+to the first refusal from `bank_manager.cpp`:
+
+| context | total/slot | predicted | measured | users x context |
+|---|---|---|---|---|
+| 5120 | 30.1 MiB | 443 | 448 | 2.3M |
+| 56320 | 52.6 MiB | 254 | 272 | 15.3M |
+| 262144 | 142.7 MiB | 93 | 96 | 25.2M |
+
+Within 1 to 7% across a 51x context range; the gap is allocator reserve, 1.1 to 1.9 GiB/chip.
+
+`users x context` is therefore NOT the invariant it would be for a pure-KV model -- it grows 11x over
+that range, because the fixed KDA carry dominates at short context. And there is a ceiling around 480
+slots per rank that no amount of context shortening lifts, all of it the FLOAT32 recurrent state.
+Halving it to bf16 is the obvious lever if concurrency ever becomes the binding constraint.
+
+`scripts/`-adjacent reproduction lives in the run logs rather than the tree: the sweep allocates the
+same two structures the adapter does and needs no weights, so it answers in minutes rather than the
+hour a full bring-up costs.
