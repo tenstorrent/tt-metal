@@ -223,8 +223,10 @@ Measured on this branch (4x Blackhole p300c = the p300x2 QB2 config), all
 | --- | ---: | ---: | ---: |
 | batch 1, decode t/s/u (ISL 128) | **50** | **20.59** (48.56 ms/token) | **2.4x short** |
 | batch 1, TTFT cold (ISL 128) | **60 ms** | ~3600 ms warm (recorded) | **~60x short** |
-| batch 8, decode t/s/u (ISL 4096) | **34** | not measured at that ISL | — |
-| batch 16 | **32 / 24** | never measured | — |
+| batch 1, decode t/s/u (ISL 4096) | **49** | 10.44 (CI) | 4.7x short |
+| batch 8, decode t/s/u (ISL 4096) | **34** | 10.31 (CI) | 3.3x short |
+| batch 8, TTFT (ISL 4096) | **500 ms** | 678,105 ms (CI) | 1356x over |
+| batch 16 | **32 / 24** | killed at the 7200 s cap | — |
 | warm-prefill TTFT, any ISL | 60-300 ms | never measured | — |
 | `r1_gpqa_diamond` | ≥84.7 | **40** | fails |
 | 3 of 4 eval gates | measured | **not run at all** | — |
@@ -306,6 +308,79 @@ CI:
 the required points, 11 of 13 fit the 7200 s per-point cap; batch 8 at 131072
 (22,066 s) and batch 16 at 32768 (11,043 s) do not, and cannot until prefill
 stops being serialized.
+
+## 4c. Measured: the required points, in CI
+
+`mvasiljevic/qwen38-bench-required` in tt-inference-server replaces the shared
+sweep with the 13 Rev 0.11 points for this model only. Run
+[`34479389468`](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/34479389468)
+(tt-metal `6f60917b27b`, tt-inference-server `0fcbc763bfcb`) ran it
+13:58 -> 05:08, 15 h 10 m, and its log confirms the override took effect rather
+than silently falling back:
+
+```
+benchmark sweep for model_name='Qwen3.8-27B' hf_repo='Qwen/Qwen3.8-27B':
+  explicit requirement set, 13 points
+```
+
+**9 of the 13 points produced measurements** — the first this model has at the
+operating points its requirements name. Four hit the 7200 s per-point cap.
+
+| point | TTFT req | TTFT measured | over | t/s/u req | measured | short |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| isl 128 c1 | 60 ms | 3,141 ms | 52x | 50 | 10.56 | 4.7x |
+| isl 1024 c1 | 150 ms | 20,599 ms | 137x | 50 | 10.49 | 4.8x |
+| isl 4096 c1 | 500 ms | 80,571 ms | 161x | 49 | 10.44 | 4.7x |
+| isl 16384 c1 | 1800 ms | 324,854 ms | 180x | 47 | 10.06 | 4.7x |
+| isl 32768 c1 | 3500 ms | 657,640 ms | 188x | 46 | 9.60 | 4.8x |
+| isl 65536 c1 | 8000 ms | 1,334,569 ms | 167x | 43 | 8.78 | 4.9x |
+| isl 131072 c1 | 22000 ms | 2,733,658 ms | 124x | 40 | 7.52 | 5.3x |
+| isl 4096 **c8** | 500 ms | **678,105 ms** | **1356x** | 34 | 10.31 | 3.3x |
+| isl 32768 **c8** | 3500 ms | **5,471,008 ms** | **1563x** | 28 | 9.48 | 3.0x |
+| isl 261892 c1 | 60000 ms | — | KILLED at cap | 34 | — | — |
+| isl 131072 c8 | 22000 ms | — | KILLED at cap | 22 | — | — |
+| isl 4096 c16 | 500 ms | — | KILLED at cap | 32 | — | — |
+| isl 32768 c16 | 3500 ms | — | KILLED at cap | 24 | — | — |
+
+The run reports `completed/failure`: four return codes of 124 (timeout) make the
+acceptance gate FAIL. That is the gate working, not a crash.
+
+Two readings, and they point in different directions:
+
+- **Decode is short by a single flat factor.** 4.7-5.3x across ISL 128 to
+  131072, barely moving with context. That is what a weight-bound decode step
+  looks like, and it means the decode gap is not a context-scaling problem —
+  the whole of it is the step being ~5x slower than the roofline the targets
+  were set against.
+- **TTFT is short by orders of magnitude, and concurrency is what breaks it.**
+  52-188x over at concurrency 1, jumping to **1356x and 1563x at concurrency 8**
+  for the same ISLs. Nothing about decode explains a 7x degradation from
+  concurrency alone; serialized prefill explains all of it.
+
+### Where the cost model was wrong
+
+`doc/benchmark_requirements_gap` predicted **two** points would hit the cap
+(isl 131072 c8, isl 32768 c16). **Four** did. The two extra:
+
+| point | predicted | actual |
+| --- | ---: | --- |
+| isl 261892 c1, n=1 | 5520 s, fits | KILLED |
+| isl 4096 c16, n=64 | 5581 s, fits | KILLED |
+
+Both misses come from the same source: the model extrapolates prefill at a flat
+**21.03 ms/token** measured over ISL 128-16384. The 261892 result shows that is
+optimistic at long context — prefill is superlinear there, which is expected once
+attention over the growing KV in the 16 full-attention layers stops being a small
+term. And isl 4096 c16 was predicted at 5581 s against a 7200 s cap, i.e. inside
+the model's own error bar; it should have been called as "too close to say".
+
+The model stays accurate where it was validated — within 0.3-7% on points
+comfortably inside the cap — and should not be trusted within ~30% of the cap or
+beyond ISL 16384. A revised prefill curve needs points measured at 65536 and
+131072, which this run now provides: 1,334,569 ms at 65536 and 2,733,658 ms at
+131072 give **20.4 and 20.9 ms/token** respectively, so the flat rate holds to
+131072 and the superlinearity appears only past it. The 261892 kill therefore
+implies **>27.5 ms/token** at that length.
 
 ## 5. What to change in the benchmark configuration
 
