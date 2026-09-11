@@ -8,6 +8,18 @@ import ttnn
 import torch
 
 
+def test_kernel_prewarm_control_bindings_exist():
+    names = (
+        "kernel_prewarm_set_capture_only",
+        "kernel_prewarm_cold_start_needed",
+        "kernel_prewarm_offline_compile",
+    )
+    for name in names:
+        binding = getattr(ttnn._ttnn.device, name, None)
+        # Existence alone can pass on a stale/partial binding; the control API must be callable.
+        assert callable(binding), f"{name} binding missing or not callable"
+
+
 def test_open_device():
     """Simple unit test to test device open/close APIs"""
     device = ttnn.open_device(device_id=0, num_command_queues=1)

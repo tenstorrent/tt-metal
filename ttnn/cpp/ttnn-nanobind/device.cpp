@@ -41,6 +41,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel_prewarm_control.hpp>
 #include <tt-metalium/memory_reporter.hpp>
 #include <tt-metalium/experimental/kernel_cache.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
@@ -58,11 +59,6 @@ namespace {
 // Prevent Python callback GC while registered.  Keyed by handle returned from C++
 // RegisterProgramRealtimeProfilerCallback. Access only from the Python thread (always under GIL), so no mutex needed.
 std::unordered_map<uint64_t, PyObject*> python_realtime_callback_refs;
-
-struct PythonProgramRealtimeRecordBatch {
-    std::vector<tt::tt_metal::experimental::ProgramRealtimeRecord> records;
-    uint64_t dropped = 0;
-};
 
 void ttnn_device(nb::module_& mod) {
     mod.def(
@@ -178,19 +174,7 @@ void py_device_module_types(nb::module_& m_device) {
             [](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
                 return std::vector<std::string>(record.kernel_sources.begin(), record.kernel_sources.end());
             },
-            "Kernel source paths associated with this runtime ID; valid until the callback returns");
-
-    nb::class_<PythonProgramRealtimeRecordBatch>(
-        m_device, "ProgramRealtimeRecordBatch", "Batch of real-time profiler records delivered to a callback.")
-        .def_ro(
-            "records",
-            &PythonProgramRealtimeRecordBatch::records,
-            "ProgramRealtimeRecord entries in this batch; non-empty, oldest first")
-        .def_ro(
-            "dropped",
-            &PythonProgramRealtimeRecordBatch::dropped,
-            "Records lost since this callback last ran; nonzero if the callback could not keep up with incoming "
-            "profiler data");
+            "Kernel source paths associated with this runtime ID");
 
     nb::class_<tt::tt_metal::detail::MemoryView>(
         m_device, "MemoryView", "Class representing view of the memory (dram, l1, l1_small, trace) of a device.")
@@ -360,6 +344,33 @@ void device_module(nb::module_& m_device) {
         Example:
             >>> ttnn.device.SetRootDir("/path/to/tt_metal_home")
     )doc");
+
+    m_device.def(
+        "kernel_prewarm_set_capture_only",
+        &tt::tt_metal::KernelPrewarmSetCaptureOnly,
+        nb::arg("enabled"),
+        R"doc(
+            Flip kernel-prewarm capture-only mode at runtime: a pipeline run generates each model
+            kernel's genfiles and records its manifest recipe but skips the gcc compile and dispatch.
+            Used by the in-process cold-start to capture the manifest without holding the device for
+            the compile.
+        )doc");
+
+    m_device.def(
+        "kernel_prewarm_cold_start_needed",
+        &tt::tt_metal::KernelPrewarmColdStartNeeded,
+        R"doc(
+            True iff the in-process cold-start (capture warmup -> off-device batch compile -> real
+            warmup) is worth running for the current build_key. Query after device init, before warmup.
+        )doc");
+
+    m_device.def(
+        "kernel_prewarm_offline_compile",
+        &tt::tt_metal::KernelPrewarmOfflineCompile,
+        R"doc(
+            Compile every captured kernel-manifest recipe into the JIT cache without opening a device;
+            returns the number of targets built. Run after a capture-only warmup, before the real run.
+        )doc");
 
     m_device.def(  // afuller
         "SetDefaultDevice",
@@ -606,17 +617,7 @@ void device_module(nb::module_& m_device) {
     m_device.def(
         "synchronize_device",
         [](MeshDevice* device, std::optional<QueueId> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
-            // Guard before touching mesh_command_queue(): the queues are torn down on close, so looking one up on
-            // an uninitialized device would assert. Synchronize() is a no-op there anyway.
-            if (!device->is_initialized()) {
-                return;
-            }
-            if (cq_id.has_value()) {
-                tt::tt_metal::distributed::Synchronize(
-                    *device, device->mesh_command_queue(cq_id->get()), sub_device_ids);
-            } else {
-                tt::tt_metal::distributed::Synchronize(*device, std::nullopt, sub_device_ids);
-            }
+            tt::tt_metal::distributed::Synchronize(device, raw_optional(cq_id), sub_device_ids);
         },
         synchronize_device_doc.data(),
         nb::arg("device"),
@@ -732,20 +733,11 @@ void device_module(nb::module_& m_device) {
             PyObject* raw_cb = callback.ptr();
             Py_INCREF(raw_cb);
 
-            uint64_t handle = 0;
-            {
-                nb::gil_scoped_release release;
-                handle = tt::tt_metal::experimental::RegisterProgramRealtimeProfilerCallback(
-                    [raw_cb](const tt::tt_metal::experimental::ProgramRealtimeRecordBatch& batch) {
-                        PythonProgramRealtimeRecordBatch py_batch{
-                            .records = std::vector<tt::tt_metal::experimental::ProgramRealtimeRecord>(
-                                batch.records.begin(), batch.records.end()),
-                            .dropped = batch.dropped,
-                        };
-                        nb::gil_scoped_acquire gil;
-                        (nb::handle(raw_cb))(nb::cast(std::move(py_batch), nb::rv_policy::move));
-                    });
-            }
+            auto handle = tt::tt_metal::experimental::RegisterProgramRealtimeProfilerCallback(
+                [raw_cb](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
+                    nb::gil_scoped_acquire gil;
+                    (nb::handle(raw_cb))(nb::cast(record, nb::rv_policy::copy));
+                });
 
             python_realtime_callback_refs[handle] = raw_cb;
             return handle;
@@ -753,22 +745,20 @@ void device_module(nb::module_& m_device) {
         nb::arg("callback"),
         R"doc(
             Register a callback to be invoked when real-time profiler data arrives from a device.
-            The callback receives a ProgramRealtimeRecordBatch and is called from its own thread.
-            Callbacks that are too slow to keep up with incoming profiler data may miss records;
-            this is reported by ProgramRealtimeRecordBatch.dropped.
+            The callback receives a ProgramRealtimeRecord and is called from the real-time profiler
+            receiver thread.
 
             Multiple callbacks can be registered.
 
             Args:
-                callback: A callable that accepts a single ProgramRealtimeRecordBatch argument.
+                callback: A callable that accepts a single ProgramRealtimeRecord argument.
 
             Returns:
                 int: A handle that can be passed to UnregisterProgramRealtimeProfilerCallback.
 
             Example:
-                >>> def my_callback(batch):
-                ...     for record in batch.records:
-                ...         print(f"runtime_id={record.runtime_id} on chip {record.chip_id}")
+                >>> def my_callback(record):
+                ...     print(f"runtime_id={record.runtime_id} on chip {record.chip_id}")
                 >>> handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(my_callback)
         )doc");
 

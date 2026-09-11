@@ -281,19 +281,16 @@ bool dependencies_up_to_date(const std::string& out_dir, const std::string& obj)
     auto up_to_date = dependencies_up_to_date(hash_file);
 
     auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    // tok must stay a reference into the pre-warmed BuildCacheTelemetry singleton's owned_tokens_: a
+    // by-value static here would first-construct on a pool thread after atexit runs, reopening the
+    // process-exit use-after-destroy the prewarm warming closes.
     static auto& tok = tt::tt_metal::BuildCacheTelemetry::inst().register_metric("dependencies_up_to_date");
     tok.record(elapsed_ms);
 
     return up_to_date;
 }
 
-bool dependencies_up_to_date_file(const std::string& hash_file_path) {
-    std::ifstream hash_file(hash_file_path);
-    if (!hash_file.is_open()) {
-        return false;
-    }
-    return dependencies_up_to_date(hash_file);
-}
+void initialize_file_hash_cache() { (void)FileHashCache::instance(); }
 
 void clear_file_hash_cache() { FileHashCache::instance().clear(); }
 
