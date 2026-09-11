@@ -44,7 +44,7 @@ concurrency:
 jobs:
   review:
     container:
-      image: harbor.ci.tenstorrent.net/tenstorrent/tt-llk-ci:latest
+      image: harbor.ci.tenstorrent.net/ghcr.io/tenstorrent/tt-metal/tt-llk-ci-ubuntu-22-04:latest
     runs-on: tt-ubuntu-2204-small-stable
     timeout-minutes: 150         # measured full reviews can exceed 85 minutes
     permissions:
