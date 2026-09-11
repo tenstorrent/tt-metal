@@ -831,8 +831,12 @@ def test_layer_norm_compact_fp32_omits_centred_buffer(device, enabled_program_ca
     warm_output.deallocate(force=True)
 
     # The compact footprint fits only if the unused full-row XMM buffer is absent.
+    # 650 KiB per bank leaves this Blackhole configuration between the compact
+    # footprints with and without XMM; this is a footprint boundary, not random pressure.
     grid = device.compute_with_storage_grid_size()
-    pressure_tiles = (650 * 1024 * grid.x * grid.y + 2047) // 2048
+    pressure_bytes_per_bank = 650 * 1024
+    bf16_tile_bytes = 32 * 32 * 2
+    pressure_tiles = (pressure_bytes_per_bank * grid.x * grid.y + bf16_tile_bytes - 1) // bf16_tile_bytes
     l1_pressure = ttnn.allocate_tensor_on_device(
         ttnn.Shape((1, 1, 32, pressure_tiles * 32)),
         ttnn.bfloat16,
@@ -903,7 +907,9 @@ def test_l1_interleaved_near_capacity(device, enabled_program_cache):
     # program after the allocator span contracts. Occupying 650 KiB/core leaves
     # room for the block-streamed path, but not full-row residual replay.
     grid = device.compute_with_storage_grid_size()
-    pressure_tiles = (650 * 1024 * grid.x * grid.y + 2047) // 2048
+    pressure_bytes_per_bank = 650 * 1024
+    bf16_tile_bytes = 32 * 32 * 2
+    pressure_tiles = (pressure_bytes_per_bank * grid.x * grid.y + bf16_tile_bytes - 1) // bf16_tile_bytes
     l1_pressure = ttnn.allocate_tensor_on_device(
         ttnn.Shape((1, 1, 32, pressure_tiles * 32)),
         ttnn.bfloat16,
