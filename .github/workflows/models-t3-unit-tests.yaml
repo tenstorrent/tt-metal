@@ -32,6 +32,7 @@ on:
           - gemma-4-e4b
           - panoptic-deeplab
           - bevformer
+          - diffusiondrive
           - mistral-small-3.1-24b
           - sd35
           - mochi
