@@ -557,6 +557,7 @@
       models/demos/deepseek_v3_d_p/tests/kimi_k3/test_golden_contract.py \
       models/demos/deepseek_v3_d_p/tests/kimi_k3/test_layer_schedule.py \
       models/demos/deepseek_v3_d_p/tests/kimi_k3/test_cache_contract.py \
+      models/demos/deepseek_v3_d_p/tests/kimi_k3/test_runtime_contract.py \
       models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kda_golden.py \
       models/demos/deepseek_v3_d_p/tests/test_kv_ack.py \
       models/demos/deepseek_v3_d_p/tests/attn_res/model/test_attn_res_pipeline_split.py

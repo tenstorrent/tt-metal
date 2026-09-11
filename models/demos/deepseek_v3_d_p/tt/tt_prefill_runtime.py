@@ -579,11 +579,15 @@ class TtPrefillRuntime:
         # Per-element metadata: (slot_id, actual_start, actual_end), seeded for chunk 0.
         # ChunkMetadata, not a bare tuple: Mistral needs a 4th field (the llama4 query-scale buffer)
         # whose lifetime matches these scalars. None elsewhere, and fields 0-2 are unchanged.
+        # `make_llama4_scale_buffer` returns None for every variant without llama_4_scaling_beta, and
+        # a NoPE model (Kimi-K3) builds no RotarySetup at all, so there is nothing to ask -- reaching
+        # through an absent attribute would be the only difference between them.
+        rope_setup = getattr(self.model, "rope_setup", None)
         self._trace_metadata = ChunkMetadata(
             self._meta1_dev(0),
             self._meta1_dev(0),
             self._meta1_dev(chunk),
-            self.model.rope_setup.make_llama4_scale_buffer(chunk),
+            rope_setup.make_llama4_scale_buffer(chunk) if rope_setup is not None else None,
         )
         # Same three words packed, for the D2H ack record. Allocated whether or not the ack is wired:
         # set_d2h_ack_service() runs after compile(), and the capture needs an address that predates it.
