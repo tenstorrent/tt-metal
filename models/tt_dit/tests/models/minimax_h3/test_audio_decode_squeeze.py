@@ -49,7 +49,16 @@ RECIPES = {
     "off_ge3": {"bands_ge": (3, "off"), "post": "off"},
     "off_ge5": {"bands_ge": (5, "off"), "post": "off"},
     "weight_ge3": {"bands_ge": (3, "weight"), "post": "weight"},
+    "act": {"all": "act"},
+    "act_off_ge3": {"all": "act", "bands_ge": (3, "off"), "post": "off"},
+    "act_off_ge5": {"all": "act", "bands_ge": (5, "off"), "post": "off"},
+    # time-packed late bands (layers/audio_pack.py): 2 steps/row at 16 ch, 4 steps/row at 8 ch
+    "full_pack": {"pack": {5: 2, 6: 4}},
+    "act_pack": {"all": "act", "pack": {5: 2, 6: 4}},
+    "off_pack": {"all": "off", "pack": {5: 2, 6: 4}},
+    "act_off_ge3_pack": {"all": "act", "bands_ge": (3, "off"), "post": "off", "pack": {5: 2, 6: 4}},
 }
+PACK_KEY = "pack"
 
 
 def _conv_modules_by_band(decoder):
@@ -70,6 +79,8 @@ def _conv_modules_by_band(decoder):
 def apply_recipe(decoder, recipe: dict) -> dict:
     """Set ``split_mode`` per conv after construction (forward reads it per call; the unused residual is harmless)."""
     counts = {}
+    if PACK_KEY in recipe:
+        counts["pack"] = dict(recipe[PACK_KEY])
     for band, conv in _conv_modules_by_band(decoder):
         mode = None
         if "all" in recipe:
@@ -138,7 +149,7 @@ def test_audio_decode_squeeze(mesh_device, num_latent_frames, batch):
     rows = []
     baseline_out = None
     for name, recipe in _selected_recipes():
-        decoder, _ = _load(mesh_device)
+        decoder, _ = _load(mesh_device, pack_bands=recipe.get(PACK_KEY))
         counts = apply_recipe(decoder, recipe)
         eager, _ = _best(lambda: decoder(latents), mesh_device, n=1)
         try:
