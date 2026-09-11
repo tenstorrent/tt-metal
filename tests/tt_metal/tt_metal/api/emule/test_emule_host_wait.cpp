@@ -63,6 +63,8 @@ protected:
     void SetUp() override { ::testing::FLAGS_gtest_death_test_style = "threadsafe"; }
 
     void TearDown() override {
+        tt::tt_metal::emule_fiber::set_peer_progress_probe({});
+        tt::tt_metal::emule_fiber::set_peer_liveness_probe({});
         // A leaked fiber poisons the global registry, so every later test fails too — fix the FIRST.
         ASSERT_EQ(FiberScheduler::instance().oldest_live_spawn_generation(), UINT64_MAX)
             << "test left a live fiber in the process-global scheduler registry; if this is "
@@ -132,6 +134,23 @@ TEST_F(EmuleHostWait, HostFedPollWithCausalD2DPollResumes) {
     ASSERT_EQ(sched.pump(), RunOutcome::HostWait) << "a dry pump must preserve the causal host wait";
 
     host_ready.store(true, std::memory_order_release);
+    ASSERT_EQ(sched.pump(), RunOutcome::Completed);
+}
+
+// A shared-rank fixed-point snapshot can be transient at a scheduling boundary. A false peer probe
+// therefore requests another local quantum; it is not by itself proof of a deadlock.
+TEST_F(EmuleHostWait, TransientPeerFixedPointRetriesBeforeSuspending) {
+    std::atomic<bool> peer_ready{false};
+    std::atomic<unsigned> probe_calls{0};
+    tt::tt_metal::emule_fiber::set_peer_progress_probe(
+        [&probe_calls] { return probe_calls.fetch_add(1, std::memory_order_relaxed) != 0; });
+    spawn_fiber(polling_body(&peer_ready, /*host_fed=*/false, nullptr), 4, "d2d_receiver_poll");
+
+    auto& sched = FiberScheduler::instance();
+    ASSERT_EQ(sched.run_persistent(), RunOutcome::PeerWait);
+    EXPECT_GE(probe_calls.load(std::memory_order_relaxed), 2u);
+
+    peer_ready.store(true, std::memory_order_release);
     ASSERT_EQ(sched.pump(), RunOutcome::Completed);
 }
 

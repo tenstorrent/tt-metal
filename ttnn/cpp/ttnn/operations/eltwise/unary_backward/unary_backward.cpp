@@ -391,6 +391,9 @@ std::vector<Tensor> lgamma_bw(
 std::vector<Tensor> frac_bw(
     const Tensor& grad, const Tensor& /*input*/, const std::optional<MemoryConfig>& /*output_mem_config*/) {
     std::vector<Tensor> grad_tensor;
+    // Passthrough gradient, see #53874: no eltwise backward op relocates it.
+    // grad is returned as-is and keeps its own config; honouring the request here would
+    // mean materialising a copy where none is needed.
     grad_tensor.emplace_back(grad);
     return grad_tensor;
 }

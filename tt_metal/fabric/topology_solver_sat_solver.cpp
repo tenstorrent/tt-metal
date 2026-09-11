@@ -14,7 +14,14 @@ namespace tt::tt_fabric::detail {
 struct TopologySatSolver::Impl {
     mutable CaDiCaL::Solver solver;
 
-    Impl() { solver.set("quiet", 1); }
+    Impl() {
+        solver.set("quiet", 1);
+        // Congruence closure (gate extraction, CaDiCaL >= 2.1) spends minutes on the guarded at-least-k
+        // cardinality encodings this solver emits (preferred-hit objective under a host-group cap) and buys
+        // nothing for these CNFs: with it off the same instances solve in seconds. Correctness is unaffected;
+        // it is a preprocessing simplification only.
+        solver.set("congruence", 0);
+    }
 
     void reserve(int max_var) {
         if (max_var > 0) {

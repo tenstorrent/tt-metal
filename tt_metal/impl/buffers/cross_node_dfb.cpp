@@ -27,7 +27,7 @@ namespace tt::tt_metal::experimental {
 namespace {
 
 void initialize_cross_node_dfb(
-    IDevice* device,
+    distributed::MeshDevice* device,
     CoreCoord sender_core,
     const CoreRangeSet& receiver_cores,
     CoreRangeSet& sender_cores_out,
@@ -79,15 +79,13 @@ ConfigPageLayout compute_config_page_layout(uint32_t max_num_receivers_per_sende
     return ConfigPageLayout{.noc_xy_offset = noc_xy_offset, .counters_offset = counters_offset, .page_size = page_size};
 }
 
-bool is_compatible_borrowed_device(IDevice* expected, IDevice* buffer_device) {
+bool is_compatible_borrowed_device(distributed::MeshDevice* expected, IDevice* buffer_device) {
     if (expected == buffer_device) {
         return true;
     }
-    if (auto* mesh = dynamic_cast<distributed::MeshDevice*>(expected)) {
-        for (IDevice* local : mesh->get_devices()) {
-            if (local == buffer_device) {
-                return true;
-            }
+    for (IDevice* local : expected->get_devices()) {
+        if (local == buffer_device) {
+            return true;
         }
     }
     return false;
@@ -96,7 +94,7 @@ bool is_compatible_borrowed_device(IDevice* expected, IDevice* buffer_device) {
 }  // namespace
 
 CrossNodeDFB::CrossNodeDFB(
-    IDevice* device,
+    distributed::MeshDevice* device,
     CoreCoord sender_core,
     const CoreRangeSet& receiver_cores,
     uint32_t entry_size,
@@ -110,7 +108,7 @@ CrossNodeDFB::CrossNodeDFB(
 }
 
 CrossNodeDFB::CrossNodeDFB(
-    IDevice* device,
+    distributed::MeshDevice* device,
     CoreCoord sender_core,
     const CoreRangeSet& receiver_cores,
     uint32_t entry_size,
@@ -312,7 +310,7 @@ const CoreRangeSet& CrossNodeDFB::all_cores() const { return all_cores_; }
 
 uint8_t CreateCrossNodeDFB(
     Program& program,
-    IDevice* device,
+    distributed::MeshDevice* device,
     CoreCoord sender_core,
     const CoreRangeSet& receiver_cores,
     uint32_t entry_size,
@@ -324,7 +322,7 @@ uint8_t CreateCrossNodeDFB(
 
 uint8_t CreateCrossNodeDFB(
     Program& program,
-    IDevice* device,
+    distributed::MeshDevice* device,
     CoreCoord sender_core,
     const CoreRangeSet& receiver_cores,
     uint32_t entry_size,

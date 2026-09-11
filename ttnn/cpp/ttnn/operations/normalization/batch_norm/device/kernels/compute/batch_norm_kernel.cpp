@@ -23,26 +23,26 @@ ALWI void batchnorm_bcast_tiles(
     uint32_t dfb_bias,
     uint32_t dfb_tmp_1,
     uint32_t dfb_output_0,
-    uint32_t weight_has,
-    uint32_t bias_has) {
+    bool weight_has,
+    bool bias_has) {
     constexpr uint32_t onetile = 1;
     constexpr int dst0 = 0;
-    uint32_t weight_has_value = weight_has;
-    uint32_t bias_has_value = bias_has;
+    const bool weight_has_value = weight_has;
+    const bool bias_has_value = bias_has;
     auto dfb_affine_or_out = (weight_has_value || bias_has_value) ? dfb_tmp_1 : dfb_output_0;
     auto dfb_scaled_output = (bias_has_value) ? dfb_tmp_1 : dfb_output_0;
 
-    DataflowBuffer dfb_bcast_obj(dfb_bcast);          // batch_mean, broadcast against the input
-    DataflowBuffer dfb_other_obj(dfb_other);          // input tiles
-    DataflowBuffer dfb_batch_var_obj(dfb_batch_var);  // batch_var
-    DataflowBuffer dfb_den_obj(dfb_den);              // 1/(sqrt(batch_var + eps))
-    DataflowBuffer dfb_weight_obj(dfb_weight);        // weight tensor
-    DataflowBuffer dfb_bias_obj(dfb_bias);            // bias tensor
-    DataflowBuffer dfb_tmp_1_obj(dfb_tmp_1);          // (input - batch_mean)/(sqrt(batch_var + eps))
+    DataflowBuffer dfb_bcast_obj(static_cast<uint16_t>(dfb_bcast));          // batch_mean, broadcast against the input
+    DataflowBuffer dfb_other_obj(static_cast<uint16_t>(dfb_other));          // input tiles
+    DataflowBuffer dfb_batch_var_obj(static_cast<uint16_t>(dfb_batch_var));  // batch_var
+    DataflowBuffer dfb_den_obj(static_cast<uint16_t>(dfb_den));              // 1/(sqrt(batch_var + eps))
+    DataflowBuffer dfb_weight_obj(static_cast<uint16_t>(dfb_weight));        // weight tensor
+    DataflowBuffer dfb_bias_obj(static_cast<uint16_t>(dfb_bias));            // bias tensor
+    DataflowBuffer dfb_tmp_1_obj(static_cast<uint16_t>(dfb_tmp_1));  // (input - batch_mean)/(sqrt(batch_var + eps))
     // output -- > [(input - batch_mean)/(sqrt(batch_var + eps))] * weight
-    DataflowBuffer dfb_output_0_obj(dfb_output_0);
-    DataflowBuffer dfb_affine_or_out_obj(dfb_affine_or_out);
-    DataflowBuffer dfb_scaled_output_obj(dfb_scaled_output);
+    DataflowBuffer dfb_output_0_obj(static_cast<uint16_t>(dfb_output_0));
+    DataflowBuffer dfb_affine_or_out_obj(static_cast<uint16_t>(dfb_affine_or_out));
+    DataflowBuffer dfb_scaled_output_obj(static_cast<uint16_t>(dfb_scaled_output));
 
     // 1/(sqrt(batch_var + eps))
     dfb_den_obj.reserve_back(onetile);
@@ -138,11 +138,11 @@ ALWI void batchnorm_bcast_tiles(
 }
 
 void kernel_main() {
-    uint32_t num_tiles = get_arg(args::num_tiles);
-    uint32_t tile_freq = get_arg(args::tile_freq);
+    const uint32_t num_tiles = get_arg(args::num_tiles);
+    const uint32_t tile_freq = get_arg(args::tile_freq);
     uint32_t tile_start = get_arg(args::tile_start);
-    constexpr uint32_t weight_has_value = get_arg(args::weight_has_value) == 1;
-    constexpr uint32_t bias_has_value = get_arg(args::bias_has_value) == 1;
+    constexpr bool weight_has_value = get_arg(args::weight_has_value) == 1;
+    constexpr bool bias_has_value = get_arg(args::bias_has_value) == 1;
 
     if (num_tiles == 0) {
         return;
@@ -154,8 +154,8 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb_other, dfb_bcast, dfb::out);
 
-    uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
-    uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
+    const uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
+    const uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     constexpr uint32_t onetile = 1;
     DataflowBuffer dfb_eps_obj(dfb::eps);  // one tile of eps, filled by the reader

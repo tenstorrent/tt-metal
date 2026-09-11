@@ -83,12 +83,15 @@ class UnpackerTilizeA(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
+        tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         num_faces_r_dim = compute_unit.src_a.tile_shape.num_faces_r_dim
         face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
+        l1_row_idx = f"{block.tile_id_global} * {num_faces_r_dim} * {face_r_dim}"
 
         return (
-            f"_llk_unpack_tilize_<p_unpacr::UNP_A>"
-            f"({block.tile_id_global} * {num_faces_r_dim} * {face_r_dim});\n"
+            f"_llk_unpack_tilize_set_src_offset_<p_unpacr::UNP_A>"
+            f"({tensor_shape}, {l1_row_idx});\n"
+            f"_llk_unpack_tilize_<p_unpacr::UNP_A>(0);\n"
         )
 
     def uninit(

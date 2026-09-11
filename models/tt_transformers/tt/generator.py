@@ -1181,6 +1181,16 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 # For batched prefill: pass full page_table (function handles slot placement)
                 # For non-batched prefill: pass sliced page_table for current user (like original code)
                 page_table_for_user = page_table if use_batched_prefill else page_table[idx : idx + 1]
+                # A resumed chunk needs a page table spanning the cached tokens
+                # too: ``prefill_forward_single_user_text`` slices
+                # ``chunk_page_table`` at an absolute block offset, so a
+                # chunk-width table leaves that slice inside its own zero pad and
+                # ``paged_fill_cache`` writes the chunk into physical block 0.
+                # ``seq_len`` is the cumulative prompt length; ``prefill_seq_len``
+                # is only this chunk's padded width.
+                page_table_use_full_len = bool(
+                    not use_batched_prefill and not enable_trace_current_prompt and num_cached_tokens
+                )
                 page_table_user = self._get_prefill_user_page_table(
                     page_table_for_user,
                     kv_cache[model_id],
@@ -1190,6 +1200,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     use_batched_prefill=use_batched_prefill,
                     user_id=batch_user_ids if use_batched_prefill else user_id,
                     padded_batch_size=padded_batch if use_batched_prefill else None,
+                    use_full_prompt_len=page_table_use_full_len,
                 )
                 full_page_table_user = None
                 if enable_trace_current_prompt and not use_batched_prefill:

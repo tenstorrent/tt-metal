@@ -553,6 +553,30 @@ targets:
             accuracy:
               top1: 95
               top5: 100
+  exaone-4.5-33b:
+    aliases: ["EXAONE-4.5-33B", "LGAI-EXAONE/EXAONE-4.5-33B"]
+    skus:
+      bh_loudbox:
+        entries:
+          - batch_size: 1
+            seq_len: 512
+            status: active
+            perf:
+              # Measured 2026-08-25 on P150x8: 36.3 t/s/u decode, TTFT 51 ms.
+              decode_t/s/u: 34
+            accuracy:
+              # Measured 2026-08-25 (performance/bfp8, ci-token-matching): 91.40 / 99.60.
+              top1: 89
+              top5: 98
+          - batch_size: 32
+            seq_len: 712
+            status: active
+            perf:
+              # Measured 2026-08-25 on P150x8: 34.1 t/s/u (1090 t/s), TTFT 14.4 ms.
+              decode_t/s/u: 32
+              prefill_time_to_first_token: 14.4
+            accuracy: {}
+
   llama3.1-8b:
     aliases: ["Llama-3.1-8B", "meta-llama/Llama-3.1-8B-Instruct"]
     skus:
@@ -657,11 +681,16 @@ targets:
           # tripped the validator's "much better than expected" upper bound. The 14 scheduled
           # runs before #48886 sat at 18.9-21.3 t/s/u with no runner correlation, so this is a
           # genuine step change from that optimization, not machine variance.
+          # Re-seeded 2026-09-08 from the last 3 scheduled b4 data-parallel runs (34008626074,
+          # 34079232201, 34183001770; three different qb2 tiles): 207.6-208.5 t/s, 51.9-52.1 t/s/u.
+          # Consistent step up from 149/37, so the old center tripped the "much better than
+          # expected" upper bound (171.8 / 42.9) on every run. TTFT unchanged (still in band).
+          # Validated on run 34255364518 (job 102168738297).
           - status: active
             perf:
               prefill_time_to_first_token: 14.4
-              decode_t/s/u: 37.3
-              decode_t/s: 149.4
+              decode_t/s/u: 52.0
+              decode_t/s: 208.0
             accuracy:
               top1: 90.0
               top5: 97.6
@@ -1250,7 +1279,10 @@ targets:
               # center left the tol-0.4 floor at 211ms, which the ~205ms cluster kept
               # tripping ("much better than expected"). Center on the observed mean so
               # the [178, 414] band spans both clusters and still gates gross regressions.
-              prefill_time_to_first_token: 296
+              # 2026-09-08: a 167 ms reading (run 34013235507) fell under the 178 floor; recenter
+              # on 260 so the tol-0.4 band [156, 364] still covers both clusters. Validated on run
+              # 34255378909 (job 102166690435).
+              prefill_time_to_first_token: 260
               prefill_time_to_first_token_tolerance: 0.4
               # decode_t/s/u is run-to-run unstable (see #48510). The earlier 18.0 center
               # (set pre-data, post-#48037) is now stale-low: the last 8 scheduled runs

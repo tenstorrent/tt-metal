@@ -134,7 +134,8 @@ class MeshConfig:
 
     def allgather(self, tensor, ccl_manager, memory_config=None, axis=0, dim=3, linear=False):
         """
-        All-gather operation for tensor parallel communication
+        All-gather operation for tensor parallel communication (all_gather_async, topology from the CCL
+        manager). The MSA K/V/index_k SP gathers use high_bw_all_gather instead: see attention/msa.py.
 
         Note: Caller should check if communication is needed before calling
         """

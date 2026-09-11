@@ -49,19 +49,29 @@ class KimiK3Config:
     NUM_LIMITED_GROUPS = 1
     ROUTE_SCALE = 1.0  # routed_scaling_factor
     ROUTED_EXPERT_HIDDEN_SIZE = 3584  # LatentMoE: routed experts run at a reduced hidden dim
+    # Routed-expert hybrid split: experts with <= this many active tokens go to
+    # moe_fused_swiglu, the rest to unified_routed_expert_moe. Measured crossover on the
+    # 3584x3072 routed-expert shape (1.11x at 768, 0.97x at 896); it is the last full M_BLOCK
+    # boundary before the fused op opens another block while the composite's chunk
+    # schedule stays flat, so the two costs cross just above it.
+    # Not enabled: only Kimi K2.6/K2.7 and GLM 5.1/5.2 dispatch both routed-expert ops today.
+    # The measured crossover is kept under _MEASURED so it is not re-derived; rename it back to
+    # ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD to turn the split on, which is all the readers look for.
+    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 768
 
     # Above this, moe_grouped_topk's circular buffers (sized from NUM_ROUTED_EXPERTS/32) no longer fit
     # L1 alongside the height-sharded gate input, and the program fails to validate. Enforced by
     # TtMoEGateConfig as both the default per-chip depth and a ceiling on any explicit sp_dim.
     MAX_GATE_SEQ_LEN_PER_CHIP = 3200
 
-    # Gate-test device-mode scores bar, relaxing the shared 0.93; see #52569. 896 experts under sigmoid
-    # near-tie the 16th and 17th scores often enough that device precision swaps a pick, and the
-    # spread across Blackhole Galaxies (0.886 - 0.952) straddles the shared bar.
-    GATE_SCORES_PCC_DEVICE = 0.87
     # Upstream KimiSparseMoeBlock builds ONE KimiMLP for the shared expert, not num_shared_experts of
     # them: shared_experts.gate_proj.weight is [6144, 7168].
     SHARED_EXPERT_INTERMEDIATE_SIZE = MOE_INTERMEDIATE_SIZE * NUM_SHARED_EXPERTS  # 6144
+
+    # Gate-test device-mode scores bar. pcc_scores sorts both sides, so this measures the
+    # selected-weight distribution rather than slot alignment; 896 experts, top-16 floors at
+    # 0.9989 on a 2x4 Blackhole mesh, the tightest reachable shape.
+    GATE_SCORES_PCC_DEVICE = 0.988
 
     # Model architecture
     NUM_LAYERS = 93

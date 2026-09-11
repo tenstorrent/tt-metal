@@ -73,6 +73,40 @@ def test_unary_composite_clamp_ttnn(input_shapes, min_val, max_val, device, expe
 
 
 @pytest.mark.parametrize(
+    "min_val, max_val",
+    [
+        (-10, None),
+        (None, 10),
+        (-10, 10),
+    ],
+)
+def test_clamp_tensor_bounds_output_tensor(min_val, max_val, device):
+    # Regression test for issue #55334: the tensor-bounds overload of ttnn.clamp
+    # ignored the output_tensor argument and silently left the caller-supplied
+    # buffer unwritten.
+    input_shape = torch.Size([1, 1, 32, 32])
+    in_data, input_tensor = data_gen_with_range(input_shape, -100, 100, device)
+
+    min_tensor = (
+        ttnn.full(input_shape, min_val, device=device, layout=ttnn.TILE_LAYOUT) if min_val is not None else None
+    )
+    max_tensor = (
+        ttnn.full(input_shape, max_val, device=device, layout=ttnn.TILE_LAYOUT) if max_val is not None else None
+    )
+
+    preallocated_output = ttnn.zeros(input_shape, device=device, layout=ttnn.TILE_LAYOUT)
+    result = ttnn.clamp(input_tensor, min_tensor, max_tensor, output_tensor=preallocated_output)
+
+    golden_function = ttnn.get_golden_function(ttnn.clamp)
+    golden_tensor = golden_function(in_data, min_val, max_val)
+
+    # The op's return value must match the golden result...
+    assert compare_pcc([result], [golden_tensor])
+    # ...and the preallocated output_tensor buffer must have actually been written.
+    assert compare_pcc([preallocated_output], [golden_tensor])
+
+
+@pytest.mark.parametrize(
     "input_shapes",
     (
         (torch.Size([1, 1, 32, 32])),
@@ -202,7 +236,7 @@ def test_unary_polygamma_ttnn(input_shapes, k, device):
     output_tensor = ttnn.polygamma(input_tensor, k)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(golden_tensor, output_tensor, ulp_threshold=1)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=1)
 
 
 # Locks in accuracy at the lower domain boundary (x ~ 0.5), where the exact-summation
@@ -226,7 +260,7 @@ def test_unary_polygamma_boundary_ttnn(input_shapes, k, device):
     output_tensor = ttnn.polygamma(input_tensor, k)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(golden_tensor, output_tensor, ulp_threshold=2)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=2)
 
 
 @pytest.mark.parametrize(
