@@ -14,11 +14,7 @@ using namespace tt::tt_metal;
 namespace ttnn::experimental::prim {
 
 PagedUpdateCacheDeviceOperation::program_factory_t PagedUpdateCacheDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
-    // Use mesh workload factory when mesh_coords is provided to enable coordinate filtering
-    if (operation_attributes.mesh_coords.has_value()) {
-        return PagedUpdateCacheMeshWorkloadFactory{};
-    }
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     return PagedUpdateCacheProgramFactory{};
 }
 
@@ -322,14 +318,12 @@ ttsl::hash::hash_t PagedUpdateCacheDeviceOperation::compute_program_hash(
     // Include parameters that affect program structure:
     // - compute_kernel_config: affects compile-time args (fp32_dest_acc_en)
     // - share_cache: affects program structure (semaphore setup)
-    // - mesh_coords: affects program factory selection
     // - block_size_override: enters compile-time args
     // - num_kv_heads_override: enters compile-time args
     // - cache_position_modulo: enters compile-time args
     return operation::hash_operation<PagedUpdateCacheDeviceOperation>(
         args.compute_kernel_config,
         args.share_cache,
-        args.mesh_coords,
         args.block_size_override,
         args.num_kv_heads_override,
         args.cache_position_modulo,
@@ -350,7 +344,6 @@ ttnn::experimental::prim::PagedUpdateCacheDeviceOperation::tensor_return_value_t
     const std::optional<const Tensor>& page_table,
     uint32_t batch_offset,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords,
     std::optional<uint32_t> block_size_override,
     std::optional<uint32_t> num_kv_heads_override,
     std::optional<uint32_t> cache_position_modulo) {
@@ -364,7 +357,6 @@ ttnn::experimental::prim::PagedUpdateCacheDeviceOperation::tensor_return_value_t
         .batch_offset = batch_offset,
         .compute_kernel_config = kernel_config_val,
         .share_cache = share_cache_arg,
-        .mesh_coords = mesh_coords,
         .block_size_override = block_size_override,
         .num_kv_heads_override = num_kv_heads_override,
         .cache_position_modulo = cache_position_modulo};

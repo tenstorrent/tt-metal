@@ -30,21 +30,4 @@ struct PagedUpdateCacheProgramFactory {
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
-struct PagedUpdateCacheMeshWorkloadFactory {
-    // Per-coord program build.  See PagedRowMajorFusedUpdateCacheMeshWorkloadFactory.
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const PagedUpdateCacheParams& operation_attributes,
-        const PagedUpdateCacheInputs& tensor_args,
-        Tensor& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
-
-    // Same program body as PagedUpdateCacheProgramFactory, so it reuses that patch.
-    static void override_runtime_arguments(
-        tt::tt_metal::Program& program,
-        const PagedUpdateCacheParams& operation_attributes,
-        const PagedUpdateCacheInputs& tensor_args,
-        Tensor& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
-};
-
 }  // namespace ttnn::experimental::prim

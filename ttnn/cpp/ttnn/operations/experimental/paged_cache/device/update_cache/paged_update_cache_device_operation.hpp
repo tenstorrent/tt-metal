@@ -22,7 +22,7 @@ struct PagedUpdateCacheDeviceOperation {
     using tensor_args_t = PagedUpdateCacheInputs;
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<PagedUpdateCacheProgramFactory, PagedUpdateCacheMeshWorkloadFactory>;
+    using program_factory_t = std::variant<PagedUpdateCacheProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
@@ -53,7 +53,6 @@ ttnn::experimental::prim::PagedUpdateCacheDeviceOperation::tensor_return_value_t
     const std::optional<const Tensor>& page_table,
     uint32_t batch_offset,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords,
     std::optional<uint32_t> block_size_override = std::nullopt,
     std::optional<uint32_t> num_kv_heads_override = std::nullopt,
     std::optional<uint32_t> cache_position_modulo = std::nullopt);

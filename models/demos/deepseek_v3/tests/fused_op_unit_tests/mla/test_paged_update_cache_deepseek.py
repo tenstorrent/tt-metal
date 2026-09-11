@@ -180,8 +180,6 @@ def test_paged_update_cache_verify_aliasing_mesh_sharded_update_idxs(mesh_device
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
     )
 
-    mesh_coords = {ttnn.MeshCoordinate(r, c) for r in range(mesh_shape[0]) for c in range(mesh_shape[1])}
-
     def dump_cache(tag: str):
         if not enable_kv_log:
             return None
@@ -197,7 +195,6 @@ def test_paged_update_cache_verify_aliasing_mesh_sharded_update_idxs(mesh_device
         tt_update,
         update_idxs_tensor=tt_prompt_update_idxs,
         page_table=tt_page_table,
-        mesh_coords=mesh_coords,
     )
     ttnn.synchronize_device(mesh_device)
     dump_cache("after_mesh_sharded_prompt_update")
@@ -207,7 +204,6 @@ def test_paged_update_cache_verify_aliasing_mesh_sharded_update_idxs(mesh_device
         tt_update,
         update_idxs_tensor=tt_spec_update_idxs,
         page_table=tt_page_table,
-        mesh_coords=mesh_coords,
     )
     ttnn.synchronize_device(mesh_device)
     tt_cache_torch = dump_cache("after_mesh_sharded_spec_update")
@@ -363,16 +359,11 @@ def test_deepseek_v3_mla_paged_update_cache_trace_mode(
         f"  Memory config: HEIGHT_SHARDED with {num_cores_x * num_cores_y} cores (grid {num_cores_y}x{num_cores_x})"
     )
 
-    # Note: mesh_coords parameter would normally come from get_mesh_coords
-    # For single device testing, we simulate a single device at position (0, 0) in the mesh
-    mesh_coords = {ttnn.MeshCoordinate(0, 0)}
-
     ttnn.experimental.paged_update_cache(
         tt_cache,
         tt_update,
         update_idxs_tensor=tt_position_idxs,
         page_table=tt_page_table,
-        mesh_coords=mesh_coords,
     )
     ttnn.synchronize_device(device)
 
@@ -385,7 +376,6 @@ def test_deepseek_v3_mla_paged_update_cache_trace_mode(
             tt_update,
             update_idxs_tensor=tt_position_idxs,
             page_table=tt_page_table,
-            mesh_coords=mesh_coords,
         )
     ttnn.end_trace_capture(device, trace_id_warmup, cq_id=0)
     ttnn.synchronize_device(device)
@@ -399,7 +389,6 @@ def test_deepseek_v3_mla_paged_update_cache_trace_mode(
             tt_update,
             update_idxs_tensor=tt_position_idxs,
             page_table=tt_page_table,
-            mesh_coords=mesh_coords,
         )
     ttnn.end_trace_capture(device, trace_id, cq_id=0)
     ttnn.synchronize_device(device)

@@ -2353,7 +2353,6 @@ class MLA1D(AbstractModule):
                 tt_kvpe,
                 update_idxs_tensor=position_idxs,
                 page_table=page_table,
-                mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
             )
         elif per_shard <= 0 or num_devices_eff <= 0 or total_elems % num_devices_eff != 0:
             ttnn.experimental.paged_update_cache(
@@ -2361,7 +2360,6 @@ class MLA1D(AbstractModule):
                 tt_kvpe,
                 update_idxs_tensor=position_idxs,
                 page_table=page_table,
-                mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
             )
         else:
             per_shard_padded = total_elems // num_devices_eff
@@ -2371,7 +2369,6 @@ class MLA1D(AbstractModule):
                     tt_kvpe,
                     update_idxs_tensor=position_idxs,
                     page_table=page_table,
-                    mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
                 )
             else:
                 prompt_row = (~alias_mask).to(torch.int32)
@@ -2402,14 +2399,12 @@ class MLA1D(AbstractModule):
                     tt_kvpe,
                     update_idxs_tensor=tt_prompt_pos,
                     page_table=page_table,
-                    mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
                 )
                 ttnn.experimental.paged_update_cache(
                     kvpe_cache,
                     tt_kvpe,
                     update_idxs_tensor=tt_spec_pos,
                     page_table=page_table,
-                    mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
                 )
 
                 ttnn.deallocate(tt_prompt_pos)
