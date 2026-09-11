@@ -278,8 +278,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             "reader_combine_fabric2d.cpp";
         rdr.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
         rdr.core_ranges = CoreRangeSet(CoreRange(self.worker_logical));
-        rdr.compile_time_args =
-            cmbf2d::ReaderCtArgs(args, tensor_args, coord, self, work, l1, plan, dram).to_ct_word_arr();
+        rdr.compile_time_args = cmbf2d::ReaderCtArgs(args, tensor_args, coord, self, work, l1, plan).to_ct_word_arr();
         for (auto* buf : {dram.in, dram.out, dram.fwd, dram.meta, dram.counts, dram.region, dram.expert_offsets}) {
             tt::tt_metal::TensorAccessorArgs(buf).append_to(rdr.compile_time_args);
         }
@@ -287,7 +286,11 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::NOC_0,
         };
-        desc.kernels.push_back(std::move(rdr));  // no fabric connection => no rt args
+        // Buffer bindings, in cmbf2d::ReaderRtArg order, so the framework rewrites them on a cache hit.
+        rdr.emplace_runtime_args(
+            self.worker_logical,
+            {dram.in, dram.out, dram.fwd, dram.meta, dram.counts, dram.region, dram.expert_offsets});
+        desc.kernels.push_back(std::move(rdr));
 
         std::vector<uint32_t> rt_raw{1u};  // num_connections
         tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
