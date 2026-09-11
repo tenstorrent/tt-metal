@@ -49,11 +49,20 @@ void kernel_main() {
     DataflowBuffer dfb_in0(dfb::in0);
     Scratchpad<volatile int> batch(scratch::batch);
 
-    // Stage the b uint32 batch ids into the scratchpad (single toucher, indexed from base).
-    // `batch_id_size > 0` is the predicate the old null `addr_ptr` stood in for.
+    // Stage the b uint32 batch ids into the scratchpad, then index them back below. The
+    // `batch_id_size > 0` guard skips both the staging read and every later batch[] access when
+    // there are no ids, so the CPU never reads uninitialized scratch memory.
     if (batch_id_size > 0) {
         noc.async_read(batchAddr, batch, (batch_id_size << 2), {.page_id = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+        // Quasar DM: the NoC wrote the ids straight to shared L1, but the CPU batch[] reads below go
+        // through the RISC's L2 cache, which invalidate_l1_cache() does not touch here. Drop the stale
+        // lines over the staged range so the CPU sees the NoC-written ids. No-op on WH/BH (CPU reads
+        // are coherent with NoC writes there and invalidate_l2_cache_range is tt-2xx-only).
+        invalidate_l2_cache_range(
+            static_cast<uintptr_t>(batch.get_base_address()), static_cast<size_t>(batch_id_size << 2));
+#endif
     }
 
     if constexpr (IS_SHARD_LOCAL) {

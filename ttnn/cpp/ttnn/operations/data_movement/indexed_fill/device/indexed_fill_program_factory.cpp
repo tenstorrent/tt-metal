@@ -290,10 +290,11 @@ ttnn::device_operation::ProgramArtifacts IndexedFillProgramFactory::create_progr
     // which fills it and reads the staged indices straight back through a raw SRAM pointer. It was
     // formerly a self-loop DFB (reader bound PRODUCER + CONSUMER): a single DM kernel filled and
     // drained it, so the FIFO synchronized nothing — a shape Quasar rejects. Converted to a private
-    // Scratchpad. The declared allocation (former entry_size * num_entries) is carried across.
+    // Scratchpad. Sized to one aligned batch page: the reader stages b uint32 ids once and reads
+    // back [0, b); the former DFB's second (double-buffer) entry synchronized nothing here.
     spec.scratchpads.push_back(ScratchpadSpec{
         .unique_id = IF_BATCH_SCRATCH,
-        .size_per_node = batch_page_size * 2,  // former entry_size * num_entries
+        .size_per_node = batch_page_size,  // one aligned page holds all b uint32 ids
     });
 
     const auto arch = input_a.device()->arch();
