@@ -110,6 +110,15 @@ assert not (USE_TRACE and not KV_ONLY_LAST_LAYER), (
     "tracing (the kv-only last block still writes its KV cache)."
 )
 
+_ALLOW_TP_SHARD_TRACE = os.environ.get("PREFILL_ALLOW_UNTESTED_TP_SHARD_TRACE", "0") == "1"
+assert not (TP_SHARD_KV and USE_TRACE) or _ALLOW_TP_SHARD_TRACE, (
+    "PREFILL_TP_SHARD_KV=1 with PREFILL_USE_TRACE=1 has no CI coverage: no job exercises the tp_axis "
+    "on-device kv_actual_global read, the key_stripe_split>1 indexer geometry, or the kv-dedup two-stage "
+    "KVPE gather. The combination works (hand-validated on 8x4) but nothing would catch a regression. "
+    "Set PREFILL_ALLOW_UNTESTED_TP_SHARD_TRACE=1 to run it anyway, or add a `tp_sharded and traced` CI row "
+    "and delete this tripwire."
+)
+
 os.environ.setdefault("PREFILL_TTNN_CACHE", ADAPTER.ttnn_cache_default)
 
 _shutdown = False
@@ -406,6 +415,7 @@ def _print_config() -> None:
         ),
         ("PREFILL_USE_TRACE", f"{USE_TRACE} (trace_region={_TRACE_REGION_SIZE >> 20} MB)"),
         ("PREFILL_TP_SHARD_KV", str(TP_SHARD_KV)),
+        ("PREFILL_LAYER_ACK_D2H", os.environ.get("PREFILL_LAYER_ACK_D2H", "0")),
         ("PREFILL_CHUNK_SIZE", str(CHUNK_SIZE)),
         ("PREFILL_MAX_SEQ_LEN", str(MAX_SEQ_LEN)),
         ("PREFILL_NUM_USERS", str(NUM_USERS)),
@@ -722,7 +732,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             f"(no migration worker); prefill_producer can import them"
         )
 
-    use_d2h = os.environ.get("PREFILL_LAYER_ACK_D2H", "1") == "1"
+    use_d2h = os.environ.get("PREFILL_LAYER_ACK_D2H", "0") == "1"
 
     from ttnn._experimental.layer_completion import LayerCompletionQueue, LayerCompletionRouter
 
