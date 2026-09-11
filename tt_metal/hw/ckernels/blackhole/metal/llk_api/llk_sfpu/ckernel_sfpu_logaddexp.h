@@ -70,17 +70,10 @@ inline void calculate_sfpu_logaddexp(const uint dst_index_in0, const uint dst_in
 // templated where the surrounding binary inits are not.
 template <bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_logaddexp_init() {
-    const float LOG_TWO = 0.693147182f;
-    const float TWO_TO_M23 = 1.19209290e-7f;
-    sfpi::vConstFloatPrgm0 = LOG_TWO * TWO_TO_M23;
-
-    if constexpr (is_fp32_dest_acc_en) {
-        sfpi::vConstFloatPrgm1 = -0x1.00001ap-2f;
-        sfpi::vConstFloatPrgm2 = 0x1.555572p-2f;
-    } else {
-        sfpi::vConstFloatPrgm1 = 0x1.744p-2f;
-        sfpi::vConstFloatPrgm2 = -0x1.008p-1f;
-    }
+    // Delegating to log1p_init rather than copying its values keeps one source for the
+    // tuned coefficients: a retune of the log1p polynomial reaches this op instead of
+    // silently desyncing from it. log1p_init ignores its first two template parameters.
+    log1p_init<false /* APPROXIMATION_MODE */, false /* FAST_APPROX */, is_fp32_dest_acc_en>();
 }
 
 }  // namespace ckernel::sfpu
