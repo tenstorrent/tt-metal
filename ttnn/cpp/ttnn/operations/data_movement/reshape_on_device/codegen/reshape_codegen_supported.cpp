@@ -113,12 +113,27 @@ bool rm_supported(const Tensor& input, const ttnn::Shape& out_padded_shape) {
     return (static_cast<uint64_t>(cb_total) <= max_l1) && (static_cast<uint64_t>(scratch_size) <= max_l1);
 }
 
+// Whether a TILE shape's page stream is one contiguous run with no interior
+// padding. Mirrors the generator's `_tile_stream_is_logically_contiguous`:
+// the W-changing fast reshape treats the input/output as one flat tile-page
+// stream, which is only safe when there is a single outer (pre-H) matrix, or
+// when H is itself tile-aligned (so no matrix carries mid-stream pad rows).
+bool tile_stream_is_logically_contiguous(const ttnn::Shape& logical_shape) {
+    uint64_t outer = 1;
+    for (uint32_t i = 0; i + 2 < logical_shape.rank(); ++i) {
+        outer *= logical_shape[i];
+    }
+    const uint32_t h = logical_shape.rank() >= 2 ? logical_shape[-2] : 1;
+    return outer == 1 || h % tt::constants::TILE_HEIGHT == 0;
+}
+
 // Whether the TILE compute-reshape chunking (build_reshape_tile_factory) is
 // legal and its per-chunk CB budget fits L1. The chunk size (and hence CB
 // footprint) is fixed by W_in/W_out alone -- it does not shrink with the core
 // split the way the RM path's per-core CB does -- so this is the single leaf
 // to bound for the TILE branch.
-bool tile_supported(const Tensor& input, const ttnn::Shape& out_padded_shape) {
+bool tile_supported(
+    const Tensor& input, const ttnn::Shape& output_logical_shape, const ttnn::Shape& out_padded_shape) {
     const auto& in_shape = input.padded_shape();
     if (in_shape.rank() < 1 || out_padded_shape.rank() < 1) {
         return false;
@@ -126,6 +141,17 @@ bool tile_supported(const Tensor& input, const ttnn::Shape& out_padded_shape) {
     const uint32_t W_in = in_shape[-1];
     const uint32_t W_out = out_padded_shape[-1];
     if (W_in % tt::constants::TILE_WIDTH != 0 || W_out % tt::constants::TILE_WIDTH != 0) {
+        return false;
+    }
+    // The fast TILE kernel walks the input/output as one flat tile-page
+    // stream; a non-tile-aligned H is only safe with a single outer matrix,
+    // since otherwise each matrix carries mid-stream pad rows that are not
+    // logical reshape data (build_reshape_tile_factory has no notion of
+    // per-matrix boundaries). Checked against the LOGICAL shapes, matching
+    // the generator's `_tile_stream_is_logically_contiguous` gate, which
+    // guards this exact fast path in `_tile_fast_path_is_safe`.
+    if (!tile_stream_is_logically_contiguous(input.logical_shape()) ||
+        !tile_stream_is_logically_contiguous(output_logical_shape)) {
         return false;
     }
     if (input.storage_type() != ttnn::StorageType::DEVICE) {
@@ -161,7 +187,7 @@ bool tile_supported(const Tensor& input, const ttnn::Shape& out_padded_shape) {
 
 bool supported_by_codegen(
     const Tensor& input,
-    const ttnn::Shape& /*output_logical_shape*/,
+    const ttnn::Shape& output_logical_shape,
     const ttnn::Shape& output_padded_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config) {
     // Both codegen program factories emit an interleaved reader/writer pair
@@ -191,7 +217,7 @@ bool supported_by_codegen(
         return rm_supported(input, output_padded_shape);
     }
     if (input.layout() == ttnn::TILE_LAYOUT) {
-        return tile_supported(input, output_padded_shape);
+        return tile_supported(input, output_logical_shape, output_padded_shape);
     }
     return false;
 }
