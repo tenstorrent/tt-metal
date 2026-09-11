@@ -1344,6 +1344,9 @@
 # seals a block that is not there; the adapter's layer_split_boundaries snaps the even split there,
 # so PREFILL_PP_LAYER_COUNTS is deliberately not pinned here.
 # No fabric_profile: torus_xy -- attn_res_gather_softmax deadlocks under Topology::Ring (#54835).
+# Own test_type per rung, unlike the Kimi-K2.7 and GLM-5.2 pairs that share prefill_runner_kv_pcc:
+# four galaxies is the scarcest resource in the pool, so this leg has to be dispatchable without
+# also claiming a single-galaxy one. The `runner` and `kv_cache` tags still select both rungs.
 - name: "(Kimi-K3-2.8T) disaggregated prefill KV accuracy 55k@5k, SC4"
   cmd: |
     set -euo pipefail
@@ -1353,7 +1356,7 @@
     fi
     cd "${TT_METAL_HOME}"
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3
-  test_type: prefill_runner_kv_pcc
+  test_type: k3_prefill_runner_93l
   test_tags: [kimi_k3, runner, kv_cache]
   test_group: disagg_prefill
   skus:
@@ -1381,7 +1384,7 @@
     fi
     cd "${TT_METAL_HOME}"
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3 sc1
-  test_type: prefill_runner_kv_pcc
+  test_type: k3_prefill_runner_24l
   test_tags: [kimi_k3, runner, kv_cache]
   test_group: disagg_prefill
   skus:
