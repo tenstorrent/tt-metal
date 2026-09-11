@@ -8,6 +8,10 @@
 // operand simply comes from DRAM, because this step is about the arithmetic.
 // The causal mask tile is generated on the core rather than read, as
 // sdpa_bw's writer does.
+//
+// Several pairs can be fed in sequence, each naming its row block and column
+// block, so the compute kernel can accumulate across them the way a streak
+// accumulates dQ and a column residency accumulates dK and dV.
 
 #include <cstdint>
 
@@ -22,6 +26,8 @@ void kernel_main() {
     const uint32_t grad_output_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t lse_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t u_scalar_addr = get_arg_val<uint32_t>(arg++);
+    const uint32_t num_pairs = get_arg_val<uint32_t>(arg++);
+    const uint32_t pair_args = arg;  // then (row block, column block) per pair
 
     constexpr uint32_t qWt = get_compile_time_arg_val(0);
     constexpr uint32_t vWt = get_compile_time_arg_val(1);
@@ -53,10 +59,16 @@ void kernel_main() {
     const auto lse = TensorAccessor(lse_args, lse_addr, interm_bytes);
     const auto u_scalar = TensorAccessor(u_args, u_scalar_addr, interm_bytes);
 
-    read_tiles_by_row(cb_query, query, 0, qWt, tile_bytes, qWt);
-    read_tiles_by_row(cb_key, key, 0, qWt, tile_bytes, qWt);
-    read_tiles_by_row(cb_value, value, 0, vWt, tile_bytes, vWt);
-    read_tiles_by_row(cb_grad_output, grad_output, 0, vWt, tile_bytes, vWt);
-    read_one_tile(cb_lse, lse, 0);
-    read_one_tile(cb_u_scalar, u_scalar, 0);
+    for (uint32_t pair = 0; pair < num_pairs; ++pair) {
+        const uint32_t row_block = get_arg_val<uint32_t>(pair_args + 2u * pair);
+        const uint32_t col_block = get_arg_val<uint32_t>(pair_args + 2u * pair + 1u);
+
+        // Row-side operands follow the row block, column-side the column block.
+        read_tiles_by_row(cb_query, query, row_block * qWt, qWt, tile_bytes, qWt);
+        read_tiles_by_row(cb_key, key, col_block * qWt, qWt, tile_bytes, qWt);
+        read_tiles_by_row(cb_value, value, col_block * vWt, vWt, tile_bytes, vWt);
+        read_tiles_by_row(cb_grad_output, grad_output, row_block * vWt, vWt, tile_bytes, vWt);
+        read_one_tile(cb_lse, lse, row_block);
+        read_one_tile(cb_u_scalar, u_scalar, row_block);
+    }
 }
