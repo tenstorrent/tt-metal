@@ -57,6 +57,11 @@ RECIPES = {
     "act_pack": {"all": "act", "pack": {5: 2, 6: 4}},
     "off_pack": {"all": "off", "pack": {5: 2, 6: 4}},
     "act_off_ge3_pack": {"all": "act", "bands_ge": (3, "off"), "post": "off", "pack": {5: 2, 6: 4}},
+    # pack 1 = dense resamplers on unpacked rows (bands 3-4 keep their dilated convs)
+    "full_pack4": {"pack": {4: 1, 5: 2, 6: 4}},
+    "full_pack34": {"pack": {3: 1, 4: 1, 5: 2, 6: 4}},
+    "off_pack34": {"all": "off", "pack": {3: 1, 4: 1, 5: 2, 6: 4}},
+    "act_off_ge3_pack34": {"all": "act", "bands_ge": (3, "off"), "post": "off", "pack": {3: 1, 4: 1, 5: 2, 6: 4}},
 }
 PACK_KEY = "pack"
 
