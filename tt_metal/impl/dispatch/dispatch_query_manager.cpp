@@ -17,6 +17,7 @@
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "impl/context/metal_context.hpp"
+#include "llrt/hal.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -119,12 +120,16 @@ bool DispatchQueryManager::distributed_dispatcher() const { return distributed_d
 
 NOC DispatchQueryManager::go_signal_noc() const { return go_signal_noc_; }
 
+bool DispatchQueryManager::fds_worker_completion_enabled() const { return fds_worker_completion_enabled_; }
+
 void DispatchQueryManager::reset(DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs) {
     num_hw_cqs_ = num_hw_cqs;
     dispatch_core_config_ = dispatch_core_config;
 
     auto& env_impl = MetalEnvAccessor(env_).impl();
     const auto& cluster = env_impl.get_cluster();
+    const auto& hal = env_impl.get_hal();
+    const auto& rtoptions = env_impl.get_rtoptions();
     const tt::ARCH arch = cluster.arch();
 
     if (arch == tt::ARCH::QUASAR) {
@@ -150,6 +155,13 @@ void DispatchQueryManager::reset(DispatchCoreConfig& dispatch_core_config, uint8
     logical_dispatch_cores_on_user_chips_ =
         populate_all_logical_dispatch_cores(env_, num_hw_cqs_, dispatch_core_config_);
     cq_dispatch_layout_ = generate_cq_dispatch_layout(arch, num_hw_cqs, logical_dispatch_cores_on_user_chips_);
+    // The core type is checked first: get_programmable_core_type_index returns -1 for DISPATCH on WH/BH, where
+    // that core type has no entry in the HAL. A single go wire is shared by every CQ on the engine, so FDS needs
+    // one CQ to own it; the go and completion paths are always used together.
+    fds_worker_completion_enabled_ =
+        resolved_dispatch_core_type_ == CoreType::DISPATCH &&
+        hal.get_supports_sending_fds_go_cmds(hal.get_programmable_core_type_index(HalProgrammableCoreType::DISPATCH)) &&
+        !rtoptions.get_disable_fds() && rtoptions.get_fast_dispatch() && cq_dispatch_layout_.num_cqs_per_core == 1;
     // Reset the dispatch cores reported by the manager. Will be re-populated when the associated query is made
     dispatch_cores_ = {};
 }
