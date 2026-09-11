@@ -166,24 +166,25 @@ class DecoderLayer(LightweightModule):
         # NB this changes the norm's reduction grid, so it is NOT bit-exact: the
         # width-wise sum is split across a different number of cores.
         # QWEN3_TTS_LN_CONSUMER_GRID=0 restores the single 64-core norm grid + reshards.
-        self._decode_ln_attn = None
-        self._decode_ln_mlp = None
         _ln_consumer_grid = os.environ.get("QWEN3_TTS_LN_CONSUMER_GRID", "1") != "0"
-        for attr, src, keep in (
-            ("_decode_ln_attn", getattr(self.attention, "_decode_wqkv_in0_memcfg", None), None),
-            ("_decode_ln_mlp", getattr(self.mlp, "_decode_gate_up_in0_memcfg", None), None),
-        ):
+
+        def _consumer_grid_norm(src):
+            """Norm configs on ``src``'s shard grid, or None to keep the 64-core norm."""
             cores = None
             if src is not None:
                 try:
                     cores = src.shard_spec.grid.num_cores()
                 except Exception:
                     cores = None
-            if _ln_consumer_grid and cores and cores != ln_num_cores and dim_tiles % cores == 0:
-                try:
-                    setattr(self, attr, _build_sharded_rmsnorm_configs(device, hidden_size, cores, m=32))
-                except Exception:
-                    setattr(self, attr, None)
+            if not (_ln_consumer_grid and cores and cores != ln_num_cores and dim_tiles % cores == 0):
+                return None
+            try:
+                return _build_sharded_rmsnorm_configs(device, hidden_size, cores, m=32)
+            except Exception:
+                return None
+
+        self._decode_ln_attn = _consumer_grid_norm(getattr(self.attention, "_decode_wqkv_in0_memcfg", None))
+        self._decode_ln_mlp = _consumer_grid_norm(getattr(self.mlp, "_decode_gate_up_in0_memcfg", None))
         # Prefill RMSNorm grid. `ln_num_cores` above takes the LARGEST core count dividing
         # dim_tiles (64 for hidden=2048), which drives block_w to (2048/64)/32 = 1 and
         # subblock_w to 1 — the same "most cores, thinnest block" shape that the matmul
