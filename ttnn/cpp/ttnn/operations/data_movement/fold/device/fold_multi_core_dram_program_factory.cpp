@@ -95,9 +95,6 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
     uint32_t tiles_per_width_dim = tt::div_up(input_padded_shape[-2], TILE_HEIGHT);
 
     const uint32_t c_padded_bytes = tiles_per_channel_dim * TILE_WIDTH * tt::datum_size(out_dfb_data_format);
-    const uint32_t output_width = input_width / stride_w;
-    const uint32_t patch_size = stride_h * stride_w;
-    const uint32_t output_stick_bytes = patch_size * c_bytes;
     // One super-block = stride_h consecutive input H-rows → one output H-row. compute_output_specs already
     // requires stride_h | H, so N*(H/sh) is exact.
     const uint32_t num_super_blocks = input_tensor.logical_shape()[0] * (input_tensor.logical_shape()[1] / stride_h);
@@ -125,7 +122,8 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
     // src0/src1: tile-format input + untilized output; src2: RM scratch sized to one full output row.
     DataflowBufferSpec src0_dfb = make_dfb(SRC0, single_tile_size, num_input_tiles, dfb_data_format);
     DataflowBufferSpec src1_dfb = make_dfb(SRC1, out_single_tile_size, num_input_tiles, out_dfb_data_format);
-    DataflowBufferSpec src2_dfb = make_dfb(SRC2, output_stick_bytes * output_width, 1, out_dfb_data_format);
+    const uint32_t src2_bytes = static_cast<uint32_t>(tile_native_fold_scratch_bytes(input_tensor, stride_h, stride_w));
+    DataflowBufferSpec src2_dfb = make_dfb(SRC2, src2_bytes, 1, out_dfb_data_format);
 
     TensorParameter input_param{.unique_id = INPUT, .spec = input_tensor.tensor_spec()};
     TensorParameter output_param{.unique_id = OUTPUT, .spec = output.tensor_spec()};
