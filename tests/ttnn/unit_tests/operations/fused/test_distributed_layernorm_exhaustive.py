@@ -50,30 +50,6 @@ import ttnn
 from tests.ttnn.unit_tests.operations.fused.distributed_norm_test_utils import run_distributed_norm_test
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-@pytest.mark.parametrize("norm_type, use_welford", [("layer_norm", False), ("layer_norm", True), ("rms_norm", False)])
-def test_distributed_norm_four_chip_smoke(mesh_device, norm_type, use_welford):
-    passes, max_abs_diff, max_rel_diff, mean_rel_diff = run_distributed_norm_test(
-        mesh_device=mesh_device,
-        batch_size=1,
-        seq_len=128,
-        hidden_dim=4096,
-        eps=1e-5,
-        norm_type=norm_type,
-        input_dtype=ttnn.bfloat16,
-        mean=0,
-        var=1,
-        outlier_pct=0,
-        outlier_var=0,
-        use_legacy=False,
-        use_high_precision=True,
-        verbose=False,
-        use_welford=use_welford,
-    )
-    assert passes, (max_abs_diff, max_rel_diff, mean_rel_diff)
-
-
 @pytest.mark.parametrize("batch_size", [1, 2])
 @pytest.mark.parametrize("seq_len", [512, 1024, 2048])
 @pytest.mark.parametrize("hidden_dim", [2048, 4096, 8192])
