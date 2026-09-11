@@ -161,9 +161,8 @@ tt::tt_metal::ProgramDescriptor SliceTileProgramFactory::create_descriptor(
     writer_kernel_desc.named_compile_time_args = {{"dfb_id_out", src0_cb_index}};
     writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};
 
-    // Writer per-core runtime args: [dst_addr, num_tiles, start_id].
-    // dst_buffer is declared as a buffer binding at arg 0, so the framework patches its
-    // base address on program-cache hits instead of rebuilding the descriptor.
+    writer_kernel_desc.emplace_common_runtime_args({dst_buffer});
+    // Per-core slot 0 is reserved; slots 1 and 2 retain the work count and offset.
     num_tiles_written = 0;
     for (const auto& core : corerange_to_cores(all_cores)) {
         uint32_t num_tiles_per_core;
@@ -177,7 +176,7 @@ tt::tt_metal::ProgramDescriptor SliceTileProgramFactory::create_descriptor(
             continue;
         }
 
-        writer_kernel_desc.emplace_runtime_args(core, {dst_buffer, num_tiles_per_core, num_tiles_written});
+        writer_kernel_desc.emplace_runtime_args(core, {0u, num_tiles_per_core, num_tiles_written});
         num_tiles_written += num_tiles_per_core;
     }
 
@@ -195,7 +194,8 @@ void SliceTileProgramFactory::override_runtime_arguments(
     patch_slice_program_addresses(program, SliceTileProgramFactory{}, args, tensor_args, output);
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> slice_tile_dynamic_args(
+void patch_slice_tile_runtime_args(
+    tt::tt_metal::Program& program,
     const SliceParams& args,
     const SliceInputs& tensor_args,
     const Tensor& output,
@@ -235,8 +235,8 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> slice_tile_dynamic_args(
     }
 
     const auto cores = corerange_to_cores(all_cores);
-    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
-    dynamic_args.reserve(cores.size() * (2 + num_dims + 2));
+    auto& reader_args_by_core = tt::tt_metal::GetRuntimeArgs(program, reader_kernel_idx);
+    auto& writer_args_by_core = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_idx);
 
     uint32_t num_tiles_written = 0;
     for (const auto& core : cores) {
@@ -250,34 +250,33 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> slice_tile_dynamic_args(
             active = false;
         }
 
-        uint32_t id0 = 0, start_id = 0;
-        std::vector<uint32_t> id_per_dim(num_dims, 0);
+        auto& reader_args = reader_args_by_core[core.x][core.y];
+        auto& writer_args = writer_args_by_core[core.x][core.y];
+        uint32_t id0 = 0, start_id = 0, unpadded_written = 0;
         if (active) {
             id0 = num_tiles_written % num_unpadded_tiles_per_dim[0];
-            uint32_t unpadded_written = num_tiles_written / num_unpadded_tiles_per_dim[0];
+            unpadded_written = num_tiles_written / num_unpadded_tiles_per_dim[0];
             start_id = id0 + start_offset;
-            for (uint32_t j = 1; j < num_dims; ++j) {
-                id_per_dim[j] = unpadded_written % num_unpadded_tiles_per_dim[j];
-                unpadded_written = unpadded_written / num_unpadded_tiles_per_dim[j];
-                start_id += id_per_dim[j] * accumulated_total_per_dim[j - 1];
-            }
         }
-
-        dynamic_args.push_back({reader_kernel_idx, core, 0, start_id, false});
-        dynamic_args.push_back({reader_kernel_idx, core, 1, num_tiles_per_core, false});
-        dynamic_args.push_back({reader_kernel_idx, core, 2, id0, false});
         for (uint32_t j = 1; j < num_dims; ++j) {
-            dynamic_args.push_back({reader_kernel_idx, core, 2 + j, id_per_dim[j], false});
+            const uint32_t id = active ? unpadded_written % num_unpadded_tiles_per_dim[j] : 0u;
+            if (active) {
+                unpadded_written /= num_unpadded_tiles_per_dim[j];
+                start_id += id * accumulated_total_per_dim[j - 1];
+            }
+            reader_args.at(2 + j) = id;
         }
-        // Writer slot 0 (dst buffer) is patched by patch_slot0; re-emit only slots 1 and 2.
-        dynamic_args.push_back({writer_kernel_idx, core, 1, num_tiles_per_core, false});
-        dynamic_args.push_back({writer_kernel_idx, core, 2, num_tiles_written, false});
+        reader_args.at(0) = start_id;
+        reader_args.at(1) = num_tiles_per_core;
+        reader_args.at(2) = id0;
+        // Leave the address/reserved slot 0 untouched in both writer variants.
+        writer_args.at(1) = num_tiles_per_core;
+        writer_args.at(2) = num_tiles_written;
 
         if (active) {
             num_tiles_written += num_tiles_per_core;
         }
     }
-    return dynamic_args;
 }
 
 }  // namespace ttnn::prim

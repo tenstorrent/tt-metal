@@ -396,22 +396,22 @@ tt::tt_metal::ProgramDescriptor SliceRmProgramFactory::create_descriptor(
         ttnn::operations::data_movement::MAX_READ_SIZE,
         sizing.chunking);
 
+    reader_desc.emplace_common_runtime_args({src0_buffer});
+    writer_desc.emplace_common_runtime_args({dst_buffer});
     reader_desc.runtime_args.reserve(all_cores_vec.size());
     writer_desc.runtime_args.reserve(all_cores_vec.size());
     for (size_t i = 0; i < all_cores_vec.size(); ++i) {
-        // Reader arg 0 = input buffer base address, declared as a Buffer* binding so the framework
-        // patches it on cache hits instead of rebuilding the descriptor; args 1.. follow unchanged.
+        // Slot 0 is reserved; operand addresses are common, and work offsets stay at slots 1.. .
         KernelDescriptor::RTArgList reader_args;
         reader_args.reserve(1 + all_runtime_args[i].first.size());
-        reader_args.push_back(src0_buffer);
+        reader_args.push_back(0u);
         reader_args.append(all_runtime_args[i].first);
         reader_desc.emplace_runtime_args(all_cores_vec[i], reader_args);
 
-        // Writer arg 0 = output buffer base address, declared as a Buffer* binding so the framework
-        // patches it on cache hits instead of rebuilding the descriptor; args 1.. follow unchanged.
+        // Preserve the writer work-offset layout as well.
         KernelDescriptor::RTArgList writer_args;
         writer_args.reserve(1 + all_runtime_args[i].second.size());
-        writer_args.push_back(dst_buffer);
+        writer_args.push_back(0u);
         writer_args.append(all_runtime_args[i].second);
         writer_desc.emplace_runtime_args(all_cores_vec[i], writer_args);
     }

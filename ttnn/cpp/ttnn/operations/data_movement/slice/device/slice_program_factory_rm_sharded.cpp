@@ -378,35 +378,41 @@ void patch_slice_program_addresses(
             }
         }
     };
-    patch_slot0(kWriterKernelIdx, output.buffer()->address());
 
     std::visit(
         [&](auto&& f) {
             using Factory = std::decay_t<decltype(f)>;
-            if constexpr (
-                std::is_same_v<Factory, SliceRmProgramFactory> ||
-                std::is_same_v<Factory, SliceRmStrideProgramFactory>) {
+            if constexpr (std::is_same_v<Factory, SliceRmProgramFactory>) {
+                GetCommonRuntimeArgs(program, kReaderKernelIdx).at(0) = tensor_args.input.buffer()->address();
+                GetCommonRuntimeArgs(program, kWriterKernelIdx).at(0) = output.buffer()->address();
+            } else if constexpr (std::is_same_v<Factory, SliceRmStrideProgramFactory>) {
                 patch_slot0(kReaderKernelIdx, tensor_args.input.buffer()->address());
+                patch_slot0(kWriterKernelIdx, output.buffer()->address());
             } else if constexpr (
                 std::is_same_v<Factory, SliceTileProgramFactory> ||
                 std::is_same_v<Factory, SliceTileTensorArgsProgramFactory>) {
-                // Divergent-partition hit leaves writer num_pages=0 -> all-zero output (#52651).
-                std::vector<tt::tt_metal::DynamicRuntimeArg> dyn{
-                    {kReaderKernelIdx, {}, 0, tensor_args.input.buffer()->address(), true}};
+                auto& reader_common = GetCommonRuntimeArgs(program, kReaderKernelIdx);
+                reader_common.at(0) = tensor_args.input.buffer()->address();
                 if constexpr (std::is_same_v<Factory, SliceTileTensorArgsProgramFactory>) {
-                    dyn.push_back(
-                        {kReaderKernelIdx, {}, 1, tensor_args.start_tensor.value().buffer()->address(), true});
-                    dyn.push_back({kReaderKernelIdx, {}, 2, tensor_args.end_tensor.value().buffer()->address(), true});
+                    reader_common.at(1) = tensor_args.start_tensor.value().buffer()->address();
+                    reader_common.at(2) = tensor_args.end_tensor.value().buffer()->address();
+                    patch_slot0(kWriterKernelIdx, output.buffer()->address());
+                } else {
+                    GetCommonRuntimeArgs(program, kWriterKernelIdx).at(0) = output.buffer()->address();
                 }
-                tt::tt_metal::apply_dynamic_runtime_args(program, dyn);
-
+                // Preserve scalar restoration: divergent partitions can leave writer num_pages=0 (#52651).
                 const uint32_t start_offset = std::is_same_v<Factory, SliceTileProgramFactory>
                                                   ? ttnn::operations::data_movement::get_tiled_start_offset(
                                                         tensor_args.input, operation_attributes.slice_start)
                                                   : 0u;
-                const auto per_core = slice_tile_dynamic_args(
-                    operation_attributes, tensor_args, output, start_offset, kReaderKernelIdx, kWriterKernelIdx);
-                tt::tt_metal::apply_dynamic_runtime_args(program, per_core);
+                patch_slice_tile_runtime_args(
+                    program,
+                    operation_attributes,
+                    tensor_args,
+                    output,
+                    start_offset,
+                    kReaderKernelIdx,
+                    kWriterKernelIdx);
             }
         },
         factory);

@@ -1968,3 +1968,42 @@ def test_slice_rm_wide_row_chunking(device, last_dim):
     ttnn_output = ttnn.slice(ttnn_input, begins, ends, step, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     assert torch.equal(torch_output, ttnn.to_torch(ttnn_output))
+
+
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["rm", "tile"])
+def test_slice_common_addresses_trace_and_preallocated(device, layout):
+    """An old trace keeps its bindings while eager hits use fresh inputs and caller-owned outputs."""
+    device.enable_program_cache()
+    retained = []
+    shape = (1, 1, 64, 128)
+    starts, ends = (0, 0, 0, 32), (1, 1, 64, 96)
+
+    def make_pair(seed):
+        torch.manual_seed(seed)
+        host = torch.rand(shape, dtype=torch.bfloat16)
+        source = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=layout, device=device)
+        target = ttnn.from_torch(
+            torch.zeros((1, 1, 64, 64), dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=layout, device=device
+        )
+        retained.extend((source, target))
+        return host, source, target
+
+    host, source, target = make_pair(0)
+    ttnn.slice(source, starts, ends, output_tensor=target)
+    ttnn.synchronize_device(device)
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    ttnn.slice(source, starts, ends, output_tensor=target)
+    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+    try:
+        entries = device.num_program_cache_entries()
+        for seed in (1, 2):
+            next_host, next_source, next_target = make_pair(seed)
+            ttnn.slice(next_source, starts, ends, output_tensor=next_target)
+            assert torch.equal(ttnn.to_torch(next_target), next_host[..., 32:96])
+        assert device.num_program_cache_entries() == entries
+        poison = ttnn.from_torch(torch.zeros((1, 1, 64, 64), dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=layout)
+        ttnn.copy_host_to_device_tensor(poison, target)
+        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+        assert torch.equal(ttnn.to_torch(target), host[..., 32:96])
+    finally:
+        ttnn.release_trace(device, trace_id)

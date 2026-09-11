@@ -11,7 +11,7 @@
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
+    const uint32_t src_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t unpadded_stick_size = get_arg_val<uint32_t>(1);
     const uint32_t stick_size_offset = get_arg_val<uint32_t>(2);
     const uint32_t num_dims = get_arg_val<uint32_t>(3);
