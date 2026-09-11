@@ -6,6 +6,9 @@
 
 #include <cstdint>
 #include <memory>
+#include <vector>
+
+#include <tt-metalium/core_coord.hpp>
 
 namespace tt::tt_metal {
 
@@ -66,9 +69,29 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program);
 
 // Configure a program on a device without running it: binaries, CB configs, runtime args and the
 // launch message land in L1, but no go signal is sent. The kernel-config block can then be read
-// back (detail::ReadKernelConfig) without the program having executed. Safe to repeat on one
+// back (ReadKernelConfig) without the program having executed. Safe to repeat on one
 // device; each call overwrites the previous config.
 void ConfigureProgramWithoutLaunch(IDevice* device, Program& program);
+
+// The kernel config a core currently runs, read back from its launch message. Circular buffers,
+// runtime args, semaphores and text are all addressed as kernel_config_base plus offset, so these
+// offsets and the bytes at that base describe the program on a core; the runtime binary reload
+// captures both and replays them at another base. Exposes launch-message layout, hence experimental.
+struct CoreKernelConfig {
+    std::vector<uint32_t> kernel_config_base;  // per programmable core type
+    std::vector<uint32_t> kernel_text_offset;  // per processor
+    std::vector<uint32_t> kernel_text_size;    // per processor
+    std::vector<uint32_t> sem_offset;          // per programmable core type
+    std::vector<uint32_t> rta_offset;          // per processor
+    std::vector<uint32_t> crta_offset;         // per processor
+    uint32_t local_cb_offset = 0;
+    uint32_t remote_cb_offset = 0;
+    uint64_t local_cb_mask = 0;
+    uint32_t enables = 0;
+    uint32_t min_remote_cb_start_index = 0;
+};
+
+CoreKernelConfig ReadKernelConfig(IDevice* device, const CoreCoord& logical_core);
 
 }  // namespace experimental
 

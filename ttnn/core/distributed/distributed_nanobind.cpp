@@ -31,6 +31,7 @@
 #include "ttnn-nanobind/small_vector_caster.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/device.hpp>
+#include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
@@ -560,95 +561,6 @@ void py_module(nb::module_& mod) {
 
                 Returns:
                     CoreCoord: The virtual coordinate of that DRAM bank.
-            )doc")
-        .def(
-            "read_core_l1",
-            [](MeshDevice* device,
-               const CoreCoord& logical_core,
-               uint32_t address,
-               uint32_t size,
-               const std::optional<MeshCoordinate>& coord) {
-                std::vector<uint32_t> data;
-                tt::tt_metal::detail::ReadFromDeviceL1(device_at(device, coord), logical_core, address, size, data);
-                return data;
-            },
-            nb::arg("logical_core"),
-            nb::arg("address"),
-            nb::arg("size"),
-            nb::arg("coord") = nb::none(),
-            R"doc(
-                Read raw L1 words from one core.
-
-                For capturing state the device wrote and the host has no other view of --
-                the runtime binary reload uses it to copy a stage's kernel-config block
-                (CB configs, runtime args, semaphores and text) after that stage has run
-                once, and to read the launch message describing it.
-
-                Args:
-                    logical_core (CoreCoord): Core whose L1 to read.
-                    address (int): Byte address in L1.
-                    size (int): Bytes to read; must be a multiple of 4.
-
-                Returns:
-                    List[int]: The words read.
-            )doc")
-        .def(
-            "write_core_l1",
-            [](MeshDevice* device,
-               const CoreCoord& logical_core,
-               uint32_t address,
-               std::vector<uint32_t> words,
-               const std::optional<MeshCoordinate>& coord) {
-                tt::tt_metal::detail::WriteToDeviceL1(device_at(device, coord), logical_core, address, words);
-            },
-            nb::arg("logical_core"),
-            nb::arg("address"),
-            nb::arg("words"),
-            nb::arg("coord") = nb::none(),
-            R"doc(
-                Write raw L1 words to one core.
-
-                The writer for read_core_l1: host-set state that is not a tensor and not part
-                of a program's kernel-config block. The semaphore pool uses it to give a slot
-                its initial value without rewriting the whole pool region, whose other slots
-                may belong to a program that is running.
-
-                Args:
-                    logical_core (CoreCoord): Core whose L1 to write.
-                    address (int): Byte address in L1; 4-byte aligned.
-                    words (List[int]): The words to write.
-                    coord (MeshCoordinate, optional): Which device of the mesh; the first when omitted.
-            )doc")
-        .def(
-            "read_kernel_config",
-            [](MeshDevice* device, const CoreCoord& logical_core, const std::optional<MeshCoordinate>& coord) {
-                auto cfg = tt::tt_metal::detail::ReadKernelConfig(device_at(device, coord), logical_core);
-                std::map<std::string, std::vector<uint32_t>> out;
-                out["kernel_config_base"] = cfg.kernel_config_base;
-                out["kernel_text_offset"] = cfg.kernel_text_offset;
-                out["kernel_text_size"] = cfg.kernel_text_size;
-                out["sem_offset"] = cfg.sem_offset;
-                out["rta_offset"] = cfg.rta_offset;
-                out["crta_offset"] = cfg.crta_offset;
-                out["local_cb_offset"] = {cfg.local_cb_offset};
-                out["remote_cb_offset"] = {cfg.remote_cb_offset};
-                out["local_cb_mask"] = {
-                    static_cast<uint32_t>(cfg.local_cb_mask & 0xFFFFFFFFu),
-                    static_cast<uint32_t>(cfg.local_cb_mask >> 32)};
-                out["enables"] = {cfg.enables};
-                out["min_remote_cb_start_index"] = {cfg.min_remote_cb_start_index};
-                return out;
-            },
-            nb::arg("logical_core"),
-            nb::arg("coord") = nb::none(),
-            R"doc(
-                Read back the kernel config a core is running, field by field.
-
-                Everything a kernel needs -- circular buffers, runtime args, semaphores,
-                text -- is addressed as kernel_config_base + offset, so these offsets plus
-                the bytes at that base are a complete description of a program on a core.
-                The runtime binary reload captures both after a stage has run once, and
-                replays them at a new base to bring that stage back.
             )doc");
 
     // Per-device optimal DRAM-bank-to-logical-worker assignment. Bound as an overload of the same
@@ -1490,6 +1402,116 @@ void py_module(nb::module_& mod) {
             Total number of ranks in MPI_COMM_WORLD (the un-split world).
         )doc");
     auto m_experimental = mod.def_submodule("experimental", "experimental distributed operations");
+    // Host support for the runtime binary reload (Blaze): raw L1 access, launch-message readback
+    // and the configure-only dispatch mode. Experimental, like the C++ APIs behind them.
+    m_experimental.def(
+        "set_configure_only",
+        [](MeshDevice* device, bool enable) {
+            tt::tt_metal::experimental::DispatchContext::get().set_configure_only(device, enable);
+        },
+        nb::arg("mesh_device"),
+        nb::arg("enable"),
+        R"doc(
+            Slow Dispatch only: while enabled, dispatching a program writes its kernel binaries,
+            circular-buffer configs, runtime args and launch message to L1 but never sends the go
+            signal -- so nothing runs. Used to capture a reloadable image off L1 without executing
+            it, and therefore without tearing the pipeline down to do it.
+
+            Experimental API; may change.
+        )doc");
+    m_experimental.def(
+        "read_core_l1",
+        [](MeshDevice* device,
+           const CoreCoord& logical_core,
+           uint32_t address,
+           uint32_t size,
+           const std::optional<MeshCoordinate>& coord) {
+            std::vector<uint32_t> data;
+            tt::tt_metal::detail::ReadFromDeviceL1(device_at(device, coord), logical_core, address, size, data);
+            return data;
+        },
+        nb::arg("mesh_device"),
+        nb::arg("logical_core"),
+        nb::arg("address"),
+        nb::arg("size"),
+        nb::arg("coord") = nb::none(),
+        R"doc(
+                Read raw L1 words from one core.
+
+                For capturing state the device wrote and the host has no other view of --
+                the runtime binary reload uses it to copy a stage's kernel-config block
+                (CB configs, runtime args, semaphores and text) after that stage has run
+                once, and to read the launch message describing it.
+
+                Args:
+                    mesh_device (MeshDevice): The mesh.
+                    logical_core (CoreCoord): Core whose L1 to read.
+                    address (int): Byte address in L1.
+                    size (int): Bytes to read; must be a multiple of 4.
+
+                Returns:
+                    List[int]: The words read.
+            )doc");
+    m_experimental.def(
+        "write_core_l1",
+        [](MeshDevice* device,
+           const CoreCoord& logical_core,
+           uint32_t address,
+           std::vector<uint32_t> words,
+           const std::optional<MeshCoordinate>& coord) {
+            tt::tt_metal::detail::WriteToDeviceL1(device_at(device, coord), logical_core, address, words);
+        },
+        nb::arg("mesh_device"),
+        nb::arg("logical_core"),
+        nb::arg("address"),
+        nb::arg("words"),
+        nb::arg("coord") = nb::none(),
+        R"doc(
+                Write raw L1 words to one core.
+
+                The writer for read_core_l1: host-set state that is not a tensor and not part
+                of a program's kernel-config block. The semaphore pool uses it to give a slot
+                its initial value without rewriting the whole pool region, whose other slots
+                may belong to a program that is running.
+
+                Args:
+                    mesh_device (MeshDevice): The mesh.
+                    logical_core (CoreCoord): Core whose L1 to write.
+                    address (int): Byte address in L1; 4-byte aligned.
+                    words (List[int]): The words to write.
+                    coord (MeshCoordinate, optional): Which device of the mesh; the first when omitted.
+            )doc");
+    m_experimental.def(
+        "read_kernel_config",
+        [](MeshDevice* device, const CoreCoord& logical_core, const std::optional<MeshCoordinate>& coord) {
+            auto cfg = tt::tt_metal::experimental::ReadKernelConfig(device_at(device, coord), logical_core);
+            std::map<std::string, std::vector<uint32_t>> out;
+            out["kernel_config_base"] = cfg.kernel_config_base;
+            out["kernel_text_offset"] = cfg.kernel_text_offset;
+            out["kernel_text_size"] = cfg.kernel_text_size;
+            out["sem_offset"] = cfg.sem_offset;
+            out["rta_offset"] = cfg.rta_offset;
+            out["crta_offset"] = cfg.crta_offset;
+            out["local_cb_offset"] = {cfg.local_cb_offset};
+            out["remote_cb_offset"] = {cfg.remote_cb_offset};
+            out["local_cb_mask"] = {
+                static_cast<uint32_t>(cfg.local_cb_mask & 0xFFFFFFFFu), static_cast<uint32_t>(cfg.local_cb_mask >> 32)};
+            out["enables"] = {cfg.enables};
+            out["min_remote_cb_start_index"] = {cfg.min_remote_cb_start_index};
+            return out;
+        },
+        nb::arg("mesh_device"),
+        nb::arg("logical_core"),
+        nb::arg("coord") = nb::none(),
+        R"doc(
+                Read back the kernel config a core is running, field by field.
+
+                Everything a kernel needs -- circular buffers, runtime args, semaphores,
+                text -- is addressed as kernel_config_base + offset, so these offsets plus
+                the bytes at that base are a complete description of a program on a core.
+                The runtime binary reload captures both after a stage has run once, and
+                replays them at a new base to bring that stage back.
+            )doc");
     m_experimental.def(
         "get_worker_noc_hop_distance",
         [](MeshDevice& mesh_device, const CoreCoord& logical_src, const CoreCoord& logical_dst, NOC noc) {

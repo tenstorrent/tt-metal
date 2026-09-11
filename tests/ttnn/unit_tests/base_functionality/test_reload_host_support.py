@@ -53,9 +53,9 @@ def _marker_program(target, cores=CORE_SET):
 
 def _words(mesh_device, addr, n, coord=None):
     got = (
-        mesh_device.read_core_l1(CORE, addr, 4 * n, coord)
+        ttnn.experimental.reload.read_core_l1(mesh_device, CORE, addr, 4 * n, coord)
         if coord is not None
-        else mesh_device.read_core_l1(CORE, addr, 4 * n)
+        else ttnn.experimental.reload.read_core_l1(mesh_device, CORE, addr, 4 * n)
     )
     return list(got)[:n]
 
@@ -73,7 +73,7 @@ def test_write_and_read_core_l1_round_trip_per_coordinate(mesh_device):
     addr = scratch.buffer_address()
     coords = [ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, 1)]
     for i, coord in enumerate(coords):
-        mesh_device.write_core_l1(CORE, addr, [0x1000 + i, 0x2000 + i, 0x3000 + i], coord)
+        ttnn.experimental.reload.write_core_l1(mesh_device, CORE, addr, [0x1000 + i, 0x2000 + i, 0x3000 + i], coord)
     for i, coord in enumerate(coords):
         assert _words(mesh_device, addr, 3, coord) == [0x1000 + i, 0x2000 + i, 0x3000 + i]
     assert _words(mesh_device, addr, 3) == [0x1000, 0x2000, 0x3000], "no coordinate = the first device"
@@ -92,16 +92,16 @@ def test_configure_only_installs_the_program_and_never_runs_it(mesh_device):
         pytest.skip("configure-only is implemented on the slow-dispatch mesh command queue")
     scratch, other = _l1_words(mesh_device), _l1_words(mesh_device)
     addr = scratch.buffer_address()
-    mesh_device.write_core_l1(CORE, addr, [0])
+    ttnn.experimental.reload.write_core_l1(mesh_device, CORE, addr, [0])
     program = _marker_program(scratch)
 
-    ttnn.set_configure_only(mesh_device, True)
+    ttnn.experimental.reload.set_configure_only(mesh_device, True)
     try:
         ttnn.generic_op([other, scratch], program)
     finally:
-        ttnn.set_configure_only(mesh_device, False)
+        ttnn.experimental.reload.set_configure_only(mesh_device, False)
     assert _words(mesh_device, addr, 1) == [0], "configure-only must not run the kernel"
-    cfg = mesh_device.read_kernel_config(CORE)
+    cfg = ttnn.experimental.reload.read_kernel_config(mesh_device, CORE)
     assert set(cfg) >= {"kernel_config_base", "kernel_text_offset", "kernel_text_size", "enables", "rta_offset"}
     assert max(cfg["kernel_text_size"]) > 0, "but the configured program's binary is on the core"
     assert cfg["enables"][0] != 0
@@ -122,11 +122,11 @@ def test_a_coordinate_outside_the_mesh_is_a_managed_error(mesh_device, expect_er
     addr = scratch.buffer_address()
     outside = ttnn.MeshCoordinate(0, 1)
     with expect_error(RuntimeError, "outside the mesh"):
-        mesh_device.read_core_l1(CORE, addr, 4, outside)
+        ttnn.experimental.reload.read_core_l1(mesh_device, CORE, addr, 4, outside)
     with expect_error(RuntimeError, "outside the mesh"):
-        mesh_device.write_core_l1(CORE, addr, [0], outside)
+        ttnn.experimental.reload.write_core_l1(mesh_device, CORE, addr, [0], outside)
     with expect_error(RuntimeError, "outside the mesh"):
-        mesh_device.read_kernel_config(CORE, outside)
+        ttnn.experimental.reload.read_kernel_config(mesh_device, CORE, outside)
     ttnn.deallocate(scratch)
 
 
@@ -187,7 +187,9 @@ def test_reload_core_ranges_must_cover_a_whole_kernel_group(mesh_device, expect_
     ttnn.generic_op([other, scratch], whole)
     ttnn.synchronize_device(mesh_device)
     for core in ttnn.corerange_to_cores(TWO_CORES, row_wise=True):
-        assert list(mesh_device.read_core_l1(core, scratch.buffer_address(), 4))[:1] == [MARKER]
+        assert list(ttnn.experimental.reload.read_core_l1(mesh_device, core, scratch.buffer_address(), 4))[:1] == [
+            MARKER
+        ]
     ttnn.deallocate(scratch)
     ttnn.deallocate(other)
 
