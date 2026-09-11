@@ -96,6 +96,17 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
                 gathered_slab_global: Block-cyclic slab width in gathered-dim elements
                     (``chunk_local * num_devices``). Required with ``gathered_prefix_tensor`` and hashed,
                     being structural rather than per-chunk.
+                input_stripe_size: Extent along ``dim`` of ONE stripe, when a device's shard is several
+                    stripes of a larger sequence rather than one contiguous run. Defaults to the whole
+                    dim (one stripe, the ordinary shard). With ``n = shape[dim] / input_stripe_size``
+                    stripes, rank ``r``'s stripe ``j`` lands at
+                    ``j * num_devices * input_stripe_size + r * input_stripe_size`` -- the stripes
+                    INTERLEAVE instead of the shards concatenating. A block-cyclic KV cache needs that:
+                    each chip holds one narrow region of every chunk, so a plain concat would order the
+                    sequence chunk-outer instead of chunk-inner. Structural, so it is part of the program
+                    hash. With more than one stripe ``gathered_dim_size`` bounds how many WHOLE stripes
+                    are transferred (it must be a multiple of ``num_devices * input_stripe_size``), and
+                    ``gathered_prefix_tensor`` is not supported.
         )doc",
         &high_bw_all_gather,
         nb::arg("input_tensor").noconvert(),
@@ -112,7 +123,8 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
         nb::arg("batch_slot_num_layers") = 1,
         nb::arg("batch_slot_layer_idx") = 0,
         nb::arg("gathered_prefix_tensor") = nb::none(),
-        nb::arg("gathered_slab_global") = 0);
+        nb::arg("gathered_slab_global") = 0,
+        nb::arg("input_stripe_size") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather::detail

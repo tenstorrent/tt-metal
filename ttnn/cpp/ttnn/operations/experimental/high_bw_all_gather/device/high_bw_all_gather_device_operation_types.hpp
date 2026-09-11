@@ -61,6 +61,16 @@ struct HighBwAllGatherParams {
     std::optional<uint32_t> input_batch_index;
     std::optional<uint32_t> gathered_dim_size;
 
+    // Extent along `dim` of ONE stripe, when a device's shard is several stripes of a larger sequence
+    // rather than one contiguous run. Defaults to the whole dim (one stripe), which is every caller
+    // today. With n = input_shape[dim] / input_stripe_size stripes, rank r's stripe j lands at
+    // j * (num_devices * input_stripe_size) + r * input_stripe_size, i.e. the stripes INTERLEAVE instead
+    // of the shards concatenating. Dense MLA's TP-deduped KVPE cache needs exactly that: it is
+    // block-cyclic, so each chip holds one narrow region of every chunk and a plain concat would order
+    // the sequence chunk-outer instead of chunk-inner. STRUCTURAL, so unlike the runtime controls above
+    // it is hashed -- it changes where every chunk is written, not how many are written.
+    std::optional<uint32_t> input_stripe_size;
+
     // TRACE-SAFE slot select. `input_batch_index` above is a host runtime argument: the program-cache
     // path re-patches the reader's input page base on every dispatch, but a ttnn trace REPLAY never runs
     // that host patch, so every replay would re-read the slot that happened to be live at capture time.

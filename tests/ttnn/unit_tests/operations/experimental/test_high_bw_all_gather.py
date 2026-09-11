@@ -561,26 +561,38 @@ def test_high_bw_all_gather_glm_topk_uint32_page_larger_than_fabric_payload(mesh
 @pytest.mark.parametrize(
     "layout,dtype", [(ttnn.TILE_LAYOUT, ttnn.bfloat8_b), (ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16)], ids=["tile", "rm"]
 )
-def test_high_bw_all_gather_interleaves_repeated_stripes(mesh_device, layout, dtype):
-    """An input carrying more than one stripe must interleave them, not concatenate whole buffers.
+@pytest.mark.parametrize("slot", [0, 2], ids=["slot0", "slot2"])
+@pytest.mark.parametrize("active_chunks", [4, 2], ids=["all_stripes", "partial_stripes"])
+def test_high_bw_all_gather_interleaves_striped_shards(mesh_device, layout, dtype, slot, active_chunks):
+    """A shard declared as several stripes must interleave them, not concatenate whole shards.
 
-    Dense MLA's TP-deduped KVPE cache rides on this: its per-chip buffer is one narrow region of EVERY
-    block-cyclic chunk, so gathering it as [1, n_chunks, R, W] has to land rank t's chunk c at
-    c*(tp*R) + t*R. Concatenating the buffers instead would land it at t*(n_chunks*R) -- t-major, which
-    is a different sequence order and silently wrong. Verified against an SP-only sharding of the same
-    host tensor, so the expected placement is stated independently of this op.
+    Dense MLA's TP-deduped KVPE cache rides on this: it is block-cyclic, so each chip's shard is one
+    narrow region of EVERY chunk. With input_stripe_size = that region, rank t's chunk c has to land at
+    c*(tp*R) + t*R. Concatenating the shards instead puts it at t*(n_chunks*R) -- t-major, a different
+    sequence order and silently wrong. The expectation is an SP-only sharding of the same host tensor,
+    so it is stated independently of this op.
+
+    input_batch_index still selects the slot and gathered_dim_size still bounds the transfer; with more
+    than one stripe it bounds WHOLE stripes, so chunks past it must be left untouched.
     """
     sp, tp = tuple(mesh_device.shape)
-    n_chunks, rows_dev, width = 4, 32, 64
+    num_slots, n_chunks, rows_dev, width = 3, 4, 32, 64
     chunk_global = rows_dev * sp * tp
 
     torch.manual_seed(0)
-    host = torch.rand((1, n_chunks, chunk_global, width), dtype=torch.bfloat16)
+    # [slots, n_chunks, chunk_global, W] is the natural layout; the cache is its flattening.
+    host = torch.rand((num_slots, n_chunks, chunk_global, width), dtype=torch.bfloat16)
 
-    # A host mesh mapper cannot shard one tensor dim on both axes ("dims must be unique"), so shard it
-    # flat over the 8 devices row-major -- device s*tp+t gets rows [s*C/sp + t*R, +R) of every chunk,
-    # which IS the sp*tp block-cyclic assignment -- and stamp the 2D topology the cache declares.
-    source = _make_tensor(mesh_device, host, dtype, layout, ttnn.ShardTensorToMesh(mesh_device, dim=2))
+    # A host mesh mapper cannot shard one tensor dim on both axes ("dims must be unique"), so shard the
+    # per-chunk layout flat over the 8 devices row-major -- device s*tp+t gets rows [s*C/sp + t*R, +R) of
+    # every chunk, which IS the sp*tp block-cyclic assignment -- then flatten and stamp the 2D topology.
+    shards = [
+        host[:, :, d * rows_dev : (d + 1) * rows_dev].reshape(num_slots, 1, n_chunks * rows_dev, width)
+        for d in range(sp * tp)
+    ]
+    source = _make_tensor(
+        mesh_device, torch.cat(shards, dim=2), dtype, layout, ttnn.ShardTensorToMesh(mesh_device, dim=2)
+    )
     dist_shape = ttnn.MeshShape(sp, tp)
     source.update_tensor_topology(
         ttnn.TensorTopology(
@@ -590,13 +602,31 @@ def test_high_bw_all_gather_interleaves_repeated_stripes(mesh_device, layout, dt
         )
     )
 
+    # SP rank s's slab is block-cyclic -- rows [c*C + s*C/sp, +C/sp) of every chunk c, chunk-major -- so
+    # build it per rank and concatenate. A contiguous split of the FLAT sequence is a different tensor.
+    rows_sp = chunk_global // sp
+    slabs = [host[slot, :, s * rows_sp : (s + 1) * rows_sp].reshape(1, 1, n_chunks * rows_sp, width) for s in range(sp)]
+    # Only the first `active_chunks` stripes are gathered; the rest keep the sentinel.
+    sentinel = torch.full((1, 1, n_chunks * rows_sp, width), 0.75, dtype=torch.bfloat16)
+    for slab in slabs:
+        slab[:, :, active_chunks * rows_sp :] = sentinel[:, :, active_chunks * rows_sp :]
+    expected = torch.cat(slabs, dim=2)
+
     sp_only = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(sp, tp), dims=[2, None])
-    expected = _make_tensor(mesh_device, host, dtype, layout, sp_only)
-    output = _make_tensor(mesh_device, torch.zeros_like(host), dtype, layout, sp_only)
+    expected_tt = _make_tensor(mesh_device, expected, dtype, layout, sp_only)
+    output = _make_tensor(mesh_device, sentinel.repeat(1, 1, sp, 1), dtype, layout, sp_only)
 
-    output = ttnn.experimental.high_bw_all_gather(source, dim=2, output_tensor=output, cluster_axis=1)
+    output = ttnn.experimental.high_bw_all_gather(
+        source,
+        dim=2,
+        output_tensor=output,
+        cluster_axis=1,
+        input_batch_index=slot,
+        input_stripe_size=rows_dev,
+        gathered_dim_size=active_chunks * tp * rows_dev,
+    )
 
-    for got, want in zip(ttnn.get_device_tensors(output), ttnn.get_device_tensors(expected)):
+    for got, want in zip(ttnn.get_device_tensors(output), ttnn.get_device_tensors(expected_tt)):
         assert torch.equal(got.cpu().to_torch(), want.cpu().to_torch())
 
 

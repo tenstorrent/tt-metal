@@ -105,6 +105,21 @@ constexpr std::size_t rt_arg_index(Enum value) {
     return static_cast<std::size_t>(value);
 }
 
+// How many stripes of the gathered dim one device's shard holds: one for a contiguous shard, several
+// when the shard is block-cyclic (dense MLA's TP-deduped KVPE cache holds one region of every chunk).
+uint32_t input_stripe_count(const Tensor& input_tensor, const HighBwAllGatherParams& operation_attributes) {
+    const auto& shape = input_tensor.padded_shape();
+    const int32_t dim = operation_attributes.dim;
+    const int32_t gather_dim = dim < 0 ? dim + static_cast<int32_t>(shape.rank()) : dim;
+    const uint32_t stripe_rows = operation_attributes.input_stripe_size.value_or(shape[gather_dim]);
+    TT_FATAL(
+        stripe_rows > 0 && shape[gather_dim] % stripe_rows == 0,
+        "high_bw_all_gather input_stripe_size {} must divide the gathered dim {}",
+        stripe_rows,
+        shape[gather_dim]);
+    return shape[gather_dim] / stripe_rows;
+}
+
 PageGeometry derive_page_geometry(
     const Tensor& input_tensor,
     const Tensor& output_tensor,
@@ -137,9 +152,14 @@ PageGeometry derive_page_geometry(
     }
 
     const bool has_runtime_extent = operation_attributes.gathered_dim_size.has_value();
-    const uint32_t active_dim_size = has_runtime_extent
+    const uint32_t num_stripes = input_stripe_count(input_tensor, operation_attributes);
+    const uint32_t stripe_rows = input_shape[gather_dim] / num_stripes;
+    // One stripe: a runtime extent narrows that stripe's front, as it always has. Several: every active
+    // stripe is transferred whole and the extent instead bounds HOW MANY, since taking the front of each
+    // would leave the source pages strided rather than one contiguous run.
+    const uint32_t active_dim_size = (has_runtime_extent && num_stripes == 1)
                                          ? *operation_attributes.gathered_dim_size / operation_attributes.num_devices
-                                         : input_shape[gather_dim];
+                                         : stripe_rows;
 
     const auto tile_spec =
         input_tensor.layout() == Layout::TILE ? input_tensor.tensor_spec().tile() : tt::tt_metal::Tile();
@@ -177,7 +197,7 @@ PageGeometry derive_page_geometry(
     // (such as sparse MLA's block-cyclic KV cache) at their stable physical offsets.
     uint32_t max_input_pages_per_stripe = 1;
     for (int32_t i = gather_dim; i < rank; i++) {
-        uint32_t extent = input_shape[i];
+        uint32_t extent = i == gather_dim ? stripe_rows : input_shape[i];
         if (i == rank - 1) {
             extent = input_tensor.layout() == Layout::TILE
                          ? extent / tile_spec.get_width()
@@ -190,12 +210,14 @@ PageGeometry derive_page_geometry(
     const uint32_t output_chunks_per_stripe = max_input_pages_per_stripe * split_factor;
     TT_FATAL(output_chunks_per_stripe > 0, "output_chunks_per_stripe must be > 0");
     const bool selected_batch = operation_attributes.input_batch_index.has_value() || batch_index_from_metadata;
-    const bool selected_or_partial = selected_batch || has_runtime_extent || extent_from_metadata;
+    const bool selected_or_partial = selected_batch || has_runtime_extent || extent_from_metadata || num_stripes > 1;
     uint32_t input_page_base = 0;
     uint32_t num_input_pages = input_tensor.buffer()->num_pages();
     if (selected_or_partial) {
         // A partial all-gather is sourced from one contiguous batch slot. Its active pages are
-        // placed in each rank's fixed worst-case output slot, preserving stable cache offsets.
+        // placed in each rank's fixed worst-case output slot, preserving stable cache offsets. The page
+        // counts below start at the gather dim, so anything between it and the batch must be singleton;
+        // a striped shard is declared with input_stripe_size, not carried by a leading dimension.
         for (int32_t i = 1; i < gather_dim; ++i) {
             TT_FATAL(
                 input_shape[i] == 1,
@@ -219,7 +241,14 @@ PageGeometry derive_page_geometry(
                 "high_bw_all_gather gathered_dim_size without input_batch_index requires input batch 1, got {}",
                 input_shape[0]);
         }
-        num_input_pages = input_pages_per_stripe;
+        // With one stripe input_pages_per_stripe already carries the runtime extent; with several it is a
+        // whole stripe and the extent picks the leading ones. Either way the active source pages are one
+        // contiguous run from the selected slot's base.
+        const uint32_t active_stripes =
+            (has_runtime_extent && num_stripes > 1)
+                ? *operation_attributes.gathered_dim_size / (operation_attributes.num_devices * stripe_rows)
+                : num_stripes;
+        num_input_pages = active_stripes * input_pages_per_stripe;
         TT_FATAL(
             input_page_base + num_input_pages <= input_tensor.buffer()->num_pages(),
             "high_bw_all_gather selected range exceeds input allocation");
@@ -447,11 +476,18 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     // input_batch_index/gathered_dim_size patch its page base and active slice counts at dispatch time.
     auto scheduling_geometry = page_geometry;
     if (has_runtime_controls) {
-        scheduling_geometry.num_input_pages = page_geometry.output_chunks_per_stripe;
+        scheduling_geometry.num_input_pages =
+            input_stripe_count(input_tensor, operation_attributes) * page_geometry.output_chunks_per_stripe;
     }
+    // The strided bank-owned iterator addresses a single stripe group (`stripe * chunks + chunk`) and
+    // has no stripe jump, so it cannot place a multi-stripe input. The eligibility check below already
+    // excludes it through num_input_pages; say so here too, because that is a CORRECTNESS bound rather
+    // than the tuning heuristic the rest of this selection is.
+    const bool single_stripe = input_stripe_count(input_tensor, operation_attributes) == 1;
     const auto can_use_bank_owned = [&](uint32_t workers_per_direction) {
-        return can_use_output_bank_owned_schedule(
-            input_tensor, output_tensor, scheduling_geometry, num_links, workers_per_direction, num_dram_banks);
+        return single_stripe &&
+               can_use_output_bank_owned_schedule(
+                   input_tensor, output_tensor, scheduling_geometry, num_links, workers_per_direction, num_dram_banks);
     };
     uint32_t workers_per_dir = 1;
     if (input_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0) {

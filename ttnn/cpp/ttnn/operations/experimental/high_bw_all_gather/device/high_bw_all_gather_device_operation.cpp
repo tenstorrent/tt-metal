@@ -76,6 +76,8 @@ ttsl::hash::hash_t HighBwAllGatherDeviceOperation::compute_program_hash(
         args.sub_core_grid,
         args.input_batch_index.has_value(),
         args.gathered_dim_size.has_value(),
+        // Structural, unlike the two above: it decides where each stripe is written.
+        args.input_stripe_size,
         // Slot select via metadata changes the reader binary (it reads the page base on-device instead of
         // taking it as a runtime argument), so the PRESENCE is hashed. The value is not: it lives in a
         // tensor the kernel reads each dispatch, which is the whole point.
@@ -364,6 +366,34 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
                 gathered_dim_size,
                 args.num_devices);
         }
+
+        const int32_t gather_dim = args.dim < 0 ? args.dim + static_cast<int32_t>(input_padded_shape.rank()) : args.dim;
+        const uint32_t stripe_rows = args.input_stripe_size.value_or(input_padded_shape[gather_dim]);
+        TT_FATAL(
+            stripe_rows > 0 && input_padded_shape[gather_dim] % stripe_rows == 0,
+            "high_bw_all_gather input_stripe_size {} must divide the gathered dim {}",
+            stripe_rows,
+            input_padded_shape[gather_dim]);
+        const uint32_t num_stripes = input_padded_shape[gather_dim] / stripe_rows;
+        if (num_stripes > 1) {
+            // A striped shard transfers WHOLE stripes: narrowing each one's front would leave the active
+            // source pages strided instead of one contiguous run from the slot base.
+            if (args.gathered_dim_size.has_value()) {
+                TT_FATAL(
+                    *args.gathered_dim_size % (args.num_devices * stripe_rows) == 0,
+                    "high_bw_all_gather gathered_dim_size {} must be a whole number of {}-row stripes across {} "
+                    "devices when the input carries {} stripes",
+                    *args.gathered_dim_size,
+                    stripe_rows,
+                    args.num_devices,
+                    num_stripes);
+            }
+            TT_FATAL(
+                !tensor_args.has_gathered_prefix_metadata(),
+                "high_bw_all_gather gathered_prefix_tensor is not supported with {} input stripes: the reader "
+                "derives its extent on-device assuming one contiguous shard",
+                num_stripes);
+        }
     }
 
     TT_FATAL(
@@ -401,6 +431,16 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_hit(
             "user-major: num_users * num_layers)",
             args.batch_slot_num_layers,
             input_shape[0]);
+    }
+    if (args.input_stripe_size.has_value() && args.gathered_dim_size.has_value()) {
+        const int32_t gather_dim = args.dim < 0 ? args.dim + static_cast<int32_t>(input_shape.rank()) : args.dim;
+        const uint32_t stripe_rows = *args.input_stripe_size;
+        TT_FATAL(
+            input_shape[gather_dim] == stripe_rows || *args.gathered_dim_size % (args.num_devices * stripe_rows) == 0,
+            "high_bw_all_gather gathered_dim_size {} must be a whole number of {}-row stripes across {} devices",
+            *args.gathered_dim_size,
+            stripe_rows,
+            args.num_devices);
     }
     if (args.gathered_dim_size.has_value()) {
         const int32_t rank = static_cast<int32_t>(input_shape.rank());
@@ -456,7 +496,8 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
     uint32_t batch_slot_num_layers,
     uint32_t batch_slot_layer_idx,
     const std::optional<Tensor>& gathered_prefix_tensor,
-    uint32_t gathered_slab_global) {
+    uint32_t gathered_slab_global,
+    std::optional<uint32_t> input_stripe_size) {
     // Query the machine and Fabric setup info.
     // This info is also effectively part of CCL args and hence should be in the program-cache hash,
     // so we include it in HighBwAllGatherParams.
@@ -589,6 +630,7 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
             .sub_core_grid = sub_core_grid,
             .input_batch_index = input_batch_index,
             .gathered_dim_size = gathered_dim_size,
+            .input_stripe_size = input_stripe_size,
             .batch_slot_num_layers = batch_slot_num_layers,
             .batch_slot_layer_idx = batch_slot_layer_idx,
             .gathered_slab_global = gathered_slab_global},
@@ -617,7 +659,8 @@ Tensor high_bw_all_gather(
     uint32_t batch_slot_num_layers,
     uint32_t batch_slot_layer_idx,
     const std::optional<Tensor>& gathered_prefix_tensor,
-    uint32_t gathered_slab_global) {
+    uint32_t gathered_slab_global,
+    std::optional<uint32_t> input_stripe_size) {
     auto [params, inputs] = ttnn::operations::experimental::high_bw_all_gather::high_bw_all_gather_build_operation_args(
         input_tensor,
         output_tensor,
@@ -632,7 +675,8 @@ Tensor high_bw_all_gather(
         batch_slot_num_layers,
         batch_slot_layer_idx,
         gathered_prefix_tensor,
-        gathered_slab_global);
+        gathered_slab_global,
+        input_stripe_size);
     return ttnn::device_operation::launch<
         ttnn::operations::experimental::high_bw_all_gather::HighBwAllGatherDeviceOperation>(params, inputs);
 }
