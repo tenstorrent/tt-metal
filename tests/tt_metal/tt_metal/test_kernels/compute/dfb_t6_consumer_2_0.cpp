@@ -59,6 +59,8 @@ void kernel_main() {
     // thread id keys its slice of the digest region.
     const uint32_t words_per_entry = dfb.get_entry_size() / sizeof(uint32_t);
 
+    // Host sizes this region with dfb_tensix_digest_region_bytes(num_consumers,
+    // num_entries_per_consumer) using the same CTA compiled into this kernel.
     volatile tt_l1_ptr uint32_t* const digests = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
         result_l1_addr + get_my_thread_id() * num_entries_per_consumer * sizeof(uint32_t));
 #endif

@@ -258,11 +258,21 @@ inline uint32_t fnv1a_page_digest(const std::vector<uint32_t>& words, uint32_t p
 }
 
 // Top of L1, below anything the allocator hands out (a single-DFB program's ring sits at
-// the allocator base). Same placement the read_tile_value / extent-probe tests use.
-inline uint32_t dfb_digest_region_addr(distributed::MeshDevice& mesh_device, uint32_t bytes) {
+// the allocator base). Canonical placement for host-seeded scratch the device writes back
+// (digests, read_tile_value results, extent probes, multi-touch results).
+inline uint32_t top_of_l1_scratch_addr(distributed::MeshDevice& mesh_device, uint32_t bytes) {
     const uint32_t alignment = mesh_device.allocator()->get_alignment(BufferType::L1);
     const uint32_t aligned = (bytes + alignment - 1u) / alignment * alignment;
     return static_cast<uint32_t>(mesh_device.l1_size_per_core()) - aligned;
+}
+
+// Host-side size of the Tensix-consumer digest region. Layout is
+// [consumer_idx][drain_index], one uint32_t each — the same indexing
+// dfb_t6_consumer_2_0.cpp uses: result_l1_addr + get_my_thread_id() *
+// num_entries_per_consumer * sizeof(uint32_t). `num_entries_per_consumer` here
+// must be the compile-time arg compiled into that kernel.
+inline uint32_t dfb_tensix_digest_region_bytes(uint32_t num_consumers, uint32_t num_entries_per_consumer) {
+    return num_consumers * num_entries_per_consumer * static_cast<uint32_t>(sizeof(uint32_t));
 }
 
 // ---- shared skip macros + ring-size helper (used by base + overrides) ----
@@ -440,11 +450,19 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
         params.kernel_run_args.push_back({.kernel = PRODUCER});
     }
     // Tensix consumer: hand it the L1 region it reports per-entry digests into (see the
-    // verification block after LaunchProgram).
-    const uint32_t digest_region_bytes =
-        p.num_consumers * num_entries_per_consumer * static_cast<uint32_t>(sizeof(uint32_t));
+    // verification block after LaunchProgram). Size it from the CTA compiled into the
+    // kernel so the host region and dfb_t6_consumer_2_0.cpp indexing cannot drift.
+    uint32_t digest_region_bytes = 0;
+    if (p.consumer_type == M2PorCType::TENSIX) {
+        const auto cta_num_entries_per_consumer = consumer.compile_time_args.get("num_entries_per_consumer");
+        ASSERT_TRUE(cta_num_entries_per_consumer.has_value())
+            << "Tensix consumer kernel must compile with num_entries_per_consumer";
+        ASSERT_EQ(*cta_num_entries_per_consumer, num_entries_per_consumer)
+            << "digest region must be sized from the same num_entries_per_consumer CTA the kernel compiles with";
+        digest_region_bytes = dfb_tensix_digest_region_bytes(p.num_consumers, *cta_num_entries_per_consumer);
+    }
     const uint32_t digest_l1_addr =
-        p.consumer_type == M2PorCType::TENSIX ? dfb_digest_region_addr(mesh_device, digest_region_bytes) : 0u;
+        p.consumer_type == M2PorCType::TENSIX ? top_of_l1_scratch_addr(mesh_device, digest_region_bytes) : 0u;
     if (p.consumer_type == M2PorCType::DM) {
         params.kernel_run_args.push_back({
             .kernel = CONSUMER,
@@ -538,21 +556,21 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
             ASSERT_EQ(entries_per_core % p.num_entries, 0u) << "MULTISET oracle needs whole ring-fills";
             ASSERT_EQ(output.size(), input.size());
 
+            std::vector<int> match_of(entries_per_core, -1);
             std::vector<uint32_t> delivered(p.num_entries, 0u);
             uint32_t unmatched = 0;
             for (uint32_t t = 0; t < entries_per_core; ++t) {
-                int match = -1;
                 for (uint32_t src = 0; src < p.num_entries; ++src) {
                     if (std::equal(
                             input.begin() + src * wpe, input.begin() + (src + 1) * wpe, output.begin() + t * wpe)) {
-                        match = static_cast<int>(src);
+                        match_of[t] = static_cast<int>(src);
                         break;
                     }
                 }
-                if (match < 0) {
+                if (match_of[t] < 0) {
                     ++unmatched;
                 } else {
-                    ++delivered[match];
+                    ++delivered[match_of[t]];
                 }
             }
 
@@ -561,12 +579,7 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
             if (unmatched != 0) {
                 std::vector<uint32_t> bad_per_residue(p.num_consumers, 0u);
                 for (uint32_t t = 0; t < entries_per_core; ++t) {
-                    bool ok = false;
-                    for (uint32_t src = 0; src < p.num_entries && !ok; ++src) {
-                        ok = std::equal(
-                            input.begin() + src * wpe, input.begin() + (src + 1) * wpe, output.begin() + t * wpe);
-                    }
-                    if (!ok) {
+                    if (match_of[t] < 0) {
                         ++bad_per_residue[t % p.num_consumers];
                     }
                 }
