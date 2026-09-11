@@ -47,7 +47,7 @@ SMALLEST_NORMAL_BF16 = 2.0 ** (-126)
 
 
 def flush_to_zero(tensor):
-    """Flush values at or below the smallest normal bfloat16 to zero."""
+    """Flush values at or below the smallest normal bfloat16 to zero. |x| ≤ 2^{-126}"""
     tensor[torch.abs(tensor) <= SMALLEST_NORMAL_BF16] = 0.0
     return tensor
 

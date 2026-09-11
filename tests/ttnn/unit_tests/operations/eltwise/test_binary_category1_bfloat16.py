@@ -18,9 +18,9 @@ pytestmark = pytest.mark.use_module_device
 Category 1: basic_binary_arithmetic
 
  1. ttnn.add              - Addition
- 2. ttnn.sub              - Subtraction
+ 2. ttnn.sub/ttnn.rsub    - Subtraction
  3. ttnn.mul              - Multiplication
- 4. ttnn.div              - Division
+ 4. ttnn.divide           - Division
 """
 
 
@@ -156,17 +156,22 @@ def test_div(device, fast_and_approximate_mode, ulp_threshold):
     tt_result = ttnn_op(tt_a, tt_b, fast_and_approximate_mode=fast_and_approximate_mode)
     result = ttnn.to_torch(tt_result)
 
-    # Device flushes subnormal quotients to zero.
-    result = flush_subnormal_values_to_zero(result)
-    golden = flush_subnormal_values_to_zero(golden)
+    # SFPU div flush includes min-normal 2^{-126} to 0 (same as SFPU mul).
+    if not fast_and_approximate_mode:
+        result = flush_to_zero(result)
+        golden = flush_to_zero(golden)
+    else:
+        result = flush_subnormal_values_to_zero(result)
+        golden = flush_subnormal_values_to_zero(golden)
 
     # Reciprocal flush: device computes a * recip(b). When recip(b) underflows
     # to 0, the quotient is +0 even if torch is a finite value (up to ~4) or
-    # ±inf. SFPU only hits this for |b| ≳ 2^126; FPU also overflows to +0 when
-    # ea−eb ≳ 145 (e.g. 2^19 / 2^{-126} = 2^145 → torch +inf, FPU +0).
+    # ±inf. SFPU only hits this for |b| ≳ 2^126 ie. |b| ≥ 8.507e37.
     # Example finite: max / 1.992×2^126 ≈ 3.984 → torch 3.984, device +0.
-    zero_mismatch = (result == 0) & (golden != 0)
-    result = torch.where(zero_mismatch, golden, result)
+    # a = 3.39e38 / b = 1.69e38 ; torch = 2.0 and device = 0.
+    # Gate on |b| so that an all-zero regression on normal divisors is caught .
+    recip_flush = (result == 0) & (golden != 0) & (input_b.abs() >= 2.0**126)
+    result = torch.where(recip_flush, golden, result)
 
     # FPU-only dest behavior. SFPU matches IEEE RNE at 0 ULP after the recip
     # flush above.
@@ -181,7 +186,13 @@ def test_div(device, fast_and_approximate_mode, ulp_threshold):
         above_2_ulp = both_finite & (golden_bf16.abs() < (2.0**-120)) & (ulp_distance(golden_bf16, result_bf16) > 2)
         result = torch.where(above_2_ulp, golden, result)
 
-        # 2) Overflow fence the other way from add: ea−eb = 128 overflows IEEE
+        # 2) FPU overflow-to-zero: when ea−eb ≳ 145, FPU dest packing returns
+        #    +0 while torch overflows to ±inf (sign is dropped).
+        #    Example: 2^19 / 2^{-126} = 2^145 → torch +inf, FPU +0.
+        overflow_to_zero = torch.isinf(golden) & (result == 0)
+        result = torch.where(overflow_to_zero, golden, result)
+
+        # 3) Overflow fence the other way from add: ea−eb = 128 overflows IEEE
         #    to ±inf, but FPU saturates at ±max bf16 (same sign).
         #    Example: 7.96875 / 2.342e-38 → torch +inf, FPU +max (0x7F7F).
         bf16_max = torch.finfo(torch.bfloat16).max
