@@ -769,10 +769,13 @@ auto coalesceFabricEvents(
                     fabric_event_markers.fabric_write_markers.push_back(markers[i]);
                 }
 
+                TT_FATAL(
+                    i + 1 >= markers.size() || !std::holds_alternative<EMD::FabricRoutingMetadataUnavailable2D>(
+                                                   EMD(markers[i + 1].data).getContents()),
+                    "[profiler noc tracing] Fabric event profiling does not support 2D fabric packets.");
+
                 if (i + 2 >= markers.size() ||
-                    (!std::holds_alternative<EMD::FabricRoutingFields1D>(EMD(markers[i + 1].data).getContents()) &&
-                     !std::holds_alternative<EMD::FabricRoutingMetadataUnavailable2D>(
-                         EMD(markers[i + 1].data).getContents())) ||
+                    !std::holds_alternative<EMD::FabricRoutingFields1D>(EMD(markers[i + 1].data).getContents()) ||
                     !std::holds_alternative<EMD::LocalNocEvent>(EMD(markers[i + 2].data).getContents()) ||
                     std::get<EMD::LocalNocEvent>(EMD(markers[i + 2].data).getContents()).noc_xfer_type !=
                         EMD::NocEventType::WRITE_) {
@@ -1068,10 +1071,7 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                         break;
                     }
                     case KernelProfilerNocEventMetadata::FabricPacketType::LOW_LATENCY_MESH: {
-                        std::get<EMD::FabricRoutingMetadataUnavailable2D>(
-                            EMD(fabric_routing_metadata_marker.data).getContents());
-                        fabric_event_json["fabric_send"] = {{"routing_metadata_available", false}};
-                        break;
+                        TT_THROW("[profiler noc tracing] Fabric event profiling does not support 2D fabric packets.");
                     }
                     case KernelProfilerNocEventMetadata::FabricPacketType::DYNAMIC_MESH: {
                         log_error(
