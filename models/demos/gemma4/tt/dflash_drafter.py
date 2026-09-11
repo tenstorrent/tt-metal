@@ -1043,6 +1043,11 @@ class DFlashFusedDecoder:
         # persistent tap buffers for the verify's copy-mode capture —
         # lazily allocated by the hook on the compile pass (shape-proof).
         self.tap_bufs = [None for _ in drafter.target_layer_ids]
+        # Does step(first=True) have to REPLAY before reading self._out?
+        # capture() executes the body once (the compile pass) so _out holds
+        # this request's first iteration; reseed() executes nothing, so it
+        # must replay or it would read the PREVIOUS request's output.
+        self._replay_on_first = False
         self.trace = None
         self.start = None
         self.anchor = None
@@ -1595,6 +1600,10 @@ class DFlashFusedDecoder:
         self._out = self._body()
         ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
         self.trace = tid
+        # The compile pass above RAN with this request's inputs, so _out is
+        # already this request's first iteration -- step(first=True) may read
+        # it without replaying.
+        self._replay_on_first = False
 
     def reseed(self, anchor_id, start):
         """Re-point the ALREADY-captured trace at a new request WITHOUT
@@ -1607,6 +1616,12 @@ class DFlashFusedDecoder:
         captured body reads."""
         self.anchor, self.start = anchor_id, start
         self._reset_per_request_state()
+        # NOTHING has executed for this request: unlike capture() there is no
+        # compile pass, so self._out still holds the PREVIOUS request's last
+        # replay. The first step MUST replay before reading it -- skipping it
+        # made a reused session open with the previous request's tokens
+        # (observed as request N answering with request N-1's content).
+        self._replay_on_first = True
         if self.use_packed:
             self._pv_upload(start)
         self._upload_iter_inputs(anchor_id, start)
@@ -1791,11 +1806,12 @@ class DFlashFusedDecoder:
             import time as _t
 
             _t0 = _t.perf_counter()
-        if not first:
+        if (not first) or self._replay_on_first:
             self._upload_iter_inputs(self.anchor, self.start)
             if _prof:
                 _t1 = _t.perf_counter()
             ttnn.execute_trace(self.mesh_device, self.trace, cq_id=0, blocking=False)
+            self._replay_on_first = False
         elif _prof:
             _t1 = _t0
         out_ids_t, fc_out = self._out

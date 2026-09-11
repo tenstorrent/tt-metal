@@ -2061,15 +2061,37 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         return self._spec_drafter
 
     def warmup_model_decode(self, *args, **kwargs):
-        """No-op in spec/adaptive mode: solo decode is the per-session fused spec
-        trace; the batched baseline decode cannot be warmed through this model's
-        (adaptive) decode_forward -- the base warmup reader rejects the padded
-        block output. In throughput mode (GEMMA4_DFLASH_SERVE_BLOCK=1) warm the
-        baseline buckets normally."""
+        """Warm the BATCHED BASELINE decode buckets -- in spec mode too.
+
+        The adaptive model serves every concurrency>1 step through the plain
+        batched baseline, so those buckets need warming exactly like a non-spec
+        model. Only the SOLO spec step is a per-session fused trace, and that
+        genuinely cannot be pre-warmed: its capture is per request and bucketed
+        by prompt length (pv_bucket).
+
+        This used to no-op in spec mode because the base warmup reader rejected
+        the old sentinel-PADDED block output. That padding is gone -- the
+        batched and no-session paths now return RAW DEVICE OUTPUT at width 1 --
+        so the base warmup applies again. Skipping it made the first conc>1
+        request of a run pay trace capture inside the measured window: on a
+        P150x8 31B benchmark the 128/128 conc-32 cell showed TTFT 27.1 s cold
+        against 11.7 s once the same shape had been driven first.
+
+        Kill switch: GEMMA4_DFLASH_WARMUP_DECODE=0 restores the old no-op.
+        """
         if self._SPEC_BLOCK <= 1:
             return super().warmup_model_decode(*args, **kwargs)
-        del args, kwargs
-        self._decode_warmup_complete = True
+        if os.environ.get("GEMMA4_DFLASH_WARMUP_DECODE", "1").lower() not in (
+            "1",
+            "true",
+            "yes",
+        ):
+            del args, kwargs
+            self._decode_warmup_complete = True
+            logger.info("Gemma4DFlash: batched decode warmup disabled by env")
+            return None
+        logger.info("Gemma4DFlash: warming batched baseline decode buckets")
+        return super().warmup_model_decode(*args, **kwargs)
 
     @staticmethod
     def _spec_pt_identity(page_table):
@@ -2247,31 +2269,16 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         # allocating/freeing a fresh decoder's buffers (which fragments DRAM).
         # A bucket change (different prompt length band) releases + re-captures.
         dec = self._spec_decoder
-        # DEFAULT OFF: cross-request decoder reuse still leaks. Reuse re-points a
-        # CACHED decoder at a new request (refresh_page_tables + prefill_ingest +
-        # reseed) instead of capturing a fresh one, and _reset_per_request_state
-        # restores the buffers we know the captured body reads (fc_prev,
-        # commit_pos, merge_idx, and the host mirror). That removed the gross
-        # failure -- a request reasoning about the PREVIOUS request's prompt --
-        # but NOT all of it: some per-request state is still not restored, so a
-        # reused session's first spec step can emit the previous request's tail.
-        #
-        # Measured on an emulated-Loudbox P150x8 31B server, 6 sequential greedy
-        # requests each carrying a unique keyword, ASYNC ON in every arm:
-        #   reuse ON  -> 3/6 contaminated ('BANANA' opening the ELEPHANT
-        #                request, 'ELEPHANT' opening VOLCANO, 'CANO' opening
-        #                SAPPHIRE)
-        #   reuse OFF -> 0/6, and the answers are correct per prompt
-        # This is NOT an async defect: async stays ON in both arms. (Turning
-        # async off instead produces EMPTY outputs after the first request, so
-        # it is not a workaround either.)
-        #
-        # Cost of OFF: one ~2.5 s fused capture per request, on the B=1 spec
-        # (latency) profile only. The conc>1 THROUGHPUT operating point runs the
-        # batched baseline, which holds no spec session, so it is unaffected.
-        # Set GEMMA4_DFLASH_DECODER_REUSE=1 to re-enable while debugging the
-        # remaining un-restored state.
-        _reuse_ok = os.environ.get("GEMMA4_DFLASH_DECODER_REUSE", "0").lower() in ("1", "true", "yes")
+        # Cross-request decoder reuse, ON by default again now that the
+        # first-step hazard is fixed. reseed() re-points a CACHED decoder at a
+        # new request instead of capturing a fresh one; the leak was that
+        # step(first=True) SKIPS the trace replay and reads self._out, which
+        # capture() fills via its compile pass but reseed() never did -- so a
+        # reused session opened by reading the PREVIOUS request's output ids as
+        # its own drafts. DFlashFusedDecoder._replay_on_first now forces that
+        # first replay. Kill switch: GEMMA4_DFLASH_DECODER_REUSE=0 (fresh
+        # capture per request, ~1.3 s each, ~15-30% slower conc-1 decode).
+        _reuse_ok = os.environ.get("GEMMA4_DFLASH_DECODER_REUSE", "1").lower() in ("1", "true", "yes")
         reused = (
             _reuse_ok
             and dec is not None
