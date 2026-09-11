@@ -229,6 +229,9 @@ class Gemma4Model:
     # the previous token ("TheThe user user...").
     # Overridden in ``__init__`` from ``hidden_size_per_layer_input``.
     _tt_vllm_always_refresh_decode_trace_inputs = True
+    # PLI is the safe class-level default. ``__init__`` enables feedback only
+    # for variants whose token input has the rank-4 sampling output layout.
+    _tt_supports_decode_token_feedback = False
     # Sampling writes a tile-aligned [1,1,1,32] token vector; decode embeds only
     # the active batch. Non-PLI prepare_decode pads tokens to this width so the
     # sampled ids can be written straight back into the trace input buffer.
@@ -285,6 +288,7 @@ class Gemma4Model:
             "yes",
         )
         self._tt_vllm_always_refresh_decode_trace_inputs = bool(self.hidden_size_per_layer_input) or force_refresh
+        self._tt_supports_decode_token_feedback = not self._tt_vllm_always_refresh_decode_trace_inputs
         n_layers = num_layers or hf_config.num_hidden_layers
 
         # Per-module dtype resolution. ``precision`` (Gemma4Precision) holds

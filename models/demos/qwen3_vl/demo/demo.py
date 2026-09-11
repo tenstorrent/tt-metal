@@ -634,6 +634,12 @@ def test_demo(
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
                 sampling_params=device_sampling_params,
+                # Qwen3-VL sampling does not feed the sampled token back into
+                # its traced decode input, so the demo must restage it each step.
+                reload_inputs=True,
+                reload_page_table=False,
+                reload_sampling_params=device_sampling_params is not None,
+                reset_sampling_state=device_sampling_params is not None and iteration == 0,
             )
 
             # Get the next token

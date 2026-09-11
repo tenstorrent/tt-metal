@@ -236,7 +236,15 @@ class TttGenerationWorker:
                 kv_cache=self.tt_kv_cache,
                 enable_trace=enable_trace,
                 sampling_params=self._sampling_params,
-                reset_batch=(step == 0),
+                # Prefill supplies the first token. On the first decode, load
+                # that token and start a new sampling state. A traced decode
+                # then feeds its sampled token and next position back on device.
+                reload_inputs=step == 0 or not enable_trace,
+                reload_page_table=False,
+                # Preserve the old worker behavior: it uploaded params on
+                # every decode, while sampling history reset only at step 0.
+                reload_sampling_params=True,
+                reset_sampling_state=step == 0,
                 prompt_tokens=input_tokens_prefill_pt,
                 output_tokens=out_tok,
                 read_from_device=False,
