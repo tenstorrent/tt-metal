@@ -322,7 +322,12 @@ void quant_init(const uint zero_point) {
     }
     _quant_kernels_configure_dest_incr_addrmod_();
 
-    lltt::record<lltt::NoExec>(QUANT_REPLAY_SLOT, QUANT_REPLAY_LEN);
+    constexpr std::uint32_t REPLAY_LEN =
+        (OUTPUT_FORMAT == DataFormat::UInt8)
+            ? (SIGN_MAGNITUDE_FORMAT ? QUANT_REPLAY_LEN_UINT8_SIGN_MAGN : QUANT_REPLAY_LEN_UINT8_2S_COMP)
+            : (SIGN_MAGNITUDE_FORMAT ? QUANT_REPLAY_LEN_SIGN_MAGN : QUANT_REPLAY_LEN_2S_COMP);
+
+    lltt::record<lltt::NoExec>(QUANT_REPLAY_SLOT, REPLAY_LEN);
     {
         // D(LREG0) = LREG0 * LREG1 + LREG2 (zero point)
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG0, 0 /*mod1*/);
@@ -337,6 +342,12 @@ void quant_init(const uint zero_point) {
         // descale. For unsigned (uint8) output, round into the full [0, 255]
         // range; otherwise clamp to signed int8 [-128, 127].
         if constexpr (OUTPUT_FORMAT == DataFormat::UInt8) {
+            // Clamp negatives to 0: SFPSTOCHRND_MOD1_FP32_TO_UINT8 can
+            // return magnitude of negative inputs instead of 0. Detect sign and
+            // force 0 before the stochastic round.
+            TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
+            TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+            TTI_SFPENCC(0, 0, 0, 0);
             TTI_SFP_STOCH_RND(
                 sfpi::SFPSTOCHRND_RND_EVEN,
                 0 /*imm8*/,
@@ -385,6 +396,12 @@ void requant_init(const uint zero_point) {
     }
     _quant_kernels_configure_dest_incr_addrmod_();
 
+    constexpr std::uint32_t REPLAY_LEN =
+        (OUTPUT_FORMAT == DataFormat::UInt8)
+            ? (INT8_INPUT ? REQUANT_REPLAY_LEN_UINT8_IN : REQUANT_REPLAY_LEN_UINT8_2S_COMP)
+            : (INT8_INPUT ? REQUANT_REPLAY_LEN_INT8_IN
+                          : (SIGN_MAGNITUDE_FORMAT ? REQUANT_REPLAY_LEN_SIGN_MAGN : REQUANT_REPLAY_LEN_2S_COMP));
+
     lltt::record<lltt::NoExec>(REQUANT_REPLAY_SLOT, REQUANT_REPLAY_LEN);
     {
         // int32 sign-magnitude (loaded that way regardless of input bit
@@ -400,6 +417,11 @@ void requant_init(const uint zero_point) {
         // (uint8) output, round into the full [0, 255] range; otherwise clamp to
         // signed int8 [-128, 127].
         if constexpr (OUTPUT_FORMAT == DataFormat::UInt8) {
+            // Clamp negatives to 0 on WH: SFPSTOCHRND_MOD1_FP32_TO_UINT8 can
+            // return magnitude of negatives instead of 0.
+            TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
+            TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+            TTI_SFPENCC(0, 0, 0, 0);
             TTI_SFP_STOCH_RND(
                 sfpi::SFPSTOCHRND_RND_EVEN,
                 0 /*imm8*/,
