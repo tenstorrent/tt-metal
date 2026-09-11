@@ -136,11 +136,7 @@ protected:
             "tests/tt_metal/tt_metal/test_kernels/misc/drisc_gddr_mc_priority.cpp",
             logical_dram_core,
             DramConfig{.noc = NOC::NOC_0});
-        SetRuntimeArgs(
-            program,
-            kernel,
-            logical_dram_core,
-            {weights[0], weights[1], weights[2], drisc_l1_base_});
+        SetRuntimeArgs(program, kernel, logical_dram_core, {weights[0], weights[1], weights[2], drisc_l1_base_});
         run_workload(std::move(program));
 
         std::array<uint32_t, 3> readback{};
@@ -727,10 +723,8 @@ TEST_F(DramKernelFixture, DISABLED_MpfePriorityWeightBenchmark) {
     }
 
     const CoreCoord tensix_logical{0, 0};
-    const CoreCoord drisc_virtual =
-        mesh_device_->virtual_core_from_logical_core(active_sender, CoreType::DRAM);
-    const CoreCoord tensix_virtual =
-        mesh_device_->virtual_core_from_logical_core(tensix_logical, CoreType::WORKER);
+    const CoreCoord drisc_virtual = mesh_device_->virtual_core_from_logical_core(active_sender, CoreType::DRAM);
+    const CoreCoord tensix_virtual = mesh_device_->virtual_core_from_logical_core(tensix_logical, CoreType::WORKER);
     const uint32_t clk_hz =
         MetalContext::instance().get_cluster().get_device_aiclk(mesh_device_->build_id()) * 1000000u;
 
@@ -743,11 +737,7 @@ TEST_F(DramKernelFixture, DISABLED_MpfePriorityWeightBenchmark) {
                 "tests/tt_metal/tt_metal/test_kernels/misc/drisc_l1_dram_dma.cpp",
                 active_sender,
                 DramConfig{.noc = NOC::NOC_0});
-            SetRuntimeArgs(
-                program,
-                drisc_kernel,
-                active_sender,
-                {dram_addr, drisc_l1_base_, bytes_per_iter, iters});
+            SetRuntimeArgs(program, drisc_kernel, active_sender, {dram_addr, drisc_l1_base_, bytes_per_iter, iters});
 
             const auto tensix_kernel = CreateKernel(
                 program,
@@ -758,20 +748,15 @@ TEST_F(DramKernelFixture, DISABLED_MpfePriorityWeightBenchmark) {
                     .noc = NOC::NOC_0,
                     .defines = {{"WRITE_TIMING", "1"}}});
             SetRuntimeArgs(
-                program,
-                tensix_kernel,
-                tensix_logical,
-                {bank_id, dram_addr, tensix_l1_base_, bytes_per_iter, iters});
+                program, tensix_kernel, tensix_logical, {bank_id, dram_addr, tensix_l1_base_, bytes_per_iter, iters});
             run_workload(std::move(program));
         } catch (...) {
             (void)set_mpfe_weights(bank_id, {0, 0, 0});
             throw;
         }
 
-        const uint64_t drisc_cycles =
-            read_timing_cycles(drisc_virtual, drisc_l1_noc_addr_ + bytes_per_iter);
-        const uint64_t ordinary_cycles =
-            read_timing_cycles(tensix_virtual, tensix_l1_base_ + bytes_per_iter);
+        const uint64_t drisc_cycles = read_timing_cycles(drisc_virtual, drisc_l1_noc_addr_ + bytes_per_iter);
+        const uint64_t ordinary_cycles = read_timing_cycles(tensix_virtual, tensix_l1_base_ + bytes_per_iter);
         log_info(
             LogTest,
             "BH MPFE benchmark case={} weights={}/{}/{} active_port=P{} ordinary_port=P{} "

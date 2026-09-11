@@ -52,8 +52,7 @@ constexpr const char* kKernelPath = "tt_metal/impl/buffers/kernels/tensor_prefet
 
 inline uint32_t align_up(uint32_t a, uint32_t align) { return (a + align - 1) & ~(align - 1); }
 
-uint32_t get_mpfe_port(
-    const metal_SocDescriptor& soc_desc, uint32_t bank_id, const CoreCoord& sender_logical_core) {
+uint32_t get_mpfe_port(const metal_SocDescriptor& soc_desc, uint32_t bank_id, const CoreCoord& sender_logical_core) {
     const uint32_t num_subchannels = soc_desc.get_grid_size(tt::CoreType::DRAM).y;
     TT_FATAL(
         num_subchannels == kNumGddrSubchannelsPerBank,
