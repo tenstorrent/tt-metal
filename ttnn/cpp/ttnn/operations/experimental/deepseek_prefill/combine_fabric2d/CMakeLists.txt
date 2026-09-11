@@ -16,7 +16,11 @@ set_target_properties(
             api
 )
 
-file(GLOB_RECURSE kernels device/kernels/*.cpp)
+file(
+    GLOB_RECURSE kernels
+    device/kernels/*.cpp
+    device/kernels/*.hpp
+)
 
 target_sources(
     ttnn_op_experimental_deepseek_prefill_combine_fabric2d

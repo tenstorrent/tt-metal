@@ -48,6 +48,13 @@ file(
     moe_compute/device/kernels/*.cpp
     moe_compute/device/kernels/*.h
     moe/selective_reduce_combine/device/kernels/*.cpp
+    all_gather_minimal_matmul_async/device/kernels/*.cpp
+    all_gather_minimal_matmul_async/device/kernels/*.hpp
+    send_recv_async/send_direct_async/device/kernels/*.cpp
+    send_recv_async/recv_direct_async/device/kernels/*.cpp
+    dit_fused_norm_common/kernels/*.cpp
+    neighbor_pad_common/kernels/*.hpp
+    reduce_scatter_common/kernels/*.hpp
 )
 
 target_sources(
