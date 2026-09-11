@@ -252,8 +252,10 @@ def test_r5_a_rejected_discovery_is_a_refusal_not_a_crash():
     run_src = (_PA / "cc_optimize" / "run.py").read_text()
     j = run_src.index("rc == EXIT_REFUSED")
     assert "raise SystemExit(EXIT_REFUSED)" in run_src[j : j + 700], "a refused discovery is not propagated"
-    # and it must be decided BEFORE the fallback that continues on a complete manifest
-    assert j < run_src.index("but the manifest is complete"), "the refusal is checked after the override"
+    # and it must be decided BEFORE the narrow fallback that continues only after a credible baseline
+    assert j < run_src.index("after persisting a credible baseline; continuing"), (
+        "the refusal is checked after the baseline-qualified override"
+    )
 
 
 def test_the_refusal_path_can_actually_return_the_refusal_code():

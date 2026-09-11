@@ -38,6 +38,25 @@ def test_it_still_disables_tracy():
     assert 'env.pop("TT_METAL_DEVICE_PROFILER", None)' in body
 
 
+def test_full_pipeline_forces_trace_after_eager_profiling():
+    """A persistent shell's TT_PERF_TRACE=0 must not change the production verdict to eager."""
+    body = _fn("_run_full_pipeline_ms")
+    assert 'env["TT_PERF_TRACE"] = "1"' in body
+    assert 'env.setdefault("TT_PERF_TRACE", "1")' not in body
+
+
+def test_only_the_verdict_path_claims_the_verdict_role():
+    """The gate refuses a non-verdict configuration, so exactly one caller may claim that role.
+
+    The op-signature probe runs the SAME pytest node at OSL=1 by design; if it also claimed
+    'verdict' the gate's sustained-decode assert would fail every coverage check.
+    """
+    assert 'env["PERF_GATE_ROLE"] = "verdict"' in _fn("_run_full_pipeline_ms")
+    probe = _fn("_full_depth_op_probe")
+    assert 'env["PERF_GATE_ROLE"] = "op_probe"' in probe
+    assert '"verdict"' not in probe
+
+
 def test_the_names_are_derived_not_hardcoded():
     """layer_depth owns the spelling and the model owns which stacks exist -- a model with other
     stack names must be covered without editing a list here."""

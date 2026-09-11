@@ -126,6 +126,53 @@ def test_discovered_variable_name_is_guarded(tmp_path):
     assert _run_custom(tmp_path, depth_vars="MAX_LAYERS") == "None"
 
 
+# --- the hook must not bill its own recursion to the model it measures -------------------------
+
+_VICTIM_IMPORT_COST = """
+import builtins, time
+
+def test_a_runtime_import_is_a_dict_lookup():
+    # One runtime import statement, like `import torch` inside ttnn.from_torch's body, executed on
+    # every decode token of the model under measurement.
+    calls = [0]
+    hooked = builtins.__import__
+    def counting(*a, **k):
+        calls[0] += 1
+        return hooked(*a, **k)
+    builtins.__import__ = counting
+    try:
+        import os as _o  # noqa: F401
+    finally:
+        builtins.__import__ = hooked
+    t = time.perf_counter()
+    for _ in range(1000):
+        import os as _o2  # noqa: F401
+    per_us = (time.perf_counter() - t) / 1000 * 1e6
+    print("IMPORT_HOOK_CALLS=%d IMPORT_US=%.1f" % (calls[0], per_us))
+"""
+
+
+def test_the_hook_does_not_recurse_into_itself(tmp_path):
+    """The plugin wraps builtins.__import__ and its body used to contain `import sys` -- an import
+    statement, i.e. a call of the wrapper itself -- so every runtime import recursed ~1000 frames deep
+    to a swallowed RecursionError and cost ~1 ms. With the plugin loaded, one `import os` must reach
+    __import__ a handful of times (the wrapper and the nested _orig_import call chain), not hundreds,
+    and must cost microseconds, not a millisecond."""
+    t = tmp_path / "test_import_cost.py"
+    t.write_text(_VICTIM_IMPORT_COST)
+    cmd = [sys.executable, "-m", "pytest", "-o", "addopts=", "--rootdir", str(tmp_path), "-s", "-q", "-p", _PLUGIN, str(t)]
+    env = dict(__import__("os").environ)
+    env["PYTHONPATH"] = str(_REPO)
+    out = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=str(_REPO), timeout=300)
+    text = (out.stdout or "") + (out.stderr or "")
+    line = next((ln for ln in text.splitlines() if ln.startswith("IMPORT_HOOK_CALLS=")), None)
+    assert line, text[-2000:]
+    calls = int(line.split()[0].split("=")[1])
+    per_us = float(line.split()[1].split("=")[1])
+    assert calls < 10, "one `import os` re-entered __import__ %d times: the hook is importing inside itself" % calls
+    assert per_us < 100.0, "a runtime import costs %.1f us under the plugin; it must stay a dict lookup" % per_us
+
+
 def test_set_depth_arms_and_disarms_the_guard():
     """set_depth is the single place that decides: asking for all layers arms the guard, asking for a
     positive cap disarms it, so the tracy slice can never be stripped."""
