@@ -22,7 +22,9 @@
 // P = N > 1024.  If P%1024 ≠ 0, the function falls back to ttnn::pad (Case B),
 // which allocates CB ≈ 17 × P_pad × elem_bytes.  This is safe for P < ~16 K
 // (fp32) or ~32 K (bf16), but overflows L1 for larger non-1024-aligned N.
-// Callers must restrict to P%1024==0 when P*elem_bytes > 64 KB.
+// Large nonaligned B=1 Float32 precise transforms on Wormhole B0 instead
+// fuse PRE/padding and POST/trimming into bounded streaming chirp kernels.
+// Other configurations retain the fallback and its size guard.
 //
 // Step 3 / 5 each lower to either the SingleTileStockham factory
 // (M ≤ 1024) or fft_two_pass (1024 < M ≤ 1M).  Chirp_n, chirp_k, and
@@ -34,6 +36,7 @@
 #include "ttnn/operations/experimental/fft/complex_mul.hpp"
 #include "ttnn/operations/experimental/fft/fft.hpp"
 #include "ttnn/operations/experimental/fft/device/bluestein_host.hpp"
+#include "ttnn/operations/experimental/fft/device/bluestein_chirp_device_operation.hpp"
 #include "ttnn/operations/experimental/fft/device/rebank_rm_device_operation.hpp"
 #include "ttnn/operations/experimental/fft/device/rebank_rm_merge_device_operation.hpp"
 
@@ -457,6 +460,23 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> bluestein_fft(
 
     // ── Get plan (chirp_n, chirp_k, B_fft) — cached per (device, N, dtype, B, inverse).
     auto plan = get_or_create(input_real.device(), N, input_real.dtype(), B, precision, inverse);
+
+    // Nonaligned large rows cannot use the generic pad/slice path within L1.
+    // Stream PRE directly to M and POST directly to N, preserving the existing
+    // chirps, convolution FFTs, and inverse normalization. Other configurations
+    // retain their existing dispatch until separately qualified.
+    const bool streaming_chirp =
+        B == 1u && input_real.dtype() == tt::tt_metal::DataType::FLOAT32 &&
+        precision == FFTPrecision::Precise && input_real.device()->arch() == tt::ARCH::WORMHOLE_B0 &&
+        N > kBluesteinRebankThreshold / sizeof(float) && N % 1024u != 0u && M <= (1u << 20);
+    if (streaming_chirp) {
+        auto [a_re, a_im] = ttnn::prim::bluestein_chirp(
+            input_real, input_imag, plan->chirp_n_re, plan->chirp_n_im, M);
+        auto [A_re, A_im] = fft(a_re, a_im, precision);
+        auto [C_re, C_im] = complex_mul_safe(A_re, A_im, plan->B_re, plan->B_im);
+        auto [c_re, c_im] = ifft(C_re, C_im, precision);
+        return ttnn::prim::bluestein_chirp(c_re, c_im, plan->chirp_k_re, plan->chirp_k_im, N);
+    }
 
     // ── Materialise an explicit zero imag input when omitted ───────────
     //   The first step (complex_mul with chirp_n) requires both halves;

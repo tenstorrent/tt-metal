@@ -19,6 +19,7 @@ Kernels use named resources generated from their program specification:
 | Table twiddles | `apply_twiddles_{reader,writer}.cpp`, `apply_twiddles_compute.cpp` | Two-pass between-pass multiply |
 | XL twiddles | `apply_twiddles_xl_reader.cpp`, `apply_twiddles_writer.cpp`, `apply_twiddles_compute.cpp` | Three-pass large-modulus multiply |
 | Complex multiply | `complex_mul_reader.cpp`, `apply_twiddles_writer.cpp`, `apply_twiddles_compute.cpp` | Bluestein pre/post chirp and spectrum multiply |
+| Streaming chirp | `bluestein_chirp_{reader,writer}.cpp`, `apply_twiddles_compute.cpp` | Single-batch FP32 precise Bluestein PRE/POST for large nonaligned rows on Wormhole B0 |
 | Rebank | `rebank_rm_{reader,writer}.cpp` | Streaming row-major rebank |
 | Rebank merge | `rebank_rm_merge_{reader,writer}.cpp` | Inverse row-major rebank |
 | Transpose | `transpose_rm_{reader,writer}.cpp` | Precision-preserving inner-axis transpose |
@@ -37,6 +38,14 @@ does not have a separate kernel triple.
 
 IFFT uses the same kernels with swapped real/imaginary inputs and applies
 `1/N` scaling in the writer.
+
+The streaming chirp path combines PRE multiplication with zero-extension to
+the convolution length, and combines POST truncation with multiplication by
+the existing cached chirp. Its 1024-element chunks use 56 KiB of declared
+dataflow buffers per core, independent of transform length. Tail transfers
+cover only valid elements; padded compute lanes are explicitly zeroed. The
+inner FFT, spectral multiply, and IFFT remain unchanged. Inverse Bluestein
+normalization remains in the cached output chirp.
 
 ## Build and installation
 

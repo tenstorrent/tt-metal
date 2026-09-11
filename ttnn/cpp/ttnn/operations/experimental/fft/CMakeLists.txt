@@ -57,6 +57,7 @@ target_sources(
         device/fft_radix_pass_factory.cpp
         device/complex_mul_device_operation.cpp
         device/complex_mul_factory.cpp
+        device/bluestein_chirp_device_operation.cpp
         fft.cpp
         apply_twiddles.cpp
         apply_twiddles_xl.cpp
