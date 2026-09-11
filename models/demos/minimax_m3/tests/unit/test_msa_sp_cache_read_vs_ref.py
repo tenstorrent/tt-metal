@@ -225,7 +225,8 @@ def test_msa_sp_cache_read_high_bw_pcc(
             shard(q, True),
             shard(iq, True),
             kv,
-            slot=slot,
+            user_id=0,
+            layer_idx=slot,
             chunk_local=chunk_local,
             **common,
         )

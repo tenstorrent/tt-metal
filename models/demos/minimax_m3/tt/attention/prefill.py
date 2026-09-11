@@ -27,9 +27,6 @@ from .operations import (
 from .weights import AttentionWeights
 
 
-
-
-
 def attention_forward(
     hidden_states,
     rope_mats,
@@ -202,12 +199,13 @@ def attention_forward(
             # Cache-read: the current chunk attends the accumulated prefix, gathered across SP straight
             # from this (user, layer) slot of the packed cache (msa_sp_attention_cache_read). Chunks are
             # chunk-aligned (asserted by the runtime), so cached_len is a whole number of chunks.
-            slot = user_id * kv_cache.num_layers + layer_idx
             tt_sdpa_out = msa_sp_attention_cache_read(
                 tt_q,
                 tt_iq,
                 kv_cache,
-                slot=slot,
+                user_id=user_id,
+                layer_idx=layer_idx,
+                slot_tensor=kv_cache.slot_tensor(user_id, mesh_device) if kv_cache.device_slot else None,
                 mesh_config=mesh_config,
                 ccl_manager=ccl_manager,
                 cached_len=cached_len,
@@ -252,6 +250,16 @@ def attention_forward(
             # Cache-read: ring_joint over the accumulated prefix in the cache (the seam already wrote this
             # chunk -> write_chunk=False). logical_n = full valid prefix = cached_len + this chunk.
             logical_n = cached_len + seq_len * sp
+            # Under device_slot the read takes the same persistent scalars as the write, so one set_read_user
+            # re-targets every consumer of a captured trace.
+            slot_kwargs = (
+                dict(
+                    slot_id=kv_cache.slot_tensor(user_id, mesh_device),
+                    kv_actual_isl_tensor=kv_cache.kv_actual_tensor(cached_len, mesh_device),
+                )
+                if kv_cache.device_slot
+                else {}
+            )
             with zone("ring_joint_sdpa"):
                 tt_sdpa_out = dense_sp_attention(
                     tt_q,
@@ -280,6 +288,7 @@ def attention_forward(
                     layer_idx=layer_idx,
                     num_layers=kv_cache.num_layers,
                     write_chunk=False,
+                    **slot_kwargs,
                 )
         else:
             with zone("ring_joint_sdpa"):

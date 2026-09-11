@@ -37,11 +37,24 @@ def _ensure_dram(t):
     return t
 
 
-def high_bw_sp_gather(t, mesh_config, ccl_manager, out_buf, *, input_batch_index=None, gathered_dim_size=None):
+def high_bw_sp_gather(
+    t,
+    mesh_config,
+    ccl_manager,
+    out_buf,
+    *,
+    input_batch_index=None,
+    gathered_dim_size=None,
+    input_batch_index_tensor=None,
+    batch_slot_num_layers=1,
+    batch_slot_layer_idx=0,
+):
     """SP all-gather of ``t`` on dim 2 with ``ttnn.experimental.high_bw_all_gather`` into the persistent
     ``out_buf`` (CCLManager.get_high_bw_gather_buffer); the returned tensor aliases it, do not deallocate.
-    ``input_batch_index`` selects one slot of a multi-slot [B, 1, rows, D] cache; ``gathered_dim_size``
-    bounds the rows moved per rank (rank r still lands at its fixed slot r*rows)."""
+    ``input_batch_index`` selects one slot of a multi-slot [B, 1, rows, D] cache, or ``input_batch_index_tensor``
+    (a 1-element uint32 user-id scalar, folded on device with ``batch_slot_num_layers`` / ``batch_slot_layer_idx``)
+    does so trace-safely; ``gathered_dim_size`` bounds the rows moved per rank (rank r still lands at its
+    fixed slot r*rows)."""
     return ttnn.experimental.high_bw_all_gather(
         t,
         dim=2,
@@ -50,6 +63,9 @@ def high_bw_sp_gather(t, mesh_config, ccl_manager, out_buf, *, input_batch_index
         num_links=ccl_manager.num_links,
         input_batch_index=input_batch_index,
         gathered_dim_size=gathered_dim_size,
+        input_batch_index_tensor=input_batch_index_tensor,
+        batch_slot_num_layers=batch_slot_num_layers,
+        batch_slot_layer_idx=batch_slot_layer_idx,
     )
 
 
@@ -280,7 +296,9 @@ def msa_sp_attention_cache_read(
     index_q,
     kv_cache,
     *,
-    slot,
+    user_id,
+    layer_idx,
+    slot_tensor=None,
     mesh_config,
     ccl_manager,
     cached_len,
@@ -291,9 +309,10 @@ def msa_sp_attention_cache_read(
     num_groups=1,
 ):
     """Cross-chunk MSA: the current chunk's queries attend the accumulated context, gathered across SP
-    straight out of (user, layer) ``slot`` of the packed ``[num_users*num_layers, 1, seq_local, hd]``
-    ND-sharded cache by ``high_bw_all_gather`` (``input_batch_index=slot``, ``gathered_dim_size`` = the
-    written prefix, incl. the current chunk that prefill.py wrote before calling us). The output is the
+    straight out of the (``user_id``, ``layer_idx``) slot of the packed ``[num_users*num_layers, 1, seq_local, hd]``
+    ND-sharded cache by ``high_bw_all_gather`` (``gathered_dim_size`` = the written prefix, incl. the current
+    chunk that prefill.py wrote before calling us). The slot is a host int, or with ``slot_tensor`` (the KV
+    cache's persistent user-slot scalar) it is read on device, so a captured trace re-targets per user. The output is the
     persistent worst-case buffer ``[1, 1, seq_local*sp, hd]`` with rank r at the fixed slot r*seq_local,
     which is the block-cyclic layout the indexer / sparse_sdpa_msa decode in-kernel (stride T/sp ==
     seq_local); ``kv_len`` bounds them to the written prefix. Returns the chunk's SP-sharded attention out
@@ -315,11 +334,18 @@ def msa_sp_attention_cache_read(
     assert n_rows <= seq_local, f"cache read past capacity: {n_rows} rows > {seq_local}"
     kv_len = cached_len + chunk_global  # natural-position valid prefix (== n_rows * sp)
 
+    if slot_tensor is None:
+        slot_kwargs = dict(input_batch_index=user_id * kv_cache.num_layers + layer_idx)
+    else:
+        slot_kwargs = dict(
+            input_batch_index_tensor=slot_tensor,
+            batch_slot_num_layers=kv_cache.num_layers,
+            batch_slot_layer_idx=layer_idx,
+        )
+
     def gather(key, cache_t):
         buf = ccl_manager.get_high_bw_gather_buffer(key, (1, 1, seq_local * sp, cache_t.shape[3]), cache_t.dtype)
-        return high_bw_sp_gather(
-            cache_t, mesh_config, ccl_manager, buf, input_batch_index=slot, gathered_dim_size=n_rows * sp
-        )
+        return high_bw_sp_gather(cache_t, mesh_config, ccl_manager, buf, gathered_dim_size=n_rows * sp, **slot_kwargs)
 
     # ag_kv feeds sparse_sdpa_msa; ag_index_k feeds the indexer — split so the two AG costs are
     # attributable to their consumer (see tests/perf/profile_prefill.py).
