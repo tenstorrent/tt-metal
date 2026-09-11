@@ -109,7 +109,7 @@ sizes:
     aliases: ["Qwen3-32B", "Qwen/Qwen3-32B"]
     skus:
       wh_llmbox_perf:
-        trace_region_size: 90000000
+        trace_region_size: 120000000
       wh_galaxy_perf:
         trace_region_size: 200000000
       bh_p150:
