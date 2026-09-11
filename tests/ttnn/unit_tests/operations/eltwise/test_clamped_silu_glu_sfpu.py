@@ -172,7 +172,7 @@ def test_clamped_silu_glu_sfpu(device, in_name, fp32_dest, dst_gate, dst_up, dst
         # no matter how accurate the SFPU is; ULP only says something about the bf16 arm.
         assert_with_pcc(g, a, pcc=BFP8_PCC)
     else:
-        assert_with_ulp(golden, actual, ulp_threshold=BF16_ULP)
+        assert_with_ulp(expected_result=golden, actual_result=actual, ulp_threshold=BF16_ULP)
         assert_with_pcc(g, a, pcc=BF16_PCC)
 
 
@@ -185,10 +185,14 @@ def test_clamped_silu_glu_init_is_required(device, expect_error):
     gate_t, up_t = _coverage_inputs(8)
     golden = clamped_silu_glu_reference(gate_t, up_t)
 
-    assert_with_ulp(golden, _run(device, gate_t, up_t, in_dtype, page_bytes, False), ulp_threshold=BF16_ULP)
+    assert_with_ulp(
+        expected_result=golden,
+        actual_result=_run(device, gate_t, up_t, in_dtype, page_bytes, False),
+        ulp_threshold=BF16_ULP,
+    )
     with expect_error(AssertionError, "Max ULP Delta"):
         assert_with_ulp(
-            golden,
-            _run(device, gate_t, up_t, in_dtype, page_bytes, False, skip_init=True),
+            expected_result=golden,
+            actual_result=_run(device, gate_t, up_t, in_dtype, page_bytes, False, skip_init=True),
             ulp_threshold=BF16_ULP,
         )

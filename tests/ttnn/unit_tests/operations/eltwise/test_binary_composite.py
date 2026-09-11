@@ -1268,7 +1268,7 @@ def _assert_clamped_silu_glu_values(gate, up, out, ttnn_dtype):
     if is_bfp8:
         assert_with_pcc(golden, tt_res, pcc=CLAMPED_SILU_GLU_BFP8_PCC)
     else:
-        assert_with_ulp(golden, tt_res, ulp_threshold=CLAMPED_SILU_GLU_ULP)
+        assert_with_ulp(expected_result=golden, actual_result=tt_res, ulp_threshold=CLAMPED_SILU_GLU_ULP)
         assert_with_pcc(golden, tt_res, pcc=CLAMPED_SILU_GLU_BF16_PCC)
 
 
