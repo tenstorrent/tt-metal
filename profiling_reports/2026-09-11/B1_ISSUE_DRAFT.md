@@ -39,7 +39,7 @@ Completion requires an explanation linking routing and mapping to cost variation
 
 ## Supporting material
 
-- [B1 finding and historical provenance](https://github.com/tenstorrent/tt-metal/blob/ssalice/mistral4-b1-investigation/profiling_reports/2026-09-11/B1_FINDING.md)
+- [MoE finding and historical provenance](https://github.com/tenstorrent/tt-metal/blob/ssalice/mistral4-b1-investigation/profiling_reports/2026-09-11/B1_FINDING.md)
 - [Local findings and run ranges](https://github.com/tenstorrent/tt-metal/blob/ssalice/mistral4-b1-investigation/profiling_reports/2026-09-11/b1-controlled-routing/LOCAL_FINDINGS.md)
 - [Validated capture matrix](https://github.com/tenstorrent/tt-metal/blob/ssalice/mistral4-b1-investigation/profiling_reports/2026-09-11/b1-controlled-routing/MATRIX_RESULTS.md) and [timing data](https://github.com/tenstorrent/tt-metal/blob/ssalice/mistral4-b1-investigation/profiling_reports/2026-09-11/b1-controlled-routing/matrix_timings.json)
 - [Validation and recovery history](https://github.com/tenstorrent/tt-metal/blob/ssalice/mistral4-b1-investigation/profiling_reports/2026-09-11/b1-controlled-routing/VALIDATION.md)
