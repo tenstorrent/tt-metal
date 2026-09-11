@@ -6,6 +6,7 @@
 #include "hal_types.hpp"
 #include <tt-metalium/mesh_device.hpp>
 #include <tuple>
+#include "impl/context/metal_context.hpp"
 #include "impl/emulation/emule_live_ranges.hpp"
 #include "impl/emulation/host_sanitizers.hpp"
 

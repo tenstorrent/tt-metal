@@ -66,11 +66,12 @@ void sync_debug_servers_before_teardown() {
 }  // namespace
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, HostHugepagePcieLoopback) {
-    TT_FATAL(this->device().is_mmio_capable(), "Host hugepage test requires an MMIO-capable device");
+    IDevice* device = this->device().get_devices()[0];
+    TT_FATAL(device->is_mmio_capable(), "Host hugepage test requires an MMIO-capable device");
 
     auto& cluster = MetalContext::instance().get_cluster();
-    const ChipId mmio_device_id = cluster.get_associated_mmio_device(this->device().get_device_ids().front());
-    const uint16_t channel = cluster.get_assigned_channel_for_device(this->device().get_device_ids().front());
+    const ChipId mmio_device_id = cluster.get_associated_mmio_device(device->id());
+    const uint16_t channel = cluster.get_assigned_channel_for_device(device->id());
 
     void* host_hugepage_base = cluster.host_dma_address(0, mmio_device_id, channel);
     ASSERT_NE(host_hugepage_base, nullptr) << "Host hugepage is not mapped for this device";
@@ -79,12 +80,12 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, HostHugepagePcieLoopback) {
     ASSERT_GE(channel_size, kHostDstOffset + kTransferSizeBytes) << "Host channel too small for test buffers";
 
     // Device-side PCIe byte offsets mirror host hugepage offsets (see SimulationSysmemManager mapping).
-    const uint64_t pcie_base = cluster.get_pcie_base_addr_from_device(this->device().get_device_ids().front());
+    const uint64_t pcie_base = cluster.get_pcie_base_addr_from_device(device->id());
     const uint32_t host_src_pcie_addr = static_cast<uint32_t>(pcie_base + kHostSrcOffset);
     const uint32_t host_dst_pcie_addr = static_cast<uint32_t>(pcie_base + kHostDstOffset);
 
     const experimental::NodeCoord node{0, 0};
-    const uint32_t l1_base = this->device().allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t l1_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     const uint32_t l1_staging_addr = l1_base + l1_alignment * 8;
 
