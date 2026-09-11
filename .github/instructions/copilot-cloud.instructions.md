@@ -1,15 +1,20 @@
-# AGENTS.md — instructions for coding agents authoring changes
+---
+applyTo: "**"
+excludeAgent: "code-review"
+---
 
-This file is for agents **writing** changes to tt-metal (GitHub Copilot cloud
-agent and equivalents).
+# Copilot cloud agent — authoring and build instructions
+
+These instructions apply to GitHub Copilot cloud agent **writing** changes to
+tt-metal in the environment configured by `.github/workflows/copilot-setup-steps.yml`.
 
 Related instruction files:
 
 | File | Audience | Purpose |
 | --- | --- | --- |
-| `AGENTS.md` (this file) | cloud agent | how to author and **verify** a change |
+| `.github/instructions/copilot-cloud.instructions.md` (this file) | cloud agent | how to author and **verify** a change |
 | `.github/copilot-instructions.md` | code review | cross-cutting review criteria |
-| `.github/instructions/*.instructions.md` | code review | path-scoped review criteria (all carry `excludeAgent: "cloud-agent"`) |
+| Other `.github/instructions/*.instructions.md` files | code review | path-scoped review criteria (carry `excludeAgent: "cloud-agent"`) |
 
 The review files describe how to critique a PR. They are not a specification
 for your own work.
