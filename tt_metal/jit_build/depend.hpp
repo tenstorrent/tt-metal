@@ -31,14 +31,21 @@ void write_dependency_hashes(
     std::ostream& hash_file);
 
 // Reads dependencies from .d file and writes their hashes to .hash file.
+// extra_dependency adds an input omitted by the compiler (e.g. a PCH umbrella).
 // Deletes the .hash file on any failure.
-void write_dependency_hashes(const std::string& out_dir, const std::string& obj, const std::string& hash_path);
+void write_dependency_hashes(
+    const std::string& out_dir,
+    const std::string& obj,
+    const std::string& hash_path,
+    const std::string& extra_dependency = {});
 
 // Returns true if all dependencies' hashes match those stored in `hash_file`.
-bool dependencies_up_to_date(std::istream& hash_file);
+bool dependencies_up_to_date(std::istream& hash_file, const std::string& required_dependency = {});
 
 // Returns true if all dependencies' hashes match those stored in the .hash file.
-bool dependencies_up_to_date(const std::string& out_dir, const std::string& obj);
+// A nonempty required_dependency must also be recorded, rejecting older incomplete caches.
+bool dependencies_up_to_date(
+    const std::string& out_dir, const std::string& obj, const std::string& required_dependency = {});
 
 // Returns true if all dependencies' hashes match those stored in the sidecar at `hash_file_path`.
 // Returns false if the file is missing or malformed. Unlike the overload above, the caller supplies

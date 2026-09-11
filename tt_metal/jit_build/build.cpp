@@ -711,13 +711,16 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     fs::remove(log_file.path());
     bool result = tt::jit_build::utils::exec_command(args, out_dir, log_file.path());
     report_result(this->target_name_, "compile", fmt::format("{}", fmt::join(args, " ")), log_file.path(), result);
-    jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash");
+    const auto umbrella = fs::path(env_.root_) / jit_build::PCH_UMBRELLA;
+    jit_build::write_dependency_hashes(
+        out_dir, obj_temp_path, obj_temp_path + ".dephash", fs::exists(umbrella) ? umbrella.string() : "");
     fs::remove(temp_d_path);  // .d file not needed after hash is written
 }
 
 bool JitBuildState::need_compile(const string& out_dir, const string& obj) const {
+    const auto umbrella = fs::path(env_.root_) / jit_build::PCH_UMBRELLA;
     return env_.get_rtoptions().get_force_jit_compile() || !fs::exists(out_dir + obj) ||
-           !jit_build::dependencies_up_to_date(out_dir, obj);
+           !jit_build::dependencies_up_to_date(out_dir, obj, fs::exists(umbrella) ? umbrella.string() : "");
 }
 
 std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
