@@ -231,8 +231,11 @@ class TTSpatialCrossAttention:
             batch_first=batch_first,
         )
 
+        # Its own namespace, not the SCA's: both own an ``output_proj`` and both
+        # apply it, so sharing one namespace makes the inner attention project
+        # with the SCA's matrix and the SCA apply that matrix a second time.
         self.deformable_attention = TTMSDeformableAttention(
-            deform_config, device, params, spatial_shapes=spatial_shapes
+            deform_config, device, params.deformable_attention, spatial_shapes=spatial_shapes
         )
 
     def forward(
