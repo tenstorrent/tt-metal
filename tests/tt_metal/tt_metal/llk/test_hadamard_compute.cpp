@@ -101,7 +101,14 @@ void run_hadamard_reconfiguration(
         }
         const auto expected = sign * (normalize ? std::sqrt(128.0f) : 128.0f);
         // The normalized SFPU path stores BF16 before the BFP8 packer runs.
-        golden[tile * face_elements + rows[tile]] = static_cast<float>(bfloat16(expected));
+        const auto bf16_expected = static_cast<float>(bfloat16(expected));
+        // Each Walsh output has one nonzero value, so it sets its row's shared
+        // exponent. Match the device's 7-bit magnitude and ties-away rounding;
+        // the host BFP8 encoder instead rounds ties to even (11.3125 -> 11.25).
+        int exponent = 0;
+        std::frexp(bf16_expected, &exponent);
+        const auto bfp8_step = std::ldexp(1.0f, exponent - 7);
+        golden[tile * face_elements + rows[tile]] = std::round(bf16_expected / bfp8_step) * bfp8_step;
         for (std::uint32_t i = 0; i < 1024; ++i) {
             copies[tile * 1024 + i] = bfloat16(static_cast<float>(static_cast<int>((i + tile * 19) % 61) - 30) / 8.0f);
         }
@@ -127,10 +134,7 @@ void run_hadamard_reconfiguration(
     std::vector<std::uint32_t> copied;
     distributed::EnqueueReadMeshBuffer(cq, result, output, true);
     distributed::EnqueueReadMeshBuffer(cq, copied, copy_output, true);
-    const auto packed_golden = pack_as_bfp8_tiles<float>(golden, true, false, face);
-    EXPECT_EQ(
-        unpack_bfp8_tiles_into_float_vec(result, true, false, face),
-        unpack_bfp8_tiles_into_float_vec(packed_golden, true, false, face));
+    EXPECT_EQ(unpack_bfp8_tiles_into_float_vec(result, true, false, face), golden);
     EXPECT_EQ(copied, packed_copies);
 }
 

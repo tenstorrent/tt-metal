@@ -3,6 +3,7 @@
 
 #include <cstdint>
 
+#include "api/compute/common.h"
 #include "api/compute/experimental/csa_index_remap.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
