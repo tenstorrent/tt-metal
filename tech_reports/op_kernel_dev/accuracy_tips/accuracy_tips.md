@@ -139,7 +139,7 @@ With changes:
 <img src="images/error_after.png" style="width:600px;"/>
 
 # Welford-Compatible Mean and Variance Paths
-LayerNorm and GroupNorm require the mean and variance per layer or group. Their `use_welford` option is retained as a compatibility name for requesting the numerically stable statistics backends; it no longer selects one algorithm unconditionally. Depending on the architecture, tensor layout and calibrated performance policy, ordinary LayerNorm and GroupNorm select either shifted two-pass SFPU statistics with FP32 accumulation or a tile/FPU reduction. Distributed LayerNorm continues to use an online Welford merge protocol.
+LayerNorm and GroupNorm require the mean and variance per layer or group. Their `use_welford` option is retained as a compatibility name; it no longer selects one algorithm or guarantees full FP32 operand precision. The shifted two-pass SFPU backend preserves FP32 inputs and accumulates statistics in FP32. The selectors can also choose the tile/FPU backend, including for Blackhole sharded LayerNorm and GroupNorm with spatial padding. On that backend, FP32 operands pass through TF32 SrcA/SrcB even when destination accumulation is FP32, so low-order variation around a large offset can be lost. Backend selection depends on architecture, layout, destination precision and calibrated performance policy. Distributed LayerNorm continues to use an online Welford merge protocol.
 
 The online Welford algorithm accumulates the mean and variance in lockstep. See: https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Welford's_online_algorithm. Specifically, the sample mean of the first $n$ elements:
 
