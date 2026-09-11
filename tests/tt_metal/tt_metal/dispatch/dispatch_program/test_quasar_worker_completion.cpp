@@ -24,7 +24,7 @@
 namespace tt::tt_metal {
 namespace {
 
-constexpr std::uint32_t local_l1_size = 3200;
+constexpr uint32_t local_l1_size = 3200;
 
 std::vector<experimental::NodeCoord> worker_nodes(const CoreCoord& worker_grid) {
     return experimental::grid_to_nodes(
@@ -42,8 +42,8 @@ SubDevice sub_device_from_nodes(const std::vector<experimental::NodeCoord>& node
 distributed::MeshWorkload create_l1_write_workload(
     distributed::MeshDevice& mesh_device,
     const experimental::NodeCoord& node,
-    std::uint32_t address,
-    std::uint32_t value,
+    uint32_t address,
+    uint32_t value,
     const std::string& kernel_id) {
     const experimental::KernelSpecName kernel_name{"worker_completion_" + kernel_id};
     experimental::ProgramSpec program_spec{
@@ -85,15 +85,14 @@ distributed::MeshWorkload create_blank_workload(
     return workload;
 }
 
-std::uint32_t read_l1_word(
-    distributed::MeshDevice& mesh_device, const experimental::NodeCoord& node, std::uint32_t address) {
-    std::vector<std::uint32_t> output(1, 0);
-    slow_dispatch::ReadFromL1(mesh_device, node, address, sizeof(std::uint32_t), output);
+uint32_t read_l1_word(distributed::MeshDevice& mesh_device, const experimental::NodeCoord& node, uint32_t address) {
+    std::vector<uint32_t> output(1, 0);
+    slow_dispatch::ReadFromL1(mesh_device, node, address, sizeof(uint32_t), output);
     return output[0];
 }
 
-void clear_l1_word(distributed::MeshDevice& mesh_device, const experimental::NodeCoord& node, std::uint32_t address) {
-    std::vector<std::uint32_t> zero(1, 0);
+void clear_l1_word(distributed::MeshDevice& mesh_device, const experimental::NodeCoord& node, uint32_t address) {
+    std::vector<uint32_t> zero(1, 0);
     slow_dispatch::WriteToL1(mesh_device, node, address, zero);
 }
 
@@ -126,7 +125,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, WorkerGoTransportSingleCQ) {
     const SubDeviceManagerId split_manager = mesh_device->create_sub_device_manager(
         {sub_device_from_nodes(first_partition), sub_device_from_nodes(second_partition)}, local_l1_size);
 
-    const std::uint32_t l1_address =
+    const uint32_t l1_address =
         metal_context.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     distributed::MeshCommandQueue& command_queue = mesh_device->mesh_command_queue();
 
@@ -136,18 +135,18 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, WorkerGoTransportSingleCQ) {
     distributed::EnqueueMeshWorkload(command_queue, default_blank, false);
     distributed::EnqueueMeshWorkload(command_queue, default_write, false);
 
-    constexpr std::uint32_t num_back_to_back_writes = 4;
-    for (std::uint32_t write_index = 0; write_index < num_back_to_back_writes; ++write_index) {
-        const std::uint32_t address = l1_address + sizeof(std::uint32_t) * (write_index + 1);
-        const std::uint32_t value = 0x22220000 + write_index;
+    constexpr uint32_t num_back_to_back_writes = 4;
+    for (uint32_t write_index = 0; write_index < num_back_to_back_writes; ++write_index) {
+        const uint32_t address = l1_address + sizeof(uint32_t) * (write_index + 1);
+        const uint32_t value = 0x22220000 + write_index;
         distributed::MeshWorkload workload = create_l1_write_workload(
             *mesh_device, nodes[0], address, value, "single_back_to_back_" + std::to_string(write_index));
         distributed::EnqueueMeshWorkload(command_queue, workload, false);
     }
     distributed::Finish(command_queue);
     EXPECT_EQ(read_l1_word(*mesh_device, nodes[0], l1_address), 0x11110000u);
-    for (std::uint32_t write_index = 0; write_index < num_back_to_back_writes; ++write_index) {
-        const std::uint32_t address = l1_address + sizeof(std::uint32_t) * (write_index + 1);
+    for (uint32_t write_index = 0; write_index < num_back_to_back_writes; ++write_index) {
+        const uint32_t address = l1_address + sizeof(uint32_t) * (write_index + 1);
         EXPECT_EQ(read_l1_word(*mesh_device, nodes[0], address), 0x22220000u + write_index);
     }
 
@@ -214,7 +213,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, WorkerGoTransportRemappedSingleSubDevi
     const SubDeviceManagerId node_one_manager =
         mesh_device->create_sub_device_manager({sub_device_from_nodes({nodes[1]})}, local_l1_size);
 
-    const std::uint32_t l1_address =
+    const uint32_t l1_address =
         metal_context.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     distributed::MeshCommandQueue& command_queue = mesh_device->mesh_command_queue();
 
@@ -265,7 +264,7 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, WorkerCompletionTransport) {
     }
     const SubDeviceManagerId split_manager = mesh_device->create_sub_device_manager(split_sub_devices, local_l1_size);
 
-    const std::uint32_t l1_address =
+    const uint32_t l1_address =
         metal_context.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     distributed::MeshCommandQueue& command_queue_0 = mesh_device->mesh_command_queue(0);
     distributed::MeshCommandQueue& command_queue_1 = mesh_device->mesh_command_queue(1);

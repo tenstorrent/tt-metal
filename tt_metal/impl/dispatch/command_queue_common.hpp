@@ -7,14 +7,13 @@
 #include <stdint.h>
 
 #include <umd/device/types/cluster_descriptor_types.hpp>
-#include <cstdint>
 #include "device.hpp"
 #include "impl/context/context_types.hpp"
 #include "sub_device_types.hpp"
 
 namespace tt::tt_metal {
 
-enum class CommandQueueDeviceAddrType : std::uint8_t {
+enum class CommandQueueDeviceAddrType : uint8_t {
     PREFETCH_Q_RD = 0,
     // Used to notify host of how far device has gotten, doesn't need L1 alignment because it's only written locally by
     // prefetch kernel.
@@ -43,7 +42,7 @@ enum class CommandQueueDeviceAddrType : std::uint8_t {
 };
 
 // likely only used in impl
-enum class CommandQueueHostAddrType : std::uint8_t {
+enum class CommandQueueHostAddrType : uint8_t {
     ISSUE_Q_RD = 0,
     ISSUE_Q_WR = 1,
     COMPLETION_Q_WR = 2,
@@ -57,10 +56,10 @@ enum class CommandQueueHostAddrType : std::uint8_t {
 /// @param cq_id uint8_t ID the command queue
 /// @param cq_size uint32_t size of the command queue
 /// @return uint32_t relative offset
-std::uint32_t get_relative_cq_offset(std::uint8_t cq_id, std::uint32_t cq_size);
+uint32_t get_relative_cq_offset(uint8_t cq_id, uint32_t cq_size);
 
 // used in system_memory_manager and device
-std::uint16_t get_umd_channel(std::uint16_t channel);
+uint16_t get_umd_channel(uint16_t channel);
 
 // only used in impl
 
@@ -69,24 +68,23 @@ std::uint16_t get_umd_channel(std::uint16_t channel);
 /// @param cq_id uint8_t ID the command queue
 /// @param cq_size uint32_t size of the command queue
 /// @return uint32_t absolute offset
-std::uint32_t get_absolute_cq_offset(
-    std::uint16_t channel, std::uint8_t cq_id, std::uint32_t cq_size, std::uint32_t base = 0);
+uint32_t get_absolute_cq_offset(uint16_t channel, uint8_t cq_id, uint32_t cq_size, uint32_t base = 0);
 
 // mostly used in debug_tools
 template <bool addr_16B>
-std::uint32_t get_cq_issue_rd_ptr(ContextId context_id, ChipId chip_id, std::uint8_t cq_id, std::uint32_t cq_size);
+uint32_t get_cq_issue_rd_ptr(ContextId context_id, ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
 
 template <bool addr_16B>
-std::uint32_t get_cq_issue_wr_ptr(ContextId context_id, ChipId chip_id, std::uint8_t cq_id, std::uint32_t cq_size);
+uint32_t get_cq_issue_wr_ptr(ContextId context_id, ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
 
 // has usage in system_memory_manager.cpp
 template <bool addr_16B>
-std::uint32_t get_cq_completion_wr_ptr(ContextId context_id, ChipId chip_id, std::uint8_t cq_id, std::uint32_t cq_size);
+uint32_t get_cq_completion_wr_ptr(ContextId context_id, ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
 
 template <bool addr_16B>
-std::uint32_t get_cq_completion_rd_ptr(ContextId context_id, ChipId chip_id, std::uint8_t cq_id, std::uint32_t cq_size);
+uint32_t get_cq_completion_rd_ptr(ContextId context_id, ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
 
-std::uint32_t get_cq_dispatch_progress(ContextId context_id, ChipId chip_id, std::uint8_t cq_id);
+uint32_t get_cq_dispatch_progress(ContextId context_id, ChipId chip_id, uint8_t cq_id);
 
 /// @brief Check if the command queue address type is shared across CQs co-located on the same dispatch core
 /// @param addr_type CommandQueueDeviceAddrType address type to check

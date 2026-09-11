@@ -76,13 +76,12 @@ void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDe
     const bool fds_worker_completion_enabled =
         metal_context.get_dispatch_core_manager().get_dispatch_core_type() == CoreType::DISPATCH &&
         !metal_context.rtoptions().get_disable_fds();
-    std::vector<std::uint32_t> workers_per_sub_device;
+    std::vector<uint32_t> workers_per_sub_device;
     workers_per_sub_device.reserve(num_sub_devices);
-    for (std::uint8_t i = 0; i < num_sub_devices; ++i) {
+    for (uint8_t i = 0; i < num_sub_devices; ++i) {
         const auto sub_device_id = SubDeviceId{i};
         const auto& sub_device = sub_device_manager->sub_device(sub_device_id);
-        const std::uint32_t active_ethernet_core_count =
-            sub_device.cores(HalProgrammableCoreType::ACTIVE_ETH).num_cores();
+        const uint32_t active_ethernet_core_count = sub_device.cores(HalProgrammableCoreType::ACTIVE_ETH).num_cores();
         workers_per_sub_device.push_back(get_dispatch_worker_count(
             i,
             sub_device.cores(HalProgrammableCoreType::TENSIX).num_cores(),
@@ -97,14 +96,14 @@ void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDe
         // exactly one CQ resets them. That has to be the last CQ: reset_worker_state drains each of the
         // preceding CQs, so by the time the last one runs, no other CQ can still have workers in flight
         // whose GO mailboxes would be remapped out from under them.
-        const std::uint8_t num_hw_cqs = mesh_device->num_hw_cqs();
-        for (std::uint8_t cq_id = 0; cq_id < num_hw_cqs; ++cq_id) {
+        const uint8_t num_hw_cqs = mesh_device->num_hw_cqs();
+        for (uint8_t cq_id = 0; cq_id < num_hw_cqs; ++cq_id) {
             mesh_device->impl().mesh_command_queue_base(cq_id).reset_worker_state(
                 /*reset_launch_msg_state=*/cq_id + 1 == num_hw_cqs,
                 num_sub_devices,
                 sub_device_manager->noc_mcast_unicast_data(),
                 sub_device_manager->get_core_go_message_mapping(),
-                ttsl::Span<const std::uint32_t>(workers_per_sub_device.data(), workers_per_sub_device.size()));
+                ttsl::Span<const uint32_t>(workers_per_sub_device.data(), workers_per_sub_device.size()));
         }
     } else {
         TT_FATAL(false, "Sub device managers are unsupported with non-mesh devices");
@@ -180,7 +179,7 @@ SubDeviceManagerId SubDeviceManagerTracker::get_default_sub_device_manager_id() 
 
 std::optional<DeviceAddr> SubDeviceManagerTracker::lowest_occupied_compute_l1_address(
     ttsl::Span<const SubDeviceId> sub_device_ids) const {
-    constexpr std::uint32_t global_bank_id = 0;
+    constexpr uint32_t global_bank_id = 0;
     DeviceAddr lowest_addr = std::numeric_limits<DeviceAddr>::max();
     // Global bank id needs to look up a bank from the compute grid (not the storage grid)
     // Since banks are lockstep in an allocator it doesn't matter if the actual core matches or not
