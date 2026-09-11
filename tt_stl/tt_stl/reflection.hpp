@@ -330,7 +330,7 @@ constexpr bool supports_conversion_to_string_v =
 // for the other would turn a program-cache key that distinguishes two live objects into one that
 // does not. A type opts in when its attributes identify the object.
 template <typename T>
-using has_reflect_through_shared_ptr_t = decltype(T::ttsl_reflect_through_shared_ptr);
+using has_reflect_through_shared_ptr_t = std::enable_if_t<T::ttsl_reflect_through_shared_ptr>;
 
 template <typename T>
 struct is_reflective_shared_ptr : std::false_type {};

@@ -295,6 +295,11 @@ struct OpaqueHandle {
     auto attribute_values() const { return std::make_tuple(value); }
 };
 
+struct ExplicitlyOpaqueHandle : OpaqueHandle {
+    using OpaqueHandle::OpaqueHandle;
+    static constexpr bool ttsl_reflect_through_shared_ptr = false;
+};
+
 TEST(SharedPtrReflectionTest, CPU_ReflectivePointeeIsTraversedByValue) {
     using Handle = ReflectiveHandle;
     static_assert(ttsl::reflection::detail::is_reflective_shared_ptr_v<std::shared_ptr<Handle>>);
@@ -328,6 +333,22 @@ TEST(SharedPtrReflectionTest, CPU_PointeeThatDidNotOptInHashesByAddress) {
     EXPECT_NE(hash_objects_with_default_seed(left), hash_objects_with_default_seed(right))
         << "a pointer to a type that did not opt in must keep hashing by address, even when the pointee is "
            "reflectable";
+}
+
+TEST(SharedPtrReflectionTest, CPU_ExplicitOptOutPreservesPointerIdentity) {
+    using Handle = ExplicitlyOpaqueHandle;
+    static_assert(not ttsl::reflection::detail::is_reflective_shared_ptr_v<std::shared_ptr<Handle>>);
+
+    const auto left = std::make_shared<Handle>(7);
+    const auto right = std::make_shared<Handle>(7);
+    EXPECT_NE(hash_objects_with_default_seed(left), hash_objects_with_default_seed(right));
+    EXPECT_NE(canonical_key(left), canonical_key(right));
+
+    const auto original_hash = hash_objects_with_default_seed(left);
+    const auto original_key = canonical_key(left);
+    left->value = 8;
+    EXPECT_EQ(hash_objects_with_default_seed(left), original_hash);
+    EXPECT_EQ(canonical_key(left), original_key);
 }
 
 // Coverage over the same adversarial set used for the hash: the exact key must be injective here
