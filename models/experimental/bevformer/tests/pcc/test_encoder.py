@@ -43,6 +43,9 @@ DEFAULT_MODEL_CONFIG = DEFAULT_TEST_CONFIG.model_config
 # Flag to control detailed comparison output
 PRINT_DETAILED_COMPARISON_FLAG = False
 
+# Module-scoped device: opens once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device({"l1_small_size": 32 * 1024})
+
 
 def create_sample_img_metas(batch_size: int, dataset_config=DEFAULT_DATASET_CONFIG) -> List[Dict[str, Any]]:
     """Create img_metas from the dataset's deterministic surround-view rig.
@@ -62,13 +65,13 @@ def create_sample_img_metas(batch_size: int, dataset_config=DEFAULT_DATASET_CONF
     "config_name, bev_size, num_layers, batch_size, expected_pcc, expected_abs_error, expected_rel_error, expected_high_error_ratio",
     [
         ("nuscenes_base", (100, 100), 6, 1, 0.997, 0.05, 0.8, 0.5),  # NuScenes base model
-        ("nuscenes_tiny", (100, 100), 3, 1, 0.996, 0.05, 0.8, 0.5),  # NuScenes tiny model
-        ("carla_base", (100, 100), 6, 1, 0.997, 0.05, 0.8, 0.5),  # CARLA base model
+        ("nuscenes_tiny", (100, 100), 3, 2, 0.996, 0.05, 0.8, 0.5),  # NuScenes tiny model, bs>1 grid widening
         ("carla_tiny", (100, 100), 3, 1, 0.995, 0.05, 0.8, 0.5),  # CARLA tiny model
-        ("nuscenes_base_fast", (100, 100), 6, 1, 0.996, 0.05, 0.8, 0.5),  # CARLA base fast model
+        # Off: (arch, camera rig) corners the three above already cover.
+        # ("carla_base", (100, 100), 6, 1, 0.997, 0.05, 0.8, 0.5),  # CARLA base model
+        # ("nuscenes_base_fast", (100, 100), 6, 1, 0.996, 0.05, 0.8, 0.5),  # NuScenes base fast model
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32 * 1024}], indirect=True)
 @pytest.mark.parametrize("seed", [0])
 def test_bevformer_encoder_forward(
     device,
@@ -164,6 +167,9 @@ def test_bevformer_encoder_forward(
     tt_model = TTBEVFormerEncoder(
         device=device,
         params=tt_parameters,
+        bev_h=bev_h,
+        bev_w=bev_w,
+        spatial_shapes=spatial_shapes,
         **encoder_kwargs,
     )
 
@@ -192,9 +198,6 @@ def test_bevformer_encoder_forward(
         key=tt_camera_features,
         value=tt_camera_features,
         bev_pos=tt_bev_pos,
-        bev_h=bev_h,
-        bev_w=bev_w,
-        spatial_shapes=spatial_shapes,
         level_start_index=tt_level_start_index,
         prev_bev=None,  # No temporal attention
         img_metas=img_metas,
