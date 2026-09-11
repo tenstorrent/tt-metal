@@ -74,10 +74,26 @@ class KimiCCL:
             num_buffers_per_channel=2,
         )
 
+    fused_all_reduce = (
+        True  # ttnn.experimental.all_reduce_async (Linear): 0.046 ms vs 0.073 ms for RS+AG at decode width 1
+    )
+
     def all_reduce(self, x: ttnn.Tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG) -> ttnn.Tensor:
         """Sum ``x`` (identical shape on every chip) across the mesh; returns the replicated result with x's shape."""
         if self.num_devices == 1:
             return x
+        if self.fused_all_reduce:
+            if x.is_sharded():
+                x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+            return ttnn.experimental.all_reduce_async(
+                x,
+                cluster_axis=1,
+                mesh_device=self.mesh_device,
+                num_links=1,
+                math_op=ttnn.ReduceType.Sum,
+                memory_config=memory_config,
+                topology=ttnn.Topology.Linear,
+            )
         x4, orig = self._as_4d(x)
         rs = self.reduce_scatter(x4, memory_config)
         if x4 is not x:

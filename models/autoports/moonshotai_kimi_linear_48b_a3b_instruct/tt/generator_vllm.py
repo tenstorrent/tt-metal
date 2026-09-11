@@ -64,6 +64,9 @@ class KimiLinearModelForGenerator(KimiLinearModel):
 
     sampling = None  # set below when the vocab shard fits on-device top-k (it does on 1x2 / 1x4)
     sampling_dp = 1
+    # The Generator reads this from the MODEL: host tokens/positions are authoritative every step, and the sampling
+    # module must allocate its own rank-4 output instead of writing sampled tokens into our [1,B] token input buffer.
+    _tt_vllm_always_refresh_decode_trace_inputs = True
 
     def __init__(self, *a, args: KimiModelArgs, **kw):
         super().__init__(*a, **kw)
@@ -108,17 +111,17 @@ class KimiLinearModelForGenerator(KimiLinearModel):
     ):
         # on_device_logits: the sampling module consumes each chip's vocab shard [1,1,B,vocab/tp]; otherwise gather the
         # full logits [1,1,B,vocab] for host sampling
-        logits = self.decode_device(tokens, current_pos, page_table, gather=not on_device_logits)
-        return logits, None
+        return self.decode_device(
+            tokens, current_pos, page_table, gather=not on_device_logits
+        )  # a plain tensor, like tt_transformers
 
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False, is_log_probs=False):
-        if is_log_probs:
-            raise NotImplementedError(
-                "device log-probs are not enabled for Kimi-Linear (the plugin samples on host then)"
-            )
-        if is_tokens:  # sampled token ids [1,1,32,1] uint32, replicated on every chip
-            toks = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).reshape(-1)[:B]
-            return toks.to(torch.int64)
+        if (
+            is_tokens or is_log_probs
+        ):  # sampled token ids (or their log-probs) for the 32 padded rows, replicated per chip
+            t = ttnn.reshape(tt_out, ttnn.Shape([1, 1, 32, 1])) if is_tokens else tt_out
+            vals = ttnn.to_torch(ttnn.get_device_tensors(t)[0]).reshape(32, -1)[:B, 0]
+            return vals.to(torch.int64) if is_tokens else vals.float()
         full = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
         rows = full.reshape(-1, full.shape[-1])[: B * S, : self.cfg.vocab_size]
         return rows.reshape(B, S, self.cfg.vocab_size)
@@ -131,8 +134,6 @@ class KimiLinearForCausalLM(Generator):
         "supports_sample_on_device": os.environ.get("KIMI_HOST_SAMPLING") != "1",
         "supports_chunked_prefill": False,
     }
-    # host tokens/positions are authoritative every step (no device-side token feedback)
-    _tt_vllm_always_refresh_decode_trace_inputs = True
 
     def __init__(self, model, model_args, mesh_device, tokenizer=None):
         super().__init__(model, model_args, mesh_device, tokenizer=tokenizer)

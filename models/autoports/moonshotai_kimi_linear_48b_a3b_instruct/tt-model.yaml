@@ -55,7 +55,7 @@ serve:
     tt:
       trace_region_size: 268435456
       fabric_config: FABRIC_1D_RING
-      sample_on_device_mode: all
+      sample_on_device_mode: decode_only  # prefill is model-owned and returns logits; decode samples on device
   env:
     TT_METAL_OPERATION_TIMEOUT_SECONDS: '120.0'
     TT_CACHE_PATH: /cache/kimi_weights
