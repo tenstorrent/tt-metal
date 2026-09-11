@@ -33,6 +33,7 @@
 #include "experimental/drisc_mode.h"
 #include "experimental/gddr_dma.h"
 #include "hostdev/remote_dfb_config_layout.h"
+#include "internal/dram_sender_credit_counters.h"
 #include "internal/prefetcher_pipe_dram_sender.h"
 #include "tt_metal/impl/buffers/dram_sender_state_block.hpp"
 #include "tt_metal/impl/buffers/tensor_prefetcher_request.hpp"
@@ -128,15 +129,11 @@ FORCE_INLINE void prefetcher_write_chunk(
     }
 }
 
-// PrefetcherPipe counter geometry: pairs at 2 * L1_ALIGNMENT, entries_acked one L1_ALIGNMENT above
-// entries_sent.
-inline constexpr uint32_t kPipeLocalPagesStride = 2 * L1_ALIGNMENT;
-
 // `local_pages_stride` is the byte stride between a sender's per-receiver counter pairs in its own
 // L1, with pages_acked half a stride above pages_sent. A DRAM-sender GlobalCircularBuffer packs
 // them at uint32 stride (REMOTE_CB_LOCAL_PAGES_STRIDE); a DRAM-sender PrefetcherPipe keeps the
-// 2 * L1_ALIGNMENT stride its worker-sender counterpart uses (kPipeLocalPagesStride). The remote
-// stride is 2 * L1_ALIGNMENT either way, and the credit unit is the same
+// 2 * L1_ALIGNMENT stride its worker-sender counterpart uses (kPipeLocalCountersStride). The
+// remote stride is 2 * L1_ALIGNMENT either way, and the credit unit is the same
 // (REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE == L1_ALIGNMENT), so the two transports differ only in
 // this one value. It is an argument rather than a template parameter so the sender loop is emitted
 // once -- DRISC text is the tight resource -- and carries no per-iteration transport branch.
@@ -174,51 +171,18 @@ FORCE_INLINE void prefetcher_finalize_block(
     iface.fifo_wr_ptr = next_wr_ptr;
 }
 
-// Non-blocking variant of remote_cb_reserve_back's polling loop: scans all
-// receivers' (pages_sent - pages_acked) and returns the min free aligned-page
-// count. Used by the recv-contig batched main loop to size the next round.
+// Non-blocking variant of remote_cb_reserve_back's polling loop: the min free aligned-page count
+// across receivers, used by the recv-contig batched main loop to size the next round. The ring
+// capacity is the only thing this adds to the shared scan, and it lives in the config page.
+// REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE is L1_ALIGNMENT, so an aligned page is a credit unit.
 FORCE_INLINE uint32_t
 poll_min_free_aligned_pages(const RemoteSenderCBInterface& iface, uint32_t num_receivers, uint32_t local_pages_stride) {
     const uint32_t fifo_size = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.config_ptr)[3];
-    const uint32_t fifo_aligned_num_pages = fifo_size / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
-    volatile tt_l1_ptr uint32_t* pages_sent_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.aligned_pages_sent_ptr);
-    volatile tt_l1_ptr uint32_t* pages_acked_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.aligned_pages_sent_ptr + local_pages_stride / 2);
-    uint32_t min_free = fifo_aligned_num_pages;
-    invalidate_l1_cache();
-    for (uint32_t i = 0; i < num_receivers; ++i) {
-        const uint32_t sent_minus_ack = *pages_sent_ptr - *pages_acked_ptr;
-        // Clamp: a resize padding credit (pages_sent bumped without a free-space reserve) can
-        // transiently push sent ahead of acked by more than the fifo holds; an unclamped
-        // subtraction would underflow to a huge value and defeat receiver backpressure.
-        const uint32_t free_pages =
-            sent_minus_ack >= fifo_aligned_num_pages ? 0u : fifo_aligned_num_pages - sent_minus_ack;
-        if (free_pages < min_free) {
-            min_free = free_pages;
-        }
-        pages_sent_ptr += local_pages_stride / sizeof(uint32_t);
-        pages_acked_ptr += local_pages_stride / sizeof(uint32_t);
-    }
-    return min_free;
-}
-
-// Spin until every receiver has acked everything this sender published. The remote-CB equivalent is
-// remote_cb_sender_barrier, which assumes the packed DRISC counter stride.
-FORCE_INLINE void prefetcher_sender_barrier(const RemoteSenderCBInterface& iface, uint32_t local_pages_stride) {
-    const uint32_t num_receivers = remote_cb_num_receivers(iface.num_receivers_and_remote_pages_sent_ptr);
-    volatile tt_l1_ptr uint32_t* sent_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.aligned_pages_sent_ptr);
-    for (uint32_t i = 0; i < num_receivers; ++i) {
-        volatile tt_l1_ptr uint32_t* acked_ptr = sent_ptr + (local_pages_stride / 2) / sizeof(uint32_t);
-        while (true) {
-            invalidate_l1_cache();
-            if (*acked_ptr == *sent_ptr) {
-                break;
-            }
-        }
-        sent_ptr += local_pages_stride / sizeof(uint32_t);
-    }
+    return experimental::dram_sender_min_free_units(
+        iface.aligned_pages_sent_ptr,
+        num_receivers,
+        local_pages_stride,
+        fifo_size / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE);
 }
 
 // Fill a RemoteSenderCBInterface from an already-loaded PrefetcherPipe sender context, so the
@@ -316,10 +280,10 @@ void kernel_main() {
 
     experimental::drisc_set_stream_mode();
     RemoteSenderCBInterface& iface = get_remote_sender_cb_interface(remote_cb_id);
-    bool has_loaded_sender_state = false;
-    // Which transport the currently loaded interface belongs to, so the stop sentinel drains it
-    // with the matching counter stride.
-    bool last_transport_was_pipe = false;
+    // What the interface above currently holds, so the stop sentinel drains it with the matching
+    // counter stride -- or not at all, if no request has loaded one.
+    enum class LoadedTarget : uint8_t { None, GlobalCircularBuffer, PrefetcherPipe };
+    LoadedTarget loaded_target = LoadedTarget::None;
 
     // Zero the per-CQ signal slots before parking on the socket. Safe to do here
     // (rather than from the host) because no WaitForCqOnTensorPrefetcher signal
@@ -343,12 +307,15 @@ void kernel_main() {
             // Stop sentinel. Receiver ack atomics target DRISC L1 while stream mode is active;
             // wait for the last loaded target to drain before exiting the request loop and
             // restoring NoC2AXI mode.
-            if (has_loaded_sender_state) {
-                if (last_transport_was_pipe) {
-                    prefetcher_sender_barrier(iface, kPipeLocalPagesStride);
-                } else {
-                    experimental::remote_cb_sender_barrier(remote_cb_id);
-                }
+            if (loaded_target == LoadedTarget::PrefetcherPipe) {
+                // remote_cb_sender_barrier is the GlobalCircularBuffer's spelling of this and
+                // assumes the packed DRISC counter stride, so a pipe drains on the shared one.
+                experimental::dram_sender_barrier(
+                    iface.aligned_pages_sent_ptr,
+                    remote_cb_num_receivers(iface.num_receivers_and_remote_pages_sent_ptr),
+                    experimental::kPipeLocalCountersStride);
+            } else if (loaded_target == LoadedTarget::GlobalCircularBuffer) {
+                experimental::remote_cb_sender_barrier(remote_cb_id);
             }
             socket_pop_pages(socket, 1);
             socket_notify_sender(socket);
@@ -391,13 +358,12 @@ void kernel_main() {
         // The only thing the credit loops need from the transport; hoisted here so they stay
         // branch-free (see prefetcher_finalize_block).
         const uint32_t local_pages_stride =
-            is_pipe ? kPipeLocalPagesStride : experimental::REMOTE_CB_LOCAL_PAGES_STRIDE;
+            is_pipe ? experimental::kPipeLocalCountersStride : experimental::REMOTE_CB_LOCAL_PAGES_STRIDE;
 
         if (!is_pipe) {
             load_sender_state(state, iface);
         }
-        has_loaded_sender_state = true;
-        last_transport_was_pipe = is_pipe;
+        loaded_target = is_pipe ? LoadedTarget::PrefetcherPipe : LoadedTarget::GlobalCircularBuffer;
         // num_receivers lives inside the target's per-sender state. Reading it per request lets a
         // single prefetcher serve targets with different receiver counts.
         const uint32_t num_receivers =
