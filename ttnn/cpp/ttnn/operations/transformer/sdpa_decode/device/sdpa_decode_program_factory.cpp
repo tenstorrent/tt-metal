@@ -12,8 +12,10 @@
 #include <optional>
 #include <string>
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -58,6 +60,11 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const uint32_t cache_position_modulo = operation_attributes.cache_position_modulo.value_or(0);
     const uint32_t capacity_t = cache_position_modulo / TILE_HEIGHT;
     const bool share_cache = operation_attributes.share_cache.value_or(false);
+    // Speculative multi-position mode: Tg candidates per batch row (PNHt == Tg), each
+    // row-tile carrying its own causal bound from cur_pos[cur_batch*Tg + j]. 0 = off. See
+    // SdpaDecodeParams::spec_multi_pos_tiles.
+    const uint32_t spec_multi_pos_tiles = operation_attributes.spec_multi_pos_tiles;
+    const bool spec_multi_pos = spec_multi_pos_tiles > 0;
 
     // V tensor: use K if MLA (V is subset of K), otherwise require explicit V
     TT_FATAL(use_mla || tensor_args.v.has_value(), "V tensor must be provided when MLA is disabled.");
@@ -385,16 +392,37 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
 
     // ========== Compute Configuration ==========
     const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
-    const uint32_t max_dynamic_chunk_size = dst_size;
+    // Spec mode multiplies every Q-shaped CB (q, qk_im, out_im, out_accumulate, mask, ...)
+    // by PNHt == T, so the K/V/mask/qk CBs — the only ones that scale with the chunk size —
+    // are capped to keep the per-core L1 footprint in range. 4 tiles = 128 KV positions per
+    // chunk; the hard L1 check after CB creation reports the exact numbers if T and
+    // max_cores_per_head_batch still push the total over budget.
+    constexpr uint32_t kSpecMaxDynamicChunkTiles = 4;
+    const uint32_t max_dynamic_chunk_size = spec_multi_pos ? std::min(dst_size, kSpecMaxDynamicChunkTiles) : dst_size;
     const uint32_t Sk_chunk_t_cb_size = Sk_chunk_t == 0 ? max_dynamic_chunk_size : Sk_chunk_t;
 
     // Matmul block/subblock configuration for QK
     const uint32_t qk_in0_block_w = DHt;
     const uint32_t qk_num_blocks = 1;
     uint32_t qk_out_subblock_w = 0, qk_out_subblock_h = 0, qk_in0_num_subblocks = 0, qk_in1_num_subblocks = 0;
+    // matmul_blocks() walks in0 as in0_num_subblocks blocks of subblock_h row-tiles, so the
+    // subblock height MUST divide PNHt — otherwise PNHt / subblock_h truncates and the tail
+    // row-tiles are never produced (the output CB is reserved for M*N tiles but only
+    // in0_num_subblocks*subblock_h*N are pushed). Every configuration that reaches here today
+    // has a power-of-2 PNHt, for which the divisor search below exits immediately and the
+    // values are unchanged; spec multi-position mode makes PNHt == T, which is 7 or 11 as
+    // often as not.
+    auto largest_divisor_at_most = [](uint32_t n, uint32_t cap) {
+        uint32_t h = std::min(n, cap);
+        while (h > 1 && n % h != 0) {
+            h--;
+        }
+        return h;
+    };
     if (Sk_chunk_t > 0) {
         qk_out_subblock_w = std::min(Sk_chunk_t, dst_size);
-        qk_out_subblock_h = (qk_out_subblock_w == Sk_chunk_t) ? std::min(PNHt, dst_size / qk_out_subblock_w) : 1;
+        qk_out_subblock_h =
+            (qk_out_subblock_w == Sk_chunk_t) ? largest_divisor_at_most(PNHt, dst_size / qk_out_subblock_w) : 1;
         qk_in0_num_subblocks = PNHt / qk_out_subblock_h;
         qk_in1_num_subblocks = Sk_chunk_t / qk_out_subblock_w;
     }
@@ -403,8 +431,9 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     uint32_t out_in0_block_w = Sk_chunk_t > 0 ? Sk_chunk_t : 0;
     uint32_t out_num_blocks = Sk_chunk_t > 0 ? 1 : 0;
     const uint32_t out_out_subblock_w = std::min(vDHt, dst_size);
+    // Same divisibility requirement as the QK subblock height above.
     const uint32_t out_out_subblock_h =
-        (out_out_subblock_w == vDHt) ? std::min(PNHt, dst_size / out_out_subblock_w) : 1;
+        (out_out_subblock_w == vDHt) ? largest_divisor_at_most(PNHt, dst_size / out_out_subblock_w) : 1;
     const uint32_t out_in0_num_subblocks = PNHt / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
 
@@ -424,7 +453,15 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const uint32_t out_tiles = PNHt * vDHt;
     const uint32_t scale_tiles = 1;
     const uint32_t statistics_tiles = PNHt;
-    const uint32_t intermed_output_tiles = (out_tiles + 2 * PNHt) * (num_cores_per_head - 1);
+    // c_19 staging for the tree reduction is indexed by ROUND (block_offset =
+    // round * (out_chunk_tiles + 2*PNHt)), so only num_tree_reduction_rounds blocks are
+    // ever addressed; the (num_cores_per_head - 1) sizing is legacy over-provisioning from
+    // the pre-tree-reduction flat gather. Legacy sizing is kept verbatim off the spec path;
+    // in spec mode each block is T times larger and the over-provisioning alone would blow
+    // L1 (110 tiles/block * 63 blocks = 14 MB at T=11, 64 cores/head).
+    const uint32_t intermed_output_blocks =
+        spec_multi_pos ? std::min(num_cores_per_head - 1, num_tree_reduction_rounds) : (num_cores_per_head - 1);
+    const uint32_t intermed_output_tiles = (out_tiles + 2 * PNHt) * intermed_output_blocks;
 
     // ========== Data Formats ==========
     const tt::DataFormat q_df = tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
@@ -443,6 +480,36 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const auto half_tile = tt::tt_metal::Tile({16, 32});
     const auto full_tile = tt::tt_metal::Tile({32, 32});
     const bool use_half_tile = is_causal && num_q_heads <= 16 && q_df == tt::DataFormat::Float16_b;
+    if (spec_multi_pos) {
+        // The mask generator writes one full 32x32 tile per (candidate, k-column) pair and
+        // the writer's MQA full-tile output branch assumes full tiles, so half tiles must be
+        // off. num_q_heads = T*32 > 16 already forces this; assert rather than assume.
+        TT_FATAL(!use_half_tile, "spec_multi_pos_tiles requires full 32x32 tiles, but use_half_tile was selected");
+        TT_FATAL(B >= 1, "spec_multi_pos_tiles requires B >= 1, got {}", B);
+        TT_FATAL(num_kv_heads == 1, "spec_multi_pos_tiles requires num_kv_heads == 1, got {}", num_kv_heads);
+        TT_FATAL(is_causal, "spec_multi_pos_tiles requires is_causal");
+        TT_FATAL(is_paged_attention, "spec_multi_pos_tiles requires paged attention");
+        TT_FATAL(use_cur_pos_tensor, "spec_multi_pos_tiles requires a cur_pos tensor");
+        TT_FATAL(!is_q_sharded, "spec_multi_pos_tiles requires an unsharded Q tensor");
+        TT_FATAL(sliding_window_size == 0, "spec_multi_pos_tiles is not supported with a sliding window");
+        TT_FATAL(!use_mla, "spec_multi_pos_tiles is not supported with MLA");
+        TT_FATAL(!use_attention_mask, "spec_multi_pos_tiles is not supported with an explicit attention mask");
+        TT_FATAL(
+            PNHt == spec_multi_pos_tiles,
+            "spec_multi_pos_tiles={} must equal PNHt={} (one 32-row Q tile per candidate)",
+            spec_multi_pos_tiles,
+            PNHt);
+        TT_FATAL(q_heads_parallel_factor == 1, "spec_multi_pos_tiles requires q_heads_parallel_factor == 1");
+        TT_FATAL(num_heads_per_core == 1, "spec_multi_pos_tiles requires num_heads_per_core == 1");
+        // The mask CB is now push/pop cycled (one block per masked chunk) instead of pushed
+        // once, so its write pointer wraps. A power-of-2 capacity guarantees every possible
+        // dynamic chunk size (also a power of 2, capped at Sk_chunk_t_cb_size) divides the
+        // capacity exactly, so no mask block ever straddles the wrap point.
+        TT_FATAL(
+            (Sk_chunk_t_cb_size & (Sk_chunk_t_cb_size - 1)) == 0,
+            "spec_multi_pos_tiles requires a power-of-2 k chunk size in tiles, got {}",
+            Sk_chunk_t_cb_size);
+    }
     const auto q_tile = use_half_tile ? half_tile : full_tile;
     const auto k_tile = full_tile;
     const auto v_tile = full_tile;
@@ -575,7 +642,11 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
             nullptr,
             is_page_table_sharded ? page_table_buffer : nullptr);
     }
-    add_cb(CBIndex::c_10, q_tiles * q_tile_size, q_df, q_tile_size, &q_tile);  // tilized Q
+    // c_10 (row-major Q staging) is only ever written/read when tilize_q is set. Spec mode
+    // requires a TILE-layout Q, so the full q_tiles allocation would waste PNHt*DHt tiles of
+    // L1 (176 KB at T=11); allocate a single tile so the CB still exists and is addressable.
+    add_cb(CBIndex::c_10, (spec_multi_pos ? 1 : q_tiles) * q_tile_size, q_df, q_tile_size,
+           &q_tile);  // tilized Q
 
     // Scalar/identity CBs
     const uint32_t col_identity_tile_size = full_tile.get_tile_size(scalar_df);
@@ -616,6 +687,43 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         out_tile_size,
         &out_tile,
         is_output_sharded ? out_buffer : nullptr);
+
+    if (spec_multi_pos) {
+        // Every Q-shaped CB scales with PNHt == T here, so an otherwise legal (T,
+        // max_cores_per_head_batch) pair can exceed L1. Fail with the numbers and the two
+        // knobs that fix it, instead of the generic "circular buffers grow to N B" error
+        // raised later during program compile.
+        uint64_t total_cb_bytes = 0;
+        for (const auto& cb : desc.cbs) {
+            total_cb_bytes += cb.total_size;
+        }
+        const uint64_t l1_budget =
+            device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        log_debug(
+            tt::LogOp,
+            "spec_multi_pos: Tg={}, B={}, Sk_chunk_t_cb={}, cores/head={}, active cores={}, tree rounds={}, "
+            "intermed blocks={}, CB total={} B of {} B",
+            spec_multi_pos_tiles,
+            B,
+            Sk_chunk_t_cb_size,
+            num_cores_per_head,
+            num_active_cores,
+            num_tree_reduction_rounds,
+            intermed_output_blocks,
+            total_cb_bytes,
+            l1_budget);
+        TT_FATAL(
+            total_cb_bytes <= l1_budget,
+            "spec_multi_pos_tiles={}: circular buffers need {} B per core but only {} B of L1 are available "
+            "(Sk_chunk_t={}, cores_per_head={}, intermed_blocks={}). Reduce spec_multi_pos_tiles or "
+            "program_config.max_cores_per_head_batch.",
+            spec_multi_pos_tiles,
+            total_cb_bytes,
+            l1_budget,
+            Sk_chunk_t_cb_size,
+            num_cores_per_head,
+            intermed_output_blocks);
+    }
 
     // ========== Kernel Scalars ==========
     const bfloat16 bfloat_identity_scalar(1.0f);
@@ -682,6 +790,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         static_cast<uint32_t>(use_col_major_group_indexing),  // use_k_mcast
         Bmask,
         capacity_t,
+        spec_multi_pos_tiles,
     };
     tt_metal::TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args_common);
     tt_metal::TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args_common);
@@ -726,6 +835,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         sliding_window_size,
         num_tree_reduction_rounds,
         original_block_size,
+        spec_multi_pos_tiles,
     };
     tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args_common);
 
@@ -762,6 +872,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         sliding_window_size,
         num_tree_reduction_rounds,
         original_block_size,
+        spec_multi_pos_tiles,
     };
 
     // ========== Compute Defines ==========

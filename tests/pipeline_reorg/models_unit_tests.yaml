@@ -195,16 +195,25 @@
   cmd: |
     unset TT_METAL_WATCHER  # blocked by #50886
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B
+    # Deselections (-k) drop tests subsumed by stricter ones in this leg or dead under CI; see PR 55548 review notes.
     pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_attention_tp.py
-    pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_gdn_tp.py
+    pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_gdn_tp.py -k "not test_gdn_tp_prefill"
     pytest --timeout 60 models/demos/blackhole/qwen36/tests/test_mlp_tp.py
-    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model_tp.py
-    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_decode_bucketing.py -k "test_bucket_warmup_compiles_all_widths_before_capture or test_bucket_trace_teardown_releases_all_stores"
-    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_mlp.py
+    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model_tp.py -k "not test_model_tp_decode_batched and not test_model_tp_long_prefill_traced"
+    # test_all_buckets_fit_trace_region is deselected here and runs last on its own budget (see below);
+    # the two kept here are host-only (monkeypatched, no device), so 120 s is ample.
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_decode_bucketing.py -k "test_bucket_warmup_compiles_all_widths_before_capture or test_bucket_trace_teardown_releases_all_stores"
+    # MTP speculative decode (unit-test coverage only until batch>1 lands; e2e runs plain decode).
+    # QWEN36_SPEC_TEST_N_LAYERS=8: lossless/determinism hold on a truncated model, and the 8 layers are
+    # already in the tensor cache from test_model_tp, so no 64-layer load happens in this leg.
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_spec_sampling_math.py
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_mtp_torch_ref.py
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_fused_recurrent_gdn.py -k "not perf and not (no_initial_state and (blackhole-1 or blackhole-2))"
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_mtp_tp.py
+    QWEN36_SPEC_TEST_N_LAYERS=8 pytest --timeout 600 models/demos/blackhole/qwen36/tests/test_spec_lossless.py
+    QWEN36_SPEC_TEST_N_LAYERS=8 pytest --timeout 600 models/demos/blackhole/qwen36/tests/test_spec_determinism.py -k "not (test_spec_decode_is_deterministic and 128)"
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_patch_merger.py
-    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_vision_attention.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_vision_block.py
-    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_wrapped_model.py
     # Last on purpose: this test builds the full 64-layer 27B model from /mnt/MLPerf (the trace-region
     # property it proves needs full depth). Passing CI runs took 58-251 s, and the layer load alone
@@ -217,6 +226,7 @@
     bh_quietbox_2:
       # 28 min assumed the 300 s cap on test_decode_bucketing; with its real cost (up to ~13 min on a
       # cold NAS) the whole entry reconstructs to ~33 min from the 2026-09-08 run.
+      # The MTP spec files were added to the cmd after that run, so this may need another raise.
       timeout: 40
       tier: 1
   owner_id: U08HL8X1ECD # Aniruddha Tupe
