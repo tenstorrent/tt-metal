@@ -81,6 +81,8 @@ if [ -n "${PREFILL_NUM_USERS:-}" ]; then
 fi
 echo "resolved shape for ${MODEL}/${CONFIG}: max_seq_len=${MAX_SEQ_LEN} num_users=${NUM_USERS}"
 
+# Investigation hook: pin the measured length so sc1 and sc2 cover the SAME 11 x 5120 chunks.
+MAX_SEQ_LEN="${PREFILL_MAX_SEQ_LEN_OVERRIDE:-${MAX_SEQ_LEN}}"
 REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))
 
 SC1_CHUNKS=$((SC1_MAX_SEQ_LEN / CHUNK_SIZE))
