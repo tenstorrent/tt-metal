@@ -619,6 +619,22 @@ class TtPrefillRuntime:
             ),
         )
 
+    def gather_slot(self, kv_cache, slot_id: int, n_tokens: int):
+        """Every layer's (k, v, index_k) of one slot, same convention and shapes as gather_layer, from ONE
+        slot readback: read_slot_kv moves the whole slot host-side (~100 s on 8x4 at 56k tokens), so
+        calling gather_layer per layer multiplies that by num_layers."""
+        from models.demos.minimax_m3.tt.runners.prefill_kv_validation import naturalize_kv_block
+
+        cfg = self.config
+        blocks = self.read_slot_kv(kv_cache, slot_id)
+        return [
+            tuple(
+                naturalize_kv_block(blk[L], n_tokens, cfg.sp_factor, cfg.chunk_size, cfg.max_seq_len).unsqueeze(0)
+                for blk in blocks
+            )
+            for L in range(cfg.num_layers)
+        ]
+
     def kv_migration_stages(self, kv_cache, first_layer_idx=None, num_my_layers=None):
         """One ``KvCacheStage`` per migratable device cache, in the order ``build_kv_chunk_table``
         consumes their gathered layouts: k, v, index_k. All three share one layer-index space (index_k
