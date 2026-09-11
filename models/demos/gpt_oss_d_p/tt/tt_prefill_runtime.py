@@ -78,6 +78,8 @@ class TtPrefillRuntimeConfig:
     # When True the runtime allocates + owns its KV cache (self.kv_cache) — the standalone galaxy
     # harness path. The adapter/engine path sets this False and passes the engine-owned KvCaches in.
     owns_kv_cache: bool = True
+    # No trace-replay mode in this runtime; the common prefill runner reads the field.
+    use_trace: bool = False
     # Pipeline-parallel rank flags the common prefill runner reads off runtime.config
     # (single-rank standalone/harness => both True). first_layer_idx is the GLOBAL index of this
     # rank's first layer (0 on single-rank); used by PREFILL_STANDALONE_PCC golden offset.
