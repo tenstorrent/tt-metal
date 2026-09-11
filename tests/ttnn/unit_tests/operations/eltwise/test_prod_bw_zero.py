@@ -71,7 +71,9 @@ def test_bw_prod_with_zeros(input_shapes, dim, num_zeros, input_layout, device):
         f"with {num_zeros} zero(s) per reduced slice (dim={dim})"
     )
 
-    # SFPU reciprocal(+/-1) may differ by one bfloat16 step; zero gradients must stay exact.
+    # rtol=2e-2 allows up to 2% relative error, which covers the SFPU reciprocal. What this
+    # assertion really pins is atol=0: the zero gradients, which the old formula got wrong,
+    # have to come back exact.
     torch.testing.assert_close(result, in_data.grad.float(), rtol=2e-2, atol=0.0)
 
 
@@ -121,5 +123,7 @@ def test_bw_prod_zero_keeps_other_factors(dim, num_zeros, device):
         f"with {num_zeros} zero(s) per reduced slice (dim={dim})"
     )
 
-    # SFPU reciprocal costs up to one bfloat16 step; zero gradients must stay exact.
+    # rtol=2e-2 allows up to 2% relative error, which covers the SFPU reciprocal. What this
+    # assertion really pins is atol=0: the zero gradients, which the old formula got wrong,
+    # have to come back exact.
     torch.testing.assert_close(result, in_data.grad.float(), rtol=2e-2, atol=0.0)
