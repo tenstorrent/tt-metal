@@ -108,6 +108,7 @@ class TtKimiK3Transformer(LightweightModule):
         lm_head_is_column_parallel: bool = False,
         padding_side: str = "right",
         sparse_kv_cache_format=None,
+        tp_shard_kv: bool = False,
         **block_kwargs,
     ):
         super().__init__()
@@ -118,11 +119,17 @@ class TtKimiK3Transformer(LightweightModule):
             raise ValueError(
                 f"Kimi-K3 uses a dense MLA KV cache; got sparse_kv_cache_format={sparse_kv_cache_format!r}"
             )
+        # Same reason, and the same hazard: `_build_model` passes this to every transformer, so
+        # leaving it unnamed forwards it to `TtKimiK3Block` and raises on the first layer. Kimi-K3
+        # does not opt into `supports_tp_shard_kv`, so the runner already refuses a True here; this
+        # keeps a direct construction honest too.
+        if tp_shard_kv:
+            raise ValueError("Kimi-K3 does not support TP-sharded KV; its allocators are TP-replicated")
         # One number, whichever name the caller used. `slot_num` and `num_users` are the same
         # quantity and disagreeing on it is not a preference, it is a broken model: MLA would size
         # its KV slots one way and KDA its carries another, and the mismatch only surfaces on the
         # second user's first chunk.
-        if num_users is not None and num_users != slot_num and 1 not in (num_users, slot_num):
+        if num_users is not None and num_users != slot_num:
             raise ValueError(f"slot_num={slot_num} and num_users={num_users} are the same quantity and must agree")
         cache_slots = max(slot_num, num_users if num_users is not None else 1)
         self.num_users = cache_slots
