@@ -361,12 +361,23 @@ precompile_warm() {
     if [[ "$PROFILE_MODE" == true ]]; then
         PROF_ENV=(TT_METAL_DEVICE_PROFILER=1)
     fi
+    # PYTHONPATH: PREPEND the plugin dir rather than replacing the inherited value.
+    # Overwriting it broke any suite whose imports live outside the repo root (the
+    # eval golden tests, for one): the warm pass failed to import, exited non-zero,
+    # and the fallback below silently ran the whole suite COLD.
+    #
+    # -o addopts=...: the warm pass discards its own output -- $clog is only grepped
+    # for the UP_FRONT_COLLECT_RESULT line -- so it should not inherit this repo's
+    # -vvs/-rA/--durations/--junitxml. Beyond the wasted work, -rA makes pytest
+    # rescan every report in the session once per passed test, which on a large
+    # parametrized suite is minutes of pure list scanning.
     # SRV_ENV (server-enable + preprocess + keepalive) is scoped to THIS subprocess only — it is the
     # sole place the server is ever enabled, so the real run / inline path can never hit it.
     env "${SRV_ENV[@]}" "${PROF_ENV[@]}" \
         UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS="$PRECOMPILE_WORKERS" \
-        LOGURU_LEVEL=ERROR PYTHONPATH="$PRECOMPILE_PLUGIN_DIR" \
-        pytest "${PYTEST_ARGS[@]}" -p tests.plugins.up_front_collect > "$clog" 2>&1
+        LOGURU_LEVEL=ERROR PYTHONPATH="$PRECOMPILE_PLUGIN_DIR${PYTHONPATH:+:$PYTHONPATH}" \
+        pytest "${PYTEST_ARGS[@]}" -p tests.plugins.up_front_collect \
+            -o addopts=--import-mode=importlib -q > "$clog" 2>&1
     cstatus=$?
     t1=$(date +%s)
     TT_TIMING_PRECOMPILE_S=$((t1-t0))
