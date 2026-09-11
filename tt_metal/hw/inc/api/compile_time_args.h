@@ -13,17 +13,10 @@ FORCE_INLINE constexpr std::array<T, sizeof...(Ts)> make_array(Ts... values) {
     return {T(values)...};
 }
 
-#ifndef KERNEL_COMPILE_TIME_ARGS
-#define KERNEL_COMPILE_TIME_ARGS
-#endif
-
-constexpr auto kernel_compile_time_args = make_array<std::uint32_t>(KERNEL_COMPILE_TIME_ARGS);
-
+// Tensor-accessor templates in the shared prelude call this with dependent
+// indices. Its definition and argument array arrive before instantiation.
 template <uint32_t Idx>
-constexpr uint32_t get_ct_arg() {
-    static_assert(Idx < kernel_compile_time_args.size(), "Index out of range");
-    return kernel_compile_time_args[Idx];
-}
+constexpr uint32_t get_ct_arg();
 
 // clang-format off
 /**
@@ -40,6 +33,26 @@ constexpr uint32_t get_ct_arg() {
 #define get_compile_time_arg_val(arg_idx) get_ct_arg<arg_idx>()
 
 #endif  // TT_METAL_COMPILE_TIME_ARGS_H
+
+// Precompile the library headers and helper, then materialize the kernel's
+// positional arguments after loading the PCH. Do not inspect the argument macro
+// while building the PCH: even an #ifndef would constrain GCC's macro validation.
+#if !defined(TT_METAL_PCH_BUILD) && !defined(TT_METAL_POSITIONAL_CT_ARGS_DEFINED)
+#define TT_METAL_POSITIONAL_CT_ARGS_DEFINED
+
+#ifndef KERNEL_COMPILE_TIME_ARGS
+#define KERNEL_COMPILE_TIME_ARGS
+#endif
+
+constexpr auto kernel_compile_time_args = make_array<std::uint32_t>(KERNEL_COMPILE_TIME_ARGS);
+
+template <uint32_t Idx>
+constexpr uint32_t get_ct_arg() {
+    static_assert(Idx < kernel_compile_time_args.size(), "Index out of range");
+    return kernel_compile_time_args[Idx];
+}
+
+#endif  // positional arguments available
 
 // Preserve the named API for callers that define the map and include this header
 // directly. Keep this outside the positional API's guard so a map defined after

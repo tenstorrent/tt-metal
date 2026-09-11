@@ -24,6 +24,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <fmt/ranges.h>
+
 #include <tt-logger/tt-logger.hpp>
 
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
@@ -258,6 +260,17 @@ std::string format_named_ct_arg_map(const std::unordered_map<std::string, std::u
         out += '}';
     }
     return out;
+}
+
+std::string format_ct_args_header(const std::vector<std::uint32_t>& args) {
+    // Without PCH, firmware includes declare the API once FORCE_INLINE is available.
+    // With PCH, the shared declarations already exist; finish the API here, before
+    // any later firmware headers or kernel body can use the positional arguments.
+    return fmt::format(
+        "// AUTO-GENERATED -- do not edit.\n#pragma once\n\n#define KERNEL_COMPILE_TIME_ARGS {}\n"
+        "#ifdef TT_METAL_PCH_BUILD\n#undef TT_METAL_PCH_BUILD\n"
+        "#include \"api/compile_time_args.h\"\n#endif\n",
+        fmt::join(args, ","));
 }
 
 std::string format_named_ct_arg_map_header(const std::unordered_map<std::string, std::uint32_t>& named_args) {

@@ -172,10 +172,9 @@ protected:
         std::ifstream log(log_path);
         ASSERT_TRUE(log.is_open()) << log_path;
         auto& manager = BuildEnvManager::get_instance(kernel->get_context_id());
+        const auto& env = manager.get_device_build_env(devices_.at(0)->build_id()).build_env;
         const auto pch_root =
-            std::filesystem::path(
-                manager.get_device_build_env(devices_.at(0)->build_id()).build_env.get_out_root_path()) /
-            "pch/trisc2";
+            std::filesystem::path(env.get_out_root_path()) / std::to_string(env.get_build_key()) / "pch/trisc2";
         for (std::string line; std::getline(log, line);) {
             if (line.starts_with("! ")) {
                 const std::filesystem::path accepted = line.substr(2);

@@ -701,32 +701,33 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     std::string pch_header;
     std::string pch_dep_path;
     if (use_pch) {
-        // The PCH is built from the same recipe minus any force-included headers:
-        // those are per-kernel, and a PCH that consumed them could not be shared.
-        std::vector<std::string> pch_defines;
-        pch_defines.reserve(defines.size());
-        for (size_t i = 0; i < defines.size(); ++i) {
-            if (defines[i] == "-include") {
-                ++i;  // skip the header argument that follows
-                continue;
+        // Share a firmware profile, independent of kernel values, names and source
+        // directories. NOC selection affects the shared prelude and has a fixed set
+        // of variants. Other kernel defines stay on the consumer command line: GCC
+        // rejects the PCH if one changes a macro actually used by the prelude.
+        std::vector<std::string> pch_defines = tt::jit_build::utils::tokenize_flags(defines_);
+        for (const auto& define : defines) {
+            if (define.starts_with("-DNOC_INDEX=") || define.starts_with("-DNOC_MODE=")) {
+                pch_defines.push_back(define);
             }
-            pch_defines.push_back(defines[i]);
         }
+        pch_defines.emplace_back("-DTT_METAL_PCH_BUILD=1");
         pch_header = jit_build::ensure_pch(
             env_.gpp_,
             env_.get_root_path(),
-            env_.get_out_root_path(),
+            (fs::path(env_.get_out_root_path()) / std::to_string(env_.get_build_key())).string(),
             target_name_,
             pch_umbrella,
             recipe.compiler_opt_level,
             cflags,
-            recipe.includes,
+            includes_,
             pch_defines);
         TT_FATAL(!pch_strict || !pch_header.empty(), "Strict PCH mode: creation failed for {}", target_name_);
         if (!pch_header.empty()) {
             // Must precede every other -include so no token is seen first.
             defines.insert(defines.begin(), pch_header);
             defines.insert(defines.begin(), "-include");
+            defines.emplace_back("-DTT_METAL_PCH_BUILD=1");
             // Normal builds warn and fall back; strict validation requires actual consumption.
             cflags += pch_strict ? " -H -Werror=invalid-pch" : " -Winvalid-pch -Wno-error=invalid-pch";
             pch_dep_path = pch_header + ".d";
@@ -1074,11 +1075,11 @@ tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSe
         if (env_.get_rtoptions().get_sanitizer_settings().enabled) {
             defines.push_back(fmt::format(R"(-DFULL_KERNEL_NAME="{}")", settings->get_full_kernel_name()));
         }
-        settings->process_compile_time_args([&defines](const std::vector<uint32_t>& values) {
-            if (!values.empty()) {
-                defines.push_back(fmt::format("-DKERNEL_COMPILE_TIME_ARGS={}", fmt::join(values, ",")));
-            }
-        });
+        // Always supply the header, including for an empty list. It completes the
+        // positional API after PCH loading; the exported recipe is also valid when
+        // compiling ordinarily or on the remote server.
+        defines.emplace_back("-include");
+        defines.emplace_back(tt::jit_build::utils::CT_ARGS_HEADER);
         // KERNEL_COMPILE_TIME_ARG_MAP arrives as a force-included header (written by genfiles,
         // see write_named_ct_arg_map_header) rather than a -D define, because one define is one
         // argv element and the map alone can exceed the per-element MAX_ARG_STRLEN. Two argv

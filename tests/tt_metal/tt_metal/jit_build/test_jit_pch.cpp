@@ -63,6 +63,10 @@ protected:
     std::string includes() const { return "-I. -I.. -I" + source_.string() + extra_includes_; }
 
     std::string ensure(const std::string& cache = "cache") const {
+        std::vector<std::string> defines = {"-DFORCE_INLINE=inline"};
+        if (defer_args_) {
+            defines.emplace_back("-DTT_METAL_PCH_BUILD=1");
+        }
         return ensure_pch(
             compiler_,
             source_.string(),
@@ -72,11 +76,14 @@ protected:
             "O0",
             "-mcpu=tt-bh-tensix -std=c++17 -MMD",
             includes(),
-            {"-DFORCE_INLINE=inline"});
+            defines);
     }
 
     void consume(
-        const std::string& pch, const std::string& body, const std::vector<std::string>& extra_defines = {}) const {
+        const std::string& pch,
+        const std::string& body,
+        const std::vector<std::string>& extra_defines = {},
+        const std::vector<uint32_t>& ct_args = {}) const {
         const auto source = consumer_ / "consumer.cpp";
         const std::string object = (consumer_ / "consumer.o").string();
         const std::string dep = (consumer_ / "consumer.d").string();
@@ -86,6 +93,14 @@ protected:
         std::vector<std::string> defines = {"-DFORCE_INLINE=inline"};
         if (!pch.empty()) {
             defines.insert(defines.end(), {"-include", pch});
+            if (defer_args_) {
+                defines.emplace_back("-DTT_METAL_PCH_BUILD=1");
+            }
+        }
+        if (defer_args_) {
+            const auto generated = consumer_ / "args.h";
+            write(generated, utils::format_ct_args_header(ct_args));
+            defines.insert(defines.end(), {"-include", generated.string()});
         }
         defines.insert(defines.end(), extra_defines.begin(), extra_defines.end());
         const auto args = utils::build_gpp_argv(
@@ -112,6 +127,7 @@ protected:
     }
 
     void use_named_api() {
+        defer_args_ = true;
         extra_includes_ = " -I" + test::JitTestTools{}.hw_include_dir();
         write(source_ / "umbrella.h", "#include \"api/compile_time_args.h\"\n");
     }
@@ -121,6 +137,7 @@ protected:
     std::filesystem::path consumer_;
     std::string compiler_;
     std::string extra_includes_;
+    bool defer_args_ = false;
 };
 
 TEST_F(JitPchTest, ReusesUnchangedPchAndMergesItsDependencies) {
@@ -176,10 +193,58 @@ TEST_F(JitPchTest, CacheClearDropsCompletedEntries) {
     ASSERT_NO_FATAL_FAILURE(consume(pch, "static_assert(value == 1);\n"));
 }
 
+TEST_F(JitPchTest, ReusesDiskPchWithoutAnInMemoryEntry) {
+    const auto pch = ensure();
+    ASSERT_FALSE(pch.empty());
+    const auto sentinel = std::filesystem::file_time_type::clock::now() - std::chrono::hours(24);
+    std::filesystem::last_write_time(pch + ".gch", sentinel);
+    pch_cache_clear();
+    clear_file_hash_cache();
+    ASSERT_EQ(ensure(), pch);
+    EXPECT_EQ(std::filesystem::last_write_time(pch + ".gch"), sentinel);
+    ASSERT_NO_FATAL_FAILURE(consume(pch, "static_assert(value == 1);\n"));
+}
+
+TEST_F(JitPchTest, DistinctPositionalArgsShareAnAcceptedPch) {
+    ASSERT_NO_FATAL_FAILURE(use_named_api());
+    const auto pch = ensure();
+    ASSERT_FALSE(pch.empty());
+    const auto sentinel = std::filesystem::file_time_type::clock::now() - std::chrono::hours(24);
+    std::filesystem::last_write_time(pch + ".gch", sentinel);
+    for (const std::vector<uint32_t>& values : {std::vector<uint32_t>{7}, {21, 42}, {}}) {
+        std::string body = "#include \"api/compile_time_args.h\"\nstatic_assert(kernel_compile_time_args.size() == " +
+                           std::to_string(values.size()) + ");\n";
+        for (size_t i = 0; i < values.size(); ++i) {
+            body += "static_assert(get_compile_time_arg_val(" + std::to_string(i) +
+                    ") == " + std::to_string(values[i]) + ");\n";
+        }
+        ASSERT_NO_FATAL_FAILURE(
+            consume(pch, body, {"-DUNUSED_KERNEL_DEFINE=" + std::to_string(values.size())}, values));
+        ASSERT_NO_FATAL_FAILURE(consume({}, body, {}, values));
+        ASSERT_EQ(ensure(), pch);
+        EXPECT_EQ(std::filesystem::last_write_time(pch + ".gch"), sentinel);
+    }
+}
+
 TEST_F(JitPchTest, FailedPchBuildRequestsTextualFallback) {
     write(source_ / "umbrella.h", "#include \"missing_generated_header.h\"\n");
     EXPECT_TRUE(ensure().empty());
     ASSERT_NO_FATAL_FAILURE(consume({}, "static_assert(1 + 1 == 2);\n"));
+}
+
+TEST_F(JitPchTest, ProfileLimitKeepsExistingPchUsable) {
+    const auto pch = ensure();
+    ASSERT_FALSE(pch.empty());
+    const auto cache = scratch_ / "cache/pch/blackhole";
+    // Include reservations from other processes, even before they publish a .gch.
+    for (size_t i = 1; i < 64; ++i) {
+        std::filesystem::create_directories(cache / ("reserved-" + std::to_string(i)));
+    }
+    EXPECT_EQ(ensure(), pch);
+    extra_includes_ = " -I" + consumer_.string();
+    EXPECT_TRUE(ensure().empty());
+    extra_includes_.clear();
+    ASSERT_NO_FATAL_FAILURE(consume(pch, "static_assert(value == 1);\n"));
 }
 
 TEST_F(JitPchTest, StrictValidationRequiresTheExpectedPch) {
