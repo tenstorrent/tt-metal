@@ -290,8 +290,7 @@ void kernel_main() {
             // (squares only the small deviations), not the cancellation-prone
             // mean(mean_i^2) - mean_g^2 -- numerically identical to Welford's pairwise merge.
             // Gathered CB interleaves [mean_0, var_0, ...] (row 0): mean_i at 2i, var_i at 2i+1;
-            // output [mean_g, 1/std] (row 0) -> combine_cb for the downstream transpose. legacy
-            // Match the composite dit_layernorm precision path.
+            // output [mean_g, 1/std] (row 0) -> combine_cb for the downstream transpose.
             constexpr uint32_t DM = 0;   // Σ mean_i  -> mean_g
             constexpr uint32_t DV = 1;   // Σ var_i   -> 1/std
             constexpr uint32_t DMM = 2;  // Σ (mean_i - mean_g)^2

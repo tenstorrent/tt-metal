@@ -493,8 +493,9 @@ class SamplingOp:
             trisc_named_compile_time_args=trisc_named_compile_time_args,
             trisc_compute_config=ttnn.ComputeConfigDescriptor(
                 math_fidelity=ttnn.MathFidelity.LoFi,
-                # Reciprocal precision follows fp32_dest_acc_en. Keep precise
-                # math mode for the other SFPU operations in this kernel.
+                # math_approx_mode=False enables Newton-Raphson reciprocal
+                # refinement; fp32_dest_acc_en=True retains full destination
+                # precision. Both settings matter for top-P sampling accuracy.
                 math_approx_mode=False,
                 fp32_dest_acc_en=True,
             ),
