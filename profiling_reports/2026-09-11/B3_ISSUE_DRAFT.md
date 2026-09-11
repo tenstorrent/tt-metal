@@ -1,5 +1,9 @@
 # B3: add direct SP8/TP1 MLA coverage and report operation priorities
 
+## TL;DR
+
+The requested eight-device MLA perf test is implemented and passed on a Galaxy column. **SDPA accounts for 83.81% of the measured MLA operation sum**, making it the first MLA optimization target to investigate. This was one cold sample, not a steady-state baseline or a measured optimization. Next, repeat with warm runs across KV depths and calibrate on LoudBox.
+
 Draft completion summary; not posted.
 
 ## Deliverable
