@@ -69,9 +69,7 @@ ttsl::hash::hash_t HighBwAllGatherDeviceOperation::compute_program_hash(
         args.cluster_axis,
         args.linearized_mesh_ring,
         args.fabric_config,
-        args.axis_topology,
         args.axis_num_devices,
-        args.axis_num_links,
         args.num_devices,
         args.num_links,
         args.mesh_rows,
@@ -486,54 +484,20 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
         "high_bw_all_gather input and output tensors must be on the same mesh device");
 
     const auto fabric_config = tt::tt_fabric::GetFabricConfig();
-    // Axis 0 is N/S, and axis 1 is E/W.
-    // An inactive axis has num_devices = 1, num_links = 0, Linear topology.
-    std::array<tt::tt_fabric::Topology, 2> axis_topology{
-        tt::tt_fabric::Topology::Linear, tt::tt_fabric::Topology::Linear};
-    std::array<uint32_t, 2> axis_num_devices{1u, 1u};
-    std::array<uint32_t, 2> axis_num_links{0u, 0u};
-    std::optional<uint32_t> resolved_num_links;
-    for (uint32_t axis = 0; axis < 2; ++axis) {
-        const bool is_axis_active = mesh_shape[axis] > 1 && (linearized_mesh_ring || *cluster_axis == axis);
-        if (!is_axis_active) {
-            continue;
-        }
-        axis_topology[axis] = ::ttnn::ccl::get_axis_topology(input_tensor, fabric_config, axis);
-        axis_num_devices[axis] = ::ttnn::ccl::get_topological_dimension(input_tensor, axis);
-        const auto discovered_num_links =
-            static_cast<uint32_t>(ttnn::operations::ccl::common::get_num_links(*mesh_device, axis));
-        if (num_links.has_value()) {
-            TT_FATAL(
-                *num_links > 0,
-                "high_bw_all_gather num_links must be greater than 0 when specified, got {}",
-                *num_links);
-            TT_FATAL(
-                *num_links <= discovered_num_links,
-                "high_bw_all_gather requested {} links, but only {} usable links were discovered on cluster_axis {}",
-                *num_links,
-                discovered_num_links,
-                axis);
-        }
-        axis_num_links[axis] = num_links.value_or(discovered_num_links);
-        resolved_num_links =
-            resolved_num_links.has_value() ? std::min(*resolved_num_links, axis_num_links[axis]) : axis_num_links[axis];
+    // Resolve physical wiring only when creating a workload. Mesh shape, fabric configuration and
+    // coordinate placement remain in the key; routing must stay fixed until the program cache is cleared.
+    if (num_links.has_value()) {
+        TT_FATAL(
+            *num_links > 0, "high_bw_all_gather num_links must be greater than 0 when specified, got {}", *num_links);
     }
-    TT_FATAL(resolved_num_links.has_value(), "high_bw_all_gather found no active collective axis");
-    const uint32_t collective_num_links = *resolved_num_links;
-    const uint32_t num_devices = linearized_mesh_ring ? static_cast<uint32_t>(mesh_shape.mesh_size())
-                                                      : axis_num_devices[0] * axis_num_devices[1];
+    std::array<uint32_t, 2> axis_num_devices{1u, 1u};
+    for (uint32_t axis = 0; axis < 2; ++axis) {
+        if (linearized_mesh_ring || *cluster_axis == axis) {
+            axis_num_devices[axis] = mesh_shape[axis];
+        }
+    }
+    const uint32_t num_devices = axis_num_devices[0] * axis_num_devices[1];
     const size_t packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
-    log_debug(
-        tt::LogOp,
-        "fabric_config: {}, axis_topology: {}, axis_num_devices: {}, axis_num_links: {}, num_links override: {}, "
-        "linearized_mesh_ring: {}, packet_size: {} B",
-        fabric_config,
-        axis_topology,
-        axis_num_devices,
-        axis_num_links,
-        num_links,
-        linearized_mesh_ring,
-        packet_size);
 
     // Resolve negative gather dim
     uint32_t rank = input_tensor.logical_shape().rank();
@@ -546,11 +510,9 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
             .cluster_axis = cluster_axis.value_or(0),
             .linearized_mesh_ring = linearized_mesh_ring,
             .fabric_config = fabric_config,
-            .axis_topology = axis_topology,
             .axis_num_devices = axis_num_devices,
-            .axis_num_links = axis_num_links,
             .num_devices = num_devices,
-            .num_links = collective_num_links,
+            .num_links = num_links,
             .mesh_rows = linearized_mesh_ring ? mesh_shape[0] : 0,
             .mesh_cols = linearized_mesh_ring ? mesh_shape[1] : 0,
             .packet_size = packet_size,

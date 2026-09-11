@@ -29,12 +29,10 @@ struct HighBwAllGatherParams {
 
     // Fabric setup info
     tt::tt_fabric::FabricConfig fabric_config = tt::tt_fabric::FabricConfig::DISABLED;
-    // Per-axis info (an inactive axis has num_devices = 1, num_links = 0, and Linear topology)
-    std::array<tt::tt_fabric::Topology, 2> axis_topology{};
+    // Device counts are structural; wiring and link availability are resolved on a cache miss.
     std::array<uint32_t, 2> axis_num_devices{};
-    std::array<uint32_t, 2> axis_num_links{};
-    uint32_t num_devices = 0;  // number of devices participating in the collective
-    uint32_t num_links = 0;
+    uint32_t num_devices = 0;           // number of devices participating in the collective
+    std::optional<uint32_t> num_links;  // Requested count; nullopt discovers available links on a miss.
     uint32_t mesh_rows = 0;
     uint32_t mesh_cols = 0;
     size_t packet_size = 0;

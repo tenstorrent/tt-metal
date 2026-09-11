@@ -1548,3 +1548,53 @@ def test_high_bw_all_gather_galaxy_ci_perf_traced(mesh_device):
         min_bandwidth_gbps=_GALAXY_CI_MIN_BANDWIDTH_GBPS,
         invocation="metadata",
     )
+
+
+@run_for_blackhole("high_bw_all_gather requires Blackhole fabric")
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("num_links", [None, 1, 2])
+def test_high_bw_all_gather_cached_link_discovery(mesh_device, num_links, expect_error):
+    """Auto and explicit links retain cache-hit correctness with fresh buffers and traces."""
+    rank_line, axis = _rank_line_mesh(mesh_device)
+    rank_line.enable_program_cache()
+    cache_entries = None
+    for _ in range(2):
+        _run_high_bw_all_gather_accuracy(
+            rank_line,
+            ttnn.bfloat16,
+            width=64,
+            layout=ttnn.TILE_LAYOUT,
+            expected_page_size=2048,
+            cluster_axis=axis,
+            rows_per_device=32,
+            num_links=num_links,
+            ag_traced=True,
+        )
+        if cache_entries is None:
+            cache_entries = rank_line.num_program_cache_entries()
+        else:
+            assert rank_line.num_program_cache_entries() == cache_entries
+    _run_high_bw_all_gather_accuracy(
+        rank_line,
+        ttnn.bfloat16,
+        width=64,
+        layout=ttnn.TILE_LAYOUT,
+        expected_page_size=2048,
+        cluster_axis=axis,
+        rows_per_device=1024,
+        num_links=num_links,
+        metadata_batch_index=2,
+    )
+    for invalid_links, message in [(0, "greater than 0"), (100, "usable links")]:
+        with expect_error(RuntimeError, message):
+            _run_high_bw_all_gather_accuracy(
+                rank_line,
+                ttnn.bfloat16,
+                width=64,
+                layout=ttnn.TILE_LAYOUT,
+                expected_page_size=2048,
+                cluster_axis=axis,
+                rows_per_device=32,
+                num_links=invalid_links,
+            )

@@ -18,6 +18,7 @@
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/mesh_ring_plan.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
 namespace ttnn::operations::experimental::high_bw_all_gather {
 
@@ -282,8 +283,31 @@ HighBwAllGatherUnicastFactory::cached_mesh_workload_t HighBwAllGatherUnicastFact
     // is baked into the workload and reused until the program cache is cleared.
     const auto& args = operation_attributes;
     const auto mesh_shape = tensor_args.input_tensor.device()->shape();
+    std::array<tt::tt_fabric::Topology, 2> axis_topology{
+        tt::tt_fabric::Topology::Linear, tt::tt_fabric::Topology::Linear};
+    std::optional<uint32_t> resolved_num_links;
+    for (uint32_t active_axis = 0; active_axis < 2; ++active_axis) {
+        if (args.axis_num_devices[active_axis] <= 1) {
+            continue;
+        }
+        axis_topology[active_axis] =
+            ::ttnn::ccl::get_axis_topology(tensor_args.input_tensor, args.fabric_config, active_axis);
+        const auto discovered_num_links = static_cast<uint32_t>(
+            ttnn::operations::ccl::common::get_num_links(*tensor_args.input_tensor.device(), active_axis));
+        if (args.num_links.has_value()) {
+            TT_FATAL(
+                *args.num_links <= discovered_num_links,
+                "high_bw_all_gather requested {} links, but only {} usable links were discovered on cluster_axis {}",
+                *args.num_links,
+                discovered_num_links,
+                active_axis);
+        }
+        const uint32_t count = args.num_links.value_or(discovered_num_links);
+        resolved_num_links = resolved_num_links.has_value() ? std::min(*resolved_num_links, count) : count;
+    }
+    TT_FATAL(resolved_num_links.has_value(), "high_bw_all_gather found no active collective axis");
     const auto axis = args.cluster_axis;
-    const auto topology = args.linearized_mesh_ring ? tt::tt_fabric::Topology::Ring : args.axis_topology[axis];
+    const auto topology = args.linearized_mesh_ring ? tt::tt_fabric::Topology::Ring : axis_topology[axis];
     ttnn::operations::ccl::common::MeshRingPlan mesh_ring_plan{
         .cluster_axis = args.linearized_mesh_ring ? std::nullopt : std::optional<uint32_t>{axis},
         .full_mesh = args.linearized_mesh_ring,
@@ -291,17 +315,17 @@ HighBwAllGatherUnicastFactory::cached_mesh_workload_t HighBwAllGatherUnicastFact
         .mesh_rows = mesh_shape[0],
         .mesh_cols = mesh_shape[1],
         .ring_size = args.num_devices,
-        .num_links = args.num_links,
+        .num_links = *resolved_num_links,
         .topology = topology,
         .fabric_config = args.fabric_config,
-        .axis_topology = args.axis_topology,
+        .axis_topology = axis_topology,
         .route_plan_hash = std::nullopt};
     if (tt::tt_fabric::is_2d_fabric_config(args.fabric_config)) {
         const auto resolved = ttnn::operations::ccl::common::resolve_mesh_ring_plan(
             tensor_args.input_tensor,
             mesh_ring_plan.cluster_axis,
-            args.num_links,
-            args.axis_topology,
+            *resolved_num_links,
+            axis_topology,
             true,
             "high_bw_all_gather");
         TT_FATAL(resolved.has_value(), "high_bw_all_gather requires a direct-neighbor line/ring");
@@ -392,8 +416,7 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     const bool fabric_is_2d = tt::tt_fabric::is_2d_fabric_config(operation_attributes.fabric_config);
     const bool linearized_mesh_ring = operation_attributes.linearized_mesh_ring;
     const uint32_t axis = operation_attributes.cluster_axis;
-    const auto topology =
-        linearized_mesh_ring ? tt::tt_fabric::Topology::Ring : operation_attributes.axis_topology[axis];
+    const auto topology = mesh_ring_plan.topology;
     const bool is_ring = tt::tt_fabric::is_ring_or_torus(topology);
 
     const uint32_t num_devices = operation_attributes.num_devices;
@@ -450,7 +473,7 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     // Num worker cores per direction per link. >1 requires an additional fabric mux core to own the fabric
     // connection and multiplex traffic.
     // This is a major perf knob, below heuristic was determined from extensive test sweeps.
-    const uint32_t num_links = operation_attributes.num_links;
+    const uint32_t num_links = mesh_ring_plan.num_links;
     // The metadata forms are runtime controls too: their values live in tensors the kernels read, so the
     // cached worker tier must likewise be sized from the MAXIMUM geometry rather than from whatever extent
     // happens to be active. Omitting them here would pick the tier from a possibly smaller page count
