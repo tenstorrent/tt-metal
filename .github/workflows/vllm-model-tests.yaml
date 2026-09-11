@@ -95,7 +95,7 @@ permissions:
   packages: write
   contents: read
 
-run-name: "Diagnostic functional Galaxy vLLM ${{ github.event_name == 'schedule' && '[scheduled]' || format('[{0}] [{1}] [{2}]', (inputs.model == 'all' && 'All models' || inputs.model), (inputs.sku == 'all' && 'All SKUs' || inputs.sku), (inputs.tier == 'all' && 'All tiers' || format('Tier {0}', inputs.tier))) }}"
+run-name: "Diagnostic PR perf Galaxy vLLM ${{ github.event_name == 'schedule' && '[scheduled]' || format('[{0}] [{1}] [{2}]', (inputs.model == 'all' && 'All models' || inputs.model), (inputs.sku == 'all' && 'All SKUs' || inputs.sku), (inputs.tier == 'all' && 'All tiers' || format('Tier {0}', inputs.tier))) }}"
 
 jobs:
   check-harbor:
