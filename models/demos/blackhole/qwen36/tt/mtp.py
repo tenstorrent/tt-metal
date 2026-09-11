@@ -69,7 +69,10 @@ class Qwen36MTP:
         # Reuse the full-attention decoder layer for mtp.layers.0. Remap the checkpoint keys to a
         # full-attention layer index L so is_full_attention_layer(L) is True and the substate loader
         # finds layers.{L}.self_attn.* / .mlp.* / .{input,post_attention}_layernorm.
-        L = next(i for i, t in enumerate(args.attention_type_list) if t == "full_attention")
+        L = next((i for i, t in enumerate(args.attention_type_list) if t == "full_attention"), None)
+        assert (
+            L is not None
+        ), f"checkpoint attention_type_list has no full_attention layer (len={len(args.attention_type_list)})"
         assert args.is_full_attention_layer(L), f"MTP host layer {L} is not full attention"
         self.mtp_host_layer = L
         prefix = f"layers.{L}."
