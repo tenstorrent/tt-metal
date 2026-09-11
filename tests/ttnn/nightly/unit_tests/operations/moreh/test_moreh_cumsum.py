@@ -137,8 +137,10 @@ def test_moreh_cumsum_callback(input_shape, dim, device):
 
         # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
         device.clear_program_cache()
+        num_program_cache_entries_list = []
         for i in range(2):
             tt_output_cpu = ttnn.to_torch(ttnn.operations.moreh.cumsum(tt_input, dim))
+            num_program_cache_entries_list.append(device.num_program_cache_entries())
 
             logger.debug(f"torch_output.shape == {torch_output.shape}, tt_output_cpu == {tt_output_cpu.shape}")
 
@@ -148,7 +150,9 @@ def test_moreh_cumsum_callback(input_shape, dim, device):
             logger.debug(f"Output pcc={output_pcc}")
 
             assert passing
-        assert device.num_program_cache_entries() >= 1
+        logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
+        assert num_program_cache_entries_list[0] > 0
+        assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
 @pytest.mark.parametrize(
