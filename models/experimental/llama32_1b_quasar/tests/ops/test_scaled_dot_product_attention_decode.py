@@ -30,10 +30,16 @@ import torch
 import ttnn
 from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
 
-# KV-cache sequence capacity and the current decode position (same for all users).
-CACHE_SEQ = 256
-CUR_POS = 128
-K_CHUNK = 128  # divides the padded layer length (nearest_n(CUR_POS + 1, K_CHUNK) == 256 <= CACHE_SEQ)
+# (KV-cache capacity, current decode position, k_chunk) configs to sweep. The number of K-chunks a
+# core processes is nearest_n(cur_pos + 1, k_chunk) / k_chunk. A 2-chunk-only test is a weak check: it
+# hides online-softmax merge bugs because the final chunk contributes a single valid column, so its
+# (possibly wrong) softmax correction is numerically negligible. The 8-chunk case exercises the real
+# multi-chunk flash accumulation (batch32 = one core does all K-chunks) and the deeper multi-round tree
+# reduction (batch1 = one K-chunk per core, combined across more cores) where merge bugs actually bite.
+DECODE_SEQ_CONFIGS = [
+    (256, 128, 128),  # 2 K-chunks: nearest_n(129, 128) == 256
+    (1024, 896, 128),  # 8 K-chunks: nearest_n(897, 128) == 1024
+]
 
 
 def _torch_decode_ref(q, k, v, cur_pos, scale, padded_layer_len):
@@ -53,15 +59,20 @@ def _torch_decode_ref(q, k, v, cur_pos, scale, padded_layer_len):
 
 
 @U.with_default_mesh()
+@pytest.mark.parametrize(
+    "cache_seq, cur_pos_val, k_chunk",
+    DECODE_SEQ_CONFIGS,
+    ids=[f"seq{s}_pos{p}_kc{kc}" for (s, p, kc) in DECODE_SEQ_CONFIGS],
+)
 @pytest.mark.parametrize("batch", U.DECODE_BATCHES, ids=[f"batch{b}" for b in U.DECODE_BATCHES])
-def test_scaled_dot_product_attention_decode(ttnn_mesh_device, reset_seeds, batch):
+def test_scaled_dot_product_attention_decode(ttnn_mesh_device, reset_seeds, batch, cache_seq, cur_pos_val, k_chunk):
     mesh = ttnn_mesh_device
     scale = U.HEAD_DIM**-0.5
 
     q_torch = U.torch_rand((1, batch, U.N_HEADS, U.HEAD_DIM))
-    k_torch = U.torch_rand((batch, U.N_KV_HEADS, CACHE_SEQ, U.HEAD_DIM))
-    v_torch = U.torch_rand((batch, U.N_KV_HEADS, CACHE_SEQ, U.HEAD_DIM))
-    cur_pos = [CUR_POS] * batch
+    k_torch = U.torch_rand((batch, U.N_KV_HEADS, cache_seq, U.HEAD_DIM))
+    v_torch = U.torch_rand((batch, U.N_KV_HEADS, cache_seq, U.HEAD_DIM))
+    cur_pos = [cur_pos_val] * batch
 
     q = U.to_tt(q_torch, mesh)
     k = U.to_tt(k_torch, mesh)
@@ -72,7 +83,7 @@ def test_scaled_dot_product_attention_decode(ttnn_mesh_device, reset_seeds, batc
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=mesh.compute_with_storage_grid_size(),
         q_chunk_size=32,  # padded_num_heads for n_heads=32
-        k_chunk_size=K_CHUNK,
+        k_chunk_size=k_chunk,
         exp_approx_mode=False,
     )
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -93,6 +104,6 @@ def test_scaled_dot_product_attention_decode(ttnn_mesh_device, reset_seeds, batc
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    padded_layer_len = ((CUR_POS + 1 + K_CHUNK - 1) // K_CHUNK) * K_CHUNK  # nearest_n(cur_pos+1, k_chunk)
+    padded_layer_len = ((cur_pos_val + 1 + k_chunk - 1) // k_chunk) * k_chunk  # nearest_n(cur_pos+1, k_chunk)
     ref = _torch_decode_ref(q_torch, k_torch, v_torch, cur_pos, scale, padded_layer_len)  # [1, b, nh, d]
     U.assert_pcc(ref, out, pcc=0.99, mesh_device=mesh)
