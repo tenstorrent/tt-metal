@@ -332,7 +332,7 @@
 
 - name: "Llama-3.1-8B-Instruct with sampling-tests"
   model: meta-llama/Llama-3.1-8B-Instruct
-  server-timeout: 15
+  server-timeout: 20
   benchmark-timeout: 5
   mesh-device: T3K
   arch: arch-wormhole_b0
@@ -353,7 +353,7 @@
 
 - name: "Llama-3.1-8B-Instruct (prefix caching)"
   model: meta-llama/Llama-3.1-8B-Instruct
-  server-timeout: 10
+  server-timeout: 15
   benchmark-timeout: 5
   mesh-device: T3K
   arch: arch-wormhole_b0

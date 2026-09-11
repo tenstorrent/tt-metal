@@ -49,7 +49,6 @@ public:
     HostBuffer& operator=(const HostBuffer& other);
     HostBuffer(HostBuffer&& other) noexcept;
     HostBuffer& operator=(HostBuffer&& other) noexcept;
-    void swap(HostBuffer& other) noexcept;
 
     ttsl::Span<std::byte> view_bytes() & noexcept;
     ttsl::Span<const std::byte> view_bytes() const& noexcept;
@@ -73,6 +72,7 @@ public:
 
 private:
     friend class experimental::HostBufferPinnedMemoryHelper;
+    void swap(HostBuffer& other) noexcept;
     void register_pinned_memory_cache_release_callback();
 
     MemoryPin pin_;
@@ -120,7 +120,5 @@ ttsl::Span<const T> HostBuffer::view_as() const& {
 // Compares data buffers by their data.
 bool operator==(const HostBuffer& a, const HostBuffer& b) noexcept;
 bool operator!=(const HostBuffer& buffer_a, const HostBuffer& buffer_b) noexcept;
-
-void swap(HostBuffer& lhs, HostBuffer& rhs) noexcept;
 
 }  // namespace tt::tt_metal

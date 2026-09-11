@@ -16,12 +16,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-# Make ``utils.*`` importable when the file is run directly (needed before
-# any ``from utils.* import ...`` at module scope).
-_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-_EXAMPLE_ROOT = os.path.dirname(_THIS_DIR)
-if _EXAMPLE_ROOT not in sys.path:
-    sys.path.insert(0, _EXAMPLE_ROOT)
+# Make ``grpo_remote_rollout.*`` importable when the file is run directly (needed
+# before any ``from grpo_remote_rollout.* import ...`` at module scope).
+_EXAMPLES_ROOT = str(Path(__file__).resolve().parents[2])
+if _EXAMPLES_ROOT not in sys.path:
+    sys.path.insert(0, _EXAMPLES_ROOT)
 
 import ttml
 import ttnn
@@ -30,11 +29,11 @@ from loguru import logger
 from transformers import AutoTokenizer
 from ttml.common.config import DeviceConfig, get_model_config, load_config
 from ttml.trainers import GRPOTrainer, get_grpo_config
-from utils.llama_grpo_completer import LlamaCompleterRemoteRollout, LlamaCompletionCtx
-from utils.llama_ttt_presets import bf16_attn_bfp8_mlp_optimizations, llama_stop_and_pad
-from utils.mpi_rollout import MPIRolloutClient, MPIRolloutServer
-from utils.ttt_generation_worker import TttGenerationWorker
-from utils.weight_bridge import HostWeightBridge, TTML_RANK, TTT_RANK
+from grpo_remote_rollout.utils.llama_grpo_completer import LlamaCompleterRemoteRollout, LlamaCompletionCtx
+from grpo_remote_rollout.utils.llama_ttt_presets import bf16_attn_bfp8_mlp_optimizations, llama_stop_and_pad
+from grpo_remote_rollout.utils.mpi_rollout import MPIRolloutClient, MPIRolloutServer
+from grpo_remote_rollout.utils.ttt_generation_worker import TttGenerationWorker
+from grpo_remote_rollout.utils.weight_bridge import HostWeightBridge, TTML_RANK, TTT_RANK
 
 CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_1b_remote_rollout.yaml"
 

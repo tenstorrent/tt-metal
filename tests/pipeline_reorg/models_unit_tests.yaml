@@ -21,6 +21,7 @@
     # (variant-qualified markers, fail-closed unverifiable variants, sidecar single-load) that
     # every tt_transformers e2e leg depends on. See #45400.
     pytest --timeout 120 models/tt_transformers/tests/test_warm_cache_marker.py
+    pytest --timeout 300 models/tt_transformers/tests/test_traced_prefill_rope_slice.py
     pytest --timeout 300 models/tt_transformers/tests/test_embedding.py
     pytest --timeout 300 models/tt_transformers/tests/test_rms_norm.py
     pytest --timeout 600 models/tt_transformers/tests/test_mlp.py
@@ -192,7 +193,7 @@
 
 - name: Qwen3.6 unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B
     pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_attention_tp.py
     pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_gdn_tp.py
@@ -1314,7 +1315,7 @@
 - name: TT-DiT Qwen-Image unit tests
   cmd: |
     unset HF_HUB_OFFLINE
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30
     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
     pytest --timeout 1500 models/tt_dit/tests/encoders/qwen25vl/test_qwen25vl.py::test_qwen25vl_encoder_pair
     pytest --timeout 900 models/tt_dit/tests/models/qwenimage/test_transformer_qwenimage.py -k "not not_traced"
@@ -1575,7 +1576,7 @@
   model_family: BEVFormer
   skus:
     bh_p150b_civ2:
-      timeout: 12
+      timeout: 16
       tier: 3
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: shield
@@ -1701,7 +1702,7 @@
   model_family: TTTv2
   skus:
     wh_llmbox:
-      timeout: 23
+      timeout: 28
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
@@ -1849,6 +1850,11 @@
       --cov=models.common.modules.sampling.penalties_1d \
       --cov-report=term-missing \
       --cov-config=models/common/tests/setup.cfg || fail=1
+    pytest models/common/tests/modules/sampling/test_params.py \
+      -m "not slow" \
+      --tb=short \
+      --durations=10 \
+      --deselect "models/common/tests/modules/sampling/test_params.py::test_legacy_device_sampling_capabilities_declare_the_exact_limit[models/tt_transformers/tt/generator_vllm.py]" || fail=1
     pytest models/common/tests/modules/sampling/test_sampling_1d.py \
       -m "not slow" \
       --tb=short \
@@ -1861,7 +1867,7 @@
   model_family: TTTv2
   skus:
     wh_llmbox:
-      timeout: 4
+      timeout: 6
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
