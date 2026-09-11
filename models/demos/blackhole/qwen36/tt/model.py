@@ -583,14 +583,19 @@ class Qwen36Model:
         ttnn.deallocate(idx)
         return int(flat)
 
-    def _lm_head(self, x, out_dtype=None):
+    def _lm_head(self, x, out_dtype=None, gather=True):
         """LM-head matmul. Vocab-sharded mesh: partial logits + all-gather to full replicated.
         Single device: plain matmul.
 
         out_dtype: leave None (default) for the base/verify path — losslessness is defined by the
         BASE argmax, so that call must stay byte-identical. The MTP drafter passes float32: its
         argmax only has to rank candidates, and at bf16 4.7-5.5% of draft rejections at 8k/32k were
-        EXACT ties in the drafter's own logits, i.e. tokens thrown away to a rounding coin flip."""
+        EXACT ties in the drafter's own logits, i.e. tokens thrown away to a rounding coin flip.
+
+        gather=False returns the per-device VOCAB SHARD instead of the replicated row, for a caller
+        that reduces across the mesh itself (tp_common.greedy_pick's shard path — the drafter). The
+        matmul and its compute config are untouched, so the shard is bit-identical to the
+        corresponding slice of the gathered row."""
         kw, ccl_kw = {}, {}
         if out_dtype is not None:
             # HiFi2 matches the bfloat8_b weight; fp32 dest accumulation is what actually keeps the
@@ -610,7 +615,7 @@ class Qwen36Model:
             # drafter's argmax came back with an out-of-range id). Gather at the head's own dtype.
             ccl_kw = dict(dtype=out_dtype)
         logits = ttnn.linear(x, self.lm_head_weight, **kw)
-        if self._lmhead_vocab_sharded:
+        if self._lmhead_vocab_sharded and gather:
             from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
             # ~8 MB/device (B=32, vocab/tp=124160, bf16) puts this in the PREFILL-gather size band, not

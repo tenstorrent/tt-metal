@@ -170,6 +170,25 @@ def wh_9b_n300(args):
     return not is_blackhole() and getattr(args, "dim", 0) <= 4096 and getattr(args, "device_name", None) == "N300"
 
 
+def wh_t3k(args):
+    """True only for an 8-chip Wormhole mesh (T3K) -- the counterpart of ``wh_9b_n300`` for the
+    MTP speculative-decode optimizations, which were all measured and gated on THIS config.
+
+    Single source of truth for their scope:
+      * ``Qwen36MTP.shard_argmax`` -- vocab-sharded greedy pick instead of the fp32 vocab
+        all-gather (tp_common.greedy_pick)
+      * ``Qwen36MTP._lm_head_bfp4`` -- bfloat4_b drafter LM head
+      * ``fc_decode_program_config`` -- the swept 1-tile-tall fc in-projection config
+      * ``decode_embed``'s ``_embed_narrow_batch`` split tilize
+      * ``TPAttention``'s ``_kv_no_pad`` and the fused sigmoid gate (attention/tp.py)
+
+    Everything outside this scope keeps the previously shipped behavior. Blackhole is excluded for
+    the same reason wh_9b_n300 excludes it: its grids and L1 budget differ and none of the above was
+    measured there. N150 (TP=1) never reaches the TP path; N300 (TP=2) has its own tuned scope.
+    """
+    return not is_blackhole() and int(getattr(args, "num_devices", 1)) == 8
+
+
 def wh_9b_n300_vision(args):
     """``wh_9b_n300`` for VISION args (VisionModelArgs), where ``args.dim`` is the wrong field.
 
@@ -206,12 +225,23 @@ def rope_permuted_enabled(args):
     ON for Wormhole 9B N300 (wh_9b_n300). No env var: this is the shipping path on that config,
     plus the geometric precondition that rope_head_dim < head_dim (Qwen3.5's partial rotary --
     with no unrotated tail to skip, the "partial" chain is already one op and there is nothing
-    to collapse). Off everywhere else (unvalidated on N150/T3K/P150x4/Blackhole and on the 27B).
+    to collapse). Off on N150/P150x4/Blackhole, still unvalidated there.
 
     MEASURED on a whole decode layer (tests/perf/test_attn_rope_permuted_sweep.py, N300, device
     profiler): 46 -> 38 programs and 704.5 -> 687.4 us at B=1; 49 -> 37 programs and 907.2 ->
     778.1 us (-14.2%) at B=32. Takes the decode RoPE section from 15 device ops to 7 per
     full-attention layer per token; prefill drops slice/slice/concat per Q and K.
+
+    NEGATIVE for T3K/27B, do not re-enable without reading this. The geometric precondition does
+    hold there (rope_head_dim 64 < head_dim 256), and it does work -- but it is INCOMPATIBLE with
+    the no-pad KV-cache reshard that T3K now uses (attention/tp.py::_kv_no_pad): permuted RoPE lands
+    K in rope_k_shard_cfg, and resharding that UNPADDED into the cache write SEGFAULTS inside
+    ttnn::prim::paged_update_cache. With the pad restored it runs correctly, so the two are
+    mutually exclusive. MEASURED on a traced drafter leg, and they are worth the SAME:
+    no-pad + stock RoPE 2512.2 us vs pad + permuted RoPE 2513.2 us (against ~2544 for neither).
+    So there is no net win to collect here, and the no-pad path is the one already gated at B=32,
+    lossless and determinism -- this one would additionally need a fresh PCC gate and a rebuild of
+    the ".rp" attention weight cache for the same time.
     """
     return wh_9b_n300(args) and getattr(args, "rope_head_dim", 0) < getattr(args, "head_dim", 0)
 
@@ -429,11 +459,53 @@ def decode_embed(emb, tok, args):
     """
     mc = getattr(args, "emb_decode_memcfg", None)
     if mc is None:
-        return emb(tok)
+        return _embed_narrow_batch(emb, tok) if wh_t3k(args) else emb(tok)
     last = int(tok.shape[-1])
     if last == 0 or last > TILE_SIZE or last % TILE_SIZE != 0:
-        return emb(tok)
+        return _embed_narrow_batch(emb, tok) if wh_t3k(args) else emb(tok)
     return emb(tok, memory_config=mc)
+
+
+# Width (in elements) above which splitting the single-core TilizeWithValPadding into
+# pad + multicore tilize + slice pays for the two extra op launches. MEASURED on WH, one RM row:
+# 640 wide 62.5 -> 22.9us (-39.6), but 64 wide 13.8 -> 20.4us (+6.7) -- the fixed ~7us per launch
+# swamps a narrow tilize. Crossover is ~150; 256 keeps a margin.
+_FAST_TILIZE_MIN_WIDTH = 256
+
+
+def _embed_narrow_batch(emb, tok):
+    """``emb(tok)`` for a batch too small to fill a tile row, without the single-core tilize.
+
+    ``ttnn.embedding(layout=TILE)`` is Embeddings + TilizeWithValPadding, and that tilize has no
+    multicore variant (only plain ``ttnn.tilize`` does; the val-padding one is what a <32-row input
+    needs). At B=1 it runs on ONE core and costs 55.6us for a [1,1,1,640] bf16 row -- 87 ns per
+    element, and the single largest data-movement op in an MTP drafter leg.
+
+    Padding the rows to a full tile first lets the multicore tilize take it, then a slice restores
+    the logical row count (``ttnn.reshape`` cannot: it requires equal volume). Three ops instead of
+    one, but MEASURED 62.5 -> 22.9us at dim/tp=640, bit-identical (``torch.equal``) and the same
+    shape, layout and memory config. Only worth it above _FAST_TILIZE_MIN_WIDTH.
+
+    Falls back to the plain call for a scaled embedding (its multiply expects the op's own output)
+    or when the width does not pay.
+    """
+    if getattr(emb, "embed_scale", None) is not None:
+        return emb(tok)
+    e = ttnn.embedding(tok, emb.weights, layout=ttnn.ROW_MAJOR_LAYOUT)
+    shape = list(e.shape)
+    rows = int(shape[-2]) if len(shape) >= 2 else 1
+    if len(shape) < 2 or rows >= TILE_SIZE or int(shape[-1]) < _FAST_TILIZE_MIN_WIDTH:
+        out = ttnn.to_layout(e, ttnn.TILE_LAYOUT)
+        ttnn.deallocate(e)
+        return out
+    pad = [(0, 0)] * (len(shape) - 2) + [(0, TILE_SIZE - rows), (0, 0)]
+    padded = ttnn.pad(e, pad, value=0.0)
+    ttnn.deallocate(e)
+    tiled = ttnn.tilize(padded, use_multicore=True)
+    ttnn.deallocate(padded)
+    out = ttnn.slice(tiled, [0] * len(shape), shape)
+    ttnn.deallocate(tiled)
+    return out
 
 
 # 2D prefill matmul config
@@ -1327,6 +1399,187 @@ def tuned_vocab_all_gather(
     )
     input_tensor.deallocate(True)
     return gathered
+
+
+def fc_decode_program_config(mesh_device, k, n):
+    """Program config for a 1-tile-tall (decode) ``[*, k] @ [k, n]`` with k >> n, or None.
+
+    The MTP head's fc in-projection is exactly that shape ([32, 10240] x [10240, 640] at 27B/TP=8)
+    and the *auto* config leaves 2.3x on the table: MEASURED on WH with the model's own
+    COMPUTE_HIFI2, auto is 165.9 us / 48 GB/s while this is 72.8 us / ~97 GB/s, with PCC identical
+    to seven digits across all 42 arms swept -- pure blocking, no precision change.
+
+    Two knobs do it, and they are the two the tt-perf-report hints point at for this op:
+
+    * ``in0_block_w``. Auto behaves like 2, which means 160 sequential K-blocks each paying an in0
+      multicast sync. Raising it is most of the win (in0bw 8 -> 16 -> 32 = 89 -> 78 -> 75 us) and
+      plateaus by 32; 320 (the whole K) is worse again at 81.
+    * FEWER cores with a wider ``per_core_N``. n is only 20 tiles, so an N-parallel config cannot
+      use more than 20 cores, and at 20 the output subblock is forced to 1x1 (the report flags it).
+      Halving to 10 cores makes it 1x2 and is slightly faster despite the lower core count. 5 cores
+      / 1x4 regresses hard (87-99 us), so this is a shallow optimum, not "fewer is better".
+
+    NOT applied: ``fp32_dest_acc_en=False`` (it would lift the subblock cap 4 -> 8) measured no
+    faster here AND lowers PCC 0.9999707 -> 0.9998, so the cap is not what binds.
+
+    in0 in L1 -- the report's other hint -- IS applied, but only here (mtp.py puts the fc's concat in
+    L1 for -2.1 us). Do NOT carry it to the LM head: measured there, moving in0 to L1 costs
+    962 -> 2539 us (+164%), and landing the OUTPUT in L1 costs 962 -> 3064 us. Its in0 is 320 KB
+    against 169 MB of streamed weight, so there is nothing to win and the placement only disturbs
+    what the auto config does with a 3.97 MB fp32 output. A report hint is a hypothesis, not an
+    answer.
+
+    Returns None when the shape does not fit the assumptions (so the caller keeps auto).
+    """
+    kt, nt = k // 32, n // 32
+    if k % 32 or n % 32 or kt == 0 or nt == 0:
+        return None
+    grid = mesh_device.compute_with_storage_grid_size()
+    per_core_n = 2 if nt % 2 == 0 else 1
+    cores = nt // per_core_n
+    if cores > grid.x * grid.y:
+        return None
+    in0_block_w = max((d for d in range(1, 33) if kt % d == 0), default=1)
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.num_cores_to_corerangeset(cores, grid, row_wise=True)
+        .bounding_box()
+        .grid_size(),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=per_core_n,
+        per_core_M=1,
+        per_core_N=per_core_n,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+
+def tiny_all_gather(input_tensor, mesh_device, tt_ccl, dim, topology, dtype):
+    """All-gather a ONE-ELEMENT-per-device tensor. Same op as tuned_vocab_all_gather (see there for
+    why this model keeps local copies of the CCL call) but tuned for the opposite size regime.
+
+    An 8-element gather moves nothing, so it sits at the num_links=1 fabric floor (measured 64 us on
+    T3K) and the only thing the knobs can do there is add contention: num_workers_per_link=1 /
+    chunks_per_sync=1, where the vocab gather wants 4/25 for bandwidth.
+
+    Takes ownership of ``input_tensor`` (deallocates it), like tuned_vocab_all_gather.
+    """
+    num_links = tt_ccl.get_num_links(None)
+    input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+    if input_tensor.dtype != dtype:
+        input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG, dtype)
+    gathered = ttnn.experimental.all_gather_async(
+        input_tensor,
+        persistent_output_buffer=None,
+        dim=dim,
+        multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
+        num_links=num_links,
+        topology=topology,
+        memory_config=None,
+        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+        chunks_per_sync=1,
+        num_workers_per_link=1,
+        num_buffers_per_channel=2,
+        subdevice_id=None,
+    )
+    input_tensor.deallocate(True)
+    return gathered
+
+
+def vocab_shard_offsets(mesh_device, num_devices, shard_width):
+    """Replicated [1,1,1,num_devices] fp32 constant [0, shard_width, 2*shard_width, ...].
+
+    Added to the GATHERED shard-local argmaxes to turn them into global vocab ids. It is applied
+    after the gather, so it is the same on every device and needs no per-device staging (this is the
+    same trick models/common/sampling/tt_sampling.py uses for its top-k device offsets). Torch-free,
+    and allocated at init so it predates any trace capture.
+    """
+    off = ttnn.Tensor(
+        [float(d * shard_width) for d in range(num_devices)],
+        [1, 1, 1, num_devices],
+        ttnn.float32,
+        ttnn.ROW_MAJOR_LAYOUT,
+    )
+    return ttnn.to_layout(ttnn.to_device(off, mesh_device), ttnn.TILE_LAYOUT)
+
+
+def greedy_pick(logits, mesh_device, tt_ccl, topology, shard_offsets=None, vocab_size=None):
+    """Greedy argmax over the vocab dim of ONE logit row -> [1,1,1] uint32 ROW_MAJOR.
+
+    ttnn.argmax needs ROW_MAJOR input: a TILE tensor takes a single-core internal-untilize path that
+    is catastrophically slow on a vocab-wide row. So untilize multicore, then argmax. Deliberately
+    NOT padded 1 -> 32 rows: [1,1,1,vocab] is ALREADY 32 rows physically, so padding it to 32 logical
+    rows only makes untilize and argmax move ~32x the bytes (measured byte-identical ids either way,
+    and the draft phase dropped 35.1 -> 22.3 ms at K=10 when the pad went).
+
+    shard_offsets None: ``logits`` is the full vocab row, replicated on every device by the LM head's
+    all-gather. Plain untilize + argmax.
+
+    shard_offsets given (from vocab_shard_offsets): ``logits`` is this device's VOCAB SHARD and was
+    never gathered. Reduce locally, then combine 8 scalars instead of moving the whole row: the
+    fp32 vocab all-gather the replicated form needs is 1.47 ms/leg on T3K/27B, ~43% of a drafter leg,
+    purely so an argmax can see columns this device does not own. Per shard we take the max VALUE and
+    the shard-local argmax INDEX, gather those two scalars, offset the indices into global vocab ids,
+    and pick the winner. Ties resolve to the LOWEST GLOBAL ID, which is exactly what a
+    first-occurrence argmax over the concatenated row returns, so this is not an approximation of the
+    gathered path -- it is byte-identical to it (verified against a full gather on random,
+    all-negative, first/last-shard, tie-across-shards and tie-within-shard rows, and all 8 replicas
+    agree, which the chained drafter needs since every device embeds the id itself; end to end the
+    drafted ids and the acceptance rate are unchanged).
+
+    MEASURED on T3K/27B, one traced drafter leg (forward + pick + chain writeback):
+    3986 -> 2684 us/leg (-32.7%); the leg's forward-only device time 3409 -> 1938 us.
+    The pick itself is 466 (gathered) -> 618 us (shard), i.e. this trades 152 us of pick for the
+    1471 us gather.
+
+    NEGATIVE results on that 618 us, so they are not re-tried: 343 of it is the ``ttnn.max`` below,
+    a 1-tile-tall 31040-wide fp32 reduce, and it is at its floor -- L1 width-sharding it over
+    5/10/31/61 cores is flat (339-460 us, so it is not core-starved), bf16 only reaches 216 us (and
+    would reinstate the ties fp32 exists to break), ``ttnn.sum`` is 421 us so it is reduce-generic
+    rather than an fp32 fallback, ``ttnn.topk`` (which would return value and index in one op) is
+    9.4 ms, and gathering the value at the known argmax index with ``ttnn.embedding`` instead of
+    reducing for it is blocked -- that op hard-requires a BFLOAT16 table. A tile-aligned 2D reshape
+    that would make the reduce cheap does not exist: 31040/(32*32) is not an integer.
+    """
+    if shard_offsets is None:
+        u = ttnn.untilize(logits, use_multicore=True)
+        out = ttnn.argmax(u, dim=-1, keepdim=False)  # [1,1,1] uint32 RM
+        ttnn.deallocate(u)
+        return out
+
+    num_devices = int(shard_offsets.shape[-1])
+    shard_width = int(logits.shape[-1])
+    # The offsets are a uniform stride, so a shard whose columns are not all real vocab would need a
+    # per-device valid width (i.e. a different program per device) to stay exact. That never arises
+    # for an evenly fractured head; refuse rather than silently drafting a pad index.
+    assert (
+        shard_width * num_devices == vocab_size
+    ), f"shard argmax needs an evenly fractured head: {shard_width} x {num_devices} != {vocab_size}"
+
+    vmax = ttnn.max(logits, dim=-1, keepdim=True)  # [1,1,1,1] this shard's best value
+    u = ttnn.untilize(logits, use_multicore=True)
+    idx = ttnn.argmax(u, dim=-1, keepdim=True)  # [1,1,1,1] uint32 RM, shard-local
+    ttnn.deallocate(u)
+    idxf = ttnn.typecast(idx, ttnn.float32)  # fp32 holds a vocab index exactly (< 2^24)
+    ttnn.deallocate(idx)
+    idxf = ttnn.to_layout(ttnn.reshape(idxf, (1, 1, 1, 1)), ttnn.TILE_LAYOUT)
+
+    kw = dict(mesh_device=mesh_device, tt_ccl=tt_ccl, dim=3, topology=topology, dtype=ttnn.float32)
+    v8 = tiny_all_gather(vmax, **kw)
+    i8 = tiny_all_gather(idxf, **kw)
+
+    g8 = ttnn.add(i8, shard_offsets)  # shard-local -> global vocab id
+    best = ttnn.max(v8, dim=-1, keepdim=True)
+    win = ttnn.eq(v8, best)
+    # vocab_size is > every valid id, so min() cannot return it unless nothing won (it always does).
+    cand = ttnn.where(win, g8, float(vocab_size))
+    tok = ttnn.min(cand, dim=-1, keepdim=True)
+    for t in (v8, i8, g8, best, win, cand):
+        ttnn.deallocate(t)
+    out = ttnn.reshape(ttnn.typecast(ttnn.to_layout(tok, ttnn.ROW_MAJOR_LAYOUT), ttnn.uint32), (1, 1, 1))
+    ttnn.deallocate(tok)
+    return out
 
 
 def prepare_conv_taps(conv_w, key_dim, nk, dk, nv, dv, kernel_size, tp):

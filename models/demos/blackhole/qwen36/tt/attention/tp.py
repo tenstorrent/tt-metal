@@ -23,6 +23,46 @@ from models.demos.blackhole.qwen36.tt.attention.rope_tp import (
 )
 from models.tt_transformers.tt.ccl import tt_all_reduce
 
+
+def _t3k_wh(args):
+    """T3K (8-chip Wormhole) — the config whose decode-path optimizations were validated here.
+
+    Several decode changes in this file were written for, and fenced to, wh_9b_n300 because that was
+    the only box their numerical checks had been run on. Wherever that check has since been redone on
+    T3K/27B, this predicate widens the fence; each call site records what was measured. Shares its
+    definition with the MTP scope (tp_common.wh_t3k) so the two cannot drift apart.
+    """
+    return tpc.wh_t3k(args)
+
+
+def _kv_no_pad(args):
+    """Whether decode reshards the UNPADDED k/v into the cache-write shard (see _WH_KV_PAD_NOTE).
+
+    That note removed the pad on N300-9B and left T3K/N150 on the pad-then-reshard branch, asking
+    for the no-pad path to be measured on those configs before re-enabling. MEASURED on T3K/27B, and
+    it is enabled there now:
+
+      * ttnn.pad on a tile tensor IS a FillPad op (ttnn pad.cpp -> fill_implicit_tile_padding), so
+        the pad costs 2 x 18 us per decode step -- it was the largest data-movement op left in an
+        MTP drafter leg. Removing it: 2560.4 -> 2528.6 us/leg, drafted ids identical.
+      * B=32 batched decode (demo batched_128_b32, whose assert requires all 32 users to decode
+        identically -- the exact failure the pad's dealloc ordering used to cause, 10-13/32 correct):
+        passes, and aggregate throughput 298.3 -> 300.5 tok/s.
+      * spec lossless unchanged (same divergence point, same near-tie flip, accept 2.69/3 -> 3.69)
+        and spec determinism 3-runs-identical at prompt_len 128 and 130.
+
+    N150 is deliberately still excluded: this box has no N150, so that half of the note's request is
+    still unmeasured. Blackhole keeps the pad for the reason the note gives (its own path, untested
+    from this host).
+
+    SCOPE LIMIT: measured against the STOCK RoPE path only. Enabling permuted RoPE here as well
+    (tp_common.rope_permuted_enabled) SEGFAULTS in ttnn::prim::paged_update_cache -- that path lands
+    K in rope_k_shard_cfg, which the unpadded reshard cannot feed to the cache write. The two are
+    mutually exclusive and measured worth the same ~31 us, so this one stays and that one is off.
+    """
+    return _t3k_wh(args)
+
+
 _WH_KV_PAD_NOTE = """Why Wormhole decode skips the ttnn.pad before the KV-cache reshard.
 
 The decode cache write used to be, for both the paged and the per-head branch:
@@ -667,7 +707,23 @@ class TPAttention:
         grid = self.mesh.compute_with_storage_grid_size()
         gx = min(B, grid.x)
         if B >= gx and B % gx != 0:
-            gx = max(x for x in range(gx, 0, -1) if B % x == 0 and B // x <= grid.y)
+            # One user per core, and nlp_concat_heads_decode needs that core set to be a RECTANGLE,
+            # so gx must divide B with B//gx rows to spare. No such gx exists when B is PRIME and
+            # larger than grid.x (B = 11, 13, 17, 19, 23, 29, 31 on an 8-wide grid): the only
+            # rectangles of a prime number of cores are Bx1 and 1xB, and both overflow an 8x8 grid.
+            # That is geometry, not a missing case -- a row-major CoreRangeSet holds B cores but is
+            # not rectangular, and nlp_concat_heads_decode then dies on a std::optional deep in C++
+            # ("bad optional access"), which is even harder to diagnose than the bare ValueError
+            # max() used to raise here. So fail here, naming the constraint.
+            fits = [x for x in range(gx, 0, -1) if B % x == 0 and B // x <= grid.y]
+            assert fits, (
+                f"decode batch B={B} cannot be laid out one-user-per-core on this "
+                f"{grid.x}x{grid.y} grid: B has no divisor <= {grid.x} whose quotient is <= {grid.y} "
+                f"(B is prime and > {grid.x}), and the core set must be rectangular. Use a batch "
+                f"width that factors into the grid; for spec decode that means a draft length K "
+                f"whose K+1 does (K=10 -> T=11 and K=12 -> T=13 do NOT, K=6 -> T=7 and K=11 -> T=12 do)."
+            )
+            gx = max(fits)
         core_grid = ttnn.CoreRangeSet({num_to_corerange(B, grid_x=gx, grid_y=grid.y)})
         shard_cfg = ttnn.create_sharded_memory_config(
             shape=(ttnn.TILE_SIZE, HD),
@@ -701,13 +757,17 @@ class TPAttention:
         noise vs an fp32 reference either way). MEASURED (device kernel duration): 9.86us -> 8.64us
         (-12.4%).
 
-        SCOPED TO WORMHOLE 9B ON N300 (tpc.wh_9b_n300) like the other decode changes, even though
-        this one is shape-agnostic and would very likely be safe everywhere: the NaN sweep that
-        justifies it was run on this config only, and the GDN precedent right next door shows this
-        exact fusion mechanism CAN blow up for a different activation. Widening the scope wants its
-        own numerical check per config, not an assumption.
+        Was SCOPED TO WORMHOLE 9B ON N300 because the NaN sweep justifying it had only been run
+        there, and the GDN precedent right next door shows this exact fusion mechanism CAN blow up
+        for a different activation -- so widening it wanted its own numerical check per config.
+
+        T3K/27B now has that check (_t3k_wh). Fused vs unfused on this config's [1,1,32,768] bf16
+        gate shape, per-device-replicated: torch.equal IDENTICAL with zero NaN on either side at
+        realistic magnitudes, gate uniform +/-50, +/-200, +/-1e4, gate = +/-3e38, x = 3e38 with
+        gate 0, and both = 3e38. Sigmoid saturates to [0,1] instead of overflowing, which is the
+        property silu lacked. N150 and Blackhole keep the unfused path -- still unmeasured here.
         """
-        if tpc.wh_9b_n300(self.args):
+        if tpc.wh_9b_n300(self.args) or _t3k_wh(self.args):
             out = ttnn.multiply(
                 x, gate, input_tensor_b_activations=[ttnn.UnaryOpType.SIGMOID], memory_config=memory_config
             )
@@ -997,6 +1057,12 @@ class TPAttention:
             # and _make_heads_decode's runtime guard makes a mismatch fall back safely anyway.
             # gate comes back FLAT ([1,1,B,NH*HD]) here; it is applied after _concat_heads_decode,
             # which is where that layout is already the right one (see _make_heads_decode).
+            # NEGATIVE, do not widen to T3K: skip_v_reshard was tried here on T3K/27B on the grounds
+            # that the shard-spec equality is verified at HD=256 too and the runtime guard below
+            # falls back on mismatch. It SEGFAULTS in ttnn::prim::paged_update_cache -- the guard
+            # compares against args.kv_update_shard_cfg (sized for max_batch_size) while the write
+            # actually uses _kv_shard_cfg(B), so at B=1 the guard passes and hands the op a spec the
+            # write path does not accept. The N300 fence is load-bearing, not just unmeasured.
             q, gate, k, v = self._make_heads_decode(
                 qg, kp, vp, B, skip_v_reshard=use_paged and tpc.wh_9b_n300(self.args)
             )
@@ -1006,7 +1072,11 @@ class TPAttention:
             # done exactly this for longer, but was only measured and PCC-checked on
             # config, so every other mesh/model keeps the original pre-concat multiply by reshaping
             # the flat gate back to [1,B,NH,HD] here.
-            gate_is_flat = tpc.wh_9b_n300(self.args)
+            # T3K added (_t3k_wh): the identity is structural -- concat-heads is a pure permutation
+            # and the gate is head-major to match -- and prefill has applied the gate post-concat all
+            # along. Dropping the reshape removes a real op (a ~4 us/8-core ReshapeView here, plus the
+            # pre-concat gate reshape).
+            gate_is_flat = tpc.wh_9b_n300(self.args) or _t3k_wh(self.args)
             if not gate_is_flat:
                 gate_r = ttnn.reshape(gate, (1, B, NH, HD), memory_config=_L1)
                 ttnn.deallocate(gate)
@@ -1137,12 +1207,19 @@ class TPAttention:
                 # narrowed back to the safe pad-then-reshard branch on purpose -- not because they're
                 # Blackhole, but because the no-pad fix has no validation there. Don't revert this to
                 # is_blackhole() without measuring the no-pad path on T3K/N150 first.
-                k_p = ttnn.pad(k, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
-                v_p = ttnn.pad(v, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
-                k_sh = ttnn.to_memory_config(k_p, _kv_cfg)
-                v_sh = ttnn.to_memory_config(v_p, _kv_cfg)
-                ttnn.deallocate(k_p)
-                ttnn.deallocate(v_p)
+                if _kv_no_pad(self.args):
+                    # Reshard the UNPADDED k/v: to_memory_config shards on the PADDED height (B*32),
+                    # which is exactly paged_update_cache's documented input, so the pad moves no
+                    # data and only costs a FillPad. See _kv_no_pad for the T3K measurements.
+                    k_sh = ttnn.to_memory_config(k, _kv_cfg)
+                    v_sh = ttnn.to_memory_config(v, _kv_cfg)
+                else:
+                    k_p = ttnn.pad(k, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
+                    v_p = ttnn.pad(v, [1, B, 32, HD], [0, 0, 0, 0], 0.0, memory_config=_L1)
+                    k_sh = ttnn.to_memory_config(k_p, _kv_cfg)
+                    v_sh = ttnn.to_memory_config(v_p, _kv_cfg)
+                    ttnn.deallocate(k_p)
+                    ttnn.deallocate(v_p)
                 # Free the pad's INPUT only after the reshard has consumed the pad's output --
                 # _WH_KV_PAD_NOTE's "dealloc late" ordering. Freeing k/v immediately after the pad
                 # hands that L1 back while the pad's write is still in flight, which measured
