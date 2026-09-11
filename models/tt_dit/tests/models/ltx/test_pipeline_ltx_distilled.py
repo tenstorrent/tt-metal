@@ -790,6 +790,11 @@ def test_pipeline_distilled_bucket_multi_rung(
         )
     ]
     monkeypatch.setenv("LTX_SERVED_CONFIGS", ",".join(f"{c}:{f}:{d}" for c, f, d in configs))
+    # This test is about the DiT traces. Audio tracing is independent, and on Galaxy the vocoder /
+    # BWE traces can stall for minutes in execute_trace's mesh-completion wait (see
+    # audio_decoder_ltx), so pin the audio side to the eager path unless the caller overrides.
+    for gate in ("LTX_VOC_TRACE", "LTX_BWE_TRACE", "LTX_VAE_TRACE"):
+        monkeypatch.setenv(gate, os.environ.get(gate, "0"))
     hot_canvas, hot_fps, hot_duration = configs[0]
     hot_h, hot_w = LTX_CANVASES[hot_canvas]
     hot_frames = ltx_aligned_num_frames(hot_fps, hot_duration)
