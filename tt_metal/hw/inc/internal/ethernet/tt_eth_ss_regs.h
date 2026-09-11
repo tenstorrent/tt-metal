@@ -30,6 +30,27 @@
 #define ETH_RISC_WALL_CLOCK_1 0x21F4
 #define ETH_RISC_WALL_CLOCK_1_AT 0x21F8
 
+#ifdef ARCH_BLACKHOLE
+//////////////////////////////
+// eth_ctrl PTP timer A: CFR counts refclk ticks from power-on, 64NS is the PTP time in ns; reading a counter's LO
+// half latches its HI half.
+#define ETH_PTP_TIMER_REGS_START 0xFFB98800
+#define ETH_PTP_TIMER_CTRL 0x00  // [0] timer_en
+#define ETH_PTP_TIMER_FUTURE_CFR_LO 0x04
+#define ETH_PTP_TIMER_FUTURE_CFR_HI 0x08
+#define ETH_PTP_TIMER_FUTURE_PTI 0x0C  // [23:0] per-tick increment, 8 integer ns bits . 16 fractional
+#define ETH_PTP_TIMER_FUTURE_TIMESTAMP_LO 0x10
+#define ETH_PTP_TIMER_FUTURE_TIMESTAMP_HI 0x14
+#define ETH_PTP_TIMER_UPDATE_PTI 0x20        // [0]
+#define ETH_PTP_TIMER_UPDATE_TIMESTAMP 0x24  // [0]
+#define ETH_PTP_TIMER_UPDATE_STAT 0x40       // [0] pti pending [1] ts pending [8] pti ack [9] ts ack
+#define ETH_PTP_TIMER_PTI_STAT 0x44          // [23:0] per-tick increment in use
+#define ETH_PTP_TIMER_CFR_LO 0x50
+#define ETH_PTP_TIMER_CFR_HI 0x54
+#define ETH_PTP_TIMER_64NS_LO 0x60
+#define ETH_PTP_TIMER_64NS_HI 0x64
+#endif
+
 //////////////////////////////
 // TX queue 0/1 controllers
 #define ETH_TXQ0_REGS_START 0xFFB90000

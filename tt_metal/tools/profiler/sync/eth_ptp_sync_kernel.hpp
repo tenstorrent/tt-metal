@@ -15,15 +15,17 @@
 #include "eth_l1_address_map.h"
 #include "internal/ethernet/dataflow_api.h"
 #include "tools/profiler/sync/eth_wallclock_sync_types.hpp"
-#include "tools/profiler/sync/eth_ptp_sync.hpp"
+#include "tools/profiler/sync/eth_ptp_link.hpp"
 #include "tools/profiler/sync/eth_ptp_sync_types.hpp"
 
 namespace tt::tt_metal::eth_ptp {
 
 namespace detail {
 
-constexpr uint32_t kWallClockL = 0xFFB121F0;
-constexpr uint32_t kWallClockH = 0xFFB121F8;
+using raw::rd;
+using raw::wr;
+constexpr uint32_t kWallClockL = kWallClockLo;
+constexpr uint32_t kWallClockH = kWallClockHi;
 inline __attribute__((always_inline)) void read_wall_clock(uint32_t& hi, uint32_t& lo) {
     lo = *reinterpret_cast<volatile uint32_t*>(kWallClockL);  // latches H
     hi = *reinterpret_cast<volatile uint32_t*>(kWallClockH);
@@ -129,7 +131,7 @@ inline bool handshake_bounded(uint32_t handshake_addr, bool is_sender, uint64_t 
 inline uint32_t g_seq_prev[kNumTxq] = {0, 0, 0};
 inline uint32_t g_want_label =
     0xFFFFFFFFu;  // TH FIFO label word: [4:0] flow label, [5] always set; all-ones = accept any
-inline TxSyncHeaderPrev g_tx_hdr_prev{};
+inline raw::TxHeaderPrev g_tx_hdr_prev{};
 
 inline bool label_ok(uint32_t lb) {
     return (lb & kRxThLabelValid) && (g_want_label == 0xFFFFFFFFu || (lb & 0x1Fu) == g_want_label);
@@ -286,16 +288,18 @@ inline void snapshot_start(volatile PtpResult* r, uint32_t flags) {
     r->pad[4] = rd(kTxqRegsBase + 0x1000 + kTxqLocalSeqUpdateTimeoutOff);
     r->pad[5] = rd(kTxqRegsBase + 0x2000);
     r->pad[6] = rd(kTxqRegsBase + 0x2000 + kTxqLocalSeqUpdateTimeoutOff);
-    r->pti_acked = (flags & PTP_FLAG_NO_TIMER_START) ? 2u : (ptp_timer_start(kPtiRefclk50MHz, 5000, 200000) ? 1u : 0u);
-    RxThPrev prev{rd(kRxFlNoMatchActions), rd(kRxFdOverrideDecision)};
+    r->pti_acked = (flags & PTP_FLAG_NO_TIMER_START)
+                       ? 2u
+                       : (ptp_timer_start(kPtiRefclk, kTimerLeadTicks, kTimerAckSpins) ? 1u : 0u);
+    raw::RxThPrev prev{rd(kRxFlNoMatchActions), rd(kRxFdOverrideDecision)};
     if (flags & PTP_FLAG_TCAM_LABEL) {
         wr(kRxThStatus, kRxThStatusFlush);
         wr(kRxFlNoMatchActions, prev.no_match_actions & ~kRxFlKeepTimestamp);
-        rx_sync_stamp_rule_install(kSyncTcamRow, kSyncLabel);
-        g_tx_hdr_prev = tx_sync_header_install(sync_txq(flags), kSyncHeaderRow, kSyncFrameDa);
-        g_want_label = kSyncLabel;
+        raw::rx_stamp_rule_install(kLinkTcamRow, kLinkLabel);
+        g_tx_hdr_prev = raw::tx_header_row_install(sync_txq(flags), kLinkHeaderRow, kStampFrameDa);
+        g_want_label = kLinkLabel;
     } else {
-        prev = rx_timestamps_enable_all((flags & PTP_FLAG_SET_OVERRIDE) != 0);
+        prev = raw::rx_timestamps_enable_all((flags & PTP_FLAG_SET_OVERRIDE) != 0);
         g_want_label = 0xFFFFFFFFu;
     }
     r->no_match_prev = prev.no_match_actions;
@@ -305,7 +309,7 @@ inline void snapshot_start(volatile PtpResult* r, uint32_t flags) {
         wr(kMacTxCfg, rd(kMacTxCfg) | kMacTxCfgTsFifoEnb);
     }
     if (flags & PTP_FLAG_QUIET_LINK) {
-        txq_keepalives_off(g_seq_prev);
+        raw::txq_keepalives_off(g_seq_prev);
     }
     uint32_t junk[4];
     drain_mac_fifo(0xFFFFFFFFu, 0xFFFFFFFFu, junk, 0, false);
@@ -325,17 +329,17 @@ inline void snapshot_end(volatile PtpResult* r, uint32_t flags, uint32_t n_done)
     r->wall_end_lo = lo;
     r->wall_end_hi = hi;
     split(read_ptp64ns(), r->ptp_end_lo, r->ptp_end_hi);
-    txq_clear_timestamp_cmd(sync_txq(flags));
+    raw::txq_clear_timestamp_cmd(sync_txq(flags));
     if (flags & PTP_FLAG_MAC_FIFO_ALL_PACKETS) {
         wr(kMacTxCfg, rd(kMacTxCfg) & ~kMacTxCfgTsFifoEnb);
     }
     if (flags & PTP_FLAG_TCAM_LABEL) {
-        tx_sync_header_restore(sync_txq(flags), kSyncHeaderRow, g_tx_hdr_prev);
-        rx_sync_stamp_rule_remove(kSyncTcamRow);
+        raw::tx_header_row_restore(sync_txq(flags), kLinkHeaderRow, g_tx_hdr_prev);
+        raw::rx_stamp_rule_remove(kLinkTcamRow);
     }
-    rx_timestamps_restore(RxThPrev{r->no_match_prev, r->override_prev});
+    raw::rx_timestamps_restore(raw::RxThPrev{r->no_match_prev, r->override_prev});
     if (flags & PTP_FLAG_QUIET_LINK) {
-        txq_keepalives_restore(g_seq_prev);
+        raw::txq_keepalives_restore(g_seq_prev);
     }
     r->n_samples = n_done;
     r->status = 1;
@@ -387,7 +391,7 @@ inline bool ptp_sync_sender(
         }
         const bool dump = (flags & PTP_FLAG_RAW_DUMP) && i < 2;
         detail::rx_discard_all();
-        txq_request_two_step(q, 0x5000'0000'0000'0000ull | i);
+        raw::txq_request_two_step(q, 0x5000'0000'0000'0000ull | i);
         sync->bytes_sent = 1;
         sync->receiver_ack = 0;
 
@@ -398,9 +402,9 @@ inline bool ptp_sync_sender(
         // Pop the egress stamp as soon as the frame has left and disarm: TS_CMD is sticky, and a queue that stays
         // armed past its idle timeout stamps its own keepalive under our tag.
         detail::txq_idle_bounded(q, deadline);
-        for (uint32_t spin = 0; spin < 4096 && !mac_tx_fifo_not_empty(); spin++) {
+        for (uint32_t spin = 0; spin < 4096 && !raw::mac_tx_fifo_not_empty(); spin++) {
         }
-        txq_clear_timestamp_cmd(q);
+        raw::txq_clear_timestamp_cmd(q);
         uint32_t w[4] = {0, 0, 0, 0};
         uint32_t diag = detail::drain_mac_fifo(i, 0x50000000u, w, ptp_addr, dump);
 
@@ -546,15 +550,15 @@ inline bool ptp_sync_receiver(
             detail::snapshot_end(pres, flags, done);
             return false;
         }
-        txq_request_two_step(q, 0x5200'0000'0000'0000ull | i);
+        raw::txq_request_two_step(q, 0x5200'0000'0000'0000ull | i);
         const uint64_t p1b = read_ptp64ns();
         detail::send_sync_frame(q, channel_addr);
         // The egress stamp lands once the frame has left the MAC; the next round's message is at least a
         // link round trip away, so waiting for the queue and then draining costs nothing on the critical path.
         detail::txq_idle_bounded(q, deadline);
-        for (uint32_t spin = 0; spin < 4096 && !mac_tx_fifo_not_empty(); spin++) {
+        for (uint32_t spin = 0; spin < 4096 && !raw::mac_tx_fifo_not_empty(); spin++) {
         }
-        txq_clear_timestamp_cmd(q);
+        raw::txq_clear_timestamp_cmd(q);
         uint32_t w[4] = {0, 0, 0, 0};
         diag |= detail::drain_mac_fifo(i, 0x52000000u, w, ptp_addr, dump);
 

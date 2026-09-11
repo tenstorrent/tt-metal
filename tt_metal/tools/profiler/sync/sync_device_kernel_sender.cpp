@@ -12,6 +12,7 @@
 
 #if defined(PROFILE_KERNEL) && defined(PROFILE_STREAMING)
 #include "tools/profiler/kernel_profiler.hpp"
+#include "internal/ethernet/eth_ptp.hpp"
 static constexpr uint32_t kRoleT0 = kernel_profiler::ppfmt::CLOCK_ROLE_T0,
                           kRoleT1 = kernel_profiler::ppfmt::CLOCK_ROLE_T1,
                           kRoleT1B = kernel_profiler::ppfmt::CLOCK_ROLE_T1B,
@@ -24,39 +25,20 @@ static constexpr uint32_t kRoleT0 = kernel_profiler::ppfmt::CLOCK_ROLE_T0,
 // Room for n words in this core's SPSC ring, non-blocking. The burst runs during bring-up before the host
 // receiver drains, so the pusher cannot free the ring mid-burst and a blocking reserve would deadlock the
 // pair; a round a side has no room for is one the host never completes, and nothing behind it shifts.
-FORCE_INLINE uint64_t link_refclk64() {
-    volatile uint32_t* lop = reinterpret_cast<volatile uint32_t*>(0xFFB98850);
-    volatile uint32_t* hip = reinterpret_cast<volatile uint32_t*>(0xFFB98854);
-    const uint32_t h1 = *hip;
-    uint32_t l = *lop;
-    const uint32_t h2 = *hip;
-    if (h1 != h2) {
-        l = *lop;
-    }
-    return (static_cast<uint64_t>(h2) << 32) | l;
-}
+FORCE_INLINE uint64_t link_refclk64() { return tt::tt_metal::eth_ptp::read_cfr(); }
 FORCE_INLINE bool link_clock_room(uint32_t n) {
     invalidate_l1_cache();
     return (kernel_profiler::wIndex - kernel_profiler::profiler_control_buffer[kernel_profiler::HEAD_INDEX]) <=
            (kernel_profiler::RING_USABLE - n);
 }
 // A software stamp is taken in two steps so nothing but the clock reads sits at the instant: read, then record.
-struct LinkInstant {
-    uint32_t wlo, whi;
-    uint64_t refclk;
-};
-FORCE_INLINE LinkInstant link_clock_read() {
-    LinkInstant t;
-    t.wlo = *reinterpret_cast<volatile uint32_t*>(0xFFB121F0);  // reading L latches H: L first
-    t.whi = *reinterpret_cast<volatile uint32_t*>(0xFFB121F8);
-    t.refclk = link_refclk64();
-    return t;
-}
+using LinkInstant = tt::tt_metal::eth_ptp::Instant;
+FORCE_INLINE LinkInstant link_clock_read() { return tt::tt_metal::eth_ptp::read_instant(); }
 FORCE_INLINE void link_clock_record(const LinkInstant& t, uint32_t round, uint32_t role) {
-    kernel_profiler::ring_write_sticky_timer(t.whi);
+    kernel_profiler::ring_write_sticky_timer(t.wall_hi);
     kernel_profiler::ring_write_word(
         kernel_profiler::ppfmt::clock_w0(kernel_profiler::ppfmt::CLOCK_LINK_REFCLK, t.refclk));
-    kernel_profiler::ring_write_word(t.wlo);
+    kernel_profiler::ring_write_word(t.wall_lo);
     kernel_profiler::ring_write_word(kernel_profiler::ppfmt::clock_w2(t.refclk));
     kernel_profiler::ring_write_word(kernel_profiler::ppfmt::clock_w3(round, role));
     kernel_profiler::publish_tail();
@@ -65,13 +47,13 @@ FORCE_INLINE void link_clock_stamp(uint32_t round, uint32_t role) { link_clock_r
 #if defined(D2D_HW_TS)
 #define LINK_HW 1
 #include "tools/profiler/sync/eth_ptp_link.hpp"
-static tt::tt_metal::eth_ptp::LinkHwState g_hw;
+static tt::tt_metal::eth_ptp::LinkSession g_hw;
+static uint32_t g_trip = 0;  // the MAC FIFO tag of the next stamped frame
 FORCE_INLINE void link_hw_record(uint32_t round, uint32_t role, uint64_t value) {
-    const uint32_t wlo = *reinterpret_cast<volatile uint32_t*>(0xFFB121F0);  // reading L latches H: L first
-    const uint32_t whi = *reinterpret_cast<volatile uint32_t*>(0xFFB121F8);
-    kernel_profiler::ring_write_sticky_timer(whi);
+    const LinkInstant t = link_clock_read();
+    kernel_profiler::ring_write_sticky_timer(t.wall_hi);
     kernel_profiler::ring_write_word(kernel_profiler::ppfmt::clock_w0(kernel_profiler::ppfmt::CLOCK_LINK_PTP, value));
-    kernel_profiler::ring_write_word(wlo);
+    kernel_profiler::ring_write_word(t.wall_lo);
     kernel_profiler::ring_write_word(kernel_profiler::ppfmt::clock_w2(value));
     kernel_profiler::ring_write_word(kernel_profiler::ppfmt::clock_w3(round, role));
     kernel_profiler::publish_tail();
@@ -124,12 +106,17 @@ FORCE_INLINE void run_loop_iteration(
         channel_sync_addrs[0]->reserved_2 = round;
         const bool hw_emit_round = link_clock_room(20);
         int64_t sum_t0 = 0, sum_t2 = 0;
-        bool stamps_ok = true;
+        bool stamps_ok = g_hw.timer_ok;
         for (uint32_t trip = 0; trip < tt::tt_metal::eth_ptp::kTripsPerRound; trip++) {
             channel_sync_addrs[0]->bytes_sent = 1;
             channel_sync_addrs[0]->receiver_ack = 0;
-            const uint64_t t0h = tt::tt_metal::eth_ptp::link_hw_send(
-                0x5000'0000'0000'0000ull | g_hw.round, channel_addrs[0], channel_addrs[0], full_payload_size_eth_words, [&] {
+            const uint64_t t0h = tt::tt_metal::eth_ptp::send_and_stamp(
+                g_hw,
+                0x5000'0000'0000'0000ull | g_trip++,
+                channel_addrs[0],
+                channel_addrs[0],
+                full_payload_size_eth_words,
+                [&] {
                     if (hw_emit_round && trip == 0) {
                         link_clock_stamp(round, kRoleT0);
                     }
@@ -137,18 +124,17 @@ FORCE_INLINE void run_loop_iteration(
             // Only our labelled frames reach the RX stamp FIFO (no-match keep-timestamp is off), so the echo's stamp
             // waits there and is popped once the echo is seen; popping inside the wait made every iteration a few
             // register reads long and put that much jitter on the software t2.
-            tt::tt_metal::eth_ptp::LinkHwRx rx;
+            tt::tt_metal::eth_ptp::RxStamps rx;
             while (channel_sync_addrs[0]->bytes_sent != 0) {
                 invalidate_l1_cache();
             }
             if (hw_emit_round && trip == 0) {
                 link_clock_stamp(round, kRoleT2);
             }
-            const uint64_t t2h = tt::tt_metal::eth_ptp::link_hw_rx_take(rx);
+            const uint64_t t2h = rx.take<tt::tt_metal::eth_ptp::LinkSession>();
             stamps_ok = stamps_ok && t0h != 0 && t2h != 0;
             sum_t0 += static_cast<int64_t>(t0h);
             sum_t2 += static_cast<int64_t>(t2h);
-            g_hw.round++;
         }
         if (hw_emit_round && stamps_ok) {
             link_hw_record(
@@ -217,7 +203,7 @@ void kernel_main() {
     }
 
 #if defined(LINK_HW)
-    tt::tt_metal::eth_ptp::link_hw_begin(g_hw);
+    g_hw.begin();
 #endif
     eth_setup_handshake(HANDSHAKE_ADDR, true);
 
@@ -249,7 +235,7 @@ void kernel_main() {
         rounds++;
     }
 #if defined(LINK_HW)
-    tt::tt_metal::eth_ptp::link_hw_end(g_hw);
+    g_hw.end();
 #endif
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stop_addr + 8) = rounds;  // round count (diagnostic)
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stop_addr + 12) =
