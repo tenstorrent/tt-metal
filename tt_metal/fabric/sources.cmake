@@ -61,9 +61,12 @@ set(FABRIC_SOURCES
     serialization/intermesh_connections_serialization.cpp
     serialization/port_descriptor_serialization.cpp
     ccl/ccl_common.cpp
+    link_health.cpp
+    fsd_host_filter.cpp
     physical_node_id.cpp
     physical_system_discovery.cpp
     physical_system_descriptor.cpp
+    physical_system_descriptor_diff.cpp
     topology_mapper.cpp
     topology_mapper_utils.cpp
     topology_solver.cpp

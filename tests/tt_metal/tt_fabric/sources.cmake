@@ -37,7 +37,11 @@ set(UNIT_TESTS_FABRIC_SRC
     fabric_data_movement/test_basic_fabric_mux_v2.cpp
     fabric_data_movement/test_fabric_traffic_generator_kernel.cpp
     fabric_router/test_physical_descriptor_builder.cpp
+    fabric_router/test_control_plane_link_health.cpp
+    fabric_router/test_fsd_host_filter.cpp
     fabric_router/test_physical_node_id.cpp
+    fabric_router/test_physical_system_descriptor_diff.cpp
+    fabric_router/test_link_health.cpp
 )
 
 set(UNIT_TESTS_PHYSICAL_DISCOVERY_SRC physical_discovery/test_physical_system_descriptor.cpp)

@@ -1,6 +1,6 @@
 # Plan: stable physical node id `(cluster_id, tray, loc)` as a packed POD
 
-**Status:** Implementation plan — **separate change** from FSD / downed-links
+**Status:** Slices 1–4 landed; slice 5 optional, slice 6 is asset work — see §10. **Separate change** from FSD / downed-links. Canonicalization shipped with two deliberate departures from §3: **§3.1**.
 **Why split:** Fabric Manager and `generate_rank_bindings` need a stable mapper identity whether or not UMD discovery has run. That is independent of `LinkHealth`. Land this first; the FSD-backed downed-links plan ([`PLAN_fsd_solve_and_downed_links.md`](PLAN_fsd_solve_and_downed_links.md) §5.5) then consumes it.
 **Related:** [tt-metal#54752](https://github.com/tenstorrent/tt-metal/pull/54752) (solver is already generic over `GlobalNode`). Production uses a POD, not a `std::tuple` / `std::string`.
 
@@ -46,9 +46,12 @@ UMD unique ids stay on `ASICDescriptor::unique_id` / `Cluster::get_unique_chip_i
 // tt_metal/api/tt-metalium/experimental/fabric/physical_node_id.hpp
 namespace tt::tt_metal {
 
-// UMD's CLUSTER_ID_MAX_LENGTH. NUL-padded, not NUL-terminated: an id of exactly this
-// length fills the buffer. Today's values: "bh-glx-110-c01u02" (18), "sjc1-tt-qb-01" (13),
-// and mock descriptor filenames up to 73.
+// UMD's CLUSTER_ID_MAX_LENGTH, which is also what the mock cluster-descriptor filenames that
+// stand in as cluster ids need while the descriptor's cluster_id field is still empty (§8.3):
+// "sc36_32x4_revc_subtorus_aisled_cluster_desc_bh-glx-120-d05u20_rank_7.yaml" is 73. Real
+// cluster ids are far shorter -- "bh-glx-110-c01u02" (18), "sjc1-tt-qb-01" (13), but the buffer
+// stays at UMD's limit so the two cannot drift apart. NUL-padded, not NUL-terminated: an id of
+// exactly this length fills the buffer.
 inline constexpr std::size_t kPhysicalClusterIdLen = 128;
 
 struct PhysicalNodeId {
@@ -60,14 +63,11 @@ struct PhysicalNodeId {
     friend auto operator<=>(const PhysicalNodeId&, const PhysicalNodeId&) = default;
 };
 
-// Lowercase, strip a trailing "_<rank>" when hosts are not unique, take the first DNS label.
-std::string canonical_cluster_id_for_node_id(std::string_view cluster_id, bool hosts_unique = true);
+// Lowercase, then take the first DNS label if the name is an FQDN. The trailing "_<rank>" that
+// run_local_discovery appends when two ranks report the same host is KEPT -- see below.
+std::string canonical_cluster_id_for_node_id(std::string_view cluster_id);
 
-PhysicalNodeId make_physical_node_id(
-    std::string_view cluster_id,
-    TrayID tray,
-    ASICLocation loc,
-    bool hosts_unique = true);
+PhysicalNodeId make_physical_node_id(std::string_view cluster_id, TrayID tray, ASICLocation loc);
 
 // cluster_id is the NUL-trimmed canonical string stored in the id.
 struct PhysicalNodeFields {
@@ -75,23 +75,43 @@ struct PhysicalNodeFields {
     TrayID tray{0};
     ASICLocation loc{0};
 };
-PhysicalNodeFields decode_physical_node_id(PhysicalNodeId id);
+PhysicalNodeFields decode_physical_node_id(const PhysicalNodeId& id);
+
+bool is_unset(const PhysicalNodeId& id);
+std::string_view cluster_id_view(const PhysicalNodeId& id);  // view into the id's own buffer
 
 }  // namespace tt::tt_metal
 ```
 
-Only the member name changes from the original spec (`host` → `cluster_id`), because the string it holds is an accelerator-group id, not a machine name. The buffer, the constant, the canonicalization, `make` / `decode`, and the hash are unchanged.
+Only the member name changes from the original spec (`host` → `cluster_id`), because the string it holds is an accelerator-group id, not a machine name. The buffer, the constant, `make` / `decode`, and the hash are otherwise unchanged; the canonicalization moved as recorded below.
 
 `make_physical_node_id`:
 
-1. `canonical = canonical_cluster_id_for_node_id(cluster_id, hosts_unique)`.
+1. `canonical = canonical_cluster_id_for_node_id(cluster_id)`.
 2. **Fatal** if `canonical.empty()` or `canonical.size() > kPhysicalClusterIdLen` (do not truncate). The limit is inclusive because it is UMD’s, and the buffer holds a full-length id with no terminator.
 3. **Fatal** if `tray` or `loc` does not fit in 16 bits.
 4. Write `canonical` into `cluster_id[]`, leftover bytes `'\0'`. Write tray and loc.
 
+### 3.1 Canonicalization as shipped — two departures from the spec above
+
+Both are load-bearing, and both came out of running the mock configs. **Anything that restates this
+canonicalization must match, in particular the FSD host filter ([`PLAN_fsd_solve_and_downed_links.md`](PLAN_fsd_solve_and_downed_links.md) §5.2).**
+
+**The `_<rank>` suffix is kept, never stripped.** There is no `hosts_unique` parameter on any of these
+functions. `run_local_discovery` appends `_<rank>` precisely when two ranks report the same cluster id,
+so that suffix is the *only* thing telling those hosts apart. Stripping it gives their chips the same
+address and merges two machines into one solver node — which is what a duplicate address is fatal
+for. The earlier spec had this backwards: it stripped the suffix exactly when it was needed.
+
+**The first-DNS-label cut is conditional on the name looking like an FQDN** — every dot-separated
+label a legal DNS label. Synthesized cluster ids contain dots that are not domain separators
+(`dual_glx_2.5d_torus_cluster_desc`, from a mock descriptor with no `cluster_id` field), and cutting
+those at the first dot merges distinct hosts. A leading dot is rejected up front as an empty first
+label, since the unconditional strip no longer catches it.
+
 `PhysicalNodeId{}` (all zeros) is unset. `make_*` must never return it (empty cluster id already fatals).
 
-C++20 defaulted `==` / `<=>` compare a C array member element-wise, so the struct stays a POD with no handwritten compare. Do not pass `id.cluster_id` as a decaying `char*` — keep the buffer inside the id; callers who need a string use `decode_physical_node_id` or `string_view{id.cluster_id}`.
+C++20 defaulted `==` / `<=>` compare a C array member element-wise, so the struct stays a POD with no handwritten compare. Do not pass `id.cluster_id` as a decaying `char*` — keep the buffer inside the id; callers who need a string use `decode_physical_node_id` or `cluster_id_view`.
 
 Provide `std::hash<PhysicalNodeId>` that hashes the **whole POD bytes**. That is a container hash only — it is not identity. Do **not** use `std::hash<std::string>` on the cluster id as the node id.
 
@@ -160,13 +180,37 @@ The solver never sees UMD `chip_unique_id` or FSD `1..N`. It sees `PhysicalNodeI
 
 ```cpp
 // physical_node_id.hpp — already in §3
-PhysicalNodeId node_id_from_asic_descriptor(
-    const ASICDescriptor& d, bool hosts_unique = true) {
-    return make_physical_node_id(d.host_name, d.tray_id, d.asic_location, hosts_unique);
+PhysicalNodeId node_id_from_asic_descriptor(const ASICDescriptor& d) {
+    return make_physical_node_id(d.host_name, d.tray_id, d.asic_location);
 }
 ```
 
 FSD builder and live discovery both fill `ASICDescriptor::{host_name, tray_id, asic_location}` — the three address components. That is enough. Do not read `d.unique_id` when building a mapper graph.
+
+### The other direction: `PhysicalNodeIdIndex`
+
+The seam above turns a descriptor into an address. Code that already holds an address and needs to
+ask the descriptor a question needs the inverse, because `PhysicalSystemDescriptor` keys its ASICs by
+its own `AsicID` and every query on it (`get_asic_neighbors`, `get_eth_connections`, `get_tray_id`)
+takes that label. This is what lets the PSD stay `AsicID`-keyed while the mapper is not:
+
+```cpp
+struct PhysicalNodeIdIndex {
+    std::unordered_map<PhysicalNodeId, AsicID> node_id_to_asic_id;
+    std::unordered_map<AsicID, PhysicalNodeId> asic_id_to_node_id;
+};
+
+// Fatal if two ASICs share an address — their ids would collide and merge two chips into one node.
+PhysicalNodeIdIndex build_physical_node_id_index(const PhysicalSystemDescriptor& descriptor);
+```
+
+Build it once per descriptor and pass it down; it is a full pass over the descriptors. This is the
+boundary §6.1 means by "the mapper re-keys at the boundary", and it is why slice 5 is optional.
+
+Its duplicate-address fatal is also what surfaced a latent bug: `get_tray_id_for_chip` returned
+`TrayID{0}` for every chip on a mock cluster descriptor, so `(cluster_id, tray, loc)` named more than one
+chip and the index refused to build. Mock discovery now ranks the chip's board among the descriptor's
+boards — a board is physically a tray — which keeps trays small and contiguous like the real paths.
 
 **Naming, scoped:** this series renames the address component only where it rewrites a declaration anyway (`MappedChipInfo::hostname` → `cluster_id`, and `PhysicalNodeId`'s buffer per §3). Existing hostname-named members it merely re-keys — `ASICDescriptor::host_name`, `HostName`, `TopologyMappingConfig::hostname_to_asics`, `get_all_hostnames()`, `my_host_name()` — keep their names here and are tracked as follow-up in [`PLAN_umd_cluster_descriptor_hostname.md`](PLAN_umd_cluster_descriptor_hostname.md) §11. Do not grow this PR series into that rename.
 
@@ -297,7 +341,7 @@ The first option — writing the packed id into the PSD — cannot be done. `ASI
 
 That leaves the builder's `1..N` in place and moves the whole job to the mapper's re-keying (§C, §E, §F), which is the next slice. The FSD-side slice is therefore not a builder rewrite but the **seam** the re-keying goes through, plus the tests that pin the invariant it has to preserve:
 
-- `node_id_from_asic_descriptor(descriptor, hosts_unique)` — declared in `physical_node_id.hpp` against a forward-declared `ASICDescriptor` so the utility header does not pull in the PSD. This is the one place a descriptor becomes a solver key.
+- `node_id_from_asic_descriptor(descriptor)` — declared in `physical_node_id.hpp` against a forward-declared `ASICDescriptor` so the utility header does not pull in the PSD. This is the one place a descriptor becomes a solver key.
 - `PhysicalDescriptorBuilder.DescriptorsCarryPositionAddressesNotFileOrderLabels` — a builder PSD still labels its ASICs `{1,2,3}`, and every descriptor packs to the FSD hostname with its tray and loc. Note the id holds the *canonical* host string: an FSD spelling a host `hostA` yields `hosta`, since the builder copies hostnames verbatim and `make_physical_node_id` canonicalizes.
 - `PhysicalDescriptorBuilder.FsdAndLiveIdSpacesAgreeOnPhysicalNodeIds` — the load-bearing one. The same three ASICs labelled `1..N` and labelled with UMD-like chip ids (disjoint id spaces, asserted) produce **equal** `PhysicalNodeId`-keyed adjacency maps. That equality is what §D consumes.
 - `PhysicalDescriptorBuilder.IntegrationQuietboxNodeIdsAreUniqueAndDecodeBack` — 16 ASICs across 4 hosts of a real in-repo FSD pack without collision and decode back to their address.
@@ -374,16 +418,15 @@ After:
 ```cpp
 PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(const PhysicalSystemDescriptor& psd) {
     PhysicalAdjacencyMap flat_adj;
-    const bool hosts_unique = psd.get_all_hostnames_unique();
     const auto& descs = psd.get_asic_descriptors();
     for (const auto& host_name : psd.get_all_hostnames()) {
         for (const auto& [src_asic_id, asic_connections] : psd.get_asic_topology(host_name)) {
-            const auto src = node_id_from_asic_descriptor(descs.at(src_asic_id), hosts_unique);
+            const auto src = node_id_from_asic_descriptor(descs.at(src_asic_id));
             for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
                 if (src_asic_id == dst_asic_id) {
                     continue;
                 }
-                const auto dst = node_id_from_asic_descriptor(descs.at(dst_asic_id), hosts_unique);
+                const auto dst = node_id_from_asic_descriptor(descs.at(dst_asic_id));
                 for (std::size_t i = 0; i < eth_connections.size(); ++i) {
                     flat_adj[src].push_back(dst);
                 }
@@ -449,9 +492,8 @@ auto mapping_result = map_multi_mesh_to_physical(
 After:
 
 ```cpp
-const bool hosts_unique = physical_system_descriptor_.get_all_hostnames_unique();
 for (const auto& [_, desc] : physical_system_descriptor_.get_asic_descriptors()) {
-    const auto nid = node_id_from_asic_descriptor(desc, hosts_unique);
+    const auto nid = node_id_from_asic_descriptor(desc);
     config.hostname_to_asics[desc.host_name].insert(nid);
     config.asic_positions[nid] = std::make_pair(desc.tray_id, desc.asic_location);
 }
@@ -496,14 +538,13 @@ After:
 ```cpp
 std::map<MeshId, std::map<PhysicalNodeId, MeshHostRankId>>
 TopologyMapper::build_physical_node_id_to_mesh_rank_mapping() {
-    const bool hosts_unique = psd.get_all_hostnames_unique();
     for (AsicID raw : psd.get_asics_connected_to_host(psd.my_host_name())) {
-        const auto nid = node_id_from_asic_descriptor(psd.get_asic_descriptors().at(raw), hosts_unique);
+        const auto nid = node_id_from_asic_descriptor(psd.get_asic_descriptors().at(raw));
         mapping[mesh_id][nid] = host_rank;
     }
 }
 
-info.physical_node_id = node_id_from_asic_descriptor(asic_descriptor, hosts_unique);
+info.physical_node_id = node_id_from_asic_descriptor(asic_descriptor);
 info.asic_id = asic_descriptor.unique_id;  // UMD chip unique id when known; 0 / unset on FSD-only
 info.tray_id = asic_descriptor.tray_id;
 info.asic_location = asic_descriptor.asic_location;
@@ -584,7 +625,8 @@ builder fills ASICDescriptor          discovery fills ASICDescriptor
 ## 7. Tests
 
 - Same `(cluster_id, tray, loc)` → same id, including FQDN vs short name vs case after canonicalization.
-- `_rank` suffix stripped iff `hosts_unique == false`.
+- `_rank` suffix **kept** — it is the only thing distinguishing two ranks that report the same cluster id (§3.1).
+- Dots that are not domain separators (`dual_glx_2.5d_torus_cluster_desc`) survive; a leading dot is fatal (§3.1).
 - Different loc, tray, or host → different id.
 - `decode` restores the canonical host string, tray, and loc.
 - Host longer than `kPhysicalClusterIdLen` → fatal (do not truncate); exactly `kPhysicalClusterIdLen` is legal and round-trips through `cluster_id_view` with no terminator.
@@ -592,6 +634,7 @@ builder fills ASICDescriptor          discovery fills ASICDescriptor
 - Empty / unset id is all zeros; `make_*` never returns it.
 - Golden vector: one fixed cluster_id/tray/loc → exact `cluster_id[]` bytes + tray + loc.
 - **Stability (the load-bearing one):** build one graph from FSD and one from a live-style descriptor with UMD-like `umd_unique_id`s; adjacency maps keyed by `PhysicalNodeId` are equal. `TopologyMapper` (or the solver on those maps) assigns the same `FabricNodeId` per position.
+  - **Half done.** `PhysicalDescriptorBuilder.FsdAndLiveIdSpacesAgreeOnPhysicalNodeIds` asserts the two adjacency maps are equal — the solver *input*. Nothing yet asserts the same `FabricNodeId` per position, which is the solver *output* and the property this whole series exists for. Outstanding.
 - **Mock + FSD (the other load-bearing one):** a descriptor whose `cluster_id` equals the FSD hostname packs the same id as the FSD builder. Filename-only (no field) must **not** equal that id. Assert this on a fixture you control, not on a shipped asset: the captures carry whatever id their machine reported, which for several BH superclusters is not today's FSD name (`PLAN_umd_cluster_descriptor_hostname.md` §7).
 - Builder unit test: QuietBox / a tiny in-memory FSD, two ASICs, ids equal `make_physical_node_id` of their FSD hostnames, not `1` and `2`.
 - Discovery: graph key ≠ `umd_unique_id` on silicon when UMD ids are large; `get_asic_id(cluster_id, tray, loc)` returns the packed id.
@@ -674,7 +717,9 @@ cluster_id_for_node_id(desc, fsd):
 | Mock, field empty, + FSD | alias fallback (temporary) |
 | Mock, no FSD | basename (ClosetBox) |
 
-`canonical_cluster_id_for_node_id` stays as specified (§3) while `cluster_id` is hostname-valued. When the value scheme stops being a hostname, the DNS-label / FQDN handling in it retires — see the UMD plan §11 table, where `PhysicalNodeId.cluster_id[]` is listed.
+`canonical_cluster_id_for_node_id` stays as specified (§3, with the shipped departures in §3.1) while `cluster_id` is hostname-valued. When the value scheme stops being a hostname, the DNS-label / FQDN handling in it retires — see the UMD plan §11 table, where `PhysicalNodeId.cluster_id[]` is listed.
+
+**As shipped, `cluster_id_for_node_id` is just the field-then-fallbacks chain**, without the alias branch: `get_local_discovery_hostname` prefers `ClusterDescriptor::get_cluster_id()`, else the mock filename, else `gethostname()`. The aisle-token alias was never needed, because the UMD field landed before any FSD ingest existed to join against — see §8.3 item 2.
 
 ### 8.3 What needs to be done
 
@@ -682,32 +727,33 @@ Work is three repos. None of this is “parse the filename in the mapper.”
 
 **1. UMD** — [`PLAN_umd_cluster_descriptor_hostname.md`](PLAN_umd_cluster_descriptor_hostname.md)
 
-- [ ] Add optional top-level `cluster_id:` to the cluster-descriptor YAML schema (`not` required).
-- [ ] `ClusterDescriptor::get_cluster_id()`; parse if present, `nullopt` if missing; reject empty / illegal strings. No setter — the id is fixed when the descriptor is built.
-- [ ] `serialize()` writes the key only when set (old goldens unchanged).
-- [ ] Copy `cluster_id_` in `create_constrained_cluster_descriptor` and `apply_chip_id_remapping`.
-- [ ] `TopologyDiscovery::fill_cluster_descriptor_info` stamps `resolve_cluster_id(options.cluster_id)` = the caller's `TopologyDiscoveryOptions::cluster_id` else `gethostname()`. UMD reads no environment variable, and the option reaches nothing else — not YAML parsing, not `create_mock_cluster`.
-- [ ] Nanobind get/set.
-- [ ] Offline tests: with key, without key (every existing YAML still parses), round-trip, validation fatals, env-var precedence, env var does not leak into parsing.
-- [ ] Bump `tt_metal/third_party/umd` in tt-metal.
+- [x] Add optional top-level `cluster_id:` to the cluster-descriptor YAML schema (`not` required).
+- [x] `ClusterDescriptor::get_cluster_id()`; parse if present, `nullopt` if missing; reject empty / illegal strings. No setter — the id is fixed when the descriptor is built.
+- [x] `serialize()` writes the key only when set (old goldens unchanged).
+- [x] Copy `cluster_id_` in `create_constrained_cluster_descriptor` and `apply_chip_id_remapping`.
+- [x] `TopologyDiscovery::fill_cluster_descriptor_info` stamps `resolve_cluster_id(options.cluster_id)` = the caller's `TopologyDiscoveryOptions::cluster_id` else `gethostname()`. UMD reads no environment variable, and the option reaches nothing else — not YAML parsing, not `create_mock_cluster`.
+- [x] Nanobind get/set.
+- [x] Offline tests: with key, without key (every existing YAML still parses), round-trip, validation fatals, env-var precedence, env var does not leak into parsing.
+- [x] Bump `tt_metal/third_party/umd` in tt-metal.
 
 **2. tt-metal** — consume the field
 
-- [ ] `get_local_discovery_hostname(cluster_desc)` prefers `get_cluster_id()`, else today’s basename / `gethostname()`. (Optional cosmetic rename to `get_local_cluster_id()`.)
-- [ ] `node_id_from_asic_descriptor` / `make_physical_node_id` use that string for `PhysicalNodeId.cluster_id[]`.
-- [ ] Every TopologyMapper **physical** map keyed by `PhysicalNodeId` (§6.1).
-- [ ] Temporary aisle-token alias when mock + FSD and the field is still empty (testing plan §6.3).
-- [ ] Tests: filename-only id ≠ FSD id; `cluster_id: bh-glx-110-c01u02` id == FSD id; SC36 packs `bh-glx-110-d10u20` not the `120` in the file.
-- [ ] Metal reads the id back only through `ClusterDescriptor::get_cluster_id()`, never from the environment. Supplying one is a separate seam: `TT_METAL_CLUSTER_ID` → `ClusterOptions::topology_discovery_options` in `open_driver` ([UMD plan](PLAN_umd_cluster_descriptor_hostname.md) §6.1).
+- [x] `get_local_discovery_hostname(cluster_desc)` prefers `get_cluster_id()`, else today’s basename / `gethostname()`. (Optional cosmetic rename to `get_local_cluster_id()`: not done.)
+- [x] `node_id_from_asic_descriptor` / `make_physical_node_id` use that string for `PhysicalNodeId.cluster_id[]`.
+- [x] Every TopologyMapper **physical** map keyed by `PhysicalNodeId` (§6.1).
+- [ ] Temporary aisle-token alias when mock + FSD and the field is still empty (testing plan §6.3). **Not written, and probably never needed:** the UMD field landed before any FSD ingest exists to need the alias, and the 27 remaining descriptors (§10) can be filled instead. Revisit only if FSD work starts before the assets land.
+- [x] Tests: filename-only id ≠ FSD id; `cluster_id: bh-glx-110-c01u02` id == FSD id (`PhysicalNodeIdTest.MockWithHostIdMatchesFsdButBasenameDoesNot`).
+- [x] Metal reads the id back only through `ClusterDescriptor::get_cluster_id()`, never from the environment. Supplying one is a separate seam: `TT_METAL_CLUSTER_ID` → `ClusterOptions::topology_discovery_options` in `open_driver` ([UMD plan](PLAN_umd_cluster_descriptor_hostname.md) §6.1).
 
-**3. tt-cluster-descriptors** — **TODO: fill every YAML** (~230 files)
+**3. tt-cluster-descriptors** — **199 of 266 YAMLs filled; 27 real descriptors left** (the other 40 unfilled are `*_mapping.yaml` rank-binding files, which have no host to name)
 
-- [ ] Write `cluster_id:` on **all** cluster descriptors (BH, ClosetBox, wormhole, T3K, dual-host, virtu, …), value = that machine's OS / FSD hostname. Separate PR. Does **not** block the UMD PR. Partial fill is fine.
-- [ ] FSD-paired BH: one-shot script — filename aisle token `c01u02` / `d10u20` → unique FSD `Host` with that `aisle`/`rack`/`shelf_u` → write that host’s `hostname` as `cluster_id` (`bh-glx-110-c01u02`).
-- [ ] QuietBox: `sjc1-tt-qb-01` etc.
+- [~] Write `cluster_id:` on **all** cluster descriptors (BH, ClosetBox, wormhole, T3K, dual-host, virtu, …), value = that machine's OS / FSD hostname. Separate PR. Does **not** block the UMD PR. Partial fill is fine.
+- [~] FSD-paired BH: one-shot script — filename aisle token `c01u02` / `d10u20` → unique FSD `Host` with that `aisle`/`rack`/`shelf_u` → write that host’s `hostname` as `cluster_id` (`bh-glx-110-c01u02`). All BH superclusters done **except one SC36 host capture** (`..._bh-glx-120-d05u20_rank_7.yaml`), which is what needed the buffer widened to UMD's `CLUSTER_ID_MAX_LENGTH`.
+- [x] QuietBox: `sjc1-tt-qb-01` etc.
 - [ ] ClosetBox: real host token (`metal-wh-09`), not the whole basename.
+- [ ] Remaining unfilled: the 6u / t3k / n300 / bh_qb / dual_glx families — these are the ones whose goldens still carry a `.yaml` filename as the hostname.
 - [ ] Unknown captures: leave unset until recapture (`serialize_to_file` stamps the live `cluster_id`).
-- [ ] Pin the submodule when a batch is ready. Then delete the aisle-token fallback for filled FSD-paired files.
+- [ ] **Pin the submodule to a merged commit.** It currently points at a branch (`p1-0tr/host-id-in-cluster-descriptor`).
 
 **Do not / what does not change**
 
@@ -736,12 +782,24 @@ Work is three repos. None of this is “parse the filename in the mapper.”
 
 ## 10. Sequence
 
-1. UMD `cluster_id` field ([`PLAN_umd_cluster_descriptor_hostname.md`](PLAN_umd_cluster_descriptor_hostname.md)) — separate PR.
-2. Utility + tests (no callers). Mock golden uses `desc.get_cluster_id()`, not the filename.
-3. `node_id_from_asic_descriptor` seam + offline tests: an FSD-built descriptor packs to the POD of its FSD hostname, and an FSD-labelled and a UMD-labelled descriptor set agree on those ids. The builder keeps `1..N` — §A.
-4. Mapper re-keys adjacency through the utility. FSD vs live agree when live uses `cluster_id_for_node_id` (§8.2).
-5. Discovery writes packed graph keys and keeps UMD on `umd_unique_id`.
-6. **TODO:** fill `cluster_id:` on **all** tt-cluster-descriptors YAMLs (UMD plan §7); delete the aisle-token fallback when FSD-paired files are done.
+1. **Done.** UMD `cluster_id` field ([`PLAN_umd_cluster_descriptor_hostname.md`](PLAN_umd_cluster_descriptor_hostname.md)) — separate PR. `ClusterDescriptor::get_cluster_id()` plus its validation are in the pinned UMD; `get_local_discovery_hostname` prefers the field and keeps the filename / `gethostname()` fallbacks (§8.2).
+2. **Done.** Utility + tests (no callers). Header is in `TT_METAL_PUBLIC_API`. Canonicalization shipped with two departures from §3 — see §3.1.
+3. **Done.** `node_id_from_asic_descriptor` seam + offline tests: an FSD-built descriptor packs to the POD of its FSD hostname, and an FSD-labelled and a UMD-labelled descriptor set agree on those ids. The builder keeps `1..N` — §A.
+4. **Done.** Mapper re-keys adjacency through the utility, via `PhysicalNodeIdIndex` at the PSD boundary (§6.1). No `AsicID`-keyed physical map remains on the mapper. Goldens re-baselined: placement moved, as §7 predicted.
+5. **Optional, not done.** Discovery writes packed graph keys. §6.1 already permits the PSD to stay `AsicID`-keyed because the mapper re-keys at the boundary, so this buys clarity rather than correctness.
+6. **In progress (assets).** Fill `cluster_id:` on **all** tt-cluster-descriptors YAMLs (UMD plan §7). 199 of 266 carry it; of the 67 without, 40 are `*_mapping.yaml` rank-binding files that correctly have none, leaving **27 real cluster descriptors**. The submodule is still pinned to a branch, not a merged commit.
 7. Downed-links / FSD ControlPlane work then diffs and maps without overlay.
 
 Slices 2–4 are the PhysicalNodeId PR series. Slice 1 can land first or in parallel. Slice 6 is assets.
+
+**What finishing slice 6 buys.** Each surviving workaround traces to one unfilled descriptor, and all
+three retire when the field is set:
+
+| Workaround | Only exists because of |
+|---|---|
+| `kPhysicalClusterIdLen = 128` (§3) | `SC36_..._cluster_desc_bh-glx-120-d05u20_rank_7.yaml` — 73 chars, the one unfilled SC36 host capture |
+| conditional FQDN cut (§3.1) | `dual_glx_2.5d_torus_cluster_desc_rank_0.yaml` — the dot in `2.5d` |
+| keeping `_<rank>` (§3.1) | `6u_dual_host_cluster_desc_rank_{0,1}.yaml` |
+
+The rank suffix is also what keeps those mock hosts distinct, so retiring that one needs the filled
+`cluster_id` values to be distinct per rank — which they are, being real hostnames.
