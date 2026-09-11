@@ -3858,10 +3858,10 @@ struct discover_dev {
     int max_gen;
     int cur_width;
     int max_width;
-    char link_note[24];  // non-empty if trained below expectation, e.g. "x1<8"
-    const char* live;    // liveness ladder outcome
-    char hb1[32];        // first heartbeat sample
-    int need_hb2;        // got a first sample; judge after the shared wait
+    char link_note[56];
+    const char* live;  // liveness ladder outcome
+    char hb1[32];      // first heartbeat sample
+    int need_hb2;      // got a first sample; judge after the shared wait
 };
 
 static sigjmp_buf discover_jmp;
@@ -3896,10 +3896,16 @@ static int discover_link_gen(const char* dir, const char* name) {
     return pcie_gen_from_speed(value);
 }
 
-// One *_link_width attribute as a lane count; 0 if unreadable or not a
-// number.
+// The widest link PCIe defines.  A sysfs lane count above this is not a
+// narrow link, it is a value we failed to understand, and saying nothing is
+// better than reporting degradation against a number that cannot be real.
+#define PCIE_MAX_LINK_WIDTH 32
+
+// One *_link_width attribute as a lane count; 0 if unreadable, not a
+// number, or not a width that exists.
 static int discover_link_width(const char* dir, const char* name) {
     char value[64];
+    long lanes;
 
     if (read_sysfs_attr(dir, name, value, sizeof(value)) != 0) {
         return 0;
@@ -3907,7 +3913,13 @@ static int discover_link_width(const char* dir, const char* name) {
     if (value[0] == '\0' || strspn(value, "0123456789") != strlen(value)) {
         return 0;
     }
-    return atoi(value);
+    // strtol rather than atoi: the digit run above can be longer than an int
+    // holds, and atoi's answer to that is undefined.
+    lanes = strtol(value, nullptr, 10);
+    if (lanes < 1 || lanes > PCIE_MAX_LINK_WIDTH) {
+        return 0;
+    }
+    return (int)lanes;
 }
 
 // What the link should have trained to: the lesser of the two ends'
