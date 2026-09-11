@@ -655,7 +655,9 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 45
+      # Measured 7:39 on one galaxy. Cheap because it is one depth, one chunk count and one iteration
+      # -- the point is the captured-trace path, not the sweep.
+      timeout: 20
       tier: 2
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic
