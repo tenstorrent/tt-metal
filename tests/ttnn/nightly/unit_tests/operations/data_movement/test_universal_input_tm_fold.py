@@ -390,6 +390,48 @@ def test_fold_f32_dtype(shape, layout, in_mc_factory, device):
     _run_fold(shape, 2, 2, layout, in_mc_factory(shape, device), None, device, dtype=ttnn.float32)
 
 
+# Tile-native scratch-gather bit-exactness — PCC can't see a scatter landing a few slots off or a write
+# past the scratch page; bf16 tile-native must round-trip byte-identically.
+
+
+@pytest.mark.parametrize(
+    "shape, stride",
+    [
+        pytest.param((1, 32, 32, 32), (2, 2), id="tile_native_32x32x32_2x2"),
+        pytest.param((1, 32, 32, 64), (2, 2), id="tile_native_32x32x64_2x2"),
+    ],
+)
+def test_fold_tile_native_bf16_bit_exact(shape, stride, device):
+    torch.manual_seed(0)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(
+        x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=DRAM_INTERLEAVED
+    )
+    got = ttnn.to_torch(ttnn.fold(ttnn_in, stride[0], stride[1]).cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert torch.equal(_fold_golden(x, stride[0], stride[1]), got)
+
+
+# Capacity-boundary regression — pins the tile_native_fold_scratch_fits_l1 fallback; one shape fits
+# (tile-native) and one overflows (composite untilize→RM), both must produce bit-exact output.
+
+
+@pytest.mark.parametrize(
+    "shape, stride",
+    [
+        pytest.param((1, 32, 32, 32), (2, 2), id="fits_L1_tile_native"),
+        pytest.param((1, 224, 224, 320), (16, 16), id="overflows_L1_composite"),
+    ],
+)
+def test_fold_tile_capacity_boundary(shape, stride, device):
+    torch.manual_seed(0)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(
+        x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=DRAM_INTERLEAVED
+    )
+    got = ttnn.to_torch(ttnn.fold(ttnn_in, stride[0], stride[1]).cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert torch.equal(_fold_golden(x, stride[0], stride[1]), got)
+
+
 # Non-standard strides — asymmetric, non-power-of-two (e.g. 3x5, 2x3).
 
 
@@ -507,10 +549,10 @@ def test_fold_invalid_shard_shape_fatals(device):
             None,
             id="rm_dram_height_sharded",
         ),
-        # TILE interleaved (composite untilize hop).
+        # TILE interleaved (tile-native scratch-gather factory).
         pytest.param(ttnn.TILE_LAYOUT, (1, 16, 16, 8), lambda s, d: L1_INTERLEAVED, None, id="tile_l1_interleaved"),
         pytest.param(ttnn.TILE_LAYOUT, (1, 16, 16, 8), lambda s, d: DRAM_INTERLEAVED, None, id="tile_dram_interleaved"),
-        # TILE W/B-sharded (composite untilize + L1-interleaved staging).
+        # TILE W/B-sharded (composite untilize→RM before prim, sharded staging).
         pytest.param(ttnn.TILE_LAYOUT, (1, 32, 32, 128), _tile_width_shard, None, id="tile_width_sh"),
         pytest.param(ttnn.TILE_LAYOUT, (1, 32, 32, 128), _tile_block_shard, None, id="tile_block_sh"),
     ],

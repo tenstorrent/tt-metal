@@ -539,10 +539,11 @@ Tensor fold(
             processed_tensor = ttnn::pad(processed_tensor, padding_spec, 0.0f, true, std::nullopt);
         }
 
-        // Tile-native factory holds one full output row in L1 scratch; if it wouldn't fit, fall back
-        // to untilize→RM so prim::fold takes the RM path (1-stick scratch).
+        // Tile-native factory only supports interleaved TILE; W/B-sharded TILE inputs and shapes whose
+        // row-scratch overflows L1 go through untilize→RM so prim::fold takes the 1-stick RM path.
         if (processed_tensor.layout() == Layout::TILE &&
-            !operations::data_movement::tile_native_fold_scratch_fits_l1(processed_tensor, stride_h, stride_w)) {
+            (processed_tensor.is_sharded() ||
+             !operations::data_movement::tile_native_fold_scratch_fits_l1(processed_tensor, stride_h, stride_w))) {
             processed_tensor = ttnn::to_layout(processed_tensor, Layout::ROW_MAJOR);
         }
 
