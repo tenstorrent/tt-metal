@@ -119,6 +119,9 @@ def _derived(checkpoint: Path, trace, root: str):
         "layer0_weights_on_derived_input",
     ],
 )
+# Building Kimi-K3's weights on device outruns pytest.ini's blanket 300 s on a cold cache all by
+# itself -- layer 1's MoE converts 256 experts before the first forward runs.
+@pytest.mark.timeout(2400)
 def test_kda_layer_matches_golden(mesh_device, device_params, layer_idx, input_layer, preceded_by_layer0):
     """One KDA layer, fed the input the model gives it.
 

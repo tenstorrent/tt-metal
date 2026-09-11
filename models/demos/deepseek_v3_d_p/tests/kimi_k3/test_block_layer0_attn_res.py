@@ -87,6 +87,9 @@ def _compose(mesh_device, tensor):
 
 
 @pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=True)
+# Building Kimi-K3's weights on device outruns pytest.ini's blanket 300 s on a cold cache all by
+# itself -- layer 1's MoE converts 256 experts before the first forward runs.
+@pytest.mark.timeout(2400)
 def test_layer0_attn_res_matches_golden(mesh_device, device_params):
     checkpoint = resolve_checkpoint()
     trace = resolve_trace(TRACE_100K)

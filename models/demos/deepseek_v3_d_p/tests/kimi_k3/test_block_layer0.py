@@ -116,6 +116,9 @@ def _shard(mesh_device, hidden: torch.Tensor) -> ttnn.Tensor:
 
 
 @pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=True)
+# Building Kimi-K3's weights on device outruns pytest.ini's blanket 300 s on a cold cache all by
+# itself -- layer 1's MoE converts 256 experts before the first forward runs.
+@pytest.mark.timeout(2400)
 def test_layer0_plain_residual_matches_torch(mesh_device, device_params, tmp_path):
     """The K3 block's KDA + dense-FFN path, with AttnRes deliberately not in the picture."""
     checkpoint = resolve_checkpoint()
