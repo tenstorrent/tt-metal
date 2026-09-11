@@ -263,7 +263,8 @@ Outputs run_pair(const Problem& p, uint32_t stage) {
     SetRuntimeArgs(
         program, reader, core,
         {query.buffer()->address(), key.buffer()->address(), value.buffer()->address(),
-         grad_output.buffer()->address(), lse.buffer()->address(), u_scalar.buffer()->address()});
+         grad_output.buffer()->address(), lse.buffer()->address(), u_scalar.buffer()->address(),
+         1u, 0u, 0u});  // one pair, row block 0 against column block 0
     SetRuntimeArgs(
         program, writer, core,
         {probe.buffer()->address(), grad_query.buffer()->address(), grad_key.buffer()->address(),
@@ -392,4 +393,238 @@ TEST(CyclicPairComputeTest, Stage5AllThreeGradientsWithWiderHead) {
     expect_close(out.dQ, p.dQ, 0.05F, "dQ at d = 128");
     expect_close(out.dK, p.dK, 0.05F, "dK at d = 128");
     expect_close(out.dV, p.dV, 0.05F, "dV at d = 128");
+}
+
+// ------------------------------------------------ accumulation across pairs
+// A streak accumulates dQ into the row packet across the columns it visits;
+// a column residency accumulates dK and dV across the rows that pass by.
+// Both are L1 accumulation into a buffer that outlives the pair, and this
+// checks them without any transport: several pairs in sequence on one core,
+// each naming its row and column block.
+
+namespace {
+
+// N blocks of each operand, so pairs can name blocks independently.
+struct Blocks {
+    uint32_t n = 4;
+    uint32_t B = kTile;
+    uint32_t d = 64;
+    std::vector<xt::xarray<float>> Q, K, V, dO;
+    std::vector<float> lse, u;  // one per row block, broadcast down the block
+};
+
+Blocks make_blocks(uint32_t n, uint32_t d) {
+    Blocks b;
+    b.n = n;
+    b.d = d;
+    for (uint32_t k = 0; k < n; ++k) {
+        b.Q.push_back(random_matrix(b.B, d, 11 + k));
+        b.K.push_back(random_matrix(b.B, d, 31 + k));
+        b.V.push_back(random_matrix(b.B, d, 51 + k));
+        b.dO.push_back(random_matrix(b.B, d, 71 + k));
+    }
+    // Any consistent per-row scalars will do; these keep P and dS in range.
+    for (uint32_t k = 0; k < n; ++k) {
+        b.lse.push_back(0.25F + 0.1F * static_cast<float>(k));
+        b.u.push_back(0.05F * static_cast<float>(k + 1));
+    }
+    return b;
+}
+
+// One pair's contribution, in exactly the order the kernel computes it.
+struct Contribution {
+    xt::xarray<float> dQ, dK, dV;
+};
+
+Contribution pair_contribution(const Blocks& b, uint32_t row, uint32_t col) {
+    const float scale = 1.0F / std::sqrt(static_cast<float>(b.d));
+    const xt::xarray<float> S = xt::linalg::dot(b.Q[row], xt::transpose(b.K[col])) * scale;
+    xt::xarray<float> P = xt::zeros<float>({b.B, b.B});
+    xt::xarray<float> dS = xt::zeros<float>({b.B, b.B});
+    const xt::xarray<float> dP = xt::linalg::dot(b.dO[row], xt::transpose(b.V[col]));
+    for (uint32_t r = 0; r < b.B; ++r) {
+        for (uint32_t c = 0; c < b.B; ++c) {
+            P(r, c) = std::exp(S(r, c) - b.lse[row]);
+            dS(r, c) = P(r, c) * (dP(r, c) - b.u[row]) * scale;
+        }
+    }
+    Contribution out;
+    out.dQ = xt::linalg::dot(dS, b.K[col]);
+    out.dK = xt::linalg::dot(xt::transpose(dS), b.Q[row]);
+    out.dV = xt::linalg::dot(xt::transpose(P), b.dO[row]);
+    return out;
+}
+
+xt::xarray<float> stack_blocks(const std::vector<xt::xarray<float>>& blocks, uint32_t B, uint32_t w) {
+    xt::xarray<float> out = xt::zeros<float>(
+        {1u, 1u, static_cast<uint32_t>(blocks.size()) * B, w});
+    for (uint32_t k = 0; k < blocks.size(); ++k) {
+        for (uint32_t r = 0; r < B; ++r) {
+            for (uint32_t c = 0; c < w; ++c) {
+                out(0, 0, k * B + r, c) = blocks[k](r, c);
+            }
+        }
+    }
+    return out;
+}
+
+Outputs run_pairs(const Blocks& b, const std::vector<std::pair<uint32_t, uint32_t>>& pairs) {
+    using namespace tt::tt_metal;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    const uint32_t qWt = b.d / kTile;
+    const uint32_t vWt = b.d / kTile;
+    const uint32_t n = b.n;
+
+    const auto query = ttml::core::from_xtensor(stack_blocks(b.Q, b.B, b.d), device);
+    const auto key = ttml::core::from_xtensor(stack_blocks(b.K, b.B, b.d), device);
+    const auto value = ttml::core::from_xtensor(stack_blocks(b.V, b.B, b.d), device);
+    const auto grad_output = ttml::core::from_xtensor(stack_blocks(b.dO, b.B, b.d), device);
+
+    xt::xarray<float> lse_tile = xt::zeros<float>({1u, 1u, n * b.B, kTile});
+    xt::xarray<float> u_tile = xt::zeros<float>({1u, 1u, n * b.B, kTile});
+    for (uint32_t k = 0; k < n; ++k) {
+        for (uint32_t r = 0; r < b.B; ++r) {
+            lse_tile(0, 0, k * b.B + r, 0) = b.lse[k];
+            u_tile(0, 0, k * b.B + r, 0) = b.u[k];
+        }
+    }
+    const auto lse = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(lse_tile, device);
+    const auto u_scalar = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(u_tile, device);
+
+    const xt::xarray<float> zeros_probe = xt::zeros<float>({1u, 1u, b.B, kTile});
+    const xt::xarray<float> zeros_grad = xt::zeros<float>({1u, 1u, b.B, b.d});
+    const auto probe = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(zeros_probe, device);
+    const auto grad_query = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(zeros_grad, device);
+    const auto grad_key = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(zeros_grad, device);
+    const auto grad_value = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(zeros_grad, device);
+
+    auto program = CreateProgram();
+    const auto core = CoreCoord{0, 0};
+    const auto region = CoreRange(core, core);
+
+    const uint32_t bf16_tile = 2 * kTile * kTile;
+    const uint32_t fp32_tile = 4 * kTile * kTile;
+    const auto make_cb = [&](uint32_t index, uint32_t tiles, tt::DataFormat format) {
+        const uint32_t page = (format == tt::DataFormat::Float32) ? fp32_tile : bf16_tile;
+        CreateCircularBuffer(
+            program, region,
+            CircularBufferConfig(tiles * page, {{index, format}}).set_page_size(index, page));
+    };
+    make_cb(tt::CBIndex::c_0, qWt, tt::DataFormat::Float16_b);
+    make_cb(tt::CBIndex::c_1, qWt, tt::DataFormat::Float16_b);
+    make_cb(tt::CBIndex::c_2, vWt, tt::DataFormat::Float16_b);
+    make_cb(tt::CBIndex::c_3, vWt, tt::DataFormat::Float16_b);
+    make_cb(tt::CBIndex::c_4, 1, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_5, 1, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_6, 1, tt::DataFormat::Float16_b);
+    make_cb(tt::CBIndex::c_10, 1, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_11, 1, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_12, 1, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_13, 1, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_14, 1, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_15, 1, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_16, qWt, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_17, qWt, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_18, vWt, tt::DataFormat::Float32);
+
+    std::map<std::string, std::string> defines = {
+        {"COMPUTE_STAGE", "5"}, {"NUM_PAIRS", std::to_string(pairs.size())}};
+
+    std::vector<uint32_t> reader_args = {qWt, vWt};
+    for (const auto* t : {&query, &key, &value, &grad_output, &lse, &u_scalar}) {
+        tt::tt_metal::TensorAccessorArgs(*t->buffer()).append_to(reader_args);
+    }
+    const auto reader = CreateKernel(
+        program, kReaderPath, region,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = reader_args,
+            .defines = defines});
+
+    std::vector<uint32_t> writer_args = {qWt, vWt};
+    for (const auto* t : {&probe, &grad_query, &grad_key, &grad_value}) {
+        tt::tt_metal::TensorAccessorArgs(*t->buffer()).append_to(writer_args);
+    }
+    const auto writer = CreateKernel(
+        program, kWriterPath, region,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = writer_args,
+            .defines = defines});
+
+    const uint32_t scaler = std::bit_cast<uint32_t>(1.0F / std::sqrt(static_cast<float>(b.d)));
+    const uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);
+    const uint32_t custom_inf = std::bit_cast<uint32_t>(tt::tt_metal::hal::get_inf());
+    std::vector<UnpackToDestMode> unpack_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    unpack_mode[tt::CBIndex::c_10] = UnpackToDestMode::UnpackToDestFp32;
+    CreateKernel(
+        program, kComputePath, region,
+        ComputeConfig{
+            .fp32_dest_acc_en = true,
+            .unpack_to_dest_mode = unpack_mode,
+            .compile_args = {qWt, vWt, scaler, minus_one, custom_inf, 1u},
+            .defines = defines});
+
+    std::vector<uint32_t> args = {
+        query.buffer()->address(), key.buffer()->address(), value.buffer()->address(),
+        grad_output.buffer()->address(), lse.buffer()->address(), u_scalar.buffer()->address(),
+        static_cast<uint32_t>(pairs.size())};
+    for (const auto& [row, col] : pairs) {
+        args.push_back(row);
+        args.push_back(col);
+    }
+    SetRuntimeArgs(program, reader, core, args);
+    SetRuntimeArgs(
+        program, writer, core,
+        {probe.buffer()->address(), grad_query.buffer()->address(), grad_key.buffer()->address(),
+         grad_value.buffer()->address()});
+
+    auto workload = tt_dist::MeshWorkload();
+    workload.add_program(tt_dist::MeshCoordinateRange(device->shape()), std::move(program));
+    tt_dist::EnqueueMeshWorkload(device->mesh_command_queue(), workload, /*blocking=*/true);
+
+    Outputs out;
+    out.probe = ttml::core::to_xtensor(probe);
+    out.dQ = ttml::core::to_xtensor(grad_query);
+    out.dK = ttml::core::to_xtensor(grad_key);
+    out.dV = ttml::core::to_xtensor(grad_value);
+    return out;
+}
+
+}  // namespace
+
+// A streak: one row against several columns, so dQ accumulates. dK and dV
+// belong to different columns here and are not meaningful, which is exactly
+// why the real kernel keeps them in the column buffer and dQ in the packet.
+TEST(CyclicPairComputeTest, DqAccumulatesAcrossAStreak) {
+    const auto b = make_blocks(4, 64);
+    const std::vector<std::pair<uint32_t, uint32_t>> pairs = {{2, 0}, {2, 1}, {2, 2}, {2, 3}};
+    const auto out = run_pairs(b, pairs);
+
+    xt::xarray<float> want = xt::zeros<float>({b.B, b.d});
+    for (const auto& [row, col] : pairs) {
+        want += pair_contribution(b, row, col).dQ;
+    }
+    expect_close(out.dQ, want, 0.05F, "dQ accumulated over four columns");
+}
+
+// A column residency: several rows against one column, so dK and dV
+// accumulate.
+TEST(CyclicPairComputeTest, ColumnGradientsAccumulateAcrossAResidency) {
+    const auto b = make_blocks(4, 64);
+    const std::vector<std::pair<uint32_t, uint32_t>> pairs = {{0, 1}, {1, 1}, {2, 1}, {3, 1}};
+    const auto out = run_pairs(b, pairs);
+
+    xt::xarray<float> want_dk = xt::zeros<float>({b.B, b.d});
+    xt::xarray<float> want_dv = xt::zeros<float>({b.B, b.d});
+    for (const auto& [row, col] : pairs) {
+        const auto c = pair_contribution(b, row, col);
+        want_dk += c.dK;
+        want_dv += c.dV;
+    }
+    expect_close(out.dK, want_dk, 0.05F, "dK accumulated over four rows");
+    expect_close(out.dV, want_dv, 0.05F, "dV accumulated over four rows");
 }

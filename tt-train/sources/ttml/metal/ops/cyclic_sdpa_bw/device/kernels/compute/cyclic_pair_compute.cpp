@@ -29,9 +29,10 @@
 // in one arrangement hung -- and those two operands have exactly one consumer
 // each, dK and dV, which check them well enough.
 //
-// Single block pair, so B = 32 (one tile row) and the accumulators start from
-// this pair rather than accumulating across timesteps. Accumulation across a
-// streak and a column residency is the next step.
+// B = 32, one tile row per block. NUM_PAIRS > 1 runs several pairs in
+// sequence with L1 accumulation into the same gradient buffers, which is what
+// a streak does for dQ and a column residency does for dK and dV: the first
+// pair reserves, the rest accumulate in place.
 
 #include <api/compute/cb_api.h>
 #include <api/compute/pack.h>
@@ -61,6 +62,10 @@
 
 #ifndef COMPUTE_STAGE
 #define COMPUTE_STAGE 5
+#endif
+
+#ifndef NUM_PAIRS
+#define NUM_PAIRS 1
 #endif
 
 namespace {
@@ -130,7 +135,7 @@ void probe_tile(uint32_t cb_source) {
 // dQ and dV looked fine. So dS is duplicated inside DST with
 // copy_dest_values, one copy is transposed and one is not, and all three
 // operands are packed from registers.
-void compute_grad_scores_with_transposes() {
+void compute_grad_scores_with_transposes(bool want_probe) {
     cb_wait_front(cb_grad_attn_weights, onetile);
     cb_wait_front(cb_attention_weights, onetile);
     cb_wait_front(cb_u_scalar, onetile);
@@ -175,10 +180,13 @@ void compute_grad_scores_with_transposes() {
     pack_tile(grad_reg, cb_grad_scores_transposed);
     pack_reconfig_data_format(cb_grad_scores_transposed, cb_attn_weights_transposed);
     pack_tile(attn_reg, cb_attn_weights_transposed);
-    cb_reserve_back(cb_probe, onetile);
-    pack_reconfig_data_format(cb_probe);
-    pack_tile(grad_keep_reg, cb_probe);
-    cb_push_back(cb_probe, onetile);
+    // The probe holds one tile, so only the last pair leaves its dS there.
+    if (want_probe) {
+        cb_reserve_back(cb_probe, onetile);
+        pack_reconfig_data_format(cb_probe);
+        pack_tile(grad_keep_reg, cb_probe);
+        cb_push_back(cb_probe, onetile);
+    }
     tile_regs_release();
     cb_push_back(cb_grad_scores, onetile);
     cb_push_back(cb_grad_scores_transposed, onetile);
@@ -192,6 +200,8 @@ void kernel_main() {
     copy_init(cb_query);
     matmul_init(cb_query, cb_key);
 
+    for (uint32_t pair = 0; pair < NUM_PAIRS; ++pair) {
+    const bool accumulate = pair > 0;
     cb_wait_front(cb_query, qWt);
     cb_wait_front(cb_key, qWt);
     cb_wait_front(cb_value, vWt);
@@ -247,17 +257,17 @@ void kernel_main() {
     return;
 #else
     // ---- dS = P * (dP - D_i) / sqrt(d), with dS^T and P^T alongside
-    compute_grad_scores_with_transposes();
+    compute_grad_scores_with_transposes(/* want_probe */ pair + 1u == NUM_PAIRS);
 
 #if COMPUTE_STAGE == 4
     return;
 #else
     // ---- the three gradients
-    update_grad_query(cb_grad_scores, cb_key, cb_grad_query, qWt, block_size, /* accumulate */ false);
+    update_grad_query(cb_grad_scores, cb_key, cb_grad_query, qWt, block_size, accumulate);
     cb_wait_front(cb_grad_query, qWt);
 
     update_grad_value(
-        cb_attn_weights_transposed, cb_grad_output, cb_grad_value, vWt, block_size, false);
+        cb_attn_weights_transposed, cb_grad_output, cb_grad_value, vWt, block_size, accumulate);
     cb_wait_front(cb_grad_value, vWt);
 
     update_grad_key(
@@ -268,10 +278,21 @@ void kernel_main() {
         block_size,
         /* cb_prev_pack */ cb_grad_value,
         /* cb_prev_srca */ cb_grad_output,
-        false);
+        accumulate);
     cb_wait_front(cb_grad_key, qWt);
+
+    // The operands of this pair are done with; the next pair's are behind them.
+    cb_pop_front(cb_query, qWt);
+    cb_pop_front(cb_key, qWt);
+    cb_pop_front(cb_value, vWt);
+    cb_pop_front(cb_grad_output, vWt);
+    cb_pop_front(cb_lse, onetile);
+    cb_pop_front(cb_u_scalar, onetile);
+    cb_pop_front(cb_attention_weights, onetile);
+    cb_pop_front(cb_grad_attn_weights, onetile);
 #endif
 #endif
 #endif
 #endif
+    }
 }
