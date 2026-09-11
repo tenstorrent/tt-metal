@@ -1187,7 +1187,9 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const uint32_t kv_cache_num_layers,
     const uint32_t kv_cache_layer_idx,
     const std::optional<uint32_t> sliding_window_size,
-    const bool circular_kv_cache) {
+    const bool circular_kv_cache,
+    const uint32_t kv_block_cyclic_stripes,
+    const uint32_t kv_block_cyclic_ranks) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -1379,7 +1381,9 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         kv_cache_num_layers,
         kv_cache_layer_idx,
         sliding_window_size,
-        circular_kv_cache);
+        circular_kv_cache,
+        kv_block_cyclic_stripes,
+        kv_block_cyclic_ranks);
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,

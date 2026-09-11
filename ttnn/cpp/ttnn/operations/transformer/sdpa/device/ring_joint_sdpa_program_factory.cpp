@@ -1481,6 +1481,39 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t num_active_cores = enable_zigzag_balancing ? std::min(num_cores, all_heads_num_q_chunks / 2)
                                                               : std::min(num_cores, all_heads_num_q_chunks);
 
+    // Block-cyclic KV slab (KV dedup, ag-before). stripes/ranks == 1 is a natural-order slab and the
+    // reader folds back to bit-identical addressing, so every other caller is unaffected. The stripe is
+    // the contiguous run the reader may cross without a jump: slab tiles / (stripes * ranks).
+    const uint32_t kv_bc_stripes = std::max(args.kv_block_cyclic_stripes, 1u);
+    const uint32_t kv_bc_ranks = std::max(args.kv_block_cyclic_ranks, 1u);
+    const bool kv_block_cyclic = kv_bc_stripes > 1 || kv_bc_ranks > 1;
+    TT_FATAL(
+        !kv_block_cyclic || kv_local_padded_Nt % (kv_bc_stripes * kv_bc_ranks) == 0,
+        "ring_joint_sdpa block-cyclic KV needs the padded slab ({} tiles) to divide into stripes * ranks "
+        "({} * {}); a partial stripe has no contiguous run to read",
+        kv_local_padded_Nt,
+        kv_bc_stripes,
+        kv_bc_ranks);
+    const uint32_t kv_bc_stripe_rows_t = kv_block_cyclic ? kv_local_padded_Nt / (kv_bc_stripes * kv_bc_ranks) : 1;
+    // TEMP PROBE -- remove.
+    log_warning(
+        tt::LogOp,
+        "BCPROBE kv_block_cyclic={} stripes={} ranks={} stripe_rows_t={} kv_local_padded_Nt={} "
+        "gathered_padded_Nt={} Sk_chunk_t={} DHt={} vDHt={} NHK={} NHV={} v_shares_k_buffer={} chunked={}",
+        kv_block_cyclic,
+        kv_bc_stripes,
+        kv_bc_ranks,
+        kv_bc_stripe_rows_t,
+        kv_local_padded_Nt,
+        gathered_padded_Nt,
+        Sk_chunk_t,
+        DHt,
+        vDHt,
+        NHK,
+        NHV,
+        v_shares_k_buffer,
+        kernel_chunked);
+
     std::vector<uint32_t> reader_compile_time_args = {
         B,
         NH,
@@ -1533,8 +1566,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         rank_mapping.mesh_cols,
         // Slot 44: circular sliding KV slab count (0 = unbounded). Feeds the reader's
         // build_sliding_q_work_plan so local slab addressing wraps identically to the host halo
-        // layout and the compute kernel. Tensor accessors start at slot 45.
+        // layout and the compute kernel.
         circular_kv_slab_count,
+        // Slots 45-48: block-cyclic KV slab geometry. Tensor accessors start at slot 49.
+        static_cast<uint32_t>(kv_block_cyclic),
+        kv_bc_stripe_rows_t,
+        kv_bc_stripes,
+        kv_bc_ranks,
     };
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
