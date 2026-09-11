@@ -95,8 +95,8 @@ class KimiExperts:
         S = x.shape[2]
         E, I, H = self.E, self.I_loc, self.H
         tile = ttnn.Tile([32, 32])
-        pc_gu = _sparse_program_config(S, I)
-        pc_d = _sparse_program_config(S, H)
+        pc_gu = _sparse_program_config(S, I, self.in0_block_w)
+        pc_d = _sparse_program_config(S, H, self.in0_block_w_down)
         kw = dict(
             sparsity=sparsity,
             nnz=nnz,
@@ -158,6 +158,11 @@ class KimiExperts:
             )
         return self._ones
 
+    # sparse_matmul inner block widths (K tiles per block). 1 (the gpt-oss/gemma4 default) made the decode MoE 12.4 ms per
+    # layer at 32 users; 24 gives 2.8 ms (8-expert single user: 2.2 -> 1.5 ms), identical outputs. K = 2304 = 72 tiles for
+    # gate/up, K = I_loc = 256 = 8 tiles for down.
+    in0_block_w = 24
+    in0_block_w_down = 8
     prefill_group = 32  # tokens per all-experts sparse_matmul group (sparse path)
     prefill_impl = "dense"  # "dense": batched dense matmuls over all experts (whole core grid); "sparse": 32-token sparse_matmul groups
     prefill_dense_chunk = (

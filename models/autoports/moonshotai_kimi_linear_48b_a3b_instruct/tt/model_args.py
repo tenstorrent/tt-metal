@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import ttnn
 from models.autoports.moonshotai_kimi_linear_48b_a3b_instruct.reference.config import KimiLinearConfig
 
 
@@ -23,9 +24,17 @@ class KimiModelArgs:
         self.num_devices = mesh_device.get_num_devices()
         self.max_prefill_chunk_size = prefill_chunk
         self.trace_prefill_supported_seq_lens: list[int] = []  # prefill is eager (model-owned)
-        self.model_config: dict = {}
         self.max_top_k = 32
         self.model_name = "Kimi-Linear-48B-A3B-Instruct"
+        # on-device sampling (models/common/sampling): the LM head is vocab-sharded across the mesh columns (40960 logits per
+        # chip on a 1x4, under TOPK_MAX_WIDTH); a 1xN mesh uses the default CCL axis. Greedy requests take the single
+        # all-gather + argmax fast path.
+        self.sampling_dp = 1
+        self.sampling_all_gather_axis = 1
+        self.allow_force_argmax_sampling = True
+        self.model_config = {
+            "SAMPLING_AG_CONFIG": {"allow_force_argmax": True, "num_links": 1, "topology": ttnn.Topology.Linear}
+        }
 
     def is_llama_vision(self) -> bool:
         return False

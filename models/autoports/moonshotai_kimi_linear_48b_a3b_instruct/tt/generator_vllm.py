@@ -62,13 +62,24 @@ def _precision_from_env() -> PrecisionPolicy:
 class KimiLinearModelForGenerator(KimiLinearModel):
     """KimiLinearModel + the hooks tt_transformers' Generator drives for decode."""
 
-    sampling = None  # host sampling
+    sampling = None  # set below when the vocab shard fits on-device top-k (it does on 1x2 / 1x4)
     sampling_dp = 1
 
     def __init__(self, *a, args: KimiModelArgs, **kw):
         super().__init__(*a, **kw)
         self.args = args
         self.mesh_device = args.mesh_device
+        # On-device sampling over the per-chip vocab shards (tt_transformers' shared module): removes the 10-21 MB logits
+        # readback + host sampling that made a vLLM decode step ~2x its device time. KIMI_HOST_SAMPLING=1 disables it.
+        if os.environ.get("KIMI_HOST_SAMPLING") != "1" and self.ccl.tt_ccl is not None:
+            from models.common.sampling import SamplingGenerator
+
+            per_chip = args.padded_vocab_size // args.num_devices
+            if per_chip <= 64 * 1024 and args.padded_vocab_size % args.num_devices == 0:
+                self.sampling = SamplingGenerator(args=args, mesh_device=self.mesh_device, tt_ccl=self.ccl.tt_ccl)
+                logger.info(
+                    f"on-device sampling enabled ({per_chip} logits per chip, force-argmax fast path for greedy)"
+                )
 
     def switch_mode(self, mode):
         return None
@@ -95,10 +106,19 @@ class KimiLinearModelForGenerator(KimiLinearModel):
     def ttnn_decode_forward(
         self, tokens, current_pos, rot_mat_idxs=None, page_table=None, kv_cache=None, on_device_logits=False, **kwargs
     ):
-        logits = self.decode_device(tokens, current_pos, page_table, gather=True)  # [1,1,B,vocab]
+        # on_device_logits: the sampling module consumes each chip's vocab shard [1,1,B,vocab/tp]; otherwise gather the
+        # full logits [1,1,B,vocab] for host sampling
+        logits = self.decode_device(tokens, current_pos, page_table, gather=not on_device_logits)
         return logits, None
 
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False, is_log_probs=False):
+        if is_log_probs:
+            raise NotImplementedError(
+                "device log-probs are not enabled for Kimi-Linear (the plugin samples on host then)"
+            )
+        if is_tokens:  # sampled token ids [1,1,32,1] uint32, replicated on every chip
+            toks = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).reshape(-1)[:B]
+            return toks.to(torch.int64)
         full = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
         rows = full.reshape(-1, full.shape[-1])[: B * S, : self.cfg.vocab_size]
         return rows.reshape(B, S, self.cfg.vocab_size)
@@ -108,7 +128,7 @@ class KimiLinearForCausalLM(Generator):
     model_capabilities = {
         "supports_prefix_caching": False,
         "supports_async_decode": False,
-        "supports_sample_on_device": False,
+        "supports_sample_on_device": os.environ.get("KIMI_HOST_SAMPLING") != "1",
         "supports_chunked_prefill": False,
     }
     # host tokens/positions are authoritative every step (no device-side token feedback)
@@ -214,6 +234,13 @@ class KimiLinearForCausalLM(Generator):
         if n == self._pc_at_capture:
             return
         t0 = time.time()
+        for (
+            m
+        ) in (
+            self.model
+        ):  # sampling traces bind to the decode logits tensor by identity: drop them with the decode traces
+            if getattr(m, "sampling", None) is not None and hasattr(m.sampling, "reset_trace"):
+                m.sampling.reset_trace()
         for key, trace_ids in list(self.trace_ids_decode.items()):
             if not trace_ids:
                 continue
@@ -257,9 +284,23 @@ class KimiLinearForCausalLM(Generator):
         toks = torch.full((B, 1), model.cfg.pad_token_id, dtype=torch.long)
         pos = torch.full((B,), -1, dtype=torch.int32)  # idle rows: skipped by the paged ops
         t0 = time.time()
-        self.decode_forward(
-            toks, pos, page_table=pt, kv_cache=kv_cache, enable_trace=enable_trace, read_from_device=True
-        )
-        for s in range(B):
-            model.reset_slot(s)
-        logger.info(f"decode warm-up (trace={enable_trace}) in {time.time()-t0:.1f}s")
+        variants = [None]
+        if model.sampling is not None and kwargs.get("can_sample_on_device", True):
+            from models.common.sampling.sampling_params import SamplingParams
+
+            # greedy params: the device-sampling decode trace + its sampling trace get captured here, on idle slots,
+            # so no request ever pays the compile pass (which would advance a live KDA state)
+            variants.append(SamplingParams(temperature=[1.0] * B, top_k=[1] * B, top_p=[1.0] * B))
+        for sp in variants:
+            self.decode_forward(
+                toks,
+                pos,
+                page_table=pt,
+                kv_cache=kv_cache,
+                enable_trace=enable_trace,
+                read_from_device=True,
+                sampling_params=sp,
+            )
+            for s in range(B):
+                model.reset_slot(s)
+        logger.info(f"decode warm-up (trace={enable_trace}, variants={len(variants)}) in {time.time()-t0:.1f}s")
