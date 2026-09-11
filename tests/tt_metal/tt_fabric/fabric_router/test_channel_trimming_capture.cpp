@@ -336,10 +336,11 @@ UnicastTrafficResult run_unicast_traffic_bw_nodes(
 
     tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
 
-    // Launch and wait
-    fixture->RunProgramNonblocking(receiver_device, std::move(receiver_program));
+    // Launch and wait. The receiver workload must outlive the Finish below; fast dispatch may still
+    // prefetch its kernel binaries after LaunchProgramAsync returns.
+    auto receiver_workload = tt_metal::LaunchProgramAsync(*receiver_device, std::move(receiver_program));
     tt_metal::LaunchProgram(*sender_device, std::move(sender_program));
-    fixture->WaitForSingleProgramDone(receiver_device);
+    tt::tt_metal::distributed::Finish(receiver_device->mesh_command_queue());
 
     // Validate sender/receiver status
     std::vector<uint32_t> sender_status;
