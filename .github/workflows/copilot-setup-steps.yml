@@ -25,7 +25,8 @@ on:
 jobs:
   # The job MUST be called 'copilot-setup-steps' to be recognized by GitHub Copilot Agent
   copilot-setup-steps:
-    runs-on: tt-ubuntu-2204-large-stable
+    # Dedicated ARC scale set; capped separately from the build runner pool.
+    runs-on: tt-ubuntu-2204-copilot-stable
     # Copilot caps this at 59. Submodule checkout is the bulk of it.
     timeout-minutes: 50
 
@@ -35,6 +36,21 @@ jobs:
       contents: read
 
     steps:
+      - name: Keep Copilot local services off the outbound proxy
+        # The runtime starts local Git, MCP, and model API proxies after setup.
+        # Preserve existing exclusions and normalize the runner image's URL prefix.
+        # GITHUB_ENV persists these values into the generated runtime steps.
+        run: |
+          bypass="localhost,127.0.0.1,::1"
+          for existing in "${no_proxy:-}" "${NO_PROXY:-}"; do
+            existing="${existing#http://}"
+            existing="${existing#https://}"
+            if [ -n "$existing" ]; then
+              bypass="$bypass,$existing"
+            fi
+          done
+          printf 'no_proxy=%s\nNO_PROXY=%s\n' "$bypass" "$bypass" >> "$GITHUB_ENV"
+
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
