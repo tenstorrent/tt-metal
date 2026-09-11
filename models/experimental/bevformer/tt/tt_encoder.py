@@ -15,7 +15,7 @@ import ttnn
 import torch
 from typing import Optional, List, Dict, Any
 
-from .tt_spatial_cross_attention import TTSpatialCrossAttention
+from .tt_spatial_cross_attention import TTSpatialCrossAttention, build_rebatch_plan
 from .tt_temporal_self_attention import TTTemporalSelfAttention
 from .tt_point_sampling_3d_2d import point_sampling_3d_to_2d_ttnn
 from ..reference.point_sampling_3d_2d import generate_reference_points
@@ -56,6 +56,8 @@ class TTBEVFormerLayer:
         use_spatial_cross_attention (bool): Whether to use spatial cross-attention
         feedforward_channels (int): FFN intermediate channel size
         batch_first (bool): Whether batch dimension is first
+        spatial_shapes: Multi-scale feature shapes [num_levels, 2]
+        bev_shape: BEV grid shape [1, 2] containing [bev_h, bev_w]
         **kwargs: Additional arguments
     """
 
@@ -72,6 +74,9 @@ class TTBEVFormerLayer:
         use_spatial_cross_attention: bool = True,
         feedforward_channels: int = 1024,
         batch_first: bool = True,
+        *,
+        spatial_shapes,
+        bev_shape,
         **kwargs,
     ):
         self.device = device
@@ -92,6 +97,7 @@ class TTBEVFormerLayer:
                 num_levels=1,  # Single level for temporal attention
                 num_points=num_points,
                 batch_first=batch_first,
+                spatial_shapes=bev_shape,
                 **kwargs,
             )
 
@@ -110,6 +116,7 @@ class TTBEVFormerLayer:
                 num_cams=num_cams,
                 batch_first=batch_first,
                 deformable_attention=deform_config,
+                spatial_shapes=spatial_shapes,
                 **kwargs,
             )
 
@@ -119,14 +126,13 @@ class TTBEVFormerLayer:
         key=None,
         value=None,
         bev_pos=None,
-        spatial_shapes=None,
-        bev_shape=None,
         level_start_index=None,
         prev_bev=None,
         shift=None,
-        reference_points_3d=None,
         reference_points_cam=None,
         bev_mask=None,
+        rebatch_plan=None,
+        bev_reference_points=None,
         **kwargs,
     ):
         """
@@ -137,28 +143,21 @@ class TTBEVFormerLayer:
             key: Multi-camera features [num_cams, H*W, B, embed_dims]
             value: Same as key
             bev_pos: BEV positional encoding [B, num_queries, embed_dims]
-            spatial_shapes: Spatial shapes of multi-scale features [num_levels, 2]
-            bev_shape: BEV grid shape [1, 2] containing [bev_h, bev_w]
             level_start_index: Start index of each level [num_levels]
             prev_bev: Previous timestep BEV features [B, num_queries, embed_dims]
             shift: Camera shift information for temporal alignment
-            reference_points_3d: 3D reference points [B, num_queries, D, 3]
             reference_points_cam: Camera reference points [num_cams, B, num_queries, D, 2]
             bev_mask: Validity mask for camera projections [num_cams, B, num_queries, D]
+            rebatch_plan: Shared SCA rebatch plan for this frame
+            bev_reference_points: 2D BEV reference points on device [B, num_queries, 1, 2].
+                The encoder owns the grid and widens its leading dimension to the
+                runtime batch before the layer loop.
 
         Returns:
             Updated BEV features [B, num_queries, embed_dims]
         """
         if use_signpost:
             signpost(header="TTNN BEVFormerLayer Forward Start")
-
-        bev_reference_points = reference_points_3d[:, :, 0, :2].unsqueeze(2)  # [bs, num_queries, 1, 2]
-        bev_reference_points = ttnn.from_torch(
-            bev_reference_points, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-        )
-
-        if use_signpost:
-            signpost(header="BEVLayer Tensor Setup Complete")
 
         if use_signpost:
             signpost(header="BEVLayer TSA Start")
@@ -168,8 +167,6 @@ class TTBEVFormerLayer:
             value=prev_bev,  # Use previous BEV as value for temporal context
             query_pos=bev_pos,
             reference_points=bev_reference_points,
-            spatial_shapes=bev_shape,  # Use bev_shape for temporal attention like reference implementation
-            level_start_index=level_start_index,
             **kwargs,
         )
 
@@ -195,7 +192,7 @@ class TTBEVFormerLayer:
             query_pos=bev_pos,
             reference_points_cam=reference_points_cam,
             bev_mask=bev_mask,
-            spatial_shapes=spatial_shapes,
+            rebatch_plan=rebatch_plan,
             level_start_index=level_start_index,
             **kwargs,
         )
@@ -297,7 +294,18 @@ class TTBEVFormerEncoder:
         feedforward_channels (int): FFN intermediate channel size
         batch_first (bool): Whether batch dimension is first
         z_cfg (Dict[str, Any]): Z-axis configuration for point sampling
+        bev_h (int): BEV grid height. The reference-point grid and bev_shape are built
+            from it at construction, so the grid cannot change between forwards; a
+            different grid needs a new encoder instance.
+        bev_w (int): BEV grid width. See bev_h.
+        spatial_shapes: Multi-scale feature shapes [num_levels, 2]. Fixed for the lifetime
+            of the encoder and its attention modules, which fold it into their sampling-offset
+            Linear at construction. Feeding features at a different resolution requires a
+            new encoder instance; it cannot be changed between forwards.
         **kwargs: Additional arguments
+
+    Batch size is not a constructor argument: it is read from bev_query on every forward,
+    so one instance serves a varying batch size without reconstruction.
     """
 
     def __init__(
@@ -317,6 +325,10 @@ class TTBEVFormerEncoder:
         feedforward_channels: int = 1024,
         batch_first: bool = True,
         z_cfg: Dict[str, Any] = None,
+        *,
+        bev_h: int,
+        bev_w: int,
+        spatial_shapes,
         **kwargs,
     ):
         self.device = device
@@ -332,6 +344,18 @@ class TTBEVFormerEncoder:
                 "end": pc_range[5],  # z_max
             }
 
+        if spatial_shapes is None:
+            raise ValueError("spatial_shapes is required")
+        if not isinstance(spatial_shapes, torch.Tensor):
+            spatial_shapes = torch.as_tensor(spatial_shapes)
+        if spatial_shapes.ndim != 2 or spatial_shapes.shape != (num_levels, 2):
+            raise ValueError(f"spatial_shapes must have shape [{num_levels}, 2], got {tuple(spatial_shapes.shape)}")
+        if spatial_shapes.dtype not in (torch.int8, torch.int16, torch.int32, torch.int64, torch.uint8):
+            raise ValueError(f"spatial_shapes must contain integers, got {spatial_shapes.dtype}")
+        if torch.any(spatial_shapes <= 0):
+            raise ValueError(f"spatial_shapes dimensions must be positive, got {spatial_shapes.tolist()}")
+        spatial_shapes = spatial_shapes.to(dtype=torch.long).clone()
+
         self.num_layers = num_layers
         self.embed_dims = embed_dims
         self.num_heads = num_heads
@@ -344,6 +368,26 @@ class TTBEVFormerEncoder:
         self.batch_first = batch_first
         self.z_cfg = z_cfg
         self.feedforward_channels = feedforward_channels
+        self.bev_h = bev_h
+        self.bev_w = bev_w
+        self.spatial_shapes = spatial_shapes
+        self.bev_shape = torch.tensor([[bev_h, bev_w]], dtype=torch.long)
+
+        # The grid itself is batch-independent: batch size only broadcasts the leading
+        # dimension. Keep the bs=1 grid and widen it per forward.
+        self._reference_points_3d = generate_reference_points(
+            bev_h=bev_h,
+            bev_w=bev_w,
+            z_cfg=z_cfg,
+            batch_size=1,
+            dtype=torch.float32,
+        )
+        self._bev_reference_points = ttnn.from_torch(
+            self._reference_points_3d[:, :, 0, :2].unsqueeze(2),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
 
         # Build transformer layers
         self.layers = []
@@ -364,6 +408,8 @@ class TTBEVFormerEncoder:
                 num_cams=num_cams,
                 feedforward_channels=feedforward_channels,
                 batch_first=batch_first,
+                spatial_shapes=spatial_shapes,
+                bev_shape=self.bev_shape,
                 **kwargs,
             )
             self.layers.append(layer)
@@ -373,10 +419,7 @@ class TTBEVFormerEncoder:
         bev_query,
         key=None,
         value=None,
-        bev_h: int = 30,
-        bev_w: int = 30,
         bev_pos=None,
-        spatial_shapes=None,
         level_start_index=None,
         prev_bev=None,
         shift=None,
@@ -390,10 +433,7 @@ class TTBEVFormerEncoder:
             bev_query: Initial BEV query features [B, num_queries, embed_dims]
             key: Multi-camera features [num_cams, H*W, B, embed_dims]
             value: Same as key (optional)
-            bev_h: BEV grid height
-            bev_w: BEV grid width
             bev_pos: BEV positional encoding [B, num_queries, embed_dims]
-            spatial_shapes: Multi-scale feature shapes [num_levels, 2]
             level_start_index: Start indices for each level [num_levels]
             prev_bev: Previous timestep BEV features [B, num_queries, embed_dims]
             shift: Camera shift for temporal alignment
@@ -409,30 +449,40 @@ class TTBEVFormerEncoder:
         output = bev_query
         intermediate = []
 
-        # Get batch size and number of queries for reference point generation
+        # Validate runtime tensor dimensions against the configured model geometry.
         bs, num_queries, _ = bev_query.shape
+        assert (
+            num_queries == self.bev_h * self.bev_w
+        ), f"num_queries {num_queries} != bev_h*bev_w {self.bev_h * self.bev_w}"
+
+        # Batch is a pure broadcast of the stored grid. Widen the host tensor as a
+        # stride-0 view -- from_torch copies it during upload either way -- and widen the
+        # device tensor on device, freeing the copy once the layers are done with it.
+        reference_points_3d = self._reference_points_3d if bs == 1 else self._reference_points_3d.expand(bs, -1, -1, -1)
+        bev_reference_points = (
+            self._bev_reference_points
+            if bs == 1
+            else ttnn.repeat(self._bev_reference_points, ttnn.Shape((bs, 1, 1, 1)))
+        )
+
+        shapes = self.spatial_shapes
+        if key is not None:
+            expected_L = shapes.prod(dim=1).sum().item()
+            L = key.shape[1]
+            assert expected_L == L, (
+                f"Spatial shapes mismatch: spatial_shapes total ({expected_L}) != key spatial dimension ({L}). "
+                f"spatial_shapes: {shapes.tolist()}, key.shape: {key.shape}"
+            )
 
         if use_signpost:
             signpost(header="BEVEncoder Reference Points Generation Start")
 
-        # Generate 3D reference points and project them to camera coordinates
+        # Project the cached 3D reference points to camera coordinates.
         # These reference points define where each BEV query will sample features from camera views
         reference_points_cam = None
         bev_mask = None
 
         if img_metas is not None:
-            # Generate 3D reference points in world coordinates
-            # Creates a 3D grid in BEV space with multiple depth levels (pillar sampling)
-            # Shape: [bev_h*bev_w, num_points_in_pillar, 3] representing (x, y, z) coordinates
-            # TODO: Move to init as it's done once in torch
-            reference_points_3d = generate_reference_points(
-                bev_h=bev_h,
-                bev_w=bev_w,
-                z_cfg=self.z_cfg,
-                batch_size=bs,
-                dtype=torch.float32,
-            )
-
             # Extract camera transformation matrices from metadata
             # These matrices transform 3D world coordinates to 2D camera pixel coordinates
             if "lidar2img" in img_metas[0]:
@@ -469,6 +519,13 @@ class TTBEVFormerEncoder:
                 device=self.device,
             )
 
+        # Camera projection is per-frame, so the SCA rebatch plan is too. Layers only gather query.
+        rebatch_plan = (
+            build_rebatch_plan(reference_points_cam, bev_mask, self.embed_dims, self.device)
+            if bev_mask is not None
+            else None
+        )
+
         if use_signpost:
             signpost(header="BEVEncoder Reference Points Complete")
 
@@ -477,22 +534,18 @@ class TTBEVFormerEncoder:
             if use_signpost:
                 signpost(header=f"BEVEncoder Layer {lid} Start")
 
-            # Create bev_shape tensor like the reference implementation
-            bev_shape = torch.tensor([[bev_h, bev_w]])
-
             output = layer(
                 bev_query=output,
                 key=key,
                 value=value,
                 bev_pos=bev_pos,
-                spatial_shapes=spatial_shapes,
-                bev_shape=bev_shape,
                 level_start_index=level_start_index,
                 prev_bev=prev_bev,
                 shift=shift,
-                reference_points_3d=reference_points_3d,
                 reference_points_cam=reference_points_cam,
                 bev_mask=bev_mask,
+                rebatch_plan=rebatch_plan,
+                bev_reference_points=bev_reference_points,
                 **kwargs,
             )
             if use_signpost:
@@ -500,6 +553,9 @@ class TTBEVFormerEncoder:
 
             if self.return_intermediate:
                 intermediate.append(output)
+
+        if bev_reference_points is not self._bev_reference_points:
+            ttnn.deallocate(bev_reference_points)
 
         if use_signpost:
             signpost(header="TTNN BEVFormerEncoder Forward End")
@@ -520,5 +576,6 @@ class TTBEVFormerEncoder:
             f"num_heads={self.num_heads}, num_levels={self.num_levels}, "
             f"num_points={self.num_points}, num_cams={self.num_cams}, "
             f"pc_range={self.pc_range}, num_points_in_pillar={self.num_points_in_pillar}, "
+            f"bev_h={self.bev_h}, bev_w={self.bev_w}, "
             f"feedforward_channels={self.feedforward_channels}, z_cfg={self.z_cfg}"
         )
