@@ -308,8 +308,17 @@ void kernel_main() {
     // Sharded joint requires the gathered joint K/V buffers (only meaningful when joint K is present).
     constexpr bool has_gathered_joint_k = joint_is_sharded && has_joint_k;
 
-    // Slots 40-43 are the rank-mapping descriptor, so tensor accessors start at slot 44.
-    constexpr auto q_args = TensorAccessorArgs<44>();
+    // Slots 40-43 are the rank-mapping descriptor and 44-47 the block-cyclic KV slab geometry, so
+    // tensor accessors start at slot 48.
+    // KV dedup (ag-before): the TP gather concatenates this SP rank's shards rank-major instead of
+    // interleaving them, which is what keeps its bank-owned schedule. Decoding that back to natural
+    // order is the reader's job -- and it stays contiguous, because the permutation only breaks every
+    // kv_bc_stripe_rows_t tiles. Disabled (1/1) folds to the natural-order generator exactly.
+    constexpr bool kv_block_cyclic = get_compile_time_arg_val(44) != 0;
+    constexpr uint32_t kv_bc_stripe_rows_t = get_compile_time_arg_val(45);
+    constexpr uint32_t kv_bc_stripes = get_compile_time_arg_val(46);
+    constexpr uint32_t kv_bc_ranks = get_compile_time_arg_val(47);
+    constexpr auto q_args = TensorAccessorArgs<48>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto gathered_k_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -324,7 +333,7 @@ void kernel_main() {
     // (unused) accessor offset (q_args' slot 44) so TensorAccessorArgs<> -- instantiated unconditionally
     // here -- never names a non-accessor compile arg (which would fail its internal static_assert).
     // The chain/CB compile args then start after the metadata accessor when present.
-    constexpr uint32_t meta_args_offset = slot_from_metadata ? post_tensor_args_offset : 44;
+    constexpr uint32_t meta_args_offset = slot_from_metadata ? post_tensor_args_offset : 48;
     constexpr auto meta_args = TensorAccessorArgs<meta_args_offset>();  // slot_id accessor
     // kv_actual_isl gets its OWN accessor (a separately-allocated single-page DRAM tensor can land in a
     // different DRAM bank than slot_id, so the slot accessor's dspec reads the wrong bank for it -- the kv
@@ -647,15 +656,19 @@ void kernel_main() {
     // (Lt_local == Lt when joint is not sharded), so this is bit-identical there.
     const auto joint_q_input_tile_logical = TensorTileShape(B, NH, Lt_local, DHt);
 
+    // KV slab generator geometry: block-cyclic when the slab is rank-major, otherwise the natural-order
+    // addressing this op has always used (BlockCyclic == false folds to it).
+#define BLOCK_CYCLIC_KV_GEN \
+    make_block_cyclic_addr_generator<kv_block_cyclic, kv_bc_stripe_rows_t, kv_bc_stripes, kv_bc_ranks>
     const auto q_generator = PaddedAddrGenerator(q_reader, input_q_tile_logical);
-    const auto local_k_generator = PaddedAddrGenerator(local_k_reader, input_k_tile_logical);
-    const auto gathered_k_generator = PaddedAddrGenerator(gathered_k_reader, gathered_k_input_tile_logical);
+    const auto local_k_generator = BLOCK_CYCLIC_KV_GEN(local_k_reader, input_k_tile_logical);
+    const auto gathered_k_generator = BLOCK_CYCLIC_KV_GEN(gathered_k_reader, gathered_k_input_tile_logical);
     const auto local_v_reader = TensorAccessor(v_args, v_addr);
     const auto input_v_tile_logical = TensorTileShape(kv_batch_dim, NHV, kv_local_padded_Nt, vDHt);
     const auto gathered_v_reader = TensorAccessor(gathered_v_args, gathered_v_addr);
     const auto gathered_v_input_tile_logical = TensorTileShape(gathered_kv_batch_dim, NHV, gathered_padded_Nt, vDHt);
-    const auto local_v_generator = PaddedAddrGenerator(local_v_reader, input_v_tile_logical);
-    const auto gathered_v_generator = PaddedAddrGenerator(gathered_v_reader, gathered_v_input_tile_logical);
+    const auto local_v_generator = BLOCK_CYCLIC_KV_GEN(local_v_reader, input_v_tile_logical);
+    const auto gathered_v_generator = BLOCK_CYCLIC_KV_GEN(gathered_v_reader, gathered_v_input_tile_logical);
     [[maybe_unused]] const auto v_generators =
         VSourceGenerators<decltype(local_v_generator), decltype(gathered_v_generator)>{
             local_v_generator, gathered_v_generator};

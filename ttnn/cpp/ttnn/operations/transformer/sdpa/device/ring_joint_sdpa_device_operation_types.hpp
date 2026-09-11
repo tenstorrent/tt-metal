@@ -39,6 +39,15 @@ struct RingJointSDPAParams {
     uint32_t kv_cache_num_layers = 1;
     uint32_t kv_cache_layer_idx = 0;
     std::optional<uint32_t> sliding_window_size = std::nullopt;
+    // KV dedup (ag-before): the KV slab's seq dim is BLOCK-CYCLIC over TP, because the TP gather that
+    // rebuilds this SP rank's slab concatenates the shards rank-major (all of rank 0's chunks, then rank
+    // 1's) rather than interleaving them -- which is what lets that gather keep its bank-owned schedule.
+    // The reader decodes it back to natural order while still reading contiguous runs; see
+    // BlockCyclicPaddedAddrGenerator. `stripes` is the chunk count the slab holds and `ranks` the TP
+    // width it was split over; 1/1 = a natural-order slab, addressed bit-identically. Structural (it
+    // changes the reader binary), so both are hashed.
+    uint32_t kv_block_cyclic_stripes = 1;
+    uint32_t kv_block_cyclic_ranks = 1;
 
     // We need a constructor, because all_gather_struct is not default initializable.
     RingJointSDPAParams(
@@ -61,7 +70,9 @@ struct RingJointSDPAParams {
         uint32_t latent_v_head_dim = 0,
         uint32_t kv_cache_num_layers = 1,
         uint32_t kv_cache_layer_idx = 0,
-        std::optional<uint32_t> sliding_window_size = std::nullopt) :
+        std::optional<uint32_t> sliding_window_size = std::nullopt,
+        uint32_t kv_block_cyclic_stripes = 1,
+        uint32_t kv_block_cyclic_ranks = 1) :
         joint_strategy(std::move(joint_strategy)),
         scale(scale),
         is_causal(is_causal),
@@ -81,7 +92,9 @@ struct RingJointSDPAParams {
         latent_v_head_dim(latent_v_head_dim),
         kv_cache_num_layers(kv_cache_num_layers),
         kv_cache_layer_idx(kv_cache_layer_idx),
-        sliding_window_size(sliding_window_size) {}
+        sliding_window_size(sliding_window_size),
+        kv_block_cyclic_stripes(kv_block_cyclic_stripes),
+        kv_block_cyclic_ranks(kv_block_cyclic_ranks) {}
 
     std::uint32_t get_q_chunk_size() const { return program_config.has_value() ? program_config->q_chunk_size : 32; }
 
@@ -109,6 +122,8 @@ struct RingJointSDPAParams {
         "kv_pad_rotation_enabled",
         "latent_v_head_dim",
         "sliding_window_size",
+        "kv_block_cyclic_stripes",
+        "kv_block_cyclic_ranks",
         "all_gather_operation_attributes",
         "all_gather_tensor_args");
     auto attribute_values() const {
@@ -128,6 +143,8 @@ struct RingJointSDPAParams {
             has_kv_pad_rotation(),
             std::cref(latent_v_head_dim),
             std::cref(sliding_window_size),
+            std::cref(kv_block_cyclic_stripes),
+            std::cref(kv_block_cyclic_ranks),
             std::cref(all_gather_operation_attributes),
             std::cref(all_gather_tensor_args));
     }

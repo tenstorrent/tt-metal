@@ -69,6 +69,10 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor = std::nullopt,
     uint32_t kv_cache_num_layers = 1,
     uint32_t kv_cache_layer_idx = 0,
-    std::optional<uint32_t> sliding_window_size = std::nullopt);
+    std::optional<uint32_t> sliding_window_size = std::nullopt,
+    // KV dedup (ag-before): declare the KV slab block-cyclic over TP so the reader decodes it back to
+    // natural order instead of the gather interleaving it. 1/1 = a natural-order slab (default).
+    uint32_t kv_block_cyclic_stripes = 1,
+    uint32_t kv_block_cyclic_ranks = 1);
 
 }  // namespace ttnn::prim

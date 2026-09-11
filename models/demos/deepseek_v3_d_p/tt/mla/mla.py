@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -25,6 +26,20 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat, MlaKvCacheGeometry
 
 # Axis 0 is N/S (mesh rows), axis 1 is E/W (mesh cols) -- the same convention high_bw_all_gather uses.
+
+# Where the TP-deduped KVPE slab gets un-striped, for the KV-dedup (ag-before) dense path.
+#   "gather" (default) -- the gather interleaves the stripes (input_stripe_size), handing ring_mla the
+#                         natural-order slab it always read. Costs the gather its bank-owned schedule and
+#                         its worker tier: measured -30% receive bandwidth at 5.3 MB/link.
+#   "reader"           -- the gather concatenates the shards rank-major, keeping the fast schedule, and
+#                         ring_mla's reader decodes back to natural order. The permutation is contiguous
+#                         at stripe granularity, so the reader still reads whole runs and only jumps at
+#                         stripe boundaries -- same NoC read count, a few extra base addresses per chunk.
+# Both must produce identical attention output; the switch exists to measure where the work is cheaper.
+KV_DEDUP_UNSTRIPE_MODE = os.environ.get("TT_MLA_KV_DEDUP_UNSTRIPE", "gather")
+# "none" is a DIAGNOSTIC: plain gather and no decode, so the slab reaches ring_mla rank-major.
+# Must produce wrong output -- if it does not, the decode is not taking effect.
+assert KV_DEDUP_UNSTRIPE_MODE in ("gather", "reader", "none"), KV_DEDUP_UNSTRIPE_MODE
 # A fabric only wraps the axis its torus flag names (see ccl_common.cpp get_axis_topology).
 _SNAKE_CLOSING_TORUS_CONFIGS = {
     0: (ttnn.FabricConfig.FABRIC_2D_TORUS_Y, ttnn.FabricConfig.FABRIC_2D_TORUS_XY),
@@ -902,6 +917,9 @@ class ttMLA:
         cfg = self._select_cfg(self.sdpa_configs.get(seq_len_local))
         q_chunk_size = cfg["q_chunk_size"] if cfg else 32
         k_chunk_size = cfg["k_chunk_size"] if cfg else 32
+        # TEMP DIAGNOSTIC override -- remove.
+        if os.environ.get("TT_MLA_FORCE_K_CHUNK"):
+            k_chunk_size = int(os.environ["TT_MLA_FORCE_K_CHUNK"])
         return ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.ring_sdpa_compute_grid,
             q_chunk_size=q_chunk_size,
@@ -968,6 +986,19 @@ class ttMLA:
             is_decode_mode=False,
         )
 
+    def _kv_block_cyclic_kwargs(self) -> dict:
+        """ring_mla's view of the KV slab: block-cyclic over TP only in "reader" un-stripe mode.
+
+        Empty otherwise, so the op sees its default 1/1 (natural order) and every non-dedup caller is
+        byte-identical. The stripe extent is derived in the op from the padded slab, so only the stripe
+        and rank COUNTS are passed here."""
+        if KV_DEDUP_UNSTRIPE_MODE != "reader" or not self._kv_dedup:
+            return {}
+        return {
+            "kv_block_cyclic_stripes": self._kv_dedup_chunks,
+            "kv_block_cyclic_ranks": self.tp_factor,
+        }
+
     def _gather_kvpe_tp_to_sp(
         self, kvpe_cache: MlaKvCache, cache_batch_idx: int, seq_len_local: int, populated_global: int
     ) -> ttnn.Tensor:
@@ -1001,7 +1032,9 @@ class ttMLA:
             num_links=self.ccl_num_links,
             cluster_axis=self.tp_axis,
             input_batch_index=cache_batch_idx if storage.shape[0] > 1 else 0,
-            input_stripe_size=rows_dev,
+            # "reader" mode leaves the shards concatenated rank-major so the gather keeps its bank-owned
+            # schedule; ring_mla's reader un-stripes instead (see KV_DEDUP_UNSTRIPE_MODE).
+            **({"input_stripe_size": rows_dev} if KV_DEDUP_UNSTRIPE_MODE == "gather" else {}),
             gathered_dim_size=active_chunks * self.tp_factor * rows_dev,
         )
 
@@ -1120,6 +1153,7 @@ class ttMLA:
             ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
             use_column_major_ccl=True,
             is_balanced=self.is_balanced,
+            **self._kv_block_cyclic_kwargs(),
             **meta_slot_kwargs,
         )
 

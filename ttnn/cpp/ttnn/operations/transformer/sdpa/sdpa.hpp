@@ -154,7 +154,13 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     // on-device as slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx (mirrors
     // update_padded_kv_cache). Resolve to 1/0 when nullopt -> slot = slot_id[0] (existing behavior).
     std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
-    std::optional<uint32_t> kv_cache_layer_idx = std::nullopt);
+    std::optional<uint32_t> kv_cache_layer_idx = std::nullopt,
+    // KV dedup (ag-before): declare the KV slab BLOCK-CYCLIC over TP. The TP gather that rebuilds this SP
+    // rank's slab then concatenates the shards rank-major -- keeping its bank-owned schedule -- and the
+    // reader decodes back to natural order, reading contiguous runs and jumping only at stripe
+    // boundaries. `stripes` is the chunk count the slab holds, `ranks` the TP width. 1/1 = natural order.
+    uint32_t kv_block_cyclic_stripes = 1,
+    uint32_t kv_block_cyclic_ranks = 1);
 
 struct ExecuteExpRingJointAttention {
     static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(
