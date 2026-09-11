@@ -49,7 +49,7 @@ Measured on Wormhole with Metal trace + KV cache + 1CQ
 python models/demos/qwen3_tts/demo/demo_full_ttnn_tts.py \
     --text "Hello, how are you today?" \
     --ref-audio models/demos/qwen3_tts/demo/jim_reference.wav \
-    --ref-text "Jason, can we take a look at the review slides" \
+    --ref-text "So basically you put up the high level overview slides." \
     --output /tmp/tts_output.wav \
     --seed 42
 ```
