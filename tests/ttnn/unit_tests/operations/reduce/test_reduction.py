@@ -368,9 +368,6 @@ def test_var_fp32_large_reduction_translation_stability(device, shape, dim):
 
 
 def test_std_var_fp32_w_l1_replay_respects_occupied_l1(device, enabled_program_cache):
-    if not is_blackhole():
-        pytest.skip("The near-capacity allocation is calibrated for Blackhole L1")
-
     torch.manual_seed(20260731)
     # This FP32 row requires 512 KiB of replay storage.
     torch_input = (torch.randn((1, 1, 32, 4096), dtype=torch.float32) + 1e4).contiguous()
@@ -389,9 +386,17 @@ def test_std_var_fp32_w_l1_replay_respects_occupied_l1(device, enabled_program_c
 
     # Reuse the same operation keys after allocator state changes. Without the
     # occupied-L1 cache discriminator, this resurrects the replay programs.
-    # Occupying 1100 KiB/core leaves room for streaming, but not 512 KiB row replay.
-    grid = device.compute_with_storage_grid_size()
-    pressure_tiles = (1100 * 1024 * grid.x * grid.y + 2047) // 2048
+    # Leave half a replay row free in each bank: enough for streaming and the
+    # interleaved input, but too little for full-row replay on either architecture.
+    memory_view = ttnn.get_memory_view(device, ttnn.BufferType.L1)
+    replay_bytes = torch_input.numel() * torch_input.element_size()
+    remaining_bytes_per_bank = replay_bytes // 2
+    bf16_tile_bytes = 32 * 32 * 2
+    free_bytes_per_bank = memory_view.largest_contiguous_bytes_free_per_bank
+    if free_bytes_per_bank <= replay_bytes:
+        pytest.skip("Initial L1 span is too small to exercise the replay-to-streaming transition")
+    pressure_tiles_per_bank = (free_bytes_per_bank - remaining_bytes_per_bank) // bf16_tile_bytes
+    pressure_tiles = pressure_tiles_per_bank * memory_view.num_banks
     l1_pressure = ttnn.allocate_tensor_on_device(
         ttnn.Shape((1, 1, 32, pressure_tiles * 32)),
         ttnn.bfloat16,
@@ -408,6 +413,10 @@ def test_std_var_fp32_w_l1_replay_respects_occupied_l1(device, enabled_program_c
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
+    free_after_pressure = ttnn.get_memory_view(device, ttnn.BufferType.L1).largest_contiguous_bytes_free_per_bank
+    assert 0 < free_after_pressure < replay_bytes
+    warm_cache_entries = device.num_program_cache_entries()
+
     for torch_op, ttnn_op in ((torch.var, ttnn.var), (torch.std, ttnn.std)):
         reference = torch_op(torch_input.to(torch.float64), dim=-1, keepdim=True, correction=1)
         actual = ttnn.to_torch(ttnn.from_device(ttnn_op(tt_input, dim=-1, keepdim=True, correction=True)))
@@ -415,6 +424,7 @@ def test_std_var_fp32_w_l1_replay_respects_occupied_l1(device, enabled_program_c
         assert torch.isfinite(actual).all()
         assert_numeric_metrics(reference, actual, rtol=1e-3, atol=1e-3, frobenius_threshold=2e-3, check_pcc=False)
 
+    assert device.num_program_cache_entries() > warm_cache_entries
     assert l1_pressure.is_allocated()
 
 
