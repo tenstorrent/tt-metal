@@ -32,8 +32,7 @@ static inline uint32_t gddr_mc_read_mpfe_weight(uint32_t port) {
 static inline void gddr_mc_write_mpfe_weight(uint32_t port, uint32_t weight) {
     volatile uint32_t* reg = reinterpret_cast<volatile uint32_t*>(gddr_mc_mpfe_weight_reg_addr(port));
     const uint32_t current = *reg;
-    *reg = (current & ~GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_MASK) |
-           (weight & GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_MASK);
+    *reg = (current & ~GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_MASK) | (weight & GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_MASK);
 }
 
 #endif  // COMPILE_FOR_DRISC

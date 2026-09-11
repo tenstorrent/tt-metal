@@ -307,8 +307,7 @@ void kernel_main() {
             set_mpfe_weight(own_mpfe_port, GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT);
             if (is_coordinator) {
                 noc_semaphore_wait(shutdown_semaphore, 1);
-                set_mpfe_weight(
-                    ordinary_operation_mpfe_port, GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT);
+                set_mpfe_weight(ordinary_operation_mpfe_port, GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT);
                 ASSERT(
                     gddr_mc_read_mpfe_weight(1) == GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT &&
                         gddr_mc_read_mpfe_weight(2) == GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT &&
