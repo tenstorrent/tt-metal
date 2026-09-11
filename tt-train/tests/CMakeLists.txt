@@ -38,6 +38,7 @@ set(SOURCES
     optimizers/muon_composite_test.cpp
     ops/cyclic_schedule_test.cpp
     ops/cyclic_schedule_device_test.cpp
+    ops/cyclic_transport_device_test.cpp
     ops/newton_schulz_op_test.cpp
     ops/frobenius_normalize_test.cpp
     ops/k_split_gram_matmul_op_test.cpp
