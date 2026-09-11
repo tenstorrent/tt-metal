@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <cstdlib>
 
 #include "api/dataflow/dataflow_api.h"
@@ -78,10 +79,15 @@ void kernel_main() {
 #endif
 
         uint32_t noc_offfset = tile_idx * TILE_WIDTH * element_size;
+        // A ROW_MAJOR buffer is exactly as long as its data (no tile padding in the
+        // last dim), so the final chunk must be clamped to the page: the fixed
+        // TILE_WIDTH-sized chunk would otherwise write past the end of the output
+        // buffer into whatever tensor is allocated next in DRAM.
+        uint32_t chunk_bytes = std::min(num_bytes_per_tile, s0.get_aligned_page_size() - noc_offfset);
         noc.async_write(
             use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_out_obj),
             s0,
-            num_bytes_per_tile,
+            chunk_bytes,
             {.offset_bytes = 0},
             {.page_id = 0, .offset_bytes = noc_offfset});
         noc.async_write_barrier();
