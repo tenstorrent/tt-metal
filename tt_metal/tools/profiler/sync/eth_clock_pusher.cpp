@@ -32,6 +32,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "internal/ethernet/eth_ptp_clock.hpp"
 
 constexpr uint32_t kStrideTicks = get_compile_time_arg_val(0);       // refclk ticks between samples (50/us)
 constexpr uint32_t kSocketConfigAddr = get_compile_time_arg_val(1);  // D2HSocket config in this core's L1
@@ -42,10 +43,6 @@ constexpr uint32_t kMyXy = get_compile_time_arg_val(4);              // y << 16 
 // separate from the frame slot, which is sized for the packed payload alone.
 constexpr uint32_t kScratchAddr = get_compile_time_arg_val(5);
 
-constexpr uint32_t kWallClockL = 0xFFB121F0;
-constexpr uint32_t kWallClockH = 0xFFB121F8;
-constexpr uint32_t kRefclkLoAddr = 0xFFB98850;
-constexpr uint32_t kRefclkHiAddr = 0xFFB98854;
 
 namespace kp = kernel_profiler;
 
@@ -67,16 +64,7 @@ constexpr uint32_t kShipWords = kRingWords / 4u;
 constexpr uint32_t kMaxDeferStrides = 333;
 constexpr uint32_t kMaxLinked = 16;  // BH has 14 eth cores
 
-// Reading the refclk (PTP CFR timer) LO latches its HI as well.
-inline __attribute__((always_inline)) void read_refclk(uint32_t& hi, uint32_t& lo) {
-    lo = *reinterpret_cast<volatile uint32_t*>(kRefclkLoAddr);
-    hi = *reinterpret_cast<volatile uint32_t*>(kRefclkHiAddr);
-}
-inline __attribute__((always_inline)) uint64_t refclk64() {
-    uint32_t hi, lo;
-    read_refclk(hi, lo);
-    return (static_cast<uint64_t>(hi) << 32) | lo;
-}
+inline __attribute__((always_inline)) uint64_t refclk64() { return tt::tt_metal::eth_ptp::read_cfr(); }
 
 #if defined(PROFILE_KERNEL)
 
@@ -100,10 +88,11 @@ struct Sample {
 };
 inline __attribute__((always_inline)) Sample take_sample() {
     Sample s;
-    s.wlo = *reinterpret_cast<volatile uint32_t*>(kWallClockL);
-    s.rlo = *reinterpret_cast<volatile uint32_t*>(kRefclkLoAddr);
-    s.whi = *reinterpret_cast<volatile uint32_t*>(kWallClockH);
-    s.rhi = *reinterpret_cast<volatile uint32_t*>(kRefclkHiAddr);
+    const tt::tt_metal::eth_ptp::Instant t = tt::tt_metal::eth_ptp::read_instant();
+    s.wlo = t.wall_lo;
+    s.whi = t.wall_hi;
+    s.rlo = static_cast<uint32_t>(t.refclk);
+    s.rhi = static_cast<uint32_t>(t.refclk >> 32);
     return s;
 }
 // The wall clock is the packet's own timestamp (low half here, high half from the sticky timer); the refclk goes

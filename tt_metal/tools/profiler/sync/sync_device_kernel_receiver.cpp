@@ -10,6 +10,7 @@
 
 #if defined(PROFILE_KERNEL) && defined(PROFILE_STREAMING)
 #include "tools/profiler/kernel_profiler.hpp"
+#include "internal/ethernet/eth_ptp.hpp"
 static constexpr uint32_t kRoleT0 = kernel_profiler::ppfmt::CLOCK_ROLE_T0,
                           kRoleT1 = kernel_profiler::ppfmt::CLOCK_ROLE_T1,
                           kRoleT1B = kernel_profiler::ppfmt::CLOCK_ROLE_T1B,
@@ -22,39 +23,19 @@ static constexpr uint32_t kRoleT0 = kernel_profiler::ppfmt::CLOCK_ROLE_T0,
 // Room for n words in this core's SPSC ring, non-blocking. The burst runs during bring-up before the host
 // receiver drains, so the pusher cannot free the ring mid-burst and a blocking reserve would deadlock the
 // pair; a round a side has no room for is one the host never completes, and nothing behind it shifts.
-FORCE_INLINE uint64_t link_refclk64() {
-    volatile uint32_t* lop = reinterpret_cast<volatile uint32_t*>(0xFFB98850);
-    volatile uint32_t* hip = reinterpret_cast<volatile uint32_t*>(0xFFB98854);
-    const uint32_t h1 = *hip;
-    uint32_t l = *lop;
-    const uint32_t h2 = *hip;
-    if (h1 != h2) {
-        l = *lop;
-    }
-    return (static_cast<uint64_t>(h2) << 32) | l;
-}
 FORCE_INLINE bool link_clock_room(uint32_t n) {
     invalidate_l1_cache();
     return (kernel_profiler::wIndex - kernel_profiler::profiler_control_buffer[kernel_profiler::HEAD_INDEX]) <=
            (kernel_profiler::RING_USABLE - n);
 }
 // A software stamp is taken in two steps so nothing but the clock reads sits at the instant: read, then record.
-struct LinkInstant {
-    uint32_t wlo, whi;
-    uint64_t refclk;
-};
-FORCE_INLINE LinkInstant link_clock_read() {
-    LinkInstant t;
-    t.wlo = *reinterpret_cast<volatile uint32_t*>(0xFFB121F0);  // reading L latches H: L first
-    t.whi = *reinterpret_cast<volatile uint32_t*>(0xFFB121F8);
-    t.refclk = link_refclk64();
-    return t;
-}
+using LinkInstant = tt::tt_metal::eth_ptp::Instant;
+FORCE_INLINE LinkInstant link_clock_read() { return tt::tt_metal::eth_ptp::read_instant(); }
 FORCE_INLINE void link_clock_record(const LinkInstant& t, uint32_t round, uint32_t role) {
-    kernel_profiler::ring_write_sticky_timer(t.whi);
+    kernel_profiler::ring_write_sticky_timer(t.wall_hi);
     kernel_profiler::ring_write_word(
         kernel_profiler::ppfmt::clock_w0(kernel_profiler::ppfmt::CLOCK_LINK_REFCLK, t.refclk));
-    kernel_profiler::ring_write_word(t.wlo);
+    kernel_profiler::ring_write_word(t.wall_lo);
     kernel_profiler::ring_write_word(kernel_profiler::ppfmt::clock_w2(t.refclk));
     kernel_profiler::ring_write_word(kernel_profiler::ppfmt::clock_w3(round, role));
     kernel_profiler::publish_tail();
@@ -63,13 +44,13 @@ FORCE_INLINE void link_clock_stamp(uint32_t round, uint32_t role) { link_clock_r
 #if defined(D2D_HW_TS)
 #define LINK_HW 1
 #include "tools/profiler/sync/eth_ptp_link.hpp"
-static tt::tt_metal::eth_ptp::LinkHwState g_hw;
+static tt::tt_metal::eth_ptp::LinkSession g_hw;
+static uint32_t g_trip = 0;  // the MAC FIFO tag of the next stamped frame
 FORCE_INLINE void link_hw_record(uint32_t round, uint32_t role, uint64_t value) {
-    const uint32_t wlo = *reinterpret_cast<volatile uint32_t*>(0xFFB121F0);  // reading L latches H: L first
-    const uint32_t whi = *reinterpret_cast<volatile uint32_t*>(0xFFB121F8);
-    kernel_profiler::ring_write_sticky_timer(whi);
+    const LinkInstant t = link_clock_read();
+    kernel_profiler::ring_write_sticky_timer(t.wall_hi);
     kernel_profiler::ring_write_word(kernel_profiler::ppfmt::clock_w0(kernel_profiler::ppfmt::CLOCK_LINK_PTP, value));
-    kernel_profiler::ring_write_word(wlo);
+    kernel_profiler::ring_write_word(t.wall_lo);
     kernel_profiler::ring_write_word(kernel_profiler::ppfmt::clock_w2(value));
     kernel_profiler::ring_write_word(kernel_profiler::ppfmt::clock_w3(round, role));
     kernel_profiler::publish_tail();
@@ -120,7 +101,7 @@ FORCE_INLINE bool run_loop_iteration(
         static bool round_ok = true, round_emit = false;
         static LinkInstant sw_t1{}, sw_t1b{};
         volatile tt_l1_ptr uint32_t* hw_stopw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(g_stop_addr);
-        tt::tt_metal::eth_ptp::LinkHwRx rx;
+        tt::tt_metal::eth_ptp::RxStamps rx;
         while (channel_sync_addrs[0]->bytes_sent == 0 && *hw_stopw == 0) {
             invalidate_l1_cache();
         }
@@ -131,16 +112,16 @@ FORCE_INLINE bool run_loop_iteration(
             sw_t1 = link_clock_read();
             round = channel_sync_addrs[0]->reserved_2;
             round_emit = link_clock_room(20);
-            round_ok = true;
+            round_ok = g_hw.timer_ok;
             sum_t1 = 0;
             sum_t1b = 0;
         }
-        const uint64_t t1h = tt::tt_metal::eth_ptp::link_hw_rx_take(rx);
+        const uint64_t t1h = rx.take<tt::tt_metal::eth_ptp::LinkSession>();
         channel_sync_addrs[0]->bytes_sent = 0;
         channel_sync_addrs[0]->receiver_ack = 0;
         const uint32_t sync_addr = reinterpret_cast<uint32_t>(channel_sync_addrs[0]);
-        const uint64_t t1bh = tt::tt_metal::eth_ptp::link_hw_send(
-            0x5200'0000'0000'0000ull | g_hw.round, sync_addr, sync_addr, sizeof(eth_channel_sync_t) >> 4, [&] {
+        const uint64_t t1bh = tt::tt_metal::eth_ptp::send_and_stamp(
+            g_hw, 0x5200'0000'0000'0000ull | g_trip++, sync_addr, sync_addr, sizeof(eth_channel_sync_t) >> 4, [&] {
                 if (trip == 0) {
                     sw_t1b = link_clock_read();
                 }
@@ -152,7 +133,6 @@ FORCE_INLINE bool run_loop_iteration(
         round_ok = round_ok && t1h != 0 && t1bh != 0;
         sum_t1 += static_cast<int64_t>(t1h);
         sum_t1b += static_cast<int64_t>(t1bh);
-        g_hw.round++;
         if (++trip == tt::tt_metal::eth_ptp::kTripsPerRound) {
             trip = 0;
             if (round_emit && round_ok) {
@@ -266,7 +246,7 @@ void kernel_main() {
     }
 
 #if defined(LINK_HW)
-    tt::tt_metal::eth_ptp::link_hw_begin(g_hw);
+    g_hw.begin();
 #endif
     eth_setup_handshake(HANDSHAKE_ADDR, false);
 
@@ -280,7 +260,7 @@ void kernel_main() {
         }
     }
 #if defined(LINK_HW)
-    tt::tt_metal::eth_ptp::link_hw_end(g_hw);
+    g_hw.end();
 #endif
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(g_stop_addr + 4) = 1;  // done, host polls this
 #else
