@@ -27,13 +27,16 @@ from loguru import logger
 
 import ttnn
 
-from ...tests.test_factory import parametrize_mesh_with_fabric
+from ...tests.test_factory import parametrize_mesh_with_fabric, with_l1_small
 
 ASSISTANT_PATH = os.getenv("GEMMA4_ASSISTANT_MODEL")
 _needs_assistant = pytest.mark.skipif(not ASSISTANT_PATH, reason="set GEMMA4_ASSISTANT_MODEL to run")
 _assistant_probe = pytest.mark.skipif(
     os.environ.get("GEMMA4_RUN_ASSISTANT_PROBES", "0") != "1",
     reason="assistant diagnostic/perf probe; set GEMMA4_RUN_ASSISTANT_PROBES=1 to run",
+)
+_FABRIC_TRACE_DEVICE_PARAMS = with_l1_small(
+    {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}
 )
 
 
@@ -1991,7 +1994,7 @@ def test_spec_decode_sampling_acceptance(mesh_device, reset_seeds):
 @_needs_assistant
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
+    [pytest.param((1, 4), _FABRIC_TRACE_DEVICE_PARAMS, id="1x4")],
     indirect=True,
 )
 def test_spec_decode_traced(mesh_device, reset_seeds):
@@ -2100,7 +2103,7 @@ def test_spec_decode_traced(mesh_device, reset_seeds):
 @_assistant_probe
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
+    [pytest.param((1, 4), _FABRIC_TRACE_DEVICE_PARAMS, id="1x4")],
     indirect=True,
 )
 def test_verify_trace_batched_capture(mesh_device, reset_seeds):
@@ -2234,7 +2237,7 @@ def test_verify_trace_batched_capture(mesh_device, reset_seeds):
 @_assistant_probe
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
+    [pytest.param((1, 4), _FABRIC_TRACE_DEVICE_PARAMS, id="1x4")],
     indirect=True,
 )
 def test_ondevice_argmax_probe(mesh_device, reset_seeds):
@@ -2363,7 +2366,7 @@ def test_ondevice_argmax_probe(mesh_device, reset_seeds):
 @_assistant_probe
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
+    [pytest.param((1, 4), _FABRIC_TRACE_DEVICE_PARAMS, id="1x4")],
     indirect=True,
 )
 def test_fused_iter_eager(mesh_device, reset_seeds):
@@ -2455,7 +2458,7 @@ def test_fused_iter_eager(mesh_device, reset_seeds):
 @_assistant_probe
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
+    [pytest.param((1, 4), _FABRIC_TRACE_DEVICE_PARAMS, id="1x4")],
     indirect=True,
 )
 def test_fused_loop_eager(mesh_device, reset_seeds):
@@ -2557,7 +2560,7 @@ def test_fused_loop_eager(mesh_device, reset_seeds):
 @_assistant_probe
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
+    [pytest.param((1, 4), _FABRIC_TRACE_DEVICE_PARAMS, id="1x4")],
     indirect=True,
 )
 def test_fused_loop_traced(mesh_device, reset_seeds):
@@ -2658,7 +2661,7 @@ def test_fused_loop_traced(mesh_device, reset_seeds):
 @_assistant_probe
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
+    [pytest.param((1, 4), _FABRIC_TRACE_DEVICE_PARAMS, id="1x4")],
     indirect=True,
 )
 def test_fused_trace_minimal(mesh_device, reset_seeds):
@@ -2740,7 +2743,7 @@ def test_fused_trace_minimal(mesh_device, reset_seeds):
 @_assistant_probe
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
+    [pytest.param((1, 4), _FABRIC_TRACE_DEVICE_PARAMS, id="1x4")],
     indirect=True,
 )
 def test_verify_seqkv_cost(mesh_device, reset_seeds):
@@ -2854,7 +2857,7 @@ def test_verify_seqkv_cost(mesh_device, reset_seeds):
 @_assistant_probe
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
+    [pytest.param((1, 4), _FABRIC_TRACE_DEVICE_PARAMS, id="1x4")],
     indirect=True,
 )
 def test_draft_step_breakdown(mesh_device, reset_seeds):
@@ -2961,7 +2964,7 @@ def test_draft_step_breakdown(mesh_device, reset_seeds):
 @_assistant_probe
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
+    [pytest.param((1, 4), _FABRIC_TRACE_DEVICE_PARAMS, id="1x4")],
     indirect=True,
 )
 def test_argmax_cost(mesh_device, reset_seeds):
@@ -3094,7 +3097,7 @@ def test_argmax_cost(mesh_device, reset_seeds):
 @_needs_assistant
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}, id="1x4")],
+    [pytest.param((1, 4), _FABRIC_TRACE_DEVICE_PARAMS, id="1x4")],
     indirect=True,
 )
 def test_spec_decode_batched(mesh_device, reset_seeds):
