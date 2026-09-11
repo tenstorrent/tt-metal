@@ -20,7 +20,11 @@ from ttnn.device import is_blackhole
 import ttnn
 from models.common.utility_functions import comp_pcc, hf_cache_layer_kv
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric2d_device_params,
+    torus_xy_device_params,
+    torus_y_device_params,
+)
 from models.demos.deepseek_v3_d_p.tests.reference_runners import run_reference_mla
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers, resolve_has_indexer
@@ -1400,6 +1404,30 @@ def test_mla_chunked_prefill(
         use_metadata_tensor=use_metadata_tensor,
         determinism_check=determinism_check,
         **kwargs,
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(8, 1)], ids=["8x1"], indirect=True)
+@pytest.mark.parametrize("device_params", [torus_y_device_params(l1_small_size=1152)], ids=["torus-y"], indirect=True)
+@pytest.mark.parametrize("variant", ["mistral_small_4"], ids=["mistral4"], indirect=True)
+@pytest.mark.skipif(not is_blackhole(), reason="Mistral Small 4 LoudBox perf targets Blackhole")
+@pytest.mark.timeout(0)
+def test_mistral4_mla_chunked_prefill_loudbox(request, mesh_device, device_params, variant):
+    """One functional 50k-prefix + 5k-chunk MLA forward at the PP4 stage shape.
+
+    Prefix preparation is outside MLA_START/MLA_END. Scalar metadata and determinism checks are
+    pinned so the perf wrapper measures exactly one forward. Use an eight-device LoudBox or a
+    Galaxy column exposed with TT_VISIBLE_DEVICES; the fixture requires eight visible devices.
+    """
+    _run_chunked_prefill(
+        request,
+        mesh_device,
+        reference=None,
+        topology=per_axis_topology(device_params["fabric_config"]),
+        use_metadata_tensor=False,
+        determinism_check=False,
+        iters_isl=[5120],
+        prefill_len=50 * 1024,
     )
 
 
