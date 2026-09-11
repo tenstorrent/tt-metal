@@ -1,6 +1,14 @@
 version: 1
 description: Centralized trace region sizes (bytes) for models CI.
 sizes:
+  llama3.1-8b-qb2:
+    skus:
+      p300x2:
+        trace_region_size: 268435456
+  llama3.1-8b-qb2-decoder:
+    skus:
+      p300x2:
+        trace_region_size: 16000000
   llama3.1-8b:
     aliases: ["Llama-3.1-8B", "meta-llama/Llama-3.1-8B-Instruct"]
     skus:

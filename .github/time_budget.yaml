@@ -332,6 +332,9 @@ llk:
     sim_quasar_xl: 180
 
 models:
+  # Agentic Research Model Tests: Saturday 07:00 UTC, independent of daily model tiers.
+  agentic_research_tier3:
+    bh_quietbox_2: 12
   merge_gate:
     wh_galaxy_merge_gate: 5
   sanity:
@@ -383,7 +386,7 @@ models:
   unit_tier2:
     wh_llmbox: 114
     wh_llmbox_perf: 191
-    wh_n150: 82
+    wh_n150: 87
     wh_n300: 30
     wh_galaxy_perf: 80
     bh_p150: 20
