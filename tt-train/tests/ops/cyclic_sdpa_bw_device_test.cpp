@@ -50,6 +50,12 @@ constexpr const char* kReaderPath =
 constexpr const char* kComputePath =
     "tt-train/sources/ttml/metal/ops/cyclic_sdpa_bw/device/kernels/compute/"
     "cyclic_sdpa_bw_compute.cpp";
+constexpr const char* kRelayReaderPath =
+    "tt-train/sources/ttml/metal/ops/cyclic_sdpa_bw/device/kernels/dataflow/"
+    "cyclic_sdpa_bw_relay_reader.cpp";
+constexpr const char* kRelayWriterPath =
+    "tt-train/sources/ttml/metal/ops/cyclic_sdpa_bw/device/kernels/dataflow/"
+    "cyclic_sdpa_bw_relay_writer.cpp";
 constexpr const char* kWriterPath =
     "tt-train/sources/ttml/metal/ops/cyclic_sdpa_bw/device/kernels/dataflow/"
     "cyclic_sdpa_bw_writer.cpp";
@@ -301,6 +307,165 @@ Gradients run_algorithm2(uint32_t C, const Reference& ref, uint32_t grid_w, uint
     return out;
 }
 
+// Algorithm 3: the row packet stays in L1 across an active streak and is
+// forwarded to the next consumer, instead of being reloaded from DRAM every
+// timestep. The compute kernel is the same one Algorithm 2 uses -- only where
+// its operands come from changes -- and the answer has to be the same
+// gradients.
+//
+// The paper's two receive slots are the compute kernel's input buffers with
+// room for two packets, so the circular-buffer protocol carries the credits
+// and readiness. A producer writes into the receiver's slot at
+// base + (u mod 2) * stride, which is where the receiver's write pointer
+// stands after u pushes; every core has the same layout, so a producer can
+// use its own base as the receiver's.
+Gradients run_relay(uint32_t C, const Reference& ref, uint32_t grid_w, uint32_t grid_h) {
+    using namespace tt::tt_metal;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    const uint32_t qWt = ref.d / kTile;
+    const uint32_t vWt = ref.d / kTile;
+
+    const auto query = ttml::core::from_xtensor(as_4d(ref.Q), device);
+    const auto key = ttml::core::from_xtensor(as_4d(ref.K), device);
+    const auto value = ttml::core::from_xtensor(as_4d(ref.V), device);
+    const auto grad_output = ttml::core::from_xtensor(as_4d(ref.dO), device);
+    const auto lse = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(ref.lse_tile, device);
+    const auto u_scalar = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(ref.u_tile, device);
+
+    const xt::xarray<float> zeros = xt::zeros<float>({1u, 1u, ref.N, ref.d});
+    const auto grad_query = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(zeros, device);
+    const auto grad_key = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(zeros, device);
+    const auto grad_value = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(zeros, device);
+
+    auto program = CreateProgram();
+    const auto region = CoreRange(CoreCoord{0, 0}, CoreCoord{grid_w - 1, grid_h - 1});
+
+    const uint32_t bf16_tile = 2 * kTile * kTile;
+    const uint32_t fp32_tile = 4 * kTile * kTile;
+    const auto make_cb = [&](uint32_t index, uint32_t tiles, tt::DataFormat format) {
+        const uint32_t page = (format == tt::DataFormat::Float32) ? fp32_tile : bf16_tile;
+        CreateCircularBuffer(
+            program, region,
+            CircularBufferConfig(tiles * page, {{index, format}}).set_page_size(index, page));
+    };
+    // The packet buffers hold two slots; everything else holds one.
+    make_cb(tt::CBIndex::c_0, 2 * qWt, tt::DataFormat::Float16_b);  // Q_i
+    make_cb(tt::CBIndex::c_3, 2 * vWt, tt::DataFormat::Float16_b);  // dO_i
+    make_cb(tt::CBIndex::c_4, 2, tt::DataFormat::Float32);          // L_i
+    make_cb(tt::CBIndex::c_5, 2, tt::DataFormat::Float32);          // D_i
+    make_cb(tt::CBIndex::c_15, 2 * qWt, tt::DataFormat::Float32);   // dQ_i, travels along
+    make_cb(tt::CBIndex::c_1, qWt, tt::DataFormat::Float16_b);      // K_j
+    make_cb(tt::CBIndex::c_2, vWt, tt::DataFormat::Float16_b);      // V_j
+    make_cb(tt::CBIndex::c_6, 1, tt::DataFormat::Float16_b);        // causal mask
+    make_cb(tt::CBIndex::c_10, 1, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_11, 1, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_12, 1, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_13, 1, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_14, 1, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_16, qWt, tt::DataFormat::Float32);  // dQ accumulator
+    make_cb(tt::CBIndex::c_17, qWt, tt::DataFormat::Float32);  // dQ to the relay
+    make_cb(tt::CBIndex::c_18, qWt, tt::DataFormat::Float32);  // dK seed
+    make_cb(tt::CBIndex::c_19, qWt, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_20, qWt, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_21, vWt, tt::DataFormat::Float32);  // dV seed
+    make_cb(tt::CBIndex::c_22, vWt, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_23, vWt, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_24, 1, tt::DataFormat::Float32);  // readiness word
+    make_cb(tt::CBIndex::c_25, 1, tt::DataFormat::Float32);  // release word
+
+    const uint32_t arrive_sem = CreateSemaphore(program, region, 0);
+    const uint32_t release_sem = CreateSemaphore(program, region, 0);
+    const uint32_t ready0_sem = CreateSemaphore(program, region, 0);
+    const uint32_t ready1_sem = CreateSemaphore(program, region, 0);
+    const uint32_t credit_prev_sem = CreateSemaphore(program, region, 0);
+    const uint32_t credit_next_sem = CreateSemaphore(program, region, 0);
+    const uint32_t credit_self_sem = CreateSemaphore(program, region, 0);
+
+    std::vector<uint32_t> reader_args = {
+        C, qWt, vWt, release_sem, ready0_sem, ready1_sem,
+        credit_prev_sem, credit_next_sem, credit_self_sem};
+    for (const auto* t : {&query, &key, &value, &grad_output, &lse, &u_scalar, &grad_query,
+                          &grad_key, &grad_value}) {
+        tt::tt_metal::TensorAccessorArgs(*t->buffer()).append_to(reader_args);
+    }
+    const auto reader = CreateKernel(
+        program, kRelayReaderPath, region,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = reader_args});
+
+    std::vector<uint32_t> writer_args = {C, qWt, vWt, arrive_sem, release_sem};
+    for (const auto* t : {&grad_key, &grad_value}) {
+        tt::tt_metal::TensorAccessorArgs(*t->buffer()).append_to(writer_args);
+    }
+    const auto writer = CreateKernel(
+        program, kRelayWriterPath, region,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = writer_args});
+
+    const uint32_t scaler = std::bit_cast<uint32_t>(1.0F / std::sqrt(static_cast<float>(ref.d)));
+    const uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);
+    const uint32_t custom_inf = std::bit_cast<uint32_t>(tt::tt_metal::hal::get_inf());
+    std::vector<UnpackToDestMode> unpack_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    unpack_mode[tt::CBIndex::c_10] = UnpackToDestMode::UnpackToDestFp32;
+    const auto compute = CreateKernel(
+        program, kComputePath, region,
+        ComputeConfig{
+            .fp32_dest_acc_en = true,
+            .unpack_to_dest_mode = unpack_mode,
+            .compile_args = {C, qWt, vWt, scaler, minus_one, custom_inf, 1u}});
+
+    const auto coordinator_logical = placement_of(C, grid_w, 1);
+    const auto coordinator = device->worker_core_from_logical_core(
+        CoreCoord{coordinator_logical.x, coordinator_logical.y});
+    const auto mcast_start = device->worker_core_from_logical_core(CoreCoord{0, 0});
+    const auto mcast_end =
+        device->worker_core_from_logical_core(CoreCoord{grid_w - 1, grid_h - 1});
+
+    const auto noc_of_core = [&](uint32_t core) {
+        const auto xy = placement_of(C, grid_w, core);
+        return device->worker_core_from_logical_core(CoreCoord{xy.x, xy.y});
+    };
+
+    for (uint32_t c = 1; c <= C; ++c) {
+        const auto xy = placement_of(C, grid_w, c);
+        const auto core = CoreCoord{xy.x, xy.y};
+        const auto neighbors = snake_neighbors(C, c);
+        const auto prev = noc_of_core(neighbors.prev != kNoCore ? neighbors.prev : c);
+        const auto next = noc_of_core(neighbors.next != kNoCore ? neighbors.next : c);
+        SetRuntimeArgs(
+            program, reader, core,
+            {c, query.buffer()->address(), key.buffer()->address(), value.buffer()->address(),
+             grad_output.buffer()->address(), lse.buffer()->address(), u_scalar.buffer()->address(),
+             grad_query.buffer()->address(), grad_key.buffer()->address(),
+             grad_value.buffer()->address(), static_cast<uint32_t>(prev.x),
+             static_cast<uint32_t>(prev.y), static_cast<uint32_t>(next.x),
+             static_cast<uint32_t>(next.y)});
+        SetRuntimeArgs(
+            program, writer, core,
+            {c, grad_key.buffer()->address(), grad_value.buffer()->address(),
+             static_cast<uint32_t>(coordinator.x), static_cast<uint32_t>(coordinator.y),
+             static_cast<uint32_t>(mcast_start.x), static_cast<uint32_t>(mcast_start.y),
+             static_cast<uint32_t>(mcast_end.x), static_cast<uint32_t>(mcast_end.y),
+             c == 1u ? 1u : 0u});
+        SetRuntimeArgs(program, compute, core, {c});
+    }
+
+    auto workload = tt_dist::MeshWorkload();
+    workload.add_program(tt_dist::MeshCoordinateRange(device->shape()), std::move(program));
+    tt_dist::EnqueueMeshWorkload(device->mesh_command_queue(), workload, /*blocking=*/true);
+
+    Gradients out;
+    out.dQ = ttml::core::to_xtensor(grad_query);
+    out.dK = ttml::core::to_xtensor(grad_key);
+    out.dV = ttml::core::to_xtensor(grad_value);
+    return out;
+}
+
 void expect_close(
     const xt::xarray<float>& got,
     const xt::xarray<float>& want,
@@ -343,6 +508,19 @@ void check_algorithm2(uint32_t C, uint32_t grid_w, uint32_t grid_h, uint32_t d =
     expect_close(got.dV, ref.dV, 0.06F, "dV");
 }
 
+void check_relay(uint32_t C, uint32_t grid_w, uint32_t grid_h, uint32_t d = 64) {
+    const auto grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
+    if (grid_w > grid.x || grid_h > grid.y) {
+        GTEST_SKIP() << "needs " << grid_w << "x" << grid_h;
+    }
+    const uint32_t N = 2u * C * kTile;
+    const auto ref = make_reference(N, d);
+    const auto got = run_relay(C, ref, grid_w, grid_h);
+    expect_close(got.dQ, ref.dQ, 0.06F, "dQ");
+    expect_close(got.dK, ref.dK, 0.06F, "dK");
+    expect_close(got.dV, ref.dV, 0.06F, "dV");
+}
+
 }  // namespace
 
 // One core, three block pairs: (2,1), (2,2), (1,1). The whole causal set for
@@ -375,4 +553,24 @@ TEST(CyclicSdpaBwAlgorithm2Test, SixteenCores) {
 // A wider head dimension, so every matmul runs over four inner tiles.
 TEST(CyclicSdpaBwAlgorithm2Test, FourCoresWiderHead) {
     check_algorithm2(4, 2, 2, /*d=*/128);
+}
+
+// ----------------------------------------------------- Algorithm 3: relay
+// At C = 1 every forward is the self-transition -- core 1 handing the packet
+// from one of its own slots to the other -- so this exercises the slot
+// lifetimes and the readiness tags with no NoC traffic at all.
+TEST(CyclicSdpaBwRelayTest, OneCoreSelfTransitionOnly) {
+    check_relay(1, 1, 1);
+}
+
+TEST(CyclicSdpaBwRelayTest, TwoCores) {
+    check_relay(2, 1, 2);
+}
+
+TEST(CyclicSdpaBwRelayTest, FourCores) {
+    check_relay(4, 2, 2);
+}
+
+TEST(CyclicSdpaBwRelayTest, EightCores) {
+    check_relay(8, 4, 2);
 }
