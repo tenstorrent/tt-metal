@@ -80,9 +80,12 @@ tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailbo
 
 #ifdef FDS_WORKER_DONE
 constexpr uint32_t fds_go_group_id = 1;
+constexpr uint32_t fds_num_dispatch_lanes = 3;
+constexpr uint32_t fds_dispatch_lane_mask = (uint32_t{1} << fds_num_dispatch_lanes) - 1;
+constexpr uint32_t fds_filter_length = 8;
 
 __attribute__((interrupt)) void fds_go_interrupt_handler() {
-    const uint32_t claimed_source = overlay::quasar::plic_claim(0);
+    const uint32_t claimed_source = overlay::quasar::plic_claim();
     if (claimed_source == 0) {
         return;
     }
@@ -97,7 +100,7 @@ __attribute__((interrupt)) void fds_go_interrupt_handler() {
 
     // Clear the FDS lanes and read them back before completing the claim so the live level cannot re-pend it.
     (void)overlay::fds_signalling::worker_read_group_status(group_id);
-    overlay::quasar::plic_complete(0, claimed_source);
+    overlay::quasar::plic_complete(claimed_source);
 
     if (group_id == fds_go_group_id && mailboxes->go_message_index == 0) {
         mailboxes->go_messages[0].signal = RUN_MSG_GO;
@@ -176,18 +179,12 @@ overlay::RemapperAPI g_remapper_configurator __attribute__((used));
 volatile TxnDFBDescriptor g_txn_dfb_descriptor[32] __attribute__((used));
 volatile KernelBarrier g_kernel_barrier[NUM_KERNEL_BARRIERS] __attribute__((used));
 
-void device_setup(uint32_t hardware_thread_id) {
+void device_setup() {
     // instn_buf
     // pc_buf
     // clock gating
     set_deassert_addresses();
     setup_isr_csrs();
-#ifdef FDS_WORKER_DONE
-    if (hardware_thread_id == 0) {
-        register_handler_for_interrupt(MACHINE_EXTERNAL_INTERRUPT_OFFSET, fds_go_interrupt_handler);
-        invalidate_l1_icache();
-    }
-#endif
     // invalidate_l1_cache
     // clear_destination_registers
     // set_default_sfpu_constant_register_state
@@ -299,6 +296,26 @@ inline void wait_for_tile_noc_traffic() {
 }
 #endif
 
+// Publishes RUN_MSG_DONE and tells the dispatcher. worker_completion_group is the FDS group for this
+// round, or 0 when the round is on the NOC.
+inline void signal_dispatch_core_done(uint32_t go_message_index, uint32_t worker_completion_group) {
+#ifdef FDS_WORKER_DONE
+    if (worker_completion_group != 0) {
+        // FDS does not share the NOC's ordering, so all tile traffic must leave the NIU before completion.
+        wait_for_tile_noc_traffic();
+        mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
+        overlay::fds_signalling::worker_signal_done(worker_completion_group);
+        return;
+    }
+#endif
+    mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
+    // calculate_dispatch_addr reads master_x, master_y and dispatch_message_offset, which the store above
+    // leaves untouched.
+    const uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
+    DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
+    notify_dispatch_core_done(dispatch_addr, noc_index);
+}
+
 extern "C" uint32_t _start1() {
     configure_csr();
     // Raw read: hw_thread_idx has not been filled yet, and do_thread_crt1() below zeroes the .tbss
@@ -341,7 +358,7 @@ extern "C" uint32_t _start1() {
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
 
-    device_setup(hartid);
+    device_setup();
     if (hartid > 0) {
         signal_subordinate_completion();
     } else {  // This is DM0
@@ -360,22 +377,20 @@ extern "C" uint32_t _start1() {
 
         noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
 #ifdef FDS_WORKER_DONE
-        const uint32_t plic_context = internal_::read_hw_thread_idx();
-        if (plic_context != 0) {
-            ASSERT(false, DebugAssertTripped);
-        }
+        register_handler_for_interrupt(MACHINE_EXTERNAL_INTERRUPT_OFFSET, fds_go_interrupt_handler);
+        invalidate_l1_icache();
         overlay::fds_signalling::worker_disable_auto_dispatch();
-        overlay::fds_signalling::worker_config_filter_length(8);
+        overlay::fds_signalling::worker_config_filter_length(fds_filter_length);
         overlay::fds_signalling::worker_config_interrupt_enable(0);
         overlay::fds_signalling::worker_clear_done();
-        for (uint32_t dispatch_lane = 0; dispatch_lane < 3; ++dispatch_lane) {
+        for (uint32_t dispatch_lane = 0; dispatch_lane < fds_num_dispatch_lanes; ++dispatch_lane) {
             overlay::fds_signalling::worker_clear_dispatch_status(dispatch_lane);
         }
-        overlay::fds_signalling::worker_config_group(fds_go_group_id, 0x7, 1);
-        overlay::quasar::plic_set_threshold(plic_context, 0);
+        overlay::fds_signalling::worker_config_group(fds_go_group_id, fds_dispatch_lane_mask, 1);
+        overlay::quasar::plic_set_threshold(0);
         overlay::quasar::plic_set_priority(overlay::quasar::plic_source_base + fds_go_group_id, 1);
-        overlay::quasar::plic_enable_source(plic_context, overlay::quasar::plic_source_base + fds_go_group_id, true);
-        overlay::quasar::plic_drain_pendings(plic_context);
+        overlay::quasar::plic_enable_source(overlay::quasar::plic_source_base + fds_go_group_id, true);
+        overlay::quasar::plic_drain_pendings();
         // Thresholds and PLIC enables must be set before arming the FDS interrupt level at reset.
         overlay::fds_signalling::worker_config_interrupt_enable(uint32_t{1} << fds_go_group_id);
         asm volatile("csrrs zero, mie, %0" : : "r"(uint32_t{1} << MACHINE_EXTERNAL_INTERRUPT_OFFSET));
@@ -408,16 +423,11 @@ extern "C" uint32_t _start1() {
                             DeviceIncrementTraceCount();
                             DeviceTraceOnlyProfilerInit();
                         }
-                        uint32_t go_message_index = mailboxes->go_message_index;
                         // Querying the noc_index is safe here, since the RUN_MSG_RESET_READ_PTR go signal is currently
                         // guaranteed to only be seen after a RUN_MSG_GO signal, which will set the noc_index to a valid
                         // value. For future proofing, the noc_index value is initialized to 0, to ensure an invalid NOC
-                        // txn is not issued.
-                        uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
-                        mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
-                        // Notify dispatcher that this has been done
-                        DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
-                        notify_dispatch_core_done(dispatch_addr, noc_index);
+                        // txn is not issued. dispatch_s only puts RUN_MSG_GO on the FDS wire, so this always uses NOC.
+                        signal_dispatch_core_done(mailboxes->go_message_index, /*worker_completion_group=*/0);
                     }
                 }
             }
@@ -431,6 +441,8 @@ extern "C" uint32_t _start1() {
             if (go_message_signal == RUN_MSG_GO) {
                 worker_completion_group = begin_worker_completion_round(launch_msg_address, false);
             }
+#else
+            constexpr uint32_t worker_completion_group = 0;
 #endif
             {
                 // Only include this iteration in the device profile if the launch message is valid. This is because all
@@ -508,11 +520,9 @@ extern "C" uint32_t _start1() {
             // Signal host/dispatcher completion after the DM0-FW zone above has finalized, so DM0's markers
             // are readable when the host wakes on RUN_MSG_DONE.
             uint32_t go_message_index = mailboxes->go_message_index;
-#ifdef FDS_WORKER_DONE
             if (worker_completion_group != 0) {
                 go_message_index = worker_completion_group - 1;
             }
-#endif
 
             // Notify dispatcher core that tensix has completed running kernels, if the launch_msg was populated
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
@@ -524,24 +534,7 @@ extern "C" uint32_t _start1() {
                 // launch messages in the ring buffer. Must be executed before signalling completion, as after that
                 // the launch message is no longer owned by us.
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
-#ifdef FDS_WORKER_DONE
-                if (worker_completion_group != 0) {
-                    // FDS does not share the NOC's ordering, so all tile traffic must leave the NIU before completion.
-                    wait_for_tile_noc_traffic();
-                    mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
-                    overlay::fds_signalling::worker_signal_done(worker_completion_group);
-                } else {
-                    mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
-                    uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
-                    DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
-                    notify_dispatch_core_done(dispatch_addr, noc_index);
-                }
-#else
-                mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
-                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
-                DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
-                notify_dispatch_core_done(dispatch_addr, noc_index);
-#endif
+                signal_dispatch_core_done(go_message_index, worker_completion_group);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
             } else {
                 mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;

@@ -169,7 +169,7 @@ static uintptr_t cmd_ptr;
 extern "C" {
 // These variables are used by triage to help report dispatcher state.
 volatile uint32_t last_wait_count = 0;
-#ifdef FDS_WORKER_GO
+#ifdef FDS_WORKER_DONE
 volatile uint32_t last_go_token = 0;
 #endif
 volatile uint32_t last_wait_stream = 0;
@@ -194,12 +194,9 @@ static std::array<uint32_t, max_num_worker_sems> workers_per_sub_device = {0};
 static std::array<uint32_t, max_num_worker_sems> open_round_worker_count = {0};
 static std::array<uint32_t, max_num_worker_sems> open_round_credited_count = {0};
 static uint32_t open_round_mask = 0;
-#endif
-
-#ifdef FDS_WORKER_GO
 constexpr uint32_t kInitGoClearHoldCycles = 4096;
 constexpr uint32_t kFdsGoToken = 1;
-static std::array<bool, max_num_worker_sems> open_round_uses_fds_go = {false};
+static bool open_round_uses_fds_go = false;
 
 FORCE_INLINE
 void write_go_verified(uint32_t value) {
@@ -258,24 +255,18 @@ void credit_open_rounds() {
 
         const uint32_t credited_worker_count = open_round_credited_count[sub_device_index];
         if (completed_worker_count > credited_worker_count) {
-            WAYPOINT("FCRW");
-            const uint32_t newly_completed_worker_count = completed_worker_count - credited_worker_count;
-            const uintptr_t completion_counter_address =
-                DISPATCH_MESSAGE_ADDR + L1_ALIGNMENT * (completion_counter_offset + sub_device_index);
-            dispatch_s_noc_semaphore_inc(
-                get_noc_addr_helper(my_noc_xy, completion_counter_address), newly_completed_worker_count, my_noc_index);
+            *worker_completion_sem_addr(
+                first_stream_used + sub_device_index, first_stream_used, completion_counter_offset) +=
+                completed_worker_count - credited_worker_count;
             open_round_credited_count[sub_device_index] = completed_worker_count;
-            WAYPOINT("FCRD");
         }
         if (completed_worker_count == expected_worker_count) {
-#ifdef FDS_WORKER_GO
-            if (open_round_uses_fds_go[sub_device_index]) {
+            if (open_round_uses_fds_go) {
                 // Clear the wire only after wait_for_workers has observed every worker in this round.
                 write_go_verified(0);
                 last_go_token = 0;
-                open_round_uses_fds_go[sub_device_index] = false;
+                open_round_uses_fds_go = false;
             }
-#endif
             open_round_mask &= ~sub_device_mask;
         }
 
@@ -436,16 +427,14 @@ void open_worker_completion_round(uint32_t sub_device_index) {
 
     open_round_worker_count[sub_device_index] = workers_per_sub_device[sub_device_index];
     open_round_credited_count[sub_device_index] = 0;
-#ifdef FDS_WORKER_GO
-    open_round_uses_fds_go[sub_device_index] = false;
-#endif
+    open_round_uses_fds_go = false;
     open_round_mask |= sub_device_mask;
     WAYPOINT("FCLD");
 }
 #endif
 
-// On Quasar dispatch engines with one CQ and one sub-device, RUN_MSG_GO uses FDS token 1 and DM0 receives it
-// through a machine-external interrupt before writing the worker mailbox signal byte. The wire is 0 outside a round.
+// In an FDS build, RUN_MSG_GO for a single sub-device uses FDS token 1 and DM0 receives it through a
+// machine-external interrupt before writing the worker mailbox signal byte. The wire is 0 outside a round.
 // All other go commands use the NOC path.
 FORCE_INLINE
 void process_go_signal_mcast_cmd() {
@@ -486,7 +475,7 @@ void process_go_signal_mcast_cmd() {
     uint32_t wait_count = load_aligned<uint32_t>(&cmd->mcast.wait_count);
     uint32_t wait_stream = load_aligned<uint32_t>(&cmd->mcast.wait_stream);
 
-#ifdef FDS_WORKER_GO
+#ifdef FDS_WORKER_DONE
     wait_for_workers(wait_count, wait_stream);
     const bool use_fds_go = multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET &&
                             (go_signal_value >> 24) == RUN_MSG_GO && num_worker_sems == 1 && num_unicasts == 0;
@@ -494,7 +483,7 @@ void process_go_signal_mcast_cmd() {
     if (use_fds_go) {
         ASSERT(multicast_go_offset == 0);
         open_worker_completion_round(0);
-        open_round_uses_fds_go[0] = true;
+        open_round_uses_fds_go = true;
         last_go_token = kFdsGoToken;
         write_go_verified(kFdsGoToken);
     } else if (multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET) {
@@ -551,12 +540,6 @@ void process_go_signal_mcast_cmd() {
 
 #if !DEVICE_PRINT_DISPATCH_ENABLED
         wait_for_workers(wait_count, wait_stream);
-#endif
-#ifdef FDS_WORKER_DONE
-        constexpr uint32_t go_signal_shift = 24;
-        if ((go_signal_value >> go_signal_shift) == RUN_MSG_GO) {
-            open_worker_completion_round(multicast_go_offset);
-        }
 #endif
         cq_noc_async_write_with_state<CQ_NOC_sndl, CQ_NOC_wait>(0, 0, 0, num_dests);
         noc_increment_nonposted_writes_issued(noc_index, 1);
@@ -738,7 +721,7 @@ void kernel_main() {
     overlay::fds_signalling::dispatch_disable_auto_dispatch();
     overlay::fds_signalling::dispatch_config_filter_length(8);
     overlay::fds_signalling::dispatch_config_interrupt_enable(0);
-    for (uint32_t group_id = 1; group_id < 16; ++group_id) {
+    for (uint32_t group_id = 1; group_id <= max_num_worker_sems; ++group_id) {
         overlay::fds_signalling::dispatch_config_group(group_id, 0xFFFFFFFF, 0);
     }
 #endif
@@ -776,7 +759,7 @@ void kernel_main() {
     // notify_kernel_start() is invoked from process_go_signal_mcast_cmd, after the
     // go signal is sent — the stall-detection window is per-program, not per-dispatch_s.
 #endif
-#ifdef FDS_WORKER_GO
+#ifdef FDS_WORKER_DONE
     write_go_verified(0);
     const uint32_t go_clear_start = get_timestamp_32b();
     while (get_timestamp_32b() - go_clear_start < kInitGoClearHoldCycles) {

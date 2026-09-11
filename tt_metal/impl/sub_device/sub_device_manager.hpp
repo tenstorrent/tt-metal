@@ -20,7 +20,6 @@
 #include "hal_types.hpp"
 #include "sub_device.hpp"
 #include "sub_device_types.hpp"
-#include <tt_stl/assert.hpp>
 #include <impl/context/context_types.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
 
@@ -30,20 +29,6 @@ struct MeshTraceBuffer;
 namespace tt::tt_metal {
 
 class IDevice;
-
-inline uint32_t get_dispatch_worker_count(
-    uint32_t sub_device_index,
-    uint32_t tensix_worker_count,
-    uint32_t active_ethernet_core_count,
-    bool fds_worker_completion_enabled) {
-    if (fds_worker_completion_enabled) {
-        TT_FATAL(
-            active_ethernet_core_count == 0,
-            "FDS worker completion does not support ACTIVE_ETH cores in sub-device {}",
-            sub_device_index);
-    }
-    return tensix_worker_count + active_ethernet_core_count;
-}
 
 class SubDeviceManager {
 public:
