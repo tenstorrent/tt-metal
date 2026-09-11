@@ -1845,7 +1845,7 @@ def op_edge_points(
 # every format can express, so a failure means the input lost its specialness rather than the
 # output being unable to hold the result. Three constraints:
 #
-#   1. A Float16 (e5m10) input never preserves specials, on any output at either dest_acc.
+#   1. Float16 inputs are excluded: although Float16 can encode specials, unpack does not preserve them (any output, any dest_acc).
 #   2. A Float16 output loses them too, unless the input is 32-bit at dest_acc=Yes.
 #   3. A 16-bit input at dest_acc=Yes keeps +inf but loses -inf and NaN.
 #
