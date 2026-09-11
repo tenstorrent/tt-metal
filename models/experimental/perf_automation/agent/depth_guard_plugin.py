@@ -34,6 +34,7 @@ SCOPE
 from __future__ import annotations
 
 import os
+import sys
 
 ENV = "TT_PERF_LAYERS"
 FORCE_ALL = "PERF_MCP_FORCE_ALL_LAYERS"
@@ -133,6 +134,18 @@ def _install_factory_tagger() -> None:
         except Exception:  # noqa: BLE001
             pass
 
+    # THE HOOK MUST NOT CONTAIN AN IMPORT STATEMENT. This body used to do `import sys as _s`,
+    # and an import statement compiles to a call of builtins.__import__ -- which is this very
+    # function once installed. So every runtime import in the measured process re-entered the hook,
+    # which imported sys, which re-entered the hook, ~1000 frames deep until RecursionError, which
+    # the `except Exception` below swallowed as if nothing had happened. The import still succeeded,
+    # so nothing was ever wrong -- it just cost ~1 ms instead of a dict lookup. Production llama's
+    # decode step runs several imports per token inside library bodies (`import torch; import numpy`
+    # in ttnn.from_torch, `import ttnn` in the sampling router), and the harness billed ~10 ms/token
+    # of its own recursion to the model: the gate read 20.6 ms/token where the identical loop without
+    # the plugin read 10.2 (2026-09-10, llama-3.1-8b on P150x4). Every host-timed number the tool
+    # produced -- baseline, candidates, "wins" -- carried that inflation; device-side profiles did
+    # not. `sys` is imported at module scope above, where the hook is not yet installed.
     def _import(name, globals=None, locals=None, fromlist=(), level=0):  # noqa: A002
         mod = _orig_import(name, globals, locals, fromlist, level)
         try:
@@ -141,10 +154,8 @@ def _install_factory_tagger() -> None:
             # submodule that actually defines the factory has to be reached through fromlist.
             for sub in fromlist or ():
                 _tag(getattr(mod, sub, None)) if hasattr(mod, sub) else None
-            import sys as _s
-
             if fromlist:
-                _tag(_s.modules.get(name))
+                _tag(sys.modules.get(name))
         except Exception:  # noqa: BLE001
             pass
         return mod

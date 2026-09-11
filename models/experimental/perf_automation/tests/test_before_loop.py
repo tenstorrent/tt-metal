@@ -125,6 +125,28 @@ def test_before_loop_all_mocks_produces_manifest_and_baseline(tmp_path, model_ro
     assert manifest2["discovery_review"]["decision"] == "continue"
 
 
+def test_explicit_perf_test_skips_pcc_derived_generation(tmp_path, model_root, monkeypatch):
+    from agent import perf_test_gen
+
+    def generation_is_a_bug(*args, **kwargs):
+        raise AssertionError("explicit --perf-test must not generate a second workload")
+
+    monkeypatch.setattr(perf_test_gen, "generate_perf_test", generation_is_a_bug)
+    explicit = f"{model_root / 'test_e2e.py'}::test_perf"
+    result = _run(tmp_path, model_root, {"perf_test": explicit})
+    manifest = json.loads((Path(result["run_dir"]) / "manifest.json").read_text())
+
+    assert manifest["perf_test_resolved"]["path"] == explicit
+    assert manifest["pathmap"]["perf_test"]["note"] == "operator-supplied --perf-test"
+    assert manifest["pathmap"]["pipelines"] == [
+        {
+            "task": "main",
+            "perf_test": "test_e2e.py::test_perf",
+            "pcc_test": "test_pcc.py::test_pcc",
+        }
+    ]
+
+
 def test_before_loop_fatal_flag_stops_run(tmp_path, model_root):
     def fatal_runner(prompt):
         return json.dumps(
