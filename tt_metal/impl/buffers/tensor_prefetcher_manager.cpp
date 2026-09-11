@@ -78,6 +78,7 @@ uint32_t get_mpfe_port(
         sender_logical_core.x,
         sender_logical_core.y,
         bank_id);
+    return 0;
 }
 
 // Largest `page` (multiple of tile_size, <= max_page_size) such that num_tiles*tile_size
