@@ -1137,13 +1137,35 @@ void py_module_types(nb::module_& mod) {
             "custom_program_hash",
             &tt::tt_metal::ProgramDescriptor::custom_program_hash,
             "Optional memoized program hash (skips full descriptor walk when set)")
-        .def_rw(
+        // Blaze-only experimental runtime binary reload (experimental::blaze::ReloadTable), exposed as
+        // the two values Blaze sets. Setting the address to None drops the table.
+        .def_prop_rw(
             "reload_table_addr",
-            &tt::tt_metal::ProgramDescriptor::reload_table_addr,
+            [](const tt::tt_metal::ProgramDescriptor& self) -> std::optional<uint32_t> {
+                return self.reload_table ? std::optional<uint32_t>(self.reload_table->address) : std::nullopt;
+            },
+            [](tt::tt_metal::ProgramDescriptor& self, std::optional<uint32_t> addr) {
+                if (!addr.has_value()) {
+                    self.reload_table.reset();
+                } else if (self.reload_table) {
+                    self.reload_table->address = *addr;
+                } else {
+                    self.reload_table = tt::tt_metal::experimental::blaze::ReloadTable{*addr, CoreRangeSet{}};
+                }
+            },
             "L1 address of the runtime binary-reload stage table; None if this program does not reload")
-        .def_rw(
+        .def_prop_rw(
             "reload_core_ranges",
-            &tt::tt_metal::ProgramDescriptor::reload_core_ranges,
+            [](const tt::tt_metal::ProgramDescriptor& self) {
+                return self.reload_table ? self.reload_table->cores : CoreRangeSet{};
+            },
+            [](tt::tt_metal::ProgramDescriptor& self, const CoreRangeSet& cores) {
+                if (self.reload_table) {
+                    self.reload_table->cores = cores;
+                } else {
+                    self.reload_table = tt::tt_metal::experimental::blaze::ReloadTable{0, cores};
+                }
+            },
             "Cores that walk the reload table; every other core in the program ignores it");
 
     mod.def(
