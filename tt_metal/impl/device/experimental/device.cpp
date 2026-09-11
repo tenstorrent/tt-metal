@@ -15,17 +15,19 @@ namespace tt::tt_metal::experimental::Device {
 
 namespace {
 
-tt::tt_metal::Device* concrete_device(IDevice* device) {
-    TT_FATAL(device != nullptr, "Device pointer cannot be null");
-
-    if (auto* mesh = dynamic_cast<distributed::MeshDevice*>(device)) {
+const tt::tt_metal::Device& concrete_device(const IDevice& device) {
+    if (const auto* mesh = dynamic_cast<const distributed::MeshDevice*>(&device)) {
         TT_FATAL(mesh->num_devices() == 1, "Experimental NOC geometry APIs are only supported on unit MeshDevice.");
-        return concrete_device(mesh->get_devices().front());
+        const auto* only_device = mesh->get_devices().front();
+        TT_FATAL(only_device != nullptr, "Device pointer cannot be null");
+        return concrete_device(*only_device);
     }
 
-    auto* dev = dynamic_cast<tt::tt_metal::Device*>(device);
-    TT_FATAL(dev != nullptr, "Device pointer must be a valid Device or MeshDevice");
-    return dev;
+    const auto* dev = dynamic_cast<const tt::tt_metal::Device*>(&device);
+    TT_FATAL(
+        dev != nullptr,
+        "Experimental NOC geometry APIs are only supported on tt::tt_metal::Device or unit MeshDevice.");
+    return *dev;
 }
 
 uint32_t noc_hop_distance(const CoreCoord& src, const CoreCoord& dst, const CoreCoord& grid_size, NOC noc) {
@@ -44,10 +46,11 @@ uint32_t noc_hop_distance(const CoreCoord& src, const CoreCoord& dst, const Core
 
 uint32_t get_worker_noc_hop_distance(
     IDevice* device, const CoreCoord& logical_src, const CoreCoord& logical_dst, NOC noc) {
-    auto* dev = concrete_device(device);
+    TT_FATAL(device != nullptr, "Device pointer cannot be null");
+    const auto& dev = concrete_device(*device);
     return noc_hop_distance(
-        dev->physical_worker_core_from_logical_core(logical_src),
-        dev->physical_worker_core_from_logical_core(logical_dst),
+        dev.physical_worker_core_from_logical_core(logical_src),
+        dev.physical_worker_core_from_logical_core(logical_dst),
         device->grid_size(),
         noc);
 }
@@ -83,17 +86,17 @@ uint32_t get_worker_noc_hop_distance(
     return get_worker_noc_hop_distance(device, logical_src, logical_dst, noc);
 }
 
-CoreAtNocHops get_closest_worker_to_eth_core(IDevice* device, const CoreCoord& logical_eth_core, NOC noc) {
-    auto* dev = concrete_device(device);
-    const auto eth_core = dev->physical_eth_core_from_logical_core(logical_eth_core);
-    const auto grid_size = device->grid_size();
-    const auto worker_grid_size = device->compute_with_storage_grid_size();
+CoreAtNocHops get_closest_worker_to_eth_core(const IDevice& device, const CoreCoord& logical_eth_core, NOC noc) {
+    const auto& dev = concrete_device(device);
+    const auto eth_core = dev.physical_eth_core_from_logical_core(logical_eth_core);
+    const auto grid_size = device.grid_size();
+    const auto worker_grid_size = device.compute_with_storage_grid_size();
 
     CoreAtNocHops closest{CoreCoord{0, 0}, std::numeric_limits<uint32_t>::max()};
     for (uint32_t y = 0; y < worker_grid_size.y; y++) {
         for (uint32_t x = 0; x < worker_grid_size.x; x++) {
             uint32_t hops = noc_hop_distance(
-                dev->physical_worker_core_from_logical_core(CoreCoord{x, y}), eth_core, grid_size, noc);
+                dev.physical_worker_core_from_logical_core(CoreCoord{x, y}), eth_core, grid_size, noc);
             if (hops < closest.distance_in_noc_hops) {
                 closest = CoreAtNocHops{CoreCoord{x, y}, hops};
             }

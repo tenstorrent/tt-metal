@@ -51,5 +51,5 @@ struct CoreAtNocHops {
 // Returns the logical worker coordinate with the fewest hops to logical_eth_core
 // on a given NOC, and that hop count. The distance is measured worker -> eth core.
 // This API is experimental and may evolve into a stable Device API in the future
-CoreAtNocHops get_closest_worker_to_eth_core(IDevice* device, const CoreCoord& logical_eth_core, NOC noc);
+CoreAtNocHops get_closest_worker_to_eth_core(const IDevice& device, const CoreCoord& logical_eth_core, NOC noc);
 }  // namespace tt::tt_metal::experimental::Device

@@ -283,7 +283,7 @@ private:
         IDevice* device, const CoreCoord& logical_src, const CoreCoord& logical_dst, NOC noc);
 
     friend experimental::Device::CoreAtNocHops experimental::Device::get_closest_worker_to_eth_core(
-        IDevice* device, const CoreCoord& logical_eth_core, NOC noc);
+        const IDevice& device, const CoreCoord& logical_eth_core, NOC noc);
 
     friend class experimental::DispatchContext;
 };
