@@ -14,7 +14,7 @@ test_mpi_interface() {
     fi
 
     # MPI OOB (out-of-band) connectivity test
-    timeout 3 mpirun --host "$test_host" \
+    timeout 30 mpirun --host "$test_host" \
         --mca oob_tcp_if_include "$interface" \
         --mca btl_tcp_if_include "$interface" \
         -np 1 hostname &>/dev/null
