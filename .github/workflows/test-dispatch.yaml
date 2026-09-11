@@ -1,4 +1,4 @@
-name: PCH pool failure diagnosis
+name: PCH pool A/B without kernel ccache
 
 on:
   workflow_dispatch:
@@ -18,19 +18,26 @@ permissions:
 
 jobs:
   pool:
-    name: Wormhole pool PCH=${{ matrix.pch }}
+    name: Wormhole pool PCH order=${{ matrix.order }} (ccache disabled)
     strategy:
       fail-fast: false
       matrix:
-        pch: ["0", "1"]
+        include:
+          - order: off-on
+            first: "0"
+            second: "1"
+          - order: on-off
+            first: "1"
+            second: "0"
     runs-on: [tt-ubuntu-2204-N300-viommu-stable]
-    timeout-minutes: 75
+    timeout-minutes: 150
     container:
       image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-ci-test-amd64:47c36e3a5e196b42b0abf8512c801be5f089f162
       env:
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
         TT_LOGGER_LEVEL: info
+        CCACHE_DISABLE: "1"
         TTNN_CONFIG_OVERRIDES: '{"validate_program_args": true}'
       volumes:
         - ${{ github.workspace }}/docker-job:/work
@@ -57,33 +64,33 @@ jobs:
           path: docker-job
       - name: Install wheel under test
         run: uv pip install ./*.whl
-      - name: Match original runtime setup
+      - name: Set up runtime without kernel ccache
         uses: ./docker-job/.github/actions/setup-job
         with:
           use-evaluation-image: true
-          enable-kernel-ccache: true
-          redis-ccache-storage: redis://${{ vars.REDIS_CCACHE_USER }}:${{ secrets.REDIS_CCACHE_PASSWORD }}@${{ vars.REDIS_CCACHE_HOST }}:${{ vars.REDIS_CCACHE_PORT }}${{ vars.REDIS_CCACHE_IS_READONLY == 'true' && '|read-only=true' || '' }}
-      - name: Isolated failing test
+          enable-kernel-ccache: false
+      - name: First pool sweep (PCH=${{ matrix.first }})
         uses: ./docker-job/.github/actions/run-with-log
         with:
-          log-file: generated/pch-diagnosis/isolated.log
-          run: python3 -u .github/scripts/diagnose_pch_pool.py --pch ${{ matrix.pch }} --phase isolated
-      - name: Upload isolated test diagnostics immediately
+          log-file: generated/pch-diagnosis/first.log
+          run: python3 -u .github/scripts/diagnose_pch_pool.py --pch ${{ matrix.first }} --phase suite --label first
+      - name: Upload first sweep immediately
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: pch-isolated-diagnosis-${{ matrix.pch }}
+          name: pch-no-ccache-${{ matrix.order }}-first
           path: docker-job/generated/pch-diagnosis
-      - name: Complete pool sweep
+      - name: Second pool sweep (PCH=${{ matrix.second }})
+        if: ${{ !cancelled() }}
         uses: ./docker-job/.github/actions/run-with-log
         with:
-          log-file: generated/pch-diagnosis/suite.log
-          run: python3 -u .github/scripts/diagnose_pch_pool.py --pch ${{ matrix.pch }} --phase suite
+          log-file: generated/pch-diagnosis/second.log
+          run: python3 -u .github/scripts/diagnose_pch_pool.py --pch ${{ matrix.second }} --phase suite --label second
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: pch-pool-diagnosis-${{ matrix.pch }}
+          name: pch-no-ccache-${{ matrix.order }}
           path: docker-job/generated/pch-diagnosis
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

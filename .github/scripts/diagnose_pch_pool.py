@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Reproduce the pool failure using the original wheel and measure cache growth."""
+"""Compare PCH modes with fresh JIT caches and kernel ccache disabled."""
 
 import argparse
 import json
@@ -10,6 +10,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 
 GIB = 1024**3
@@ -86,9 +87,13 @@ def save_cache_details(root, phase):
 
 
 def run_phase(phase, target, pch):
-    root = Path("/github/home/pch-diagnosis") / phase
-    root.mkdir(parents=True, exist_ok=True)
+    parent = Path("/github/home/pch-diagnosis")
+    parent.mkdir(parents=True, exist_ok=True)
+    root = Path(tempfile.mkdtemp(prefix=f"{phase}-pch{pch}-", dir=parent))
     env = os.environ.copy()
+    # JIT checks presence, so setting this to "0" would still enable ccache.
+    env.pop("TT_METAL_CCACHE_KERNEL_SUPPORT", None)
+    env["CCACHE_DISABLE"] = "1"
     env["TT_METAL_CACHE"] = str(root)
     env.update(OMP_NUM_THREADS="2", MKL_NUM_THREADS="2", OMP_WAIT_POLICY="passive")
     env.pop("TT_METAL_JIT_PCH_STRICT", None)
@@ -96,6 +101,18 @@ def run_phase(phase, target, pch):
         env["TT_METAL_JIT_PCH"] = "1"
     else:
         env.pop("TT_METAL_JIT_PCH", None)
+    config = {
+        "phase": phase,
+        "pch": pch,
+        "runner": env.get("RUNNER_NAME"),
+        "test_commit": env.get("GITHUB_SHA"),
+        "environment": {
+            key: env.get(key)
+            for key in ("TT_METAL_CACHE", "TT_METAL_JIT_PCH", "TT_METAL_CCACHE_KERNEL_SUPPORT", "CCACHE_DISABLE")
+        },
+    }
+    print("PCH_AB_CONFIG " + json.dumps(config, sort_keys=True), flush=True)
+    (OUTPUT / f"{phase}-config.json").write_text(json.dumps(config, indent=2))
     command = [
         sys.executable,
         "-m",
@@ -110,9 +127,11 @@ def run_phase(phase, target, pch):
     ]
     print(f"PCH_PHASE_START phase={phase} pch={pch} command={command}", flush=True)
     first = snapshot(root, phase)
+    assert first["cache_bytes"] == 0, "Each A/B pass must start with an empty JIT cache"
     if min(first["free_bytes"].values()) < 3 * GIB:
         print("PCH_DISK_GUARD: insufficient free space before tests", flush=True)
         return 86
+    started = time.monotonic()
     proc = subprocess.Popen(command, env=env, start_new_session=True)
     rc = None
     try:
@@ -130,8 +149,15 @@ def run_phase(phase, target, pch):
             rc = proc.returncode
     finally:
         stop(proc)
-        snapshot(root, phase)
+        final = snapshot(root, phase)
         save_cache_details(root, phase)
+    result = {
+        **config,
+        "exit_code": rc,
+        "elapsed_seconds": time.monotonic() - started,
+        "cache": final,
+    }
+    (OUTPUT / f"{phase}-result.json").write_text(json.dumps(result, indent=2))
     print(f"PCH_PHASE_END phase={phase} exit_code={rc}", flush=True)
     return rc
 
@@ -140,13 +166,14 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--pch", choices=["0", "1"], required=True)
     parser.add_argument("--phase", choices=["isolated", "suite"], required=True)
+    parser.add_argument("--label", choices=["first", "second"])
     args = parser.parse_args()
     OUTPUT.mkdir(parents=True, exist_ok=True)
     subprocess.run(["df", "-h", "/", "/work", "/github/home", "/tmp"], check=True)
     target = "tests/ttnn/unit_tests/operations/pool"
     if args.phase == "isolated":
         target += "/test_upsample.py::test_nearest_upsample_with_uneven_input_shards"
-    return run_phase(args.phase, target, args.pch)
+    return run_phase(args.label or args.phase, target, args.pch)
 
 
 if __name__ == "__main__":
