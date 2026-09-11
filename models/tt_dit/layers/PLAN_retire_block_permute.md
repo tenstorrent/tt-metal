@@ -5,7 +5,43 @@ Phase 0 done; Phase 1 B2 done; D1 priced (axis swap rejected); Phase 4 (deletion
 Block order was found to be unused in production (Phase 1 notes). Remaining, optional: Phases 1 (B1),
 2, 3 and 5 = the "bricked deterministic stages" speed project; everything is uncommitted in the tree.
 
-## PICKUP 2026-09-11 17:35 -- deletion committed as WIP, verification NOT yet checked
+## Deletion verification (read 2026-09-11 20:45; jobs 424-428 ran after the session ended)
+
+- 424 unit (neighborhood_sdpa, permute, bricked executor, tests/unit/test_na3d.py, vae/test_na3d.py): **90 passed, 5 skipped**.
+- 425 block arms, baseline now bricked: **19 passed** (5 arms x 3 stages + 4 stage-1 arms).
+- 428 production pipeline: PASSED, ANOMALIES none, **VAE decode 12.31 s** (12.35 s before the deletion).
+- 427 gate runner: 29 passed, 1 skipped, **1 failed**: `test_stage5_bricked_matches_upstream_at_production_width
+  [w480_h272]` timed out at pytest's 300 s. Pre-existing, not the deletion: the same param FAILED on
+  2026-08-31 (jobs 876/885, PCC 1.6-1.8 %). The w480_h64 param passes at 99.9936 %. Ledger: every bricked gate
+  is "new, not baselined"; no baselined entry moved.
+- 426 (gates + shard equivalence + stage-5 parity): reaped by the broker while the h272 case above sat
+  silent for 300 s. Before that: the full-decode bricked gate (tp_off, tp4), the stage-5 bricked gates,
+  shard equivalence, `test_stage5_parity_w_sharded_bricked`, the h64 production-width gate and the ported
+  `test_stage5_gna_parity_w_sharded[t12_stride111]` all PASSED; **`[t12_stride122]` FAILED** (traceback not
+  captured; single-case rerun is job 430).
+- Pre-commit on the deletion commit: isort/autoflake fixups committed as cb8e1ffb2dd.
+
+## PICKUP 2026-09-11 20:55 -- deletion verified except two items (read this first)
+
+Commits on na-integration, oldest first: ddc59cd71ed (bricked deterministic stages), 396f54b6956 (misc),
+ee209de41d5 (Tier-2 deletion of the general-SDPA executors), 955898dba2b (pickup note), cb8e1ffb2dd
+(pre-commit fixups), then the commit carrying this note and the GNA-parity test fix.
+
+Open:
+1. **Broker job 431** re-runs `test_diffvae_stage5.py::test_stage5_gna_parity_w_sharded` (5 cases) after
+   the grid was widened to W=64 so the stride-(1,2,2) brick's 8-site halo fits an 8-column shard (at
+   W=32 it asserted "a 8-site halo exceeds the 4-site shard"). Read `generated/del_gna_parity.log`:
+   the two stride-(1,1,1) rows must pass at PCC >= 0.999; the stride > 1 rows only log a PCC. If green,
+   the deletion is fully verified.
+2. `test_stage5_bricked_matches_upstream_at_production_width[w480_h272]` times out at pytest's 300 s
+   (jobs 426/427). PRE-EXISTING: the same case failed on 2026-08-31 at PCC 1.6-1.8 % (jobs 876/885).
+   Not caused by the deletion; either investigate (first-run JIT for that geometry vs a real hang --
+   it went silent right after mesh creation) or mark it xfail with that history.
+
+Everything else passed after the deletion: unit 90, arms 19, decoder + stage-5 gates (all bricked
+params), shard equivalence, production pipeline VAE decode 12.31 s, ANOMALIES none.
+
+## PICKUP 2026-09-11 17:35 (superseded by the note above)
 
 Commits on na-integration: ddc59cd71ed (bricked deterministic stages), 396f54b6956 (misc: decode-tree live
 lines, perf-table breakdown, accessor fix), then the WIP deletion commit (pre-commit hooks skipped with -n;

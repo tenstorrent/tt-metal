@@ -541,12 +541,14 @@ def test_resolved_gna_stride(monkeypatch):
     # effect at all -- at T = 11 the 11-kernel already spans the axis and every query sees all of it,
     # so the stride would measure as free. T = 22 is the smallest grid where it actually bites, and the
     # stride-1 row at the same grid is the control the strided row is read against.
+    # W is 64, not 32: over the 8 W-chips a shard is then 8 columns wide, which is what a real stride
+    # needs -- at stride > 1 the chooser takes the (2,4,4) brick, whose 8-site halo must fit the shard.
     [
-        (Grid(batch=1, t=12, h=32, w=32), (1, 1, 1), 0.999),
-        (Grid(batch=1, t=12, h=32, w=32), (1, 2, 2), None),
-        (Grid(batch=1, t=12, h=32, w=32), (1, 4, 4), None),
-        (Grid(batch=1, t=22, h=32, w=32), (1, 1, 1), 0.999),
-        (Grid(batch=1, t=22, h=32, w=32), (11, 4, 8), None),
+        (Grid(batch=1, t=12, h=32, w=64), (1, 1, 1), 0.999),
+        (Grid(batch=1, t=12, h=32, w=64), (1, 2, 2), None),
+        (Grid(batch=1, t=12, h=32, w=64), (1, 4, 4), None),
+        (Grid(batch=1, t=22, h=32, w=64), (1, 1, 1), 0.999),
+        (Grid(batch=1, t=22, h=32, w=64), (11, 4, 8), None),
     ],
     ids=["t12_stride111", "t12_stride122", "t12_stride144", "t22_stride111", "t22_stride11_4_8"],
 )
