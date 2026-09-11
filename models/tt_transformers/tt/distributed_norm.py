@@ -193,6 +193,19 @@ class DistributedNorm(LightweightModule):
             # (num_links=4), which cannot be validated on this board. The fallbacks are what
             # actually run, so they are what is tuned -- see ModelArgs.ccl_sync_params.
             ag_chunks_per_sync, ag_num_workers = self.args.ccl_sync_params(mode)
+            # Halve what the gather moves. This collective did not respond to more
+            # workers per link or a coarser sync, so it is pinned by the inter-chip link
+            # rather than by cores -- which leaves bytes as the only lever. bf8_b is the
+            # documented floor for a normalization input (never below), and the residual
+            # stream itself is untouched: only the copy handed to the gather is narrowed.
+            #
+            # PREFILL only. The cast is a whole extra program, and it only pays when the
+            # payload is big enough: prefill gathers ~1 MB in 22 us, decode ~0.2 MB in
+            # 12 us. Measured with the cast in BOTH modes, prefill improved but the
+            # per-token time went 8.1227 -> 8.1289 ms -- in decode the 64 extra typecast
+            # launches cost more than the narrower gather saves.
+            if mode == Mode.PREFILL and x.dtype == ttnn.bfloat16:
+                x = ttnn.typecast(x, ttnn.bfloat8_b)
             x = ttnn.experimental.all_gather_async(
                 x,
                 persistent_output_buffer=None,
