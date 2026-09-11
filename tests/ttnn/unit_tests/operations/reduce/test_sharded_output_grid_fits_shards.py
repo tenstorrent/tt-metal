@@ -65,6 +65,7 @@ OUT_LAYOUTS = [
 ]
 
 
+@pytest.mark.requires_grid_size((11, 8))
 @pytest.mark.parametrize("keepdim", [True, False], ids=["keepdim", "no_keepdim"])
 @pytest.mark.parametrize("out_layout", OUT_LAYOUTS, ids=lambda l: str(l).split(".")[-1])
 @pytest.mark.parametrize("label, in_layout, in_grid, in_shard_tiles, shape, dtype", CASES, ids=[c[0] for c in CASES])
