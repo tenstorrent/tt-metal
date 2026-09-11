@@ -5271,6 +5271,16 @@ def optimize_pipeline(
     if _cov:
         from agent.layer_depth import set_depth as _set_depth
 
+        # BOUND THE PERSISTENT SERVER THE SAME WAY THE ONE-OFF PROBE ALREADY IS (see _token_window
+        # at line ~1574). agent.measure.measure_runs defaults TT_PERF_OSL_TOKENS to 128 when nothing
+        # overrides it, and profile_model()/termination_check() run through that path on every call
+        # for the rest of the round -- not once, like the probe. Depth alone does not bound a tracy
+        # capture; a recurring stage replays its whole graph once per token, so an uncapped 128-token
+        # window here hits the same 32K-source-location instrumentation ceiling the probe was fixed
+        # to avoid, and does it on every exploration call instead of once.
+        _cov_int = next(iter(_cov.values())) if isinstance(_cov, dict) else int(_cov)
+        _cov_env[_tokens_env()] = str(_token_window(_cov_int))
+
         if isinstance(_cov, dict) and len(_cov) > 1:
             # Multi-stack: set TT_PERF_STACK{N}_LAYERS for each stack in sorted order.
             _profile_extra: dict = {}
