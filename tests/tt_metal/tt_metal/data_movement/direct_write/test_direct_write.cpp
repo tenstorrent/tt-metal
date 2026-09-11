@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-logger/tt-logger.hpp>
-#include "multi_device_fixture.hpp"
 #include "device_fixture.hpp"
 #include "dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
@@ -323,7 +322,7 @@ void multicast_test(
 
 }  // namespace unit_tests::dm::direct_write
 
-TEST_F(GenericMeshDeviceFixture, TensixDirectWritePerformanceComparison) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDirectWritePerformanceComparison) {
     if (get_mesh_device()->impl().get_device(0)->arch() == ARCH::QUASAR) {
         GTEST_SKIP()
             << "Skipping on Quasar emulator: direct-write kernel executes but destination L1 remains unchanged";
@@ -332,7 +331,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDirectWritePerformanceComparison) {
     unit_tests::dm::direct_write::performance_comparison_test(get_mesh_device(), test_id);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDirectWriteAddressPatterns) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDirectWriteAddressPatterns) {
     if (get_mesh_device()->impl().get_device(0)->arch() == ARCH::QUASAR) {
         GTEST_SKIP()
             << "Skipping on Quasar emulator: direct-write kernel executes but destination L1 remains unchanged";
@@ -341,7 +340,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDirectWriteAddressPatterns) {
     unit_tests::dm::direct_write::address_pattern_test(get_mesh_device(), test_id);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDirectWriteMulticast) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDirectWriteMulticast) {
     uint32_t test_id = 507;
     unit_tests::dm::direct_write::multicast_test(get_mesh_device(), test_id);
 }
