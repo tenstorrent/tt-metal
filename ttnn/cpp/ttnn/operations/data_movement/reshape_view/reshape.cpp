@@ -688,8 +688,16 @@ ttnn::Tensor reshape_dispatch(
         TT_FATAL(false, "Attempting to reshape between two shapes with different volumes");
     }
 
+    // The native TILE path (reshape_tiled) always recomputes its own tile-rounded padded shape
+    // via compute_padded_shape(logical_shape) and ignores whatever padded_shape the caller passed
+    // in; the codegen TILE program factory needs to see that SAME padded shape (it is the
+    // authority for W_out/H_out/output allocation), not the caller's raw, possibly-unrounded one.
+    // ROW_MAJOR has no tile padding, so padded_shape is used as-is there.
+    const ttnn::Shape codegen_padded_shape =
+        (tensor.layout() == ttnn::TILE_LAYOUT) ? compute_padded_shape(logical_shape) : padded_shape;
+
     const bool codegen_can_serve = operations::data_movement::reshape_codegen_can_serve(
-        tensor, logical_shape, padded_shape, mem_config, sub_core_grid);
+        tensor, logical_shape, codegen_padded_shape, mem_config, sub_core_grid);
     bool use_codegen;
     switch (mode) {
         case ReshapeRouteMode::kForceNative: use_codegen = false; break;
@@ -705,13 +713,13 @@ ttnn::Tensor reshape_dispatch(
             break;
         case ReshapeRouteMode::kAuto:
         default:
-            use_codegen =
-                codegen_can_serve && !reshape_codegen::is_demoted(tensor, logical_shape, padded_shape, mem_config);
+            use_codegen = codegen_can_serve &&
+                          !reshape_codegen::is_demoted(tensor, logical_shape, codegen_padded_shape, mem_config);
             break;
     }
 
     if (use_codegen) {
-        return operations::data_movement::reshape_via_codegen(tensor, logical_shape, padded_shape, mem_config);
+        return operations::data_movement::reshape_via_codegen(tensor, logical_shape, codegen_padded_shape, mem_config);
     }
 
     // Do the reshape in row-major
