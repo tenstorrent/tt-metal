@@ -46,7 +46,7 @@
 //      trip, and because the L1 slot array and the id that selects it are
 //      DM-side firmware state that a TRISC build does not have.
 //
-//   3. DM threads and TRISCs together -- dm_compute_barrier(). Here the L1
+//   3. DM threads and TRISCs together -- sync_dm_compute_threads(). Here the L1
 //      barrier is not an option: DMs and TRISCs do not share a coherent view
 //      of L1 over atomics, so an arrival one kind writes is not guaranteed to
 //      be seen by the other. It uses a second, independent tensix global
@@ -254,7 +254,7 @@ inline void wait_threads(uint32_t participants) {
  *
  * Which barrier a DM kernel rendezvouses on is decided by firmware, not the caller, so two
  * co-resident kernels cannot collide. This does not synchronize with the other kernels on
- * the core; use dm_compute_barrier() for a rendezvous that spans DM and compute.
+ * the core; use sync_dm_compute_threads() for a rendezvous that spans DM and compute.
  */
 // clang-format on
 inline void sync_threads() {
@@ -286,7 +286,7 @@ inline void sync_threads() {
  * | tensixes     | Number of tensix engines (NEOs) that will arrive.| uint32_t | True     |
  */
 // clang-format on
-inline void dm_compute_barrier(uint32_t dm_threads, uint32_t tensixes) {
+inline void sync_dm_compute_threads(uint32_t dm_threads, uint32_t tensixes) {
 #if defined(TT_HAS_DM_COMPUTE_BARRIER)
     tensix_global_sem_barrier(
         DM_COMPUTE_BARRIER_ARRIVED_SEM_IDX,

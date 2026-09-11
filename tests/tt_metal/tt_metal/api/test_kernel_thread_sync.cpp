@@ -381,7 +381,7 @@ TEST_F(KernelThreadSyncTest, PerKernelBarriersAreIndependentAcrossDmAndCompute) 
 
 TEST_F(KernelThreadSyncTest, DmComputeBarrierSynchronizesDmAndTriscs) {
     if (this->arch_ != tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "dm_compute_barrier across DMs and TRISCs is Quasar-only";
+        GTEST_SKIP() << "sync_dm_compute_threads across DMs and TRISCs is Quasar-only";
     }
 
     NodeCoord node{0, 0};
