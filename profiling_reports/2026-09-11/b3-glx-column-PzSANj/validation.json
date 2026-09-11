@@ -1,0 +1,69 @@
+{
+  "passed": true,
+  "csv": "profiling_reports/2026-09-11/b3-glx-column-PzSANj/profiler/mistral4_mla/reports/2026_09_11_15_38_59/ops_perf_results_2026_09_11_15_38_59.csv.gz",
+  "csv_sha256": "c83d2665dad371edaa58ecb8211154d346011df8674765362c8914d7ef3c4a2f",
+  "csv_total_rows": 266,
+  "signposts": {
+    "MLA_START": 1,
+    "MLA_END": 1
+  },
+  "device_ids": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "selected_rows": 192,
+  "operations_per_device": 24,
+  "identical_sequence_fields": [
+    "OP CODE",
+    "GLOBAL CALL COUNT minus DEVICE ID",
+    "SUB DEVICE ID"
+  ],
+  "duration_validation": "all finite and strictly positive",
+  "trace": "untraced first forward",
+  "sum_of_per_operation_device_maxima_ns": 8585052,
+  "categories_ns": {
+    "Matmul": 737823,
+    "Other": 652105,
+    "SDPA": 7195124
+  },
+  "op_totals_ns": {
+    "MatmulDeviceOperation": 737823,
+    "LayerNormDeviceOperation": 24808,
+    "NlpCreateHeadsDeviceOperation": 58686,
+    "SliceDeviceOperation": 45343,
+    "RotaryEmbeddingIndexedDeviceOperation": 41223,
+    "ConcatDeviceOperation": 78286,
+    "TilizeDeviceOperation": 137536,
+    "TypecastDeviceOperation": 103778,
+    "BinaryNgDeviceOperation": 101827,
+    "UpdatePaddedKvCacheDeviceOperation": 4904,
+    "RingJointSDPADeviceOperation": 7195124,
+    "NLPConcatHeadsDeviceOperation": 55714
+  },
+  "per_device_kernel_sum_ns": {
+    "0": 8571856.0,
+    "4": 8567752.0,
+    "5": 8567285.0,
+    "6": 8559269.0,
+    "7": 8553320.0,
+    "3": 8543243.0,
+    "2": 8545420.0,
+    "1": 8538909.0
+  },
+  "program_cache_hit_values": {
+    "False": 192
+  },
+  "limitations": [
+    "One instrumented first forward, no warmup/repeats; not a steady-state benchmark.",
+    "Kernel-counter durations exclude host compilation gaps, but cold execution and instrumentation may affect device timing.",
+    "Sum of per-operation device maxima is an accumulated operation budget, not wall-clock MLA latency or TTFT.",
+    "RingJointSDPA includes distributed ring communication; CCL category zero does not mean no communication.",
+    "Reference=None: execution and coverage validated, numerical accuracy not independently compared."
+  ]
+}

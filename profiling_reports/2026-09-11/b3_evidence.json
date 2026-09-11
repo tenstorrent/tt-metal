@@ -1,0 +1,595 @@
+{
+  "ops_1rank.csv.gz": {
+    "sha256": "1f2a95ea9811027e10f1915ff56843a057270f4c8eb5bdf00ae9465daf1cbeab",
+    "devices": 32,
+    "sdpa_invocations_per_device": 9,
+    "metric": "sum of all non-socket device kernel durations / devices / 9; accumulated work, not elapsed time",
+    "total_ms": 5.594304482638888,
+    "operations": {
+      "MatmulDeviceOperation": {
+        "ms": 1.318788354166667,
+        "percent": 23.573767896605116
+      },
+      "RingJointSDPADeviceOperation": {
+        "ms": 0.9750933055555551,
+        "percent": 17.430107863839297
+      },
+      "CombineDeviceOperation": {
+        "ms": 0.6603328298611107,
+        "percent": 11.803662669959381
+      },
+      "DispatchDeviceOperation": {
+        "ms": 0.5920169027777779,
+        "percent": 10.582493402263255
+      },
+      "UnifiedRoutedExpertFfnDeviceOperation": {
+        "ms": 0.4701265486111111,
+        "percent": 8.403663941962412
+      },
+      "ReduceScatterMinimalAsyncDeviceOperation": {
+        "ms": 0.35429452777777737,
+        "percent": 6.33312914728326
+      },
+      "ReduceScatterDeviceOperation": {
+        "ms": 0.3069370416666667,
+        "percent": 5.486598783087357
+      },
+      "HighBwAllGatherDeviceOperation": {
+        "ms": 0.1761851631944442,
+        "percent": 3.1493667128989715
+      },
+      "PostCombineReduceDeviceOperation": {
+        "ms": 0.12271851388888884,
+        "percent": 2.1936330828922155
+      },
+      "AllGatherAsyncDeviceOperation": {
+        "ms": 0.11783317361111105,
+        "percent": 2.1063060471018193
+      },
+      "LayerNormPostAllGatherDeviceOperation": {
+        "ms": 0.09687065277777786,
+        "percent": 1.7315942147661405
+      },
+      "AllGatherDeviceOperation": {
+        "ms": 0.0658863993055556,
+        "percent": 1.1777406737517502
+      },
+      "LayerNormPreAllGatherDeviceOperation": {
+        "ms": 0.04693415972222217,
+        "percent": 0.8389632682288838
+      },
+      "BinaryNgDeviceOperation": {
+        "ms": 0.03667177777777778,
+        "percent": 0.6555198754659015
+      },
+      "MaskedBincountDeviceOperation": {
+        "ms": 0.03383268055555557,
+        "percent": 0.604770095380943
+      },
+      "MoeGroupedTopkDeviceOperation": {
+        "ms": 0.026647145833333323,
+        "percent": 0.4763263407636977
+      },
+      "LayerNormDeviceOperation": {
+        "ms": 0.02418193402777779,
+        "percent": 0.43225988329421305
+      },
+      "ConcatDeviceOperation": {
+        "ms": 0.020427416666666663,
+        "percent": 0.36514667247841415
+      },
+      "RotaryEmbeddingIndexedDeviceOperation": {
+        "ms": 0.020418489583333314,
+        "percent": 0.3649870979797244
+      },
+      "OffsetCumsumDeviceOperation": {
+        "ms": 0.01937194791666667,
+        "percent": 0.3462798275779357
+      },
+      "UntilizeWithUnpaddingDeviceOperation": {
+        "ms": 0.01787461805555555,
+        "percent": 0.31951457256262744
+      },
+      "EmbeddingsDeviceOperation": {
+        "ms": 0.016386538194444453,
+        "percent": 0.29291466428575164
+      },
+      "NlpCreateHeadsDeviceOperation": {
+        "ms": 0.015162340277777783,
+        "percent": 0.2710317310191447
+      },
+      "SliceDeviceOperation": {
+        "ms": 0.014201309027777763,
+        "percent": 0.2538529869414413
+      },
+      "NLPConcatHeadsDeviceOperation": {
+        "ms": 0.013802340277777778,
+        "percent": 0.24672129163886838
+      },
+      "ReshapeViewDeviceOperation": {
+        "ms": 0.006691791666666667,
+        "percent": 0.11961793798377744
+      },
+      "FastReduceNCDeviceOperation": {
+        "ms": 0.00588946875,
+        "percent": 0.10527615663890143
+      },
+      "CopyDeviceOperation": {
+        "ms": 0.00526919444444444,
+        "percent": 0.09418855303276075
+      },
+      "UpdatePaddedKvCacheDeviceOperation": {
+        "ms": 0.004589947916666663,
+        "percent": 0.08204680190202197
+      },
+      "TypecastDeviceOperation": {
+        "ms": 0.004067864583333335,
+        "percent": 0.07271439364727755
+      },
+      "TilizeDeviceOperation": {
+        "ms": 0.003493805555555556,
+        "percent": 0.06245290306235698
+      },
+      "GenericOpDeviceOperation": {
+        "ms": 0.0013062986111111112,
+        "percent": 0.023350509704379144
+      }
+    }
+  },
+  "ops_pp4_stage0.csv.gz": {
+    "sha256": "5fe5abff93fbba39508aba769e71a9c369c9a3ff1745030cfdc27f670bbd0752",
+    "devices": 8,
+    "sdpa_invocations_per_device": 9,
+    "metric": "sum of all non-socket device kernel durations / devices / 9; accumulated work, not elapsed time",
+    "total_ms": 11.891490361111112,
+    "operations": {
+      "RingJointSDPADeviceOperation": {
+        "ms": 2.7875968749999998,
+        "percent": 23.44194705918707
+      },
+      "CombineDeviceOperation": {
+        "ms": 2.162010583333333,
+        "percent": 18.18115743005421
+      },
+      "MatmulDeviceOperation": {
+        "ms": 2.084789180555556,
+        "percent": 17.53177370746957
+      },
+      "DispatchDeviceOperation": {
+        "ms": 2.0771534861111114,
+        "percent": 17.46756229062803
+      },
+      "UnifiedRoutedExpertFfnDeviceOperation": {
+        "ms": 1.8750408888888888,
+        "percent": 15.76792169819906
+      },
+      "LayerNormDeviceOperation": {
+        "ms": 0.15537500000000004,
+        "percent": 1.3066066176879294
+      },
+      "BinaryNgDeviceOperation": {
+        "ms": 0.1334766388888889,
+        "percent": 1.1224550904519015
+      },
+      "PostCombineReduceDeviceOperation": {
+        "ms": 0.1320176111111111,
+        "percent": 1.110185578948539
+      },
+      "ConcatDeviceOperation": {
+        "ms": 0.06987656944444443,
+        "percent": 0.5876182658564197
+      },
+      "EmbeddingsDeviceOperation": {
+        "ms": 0.06183838888888889,
+        "percent": 0.5200221924336729
+      },
+      "NlpCreateHeadsDeviceOperation": {
+        "ms": 0.05670369444444444,
+        "percent": 0.4768426220979267
+      },
+      "NLPConcatHeadsDeviceOperation": {
+        "ms": 0.05195631944444445,
+        "percent": 0.43692016615812806
+      },
+      "SliceDeviceOperation": {
+        "ms": 0.04196077777777777,
+        "percent": 0.35286390943058427
+      },
+      "RotaryEmbeddingIndexedDeviceOperation": {
+        "ms": 0.04186993055555555,
+        "percent": 0.3520999410846205
+      },
+      "MaskedBincountDeviceOperation": {
+        "ms": 0.034442291666666666,
+        "percent": 0.28963814139986793
+      },
+      "TopKDeviceOperation": {
+        "ms": 0.02302516666666667,
+        "percent": 0.19362725753843402
+      },
+      "AllGatherDeviceOperation": {
+        "ms": 0.019618222222222224,
+        "percent": 0.1649769846038806
+      },
+      "UntilizeWithUnpaddingDeviceOperation": {
+        "ms": 0.019204027777777775,
+        "percent": 0.16149386825877557
+      },
+      "OffsetCumsumDeviceOperation": {
+        "ms": 0.01911931944444445,
+        "percent": 0.1607815241306556
+      },
+      "TilizeDeviceOperation": {
+        "ms": 0.012620041666666668,
+        "percent": 0.10612666102760464
+      },
+      "TypecastDeviceOperation": {
+        "ms": 0.007974986111111112,
+        "percent": 0.06706464765082608
+      },
+      "ReshapeViewDeviceOperation": {
+        "ms": 0.006718486111111112,
+        "percent": 0.05649826814881556
+      },
+      "SoftmaxDeviceOperation": {
+        "ms": 0.0056597777777777775,
+        "percent": 0.04759519291448125
+      },
+      "UpdatePaddedKvCacheDeviceOperation": {
+        "ms": 0.004600736111111112,
+        "percent": 0.038689314555196176
+      },
+      "ZeroPaddedKvCacheDeviceOperation": {
+        "ms": 0.004279944444444445,
+        "percent": 0.035991657180677705
+      },
+      "GenericOpDeviceOperation": {
+        "ms": 0.0013068333333333335,
+        "percent": 0.010989651369580106
+      },
+      "CopyDeviceOperation": {
+        "ms": 0.0012545833333333335,
+        "percent": 0.010550261533543456
+      }
+    }
+  },
+  "ops_pp4_stage1.csv.gz": {
+    "sha256": "435e0c83351d6ce9974829638c6a4df096ddeca46f35b7b8b684bf57d3ab79a5",
+    "devices": 8,
+    "sdpa_invocations_per_device": 9,
+    "metric": "sum of all non-socket device kernel durations / devices / 9; accumulated work, not elapsed time",
+    "total_ms": 14.634812763888892,
+    "operations": {
+      "CombineDeviceOperation": {
+        "ms": 3.9438629444444455,
+        "percent": 26.948502916114162
+      },
+      "DispatchDeviceOperation": {
+        "ms": 3.005735916666666,
+        "percent": 20.538260141484418
+      },
+      "RingJointSDPADeviceOperation": {
+        "ms": 2.7890706388888886,
+        "percent": 19.05778149598787
+      },
+      "MatmulDeviceOperation": {
+        "ms": 2.083369666666668,
+        "percent": 14.235711110751899
+      },
+      "UnifiedRoutedExpertFfnDeviceOperation": {
+        "ms": 1.9551573750000004,
+        "percent": 13.359633679935504
+      },
+      "LayerNormDeviceOperation": {
+        "ms": 0.15417641666666665,
+        "percent": 1.0534908724428227
+      },
+      "BinaryNgDeviceOperation": {
+        "ms": 0.1346554861111111,
+        "percent": 0.9201039212703207
+      },
+      "PostCombineReduceDeviceOperation": {
+        "ms": 0.1311565138888889,
+        "percent": 0.8961953665202672
+      },
+      "ConcatDeviceOperation": {
+        "ms": 0.07102001388888893,
+        "percent": 0.4852813290794495
+      },
+      "NlpCreateHeadsDeviceOperation": {
+        "ms": 0.056562083333333325,
+        "percent": 0.38648996912963
+      },
+      "NLPConcatHeadsDeviceOperation": {
+        "ms": 0.05200727777777779,
+        "percent": 0.35536688181009535
+      },
+      "SliceDeviceOperation": {
+        "ms": 0.04196179166666664,
+        "percent": 0.2867258525521182
+      },
+      "RotaryEmbeddingIndexedDeviceOperation": {
+        "ms": 0.041875527777777775,
+        "percent": 0.28613640948727953
+      },
+      "MaskedBincountDeviceOperation": {
+        "ms": 0.03438309722222223,
+        "percent": 0.23494046542953959
+      },
+      "TopKDeviceOperation": {
+        "ms": 0.028857083333333335,
+        "percent": 0.19718109004125842
+      },
+      "TilizeDeviceOperation": {
+        "ms": 0.020404444444444444,
+        "percent": 0.13942402115858976
+      },
+      "AllGatherDeviceOperation": {
+        "ms": 0.020313055555555553,
+        "percent": 0.13879955885515402
+      },
+      "UntilizeWithUnpaddingDeviceOperation": {
+        "ms": 0.01917094444444445,
+        "percent": 0.13099548831774857
+      },
+      "OffsetCumsumDeviceOperation": {
+        "ms": 0.01912848611111112,
+        "percent": 0.13070536958498216
+      },
+      "TypecastDeviceOperation": {
+        "ms": 0.008122430555555555,
+        "percent": 0.05550074802185027
+      },
+      "ReshapeViewDeviceOperation": {
+        "ms": 0.006756208333333334,
+        "percent": 0.04616532129474278
+      },
+      "SoftmaxDeviceOperation": {
+        "ms": 0.005664027777777777,
+        "percent": 0.03870242735017186
+      },
+      "UpdatePaddedKvCacheDeviceOperation": {
+        "ms": 0.004603624999999998,
+        "percent": 0.03145667166551902
+      },
+      "ZeroPaddedKvCacheDeviceOperation": {
+        "ms": 0.004307902777777778,
+        "percent": 0.029435995166316318
+      },
+      "GenericOpDeviceOperation": {
+        "ms": 0.0013098333333333334,
+        "percent": 0.00895012019945565
+      },
+      "CopyDeviceOperation": {
+        "ms": 0.0011799722222222222,
+        "percent": 0.008062776348828871
+      }
+    }
+  },
+  "ops_pp4_stage2.csv.gz": {
+    "sha256": "51826d7d71b8d0051fc08acea29ce3da5e1c81c7d6bab2acb127fd7b76bc0a96",
+    "devices": 8,
+    "sdpa_invocations_per_device": 9,
+    "metric": "sum of all non-socket device kernel durations / devices / 9; accumulated work, not elapsed time",
+    "total_ms": 11.971388166666665,
+    "operations": {
+      "RingJointSDPADeviceOperation": {
+        "ms": 2.789116555555556,
+        "percent": 23.298188286314357
+      },
+      "CombineDeviceOperation": {
+        "ms": 2.22336561111111,
+        "percent": 18.572329124719943
+      },
+      "DispatchDeviceOperation": {
+        "ms": 2.136287569444444,
+        "percent": 17.844944460098276
+      },
+      "MatmulDeviceOperation": {
+        "ms": 2.0845259166666668,
+        "percent": 17.41256642626338
+      },
+      "UnifiedRoutedExpertFfnDeviceOperation": {
+        "ms": 1.880389097222222,
+        "percent": 15.707360508600072
+      },
+      "LayerNormDeviceOperation": {
+        "ms": 0.15519779166666664,
+        "percent": 1.2964059765332978
+      },
+      "BinaryNgDeviceOperation": {
+        "ms": 0.1348014027777778,
+        "percent": 1.1260298379858829
+      },
+      "PostCombineReduceDeviceOperation": {
+        "ms": 0.13152944444444445,
+        "percent": 1.0986983515468762
+      },
+      "ConcatDeviceOperation": {
+        "ms": 0.07061340277777776,
+        "percent": 0.5898514173518733
+      },
+      "NlpCreateHeadsDeviceOperation": {
+        "ms": 0.05659001388888888,
+        "percent": 0.4727105420109847
+      },
+      "NLPConcatHeadsDeviceOperation": {
+        "ms": 0.05197693055555556,
+        "percent": 0.43417630296443815
+      },
+      "SliceDeviceOperation": {
+        "ms": 0.041988124999999994,
+        "percent": 0.3507373114582688
+      },
+      "RotaryEmbeddingIndexedDeviceOperation": {
+        "ms": 0.04195299999999997,
+        "percent": 0.35044390354674665
+      },
+      "MaskedBincountDeviceOperation": {
+        "ms": 0.03433780555555555,
+        "percent": 0.286832279410723
+      },
+      "TopKDeviceOperation": {
+        "ms": 0.027636416666666656,
+        "percent": 0.23085390166879693
+      },
+      "AllGatherDeviceOperation": {
+        "ms": 0.02060683333333333,
+        "percent": 0.17213403363455662
+      },
+      "TilizeDeviceOperation": {
+        "ms": 0.020325277777777775,
+        "percent": 0.16978212964785339
+      },
+      "UntilizeWithUnpaddingDeviceOperation": {
+        "ms": 0.019172499999999995,
+        "percent": 0.16015268850261014
+      },
+      "OffsetCumsumDeviceOperation": {
+        "ms": 0.019119736111111108,
+        "percent": 0.15971193853982968
+      },
+      "TypecastDeviceOperation": {
+        "ms": 0.008018597222222222,
+        "percent": 0.06698134845004307
+      },
+      "ReshapeViewDeviceOperation": {
+        "ms": 0.0066959722222222256,
+        "percent": 0.055933130970279646
+      },
+      "SoftmaxDeviceOperation": {
+        "ms": 0.0056506388888888865,
+        "percent": 0.04720120014671833
+      },
+      "UpdatePaddedKvCacheDeviceOperation": {
+        "ms": 0.004613680555555555,
+        "percent": 0.03853922779316408
+      },
+      "ZeroPaddedKvCacheDeviceOperation": {
+        "ms": 0.004308847222222223,
+        "percent": 0.03599287870574483
+      },
+      "GenericOpDeviceOperation": {
+        "ms": 0.0013200833333333333,
+        "percent": 0.011026986302298638
+      },
+      "CopyDeviceOperation": {
+        "ms": 0.0012469166666666672,
+        "percent": 0.010415806832983689
+      }
+    }
+  },
+  "ops_pp4_stage3.csv.gz": {
+    "sha256": "70089bdf4977a9f59ac30a31b795256ded5b442250414787ef3bea860b98b6b8",
+    "devices": 8,
+    "sdpa_invocations_per_device": 9,
+    "metric": "sum of all non-socket device kernel durations / devices / 9; accumulated work, not elapsed time",
+    "total_ms": 16.17107494444444,
+    "operations": {
+      "MatmulDeviceOperation": {
+        "ms": 4.760355694444444,
+        "percent": 29.43747221998906
+      },
+      "CombineDeviceOperation": {
+        "ms": 3.4723109583333325,
+        "percent": 21.47235709600271
+      },
+      "RingJointSDPADeviceOperation": {
+        "ms": 2.7888370416666666,
+        "percent": 17.24583585969199
+      },
+      "DispatchDeviceOperation": {
+        "ms": 2.300497763888888,
+        "percent": 14.226003971858544
+      },
+      "UnifiedRoutedExpertFfnDeviceOperation": {
+        "ms": 1.9439196666666672,
+        "percent": 12.020967519753528
+      },
+      "LayerNormDeviceOperation": {
+        "ms": 0.2211179027777777,
+        "percent": 1.3673667553791318
+      },
+      "BinaryNgDeviceOperation": {
+        "ms": 0.13466722222222224,
+        "percent": 0.8327660510193049
+      },
+      "PostCombineReduceDeviceOperation": {
+        "ms": 0.13146361111111113,
+        "percent": 0.8129553017517572
+      },
+      "ConcatDeviceOperation": {
+        "ms": 0.0709048611111111,
+        "percent": 0.4384672098466182
+      },
+      "NlpCreateHeadsDeviceOperation": {
+        "ms": 0.056690777777777764,
+        "percent": 0.35056901271275
+      },
+      "NLPConcatHeadsDeviceOperation": {
+        "ms": 0.05199455555555556,
+        "percent": 0.3215281342408115
+      },
+      "SliceDeviceOperation": {
+        "ms": 0.0420227361111111,
+        "percent": 0.2598635913535728
+      },
+      "RotaryEmbeddingIndexedDeviceOperation": {
+        "ms": 0.04129690277777777,
+        "percent": 0.25537512453348243
+      },
+      "MaskedBincountDeviceOperation": {
+        "ms": 0.034352444444444435,
+        "percent": 0.21243142192131256
+      },
+      "TopKDeviceOperation": {
+        "ms": 0.023055819444444445,
+        "percent": 0.14257443938422443
+      },
+      "AllGatherDeviceOperation": {
+        "ms": 0.020289013888888877,
+        "percent": 0.1254648436086752
+      },
+      "UntilizeWithUnpaddingDeviceOperation": {
+        "ms": 0.019141208333333347,
+        "percent": 0.11836695086191096
+      },
+      "OffsetCumsumDeviceOperation": {
+        "ms": 0.01912765277777778,
+        "percent": 0.11828312492206382
+      },
+      "TilizeDeviceOperation": {
+        "ms": 0.011224375000000002,
+        "percent": 0.06941019714868198
+      },
+      "ReshapeViewDeviceOperation": {
+        "ms": 0.0066740138888888864,
+        "percent": 0.04127130640243392
+      },
+      "SoftmaxDeviceOperation": {
+        "ms": 0.005648847222222222,
+        "percent": 0.034931797927031924
+      },
+      "UpdatePaddedKvCacheDeviceOperation": {
+        "ms": 0.004599374999999998,
+        "percent": 0.028441986793092622
+      },
+      "ZeroPaddedKvCacheDeviceOperation": {
+        "ms": 0.004315763888888887,
+        "percent": 0.02668816948604622
+      },
+      "TypecastDeviceOperation": {
+        "ms": 0.004017458333333333,
+        "percent": 0.02484348348600986
+      },
+      "GenericOpDeviceOperation": {
+        "ms": 0.001320847222222222,
+        "percent": 0.008167961788316353
+      },
+      "CopyDeviceOperation": {
+        "ms": 0.001228430555555556,
+        "percent": 0.007596468136940903
+      }
+    }
+  }
+}

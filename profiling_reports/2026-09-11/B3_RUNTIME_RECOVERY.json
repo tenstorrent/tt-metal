@@ -1,0 +1,29 @@
+{
+  "timestamp_utc": "2026-09-11T15:32:00.372598+00:00",
+  "source_host": "bh-glx-120-b03u02",
+  "source_root": "/tmp/ssalice-mistral4-prefill-followups-profile",
+  "revision": "b48bf4095de1601786c4cf0e91a647a532c730c5",
+  "destination": "/data/ssalice/temp/tt-metal/.worktrees/mistral4-prefill-followups",
+  "hashes": {
+    "build/lib/libtt_metal.so": "20a0c6feadec852232b5e796921f77abd27cf82eef25318e771bac899e479d76",
+    "build/lib/_ttnncpp.so": "d9c1defa378d95a8a73c4688ebb4dbf99960d875ad5ca530998a2e8ede0acd39",
+    "ttnn/ttnn/_ttnn.so": "2b2be30fb02fd1c2dfbf1b5cc4e17cd504a0c98b8926e2f37982a4bf513e4eca"
+  },
+  "import_verification": "TTNN, ttnn._ttnn, Tracy imported from destination; /proc/self/maps confirmed libtt_metal.so and _ttnncpp.so from destination/build_Release/lib",
+  "recovered_runtime": [
+    "build_Release/lib",
+    "build_Release/tools",
+    "build_Release/include",
+    "build_Release/libexec",
+    "build_Release/share",
+    "runtime",
+    "ttnn/ttnn/_ttnn.so"
+  ],
+  "build_intermediates": "Partial bulk transfer stopped intentionally after complete runtime transfer. Not a complete reproducible build tree.",
+  "submodule_contents": {
+    "tracy": "117100515bb21d9a6b3a8f0eee50ecd91f961408",
+    "umd": "1d8da476f6576a2dc9d2d171a08c523beecc160f",
+    "tt-cluster-descriptors": "9bcf698e971a7a49df1aaf17892352c47d359d47"
+  },
+  "hardware_accessed": false
+}
