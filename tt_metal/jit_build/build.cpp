@@ -183,7 +183,7 @@ void JitBuildEnv::init(
     }
 
     if (rtoptions.get_riscv_debug_info_enabled()) {
-        common_flags += "-g ";
+        common_flags += "-g1 ";
     }
 
     this->cflags_ = common_flags;
