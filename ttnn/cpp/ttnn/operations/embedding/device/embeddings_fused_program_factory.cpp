@@ -83,8 +83,6 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     uint32_t g1_numcores = core_group_1.num_cores();
 
     // Create Buffers
-    tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-
     EmbeddingsIndexType embeddings_index_type;
     if (a.dtype() == DataType::BFLOAT16) {
         embeddings_index_type = EmbeddingsIndexType::BFP16;
@@ -142,9 +140,10 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     const KernelSpecName COMPUTE_G2{"compute_group_2"};
 
     const DFBSpecName WEIGHTS_STAGING{"weights_staging"};
-    const DFBSpecName INDEX_SCRATCH{"index_scratch"};
     const DFBSpecName OUTPUT{"output"};
-    const DFBSpecName WEIGHT_CACHE{"weight_cache"};
+    // Reader-private staging regions (formerly reader self-loop DFBs; see the ScratchpadSpecs below).
+    const ScratchpadSpecName INDEX_SCRATCH{"index_scratch"};
+    const ScratchpadSpecName WEIGHT_CACHE{"weight_cache"};
 
     const TensorParamName INPUT_PARAM{"input"};
     const TensorParamName WEIGHTS_PARAM{"weights"};
@@ -165,11 +164,14 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
         .data_format_metadata = weights_data_format,
     });
 
-    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+    // The reader's private page for the block of indices it is working through. Nothing hands it off
+    // or synchronizes on it, so it is a scratchpad rather than a DFB. (As a DFB it was bound by the
+    // reader as both PRODUCER and CONSUMER -- a DM self-loop, legal on Gen1 but rejected by the spec
+    // validator on Gen2/Quasar, and its UInt32 format has no Quasar device format.) size_per_node is
+    // the former DFB's whole allocation, entry_size * num_entries.
+    spec.scratchpads.push_back(ScratchpadSpec{
         .unique_id = INDEX_SCRATCH,
-        .entry_size = TILE_HEIGHT * input_element_size_bytes,
-        .num_entries = 1,
-        .data_format_metadata = input_data_format,
+        .size_per_node = TILE_HEIGHT * input_element_size_bytes * 1,
     });
 
     uint32_t output_dfb_total_size;
@@ -202,12 +204,12 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
 
     if (use_local_cache) {
         uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
-        // PADDED caches the single pad row; BINARY caches rows 0 and 1.
-        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        // PADDED caches the single pad row; BINARY caches rows 0 and 1. The reader fills the cache and
+        // replays tokens out of it with no hand-off to another kernel, so like the index page it is a
+        // scratchpad (formerly a reader self-loop DFB of entry_size cache_page_size).
+        spec.scratchpads.push_back(ScratchpadSpec{
             .unique_id = WEIGHT_CACHE,
-            .entry_size = cache_page_size,
-            .num_entries = (embeddings_type == EmbeddingsType::PADDED) ? 1u : 2u,
-            .data_format_metadata = weights_data_format,
+            .size_per_node = cache_page_size * ((embeddings_type == EmbeddingsType::PADDED) ? 1u : 2u),
         });
     }
     uint32_t weight_block_size;
@@ -243,37 +245,25 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
         .accessor_name = "in0",
         .endpoint_type = DFBEndpointType::PRODUCER,
     });
-    // The index scratch page never leaves the reader: it reserves the page once, decodes indices out
-    // of it, and commits it at the end only to leave the buffer balanced. Both roles are the reader's.
-    reader_dfb_bindings.push_back(DFBBinding{
-        .dfb_spec_name = INDEX_SCRATCH,
-        .accessor_name = "in1",
-        .endpoint_type = DFBEndpointType::PRODUCER,
-    });
-    reader_dfb_bindings.push_back(DFBBinding{
-        .dfb_spec_name = INDEX_SCRATCH,
-        .accessor_name = "in1",
-        .endpoint_type = DFBEndpointType::CONSUMER,
+    // The index page never leaves the reader (see the ScratchpadSpec above).
+    Group<ScratchpadBinding> reader_scratchpad_bindings;
+    reader_scratchpad_bindings.push_back(ScratchpadBinding{
+        .scratchpad_spec_name = INDEX_SCRATCH,
+        .accessor_name = "indices",
     });
     if (use_local_cache) {
         // Likewise the weight cache: the reader fills it and reads tokens back out of it, with no
         // hand-off to another kernel.
-        reader_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = WEIGHT_CACHE,
+        reader_scratchpad_bindings.push_back(ScratchpadBinding{
+            .scratchpad_spec_name = WEIGHT_CACHE,
             .accessor_name = "local_cache",
-            .endpoint_type = DFBEndpointType::PRODUCER,
-        });
-        reader_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = WEIGHT_CACHE,
-            .accessor_name = "local_cache",
-            .endpoint_type = DFBEndpointType::CONSUMER,
         });
     }
 
-    // These defines and the weight cache's DFB binding share one condition, the embeddings type. That
-    // is what lets the reader name the cache handle at all: a dfb:: handle exists only on the builds
-    // where the host binds it, so the reader's reference to it is compiled out under the same defines
-    // on the builds where it is not.
+    // These defines and the weight cache's scratchpad binding share one condition, the embeddings type.
+    // That is what lets the reader name the cache handle at all: a scratch:: handle exists only on the
+    // builds where the host binds it, so the reader's reference to it is compiled out under the same
+    // defines on the builds where it is not.
     KernelSpec::CompilerOptions::Defines embedding_defines{
         {enchantum::to_string(embeddings_type).data(), "1"},
         {enchantum::to_string(embeddings_index_type).data(), "1"},
@@ -289,6 +279,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
         .source = "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings_tilize.cpp",
         .compiler_options = {.defines = embedding_defines},
         .dfb_bindings = std::move(reader_dfb_bindings),
+        .scratchpad_bindings = std::move(reader_scratchpad_bindings),
         .tensor_bindings =
             {
                 TensorBinding{.tensor_parameter_name = INPUT_PARAM, .accessor_name = "input"},
@@ -322,6 +313,14 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
     // Legacy compute config left every field at its default; ComputeGen1Config's defaults reproduce
     // them exactly (HiFi4, precise SFPU, 16-bit dest, double-buffered dest, no unpack-mode entries).
     ComputeHardwareConfig compute_hw = ComputeGen1Config{};
+    // Gen2 (Quasar): KernelSpec::hw_config must hold the target generation's alternative -- the spec
+    // validator rejects a ComputeGen1Config on Quasar. The Gen1 config sets no field, so the Gen2 one
+    // is default-constructed too (same HiFi4 / precise SFPU / 16-bit dest / double-buffered dest; the
+    // Gen2-only enable_2x_src_register is left at its default). WH/BH take the Gen1 config unchanged.
+    if (device->arch() == tt::ARCH::QUASAR) {
+        // TODO(#52269): Quasar unpack_modes are copied from Gen1 and not yet optimized for Quasar.
+        compute_hw = ComputeGen2Config{};
+    }
 
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t per_core_block_cnt) {
         Group<DFBBinding> compute_dfb_bindings;
