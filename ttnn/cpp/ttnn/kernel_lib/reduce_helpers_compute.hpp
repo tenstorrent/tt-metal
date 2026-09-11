@@ -212,22 +212,22 @@ enum class ReduceWithinTile { Collapse, Skip };
  *         ckl::eltwise_chain(
  *             ckl::IterationShape::tiles(HALF),
  *             ckl::BinaryFpu<
- *                 ckl::input(cb_in, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Block),
- *                 ckl::input(cb_in, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Block,
- *                            ckl::TileOffset::Set),
+ *                 ckl::input(cb_in, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
+ *                 ckl::input(cb_in, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block,
+ *                            ckl::TileAddressing::Offset),
  *                 ckl::BinaryFpuOp::Add,
  *                 ckl::BroadcastDim::None,
  *                 ckl::Dst::D0,
  *                 ckl::DestAccumulation::WholeShape>{0, HALF},   // <- the two operand BASES
  *             ckl::PackTile<ckl::output(cb_out, ckl::ReservePolicy::PerOuter, ckl::PushPolicy::PerOuter,
- *                                       ckl::DataFormatReconfig::Enabled, ckl::PackRelu::Disabled,
- *                                       ckl::L1Accumulation::Disabled,
- *                                       ckl::DestAccumulation::WholeShape)>{});
+ *                                       ckl::DataFormatReconfig::Enabled, ckl::TileAddressing::Direct,
+ *                                       ckl::DestAccumulation::WholeShape,
+ *                                       ckl::L1Accumulation::Disabled)>{});
  *
  *     `{0, HALF}` are the A and B operand base offsets — that brace pair is the whole trick, and it is
  *     the same idiom the `eltwise_l1_vs_dest_accumulate` example measures. `tiles(...)` is one
  *     contiguous shape, so the accumulation scope is WholeShape (PerRow is rejected there); for a 2D
- *     walk use `grid(H, W)` with `TileOffset::Strided` and a `StridedTileRange{base, row_stride}` per
+ *     walk use `grid(H, W)` with `TileAddressing::Strided` and a `StridedTileRange{base, row_stride}` per
  *     operand. ODD N does not tile into halves — fall back to (1), or handle the leftover separately.
  */
 

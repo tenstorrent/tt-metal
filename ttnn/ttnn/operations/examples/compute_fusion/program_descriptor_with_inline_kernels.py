@@ -97,7 +97,7 @@ _SFPU_CHAIN_KERNEL = (
 #include <cstdint>
 #include "api/compute/common.h"
 #include "api/dataflow/circular_buffer.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/sfpu.hpp"
 """
@@ -126,9 +126,9 @@ void kernel_main() {
             CF_PHASE("CF_FUSED");
             eltwise_chain(
                 IterationShape::tiles(n).block_size(blk),
-                CopyTile<input(cb_x, WaitPolicy::Upfront, PopPolicy::None, OperandKind::Block), Dst::D0>{},
+                CopyTile<input(cb_x, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block), Dst::D0>{},
                 Sqrt<>{},
-                CopyTile<input(cb_y, WaitPolicy::Upfront, PopPolicy::None, OperandKind::Block), Dst::D1>{},
+                CopyTile<input(cb_y, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block), Dst::D1>{},
                 AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
                 Exp<>{},
                 PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{});
@@ -137,20 +137,20 @@ void kernel_main() {
             { CF_PHASE("CF_SQRT");  // s1 = sqrt(x)
               eltwise_chain(
                 IterationShape::tiles(n).block_size(blk),
-                CopyTile<input(cb_x, WaitPolicy::Upfront, PopPolicy::None, OperandKind::Block), Dst::D0>{},
+                CopyTile<input(cb_x, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block), Dst::D0>{},
                 Sqrt<>{},
                 PackTile<output(cb_s1, ReservePolicy::Upfront, PushPolicy::AtEnd)>{}); }
             { CF_PHASE("CF_ADD");  // s2 = s1 + y
               eltwise_chain(
                 IterationShape::tiles(n).block_size(blk),
-                CopyTile<input(cb_s1, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block), Dst::D0>{},
-                CopyTile<input(cb_y, WaitPolicy::Upfront, PopPolicy::None, OperandKind::Block), Dst::D1>{},
+                CopyTile<input(cb_s1, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block), Dst::D0>{},
+                CopyTile<input(cb_y, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block), Dst::D1>{},
                 AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
                 PackTile<output(cb_s2, ReservePolicy::Upfront, PushPolicy::AtEnd)>{}); }
             { CF_PHASE("CF_EXP");  // out = exp(s2)
               eltwise_chain(
                 IterationShape::tiles(n).block_size(blk),
-                CopyTile<input(cb_s2, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block), Dst::D0>{},
+                CopyTile<input(cb_s2, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block), Dst::D0>{},
                 Exp<>{},
                 PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{}); }
         }
@@ -168,7 +168,7 @@ _FPU_SFPU_KERNEL = (
 #include <cstdint>
 #include "api/compute/common.h"
 #include "api/dataflow/circular_buffer.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/sfpu.hpp"
 """
@@ -197,33 +197,34 @@ void kernel_main() {
             CF_PHASE("CF_FUSED");
             eltwise_chain(
                 IterationShape::tiles(n).block_size(blk),
-                CopyTile<input(cb_x, WaitPolicy::Upfront, PopPolicy::None, OperandKind::Block), Dst::D0>{},
+                CopyTile<input(cb_x, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block), Dst::D0>{},
                 Sqrt<>{},
-                DestReuseBinary<input(cb_b, WaitPolicy::Upfront, PopPolicy::None, OperandKind::Block),
-                                BinaryFpuOp::Mul, DestReuseType::DEST_TO_SRCA, Dst::D0>{},
+                DestReuseBinary<BinaryFpuOp::Mul,
+                                input(cb_b, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block),
+                                DestReuseType::DEST_TO_SRCA, Dst::D0>{},
                 PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{});
         } else if constexpr (method == 1) {
             CF_PHASE("CF_FUSED");
             eltwise_chain(
                 IterationShape::tiles(n).block_size(blk),
-                CopyTile<input(cb_x, WaitPolicy::Upfront, PopPolicy::None, OperandKind::Block), Dst::D0>{},
+                CopyTile<input(cb_x, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block), Dst::D0>{},
                 Sqrt<>{},
-                CopyTile<input(cb_b, WaitPolicy::Upfront, PopPolicy::None, OperandKind::Block), Dst::D1>{},
+                CopyTile<input(cb_b, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block), Dst::D1>{},
                 MulBinary<Dst::D0, Dst::D1, Dst::D0>{},
                 PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{});
         } else {
             { CF_PHASE("CF_SQRT");  // s1 = sqrt(x)
               eltwise_chain(
                 IterationShape::tiles(n).block_size(blk),
-                CopyTile<input(cb_x, WaitPolicy::Upfront, PopPolicy::None, OperandKind::Block), Dst::D0>{},
+                CopyTile<input(cb_x, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block), Dst::D0>{},
                 Sqrt<>{},
                 PackTile<output(cb_s1, ReservePolicy::Upfront, PushPolicy::AtEnd)>{}); }
             { CF_PHASE("CF_MUL");  // out = s1 * b (FPU)
               eltwise_chain(
                 IterationShape::tiles(n).block_size(blk),
                 BinaryFpu<BinaryFpuOp::Mul,
-                          input(cb_s1, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Block),
-                          input(cb_b, WaitPolicy::Upfront, PopPolicy::None, OperandKind::Block),
+                          input(cb_s1, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block),
+                          input(cb_b, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block),
                           Dst::D0>{},
                 PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{}); }
         }
@@ -243,7 +244,7 @@ _REDUCE_RECIP_KERNEL = (
 #include "api/compute/reduce.h"
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/dataflow/circular_buffer.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 """
