@@ -51,6 +51,22 @@ bool metal_SocDescriptor::is_noc0_dram_endpoint(const tt::tt_metal::CoreCoord& t
     return false;
 }
 
+uint8_t metal_SocDescriptor::get_dram_endpoint_noc_mask(const tt::tt_metal::CoreCoord& translated_coord) const {
+    // Both endpoint tables matter: worker and eth DRAM reads can route through different subchannels,
+    // and a NIU serving either one has to keep forwarding to AXI.
+    uint8_t mask = 0;
+    for (size_t dram_view = 0; dram_view < this->dram_view_worker_cores.size(); ++dram_view) {
+        const auto num_nocs = static_cast<uint8_t>(this->dram_view_worker_cores.at(dram_view).size());
+        for (uint8_t noc = 0; noc < num_nocs; ++noc) {
+            if (get_preferred_worker_core_for_dram_view(static_cast<int>(dram_view), noc) == translated_coord ||
+                get_preferred_eth_core_for_dram_view(static_cast<int>(dram_view), noc) == translated_coord) {
+                mask |= static_cast<uint8_t>(1u << noc);
+            }
+        }
+    }
+    return mask;
+}
+
 std::vector<tt::tt_metal::CoreCoord> metal_SocDescriptor::get_metal_dram_cores(tt::CoordSystem coord_system) const {
     // Blackhole reserves each DRAM view's NOC0 worker endpoint for the syseng firmware; no other
     // architecture has that restriction (and future ones won't), so the exclusion is confined to this
