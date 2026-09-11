@@ -22,7 +22,8 @@ void kernel_main() {
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
 
-    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::scaler>;
+    using Auxiliary =
+        ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, REDUCE_AUXILIARY_CB>;
     dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 
     const auto s = TensorAccessor(tensor::src);

@@ -10,9 +10,7 @@
 void kernel_main() {
     using Call =
         ttnn::kernel_lib::BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallArgs<0>, dfb::input, dfb::scaler, dfb::out>;
-    constexpr uint32_t startup_src_b =
-        Call::algorithm == compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd ? dfb::input : dfb::scaler;
-    compute_kernel_hw_startup(dfb::input, startup_src_b, dfb::out);
+    compute_kernel_hw_startup(dfb::input, dfb::out);
 
     // The reader streams each column contiguously. The plan handles its full
     // height, including the final partial tile, in one call.

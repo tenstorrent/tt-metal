@@ -74,8 +74,10 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanHFactory::
     // ---- Dataflow buffers ----
     constexpr uint32_t num_input_tiles = 2;
     namespace reduce_host = ttnn::kernel_lib::host;
+    auto reduce_block = reduce_host::ReduceBlockSpec::tiled(origin_H, 32, input.dtype(), output.dtype());
+    reduce_block.allow_empty_auxiliary = true;
     const auto reduce_plan = reduce_host::make_reduce_plan(
-        reduce_host::ReduceBlockSpec::tiled(origin_H, 32, input.dtype(), output.dtype()),
+        reduce_block,
         ReduceOpMath::AVG,
         ReduceOpDim::H,
         1.0F / origin_H,
@@ -86,6 +88,9 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanHFactory::
          .available_l1_bytes = 8 * tile_size(data_format)},
         num_input_tiles * tile_size(data_format));
     const auto* auxiliary = reduce_plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
+    // The optional endpoint has no generated dfb::scaler token when omitted.
+    const KernelSpec::CompilerOptions::Defines auxiliary_defines{
+        {"REDUCE_AUXILIARY_CB", auxiliary ? "dfb::scaler" : "ttnn::kernel_lib::reduce_plan_args::no_cb_id"}};
     const auto compute_reduce_args = reduce_host::ReduceCallArgs(reduce_plan, {0, 1, 2}).get_compile_time_args();
     const auto reader_reduce_args =
         reduce_host::ReduceAuxiliaryArgs({1, reduce_plan.auxiliary_tiles}).get_compile_time_args();
@@ -95,12 +100,14 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanHFactory::
         .num_entries = num_input_tiles,
         .data_format_metadata = data_format,
     });
-    spec.dataflow_buffers.push_back(DataflowBufferSpec{
-        .unique_id = SCALER_DFB,
-        .entry_size = auxiliary->page_size,
-        .num_entries = auxiliary->page_count,
-        .data_format_metadata = auxiliary->data_format,
-    });
+    if (auxiliary) {
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = SCALER_DFB,
+            .entry_size = auxiliary->page_size,
+            .num_entries = auxiliary->page_count,
+            .data_format_metadata = auxiliary->data_format,
+        });
+    }
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = OUT_DFB,
         .entry_size = tile_size(data_format),
@@ -119,15 +126,18 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanHFactory::
             .accessor_name = "input",
             .endpoint_type = DFBEndpointType::PRODUCER,
         },
-        DFBBinding{
+    };
+    if (auxiliary) {
+        reader_dfb_bindings.push_back(DFBBinding{
             .dfb_spec_name = SCALER_DFB,
             .accessor_name = "scaler",
             .endpoint_type = DFBEndpointType::PRODUCER,
-        },
-    };
+        });
+    }
     spec.kernels.push_back(KernelSpec{
         .unique_id = READER,
         .source = "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/reader_moreh_mean_h.cpp",
+        .compiler_options = {.defines = auxiliary_defines},
         .dfb_bindings = std::move(reader_dfb_bindings),
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "src"}},
         .compile_time_args =
@@ -163,16 +173,18 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanHFactory::
         Group<DFBBinding> dfb_bindings = {
             DFBBinding{
                 .dfb_spec_name = INPUT_DFB, .accessor_name = "input", .endpoint_type = DFBEndpointType::CONSUMER},
-            DFBBinding{
-                .dfb_spec_name = SCALER_DFB, .accessor_name = "scaler", .endpoint_type = DFBEndpointType::CONSUMER},
             DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER},
         };
+        if (auxiliary) {
+            dfb_bindings.push_back(DFBBinding{
+                .dfb_spec_name = SCALER_DFB, .accessor_name = "scaler", .endpoint_type = DFBEndpointType::CONSUMER});
+        }
         return KernelSpec{
             .unique_id = unique_id,
             .source = "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_h.cpp",
             // O3 is legacy ComputeConfig's default; Metal 2.0's CompilerOptions defaults to O2, so
             // the level has to be stated explicitly to keep the compute kernel where it was.
-            .compiler_options = {.opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
+            .compiler_options = {.defines = auxiliary_defines, .opt_level = tt::tt_metal::KernelBuildOptLevel::O3},
             .dfb_bindings = std::move(dfb_bindings),
             .compile_time_args = {{"units_per_core", units_per_core}},
             .hw_config = compute_hw,

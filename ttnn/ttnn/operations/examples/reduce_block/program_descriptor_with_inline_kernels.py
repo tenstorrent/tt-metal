@@ -181,11 +181,7 @@ ALWI void issue_calls() {
 
 void kernel_main() {
     using First = CallAt<0>;
-    constexpr uint32_t startup_src_b =
-        First::algorithm == compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd
-            ? First::input_cb_id
-            : First::auxiliary_cb_id;
-    compute_kernel_hw_startup(First::input_cb_id, startup_src_b, First::output_cb_id);
+    compute_kernel_hw_startup(First::input_cb_id, First::output_cb_id);
 
     arm_persistent_inputs();
     for (uint32_t iter = 0; iter < kernel_iters; ++iter) {
@@ -319,6 +315,7 @@ def _make_sequence_plan(
         output_tile=output_tensor.spec.tile,
         input_row_stride_tiles=row_stride,
         resident_input_tiles=input_tensor.buffer_num_pages() if resident else None,
+        allow_empty_auxiliary=True,
     )
     cap = max_input_cb_bytes
     if cap is None and not resident:
@@ -368,18 +365,15 @@ def _planned_kernels(sequence, *, kernel_iters, fidelity, fp32_dest, compute_cfg
         compile_time_args=compute_compile_time_args,
         config=compute_cfg or ttnn.ComputeConfigDescriptor(math_fidelity=fidelity, fp32_dest_acc_en=fp32_dest),
     )
-    return [reader, compute]
+    return [reader, compute] if sequence.auxiliary.tiles else [compute]
 
 
 def _planned_cbs(input_bindings, output_tensor, sequence, accumulation_dtype):
     auxiliary_pages = len(sequence.auxiliary.tiles)
     cbs = [ttnn.cb_descriptor_from_sharded_tensor(cb_id, tensor) for cb_id, tensor in input_bindings]
-    cbs.extend(
-        [
-            ttnn.cb_descriptor_from_sharded_tensor(CB_OUT, output_tensor),
-            _scratch_cb(CB_AUXILIARY, input_bindings[0][1].dtype, auxiliary_pages),
-        ]
-    )
+    cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_OUT, output_tensor))
+    if auxiliary_pages:
+        cbs.append(_scratch_cb(CB_AUXILIARY, input_bindings[0][1].dtype, auxiliary_pages))
     if len(sequence.calls) > 1:
         cbs.append(_scratch_cb(CB_ACCUMULATOR, accumulation_dtype, out_tile_count_from_plan(sequence.calls[0])))
     return cbs

@@ -14,10 +14,7 @@ using ReduceCall = ttnn::kernel_lib::
 
 void kernel_main() {
     constexpr uint32_t repetitions = get_arg(args::reduce_repetitions);
-    using First = ReduceCall<0>;
-    constexpr uint32_t startup_src_b =
-        First::algorithm == compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd ? dfb::in0 : dfb::scaler;
-    compute_kernel_hw_startup(dfb::in0, startup_src_b, dfb::out);
+    compute_kernel_hw_startup(dfb::in0, dfb::out);
 
     for (uint32_t column = 0; column < get_arg(args::units_per_core); ++column) {
         for (uint32_t batch = 0; batch < repetitions; ++batch) {

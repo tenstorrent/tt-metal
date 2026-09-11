@@ -81,11 +81,7 @@ ALWI void issue_calls() {
 
 void kernel_main() {
     using First = CallAt<0>;
-    constexpr uint32_t startup_src_b =
-        First::algorithm == compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd
-            ? First::input_cb_id
-            : First::auxiliary_cb_id;
-    compute_kernel_hw_startup(First::input_cb_id, startup_src_b, First::output_cb_id);
+    compute_kernel_hw_startup(First::input_cb_id, First::output_cb_id);
     issue_calls();
 }
 ```
@@ -102,6 +98,32 @@ chunking, post-scale, and slice of the shared auxiliary CB. `compute_kernel_lib:
 descriptor directly to the retained explicit overload. Compute hardware startup remains kernel-owned and is
 performed once before any calls; the first call supplies the startup CBs as shown above and in
 `_PLANNED_REDUCE_KERNEL`.
+
+### Empty auxiliary recipes
+
+This example sets `ReduceBlockSpec.allow_empty_auxiliary = True`. When a call
+needs no scaler, mask or zero tile, the planner returns an empty recipe and no
+`ReduceCbRole.AUXILIARY` allocation requirement. The example omits the auxiliary
+CB and its producer kernel when the entire sequence has no auxiliary tiles.
+
+The option defaults to `False` for existing factories that assume an auxiliary
+CB is always present. Required native scalers, partial masks and runtime-tail
+masks remain in the plan with either setting. A later call may introduce an
+accumulation zero tile even when the first call needs no auxiliaries; allocation
+must therefore follow the complete aggregate recipe.
+For uniform allocations across full and tail cores, take the maximum across
+their plans as well; full cores may have empty recipes while tails need masks.
+
+Empty calls serialize `NO_CB_ID` and an auxiliary count/offset of zero. An empty
+dataflow descriptor still occupies one header word, so following descriptors
+retain unambiguous offsets. `prepare_reduce_auxiliary_tiles()` is a no-op for
+that descriptor and does not require a CB. Keeping a caller-owned unused CB is
+also valid; an empty recipe performs no operations on it.
+
+If an entire sequence must avoid auxiliary allocation, pass `NO_CB_ID` for its
+auxiliary CB ID. The planner then uses the ordinary pairs reload instead of
+introducing an optional zero-pair optimization. It still rejects reductions
+that need a scaler or mask when no auxiliary CB can be supplied.
 
 The dataflow kernel does not receive or walk the call list:
 

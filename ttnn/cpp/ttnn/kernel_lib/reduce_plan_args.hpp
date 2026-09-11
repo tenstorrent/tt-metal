@@ -103,8 +103,8 @@ public:
 
     static constexpr std::uint32_t next_compile_time_args_offset() { return CTA_OFFSET + num_compile_time_args(); }
 
-    static_assert(cb_id != reduce_plan_args::no_cb_id, "Reduction auxiliary CB ID uses the reserved no-CB value");
-    static_assert(num_tiles > 0, "Reduction auxiliary recipe must contain at least one tile");
+    static_assert(
+        num_tiles == 0 || cb_id != reduce_plan_args::no_cb_id, "A non-empty reduction auxiliary recipe requires a CB");
 };
 
 /**
@@ -213,7 +213,14 @@ public:
     static_assert(rows > 0 && columns > 0 && batches > 0, "Reduction block shape must be non-zero");
     static_assert(reduce_factor > 0, "Reduction factor must be non-zero");
     static_assert(reduce_axis_chunk_tiles > 0 && output_chunk_tiles > 0, "Reduction chunk must be non-zero");
-    static_assert(auxiliary_tile_count > 0, "Reduction auxiliary tile count must be non-zero");
+    static_assert(
+        auxiliary_tile_count == 0 || auxiliary_cb_id != reduce_plan_args::no_cb_id,
+        "A non-empty reduction auxiliary slice requires a CB");
+    static_assert(auxiliary_tile_count != 0 || auxiliary_tile_offset == 0, "An empty auxiliary slice has offset zero");
+    static_assert(
+        auxiliary_tile_count != 0 || (partial_mode == compute_kernel_lib::ReducePartialMode::None && !is_tail &&
+                                      reload_mode != compute_kernel_lib::AccumulateReloadMode::CopySeedZeroPair),
+        "Partial reductions, runtime tails and zero-pair reloads require auxiliary tiles");
     static_assert(
         partial_mode == compute_kernel_lib::ReducePartialMode::None ||
             partial_mode == compute_kernel_lib::ReducePartialMode::Scaler ||
@@ -259,26 +266,32 @@ private:
 
 public:
     static_assert(Call::input_cb_id < sizeof...(CB_IDS));
-    static_assert(Call::auxiliary_cb_id < sizeof...(CB_IDS));
+    static_assert(Call::auxiliary_cb_id == reduce_plan_args::no_cb_id || Call::auxiliary_cb_id < sizeof...(CB_IDS));
     static_assert(Call::output_cb_id < sizeof...(CB_IDS));
     static_assert(!Call::has_accumulator || Call::accumulator_cb_id < sizeof...(CB_IDS));
-    static_assert(((CB_IDS < reduce_plan_args::no_cb_id) && ...));
+    static_assert(((CB_IDS <= reduce_plan_args::no_cb_id) && ...));
 
     static constexpr std::uint32_t input_cb_id = cb_ids[Call::input_cb_id];
-    static constexpr std::uint32_t auxiliary_cb_id = cb_ids[Call::auxiliary_cb_id];
+    static constexpr std::uint32_t auxiliary_cb_id = Call::auxiliary_cb_id == reduce_plan_args::no_cb_id
+                                                         ? reduce_plan_args::no_cb_id
+                                                         : cb_ids[Call::auxiliary_cb_id];
     static constexpr std::uint32_t output_cb_id = cb_ids[Call::output_cb_id];
     static constexpr std::uint32_t accumulator_cb_id =
         Call::has_accumulator ? cb_ids[Call::accumulator_cb_id] : reduce_plan_args::no_cb_id;
+    static_assert(input_cb_id < reduce_plan_args::no_cb_id && output_cb_id < reduce_plan_args::no_cb_id);
+    static_assert(!Call::has_accumulator || accumulator_cb_id < reduce_plan_args::no_cb_id);
+    static_assert(Call::auxiliary_tile_count == 0 || auxiliary_cb_id < reduce_plan_args::no_cb_id);
     static_assert(Call::accumulation_mode != ReduceAccumulationMode::Intermediate || output_cb_id == accumulator_cb_id);
     static_assert(Call::accumulation_mode != ReduceAccumulationMode::Final || output_cb_id != accumulator_cb_id);
 };
 
 // The reader receives the same physical auxiliary recipe, bound to its
 // resolved producer endpoint rather than the host's logical ID.
-template <typename Auxiliary, std::uint32_t CB_ID>
+template <typename Auxiliary, std::uint32_t CB_ID = reduce_plan_args::no_cb_id>
 struct BoundReduceAuxiliaryArgs : Auxiliary {
-    static_assert(CB_ID < reduce_plan_args::no_cb_id);
-    static constexpr std::uint32_t cb_id = CB_ID;
+    static_assert(CB_ID <= reduce_plan_args::no_cb_id);
+    static_assert(Auxiliary::num_tiles == 0 || CB_ID != reduce_plan_args::no_cb_id);
+    static constexpr std::uint32_t cb_id = Auxiliary::num_tiles == 0 ? reduce_plan_args::no_cb_id : CB_ID;
 };
 
 }  // namespace ttnn::kernel_lib

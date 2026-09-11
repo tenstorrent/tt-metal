@@ -63,6 +63,125 @@ ttnn::kernel_lib::host::ReduceBlockSpec local_reduce_block(
 }
 }  // namespace
 
+TEST(ReduceHostPlanner, EmptyAuxiliaryRecipeOmitsAllocationAndSerializesNoCb) {
+    using namespace tt::tt_metal;
+    using namespace ttnn::kernel_lib::host;
+    namespace args = ttnn::kernel_lib::reduce_plan_args;
+    const ReduceHardwareConfig hardware{
+        .arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true, .available_l1_bytes = 1U << 20};
+    for (const auto dtype : {DataType::BFLOAT16, DataType::FLOAT32, DataType::INT32}) {
+        for (const auto dim : {ReduceOpDim::W, ReduceOpDim::H}) {
+            auto block = ReduceBlockSpec::tiled(256, 256, dtype, dtype);
+            block.resident_input_tiles = 64;
+            block.resident_output_tiles = 8;
+            const auto mode = dtype == DataType::FLOAT32 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
+            const auto legacy = make_reduce_plan(block, ReduceOpMath::SUM, dim, 1.0F, mode, hardware);
+            block.allow_empty_auxiliary = true;
+            const auto plan = make_reduce_plan(block, ReduceOpMath::SUM, dim, 1.0F, mode, hardware);
+            EXPECT_TRUE(plan.auxiliary_tiles.empty());
+            EXPECT_EQ(plan.find_cb(ReduceCbRole::Auxiliary), nullptr);
+            EXPECT_EQ(plan.total_owned_l1_bytes, 0U);
+            EXPECT_EQ(legacy.total_owned_l1_bytes, legacy.find_cb(ReduceCbRole::Auxiliary)->total_size_bytes);
+            const auto words = ReduceCallArgs(plan, {0, no_cb_id, 16}).get_compile_time_args();
+            EXPECT_EQ(
+                args::extract(
+                    words[static_cast<uint32_t>(args::CallWord::CircularBuffers)],
+                    args::circular_buffers::auxiliary_shift,
+                    args::circular_buffers::id_mask),
+                no_cb_id);
+            EXPECT_EQ(ReduceAuxiliaryArgs({no_cb_id, {}}).get_compile_time_args(), (std::vector<uint32_t>{no_cb_id}));
+            // Keeping an existing CB is also valid; the empty descriptor never references it.
+            EXPECT_EQ(ReduceCallArgs(plan, {0, 1, 16}).get_compile_time_args(), words);
+            EXPECT_EQ(ReduceAuxiliaryArgs({1, {}}).get_compile_time_args(), (std::vector<uint32_t>{no_cb_id}));
+        }
+    }
+}
+
+TEST(ReduceHostPlanner, EmptyAuxiliaryOptionPreservesRequiredScalersAndTailMasks) {
+    using namespace tt::tt_metal;
+    using namespace ttnn::kernel_lib::host;
+    ReduceHardwareConfig hardware{
+        .arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true, .available_l1_bytes = 1U << 20};
+    auto block = ReduceBlockSpec::tiled(32, 256, DataType::BFLOAT16, DataType::FLOAT32);
+    block.allow_empty_auxiliary = true;
+    block.resident_input_tiles = 8;
+    block.resident_output_tiles = 1;
+    const auto full = make_reduce_plan(block, ReduceOpMath::SUM, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast, hardware);
+    EXPECT_TRUE(full.auxiliary_tiles.empty());
+    const auto native =
+        make_reduce_plan(block, ReduceOpMath::MAX, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast, hardware);
+    ASSERT_EQ(native.auxiliary_tiles.size(), 1U);
+    EXPECT_ANY_THROW(ReduceCallArgs(native, {0, no_cb_id, 16}));
+    auto invalid = native;
+    invalid.auxiliary_tiles.clear();
+    EXPECT_ANY_THROW(ReduceCallArgs(invalid, {0, no_cb_id, 16}));
+    block.logical_w = 255;
+    const auto partial =
+        make_reduce_plan(block, ReduceOpMath::SUM, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast, hardware);
+    ASSERT_EQ(partial.auxiliary_tiles.size(), 1U);
+    EXPECT_ANY_THROW(ReduceCallArgs(partial, {0, no_cb_id, 16}));
+    block.logical_w = 256;
+    block.tail = ReduceTailConfig{};
+    const auto tail = make_reduce_plan(block, ReduceOpMath::SUM, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast, hardware);
+    ASSERT_EQ(tail.auxiliary_tiles.size(), 2U);
+    EXPECT_EQ(tail.total_owned_l1_bytes, 2U * tt::tile_size(tt::DataFormat::Float16_b));
+    hardware.available_l1_bytes = tail.total_owned_l1_bytes - 1;
+    EXPECT_ANY_THROW(make_reduce_plan(block, ReduceOpMath::SUM, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast, hardware));
+}
+
+TEST(ReduceHostPlanner, AuxiliarySequenceCanStartWithAnEmptyCall) {
+    using namespace tt::tt_metal;
+    using namespace ttnn::kernel_lib::host;
+    const ReduceHardwareConfig hardware{
+        .arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true, .available_l1_bytes = 1U << 20};
+    auto block = ReduceBlockSpec::tiled(32, 256, DataType::BFLOAT16, DataType::FLOAT32);
+    block.allow_empty_auxiliary = true;
+    block.resident_input_tiles = 8;
+    block.resident_output_tiles = 1;
+    const ReduceCallConfig first{block, ReduceOpMath::SUM, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast};
+    const auto empty = make_reduce_sequence_plan({{0, first}, {3, first}}, {no_cb_id, 2, 16}, hardware);
+    EXPECT_TRUE(empty.auxiliary.tiles.empty());
+    EXPECT_EQ(empty.auxiliary.cb_id, no_cb_id);
+    EXPECT_NO_THROW(empty.get_compile_time_args());
+    auto second = first;
+    second.block.logical_w = second.block.padded_w = 288;
+    second.block.resident_input_tiles = 9;
+    const auto mixed = make_reduce_sequence_plan({{0, first}, {3, second}}, {1, 2, 16}, hardware);
+    EXPECT_TRUE(mixed.calls[0].plan.auxiliary_tiles.empty());
+    EXPECT_EQ(mixed.calls[0].auxiliary_cb_id, no_cb_id);
+    ASSERT_EQ(mixed.auxiliary.tiles.size(), 1U);
+    EXPECT_EQ(mixed.auxiliary.tiles[0].type, ReduceAuxiliaryTileType::Zero);
+    EXPECT_EQ(mixed.calls[1].auxiliary_cb_id, 1U);
+    EXPECT_EQ(mixed.calls[1].plan.find_cb(ReduceCbRole::Auxiliary)->page_count, 1U);
+    EXPECT_NO_THROW(mixed.get_compile_time_args());
+    // No-CB requests use the correct pairs reload instead of allocating a zero optimization.
+    const auto no_zero = make_reduce_sequence_plan({{0, first}, {3, second}}, {no_cb_id, 2, 16}, hardware);
+    EXPECT_TRUE(no_zero.auxiliary.tiles.empty());
+    EXPECT_EQ(no_zero.calls[1].plan.reload_mode, compute_kernel_lib::AccumulateReloadMode::CopySeedPairs);
+    EXPECT_NO_THROW(no_zero.get_compile_time_args());
+}
+
+TEST(ReduceHostPlanner, DenseEmptyAuxiliaryBudgetAddsZeroOnlyForStagedChunks) {
+    using namespace tt::tt_metal;
+    using namespace ttnn::kernel_lib::host;
+    ReduceHardwareConfig hardware{
+        .arch = tt::ARCH::WORMHOLE_B0, .fp32_dest_acc_en = true, .available_l1_bytes = 1U << 20};
+    auto block = ReduceBlockSpec::tiled(32, 256, DataType::BFLOAT16, DataType::BFLOAT16);
+    block.input_layout = block.output_layout = Layout::ROW_MAJOR;
+    block.allow_empty_auxiliary = true;
+    const auto full = make_reduce_plan(block, ReduceOpMath::SUM, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast, hardware);
+    EXPECT_TRUE(full.auxiliary_tiles.empty());
+    EXPECT_EQ(full.find_cb(ReduceCbRole::Auxiliary), nullptr);
+    hardware.available_l1_bytes = full.total_owned_l1_bytes;
+    EXPECT_NO_THROW(make_reduce_plan(block, ReduceOpMath::SUM, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast, hardware));
+    const auto chunked =
+        make_reduce_plan(block, ReduceOpMath::SUM, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast, hardware, 8192);
+    ASSERT_EQ(chunked.auxiliary_tiles.size(), 1U);
+    EXPECT_EQ(chunked.auxiliary_tiles[0].type, ReduceAuxiliaryTileType::Zero);
+    EXPECT_EQ(chunked.find_cb(ReduceCbRole::Auxiliary)->page_count, 1U);
+    EXPECT_LE(chunked.total_owned_l1_bytes, hardware.available_l1_bytes);
+}
+
 TEST(ReduceHostPlanner, TailPlanningReservesRuntimeEdgesForAlignedBlocks) {
     using namespace tt::tt_metal;
     using namespace ttnn::kernel_lib::host;

@@ -34,10 +34,14 @@
  * DEST register capacity is automatically detected via dest_helpers.hpp.
  *
  * IMPORTANT: Requires compute kernel hardware initialization.
- * Call compute_kernel_hw_startup(cb_in, cb_scaler, cb_out) exactly once at the
- * start of your kernel before using. Do NOT re-call it later (and never inside
- * a loop) — re-running mid-kernel can race the compute pipeline and produce
- * undefined behavior.
+ * Call compute_kernel_hw_startup(cb_in, cb_out) exactly once at the start of
+ * your kernel. With input reconfiguration enabled (the default), the helper
+ * configures the operands needed by its algorithm, including auxiliary tiles.
+ * Startup and subsequent operands must have compatible tile/face geometry;
+ * format reconfiguration alone does not change that geometry.
+ * Do NOT re-call startup later or inside a loop: re-running mid-kernel can race
+ * the compute pipeline and produce undefined behavior. If input reconfiguration
+ * is disabled, the caller must configure the actual operands before reduce().
  *
  * For the planned interface, the host appends this flat suffix after the
  * compute kernel's own compile-time arguments:
@@ -72,11 +76,7 @@
  *
  * void kernel_main() {
  *     using First = CallAt<0>;
- *     constexpr uint32_t startup_src_b =
- *         First::algorithm == compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd
- *             ? First::input_cb_id
- *             : First::auxiliary_cb_id;
- *     compute_kernel_hw_startup(First::input_cb_id, startup_src_b, First::output_cb_id);
+ *     compute_kernel_hw_startup(First::input_cb_id, First::output_cb_id);
  *     issue_calls();
  * }
  * @endcode
@@ -113,11 +113,14 @@ namespace compute_kernel_lib {
  * usage across consecutive ops it can pick a narrower mode. When that is impractical,
  * INPUT_AND_OUTPUT is the safe default (biggest perf hit, but always correct).
  *
- * - NONE: Skip all reconfiguration (reduce is first op, or input and output formats
- *         both match the previous op).
+ * - NONE: Skip entry reconfiguration; the actual input and output operands must
+ *         already be configured, including when reduce is the first operation.
  * - INPUT: Reconfigure unpacker only (input CB format differs from previous op).
  * - OUTPUT: Reconfigure packer only (output CB format differs from previous op).
  * - INPUT_AND_OUTPUT: Reconfigure both (default, safest, largest perf impact).
+ * Internal transitions to an accumulator, auxiliary mask or zero tile still
+ * reconfigure as needed, then restore the reduction's operand state.
+ * Quasar output descriptor initialization is required independently of this mode.
  */
 // =============================================================================
 // Input Policy - control how input tiles are synchronized and consumed
@@ -165,7 +168,7 @@ namespace compute_kernel_lib {
  *   1/reduce_factor with a single SFPU scalar-multiply. One DST register per output tile, so it handles an
  *   arbitrary block without the REDUCE_COL DST/chunk limit; it wins for wide reduces (many tiles per output)
  *   and is more accurate for AVG / scalar.
- *   Boots like every reduce — compute_kernel_hw_startup(cb_in, cb_scaler, cb_out) once at kernel start (see the
+ *   Boots like every reduce — compute_kernel_hw_startup(cb_in, cb_out) once at kernel start (see the
  *   file-level note); reduce() runs no heavy per-call hw_configure — per call it does only light format reconfig
  *   (per reconfig_mode) + the SFPU-macro load, exactly like ReduceTile relies on boot + light reduce_init.
  *   RESTRICTED — guarded by static_assert / ASSERT in reduce():

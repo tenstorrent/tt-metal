@@ -17,6 +17,7 @@
 #include <umd/device/types/arch.hpp>
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_types.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args_common.hpp"
 
 /**
  * @file reduce_host.hpp
@@ -44,6 +45,8 @@
  */
 
 namespace ttnn::kernel_lib::host {
+
+inline constexpr std::uint32_t no_cb_id = reduce_plan_args::no_cb_id;
 
 using ReducePath = ttnn::kernel_lib::ReducePath;
 using ReduceAuxiliaryTileType = ttnn::kernel_lib::ReduceAuxiliaryTileType;
@@ -121,7 +124,7 @@ struct ReduceAuxiliaryTileSpec {
 // the CB ID as well as the physical tiles to materialize. Calls refer to
 // contiguous slices of `tiles`; equal call recipes share the same slice.
 struct ReduceAuxiliaryPlan {
-    std::uint32_t cb_id = 0;
+    std::uint32_t cb_id = no_cb_id;
     std::vector<ReduceAuxiliaryTileSpec> tiles;
 };
 
@@ -214,6 +217,12 @@ struct ReduceBlockSpec {
     // stream valid work in fixed-size packets of chunk.input_tiles() pages,
     // padding the final axis/output group so each packet fits the CB ring.
     std::optional<ReduceTailConfig> tail;
+
+    // Allow algorithms that do not read auxiliary tiles to return an empty
+    // recipe and no Auxiliary CB requirement. False preserves the legacy
+    // placeholder tile for factories that always allocate and bind that CB.
+    // Required scalers, masks and accumulation zeros are still planned.
+    bool allow_empty_auxiliary = false;
 
     // Convenience for a local tiled block with padding rounded to whole tiles.
     static ReduceBlockSpec tiled(

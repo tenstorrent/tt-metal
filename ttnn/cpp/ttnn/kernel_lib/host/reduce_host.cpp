@@ -33,7 +33,6 @@ std::uint32_t checked_u32(std::size_t value, const char* label) {
 }
 
 std::uint32_t auxiliary_tile_count(const ReducePlan& plan) {
-    TT_FATAL(!plan.auxiliary_tiles.empty(), "Reduce planner: auxiliary tile recipe must not be empty");
     return checked_u32(plan.auxiliary_tiles.size(), "auxiliary tile count");
 }
 
@@ -311,18 +310,21 @@ void configure_scalar_and_aux(
     std::uint32_t logical_reduce_elements,
     std::uint32_t partial_elements,
     bool has_partial,
-    bool uses_sfpu) {
+    bool uses_sfpu,
+    bool allow_empty_auxiliary) {
     TT_FATAL(tile_h > 0 && tile_w > 0, "Reduce planner: auxiliary tile shape must be non-zero");
     plan.auxiliary_tiles.clear();
     plan.partial_mode = compute_kernel_lib::ReducePartialMode::None;
 
     if (uses_sfpu) {
-        // SFPU folds never read the scaler. Keep the auxiliary tile for the
-        // shared buffer protocol, and scale only the finalized output in reduce<Call>().
+        // SFPU folds never read the scaler. Legacy callers retain a placeholder;
+        // callers supporting empty recipes need no auxiliary allocation.
         plan.reduce_factor = 1;
         plan.post_scale = scalar;
-        plan.auxiliary_tiles.push_back(
-            {.value = 1.0F, .type = ReduceAuxiliaryTileType::FirstRow, .num_valid_elements = tile_w});
+        if (!allow_empty_auxiliary) {
+            plan.auxiliary_tiles.push_back(
+                {.value = 1.0F, .type = ReduceAuxiliaryTileType::FirstRow, .num_valid_elements = tile_w});
+        }
     } else if (plan.algorithm == ReduceAlgorithm::AccumulateViaAdd) {
         plan.reduce_factor = math == ReduceOpMath::AVG ? logical_reduce_elements : 1U;
         plan.post_scale = math == ReduceOpMath::AVG ? scalar * logical_reduce_elements : scalar;
@@ -333,7 +335,7 @@ void configure_scalar_and_aux(
                      dim == ReduceOpDim::W ? ReduceAuxiliaryTileType::FirstRow : ReduceAuxiliaryTileType::FirstColumn,
                  .num_valid_elements = partial_elements});
             plan.partial_mode = compute_kernel_lib::ReducePartialMode::Mask;
-        } else {
+        } else if (!allow_empty_auxiliary) {
             plan.auxiliary_tiles.push_back(
                 {.value = 1.0F, .type = ReduceAuxiliaryTileType::FirstRow, .num_valid_elements = tile_w});
         }
@@ -443,7 +445,8 @@ ReducePlan make_tiled_plan(
         logical_reduce_elements,
         partial_elements,
         has_axis_partial,
-        uses_sfpu);
+        uses_sfpu,
+        block.allow_empty_auxiliary);
 
     const auto input_format = tt::tt_metal::datatype_to_dataformat_converter(block.input_dtype);
     const auto output_format = tt::tt_metal::datatype_to_dataformat_converter(block.output_dtype);
@@ -517,7 +520,8 @@ ReducePlan make_tiled_plan(
                     logical_reduce_elements,
                     partial_elements,
                     has_axis_partial,
-                    uses_sfpu);
+                    uses_sfpu,
+                    block.allow_empty_auxiliary);
                 // A native edge needs another auxiliary tile. Rebudget the
                 // input after that change, including tail-only masks, rather
                 // than retaining a chunk sized for the smaller additive recipe.
@@ -553,13 +557,15 @@ ReducePlan make_tiled_plan(
         aux_bytes = static_cast<std::size_t>(auxiliary_tile_count(plan)) * aux_tile_bytes;
     }
 
-    add_requirement(
-        plan,
-        {.role = ReduceCbRole::Auxiliary,
-         .data_format = aux_format,
-         .page_size = aux_tile_bytes,
-         .page_count = auxiliary_tile_count(plan),
-         .total_size_bytes = aux_bytes});
+    if (!plan.auxiliary_tiles.empty()) {
+        add_requirement(
+            plan,
+            {.role = ReduceCbRole::Auxiliary,
+             .data_format = aux_format,
+             .page_size = aux_tile_bytes,
+             .page_count = auxiliary_tile_count(plan),
+             .total_size_bytes = aux_bytes});
+    }
     add_requirement(
         plan,
         {.role = ReduceCbRole::Output,
@@ -656,7 +662,8 @@ ReducePlan make_row_major_plan(
         logical_reduce_elements,
         partial_elements,
         false,
-        requires_sfpu(block.input_dtype, fp32_mode));
+        requires_sfpu(block.input_dtype, fp32_mode),
+        block.allow_empty_auxiliary);
     plan.partial_reduce_axis_elements = has_partial ? partial_elements : 0U;
 
     const auto input_format = tt::tt_metal::datatype_to_dataformat_converter(block.input_dtype);
@@ -669,11 +676,11 @@ ReducePlan make_row_major_plan(
     const std::uint32_t src_datum_bytes = tt::datum_size(input_format);
     const std::uint32_t dst_datum_bytes = tt::datum_size(output_format);
 
-    // Output, auxiliary, clear-template, and one accumulator tile are fixed. W uses one H tile
-    // per staged work unit and H uses one output column, so one accumulator page is sufficient.
-    const std::size_t fixed_bytes =
-        static_cast<std::size_t>(2) * output_tile_bytes + aux_tile_bytes + input_tile_bytes + output_tile_bytes;
-    const auto input_budget = available_for_input(hardware, fixed_bytes, max_input_cb_bytes);
+    // Output, clear-template and one accumulator tile are fixed. Auxiliary
+    // storage is optional until staged additive chunks require a zero tile.
+    const std::size_t fixed_bytes = static_cast<std::size_t>(3) * output_tile_bytes + input_tile_bytes;
+    auto input_budget =
+        available_for_input(hardware, fixed_bytes + auxiliary_tile_count(plan) * aux_tile_bytes, max_input_cb_bytes);
 
     std::uint32_t axis_chunk = 0;
     std::uint32_t staging_buffers = 2;
@@ -682,6 +689,9 @@ ReducePlan make_row_major_plan(
         axis_chunk = reduced_tiles;
         staging_buffers = 1;
     } else {
+        if (plan.algorithm == ReduceAlgorithm::AccumulateViaAdd && plan.auxiliary_tiles.empty()) {
+            input_budget = available_for_input(hardware, fixed_bytes + aux_tile_bytes, max_input_cb_bytes);
+        }
         std::uint64_t low = 1;
         std::uint64_t high = reduced_tiles;
         while (low <= high) {
@@ -769,13 +779,15 @@ ReducePlan make_row_major_plan(
          .page_size = output_tile_bytes,
          .page_count = 1,
          .total_size_bytes = output_tile_bytes});
-    add_requirement(
-        plan,
-        {.role = ReduceCbRole::Auxiliary,
-         .data_format = aux_format,
-         .page_size = aux_tile_bytes,
-         .page_count = auxiliary_tile_count(plan),
-         .total_size_bytes = static_cast<std::size_t>(auxiliary_tile_count(plan)) * aux_tile_bytes});
+    if (!plan.auxiliary_tiles.empty()) {
+        add_requirement(
+            plan,
+            {.role = ReduceCbRole::Auxiliary,
+             .data_format = aux_format,
+             .page_size = aux_tile_bytes,
+             .page_count = auxiliary_tile_count(plan),
+             .total_size_bytes = static_cast<std::size_t>(auxiliary_tile_count(plan)) * aux_tile_bytes});
+    }
     add_requirement(
         plan,
         {.role = ReduceCbRole::Output,
@@ -959,7 +971,7 @@ bool zero_pair_avoids_an_odd_fold(const ReducePlan& plan, ReduceOpDim dim, bool 
     return false;
 }
 
-bool try_enable_zero_pair(ReducePlan& plan, const ReduceHardwareConfig& hardware) {
+bool try_enable_zero_pair(ReducePlan& plan, const ReduceHardwareConfig& hardware, const ReduceBlockSpec& block) {
     // Tail parity is a runtime property. The ordinary reload works for either
     // parity and leaves the last auxiliary tile reserved for the output mask.
     if (plan.tail) {
@@ -968,7 +980,9 @@ bool try_enable_zero_pair(ReducePlan& plan, const ReduceHardwareConfig& hardware
     auto auxiliary = std::find_if(plan.cb_requirements.begin(), plan.cb_requirements.end(), [](const auto& req) {
         return req.role == ReduceCbRole::Auxiliary;
     });
-    TT_FATAL(auxiliary != plan.cb_requirements.end(), "Reduce planner: plan is missing its auxiliary CB");
+    const auto auxiliary_format =
+        block.input_dtype == DataType::FLOAT32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    const auto page_size = tt::tile_size(auxiliary_format);
 
     TT_FATAL(
         plan.algorithm == ReduceAlgorithm::AccumulateViaAdd,
@@ -978,9 +992,9 @@ bool try_enable_zero_pair(ReducePlan& plan, const ReduceHardwareConfig& hardware
             return tile.type == ReduceAuxiliaryTileType::Zero;
         });
     const bool has_partial = plan.partial_mode != compute_kernel_lib::ReducePartialMode::None;
-    const std::uint32_t extra_tiles = has_partial && !already_has_zero ? 1U : 0U;
+    const std::uint32_t extra_tiles = !already_has_zero && (has_partial || plan.auxiliary_tiles.empty()) ? 1U : 0U;
 
-    const std::size_t extra_bytes = static_cast<std::size_t>(extra_tiles) * auxiliary->page_size;
+    const std::size_t extra_bytes = static_cast<std::size_t>(extra_tiles) * page_size;
     if (extra_bytes > hardware.available_l1_bytes - plan.total_owned_l1_bytes) {
         return false;  // CopySeedPairs is the correct no-extra-L1 fallback.
     }
@@ -997,9 +1011,19 @@ bool try_enable_zero_pair(ReducePlan& plan, const ReduceHardwareConfig& hardware
             plan.auxiliary_tiles = {zero};
         }
     }
-    auxiliary->page_count = auxiliary_tile_count(plan);
-    auxiliary->total_size_bytes += extra_bytes;
-    plan.total_owned_l1_bytes += extra_bytes;
+    if (auxiliary == plan.cb_requirements.end()) {
+        add_requirement(
+            plan,
+            {.role = ReduceCbRole::Auxiliary,
+             .data_format = auxiliary_format,
+             .page_size = page_size,
+             .page_count = auxiliary_tile_count(plan),
+             .total_size_bytes = extra_bytes});
+    } else {
+        auxiliary->page_count = auxiliary_tile_count(plan);
+        auxiliary->total_size_bytes += extra_bytes;
+        plan.total_owned_l1_bytes += extra_bytes;
+    }
     return true;
 }
 
@@ -1022,7 +1046,9 @@ bool auxiliary_recipe_matches_at(
 
 std::uint32_t append_auxiliary_recipe(
     std::vector<ReduceAuxiliaryTileSpec>& aggregate, const std::vector<ReduceAuxiliaryTileSpec>& recipe) {
-    TT_FATAL(!recipe.empty(), "Reduce sequence planner: an auxiliary recipe must not be empty");
+    if (recipe.empty()) {
+        return 0;
+    }
 
     if (recipe.size() <= aggregate.size()) {
         for (std::size_t offset = 0; offset + recipe.size() <= aggregate.size(); ++offset) {
@@ -1061,6 +1087,9 @@ ReduceSequencePlan make_reduce_sequence_plan(
         "Reduce sequence planner: call count exceeds uint32_t");
 
     const bool accumulates = reductions.size() > 1;
+    TT_FATAL(
+        cb_ids.auxiliary_cb_id <= reduce_plan_args::no_cb_id,
+        "Reduce sequence planner: auxiliary CB ID must fit in one byte, including the no-CB value");
     TT_FATAL(
         cb_ids.auxiliary_cb_id != cb_ids.output_cb_id,
         "Reduce sequence planner: auxiliary and final output CB IDs must differ");
@@ -1143,8 +1172,9 @@ ReduceSequencePlan make_reduce_sequence_plan(
 
     if (accumulates && plans.front().algorithm == ReduceAlgorithm::AccumulateViaAdd) {
         for (std::size_t i = 0; i < plans.size(); ++i) {
-            if (zero_pair_avoids_an_odd_fold(plans[i], reductions[i].second.reduce_dim, i == 0)) {
-                try_enable_zero_pair(plans[i], hardware);
+            if (cb_ids.auxiliary_cb_id != reduce_plan_args::no_cb_id &&
+                zero_pair_avoids_an_odd_fold(plans[i], reductions[i].second.reduce_dim, i == 0)) {
+                try_enable_zero_pair(plans[i], hardware, reductions[i].second.block);
             }
         }
     }
@@ -1218,18 +1248,22 @@ ReduceSequencePlan make_reduce_sequence_plan(
         }
     }
 
-    const auto* expected_aux = plans.front().find_cb(ReduceCbRole::Auxiliary);
-    TT_FATAL(expected_aux != nullptr, "Reduce sequence planner: call plan is missing its auxiliary CB requirement");
-    for (std::size_t i = 1; i < plans.size(); ++i) {
-        const auto* auxiliary = plans[i].find_cb(ReduceCbRole::Auxiliary);
-        TT_FATAL(
-            auxiliary != nullptr && auxiliary->data_format == expected_aux->data_format &&
-                auxiliary->page_size == expected_aux->page_size,
-            "Reduce sequence planner: one shared auxiliary CB cannot represent the planned call formats");
+    const ReduceCbRequirement* expected_aux = nullptr;
+    for (const auto& plan : plans) {
+        if (const auto* auxiliary = plan.find_cb(ReduceCbRole::Auxiliary)) {
+            TT_FATAL(
+                expected_aux == nullptr || (auxiliary->data_format == expected_aux->data_format &&
+                                            auxiliary->page_size == expected_aux->page_size),
+                "Reduce sequence planner: one shared auxiliary CB cannot represent the planned call formats");
+            expected_aux = auxiliary;
+        }
     }
 
     ReduceSequencePlan sequence;
-    sequence.auxiliary.cb_id = cb_ids.auxiliary_cb_id;
+    sequence.auxiliary.cb_id = expected_aux ? cb_ids.auxiliary_cb_id : reduce_plan_args::no_cb_id;
+    TT_FATAL(
+        !expected_aux || cb_ids.auxiliary_cb_id < reduce_plan_args::no_cb_id,
+        "Reduce sequence planner: these calls require auxiliary tiles and a valid auxiliary CB ID");
     std::vector<std::uint32_t> auxiliary_tile_offsets;
     auxiliary_tile_offsets.reserve(plans.size());
     for (const auto& plan : plans) {
@@ -1237,9 +1271,10 @@ ReduceSequencePlan make_reduce_sequence_plan(
     }
     // The whole aggregate recipe is resident while each call runs. Distinct
     // runtime shape sources may prevent tiles from being shared across calls.
-    const auto aggregate_aux_bytes = sequence.auxiliary.tiles.size() * expected_aux->page_size;
+    const auto aggregate_aux_bytes = expected_aux ? sequence.auxiliary.tiles.size() * expected_aux->page_size : 0U;
     for (const auto& plan : plans) {
-        const auto call_aux_bytes = plan.find_cb(ReduceCbRole::Auxiliary)->total_size_bytes;
+        const auto* call_aux = plan.find_cb(ReduceCbRole::Auxiliary);
+        const auto call_aux_bytes = call_aux ? call_aux->total_size_bytes : 0U;
         const auto owned_bytes = plan.total_owned_l1_bytes - call_aux_bytes + aggregate_aux_bytes;
         TT_FATAL(
             owned_bytes <= hardware.available_l1_bytes,
@@ -1259,7 +1294,7 @@ ReduceSequencePlan make_reduce_sequence_plan(
         const bool is_last = i + 1 == reductions.size();
         sequence.calls.push_back(
             {.input_cb_id = reductions[i].first,
-             .auxiliary_cb_id = cb_ids.auxiliary_cb_id,
+             .auxiliary_cb_id = plans[i].auxiliary_tiles.empty() ? reduce_plan_args::no_cb_id : cb_ids.auxiliary_cb_id,
              .auxiliary_tile_offset = auxiliary_tile_offsets[i],
              .output_cb_id = accumulates && !is_last ? cb_ids.accumulator_cb_id : cb_ids.output_cb_id,
              .accumulator_cb_id = accumulates ? std::optional<std::uint32_t>{cb_ids.accumulator_cb_id} : std::nullopt,
@@ -1342,13 +1377,18 @@ std::uint32_t encode_configuration(const ReduceCallPlan& call) {
 
 std::uint32_t encode_circular_buffers(const ReduceCallPlan& call) {
     using namespace reduce_plan_args;
-    const auto accumulator_cb_id = call.accumulator_cb_id.value_or(no_cb_id);
+    const auto accumulator_cb_id = call.accumulator_cb_id.value_or(reduce_plan_args::no_cb_id);
+    const auto auxiliary_cb_id = call.plan.auxiliary_tiles.empty() ? reduce_plan_args::no_cb_id : call.auxiliary_cb_id;
     TT_FATAL(
-        call.input_cb_id < no_cb_id && call.auxiliary_cb_id < no_cb_id && call.output_cb_id < no_cb_id &&
-            (!call.accumulator_cb_id.has_value() || *call.accumulator_cb_id < no_cb_id),
-        "Reduce plan args: CB IDs must fit in one byte and 255 is reserved for no accumulator");
+        call.input_cb_id < reduce_plan_args::no_cb_id && call.auxiliary_cb_id <= reduce_plan_args::no_cb_id &&
+            call.output_cb_id < reduce_plan_args::no_cb_id &&
+            (!call.accumulator_cb_id.has_value() || *call.accumulator_cb_id < reduce_plan_args::no_cb_id),
+        "Reduce plan args: CB IDs must fit in one byte; 255 denotes an absent optional CB");
+    TT_FATAL(
+        call.plan.auxiliary_tiles.empty() || auxiliary_cb_id != reduce_plan_args::no_cb_id,
+        "Reduce plan args: a non-empty auxiliary recipe requires a valid auxiliary CB ID");
     return insert(call.input_cb_id, circular_buffers::input_shift, circular_buffers::id_mask) |
-           insert(call.auxiliary_cb_id, circular_buffers::auxiliary_shift, circular_buffers::id_mask) |
+           insert(auxiliary_cb_id, circular_buffers::auxiliary_shift, circular_buffers::id_mask) |
            insert(call.output_cb_id, circular_buffers::output_shift, circular_buffers::id_mask) |
            insert(accumulator_cb_id, circular_buffers::accumulator_shift, circular_buffers::id_mask);
 }
@@ -1377,10 +1417,14 @@ std::uint32_t encode_chunk_and_auxiliary(const ReduceCallPlan& call) {
 
 std::uint32_t encode_auxiliary_header(const ReduceAuxiliaryPlan& auxiliary) {
     using namespace reduce_plan_args;
-    TT_FATAL(auxiliary.cb_id < no_cb_id, "Reduce plan args: auxiliary CB ID must fit in one byte");
+    TT_FATAL(
+        auxiliary.cb_id <= reduce_plan_args::no_cb_id &&
+            (auxiliary.tiles.empty() || auxiliary.cb_id != reduce_plan_args::no_cb_id),
+        "Reduce plan args: a non-empty auxiliary recipe requires a valid auxiliary CB ID");
     const auto tile_count = checked_u32(auxiliary.tiles.size(), "aggregate auxiliary tile count");
     check_fits(tile_count, auxiliary_header::tile_count_mask, "aggregate auxiliary tile count");
-    return insert(auxiliary.cb_id, auxiliary_header::cb_id_shift, auxiliary_header::cb_id_mask) |
+    const auto cb_id = auxiliary.tiles.empty() ? reduce_plan_args::no_cb_id : auxiliary.cb_id;
+    return insert(cb_id, auxiliary_header::cb_id_shift, auxiliary_header::cb_id_mask) |
            insert(tile_count, auxiliary_header::tile_count_shift, auxiliary_header::tile_count_mask);
 }
 
@@ -1436,8 +1480,23 @@ ReduceCallArgs::ReduceCallArgs(const ReduceCallPlan& call) {
         "Reduce plan args: a partial-mask call must use AccumulateViaAdd");
     TT_FATAL(
         plan.Ht > 0 && plan.Wt > 0 && plan.batches > 0 && plan.reduce_factor > 0 && plan.chunk.reduce_axis_tiles > 0 &&
-            plan.chunk.output_tiles > 0 && !plan.auxiliary_tiles.empty(),
+            plan.chunk.output_tiles > 0,
         "Reduce plan args: call contains zero-sized kernel geometry");
+    if (plan.auxiliary_tiles.empty()) {
+        const auto* input = plan.find_cb(ReduceCbRole::Input);
+        if (!input) {
+            input = plan.find_cb(ReduceCbRole::TiledScratch);
+        }
+        const bool sfpu =
+            input && (input->data_format == tt::DataFormat::Int32 ||
+                      (input->data_format == tt::DataFormat::Float32 && plan.fp32_mode == ReduceFp32Mode::Accurate));
+        TT_FATAL(
+            (plan.algorithm == ReduceAlgorithm::AccumulateViaAdd || sfpu) &&
+                plan.partial_mode == compute_kernel_lib::ReducePartialMode::None && !plan.tail &&
+                plan.reload_mode != compute_kernel_lib::AccumulateReloadMode::CopySeedZeroPair,
+            "Reduce plan args: this reduction requires auxiliary tiles");
+        TT_FATAL(call.auxiliary_tile_offset == 0, "Reduce plan args: an empty auxiliary slice must have offset zero");
+    }
 
     compile_time_args_.reserve(reduce_plan_args::call_compile_time_arg_count());
     const std::uint32_t record[] = {
@@ -1479,7 +1538,6 @@ void ReduceCallArgs::append_to(std::vector<std::uint32_t>& compile_time_args) co
 std::vector<std::uint32_t> ReduceCallArgs::get_compile_time_args() const { return compile_time_args_; }
 
 ReduceAuxiliaryArgs::ReduceAuxiliaryArgs(const ReduceAuxiliaryPlan& auxiliary) {
-    TT_FATAL(!auxiliary.tiles.empty(), "Reduce plan args: an aggregate auxiliary recipe must not be empty");
     compile_time_args_.reserve(reduce_plan_args::auxiliary_compile_time_arg_count(auxiliary.tiles.size()));
     compile_time_args_.push_back(encode_auxiliary_header(auxiliary));
     for (const auto& tile : auxiliary.tiles) {
