@@ -5,7 +5,7 @@
 #pragma once
 
 #include "cross_node_dfb_test_utils.hpp"
-#include "impl/dataflow_buffer/prefetcher_pipe.hpp"
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 
 namespace tt::tt_metal::prefetcher_pipe_test {
 

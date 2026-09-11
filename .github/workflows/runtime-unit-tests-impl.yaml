@@ -9,6 +9,15 @@ on:
       build-artifact-name:
         required: true
         type: string
+      prebuilt-image:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Env image carrying the source tree and build output at /work. When set,
+          the job mounts no /work, checks out only .github, and fetches no
+          artifact. Empty falls back to the artifact path, which is what forks and
+          a failed bake get.
       enabled-skus:
         required: true
         type: string
@@ -70,7 +79,7 @@ jobs:
       # actually pulls (DNS split-brain). GHCR-direct is the path the multi-host SKUs
       # and the Harbor-outage fallback already use, so harbor-prefix is intentionally
       # not applied here.
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ inputs.prebuilt-image || inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
         ARCH_NAME: ${{ contains(matrix.test-group.sku, 'bh_') && 'blackhole' || 'wormhole_b0' }}
@@ -80,7 +89,9 @@ jobs:
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
       volumes:
-        - ${{ github.workspace }}/docker-job:/work
+        # The image owns /work, so no bind mount: one would mask the payload. A
+        # single-path entry is an anonymous volume on an unused path.
+        - ${{ inputs.prebuilt-image != '' && '/no_work_mount' || format('{0}/docker-job:/work', github.workspace) }}
         - /dev/hugepages-1G:/dev/hugepages-1G
       options: "--device /dev/tenstorrent"
     defaults:
@@ -92,13 +103,17 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
-          submodules: recursive
+          # With an image the source is already at /work; the workspace copy only
+          # has to satisfy `uses: ./docker-job/...`, which resolves against it.
+          submodules: ${{ inputs.prebuilt-image == '' && 'recursive' || 'false' }}
+          sparse-checkout: ${{ inputs.prebuilt-image != '' && '.github' || '' }}
           path: docker-job
       - name: ⬇️  Setup Job
         uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
+          env-from-image: ${{ inputs.prebuilt-image != '' }}
       - name: Ensure BH links online
         if: ${{ contains(matrix.test-group.sku, 'bh_loudbox') || contains(matrix.test-group.sku, 'bh_galaxy') }}
         uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
@@ -132,7 +147,9 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: profdata-metal-runtime-${{ matrix.test-group.name }}
-          path: ${{ github.workspace }}/docker-job/coverage/job.profdata
+          # /work, not the workspace: that path only resolved through the bind
+          # mount, and if-no-files-found: ignore would hide the miss.
+          path: /work/coverage/job.profdata
           if-no-files-found: ignore
           retention-days: 1
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
