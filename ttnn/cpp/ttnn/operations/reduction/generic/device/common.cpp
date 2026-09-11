@@ -35,8 +35,6 @@ ttnn::kernel_lib::host::ReduceSequencePlan make_generic_reduce_sequence(
     const auto tile = input.tile();
     const uint32_t tile_h = tile.get_height();
     const uint32_t tile_w = tile.get_width();
-    const TensorLayout input_layout(input.data_type(), PageConfig(Layout::TILE, tile), MemoryConfig{});
-    const TensorLayout output_layout(output.data_type(), PageConfig(Layout::TILE, output.tile()), MemoryConfig{});
     const uint32_t axis_tiles = dim == ReduceOpDim::W ? Wt : Ht;
     const uint32_t chunk_tiles =
         row_major ? (dim == ReduceOpDim::W ? row_major->wt_tiles_per_chunk : row_major->ht_tiles_per_chunk)
@@ -62,13 +60,12 @@ ttnn::kernel_lib::host::ReduceSequencePlan make_generic_reduce_sequence(
         } else if (dim == ReduceOpDim::W && !identity_padded) {
             w = input.logical_shape()[input.logical_shape().rank() - 1];
         }
-        const Shape input_shape{batches, 1, h, w};
-        const Shape output_shape{batches, 1, dim == ReduceOpDim::W ? h : 1U, dim == ReduceOpDim::H ? w : 1U};
+        auto block = rh::ReduceBlockSpec::tiled(h, w, input.data_type(), output.data_type(), batches, tile);
+        block.output_tile = output.tile();
         calls.emplace_back(
             0,
             rh::ReduceCallConfig{
-                TensorSpec(input_shape, input_layout),
-                TensorSpec(output_shape, output_layout),
+                block,
                 math,
                 dim,
                 scalar,

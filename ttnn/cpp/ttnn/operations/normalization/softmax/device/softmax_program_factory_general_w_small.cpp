@@ -95,17 +95,17 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralWSmall::create_program_artif
 
     // ---- DataflowBuffers ----
     namespace reduce_host = ttnn::kernel_lib::host;
-    const TensorLayout input_layout(input_tensor.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
-    const TensorLayout intermediate_layout(
-        fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{});
     const reduce_host::ReduceHardwareConfig reduce_hardware{
         .arch = arch,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = dst_full_sync_en,
         .available_l1_bytes = (Wt + 8) * intermed_tile_size};
     auto max_plan = reduce_host::make_reduce_plan(
-        TensorSpec(Shape{32, input_tensor.logical_shape()[-1]}, input_layout),
-        TensorSpec(Shape{32, 1}, intermediate_layout),
+        reduce_host::ReduceBlockSpec::tiled(
+            32,
+            input_tensor.logical_shape()[-1],
+            input_tensor.dtype(),
+            fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16),
         ReduceOpMath::MAX,
         ReduceOpDim::W,
         1.0F,
@@ -116,8 +116,11 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralWSmall::create_program_artif
     // The exponentials retain their output-padding mask, so their padded
     // extent is a complete reduction input with zero-valued padding.
     auto sum_plan = reduce_host::make_reduce_plan(
-        TensorSpec(Shape{32, Wt * 32}, intermediate_layout),
-        TensorSpec(Shape{32, 1}, intermediate_layout),
+        reduce_host::ReduceBlockSpec::tiled(
+            32,
+            Wt * 32,
+            fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16,
+            fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16),
         ReduceOpMath::SUM,
         ReduceOpDim::W,
         1.0F,

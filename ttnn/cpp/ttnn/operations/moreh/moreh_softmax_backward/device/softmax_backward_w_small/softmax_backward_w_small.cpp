@@ -61,11 +61,8 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardWSmallFactory::create_program
     namespace reduce_host = ttnn::kernel_lib::host;
     const auto intermediate_dtype = fp32_dest_acc_en ? DataType::FLOAT32 : input_grad.dtype();
     const auto reduce_dtype = op == MorehSoftmaxBackwardOp::LOGSOFTMAX ? output_grad.dtype() : intermediate_dtype;
-    const TensorLayout reduce_layout(reduce_dtype, PageConfig(Layout::TILE), MemoryConfig{});
-    const TensorLayout intermediate_layout(intermediate_dtype, PageConfig(Layout::TILE), MemoryConfig{});
     auto reduce_plan = reduce_host::make_reduce_plan(
-        TensorSpec(Shape{32, input_grad.logical_shape()[-1]}, reduce_layout),
-        TensorSpec(Shape{32, 1}, intermediate_layout),
+        reduce_host::ReduceBlockSpec::tiled(32, input_grad.logical_shape()[-1], reduce_dtype, intermediate_dtype),
         ReduceOpMath::SUM,
         ReduceOpDim::W,
         1.0F,

@@ -107,8 +107,6 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryWOthe
 
     namespace reduce_host = ttnn::kernel_lib::host;
     const auto intermediate_dtype = fp32_dest_acc_en ? DataType::FLOAT32 : input.dtype();
-    const TensorLayout intermediate_layout(intermediate_dtype, PageConfig(Layout::TILE), MemoryConfig{});
-    const TensorLayout output_layout(out.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
     // Keep a full block with the tail so every call can use AccumulateViaAdd
     // for long sums. A tiny final call would force the entire sequence back
     // to ReduceTile, losing BF16 precision from repeated within-tile folds.
@@ -121,8 +119,7 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryWOthe
         reductions.emplace_back(
             0,
             reduce_host::ReduceCallConfig{
-                TensorSpec(Shape{32, extent}, intermediate_layout),
-                TensorSpec(Shape{32, 1}, output_layout),
+                reduce_host::ReduceBlockSpec::tiled(32, extent, intermediate_dtype, out.dtype()),
                 p == 0.0f ? ReduceOpMath::SUM : ReduceOpMath::MAX,
                 ReduceOpDim::W,
                 1.0F,

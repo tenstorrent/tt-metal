@@ -95,13 +95,10 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create_program_artifact
     auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : dfb_data_format;
 
     namespace reduce_host = ttnn::kernel_lib::host;
-    const TensorLayout input_layout(output_grad.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
-    const TensorLayout output_layout(bias_grad.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
     // The scalar path still masks the two-dimensional edge before reduction;
     // a one-axis partial recipe cannot describe both edges of an HW reduction.
     const reduce_host::ReduceCallConfig reduction{
-        TensorSpec(Shape{32, 32}, input_layout),
-        TensorSpec(Shape{1, 1}, output_layout),
+        reduce_host::ReduceBlockSpec::tiled(32, 32, output_grad.dtype(), bias_grad.dtype()),
         ReduceOpMath::SUM,
         ReduceOpDim::HW,
         1.0F,

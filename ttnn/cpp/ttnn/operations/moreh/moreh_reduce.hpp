@@ -28,24 +28,16 @@ inline MorehReduceBlocks make_moreh_reduce_blocks(
     constexpr uint32_t block_tiles = MorehReduceBlocks::tiles_per_block;
     const uint32_t num_blocks = std::max(1U, num_tiles / block_tiles);
     const uint32_t descriptors = std::min(num_blocks, 3U);
-    const TensorLayout input_layout(input_dtype, PageConfig(Layout::TILE), MemoryConfig{});
-    const TensorLayout output_layout(output_dtype, PageConfig(Layout::TILE), MemoryConfig{});
     std::vector<rh::ReduceCbConfig> calls;
     for (uint32_t i = 0; i < descriptors; ++i) {
         const uint32_t tiles = i + 1 == descriptors ? num_tiles - (num_blocks - 1) * block_tiles : block_tiles;
-        const Shape input_shape = dim == ReduceOpDim::W ? Shape{32, tiles * 32} : Shape{tiles * 32, 32};
-        const Shape output_shape = dim == ReduceOpDim::W   ? Shape{32, 1}
-                                   : dim == ReduceOpDim::H ? Shape{1, 32}
-                                                           : Shape{1, 1};
-        calls.emplace_back(
-            0,
-            rh::ReduceCallConfig{
-                TensorSpec(input_shape, input_layout),
-                TensorSpec(output_shape, output_layout),
-                ReduceOpMath::SUM,
-                dim,
-                1.0F,
-                ReduceFp32Mode::Fast});
+        auto block = rh::ReduceBlockSpec::tiled(
+            dim == ReduceOpDim::W ? 32 : tiles * 32,
+            dim == ReduceOpDim::W ? tiles * 32 : 32,
+            input_dtype,
+            output_dtype);
+        block.resident_input_tiles = std::min(num_tiles, 2 * block_tiles - 1);
+        calls.emplace_back(0, rh::ReduceCallConfig{block, ReduceOpMath::SUM, dim, 1.0F, ReduceFp32Mode::Fast});
     }
     auto sequence = rh::make_reduce_sequence_plan(calls, {1, 3, 2}, hardware);
     for (auto& call : sequence.calls) {

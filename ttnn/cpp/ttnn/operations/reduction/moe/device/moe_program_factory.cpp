@@ -96,16 +96,22 @@ ttnn::device_operation::ProgramArtifacts MoeProgramFactory::create_program_artif
     namespace rh = ttnn::kernel_lib::host;
     // The top-k mask already excludes entries beyond k; both reductions see
     // the same resident tiled values and leave them for the following transform.
-    const TensorLayout values_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{});
-    const TensorLayout output_layout(out_tensor.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
-    const TensorSpec values_spec(Shape{Ht * tile_height, Kt * tile_width}, values_layout);
-    const TensorSpec result_spec(Shape{Ht * tile_height, 1}, output_layout);
     const rh::ReduceHardwareConfig hardware{
         input_tensor.device().arch(), false, false, input_tensor.device().l1_size_per_core()};
     auto max_plan = rh::make_reduce_plan(
-        values_spec, result_spec, ReduceOpMath::MAX, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast, hardware);
+        rh::ReduceBlockSpec::tiled(Ht * tile_height, Kt * tile_width, DataType::BFLOAT16, out_tensor.dtype()),
+        ReduceOpMath::MAX,
+        ReduceOpDim::W,
+        1.0F,
+        ReduceFp32Mode::Fast,
+        hardware);
     auto sum_plan = rh::make_reduce_plan(
-        values_spec, result_spec, ReduceOpMath::SUM, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast, hardware);
+        rh::ReduceBlockSpec::tiled(Ht * tile_height, Kt * tile_width, DataType::BFLOAT16, out_tensor.dtype()),
+        ReduceOpMath::SUM,
+        ReduceOpDim::W,
+        1.0F,
+        ReduceFp32Mode::Fast,
+        hardware);
     max_plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop;
     sum_plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop;
     const auto& auxiliary = *max_plan.find_cb(rh::ReduceCbRole::Auxiliary);

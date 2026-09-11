@@ -180,12 +180,12 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPostAllGatherProgramFactory::create_
     const uint32_t epsilon_packed = std::bit_cast<uint32_t>(eps);
 
     namespace rh = ttnn::kernel_lib::host;
-    const TensorLayout stats_layout(stats_tensor.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
-    const TensorLayout result_layout(
-        fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{});
     auto reduce_plan = rh::make_reduce_plan(
-        TensorSpec(Shape{TILE_HEIGHT, stats_tiles_cols * TILE_WIDTH}, stats_layout),
-        TensorSpec(Shape{TILE_HEIGHT, 1}, result_layout),
+        rh::ReduceBlockSpec::tiled(
+            TILE_HEIGHT,
+            stats_tiles_cols * TILE_WIDTH,
+            stats_tensor.dtype(),
+            fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16),
         ReduceOpMath::SUM,
         ReduceOpDim::W,
         1.0F / (input_tensor.logical_shape()[-1] * num_devices),

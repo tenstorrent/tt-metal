@@ -381,19 +381,13 @@ def create_program_descriptor(
 
     planner = ttnn.reduce_planner
 
-    def spec(shape, dtype):
-        return ttnn.TensorSpec(
-            ttnn.Shape(shape), dtype, ttnn.TILE_LAYOUT, ttnn.TensorMemoryLayout.INTERLEAVED, None, ttnn.BufferType.L1
-        )
-
     reduce_tiles = width_tiles if method_id == 0 else 1
     sequence = planner.make_reduce_sequence_plan(
         reductions=[
             (
                 CB_IN if method_id == 0 else CB_INTERM,
                 planner.ReduceCallConfig(
-                    input_spec=spec([32, reduce_tiles * 32], scaler_format),
-                    output_spec=spec([32, 1], output_tensor.dtype),
+                    block=planner.ReduceBlockSpec(32, reduce_tiles * 32, scaler_format, output_tensor.dtype),
                     reduce_math=planner.ReduceMath.SUM,
                     reduce_dim=planner.ReduceDimension.ROW,
                     scalar=1.0 / (width_tiles * TILE),

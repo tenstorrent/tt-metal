@@ -64,9 +64,6 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHLargeFactory::create_program
     namespace reduce_host = ttnn::kernel_lib::host;
     const bool is_log = op == MorehSoftmaxBackwardOp::LOGSOFTMAX;
     const auto intermediate_dtype = fp32_dest_acc_en ? DataType::FLOAT32 : input_grad.dtype();
-    const TensorLayout reduce_layout(
-        is_log ? output_grad.dtype() : intermediate_dtype, PageConfig(Layout::TILE), MemoryConfig{});
-    const TensorLayout intermediate_layout(intermediate_dtype, PageConfig(Layout::TILE), MemoryConfig{});
     constexpr uint32_t reduce_block_tiles = 8;
     const uint32_t reduce_buffer_tiles = is_log ? 1 : std::min(Ht, 2 * reduce_block_tiles - 1);
     const uint32_t num_blocks = is_log ? 1 : std::max(1U, Ht / reduce_block_tiles);
@@ -79,8 +76,8 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHLargeFactory::create_program
         reductions.emplace_back(
             0,
             reduce_host::ReduceCallConfig{
-                TensorSpec(Shape{extent, 32}, reduce_layout),
-                TensorSpec(Shape{1, 32}, intermediate_layout),
+                reduce_host::ReduceBlockSpec::tiled(
+                    extent, 32, is_log ? output_grad.dtype() : intermediate_dtype, intermediate_dtype),
                 ReduceOpMath::SUM,
                 ReduceOpDim::H,
                 1.0F,

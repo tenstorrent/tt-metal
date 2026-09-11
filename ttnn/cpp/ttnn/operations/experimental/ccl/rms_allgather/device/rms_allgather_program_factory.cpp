@@ -659,14 +659,15 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
         (std::uint32_t)ex_global_cb_index};
 
     namespace rh = ttnn::kernel_lib::host;
-    const TensorLayout reduce_layout(
-        fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{});
     const rh::ReduceHardwareConfig reduce_hardware{
         mesh_device->arch(), fp32_dest_acc_en, false, mesh_device->l1_size_per_core()};
     const auto make_stats_call = [&](uint32_t tiles, float scalar, compute_kernel_lib::ReduceInputPolicy policy) {
         auto plan = rh::make_reduce_plan(
-            TensorSpec(Shape{32, tiles * 32}, reduce_layout),
-            TensorSpec(Shape{32, 1}, reduce_layout),
+            rh::ReduceBlockSpec::tiled(
+                32,
+                tiles * 32,
+                fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16,
+                fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16),
             ReduceOpMath::SUM,
             ReduceOpDim::W,
             scalar,

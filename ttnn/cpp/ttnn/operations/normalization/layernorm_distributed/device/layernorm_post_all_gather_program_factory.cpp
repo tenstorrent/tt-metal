@@ -315,12 +315,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
     tt::DataFormat scaler_data_format =
         in_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     if (is_rmsnorm) {
-        const TensorLayout stats_layout(stats.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
-        const TensorLayout variance_layout(
-            fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{});
         auto reduce_plan = rh::make_reduce_plan(
-            TensorSpec(Shape{tile_height, stats_tiles_cols * tile_width}, stats_layout),
-            TensorSpec(Shape{tile_height, 1}, variance_layout),
+            rh::ReduceBlockSpec::tiled(
+                tile_height,
+                stats_tiles_cols * tile_width,
+                stats.dtype(),
+                fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16),
             ReduceOpMath::SUM,
             ReduceOpDim::W,
             1.0F / reduce_factor,

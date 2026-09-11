@@ -359,8 +359,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         namespace rh = ttnn::kernel_lib::host;
         rh::ReduceAuxiliaryPlan local_auxiliary{1, {}};
         if (!is_post_all_gather) {
-            const TensorLayout layout(
-                fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{});
+            const auto reduce_dtype = fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16;
             const rh::ReduceHardwareConfig hardware{
                 device->arch(), fp32_dest_acc_en, dst_full_sync_en, device->l1_size_per_core()};
             const uint32_t logical_tiles = tt::div_up(logical_K, tile_width);
@@ -372,18 +371,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
             // The existing elementwise column mask also zeros output padding.
             // Describe full tiles here; the final shard can own fewer tiles.
             for (uint32_t tiles : {block_wt, last_tiles}) {
+                auto block = rh::ReduceBlockSpec::tiled(block_ht * 32, tiles * 32, reduce_dtype, reduce_dtype);
+                block.resident_input_tiles = block_ht * block_wt;
+                block.input_row_stride_tiles = block_wt;
                 auto plan = rh::make_reduce_plan(
-                    TensorSpec(Shape{block_ht * 32, tiles * 32}, layout),
-                    TensorSpec(Shape{block_ht * 32, 1}, layout),
-                    ReduceOpMath::SUM,
-                    ReduceOpDim::W,
-                    winv,
-                    ReduceFp32Mode::Fast,
-                    hardware,
-                    block_ht * block_wt * single_tile_size);
-                plan.input_policy = compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop;
+                    block, ReduceOpMath::SUM, ReduceOpDim::W, winv, ReduceFp32Mode::Fast, hardware);
                 plan.reconfig_mode = compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT;
-                plan.input_row_stride_tiles = block_wt;
                 rh::ReduceCallPlan call{
                     .input_cb_id = 0,
                     .auxiliary_cb_id = 1,

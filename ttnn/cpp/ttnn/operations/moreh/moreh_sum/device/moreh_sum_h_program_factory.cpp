@@ -85,8 +85,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
     constexpr uint32_t num_input_tiles = 2;
     namespace reduce_host = ttnn::kernel_lib::host;
     const auto reduce_plan = reduce_host::make_reduce_plan(
-        TensorSpec(Shape{origin_H, 32}, TensorLayout(input.dtype(), PageConfig(Layout::TILE), MemoryConfig{})),
-        TensorSpec(Shape{1, 32}, TensorLayout(output.dtype(), PageConfig(Layout::TILE), MemoryConfig{})),
+        reduce_host::ReduceBlockSpec::tiled(origin_H, 32, input.dtype(), output.dtype()),
         ReduceOpMath::SUM,
         ReduceOpDim::H,
         1.0F,

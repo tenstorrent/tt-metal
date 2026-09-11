@@ -94,17 +94,14 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxWLar
     const DFBSpecName TMP{"tmp"};
 
     namespace reduce_host = ttnn::kernel_lib::host;
-    const TensorLayout input_layout(input.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
-    const TensorLayout intermediate_layout(
-        fp32_dest_acc_en ? DataType::FLOAT32 : input.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
     const reduce_host::ReduceHardwareConfig reduce_hardware{
         .arch = arch,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = dst_full_sync_en,
         .available_l1_bytes = 24 * tile_size_intermed};
     const auto max_plan = reduce_host::make_reduce_plan(
-        TensorSpec(Shape{32, input.logical_shape()[-1]}, input_layout),
-        TensorSpec(Shape{32, 1}, intermediate_layout),
+        reduce_host::ReduceBlockSpec::tiled(
+            32, input.logical_shape()[-1], input.dtype(), fp32_dest_acc_en ? DataType::FLOAT32 : input.dtype()),
         ReduceOpMath::MAX,
         ReduceOpDim::W,
         1.0F,
@@ -126,8 +123,11 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxWLar
         reductions.emplace_back(
             0,
             reduce_host::ReduceCallConfig{
-                TensorSpec(Shape{32, extent}, intermediate_layout),
-                TensorSpec(Shape{32, 1}, intermediate_layout),
+                reduce_host::ReduceBlockSpec::tiled(
+                    32,
+                    extent,
+                    fp32_dest_acc_en ? DataType::FLOAT32 : input.dtype(),
+                    fp32_dest_acc_en ? DataType::FLOAT32 : input.dtype()),
                 ReduceOpMath::SUM,
                 ReduceOpDim::W,
                 1.0F,

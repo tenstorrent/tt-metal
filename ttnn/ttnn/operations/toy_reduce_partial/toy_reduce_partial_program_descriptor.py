@@ -3,6 +3,7 @@
 
 """Single-core streamed SUM/MAX reduction using the host planner."""
 
+import math
 from pathlib import Path
 
 import ttnn
@@ -26,8 +27,17 @@ def create_program_descriptor(
             (
                 cb_in,
                 planner.ReduceCallConfig(
-                    input_spec=input_tensor.spec,
-                    output_spec=output_tensor.spec,
+                    block=planner.ReduceBlockSpec(
+                        input_tensor.shape[-2],
+                        input_tensor.shape[-1],
+                        input_tensor.dtype,
+                        output_tensor.dtype,
+                        batches=math.prod(input_tensor.shape[:-2]),
+                        padded_h=input_tensor.padded_shape[-2],
+                        padded_w=input_tensor.padded_shape[-1],
+                        input_tile=input_tensor.spec.tile,
+                        output_tile=output_tensor.spec.tile,
+                    ),
                     reduce_math={"max": planner.ReduceMath.MAX, "sum": planner.ReduceMath.SUM}[pool_type],
                     reduce_dim=planner.ReduceDimension.ROW if reduce_row else planner.ReduceDimension.COLUMN,
                     scalar=1.0,
