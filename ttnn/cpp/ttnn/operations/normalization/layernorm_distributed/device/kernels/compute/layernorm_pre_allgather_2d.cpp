@@ -44,10 +44,12 @@ void kernel_main() {
     constexpr auto reduce_fp32_mode = unpack_fp32_active ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
     DataflowBuffer dfb_inp(dfb_inp_id);
     DataflowBuffer dfb_reduce(dfb::reduce);
+#ifdef FUSE_PRE_ADD
     constexpr auto in0_input =
         ckl::input(dfb::in0, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block);
     constexpr auto res_input =
         ckl::input(dfb::res, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block);
+#endif
     constexpr auto input_squared =
         ckl::input(dfb_inp_id, ckl::WaitPolicy::Cumulative, ckl::PopPolicy::None, ckl::InputTileMapping::Block);
 
