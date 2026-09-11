@@ -294,7 +294,7 @@ class TtPrefillRuntime:
             kv_only_idx = last_excl - 1
             assert kv_only_idx not in dcfg.target_layer_ids, (
                 f"drafter target layer {kv_only_idx} coincides with the kv-only last layer; its post-FFN tap "
-                f"never fires. Move the tap off the last layer or disable PREFILL_KV_ONLY_LAST_LAYER."
+                "never fires. Move the tap off the last layer."
             )
 
         logger.info(
@@ -533,7 +533,7 @@ class TtPrefillRuntime:
         """The captured/warmed metadata forward: per-chunk scalars come from the persistent metadata
         tensor on-device (actual_start/actual_end = None host-side). Writes user slot metadata[0].
         Returns the forward output — a hidden-state activation on a non-last rank (forwarded downstream
-        over D2D), or None on the last/single rank (the KV cache is the output).    
+        over D2D), or None on the last/single rank (the KV cache is the output).
 
         index_kv_cache is threaded for the sparse/DSA path exactly as the eager prefill_chunk does;
         omitting it would replay the indexer against no cache. This warm pass is also what memoizes
