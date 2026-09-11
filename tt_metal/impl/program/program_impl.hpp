@@ -309,7 +309,7 @@ public:
 
     void set_kernels_bin_buffer(const std::shared_ptr<Buffer>& buffer);
 
-    // Runtime binary reload: see ProgramDescriptor::reload_table_addr.
+    // Runtime binary reload: see experimental::blaze::ReloadTable (ProgramDescriptor::reload_table).
     std::optional<uint32_t> reload_table_addr_;
     CoreRangeSet reload_core_ranges_;
 

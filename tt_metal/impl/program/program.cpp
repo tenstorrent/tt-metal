@@ -409,8 +409,8 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
 
-    if (descriptor.reload_table_addr.has_value()) {
-        internal_->set_reload_table(*descriptor.reload_table_addr, descriptor.reload_core_ranges);
+    if (descriptor.reload_table.has_value()) {
+        internal_->set_reload_table(descriptor.reload_table->address, descriptor.reload_table->cores);
     }
 
     for (const auto& cb_descriptor : descriptor.cbs) {

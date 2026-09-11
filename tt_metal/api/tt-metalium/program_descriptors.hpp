@@ -12,6 +12,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/blaze/named_kernel_args.hpp>
+#include <tt-metalium/experimental/blaze/reload_table.hpp>
 #include <tt_stl/small_vector.hpp>
 
 #include <functional>
@@ -223,13 +224,8 @@ struct ProgramDescriptor {
     SemaphoreDescriptors semaphores;
     CBDescriptors cbs;
     std::optional<std::uint64_t> custom_program_hash;
-    // Runtime binary reload: L1 address of this program's stage table; std::nullopt when the
-    // program does not reload. Firmware reads it from the launch message
-    // (kernel_config_msg_t::reload_table_addr, where 0 means no table).
-    std::optional<uint32_t> reload_table_addr;
-    // The cores that walk that table. Empty means none; a core given a table it was not built
-    // for would run another core's binary.
-    CoreRangeSet reload_core_ranges;
+    // Blaze-only experimental runtime binary reload; std::nullopt when the program does not reload.
+    std::optional<experimental::blaze::ReloadTable> reload_table;
 
     std::optional<uint32_t> find_available_semaphore_id(const CoreCoord& core, CoreType core_type) const;
 };
