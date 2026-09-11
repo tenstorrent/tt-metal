@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/distributed/host_transport.hpp"
+#include <tt-metalium/experimental/sockets/internal/host_transport.hpp>
 
 #include <mpi.h>
 
@@ -12,8 +12,8 @@
 #include <sstream>
 #include <vector>
 
-#include "host_stats.hpp"  // now_ns()
-#include "host_uva_layout.hpp"
+#include <tt-metalium/experimental/sockets/internal/host_stats.hpp>  // now_ns()
+#include <tt-metalium/experimental/sockets/internal/host_uva_layout.hpp>
 #include "multihost/mpi_distributed_context.hpp"
 
 #include <tt-metalium/distributed_context.hpp>

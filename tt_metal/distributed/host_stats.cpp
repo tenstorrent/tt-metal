@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-#include "host_stats.hpp"
+#include <tt-metalium/experimental/sockets/internal/host_stats.hpp>
 
 #include <cmath>
 
@@ -19,7 +19,7 @@
 #include <utility>
 #include <vector>
 
-#include "host_uva_layout.hpp"
+#include <tt-metalium/experimental/sockets/internal/host_uva_layout.hpp>
 
 namespace tt::tt_metal::experimental {
 

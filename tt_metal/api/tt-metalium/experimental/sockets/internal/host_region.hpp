@@ -24,13 +24,13 @@
 #include <memory>
 #include <string>
 
-#include "host_uva.hpp"
+#include <tt-metalium/experimental/sockets/internal/host_uva.hpp>
 #include <cstdlib>
 #include <string>
 #include <thread>
 
-#include "host_stats.hpp"   // now_ns()
-#include "host_uva_layout.hpp"
+#include <tt-metalium/experimental/sockets/internal/host_stats.hpp>  // now_ns()
+#include <tt-metalium/experimental/sockets/internal/host_uva_layout.hpp>
 
 namespace tt::tt_metal::distributed {
 class MeshDevice;
@@ -64,7 +64,6 @@ inline uint64_t load_acquire(const volatile uint64_t* p) {
 inline void store_release(volatile uint64_t* p, uint64_t v) {
     __atomic_store_n(const_cast<uint64_t*>(p), v, __ATOMIC_RELEASE);
 }
-
 
 class HostRegion {
 public:
@@ -265,8 +264,7 @@ inline uint64_t credit_turnaround_ns(const HostRegion& region, uint32_t core, ui
 
 // Returns false on timeout, and the caller reports rather than aborts: a drain that timed out
 // means the interval is wider than intended, which weakens a number without invalidating a run.
-inline bool drain_credits(HostRegion& region, uint32_t cores, uint64_t want, uint64_t budget_ns,
-                          uint32_t& slow_core) {
+inline bool drain_credits(HostRegion& region, uint32_t cores, uint64_t want, uint64_t budget_ns, uint32_t& slow_core) {
     const uint64_t dl = now_ns() + budget_ns;
     for (uint32_t core = 0; core < cores; ++core) {
         while (credit_total(region, core) < want) {

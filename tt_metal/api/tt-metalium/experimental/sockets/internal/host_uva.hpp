@@ -41,13 +41,7 @@ static_assert(kRegionShift == kSelectorShift + kSelectorBits, "region must abut 
 static_assert(kSelectorShift == kPageShift + kPageBits, "selector must abut page");
 static_assert(kPageShift == kOffsetShift + kOffsetBits, "page must abut offset");
 
-enum UvaRegion : uint32_t {
-    kRegionDram = 0,
-    kRegionHost = 1,
-    kRegionT6 = 2,
-    kRegionRdmaReg = 3,
-    kRegionCount
-};
+enum UvaRegion : uint32_t { kRegionDram = 0, kRegionHost = 1, kRegionT6 = 2, kRegionRdmaReg = 3, kRegionCount };
 
 static_assert(kRegionCount <= (1u << kRegionBits), "region kinds must fit the region field");
 
@@ -101,12 +95,7 @@ static_assert(t6_global_selector(0, 0, 42, 1) == 42, "host 0 chip 0: the selecto
 // runs, it just always answers "local", and the no-such-host branch is reachable from
 // the configuration people actually run rather than only a hypothetical one.
 // ---------------------------------------------------------------------------
-enum HostReach : uint32_t {
-    kHostReachNoSuchHost = 0,
-    kHostReachLocal = 1,
-    kHostReachRemote = 2,
-    kHostReachCount
-};
+enum HostReach : uint32_t { kHostReachNoSuchHost = 0, kHostReachLocal = 1, kHostReachRemote = 2, kHostReachCount };
 
 struct HostTopology {
     uint32_t ident;
@@ -121,9 +110,7 @@ constexpr bool host_topology_ok(HostTopology t) {
                static_cast<uint64_t>(kSelectorMask) + 1;
 }
 
-constexpr uint32_t my_t6_slot(HostTopology t, uint32_t my_chip) {
-    return t6_slot(t.ident, my_chip, t.chips_per_host);
-}
+constexpr uint32_t my_t6_slot(HostTopology t, uint32_t my_chip) { return t6_slot(t.ident, my_chip, t.chips_per_host); }
 
 constexpr uint32_t host_reach(uint32_t selector, HostTopology t) {
     if (selector >= t.num) {
@@ -165,9 +152,7 @@ constexpr uint64_t uva_encode(uint32_t region, uint32_t selector, uint32_t page,
 }
 
 constexpr uint32_t uva_region(uint64_t uva) { return static_cast<uint32_t>((uva >> kRegionShift) & kRegionMask); }
-constexpr uint32_t uva_selector(uint64_t uva) {
-    return static_cast<uint32_t>((uva >> kSelectorShift) & kSelectorMask);
-}
+constexpr uint32_t uva_selector(uint64_t uva) { return static_cast<uint32_t>((uva >> kSelectorShift) & kSelectorMask); }
 constexpr uint32_t uva_page(uint64_t uva) { return static_cast<uint32_t>((uva >> kPageShift) & kPageMask); }
 constexpr uint32_t uva_offset(uint64_t uva) { return static_cast<uint32_t>((uva >> kOffsetShift) & kOffsetMask); }
 
@@ -226,12 +211,11 @@ constexpr uint32_t uva_target_host(uint64_t uva, HostTopology t) {
     }
     return kHostNone;
 }
-static_assert(uva_target_host(uva_encode(kRegionT6, t6_global_selector(2, 1, 9, 4), 0, 0),
-                              HostTopology{0, 8, 4}) == 2,
-              "a t6 UVA names its host");
-static_assert(uva_target_host(uva_encode(kRegionDram, 3, 0, 0), HostTopology{0, 8, 4}) == kHostNone,
-              "dram has no host field");
-
+static_assert(
+    uva_target_host(uva_encode(kRegionT6, t6_global_selector(2, 1, 9, 4), 0, 0), HostTopology{0, 8, 4}) == 2,
+    "a t6 UVA names its host");
+static_assert(
+    uva_target_host(uva_encode(kRegionDram, 3, 0, 0), HostTopology{0, 8, 4}) == kHostNone, "dram has no host field");
 
 constexpr bool uva_selector_fits(uint32_t selector) { return (selector & ~static_cast<uint32_t>(kSelectorMask)) == 0; }
 constexpr bool uva_region_fits(uint32_t region) { return (region & ~static_cast<uint32_t>(kRegionMask)) == 0; }

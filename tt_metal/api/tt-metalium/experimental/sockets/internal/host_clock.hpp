@@ -33,7 +33,7 @@
 namespace tt::tt_metal::experimental {
 
 struct ClockSync {
-    int64_t offset_ns = 0;        // add to a PEER timestamp to express it on our clock
+    int64_t offset_ns = 0;  // add to a PEER timestamp to express it on our clock
     uint64_t min_rtt_ns = 0;
     uint64_t uncertainty_ns = 0;  // half the minimum RTT: the bound on offset_ns
     uint32_t samples = 0;

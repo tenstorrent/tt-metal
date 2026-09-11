@@ -43,8 +43,8 @@
 // A relative path here compiles only in the layout it was written for, and the failure lands in
 // the JIT build at run time -- after the device is open and the transport connected -- rather
 // than in the host build where it would be cheap to see.
-#include "tt_metal/distributed/host_uva.hpp"
-#include "tt_metal/distributed/host_uva_layout.hpp"
+#include <tt-metalium/experimental/sockets/internal/host_uva.hpp>
+#include <tt-metalium/experimental/sockets/internal/host_uva_layout.hpp>
 
 namespace {
 

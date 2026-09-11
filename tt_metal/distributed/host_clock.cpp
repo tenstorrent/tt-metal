@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-#include "host_clock.hpp"
+#include <tt-metalium/experimental/sockets/internal/host_clock.hpp>
 
 #include <cerrno>
 #include <cstring>
 #include <sstream>
 
-#include "host_stats.hpp"
+#include <tt-metalium/experimental/sockets/internal/host_stats.hpp>
 
 namespace tt::tt_metal::experimental {
 

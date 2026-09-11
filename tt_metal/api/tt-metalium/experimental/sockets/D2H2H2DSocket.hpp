@@ -31,14 +31,14 @@
 #include <thread>
 #include <vector>
 
-#include "tt_metal/distributed/host_clock.hpp"
-#include "tt_metal/distributed/host_deliver.hpp"
-#include "tt_metal/distributed/host_region.hpp"
-#include "tt_metal/distributed/host_scan.hpp"
-#include "tt_metal/distributed/host_stats.hpp"
-#include "tt_metal/distributed/host_transport.hpp"
-#include "tt_metal/distributed/host_uva.hpp"
-#include "tt_metal/distributed/host_uva_layout.hpp"
+#include <tt-metalium/experimental/sockets/internal/host_clock.hpp>
+#include <tt-metalium/experimental/sockets/internal/host_deliver.hpp>
+#include <tt-metalium/experimental/sockets/internal/host_region.hpp>
+#include <tt-metalium/experimental/sockets/internal/host_scan.hpp>
+#include <tt-metalium/experimental/sockets/internal/host_stats.hpp>
+#include <tt-metalium/experimental/sockets/internal/host_transport.hpp>
+#include <tt-metalium/experimental/sockets/internal/host_uva.hpp>
+#include <tt-metalium/experimental/sockets/internal/host_uva_layout.hpp>
 
 namespace tt::tt_metal::experimental {
 

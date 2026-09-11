@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-#include "host_deliver.hpp"
+#include <tt-metalium/experimental/sockets/internal/host_deliver.hpp>
 
 #include <algorithm>
 #include <cstdlib>
@@ -11,8 +11,8 @@
 #include <mutex>
 #include <sstream>
 
-#include "host_uva_layout.hpp"
-#include "host_region.hpp"
+#include <tt-metalium/experimental/sockets/internal/host_uva_layout.hpp>
+#include <tt-metalium/experimental/sockets/internal/host_region.hpp>
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>

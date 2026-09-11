@@ -20,7 +20,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
 
-#include "tt_metal/distributed/host_uva_layout.hpp"
+#include <tt-metalium/experimental/sockets/internal/host_uva_layout.hpp>
 
 namespace {
 

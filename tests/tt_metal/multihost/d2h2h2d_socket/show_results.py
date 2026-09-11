@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Print the D2H2H2D bandwidth and latency tables from the stripped CSV.
 
 The CSV that test_oneway_volume writes has one row per stage per run:

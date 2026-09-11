@@ -54,9 +54,9 @@
 #include <thread>
 #include <vector>
 
-#include "host_region.hpp"
-#include "host_stats.hpp"
-#include "host_uva_layout.hpp"
+#include <tt-metalium/experimental/sockets/internal/host_region.hpp>
+#include <tt-metalium/experimental/sockets/internal/host_stats.hpp>
+#include <tt-metalium/experimental/sockets/internal/host_uva_layout.hpp>
 
 namespace tt::tt_metal::experimental {
 
@@ -106,13 +106,13 @@ struct ScanConfig {
     // Non-null only when the ladder is quiesced. Same lifetime rule as `ladder`.
     LadderSync* ladder_sync = nullptr;
 
-    uint32_t workers = 0;             // 0 => one per online CPU
-    std::vector<int> cpus;            // explicit affinity list; empty => 0..workers-1
+    uint32_t workers = 0;   // 0 => one per online CPU
+    std::vector<int> cpus;  // explicit affinity list; empty => 0..workers-1
     bool pin_threads = true;
-    uint64_t stop_after_messages = 0; // 0 => run until stop() is called
-    bool scan_rx = false;             // also watch kCtrlRx (delivery / return path)
+    uint64_t stop_after_messages = 0;  // 0 => run until stop() is called
+    bool scan_rx = false;              // also watch kCtrlRx (delivery / return path)
 
-    uint32_t steal_attempts = 2;      // victims tried per idle pass before backing off
+    uint32_t steal_attempts = 2;  // victims tried per idle pass before backing off
 
     // The scanner records two timing samples of its own -- kHopDecode and kHopStealWait --
     // and until this existed it had no way to know a warmup was in progress: nothing in this
@@ -130,7 +130,6 @@ struct ScanConfig {
     //
     // LIFETIME: must outlive join(). Both callers hold it in an object that owns the scanner.
     const std::atomic<bool>* recording = nullptr;
-
 };
 
 class BankScanner {
@@ -142,8 +141,8 @@ public:
     BankScanner& operator=(const BankScanner&) = delete;
 
     void start();
-    void stop();                       // asks workers to finish; does not block
-    void join();                       // blocks until every worker has exited
+    void stop();  // asks workers to finish; does not block
+    void join();  // blocks until every worker has exited
     bool running() const { return running_.load(std::memory_order_acquire); }
     uint64_t serviced() const { return serviced_.load(std::memory_order_relaxed); }
 
@@ -173,9 +172,7 @@ private:
     // Are this scanner's own timing samples being kept? See ScanConfig::recording.
     // Relaxed: the gate opens once and never closes, so the only cost of racing it is one
     // sample either side of the boundary -- the same tolerance the driver's own gate has.
-    bool recording() const {
-        return cfg_.recording == nullptr || cfg_.recording->load(std::memory_order_relaxed);
-    }
+    bool recording() const { return cfg_.recording == nullptr || cfg_.recording->load(std::memory_order_relaxed); }
 
     HostRegion& region_;
     ScanConfig cfg_;

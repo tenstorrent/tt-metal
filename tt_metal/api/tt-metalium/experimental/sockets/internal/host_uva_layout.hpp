@@ -73,21 +73,18 @@ constexpr uint32_t kCtrlRx = kDataRegisters + 1;  // 31: host -> T6, RX SLOT 0 (
 //
 //     slots = kArenaBytes / payload_bytes
 //
-constexpr uint32_t kPayloadStampOffset = 0;   // uint32 iteration
-constexpr uint32_t kPayloadDestOffset = 4;    // uint32 destination selector
+constexpr uint32_t kPayloadStampOffset = 0;  // uint32 iteration
+constexpr uint32_t kPayloadDestOffset = 4;   // uint32 destination selector
 constexpr uint32_t kPayloadHeaderBytes = 8;
 static_assert(kPayloadDestOffset + 4 == kPayloadHeaderBytes, "the header is the stamp and the selector");
 
 constexpr uint32_t kRxNoticeSlots = 8;
 
-
 constexpr uint32_t kRxSlotBase = 8;  // registers 8..14 hold slots 1..7 (slot 0 is kCtrlRx)
-static_assert(kRxSlotBase + kRxNoticeSlots - 1 < kDataRegisters,
-              "the RX notice block must stay inside the data registers");
+static_assert(
+    kRxSlotBase + kRxNoticeSlots - 1 < kDataRegisters, "the RX notice block must stay inside the data registers");
 
-constexpr uint32_t rx_slot_reg(uint32_t slot) {
-    return slot == 0 ? kCtrlRx : (kRxSlotBase + slot - 1);
-}
+constexpr uint32_t rx_slot_reg(uint32_t slot) { return slot == 0 ? kCtrlRx : (kRxSlotBase + slot - 1); }
 static_assert(rx_slot_reg(0) == kCtrlRx, "slot 0 keeps its historical home");
 static_assert(rx_slot_reg(1) == kRxSlotBase, "slot 1 starts the relocated block");
 
@@ -143,9 +140,9 @@ static_assert(kCtrlMagic != 0, "a zeroed bank must not decode as armed");
 static_assert(kCtrlMagic != 0x57A7ull, "must not collide with the legacy status magic");
 
 enum CtrlOpcode : uint32_t {
-    kOpNop = 0x00,       // armed but nothing to do; used to time the notice path alone
-    kOpSendUva = 0x01,   // move bytes named by a UVA operand to the UVA's owner
-    kOpEchoUva = 0x02,   // kOpSendUva, and the far side sends it back -- round trip
+    kOpNop = 0x00,      // armed but nothing to do; used to time the notice path alone
+    kOpSendUva = 0x01,  // move bytes named by a UVA operand to the UVA's owner
+    kOpEchoUva = 0x02,  // kOpSendUva, and the far side sends it back -- round trip
 
     // TWO ENCODINGS OF ONE OPERATION, which is the sb/sh/sw/sd vs block-move split:
     //
@@ -163,9 +160,9 @@ constexpr bool ctrl_op_is_store(uint32_t op) { return op == kOpRdmaWrite || op =
 // Does this opcode carry its length as an immediate rather than in a register?
 constexpr bool ctrl_op_has_imm(uint32_t op) { return op == kOpRdmaWriteImm; }
 
-constexpr uint32_t kCtrlImmShift = kCtrlBaseShift;                       // 8
-constexpr uint64_t kCtrlImmMask = (kCtrlCountMask << 5) | kCtrlBaseMask; // 10 bits
-constexpr uint32_t kCtrlImmMax = static_cast<uint32_t>(kCtrlImmMask);    // 1023
+constexpr uint32_t kCtrlImmShift = kCtrlBaseShift;                        // 8
+constexpr uint64_t kCtrlImmMask = (kCtrlCountMask << 5) | kCtrlBaseMask;  // 10 bits
+constexpr uint32_t kCtrlImmMax = static_cast<uint32_t>(kCtrlImmMask);     // 1023
 static_assert(kCtrlImmShift == kCtrlBaseShift, "the immediate overlays base:count exactly");
 static_assert(kCtrlCountShift == kCtrlBaseShift + 5, "base and count must abut for the overlay to be contiguous");
 
@@ -207,8 +204,6 @@ constexpr uint64_t elapsed_visibility_of(uint64_t w) { return (w >> 32) & kElaps
 // control word safe to reuse: a single-slot mailbox needs the writer to know the slot is
 // free, and nothing else in the design tells it.
 constexpr uint32_t kArgCreditReg = 4;
-
-
 
 // HOW MANY TX-QUEUE SLOTS ONE MESSAGE COSTS, and how many are held back.
 //
@@ -279,9 +274,7 @@ constexpr uint64_t rx_scr_encode(uint32_t offset, uint32_t length) {
            ((static_cast<uint64_t>(length) & kRxScrLengthMask) << kRxScrLengthShift) |
            ((static_cast<uint64_t>(offset) & kRxScrOffsetMask) << kRxScrOffsetShift);
 }
-constexpr uint32_t rx_scr_magic(uint64_t w) {
-    return static_cast<uint32_t>((w >> kRxScrMagicShift) & kCtrlMagicMask);
-}
+constexpr uint32_t rx_scr_magic(uint64_t w) { return static_cast<uint32_t>((w >> kRxScrMagicShift) & kCtrlMagicMask); }
 constexpr uint32_t rx_scr_length(uint64_t w) {
     return static_cast<uint32_t>((w >> kRxScrLengthShift) & kRxScrLengthMask);
 }
@@ -290,9 +283,7 @@ constexpr uint32_t rx_scr_offset(uint64_t w) {
 }
 // Armed AND self-consistent. A length of 0 is refused for the same reason ctrl_validate
 // refuses count == 0: it names an address and moves nothing, which is always a caller bug.
-constexpr bool rx_scr_armed(uint64_t w) {
-    return rx_scr_magic(w) == kCtrlMagic && rx_scr_length(w) != 0;
-}
+constexpr bool rx_scr_armed(uint64_t w) { return rx_scr_magic(w) == kCtrlMagic && rx_scr_length(w) != 0; }
 
 static_assert(rx_scr_offset(rx_scr_encode(0x123456, 0xABCDEF)) == 0x123456, "offset round-trips");
 static_assert(rx_scr_length(rx_scr_encode(0x123456, 0xABCDEF)) == 0xABCDEF, "length round-trips");
@@ -308,8 +299,8 @@ static_assert(kNoticeStoreBytes <= kRegisterBytes, "a store notice must still fi
 static_assert(kNoticeUvaOffset + 8 == kNoticeStoreBytes, "the UVA is the last word of a store notice");
 // kCtrlRx is the LAST register of the bank, so a notice may fill its line and not one byte
 // more -- past that is the next core's data registers, and banks are contiguous.
-static_assert(kCtrlRx * kRegisterBytes + kNoticeStoreBytes <= kBankBytes,
-              "a store notice must not run past the end of the bank");
+static_assert(
+    kCtrlRx * kRegisterBytes + kNoticeStoreBytes <= kBankBytes, "a store notice must not run past the end of the bank");
 
 // How many bytes this opcode's notice occupies. One function, so the writers and the
 // reader cannot disagree about whether word 4 is present.
@@ -333,26 +324,23 @@ constexpr uint32_t notice_bytes_for(uint32_t opcode) {
 // direction already carries, and for the same reason.
 //
 constexpr uint32_t kD2HHeaderCtrlOffset = 0;
-constexpr uint32_t kD2HHeaderOperandOffset = 8;   // operands run consecutively from here
+constexpr uint32_t kD2HHeaderOperandOffset = 8;  // operands run consecutively from here
 constexpr uint32_t kD2HHeaderMaxOperands = 7;
 constexpr uint32_t kD2HHeaderBytes = 64;
 
-static_assert(kD2HHeaderOperandOffset + kD2HHeaderMaxOperands * 8 == kD2HHeaderBytes,
-              "the header must be exactly one PCIe alignment unit, fully used");
-static_assert(kD2HHeaderMaxOperands <= kDataRegisters,
-              "cannot carry more operands than the register file has");
+static_assert(
+    kD2HHeaderOperandOffset + kD2HHeaderMaxOperands * 8 == kD2HHeaderBytes,
+    "the header must be exactly one PCIe alignment unit, fully used");
+static_assert(kD2HHeaderMaxOperands <= kDataRegisters, "cannot carry more operands than the register file has");
 
 // The socket page for a run of `payload_bytes`. PCIe-aligned by construction whenever the
 // payload is, because the header is itself a multiple of the alignment.
-constexpr uint32_t d2h_page_bytes(uint32_t payload_bytes) {
-    return kD2HHeaderBytes + payload_bytes;
-}
+constexpr uint32_t d2h_page_bytes(uint32_t payload_bytes) { return kD2HHeaderBytes + payload_bytes; }
 
 // ---------------------------------------------------------------------------
 // Control word encode / decode
 // ---------------------------------------------------------------------------
-constexpr uint64_t ctrl_encode(
-    uint32_t opcode, uint32_t base, uint32_t count, uint64_t flags, uint32_t sequence) {
+constexpr uint64_t ctrl_encode(uint32_t opcode, uint32_t base, uint32_t count, uint64_t flags, uint32_t sequence) {
     return ((kCtrlMagic & kCtrlMagicMask) << kCtrlMagicShift) |
            ((kCtrlVersion & kCtrlVersionMask) << kCtrlVersionShift) |
            ((static_cast<uint64_t>(sequence) & kCtrlSeqMask) << kCtrlSeqShift) |
@@ -500,7 +488,7 @@ static_assert(ctrl_validate(0x57A7ull << 48) == kCtrlIdle, "a legacy status word
 constexpr uint64_t kArenaBytes = 1536ull * 1024ull;  // 1.5 MiB, one Tensix L1
 // STILL TWO ARENAS. The receive pool is carved OUT of the existing RX arena rather than added
 // alongside it, so this design costs no memory at all -- see rx_slot_offset().
-constexpr uint64_t kArenasPerCore = 2;               // TX, RX
+constexpr uint64_t kArenasPerCore = 2;                           // TX, RX
 constexpr uint64_t kArenaStride = kArenaBytes * kArenasPerCore;  // 3 MiB per core
 
 static_assert(kArenaBytes == 0x180000ull, "an arena is exactly one Blackhole Tensix L1");
@@ -547,8 +535,9 @@ constexpr uint64_t kNoticeStageSlotBytes = 64;
 constexpr uint64_t notice_stage_offset(uint32_t slot) {
     return kNoticeStageOffset + static_cast<uint64_t>(slot % kNoticeStageSlots) * kNoticeStageSlotBytes;
 }
-static_assert(kNoticeStageOffset + kNoticeStageSlots * kNoticeStageSlotBytes <= kHeaderBytes,
-              "notice staging must fit the header page");
+static_assert(
+    kNoticeStageOffset + kNoticeStageSlots * kNoticeStageSlotBytes <= kHeaderBytes,
+    "notice staging must fit the header page");
 static_assert(kNoticeStageOffset >= sizeof(uint64_t) * 24, "staging must not overlap the RegionHeader fields");
 
 // THE SMALL-WRITE COMPLETION PROBE, and why a scratch line in the header earns its place.
@@ -566,8 +555,8 @@ static_assert(kNoticeStageOffset >= sizeof(uint64_t) * 24, "staging must not ove
 // slot, which is exactly what a probe needs and what no other offset in the region offers.
 constexpr uint64_t kSuppressProbeOffset = 1024;
 constexpr uint64_t kSuppressProbeBytes = 64;
-static_assert(kSuppressProbeOffset + kSuppressProbeBytes <= kNoticeStageOffset,
-              "the probe line must not overlap notice staging");
+static_assert(
+    kSuppressProbeOffset + kSuppressProbeBytes <= kNoticeStageOffset, "the probe line must not overlap notice staging");
 
 constexpr uint64_t kBankArrayBytes = static_cast<uint64_t>(kProvisionedCores) * kBankBytes;  // 256 KiB
 
@@ -637,8 +626,9 @@ constexpr uint64_t rx_slot_offset(uint32_t core, uint32_t slot, uint64_t payload
     return rx_arena_offset(core) + static_cast<uint64_t>(slot) * payload_bytes;
 }
 static_assert(rx_slot_offset(0, 0, 16384) == rx_arena_offset(0), "slot 0 is the arena start");
-static_assert(rx_slot_offset(0, 7, 16384) + 16384 <= rx_arena_offset(0) + kArenaBytes,
-              "the last notice slot's bytes must stay inside the arena at the smallest size");
+static_assert(
+    rx_slot_offset(0, 7, 16384) + 16384 <= rx_arena_offset(0) + kArenaBytes,
+    "the last notice slot's bytes must stay inside the arena at the smallest size");
 
 // THE SLOT WINDOW, in the line register 4 owns.
 //
@@ -653,8 +643,9 @@ constexpr uint32_t kSlotWindowReg = kArgCreditReg;  // register 4, reusing the c
 constexpr uint64_t slot_head_offset(uint32_t core) { return reg_offset(core, kSlotWindowReg); }
 constexpr uint64_t slot_tail_offset(uint32_t core) { return reg_offset(core, kSlotWindowReg) + 8; }
 static_assert(slot_tail_offset(0) - slot_head_offset(0) == 8, "head and tail are adjacent words");
-static_assert(slot_tail_offset(0) + 8 <= reg_offset(0, kSlotWindowReg) + kRegisterBytes,
-              "the slot window must stay inside its own register line");
+static_assert(
+    slot_tail_offset(0) + 8 <= reg_offset(0, kSlotWindowReg) + kRegisterBytes,
+    "the slot window must stay inside its own register line");
 // The pinned prefix for a run using `cores` cores. Everything the device or the NIC can
 // touch must be inside this, and the program asserts that before it arms anything.
 constexpr uint64_t pinned_bytes_for(uint32_t cores) {
@@ -693,8 +684,9 @@ constexpr uint64_t credit_word_offset(uint32_t core, uint32_t peer_host) {
     return reg_offset(core, kArgCreditReg) + static_cast<uint64_t>(peer_host) * sizeof(uint64_t);
 }
 static_assert(credit_word_offset(0, 0) == reg_offset(0, kArgCreditReg), "peer 0 IS the register");
-static_assert(credit_word_offset(0, kMaxCreditPeers - 1) + 8 == reg_offset(0, kArgCreditReg) + kRegisterBytes,
-              "the last credit word must not leave register 4's line");
+static_assert(
+    credit_word_offset(0, kMaxCreditPeers - 1) + 8 == reg_offset(0, kArgCreditReg) + kRegisterBytes,
+    "the last credit word must not leave register 4's line");
 
 // The credit is the only backward-flowing
 // event this protocol has, so `post -> credit visible` is the only sender-side bracket that
@@ -709,8 +701,7 @@ static_assert(credit_word_offset(0, kMaxCreditPeers - 1) + 8 == reg_offset(0, kA
 //
 constexpr uint64_t kCreditCountMask = 0xFFFFFFFFull;
 constexpr uint64_t credit_pack(uint64_t count, uint64_t turnaround_ns) {
-    return ((turnaround_ns > kCreditCountMask ? kCreditCountMask : turnaround_ns) << 32) |
-           (count & kCreditCountMask);
+    return ((turnaround_ns > kCreditCountMask ? kCreditCountMask : turnaround_ns) << 32) | (count & kCreditCountMask);
 }
 constexpr uint64_t credit_count_of(uint64_t w) { return w & kCreditCountMask; }
 // Nanoseconds, on the RECEIVER's clock. Saturated at ~4.29 s by credit_pack; a turnaround that
@@ -753,26 +744,26 @@ static_assert(bank_offset(kProvisionedCores - 1) + kBankBytes <= kArenaArrayOffs
 constexpr uint64_t kRegionMagic = 0x543648'4F535456ull;  // "T6HOSTV" -- distinctive in a hex dump
 
 struct RegionHeader {
-    uint64_t magic;             // kRegionMagic
-    uint32_t version;           // kCtrlVersion -- header and control word version together
-    uint32_t provisioned_cores; // kProvisionedCores
-    uint64_t arena_bytes;       // kArenaBytes
-    uint64_t arena_stride;      // kArenaStride
-    uint64_t bank_bytes;        // kBankBytes
-    uint64_t arena_array_offset;// kArenaArrayOffset
-    uint32_t cores_in_use;      // the prefix actually pinned and armed
-    uint32_t host_id;           // this host's identifier in the UVA selector's host field
-    uint32_t chips_per_host;    // the UVA selector stride -- see host_uva.hpp
-    uint32_t chip;              // which chip on this host this region serves
+    uint64_t magic;               // kRegionMagic
+    uint32_t version;             // kCtrlVersion -- header and control word version together
+    uint32_t provisioned_cores;   // kProvisionedCores
+    uint64_t arena_bytes;         // kArenaBytes
+    uint64_t arena_stride;        // kArenaStride
+    uint64_t bank_bytes;          // kBankBytes
+    uint64_t arena_array_offset;  // kArenaArrayOffset
+    uint32_t cores_in_use;        // the prefix actually pinned and armed
+    uint32_t host_id;             // this host's identifier in the UVA selector's host field
+    uint32_t chips_per_host;      // the UVA selector stride -- see host_uva.hpp
+    uint32_t chip;                // which chip on this host this region serves
     // The two fields a peer must agree with or it addresses the wrong core entirely.
     // grid_width is here for the same reason chips_per_host is: a mismatch does not
     // corrupt an offset, it silently names a different core, and both sides then read a
     // bank that is legitimately idle.
     uint32_t grid_width;
     uint32_t grid_height;
-    uint64_t pinned_bytes;      // pinned_bytes_for(cores_in_use)
-    uint64_t device_io_base;    // PinnedMemory::get_noc_addr().addr -- what the T6 writes to
-    uint32_t pcie_xy_enc;       // PinnedMemory::get_noc_addr().pcie_xy_enc
+    uint64_t pinned_bytes;    // pinned_bytes_for(cores_in_use)
+    uint64_t device_io_base;  // PinnedMemory::get_noc_addr().addr -- what the T6 writes to
+    uint32_t pcie_xy_enc;     // PinnedMemory::get_noc_addr().pcie_xy_enc
     uint32_t reserved;
 };
 

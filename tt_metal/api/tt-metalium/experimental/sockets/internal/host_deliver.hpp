@@ -66,7 +66,7 @@ public:
     // `dst_l1` IS THE EFFECTIVE ADDRESS, and 0 means "the layout's fixed payload_addr".
     //
     virtual std::string write_payload(uint32_t core, const uint8_t* src, uint32_t bytes, uint32_t dst_l1) = 0;
-    virtual std::string ring_doorbell(uint32_t core, uint32_t value) = 0;   // rdma_signal
+    virtual std::string ring_doorbell(uint32_t core, uint32_t value) = 0;    // rdma_signal
     virtual std::string ring_completion(uint32_t core, uint32_t value) = 0;  // rdma_completion
 
     // Reads a core's doorbell back. Used by the round-trip mode to see the far core
@@ -128,8 +128,12 @@ struct H2DSocketConfig {
 // `mesh_device` rather than IDevice*: H2DSocket's constructor takes the mesh, and the
 // sockets must outlive it, so the deliverer holds a share of it.
 std::unique_ptr<Deliverer> make_h2d_socket_deliverer(
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device, uint32_t grid_width, uint32_t cores,
-    L1Layout layout, H2DSocketConfig cfg, std::string& error);
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device,
+    uint32_t grid_width,
+    uint32_t cores,
+    L1Layout layout,
+    H2DSocketConfig cfg,
+    std::string& error);
 
 // The Tensix wall clock, as the host addresses it. Blackhole:
 // RISCV_DEBUG_REGS_START_ADDR (0xFFB12000) | 0x1F0. Duplicated here rather than included

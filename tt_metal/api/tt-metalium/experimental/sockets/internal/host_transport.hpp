@@ -58,7 +58,7 @@ struct RetireStats {
     uint64_t max_ns = 0;
     double mean_ns = 0.0;
     double m2 = 0.0;
-    uint64_t bytes = 0;        // payload bytes across the measured operations
+    uint64_t bytes = 0;  // payload bytes across the measured operations
     uint64_t unmeasured = 0;
 };
 
@@ -88,7 +88,7 @@ struct Completion {
 };
 
 struct OpHandle {
-    uint32_t slot = 0;       // 0 == no completion to wait for
+    uint32_t slot = 0;         // 0 == no completion to wait for
     bool inline_done = false;  // the transfer completed synchronously; see below
     bool valid() const { return slot != 0 || inline_done; }
 };
@@ -115,8 +115,8 @@ public:
 
     virtual std::string connect(uint8_t* region_base, uint64_t region_bytes) = 0;
 
-    virtual std::string post(uint64_t local_offset, uint64_t remote_offset, uint64_t bytes, uint64_t tag,
-                             OpHandle& op) = 0;
+    virtual std::string post(
+        uint64_t local_offset, uint64_t remote_offset, uint64_t bytes, uint64_t tag, OpHandle& op) = 0;
 
     // MPI Progress. An idle sender makes no MPI calls at all, and one-sided operations
     // still need the TARGET side to progress before they complete -- so a peer's credit
@@ -131,10 +131,16 @@ public:
 
     virtual std::string flush() = 0;
 
-    virtual std::string post_notice(uint32_t dest_core, uint32_t rx_slot, uint64_t length,
-                                    uint32_t origin_selector,
-                                    uint64_t elapsed_ns, bool reply, uint32_t stage_slot, OpHandle& op,
-                                    uint64_t dest_uva) = 0;
+    virtual std::string post_notice(
+        uint32_t dest_core,
+        uint32_t rx_slot,
+        uint64_t length,
+        uint32_t origin_selector,
+        uint64_t elapsed_ns,
+        bool reply,
+        uint32_t stage_slot,
+        OpHandle& op,
+        uint64_t dest_uva) = 0;
 
     virtual Completion wait(OpHandle& op, uint32_t timeout_ms) = 0;
 
@@ -152,13 +158,15 @@ public:
 
     virtual std::string barrier() = 0;
 
-    virtual std::string post_credit(uint32_t core, uint32_t my_host, uint64_t count,
-                                    uint64_t turnaround_ns, uint32_t stage_slot) = 0;
+    virtual std::string post_credit(
+        uint32_t core, uint32_t my_host, uint64_t count, uint64_t turnaround_ns, uint32_t stage_slot) = 0;
 
     virtual std::string post_word(uint64_t remote_offset, uint64_t value) = 0;
 
     virtual std::string fetch_add(uint64_t remote_offset, uint64_t add, uint64_t& out) {
-        (void)remote_offset; (void)add; (void)out;
+        (void)remote_offset;
+        (void)add;
+        (void)out;
         return "this transport does not implement fetch_add";
     }
     virtual bool atomics_available() const { return false; }
@@ -168,7 +176,7 @@ std::unique_ptr<Transport> make_transport(const TransportConfig& cfg, std::strin
 
 enum : uint32_t {
     kPeerOk = 0,
-    kPeerNoSuchHost = 1,  // the id is outside the configured topology: a bad address
+    kPeerNoSuchHost = 1,    // the id is outside the configured topology: a bad address
     kPeerNotConnected = 2,  // inside the topology, no endpoint: a provisioning gap
     kPeerIsSelf = 3,        // our own id; routing should have taken the local arm before here
 };
@@ -186,7 +194,8 @@ public:
                    std::to_string(entries_.size()) + " hosts";
         }
         if (host_id == self_) {
-            return "peer table: host " + std::to_string(host_id) + " is THIS host; a peer entry for "
+            return "peer table: host " + std::to_string(host_id) +
+                   " is THIS host; a peer entry for "
                    "ourselves would be reached only by a routing bug";
         }
         if (entries_[host_id] != nullptr) {
@@ -232,8 +241,12 @@ private:
     uint32_t self_ = 0;
 };
 
-std::string connect_mesh(uint8_t* region_base, uint64_t region_bytes, const TransportConfig& base_cfg,
-                         std::vector<std::unique_ptr<Transport>>& owned, PeerTable& table);
+std::string connect_mesh(
+    uint8_t* region_base,
+    uint64_t region_bytes,
+    const TransportConfig& base_cfg,
+    std::vector<std::unique_ptr<Transport>>& owned,
+    PeerTable& table);
 
 inline const char* peer_why_name(uint32_t why) {
     switch (why) {

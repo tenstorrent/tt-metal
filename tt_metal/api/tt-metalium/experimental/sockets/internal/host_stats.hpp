@@ -60,11 +60,11 @@ enum Hop : uint32_t {
     kHopHostToRemoteHost,
     kHopRemoteHostToRemoteT6,
     kHopOneWayTotal,
-    kHopNotice,      // armed word visible -> a worker picked it up
-    kHopDecode,      // validate + operand snapshot + route
+    kHopNotice,  // armed word visible -> a worker picked it up
+    kHopDecode,  // validate + operand snapshot + route
     kHopStealWait,
-    kHopL1Write,     // the noc_write half of stages 3/6, without the doorbell
-    kHopDoorbell,    // the doorbell half
+    kHopL1Write,   // the noc_write half of stages 3/6, without the doorbell
+    kHopDoorbell,  // the doorbell half
     kHopH2HRetire,
     kHopSendQueueWait,
     kHopPullWait,
@@ -102,8 +102,7 @@ inline const char* hop_name(uint32_t h) {
 }
 
 inline bool hop_crosses_device_clock(uint32_t h) {
-    return h == kHopT6ToHost || h == kHopD2HVisibility || h == kHopD2HFenced ||
-           h == kHopRemoteHostToRemoteT6;
+    return h == kHopT6ToHost || h == kHopD2HVisibility || h == kHopD2HFenced || h == kHopRemoteHostToRemoteT6;
 }
 
 inline bool hop_crosses_host_clock(uint32_t h) { return h == kHopH2HNet; }
@@ -116,14 +115,11 @@ inline bool hop_rate_is_bandwidth(uint32_t h) {
         case kHopH2HRetire:             // post -> completion: the transfer, by construction
         case kHopD2HFenced:             // kHopT6ToHost with the read-back probe taken back out
             return true;
-        default:
-            return false;
+        default: return false;
     }
 }
 
-inline bool hop_samples_warmup_gated(uint32_t h) {
-    return h < kHopCount;
-}
+inline bool hop_samples_warmup_gated(uint32_t h) { return h < kHopCount; }
 
 struct Dist {
     uint64_t n = 0;
@@ -201,7 +197,7 @@ struct alignas(64) WorkerStats {
     uint64_t timed_bytes = 0;
     uint64_t rejected[8] = {};
     uint64_t idle_spins = 0;
-    uint64_t delivered = 0;   // messages written into a Tensix L1
+    uint64_t delivered = 0;  // messages written into a Tensix L1
     uint64_t tx_credit_skips = 0;
     TraceBucket trace[kTraceBuckets];
     uint64_t trace_clamped = 0;  // samples that landed past the last bucket
@@ -219,9 +215,9 @@ struct alignas(64) WorkerStats {
     const struct VolumeLadder* ladder_cfg = nullptr;
     struct LadderSync* ladder_sync = nullptr;  // non-null only when quiescing
     uint32_t ladder_workers = 0;
-    uint64_t ladder_bytes = 0;                  // this worker's cumulative payload
-    uint64_t ladder_window_start = 0;           // ladder_bytes when the current window opened
-    uint32_t ladder_next = 0;                   // index of the next mark to cross
+    uint64_t ladder_bytes = 0;         // this worker's cumulative payload
+    uint64_t ladder_window_start = 0;  // ladder_bytes when the current window opened
+    uint32_t ladder_next = 0;          // index of the next mark to cross
     char pad[64];
 };
 
@@ -249,17 +245,17 @@ struct LadderSync {
     std::atomic<uint32_t> arrived{0};     // workers sealed at the current checkpoint
     std::atomic<uint32_t> generation{0};  // bumped when a checkpoint completes
     std::atomic<uint32_t> next_mark{0};
-    std::atomic<uint32_t> clean{0};       // checkpoints where every worker arrived in budget
-    std::atomic<uint32_t> degraded{0};    // checkpoints that timed out and proceeded anyway
+    std::atomic<uint32_t> clean{0};     // checkpoints where every worker arrived in budget
+    std::atomic<uint32_t> degraded{0};  // checkpoints that timed out and proceeded anyway
 };
 
 struct VolumeLadder {
     bool enabled = false;
-    bool quiesced = false;       // pause at each checkpoint so boundaries are exact
-    uint64_t chunk_bytes = 0;    // one message's payload
-    uint64_t total_bytes = 0;    // the RECORDED volume this ladder spans
+    bool quiesced = false;         // pause at each checkpoint so boundaries are exact
+    uint64_t chunk_bytes = 0;      // one message's payload
+    uint64_t total_bytes = 0;      // the RECORDED volume this ladder spans
     uint64_t discarded_bytes = 0;  // what --steady dropped before the counters started
-    std::vector<uint64_t> marks; // nominal cumulative thresholds, doubling from chunk_bytes
+    std::vector<uint64_t> marks;   // nominal cumulative thresholds, doubling from chunk_bytes
     uint32_t quiesce_clean = 0;
     uint32_t quiesce_degraded = 0;
 
@@ -283,8 +279,8 @@ struct VolumeLadder {
     }
 };
 
-inline void ladder_note_quiesced(WorkerStats& ws, LadderSync& sync, const VolumeLadder& cfg,
-                                 uint32_t workers, uint64_t payload_bytes) {
+inline void ladder_note_quiesced(
+    WorkerStats& ws, LadderSync& sync, const VolumeLadder& cfg, uint32_t workers, uint64_t payload_bytes) {
     const uint64_t total = sync.bytes.fetch_add(payload_bytes, std::memory_order_acq_rel) + payload_bytes;
     ws.ladder_bytes += payload_bytes;
 
@@ -330,8 +326,7 @@ inline void ladder_note_message(WorkerStats& ws, bool recording, uint64_t payloa
         return;
     }
     ws.ladder_bytes += payload_bytes;
-    while (ws.ladder_next < cfg.marks.size() &&
-           ws.ladder_bytes >= cfg.worker_mark(ws.ladder_next, workers)) {
+    while (ws.ladder_next < cfg.marks.size() && ws.ladder_bytes >= cfg.worker_mark(ws.ladder_next, workers)) {
         ladder_seal_window(ws);
     }
 }
@@ -343,7 +338,7 @@ struct RunStats {
     uint64_t wall_ns = 0;
 
     uint64_t timed_ns = 0;
-    uint32_t timed_iters = 0;    // iterations inside the bracket: iters - warmup
+    uint32_t timed_iters = 0;     // iterations inside the bracket: iters - warmup
     uint32_t xfers_per_iter = 1;  // fabtests' show_perf() argument: 1 one-way, 2 round trip
 
     uint32_t window = 0;
@@ -360,7 +355,7 @@ struct RunStats {
     std::string provider = "none";
     std::string mode = "oneway";  // oneway | roundtrip | local
 
-    std::string run_id;           // unique per process
+    std::string run_id;  // unique per process
     std::string run_started_utc;
 
     double ns_per_cycle = 0.0;
@@ -496,7 +491,7 @@ struct RunStats {
         }
         return s.ns();
     }
-    uint64_t total(uint64_t WorkerStats::*field) const {
+    uint64_t total(uint64_t WorkerStats::* field) const {
         uint64_t t = 0;
         for (const auto& w : per_worker) {
             t += w.*field;

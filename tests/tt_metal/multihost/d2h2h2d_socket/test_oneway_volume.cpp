@@ -12,10 +12,10 @@
 #include <thread>
 #include <vector>
 
-#include "tt_metal/distributed/host_clock.hpp"
-#include "tt_metal/distributed/host_deliver.hpp"
-#include "tt_metal/distributed/host_region.hpp"
-#include "tt_metal/distributed/host_scan.hpp"
+#include <tt-metalium/experimental/sockets/internal/host_clock.hpp>
+#include <tt-metalium/experimental/sockets/internal/host_deliver.hpp>
+#include <tt-metalium/experimental/sockets/internal/host_region.hpp>
+#include <tt-metalium/experimental/sockets/internal/host_scan.hpp>
 #include <tt-metalium/experimental/sockets/D2H2H2DSocket.hpp>
 
 // THIS PROGRAM REQUIRES A HOST-TO-HOST TRANSPORT, and the requirement comes from the class
@@ -26,10 +26,10 @@
 #if !defined(TT_METAL_HOST_BRIDGE)
 #error "this test needs TT_METAL_HOST_BRIDGE: D2H2H2DSocket IS the middle hop, and it has no transport-less form."
 #endif
-#include "tt_metal/distributed/host_stats.hpp"
-#include "tt_metal/distributed/host_transport.hpp"
-#include "tt_metal/distributed/host_uva.hpp"
-#include "tt_metal/distributed/host_uva_layout.hpp"
+#include <tt-metalium/experimental/sockets/internal/host_stats.hpp>
+#include <tt-metalium/experimental/sockets/internal/host_transport.hpp>
+#include <tt-metalium/experimental/sockets/internal/host_uva.hpp>
+#include <tt-metalium/experimental/sockets/internal/host_uva_layout.hpp>
 #include <tt-metalium/distributed_context.hpp>
 
 #include <tt-metalium/allocator.hpp>

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-#include "host_region.hpp"
+#include <tt-metalium/experimental/sockets/internal/host_region.hpp>
 
 #include <sys/mman.h>
 #include <sys/resource.h>
