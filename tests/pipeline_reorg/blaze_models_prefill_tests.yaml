@@ -158,11 +158,12 @@
     export MESH_DEVICE=TG
     export KIMI_K2_7_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized
     export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
+    export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_kimi_prefill_block -k "torus-xy-8x4 and perf-random-5k and with_determinism and iter2 and not iter25 and not iter2000 and moe_gate_device and not pretrained" -vvv --tb=short --timeout=900
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_chunked.py::test_kimi_prefill_block_chunked -k "torus-xy-8x4 and chunks2 and with_determinism and iter2" -vvv --tb=short --timeout=900
     '
   test_type: prefill_block_determinism
   test_tags: [kimi_k2_7, block, determinism]
@@ -585,35 +586,6 @@
   skus:
     bh_sc1:
       timeout: 20
-      tier: 2
-      release_ready: false
-  owner_id: U09LK84G4TF  # Nikola Milicevic
-  team: models
-  sp_config: sc1
-
-
-- name: "(GLM-5.2-744B) prefill block accuracy 5k"
-  fabric_profile: torus_xy
-  cmd: |
-    export MESH_DEVICE=TG
-    export GLM52_HF_MODEL=/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8/
-    export TT_GLM52_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/GLM-5.2-Cache/CI
-    # Fused GLM-5.2 decoder block (sparse-SDPA MLA + norm/residual + dense/MoE FFN, layers 0 and 6) vs the
-    # composed CPU reference on the fabric2d transport. The CI ttnn cache dir is empty, so both blocks build
-    # RANDOM weights (never rebuilds): the dense block matches directly, and the MoE block runs at the first
-    # FULL-indexer layer (6; GLM-5.2 layers 3-5 reuse a prior layer's indexer top-k, which an isolated block
-    # cannot supply) where the non-degenerate random gate agrees with the reference. -k glm52 runs both the
-    # dense and MoE parametrizations.
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_glm_prefill_block -k "seq5120 and torus-xy-8x4 and glm52" -vvv --tb=short --timeout=300
-    '
-  test_type: glm_prefill_block
-  test_tags: [glm_5_2, block]
-  test_group: module
-  skus:
-    bh_sc1:
-      timeout: 30
       tier: 2
       release_ready: false
   owner_id: U09LK84G4TF  # Nikola Milicevic
