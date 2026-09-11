@@ -190,3 +190,29 @@ def test_rows_carry_the_category_the_rollup_charges_them_to():
     assert by_label["│  ├─ kv-allgather"] == dt.ALLGATHER
     # the remainder row carries its PARENT's category, because that is where its ms are charged
     assert by_label["│  └─ · other (unattributed)"] == dt.ATTENTION
+
+
+def test_live_lines_stream_progress(monkeypatch, capsys):
+    """DIFFVAE_STAGE_LOG: one line per open and per close, depth as indent, and a hang -- a span
+    that never closes -- leaves a ">" with no "<", which is the whole point."""
+    monkeypatch.setattr(dt, "LIVE", True)
+    root = dt.open_span("decode", root=True)
+    attn = dt.open_span("attention", category=dt.ATTENTION)
+    dt.open_span("kv-allgather", category=dt.ALLGATHER)  # never closes: the hang
+    _close(attn, 12.34)
+    _close(root, 20.0)
+    lines = [ln.split("] ", 1)[1] for ln in capsys.readouterr().out.splitlines()]
+    assert lines == [
+        "> decode",
+        "  > attention",
+        "    > kv-allgather",
+        "  < attention  12.3 ms",
+        "< decode  20.0 ms",
+    ]
+    assert dt.roots()[-1].children[0].children[0].flags == {"unclosed"}
+
+
+def test_live_off_prints_nothing(capsys):
+    root = dt.open_span("decode", root=True)
+    _close(root, 1.0)
+    assert capsys.readouterr().out == ""

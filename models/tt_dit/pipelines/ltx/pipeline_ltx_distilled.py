@@ -18,6 +18,7 @@ import ttnn
 from ...models.transformers.ltx.rope_ltx import prepare_audio_rope, prepare_av_cross_pe, prepare_video_rope
 from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel, build_audio_masks, build_video_pad_mask
 from ...models.vae.vae_ltx import upsample_latent
+from ...utils import decode_tree
 from ...utils.ltx import load_conditioning_image
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
@@ -849,10 +850,15 @@ class LTXDistilledPipeline(LTXPipeline):
         )
         # export_video_audio needs float [-1,1]; the frame-return path uses the requested output_type.
         decode_type = ("yuv" if yuv_export else "float") if output_path is not None else output_type
+        # Roots recorded before this call belong to warm-up or an earlier gen; keep only what THIS
+        # decode records so the perf table's breakdown never describes a different pass.
+        roots_before = decode_tree.root_count()
         t0 = time.time()
         video_pixels = self.decode_latents(s2_video, latent_frames, latent_h, latent_w, output_type=decode_type)
         t_vae_decode = time.time() - t0
         timings.append(("VAE decode", t_vae_decode))
+        new_roots = decode_tree.roots()[roots_before:]
+        self.last_decode_tree = new_roots[-1] if new_roots else None
         logger.info(f"VAE decode (forward): {t_vae_decode:.1f}s — {tuple(video_pixels.shape)}")
 
         t0 = time.time()

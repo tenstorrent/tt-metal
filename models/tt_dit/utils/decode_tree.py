@@ -19,7 +19,9 @@ Not valid under trace capture: there the spans time the capture, not the executi
 from __future__ import annotations
 
 import os
+import sys
 import threading
+import time
 from collections import OrderedDict, deque
 
 #: One gate for the whole instrumentation. ``diffvae_ltx_stage5`` and ``na3d`` import THIS rather
@@ -30,6 +32,14 @@ ENABLED = os.environ.get("DIFFVAE_STAGE_TIMING", "") not in ("", "0")
 #: Deep mode adds spans inside the 16 deterministic NABlocks -- 64 more device syncs per decode, so
 #: it is opt-in and its numbers are NOT comparable with a plain DIFFVAE_STAGE_TIMING run.
 DEEP = ENABLED and os.environ.get("DIFFVAE_BLOCK_PROF", "") not in ("", "0")
+
+#: Live mode prints one line to stdout as each span opens and one as it closes, so a decode reports
+#: its own progress while it runs instead of only at teardown. Without it a run is silent from the
+#: stage-5 plan line to the tree, and a device-side hang looks exactly like work from outside; with
+#: it a hang reads as the last "> label" line with no matching "<" -- which names the culprit. The
+#: lines also keep the device broker's silence reaper fed. Costs nothing beyond the syncs the spans
+#: already pay, and does not touch the tree, so tree numbers stay comparable with LIVE off.
+LIVE = ENABLED and os.environ.get("DIFFVAE_STAGE_LOG", "") not in ("", "0")
 
 ATTENTION, SDPA, ALLGATHER, MLP = "attention", "sdpa", "allgather", "mlp"
 CONTEXT_INJECT, RESHAPE, UPSAMPLE = "context-inject", "reshape+permute", "upsample"
@@ -77,6 +87,15 @@ def _stack() -> list:
     return st
 
 
+def _live(mark: str, depth: int, label: str, tail: str = "") -> None:
+    """One progress line: wall-clock stamp, depth as indent, ``>`` opening / ``<`` closing / ``!``
+    aborted. Written straight to stdout and flushed, so it streams through ``pytest -s`` and a
+    broker log alike instead of waiting on a buffer."""
+    stamp = time.strftime("%H:%M:%S")
+    sys.stdout.write(f"[stage {stamp}] {'  ' * depth}{mark} {label}{tail}\n")
+    sys.stdout.flush()
+
+
 def open_span(label, *, category=None, root=False):
     """Push a span. ``label`` is required: a node names itself from birth, so a span that never
     closes still says which one it was -- anonymous orphans are useless exactly when a leak needs
@@ -94,6 +113,8 @@ def open_span(label, *, category=None, root=False):
     if parent is not None:
         parent.children.append(node)
     span = Span(node)
+    if LIVE:
+        _live(">", len(st), label)
     st.append(span)
     return span
 
@@ -109,6 +130,8 @@ def close_span(span, ms) -> None:
         orphan.flags.add("unclosed")  # incl_ms stays 0, so it lands in the parent's remainder
     st.pop()
     span.node.incl_ms = ms  # a node closes exactly once: assignment, not accumulation
+    if LIVE:
+        _live("<", len(st), span.node.label, f"  {ms:.1f} ms")
     if span.node.parent is None:
         _finish(span.node, st)
 
@@ -125,6 +148,8 @@ def abort_span(span) -> None:
         st.pop().node.flags.add("unclosed")
     st.pop()
     span.node.flags.add("aborted")
+    if LIVE:
+        _live("!", len(st), span.node.label, "  aborted")
     if span.node.parent is None:
         _finish(span.node, st)
 
