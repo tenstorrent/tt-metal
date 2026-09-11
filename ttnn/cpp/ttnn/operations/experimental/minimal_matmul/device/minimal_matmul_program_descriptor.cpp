@@ -22,6 +22,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <map>
 #include <string>
 #include <tuple>
@@ -34,12 +35,12 @@
 namespace ttnn::experimental::prim {
 
 using tt::tt_metal::experimental::AddRuntimeArgsForNode;
-using tt::tt_metal::experimental::ComputeGen1Config;
 using tt::tt_metal::experimental::DataflowBufferSpec;
 using tt::tt_metal::experimental::DataMovementGen1Config;
 using tt::tt_metal::experimental::DFBBinding;
 using tt::tt_metal::experimental::DFBEndpointType;
 using tt::tt_metal::experimental::DFBSpecName;
+using tt::tt_metal::experimental::double_buffer_dest;
 using tt::tt_metal::experimental::Group;
 using tt::tt_metal::experimental::KernelAdvancedOptions;
 using tt::tt_metal::experimental::KernelSpec;
@@ -52,6 +53,7 @@ using tt::tt_metal::experimental::SemaphoreSpecName;
 using tt::tt_metal::experimental::TensorBinding;
 using tt::tt_metal::experimental::TensorParameter;
 using tt::tt_metal::experimental::TensorParamName;
+using tt::tt_metal::experimental::unpack_modes;
 using tt::tt_metal::experimental::WorkUnitSpec;
 
 namespace {
@@ -755,8 +757,7 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         device->arch(), num_cores, compute_defines, ttnn::get_throttle_level(compute_kernel_config));
 
     auto compute_hw = to_compute_hardware_config(device->arch(), compute_kernel_config);
-    auto& compute_gen1 = std::get<ComputeGen1Config>(compute_hw);
-    compute_gen1.double_buffer_dest = true;
+    double_buffer_dest(compute_hw) = true;
     if (fp32_dest_acc_en) {
         // Metal 2.0 requires an explicit unpack mode for Float32 DFBs when enable_32_bit_dest is set.
         const std::vector<std::pair<DFBSpecName, tt::DataFormat>> compute_consumed{
@@ -767,13 +768,14 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
             {DFB_TERNARY_A, ternary_a_data_format},
             {DFB_TERNARY_B, ternary_c_data_format},
         };
+        auto& compute_unpack_modes = unpack_modes(compute_hw);
         for (const auto& [dfb, format] : compute_consumed) {
             // Only DFBs this kernel actually binds may appear in unpack_modes.
             const bool bound = (dfb == DFB_IN0 || dfb == DFB_IN1 || dfb == DFB_INTERMEDIATE) ||
                                (dfb == DFB_IN2 && use_bias) ||
                                ((dfb == DFB_TERNARY_A || dfb == DFB_TERNARY_B) && use_fused_ternary);
             if (bound && format == tt::DataFormat::Float32) {
-                compute_gen1.unpack_modes.emplace(dfb, tt::tt_metal::UnpackMode::UnpackToSrc);
+                compute_unpack_modes.emplace(dfb, tt::tt_metal::UnpackMode::UnpackToSrc);
             }
         }
     }
@@ -993,8 +995,7 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
             AddRuntimeArgsForNode(
                 compute_args.runtime_arg_values,
                 core,
-                {{"fused_ternary_scalar",
-                  *reinterpret_cast<const uint32_t*>(&operation_attributes.fused_ternary_scalar.value())},
+                {{"fused_ternary_scalar", std::bit_cast<uint32_t>(operation_attributes.fused_ternary_scalar.value())},
                  {"broadcast_ternary_b", ternary_b_broadcast}});
         }
     }
