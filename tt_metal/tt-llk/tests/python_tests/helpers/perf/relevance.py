@@ -192,7 +192,11 @@ class UnpackTilizeRelevance(PerfRelevance):
     _DIM_RUNTIMES = frozenset({INPUT_DIMENSIONS, TILE_COUNT, LOOP_FACTOR})
     unpack_runtimes = _DIM_RUNTIMES
     pack_templates = frozenset()
-    pack_runtimes = frozenset({TILE_COUNT, LOOP_FACTOR})
+    # Keep INPUT_DIMENSIONS on PACK. SPEED_OF_LIGHT inlines runtimes, and
+    # unpack_tilize_perf.cpp asserts FULL_RT_DIM * FULL_CT_DIM == TILE_CNT on
+    # the unpack thread before PACK_ISOLATE returns. Dropping dims zeros them
+    # via project_runtimes and trips that assert.
+    pack_runtimes = _DIM_RUNTIMES
     cong_runtimes = _DIM_RUNTIMES
 
 

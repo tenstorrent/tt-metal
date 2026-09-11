@@ -24,6 +24,7 @@ from helpers.perf.relevance import (
     UNPACK_TILIZE_RELEVANCE,
     execute_key,
     pin_template,
+    project_runtimes,
     project_templates,
 )
 from helpers.perf.schema import MARKER, MEAN, stat_column
@@ -504,7 +505,7 @@ def test_unpack_tilize_output_format_reuses_unpack():
     )
 
 
-def test_unpack_tilize_same_tile_cnt_reuses_pack_not_unpack():
+def test_unpack_tilize_same_tile_cnt_different_dims_misses_pack():
     rt_2x4 = [INPUT_DIMENSIONS(2, 4, 4, 2), TILE_COUNT(8), LOOP_FACTOR(256)]
     rt_4x2 = [INPUT_DIMENSIONS(4, 2, 2, 4), TILE_COUNT(8), LOOP_FACTOR(256)]
     fmt = _format(DataFormat.Float16, DataFormat.Float16)
@@ -514,7 +515,7 @@ def test_unpack_tilize_same_tile_cnt_reuses_pack_not_unpack():
         run_type=PerfRunType.PACK_ISOLATE,
         spec=pack,
         **_execute_kwargs("perf_unpack_tilize", [], rt_2x4, fmt),
-    ) == execute_key(
+    ) != execute_key(
         run_type=PerfRunType.PACK_ISOLATE,
         spec=pack,
         **_execute_kwargs("perf_unpack_tilize", [], rt_4x2, fmt),
@@ -528,3 +529,13 @@ def test_unpack_tilize_same_tile_cnt_reuses_pack_not_unpack():
         spec=unpack,
         **_execute_kwargs("perf_unpack_tilize", [], rt_4x2, fmt),
     )
+
+
+def test_unpack_tilize_sol_pack_keeps_dim_tile_cnt_invariant():
+    runtimes = [INPUT_DIMENSIONS(2, 3, 3, 2), TILE_COUNT(6), LOOP_FACTOR(256)]
+    projected = project_runtimes(
+        runtimes, UNPACK_TILIZE_RELEVANCE[PerfRunType.PACK_ISOLATE]
+    )
+    dims = next(p for p in projected if isinstance(p, INPUT_DIMENSIONS))
+    tiles = next(p for p in projected if isinstance(p, TILE_COUNT))
+    assert dims.full_rt_dim * dims.full_ct_dim == tiles.tile_cnt
