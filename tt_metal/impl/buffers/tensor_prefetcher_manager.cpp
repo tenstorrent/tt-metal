@@ -44,10 +44,41 @@ namespace tt::tt_metal::distributed {
 namespace {
 
 constexpr uint32_t kRemoteCBId = 31;
+constexpr uint32_t kNumGddrSubchannelsPerBank = 3;
+constexpr uint32_t kFirstMpfePort = 1;
+constexpr uint32_t kMpfePortSum = 1 + 2 + 3;
 
 constexpr const char* kKernelPath = "tt_metal/impl/buffers/kernels/tensor_prefetcher.cpp";
 
 inline uint32_t align_up(uint32_t a, uint32_t align) { return (a + align - 1) & ~(align - 1); }
+
+uint32_t get_mpfe_port(
+    const metal_SocDescriptor& soc_desc, uint32_t bank_id, const CoreCoord& sender_logical_core) {
+    const uint32_t num_subchannels = soc_desc.get_grid_size(tt::CoreType::DRAM).y;
+    TT_FATAL(
+        num_subchannels == kNumGddrSubchannelsPerBank,
+        "Tensor prefetcher expected {} GDDR subchannels for bank {}, found {}",
+        kNumGddrSubchannelsPerBank,
+        bank_id,
+        num_subchannels);
+
+    const CoreCoord sender_physical = soc_desc.get_physical_dram_core_from_logical(sender_logical_core);
+    const size_t channel = soc_desc.get_channel_for_dram_view(static_cast<int>(bank_id));
+    for (uint32_t subchannel = 0; subchannel < num_subchannels; ++subchannel) {
+        const tt::umd::CoreCoord subchannel_physical = soc_desc.get_dram_core_for_channel(
+            static_cast<int>(channel), static_cast<int>(subchannel), tt::CoordSystem::TRANSLATED);
+        if (subchannel_physical.x == sender_physical.x && subchannel_physical.y == sender_physical.y) {
+            // MPFE P0 is the tied-off native port. GDDR subchannels 0..2 enter through P1..P3.
+            return kFirstMpfePort + subchannel;
+        }
+    }
+
+    TT_THROW(
+        "Tensor prefetcher could not map logical DRAM sender ({}, {}) in bank {} to an MPFE port",
+        sender_logical_core.x,
+        sender_logical_core.y,
+        bank_id);
+}
 
 // Largest `page` (multiple of tile_size, <= max_page_size) such that num_tiles*tile_size
 // is divisible by page. Returns (page_size, num_pages). Identical to the existing
@@ -506,9 +537,46 @@ void TensorPrefetcherManager::build_and_launch_programs(uint32_t stage_ring_base
     programs_.clear();
     for (uint32_t d = 0; d < devices_.size(); ++d) {
         auto program = std::make_unique<Program>();
+        const uint32_t shutdown_semaphore_id = CreateSemaphore(
+            *program,
+            CoreRangeSet(ttsl::Span<const CoreCoord>(sender_logical_cores_)),
+            /*initial_value=*/0,
+            CoreType::DRAM);
+        const auto& soc_desc =
+            MetalContext::instance(mesh_device_->impl().get_context_id()).get_cluster().get_soc_desc(devices_[d]->id());
 
         for (uint32_t s = 0; s < num_senders_; ++s) {
             const CoreCoord sender_logical = sender_logical_cores_[s];
+            const uint32_t bank_id = static_cast<uint32_t>(sender_logical.x);
+            const uint32_t bank_sender_base = 2 * bank_id;
+            TT_FATAL(
+                bank_sender_base + 1 < sender_logical_cores_.size() &&
+                    sender_logical_cores_[bank_sender_base].x == bank_id &&
+                    sender_logical_cores_[bank_sender_base + 1].x == bank_id,
+                "Tensor prefetcher sender slots for bank {} are not a contiguous pair",
+                bank_id);
+
+            const uint32_t first_sender_port =
+                get_mpfe_port(soc_desc, bank_id, sender_logical_cores_[bank_sender_base]);
+            const uint32_t second_sender_port =
+                get_mpfe_port(soc_desc, bank_id, sender_logical_cores_[bank_sender_base + 1]);
+            TT_FATAL(
+                first_sender_port != second_sender_port,
+                "Tensor prefetcher senders for bank {} both map to MPFE port {}",
+                bank_id,
+                first_sender_port);
+            const uint32_t own_mpfe_port = get_mpfe_port(soc_desc, bank_id, sender_logical);
+            const uint32_t ordinary_operation_mpfe_port = kMpfePortSum - first_sender_port - second_sender_port;
+            TT_FATAL(
+                ordinary_operation_mpfe_port >= 1 && ordinary_operation_mpfe_port <= 3,
+                "Tensor prefetcher senders for bank {} map to invalid MPFE ports {} and {}",
+                bank_id,
+                first_sender_port,
+                second_sender_port);
+
+            const bool is_coordinator = s == bank_sender_base;
+            const CoreCoord peer_logical = sender_logical_cores_[is_coordinator ? s + 1 : s - 1];
+            const CoreCoord peer_noc = devices_[d]->virtual_core_from_logical_core(peer_logical, CoreType::DRAM);
 
             std::vector<uint32_t> compile_args = {
                 stage_ring_base,
@@ -517,13 +585,22 @@ void TensorPrefetcherManager::build_and_launch_programs(uint32_t stage_ring_base
                 socket_page_size,
                 cq_signal_l1_addr_,
                 cq_signal_slot_stride_,
+                shutdown_semaphore_id,
             };
 
             KernelHandle kernel_id = CreateKernel(
                 *program, kKernelPath, sender_logical, DramConfig{.noc = NOC::NOC_0, .compile_args = compile_args});
 
             const uint32_t socket_addr = sockets_[d * num_senders_ + s]->get_config_buffer_address();
-            std::vector<uint32_t> rt_args = {/*bank_id=*/static_cast<uint32_t>(sender_logical.x), socket_addr};
+            std::vector<uint32_t> rt_args = {
+                bank_id,
+                socket_addr,
+                own_mpfe_port,
+                ordinary_operation_mpfe_port,
+                static_cast<uint32_t>(is_coordinator),
+                static_cast<uint32_t>(peer_noc.x),
+                static_cast<uint32_t>(peer_noc.y),
+            };
             SetRuntimeArgs(*program, kernel_id, sender_logical, rt_args);
         }
 

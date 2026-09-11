@@ -30,6 +30,7 @@
 #include "api/socket_api.h"
 #include "experimental/drisc_mode.h"
 #include "experimental/gddr_dma.h"
+#include "internal/tt-1xx/blackhole/gddr_mc_regs.h"
 #include "tt_metal/impl/buffers/dram_sender_state_block.hpp"
 #include "tt_metal/impl/buffers/tensor_prefetcher_request.hpp"
 
@@ -66,6 +67,14 @@ using tt::tt_metal::TensorPrefetcherTensorLayout;
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
 namespace {
+
+constexpr uint32_t kInactiveMpfeWeight = 7;
+constexpr uint32_t kActiveMpfeWeight = 0;
+
+FORCE_INLINE void set_mpfe_weight(uint32_t port, uint32_t weight) {
+    gddr_mc_write_mpfe_weight(port, weight);
+    ASSERT(gddr_mc_read_mpfe_weight(port) == weight, DebugAssertTripped);
+}
 
 template <bool single_row, bool single_page>
 FORCE_INLINE void prefetcher_write_chunk(
@@ -222,6 +231,7 @@ void kernel_main() {
     // its own dispatcher write, which only lands on an L1-aligned address.
     constexpr uint32_t cq_signal_l1_base = get_compile_time_arg_val(4);
     constexpr uint32_t cq_signal_slot_stride = get_compile_time_arg_val(5);
+    constexpr uint32_t shutdown_semaphore_id = get_compile_time_arg_val(6);
     constexpr uint32_t ring_half = stage_ring_size / 2;
     constexpr uint32_t stage_slot_a = stage_ring_base;
     constexpr uint32_t stage_slot_b = stage_ring_base + ring_half;
@@ -239,12 +249,27 @@ void kernel_main() {
     const uint32_t bank_id = get_arg_val<uint32_t>(rt_idx++);
     (void)bank_id;
     const uint32_t socket_config_addr = get_arg_val<uint32_t>(rt_idx++);
+    const uint32_t own_mpfe_port = get_arg_val<uint32_t>(rt_idx++);
+    const uint32_t ordinary_operation_mpfe_port = get_arg_val<uint32_t>(rt_idx++);
+    const bool is_coordinator = get_arg_val<uint32_t>(rt_idx++) != 0;
+    const uint32_t peer_noc_x = get_arg_val<uint32_t>(rt_idx++);
+    const uint32_t peer_noc_y = get_arg_val<uint32_t>(rt_idx++);
 
     // ---- Init ----
     SocketReceiverInterface socket = create_receiver_socket_interface(socket_config_addr);
     set_receiver_socket_page_size(socket, socket_page_size);
 
     experimental::drisc_set_stream_mode();
+    // While this sender is parked, give it the same grant length as ordinary
+    // operation traffic. A PREFETCH command lowers only this sender's own slot.
+    set_mpfe_weight(ordinary_operation_mpfe_port, kInactiveMpfeWeight);
+    set_mpfe_weight(own_mpfe_port, kInactiveMpfeWeight);
+
+    const uint32_t shutdown_semaphore_addr = get_semaphore(shutdown_semaphore_id);
+    volatile tt_l1_ptr uint32_t* shutdown_semaphore =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(shutdown_semaphore_addr);
+    const uint64_t peer_shutdown_semaphore = get_noc_addr(peer_noc_x, peer_noc_y, shutdown_semaphore_addr);
+
     RemoteSenderCBInterface& iface = get_remote_sender_cb_interface(remote_cb_id);
     bool has_loaded_sender_state = false;
 
@@ -275,6 +300,27 @@ void kernel_main() {
             }
             socket_pop_pages(socket, 1);
             socket_notify_sender(socket);
+
+            // Each sender owns its MPFE slot. The coordinator waits until its peer
+            // has also drained and restored before returning the shared ordinary-
+            // operation slot to the hardware default.
+            set_mpfe_weight(own_mpfe_port, GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT);
+            if (is_coordinator) {
+                noc_semaphore_wait(shutdown_semaphore, 1);
+                set_mpfe_weight(
+                    ordinary_operation_mpfe_port, GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT);
+                ASSERT(
+                    gddr_mc_read_mpfe_weight(1) == GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT &&
+                        gddr_mc_read_mpfe_weight(2) == GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT &&
+                        gddr_mc_read_mpfe_weight(3) == GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT,
+                    DebugAssertTripped);
+                noc_semaphore_inc(peer_shutdown_semaphore, 1);
+                noc_async_atomic_barrier();
+            } else {
+                noc_semaphore_inc(peer_shutdown_semaphore, 1);
+                noc_async_atomic_barrier();
+                noc_semaphore_wait(shutdown_semaphore, 1);
+            }
             break;
         }
         if (cmd_id == tt::tt_metal::DRAM_PREFETCHER_CMD_WAIT_CQ) {
@@ -290,6 +336,8 @@ void kernel_main() {
             continue;
         }
         // DRAM_PREFETCHER_CMD_PREFETCH
+        set_mpfe_weight(own_mpfe_port, kActiveMpfeWeight);
+
         const uint32_t req_num_entries = req->prefetch.num_entries;
         const uint32_t gcb_state_addr = req->prefetch.gcb_state_addr;
         volatile tt_l1_ptr DramSenderStateBlock* state =
@@ -799,6 +847,7 @@ void kernel_main() {
         // resumes at the right ring offset.
         store_sender_state(state, iface);
 
+        set_mpfe_weight(own_mpfe_port, kInactiveMpfeWeight);
         socket_pop_pages(socket, 1);
         socket_notify_sender(socket);
     }
