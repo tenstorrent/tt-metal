@@ -5,8 +5,8 @@
 // Direct coverage of the two host APIs the runtime binary reload captures an image with:
 // experimental::ConfigureProgramWithoutLaunch lands a program's binary, runtime args and launch
 // message on its cores without a go signal, and detail::ReadKernelConfig reads that launch message
-// back. The Python test tests/ttnn/unit_tests/base_functionality/test_reload_host_support.py covers
-// the same path through ttnn.generic_op; this one calls the C++ API on one device.
+// back. The Python-side host-support test covers the same path through generic_op; this one calls
+// the C++ API on one device.
 
 #include <gtest/gtest.h>
 
@@ -27,7 +27,7 @@ namespace {
 
 constexpr uint32_t MARKER = 0xC0FFEE01;
 // One data-movement kernel that writes its second runtime arg to the L1 address in its first.
-constexpr const char* MARKER_KERNEL = "tests/ttnn/unit_tests/base_functionality/kernels/write_marker.cpp";
+constexpr const char* MARKER_KERNEL = "tests/tt_metal/tt_metal/test_kernels/misc/write_l1_marker.cpp";
 
 uint32_t read_word(IDevice* device, const CoreCoord& core, uint32_t addr) {
     std::vector<uint32_t> words;
