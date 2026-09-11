@@ -46,3 +46,31 @@ Per-rank mean, against the same run before the rebase:
 
 Rank 3 is fastest because it holds 21 layers, not 24. The shape is the expected one: a four-deep
 fill bubble, every rank busy through the middle, and a staggered drain.
+
+## The KDA inverse, after #55626
+
+Kimi-K3 carried a workaround commit that pinned the pre-#54937 KDA inverse, because
+`invert_block_ps4` was uncorrelated on K3's real gate magnitudes (#55420). `#55626` fixed that in
+main with `invert_block_nested`, so the workaround is dropped rather than carried, and what follows
+is the evidence that main's inverse is at least as good on K3 as the workaround was.
+
+`N` is the negated strictly-lower `Akk`, so `T_inv = (I-N)^-1`, and `N` carries `exp(G_i - G_j)`
+where `G` is the per-chunk cumsum of a gate saturated at its -5.0 lower bound: about -150 over 32
+rows. Score `T_inv` on its strictly-lower part, not the whole tile -- whole-tensor PCC is dominated
+by the identity diagonal and read 0.99508 while the off-diagonals were wrong enough to take the
+recurrence from 1.0 to 0.0014.
+
+Measured on one Blackhole Galaxy, real Kimi-K3 weights:
+
+| inverse | strictly-lower PCC, layers 0 and 1 |
+|---|---|
+| `invert_doubling` (retired in #54937) | 0.01186, 0.02302 |
+| `invert_block_ps4` (the #55420 bug) | 8/18 layers above 0.999, worst 0.7508 |
+| `invert_horner` (the dropped workaround) | 18/18 above 0.999, worst 0.99982 |
+| `invert_block_nested` (main, #55626) | **0.99999, 1.00000** |
+
+`test_kda_single_device_matches_reference` passes on both layers; layer 1 read 0.69629 under
+`invert_doubling`. The bisection instruments that found #55420 -- `test_kda_tinv_precision.py`,
+`test_kda_prepare_vs_scan.py`, `test_kda_decay_magnitude.py`, `test_kda_stage_bisect.py` and
+`test_layer0_stages.py` -- were deleted once these numbers were taken; their durable content is the
+op-level coverage under `tests/ttnn/nightly/unit_tests/operations/experimental/kda/`.
