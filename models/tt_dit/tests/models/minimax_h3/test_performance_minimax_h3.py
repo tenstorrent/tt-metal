@@ -84,11 +84,17 @@ def test_t2va_performance(mesh_device, reset_seeds, aspect_ratio, duration_s):
             "from the total either way, but the run will take far longer than the reported compute."
         )
 
+    def _env_bool(name):
+        v = os.environ.get(name)
+        return None if v is None or v == "" else v.strip().lower() in ("1", "true", "yes", "on")
+
     pipeline = MiniMaxH3Pipeline.create_pipeline(
         mesh_device=mesh_device,
         weights_dir=weights,
         dit_fsdp=False,
-        vae_output_type="yuv420",
+        vae_output_type=os.environ.get("MINIMAX_H3_VAE_OUTPUT_TYPE", "yuv420"),
+        trace_denoise=_env_bool("MINIMAX_H3_TRACE_DENOISE"),
+        bucket_denoise=_env_bool("MINIMAX_H3_BUCKET_DENOISE"),
     )
 
     benchmark_profiler = BenchmarkProfiler()
