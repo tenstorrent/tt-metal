@@ -231,15 +231,34 @@ jobs:
          || needs.build-default.outputs.dev-docker-image
          || 'docker-image-unresolved!' }}
       env:
-        ARCH_NAME: ${{ matrix.leg.arch }}
+        # An entry only carries `arch` when it needs it to tell two otherwise
+        # identical entries apart, so most legs have none and ARCH_NAME arrived
+        # empty -- which the test scripts reject outright ("Must provide ARCH_NAME
+        # in environment"). Fall back to the SKU prefix, the same derivation
+        # single-card-profiler-tests-impl.yaml uses.
+        ARCH_NAME: >-
+          ${{ matrix.leg.arch
+              || (contains(matrix.leg.sku, 'quasar') && 'quasar')
+              || ((startsWith(matrix.leg.sku, 'bh_') || startsWith(matrix.leg.sku, 'sim_bh')) && 'blackhole')
+              || 'wormhole_b0' }}
         LOGURU_LEVEL: INFO
         TT_LOGGER_LEVEL: warn
         LD_LIBRARY_PATH: /work/build/lib
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         TT_METAL_HOME: ${{ matrix.leg.gate_packages && '/usr/libexec/tt-metalium' || '/work' }}
+        # Set by 57 of the owning impls and assumed by anything importing from the
+        # tree; tracks TT_METAL_HOME so a packages leg resolves to the same root.
+        PYTHONPATH: ${{ matrix.leg.gate_packages && '/usr/libexec/tt-metalium' || '/work' }}
         GTEST_TOTAL_SHARDS: ${{ matrix.leg.gtest_shard_total || 1 }}
         GTEST_SHARD_INDEX: ${{ matrix.leg.gtest_shard_index || 0 }}
         HF_HUB_OFFLINE: ${{ (matrix.leg['weights-cache-mode'] == 'local-disk' || matrix.leg['weights-cache-mode'] == 'lfc') && '0' || '1' }}
+        # The tracy paths the three profiler impls set. Empty on every other leg,
+        # which the consuming scripts treat as unset (they test with -z).
+        PROFILER_SCRIPTS_ROOT: ${{ matrix.leg.gate_profile == 'profiler' && '/work/tools/tracy' || '' }}
+        PROFILER_TEST_SCRIPTS_ROOT: ${{ matrix.leg.gate_profile == 'profiler' && '/work/tests/tt_metal/tools/profiler' || '' }}
+        PROFILER_ARTIFACTS_DIR: ${{ matrix.leg.gate_profile == 'profiler' && '/work/generated/profiler' || '' }}
+        PROFILER_OUTPUT_DIR: ${{ matrix.leg.gate_profile == 'profiler' && '/work/generated/profiler/reports' || '' }}
+        DONT_USE_VIRTUAL_ENVIRONMENT: ${{ matrix.leg.gate_profile == 'profiler' && '1' || '' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
