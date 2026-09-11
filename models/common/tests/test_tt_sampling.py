@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -156,6 +157,45 @@ def make_sampling_args(mesh_device, sampling_dp: int = 1) -> _SamplingArgs:
         sub_core_grid_topk=sub_core_grids,
         start_core=ttnn.CoreCoord(0, 0),
         model_config={},
+    )
+
+
+def grammar_shard_coverage_tokens(args: _SamplingArgs) -> tuple[int, int, int, int]:
+    """Return shard-0 tail, shard-1 head, middle-shard, and final valid tokens."""
+    num_tp = args.cluster_shape[args.sampling_all_gather_axis]
+    if num_tp == 1:
+        tokens = (777, 888, 999, args.vocab_size - 1)
+        shard_width = args.padded_vocab_size
+    else:
+        shard_width = args.padded_vocab_size // num_tp
+        tokens = (
+            shard_width - 1,
+            shard_width,
+            (num_tp // 2) * shard_width + shard_width // 2,
+            args.vocab_size - 1,
+        )
+    if len(set(tokens)) != len(tokens) or any(token < 0 or token >= args.vocab_size for token in tokens):
+        raise ValueError(
+            "grammar shard coverage tokens are invalid for "
+            f"vocab_size={args.vocab_size}, num_tp={num_tp}, "
+            f"shard_width={shard_width}: {tokens}"
+        )
+    return tokens
+
+
+def test_grammar_shard_coverage_tokens_span_4x8_vocabulary():
+    args = SimpleNamespace(
+        cluster_shape=(4, 8),
+        sampling_all_gather_axis=1,
+        vocab_size=VOCAB_SIZE,
+        padded_vocab_size=32768,
+    )
+
+    assert grammar_shard_coverage_tokens(args) == (
+        4095,
+        4096,
+        18432,
+        VOCAB_SIZE - 1,
     )
 
 
@@ -589,17 +629,27 @@ class TestGrammarSampling:
         mesh_device,
         device_params,
     ):
-        """Eager masking constrains only the selected batch rows."""
+        """Eager masking constrains rows to tokens across representative TP shards."""
         args = make_sampling_args(mesh_device)
-        logits = build_hot_logits(args, hot_tokens=[42, 777, 888])
+        shard0_tail, shard1_head, middle_shard, final_token = grammar_shard_coverage_tokens(args)
+        logits = build_hot_logits(
+            args,
+            hot_tokens=[
+                42,
+                shard0_tail,
+                shard1_head,
+                middle_shard,
+                final_token,
+            ],
+        )
         params = per_lane_params(0.0, 1, 1.0)
         mask = grammar_mask(
             args,
             {
-                0: [777],
-                15: [888],
-                16: [777],
-                BATCH_SIZE - 1: [888],
+                0: [shard0_tail],
+                15: [shard1_head],
+                16: [middle_shard],
+                BATCH_SIZE - 1: [final_token],
             },
         )
 
@@ -611,10 +661,10 @@ class TestGrammarSampling:
             grammar_bitmasks=[mask],
         )[0]
 
-        assert tokens[0] == 777
-        assert tokens[15] == 888
-        assert tokens[16] == 777
-        assert tokens[BATCH_SIZE - 1] == 888
+        assert tokens[0] == shard0_tail
+        assert tokens[15] == shard1_head
+        assert tokens[16] == middle_shard
+        assert tokens[BATCH_SIZE - 1] == final_token
         for row in set(range(BATCH_SIZE)) - {0, 15, 16, BATCH_SIZE - 1}:
             assert tokens[row] == 42
 
@@ -629,12 +679,36 @@ class TestGrammarSampling:
         mesh_device,
         device_params,
     ):
-        """Trace replay replaces old constraints when requests turn over."""
+        """Trace replay replaces constraints across representative TP shards."""
         args = make_sampling_args(mesh_device)
-        logits = build_hot_logits(args, hot_tokens=[42, 777, 888])
+        shard0_tail, shard1_head, middle_shard, final_token = grammar_shard_coverage_tokens(args)
+        logits = build_hot_logits(
+            args,
+            hot_tokens=[
+                42,
+                shard0_tail,
+                shard1_head,
+                middle_shard,
+                final_token,
+            ],
+        )
         params = per_lane_params(0.0, 1, 1.0)
-        first = grammar_mask(args, {0: [777], 15: [777], 16: [888]})
-        second = grammar_mask(args, {15: [888], BATCH_SIZE - 1: [777]})
+        first = grammar_mask(
+            args,
+            {
+                0: [shard0_tail],
+                14: [final_token],
+                15: [shard1_head],
+                16: [middle_shard],
+            },
+        )
+        second = grammar_mask(
+            args,
+            {
+                15: [final_token],
+                BATCH_SIZE - 1: [shard0_tail],
+            },
+        )
 
         outputs = run_sampling_generator(
             mesh_device,
@@ -646,13 +720,16 @@ class TestGrammarSampling:
             grammar_bitmasks=[first, second],
         )
 
-        assert outputs[0][0] == 777
-        assert outputs[0][15] == 777
-        assert outputs[0][16] == 888
+        assert outputs[0][0] == shard0_tail
+        assert outputs[0][14] == final_token
+        assert outputs[0][15] == shard1_head
+        assert outputs[0][16] == middle_shard
+        assert outputs[0][BATCH_SIZE - 1] == 42
         assert outputs[1][0] == 42
-        assert outputs[1][15] == 888
+        assert outputs[1][14] == 42
+        assert outputs[1][15] == final_token
         assert outputs[1][16] == 42
-        assert outputs[1][BATCH_SIZE - 1] == 777
+        assert outputs[1][BATCH_SIZE - 1] == shard0_tail
 
     @pytest.mark.parametrize("mesh_device", [1], indirect=True)
     def test_eager_mask_clears_stale_rows(
