@@ -80,7 +80,13 @@ ALWI void typecast_tile(uint32_t idst) {
         detail::_typecast_is_mx_format_(in_format) ? DataFormat::Float16_b : in_format;
     constexpr DataFormat effective_output_format =
         detail::_typecast_is_mx_format_(out_format) ? DataFormat::Float16_b : out_format;
-    if constexpr (effective_input_format != effective_output_format) {
+    if constexpr (effective_input_format == DataFormat::Float16_b && effective_output_format == DataFormat::Float32) {
+        // Float16_b -> Float32 is a pure WIDENING that the unpacker/packer perform: the bf16 lands in the
+        // 32-bit DEST and the packer emits fp32, with no rounding to do. WH/BH handle it as a packer no-op
+        // (see the non-Quasar branch below), and doing the same here avoids running the SFPU typecast,
+        // which currently mis-targets the second DEST bank under DstSync::SyncHalf -- zeroing tile 1 (and
+        // every odd tile) when a single core processes more than one tile. No SFPU op needed.
+    } else if constexpr (effective_input_format != effective_output_format) {
         // Single unified Quasar typecast kernel, templated on the effective source/destination formats.
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
@@ -415,7 +421,9 @@ ALWI void typecast_tile_init() {
         detail::_typecast_is_mx_format_(in_format) ? DataFormat::Float16_b : in_format;
     constexpr DataFormat effective_output_format =
         detail::_typecast_is_mx_format_(out_format) ? DataFormat::Float16_b : out_format;
-    if constexpr (effective_input_format != effective_output_format) {
+    if constexpr (effective_input_format == DataFormat::Float16_b && effective_output_format == DataFormat::Float32) {
+        // Float16_b -> Float32 runs no SFPU op (packer-handled widening; see typecast_tile) -> no init.
+    } else if constexpr (effective_input_format != effective_output_format) {
         MATH(SFPU_UNARY_INIT(typecast, sfpu::init_typecast));
     }
 #else
