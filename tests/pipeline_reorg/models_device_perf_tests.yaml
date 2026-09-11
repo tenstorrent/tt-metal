@@ -24,7 +24,7 @@
   skus:
     wh_n150:
       timeout: 20
-      tt_cache_path: /mnt/MLPerf/huggingface/tt_cache
+      tt_cache_path: ""
       hf_model: meta-llama/Llama-3.1-8B-Instruct
     bh_p150:
       timeout: 20
