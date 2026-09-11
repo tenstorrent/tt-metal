@@ -44,7 +44,11 @@ public:
     //
     // Runtime arguments for Programs created from a ProgramSpec must be configured through
     // set_program_run_args or update_program_run_args, not the legacy host APIs.
-    explicit Program(distributed::MeshDevice& mesh_device, const ProgramSpec& spec);
+    //
+    // defer_compile: build the Program but SKIP the trailing compile + allocation step,
+    // returning an uncompiled Program. The caller must compile it before any dispatch;
+    // it exists for compile-only paths such as ttnn's up-front parallel precompile.
+    explicit Program(distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool defer_compile = false);
 
     // Alternative "ProgramDescriptor" API, created for TTNN generic op
     explicit Program(const ProgramDescriptor& descriptor);
@@ -141,6 +145,12 @@ public:
 
     // Used in ops.
     std::vector<std::shared_ptr<CircularBuffer>> circular_buffers() const;
+
+    // True once this Program's kernels have been JIT-compiled for at least one build
+    // key. Exposed because ProgramImpl is not visible outside tt_metal, and callers
+    // that compile programs in bulk (e.g. ttnn's up-front precompile) need to tell
+    // "I compiled this" from "it arrived already compiled".
+    bool is_compiled() const;
 
     // debug/test/internal usage.
     detail::ProgramImpl& impl() { return *internal_; }

@@ -39,14 +39,19 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
 // Public Entry Points
 // ============================================================================
 
-Program::Program(distributed::MeshDevice& mesh_device, const ProgramSpec& spec) :
+Program::Program(distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool defer_compile) :
     Program(BuildProgramFromSpec(mesh_device, spec)) {
-    impl().compile_and_allocate(&mesh_device, false);
+    // defer_compile: hand back a built-but-uncompiled Program. The caller takes
+    // responsibility for compiling it before any dispatch.
+    if (!defer_compile) {
+        impl().compile_and_allocate(&mesh_device, false);
+    }
 }
 
 distributed::MeshWorkload::MeshWorkload(
     distributed::MeshDevice& mesh_device,
-    const std::unordered_map<distributed::MeshCoordinateRange, ProgramSpec>& program_specs) :
+    const std::unordered_map<distributed::MeshCoordinateRange, ProgramSpec>& program_specs,
+    bool defer_compile) :
     MeshWorkload() {
     const distributed::MeshCoordinateRange mesh_extent(mesh_device.shape());
     TT_FATAL(!program_specs.empty(), "At least one ProgramSpec is required to create a MeshWorkload.");
@@ -58,14 +63,21 @@ distributed::MeshWorkload::MeshWorkload(
             mesh_device.shape());
         impl().add_program(device_range, BuildProgramFromSpec(mesh_device, program_spec));
     }
-    impl().compile(&mesh_device);
+    // defer_compile: skip compile + CB/DFB allocation + finalize, handing back an
+    // uncompiled, unfinalized MeshWorkload. Not dispatch-ready; see the header.
+    if (!defer_compile) {
+        impl().compile(&mesh_device);
+    }
 }
 
-distributed::MeshWorkload::MeshWorkload(distributed::MeshDevice& mesh_device, const ProgramSpec& program_spec) :
+distributed::MeshWorkload::MeshWorkload(
+    distributed::MeshDevice& mesh_device, const ProgramSpec& program_spec, bool defer_compile) :
     MeshWorkload() {
     impl().add_program(
         distributed::MeshCoordinateRange(mesh_device.shape()), BuildProgramFromSpec(mesh_device, program_spec));
-    impl().compile(&mesh_device);
+    if (!defer_compile) {
+        impl().compile(&mesh_device);
+    }
 }
 
 }  // namespace tt::tt_metal

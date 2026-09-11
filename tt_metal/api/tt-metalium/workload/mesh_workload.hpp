@@ -47,15 +47,28 @@ public:
     //
     // INVARIANT: A successfully constructed MeshWorkload is always valid.
     //
+    // defer_compile: build the programs but SKIP the trailing MeshWorkloadImpl::compile
+    // step, returning an UNCOMPILED, UNFINALIZED MeshWorkload. This exists for callers
+    // that only want the Programs materialized so their kernels can be JIT-compiled
+    // later, in bulk and in parallel (see ttnn::up_front_compile). Setting run args on
+    // the result is still legal: set_program_run_args is order-agnostic with respect
+    // to allocation.
+    //
+    // PRE-CONDITION: a deferred MeshWorkload MUST NOT be enqueued or otherwise treated
+    // as dispatch-ready until it has been compiled. The intended consumers are
+    // compile-only paths that discard the workload afterwards.
     explicit MeshWorkload(
-        MeshDevice& mesh_device, const std::unordered_map<MeshCoordinateRange, ProgramSpec>& program_specs);
+        MeshDevice& mesh_device,
+        const std::unordered_map<MeshCoordinateRange, ProgramSpec>& program_specs,
+        bool defer_compile = false);
 
     // Create a MeshWorkload object from single ProgramSpec,
     // to be applied mesh-wide (SPMD)
     //
     // INVARIANT: A successfully constructed MeshWorkload is always valid.
     //
-    explicit MeshWorkload(MeshDevice& mesh_device, const ProgramSpec& program_spec);
+    // defer_compile: see the region-mapped constructor above.
+    explicit MeshWorkload(MeshDevice& mesh_device, const ProgramSpec& program_spec, bool defer_compile = false);
 
     ~MeshWorkload();
     MeshWorkload(MeshWorkload&& other) noexcept;
