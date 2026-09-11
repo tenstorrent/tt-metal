@@ -72,6 +72,17 @@
 // then caught where it happens, instead of being left to show up -- or not --
 // in a final checksum. The count of violations goes in the stats page.
 //
+// Every wait carries its own waypoint, so a hang names the wait rather than
+// just the primitive. noc_semaphore_wait_min sets WAYPOINT("NSMW") itself, and
+// a core has one waypoint slot, so wrapping the call does not help: the
+// primitive's waypoint is the one left standing. These waits therefore spin
+// inline, with the same idiom the primitive uses, so the surviving waypoint
+// names the protocol step. This protocol has four distinct waits --
+// readiness, credit, endpoint progress and the barrier's release -- and
+// telling them apart is the difference between a diagnosable hang and a
+// generic one. By the watcher's convention the last letter is W while
+// waiting and D once done.
+//
 // The column pages are poisoned by the host, because the column-state rules
 // say a first visit initialises the gradients locally and must not read them
 // from DRAM. A kernel that reads them anyway accumulates poison.
@@ -119,6 +130,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/waypoint.h"
 #include "tt-train/sources/ttml/metal/ops/cyclic_sdpa_bw/device/parity_snake.hpp"
 
 namespace {
@@ -136,6 +148,24 @@ constexpr uint32_t column_term(uint32_t i, uint32_t j) {
 }
 
 using Words = volatile tt_l1_ptr uint32_t*;
+
+// A threshold wait that leaves its own waypoint standing. Same spin as
+// noc_semaphore_wait_min; the tags must be 4-character string literals.
+//
+// The threshold is latched into a local before the loop, and that is not
+// cosmetic: the credit waits pass ++sent_to_next as the threshold, and
+// re-evaluating it once per spin made the target climb faster than the grants
+// could arrive, hanging every core on CRDW. Evaluate arguments once.
+#define WAIT_MIN_TAGGED(sem_ptr, threshold, TAG_WAIT, TAG_DONE)       \
+    do {                                                              \
+        volatile tt_l1_ptr uint32_t* const wait_sem_ = (sem_ptr);     \
+        const uint32_t wait_target_ = (threshold);                    \
+        WAYPOINT(TAG_WAIT);                                           \
+        do {                                                          \
+            invalidate_l1_cache();                                    \
+        } while ((*wait_sem_) < wait_target_);                        \
+        WAYPOINT(TAG_DONE);                                           \
+    } while (0)
 
 #ifndef SKEW_ITERS
 #define SKEW_ITERS 0
@@ -296,11 +326,11 @@ void kernel_main() {
     // Wait for the receiver's permission for this core's next forward to it.
     const auto await_credit = [&](uint32_t r) {
         if (r == my_core) {
-            noc_semaphore_wait_min(credit_from_self, ++sent_to_self);
+            WAIT_MIN_TAGGED(credit_from_self, ++sent_to_self, "CRDW", "CRDD");
         } else if (r == neighbors.prev) {
-            noc_semaphore_wait_min(credit_from_prev, ++sent_to_prev);
+            WAIT_MIN_TAGGED(credit_from_prev, ++sent_to_prev, "CRDW", "CRDD");
         } else {
-            noc_semaphore_wait_min(credit_from_next, ++sent_to_next);
+            WAIT_MIN_TAGGED(credit_from_next, ++sent_to_next, "CRDW", "CRDD");
         }
     };
 
@@ -398,9 +428,9 @@ void kernel_main() {
             // Any positive tag will do -- including the one this slot still
             // carries from its use at t - 2, which is why the contract
             // insists the tag identify the destination timestep.
-            noc_semaphore_wait_min(ready_sem[t % 2u], 1u);
+            WAIT_MIN_TAGGED(ready_sem[t % 2u], 1u, "RDYW", "RDYD");
 #else
-            noc_semaphore_wait_min(ready_sem[t % 2u], t + 1u);
+            WAIT_MIN_TAGGED(ready_sem[t % 2u], t + 1u, "RDYW", "RDYD");
 #endif
             if (producer.core == my_core) {
                 ++n_self_forwards;
@@ -423,7 +453,7 @@ void kernel_main() {
                 const uint32_t want = sched.endpoint_threshold(pair.i, t);
 #endif
 #ifndef FAULT_NO_ENDPOINT_WAIT
-                noc_semaphore_wait_min(endpoint_sem[e - 1u], want);
+                WAIT_MIN_TAGGED(endpoint_sem[e - 1u], want, "ENDW", "ENDD");
 #endif
             }
 #endif
@@ -481,14 +511,14 @@ void kernel_main() {
         // ---- release timestep t once every core has arrived
 #if !defined(FAULT_NO_BARRIER) && !defined(TRANSPORT_ENDPOINT)
         if (is_coordinator != 0u) {
-            noc_semaphore_wait_min(arrive_sem, kCores * (t + 1u));
+            WAIT_MIN_TAGGED(arrive_sem, kCores * (t + 1u), "ARVW", "ARVD");
             *scratch = t + 1u;
             noc_semaphore_set_multicast_loopback_src(scratch_l1, release_mcast_addr, kCores);
             noc_async_write_barrier();
         }
 
         // ---- barrier wait
-        noc_semaphore_wait_min(release_sem, t + 1u);
+        WAIT_MIN_TAGGED(release_sem, t + 1u, "BARW", "BARD");
 #endif
 
 #if defined(TRANSPORT_RELAY) || defined(TRANSPORT_ENDPOINT)

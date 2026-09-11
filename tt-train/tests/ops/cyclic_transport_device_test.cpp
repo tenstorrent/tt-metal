@@ -667,7 +667,18 @@ TEST(CyclicTransportEndpointTest, ReloadingWithoutTheEndpointWaitCorruptsThePack
 //     --gtest_also_run_disabled_tests \
 //     --gtest_filter=CyclicTransportEndpointTest.DISABLED_WaitingForTDeadlocks
 //
-// The watcher log then shows the waiting cores parked in a semaphore wait.
+// Observed: the run does not complete, the operation timeout throws after its
+// interval, and the process tears down cleanly with no card reset needed. The
+// watcher log shows all eight cores of the region parked, four at CRDW and
+// four at RDYW -- a credit and readiness cycle, not a core sitting at ENDW.
+//
+// That shape is worth understanding. Waiting for t rather than t_prev + 1 is
+// not waiting for a value that is merely absent: it is a value a *later*
+// spill would publish, since an endpoint's published values climb as it
+// spills. So the core waits for progress that cannot happen until it releases
+// the slots and forwards the packets that the endpoint's later spill depends
+// on. The unsatisfiable wait turns into a circular one, and the cores visible
+// in the log are the cycle rather than its origin.
 TEST(CyclicTransportEndpointTest, DISABLED_WaitingForTDeadlocks) {
     if (!grid_fits(4, 2)) {
         GTEST_SKIP() << "needs a 4x2 region";
