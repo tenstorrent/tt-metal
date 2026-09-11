@@ -806,6 +806,9 @@
 # they cost no second runner acquisition: the mesh is already open for the MLA rows.
 # The tests/torch/ file is host-only, and that directory has no CI home for any model. It is three
 # fast tests against an already-warm interpreter, so it rides along instead of staying ungated.
+# test_llama4_scale_cache.py is host-only for the same reason: it stubs the mesh device and asserts
+# the shared query-scale dict reaches every layer. 2.6 s measured, so it rides along here too rather
+# than acquiring a runner of its own.
 - name: "Mistral-Small-4-119B MLA accuracy 5k, 25k + llama4 query scale"
   cmd: |
     export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
@@ -817,17 +820,19 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral_small4_mla -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py -k "llama4" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/torch/test_mistral_small_4_mla_reference.py -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_llama4_scale_cache.py -vvv --tb=short
     '
   test_type: mistral4_mla
   test_tags: [mistral4, mla]
   test_group: module
   skus:
     bh_sc1:
-      # 4.9 min measured on CI run 33558247799 for all three pytest invocations; 10 is ~2.0x.
+      # 4.9 min measured on CI run 33558247799 for the first three pytest invocations; 10 is ~2.0x.
+      # The fourth (test_llama4_scale_cache) is host-only and adds 2.6 s, inside that headroom.
       # Was briefly 18, sized from 12.0 min measured on a galaxy box -- the same work runs ~2.4x
       # slower there than on CI, so local numbers oversize CI timeouts badly. Size from CI runs.
       # `set -e` above is load-bearing: without it only the LAST pytest's status reaches the runner,
-      # so a failure in either of the first two would report as a pass.
+      # so a failure in any of the earlier ones would report as a pass.
       timeout: 10
       tier: 2
       release_ready: false
