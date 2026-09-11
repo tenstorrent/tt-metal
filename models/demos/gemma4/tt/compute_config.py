@@ -40,12 +40,16 @@ def prefill_sdpa_compute_kernel_config(device):
     one function and one knob (``GEMMA4_PREFILL_SDPA_FIDELITY``) rather than
     five inline literals that can drift apart:
 
-      * ``hifi4_nodest`` (**default**) -- HiFi4 without fp32 dest-acc. Gives up
-        the softmax-reduce precision #47311 removed, but measures better than
-        either dest-acc arm end to end on *both* variants, and is #38306-safe.
-      * ``hifi4`` -- HiFi4 + fp32 dest-acc. On Wormhole B0 this is exactly the
-        combination #38306 covers; SDPA never calls
+      * ``hifi4`` (**default**) -- HiFi4 + fp32 dest-acc. Restores the
+        softmax-reduce FP32 accumulation #47311 removed. On Wormhole B0 this is
+        exactly the combination #38306 covers; SDPA never calls
         ``verify_numerical_configuration``, so it never warned about it.
+      * ``hifi4_nodest`` -- HiFi4 without fp32 dest-acc, the loudbox default.
+        MEASURED FASTER but LESS ACCURATE on 12B/T3K: prefill TTFT -5.2% at 4k
+        and -7.6% at 32k, against ``test_attention_prefill`` full-attention PCC
+        0.9932 -> 0.9861, which fails six unit tests at the 0.99 gate
+        (seq1024-global tp=4/8, seq4096-global tp=1/2/4/8). Opt in only where
+        the long-context TTFT is worth that.
       * ``hifi3`` -- HiFi3 + fp32 dest-acc, the runtime's own #38306
         recommendation for Wormhole.
 
@@ -53,7 +57,7 @@ def prefill_sdpa_compute_kernel_config(device):
     long-context SDPA pays for that in passes. Judge changes here on
     ``test_teacher_forcing_e2e``, which is bit-reproducible across repeats.
     """
-    mode = os.environ.get("GEMMA4_PREFILL_SDPA_FIDELITY", "hifi4_nodest").strip().lower()
+    mode = os.environ.get("GEMMA4_PREFILL_SDPA_FIDELITY", "hifi4").strip().lower()
     if mode == "hifi4":
         fidelity, dest_acc = ttnn.MathFidelity.HiFi4, True
     elif mode == "hifi3":
