@@ -118,44 +118,59 @@ template <bool copy_async>
 FORCE_INLINE void copy_via_memmove(const uint32_t dst_l1_addr, const uint32_t src_l1_addr, const uint32_t bytes) {
     invalidate_l1_cache();
     uint32_t src_read_addr = src_l1_addr;
+    uint32_t dst_write_addr = dst_l1_addr;
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // (#56283) Normalise cached-vs-uncached inputs FIRST, then apply the alias arithmetic below exactly once.
+    // Callers hand us L1 addresses straight from the DFB getters, and since #52769
+    // DataflowBuffer::get_read_ptr()/get_write_ptr() ALREADY return the UNCACHED alias on Quasar DM. This
+    // function does its own alias math (adds MEM_L1_UNCACHED_BASE to the source read; treats the dest as
+    // cached and L2-flushes it), so an already-aliased source would become src + 2*MEM_L1_UNCACHED_BASE --
+    // outside both L1 windows -> misaligned segments read as zeros on RTL / a tile_mmio_rd8 abort on
+    // craq-sim, and the dest flush would target a 4 MB-offset range. A raw cached address is
+    // < MEM_L1_UNCACHED_BASE and is left untouched, so callers that pass cached addresses are unaffected.
+    if (src_read_addr >= MEM_L1_UNCACHED_BASE) {
+        src_read_addr -= MEM_L1_UNCACHED_BASE;
+    }
+    if (dst_write_addr >= MEM_L1_UNCACHED_BASE) {
+        dst_write_addr -= MEM_L1_UNCACHED_BASE;
+    }
     // (a, #51763) SOURCE coherency: read the source through the UNCACHED L1 alias so the memmove bypasses the
     // RISC caches entirely and always sees freshly NoC-written data. invalidate_l1_cache() is a no-op on Quasar,
     // and an L2-range invalidate does NOT reach the private per-core L1 D$ (data path Core -> L1 D$ -> L2 -> TL1;
     // only invalidate_cache_all / invalidate_l1_dcache touch the D$). So a stale D$ line for a reused-CB source
     // (e.g. a loop re-reading the same scratch buffer) could otherwise be read before it ever reaches L2. The
-    // uncached alias reads TL1 directly, so no source-side cache invalidation is needed. (The DEST side stays
-    // cached: flush_l2_cache_range() below probes the L1 D$, so dirty destination lines are still written back.)
-    src_read_addr = src_l1_addr + MEM_L1_UNCACHED_BASE;
+    // uncached alias reads TL1 directly, so no source-side cache invalidation is needed.
+    src_read_addr += MEM_L1_UNCACHED_BASE;
+    // (#56283) DEST: write through the UNCACHED alias too, so the CPU store lands in TL1 immediately.
+    // This replaces the old cached-write + flush_l2_cache_range() publish: the copy_async=true callers
+    // (e.g. reshape) skip the drain below, leaving the flush as the ONLY publish, and it does not
+    // reliably reach TL1 before a subsequent NoC read of the destination -> stale-TL1 zeros for some
+    // segments. An uncached dest write is published to TL1 directly and needs no L2 flush.
+    dst_write_addr += MEM_L1_UNCACHED_BASE;
 #endif
     // Cast the L1 address (uint32_t) to a pointer through uintptr_t: a bare (void*)(uint32_t) is an
     // int-to-pointer cast that -Werror=int-to-pointer-cast rejects on Quasar (64-bit pointers). uintptr_t
     // is the correct width on every arch, so this is a no-op change for WH/BH.
-    memmove((void*)(uintptr_t)(dst_l1_addr), (void*)(uintptr_t)(src_read_addr), (size_t)(bytes));
+    memmove((void*)(uintptr_t)(dst_write_addr), (void*)(uintptr_t)(src_read_addr), (size_t)(bytes));
     if constexpr (!copy_async) {
         if (bytes != 0) {
             // Drain the 4B-aligned word holding the last written byte: in-bounds and aligned for any
             // size/alignment (dst may be sub-word-aligned on the misaligned path).
             volatile tt_l1_ptr uint32_t* drain_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>((dst_l1_addr + bytes - 1) & ~uint32_t{3});
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>((dst_write_addr + bytes - 1) & ~uint32_t{3});
 #if defined(ARCH_QUASAR)
-            // Quasar has no ckernel::load_blocking. This volatile load is a LOCAL ordering barrier only
-            // (reads back the dirty L1D line); the L2->TL1 publish for cross-agent visibility is done by the
-            // flush_l2_cache_range() after this block (see the #51763 coherency note above).
+            // Quasar has no ckernel::load_blocking. This volatile load is a LOCAL ordering barrier only.
+            // On Quasar DM the dest was written through the uncached alias above, so it is already in TL1
+            // (drain_ptr is the uncached alias too); cross-agent visibility needs no extra publish.
             (void)*drain_ptr;
 #else
             (void)ckernel::load_blocking(drain_ptr);
 #endif
         }
     }
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-    // (b, #51763) DEST coherency: the CPU stores land in L1 D$/L2, not TL1; the volatile-load drain above is
-    // only a LOCAL ordering barrier (and the copy_async path skips it entirely). Flush the L2 range so a
-    // later NoC / other-agent read of the destination sees the copied data. Runs on both async and sync paths.
-    if (bytes != 0) {
-        flush_l2_cache_range(static_cast<uintptr_t>(dst_l1_addr), static_cast<size_t>(bytes));
-    }
-#endif
+    // (#56283) No flush_l2_cache_range on Quasar DM: the dest write above went through the uncached alias,
+    // so it is already published to TL1. (Previously the dest was written cached and this flush was the
+    // publish -- but copy_async=true callers skip the drain, so the flush alone left stale TL1.)
 }
 
 template <bool guaranteed_16B_aligned, bool copy_async, bool use_read_datamover, uint32_t max_transfer_size>
