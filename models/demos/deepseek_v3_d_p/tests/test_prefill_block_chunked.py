@@ -81,6 +81,12 @@ _PADDED_FULL_55K = [
 assert sum(_PADDED_FULL_55K) == SEQ_CACHE and all(v % 32 == 0 and 0 < v <= CHUNK for v in _PADDED_FULL_55K)
 
 
+# Soak length. A pass over one chunk measured 3.0-3.6 s on mesh-8x4 (profiler tt_forward), almost all
+# of it the seven host gathers rather than device work, so 500 passes is ~30 min -- the most that fits
+# the 3600 s timeout with room for setup. Raising it needs a larger timeout, not just a bigger number.
+SOAK_ITERS = 500
+
+
 def _chunked_repeat_combos(**params):
     """determinism_check repeats the whole chunk sweep num_iterations times -- that repetition IS the
     stress run, and every pass must come back bit-identical to pass 0. num_iterations means nothing
@@ -88,7 +94,7 @@ def _chunked_repeat_combos(**params):
     iters = params.get("num_iterations")
     if not params.get("determinism_check"):
         return iters != 2
-    if iters == 2000:
+    if iters == SOAK_ITERS:
         return params.get("n_chunks") != 1 or params["is_ci_env"] or params["is_ci_v2_env"]
     return params.get("n_chunks") != 2
 
@@ -442,7 +448,7 @@ def run_chunked_block(
 
 @pytest.mark.uncollect_if(pred=_chunked_repeat_combos)
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
-@pytest.mark.parametrize("num_iterations", [2, 5, 2000], ids=["iter2", "iter5", "iter2000"])
+@pytest.mark.parametrize("num_iterations", [2, 5, SOAK_ITERS], ids=["iter2", "iter5", f"soak{SOAK_ITERS}"])
 @pytest.mark.parametrize("n_chunks", [1, 2, 5, 10, 11], ids=["chunks1", "chunks2", "chunks5", "chunks10", "chunks11"])
 @pytest.mark.parametrize(
     "layer_idx, gate_fallback_mode",
@@ -962,7 +968,7 @@ def test_ds_prefill_block_chunked_padded(
 
 @pytest.mark.uncollect_if(pred=_chunked_repeat_combos)
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
-@pytest.mark.parametrize("num_iterations", [2, 5, 2000], ids=["iter2", "iter5", "iter2000"])
+@pytest.mark.parametrize("num_iterations", [2, 5, SOAK_ITERS], ids=["iter2", "iter5", f"soak{SOAK_ITERS}"])
 @pytest.mark.parametrize("n_chunks", [1, 2, 5, 10, 11], ids=["chunks1", "chunks2", "chunks5", "chunks10", "chunks11"])
 @pytest.mark.parametrize(
     "layer_idx, gate_fallback_mode",
