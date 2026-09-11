@@ -33,7 +33,6 @@ void kernel_main() {
 #if defined(MULTICAST)
     MulticastEndpoint dst;
     constexpr uint8_t tx_stream = 0;
-    const uint64_t start = get_timestamp();
     // The two NOCs are opposing tori: pick the multicast entry corner to match the NOC's flow
     // direction (NOC0 enters at the min corner, NOC1 at the max corner).
     const uint32_t noc_x_start = noc_index == 0 ? tensix_noc_x_start : tensix_noc_x_end;
@@ -61,8 +60,6 @@ void kernel_main() {
         gddr_addr += num_bytes;
         noc.async_write_barrier();
     }
-    CoreLocalMem<uint64_t> total_time_res(drisc_l1_addr + num_bytes);
-    total_time_res[0] = get_timestamp() - start;
 #else
     UnicastEndpoint dst;
     // Single-stream double-buffered: both halves share stream 0 and are
@@ -93,7 +90,7 @@ void kernel_main() {
     // the two sides still overlap because NOC writes are async (issue then move on).
     // Maintains 2 outstanding DMAs throughout (interleaved consume/refill)
     for (uint32_t i = 0; i < total_iters - 1; i++) {
-        experimental::dma_async_read_wait_n(tx_stream, 1);              // A[i] ready (oldest)
+        experimental::dma_async_read_wait_n(tx_stream, 1);                        // A[i] ready (oldest)
         noc.async_write_barrier<NocOptions::TXN_ID>({.trid = trid_A});  // prev A acked
         noc.async_write<NocOptions::TXN_ID>(
             src,
@@ -105,7 +102,7 @@ void kernel_main() {
         noc.async_writes_flushed<NocOptions::TXN_ID>({.trid = trid_A});
         experimental::dma_async_read(tx_stream, src_A, dst_A, half_buffer_bytes);  // refill A
 
-        experimental::dma_async_read_wait_n(tx_stream, 1);              // B[i] ready (oldest now)
+        experimental::dma_async_read_wait_n(tx_stream, 1);                        // B[i] ready (oldest now)
         noc.async_write_barrier<NocOptions::TXN_ID>({.trid = trid_B});  // prev B acked
         noc.async_write<NocOptions::TXN_ID>(
             src,
@@ -121,7 +118,7 @@ void kernel_main() {
     }
 
     // Final A: oldest of the two outstanding reads is A[last].
-    experimental::dma_async_read_wait_n(tx_stream, 1);              // A[last] ready
+    experimental::dma_async_read_wait_n(tx_stream, 1);                        // A[last] ready
     noc.async_write_barrier<NocOptions::TXN_ID>({.trid = trid_A});  // prev A acked
     noc.async_write<NocOptions::TXN_ID>(
         src,
@@ -132,7 +129,7 @@ void kernel_main() {
         NocOptVals{.trid = trid_A});
 
     // Final B: drain the remaining outstanding read.
-    experimental::dma_async_read_wait_n(tx_stream, 0);              // B[last] ready
+    experimental::dma_async_read_wait_n(tx_stream, 0);                        // B[last] ready
     noc.async_write_barrier<NocOptions::TXN_ID>({.trid = trid_B});  // prev B acked
     noc.async_write<NocOptions::TXN_ID>(
         src,

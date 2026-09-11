@@ -7,7 +7,6 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/endpoints.h"
-#include "risc_common.h"
 
 void kernel_main() {
     const uint32_t src_dram_bank_id = get_arg_val<uint32_t>(0);
@@ -20,16 +19,9 @@ void kernel_main() {
     AllocatorBank<AllocatorBankType::DRAM> bank;
     CoreLocalMem<uint32_t> dst(dst_l1_addr);
 
-#ifdef RECORD_TIMING
-    const uint64_t start = get_timestamp();
-#endif
     for (uint32_t i = 0; i < iters; i++) {
         noc.async_read(bank, dst, total_bytes, {.bank_id = src_dram_bank_id, .addr = src_dram_addr}, {});
         src_dram_addr += total_bytes;
         noc.async_read_barrier();
     }
-#ifdef RECORD_TIMING
-    CoreLocalMem<uint64_t> timing(dst_l1_addr + total_bytes);
-    timing[0] = get_timestamp() - start;
-#endif
 }
