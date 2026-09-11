@@ -248,7 +248,8 @@ jobs:
       options: >-
          ${{ (startsWith(matrix.leg.sku, 'sim_') && '--label runner-mode=sim')
              || (matrix.leg.sku != 'github_hosted_cpu' && '--device /dev/tenstorrent')
-             || '' }}    defaults:
+             || '' }}
+    defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878

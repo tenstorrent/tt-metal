@@ -165,6 +165,41 @@ def changed_files(base):
     return sorted(name for name in names if name.strip().endswith((".yaml", ".yml")))
 
 
+def rename_sources(base):
+    """
+    {new path: path it was renamed from} for yamls moved between base and HEAD.
+
+    Without this a rename reads as a brand new file: `git show base:<new path>`
+    finds nothing, the base matrix comes back empty, and every entry in the file
+    looks added -- so renaming a pipeline yaml demanded a hardware run and an
+    owner review for its whole matrix. Pairing the paths means a pure rename
+    scopes to nothing, and a rename that also edits entries scopes to just those.
+
+    -M is passed explicitly rather than relying on diff.renames, which a local
+    config can switch off; without rename detection git reports the pair as an
+    unrelated delete plus add and the pairing is lost again.
+
+    A yaml moved in from outside TESTS_DIR is deliberately not paired: the gate
+    never saw it before, so its entries are genuinely new to the gate's scope.
+    """
+    diff = subprocess.run(
+        ["git", "diff", "--name-status", "-M", base, "--", TESTS_DIR],
+        capture_output=True,
+        text=True,
+    )
+    if diff.returncode != 0:
+        raise GateError(f"git diff --name-status against {base} failed: {diff.stderr.strip()}")
+
+    sources = {}
+    for line in diff.stdout.splitlines():
+        fields = line.split("\t")
+        # "R<similarity>\told\tnew"; plain edits are "M\tpath" and are not pairs.
+        if len(fields) == 3 and fields[0].startswith("R"):
+            _, old_path, new_path = fields
+            sources[new_path] = old_path
+    return sources
+
+
 def load_review_only_skus(raw, sku_config_path):
     """
     Parse the review-only SKU list.
@@ -384,8 +419,13 @@ def needs_packages(entry):
     return any(prefix in cmd for prefix in PACKAGE_INSTALL_PREFIXES)
 
 
-def scope_file(path, base, review_only, tracy_files, non_matrix_files, unsupported_files):
-    """Diff one tests yaml and return its scoping result."""
+def scope_file(path, base, review_only, tracy_files, non_matrix_files, unsupported_files, base_path=None):
+    """Diff one tests yaml and return its scoping result.
+
+    base_path is where the file lived at `base` when it has since been renamed;
+    the base matrix is read from there so a rename is not mistaken for a file
+    full of new entries.
+    """
     if os.path.basename(path) in non_matrix_files:
         # Declared as holding no test matrix (e.g. ttsim-skip-list.yaml, a per-arch
         # mapping of test ids). Nothing here for the gate to prove.
@@ -393,13 +433,14 @@ def scope_file(path, base, review_only, tracy_files, non_matrix_files, unsupport
 
     unsupported = os.path.basename(path) in unsupported_files
 
-    old_entries = parse_entries(git_show(base, path))
+    old_path = base_path or path
+    old_entries = parse_entries(git_show(base, old_path))
     new_entries = parse_entries(open(path).read() if os.path.exists(path) else None)
 
     # Reaching here with a non-list means a real test matrix was reshaped into
     # something else. prepare_test_matrix.py errors on that shape, and so does the
     # gate -- silently marking it "no tests" would pass the PR with zero coverage.
-    for entries, label in ((new_entries, path), (old_entries, f"{path}@{base}")):
+    for entries, label in ((new_entries, path), (old_entries, f"{old_path}@{base}")):
         if entries is None:
             raise GateError(
                 f"{label} is not a list of test entries. If it legitimately holds no test "
@@ -407,7 +448,7 @@ def scope_file(path, base, review_only, tracy_files, non_matrix_files, unsupport
                 ".github/workflows/verify-changed-tests.yaml; otherwise fix the file."
             )
 
-    old_index = index_entries(old_entries, f"{path}@{base}")
+    old_index = index_entries(old_entries, f"{old_path}@{base}")
     new_index = index_entries(new_entries, path)
 
     touched, metadata_only = [], []
@@ -458,11 +499,20 @@ def scope_file(path, base, review_only, tracy_files, non_matrix_files, unsupport
     }
 
 
-def build_scope(base, files, review_only, tracy_files, non_matrix_files, unsupported_files):
+def build_scope(base, files, review_only, tracy_files, non_matrix_files, unsupported_files, renames=None):
     run_legs, review_legs, metadata_only, skipped = [], [], [], []
+    renames = renames or {}
 
     for path in sorted(files):
-        scoped = scope_file(path, base, review_only, tracy_files, non_matrix_files, unsupported_files)
+        scoped = scope_file(
+            path,
+            base,
+            review_only,
+            tracy_files,
+            non_matrix_files,
+            unsupported_files,
+            base_path=renames.get(path),
+        )
         if scoped["no_entries"]:
             skipped.append(path)
             continue
@@ -698,20 +748,62 @@ def filter_matrix(scope, matrices, skips):
 # ---------------------------------------------------------------------------
 
 
+def next_page_url(link_header):
+    """The rel="next" URL from a GitHub Link header, or None on the last page."""
+    for part in (link_header or "").split(","):
+        segments = part.split(";")
+        if len(segments) < 2:
+            continue
+        url = segments[0].strip()
+        if not (url.startswith("<") and url.endswith(">")):
+            continue
+        if any(segment.strip().replace('"', "").replace(" ", "") == "rel=next" for segment in segments[1:]):
+            return url[1:-1]
+    return None
+
+
+# A self-referential Link header would otherwise spin forever and hang the job.
+# 100 pages is 10k review submissions -- far past any real PR.
+MAX_REVIEW_PAGES = 100
+
+
 def fetch_reviews(repo, pr, token):
+    """Every review submission on the PR, following pagination to the last page.
+
+    Pagination is not optional here. The endpoint returns OLDEST first, and counts
+    every submission -- each approve, request-changes and plain review comment --
+    as a review. Reading only the first page therefore hands back the oldest 100
+    and silently drops the newest, which is precisely where an approval on the
+    current head has to be. The result was a false block on a properly approved
+    PR, most likely on exactly the long-lived galaxy PRs this gate exists to route
+    to owners.
+    """
     url = f"https://api.github.com/repos/{repo}/pulls/{pr}/reviews?per_page=100"
-    request = urllib.request.Request(url)
-    request.add_header("Accept", "application/vnd.github+json")
-    request.add_header("X-GitHub-Api-Version", "2022-11-28")
-    if token:
-        request.add_header("Authorization", f"Bearer {token}")
-    try:
-        with urllib.request.urlopen(request) as response:
-            return json.load(response)
-    except urllib.error.HTTPError as err:
-        raise GateError(f"GitHub API returned {err.code} fetching reviews for {repo}#{pr}")
-    except urllib.error.URLError as err:
-        raise GateError(f"could not reach the GitHub API: {err.reason}")
+    reviews = []
+    for _ in range(MAX_REVIEW_PAGES):
+        request = urllib.request.Request(url)
+        request.add_header("Accept", "application/vnd.github+json")
+        request.add_header("X-GitHub-Api-Version", "2022-11-28")
+        if token:
+            request.add_header("Authorization", f"Bearer {token}")
+        try:
+            with urllib.request.urlopen(request) as response:
+                page = json.load(response)
+                link_header = response.headers.get("Link", "")
+        except urllib.error.HTTPError as err:
+            raise GateError(f"GitHub API returned {err.code} fetching reviews for {repo}#{pr}")
+        except urllib.error.URLError as err:
+            raise GateError(f"could not reach the GitHub API: {err.reason}")
+
+        if not isinstance(page, list):
+            raise GateError(f"unexpected reviews payload for {repo}#{pr}: expected a list")
+        reviews.extend(page)
+
+        url = next_page_url(link_header)
+        if not url:
+            return reviews
+
+    raise GateError(f"reviews for {repo}#{pr} did not terminate after {MAX_REVIEW_PAGES} pages")
 
 
 def check_reviews(review_legs, repo, pr, head_sha, codeowners_path):
@@ -806,7 +898,16 @@ def run(args):
     files = args.files if args.files is not None else changed_files(base)
     files = [f for f in files if f.startswith(TESTS_DIR + "/")]
 
-    scope = build_scope(base, files, review_only, tracy_files, non_matrix_files, unsupported_files)
+    # A renamed yaml's base matrix lives at its old path, so a rename is scoped as
+    # the no-op it is rather than as a file full of newly added entries.
+    renames = rename_sources(base)
+    if renames:
+        for new_path, old_path in sorted(renames.items()):
+            print(f"Renamed: {old_path} -> {new_path} (diffed against its old path)")
+
+    scope = build_scope(
+        base, files, review_only, tracy_files, non_matrix_files, unsupported_files, renames=renames
+    )
 
     # In a merge group the legs already ran on the PR head, so there is no matrix
     # to build and no review to re-check -- only the scope needs to resolve.
