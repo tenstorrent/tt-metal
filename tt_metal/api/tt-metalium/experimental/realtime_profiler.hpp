@@ -20,6 +20,7 @@ struct ProgramRealtimeRecord {
     double frequency;                                  // Device clock frequency (cycles per ns)
     std::span<const std::string_view> kernel_sources;  // Kernel source paths; valid until
                                                        // MetalContext teardown or reinitialization.
+    uint32_t core_count = 0;                           // Distinct programmable cores used by the program.
 };
 
 struct ProgramRealtimeRecordBatch {
