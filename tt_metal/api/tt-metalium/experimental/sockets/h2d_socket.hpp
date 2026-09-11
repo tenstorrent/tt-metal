@@ -105,10 +105,10 @@ public:
      *                   coord of an L2CPU tile on the target device.
      * @param fifo_size Size of the circular FIFO buffer in bytes. Must be PCIe-aligned.
      * @param config_buffer_address LIM address on the receiver L2CPU for the socket metadata.
-     *                              Must be PCIe-aligned and within the L2CPU's LIM window.
+     *                              Must be PCIe-aligned and within the L2CPU's IoWindow.
      * @param data_fifo_address LIM address for the data FIFO. In HOST_PUSH this is the ring
      *                          itself and must be PCIe-aligned, disjoint from the config buffer,
-     *                          and fit with fifo_size inside the L2CPU's LIM window. In
+     *                          and fit with fifo_size inside the L2CPU's IoWindow. In
      *                          DEVICE_PULL the ring lives in pinned host memory and this is the
      *                          base the device computes ring offsets against.
      * @param h2d_mode Transfer mode: HOST_PUSH or DEVICE_PULL.

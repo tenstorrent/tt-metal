@@ -454,7 +454,7 @@ D2HSocket::D2HSocket(
             device_id);
     }
 
-    // The sender_socket_md blob is written through the L2CPU LIM window, and
+    // The sender_socket_md blob is written through the L2CPU IoWindow, and
     // notify_sender() later routes config_buffer_address_ + bytes_acked_device_offset_
     // through the same window (subtracting its base). An address outside the window
     // passes the alignment check above but then underflows or trips the window's
@@ -462,7 +462,7 @@ D2HSocket::D2HSocket(
     const uint64_t config_end = static_cast<uint64_t>(config_buffer_address) + required_config_buffer_size();
     TT_FATAL(
         config_buffer_address >= ll_api::kL2cpuLimBase && config_end <= ll_api::kL2cpuLimTlbEnd,
-        "L2CPU D2H config buffer [0x{:x}, 0x{:x}) must lie inside the LIM window [0x{:x}, 0x{:x}).",
+        "L2CPU D2H config buffer [0x{:x}, 0x{:x}) must lie inside the IoWindow [0x{:x}, 0x{:x}).",
         config_buffer_address,
         config_end,
         ll_api::kL2cpuLimBase,

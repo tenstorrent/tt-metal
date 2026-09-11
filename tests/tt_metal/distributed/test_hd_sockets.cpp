@@ -584,7 +584,7 @@ TEST_F(L2CpuSocketFixture, L2CpuSocketRejectsInvalidLimAddresses) {
     EXPECT_ANY_THROW(H2DSocket(*mesh_device_, l2cpu, /*fifo_size=*/0, config_addr, data_addr, H2DMode::HOST_PUSH));
     EXPECT_ANY_THROW(H2DSocket(*mesh_device_, l2cpu, pcie_alignment + 1, config_addr, data_addr, H2DMode::HOST_PUSH));
 
-    // In HOST_PUSH the ring lives in LIM and is reached through the LIM window,
+    // In HOST_PUSH the ring lives in LIM and is reached through the IoWindow,
     // so a ring running past the window end must be rejected at construction.
     EXPECT_ANY_THROW(H2DSocket(
         *mesh_device_,

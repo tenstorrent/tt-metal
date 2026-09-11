@@ -579,7 +579,7 @@ H2DSocket::H2DSocket(
             device_id);
     }
 
-    // The receiver_socket_md is written through the L2CPU LIM window, and
+    // The receiver_socket_md is written through the L2CPU IoWindow, and
     // notify_receiver() later routes config_buffer_address_ + bytes_sent through
     // the same window (subtracting its base). An address outside the window is
     // accepted by the alignment checks above but underflows or trips the window's
@@ -587,7 +587,7 @@ H2DSocket::H2DSocket(
     const uint64_t config_end = static_cast<uint64_t>(config_buffer_address) + sizeof(receiver_socket_md);
     TT_FATAL(
         config_buffer_address >= ll_api::kL2cpuLimBase && config_end <= ll_api::kL2cpuLimTlbEnd,
-        "L2CPU H2D config buffer [0x{:x}, 0x{:x}) must lie inside the LIM window [0x{:x}, 0x{:x}).",
+        "L2CPU H2D config buffer [0x{:x}, 0x{:x}) must lie inside the IoWindow [0x{:x}, 0x{:x}).",
         config_buffer_address,
         config_end,
         ll_api::kL2cpuLimBase,
