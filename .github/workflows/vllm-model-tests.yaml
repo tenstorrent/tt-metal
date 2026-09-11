@@ -95,7 +95,7 @@ permissions:
   packages: write
   contents: read
 
-run-name: "vLLM Model Tests ${{ github.event_name == 'schedule' && '[scheduled]' || format('[{0}] [{1}] [{2}]', (inputs.model == 'all' && 'All models' || inputs.model), (inputs.sku == 'all' && 'All SKUs' || inputs.sku), (inputs.tier == 'all' && 'All tiers' || format('Tier {0}', inputs.tier))) }}"
+run-name: "Diagnostic functional Galaxy vLLM ${{ github.event_name == 'schedule' && '[scheduled]' || format('[{0}] [{1}] [{2}]', (inputs.model == 'all' && 'All models' || inputs.model), (inputs.sku == 'all' && 'All SKUs' || inputs.sku), (inputs.tier == 'all' && 'All tiers' || format('Tier {0}', inputs.tier))) }}"
 
 jobs:
   check-harbor:
@@ -165,6 +165,7 @@ jobs:
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
+      use-artifacts-from-run: '34606046887'
   vllm-plugin-unit-tests:
     needs: build-artifact
     runs-on: ubuntu-latest
@@ -234,7 +235,7 @@ jobs:
       - name: 🧪 Run host-only plugin tests
         run: |
           pushd "$PLUGIN_DIR"
-          pytest tests --ignore=tests/tt -v
+          python -m pytest -c pyproject.toml --confcutdir=. tests --ignore=tests/tt -v
           popd
   vllm-tests:
     needs: [check-harbor, build-artifact, resolve-skus]
