@@ -139,7 +139,9 @@ void JitBuildEnv::init(
     // Tools
     const static bool use_ccache = std::getenv("TT_METAL_CCACHE_KERNEL_SUPPORT") != nullptr;
     if (use_ccache) {
-        this->gpp_ = "ccache ";
+        // ccache requires these settings for both PCH creation and consumption; otherwise
+        // it reports every PCH-backed compile as uncacheable. Scope them to device JIT commands.
+        this->gpp_ = "ccache sloppiness=pch_defines,time_macros ";
     } else {
         this->gpp_ = "";
     }
