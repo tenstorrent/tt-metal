@@ -49,11 +49,16 @@ Regular prefill seq128 on craq-sim, run incrementally (JIT from source, no build
 4. ⏳ **QK^T transpose** (`matmul_blocks(...,true)` at compute_common.hpp:1911, inside `sdpa_inner_loop`): runtime `LLK_ASSERT(transpose==0)` on Quasar (compiles via the hardcoded `<false>` template, fails/wrong at runtime). FIX = `transpose_block`→`kt` DFB + `matmul_blocks(false)`. `dfb::kt` is a global accessor, so inside `sdpa_inner_loop` just `constexpr auto dfb_kt = dfb::kt;` — NO signature threading needed.
 5. ⏳ **DFB budget**: sdpa non-streaming has EXACTLY 8 compute self-loop DFBs (`qk_im, out_im_A, out_im_B, max_A, max_B, sum_A, sum_B, exp_max_diff` — all PRODUCER+CONSUMER on compute). Adding `kt` = 9 > cap. Need to free a slot: merge an A/B ping-pong pair (mirror the peer's in-progress decode `max_1/max_2`→`max` 2-deep-DFB + tile-offset-helper merge) OR reuse a dead buffer. Coordinate with the peer to reuse their validated merge.
 
-## Status
+## Status (checkpoint committed c4cf1c1045d, 2026-09-11)
 - [x] WH baseline green.
 - [x] Blockers + craq-sim viability mapped; plan reconciled with decode plan.
-- [ ] SFPU swap (subagent, edit-only, in flight).
-- [ ] QK^T transpose-free.
-- [ ] dtype/fp32/opt_level.
-- [ ] WH all-tests-green.
-- [ ] craq-sim regular prefill PCC.
+- [x] SFPU swap (compute_common.hpp, ARCH_QUASAR).
+- [x] Streaming compile-guard (sdpa.cpp #ifndef ARCH_QUASAR) + force use_streaming_compute=false on Quasar.
+- [x] fp32=false on Quasar (factory local + `enable_32_bit_dest(compute_hw)=false` — the value the JIT reads) + opt_level=Os.
+- [x] **WH ALL tests green**: ops 3/3, chunked 3/3, prototype_ops sdpa 3/3, prototype_ops chunked 3/3, graph 1/1, module test_attention_1d 9/10 (the 1 failure = `_vs_reference` HF gated-repo OSError, an env/auth issue, NOT the op).
+- [x] **craq-sim: COMPILES + program-creates + EXECUTES** (regular prefill seq128). Hits sim runtime `UndefinedBehavior: qsr_cache_validate_l1_range: addr=0x460bc0 size=1` (a single-element L1 read).
+- [ ] QK^T transpose-free + kt DFB + one A/B ping-pong merge (fit 8-cap). NEXT.
+- [ ] Resolve the sim UB — uncertain if it's a QK^T-downstream effect or a separate craq-sim limitation (emulator territory like decode's GH#50135). Investigate after the QK^T fix.
+- [ ] craq-sim regular prefill PCC (blocked on the two above).
+- [ ] dtype BFLOAT16-on-Quasar device-op restriction (not yet needed — test uses bf16; add for robustness).
+- [ ] Streaming path Quasar port (deferred; only needed for the model/module path on Quasar).
