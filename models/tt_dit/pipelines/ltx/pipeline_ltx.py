@@ -152,11 +152,11 @@ class LTXTransformerState:
 BASE_SHIFT_ANCHOR = 1024
 MAX_SHIFT_ANCHOR = 4096
 
-# Default DiT-linear quant preset. bf8 weights are the shipped tier: the perf targets and the VBench
-# floors are calibrated against it, so a bare run must get it without env plumbing. LTX_QUANT="" opts
-# back to the bf16 baseline. The weight-cache name derives from the same value, so both readers must
-# resolve the default identically or a run dtype-clashes on a stale-precision cache hit.
-LTX_QUANT_DEFAULT = "all_bf8_lofi"
+# Default DiT-linear quant preset: none, i.e. the bf16 baseline, as on main. A bare run and the
+# `high` quality tier render bf16; bf8 presets are opt-in via LTX_QUANT or the medium/fast tiers.
+# The weight-cache name derives from the same value, so both readers must resolve the default
+# identically or a run dtype-clashes on a stale-precision cache hit.
+LTX_QUANT_DEFAULT = ""
 
 
 def compute_sigmas(
