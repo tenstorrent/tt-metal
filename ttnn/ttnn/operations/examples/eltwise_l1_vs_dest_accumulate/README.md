@@ -38,8 +38,8 @@ helper. The progression is monotonic — each step strips more accumulator L1 tr
   L1 round-trip and *provides the PACK→UNPACK sync* so the next step reads the freshly written `acc`.
   Nothing is retained in DEST between steps.
 - **`pack_l1_acc`** reads two tiles at a time from a **caller-managed** input (so one add can read two
-  distinct tiles of the same CB — `srcA = tile 2k`, `srcB = tile 2k+1` — via per-operand `TileOffset`
-  + `OperandKind::Scalar`), sums them in DEST, and packs with `OutputLifecycle::L1AccumulationCallerManaged`
+  distinct tiles of the same CB — `srcA = tile 2k`, `srcB = tile 2k+1` — via per-operand `TileAddressing`
+  + `InputTileMapping::Scalar`), sums them in DEST, and packs with `OutputLifecycle::L1AccumulationCallerManaged`
   so the **packer** adds DEST onto the resident `acc` tile. `acc` is never unpacked; the binary init is
   hoisted once (`SetupOwner::Caller`).
 - **`dest_acc`** keeps the running sum in one **sticky DEST** tile (`BinaryFpu<…, DestAccumulation::Enabled>`

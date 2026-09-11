@@ -21,7 +21,7 @@ identical correct result):
                   tile; the per-iteration cb_out push/wait drives the round-trip and syncs PACK->UNPACK.
 
   pack_l1_acc: read TWO tiles per step. One BinaryFpu puts X[2k]+X[2k+1] in DEST (caller-managed
-                  input so one add reads two distinct tiles of the same CB via per-operand TileOffset),
+                  input so one add reads two distinct tiles of the same CB via per-operand TileAddressing),
                   then the PACK engine folds that onto `acc` in place (L1-accumulation). `acc` is only
                   packed, never unpacked — B/2 steps. Binary init hoisted once (InitReconfigOwner::Caller).
 
@@ -96,14 +96,14 @@ void kernel_main() {
             // ---- read two tiles per step: DEST = X[2k] + X[2k+1], then L1-accumulate onto acc ----
             // The input is caller-managed (one wait/pop for the whole resident stream) so each add
             // can read two distinct tiles of the same CB: srcA = tile 2k, srcB = tile 2k+1, via
-            // per-operand TileOffset + OperandKind::Scalar. The packer folds DEST onto the running
+            // per-operand TileAddressing + InputTileMapping::Scalar. The packer folds DEST onto the running
             // acc in L1 in place, so acc is never unpacked. B/2 steps; acc reserved/published once.
             constexpr uint32_t N = B / 2;
             cb_wait_front(cb_in, B);      // caller-managed input: wait for the resident stream once
             cb_reserve_back(cb_out, 1);   // caller-managed acc: reserve the single accumulator tile
             constexpr auto pair_operand = ckl::input(
-                cb_in, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Scalar,
-                ckl::DataFormatReconfig::Disabled, ckl::TileOffset::Set);
+                cb_in, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Scalar,
+                ckl::DataFormatReconfig::Disabled, ckl::TileAddressing::Offset);
             using AddPair = ckl::BinaryFpu<ckl::BinaryFpuOp::Add, pair_operand, pair_operand, ckl::Dst::D0>;
             // step 0: seed acc = X[0] + X[1] (plain pack, l1-acc off).
             ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
@@ -120,7 +120,8 @@ void kernel_main() {
                     AddPair{2 * k, 2 * k + 1},
                     ckl::PackTile<
                         ckl::output(cb_out, ckl::ReservePolicy::None, ckl::PushPolicy::None,
-                                    ckl::DataFormatReconfig::Disabled, ckl::PackRelu::Disabled,
+                                    ckl::DataFormatReconfig::Disabled, ckl::TileAddressing::Direct,
+                                    ckl::DestAccumulation::Disabled,
                                     ckl::L1Accumulation::AddToExisting),
                         ckl::Dst::D0>{});
             }
@@ -140,16 +141,16 @@ void kernel_main() {
                 ckl::IterationShape::tiles(N),
                 ckl::BinaryFpu<
                     ckl::BinaryFpuOp::Add,
-                    ckl::input(cb_in, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Block,
-                               ckl::DataFormatReconfig::Disabled, ckl::TileOffset::Unset),
-                    ckl::input(cb_in, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Block,
-                               ckl::DataFormatReconfig::Disabled, ckl::TileOffset::Set),
+                    ckl::input(cb_in, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block,
+                               ckl::DataFormatReconfig::Disabled, ckl::TileAddressing::Direct),
+                    ckl::input(cb_in, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block,
+                               ckl::DataFormatReconfig::Disabled, ckl::TileAddressing::Offset),
                     ckl::Dst::D0,
                     ckl::DestAccumulation::WholeShape>{0, N},
                 ckl::PackTile<
                     ckl::output(cb_out, ckl::ReservePolicy::PerOuter, ckl::PushPolicy::PerOuter,
-                                ckl::DataFormatReconfig::Disabled, ckl::PackRelu::Disabled,
-                                ckl::L1Accumulation::Disabled, ckl::DestAccumulation::WholeShape),
+                                ckl::DataFormatReconfig::Disabled, ckl::TileAddressing::Direct,
+                                ckl::DestAccumulation::WholeShape, ckl::L1Accumulation::Disabled),
                     ckl::Dst::D0>{});
             cb_pop_front(cb_in, B);   // release the resident input for this pass
         }
