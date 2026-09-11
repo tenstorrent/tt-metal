@@ -323,6 +323,18 @@ class ModelOptimizations:
                 "TensorPrecision": {TensorGroup.FF1_FF3: PrecisionSetting.BFP4},
                 "OpFidelity": {OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI},
             }
+            if base_model_name == "Llama-3.1-8B":
+                # Walk the remaining bfloat8_b decode projections to LoFi. FF1/FF3 were already
+                # there; QKV, the attention output and FF2 were the ones left at HiFi2, and these
+                # ops turn out to be FIDELITY-bound rather than bandwidth-bound -- dropping their
+                # WEIGHTS to bfloat4_b instead moves the per-token time by ~0.3%, while dropping
+                # fidelity moves it by 10x that. Measured (trace+1cq, 128 decode tokens) from a
+                # 9.221 ms baseline: QKV+WO 8.850 ms, FF2 8.730 ms, all three 8.225 ms (-10.8%).
+                # Scoped to the model it is PCC-validated on; other models keep HiFi2, and the
+                # accuracy preset is untouched. The decoder JSON still pins layer 31 to HiFi2.
+                settings["OpFidelity"][OpGroup.LI_QKV_DECODE] = MathFidelitySetting.LOFI
+                settings["OpFidelity"][OpGroup.LI_O_DECODE] = MathFidelitySetting.LOFI
+                settings["OpFidelity"][OpGroup.LI_FF2] = MathFidelitySetting.LOFI
             if model_name.startswith("Phi-3-mini"):  # TODO: Only do this for N150
                 logger.info(
                     f"Model {model_name} is running out of L1 memory under standard high-performance settings, using FP16 accumulate in attention prefill QKV Matmul"
@@ -482,10 +494,20 @@ def parse_optimizations(string):
     return apply_settings
 
 
-def parse_decoder_json(json_file_path, default_optimization=ModelOptimizations.performance):
+def parse_decoder_json(json_file_path, default_optimization=ModelOptimizations.performance, model_name=None):
     """
     Reads a JSON file and returns a DecodersPrecision instance.
+
+    ``model_name`` names the model the defaults are being built FOR. It matters because
+    ``default_optimization`` branches on it: ModelOptimizations.performance/accuracy carry
+    per-model overrides (Qwen2.5-7B's "degraded under standard high-performance settings"
+    fallback, Phi-3-mini's L1 workaround, and the Llama-3.1-8B fidelity settings below).
+    This used to pass a literal "model" placeholder, so for every model that HAS a decoder
+    JSON those per-model branches silently never fired and the generic defaults were used
+    instead. Callers that genuinely do not know the model (the demos pass only a path) keep
+    the old placeholder by leaving this None.
     """
+    model_name = model_name or "model"
     if not json_file_path:
         return None
 
@@ -501,11 +523,10 @@ def parse_decoder_json(json_file_path, default_optimization=ModelOptimizations.p
             raise ValueError("Invalid JSON format: Missing 'decoders' key")
 
         num_decoders = max(int(decoder_id) for decoder_id in config_data["decoders"].keys()) + 1
-        placeholder_model_name = "model"
-        decoder_conf = default_optimization(placeholder_model_name)
+        decoder_conf = default_optimization(model_name)
         default_tensor_dtype_settings = decoder_conf.tensor_dtype_settings
         default_op_fidelity_settings = decoder_conf.op_fidelity_settings
-        decoders_precision = DecodersPrecision(num_decoders, placeholder_model_name, decoder_conf)
+        decoders_precision = DecodersPrecision(num_decoders, model_name, decoder_conf)
 
         for decoder_id, settings in config_data["decoders"].items():
             decoder_id = int(decoder_id)
@@ -5092,7 +5113,9 @@ class DecodersPrecision:
         decoder_config_path = model_params_dir / "model_params" / model_name / decoder_config_filename
         inst = None
         if decoder_config_path.exists():
-            inst = parse_decoder_json(decoder_config_path, default_optimization=optimization_level)
+            inst = parse_decoder_json(
+                decoder_config_path, default_optimization=optimization_level, model_name=model_name
+            )
             logger.info(
                 f"Model {model_name} requires specific TensorPrecision and OpFidelity configuration, using {decoder_config_path}"
             )
