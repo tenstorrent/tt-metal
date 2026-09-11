@@ -34,12 +34,6 @@ def _preprocess_collective_golden_inputs(function_args, function_kwargs):
         placement.dim if isinstance(placement, ttnn.PlacementShard) else None
         for placement in tensor_topology.placements()
     )
-    mesh_coords = tuple(tuple(int(value) for value in mesh_coord) for mesh_coord in tensor_topology.mesh_coords())
-    # get_device_tensors() returns shards in physical storage order, while the golden
-    # functions index shards by logical distribution position; reorder through the
-    # topology's logical-to-physical coordinate mapping.
-    input_tensors = ttnn.decorators.reorder_shards_to_logical_order(input_tensors, mesh_coords)
-
     function_args = list(function_args)
     function_kwargs = dict(function_kwargs)
     if function_args:
@@ -48,13 +42,12 @@ def _preprocess_collective_golden_inputs(function_args, function_kwargs):
         function_kwargs["input_tensor"] = input_tensors
     function_kwargs["_ttnn_golden_mesh_shape"] = mesh_shape
     function_kwargs["_ttnn_golden_mesh_shard_dims"] = mesh_shard_dims
-    function_kwargs["_ttnn_golden_mesh_coords"] = mesh_coords
     function_kwargs["_ttnn_global_golden_mesh_shards"] = True
     return tuple(function_args), function_kwargs
 
 
-def _logical_coordinate_to_index(coordinate, mesh_shape):
-    """Convert a logical distribution coordinate to its row-major logical index."""
+def _mesh_coordinate_to_index(coordinate, mesh_shape):
+    """Convert a row-major mesh coordinate to its flat device index."""
 
     coordinate_key = tuple(int(value) for value in coordinate)
     index = 0
@@ -63,84 +56,26 @@ def _logical_coordinate_to_index(coordinate, mesh_shape):
     return index
 
 
-def _physical_coordinate_to_logical_index(coordinate, mesh_shape, mesh_coords=None):
-    """Convert a physical device-mesh coordinate to its logical distribution index.
-
-    The topology's mesh coordinates map each logical distribution position to its physical
-    device coordinate, so the logical index of a physical coordinate is its position in
-    that mapping. Without topology coordinates the identity mapping is assumed.
-    """
-
-    coordinate_key = tuple(int(value) for value in coordinate)
-    if mesh_coords is not None:
-        normalized_mesh_coords = [tuple(int(value) for value in mesh_coord) for mesh_coord in mesh_coords]
-        if coordinate_key not in normalized_mesh_coords:
-            raise ValueError(f"Mesh coordinate {coordinate_key} is not present in the tensor topology")
-        return normalized_mesh_coords.index(coordinate_key)
-
-    return _logical_coordinate_to_index(coordinate_key, mesh_shape)
-
-
-def _normalize_mesh_coords(mesh_shape, mesh_coords):
-    """Return the topology coordinate associated with each per-device shard."""
+def _get_collective_groups(mesh_shape, cluster_axis):
+    """Return row-major device indices grouped along the collective axis."""
 
     import math
 
-    expected_count = math.prod(mesh_shape)
-    if mesh_coords is None:
-        return tuple(itertools.product(*(range(dimension) for dimension in mesh_shape)))
-
-    normalized_mesh_coords = tuple(tuple(int(value) for value in mesh_coord) for mesh_coord in mesh_coords)
-    if len(normalized_mesh_coords) != expected_count:
-        raise ValueError(
-            f"Tensor topology has {len(normalized_mesh_coords)} mesh coordinates for mesh volume {expected_count}"
-        )
-    if len(set(normalized_mesh_coords)) != len(normalized_mesh_coords):
-        raise ValueError("Tensor topology contains duplicate mesh coordinates")
-    return normalized_mesh_coords
-
-
-def _has_identity_topology(mesh_shape, mesh_coords):
-    """Return whether logical distribution positions map to identical physical coordinates."""
-
-    normalized_mesh_coords = _normalize_mesh_coords(mesh_shape, mesh_coords)
-    identity_positions = itertools.product(*(range(dimension) for dimension in mesh_shape))
-    return all(
-        tuple(position) == coordinate for position, coordinate in zip(identity_positions, normalized_mesh_coords)
-    )
-
-
-def _get_collective_groups(mesh_shape, cluster_axis, mesh_coords=None):
-    """Return logical distribution indices grouped along the collective axis.
-
-    ``cluster_axis`` is a physical device-mesh axis, so groups are formed from the
-    physical coordinates the topology assigns to each logical distribution position.
-    """
-
-    normalized_mesh_coords = _normalize_mesh_coords(mesh_shape, mesh_coords)
-
     if cluster_axis is None:
-        import math
-
         return [list(range(math.prod(mesh_shape)))]
-    physical_rank = len(normalized_mesh_coords[0])
     if cluster_axis < 0:
-        cluster_axis += physical_rank
-    if cluster_axis < 0 or cluster_axis >= physical_rank:
-        raise ValueError(f"Collective axis {cluster_axis} is invalid for physical mesh rank {physical_rank}")
+        cluster_axis += len(mesh_shape)
+    if cluster_axis < 0 or cluster_axis >= len(mesh_shape):
+        raise ValueError(f"Collective axis {cluster_axis} is invalid for mesh shape {mesh_shape}")
 
     groups = {}
-    for logical_index, physical_coordinate in enumerate(normalized_mesh_coords):
-        group_coordinate = physical_coordinate[:cluster_axis] + physical_coordinate[cluster_axis + 1 :]
-        groups.setdefault(group_coordinate, []).append(logical_index)
-    # Order members within each group by their physical coordinate along the collective axis.
-    return [
-        sorted(group, key=lambda logical_index: normalized_mesh_coords[logical_index][cluster_axis])
-        for group in groups.values()
-    ]
+    for coordinate in itertools.product(*(range(dimension) for dimension in mesh_shape)):
+        group_coordinate = coordinate[:cluster_axis] + coordinate[cluster_axis + 1 :]
+        groups.setdefault(group_coordinate, []).append(_mesh_coordinate_to_index(coordinate, mesh_shape))
+    return list(groups.values())
 
 
-def _compose_mesh_golden_outputs(per_device_outputs, mesh_shape, mesh_shard_dims, mesh_coords=None):
+def _compose_mesh_golden_outputs(per_device_outputs, mesh_shape, mesh_shard_dims):
     """Compose per-device Torch values according to mesh shard placements."""
 
     import math
@@ -150,10 +85,9 @@ def _compose_mesh_golden_outputs(per_device_outputs, mesh_shape, mesh_shard_dims
         raise ValueError("Collective golden output count does not match the mesh volume")
     if len(mesh_shard_dims) != len(mesh_shape):
         raise ValueError("Collective golden placement count does not match the mesh rank")
-    _normalize_mesh_coords(mesh_shape, mesh_coords)
 
     values = {
-        coordinate: per_device_outputs[_logical_coordinate_to_index(coordinate, mesh_shape)]
+        coordinate: per_device_outputs[_mesh_coordinate_to_index(coordinate, mesh_shape)]
         for coordinate in itertools.product(*(range(dimension) for dimension in mesh_shape))
     }
     for axis in range(len(mesh_shape) - 1, -1, -1):
@@ -192,11 +126,10 @@ def _golden_function_all_broadcast(
 ):
     _ttnn_golden_mesh_shape = kwargs.get("_ttnn_golden_mesh_shape")
     _ttnn_golden_mesh_shard_dims = kwargs.get("_ttnn_golden_mesh_shard_dims")
-    _ttnn_golden_mesh_coords = kwargs.get("_ttnn_golden_mesh_coords")
     if _ttnn_golden_mesh_shape is None or _ttnn_golden_mesh_shard_dims is None:
         return None
 
-    groups = _get_collective_groups(_ttnn_golden_mesh_shape, cluster_axis, _ttnn_golden_mesh_coords)
+    groups = _get_collective_groups(_ttnn_golden_mesh_shape, cluster_axis)
     group_size = len(groups[0])
     per_result_device_outputs = [[None] * len(input_tensor) for _ in range(group_size)]
     for group in groups:
@@ -207,12 +140,10 @@ def _golden_function_all_broadcast(
     output_shard_dims = list(_ttnn_golden_mesh_shard_dims)
     if cluster_axis is None:
         output_shard_dims = [None] * len(output_shard_dims)
-    elif _has_identity_topology(_ttnn_golden_mesh_shape, _ttnn_golden_mesh_coords):
-        # The collective replicates data along the physical axis; with an identity topology
-        # the distribution axes correspond to physical axes, so drop the axis placement.
+    else:
         output_shard_dims[cluster_axis] = None
     return [
-        _compose_mesh_golden_outputs(outputs, _ttnn_golden_mesh_shape, output_shard_dims, _ttnn_golden_mesh_coords)
+        _compose_mesh_golden_outputs(outputs, _ttnn_golden_mesh_shape, output_shard_dims)
         for outputs in per_result_device_outputs
     ]
 
@@ -235,20 +166,17 @@ def _golden_function_all_gather(
 
     _ttnn_golden_mesh_shape = kwargs.get("_ttnn_golden_mesh_shape")
     _ttnn_golden_mesh_shard_dims = kwargs.get("_ttnn_golden_mesh_shard_dims")
-    _ttnn_golden_mesh_coords = kwargs.get("_ttnn_golden_mesh_coords")
     if _ttnn_golden_mesh_shape is None or _ttnn_golden_mesh_shard_dims is None:
         return None
 
     per_device_outputs = [None] * len(input_tensor)
-    for group in _get_collective_groups(_ttnn_golden_mesh_shape, cluster_axis, _ttnn_golden_mesh_coords):
+    for group in _get_collective_groups(_ttnn_golden_mesh_shape, cluster_axis):
         gathered = torch.cat([input_tensor[index] for index in group], dim=dim)
         for index in group:
             per_device_outputs[index] = gathered
 
     output_shard_dims = _replace_matching_shards_with_replicas(_ttnn_golden_mesh_shard_dims, dim, input_tensor[0].ndim)
-    return _compose_mesh_golden_outputs(
-        per_device_outputs, _ttnn_golden_mesh_shape, output_shard_dims, _ttnn_golden_mesh_coords
-    )
+    return _compose_mesh_golden_outputs(per_device_outputs, _ttnn_golden_mesh_shape, output_shard_dims)
 
 
 ttnn.attach_golden_function(
@@ -268,12 +196,11 @@ def _golden_function_all_reduce(
 
     _ttnn_golden_mesh_shape = kwargs.get("_ttnn_golden_mesh_shape")
     _ttnn_golden_mesh_shard_dims = kwargs.get("_ttnn_golden_mesh_shard_dims")
-    _ttnn_golden_mesh_coords = kwargs.get("_ttnn_golden_mesh_coords")
     if _ttnn_golden_mesh_shape is None or _ttnn_golden_mesh_shard_dims is None:
         return None
 
     per_device_outputs = [None] * len(input_tensor)
-    for group in _get_collective_groups(_ttnn_golden_mesh_shape, cluster_axis, _ttnn_golden_mesh_coords):
+    for group in _get_collective_groups(_ttnn_golden_mesh_shape, cluster_axis):
         reduced = torch.stack([input_tensor[index] for index in group]).sum(dim=0)
         for index in group:
             per_device_outputs[index] = reduced
@@ -281,11 +208,9 @@ def _golden_function_all_reduce(
     output_shard_dims = list(_ttnn_golden_mesh_shard_dims)
     if cluster_axis is None:
         output_shard_dims = [None] * len(output_shard_dims)
-    elif _has_identity_topology(_ttnn_golden_mesh_shape, _ttnn_golden_mesh_coords):
+    else:
         output_shard_dims[cluster_axis] = None
-    return _compose_mesh_golden_outputs(
-        per_device_outputs, _ttnn_golden_mesh_shape, output_shard_dims, _ttnn_golden_mesh_coords
-    )
+    return _compose_mesh_golden_outputs(per_device_outputs, _ttnn_golden_mesh_shape, output_shard_dims)
 
 
 ttnn.attach_golden_function(
@@ -306,12 +231,11 @@ def _golden_function_reduce_scatter(
 
     _ttnn_golden_mesh_shape = kwargs.get("_ttnn_golden_mesh_shape")
     _ttnn_golden_mesh_shard_dims = kwargs.get("_ttnn_golden_mesh_shard_dims")
-    _ttnn_golden_mesh_coords = kwargs.get("_ttnn_golden_mesh_coords")
     if _ttnn_golden_mesh_shape is None or _ttnn_golden_mesh_shard_dims is None:
         return None
 
     per_device_outputs = [None] * len(input_tensor)
-    for group in _get_collective_groups(_ttnn_golden_mesh_shape, cluster_axis, _ttnn_golden_mesh_coords):
+    for group in _get_collective_groups(_ttnn_golden_mesh_shape, cluster_axis):
         reduced = torch.stack([input_tensor[index] for index in group]).sum(dim=0)
         for index, chunk in zip(group, torch.chunk(reduced, len(group), dim=dim)):
             per_device_outputs[index] = chunk
@@ -323,13 +247,9 @@ def _golden_function_reduce_scatter(
     if cluster_axis is None:
         for axis, dimension in enumerate(_ttnn_golden_mesh_shape):
             output_shard_dims[axis] = normalized_dim if dimension > 1 else None
-    elif _has_identity_topology(_ttnn_golden_mesh_shape, _ttnn_golden_mesh_coords):
-        # The scattered dim is distributed along the physical axis; with an identity
-        # topology the distribution axes correspond to physical axes, so shard that axis.
+    else:
         output_shard_dims[cluster_axis] = normalized_dim
-    return _compose_mesh_golden_outputs(
-        per_device_outputs, _ttnn_golden_mesh_shape, output_shard_dims, _ttnn_golden_mesh_coords
-    )
+    return _compose_mesh_golden_outputs(per_device_outputs, _ttnn_golden_mesh_shape, output_shard_dims)
 
 
 ttnn.attach_golden_function(
@@ -347,20 +267,14 @@ def _golden_function_point_to_point(
     **kwargs,
 ):
     _ttnn_golden_mesh_shape = kwargs.get("_ttnn_golden_mesh_shape")
-    _ttnn_golden_mesh_coords = kwargs.get("_ttnn_golden_mesh_coords")
     if _ttnn_golden_mesh_shape is None:
         return None
 
-    # Sender and receiver coordinates are physical device-mesh coordinates; translate
-    # them to logical distribution positions before indexing the logically ordered shards.
-    sender_index = _physical_coordinate_to_logical_index(
-        sender_coord, _ttnn_golden_mesh_shape, _ttnn_golden_mesh_coords
-    )
-    _physical_coordinate_to_logical_index(receiver_coord, _ttnn_golden_mesh_shape, _ttnn_golden_mesh_coords)
-    receiver_coord = tuple(int(value) for value in receiver_coord)
-    # A fresh point-to-point output initializes only the receiver shard.
+    sender_index = _mesh_coordinate_to_index(sender_coord, _ttnn_golden_mesh_shape)
+    receiver_index = _mesh_coordinate_to_index(receiver_coord, _ttnn_golden_mesh_shape)
     output = input_tensor[sender_index].clone()
-    output._ttnn_mesh_coord = receiver_coord
+    # Point-to-point initializes only the receiver shard of its fresh output tensor.
+    output._ttnn_mesh_index = receiver_index
     return output
 
 
@@ -464,34 +378,25 @@ ttnn.attach_golden_function(ttnn.all_to_all_combine, golden_function=_golden_fun
 
 def _preprocess_reduce_to_root_golden_inputs(function_args, function_kwargs):
     """Convert reduce-to-root state tensors into per-device Torch shards.
-    Preserves their shared mesh shape and coordinate ordering for golden execution.
+    Preserves their shared mesh shape for local and global golden execution.
     """
 
     function_args = list(function_args)
     function_kwargs = dict(function_kwargs)
     input_names = ("input_tensor_l", "input_tensor_s", "input_tensor_m")
     mesh_shape = None
-    mesh_coords = None
 
     for index, input_name in enumerate(input_names):
         input_tensor = function_args[index] if index < len(function_args) else function_kwargs[input_name]
         if mesh_shape is None:
-            tensor_topology = input_tensor.tensor_topology()
-            mesh_shape = tuple(int(dimension) for dimension in tensor_topology.distribution_shape())
-            mesh_coords = tuple(
-                tuple(int(value) for value in mesh_coord) for mesh_coord in tensor_topology.mesh_coords()
-            )
+            mesh_shape = tuple(input_tensor.device().shape)
         input_tensors = [ttnn.to_torch(tensor) for tensor in ttnn.get_device_tensors(input_tensor)]
-        # Normalize each state list from physical storage order to logical distribution
-        # order so the golden's positional reduction combines the intended devices.
-        input_tensors = ttnn.decorators.reorder_shards_to_logical_order(input_tensors, mesh_coords)
         if index < len(function_args):
             function_args[index] = input_tensors
         else:
             function_kwargs[input_name] = input_tensors
 
     function_kwargs["_ttnn_golden_mesh_shape"] = mesh_shape
-    function_kwargs["_ttnn_golden_mesh_coords"] = mesh_coords
     function_kwargs["_ttnn_global_golden_mesh_shards"] = True
     return tuple(function_args), function_kwargs
 
@@ -508,7 +413,6 @@ def _golden_function_reduce_to_root(
     import torch
 
     _ttnn_golden_mesh_shape = kwargs.get("_ttnn_golden_mesh_shape")
-    _ttnn_golden_mesh_coords = kwargs.get("_ttnn_golden_mesh_coords")
     if _ttnn_golden_mesh_shape is None:
         return None
     if len(input_tensor_l) != 4 or len(input_tensor_s) != 4 or len(input_tensor_m) != 4:
@@ -552,12 +456,9 @@ def _golden_function_reduce_to_root(
     output_l = tensor_l.reshape(input_tensor_l[0].shape)
     output_s = tensor_s.reshape(input_tensor_s[0].shape)
     output_m = tensor_m.reshape(input_tensor_m[0].shape)
-    # The root coordinate is a physical device-mesh coordinate; validate it against the
-    # topology and tag the outputs with the normalized physical coordinate.
-    _physical_coordinate_to_logical_index(root_coord, _ttnn_golden_mesh_shape, _ttnn_golden_mesh_coords)
-    root_coord = tuple(int(value) for value in root_coord)
+    root_index = _mesh_coordinate_to_index(root_coord, _ttnn_golden_mesh_shape)
     for output in (output_l, output_s, output_m):
-        output._ttnn_mesh_coord = root_coord
+        output._ttnn_mesh_index = root_index
     return output_l, output_s, output_m
 
 
@@ -639,19 +540,16 @@ ttnn.attach_golden_function(
 
 
 def _preprocess_moe_routing_remap_golden_inputs(function_args, function_kwargs):
-    """Convert replicated routing weights and retain their mesh shape."""
+    """Convert the replicated routing weights and retain their device mesh shape."""
 
     input_tensor = function_args[0] if function_args else function_kwargs["routing_weights_tensor"]
     golden_args, golden_kwargs = ttnn.decorators.default_preprocess_golden_function_inputs(
         function_args, function_kwargs
     )
-    tensor_topology = input_tensor.tensor_topology()
-    golden_kwargs["_ttnn_golden_mesh_shape"] = tuple(
-        int(dimension) for dimension in tensor_topology.distribution_shape()
-    )
-    golden_kwargs["_ttnn_golden_mesh_coords"] = tuple(
-        tuple(int(value) for value in mesh_coord) for mesh_coord in tensor_topology.mesh_coords()
-    )
+    # cluster_axis indexes the physical device mesh, so use the physical mesh shape (the
+    # tensor's distribution shape may differ, e.g. a default replicated topology is 1D
+    # even on a 2D device mesh).
+    golden_kwargs["_ttnn_golden_mesh_shape"] = tuple(input_tensor.device().shape)
     return golden_args, golden_kwargs
 
 
@@ -663,30 +561,28 @@ def _golden_function_moe_routing_remap(
     *args,
     **kwargs,
 ):
+    import math
+
     import torch
 
     _ttnn_golden_mesh_shape = kwargs.get("_ttnn_golden_mesh_shape")
-    _ttnn_golden_mesh_coords = kwargs.get("_ttnn_golden_mesh_coords")
     if _ttnn_golden_mesh_shape is None:
         return None
 
     non_zero_indices = torch.nonzero(routing_weights_tensor.flatten(), as_tuple=False).flatten()
     local_non_zero_size = non_zero_weight_size // expert_parallel_size
 
-    mesh_coords = _normalize_mesh_coords(_ttnn_golden_mesh_shape, _ttnn_golden_mesh_coords)
-    # cluster_axis is a physical device-mesh axis; validate it against the physical mesh
-    # rank and take each device's expert partition from its physical coordinate. The
-    # tensor's distribution shape may differ from the physical mesh shape (for example a
-    # default replicated topology is 1D even on a 2D device mesh).
-    physical_rank = len(mesh_coords[0])
     if cluster_axis < 0:
-        cluster_axis += physical_rank
-    if cluster_axis < 0 or cluster_axis >= physical_rank:
-        raise ValueError(f"Collective axis {cluster_axis} is invalid for physical mesh rank {physical_rank}")
+        cluster_axis += len(_ttnn_golden_mesh_shape)
+    if cluster_axis < 0 or cluster_axis >= len(_ttnn_golden_mesh_shape):
+        raise ValueError(f"Collective axis {cluster_axis} is invalid for mesh shape {_ttnn_golden_mesh_shape}")
+    member_stride = 1
+    for dimension in _ttnn_golden_mesh_shape[cluster_axis + 1 :]:
+        member_stride *= dimension
 
     per_device_outputs = []
-    for device_index in range(len(mesh_coords)):
-        member_index = mesh_coords[device_index][cluster_axis]
+    for device_index in range(math.prod(_ttnn_golden_mesh_shape)):
+        member_index = (device_index // member_stride) % _ttnn_golden_mesh_shape[cluster_axis]
         local_start = member_index * local_non_zero_size
         local_indices = non_zero_indices[local_start : local_start + local_non_zero_size]
         output = torch.zeros_like(routing_weights_tensor)

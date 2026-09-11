@@ -3,22 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-def golden_apply_fused_activations(tensor, activation=None, *, program_config=None):
-    """Apply the program-config fused activation or the explicitly requested activation."""
-
-    if program_config is not None:
-        program_config_activation = getattr(program_config, "fused_activation", None)
-        if program_config_activation:
-            activation = program_config_activation
-
-    if activation is None:
-        return tensor
-
-    from ttnn.operations.activations import get_golden_function_for_activation
-
-    return get_golden_function_for_activation(activation)(tensor)
-
-
 def golden_compute_gradients(output, inputs, grad_output):
     """Compute ordered gradients, preserving None for inputs unused by the output."""
 

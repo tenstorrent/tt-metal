@@ -377,7 +377,6 @@ def _golden_div_bw(
     a=_MISSING,
     b=_MISSING,
     *args,
-    value=None,
     rounding_mode=None,
     are_required_outputs=(True, True),
     **kwargs,
@@ -385,10 +384,9 @@ def _golden_div_bw(
     import torch
 
     grad, a, b = _resolve_binary_backward_inputs(grad, a, b, kwargs)
+    # The tensor-scalar overload passes rounding_mode positionally after the scalar.
     if args:
         rounding_mode = args[0]
-    if value is not None:
-        rounding_mode = value
     op_kwargs = None if torch.is_complex(a) else {"rounding_mode": rounding_mode}
     return _binary_backward_reference(
         torch.div,
