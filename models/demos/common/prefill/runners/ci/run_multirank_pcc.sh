@@ -53,7 +53,11 @@ case "${MODEL}" in
     # multi-galaxy perf gain is shown to match the single-galaxy one; set PREFILL_USE_TRACE=1 to
     # measure it. Note the runner asserts USE_TRACE requires KV_ONLY_LAST_LAYER=1 (its default): the
     # LM-head tail calls synchronize_device(), which TT_FATALs inside begin_trace_capture.
-    RUNNER_ENV="export PREFILL_LAYER_ACK_D2H=1; export PREFILL_USE_TRACE=${PREFILL_USE_TRACE:-0};"
+    # ALLOW_UNTESTED_TP_SHARD_TRACE must be exported INSIDE the runner command: ttrun's mpi-args
+    # forward only PATH and LD_LIBRARY_PATH, so an export in the caller's shell never reaches the
+    # ranks and the tp_shard+trace tripwire fires ~45 s in, after ttrun has already spun up.
+    RUNNER_ENV="export PREFILL_LAYER_ACK_D2H=1; export PREFILL_USE_TRACE=${PREFILL_USE_TRACE:-0}; \
+        export PREFILL_ALLOW_UNTESTED_TP_SHARD_TRACE=${PREFILL_ALLOW_UNTESTED_TP_SHARD_TRACE:-0};"
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
         export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k;"
     ;;
