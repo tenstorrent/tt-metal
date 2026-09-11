@@ -42,12 +42,18 @@ def test_mix_streams_op(device, reset_seeds, batch_size, seq_len, hc, d):
 
     reference = _torch_reference(post, comb, sublayer_out, streams)
 
-    def to_tt(x):
-        return ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    def to_tt(x, layout):
+        return ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=layout, device=device)
 
-    out_tt = ttnn.experimental.deepseek.mix_streams(to_tt(post), to_tt(comb), to_tt(sublayer_out), to_tt(streams))
+    out_tt = ttnn.experimental.deepseek.mix_streams(
+        to_tt(post, ttnn.TILE_LAYOUT),
+        to_tt(comb, ttnn.TILE_LAYOUT),
+        to_tt(sublayer_out, ttnn.ROW_MAJOR_LAYOUT),
+        to_tt(streams, ttnn.TILE_LAYOUT),
+    )
     got = ttnn.to_torch(out_tt).float()
 
+    assert out_tt.layout == ttnn.TILE_LAYOUT
     assert tuple(out_tt.shape) == tuple(reference.shape)
     passing, pcc_message = comp_pcc(reference, got, pcc=PCC_THRESHOLD)
     logger.info(f"[mix_streams] {comp_allclose(reference, got)}")
