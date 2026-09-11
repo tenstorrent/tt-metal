@@ -46,34 +46,31 @@
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     // Runtime arguments for 4D slice support with multi-core work distribution
-    uint32_t rt_args_idx = 0;
-    uint32_t dst_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t tensor_rank = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t output_w = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t output_h = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t output_d = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t output_n = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t element_size = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t num_rows_for_this_core = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t start_row_for_this_core = get_arg_val<uint32_t>(rt_args_idx++);
+    const auto tensor_rank = get_arg(args::tensor_rank);
+    const auto output_w = get_arg(args::output_w);
+    const auto output_h = get_arg(args::output_h);
+    const auto output_d = get_arg(args::output_d);
+    const auto output_n = get_arg(args::output_n);
+    const auto element_size = get_arg(args::element_size);
+    const auto num_rows_for_this_core = get_arg(args::num_rows_for_this_core);
+    const auto start_row_for_this_core = get_arg(args::start_row_for_this_core);
 
     // Compile-time arguments
-    constexpr uint32_t dfb_id_in = get_compile_time_arg_val(0);
-    constexpr uint32_t compile_time_element_size = get_compile_time_arg_val(1);
-    constexpr auto dst_args = TensorAccessorArgs<2>();
+    constexpr auto compile_time_element_size = get_arg(args::compile_time_element_size);
 
     // Calculate sizes - working with rows, not tiles
     uint32_t output_bytes_per_row = output_w * element_size;  // Dynamic element size
 
     // Set up TensorAccessor for output data - use row size as page size
-    const auto s0 = TensorAccessor(dst_args, dst_addr);
+    const auto s0 = TensorAccessor(tensor::dst);
 
     Noc noc;
     // Create DataflowBuffer for Device 2.0 API
-    DataflowBuffer dfb_in(dfb_id_in);
+    DataflowBuffer dfb_in(dfb::in);
 
     // Multi-core work distribution: this core writes rows starting from start_row_for_this_core
     // Write each row from circular buffer to output tensor at the correct logical position

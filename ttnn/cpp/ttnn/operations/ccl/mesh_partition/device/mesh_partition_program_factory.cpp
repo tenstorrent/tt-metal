@@ -13,6 +13,9 @@
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 namespace ttnn::operations::ccl {
 namespace detail {
@@ -29,6 +32,10 @@ uint32_t get_cluster_axis_index(
 namespace {
 
 using SliceOp = ttnn::prim::SliceDeviceOperation;
+
+// MeshPartition drives slice's program factories directly rather than going through TTNN's
+// dispatcher, so it builds and refreshes their programs itself. Every slice factory now speaks the
+// Metal 2.0 spec API, so both sites go through MakeProgramFromSpec / UpdateProgramRunArgs.
 
 // Helper function to compute slice parameters for a given mesh coordinate
 auto compute_slice_parameters(
@@ -128,8 +135,11 @@ MeshPartitionDeviceOperation::MeshPartition::create_at(
     Program program = std::visit(
         [&](auto&& factory) -> Program {
             using Factory = std::decay_t<decltype(factory)>;
-            auto descriptor = Factory::create_descriptor(slice_attrs, slice_tensor_args, tensor_return_value);
-            return Program{descriptor};
+            auto* mesh_device = slice_tensor_args.input.device();
+            auto artifacts = Factory::create_program_artifacts(slice_attrs, slice_tensor_args, tensor_return_value);
+            Program spec_program = tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device, artifacts.spec);
+            tt::tt_metal::experimental::SetProgramRunArgs(spec_program, artifacts.run_params);
+            return spec_program;
         },
         program_factory);
 
@@ -149,11 +159,18 @@ void MeshPartitionDeviceOperation::MeshPartition::override_runtime_arguments(
         auto [slice_attrs, slice_tensor_args] =
             compute_slice_parameters(operation_attributes, tensor_args, mesh_coordinate);
 
-        // Re-apply this coord's per-dispatch state to the cached Program, through the same patch the
-        // slice op uses -- addresses only. CB total_size/page_size are not re-applied on a hit, so any
-        // sizing that varies across calls must be in compute_program_hash().
-        ttnn::prim::patch_slice_program_addresses(
-            program, shared_variables.slice_program_factory, slice_attrs, slice_tensor_args, tensor_return_value);
+        // Re-apply this coord's per-dispatch state to the cached Program. Addresses only; DFB
+        // sizing is not re-applied on a hit, so any sizing that varies across calls must be in
+        // compute_program_hash().
+        std::visit(
+            [&](auto&& factory) {
+                using Factory = std::decay_t<decltype(factory)>;
+                tt::tt_metal::experimental::UpdateProgramRunArgs(
+                    program,
+                    Factory::override_runtime_arguments(
+                        slice_attrs, slice_tensor_args, tensor_return_value, mesh_coordinate));
+            },
+            shared_variables.slice_program_factory);
     }
 }
 

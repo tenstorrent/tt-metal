@@ -9,47 +9,60 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "api/debug/assert.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t unpadded_stick_size = get_arg_val<uint32_t>(1);
-    const uint32_t stick_size_offset = get_arg_val<uint32_t>(2);
-    const uint32_t num_dims = get_arg_val<uint32_t>(3);
-    const uint32_t misalignment = get_arg_val<uint32_t>(4);
-    const uint32_t start_id = get_arg_val<uint32_t>(5);
-    const uint32_t num_sticks_per_core = get_arg_val<uint32_t>(6);
-    const uint32_t num_sticks_per_core_read = get_arg_val<uint32_t>(7);
-    const uint32_t num_read_per_barrier = get_arg_val<uint32_t>(8);
+    const auto unpadded_stick_size = get_arg(args::unpadded_stick_size);
+    const auto stick_size_offset = get_arg(args::stick_size_offset);
+    const auto num_dims = get_arg(args::num_dims);
+    const auto misalignment = get_arg(args::misalignment);
+    const auto start_id = get_arg(args::start_id);
+    const auto num_sticks_per_core = get_arg(args::num_sticks_per_core);
+    const auto num_sticks_per_core_read = get_arg(args::num_sticks_per_core_read);
+    const auto num_read_per_barrier = get_arg(args::num_read_per_barrier);
     // Sub-row chunking: `num_chunks_per_stick` NOC transfers of `chunk_size` per stick (last = `last_chunk_size`).
-    const uint32_t chunk_size = get_arg_val<uint32_t>(9);
-    const uint32_t num_chunks_per_stick = get_arg_val<uint32_t>(10);
-    const uint32_t last_chunk_size = get_arg_val<uint32_t>(11);
+    const auto chunk_size = get_arg(args::chunk_size);
+    const auto num_chunks_per_stick = get_arg(args::num_chunks_per_stick);
+    const auto last_chunk_size = get_arg(args::last_chunk_size);
     // Byte offset of the slice's W-begin within a row, rounded down to the source buffer's alignment;
     // the leftover `misalignment` bytes are trimmed on-device by the tt_memmove below.
-    const uint32_t src_offset_bytes = get_arg_val<uint32_t>(12);
+    const auto src_offset_bytes = get_arg(args::src_offset_bytes);
 
-    tt_l1_ptr uint32_t* num_unpadded_sticks = (tt_l1_ptr uint32_t*)(get_arg_addr(13));
-    volatile tt_l1_ptr uint32_t* num_padded_sticks = num_unpadded_sticks + num_dims;
-    volatile tt_l1_ptr uint32_t* id_per_dim = num_padded_sticks + num_dims;
+    // Three num_dims-long runtime vararg blocks, in host push order:
+    //   [0, num_dims)            num_unpadded_sticks per dim
+    //   [num_dims, 2*num_dims)   num_padded_sticks per dim
+    //   [2*num_dims, 3*num_dims) the per-dim walk counters
+    const uint32_t num_unpadded_sticks_base = 0;
+    const uint32_t num_padded_sticks_base = num_dims;
+    const uint32_t id_per_dim_base = num_dims * 2;
 
-    constexpr auto src_args = TensorAccessorArgs<0>();
+    // The walk counters are seeded by the host and advanced as this kernel walks the input, so they
+    // are copied into a local: get_vararg() reads a vararg but cannot write one back. num_dims is a
+    // runtime value here, so the local is sized by the accessor's own rank ceiling.
+    ASSERT(num_dims <= tensor_accessor::MAX_RANK);
+    uint32_t id_per_dim[tensor_accessor::MAX_RANK];
+    for (uint32_t j = 0; j < num_dims; ++j) {
+        id_per_dim[j] = get_vararg(id_per_dim_base + j);
+    }
+
     uint32_t read_size = unpadded_stick_size + misalignment;
 
     // The accessor base stays the unshifted buffer base: Metal 2.0 supplies it from the tensor binding
     // and offers no seam for a pre-offset base. The W-begin shift rides each read as `src_offset_bytes`.
-    const auto s0 = TensorAccessor(src_args, src_addr);
-
-    constexpr uint32_t dfb_id_in0 = 0;
+    // The per-page stride is the buffer's aligned page size, which the binding supplies; the host
+    // pins that it equals the per-shard page size this kernel needs (check_accessor_page_size).
+    const auto s0 = TensorAccessor(tensor::src);
 
     Noc noc;
     // Create DataflowBuffer for Device 2.0 API
-    DataflowBuffer dfb_in0(dfb_id_in0);
+    DataflowBuffer dfb_in0(dfb::in0);
 
     uint32_t src_stick_id = start_id;
     uint32_t sticks_read = 0;
 
     if (num_chunks_per_stick > 1) {
-        // Chunked path: batch by `num_read_per_barrier` so the second CB pair pipelines behind the first.
+        // Chunked path: batch by `num_read_per_barrier` so the second DFB pair pipelines behind the first.
         for (uint32_t iter = 0; iter < num_sticks_per_core_read && sticks_read < num_sticks_per_core; ++iter) {
             uint32_t c = 0;
             while (c < num_chunks_per_stick) {
@@ -75,9 +88,9 @@ void kernel_main() {
             src_stick_id++;
             for (uint32_t j = 0; j < num_dims; j++) {
                 id_per_dim[j]++;
-                if (id_per_dim[j] == num_unpadded_sticks[j]) {
+                if (id_per_dim[j] == get_vararg(num_unpadded_sticks_base + j)) {
                     id_per_dim[j] = 0;
-                    src_stick_id += num_padded_sticks[j];
+                    src_stick_id += get_vararg(num_padded_sticks_base + j);
                 } else {
                     break;
                 }
@@ -105,9 +118,9 @@ void kernel_main() {
             src_stick_id++;
             for (uint32_t j = 0; j < num_dims; j++) {
                 id_per_dim[j]++;
-                if (id_per_dim[j] == num_unpadded_sticks[j]) {
+                if (id_per_dim[j] == get_vararg(num_unpadded_sticks_base + j)) {
                     id_per_dim[j] = 0;
-                    src_stick_id += num_padded_sticks[j];
+                    src_stick_id += get_vararg(num_padded_sticks_base + j);
                 } else {
                     break;
                 }
