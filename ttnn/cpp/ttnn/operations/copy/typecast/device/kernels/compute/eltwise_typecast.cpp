@@ -8,7 +8,8 @@
 #include "api/compute/eltwise_unary/typecast.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
-#include "api/debug/dprint.h"  // [TC-DBG #51270] remove after typecast multi-tile isolation
+#include "api/debug/dprint.h"         // [TC-DBG #51270] remove after typecast multi-tile isolation
+#include "api/debug/dprint_tensix.h"  // [TC-DBG #51270] DEST-register dump (dprint_tensix_dest_reg_row_float32)
 
 void kernel_main() {
     constexpr uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
@@ -52,8 +53,19 @@ void kernel_main() {
 
             copy_tile(dfb::in, 0, 0);
 
+            // [TC-DBG #51270] STEP 1 — DEST row 0 right after copy_tile (before the SFPU). Shows whether
+            // the unpacker actually loaded this block's input into the active DEST bank. If block 1 is
+            // zero here, the copy/unpack (not the SFPU) is the failure.
+            MATH((DPRINT("TC_DST_COPY blk={}\n", block_index)));
+            MATH((dprint_tensix_dest_reg_row_float32(0)));
+
             TYPECAST_LLK_INIT();
             TYPECAST_LLK(0);
+
+            // [TC-DBG #51270] STEP 2 — DEST row 0 right after the typecast SFPU. If block 1 was non-zero
+            // after copy (STEP 1) but zero here, the SFPU typecast is zeroing the second tile.
+            MATH((DPRINT("TC_DST_TC blk={}\n", block_index)));
+            MATH((dprint_tensix_dest_reg_row_float32(0)));
 
             tile_regs_commit();
 
