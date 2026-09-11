@@ -24,9 +24,10 @@ void bind_mix_streams(nb::module_& mod) {
             new_streams = (placement + mixed).reshape([B, S, hc, D])
 
         where ``T == B*S``. Both terms are single-tile matmuls accumulated into the same
-        destination register, so the step costs one dispatch instead of four. It runs at
+        destination register, so the step costs one dispatch instead of four. The fused
+        kernel takes ROW_MAJOR bfloat16 inputs and returns ROW_MAJOR output. It runs at
         HiFi4 with fp32 destination accumulation (matching the ``_HIFI4`` config used by
-        the eager Python path). Shapes the kernel does not cover (hc > 32, D not
+        the eager Python path). Shapes the kernel does not cover (TILE layout, hc > 32, D not
         tile-aligned, non-bfloat16 inputs) fall back to the equivalent op sequence.
 
         Args:
@@ -43,7 +44,7 @@ void bind_mix_streams(nb::module_& mod) {
                 settings. Defaults to HiFi4 / fp32 dest acc / packer-l1-acc (``_HIFI4``).
 
         Returns:
-            ttnn.Tensor: new residual-stream stack, [B, S, hc, D].
+            ttnn.Tensor: new residual-stream stack, [B, S, hc, D] (ROW_MAJOR on the fused path).
         )doc",
         &ttnn::experimental::deepseek::mix_streams::mix_streams,
         nb::arg("post"),
