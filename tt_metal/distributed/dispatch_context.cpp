@@ -185,7 +185,7 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
 
 void DispatchContext::set_configure_only(distributed::MeshDevice* mesh_device, bool enable) {
     TT_FATAL(
-        !MetalContext::instance().rtoptions().get_fast_dispatch(),
+        !MetalContext::instance(extract_context_id(mesh_device)).rtoptions().get_fast_dispatch(),
         "{} can only be called when Fast Dispatch is disabled.",
         __func__);
     auto& sd_mesh_cq = dynamic_cast<distributed::SDMeshCommandQueue&>(mesh_device->mesh_command_queue());

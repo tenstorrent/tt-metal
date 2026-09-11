@@ -38,6 +38,7 @@
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/maybe_remote.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
+#include <tt_stl/assert.hpp>
 #include <ttnn/api/ttnn/types.hpp>
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/distributed/api.hpp"
@@ -47,6 +48,24 @@
 
 #include "ttnn/tensor/types.hpp"
 #include "ttnn-nanobind/pipeline_module_nanobind.hpp"
+
+namespace {
+
+// The device a mesh coordinate names, or the mesh's first device when none is given.
+// MeshDevice::get_device returns nullptr for a coordinate outside the mesh, and the raw L1
+// accessors would dereference it, so that is refused here with the coordinate in the message.
+tt::tt_metal::IDevice* device_at(
+    tt::tt_metal::distributed::MeshDevice* mesh,
+    const std::optional<tt::tt_metal::distributed::MeshCoordinate>& coord) {
+    if (!coord.has_value()) {
+        return mesh->get_devices().at(0);
+    }
+    tt::tt_metal::IDevice* device = mesh->get_device(*coord);
+    TT_FATAL(device != nullptr, "MeshCoordinate {} is outside the mesh of shape {}", *coord, mesh->shape());
+    return device;
+}
+
+}  // namespace
 
 // note from nanobind docs:
 // We strongly recommend that you replace all use of std::unique_ptr<T> by
@@ -550,12 +569,7 @@ void py_module(nb::module_& mod) {
                uint32_t size,
                const std::optional<MeshCoordinate>& coord) {
                 std::vector<uint32_t> data;
-                tt::tt_metal::detail::ReadFromDeviceL1(
-                    coord.has_value() ? device->get_device(*coord) : device->get_devices().at(0),
-                    logical_core,
-                    address,
-                    size,
-                    data);
+                tt::tt_metal::detail::ReadFromDeviceL1(device_at(device, coord), logical_core, address, size, data);
                 return data;
             },
             nb::arg("logical_core"),
@@ -585,11 +599,7 @@ void py_module(nb::module_& mod) {
                uint32_t address,
                std::vector<uint32_t> words,
                const std::optional<MeshCoordinate>& coord) {
-                tt::tt_metal::detail::WriteToDeviceL1(
-                    coord.has_value() ? device->get_device(*coord) : device->get_devices().at(0),
-                    logical_core,
-                    address,
-                    words);
+                tt::tt_metal::detail::WriteToDeviceL1(device_at(device, coord), logical_core, address, words);
             },
             nb::arg("logical_core"),
             nb::arg("address"),
@@ -612,8 +622,7 @@ void py_module(nb::module_& mod) {
         .def(
             "read_kernel_config",
             [](MeshDevice* device, const CoreCoord& logical_core, const std::optional<MeshCoordinate>& coord) {
-                auto cfg = tt::tt_metal::detail::ReadKernelConfig(
-                    coord.has_value() ? device->get_device(*coord) : device->get_devices().at(0), logical_core);
+                auto cfg = tt::tt_metal::detail::ReadKernelConfig(device_at(device, coord), logical_core);
                 std::map<std::string, std::vector<uint32_t>> out;
                 out["kernel_config_base"] = cfg.kernel_config_base;
                 out["kernel_text_offset"] = cfg.kernel_text_offset;
