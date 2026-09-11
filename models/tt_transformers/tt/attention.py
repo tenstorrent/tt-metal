@@ -656,7 +656,14 @@ class Attention(LightweightModule):
         )
 
         q_heads_1BQD, k_heads_1BKD = ttnn.experimental.rotary_embedding_llama_fused_qk(
-            q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"]
+            q_heads_pre_rot_1BQD,
+            k_heads_pre_rot_1BKD,
+            rot_mats[0],
+            rot_mats[1],
+            self.transformation_mats["decode"],
+            # Same missing-argument case as the prefill rope: no config was passed, so
+            # this ran at ttnn's HiFi4 default on bf16 operands.
+            compute_kernel_config=self.compute_kernel_config_hifi2,
         )
         return q_heads_1BQD, k_heads_1BKD
 

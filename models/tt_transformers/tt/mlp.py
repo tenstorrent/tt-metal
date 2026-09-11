@@ -302,12 +302,18 @@ class MLP(LightweightModule):
                     ),
                 )
 
+        # The gated multiply carries an SFPU activation (SiLU, i.e. an exp), and in
+        # decode it costs 12.4 us/layer against 0.48 us for the residual add on a
+        # tensor only 3.5x smaller -- the activation, not the multiply, is the cost.
+        # ttnn.mul exposes no compute-kernel config, but it does expose the SFPU's
+        # approximate mode, which is what that exp is evaluated with.
         w2_in = ttnn.mul(
             w1_out,
             w3_out,
             input_tensor_a_activations=[self.activation_type],
             dtype=activation_dtype or ttnn.bfloat8_b,
             memory_config=w1_out.memory_config(),
+            fast_and_approximate_mode=True,
         )
 
         if mode == Mode.DECODE and not TG and self.prefetcher is None:
