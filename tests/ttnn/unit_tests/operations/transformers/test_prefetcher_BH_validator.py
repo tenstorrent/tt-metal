@@ -213,6 +213,25 @@ def test_validator_dram_sender(device, K, N, dtype, recv_per_bank, num_layers):
         )
 
 
+def test_validator_dram_sender_restart(device):
+    """Start/stop twice so the DRISC shutdown semaphore and MPFE defaults are re-established."""
+    K, N, dtype, recv_per_bank, num_layers = 448, 1792, ttnn.bfloat16, 1, 1
+    tt_weight, _, gcb, _, _, ring_size = _setup_weight_and_gcb_dram_sender(
+        device, K, N, dtype, recv_per_bank, num_layers
+    )
+
+    for _ in range(2):
+        with tensor_prefetcher_session(device):
+            ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)], global_cb=gcb)
+            ttnn.experimental.test_dram_prefetcher_validator(
+                device,
+                tt_weight,
+                num_layers=num_layers,
+                print_stride=max(1, ring_size // 4),
+                global_cb=gcb,
+            )
+
+
 @pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(448, 1792, ttnn.bfloat16, 1)])
 def test_validator_dram_sender_multi_gcb_switching(device, K, N, dtype, recv_per_bank):
     """Two DRAM-sender GCBs share one prefetcher; interleave Queue(A) → Queue(B) → Queue(A)

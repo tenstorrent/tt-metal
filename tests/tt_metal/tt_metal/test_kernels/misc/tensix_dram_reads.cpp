@@ -19,9 +19,16 @@ void kernel_main() {
     AllocatorBank<AllocatorBankType::DRAM> bank;
     CoreLocalMem<uint32_t> dst(dst_l1_addr);
 
+#ifdef WRITE_TIMING
+    const uint64_t start = get_timestamp();
+#endif
     for (uint32_t i = 0; i < iters; i++) {
         noc.async_read(bank, dst, total_bytes, {.bank_id = src_dram_bank_id, .addr = src_dram_addr}, {});
         src_dram_addr += total_bytes;
         noc.async_read_barrier();
     }
+#ifdef WRITE_TIMING
+    CoreLocalMem<uint64_t> timing(dst_l1_addr);
+    timing[total_bytes / sizeof(uint64_t)] = get_timestamp() - start;
+#endif
 }
