@@ -1739,16 +1739,13 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         y = self.o_a_proj(attn)
         y = ttnn.experimental.view(y, [1, 1, y.shape[-2], groups * self.o_lora_rank])
         output = self.o_b_proj(y)
-        output = ttnn.to_memory_config(output, ttnn.L1_MEMORY_CONFIG)
-        output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
         if self.tp_size > 1:
             if self.row_parallel_o_b:
-                gathered = ttnn.all_reduce(
+                gathered = ttnn.experimental.deepseek.width_sharded_all_reduce(
                     output,
                     cluster_axis=_tp_cluster_axis(self.device),
-                    num_links=1,
+                    num_links=2,
                     topology=ttnn.Topology.Linear,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
             else:
                 gathered = ttnn.all_gather(
