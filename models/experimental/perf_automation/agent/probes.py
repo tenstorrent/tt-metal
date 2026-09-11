@@ -2149,6 +2149,98 @@ def available_memory_gb():
     return None
 
 
+def memory_cap_preexec_fn(margin_gb: float = None):
+    """A `preexec_fn` that caps the CHILD's own address space to what is available right now, minus
+    a safety margin -- so a single subprocess's own growth can kill only itself, not the machine.
+
+    THE GAP THE HEADROOM WAIT DOES NOT CLOSE. wait_for_memory_headroom_before_device_work refuses to
+    START a subprocess on a box already low; it says nothing once that subprocess is running, and on
+    2026-09-11 a full-depth PCC build passed a healthy headroom check, launched, and then grew past
+    120 GB on its own inside a box with plenty of free memory at launch time -- the kernel OOM-killed
+    it anyway, and everything else running got no warning either. A pre-launch check cannot predict
+    a model- and call-specific growth curve; a hard ceiling on the process itself does not need to.
+
+    RLIMIT_AS, not a monitoring loop: the kernel refuses the allocation THAT CROSSES the line, inside
+    the one process that asked for it, as an ordinary MemoryError/bad_alloc -- the same shape of
+    failure every caller here already treats as a crashed measurement (see _verdict_from_output,
+    _useful_tail). No other process on the box is ever touched. Sized off available memory taken at
+    the moment of launch (not the model, not the call) -- the same number the headroom wait already
+    reads -- so it needs no per-model estimate and adapts to however loaded the box already is.
+
+    Returns None (no cap applied) if available memory cannot be read or capping is disabled via
+    PERF_MCP_DISABLE_MEM_CAP=1 -- a cap that cannot be sized must not be guessed at.
+    """
+    if os.environ.get("PERF_MCP_DISABLE_MEM_CAP") == "1":
+        return None
+    avail = available_memory_gb()
+    if avail is None:
+        return None
+    margin = margin_gb if margin_gb is not None else float(os.environ.get("PERF_MCP_MEM_CAP_MARGIN_GB", "10"))
+    cap_bytes = int(max(avail - margin, 1.0) * (1024.0**3))
+
+    def _set_rlimit():
+        try:
+            import resource
+
+            resource.setrlimit(resource.RLIMIT_AS, (cap_bytes, cap_bytes))
+        except Exception:  # noqa: BLE001 -- a cap that cannot be set must not stop the work
+            pass
+
+    return _set_rlimit
+
+
+# THE STANDARD SIGNAL a model is expected to respect when its reference/golden build must shrink its
+# own memory footprint -- the same shape as TT_PERF_LAYERS for depth: a name every model honours, not
+# a per-model branch this tool grows. Set to "1" by run_with_low_memory_fallback on the retry after a
+# capped attempt failed for exactly that reason; unset (or any other value) means build normally.
+LOW_MEM_REFERENCE_ENV = "PERF_MCP_LOW_MEM_REFERENCE"
+
+_MEMORY_FAILURE_RE = __import__("re").compile(
+    r"MemoryError|std::bad_alloc|bad_alloc|Cannot allocate memory|malloc failed|out of memory",
+    __import__("re").IGNORECASE,
+)
+
+
+def is_memory_cap_failure(output: str) -> bool:
+    """Did this subprocess fail because it hit the RLIMIT_AS cap (or ran out of memory generally),
+    as opposed to any other crash? Read from the SAME output every caller here already captures --
+    no new channel, just a check on text that already exists."""
+    return bool(output) and bool(_MEMORY_FAILURE_RE.search(output))
+
+
+def run_with_low_memory_fallback(run_once, env: dict):
+    """Run `run_once()` once; if it failed and the failure looks like a memory-cap hit, run it again
+    with LOW_MEM_REFERENCE_ENV=1 in `env` (mutated in place, so the retry actually sees it) and
+    return that second attempt instead.
+
+    THE GAP THIS CLOSES. A hard cap turns an uncontrolled whole-machine OOM into one subprocess
+    failing on its own -- strictly safer, but a clean failure is still a failure, and a baseline that
+    never lands is no better to the run than a crashed one. The cap tells you WHY it failed; this is
+    what does something about it. It does not know HOW a model would shrink its footprint (that is
+    model-specific, same as depth), so it sets one generic signal and asks the model to honour it --
+    the same contract TT_PERF_LAYERS already is for depth.
+
+    `run_once` must return an object with `.returncode` and combined output visible via `str(result)`
+    containing stdout/stderr, matching subprocess.CompletedProcess -- callers pass a closure over
+    their own subprocess.run(...) so this stays agnostic to each call site's exact argument shape.
+    ONE retry only: a second memory-cap failure means the model does not honour the signal (or the
+    box genuinely cannot fit it even at low memory), and retrying forever helps nobody.
+    """
+    result = run_once()
+    out = (getattr(result, "stdout", "") or "") + (getattr(result, "stderr", "") or "")
+    failed = getattr(result, "returncode", 0) not in (0, None)
+    if not failed or not is_memory_cap_failure(out):
+        return result
+    print(
+        "  [memory-gate] subprocess hit the memory cap -- retrying once with %s=1 (ask the model to "
+        "build its reference at lower precision)" % LOW_MEM_REFERENCE_ENV,
+        file=sys.stderr,
+        flush=True,
+    )
+    env[LOW_MEM_REFERENCE_ENV] = "1"
+    return run_once()
+
+
 def wait_for_memory_headroom_before_device_work(label: str = "") -> None:
     """Refuse to add a heavy subprocess on top of a box already nearly out of memory.
 

@@ -162,14 +162,18 @@ def run_pcc(ctx) -> dict:
     apply_scope(env, ctx.manifest.get("config", {}))
     probes.wait_for_memory_headroom_before_device_work("check_pcc (full-depth)")
     try:
-        r = subprocess.run(
-            # -p depth_guard: correctness must run at FULL depth; see agent/depth_guard_plugin.py
-            [sys.executable, "-m", "pytest", "-p", _DEPTH_GUARD, "-o", "addopts=", "-o", "timeout=0", test, "-sv"],
-            cwd=str(gitio.repo_root(ctx.model_root())),
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=probes.adaptive_backstop(3600),
+        r = probes.run_with_low_memory_fallback(
+            lambda: subprocess.run(
+                # -p depth_guard: correctness must run at FULL depth; see agent/depth_guard_plugin.py
+                [sys.executable, "-m", "pytest", "-p", _DEPTH_GUARD, "-o", "addopts=", "-o", "timeout=0", test, "-sv"],
+                cwd=str(gitio.repo_root(ctx.model_root())),
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=probes.adaptive_backstop(3600),
+                preexec_fn=probes.memory_cap_preexec_fn(),
+            ),
+            env,
         )
     except Exception as exc:  # timeout, OS error, etc.
         return {"status": "crash", "error": str(exc)}

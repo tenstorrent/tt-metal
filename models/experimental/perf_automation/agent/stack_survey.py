@@ -128,17 +128,25 @@ def survey_model(repo_root, model_root, env=None, timeout_s: int = 1800, python_
     run_env = dict(os.environ)
     run_env.update(env or {})
     run_env.pop("TT_PERF_LAYERS", None)  # walk at FULL depth: a capped build hides short stacks
-    from .probes import wait_for_memory_headroom_before_device_work
+    from .probes import (
+        memory_cap_preexec_fn,
+        run_with_low_memory_fallback,
+        wait_for_memory_headroom_before_device_work,
+    )
 
     wait_for_memory_headroom_before_device_work("stack survey (full-depth build)")
     try:
-        proc = subprocess.run(
-            [str(python_bin), str(probe), str(model_root), str(repo_root)],
-            cwd=str(repo_root),
-            env=run_env,
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
+        proc = run_with_low_memory_fallback(
+            lambda: subprocess.run(
+                [str(python_bin), str(probe), str(model_root), str(repo_root)],
+                cwd=str(repo_root),
+                env=run_env,
+                capture_output=True,
+                text=True,
+                timeout=timeout_s,
+                preexec_fn=memory_cap_preexec_fn(),
+            ),
+            run_env,
         )
     except Exception as exc:  # noqa: BLE001
         _why("stack probe did not run: %s" % str(exc)[:160])
@@ -191,11 +199,26 @@ def survey(repo_root, node, env=None, timeout_s: int = 3600, python_bin=None) ->
     # is not a stack -- so a capped build reports structure the model does not have.
     run_env.pop("TT_PERF_LAYERS", None)
     run_env["TT_PERF_OSL_TOKENS"] = "1"
-    from .probes import wait_for_memory_headroom_before_device_work
+    from .probes import (
+        memory_cap_preexec_fn,
+        run_with_low_memory_fallback,
+        wait_for_memory_headroom_before_device_work,
+    )
 
     wait_for_memory_headroom_before_device_work("stack survey (full-depth build)")
     try:
-        proc = subprocess.run(cmd, cwd=str(repo_root), env=run_env, capture_output=True, text=True, timeout=timeout_s)
+        proc = run_with_low_memory_fallback(
+            lambda: subprocess.run(
+                cmd,
+                cwd=str(repo_root),
+                env=run_env,
+                capture_output=True,
+                text=True,
+                timeout=timeout_s,
+                preexec_fn=memory_cap_preexec_fn(),
+            ),
+            run_env,
+        )
     except Exception as exc:  # noqa: BLE001 -- an unwalkable model degrades to today's blind generation
         _why("probe did not run: %s" % str(exc)[:160])
         return []

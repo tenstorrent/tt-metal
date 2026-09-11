@@ -841,7 +841,13 @@ def build_pipeline(device, model=None, layers=None, prefill_layers=None, decode_
     os.environ.setdefault("TT_HW_PLANNER_SHARD_RUN", "1")
 
     if model is None:
-        model = _hf_ref.load_reference(layers if layers is not None else None, dtype=torch.float32)
+        # PERF_MCP_LOW_MEM_REFERENCE: the tool's standard signal to shrink a reference build's own
+        # memory footprint (same shape as TT_PERF_LAYERS for depth), set on the retry after a
+        # full-fp32 load hit the tool's memory cap. bf16 halves the load and needs no fp32<-bf16
+        # conversion afterward, which is what made the fp32 build's OWN peak (loading bf16, then
+        # converting the whole model in place) worse than its steady-state size alone suggested.
+        _ref_dtype = torch.bfloat16 if os.environ.get("PERF_MCP_LOW_MEM_REFERENCE") == "1" else torch.float32
+        model = _hf_ref.load_reference(layers if layers is not None else None, dtype=_ref_dtype)
 
     return NemotronHPipeline(
         device,

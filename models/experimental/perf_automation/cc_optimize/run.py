@@ -3663,6 +3663,8 @@ def _run_device_proc(
       ROUND   agent round                                       -> PERF_MCP_ROUND_STALL_SEC   (600s)"""
     _wait_for_thermal_headroom_before_device_work(label)
     _wait_for_memory_headroom_before_device_work(label)
+    from agent.probes import memory_cap_preexec_fn
+
     _obs_t0 = time.monotonic()
     _therm = _thermal_watch_new()
     _piped = bool(capture or stall_s)
@@ -3674,6 +3676,7 @@ def _run_device_proc(
         stderr=subprocess.STDOUT if _piped else None,
         text=True if _piped else None,
         start_new_session=True,
+        preexec_fn=memory_cap_preexec_fn(),
     )
     rc, out = None, ""
     try:
