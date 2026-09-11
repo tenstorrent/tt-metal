@@ -533,3 +533,13 @@ unit_tests_dispatch:
     back2back: true
     env:
       TT_METAL_DISABLE_FDS: 1
+
+  - filter: "*WorkerGoTransportRemappedSingleSubDevice*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*WorkerGoTransportRemappedSingleSubDevice*"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_DISABLE_FDS: 1
