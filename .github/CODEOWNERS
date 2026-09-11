@@ -676,3 +676,5 @@ tech_reports/real_time_profiler/ @mo-tenstorrent @yusufbashiTT
 tt_metal/tt-llk/tests/python_tests/helpers/perf* @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
 tt_metal/tt-llk/tests/python_tests/**/perf_*.py @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
 tt_metal/tt-llk/tests/python_tests/**/test_perf_*.py @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
+
+/models/experimental/nomic_embed_text_v2_moe/ @avelickovTT @kgrujcic-tt @mbezuljTT
