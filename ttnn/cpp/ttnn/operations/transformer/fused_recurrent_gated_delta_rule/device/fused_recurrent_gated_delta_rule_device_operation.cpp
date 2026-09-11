@@ -81,17 +81,59 @@ void FusedRecurrentGatedDeltaRuleDeviceOperation::validate_on_program_cache_miss
     check(in.v, "v", {BHT, 1u, V});
     check(in.decay, "decay", {BHT, 1u, 1u});
     check(in.beta, "beta", {BHT, 1u, 1u});
+    // Ring mode: initial_state is the [BH*T,K,V] per-token ring AND the (in-place) state output;
+    // each core selects its initial-state block from it by index. Non-ring keeps [BH,K,V].
+    const bool ring = in.initial_state_block_idx.has_value();
     if (in.initial_state.has_value()) {
-        check(*in.initial_state, "initial_state", {attrs.BH, K, V});
+        check(
+            *in.initial_state,
+            "initial_state",
+            ring ? std::initializer_list<uint32_t>{BHT, K, V} : std::initializer_list<uint32_t>{attrs.BH, K, V});
+    }
+    if (ring) {
+        TT_FATAL(
+            attrs.output_per_token_state,
+            "fused_recurrent_gated_delta_rule: initial_state_block_idx requires output_per_token_state");
+        TT_FATAL(
+            in.initial_state.has_value(),
+            "fused_recurrent_gated_delta_rule: initial_state_block_idx requires initial_state (the ring)");
+        const Tensor& idx = *in.initial_state_block_idx;
+        TT_FATAL(
+            idx.storage_type() == StorageType::DEVICE && idx.buffer() != nullptr,
+            "fused_recurrent_gated_delta_rule: initial_state_block_idx must be allocated on device");
+        TT_FATAL(
+            idx.device() == device,
+            "fused_recurrent_gated_delta_rule: initial_state_block_idx must be on the same device as q");
+        TT_FATAL(!idx.is_sharded(), "fused_recurrent_gated_delta_rule: initial_state_block_idx must be interleaved");
+        TT_FATAL(
+            idx.layout() == Layout::ROW_MAJOR,
+            "fused_recurrent_gated_delta_rule: initial_state_block_idx must be ROW_MAJOR");
+        TT_FATAL(
+            idx.dtype() == DataType::UINT32 || idx.dtype() == DataType::INT32,
+            "fused_recurrent_gated_delta_rule: initial_state_block_idx must be uint32 or int32, got {}",
+            idx.dtype());
+        const auto& ishape = idx.logical_shape();
+        const bool shape_ok = (ishape.rank() == 1 && static_cast<uint32_t>(ishape[0]) == attrs.BH) ||
+                              (ishape.rank() == 2 && ishape[0] == 1 && static_cast<uint32_t>(ishape[1]) == attrs.BH);
+        TT_FATAL(
+            shape_ok,
+            "fused_recurrent_gated_delta_rule: initial_state_block_idx must be [{}] or [1,{}], got {}",
+            attrs.BH,
+            attrs.BH,
+            ishape);
     }
 }
 
 FusedRecurrentGatedDeltaRuleDeviceOperation::spec_return_value_t
 FusedRecurrentGatedDeltaRuleDeviceOperation::compute_output_specs(
-    const operation_attributes_t& attrs, const tensor_args_t&) {
+    const operation_attributes_t& attrs, const tensor_args_t& in) {
     const auto layout = TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
     // o: [BH*T, 1, V]  (one row per (head, token); host folds to [B,T,HV,V]).
     ttnn::Shape o_shape({attrs.BH * attrs.T, 1, attrs.val_dim});
+    // Ring mode: the state output IS the caller's ring (in place), so its spec is the ring's spec.
+    if (in.initial_state_block_idx.has_value()) {
+        return {tt::tt_metal::TensorSpec(o_shape, layout), in.initial_state->tensor_spec()};
+    }
     // state: per-token [BH*T, K, V] for verify slots, else final [BH, K, V].
     ttnn::Shape s_shape = attrs.output_per_token_state ? ttnn::Shape({attrs.BH * attrs.T, attrs.key_dim, attrs.val_dim})
                                                        : ttnn::Shape({attrs.BH, attrs.key_dim, attrs.val_dim});
@@ -105,8 +147,13 @@ FusedRecurrentGatedDeltaRuleDeviceOperation::create_output_tensors(
     auto* device = in.q.device();
     std::vector<Tensor> outs;
     outs.reserve(specs.size());
-    for (const auto& spec : specs) {
-        outs.push_back(create_device_tensor(spec, device));
+    outs.push_back(create_device_tensor(specs[0], device));
+    // Ring mode writes the per-token states back into the caller's ring: alias it as the state
+    // output instead of allocating. (The adapter allows an output buffer to alias an input buffer.)
+    if (in.initial_state_block_idx.has_value()) {
+        outs.push_back(*in.initial_state);
+    } else {
+        outs.push_back(create_device_tensor(specs[1], device));
     }
     return outs;
 }
@@ -118,6 +165,7 @@ std::vector<Tensor> fused_recurrent_gated_delta_rule(
     const Tensor& decay,
     const Tensor& beta,
     const std::optional<Tensor>& initial_state,
+    const std::optional<Tensor>& initial_state_block_idx,
     uint32_t T,
     bool output_final_state,
     bool output_per_token_state,
@@ -153,6 +201,7 @@ std::vector<Tensor> fused_recurrent_gated_delta_rule(
         .decay = decay,
         .beta = beta,
         .initial_state = initial_state,
+        .initial_state_block_idx = initial_state_block_idx,
     };
     return ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
 }

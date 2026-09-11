@@ -589,6 +589,7 @@ def fused_recurrent_gated_delta_rule_ttnn(
     device=None,
     output_per_token_state=False,
     high_precision=True,
+    initial_state_block_idx=None,
 ):
     """Fused recurrent gated delta rule via the C++ ``ttnn.transformer.fused_recurrent_gated_delta_rule``
     op. Collapses the per-token recurrence (decay -> k.S -> delta -> outer -> q.S) into ONE device
@@ -604,6 +605,13 @@ def fused_recurrent_gated_delta_rule_ttnn(
 
     Returns (o [B, T, H, V], state): state is [B, T, H, K, V] if output_per_token_state else the
     final state [B, H, K, V] (fp32).
+
+    ``initial_state_block_idx`` turns on the op's "ring" mode: deferred per-head initial-state
+    select, in place. It is a [BH] uint32/int32 ROW_MAJOR device tensor (BH = B*H, h = b*H + hv,
+    b-major) and requires ``output_per_token_state=True`` plus an ``initial_state`` that is the
+    fp32 TILE ring of EXACT shape [T*BH, K, V]. Head h then starts from ring block idx[h] instead
+    of block h and writes its per-token states back into the SAME buffer; the returned state IS
+    that ring tensor (shape [T*BH, K, V]), not a copy. CALLER CONTRACT: idx[h] % BH == h.
     """
     Kd = q.shape[-1]
     if scale is None:
@@ -624,6 +632,7 @@ def fused_recurrent_gated_delta_rule_ttnn(
         beta,
         scale=scale,
         initial_state=initial_state,
+        initial_state_block_idx=initial_state_block_idx,
         output_final_state=True,
         output_per_token_state=output_per_token_state,
     )
