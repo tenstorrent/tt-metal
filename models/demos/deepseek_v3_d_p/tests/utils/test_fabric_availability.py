@@ -17,6 +17,7 @@ Verified on bh-glx-120-b07u08, which is X-wrap-only: pytest called it "4 passed"
 logged two downgrades. The mapper announces every fallback, so treat that warning as the verdict.
 """
 
+import os
 import re
 
 import pytest
@@ -38,6 +39,9 @@ DOWNGRADE = re.compile(r"requested fabric type (\S+) could not be realized.*?usi
 
 @pytest.mark.parametrize("fabric_config", FABRICS, ids=lambda fabric: fabric.name)
 def test_fabric_opens(fabric_config, capfd):
+    if "TT_MESH_GRAPH_DESC_PATH" in os.environ:
+        pytest.fail("TT_MESH_GRAPH_DESC_PATH must be unset so this test exercises topology auto-discovery")
+
     num_devices = ttnn.get_num_devices()
     if num_devices != MESH_SHAPE[0] * MESH_SHAPE[1]:
         pytest.skip(f"{MESH_SHAPE} needs {MESH_SHAPE[0] * MESH_SHAPE[1]} devices; this host has {num_devices}")
