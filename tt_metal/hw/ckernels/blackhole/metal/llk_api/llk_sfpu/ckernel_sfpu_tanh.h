@@ -218,7 +218,6 @@ inline void tanh_init() {
         //
         // Fitted to minimise max bfloat16 ULP error rather than max absolute error. The two
         // have different optima, so this is not the table an absolute-error fit would give.
-        // tests/python_tests/test_tanh_ulp_sweep.py measures both over every finite bf16 value.
         //
         // Three properties to preserve if you retune. Segment 0's intercept must stay 0:
         // SGN_RETAIN would otherwise put a jump across the origin, and ULP error diverges as
