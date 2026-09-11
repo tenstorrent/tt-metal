@@ -1,5 +1,12 @@
 # Follow-up experiments and pipeline gaps
 
+This is a user-directed follow-up using targeted skills and independent review
+agents, not an end-to-end invocation of the agentic-research/model-bringup
+pipeline or every stage gate. `STAGE_REVIEW.md` records bounded source/evidence
+reviews requested through the stage-review skill; it is not a pipeline stage
+completion certificate. The automatic acceptance gates proposed here have not
+been installed into the pipeline.
+
 Status: full-model follow-up measured; serving integration and CI validation remain
 in progress. This log records the work after the first performance
 report, including rejected attempts. The objective is to make the bringup
@@ -52,6 +59,7 @@ not implemented by this performance follow-up.
 | Serving lifetime | Active and allocated batch, aligned/ragged prompt branches, nonzero slots, reset/remap, cache ownership and trace recapture | A B1 layer probe is the sole evidence for a B32 serving implementation |
 | Sampling feedback | Full selected graph, actual per-rank feedback token IDs, seeded/unseeded cases, exact plugin reload contract, reviewed shared-suite text | HTTP200, identical seed buffers, a small-stack pass or coherent greedy output is treated as sampled-quality acceptance |
 | Real TTFT | Actual serving benchmark with full requested OSL, request completion/token counts, setup versus first-response timing | Generator prefill or output1 is reported as the requested multi-token HTTP TTFT |
+| Published evidence | Tracked artifacts or a durable archive, exact-byte hashes, reproduction command and source identity | Logs exist only locally under ignored names or temporary paths while the report implies they were published |
 | Required CI matrix | Immutable metal/plugin/inference-server refs, requested ISL/OSL/concurrency JSON, dispatch URL and executed matrix | Generic sweeps replace requested points, dependency refs drift, or queued CI is called passed |
 
 For this model, the most consequential misses were available native GDN
@@ -1134,3 +1142,69 @@ The script can replay the baseline method saved in the artifact even after
 production integration; rerunning an A/B against the already-replaced current
 method would otherwise silently compare the candidate to itself. That
 reproduction trap is another pipeline check to automate.
+
+
+### Published checkpoint and durable log evidence
+
+Working checkpoint `4ea57c41431` was committed and pushed to
+`mvasiljevic/qwen38-native-prefill` while the selected device-fill serving
+rerun continued. Its commit message explicitly records pending serving/CI
+validation. The196 completed task files passed pre-commit and staged diff
+checks; no C++/CMake build was required for these Python/docs changes.
+
+A publication audit caught a separate evidence problem: repository-wide
+rules ignore raw `.log` files, so having logs locally under the model directory
+did not publish them with the checkpoint. The follow-up now includes an
+exact-byte compressed archive and SHA256 manifest under
+`artifacts/runtime_logs.tar.gz` / `runtime_logs_manifest.json`; the active
+run is added after it finishes. Pipeline gates should check artifact tracking
+and durability, not just filesystem existence.
+
+
+### Completed device-fill serving validation and concurrent CI
+
+The selected runtime at4ea57c41431 completed the unchanged actual server path,
+canonical sampling smoke (3 passed,1 skipped), six greedy/sample prompt pairs,
+and both local HTTP benchmarks. All greedy strings match the previous serving
+run byte for byte. Sampled outputs are coherent; fixed256-token budgets still
+truncate some reasoning/story outputs, so this is not a claim that every task
+finished. The first generated Fibonacci function in each mode passed n=0,1,10.
+
+| HTTP point | Prior corrected-sampling median | Device-fill median | Saving |
+| --- | ---: | ---: | ---: |
+| ISL128/OSL252/C1 | 910.998ms | 728.482ms | 182.516ms (20.03%) |
+| ISL4096/OSL252/C8 | 12812.076ms | 11443.820ms | 1368.256ms (10.68%) |
+
+All4/8 requests completed with1008/2016 output tokens. TPOT remains88.822/
+90.415ms. The short-point saving is within about4% of the isolated175.451ms
+prediction. The eight-request saving is within about2.5% of eight times that
+prediction. This confirms that a host-side tensor construction outside the
+per-layer device profile materially affected serving TTFT. Pipeline optimization
+must inspect the adapter, sampling and first-decode setup, not stop at the
+stacked decoder estimate. The60ms short-point target still misses by12.14×.
+See `artifacts/device_fill_serving_summary.json` and
+`artifacts/device_fill_serving_qualitative_review.json` for exact observations.
+
+Two immutable-source CI runs were dispatched without cancelling either:
+
+- 34617909914 uses inference-server8d9f3084853883999aec235293d58472f6d783f4
+and historical decode_only sampling.
+- 34618127149 uses inference-serverdf501912ccadd1bf4ccd7131042430357933c086
+and all sampling. The only configuration difference is this sampling mode.
+
+Both resolve the fixed metal tag `mvasiljevic/qwen38-perf-4ea57c41431`, include
+common/sampling in the source overlay, and reuse the prior image built at
+6f60917b27b63908f85fc982fe010b1d6ad76523. The complete tree diff outside models/
+is empty, establishing native-build compatibility. Both build chains were
+observed skipped and both benchmark steps running on separate runners.
+The previous13 points are unchanged: OSL252; C1 at ISL128,1024,4096,16384,
+32768,65536,131072,261892; C8 at4096,32768,131072; C16 at4096,32768.
+This excludes APC and is not the historical21-point coverage including APC.
+
+Expectations: native prefill should improve the compute-heavy part of both
+runs; all-mode additionally exercises the selected scatter. Local measurements
+suggest a material serving reduction, but do not establish an exact CI result:
+CI uses FABRIC_1D versus local FABRIC_1D_RING, and long-context/concurrency points
+have not yet been observed. Neither current run is expected to satisfy all
+latency targets. Dispatch inputs, pinned refs and build checks are retained in
+`artifacts/ci_dispatch_runs.json` and the adjacent CI input/validation JSONs.

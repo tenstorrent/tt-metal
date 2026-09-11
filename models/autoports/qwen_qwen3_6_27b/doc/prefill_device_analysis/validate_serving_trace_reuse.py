@@ -1,10 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Real reduced-adapter A/B: repeated S128 prefill, three decode steps, reset.
+"""Real adapter A/B: repeated S128 prefill, three decode steps, reset.
 
 Run only after obtaining the coordinating agent's hardware window. The default
 loads four layers with 32 allocated slots, one active request and greedy sampling.
+An explicitly selected 64-layer run validates the complete model graph.
 Allocation tracking is required; its overhead is present in both timing arms.
 """
 
@@ -13,6 +14,7 @@ import hashlib
 import json
 import os
 import statistics
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -111,9 +113,11 @@ def request(adapter, generator, prompt, *, correctness, sampling_params):
         "program_cache_entries": generator.mesh_device.num_program_cache_entries(),
     }
     if correctness:
+        readback_started = time.perf_counter()
         result["decode_tokens_by_rank"] = ranks
         result["cache_digests"] = cache_digests(generator)
         result["trace_position_by_rank"] = all_rank_tokens(generator._trace_position)
+        result["cache_and_position_readback_ms"] = (time.perf_counter() - readback_started) * 1000
         if any(values[0] != 131 for values in result["trace_position_by_rank"]):
             raise AssertionError("three resident decode steps did not advance position from 128 to 131")
     return result
@@ -122,24 +126,51 @@ def request(adapter, generator, prompt, *, correctness, sampling_params):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--num-layers", type=int, default=4)
+    parser.add_argument("--num-layers", type=int, choices=(4, 64), default=4)
     parser.add_argument("--timed-requests", type=int, default=3)
     parser.add_argument("--correctness-only", action="store_true")
     args = parser.parse_args()
     if not ttnn.TRACE_ALLOC_TRACKING:
         raise ValueError("TT_METAL_TRACE_ALLOC_TRACKING=1 is required at process startup")
-    if args.num_layers != 4:
-        raise ValueError("This reviewed initial probe is restricted to four real layers")
+    if os.environ.get("TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE", "0") != "0":
+        raise ValueError("Program-owned buffers must remain included in trace allocation tracking")
+    if args.timed_requests < 1:
+        raise ValueError("At least one timing request is required")
     if os.environ.get("TT_METAL_DEVICE_PROFILER") == "1":
         raise ValueError("This adapter experiment uses host/serving timing, not device profiling")
     torch.set_num_threads(8)
     ttnn.CONFIG.throw_exception_on_fallback = True
+    model_dir = Path(__file__).resolve().parents[2]
+    repo = model_dir.parents[2]
+    source_paths = [
+        Path(__file__).resolve(),
+        Path(__file__).with_name("serving_trace_reuse_runtime.py").resolve(),
+        Path(__file__).with_name("serving_trace_reuse_plan.py").resolve(),
+        model_dir / "tt/generator.py",
+        model_dir / "tt/generator_vllm.py",
+        model_dir / "tt/model.py",
+        repo / "models/common/sampling/generator.py",
+        repo / "ttnn/ttnn/unsafe_allocation_tracker.py",
+    ]
     result = {
         "invocation": sys.argv,
-        "scope": "Reduced adapter, four layers, B32 allocated, C1 slot0 S128, three decode steps/request.",
+        "scope": (
+            f"{'Full-model' if args.num_layers == 64 else 'Reduced'} adapter, {args.num_layers} layers, "
+            "B32 allocated, C1 slot0 S128, max context256, three decode steps/request."
+        ),
+        "num_layers": args.num_layers,
+        "git_head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip(),
+        "source_sha256": {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in source_paths},
+        "model_id": os.environ.get("QWEN_AUTOPORT_MODEL_ID"),
+        "model_revision": os.environ.get("QWEN_AUTOPORT_MODEL_REVISION"),
         "measurement": "Host request boundaries including token readback; allocation tracker enabled in both arms.",
         "actual_http_ttft": False,
         "allocation_tracking": True,
+        "program_owned_allocations_included": True,
+        "token_comparison_contract": (
+            "All four ranks of active slot0 must match; inactive sampled tokens are diagnostic only. "
+            "All slots of every cache and position tensor still require exact equality."
+        ),
         "arms": {},
     }
 
@@ -152,7 +183,9 @@ def main():
     try:
         ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
         mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=200_000_000)
-        generator = build_generator(Path(__file__).parents[2], mesh, batch=32, num_layers=4, max_context=256)
+        generator = build_generator(model_dir, mesh, batch=32, num_layers=args.num_layers, max_context=256)
+        if len(generator.model.layers) != args.num_layers:
+            raise AssertionError("Loaded layer count does not match the requested experiment scope")
         adapter = Qwen36ForCausalLM(generator)
         result["precision"] = generator.model.precision_summary()
         prompts = []
@@ -181,9 +214,27 @@ def main():
                     reference = references[index]
                     row["comparison"] = {
                         "token_ids_exact": row["token_ids"] == reference["token_ids"],
-                        "all_rank_tokens_exact": row["decode_tokens_by_rank"] == reference["decode_tokens_by_rank"],
+                        "all_rank_active_tokens_exact": [
+                            [rank[0] for rank in step] for step in row["decode_tokens_by_rank"]
+                        ]
+                        == [[rank[0] for rank in step] for step in reference["decode_tokens_by_rank"]],
                         "all_cache_digests_exact": row["cache_digests"] == reference["cache_digests"],
                         "positions_exact": row["trace_position_by_rank"] == reference["trace_position_by_rank"],
+                    }
+                    # The runner emits only active request rows. Keep complete
+                    # vectors as evidence, but undefined inactive sampled
+                    # values must not reject an otherwise equivalent request.
+                    row["inactive_token_diagnostics"] = {
+                        "all_raw_vectors_exact": row["decode_tokens_by_rank"] == reference["decode_tokens_by_rank"],
+                        "mismatch_count_by_step_and_rank": [
+                            [
+                                sum(a != b for a, b in zip(actual_rank[1:], expected_rank[1:]))
+                                for actual_rank, expected_rank in zip(actual_step, expected_step)
+                            ]
+                            for actual_step, expected_step in zip(
+                                row["decode_tokens_by_rank"], reference["decode_tokens_by_rank"]
+                            )
+                        ],
                     }
                     if not all(row["comparison"].values()):
                         arm["correctness"].append(row)
@@ -219,7 +270,9 @@ def main():
             experiment.close()
             experiment = None
             save()
-        result["status"] = "passed_reduced_adapter_correctness"
+        result["status"] = (
+            "passed_full64_adapter_correctness" if args.num_layers == 64 else "passed_reduced_adapter_correctness"
+        )
     except BaseException as error:
         result["status"] = "failed"
         result["error"] = repr(error)

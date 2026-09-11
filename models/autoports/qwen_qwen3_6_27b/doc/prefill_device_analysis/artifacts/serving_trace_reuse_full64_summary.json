@@ -1,0 +1,249 @@
+{
+  "status": "passed_full64_closed_envelope_experimental",
+  "actual_http_ttft": false,
+  "production_trace_reuse_enabled": false,
+  "hardware_clean_close_utc": "2026-09-11 15:59:12.672",
+  "git_head": "4ea57c41431a1e80318c4d32d249d5552c4f165f",
+  "model_id": "Qwen/Qwen3.8-27B",
+  "model_revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+  "source_sha256": {
+    "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/validate_serving_trace_reuse.py": "77034da011ac3fee08246c7e819fd09a3b75c38079da16b690296c8359121900",
+    "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/serving_trace_reuse_runtime.py": "ccf66db6cbcd0cc5a423dc81aefb846528133d3379f6a294e33400a4f7b5936a",
+    "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/serving_trace_reuse_plan.py": "dacfe2dbfafbb22146cc53dda79e90cac15a9ce0184d1197c7b8540d5d439c88",
+    "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tt/generator.py": "590cac7224ca6a5c5910b929cdd1636198cf99faef53845d5bd86a41ab54fc12",
+    "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tt/generator_vllm.py": "3fedd468f4c705b4e0581b157645164c236a63e5b6ad050484ba0c15651e7580",
+    "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tt/model.py": "bb867561c6673d757d422912a5585051c91b45c155b2c3404dd81b54802ecdd1",
+    "/home/mvasiljevic/tt-metal/models/common/sampling/generator.py": "6df6b6dd3308063772198e0a4b73d136e9f95b43a586be8654f8ac3d9c591a97",
+    "/home/mvasiljevic/tt-metal/ttnn/ttnn/unsafe_allocation_tracker.py": "49d0032603ed8d48cbc1ec17b180525c2779ea6f0eac1b4daf8975eaa3de7b69"
+  },
+  "invocation": [
+    "models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/validate_serving_trace_reuse.py",
+    "--num-layers",
+    "64",
+    "--timed-requests",
+    "3",
+    "--output",
+    "models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/artifacts/serving_trace_reuse_full64_active_slots.json"
+  ],
+  "scope": "Full-model adapter, 64 layers, B32 allocated, C1 slot0 S128, max context256, three decode steps/request.",
+  "first_attempt": "serving_trace_reuse_full64.json",
+  "first_attempt_verdict": "Harness overchecked inactive sampled token slots before any reuse; active-rank tokens, all512 cache digests and positions matched. Preserved, not classified as trace reuse failure.",
+  "corrected_attempt": "serving_trace_reuse_full64_active_slots.json",
+  "token_comparison_contract": "All four ranks of active slot0 must match; inactive sampled tokens are diagnostic only. All slots of every cache and position tensor still require exact equality.",
+  "arms": {
+    "original": {
+      "timed_samples": 3,
+      "correctness_requests": 4,
+      "counters": {
+        "release_calls": 16,
+        "live_trace_releases": 7,
+        "setup_recaptures": 8,
+        "model_capture_calls": 8
+      },
+      "median_ms": {
+        "prefill": 167.39736637100577,
+        "first_decode": 1171.0839816369116,
+        "prefill_plus_first_decode": 1337.089404463768
+      },
+      "median_spans_ms": {
+        "prefill_work": 166.25957563519478,
+        "prefill_guard": 1.1028642766177654,
+        "setup_work": 532.6659819111228,
+        "setup_guard": 0.0170818530023098
+      },
+      "median_correctness_readback_ms": 4431.428417097777,
+      "cache_rank_tensors_per_request": 512,
+      "cache_rank_tensors_changed_between_prompts": 512,
+      "all_timings_active_token_history_matches_correctness": true,
+      "allocation_observations": 0,
+      "max_surviving_ordinary_allocations": null,
+      "max_surviving_program_owned_allocations": null,
+      "preserved_program_counts": []
+    },
+    "reuse": {
+      "timed_samples": 3,
+      "correctness_requests": 4,
+      "counters": {
+        "release_calls": 2,
+        "live_trace_releases": 0,
+        "setup_recaptures": 1,
+        "model_capture_calls": 1,
+        "resets_preserving_trace": 7,
+        "setup_reuses": 7
+      },
+      "median_ms": {
+        "prefill": 163.520700763911,
+        "first_decode": 635.3112370707095,
+        "prefill_plus_first_decode": 798.8319378346205
+      },
+      "median_spans_ms": {
+        "prefill_work": 159.32006621733308,
+        "prefill_guard": 3.7941518239676952,
+        "setup_work": 0.17050513997673988,
+        "setup_guard": 0.7998538203537464
+      },
+      "median_correctness_readback_ms": 4417.485929792747,
+      "cache_rank_tensors_per_request": 512,
+      "cache_rank_tensors_changed_between_prompts": 512,
+      "all_timings_active_token_history_matches_correctness": true,
+      "allocation_observations": 7,
+      "max_surviving_ordinary_allocations": 0,
+      "max_surviving_program_owned_allocations": 0,
+      "preserved_program_counts": [
+        [
+          283,
+          283
+        ]
+      ],
+      "comparisons": [
+        {
+          "token_ids_exact": true,
+          "all_rank_active_tokens_exact": true,
+          "all_cache_digests_exact": true,
+          "positions_exact": true
+        },
+        {
+          "token_ids_exact": true,
+          "all_rank_active_tokens_exact": true,
+          "all_cache_digests_exact": true,
+          "positions_exact": true
+        },
+        {
+          "token_ids_exact": true,
+          "all_rank_active_tokens_exact": true,
+          "all_cache_digests_exact": true,
+          "positions_exact": true
+        },
+        {
+          "token_ids_exact": true,
+          "all_rank_active_tokens_exact": true,
+          "all_cache_digests_exact": true,
+          "positions_exact": true
+        }
+      ],
+      "inactive_token_diagnostics": [
+        {
+          "all_raw_vectors_exact": false,
+          "mismatch_count_by_step_and_rank": [
+            [
+              21,
+              21,
+              21,
+              21
+            ],
+            [
+              21,
+              21,
+              21,
+              21
+            ],
+            [
+              21,
+              21,
+              21,
+              21
+            ]
+          ]
+        },
+        {
+          "all_raw_vectors_exact": false,
+          "mismatch_count_by_step_and_rank": [
+            [
+              20,
+              20,
+              20,
+              20
+            ],
+            [
+              22,
+              22,
+              22,
+              22
+            ],
+            [
+              22,
+              22,
+              22,
+              22
+            ]
+          ]
+        },
+        {
+          "all_raw_vectors_exact": false,
+          "mismatch_count_by_step_and_rank": [
+            [
+              17,
+              17,
+              17,
+              17
+            ],
+            [
+              22,
+              22,
+              22,
+              22
+            ],
+            [
+              22,
+              22,
+              22,
+              22
+            ]
+          ]
+        },
+        {
+          "all_raw_vectors_exact": false,
+          "mismatch_count_by_step_and_rank": [
+            [
+              17,
+              17,
+              17,
+              17
+            ],
+            [
+              22,
+              22,
+              22,
+              22
+            ],
+            [
+              22,
+              22,
+              22,
+              22
+            ]
+          ]
+        }
+      ]
+    }
+  },
+  "median_request_boundary_saved_ms": 538.2574666291475,
+  "intrinsic_tracker_limit": "TTNN verify_before_replay calls gc.collect for every model/sampler replay in both arms. Its time was not independently instrumented; raw tracked totals or overhead-subtracted estimates are not production/HTTP measurements.",
+  "preserved_evidence": {
+    "archive": "serving_trace_reuse_full64_evidence.tar.gz",
+    "archive_bytes": 328246,
+    "archive_sha256": "422f6168f3acda10f4571cfb721e6552b9fcd3ba1bee732d2527eff469196376",
+    "entries": [
+      {
+        "name": "serving_trace_reuse_full64.json",
+        "bytes": 915174,
+        "sha256": "693d14472fcaed9c86eb96d962ebb5ce79a15b93443b60f1f17dbb1131198ed4"
+      },
+      {
+        "name": "serving_trace_reuse_full64_active_slots.json",
+        "bytes": 1427652,
+        "sha256": "021ff0fc26b1b7ab2546d7b06cc0c8cba8d03fb6d24f7b4f26ac29d184329c14"
+      },
+      {
+        "name": "qwen_serving_trace_reuse_full64.log",
+        "bytes": 107904,
+        "sha256": "dc1284321a4ed51de4755253d20a728af69ad0986b7e3d023f7e183a70cea25e"
+      },
+      {
+        "name": "qwen_serving_trace_reuse_full64_active_slots.log",
+        "bytes": 109015,
+        "sha256": "44f67447db44aca859e45638eae2e8120aa7fc5a9b64748a188538736fd5cf10"
+      }
+    ]
+  }
+}

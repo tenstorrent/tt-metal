@@ -1,0 +1,121 @@
+{
+  "archive": "runtime_logs.tar.gz",
+  "scope": "Completed follow-up logs including selected device-fill serving. Active full64 trace-reuse experiment excluded. Raw .log files are globally gitignored; this archive preserves exact bytes.",
+  "members": [
+    {
+      "path": "artifacts/qwen_serving_trace_reuse_correctness.log",
+      "bytes": 18479,
+      "sha256": "258e3645ff62ee3477a5cde10e9b1b1d0db40f0108dd7f5dd419efb37787619d"
+    },
+    {
+      "path": "artifacts/qwen_serving_trace_reuse_timing.log",
+      "bytes": 22441,
+      "sha256": "edcc2ac75b8b8e1a7ee0e92165de6933f2e88488909570d69205b72aff3dba21"
+    },
+    {
+      "path": "artifacts/qwen_serving_trace_reuse_without_gc_timing.log",
+      "bytes": 21290,
+      "sha256": "fe416cbbe76d0a57a5783d5af3389bff037119208ccfe0af980419a3ec17e464"
+    },
+    {
+      "path": "artifacts/qwen_slot_logits_scatter.log",
+      "bytes": 6339,
+      "sha256": "aef81b9138d0c6a79e26deed5a5f8fa08d367a98f8d8be28b871f6eade0d882d"
+    },
+    {
+      "path": "device_fill_serving/readiness_vllm/sampling_tests.log",
+      "bytes": 1208,
+      "sha256": "6964b03ddb0f561fdda59de399b7d83ab949b69beb4fd70b1aa8f5951caf5009"
+    },
+    {
+      "path": "device_fill_serving/readiness_vllm/server.log",
+      "bytes": 269468,
+      "sha256": "0526e3e399b5b80bf2d98a5a0b89c7673015565245dbab59c0c63acf63250adb"
+    },
+    {
+      "path": "device_fill_serving/readiness_vllm/vllm_benchmark.log",
+      "bytes": 10118,
+      "sha256": "f14af7ac4264fbe7e847e762a63d096bff48d16a3284f7bb6a7f6823d5e45bfc"
+    },
+    {
+      "path": "device_fill_serving/readiness_vllm/vllm_ci_serving_benchmark.log",
+      "bytes": 10060,
+      "sha256": "b97772221cd594cb72b3532c62716086db962e4f85e9532f4ed8e5fce56a2662"
+    },
+    {
+      "path": "final_serving/readiness_vllm/sampling_tests.log",
+      "bytes": 1208,
+      "sha256": "e32ee15c7bfdeb916adb7d53d25e18b1a17949237beee0dd0c6960a672aa1af9"
+    },
+    {
+      "path": "final_serving/readiness_vllm/server.log",
+      "bytes": 270687,
+      "sha256": "b29a7d3e8102a0eb1f173dfbc4e093e0cbae977134ec12cb6c5a56563fee0a12"
+    },
+    {
+      "path": "final_serving/readiness_vllm/vllm_benchmark.log",
+      "bytes": 10171,
+      "sha256": "b4a8e4579b52d8394d8b74d28d429c231176bbd6c484c35b5f39689b90f95885"
+    },
+    {
+      "path": "final_serving/readiness_vllm/vllm_ci_serving_benchmark.log",
+      "bytes": 10001,
+      "sha256": "898645d2d3a0bc5b0a2956efd5220c7939e12014be1d7ef887bc6c3021273057"
+    },
+    {
+      "path": "penalty_recapture_b32.log",
+      "bytes": 35363,
+      "sha256": "6aa7d428b047e0bf0a16eebb339c0773ca76f482daae8b4aa5d94925491ac3bb"
+    },
+    {
+      "path": "readiness_vllm/initial_sampling_attempt/sampling_tests.log",
+      "bytes": 5390,
+      "sha256": "c86ff1191a1054d2e4009507ed6b9c5217baf481314be562fb660879df422b76"
+    },
+    {
+      "path": "readiness_vllm/initial_sampling_attempt/server.log",
+      "bytes": 164229,
+      "sha256": "f4fc016567c74f342e5e07a024dc2e4d8c6dd782b05c87d53ec203c79b9335f7"
+    },
+    {
+      "path": "readiness_vllm/interrupted_startup/server.log",
+      "bytes": 69884,
+      "sha256": "ebcf255a0e0a463971ec5874fc9c977212c6bb0be74cfc2459b9b2a1020a9a81"
+    },
+    {
+      "path": "readiness_vllm/sampling_tests.log",
+      "bytes": 1208,
+      "sha256": "5751568cef5fd8341e8459f28a4af1e69a1210a42726bb7985c0a17b219444b8"
+    },
+    {
+      "path": "readiness_vllm/server.log",
+      "bytes": 914273,
+      "sha256": "1bfa687a14d9e17a58b0c3d22ceb5ee18cd78aee59d9f9123cc5a742cfc34d6b"
+    },
+    {
+      "path": "readiness_vllm/vllm_benchmark.log",
+      "bytes": 10209,
+      "sha256": "6853cc1705f24377a7e1a03beab5a753df23a09b425e1e5bc465099b847f8f0b"
+    },
+    {
+      "path": "readiness_vllm/vllm_ci_serving_benchmark.log",
+      "bytes": 9923,
+      "sha256": "36f3e9cf4c4ac854a5fb9dee2af4d56b54eb8a7b4a2330919e5420213a20529b"
+    },
+    {
+      "path": "sampling_rank_full64.log",
+      "bytes": 254246,
+      "sha256": "78fdc7016308839f5392a515ca64335d926b2a0c06f3c1700030b67b056212ae"
+    },
+    {
+      "path": "sampling_rank_full64_production.log",
+      "bytes": 273061,
+      "sha256": "d6771dc0160ab8180b44eb32c32ca189ee506dfff07c0764c0869e4b49c68506"
+    },
+    {
+      "path": "sampling_rank_full64_refresh.log",
+      "bytes": 150299,
+      "sha256": "d69d81810619eb68b32efba8a183e4943b06b63a1e8b970f1fa74f81dedff455"
+    }
+  ]
+}

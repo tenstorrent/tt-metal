@@ -1,5 +1,12 @@
 # Stage Review
 
+This is a user-directed follow-up using targeted skills and independent review
+agents, not an end-to-end invocation of the agentic-research/model-bringup
+pipeline or every stage gate. `STAGE_REVIEW.md` records bounded source/evidence
+reviews requested through the stage-review skill; it is not a pipeline stage
+completion certificate. The automatic acceptance gates proposed here have not
+been installed into the pipeline.
+
 Verdict: more-work-needed
 
 ## Current Review: Production Seed Policy and Slot-Logit Scatter
@@ -8,34 +15,52 @@ Independent source/artifact review on 2026-09-11. The current candidate uses
 native prefill, the Qwen-only per-step unseeded seed policy, the explicit v1
 reload contract, history-preserving warmup, and device-filled inactive logit
 rows. No new concrete implementation defect was found in the scatter change.
-The prior production seed-policy serving run is complete; the newly changed
-scatter path is being validated in `device_fill_serving/`. That run and the
-required 13-point CI matrix remain open. Historical findings below retain their
-original wording; the dispositions in this section take precedence.
+The selected device-fill serving run is complete and its source, smoke,
+actual generated text and benchmarks have been reviewed. The proven serving
+finding is closed. Two required-point CI runs are active; their full matrices
+and the 60/500ms targets remain incomplete. Historical findings below retain
+their original wording; the dispositions in this section take precedence.
 
 ## Required Work
 
-- P1: Finish the already-running serving validation of the selected scatter.
-  Evidence: `artifacts/slot_logits_scatter.json` passes static TP4 correctness
-  and timing, while the completed `final_serving/` run predates this change.
-  Why this matters: isolated scatter latency does not establish its actual
-  effect on HTTP TTFT or validate subsequent production sampling and decode.
-  Required next step: inspect the planned unchanged canonical smoke, all six
-  greedy/sample pairs, and requested 128/252/C1 and 4096/252/C8 benchmarks
-  under `device_fill_serving/`. Retain actual completion/token counts and
-  compare HTTP medians to the preceding serving run. No additional hardware
-  test is requested beyond the owner's current validation.
-
 - P1: Complete the required 13-point OSL252 CI execution and report its results.
-  Evidence: the exact matrix and dependency revisions are recovered, but no
-  dispatched/completed matrix establishes the requested long-context and
-  concurrency coverage. Two local benchmark points do not constitute that
-  matrix. Required next step: retain the selected immutable refs, dispatch/run
-  identity and observed rows, and resolve any execution failures. The 60ms
-  S128 and 500ms S4096 requirements remain unmet; explaining the remaining
-  gap does not convert them to passed requirements.
+  Evidence: runs34617909914 (`decode_only`) and34618127149 (`all`) are active
+  on separate runners, with build jobs skipped. Their dispatch identities and
+  source overlays are verified, but neither complete matrix is available.
+  Two successful local benchmark points do not constitute that matrix.
+  Required next step: inspect the executed rows, requested output counts and
+  long-context/concurrency results, and resolve any failures. Preserve both
+  runs; neither run's dispatch or intermediate progress is a pass.
+
+- P1: The performance requirements remain unmet.
+  Evidence: full64 B1 generator medians are119.301ms S128 and1299.242ms S4096
+  against60/500ms. Selected local median HTTP TTFT at128/252/C1 is728.482ms,
+  still12.14 times60ms. The4096/252/C8 burst is a different admission/concurrency
+  regime and must not be compared to an isolated B1 S4096 target.
+  Required next step: keep these targets open while the already-dispatched
+  matrix establishes the current serving behavior. Report actual results and
+  remaining bottlenecks; neither explaining the gap nor the achieved relative
+  speedup satisfies the target.
 
 ## Closed Findings and Verified Scope
+
+- **Selected scatter serving integration:** the unchanged canonical smoke
+  in `device_fill_serving/readiness_vllm/sampling_tests.log` reports3passed/
+  1skipped in23.86s. The reviewer read all12 generated strings and independently
+  confirmed all six greedy outputs are byte-identical to the preceding
+  seed-policy run. Sampled outputs have no observed dropped-word or variable-
+  name corruption. The sampled haiku, learning explanation, thermodynamics
+  answer and translation are complete; both story outputs and the greedy
+  thermodynamics answer are limited by the fixed256-token budget. The sampled
+  Python's requested Fibonacci function and example are complete and correct
+  by inspection; an optional second function begins when the budget ends.
+  This closes the demonstrated integration regression without claiming all
+  answers finish at this budget. Raw benchmark JSONs confirm4/4 short requests
+  with1008 output tokens and8/8 burst requests with2016 output tokens, exactly
+  the requested counts. Median HTTP TTFT is728.482ms and11443.820ms respectively.
+  The source summary records checkpoint4ea57c41431, and the actual server log
+  confirms B32, max_model_len262144, sampling mode `all`, and FABRIC_1D_RING.
+  No experimental trace-reuse candidate is selected.
 
 - **Slot-logit scatter source/static boundary:** production's method body is
   AST-identical to the measured probe candidate, excluding its docstring.
@@ -83,7 +108,8 @@ original wording; the dispositions in this section take precedence.
   sampled Python example output hit the fixed256-token budget. These are
   retained completion limits, not a complete-answer pass. Min-p is a host
   compatibility test and the all-vocabulary logprob skip proves no logprob
-  accuracy. The final scatter rerun must still be reviewed separately.
+  accuracy. The completed selected scatter rerun above supplies subsequent
+  integration evidence.
 
 - **Warmup penalty history:** `penalty_recapture_b32.json` records zero
   mismatches on all four ranks for all three resident history buffers after
@@ -99,13 +125,15 @@ original wording; the dispositions in this section take precedence.
 
 ## Other Concerns
 
-The latest completed HTTP run, before scatter selection, measures median
-TTFT910.998ms at128/252/C1 and12812.076ms at4096/252/C8. All4/4 and8/8
-requests delivered all1008/2016 requested output tokens. The C8 burst includes
-admission and serialized prefill; it is not an isolated B1 S4096 measurement.
-The B1 generator result remains119.301/1299.242ms, from the complete native
-validation. These measurements are distinct; a static scatter saving is not
-subtracted from HTTP timing and presented as an observed result.
+The selected local HTTP run measures median TTFT728.482ms at128/252/C1
+and11443.820ms at4096/252/C8. The preceding seed-policy run measured
+910.998/12812.076ms in those same profiles: observed reductions are182.516ms
+and1368.256ms. The short-point result agrees with the isolated scatter saving;
+the C8 burst also includes admission and serialized per-request prefill. These
+are observed HTTP results, not estimates formed by subtracting static kernel
+or operation timing. Mean TPOT is88.822/90.415ms. The B1 generator result
+remains119.301/1299.242ms from the complete native validation, which is a
+separate measurement boundary.
 
 The latest benchmark summary correctly generates its ISL4096/OSL252/C8 label
 from the configuration. Earlier historical artifacts retain the stale
@@ -116,6 +144,37 @@ sampler dependencies. Its new automatic gates are proposals, not claims that
 the pipeline was modified. No material overclaim was found in that ledger.
 
 ## Hard-Check Gaps
+
+The CI provenance is internally consistent. Both runs reuse the earlier
+image built from native checkpoint6f60917b27b63908f85fc982fe010b1d6ad76523
+with plugin c9cfebcf0490066ff85e1e3fba2c7d456ce5ce42. The reviewer independently
+verified no changes outside `models/` through source checkpoint
+4ea57c41431a1e80318c4d32d249d5552c4f165f, so the native build inputs are unchanged.
+The fixed tag `mvasiljevic/qwen38-perf-4ea57c41431` resolves to that exact
+checkpoint. Its three read-only source overlays include the autoport,
+`models/autoports/vllm_bundles` and `models/common/sampling`; omitting the last
+path would have retained the old shared sampler in the image. The helper's
+`git clone --branch` accepts the fixed tag, while the dispatch's metal-ref
+input alone does not select the overlay when image reuse skips SHA resolution.
+
+- [Run34617909914](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/34617909914)
+  pins inference-server8d9f3084853883999aec235293d58472f6d783f4 and retains
+  `decode_only`, preserving the prior CI sampling configuration. Its prefill
+  uses host logits and bypasses device scatter.
+- [Run34618127149](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/34618127149)
+  pins inference-serverdf501912ccadd1bf4ccd7131042430357933c086. Independent
+  source comparison confirms its only change from the first configuration is
+  `sample_on_device_mode: all`, exercising device scatter with the same13
+  required points. Both CI modes retain FABRIC_1D; local serving used
+  FABRIC_1D_RING, so local results do not certify that CI configuration.
+
+At review, GitHub reports both benchmark jobs in progress, respectively on
+`120-qb2-p04t07` and `qb2-120-p01t03`, with all image-build jobs skipped.
+The inspected dispatch/reusable workflow chain at
+ba2f03318608be52c5cb2085469598a89dcfa0fc contains no concurrency cancellation
+group; the first run remains active. Durable inputs, matrix and observed
+statuses are in `artifacts/ci_dispatch*.json`, `required_ci_matrix.json` and
+`ci_overlay_validation.json`. They prove dispatch/provenance, not completed CI.
 
 Maximum-context/current native behavior and the complete13-point CI matrix
 are not certified by the short local smokes. The unsafe binary-SiLU candidate
@@ -129,16 +188,22 @@ regressions, with no Torch/TTNN imports or device operations.
 ## Anomaly Ledger
 
 - Rank-divergent unseeded feedback and malformed sampled text: fixed for the
-  production seed policy by full64 rank controls and the reviewed HTTP suite;
-  awaiting the already-running scatter integration regression check.
+  production seed policy by full64 rank controls and both reviewed HTTP runs,
+  including the selected device-fill implementation.
 - Synthetic warmup token contaminated preserved penalty history: fixed;
   source ordering,12 host regressions and reduced B32 device evidence agree.
-- Excess serving TTFT: more-work-needed. The new scatter removes a measured
-  175–185ms static bottleneck; its HTTP impact is not yet measured. Trace
-  recapture remains an experimental optimization opportunity.
+- Excess serving TTFT: more-work-needed. Device scatter removes a measured
+  175–185ms static bottleneck; actual short-profile HTTP TTFT improves by
+  182.516ms and still misses60ms. Trace recapture remains an experimental
+  optimization opportunity.
 - Fixed-budget incomplete shared answers: controlled as truncation, with
   coherent text and explicit case-level limits; no blanket task-success or
   release-quality claim is made.
+- Server shutdown reports abort-mode engine termination and nanobind leaks of
+  operation/config/type bindings after the completed requests. This log does
+  not demonstrate graceful device teardown or establish a new scatter/cache
+  leak. The separate ownership/lifecycle probes remain the cleanup evidence;
+  the HTTP smoke is not relabeled as a teardown test.
 
 ## Scope Inspected and Residual Risk
 
@@ -146,14 +211,19 @@ Source: `tt/generator.py`, its vLLM consumers, common sampling generator,
 creation-op source, and `probe_slot_logits_scatter.py`. Evidence: static scatter
 JSON and preserved baseline, production full64 sampling/source sidecar,
 penalty-history JSON, all shared text and test/benchmark outputs under
-`final_serving/`, and the current pipeline ledger. Commands were read-only
+`final_serving/` and `device_fill_serving/`, dispatch/overlay JSONs, exact
+inference-server/workflow source diffs, and current GitHub run/job statuses.
+Commands were read-only
 `rg`, `sed`, `git diff`, small standard-library AST/JSON scripts, and
 `python3 -m unittest discover -s models/autoports/qwen_qwen3_6_27b/tests
--p test_vllm_decode_reload.py` (12passed). Only this report was edited.
+-p test_vllm_decode_reload.py` (12passed in the preceding source review).
+The completed-serving update reran no device or host tests; it inspected
+artifacts and used read-only `gh api` queries. Only this report was edited.
 
 No additional source bug was found in the selected scatter or seed policy.
-The pending selected-code serving rerun and CI matrix prevent stage closure;
-this interim review is not release certification or a performance-target pass.
+The selected-code local serving finding is closed. The unfinished CI matrices
+and unmet targets retain the more-work-needed verdict. This targeted review
+is not formal pipeline completion, release certification or a target pass.
 
 ## Earlier Review History (Superseded by the Current Dispositions Above)
 

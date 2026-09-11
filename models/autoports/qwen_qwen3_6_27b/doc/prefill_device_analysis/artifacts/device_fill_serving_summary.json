@@ -1,0 +1,44 @@
+{
+  "runtime_checkpoint": "4ea57c41431a1e80318c4d32d249d5552c4f165f",
+  "runner_command": "bash models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/run_native_serving.sh --model-dir models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/device_fill_serving",
+  "exit_code": 0,
+  "sampling": {
+    "passed": 3,
+    "skipped": 1,
+    "seconds": 23.86
+  },
+  "qualitative_review": "device_fill_serving_qualitative_review.json",
+  "sampling_mode": "all",
+  "fabric": "FABRIC_1D_RING",
+  "allocated_batch": 32,
+  "max_model_len": 262144,
+  "experimental_trace_reuse_enabled": false,
+  "benchmarks": [
+    {
+      "isl": 128,
+      "osl": 252,
+      "concurrency": 1,
+      "completed": 4,
+      "total_output_tokens": 1008,
+      "median_http_ttft_ms": 728.4818752668798,
+      "mean_tpot_ms": 88.8216027190382,
+      "aggregate_output_tokens_per_s": 10.925286670633824,
+      "prior_median_http_ttft_ms": 910.9980470966548,
+      "median_ttft_saved_ms": 182.51617182977498,
+      "source": "device_fill_serving/readiness_vllm/vllm_result.json"
+    },
+    {
+      "isl": 4096,
+      "osl": 252,
+      "concurrency": 8,
+      "completed": 8,
+      "total_output_tokens": 2016,
+      "median_http_ttft_ms": 11443.820054177195,
+      "mean_tpot_ms": 90.41450026726159,
+      "aggregate_output_tokens_per_s": 59.192879853561394,
+      "prior_median_http_ttft_ms": 12812.076004454866,
+      "median_ttft_saved_ms": 1368.2559502776712,
+      "source": "device_fill_serving/readiness_vllm/vllm_ci_serving_result.json"
+    }
+  ]
+}

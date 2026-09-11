@@ -1,0 +1,38 @@
+{
+  "runtime_checkpoint": "4ea57c41431a1e80318c4d32d249d5552c4f165f",
+  "source_overlay_tag": "mvasiljevic/qwen38-perf-4ea57c41431",
+  "base_native_checkpoint": "6f60917b27b63908f85fc982fe010b1d6ad76523",
+  "native_build_inputs_identical": true,
+  "native_build_validation_command": "git diff --name-only 6f60917b27b63908f85fc982fe010b1d6ad76523 4ea57c41431 -- . \":(exclude)models\"",
+  "overlay_paths": [
+    "models/autoports/qwen_qwen3_6_27b",
+    "models/autoports/vllm_bundles",
+    "models/common/sampling"
+  ],
+  "matrix_artifact": "required_ci_matrix.json",
+  "matrix_points": 13,
+  "runs": [
+    {
+      "run_id": 34617909914,
+      "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/34617909914",
+      "sampling_mode": "decode_only",
+      "inference_server_sha": "8d9f3084853883999aec235293d58472f6d783f4",
+      "runner": "120-qb2-p04t07",
+      "status_observed": "benchmark_job_in_progress",
+      "build_jobs": "skipped",
+      "inputs_artifact": "ci_dispatch_decode_only_inputs.json"
+    },
+    {
+      "run_id": 34618127149,
+      "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/34618127149",
+      "sampling_mode": "all",
+      "inference_server_sha": "df501912ccadd1bf4ccd7131042430357933c086",
+      "runner": "qb2-120-p01t03",
+      "status_observed": "benchmark_job_in_progress",
+      "build_jobs": "skipped",
+      "inputs_artifact": "ci_dispatch_all_inputs.json"
+    }
+  ],
+  "comparison_note": "decode_only prefill uses host logits and bypasses device scatter; all mode exercises it. Both CI runs retain the prior FABRIC_1D setting; local all-mode serving used FABRIC_1D_RING. CI results are pending, not target passes.",
+  "cancellation": "No cross-run cancellation/concurrency group in inspected workflow chain; runs assigned different runners; neither cancelled."
+}

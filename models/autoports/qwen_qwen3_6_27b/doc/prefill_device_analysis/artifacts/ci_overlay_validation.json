@@ -1,0 +1,24 @@
+{
+  "yaml_parse": "passed",
+  "only_changed_values": [
+    [
+      "/templates/13/device_model_specs/0/tt_metal_source_paths",
+      [
+        "models/autoports/qwen_qwen3_6_27b",
+        "models/autoports/vllm_bundles"
+      ],
+      [
+        "models/autoports/qwen_qwen3_6_27b",
+        "models/autoports/vllm_bundles",
+        "models/common/sampling"
+      ]
+    ],
+    [
+      "/templates/13/device_model_specs/0/tt_metal_source_ref",
+      "mvasiljevic/qwen38-deltanet-kda",
+      "mvasiljevic/qwen38-perf-4ea57c41431"
+    ]
+  ],
+  "matrix_unchanged": true,
+  "native_build_diff_outside_models": ""
+}

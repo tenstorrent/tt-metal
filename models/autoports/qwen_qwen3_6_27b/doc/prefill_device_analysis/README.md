@@ -1,5 +1,12 @@
 # Qwen3.8 TP4 prefill device investigation
 
+This is a user-directed follow-up using targeted skills and independent review
+agents, not an end-to-end invocation of the agentic-research/model-bringup
+pipeline or every stage gate. `STAGE_REVIEW.md` records bounded source/evidence
+reviews requested through the stage-review skill; it is not a pipeline stage
+completion certificate. The automatic acceptance gates proposed here have not
+been installed into the pipeline.
+
 Investigation started 2026-09-11; follow-up integration checks are ongoing. The runtime directory retains its Qwen3.6 name;
 experiments explicitly load Qwen3.8 revision
 `1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0` and the selected precision JSON.
@@ -14,24 +21,39 @@ dedicated gated RMSNorm, K-block limit8, and one MLP SiLU. Fresh pinned Qwen3.8
 checks measured **99/100 top1 and 100/100 top5** for both prefill and teacher
 forcing; the run counted1872 flat-native calls and zero rank4 calls.
 
-The first live benchmark measured **890.998ms median HTTP TTFT** at
-ISL128/OSL252/C1 (4/4 requests), and **13039.632ms** for the
-ISL4096/OSL252/C8 burst (8/8). The sampled-text failure was reproduced
-as TP rank token disagreement and repaired with shared per-step entropy seeds.
-The production full64 check passes574 decode observations; the final live
-sampling/quality/benchmark rerun remains in progress before CI dispatch.
+The selected device-fill implementation completed live serving validation:
+**728.482ms median HTTP TTFT at ISL128/OSL252/C1** (4/4 requests,1008 output
+ tokens) and **11443.820ms at ISL4096/OSL252/C8** (8/8 requests,2016 tokens).
+The preceding corrected-sampling implementation measured910.998/12812.076ms;
+device fill saved182.516ms/1368.256ms respectively. The short-point saving
+closely matches the isolated175.451ms prediction. Canonical sampling passed
+3 tests with1 skip; all six greedy outputs were unchanged, and all six sampled
+responses were coherent, with documented output-budget truncations.
+See `artifacts/device_fill_serving_summary.json` and the qualitative review.
 
 The119.301/1299.242ms figures are warmed generator measurements, **not
 serving/CI TTFT**. Their remaining gaps are1.988×/2.598× against60/500ms.
-Actual short-point HTTP TTFT remains14.85× above60ms.
+Actual short-point HTTP TTFT remains **12.14× above60ms**. Full64 production
+sampling checks passed574 decode observations without TP rank disagreement.
 The full-batch32 native test exposed a core-count limit; device-side batch
-tiling now passes both aligned S128 and ragged S65 lifecycle checks across
-four layers with all 32 rows active. Live serving validation remains in progress.
-Required-point CI has not yet been dispatched.
+tiling passes aligned S128 and ragged S65 lifecycle checks across four layers.
+
+Two CI benchmark runs are in progress, both pinned to runtime checkpoint
+`4ea57c41431` and reusing the previous native build (all build jobs skipped):
+[historical decode-only sampling](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/34617909914)
+and [sampling on device for prefill and decode](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/34618127149).
+Both retain the requested13-point OSL252 matrix; neither is a completed CI
+result. The second run exercises device prefill scatter; the first bypasses it.
+CI retains FABRIC_1D, whereas the local serving measurements use FABRIC_1D_RING.
+Trace reuse remains an unselected experiment aimed at the roughly500ms setup
+cost; no production HTTP improvement is claimed for it.
 
 See [the complete additional-work and pipeline-gap ledger](PIPELINE_GAPS.md)
 for all follow-up actions, failed hypotheses, full-model artifacts, production
-changes and proposed automatic gates. See [native operator experiments](native_gdn_followup.md)
+changes and proposed automatic gates. Completed raw logs are preserved in
+[the runtime-log archive](artifacts/runtime_logs.tar.gz), indexed by
+[a SHA256 manifest](artifacts/runtime_logs_manifest.json), because the repository
+ignores raw `.log` files. See [native operator experiments](native_gdn_followup.md)
 for the shape/dtype adapter and higher-precision recurrent-state oracle.
 
 ![Full-model native graph improvements and remaining target gaps](artifacts/native_final_full_model.png)

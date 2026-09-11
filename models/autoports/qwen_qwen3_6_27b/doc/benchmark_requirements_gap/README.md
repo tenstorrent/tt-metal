@@ -561,7 +561,18 @@ HTTP TTFT and12812.076ms at4096/252/C8.
 A further tensor-construction audit found host BFP8 packing in inactive-logit
 expansion. Replacing it with a device-filled row and concatenation reduced
 that operation from176–185ms to0.5–1.0ms with exact all-rank results. It is
-integrated, and a fresh full serving rerun is in progress before CI dispatch.
+integrated and the serving rerun completed: **728.482ms** at128/252/C1 and
+**11443.820ms** at4096/252/C8, all4/8 requests and1008/2016 tokens completed.
+The latest short-point HTTP gap is **12.14× above60ms**. The182.516ms saving
+matches the isolated175.451ms prediction within about4%. Canonical sampling
+passed3 tests with1 skip; all six greedy outputs were unchanged and all six
+sampled responses were coherent, with budget truncations documented.
+
+Two required13-point CI jobs are now running with the same fixed runtime
+checkpoint4ea57c41431 and reused native build: [decode-only sampling](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/34617909914)
+and [all-mode sampling](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/34618127149).
+Both build chains were skipped. Results are pending; local serving uses
+FABRIC_1D_RING while these CI configurations retain FABRIC_1D.
 The approximately521ms decode-setup opportunity remains open: guarded trace
 reuse passed reduced correctness but is still experimental, not a production
 HTTP speedup.

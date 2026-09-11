@@ -1,0 +1,12 @@
+{
+  "artifact": "device_fill_serving/readiness_vllm/vllm_qualitative_outputs.json",
+  "status": "coherent_with_documented_budget_truncations",
+  "all_six_greedy_outputs_byte_identical_to_seed_policy_run": true,
+  "sampled_review": "All six coherent, no observed dropped-word corruption. Haiku, learning explanation, sampled thermodynamics and French translation complete. Story truncated; Fibonacci first function and example complete, optional second function starts at budget end.",
+  "greedy_limit": "Story and thermodynamics still budget-truncated at256 tokens.",
+  "python_checks": {
+    "greedy_completion": "parsed and expected outputs at n=0,1,10",
+    "sampled_completion": "parsed and expected outputs at n=0,1,10"
+  },
+  "scope": "Manual review of all twelve strings, not a complete-answer pass for all prompts."
+}

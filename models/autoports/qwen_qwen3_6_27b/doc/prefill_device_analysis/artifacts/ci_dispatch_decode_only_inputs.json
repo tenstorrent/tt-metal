@@ -1,0 +1,16 @@
+{
+  "model": "Qwen/Qwen3.8-27B",
+  "runner-label": "bh-qb-ge",
+  "device-type": "p300x2",
+  "workflow": "benchmarks",
+  "docker-image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64:0.21.0-6f60917b27b63908f85fc982fe010b1d6ad76523-c9cfebc-102878151652",
+  "tt-metal-git-ref": "4ea57c41431a1e80318c4d32d249d5552c4f165f",
+  "inference-server-git-ref": "8d9f3084853883999aec235293d58472f6d783f4",
+  "vllm-git-ref": "c9cfebcf0490066ff85e1e3fba2c7d456ce5ce42",
+  "impl-of-model": "default",
+  "tt-forge-version-override": "",
+  "throttle-perf": "0",
+  "run-full-evals": "false",
+  "run-ai-summary": "false",
+  "create-issue-comment": "false"
+}

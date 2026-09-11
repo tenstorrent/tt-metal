@@ -1,3 +1,6 @@
 # Retain compact, processed performance tables; raw Tracy captures stay in /tmp.
 !artifacts/*_perf.csv
 !artifacts/*_perf_stacked.csv
+
+# Runtime evidence is archived because repository-wide rules ignore raw logs.
+!artifacts/runtime_logs.tar.gz

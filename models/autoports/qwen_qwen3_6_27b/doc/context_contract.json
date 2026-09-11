@@ -354,8 +354,8 @@
         "concurrency": 1,
         "requests_completed": 4,
         "requests_requested": 4,
-        "median_http_ttft_ms": 890.9982368,
-        "artifact": "doc/prefill_device_analysis/readiness_vllm/vllm_benchmark.json"
+        "median_http_ttft_ms": 728.4818752668798,
+        "artifact": "doc/prefill_device_analysis/device_fill_serving/readiness_vllm/vllm_benchmark.json"
       },
       "secondary": {
         "isl": 4096,
@@ -363,14 +363,19 @@
         "concurrency": 8,
         "requests_completed": 8,
         "requests_requested": 8,
-        "median_http_ttft_ms": 13039.631769,
-        "artifact": "doc/prefill_device_analysis/readiness_vllm/vllm_ci_serving_benchmark.json"
+        "median_http_ttft_ms": 11443.820054177195,
+        "artifact": "doc/prefill_device_analysis/device_fill_serving/readiness_vllm/vllm_ci_serving_benchmark.json"
       },
-      "quality_status": "Full64 production seed policy:574 decode observations with exact TP rank agreement; live shared outputs coherent with documented256-token budget truncations. New device-fill scatter final serving rerun in progress."
+      "quality_status": "Selected device-fill serving validation complete: canonical3passed1skipped; six greedy outputs unchanged, six sampled outputs coherent with documented256-token budget truncations. Full64 production seed check:574 decode observations with exact TP rank agreement.",
+      "runtime_checkpoint": "4ea57c41431a1e80318c4d32d249d5552c4f165f",
+      "sampling_mode": "all",
+      "fabric": "FABRIC_1D_RING"
     },
-    "required_ci_status": "not_dispatched_pending_final_integration_validation",
+    "required_ci_status": "two_runs_in_progress_decode_only_and_all_34617909914_34618127149",
     "seed_policy_validation_artifact": "doc/prefill_device_analysis/artifacts/sampling_rank_full64_production.json",
     "seed_policy_serving_artifact": "doc/prefill_device_analysis/artifacts/seed_policy_serving_summary.json",
-    "device_logits_scatter_artifact": "doc/prefill_device_analysis/artifacts/slot_logits_scatter.json"
+    "device_logits_scatter_artifact": "doc/prefill_device_analysis/artifacts/slot_logits_scatter.json",
+    "device_fill_serving_artifact": "doc/prefill_device_analysis/artifacts/device_fill_serving_summary.json",
+    "required_ci_dispatch_artifact": "doc/prefill_device_analysis/artifacts/ci_dispatch_runs.json"
   }
 }
