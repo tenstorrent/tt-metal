@@ -258,7 +258,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     make_cb(cb_q_arg, (stream_heads ? 2 : 1) * HB * QC * Dt, q_fmt, q_tile);
     make_cb(cb_k_arg, 2 * KC * Dt, k_fmt, k_tile);
     make_cb(cb_w_arg, Hi * QC, tt::DataFormat::Float16_b, bf16_tile);
-    make_cb(cb_mask_arg, num_mask_tiles, tt::DataFormat::Float16_b, bf16_tile);
+    make_cb(cb_mask_arg, args.key_compression_ratio + 1, tt::DataFormat::Float16_b, bf16_tile);
     const tt::DataFormat acc_fmt = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const uint32_t acc_tile = fp32_dest_acc_en ? fp32_tile : bf16_tile;
     // cb_qk buffers a batch of relu(q.kT) tiles so compute runs the batch's matmuls then mul+accumulates,
@@ -289,8 +289,8 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     // max(2*KC, .) keeps the QC<=2 double buffer and a whole multiple of QC*KC so a push never wraps mid-unit.
     make_cb(cb_acc_strip_arg, std::max(2u * KC, QC * KC), acc_fmt, acc_tile);
 
-    // Common args: 9 dims then the CB indices in CbArg order. chunk_t is NOT here (per-device runtime arg).
-    std::vector<uint32_t> common_ct = {Hi, Sqt, Tt, Dt, QC, KC, HB, G, block_tiles};
+    // Common dimensions (including compressed-key ratio), then CB indices. chunk_t stays a runtime arg.
+    std::vector<uint32_t> common_ct = {Hi, Sqt, Tt, Dt, QC, KC, HB, G, block_tiles, args.key_compression_ratio};
     common_ct.insert(common_ct.end(), cb_id.begin(), cb_id.end());
 
     // MSA synthesizes the constant gate in-kernel (no weights tensor / no fill op): the reader fills cb_w
