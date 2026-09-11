@@ -56,6 +56,7 @@ def _make_case(device, shape, seed=7):
     g64 = gamma64 * dy64 / rms64
     scale64 = (x64 * g64).mean(dim=-1, keepdim=True)  # E[x*g]
     dx64 = g64 - x64 * scale64 / (rms64 * rms64)
+    dgamma64 = (dy64 * x64 / rms64).sum(dim=(0, 1, 2), keepdim=True)
 
     f32 = lambda t: t.to(torch.float32)
     tensors = dict(
@@ -65,7 +66,7 @@ def _make_case(device, shape, seed=7):
         mean_x2=_dev(f32(mean_x2_64), device),
         scale=_dev(f32(scale64), device),
     )
-    return tensors, dx64
+    return tensors, dx64, dgamma64
 
 
 # --- variants --------------------------------------------------------------------------------
@@ -73,6 +74,12 @@ def run_chain(t):
     inv_rms = ttnn.rsqrt(ttnn.add(t["mean_x2"], EPS))
     d = ttnn.multiply(t["scale"], ttnn.square(inv_rms))
     return rmsnorm_bw_apply(t["x"], t["dy"], t["gamma"], inv_rms, d)
+
+
+def run_chain_full(t):
+    inv_rms = ttnn.rsqrt(ttnn.add(t["mean_x2"], EPS))
+    d = ttnn.multiply(t["scale"], ttnn.square(inv_rms))
+    return rmsnorm_bw_apply(t["x"], t["dy"], t["gamma"], inv_rms, d, with_dgamma=True)
 
 
 def run_pr_dx(t):
@@ -99,27 +106,43 @@ SHAPES = [(1, 1, 512, 1024), (1, 1, 8192, 512), (1, 8, 1024, 1024)]
 #   chain  : read x, read dy, write dx                                      -> 3
 #   pr_dx  : multiply(gamma,dy) 2, divide(.,rms) 2, multiply(x,col) 2, subtract 3  -> 9
 #   pr_full: pr_dx + divide(x,rms) 2 + multiply(dy,.) 3 + sum reads 1            -> 15
-TRAFFIC_TENSORS = {"chain": 3, "pr_dx": 9, "pr_full": 15}
+TRAFFIC_TENSORS = {"chain": 3, "chain_full": 3, "pr_dx": 9, "pr_full": 15}
 USEFUL_TENSORS = 3
 
 
 @pytest.mark.parametrize("shape", SHAPES, ids=["x".join(map(str, s)) for s in SHAPES])
 def test_rmsnorm_bw_apply(device, shape):
-    t, dx64 = _make_case(device, shape)
+    t, dx64, dgamma64 = _make_case(device, shape)
 
-    got = {"chain": run_chain(t), "pr_dx": run_pr_dx(t)}
+    cf_dx, cf_dgamma = run_chain_full(t)
+    pr_dx_t, pr_dgamma = run_pr_full(t)
+    got = {"chain": run_chain(t), "chain_full": cf_dx, "pr_dx": run_pr_dx(t), "pr_full": pr_dx_t}
     errs = {}
     for name, out in got.items():
         out_t = ttnn.to_torch(out).to(torch.float64)
         err = (out_t - dx64).abs().max().item()
         rel = err / dx64.abs().max().item()
         errs[name] = (err, rel)
-        assert torch.allclose(out_t, dx64, rtol=1e-4, atol=1e-4), f"{name}: max abs err {err}"
+        assert torch.allclose(out_t, dx64, rtol=1e-4, atol=1e-4), f"{name}: dx max abs err {err}"
     chain_vs_pr = (ttnn.to_torch(got["chain"]) - ttnn.to_torch(got["pr_dx"])).abs().max().item()
+    dg_errs = {}
+    for name, dg in (("chain_full", cf_dgamma), ("pr_full", pr_dgamma)):
+        dg_t = ttnn.to_torch(dg).to(torch.float64)
+        assert list(dg_t.shape) == list(dgamma64.shape), f"{name}: dgamma shape {dg_t.shape}"
+        err = (dg_t - dgamma64).abs().max().item()
+        dg_errs[name] = (err, err / dgamma64.abs().max().item())
+        assert torch.allclose(
+            dg_t, dgamma64, rtol=1e-3, atol=1e-3 * dgamma64.abs().max().item()
+        ), f"{name}: dgamma max abs err {err}"
 
     # --- timing ---
     trials = int(os.environ.get("RB_TRIALS", "5"))
-    runners = {"chain": lambda: run_chain(t), "pr_dx": lambda: run_pr_dx(t), "pr_full": lambda: run_pr_full(t)}
+    runners = {
+        "chain": lambda: run_chain(t),
+        "chain_full": lambda: run_chain_full(t),
+        "pr_dx": lambda: run_pr_dx(t),
+        "pr_full": lambda: run_pr_full(t),
+    }
     for run in runners.values():
         run()
     ttnn.synchronize_device(device)
@@ -148,7 +171,12 @@ def test_rmsnorm_bw_apply(device, shape):
             f"std={statistics.pstdev(samples[k]):10.0f}  ({med[k]/1e3:9.1f} us)"
         )
     logger.info(
-        f"  speedup chain vs pr_dx: {med['pr_dx']/med['chain']:.2f}x   vs pr_full: {med['pr_full']/med['chain']:.2f}x"
+        f"  dgamma max|err| vs fp64: chain_full={dg_errs['chain_full'][0]:.3e} (rel {dg_errs['chain_full'][1]:.2e})  "
+        f"pr_full={dg_errs['pr_full'][0]:.3e} (rel {dg_errs['pr_full'][1]:.2e})"
+    )
+    logger.info(
+        f"  speedup dx-only: chain vs pr_dx {med['pr_dx']/med['chain']:.2f}x   "
+        f"full: chain_full vs pr_full {med['pr_full']/med['chain_full']:.2f}x"
     )
     n_elem = 1
     for s_ in shape:
