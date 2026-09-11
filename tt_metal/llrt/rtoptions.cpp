@@ -54,6 +54,7 @@ enum class EnvVarID {
     TT_METAL_LOGS_PATH,                       // Path for generated logs and debug output
     TT_METAL_SIMULATOR,                       // Path to simulator executable
     TT_METAL_MOCK_CLUSTER_DESC_PATH,          // Mock cluster descriptor path
+    TT_METAL_CLUSTER_ID,                      // Cluster id to stamp on the discovered cluster descriptor
     TT_METAL_EMULE_MODE,                      // Enable emulated mode (SWEmuleChip with real memory I/O)
     TT_METAL_VISIBLE_DEVICES,                 // Comma-separated list of visible device IDs
     ARCH_NAME,                                // Architecture name (simulation mode)
@@ -481,6 +482,21 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             // Only set Mock target if Simulator hasn't been set already
             if (this->simulator_path.empty()) {
                 this->runtime_target_device_ = tt::TargetDevice::Mock;
+            }
+            break;
+
+        // TT_METAL_CLUSTER_ID
+        // Cluster id UMD stamps on the cluster descriptor it discovers: a unique string naming the
+        // group of accelerators behind a common host / controller / root complex. Leave unset on
+        // bare metal, where UMD's gethostname() already names that group. Set it in a container or a
+        // VM, where gethostname() names the container or the guest instead.
+        // Default: unset (UMD uses the OS hostname)
+        // Usage: export TT_METAL_CLUSTER_ID=bh-glx-110-c01u02
+        case EnvVarID::TT_METAL_CLUSTER_ID:
+            // Exported but empty is a launcher accident, not a request for an empty cluster id, and
+            // UMD throws on one. Treat it as unset so such a run still gets the OS hostname.
+            if (value[0] != '\0') {
+                this->cluster_id = std::string(value);
             }
             break;
 

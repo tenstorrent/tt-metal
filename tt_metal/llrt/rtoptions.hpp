@@ -361,6 +361,9 @@ class RunTimeOptions {
     // Mock cluster initialization using a provided cluster descriptor
     std::string mock_cluster_desc_path;
 
+    // Cluster id handed to UMD topology discovery; unset means UMD uses the OS hostname
+    std::optional<std::string> cluster_id;
+
     // Consolidated target device selection
     TargetDevice runtime_target_device_ = TargetDevice::Silicon;
     // Timeout duration for operations
@@ -862,6 +865,11 @@ public:
 
     // Reliability mode override accessor
     std::optional<tt::tt_fabric::FabricReliabilityMode> get_reliability_mode() const { return reliability_mode; }
+
+    // Cluster id to stamp on the discovered cluster descriptor. Nullopt on bare metal, where UMD
+    // falls back to the OS hostname; set from TT_METAL_CLUSTER_ID in a container or a VM, where the
+    // hostname names the container or the guest rather than the accelerator group.
+    const std::optional<std::string>& get_cluster_id() const { return cluster_id; }
 
     // Mock cluster accessors
     bool get_mock_enabled() const { return !mock_cluster_desc_path.empty(); }
