@@ -87,6 +87,7 @@ class MiniMaxH3AudioDecoder(Module):
         # (see compute_depthwise_conv1d.cpp).
         self.split_mode = split_mode
         self.max_c_in_block = max_c_in_block
+        self.pack_bands = dict(pack_bands or {})
 
         # H3's audio channel schedule differs from LTX's at both ends, so every conv misses
         # _FP32_BLOCKINGS. Seed stubs before any conv is built; see that module for why stubs.
