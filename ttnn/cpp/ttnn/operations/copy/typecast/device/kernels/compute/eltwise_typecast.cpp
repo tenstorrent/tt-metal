@@ -44,53 +44,32 @@ void kernel_main() {
         // pool kernel uses; WH/BH need no repoint (pack_tile tracks the CB slot there).
         pack_init(dfb::out);
 #endif
-        uint32_t dbg_out_addr = 0;
         for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
             tile_regs_acquire();
 
             // Pop tile after tile, copy to DST and pack
             dfb_in.wait_front(1);
 
-            // [TC-DBG #51270] STEP 1 — the compute's own view of the INPUT slot it is about to unpack
-            // (first 4 bf16 datums, raw). Compare against the reader's TC_RD for the same block: if this
-            // shows zeros for block 1 while TC_RD was non-zero, the compute reads a stale/zero input slot
-            // (CB slot / cache visibility) rather than the fresh data the reader wrote.
-            {
-                volatile tt_l1_ptr uint16_t* ip = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dfb_in.get_read_ptr());
-                DPRINT(
-                    "TC_CIN blk={} in= {} {} {} {}\n",
-                    block_index,
-                    (uint32_t)ip[0],
-                    (uint32_t)ip[1],
-                    (uint32_t)ip[2],
-                    (uint32_t)ip[3]);
-            }
-
             copy_tile(dfb::in, 0, 0);
 
-            TYPECAST_LLK_INIT();
-            TYPECAST_LLK(0);
+            // [TC-DBG #51270] A/B PROBE: the SFPU typecast is bypassed for this diagnostic build. For
+            // bf16->fp32 the copy alone already produces the correct result (the bf16 sits in the 32-bit
+            // DEST, and the packer emits fp32), so a correct block-1 output here means the SFPU typecast
+            // is what breaks the 2nd DEST bank; a still-zero block-1 output means copy / DEST-bank / pack
+            // is the culprit, independent of the SFPU. Restore TYPECAST_LLK_INIT()/TYPECAST_LLK(0) after.
+            // TYPECAST_LLK_INIT();
+            // TYPECAST_LLK(0);
 
             tile_regs_commit();
 
             tile_regs_wait();
 
             pack_tile(0, dfb::out);
-            dbg_out_addr = dfb_out.get_write_ptr();  // slot just packed (captured before push advances it)
 
             dfb_in.pop_front(1);
 
             tile_regs_release();
         }
         dfb_out.push_back(per_core_block_dim);
-
-        // [TC-DBG #51270] STEP 2 — the compute's own view of the OUTPUT slot right after pack+push (first
-        // 4 fp32 datums, raw). If this is CORRECT for block 1 while the writer's TC_WR reads zeros, the
-        // packer's write did not become visible at the slot the writer drains (PACK->writer slot / cache
-        // handoff). If this is ALSO zero, the pack/DEST produced zeros for the 2nd tile.
-        {
-            volatile tt_l1_ptr uint32_t* op = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dbg_out_addr);
-            DPRINT("TC_COUT blk={} out= {} {} {} {}\n", block_index, op[0], op[1], op[2], op[3]);
-        }
     }
 }
