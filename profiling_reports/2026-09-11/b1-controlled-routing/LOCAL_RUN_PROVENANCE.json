@@ -1,0 +1,29 @@
+{
+  "native_runtime_root": "/data/ssalice/temp/tt-metal/.worktrees/mistral4-prefill-followups",
+  "source_branch": "ssalice/mistral4-b1-investigation",
+  "visible_devices": [
+    0,
+    1,
+    2,
+    3,
+    11,
+    10,
+    9,
+    8
+  ],
+  "files": {
+    "/data/ssalice/temp/tt-metal/.worktrees/mistral4-prefill-followups/build/lib/libtt_metal.so": "20a0c6feadec852232b5e796921f77abd27cf82eef25318e771bac899e479d76",
+    "/data/ssalice/temp/tt-metal/.worktrees/mistral4-prefill-followups/ttnn/ttnn/_ttnn.so": "2b2be30fb02fd1c2dfbf1b5cc4e17cd504a0c98b8926e2f37982a4bf513e4eca",
+    "/data/ssalice/temp/tt-metal/.worktrees/mistral4-b1-investigation/models/demos/deepseek_v3_d_p/tests/perf/test_b1_controlled_dispatch_combine.py": "ec4b970740f4a02cd4bac913911dabf589bd8eb2b2af4c7224a02940b0709e01"
+  },
+  "manager": "disabled; first-row dispatch core allocation preserved",
+  "warmup": "discard first of ten iterations per fresh process",
+  "matrix": "L18/L23 captured, placement_balanced, source_shuffled; forward and reverse order",
+  "limits": [
+    "TP-captured routes replayed on PP placement, not contemporaneous actual PP routing",
+    "no FFN or concurrent shared expert",
+    "eager instrumented per-operation kernel durations, not model throughput"
+  ],
+  "runtime_checkout_revision": "96125e3b5f7a2eb553ea01a2eac733d3b154b77a",
+  "native_build_provenance": "Recovered matching b48bf4095de build; details in sibling followups profiling_reports/2026-09-11/B3_RUNTIME_RECOVERY.json. Subsequent changes are Python/YAML only."
+}

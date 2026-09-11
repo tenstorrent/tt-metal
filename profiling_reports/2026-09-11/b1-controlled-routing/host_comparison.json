@@ -1,0 +1,66 @@
+[
+  {
+    "layer": 18,
+    "mode": "captured",
+    "destination_max_mean": 1.740234375,
+    "tile_rounded_destination_max_mean": 1.6842105263157894,
+    "mean_unique_destinations_per_token": 3.2333984375,
+    "local_assignment_fraction": 0.121337890625
+  },
+  {
+    "layer": 18,
+    "mode": "placement_balanced",
+    "destination_max_mean": 1.017578125,
+    "tile_rounded_destination_max_mean": 1.035561877667141,
+    "mean_unique_destinations_per_token": 3.4375,
+    "local_assignment_fraction": 0.1265625
+  },
+  {
+    "layer": 18,
+    "mode": "source_shuffled",
+    "destination_max_mean": 1.740234375,
+    "tile_rounded_destination_max_mean": 1.6842105263157894,
+    "mean_unique_destinations_per_token": 3.2333984375,
+    "local_assignment_fraction": 0.1240234375
+  },
+  {
+    "layer": 18,
+    "mode": "uniform",
+    "destination_max_mean": 1.0,
+    "tile_rounded_destination_max_mean": 1.0,
+    "mean_unique_destinations_per_token": 1.0,
+    "local_assignment_fraction": 0.125
+  },
+  {
+    "layer": 23,
+    "mode": "captured",
+    "destination_max_mean": 1.525390625,
+    "tile_rounded_destination_max_mean": 1.497142857142857,
+    "mean_unique_destinations_per_token": 3.3703125,
+    "local_assignment_fraction": 0.117529296875
+  },
+  {
+    "layer": 23,
+    "mode": "placement_balanced",
+    "destination_max_mean": 1.044140625,
+    "tile_rounded_destination_max_mean": 1.04,
+    "mean_unique_destinations_per_token": 3.44140625,
+    "local_assignment_fraction": 0.114697265625
+  },
+  {
+    "layer": 23,
+    "mode": "source_shuffled",
+    "destination_max_mean": 1.525390625,
+    "tile_rounded_destination_max_mean": 1.497142857142857,
+    "mean_unique_destinations_per_token": 3.3703125,
+    "local_assignment_fraction": 0.127734375
+  },
+  {
+    "layer": 23,
+    "mode": "uniform",
+    "destination_max_mean": 1.0,
+    "tile_rounded_destination_max_mean": 1.0,
+    "mean_unique_destinations_per_token": 1.0,
+    "local_assignment_fraction": 0.125
+  }
+]

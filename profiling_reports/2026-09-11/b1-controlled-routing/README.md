@@ -1,0 +1,7 @@
+# Reproduce the B1 analysis
+
+This branch includes the twelve successful source CSVs compressed without changing their bytes, each measured worker as `worker.py.gz`, routing cases, timing summaries and analysis scripts. Large Tracy binaries and console logs remain on the profiling host. Historical September 8 raw captures are also host-local; their hashes and derived tables are included in the parent directory.
+
+From this directory, run `python3 aggregate_timings.py`. It reads compressed CSVs and workers on a fresh checkout and validates coverage before rebuilding the summaries. Source hashes refer to the uncompressed CSV bytes. The run paths embedded in original metadata identify the profiling host; the script resolves the packaged files locally.
+
+The measured worker is an isolated performance diagnostic, not a production correctness test. For a hardware rerun, decompress one successful run's `worker.py.gz` into `models/demos/deepseek_v3_d_p/tests/perf/test_b1_controlled_dispatch_combine.py`, configure the matching native runtime and a verified eight-chip ring, and set `B1_ROUTING_CASE` to the desired case JSON. `run-local.sh` records the original host environment and invocation; its absolute paths must be adapted on another machine. Run one case at a time. The original worker bytes remain archived for exact provenance; no new hardware validation is claimed by publishing this branch.
