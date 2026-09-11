@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import gc
 import os
+import statistics
 import tempfile
 import time
 from pathlib import Path
@@ -20,9 +21,39 @@ from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import DecodersPrecision
 
 
+# The checkpoint this gate runs. Weights are loaded from HF_MODEL (a local directory); the id is
+# stated here so the optimizer's roofline can resolve the model from the test it executes
+# (cc_optimize/run.py::_resolve_model_id scans the run's own test files for a cached HF id).
+HF_MODEL_ID = "meta-llama/Llama-3.1-8B-Instruct"
+
 INPUT_IDS = [128000] + [1000 + ((index * 7919) % 120000) for index in range(127)]
 INPUT_TOKENS = len(INPUT_IDS)
 MAX_SEQ_LEN = 2048
+# Timed prefills per run. perf_mcp takes the median of the TRACE_STAGE_MS[prefill] samples and uses
+# their spread as the tolerance a prefill change must clear; one sample would fall back to the
+# whole-pipeline 8% tolerance, under which a 5% TTFT win reads as no result.
+PREFILL_SAMPLES = 3
+
+# Stage names as the optimizer knows them. In the tracy run they bracket each stage with signposts
+# (agent/stage_marks.py: "stage:<name>" / "stage:<name>:end") so the per-op profile is split into a
+# prefill stack and a decode stack; in the trace run they label TRACE_STAGE_MS[<name>] so each
+# stack gets its own time, its own best-so-far and its own roofline band.
+STAGE_PREFILL = "prefill"
+STAGE_DECODE = "decode"
+STAGE_PATH = "trace+1cq"
+
+
+def _signpost(name: str, enabled: bool) -> None:
+    """Tracy signpost, only under the device profiler. Best-effort: a missing mark costs the stage split."""
+    if not enabled:
+        return
+    try:
+        from tracy import signpost
+
+        signpost(name)
+        print(f"PERF_GATE_SIGNPOST {name}", flush=True)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  [perf-gate] signpost {name!r} not emitted ({type(exc).__name__}: {exc})", flush=True)
 
 # Weight cache for the gate. create_tt_model takes a warm-cache shortcut (load_tensor_flatbuffer on
 # the .tensorbin files) whenever TT_CACHE_PATH already holds a complete cache, and that shortcut has
@@ -93,10 +124,11 @@ def test_optimizer_direct_perf(monkeypatch):
         # the traced production path. State the resolved configuration, then refuse the ones that
         # cannot be a production verdict rather than measuring them anyway.
         role = os.environ.get("PERF_GATE_ROLE", "manual")
+        prefill_samples = 1 if profiling else PREFILL_SAMPLES
         print(
-            f"GATE_CONFIG role={role} profiling={int(profiling)} trace={int(enable_trace)} "
+            f"GATE_CONFIG role={role} model={HF_MODEL_ID} profiling={int(profiling)} trace={int(enable_trace)} "
             f"layers={depth or 32} isl={INPUT_TOKENS} osl={output_tokens} decode_tokens={decode_tokens} "
-            f"profiler_buffer={PROFILER_BUFFER_AT_IMPORT}",
+            f"prefill_samples={prefill_samples} profiler_buffer={PROFILER_BUFFER_AT_IMPORT}",
             flush=True,
         )
         if role == "verdict":
@@ -161,10 +193,23 @@ def test_optimizer_direct_perf(monkeypatch):
             )
             ttnn.synchronize_device(mesh_device)
 
-            start = time.perf_counter()
-            first_token = _prefill(generator, input_ids, page_table, kv_cache, sampling_params, enable_trace)
-            ttnn.synchronize_device(mesh_device)
-            ttft_end = time.perf_counter()
+            # The measured region. Under the profiler the start/stop pair is what tt-perf-report
+            # slices on (the run's manifest names them), so weight load and warm-up stay out of the
+            # per-op profile; the stage pairs inside it split that profile into prefill and decode.
+            _signpost("start", profiling)
+            prefill_ms = []
+            first_token = None
+            for _ in range(prefill_samples):
+                _signpost(f"stage:{STAGE_PREFILL}", profiling)
+                prefill_start = time.perf_counter()
+                first_token = _prefill(generator, input_ids, page_table, kv_cache, sampling_params, enable_trace)
+                ttnn.synchronize_device(mesh_device)
+                prefill_ms.append((time.perf_counter() - prefill_start) * 1000.0)
+                _signpost(f"stage:{STAGE_PREFILL}:end", profiling)
+            ttft_ms = statistics.median(prefill_ms)
+
+            _signpost(f"stage:{STAGE_DECODE}", profiling)
+            decode_start = time.perf_counter()
             _decode(
                 generator,
                 first_token,
@@ -177,26 +222,39 @@ def test_optimizer_direct_perf(monkeypatch):
             )
             ttnn.synchronize_device(mesh_device)
             end = time.perf_counter()
+            _signpost(f"stage:{STAGE_DECODE}:end", profiling)
+            _signpost("stop", profiling)
 
-            decode_seconds = end - ttft_end
-            ttft_ms = (ttft_end - start) * 1000.0
+            decode_seconds = end - decode_start
             decode_tokens_per_second = decode_tokens / decode_seconds
+            per_token_ms = 1000.0 / decode_tokens_per_second
+            wall_ms = ttft_ms + decode_seconds * 1000.0
             print(
-                f"PERF wall_ms={(end - start) * 1000.0:.3f} "
+                f"PERF wall_ms={wall_ms:.3f} "
                 f"ttft_ms={ttft_ms:.3f} "
+                f"ttft_samples_ms={','.join(f'{ms:.3f}' for ms in prefill_ms)} "
                 f"decode_tokens_per_second={decode_tokens_per_second:.3f}",
                 flush=True,
             )
             if not profiling and enable_trace:
-                print(f"TRACE_PER_TOKEN_MS={1000.0 / decode_tokens_per_second:.6f}", flush=True)
-                print(f"TRACE_PREFILL_MS={ttft_ms:.6f}", flush=True)
+                # Per-stage lines first, in the shape agent/trace_replay.py prints them: one
+                # TRACE_STAGE_MS per prefill sample (median + spread are taken by the reader), one for
+                # decode, and the prompt length as the item count prefill retires per call.
+                for ms in prefill_ms:
+                    print(f"TRACE_STAGE_MS[{STAGE_PREFILL}]={ms:.4f} path={STAGE_PATH}", flush=True)
+                print(f"TRACE_STAGE_ITEMS[{STAGE_PREFILL}]={INPUT_TOKENS}", flush=True)
+                print(f"TRACE_STAGE_MS[{STAGE_DECODE}]={per_token_ms:.4f} path={STAGE_PATH}", flush=True)
+                # The headline: decode is the recurring stage, so the per-token time is the score.
+                print(f"TRACE_PER_TOKEN_MS={per_token_ms:.4f}", flush=True)
                 print("TRACE_HEADLINE_UNIT=token", flush=True)
+                print(f"TRACE_PIPELINE_MS={ttft_ms + per_token_ms:.4f} TRACE_STAGES=2", flush=True)
+                print(f"TRACE_PREFILL_MS={ttft_ms:.6f}", flush=True)
+                print(f"TRACE_PREFILL_PATH={STAGE_PATH}", flush=True)
                 print(f"PERF_ISL_TOKENS={INPUT_TOKENS}", flush=True)
                 print("DP=1 TP=4 shard_active=True", flush=True)
-                print("TRACE_REPLAY_PATH=trace+1cq batch=1", flush=True)
-                print("TRACE_PREFILL_PATH=trace+1cq", flush=True)
+                print(f"TRACE_REPLAY_PATH={STAGE_PATH} batch=1", flush=True)
             elif not profiling:
-                print(f"FORWARD_WALL_MS={(end - start) * 1000.0:.6f}", flush=True)
+                print(f"FORWARD_WALL_MS={wall_ms:.6f}", flush=True)
         finally:
             generator = None
             model = None
