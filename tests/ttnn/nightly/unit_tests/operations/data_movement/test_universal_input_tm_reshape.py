@@ -534,3 +534,79 @@ def test_reshape_layout_only_sharded_output_without_input_shard_spec_fails(devic
 
     with expect_error(RuntimeError, "no input_shard_spec is available"):
         ttnn.reshape(tt_input, (1, 1, 512, 128), memory_config=out_mc)
+
+
+# Input from an ND shard spec that normalizes to a 2D layout keeps the higher-rank nd_shard_spec
+# attached; a rank-lowering reshape used to abort in BufferDistributionSpec on the shard-rank check.
+
+
+@pytest.mark.parametrize("layout", LAYOUTS, ids=LAYOUT_IDS)
+@pytest.mark.parametrize(
+    "nd_shard_shape, strategy_name",
+    [
+        ([1, 1, 32, 128], "height"),  # splits the flattened height -> HEIGHT_SHARDED
+        ([1, 1, 64, 64], "width"),  # splits the width -> WIDTH_SHARDED
+    ],
+    ids=["nd_height", "nd_width"],
+)
+def test_reshape_nd_shard_spec_normalized_to_2d_input(device, layout, nd_shard_shape, strategy_name):
+    """An input whose MemoryConfig was built from a rank-4 NdShardSpec that
+    normalizes to a 2D layout must reshape to a lower-rank shape without tripping
+    the shard-rank check, and preserve values exactly."""
+    input_shape = [1, 1, 64, 128]
+    output_shape = [1, 128, 64]  # rank 3 < the retained rank-4 nd_shard_spec
+
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+    nd_shard_spec = ttnn.NdShardSpec(
+        shard_shape=ttnn.Shape(nd_shard_shape), grid=grid, orientation=ttnn.ShardOrientation.ROW_MAJOR
+    )
+    in_memcfg = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1, nd_shard_spec=nd_shard_spec)
+
+    torch.manual_seed(0)
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_output = torch_input.reshape(output_shape)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=in_memcfg)
+
+    tt_output = ttnn.reshape(tt_input, output_shape, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    actual = ttnn.to_torch(tt_output).to(torch.bfloat16)
+    _assert_reshape(torch_output, actual, ttnn.bfloat16)
+
+
+# ND-sharded output config: the internal sharded paths only handle a 2D shard_spec, so an ND output
+# used to abort. Covered for both a spec that normalizes to 2D and one that stays genuinely ND.
+
+
+@pytest.mark.parametrize("layout", LAYOUTS, ids=LAYOUT_IDS)
+@pytest.mark.parametrize(
+    "input_shape, output_shape, nd_shard_shape",
+    [
+        # normalizes to a 2D layout once applied to the output tensor
+        ([1, 1, 64, 128], [1, 1, 128, 64], [1, 1, 64, 64]),
+        # genuinely ND (batch split) — stays ND_SHARDED
+        ([2, 2, 64, 64], [2, 2, 32, 128], [1, 1, 64, 64]),
+    ],
+    ids=["normalizes_2d", "genuine_nd"],
+)
+def test_reshape_nd_sharded_output(device, layout, input_shape, output_shape, nd_shard_shape):
+    """Reshape with an ND-sharded output memory_config must succeed and preserve
+    values, whether the ND spec normalizes to a 2D layout or stays ND."""
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+    nd_shard_spec = ttnn.NdShardSpec(
+        shard_shape=ttnn.Shape(nd_shard_shape), grid=grid, orientation=ttnn.ShardOrientation.ROW_MAJOR
+    )
+    out_memcfg = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1, nd_shard_spec=nd_shard_spec)
+
+    torch.manual_seed(0)
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_output = torch_input.reshape(output_shape)
+
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt_output = ttnn.reshape(tt_input, output_shape, memory_config=out_memcfg)
+
+    assert tt_output.memory_config().is_sharded()
+    actual = ttnn.to_torch(tt_output).to(torch.bfloat16)
+    _assert_reshape(torch_output, actual, ttnn.bfloat16)
