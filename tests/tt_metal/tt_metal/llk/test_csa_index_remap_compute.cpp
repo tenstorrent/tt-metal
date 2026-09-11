@@ -31,7 +31,7 @@ TEST_F(LLKBlackholeSingleCardFixture, CsaIndexRemapReinitializesSfpu) {
             const auto row = rows[sample % rows.size()];
             input[index] = device * 8 * 16384 + bank * 16384 + row;
             const auto position = ((row / 32 * 8 + device) * 8 + bank) * 32 + row % 32 + 256;
-            golden[index] = (position % 8) * 16384 + position / 8;
+            golden[index] = (position % 8) * 16384 | position / 8;
         }
     }
 
