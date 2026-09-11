@@ -1,6 +1,11 @@
 import ttnn
 
-from models.experimental.deepseek_v4_flash.tt.decode_prefetch import DECODE_GCB_GROUP, DECODE_LAYOUTS
+from models.experimental.deepseek_v4_flash.tt.decode_prefetch import (
+    DECODE_GCB_GROUP,
+    DECODE_LAYOUTS,
+    decode_gcb_group_specs,
+    decode_prefetch_page_bytes,
+)
 from models.experimental.deepseek_v4_flash.tt.l1_placement import placement_for
 from models.experimental.deepseek_v4_flash.tt.layers import LinearDecode, fused_rms_norm_gamma_memory_config
 
@@ -60,6 +65,25 @@ def test_kv_uses_full_width_16_core_layout():
 
 def test_kv_uses_a_private_prefetch_ring():
     assert "kv_proj" not in DECODE_GCB_GROUP
+
+
+def test_csa_compressor_uses_full_width_32_core_layout():
+    assert DECODE_LAYOUTS["compressed_sparse_attention"] == {"K": 4096, "N": 1024, "n_blocks": 32}
+    assert "compressed_sparse_attention" not in DECODE_GCB_GROUP
+
+
+def test_hca_compressor_uses_full_width_16_core_layout():
+    assert DECODE_LAYOUTS["heavily_compressed_attention"] == {"K": 4096, "N": 512, "n_blocks": 16}
+    assert "heavily_compressed_attention" not in DECODE_GCB_GROUP
+
+
+def test_shared_decode_gcb_page_stays_32_tiles():
+    """Compressor leaving the shared group must not inflate the ring to a 128-tile page."""
+    import ttnn
+    from models.experimental.deepseek_v4_flash.tt.layers import decode_gcb_page_bytes
+
+    assert decode_gcb_page_bytes(decode_gcb_group_specs(), ttnn.bfloat4_b) == 32 * 576
+    assert decode_prefetch_page_bytes(ttnn.bfloat4_b) == 32 * 576
 
 
 def test_packed_kv_matches_full_width_layout():

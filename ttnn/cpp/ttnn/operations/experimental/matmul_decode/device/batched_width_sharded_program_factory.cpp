@@ -126,8 +126,20 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
         b_blocks * n_blocks,
         num_B_cores);
 
+    const bool mcast_out = operation_attributes.output_core_grid.has_value();
+    const bool mcast_two_hub = mcast_out && operation_attributes.output_mcast_two_hub;
+    auto output_core_range_set = mcast_out ? *operation_attributes.output_core_grid : inputB_core_range_set;
+
     const auto all_compute_cores = inputA_core_range_set.merge(inputB_core_range_set);
     const auto all_compute_cores_with_bbox = tt::tt_metal::CoreRangeSet(all_compute_cores.bounding_box());
+
+    if (mcast_out) {
+        TT_FATAL(
+            Bc == 1 && M_tiles == 1,
+            "batched matmul_decode output_core_grid requires Bc = 1 and M_tiles = 1, but got Bc={}, M_tiles={}",
+            Bc,
+            M_tiles);
+    }
 
     log_debug(
         tt::LogOp,
@@ -154,6 +166,8 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
     const uint32_t in1_cb_index = CBIndex::c_1;       // this core's weight block (resident)
     const uint32_t out_cb_index = CBIndex::c_2;       // this core's output block (compute -> writer)
     const uint32_t full_in0_cb_index = CBIndex::c_3;  // gathered full A
+    const uint32_t out_full_cb_index = CBIndex::c_5;
+    const uint32_t out_stage_cb_index = CBIndex::c_6;
     // GCB path only: sync_cb carries "compute is done reading in1" back to the reader so it can
     // release the GCB page; remote_cb is the remote (GCB) index aliased onto the local in1 CB.
     const uint32_t sync_cb_index = CBIndex::c_4;
@@ -316,10 +330,34 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
             .tile = out_tile_desc,
         }}},
     };
-    if (output_tensor.layout() == Layout::ROW_MAJOR) {
+    if (output_tensor.layout() == Layout::ROW_MAJOR && !mcast_out) {
         out_cb_desc.buffer = output_tensor.buffer();
     }
     desc.cbs.push_back(std::move(out_cb_desc));
+    if (mcast_out) {
+        const uint32_t packed_N_tiles = b_blocks * div_up(operation_attributes.N, tt::constants::TILE_WIDTH);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = M_tiles * packed_N_tiles * out_tile_size,
+            .core_ranges = output_core_range_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = out_full_cb_index,
+                .data_format = out_data_format,
+                .page_size = out_tile_size,
+                .tile = out_tile_desc,
+            }}},
+            .buffer = output_tensor.buffer(),
+        });
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = M_tiles * packed_N_tiles * out_tile_size,
+            .core_ranges = inputB_core_range_set.merge(output_core_range_set),
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = out_stage_cb_index,
+                .data_format = out_data_format,
+                .page_size = out_tile_size,
+                .tile = out_tile_desc,
+            }}},
+        });
+    }
     desc.cbs.push_back(CBDescriptor{
         .total_size = full_in0_num_tiles * in0_tile_size,
         .core_ranges = inputB_core_range_set,
@@ -392,7 +430,116 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
     }
     desc.kernels.push_back(std::move(reader_kernel_desc));
 
-    if (output_tensor.layout() != Layout::ROW_MAJOR) {
+    if (mcast_out) {
+        const uint32_t packed_N_tiles = b_blocks * div_up(operation_attributes.N, tt::constants::TILE_WIDTH);
+        const uint32_t num_producers = static_cast<uint32_t>(b_cores.size());
+        const uint32_t num_out_hubs = mcast_two_hub ? 2u : 1u;
+        const uint32_t split_P = mcast_two_hub ? num_producers / 2 : num_producers;
+        const CoreRange dest_bbox = output_core_range_set.bounding_box();
+        const CoreCoord hub0_logical = dest_bbox.start_coord;
+        const CoreCoord hub1_logical = dest_bbox.end_coord;
+        TT_FATAL(
+            !mcast_two_hub || hub0_logical != hub1_logical,
+            "batched matmul_decode output_mcast_two_hub needs an output_core_grid of at least two cores, but got {}",
+            output_core_range_set.str());
+        const CoreCoord dest_start_phys = device->worker_core_from_logical_core(hub0_logical);
+        const CoreCoord dest_end_phys = device->worker_core_from_logical_core(hub1_logical);
+        const uint32_t num_dest_cores = output_core_range_set.num_cores();
+        constexpr uint32_t out_stage_sem_id = 0;
+        constexpr uint32_t out_done_sem_id = 1;
+        auto writer_bbox = inputB_core_range_set.merge(output_core_range_set);
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = out_stage_sem_id,
+            .core_ranges = writer_bbox,
+            .initial_value = 0,
+        });
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = out_done_sem_id,
+            .core_ranges = writer_bbox,
+            .initial_value = 0,
+        });
+
+        const KernelDescriptor::CompileTimeArgs writer_ct_args = {
+            M_tiles,
+            Nc_tiles,
+            packed_N_tiles,
+            out_tile_size,
+            num_dest_cores,
+            static_cast<uint32_t>(dest_start_phys.x),
+            static_cast<uint32_t>(dest_start_phys.y),
+            static_cast<uint32_t>(dest_end_phys.x),
+            static_cast<uint32_t>(dest_end_phys.y),
+            out_stage_sem_id,
+            out_done_sem_id,
+            static_cast<uint32_t>(dest_start_phys.x),
+            static_cast<uint32_t>(dest_start_phys.y),
+            static_cast<uint32_t>(dest_end_phys.x),
+            static_cast<uint32_t>(dest_end_phys.y),
+            split_P,
+            num_producers,
+            num_out_hubs,
+        };
+        KernelDescriptor::NamedCompileTimeArgs writer_named = {
+            {"cb_out", out_cb_index},
+            {"cb_out_stage", out_stage_cb_index},
+            {"cb_out_full", out_full_cb_index},
+        };
+
+        std::map<CoreCoord, uint32_t> producer_id_by_core;
+        for (uint32_t id = 0; id < b_cores.size(); id++) {
+            producer_id_by_core[b_cores[id]] = id;
+        }
+        auto out_role_of = [&](const CoreCoord& core) -> HubRole {
+            if (core == hub0_logical) {
+                return HubRole::Hub0;
+            }
+            if (mcast_two_hub && core == hub1_logical) {
+                return HubRole::Hub1;
+            }
+            return HubRole::Plain;
+        };
+
+        const std::vector<CoreCoord> writer_cores = corerange_to_cores(writer_bbox, std::nullopt, true);
+        const NOC reader_noc = use_global_cb ? NOC::NOC_0 : NOC::NOC_1;
+        const NOC writer_noc = reader_noc == NOC::NOC_0 ? NOC::NOC_1 : NOC::NOC_0;
+
+        auto build_writer = [&](const std::vector<CoreCoord>& cores, NOC noc) {
+            std::vector<CoreRange> ranges;
+            ranges.reserve(cores.size());
+            for (const auto& core : cores) {
+                ranges.emplace_back(core, core);
+            }
+            KernelDescriptor writer;
+            writer.kernel_source =
+                "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/dataflow/"
+                "writer_full_width_output_mcast.cpp";
+            writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
+            writer.core_ranges = CoreRangeSet(ranges);
+            writer.compile_time_args = writer_ct_args;
+            writer.named_compile_time_args = writer_named;
+            writer.config = DataMovementConfigDescriptor{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = noc,
+            };
+            writer.runtime_args.reserve(cores.size());
+            for (const auto& core : cores) {
+                const auto it = producer_id_by_core.find(core);
+                const bool is_producer = it != producer_id_by_core.end();
+                const uint32_t n_idx = is_producer ? it->second : 0;
+                const bool is_dest = output_core_range_set.contains(core);
+                writer.runtime_args.emplace_back(
+                    core,
+                    KernelDescriptor::CoreRuntimeArgs{
+                        static_cast<uint32_t>(is_producer),
+                        n_idx,
+                        static_cast<uint32_t>(out_role_of(core)),
+                        static_cast<uint32_t>(is_dest)});
+            }
+            return writer;
+        };
+
+        desc.kernels.push_back(build_writer(writer_cores, writer_noc));
+    } else if (output_tensor.layout() != Layout::ROW_MAJOR) {
         const uint32_t N_tiles = div_up(operation_attributes.N, tt::constants::TILE_WIDTH);
         KernelDescriptor writer_kernel_desc;
         writer_kernel_desc.kernel_source =

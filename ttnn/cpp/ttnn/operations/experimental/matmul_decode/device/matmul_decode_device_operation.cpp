@@ -306,8 +306,19 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
     }
 
     if (operation_attributes.output_core_grid.has_value()) {
-        TT_FATAL(!batched, "matmul_decode output_core_grid is only supported on the full-width factory");
-        TT_FATAL(!partial, "matmul_decode output_core_grid is only supported on the full-width factory");
+        TT_FATAL(!partial, "matmul_decode output_core_grid is not supported with partial_width_sharded");
+        if (batched) {
+            TT_FATAL(
+                operation_attributes.M == 1,
+                "batched matmul_decode output_core_grid requires M = 1, but got M={}",
+                operation_attributes.M);
+            TT_FATAL(
+                operation_attributes.b_blocks == operation_attributes.batch,
+                "batched matmul_decode output_core_grid requires Bc = 1 (b_blocks == batch), but got batch={}, "
+                "b_blocks={}",
+                operation_attributes.batch,
+                operation_attributes.b_blocks);
+        }
         TT_FATAL(
             !operation_attributes.all_gather,
             "matmul_decode output_core_grid is mutually exclusive with fused all_gather");
@@ -834,8 +845,8 @@ MatmulDecodeDeviceOperation::spec_return_value_t MatmulDecodeDeviceOperation::co
     const tt::tt_metal::Tile output_tile = in0_tile_for_compute(input_tensor_a);
     const auto output_tile_height = input_tensor_a.layout() == Layout::ROW_MAJOR ? 1 : output_tile.get_height();
 
-    const bool batched_out = input_tensor_a.logical_shape().rank() == 4 && operation_attributes.batch > 1 &&
-                             !operation_attributes.output_core_grid.has_value();
+    const bool batched = input_tensor_a.logical_shape().rank() == 4 && operation_attributes.batch > 1;
+    const bool batched_out = batched && !operation_attributes.output_core_grid.has_value();
     // TILE batched output stays DRAM-interleaved. Rank-4 with batch == 1 is the full-width path.
     // ROW_MAJOR batched output is width-sharded on the weight grid in the same folded
     // [Bc*M, b_blocks*N] layout as the weights.
@@ -869,6 +880,26 @@ MatmulDecodeDeviceOperation::spec_return_value_t MatmulDecodeDeviceOperation::co
             output_shape,
             tt::tt_metal::TensorLayout(
                 dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR), memory_config));
+    }
+    if (batched && operation_attributes.output_core_grid.has_value()) {
+        // Fold the block-diagonal [Bc*M, b_blocks*N] result and replicate it on every dest core.
+        const uint32_t packed_N = static_cast<uint32_t>(operation_attributes.b_blocks * operation_attributes.N);
+        const auto& dest_grid = *operation_attributes.output_core_grid;
+        const int dest_cores = static_cast<int>(dest_grid.num_cores());
+        const uint32_t shard_height = tt::round_up(operation_attributes.M, output_tile_height);
+        for (int i = 0; i < static_cast<int>(output_shape.rank()) - 2; ++i) {
+            output_shape[i] = 1;
+        }
+        output_shape[-1] = static_cast<int>(packed_N);
+        output_shape[-2] = dest_cores * operation_attributes.M;
+        auto shard_spec =
+            tt::tt_metal::ShardSpec(dest_grid, {shard_height, packed_N}, tt::tt_metal::ShardOrientation::ROW_MAJOR);
+        auto memory_config = MemoryConfig(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec);
+        const auto output_page_config = input_tensor_a.layout() == Layout::ROW_MAJOR
+                                            ? tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR)
+                                            : tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE, output_tile);
+        return tt::tt_metal::TensorSpec(
+            output_shape, tt::tt_metal::TensorLayout(dtype, output_page_config, memory_config));
     }
 
     // Neither a prefetcher-fed weight (ND-sharded in DRAM) nor a packed weight (a region of the

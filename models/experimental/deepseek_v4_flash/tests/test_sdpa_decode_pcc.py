@@ -27,6 +27,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.experimental.deepseek_v4_flash.tt.attention import DeepSeekV4Attention
+from models.experimental.deepseek_v4_flash.tt.common import width_sharded_l1_config
 
 _MASK_NEG = -1.0e9
 PCC_THRESHOLD = 0.99
@@ -98,12 +99,18 @@ def test_sdpa_decode_pcc(device, reset_seeds, num_heads: int, head_dim: int, skv
 
     attn = _make_attention(device, num_heads, head_dim, sinks)
 
-    def to_tt(t):
+    def to_tt(t, *, packed_q: bool = False):
+        if packed_q:
+            packed = t.reshape(1, 1, t.shape[1], t.shape[-1] * t.shape[2])
+            tensor = ttnn.from_torch(packed, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+            return ttnn.to_memory_config(
+                tensor, width_sharded_l1_config(packed.shape[-2], packed.shape[-1], device, tile_height=1)
+            )
         return ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-    # The op (and its height-sharded output) is ``[1, B, H, Dh]``; the fp32
-    # reference keeps the head-major ``[1, H, 1, Dh]`` layout.
-    fused = ttnn.to_torch(attn._sdpa_decode(to_tt(q.transpose(1, 2)), to_tt(kv), to_tt(mask))).float()
+    # Packed WIDTH_SHARDED ``[1, 1, B, H*Dh]`` -- the layout :meth:`_sdpa_decode`
+    # gathers onto the SDPA cores. The fp32 reference keeps head-major ``[1, H, 1, Dh]``.
+    fused = ttnn.to_torch(attn._sdpa_decode(to_tt(q.transpose(1, 2), packed_q=True), to_tt(kv), to_tt(mask))).float()
     fused = fused.transpose(1, 2)
     reference = _torch_reference(q, kv, mask, attn.sinks_torch, attn.scaling)
 

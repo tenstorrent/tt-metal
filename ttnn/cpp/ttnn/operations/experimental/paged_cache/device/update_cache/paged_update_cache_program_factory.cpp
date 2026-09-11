@@ -103,12 +103,116 @@ std::vector<UpdateCachePerCoreOffsets> compute_update_cache_offsets(
     return offsets;
 }
 
+ProgramDescriptor create_rm_width_sharded_update_descriptor(
+    const PagedUpdateCacheParams& operation_attributes, const PagedUpdateCacheInputs& tensor_args) {
+    ProgramDescriptor desc;
+
+    const auto& cache_tensor = tensor_args.cache_tensor;
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& update_idxs_tensor = tensor_args.update_idxs_tensor;
+    tt_metal::IDevice* device = input_tensor.device();
+
+    const bool use_index_tensor = update_idxs_tensor.has_value();
+    const ShardSpec& cache_shard = cache_tensor.shard_spec().value();
+    const uint32_t num_cache_cores = cache_shard.grid.num_cores();
+    const uint32_t shard_width_bytes = cache_shard.shape[1] * cache_tensor.element_size();
+    const uint32_t cache_num_rows = cache_tensor.physical_volume() / cache_tensor.padded_shape()[-1];
+
+    const std::vector<CoreCoord> cache_logical_cores =
+        corerange_to_cores(cache_shard.grid, num_cache_cores, cache_shard.orientation == ShardOrientation::ROW_MAJOR);
+
+    tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    const uint32_t input_cb_page_size = input_tensor.buffer()->aligned_page_size();
+    auto* in1_buffer = input_tensor.buffer();
+    const CoreRangeSet all_cores = input_tensor.shard_spec().value().grid;
+
+    const tt::CBIndex src1_cb_index = CBIndex::c_1;
+    const tt::CBIndex cb_index_id = CBIndex::c_2;
+
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = input_cb_page_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(src1_cb_index),
+            .data_format = input_cb_data_format,
+            .page_size = input_cb_page_size,
+        }}},
+        .buffer = in1_buffer,
+    });
+
+    uint32_t index_stick_size = 0;
+    tt::DataFormat index_data_format = tt::DataFormat::Int32;
+    uint32_t index_tensor_tile_size = 0;
+    if (use_index_tensor) {
+        index_data_format = tt_metal::datatype_to_dataformat_converter(update_idxs_tensor.value().dtype());
+        index_tensor_tile_size = tt::tile_size(index_data_format);
+        index_stick_size = update_idxs_tensor.value().buffer()->aligned_page_size();
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = index_tensor_tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_index_id),
+                .data_format = index_data_format,
+                .page_size = index_tensor_tile_size,
+            }}},
+        });
+    }
+
+    std::vector<uint32_t> writer_compile_time_args = {
+        (std::uint32_t)src1_cb_index,
+        (std::uint32_t)use_index_tensor,
+        (std::uint32_t)cb_index_id,
+        num_cache_cores,
+        shard_width_bytes,
+        cache_num_rows,
+        index_stick_size,
+    };
+    TensorAccessorArgs(use_index_tensor ? update_idxs_tensor->buffer() : nullptr).append_to(writer_compile_time_args);
+
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/"
+        "writer_update_cache_rm_width_sharded.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_desc.config = WriterConfigDescriptor{};
+
+    Buffer* const index_buffer_for_rt = use_index_tensor ? update_idxs_tensor.value().buffer() : nullptr;
+    const auto cores = update_cache_cores(tensor_args);
+    auto* cache_buffer = cache_tensor.buffer();
+    for (uint32_t i = 0; i < cores.size(); ++i) {
+        KernelDescriptor::RTArgList rargs;
+        rargs.push_back(cache_buffer);
+        if (use_index_tensor) {
+            rargs.push_back(index_buffer_for_rt);
+        } else {
+            rargs.push_back(uint32_t{0});
+        }
+        rargs.push_back(i);
+        rargs.push_back(use_index_tensor ? 0u : operation_attributes.update_idxs.at(i));
+        for (const CoreCoord& cache_core : cache_logical_cores) {
+            const CoreCoord physical = device->worker_core_from_logical_core(cache_core);
+            rargs.push_back(static_cast<uint32_t>(physical.x));
+            rargs.push_back(static_cast<uint32_t>(physical.y));
+        }
+        writer_desc.emplace_runtime_args(cores.at(i), rargs);
+    }
+
+    desc.kernels.push_back(std::move(writer_desc));
+    return desc;
+}
+
 }  // namespace
 
 ProgramDescriptor PagedUpdateCacheProgramFactory::create_descriptor(
     const PagedUpdateCacheParams& operation_attributes,
     const PagedUpdateCacheInputs& tensor_args,
     Tensor& /*tensor_return_value*/) {
+    if (is_rm_width_sharded_l1_cache(tensor_args.cache_tensor)) {
+        return create_rm_width_sharded_update_descriptor(operation_attributes, tensor_args);
+    }
+
     ProgramDescriptor desc;
 
     const auto& cache_tensor = tensor_args.cache_tensor;
@@ -500,6 +604,27 @@ void PagedUpdateCacheProgramFactory::override_runtime_arguments(
     // empty descriptor for coords excluded from the dispatch — those programs have no kernels to patch.
     if (operation_attributes.mesh_coords.has_value() && mesh_dispatch_coordinate.has_value() &&
         !operation_attributes.mesh_coords.value().contains(mesh_dispatch_coordinate.value())) {
+        return;
+    }
+
+    if (is_rm_width_sharded_l1_cache(tensor_args.cache_tensor)) {
+        constexpr uint32_t kWriterKernelIdx = 0;
+        constexpr uint32_t kInputCbPos = 0;
+        const uint32_t cache_addr = tensor_args.cache_tensor.buffer()->address();
+        const uint32_t update_idxs_addr = tensor_args.update_idxs_tensor.has_value()
+                                              ? tensor_args.update_idxs_tensor.value().buffer()->address()
+                                              : 0u;
+        const auto cores = update_cache_cores(tensor_args);
+        for (uint32_t i = 0; i < cores.size(); ++i) {
+            auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx, cores.at(i));
+            writer_args[0] = cache_addr;
+            writer_args[1] = update_idxs_addr;
+            if (!tensor_args.update_idxs_tensor.has_value()) {
+                writer_args[3] = operation_attributes.update_idxs.at(i);
+            }
+        }
+        tt::tt_metal::UpdateDynamicCircularBufferAddress(
+            program, program.circular_buffers().at(kInputCbPos)->id(), *tensor_args.input_tensor.buffer());
         return;
     }
 
