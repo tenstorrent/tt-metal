@@ -59,8 +59,11 @@ def test_up_front_compile(device):
     assert n_unique >= 1
 
     # Parallel compile -> warms the on-disk kernel cache. Must report zero errors.
-    num_programs, num_errors, workers, wall = ttnn.graph.up_front_compile(device, 4)
-    print(f"up_front: compiled {num_programs} programs in {wall:.2f}s (workers={workers}, errors={num_errors})")
+    num_programs, num_errors, workers, wall, num_already = ttnn.graph.up_front_compile(device, 4)
+    print(
+        f"up_front: {num_programs} collected | {num_programs - num_already} built | "
+        f"{num_already} already compiled in {wall:.2f}s (workers={workers}, errors={num_errors})"
+    )
     assert num_errors == 0, "parallel compile reported errors"
 
     # The real run is now warm and must still be numerically correct. Use PCC
@@ -107,14 +110,22 @@ def test_up_front_collect_mechanics(device):
 
     # compile() JIT-builds exactly the deduped unique set, error-free, then resets the
     # collector. If compile silently skipped programs this parity check would catch it.
-    num_programs, num_errors, _, _ = ttnn.graph.up_front_compile(device, 4)
+    num_programs, num_errors, _, _, num_already = ttnn.graph.up_front_compile(device, 4)
     assert num_errors == 0, "parallel compile reported errors"
     assert num_programs == unique, f"compiled {num_programs} programs, expected the {unique} unique collected"
+    # Every collected program must arrive UNCOMPILED, so this pass is the thing that
+    # builds it -- in parallel. A non-zero count means something compiled it inline
+    # during collect (as Metal 2.0 spec factories did before defer_compile), which
+    # silently degrades the pass to serial compilation behind op dispatch.
+    assert num_already == 0, (
+        f"{num_already}/{num_programs} programs were already compiled on arrival -- "
+        f"they were JIT'd inline during collect, defeating the parallel pass"
+    )
     assert ttnn.graph.up_front_num_collected() == 0, "compile() should clear the collector"
 
     # Compiling an empty collector is a no-op, not an error.
-    n, e, _, _ = ttnn.graph.up_front_compile(device, 4)
-    assert (n, e) == (0, 0), f"empty compile should be a no-op, got ({n}, {e})"
+    n, e, _, _, already = ttnn.graph.up_front_compile(device, 4)
+    assert (n, e, already) == (0, 0, 0), f"empty compile should be a no-op, got ({n}, {e}, {already})"
 
 
 def test_up_front_collect_accumulates(device):
@@ -144,3 +155,57 @@ def test_up_front_collect_accumulates(device):
     assert after_second > after_first, "clear=False should accumulate, not reset, across passes"
     assert ttnn.graph.up_front_num_unique() <= after_second
     ttnn.graph.up_front_clear()
+
+
+def test_up_front_collect_defers_spec_factory_compile(device):
+    """Metal 2.0 ProgramSpec factories must NOT compile at construction while a
+    collect pass is active.
+
+    MakeMeshWorkloadFromSpecs compiles eagerly by default (it is the last statement
+    in the factory). Under collect that is exactly wrong: the workload is stashed and
+    discarded, so the compile happens inline, one kernel at a time, behind op
+    dispatch — and the later parallel pass finds every program already compiled and
+    does nothing. The pass then reports a very fast, very healthy-looking no-op.
+
+    ttnn.rms_norm routes to ttnn::prim::layer_norm, whose factory is ProgramSpec-based,
+    so it exercises that path. The invariant: everything the pass is handed is built BY
+    the pass. Drop the defer_compile argument at
+    mesh_device_operation_adapter.hpp's MakeMeshWorkloadFromSpecs call and this fails
+    with num_already == num_programs.
+    """
+    torch.manual_seed(0)
+    ttnn.graph.up_front_clear()
+
+    shapes = [(1, 1, 32, 64), (1, 1, 64, 128), (1, 1, 128, 256)]
+    for shape in shapes:
+        ttnn.graph.up_front_begin_collect(clear=False)
+        try:
+            x = ttnn.from_torch(
+                torch.randn(*shape, dtype=torch.bfloat16),
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                dtype=ttnn.bfloat16,
+            )
+            ttnn.rms_norm(x)
+        finally:
+            ttnn.graph.up_front_end_collect()
+
+    unique = ttnn.graph.up_front_num_unique()
+    assert unique >= 1, "rms_norm didn't reach the collector — did the spec-factory path change?"
+
+    num_programs, num_errors, _, _, num_already = ttnn.graph.up_front_compile(device, 4)
+    assert num_errors == 0, "parallel compile reported errors"
+    assert num_programs == unique
+    assert num_already == 0, (
+        f"{num_already}/{num_programs} spec-factory programs arrived already compiled — "
+        f"they were JIT'd inline and serially during collect, defeating the parallel pass"
+    )
+
+    # The normal (non-deferred) path must be unaffected: a deferred workload is
+    # discarded, and the real run builds and compiles its own.
+    t = torch.randn(1, 1, 128, 256)
+    x = ttnn.from_torch(t, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    got = ttnn.to_torch(ttnn.rms_norm(x)).float().flatten()
+    expected = (t / torch.sqrt(t.pow(2).mean(-1, keepdim=True) + 1e-12)).flatten()
+    pcc = torch.corrcoef(torch.stack([got, expected]))[0, 1].item()
+    assert pcc > 0.999, f"warm rms_norm incorrect: PCC {pcc}"
