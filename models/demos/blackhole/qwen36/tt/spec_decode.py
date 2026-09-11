@@ -214,8 +214,9 @@ class SpeculativeDecoder:
 
         The first real ``_draft`` happens after capture_verify_trace, and the logits-producing drafter
         path has programs nothing earlier in generate() has run at B=1: head_norm in DECODE mode
-        (gather-then-norm), the fp32 LM head and its vocab all-gather, the multicore untilize and the
-        argmax — and, under V3, the mesh_partition that re-fractures mtp.norm's output. A program that
+        (gather-then-norm), the fp32 LM head (plus its vocab all-gather, or under shard_argmax the
+        shard reduce and the two scalar gathers of tp_common.greedy_pick), the multicore untilize and
+        the argmax — and, under V3, the mesh_partition that re-fractures mtp.norm's output. A program that
         first compiles while a trace is parked lands its kernel binaries in memory the replayed trace
         writes over (see capture_verify_trace), so they have to compile here. Runs under BOTH feed
         contracts.
@@ -231,22 +232,13 @@ class SpeculativeDecoder:
         ttnn.synchronize_device(self.mesh)
 
     def _argmax_last(self, logits):
-        """argmax over the vocab dim for ONE row -> [1,1,1] uint32 ROW_MAJOR.
+        """Greedy pick over the vocab dim for ONE row -> [1,1,1] uint32 ROW_MAJOR.
 
-        ttnn.argmax needs ROW_MAJOR input: a TILE tensor takes a single-core internal-untilize path
-        that is catastrophically slow on a 151k-wide vocab. So untilize multicore, then argmax.
-
-        This used to pad 1 -> 32 rows first, on the belief that the multicore argmax is row-parallel
-        and returns garbage below a full tile of rows. It does not: measured on the real drafter, the
-        unpadded argmax returns byte-identical ids (K=3 lossless acceptance 2.57 either way) and the
-        draft phase drops 35.1 -> 22.3 ms at K=10. The pad was pure traffic — [1,1,1,vocab] is
-        ALREADY 32 rows physically, so padding it to 32 logical rows made untilize and argmax move
-        ~32x the bytes they need, so the pad is gone.
+        The eager draft chain's counterpart to the traced chain's pick, so it must be the SAME
+        reduction: both go through Qwen36MTP._argmax_last -> tp_common.greedy_pick, which handles
+        the vocab-sharded and gathered logit forms.
         """
-        u = ttnn.untilize(logits, use_multicore=True)
-        out = ttnn.argmax(u, dim=-1, keepdim=False)  # [1,1,1] uint32 RM
-        ttnn.deallocate(u)
-        return out
+        return self.mtp._argmax_last(logits)
 
     def _id_to_host(self, id_tt):
         """[*,1] uint32 device id -> python int. Reads only the device-0 replica: the logits are
