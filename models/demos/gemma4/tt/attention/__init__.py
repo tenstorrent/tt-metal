@@ -165,6 +165,10 @@ class Gemma4Attention:
             per_slot_layer_bytes = 2 * nkv_local * int(config.sliding_window or 0) * int(config.head_dim) * 2
             per_layer_budget = (16 if is_blackhole() else 8) * 1024 * 1024
             _pool_slots = int(min(8, max(2, per_layer_budget // max(1, per_slot_layer_bytes))))
+            # WH 12 GB/ASIC: 50 sliding layers × 4 slots is ~400 MB, which is
+            # the margin 31B T3K 256k needs for the last global V cache.
+            if not is_blackhole() and max_seq_len >= 256 * 1024:
+                _pool_slots = 0
         if config.is_sliding and config.sliding_window and layer_idx == 0:
             if _pool_slots == 0:
                 logger.warning(

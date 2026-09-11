@@ -442,6 +442,14 @@ def test_demo_text(
     if _decode_trace is not None:
         enable_trace = _decode_trace.lower() in ("1", "true", "yes")
         logger.info(f"GEMMA4_DECODE_TRACE override: enable_trace={enable_trace}")
+    elif (not is_blackhole()) and max_seq_len >= 256 * 1024:
+        # 192 MB trace region + tail pool OOMs 31B T3K at the last global V cache.
+        enable_trace = False
+        os.environ.setdefault("GEMMA4_TAIL_POOL_SLOTS", "0")
+        logger.info(
+            f"WH max_seq_len={max_seq_len}: enable_trace=False, "
+            "GEMMA4_TAIL_POOL_SLOTS default 0 (256k DRAM headroom)"
+        )
 
     # ── Speculative-decoding dispatch ────────────────────────────────────────
     # `--speculative` reroutes the demo through the it-assistant drafter +

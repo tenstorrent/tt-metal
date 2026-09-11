@@ -138,6 +138,8 @@ class Gemma4DecoderLayer:
             tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/self_attn" if tensor_cache_path else None,
             weight_dtype=attention_dtype,
             bounded_sliding_kv_cache=bounded_sliding_kv_cache,
+            max_seq_len=max_seq_len,
+            max_batch_size=max_local_batch_size,
         )
 
         # Shared/dense MLP (HF key: "mlp")

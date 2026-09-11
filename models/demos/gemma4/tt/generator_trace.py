@@ -198,11 +198,15 @@ GEMMA4_LONG_CONTEXT_POLICY = {
         # (docs.tenstorrent.com wormhole + t3000 / quietbox specs). Hybrid-OFF
         # full-length KV + full-ISL prefill scratch OOM at max_model_len=32768
         # (vLLM nightly run 30291376571: banks ~full, chunk=32768). Keep multi-
-        # chunk=2048 and auto-bound earlier than BH; serve ≤16k until hybrid KV.
+        # chunk=2048 and auto-bound earlier than BH. Metal Direct (text_demo /
+        # text_demo_v2 -k long-context-256k) reaches the full HF 256k ISL on
+        # T3K with bounded sliding + chunk 2048; vLLM serving stays at 16k
+        # (max_model_len) until hybrid KV.
         # Validated on a real WH T3K on this branch: 4k (TTFT ~8.5 s, 15.7 tok/s),
-        # 32k bounded+chunk2048 (TTFT ~55 s, 14.8 tok/s) and 128k (TTFT ~188 s,
-        # 12.9 tok/s) all PASS. The inferred cutovers held, so this is promoted
-        # from "inferred" to "measured".
+        # 32k unbounded (TTFT ~55 s, 14.8 tok/s), 128k bounded+chunk2048
+        # (TTFT ~188 s, 12.9 tok/s), 256k (TTFT ~564 s, 10.1 tok/s) all PASS.
+        # The inferred cutovers held, so this is promoted from "inferred" to
+        # "measured".
         "T3K": {
             # Unbounded measured through 32768. bounded_isl_min sits above it so
             # concurrent serving never enters the bounded sliding remap, which is
