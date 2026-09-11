@@ -52,13 +52,8 @@ void kernel_main() {
 
             copy_tile(dfb::in, 0, 0);
 
-            // [TC-DBG #51270] A/B PROBE: the SFPU typecast is bypassed for this diagnostic build. For
-            // bf16->fp32 the copy alone already produces the correct result (the bf16 sits in the 32-bit
-            // DEST, and the packer emits fp32), so a correct block-1 output here means the SFPU typecast
-            // is what breaks the 2nd DEST bank; a still-zero block-1 output means copy / DEST-bank / pack
-            // is the culprit, independent of the SFPU. Restore TYPECAST_LLK_INIT()/TYPECAST_LLK(0) after.
-            // TYPECAST_LLK_INIT();
-            // TYPECAST_LLK(0);
+            TYPECAST_LLK_INIT();
+            TYPECAST_LLK(0);
 
             tile_regs_commit();
 
