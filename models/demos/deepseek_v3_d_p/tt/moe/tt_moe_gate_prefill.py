@@ -56,6 +56,46 @@ class GateComputeMode(Enum):
     GPT_DEVICE = "gpt_device"  # matmul device, ttnn.topk + ttnn.softmax on device
 
 
+# Routing-math family: modes in the same family are mutually substitutable (they only trade off
+# where the compute runs), but crossing families silently applies the wrong affinity function --
+# moe_grouped_topk.cpp implements only sigmoid/sqrtsoftplus, never softmax, so a GPT-style router
+# (Mistral) run under a "sigmoid" mode produces plausible-looking, wrong-expert routing with no error.
+GATE_MODE_FAMILY = {
+    GateComputeMode.DEVICE: "sigmoid",
+    GateComputeMode.DEVICE_FP32: "sigmoid",
+    GateComputeMode.HOST_GROUPED_GATE: "sigmoid",
+    GateComputeMode.HOST_MATMUL: "sigmoid",
+    GateComputeMode.HOST_ALL: "sigmoid",
+    GateComputeMode.HASH_HOST: "hash",
+    GateComputeMode.HASH_DEVICE: "hash",
+    GateComputeMode.GPT_HOST: "gpt",
+    GateComputeMode.GPT_DEVICE: "gpt",
+}
+
+
+def assert_gate_mode_matches_adapter(variant, gate_fallback_mode: GateComputeMode) -> None:
+    """The only other reader of ``adapter.default_gate_mode`` is prefill_runner.py's env-var
+    fallback -- nothing ties a test's chosen mode back to it, so the adapter and the test suite can
+    silently drift onto different routing families (this is how a wrong manifest gate mode survived
+    review once already). Checked by family, not exact value: HOST_ALL/DEVICE/DEVICE_FP32 rows
+    intentionally diverge from each other to exercise host-fallback paths, and must keep passing.
+    """
+    # A dense row drives no MoE gate and passes None: there is no chosen mode to cross-check, and
+    # looking it up raises KeyError(None). Return rather than assert -- the check exists to catch a
+    # row on the wrong routing FAMILY, and a row with no routing at all cannot be on the wrong one.
+    if gate_fallback_mode is None:
+        return
+    default_mode = GateComputeMode[variant.default_gate_mode]
+    expected_family = GATE_MODE_FAMILY[default_mode]
+    actual_family = GATE_MODE_FAMILY[gate_fallback_mode]
+    assert actual_family == expected_family, (
+        f"{variant.name}: test row uses {gate_fallback_mode.name} ({actual_family} routing) but the "
+        f"adapter declares default_gate_mode={variant.default_gate_mode!r} ({expected_family} routing) -- "
+        "one of the two is wrong, and the model's affinity function would silently differ from what "
+        "this test measures"
+    )
+
+
 # Per-chip prefill sequence the production deployment runs at, and the depth the MoE/gate tests
 # drive. Every tuned matmul entry is keyed to it; other depths fall back to TTNN's default tiling.
 GATE_PRODUCTION_SP_DIM = PREFILL_CHUNK_TOKENS_PER_CHIP
@@ -1001,7 +1041,9 @@ class TtMoEGatePrefill(LightweightModule):
                 ),
             )
 
-        _, actual_start, actual_end = metadata
+        # Index, do not unpack: ChunkMetadata carries an optional 4th field (tt/mla/rope.py), so a
+        # strict 3-way unpack breaks as soon as a variant sets one. Fields 0-2 are the stable contract.
+        actual_start, actual_end = metadata[1], metadata[2]
         return ttnn.experimental.deepseek_prefill.moe_padding_config(
             self._padding_config_device,
             actual_start,

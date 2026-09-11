@@ -29,7 +29,7 @@ void bind_indexer_score(nb::module_& mod) {
         R"doc(
         DeepSeek-V3.2 DSA / GLM-5 lightning-indexer scorer.
 
-        score[b, 0, s, t] = sum_h relu(q[b,h,s,:] . k[b,t,:]) * weights[b,h,s]
+        score[b, 0, s, t] = sum_h relu(q[b,h,s,:] . k[b,0,t,:]) * weights[b,0,s,h]
 
         ReLU(q.kT) gated by the learned per-head weights and summed over ALL Hi
         index heads into one shared selection row [B, 1, Sq, T]. For MiniMax M3's
@@ -38,8 +38,8 @@ void bind_indexer_score(nb::module_& mod) {
         Args:
             q: [B, Hi, Sq, D] bf16 or bfp8_b tiled (post non-interleaved RoPE)
             k: [B, 1, T, D] bf16 or bfp8_b tiled, single shared head
-            weights: [B, Hi, Sq, 1] bf16 tiled learned per-head gates (scale
-                pre-folded)
+            weights: [B, 1, Sq, Hi] bf16 tiled learned per-head gates (scale
+                pre-folded).
             chunk_start_idx: absolute global position of rank 0's query row 0
                 (rank 0 = lowest seq_shard_axes[0] (SP) coord; causality: key t
                 visible to query s iff t <= chunk_start + s). OMIT on a mesh ->
@@ -209,11 +209,21 @@ void bind_indexer_score(nb::module_& mod) {
         scoring; the reader gates each K band on ONLY the SP shards that band touches, so it scores already-
         arrived shards while farther slabs are still in flight. DSA only -- there is no fused MSA variant.
 
+        Trace-safe capture: pass ``cache_batch_idx_tensor`` (a 1-element uint32 ROW_MAJOR DRAM tensor holding
+        the USER id) instead of ``cache_batch_idx``, together with ``index_cache_num_layers`` /
+        ``index_cache_layer_idx``; the reader recomposes the flat slot on-device. A host ``cache_batch_idx``
+        is re-patched per dispatch and a replay never re-runs that patch, so every replay would score
+        against the slot that was live at capture time.
+
+        For trace replay, ``chunk_start_idx_tensor`` supplies the dynamic chunk position on-device. It must
+        be a 1-element UINT32 row-major DRAM tensor and requires block-cyclic layout. Do not also provide
+        ``chunk_start_idx`` or ``kv_len``; the kernel derives ``kv_len`` from the tensor value.
+
         Args:
             q: [B, Hi, Sq, D] bf16/bfp8_b tiled (post non-interleaved RoPE); see indexer_score_dsa
             k: [B, 1, T, D] bf16/bfp8_b tiled PERSISTENT all-gather OUTPUT buffer, T = sp*sll. B must be 1
                 when cache_batch_idx is set; the gather fills remote SP shards in place
-            weights: [B, Hi, Sq, 1] bf16 tiled learned per-head gates (scale pre-folded)
+            weights: [B, 1, Sq, Hi] bf16 tiled learned per-head gates (scale pre-folded)
             k_local: [B, 1, sll, D] bf16/bfp8_b tiled, interleaved or ND-sharded DRAM -- this chip's SP
                 shard and the all-gather INPUT; sll = T/sp; must match k's dtype
             ag_multi_device_global_semaphore: list of the all-gather's out-ready global semaphores; requires
@@ -273,7 +283,11 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("seq_subshard_axis") = nb::none(),
         nb::arg("block_cyclic_sp_axis") = nb::none(),
         nb::arg("block_cyclic_chunk_local") = nb::none(),
-        nb::arg("block_cyclic_cache_tp_sharded") = false);
+        nb::arg("block_cyclic_cache_tp_sharded") = false,
+        nb::arg("chunk_start_idx_tensor") = nb::none(),
+        nb::arg("cache_batch_idx_tensor") = nb::none(),
+        nb::arg("index_cache_num_layers") = 1,
+        nb::arg("index_cache_layer_idx") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::indexer_score::detail

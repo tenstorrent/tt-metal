@@ -19,7 +19,11 @@ from models.common.sampling import (
     scatter_sampling_params_to_slots,
 )
 from models.common.sampling._utils import topk_would_route_to_large_indices
-from models.common.sampling.generator import _hash_request_seed_to_device_seed, _mark_trace_buffers_corruptible
+from models.common.sampling.generator import (
+    MAX_UINT32,
+    _hash_request_seed_to_device_seed,
+    _mark_trace_buffers_corruptible,
+)
 from models.common.sampling.tt_log_probs import MAX_TOP_LOGPROBS, LogProbsResult
 from models.common.sampling.tt_sampling import format_grammar_bitmask
 from models.common.utility_functions import comp_pcc, is_blackhole
@@ -72,6 +76,74 @@ def test_grammar_uses_separate_trace():
 
     assert grammar_key.grammar_on is True
     assert grammar_on is not grammar_off
+
+
+def test_precompile_all_configs_selects_supported_grammar_matrix():
+    class StubLogProbs:
+        def __init__(self):
+            self.logprobs_enabled = [False]
+            self.num_logprobs = [0]
+            self.enable_log_probs = False
+
+        def set_log_probs_mode(self, enabled, num_logprobs=0):
+            values = list(enabled) if isinstance(enabled, list) else [enabled]
+            self.logprobs_enabled = values
+            self.enable_log_probs = any(values)
+            self.num_logprobs = list(num_logprobs) if isinstance(num_logprobs, list) else [num_logprobs]
+
+    class StubSampling:
+        def __init__(self):
+            self.log_probs_calculator = StubLogProbs()
+            self._allow_force_argmax_sampling = True
+            self._force_argmax_sampling = False
+            self.grammar_updates = []
+
+        def update_grammar_bitmask(self, mask):
+            self.grammar_updates.append(mask)
+
+    sampling = SamplingGenerator.__new__(SamplingGenerator)
+    sampling.tt_sampling = StubSampling()
+    sampling._penalties_active = False
+    sampling._log_probs_active = False
+    penalty_resets = []
+    sampling.tt_penalties = SimpleNamespace(reset_output_tokens=lambda: penalty_resets.append(True))
+    calls = []
+    sampling._run_sampling = lambda _logits, **kwargs: calls.append(
+        (
+            kwargs["penalties_on"],
+            sampling.tt_sampling.log_probs_calculator.enable_log_probs,
+            sampling.tt_sampling._force_argmax_sampling,
+            kwargs["grammar_on"],
+            kwargs["count_tokens"],
+        )
+    )
+
+    sampling.precompile(object(), all_configs=True)
+
+    assert set(calls) == {
+        (penalties, log_probs, force_argmax, False, False)
+        for penalties in (False, True)
+        for log_probs in (False, True)
+        for force_argmax in (False, True)
+    }
+
+    calls.clear()
+    grammar = torch.ones((1, 1), dtype=torch.int32)
+    sampling.precompile(
+        object(),
+        grammar_bitmask=grammar,
+        compile_token_update=True,
+        all_configs=True,
+    )
+
+    assert sampling.tt_sampling.grammar_updates == [grammar]
+    assert set(calls) == {
+        (penalties, False, force_argmax, True, True) for penalties in (False, True) for force_argmax in (False, True)
+    }
+    assert len(penalty_resets) == 2
+    assert sampling._penalties_active is False
+    assert sampling.tt_sampling._force_argmax_sampling is False
+    assert sampling._log_probs_active is False
 
 
 def test_greedy_switch_keeps_cached_traces():
@@ -284,7 +356,34 @@ def test_seed_manager_seed_params_do_not_fallback_to_slot_zero():
     assert seed_manager._seed_from_slot_params([11], 0) == 11
     assert seed_manager._seed_from_slot_params([11], 1) is None
     assert seed_manager._seed_from_slot_params(torch.tensor([22]), 1) is None
+    assert seed_manager._seed_from_slot_params((44,), 0) == 44
     assert seed_manager._seed_from_slot_params(33, 3) == 33
+
+
+def test_seed_manager_updates_lazy_buffer_with_request_position_hash_and_preserves_default_source():
+    class Buffer:
+        def __init__(self):
+            self.source = torch.arange(4, dtype=torch.int64)
+            self.updates = []
+
+        def update(self, source):
+            self.source = source
+            self.updates.append(source.clone())
+
+    buffer = Buffer()
+    defaults = buffer.source.clone()
+    seed_manager = SeedManager(max_batch_size=4, seed_buffer=buffer)
+    seed_manager.reset_seed_from_slots((707, None, None, None), range(4))
+    seed_manager.align_seed_counters_to_positions((707, None, None, None), [0], [13], offset=1)
+
+    values = seed_manager.get_new_values([0])
+
+    assert values == (_hash_request_seed_to_device_seed(707, 14), MAX_UINT32, MAX_UINT32, MAX_UINT32)
+    assert torch.equal(buffer.updates[-1], torch.tensor(values))
+    assert torch.equal(buffer.source, defaults)
+
+    seed_manager.restore_default_device_values()
+    assert torch.equal(buffer.updates[-1], defaults)
 
 
 def test_seed_counter_position_alignment_skips_out_of_bounds_slots():
@@ -346,6 +445,21 @@ def test_duplicate_request_seeds_get_distinct_device_streams():
     assert sorted(seed_manager.seed_salts) == [0, 1, 2, 3]
     first_draws = [seed_manager._next_device_seed_for_slot(slot) for slot in range(4)]
     assert len(set(first_draws)) == 4, f"duplicate-seed slots drew identical device seeds: {first_draws}"
+
+
+def test_duplicate_request_seeds_can_share_one_stream_when_salting_is_disabled():
+    """Independent vLLM requests with the same seed remain bit-identical."""
+
+    seed_manager = SeedManager(
+        SimpleNamespace(_sampling_dp=1),
+        max_batch_size=4,
+        salt_duplicate_seeds=False,
+    )
+    seed_manager.reset_seed([1234, 1234, 1234, 1234], [0, 1, 2, 3])
+
+    assert seed_manager.seed_salts == [0, 0, 0, 0]
+    first_draws = [seed_manager._next_device_seed_for_slot(slot) for slot in range(4)]
+    assert len(set(first_draws)) == 1
 
 
 def test_unique_seed_stream_is_unchanged_and_slot_independent():

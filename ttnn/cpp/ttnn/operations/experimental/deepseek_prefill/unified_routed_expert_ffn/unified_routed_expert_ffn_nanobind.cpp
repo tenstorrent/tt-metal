@@ -4,9 +4,13 @@
 
 #include "unified_routed_expert_ffn_nanobind.hpp"
 
+#include <limits>
+
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/vector.h>
+
+#include <tt-metalium/core_coord.hpp>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "unified_routed_expert_ffn.hpp"
@@ -20,6 +24,11 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         .value("Silu", RoutedExpertActivation::Silu)
         .value("SwiGluOai", RoutedExpertActivation::SwiGluOai)
         .value("SituGlu", RoutedExpertActivation::SituGlu);
+
+    // The worker rectangle this op fixes regardless of device grid. Exported so a hybrid forward can
+    // pass moe_fused_swiglu the same grid -- that op defaults to the whole device instead -- without
+    // a second copy of the numbers on the Python side.
+    mod.attr("UNIFIED_ROUTED_EXPERT_CORE_GRID") = CoreCoord{kCoreGridX, kCoreGridY};
 
     ttnn::bind_function<"unified_routed_expert_moe", "ttnn.experimental.deepseek_prefill.">(
         mod,
@@ -74,7 +83,9 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("activation") = RoutedExpertActivation::Silu,
         nb::arg("gate_biases") = nb::none(),
         nb::arg("up_biases") = nb::none(),
-        nb::arg("down_biases") = nb::none());
+        nb::arg("down_biases") = nb::none(),
+        nb::arg("min_active_tokens") = 0,
+        nb::arg("max_active_tokens") = std::numeric_limits<uint32_t>::max());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::detail

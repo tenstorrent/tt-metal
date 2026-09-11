@@ -37,6 +37,10 @@ class ModelCapabilitiesMixin:
         engine may overlap scheduling with device execution.
     ``supports_sample_on_device`` (bool)
         The full on-device sampling pipeline is implemented.
+    ``max_device_top_k`` (positive int)
+        Optional exact stochastic ``top_k`` limit for runtimes that expose
+        device-sampling admission through this capability dictionary. Callers
+        use it to route larger requests to host sampling instead of clamping.
     ``supports_device_grammar`` (bool)
         Decode logits can remain on device until the vLLM TT plugin supplies a
         packed grammar bitmask at sample time. Requires

@@ -5,23 +5,32 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <tt-metalium/allocator.hpp>
+#include <cstdlib>
 #include <unordered_map>
 #include <memory>
 #include <optional>
 #include <vector>
 
 #include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include "gmock/gmock.h"
 #include "hostdevcommon/common_values.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_config.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/shape_base.hpp>
 #include <tt-metalium/system_mesh.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -52,6 +61,77 @@ TEST(MeshDeviceInitTest, Init1x1Mesh) {
             config, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, tt::tt_metal::DispatchCoreType::WORKER);
         mesh->close();
     });
+}
+
+std::shared_ptr<MeshDevice> create_unit_mesh_for_close_tests() {
+    return MeshDevice::create(
+        MeshDeviceConfig(MeshShape(1, 1)),
+        DEFAULT_L1_SMALL_SIZE,
+        DEFAULT_TRACE_REGION_SIZE,
+        1,
+        DispatchCoreType::WORKER);
+}
+
+// Compile a dummy CB program so ProgramImpl holds persistent-L1 seals and a kernel-binary
+// MeshBuffer, then stash the MeshWorkload in the device program cache. Mirrors the TTNN
+// cached-op lifetime that hangs on hybrid multihost if close_impl destroys the cache.
+void compile_and_cache_dummy_workload(MeshDevice& mesh, const program_cache::detail::ProgramCacheKey& key) {
+    mesh.enable_program_cache();
+
+    Program program;
+    const CoreRangeSet cores(CoreRange({0, 0}, {0, 0}));
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
+        cores,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    const CircularBufferConfig cb_config =
+        CircularBufferConfig(2048, {{0, tt::DataFormat::Float16_b}}).set_page_size(0, 2048);
+    CreateCircularBuffer(program, cores, cb_config);
+
+    MeshWorkload workload;
+    workload.add_program(MeshCoordinateRange(mesh.shape()), std::move(program));
+    EnqueueMeshWorkload(mesh.mesh_command_queue(), workload, false);
+    Finish(mesh.mesh_command_queue());
+
+    program_cache::detail::CachedMeshWorkload<int> cached(std::move(workload), /*shared_variables=*/0);
+    mesh.get_program_cache().insert(key, program_cache::detail::CachedProgramFactory(std::move(cached), 0));
+}
+
+TEST(MeshDeviceInitTest, CloseDoesNotClearProgramCache) {
+    if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
+        GTEST_SKIP() << "Requires fast dispatch to enqueue a MeshWorkload";
+    }
+
+    auto mesh = create_unit_mesh_for_close_tests();
+    compile_and_cache_dummy_workload(
+        *mesh, program_cache::detail::ProgramCacheKey{.hash = 0xC105E, .canonical = "close-does-not-clear-cache"});
+
+    const auto entries_before_close = mesh->num_program_cache_entries();
+    ASSERT_GT(entries_before_close, 0u);
+
+    // close() must leave cached programs in place: destroying them here hangs hybrid
+    // multihost teardown (RELEASE-13). Seal lifetime is handled by PersistentL1Arena.
+    mesh->close();
+    EXPECT_EQ(mesh->num_program_cache_entries(), entries_before_close);
+}
+
+TEST(MeshDeviceInitTest, DestroyAfterCloseDoesNotTerminateOnPersistentL1Seals) {
+    if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
+        GTEST_SKIP() << "Requires fast dispatch to enqueue a MeshWorkload";
+    }
+
+    auto mesh = create_unit_mesh_for_close_tests();
+    compile_and_cache_dummy_workload(
+        *mesh,
+        program_cache::detail::ProgramCacheKey{.hash = 0x5EA1, .canonical = "destroy-after-close-persistent-l1-seals"});
+
+    ASSERT_GT(mesh->num_program_cache_entries(), 0u);
+    mesh->close();
+
+    // Tracker/arena are already gone; dropping the MeshDevice destroys the cache and
+    // ~Seal must no-op instead of TT_FATAL from a noexcept ProgramImpl destructor.
+    EXPECT_NO_THROW(mesh.reset());
 }
 
 using MeshDevice2x4Test = MeshDevice2x4Fixture;

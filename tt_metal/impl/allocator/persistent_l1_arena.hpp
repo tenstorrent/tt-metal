@@ -82,6 +82,7 @@ public:
 
     DeviceAddr high_water_mark(const CoreRangeSet& cores) const;
     std::vector<std::pair<DeviceAddr, DeviceAddr>> occupied_ranges() const;
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> occupied_ranges(const CoreCoord& core) const;
 
     // Persistent allocations must be established before program-local L1 is
     // placed. Once a core is sealed, no new persistent allocation may use it.

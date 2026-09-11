@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import time
 from pathlib import Path
 
 import torch
@@ -350,9 +351,15 @@ class ChunkedPrefillPageTableGuardMixin:
                 m.update_persistent_per_layer_page_tables(sliced)
 
     def _clear_sequential_batch_page_tables(self) -> None:
+        """Put the full-batch per-layer tables back after sequential prefill."""
         for m in self.model:
-            if hasattr(m, "_sequential_batch_page_tables"):
-                del m._sequential_batch_page_tables
+            batch_host = getattr(m, "_sequential_batch_page_tables", None)
+            if batch_host is None:
+                continue
+            m._active_page_tables_per_layer = batch_host
+            if hasattr(m, "update_persistent_per_layer_page_tables"):
+                m.update_persistent_per_layer_page_tables(batch_host)
+            del m._sequential_batch_page_tables
 
     def _effective_paged_block_size(self, kv_cache):
         """Effective block_size the paged ops address this model's K/V cache with.
@@ -784,7 +791,11 @@ class ChunkedPrefillPageTableGuardMixin:
         """True if any layer has a cross-chunk ``_sliding_prefill_tail`` stash."""
         for layer in getattr(self.model[model_id], "layers", []):
             attn = getattr(layer, "self_attn", None)
-            if attn is not None and getattr(attn, "_sliding_prefill_tail", None) is not None:
+            if attn is None:
+                continue
+            if getattr(attn, "_tail_pool_map", None):
+                return True  # pooled tails live in the boot pool, not the fallback dict
+            if any(v is not None for v in (getattr(attn, "_sliding_tails_by_key", None) or {}).values()):
                 return True
         return False
 
@@ -807,6 +818,30 @@ class ChunkedPrefillPageTableGuardMixin:
         self, tokens, page_table=None, *, kv_cache=None, num_cached_tokens=0, **kwargs
     ):
         self._activate_sequential_per_layer_row(page_table)
+        # Bind this request's stable identity (its first global block id — the
+        # same keying _bounded_ring_slots uses) to every layer config so the
+        # cross-chunk sliding-tail stash is consumed/produced PER REQUEST.
+        # Interleaved multi-request continuations through a single per-layer
+        # slot handed one request's window tail to another (conc3/9k fluent
+        # nondeterministic corruption); scheduler order and row placement are
+        # not stable across rounds (plugin PR #68), so only a request-owned
+        # key is safe.
+        req_key = None
+        if page_table is not None and torch.is_tensor(page_table) and page_table.numel() > 0:
+            pt2d = page_table if page_table.dim() > 1 else page_table.unsqueeze(0)
+            if int(pt2d[0].max()) > 0:
+                # All-zero row = vLLM null block / B=1 warmup mock tables —
+                # never a real request; keep key None so trace-unsafe pool
+                # copies cannot run during warmup capture. Key on the first
+                # block id +1: under bounded the remapped sliding table's
+                # slot 0 legitimately starts at block id 0, and a falsy key
+                # would silently bypass the pool for that request.
+                req_key = int(pt2d[0, 0]) + 1
+        for model in self.model:
+            for layer in getattr(model, "layers", []):
+                cfg = getattr(getattr(layer, "self_attn", None), "config", None)
+                if cfg is not None:
+                    cfg._g4_active_req_key = req_key
         if page_table is not None and kv_cache is not None:
             block_size = self._effective_paged_block_size(kv_cache)
             needed_blocks = num_blocks_in_seq(tokens.shape[-1] + num_cached_tokens, block_size)
@@ -1016,6 +1051,14 @@ class ChunkedPrefillPageTableGuardMixin:
             chunk_starts = [s for s in chunk_starts if s < last_abs]
             chunk_starts.append(last_abs)
 
+            # G4_CHUNK_PROFILE=1: per-chunk host wall timing (prepare vs
+            # forward-submit). Submission is async, so 'fwd' includes device
+            # backpressure once the pipeline fills — a flat fwd series means
+            # device-bound at that rate; a prep-heavy series means host work
+            # between submissions is the tax.
+            _profile_chunks = os.environ.get("G4_CHUNK_PROFILE", "0") == "1"
+            _t_prev = time.perf_counter() if _profile_chunks else 0.0
+
             for chunk_start in chunk_starts:
                 chunk_end = chunk_start + chunk_size
                 chunk_start_relative = chunk_start - num_cached_tokens
@@ -1044,6 +1087,7 @@ class ChunkedPrefillPageTableGuardMixin:
                             needed_blocks,
                             block_size,
                         )
+                _t_gap = (time.perf_counter() - _t_prev) if _profile_chunks else 0.0
                 chunk_inputs = self.model[model_id].prepare_inputs_prefill(
                     chunk_tokens,
                     start_pos=chunk_start,
@@ -1053,6 +1097,7 @@ class ChunkedPrefillPageTableGuardMixin:
                     user_id=CHUNK_USER_ID,
                     **kwargs,
                 )
+                _t_prep = (time.perf_counter() - _t_prev - _t_gap) if _profile_chunks else 0.0
                 (
                     chunk_prefill_input,
                     chunk_rot_mats_global_prefill,
@@ -1078,6 +1123,17 @@ class ChunkedPrefillPageTableGuardMixin:
                     batch_size=batch_size,
                     **kwargs,
                 )
+                if _profile_chunks:
+                    _t_now = time.perf_counter()
+                    logger.info(
+                        "[g4-chunkprof] chunk_start={} gap={:.1f}ms prep={:.1f}ms fwd={:.1f}ms total={:.1f}ms",
+                        chunk_start,
+                        _t_gap * 1e3,
+                        _t_prep * 1e3,
+                        (_t_now - _t_prev - _t_gap - _t_prep) * 1e3,
+                        (_t_now - _t_prev) * 1e3,
+                    )
+                    _t_prev = _t_now
                 if is_last_chunk:
                     return tt_logits
                 del tt_logits
@@ -1129,7 +1185,30 @@ class ChunkedPrefillPageTableGuardMixin:
         prev_decode_batch = getattr(self, "_prev_decode_batch", None)
         sampling_trace_key = (True, prev_decode_batch) if prev_decode_batch is not None else None
         if sampling_trace_key is None or not self.trace_inputs_decode[sampling_trace_key]:
-            return None
+            # No decode trace captured yet (the two-phase warmup's traceless
+            # pass). Hand back a persistent dummy of the real feedback buffer's
+            # spec instead of None: with None the warmup-phase-1 eager sample
+            # runs the no-output-tensor SamplingDeviceOperation variant, and
+            # the with-output variant then FIRST-COMPILES during phase 2 — a
+            # program-cache allocation while traces are live (#30187 class;
+            # TT_METAL_TRACE_ALLOC_TRACKING=1 flags it at decode warmup).
+            # Allocating this dummy pre-capture keeps its address safe and
+            # compiles the same op variant the runtime path replays.
+            dummy = getattr(self, "_g4_warmup_token_feedback_dummy", None)
+            if dummy is None:
+                dummy = ttnn.from_torch(
+                    torch.zeros(1, 1, 1, int(pad_w), dtype=torch.int64),
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    dtype=ttnn.uint32,
+                    device=model.mesh_device,
+                    mesh_mapper=(
+                        ttnn.ReplicateTensorToMesh(model.mesh_device)
+                        if model.mesh_device.get_num_devices() > 1
+                        else None
+                    ),
+                )
+                self._g4_warmup_token_feedback_dummy = dummy
+            return dummy
         feedback = self._decode_token_feedback_buffer(model, self.trace_inputs_decode[sampling_trace_key][model_id])
         if feedback is None:
             return None
@@ -1305,6 +1384,10 @@ class ChunkedPrefillPageTableGuardMixin:
         OOB ``slot_remap`` fall back instead of ``IndexError``.
         """
         del kwargs  # Generator accepts extras; Gemma4 path ignores them.
+        # Sequential per-user prefill narrows the per-layer tables to one row and
+        # not every prefill entry point unwinds it; decode always needs the full
+        # batch back or paged_update_cache TT_FATALs (1 row vs B users).
+        self._clear_sequential_batch_page_tables()
         mode_switched = False
         if self.mode != Mode.DECODE:
             self.mode = Mode.DECODE

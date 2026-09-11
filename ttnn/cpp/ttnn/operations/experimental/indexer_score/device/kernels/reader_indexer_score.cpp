@@ -10,6 +10,8 @@
 // sender reads DRAM + mcasts; receiver takes the L1->L1 copy; none is a plain DRAM read. q/w (row) and k
 // (column) mcast are independent; either may be off.
 
+#include <tt-metalium/constants.hpp>
+
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
@@ -27,6 +29,10 @@
 // per-band gate in kernel_main) so scoring of already-arrived shards runs while farther slabs are in flight.
 // Reuses the ring-joint-SDPA receiver so the crossed direction-index swap + asymmetric thresholds stay identical.
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_receiver.hpp"
+// Metadata reads invalidate the reused L1 address; causal geometry is shared with the host implementation.
+#include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
+#include "indexer_score_metadata.hpp"
+#include "indexer_score_causal_geometry.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_rank_mapping.hpp"
 
 constexpr uint32_t q_tile_bytes = get_tile_size(cb_q);     // q: bf16 or bfp8_b (smaller tile)
@@ -69,11 +75,48 @@ constexpr auto snake_orientation =
     static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(bc_ct_base + 6));
 constexpr uint32_t rank_mapping_mesh_rows = get_compile_time_arg_val(bc_ct_base + 7);
 constexpr uint32_t rank_mapping_mesh_cols = get_compile_time_arg_val(bc_ct_base + 8);
+constexpr bool partial_readiness_enabled = get_compile_time_arg_val(bc_ct_base + 9) != 0;
+constexpr uint32_t fused_physical_sp = get_compile_time_arg_val(bc_ct_base + 10);
 
 FORCE_INLINE constexpr uint32_t tensor_rank_from_transport_rank(uint32_t transport_rank) {
     return ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
         transport_rank, rank_mapping_mesh_rows, rank_mapping_mesh_cols, snake_orientation);
 }
+
+// +11, not +10 or +9: main's partial_readiness_enabled took bc_ct_base + 9 and #55617's
+// fused_physical_sp took bc_ct_base + 10. Both factories push both of those before this block, so this
+// base must clear them. A collision here does NOT produce a merge conflict -- the declarations sit in
+// different hunks -- and reads an unrelated word as the metadata flag, so re-check it whenever main
+// grows the block-cyclic block.
+constexpr uint32_t meta_ct_base = bc_ct_base + 11;
+constexpr bool chunk_start_from_metadata = get_compile_time_arg_val(meta_ct_base) != 0;
+constexpr uint32_t meta_rt_base = get_compile_time_arg_val(meta_ct_base + 1);
+constexpr uint32_t cb_meta_derived = get_compile_time_arg_val(meta_ct_base + 2);
+constexpr uint32_t cb_meta_writer = get_compile_time_arg_val(meta_ct_base + 3);
+constexpr uint32_t meta_Sq = get_compile_time_arg_val(meta_ct_base + 4);
+// Rotation-exact SP geometry: sp_axis set, OR a fused full-mesh ring. The host computes the
+// same predicate in rotation_exact_sp_geometry(), so both sides pick the same branch.
+constexpr uint32_t meta_rotation_exact = get_compile_time_arg_val(meta_ct_base + 5);
+// KV dedup splits the KEY stripes tp-times finer than the queries, so block_cyclic_ct carries the SPLIT
+// geometry (bc_sp == sp*split, bc_chunk_local == chunk_local/split) -- which is what the invP addressing
+// needs. The causal geometry is NOT invariant under that regrouping: the host's device_causal_geometry
+// passes the UNSPLIT sp/chunk_local, so feeding it the split pair here derives a different mask on the
+// metadata path than the scalar path uses. Carry the split factor so this side can undo it; it is
+// already hashed (structural), so it costs no extra program variant.
+constexpr uint32_t meta_key_stripe_split = get_compile_time_arg_val(meta_ct_base + 6);
+constexpr auto meta_args = TensorAccessorArgs<meta_ct_base + 7>();
+// Cache-slot select, appended with the same fixed-width discipline as the chunk-start block above: both
+// factories always push it (zero-filled, with a placeholder accessor, when off), so every index here is
+// valid unconditionally and no guarded-index trick is needed.
+constexpr uint32_t slot_ct_base = meta_args.next_compile_time_args_offset();
+constexpr bool cache_slot_from_metadata = get_compile_time_arg_val(slot_ct_base) != 0;
+constexpr uint32_t slot_rt_base = get_compile_time_arg_val(slot_ct_base + 1);      // RT slot of this block
+constexpr uint32_t slot_local_pages = get_compile_time_arg_val(slot_ct_base + 2);  // pages per cache slot
+constexpr uint32_t cb_meta_slot = get_compile_time_arg_val(slot_ct_base + 3);      // NoC landing slot
+// Slot count of the local cache (k_local batch dim), so the on-device recomposition can be bounded the
+// same way the AG reader bounds the identical word. Shape-derived, hence already hashed.
+constexpr uint32_t slot_cache_extent = get_compile_time_arg_val(slot_ct_base + 4);
+constexpr auto slot_meta_args = TensorAccessorArgs<slot_ct_base + 5>();
 
 // Thin alias over the shared block-cyclic invP map (tt::block_cyclic, block_cyclic_remap.hpp): identity for
 // contiguous K, invP for the per-SP-shard block-cyclic layout. One name shared between the non-fused reader and
@@ -235,6 +278,50 @@ inline void fill_w_group_const() {
     cb.push_back(w_group_tiles);
 }
 
+// Prepare gate columns after the first K read so their local preparation overlaps QK matmul.
+// The weight row multicast must still complete before any column multicast or fabric wait.
+inline void expand_w_group() {
+    constexpr uint32_t head_tiles = (num_heads + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
+    using namespace tt::constants;
+    constexpr uint32_t bf16_per_word = sizeof(uint32_t) / sizeof(uint16_t);
+    constexpr uint32_t face_row_words = FACE_WIDTH / bf16_per_word;
+    constexpr uint32_t face_words = FACE_HW / bf16_per_word;
+    constexpr uint32_t tile_words = TILE_HW / bf16_per_word;
+    constexpr uint32_t bf16_bits = sizeof(uint16_t) * 8;
+    // read_w_group reserved the output group; compute waits until expansion finishes.
+    // Walk input tiles and head pairs backward: expanded destinations are at or after their
+    // source tile. The final head-0 store aliases its original column without changing it.
+    CircularBuffer gates(cb_w);
+    const uint32_t addr = gates.get_write_ptr();
+    for (uint32_t row_end = q_tiles_per_unit; row_end > 0; --row_end) {
+        const uint32_t q_row = row_end - 1;
+        for (uint32_t tile_end = head_tiles; tile_end > 0; --tile_end) {
+            const uint32_t ht = tile_end - 1;
+            auto* src =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr + (q_row * head_tiles + ht) * bf16_tile_bytes);
+            const uint32_t heads_in_tile = std::min<uint32_t>(TILE_WIDTH, num_heads - ht * TILE_WIDTH);
+            for (uint32_t pair_end = (heads_in_tile + bf16_per_word - 1) / bf16_per_word; pair_end > 0; --pair_end) {
+                const uint32_t h = bf16_per_word * (pair_end - 1);
+                auto* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    addr + (q_row * num_heads + ht * TILE_WIDTH + h) * bf16_tile_bytes);
+                // Extract two BF16 heads per word. Word stores also set the unused column 1;
+                // this avoids narrow L1 accesses.
+                for (uint32_t r = 0; r < TILE_HEIGHT; ++r) {
+                    const uint32_t row_offset =
+                        (r / FACE_HEIGHT) * (TILE_WIDTH / FACE_WIDTH) * face_words + (r % FACE_HEIGHT) * face_row_words;
+                    const uint32_t pair =
+                        src[row_offset + (h / FACE_WIDTH) * face_words + (h % FACE_WIDTH) / bf16_per_word];
+                    dst[row_offset] = pair;
+                    if (ht * TILE_WIDTH + h + 1 < num_heads) {
+                        dst[tile_words + row_offset] = pair >> bf16_bits;
+                    }
+                }
+            }
+        }
+    }
+    gates.push_back(w_group_tiles);
+}
+
 /** resident w (gates) group [q_tiles_per_unit][num_heads], role-aware (q row mcast). MSA fills a constant
  *  scale in L1 instead (no weights tensor); the q placeholder accessor is then unused. */
 template <typename WAcc>
@@ -243,21 +330,32 @@ inline void read_w_group(Noc noc, const WAcc& w_acc, uint32_t q_row_start, const
         fill_w_group_const();
         return;
     }
-    read_block_or_mcast<cb_w, q_mcast_on, q_send_sem, q_recv_sem, q_valid_sem>(
-        noc, w_group_tiles, w_group_tiles * bf16_tile_bytes, q_dir, [&](uint32_t addr) {
-            uint32_t ptr = addr;
-            for (uint32_t q_row = 0; q_row < q_tiles_per_unit; ++q_row) {
-                for (uint32_t head = 0; head < num_heads; ++head) {
-                    noc.async_read(
-                        w_acc,
-                        CoreLocalMem<uint32_t>(ptr),
-                        bf16_tile_bytes,
-                        {.page_id = head * q_len_tiles + q_row_start + q_row},
-                        {});
-                    ptr += bf16_tile_bytes;
-                }
-            }
-        });
+    // Transport [query, head] weight tiles, then prepare each core's resident gate columns.
+    // Multicasting before expansion avoids broadcasting 31 padding columns per head.
+    constexpr uint32_t head_tiles = (num_heads + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
+    constexpr uint32_t input_tiles = q_tiles_per_unit * head_tiles;
+    CircularBuffer cb(cb_w);
+    cb.reserve_back(w_group_tiles);
+    const uint32_t addr = cb.get_write_ptr();
+    if (q_mcast_on && q_dir.role == iscore::mcast_role_receiver) {
+        mcast_recv<q_send_sem, q_recv_sem>(noc, q_dir);
+    } else {
+        for (uint32_t tile = 0; tile < input_tiles; ++tile) {
+            noc.async_read(
+                w_acc,
+                CoreLocalMem<uint32_t>(addr + tile * bf16_tile_bytes),
+                bf16_tile_bytes,
+                {.page_id = q_row_start * head_tiles + tile},
+                {});
+        }
+        noc.async_read_barrier();
+        if (q_mcast_on && q_dir.role == iscore::mcast_role_sender) {
+            mcast_send<q_send_sem, q_recv_sem, q_valid_sem>(noc, q_dir, addr, input_tiles * bf16_tile_bytes);
+        }
+    }
+    if constexpr (stream_heads || fuse_single) {
+        expand_w_group();
+    }
 }
 
 /** Read one k tile's head_dim_tiles pages [base, base+head_dim_tiles) from `acc` into the CB at `ptr`,
@@ -294,22 +392,16 @@ inline void read_k_chunk(
         });
 }
 
-/** Ring-fused k chunk: dual-source per tile. The gathered buffer (k_acc) holds every REMOTE SP-shard's slab
- *  (the all-gather wrote them); this device's OWN shard is read straight from the SP-sharded local cache
- *  (k_local_acc) -- the all-gather omits the local band from the gathered buffer. shard(logical tile L) =
- *  bc_ktile(L)/tiles_per_shard; local page = k_batch_page_offset/ring_size +
- *  (bc_ktile(L) - ring_index*tiles_per_shard)*head_dim_tiles (the slot offset is 1/ring of the gathered
- *  buffer's since k_local holds only sll=T/ring keys per slot). In indexed fused mode the gathered buffer is
- *  batch-1 (remote offset 0) while local_batch_page_offset selects the original cache slot. */
+/** Ring-fused shard-major K chunk. Every unit is a consecutive physical range inside one SP shard. Remote
+ *  shards come from the gathered buffer; this device's own shard comes directly from the AG input cache. */
 template <typename KAcc, typename KLocalAcc>
 inline void read_k_chunk_fused(
     Noc noc,
     const KAcc& k_acc,
     const KLocalAcc& k_local_acc,
     uint32_t ring_index,
-    uint32_t ring_size,
     uint32_t tiles_per_shard,
-    uint32_t k_tile_start,
+    uint32_t physical_tile_start,
     uint32_t k_tiles_in_unit,
     const McastDir& k_dir,
     uint32_t gathered_batch_page_offset,
@@ -318,15 +410,18 @@ inline void read_k_chunk_fused(
         noc, k_chunk_tiles, k_chunk_tiles * k_tile_bytes, k_dir, [&](uint32_t addr) {
             uint32_t ptr = addr;
             for (uint32_t k_col = 0; k_col < k_tiles_in_unit; ++k_col) {
-                const uint32_t seq_tile = bc_ktile(k_tile_start + k_col);
-                const uint32_t shard = seq_tile / tiles_per_shard;
+                const uint32_t physical_tile = physical_tile_start + k_col;
+                const uint32_t shard = physical_tile / tiles_per_shard;
                 if (shard == ring_index) {
                     const uint32_t local_base =
-                        local_batch_page_offset + (seq_tile - ring_index * tiles_per_shard) * head_dim_tiles;
+                        local_batch_page_offset + (physical_tile - ring_index * tiles_per_shard) * head_dim_tiles;
                     read_ktile_dims(noc, k_local_acc, ptr, local_base);  // OWN shard from the SP-local cache
                 } else {
                     read_ktile_dims(
-                        noc, k_acc, ptr, gathered_batch_page_offset + seq_tile * head_dim_tiles);  // remote slab
+                        noc,
+                        k_acc,
+                        ptr,
+                        gathered_batch_page_offset + physical_tile * head_dim_tiles);  // remote shard
                 }
             }
         });
@@ -348,26 +443,51 @@ struct FusedRingGate {
 
     uint32_t ring_index;
     uint32_t ring_size;
-    uint32_t tiles_per_shard;           // tiles per SP shard in the gathered buffer
-    uint32_t sem_id[2];                 // the two direction semaphore ids
-    KLocalAcc k_local_acc;              // local SP shard cache (the all-gather INPUT; AG omits it from gathered)
-    uint32_t local_batch_page_offset;   // selected slot in k_local; gathered k may be batch-1
-    uint32_t perm_base;                 // rt slot of the band-visit permutation (one entry per band)
-    uint32_t shard_dir[max_ring_size];  // shard -> direction semaphore index
-    uint32_t shard_val[max_ring_size];  // shard -> wait threshold
+    uint32_t tiles_per_shard;                // tiles per SP shard in the gathered buffer
+    uint32_t sem_id[2];                      // the two direction semaphore ids
+    KLocalAcc k_local_acc;                   // local SP shard cache (the all-gather INPUT; AG omits it from gathered)
+    uint32_t local_batch_page_offset;        // selected slot in k_local; gathered k may be batch-1
+    uint32_t meta_addr;                      // trace-safe: DRAM address of the 1-element chunk_start_idx tensor
+    uint32_t meta_device_index;              // this device's SP-ring index (causal geometry input)
+    uint32_t meta_tp_index;                  // its TP sub-shard rank (0 when SP-only)
+    uint32_t slot_meta_addr;                 // trace-safe: DRAM address of the 1-element USER id tensor
+    uint32_t slot_num_layers;                // index-cache layers per user (recomposition stride)
+    uint32_t slot_layer_idx;                 // this layer's index within a user's slots
+    uint32_t perm_base;                      // rt slot of the band-visit permutation (one entry per band)
+    uint32_t shard_dir[max_ring_size];       // shard -> direction semaphore index
+    uint32_t shard_half_val[max_ring_size];  // shard -> midpoint-ready threshold
+    uint32_t shard_val[max_ring_size];       // shard -> wait threshold
 
     // recv has already consumed the fused block (waiting for the op signal) and advanced argidx; take the
     // k_local addr from the next slot and leave argidx at the band-perm base.
-    FusedRingGate(const RingSDPAOpReceiver& recv, uint32_t& argidx) :
+    // `local_offset_override` is the reader-derived slot base on the metadata path (0 elsewhere); it
+    // replaces the runtime argument, which a replay would have frozen at the captured slot.
+    FusedRingGate(const RingSDPAOpReceiver& recv, uint32_t& argidx, uint32_t local_offset_override = 0) :
+        // TENSOR rank, not the transport rank: on a full-mesh ring the two differ by the snake mapping,
+        // and both the slot recomposition and the causal geometry are defined over tensor ranks.
         ring_index(tensor_rank_from_transport_rank(recv.seq.ring_index)),
         ring_size(recv.seq.ring_size),
         tiles_per_shard(k_len_tiles / recv.seq.ring_size),
         sem_id{recv.signal_op_semaphore_ids[0], recv.signal_op_semaphore_ids[1]},
         k_local_acc(TensorAccessor(kl_args, get_arg_val<uint32_t>(argidx++), k_tile_bytes)),
+        // Consumed UNCONDITIONALLY: the host pushes this slot on both paths (0 on the metadata one), so
+        // skipping it would shift perm_base. The metadata value is applied in the body below.
         local_batch_page_offset(get_arg_val<uint32_t>(argidx++)),
+        meta_addr(get_arg_val<uint32_t>(argidx++)),
+        meta_device_index(get_arg_val<uint32_t>(argidx++)),
+        meta_tp_index(get_arg_val<uint32_t>(argidx++)),
+        // Cache-slot block: three more fixed slots, consumed unconditionally like the chunk-start block
+        // above, so band_perm_base stays a compile-time constant on every path.
+        slot_meta_addr(get_arg_val<uint32_t>(argidx++)),
+        slot_num_layers(get_arg_val<uint32_t>(argidx++)),
+        slot_layer_idx(get_arg_val<uint32_t>(argidx++)),
         perm_base(argidx),
         shard_dir{},
+        shard_half_val{},
         shard_val{} {
+        if constexpr (cache_slot_from_metadata) {
+            local_batch_page_offset = local_offset_override;
+        }
         RingIdSequencer s = recv.seq;  // fresh copy (received={0,0}); replay to index (dir,val) by shard id
         for (uint32_t i = 0; i < ring_size; ++i) {
             uint32_t cap_dir = 0, cap_val = 0;
@@ -377,24 +497,33 @@ struct FusedRingGate {
             });
             const uint32_t tensor_rank = tensor_rank_from_transport_rank(rid);
             shard_dir[tensor_rank] = cap_dir;
-            shard_val[tensor_rank] = cap_val;
+            if constexpr (partial_readiness_enabled) {
+                if (tensor_rank == ring_index) {
+                    continue;
+                }
+                // Partial-readiness AG emits midpoint + completion for every remote shard. Direction 0's
+                // semaphore also contains the existing local-slice pre-signal.
+                shard_half_val[tensor_rank] = cap_dir == 0 ? 2 * (cap_val - 1) : 2 * cap_val - 1;
+                shard_val[tensor_rank] = cap_dir == 0 ? 2 * cap_val - 1 : 2 * cap_val;
+            } else {
+                shard_val[tensor_rank] = cap_val;
+            }
         }
     }
 
-    // Absolute band index this column visits at iteration band_i (striped set, band0=0).
-    uint32_t band(uint32_t band_i) const { return get_arg_val<uint32_t>(perm_base + band_i); }
+    // Physical K-tile start this column visits at iteration work_i.
+    uint32_t physical_start(uint32_t work_i) const { return get_arg_val<uint32_t>(perm_base + work_i); }
 
-    // Wait on each distinct non-local SP-shard the band [k_tile_start, +k_tiles_in_unit) lands in. Shards form
-    // contiguous runs over the tiles (change only at block boundaries), so wait once per run start.
-    void gate_band(uint32_t k_tile_start, uint32_t k_tiles_in_unit) const {
-        uint32_t prev_shard = 0xFFFFFFFFu;
-        for (uint32_t c = 0; c < k_tiles_in_unit; ++c) {
-            const uint32_t shard = bc_ktile(k_tile_start + c) / tiles_per_shard;
-            if (shard != prev_shard) {
-                prev_shard = shard;
-                if (shard != ring_index) {
-                    Semaphore<>(sem_id[shard_dir[shard]]).wait_min(shard_val[shard]);
-                }
+    void gate_shard(uint32_t physical_tile_start, uint32_t k_tiles_in_unit, uint32_t midpoint_tiles) const {
+        const uint32_t shard = physical_tile_start / tiles_per_shard;
+        if (shard != ring_index) {
+            if constexpr (partial_readiness_enabled) {
+                const uint32_t shard_offset = physical_tile_start - shard * tiles_per_shard;
+                const bool entirely_in_first_half = shard_offset + k_tiles_in_unit <= midpoint_tiles;
+                Semaphore<>(sem_id[shard_dir[shard]])
+                    .wait_min(entirely_in_first_half ? shard_half_val[shard] : shard_val[shard]);
+            } else {
+                Semaphore<>(sem_id[shard_dir[shard]]).wait_min(shard_val[shard]);
             }
         }
     }
@@ -405,21 +534,21 @@ struct FusedRingGate {
     void read_k(
         Noc noc,
         const KAcc& k_acc,
-        uint32_t k_tile_start,
+        uint32_t physical_tile_start,
         uint32_t k_tiles_in_unit,
+        uint32_t midpoint_tiles,
         const McastDir& k_dir,
         uint32_t k_batch_page_offset) const {
         if (k_mcast_on == 0 || k_dir.role == iscore::mcast_role_sender) {
-            gate_band(k_tile_start, k_tiles_in_unit);
+            gate_shard(physical_tile_start, k_tiles_in_unit, midpoint_tiles);
         }
         read_k_chunk_fused(
             noc,
             k_acc,
             k_local_acc,
             ring_index,
-            ring_size,
             tiles_per_shard,
-            k_tile_start,
+            physical_tile_start,
             k_tiles_in_unit,
             k_dir,
             k_batch_page_offset,
@@ -481,7 +610,7 @@ void kernel_main() {
     const McastDir q_dir = read_mcast_dir(17);            // Q/W row mcast: args [17, 25)
     // Persistent-cache args (hash-excluded, re-applied each dispatch), after the mcast tuples.
     const uint32_t k_batch_page_offset = get_arg_val<uint32_t>(25);  // indexed-cache page offset; 0 when not indexed
-    const uint32_t kv_len_tiles = get_arg_val<uint32_t>(26);         // valid KV length in tiles (full when unset)
+    uint32_t kv_len_tiles = get_arg_val<uint32_t>(26);               // valid KV length in tiles (full when unset)
 
     const auto q_acc = TensorAccessor(q_args, q_addr, q_tile_bytes);
     const auto k_acc = TensorAccessor(k_args, k_addr, k_tile_bytes);
@@ -506,6 +635,8 @@ void kernel_main() {
 
         WorkUnitSpan span;
         span.set_valid_k_len_tiles(kv_len_tiles);
+        ShardMajorWorkUnitSpan<block_cyclic, bc_chunk_local, bc_sp, fused_physical_sp> shard_span;
+        shard_span.set_valid_k_len_tiles(kv_len_tiles);
         const uint32_t band_iters = stream_heads ? max_bands : num_bands;
         for (uint32_t phase = 0; phase < num_groups; ++phase) {
             const uint32_t group = row_group0 + phase * group_stride;
@@ -524,15 +655,34 @@ void kernel_main() {
             }
             for (uint32_t band_i = 0; band_i < band_iters; ++band_i) {
                 if constexpr (fused_ring_enabled) {
-                    const uint32_t band = gate->band(band_i);
-                    span.set(group, band0 + band);
+                    const uint32_t physical_start = gate->physical_start(band_i);
+                    shard_span.set(group, physical_start, gate->tiles_per_shard);
+                    const uint32_t k_tiles_in_unit = shard_span.k_tiles();
                     // q/w were multicasted before this loop. Every row of this K-mcast column has
-                    // the same band list, so skipping an empty runtime-prefix band preserves both
+                    // the same work list, so skipping an empty runtime-prefix unit preserves both
                     // the fabric gate and the local CB protocol.
-                    if (span.k_tiles() == 0) {
+                    if (k_tiles_in_unit == 0) {
+                        if (band_i == 0) {
+                            expand_w_group();
+                        }
                         continue;
                     }
-                    gate->read_k(noc, k_acc, span.k_tile_start(), span.k_tiles(), k_dir, k_batch_page_offset);
+                    uint32_t gathered_shard_tiles = gate->tiles_per_shard;
+                    if constexpr (block_cyclic) {
+                        // Partial-height gathers are enabled only for the ordinary SP-only layout. A
+                        // TP-inner reconstructed cache (bc_sp > ring_size) gathers the full physical
+                        // shard, so its midpoint must stay at half that shard as well.
+                        if (bc_sp == gate->ring_size) {
+                            const uint32_t global_slab_tiles = bc_chunk_local * bc_sp;
+                            const uint32_t valid_slabs = (kv_len_tiles + global_slab_tiles - 1) / global_slab_tiles;
+                            gathered_shard_tiles = std::min(valid_slabs * bc_chunk_local, gate->tiles_per_shard);
+                        }
+                    }
+                    // KEEP IN SYNC with the AG writer's row-aligned midpoint_prefix_pages() and the host's
+                    // gather_valid_height_tiles(). Units crossing this boundary wait for completion.
+                    const uint32_t midpoint_tiles = (gathered_shard_tiles + 1) / 2;
+                    gate->read_k(
+                        noc, k_acc, physical_start, k_tiles_in_unit, midpoint_tiles, k_dir, k_batch_page_offset);
                 } else {
                     const uint32_t band = band_i;
                     const bool real_band = band < num_bands;
@@ -565,9 +715,81 @@ void kernel_main() {
                         }
                     }
                 }
+                if constexpr (!synthesize_gate && !stream_heads && !fuse_single) {
+                    if (band_i == 0) {
+                        expand_w_group();
+                    }
+                }
             }
         }
     };
+
+    if constexpr (fused_ring_enabled && chunk_start_from_metadata) {
+        // Derive causal values before the blocking ring receiver so compute can consume them independently.
+        // The factory supplies meta_rt_base to keep this layout coupled to the runtime-argument builder.
+        CircularBuffer cb_derived(cb_meta_derived);
+        cb_derived.reserve_back(1);
+        const uint32_t derived_l1 = cb_derived.get_write_ptr();
+        // Lands at the page base, is consumed immediately, then the four derived words overwrite it -- so the
+        // one CB serves as both the NoC landing slot and the reader->compute mailbox.
+        const uint32_t chunk_start_idx = trace_metadata::read_metadata_scalar_u32(
+            noc, meta_args, get_arg_val<uint32_t>(meta_rt_base + 0), derived_l1);
+        // Match the SCALAR host contract, which validate_chunk_start states explicitly: the chunk must
+        // START inside the cache, but its causal window MAY end past the valid prefix and past T -- a
+        // chunked prefill runs a fixed chunk size, so a final chunk pads its query window beyond what the
+        // cache holds. Requiring start + sp*chunk_local <= T here was stricter than both that contract and
+        // the AG reader's bounded_kv_actual_isl (start < T, then clamp), so a legitimate padded window
+        // tripped this ASSERT under the watcher while the scalar path accepted it -- and it made the
+        // kv_len_tiles clamp below dead code. Both readers of this word now fall back identically.
+        constexpr uint32_t chunk_global_tiles = bc_sp * bc_chunk_local;
+        ASSERT(
+            chunk_start_idx % iscore::kCausalTileWidth == 0 &&
+            chunk_start_idx / iscore::kCausalTileWidth < k_len_tiles);
+        // Undo the key-stripe split so this matches device_causal_geometry's (unsplit) arguments exactly.
+        // Identity when key_stripe_split == 1, which is every non-dedup path.
+        // Guard the divisor: the non-fused factory zero-fills this block (it rejects the metadata path),
+        // and `bc_sp / 0` is an ill-formed constant expression even in a discarded branch.
+        constexpr uint32_t geom_split = meta_key_stripe_split != 0 ? meta_key_stripe_split : 1;
+        constexpr uint32_t geom_sp = bc_sp / geom_split;
+        constexpr uint32_t geom_chunk_local_elems = bc_chunk_local * 32 * geom_split;
+        const auto geom = ttnn::operations::experimental::indexer_score::causal_geometry_tiles(
+            chunk_start_idx,
+            block_cyclic,
+            meta_rotation_exact != 0,
+            geom_sp,
+            geom_chunk_local_elems,
+            get_arg_val<uint32_t>(meta_rt_base + 1),  // device_index
+            get_arg_val<uint32_t>(meta_rt_base + 2),  // tp_index
+            meta_Sq);
+        // Derive kv_len from the same position used for causal geometry.
+        const uint32_t derived_kv_len_tiles = chunk_start_idx / 32 + chunk_global_tiles;
+        kv_len_tiles = derived_kv_len_tiles < k_len_tiles ? derived_kv_len_tiles : k_len_tiles;
+
+        const IndexerScoreMetadataBounds bounds{
+            .kv_len_tiles = kv_len_tiles,
+            .chunk_start_tiles = geom.chunk_start_tiles,
+            .straddle_q_tile = geom.straddle_q_tile,
+            .straddle_jump_tiles = geom.straddle_jump_tiles,
+        };
+        CoreLocalMem<IndexerScoreMetadataBounds> mailbox(derived_l1);
+        mailbox->kv_len_tiles = bounds.kv_len_tiles;
+        mailbox->chunk_start_tiles = bounds.chunk_start_tiles;
+        mailbox->straddle_q_tile = bounds.straddle_q_tile;
+        mailbox->straddle_jump_tiles = bounds.straddle_jump_tiles;
+        clobber_all_memory();
+        cb_derived.push_back(1);
+
+        // Second copy for the writer (one derivation, two consumers -- see the factory note).
+        CircularBuffer cb_wmeta(cb_meta_writer);
+        cb_wmeta.reserve_back(1);
+        CoreLocalMem<IndexerScoreMetadataBounds> wmailbox(cb_wmeta.get_write_ptr());
+        wmailbox->kv_len_tiles = bounds.kv_len_tiles;
+        wmailbox->chunk_start_tiles = bounds.chunk_start_tiles;
+        wmailbox->straddle_q_tile = bounds.straddle_q_tile;
+        wmailbox->straddle_jump_tiles = bounds.straddle_jump_tiles;
+        clobber_all_memory();
+        cb_wmeta.push_back(1);
+    }
 
     if constexpr (fused_ring_enabled) {
         // The receiver consumes the fused-arg block at slot 27 (ring/dir/sems plus the split-forwarding
@@ -575,7 +797,24 @@ void kernel_main() {
         // gate then consumes k_local and records the following band-permutation base.
         uint32_t fused_argidx = 27;
         RingSDPAOpReceiver fused_recv(/*wait_for_op_signal=*/true, fused_argidx);
-        const FusedRingGate gate(fused_recv, fused_argidx);
+        // TRACE-SAFE slot select. cache_batch_idx is a host runtime arg the override re-patches per
+        // dispatch, which a replay cannot do -- so a captured program would score every request against
+        // the slot live at capture time (capture warms user 0). Recompose it here from the on-device user
+        // id, mirroring TtIndexer's host formula. The RT slots are still consumed by the gate so the
+        // band-permutation base is unaffected.
+        uint32_t local_slot_offset = 0;
+        if constexpr (cache_slot_from_metadata) {
+            CircularBuffer cb_slot(cb_meta_slot);
+            cb_slot.reserve_back(1);
+            const uint32_t user_id = trace_metadata::read_metadata_scalar_u32(
+                noc, slot_meta_args, get_arg_val<uint32_t>(slot_rt_base + 0), cb_slot.get_write_ptr());
+            const uint32_t num_layers = get_arg_val<uint32_t>(slot_rt_base + 1);
+            const uint32_t layer_idx = get_arg_val<uint32_t>(slot_rt_base + 2);
+            local_slot_offset =
+                trace_metadata::bounded_cache_batch_idx(user_id, num_layers, layer_idx, slot_cache_extent) *
+                slot_local_pages;
+        }
+        const FusedRingGate gate(fused_recv, fused_argidx, local_slot_offset);
         run(&gate);
     } else {
         run(nullptr);

@@ -202,7 +202,7 @@ void run_strided_dfb_copy_test(
     // -----------------------------------------------------------------------
     // Dispatch and verify
     // -----------------------------------------------------------------------
-    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(*mesh_device, std::move(program));
 
     const auto output_cpu = output_tensor.cpu(true);
     const auto output_shard = ttnn::distributed::get_device_tensors(output_cpu).front();

@@ -675,13 +675,22 @@ class TtQwenModelArgs(TtModelArgs):
                     lambda n: n + 1 if n > 1 and all(n % i != 0 for i in range(2, int(n**0.5) + 1)) else n
                 )
                 total_per_core_out_M = add_one_if_prime(math.ceil(seq_len / (7 * self.tile_size)))
+
+                # On Blackhole, persistent decode-path L1 buffers sit at ~989 KB on core range
+                # [0-0 - 3-6], leaving this matmul only ~761 KB of contiguous L1 for its static CBs,
+                # whose size is dominated by the output block volume. Bound that volume, and always pad
+                # per_core_M to a multiple of 8 so that a block height close to the bound actually divides
+                # per_core_M (otherwise a prime-ish per_core_M collapses the block to a tiny, slow shape).
+                max_out_block_volume = 160 if self.is_blackhole else 320
                 per_core_M = (
-                    next_multiple_of_8(total_per_core_out_M) if total_per_core_out_M > 320 else total_per_core_out_M
+                    next_multiple_of_8(total_per_core_out_M)
+                    if (self.is_blackhole or total_per_core_out_M > 320)
+                    else total_per_core_out_M
                 )
                 per_core_N = 10
 
                 # Want out_block_h and out_block_w such that:
-                # out_block_h * out block_w <= 320
+                # out_block_h * out block_w <= max_out_block_volume
                 # out_block_h % per_core_M == 0
                 # out_block_w % per_core_N == 0
                 # Since we're fixing per_core_N = 10, out_block_w can only be 5 or 10
@@ -689,7 +698,7 @@ class TtQwenModelArgs(TtModelArgs):
                 def find_out_block_h(out_block_w):
                     max_out_block_h = -1
                     for i in range(1, per_core_M + 1):
-                        if i * out_block_w > 320:
+                        if i * out_block_w > max_out_block_volume:
                             break
                         if per_core_M % i == 0:
                             if i > max_out_block_h:

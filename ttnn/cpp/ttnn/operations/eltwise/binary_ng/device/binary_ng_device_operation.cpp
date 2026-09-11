@@ -300,8 +300,13 @@ ttsl::hash::hash_t BinaryNgDeviceOperation::tensor_args_t::to_hash() const {
     return ttsl::hash::hash_objects_with_default_seed(
         input_tensor_a.dtype(),
         input_tensor_a.memory_config(),
+        input_tensor_a.tensor_spec().tensor_layout().get_alignment(),
+        input_tensor_a.tensor_spec().tile(),
         input_tensor_b.has_value() ? std::optional<DataType>{input_tensor_b->dtype()} : std::nullopt,
         input_tensor_b.has_value() ? std::optional<MemoryConfig>{input_tensor_b->memory_config()} : std::nullopt,
+        input_tensor_b.has_value() ? std::optional{input_tensor_b->tensor_spec().tensor_layout().get_alignment()}
+                                   : std::nullopt,
+        input_tensor_b.has_value() ? std::optional{input_tensor_b->tensor_spec().tile()} : std::nullopt,
         sharded_tensor_shape_in_pages(input_tensor_a),
         input_tensor_b.has_value() ? sharded_tensor_shape_in_pages(*input_tensor_b) : std::nullopt);
 }

@@ -104,6 +104,11 @@
 # in the simulator itself, not this CI wiring — see #54794.
 # QuasarMultiSemaphorePipeline and QuasarMultipleClustersMultiSemaphorePipeline are
 # excluded: both are disabled on tt-metal main.
+#
+# The merge gate runs this same entry from
+# tests/pipeline_reorg/ttsim_merge_gate_tests.yaml — currently an exact copy, differing
+# only in its 15-min timeout against this list's 30. Intended to become a reduced
+# subset; keep the two in sync when adding fixtures to either.
 - name: runtime_sim_quasar_cpp_unit_tests
   cmd: >-
     f=HostOnlyTest.Bfp8Conversion;

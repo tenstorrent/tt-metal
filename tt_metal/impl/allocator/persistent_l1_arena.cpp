@@ -164,6 +164,20 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> PersistentL1Arena::occupied_range
     return ranges;
 }
 
+std::vector<std::pair<DeviceAddr, DeviceAddr>> PersistentL1Arena::occupied_ranges(const CoreCoord& core) const {
+    std::lock_guard lock(mutex_);
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> ranges;
+    auto regions_it = regions_by_core_.find(core);
+    if (regions_it == regions_by_core_.end()) {
+        return ranges;
+    }
+    ranges.reserve(regions_it->second.size());
+    for (const Region& region : regions_it->second) {
+        ranges.emplace_back(region.begin, region.end);
+    }
+    return ranges;
+}
+
 PersistentL1Arena::Seal PersistentL1Arena::seal(const CoreRangeSet& cores) {
     increment_seals(cores);
     return Seal(liveness_, cores);

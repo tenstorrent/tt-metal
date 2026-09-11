@@ -15,12 +15,12 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal::unit_tests::llk::single_core {
 
@@ -38,26 +38,20 @@ inline vector<std::uint32_t> run_unary(
     bool fp32_dest_acc_en,
     const std::string& compute_kernel,
     std::uint32_t cb_depth_tiles = 1) {
-    IDevice* dev = mesh_device.get_devices()[0];
     Program program = CreateProgram();
     CoreCoord core = {0, 0};
 
     std::uint32_t input_tile_size = tt::tile_size(input_fmt);
     std::uint32_t output_tile_size = tt::tile_size(output_fmt);
 
-    InterleavedBufferConfig src_config{
-        .device = dev,
-        .size = num_tiles * input_tile_size,
-        .page_size = num_tiles * input_tile_size,
-        .buffer_type = BufferType::DRAM};
-    auto src_buffer = CreateBuffer(src_config);
-
-    InterleavedBufferConfig dst_config{
-        .device = dev,
-        .size = num_tiles * output_tile_size,
-        .page_size = num_tiles * output_tile_size,
-        .buffer_type = BufferType::DRAM};
-    auto dst_buffer = CreateBuffer(dst_config);
+    auto src_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = num_tiles * input_tile_size},
+        {.page_size = num_tiles * input_tile_size, .buffer_type = BufferType::DRAM},
+        &mesh_device);
+    auto dst_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = num_tiles * output_tile_size},
+        {.page_size = num_tiles * output_tile_size, .buffer_type = BufferType::DRAM},
+        &mesh_device);
 
     CircularBufferConfig cb_src_config =
         CircularBufferConfig(cb_depth_tiles * input_tile_size, {{tt::CBIndex::c_0, input_fmt}})
@@ -87,20 +81,15 @@ inline vector<std::uint32_t> run_unary(
         core,
         ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = {num_tiles}});
 
-    detail::WriteToBuffer(src_buffer, src_vec);
+    auto& cq = mesh_device.mesh_command_queue();
+    distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec, /*blocking=*/true);
     SetRuntimeArgs(program, reader, core, {src_buffer->address(), 0, num_tiles});
     SetRuntimeArgs(program, writer, core, {dst_buffer->address(), 0, num_tiles});
 
-    distributed::MeshWorkload workload;
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    workload.add_program(device_range, std::move(program));
-    auto& cq = mesh_device.mesh_command_queue();
-    distributed::EnqueueMeshWorkload(cq, workload, false);
-    distributed::Finish(cq);
+    LaunchProgram(mesh_device, std::move(program));
 
     vector<std::uint32_t> result_vec;
-    detail::ReadFromBuffer(dst_buffer, result_vec);
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_buffer, /*blocking=*/true);
     return result_vec;
 }
 
@@ -119,26 +108,20 @@ inline vector<std::uint32_t> run_unary_tiled(
     bool fp32_dest_acc_en,
     const std::string& compute_kernel,
     std::uint32_t cb_depth_tiles) {
-    IDevice* dev = mesh_device.get_devices()[0];
     Program program = CreateProgram();
     CoreCoord core = {0, 0};
 
     const std::uint32_t input_tile_size = tile.get_tile_size(input_fmt);
     const std::uint32_t output_tile_size = tile.get_tile_size(output_fmt);
 
-    InterleavedBufferConfig src_config{
-        .device = dev,
-        .size = num_tiles * input_tile_size,
-        .page_size = num_tiles * input_tile_size,
-        .buffer_type = BufferType::DRAM};
-    auto src_buffer = CreateBuffer(src_config);
-
-    InterleavedBufferConfig dst_config{
-        .device = dev,
-        .size = num_tiles * output_tile_size,
-        .page_size = num_tiles * output_tile_size,
-        .buffer_type = BufferType::DRAM};
-    auto dst_buffer = CreateBuffer(dst_config);
+    auto src_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = num_tiles * input_tile_size},
+        {.page_size = num_tiles * input_tile_size, .buffer_type = BufferType::DRAM},
+        &mesh_device);
+    auto dst_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = num_tiles * output_tile_size},
+        {.page_size = num_tiles * output_tile_size, .buffer_type = BufferType::DRAM},
+        &mesh_device);
 
     CircularBufferConfig cb_src_config =
         CircularBufferConfig(cb_depth_tiles * input_tile_size, {{tt::CBIndex::c_0, input_fmt}})
@@ -170,20 +153,15 @@ inline vector<std::uint32_t> run_unary_tiled(
         core,
         ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = {num_tiles}});
 
-    detail::WriteToBuffer(src_buffer, src_vec);
+    auto& cq = mesh_device.mesh_command_queue();
+    distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec, /*blocking=*/true);
     SetRuntimeArgs(program, reader, core, {src_buffer->address(), 0, num_tiles});
     SetRuntimeArgs(program, writer, core, {dst_buffer->address(), 0, num_tiles});
 
-    distributed::MeshWorkload workload;
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    workload.add_program(device_range, std::move(program));
-    auto& cq = mesh_device.mesh_command_queue();
-    distributed::EnqueueMeshWorkload(cq, workload, false);
-    distributed::Finish(cq);
+    LaunchProgram(mesh_device, std::move(program));
 
     vector<std::uint32_t> result_vec;
-    detail::ReadFromBuffer(dst_buffer, result_vec);
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_buffer, /*blocking=*/true);
     return result_vec;
 }
 
@@ -206,7 +184,6 @@ inline vector<std::uint32_t> run_binary(
     if (out_tiles == 0) {
         out_tiles = num_tiles;
     }
-    IDevice* dev = mesh_device.get_devices()[0];
     Program program = CreateProgram();
     CoreCoord core = {0, 0};
 
@@ -214,12 +191,11 @@ inline vector<std::uint32_t> run_binary(
     std::uint32_t tile_bytes = tt::tile_size(fmt);
 
     auto make_dram = [&](std::uint32_t ntiles) {
-        InterleavedBufferConfig cfg{
-            .device = dev,
-            .size = ntiles * tile_bytes,
-            .page_size = ntiles * tile_bytes,
-            .buffer_type = BufferType::DRAM};
-        return CreateBuffer(cfg);
+        const std::uint32_t size = ntiles * tile_bytes;
+        return distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = size},
+            {.page_size = size, .buffer_type = BufferType::DRAM},
+            &mesh_device);
     };
     auto src0_buffer = make_dram(num_tiles);
     auto src1_buffer = make_dram(num_tiles);
@@ -254,24 +230,19 @@ inline vector<std::uint32_t> run_binary(
         core,
         ComputeConfig{.fp32_dest_acc_en = false, .compile_args = compile_args, .defines = compute_defines});
 
-    detail::WriteToBuffer(src0_buffer, src0_vec);
-    detail::WriteToBuffer(src1_buffer, src1_vec);
+    auto& cq = mesh_device.mesh_command_queue();
+    distributed::EnqueueWriteMeshBuffer(cq, src0_buffer, src0_vec, /*blocking=*/true);
+    distributed::EnqueueWriteMeshBuffer(cq, src1_buffer, src1_vec, /*blocking=*/true);
     SetRuntimeArgs(program, reader, core, {src0_buffer->address(), 0, src1_buffer->address(), 0, num_tiles});
     SetRuntimeArgs(program, writer, core, {dst_buffer->address(), 0, out_tiles});
     // Shipping eltwise_binary.cpp reads runtime args {per_core_block_cnt, per_core_block_size, acc_to_dst};
     // the id-free kernels read only compile-time num_tiles and ignore these (harmless). One tile per block.
     SetRuntimeArgs(program, compute, core, {num_tiles, 1, 0});
 
-    distributed::MeshWorkload workload;
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    workload.add_program(device_range, std::move(program));
-    auto& cq = mesh_device.mesh_command_queue();
-    distributed::EnqueueMeshWorkload(cq, workload, false);
-    distributed::Finish(cq);
+    LaunchProgram(mesh_device, std::move(program));
 
     vector<std::uint32_t> result_vec;
-    detail::ReadFromBuffer(dst_buffer, result_vec);
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_buffer, /*blocking=*/true);
     return result_vec;
 }
 
@@ -281,7 +252,6 @@ inline vector<std::uint32_t> run_matmul_single(
     const vector<std::uint32_t>& src0_vec,
     const vector<std::uint32_t>& src1_vec,
     const std::string& compute_kernel) {
-    IDevice* dev = mesh_device.get_devices()[0];
     Program program = CreateProgram();
     CoreCoord core = {0, 0};
 
@@ -289,9 +259,10 @@ inline vector<std::uint32_t> run_matmul_single(
     std::uint32_t tile_bytes = tt::tile_size(fmt);
 
     auto make_dram = [&]() {
-        InterleavedBufferConfig cfg{
-            .device = dev, .size = tile_bytes, .page_size = tile_bytes, .buffer_type = BufferType::DRAM};
-        return CreateBuffer(cfg);
+        return distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = tile_bytes},
+            {.page_size = tile_bytes, .buffer_type = BufferType::DRAM},
+            &mesh_device);
     };
     auto src0_buffer = make_dram();
     auto src1_buffer = make_dram();
@@ -321,21 +292,16 @@ inline vector<std::uint32_t> run_matmul_single(
     CreateKernel(
         program, compute_kernel, core, ComputeConfig{.fp32_dest_acc_en = false, .compile_args = {1, 1, 1, 1, 1, 1, 1}});
 
-    detail::WriteToBuffer(src0_buffer, src0_vec);
-    detail::WriteToBuffer(src1_buffer, src1_vec);
+    auto& cq = mesh_device.mesh_command_queue();
+    distributed::EnqueueWriteMeshBuffer(cq, src0_buffer, src0_vec, /*blocking=*/true);
+    distributed::EnqueueWriteMeshBuffer(cq, src1_buffer, src1_vec, /*blocking=*/true);
     SetRuntimeArgs(program, reader, core, {src0_buffer->address(), 0, src1_buffer->address(), 0, 1});
     SetRuntimeArgs(program, writer, core, {dst_buffer->address(), 0, 1});
 
-    distributed::MeshWorkload workload;
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    workload.add_program(device_range, std::move(program));
-    auto& cq = mesh_device.mesh_command_queue();
-    distributed::EnqueueMeshWorkload(cq, workload, false);
-    distributed::Finish(cq);
+    LaunchProgram(mesh_device, std::move(program));
 
     vector<std::uint32_t> result_vec;
-    detail::ReadFromBuffer(dst_buffer, result_vec);
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_buffer, /*blocking=*/true);
     return result_vec;
 }
 
@@ -350,7 +316,6 @@ inline vector<std::uint32_t> run_matmul_block(
     std::uint32_t rt_dim,
     std::uint32_t kt_dim,
     const std::string& compute_kernel) {
-    IDevice* dev = mesh_device.get_devices()[0];
     Program program = CreateProgram();
     CoreCoord core = {0, 0};
 
@@ -364,9 +329,11 @@ inline vector<std::uint32_t> run_matmul_block(
     TT_FATAL(in0_tiles == in1_tiles, "run_matmul_block: reader_binary needs in0_tiles == in1_tiles (rt==ct)");
 
     auto make_dram = [&](std::uint32_t n) {
-        InterleavedBufferConfig cfg{
-            .device = dev, .size = n * tile_bytes, .page_size = n * tile_bytes, .buffer_type = BufferType::DRAM};
-        return CreateBuffer(cfg);
+        const std::uint32_t size = n * tile_bytes;
+        return distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = size},
+            {.page_size = size, .buffer_type = BufferType::DRAM},
+            &mesh_device);
     };
     auto src0_buffer = make_dram(in0_tiles);
     auto src1_buffer = make_dram(in1_tiles);
@@ -398,21 +365,16 @@ inline vector<std::uint32_t> run_matmul_block(
         core,
         ComputeConfig{.fp32_dest_acc_en = false, .compile_args = {ct_dim, rt_dim, kt_dim}});
 
-    detail::WriteToBuffer(src0_buffer, src0_vec);
-    detail::WriteToBuffer(src1_buffer, src1_vec);
+    auto& cq = mesh_device.mesh_command_queue();
+    distributed::EnqueueWriteMeshBuffer(cq, src0_buffer, src0_vec, /*blocking=*/true);
+    distributed::EnqueueWriteMeshBuffer(cq, src1_buffer, src1_vec, /*blocking=*/true);
     SetRuntimeArgs(program, reader, core, {src0_buffer->address(), 0, src1_buffer->address(), 0, in0_tiles});
     SetRuntimeArgs(program, writer, core, {dst_buffer->address(), 0, out_tiles});
 
-    distributed::MeshWorkload workload;
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    workload.add_program(device_range, std::move(program));
-    auto& cq = mesh_device.mesh_command_queue();
-    distributed::EnqueueMeshWorkload(cq, workload, false);
-    distributed::Finish(cq);
+    LaunchProgram(mesh_device, std::move(program));
 
     vector<std::uint32_t> result_vec;
-    detail::ReadFromBuffer(dst_buffer, result_vec);
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_buffer, /*blocking=*/true);
     return result_vec;
 }
 

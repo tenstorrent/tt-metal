@@ -168,23 +168,77 @@ class Penalties1D(LightweightModule):
         assert self.config.is_resolved(), "config must be resolved before loading device buffers!"
         cfg = self.config
 
-        # Module-owned buffers
-        self._decode_src = _materialize(cfg.decode_src)
-        self._zeros = _materialize(cfg.zeros)
+        try:
+            # Module-owned buffers
+            self._decode_src = _materialize(cfg.decode_src)
+            self._zeros = _materialize(cfg.zeros)
 
-        # Derived topology fields
-        self._cluster_shape = cfg.mesh_device.shape
-        self._num_devices = max(self._cluster_shape[-1], self._cluster_shape[-2])
-        self._op_kwargs = {"sub_core_grids": cfg.sub_core_grids} if cfg.sub_core_grids else {}
-        self._replicate_mapper = ttnn.ShardTensor2dMesh(
-            cfg.mesh_device, dims=(None, None), mesh_shape=self._cluster_shape
-        )
-        self._use_low_perf_tilize = cfg.sub_core_grids is not None
+            # Derived topology fields
+            self._cluster_shape = cfg.mesh_device.shape
+            self._num_devices = max(self._cluster_shape[-1], self._cluster_shape[-2])
+            self._op_kwargs = {"sub_core_grids": cfg.sub_core_grids} if cfg.sub_core_grids else {}
+            self._replicate_mapper = ttnn.ShardTensor2dMesh(
+                cfg.mesh_device, dims=(None, None), mesh_shape=self._cluster_shape
+            )
+            self._use_low_perf_tilize = cfg.sub_core_grids is not None
 
-        # Slice tensors for scatter → slice (port from tt_penalties.py:117-139)
-        self._slice_start, self._slice_end = self._build_slice_tensors()
+            # Slice tensors for scatter → slice (port from tt_penalties.py:117-139)
+            self._slice_start, self._slice_end = self._build_slice_tensors()
+        except BaseException as primary:
+            try:
+                self.release()
+            except BaseException as cleanup_error:
+                _attach_cleanup_failures(primary, (cleanup_error,))
+            raise
 
         self._device_buffers_loaded = True
+
+    def release(self) -> None:
+        """Release every module-owned buffer idempotently.
+
+        Preallocated ``ttnn.Tensor`` config fields are caller-owned and are not
+        deallocated here.  LazyBuffer fields and the slice tensors constructed
+        by :meth:`load_device_buffers` are owned by this module.
+        """
+
+        failures = []
+        for name in (
+            "prompt_mask",
+            "output_mask",
+            "output_counts",
+            "output_counts_gathered",
+            "zeros",
+            "decode_src",
+            "presence_penalties",
+            "frequency_penalties",
+            "repetition_penalties",
+            "inverse_repetition_penalties",
+        ):
+            specification = getattr(self.config, name, None)
+            if isinstance(specification, LazyBuffer):
+                try:
+                    specification.release()
+                except BaseException as error:
+                    failures.append(error)
+
+        for name in ("_slice_start", "_slice_end"):
+            tensor = getattr(self, name, None)
+            if tensor is not None:
+                try:
+                    ttnn.deallocate(tensor)
+                except BaseException as error:
+                    failures.append(error)
+                else:
+                    setattr(self, name, None)
+
+        for name in ("_decode_src", "_zeros"):
+            specification = getattr(self.config, name.removeprefix("_"), None)
+            if isinstance(specification, LazyBuffer) and specification._value is None:
+                setattr(self, name, None)
+
+        self._device_buffers_loaded = False
+        if failures:
+            _raise_cleanup_failures(failures)
 
     # -- Lifecycle methods (per-request setup) ---------------------------------
 
@@ -399,20 +453,38 @@ class Penalties1D(LightweightModule):
         start_1d[0::2] = 0
         start_1d[1::2] = d * vocab_per_dev
 
+        padded_batch_size = ((cfg.max_batch_size + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
         end_1d = torch.empty(2 * self._num_devices, dtype=torch.int32)
-        end_1d[0::2] = cfg.max_batch_size
+        end_1d[0::2] = padded_batch_size
         end_1d[1::2] = (d + 1) * vocab_per_dev
 
-        slice_start = ttnn.from_torch(
-            start_1d,
-            device=cfg.mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(cfg.mesh_device, dims=shard_dims_slice, mesh_shape=self._cluster_shape),
-        )
-        slice_end = ttnn.from_torch(
-            end_1d,
-            device=cfg.mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(cfg.mesh_device, dims=shard_dims_slice, mesh_shape=self._cluster_shape),
-        )
+        slice_start = None
+        try:
+            slice_start = ttnn.from_torch(
+                start_1d,
+                device=cfg.mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    cfg.mesh_device,
+                    dims=shard_dims_slice,
+                    mesh_shape=self._cluster_shape,
+                ),
+            )
+            slice_end = ttnn.from_torch(
+                end_1d,
+                device=cfg.mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    cfg.mesh_device,
+                    dims=shard_dims_slice,
+                    mesh_shape=self._cluster_shape,
+                ),
+            )
+        except BaseException as primary:
+            if slice_start is not None:
+                try:
+                    ttnn.deallocate(slice_start)
+                except BaseException as cleanup_error:
+                    _attach_cleanup_failures(primary, (cleanup_error,))
+            raise
         return slice_start, slice_end
 
     def _pad_batch_to_max(self, tokens_2d: "torch.Tensor", pad_value: int) -> "torch.Tensor":
@@ -439,23 +511,69 @@ class Penalties1D(LightweightModule):
         counts_new = ttnn.scatter_add(self._zeros, 1, new_tokens, src, **op)
 
         new_tokens.deallocate()
-        counts_new = ttnn.tilize(counts_new, **op, use_low_perf=self._use_low_perf_tilize)
+        counts_new = self._tilize_counts(counts_new)
         if counts is not None:
             counts = ttnn.add(counts, counts_new, output_tensor=counts, **op)
         else:
             counts = counts_new
-        counts_sliced = ttnn.slice(
-            counts,
-            self._slice_start,
-            self._slice_end,
-            output_tensor=counts_sliced,
-            slice_dim=1,
-            num_devices=self._num_devices,
-            **op,
-        )
+
+        if counts.shape[-2] % ttnn.TILE_SIZE:
+            # Dynamic tiled slice requires tile-aligned logical input/output
+            # heights. Pure padded views share the original buffers, so the
+            # caller-owned logical-B state remains authoritative.
+            counts_padded = ttnn.reshape(
+                counts,
+                counts.padded_shape,
+                counts.padded_shape,
+                skip_padding_fill=True,
+            )
+            counts_sliced_padded = None
+            if counts_sliced is not None:
+                counts_sliced_padded = ttnn.reshape(
+                    counts_sliced,
+                    counts_sliced.padded_shape,
+                    counts_sliced.padded_shape,
+                    skip_padding_fill=True,
+                )
+            sliced = ttnn.slice(
+                counts_padded,
+                self._slice_start,
+                self._slice_end,
+                output_tensor=counts_sliced_padded,
+                slice_dim=1,
+                num_devices=self._num_devices,
+                **op,
+            )
+            if counts_sliced is None:
+                logical_shape = list(sliced.padded_shape)
+                logical_shape[-2] = self.config.max_batch_size
+                counts_sliced = ttnn.reshape(
+                    sliced,
+                    logical_shape,
+                    sliced.padded_shape,
+                    skip_padding_fill=True,
+                )
+        else:
+            # Preserve the established batch-32 slice exactly.
+            counts_sliced = ttnn.slice(
+                counts,
+                self._slice_start,
+                self._slice_end,
+                output_tensor=counts_sliced,
+                slice_dim=1,
+                num_devices=self._num_devices,
+                **op,
+            )
 
         mask = ttnn.gt(counts_sliced, 0, output_tensor=mask, **op)
         return counts, mask
+
+    def _tilize_counts(self, counts):
+        """Tilize one histogram while preserving non-tile batch heights."""
+
+        if counts.padded_shape[-2] % ttnn.TILE_SIZE == 0:
+            return ttnn.tilize(counts, **self._op_kwargs, use_low_perf=self._use_low_perf_tilize)
+        return ttnn.to_layout(counts, ttnn.TILE_LAYOUT, **self._op_kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -576,3 +694,24 @@ def _materialize(buf):
     if isinstance(buf, ttnn.Tensor):
         return buf
     return buf.get_device_buffer()
+
+
+def _attach_cleanup_failures(primary, failures):
+    if not failures:
+        return
+    previous = tuple(getattr(primary, "cleanup_failures", ()))
+    primary.cleanup_failures = previous + tuple(failures)
+    add_note = getattr(primary, "add_note", None)
+    if callable(add_note):
+        add_note(f"cleanup also encountered {len(failures)} failure(s)")
+
+
+def _raise_cleanup_failures(failures):
+    primary = failures[0]
+    if len(failures) > 1:
+        previous = tuple(getattr(primary, "cleanup_failures", ()))
+        primary.cleanup_failures = previous + tuple(failures[1:])
+        add_note = getattr(primary, "add_note", None)
+        if callable(add_note):
+            add_note(f"cleanup also encountered {len(failures) - 1} additional failure(s)")
+    raise primary

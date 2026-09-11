@@ -12,7 +12,9 @@ This test suite verifies:
 
 import math
 import os
+import time
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 import torch
@@ -21,7 +23,7 @@ from loguru import logger
 import ttnn
 from models.common.auto_compose import to_torch_auto_compose
 from models.common.modules.lazy_weight import LazyWeight
-from models.common.modules.lm_head.lm_head_1d import LMHead1D, LMHead1DConfig
+from models.common.modules.lm_head.lm_head_1d import LMHead1D, LMHead1DConfig, resolve_lm_head_1d_arch_config
 from models.common.tensor_utils import TILE_SIZE
 from models.common.utility_functions import comp_allclose, comp_pcc
 
@@ -35,8 +37,6 @@ pytestmark = pytest.mark.usefixtures("skip_on_galaxy_system")
 
 def test_lm_head_1d_config_creation():
     """Test LMHead1DConfig dataclass creation."""
-    from unittest.mock import MagicMock
-
     config = LMHead1DConfig(
         output_weights=[MagicMock()],
         mesh_device=MagicMock(),
@@ -49,8 +49,6 @@ def test_lm_head_1d_config_creation():
 
 def test_lm_head_1d_config_defaults():
     """Test LMHead1DConfig default values."""
-    from unittest.mock import MagicMock
-
     config = LMHead1DConfig(output_weights=[MagicMock()])
     assert config.mesh_device is None
     assert config.program_configs is None
@@ -63,8 +61,6 @@ def test_lm_head_1d_config_defaults():
 
 def test_lm_head_1d_config_is_resolved_all_fields():
     """Test is_resolved() when all fields are set."""
-    from unittest.mock import MagicMock
-
     mock_device = MagicMock()
     mock_device.get_num_devices.return_value = 1
 
@@ -73,7 +69,11 @@ def test_lm_head_1d_config_is_resolved_all_fields():
         mesh_device=mock_device,
         dim=4096,
         program_configs=[None],
-        compute_kernel_config=MagicMock(),
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            ttnn.device.Arch.WORMHOLE_B0,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+        ),
+        output_split_sizes=[1024],
         output_memcfg=MagicMock(),
         input_memcfg=MagicMock(),
         weights_memcfgs=[MagicMock()],
@@ -85,10 +85,127 @@ def test_compute_kernel_config_hifi2():
     """Test _compute_kernel_config_hifi2 returns valid config."""
     from models.common.modules.lm_head.lm_head_1d import _compute_kernel_config_hifi2
 
-    cfg = _compute_kernel_config_hifi2()
+    cfg = _compute_kernel_config_hifi2(ttnn.device.Arch.WORMHOLE_B0)
     assert cfg.math_fidelity == ttnn.MathFidelity.HiFi2
     assert cfg.packer_l1_acc is True
     assert cfg.fp32_dest_acc_en is False
+
+
+def _pure_lm_head_config(arch):
+    mesh = MagicMock()
+    mesh.arch.return_value = arch
+    mesh.get_num_devices.return_value = 1
+    weight = LazyWeight(source=torch.empty(32, 32), device=mesh)
+    return LMHead1DConfig(
+        output_weights=[weight],
+        mesh_device=mesh,
+        dim=32,
+        program_configs=[None],
+        output_split_sizes=[32],
+        output_memcfg=ttnn.L1_MEMORY_CONFIG,
+        input_memcfg=ttnn.DRAM_MEMORY_CONFIG,
+        weights_memcfgs=[ttnn.DRAM_MEMORY_CONFIG],
+    )
+
+
+@pytest.mark.parametrize("arch", [ttnn.device.Arch.WORMHOLE_B0, ttnn.device.Arch.BLACKHOLE])
+def test_lm_head_arch_resolver_selects_once_without_mutation(arch):
+    config = _pure_lm_head_config(arch)
+    original_program_configs = config.program_configs
+    original_output_weights = config.output_weights
+    original_weight = config.output_weights[0]
+
+    resolved = resolve_lm_head_1d_arch_config(config)
+
+    assert isinstance(resolved, LMHead1DConfig)
+    assert resolved is not config
+    assert resolved.is_resolved()
+    assert config.program_configs is original_program_configs
+    assert config.output_weights is original_output_weights
+    assert config.output_weights[0] is original_weight
+    assert resolved.output_weights[0] is not original_weight
+    assert config.compute_kernel_config is None
+    assert config.mesh_device.arch.call_count == 1
+    assert resolved.compute_kernel_config.math_fidelity == ttnn.MathFidelity.HiFi2
+    assert resolved.compute_kernel_config.math_approx_mode is False
+    assert resolved.compute_kernel_config.fp32_dest_acc_en is False
+    assert resolved.compute_kernel_config.packer_l1_acc is True
+    assert resolved.compute_kernel_config.dst_full_sync_en is False
+    assert resolved.compute_kernel_config.throttle_level == ttnn.ThrottleLevel.NO_THROTTLE
+
+
+def test_lm_head_explicit_common_override_is_copied():
+    config = _pure_lm_head_config(ttnn.device.Arch.BLACKHOLE)
+    override = ttnn.init_device_compute_kernel_config(
+        ttnn.device.Arch.BLACKHOLE,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
+    config.compute_kernel_config = override
+    resolved = resolve_lm_head_1d_arch_config(config)
+    assert resolved.compute_kernel_config is not override
+    assert resolved.compute_kernel_config.math_fidelity == ttnn.MathFidelity.HiFi4
+    assert resolved.compute_kernel_config.math_approx_mode is True
+    assert resolved.compute_kernel_config.fp32_dest_acc_en is True
+    assert resolved.compute_kernel_config.packer_l1_acc is False
+    assert config.compute_kernel_config is override
+
+
+def test_lm_head_arch_resolver_fails_closed(expect_error):
+    config = _pure_lm_head_config(object())
+    with expect_error(ValueError, "Unsupported LMHead1D architecture"):
+        resolve_lm_head_1d_arch_config(config)
+
+    config = _pure_lm_head_config(ttnn.device.Arch.BLACKHOLE)
+    config.program_configs = []
+    with expect_error(ValueError, "one program config"):
+        resolve_lm_head_1d_arch_config(config)
+
+    config = _pure_lm_head_config(ttnn.device.Arch.BLACKHOLE)
+    config.output_split_sizes = [0]
+    with expect_error(ValueError, "0 < logical"):
+        resolve_lm_head_1d_arch_config(config)
+
+    config = _pure_lm_head_config(ttnn.device.Arch.BLACKHOLE)
+    config.mesh_device.get_num_devices.return_value = 3
+    with expect_error(ValueError, "must be divisible"):
+        resolve_lm_head_1d_arch_config(config)
+
+    config = _pure_lm_head_config(ttnn.device.Arch.BLACKHOLE)
+    config.compute_kernel_config = object()
+    with expect_error(ValueError, "Invalid LMHead1D compute recipe"):
+        resolve_lm_head_1d_arch_config(config)
+
+
+def test_lm_head_resolutions_are_independent():
+    config = _pure_lm_head_config(ttnn.device.Arch.BLACKHOLE)
+    first = resolve_lm_head_1d_arch_config(config)
+    second = resolve_lm_head_1d_arch_config(config)
+    assert first is not second
+    assert first.compute_kernel_config is not second.compute_kernel_config
+
+
+def test_lm_head_weight_device_mismatch_fails_before_architecture_query(expect_error):
+    config = _pure_lm_head_config(ttnn.device.Arch.BLACKHOLE)
+    config.output_weights[0].device = MagicMock()
+    with expect_error(ValueError, "must match output weight 0 device"):
+        resolve_lm_head_1d_arch_config(config)
+    assert config.mesh_device.arch.call_count == 0
+
+
+def test_lm_head_construction_is_only_architecture_query():
+    config = _pure_lm_head_config(ttnn.device.Arch.BLACKHOLE)
+    module = LMHead1D.from_config(config)
+    assert config.mesh_device.arch.call_count == 1
+
+    _ = module.forward
+    _ = module.config.input_memcfg
+    _ = module.config.compute_kernel_config
+    assert config.mesh_device.arch.call_count == 1
+    assert not hasattr(module, "arch_config")
 
 
 def test_create_dram_sharded_mem_config():
@@ -102,14 +219,14 @@ def test_create_dram_sharded_mem_config():
     assert mc.buffer_type == ttnn.BufferType.DRAM
 
 
-def test_from_model_args_rejects_galaxy():
+def test_from_model_args_rejects_galaxy(expect_error):
     """Test from_model_args raises for Galaxy devices."""
     from unittest.mock import MagicMock
 
     mock_args = MagicMock()
     mock_args.is_galaxy = True
 
-    with pytest.raises(ValueError, match="Galaxy"):  # allow-pytest.raises: pre-existing
+    with expect_error(ValueError, "Galaxy"):
         LMHead1D.from_model_args(
             mesh_device=MagicMock(),
             args=mock_args,
@@ -154,10 +271,16 @@ def _prepare_lm_head_weights(
     splits = []
     for i, split_size in enumerate(split_sizes):
         device_splits = []
+        physical_split_size = math.ceil(split_size / TILE_SIZE) * TILE_SIZE
         for dev in range(num_devices):
             start = dev * size_per_device + sum(split_sizes[:i])
             end = start + split_size
-            device_splits.append(torch_w[:, start:end])
+            device_split = torch_w[:, start:end]
+            if split_size < physical_split_size:
+                device_split = torch.cat(
+                    [device_split, torch.zeros(dim, physical_split_size - split_size, dtype=device_split.dtype)], dim=-1
+                )
+            device_splits.append(device_split)
         splits.append(torch.cat(device_splits, dim=-1))
 
     return splits
@@ -317,6 +440,164 @@ def test_lm_head_1d_vs_reference(
     logger.info(f"LMHead1D vs reference: {pcc_message}")
     assert passing, f"LMHead1D output does not meet PCC {pcc}: {pcc_message}."
     logger.info(f"LMHead1D: PASSED for {hf_model_name} (mesh={mesh_shape}, devices={num_devices})")
+
+
+@pytest.mark.parametrize(
+    "ttnn_mesh_device,vocab_size,max_columns_per_device,expected_splits",
+    [
+        pytest.param((1, 1), 8192, 8192, 1, id="p150-single-split"),
+        pytest.param(
+            {"mesh_shape": (1, 4), "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
+            128256,
+            4008,
+            8,
+            id="p150x4-4008-column-splits",
+        ),
+    ],
+    indirect=["ttnn_mesh_device"],
+)
+def test_lm_head_1d_blackhole_common_config_correctness_cache_and_timing(
+    request, ttnn_mesh_device, require_blackhole_mesh_device, vocab_size, max_columns_per_device, expected_splits
+):
+    """Focused BH correctness/cache gate; timing is recorded without a fabricated threshold."""
+    torch.manual_seed(2026)
+    dim = 256
+    batch_rows = 32
+    num_devices = ttnn_mesh_device.get_num_devices()
+    full_weight = torch.randn(vocab_size, dim, dtype=torch.bfloat16)
+    torch_input = torch.randn(1, 1, batch_rows, dim, dtype=torch.bfloat16)
+    reference = torch.nn.functional.linear(torch_input, full_weight)
+    splits = _prepare_lm_head_weights(full_weight, vocab_size, dim, num_devices, max_columns_per_device)
+    assert len(splits) == expected_splits
+    logical_split_sizes = [max_columns_per_device] * (expected_splits - 1) + [
+        vocab_size // num_devices - max_columns_per_device * (expected_splits - 1)
+    ]
+    assert max(logical_split_sizes) == max_columns_per_device
+
+    compute = ttnn.init_device_compute_kernel_config(
+        ttnn.device.Arch.BLACKHOLE,
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+    common = LMHead1DConfig(
+        output_weights=[LazyWeight(source=split, dtype=ttnn.bfloat8_b) for split in splits],
+        mesh_device=ttnn_mesh_device,
+        dim=dim,
+        max_batch_size=1,
+        lm_head_dtype=ttnn.bfloat16,
+        output_split_sizes=logical_split_sizes,
+        compute_kernel_config=compute,
+    )
+    model = LMHead1D.from_config(common)
+    assert len(model.config.output_weights) == expected_splits
+    ttnn_mesh_device.enable_program_cache()
+    ttnn_mesh_device.clear_program_cache()
+    request.addfinalizer(ttnn_mesh_device.disable_and_clear_program_cache)
+    input_weight = LazyWeight(source=torch_input)
+
+    def run_once():
+        output = model.forward(input_weight)
+        ttnn.synchronize_device(ttnn_mesh_device)
+        return output
+
+    output = run_once()
+    actual = to_torch_auto_compose(output)[..., :vocab_size]
+    output.deallocate(True)
+    passing, pcc_message = comp_pcc(reference, actual, 0.999)
+    assert passing, f"Blackhole LMHead1D PCC failed: {pcc_message}"
+
+    cache_entries = ttnn_mesh_device.num_program_cache_entries()
+    assert cache_entries > 0
+    timings_ms = []
+    for _ in range(3):
+        start = time.perf_counter()
+        output = run_once()
+        timings_ms.append((time.perf_counter() - start) * 1000)
+        assert ttnn_mesh_device.num_program_cache_entries() == cache_entries
+        output.deallocate(True)
+    logger.info(
+        "BH LMHead1D measurement mesh={} dim={} vocab={} max_columns={}: warm-cache mean={:.3f} ms, samples={}",
+        tuple(ttnn_mesh_device.shape),
+        dim,
+        vocab_size,
+        max_columns_per_device,
+        sum(timings_ms) / len(timings_ms),
+        timings_ms,
+    )
+
+
+@pytest.mark.parametrize(
+    "ttnn_mesh_device",
+    [pytest.param((1, 1), id="n150-single-split")],
+    indirect=True,
+)
+def test_lm_head_1d_wormhole_common_config_correctness_cache_and_timing(request, ttnn_mesh_device):
+    """Focused WH correctness/cache gate; timing is evidence, not a threshold."""
+    torch.manual_seed(2026)
+    dim = 256
+    vocab_size = 8192
+    batch_rows = 32
+    full_weight = torch.randn(vocab_size, dim, dtype=torch.bfloat16)
+    torch_input = torch.randn(1, 1, batch_rows, dim, dtype=torch.bfloat16)
+    reference = torch.nn.functional.linear(torch_input, full_weight)
+    splits = _prepare_lm_head_weights(full_weight, vocab_size, dim, 1, vocab_size)
+    assert len(splits) == 1
+
+    compute = ttnn.init_device_compute_kernel_config(
+        ttnn.device.Arch.WORMHOLE_B0,
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+    common = LMHead1DConfig(
+        output_weights=[LazyWeight(source=splits[0], dtype=ttnn.bfloat8_b)],
+        mesh_device=ttnn_mesh_device,
+        dim=dim,
+        max_batch_size=1,
+        lm_head_dtype=ttnn.bfloat16,
+        output_split_sizes=[vocab_size],
+        compute_kernel_config=compute,
+    )
+    model = LMHead1D.from_config(common)
+    assert isinstance(model.config, LMHead1DConfig)
+    assert model.config is not common
+    assert not hasattr(model, "arch_config")
+    ttnn_mesh_device.enable_program_cache()
+    ttnn_mesh_device.clear_program_cache()
+    request.addfinalizer(ttnn_mesh_device.disable_and_clear_program_cache)
+    input_weight = LazyWeight(source=torch_input)
+
+    def run_once():
+        output = model.forward(input_weight)
+        ttnn.synchronize_device(ttnn_mesh_device)
+        return output
+
+    output = run_once()
+    actual = to_torch_auto_compose(output)[..., :vocab_size]
+    output.deallocate(True)
+    passing, pcc_message = comp_pcc(reference, actual, 0.999)
+    assert passing, f"Wormhole LMHead1D PCC failed: {pcc_message}"
+
+    cache_entries = ttnn_mesh_device.num_program_cache_entries()
+    assert cache_entries > 0
+    timings_ms = []
+    for _ in range(3):
+        start = time.perf_counter()
+        output = run_once()
+        timings_ms.append((time.perf_counter() - start) * 1000)
+        assert ttnn_mesh_device.num_program_cache_entries() == cache_entries
+        output.deallocate(True)
+    logger.info(
+        "WH LMHead1D measurement mesh={} dim={} vocab={}: warm-cache mean={:.3f} ms, samples={}",
+        tuple(ttnn_mesh_device.shape),
+        dim,
+        vocab_size,
+        sum(timings_ms) / len(timings_ms),
+        timings_ms,
+    )
 
 
 # ============================================================================

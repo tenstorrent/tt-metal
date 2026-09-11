@@ -45,8 +45,7 @@ protected:
     }
 
     void create_devices(const std::vector<ChipId>& device_ids) {
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config();
         // TODO: Some CI machines have lots of cards, running all tests on all the cards is slow.
         // Coverage for multidevices should be decent if we just confirm 2 work.
         id_to_device_ = distributed::MeshDevice::create_unit_meshes(
@@ -100,6 +99,7 @@ protected:
         AnyDispatchMeshDeviceFixture(l1_small_size, trace_region_size) {}
 };
 
+// Opens exactly one MMIO chip as a unit MeshDevice.
 class AnyDispatchMeshDeviceSingleCardFixture : public MeshDispatchFixture {
 protected:
     static void SetUpTestSuite() {}
@@ -123,16 +123,12 @@ protected:
     virtual size_t num_command_queues() const { return 1; }
 
     virtual void create_devices() {
-        std::vector<ChipId> ids;
-        for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
-            ids.push_back(id);
-        }
-        create_devices(ids);
+        const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
+        create_devices({mmio_device_id});
     }
 
     void create_devices(const std::vector<ChipId>& ids) {
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config();
         id_to_device_ = distributed::MeshDevice::create_unit_meshes(
             ids, l1_small_size_, trace_region_size_, num_command_queues(), dispatch_core_config);
         devices_.clear();
@@ -143,6 +139,9 @@ protected:
 
     std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
     std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> id_to_device_;
+
+public:
+    distributed::MeshDevice& device() { return *devices_.front(); }
 };
 
 // Same as MeshDeviceSingleCardFixture but remove the check for slow dispatch mode
@@ -170,29 +169,11 @@ protected:
 class MeshDeviceSingleCardBufferFixture : public MeshDeviceSingleCardFixture {};
 
 // Single unit-mesh fixture: always owns exactly one unit MeshDevice.
-class UnitMeshAnyDispatchFixture : public AnyDispatchMeshDeviceSingleCardFixture {
-public:
-    distributed::MeshDevice& device() { return *devices_.front(); }
-
-protected:
-    void create_devices() override {
-        const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
-        AnyDispatchMeshDeviceSingleCardFixture::create_devices({mmio_device_id});
-    }
-};
+class UnitMeshAnyDispatchFixture : public AnyDispatchMeshDeviceSingleCardFixture {};
 
 // Single unit-mesh fixture: always owns exactly one unit MeshDevice.
 // Requires slow dispatch mode.
-class UnitMeshFixture : public MeshDeviceSingleCardFixture {
-public:
-    distributed::MeshDevice& device() { return *devices_.front(); }
-
-protected:
-    void create_devices() override {
-        const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
-        AnyDispatchMeshDeviceSingleCardFixture::create_devices({mmio_device_id});
-    }
-};
+class UnitMeshFixture : public MeshDeviceSingleCardFixture {};
 
 class BlackholeSingleCardFixture : public MeshDeviceSingleCardFixture {
 protected:

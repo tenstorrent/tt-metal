@@ -26,10 +26,10 @@ from models.demos.common.prefill.runners.migration import (
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
     PREFILL_CHUNK_TOKENS,
-    create_kv_chunk_address_table_kimi,
+    create_kv_chunk_address_table_block_cyclic,
     merged_num_layers,
+    populate_kv_chunk_address_table_block_cyclic,
     populate_kv_chunk_address_table_dflash,
-    populate_kv_chunk_address_table_kimi,
 )
 
 # A KV chunk is one DRAM bank's worth of tokens (NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK=32) x head_dim.
@@ -129,10 +129,10 @@ def build_and_serialize_kv_chunk_table(
 
     ``tp_shard_kv`` (KV dedup): the table addresses each (row, col) device individually instead of one
     group per SP row. MUST match the layout the caches were allocated with, or every address is wrong.
-    Merged (KVPE + index) table only, and single-stage only (no PP). ``tp_axis`` names the TP mesh axis
-    in either case — it is the dflash head-count geometry and is not itself the dedup switch."""
+    Merged (KVPE + index) table only. ``tp_axis`` names the TP mesh axis in either case — it is the
+    dflash head-count geometry and is not itself the dedup switch."""
     assert chunk_size_global == PREFILL_CHUNK_TOKENS, (
-        f"create_kv_chunk_address_table_kimi assumes a block-cyclic period of "
+        f"create_kv_chunk_address_table_block_cyclic assumes a block-cyclic period of "
         f"PREFILL_CHUNK_TOKENS={PREFILL_CHUNK_TOKENS}, but chunk_size_global={chunk_size_global}. "
         f"A different period would mismap every position; re-introduce a parametrized builder if needed."
     )
@@ -173,7 +173,7 @@ def build_and_serialize_kv_chunk_table(
     stage_layout = stage_layouts[0] if stage_layouts else None
 
     def _builder(*, config, chunk_size_bytes, num_users):
-        return create_kv_chunk_address_table_kimi(
+        return create_kv_chunk_address_table_block_cyclic(
             config=config,
             mesh_device=mesh_device,
             mesh_shape=mesh_shape,
@@ -238,7 +238,7 @@ def _build_and_serialize_merged_kv_chunk_table(
     n_block_cyclic = 0
     index_config_name = None
     for kind, payload in caches:
-        if kind in ("kvpe", "index"):  # block-cyclic MLA caches -> populate_kv_chunk_address_table_kimi
+        if kind in ("kvpe", "index"):  # block-cyclic MLA caches -> populate_kv_chunk_address_table_block_cyclic
             if kind == "index":
                 index_config_name = str(n_block_cyclic)
             entries.append((str(n_block_cyclic), payload, None))
@@ -337,7 +337,7 @@ def _build_and_serialize_merged_kv_chunk_table(
         if head_idx is None:  # MLA/kimi block-cyclic model cache
             # Every block-cyclic cache shares the dedup layout, so all such configs resolve to the same
             # device groups (add_device_group dedups, so they are registered once and shared).
-            populate_kv_chunk_address_table_kimi(
+            populate_kv_chunk_address_table_block_cyclic(
                 lookup_table=table,
                 config=cfg,
                 mesh_device=mesh_device,

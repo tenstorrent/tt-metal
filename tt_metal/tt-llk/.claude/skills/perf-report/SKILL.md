@@ -70,7 +70,7 @@ Rules:
   It also writes to the same `<module>.csv` path, overwriting the timing
   report. Move the timing report out of the way first (see Refresh and
   compare), run counters as a separate sweep, and validate the result as a
-  counter report. `--dump-csv-counters`
+  counter report. `--dump-perf-counters`
   additionally writes raw counter values to `<module>.counters.csv`.
 - Perf counters are unavailable on Quasar. The build gate keeps the define off
   there and `counters.h` `#error`s if it ever slips through, so the flag

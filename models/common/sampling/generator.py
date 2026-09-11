@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import copy
+import itertools
 import random
 import secrets
 from dataclasses import dataclass, fields, replace
@@ -91,6 +92,20 @@ class _TraceKey:
     force_argmax: bool
     grammar_on: bool
     bucket: int | None = None
+
+
+# ``all_configs`` sweeps the ordinary sampler axes for one selected grammar
+# mode. Grammar requires a staged mask and is therefore not an independent
+# warmup dimension.
+_PRECOMPILE_CONFIG_FLAGS = ("penalties_on", "log_probs_on", "force_argmax")
+_TRACE_KEY_BOOL_FIELDS = tuple(f.name for f in fields(_TraceKey) if f.type in (bool, "bool"))
+if _TRACE_KEY_BOOL_FIELDS != (
+    *_PRECOMPILE_CONFIG_FLAGS,
+    "grammar_on",
+):
+    raise RuntimeError(
+        "sampling precompile axes must match the boolean trace-key fields, got " f"{_TRACE_KEY_BOOL_FIELDS}"
+    )
 
 
 class SamplingGenerator:
@@ -373,6 +388,7 @@ class SamplingGenerator:
         tt_out_tok: ttnn.Tensor | None = None,
         grammar_bitmask: torch.Tensor | None = None,
         compile_token_update: bool = False,
+        all_configs: bool = False,
     ) -> None:
         """Run the sampling pipeline once without capturing, to compile it and size its scratch.
 
@@ -382,21 +398,69 @@ class SamplingGenerator:
         left inline, this pass allocates device buffers that a live trace can corrupt on replay.
 
         ``logits`` only has to match the spec of the tensor that will later be captured, not be it.
+
+        ``all_configs`` compiles every supported
+        penalties/logprobs/force-argmax combination for the grammar mode
+        selected by ``grammar_bitmask``. Grammar-plus-logprobs is excluded
+        because that runtime combination is unsupported, and force-argmax
+        variants are skipped when the model disables that path.
         """
         grammar_on = grammar_bitmask is not None
         if grammar_on:
             self.tt_sampling.update_grammar_bitmask(grammar_bitmask)
 
-        self._run_sampling(
-            logits,
-            penalties_on=self._penalties_active,
-            grammar_on=grammar_on,
-            tt_out_tok=tt_out_tok,
-            count_tokens=compile_token_update,
-        )
+        if not all_configs:
+            try:
+                self._run_sampling(
+                    logits,
+                    penalties_on=self._penalties_active,
+                    grammar_on=grammar_on,
+                    tt_out_tok=tt_out_tok,
+                    count_tokens=compile_token_update,
+                )
+            finally:
+                if compile_token_update and self._penalties_active:
+                    self.reset_penalty_counts()
+            return
 
-        if compile_token_update:
-            self.reset_penalty_counts()
+        log_probs = self.tt_sampling.log_probs_calculator
+        saved_penalties = self._penalties_active
+        saved_force_argmax = self.tt_sampling._force_argmax_sampling
+        saved_enabled = list(log_probs.logprobs_enabled)
+        saved_num_logprobs = list(log_probs.num_logprobs)
+        try:
+            for penalties_on, log_probs_on, force_argmax in itertools.product(
+                (False, True),
+                repeat=len(_PRECOMPILE_CONFIG_FLAGS),
+            ):
+                if grammar_on and log_probs_on:
+                    continue
+                # Models that disable force-argmax never reach that program, and it is not runnable
+                # under their sub-device config (untilize with sub_core_grids=None).
+                if force_argmax and not self.tt_sampling._allow_force_argmax_sampling:
+                    continue
+                self._penalties_active = penalties_on
+                # Set the flag directly: reset_params() would re-derive it from k/p/temp and overwrite
+                # the live request params, and only the flag selects the program being compiled.
+                self.tt_sampling._force_argmax_sampling = force_argmax
+                log_probs.set_log_probs_mode(log_probs_on, num_logprobs=0)
+                try:
+                    self._run_sampling(
+                        logits,
+                        penalties_on=penalties_on,
+                        grammar_on=grammar_on,
+                        tt_out_tok=tt_out_tok,
+                        count_tokens=compile_token_update,
+                    )
+                finally:
+                    if compile_token_update and penalties_on:
+                        self.reset_penalty_counts()
+        finally:
+            self._penalties_active = saved_penalties
+            self.tt_sampling._force_argmax_sampling = saved_force_argmax
+            # Restore through the setter that owns the derived flags rather than re-deriving them here.
+            log_probs.set_log_probs_mode(saved_enabled, num_logprobs=saved_num_logprobs)
+            self._log_probs_active = log_probs.enable_log_probs
 
     def capture_trace(
         self,
@@ -430,13 +494,18 @@ class SamplingGenerator:
                 f"(penalties={penalties_on}, log_probs={log_probs_on}, "
                 f"force_argmax={force_argmax}, grammar={grammar_on})"
             )
+            # TTPenalties.apply() rewrites its input in place, so compiling on `logits` itself would
+            # leave the capture buffer already penalized and make the first replay penalize it twice.
+            scratch = ttnn.clone(logits) if penalties_on else logits
             self._run_sampling(
-                logits,
+                scratch,
                 penalties_on=penalties_on,
                 grammar_on=grammar_on,
                 tt_out_tok=tt_out_tok,
                 count_tokens=False,
             )
+            if scratch is not logits:
+                ttnn.deallocate(scratch)
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
         sampled = self._run_sampling(
@@ -486,10 +555,13 @@ class SamplingGenerator:
     ) -> tuple[ttnn.Tensor, ttnn.Tensor | LogProbsResult | None]:
         """Run eager sampling or replay the trace matching this configuration.
 
-        A non-``None`` packed grammar mask is validated and copied into the
-        persistent trace input before selecting the separate grammar-on trace.
+        A non-``None`` packed grammar mask is validated and fully replaces the
+        persistent mask before eager execution, trace capture, or trace replay.
         Call ``enable_device_grammar`` before any trace capture; grammar-on and
-        grammar-off traces never share mask state.
+        grammar-off traces use separate keys.
+
+        ``count_tokens`` only applies to the untraced path: the token-count update is recorded into
+        the trace at capture time, so a replay always performs it.
         """
 
         penalties_on = self._penalties_active
@@ -497,13 +569,14 @@ class SamplingGenerator:
         force_argmax = self.tt_sampling.force_argmax_sampling
         grammar_on = grammar_bitmask is not None
 
-        if grammar_on:
-            self.tt_sampling.update_grammar_bitmask(grammar_bitmask)
-
         # Explicit request seeds update a persistent seed tensor every token;
         # run them directly so trace replay cannot observe stale seed state.
         use_internal_trace = enable_trace and not self.seed_manager.has_active_request_seed()
+        if use_internal_trace and not count_tokens:
+            raise ValueError("count_tokens=False cannot be honoured on a traced sample(); pass enable_trace=False.")
         if not use_internal_trace:
+            if grammar_on:
+                self.tt_sampling.update_grammar_bitmask(grammar_bitmask)
             tt_out = self._run_sampling(
                 logits,
                 penalties_on=penalties_on,
@@ -519,13 +592,19 @@ class SamplingGenerator:
                 grammar_on,
             )
             if slot["id"] is None:
-                return self.capture_trace(
+                self.capture_trace(
                     logits,
                     tt_out_tok=tt_out_tok,
                     skip_precompile=skip_precompile,
                     grammar_bitmask=grammar_bitmask,
                 )
+                # begin/end_trace_capture only records the ops, so the captured output buffer
+                # still holds the previous step's token; replay before returning it as this
+                # step's sample. Callers that only capture (warmup) must not pay for this.
+                return self._execute_trace(key)
 
+            if grammar_on:
+                self.tt_sampling.update_grammar_bitmask(grammar_bitmask)
             self._validate_trace_inputs(slot, logits, tt_out_tok)
             tt_out = self._execute_trace(key)
 
@@ -843,7 +922,11 @@ class SeedManager:
     writes to device. `write_device_seed_values` writes explicit seeds only.
     """
 
-    def __init__(self, tt_sampling, max_batch_size=32, salt_duplicate_seeds=True):
+    def __init__(self, tt_sampling=None, max_batch_size=32, salt_duplicate_seeds=True, *, seed_buffer=None):
+        if tt_sampling is None and seed_buffer is None:
+            raise TypeError("SeedManager requires tt_sampling or a mutable seed_buffer")
+        if tt_sampling is not None and seed_buffer is not None:
+            raise TypeError("SeedManager accepts exactly one device seed sink")
         self.max_batch_size = max_batch_size
         # When False, concurrent slots sharing a request seed keep salt 0, so two independent
         # requests carrying the same seed stay bit-identical (the OpenAI/vLLM reproducibility
@@ -869,6 +952,13 @@ class SeedManager:
         # Pre-allocate RNG objects; actual request seeds are set via reset_seed().
         self.rngs = [random.Random(secrets.randbits(64)) for _ in range(max_batch_size)]
         self.tt_sampling = tt_sampling
+        self._seed_buffer = seed_buffer
+        self._seed_buffer_source = None
+        if seed_buffer is not None:
+            source = getattr(seed_buffer, "source", None)
+            if source is None or not callable(getattr(seed_buffer, "update", None)):
+                raise TypeError("seed_buffer must expose source and update()")
+            self._seed_buffer_source = source.clone() if callable(getattr(source, "clone", None)) else copy.copy(source)
         # True when at least one user slot has a non-None request seed.
         self._seed_active = False
         # Set to True by reset_seed() so the next get_new_values() pushes
@@ -882,13 +972,114 @@ class SeedManager:
         # True only for the most recent get_new_values() call when at least
         # one active slot used an explicit request seed.
         self._active_request_seed = False
+        # Sampling1D runtime state. The all-unseeded path is deliberately
+        # untouched until an explicit request seed overlays model defaults.
+        self._runtime_seed_buffer_managed = False
         # Mesh mapper for sharding seeds across rows when sampling_dp > 1.
-        if tt_sampling._sampling_dp > 1:
+        sampling_dp = 1 if tt_sampling is None else tt_sampling._sampling_dp
+        if sampling_dp > 1:
             self._seed_mapper = ttnn.ShardTensor2dMesh(
                 tt_sampling.mesh_device, dims=tt_sampling._param_dims, mesh_shape=tt_sampling.cluster_shape
             )
         else:
             self._seed_mapper = None
+
+    def restore_default_device_values(self) -> None:
+        """Restore a model-owned seed buffer after an explicitly seeded request.
+
+        ``LazyBuffer.update`` also replaces its future materialization source.  Runtime
+        request seeds are invocation state, not model configuration, so preserve the
+        construction-time source across updates and restore it when execution returns
+        to the legacy ``seed=None`` path.
+        """
+
+        if self._seed_buffer is None or self._seed_buffer_source is None:
+            return
+        source = (
+            self._seed_buffer_source.clone()
+            if callable(getattr(self._seed_buffer_source, "clone", None))
+            else copy.copy(self._seed_buffer_source)
+        )
+        self._seed_buffer.update(source)
+        self._seed_buffer.source = source
+        self.seeds = [None for _ in range(self.max_batch_size)]
+        self.seed_counters = [0 for _ in range(self.max_batch_size)]
+        self._seed_active = False
+        self._active_request_seed = False
+        self._reseted = False
+        self._needs_skip = False
+        self._runtime_seed_buffer_managed = False
+
+    @property
+    def seed_buffer(self):
+        """Return the borrowed model-owned seed buffer, if this manager uses one."""
+
+        return self._seed_buffer
+
+    def get_seed_device_buffer(self):
+        """Return the stable model-owned device handle used by Sampling1D traces."""
+
+        get_device_buffer = getattr(self._seed_buffer, "get_device_buffer", None)
+        return get_device_buffer() if callable(get_device_buffer) else None
+
+    def refresh_absolute_request_seeds(self, seeds, active_slots, positions, *, reset_batch: bool):
+        """Refresh a model-owned seed buffer for one Sampling1D decode step.
+
+        Explicit slots use the stable ``hash(request_seed, absolute_position)``
+        stream. Every unseeded and inactive slot retains its exact
+        construction-default value. The initial all-unseeded path remains
+        untouched; after a mixed/seeded request, the first all-unseeded call
+        restores the complete default tensor. Explicit seeds remain stable
+        across slot remaps through their absolute-position hash.
+        """
+
+        if self._seed_buffer is None:
+            raise RuntimeError("absolute request-seed refresh requires a model-owned seed buffer")
+        active = {int(slot) for slot in active_slots}
+        if any(slot < 0 or slot >= self.max_batch_size for slot in active):
+            raise ValueError("active seed slot is outside the seed-buffer capacity")
+        requested = {slot: self._seed_from_slot_params(seeds, slot) for slot in active}
+        explicit = {slot: seed for slot, seed in requested.items() if seed is not None}
+        if not explicit:
+            if self._runtime_seed_buffer_managed:
+                self.restore_default_device_values()
+                return tuple(int(value) for value in self._seed_buffer_source.reshape(-1).tolist())
+            return None
+
+        values = [int(value) for value in self._seed_buffer_source.reshape(-1).tolist()]
+        if len(values) != self.max_batch_size:
+            raise ValueError("seed-buffer default source does not match its declared capacity")
+        for slot, request_seed in explicit.items():
+            position = self._position_for_slot(positions, slot)
+            if position is None or position < 0:
+                raise ValueError("explicit request seed requires a nonnegative absolute decode position")
+            self.seeds[slot] = request_seed
+            self.seed_counters[slot] = position + 1
+            values[slot] = _hash_request_seed_to_device_seed(request_seed, position + 1)
+        for slot in set(range(self.max_batch_size)) - set(explicit):
+            self.seeds[slot] = None
+            self.seed_counters[slot] = 0
+        self._seed_active = True
+        self._active_request_seed = True
+        self._runtime_seed_buffer_managed = True
+        self._write_model_seed_values(values)
+        return tuple(values)
+
+    @staticmethod
+    def _position_for_slot(positions, slot: int):
+        if isinstance(positions, torch.Tensor):
+            flat = positions.reshape(-1)
+            return None if slot >= flat.numel() else int(flat[slot].item())
+        if isinstance(positions, (list, tuple)):
+            return None if slot >= len(positions) else int(positions[slot])
+        return None if positions is None else int(positions)
+
+    def _write_model_seed_values(self, values) -> None:
+        source = torch.tensor(values, dtype=self._seed_buffer_source.dtype).reshape(self._seed_buffer_source.shape)
+        self._seed_buffer.update(source)
+        # Request state must not become the LazyBuffer's rematerialization
+        # default after model cleanup.
+        self._seed_buffer.source = self._seed_buffer_source
 
     def _next_unseeded_rng_seed(self) -> int:
         return secrets.randbits(64)
@@ -986,7 +1177,7 @@ class SeedManager:
             if slot < 0 or slot >= flat.numel():
                 return None
             seed = flat[slot]
-        elif isinstance(seeds, list):
+        elif isinstance(seeds, (list, tuple)):
             if slot < 0 or slot >= len(seeds):
                 return None
             seed = seeds[slot]
@@ -1146,6 +1337,9 @@ class SeedManager:
         except (TypeError, ValueError) as exc:
             raise ValueError("seed_values must contain integer-like values") from exc
 
+        if self._seed_buffer is not None:
+            self._write_model_seed_values(wrapped)
+            return
         seed_tt = ttnn.from_torch(
             torch.tensor(wrapped, dtype=torch.uint32),
             dtype=ttnn.uint32,
@@ -1208,3 +1402,4 @@ class SeedManager:
 
         self.write_device_seed_values(new_seeds)
         self._reseted = False
+        return tuple(new_seeds)

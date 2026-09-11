@@ -90,8 +90,8 @@ namespace ttnn::experimental {
 // second axis's seq offset). The two axis roles map internally to (cluster_axis, seq_subshard_axis).
 
 // DeepSeek-V3.2 DSA / GLM-5 (ttnn.experimental.indexer_score_dsa):
-//   score[b, 0, s, t] = sum_h relu(q[b,h,s,:] . k[b,t,:]) * weights[b,h,s]
-// q [B,Hi,Sq,D], k [B,1,T,D], weights [B,Hi,Sq,1] -> score [B,1,Sq,T] (all heads relu'd + summed).
+//   score[b, 0, s, t] = sum_h relu(q[b,h,s,:] . k[b,0,t,:]) * weights[b,0,s,h]
+// q [B,Hi,Sq,D], k [B,1,T,D], weights [B,1,Sq,Hi] -> score [B,1,Sq,T] (all heads relu'd + summed).
 // cache_batch_idx/kv_len/chunk_start_idx are re-applied each dispatch and hash-excluded (no recompile); see
 // the nanobind docs for their full semantics. OMIT chunk_start_idx on a mesh (deduced as T - sp_ring*Sq).
 ttnn::Tensor indexer_score_dsa(
@@ -165,6 +165,13 @@ ttnn::Tensor ring_indexer_score_dsa(
     std::optional<uint32_t> seq_subshard_axis = std::nullopt,
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
     std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt,
-    bool block_cyclic_cache_tp_sharded = false);
+    bool block_cyclic_cache_tp_sharded = false,
+    // For trace replay, supplies chunk_start_idx on-device. Mutually exclusive with chunk_start_idx and kv_len.
+    const std::optional<ttnn::Tensor>& chunk_start_idx_tensor = std::nullopt,
+    // Trace-safe cache-slot select: 1-element uint32 USER id; the reader recomposes
+    // user_id * index_cache_num_layers + index_cache_layer_idx. Mutually exclusive with cache_batch_idx.
+    const std::optional<ttnn::Tensor>& cache_batch_idx_tensor = std::nullopt,
+    uint32_t index_cache_num_layers = 1,
+    uint32_t index_cache_layer_idx = 0);
 
 }  // namespace ttnn::experimental

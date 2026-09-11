@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import importlib
 import inspect
 import math
@@ -18,6 +19,8 @@ import models.common.llm_runtime.prefill.result_collector as result_collector_mo
 import models.common.llm_runtime.prefill.runtime as prefill_module
 import models.common.llm_runtime.prefill.sampling_helpers as sampling_helpers
 import models.common.llm_runtime.tensor_resources as tensor_resources_module
+import models.common.llm_runtime.trace_compiler as trace_compiler_module
+import ttnn
 from models.common.llm_runtime.config import PageTableLayout
 from models.common.llm_runtime.output_reader import OutputReader
 from models.common.llm_runtime.prefill.config import PrefillRuntimeConfig
@@ -35,7 +38,7 @@ from models.common.llm_runtime.prefill.signatures import (
 )
 from models.common.llm_runtime.prefill.trace import PrefillHiddenPersistentInputs, PrefillReplayState
 from models.common.llm_runtime.program_compiler import ProgramCompiler, ProgramKey
-from models.common.llm_runtime.trace_compiler import TraceKey
+from models.common.llm_runtime.trace_compiler import TraceCapturePlan, TraceCompiler, TraceKey
 from models.common.sampling import SamplingParams
 
 
@@ -59,6 +62,7 @@ class FakeModel:
         self.sampling = SimpleNamespace(
             config=SimpleNamespace(
                 max_batch_size=sampling_batch_size,
+                max_top_k=32,
                 allow_force_argmax=allow_force_argmax,
             )
         )
@@ -95,6 +99,7 @@ def _runtime(
     disable_batched_prefill=False,
     max_prefill_batch_size=8,
     batched_prefill_batched_extract=True,
+    trace_capture_prime_sequence_lengths=(),
 ):
     mesh_device = SimpleNamespace(shape=(1, 1))
     config = PrefillRuntimeConfig.resolve(
@@ -118,6 +123,7 @@ def _runtime(
         batched_prefill_batched_extract=batched_prefill_batched_extract,
         device_sampling_enabled=device_sampling_enabled,
         can_enable_trace=lambda length, cached: cached == 0 and length in trace_lengths,
+        trace_capture_prime_sequence_lengths=trace_capture_prime_sequence_lengths,
     )
     return PrefillRuntime(config)
 
@@ -237,6 +243,18 @@ def test_sampling_values_accept_vector_tensor_fields_for_full_batch():
     assert values[2] == (1.0,) * 32
 
 
+def test_prefill_tokens_supply_masked_prompt_history_when_plugin_history_is_absent():
+    tokens = torch.tensor([[11, 12, 0, 0], [21, 22, 23, 0]])
+
+    history = prefill_module._prompt_history_from_prefill_tokens(
+        tokens,
+        torch.tensor([2, 3]),
+    )
+
+    assert torch.equal(history, torch.tensor([[11, 12, -1, -1], [21, 22, 23, -1]]))
+    assert torch.equal(tokens, torch.tensor([[11, 12, 0, 0], [21, 22, 23, 0]]))
+
+
 def test_single_greedy_prefill_uses_argmax_without_changing_batched_sampling():
     runtime = _runtime(allow_force_argmax=True)
     greedy = SamplingParams(temperature=0.0, top_k=32, top_p=0.08)
@@ -286,6 +304,7 @@ def test_trace_finish_reuses_trace_owned_sample_output(monkeypatch):
         *,
         sampled_output=None,
         owned=None,
+        count_tokens=True,
     ):
         seen.append(((prepared, hidden, kpt, position_inputs), {"sampled_output": sampled_output, "owned": owned}))
         return "tokens", None
@@ -419,6 +438,7 @@ def test_eager_sampled_prefill_uses_preallocated_output(monkeypatch):
         *,
         sampled_output=None,
         owned=None,
+        count_tokens=True,
     ):
         events.append("finish")
         seen.append(
@@ -1162,6 +1182,16 @@ def test_prefill_signature_keys_and_trace_fingerprints_have_stable_goldens():
         True,
     )
 
+    assert ProgramKey.from_signature(
+        dataclasses.replace(program_signature, penalties_enabled=True)
+    ) != ProgramKey.from_signature(program_signature)
+    assert ProgramKey.from_signature(
+        dataclasses.replace(program_signature, logprobs_enabled=True)
+    ) != ProgramKey.from_signature(program_signature)
+    assert TraceKey.from_signature(
+        dataclasses.replace(trace_signature, sampling_path="topk")
+    ) != TraceKey.from_signature(trace_signature)
+
 
 def test_cached_offsets_share_one_chunk_trace_identity_and_can_trace_contract():
     runtime = _runtime()
@@ -1303,7 +1333,7 @@ def test_q128_single_topk_tile_is_program_material_but_not_trace_material():
     assert prepare(32, None).program_signatures[0].last_token_tile_start is None
 
 
-def test_hidden_capture_schema_is_sampling_independent_with_separate_alias_workspaces():
+def test_hidden_capture_schema_is_sampling_independent_with_distinct_trace_and_alias_identities():
     runtime = _runtime(allow_force_argmax=True)
     tokens, page_table, prompt_lens, start_pos = _inputs(prompt_length=80)
 
@@ -1321,7 +1351,12 @@ def test_hidden_capture_schema_is_sampling_independent_with_separate_alias_works
     topk = prepare(SamplingParams(temperature=1.0, top_k=32, top_p=0.08))
     plans = [runtime.capture_plan(prepared) for prepared in (logits, argmax, topk)]
 
-    assert logits.trace_signature == argmax.trace_signature == topk.trace_signature
+    assert {prepared.trace_signature.sampling_path for prepared in (logits, argmax, topk)} == {
+        "logits",
+        "argmax",
+        "topk",
+    }
+    assert len({prepared.trace_signature for prepared in (logits, argmax, topk)}) == 3
     assert len({plan.schema_fingerprint for plan in plans}) == 1
     assert len({plan.workspace_fingerprint for plan in plans}) == 3
     assert all("topk" not in repr(plan.schema_fingerprint) for plan in plans)
@@ -1436,7 +1471,8 @@ def test_static_q128_single_topk_uses_tile_output_and_exact_host_row(monkeypatch
     monkeypatch.setattr(
         runtime.postprocessor,
         "sample_device",
-        lambda logits, kpt, sampled_output=None: sampled.append((logits, sampled_output)) or sampled_output,
+        lambda logits, kpt, sampling, sampled_output=None, **kwargs: sampled.append((logits, sampled_output))
+        or sampled_output,
     )
 
     assert runtime.postprocessor.sampling_output_rows(prepared) == 32
@@ -1579,13 +1615,13 @@ def test_prepare_classifies_once_and_invoke_uses_only_sequence_runner(monkeypatc
     seen = []
     expected = InvocationResult("value", "owned")
 
-    def run_sequence(received):
-        seen.append(received)
+    def run_sequence(received, *, count_tokens=True):
+        seen.append((received, count_tokens))
         return expected
 
     monkeypatch.setattr(runtime.sequence_runner, "run", run_sequence)
     assert runtime.invoke(prepared) is expected
-    assert seen == [prepared]
+    assert seen == [(prepared, True)]
     assert not hasattr(runtime, "_run_regular_prefill")
     assert not hasattr(runtime, "_run_chunked_prefill")
 
@@ -1913,7 +1949,7 @@ def test_regular_logits_and_argmax_preserve_operation_order(
     monkeypatch.setattr(
         runtime.postprocessor,
         "sample_device",
-        lambda logits, kpt, sampled_output=None: events.append("sample") or "sampled",
+        lambda logits, kpt, sampling, sampled_output=None, **kwargs: events.append("sample") or "sampled",
     )
     # ttnn.untilize is overloaded; this test only checks operation order.
     monkeypatch.setattr(
@@ -2024,7 +2060,9 @@ def test_chunk_sequence_allocates_kpt_before_steps_and_reuses_final_position(mon
     monkeypatch.setattr(
         runtime.postprocessor,
         "finish_prefill_sequence",
-        lambda prepared, final_step_output, kpt, position_inputs, *, sampled_output, owned: events.append("finish")
+        lambda prepared, final_step_output, kpt, position_inputs, *, sampled_output, owned, count_tokens=True: events.append(
+            "finish"
+        )
         or final_step_output,
     )
 
@@ -2087,7 +2125,7 @@ def test_sequence_preserves_sampling_output_preallocation_matrix(
     monkeypatch.setattr(
         runtime.postprocessor,
         "finish_prefill_sequence",
-        lambda prepared, final_step_output, kpt, position_inputs, *, sampled_output, owned: final_step_output,
+        lambda prepared, final_step_output, kpt, position_inputs, *, sampled_output, owned, count_tokens=True: final_step_output,
     )
 
     runtime.sequence_runner.run(prepared)
@@ -2169,7 +2207,7 @@ def test_sequence_retains_raw_padded_and_sampled_outputs(monkeypatch):
     monkeypatch.setattr(
         runtime.postprocessor,
         "sample_device",
-        lambda logits, kpt, sampled_output=None: sampled_regular,
+        lambda logits, kpt, sampling, sampled_output=None, **kwargs: sampled_regular,
     )
 
     assert (
@@ -2200,7 +2238,7 @@ def test_sequence_retains_raw_padded_and_sampled_outputs(monkeypatch):
     monkeypatch.setattr(
         runtime.postprocessor,
         "sample_device",
-        lambda logits, kpt, sampled_output=None: sampled_chunked,
+        lambda logits, kpt, sampling, sampled_output=None, **kwargs: sampled_chunked,
     )
 
     assert (
@@ -2226,7 +2264,7 @@ def test_sequence_retains_raw_padded_and_sampled_outputs(monkeypatch):
     monkeypatch.setattr(
         runtime.postprocessor,
         "sample_device",
-        lambda logits, kpt, sampled_output=None: raw_regular,
+        lambda logits, kpt, sampling, sampled_output=None, **kwargs: raw_regular,
     )
     assert (
         runtime.postprocessor.finish_regular_prefill(
@@ -2374,7 +2412,7 @@ def test_finalization_failure_releases_every_resource_acquired_before_failure(mo
             raise RuntimeError("pad failed")
         return padded
 
-    def sample(logits, kpt, sampled_output=None):
+    def sample(logits, kpt, sampling, sampled_output=None, **kwargs):
         if failure_point == "sample":
             raise RuntimeError("sample failed")
         return object()
@@ -2490,6 +2528,145 @@ def test_trace_capture_uses_hidden_body_without_eager_sequence(monkeypatch):
 
     assert runtime.capture_plan(prepared).capture(persistent) == "hidden"
     assert seen == [(prepared.request, "device-inputs", {"fill_rows": prepared.request.padded_batch_size})]
+
+
+@pytest.mark.parametrize("prompt_length", (80, 700), ids=("q128", "q1024"))
+def test_opt_in_trace_capture_prime_uses_padded_body_and_releases_output(monkeypatch, prompt_length):
+    padded_length = 128 if prompt_length <= 128 else 1024
+    runtime = _runtime(trace_capture_prime_sequence_lengths=(padded_length,))
+    tokens, page_table, prompt_lens, start_pos = _inputs(prompt_length=prompt_length, rows=3)
+    prepared = runtime.prepare(
+        tokens=tokens,
+        page_table=page_table,
+        prompt_lens=prompt_lens,
+        empty_slots=[0, 1, 2],
+        start_pos=start_pos,
+    )[0]
+    persistent = PrefillHiddenPersistentInputs(device_inputs="device-inputs")
+    seen = []
+    released = []
+    monkeypatch.setattr(
+        runtime,
+        "_run_hidden_body",
+        lambda request, device_inputs, **kwargs: seen.append((request, device_inputs, kwargs)) or "hidden",
+    )
+    monkeypatch.setattr(runtime, "_release_or_retain_transient", lambda value: released.append(value) or [])
+
+    plan = runtime.capture_plan(prepared)
+    assert plan.prime is not None
+    assert plan.release_prime_output is not None
+    output = plan.prime(persistent)
+    assert output == "hidden"
+    assert plan.release_prime_output(output) == []
+
+    assert seen == [(prepared.request, "device-inputs", {"fill_rows": prepared.request.padded_batch_size})]
+    assert prepared.request.padded_batch_size == 4
+    assert released == ["hidden"]
+
+
+def test_opt_in_trace_capture_prime_does_not_expand_single_request_warmup():
+    runtime = _runtime(trace_capture_prime_sequence_lengths=(128, 1024))
+    tokens, page_table, prompt_lens, start_pos = _inputs(prompt_length=80, rows=1)
+    prepared = runtime.prepare(
+        tokens=tokens,
+        page_table=page_table,
+        prompt_lens=prompt_lens,
+        empty_slots=[0],
+        start_pos=start_pos,
+    )[0]
+
+    assert prepared.request.kind == "single"
+    assert runtime.capture_plan(prepared).prime is None
+
+
+@pytest.mark.parametrize(
+    ("prompt_length", "active_rows", "padded_rows"),
+    ((80, 30, 32), (700, 3, 4)),
+    ids=("q128-active30-padded32", "q1024-active3-padded4"),
+)
+def test_partial_wave_primes_every_padded_child_program_before_capture(
+    monkeypatch,
+    prompt_length,
+    active_rows,
+    padded_rows,
+):
+    padded_length = 128 if prompt_length <= 128 else 1024
+    runtime = _runtime(
+        max_prefill_batch_size=32,
+        trace_capture_prime_sequence_lengths=(padded_length,),
+    )
+    tokens, page_table, prompt_lens, start_pos = _inputs(prompt_length=prompt_length, rows=active_rows)
+    prepared = runtime.prepare(
+        tokens=tokens,
+        page_table=page_table,
+        prompt_lens=prompt_lens,
+        empty_slots=list(range(active_rows)),
+        start_pos=start_pos,
+    )[0]
+    assert prepared.request.kind == "batched"
+    assert len(prepared.request.source_rows) == active_rows
+    assert prepared.request.padded_batch_size == padded_rows
+    operation_plan = runtime.capture_plan(prepared)
+    persistent = PrefillHiddenPersistentInputs(device_inputs="persistent-inputs")
+    child_programs = set()
+    events = []
+    capture_active = False
+
+    def run_hidden_body(request, device_inputs, *, fill_rows=None):
+        rows = len(request.source_rows) if fill_rows is None else fill_rows
+        required = {(request.padded_sequence_length, slot) for slot in range(rows)}
+        if capture_active and not required.issubset(child_programs):
+            raise RuntimeError("new child program during capture")
+        if not capture_active:
+            child_programs.update(required)
+        events.append(("body", rows, capture_active))
+        return "hidden-output"
+
+    monkeypatch.setattr(runtime, "_run_hidden_body", run_hidden_body)
+    runtime._run_hidden_body(prepared.request, "eager-inputs")
+
+    monkeypatch.setattr(ttnn, "synchronize_device", lambda mesh: events.append(("sync", mesh)))
+
+    def begin(mesh, cq_id):
+        nonlocal capture_active
+        capture_active = True
+        events.append(("begin",))
+        return 7
+
+    def end(mesh, trace_id, cq_id):
+        nonlocal capture_active
+        capture_active = False
+        events.append(("end",))
+
+    monkeypatch.setattr(ttnn, "begin_trace_capture", begin)
+    monkeypatch.setattr(ttnn, "end_trace_capture", end)
+    monkeypatch.setattr(ttnn, "release_trace", lambda mesh, trace_id: None)
+    monkeypatch.setattr(trace_compiler_module, "_trim_host_allocator", lambda: None)
+    compiler = ProgramCompiler("mesh", lambda: object())
+    program = compiler.compile(
+        PrefillProgramSignature("regular-batched", padded_rows, padded_length, 32, None, "logits"),
+        lambda context: torch.zeros(1),
+    )
+    trace = TraceCompiler(compiler)
+    trace.register_capture_plan(
+        TraceCapturePlan(
+            program.key,
+            operation_plan.signature,
+            "prefill",
+            lambda: persistent,
+            lambda value: operation_plan.capture(value.values),
+            prime=lambda value: operation_plan.prime(value.values),
+            release_prime_output=operation_plan.release_prime_output,
+        )
+    )
+
+    trace.capture_all()
+
+    assert [event for event in events if event[0] == "body"] == [
+        ("body", active_rows, False),
+        ("body", padded_rows, False),
+        ("body", padded_rows, True),
+    ]
 
 
 def test_assemble_restores_source_rows_and_releases_each_owned_result(monkeypatch):
@@ -2685,7 +2862,6 @@ def test_page_table_layout_replacement_is_immutable_and_bounded(expect_error):
     assert runtime.config is not original
     assert runtime.config.page_table_layout is smaller
     assert original.page_table_layout.raw_capacity_width == 256
-    assert runtime.config.page_table_layout_ceiling is original.page_table_layout
     with expect_error(ValueError, "block_size"):
         runtime.configure_page_table_layout(PageTableLayout(16, 128, 136, 128))
     with expect_error(ValueError, "capacity ceiling"):
@@ -2732,6 +2908,9 @@ def test_prefill_runtime_request_signatures_are_exact():
                 ("start_pos", keyword_only, None, "torch.Tensor | None"),
                 ("empty_slots", keyword_only, None, "Sequence[int] | None"),
                 ("sampling_params", keyword_only, None, "SamplingParams | None"),
+                ("prompt_tokens", keyword_only, None, "Any"),
+                ("output_tokens", keyword_only, None, "Any"),
+                ("slot_remap", keyword_only, None, "Any"),
             ),
             "tuple[PreparedPrefill, ...]",
         ),
