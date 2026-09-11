@@ -1168,6 +1168,10 @@ def test_demo_text(
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
                 sampling_params=device_sampling_params,
+                reload_inputs=iteration == 0 or not enable_trace or device_sampling_params is None,
+                reload_page_table=False,
+                reload_sampling_params=device_sampling_params is not None,
+                reset_sampling_state=device_sampling_params is not None and iteration == 0,
             )
 
             if device_sampling_params is not None:
