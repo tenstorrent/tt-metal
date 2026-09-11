@@ -68,3 +68,36 @@
       timeout: 20
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+
+# --- Device profiler overhead microbenchmark ---
+# Google Benchmark host-timing binary that isolates the cost the device profiler adds:
+# ReadMeshDeviceProfilerResults (the L1->DRAM profiler-buffer writeout) and profiler-enabled
+# dispatch, over a common (single core) and worst (full grid, all RISCs) program shape. The
+# binary forces TT_METAL_DEVICE_PROFILER=1 on internally so kernels JIT with -DPROFILE_KERNEL.
+# Deliberately runs WITHOUT TT_METAL_PROFILER_ACCUMULATE so each read performs the full writeout
+# (the pessimistic overhead this benchmark tracks), unlike the op-to-op job above. Behaves
+# identically on Wormhole and Blackhole (standard device profiler only).
+- name: runtime_perf_profiler_overhead
+  cmd: |
+    mkdir -p generated/test_reports
+    export TT_METAL_DEVICE_PROFILER=1
+    ./build/test/tt_metal/perf_microbenchmark/dispatch/benchmark_profiler_overhead \
+      --benchmark_out_format=json --benchmark_out=profiler_overhead_bench.json
+    GOLDEN=tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/profiler_overhead_golden.json
+    if [ "$ARCH_NAME" = "blackhole" ]; then
+      GOLDEN=tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/profiler_overhead_blackhole_golden.json
+    fi
+    # ARMED: metrics with a numeric real_time in the golden are gated at +/-tolerance_pct (defined
+    # in the golden); metrics with real_time=null are record-only (measured value printed, not
+    # gated). Gated: BM_profiler_read on both SKUs (real wh_n300_civ2 and bh_p150_perf captures).
+    # Record-only: BM_profiled_dispatch on both SKUs (host-side jitter too high to gate, especially
+    # on Wormhole). See each golden's tolerance_pct and _comment for details.
+    ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_profiler_overhead_ci.py \
+      profiler_overhead_bench.json --golden "$GOLDEN"
+  skus:
+    wh_n300_civ2:
+      timeout: 10
+    bh_p150_perf:
+      timeout: 10
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime

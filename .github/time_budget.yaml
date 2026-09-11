@@ -289,9 +289,9 @@ runtime:
     bh_p150_perf: 50
     bh_p150b_civ2_viommu: 10
   perf_profiler:
-    wh_n300_civ2: 5
+    wh_n300_civ2: 15
     wh_n300_perf: 20
-    bh_p150_perf: 25
+    bh_p150_perf: 35
 
 triage:
   merge_gate:
