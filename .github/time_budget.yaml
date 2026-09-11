@@ -383,7 +383,7 @@ models:
   unit_tier2:
     wh_llmbox: 114
     wh_llmbox_perf: 191
-    wh_n150: 82
+    wh_n150: 87
     wh_n300: 30
     wh_galaxy_perf: 80
     bh_p150: 20
