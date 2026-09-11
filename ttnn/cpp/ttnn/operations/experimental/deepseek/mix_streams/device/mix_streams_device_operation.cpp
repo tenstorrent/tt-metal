@@ -26,7 +26,7 @@ struct Dims {
 std::optional<Dims> fusable_dims(
     const Tensor& post, const Tensor& comb, const Tensor& sublayer_out, const Tensor& streams) {
     for (const Tensor* t : {&post, &comb, &sublayer_out, &streams}) {
-        if (t->storage_type() != StorageType::DEVICE || t->layout() != Layout::TILE) {
+        if (t->storage_type() != StorageType::DEVICE || t->layout() != Layout::ROW_MAJOR) {
             return std::nullopt;
         }
         // The reader assembles the comb / post tiles element-wise in L1, which is
@@ -55,13 +55,7 @@ std::optional<Dims> fusable_dims(
     if (!shapes_ok) {
         return std::nullopt;
     }
-    // The kernel walks tensors page-by-page assuming the standard 32x32 tile.
-    for (const Tensor* t : {&post, &comb, &sublayer_out, &streams}) {
-        const auto& tile = t->tensor_spec().tile();
-        if (tile.get_height() != tt::constants::TILE_HEIGHT || tile.get_width() != tt::constants::TILE_WIDTH) {
-            return std::nullopt;
-        }
-    }
+    // Compute still uses one 32x32 tile per (token, D-slice); D must be a multiple of 32.
     return dims;
 }
 
@@ -69,7 +63,7 @@ void validate_tensors(const MixStreamsParams& attributes, const MixStreamsInputs
     const auto dims = fusable_dims(tensor_args.post, tensor_args.comb, tensor_args.sublayer_out, tensor_args.streams);
     TT_FATAL(
         dims.has_value(),
-        "mix_streams: inputs are not supported by the fused kernel -- expected device-resident, TILE-layout, "
+        "mix_streams: inputs are not supported by the fused kernel -- expected device-resident, ROW_MAJOR, "
         "BFLOAT16 tensors shaped post [B,S,hc,1], comb [B,S,hc,hc], sublayer_out [B,S,1,D], streams [B,S,hc,D] "
         "with hc <= {} and D a multiple of {}; got post {}, comb {}, sublayer_out {}, streams {}",
         tt::constants::TILE_HEIGHT,
@@ -107,9 +101,7 @@ MixStreamsDeviceOperation::spec_return_value_t MixStreamsDeviceOperation::comput
     return tt::tt_metal::TensorSpec(
         streams.logical_shape(),
         tt::tt_metal::TensorLayout(
-            streams.dtype(),
-            tt::tt_metal::PageConfig(Layout::TILE, streams.tensor_spec().tile()),
-            operation_attributes.output_mem_config));
+            streams.dtype(), tt::tt_metal::PageConfig(Layout::ROW_MAJOR), operation_attributes.output_mem_config));
 }
 
 MixStreamsDeviceOperation::tensor_return_value_t MixStreamsDeviceOperation::create_output_tensors(
