@@ -1295,6 +1295,31 @@ class ModelArgs:
         return self.model_config["DECODERS_OPTIMIZATIONS"]
 
     @property
+    def lm_head_compute_kernel_config(self):
+        """Math fidelity for the LM head projection, following the run's optimization preset.
+
+        The LM head ran at a hard-coded HiFi2 regardless of preset -- the one projection in the
+        model whose fidelity the performance/accuracy choice could not reach. It is a bfloat8_b
+        matmul, which is exactly the case the repo's own precision policy says to try at LoFi,
+        and it is the LEAST depth-sensitive matmul here: its error lands on the logits and is
+        not carried through 32 more layers.
+
+        Measured (trace+1cq, 128 decode tokens): HiFi2 9.382 ms, LoFi 9.221 ms (-1.7%). Dropping
+        the LM head WEIGHTS to bfloat4_b instead measured 9.380 ms -- no change -- so this op is
+        fidelity-bound, not bandwidth-bound, and fidelity is the knob that moves it.
+
+        The accuracy preset keeps HiFi2 unchanged.
+        """
+        if getattr(self.decoders_optimizations, "__name__", "") == "performance":
+            return self.compute_kernel_config_lofi
+        return ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+
+    @property
     def use_fused_all_gather_matmul(self):
         """Get whether fused all-gather matmul should be used."""
         return getattr(self, "_use_fused_all_gather_matmul", False)

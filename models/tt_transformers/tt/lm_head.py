@@ -164,12 +164,9 @@ class LMHead(LightweightModule):
                         )
                     )
 
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
-        )
+        # Follows the run's optimization preset instead of a hard-coded HiFi2; see
+        # ModelArgs.lm_head_compute_kernel_config for the measurement and the rationale.
+        self.compute_kernel_config = args.lm_head_compute_kernel_config
 
     def _update_output_weights_dram_sharded(self, weight: ttnn.Tensor) -> None:
         """In-place replace every chunk of ``self.output_weights_dram_sharded``
