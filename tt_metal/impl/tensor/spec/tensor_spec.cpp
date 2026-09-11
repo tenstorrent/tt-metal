@@ -157,8 +157,7 @@ CoreRangeSet first_n_cores(CoreRangeSet grid, uint32_t count, ShardOrientation o
     if (count == 0 || count >= grid.num_cores()) {
         return grid;
     }
-    return CoreRangeSet(corerange_to_cores(grid, count, orientation == ShardOrientation::ROW_MAJOR))
-        .merge_ranges();
+    return select_from_corerangeset(grid, 0, count - 1, orientation == ShardOrientation::ROW_MAJOR);
 }
 
 CoreRange leading_block(CoreRange grid, uint32_t rows, uint32_t cols) {
