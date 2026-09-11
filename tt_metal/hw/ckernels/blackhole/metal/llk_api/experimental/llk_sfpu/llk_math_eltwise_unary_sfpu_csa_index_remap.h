@@ -4,11 +4,18 @@
 #pragma once
 
 #include "llk_math_eltwise_unary_sfpu_params.h"
+#include "llk_math_eltwise_unary_sfpu_init.h"
 #include "sfpu/experimental/ckernel_sfpu_csa_index_remap.h"
 
 #include "sanitizer/api.h"
 
 namespace ckernel {
+
+template <bool is_fp32_dest_acc_en>
+inline void llk_math_eltwise_unary_sfpu_csa_index_remap_init() {
+    SAN_HOOK(unsupported());
+    llk_math_eltwise_unary_sfpu_init<SfpuType::unused, is_fp32_dest_acc_en>();
+}
 
 template <std::uint32_t ROW_OFFSET>
 inline void llk_math_eltwise_unary_sfpu_csa_index_remap(std::uint32_t dst_index) {

@@ -38,7 +38,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_MATH
 #include "experimental/llk_sfpu/llk_math_eltwise_unary_sfpu_csa_index_remap.h"
 #include "llk_lib_math_wrappers.h"
-#include "llk_math_eltwise_unary_sfpu.h"
 
 using namespace ckernel;
 
@@ -51,7 +50,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, PackMode::Default>(
         TILE_NUM_FACES, formats.math);
-    _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
     for (std::uint32_t section = 0; section < SECTIONS; ++section)
     {
         _llk_math_wait_for_dest_available_<dest_sync>();
@@ -60,6 +58,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                 tile, formats.math, formats.math);
         }
+        // Model a prior fused operation that changed the shared address modifier.
+        addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 32}}.set(ADDR_MOD_7);
+        llk_math_eltwise_unary_sfpu_csa_index_remap_init<is_fp32_dest_acc_en>();
         llk_math_eltwise_unary_sfpu_csa_index_remap<CSA_ROW_OFFSET>(params.DST_INDEX);
         _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }
