@@ -84,7 +84,6 @@ def test_multiply_with_scalar_sharded(device, scalar, input_shard_orientation, o
     assert_with_ulp(expected_result=torch_output_tensor, actual_result=output, ulp_threshold=0)
 
 
-@pytest.mark.skip(reason="Unable to multiply scalar to tensor with int")
 # fmt: off
 @pytest.mark.parametrize("input_a,scalar", [
         ([13, 16, 42, 42], 0.125)
