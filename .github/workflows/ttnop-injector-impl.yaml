@@ -1,0 +1,315 @@
+name: "TTNOP Injector implementation"
+
+on:
+  workflow_call:
+    inputs:
+      architecture:
+        description: "Architecture to run: wormhole or blackhole"
+        required: true
+        type: string
+      docker-image:
+        description: "LLK CI container image"
+        required: true
+        type: string
+      changed-only:
+        description: "Select tests affected since the last successful weekly run"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  actions: read
+  contents: read
+  packages: read
+
+env:
+  LLK_PATH: tt_metal/tt-llk
+  PYTEST_MARKERS: "not perf and not nightly and not accuracy and not quasar"
+  TTNOP_THREADS: unpack,math
+  TTNOP_SITE_MODE: sync
+  TTNOP_DELAYS: 5,10,20,40,60,80,100
+  TTNOP_WEDGE_TIMEOUT: 120
+  TTNOP_QUIET_TIMEOUT: 900
+  TTNOP_MAX_RESETS: 5
+  TTNOP_MAX_EVICTIONS: 8
+  TTNOP_MIN_WORKERS: 5
+  TTNOP_RESET_COST: 240
+  TTNOP_PROGRESS_SECONDS: 300
+
+jobs:
+  select-tests:
+    name: "Select changed tests"
+    runs-on: ubuntu-slim
+    outputs:
+      base-sha: ${{ steps.select.outputs.base-sha }}
+      mode: ${{ steps.select.outputs.mode }}
+      shards: ${{ steps.select.outputs.shards }}
+    steps:
+      - name: Checkout repository history
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          fetch-depth: 0
+
+      - name: Select test files
+        id: select
+        env:
+          ARCHITECTURE: ${{ inputs.architecture }}
+          CHANGED_ONLY: ${{ inputs.changed-only }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "$CHANGED_ONLY" != "true" ]]; then
+            echo "base-sha=" >> "$GITHUB_OUTPUT"
+            echo "mode=full" >> "$GITHUB_OUTPUT"
+            echo "shards=5" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # A failed Friday is retried next week instead of becoming the new baseline.
+          if ! base="$(
+            gh api --method GET \
+              "/repos/$GITHUB_REPOSITORY/actions/workflows/ttnop-injector.yaml/runs" \
+              -f event=schedule \
+              -f status=success \
+              -f per_page=1 \
+              --jq '.workflow_runs[0].head_sha // empty'
+          )"; then
+            echo "::warning::Could not query prior TTNOP runs; using the weekly fallback"
+            base=""
+          fi
+
+          if [[ -z "$base" ]]; then
+            base="$(git rev-list -1 --before='7 days ago' "$GITHUB_SHA")"
+          fi
+          if [[ -z "$base" ]]; then
+            echo "::error::No commit exists before the weekly comparison window"
+            exit 1
+          fi
+
+          # One selector is shared with ci.sh so planning and execution cannot drift.
+          selection="$(
+            python3 tt_metal/tt-llk/tests/python_tests/ttnop/changed_tests.py \
+              --repo . --base "$base" --arch "$ARCHITECTURE"
+          )"
+          mapfile -t selected_tests < <(
+            python3 -c \
+              'import json, sys; [print(path) for path in json.load(sys.stdin)["tests"]]' \
+              <<< "$selection"
+          )
+          echo "### TTNOP $ARCHITECTURE selection" >> "$GITHUB_STEP_SUMMARY"
+          while IFS= read -r reason; do
+            echo "$reason"
+            printf -- '- %s\n' "$reason" >> "$GITHUB_STEP_SUMMARY"
+          done < <(
+            python3 -c \
+              'import json, sys; [print(reason) for reason in json.load(sys.stdin)["reasons"]]' \
+              <<< "$selection"
+          )
+
+          # Keep the matrix fixed; raise this to 15 when that many machines are available.
+          count=${#selected_tests[@]}
+          if [[ "$count" -gt 0 ]]; then
+            mode=changed
+            shards=5
+          else
+            mode=none
+            shards=0
+          fi
+
+          echo "base-sha=$base" >> "$GITHUB_OUTPUT"
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "shards=$shards" >> "$GITHUB_OUTPUT"
+          if [[ "$shards" -eq 0 ]]; then
+            echo "No relevant $ARCHITECTURE changes; its hardware matrix will be skipped."
+          else
+            echo "Selected $count $ARCHITECTURE pytest target(s) since $base."
+          fi
+
+  load-test-matrix:
+    runs-on: ubuntu-slim
+    needs: select-tests
+    if: needs.select-tests.outputs.mode != 'none'
+    outputs:
+      matrix: ${{ steps.filter-matrix.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_ttnop_tests.yaml
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Verify test timeouts against budget
+        run: |
+          set -e
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "ttnop"
+      - name: Build test matrix
+        id: build-matrix
+        env:
+          ARCHITECTURE: ${{ inputs.architecture }}
+        run: |
+          set -euo pipefail
+          case "$ARCHITECTURE" in
+            wormhole) ENABLED_SKUS="wh_n150_civ2" ;;
+            blackhole) ENABLED_SKUS="bh_p150b_civ2" ;;
+            *)
+              echo "::error::Unsupported architecture '$ARCHITECTURE'"
+              exit 1
+              ;;
+          esac
+
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "$ENABLED_SKUS" \
+            ./.github/sku_config.yaml
+      - name: Limit changed-test shards
+        id: filter-matrix
+        env:
+          MATRIX: ${{ steps.build-matrix.outputs.matrix }}
+          SHARDS: ${{ needs.select-tests.outputs.shards }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+
+          matrix = json.loads(os.environ["MATRIX"])
+          shards = int(os.environ["SHARDS"])
+          # Keep groups 1..N so their --group values remain contiguous.
+          matrix = [entry for entry in matrix if int(entry["split_group"]) <= shards]
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"matrix={json.dumps(matrix)}\n")
+          PY
+
+  ttnop-injector-exec:
+    needs: [select-tests, load-test-matrix]
+    if: >-
+      needs.select-tests.outputs.shards != '0' &&
+      needs.load-test-matrix.outputs.matrix != '[]'
+    env:
+      CHIP_ARCH: ${{ inputs.architecture }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJSON(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
+    timeout-minutes: ${{ matrix.test-group.timeout }}
+    container:
+      image: ${{ inputs.docker-image }}
+      options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          fetch-depth: 0
+      - name: Mark repository as safe directory
+        run: |
+          git config --global --add safe.directory $GITHUB_WORKSPACE
+      - name: Install SFPI
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          cd tests
+          ./setup_testing_env.sh
+          cd ..
+      - name: Reset the card
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}/tests/python_tests
+        run: |
+          python3 - <<'PY'
+          from helpers.hardware_controller import HardwareController
+
+          HardwareController().reset_card()
+          print("card reset OK")
+          PY
+      - name: Run ttnop sweep
+        id: ttnop
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        env:
+          BASE_SHA: ${{ needs.select-tests.outputs.base-sha }}
+          SELECTED_SHARDS: ${{ needs.select-tests.outputs.shards }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$BASE_SHA" ]]; then
+            # ci.sh repeats the same diff and maps it to concrete test paths.
+            export TTNOP_CHANGED_SINCE="$BASE_SHA"
+          fi
+          export TTNOP_SPLITS="$SELECTED_SHARDS"
+
+          status=0
+          (
+          ${{ matrix.test-group.cmd }}
+          ) || status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "ttnop sweep exited $status"
+
+      - name: Fail if the sweep found races
+        if: steps.ttnop.outputs.status == '1'
+        shell: bash
+        run: |
+          echo "::error::The ttnop sweep found timing races. Each failing case is" \
+               "in the junit artifact, and the variant that broke it (with its" \
+               "resolved source location) is in the ttnop report artifact."
+          exit 1
+
+      - name: Fail if a perturbation wedged a core
+        if: steps.ttnop.outputs.status == '75'
+        shell: bash
+        run: |
+          echo "::error::A perturbation hung a Tensix core. The sweep recovered" \
+               "(spare core, or a card reset) and skipped that case. The variant" \
+               "that wedged it is in the ttnop report artifact."
+          exit 1
+
+      - name: Fail if the sweep never ran
+        if: >-
+          steps.ttnop.outputs.status != '0' &&
+          steps.ttnop.outputs.status != '1' &&
+          steps.ttnop.outputs.status != '75'
+        shell: bash
+        run: |
+          echo "::error::The ttnop sweep did not complete (exit" \
+               "${{ steps.ttnop.outputs.status }}). No results were produced, so" \
+               "nothing was actually tested. See the sweep step's log."
+          exit 1
+
+      - name: Upload ttnop failure report
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: ttnop-report-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
+          path: |
+            ${{ env.LLK_PATH }}/tests/python_tests/ttnop/reports/**/report.md
+            ${{ env.LLK_PATH }}/tests/python_tests/ttnop/reports/**/failures.jsonl
+          if-no-files-found: warn
+
+      - name: Upload ttnop junit results
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: ttnop-junit-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
+          path: ${{ env.LLK_PATH }}/tests/python_tests/ttnop/reports/**/junit.xml
+          if-no-files-found: warn
+
+      - name: Upload test logs on failure
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: failure() || steps.ttnop.outputs.status != '0'
+        with:
+          name: ttnop-logs-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
+          path: |
+            ${{ env.LLK_PATH }}/tests/python_tests/test_run*.log
+            ${{ env.LLK_PATH }}/tests/python_tests/test_errors*.log
+          if-no-files-found: ignore
