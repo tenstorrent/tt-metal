@@ -39,8 +39,6 @@ void kernel_main() {
     constexpr uint32_t window_size_hw = get_arg(args::window_size_hw);
     constexpr uint32_t scratch_npages = get_arg(args::scratch_npages);
 
-    constexpr uint32_t split_reader = get_arg(args::split_reader);
-
     constexpr uint32_t max_out_sticks_per_core = get_arg(args::max_out_sticks_per_core);
     constexpr uint32_t in_c = get_arg(args::in_c);
     constexpr uint32_t in_nblocks_c = get_arg(args::in_nblocks_c);
@@ -50,18 +48,9 @@ void kernel_main() {
     // kernel (DataflowBuffer construction and LLK calls taking a uint32_t CB id) is unchanged;
     // dfb::<name> converts implicitly to uint32_t.
     constexpr auto in_cb_id_0 = dfb::in_cb_0;
-#ifdef SPLIT_READER
-    constexpr auto in_cb_id_1 = dfb::in_cb_1;  // for split reader
-#endif
     constexpr auto in_scalar_cb_id_0 = dfb::in_scalar_cb_0;
-#ifdef SPLIT_READER
-    constexpr auto in_scalar_cb_id_1 = dfb::in_scalar_cb_1;
-#endif
     constexpr auto out_cb_id = dfb::out_cb;
     constexpr auto scratch_cb_id_0 = dfb::scratch_cb_0;
-#ifdef SPLIT_READER
-    constexpr auto scratch_cb_id_1 = dfb::scratch_cb_1;
-#endif
     constexpr bool one_scalar_per_core = get_arg(args::one_scalar_per_core);
     constexpr bool is_output_tiled = get_arg(args::is_output_tiled);  // 1 = TILED, 0 = ROW_MAJOR
     constexpr bool is_output_block_format = (bool)get_arg(args::is_output_block_format);
@@ -72,8 +61,6 @@ void kernel_main() {
     // to fast_tilize so the unpacker/math read the correct face count from CB metadata.
     constexpr auto fast_tilize_cb_id = dfb::fast_tilize_cb;
 #endif
-
-    constexpr bool use_split_reader = split_reader;
 
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
     // QSR: match num_faces_in_input_tile_for_cb in the pool factory. The reduce-col strided tilize
@@ -126,15 +113,8 @@ void kernel_main() {
 
     DataflowBuffer in_scalar_cb_0(in_scalar_cb_id_0);
     DataflowBuffer in_cb_0(in_cb_id_0);
-#ifdef SPLIT_READER
-    DataflowBuffer in_scalar_cb_1(in_scalar_cb_id_1);
-    DataflowBuffer in_cb_1(in_cb_id_1);
-#endif
     DataflowBuffer out_cb(out_cb_id);
     DataflowBuffer scratch_cb_0(scratch_cb_id_0);
-#ifdef SPLIT_READER
-    DataflowBuffer scratch_cb_1(scratch_cb_id_1);
-#endif
 #ifdef OUTPUT_TILED
     DataflowBuffer pre_tilize_cb(pre_tilize_cb_id);
     DataflowBuffer fast_tilize_cb(fast_tilize_cb_id);
@@ -143,7 +123,6 @@ void kernel_main() {
     // Packer dest is baked at init (hw_startup + pack_untilize_dest_init) and must match the CB
     // the per-stick loop packs into. tilizeA_B_reduce_init only programs unpack+math (no ocb).
 #if PACK_TO_SCRATCH == 1
-    // Both scratch CBs share the same full-tile geometry, so init once with scratch_cb_0.
     constexpr uint32_t pack_target_cb_id = is_output_tiled ? tilize_untilize_cb : scratch_cb_id_0;
 #else
     constexpr uint32_t pack_target_cb_id = tilize_untilize_cb;
@@ -180,21 +159,10 @@ void kernel_main() {
     uint32_t tilize_stick_counter = 0;
     uint32_t tilize_stick_total = 0;
     for (uint32_t n = 0; n < num_out_sticks_per_thread; ++n) {
-        const bool reader0 = !(use_split_reader && (n & 0x1));
-        const bool use_reader1_scalar = !reader0 && !one_scalar_per_core;
-        // The reader1 (split) DFB tokens only exist under SPLIT_READER; gate the selection at
-        // the preprocessor so the non-split build never names dfb::in_cb_1 / dfb::in_scalar_cb_1.
-#ifdef SPLIT_READER
-        const uint32_t curr_scalar_cb_id = use_reader1_scalar ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
-        const uint32_t curr_in_cb_id = !reader0 ? in_cb_id_1 : in_cb_id_0;
-        DataflowBuffer curr_scalar_cb = use_reader1_scalar ? in_scalar_cb_1 : in_scalar_cb_0;
-        DataflowBuffer curr_in_cb = reader0 ? in_cb_0 : in_cb_1;
-#else
         const uint32_t curr_scalar_cb_id = in_scalar_cb_id_0;
         const uint32_t curr_in_cb_id = in_cb_id_0;
         DataflowBuffer curr_scalar_cb = in_scalar_cb_0;
         DataflowBuffer curr_in_cb = in_cb_0;
-#endif
         if constexpr (!one_scalar_per_core) {
             curr_scalar_cb.wait_front(1);
         }
@@ -218,13 +186,9 @@ void kernel_main() {
             }
 #endif
             // Re-init the fused tilize+reduce for THIS stick/c-block through the compute API rather than
-            // hand-issuing individual UNPACK/MATH llk_* calls. This re-programs UNPACK and MATH together, which
-            // is required because both change per iteration:
-            //   (a) split-reader: even sticks read in_cb_0, odd sticks read in_cb_1 -- the unpack-tilize
-            //       descriptor must re-bind to THIS stick's input CB, else reader1 re-reduces reader0's window;
-            //   (b) tiles_to_reduce changes across c-blocks (e.g. 4 then 2 for 6 tiles / 192c) -- UNPACK and
-            //       MATH must both be re-programmed for the new count (PACK is re-init'd via
-            //       pack_untilize_dest_init below).
+            // hand-issuing individual UNPACK/MATH llk_* calls: tiles_to_reduce changes across c-blocks
+            // (e.g. 4 then 2 for 6 tiles / 192c), so UNPACK and MATH must both be re-programmed for the
+            // new count (PACK is re-init'd via pack_untilize_dest_init below).
             tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
                 curr_in_cb_id, curr_scalar_cb_id, tiles_to_reduce);
             tile_regs_acquire();
@@ -314,18 +278,13 @@ void kernel_main() {
 #endif  // OUTPUT_TILED
             } else {
 #if PACK_TO_SCRATCH == 1
-#ifdef SPLIT_READER
-                const uint32_t curr_scratch_cb_id = reader0 ? scratch_cb_id_0 : scratch_cb_id_1;
-                DataflowBuffer curr_scratch_cb = reader0 ? scratch_cb_0 : scratch_cb_1;
-#else
                 const uint32_t curr_scratch_cb_id = scratch_cb_id_0;
                 DataflowBuffer curr_scratch_cb = scratch_cb_0;
-#endif
                 // One full-width stick per output row: reserve/push once, pack each c-block into its channel slice.
                 if (first_c_block) {
                     curr_scratch_cb.reserve_back(1);
                 }
-                // Re-init pack-untilize for this stick's scratch CB (split reader: scratch_cb_0 vs _1).
+                // Re-init pack-untilize for this stick's scratch CB.
                 // full_ct_dim = in_ntiles_c; block_c_index places the slice. Init width must match pack width.
                 if (last_c_block) {
                     pack_untilize_dest_init<partial_iter_output_tiles, in_ntiles_c>(curr_scratch_cb_id);

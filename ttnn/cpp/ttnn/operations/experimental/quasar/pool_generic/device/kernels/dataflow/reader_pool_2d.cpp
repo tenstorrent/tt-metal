@@ -210,7 +210,6 @@ void kernel_main() {
 
     constexpr uint32_t in_c = get_arg(args::in_c);
 
-    constexpr uint32_t split_reader = get_arg(args::split_reader);
     constexpr uint32_t reader_id = get_arg(args::reader_id);
 
     constexpr uint32_t bf16_scalar = get_arg(args::bf16_scalar);
@@ -259,8 +258,6 @@ void kernel_main() {
     constexpr bool zero_pages = (bool)get_arg(args::zero_pages);
     constexpr uint32_t config_in_dram = get_arg(args::config_in_dram);
     constexpr uint32_t reader_page_size = get_arg(args::reader_page_size);
-
-    constexpr bool use_split_reader = split_reader;
 
     constexpr uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;

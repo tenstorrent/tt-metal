@@ -135,6 +135,9 @@ FactoryParameters get_factory_parameters(
     bool split_reader = !single_reader_stream;
     TT_FATAL((split_reader && return_indices) || !return_indices, "split_reader must be true for MPWI");
     const bool is_quasar = tt::tt_metal::hal::get_arch() == tt::ARCH::QUASAR;
+    TT_FATAL(
+        !is_quasar || !split_reader || return_indices,
+        "split reader is not supported by the Quasar pool2d path (only MPWI keeps its two-reader structure)");
     // SPMD threads per cluster: symmetric STRIDED pairs reader thread i with compute thread i into
     // private (DM, NEO) lanes; Gen1 stays 1. Any per-core stick count is legal — the reader deals
     // sticks round-robin and each compute lane derives its own share, so remainders just shorten

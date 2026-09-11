@@ -327,7 +327,6 @@ const TensorParamName READER_INDICES_TENSOR{"reader_indices"};
 const TensorParamName CONFIG_TENSOR{"config"};
 
 const DFBSpecName DFB_IN_SCALAR_0{"in_scalar_cb_0"};
-const DFBSpecName DFB_IN_SCALAR_1{"in_scalar_cb_1"};
 const DFBSpecName DFB_CLEAR_VALUE{"clear_value_cb"};
 const DFBSpecName DFB_IN_SHARD{"in_shard_cb"};  // raw_in_cb (borrowed input)
 // [DEBUG scratch->out workaround] borrowed OUTPUT view for the DM readers, so they can NoC-copy the
@@ -335,7 +334,6 @@ const DFBSpecName DFB_IN_SHARD{"in_shard_cb"};  // raw_in_cb (borrowed input)
 const DFBSpecName DFB_OUT_SHARD{"out_shard_cb"};
 const DFBSpecName DFB_READER_INDICES{"reader_indices_cb"};
 const DFBSpecName DFB_IN_0{"in_cb_0"};
-const DFBSpecName DFB_IN_1{"in_cb_1"};
 const DFBSpecName DFB_IN_IDX{"in_idx_cb"};
 const DFBSpecName DFB_PACK_TMP{"pack_tmp_cb"};
 const DFBSpecName DFB_PACK_IDX_TMP{"pack_idx_tmp_cb"};
@@ -350,10 +348,9 @@ const DFBSpecName DFB_FAST_TILIZE{"fast_tilize_cb"};
 const DFBSpecName DFB_OUT{"out_cb"};
 const DFBSpecName DFB_OUT_IDX{"out_idx_cb"};
 const DFBSpecName DFB_CONFIG{"config_cb"};
-// [DEBUG] Per-reader scratch pack-untilize targets, read out (DPRINT'd) from the DM readers — only DM-core
-// L1 reads are reliable on the sim. Two CBs (mirroring in_cb_0/in_cb_1) keep the split reader in lockstep.
+// [DEBUG] Scratch pack-untilize target, read out (DPRINT'd) from the DM reader — only DM-core
+// L1 reads are reliable on the sim.
 const DFBSpecName DFB_SCRATCH_0{"scratch_cb_0"};  // (remove after)
-const DFBSpecName DFB_SCRATCH_1{"scratch_cb_1"};  // (remove after)
 
 const KernelSpecName READER0_KERNEL{"reader0"};
 const KernelSpecName READER1_KERNEL{"reader1"};
@@ -773,25 +770,14 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
 
     std::vector<DataflowBufferSpec> dfbs;
 
-    // scalar CB(s)
-    // The pool2d split-reader compute kernel references dfb::in_cb_1 and dfb::in_scalar_cb_1
-    // (under #ifdef SPLIT_READER) regardless of dtype, so both second-stream DFBs must exist
-    // whenever pool2d uses a split reader. (mpwi has a single input/scalar stream — reader1 is
-    // the writer face.)
-    const bool has_second_input_cb = cb_sizes.has_split_reader && !return_indices;
-
     // mandatory: in_scalar_0, clear_value, in_shard, reader_indices, in_0, out
     constexpr uint32_t num_mandatory_dfbs = 6;
     dfbs.reserve(
-        num_mandatory_dfbs + (has_second_input_cb ? 2 : 0) + (return_indices ? 9 : 0) +
-        (cb_sizes.has_pre_tilize ? 2 : 0) + (cb_sizes.has_out_idx ? 1 : 0) + (one_scalar_per_core ? 0 : 1));
+        num_mandatory_dfbs + (return_indices ? 9 : 0) + (cb_sizes.has_pre_tilize ? 2 : 0) +
+        (cb_sizes.has_out_idx ? 1 : 0) + (one_scalar_per_core ? 0 : 1));
 
     dfbs.push_back(local_dfb(
         DFB_IN_SCALAR_0, cb_sizes.scalar_cb_pagesize, cb_sizes.scalar_cb_npages, params.data_format, scalar_face));
-    if (has_second_input_cb) {
-        dfbs.push_back(local_dfb(
-            DFB_IN_SCALAR_1, cb_sizes.scalar_cb_pagesize, cb_sizes.scalar_cb_npages, params.data_format, scalar_face));
-    }
     // clear value CB (one entry per reader thread: each lane fills and reads its own copy)
     dfbs.push_back(
         local_dfb(DFB_CLEAR_VALUE, cb_sizes.clear_value_cb_size, cb_sizes.clear_value_cb_npages, params.data_format));
@@ -829,14 +815,9 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
             tt::DataFormat::RawUInt16,
             READER_INDICES_TENSOR));
     }
-    // input CB(s). The second input stream (in_cb_1) only exists for the pool2d split-reader
-    // (mpwi has a single input stream — reader1 is the writer face, not a second producer).
+    // input CB
     dfbs.push_back(
         local_dfb(DFB_IN_0, cb_sizes.in_cb_pagesize, cb_sizes.in_cb_npages, params.data_format, input_face_geometry));
-    if (has_second_input_cb) {
-        dfbs.push_back(local_dfb(
-            DFB_IN_1, cb_sizes.in_cb_pagesize, cb_sizes.in_cb_npages, params.data_format, input_face_geometry));
-    }
 
     // MPWI scratch / index CBs
     if (return_indices) {
@@ -917,16 +898,6 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
             params.output_data_format,
             std::optional{scratch_full_face},
             std::nullopt));
-        // Second scratch CB for reader1 (only exists under split reader, like in_cb_1).
-        if (cb_sizes.has_split_reader) {
-            dfbs.push_back(local_dfb(
-                DFB_SCRATCH_1,
-                scratch_pagesize,
-                scratch_npages,
-                params.output_data_format,
-                std::optional{scratch_full_face},
-                std::nullopt));
-        }
         // [DEBUG scratch->out] borrowed OUTPUT view (per-stick RM rows) that the DM readers write into
         // via NoC. page = output row bytes; npages = output sticks per core. Mirrors DFB_IN_SHARD.
         const uint32_t out_row_bytes = output_shard_shape[1] * params.nbytes;
@@ -976,7 +947,6 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         {"in_nbytes_leftover", in_nbytes_leftover},
         {"in_w", in_w},
         {"in_c", in_c_per_shard_ceil},
-        {"split_reader", params.split_reader},
         {"reader_id", 0u},
         {"bf16_scalar", bf16_scalar},
         {"bf16_init_value", bf16_init_value},
@@ -1025,23 +995,22 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     // the writer face); for pool2d they are symmetric input producers.
     auto make_reader_bindings = [&](bool is_reader1) {
         Group<DFBBinding> b;
-        // Shard input (fake CB, base-pointer read by both readers): reader0=P / reader1=C when
-        // split, self-loop on reader0 otherwise.
-        if (params.split_reader) {
+        // Shard input (fake CB, base-pointer read): mpwi's two readers take a P/C pair; pool2d's
+        // single multi-threaded reader takes the producer face only (Gen2 forbids DM self-loops;
+        // compute carries a never-constructed consumer binding to close the census).
+        if (return_indices) {
             b.push_back(DFBBinding{
                 .dfb_spec_name = DFB_IN_SHARD,
                 .accessor_name = "in_shard_cb",
                 .endpoint_type = is_reader1 ? DFBEndpointType::CONSUMER : DFBEndpointType::PRODUCER});
         } else {
-            // Gen2 forbids DM self-loops (program_spec.cpp): reader takes the producer face only;
-            // compute carries a never-constructed consumer binding to close the census.
             b.push_back(DFBBinding{
                 .dfb_spec_name = DFB_IN_SHARD,
                 .accessor_name = "in_shard_cb",
                 .endpoint_type = DFBEndpointType::PRODUCER});
         }
-        // Reader-indices CB: reader0=P / reader1=C when split (DRAM push -> wait), else self-loop.
-        if (params.split_reader) {
+        // Reader-indices CB: same P/C-pair-vs-producer-face split as in_shard.
+        if (return_indices) {
             b.push_back(DFBBinding{
                 .dfb_spec_name = DFB_READER_INDICES,
                 .accessor_name = "reader_indices_cb",
@@ -1053,7 +1022,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
                 .endpoint_type = DFBEndpointType::PRODUCER});
         }
         if (!one_scalar_per_core) {
-            if (params.split_reader) {
+            if (return_indices) {
                 b.push_back(DFBBinding{
                     .dfb_spec_name = DFB_CONFIG,
                     .accessor_name = "config_cb",
@@ -1129,48 +1098,30 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
                     .endpoint_type = DFBEndpointType::CONSUMER});
             }
         } else {
-            // pool2d: each reader produces its own input + scalar stream (compute consumes both).
+            // pool2d: the reader produces the input + scalar streams (compute consumes them).
             b.push_back(DFBBinding{
-                .dfb_spec_name = is_reader1 ? DFB_IN_1 : DFB_IN_0,
-                .accessor_name = "in_cb",
-                .endpoint_type = DFBEndpointType::PRODUCER});
+                .dfb_spec_name = DFB_IN_0, .accessor_name = "in_cb", .endpoint_type = DFBEndpointType::PRODUCER});
             b.push_back(DFBBinding{
-                .dfb_spec_name = is_reader1 ? DFB_IN_SCALAR_1 : DFB_IN_SCALAR_0,
+                .dfb_spec_name = DFB_IN_SCALAR_0,
                 .accessor_name = "in_scalar_cb",
                 .endpoint_type = DFBEndpointType::PRODUCER});
-            // clear value: reader0=P / reader1=C when split, self-loop on reader0 otherwise.
-            if (params.split_reader) {
-                b.push_back(DFBBinding{
-                    .dfb_spec_name = DFB_CLEAR_VALUE,
-                    .accessor_name = "clear_value_cb",
-                    .endpoint_type = is_reader1 ? DFBEndpointType::CONSUMER : DFBEndpointType::PRODUCER});
-            } else {
-                b.push_back(DFBBinding{
-                    .dfb_spec_name = DFB_CLEAR_VALUE,
-                    .accessor_name = "clear_value_cb",
-                    .endpoint_type = DFBEndpointType::PRODUCER});
-            }
+            b.push_back(DFBBinding{
+                .dfb_spec_name = DFB_CLEAR_VALUE,
+                .accessor_name = "clear_value_cb",
+                .endpoint_type = DFBEndpointType::PRODUCER});
             // [DEBUG scratch->DM] each reader consumes its own scratch CB (reader0->scratch_cb_0,
             // reader1->scratch_cb_1) so the DM core can read the compute-packed L1 (only DM-core L1 reads
             // are reliable on the sim), then NoC-copy scratch row 0 into the output. (remove after)
             b.push_back(DFBBinding{
-                .dfb_spec_name = is_reader1 ? DFB_SCRATCH_1 : DFB_SCRATCH_0,
+                .dfb_spec_name = DFB_SCRATCH_0,
                 .accessor_name = "scratch_cb",
                 .endpoint_type = DFBEndpointType::CONSUMER});
-            // [DEBUG scratch->out] borrowed OUTPUT view for the NoC write. reader0=P / reader1=C when
-            // split (roles just satisfy the 1P1C binding; both use the base pointer), self-loop on
-            // reader0 otherwise. Mirrors in_shard_cb.
-            if (params.split_reader) {
-                b.push_back(DFBBinding{
-                    .dfb_spec_name = DFB_OUT_SHARD,
-                    .accessor_name = "out_shard_cb",
-                    .endpoint_type = is_reader1 ? DFBEndpointType::CONSUMER : DFBEndpointType::PRODUCER});
-            } else {
-                b.push_back(DFBBinding{
-                    .dfb_spec_name = DFB_OUT_SHARD,
-                    .accessor_name = "out_shard_cb",
-                    .endpoint_type = DFBEndpointType::PRODUCER});
-            }
+            // [DEBUG scratch->out] borrowed OUTPUT view for the NoC write (producer face only,
+            // mirrors in_shard_cb).
+            b.push_back(DFBBinding{
+                .dfb_spec_name = DFB_OUT_SHARD,
+                .accessor_name = "out_shard_cb",
+                .endpoint_type = DFBEndpointType::PRODUCER});
         }
         return b;
     };
@@ -1240,7 +1191,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     };
 
     std::optional<KernelSpec> reader1;
-    if (params.split_reader) {
+    if (return_indices) {
         reader1 = KernelSpec{
             .unique_id = READER1_KERNEL,
             .source = reader_path,
@@ -1249,7 +1200,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
             .tensor_bindings = make_reader_tensor_bindings(true),
             .compile_time_args = reader1_cta,
             .runtime_arg_schema = {.runtime_arg_names = reader_rta_names},
-            // QSR: companion opt-out on the split/second reader (writer-face). Same sub-tile stick
+            // QSR: companion opt-out on the mpwi second reader (writer-face). Same sub-tile stick
             // DFB transfers as reader0; keep explicit reserve/push credits authoritative to avoid the
             // implicit-sync NWFW/NRBW stall (mirrors tilize/transpose HC-sharded).
             .hw_config = ttnn::create_writer_datamovement_config(
@@ -1263,7 +1214,6 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     KernelSpec::CompileTimeArgs compute_cta = {
         {"in_ntiles_c", params.in_ntiles_c},
         {"window_size_hw", kernel_h * kernel_w},
-        {"split_reader", params.split_reader},
         {"max_out_sticks_per_core", 0u},
         {"in_c", in_c_per_shard_ceil},
         {"in_nblocks_c", in_nblocks_c},
@@ -1302,40 +1252,23 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         // Should be ALL (broadcast scalar), but ALL under-allocates consumer tile counters when
         // consumer threads > producer threads (issue #54505); reader pushes one copy per thread instead.
         .access_pattern = DFBAccessPattern::STRIDED});
-    // pool2d split-reader compute consumes the second input + scalar streams (both DFBs exist
-    // whenever has_second_input_cb; the kernel references them under #ifdef SPLIT_READER).
-    if (has_second_input_cb) {
-        compute_bindings.push_back(DFBBinding{
-            .dfb_spec_name = DFB_IN_1,
-            .accessor_name = "in_cb_1",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-            .access_pattern = DFBAccessPattern::STRIDED});
-        compute_bindings.push_back(DFBBinding{
-            .dfb_spec_name = DFB_IN_SCALAR_1,
-            .accessor_name = "in_scalar_cb_1",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-            // Should be ALL — same workaround as in_scalar_cb_0 above (issue #54505).
-            .access_pattern = DFBAccessPattern::STRIDED});
-    }
     if (!return_indices) {
         // Census partners for the reader's raw-view DFBs: Gen2 forbids DM self-loops, so the
         // single multi-threaded reader takes only the producer face and compute carries these
         // never-constructed consumer bindings (no credit traffic ever flows on them).
-        if (!params.split_reader) {
-            for (const auto& [spec, name] : std::initializer_list<std::pair<DFBSpecName, const char*>>{
-                     {DFB_IN_SHARD, "census_in_shard"},
-                     {DFB_READER_INDICES, "census_reader_indices"},
-                     {DFB_CLEAR_VALUE, "census_clear_value"},
-                     {DFB_OUT_SHARD, "census_out_shard"}}) {
-                compute_bindings.push_back(DFBBinding{
-                    .dfb_spec_name = spec, .accessor_name = name, .endpoint_type = DFBEndpointType::CONSUMER});
-            }
-            if (!one_scalar_per_core) {
-                compute_bindings.push_back(DFBBinding{
-                    .dfb_spec_name = DFB_CONFIG,
-                    .accessor_name = "census_config",
-                    .endpoint_type = DFBEndpointType::CONSUMER});
-            }
+        for (const auto& [spec, name] : std::initializer_list<std::pair<DFBSpecName, const char*>>{
+                 {DFB_IN_SHARD, "census_in_shard"},
+                 {DFB_READER_INDICES, "census_reader_indices"},
+                 {DFB_CLEAR_VALUE, "census_clear_value"},
+                 {DFB_OUT_SHARD, "census_out_shard"}}) {
+            compute_bindings.push_back(
+                DFBBinding{.dfb_spec_name = spec, .accessor_name = name, .endpoint_type = DFBEndpointType::CONSUMER});
+        }
+        if (!one_scalar_per_core) {
+            compute_bindings.push_back(DFBBinding{
+                .dfb_spec_name = DFB_CONFIG,
+                .accessor_name = "census_config",
+                .endpoint_type = DFBEndpointType::CONSUMER});
         }
         // pool2d: compute produces output directly into the borrowed output DFB.  The
         // result stays resident (the DFB is borrowed from OUTPUT_TENSOR and sized to the
@@ -1360,13 +1293,6 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
             .accessor_name = "scratch_cb_0",
             .endpoint_type = DFBEndpointType::PRODUCER,
             .access_pattern = DFBAccessPattern::STRIDED});
-        if (cb_sizes.has_split_reader) {
-            compute_bindings.push_back(DFBBinding{
-                .dfb_spec_name = DFB_SCRATCH_1,
-                .accessor_name = "scratch_cb_1",
-                .endpoint_type = DFBEndpointType::PRODUCER,
-                .access_pattern = DFBAccessPattern::STRIDED});
-        }
         if (cb_sizes.has_pre_tilize) {
             compute_bindings.push_back(DFBBinding{
                 .dfb_spec_name = DFB_PRE_TILIZE,
@@ -1452,9 +1378,6 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     KernelSpec::CompilerOptions::Defines compute_defines;
     for (const auto& [k, v] : pool_defines_map) {
         compute_defines.insert({k, v});
-    }
-    if (cb_sizes.has_split_reader) {
-        compute_defines.insert({"SPLIT_READER", "1"});
     }
     if (is_output_tiled) {
         compute_defines.insert({"OUTPUT_TILED", "1"});
