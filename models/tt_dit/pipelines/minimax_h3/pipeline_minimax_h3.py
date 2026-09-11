@@ -137,6 +137,8 @@ _DEFAULT_AUDIO_PACK = "5:2,6:4"
 # Split mode of the packed bands' anti-alias resamplers ("same" = the convs' mode). "off" is the measured 65 dB /
 # -72 ms point (layers/audio_pack.py).
 _AUDIO_RESAMPLER_SPLIT_ENV = "MINIMAX_H3_AUDIO_RESAMPLER_SPLIT"
+# Conv split mode of the audio decoder when the caller passes none ("full" = main's accurate default).
+_AUDIO_SPLIT_ENV = "MINIMAX_H3_AUDIO_SPLIT"
 
 
 def _audio_resampler_split_mode() -> str | None:
@@ -314,7 +316,7 @@ class MiniMaxH3Pipeline:
         topology: ttnn.Topology | None = None,
         coresident: bool | None = None,
         task: str = "t2va",
-        audio_split_mode: str = "full",
+        audio_split_mode: str | None = None,
         audio_t_factor: int | None = None,
     ) -> None:
         self.mesh_device = mesh_device
@@ -356,6 +358,8 @@ class MiniMaxH3Pipeline:
         # operands for the fp32-exact kernels' best accuracy (~67 dB vs CPU); "off" skips the split
         # for a lower-fidelity decode (~42 dB). Keys the device-weight cache via `weights_variant`.
         # audio_t_factor=4 timings: 2.2 s (full) / 1.6 s (off) on 4x8; default is 8 (~1.4 s full).
+        if audio_split_mode is None:
+            audio_split_mode = os.environ.get(_AUDIO_SPLIT_ENV, "full").strip() or "full"
         if audio_split_mode not in ("off", "weight", "act", "full", "stack"):
             raise ValueError(
                 f"audio_split_mode must be 'off', 'weight', 'act', 'full' or 'stack', got {audio_split_mode!r}"
@@ -434,7 +438,7 @@ class MiniMaxH3Pipeline:
         num_links: int | None = None,
         topology: ttnn.Topology | None = None,
         task: str = "t2va",
-        audio_split_mode: str = "full",
+        audio_split_mode: str | None = None,
         audio_t_factor: int | None = None,
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
@@ -1301,8 +1305,9 @@ class MiniMaxH3Pipeline:
                 resampler_split_mode=_audio_resampler_split_mode(),
             )
             logger.info(
-                f"Audio packing: {decoder.pack_bands or 'off'} ({_AUDIO_PACK_ENV}), resampler split "
-                f"{decoder.resampler_split_mode or 'same'} ({_AUDIO_RESAMPLER_SPLIT_ENV})"
+                f"Audio conv split: {decoder.split_mode} ({_AUDIO_SPLIT_ENV}); packing: {decoder.pack_bands or 'off'} "
+                f"({_AUDIO_PACK_ENV}); resampler split {decoder.resampler_split_mode or 'same'} "
+                f"({_AUDIO_RESAMPLER_SPLIT_ENV})"
             )
 
             def read_state() -> dict[str, torch.Tensor]:
