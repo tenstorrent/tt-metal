@@ -242,12 +242,6 @@ The following metrics are automatically computed from raw counters. Each metric 
 - **NOC vs Compute Balance (%)**: NOC cycles as a fraction of NOC + FPU cycles. >50% = NOC-bound, <50% = compute-bound.
 - **TDMA vs NOC L1 Share (%)**: RISC/TDMA traffic as a fraction of all L1 traffic. Shows how much bandwidth goes to firmware vs NOC.
 
-*Fidelity Metrics*
-
-- **Fidelity Stall Rate (%)**: Fraction of math-valid cycles spent in a fidelity phase (multi-HF-cycle math instruction). 0% = pure LoFi; >0% = HiFi math is active.
-- **HiFi Fraction (%)**: Fraction of issued math instructions that took more than 1 HF cycle (HiFi2 + HiFi4 over total).
-- **Avg HF Cycles Per Instrn** (raw number): Weighted average of HF cycles per issued math instruction. 1.0 = all LoFi, 2.0 = all HiFi2, 4.0 = all HiFi4.
-
 *Wormhole-Only Metrics*
 
 These metrics depend on per-pack-engine hardware signals that don't exist on Blackhole (``PACK_COUNT=1``).

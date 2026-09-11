@@ -24,11 +24,11 @@
 #define DEBUG_PRINT 0
 using namespace ckernel;
 
-void generate_rand_tile(const uint32_t dfb_id, const uint32_t seed) {
+static void generate_rand_tile(const uint32_t dfb_id, const uint32_t seed) {
     compute_kernel_hw_startup(dfb_id, dfb_id);
     copy_init(dfb_id);
 
-    DataflowBuffer dfb_obj(dfb_id);
+    DataflowBuffer dfb_obj(static_cast<uint16_t>(dfb_id));
 
     // The random tile is packed to BF16 before the strict cumulative-probability
     // comparison. Keep the FP32 endpoint below the BF16 midpoint to 1.0 so the
@@ -91,17 +91,17 @@ void sub_exp_block_bcast_cols_inplace() {
     }
 }
 
-void add_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
+static void add_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles produced
-    DataflowBuffer in0_dfb_obj(in0_dfb);
-    DataflowBuffer in1_dfb_obj(in1_dfb);
+    DataflowBuffer in0_dfb_obj(static_cast<uint16_t>(in0_dfb));
+    DataflowBuffer in1_dfb_obj(static_cast<uint16_t>(in1_dfb));
 
     reconfig_data_format(in0_dfb, in1_dfb);
     add_init(in0_dfb, in1_dfb);
-    in0_dfb_obj.wait_front(num_tiles);
-    in1_dfb_obj.wait_front(num_tiles);
+    in0_dfb_obj.wait_front(static_cast<uint16_t>(num_tiles));
+    in1_dfb_obj.wait_front(static_cast<uint16_t>(num_tiles));
     for (uint32_t i = 0; i < num_tiles; i++) {
         tile_regs_acquire();
         add_tiles(in0_dfb, in1_dfb, 0, i, 0);
@@ -119,20 +119,20 @@ void add_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
     }
 }
 
-void mul_block_bcast_cols(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_t rows, uint32_t cols) {
+static void mul_block_bcast_cols(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_t rows, uint32_t cols) {
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
     // Postcondition: in1_cb has rows consumed
 
-    DataflowBuffer in0_dfb_obj(in0_dfb);
-    DataflowBuffer in1_dfb_obj(in1_dfb);
-    DataflowBuffer out_dfb_obj(out_dfb);
+    DataflowBuffer in0_dfb_obj(static_cast<uint16_t>(in0_dfb));
+    DataflowBuffer in1_dfb_obj(static_cast<uint16_t>(in1_dfb));
+    DataflowBuffer out_dfb_obj(static_cast<uint16_t>(out_dfb));
 
-    uint32_t num_tiles = rows * cols;
+    const uint32_t num_tiles = rows * cols;
     mul_bcast_cols_init(in0_dfb, in1_dfb);
-    in0_dfb_obj.wait_front(num_tiles);
-    in1_dfb_obj.wait_front(rows);
+    in0_dfb_obj.wait_front(static_cast<uint16_t>(num_tiles));
+    in1_dfb_obj.wait_front(static_cast<uint16_t>(rows));
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t j = 0; j < cols; ++j) {
             tile_regs_acquire();
@@ -149,18 +149,18 @@ void mul_block_bcast_cols(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, 
             out_dfb_obj.push_back(1);
         }
     }
-    in1_dfb_obj.pop_front(rows);
+    in1_dfb_obj.pop_front(static_cast<uint16_t>(rows));
 }
 
-void recip_block_inplace(uint32_t in_dfb, uint32_t num_tiles) {
+static void recip_block_inplace(uint32_t in_dfb, uint32_t num_tiles) {
     // Precondition: in_cb has num_tiles produced
     // Postcondition: in_cb has num_tiles produced
-    DataflowBuffer in_dfb_obj(in_dfb);
+    DataflowBuffer in_dfb_obj(static_cast<uint16_t>(in_dfb));
 
     copy_init(in_dfb);
     recip_tile_init();
 
-    in_dfb_obj.wait_front(num_tiles);
+    in_dfb_obj.wait_front(static_cast<uint16_t>(num_tiles));
     for (uint32_t i = 0; i < num_tiles; ++i) {
         tile_regs_acquire();
         copy_tile(in_dfb, 0, 0);
@@ -236,7 +236,7 @@ void top_k() {
         transpose_init(input_dfb_index);
     }
     for (uint32_t ht = 0; ht < Ht; ++ht) {
-        bool ascending = false;
+        const bool ascending = false;
         input_transposed_dfb.reserve_back(Wt);
         index_transposed_dfb.reserve_back(Wt);
 
@@ -260,7 +260,7 @@ void top_k() {
             // llk_topk_sort -> inplace
             // stable_sort: equal values keep their original (lowest) position, so the candidate the
             // top-k keeps for a tie does not depend on how the bitonic network happens to swap.
-            ckernel::topk_local_sort<stable_sort>(0, (int)ascending, logk - 1);
+            ckernel::topk_local_sort<stable_sort>(0, static_cast<int>(ascending), logk - 1);
 
             tile_regs_commit();
 
@@ -292,8 +292,8 @@ void top_k() {
             input_transposed_dfb.wait_front(Wt);
             index_transposed_dfb.wait_front(Wt);
 
-            for (uint32_t left_ind = 0; left_ind < Wt - (1 << m_iter); left_ind += 2 << m_iter) {
-                uint32_t right_ind = left_ind + (1 << m_iter);
+            for (uint32_t left_ind = 0; left_ind < Wt - (1u << m_iter); left_ind += 2u << m_iter) {
+                const uint32_t right_ind = left_ind + (1u << m_iter);
                 tile_regs_acquire();
 
                 reconfig_data_format_srca(index_transposed_dfb_index, input_transposed_dfb_index);
@@ -308,9 +308,10 @@ void top_k() {
                 copy_tile(index_transposed_dfb_index, right_ind, index_dest_end);
 
                 // merge values - move larger 32 values into 0th dest and lower 32 values into 1st dest
-                ckernel::topk_merge<false, stable_sort>(0, m_iter, K);
+                ckernel::topk_merge<false, stable_sort>(0, static_cast<int>(m_iter), K);
                 // sort within the larger 32 values
-                ckernel::topk_rebuild<stable_sort>(0, (uint32_t)a, m_iter, K, logk, true);
+                ckernel::topk_rebuild<stable_sort>(
+                    0, static_cast<uint32_t>(a), static_cast<int>(m_iter), K, logk, true);
 
                 tile_regs_commit();
                 tile_regs_wait();
@@ -337,7 +338,7 @@ void top_k() {
             index_transposed_dfb.push_back(Wt);
         }
 
-        constexpr uint32_t Kt = K % tile_width == 0 ? K / tile_width : K / tile_width + 1;
+        constexpr uint32_t Kt = K % tile_width == 0 ? K / tile_width : (K / tile_width) + 1;
 
         // transpose value tiles and pack into output buffer
         reconfig_data_format_srca(input_transposed_dfb_index);
@@ -392,8 +393,8 @@ void mul_block_bcast_scalar_inplace() {
     DataflowBuffer in0_dfb_obj(in0_dfb);
     DataflowBuffer in1_scalar_dfb_obj(in1_scalar_dfb);
 
-    uint32_t dst_tiles = num_tiles;
-    uint32_t granularity = 1;
+    const uint32_t dst_tiles = num_tiles;
+    const uint32_t granularity = 1;
 
     reconfig_data_format(in0_dfb, in1_scalar_dfb);
     mul_bcast_scalar_init(in0_dfb, in1_scalar_dfb);
@@ -407,8 +408,8 @@ void mul_block_bcast_scalar_inplace() {
         }
         tile_regs_commit();
 
-        in0_dfb_obj.pop_front(dst_tiles);
-        in0_dfb_obj.reserve_back(dst_tiles);
+        in0_dfb_obj.pop_front(static_cast<uint16_t>(dst_tiles));
+        in0_dfb_obj.reserve_back(static_cast<uint16_t>(dst_tiles));
 
         tile_regs_wait();
         for (uint32_t i = 0; i < dst_tiles; ++i) {
@@ -416,7 +417,7 @@ void mul_block_bcast_scalar_inplace() {
         }
         tile_regs_release();
 
-        in0_dfb_obj.push_back(dst_tiles);
+        in0_dfb_obj.push_back(static_cast<uint16_t>(dst_tiles));
     }
 }
 

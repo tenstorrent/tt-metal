@@ -22,13 +22,9 @@ op count, bytes moved (from the CSV's input/output shapes + dtypes) and the impl
 Zone list — dense layer: input_norm, attn/{qkv_proj,split_heads,qk_norm,rope,kv_write,
 ring_joint_sdpa,concat_heads,o_proj,ccl_out_allreduce}, post_attn_norm, mlp/{gate_up_proj,swiglu,
 down_proj,tp_allreduce}. Sparse layer: the same front end plus attn/{index_branch,index_k_write,
-cache_read/{deshard,slice},ag_kv,ag_index_k,indexer,sparse_sdpa} and mlp/{shared_expert,router_topk,
-routing_setup,dispatch,experts_mm,combine,reduce_ws_rs,tp_allgather,add_shared}.
-
-`cache_read/deshard` is the one to watch: the MSA cache-read path converts the ENTIRE packed cache
-(num_users*num_layers slots x3 tensors) from NdShard to DRAM-interleaved on EVERY sparse layer to work
-around the round-robin slice corruption (see attention/prefill.py). That is ~60x more traffic than the
-layer needs; this zone measures the real cost.
+ag_kv,ag_index_k,indexer,sparse_sdpa} and mlp/{shared_expert,router_topk,routing_setup,dispatch,
+experts_mm,combine,reduce_ws_rs,tp_allgather,add_shared}. The MSA cache read is the ag_kv + ag_index_k
+gathers (high_bw_all_gather straight from the cache slot); there is no separate cache_read zone.
 
 Tokens come from a REAL golden trace's metadata.json (tiled to length, exactly like
 scripts/run_prefill_perf.sh's make_trace): MoE expert routing is content-dependent, so random token ids would
@@ -53,7 +49,8 @@ Env:
   PROFILE_STAGE       which stage to profile, 0..PROFILE_STAGES-1. Stage k owns global layers
                       [k*60/S, (k+1)*60/S); PROFILE_LAYER_IDS must fall inside that range and
                       PROFILE_NUM_LAYERS takes the first N of it                             [default 0]
-  PROFILE_FABRIC      fabric config: 1d | 1d_ring | 2d | 2d_torus_xy                        [default 1d]
+  M3_FABRIC           fabric config: 1d | 1d_ring | 2d | 2d_torus_xy (utils/fabric_env.py)     [default 1d]
+  M3_CCL_TOPOLOGY     legacy-CCL topology: linear | ring (ring needs a ring/torus fabric)   [default linear]
   EXPERT_DTYPE        MoE routed-expert weight dtype: "bf4" or "bf8"                  [default bf4]
   HF_MODEL            real MiniMax-M3 weights dir (read by ModelArgs)
   M3_PROFILE_ZONES    set to 1 by this script before the model is imported
@@ -95,6 +92,8 @@ os.environ.setdefault("TT_METAL_DEVICE_PROFILER", "1")
 from loguru import logger  # noqa: E402
 
 import ttnn  # noqa: E402
+from models.demos.minimax_m3.tt.ccl import L1_SMALL_SIZE  # noqa: E402
+from models.demos.minimax_m3.utils.fabric_env import ccl_topology_from_env, fabric_config_from_env  # noqa: E402
 
 
 def _raise_nproc_limit():
@@ -116,13 +115,6 @@ MSA_MIN_TOKENS = 16 * 128  # 2048
 
 # sparse_attention_freq marks layers 0-2 dense and 3-59 sparse (tt/layer.py).
 FIRST_SPARSE_LAYER = 3
-
-FABRIC_CONFIGS = {
-    "1d": ttnn.FabricConfig.FABRIC_1D,
-    "1d_ring": ttnn.FabricConfig.FABRIC_1D_RING,
-    "2d": ttnn.FabricConfig.FABRIC_2D,
-    "2d_torus_xy": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
-}
 
 
 def load_tokens(n: int):
@@ -254,6 +246,7 @@ def build_runtime(mesh, chunk, total, num_layers_override, layer_ids=None, stage
         weight_cache_path=cache_path,
         first_layer_idx=first_layer_idx,
         layer_indices=layer_ids,
+        topology=ccl_topology_from_env(),
         is_first_rank=True,
         is_last_rank=is_last_stage,
     )
@@ -264,30 +257,6 @@ def build_runtime(mesh, chunk, total, num_layers_override, layer_ids=None, stage
         mesh, num_layers=num_layers, max_seq_len=total, num_users=1, head_dim=hf_config.head_dim
     )
     return runtime, kv_cache, hf_config, global_layer_indices
-
-
-def cache_traffic_note(hf_config, global_layer_indices, total, sp):
-    """Log the whole-cache de-shard traffic the `cache_read/deshard` zone should be moving.
-
-    The packed cache is [num_users*num_layers, 1, seq_local, head_dim] per chip (kv_cache.py), and the
-    MSA cache-read converts the WHOLE tensor per layer, for each of K / V / index_k. Printing the
-    expected bytes up front makes the measured GB/s in the report immediately interpretable.
-    """
-    num_layers = len(global_layer_indices)
-    n_sparse = sum(1 for i in global_layer_indices if i >= FIRST_SPARSE_LAYER)
-    seq_local = total // sp
-    elems = num_layers * seq_local * hf_config.head_dim  # per chip, per cache tensor
-    kv_bytes = elems * 1.0625  # bf8_b: 1 byte + 1/16 block scale
-    ik_bytes = elems * (2.0 if os.getenv("M3_INDEX_CACHE_BF16") == "1" else 1.0625)
-    per_layer = 2 * (2 * kv_bytes + ik_bytes)  # read + write, K + V + index_k
-    logger.info(
-        f"[zone-prof] whole-cache de-shard traffic (the cache_read/deshard hypothesis):\n"
-        f"    packed cache per chip: {num_layers} layers x {seq_local} rows x {hf_config.head_dim} = "
-        f"{elems/1e6:.1f}M elems/tensor ({kv_bytes/2**20:.0f} MiB K, {kv_bytes/2**20:.0f} MiB V, "
-        f"{ik_bytes/2**20:.0f} MiB index_k)\n"
-        f"    per sparse layer (read+write x3 tensors): {per_layer/2**20:.0f} MiB\n"
-        f"    x {n_sparse} sparse layers: {per_layer * n_sparse/2**30:.1f} GiB per chunk, per chip"
-    )
 
 
 def main():
@@ -302,10 +271,7 @@ def main():
     stage = int(os.getenv("PROFILE_STAGE", "0"))
     assert stages in (1, 2, 4), f"PROFILE_STAGES must be 1, 2 or 4 (got {stages})"
     assert 0 <= stage < stages, f"PROFILE_STAGE={stage} out of range for {stages} stages"
-    fabric_name = os.getenv("PROFILE_FABRIC", "1d")
-    assert (
-        fabric_name in FABRIC_CONFIGS
-    ), f"PROFILE_FABRIC must be one of {sorted(FABRIC_CONFIGS)} (got {fabric_name!r})"
+    fabric_config = fabric_config_from_env()
 
     n_chunks, cache, total = plan(chunk, cache_req)
     print(
@@ -322,11 +288,13 @@ def main():
     # TODO(profiling): the pipeline runner's intra-galaxy bindings use 2D fabric (PREFILL_FABRIC_MODE=2d);
     # 1d is the default here so stage captures compare like-for-like with the whole-galaxy baseline.
     # 2d / 2d_torus_xy are wired through but not yet validated on a carved sub-mesh (torus also needs the
-    # matching *_torus_xy mesh graph descriptor).
-    ttnn.set_fabric_config(FABRIC_CONFIGS[fabric_name])
-    galaxy = ttnn.open_mesh_device(ttnn.MeshShape(8, 4))
+    # matching *_torus_xy mesh graph descriptor). M3_CCL_TOPOLOGY=Ring puts the legacy CCLs on the ring
+    # (measured in PR #55668); high_bw_all_gather derives its own from the fabric.
+    ttnn.set_fabric_config(fabric_config)
+    galaxy = ttnn.open_mesh_device(ttnn.MeshShape(8, 4), l1_small_size=L1_SMALL_SIZE)
     print(
-        f"[zone-prof] galaxy opened {tuple(galaxy.shape)} ndev={galaxy.get_num_devices()} fabric={fabric_name}",
+        f"[zone-prof] galaxy opened {tuple(galaxy.shape)} ndev={galaxy.get_num_devices()} fabric={fabric_config} "
+        f"ccl_topology={ccl_topology_from_env()}",
         flush=True,
     )
     mesh = galaxy
@@ -346,7 +314,6 @@ def main():
             mesh, chunk, total, num_layers_override, layer_ids, stages=stages, stage=stage
         )
         num_layers = len(global_layer_indices)
-        cache_traffic_note(hf_config, global_layer_indices, total, sp)
 
         # Per-layer ReadDeviceProfiler for the UN-profiled phases only (warmup + prefix). The device
         # profiler buffer must be drained or it overflows and the next phase's data is dropped — but a
@@ -432,7 +399,7 @@ def main():
 
         print(
             f"\n[zone-prof] PROFILED CHUNK: {chunk} tok @ {cache} cache, {num_layers} layers "
-            f"(stage {stage}/{stages}, mesh {sp}x{tp}, fabric {fabric_name})\n"
+            f"(stage {stage}/{stages}, mesh {sp}x{tp}, fabric {fabric_config})\n"
             f"  wall-clock: {wall*1e3:.1f} ms  ({chunk_reads} profiler reads inside the chunk, "
             f"{prefix_reads} before it)\n"
             f"  device-kernel time per zone: parse the ops CSV with\n"
