@@ -72,6 +72,12 @@ int64_t tracy_anchor_now() {
     return tracy::Profiler::GetTime();
 #else
     return 0;
+    {
+        // Two seconds, or as much of it as lies after the profiler's own epoch.
+        const double mul = TracyGetTimerMul() > 0.0 ? TracyGetTimerMul() : 1.0;
+        const int64_t anchor_ns = static_cast<int64_t>(static_cast<double>(anchor_tracy_) * mul);
+        origin_margin_ns_ = std::max<int64_t>(0, std::min<int64_t>(2'000'000'000, anchor_ns - 1'000'000));
+    }
 #endif
 }
 
@@ -96,9 +102,14 @@ TracySink::TracySink(Service& service) :
             .clock_sink =
                 [this](const ClockSample& cs) {
                     plot_samples_.push_back(
-                        PlotSample{cs.dev, cs.kind, cs.lane / profiler::kSpscNRiscDecode, cs.ts, cs.value24});
+                        PlotSample{cs.dev, cs.kind, cs.lane / profiler::kSpscNRiscDecode, cs.ts, cs.value});
                 },
-            .on_capture_end = [this](const CaptureContext&) { emit_plots(); }});
+            .on_capture_end =
+                [this](const CaptureContext&) {
+                    SyncPlots::wait_complete(std::chrono::seconds(10));
+                    flush_held(true);
+                    emit_plots();
+                }});
 }
 
 TracySink::~TracySink() {
@@ -119,20 +130,61 @@ void TracySink::on_batch(const Batch& batch, uint64_t capture) {
     } else if (ns_since_epoch(std::chrono::steady_clock::now()) >= next_refine_ns_) {
         refine_map();
     }
+    if (plots_only_) {
+        return;
+    }
     for (const api::Zone& z : batch.zones()) {
-        push_zone(
-            z.core(),
-            z.site().name,
-            ns_since_epoch(z.start_time()),
-            ns_since_epoch(z.end_time()),
-            z.site().name == api::kStallZoneName ? kStallColor : 0);
+        held_[z.core().chip_id].zones.push_back(z);
     }
     for (const api::TimestampedData& d : batch.timestamped_data()) {
-        push_marker(d.core(), d.site().name, ns_since_epoch(d.time()), d.runtime_id(), d.payload());
+        std::vector<std::byte> bytes(d.size_bytes());
+        std::memcpy(bytes.data(), &d, d.size_bytes());
+        held_[d.core().chip_id].data.push_back(std::move(bytes));
     }
     for (const api::Event& e : batch.events()) {
-        push_marker(e.core(), e.site().name, ns_since_epoch(e.time()), e.runtime_id(), {});
+        held_[e.core().chip_id].events.push_back(e);
     }
+    flush_held(false);
+}
+
+void TracySink::flush_held(bool all) {
+    for (auto& [chip, held] : held_) {
+        const int64_t until = all ? std::numeric_limits<int64_t>::max() : SyncCorrections::published_until_ns(chip);
+        while (!held.zones.empty() && held.zones.front().base_ns(held.zones.front().end_timestamp()) <= until) {
+            emit_zone(held.zones.front());
+            held.zones.pop_front();
+        }
+        while (!held.data.empty()) {
+            const auto& d = *reinterpret_cast<const api::TimestampedData*>(held.data.front().data());
+            if (d.base_ns(d.timestamp()) > until) {
+                break;
+            }
+            emit_data(d);
+            held.data.pop_front();
+        }
+        while (!held.events.empty() && held.events.front().base_ns(held.events.front().timestamp()) <= until) {
+            emit_event(held.events.front());
+            held.events.pop_front();
+        }
+    }
+}
+
+void TracySink::emit_zone(const api::Zone& z) {
+    const auto [start, end] = z.host_span();
+    push_zone(
+        z.core(),
+        z.site().name,
+        ns_since_epoch(start),
+        ns_since_epoch(end),
+        z.site().name == api::kStallZoneName ? kStallColor : 0);
+}
+
+void TracySink::emit_data(const api::TimestampedData& d) {
+    push_marker(d.core(), d.site().name, ns_since_epoch(d.time()), d.runtime_id(), d.payload());
+}
+
+void TracySink::emit_event(const api::Event& e) {
+    push_marker(e.core(), e.site().name, ns_since_epoch(e.time()), e.runtime_id(), {});
 }
 
 TracySink::Probe TracySink::probe() const {
@@ -186,7 +238,7 @@ void TracySink::refine_map() {
 
 int64_t TracySink::to_timeline(int64_t steady_ns) const {
     if (segments_.empty()) {
-        return steady_ns < 0 ? 0 : steady_ns;
+        return steady_ns;
     }
     const Segment* seg = &segments_.back();
     while (seg != segments_.data() && steady_ns < seg->steady_ns) {
@@ -194,7 +246,7 @@ int64_t TracySink::to_timeline(int64_t steady_ns) const {
     }
     const int64_t ns =
         seg->tracy_ns + static_cast<int64_t>(static_cast<double>(steady_ns - seg->steady_ns) * seg->slope);
-    return ns < 0 ? 0 : ns;  // a record cannot predate the capture; clamp rather than wrap
+    return ns;  // may be negative: a corrected time before the capture anchor; callers drop, never clamp
 }
 
 TracySink::Lane TracySink::lane(const Core& core) {
@@ -212,7 +264,7 @@ TracySink::Lane TracySink::lane(const Core& core) {
         // Timestamps arrive already on the host timeline in nanoseconds from anchor_tracy_: identity mapping, and
         // calibrated so the GUI offers no drift control. Everything the sink emits goes through this thread's
         // lock-free queue, whose FIFO order is what keeps the context ahead of the zones that reference it.
-        TracyTTContextPopulateCalibratedLockfree(ce.ctx, anchor_tracy_, 0.0, 1.0);
+        TracyTTContextPopulateCalibratedLockfree(ce.ctx, anchor_tracy_, static_cast<double>(origin_margin_ns_), 1.0);
         const std::string name = fmt::format(
             "Device: {}, Logical ({},{}) Physical ({},{})",
             core.chip_id,
@@ -315,13 +367,22 @@ void TracySink::push_zone(
     [[maybe_unused]] int64_t end_ns,
     [[maybe_unused]] uint32_t color) {
 #if defined(TRACY_ENABLE)
+    int64_t s = to_timeline(start_ns) + origin_margin_ns_, e = to_timeline(end_ns) + origin_margin_ns_;
+    if (s < 0) {
+        clamped_zones_++;
+        s = 0;
+    }
+    if (e < s) {
+        clamped_zones_++;
+        e = s;
+    }
     const Lane ln = lane(core);
     TracyTTPushZone(
         ln.ctx,
         static_cast<const tracy::SourceLocationData*>(srcloc(name, color, ln.risc)),
         ln.thread,
-        static_cast<uint64_t>(to_timeline(start_ns)),
-        static_cast<uint64_t>(to_timeline(end_ns)));
+        static_cast<uint64_t>(s),
+        static_cast<uint64_t>(e));
 #endif
 }
 
@@ -332,13 +393,18 @@ void TracySink::push_marker(
     [[maybe_unused]] uint32_t runtime_id,
     [[maybe_unused]] std::span<const uint64_t> values) {
 #if defined(TRACY_ENABLE)
+    int64_t ts = to_timeline(timestamp_ns) + origin_margin_ns_;
+    if (ts < 0) {
+        clamped_markers_++;
+        ts = 0;
+    }
     TracyTTCtx ctx = lane(core).ctx;
     tracy::TTDeviceMarker marker;
     marker.chip_id = core.chip_id;
     marker.core_x = core.logical.x;
     marker.core_y = core.logical.y;
     marker.risc = kRisc[static_cast<uint32_t>(core.risc)];
-    marker.timestamp = static_cast<uint64_t>(to_timeline(timestamp_ns));
+    marker.timestamp = static_cast<uint64_t>(ts);
     marker.runtime_host_id = runtime_id;
     marker.marker_type = values.empty() ? tracy::TTDeviceMarkerType::EVENT : tracy::TTDeviceMarkerType::DATA;
     marker.marker_name = std::string(name);
@@ -362,6 +428,17 @@ void TracySink::push_marker(
 // The stamp PlotDataAt needs for a point at host time host_ns. The server displays (tsc - baseTime) * m_timerMul --
 // an absolute timer-tick stamp like GetTime() -- while to_timeline() yields ns since anchor_tracy_; so
 // anchor_tracy_ + ns / mul, which is exactly where the device zones land through their GPU context.
+void TracySink::plot_point(const char* name, double value, int64_t host_ns) {
+#if defined(TRACY_ENABLE)
+    int64_t stamp = plot_stamp(host_ns);
+    if (stamp < 0) {
+        clamped_plot_points_++;
+        stamp = 0;
+    }
+    tracy::Profiler::PlotDataAt(name, value, stamp);
+#endif
+}
+
 int64_t TracySink::plot_stamp(int64_t host_ns) const {
 #if defined(TRACY_ENABLE)
     const double timer_mul = TracyGetTimerMul() > 0.0 ? TracyGetTimerMul() : 1.0;
@@ -428,12 +505,12 @@ void TracySink::emit_plots() {
         if (s.pts.empty() || s.dev >= clocks_.size() || root_dev >= clocks_.size()) {
             continue;
         }
-        const bool link = s.kind == PP_CLOCK_LINK_REFCLK;
+        const bool link = s.kind == PP_CLOCK_LINK_REFCLK || s.kind == PP_CLOCK_LINK_PTP;
         const char* name = intern_name(fmt::format(
-            "d2d freq scale chip{}/chip{} {}", chip_of(s.dev), chip_of(root_dev), link ? "link 1ms" : "local 3us"));
+            "d2d freq scale chip{}/chip{} {}", chip_of(s.dev), chip_of(root_dev), link ? "link 1ms" : "local 1ms"));
         if (s.dev == root_dev) {
             for (const FreqPoint& p : s.pts) {
-                tracy::Profiler::PlotDataAt(name, 1.0, plot_stamp(p.host_ns));
+                plot_point(name, 1.0, p.host_ns);
             }
             continue;
         }
@@ -453,21 +530,33 @@ void TracySink::emit_plots() {
             if (it->ghz <= 0.0) {
                 continue;
             }
-            tracy::Profiler::PlotDataAt(name, p.ghz / it->ghz, plot_stamp(p.host_ns));
+            plot_point(name, p.ghz / it->ghz, p.host_ns);
         }
     }
-    // Series the d2d consumer computed at capture end (the cross-chip refclk scale regression), placed the same way.
+    // Series the d2d consumer computed at capture end (the cross-chip refclk scale regression and the sync error),
+    // placed the same way; it runs on its own thread, so wait for its final publish.
+    SyncPlots::wait_complete(std::chrono::seconds(10));
     for (auto& [name, pts] : SyncPlots::drain()) {
         const char* nm = intern_name(name);
         for (const SyncPlotPoint& p : pts) {
-            tracy::Profiler::PlotDataAt(nm, p.value, plot_stamp(p.host_ns));
+            plot_point(nm, p.value, p.host_ns);
         }
     }
 #else
+    SyncPlots::wait_complete(std::chrono::seconds(10));
     SyncPlots::drain();
 #endif
     plot_samples_.clear();
     plot_samples_.shrink_to_fit();
+    if (clamped_zones_ != 0 || clamped_markers_ != 0 || clamped_plot_points_ != 0) {
+        log_warning(
+            tt::LogMetal,
+            "[streaming profiler] Tracy sink clamped {} zones, {} markers and {} plot points to the timeline origin: a "
+            "d2d correction exceeded its bound",
+            clamped_zones_,
+            clamped_markers_,
+            clamped_plot_points_);
+    }
 }
 
 // PlotDataAt keys a plot by its name POINTER, so every name lives for the sink's lifetime.
@@ -476,8 +565,8 @@ const char* TracySink::intern_name(const std::string& name) { return plot_names_
 // One stream of PP_CLOCK samples [begin, end) -> that chip's applied AICLK in GHz at every sample: the sliding
 // dwall/drefclk over the trailing window (the refclk is a fixed 50 MHz, so wall ticks per refclk tick x 50 MHz is
 // the AICLK), at the sample's host time via the eth clock. The window is set in REFCLK ticks so a dropped sample
-// only widens it: ~100 us for the 3 us local tracker (0.02 % quantisation), >= 1 ms for the 1 ms link stamps
-// (2e-5). The link sender emits two stamps per round a few us apart, which the >= 1 ms window steps over.
+// only widens it: >= 1 ms (2e-5 quantisation) for both the 1 ms link stamps and the tracker's 1 ms keepalives, whose
+// change bursts a few us apart the window steps over, as it does the link sender's two stamps per round.
 std::vector<TracySink::FreqPoint> TracySink::compute_frequency(size_t begin, size_t end) const {
     std::vector<FreqPoint> out;
     if (end <= begin) {
@@ -493,26 +582,15 @@ std::vector<TracySink::FreqPoint> TracySink::compute_frequency(size_t begin, siz
     if (eclk.frequency_ghz <= 0.0) {
         return out;
     }
-    const bool link = s0.kind == PP_CLOCK_LINK_REFCLK;
+    const bool link = s0.kind == PP_CLOCK_LINK_REFCLK || s0.kind == PP_CLOCK_LINK_PTP;
     if (!link && s0.kind != PP_CLOCK_LOCAL_REFCLK) {
         return out;
     }
     constexpr double kRefclkHz = 50.0e6;
-    const uint64_t window = link ? 50'000 : 5'000;  // refclk ticks: 1 ms / 100 us
+    const uint64_t window = 50'000;  // refclk ticks: 1 ms, for the 1 ms link stamps and the tracker's 1 ms keepalives
     std::vector<uint64_t> refclk(end - begin);
-    {
-        bool seeded = false;
-        uint32_t last = 0;
-        uint64_t wraps = 0;
-        for (size_t i = begin; i < end; i++) {
-            const uint32_t v = plot_samples_[i].value24;
-            if (seeded && v < last && (last - v) > (1u << 23)) {
-                wraps++;
-            }
-            seeded = true;
-            last = v;
-            refclk[i - begin] = (wraps << 24) | v;
-        }
+    for (size_t i = begin; i < end; i++) {
+        refclk[i - begin] = plot_samples_[i].value;
     }
     out.reserve(end - begin);
     size_t j = 0;  // trailing edge: the LATEST sample still >= window behind, for the tightest window over target
