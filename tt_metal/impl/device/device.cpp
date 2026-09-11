@@ -505,19 +505,12 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
 
     // Set num_worker_sems and go_signal_noc_data on dispatch for the default sub device config
     const CoreCoord compute_grid_size = compute_with_storage_grid_size();
-    const bool fds_worker_completion_enabled =
-        context_->get_dispatch_core_manager().get_dispatch_core_type() == CoreType::DISPATCH &&
-        !context_->rtoptions().get_disable_fds();
-    const uint32_t tensix_worker_count = compute_grid_size.x * compute_grid_size.y;
-    std::vector<uint32_t> workers_per_sub_device;
-    workers_per_sub_device.reserve(num_sub_devices());
-    for (uint32_t sub_device_index = 0; sub_device_index < num_sub_devices(); ++sub_device_index) {
-        workers_per_sub_device.push_back(get_dispatch_worker_count(
-            sub_device_index,
-            tensix_worker_count,
-            static_cast<uint32_t>(active_eth_cores.size()),
-            fds_worker_completion_enabled));
+    if (context_->get_dispatch_query_manager().fds_worker_completion_enabled()) {
+        TT_FATAL(active_eth_cores.empty(), "FDS worker completion does not support ACTIVE_ETH cores");
     }
+    const uint32_t default_sub_device_worker_count =
+        compute_grid_size.x * compute_grid_size.y + static_cast<uint32_t>(active_eth_cores.size());
+    std::vector<uint32_t> workers_per_sub_device(num_sub_devices(), default_sub_device_worker_count);
     for (auto& command_queue : command_queues_) {
         command_queue->set_go_signal_noc_data_and_dispatch_sems(
             num_sub_devices(), noc_mcast_unicast_data, workers_per_sub_device);

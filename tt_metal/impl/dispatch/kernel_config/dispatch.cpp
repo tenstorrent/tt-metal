@@ -141,7 +141,7 @@ void DispatchKernel::GenerateStaticConfigs() {
 
         static_config_.my_downstream_cb_sem_id = 0;  // unused
 
-        static_config_.prefetch_h_max_credits = 0;                   // unused prefetch_downstream_buffer_pages
+        static_config_.prefetch_h_max_credits = 0;  // unused prefetch_downstream_buffer_pages
 
         static_config_.packed_write_max_unicast_sub_cmds =
             device_->compute_with_storage_grid_size().x * device_->compute_with_storage_grid_size().y;
@@ -580,10 +580,7 @@ void DispatchKernel::CreateKernel() {
         {"IS_H_VARIANT", std::to_string(static_config_.is_h_variant.value())},
     };
 
-    if (GetCoreType() == CoreType::DISPATCH &&
-        descriptor_.hal().get_supports_sending_fds_go_cmds(
-            descriptor_.hal().get_programmable_core_type_index(HalProgrammableCoreType::DISPATCH)) &&
-        !descriptor_.rtoptions().get_disable_fds()) {
+    if (get_dispatch_query_manager_ref().fds_worker_completion_enabled()) {
         defines["FDS_WORKER_DONE"] = "1";
     }
 
