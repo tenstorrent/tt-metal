@@ -610,6 +610,27 @@ ttnn::Tensor ttnn::reshape(
         return ttnn::experimental::view(tensor, logical_shape, padded_shape);
     }
 
+    // ND-sharded output: the internal sharded paths only handle a 2D shard_spec, so a genuinely ND
+    // output config (ND_SHARDED, or an nd_shard_spec with no 2D shard_spec) would abort. A config
+    // naming only a sharded layout is left to the 2D auto-derive path. Reshape to an interleaved
+    // intermediate, then let to_memory_config lay out the ND output.
+    const bool nd_sharded_output =
+        explicit_memory_config && (mem_config.memory_layout() == TensorMemoryLayout::ND_SHARDED ||
+                                   (mem_config.nd_shard_spec().has_value() && !mem_config.shard_spec().has_value()));
+    if (nd_sharded_output) {
+        MemoryConfig interleaved_mem_config{TensorMemoryLayout::INTERLEAVED, mem_config.buffer_type()};
+        auto interleaved_result = reshape(
+            tensor,
+            logical_input_shape,
+            padded_input_shape,
+            interleaved_mem_config,
+            pad_value,
+            reshape_map_mode,
+            sub_core_grid,
+            skip_padding_fill);
+        return ttnn::to_memory_config(interleaved_result, mem_config);
+    }
+
     bool this_is_view =
         (tensor_shape_last_dim == shape_last_dim) && (mem_config.is_sharded() == tensor.memory_config().is_sharded()) &&
         (mem_config.is_l1() == tensor.memory_config().is_l1()) &&
