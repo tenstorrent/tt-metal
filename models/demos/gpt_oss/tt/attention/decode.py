@@ -129,16 +129,22 @@ def decode_forward(
     # Use local heads per device, not global heads
     padded_heads = ((num_local_heads + 31) // 32) * 32
 
-    # SDPA writes to DRAM; reshard onto a rectangular one-core-per-user grid for nlp_concat_heads_decode
-    # (it needs a single CoreRange as input grid; the RoPE/SDPA user grid is not one for 8 < B < 32 on
-    # Blackhole's 13-wide compute grid).
+    # SDPA writes to DRAM; reshard onto the same one-core-per-user grid RoPE/SDPA use (user b on the b-th core,
+    # row-major) for nlp_concat_heads_decode. For an input grid that is not one rectangle from (0, 0) (e.g. 13 + 9
+    # cores for 22 users on Blackhole's 13-wide grid) the op requires sub_core_grids (passed below) and then reads
+    # the users in row-major order of the input CoreRangeSet; with it, any 1 <= batch <= 32 works, so no separate
+    # rectangular 'concat grid' (and no batch sizes it could not hold) is needed.
     height_sharded_mem_config = ttnn.create_sharded_memory_config(
         shape=(padded_heads, head_dim),  # Shape per shard (tile-aligned)
-        core_grid=program_config.get_decode_concat_grid(batch_size),
+        core_grid=batch_grid,
         strategy=ttnn.ShardStrategy.HEIGHT,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
+    device_grid = mesh_device.compute_with_storage_grid_size()
+    concat_sub_core_grids = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid.x - 1, device_grid.y - 1))}
+    )  # output: the first num_local_heads cores of the compute grid, as in the op's default program
     # Scaled dot-product attention
     if page_table is not None:
         tt_sdpa_tensor = ttnn.transformer.paged_scaled_dot_product_attention_decode(
@@ -176,7 +182,9 @@ def decode_forward(
     tt_q.deallocate(True)
 
     # Concat heads and apply output projection
-    tt_sdpa_out = ttnn.experimental.nlp_concat_heads_decode(tt_sdpa_tensor, num_heads=num_local_heads)
+    tt_sdpa_out = ttnn.experimental.nlp_concat_heads_decode(
+        tt_sdpa_tensor, num_heads=num_local_heads, sub_core_grids=concat_sub_core_grids
+    )
     tt_sdpa_tensor.deallocate(True)
 
     tt_out = ttnn.linear(

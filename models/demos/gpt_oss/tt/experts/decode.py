@@ -230,9 +230,9 @@ def _decode_forward_batched(
       1. union mask  = sum over users of the dense routing weights -> [1, 1, 1, E]
                        (softmax weights are >= 0, so an expert is non-zero iff at
                        least one user picked it; computed on device, trace-safe)
-      2. gate/up/down = sparse_matmul over that mask (nnz inferred at runtime)
-      3. multiply by the dense per-(user, expert) routing weights so users that did
-         not pick an expert get exactly 0 from it, then reduce over experts
+      2. gate/up = sparse_matmul over that mask (nnz inferred at runtime), SwiGLU
+      3. multiply by the dense per-(user, expert) routing weights (on the down input, so users
+         that did not pick an expert get exactly 0 from it), down = sparse_matmul, reduce over experts
 
     Cost model: each active expert's weight slice is streamed from DRAM once, the
     same as an exact per-token gather. The extra compute (32 rows per active expert
@@ -305,8 +305,15 @@ def _decode_forward_batched(
     gate.deallocate(True)
     up.deallocate(True)
 
-    # 2b. Down projection (input is expert-batched too): [1, E, T, Ip] x [1, E, I, H] -> [1, E, T, H]
-    #     (padded K: Ip == padded I of the weight; the extra input columns are zero)
+    # 3. Per-(user, expert) routing weights [T, E] -> [1, E, T, 1]; zero for unselected pairs. Applied to the down
+    #    INPUT [1, E, T, Ip] rather than the down output [1, E, T, H] (H / Ip = 7.5x fewer elements); exact, since the
+    #    down projection is linear and its bias is folded separately below.
+    token_expert_weights = ttnn.permute(routing_weights, (1, 0))
+    token_expert_weights = ttnn.reshape(token_expert_weights, (1, num_experts, num_tokens, 1))
+    down_input = ttnn.mul(down_input, token_expert_weights, output_tensor=down_input)
+    token_expert_weights.deallocate(True)
+
+    # 4. Down projection (input is expert-batched too): [1, E, T, Ip] x [1, E, Ip, H] -> [1, E, T, H]
     down = ttnn.sparse_matmul(
         down_input,
         weights.down_proj,
@@ -316,20 +323,14 @@ def _decode_forward_batched(
         output_tile=output_tile,
         is_input_a_sparse=True,
         program_config=program_config.get_decode_down_config(
-            num_tokens, weights.down_proj.shape[-1], k=down_input.shape[-1]
+            num_tokens, weights.down_proj.shape[-1], k=down_input.shape[-1], num_users=real_tokens
         ),
         dtype=activation_dtype,
     )
     down_input.deallocate(True)
     sparsity.deallocate(True)
 
-    # 3. Per-(user, expert) routing weights [T, E] -> [1, E, T, 1]; zero for unselected pairs.
-    token_expert_weights = ttnn.permute(routing_weights, (1, 0))
-    token_expert_weights = ttnn.reshape(token_expert_weights, (1, num_experts, num_tokens, 1))
-    down = ttnn.mul(down, token_expert_weights, output_tensor=down)
-    token_expert_weights.deallocate(True)
-
-    # Reduce over experts: [1, E, T, H] -> [1, 1, T, H]. Keep the result in L1 like the batch=1 path
+    # 5. Reduce over experts: [1, E, T, H] -> [1, 1, T, H]. Keep the result in L1 like the batch=1 path
     # (the residual add and the next norm read it; the default would land in DRAM).
     next_states = ttnn.experimental.fast_reduce_nc(down, dims=[1], memory_config=ttnn.L1_MEMORY_CONFIG)
     next_states = ttnn.unsqueeze_to_4D(next_states)

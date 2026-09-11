@@ -11,7 +11,7 @@ import ttnn
 from models.demos.gpt_oss.config import MeshConfig, Mode
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 
-from .config import ExpertConfig
+from .config import SORTED_MOE_MIN_EXPERTS, ExpertConfig
 
 
 @dataclass(frozen=True)  # ✅ Make immutable to prevent accidental modification
@@ -20,15 +20,24 @@ class ExpertWeights:
 
     Gate and up projections are stored FUSED along the output dimension so the two projections run
     as one sparse_matmul in decode (the per-expert cost of that op is a fixed overhead, not bandwidth,
-    so one call with N = 2 * intermediate is ~half the price of two calls) and as one dense matmul per
-    expert in EP=1 prefill (see gate_up_proj_per_expert). Per device the fused output is
+    so one call with N = 2 * intermediate is ~half the price of two calls) and as one batched dense
+    matmul over all experts in single-row (EP=1, SP=1) prefill. Per device the fused output is
     laid out as [gate (intermediate_padded_per_device) | up (intermediate_padded_per_device)], each
     half zero-padded from intermediate_size_per_device up to a tile multiple so that the halves can
     be split at a tile boundary and fed to SwiGLU / the down projection without any re-layout.
+
+    down_proj's K (rows) is zero-padded once at load from intermediate_size_per_device to
+    intermediate_padded_per_device, the width the SwiGLU output carries: dense matmuls check the logical
+    K, and the padded activation columns are exactly zero, so one copy serves the sparse (decode, and
+    prefill on multi-row meshes: SP>1 or EP>1) and the dense (single-row EP=1, SP=1 prefill) consumers
+    alike. No other weight copies persist: the dense prefill path slices the experts it needs per call and
+    frees them. The one exception is tiny: for models with fewer than SORTED_MOE_MIN_EXPERTS experts (whose
+    long prefill splits run one matmul per expert) the fused gate/up bias is also kept per expert so that
+    ttnn.linear can fuse the bias add (E x [1, 1, 1, 2Ip] bf16 tiles, ~1.5 MB per layer for gpt-oss-20b).
     """
 
     gate_up_proj: ttnn.Tensor  # [1, E, hidden, 2 * intermediate_padded_per_device] per device
-    down_proj: ttnn.Tensor  # [1, E, intermediate_size_per_device, hidden] per device
+    down_proj: ttnn.Tensor  # [1, E, intermediate_padded_per_device, hidden] per device (K zero-padded, see above)
     gate_up_proj_bias: ttnn.Tensor  # [1, E, 2 * intermediate_padded_per_device]
     down_proj_bias: ttnn.Tensor  # [1, E, hidden]; only TP rank 0 holds non-zeros
     intermediate_size_per_device: int
@@ -37,20 +46,9 @@ class ExpertWeights:
     # directly onto [1, E, tokens, N] activations (prefill and multi-user decode) without a per-call
     # ttnn.transpose. Stored bfloat8_b (the activations it is added to are bfloat8_b).
     gate_up_proj_bias_t: ttnn.Tensor = None
-    # Per-expert views of gate_up_proj ([1, 1, hidden, 2 * intermediate_padded_per_device] each), created on device
-    # on first use by the dense prefill path (experts/prefill.py, EP=1): one dense matmul per expert over the whole
-    # token split beats the per-(32-token tile, expert) sparse_matmul by ~3x on Blackhole.
-    gate_up_proj_per_expert: list = None
-    # down_proj with K zero-padded from intermediate_size_per_device to intermediate_padded_per_device (dense matmul
-    # requires matching logical K; the sparse_matmul path compares padded shapes). Also created on first use.
-    down_proj_padded: ttnn.Tensor = None
     # Per-expert [1, 1, 1, 2 * intermediate_padded_per_device] bf16 copies of the fused gate/up bias for the dense
-    # prefill path's per-expert ttnn.linear (fused bias add). Also created on first use.
+    # per-expert prefill loop's fused-bias ttnn.linear; built at load only when num_experts < SORTED_MOE_MIN_EXPERTS.
     gate_up_proj_bias_per_expert: list = None
-    # {n: [n, n] bf16 identity} one-hot tables for the expert-sorted prefill path's scatter matmul (created on use).
-    eye_tables: dict = None
-    # Per-expert [1, 1, Ip_padded, hidden] views of down_proj_padded for the hot-expert group of the sorted path.
-    down_proj_per_expert: list = None
 
 
 def _fuse_gate_up_per_device(gate, up, tp, local, padded):
@@ -167,6 +165,16 @@ def load_expert_weights(
         cache_file_name=get_cache_file_name(tensor_cache_path, "down_proj"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    pad_k = intermediate_padded_per_device - intermediate_size_per_device
+    if pad_k > 0:
+        # One-time device-side K padding (see the class docstring); the cached file keeps the HF shape. For the
+        # block-float weight dtypes ttnn.pad round-trips the layer's shard through bf16 to zero the padding rows
+        # (a load-time transient of ~4x the shard, freed before the next layer) and returns a fresh buffer; for
+        # bf16/fp32 it pads in place and returns a view of the same buffer, which must then not be freed.
+        down_proj_padded = ttnn.pad(down_proj_tt, padding=[(0, 0), (0, 0), (0, pad_k), (0, 0)], value=0.0)
+        if weight_dtype in (ttnn.bfloat4_b, ttnn.bfloat8_b):
+            down_proj_tt.deallocate(True)
+        down_proj_tt = down_proj_padded
 
     down_proj_bias_tt = ttnn.as_tensor(
         down_proj_bias,
@@ -178,6 +186,16 @@ def load_expert_weights(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
+    gate_up_proj_bias_per_expert = None
+    if config.num_experts < SORTED_MOE_MIN_EXPERTS:
+        n = gate_up_proj_bias_t_tt.shape[-1]
+        gate_up_proj_bias_per_expert = [
+            ttnn.typecast(
+                ttnn.reshape(ttnn.slice(gate_up_proj_bias_t_tt, [e, 0, 0], [e + 1, 1, n]), (1, 1, 1, n)), bias_dtype
+            )
+            for e in range(config.num_experts)
+        ]
+
     return ExpertWeights(
         gate_up_proj=gate_up_proj_tt,
         down_proj=down_proj_tt,
@@ -186,4 +204,5 @@ def load_expert_weights(
         intermediate_size_per_device=intermediate_size_per_device,
         intermediate_padded_per_device=intermediate_padded_per_device,
         gate_up_proj_bias_t=gate_up_proj_bias_t_tt,
+        gate_up_proj_bias_per_expert=gate_up_proj_bias_per_expert,
     )

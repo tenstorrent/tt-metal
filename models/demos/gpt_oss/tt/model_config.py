@@ -201,6 +201,18 @@ class ModelArgs:
 
         model_name = self.model_name
         device_name = determine_device_name(self.mesh_device)
+        # The EP=1 expert prefill plans its expert-sorted path on the host from a device->host read of the routed
+        # token counts, which must never be captured in a trace; that path only exists above this many tokens per
+        # device, so every traced length has to stay at or below it (sp > 1 only shortens the per-device split).
+        from models.demos.gpt_oss.tt.experts.prefill import MAX_TRACEABLE_PREFILL_TOKENS
+
+        for per_device_lens in model_specific_supported_seq_lens.values():
+            for lens in per_device_lens.values():
+                if any(seq_len > MAX_TRACEABLE_PREFILL_TOKENS for seq_len in lens):
+                    raise ValueError(
+                        f"traced prefill lengths {lens} exceed the experts' traceable bound "
+                        f"{MAX_TRACEABLE_PREFILL_TOKENS} tokens"
+                    )
 
         # If there is no entry for a model in model_specific_supported_seq_lens, use the entry in default_supported_seq_lens
         result = model_specific_supported_seq_lens.get(model_name, {}).get(

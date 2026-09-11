@@ -31,12 +31,6 @@ def compute_per_device_vocab(vocab_size, num_tp):
     return 1 << (per_device - 1).bit_length()  # next power of 2
 
 
-def _corerange_cores(core_range):
-    """Row-major list of (x, y) core coordinates of a ttnn.CoreRange."""
-    start, end = core_range.start, core_range.end
-    return [(x, y) for y in range(start.y, end.y + 1) for x in range(start.x, end.x + 1)]
-
-
 def create_rope_setup(
     mesh_device,
     hf_config,
@@ -159,15 +153,21 @@ class Model:
 
             user_cores, _ = _AttnProgramConfig.get_decode_user_grid(mesh_device, max_local_batch_size)
             rope_grid = self.rope_setup.batch_grid
-            if isinstance(rope_grid, ttnn.CoreRangeSet):
-                expected = [c for cr in user_cores.ranges() for c in _corerange_cores(cr)]
-                actual = [c for cr in rope_grid.ranges() for c in _corerange_cores(cr)][: len(expected)]
-                if expected != actual:
-                    raise RuntimeError(
-                        f"RoPE core placement {actual[:4]}... does not match attention's per-user grid "
-                        f"{expected[:4]}... for max_local_batch_size={max_local_batch_size}; update "
-                        "ProgramConfig.get_decode_user_grid to mirror RotarySetup.get_batch_grid"
-                    )
+            if isinstance(rope_grid, ttnn.CoreGrid):
+                # RotarySetup returns a CoreGrid on Blackhole for batches that are multiples of 32 (rotary_embedding_llama
+                # then lays the users out row-major over it); normalise so the comparison below covers that case too.
+                rope_grid = ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(rope_grid.x - 1, rope_grid.y - 1))}
+                )
+            expected = [(c.x, c.y) for c in ttnn.corerange_to_cores(user_cores, None, True)]
+            rope_cores = [(c.x, c.y) for c in ttnn.corerange_to_cores(rope_grid, None, True)]
+            actual = rope_cores[: len(expected)]
+            if len(rope_cores) < len(expected) or expected != actual:
+                raise RuntimeError(
+                    f"RoPE core placement {actual[:4]}... does not match attention's per-user grid "
+                    f"{expected[:4]}... for max_local_batch_size={max_local_batch_size}; update "
+                    "ProgramConfig.get_decode_user_grid to mirror RotarySetup.get_batch_grid"
+                )
 
         # Keep references for compatibility
         self.cos_matrix = self.rope_setup.cos_matrix

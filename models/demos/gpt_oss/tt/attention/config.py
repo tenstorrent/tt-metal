@@ -123,28 +123,6 @@ class ProgramConfig:
         user_cores = ttnn.num_cores_to_corerangeset(batch_size, sdpa_grid, row_wise=True)
         return user_cores, sdpa_grid
 
-    @staticmethod
-    def get_decode_concat_grid(batch_size: int):
-        """Single-rectangle core grid with one core per user for nlp_concat_heads_decode's input.
-
-        The op derives its output grid from the bounding box of the input grid, so the input must be
-        exactly one CoreRange (16 users laid out row-major on a 13-wide grid, 13 + 3, is not). Pick the
-        widest w <= 8 that divides the batch with at most 8 rows; every practical batch (powers of two,
-        multiples of 8) gets a full rectangle, and a batch that fits in one row stays a row.
-        """
-        if batch_size <= 8:
-            return ttnn.num_cores_to_corerangeset(batch_size, ttnn.CoreCoord(8, 8), row_wise=True)
-        for width in range(8, 0, -1):
-            if batch_size % width == 0 and batch_size // width <= 8:
-                return ttnn.CoreRangeSet(
-                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(width - 1, batch_size // width - 1))}
-                )
-        raise ValueError(
-            f"batch size {batch_size}: nlp_concat_heads_decode needs one core per user on a single rectangle of "
-            "at most 8x8 cores and no w <= 8 with batch/w <= 8 divides this batch; pad the batch to a multiple "
-            "of 8 or a power of two (<= 32)."
-        )
-
     def get_decode_sdpa_config(self, mesh_device, batch_size: int = 1) -> ttnn.SDPAProgramConfig:
         """Get SDPA config for decode mode"""
         _, sdpa_grid = self.get_decode_user_grid(mesh_device, batch_size)

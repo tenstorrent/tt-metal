@@ -24,6 +24,13 @@ class ExpertConfig:
     alpha: float = 1.702
 
 
+# Models with at least this many experts run long prefill splits through the expert-sorted MoE (experts/prefill.py);
+# smaller ones run one matmul per expert. Measured on P150x8: the sorted path halves gpt-oss-120b (E=128) prefill at
+# ISL >= 1024 but is slower than the per-expert loop for gpt-oss-20b (E=32: ~128 routed tokens per expert per 1024
+# tokens, so the gathered rows are not much fewer and the fixed cost + host round-trip dominate).
+SORTED_MOE_MIN_EXPERTS = 64
+
+
 @dataclass
 class ProgramConfig:
     """
@@ -235,11 +242,13 @@ class ProgramConfig:
         )
 
     def get_decode_down_config(
-        self, m: int, n: int, k: int = None
+        self, m: int, n: int, k: int = None, num_users: int = None
     ) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
-        """Get program config for decode down projection (m = tokens in the step)"""
+        """Get program config for decode down projection (m = rows of the step's input tile; num_users = real users
+        in the step, which the batched path pads to a full 32-row tile -- the grid choice must see the real count)"""
         cores = self.decode_down_cores
-        if self.decode_down_cores_batched is not None and m >= self.decode_down_batched_min_tokens:
+        users = m if num_users is None else num_users
+        if self.decode_down_cores_batched is not None and users >= self.decode_down_batched_min_tokens:
             cores = self.decode_down_cores_batched
         return self._build_matmul_config(
             cores,

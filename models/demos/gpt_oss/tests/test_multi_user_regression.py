@@ -65,7 +65,8 @@ ISL_OSL_PAIRS = [
     (16384, 128),
     (32768, 128),
 ]
-BATCH_SIZES = [1, 2, 4, 8, 16, 32]
+# GPT_OSS_REGRESSION_BATCHES="22,31" overrides the batch sizes, e.g. to check a batch with no 8-wide core rectangle.
+BATCH_SIZES = [int(b) for b in os.getenv("GPT_OSS_REGRESSION_BATCHES", "1,2,4,8,16,32").split(",")]
 # Total KV tokens the sweep may allocate per mesh (512K tokens = 8192 blocks of 64 = ~2.6 GB per device on
 # the 120B at batch >= 8; smaller batches are capped at 64K per user and allocate less). Mirrors the server's
 # context-capped concurrency: a batch of B gets min(64K, 512K // B) tokens of context each.
@@ -337,7 +338,7 @@ def _run_pair(
         # pair still warms the whole batch: that call also prepares the decode trace, whose persistent page
         # table must have the full batch shape.
         warm_users = batch if not warmed_lengths else 1
-        _, compile_time = _prefill(
+        _, warm_time = _prefill(
             generator,
             models,
             tt_kv_cache,
@@ -345,6 +346,8 @@ def _run_pair(
             input_tokens[:warm_users],
             decoding_pos[:warm_users],
         )
+        if compile_time is None:  # only when this length was not pre-compiled (then this call did compile it)
+            compile_time = warm_time
         warmed_lengths.add(padded_len)
     temp_before_prefill = _wait_for_cooldown("prefill")
     logits, prefill_time = _prefill(generator, models, tt_kv_cache, page_table, input_tokens, decoding_pos)
