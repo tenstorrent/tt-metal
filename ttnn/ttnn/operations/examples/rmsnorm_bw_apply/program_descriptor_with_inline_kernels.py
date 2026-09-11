@@ -47,7 +47,8 @@ CB_GAMMA = 2
 CB_INV_RMS = 3
 CB_D = 4
 CB_OUT = 16
-CB_ACC = 17  # dgamma partial accumulator (compute-private until pushed to the writer)
+CB_ACC = 17  # dgamma per-row accumulator, compute-private (L1 pack-accumulate across rows)
+CB_PART = 18  # dgamma collapsed column tiles (row 0 valid), compute -> writer
 
 NEG_ONE_BITS = struct.unpack("<I", struct.pack("<f", -1.0))[0]
 
@@ -134,9 +135,12 @@ _COMPUTE_KERNEL = r"""
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/ternary/ternary.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/broadcast/bcast.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/generators/fill.hpp"
+#include "api/compute/compute_kernel_api.h"  // sfpu_reduce (within-tile SFPU column collapse)
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/pack.h"
 
 void kernel_main() {
-    constexpr uint32_t cb_dy = 0, cb_x = 1, cb_gamma = 2, cb_inv = 3, cb_d = 4, cb_out = 16, cb_acc = 17;
+    constexpr uint32_t cb_dy = 0, cb_x = 1, cb_gamma = 2, cb_inv = 3, cb_d = 4, cb_out = 16, cb_acc = 17, cb_part = 18;
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t neg_one_bits = get_compile_time_arg_val(1);
     constexpr uint32_t with_dgamma = get_compile_time_arg_val(4);
@@ -260,7 +264,28 @@ void kernel_main() {
         }
     }
     if constexpr (with_dgamma) {
+        // Finalize: each accumulated column tile holds 32 per-row partial sums (fp32, exact). Collapse
+        // the 32 rows on the SFPU (the same sfpu_reduce the reduce helper's AccumulateViaAdd path uses for
+        // its finalize); the column sums land in ROW 0 of the tile, rows 1..31 are stale. copy_tile reads
+        // cb_acc through unpack-to-dest so the fp32 partials reach DEST unrounded.
         cb_push_back(cb_acc, Wt);
+        cb_wait_front(cb_acc, Wt);
+        cb_reserve_back(cb_part, Wt);
+        reconfig_data_format_srca(cb_acc);
+        pack_reconfig_data_format(cb_part);
+        copy_tile_to_dst_init_short(cb_acc);
+        sfpu_reduce_init<ckernel::PoolType::SUM, DataFormat::Float32>();
+        for (uint32_t c = 0; c < Wt; ++c) {
+            tile_regs_acquire();
+            copy_tile(cb_acc, c, 0);
+            sfpu_reduce<ckernel::PoolType::SUM, DataFormat::Float32, ckernel::ReduceDim::REDUCE_COL>(0, 1, 1);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, cb_part);
+            tile_regs_release();
+        }
+        cb_push_back(cb_part, Wt);
+        cb_pop_front(cb_acc, Wt);
     }
 }
 """
@@ -272,7 +297,7 @@ _WRITER_KERNEL = r"""
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
-    constexpr uint32_t cb_out = 16, cb_acc = 17;
+    constexpr uint32_t cb_out = 16, cb_part = 18;
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t page = get_compile_time_arg_val(1);
     constexpr uint32_t with_dgamma = get_compile_time_arg_val(2);
@@ -301,16 +326,25 @@ void kernel_main() {
         cb_pop_front(cb_out, Wt);
     }
     if constexpr (with_dgamma) {
-        // this core's dgamma partial: one [32 x W] tile-row at tile-row core_idx of the partial tensor
-        cb_wait_front(cb_acc, Wt);
-        const uint32_t l1 = get_read_ptr(cb_acc);
+        // This core's dgamma partial is ROW 0 of each collapsed column tile (32 fp32 = cols 0-15 in face 0,
+        // cols 16-31 in face 1; 64 B each). Scatter those two segments into row `core_idx` of the compact
+        // partial tensor: tile-row core_idx/32, in-tile row core_idx%32 -> face (row<16 ? 0 : 2) + half,
+        // byte (row%16)*64 within the 1 KiB face. Rows of cores that do not exist stay zero (host zero-fills).
+        cb_wait_front(cb_part, Wt);
+        const uint32_t l1 = get_read_ptr(cb_part);
+        const uint32_t row = core_idx & 31u;
+        const uint32_t page_row = core_idx >> 5;
+        const uint32_t face_r = (row < 16u) ? 0u : 2u;
+        const uint32_t in_face = (row & 15u) * 64u;
 #ifndef RB_STUB_DM
         for (uint32_t c = 0; c < Wt; ++c) {
-            noc_async_write(l1 + c * page, part_acc.get_noc_addr(core_idx * Wt + c), page);
+            const uint32_t pg = page_row * Wt + c;
+            noc_async_write(l1 + c * page, part_acc.get_noc_addr(pg, face_r * 1024u + in_face), 64u);
+            noc_async_write(l1 + c * page + 1024u, part_acc.get_noc_addr(pg, (face_r + 1u) * 1024u + in_face), 64u);
         }
 #endif
         noc_async_write_barrier();
-        cb_pop_front(cb_acc, Wt);
+        cb_pop_front(cb_part, Wt);
     }
 }
 """
@@ -401,6 +435,7 @@ def create_program_descriptor(
     with_dgamma = partial is not None
     if with_dgamma:
         cbs.append(_cb(CB_ACC, Wt, page, core_ranges))
+        cbs.append(_cb(CB_PART, Wt, page, core_ranges))
 
     reader_ct = [Wt, page]
     for t in (dy, x, gamma, inv_rms, d):
@@ -471,9 +506,10 @@ def rmsnorm_bw_apply(x, dy, gamma, inv_rms, d, *, num_cores=None, with_dgamma=Fa
     """dx = gamma*dy*inv_rms - x*d, one all-SFPU chain per tile-row. Returns dx (fp32).
 
     With with_dgamma=True also returns dgamma = sum over N,C,H of dy*x/rms as a [1,1,1,W] fp32
-    tensor: each core pack-accumulates its rows' dy*x/rms into one [32, W] partial in L1, the
-    writer emits the per-core partials as a [1,1,32*num_cores,W] tensor, and a single small
-    ttnn.sum finishes the cross-core / cross-row reduction.
+    tensor: each core pack-accumulates its rows' dy*x/rms into one [32, W] fp32 window in L1,
+    collapses the 32 rows per column tile on the SFPU (sfpu_reduce, fp32), the writer scatters
+    the resulting 32-float row into row `core` of a compact [1,1,32*ceil(cores/32),W] partial
+    tensor (~ncores*W*4 bytes), and one small ttnn.sum over that finishes the cross-core reduction.
     """
     validate(x, dy, gamma, inv_rms, d)
     device = x.device()
@@ -487,8 +523,15 @@ def rmsnorm_bw_apply(x, dy, gamma, inv_rms, d, *, num_cores=None, with_dgamma=Fa
     n, c, h, w = x.shape
     grid = device.compute_with_storage_grid_size()
     ncores = min(num_cores or grid.x * grid.y, grid.x * grid.y, n * c * (h // TILE))
-    partial = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([1, 1, TILE * ncores, w]), ttnn.float32, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    # Compact partials: core k owns ROW k. Must be zero-filled: rows >= ncores in the last tile-row are
+    # never written, and the final sum runs over every row.
+    partial_rows = TILE * ((ncores + TILE - 1) // TILE)
+    partial = ttnn.zeros(
+        ttnn.Shape([1, 1, partial_rows, w]),
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     desc = create_program_descriptor(x, dy, gamma, inv_rms, d, out, partial, num_cores=ncores, **debug)
     # generic_op returns io_tensors.back(); both `out` and `partial` are written by the program.
