@@ -37,6 +37,12 @@ serve:
   block_size: 64
   capabilities:
     tool_parser: olmo3
+  # Olmo 3 ends a tool-call turn with <|im_end|> (100265): in its chat template a function_calls turn is always followed by
+  # an environment turn, so the model never learned to emit eos (<|endoftext|>, 100257) there. generation_config.json lists
+  # only 100257, so after </function_calls> generation ran on and hallucinated the environment/user/assistant turns
+  # (OpenCode T7: read(...) delivered as content, no tool call). Declaring <|im_end|> as a stop token ends the turn cleanly.
+  args:
+    - [--override-generation-config, '{"eos_token_id": [100257, 100265]}']
   additional_config:
     tt:
       trace_region_size: 160000000
