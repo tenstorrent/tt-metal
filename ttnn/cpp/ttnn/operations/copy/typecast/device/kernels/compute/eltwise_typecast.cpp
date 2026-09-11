@@ -37,6 +37,15 @@ void kernel_main() {
             // Pop tile after tile, copy to DST and pack
             dfb_in.wait_front(1);
 
+#ifdef ARCH_QUASAR
+            // [#51270] Re-arm the datacopy unpack/math for EVERY tile on Quasar. Here bf16->fp32 runs a
+            // real SFPU op (typecast.h), and TYPECAST_LLK_INIT / TYPECAST_LLK below reconfigure the
+            // unpacker. A single copy_init before the loop therefore leaves the 2nd+ tile's copy_tile
+            // mis-armed, so it loads nothing into the next DEST half (half-sync ping-pong) and the tile
+            // packs all zeros (confirmed by DPRINT: tile 1 fp32bits = 0). WH/BH keep the single pre-loop
+            // copy_init: there bf16->fp32 is a packer no-op, so nothing reconfigures between tiles.
+            copy_init(dfb::in);
+#endif
             copy_tile(dfb::in, 0, 0);
 
             TYPECAST_LLK_INIT();
