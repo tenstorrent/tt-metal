@@ -2,8 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for Megatron sequence parallelism (``TPStrategy.TENSOR_SEQUENCE``) on Llama.
-The oracle is classic tensor parallelism.
+"""Megatron sequence parallelism (``TPStrategy.TENSOR_SEQUENCE``) on Llama.
+The oracle is classic tensor parallelism on the same weights.
 """
 
 from __future__ import annotations
@@ -15,11 +15,9 @@ import ttnn
 import ttml
 from ttml.models import EmbeddingPlacement, WeightTyingType
 from ttml.models.llama import Llama, LlamaConfig
-from ttml.models.llama.gqattn import GroupedQueryAttention
-from ttml.parallel import TPStrategy
-from ttml.testing import assert_within_ulp, read_mesh_tensor
-
-pytestmark = pytest.mark.requires_device
+from ttml.modules import LoraConfig, LoraModel
+from ttml.parallel import TPStrategy, is_sequence_parallel
+from ttml.testing import assert_within_ulp
 
 TP_AXIS_SIZE = 2  # the 'tp' extent of conftest's tp_mesh fixture
 
@@ -36,10 +34,11 @@ N_KV_HEADS = 2
 N_LAYERS = 2
 INTERMEDIATE = 128
 VOCAB = 128
-NATIVE = ttml.autograd.PreferredPrecision.NATIVE
+TP, SP = TPStrategy.TENSOR, TPStrategy.TENSOR_SEQUENCE
+PLACEMENTS = list(EmbeddingPlacement)
 
 
-def config(tp_strategy: TPStrategy, seq_len: int = SEQ_LEN) -> LlamaConfig:
+def config(tp_strategy: TPStrategy, placement=EmbeddingPlacement.VocabParallel, **overrides) -> LlamaConfig:
     return LlamaConfig(
         hidden_size=HIDDEN,
         num_attention_heads=N_HEADS,
@@ -47,22 +46,25 @@ def config(tp_strategy: TPStrategy, seq_len: int = SEQ_LEN) -> LlamaConfig:
         num_hidden_layers=N_LAYERS,
         intermediate_size=INTERMEDIATE,
         vocab_size=VOCAB,
-        max_position_embeddings=seq_len,
+        max_position_embeddings=SEQ_LEN,
         tp_strategy=tp_strategy,
-        embedding_placement=EmbeddingPlacement.VocabParallel,
+        embedding_placement=placement,
         weight_tying=WeightTyingType.Disabled,
+        **overrides,
     )
 
 
-def paired_models() -> tuple[Llama, Llama]:
-    """A TP model and an SP model holding bitwise-identical weights."""
-    tp_model, sp_model = Llama(config(TPStrategy.TENSOR)), Llama(config(TPStrategy.TENSOR_SEQUENCE))
-    source, destination = tp_model.parameters(), sp_model.parameters()
-    assert set(source.keys()) == set(destination.keys())
-    for name in source.keys():
-        destination[name].set_value(source[name].get_value(NATIVE))
-        assert destination[name].get_value(NATIVE).dtype == source[name].get_value(NATIVE).dtype, name
-    return tp_model, sp_model
+def paired_models(placement=EmbeddingPlacement.VocabParallel, **overrides) -> tuple[Llama, Llama]:
+    """A TP model and an SP model built from one seed: the same weights in independent storage."""
+    models = []
+    for strategy in (TP, SP):
+        ttml.manual_seed(0)
+        models.append(Llama(config(strategy, placement, **overrides)))
+    return tuple(models)
+
+
+def adamw(model):
+    return ttml.optimizers.AdamW(model.parameters(), ttml.optimizers.AdamWConfig.make(1e-2, 0.9, 0.999, 1e-8, 0.0))
 
 
 def token_ids(batch: int, seq_len: int, seed: int):
@@ -75,93 +77,137 @@ def causal_mask(seq_len: int):
     return ttml.autograd.Tensor.from_numpy(mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)
 
 
-def rope_params(seq_len: int = SEQ_LEN):
-    return ttml.ops.rope.build_rope_params(seq_len, HIDDEN // N_HEADS, 500000.0, ttml.ops.rope.RopeScalingParams())
+def per_rank(tensor) -> np.ndarray:
+    """Every tp rank's copy of ``tensor`` stacked along dim 1, which is 1 on every tensor here, so SP
+    and TP tensors compare rank by rank whatever their placement. The layout is imposed by a composer
+    rather than read off the tensor: activation and gradient topologies are stale after collectives."""
+    mesh = ttml.mesh()
+    dims = [0] * len(mesh.shape)
+    dims[mesh.axis_index("tp")] = 1
+    device = ttml.autograd.AutoContext.get_instance().get_device()
+    composer = ttnn.create_mesh_composer(device, ttnn.MeshComposerConfig(dims))
+    return tensor.to_numpy(ttnn.DataType.FLOAT32, composer=composer).astype(np.float64)
 
 
+def backward(model, ids, mask) -> None:
+    model.train()
+    model(ids, mask).backward(retain_graph=False)
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
+def assert_same_grads(sp_model, tp_model, label: str = "") -> None:
+    tp_params, sp_params = tp_model.parameters(), sp_model.parameters()
+    assert set(tp_params.keys()) == set(sp_params.keys())
+    for name, tp_param in tp_params.items():
+        if not tp_param.get_requires_grad():
+            continue
+        assert sp_params[name].is_grad_initialized(), f"{name}: SP grad missing"
+        assert_within_ulp(
+            per_rank(sp_params[name].get_grad_tensor()),
+            per_rank(tp_param.get_grad_tensor()),
+            f"grad {name} {label}",
+            MAX_ULP,
+        )
+
+
+@pytest.fixture(autouse=True)
+def reset_graph():
+    yield
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
+@pytest.mark.requires_device
 @pytest.mark.usefixtures("tp_mesh")
 class TestMatchesTensorParallel:
+    @pytest.mark.parametrize("placement", PLACEMENTS, ids=lambda p: p.name)
     @pytest.mark.parametrize("batch", [1, 2])
-    def test_logits(self, batch):
-        tp_model, sp_model = paired_models()
+    def test_logits(self, placement, batch):
+        tp_model, sp_model = paired_models(placement)
         tp_model.eval()
         sp_model.eval()
-
         ids, mask = token_ids(batch, SEQ_LEN, seed=1234 + batch), causal_mask(SEQ_LEN)
+
         # Logits stay vocab-sharded under both strategies (gather_output=False).
-        tp_logits = read_mesh_tensor(tp_model(ids, mask), {"tp": 3})
-        sp_logits = read_mesh_tensor(sp_model(ids, mask), {"tp": 3})
+        tp_logits, sp_logits = per_rank(tp_model(ids, mask)), per_rank(sp_model(ids, mask))
 
         assert tp_logits.std() > 1e-3, "logits are ~constant; agreement would prove nothing"
-        assert_within_ulp(sp_logits, tp_logits, f"logits batch={batch}", MAX_ULP)
+        assert_within_ulp(sp_logits, tp_logits, f"logits {placement.name} batch={batch}", MAX_ULP)
 
-    def test_gradients_after_sequence_parallel_sync(self):
-        tp_model, sp_model = paired_models()
+    @pytest.mark.parametrize("placement", PLACEMENTS, ids=lambda p: p.name)
+    def test_gradients_after_sync(self, placement):
+        tp_model, sp_model = paired_models(placement, attention_bias=True)
         ids, mask = token_ids(1, SEQ_LEN, seed=77), causal_mask(SEQ_LEN)
         for model in (tp_model, sp_model):
-            model.train()
-            model(ids, mask).backward(retain_graph=False)
+            backward(model, ids, mask)
 
-        ttml.sync_sequence_parallel_gradients(sp_model.parameters(), "tp")
+        ttml.sync_gradients(sp_model.parameters())
 
-        tp_params, sp_params = tp_model.parameters(), sp_model.parameters()
-        for name in tp_params.keys():
-            assert tp_params[name].is_grad_initialized(), f"{name}: TP grad missing"
-            assert sp_params[name].is_grad_initialized(), f"{name}: SP grad missing"
-            assert_within_ulp(
-                read_mesh_tensor(sp_params[name].get_grad_tensor()),
-                read_mesh_tensor(tp_params[name].get_grad_tensor()),
-                f"grad {name}",
-                MAX_ULP,
-            )
+        assert_same_grads(sp_model, tp_model)
+
+    def test_gradients_after_an_optimizer_step(self):
+        """The optimizer rewrites each parameter's mesh topology in place; the sync must not read it."""
+        tp_model, sp_model = paired_models()
+        optimizers = [adamw(model) for model in (tp_model, sp_model)]
+        for step in range(2):
+            ids, mask = token_ids(1, SEQ_LEN, seed=step), causal_mask(SEQ_LEN)
+            for model, optimizer in zip((tp_model, sp_model), optimizers):
+                optimizer.zero_grad()
+                backward(model, ids, mask)
+            ttml.sync_gradients(sp_model.parameters())
+            assert_same_grads(sp_model, tp_model, f"step {step}")
+            for optimizer in optimizers:
+                optimizer.step()
+
+    def test_lora(self):
+        """The adapters reuse the base layers' collectives, so SP needs no LoRA-specific math."""
+        tp_model, sp_model = paired_models()
+        lora = LoraConfig(
+            rank=8, target_modules=["qkv_linear", "out_linear", "w_gate_up", "w2"], trainable_modules=["_norm", "ln_fc"]
+        )
+        wrapped = []
+        for model in (tp_model, sp_model):
+            np.random.seed(0)  # lora_A is drawn from numpy's global RNG
+            wrapped.append(LoraModel(model, lora))
+        tp_lora, sp_lora = wrapped
+        ids, mask = token_ids(1, SEQ_LEN, seed=9), causal_mask(SEQ_LEN)
+        for model in (tp_lora, sp_lora):
+            backward(model, ids, mask)
+
+        ttml.sync_gradients(sp_lora.parameters())
+
+        assert_same_grads(sp_lora, tp_lora)
+
+    def test_marks_the_parameters_of_the_sequence_sharded_region(self):
+        """Exactly the norm gains and the row-parallel bias see a per-rank slice of the sequence."""
+        tp_model, sp_model = paired_models(attention_bias=True)
+        assert not any(is_sequence_parallel(p) for _, p in tp_model.parameters().items())
+
+        marked = {name for name, p in sp_model.parameters().items() if is_sequence_parallel(p)}
+        per_block = ("attention_norm/gamma", "mlp_norm/gamma", "attention/out_linear/bias")
+        expected = {f"Llama/blocks/{i}/{suffix}" for i in range(N_LAYERS) for suffix in per_block}
+        assert marked == expected | {"Llama/ln_fc/gamma"}
 
 
+@pytest.mark.requires_device
 @pytest.mark.usefixtures("tp_mesh")
 class TestValidation:
-    def test_rejects_replicated_embedding(self, expect_error):
-        with expect_error(ValueError, "sequence parallelism needs the embedding"):
-            LlamaConfig(
-                hidden_size=HIDDEN,
-                num_attention_heads=N_HEADS,
-                num_key_value_heads=N_KV_HEADS,
-                intermediate_size=INTERMEDIATE,
-                max_position_embeddings=SEQ_LEN,
-                tp_strategy=TPStrategy.TENSOR_SEQUENCE,
-                embedding_placement=EmbeddingPlacement.Replicated,
-            )
-
-    def test_rejects_max_positions_not_divisible_by_32_tp(self, expect_error):
-        with expect_error(ValueError, "max_position_embeddings divisible by"):
-            config(TPStrategy.TENSOR_SEQUENCE, seq_len=32)
-
     def test_rejects_input_sequence_not_divisible_by_32_tp(self, expect_error):
-        """The config gate covers max_position_embeddings; a shorter input needs its own."""
-        model = Llama(config(TPStrategy.TENSOR_SEQUENCE))
+        model = Llama(config(SP))
         with expect_error(ValueError, "input sequence length divisible by"):
             model(token_ids(1, 32, seed=5), causal_mask(32))
 
-    def test_rejects_kv_cache_decode(self, expect_error):
-        """Single-token decode has nothing to shard along the sequence."""
-        attention = GroupedQueryAttention(
-            embedding_size=HIDDEN,
-            num_heads=N_HEADS,
-            num_groups=N_KV_HEADS,
-            dropout=0.0,
-            rope_params=rope_params(),
-            tp_strategy=TPStrategy.TENSOR_SEQUENCE,
-        )
-        hidden = ttml.autograd.Tensor.from_numpy(
-            np.zeros((1, 1, SEQ_LEN, HIDDEN), np.float32), ttnn.Layout.TILE, ttnn.DataType.BFLOAT16
-        )
+    def test_rejects_kv_cache(self, expect_error):
+        """Single-token decode has no sequence to shard, so the model refuses before any collective."""
+        model = Llama(config(SP))
         kv_cache = ttml.models.KvCache(
             num_layers=N_LAYERS,
             batch_size=1,
-            num_groups=attention.num_groups,
+            num_groups=N_KV_HEADS // TP_AXIS_SIZE,
             max_seq_len=SEQ_LEN,
             head_dim=HIDDEN // N_HEADS,
         )
         with expect_error(NotImplementedError, "sequence_parallel does not support"):
-            attention(hidden, causal_mask(SEQ_LEN), kv_cache=kv_cache, layer_idx=0, new_tokens=1)
+            model(token_ids(1, SEQ_LEN, seed=5), causal_mask(SEQ_LEN), kv_cache=kv_cache, new_tokens=SEQ_LEN)
 
 
 class TestTPStrategy:

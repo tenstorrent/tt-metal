@@ -12,7 +12,7 @@ import ttml
 from ttml.modules import AbstractModuleBase, Parameter, RunMode, LinearLayer, ColumnParallelLinear, RowParallelLinear
 
 from .gqattn import GroupedQueryAttention
-from ttml.parallel import TPStrategy
+from ttml.parallel import TPStrategy, mark_sequence_parallel
 
 
 def compute_swiglu_intermediate_size(hidden_size: int, multiple_of: int = 256) -> int:
@@ -33,6 +33,7 @@ class RMSNormLayer(AbstractModuleBase):
         features: int,
         epsilon: float = 1e-5,
         use_composite: bool = False,
+        sequence_parallel: bool = False,
     ) -> None:
         super().__init__()
 
@@ -41,6 +42,8 @@ class RMSNormLayer(AbstractModuleBase):
 
         gamma_shape = (1, 1, 1, features)
         self.gamma = Parameter(ttml.init.ones()(gamma_shape))
+        if sequence_parallel:
+            mark_sequence_parallel(self.gamma)
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         """Forward pass of RMSNorm.
@@ -77,7 +80,10 @@ class LlamaMLP(AbstractModuleBase):
 
         self.embedding_size = embedding_size
         self.dropout_prob = dropout
-        self.use_tp = use_tp
+        # Classic TP replicates activations across tp ranks, which must then drop the same units; one
+        # boolean cannot also decorrelate DP groups: https://github.com/tenstorrent/tt-metal/issues/55947.
+        # Under SP every rank holds different tokens.
+        self._per_device_dropout_seed = not use_tp or sequence_parallel
 
         if intermediate_size is None:
             intermediate_size = compute_swiglu_intermediate_size(embedding_size)
@@ -141,9 +147,7 @@ class LlamaMLP(AbstractModuleBase):
         x = self.w2(h)
 
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
-            # One boolean cannot decorrelate DP groups, leaving a DP+TP mesh
-            # on a single mask: https://github.com/tenstorrent/tt-metal/issues/55947
-            x = ttml.ops.dropout.dropout(x, self.dropout_prob, use_per_device_seed=not self.use_tp)
+            x = ttml.ops.dropout.dropout(x, self.dropout_prob, use_per_device_seed=self._per_device_dropout_seed)
 
         return x
 
@@ -165,18 +169,15 @@ class LlamaBlock(AbstractModuleBase):
     ) -> None:
         super().__init__()
 
-        # Under sequence parallelism the residual stream (and hence the two RMSNorm
-        # inputs) is sequence-sharded across the TP axis; the norms are per-token so
-        # they need no change. The attention/MLP linears gather to full sequence for
-        # their matmuls and reduce-scatter back, so the block wiring is unchanged.
+        sequence_parallel = tp_strategy.sequence_parallel
         self.mlp = LlamaMLP(
             hidden_size,
             intermediate_size,
             mlp_dropout,
             tp_strategy=tp_strategy,
         )
-        self.attention_norm = RMSNormLayer(hidden_size)
-        self.mlp_norm = RMSNormLayer(hidden_size)
+        self.attention_norm = RMSNormLayer(hidden_size, sequence_parallel=sequence_parallel)
+        self.mlp_norm = RMSNormLayer(hidden_size, sequence_parallel=sequence_parallel)
         self.attention = GroupedQueryAttention(
             embedding_size=hidden_size,
             num_heads=num_attention_heads,

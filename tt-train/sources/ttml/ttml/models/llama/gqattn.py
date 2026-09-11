@@ -49,6 +49,9 @@ class GroupedQueryAttention(AbstractModuleBase):
         self.dropout_prob = dropout
         self.rope_params = rope_params
         self.sequence_parallel = sequence_parallel
+        # Identical masks across tp ranks that hold identical activations,
+        # per-device masks once SP gives each rank its own tokens.
+        self._per_device_dropout_seed = not use_tp or sequence_parallel
 
         head_dim = embedding_size // num_heads
         qkv_dim = (num_heads + 2 * num_groups) * head_dim  # == embedding_size + 2 * num_groups * head_dim
@@ -121,9 +124,8 @@ class GroupedQueryAttention(AbstractModuleBase):
 
         out = self.out_linear(attention)
 
-        # Apply dropout if in training mode (using RunMode from AbstractModuleBase)
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
-            out = ttml.ops.dropout.dropout(out, self.dropout_prob)
+            out = ttml.ops.dropout.dropout(out, self.dropout_prob, use_per_device_seed=self._per_device_dropout_seed)
 
         return out
 
@@ -168,9 +170,8 @@ class GroupedQueryAttention(AbstractModuleBase):
 
         out = self.out_linear(attention)
 
-        # Apply dropout if in training mode (using RunMode from AbstractModuleBase)
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
-            out = ttml.ops.dropout.dropout(out, self.dropout_prob)
+            out = ttml.ops.dropout.dropout(out, self.dropout_prob, use_per_device_seed=self._per_device_dropout_seed)
 
         return out
 
@@ -185,10 +186,8 @@ class GroupedQueryAttention(AbstractModuleBase):
         if kv_cache is None:
             return self.forward_no_kv(input, mask)
         if self.sequence_parallel:
-            # SP shards the residual stream along the sequence; single-token decode
-            # (seq=1, not divisible by tp) has nothing to shard. Decode runs with the
-            # classic-TP model instead.
-            raise NotImplementedError("sequence_parallel does not support the KV-cache decode path")
+            # Single-token decode has no sequence to shard.
+            raise NotImplementedError("sequence_parallel does not support the KV-cache path")
         if layer_idx is None or new_tokens is None:
             raise ValueError("forward with kv_cache requires layer_idx and new_tokens to be set")
         return self.forward_kv(input, mask, kv_cache, layer_idx, new_tokens)

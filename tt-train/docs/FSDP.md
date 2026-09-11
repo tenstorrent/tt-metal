@@ -75,7 +75,7 @@ logits = model(input_tokens, mask)
 loss = ttml.ops.loss.cross_entropy_loss(logits, targets, reduce=ttml.ops.ReduceType.MEAN)
 loss.backward(False)
 
-ttml.sync_gradients(model.parameters())  # no-op on a pure-FSDP mesh
+ttml.sync_gradients(model.parameters())  # managed params are already reduce-scattered; averages only unsharded ones
 optimizer.step()
 ```
 
@@ -231,10 +231,9 @@ host-roundtrip:
 
 ### Gradient sync
 
-`ttml.sync_gradients(model.parameters(), axis_names=("dp",))` continues to
-work exactly like in DDP. For pure-FSDP runs (no `"dp"` axis on the mesh)
-it is a no-op: gradients have already been reduce-scattered in
-`backward_post`. For a hybrid mesh (`"fsdp"` and `"dp"`), each parameter
+`ttml.sync_gradients(model.parameters())` continues to work exactly like in
+DDP. For pure-FSDP runs it leaves FSDP-managed parameters alone: their
+gradients have already been reduce-scattered in `backward_post`. For a hybrid mesh (`"fsdp"` and `"dp"`), each parameter
 is filtered per-axis: FSDP-sharded params skip the `"fsdp"` axis (already
 reduce-scattered) but still all-reduce on the `"dp"` axis (replicated
 across DP groups). The same call covers both cases, no rewrites needed.
@@ -296,7 +295,7 @@ In this layout:
 - During backward:
   - The FSDP backward-post hook reduce-scatters grads across the
     `"fsdp"` axis (size F) — same as pure FSDP.
-  - `ttml.sync_gradients(params, axis_names=("dp", "fsdp"))` then runs
+  - `ttml.sync_gradients(params)` then runs
     a per-param filter: FSDP-managed grads skip the `"fsdp"` axis
     (already reduce-scattered) but all-reduce across `"dp"` to average
     each shard over DP replicas. Any non-FSDP / replicated parameter
@@ -335,7 +334,7 @@ In this layout:
   outside the training loop.
 - **`ttml.fsdp.is_fsdp_managed(param.tensor)`** returns `True` for any
   parameter `fully_shard` has touched. The marker is what
-  `sync_gradients` uses to decide which axes to skip per parameter.
+  `average_gradients` uses to decide which axes to skip per parameter.
 
 ---
 

@@ -21,7 +21,7 @@ from ttml.modules import (
 
 from .. import EmbeddingPlacement, RunnerType, WeightTyingType, memory_efficient_runner
 from .autograd_ops import SliceLastDim
-from ttml.parallel import TPStrategy
+from ttml.parallel import SEQUENCE_DIM, TPStrategy
 from .transformer import LlamaBlock, RMSNormLayer, compute_swiglu_intermediate_size
 
 
@@ -47,8 +47,7 @@ class LlamaConfig:
 
     ``embedding_placement`` selects how the token-embedding table is placed across the
     TP axis (see :class:`EmbeddingPlacement`); it defaults to ``Replicated`` (no
-    sharding) and is ignored when tensor parallelism is disabled. ``Replicated`` is
-    incompatible with ``TPStrategy.TENSOR_SEQUENCE``.
+    sharding) and is ignored when tensor parallelism is disabled.
     """
 
     hidden_size: int = 384
@@ -130,22 +129,6 @@ class LlamaConfig:
                     f"intermediate_size={intermediate_size}, tp_size={tp_size}"
                 )
 
-        if self.tp_strategy.sequence_parallel:
-            if self.embedding_placement == EmbeddingPlacement.Replicated:
-                raise ValueError(
-                    "sequence parallelism needs the embedding output sharded along the sequence, "
-                    "which the replicated embedding cannot produce. Set embedding_placement to "
-                    "VocabParallel or FeatureParallel, or use TPStrategy.TENSOR."
-                )
-            # Each TP rank owns S/tp_size sequence positions and the sequence
-            # reduce-scatter requires the per-shard tile count to divide the ring.
-            tp_size = ttml.mesh().axis_size("tp")
-            if self.max_position_embeddings % (32 * tp_size) != 0:
-                raise ValueError(
-                    "sequence_parallel requires max_position_embeddings divisible by 32*tp_size "
-                    f"(got max_position_embeddings={self.max_position_embeddings}, tp_size={tp_size})"
-                )
-
 
 class Llama(AbstractModuleBase):
     """Llama decoder-only transformer (Python implementation)."""
@@ -154,6 +137,7 @@ class Llama(AbstractModuleBase):
         super().__init__()
 
         self.config = config
+        sequence_parallel = config.tp_strategy.sequence_parallel
 
         if config.tp_strategy.tensor_parallel:
             # Pad the vocab so the LM head's sharded output rows are
@@ -163,42 +147,36 @@ class Llama(AbstractModuleBase):
             # columns are kept on-device and handled by the downstream
             # vocab_parallel_cross_entropy_loss, so ``config.vocab_size`` is
             # free to be arbitrary.
-            tp_size = ttml.mesh().axis_size("tp")
-            align = 32 * tp_size
+            mesh = ttml.mesh()
+            self.tp_size = mesh.axis_size("tp")
+            self._tp_axis = mesh.axis_index("tp")
+            align = 32 * self.tp_size
             self.padded_vocab_size = ((config.vocab_size + align - 1) // align) * align
             # No gather after LM head, because vocab_parallel_cross_entropy_loss
-            # expects a vocab-sharded tensor.
+            # expects a vocab-sharded tensor. Under SP the head input is sequence-sharded
+            # and the column-parallel input gather restores the full sequence, so the
+            # logits come out exactly as in classic TP.
             self.fc = ColumnParallelLinear(
                 config.hidden_size,
                 self.padded_vocab_size,
                 has_bias=False,
                 gather_output=False,
-                # Under SP the head input (ln_fc output) is sequence-sharded; the
-                # column-parallel gather restores the full sequence, yielding
-                # full-sequence vocab-sharded logits -- exactly what the classic-TP
-                # path produces, so vocab_parallel_cross_entropy_loss is unchanged.
-                sequence_parallel=config.tp_strategy.sequence_parallel,
+                sequence_parallel=sequence_parallel,
                 axis_name="tp",
             )
             if config.embedding_placement == EmbeddingPlacement.VocabParallel:
-                # Under SP the embedding output is reduce-scattered along the
-                # sequence so the first block receives a sequence-sharded residual.
                 self.tok_emb = VocabParallelEmbedding(
                     self.padded_vocab_size,
                     config.hidden_size,
                     weight_init=ttml.init.normal(0.0, 0.02),
-                    sequence_parallel=config.tp_strategy.sequence_parallel,
+                    sequence_parallel=sequence_parallel,
                     axis_name="tp",
                 )
             elif config.embedding_placement == EmbeddingPlacement.FeatureParallel:
-                # Under SP the gathered full-hidden embedding is additionally
-                # scattered along the sequence, so the first block receives a
-                # sequence-sharded residual.
                 self.tok_emb = FeatureParallelEmbedding(
                     self.padded_vocab_size,
                     config.hidden_size,
                     weight_init=ttml.init.normal(0.0, 0.02),
-                    sequence_parallel=config.tp_strategy.sequence_parallel,
                     axis_name="tp",
                 )
             else:
@@ -208,6 +186,7 @@ class Llama(AbstractModuleBase):
                     weight_init=ttml.init.normal(0.0, 0.02),
                 )
         else:
+            self.tp_size = 1
             self.padded_vocab_size = ((config.vocab_size + 31) // 32) * 32
             self.fc = LinearLayer(
                 config.hidden_size,
@@ -222,6 +201,10 @@ class Llama(AbstractModuleBase):
 
         if config.weight_tying == ttml.models.WeightTyingType.Enabled:
             self.tok_emb.weight = self.fc.weight
+
+        # Block 0 needs a sequence-sharded residual. Embeddings that emit the full sequence
+        # on every rank are sliced locally; the vocab-parallel one already lands sharded.
+        self._slice_sequence = sequence_parallel and not isinstance(self.tok_emb, VocabParallelEmbedding)
 
         head_dim = config.hidden_size // config.num_attention_heads
 
@@ -257,7 +240,7 @@ class Llama(AbstractModuleBase):
             ]
         )
 
-        self.ln_fc = RMSNormLayer(config.hidden_size)
+        self.ln_fc = RMSNormLayer(config.hidden_size, sequence_parallel=sequence_parallel)
 
     def forward(
         self,
@@ -274,11 +257,15 @@ class Llama(AbstractModuleBase):
         padded_seq_len = ((actual_seq_len + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
 
         if self.config.tp_strategy.sequence_parallel:
-            tp_size = ttml.mesh().axis_size("tp")
-            if actual_seq_len % (TILE_SIZE * tp_size) != 0:
+            if kv_cache is not None:
+                raise NotImplementedError(
+                    "sequence_parallel does not support the KV-cache path: single-token decode has "
+                    "no sequence to shard. Run inference with TPStrategy.TENSOR."
+                )
+            if actual_seq_len % (TILE_SIZE * self.tp_size) != 0:
                 raise ValueError(
                     "sequence_parallel requires the input sequence length divisible by 32*tp_size "
-                    f"(got seq_len={actual_seq_len}, tp_size={tp_size})"
+                    f"(got seq_len={actual_seq_len}, tp_size={self.tp_size})"
                 )
 
         input_padded = input
@@ -301,6 +288,9 @@ class Llama(AbstractModuleBase):
             step = [1, 1, 1, 1]
             out_val = ttnn.slice(tok_emb_out.get_value(), slice_start, slice_end, step)
             out = ttml.autograd.create_tensor(out_val)
+
+        if self._slice_sequence:
+            out = ttml.ops.distributed.scatter(out, SEQUENCE_DIM, self._tp_axis)
 
         for layer_idx, block in enumerate(self.blocks):
             extra_args = () if kv_cache is None else (kv_cache, layer_idx, new_tokens)

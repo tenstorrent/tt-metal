@@ -669,7 +669,7 @@ class GRPOTrainer:
                 optimizer.set_lr(base_lr * warmup_factor)
 
                 if fsdp_enabled:
-                    ttml.sync_gradients(tt_model.parameters(), axis_names=fsdp_sync_axes)
+                    ttml.sync_gradients(tt_model.parameters())
                 elif ddp_context_enabled:
                     # Parallelism-context DDP (Llama completer): a parallelism
                     # context is initialized, so use its gradient sync.
@@ -684,7 +684,7 @@ class GRPOTrainer:
                     # axis — the same primitive FSDP uses. The loss normalization
                     # divides by ``grad_sync_world_size`` (= the "dp" axis size
                     # here), matched to this reduction.
-                    ttml.sync_gradients(tt_model.parameters(), axis_names=("dp",))
+                    ttml.sync_gradients(tt_model.parameters())
 
                 for cb in self.callbacks:
                     cb.on_before_optimizer_step(self)

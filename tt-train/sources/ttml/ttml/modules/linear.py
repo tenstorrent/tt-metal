@@ -10,13 +10,26 @@ import ml_dtypes
 import ttnn
 import ttml
 
+from ttml.parallel import SEQUENCE_DIM, mark_sequence_parallel
+
 from .module_base import AbstractModuleBase
 from .parameter import Parameter
 
-# Activations flow as 4-D tensors ``(B, 1, S, H)``; the sequence dimension is axis 2.
-# Under Megatron sequence parallelism the residual stream is sharded along this axis
-# across the tensor-parallel mesh axis, so the SP collectives target dim 2.
-_SEQUENCE_DIM = 2
+
+def column_parallel_input(x, cluster_axis: int, sequence_parallel: bool):
+    """The input of a column-parallel matmul: the full sequence, replicated on every TP rank."""
+    if sequence_parallel:
+        return ttml.ops.distributed.all_gather(
+            x, SEQUENCE_DIM, cluster_axis, ttml.ops.distributed.GradOutputType.SHARDED
+        )
+    return ttml.ops.distributed.broadcast(x, cluster_axis)
+
+
+def row_parallel_output(x, cluster_axis: int, sequence_parallel: bool, input_is_parallel: bool):
+    """The output of a row-parallel matmul: the partial products summed across TP ranks."""
+    if sequence_parallel:
+        return ttml.ops.distributed.reduce_scatter(x, SEQUENCE_DIM, cluster_axis)
+    return ttml.ops.distributed.all_reduce(x, input_is_parallel, cluster_axis)
 
 
 class LinearLayer(AbstractModuleBase):
@@ -144,13 +157,7 @@ class ColumnParallelLinear(AbstractModuleBase):
             self.bias = None
 
     def forward(self, x):
-        if self.sequence_parallel:
-            x = ttml.ops.distributed.all_gather(
-                x, _SEQUENCE_DIM, self.cluster_axis, ttml.ops.distributed.GradOutputType.SHARDED
-            )
-        else:
-            # Broadcast ensures the input is replicated across all TP devices.
-            x = ttml.ops.distributed.broadcast(x, self.cluster_axis)
+        x = column_parallel_input(x, self.cluster_axis, self.sequence_parallel)
         bias_t = self.bias.tensor if self.bias is not None else None
         x = ttml.ops.linear.linear(x, self.weight.tensor, bias_t)
         if self.gather_output:
@@ -222,6 +229,8 @@ class RowParallelLinear(AbstractModuleBase):
         if has_bias:
             bias_shape = (1, 1, 1, out_features)
             self.bias = Parameter(bias_init(bias_shape))
+            if sequence_parallel:
+                mark_sequence_parallel(self.bias)
         else:
             self.bias = None
 
@@ -230,12 +239,7 @@ class RowParallelLinear(AbstractModuleBase):
             # Split the input along the feature dimension across TP devices.
             x = ttml.ops.distributed.scatter(x, 3, self.cluster_axis)
         x = ttml.ops.linear.linear(x, self.weight.tensor, None)
-        if self.sequence_parallel:
-            # SP: sum partial products across TP and re-shard along the sequence in one step.
-            x = ttml.ops.distributed.reduce_scatter(x, _SEQUENCE_DIM, self.cluster_axis)
-        else:
-            # Sum partial products across TP devices to obtain the full result.
-            x = ttml.ops.distributed.all_reduce(x, self.input_is_parallel, self.cluster_axis)
+        x = row_parallel_output(x, self.cluster_axis, self.sequence_parallel, self.input_is_parallel)
         if self.bias is not None:
             x = ttml.ops.binary.add(x, self.bias.tensor)
         return x

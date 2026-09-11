@@ -430,7 +430,7 @@ When the completer opens a named mesh with an `"fsdp"` axis (size > 1), the
    `per_device_train_batch_size` landing on each device.
    `per_device_train_batch_size * num_devices` must be divisible by
    `num_generations` so each prompt's GRPO group stays intact within the batch.
-2. Synchronizes gradients with `ttml.sync_gradients(params, axis_names=("dp", "fsdp"))`
+2. Synchronizes gradients with `ttml.sync_gradients(params)`
    each optimizer step. FSDP-managed parameters skip the `"fsdp"` axis (their
    gradients were already reduce-scattered by the FSDP backward hook); any
    replicated parameter is all-reduced across the axis.

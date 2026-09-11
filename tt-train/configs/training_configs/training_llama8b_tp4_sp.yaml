@@ -1,6 +1,7 @@
 # MGD: tt-train/configs/mgd/bh_qb_1_4_ring_ring.textproto (Blackhole QuietBox, device_topology [1, 4])
+# training_llama8b_tp4.yaml plus Megatron sequence parallelism on the tp axis.
 training_config:
-  project_name: "tt_train_llama8b_tp4"
+  project_name: "tt_train_llama8b_tp4_sp"
   seed: 5489
   batch_size: 1
   gradient_accumulation_steps: 4
@@ -22,6 +23,7 @@ training_config:
 
 device_config:
   enable_tp: true
+  enable_sp: true
   enable_ddp: false
   mesh_shape: [1, 4]  # mirrors MGD device_topology [1, 4]; axis 1 = tp (size 4)
 

@@ -6,6 +6,7 @@ import functools, operator, os, re
 from typing import Iterable
 import ttnn
 import ttml
+from .parallel import is_sequence_parallel
 
 
 def prod(x: Iterable[int]) -> int:
@@ -231,20 +232,18 @@ def mesh() -> Mesh:
     return _mesh
 
 
-def sync_gradients(parameters, axis_names: tuple[str, ...] = ("dp",)):
+def sync_gradients(parameters):
+    """Turn each device's local gradient into the global one; call once per step."""
+    average_gradients(parameters, axis_names=("dp", "fsdp"))
+    sum_sp_gradients(parameters, axis_name="tp")
+
+
+def average_gradients(parameters, axis_names: tuple[str, ...]):
     """Average parameter gradients across one or more mesh axes.
 
-    For each parameter with an initialized gradient, the grad is all-reduced
-    (summed) across every axis in ``axis_names`` and then divided by the
-    product of those axis sizes, leaving each device with the mean grad.
-
     Axes listed in ``axis_names`` but not present on the active mesh are
-    silently skipped — if none are present (or ``axis_names`` is empty, or
-    no mesh is open), the function is a no-op. The default ``("dp",)``
-    matches the common DDP case. TP is intentionally excluded: sharded
-    parameters already hold per-shard-correct grads, and replicated
-    parameters see identical inputs on every TP rank so their grads match
-    without a reduce.
+    silently skipped. If none are present (or ``axis_names`` is empty, or
+    no mesh is open), the function is a no-op.
 
     FSDP interaction: parameters sharded by ``ttml.fsdp.fully_shard`` on a
     mesh axis listed in ``axis_names`` are skipped for that axis — the FSDP
@@ -290,54 +289,19 @@ def _param_is_fsdp_sharded(param, axis_index: int) -> bool:
     return False
 
 
-def _param_is_sharded_on_axis(param, axis_index: int, name: str) -> bool:
-    """True if ``param`` is Shard (not Replicate) on the given mesh axis.
-
-    Raises when the topology could not be read.
-    """
-    sharding = ttml.Sharding.from_tensor(param)
-    placements = sharding.placements
-    if placements is None:
-        raise RuntimeError(
-            f"{name}: could not read mesh placements; cannot tell whether it is sharded."
-        ) from sharding.read_error
-    if axis_index >= len(placements):
-        return False  # short placements == fully replicated, not unknown
-    return isinstance(placements[axis_index], ttnn.PlacementShard)
-
-
-def sync_sequence_parallel_gradients(parameters, axis_name: str = "tp"):
-    """Sum the gradients of TP-replicated parameters across the tensor-parallel axis.
-
-    Under Megatron sequence parallelism the residual stream is sharded along the
-    sequence across ``axis_name`` (the TP axis), so a parameter that is *replicated*
-    on that axis -- the RMSNorm ``gamma`` weights, and any bias added in a
-    sequence-sharded region -- only accumulates the gradient from its rank's slice of
-    the sequence. The full gradient is the SUM over ranks, so we all-reduce with **no
-    averaging** (unlike :func:`sync_gradients`, which means-reduces over the data
-    axes). TP-*sharded* parameters are skipped: each rank already holds the correct grad
-    for its shard.
-
-    Orthogonal to :func:`sync_gradients` (dp/fsdp): the reductions are over disjoint
-    axes and commute, so both may be called. No-op when ``axis_name`` has size 1.
+def sum_sp_gradients(parameters, axis_name: str):
+    """Sum the gradients of sequence-parallel parameters across the tensor-parallel axis.
+    No-op when ``axis_name`` is absent or has size 1.
 
     Args:
         parameters: A ``NamedParameters`` mapping (e.g. ``model.parameters()``).
-        axis_name: The tensor-parallel mesh axis name (default ``"tp"``).
-
-    Raises:
-        RuntimeError: if a parameter reports no placement on the axis -- neither
-            choice is safe to assume. See :func:`_param_is_sharded_on_axis`.
+        axis_name: The tensor-parallel mesh axis name.
     """
     m = maybe_mesh()
     if m is None or not m.has_axis(axis_name) or m.axis_size(axis_name) == 1:
         return
     axis = m.axis_index(axis_name)
 
-    for name, param in parameters.items():
-        if not param.is_grad_initialized():
-            continue
-        if _param_is_sharded_on_axis(param, axis, name):
-            continue
-        # SUM across TP (no division): reconstruct the full-sequence gradient.
-        param.set_grad(ttml.core.distributed.all_reduce(param.get_grad(), cluster_axis=axis))
+    for _, param in parameters.items():
+        if is_sequence_parallel(param) and param.is_grad_initialized():
+            param.set_grad(ttml.core.distributed.all_reduce(param.get_grad(), cluster_axis=axis))

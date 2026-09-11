@@ -249,6 +249,8 @@ def _build_deepseek(cfg: ModelConfig, tp_strategy: TPStrategy) -> Model:
     # DeepSeek integrates with the named-mesh TP path (MLA, dense MLP, LM head, and — under
     # full-model TP — sparse MoE all shard across the "tp" axis). moe_type selects the MoE FFN
     # variant; sparse_ep additionally partitions experts across a mesh axis.
+    if tp_strategy.sequence_parallel:
+        raise ValueError("model_type=deepseek has no sequence-parallel path; enable_sp needs model_type=llama")
     use_tp = tp_strategy.tensor_parallel
     assert isinstance(cfg.spec, DeepSeekSpec)
     spec = cfg.spec

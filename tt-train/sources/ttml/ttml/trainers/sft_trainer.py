@@ -56,9 +56,6 @@ class SFTConfig:
         gradient_checkpointing: Enable activation recomputation to reduce
             memory usage at the cost of ~30 % extra compute.  Sets the
             model's ``runner_type`` to ``MemoryEfficient``.
-        sequence_parallel: Sum the gradients of tp-replicated params (RMSNorm gammas)
-            over the ``tp`` axis each step, since each tp rank saw only its slice of
-            the sequence.  Requires a model built with ``sequence_parallel=True``.
     """
 
     # ---- loop ----
@@ -79,7 +76,6 @@ class SFTConfig:
     gradient_checkpointing: bool = False
     # If True, tqdm progress bar (and its loss/lr postfix) is suppressed.
     disable_progress_bar: bool = False
-    sequence_parallel: bool = False
 
 
 class SFTTrainer:
@@ -177,15 +173,6 @@ class SFTTrainer:
         if config.seed is not None:
             ttml.autograd.AutoContext.get_instance().set_seed(config.seed)
 
-        # Read the strategy before any wrapping: LoraModel holds the real model at .model and
-        # forwards no attributes, so this has to happen while `model` is still the model itself.
-        # Models that expose no tp_strategy (every non-Llama one) leave the check inactive.
-        strategy = getattr(getattr(model, "config", None), "tp_strategy", None)
-        if strategy is not None and config.sequence_parallel != strategy.sequence_parallel:
-            raise ValueError(
-                f"SFTConfig.sequence_parallel={config.sequence_parallel} disagrees with the model's {strategy}."
-            )
-
         if peft_config is not None:
             from ttml.modules.lora import LoraModel
 
@@ -199,8 +186,6 @@ class SFTTrainer:
         self.eval_dataloader = eval_dataloader
         self.config = config
         self.step = 0  # 0-based; incremented after each optimizer step
-        # Axes to all-reduce gradients across each step; empty (single-device / TP-only) = no-op.
-        self._grad_sync_axes = self._resolve_grad_sync_axes()
         self._validate_clip_grad_norm()
 
         self._optimizer = self._build_optimizer(optimizer)
@@ -274,11 +259,7 @@ class SFTTrainer:
                     cb.on_after_backward(self, batch)
                 ttml.autograd.AutoContext.get_instance().reset_graph()
 
-            if self._grad_sync_axes:
-                ttml.sync_gradients(self.model.parameters(), axis_names=self._grad_sync_axes)
-
-            if cfg.sequence_parallel:
-                ttml.sync_sequence_parallel_gradients(self.model.parameters(), "tp")
+            ttml.sync_gradients(self.model.parameters())
 
             for cb in list(self._callbacks):
                 cb.on_before_optimizer_step(self)
@@ -577,17 +558,3 @@ class SFTTrainer:
                 "clip_grad_norm is not supported with sharded parameters (FSDP/TP): each device holds "
                 "only a shard, so the per-shard norm is wrong"
             )
-
-    @staticmethod
-    def _resolve_grad_sync_axes() -> tuple[str, ...]:
-        """Mesh axes to all-reduce gradients across each step.
-
-        The subset of ``("dp", "fsdp")`` present on the active mesh with size > 1; empty otherwise
-        (single device / TP-only). FSDP-sharded params are skipped per-axis by ``ttml.sync_gradients``
-        (``fully_shard``'s backward hooks already reduce-scattered them), so this covers DDP, the dp axis
-        of HSDP, and non-sharded params on the fsdp axis.
-        """
-        mesh = ttml.maybe_mesh()
-        if mesh is None:
-            return ()
-        return tuple(name for name in ("dp", "fsdp") if mesh.has_axis(name) and mesh.axis_size(name) > 1)

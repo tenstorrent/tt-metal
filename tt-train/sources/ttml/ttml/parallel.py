@@ -2,11 +2,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tensor-parallel strategy for TTML models."""
+"""Tensor-parallel strategy for TTML models, and the marker for sequence-parallel parameters."""
 
 from __future__ import annotations
 
 from enum import Enum
+from typing import Any
+
+# Activations flow as 4-D ``(B, 1, S, H)`` tensors; sequence parallelism shards dim 2 across the tp axis.
+SEQUENCE_DIM = 2
 
 
 class TPStrategy(Enum):
@@ -46,3 +50,13 @@ class TPStrategy(Enum):
     def sequence_parallel(self) -> bool:
         """True if Megatron sequence parallelism is active (``TENSOR_SEQUENCE``)."""
         return self is TPStrategy.TENSOR_SEQUENCE
+
+
+def mark_sequence_parallel(parameter) -> None:
+    """Flag a parameter that is applied to the sequence-sharded residual stream."""
+    parameter.add_post_materialize_callback(lambda p: setattr(p.tensor, "_sequence_parallel", True))
+
+
+def is_sequence_parallel(param_tensor: Any) -> bool:
+    """True if :func:`mark_sequence_parallel` flagged this parameter tensor."""
+    return getattr(param_tensor, "_sequence_parallel", False)

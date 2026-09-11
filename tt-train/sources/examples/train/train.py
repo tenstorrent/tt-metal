@@ -527,7 +527,6 @@ def run_training(
         checkpoint_prefix=args.checkpoint_prefix,
         max_grad_norm=(training_cfg.clip_grad_norm_max_norm if training_cfg.use_clip_grad_norm else 0.0),
         disable_progress_bar=True,
-        sequence_parallel=tp_strategy.sequence_parallel,
     )
 
     def _causal_lm_loss(logits, batch):
