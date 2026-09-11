@@ -68,6 +68,7 @@ class MiniMaxH3AudioDecoder(Module):
         ccl_manager: CCLManager | None = None,
         split_mode: str = "full",
         max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK,
+        pack_bands: dict[int, int] | None = None,
     ) -> None:
         super().__init__()
         self.mesh_device = mesh_device
@@ -122,6 +123,7 @@ class MiniMaxH3AudioDecoder(Module):
             ccl_manager=ccl_manager,
             # H3-only opt-in: LTX's vocoder keeps its default single-conv weights.
             split_mode=split_mode,
+            pack_bands=pack_bands,
         )
 
     def _project_latents_device(self, latents_BCT: torch.Tensor) -> torch.Tensor:

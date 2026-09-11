@@ -31,7 +31,9 @@ from ..utils.tensor import local_device_to_torch
 # Per-mesh cache of constant zeros buffers, keyed by id(mesh_device).
 _ZEROS_CACHE: dict = {}
 
-CONV_SPLIT_MODES = ("off", "weight", "full")
+CONV_SPLIT_MODES = ("off", "weight", "act", "full")
+# Modes that carry a prepared weight residual (``weight_lo``).
+WEIGHT_SPLIT_MODES = ("weight", "full")
 
 # Default cap on conv3d's C_in_block for the H3 audio blocking table; the sweep that keeps it at
 # 128 lives in `blockings_minimax_h3_audio`.
@@ -84,13 +86,25 @@ def conv3d_maybe_split(
     cannot help. Conv is linear in both arguments, so splitting an operand into ``hi = bf16(v)`` plus
     the exact residual ``lo = v - hi`` lets a second conv carry the dropped mantissa bits.
     ``split_mode="weight"`` splits the weight only (2 convs, measured 1.5x less error on ``conv_pre``);
-    ``"full"`` splits both (3 convs -- the ``lo*lo`` term is negligible and omitted; 1.9x).
+    ``"act"`` splits the activation only (2 convs); ``"full"`` splits both (3 convs -- the ``lo*lo`` term is
+    negligible and omitted; 1.9x).
 
     ``bias`` is applied to exactly one term, since it is not a factor of the product being split.
     """
     if split_mode == "off":
         return ttnn.experimental.conv3d(
             input_tensor=input_tensor, weight_tensor=weight_tensor, bias_tensor=bias_tensor, **conv_kwargs
+        )
+    if split_mode == "act":
+        # Activation-only split (2 convs): measured on the H3 decoder, the weight split adds nothing the
+        # activation split does not already give (weight-only 50.8 dB vs off 51.3 dB; full 67.4 dB).
+        x_hi, x_lo = _split_operand(input_tensor)
+        out = ttnn.experimental.conv3d(
+            input_tensor=x_hi, weight_tensor=weight_tensor, bias_tensor=bias_tensor, **conv_kwargs
+        )
+        return ttnn.add(
+            out,
+            ttnn.experimental.conv3d(input_tensor=x_lo, weight_tensor=weight_tensor, bias_tensor=None, **conv_kwargs),
         )
     assert weight_lo_tensor is not None, f"split_mode={split_mode!r} needs a prepared weight residual"
 
@@ -896,7 +910,7 @@ class Conv2dViaConv3d(Module):
         self.weight = Parameter(total_shape=[d, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
         self.weight_lo = (
             Parameter(total_shape=[d, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
-            if self.split_mode != "off"
+            if self.split_mode in WEIGHT_SPLIT_MODES
             else None
         )
         self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
@@ -919,7 +933,7 @@ class Conv2dViaConv3d(Module):
                 dtype=self.dtype,
                 unpadded_out=self.unpadded_out_channels,
                 out_channels=self.out_channels,
-                split=self.split_mode != "off",
+                split=self.split_mode in WEIGHT_SPLIT_MODES,
             )
         if "bias" in state:
             state["bias"] = state["bias"].reshape(1, -1)
@@ -1087,6 +1101,8 @@ class Conv1dViaConv3d(Module):
 
         self.same_pad = same_pad
         self.eff_k = eff_k
+        # Boundary fill of the T halo exchange at the global sequence ends ("zeros" | "replicate").
+        self.halo_padding_mode = "zeros"
 
         self._alloc_weight_bias()
 
@@ -1110,7 +1126,7 @@ class Conv1dViaConv3d(Module):
                 out_channels=self.out_channels,
                 unpadded_in=self.unpadded_in_channels,
                 in_channels=self.in_channels,
-                split=self.split_mode != "off",
+                split=self.split_mode in WEIGHT_SPLIT_MODES,
             )
         if "bias" in state and self.bias is not None:
             state["bias"] = state["bias"].reshape(1, -1)
@@ -1139,7 +1155,7 @@ class Conv1dViaConv3d(Module):
                 dtype=self.dtype,
                 mesh_axes=mesh_axes,
             )
-            if self.split_mode != "off"
+            if self.split_mode in WEIGHT_SPLIT_MODES
             else None
         )
         self.bias = (
@@ -1177,7 +1193,7 @@ class Conv1dViaConv3d(Module):
                 pad_right=self.halo_pad_right,
                 parallel_config=self.parallel_config,
                 ccl_manager=self.ccl_manager,
-                padding_mode="zeros",
+                padding_mode=self.halo_padding_mode,
             )
         elif self.external_pad_front > 0:
             B, T, C = x_BTC.shape

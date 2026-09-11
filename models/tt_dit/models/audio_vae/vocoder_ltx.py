@@ -29,6 +29,7 @@ from ...layers.audio_ops import (
     channel_factor,
     partition_channel,
 )
+from ...layers.audio_pack import PackedActivation1d, PackedConv1d
 from ...layers.audio_resample import Activation1d
 from ...layers.module import Module, ModuleList
 from ...parallel.config import ParallelFactor
@@ -37,6 +38,18 @@ from ...utils.tensor import local_device_to_torch
 from ...utils.tracing import traced_function
 
 TILE_HEIGHT = ttnn.TILE_SIZE  # 32; the per-shard T-height floor for HEIGHT_SHARDED convs
+
+
+def _reshape_rows(x: ttnn.Tensor, shape) -> ttnn.Tensor:
+    """Row-major reshape that changes the row width (a device copy); frees the source when it was copied."""
+    y = ttnn.reshape(x, shape)
+    try:
+        distinct = y.buffer_address() != x.buffer_address()
+    except Exception:  # noqa: BLE001 -- no address on this tensor kind: keep both alive rather than risk a free
+        distinct = False
+    if distinct:
+        ttnn.deallocate(x)
+    return y
 
 
 class DilatedConv1d(_AlignedOutConv1d):
@@ -88,88 +101,58 @@ class AMPBlock1(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
+        pack: int = 1,
     ) -> None:
         super().__init__()
         self.channels = channels
         self.kernel_size = kernel_size
         self.num_branches = len(dilation)
         self.mesh_device = mesh_device
+        # pack > 1: the block runs on time-packed rows (B, T/pack, pack*C); see layers/audio_pack.py.
+        self.pack = pack
 
         act_cls = SnakeBeta if activation == "snakebeta" else Snake
+        common = dict(mesh_device=mesh_device, dtype=dtype, parallel_config=parallel_config, ccl_manager=ccl_manager)
 
-        self.convs1 = ModuleList(
-            [
-                DilatedConv1d(
-                    in_channels=channels,
-                    out_channels=channels,
+        def conv(dil):
+            if pack > 1:
+                return PackedConv1d(
+                    channels,
+                    channels,
                     kernel_size=kernel_size,
-                    dilation=dilation[i],
+                    dilation=dil,
+                    pack=pack,
                     bias=True,
-                    mesh_device=mesh_device,
-                    dtype=dtype,
-                    parallel_config=parallel_config,
-                    ccl_manager=ccl_manager,
                     split_mode=split_mode,
+                    **common,
                 )
-                for i in range(self.num_branches)
-            ]
-        )
-        self.convs2 = ModuleList(
-            [
-                DilatedConv1d(
-                    in_channels=channels,
-                    out_channels=channels,
-                    kernel_size=kernel_size,
-                    dilation=1,
-                    bias=True,
-                    mesh_device=mesh_device,
-                    dtype=dtype,
-                    parallel_config=parallel_config,
-                    ccl_manager=ccl_manager,
-                    split_mode=split_mode,
-                )
-                for i in range(self.num_branches)
-            ]
-        )
+            return DilatedConv1d(
+                in_channels=channels,
+                out_channels=channels,
+                kernel_size=kernel_size,
+                dilation=dil,
+                bias=True,
+                split_mode=split_mode,
+                **common,
+            )
+
         # alpha_logscale=True: checkpoint stores log α / log β, collapsed at load time.
-        self.acts1 = ModuleList(
-            [
-                Activation1d(
-                    channels=channels,
-                    activation=act_cls(
-                        channels,
-                        alpha_logscale=True,
-                        mesh_device=mesh_device,
-                        dtype=dtype,
-                        parallel_config=parallel_config,
-                    ),
-                    mesh_device=mesh_device,
-                    dtype=dtype,
-                    parallel_config=parallel_config,
-                    ccl_manager=ccl_manager,
-                )
-                for _ in range(self.num_branches)
-            ]
-        )
-        self.acts2 = ModuleList(
-            [
-                Activation1d(
-                    channels=channels,
-                    activation=act_cls(
-                        channels,
-                        alpha_logscale=True,
-                        mesh_device=mesh_device,
-                        dtype=dtype,
-                        parallel_config=parallel_config,
-                    ),
-                    mesh_device=mesh_device,
-                    dtype=dtype,
-                    parallel_config=parallel_config,
-                    ccl_manager=ccl_manager,
-                )
-                for _ in range(self.num_branches)
-            ]
-        )
+        def act():
+            if pack > 1:
+                assert activation == "snakebeta", "packed blocks implement SnakeBeta only"
+                return PackedActivation1d(channels=channels, pack=pack, split_mode=split_mode, **common)
+            return Activation1d(
+                channels=channels,
+                activation=act_cls(
+                    channels, alpha_logscale=True, mesh_device=mesh_device, dtype=dtype, parallel_config=parallel_config
+                ),
+                **common,
+            )
+
+        self.convs1 = ModuleList([conv(dilation[i]) for i in range(self.num_branches)])
+        self.convs2 = ModuleList([conv(1) for _ in range(self.num_branches)])
+        self.acts1 = ModuleList([act() for _ in range(self.num_branches)])
+        self.acts2 = ModuleList([act() for _ in range(self.num_branches)])
 
     def forward(self, x_BTC: ttnn.Tensor, set_tail=None, x_rep=None) -> ttnn.Tensor:
         # set_tail(xd, mode): materialize the tile-align pad image to an op's boundary when
@@ -231,8 +214,12 @@ class Vocoder(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
+        pack_bands: dict[int, int] | None = None,
     ) -> None:
         super().__init__()
+        # band index -> time steps packed per row for that band's AMP blocks (layers/audio_pack.py); the
+        # narrow late bands (8-16 channels) run ~2x faster per op on 32-wide packed rows.
+        self.pack_bands = dict(pack_bands or {})
 
         if resblock_kernel_sizes is None:
             resblock_kernel_sizes = [3, 7, 11]
@@ -321,6 +308,7 @@ class Vocoder(Module):
                         parallel_config=parallel_config,
                         ccl_manager=ccl_manager,
                         split_mode=split_mode,
+                        pack=self.pack_bands.get(i, 1),
                     )
                 )
 
@@ -459,15 +447,17 @@ class Vocoder(Module):
         # A no-op when there is no channel-TP, which is why moving it above the T partition is safe.
         x_dev = partition_channel(x_dev, self.parallel_config, dim=2)
 
-        def _set_tail(xd, cumrate, mode):
+        def _set_tail(xd, cumrate, mode, pack=1):
             # Materialize the tile-align pad image (t_pad*cumrate tail rows) to the op's boundary so
             # it matches unsharded: zeros for gather/zeros-pad convs, the real last row for
-            # replicate-pad activations. No-op when unsharded (t_pad == 0).
+            # replicate-pad activations. No-op when unsharded (t_pad == 0). On packed rows the image
+            # is t_pad*cumrate/pack rows.
             if t_pad == 0:
                 return xd
+            assert (t_pad * cumrate) % pack == 0, f"pad image {t_pad * cumrate} rows not a multiple of pack {pack}"
             return _set_tpad_tail(
                 xd,
-                t_pad * cumrate,
+                t_pad * cumrate // pack,
                 mode=mode,
                 mesh_device=self.mesh_device,
                 parallel_config=self.parallel_config,
@@ -488,7 +478,12 @@ class Vocoder(Module):
             x_dev = _set_tail(x_dev, cumrate, "zeros")  # ups gathers T to full and zero-pads internally
             x_dev = self.ups[i](x_dev)
             cumrate *= self.upsample_rates[i]
-            stage_set_tail = (lambda c: (lambda xd, mode: _set_tail(xd, c, mode)))(cumrate)
+            pack = self.pack_bands.get(i, 1)
+            if pack > 1:
+                B_, T_, C_ = x_dev.shape
+                assert T_ % pack == 0, f"band {i}: local T {T_} not a multiple of pack {pack}"
+                x_dev = _reshape_rows(x_dev, (B_, T_ // pack, pack * C_))
+            stage_set_tail = (lambda c, p: (lambda xd, mode: _set_tail(xd, c, mode, p)))(cumrate, pack)
             start = i * self.num_kernels
             # Mean over the num_kernels parallel AMP branches.
             block_outputs = []
@@ -507,6 +502,9 @@ class Vocoder(Module):
                 acc = new_acc
             x_dev = ttnn.multiply(acc, 1.0 / self.num_kernels)
             ttnn.deallocate(acc)
+            if pack > 1:
+                B_, Tp, Cp = x_dev.shape
+                x_dev = _reshape_rows(x_dev, (B_, Tp * pack, Cp // pack))
 
         x_dev = _set_tail(x_dev, cumrate, "replicate")  # act_post is a replicate-pad activation
         x_dev = self.act_post(x_dev)
