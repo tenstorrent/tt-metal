@@ -325,6 +325,14 @@ void JitBuildEnv::init(
             "TT_METAL_STREAMING_PROFILER is not supported on Quasar: the streaming profiler needs a DRISC "
             "drainer, which Quasar does not have. Use TT_METAL_DEVICE_PROFILER instead.");
         this->defines_ += "-DPROFILE_KERNEL=1 -DPROFILE_STREAMING=1 ";
+        if (rtoptions.get_profiler_sync_events_enabled()) {
+            // Synchronization-event instrumentation (tools/profiler/synchronization_event_profiler.hpp).
+            // Emitted INSIDE this block on purpose: the gate in that header also requires
+            // PROFILE_STREAMING, so the legacy DRAM profiler's preprocessor state is untouched. It lands
+            // in defines_, which is hashed into the build key below, so toggling it recompiles rather
+            // than silently reusing kernels built without the markers.
+            this->defines_ += "-DPROFILE_SYNC_EVENTS=1 ";
+        }
     }
     if (rtoptions.get_profiler_noc_events_enabled()) {
         // force profiler on if noc events are being profiled

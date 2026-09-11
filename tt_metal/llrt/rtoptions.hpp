@@ -243,6 +243,8 @@ class RunTimeOptions {
     bool profiler_disable_push_to_tracy = false;
     std::optional<uint32_t> profiler_program_support_count = std::nullopt;
     bool streaming_profiler_tracy_enabled = false;
+    // Synchronization-event instrumentation, opt-in on top of the streaming profiler.
+    bool profiler_sync_events_enabled = false;
     uint32_t streaming_profiler_num_relays = 0;
     uint32_t streaming_profiler_spool_mb = 128;
     uint32_t streaming_profiler_fifo_mb = 256;
@@ -703,6 +705,7 @@ public:
     bool get_profiler_disable_dump_to_files() const { return profiler_disable_dump_to_files; }
     bool get_profiler_disable_push_to_tracy() const { return profiler_disable_push_to_tracy; }
     bool get_streaming_profiler_tracy_enabled() const { return streaming_profiler_tracy_enabled; }
+    bool get_profiler_sync_events_enabled() const { return profiler_sync_events_enabled; }
     uint32_t get_streaming_profiler_num_relays() const { return streaming_profiler_num_relays; }
     uint32_t get_streaming_profiler_spool_mb() const { return streaming_profiler_spool_mb; }
     uint32_t get_streaming_profiler_fifo_mb() const { return streaming_profiler_fifo_mb; }
