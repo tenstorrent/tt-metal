@@ -383,13 +383,12 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
             output_memory_config =
                 MemoryConfig{input_memory_config.memory_layout(), input_memory_config.buffer_type(), shard_spec};
         } else if (
-            input_memory_config.is_sharded() && input_memory_config.shard_spec().has_value() &&
-            input_memory_config.nd_shard_spec().has_value() &&
-            input_memory_config.nd_shard_spec()->shard_shape.rank() > new_padded_shape.rank()) {
-            // A config built from an ND shard spec that normalizes to a 2D layout keeps the
-            // higher-rank nd_shard_spec attached. After the rank drop it would exceed the tensor
-            // rank (BufferDistributionSpec requires shard rank <= tensor rank), so drop it and
-            // keep only the equivalent 2D shard_spec.
+            input_memory_config.shard_spec().has_value() && input_memory_config.nd_shard_spec().has_value() &&
+            new_padded_shape != input_tensor.padded_shape()) {
+            // A config built from an ND shard spec that normalizes to 2D keeps the nd_shard_spec
+            // attached. Once the padded shape changes it no longer describes the tensor (its rank may
+            // exceed the new rank, or its extents were sized for the old shape), so drop it and keep
+            // only the equivalent 2D shard_spec that the downstream view/recompute path relies on.
             output_memory_config = MemoryConfig{
                 input_memory_config.memory_layout(),
                 input_memory_config.buffer_type(),
