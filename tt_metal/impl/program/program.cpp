@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <allocator.hpp>
+#include "impl/buffers/buffer_impl.hpp"
 #include <circular_buffer.hpp>
 #include <circular_buffer_config.hpp>
 #include <device.hpp>
@@ -56,6 +57,7 @@
 #include "tt-metalium/mesh_workload.hpp"
 #include <unistd.h>
 #include "jit_build/build.hpp"
+#include "jit_build/build_cache_telemetry.hpp"
 #include <tt_stl/enum.hpp>
 #include "jit_build/jit_build_options.hpp"
 #include "kernel_types.hpp"
@@ -1368,7 +1370,7 @@ uint8_t detail::ProgramImpl::add_cross_node_dfb(experimental::CrossNodeDFB gdfb)
 }
 
 uint8_t detail::ProgramImpl::add_prefetcher_pipe_attachment(
-    experimental::PrefetcherPipe& prefetcher_pipe, const CoreRangeSet& cores, uint32_t entry_size) {
+    experimental::PrefetcherPipeImpl& prefetcher_pipe, const CoreRangeSet& cores, uint32_t entry_size) {
     TT_FATAL(this->compiled_.empty(), "Cannot attach PrefetcherPipe to an already compiled program {}", this->id);
 
     for (const auto& [core, remote_bits] : per_core_remote_cb_indices_) {
@@ -1440,7 +1442,7 @@ uint8_t detail::ProgramImpl::add_prefetcher_pipe_attachment(
     return prefetcher_pipe_id;
 }
 
-const experimental::PrefetcherPipe& detail::ProgramImpl::get_prefetcher_pipe_attachment(
+const experimental::PrefetcherPipeImpl& detail::ProgramImpl::get_prefetcher_pipe_attachment(
     uint8_t prefetcher_pipe_id) const {
     auto it = prefetcher_pipe_attachments_.find(prefetcher_pipe_id);
     TT_FATAL(
@@ -1466,7 +1468,7 @@ void detail::ProgramImpl::register_prefetcher_pipe_relay_dfb(
     TT_FATAL(
         this->compiled_.empty(), "Cannot register a PrefetcherPipe relay on an already compiled program {}", this->id);
 
-    const experimental::PrefetcherPipe& pipe = get_prefetcher_pipe_attachment(prefetcher_pipe_id);
+    const experimental::PrefetcherPipeImpl& pipe = get_prefetcher_pipe_attachment(prefetcher_pipe_id);
 
     auto relay_dfb = get_dataflow_buffer(relay_dfb_host_id);
     TT_FATAL(relay_dfb != nullptr, "Relay DFB host id {} does not exist", relay_dfb_host_id);
@@ -2587,7 +2589,7 @@ void detail::ProgramImpl::allocate_kernel_bin_buf_on_device(IDevice* device) {
     // allocated bottom up
     std::size_t binary_data_size_bytes = this->program_transfer_info.binary_data.size() * sizeof(uint32_t);
     if (!this->kernels_buffer_.contains(device->id()) and binary_data_size_bytes) {
-        std::shared_ptr<Buffer> kernel_bin_buf = Buffer::create(
+        std::shared_ptr<Buffer> kernel_bin_buf = BufferImpl::create(
             device,
             binary_data_size_bytes,
             HostMemDeviceCommand::PROGRAM_PAGE_SIZE,
@@ -3196,6 +3198,25 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
             max_size,
             enchantum::to_string(programmable_core_type));
 
+        // Recorded here, not per program: `state` is computed once per core type and then copied
+        // into every program in the span, so recording inside the loop below would log the same
+        // numbers N times for an N-program MeshWorkload (inflating count/total, and making min==max).
+        {
+            const auto target = enchantum::to_string(programmable_core_type);
+            const auto record_size = [&](std::string_view name, uint32_t bytes) {
+                per_target_telemetry_token(name, target, "B").record(bytes);
+            };
+            // finalize_rt_args lays out unique RTAs and common RTAs back to back between rta_offset
+            // and sem_offset, so this span covers both (plus alignment padding), not unique RTAs alone.
+            record_size("program_config_size.rta_and_crta", state.sem_offset - state.rta_offset);
+            record_size("program_config_size.semaphore", state.sem_size);
+            record_size("program_config_size.circular_buffer", state.cb_size);
+            record_size("program_config_size.local_circular_buffer", state.local_cb_size);
+            record_size("program_config_size.dataflow_buffer", state.dfb_size);
+            record_size("program_config_size.kernel_text", state.kernel_text_size);
+            record_size("program_config_size.total", state.offset);
+        }
+
         for (auto& program : programs) {
             program->set_program_offsets_and_sizes(index, state);
         }
@@ -3279,10 +3300,18 @@ bool detail::ProgramCompileGroup::contains(tt::tt_metal::IDevice* device) {
     return program_device_map_.contains(device);
 }
 
-void LaunchProgram(distributed::MeshDevice& mesh_device, Program&& program, bool wait_until_cores_done) {
+[[nodiscard]] distributed::MeshWorkload LaunchProgramAsync(distributed::MeshDevice& mesh_device, Program&& program) {
     distributed::MeshWorkload workload;
     workload.add_program(distributed::MeshCoordinateRange(mesh_device.shape()), std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, wait_until_cores_done);
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/false);
+    return workload;
+}
+
+distributed::MeshWorkload LaunchProgram(distributed::MeshDevice& mesh_device, Program&& program) {
+    distributed::MeshWorkload workload;
+    workload.add_program(distributed::MeshCoordinateRange(mesh_device.shape()), std::move(program));
+    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/true);
+    return workload;
 }
 
 }  // namespace tt::tt_metal

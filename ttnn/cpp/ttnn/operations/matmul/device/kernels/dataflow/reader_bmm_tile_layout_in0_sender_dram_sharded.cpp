@@ -44,8 +44,9 @@ void kernel_main() {
     const uint32_t sender_id = get_arg_val<uint32_t>(1);
     const bool is_last_ktile_padded = static_cast<bool>(get_arg_val<uint32_t>(2));
 
-    tt_l1_ptr uint32_t* in0_mcast_sender_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(3));
-    tt_l1_ptr uint32_t* in0_mcast_sender_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(3 + num_storage_cores));
+    tt_l1_ptr uint32_t* in0_mcast_sender_noc_x = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(3));
+    tt_l1_ptr uint32_t* in0_mcast_sender_noc_y =
+        reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(3 + num_storage_cores));
 
     const uint32_t sender_block_id = sender_id * num_blocks_per_shard;
 
@@ -55,9 +56,9 @@ void kernel_main() {
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(dfb_id_in0);
     constexpr DataFormat in0_data_format = get_dataformat(dfb_id_in0);
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer dfb_in0(dfb_id_in0);
-    DataflowBuffer dfb_in2(dfb_id_in2);
+    const DataflowBuffer dfb_in2(dfb_id_in2);
     Semaphore<> sender_sem(get_compile_time_arg_val(4));
     Semaphore<> receiver_sem(get_compile_time_arg_val(5));
 
@@ -94,7 +95,7 @@ void kernel_main() {
                 if (is_last_ktile_padded && (i == num_blocks_per_shard - 1)) {
                     for (uint32_t h = 0; h < in0_block_h; ++h) {
                         auto in0_last_ktile_ptr =
-                            local_read_addr + (h * in0_block_w + in0_block_w - 1) * in0_single_tile_size_bytes;
+                            local_read_addr + ((h * in0_block_w + in0_block_w - 1) * in0_single_tile_size_bytes);
                         pad_last_ktile<in0_data_format, in0_last_ktile_w>(in0_last_ktile_ptr);
                     }
                 }
@@ -103,7 +104,7 @@ void kernel_main() {
                 if (is_last_ktile_padded && (i == num_blocks_per_shard - 1)) {
                     for (uint32_t w = 0; w < in0_block_w; ++w) {
                         auto in0_last_ktile_ptr =
-                            local_read_addr + ((in0_block_h - 1) * in0_block_w + w) * in0_single_tile_size_bytes;
+                            local_read_addr + (((in0_block_h - 1) * in0_block_w + w) * in0_single_tile_size_bytes);
                         pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(in0_last_ktile_ptr);
                     }
                 }
@@ -111,7 +112,7 @@ void kernel_main() {
 
 #ifndef SKIP_MCAST
             // num_dests must not include source, since we are NOT really doing a local copy!
-            MulticastEndpoint mcast_dst;
+            const MulticastEndpoint mcast_dst;
             noc.async_write_multicast(
                 CoreLocalMem<uint32_t>(local_read_addr),
                 mcast_dst,
@@ -147,7 +148,7 @@ void kernel_main() {
             receiver_sem.set(INVALID);
 
             if (block_id == sender_id) {
-                uint32_t l1_write_addr_in0 = dfb_in0.get_write_ptr();
+                const uint32_t mcast_l1_write_addr_in0 = dfb_in0.get_write_ptr();
                 // copy start address of block, to be used for mcasting
 
                 // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr
@@ -159,7 +160,7 @@ void kernel_main() {
                     if (is_last_ktile_padded && (block == num_blocks - 1)) {
                         for (uint32_t h = 0; h < in0_block_h; ++h) {
                             auto in0_last_ktile_ptr =
-                                local_read_addr + (h * in0_block_w + in0_block_w - 1) * in0_single_tile_size_bytes;
+                                local_read_addr + ((h * in0_block_w + in0_block_w - 1) * in0_single_tile_size_bytes);
                             pad_last_ktile<in0_data_format, in0_last_ktile_w>(in0_last_ktile_ptr);
                         }
                     }
@@ -168,13 +169,13 @@ void kernel_main() {
                     if (is_last_ktile_padded && (block == num_blocks - 1)) {
                         for (uint32_t w = 0; w < in0_block_w; ++w) {
                             auto in0_last_ktile_ptr =
-                                local_read_addr + ((in0_block_h - 1) * in0_block_w + w) * in0_single_tile_size_bytes;
+                                local_read_addr + (((in0_block_h - 1) * in0_block_w + w) * in0_single_tile_size_bytes);
                             pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(in0_last_ktile_ptr);
                         }
                     }
                 }
 #ifndef SKIP_MCAST
-                MulticastEndpoint mcast_dst;
+                const MulticastEndpoint mcast_dst;
                 noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
                     CoreLocalMem<uint32_t>(local_read_addr),
                     mcast_dst,
@@ -185,7 +186,7 @@ void kernel_main() {
                      .noc_y_start = in0_mcast_dest_noc_start_y,
                      .noc_x_end = in0_mcast_dest_noc_end_x,
                      .noc_y_end = in0_mcast_dest_noc_end_y,
-                     .addr = l1_write_addr_in0},
+                     .addr = mcast_l1_write_addr_in0},
                     true);
 #endif
                 // Set local semaphore to VALID. For single-core configurations, this is all we need.

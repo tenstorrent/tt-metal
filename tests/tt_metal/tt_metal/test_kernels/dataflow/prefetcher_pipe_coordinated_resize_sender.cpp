@@ -24,6 +24,7 @@
 //   [0] l1_staging_addr
 //   [1] resized_sem_addr  - written to 1 after resize completes
 //   [2] go_sem_addr       - wait until host writes 1
+//   [3] credit_base_addr  - Quasar only: pages_sent slot for host credit probe flush
 //
 // Staging layout (host MulticastCounter with resized tail):
 //   [0, num_entries_e1 * entry_size_e1)           E1 entries
@@ -33,6 +34,9 @@
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_api.h"
+#ifdef ARCH_QUASAR
+#include "dev_mem_map.h"
+#endif
 
 void kernel_main() {
     constexpr uint8_t prefetcher_pipe_id = get_compile_time_arg_val(0);
@@ -48,8 +52,18 @@ void kernel_main() {
 
     const uint32_t staging_base = get_arg_val<uint32_t>(0);
     const CoreLocalMem<uint8_t> staging(staging_base);
+    // Quasar: host read_core/write_core see the uncached L1 alias. Cached stores are not
+    // host-visible without a flush (same pattern as sub_device/syncer.cpp).
+#ifdef ARCH_QUASAR
+    volatile tt_l1_ptr uint32_t* resized_sem =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(1) + MEM_L1_UNCACHED_BASE);
+    volatile tt_l1_ptr uint32_t* go_sem =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(2) + MEM_L1_UNCACHED_BASE);
+    const uint32_t credit_base_addr = get_arg_val<uint32_t>(3);
+#else
     volatile tt_l1_ptr uint32_t* resized_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(1));
     volatile tt_l1_ptr uint32_t* go_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(2));
+#endif
 
     Noc noc;
     experimental::PrefetcherPipe gdfb(prefetcher_pipe_id);
@@ -63,6 +77,10 @@ void kernel_main() {
 
     gdfb.set_entry_size(entry_size_e2);
 
+#ifdef ARCH_QUASAR
+    // pages_sent / wr_offset are updated via cached stores; host read_credit_pair reads TL1.
+    flush_l2_cache_range(credit_base_addr, 2 * L1_ALIGNMENT);
+#endif
     noc_semaphore_set(resized_sem, 1);
     noc_semaphore_wait(go_sem, 1);
 

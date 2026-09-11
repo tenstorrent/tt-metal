@@ -62,7 +62,7 @@ def run_lerp_test(
         assert calculated_tensor.dtype == ttnn_output_dtype
 
     calculated_tensor = ttnn.to_torch(calculated_tensor)
-    assert_with_ulp(golden_output_tensor, calculated_tensor, ulp_threshold=ulp_threshold)
+    assert_with_ulp(expected_result=golden_output_tensor, actual_result=calculated_tensor, ulp_threshold=ulp_threshold)
 
 
 @pytest.mark.parametrize("h", [64])

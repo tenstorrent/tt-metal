@@ -910,6 +910,8 @@ void kernel_main() {
     // is what lets the reader and writer leave the padded down weights and the
     // padded hidden (gate/up N-OOB) columns unwritten: nothing ever reduces them.
     constexpr uint32_t d_K_down_tiles = get_compile_time_arg_val(34);
+    constexpr uint32_t min_active_tokens = get_compile_time_arg_val(35);
+    constexpr uint32_t max_active_tokens = get_compile_time_arg_val(36);
 
     // CBs
     constexpr uint32_t cb_in0_x = get_named_compile_time_arg_val("cb_in0_x");
@@ -987,7 +989,10 @@ void kernel_main() {
             const volatile tt_l1_ptr uint32_t* idx_ptr =
                 reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(idx_l1_addr);
             const uint32_t global_expert_id = idx_ptr[local_expert_id];
-            count_value = counts_ptr[global_expert_id];
+            // Hybrid dispatch: experts outside this op's band belong to the other
+            // routed-expert op and are dropped here exactly like a zero count.
+            count_value =
+                adaptive_chunk::count_in_band(counts_ptr[global_expert_id], min_active_tokens, max_active_tokens);
             ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, count_value);
             ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, count_value);
         }));

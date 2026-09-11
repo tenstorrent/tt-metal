@@ -14,9 +14,9 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 void kernel_main() {
-    uint32_t Ht = get_arg(args::Ht);
-    uint32_t Wt = get_arg(args::Wt);
-    uint32_t NC = get_arg(args::NC);
+    const uint32_t Ht = get_arg(args::Ht);
+    const uint32_t Wt = get_arg(args::Wt);
+    const uint32_t NC = get_arg(args::NC);
     // Accurate fp32: the host sets enable_fp32_sfpu to route Float32 through the SFPU (full fp32)
     // vs the FPU (tf32).
     constexpr auto fp32_mode = get_arg(args::enable_fp32_sfpu) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;

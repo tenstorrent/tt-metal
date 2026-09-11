@@ -29,12 +29,12 @@ The counters are built from a reusable RTL module (`tt_perf_cnt`) that provides 
 ### How to Run
 
 ```bash
-# Capture all counter groups (fpu, pack, unpack, l1_0, instrn)
-python -m tracy --profiler-capture-perf-counters=all \
+# Capture every counter group; all needs several passes, so opt in to the workload replay
+python -m tracy --profiler-capture-perf-counters=all --perf-counter-multipass \
     -m "pytest your_test.py -x -v"
 ```
 
-Available counter groups for `--profiler-capture-perf-counters`: `fpu`, `pack`, `unpack`, `l1_0`, `l1_1`, `instrn`, `all`. Blackhole also supports `l1_2`, `l1_3`, `l1_4`. See the [user guide](../../docs/source/ttnn/ttnn/profiling_ttnn_operations.rst) for details.
+Available counter groups for `--profiler-capture-perf-counters`: `fpu`, `pack`, `unpack`, `l1_0`, `l1_1`, `instrn`, `all`. Blackhole also supports `l1_2`, `l1_3`, `l1_4`, `l1_5`. See the [user guide](../../docs/source/ttnn/ttnn/profiling_ttnn_operations.rst) for details.
 
 ### Environment Variable
 
@@ -52,10 +52,10 @@ Available counter groups for `--profiler-capture-perf-counters`: `fpu`, `pack`, 
 | `1 << 7` | 128 | L1 bank 3 (BH only: NOC Ring 3) |
 | `1 << 8` | 256 | L1 bank 4 (BH only: misc ports) |
 
-Recommended value for a broad capture: `47` (`0x2F`) — FPU | PACK | UNPACK | L1_0 | INSTRN.
+The BRISC firmware fits the readout code for 3 groups per run (a 4th overflows `.text` on Blackhole), so a mask with more than three groups is not usable directly; `python -m tracy --perf-counter-multipass` schedules the passes and merges the logs instead. A three-group example: `7` (`0x7`) = FPU | PACK | UNPACK.
 
 ```bash
-export TT_METAL_PROFILE_PERF_COUNTERS=47
+export TT_METAL_PROFILE_PERF_COUNTERS=7
 ```
 
 **L1 bank mutual exclusion:** all L1 banks share the same hardware mux (selected via `MUX_CTRL`), so only one L1 bank may be enabled per run. The env-var path throws if more than one L1 bit is set. To capture multiple L1 banks, run the profiler twice and merge results; the `python -m tracy --profiler-capture-perf-counters=...` CLI does this automatically when both `l1_0` and `l1_1` are requested (see `process_model_log.run_device_profiler`).
@@ -1058,69 +1058,6 @@ Paired with `SrcA/SrcB Write Port Blocked Rate` to separate the two stall modes:
 
 ---
 
-**45. Fidelity Stall Rate**
-
-Fraction of math-valid cycles stalled in a fidelity phase (multi-HF-cycle math instruction).
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | UNPACK |
-
-```
-Fidelity Stall Rate = MATH_FIDELITY_STALL / MATH_INSTRN_AVAILABLE * 100
-```
-
-- **0%**: LoFi math only (all instructions complete in 1 HF cycle).
-- **>0%**: HiFi math instructions are active. Each HiFi2 takes 2 cycles, HiFi4 takes 4 cycles.
-
-**Use case:** Detects whether a workload uses HiFi math; non-zero values indicate multi-cycle math instructions contributing to total execution time.
-
----
-
-**46. HiFi Fraction**
-
-Fraction of issued math instructions that took more than 1 HF cycle (HiFi2 or HiFi4).
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | UNPACK |
-
-```
-HiFi Fraction = (MATH_INSTRN_HF_2_CYCLE + MATH_INSTRN_HF_4_CYCLE) /
-                (MATH_INSTRN_HF_1_CYCLE + MATH_INSTRN_HF_2_CYCLE + MATH_INSTRN_HF_4_CYCLE) * 100
-```
-
-- **0%**: Pure LoFi.
-- **100%**: Pure HiFi.
-
-**Use case:** Quick check of fidelity mix in a workload.
-
----
-
-**47. Avg HF Cycles Per Instrn**
-
-Weighted average of HF cycles per issued math instruction (1 for LoFi, 2 for HiFi2, 4 for HiFi4).
-
-| | |
-|---|---|
-| **Architectures** | Wormhole, Blackhole |
-| **Counter group** | UNPACK |
-
-```
-Avg HF Cycles = (HF_1 + 2*HF_2 + 4*HF_4) / (HF_1 + HF_2 + HF_4)
-```
-
-- **1.0**: All LoFi.
-- **2.0**: All HiFi2.
-- **4.0**: All HiFi4.
-- Between: Mixed workload.
-
-**Use case:** Single-number summary of fidelity impact on math execution.
-
----
-
 ## Hardware Register Reference
 
 Each counter bank `<X>` (`FPU`, `TDMA_PACK`, `TDMA_UNPACK`, `L1`, `INSTRN_THREAD`) is programmed via three RISC-V debug registers. The programming sequence in `start_perf_counter()` / `stop_perf_counter()` follows this map.
@@ -1160,4 +1097,4 @@ Because the software must toggle bit [16] and re-read to get both `req` and `gra
 
 Verified against the `wormhole_rtl` and `blackhole_rtl` branches. Every counter exposed via the `hw_counters.h` arrays is driven by a real RTL signal — signals that are hardwired to a constant, or whose grant/req line is an alias of another counter we already expose, are omitted from the arrays entirely. No post-hoc filtering is applied; every emitted counter is reported as-is.
 
-Some counters will still be 0 for a given workload — for example, `WAITING_FOR_SFPU_IDLE_{0,2}` never fires because only the math thread waits for SFPU, and `MATH_INSTRN_HF_2/4_CYCLE` fire only for HiFi math. These are workload-dependent zeros, not dead counters.
+Some counters will still be 0 for a given workload, for example `WAITING_FOR_SFPU_IDLE_{0,2}` never fires because only the math thread waits for SFPU. Those are workload-dependent zeros rather than dead counters. The fidelity counters were a different case: they were tied off in hardware on both architectures and have been removed.

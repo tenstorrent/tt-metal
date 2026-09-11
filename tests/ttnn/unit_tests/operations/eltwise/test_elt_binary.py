@@ -178,7 +178,7 @@ def test_fused_relu_with_broadcast(device, dtype, broadcast_shape):
     tt_out = ttnn.add(tt_a, tt_b, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)])
     result = ttnn.to_torch(tt_out)
 
-    assert_with_ulp(golden, result, 1)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
 
 
 # fmt: off
@@ -203,7 +203,7 @@ def test_rne_approx_modes(device, ttnn_op, fast_and_approximate_mode, ulp_thresh
     kwargs = {} if fast_and_approximate_mode is None else {"fast_and_approximate_mode": fast_and_approximate_mode}
     output = ttnn.to_torch(ttnn_op(input_tensor_a, input_tensor_b, **kwargs))
 
-    assert_with_ulp(torch_output_tensor, output, ulp_threshold)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output, ulp_threshold=ulp_threshold)
 
 
 # fmt: off
@@ -224,7 +224,9 @@ def test_rne_approx_modes_inplace(device, ttnn_op, fast_and_approximate_mode, ul
     kwargs = {} if fast_and_approximate_mode is None else {"fast_and_approximate_mode": fast_and_approximate_mode}
     ttnn_op(input_tensor_a, input_tensor_b, **kwargs)
 
-    assert_with_ulp(torch_output_tensor, ttnn.to_torch(input_tensor_a), ulp_threshold)
+    assert_with_ulp(
+        expected_result=torch_output_tensor, actual_result=ttnn.to_torch(input_tensor_a), ulp_threshold=ulp_threshold
+    )
 
 
 # fmt: off

@@ -98,9 +98,7 @@ m2::KernelSpec make_touch_consumer(
 
 uint32_t touch_result_l1_addr(distributed::MeshDevice& mesh_device, uint32_t num_dfbs) {
     const uint32_t bytes = num_dfbs * 3 * sizeof(uint32_t);
-    const uint32_t align = mesh_device.allocator()->get_alignment(BufferType::L1);
-    const uint32_t aligned = (bytes + align - 1) / align * align;
-    return static_cast<uint32_t>(mesh_device.l1_size_per_core()) - aligned;
+    return top_of_l1_scratch_addr(mesh_device, bytes);
 }
 
 void expect_touch_results(
@@ -303,7 +301,7 @@ TEST_F(UnitMeshAnyDispatchFixture, HalfGrid3Plus3DFBsOnDevice) {
     }
     m2::SetProgramRunArgs(program, params);
 
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
 
     for (uint32_t i = 0; i < per_half * 2; ++i) {
         std::vector<uint32_t> got;
@@ -452,7 +450,7 @@ TEST_F(UnitMeshAnyDispatchFixture, HalfGridOnDeviceDataflow1DFBEach) {
     m2_writeshard_barrier_uint32(this->device(), in_a, input_a);
     m2_writeshard_barrier_uint32(this->device(), in_b, input_b);
 
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
 
     std::vector<uint32_t> result_a, result_b;
     slow_dispatch::ReadFromBuffer(out_a.mesh_buffer(), result_a);

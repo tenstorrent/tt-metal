@@ -65,6 +65,9 @@ def run_mla_inference(
     tt_kvpe_cache,
     return_indices=False,
     inject_indices=None,
+    is_chunked=False,
+    active_seq_len=None,
+    actual_start=None,
 ):
     """
     Utility function to run MLA inference without host comparison.
@@ -80,12 +83,25 @@ def run_mla_inference(
         is_balanced: Whether to use balanced chunk ordering
         topology: Topology (Linear or Ring)
         tt_kvpe_cache: Initialized KVPE cache on device
+        is_chunked / active_seq_len / actual_start: prefill mode, passed straight to ttMLA and
+            forward(). No chunk loop here -- one forward over the whole sequence -- so only two
+            triples fit: single-shot (False/None/None) or one chunk (True/seq_len/0). Sparse must chunk.
 
     Returns:
         Tuple of (tt_output, hidden_states, chunk_order, shard_dims)
     """
     # Create TT MLA
     logger.info("Creating TT MLA...")
+
+    # The mode is the caller's, not derived: dense chunked prefill is real (test_mla_chunked_prefill,
+    # tt_prefill_runtime.py), so sparsity cannot decide it -- it only decides what a sparse caller may
+    # declare, since ttMLA binds _apply_rope_padded + _sparse_chunked_attn from _has_indexer alone.
+    has_indexer = resolve_has_indexer(config)
+    assert not has_indexer or is_chunked, (
+        "sparse (DSA) MLA has no single-shot path -- it is block-cyclic by construction. Pass "
+        "is_chunked=True: this helper's single forward is then declared as one full-length chunk at "
+        "offset 0, which is what actually executes."
+    )
 
     mla_tt = ttMLA(
         config,
@@ -97,17 +113,12 @@ def run_mla_inference(
         tp_axis=tp_axis,
         is_balanced=is_balanced,
         topology=topology,
-        # Match the single-layer test cache (num_kvpe_cache_layers=1): the sparse single-shot write now
-        # goes through update_padded_kv_cache, which asserts cache_batch % layer_num == 0. Dense is
-        # unaffected (its single-shot write uses fill_cache_for_user_, which ignores layer_num).
+        is_chunked=is_chunked,
+        active_seq_len=active_seq_len,
         layer_num=1,
         sparse_kv_cache_format=tt_kvpe_cache.format,
     )
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
-    # Sparse (DSA) single-shot is folded onto the block-cyclic path (one full-seq chunk at offset 0):
-    # it uses the indexed rope tables and a caller-owned indexer key cache, exactly like the chunked
-    # path. Dense keeps natural rope + no index cache.
-    has_indexer = resolve_has_indexer(config)
     index_kv_cache = None
     if has_indexer:
         rope_tensors = rope_setup.get_rope_tensors_indexed(cache_seq_len_global=seq_len, chunk_size_global=seq_len)
@@ -159,11 +170,12 @@ def run_mla_inference(
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
     # GLM-5.2 indexer reuse (return_indices / inject_indices): capture this layer's top-k selection, or
-    # feed a prior layer's to skip the indexer. Defaults leave the single-shot forward unchanged.
+    # feed a prior layer's to skip the indexer. Defaults leave the forward unchanged.
     mla_out = mla_tt.forward(
         hidden_states=tt_hidden_states,
         rope_tensors=rope_tensors,
         kvpe_cache=tt_kvpe_cache,
+        actual_start=actual_start,
         indexer_indices=inject_indices,
         return_indexer_indices=return_indices,
         index_kv_cache=index_kv_cache,
