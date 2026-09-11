@@ -759,8 +759,16 @@ class ModelArgs:
         # test_non_uniform_seeding). Forcing per-user batch-1 prefill removes the
         # variance. Workaround until the prefill kernels are batch-invariant.
         # Disabled for Qwen3-32B (P150x4) and Llama-3.1-8B (P300/P150x4/P150x8).
-        self.disable_batched_prefill = (self.base_model_name == "Qwen3-32B" and self.device_name == "P150x4") or (
-            self.base_model_name == "Llama-3.1-8B" and self.device_name in ("P150", "P300", "P150x4", "P150x8")
+        # Olmo-3.1-32B on Blackhole: a 32-user burst of ~200-token prompts batches 32 x 1024-token
+        # prefills into one 32k-token pass. On a single P150 the KV pool leaves no DRAM for the
+        # [32768, 27648] bfp8 MLP activation (TT_FATAL Out of Memory in mlp.py ttnn.mul); on P300 /
+        # P150x4 the traced batched prefill overflows trace_region_size (mesh_trace.cpp:82). Either
+        # way the EngineCore dies and the server is wedged. Sequential per-user prefill is the
+        # validated path for this model; the 8-user batch fits but leaves no headroom.
+        self.disable_batched_prefill = (
+            (self.base_model_name == "Qwen3-32B" and self.device_name == "P150x4")
+            or (self.base_model_name == "Llama-3.1-8B" and self.device_name in ("P150", "P300", "P150x4", "P150x8"))
+            or (self.base_model_name == "Olmo-3.1-32B" and self.device_name in ("P150", "P300", "P150x4", "P150x8"))
         )
 
         if (
