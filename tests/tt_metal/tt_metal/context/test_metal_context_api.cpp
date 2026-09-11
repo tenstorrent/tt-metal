@@ -20,7 +20,6 @@ namespace tt::tt_metal {
 
 class MetalContextTest : public ::testing::Test {
 protected:
-    void SetUp() override { MetalContext::destroy_all_instances(); }
     void TearDown() override { MetalContext::destroy_all_instances(); }
 };
 
