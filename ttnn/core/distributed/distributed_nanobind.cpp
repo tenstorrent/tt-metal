@@ -5,8 +5,6 @@
 #include "ttnn/distributed/distributed_nanobind.hpp"
 
 #include <tt-metalium/tt_metal.hpp>
-#include <nanobind/stl/vector.h>
-#include <nanobind/stl/string.h>
 #include <nanobind/stl/map.h>
 
 #include <tt_stl/reflection.hpp>
