@@ -16,6 +16,7 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/pack.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/dfb_binding_token.h"
 #include "experimental/kernel_args.h"
@@ -530,12 +531,12 @@ void kernel_main() {
                 dfb_in1.pop_front(in1_block_num_tiles);
                 reuse_in0_block = false;
                 if (k_block == 0) {
-                    PACK((llk_pack_reconfig_l1_acc(1)));
+                    pack_reconfig_l1_acc(1);
                 }
             }
 
             dfb_intermediate.push_back(out_block_num_tiles);
-            PACK((llk_pack_reconfig_l1_acc(0)));
+            pack_reconfig_l1_acc(0);
 
 #ifdef FUSE_SWIGLU
             // SwiGLU collapses the interleaved gate/up block to half its N width.
