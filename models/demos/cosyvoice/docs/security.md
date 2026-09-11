@@ -1,28 +1,43 @@
 # Dependency and input-handling review
 
-> For the maintainers / security owner: three `torch` advisories are open and are
-> not closed by a version bump. The disposition being requested, the evidence
-> behind it, and what the alternatives cost are in the next section. Everything after
-> that is the full audit record.
+> For the maintainers / security owner: four advisories are open and are not closed
+> by a version bump -- three `torch` MEDIUMs and one `transformers` HIGH. The
+> disposition being requested, the evidence behind it, and what the alternatives
+> cost are in the next section. Everything after that is the full audit record.
 
-## Disposition requested: three open `torch` advisories
+## Disposition requested: four open advisories
 
 Cycode has flagged the same three MEDIUM advisories against `requirements-reference.txt`'s
-`torch==2.6.0+cpu` on every scan since 2026-08-12, unchanged. They are the last three
-of the 40 findings this file opened with; the other 37, including every CRITICAL and
-every HIGH, are closed by removal or by a bump (see *Audit findings* below).
+`torch==2.6.0+cpu` on every scan since 2026-08-12, unchanged, joined on 2026-09-10 by one
+HIGH against `transformers==5.5.0`. These four are the last four of the 41 findings this
+file opened with; the other 37 are closed by removal or by a bump (see *Audit findings*
+below).
 
 | advisory | affected function | impact | fixed in |
 |---|---|---|---|
 | [CVE-2025-3730](https://nvd.nist.gov/vuln/detail/CVE-2025-3730) | `torch.nn.functional.ctc_loss` | denial of service | `2.8.0` |
 | [CVE-2025-2999](https://nvd.nist.gov/vuln/detail/CVE-2025-2999) | `torch.nn.utils.rnn.unpack_sequence` | memory corruption | `2.9.1` |
 | [CVE-2025-2998](https://nvd.nist.gov/vuln/detail/CVE-2025-2998) | `torch.nn.utils.rnn.pad_packed_sequence` | memory corruption | none recorded; range ends at `<= 2.6.0` |
+| [CVE-2026-9856](https://nvd.nist.gov/vuln/detail/CVE-2026-9856) | `PreTrainedTokenizerBase.save_pretrained` / `ProcessorMixin.save_pretrained` | arbitrary file write | `5.10.1` (advisory names `5.10.0`, yanked) |
 
 All three are CVSS 4.0 base 4.8 MEDIUM, `AV:L/AC:L/PR:L/UI:N` — local access with
 existing privileges, no user interaction. NVD's own text for CVE-2025-3730 adds "the
 real existence of this vulnerability is still doubted at the moment". Two of the three
 are memory corruption rather than DoS, which is worth stating plainly because an
 earlier revision of this document called all three "local DoS" and that was wrong.
+
+The `transformers` finding, CVE-2026-9856 (GHSA-xrqw-3rrv-vx5w, CVSS 7.1 HIGH), is a path
+traversal: `PreTrainedTokenizerBase`/`ProcessorMixin.save_pretrained` write a checkpoint's
+chat-template name as `<name>.jinja` without checking it stays inside the target directory.
+The advisory names `5.10.0` as first patched; that release was yanked by its own authors 21
+minutes after publishing ("missing a bunch of fixes"), so `5.10.1` is the version that
+actually carries the fix. Not reachable either way: this file's only `transformers` import
+(`scripts/eval_wer_sim.py`) never calls `save_pretrained`, and upstream CosyVoice@074ca6d's
+three call sites are all off the reference path -- a CUDA-only Triton export script, a GRPO
+training example, and a `vllm`-only path that saves a raw model, not a tokenizer. Unlike
+`lightning`, this package sits in the AR decode loop that produces every golden, so a
+five-minor-version bump needs a golden re-run before it can be called safe; none has been
+done, so the pin stays at `5.5.0`.
 
 What ships. Nothing. `requirements-reference.txt` builds a host-only venv for
 golden capture, weight export and WER/speaker scoring. Merging this demo installs
@@ -73,13 +88,11 @@ is real work, and it buys nothing on the reachability table above.
 
 The disposition being asked for. One of:
 
-1. Accept the risk and keep `torch==2.6.0+cpu` — the recommendation. The findings
-   are local-privilege, MEDIUM, in functions no reference-path code calls, in a venv
-   the merge does not install.
-2. Require the bump — in which case the golden set is regenerated and every
-   accuracy figure re-measured before merge. `docs/security.md`'s *Reproducing*
-   section is the procedure; budget a full re-run of `tests/pcc` and `tests/e2e` on
-   both architectures.
+1. Accept the risk and keep both pins — the recommendation. Every finding is in a
+   function no reference-path code calls, in a venv the merge does not install.
+2. Require a bump — golden set regenerated and every figure re-measured before merge;
+   `5.10.1` for `transformers`, not the yanked `5.10.0`. `docs/security.md`'s
+   *Reproducing* section is the procedure.
 3. Require the file's removal from the PR — publishable, at the cost that the
    goldens and the WER/similarity scores stop being reproducible from this tree.
 
@@ -93,8 +106,9 @@ and its date so a later scan hits a written disposition rather than an open find
 `pip-audit` run 2026-08-05; re-worked 2026-08-12 against the Cycode scan on the PR, which
 flagged 38 advisories across 10 pinned packages plus one SAST finding. A 39th arrived on
 2026-08-22 against `hydra-core` and a 40th on 2026-09-09 against `lightning`; both are closed
-the same way, by a bump. The conclusion depends on a distinction the two-environment split
-already enforces, so it is stated first.
+the same way, by a bump. A 41st arrived the same day against `transformers` and is held
+open -- see *Disposition requested* above. The conclusion depends on a distinction the
+two-environment split already enforces, so it is stated first.
 
 ## The port adds no runtime dependencies
 
@@ -134,10 +148,10 @@ help. So the pins moved.
 |---|---|---|
 | removed with the package | 1 CRITICAL, 10 HIGH, 6 MODERATE | `gradio`, `onnx` — never imported |
 | fixed by a version bump | 3 CRITICAL, 10 HIGH, 7 MODERATE | `torch`, `lightning`, `diffusers`, `pyarrow`, `protobuf`, `modelscope`, `gdown`, `transformers`, `hydra-core` |
-| **outstanding** | **3 MODERATE** | `torch` ×3 |
+| **outstanding** | **1 HIGH, 3 MODERATE** | `transformers`, `torch` ×3 |
 
-37 of 40 closed, including every CRITICAL and every HIGH. The three that remain are
-the `torch` MEDIUMs dispositioned at the top of this document; see *Disposition
+37 of 41 closed. The four that remain are the three `torch` MEDIUMs and the
+`transformers` HIGH dispositioned at the top of this document; see *Disposition
 requested* for their functions, their reachability and what a bump would cost.
 
 Re-measured 2026-08-22, because the reason recorded here was wrong. Neither the `triton` pin
