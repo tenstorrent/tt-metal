@@ -382,6 +382,111 @@ beyond ISL 16384. A revised prefill curve needs points measured at 65536 and
 131072 and the superlinearity appears only past it. The 261892 kill therefore
 implies **>27.5 ms/token** at that length.
 
+## 4d. Why prefill is slow: op count, not overhead
+
+TTFT is the larger of the two gaps (52-1563x over target against decode's flat
+4.7-5.3x), so it is worth knowing what it actually is. It is **device time, and
+it is the per-op latency floor multiplied by an enormous op count** — not
+warmup, not trace capture, not host dispatch.
+
+### It is not compute or bandwidth bound
+
+From the required-point run, at concurrency 1:
+
+| ISL | measured | ms/token | TFLOP | achieved | % of QB2 peak (2654 TF/s) |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1024 | 20,599 ms | 20.12 | 55.3 | 2.68 TF/s | **0.10%** |
+| 4096 | 80,571 ms | 19.67 | 221.2 | 2.75 TF/s | **0.10%** |
+| 32768 | 657,640 ms | 20.07 | 1769.5 | 2.69 TF/s | **0.10%** |
+| 131072 | 2,733,658 ms | 20.86 | 7077.9 | 2.59 TF/s | **0.10%** |
+
+A flat 2.6-2.75 TFLOP/s, a thousandth of peak, and ~12 GB/s of bandwidth.
+Neither resource is the constraint.
+
+### It is op count, and the op count is proportional to ISL
+
+`_sequential_recurrence` in `functional_decoder.py` applies the gated-delta
+rank-1 update **one token at a time**. Counting the loop body: five slices, four
+elementwise ops, one transpose and three matmuls — **13 ops per token per
+layer**, across 48 linear-attention layers:
+
+| ISL | recurrence ops | measured | **us per op** |
+| ---: | ---: | ---: | ---: |
+| 1024 | 638,976 | 20,599 ms | **32.2** |
+| 4096 | 2,555,904 | 80,571 ms | **31.5** |
+| 32768 | 20,447,232 | 657,640 ms | **32.2** |
+| 131072 | 81,788,928 | 2,733,658 ms | **33.4** |
+
+**31.5-33.4 us per op, flat across a 128x range of ISL.** That is the same
+per-op floor the decode study measured independently on this hardware — a
+`multiply` costs 32.0 us on 49 K elements and 35.8 us on 1.57 M, i.e. size
+barely matters below a few MB. The recurrence state here is 0.39 MB per op at
+batch 1, so each of those ~32 us does almost no work. Prefill's constant
+ms/token is a direct consequence: op count is linear in tokens.
+
+### The formulation was tuned at batch 32, and the product is batch-1-primary
+
+The sequential form replaced a Hillis-Steele parallel scan because it measured
+3.85x faster at batch 32 (`doc/prefill_general_optimizations`). Its docstring
+gives the reason:
+
+> Composing transforms buys parallel depth, which is only worth paying for when
+> the device is starved -- and it is not, since `groups = batch * value_heads`
+> already exceeds the core count by more than an order of magnitude.
+
+True at batch 32: 384 groups per device against 110 cores. **At batch 1 it is 12
+groups per device, so the device is starved and the argument inverts.** Measured
+at ISL 4096, batch 1, all 64 layers, real weights:
+
+| scan | warm TTFT | ms/token | ops | us/op | state per op |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| sequential (shipped default) | 81,467 ms | 19.89 | ~2,556,000 | 31.9 | 0.39 MB |
+| `QWEN36_PREFILL_SCAN=hillis` | **44,800 ms** | **10.94** | ~184,000 | 243.1 | 12.6 MB |
+
+**1.82x faster at batch 1.** A 14x op-count reduction bought with bigger ops:
+hillis moves ~37.7 MB per op, which at the 262 GB/s this hardware reaches would
+be 144 us against 243 us measured, so ~59% of the bandwidth roofline. That is a
+sane regime; 0.10% of compute peak is not.
+
+So the right change is **batch-dependent scan selection** — sequential where
+`groups` saturates the core grid, parallel where it does not — which is exactly
+what the docstring reasons about but does not implement. Two caveats before
+anyone flips a default: the 3.85x batch-32 figure is from the earlier document
+and was not re-measured here, only the batch-1 number is; and the parallel scan
+materialises `[groups, chunk, K, K]`, which is what made chunk 64 OOM, so its
+footprint needs checking at the long ISLs.
+
+Even so, 44,800 ms against a 500 ms target is still **90x over** (from 163x).
+Prefill formulation alone does not reach the requirement; APC is what takes this
+path off the steady-state loop.
+
+### Kernel compilation is 33.7 s, once
+
+Worth separating from the above, and worth correcting an earlier claim in this
+work. A first measurement put the cold-vs-warm difference at 208 ms, which was
+wrong: that run reported `JIT cache stats: 794/802 hits`, so the kernels were
+already compiled into the shared 13 GB on-disk cache by earlier runs, and
+iteration 0 paid only ttnn's in-process program-cache build.
+
+Re-measured with `TT_METAL_CACHE` pointed at an empty private directory
+(`0/802 hits`, shared cache untouched):
+
+| kernel cache | iteration 0 | warm median | iteration-0 overhead |
+| --- | ---: | ---: | ---: |
+| **empty** | **112,846 ms** | 79,103 ms | **33,743 ms (+43%)** |
+| warm | 81,674 ms | 81,467 ms | 208 ms |
+
+So compilation costs **33.7 s on a genuinely first-ever prefill**. It does not
+affect the analysis above — it is one-time and cannot produce a rate flat in ISL
+— and it does not inflate the CI numbers either: in the required-point run mean
+and median TTFT were 80,617 and 80,571 ms at ISL 4096, i.e. all four requests
+uniform, so compilation had been paid during server startup and trace capture.
+But the requirements state **cold** TTFT targets, and the ISL-128 target is
+60 ms, so a fresh container's first request carrying ~34 s is worth knowing.
+
+Warm prefill agrees across the two independent runs, 79,103 and 81,467 ms
+(2.9% apart), so the figure the rest of this section rests on is stable.
+
 ## 5. What to change in the benchmark configuration
 
 In rough order of value per hour of runner time:
@@ -398,6 +503,9 @@ In rough order of value per hour of runner time:
 5. **Enable APC and chunked prefill**, then re-check whether the long-ISL
    multi-concurrency points still hit the 7200 s cap. They likely will not:
    serialized per-request prefill is the direct cause.
+5b. **Select the prefill scan on batch, not by default** (section 4d): the shipped
+   sequential recurrence is 1.82x slower than the parallel scan at batch 1, the
+   requirements' primary profile.
 6. **Make the other three eval tasks actually run** — `terminal_bench_2_1`,
    `livecodebench`, `swe_bench_verified` — and settle SWE-bench Pro vs Verified
    before gating on 61.7.

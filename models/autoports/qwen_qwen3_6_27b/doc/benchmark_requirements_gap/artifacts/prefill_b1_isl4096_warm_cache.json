@@ -1,0 +1,21 @@
+{
+  "label": "prefill_probe",
+  "batch": 1,
+  "prefill_iters": 3,
+  "linear_prefill_chunk_size": 32,
+  "prompt_tokens": 4096,
+  "ttft_ms_all": [
+    81674.05224405229,
+    80707.41808740422,
+    82225.62606772408
+  ],
+  "ttft_ms_cold": 81674.05224405229,
+  "ttft_ms_warm_median": 81466.52207756415,
+  "cold_overhead_ms": 207.53016648814082,
+  "measured_decode_replays": 4,
+  "trace_capture_seconds": 1.8558111051097512,
+  "token_out_seconds": 0.19576061889529228,
+  "ms_per_token": 48.94015472382307,
+  "token_out_t_s_u": 20.43311889067691,
+  "token_out_total_t_s": 20.43311889067691
+}

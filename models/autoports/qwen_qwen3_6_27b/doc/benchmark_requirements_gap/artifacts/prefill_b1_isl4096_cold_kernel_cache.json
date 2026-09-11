@@ -1,0 +1,21 @@
+{
+  "label": "cold_kernel_cache",
+  "batch": 1,
+  "prefill_iters": 3,
+  "linear_prefill_chunk_size": 32,
+  "prompt_tokens": 4096,
+  "ttft_ms_all": [
+    112845.83749109879,
+    78769.4634157233,
+    79436.40822498128
+  ],
+  "ttft_ms_cold": 112845.83749109879,
+  "ttft_ms_warm_median": 79102.93582035229,
+  "cold_overhead_ms": 33742.901670746505,
+  "measured_decode_replays": 4,
+  "trace_capture_seconds": 27.470335866790265,
+  "token_out_seconds": 0.19570465479046106,
+  "ms_per_token": 48.926163697615266,
+  "token_out_t_s_u": 20.438961987300498,
+  "token_out_total_t_s": 20.438961987300498
+}

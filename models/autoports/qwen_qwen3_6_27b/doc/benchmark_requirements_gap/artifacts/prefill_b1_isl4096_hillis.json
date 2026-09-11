@@ -1,0 +1,20 @@
+{
+  "label": "hillis_b1",
+  "batch": 1,
+  "prefill_iters": 2,
+  "linear_prefill_chunk_size": 32,
+  "prompt_tokens": 4096,
+  "ttft_ms_all": [
+    45008.93624080345,
+    44800.25582481176
+  ],
+  "ttft_ms_cold": 45008.93624080345,
+  "ttft_ms_warm_median": 44800.25582481176,
+  "cold_overhead_ms": 208.68041599169374,
+  "measured_decode_replays": 4,
+  "trace_capture_seconds": 0.6455827201716602,
+  "token_out_seconds": 0.195711440872401,
+  "ms_per_token": 48.92786021810025,
+  "token_out_t_s_u": 20.43825328846207,
+  "token_out_total_t_s": 20.43825328846207
+}
