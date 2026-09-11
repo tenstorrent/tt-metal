@@ -65,7 +65,7 @@ Results (2026-09-11 23:06, host rebuilt with `./build_metal.sh --release`, `_ttn
   (identical to pre-excision); stage-5 `parity_w_sharded_bricked` 99.9936 % + GNA parity 5/5, **6 passed**.
 - Job 443 (production pipeline, SLAB 78): PASSED, ANOMALIES none, **VAE decode 12.20 s** (12.31 s before),
   output `~/ltx25_diffvae_1080p.mp4`.
-**Tier 3 DONE.** Still untouched by choice: item 4 (untracked scratch: root diagrams, `models/demos/t3000/llama2_70b/`,
+**Tier 3 DONE.** Still untouched by choice: item 4 (untracked scratch: root diagrams,
 kernel NOTES/figs, `NA_SDPA_KV_COALESCING.patch`), `DIFFVAE_STAGES_WSP` (live fallback), the three untracked
 tests worth committing (`test_brick_activation.py`, `test_halo_exchange_geometry.py`, `test_gemma4_cache_roundtrip.py`).
 
