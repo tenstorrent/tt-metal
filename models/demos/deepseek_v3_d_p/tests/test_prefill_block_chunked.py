@@ -146,10 +146,13 @@ def _pcc_pe(label: str, ref_pe: torch.Tensor, dev_pe: torch.Tensor, thr: float) 
     return _pcc(label, interleave_pe(ref_pe), dev_pe, thr)
 
 
-def _log_position_breakdown(label, golden, dev, split, bands, pe_interleave):
+def _log_position_breakdown(label, golden, dev, split, bands, pe_interleave, primary=None):
     """Per-band PCC, so a localised miss (chunk boundary, pad tail) is distinguishable from a uniform
     one -- the two need different fixes and a single PCC over n_chunks*CHUNK rows cannot tell them
-    apart. Set KVPE_POSITION_BREAKDOWN=1. Diagnostic: asserts nothing."""
+    apart. Set KVPE_POSITION_BREAKDOWN=1. Diagnostic: asserts nothing.
+
+    Only the first `primary` bands (default: all) are ranked for "worst". Narrower bands nested inside
+    a wider one score lower on noise alone, so mixing granularities would always blame the narrow one."""
     ref_kv, dev_kv = golden[:, :split].float(), dev[:, :split].float()
     ref_pe = golden[:, split:].float()
     if pe_interleave:
@@ -159,12 +162,13 @@ def _log_position_breakdown(label, golden, dev, split, bands, pe_interleave):
     logger.info(f"{label} position breakdown:")
     logger.info(f"{'band':>20} {'pe PCC':>10} {'kv PCC':>10} {'|ref|max':>10} {'|dev|max':>10}")
     scored = []
-    for lo, hi, name in bands:
+    for idx, (lo, hi, name) in enumerate(bands):
         if hi <= lo:
             continue
         pe = float(comp_pcc(ref_pe[lo:hi], dev_pe[lo:hi], 0.0)[1])
         kv = float(comp_pcc(ref_kv[lo:hi], dev_kv[lo:hi], 0.0)[1])
-        scored.append((pe, name))
+        if primary is None or idx < primary:
+            scored.append((pe, name))
         logger.info(
             f"{name:>20} {pe:>10.6f} {kv:>10.6f} "
             f"{ref_pe[lo:hi].abs().max():>10.3f} {dev_pe[lo:hi].abs().max():>10.3f}"
@@ -382,7 +386,10 @@ def run_chunked_block(
         if not determinism_check:
             continue
         if it == 0:
-            assert torch.isfinite(out_accum).all(), "iter 0 output is not finite; bit-identity would be vacuous"
+            for nm, t in (("output", out_accum), ("kvpe", kv_accum["tt_kvpe"])):
+                # both accumulators start as zeros, so an all-zero gather would compare bit-identical
+                # to itself on every pass and report determinism it never measured
+                assert torch.isfinite(t).all() and t.any(), f"iter 0 {nm} is degenerate; bit-identity is vacuous"
             baseline = (out_accum.clone(), kv_accum["tt_kvpe"].clone())
         else:
             for name, base, cur in (
@@ -408,7 +415,7 @@ def run_chunked_block(
         bands = [(c * CHUNK, (c + 1) * CHUNK, f"chunk{c}") for c in range(n_chunks)]
         last = (n_chunks - 1) * CHUNK
         bands += [(last + i * chunk_local, last + (i + 1) * chunk_local, f"  last chip{i}") for i in range(sp)]
-        _log_position_breakdown("kv_post_transform", g_post, kv_accum["tt_kvpe"], kv_lora, bands, True)
+        _log_position_breakdown("kv_post_transform", g_post, kv_accum["tt_kvpe"], kv_lora, bands, True, n_chunks)
     logger.info("Comparing KV intermediates vs golden trace:")
     _pcc("compressed_kv[nope]", g_compressed[:, :kv_lora], kv_accum["tt_kv"][:, :kv_lora], THRESHOLDS.kv_nope)
     _pcc("compressed_kv[pe]", g_compressed[:, kv_lora:], kv_accum["tt_kv"][:, kv_lora:], THRESHOLDS.kv_pe)
