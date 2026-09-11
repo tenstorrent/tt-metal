@@ -9,7 +9,6 @@
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/types.hpp"
-#include <array>
 #include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_device_operation.hpp"
 
 namespace ttnn::transformer {
@@ -34,26 +33,7 @@ ttnn::Tensor scaled_dot_product_attention(
     /// Windowed mode only. Per-device form of the offset above: a 1-element int32/uint32 ROW_MAJOR device
     /// tensor, read at runtime rather than baked into the program. Shard it on the sequence-parallel axis
     /// so every device runs the SAME program yet sees its own origin. Overrides the scalar when set.
-    const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor = std::nullopt,
-    /// 3D-neighborhood (NATTEN) windowed mode: {T, H, W, kt, kh, kw}. Each query attends a (kt,kh,kw)
-    /// box, inward-shifted at borders, over a (T,H,W) grid flattened T-outer. The on-device mask is
-    /// synthesized from these six ints -- no cu_window_seqlens. Mutually exclusive with the 1D
-    /// windowed / sliding-window / causal modes; requires T*H*W == the K sequence length.
-    const std::optional<std::array<uint32_t, 6>>& neighborhood_3d = std::nullopt,
-    /// Spatial sequence-parallel over W: {W_full, w_origin}. The neighborhood_3d (T,H,W) is then this
-    /// chip's LOCAL padded shard, and the mask computes each column's global w = w_origin + local_w,
-    /// clamped in [0, W_full). w_origin is signed (int32 bit-pattern in a uint32).
-    const std::optional<std::array<uint32_t, 2>>& neighborhood_w_shard = std::nullopt,
-    /// Fused-gather variant of neighborhood_3d (off by default). When true the reader densely gathers
-    /// each Q chunk's window rows from a ROW_MAJOR K/V table into a contiguous cb_k/cb_v so the compute
-    /// runs dense flash over only real window tokens (the writer generates the neighborhood mask on
-    /// device). Requires neighborhood_3d.
-    bool neighborhood_gather = false,
-    /// Generalized Neighborhood Attention stride: {st, sh, sw}. Runs of `stride` queries along an axis are
-    /// grouped and share one window -- that of the group's center-most member, biased right for even
-    /// groups. {1,1,1} (the default, and nullopt) is standard neighborhood attention. Each stride must be
-    /// in [1, kernel] and divide its axis length. Requires neighborhood_3d.
-    const std::optional<std::array<uint32_t, 3>>& neighborhood_stride = std::nullopt);
+    const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor = std::nullopt);
 
 /// Chunked SDPA over paged K/V: one Q chunk per call, K/V in paged layout.
 /// Two overloads: legacy (chunk_start_idx as int) or flexible (chunk_start_idx_tensor on device).

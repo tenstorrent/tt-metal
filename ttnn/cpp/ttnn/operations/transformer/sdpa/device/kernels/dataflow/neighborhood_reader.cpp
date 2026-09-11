@@ -433,10 +433,7 @@ void kernel_main() {
     // the chunk. Needed once the chunk is wider than the stride, because then each brick centres a
     // DIFFERENT window and a shared mask would attend to the wrong one.
     constexpr uint32_t per_brick_mask = get_compile_time_arg_val(kernel_args::reader_arg::per_brick_mask);
-    constexpr uint32_t mask_memset_only = get_compile_time_arg_val(kernel_args::reader_arg::mask_memset_only);
-    constexpr uint32_t skip_kv = get_compile_time_arg_val(kernel_args::reader_arg::skip_kv);
     constexpr uint32_t relative_mask = get_compile_time_arg_val(kernel_args::reader_arg::relative_mask);
-    constexpr uint32_t table_always = get_compile_time_arg_val(kernel_args::reader_arg::table_always);
     constexpr auto origin_accessor_args = TensorAccessorArgs<value_accessor_args.next_compile_time_args_offset()>();
     constexpr auto interior_mask_args = TensorAccessorArgs<origin_accessor_args.next_compile_time_args_offset()>();
 
@@ -464,8 +461,7 @@ void kernel_main() {
     // [brick][slot] block is the same tile-for-tile on every such chunk, so once written it is
     // never written again until an edge chunk dirties the pages. The block is
     // bricks_per_query_chunk times bigger, so this only applies while cb_mask fits the shared L1
-    // budget -- the same test the factory sizes the CB by. MEMSET_ONLY keeps writing so that probe
-    // stays a floor on the write cost.
+    // budget -- the same test the factory sizes the CB by.
     //
     // This predicate is ALSO what the program factory sizes cb_mask by, so the two cannot drift:
     // there is no compile arg for the mode. Adding one is not free either -- the reader's five
@@ -480,12 +476,12 @@ void kernel_main() {
     bool mask_pages_hold_table = false;
     // Per-brick: the block resident in cb_mask is whichever chunk wrote it last, identified by its
     // WindowClamp (see compute_per_brick_window_clamp); the table is not needed for this, generated blocks
-    // persist just the same. MEMSET_ONLY keeps writing so that probe stays a floor on the write cost.
+    // persist just the same.
     // resident_clamp_is_valid says the resident record describes what the pages hold; it is false
     // until the first work item has written them. Whether the resident block is the one THIS chunk
     // needs is the word-by-word compare below, not this flag.
     static_assert(bricks_per_query_chunk <= MAX_BRICKS_PER_CHUNK, "WindowClamp holds at most 8 bricks");
-    constexpr bool persistent_mask_enabled = per_brick_mask != 0 && per_brick_persistent_fits && mask_memset_only == 0;
+    constexpr bool persistent_mask_enabled = per_brick_mask != 0 && per_brick_persistent_fits;
     WindowClamp resident_query_brick_window_clamp{};
     bool resident_clamp_is_valid = false;
 #if defined(DEBUG_PRINT_ENABLED)
@@ -601,7 +597,7 @@ void kernel_main() {
         const bool use_interior_table =
             interior_table_supported &&
             gather_is_canonical(gather_origin_brick, chunk_origin_site, gather_bricks, extents) &&
-            (table_always != 0 || brick_window_is_unclamped(chunk_origin_site, extents));
+            brick_window_is_unclamped(chunk_origin_site, extents);
         // The pages already hold exactly these tiles, so there is nothing to write.
         const bool refill_mask = use_interior_table && !mask_pages_hold_table;
 
@@ -710,14 +706,6 @@ void kernel_main() {
                     brick_count,
                     head_count,
                     head_dim_tiles);
-                // DIFFVAE_NA_SKIP_KV: issue no K/V reads at all, leaving whatever the buffers
-                // held. WRONG OUTPUT -- it exists to split the gather's DMA cost from the compute
-                // kernel's, which no other probe here separates, and which decides whether a
-                // bigger query chunk (fewer slots per query, more matmul per slot) can pay.
-                if (skip_kv != 0) {
-                    value_write_pointer += head_dim_tiles * tile_bytes;
-                    continue;
-                }
                 for (uint32_t head_dim_tile = 0; head_dim_tile < head_dim_tiles; ++head_dim_tile) {
                     const uint32_t key_write_pointer =
                         key_base_pointer + (head_dim_tile * tiles_per_kv_chunk + slot) * tile_bytes;
@@ -757,23 +745,10 @@ void kernel_main() {
                             mask_write_pointer + brick_in_chunk * tiles_per_kv_chunk * tile_bytes;
                         // Resolved per brick, not per slot: the table describes a window that centres
                         // on its query, which stops being true once the window clamps at a volume edge.
-                        const bool brick_takes_table =
-                            relative_mask != 0 && use_uploaded_mask &&
-                            (table_always != 0 || brick_window_is_unclamped(query_origin_site, extents));
+                        const bool brick_takes_table = relative_mask != 0 && use_uploaded_mask &&
+                                                       brick_window_is_unclamped(query_origin_site, extents);
                         for (uint32_t slot = 0; slot < tiles_per_kv_chunk; ++slot) {
                             const uint32_t gather_slot = kv_chunk_index * tiles_per_kv_chunk + slot;
-                            // DIFFVAE_NA_MASK_MEMSET_ONLY: write every tile as a constant, skipping
-                            // classify_brick AND fill_mask_tile. WRONG OUTPUT -- it exists to split
-                            // "writing N tiles costs X" from "deciding what is in them costs X", which
-                            // no other experiment here separates.
-                            if (mask_memset_only != 0) {
-                                volatile tt_l1_ptr uint32_t* zero_destination =
-                                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(brick_base + slot * tile_bytes);
-                                for (uint32_t word = 0; word < tile_bytes / sizeof(uint32_t); ++word) {
-                                    zero_destination[word] = 0x00000000u;
-                                }
-                                continue;
-                            }
                             const mask_gen::BrickCoverage brick_coverage =
                                 gather_slot >= gather_brick_count
                                     ? mask_gen::BrickCoverage::NoneVisible

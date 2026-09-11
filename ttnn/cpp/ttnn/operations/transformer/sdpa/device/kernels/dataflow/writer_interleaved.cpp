@@ -44,12 +44,9 @@ void kernel_main() {
     // Windowed (block-diagonal) mask generation flags. Fixed scalar slots BEFORE the tensor-accessor
     // block so the accessor offset chain stays intact for all configs.
     constexpr bool use_windowed_mask = get_compile_time_arg_val(25) == 1;
-    // Fused-gather variant of 3D-neighborhood: mask is generated over the reader's dense-packed keys
-    // (packed_to_flat) instead of the active-tile real positions. Build-out in progress.
-    constexpr bool neighborhood_gather = get_compile_time_arg_val(26) == 1;
 
     // out accessor, then the cu_window accessor chained immediately after it (before the CB-id block).
-    constexpr auto out_args = TensorAccessorArgs<27>();
+    constexpr auto out_args = TensorAccessorArgs<26>();
     constexpr auto cu_window_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     // Per-device Q offset accessor, chained after cu_window so the offset chain stays intact.
     constexpr auto q_offset_args = TensorAccessorArgs<cu_window_args.next_compile_time_args_offset()>();
@@ -76,34 +73,14 @@ void kernel_main() {
     // Q/output are addressed locally, but cu_window_seqlens and K/V are global, so the mask generator
     // needs the shard's global origin. Windowed builds only: the ring-distributed factory shares this
     // kernel, never sets use_windowed_mask, and supplies runtime args only through slot 11 — so slots
-    // 12..27 must not be read there (mirrors the reader's guarded windowed tail).
+    // 12/13 must not be read there (mirrors the reader's guarded windowed tail).
     uint32_t q_tok_offset = 0;
     // Per-device form: when a tensor was supplied its value wins, read below once cb_cu_window_in is
     // available. Zero address means the caller used the scalar above.
     uint32_t q_tok_offset_addr = 0;
-    // 3D-neighborhood descriptor {T,H,W,kt,kh,kw}; T==0 selects the block-diagonal (cu_window) path.
-    uint32_t nb_T = 0, nb_H = 0, nb_W = 0, nb_kt = 0, nb_kh = 0, nb_kw = 0;
-    // Spatial-SP over W: full width + this shard's global W origin (signed). nb_W_full == 0 => not
-    // W-sharded (mask uses local == global W).
-    uint32_t nb_W_full = 0;
-    int32_t nb_w_origin = 0;
-    // GNA query-group stride {st,sh,sw}; 1 is standard neighborhood attention (never 0: the kernels divide
-    // by it).
-    uint32_t nb_st = 1, nb_sh = 1, nb_sw = 1;
     if constexpr (use_windowed_mask) {
         q_tok_offset = get_arg_val<uint32_t>(12);
         q_tok_offset_addr = get_arg_val<uint32_t>(13);
-        nb_T = get_arg_val<uint32_t>(14);
-        nb_H = get_arg_val<uint32_t>(15);
-        nb_W = get_arg_val<uint32_t>(16);
-        nb_kt = get_arg_val<uint32_t>(17);
-        nb_kh = get_arg_val<uint32_t>(18);
-        nb_kw = get_arg_val<uint32_t>(19);
-        nb_W_full = get_arg_val<uint32_t>(20);
-        nb_w_origin = static_cast<int32_t>(get_arg_val<uint32_t>(21));
-        nb_st = get_arg_val<uint32_t>(22);
-        nb_sh = get_arg_val<uint32_t>(23);
-        nb_sw = get_arg_val<uint32_t>(24);
     }
 
     constexpr uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
@@ -150,11 +127,19 @@ void kernel_main() {
             sliding_window_size>(noc);
     }
 
-    // Windowed setup. The per-device Q origin (if passed as a tensor) lands in its OWN dedicated CB
-    // and is read in both sub-modes -- 3D-neighborhood uses it for SP-over-T. The cu_window array load
-    // is block-diagonal only (3D has no cu tensor; cu_window_seqlens_addr is 0 and cb_cu_window_in is
-    // not dedicated there, so touching it would read null and desync a shared CB).
+    // Windowed: load cu_window_seqlens into L1 once; the writer synthesizes the block-diagonal mask per
+    // Q chunk from it (so the reader streams Q/K/V only).
     if constexpr (use_windowed_mask) {
+        const auto cu_window_reader = TensorAccessor(cu_window_args, cu_window_seqlens_addr);
+        constexpr uint32_t cu_tile_bytes = get_tile_size(cb_cu_window_in);
+        CircularBuffer cb_cu(cb_cu_window_in);
+        cb_cu.reserve_back(1);
+        noc.async_read(
+            cu_window_reader, CoreLocalMem<uint32_t>(cb_cu.get_write_ptr()), cu_tile_bytes, {.page_id = 0}, {});
+        noc.async_read_barrier();
+        // Per-device Q origin, if the caller passed it as a tensor. Lands in its own dedicated CB —
+        // every other CB here has a producer/consumer contract with another kernel that a writer-side
+        // reserve/push would break.
         if (q_tok_offset_addr != 0) {
             const auto q_offset_reader = TensorAccessor(q_offset_args, q_tok_offset_addr);
             CircularBuffer cb_off(cb_windowed_q_offset);
@@ -164,24 +149,15 @@ void kernel_main() {
             noc.async_read_barrier();
             q_tok_offset = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(off_ptr);
         }
-        if (nb_T == 0) {
-            // Watcher-build guard for the offset contract the host cannot check in the tensor form (the
-            // per-device value lives on device, so validate() never sees it): the origin must be
-            // tile-aligned, and the Q shard must fit in the K sequence. Tile-granular -- the host's
-            // scalar-form check rounded up to whole tiles. Compiled out of non-watcher builds.
-            ASSERT(q_tok_offset % tt::constants::TILE_HEIGHT == 0);
-            ASSERT(
-                q_tok_offset / tt::constants::TILE_HEIGHT + valid_Sqt <=
-                (unpadded_Sk + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT);
-            const auto cu_window_reader = TensorAccessor(cu_window_args, cu_window_seqlens_addr);
-            constexpr uint32_t cu_tile_bytes = get_tile_size(cb_cu_window_in);
-            CircularBuffer cb_cu(cb_cu_window_in);
-            cb_cu.reserve_back(1);
-            noc.async_read(
-                cu_window_reader, CoreLocalMem<uint32_t>(cb_cu.get_write_ptr()), cu_tile_bytes, {.page_id = 0}, {});
-            noc.async_read_barrier();
-            cb_cu.push_back(1);
-        }
+        // Watcher-build guard for the offset contract the host cannot check in the tensor form (the
+        // per-device value lives on device, so validate() never sees it): the origin must be
+        // tile-aligned, and the Q shard must fit in the K sequence. Tile-granular -- the host's
+        // scalar-form check rounded up to whole tiles. Compiled out of non-watcher builds.
+        ASSERT(q_tok_offset % tt::constants::TILE_HEIGHT == 0);
+        ASSERT(
+            q_tok_offset / tt::constants::TILE_HEIGHT + valid_Sqt <=
+            (unpadded_Sk + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT);
+        cb_cu.push_back(1);
     }
 
     if constexpr (is_chunked) {
@@ -239,27 +215,7 @@ void kernel_main() {
             // would still compile the discarded body). valid_Skt derived from the unpadded K length.
             constexpr uint32_t windowed_valid_Skt =
                 (unpadded_Sk + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
-            // Fused-gather: mask over the reader's DENSE packed keys (n_packed_chunks chunks). Only one
-            // of these two generates -- the streamed path is disabled in gather mode and vice versa.
-            neighborhood_gather_generate_if_enabled<neighborhood_gather, cb_mask_in>(
-                noc,
-                q_chunk,
-                Sq_chunk_t,
-                Sk_chunk_t,
-                valid_Sqt,
-                q_tok_offset,
-                nb_T,
-                nb_H,
-                nb_W,
-                nb_kt,
-                nb_kh,
-                nb_kw,
-                nb_st,
-                nb_sh,
-                nb_sw,
-                nb_W_full,
-                nb_w_origin);
-            windowed_generate_if_enabled<use_windowed_mask && !neighborhood_gather, cb_mask_in, cb_cu_window_in>(
+            windowed_generate_if_enabled<use_windowed_mask, cb_mask_in, cb_cu_window_in>(
                 noc,
                 q_chunk,
                 Sq_chunk_t,
@@ -268,18 +224,7 @@ void kernel_main() {
                 windowed_valid_Skt,
                 k_num_chunks,
                 cu_window_seqlens_eles,
-                q_tok_offset,
-                nb_T,
-                nb_H,
-                nb_W,
-                nb_kt,
-                nb_kh,
-                nb_kw,
-                nb_st,
-                nb_sh,
-                nb_sw,
-                nb_W_full,
-                nb_w_origin);
+                q_tok_offset);
 
             // Determine how many rows of OUT will be written. Both start and end rows are
             // capped by valid_Sqt, since Sq padding is independent of Sk padding.

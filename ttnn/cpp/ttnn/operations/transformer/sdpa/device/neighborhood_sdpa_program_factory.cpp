@@ -61,9 +61,7 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     // cannot be one tile per slot broadcast down the query rows -- each brick needs its own. That
     // is only reachable via DIFFVAE_NA_UNSAFE_CHUNK today, so this follows the same switch rather
     // than costing anything on the shipped path.
-    const bool chunk_exceeds_stride = query_tile_rows > 1 && !(config.query_chunk_sites() == config.stride);
-    const char* per_brick_env = std::getenv("DIFFVAE_NA_PER_BRICK_MASK");
-    const bool per_brick_mask = per_brick_env != nullptr ? per_brick_env[0] == '1' : chunk_exceeds_stride;
+    const bool per_brick_mask = query_tile_rows > 1 && !(config.query_chunk_sites() == config.stride);
     const uint32_t mask_tiles_per_kv_chunk = per_brick_mask ? query_tile_rows * tiles_per_kv_chunk : tiles_per_kv_chunk;
 
     // The relative mask table makes every unclamped query brick want the SAME tiles in the same
@@ -197,11 +195,6 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     reader_compile_args[kernel_args::reader_arg::volume_chunks_width] = plan.volume_chunks.width();
     reader_compile_args[kernel_args::reader_arg::tiles_per_kv_chunk] = tiles_per_kv_chunk;
     reader_compile_args[kernel_args::reader_arg::per_brick_mask] = per_brick_mask ? 1u : 0u;
-    const char* memset_env = std::getenv("DIFFVAE_NA_MASK_MEMSET_ONLY");
-    reader_compile_args[kernel_args::reader_arg::mask_memset_only] =
-        (memset_env != nullptr && memset_env[0] == '1') ? 1u : 0u;
-    const char* skip_kv_env = std::getenv("DIFFVAE_NA_SKIP_KV");
-    reader_compile_args[kernel_args::reader_arg::skip_kv] = (skip_kv_env != nullptr && skip_kv_env[0] == '1') ? 1u : 0u;
     reader_compile_args[kernel_args::reader_arg::kv_chunk_count] = kv_chunk_count;
     reader_compile_args[kernel_args::reader_arg::gather_brick_count] = plan.gather_brick_count;
     reader_compile_args[kernel_args::reader_arg::volume_bricks_time] = plan.volume_bricks.time();
@@ -236,9 +229,6 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     // A stride-1 table is relative; a GNA one is per-regime. The kernel indexes them differently.
     const bool relative_mask = config.stride.time() == 1 && config.stride.height() == 1 && config.stride.width() == 1;
     reader_compile_args[kernel_args::reader_arg::relative_mask] = relative_mask ? 1u : 0u;
-    const char* always_env = std::getenv("DIFFVAE_NA_TABLE_ALWAYS");
-    reader_compile_args[kernel_args::reader_arg::table_always] =
-        (always_env != nullptr && always_env[0] == '1') ? 1u : 0u;
 
     // Accessor args come after the named block, in the order the reader constructs them.
     tt::tt_metal::TensorAccessorArgs(tensors.query_tensor.buffer()).append_to(reader_compile_args);

@@ -29,8 +29,8 @@
 //
 // The windowed SDPA path next door cannot do that: its chunks are flat token runs rather than 3D
 // boxes, so its box extent varies per chunk (H and W fall back to the whole axis when a chunk
-// straddles a frame or a row) and it must carry lo/hi bounds. See NeighborhoodBox in
-// windowed_loop_geometry.hpp -- a genuinely different concept despite the similar shape.
+// straddles a frame or a row) and it must carry lo/hi bounds -- a genuinely different concept
+// from a point despite the similar shape.
 
 namespace ttnn::transformer::neighborhood {
 

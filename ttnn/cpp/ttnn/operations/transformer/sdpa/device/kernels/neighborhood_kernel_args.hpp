@@ -101,24 +101,12 @@ enum : uint32_t {
     // not share a window and the broadcast mask silently attends to the wrong one.
     per_brick_mask,
 
-    // 1 = fill every mask tile with a constant (DIFFVAE_NA_MASK_MEMSET_ONLY). Diagnostic only:
-    // wrong output, but it isolates tile WRITE cost from tile CONTENT cost.
-    mask_memset_only,
-
     // 1 = the uploaded mask is indexed by the RELATIVE brick offset (key_brick - query_brick)
     // rather than by (regime, gather slot). That is what a stride-1 mask needs: every query
     // centres its own window, so the pattern depends only on the relative offset -- and unlike a
     // regime set it carries no dependence on the gather origin's brick phase or on the shard
     // origin, so ONE table serves every chunk and every shard.
     relative_mask,
-
-    // DIFFVAE_NA_TABLE_ALWAYS: skip the per-brick clamping gate. Diagnostic -- edge bricks get
-    // the interior pattern, so the frame is wrong there, but it shows what the gate is costing.
-    table_always,
-
-    // DIFFVAE_NA_SKIP_KV: issue no K/V reads at all. Diagnostic with WRONG output; it separates
-    // the gather's cost from the compute kernel's.
-    skip_kv,
 
     // The volume and the gather span, measured in bricks -- one brick is one tile row, so
     // these are also tile counts.

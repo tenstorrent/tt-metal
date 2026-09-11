@@ -35,14 +35,7 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
     for (const auto* input_tensor : {&q, &k, &v}) {
         TT_FATAL(input_tensor->storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device");
         TT_FATAL(input_tensor->buffer() != nullptr, "Operands to SDPA need to be allocated in buffers on device");
-        // Fused-gather 3D-neighborhood reads K/V row-by-row and repacks the window into cb_k/cb_v on
-        // device, so K and V come in ROW_MAJOR (Q stays TILE). Everything else is TILE.
-        const bool gather_kv_rowmajor = attrs.neighborhood_gather && (input_tensor == &k || input_tensor == &v);
-        TT_FATAL(
-            input_tensor->layout() == (gather_kv_rowmajor ? Layout::ROW_MAJOR : Layout::TILE),
-            "SDPA inputs must be tilized (neighborhood_gather K/V must be ROW_MAJOR); got layout {} for a {} tensor",
-            input_tensor->layout(),
-            gather_kv_rowmajor ? "gather-K/V" : "TILE");
+        TT_FATAL((input_tensor->layout() == Layout::TILE), "Inputs to SDPA must be tilized");
         TT_FATAL(
             input_tensor->dtype() == DataType::BFLOAT16 || input_tensor->dtype() == DataType::BFLOAT8_B ||
                 input_tensor->dtype() == DataType::BFLOAT4_B,
@@ -87,13 +80,6 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                 "Head dimension of V must be less than or equal to head dim of K, got {} and {}",
                 attrs.head_dim_v.value(),
                 q_shape[3]);
-        } else if (attrs.neighborhood_gather) {
-            // Fused gather uploads K/V as [B, NH, T*H, W*D] (W-row pages), so their [2]/[3] dims are
-            // (T*H, W*D), not (S, HD). Only batch, heads, and K==V shape are checked here; the (T,H,W,D)
-            // consistency is checked in the 3D-neighborhood branch.
-            TT_FATAL(k_shape[0] == B && v_shape[0] == B, "K and V batch must match Q.");
-            TT_FATAL(k_shape[1] == nkv && v_shape[1] == nkv, "K and V num_heads must match.");
-            TT_FATAL(k_shape[2] == v_shape[2] && k_shape[3] == v_shape[3], "gather K and V must have the same shape.");
         } else {
             TT_FATAL(
                 k_shape[0] == B && v_shape[0] == B,
@@ -439,125 +425,6 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
     };
 
     auto validate_windowed_mode = [&]() {
-        if (attrs.neighborhood_3d.has_value()) {
-            const auto& nbr = attrs.neighborhood_3d.value();  // {T, H, W, kt, kh, kw}
-            TT_FATAL(!attrs.is_causal, "3D-neighborhood SDPA is non-causal; is_causal must be false.");
-            TT_FATAL(
-                !tensors.attn_mask.has_value(), "3D-neighborhood SDPA builds its own mask; attn_mask must not be set.");
-            TT_FATAL(
-                !tensors.cu_window_seqlens.has_value(),
-                "3D-neighborhood SDPA is mutually exclusive with cu_window_seqlens.");
-            TT_FATAL(
-                attrs.sliding_window_size.value_or(0) == 0,
-                "3D-neighborhood SDPA does not support sliding_window_size.");
-            TT_FATAL(
-                !attrs.use_mla && !tensors.attention_sink.has_value(),
-                "3D-neighborhood SDPA does not support MLA / attention_sink.");
-            TT_FATAL(
-                !(attrs.chunk_start_idx.has_value() || attrs.chunk_start_idx_tensor.has_value()),
-                "3D-neighborhood SDPA does not support chunked/paged mode.");
-            validate_shapes_and_chunks();
-            for (uint32_t i = 0; i < 6; ++i) {
-                TT_FATAL(nbr[i] >= 1, "neighborhood_3d[{}] must be >= 1, got {}.", i, nbr[i]);
-            }
-            const uint32_t sites = nbr[0] * nbr[1] * nbr[2];
-            if (attrs.neighborhood_gather) {
-                // Gather K/V come as [B, NH, T*H, W*D] (W-row pages): rows = T*H, page width = W*D.
-                TT_FATAL(
-                    static_cast<uint32_t>(k.logical_shape()[-2]) == nbr[0] * nbr[1] &&
-                        static_cast<uint32_t>(k.logical_shape()[-1]) % nbr[2] == 0,
-                    "gather K must be [B,NH,T*H,W*D]; got rows {} (want {}) and width {} (want a multiple of W={}).",
-                    k.logical_shape()[-2],
-                    nbr[0] * nbr[1],
-                    k.logical_shape()[-1],
-                    nbr[2]);
-            } else {
-                TT_FATAL(
-                    sites == static_cast<uint32_t>(k.logical_shape()[-2]),
-                    "neighborhood_3d T*H*W = {} must equal the K sequence length {}.",
-                    sites,
-                    k.logical_shape()[-2]);
-            }
-            // SP-over-T: Q may be a tile-aligned shard at a global token offset while K/V stay the
-            // full grid. The mask generator and the T/H/W k-range narrowing already use
-            // windowed_q_token_offset as the global Q position, so a shard evaluates against full K/V
-            // with no other change. (Shard boundaries fall at t_lo*H*W, so H*W must be tile-aligned for
-            // whole-frame SP -- true for the large stages; the host executor owns that split.)
-            const auto q_rows_nbr = static_cast<uint32_t>(q.logical_shape()[-2]);
-            TT_FATAL(
-                attrs.windowed_q_token_offset % tt::constants::TILE_HEIGHT == 0,
-                "windowed_q_token_offset must be a multiple of {}, got {}.",
-                tt::constants::TILE_HEIGHT,
-                attrs.windowed_q_token_offset);
-            TT_FATAL(
-                attrs.windowed_q_token_offset + q_rows_nbr <= sites,
-                "neighborhood_3d Q shard [{}, {}) does not fit in the grid T*H*W = {}.",
-                attrs.windowed_q_token_offset,
-                attrs.windowed_q_token_offset + q_rows_nbr,
-                sites);
-            if (tensors.windowed_q_token_offset_tensor.has_value()) {
-                const auto& off = tensors.windowed_q_token_offset_tensor.value();
-                TT_FATAL(
-                    off.storage_type() == StorageType::DEVICE, "windowed_q_token_offset_tensor must be on device.");
-                TT_FATAL(off.buffer() != nullptr, "windowed_q_token_offset_tensor must be allocated on device.");
-                TT_FATAL(
-                    q.device() == off.device(), "windowed_q_token_offset_tensor must be on the same device as Q/K/V.");
-                TT_FATAL(
-                    off.dtype() == DataType::INT32 || off.dtype() == DataType::UINT32,
-                    "windowed_q_token_offset_tensor must be INT32/UINT32, got {}.",
-                    off.dtype());
-                TT_FATAL(off.layout() == Layout::ROW_MAJOR, "windowed_q_token_offset_tensor must be ROW_MAJOR.");
-                // The op reads element 0 on each device, so a single [1] tensor (one chip) and a
-                // mesh-distributed [num_shards] tensor (one offset per chip, for SP-over-T) are both
-                // valid -- the latter's global volume is the shard count, not 1.
-                TT_FATAL(
-                    off.logical_shape().volume() >= 1,
-                    "windowed_q_token_offset_tensor must hold at least 1 element, got {}.",
-                    off.logical_shape().volume());
-            }
-            // Spatial-SP over W: {W_full, w_origin}. The (T,H,W) above is the local padded shard, so
-            // W_full must cover it and the kernel spans the full width. w_origin is a signed int32 in a
-            // uint32 (not range-checked: a left-edge shard's fake halo is intentionally negative).
-            if (attrs.neighborhood_w_shard.has_value()) {
-                const uint32_t w_full = attrs.neighborhood_w_shard.value()[0];
-                TT_FATAL(w_full >= nbr[2], "neighborhood_w_shard W_full={} must be >= local W={}.", w_full, nbr[2]);
-                TT_FATAL(nbr[5] <= w_full, "neighborhood_3d kw={} must be <= W_full={}.", nbr[5], w_full);
-            }
-            // GNA stride {st, sh, sw}: runs of `stride` queries share one window. Each stride must be in
-            // [1, kernel] -- past the kernel a group is wider than the window it shares, so some of its
-            // queries would not attend to themselves -- and must divide its axis so no trailing group
-            // elects a leader past the end. The W axis is measured in the span the window is clamped in,
-            // which is W_full under spatial-SP over W.
-            if (attrs.neighborhood_stride.has_value()) {
-                const auto& stride = attrs.neighborhood_stride.value();
-                const uint32_t w_span =
-                    attrs.neighborhood_w_shard.has_value() ? attrs.neighborhood_w_shard.value()[0] : nbr[2];
-                const std::array<uint32_t, 3> axis = {nbr[0], nbr[1], w_span};
-                const std::array<uint32_t, 3> kernel = {nbr[3], nbr[4], nbr[5]};
-                constexpr std::array<const char*, 3> axis_name = {"t", "h", "w"};
-                for (uint32_t i = 0; i < 3; ++i) {
-                    // An axis shorter than its kernel attends whole, so the effective kernel is the axis.
-                    const uint32_t k_eff = kernel[i] > axis[i] ? axis[i] : kernel[i];
-                    TT_FATAL(stride[i] >= 1, "neighborhood_stride {} must be >= 1, got {}.", axis_name[i], stride[i]);
-                    TT_FATAL(
-                        stride[i] <= k_eff,
-                        "neighborhood_stride {}={} must not exceed the effective kernel {}={} (axis length {}).",
-                        axis_name[i],
-                        stride[i],
-                        axis_name[i],
-                        k_eff,
-                        axis[i]);
-                    TT_FATAL(
-                        axis[i] % stride[i] == 0,
-                        "neighborhood_stride {}={} must divide the {} axis length {}.",
-                        axis_name[i],
-                        stride[i],
-                        axis_name[i],
-                        axis[i]);
-                }
-            }
-            return;
-        }
         TT_FATAL(tensors.cu_window_seqlens.has_value(), "Windowed SDPA requires cu_window_seqlens.");
         TT_FATAL(!attrs.is_causal, "Windowed SDPA is non-causal; is_causal must be false.");
         TT_FATAL(
@@ -639,14 +506,6 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
     };
 
     check_conditions();
-    // Fused-gather variant is a sub-mode of 3D-neighborhood; it is meaningless without it.
-    TT_FATAL(
-        !attrs.neighborhood_gather || attrs.neighborhood_3d.has_value(),
-        "neighborhood_gather requires neighborhood_3d to be set.");
-    // Likewise the GNA stride: it only means anything as a modifier of a 3D neighborhood.
-    TT_FATAL(
-        !attrs.neighborhood_stride.has_value() || attrs.neighborhood_3d.has_value(),
-        "neighborhood_stride requires neighborhood_3d to be set.");
     bool is_chunked_mode = attrs.chunk_start_idx.has_value() || attrs.chunk_start_idx_tensor.has_value();
 
     if (attrs.is_windowed) {
@@ -784,11 +643,7 @@ Tensor sdpa(
     const std::optional<Tensor>& cu_window_seqlens,
     uint32_t windowed_q_token_offset,
     const std::optional<Tensor>& windowed_q_token_offset_tensor,
-    const std::optional<std::array<uint32_t, 6>>& neighborhood_3d,
-    const std::optional<std::array<uint32_t, 2>>& neighborhood_w_shard,
-    bool neighborhood_gather,
-    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
-    const std::optional<std::array<uint32_t, 3>>& neighborhood_stride) {
+    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry) {
     using OperationType = ttnn::prim::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -802,12 +657,8 @@ Tensor sdpa(
             .use_mla = use_mla,
             .head_dim_v = head_dim_v,
             .sliding_window_size = sliding_window_size,
-            .is_windowed = cu_window_seqlens.has_value() || neighborhood_3d.has_value(),
+            .is_windowed = cu_window_seqlens.has_value(),
             .windowed_q_token_offset = windowed_q_token_offset,
-            .neighborhood_3d = neighborhood_3d,
-            .neighborhood_w_shard = neighborhood_w_shard,
-            .neighborhood_gather = neighborhood_gather,
-            .neighborhood_stride = neighborhood_stride,
             .paged_cache_geometry =
                 paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
         },

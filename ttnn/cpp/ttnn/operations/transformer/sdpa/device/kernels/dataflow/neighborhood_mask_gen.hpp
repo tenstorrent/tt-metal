@@ -164,8 +164,8 @@ FORCE_INLINE void fill_mask_tile(
     // What the elementwise version actually cost, though, was not the arithmetic but the 1024
     // volatile 16-bit stores. This assembles each row as a 32-bit visibility bitmap and writes 512
     // packed words, the same traffic as a memset. Generating a tile now costs about what copying
-    // one does, which is why bypassing the boundary gate entirely (DIFFVAE_NA_TABLE_ALWAYS, all
-    // bricks served from the table) measures 0.2 s SLOWER rather than faster.
+    // one does, which is why bypassing the boundary gate entirely (every brick served from the
+    // table, tried as a probe on 2026-09-10) measured 0.2 s SLOWER rather than faster.
     uint32_t accept[3][SITES_PER_BRICK_AXIS_MAX];  // accept[static_cast<uint32_t>(axis)][query offset] = bitmask over
                                                    // key offsets
     uint32_t key_present[3] = {0, 0, 0};           // key offsets this device actually holds

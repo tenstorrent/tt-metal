@@ -559,18 +559,13 @@ with no `<`; the tree itself is unchanged).
 
 ### Their SDPA kernels
 
-
-| file                                       | lines | does                                                                      |
-| ------------------------------------------ | ----- | ------------------------------------------------------------------------- |
-| `kernels/windowed_loop_geometry.hpp`       | 395   | per-chunk window bounds, computed as templates in both reader and compute |
-| `kernels/dataflow/windowed_mask_gen.hpp`   | 861   | their mask generator                                                      |
-| `kernels/dataflow/neighborhood_gather.hpp` | 192   | the fused reader's gather                                                 |
-| `kernels/dataflow/sparse_sdpa_gather.hpp`  | 103   | MLA-oriented gather, borrowed patterns                                    |
-| `device/sdpa_program_factory.cpp`          | 1603  | the shared SDPA factory, with NA parameters threaded through              |
-
-
-`sdpa_device_operation.cpp:549` is where `stride[i] <= k_eff` lives — the check that rejects a
-stride larger than its kernel, reported in **op-order axes**.
+The general SDPA op's neighborhood mode (`neighborhood_3d`, `neighborhood_w_shard`,
+`neighborhood_gather`, `neighborhood_stride`; its additions to `windowed_loop_geometry.hpp`,
+`windowed_mask_gen.hpp`, `reader_interleaved.cpp`, `writer_interleaved.cpp` and the shared factory,
+plus `neighborhood_gather.hpp`) was removed on 2026-09-11, after its last executor went. Those files
+are back at their upstream content. The one thing our op still shares with the general op's kernels
+is `compute_common.hpp::matmul_blocks`, whose `mask_subblock_stride` parameter (default 0, the
+upstream behaviour) is what lets the per-brick mask advance down the query rows.
 
 ---
 
@@ -596,17 +591,14 @@ stride larger than its kernel, reported in **op-order axes**.
 
 ### Ours — diagnostics
 
-All default off. The ones marked WRONG OUTPUT exist to separate one cost from another and must
-never render a shipped frame.
+All default off. The wrong-output probes of the 2026-09-10 mask investigation (`SKIP_KV`,
+`MASK_MEMSET_ONLY`, `TABLE_ALWAYS`) and the `PER_BRICK_MASK` override were removed on 2026-09-11
+once that investigation closed; the op reads only `DIFFVAE_NA_UNSAFE_CHUNK` from the environment.
 
 | variable                       | does                                                                     |
 | ------------------------------ | ------------------------------------------------------------------------ |
-| `DIFFVAE_NA_SKIP_KV`           | issue no K/V reads at all. **WRONG OUTPUT** — isolates gather cost from compute |
-| `DIFFVAE_NA_MASK_MEMSET_ONLY`  | fill every mask tile with a constant. **WRONG OUTPUT** — separates deciding tile content from writing it. Only reachable when `per_brick_mask` is on, i.e. a chunk wider than one brick |
-| `DIFFVAE_NA_TABLE_ALWAYS`      | skip the per-brick clamping gate. **WRONG at volume edges** — shows what the gate costs |
 | `DIFFVAE_NA_CHUNK_BRICKS`      | force the query chunk, in BRICKS (`t,h,w`)                               |
-| `DIFFVAE_NA_UNSAFE_CHUNK`      | lift the plan's `chunk == stride` check, needed with the above at stride 1. **WRONG OUTPUT unless paired with `PER_BRICK_MASK=1`** — see `neighborhood_plan.cpp` |
-| `DIFFVAE_NA_PER_BRICK_MASK`    | force the mask mode; defaults on when the chunk exceeds the stride       |
+| `DIFFVAE_NA_UNSAFE_CHUNK`      | lift the plan's `chunk == stride` check, needed with the above at stride 1. The factory then switches to per-brick masks on its own — see `neighborhood_plan.cpp` |
 | `DIFFVAE_NA_HALO_TOPOLOGY`     | `ring` retries the halo on ring — see the deadlock note in `_halo_exchange` |
 | `DIFFVAE_NA_HALO_LINKS`        | halo link count only                                                     |
 | `DIFFVAE_NA_HALO_PERSISTENT`   | halo without the persistent buffer                                       |

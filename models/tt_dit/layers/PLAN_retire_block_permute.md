@@ -1,6 +1,6 @@
 # Plan: retire `block_permute.py` by moving stages 2-5 onto the bricked neighborhood attention
 
-Status: PHASE 4 DONE AND FULLY VERIFIED, 2026-09-11 21:25. Branch `na-integration`. Owner: James Lee.
+Status: PHASE 4 VERIFIED; TIER 3 (C++ excision of the general op's neighborhood mode) DONE, 2026-09-11 23:06. Branch `na-integration`. Owner: James Lee.
 Phase 0 done; Phase 1 B2 done; D1 priced (axis swap rejected); Phase 4 (deletion) done; every gate green.
 Block order was found to be unused in production (Phase 1 notes). Remaining, optional: Phases 1 (B1),
 2, 3 and 5 = the "bricked deterministic stages" speed project; everything is uncommitted in the tree.
@@ -21,7 +21,55 @@ Block order was found to be unused in production (Phase 1 notes). Remaining, opt
   captured; single-case rerun is job 430).
 - Pre-commit on the deletion commit: isort/autoflake fixups committed as cb8e1ffb2dd.
 
-## PICKUP 2026-09-11 21:25 -- deletion fully verified, nothing open (read this first)
+## Tier 3 -- the general SDPA op's neighborhood mode excised (2026-09-11, DONE and device-verified; read this first)
+
+James asked "what else can be deleted" after the Tier-2 verification closed, and approved items 1-3
+of the answer (item 4, the ~50 MB of untracked scratch at the repo root, was NOT approved and is left).
+
+1. **General op's neighborhood mode (C++).** No caller remained but its own test and one probe test.
+   `sdpa.cpp/.hpp`, `sdpa_nanobind.cpp`, `sdpa_device_operation.cpp/.hpp`, `sdpa_device_operation_types.hpp`,
+   `sdpa_program_factory.cpp`, `ring_distributed_sdpa_program_factory.cpp`, `sdpa_interleaved_cb_ids.hpp`,
+   `reader_interleaved.cpp`, `writer_interleaved.cpp`, `windowed_mask_gen.hpp`, `windowed_loop_geometry.hpp`
+   were reset to the merge base with main (7370e30262af, 2026-09-10): every hunk in them was neighborhood
+   mode (checked hunk by hunk; the two non-neighborhood hunks were clang-format one-liners). Deleted:
+   `kernels/dataflow/neighborhood_gather.hpp` and `tests/ttnn/unit_tests/operations/sdpa/test_neighborhood_3d_sdpa.py`;
+   `vae/test_na3d.py::test_fused_q_offset` (the probe of the general op's `neighborhood_gather`) removed.
+   KEPT: `compute_common.hpp::matmul_blocks(mask_subblock_stride)` -- the bricked op's compute kernel uses it.
+   The bricked op's kernels include none of the reverted headers (`neighborhood_point3.hpp` only named
+   `NeighborhoodBox` in a comment; reworded). Upstream's windowed / sliding-window modes (Qwen2.5-VL,
+   Gemma 4, GPT-OSS) are untouched by construction: those files are now byte-identical to the merge base.
+2. **Bricked-op probe knobs.** `DIFFVAE_NA_SKIP_KV`, `DIFFVAE_NA_MASK_MEMSET_ONLY`, `DIFFVAE_NA_TABLE_ALWAYS`
+   (the 2026-09-10 mask-lever probes, all measured no-ops) and the `DIFFVAE_NA_PER_BRICK_MASK` override are
+   gone from `neighborhood_kernel_args.hpp` (three `reader_arg` slots), `neighborhood_sdpa_program_factory.cpp`
+   (four `getenv`s) and `neighborhood_reader.cpp` (the branches). `per_brick_mask` is now purely derived
+   (chunk wider than the stride). `DIFFVAE_NA_UNSAFE_CHUNK` stays: `test_neighborhood_sdpa.py` and
+   `na_sdpa_cost.py` depend on it. Reader compile-arg indices shifted, so a rebuild + device run is required.
+3. **Dead script / docs.** Untracked `run_ltx25_window.sh` deleted (it exported `DIFFVAE_S5_KERNEL`, which
+   nothing reads; the stash-only reader is described in memory note `s5-window-sweep-2026-09-10`).
+   `NEIGHBORHOOD_ATTENTION.md`: diagnostics table and "Their SDPA kernels" section rewritten.
+
+Verification plan (after `./build_metal.sh --release` and `import ttnn`):
+- `tests/ttnn/unit_tests/operations/sdpa/test_windowed_sdpa.py` -- upstream's windowed mode still works on
+  the reverted reader/writer (this is the belt for item 1).
+- `models/tt_dit/tests/unit/test_neighborhood_sdpa.py test_neighborhood_permute.py test_na3d_bricked_w_sharded.py`
+  + `tests/models/vae/test_na3d.py` -- bricked op after the probe removal (JIT recompiles the reader).
+- `test_diffvae_decoder.py -k 'bricked_matches_replicated or shard_equivalence'`, stage-5 parity
+  `test_diffvae_stage5.py -k parity_w_sharded_bricked` (expect 99.9936 %), then the production pipeline
+  (expect VAE decode ~12.3 s).
+Results (2026-09-11 23:06, host rebuilt with `./build_metal.sh --release`, `_ttnncpp.so` 50 KB smaller,
+`import ttnn` shows the general op without the neighborhood kwargs and with `sliding_window_size` intact):
+- Job 441 (units): **144 passed** -- `test_windowed_sdpa.py` (upstream's windowed mode on the reverted
+  reader/writer), `test_neighborhood_sdpa.py`, `test_neighborhood_permute.py`, `test_na3d_bricked_w_sharded.py`,
+  `vae/test_na3d.py`.
+- Job 442 (gates): decoder `bricked_matches_replicated` + `shard_equivalence` **6 passed** at 99.9924-99.9958 %
+  (identical to pre-excision); stage-5 `parity_w_sharded_bricked` 99.9936 % + GNA parity 5/5, **6 passed**.
+- Job 443 (production pipeline, SLAB 78): PASSED, ANOMALIES none, **VAE decode 12.20 s** (12.31 s before),
+  output `~/ltx25_diffvae_1080p.mp4`.
+**Tier 3 DONE.** Still untouched by choice: item 4 (untracked scratch: `h`, root diagrams, `models/demos/t3000/llama2_70b/`,
+kernel NOTES/figs, `NA_SDPA_KV_COALESCING.patch`), `DIFFVAE_STAGES_WSP` (live fallback), the three untracked
+tests worth committing (`test_brick_activation.py`, `test_halo_exchange_geometry.py`, `test_gemma4_cache_roundtrip.py`).
+
+## PICKUP 2026-09-11 21:25 -- deletion fully verified, nothing open (superseded by the Tier 3 note above)
 
 The two items left open at 20:55 both closed on device:
 1. `test_stage5_gna_parity_w_sharded` (job 439): **5 passed**. Stride-1 rows at 99.9936 % / 99.9932 % PCC;

@@ -7,7 +7,6 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include <array>
 #include <optional>
 
 namespace ttnn::prim {
@@ -30,24 +29,6 @@ struct SDPAParams {
     // output are addressed locally; cu_window_seqlens and K/V stay global, so the mask generator offsets
     // Q by this to find the right windows. 0 means Q spans the whole sequence (the unsharded case).
     uint32_t windowed_q_token_offset = 0;
-    // 3D-neighborhood (NATTEN) windowed mode: each query attends a (kt,kh,kw) box, inward-shifted at
-    // borders, over a (T,H,W) grid flattened T-outer (t = idx/(H*W), h = (idx%(H*W))/W, w = idx%W).
-    // When set, the writer synthesizes the per-element 3D mask on-device (no cu_window_seqlens needed);
-    // mutually exclusive with the 1D windowed / sliding-window modes. Layout: {T, H, W, kt, kh, kw}.
-    std::optional<std::array<uint32_t, 6>> neighborhood_3d;
-    // Spatial sequence-parallel over W for neighborhood_3d: the (T,H,W) above is this chip's LOCAL
-    // padded shard; this carries {W_full, w_origin} so the mask computes each column's GLOBAL w =
-    // w_origin + local_w and clamps the window in [0, W_full). w_origin is a signed int32 stored in a
-    // uint32 (a left-edge shard's fake halo maps to negative global w). Absent => not W-sharded.
-    std::optional<std::array<uint32_t, 2>> neighborhood_w_shard;
-    // Fused-gather variant of neighborhood_3d: instead of streaming the box's active K/V tiles from a
-    // TILE-layout K/V and masking per tile, the reader densely gathers each query chunk's window rows
-    // from a ROW_MAJOR K/V table into a contiguous cb_k/cb_v (row-granular), so the compute runs dense
-    // flash over only real window tokens. Only meaningful when neighborhood_3d is set. Off => the
-    // existing streamed-active-tile path. (Build-out in progress; off by default.)
-    bool neighborhood_gather = false;
-    // GNA query-group stride {st,sh,sw}; nullopt and {1,1,1} both mean standard neighborhood attention.
-    std::optional<std::array<uint32_t, 3>> neighborhood_stride;
     // Chunked/paged geometry overrides (shared with paged decode). See
     // ttnn::operations::transformer::PagedCacheGeometryOverride.
     ttnn::operations::transformer::PagedCacheGeometryOverride paged_cache_geometry;

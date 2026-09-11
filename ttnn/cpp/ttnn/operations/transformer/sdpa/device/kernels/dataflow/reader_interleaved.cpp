@@ -12,7 +12,6 @@
 #include "api/tensor/noc_traits.h"
 #include "dataflow_common.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/windowed_loop_geometry.hpp"
-#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/neighborhood_gather.hpp"
 
 // Fetch a KV chunk into L1 for forwarding. No CB lifecycle — caller manages
 // cb_reserve_back / cb_push_back. Single read barrier at end for lower latency.
@@ -100,11 +99,8 @@ void kernel_main() {
     // Windowed K-range narrowing: the reader computes each Q chunk's [k_lo, k_hi) from
     // cu_window_seqlens, streams only that range, and feeds it to compute over a ctrl CB.
     constexpr bool use_windowed_narrowing = get_compile_time_arg_val(34) == 1;
-    // Fused-gather variant of 3D-neighborhood: reader densely gathers each Q chunk's window rows into
-    // cb_k/cb_v (row-granular) rather than streaming the box's active tiles. (Build-out in progress.)
-    constexpr bool neighborhood_gather = get_compile_time_arg_val(35) == 1;
 
-    constexpr auto q_args = TensorAccessorArgs<36>();
+    constexpr auto q_args = TensorAccessorArgs<35>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -194,37 +190,11 @@ void kernel_main() {
     uint32_t cu_window_seqlens_eles = 0;
     uint32_t windowed_q_tok_offset = 0;
     uint32_t windowed_q_tok_offset_addr = 0;
-    // 3D-neighborhood: T != 0 selects the per-element-mask path (built by the writer) and skips the
-    // cu_window load. The reader narrows the K stream to the T band (nb_H/nb_W/nb_kt), matching the
-    // writer's mask loop; kh/kw don't affect the T band so they stay unused.
-    uint32_t nb_T = 0;
-    uint32_t nb_H = 0;
-    uint32_t nb_W = 0;
-    uint32_t nb_kt = 0;
-    uint32_t nb_kh = 0;
-    uint32_t nb_kw = 0;
-    // This shard's global w-origin (W-SP).
-    uint32_t nb_w_origin = 0;
-    // GNA query-group stride {st,sh,sw}. 1 is standard neighborhood attention; never 0, which would
-    // divide by zero in gna_leader.
-    uint32_t nb_st = 1;
-    uint32_t nb_sh = 1;
-    uint32_t nb_sw = 1;
     if constexpr (use_windowed_narrowing) {
         cu_window_seqlens_addr = get_arg_val<uint32_t>(argidx++);
         cu_window_seqlens_eles = get_arg_val<uint32_t>(argidx++);
         windowed_q_tok_offset = get_arg_val<uint32_t>(argidx++);
         windowed_q_tok_offset_addr = get_arg_val<uint32_t>(argidx++);
-        nb_T = get_arg_val<uint32_t>(argidx++);   // 14: T
-        nb_H = get_arg_val<uint32_t>(argidx++);   // 15: H
-        nb_W = get_arg_val<uint32_t>(argidx++);   // 16: W
-        nb_kt = get_arg_val<uint32_t>(argidx++);  // 17: kt
-        nb_kh = get_arg_val<uint32_t>(argidx++);  // 18: kh
-        nb_kw = get_arg_val<uint32_t>(argidx++);  // 19: kw
-        nb_w_origin = get_arg_val<uint32_t>(argidx++);
-        nb_st = get_arg_val<uint32_t>(argidx++);
-        nb_sh = get_arg_val<uint32_t>(argidx++);
-        nb_sw = get_arg_val<uint32_t>(argidx++);
     }
 
     // When chunked: only process K/V up to (chunk_start_idx + Q_chunk_length) tokens.
@@ -248,9 +218,6 @@ void kernel_main() {
     // by compute. Valid fallback ids (q_in) when not windowed; only touched behind the constexpr flag.
     constexpr uint32_t cb_id_windowed_cu_reader = get_compile_time_arg_val(cb_arg_offset + 8);
     constexpr uint32_t cb_id_windowed_k_range = get_compile_time_arg_val(cb_arg_offset + 9);
-    // neighborhood_gather only: the reader's 1-stick ROW_MAJOR staging scratch (inactive id otherwise;
-    // only touched behind `if constexpr (neighborhood_gather)`).
-    constexpr uint32_t cb_id_gather_stage = get_compile_time_arg_val(cb_arg_offset + 10);
 
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
@@ -321,11 +288,9 @@ void kernel_main() {
         }
     }
 
-    // Windowed narrowing setup. cb_id_windowed_cu_reader is now a real dedicated CB in BOTH sub-modes
-    // (see program factory), so the reserve here is always safe -- unlike before, it never aliases the
-    // Q input CB. The per-device Q-offset override is staged first (both sub-modes: 3D-neighborhood
-    // uses it for SP-over-T); then, block-diagonal only, the cu_window array overwrites the same
-    // landing spot (the offset value has already been captured into windowed_q_tok_offset).
+    // Windowed narrowing: load cu_window_seqlens once (the reader's own copy — the writer has its own
+    // CB with its own producer contract), resolving the per-device Q-offset override first so the
+    // 4-byte read can stage through the same landing spot before the full array overwrites it.
     volatile tt_l1_ptr uint32_t* windowed_cu_ptr = nullptr;
     if constexpr (use_windowed_narrowing) {
         CircularBuffer cb_cu_reader(cb_id_windowed_cu_reader);
@@ -337,13 +302,11 @@ void kernel_main() {
             noc.async_read_barrier();
             windowed_q_tok_offset = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cu_write_ptr);
         }
-        if (nb_T == 0) {  // block-diagonal: load the cu_window array into the same scratch
-            const auto cu_window_reader = TensorAccessor(cu_window_args, cu_window_seqlens_addr);
-            constexpr uint32_t cu_tile_bytes = get_tile_size(cb_id_windowed_cu_reader);
-            noc.async_read(cu_window_reader, CoreLocalMem<uint32_t>(cu_write_ptr), cu_tile_bytes, {.page_id = 0}, {});
-            noc.async_read_barrier();
-            windowed_cu_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cu_write_ptr);
-        }
+        const auto cu_window_reader = TensorAccessor(cu_window_args, cu_window_seqlens_addr);
+        constexpr uint32_t cu_tile_bytes = get_tile_size(cb_id_windowed_cu_reader);
+        noc.async_read(cu_window_reader, CoreLocalMem<uint32_t>(cu_write_ptr), cu_tile_bytes, {.page_id = 0}, {});
+        noc.async_read_barrier();
+        windowed_cu_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cu_write_ptr);
     }
 
     uint32_t read_offset = 0;
@@ -428,92 +391,27 @@ void kernel_main() {
             // Windowed narrowing: this Q chunk's K-chunk range. Pushed to compute over the ctrl CB
             // BEFORE any blocking CB reserve, so compute learns its bounds even while this reader is
             // parked on cb_k space. The writer self-computes the same range from the same tensor.
-            // windowed_k_lo/hi bound this reader's K-loop. For block-diagonal they are also what the
-            // compute processes (streamed contiguously). For 3D-neighborhood they are the outer T band;
-            // the reader then PACKS only the active chunks, so the compute walks a dense [0, N] instead
-            // (nbr_box drives which chunks in the T band are active — see the K-loop skip below).
             uint32_t windowed_k_lo = 0;
             uint32_t windowed_k_hi = k_num_chunks;
-            NeighborhoodBox nbr_box = {0, 1, 0, 0};
             if constexpr (use_windowed_narrowing) {
-                uint32_t ctrl_lo = 0;
-                uint32_t ctrl_hi = k_num_chunks;
-                if (nb_T == 0) {  // block-diagonal narrows via cu_window
-                    const auto range = windowed_k_chunk_range(
-                        q_chunk,
-                        Sq_chunk_t,
-                        valid_Sqt,
-                        windowed_q_tok_offset,
-                        windowed_cu_ptr,
-                        cu_window_seqlens_eles,
-                        Sk_chunk_t,
-                        k_num_chunks,
-                        tt::constants::TILE_HEIGHT);
-                    windowed_k_lo = range.k_lo;
-                    windowed_k_hi = range.k_hi;
-                    ctrl_lo = windowed_k_lo;
-                    ctrl_hi = windowed_k_hi;
-                } else {  // 3D-neighborhood (strided Q); packed active count for compute
-                    {
-                        const auto range = neighborhood_t_k_chunk_range(
-                            q_chunk,
-                            Sq_chunk_t,
-                            valid_Sqt,
-                            windowed_q_tok_offset,
-                            nb_T,
-                            nb_H,
-                            nb_W,
-                            nb_kt,
-                            nb_st,
-                            Sk_chunk_t,
-                            k_num_chunks,
-                            tt::constants::TILE_HEIGHT);
-                        windowed_k_lo = range.k_lo;
-                        windowed_k_hi = range.k_hi;
-                        nbr_box = neighborhood_box(
-                            q_chunk,
-                            Sq_chunk_t,
-                            valid_Sqt,
-                            windowed_q_tok_offset,
-                            nb_T,
-                            nb_H,
-                            nb_W,
-                            nb_kt,
-                            nb_kh,
-                            nb_kw,
-                            nb_st,
-                            nb_sh,
-                            nb_sw,
-                            tt::constants::TILE_HEIGHT);
-                    }
-                    ctrl_lo = 0;
-                    if constexpr (neighborhood_gather) {
-                        // Fused gather: compute walks n_packed_chunks dense chunks (the box's n_box
-                        // tokens packed into ceil(n_box/32) seqtiles, grouped Sk_chunk_t per chunk).
-                        // Reader (below), writer, and this count MUST agree or the CBs deadlock.
-                        const neighborhood_gather::BoxDims bd = neighborhood_gather::box_dims(nbr_box);
-                        const uint32_t n_packed_seqtiles =
-                            (bd.n_box + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
-                        const uint32_t n_packed_chunks = (n_packed_seqtiles + Sk_chunk_t - 1) / Sk_chunk_t;
-                        ctrl_hi = n_packed_chunks > 0 ? n_packed_chunks : 1;
-                    } else {
-                        const uint32_t sites = nb_T * nb_H * nb_W;
-                        const uint32_t chunk_toks = Sk_chunk_t * tt::constants::TILE_HEIGHT;
-                        uint32_t n_active = 0;
-                        for (uint32_t c = windowed_k_lo; c < windowed_k_hi; ++c) {
-                            if (neighborhood_chunk_active(c, chunk_toks, nb_W, nb_H, sites, nbr_box)) {
-                                ++n_active;
-                            }
-                        }
-                        ctrl_hi = n_active > 0 ? n_active : 1;  // always >= 1 chunk (matches the range contract)
-                    }
-                }
+                const auto range = windowed_k_chunk_range(
+                    q_chunk,
+                    Sq_chunk_t,
+                    valid_Sqt,
+                    windowed_q_tok_offset,
+                    windowed_cu_ptr,
+                    cu_window_seqlens_eles,
+                    Sk_chunk_t,
+                    k_num_chunks,
+                    tt::constants::TILE_HEIGHT);
+                windowed_k_lo = range.k_lo;
+                windowed_k_hi = range.k_hi;
                 CircularBuffer cb_k_range(cb_id_windowed_k_range);
                 cb_k_range.reserve_back(1);
                 volatile tt_l1_ptr uint32_t* k_range_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_k_range.get_write_ptr());
-                k_range_ptr[0] = ctrl_lo;
-                k_range_ptr[1] = ctrl_hi;
+                k_range_ptr[0] = windowed_k_lo;
+                k_range_ptr[1] = windowed_k_hi;
                 cb_k_range.push_back(1);
             }
 
@@ -578,118 +476,8 @@ void kernel_main() {
                 should_receive = is_chain_participant && !is_injector && (nb == chain_batch && nq == chain_head);
             }
 
-            // Fused-gather branch: densely gather this Q chunk's neighborhood box into cb_k/cb_v as
-            // n_packed_chunks contiguous chunks, then skip the streaming K-loop. The compute walks the
-            // same n_packed_chunks (pushed to the ctrl CB above); the writer masks the same packing.
-            if constexpr (neighborhood_gather) {
-                // Q: read now if the subblock-push path deferred it (else already read above the K-loop).
-                if constexpr (use_q_subblock_push) {
-                    for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
-                        read_q_subblock<q_tile_bytes>(
-                            q_reader,
-                            cb_q_in,
-                            q_read_tile_id,
-                            q_sub * qk_subblock_h,
-                            qk_subblock_h,
-                            q_row_tile_count,
-                            DHt,
-                            DHt,
-                            barrier_threshold);
-                    }
-                }
-
-                const neighborhood_gather::BoxDims bd = neighborhood_gather::box_dims(nbr_box);
-                const uint32_t n_box = bd.n_box;
-                const uint32_t n_packed_seqtiles =
-                    (n_box + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
-                uint32_t n_packed_chunks = (n_packed_seqtiles + Sk_chunk_t - 1) / Sk_chunk_t;
-                if (n_packed_chunks == 0) {
-                    n_packed_chunks = 1;
-                }
-                // W-run coalesced: K/V are uploaded as [B,NH,T*H,W*D] ROW_MAJOR, so a page is a full W-row.
-                const uint32_t n_rows = nb_T * nb_H;  // (t,h) rows in the volume
-                const uint32_t k_head_row_base = (nb * NKH + k_head) * n_rows;
-                const uint32_t v_head_row_base = (nb * NVH + v_head) * n_rows;
-                constexpr uint32_t k_D = DHt * tt::constants::TILE_WIDTH;  // K head dim in elements
-                constexpr uint32_t v_D = vDHt * tt::constants::TILE_WIDTH;
-                const uint32_t k_row_bytes = nb_W * k_D * 2;  // bf16 W-row page
-                const uint32_t v_row_bytes = nb_W * v_D * 2;
-                constexpr uint32_t k_chunk_size = Sk_chunk_t * tt::constants::TILE_HEIGHT;
-
-                CircularBuffer cb_stage(cb_id_gather_stage);
-                cb_stage.reserve_back(1);
-                const uint32_t stage_addr = cb_stage.get_write_ptr();
-
-                for (uint32_t pc = 0; pc < n_packed_chunks; ++pc) {
-                    const uint32_t j0 = pc * k_chunk_size;
-                    uint32_t j1 = j0 + k_chunk_size;
-                    if (j1 > n_box) {
-                        j1 = n_box;
-                    }
-                    // K: transposed grid (dtile-outer, seqtile-inner), natural within-tile faces.
-                    cb_k.reserve_back(k_chunk_tiles);
-                    const uint32_t k_base = cb_k.get_write_ptr();
-                    for (uint32_t ti = 0; ti < k_chunk_tiles; ++ti) {
-                        fill_zeros_async(noc, cb_k_in, k_tile_bytes, ti * k_tile_bytes);
-                    }
-                    noc.async_read_barrier();
-                    neighborhood_gather::gather_range_wrun<true>(
-                        noc,
-                        k_reader,
-                        k_base,
-                        stage_addr,
-                        k_row_bytes,
-                        j0,
-                        j1,
-                        nbr_box,
-                        bd,
-                        nb_H,
-                        k_head_row_base,
-                        k_D,
-                        DHt,
-                        Sk_chunk_t,
-                        k_tile_bytes);
-                    cb_k.push_back(k_chunk_tiles);
-                    // V: natural grid (seqtile-outer, dtile-inner).
-                    cb_v.reserve_back(v_chunk_tiles);
-                    const uint32_t v_base = cb_v.get_write_ptr();
-                    for (uint32_t ti = 0; ti < v_chunk_tiles; ++ti) {
-                        fill_zeros_async(noc, cb_v_in, v_tile_bytes, ti * v_tile_bytes);
-                    }
-                    noc.async_read_barrier();
-                    neighborhood_gather::gather_range_wrun<false>(
-                        noc,
-                        v_reader,
-                        v_base,
-                        stage_addr,
-                        v_row_bytes,
-                        j0,
-                        j1,
-                        nbr_box,
-                        bd,
-                        nb_H,
-                        v_head_row_base,
-                        v_D,
-                        vDHt,
-                        Sk_chunk_t,
-                        v_tile_bytes);
-                    cb_v.push_back(v_chunk_tiles);
-                }
-                cb_stage.push_back(1);
-                cb_stage.pop_front(1);
-                continue;  // next global_q_iter; skip the streaming K-loop
-            }
-
             // loop while k_low < q_high
             for (uint32_t k_chunk = k_loop_start; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
-                // 3D-neighborhood packs only the active chunks (the H band is scattered across the T
-                // band); skipping an inactive chunk here must match the writer's mask skip and the
-                // packed count pushed to the ctrl CB above. Block-diagonal (nb_T == 0) streams all.
-                if (nb_T != 0 &&
-                    !neighborhood_chunk_active(
-                        k_chunk, Sk_chunk_t * tt::constants::TILE_HEIGHT, nb_W, nb_H, nb_T * nb_H * nb_W, nbr_box)) {
-                    continue;
-                }
                 const uint32_t kv_row_start_tile = std::min(k_chunk * Sk_chunk_t, valid_Skt_bound);
                 const uint32_t kv_row_end_tile = std::min(kv_row_start_tile + Sk_chunk_t, valid_Skt_bound);
                 const uint32_t kv_row_tile_count = kv_row_end_tile - kv_row_start_tile;

@@ -187,7 +187,7 @@ tt::tt_metal::Buffer* buffer_or_null(const std::optional<Tensor>& t) {
     return t.has_value() ? t.value().buffer() : nullptr;
 }
 
-// Windowed (block-diagonal / 3D-neighborhood) CB allocation and runtime values, split out of create_descriptor (which
+// Windowed (block-diagonal) CB allocation and runtime values, split out of create_descriptor (which
 // sits at clang-tidy's cognitive-complexity limit). The allocators are create_descriptor's CB lambdas.
 struct WindowedSetup {
     tt::tt_metal::Buffer* cu_window_buffer = nullptr;
@@ -218,26 +218,19 @@ WindowedSetup setup_windowed_cbs(
     if (!attrs.is_windowed) {
         return w;
     }
-    // The reader->compute k-range ctrl CB carries each Q chunk's {k_lo, k_hi} and is needed in both
-    // windowed sub-modes (block-diagonal and 3D-neighborhood); double-buffered so the reader can run a
-    // Q chunk ahead (sparse_sdpa precedent).
+    // 1-tile CB holding cu_window_seqlens, loaded once by the writer.
+    const auto& cu = tensors.cu_window_seqlens.value();
+    tt::DataFormat cu_df = tt::tt_metal::datatype_to_dataformat_converter(cu.dtype());
+    cb_ids.cu_window_seqlens = allocate_tile_cb(1, tt::tile_size(cu_df), cu_df);
+    // K-range narrowing: the reader gets its OWN cu_window copy (sharing the writer's CB would put
+    // two producers on one CB), and a small reader->compute ctrl CB carrying each Q chunk's
+    // {k_lo, k_hi} (double-buffered so the reader can run a Q chunk ahead; sparse_sdpa precedent).
+    cb_ids.windowed_cu_reader = allocate_tile_cb(1, tt::tile_size(cu_df), cu_df);
     constexpr uint32_t k_range_page_size = 16;
     cb_ids.windowed_k_range = allocate_cb(k_range_page_size, 2, tt::DataFormat::Int32);
+    w.cu_window_buffer = cu.buffer();
+    w.cu_window_seqlens_eles = cu.logical_shape()[-1];
     w.q_token_offset = attrs.windowed_q_token_offset;
-    // Reader scratch, always a REAL dedicated CB whenever windowed: it holds the reader's OWN cu_window
-    // copy (block-diagonal; sharing the writer's CB would put two producers on one CB) and/or stages the
-    // per-device Q offset (both sub-modes, incl. 3D-neighborhood which has no cu tensor). It must never
-    // alias the Q input CB -- a stray reserve_back there desyncs Q streaming. A UInt32 tile fits both the
-    // cu array (validated int32/uint32) and the 4-byte offset read.
-    cb_ids.windowed_cu_reader = allocate_tile_cb(1, tt::tile_size(tt::DataFormat::UInt32), tt::DataFormat::UInt32);
-    if (tensors.cu_window_seqlens.has_value()) {
-        // 1-tile CB holding cu_window_seqlens, loaded once by the writer. Block-diagonal sub-mode only.
-        const auto& cu = tensors.cu_window_seqlens.value();
-        tt::DataFormat cu_df = tt::tt_metal::datatype_to_dataformat_converter(cu.dtype());
-        cb_ids.cu_window_seqlens = allocate_tile_cb(1, tt::tile_size(cu_df), cu_df);
-        w.cu_window_buffer = cu.buffer();
-        w.cu_window_seqlens_eles = cu.logical_shape()[-1];
-    }
     if (tensors.windowed_q_token_offset_tensor.has_value()) {
         // Per-device form: the writer reads the value at runtime, so the scalar baked into the
         // program is unused. Kept identical across devices, which is the point -- one program.
@@ -330,14 +323,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         max_prefix_tokens_flexible = max_blocks * block_size_for_sk;
     }
     // In chunked mode: legacy uses chunk_start_idx + Sq; flexible uses Sq + max prefix from page table.
-    // neighborhood_gather uploads K/V as [B,NH,T*H,W*D] (W-row pages), so k_shape[2] is T*H, not the seq
-    // length -- take the real Sk = T*H*W from the neighborhood descriptor instead.
-    const uint32_t Sk =
-        is_chunked ? (flexible_chunked ? (Sq + max_prefix_tokens_flexible) : (chunk_start_idx.value() + Sq))
-        : operation_attributes.neighborhood_gather
-            ? (operation_attributes.neighborhood_3d.value()[0] * operation_attributes.neighborhood_3d.value()[1] *
-               operation_attributes.neighborhood_3d.value()[2])
-            : k_shape[2];
+    const uint32_t Sk = is_chunked
+                            ? (flexible_chunked ? (Sq + max_prefix_tokens_flexible) : (chunk_start_idx.value() + Sq))
+                            : k_shape[2];
 
     /*
     Note about tensor shapes:
@@ -642,8 +630,6 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     reader_compile_time_args.push_back(0);  // mcast_enabled placeholder
     reader_compile_time_args.push_back(static_cast<uint32_t>(use_zigzag_balancing));  // arg 33
     reader_compile_time_args.push_back(static_cast<uint32_t>(is_windowed));           // arg 34: K-range narrowing
-    // arg 35: fused-gather variant of 3D-neighborhood (densely gather the window into cb_k/cb_v).
-    reader_compile_time_args.push_back(static_cast<uint32_t>(operation_attributes.neighborhood_gather));
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -712,8 +698,6 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         k_partial_col,                                 // arg 23: K partial-tile col (0 = no partial)
         static_cast<uint32_t>(use_zigzag_balancing),   // arg 24
         static_cast<uint32_t>(is_windowed),            // arg 25: windowed block-diagonal mask generation
-        // arg 26: fused-gather variant of 3D-neighborhood (mask generated over dense-packed keys).
-        static_cast<uint32_t>(operation_attributes.neighborhood_gather),
     };
 
     // out accessor, then the cu_window accessor chained right after it (before the CB-id block) so the
@@ -864,28 +848,6 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     tt::tt_metal::Buffer* const windowed_q_offset_buffer = windowed.q_offset_buffer;
     const uint32_t cu_window_seqlens_eles = windowed.cu_window_seqlens_eles;
     const uint32_t windowed_q_token_offset = windowed.q_token_offset;
-    // {T, H, W, kt, kh, kw} for 3D-neighborhood mode; all-zero otherwise. Passed as runtime args to the
-    // reader (k-range) and writer (mask gen); the kernels select the 3D path when the leading dim (T) != 0.
-    const std::array<uint32_t, 6> neighborhood =
-        operation_attributes.neighborhood_3d.value_or(std::array<uint32_t, 6>{});
-    // {W_full, w_origin} for spatial-SP over W (both 0 => not W-sharded). w_origin is a signed int32
-    // stored as a uint32 bit-pattern; the writer reinterprets it. Only the writer's mask uses these.
-    const std::array<uint32_t, 2> w_shard =
-        operation_attributes.neighborhood_w_shard.value_or(std::array<uint32_t, 2>{});
-    // Block-permuted Q descriptor {bt, bh, bw}; all-zero when strided (bt==0 selects the strided path in
-    // the reader/mask). The block counts (Hb, Wb) are derived kernel-side from nb_H/bh, nb_W/bw.
-    // GNA query-group stride {st, sh, sw}. Defaults to {1,1,1} rather than zeros because the kernels
-    // divide by it to find a query's group; 1 is exactly standard neighborhood attention.
-    const std::array<uint32_t, 3> nbr_stride =
-        operation_attributes.neighborhood_stride.value_or(std::array<uint32_t, 3>{1, 1, 1});
-    if (is_windowed && operation_attributes.neighborhood_gather) {
-        // Reader's row-major staging scratch: one full W-row page (W * D bf16 elems, sized for the wider
-        // of K's DHt and V's vDHt head dim), landed from DRAM before its box w-run is face-scattered
-        // into cb_k/cb_v. W-run coalescing => one page-read per (t,h) box-row instead of per token.
-        const uint32_t nb_W = operation_attributes.neighborhood_3d.value()[2];
-        const uint32_t gather_stage_bytes = nb_W * std::max(DHt, vDHt) * TILE_WIDTH * sizeof(uint16_t);
-        cb_ids.gather_stage = allocate_cb(gather_stage_bytes, 1, tt::DataFormat::Float16_b);
-    }
 
     cb_ids.identity_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
     cb_ids.col_identity = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
@@ -1551,16 +1513,6 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         reader_args.push_back(cu_window_seqlens_eles);
         reader_args.push_back(windowed_q_token_offset);
         reader_args.push_back(windowed_q_offset_buffer);
-        // 3D-neighborhood descriptor {T,H,W,kt,kh,kw}; zeros when block-diagonal (T==0 selects that path).
-        for (uint32_t d : neighborhood) {
-            reader_args.push_back(d);
-        }
-        // w_origin (the writer already gets it at slot 21), for the W-SP global-w coords.
-        reader_args.push_back(w_shard[1]);
-        // GNA stride tail, in the same order the writer gets at slots 22-24.
-        reader_args.push_back(nbr_stride[0]);
-        reader_args.push_back(nbr_stride[1]);
-        reader_args.push_back(nbr_stride[2]);
 
         reader_desc.emplace_runtime_args(core, reader_args);
 
@@ -1579,18 +1531,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
              cu_window_buffer,                                 // 10: windowed mask src (nullptr if unused)
              cu_window_seqlens_eles,                           // 11: window count + 1
              windowed_q_token_offset,                          // 12: global origin of this Q shard (scalar)
-             windowed_q_offset_buffer,                         // 13: same, per-device (nullptr => use 12)
-             neighborhood[0],                                  // 14: 3D-neighborhood T (0 => block-diagonal)
-             neighborhood[1],                                  // 15: H
-             neighborhood[2],                                  // 16: W
-             neighborhood[3],                                  // 17: kt
-             neighborhood[4],                                  // 18: kh
-             neighborhood[5],                                  // 19: kw
-             w_shard[0],                                       // 20: W_full (0 => not W-sharded)
-             w_shard[1],                                       // 21: w_origin (signed int32 bit-pattern)
-             nbr_stride[0],                                    // 22: GNA stride st (1 => standard NA)
-             nbr_stride[1],                                    // 23: GNA stride sh
-             nbr_stride[2]});                                  // 24: GNA stride sw
+             windowed_q_offset_buffer});                       // 13: same, per-device (nullptr => use 12)
 
         compute_desc.emplace_runtime_args(
             core,
