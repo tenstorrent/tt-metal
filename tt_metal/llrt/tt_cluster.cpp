@@ -930,7 +930,7 @@ void Cluster::write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt
     const ChipId chip_id = core.chip;
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
 
-    if (rtoptions_.get_watcher_enabled()) {
+    if (rtoptions_.get_watcher_enabled() && !rtoptions_.watcher_noc_sanitize_disabled()) {
         TT_FATAL(this->hal_ != nullptr, "HAL must be set before host NOC sanitization");
         tt::watcher_sanitize_host_noc_write(
             *this->hal_,
@@ -964,7 +964,7 @@ void Cluster::write_reg(const std::uint32_t* mem_ptr, tt_cxy_pair target, uint64
     int chip_id = target.chip;
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
 
-    if (rtoptions_.get_watcher_enabled()) {
+    if (rtoptions_.get_watcher_enabled() && !rtoptions_.watcher_noc_sanitize_disabled()) {
         TT_FATAL(this->hal_ != nullptr, "HAL must be set before host NOC sanitization");
         tt::watcher_sanitize_host_noc_write(
             *this->hal_,
@@ -991,7 +991,7 @@ void Cluster::read_reg(std::uint32_t* mem_ptr, tt_cxy_pair target, uint64_t addr
     int chip_id = target.chip;
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
 
-    if (rtoptions_.get_watcher_enabled()) {
+    if (rtoptions_.get_watcher_enabled() && !rtoptions_.watcher_noc_sanitize_disabled()) {
         TT_FATAL(this->hal_ != nullptr, "HAL must be set before host NOC sanitization");
         tt::watcher_sanitize_host_noc_read(
             *this->hal_,
@@ -1027,7 +1027,7 @@ void Cluster::noc_multicast_write(
     const {
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
 
-    if (rtoptions_.get_watcher_enabled()) {
+    if (rtoptions_.get_watcher_enabled() && !rtoptions_.watcher_noc_sanitize_disabled()) {
         TT_FATAL(this->hal_ != nullptr, "HAL must be set before host NOC sanitization");
         tt::watcher_sanitize_host_noc_multicast_write(
             *this->hal_,
