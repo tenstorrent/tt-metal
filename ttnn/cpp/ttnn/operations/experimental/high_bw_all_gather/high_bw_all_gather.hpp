@@ -30,7 +30,10 @@ Tensor high_bw_all_gather(
     // Trace-safe active extent: 1-element uint32 tensor holding this chunk's start position in the
     // gathered dim; the reader derives the extent from it. Mutually exclusive with gathered_dim_size.
     const std::optional<Tensor>& gathered_prefix_tensor = std::nullopt,
-    uint32_t gathered_slab_global = 0);
+    uint32_t gathered_slab_global = 0,
+    // Extent along `dim` of one stripe when the shard is block-cyclic rather than contiguous; see
+    // HighBwAllGatherParams::input_stripe_size. Defaults to the whole dim (one stripe).
+    std::optional<uint32_t> input_stripe_size = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather
 
