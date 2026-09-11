@@ -13,7 +13,7 @@
 //   [schedule end ..)            assignments, ASSIGNMENT_WORDS each
 //   [assignments end ..)         TensorAccessorArgs, chained on by the program factory
 //
-// The DRAM base addresses are NOT here: they are runtime args, in ReaderRtArg order.
+// The DRAM base addresses are NOT here: they are runtime args, in combine_fabric2d_reader_rt_args.hpp.
 
 #include "combine_fabric2d_kernel_interface.hpp"
 
@@ -25,20 +25,6 @@ namespace cmbf2d {
 
 // Scalars packed before the variable-length blocks, i.e. the index the schedule starts at.
 constexpr uint32_t READER_SCALAR_CT_ARGS = 24;
-
-// One base address per DRAM buffer the reader touches, bound as runtime args in this order. A buffer's
-// address is assigned per allocation, and a cached program is re-dispatched against whatever buffers the
-// caller hands it, so these cannot be compile-time: the framework patches a Buffer* binding on every hit.
-enum ReaderRtArg : uint32_t {
-    RDR_RT_DRAM_IN,
-    RDR_RT_DRAM_OUT,
-    RDR_RT_DRAM_FWD,
-    RDR_RT_DRAM_META,
-    RDR_RT_DRAM_COUNTS,
-    RDR_RT_DRAM_REGION,
-    RDR_RT_DRAM_EXPERT_OFFSETS,
-    RDR_RT_ARGS,
-};
 
 struct ReaderCtArgs {
     uint32_t num_l1_slots;

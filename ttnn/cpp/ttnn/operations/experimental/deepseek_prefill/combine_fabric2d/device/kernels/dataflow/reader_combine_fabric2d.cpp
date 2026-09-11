@@ -40,6 +40,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "combine_fabric2d_reader_ct_args.hpp"
+#include "combine_fabric2d_reader_rt_args.hpp"
 
 constexpr cmbf2d::ReaderCtArgs ct{};
 
@@ -97,14 +98,15 @@ struct Dram {
 };
 
 Dram open_dram() {
+    const cmbf2d::ReaderRtArgs rt{};
     return Dram{
-        TensorAccessor(ct.dram_in_args, get_arg_val<uint32_t>(cmbf2d::RDR_RT_DRAM_IN)),
-        TensorAccessor(ct.dram_out_args, get_arg_val<uint32_t>(cmbf2d::RDR_RT_DRAM_OUT)),
-        TensorAccessor(ct.dram_fwd_args, get_arg_val<uint32_t>(cmbf2d::RDR_RT_DRAM_FWD)),
-        TensorAccessor(ct.dram_meta_args, get_arg_val<uint32_t>(cmbf2d::RDR_RT_DRAM_META)),
-        TensorAccessor(ct.dram_counts_args, get_arg_val<uint32_t>(cmbf2d::RDR_RT_DRAM_COUNTS)),
-        TensorAccessor(ct.dram_region_args, get_arg_val<uint32_t>(cmbf2d::RDR_RT_DRAM_REGION)),
-        TensorAccessor(ct.dram_expert_offsets_args, get_arg_val<uint32_t>(cmbf2d::RDR_RT_DRAM_EXPERT_OFFSETS))};
+        TensorAccessor(ct.dram_in_args, rt.dram_in),
+        TensorAccessor(ct.dram_out_args, rt.dram_out),
+        TensorAccessor(ct.dram_fwd_args, rt.dram_fwd),
+        TensorAccessor(ct.dram_meta_args, rt.dram_meta),
+        TensorAccessor(ct.dram_counts_args, rt.dram_counts),
+        TensorAccessor(ct.dram_region_args, rt.dram_region),
+        TensorAccessor(ct.dram_expert_offsets_args, rt.dram_expert_offsets)};
 }
 
 // Where origin chip `row`'s tokens for expert `e` start, and where they end. The runs are laid out in
