@@ -93,7 +93,9 @@ RotateHalfProgramFactory::cached_program_t RotateHalfProgramFactory::create(
         {"BCAST_OP", "mul_tiles_bcast"},
         {"BCAST_LLKOP", "EltwiseBinaryType::ELWMUL"},
         {"BCAST_DIM", "BroadcastType::SCALAR"},
-        {"BCAST_SCALAR", "1"}};
+        {"BCAST_SCALAR", "1"},
+        {"CHAIN_BCAST_OP", "compute_kernel_lib::BinaryFpuOp::Mul"},
+        {"CHAIN_BCAST_DIM", "compute_kernel_lib::BroadcastDim::Scalar"}};
 
     auto bcast_kernel_group_1_id = CreateKernel(
         program,
