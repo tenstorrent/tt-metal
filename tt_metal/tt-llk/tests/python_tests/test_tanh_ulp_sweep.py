@@ -96,7 +96,7 @@ class Config:
 
 
 CONFIGS: List[Config] = [
-    # The retuned SFPLUT, as a consumer sees it (bf16 in, bf16 out).
+    # The approximate LUT path, as a consumer sees it (bf16 in, bf16 out).
     Config("approx-lut-bf16-out", BF16, ApproximationMode.Yes, DestAccumulation.No),
     # The same LUT read out of an fp32 dest, so the output format's own rounding
     # does not mask part of the kernel error.
@@ -299,7 +299,9 @@ def _summarize(cfg: Config, x: np.ndarray, ref: np.ndarray, hw: np.ndarray) -> d
 def _print_summary(s: dict) -> None:
     logger.info("── {} ({} -> {}) ──", s["label"], s["in_fmt"], s["out_fmt"])
     logger.info(
-        "   swept {} values, {} above the 2^-8 scale floor", s["n_values"], s["n_scale_gated"]
+        "   swept {} values, {} above the 2^-8 scale floor",
+        s["n_values"],
+        s["n_scale_gated"],
     )
     logger.info("   correctly rounded          {:.2%}", s["correctly_rounded_frac"])
     logger.info(
@@ -357,4 +359,6 @@ def test_tanh_ulp_sweep(cfg: Config):
     # Sanity only — this file measures, it does not gate. A dead kernel or a
     # sweep that never reached the device would show up here.
     assert s["n_values"] == n_total, "sweep did not cover every bf16 value"
-    assert s["correctly_rounded_frac"] > 0.1, "kernel output looks unrelated to the reference"
+    assert (
+        s["correctly_rounded_frac"] > 0.1
+    ), "kernel output looks unrelated to the reference"
