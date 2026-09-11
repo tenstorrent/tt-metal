@@ -79,7 +79,7 @@ pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx_distilled.py -k "bh_2x4s
 
 Override generation settings with environment variables: `PROMPT`, `NUM_FRAMES`, `HEIGHT`, `WIDTH`, `NUM_STEPS`, `SEED`, `OUTPUT_PATH`.
 
-Trace gates (all accept `1`/`0`/`true`/`false`; require `LTX_TRACED`): `LTX_VOC_TRACE` (vocoder + BWE, default on), `LTX_VAE_TRACE` (mel decoder, default off).
+Trace gates (all accept `1`/`0`/`true`/`false`; require `LTX_TRACED`): `LTX_VOC_TRACE` (main vocoder, default on), `LTX_BWE_TRACE` (BWE generator, default on), `LTX_VAE_TRACE` (mel decoder, default off).
 
 ## Scalability
 
