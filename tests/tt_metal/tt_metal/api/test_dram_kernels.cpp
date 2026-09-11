@@ -3,9 +3,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <algorithm>
+#include <array>
+#include <charconv>
+#include <cstdlib>
 #include <cstdint>
-#include <vector>
 #include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <limits>
+#include <numeric>
+#include <random>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <vector>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -18,8 +32,11 @@
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
+#include "internal/tt-1xx/blackhole/noc/noc_parameters.h"
 #include "llrt/hal.hpp"
 #include "llrt/tt_cluster.hpp"
+#include "umd/device/firmware/firmware_info_provider.hpp"
+#include "umd/device/tt_device/tt_device.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -839,3 +856,405 @@ INSTANTIATE_TEST_SUITE_P(
     [](const testing::TestParamInfo<DRISCNocModeParams>& info) {
         return info.param.drisc_noc == NOC::NOC_0 ? "Noc0StreamNoc1Noc2Axi" : "Noc1StreamNoc0Noc2Axi";
     });
+
+namespace {
+
+enum class ContentionMode { CurrentOnly, PrefetchProxyOnly, SameBank, DifferentBank };
+
+const char* contention_mode_name(ContentionMode mode) {
+    switch (mode) {
+        case ContentionMode::CurrentOnly: return "current_only";
+        case ContentionMode::PrefetchProxyOnly: return "prefetch_proxy_only";
+        case ContentionMode::SameBank: return "same_bank";
+        case ContentionMode::DifferentBank: return "different_bank";
+    }
+    return "unknown";
+}
+
+uint32_t env_u32(const char* name, uint32_t default_value) {
+    const char* value = std::getenv(name);
+    if (value == nullptr) {
+        return default_value;
+    }
+
+    std::string_view digits(value);
+    int base = 10;
+    if (digits.size() >= 2 && digits[0] == '0' && (digits[1] == 'x' || digits[1] == 'X')) {
+        digits.remove_prefix(2);
+        base = 16;
+    }
+
+    uint32_t parsed = 0;
+    const auto [end, error] = std::from_chars(digits.data(), digits.data() + digits.size(), parsed, base);
+    if (error == std::errc::result_out_of_range) {
+        throw std::out_of_range(std::string(name) + " exceeds the uint32 range");
+    }
+    if (error != std::errc{} || end != digits.data() + digits.size()) {
+        throw std::invalid_argument(std::string(name) + " must be a decimal or 0x-prefixed hexadecimal uint32");
+    }
+    return parsed;
+}
+
+uint64_t percentile_cycles(std::vector<uint64_t> values, double percentile) {
+    if (values.empty()) {
+        return 0;
+    }
+    std::sort(values.begin(), values.end());
+    const size_t index = static_cast<size_t>(percentile * static_cast<double>(values.size() - 1));
+    return values.at(index);
+}
+
+struct ContentionSample {
+    uint32_t repetition;
+    ContentionMode mode;
+    uint32_t current_bank;
+    uint64_t current_cycles;
+    uint64_t prefetch_proxy_cycles;
+    uint32_t niu_read_requests_delta;
+    bool current_correct;
+    bool prefetch_proxy_correct;
+};
+
+}  // namespace
+
+// Gate before the parent fixture initializes a device, so merely selecting this test is non-invasive.
+class BlackholeContentionFixture : public DramKernelFixture {
+protected:
+    void SetUp() override {
+        const char* opt_in = std::getenv("TT_METAL_RUN_BH_CONTENTION");
+        if (opt_in == nullptr || std::string(opt_in) != "1") {
+            GTEST_SKIP() << "Set TT_METAL_RUN_BH_CONTENTION=1 to run the exclusive-device characterization";
+        }
+        DramKernelFixture::SetUp();
+    }
+};
+
+// Hardware-gated characterization harness for the Blackhole GDDR arbitration investigation.
+//
+// This deliberately performs no memory-controller register writes. The DRISC DMA + multicast path is a
+// contention proxy that exercises the same GDDR DMA source path as the real tensor prefetcher, while the
+// sibling Tensix read uses the endpoint's other NIU in NOC2AXI mode. The full tensor-prefetcher lifecycle
+// remains covered by the ttnn prefetcher tests; this low-level harness provides reproducible, bank-local
+// timing and NIU counter evidence until authoritative MC register definitions and ownership are available.
+//
+// Opt in with TT_METAL_RUN_BH_CONTENTION=1. Optional knobs:
+//   BH_CONTENTION_BANK, BH_CONTENTION_ISOLATION_BANK, BH_CONTENTION_SENDER_SUBCHANNEL,
+//   BH_CONTENTION_PREFETCH_NOC, BH_CONTENTION_CURRENT_NOC, BH_CONTENTION_BYTES,
+//   BH_CONTENTION_ITERS, BH_CONTENTION_REPETITIONS, BH_CONTENTION_SEED,
+//   BH_CONTENTION_JSON.
+TEST_F(BlackholeContentionFixture, SafeGDDRContentionCharacterization) {
+    const auto& cluster = MetalContext::instance().get_cluster();
+    const auto& soc_desc = cluster.get_soc_desc(mesh_device_->build_id());
+    const uint32_t num_banks = soc_desc.get_dram_compute_grid_size().x;
+    const uint32_t prefetch_bank = env_u32("BH_CONTENTION_BANK", 0);
+    const uint32_t isolation_bank = env_u32("BH_CONTENTION_ISOLATION_BANK", 1);
+    const uint32_t bytes_per_iter = env_u32("BH_CONTENTION_BYTES", 16 * 1024);
+    const uint32_t iters = env_u32("BH_CONTENTION_ITERS", 256);
+    const uint32_t repetitions = env_u32("BH_CONTENTION_REPETITIONS", 20);
+    const uint32_t random_seed = env_u32("BH_CONTENTION_SEED", 0xB1AC);
+    const uint32_t default_sender_subchannel = logical_dram_endpoint_for_noc(soc_desc, prefetch_bank, NOC::NOC_1).y;
+    const uint32_t sender_subchannel = env_u32("BH_CONTENTION_SENDER_SUBCHANNEL", default_sender_subchannel);
+    const uint32_t prefetch_noc_index = env_u32("BH_CONTENTION_PREFETCH_NOC", 0);
+    const uint32_t current_noc_index = env_u32("BH_CONTENTION_CURRENT_NOC", 1);
+    const std::string test_commit =
+        std::getenv("BH_CONTENTION_TEST_COMMIT") == nullptr ? "unrecorded" : std::getenv("BH_CONTENTION_TEST_COMMIT");
+    const uint64_t total_bytes = static_cast<uint64_t>(bytes_per_iter) * iters;
+
+    ASSERT_LT(prefetch_bank, num_banks);
+    ASSERT_LT(isolation_bank, num_banks);
+    ASSERT_NE(prefetch_bank, isolation_bank);
+    ASSERT_GT(bytes_per_iter, 0u);
+    ASSERT_GT(iters, 0u);
+    ASSERT_EQ(bytes_per_iter % 64, 0u);
+    ASSERT_GE(repetitions, 1u);
+    ASSERT_LT(prefetch_noc_index, NUM_NOCS);
+    ASSERT_LT(current_noc_index, NUM_NOCS);
+    const NOC prefetch_noc = static_cast<NOC>(prefetch_noc_index);
+    const NOC current_noc = static_cast<NOC>(current_noc_index);
+    const std::vector<uint32_t> usable_sender_subchannels = usable_dram_endpoints(prefetch_bank);
+    ASSERT_NE(
+        std::find(usable_sender_subchannels.begin(), usable_sender_subchannels.end(), sender_subchannel),
+        usable_sender_subchannels.end())
+        << "Requested sender subchannel is not DRISC-usable";
+    ASSERT_LE(total_bytes, std::numeric_limits<uint32_t>::max())
+        << "Kernel GDDR addresses and mesh-buffer page size are 32-bit";
+    const auto& hal = MetalContext::instance().hal();
+    const uint64_t drisc_l1_end = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::BASE) +
+                                  hal.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::BASE);
+    const uint64_t tensix_l1_end = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +
+                                   hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
+    ASSERT_LE(static_cast<uint64_t>(drisc_l1_base_) + bytes_per_iter + sizeof(uint64_t), drisc_l1_end)
+        << "DRISC payload plus timing must fit in L1";
+    ASSERT_LE(static_cast<uint64_t>(tensix_l1_base_) + bytes_per_iter + sizeof(uint64_t), tensix_l1_end)
+        << "Tensix payload plus timing must fit in L1";
+    ASSERT_GE(dram_unreserved_size_, total_bytes);
+
+    const auto device_id = mesh_device_->get_device_ids()[0];
+    auto* tt_device = cluster.get_driver()->get_tt_device(device_id);
+    auto* fw = tt_device->get_firmware_info_provider();
+    ASSERT_NE(fw, nullptr);
+    const auto fw_version = fw->get_firmware_version().to_string();
+    const auto board_id = fw->get_board_id();
+    const auto cm_fw = fw->get_cm_fw_version();
+    const auto gddr_fw = fw->get_gddr_fw_version();
+    const auto dram_speed = fw->get_dram_speed();
+    const auto chip_info = tt_device->get_chip_info();
+    const uint32_t physical_dram_channels = tt_device->get_architecture_implementation()->get_dram_banks_number();
+    const uint32_t dram_harvesting_mask = chip_info.harvesting_masks.dram_harvesting_mask;
+    const auto training = fw->get_dram_training_status(physical_dram_channels);
+    const uint32_t aiclk_mhz = cluster.get_device_aiclk(device_id);
+    const uint32_t aiclk_hz = aiclk_mhz * 1000000u;
+
+    log_info(
+        LogTest,
+        "BH contention metadata: device={} board={} fw={} cm_fw={} gddr_fw={} dram_speed={} aiclk_mhz={} "
+        "logical_banks={} physical_channels={} harvesting_mask=0x{:x} training_entries={}",
+        device_id,
+        board_id.has_value() ? std::to_string(*board_id) : "unavailable",
+        fw_version,
+        cm_fw.has_value() ? cm_fw->to_string() : "unavailable",
+        gddr_fw.has_value() ? gddr_fw->to_string() : "unavailable",
+        dram_speed.has_value() ? std::to_string(*dram_speed) : "unavailable",
+        aiclk_mhz,
+        num_banks,
+        physical_dram_channels,
+        dram_harvesting_mask,
+        training.size());
+
+    auto dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = num_banks * total_bytes},
+        {.page_size = static_cast<uint32_t>(total_bytes), .buffer_type = BufferType::DRAM},
+        mesh_device_);
+    const uint32_t dram_addr = dram_buffer->address();
+    const uint32_t elements_per_iter = bytes_per_iter / sizeof(uint32_t);
+    std::vector<uint32_t> data =
+        create_random_vector_of_bfloat16(static_cast<size_t>(total_bytes), 1000.0f, random_seed);
+    std::vector<uint32_t> last_chunk(data.end() - elements_per_iter, data.end());
+    for (uint32_t bank : {prefetch_bank, isolation_bank}) {
+        const uint32_t channel = mesh_device_->dram_channel_from_logical_core({bank, 0});
+        slow_dispatch::WriteToDRAMChannel(*mesh_device_, channel, dram_addr, data);
+    }
+
+    constexpr CoreCoord prefetch_receiver_logical{1, 0};
+    constexpr CoreCoord current_reader_logical{0, 1};
+    const CoreCoord current_reader_virtual =
+        mesh_device_->virtual_core_from_logical_core(current_reader_logical, CoreType::WORKER);
+    const CoreCoord mcast_target =
+        mesh_device_->virtual_core_from_logical_core(prefetch_receiver_logical, CoreType::WORKER);
+    const CoreCoord prefetch_drisc_logical{prefetch_bank, sender_subchannel};
+    const CoreCoord prefetch_drisc_virtual =
+        mesh_device_->virtual_core_from_logical_core(prefetch_drisc_logical, CoreType::DRAM);
+
+    auto read_niu_counter = [&](uint32_t bank) {
+        const CoreCoord endpoint =
+            soc_desc.get_preferred_worker_core_for_dram_view(bank, static_cast<uint8_t>(current_noc));
+        uint32_t value = 0;
+        cluster.get_driver()->read_from_device_reg(
+            &value,
+            device_id,
+            tt::umd::CoreCoord{static_cast<int>(endpoint.x), static_cast<int>(endpoint.y)},
+            NOC_STATUS(NIU_SLV_RD_REQ_RECEIVED) + current_noc_index * NOC_INSTANCE_OFFSET,
+            sizeof(value));
+        return value;
+    };
+
+    std::vector<ContentionSample> samples;
+    samples.reserve(repetitions * 4);
+    std::mt19937 rng(random_seed);
+    std::array<ContentionMode, 4> modes = {
+        ContentionMode::CurrentOnly,
+        ContentionMode::PrefetchProxyOnly,
+        ContentionMode::SameBank,
+        ContentionMode::DifferentBank};
+
+    for (uint32_t repetition = 0; repetition < repetitions + 1; ++repetition) {
+        std::shuffle(modes.begin(), modes.end(), rng);
+        for (ContentionMode mode : modes) {
+            const bool run_prefetch = mode != ContentionMode::CurrentOnly;
+            const bool run_current = mode != ContentionMode::PrefetchProxyOnly;
+            const uint32_t current_bank = mode == ContentionMode::DifferentBank ? isolation_bank : prefetch_bank;
+
+            Program program = CreateProgram();
+            if (run_prefetch) {
+                auto prefetch_kernel = CreateKernel(
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/misc/drisc_mcast_writes_tensix.cpp",
+                    prefetch_drisc_logical,
+                    DramConfig{.noc = prefetch_noc, .defines = {{"MULTICAST", "1"}}});
+                SetRuntimeArgs(
+                    program,
+                    prefetch_kernel,
+                    prefetch_drisc_logical,
+                    {dram_addr,
+                     drisc_l1_base_,
+                     tensix_l1_base_,
+                     mcast_target.x,
+                     mcast_target.y,
+                     mcast_target.x,
+                     mcast_target.y,
+                     bytes_per_iter,
+                     1u,
+                     iters});
+            }
+            if (run_current) {
+                auto current_kernel = CreateKernel(
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/misc/tensix_dram_reads.cpp",
+                    current_reader_logical,
+                    DataMovementConfig{
+                        .processor = DataMovementProcessor::RISCV_0,
+                        .noc = current_noc,
+                        .defines = {{"RECORD_TIMING", "1"}}});
+                SetRuntimeArgs(
+                    program,
+                    current_kernel,
+                    current_reader_logical,
+                    {current_bank, dram_addr, tensix_l1_base_, bytes_per_iter, iters});
+            }
+
+            const uint32_t counter_before = run_current ? read_niu_counter(current_bank) : 0;
+            run_workload(std::move(program));
+            const uint32_t counter_after = run_current ? read_niu_counter(current_bank) : 0;
+
+            uint64_t current_cycles = 0;
+            uint64_t prefetch_cycles = 0;
+            bool current_correct = true;
+            bool prefetch_correct = true;
+            if (run_current) {
+                current_cycles = read_timing_cycles(current_reader_virtual, tensix_l1_base_ + bytes_per_iter);
+                std::vector<uint32_t> result;
+                slow_dispatch::ReadFromL1(
+                    *mesh_device_, current_reader_logical, tensix_l1_base_, bytes_per_iter, result, CoreType::WORKER);
+                current_correct = result == last_chunk;
+                EXPECT_TRUE(current_correct) << contention_mode_name(mode) << " current-op payload mismatch";
+            }
+            if (run_prefetch) {
+                prefetch_cycles = read_timing_cycles(prefetch_drisc_virtual, drisc_l1_noc_addr_ + bytes_per_iter);
+                std::vector<uint32_t> result;
+                slow_dispatch::ReadFromL1(
+                    *mesh_device_,
+                    prefetch_receiver_logical,
+                    tensix_l1_base_,
+                    bytes_per_iter,
+                    result,
+                    CoreType::WORKER);
+                prefetch_correct = result == last_chunk;
+                EXPECT_TRUE(prefetch_correct) << contention_mode_name(mode) << " prefetch-proxy payload mismatch";
+            }
+
+            if (repetition != 0) {
+                samples.push_back(
+                    {repetition - 1,
+                     mode,
+                     current_bank,
+                     current_cycles,
+                     prefetch_cycles,
+                     counter_after - counter_before,
+                     current_correct,
+                     prefetch_correct});
+            }
+        }
+    }
+
+    for (ContentionMode mode : modes) {
+        std::vector<uint64_t> current;
+        std::vector<uint64_t> prefetch;
+        for (const auto& sample : samples) {
+            if (sample.mode == mode) {
+                if (sample.current_cycles != 0) {
+                    current.push_back(sample.current_cycles);
+                }
+                if (sample.prefetch_proxy_cycles != 0) {
+                    prefetch.push_back(sample.prefetch_proxy_cycles);
+                }
+            }
+        }
+        log_info(
+            LogTest,
+            "BH contention {}: current p50/p95/p99={}/{}/{} cycles, prefetch-proxy p50={} cycles",
+            contention_mode_name(mode),
+            percentile_cycles(current, 0.50),
+            percentile_cycles(current, 0.95),
+            percentile_cycles(current, 0.99),
+            percentile_cycles(prefetch, 0.50));
+    }
+
+    if (const char* output_path = std::getenv("BH_CONTENTION_JSON"); output_path != nullptr) {
+        const std::filesystem::path path(output_path);
+        if (!path.parent_path().empty()) {
+            std::filesystem::create_directories(path.parent_path());
+        }
+        std::ofstream out(path);
+        ASSERT_TRUE(out.is_open()) << "Could not open " << path;
+        out << "{\n"
+            << "  \"schema_version\": 2,\n"
+            << "  \"register_writes_performed\": false,\n"
+            << "  \"register_sweeps_available\": false,\n"
+            << "  \"register_sweeps_blocker\": \"authoritative MC register definitions, ownership, addressing, and "
+               "restoration contract are unavailable in this repository\",\n"
+            << "  \"device_id\": " << device_id << ",\n"
+            << "  \"test_commit\": \"" << test_commit << "\",\n"
+            << "  \"board_id\": ";
+        if (board_id.has_value()) {
+            out << *board_id;
+        } else {
+            out << "null";
+        }
+        out << ",\n  \"firmware_bundle\": \"" << fw_version << "\",\n"
+            << "  \"cm_firmware\": \"" << (cm_fw.has_value() ? cm_fw->to_string() : "unavailable") << "\",\n"
+            << "  \"gddr_firmware\": \"" << (gddr_fw.has_value() ? gddr_fw->to_string() : "unavailable") << "\",\n"
+            << "  \"dram_speed\": " << (dram_speed.has_value() ? std::to_string(*dram_speed) : "null") << ",\n"
+            << "  \"aiclk_mhz\": " << aiclk_mhz << ",\n"
+            << "  \"logical_dram_banks\": " << num_banks << ",\n"
+            << "  \"physical_dram_channels\": " << physical_dram_channels << ",\n"
+            << "  \"dram_harvesting_mask\": " << dram_harvesting_mask << ",\n"
+            << "  \"physical_dram_training_status\": [";
+        for (size_t i = 0; i < training.size(); ++i) {
+            out << "\"" << dram_training_status_to_str(training[i]) << "\"" << (i + 1 == training.size() ? "" : ",");
+        }
+        out << "],\n"
+            << "  \"prefetch_bank\": " << prefetch_bank << ",\n"
+            << "  \"isolation_bank\": " << isolation_bank << ",\n"
+            << "  \"prefetch_drisc_logical\": [" << prefetch_drisc_logical.x << "," << prefetch_drisc_logical.y
+            << "],\n"
+            << "  \"usable_sender_subchannels\": [";
+        for (size_t i = 0; i < usable_sender_subchannels.size(); ++i) {
+            out << usable_sender_subchannels[i] << (i + 1 == usable_sender_subchannels.size() ? "" : ",");
+        }
+        out << "],\n"
+            << "  \"prefetch_receiver_logical\": [" << prefetch_receiver_logical.x << "," << prefetch_receiver_logical.y
+            << "],\n"
+            << "  \"prefetch_noc\": " << prefetch_noc_index << ",\n"
+            << "  \"current_reader_logical\": [" << current_reader_logical.x << "," << current_reader_logical.y
+            << "],\n"
+            << "  \"current_noc\": " << current_noc_index << ",\n"
+            << "  \"bytes_per_iteration\": " << bytes_per_iter << ",\n"
+            << "  \"iterations\": " << iters << ",\n"
+            << "  \"random_seed\": " << random_seed << ",\n"
+            << "  \"samples\": [\n";
+        for (size_t i = 0; i < samples.size(); ++i) {
+            const auto& sample = samples[i];
+            out << "    {\"repetition\":" << sample.repetition << ",\"mode\":\"" << contention_mode_name(sample.mode)
+                << "\",\"current_bank\":" << sample.current_bank << ",\"current_cycles\":" << sample.current_cycles
+                << ",\"current_bandwidth_gbps\":"
+                << (sample.current_cycles == 0 ? 0.0 : compute_bw_gbs(total_bytes, sample.current_cycles, aiclk_hz))
+                << ",\"prefetch_proxy_cycles\":" << sample.prefetch_proxy_cycles
+                << ",\"prefetch_proxy_bandwidth_gbps\":"
+                << (sample.prefetch_proxy_cycles == 0
+                        ? 0.0
+                        : compute_bw_gbs(total_bytes, sample.prefetch_proxy_cycles, aiclk_hz))
+                << ",\"niu_read_requests_delta\":";
+            if (sample.mode == ContentionMode::PrefetchProxyOnly) {
+                out << "null";
+            } else {
+                out << sample.niu_read_requests_delta;
+            }
+            out << ",\"current_correct\":" << std::boolalpha << sample.current_correct
+                << ",\"prefetch_proxy_correct\":" << sample.prefetch_proxy_correct << "}"
+                << (i + 1 == samples.size() ? "\n" : ",\n");
+        }
+        out << "  ]\n}\n";
+        ASSERT_TRUE(out.good()) << "Failed writing " << path;
+        log_info(LogTest, "Wrote BH contention samples to {}", path.string());
+    }
+}
