@@ -2000,3 +2000,205 @@ def test_ring_joint_sdpa_logical_tensor_trace_replay(
         submesh.reset_sub_device_stall_group()
         submesh.clear_loaded_sub_device_manager()
         submesh.remove_sub_device_manager(sub_device_manager)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, sp_axis, b, nh, padded_q_len, padded_kv_len, d, q_chunk_size, k_chunk_size, logical_ns",
+    [
+        # is_cross: short Q shard attends non-causally to the SP-sharded K/V (LTX V2A). logical_n is the live
+        # KV length; the list moves a full length, sub-tile tails, and lengths that empty whole ring iterations.
+        ((2, 4), 0, 1, 24, 128, 512, 64, 32, 64, [512, 383, 129, 500]),
+        ((4, 8), 0, 1, 24, 256, 1024, 64, 32, 64, [1024, 767, 129, 1000]),
+    ],
+    ids=["m2x4", "m4x8"],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        (
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "trace_region_size": LOGICAL_TENSOR_TRACE_REGION_SIZE,
+            },
+            ttnn.Topology.Linear,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=["line"],
+)
+def test_ring_joint_sdpa_cross_logical_tensor_trace_replay(
+    mesh_device,
+    sp_axis,
+    b,
+    nh,
+    padded_q_len,
+    padded_kv_len,
+    d,
+    q_chunk_size,
+    k_chunk_size,
+    logical_ns,
+    all_gather_topology,
+    reset_seeds,
+):
+    """``is_cross=True`` twin of ``test_ring_joint_sdpa_logical_tensor_trace_replay``: one captured cross
+    ring SDPA (Q.seq < K.seq per device, no joint) replayed per live ``logical_n`` with only the length
+    tensor refreshed in place must match the host-scalar path bit-for-bit.
+
+    This is the LTX V2A cross-attention shape under trace bucketing: the audio Q is fixed while the
+    video K/V is padded to a bucket rung and only its live length changes between requests.
+    """
+    sp_factor = mesh_device.shape[sp_axis]
+    up_axis = 1 - sp_axis
+    num_links = sharded_prompt_num_links(mesh_device.shape)
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(*mesh_device.shape))
+    submesh.cache_entries_counter = CacheEntriesCounter(submesh)
+    assert padded_q_len % (sp_factor * 32) == 0 and padded_kv_len % (sp_factor * 32) == 0
+    assert padded_q_len < padded_kv_len, "is_cross requires the per-device Q shard shorter than its K/V shard"
+    submesh.enable_program_cache()
+
+    dtype = ttnn.bfloat16
+    full_compute_grid = submesh.compute_with_storage_grid_size()
+    sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y - 1)
+    ccl_core_grid_offset = (0, full_compute_grid.y - 1)
+
+    ccl_sub_device_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_compute_grid.x - 1, full_compute_grid.y - 1))}
+    )
+    worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
+    worker_sub_device_id = ttnn.SubDeviceId(0)
+    sub_device_manager = submesh.create_sub_device_manager([worker_sub_device], 0)
+    submesh.load_sub_device_manager(sub_device_manager)
+    submesh.set_sub_device_stall_group([worker_sub_device_id])
+    ccl_semaphore_handles = [ttnn.create_global_semaphore(submesh, ccl_sub_device_crs, 0) for _ in range(2)]
+
+    spatial_shard_dims = [None, None]
+    spatial_shard_dims[sp_axis] = 2
+    spatial_shard_dims[up_axis] = 1
+    kv_buf_shard_dims = [None, None]
+    kv_buf_shard_dims[up_axis] = 1
+
+    # Garbage past logical_n: any leak into the attended keys collapses the comparison.
+    Q = 8.0 * fa_rand(b, nh, padded_q_len, d)
+    K = 8.0 * fa_rand(b, nh, padded_kv_len, d)
+    V = 8.0 * fa_rand(b, nh, padded_kv_len, d)
+
+    def upload(host_tensor, dims):
+        return ttnn.from_torch(
+            host_tensor,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=dims),
+        )
+
+    tt_Q = upload(Q, spatial_shard_dims)
+    tt_K = upload(K, spatial_shard_dims)
+    tt_V = upload(V, spatial_shard_dims)
+    persistent_kv_bufs = [
+        upload(torch.zeros(b, nh, padded_kv_len, d), kv_buf_shard_dims),
+        upload(torch.zeros(b, nh, padded_kv_len, d), kv_buf_shard_dims),
+    ]
+
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=sdpa_compute_grid,
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=False,
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        submesh.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    tt_logical_n = logical_length_tensor(submesh, logical_ns[0])
+
+    def load_length(logical_n):
+        ttnn.copy_host_to_device_tensor(logical_length_tensor(submesh, logical_n, on_device=False), tt_logical_n)
+
+    def call(logical_n):
+        return ttnn.transformer.ring_joint_scaled_dot_product_attention(
+            tt_Q,
+            tt_K,
+            tt_V,
+            None,
+            None,
+            None,
+            persistent_output_buffer_k=persistent_kv_bufs[0],
+            persistent_output_buffer_v=persistent_kv_bufs[1],
+            joint_strategy="rear",
+            logical_n=logical_n,
+            is_cross=True,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            dim=2,
+            multi_device_global_semaphore=ccl_semaphore_handles,
+            num_links=num_links,
+            cluster_axis=sp_axis,
+            mesh_device=submesh,
+            topology=all_gather_topology,
+            subdevice_id=worker_sub_device_id,
+            ccl_core_grid_offset=ccl_core_grid_offset,
+        )
+
+    composer = ttnn.ConcatMesh2dToTensor(submesh, mesh_shape=tuple(submesh.shape), dims=spatial_shard_dims)
+
+    def fetch(tt_out):
+        return ttnn.to_torch(tt_out, mesh_composer=composer)[:, :, :padded_q_len, :]
+
+    trace_id = None
+    try:
+        references = []
+        for logical_n in logical_ns:
+            tt_out, tt_joint_out, tt_stats = call(logical_n)
+            ttnn.synchronize_device(submesh)
+            references.append(fetch(tt_out))
+            for t in (tt_out, tt_joint_out, tt_stats):
+                ttnn.deallocate(t)
+
+        # Every Q row attends to every live key, so any change in logical_n must move the output.
+        for i in range(1, len(logical_ns)):
+            assert not torch.equal(references[i], references[0]), (
+                f"logical_n={logical_ns[0]} and logical_n={logical_ns[i]} give identical cross output, so "
+                "replays could not distinguish them; pick different lengths"
+            )
+
+        # Compile the tensor-path program, then capture it once with the placeholder scalars.
+        load_length(logical_ns[0])
+        warm = call(tt_logical_n)
+        ttnn.synchronize_device(submesh)
+        for t in warm:
+            ttnn.deallocate(t)
+
+        trace_id = ttnn.begin_trace_capture(submesh, cq_id=0)
+        tt_out_traced, _, _ = call(tt_logical_n)
+        ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
+        ttnn.synchronize_device(submesh)
+
+        n = len(logical_ns)
+        replay_order = list(range(n)) + list(reversed(range(n))) + [0, n - 1, 1]
+        for replay_idx, i in enumerate(replay_order):
+            load_length(logical_ns[i])
+            ttnn.execute_trace(submesh, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(submesh)
+            got = fetch(tt_out_traced)
+            ref = references[i]
+            assert torch.equal(got, ref), (
+                f"replay {replay_idx} of order {replay_order}: logical_n={logical_ns[i]}: traced cross output "
+                f"differs from the host-scalar path (max abs diff {(got - ref).abs().max().item()})"
+            )
+            logger.info(f"cross logical-tensor trace replay {replay_idx} (logical_n={logical_ns[i]}): bit-exact")
+
+        logger.success(
+            f"cross logical-tensor trace: 1 capture, {len(replay_order)} replays over {n} logical_n values, "
+            "all bit-exact vs the host-scalar path"
+        )
+    finally:
+        if trace_id is not None:
+            ttnn.release_trace(submesh, trace_id)
+        submesh.reset_sub_device_stall_group()
+        submesh.clear_loaded_sub_device_manager()
+        submesh.remove_sub_device_manager(sub_device_manager)

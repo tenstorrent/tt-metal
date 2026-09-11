@@ -430,8 +430,11 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "logical_n as a tensor is incompatible with the kv_actual_isl / metadata KV-pad rotation path, "
             "which derives logical_n itself");
         TT_FATAL(!args.has_sliding_window(), "logical_n as a tensor is incompatible with sliding-window attention");
+        // A cross-attention Q shard (is_cross) is legitimately shorter than its K/V shard and runs the
+        // non-chunked kernel path (kernel_chunked = is_chunked && !is_cross), so only the genuine
+        // chunked-prefill shape is excluded here.
         TT_FATAL(
-            !tensor_args.is_chunked(),
+            !tensor_args.is_chunked() || args.is_cross,
             "logical_n as a tensor is incompatible with chunked-shaped prefill (Q.seq < K.seq); use the "
             "kv_actual_isl metadata path there");
     }
