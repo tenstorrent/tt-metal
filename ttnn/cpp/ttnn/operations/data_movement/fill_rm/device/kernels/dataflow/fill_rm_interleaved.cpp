@@ -43,6 +43,16 @@ void kernel_main() {
         in1[w] = val_lo;
     }
 
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // Quasar DM: the fills above are CPU stores that land in the RISC's L1 D$/L2, not shared L1, and
+    // the NoC below reads shared L1 directly. Flush the filled range (W bf16 elements = W<<1 bytes)
+    // so the NoC writes see the fills. No-op on WH/BH (CPU stores are coherent to the NoC there and
+    // flush_l2_cache_range is tt-2xx-only). #51763 fixed this for the tt_memmove fallback but not for
+    // direct scratchpad stores like these.
+    flush_l2_cache_range(static_cast<uintptr_t>(in0.get_base_address()), static_cast<size_t>(W << 1));
+    flush_l2_cache_range(static_cast<uintptr_t>(in1.get_base_address()), static_cast<size_t>(W << 1));
+#endif
+
     Noc noc;
     std::uint32_t nch_dst = 0;
     // input is NCH(Wt*32) unpadded RM
