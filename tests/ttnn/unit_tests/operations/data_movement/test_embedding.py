@@ -434,7 +434,8 @@ def test_embedding_tiled_sharded_output(
 # width-/block-sharded output whose shard width is strictly smaller than the weight row, so each
 # core reads only its column slice of every weight row (reader runtime arg `weight_offset` != 0).
 # GENERIC reads every token from DRAM; PADDED additionally serves the pad row out of a local cache
-# that must hold the same column slice.
+# that must hold the same column slice; BINARY serves BOTH of its two weight rows out of that cache
+# (vocabulary is exactly {0, 1}), so every output element comes from a cached column slice.
 @pytest.mark.parametrize("batch_size, sentence_size, vocabulary_size", [(2, 256, 4096)])
 @pytest.mark.parametrize(
     "hidden_embedding_dim, output_memory_layout, shard_width, num_cores_x, num_cores_y",
@@ -446,7 +447,9 @@ def test_embedding_tiled_sharded_output(
         (2048, ttnn.TensorMemoryLayout.BLOCK_SHARDED, 512, 4, 4),
     ],
 )
-@pytest.mark.parametrize("embeddings_type", [ttnn.EmbeddingsType.GENERIC, ttnn.EmbeddingsType.PADDED])
+@pytest.mark.parametrize(
+    "embeddings_type", [ttnn.EmbeddingsType.GENERIC, ttnn.EmbeddingsType.PADDED, ttnn.EmbeddingsType.BINARY]
+)
 def test_embedding_tiled_sharded_output_weight_column_offset(
     device,
     batch_size,
@@ -479,11 +482,15 @@ def test_embedding_tiled_sharded_output_weight_column_offset(
     shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     output_mem_config = ttnn.MemoryConfig(output_memory_layout, ttnn.BufferType.L1, shard_spec)
 
+    if embeddings_type == ttnn.EmbeddingsType.BINARY:
+        vocabulary_size = 2  # the op requires a two-row weight table; both rows are served from the local cache
     torch_input_tensor = torch.randint(0, vocabulary_size - 1, (batch_size, sentence_size))
     pad_token = None
     if embeddings_type == ttnn.EmbeddingsType.PADDED:
         pad_token = vocabulary_size - 1
         torch_input_tensor[:, ::5] = pad_token  # make sure the local pad-row cache is actually used
+    elif embeddings_type == ttnn.EmbeddingsType.BINARY:
+        torch_input_tensor = torch.randint(0, 2, (batch_size, sentence_size))  # rows 0 and 1, both cached
     torch_weights = torch_random((vocabulary_size, hidden_embedding_dim), -0.1, 0.1, dtype=torch.bfloat16)
     torch_output_tensor = torch.nn.functional.embedding(torch_input_tensor, torch_weights)
 
