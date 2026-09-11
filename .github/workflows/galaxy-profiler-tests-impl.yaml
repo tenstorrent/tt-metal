@@ -6,6 +6,15 @@ on:
       docker-image:
         required: true
         type: string
+      prebuilt-image:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Env image carrying the source tree and build output at /work. When set,
+          the job mounts no /work, checks out only .github, and fetches no
+          artifact. Empty falls back to the artifact path, which is what forks and
+          a failed bake get.
       build-artifact-name:
         required: true
         type: string
@@ -64,10 +73,15 @@ jobs:
     name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs_on }}
     container:
-      image: ${{ inputs.docker-image }}
+      image: ${{ inputs.prebuilt-image || inputs.docker-image }}
       env:
         TT_METAL_HOME: /work
-        PYTHONPATH: /work
+        # /work/ttnn because the image installs no wheel: /work/ttnn is a namespace
+        # dir and the package is /work/ttnn/ttnn. /work/tools carries the `tracy`
+        # module, which _ttnn imports during init on a tracy-enabled build, and this
+        # caller builds with tracy on. Missing it fails as "error while initializing
+        # the extension", naming neither tracy nor the path.
+        PYTHONPATH: /work:/work/ttnn:/work/tools
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: wormhole_b0
         LOGURU_LEVEL: INFO
@@ -77,7 +91,9 @@ jobs:
         PROFILER_OUTPUT_DIR: /work/generated/profiler/reports
         DONT_USE_VIRTUAL_ENVIRONMENT: 1
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        # The image owns /work, so no bind mount: one would mask the payload. A
+        # single-path entry is an anonymous volume on an unused path.
+        - ${{ inputs.prebuilt-image != '' && '/no_work_mount' || format('{0}/docker-job:/work', github.workspace) }} # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf:ro
       options: "--device /dev/tenstorrent"
@@ -91,7 +107,10 @@ jobs:
         timeout-minutes: 20
         with:
           ref: ${{ inputs.ref || github.sha }}
-          submodules: recursive
+          # With an image the source is already at /work; the workspace copy only
+          # has to satisfy `uses: ./docker-job/...`, which resolves against it.
+          submodules: ${{ inputs.prebuilt-image == '' && 'recursive' || 'false' }}
+          sparse-checkout: ${{ inputs.prebuilt-image != '' && '.github' || '' }}
           path: docker-job
       - name: Mark repository as safe directory
         run: git config --global --add safe.directory $GITHUB_WORKSPACE
@@ -101,6 +120,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          env-from-image: ${{ inputs.prebuilt-image != '' }}
           enable-watcher: ${{ inputs.enable-watcher }}
           enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts }}

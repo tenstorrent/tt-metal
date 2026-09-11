@@ -122,33 +122,83 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
 
-  galaxy-profiler-tests:
+  # Bakes the source tree and this run's build output into one image the test legs
+  # run in, so they need no artifact download and no recursive checkout. One bake
+  # serves all three legs, since they share the one build-artifact above and all
+  # take the build tarball on the dev base.
+  #
+  # No consumer gate needed here: determine-tests.any-selected is true only when at
+  # least one of run-galaxy, run-t3k and run-single-card is, and all three of those
+  # legs consume this image. build-artifact already carries that gate.
+  bake-env-dev-full:
     needs: [determine-tests, build-artifact]
-    if: ${{ needs.determine-tests.outputs.run-galaxy == 'true' }}
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      # Canonical, never a resolve-docker-pull-refs output: that one is
+      # Harbor-prefixed and the producer runs GitHub-hosted with no Harbor access.
+      base-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-env
+      image-name: prebuilt-tests-env-image
+      checkout-source: true
+      build-args: PROFILE=full
+      # No source-ref: this caller takes no ref, so the producer's default (its own
+      # commit) is already the commit build-artifact built.
+
+  galaxy-profiler-tests:
+    needs: [determine-tests, build-artifact, bake-env-dev-full]
+    # bake-env-dev-full is in needs but deliberately absent from the if:. A failed
+    # bake leaves the ref empty and the legs fall back to the artifact path; gating
+    # on it would skip the suite instead. The if: therefore restates the
+    # build-artifact dependency the bare needs list used to imply. determine-tests
+    # stays covered by the run-* check, which is empty unless that job succeeded.
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' &&
+     needs.determine-tests.outputs.run-galaxy == 'true' }}
     uses: ./.github/workflows/galaxy-profiler-tests-impl.yaml
     secrets: inherit
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      prebuilt-image: ${{ needs.bake-env-dev-full.outputs.image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
   t3000-profiler-tests:
-    needs: [determine-tests, build-artifact]
-    if: ${{ needs.determine-tests.outputs.run-t3k == 'true' }}
+    needs: [determine-tests, build-artifact, bake-env-dev-full]
+    # bake-env-dev-full is in needs but deliberately absent from the if:. A failed
+    # bake leaves the ref empty and the legs fall back to the artifact path; gating
+    # on it would skip the suite instead. The if: therefore restates the
+    # build-artifact dependency the bare needs list used to imply. determine-tests
+    # stays covered by the run-* check, which is empty unless that job succeeded.
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' &&
+     needs.determine-tests.outputs.run-t3k == 'true' }}
     uses: ./.github/workflows/t3000-profiler-tests-impl.yaml
     secrets: inherit
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      prebuilt-image: ${{ needs.bake-env-dev-full.outputs.image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
   single-card-profiler-tests:
-    needs: [determine-tests, build-artifact]
-    if: ${{ needs.determine-tests.outputs.run-single-card == 'true' }}
+    needs: [determine-tests, build-artifact, bake-env-dev-full]
+    # bake-env-dev-full is in needs but deliberately absent from the if:. A failed
+    # bake leaves the ref empty and the legs fall back to the artifact path; gating
+    # on it would skip the suite instead. The if: therefore restates the
+    # build-artifact dependency the bare needs list used to imply. determine-tests
+    # stays covered by the run-* check, which is empty unless that job succeeded.
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' &&
+     needs.determine-tests.outputs.run-single-card == 'true' }}
     uses: ./.github/workflows/single-card-profiler-tests-impl.yaml
     secrets: inherit
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      prebuilt-image: ${{ needs.bake-env-dev-full.outputs.image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.determine-tests.outputs.single-card-skus }}
