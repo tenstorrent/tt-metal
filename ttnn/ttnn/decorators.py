@@ -96,7 +96,7 @@ def _copy_golden_comparison_config(source, destination):
 
 
 def compare_tensors_using_pcc(
-    python_fully_qualified_name, golden_outputs, outputs, desired_pcc, level, fail_on_bad_comparison
+    python_fully_qualified_name, golden_outputs, outputs, desired_pcc, level, fail_on_bad_comparison, output_path=()
 ):
     import numbers
     import torch
@@ -105,7 +105,7 @@ def compare_tensors_using_pcc(
 
     if isinstance(golden_outputs, (list, tuple, dict)) or isinstance(outputs, (list, tuple, dict)):
         comparison_records = []
-        for golden_output, output in _structured_output_pairs(golden_outputs, outputs):
+        for leaf_path, golden_output, output in _structured_output_leaves(golden_outputs, outputs):
             comparison_records.extend(
                 compare_tensors_using_pcc(
                     python_fully_qualified_name,
@@ -114,6 +114,7 @@ def compare_tensors_using_pcc(
                     desired_pcc,
                     level,
                     fail_on_bad_comparison,
+                    output_path=output_path + leaf_path,
                 )
             )
         return comparison_records
@@ -254,7 +255,8 @@ def compare_tensors_using_pcc(
         "actual_pcc": float(actual_pcc),
     }
     if not matches:
-        error_message = f"{python_fully_qualified_name}: Comparing output tensor 0 against CPU {level} failed: pcc is {actual_pcc} but should be >={desired_pcc}"
+        output_label = _format_output_tensor_label(output_path)
+        error_message = f"{python_fully_qualified_name}: Comparing {output_label} against CPU {level} failed: pcc is {actual_pcc} but should be >={desired_pcc}"
         if fail_on_bad_comparison:
             raise RuntimeError(error_message)
         logger.error(error_message)
@@ -499,6 +501,62 @@ def _convert_ttnn_to_torch_for_comparison(tensor, **kwargs):
     return ttnn.to_torch(tensor, **kwargs)
 
 
+def _normalize_topology_mesh_coords(mesh_coords):
+    """Normalize topology mesh coordinates to plain integer tuples.
+
+    ``TensorTopology.mesh_coords()`` maps each logical distribution position (row-major
+    over ``distribution_shape()``) to the physical device coordinate holding its shard.
+    """
+
+    return tuple(tuple(int(value) for value in mesh_coord) for mesh_coord in mesh_coords)
+
+
+def _physical_storage_order(mesh_coords):
+    """Return logical distribution indices ordered by physical storage position.
+
+    ``ttnn.get_device_tensors()`` yields shards in physical storage order (row-major over
+    the physical mesh), so sorting logical positions by their physical coordinate recovers
+    the logical index behind each storage slot.
+    """
+
+    normalized_mesh_coords = _normalize_topology_mesh_coords(mesh_coords)
+    return tuple(sorted(range(len(normalized_mesh_coords)), key=lambda index: normalized_mesh_coords[index]))
+
+
+def reorder_shards_to_logical_order(shards, mesh_coords):
+    """Reorder shards from physical storage order to logical distribution order.
+
+    ``ttnn.get_device_tensors()`` returns shards in physical storage order, while golden
+    functions index shards by logical distribution position. Use the topology's
+    logical-to-physical coordinate mapping to translate between the two orders.
+    """
+
+    shards = list(shards)
+    normalized_mesh_coords = _normalize_topology_mesh_coords(mesh_coords)
+    if len(shards) != len(normalized_mesh_coords):
+        raise ValueError(
+            f"Cannot map {len(shards)} mesh shards to {len(normalized_mesh_coords)} tensor topology coordinates"
+        )
+    logical_shards = [None] * len(shards)
+    for storage_index, logical_index in enumerate(_physical_storage_order(normalized_mesh_coords)):
+        logical_shards[logical_index] = shards[storage_index]
+    return logical_shards
+
+
+def _storage_index_for_physical_coord(coordinate, mesh_coords):
+    """Return the physical storage index of a physical mesh coordinate.
+
+    Physical storage order is row-major over the physical mesh coordinates, so the storage
+    index of a coordinate is its rank among the sorted topology coordinates.
+    """
+
+    normalized_mesh_coords = _normalize_topology_mesh_coords(mesh_coords)
+    coordinate_key = tuple(int(value) for value in coordinate)
+    if coordinate_key not in normalized_mesh_coords:
+        raise ValueError(f"Mesh coordinate {coordinate_key} is not present in the tensor topology")
+    return sum(1 for mesh_coord in normalized_mesh_coords if mesh_coord < coordinate_key)
+
+
 def to_torch_for_comparison(tensor, golden_tensor=None):
     import math
     import torch
@@ -511,24 +569,28 @@ def to_torch_for_comparison(tensor, golden_tensor=None):
     mesh_coord = getattr(golden_tensor, "_ttnn_mesh_coord", None)
     if mesh_coord is not None:
         device_tensors = list(ttnn.get_device_tensors(tensor))
-        mesh_coords = list(tensor.tensor_topology().mesh_coords())
+        mesh_coords = _normalize_topology_mesh_coords(tensor.tensor_topology().mesh_coords())
         if len(mesh_coords) != len(device_tensors):
             raise ValueError(
                 f"Cannot map {len(device_tensors)} mesh shards to {len(mesh_coords)} tensor topology coordinates"
             )
         requested_coord = tuple(int(value) for value in mesh_coord)
-        for tensor_coord, device_tensor in zip(mesh_coords, device_tensors):
-            if tuple(int(value) for value in tensor_coord) == requested_coord:
-                return _convert_ttnn_to_torch_for_comparison(device_tensor)
-        raise ValueError(f"Runtime output has no shard at mesh coordinate {requested_coord}")
+        if requested_coord not in mesh_coords:
+            raise ValueError(f"Runtime output has no shard at mesh coordinate {requested_coord}")
+        # Device tensors are stored in physical coordinate order; resolve the requested
+        # physical coordinate against that order instead of the topology listing order.
+        storage_index = _storage_index_for_physical_coord(requested_coord, mesh_coords)
+        return _convert_ttnn_to_torch_for_comparison(device_tensors[storage_index])
 
     try:
         topology = tensor.tensor_topology()
         placements = list(topology.placements())
         distribution_shape = [int(dim) for dim in list(topology.distribution_shape())]
+        mesh_coords = _normalize_topology_mesh_coords(topology.mesh_coords())
     except Exception:
         placements = []
         distribution_shape = []
+        mesh_coords = ()
 
     def get_shape(value):
         try:
@@ -546,6 +608,10 @@ def to_torch_for_comparison(tensor, golden_tensor=None):
             return None
 
         torch_shards = [_convert_ttnn_to_torch_for_comparison(device_tensor) for device_tensor in device_tensors]
+        # Device tensors arrive in physical storage order; compose them in logical
+        # distribution order so permuted topologies rebuild the logical tensor.
+        if len(mesh_coords) == len(torch_shards):
+            torch_shards = reorder_shards_to_logical_order(torch_shards, mesh_coords)
         if len(torch_shards) == 1:
             return torch_shards[0]
 
@@ -629,7 +695,9 @@ def to_torch_for_comparison(tensor, golden_tensor=None):
     return _convert_ttnn_to_torch_for_comparison(tensor)
 
 
-def _structured_output_pairs(golden_outputs, outputs):
+def _structured_output_leaves(golden_outputs, outputs):
+    """Yield ``(path, golden, output)`` leaf triples, tracking each leaf's output path."""
+
     import torch
 
     if isinstance(outputs, (ttnn.Tensor, torch.Tensor)) and isinstance(golden_outputs, (list, tuple)):
@@ -641,7 +709,7 @@ def _structured_output_pairs(golden_outputs, outputs):
             )
         golden_outputs = golden_outputs[0]
 
-    def pairs(golden_output, output):
+    def pairs(golden_output, output, path):
         if golden_output is None or output is None:
             if golden_output is None and output is None:
                 return
@@ -659,8 +727,8 @@ def _structured_output_pairs(golden_outputs, outputs):
                     f"Output structure mismatch: golden has {len(golden_output)} elements "
                     f"but output has {len(output)}"
                 )
-            for nested_golden, nested_output in zip(golden_output, output):
-                yield from pairs(nested_golden, nested_output)
+            for index, (nested_golden, nested_output) in enumerate(zip(golden_output, output)):
+                yield from pairs(nested_golden, nested_output, path + (index,))
             return
         if isinstance(golden_output, dict) or isinstance(output, dict):
             if not isinstance(golden_output, dict) or not isinstance(output, dict):
@@ -671,11 +739,26 @@ def _structured_output_pairs(golden_outputs, outputs):
             if golden_output.keys() != output.keys():
                 raise ValueError("Output structure mismatch: golden and output dictionaries have different keys")
             for key in golden_output:
-                yield from pairs(golden_output[key], output[key])
+                yield from pairs(golden_output[key], output[key], path + (key,))
             return
-        yield golden_output, output
+        yield path, golden_output, output
 
-    return tuple(pairs(golden_outputs, outputs))
+    return tuple(pairs(golden_outputs, outputs, ()))
+
+
+def _structured_output_pairs(golden_outputs, outputs):
+    return tuple(
+        (golden_output, output) for _, golden_output, output in _structured_output_leaves(golden_outputs, outputs)
+    )
+
+
+def _format_output_tensor_label(output_path):
+    """Render the compared output leaf, preserving the historic root label."""
+
+    if not output_path:
+        return "output tensor 0"
+    rendered_path = "".join(f"[{component!r}]" for component in output_path)
+    return f"output tensor at output{rendered_path}"
 
 
 def get_tensor_report_record(tensor):
@@ -838,9 +921,17 @@ def _decompose_global_golden_mesh_tensor(input_tensor, golden_tensor):
         raise ValueError("Cannot reconstruct sharded mesh inputs from a single-shard global golden")
 
     distribution_size = math.prod(distribution_shape)
+    mesh_coords = _normalize_topology_mesh_coords(topology.mesh_coords())
+    if len(mesh_coords) == len(device_tensors):
+        # Device tensors are stored in physical coordinate order; map each storage slot to
+        # its logical distribution position through the topology coordinate mapping.
+        storage_order = _physical_storage_order(mesh_coords)
+        logical_indices = [storage_order[shard_index] % distribution_size for shard_index in range(len(device_tensors))]
+    else:
+        logical_indices = [shard_index % distribution_size for shard_index in range(len(device_tensors))]
     shards = []
     for shard_index in range(len(device_tensors)):
-        coordinate_index = shard_index % distribution_size
+        coordinate_index = logical_indices[shard_index]
         coordinates = [0] * len(distribution_shape)
         for axis in range(len(distribution_shape) - 1, -1, -1):
             coordinates[axis] = coordinate_index % distribution_shape[axis]

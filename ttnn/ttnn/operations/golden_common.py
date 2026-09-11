@@ -56,11 +56,3 @@ def golden_select_optional_outputs(values, required):
         raise ValueError("Output values and requirements must have equal length")
 
     return [value if is_required else None for value, is_required in zip(values, required)]
-
-
-def golden_assemble_conditional_result(primary, *conditional_parts):
-    """Return a primary result alone or append enabled values in a tuple."""
-
-    result = [primary]
-    result.extend(value for include, value in conditional_parts if include)
-    return result[0] if len(result) == 1 else tuple(result)

@@ -267,7 +267,9 @@ def test_mesh_coordinate_selects_requested_device_shard_and_emits_one_record(mon
     topology = _FakeTensorTopology(mesh_coords=mesh_coords)
     runtime_output = _FakeDistributedTensor(topology=topology)
     runtime_output.tensor_id = 17
-    device_tensors = [_FakeDistributedTensor(torch.tensor([1.0])), _FakeDistributedTensor(torch.tensor([0.0]))]
+    # Device tensors are stored in physical coordinate order: index 0 holds physical
+    # (0, 0) and index 1 holds physical (0, 1), regardless of the topology listing order.
+    device_tensors = [_FakeDistributedTensor(torch.tensor([0.0])), _FakeDistributedTensor(torch.tensor([1.0]))]
     golden = torch.tensor([1.0])
     golden._ttnn_mesh_coord = (0, 1)
     ttnn.decorators.set_tensor_id(golden, force=True)
@@ -320,6 +322,69 @@ def test_to_torch_for_comparison_composes_mesh_shards(monkeypatch):
     output = ttnn.decorators.to_torch_for_comparison(runtime_output, golden)
 
     assert torch.equal(output, golden)
+
+
+# Verifies to_torch_for_comparison composes per-device shards in logical distribution
+# order when the topology maps logical positions to permuted physical coordinates.
+def test_to_torch_for_comparison_composes_shards_in_logical_order(monkeypatch):
+    topology = _FakeTensorTopology(mesh_coords=(ttnn.MeshCoordinate(0, 1), ttnn.MeshCoordinate(0, 0)))
+    runtime_output = _FakeDistributedTensor(topology=topology)
+    # Physical storage order: index 0 holds physical (0, 0) = logical 1, index 1 holds
+    # physical (0, 1) = logical 0.
+    device_tensors = [
+        _FakeDistributedTensor(torch.tensor([2.0])),
+        _FakeDistributedTensor(torch.tensor([1.0])),
+    ]
+    golden = torch.tensor([1.0, 2.0])
+    monkeypatch.setattr(ttnn, "Tensor", _FakeDistributedTensor)
+    monkeypatch.setattr(ttnn, "get_device_tensors", lambda _: device_tensors)
+    monkeypatch.setattr(ttnn, "to_torch", lambda tensor, **_: tensor.value)
+
+    output = ttnn.decorators.to_torch_for_comparison(runtime_output, golden)
+
+    assert torch.equal(output, golden)
+
+
+# Verifies global golden decomposition splits shards by logical distribution coordinate
+# even when the topology maps them to permuted physical coordinates.
+def test_decompose_global_golden_uses_logical_coordinates_for_permuted_topology(monkeypatch):
+    topology = _FakeTensorTopology(
+        mesh_coords=(ttnn.MeshCoordinate(0, 1), ttnn.MeshCoordinate(0, 0)),
+        placements=(ttnn.PlacementShard(0),),
+        distribution_shape=(2,),
+    )
+    input_tensor = _FakeDistributedTensor(topology=topology)
+    # Physical storage order: index 0 holds physical (0, 0) = logical 1, index 1 holds
+    # physical (0, 1) = logical 0.
+    device_tensors = [
+        _FakeDistributedTensor(torch.tensor([3.0, 4.0])),
+        _FakeDistributedTensor(torch.tensor([1.0, 2.0])),
+    ]
+    monkeypatch.setattr(ttnn, "get_device_tensors", lambda _: device_tensors)
+
+    golden = torch.tensor([1.0, 2.0, 3.0, 4.0])
+    shards = ttnn.decorators._decompose_global_golden_mesh_tensor(input_tensor, golden)
+
+    assert torch.equal(shards[0], torch.tensor([3.0, 4.0]))
+    assert torch.equal(shards[1], torch.tensor([1.0, 2.0]))
+
+
+# Verifies a mismatch in a nested structured output reports the failing leaf path.
+def test_structured_output_comparison_reports_failing_leaf(expect_error):
+    golden = [torch.tensor([1.0]), {"weight": torch.tensor([2.0])}]
+    output = [torch.tensor([1.0]), {"weight": torch.tensor([3.0])}]
+    for leaf in (golden[0], golden[1]["weight"], output[0], output[1]["weight"]):
+        ttnn.decorators.set_tensor_id(leaf, force=True)
+
+    with expect_error(RuntimeError, r"Comparing output tensor at output\[1\]\['weight'\] against CPU locally failed"):
+        ttnn.decorators.compare_tensors_using_pcc(
+            "ttnn.test_operation",
+            golden,
+            output,
+            desired_pcc=0.99,
+            level="locally",
+            fail_on_bad_comparison=True,
+        )
 
 
 def test_typecast_golden_prefers_explicit_bfloat16_metadata():

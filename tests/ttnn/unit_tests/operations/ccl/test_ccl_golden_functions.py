@@ -29,18 +29,29 @@ def _two_group_collective_inputs():
     ]
 
 
-# Verifies collective groups are formed from logical distribution coordinates rather than physical device order.
+# Verifies collective groups are formed from the physical mesh coordinates the topology
+# assigns to each logical distribution position, not from logical positions directly.
 def test_collective_groups_follow_logical_distribution_coordinates():
-    mesh_coords = tuple(ttnn.MeshCoordinate(row, column) for row in range(2) for column in range(2))
-    input_tensors = [torch.tensor([index + 1.0], dtype=torch.bfloat16) for index, mesh_coord in enumerate(mesh_coords)]
+    # Nontrivial permutation mapping logical distribution positions to physical coordinates.
+    mesh_coords = ((0, 1), (1, 0), (0, 0), (1, 1))
+    # Values are per logical distribution position, as produced by golden preprocessing.
+    input_tensors = [
+        torch.tensor([1.0], dtype=torch.bfloat16),
+        torch.tensor([2.0], dtype=torch.bfloat16),
+        torch.tensor([4.0], dtype=torch.bfloat16),
+        torch.tensor([8.0], dtype=torch.bfloat16),
+    ]
 
     output = ttnn.get_golden_function(ttnn.all_reduce)(
         input_tensors,
         cluster_axis=0,
-        **_mesh_kwargs(mesh_shape=(4,), shard_dims=(None,), mesh_coords=mesh_coords),
+        **_mesh_kwargs(mesh_shape=(2, 2), shard_dims=(None, None), mesh_coords=mesh_coords),
     )
 
-    assert torch.equal(output, torch.tensor([10.0], dtype=torch.bfloat16))
+    # Physical axis-0 groups are {(0, 0), (1, 0)} and {(0, 1), (1, 1)}, i.e. logical
+    # positions {2, 1} summing to 6 and {0, 3} summing to 9. The composed logical tensor
+    # is anchored at logical position 0, which belongs to the group summing to 9.
+    assert torch.equal(output, torch.tensor([9.0], dtype=torch.bfloat16))
 
 
 # Checks the all_broadcast golden produces the expected per-group broadcast for every collective group.
@@ -76,12 +87,16 @@ def test_all_gather_golden_composes_every_collective_group():
 # Ensures all_gather output follows logical shard order even when topology coordinates are permuted.
 def test_all_gather_golden_preserves_logical_order_with_permuted_topology_coordinates():
     mesh_coords = ((0, 1), (0, 0), (1, 1), (1, 0))
-    input_tensors = [
-        torch.tensor([[3.0, 4.0]], dtype=torch.bfloat16),
-        torch.tensor([[1.0, 2.0]], dtype=torch.bfloat16),
-        torch.tensor([[30.0, 40.0]], dtype=torch.bfloat16),
-        torch.tensor([[10.0, 20.0]], dtype=torch.bfloat16),
+    # Production preprocessing obtains shards from get_device_tensors() in physical
+    # storage order, so arrange the values by physical coordinate and apply the same
+    # logical reordering the preprocessor performs.
+    physical_storage_shards = [
+        torch.tensor([[1.0, 2.0]], dtype=torch.bfloat16),  # physical (0, 0) = logical 1
+        torch.tensor([[3.0, 4.0]], dtype=torch.bfloat16),  # physical (0, 1) = logical 0
+        torch.tensor([[10.0, 20.0]], dtype=torch.bfloat16),  # physical (1, 0) = logical 3
+        torch.tensor([[30.0, 40.0]], dtype=torch.bfloat16),  # physical (1, 1) = logical 2
     ]
+    input_tensors = ttnn.decorators.reorder_shards_to_logical_order(physical_storage_shards, mesh_coords)
 
     output = ttnn.get_golden_function(ttnn.all_gather)(
         input_tensors,
@@ -90,8 +105,48 @@ def test_all_gather_golden_preserves_logical_order_with_permuted_topology_coordi
         **_mesh_kwargs(mesh_coords=mesh_coords),
     )
 
-    expected = torch.tensor([[3.0, 4.0, 1.0, 2.0], [30.0, 40.0, 10.0, 20.0]], dtype=torch.bfloat16)
+    expected = torch.tensor([[1.0, 2.0, 3.0, 4.0], [10.0, 20.0, 30.0, 40.0]], dtype=torch.bfloat16)
     assert torch.equal(output, expected)
+
+
+# Verifies collective preprocessing reorders get_device_tensors() shards from physical
+# storage order into logical distribution order using the topology mapping.
+def test_collective_preprocessing_reorders_physical_shards_to_logical_order(monkeypatch):
+    from ttnn.operations.ccl import _preprocess_collective_golden_inputs
+
+    mesh_coords = ((0, 1), (0, 0), (1, 1), (1, 0))
+
+    class _FakeTopology:
+        def distribution_shape(self):
+            return (2, 2)
+
+        def placements(self):
+            return (ttnn.PlacementReplicate(), ttnn.PlacementReplicate())
+
+        def mesh_coords(self):
+            return mesh_coords
+
+    class _FakeTensor:
+        def tensor_topology(self):
+            return _FakeTopology()
+
+    physical_storage_shards = [
+        torch.tensor([1.0], dtype=torch.bfloat16),  # physical (0, 0) = logical 1
+        torch.tensor([2.0], dtype=torch.bfloat16),  # physical (0, 1) = logical 0
+        torch.tensor([4.0], dtype=torch.bfloat16),  # physical (1, 0) = logical 3
+        torch.tensor([8.0], dtype=torch.bfloat16),  # physical (1, 1) = logical 2
+    ]
+    monkeypatch.setattr(ttnn, "get_device_tensors", lambda tensor: physical_storage_shards)
+    monkeypatch.setattr(ttnn, "to_torch", lambda tensor: tensor)
+
+    function_args, function_kwargs = _preprocess_collective_golden_inputs((_FakeTensor(),), {})
+
+    logical_shards = function_args[0]
+    assert torch.equal(logical_shards[0], physical_storage_shards[1])
+    assert torch.equal(logical_shards[1], physical_storage_shards[0])
+    assert torch.equal(logical_shards[2], physical_storage_shards[3])
+    assert torch.equal(logical_shards[3], physical_storage_shards[2])
+    assert function_kwargs["_ttnn_golden_mesh_coords"] == mesh_coords
 
 
 # Ensures the golden raises when the provided mesh coordinates don't cover the full mesh volume.
@@ -198,21 +253,20 @@ def test_reduce_to_root_golden_reduces_four_device_states():
 
 
 def _expected_moe_routing_outputs(
-    routing_weights, non_zero_weight_size, expert_parallel_size, cluster_axis, mesh_shape
+    routing_weights, non_zero_weight_size, expert_parallel_size, cluster_axis, mesh_shape, mesh_coords=None
 ):
     non_zero_indices = torch.nonzero(routing_weights.flatten(), as_tuple=False).flatten()
     local_non_zero_size = non_zero_weight_size // expert_parallel_size
     outputs = [torch.zeros_like(routing_weights) for _ in range(mesh_shape[0] * mesh_shape[1])]
 
-    for cluster_index in range(mesh_shape[1 - cluster_axis]):
-        for member_index in range(mesh_shape[cluster_axis]):
-            coordinate = [0, 0]
-            coordinate[cluster_axis] = member_index
-            coordinate[1 - cluster_axis] = cluster_index
-            device_index = coordinate[0] * mesh_shape[1] + coordinate[1]
-            local_start = member_index * local_non_zero_size
-            local_indices = non_zero_indices[local_start : local_start + local_non_zero_size]
-            outputs[device_index].flatten()[local_indices] = routing_weights.flatten()[local_indices]
+    if mesh_coords is None:
+        mesh_coords = tuple(itertools.product(*(range(dimension) for dimension in mesh_shape)))
+    for device_index, coordinate in enumerate(mesh_coords):
+        # The expert partition follows the device's physical coordinate along the cluster axis.
+        member_index = coordinate[cluster_axis]
+        local_start = member_index * local_non_zero_size
+        local_indices = non_zero_indices[local_start : local_start + local_non_zero_size]
+        outputs[device_index].flatten()[local_indices] = routing_weights.flatten()[local_indices]
     return torch.cat(outputs, dim=0)
 
 
@@ -283,6 +337,7 @@ def test_moe_routing_remap_golden_preserves_logical_order_with_permuted_topology
         expert_parallel_size=4,
         cluster_axis=1,
         mesh_shape=mesh_shape,
+        mesh_coords=mesh_coords,
     )
 
     assert torch.equal(output, expected)
