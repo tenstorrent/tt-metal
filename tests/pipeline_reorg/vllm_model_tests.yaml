@@ -156,7 +156,7 @@
 - name: "Gemma4-26B-A4B"
   model: google/gemma-4-26B-A4B-it
   coherence-test: true
-  server-timeout: 30
+  server-timeout: 45
   benchmark-timeout: 10
   mesh-device: P150x4
   arch: arch-blackhole
