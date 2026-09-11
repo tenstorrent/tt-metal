@@ -40,6 +40,15 @@ state) layers and **Gated Full Attention** (paged KV cache) layers. The 9B has
 32 layers (24 DeltaNet + 8 full-attention). Qwen3.5 uses zero-centered RMSNorm
 everywhere and **partial** RoPE (only a fraction of each head is rotated).
 
+## Speculative decoding (Qwen3.6-27B-DFlash)
+
+Qwen3.6-27B has a DFlash block-diffusion drafter, `z-lab/Qwen3.6-27B-DFlash`. A host-only
+reference for it — the drafter, the target integration, and the speculative loop — lives in
+[reference/dflash/](reference/dflash/) and is documented in [README-DFLASH.md](README-DFLASH.md).
+It runs on CPU with no device, and is the place to verify the checkpoint pair before any device
+bring-up. Read it before porting: rolling a rejected block back through the Gated DeltaNet layers
+is the hard part, and transformers' own `crop()` silently gets it wrong.
+
 ## Environment setup
 
 Before running **any** test, export the two environment variables that select

@@ -94,6 +94,10 @@ def chunk_gated_delta_rule_fused_adapter(
     device=None,
     cached_masks=None,  # unused (the fused op builds its own constants)
     valid_len=None,  # scalar: zero padded positions >= valid_len (masked-bucket prefill)
+    valid_mask=None,  # (m, mq) PRE-STAGED device masks for valid_len, same reason const_tiles
+    # exists: building them here is a host upload, illegal under trace. The multiplies they feed are
+    # fixed-shape -- only the CONTENTS depend on valid_len -- so a caller that stages these can
+    # capture a MASKED forward, which is what DFlash block verification needs. None = build eagerly.
     qkv_head_dims=None,  # (Nk, Dk, Nv, Dv) when q/k/v are flat
     return_o_bh=False,  # True: return o as [B*Nv, T, V]; else [B, T, Nv, V]
     const_tiles=None,  # (eye, tril, ones, masks) device tensors built once by the caller (layer);
@@ -147,25 +151,32 @@ def chunk_gated_delta_rule_fused_adapter(
     # Scalar (one length for all rows) or a per-row list/tuple of B lengths (grouped batched prefill:
     # each user its own real length within the shared bucket).
     _is_per_row = isinstance(valid_len, (list, tuple))
-    if _is_per_row or (valid_len is not None and valid_len < T):
+    _staged = valid_mask is not None
+    if _staged or _is_per_row or (valid_len is not None and valid_len < T):
         _dram = ttnn.DRAM_MEMORY_CONFIG  # op CBs clash with L1 inputs at small buckets
-        _mt = torch.zeros(B, T, 1, dtype=torch.float32)
-        if _is_per_row:
-            for _b in range(B):
-                _mt[_b, : int(valid_len[_b]), :] = 1.0
+        if _staged:
+            # Contents already written by the caller, outside any trace capture.
+            _m, _mq = valid_mask
         else:
-            _mt[:, :valid_len, :] = 1.0
-        _m = ttnn.from_torch(_mt, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+            _mt = torch.zeros(B, T, 1, dtype=torch.float32)
+            if _is_per_row:
+                for _b in range(B):
+                    _mt[_b, : int(valid_len[_b]), :] = 1.0
+            else:
+                _mt[:, :valid_len, :] = 1.0
+            _m = ttnn.from_torch(_mt, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+            # Also mask q/k/v for bit-parity with seq (beta/g alone is enough for correctness).
+            _mq_t = _mt if len(q.shape) == 3 else _mt.reshape(B, T, 1, 1)
+            _mq = ttnn.from_torch(_mq_t, dtype=q.dtype, layout=ttnn.TILE_LAYOUT, device=device)
         beta = ttnn.multiply(beta, _m, memory_config=_dram)  # beta/g fp32 (op contract) — load-bearing
         g = ttnn.multiply(g, _m, memory_config=_dram)
-        # Also mask q/k/v for bit-parity with seq (beta/g alone is enough for correctness).
-        _mq_t = _mt if len(q.shape) == 3 else _mt.reshape(B, T, 1, 1)
-        _mq = ttnn.from_torch(_mq_t, dtype=q.dtype, layout=ttnn.TILE_LAYOUT, device=device)
         q = ttnn.multiply(q, _mq, memory_config=_dram)
         k = ttnn.multiply(k, _mq, memory_config=_dram)
         v = ttnn.multiply(v, _mq, memory_config=_dram)
-        ttnn.deallocate(_m)
-        ttnn.deallocate(_mq)
+        if not _staged:
+            # Staged buffers belong to the caller and a trace has baked their addresses.
+            ttnn.deallocate(_m)
+            ttnn.deallocate(_mq)
 
     s0 = None
     if initial_state is not None:

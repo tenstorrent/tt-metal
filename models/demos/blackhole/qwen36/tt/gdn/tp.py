@@ -978,7 +978,9 @@ class TPGatedDeltaNet:
         ttnn.deallocate(ab)
         return qkv, z, a, b
 
-    def forward_prefill(self, x, chunk_size=128, valid_len=None, capture_state=False, return_state=False):
+    def forward_prefill(
+        self, x, chunk_size=128, valid_len=None, capture_state=False, return_state=False, valid_mask=None
+    ):
         """Causal chunk-prefill from scratch. x [1,1,T,dim]: K-sharded (dim/tp per device) when the
         fused in-proj AG-matmul path is active (``_fuse_agmm`` and T>TILE — the norm skips its
         post-AG); replicated otherwise. Output reduce-scattered.
@@ -1140,8 +1142,10 @@ class TPGatedDeltaNet:
 
         _use_fused = fused_chunk_enabled()
         _delta_fn = chunk_gated_delta_rule_fused_adapter if _use_fused else chunk_gated_delta_rule_seq_adapter
-        # const_tiles only applies to the fused op; the seq adapter has no such param.
+        # const_tiles and valid_mask only apply to the fused op; the seq adapter has neither.
         _extra = {"const_tiles": self._fused_const_tiles} if _use_fused else {}
+        if _use_fused and valid_mask is not None:
+            _extra["valid_mask"] = valid_mask
         o, final_state = _delta_fn(
             q,
             k,
