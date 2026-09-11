@@ -382,7 +382,15 @@ def _record_kv_cache_pcc(
     logger.info(f"KV cache min PCC across layers: {kv_min:.6f}")
     if assert_threshold is not None:
         if assert_layer_depth is not None:
-            gated_min = min(v for i, v in cache_min_pcc.items() if i <= assert_layer_depth)
+            # Keyed by MODEL layer, not slot index, so on a hybrid stack (Kimi-K3 writes a slab only
+            # on layers 3, 7, 11, ...) a depth below the first full-attention layer selects nothing
+            # and bare min() would raise ValueError instead of asserting anything.
+            gated = [v for i, v in cache_min_pcc.items() if i <= assert_layer_depth]
+            assert gated, (
+                f"assert_layer_depth={assert_layer_depth} is below the first layer that owns a KV "
+                f"slab (slabs at {sorted(cache_min_pcc)}), so the gate would cover no layer at all"
+            )
+            gated_min = min(gated)
             logger.info(
                 f"KV cache min PCC over asserted layers 0..{assert_layer_depth}: {gated_min:.6f} "
                 f"(layers >{assert_layer_depth} recorded only)"
