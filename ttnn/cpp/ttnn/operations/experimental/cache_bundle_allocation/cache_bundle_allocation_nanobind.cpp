@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "cache_bundle_allocation_nanobind.hpp"
-#include <nanobind/stl/variant.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "cache_bundle_allocation.hpp"
@@ -40,8 +39,9 @@ Every replica must execute identical requests in identical order; no CCL is used
 Serialize calls sharing a pool, finish prior slot accesses before reset, and
 order consumers after this update before accessing new pages.
 
-slot_id, actual_start, and actual_end each accept a scalar or a UINT32 [1, 1]
-row-major interleaved DRAM tensor on the same device. For trace replay, update
+slot_id, actual_start, and actual_end must be all scalars or all UINT32 [1, 1]
+row-major interleaved DRAM tensors on the same device. Mixed scalar/tensor
+inputs are rejected. For trace replay, update
 these tensors in place on the same command queue before replay; their addresses
 remain fixed. Replicate request values across the mesh. Scalars and page_size
 remain fixed within a trace. Tensor request values must satisfy the same range
@@ -53,16 +53,44 @@ exceed 65,536 bundles per SP; size them for all simultaneously live slots.
 IDs are in [0, bundles_per_sp); no ID is reserved as a sentinel. Metadata row
 byte sizes must fit 32-bit NoC offsets; tensor storage is limited by available DRAM.
 )doc",
-        &ttnn::experimental::update_cache_bundle_allocation,
-        nb::arg("page_table").noconvert(),
-        nb::arg("allocated_pages").noconvert(),
-        nb::arg("free_list").noconvert(),
-        nb::arg("free_count").noconvert(),
-        nb::kw_only(),
-        nb::arg("slot_id"),
-        nb::arg("actual_start"),
-        nb::arg("actual_end"),
-        nb::arg("page_size") = 32);
+        ttnn::overload_t(
+            nb::overload_cast<
+                const Tensor&,
+                const Tensor&,
+                const Tensor&,
+                const Tensor&,
+                uint32_t,
+                uint32_t,
+                uint32_t,
+                uint32_t>(&ttnn::experimental::update_cache_bundle_allocation),
+            nb::arg("page_table").noconvert(),
+            nb::arg("allocated_pages").noconvert(),
+            nb::arg("free_list").noconvert(),
+            nb::arg("free_count").noconvert(),
+            nb::kw_only(),
+            nb::arg("slot_id"),
+            nb::arg("actual_start"),
+            nb::arg("actual_end"),
+            nb::arg("page_size") = 32),
+        ttnn::overload_t(
+            nb::overload_cast<
+                const Tensor&,
+                const Tensor&,
+                const Tensor&,
+                const Tensor&,
+                const Tensor&,
+                const Tensor&,
+                const Tensor&,
+                uint32_t>(&ttnn::experimental::update_cache_bundle_allocation),
+            nb::arg("page_table").noconvert(),
+            nb::arg("allocated_pages").noconvert(),
+            nb::arg("free_list").noconvert(),
+            nb::arg("free_count").noconvert(),
+            nb::kw_only(),
+            nb::arg("slot_id").noconvert(),
+            nb::arg("actual_start").noconvert(),
+            nb::arg("actual_end").noconvert(),
+            nb::arg("page_size") = 32));
 }
 
 }  // namespace ttnn::operations::experimental::cache_bundle_allocation::detail

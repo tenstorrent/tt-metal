@@ -210,29 +210,29 @@ Tensor update_cache_bundle_allocation(
     const Tensor& allocated_pages,
     const Tensor& free_list,
     const Tensor& free_count,
-    const std::variant<uint32_t, Tensor>& slot_id,
-    const std::variant<uint32_t, Tensor>& actual_start,
-    const std::variant<uint32_t, Tensor>& actual_end,
+    uint32_t slot_id,
+    uint32_t actual_start,
+    uint32_t actual_end,
     uint32_t page_size) {
     using Op = prim::UpdateCacheBundleAllocationDeviceOperation;
-    const auto scalar = [](const auto& value) {
-        return std::holds_alternative<uint32_t>(value) ? std::get<uint32_t>(value) : 0u;
-    };
-    const auto tensor = [](const auto& value) -> std::optional<Tensor> {
-        if (const auto* t = std::get_if<Tensor>(&value)) {
-            return *t;
-        }
-        return std::nullopt;
-    };
     return ttnn::device_operation::launch<Op>(
-        Op::operation_attributes_t{scalar(slot_id), scalar(actual_start), scalar(actual_end), page_size},
+        Op::operation_attributes_t{slot_id, actual_start, actual_end, page_size},
         Op::tensor_args_t{
-            page_table,
-            allocated_pages,
-            free_list,
-            free_count,
-            tensor(slot_id),
-            tensor(actual_start),
-            tensor(actual_end)});
+            page_table, allocated_pages, free_list, free_count, std::nullopt, std::nullopt, std::nullopt});
+}
+
+Tensor update_cache_bundle_allocation(
+    const Tensor& page_table,
+    const Tensor& allocated_pages,
+    const Tensor& free_list,
+    const Tensor& free_count,
+    const Tensor& slot_id,
+    const Tensor& actual_start,
+    const Tensor& actual_end,
+    uint32_t page_size) {
+    using Op = prim::UpdateCacheBundleAllocationDeviceOperation;
+    return ttnn::device_operation::launch<Op>(
+        Op::operation_attributes_t{0, 0, 0, page_size},
+        Op::tensor_args_t{page_table, allocated_pages, free_list, free_count, slot_id, actual_start, actual_end});
 }
 }  // namespace ttnn::experimental

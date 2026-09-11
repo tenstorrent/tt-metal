@@ -4,21 +4,31 @@
 
 #pragma once
 
-#include <variant>
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::experimental {
 
 // In-place update of four UINT32 cache bundle metadata tensors; returns the input page_table.
+// Request inputs must be all scalars or all tensors; mixed inputs are not supported.
 // The caller must provide valid metadata and reserve sufficient capacity before calling.
 Tensor update_cache_bundle_allocation(
     const Tensor& page_table,
     const Tensor& allocated_pages,
     const Tensor& free_list,
     const Tensor& free_count,
-    const std::variant<uint32_t, Tensor>& slot_id,
-    const std::variant<uint32_t, Tensor>& actual_start,
-    const std::variant<uint32_t, Tensor>& actual_end,
+    uint32_t slot_id,
+    uint32_t actual_start,
+    uint32_t actual_end,
+    uint32_t page_size = 32);
+
+Tensor update_cache_bundle_allocation(
+    const Tensor& page_table,
+    const Tensor& allocated_pages,
+    const Tensor& free_list,
+    const Tensor& free_count,
+    const Tensor& slot_id,
+    const Tensor& actual_start,
+    const Tensor& actual_end,
     uint32_t page_size = 32);
 
 }  // namespace ttnn::experimental
