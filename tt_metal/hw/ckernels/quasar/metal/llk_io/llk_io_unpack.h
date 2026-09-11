@@ -26,13 +26,10 @@ inline void llk_wait_tiles(const std::int32_t dfb_id, const std::uint32_t num_ti
     // TEN-4746: arm this dfb; a real unpack (UNPACR) on it must clear this before the matching pop.
     LLK_TDMA_GUARD_NOTE_WAIT(dfb_id);
 
-    // TT_WAIT_TILES only gates the Tensix instruction stream (the unpacker) and returns to the RISC-V core
-    // immediately. Also block the RISC until that WAIT_TILES has resolved, so wait_front() has the same contract as
-    // on Blackhole: when it returns, a RISC-side L1 read of the waited entries (read_tile_value, get_tile_address)
-    // is safe. WAIT_TILES executes on the SYNC engine (same class as STALLWAIT/SEMWAIT), so poll this thread's SYNC
-    // busy bit in the tensix_busy_status CSR rather than the tile counter: the CSR is a direct view of the engine
-    // state and does not lag like the NEO-local tile-counter mirror. csr_read fences first, which orders the
-    // WAIT_TILES store above ahead of the read. In the common case (tiles already present) this is one CSR read.
+    // TT_WAIT_TILES only gates the Tensix instruction stream and returns to the RISC-V core immediately. We want to
+    // also block the RISC until that WAIT_TILES has resolved, so wait_front() has the same contract as on Blackhole:
+    // when it returns, a RISC-side L1 read of the waited entries is safe. Poll this thread's SYNC busy bit in the
+    // tensix_busy_status CSR.
     ckernel::wait_sync_idle();
 }
 
