@@ -159,8 +159,17 @@ class MiniMaxH3AudioDecoder(Module):
         """
         _, channels, _ = latents_BCT.shape
         assert channels == self.latent_channels, f"expected {self.latent_channels} latent channels, got {channels}"
-        projected = self._project_latents_device(latents_BCT)
-        return self.decoder.forward_BCT_traced(projected) if traced else self.decoder.forward_BCT(projected)
+        # dec_in_proj is a k=1 conv, so it runs on the vocoder's own T padding and hands its output to the
+        # vocoder on device: no readback + re-upload of the (B, T, 2048) projection between the two.
+        x = latents_BCT.transpose(1, 2).float().contiguous()  # (B, T, C)
+        t_pad = self.decoder.t_pad_for(x.shape[1])
+        if t_pad:
+            x = torch.nn.functional.pad(x, (0, 0, 0, t_pad))
+        x_dev = ttnn.from_torch(x, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype)
+        projected_dev = self.dec_in_proj(x_dev)
+        return self.decoder.forward_device_BTC(
+            projected_dev, t_pad=t_pad, traced=traced, trace_key=tuple(latents_BCT.shape)
+        )
 
     def _t_padding(self, num_frames: int) -> int:
         """T padding needed for tile-aligned per-chip shards; zero when unsharded."""
