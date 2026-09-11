@@ -45,6 +45,12 @@ void kernel_main() {
     const uint32_t sender_id = get_arg(args::sender_id);
     const bool is_last_ktile_padded = static_cast<bool>(get_arg(args::is_last_ktile_padded));
 
+    // The mcast senders' noc coordinates arrive as a runtime vararg block: the noc-x value for
+    // each storage core, then the noc-y value for each. A receiver picks the pair belonging to the
+    // block it is waiting on, so the index is data-derived and the block stays positional.
+    constexpr uint32_t sender_noc_x_base = 0;
+    constexpr uint32_t sender_noc_y_base = num_storage_cores;
+
     tt_l1_ptr uint32_t* in0_mcast_sender_noc_x = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(3));
     tt_l1_ptr uint32_t* in0_mcast_sender_noc_y =
         reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(3 + num_storage_cores));
