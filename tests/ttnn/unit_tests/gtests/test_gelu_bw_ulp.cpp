@@ -1752,4 +1752,87 @@ TEST_F(GeluBwPolyTest, SpecialValues) {
     EXPECT_EQ(result_nan, 1.0f) << "NaN treated as large positive by SFPU, saturates to 1.0";
 }
 
+// =============================================================================
+// FP32 accuracy of the positive tail.
+//
+// Everything above runs in BFLOAT16, where saturating GELU' to 1 from x=3.1719
+// is within 1 ULP and therefore correct. gelu_bw also accepts FLOAT32
+// (gelu_bw_device_operation.cpp) and sets fp32_dest_acc_en accordingly
+// (gelu_bw_program_factory.cpp), and in FP32 that same threshold is 7.5e-3 low
+// -- GELU'(3.1719) = 1.00751 and GELU' does not reach 1.0f until x ~= 5.911.
+//
+// These tests pin the FP32 path so the BF16-derived threshold cannot be
+// reintroduced. Tolerances are in absolute error against the exact GELU'
+// evaluated in double, because ULP counting near 1.0 in FP32 is dominated by
+// the polynomial's own error rather than by the branch under test.
+// =============================================================================
+float run_gelu_bw_single_fp32(tt::tt_metal::distributed::MeshDevice& device, float input_val, float grad_val = 1.0f) {
+    ttnn::Shape shape({1, 1, 32, 32});
+
+    auto input_tensor = ttnn::full(shape, input_val, DataType::FLOAT32, ttnn::TILE_LAYOUT, device);
+    auto grad_tensor = ttnn::full(shape, grad_val, DataType::FLOAT32, ttnn::TILE_LAYOUT, device);
+
+    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "none");
+
+    auto output_cpu = ttnn::from_device(result);
+    auto output_vec = output_cpu.to_vector<float>();
+    return output_vec[0];
+}
+
+TEST_F(GeluBwPolyTest, DerivativePositiveTailFp32) {
+    // Absolute-error budgets. Before the fix the kernel returns exactly 1.0f
+    // here, so the error equals 1 - GELU'(x): 7.5e-3 at 3.1719 and 5.0e-4 at
+    // x=4, both far outside these budgets. Nothing is asserted about ULP
+    // because the point is the missing hump, not last-bit rounding.
+    std::vector<std::pair<float, double>> cases = {
+        {3.1719f, 1.0e-4},  // the boundary itself: worst case for the old code
+        {3.25f, 1.0e-4},
+        {3.5f, 5.0e-5},
+        {4.0f, 5.0e-6},
+        {4.5f, 1.0e-6},
+        {5.0f, 1.0e-6},
+    };
+
+    std::cout << "\n[FP32] Positive tail, absolute error vs exact GELU':\n";
+    for (const auto& [x, budget] : cases) {
+        float actual = run_gelu_bw_single_fp32(*device_, x);
+        double expected = bf16_ulp_bw::gelu_derivative_exact(static_cast<double>(x));
+        double err = std::abs(static_cast<double>(actual) - expected);
+
+        std::cout << "[FP32] x=" << x << ": expected=" << expected << ", actual=" << actual << ", abs err=" << err
+                  << " (budget " << budget << ")\n";
+
+        EXPECT_LT(err, budget) << "FP32 GELU'(" << x << ") is outside its budget; a BF16-derived "
+                               << "saturation threshold truncates the hump (GELU' > 1 up to x~3.16)";
+        // GELU' genuinely exceeds 1 on this interval, so a result of exactly
+        // 1.0f is the specific failure mode being guarded against.
+        EXPECT_GT(actual, 1.0f) << "FP32 GELU'(" << x << ") must not be clamped to 1.0f";
+    }
+}
+
+TEST_F(GeluBwPolyTest, DerivativeFp32SaturatesEventually) {
+    // The complement: past the point where GELU' is within one FP32 ulp of 1,
+    // returning exactly 1.0f is right, and must stay right -- including for
+    // inputs large enough that x*x would overflow to inf.
+    for (float x : {6.0f, 8.0f, 13.375f, 20.0f, 1.0e6f, 3.0e38f}) {
+        float actual = run_gelu_bw_single_fp32(*device_, x);
+        std::cout << "[FP32] x=" << x << ": actual=" << actual << "\n";
+        EXPECT_TRUE(std::isfinite(actual)) << "FP32 GELU'(" << x << ") must stay finite";
+        EXPECT_FLOAT_EQ(actual, 1.0f) << "FP32 GELU'(" << x << ") should be 1.0f";
+    }
+}
+
+TEST_F(GeluBwPolyTest, DerivativeFp32CoreRegionUnchanged) {
+    // Control: the fix must not touch x < 3.1719. These values are inside the
+    // degree-8 polynomial's fit range and must keep their previous accuracy.
+    for (float x : {-3.0f, -1.0f, 0.0f, 1.0f, 2.0f, 3.0f, 3.17f}) {
+        float actual = run_gelu_bw_single_fp32(*device_, x);
+        double expected = bf16_ulp_bw::gelu_derivative_exact(static_cast<double>(x));
+        double err = std::abs(static_cast<double>(actual) - expected);
+        std::cout << "[FP32] core x=" << x << ": expected=" << expected << ", actual=" << actual << ", abs err=" << err
+                  << "\n";
+        EXPECT_LT(err, 1.0e-4) << "FP32 core region GELU'(" << x << ") regressed";
+    }
+}
+
 }  // namespace ttnn::test
