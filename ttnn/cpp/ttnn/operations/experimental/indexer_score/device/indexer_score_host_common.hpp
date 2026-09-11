@@ -17,9 +17,9 @@
 #include <tt-metalium/constants.hpp>   // tt::constants::TILE_WIDTH
 #include <tt-metalium/core_coord.hpp>  // CoreCoord
 
-#include "ttnn/distributed/types.hpp"                // ttnn::MeshCoordinate
-#include "ttnn/operations/ccl/ccl_common.hpp"        // get_linearized_index_from_physical_coord
-#include "indexer_score_device_operation_types.hpp"  // operation_attributes_t, Tensor
+#include "ttnn/distributed/types.hpp"                 // ttnn::MeshCoordinate
+#include "ttnn/operations/ccl/ccl_common.hpp"         // get_linearized_index_from_physical_coord
+#include "indexer_score_device_operation_types.hpp"   // operation_attributes_t, Tensor
 #include "kernels/indexer_score_causal_geometry.hpp"  // shared host/device causal closed form
 
 namespace ttnn::operations::experimental::indexer_score::program {
@@ -126,7 +126,8 @@ inline DeviceCausalGeometry device_causal_geometry(
     const bool has_bc = args.block_cyclic.has_value();
     const bool rotation_exact = rotation_exact_sp_geometry(args);
     const uint32_t sp = has_bc ? args.block_cyclic->sp : 1u;
-    const uint32_t chunk_local = has_bc ? args.block_cyclic->chunk_local : 0u;
+    // Stored block-cyclic geometry is in compressed K rows; causal ownership remains in query-token units.
+    const uint32_t chunk_local = has_bc ? args.block_cyclic->chunk_local * args.key_compression_ratio : 0u;
     TT_FATAL(
         !(has_bc && rotation_exact) || device_index < sp,
         "indexer_score: device_index {} out of range for block-cyclic sp={} (check seq_shard_axes[0] vs "

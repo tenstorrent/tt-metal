@@ -201,11 +201,34 @@ inline void read_block_or_mcast(Noc noc, uint32_t ntiles, uint32_t bytes, const 
     cb.push_back(ntiles);
 }
 
+/** Build one partial causal mask for each compressed-key residue represented by a query tile. */
+inline void fill_compressed_causal_mask_tile(Noc noc, uint32_t tile_id) {
+    fill_tile_zeros<bf16_tile_bytes>(noc, cb_mask, tile_id);
+    CircularBuffer cb(cb_mask);
+    volatile tt_l1_ptr uint16_t* ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb.get_write_ptr() + tile_id * bf16_tile_bytes);
+    constexpr uint16_t neginf = 0xFF80;
+    constexpr uint32_t face_h = tt::constants::FACE_HEIGHT;
+    constexpr uint32_t face_w = tt::constants::FACE_WIDTH;
+    constexpr uint32_t face_hw = face_h * face_w;
+    const uint32_t residue = tile_id * (tt::constants::TILE_WIDTH / key_compression_ratio);
+    for (uint32_t row = 0; row < tt::constants::TILE_HEIGHT; ++row) {
+        const uint32_t first_masked = residue + (row + 1) / key_compression_ratio;
+        for (uint32_t col = first_masked; col < tt::constants::TILE_WIDTH; ++col) {
+            const uint32_t face = (row / face_h) * 2 + (col / face_w);
+            const uint32_t face_offset = (row % face_h) * face_w + (col % face_w);
+            ptr[face * face_hw + face_offset] = neginf;
+        }
+    }
+}
+
 inline void build_mask_tiles(Noc noc) {
     CircularBuffer cb(cb_mask);
     cb.reserve_back(num_mask_tiles);
-    fill_causal_diagonal_tile_bf16<bf16_tile_bytes>(noc, cb_mask, /*tile_id=*/0);  // diagonal strict-upper -inf
-    fill_neginf_tile<bf16_tile_bytes>(cb_mask, /*tile_id=*/1);                     // full -inf
+    for (uint32_t tile_id = 0; tile_id < key_compression_ratio; ++tile_id) {
+        fill_compressed_causal_mask_tile(noc, tile_id);
+    }
+    fill_neginf_tile<bf16_tile_bytes>(cb_mask, /*tile_id=*/key_compression_ratio);
     cb.push_back(num_mask_tiles);
 }
 
@@ -744,14 +767,14 @@ void kernel_main() {
         constexpr uint32_t chunk_global_tiles = bc_sp * bc_chunk_local;
         ASSERT(
             chunk_start_idx % iscore::kCausalTileWidth == 0 &&
-            chunk_start_idx / iscore::kCausalTileWidth < k_len_tiles);
+            chunk_start_idx / iscore::kCausalTileWidth < k_len_tiles * key_compression_ratio);
         // Undo the key-stripe split so this matches device_causal_geometry's (unsplit) arguments exactly.
         // Identity when key_stripe_split == 1, which is every non-dedup path.
         // Guard the divisor: the non-fused factory zero-fills this block (it rejects the metadata path),
         // and `bc_sp / 0` is an ill-formed constant expression even in a discarded branch.
         constexpr uint32_t geom_split = meta_key_stripe_split != 0 ? meta_key_stripe_split : 1;
         constexpr uint32_t geom_sp = bc_sp / geom_split;
-        constexpr uint32_t geom_chunk_local_elems = bc_chunk_local * 32 * geom_split;
+        constexpr uint32_t geom_chunk_local_elems = bc_chunk_local * 32 * geom_split * key_compression_ratio;
         const auto geom = ttnn::operations::experimental::indexer_score::causal_geometry_tiles(
             chunk_start_idx,
             block_cyclic,
@@ -761,8 +784,10 @@ void kernel_main() {
             get_arg_val<uint32_t>(meta_rt_base + 1),  // device_index
             get_arg_val<uint32_t>(meta_rt_base + 2),  // tp_index
             meta_Sq);
-        // Derive kv_len from the same position used for causal geometry.
-        const uint32_t derived_kv_len_tiles = chunk_start_idx / 32 + chunk_global_tiles;
+        // Derive kv_len from the same position used for causal geometry. Round compressed history up to a
+        // whole K tile; any padded rows in that boundary tile remain future-masked by the exact causal mask.
+        const uint32_t derived_kv_len_tiles =
+            (chunk_start_idx + 32 * key_compression_ratio - 1) / (32 * key_compression_ratio) + chunk_global_tiles;
         kv_len_tiles = derived_kv_len_tiles < k_len_tiles ? derived_kv_len_tiles : k_len_tiles;
 
         const IndexerScoreMetadataBounds bounds{

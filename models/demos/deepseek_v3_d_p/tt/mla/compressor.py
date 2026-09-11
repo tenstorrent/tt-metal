@@ -230,7 +230,8 @@ class TtCompressorBase(LightweightModule):
             cluster_axis=self.tp_axis,
         )
 
-    def _normalize_rotate_and_gather(self, pooled, first_window_position: int):
+    def _normalize_rotate_and_gather(self, pooled, first_window_position: int, *, gather_sp: bool = True):
+        """Normalize and rotate local compressed rows, optionally gathering them across SP."""
         batch, n_windows = pooled.shape[0], pooled.shape[1]
         compressed = ttnn.reshape(pooled, [batch, 1, n_windows, self.head_dim])
         compressed = ttnn.rms_norm(compressed, weight=self.kv_norm_weight, epsilon=self.rms_norm_eps)
@@ -243,7 +244,7 @@ class TtCompressorBase(LightweightModule):
         rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
         compressed_kv = ttnn.concat([nope, rope], dim=-1)
 
-        if self.sp_factor > 1:
+        if gather_sp and self.sp_factor > 1:
             compressed_kv = ttnn.experimental.all_gather_async(
                 compressed_kv,
                 dim=2,
@@ -422,6 +423,7 @@ class TtCSACompressor(TtCompressorBase):
         dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat8_b,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        preloaded_weights: dict[str, ttnn.Tensor] | None = None,
     ):
         super().__init__(
             device,
@@ -437,13 +439,22 @@ class TtCSACompressor(TtCompressorBase):
         self.compress_rate = int(compress_rate)
         self.rope_head_dim = int(rope_head_dim)
         self.rms_norm_eps = float(rms_norm_eps)
-        self._init_compression_weights(
-            kv_proj_weight=kv_proj_weight,
-            gate_proj_weight=gate_proj_weight,
-            position_bias=position_bias,
-            kv_norm_weight=kv_norm_weight,
-            projection_dim=2 * self.head_dim,
-        )
+        if preloaded_weights is None:
+            self._init_compression_weights(
+                kv_proj_weight=kv_proj_weight,
+                gate_proj_weight=gate_proj_weight,
+                position_bias=position_bias,
+                kv_norm_weight=kv_norm_weight,
+                projection_dim=2 * self.head_dim,
+            )
+        else:
+            self.wkv = preloaded_weights["kv_proj"]
+            self.wgate = preloaded_weights["gate_proj"]
+            self.position_bias = preloaded_weights["position_bias"]
+            self.kv_norm_weight = preloaded_weights["kv_norm"]
+            self.trans_mat = self.ops.from_torch(get_rot_transformation_mat())
+            self._entry_rope = None
+            self._entry_index = None
 
     def alloc_tables(self, max_seq_len: int, chunk_tokens: int):
         self._alloc_rope_tables(max_seq_len, chunk_tokens)
@@ -471,8 +482,13 @@ class TtCSACompressor(TtCompressorBase):
         initial_score_state,
         seq_len_actual: int | None = None,
         first_window_position: int = 0,
+        gather_sp: bool = True,
     ):
-        """Compress one SP slab and return its decode-compatible outgoing state."""
+        """Compress one SP slab and return its decode-compatible outgoing state.
+
+        ``gather_sp=False`` keeps transformed compressed rows local so a caller
+        can write them directly into a block-cyclic cache.
+        """
         input_shape = tuple(hidden_states.shape)
         if len(input_shape) != 4 or input_shape[1] != 1:
             raise ValueError(f"Expected hidden_states shape [B, 1, S, hidden], got {input_shape}")
@@ -502,5 +518,5 @@ class TtCSACompressor(TtCompressorBase):
             topology=self.ccl_topology,
         )
         pooled = ttnn.reshape(pooled, [batch, n_windows, self.head_dim])
-        compressed_kv = self._normalize_rotate_and_gather(pooled, first_window_position)
+        compressed_kv = self._normalize_rotate_and_gather(pooled, first_window_position, gather_sp=gather_sp)
         return compressed_kv, None, local_kv_state, local_score_state
