@@ -71,34 +71,9 @@ def test_tanh_range(device, torch_dtype, ttnn_dtype, atol):
 
     assert_allclose(output_tensor, torch_output_tensor, rtol=1e-05, atol=atol)
     pcc, pcc_msg = assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
-    # PCC and max abs error against torch.tanh over this test's 32-value input,
-    # measured on a Wormhole n150 with the 6-entry ULP-fitted approximate table:
-    #
-    #   bfloat16  approx=False  pcc 0.9999899271259238   max|err| 0.003906
-    #   bfloat16  approx=True   pcc 0.9999149051477796   max|err| 0.017578
-    #   float32   approx=False  pcc 0.9999999999999983   max|err| 0.000000
-    #   float32   approx=True   pcc 0.9999224853063899   max|err| 0.018962
-    #
-    # Over the full bf16 domain, against the 3-segment 0.8125 table this replaces:
-    # max bf16 ULP 48.0 -> 10.0, max abs 0.0582 -> 0.0184, max relative 18.75% -> 4.48%.
-    #
-    # Gate on those rather than on PCC. An intermediate version of this table -- same
-    # global max ULP, 2x worse max absolute error -- scored pcc 0.9991178786405039 here,
-    # *below* the 0.9992522964571828 of the 3-segment table it beat on every error
-    # metric. PCC scores the linear correlation of the deviation pattern, not its size,
-    # so a systematically scaled error can outscore a smaller but wigglier one. It
-    # happens to agree with the error metrics for this table; that is not something to
-    # rely on.
-    #
-    # The float32 approx row is exactly the fit's own maximum: 0.018962, reached at
-    # |x| = 0.5, and this input happens to sample it.
-    #
-    # Not re-measured on Blackhole -- no p100a on this host. The two architectures share
-    # the table and the instruction, and the previous 3-segment numbers agreed to seven
-    # decimals across them, so they are expected to match here too.
-    #
-    # Not re-measured: the timing below. The retune moves two SFPLOADI immediates and
-    # changes no instructions, so it cannot affect it.
+    # pcc_msg 0.9999899271259238, fast_and_approximate_mode=True pcc 0.9999149051477796
+    # pcc_msg 0.9999583453515977 - fpu arithmetic, pcc_msg 0.9999669593009368 sfpu arithmetic
+    # fp32 pcc_msg 0.9999999999999983 (fast_and_approximate_mode=False) , 0.9999224853063899 (fast_and_approximate_mode=True)
     # Single-tile tanh: accurate = 7886ns, approx = 1789ns (~77% faster)
     assert pcc
 
