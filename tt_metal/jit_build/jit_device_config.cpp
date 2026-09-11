@@ -19,6 +19,7 @@
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/dispatch_core_manager.hpp"
+#include "impl/dispatch/dispatch_query_manager.hpp"
 #include "impl/dispatch/dispatch_mem_map.hpp"
 #include "llrt/hal.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
@@ -48,9 +49,6 @@ JitDeviceConfig create_jit_device_config(ChipId device_id, uint8_t num_hw_cqs, C
     CoreCoord pcie_core = pcie_cores.empty() ? soc_d.grid_size : pcie_cores[0];
 
     const tt::CoreType resolved_dispatch_core_type = resolve_dispatch_core_type(env, device_id, dispatch_core_config);
-    const bool is_fds_supported =
-        resolved_dispatch_core_type == tt::CoreType::DISPATCH &&
-        hal.get_supports_sending_fds_go_cmds(hal.get_programmable_core_type_index(HalProgrammableCoreType::DISPATCH));
 
     return {
         .hal = &hal,
@@ -61,8 +59,7 @@ JitDeviceConfig create_jit_device_config(ChipId device_id, uint8_t num_hw_cqs, C
         .harvesting_mask = cluster.get_harvesting_mask(device_id),
         .dispatch_core_type = dispatch_core_config.get_dispatch_core_type(),
         .resolved_dispatch_core_type = resolved_dispatch_core_type,
-        .fds_worker_done =
-            is_fds_supported && !ctx.rtoptions().get_disable_fds() && ctx.rtoptions().get_fast_dispatch(),
+        .fds_worker_done = ctx.get_dispatch_query_manager().fds_worker_completion_enabled(),
         .dispatch_core_axis = dispatch_core_config.get_dispatch_core_axis(),
         .coordinate_virtualization_enabled = hal.is_coordinate_virtualization_enabled(),
         .dispatch_message_addr = ctx.dispatch_mem_map().get_dispatch_message_addr_start(),
@@ -216,6 +213,9 @@ void enumerate_jit_device_configs(
                             .harvesting_mask = 0,
                             .dispatch_core_type = dispatch_core_type,
                             .resolved_dispatch_core_type = resolve_dispatch_core_type(arch, dispatch_core_type),
+                            // fds_worker_done keeps its default. FDS needs the live dispatch core placement and
+                            // the FDS runtime options, neither available offline, but only Quasar can enable it
+                            // and resolve_dispatch_core_type above already rejects Quasar here.
                             .dispatch_core_axis = dispatch_core_axis,
                             .coordinate_virtualization_enabled = true,
                             .dispatch_message_addr = dispatch_message_addr(hal, dispatch_core_type),
