@@ -192,8 +192,8 @@ shield:
     wh_n150: 100
     bh_p150: 60
   demo:
-    bh_sc4: 50
-    bh_sc1: 75
+    bh_sc4: 95
+    bh_sc1: 105
 
 scaleout:
   merge_gate:
@@ -408,7 +408,7 @@ models:
     bh_quietbox_2: 80
   demo:
     bh_galaxy: 470
-    bh_sc1: 540
+    bh_sc1: 730
     bh_sc1_high_power: 194
     wh_n150: 500
     wh_n150_civ2: 300

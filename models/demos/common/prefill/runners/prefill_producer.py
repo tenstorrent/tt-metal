@@ -146,7 +146,7 @@ def _read_kv_chunk_table(timeout_s: int):
     return table
 
 
-def _read_device_map(timeout_s: int) -> dict:
+def _read_device_map(timeout_s: int, rank: int | None = None) -> dict:
     import glob as _glob
     import json
 
@@ -165,19 +165,41 @@ def _read_device_map(timeout_s: int) -> dict:
     path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
     stem, ext = os.path.splitext(path)
 
-    def _matches():
+    # A KV read is UMD-local: read_dram_umd only reaches chips visible to THIS process. Under
+    # pipeline parallelism every rank exports its own map, and merging them all makes the caller
+    # believe it can resolve another galaxy's chips -- such a layer then clears the visibility guard
+    # and dies inside the read with "no visible chip with ASIC unique_id".
+    def _own():
+        # This rank's own map: the only chips this process can actually reach.
+        own = f"{stem}_r{rank}{ext}"
+        return [own] if os.path.exists(own) else []
+
+    def _any():
         return ([path] if os.path.exists(path) else []) + sorted(_glob.glob(f"{stem}_r*{ext}"))
 
+    # Waiting on _any() under pipeline parallelism is a race, not a fallback: the ranks write to a
+    # shared path at different times, so a rank whose own map is not out yet would see a PEER's and
+    # stop waiting immediately, picking up exactly the cross-galaxy map the rank-scoping exists to
+    # avoid. Wait for our own, or for nothing.
+    _wanted = _own if rank is not None else _any
+
     deadline = time.perf_counter() + timeout_s
-    files = _matches()
+    files = _wanted()
     while not files:
         if time.perf_counter() > deadline:
-            logger.warning(
-                f"[producer] device map {path} (or {stem}_r*{ext}) not found after {timeout_s}s; skipping KV read."
-            )
+            if rank is not None and _any():
+                logger.warning(
+                    f"[producer] rank {rank}'s own device map {stem}_r{rank}{ext} never appeared, though "
+                    f"other ranks' maps are present. Not merging them -- they describe chips this "
+                    f"process cannot reach. Skipping KV read."
+                )
+            else:
+                logger.warning(
+                    f"[producer] device map {path} (or {stem}_r*{ext}) not found after {timeout_s}s; skipping KV read."
+                )
             return {}
         time.sleep(0.1)
-        files = _matches()
+        files = _wanted()
 
     device_map = {}
     for f_path in files:
@@ -686,18 +708,40 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
         _load_golden_index_k,
         _load_golden_kv_post,
         index_golden_present,
+        kvpe_golden_present,
     )
     from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs
     from tests.ttnn.utils_for_testing import comp_pcc
+
+    # The pe half needs re-basing only if the model rotates it. Absent (every other model here) means
+    # the usual rotated convention.
+    _KVPE_INTERLEAVE = not bool(getattr(ADAPTER.model_config, "USE_NOPE", False))
 
     KV_LORA = ADAPTER.model_config.KV_LORA_RANK
     HEAD_DIM = KV_LORA + ADAPTER.model_config.QK_ROPE_HEAD_DIM
     tokens_per_block = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     read_len = ((real_len + tokens_per_block - 1) // tokens_per_block) * tokens_per_block
 
+    # Which layers own a KV slab according to the MODEL, not according to what happens to be on
+    # disk. A hybrid stack legitimately has goldens for only some layers, but a mispointed or partial
+    # PREFILL_TRACE_DIR looks exactly the same from a file-presence check, and skipping both leaves a
+    # gate that passes on whatever subset survived. None (every dense model) means every layer.
+    slab_layers = getattr(ADAPTER, "kv_slot_layer_ids", lambda n: None)(NUM_LAYERS)
+    expected_slabs = set(range(NUM_LAYERS)) if slab_layers is None else set(slab_layers)
+
     min_pcc = 1.0
     checked = 0
+    unreferenced = []
+    missing_golden = []
     for layer in range(NUM_LAYERS):
+        # A hybrid attention stack writes a KV slab on only some layers, so the golden references only
+        # those and the table publishes rows for only those. Skip the rest explicitly: the loader
+        # would raise on the missing file, and reading an unpublished row would score whatever sits
+        # at the default location.
+        if not kvpe_golden_present(trace_dir, layer):
+            (missing_golden if layer in expected_slabs else unreferenced).append(layer)
+            continue
         loc0 = table.lookup(layer, 0, slot_id)
         try:
             _resolve_unique_id(table.get_device_group(loc0.device_group_index).fabric_node_ids, device_map)
@@ -713,21 +757,28 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
         device_kv = torch.cat(decoded_rows, dim=0)[:real_len]
 
         golden = _load_golden_kv_post(trace_dir, layer, real_len)
-        _, pcc_nope = comp_pcc(golden[:, :KV_LORA], device_kv[:, :KV_LORA])
-
-        golden_pe = golden[:, KV_LORA:]
-        pe_dim = golden_pe.shape[-1]
-        golden_pe = torch.stack([golden_pe[:, : pe_dim // 2], golden_pe[:, pe_dim // 2 :]], dim=-1).reshape(-1, pe_dim)
-        _, pcc_pe = comp_pcc(golden_pe, device_kv[:, KV_LORA:])
+        # Re-base the pe half only if the model rotates it. Kimi-K3 is NoPE (`mla_use_nope`): its 64
+        # rope dims pass through unrotated, so applying the half-split re-interleave scores the
+        # transform instead of the cache -- 0.02 against a nope half of 0.998.
+        pcc_nope, pcc_pe = cache_half_pccs(golden, device_kv, KV_LORA, pe_interleave=_KVPE_INTERLEAVE)
 
         min_pcc = min(min_pcc, pcc_nope, pcc_pe)
         checked += 1
         logger.info(f"[producer] slot {slot_id} layer {layer:>2} KV PCC: nope={pcc_nope:.5f} pe={pcc_pe:.5f}")
 
     logger.info(
-        f"[producer] slot {slot_id} KV PCC over [0,{real_len}) across {checked}/{NUM_LAYERS} local layers -> "
-        f"{min_pcc:.6f}"
+        f"[producer] slot {slot_id} KV PCC over [0,{real_len}) across {checked}/{len(expected_slabs)} "
+        f"slab-owning layers -> {min_pcc:.6f}"
+        + (f"; {len(unreferenced)} layers carry no KV golden (hybrid stack): {unreferenced}" if unreferenced else "")
     )
+    if missing_golden:
+        # These layers DO own a slab, so the golden should have covered them. Naming them is the
+        # difference between a partial trace and a gate that quietly narrowed itself.
+        logger.warning(
+            f"[producer] slot {slot_id}: {len(missing_golden)} slab-owning layer(s) have no KV golden "
+            f"under {trace_dir} and were not scored: {missing_golden}. The trace is partial or "
+            f"PREFILL_TRACE_DIR is wrong; the PCC below covers only the rest."
+        )
     if checked == 0:
         raise RuntimeError(f"slot {slot_id}: no local layers resolved against the device map (nothing verified)")
 
@@ -805,7 +856,7 @@ def _write_pcc_verdict(
 
 
 def _verify_resident_slots(kv_table, stats: RunStats, threshold: float, slot_traces: dict, rank: int = 0) -> bool:
-    device_map = _read_device_map(int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60")))
+    device_map = _read_device_map(int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60")), rank=rank)
     if not device_map:
         logger.error("[producer] no device map available; skipping KV read/PCC.")
         _write_pcc_verdict(rank, ok=False, min_pcc=0.0, checked=0, threshold=threshold, per_cache={})

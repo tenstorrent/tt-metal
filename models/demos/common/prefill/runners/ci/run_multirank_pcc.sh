@@ -20,6 +20,10 @@ RUNNER_ENV=""
 PRODUCER_ENV=""
 TP_SHARD_KV_DEFAULT=0
 FABRIC_MODE=2d
+# sc1 runs a single galaxy, so both of these exist to shrink the sc4 model down to what one fits.
+# Defaults keep every model that does fit unchanged: full 256k context, full manifest depth.
+SC1_MAX_SEQ_LEN=256000
+SC1_NUM_LAYERS=""
 
 case "${CONFIG}" in
   sc1|sc4) ;;
@@ -54,6 +58,23 @@ case "${MODEL}" in
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
         export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k;"
     ;;
+  kimi_k3)
+    export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/kimi_k3_prefill_runner_kv}"
+    MANIFEST="${MANIFEST_DIR}/kimi_k3.json"
+    MAX_SEQ_LEN=56320
+    # Bisected, not computed: the arithmetic bound overshoots ~20% once weights and transients are
+    # counted, and the OOM edge wanders between ranks. 1 is the measured 93-layer configuration.
+    NUM_USERS_DEFAULT=1
+    # 93 layers do not fit one galaxy -- MLA's static CBs become unplaceable past ~36 layers on a
+    # rank (#54876) and a 48-layer single rank OOMs at 2 users. 24 fits, ends on an MLA layer, and
+    # is the deepest depth the golden's decoder-output stream covers, so sc1 is a real accuracy gate
+    # rather than a smaller copy of sc4.
+    SC1_NUM_LAYERS=24
+    SC1_MAX_SEQ_LEN=${MAX_SEQ_LEN}
+    RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized; export PREFILL_LAYER_ACK_D2H=1;"
+    PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
+        export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/k3_vllm_code_debug_1M;"
+    ;;
   *)
     echo "unknown model key '${MODEL}'" >&2
     exit 2
@@ -64,10 +85,13 @@ MGD="${MGD_DIR}/${MODEL}_${CONFIG}_mgd.textproto"
 [ -f "${MGD}" ] || { echo "no mesh-graph descriptor for ${MODEL}/${CONFIG} at ${MGD}" >&2; exit 2; }
 
 SC4_MAX_SEQ_LEN=${MAX_SEQ_LEN}
-SC1_MAX_SEQ_LEN=256000
+NUM_LAYERS_ENV=""
 if [ "${CONFIG}" = sc1 ]; then
   MAX_SEQ_LEN=${SC1_MAX_SEQ_LEN}
   NUM_USERS_DEFAULT=1
+  # Exported to BOTH runner and producer, and only when the model asked for it: the manifest's depth
+  # is applied with setdefault, so an explicit export is what shrinks it.
+  [ -n "${SC1_NUM_LAYERS}" ] && NUM_LAYERS_ENV="export PREFILL_NUM_LAYERS=${SC1_NUM_LAYERS};"
 fi
 
 REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))
@@ -151,6 +175,7 @@ python3 "${TTRUN_PY}" \
     export PREFILL_ENABLE_MIGRATION=1; \
     export PREFILL_MOCK_MIGRATION=1; \
     export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
+    ${NUM_LAYERS_ENV} \
     ${RUNNER_ENV} \
     export LOGURU_LEVEL=INFO; \
     exec python3 -m models.demos.common.prefill.runners.prefill_runner" &
@@ -189,6 +214,7 @@ set +e
     export PREFILL_SEND_SHUTDOWN=1; \
     export PREFILL_STANDALONE_CHUNKED_PCC=${PCC_THRESHOLD}; \
     export PREFILL_H2D_CONNECT_TIMEOUT=120; \
+    ${NUM_LAYERS_ENV} \
     ${PRODUCER_ENV} \
     export LOGURU_LEVEL=INFO; \
     exec python3 -m models.demos.common.prefill.runners.prefill_producer"

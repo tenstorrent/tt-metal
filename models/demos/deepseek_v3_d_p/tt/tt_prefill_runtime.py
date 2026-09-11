@@ -110,6 +110,12 @@ class TtPrefillRuntime:
     IDs / sampled tokens.
     """
 
+    # The transformer this runtime drives. Overridden by a model whose stack is not
+    # `TtPrefillTransformer`: Kimi-K3's blocks are their own class because only 24 of its 93 layers
+    # write a KV slab and its residual is block-structured, so it cannot reuse the shared block. A
+    # class attribute rather than a constructor argument, so every existing caller is unaffected.
+    MODEL_CLS = TtPrefillTransformer
+
     def __init__(
         self,
         mesh_device: ttnn.MeshDevice,
@@ -183,7 +189,7 @@ class TtPrefillRuntime:
         if self.config.weight_cache_path:
             num_devices = self.config.mesh_shape[0] * self.config.mesh_shape[1]
             experts_per_chip = model_cfg.NUM_ROUTED_EXPERTS // num_devices
-            if TtPrefillTransformer.check_cache_complete(
+            if self.MODEL_CLS.check_cache_complete(
                 self.config.weight_cache_path,
                 self.config.num_layers,
                 experts_per_chip,
@@ -219,7 +225,7 @@ class TtPrefillRuntime:
                     f"TTNN weight cache not complete at {self.config.weight_cache_path}; "
                     f"it will be rebuilt from the supplied weights."
                 )
-        self.model = TtPrefillTransformer(
+        self.model = self.MODEL_CLS(
             mesh_device=self.mesh_device,
             config=self.hf_config,
             model_cfg=model_cfg,
@@ -363,7 +369,7 @@ class TtPrefillRuntime:
 
     def make_placeholder_activation(self) -> ttnn.Tensor:
         """Allocate a zero hidden-state activation matching what the D2D socket delivers:
-        [1, 1, chunk_per_chip, emb_dim/tp] — or 2·emb_dim/tp under DFlash, which packs the drafter
+        [1, activation_planes, chunk_per_chip, emb_dim/tp] — or 2·emb_dim/tp under DFlash, which packs the drafter
         partial alongside the hidden — TILE_LAYOUT, DRAM, replicated.
 
         Stand-in input for a non-first rank until the upstream D2D-socket sync op
@@ -376,7 +382,10 @@ class TtPrefillRuntime:
         # 2H-wide tensor and this receive buffer must match. Non-dflash keeps H.
         feature_size = self.hf_config.hidden_size * (2 if self.config.dflash_enabled else 1)
         emb_per_tp = feature_size // self.config.tp_factor
-        zeros = torch.zeros(1, 1, chunk_per_chip, emb_per_tp, dtype=torch.bfloat16)
+        # Dim 1 carries any extra per-token state the model ships across the boundary (DFlash widens
+        # the LAST dim instead, so the two compose). `_prepare_trace` captures this buffer as the
+        # address-stable input, so a wrong plane count here is baked into the replay.
+        zeros = torch.zeros(1, self.activation_planes, chunk_per_chip, emb_per_tp, dtype=torch.bfloat16)
         return ttnn.from_torch(
             zeros,
             device=self.mesh_device,
@@ -570,11 +579,15 @@ class TtPrefillRuntime:
         # Per-element metadata: (slot_id, actual_start, actual_end), seeded for chunk 0.
         # ChunkMetadata, not a bare tuple: Mistral needs a 4th field (the llama4 query-scale buffer)
         # whose lifetime matches these scalars. None elsewhere, and fields 0-2 are unchanged.
+        # `make_llama4_scale_buffer` returns None for every variant without llama_4_scaling_beta, and
+        # a NoPE model (Kimi-K3) builds no RotarySetup at all, so there is nothing to ask -- reaching
+        # through an absent attribute would be the only difference between them.
+        rope_setup = getattr(self.model, "rope_setup", None)
         self._trace_metadata = ChunkMetadata(
             self._meta1_dev(0),
             self._meta1_dev(0),
             self._meta1_dev(chunk),
-            self.model.rope_setup.make_llama4_scale_buffer(chunk),
+            rope_setup.make_llama4_scale_buffer(chunk) if rope_setup is not None else None,
         )
         # Same three words packed, for the D2H ack record. Allocated whether or not the ack is wired:
         # set_d2h_ack_service() runs after compile(), and the capture needs an address that predates it.
@@ -783,6 +796,16 @@ class TtPrefillRuntime:
         # KV-output path ignores.
         return out if not self.config.is_last_rank else None
 
+    @property
+    def activation_planes(self) -> int:
+        """Planes on dim 1 of the D2D payload this rank RECEIVES.
+
+        1 for every model whose cross-rank state is just the activation. Overridden by a model that
+        also carries per-token state produced upstream; it must agree with the adapter's
+        `pipeline_activation_planes` at this rank's first layer, since that is what sized the socket.
+        """
+        return 1
+
     def release_trace(self) -> None:
         """Free the captured trace segments and the sub-device managers that own them, BEFORE the
         driver closes the mesh device. Idempotent; safe to call when use_trace is off.
@@ -877,6 +900,16 @@ class TtPrefillRuntime:
             stages.append(KvCacheStage(int(index_cache.buffer_address()), first_full, count_full))
         return stages
 
+    def kv_table_layer_rows(self, stage_layouts):
+        """Model layer to publish each dense KV slab at, or None when every layer owns one.
+
+        Only a HYBRID attention stack needs this. `kv_migration_stages` numbers such a model's KVPE
+        stage in compacted slab space (as it already does for the DSA index cache), so the gathered
+        stages count slabs rather than layers; this maps slab -> model layer so the published table
+        keeps the model's layer axis and a consumer indexing by layer is unaffected.
+        """
+        return None
+
     def build_kv_chunk_table(
         self,
         kv_caches: MlaKvCaches,
@@ -906,6 +939,19 @@ class TtPrefillRuntime:
         Under DFlash, this rank's drafter context caches join the same merged table as
         ``2 * num_kv_heads`` further named configs (see the gate below)."""
         from models.demos.deepseek_v3_d_p.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
+
+        # The gathered stage is authoritative for this rank's KVPE range, not the caller's arguments.
+        # They can legitimately disagree: `kv_migration_stages` may number the stage in a COMPACTED
+        # space (the DSA index cache does, and a hybrid stack must for KVPE too, since only some
+        # layers own a slab) while the runner passes the rank's MODEL-layer span. Taking the layout
+        # keeps the cache-depth check and the address walk in the space everyone already agreed on.
+        _primary_layout = stage_layouts[0] if stage_layouts else None
+        if _primary_layout:
+            _my_rank = int(ttnn.distributed_context_get_rank())
+            _mine = [st for st in _primary_layout if st["rank"] == _my_rank]
+            if _mine:
+                first_layer_idx = int(_mine[0]["first_layer"])
+                num_my_layers = int(_mine[0]["count"])
 
         # DFlash: register the drafter's context K/V as further configs of the same merged table, so a
         # device-less consumer (prefill_producer) can read them back per (layer, head) and PCC them
@@ -961,6 +1007,7 @@ class TtPrefillRuntime:
             first_layer_idx=first_layer_idx,
             num_my_layers=num_my_layers,
             stage_layouts=stage_layouts,
+            layer_rows=self.kv_table_layer_rows(stage_layouts),
             index_layer_ids=index_layer_ids,
         )
 
