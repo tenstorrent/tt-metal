@@ -12,6 +12,10 @@
 namespace ckernel {
 
 #if defined(ARCH_BLACKHOLE)
+// Call before csa_index_remap, including when switching from another operation.
+// Re-establish the common SFPU configuration, address modifiers and counters.
+ALWI void csa_index_remap_init() { MATH((llk_math_eltwise_unary_sfpu_csa_index_remap_init<DST_ACCUM_MODE>())); }
+
 template <std::uint32_t ROW_OFFSET>
 ALWI void csa_index_remap(std::uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_csa_index_remap<ROW_OFFSET>(idst)));

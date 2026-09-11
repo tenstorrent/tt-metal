@@ -5,10 +5,12 @@ set(UNIT_TESTS_LLK_SRC
     test_broadcast.cpp
     test_compute_kernel_sentinel.cpp
     test_copy_block_matmul_partials.cpp
+    test_csa_index_remap_compute.cpp
     test_cumsum.cpp
     test_dropout_sfpu_compute.cpp
     test_fp8_typecast.cpp
     test_golden_impls.cpp
+    test_hadamard_compute.cpp
     test_mul_reduce_scalar.cpp
     test_mxfp4_typecast.cpp
     test_mxfp6_typecast.cpp
