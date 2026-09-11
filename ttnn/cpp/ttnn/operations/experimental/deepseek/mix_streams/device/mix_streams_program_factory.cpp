@@ -59,7 +59,7 @@ MixStreamsProgramFactory::cached_program_t MixStreamsProgramFactory::create(
     const auto& streams_shape = streams.logical_shape();
     const uint32_t hc = operation_attributes.num_streams;
     const uint32_t num_tokens = static_cast<uint32_t>(streams_shape[0]) * static_cast<uint32_t>(streams_shape[1]);
-    const uint32_t n_tiles = streams.padded_shape()[-1] / constants::TILE_WIDTH;
+    const uint32_t n_tiles = streams.logical_shape()[-1] / constants::TILE_WIDTH;
     // hc <= TILE_HEIGHT, so every token is exactly one tile row of the [T*hc, D] tile grid.
     const uint32_t total_tiles = num_tokens * n_tiles;
 
@@ -75,14 +75,18 @@ MixStreamsProgramFactory::cached_program_t MixStreamsProgramFactory::create(
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
 
     constexpr uint32_t tile_buffering = 2;
-    auto make_cb = [&](uint32_t index, uint32_t num_pages) {
-        CircularBufferConfig config = CircularBufferConfig(num_pages * tile_size_bytes, {{index, tile_data_format}})
-                                          .set_page_size(index, tile_size_bytes);
+    const uint32_t comb_src_page = std::max(
+        static_cast<uint32_t>(comb.buffer()->aligned_page_size()), 32u * static_cast<uint32_t>(sizeof(uint16_t)));
+    const uint32_t post_src_page = post.buffer()->aligned_page_size();
+    auto make_cb = [&](uint32_t index, uint32_t num_pages, uint32_t page_bytes = 0) {
+        const uint32_t page = page_bytes == 0 ? tile_size_bytes : page_bytes;
+        CircularBufferConfig config =
+            CircularBufferConfig(num_pages * page, {{index, tile_data_format}}).set_page_size(index, page);
         CreateCircularBuffer(program, all_cores, config);
     };
-    make_cb(kCbCombSrc, 1);
+    make_cb(kCbCombSrc, hc, comb_src_page);
     make_cb(kCbComb, tile_buffering);
-    make_cb(kCbPostSrc, 1);
+    make_cb(kCbPostSrc, hc, post_src_page);
     make_cb(kCbPost, tile_buffering);
     make_cb(kCbStreams, tile_buffering);
     make_cb(kCbSub, tile_buffering);
@@ -104,7 +108,7 @@ MixStreamsProgramFactory::cached_program_t MixStreamsProgramFactory::create(
     TensorAccessorArgs(sublayer_out.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(streams.buffer()).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {kCbOut};
+    std::vector<uint32_t> writer_compile_time_args = {kCbOut, hc, n_tiles};
     TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     const std::vector<uint32_t> compute_compile_time_args = {
