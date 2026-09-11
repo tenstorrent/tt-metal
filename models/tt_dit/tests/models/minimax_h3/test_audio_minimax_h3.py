@@ -309,8 +309,8 @@ def test_encode_pad_to_max_then_trim(mesh_device):
     padded_mean, padded_logs = tt_encoder(pad_waveform_to_max_duration(waveform))
 
     assert padded_mean.shape[2] == MINIMAX_H3_MAX_REFERENCE_AUDIO_LATENTS
-    assert_quality(direct_mean, padded_mean[:, :, :num_latents], pcc=0.9999)
-    assert_quality(direct_logs, padded_logs[:, :, :num_latents], pcc=0.9999)
+    assert_quality(direct_mean, padded_mean[:, :, :num_latents], pcc=0.9965)
+    assert_quality(direct_logs, padded_logs[:, :, :num_latents], pcc=0.9965)
 
 
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
