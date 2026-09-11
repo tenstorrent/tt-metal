@@ -31,73 +31,71 @@
 #define TILE_WORD_16_BIT ((32 * 32 * 2 + 32) >> 4)
 #define TILE_WORD_32_BIT ((32 * 32 * 4 + 32) >> 4)
 
-const std::uint32_t STREAM_RESTART_CHECK_MASK = (0x1 << 3) - 1;
+const uint32_t STREAM_RESTART_CHECK_MASK = (0x1 << 3) - 1;
 
-const std::uint32_t MAX_TILES_PER_PHASE = 2048;
+const uint32_t MAX_TILES_PER_PHASE = 2048;
 
 // These values are defined in each core type's FW .cc file
 
 // Virtual X coordinate
-extern std::uint8_t my_x[NUM_NOCS];
+extern uint8_t my_x[NUM_NOCS];
 
 // Virtual Y coordinate
-extern std::uint8_t my_y[NUM_NOCS];
+extern uint8_t my_y[NUM_NOCS];
 
-inline void WRITE_REG(uintptr_t addr, std::uint32_t val) {
-    volatile tt_reg_ptr std::uint32_t* ptr = (volatile tt_reg_ptr std::uint32_t*)addr;
+inline void WRITE_REG(uintptr_t addr, uint32_t val) {
+    volatile tt_reg_ptr uint32_t* ptr = (volatile tt_reg_ptr uint32_t*)addr;
     ptr[0] = val;
 }
 
-inline std::uint32_t READ_REG(uintptr_t addr) {
-    volatile tt_reg_ptr std::uint32_t* ptr = (volatile tt_reg_ptr std::uint32_t*)addr;
+inline uint32_t READ_REG(uintptr_t addr) {
+    volatile tt_reg_ptr uint32_t* ptr = (volatile tt_reg_ptr uint32_t*)addr;
     return ptr[0];
 }
 
-inline std::uint32_t dram_io_incr_ptr(std::uint32_t curr_ptr, std::uint32_t incr, std::uint32_t buf_size_q_slots) {
-    std::uint32_t next_ptr = curr_ptr + incr;
-    std::uint32_t double_buf_size_q_slots = 2 * buf_size_q_slots;
+inline uint32_t dram_io_incr_ptr(uint32_t curr_ptr, uint32_t incr, uint32_t buf_size_q_slots) {
+    uint32_t next_ptr = curr_ptr + incr;
+    uint32_t double_buf_size_q_slots = 2 * buf_size_q_slots;
     if (next_ptr >= double_buf_size_q_slots) {
         next_ptr -= double_buf_size_q_slots;
     }
     return next_ptr;
 }
 
-inline __attribute__((always_inline)) std::uint32_t dram_io_empty(std::uint32_t rd_ptr, std::uint32_t wr_ptr) {
+inline __attribute__((always_inline)) uint32_t dram_io_empty(uint32_t rd_ptr, uint32_t wr_ptr) {
     return (rd_ptr == wr_ptr);
 }
 
-inline __attribute__((always_inline)) std::uint32_t dram_io_local_empty(
-    std::uint32_t local_rd_ptr, std::uint32_t rd_ptr, std::uint32_t wr_ptr) {
+inline __attribute__((always_inline)) uint32_t
+dram_io_local_empty(uint32_t local_rd_ptr, uint32_t rd_ptr, uint32_t wr_ptr) {
     if (rd_ptr == wr_ptr) {
         return true;
     }
 
-    std::uint32_t case1 = rd_ptr < wr_ptr && (local_rd_ptr < rd_ptr || local_rd_ptr >= wr_ptr);
-    std::uint32_t case2 = rd_ptr > wr_ptr && wr_ptr <= local_rd_ptr && local_rd_ptr < rd_ptr;
+    uint32_t case1 = rd_ptr < wr_ptr && (local_rd_ptr < rd_ptr || local_rd_ptr >= wr_ptr);
+    uint32_t case2 = rd_ptr > wr_ptr && wr_ptr <= local_rd_ptr && local_rd_ptr < rd_ptr;
 
     return case1 || case2;
 }
 
-inline std::uint32_t dram_io_full(std::uint32_t rd_ptr, std::uint32_t wr_ptr, std::uint32_t buf_size_q_slots) {
-    std::uint32_t wr_ptr_reduced_by_q_slots = wr_ptr - buf_size_q_slots;
-    std::uint32_t rd_ptr_reduced_by_q_slots = rd_ptr - buf_size_q_slots;
-    std::uint32_t case1 = (wr_ptr_reduced_by_q_slots == rd_ptr);
-    std::uint32_t case2 = (rd_ptr_reduced_by_q_slots == wr_ptr);
+inline uint32_t dram_io_full(uint32_t rd_ptr, uint32_t wr_ptr, uint32_t buf_size_q_slots) {
+    uint32_t wr_ptr_reduced_by_q_slots = wr_ptr - buf_size_q_slots;
+    uint32_t rd_ptr_reduced_by_q_slots = rd_ptr - buf_size_q_slots;
+    uint32_t case1 = (wr_ptr_reduced_by_q_slots == rd_ptr);
+    uint32_t case2 = (rd_ptr_reduced_by_q_slots == wr_ptr);
     return case1 || case2;
 }
 
-inline __attribute__((always_inline)) std::uint32_t buf_ptr_inc_wrap(
-    std::uint32_t buf_ptr, std::uint32_t inc, std::uint32_t buf_size) {
-    std::uint32_t result = buf_ptr + inc;
+inline __attribute__((always_inline)) uint32_t buf_ptr_inc_wrap(uint32_t buf_ptr, uint32_t inc, uint32_t buf_size) {
+    uint32_t result = buf_ptr + inc;
     if (result >= buf_size) {
         result -= buf_size;
     }
     return result;
 }
 
-inline __attribute__((always_inline)) std::uint32_t buf_ptr_dec_wrap(
-    std::uint32_t buf_ptr, std::uint32_t dec, std::uint32_t buf_size) {
-    std::uint32_t result = buf_ptr;
+inline __attribute__((always_inline)) uint32_t buf_ptr_dec_wrap(uint32_t buf_ptr, uint32_t dec, uint32_t buf_size) {
+    uint32_t result = buf_ptr;
     if (dec > result) {
         result += buf_size;
     }
@@ -109,15 +107,15 @@ inline __attribute__((always_inline)) std::uint32_t buf_ptr_dec_wrap(
 // tt_metal/tt-llk/tt_llk_wormhole_b0/common/inc/ckernel.h, which trisc
 // kernels bring into the global namespace using "using namespace ckernel".
 #if !defined(COMPILE_FOR_TRISC)  // BRISC, NCRISC, ERISC, IERISC
-inline __attribute__((always_inline)) std::uint32_t reg_read(uintptr_t addr) {
-    volatile tt_reg_ptr std::uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr std::uint32_t*>(addr);
+inline __attribute__((always_inline)) uint32_t reg_read(uintptr_t addr) {
+    volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(addr);
     return p_reg[0];
 }
 #endif
 
 inline void assert_trisc_reset() {
-    std::uint32_t soft_reset_0 = READ_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_SOFT_RESET_0_REG_ADDR);
-    std::uint32_t trisc_reset_mask = T6_DEBUG_REGS_SOFT_RESET_0_RISC_CONTROL_SOFT_RESET_MASK;
+    uint32_t soft_reset_0 = READ_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_SOFT_RESET_0_REG_ADDR);
+    uint32_t trisc_reset_mask = T6_DEBUG_REGS_SOFT_RESET_0_RISC_CONTROL_SOFT_RESET_MASK;
     WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_SOFT_RESET_0_REG_ADDR, soft_reset_0 | trisc_reset_mask);
     soft_reset_0 = READ_REG(NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_SOFT_RESET_0_REG_ADDR);
     WRITE_REG(NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_SOFT_RESET_0_REG_ADDR, soft_reset_0 | trisc_reset_mask);
@@ -128,8 +126,8 @@ inline void assert_trisc_reset() {
 }
 
 inline void deassert_trisc_reset() {
-    std::uint32_t soft_reset_0 = READ_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_SOFT_RESET_0_REG_ADDR);
-    std::uint32_t trisc_reset_mask = T6_DEBUG_REGS_SOFT_RESET_0_RISC_CONTROL_SOFT_RESET_MASK;
+    uint32_t soft_reset_0 = READ_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_SOFT_RESET_0_REG_ADDR);
+    uint32_t trisc_reset_mask = T6_DEBUG_REGS_SOFT_RESET_0_RISC_CONTROL_SOFT_RESET_MASK;
     WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_SOFT_RESET_0_REG_ADDR, soft_reset_0 & ~trisc_reset_mask);
     soft_reset_0 = READ_REG(NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_SOFT_RESET_0_REG_ADDR);
     WRITE_REG(NEO_REGS_1__LOCAL_REGS_DEBUG_REGS_SOFT_RESET_0_REG_ADDR, soft_reset_0 & ~trisc_reset_mask);
@@ -139,7 +137,7 @@ inline void deassert_trisc_reset() {
     WRITE_REG(NEO_REGS_3__LOCAL_REGS_DEBUG_REGS_SOFT_RESET_0_REG_ADDR, soft_reset_0 & ~trisc_reset_mask);
 }
 
-inline std::uint32_t special_mult(std::uint32_t a, std::uint32_t special_b) {
+inline uint32_t special_mult(uint32_t a, uint32_t special_b) {
     if (special_b == TILE_WORD_8_BIT) {
         return a * TILE_WORD_8_BIT;
     } else if (special_b == TILE_WORD_16_BIT) {
@@ -242,8 +240,8 @@ inline __attribute__((always_inline)) void invalidate_l1_icache() { __asm__ __vo
 // Probes L1 D$ for dirty data before flushing - no need to flush L1 first.
 inline __attribute__((always_inline)) void flush_l2_cache_line(uintptr_t addr) {
     __asm__ __volatile__("fence" ::: "memory");
-    volatile std::uint64_t* flush_reg = (volatile std::uint64_t*)L2_FLUSH_ADDR;
-    *flush_reg = (std::uint64_t)addr;
+    volatile uint64_t* flush_reg = (volatile uint64_t*)L2_FLUSH_ADDR;
+    *flush_reg = (uint64_t)addr;
     __asm__ __volatile__("fence" ::: "memory");
 }
 
@@ -251,8 +249,8 @@ inline __attribute__((always_inline)) void flush_l2_cache_line(uintptr_t addr) {
 // Discards dirty data - use only when data is known to be stale.
 inline __attribute__((always_inline)) void invalidate_l2_cache_line(uintptr_t addr) {
     __asm__ __volatile__("fence" ::: "memory");
-    volatile std::uint64_t* inv_reg = (volatile std::uint64_t*)L2_INVALIDATE_ADDR;
-    *inv_reg = (std::uint64_t)addr;
+    volatile uint64_t* inv_reg = (volatile uint64_t*)L2_INVALIDATE_ADDR;
+    *inv_reg = (uint64_t)addr;
     __asm__ __volatile__("fence" ::: "memory");
 }
 
@@ -278,9 +276,9 @@ inline __attribute__((always_inline)) void invalidate_l2_cache_range(uintptr_t s
     uintptr_t end_addr = start_addr + size;
 
     __asm__ __volatile__("fence" ::: "memory");
-    volatile std::uint64_t* inv_reg = (volatile std::uint64_t*)L2_INVALIDATE_ADDR;
+    volatile uint64_t* inv_reg = (volatile uint64_t*)L2_INVALIDATE_ADDR;
     for (uintptr_t addr = aligned_start; addr < end_addr; addr += 64) {
-        *inv_reg = (std::uint64_t)addr;
+        *inv_reg = (uint64_t)addr;
     }
     __asm__ __volatile__("fence" ::: "memory");
 }
@@ -290,9 +288,9 @@ inline __attribute__((always_inline)) void invalidate_l2_cache_range(uintptr_t s
 inline void flush_l2_cache_full() {
     __asm__ __volatile__("fence" ::: "memory");
 
-    volatile std::uint64_t* flush_reg = (volatile std::uint64_t*)L2_FLUSH_ADDR;
-    for (std::uint32_t addr = 0; addr < MEMORY_PORT_CACHEABLE_MEM_PORT_MEM_SIZE; addr += L2_CACHE_LINE_SIZE) {
-        *flush_reg = (std::uint64_t)addr;
+    volatile uint64_t* flush_reg = (volatile uint64_t*)L2_FLUSH_ADDR;
+    for (uint32_t addr = 0; addr < MEMORY_PORT_CACHEABLE_MEM_PORT_MEM_SIZE; addr += L2_CACHE_LINE_SIZE) {
+        *flush_reg = (uint64_t)addr;
     }
 
     __asm__ __volatile__("fence" ::: "memory");
@@ -301,9 +299,9 @@ inline void flush_l2_cache_full() {
 // Coordinated L2 invalidation across all DM cores.
 // Each core signals ready by writing its bit, then polls until HW clears register.
 // Call from all DM cores, or write other cores' bits if only one core is active.
-inline void invalidate_l2_cache(std::uint32_t hartid) {
-    volatile std::uint64_t* inv_reg = (volatile std::uint64_t*)L2_FULL_INVALIDATE_ADDR;
-    *inv_reg = (std::uint64_t)(1 << hartid);
+inline void invalidate_l2_cache(uint32_t hartid) {
+    volatile uint64_t* inv_reg = (volatile uint64_t*)L2_FULL_INVALIDATE_ADDR;
+    *inv_reg = (uint64_t)(1 << hartid);
     while (*inv_reg != 0);  // Wait for HW to complete and clear
 }
 
@@ -319,7 +317,7 @@ inline __attribute__((always_inline)) void invalidate_l1_cache() {}
 // Invalidate entire cache hierarchy: L2 + L1 D$ + L1 I$.
 // Must be called from all DM cores for proper synchronization.
 // After return, all caches are cold and will fetch fresh data from TL1.
-inline void invalidate_cache_all(std::uint32_t hartid) {
+inline void invalidate_cache_all(uint32_t hartid) {
     // 1. Coordinate L2 wipe across all cores
     invalidate_l2_cache(hartid);
 
@@ -378,15 +376,15 @@ inline __attribute__((always_inline)) void set_l1_data_cache() {
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_isr.h"
 
 inline void risc_init() {
-    for (std::uint32_t n = 0; n < NUM_NOCS; n++) {
-        std::uint32_t noc_id_reg = MY_NOC_ENCODING(n);
+    for (uint32_t n = 0; n < NUM_NOCS; n++) {
+        uint32_t noc_id_reg = MY_NOC_ENCODING(n);
         my_x[n] = noc_id_reg & NOC_NODE_ID_MASK;
         my_y[n] = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
     }
 }
 
 inline __attribute__((interrupt, hot)) void synchronous_exception_handler() {
-    std::uint64_t mcause;
+    uint64_t mcause;
     asm volatile("csrr %0, mcause" : "=r"(mcause));
     ASSERT(0 == 1, debug_assert_type_t::DebugAssertHwFault);
 #if !defined(WATCHER_ENABLED)  // hang anyway
@@ -397,29 +395,29 @@ inline __attribute__((interrupt, hot)) void synchronous_exception_handler() {
 }
 
 #if defined(COMPILE_FOR_DISPATCH_ENGINE)
-constexpr std::uint32_t INTERRUPT_TABLE_BASE = MEM_DISPATCH_INTERRUPT_TABLE_BASE;
+constexpr uint32_t INTERRUPT_TABLE_BASE = MEM_DISPATCH_INTERRUPT_TABLE_BASE;
 #else
-constexpr std::uint32_t INTERRUPT_TABLE_BASE = MEM_INTERRUPT_TABLE_BASE;
+constexpr uint32_t INTERRUPT_TABLE_BASE = MEM_INTERRUPT_TABLE_BASE;
 #endif
 
-constexpr std::uint32_t SYNC_INTERRUPT_INDEX = 0;                // synchronized interrupts index
-constexpr std::uint32_t MACHINE_EXTERNAL_INTERRUPT_OFFSET = 11;  // machine external interrupt offset
-constexpr std::uint32_t ROCC_INTERRUPT_INDEX = 13;               // rocc interrupt index
+constexpr uint32_t SYNC_INTERRUPT_INDEX = 0;                // synchronized interrupts index
+constexpr uint32_t MACHINE_EXTERNAL_INTERRUPT_OFFSET = 11;  // machine external interrupt offset
+constexpr uint32_t ROCC_INTERRUPT_INDEX = 13;               // rocc interrupt index
 
 // Encodes a 21-bit byte offset into a RISC-V J-type immediate field
-inline __attribute__((always_inline)) std::uint32_t encode_j_immediate(std::int32_t offset) {
+inline __attribute__((always_inline)) uint32_t encode_j_immediate(int32_t offset) {
     // 1. Jumps must be 2-byte aligned (even numbers)
     // Shift right by 1 to discard the implicit 0-bit
-    std::uint32_t imm = static_cast<std::uint32_t>(offset >> 1);
+    uint32_t imm = static_cast<uint32_t>(offset >> 1);
 
     // 2. Extract specific bit slices using masks
-    std::uint32_t bit_20 = (imm >> 19) & 0x1;       // Sign bit (imm[20])
-    std::uint32_t bits_10_1 = (imm >> 0) & 0x3FF;   // imm[10:1]
-    std::uint32_t bit_11 = (imm >> 10) & 0x1;       // imm[11]
-    std::uint32_t bits_19_12 = (imm >> 11) & 0xFF;  // imm[19:12]
+    uint32_t bit_20 = (imm >> 19) & 0x1;       // Sign bit (imm[20])
+    uint32_t bits_10_1 = (imm >> 0) & 0x3FF;   // imm[10:1]
+    uint32_t bit_11 = (imm >> 10) & 0x1;       // imm[11]
+    uint32_t bits_19_12 = (imm >> 11) & 0xFF;  // imm[19:12]
 
     // 3. Reconstruct into the J-type instruction layout positions
-    std::uint32_t instruction_bits = 0;
+    uint32_t instruction_bits = 0;
     instruction_bits |= (bit_20 << 31);      // Position 31
     instruction_bits |= (bits_10_1 << 21);   // Positions 30:21
     instruction_bits |= (bit_11 << 20);      // Position 20
@@ -428,13 +426,12 @@ inline __attribute__((always_inline)) std::uint32_t encode_j_immediate(std::int3
     return instruction_bits;
 }
 
-inline __attribute__((always_inline)) void register_handler_for_interrupt(
-    std::uint32_t interrupt_index, void (*handler)()) {
-    std::uint64_t isr_address = reinterpret_cast<std::uint64_t>(handler);
-    std::uint32_t encoded_offset = encode_j_immediate(
-        std::int32_t(isr_address) - std::int32_t(INTERRUPT_TABLE_BASE + interrupt_index * sizeof(std::uint32_t)));
-    std::uint32_t instruction = 0x0000006f | encoded_offset;  // create a jump instruction to the handler
-    *((std::uint32_t*)(INTERRUPT_TABLE_BASE) + interrupt_index) = instruction;
+inline __attribute__((always_inline)) void register_handler_for_interrupt(uint32_t interrupt_index, void (*handler)()) {
+    uint64_t isr_address = reinterpret_cast<uint64_t>(handler);
+    uint32_t encoded_offset =
+        encode_j_immediate(int32_t(isr_address) - int32_t(INTERRUPT_TABLE_BASE + interrupt_index * sizeof(uint32_t)));
+    uint32_t instruction = 0x0000006f | encoded_offset;  // create a jump instruction to the handler
+    *((uint32_t*)(INTERRUPT_TABLE_BASE) + interrupt_index) = instruction;
 }
 
 inline __attribute__((always_inline)) void setup_isr_csrs() {
@@ -466,15 +463,15 @@ inline __attribute__((always_inline)) void disable_dfb_tile_isr() {
 }
 #else
 inline __attribute__((interrupt, hot)) void handle_interrupt() {
-    std::uint32_t trisc_id = internal_::get_trisc_id();
-    std::uint32_t error_code = RISC_PIC_BRISC_EX_REG_BASE(trisc_id)[HW_ERROR_INTERRUPT_INDEX] >> 8 & 0x3f;
+    uint32_t trisc_id = internal_::get_trisc_id();
+    uint32_t error_code = RISC_PIC_BRISC_EX_REG_BASE(trisc_id)[HW_ERROR_INTERRUPT_INDEX] >> 8 & 0x3f;
     if (error_code == trisc_id || (35 - error_code) == trisc_id ||
         (error_code > 3 && error_code < 32 && trisc_id == 0)) {
         ASSERT(0 == 1, debug_assert_type_t::DebugAssertHwFault);
-        std::uint32_t hirv = *(RISC_PIC_BRISC_HW_INT_REG(trisc_id));  // clears the interrupt after handling the error
+        uint32_t hirv = *(RISC_PIC_BRISC_HW_INT_REG(trisc_id));  // clears the interrupt after handling the error
         (void)hirv;
     } else {
-        std::uint32_t hirv = *(RISC_PIC_BRISC_HW_INT_REG(trisc_id));  // clears the interrupt
+        uint32_t hirv = *(RISC_PIC_BRISC_HW_INT_REG(trisc_id));  // clears the interrupt
         (void)hirv;
         return;
     }
@@ -486,8 +483,8 @@ inline __attribute__((interrupt, hot)) void handle_interrupt() {
 }
 
 inline __attribute__((always_inline)) void setup_isr_csrs() {
-    std::uint32_t trisc_id = ckernel::csr_read<ckernel::CSR::TRISC_ID>();
-    RISC_PIC_BRISC_HW_IVT_BASE(trisc_id)[HW_ERROR_INTERRUPT_INDEX] = reinterpret_cast<std::uint32_t>(handle_interrupt);
+    uint32_t trisc_id = ckernel::csr_read<ckernel::CSR::TRISC_ID>();
+    RISC_PIC_BRISC_HW_IVT_BASE(trisc_id)[HW_ERROR_INTERRUPT_INDEX] = reinterpret_cast<uint32_t>(handle_interrupt);
     *(RISC_PIC_BRISC_HW_INT_EN(trisc_id)) = 1 << HW_ERROR_INTERRUPT_INDEX;
     RISCV_DEBUG_REGS->ERR_MASK = 0xFFFF;  // enable all errors
 }
@@ -497,18 +494,18 @@ inline __attribute__((always_inline)) void setup_isr_csrs() {
 #if defined(COMPILE_FOR_ERISC)
 #include "internal/ethernet/erisc.h"
 #endif
-inline void riscv_wait(std::uint32_t cycles) {
-    volatile std::uint32_t tt_reg_ptr* clock_lo =
-        reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_0_REG_ADDR);
-    volatile std::uint32_t tt_reg_ptr* clock_hi =
-        reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_1_REG_ADDR);
-    std::uint64_t wall_clock_timestamp = clock_lo[0] | ((std::uint64_t)clock_hi[0] << 32);
-    std::uint64_t wall_clock = 0;
+inline void riscv_wait(uint32_t cycles) {
+    volatile uint tt_reg_ptr* clock_lo =
+        reinterpret_cast<volatile uint tt_reg_ptr*>(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_0_REG_ADDR);
+    volatile uint tt_reg_ptr* clock_hi =
+        reinterpret_cast<volatile uint tt_reg_ptr*>(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_1_REG_ADDR);
+    uint64_t wall_clock_timestamp = clock_lo[0] | ((uint64_t)clock_hi[0] << 32);
+    uint64_t wall_clock = 0;
     do {
 #if defined(COMPILE_FOR_ERISC)
         internal_::risc_context_switch();
 #endif
-        wall_clock = clock_lo[0] | ((std::uint64_t)clock_hi[0] << 32);
+        wall_clock = clock_lo[0] | ((uint64_t)clock_hi[0] << 32);
     } while (wall_clock < (wall_clock_timestamp + cycles));
 }
 
@@ -529,8 +526,8 @@ inline __attribute__((always_inline)) void manually_flush_icache() {
 }
 
 // Zero a buffer in L1 memory
-void zero_l1_buf(tt_l1_ptr std::uint32_t* buf, std::uint32_t size_bytes) {
-    for (std::uint32_t i = 0; i < size_bytes / 4; i++) {
+void zero_l1_buf(tt_l1_ptr uint32_t* buf, uint32_t size_bytes) {
+    for (uint32_t i = 0; i < size_bytes / 4; i++) {
         buf[i] = 0;
     }
 }
@@ -542,21 +539,21 @@ void zero_l1_buf(tt_l1_ptr std::uint32_t* buf, std::uint32_t size_bytes) {
 //     synchronized, meaning if two TRISCs on different NEOs read their own counters at exactly
 //     the same time, the value will be the same.
 //   * The DM value is per-hart: rdcycle counts that core's own cycles since reset.
-inline std::uint64_t get_timestamp() {
+inline uint64_t get_timestamp() {
 #if defined(COMPILE_FOR_TRISC)
-    std::uint32_t timestamp_low = *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(
+    uint32_t timestamp_low = *reinterpret_cast<volatile uint32_t tt_reg_ptr*>(
         LOCAL_REGS_BASE + NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_0_REG_OFFSET);
-    std::uint32_t timestamp_high = *reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(
+    uint32_t timestamp_high = *reinterpret_cast<volatile uint32_t tt_reg_ptr*>(
         LOCAL_REGS_BASE + NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_1_AT_REG_OFFSET);
-    return (static_cast<std::uint64_t>(timestamp_high) << 32) | timestamp_low;
+    return (static_cast<uint64_t>(timestamp_high) << 32) | timestamp_low;
 #else
-    std::uint64_t cycle;
+    uint64_t cycle;
     asm volatile("rdcycle %0" : "=r"(cycle));
     return cycle;
 #endif
 }
 
 // Lower 32 bits of the timestamp. Same cross-processor caveats as get_timestamp().
-inline std::uint32_t get_timestamp_32b() { return static_cast<std::uint32_t>(get_timestamp()); }
+inline uint32_t get_timestamp_32b() { return static_cast<uint32_t>(get_timestamp()); }
 
 #endif
