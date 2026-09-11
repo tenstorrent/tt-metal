@@ -659,6 +659,57 @@ void add_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
     dfb_in0.push_back(num_tiles);
 }
 
+/**
+ * Merged online-softmax running-sum update, fused: sum = cur + prev * exp_max_diff, in place on the
+ * single merged sum DFB that holds both the prev block (ring front [0, num_tiles)) and the cur block
+ * (behind it at [cur_offset, cur_offset + num_tiles)), plus a separate exp_max_diff (emd) DFB.
+ *
+ * Why fused (not mul_block_inplace(prev) followed by add_block_inplace(cur, prev)): the two sum blocks
+ * sit contiguously in the ring exactly as reduce_c produced them (prev at the front, cur reserve_back'd
+ * right behind it). WH tile addressing is fifo_rd_ptr + page_size*tile_index with NO ring wrap, so an
+ * offset read (cur at cur_offset) is only valid while prev and cur are physically contiguous. An in-place
+ * mul_block_inplace on the front (prev) block pop_front/reserve_back/push_back-rotates the full
+ * 2*num_tiles-deep ring, which wraps the layout and makes the subsequent cur offset read fetch a wrong L1
+ * address (PCC ~0.70 on WH batch32). This fused pass reads both blocks straight from the contiguous
+ * reduce_c layout — mirroring the merged max path, whose sub_exp_block also reads prev@front + cur@offset
+ * contiguously and never rotates the merged buffer.
+ *
+ * emd is read (num_tiles at the front) but NOT popped — the out-accumulator scaling that follows pops it.
+ * num_tiles is statistics_tiles (== Sq_chunk_t); num_tiles + 1 must fit DST (one scratch reg for cur).
+ *
+ * Postcondition: `dfb_sum` holds num_tiles produced (the running sum) at the front; prev+cur consumed.
+ */
+void fma_block_merged_sum(uint32_t dfb_sum, uint32_t dfb_emd, uint32_t cur_offset, uint32_t num_tiles) {
+    DataflowBuffer d_sum(dfb_sum);
+    DataflowBuffer d_emd(dfb_emd);
+    d_sum.wait_front(cur_offset + num_tiles);  // prev@front [0,num_tiles) + cur@[cur_offset,+num_tiles)
+    d_emd.wait_front(num_tiles);
+    reconfig_data_format(dfb_sum, dfb_emd);
+    pack_reconfig_data_format(dfb_sum);
+    const uint32_t cur_scratch = num_tiles;  // one scratch DST reg above the num_tiles result regs
+    tile_regs_acquire();
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        // dst[i] = prev[i] * emd[i]   (prev at front idx i, emd at front idx i)
+        mul_init(dfb_sum, dfb_emd);
+        mul_tiles(dfb_sum, dfb_emd, i, i, i);
+        // dst[cur_scratch] = cur[i]   (cur at ring offset cur_offset + i)
+        copy_init(dfb_sum);
+        copy_tile(dfb_sum, cur_offset + i, cur_scratch);
+        // dst[i] = prev[i]*emd[i] + cur[i]
+        add_binary_tile_init();
+        add_binary_tile(i, cur_scratch, i);
+    }
+    tile_regs_commit();
+    tile_regs_wait();
+    d_sum.pop_front(cur_offset + num_tiles);  // drop the consumed prev AND cur blocks
+    d_sum.reserve_back(num_tiles);
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        pack_tile(i, dfb_sum, i);
+    }
+    tile_regs_release();
+    d_sum.push_back(num_tiles);  // running sum is now the single contiguous front block
+}
+
 void mul_tiles_bcast_cols_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
     DataflowBuffer dfb_in0(in0_dfb);
     DataflowBuffer dfb_in1(in1_dfb);
