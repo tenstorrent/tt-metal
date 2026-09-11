@@ -368,9 +368,10 @@
     {
       "branch": "silencer/pytest-collection-warning-test-metadata-loader",
       "pattern": "PytestCollectionWarning: cannot collect test class 'TestMetadataLoader'",
-      "status": "opened",
-      "reported": false,
-      "note": "PR opened this run to add __test__=False to TestMetadataLoader in tests/tt_metal/tt_metal/data_movement/python/test_metadata.py; found in runtime-perf-profiler-tests/runtime_perf_data_movement[bh_p150_perf] job 102343682696 of run 34310201941."
+      "status": "resolved",
+      "reported": true,
+      "note": "PR opened this run to add __test__=False to TestMetadataLoader in tests/tt_metal/tt_metal/data_movement/python/test_metadata.py; found in runtime-perf-profiler-tests/runtime_perf_data_movement[bh_p150_perf] job 102343682696 of run 34310201941. | Reconciled 2026-09-11: PR is #55903, already out of draft (state=open, draft=false). Validation run 34332033048 (runtime-perf-profiler-tests/runtime-perf-tests) completed/failure due to unrelated jit_build compile-throughput perf regression; target job 102405339828 test-execution log confirmed 0 occurrences of PytestCollectionWarning/TestMetadataLoader. Outcome already commented and PR already marked ready for review in a prior run -- no further action needed.",
+      "number": 55903
     },
     {
       "branch": "silencer/dedupe-split-l1-dram-downgrade-warnings",
@@ -418,11 +419,11 @@
       "category": 5,
       "validation_workflow_dispatched": "models-t1-e2e-tests",
       "dispatched": "2026-09-10",
-      "status": "nonterminal-reported",
-      "reported": false,
+      "status": "resolved",
+      "reported": true,
       "nonterminal_reported": true,
-      "note": "PR opened this run: gated both AllGatherMulticastFactory and AllGatherUnicastFactory L1-semaphore-fallback log_warning calls with std::once_flag/std::call_once, matching existing per-process idiom in groupnorm.cpp (welford_fallback_warned) and unary_utils.cpp (warn_flag). Sampled from Gemma-4-12B e2e tests [bh_quietbox_2] job in a fresh main-branch run. Dispatched models-t1-e2e-tests for validation; awaiting run outcome next scan. | Reconciled 2026-09-11: validation run 34529741207 (models-t1-e2e-tests) still queued at check time. Posted /codeowners ping interim comment and marked PR ready for review. Awaiting terminal outcome next scan.",
-      "last_state": "queued",
+      "note": "PR opened this run: gated both AllGatherMulticastFactory and AllGatherUnicastFactory L1-semaphore-fallback log_warning calls with std::once_flag/std::call_once, matching existing per-process idiom in groupnorm.cpp (welford_fallback_warned) and unary_utils.cpp (warn_flag). Sampled from Gemma-4-12B e2e tests [bh_quietbox_2] job in a fresh main-branch run. Dispatched models-t1-e2e-tests for validation; awaiting run outcome next scan. | Reconciled 2026-09-11: validation run 34529741207 (models-t1-e2e-tests) still queued at check time. Posted /codeowners ping interim comment and marked PR ready for review. Awaiting terminal outcome next scan. | Reconciled 2026-09-11: validation run 34529741207 (models-t1-e2e-tests) completed/failure overall due to unrelated model e2e failures (Qwen3-32B, Llama3.3-70B, Gemma-4-31B/26B, Qwen3.6-27B, TT-DiT Wan2.2 single-galaxy) -- none touch all_gather. Target job 'Gemma-4-12B e2e tests [bh_quietbox_2]' (103050058670) completed/success; re-grepped test-execution log and confirmed the guarded warning now fires exactly once per pytest process per factory site (4 total: 2 processes x 2 call sites), down from 19x per-invocation repeats in the original sample -- fix confirmed working. Commented outcome (/codeowners ping) and marked ready for review.",
+      "last_state": "failure",
       "number": 56172
     },
     {
@@ -435,12 +436,29 @@
       "category": 6,
       "validation_workflow_dispatched": "models-t2-unit-tests",
       "dispatched": "2026-09-11",
+      "status": "nonterminal-reported",
+      "reported": false,
+      "nonterminal_reported": true,
+      "number": 56221,
+      "note": "PR opened this run: demoted print() to logger.debug() in models/tt_transformers/tests/test_utils.py (single definition site, no duplicates found elsewhere). Dispatched models-t2-unit-tests for validation; awaiting run outcome next scan. | Reconciled 2026-09-11: validation run 34582955027 (models-t2-unit-tests) still queued/in-progress (2 jobs pending: Shallow UNet [wh_llmbox_perf], Gemma-3-27B [wh_llmbox_perf]). Posted /codeowners ping interim comment naming the exact re-grep target (get_ref_model_dype print string in models/tt_transformers/tests/test_utils.py). Could NOT mark PR ready for review this run -- mark_pull_request_as_ready_for_review limit (1/run) already used on PR #56172; PR #56221 remains draft=true until next run marks it ready. Awaiting terminal outcome next scan.",
+      "last_state": "queued"
+    },
+    {
+      "branch": "silencer/deprecated-pydantic-validator-llama-models",
+      "title": "[silencer] Migrate deprecated pydantic @validator to @field_validator in llama_models",
+      "pattern": "PydanticDeprecatedSince20: Pydantic V1 style @validator validators are deprecated, models/common/llama_models.py:63 (ToolCall.validate_field) - fires once per test process on import, mirrored as a ##[warning] GHA annotation",
+      "source_run_id": "34439940959",
+      "source_job_id": "102756169382",
+      "source_workflow": "models-t3-e2e-tests.yaml",
+      "category": 4,
+      "validation_workflow_dispatched": "models-t3-e2e-tests",
+      "dispatched": "2026-09-11",
       "status": "dispatched",
       "reported": false,
       "nonterminal_reported": false,
       "number": null,
-      "note": "PR opened this run: demoted print() to logger.debug() in models/tt_transformers/tests/test_utils.py (single definition site, no duplicates found elsewhere). Dispatched models-t2-unit-tests for validation; awaiting run outcome next scan."
+      "note": "PR opened this run: migrated ToolCall.validate_field's @validator('tool_name', pre=True) to @field_validator('tool_name', mode='before') in models/common/llama_models.py, matching the non-deprecated idiom already used in ttnn/ttnn/distributed/ttrun.py. Sampled from models-t3-e2e-tests run 34439940959 (Gemma-2-9B [wh_n300] job 102756169382 and Qwen2.5-VL-32B [bh_quietbox_2] job 102756169360), both showing the warning + its GHA-annotation mirror. Dispatched models-t3-e2e-tests for validation; awaiting run outcome next scan."
     }
   ],
-  "backlog_cursor": "Reconciled PR #56172 (all-gather-l1-semaphore, validation still queued) and PR #56065 (matmul-bmm-unused-tensoraccessor-args, dispatch never landed on branch - reported to maintainer, left in draft). New target this run: found and fixed a bare print() debug leftover ('get_ref_model_dype: key=...') in models/tt_transformers/tests/test_utils.py while sampling a fresh models-t2-unit-tests run (34424509985, Gemma-3-27B unit tests job) - demoted to logger.debug() matching existing loguru idiom in the file, PR opened on branch silencer/demote-ref-model-dtype-debug-print, dispatched models-t2-unit-tests for validation. Also confirmed 'Watcher checking device <n>' (336x in same job) is explicitly documented in CONTRIBUTING.md as the hang-debugging signal - do NOT demote it. Next: continue rotating through models-t1/t3-e2e-tests, blackhole-e2e-tests, galaxy-* workflows for fresh noise; re-check PR #56065's dispatch situation."
+  "backlog_cursor": "Reconciled 3 in-flight validations this run: PR #56172 (all-gather-l1-semaphore) validation completed/success on target job, warning confirmed reduced to once-per-process-per-site -- commented outcome, marked ready for review. PR #55903 (pytest-collection warning) was already resolved/ready in a prior run -- no action needed, just reconciled the stale in-flight entry. PR #56221 (ref-model-dtype-debug-print) validation run still queued/in-progress -- posted interim comment naming the exact re-grep target; could not mark ready for review this run (mark-ready limit 1/run already used on #56172), remains draft until next run. New target this run: found PydanticDeprecatedSince20 warning from models/common/llama_models.py:63 (@validator pre=True, Pydantic V1 style) while sampling a fresh models-t3-e2e-tests run (34439940959) -- migrated to @field_validator(mode='before') matching existing non-deprecated usage elsewhere in repo. PR opened on branch silencer/deprecated-pydantic-validator-llama-models, dispatched models-t3-e2e-tests for validation. Other candidates noted but not acted on: SWIG builtin-type DeprecationWarnings (third-party/vendored, not a viable root-cause target per prior scan note), pydantic ConfigDict-class config warning in infra/data_collection/pydantic_models.py (already tracked/resolved via prior PRs #55002/#55579). Next: continue rotating through remaining tracked workflows for fresh noise; re-check PR #56065 (matmul-bmm-unused-tensoraccessor-args, dispatch never landed) and PR #55335 (dfb_x_id, still open) on a future scan."
 }
