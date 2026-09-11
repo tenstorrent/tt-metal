@@ -601,9 +601,10 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
             bank_id);
         const auto role_index = static_cast<size_t>(std::distance(bank_sender_roles.begin(), role));
         TT_FATAL(
-            starts_a_bank || role_index > previous_role,
+            starts_a_bank ? role_index == 0 : role_index > previous_role,
             "DRAM bank {}'s PrefetcherPipes are not in sender order: pipe {} sends from {}, its bank's sender {}, "
-            "after a pipe that sends from its sender {}. A sender's bank-local slab base is accumulated in list "
+            "(previous sender {}). Each bank must start with sender 0 and continue in increasing sender order. "
+            "A sender's bank-local slab base is accumulated in list "
             "order, so pass the pipes as CreatePrefetcherPipesForTensorPrefetcher returned them",
             bank_id,
             pipe_in_bank,

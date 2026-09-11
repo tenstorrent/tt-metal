@@ -744,6 +744,12 @@ def test_pipe_list_order_is_enforced(device, K, N, dtype, recv_per_bank, expect_
         swapped[0], swapped[1] = swapped[1], swapped[0]
         with expect_error(RuntimeError, "not in sender order"):
             queue(swapped)
+        # A trailing sender cannot open a bank, even when no other pipe follows it in that bank.
+        with expect_error(RuntimeError, "not in sender order"):
+            queue(pipes[1:])
+        # Apply the same guard to later banks, not just the first pipe in the list.
+        with expect_error(RuntimeError, "not in sender order"):
+            queue(pipes[:2] + pipes[3:])
         # The list as the factory returned it still works, on the same prefetcher.
         _queue_and_validate_pipes(device, tt_weight, pipes, ring_size)
 
