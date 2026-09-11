@@ -16,12 +16,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
-from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
-    fabric2d_device_params,
-    torus_x_device_params,
-    torus_xy_device_params,
-)
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import extract_mesh_config
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
@@ -59,23 +54,6 @@ def random_weights(config, emb_dim: int, vocab_size: int, dtype: torch.dtype):
     return config, weights
 
 
-def _ci_unsupported_param_combos_lm_head(**params):
-    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
-
-    if not on_ci:
-        return False
-    return True
-
-
-def _ci_unsupported_param_combos_global_to_local_token_id(**params):
-    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
-
-    if not on_ci:
-        return False
-    return True
-
-
-@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_lm_head)
 @pytest.mark.parametrize("is_column_parallel", [True, False], ids=["col", "row"])
 @pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])
 @pytest.mark.parametrize(
@@ -100,33 +78,14 @@ def _ci_unsupported_param_combos_global_to_local_token_id(**params):
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
     [
-        pytest.param(
-            (1, 4),
-            torus_x_device_params(),
-            1,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
-            id="torus-x-1x4",
-        ),
+        # The LM head is not part of the prefill transformer any more (decode owns it); this module
+        # test is kept as a minimal standalone check and runs only on a 2x2 mesh.
         pytest.param(
             (2, 2),
             fabric2d_device_params(),
             1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
             id="fabric2d-2x2",
-        ),
-        pytest.param(
-            (2, 4),
-            fabric2d_device_params(),
-            1,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="fabric2d-2x4",
-        ),
-        pytest.param(
-            (8, 4),
-            torus_xy_device_params(),
-            2,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="torus-xy-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -240,7 +199,6 @@ def test_lm_head(
     logger.debug("PCC test passed!")
 
 
-@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_global_to_local_token_id)
 def test_global_to_local_token_id():
     """Verify token mapping for both balanced and sequential modes."""
     from models.demos.deepseek_v3_d_p.tt.mla.utils import global_to_local_token_id
