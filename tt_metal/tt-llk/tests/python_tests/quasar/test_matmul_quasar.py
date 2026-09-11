@@ -205,6 +205,22 @@ def matmul_enable_direct_indexing(register_format_hint):
     return [False] if register_format_hint is None else [True, False]
 
 
+def matmul_transpose_modes(math_fidelity):
+    # The transpose feature is actually independent of fidelity
+    # This is just so that the number of cases doesn't explode
+    if math_fidelity != MathFidelity.LoFi:
+        return [Transpose.No]
+    return [Transpose.No, Transpose.Yes]
+
+
+def matmul_tiny_transpose_modes(input_tile_dimensions):
+    # Tiny-tiles is only tested in LoFi so the same check as regular matmul is not required
+    _, input_B_tile_dimensions = input_tile_dimensions
+    if input_B_tile_dimensions != (TILE_DIM, TILE_DIM):
+        return [Transpose.No]
+    return [Transpose.No, Transpose.Yes]
+
+
 # Generate format-aware combinations. MxFp4 is an input-only (L1) format here: the
 # unpacker produces MxFp4_2x_A/B in the src registers, so drop the cross-product
 # entries where MxFp4 would land as an output.
@@ -255,7 +271,7 @@ _ARCH = get_chip_architecture()
     implied_math_format=lambda format: matmul_implied_math_formats(format),
     register_format_hint=matmul_register_format_hints,
     enable_direct_indexing=matmul_enable_direct_indexing,
-    transpose=[Transpose.No],
+    transpose=matmul_transpose_modes,
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
@@ -568,7 +584,7 @@ def test_matmul(
     implied_math_format=lambda format: matmul_implied_math_formats(format),
     register_format_hint=matmul_register_format_hints,
     enable_direct_indexing=matmul_enable_direct_indexing,
-    transpose=[Transpose.No],
+    transpose=matmul_tiny_transpose_modes,
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
