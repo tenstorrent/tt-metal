@@ -50,7 +50,9 @@
   team: train
 
 - name: tt-train python unit tests
-  cmd: python -m pytest tt-train/tests/python
+  cmd: |
+    export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
+    python -m pytest tt-train/tests/python
   skus:
     bh_p100:
       timeout: 20
