@@ -23,21 +23,21 @@ from models.demos.gemma4.tt.generator_trace import (
     should_auto_enable_chunked_bounded,
     warmup_gemma4_model_prefill,
 )
-from models.tt_transformers.tt.common import (
+from models.ttt_compat.tt.common import (
     Mode,
     get_block_size,
     get_max_prefill_chunk_size,
     get_padded_prefill_len,
     num_blocks_in_seq,
 )
-from models.tt_transformers.tt.generator import (
+from models.ttt_compat.tt.generator import (
     MAX_BATCHED_PREFILL_SEQ_LEN,
     SUPPORTED_PREFILL_BATCH_SIZES,
     Generator,
     _pad_or_create_page_table,
     batched_prefill_padded_batch,
 )
-from models.tt_transformers.tt.model_config import determine_device_name
+from models.ttt_compat.tt.model_config import determine_device_name
 
 # Same 128k batched-prefill token ceiling as the shared Generator
 # (padded_batch × padded_prefill_seq_len).
@@ -524,7 +524,7 @@ class ChunkedPrefillPageTableGuardMixin:
         capture would otherwise hit ``q_pad`` concat (program not in cache).
         """
         import ttnn
-        from models.tt_transformers.tt.common import copy_host_to_device
+        from models.ttt_compat.tt.common import copy_host_to_device
 
         if batch_size > 1:
             return super()._capture_trace_prefill(
@@ -735,7 +735,7 @@ class ChunkedPrefillPageTableGuardMixin:
         if full_page_table is not None and batch_size == 1:
             full_page_table = full_page_table[user_id : user_id + 1, :]
 
-        from models.tt_transformers.tt.generator import _get_max_blocks_prefill
+        from models.ttt_compat.tt.generator import _get_max_blocks_prefill
 
         max_blocks_prefill = _get_max_blocks_prefill(kv_cache)
         source_page_table = full_page_table if full_page_table is not None else page_table
@@ -891,7 +891,7 @@ class ChunkedPrefillPageTableGuardMixin:
             and not self._uses_bounded_sliding_kv(model_id)
         )
         if not use_traced_chunks:
-            # Eager path stays in gemma4 (do not patch models/tt_transformers):
+            # Eager path stays in gemma4 (do not patch models/ttt_compat):
             # true last-token for bounded fill, ring-aligned last-chunk expand,
             # and intermediate get_last_token=-1.
             return self._prefill_forward_single_user_text_eager(
@@ -1518,8 +1518,8 @@ class ChunkedPrefillPageTableGuardMixin:
         must include per-DP chunk batch or async-ahead keep and replay hit the
         wrong Metal graph. Kept local to this mixin — no ``tt_transformers`` edits.
         """
-        from models.tt_transformers.tt.common import copy_host_to_device
-        from models.tt_transformers.tt.generator import DECODE_PAGE_TABLE_INPUT_IDX
+        from models.ttt_compat.tt.common import copy_host_to_device
+        from models.ttt_compat.tt.generator import DECODE_PAGE_TABLE_INPUT_IDX
 
         batch = int(tokens[0].shape[0]) if tokens else 1
         decode_trace_key = (on_device_sampling, batch)

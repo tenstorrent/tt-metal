@@ -12,7 +12,7 @@ from models.demos.blackhole.qwen36.tt.attention import AttentionConfig, Qwen36Ga
 from models.demos.blackhole.qwen36.tt.gdn import GDNConfig, Qwen36GatedDeltaNet
 from models.demos.blackhole.qwen36.tt.mlp import Qwen36MLP
 from models.demos.blackhole.qwen36.utils.substate import substate
-from models.tt_transformers.tt.common import Mode
+from models.ttt_compat.tt.common import Mode
 
 
 class Qwen36DecoderLayer:
@@ -143,7 +143,7 @@ class Qwen36DecoderLayer:
             ),
         )
         if self.num_devices > 1:
-            from models.tt_transformers.tt.distributed_norm import DistributedNorm
+            from models.ttt_compat.tt.distributed_norm import DistributedNorm
 
             return DistributedNorm(
                 norm, args, tt_ccl=tt_ccl, TG=args.is_galaxy, ag_config_key=ag_key, enable_all_gather=enable_all_gather

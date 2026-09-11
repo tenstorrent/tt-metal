@@ -135,7 +135,7 @@ def test_packed_verify_matches_sequential(mesh_device, reset_seeds):
     from models.demos.gemma4.demo.text_demo_v2 import create_tt_page_table
     from models.demos.gemma4.tt.generator import Gemma4Generator
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
-    from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+    from models.ttt_compat.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 
     max_seq_len = 1024
     block_size = 64
@@ -279,7 +279,7 @@ def test_packed_verify_batch_perf(mesh_device, reset_seeds):
     from models.demos.gemma4.demo.text_demo_v2 import create_tt_page_table
     from models.demos.gemma4.tt.generator import Gemma4Generator
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
-    from models.tt_transformers.tt.common import PagedAttentionConfig
+    from models.ttt_compat.tt.common import PagedAttentionConfig
 
     # CI is a shared, time-boxed runner: perf numbers there are meaningless and
     # the full sweep (B up to 32, ctx=2048, 20 reps) on a 31B target blows the

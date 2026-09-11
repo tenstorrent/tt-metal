@@ -12,11 +12,11 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 )
 from models.common.reference_rope import apply_rotary_emb, precompute_freqs_cis
 from models.common.utility_functions import skip_for_blackhole, nearest_32, skip_for_wormhole_b0
-from models.tt_transformers.tt.common import (
+from models.ttt_compat.tt.common import (
     precompute_freqs,
     get_rot_transformation_mat,
 )
-from models.tt_transformers.tt.rope import RotarySetup
+from models.ttt_compat.tt.rope import RotarySetup
 from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
 
 MAX_SEQ_LEN = 128 * 1024

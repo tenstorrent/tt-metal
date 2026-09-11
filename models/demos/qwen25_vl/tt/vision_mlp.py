@@ -6,7 +6,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.common import pad_to_size
+from models.ttt_compat.tt.common import pad_to_size
 
 
 class MLP(LightweightModule):

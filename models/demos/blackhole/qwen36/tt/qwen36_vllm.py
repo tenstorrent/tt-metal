@@ -26,7 +26,7 @@ from vllm.multimodal import MULTIMODAL_REGISTRY
 import ttnn
 from models.demos.blackhole.qwen36.tt.common import create_tt_model
 from models.demos.blackhole.qwen36.tt.generator_interface import prefill_dispatch, warmup_decode_buckets
-from models.tt_transformers.tt.generator import Generator
+from models.ttt_compat.tt.generator import Generator
 
 _PREFILL_WARMUP_CHUNK = 2048
 _PREFILL_WARMUP_BUCKET = 4096

@@ -9,7 +9,7 @@ import ttnn
 from pathlib import Path
 from loguru import logger
 import torch
-from models.tt_transformers.tt.common import (
+from models.ttt_compat.tt.common import (
     precompute_freqs,
     freqs_to_rotation_matrix,
     num_to_core_range_set,
@@ -164,7 +164,7 @@ class TtQwenModelArgs(TtModelArgs):
     }
 
     LOCAL_HF_PARAMS = {
-        "Qwen3-32B": "models/tt_transformers/model_params/Qwen3-32B",
+        "Qwen3-32B": "models/ttt_compat/model_params/Qwen3-32B",
     }
 
     def __init__(

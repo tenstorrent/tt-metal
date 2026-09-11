@@ -9,22 +9,22 @@ from loguru import logger
 import os
 import ttnn
 
-from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import (
+from models.ttt_compat.tt.ccl import TT_CCL
+from models.ttt_compat.tt.common import (
     sample_host,
     PagedAttentionConfig,
     preprocess_inputs_prefill,
 )
 
-from models.tt_transformers.tt.model_config import DecodersPrecision
+from models.ttt_compat.tt.model_config import DecodersPrecision
 from models.experimental.mistral_24b.tt.model import MistralTransformer as Transformer
 
-from models.tt_transformers.tt.generator import Generator
+from models.ttt_compat.tt.generator import Generator
 
 from models.experimental.mistral_24b.tt.pipeline.vision_model import TtMistralVisionTransformer
 from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
 
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.ttt_compat.tt.model_config import ModelArgs
 from transformers import AutoProcessor, AutoModelForImageTextToText
 
 import re
@@ -210,6 +210,7 @@ def load_separate_models_like_test_end2end(model_args, mesh_device, dtype, paged
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
+        own_vision=False,
     )
     logger.info("Separate vision and text models loaded like test_end2end.py")
     return vision_model, text_model

@@ -61,7 +61,7 @@ def test_gdn_tp(mesh_device, B, reset_seeds, ensure_gc, request):
 
     # args.CKPT_DIR is the resolved local snapshot dir (Qwen36ModelArgs downloads the hub id).
     sd = load_gdn_layer(args.CKPT_DIR, li)
-    from models.tt_transformers.tt.ccl import TT_CCL
+    from models.ttt_compat.tt.ccl import TT_CCL
 
     tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
     tw = load_gdn_weights_tp(mesh_device, sd, args)
@@ -206,7 +206,7 @@ def test_gdn_tp_peruser_state(mesh_device, B, reset_seeds, ensure_gc, request):
     logger.info(f"devices={nd} gdn layer={li} B={B}")
 
     sd = load_gdn_layer(args.CKPT_DIR, li)
-    from models.tt_transformers.tt.ccl import TT_CCL
+    from models.ttt_compat.tt.ccl import TT_CCL
 
     tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
     tw = load_gdn_weights_tp(mesh_device, sd, args)
@@ -271,7 +271,7 @@ def test_gdn_tp_write_slot_and_remap(mesh_device, B, reset_seeds, ensure_gc, req
     logger.info(f"devices={nd} gdn layer={li} B={B}")
 
     sd = load_gdn_layer(args.CKPT_DIR, li)
-    from models.tt_transformers.tt.ccl import TT_CCL
+    from models.ttt_compat.tt.ccl import TT_CCL
 
     tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
     tw = load_gdn_weights_tp(mesh_device, sd, args)
@@ -350,7 +350,7 @@ def test_gdn_tp_batched_prefill(mesh_device, B, reset_seeds, ensure_gc, request)
     logger.info(f"devices={nd} gdn layer={li} B={B}")
 
     sd = load_gdn_layer(args.CKPT_DIR, li)
-    from models.tt_transformers.tt.ccl import TT_CCL
+    from models.ttt_compat.tt.ccl import TT_CCL
 
     tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
     tw = load_gdn_weights_tp(mesh_device, sd, args)
@@ -410,7 +410,7 @@ def test_gdn_tp_batched_prefill_chunked(mesh_device, B, reset_seeds, ensure_gc, 
     nd = mesh_device.get_num_devices()
     li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
     sd = load_gdn_layer(args.CKPT_DIR, li)
-    from models.tt_transformers.tt.ccl import TT_CCL
+    from models.ttt_compat.tt.ccl import TT_CCL
 
     tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
     tw = load_gdn_weights_tp(mesh_device, sd, args)
@@ -461,7 +461,7 @@ def test_gdn_tp_prefill(mesh_device, reset_seeds, ensure_gc, request):
     logger.info(f"devices={nd} gdn layer={li} T={T}")
 
     sd = load_gdn_layer(args.CKPT_DIR, li)
-    from models.tt_transformers.tt.ccl import TT_CCL
+    from models.ttt_compat.tt.ccl import TT_CCL
 
     tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
     tw = load_gdn_weights_tp(mesh_device, sd, args)
@@ -512,7 +512,7 @@ def test_gdn_tp_fused_chunk_prefill(mesh_device, monkeypatch, reset_seeds, ensur
     logger.info(f"devices={nd} gdn layer={li} T={T} chunk={chunk}")
 
     sd = load_gdn_layer(args.CKPT_DIR, li)
-    from models.tt_transformers.tt.ccl import TT_CCL
+    from models.ttt_compat.tt.ccl import TT_CCL
 
     tt_ccl = TT_CCL(mesh_device) if nd > 1 else None
     tw = load_gdn_weights_tp(mesh_device, sd, args)

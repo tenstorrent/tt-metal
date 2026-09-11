@@ -433,7 +433,7 @@ def test_mlp_2d_vs_reference(
     logger.info(f"MLP2D (direct API) vs HF reference: PASSED for mode={mode}, seq_len={seq_len}")
 
 
-# [INFO] this test will retire once models/tt_transformers/tt/model_config.py retires
+# [INFO] this test will retire once models/ttt_compat/tt/model_config.py retires
 @pytest.mark.parametrize(
     "ttnn_mesh_device",
     [(8, 4)],
@@ -450,9 +450,9 @@ def test_mlp_2d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevice, 
 
     import os
 
-    from models.tt_transformers.tests.test_utils import get_ref_model_dype
-    from models.tt_transformers.tt.ccl import TT_CCL
-    from models.tt_transformers.tt.model_config import ModelArgs
+    from models.ttt_compat.tests.test_utils import get_ref_model_dype
+    from models.ttt_compat.tt.ccl import TT_CCL
+    from models.ttt_compat.tt.model_config import ModelArgs
 
     batch_size = 1
     mode = "decode" if seq_len <= 32 else "prefill"

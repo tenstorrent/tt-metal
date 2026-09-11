@@ -26,8 +26,8 @@ from models.demos.gemma4.tt.generator_trace import (
     can_gemma4_enable_prefill_trace,
     warmup_gemma4_prefill_bucket,
 )
-from models.tt_transformers.tt.common import PagedAttentionConfig, get_padded_prefill_len
-from models.tt_transformers.tt.generator import SUPPORTED_PREFILL_BATCH_SIZES
+from models.ttt_compat.tt.common import PagedAttentionConfig, get_padded_prefill_len
+from models.ttt_compat.tt.generator import SUPPORTED_PREFILL_BATCH_SIZES
 
 from ..test_factory import (
     TestFactory,

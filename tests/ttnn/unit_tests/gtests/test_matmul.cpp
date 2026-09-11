@@ -907,7 +907,7 @@ inline std::vector<float> sharded_random_bf16(size_t n, uint32_t seed) {
     return out;
 }
 
-// Port of models/tt_transformers/tt/model_config.py::find_largest_divisor (max divisor 8).
+// Port of models/ttt_compat/tt/model_config.py::find_largest_divisor (max divisor 8).
 inline uint32_t sharded_largest_divisor(uint32_t n, uint32_t max_divisor = 8) {
     for (uint32_t i = max_divisor; i > 1; --i) {
         if (n % i == 0) {
@@ -924,9 +924,9 @@ inline uint32_t sharded_largest_divisor(uint32_t n, uint32_t max_divisor = 8) {
 // decode projection archetype (runs every token): in0 [1,1,32,K] bf16 WIDTH_SHARDED in L1,
 // in1 [K,N] bf16 WIDTH_SHARDED across the DRAM banks, explicit DRAMSharded program config,
 // output L1 WIDTH_SHARDED (shard spec computed by the op). Config math ports
-// models/tt_transformers/tt/model_config.py::{create_dram_sharded_mem_config,
+// models/ttt_compat/tt/model_config.py::{create_dram_sharded_mem_config,
 // dram_matmul_config}. Missing coverage (deliberate): dram-sharded + bias is known broken --
-// models apply bias as a separate add (models/tt_transformers/tt/attention.py
+// models apply bias as a separate add (models/ttt_compat/tt/attention.py
 // "FIXME: File bug against dram-sharded matmuls with bias") -- so bias is NOT tested here.
 // Tiny tiles (tile_h < 16) are rejected on this path per #42927; this test uses 32x32 tiles.
 TEST_F(MatmulSmoke, DramShardedDecodeProjection) {

@@ -16,8 +16,8 @@ from transformers import AutoConfig
 import ttnn
 from models.common.utility_functions import comp_pcc, nearest_32
 from models.experimental.ops.quasar.gpt_oss.tt.model import create_rope_setup
-from models.tt_transformers.tt.common import rope_scaling_model_factory
-from models.tt_transformers.tt.rope import rotary_embedding_factory
+from models.ttt_compat.tt.common import rope_scaling_model_factory
+from models.ttt_compat.tt.rope import rotary_embedding_factory
 
 from ..test_factory import parametrize_mesh_with_fabric
 
@@ -415,7 +415,7 @@ def test_rope_scaling_parameters(mesh_device, device_params, reset_seeds):
 
     # For Yarn scaling, verify specific parameters
     if rope_scaling.rope_type.value == "yarn":
-        from models.tt_transformers.tt.common import RopeScalingYarn
+        from models.ttt_compat.tt.common import RopeScalingYarn
 
         assert isinstance(rope_scaling, RopeScalingYarn), "Expected RopeScalingYarn for yarn type"
 
@@ -912,8 +912,8 @@ def test_rope_yarn_values_match_hf(mesh_device, device_params, reset_seeds):
 
     from transformers.models.gpt_oss.modeling_gpt_oss import GptOssRotaryEmbedding
 
-    from models.tt_transformers.tt.common import rope_scaling_model_factory
-    from models.tt_transformers.tt.rope import rotary_embedding_factory
+    from models.ttt_compat.tt.common import rope_scaling_model_factory
+    from models.ttt_compat.tt.rope import rotary_embedding_factory
 
     hf_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
 

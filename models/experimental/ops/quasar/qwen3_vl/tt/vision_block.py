@@ -6,7 +6,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.experimental.ops.quasar.qwen3_vl.tt.vision_attention import VisionAttention
 from models.experimental.ops.quasar.qwen3_vl.tt.vision_layernorm import LayerNorm
 from models.experimental.ops.quasar.qwen3_vl.tt.vision_mlp import MLP
-from models.tt_transformers.tt.common import Mode
+from models.ttt_compat.tt.common import Mode
 
 
 class VisionBlock(LightweightModule):

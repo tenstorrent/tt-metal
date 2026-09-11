@@ -21,7 +21,7 @@ from models.experimental.diffusion_gemma.reference.attention_mask import (
 )
 from models.experimental.diffusion_gemma.tt import chunked_prefill as cp
 from models.experimental.diffusion_gemma.tt.model import DiffusionGemma4Model
-from models.tt_transformers.tt.common import PagedAttentionConfig
+from models.ttt_compat.tt.common import PagedAttentionConfig
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 CHUNK_SIZE = 256

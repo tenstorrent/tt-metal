@@ -20,7 +20,7 @@
 - name: Llama 3.1-8B seqlen sweep
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
-    pytest --timeout 840 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" --num_layers 10
+    pytest --timeout 840 models/ttt_compat/demo/simple_text_demo.py -k "performance-seqlen-sweep" --num_layers 10
   model: llama3.1-8b
   model_family: Llama
   skus:
@@ -49,7 +49,7 @@
 - name: Llama 3.3-70B seqlen sweep (LoudBox)
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
-    pytest --timeout 1440 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep"
+    pytest --timeout 1440 models/ttt_compat/demo/simple_text_demo.py -k "performance-seqlen-sweep"
   model: llama3.3-70b
   model_family: Llama
   skus:
@@ -63,7 +63,7 @@
 - name: Qwen3-32B seqlen sweep (LoudBox)
   cmd: |
     export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
-    pytest --timeout 840 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep"
+    pytest --timeout 840 models/ttt_compat/demo/simple_text_demo.py -k "performance-seqlen-sweep"
   model: qwen3-32b
   model_family: Qwen
   skus:

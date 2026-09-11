@@ -12,7 +12,7 @@ import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
 from models.demos.multimodal.gemma3.tt.gemma_image_mlp import TtGemmaImageFeedForward
 from models.demos.multimodal.gemma3.tt.model_config import ModelArgs
-from models.tt_transformers.tt.ccl import TT_CCL
+from models.ttt_compat.tt.ccl import TT_CCL
 
 
 @pytest.mark.parametrize(

@@ -24,9 +24,9 @@ from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_accu
 from models.demos.utils.model_targets import resolve_accuracy_targets
 from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
-from models.tt_transformers.tt.generator import create_submeshes
-from models.tt_transformers.tt.model_config import (
+from models.ttt_compat.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+from models.ttt_compat.tt.generator import create_submeshes
+from models.ttt_compat.tt.model_config import (
     DecodersPrecision,
     MathFidelitySetting,
     ModelOptimizations,
@@ -72,7 +72,7 @@ def create_tt_model(
     enable_program_trace: bool = False,
 ):
     from models.demos.multimodal.gemma3.tt.model_config import ModelArgs, is_gemma3_host_weight
-    from models.tt_transformers.tt.model import Transformer
+    from models.ttt_compat.tt.model import Transformer
 
     tt_model_args = ModelArgs(
         mesh_device,
@@ -170,7 +170,7 @@ class TokenAccuracy:
     def __init__(self, model_name):
         self.gt_pos = -1
         self.store_predicted_tokens = []
-        reference_data_file = os.path.join("models/tt_transformers/tests/reference_outputs/", model_name) + ".refpt"
+        reference_data_file = os.path.join("models/ttt_compat/tests/reference_outputs/", model_name) + ".refpt"
         assert os.path.exists(reference_data_file)
         logger.info(f"Loading reference data from {reference_data_file}")
         reference_data = torch.load(reference_data_file)
@@ -248,7 +248,7 @@ def load_inputs(user_input, batch, instruct):
         user_input = user_input * batch
 
     in_prompt = []
-    cache_dir = Path("models/tt_transformers/demo/context_cache")
+    cache_dir = Path("models/ttt_compat/demo/context_cache")
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     # The demo supports a custom prompt file, where the context is provided by a link to a book from the gutenberg project
@@ -371,7 +371,7 @@ def _gemma3_text_demo_device_params():
 
 # List of supported Parameters for demo.py
 #
-# input_prompts (string): input json file with prompts to process. See models/tt_transformers/demo/*.json for list of input files
+# input_prompts (string): input json file with prompts to process. See models/ttt_compat/demo/*.json for list of input files
 # instruct (bool): Whether to use instruct weights or general weights
 # repeat_batches (int): Number of consecutive batches of users to run (default: 1)
 # max_seq_len (int): Maximum context length supported by the model (Llama-3.1 and Llama-3.2 models have a maximum context length of 128k, i.e., 128 * 1024)
@@ -388,7 +388,7 @@ def _gemma3_text_demo_device_params():
     "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only, data_parallel, token_accuracy, stress_test, enable_trace",
     [
         (  # Batch-1 run (Latency) - single user, small prompt
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/ttt_compat/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             1024,  # max_seq_len
@@ -405,7 +405,7 @@ def _gemma3_text_demo_device_params():
             True,  # enable_trace
         ),
         (  # Batch-32 run (Throughput) - 32 users, small prompt
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/ttt_compat/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             1024,  # max_seq_len
@@ -422,7 +422,7 @@ def _gemma3_text_demo_device_params():
             True,  # enable_trace
         ),
         (  # long-context-64k run - Single user, long prompt (may vary based on the model's tokenizer)
-            "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
+            "models/ttt_compat/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -439,7 +439,7 @@ def _gemma3_text_demo_device_params():
             True,  # enable_trace
         ),
         (  # Long-context-32k run - Single user, long prompt (may vary based on the model's tokenizer)
-            "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
+            "models/ttt_compat/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             32 * 1024,  # max_seq_len
@@ -456,7 +456,7 @@ def _gemma3_text_demo_device_params():
             True,  # enable_trace
         ),
         (  # Long-context-16k run - Single user, long prompt (may vary based on the model's tokenizer)
-            "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
+            "models/ttt_compat/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             32 * 1024,  # max_seq_len
@@ -473,7 +473,7 @@ def _gemma3_text_demo_device_params():
             True,  # enable_trace
         ),
         (  # Long-context-2k run - Single user, long prompt (may vary based on the model's tokenizer)
-            "models/tt_transformers/demo/sample_prompts/input_data_long_2k.json",  # input_prompts
+            "models/ttt_compat/demo/sample_prompts/input_data_long_2k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             32 * 1024,  # max_seq_len
@@ -490,7 +490,7 @@ def _gemma3_text_demo_device_params():
             True,  # enable_trace
         ),
         (  # Long-context-1k run - Single user, long prompt (may vary based on the model's tokenizer)
-            "models/tt_transformers/demo/sample_prompts/input_data_long_1k.json",  # input_prompts
+            "models/ttt_compat/demo/sample_prompts/input_data_long_1k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             8 * 1024,  # max_seq_len
@@ -507,7 +507,7 @@ def _gemma3_text_demo_device_params():
             True,  # enable_trace
         ),
         (  # stress test
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/ttt_compat/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             20,  # repeat_batches
             32 * 1024,  # max_seq_len
@@ -524,7 +524,7 @@ def _gemma3_text_demo_device_params():
             True,  # enable_trace
         ),
         (  # reasoning-1 - single user, small prompt, long thinking time
-            "models/tt_transformers/demo/input_data_questions_reasoning.json",  # input_prompts
+            "models/ttt_compat/demo/input_data_questions_reasoning.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             16 * 1024,  # max_seq_len
@@ -544,7 +544,7 @@ def _gemma3_text_demo_device_params():
             True,  # enable_trace
         ),
         (  # ci-1 [CI-only] - Measures the performance of a single user over 2048 iterations
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/ttt_compat/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             8192,  # max_seq_len
@@ -561,7 +561,7 @@ def _gemma3_text_demo_device_params():
             True,  # enable_trace
         ),
         (  # ci-32 [CI-only] - Measures the performance of 32 users over 4096 iterations
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/ttt_compat/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             2000,  # max_seq_len
@@ -578,7 +578,7 @@ def _gemma3_text_demo_device_params():
             True,  # enable_trace
         ),
         (  # DP-4-b1 - single user, data-parallel=4, small prompt
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/ttt_compat/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             1024,  # max_seq_len
@@ -595,7 +595,7 @@ def _gemma3_text_demo_device_params():
             True,  # enable_trace
         ),
         (  # DP-8-b1 - single user, data-parallel=8, small prompt
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/ttt_compat/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             1024,  # max_seq_len
@@ -612,7 +612,7 @@ def _gemma3_text_demo_device_params():
             True,  # enable_trace
         ),
         (  # DP-4-b32 - 32 users, data-parallel=4, small prompt
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/ttt_compat/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             1024,  # max_seq_len
@@ -629,7 +629,7 @@ def _gemma3_text_demo_device_params():
             True,  # enable_trace
         ),
         (  # ci-b1-DP-4 [CI-Only] - single user, data-parallel=4, small prompt
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/ttt_compat/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             8192,  # max_seq_len
@@ -646,7 +646,7 @@ def _gemma3_text_demo_device_params():
             True,  # enable_trace
         ),
         (  # ci-b1-DP-8 [CI-Only] - single user, data-parallel=8, small prompt
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/ttt_compat/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             8192,  # max_seq_len
@@ -663,7 +663,7 @@ def _gemma3_text_demo_device_params():
             True,  # enable_trace
         ),
         (  # ci-b1-DP-16 [CI-Only] - single user, data-parallel=16, small prompt
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/ttt_compat/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             8192,  # max_seq_len
@@ -680,7 +680,7 @@ def _gemma3_text_demo_device_params():
             True,  # enable_trace
         ),
         (  # ci-b1-DP-32 [CI-Only] - single user, data-parallel=32, small prompt
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/ttt_compat/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             8192,  # max_seq_len
@@ -697,7 +697,7 @@ def _gemma3_text_demo_device_params():
             True,  # enable_trace
         ),
         (  # ci-stress-1 [CI-only] stress test - Runs a short prefill (128) and loops the same iteration over 50000 times
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/ttt_compat/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -714,7 +714,7 @@ def _gemma3_text_demo_device_params():
             True,  # enable_trace
         ),
         (  # CI Batch-1 run - Measures token matching accuracy of a single user over 500 iterations
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/ttt_compat/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             False,  # instruct mode
             1,  # repeat_batches
             1024,  # max_seq_len
@@ -733,14 +733,14 @@ def _gemma3_text_demo_device_params():
         # Seqlen sweep: 1k-128k context lengths, one step per seqlen
         (
             [
-                "models/tt_transformers/demo/sample_prompts/input_data_long_1k.json",
-                "models/tt_transformers/demo/sample_prompts/input_data_long_2k.json",
-                "models/tt_transformers/demo/sample_prompts/input_data_long_4k.json",
-                "models/tt_transformers/demo/sample_prompts/input_data_long_8k.json",
-                "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",
-                "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",
-                "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",
-                "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",
+                "models/ttt_compat/demo/sample_prompts/input_data_long_1k.json",
+                "models/ttt_compat/demo/sample_prompts/input_data_long_2k.json",
+                "models/ttt_compat/demo/sample_prompts/input_data_long_4k.json",
+                "models/ttt_compat/demo/sample_prompts/input_data_long_8k.json",
+                "models/ttt_compat/demo/sample_prompts/input_data_long_16k.json",
+                "models/ttt_compat/demo/sample_prompts/input_data_long_32k.json",
+                "models/ttt_compat/demo/sample_prompts/input_data_long_64k.json",
+                "models/ttt_compat/demo/sample_prompts/input_data_long_128k.json",
             ],  # input_prompts: list of 8 files, one per sweep step
             True,  # instruct mode
             8,  # repeat_batches (one per seqlen step)
@@ -946,7 +946,7 @@ def test_demo_text(
     if print_to_file:
         # Creat batch output file
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        output_directory = "models/tt_transformers/demo/output"
+        output_directory = "models/ttt_compat/demo/output"
         os.makedirs(output_directory, exist_ok=True)
         os.chmod(output_directory, 0o755)
         output_filename = f"{output_directory}/llama_text_demo_output_{timestamp}.txt"

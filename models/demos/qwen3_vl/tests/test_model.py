@@ -12,7 +12,7 @@ from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.qwen3_vl.reference.functional import qwen3_vision_transformer_preprocess
 from models.demos.qwen3_vl.tt.model import VisionTransformer
 from models.demos.qwen3_vl.tt.model_config import VisionModelArgs
-from models.tt_transformers.tt.load_checkpoints import (
+from models.ttt_compat.tt.load_checkpoints import (
     convert_hf_to_meta,
     convert_rope_style_hf_to_meta,
     standardize_hf_keys_multimodal,

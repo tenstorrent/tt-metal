@@ -9,7 +9,7 @@ import ttnn
 from models.common.model_capabilities import ModelCapabilitiesMixin
 from models.common.warmup import WarmupForwardMixin
 from models.demos.qwen25_vl.tt.common import get_block_size, get_max_prefill_chunk_size, num_blocks_in_seq
-from models.tt_transformers.tt.generator import Generator as TTTGenerator
+from models.ttt_compat.tt.generator import Generator as TTTGenerator
 
 
 class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):

@@ -31,7 +31,7 @@ from models.demos.gemma4.utils.general_utils import cast_host_for_ttnn, get_cach
 from models.demos.gemma4.utils.substate import substate
 
 # Tracy signpost headers — paired begin/end with the same name. The
-# ``models/tt_transformers/scripts/op_perf_results.py --signpost <NAME>``
+# ``models/ttt_compat/scripts/op_perf_results.py --signpost <NAME>``
 # tool consumes these to filter the op CSV to a single region. Targets
 # from issue #44953: lm_head + sampling ≤ 10% of decode step time and
 # sampling alone < 5%. On-device sampling itself runs in the
@@ -552,7 +552,7 @@ class Gemma4Model:
                 # Requires a real TT_CCL (semaphores for force-argmax
                 # all_gather_async) — passing tt_ccl=None made force-argmax
                 # unusable, which is why it was previously forced off.
-                from models.tt_transformers.tt.ccl import TT_CCL
+                from models.ttt_compat.tt.ccl import TT_CCL
 
                 if ccl_manager is not None:
                     sampling_args.model_config["SAMPLING_AG_CONFIG"] = {
@@ -1596,7 +1596,7 @@ class Gemma4Model:
         for per-layer inputs.
 
         Returns a 6-tuple matching
-        ``models/tt_transformers/tt/model.py:prepare_inputs_prefill``:
+        ``models/ttt_compat/tt/model.py:prepare_inputs_prefill``:
         ``(tt_input, None, None, tt_page_table, tt_chunk_page_table,
         tt_chunk_start_idx)``. ``tt_input`` is host-staged token IDs when
         ``trace_enabled`` (so the trace owns the embed step) and tile-laid
@@ -2069,7 +2069,7 @@ class Gemma4Model:
 
     def prepare_inputs_decode(self, tokens, current_pos, page_table=None):
         """Wrapper: prepare_decode_inputs_host + copy to device."""
-        from models.tt_transformers.tt.common import copy_host_to_device
+        from models.ttt_compat.tt.common import copy_host_to_device
 
         host_inputs = self.prepare_decode_inputs_host(tokens, current_pos, page_table)
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)

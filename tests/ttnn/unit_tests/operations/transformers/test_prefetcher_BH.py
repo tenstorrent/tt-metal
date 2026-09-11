@@ -4,8 +4,8 @@
 
 """
 Unit tests for Prefetcher with ring matmul on Blackhole.
-These tests use the Prefetcher class from models/tt_transformers/tt/prefetcher.py
-and the prefetcher matmul/memory configs from models/tt_transformers/tt/model_config.py.
+These tests use the Prefetcher class from models/ttt_compat/tt/prefetcher.py
+and the prefetcher matmul/memory configs from models/ttt_compat/tt/model_config.py.
 
 The test runs all 5 matmuls: QKV, WO, FF1, FF3, FF2 for X number of layers.
 Weights are tensor-parallelized across devices:
@@ -23,12 +23,12 @@ import ttnn
 from loguru import logger
 
 from models.common.utility_functions import is_blackhole
-from models.tt_transformers.tt.prefetcher import (
+from models.ttt_compat.tt.prefetcher import (
     Prefetcher,
     VERIFIED_MODEL_CONFIGS,
     is_prefetcher_supported,
 )
-from models.tt_transformers.tt.common import Mode
+from models.ttt_compat.tt.common import Mode
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.ttnn.unit_tests.operations.prefetcher_common import (
     bank_receivers_contiguous,

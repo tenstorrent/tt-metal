@@ -12,21 +12,12 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.multimodal.gemma3.tt.load_checkpoints import convert_vision_hf_to_meta, convert_vision_meta_to_hf
-from models.tt_transformers.tt.common import (
-    Mode,
-    calculate_prefill_warmup_seq_lens,
-    cap_seq_lens_to_max_prefill_chunk_size,
-)
-from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, convert_meta_to_hf, standardize_hf_keys
-from models.tt_transformers.tt.model_config import (
-    HfAttentionWrapper,
-    HfDecoderWrapper,
-    HfModelWrapper,
-    MathFidelitySetting,
-)
-from models.tt_transformers.tt.model_config import ModelArgs as TTModelArgs
-from models.tt_transformers.tt.model_config import ModelOptimizations, OpGroup
-from models.tt_transformers.tt.prefetcher import Prefetcher
+from models.ttt_compat.tt.common import Mode, calculate_prefill_warmup_seq_lens, cap_seq_lens_to_max_prefill_chunk_size
+from models.ttt_compat.tt.load_checkpoints import convert_hf_to_meta, convert_meta_to_hf, standardize_hf_keys
+from models.ttt_compat.tt.model_config import HfAttentionWrapper, HfDecoderWrapper, HfModelWrapper, MathFidelitySetting
+from models.ttt_compat.tt.model_config import ModelArgs as TTModelArgs
+from models.ttt_compat.tt.model_config import ModelOptimizations, OpGroup
+from models.ttt_compat.tt.prefetcher import Prefetcher
 
 # file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"

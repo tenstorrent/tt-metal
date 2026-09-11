@@ -6,7 +6,7 @@ Host-side HF weight layout helpers for Mistral-7B-Instruct-v0.3 (TTTv2 port).
 
 Q/K linear weights use HuggingFace head layout; TTNN RoPE expects Meta layout.
 This duplicates the small permute helpers from ``load_checkpoints.reverse_permute``
-without importing ``models/tt_transformers``.
+without importing ``models/ttt_compat``.
 
 Mistral 7B v0.3 has no QKV bias and no Q/K norm — those Qwen-only branches are
 intentionally absent here.

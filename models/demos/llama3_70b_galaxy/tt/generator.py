@@ -18,7 +18,7 @@ from models.common.llama_models import (
 from models.common.sampling import SamplingParams, broadcast_sampling_params, format_sampling_params
 from models.common.warmup import WarmupForwardMixin
 from models.demos.llama3_70b_galaxy.tt.model_config import SDPA_CHUNK_ALIGN
-from models.tt_transformers.tt.common import (
+from models.ttt_compat.tt.common import (
     InterleavedTextMedia,
     copy_host_to_device,
     get_block_size,

@@ -20,7 +20,7 @@ pytestmark = [run_for_blackhole(), pytest.mark.parametrize("device_params", DEVI
 
 
 def test_embedding_pcc(device, request):
-    from models.tt_transformers.tt.embedding import Embedding
+    from models.ttt_compat.tt.embedding import Embedding
 
     args = Qwen36ModelArgs(mesh_device=device, max_batch_size=1, max_seq_len=2048)
     args.dummy_weights = True  # random table below; lets Embedding skip the weight cache path

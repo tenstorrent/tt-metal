@@ -10,7 +10,7 @@ load_state_dict/weight_cache_path override the base meta-key (wq/wk/wv) scheme.
 import os
 from pathlib import Path
 
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.ttt_compat.tt.model_config import ModelArgs
 
 # l1_small_size the GDN prefill depthwise ttnn.conv1d requires.
 GDN_CONV1D_L1_SMALL_SIZE = 24576

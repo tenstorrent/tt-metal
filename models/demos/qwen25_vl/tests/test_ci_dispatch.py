@@ -6,7 +6,7 @@ import os
 import pytest
 from loguru import logger
 
-from models.tt_transformers.tt.common import get_hf_tt_cache_path
+from models.ttt_compat.tt.common import get_hf_tt_cache_path
 
 
 # This test will run all the nightly fast dispatch tests for all supported TTT models in CI [N150 / N300 only]

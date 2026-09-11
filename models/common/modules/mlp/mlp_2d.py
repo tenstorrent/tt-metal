@@ -504,7 +504,7 @@ class MLP2D(LightweightModule):
 
         import torch
 
-        from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
+        from models.ttt_compat.tt.model_config import OpGroup, TensorGroup
 
         # Get model_config for overrides
         model_config = args.get_model_config()

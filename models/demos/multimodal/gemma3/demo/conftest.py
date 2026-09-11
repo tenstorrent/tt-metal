@@ -4,7 +4,7 @@
 import argparse
 import json
 
-from models.tt_transformers.tt.model_config import parse_optimizations
+from models.ttt_compat.tt.model_config import parse_optimizations
 
 
 def _cli_bool(value):

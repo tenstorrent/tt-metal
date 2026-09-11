@@ -19,7 +19,7 @@ which prefetcher is used:
   `ttnn.dram_prefetcher(num_layers=N+1)` before the trace.
 
 Both push N+1 layers (1 warmup + N traced); both traces contain only N matmul
-launches. Sender/receiver layout from `models/tt_transformers/tt/prefetcher/prefetcher_config.yaml`
+launches. Sender/receiver layout from `models/ttt_compat/tt/prefetcher/prefetcher_config.yaml`
 (production col-0/col-7 senders, scattered receivers); matmul pinned to receivers
 via `sub_device_id`.
 
@@ -288,7 +288,7 @@ def test_bench_dram_core_repeats(device, op_name, shape):
 
     # Production scattered receiver layout (matches test_bench_workercore_repeats) so the
     # matmul receiver/in0-gather NoC paths are identical between the two paths.
-    from models.tt_transformers.tt.prefetcher import generate_sender_receiver_mapping, ARCH_CONFIG
+    from models.ttt_compat.tt.prefetcher import generate_sender_receiver_mapping, ARCH_CONFIG
 
     bh_cfg = ARCH_CONFIG["blackhole"]
     raw_mapping = generate_sender_receiver_mapping(num_receivers_per_sender=num_receivers_per_bank)
@@ -530,7 +530,7 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
 
     # Production scattered receiver layout (identical to the K-row-major bench) so the
     # matmul receiver/in0-gather NoC paths match exactly.
-    from models.tt_transformers.tt.prefetcher import generate_sender_receiver_mapping, ARCH_CONFIG
+    from models.ttt_compat.tt.prefetcher import generate_sender_receiver_mapping, ARCH_CONFIG
 
     bh_cfg = ARCH_CONFIG["blackhole"]
     raw_mapping = generate_sender_receiver_mapping(num_receivers_per_sender=num_receivers_per_bank)
@@ -729,7 +729,7 @@ def test_bench_workercore_repeats(device, op_name, shape):
 
     Parametrized over the same Llama shapes as the DRAM-core test. FF2 skipped because
     it exceeds the worker prefetcher's L1 budget (matches production behavior — the
-    full-model `Prefetcher` class in models/tt_transformers/tt/prefetcher.py routes FF2
+    full-model `Prefetcher` class in models/ttt_compat/tt/prefetcher.py routes FF2
     to a DRAM-sharded matmul instead of the prefetcher path).
 
     Uses dispatch_core_axis=COL like the canonical `test_prefetcher_BH` to keep the
@@ -747,11 +747,11 @@ def test_bench_workercore_repeats(device, op_name, shape):
     ring_rows = _RING_ROWS
 
     # Use the production sender/receiver layout from
-    # models/tt_transformers/tt/prefetcher/prefetcher_config.yaml. The naive row-major
+    # models/ttt_compat/tt/prefetcher/prefetcher_config.yaml. The naive row-major
     # grid in the original bench collides with dispatch cores at physical workers
     # 14-2/14-3 on Blackhole P150; the production layout avoids them by placing
     # senders on cols 0 (left) and 7 (right) with bank-ordered rows.
-    from models.tt_transformers.tt.prefetcher import generate_sender_receiver_mapping, ARCH_CONFIG
+    from models.ttt_compat.tt.prefetcher import generate_sender_receiver_mapping, ARCH_CONFIG
 
     bh_cfg = ARCH_CONFIG["blackhole"]
     raw_mapping = generate_sender_receiver_mapping(num_receivers_per_sender=_NUM_RECV_PER_BANK)

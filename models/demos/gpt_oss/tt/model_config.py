@@ -18,12 +18,12 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
-from models.tt_transformers.tt.common import (
+from models.ttt_compat.tt.common import (
     calculate_prefill_warmup_seq_lens,
     cap_seq_lens_to_max_prefill_chunk_size,
     get_base_model_name,
 )
-from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
+from models.ttt_compat.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 
 
 class ModelArgs:

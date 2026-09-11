@@ -4,11 +4,11 @@
 """End-to-end LFM2.5-VL model: hybrid (ShortConv/attention) text backbone + SigLIP2 vision
 tower + multi-modal projector, with early-fusion image embedding (à la Gemma3).
 
-``TtLfm25VlModel`` subclasses ``models.tt_transformers.tt.model.Transformer`` and reuses
+``TtLfm25VlModel`` subclasses ``models.ttt_compat.tt.model.Transformer`` and reuses
 its embedding / RoPE / KV-cache / sampling machinery unchanged. The only thing that
 differs from a plain text model is which class builds each decoder layer: for the
 duration of ``Transformer.__init__`` (and only then) the module-level ``TransformerBlock``
-symbol inside ``models.tt_transformers.tt.model`` is monkeypatched to
+symbol inside ``models.ttt_compat.tt.model`` is monkeypatched to
 ``LfmDecoderLayer``, which internally decides -- per layer, from ``args.layer_types`` --
 whether to build a real ``TransformerBlock`` (full attention layers) or the custom
 ``ShortConv`` path (conv layers). This lets ``Transformer.__init__``'s existing
@@ -20,12 +20,12 @@ from __future__ import annotations
 
 import torch
 
-import models.tt_transformers.tt.model as tt_model_module
+import models.ttt_compat.tt.model as tt_model_module
 import ttnn
 from models.demos.multimodal.lfm25_vl.tt.decoder import LfmDecoderLayer
 from models.demos.multimodal.lfm25_vl.tt.vision_model import TtLfm25VlVisionModel
-from models.tt_transformers.tt.generator import Generator
-from models.tt_transformers.tt.model import Transformer
+from models.ttt_compat.tt.generator import Generator
+from models.ttt_compat.tt.model import Transformer
 
 
 class TtLfm25VlModel(Transformer):

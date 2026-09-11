@@ -6,7 +6,7 @@
 Generate a **book-methodology** CPU reference ``.refpt`` for DeepSeek-R1-Distill-Qwen-14B.
 
 Book methodology (identical in spirit to TTTv1
-``models/tt_transformers/tests/generate_reference_outputs.py`` and the committed
+``models/ttt_compat/tests/generate_reference_outputs.py`` and the committed
 Llama/Qwen/Mistral book references): teacher-force the HF model over ground-truth
 tokens from a real corpus (``tale-of-two-cities.txt.bz2``) in a single forward pass
 and record, per position, the model's top-5 predicted tokens for the *next* corpus
@@ -46,7 +46,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 # tale-of-two-cities corpus, shared with the TTTv1 book-reference generator.
-DEFAULT_CORPUS = "models/tt_transformers/tests/tale-of-two-cities.txt.bz2"
+DEFAULT_CORPUS = "models/ttt_compat/tests/tale-of-two-cities.txt.bz2"
 
 
 def _dtype_from_arg(name: str) -> torch.dtype:
@@ -64,7 +64,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--output",
-        default="models/tt_transformers/tests/reference_outputs/DeepSeek-R1-Distill-Qwen-14B.refpt",
+        default="models/ttt_compat/tests/reference_outputs/DeepSeek-R1-Distill-Qwen-14B.refpt",
         help="Output .refpt path (shared reference_outputs dir, same as the sibling book refpts)",
     )
     parser.add_argument("--total-length", type=int, default=1024, help="Number of corpus tokens to score")

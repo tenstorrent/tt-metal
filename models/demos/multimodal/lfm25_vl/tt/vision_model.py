@@ -17,7 +17,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.multimodal.gemma3.tt.gemma_image_transformer import TtGemmaImageTransformer
 from models.demos.multimodal.lfm25_vl.tt.multi_modal_projector import TtLfm2VlMultiModalProjector
 from models.demos.multimodal.lfm25_vl.tt.siglip2_vision_embedding import TtSiglip2VisionEmbeddings
-from models.tt_transformers.tt.multimodal.llama_layernorm import TtLayerNorm
+from models.demos.multimodal.llama_layernorm import TtLayerNorm
 
 
 class TtLfm25VlVisionModel(LightweightModule):

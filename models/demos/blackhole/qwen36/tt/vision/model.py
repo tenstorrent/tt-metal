@@ -9,9 +9,9 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import comp_pcc
 from models.demos.blackhole.qwen36.tt.vision.functional import qwen3_5_vision_transformer_preprocess
-from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import get_rot_transformation_mat
-from models.tt_transformers.tt.load_checkpoints import (
+from models.ttt_compat.tt.ccl import TT_CCL
+from models.ttt_compat.tt.common import get_rot_transformation_mat
+from models.ttt_compat.tt.load_checkpoints import (
     convert_hf_to_meta,
     convert_rope_style_hf_to_meta,
     standardize_hf_keys_multimodal,
@@ -228,7 +228,7 @@ class DropInVisionTransformer(torch.nn.Module):
             # 1. Calculate total unpadded sequence length
             grid_thw = grid_thw.unsqueeze(0)
             unpadded_seq_len = grid_thw.prod(dim=1).sum().item()
-            # Calculate padded sequence length (divisible by 2048) required by models/tt_transformers/tt/attention.py::forward_prefill
+            # Calculate padded sequence length (divisible by 2048) required by models/ttt_compat/tt/attention.py::forward_prefill
             seq_len = ((unpadded_seq_len // 2048) + 1) * 2048
 
             # 2. Use preprocessing function from reference/functional to get indices and embeddings

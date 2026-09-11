@@ -279,7 +279,7 @@ def test_target_generator_capabilities_advertise_exact_device_top_k(relative_pat
 @pytest.mark.parametrize(
     "relative_path",
     [
-        "models/tt_transformers/tt/generator_vllm.py",
+        "models/ttt_compat/tt/generator_vllm.py",
         "models/demos/llama3_70b_galaxy/tt/generator_vllm.py",
     ],
 )

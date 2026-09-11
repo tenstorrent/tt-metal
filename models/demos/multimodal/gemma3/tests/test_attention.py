@@ -10,11 +10,11 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.multimodal.gemma3.tt.model_config import ModelArgs as Gemma3ModelArgs
-from models.tt_transformers.tests.test_utils import get_ref_model_dype
-from models.tt_transformers.tt.attention import Attention
-from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import Mode, PagedAttentionConfig, precompute_freqs
-from models.tt_transformers.tt.rope import RotarySetup
+from models.ttt_compat.tests.test_utils import get_ref_model_dype
+from models.ttt_compat.tt.attention import Attention
+from models.ttt_compat.tt.ccl import TT_CCL
+from models.ttt_compat.tt.common import Mode, PagedAttentionConfig, precompute_freqs
+from models.ttt_compat.tt.rope import RotarySetup
 
 
 @torch.no_grad()

@@ -746,8 +746,8 @@ def test_rope_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevice)
     Test that RotarySetup1D.from_model_args produces numerically identical
     rotation matrices compared to TTTv1 RotarySetup built with the same args.
     """
-    from models.tt_transformers.tt.model_config import ModelArgs
-    from models.tt_transformers.tt.rope import RotarySetup as TTTv1RotarySetup
+    from models.ttt_compat.tt.model_config import ModelArgs
+    from models.ttt_compat.tt.rope import RotarySetup as TTTv1RotarySetup
 
     model_args = ModelArgs(ttnn_mesh_device, max_batch_size=1, max_seq_len=128, cache_hf=True)
     model_args.n_layers = 1
@@ -763,7 +763,7 @@ def test_rope_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDevice)
     )
 
     # Build TTTv1 reference with same params
-    from models.tt_transformers.tt.common import rope_scaling_model_factory
+    from models.ttt_compat.tt.common import rope_scaling_model_factory
 
     rope_scaling = None
     if hasattr(model_args, "rope_scaling_params") and model_args.rope_scaling_params is not None:

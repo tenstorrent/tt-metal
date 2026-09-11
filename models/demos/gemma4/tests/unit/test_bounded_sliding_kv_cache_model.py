@@ -280,7 +280,7 @@ def test_attention_decode_bounded_vs_unbounded_parity(cache_len, mesh_device, re
     from models.demos.gemma4.config import MeshConfig, ModeConfig
     from models.demos.gemma4.tt.attention import Gemma4Attention, Gemma4AttentionConfig
     from models.demos.gemma4.tt.attention.kv_cache import init_kv_cache
-    from models.tt_transformers.tt.common import PagedAttentionConfig
+    from models.ttt_compat.tt.common import PagedAttentionConfig
 
     from ..test_factory import TestFactory, compare_tensors, get_pcc_threshold
 

@@ -214,7 +214,7 @@ def _qwen_wh_attn_hifi4_kernel() -> ttnn.WormholeComputeKernelConfig:
 
     Matches the TTTv1 ``ModelArgs.compute_kernel_config_hifi4`` used by both
     ``ModelOptimizations.performance`` and ``ModelOptimizations.accuracy`` for
-    Qwen2-7B (see ``models/tt_transformers/tt/model_config.py``).
+    Qwen2-7B (see ``models/ttt_compat/tt/model_config.py``).
     The TTTv2 ``Attention1D`` defaults are HiFi2 with fp16 accumulation; that
     silently downgrades attention prefill QKV/WO and decode QKV/SDPA/WO matmul
     precision for this model, producing a broad per-layer divergence vs HF.

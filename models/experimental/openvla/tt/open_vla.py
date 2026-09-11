@@ -40,8 +40,8 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.experimental.openvla.tt import tt_optimized_openvla_vision
-from models.tt_transformers.demo.simple_text_demo import create_tt_page_table
-from models.tt_transformers.tt.common import (
+from models.ttt_compat.demo.simple_text_demo import create_tt_page_table
+from models.ttt_compat.tt.common import (
     PagedAttentionConfig,
     get_block_size,
     get_padded_prefill_len,
@@ -49,9 +49,9 @@ from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
     sample_host,
 )
-from models.tt_transformers.tt.generator import Generator, create_submeshes
-from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import (
+from models.ttt_compat.tt.generator import Generator, create_submeshes
+from models.ttt_compat.tt.model import Transformer
+from models.ttt_compat.tt.model_config import (
     DecodersPrecision,
     MathFidelitySetting,
     ModelArgs,

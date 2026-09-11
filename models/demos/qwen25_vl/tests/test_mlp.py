@@ -12,7 +12,7 @@ import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
 from models.demos.qwen25_vl.tt.vision_mlp import MLP
-from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta
+from models.ttt_compat.tt.load_checkpoints import convert_hf_to_meta
 
 
 @torch.no_grad()
