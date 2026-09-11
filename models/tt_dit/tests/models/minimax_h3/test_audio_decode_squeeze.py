@@ -65,7 +65,11 @@ RECIPES = {
     # stacked split (same arithmetic as full, one conv3d over 3x input channels): set at construction
     "stack": {"build": "stack"},
     "stack_pack": {"build": "stack", "pack": {5: 2, 6: 4}},
+    # packed resamplers (fixed kaiser taps) with a cheaper split than the convs
+    "full_pack_rsact": {"pack": {5: 2, 6: 4}, "resamplers": "act"},
+    "full_pack_rsoff": {"pack": {5: 2, 6: 4}, "resamplers": "off"},
 }
+RESAMPLERS_KEY = "resamplers"
 PACK_KEY = "pack"
 BUILD_KEY = "build"  # split_mode passed to the constructor (needed when it changes the weight shapes)
 
@@ -85,13 +89,27 @@ def _conv_modules_by_band(decoder):
     yield "post", voc.conv_post
 
 
+def _packed_resamplers(decoder):
+    for block in decoder.decoder.resblocks:
+        for act in list(block.acts1) + list(block.acts2):
+            for name in ("up", "down"):
+                if hasattr(act, name):
+                    yield getattr(act, name)
+
+
 def apply_recipe(decoder, recipe: dict) -> dict:
     """Set ``split_mode`` per conv after construction (forward reads it per call; the unused residual is harmless)."""
     counts = {}
+    if RESAMPLERS_KEY in recipe:
+        n = 0
+        for conv in _packed_resamplers(decoder):
+            conv.split_mode = recipe[RESAMPLERS_KEY]
+            n += 1
+        counts[f"resamplers_{recipe[RESAMPLERS_KEY]}"] = n
     if PACK_KEY in recipe:
         counts["pack"] = dict(recipe[PACK_KEY])
-    if BUILD_KEY in recipe:
-        recipe = {k: v for k, v in recipe.items() if k not in (PACK_KEY, BUILD_KEY)}
+    if BUILD_KEY in recipe or RESAMPLERS_KEY in recipe:
+        recipe = {k: v for k, v in recipe.items() if k not in (PACK_KEY, BUILD_KEY, RESAMPLERS_KEY)}
     for band, conv in _conv_modules_by_band(decoder):
         mode = None
         if "all" in recipe:
