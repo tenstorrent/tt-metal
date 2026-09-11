@@ -304,18 +304,20 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str, tp_size: in
         # reads back the single-token logits (no recompute over the prior context).
         decode_tokens = 0
         decode_time = 0.0
-        for step in range(1, max_new_tokens):
-            if next_id == eos_id:
+        n_ahead = min(1024, max_new_tokens, max(0, max_seq - (start_pos + real_len)))
+        gen_positions = [start_pos + real_len + step - 1 for step in range(1, n_ahead + 1)]
+        if traced and gen_positions:
+            # Issue every generation execute_trace on the replay thread before any H2D
+            # packet, so the device is already waiting on recv when we start feeding.
+            model.replay_traced_ahead(gen_positions)
+        for step, pos in enumerate(gen_positions, start=1):
+            if not traced and next_id == eos_id:
                 logger.info("hit EOS; stopping")
-                break
-            pos = start_pos + real_len + step - 1  # absolute position of the token being fed back
-            if pos >= max_seq:  # ran past the precomputed RoPE span
-                logger.warning(f"hit max RoPE length {max_seq}; stopping at {len(generated)} tokens")
                 break
             t0 = time.perf_counter()
             if traced:
-                # [1, 1, vocab], lm_head in-trace; the socket read is the device sync
-                logits = model.decode_traced(next_id, pos).reshape(1, -1).float()
+                model.write_step_packet(next_id, pos)
+                logits = model.read_decoded_output().reshape(1, -1).float()
             else:
                 hidden = model.decode(next_id, pos, rope)  # [1, 1, D]
                 with _region("LM_HEAD"):
