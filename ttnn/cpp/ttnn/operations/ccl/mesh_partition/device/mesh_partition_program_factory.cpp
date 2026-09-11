@@ -133,27 +133,42 @@ MeshPartitionDeviceOperation::MeshPartition::create_at(
         },
         program_factory);
 
-    return {std::move(program), shared_variables_t{.slice_program_factory = program_factory}};
+    const bool common_addresses = std::holds_alternative<ttnn::prim::SliceTileProgramFactory>(program_factory) ||
+                                  std::holds_alternative<ttnn::prim::SliceRmProgramFactory>(program_factory);
+    return {
+        std::move(program),
+        shared_variables_t{
+            .slice_program_factory = program_factory,
+            .slice_attributes = std::move(slice_attrs),
+            .address_kernels =
+                common_addresses ? std::make_optional(shared_variables_t::AddressKernels{0, 1}) : std::nullopt}};
 }
 
 void MeshPartitionDeviceOperation::MeshPartition::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
+    // The default cache key includes partition attributes, tensor specs and target coordinates.
+    // Each coordinate has its own Program, unlike standalone Slice's divergent partitions (#52651).
+    // Its work split remains fixed; distributed operands share an address across coordinates.
+    const uint32_t input_address = tensor_args.input_tensor.buffer()->address();
+    const uint32_t output_address = tensor_return_value.buffer()->address();
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
-        auto& shared_variables = cached_workload.shared_variables.at(range);
-
-        // Get the mesh coordinate from the range (assuming single device per range)
-        auto mesh_coordinate = *range.begin();
-        auto [slice_attrs, slice_tensor_args] =
-            compute_slice_parameters(operation_attributes, tensor_args, mesh_coordinate);
-
-        // Re-apply this coord's per-dispatch state to the cached Program, through the same patch the
-        // slice op uses -- addresses only. CB total_size/page_size are not re-applied on a hit, so any
-        // sizing that varies across calls must be in compute_program_hash().
-        ttnn::prim::patch_slice_program_addresses(
-            program, shared_variables.slice_program_factory, slice_attrs, slice_tensor_args, tensor_return_value);
+        const auto& shared = cached_workload.shared_variables.at(range);
+        if (shared.address_kernels) {
+            // Fetch live storage on every hit: enqueue and trace capture can retarget it.
+            GetCommonRuntimeArgs(program, shared.address_kernels->reader).at(0) = input_address;
+            GetCommonRuntimeArgs(program, shared.address_kernels->writer).at(0) = output_address;
+        } else {
+            const SliceOp::tensor_args_t slice_tensor_args{
+                .input = tensor_args.input_tensor,
+                .start_tensor = std::nullopt,
+                .end_tensor = std::nullopt,
+                .preallocated_output = std::nullopt};
+            ttnn::prim::patch_slice_program_addresses(
+                program, shared.slice_program_factory, shared.slice_attributes, slice_tensor_args, tensor_return_value);
+        }
     }
 }
 

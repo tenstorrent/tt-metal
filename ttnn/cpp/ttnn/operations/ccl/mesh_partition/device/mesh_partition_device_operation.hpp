@@ -47,6 +47,12 @@ struct MeshPartitionDeviceOperation {
         // slot layout that factory baked (see patch_slice_program_addresses).
         struct shared_variables_t {
             prim::SliceDeviceOperation::program_factory_t slice_program_factory;
+            prim::SliceDeviceOperation::operation_attributes_t slice_attributes;
+            struct AddressKernels {
+                tt::tt_metal::KernelHandle reader;
+                tt::tt_metal::KernelHandle writer;
+            };
+            std::optional<AddressKernels> address_kernels;
         };
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 

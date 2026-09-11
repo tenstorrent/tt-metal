@@ -12,7 +12,7 @@
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
+    const uint32_t dst_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t num_pages = get_arg_val<uint32_t>(1);
     const uint32_t start_id = get_arg_val<uint32_t>(2);
 

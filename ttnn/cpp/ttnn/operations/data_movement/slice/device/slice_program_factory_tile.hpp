@@ -27,7 +27,8 @@ struct SliceTileProgramFactory {
 };
 
 // Per-core scalars are hash-excluded; a divergent-partition cache hit leaves them stale -> all-zero output (#52651).
-std::vector<tt::tt_metal::DynamicRuntimeArg> slice_tile_dynamic_args(
+void patch_slice_tile_runtime_args(
+    tt::tt_metal::Program& program,
     const SliceParams& args,
     const SliceInputs& tensor_args,
     const Tensor& output,

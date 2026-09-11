@@ -10,7 +10,7 @@
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
+    uint32_t dst_addr = get_common_arg_val<uint32_t>(0);
     uint32_t stick_size = get_arg_val<uint32_t>(1);
     uint32_t stick_size_offset = get_arg_val<uint32_t>(2);
     uint32_t num_sticks_per_core = get_arg_val<uint32_t>(3);
