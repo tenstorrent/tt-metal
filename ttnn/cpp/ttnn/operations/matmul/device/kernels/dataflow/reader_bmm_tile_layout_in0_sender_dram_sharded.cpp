@@ -51,20 +51,16 @@ void kernel_main() {
     constexpr uint32_t sender_noc_x_base = 0;
     constexpr uint32_t sender_noc_y_base = num_storage_cores;
 
-    tt_l1_ptr uint32_t* in0_mcast_sender_noc_x = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(3));
-    tt_l1_ptr uint32_t* in0_mcast_sender_noc_y =
-        reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(3 + num_storage_cores));
-
     const uint32_t sender_block_id = sender_id * num_blocks_per_shard;
 
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(dfb::in0);
     constexpr DataFormat in0_data_format = get_dataformat(dfb::in0);
 
     const Noc noc;
-    DataflowBuffer dfb_in0(dfb_id_in0);
-    const DataflowBuffer dfb_in2(dfb_id_in2);
-    Semaphore<> sender_sem(get_compile_time_arg_val(4));
-    Semaphore<> receiver_sem(get_compile_time_arg_val(5));
+    DataflowBuffer dfb_in0(dfb::in0);
+    const DataflowBuffer dfb_in2(dfb::in0_sharded);  // Sharded in0
+    Semaphore sender_sem(sem::in0_mcast_sender);
+    Semaphore receiver_sem(sem::in0_mcast_receiver);
 
     uint32_t l1_write_addr_in0;
 

@@ -25,14 +25,11 @@ void kernel_main() {
 #ifdef FUSE_BIAS
     const uint32_t in3_tensor_addr = TensorAccessor(tensor::bias).get_bank_base_address();
 #endif
-    const uint32_t dram_bank_id = get_arg_val<uint32_t>(3);
-    const uint32_t vc = get_arg_val<uint32_t>(4);
-    const uint32_t dram_reader_index = get_arg_val<uint32_t>(5);
-    const uint32_t num_shard_to_write_back = get_arg_val<uint32_t>(6);
-    const uint32_t reshard_tensor_start_offset = get_arg_val<uint32_t>(7);
-    tt_l1_ptr uint32_t* per_core_N_reshard_bytes = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(8));
-    tt_l1_ptr uint32_t* in0_mcast_sender_noc_x = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(9));
-    tt_l1_ptr uint32_t* in0_mcast_sender_noc_y = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(10));
+    const uint32_t dram_bank_id = get_arg(args::dram_bank_id);
+    const uint32_t vc = get_arg(args::vc);
+    const uint32_t dram_reader_index = get_arg(args::dram_reader_index);
+    const uint32_t num_shard_to_write_back = get_arg(args::num_shard_to_write_back);
+    const uint32_t reshard_tensor_start_offset = get_arg(args::reshard_tensor_start_offset);
 
     // COMPILE TIME ARGS
     constexpr auto in1_page_size = get_arg(args::in1_page_size);
@@ -69,9 +66,9 @@ void kernel_main() {
 #endif
 
     const Noc noc;
-    DataflowBuffer dfb_in1(dfb_id_in1);
-    DataflowBuffer dfb_out(dfb_id_out);
-    const DataflowBuffer dfb_out_reshard(dfb_id_out_reshard);
+    DataflowBuffer dfb_in1(dfb::in1);
+    DataflowBuffer dfb_out(dfb::out);
+    const DataflowBuffer dfb_out_reshard(dfb::out_reshard);
 #ifdef FUSE_BIAS
     DataflowBuffer dfb_in3(dfb::bias);
 #endif
