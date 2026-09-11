@@ -90,21 +90,15 @@ latency. The central accuracy target is the research baseline of 80.47%, with
 7% relative tolerance. This small fixed subset is a regression check, not a
 full IFEval evaluation.
 
-A prior QB2 source-build run of the decoder checks and serving benchmark completed
-in 6 minutes 33 seconds:
-83.47% mean IFEval accuracy, 131.24 decode tokens/s/user, and identical text across
-both passes. The server's Python dependencies were already installed; the
-scorer environment and model kernel cache were fresh. These are measurements of
-this fixed workload, not guarantees for other request lengths or concurrency.
-
-The weekly command now selects the whole model test directory, including the
+The weekly command selects the whole model test directory, including the
 device token-history wrap test and host regressions for generation readback and
-hardware admission. A [CI run at `1970d4e25e5`](https://github.com/tenstorrent/tt-metal/actions/runs/34480800119)
-passed all 24 model tests in 82.75 seconds, then completed 54 of 56 serving
-requests before reaching its 10-minute limit. All 26 completed second-pass
-responses matched the first pass. No final accuracy summary was produced.
-The 12-minute budget allows the remaining requests, scoring/reporting, and
-runner variance; the complete command still needs validation within that budget.
+hardware admission. A [QB2 CI run at `2fedec017d3`](https://github.com/tenstorrent/tt-metal/actions/runs/34498805633/job/102965561409)
+passed all 24 model tests and completed all 56 serving requests with identical
+text across both passes. It measured 83.47% mean IFEval accuracy and 131.08 decode
+tokens/s/user. The complete command took 10 minutes 7.55 seconds, within the
+12-minute budget; [test reports, logs, and benchmark data](https://github.com/tenstorrent/tt-metal/actions/runs/34498805633/artifacts/10163972290)
+were published successfully. These measurements cover this fixed workload,
+not other request lengths or concurrency.
 
 The scorer runs in a separate environment to preserve the serving dependency
 set. `tests/report.py` converts its saved summary into the standard tt-metal

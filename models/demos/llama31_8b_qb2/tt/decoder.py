@@ -582,7 +582,9 @@ class LlamaDecoder(LightweightModule):
         normalized = self._norm_input(residual, decode=True, site="mlp")
         normalized = ttnn.to_memory_config(normalized, self.decode_inputs["gate_up"])
         packed = ttnn.to_memory_config(self._decode_linear(normalized, "gate_up"), ttnn.L1_MEMORY_CONFIG)
-        gate, up = packed[:, :, :, :3584], packed[:, :, :, 3584:]
+        # Decode concatenates equal gate/up halves on each TP4 device.
+        gate_width = self.decode_logical_widths["gate_up"] // 2
+        gate, up = packed[:, :, :, :gate_width], packed[:, :, :, gate_width:]
         product = ttnn.mul(
             gate,
             up,
