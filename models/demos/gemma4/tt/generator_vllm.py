@@ -2247,12 +2247,31 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         # allocating/freeing a fresh decoder's buffers (which fragments DRAM).
         # A bucket change (different prompt length band) releases + re-captures.
         dec = self._spec_decoder
-        # Kill switch for the cross-request decoder reuse (GEMMA4_DFLASH_DECODER_REUSE=0
-        # forces a fresh capture per request). Reuse re-points a CACHED decoder at a
-        # new request, so any per-request state it fails to reset leaks into the next
-        # request's drafts -- set this to isolate the reuse path when output looks
-        # contaminated by a previous request.
-        _reuse_ok = os.environ.get("GEMMA4_DFLASH_DECODER_REUSE", "1").lower() in ("1", "true", "yes")
+        # DEFAULT OFF: cross-request decoder reuse still leaks. Reuse re-points a
+        # CACHED decoder at a new request (refresh_page_tables + prefill_ingest +
+        # reseed) instead of capturing a fresh one, and _reset_per_request_state
+        # restores the buffers we know the captured body reads (fc_prev,
+        # commit_pos, merge_idx, and the host mirror). That removed the gross
+        # failure -- a request reasoning about the PREVIOUS request's prompt --
+        # but NOT all of it: some per-request state is still not restored, so a
+        # reused session's first spec step can emit the previous request's tail.
+        #
+        # Measured on an emulated-Loudbox P150x8 31B server, 6 sequential greedy
+        # requests each carrying a unique keyword, ASYNC ON in every arm:
+        #   reuse ON  -> 3/6 contaminated ('BANANA' opening the ELEPHANT
+        #                request, 'ELEPHANT' opening VOLCANO, 'CANO' opening
+        #                SAPPHIRE)
+        #   reuse OFF -> 0/6, and the answers are correct per prompt
+        # This is NOT an async defect: async stays ON in both arms. (Turning
+        # async off instead produces EMPTY outputs after the first request, so
+        # it is not a workaround either.)
+        #
+        # Cost of OFF: one ~2.5 s fused capture per request, on the B=1 spec
+        # (latency) profile only. The conc>1 THROUGHPUT operating point runs the
+        # batched baseline, which holds no spec session, so it is unaffected.
+        # Set GEMMA4_DFLASH_DECODER_REUSE=1 to re-enable while debugging the
+        # remaining un-restored state.
+        _reuse_ok = os.environ.get("GEMMA4_DFLASH_DECODER_REUSE", "0").lower() in ("1", "true", "yes")
         reused = (
             _reuse_ok
             and dec is not None
