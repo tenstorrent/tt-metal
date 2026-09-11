@@ -189,7 +189,7 @@ inline constexpr PacketFormat kStickyProg{
     .type = PP_STICKY_PROG, .words = 1, .kind = Kind::Sticky, .sets = PacketFormat::Sets::Prog, .value_word = 0};
 inline constexpr PacketFormat kStickyProgExt{
     .type = PP_STICKY_PROG_EXT, .words = 2, .kind = Kind::Sticky, .sets = PacketFormat::Sets::Prog, .value_word = 1};
-inline constexpr PacketFormat kClock{.type = PP_CLOCK, .words = 2, .kind = Kind::Clock, .ts_lo = 1};
+inline constexpr PacketFormat kClock{.type = PP_CLOCK, .words = 4, .kind = Kind::Clock, .ts_lo = 1};
 
 // The walk tests types in this order, so the common ones come first.
 inline constexpr std::array<PacketFormat, 9> kFormats = {

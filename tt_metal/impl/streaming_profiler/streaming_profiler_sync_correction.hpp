@@ -5,6 +5,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -13,35 +14,41 @@
 
 namespace tt::tt_metal::streaming_profiler {
 
-// One piece of a chip's time-indexed correction, keyed by HOST TIME: over host-ns [ns_lo, ns_hi]
-// the correction is delta_ns_lo + slope_ns_per_tick * (ticks - tick_lo). The d2d sync publishes one per 1 ms
-// tracker bucket -- the AICLK that actually applied over that millisecond, and for a non-root chip the link onto the
-// root's timeline -- so a Record's host time is its static anchor composed with this term.
-struct SyncSegment {
-    int64_t ns_lo = 0, ns_hi = 0;
-    double delta_ns_lo = 0.0;
-    double slope = 0.0;  // correction ns per host ns
+// One node of a chip's time-indexed correction, keyed by the record's host time BEFORE the correction (its static
+// anchor's placing): the correction is delta_ns there and linear between neighbouring nodes. The d2d sync places a
+// node at every DVFS transition and at each publish, so between nodes the chip's clock ran at one rate.
+struct SyncNode {
+    int64_t host_ns = 0;
+    double delta_ns = 0.0;
 };
 
-// Per-chip published series. Readers (every consumer thread converting a record's time) are lock-free: they load the
-// current snapshot and binary-search it; a publish swaps in a new snapshot. Before any publish, or before a chip's
-// first segment, the correction is 0 and records convert exactly as they did without the d2d sync.
+// Per-chip published series of nodes, strictly increasing in host_ns. Readers (every consumer thread converting a
+// record's time) are lock-free: they load the current snapshot and binary-search it; a publish swaps in a new
+// snapshot. Before any publish the correction is 0 and records convert exactly as they did without the d2d sync;
+// before a chip's first node it is that node's value.
 class SyncCorrections {
 public:
     static constexpr uint32_t kMaxChips = 256;
-    // Beyond the last segment a live sink slightly ahead of the fit extends the last line, but only this far in
-    // ticks (~50 ms at 1.35 GHz); further out the correction holds constant rather than extrapolating a slope.
-    static constexpr int64_t kHoldNs = 50'000'000;  // extend the last segment at most this far past its end (50 ms)
+    // Beyond the last node a live sink slightly ahead of the fit extends the last two nodes' line, but only this far;
+    // further out the correction holds constant rather than extrapolating a slope.
+    static constexpr int64_t kHoldNs = 50'000'000;
 
-    static void publish(uint32_t chip_id, std::vector<SyncSegment> segments);
+    // `nodes` must be strictly increasing in host_ns.
+    static void publish(uint32_t chip_id, std::vector<SyncNode> nodes);
     static void clear(uint32_t chip_id);
     static int64_t lookup_ns(uint32_t chip_id, int64_t host_ns) noexcept;
+    // Both ends of one record from the same snapshot; the end never precedes the start.
+    static void lookup_span_ns(
+        uint32_t chip_id, int64_t start_ns, int64_t end_ns, int64_t& d_start, int64_t& d_end) noexcept;
     // A parallel LOCAL-only series (each chip's own-anchor + local-AICLK term, no cross-chip link). Used only
     // for the Tracy/CSV local-vs-linked plots; Record::host_time uses the linked series above.
-    static void publish_local(uint32_t chip_id, std::vector<SyncSegment> segments);
+    static void publish_local(uint32_t chip_id, std::vector<SyncNode> nodes);
     static int64_t lookup_local_ns(uint32_t chip_id, int64_t host_ns) noexcept;
-    // How many segments a chip currently has published (0 = none).
+    // How many nodes a chip currently has published (0 = none).
     static size_t published(uint32_t chip_id) noexcept;
+    // The host time of the chip's last published linked node; INT64_MIN before any publish. A record behind it
+    // converts against nodes on both sides; ahead of it, against the last two nodes' line extended.
+    static int64_t published_until_ns(uint32_t chip_id) noexcept;
 };
 
 // A named (host ns, value) series a consumer computes once a capture is complete -- the d2d sync's running
@@ -55,6 +62,12 @@ class SyncPlots {
 public:
     static void publish(std::string name, std::vector<SyncPlotPoint> points);
     static std::vector<std::pair<std::string, std::vector<SyncPlotPoint>>> drain();
+    // The computing consumer and the draining sink run on their own threads: the consumer declares its series
+    // pending at attach and complete after its final publish, and a sink drains only once they are complete (or the
+    // wait runs out).
+    static void expect();
+    static void complete();
+    static void wait_complete(std::chrono::milliseconds timeout);
 };
 
 }  // namespace tt::tt_metal::streaming_profiler

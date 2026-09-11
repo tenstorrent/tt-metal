@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
+#include <map>
 #include <bit>
 #include <chrono>
 #include <set>
@@ -58,7 +60,7 @@ constexpr uint32_t kCfgReserve = 8 * 1024;
 constexpr uint32_t kMiscBytes = 1024;  // done(64) + stop(64), with headroom
 constexpr uint32_t kPageSize = kernel_profiler::SPSC_SPAN_PAGE_WORDS * 4;
 constexpr uint32_t kNRisc = kernel_profiler::PROFILER_SPSC_TENSIX_RISC;
-// Idle-eth clock pushers: one socket per idle-eth core. A 2-3 word PP_CLOCK sample every 3 us is well under 1 MB/s,
+// Idle-eth clock pushers: one socket per idle-eth core. A 4-5 word PP_CLOCK sample every 3 us is well under 1 MB/s,
 // so 1 MiB of host FIFO (a single 2 MiB-aligned carve of the host channel) is generous; the relays' budget is
 // untouched.
 constexpr uint32_t kEthFifoBytes = 1u << 20;
@@ -944,6 +946,16 @@ void Devices::plan_link_sync() {
     }
 }
 
+void Devices::release_eth_pushers() {
+    auto& cluster = MetalContext::instance(context_id_).get_cluster();
+    const uint32_t go = 1;
+    for (const DeviceCtx& ctx : devices_) {
+        for (const EthPusher& e : ctx.eth) {
+            cluster.write_core(&go, sizeof(go), tt_cxy_pair(ctx.chip_id, e.virt), eth_ctrl_ + 8);
+        }
+    }
+}
+
 // Launch each planned link sync. Called AFTER the receiver's ingest threads are up: the sync kernels emit their
 // PP_CLOCK(LINK) stamps into the active cores' rings, the idle pushers drain those rings over their sockets, and the
 // receiver empties the FIFOs -- so the pushers never block and the burst completes. Running this during boot()
@@ -951,6 +963,14 @@ void Devices::plan_link_sync() {
 // kernels wedged an eth core (a board reset). A binary that failed to compile is never launched.
 void Devices::run_link_sync() {
     auto& cluster = MetalContext::instance(context_id_).get_cluster();
+    // TT_METAL_STREAMING_PROFILER_D2D_HW_TS=1: the sync kernels stamp their frames with the eth tile's 1588 hardware
+    // (MAC egress, RX classifier ingress) instead of reading the clock in software around them.
+    const bool hw_stamps = std::getenv("TT_METAL_STREAMING_PROFILER_D2D_HW_TS") != nullptr;
+    const std::map<std::string, std::string> sync_defines =
+        hw_stamps ? std::map<std::string, std::string>{{"D2D_HW_TS", "1"}} : std::map<std::string, std::string>{};
+    if (hw_stamps) {
+        log_info(tt::LogMetal, "[streaming profiler] link sync: 1588 hardware stamps");
+    }
     // The stop/done words sit at the top of the active eth core's UNRESERVED region, clear of the sync kernel's eth
     // channels (which start at its base) and its profiler ring: stop at -64, done at -60.
     const uint32_t stop_addr = aeth_unreserved_ + aeth_unres_size_ - 64;
@@ -972,12 +992,12 @@ void Devices::run_link_sync() {
             *ps,
             "tt_metal/tools/profiler/sync/sync_device_kernel_sender.cpp",
             L.eth_a,
-            EthernetConfig{.noc = NOC::RISCV_0_default, .compile_args = ct});
+            EthernetConfig{.noc = NOC::RISCV_0_default, .compile_args = ct, .defines = sync_defines});
         const auto kid_r = CreateKernel(
             *pr,
             "tt_metal/tools/profiler/sync/sync_device_kernel_receiver.cpp",
             L.eth_b,
-            EthernetConfig{.noc = NOC::RISCV_0_default, .compile_args = ct});
+            EthernetConfig{.noc = NOC::RISCV_0_default, .compile_args = ct, .defines = sync_defines});
         // The stop word and pace ride as RUNTIME args (positional compile args past index 2 do not reach an eth
         // kernel here). Sender: {stop_addr, pace}; receiver: {stop_addr}.
         SetRuntimeArgs(*ps, kid_s, L.eth_a, {stop_addr, kLinkSyncPaceTicks});

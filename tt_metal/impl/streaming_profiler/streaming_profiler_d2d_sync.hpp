@@ -4,35 +4,55 @@
 
 #pragma once
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <cstdlib>
+#include <optional>
 #include <map>
 #include <utility>
 #include <vector>
 
 #include "impl/streaming_profiler/streaming_profiler_consumer.hpp"
 #include "impl/streaming_profiler/streaming_profiler_decode.hpp"
+#include "impl/streaming_profiler/streaming_profiler_sync_correction.hpp"
 
 namespace tt::tt_metal::streaming_profiler {
 
 // The local half of the device<->device sync: one chip's AICLK wall clock against its eth tile's free-running
-// 50 MHz refclk, from the idle-eth tracker's PP_CLOCK(LOCAL) samples (one every 3 us).
+// 50 MHz refclk, from the idle-eth tracker's PP_CLOCK(LOCAL) samples.
 //
-// Fitted in 1 ms buckets, each RELATIVE TO ITS OWN FIRST SAMPLE. A bucket's slope is the number of wall ticks per
-// refclk tick that ACTUALLY applied over that millisecond -- the AICLK rate under DVFS, not the nominal one -- and a
-// 1 ms bucket holds ~330 samples, about one DVFS excursion (a straight line through a 0.5 s bucket left tens of
-// microseconds of residual that was the model's error, not the sync's). Anchoring each bucket at its own origin
-// removes the lever arm a session-origin intercept would have (a 1 ppm slope error 30 s in is 30 us at the origin).
+// AICLK is a PLL multiple of the crystal the refclk counts, so between DVFS transitions the wall clock is EXACTLY
+// linear in the refclk with a slope that is a multiple of 1/8 wall ticks per refclk tick (27 at 1.35 GHz, 26.875 at
+// 1.34375, 20.375 at 1.01875), and a transition is a ~3 us glide at most once per ms (the ARC firmware's DVFS timer).
+// The fit is therefore one straight line per RUN of constant rate, each relative to its own first sample: a sample
+// joins the open run while it lies on that run's exact line and opens a new run when it does not, so the run
+// boundaries ARE the transitions, and between two of them the map is one fitted line: its slope resolves the ratio
+// to 0.03 ppm within 10 ms and its intercept averages every sample of the run (~1 ns after a few dozen) -- where a
+// chord through a fixed window bends for the whole window when a transition falls inside it. The PLL multiple is
+// only nominal at the ppm level (a run of 10 s at the snapped 27.000 drifted 0.5 ppm off the samples), so the
+// multiple serves to name the rate, never to place a record.
 struct LocalClockFit {
     static constexpr double kRefclkHz = 50e6;
-    static constexpr uint64_t kBucketTicks = static_cast<uint64_t>(kRefclkHz * 0.001);  // 1 ms of refclk
+    // A sample this far (wall ticks) off the open run's line opens a new run: the refclk quantisation puts a sample
+    // at most ~14 ticks off the line, a single 1/8 step in the ratio walks 19 ticks per 3 us stride.
+    static constexpr double kSplitWallTicks = 64.0;
+    // A run is cut after this much refclk (0.5 s) regardless: the ratio wanders with temperature at the 0.01 ppm/s
+    // level, which one line per half second follows to ~ns, and the relative sums stay small.
+    static constexpr double kMaxRunTicks = 25e6;
+    // Fewer samples than this fix the slope too loosely (>100 ppm) to test a newcomer against.
+    static constexpr uint64_t kSettledSamples = 16;
 
-    struct Accum {
+    struct Run {
         bool anchored = false;
-        double ax = 0.0, ay = 0.0;  // this bucket's own origin: (refclk, wall)
+        double ax = 0.0, ay = 0.0;  // this run's own origin: (refclk, wall)
+        double r_first = 0.0, r_last = 0.0;
+        double last_x = 0.0, last_y = 0.0;  // the newest sample, so it can be handed to the next run
+        double prev_x = 0.0;                // the sample before it, for r_last once the newest is removed
         long double sx = 0, sy = 0, sxx = 0, sxy = 0;
         uint64_t n = 0;
-        // Wall ticks per refclk tick over this bucket: the applied AICLK / 50 MHz.
-        double slope() const {
+        // Wall ticks per refclk tick over this run: the applied AICLK / 50 MHz.
+        double fitted_slope() const {
             if (n < 2) {
                 return 0.0;
             }
@@ -40,21 +60,43 @@ struct LocalClockFit {
             const long double den = nn * sxx - sx * sx;
             return den > 0 ? static_cast<double>((nn * sxy - sx * sy) / den) : 0.0;
         }
+        // The line's slope is the DVFS step's exact multiple whenever the fit lies within a step's width of one. A
+        // young run's fitted slope (16 samples over 48 us, refclk quantised to 20 ns) is off by up to ~100 ppm,
+        // which is 20 ns of placement 200 us in; runs longer than 50 ms all land on their multiple to <0.005 ppm.
+        double slope() const {
+            const double r = ratio();
+            return r != 0.0 ? r : fitted_slope();
+        }
+        // The DVFS step this run sits on: the nearest multiple of 1/8 (0 when the fit is not within 1000 ppm of one,
+        // a run cut across a glide).
+        double ratio() const {
+            const double s = fitted_slope();
+            const double sn = std::round(s * 8.0) / 8.0;
+            return (sn > 0.0 && std::abs(s - sn) <= 1000e-6 * sn) ? sn : 0.0;
+        }
+        // Whether the line is fixed well enough (slope to ~100 ppm, a stride's extrapolation to a fraction of a
+        // tick) to test a newcomer against it.
+        bool settled() const { return n >= kSettledSamples; }
         double intercept() const {
             if (n < 2) {
                 return 0.0;
             }
             return static_cast<double>((sy - static_cast<long double>(slope()) * sx) / static_cast<long double>(n));
         }
-        // The fitted line, both ways, through this bucket's own anchor so a conversion never leaves the interval.
+        // The fitted line, both ways, through this run's own anchor so a conversion never leaves the interval.
         double wall_of_refclk(double r) const { return ay + intercept() + slope() * (r - ax); }
         double refclk_of_wall(double w) const { return ax + (w - ay - intercept()) / slope(); }
         void add(double x, double y) {
             if (!anchored) {
                 ax = x;
                 ay = y;
+                r_first = x;
                 anchored = true;
             }
+            r_last = x;
+            prev_x = last_x;
+            last_x = x;
+            last_y = y;
             const long double dx = x - ax, dy = y - ay;
             sx += dx;
             sy += dy;
@@ -62,31 +104,130 @@ struct LocalClockFit {
             sxy += dx * dy;
             n++;
         }
+        // Takes the newest sample back out; the sums are exact, so this is exact.
+        void remove_last() {
+            const long double dx = last_x - ax, dy = last_y - ay;
+            sx -= dx;
+            sy -= dy;
+            sxx -= dx * dx;
+            sxy -= dx * dy;
+            n--;
+            last_x = prev_x;
+            r_last = prev_x;
+        }
     };
 
-    // Buckets keyed by refclk_ticks / kBucketTicks; a std::map because the tracker can be paused by a ship.
-    std::map<uint64_t, Accum> buckets;
+    std::vector<Run> runs;  // in time order, disjoint in refclk
     uint64_t n_total = 0;
+    uint64_t transitions = 0;  // runs opened by a sample off the line or by a burst (the kMaxRunTicks cuts are not counted)
+    uint64_t handed_over = 0;  // samples moved from a run's tail to the run after it
+    double prev_gap = 0.0;     // refclk between the last two samples
+    bool pending_handover = false;
+
+    // The tracker emits a burst of consecutive 3 us samples when it detects a rate change, a sample per 100 us for
+    // the run's first ms, then one per ms: a sample following the previous one by less than kBurstGapTicks after a
+    // gap of at least kSparseGapTicks is the first of a burst, i.e. the tracker's own verdict that a new rate
+    // began, and opens a run whether or not it has yet left the old line by the threshold. Testing the same sample
+    // against a fitted line with the same threshold let it join the old run one sample too often, and that one
+    // sample pulled a 1 ms run's slope 40 ppm off, which a node frozen on it carried as 20-45 ns.
+    static constexpr double kBurstGapTicks = 300.0;    // 6 us
+    static constexpr double kSparseGapTicks = 1500.0;  // 30 us
 
     void add(uint64_t refclk_ticks, uint64_t wall_ticks) {
-        buckets[refclk_ticks / kBucketTicks].add(static_cast<double>(refclk_ticks), static_cast<double>(wall_ticks));
+        const double r = static_cast<double>(refclk_ticks), w = static_cast<double>(wall_ticks);
         n_total++;
-    }
-};
-
-// Reassembles a 24-bit refclk value stream (the PP_CLOCK payload) into 64-bit ticks. A source samples at least every
-// few ms, far inside the 0.335 s a 24-bit wrap takes at 50 MHz, so a drop of more than half the range is a wrap.
-struct RefclkUnwrap {
-    bool seeded = false;
-    uint32_t last = 0;
-    uint64_t wraps = 0;
-    uint64_t full(uint32_t v24) {
-        if (seeded && v24 < last && (last - v24) > (1u << 23)) {
-            wraps++;
+        if (!runs.empty()) {
+            Run& cur = runs.back();
+            const double gap = r - cur.r_last;
+            const bool burst_start = cur.n >= 2 && gap < kBurstGapTicks && prev_gap >= kSparseGapTicks;
+            const bool off = cur.settled() && std::abs(w - cur.wall_of_refclk(r)) > kSplitWallTicks;
+            if (!off && !burst_start && r - cur.r_first < kMaxRunTicks) {
+                cur.add(r, w);
+                prev_gap = gap;
+                settle_handover();
+                return;
+            }
+            transitions += (off || burst_start) ? 1 : 0;
+            // The old run's newest sample may already sit on the new rate (a sparse sample landing in the ~12 us
+            // between a transition and the tracker's detection of it); judged once the new run's line is settled.
+            pending_handover = burst_start && cur.n >= 3;
+            prev_gap = gap;
         }
-        seeded = true;
-        last = v24;
-        return (wraps << 24) | v24;
+        runs.emplace_back();
+        runs.back().add(r, w);
+    }
+
+private:
+    void settle_handover() {
+        if (!pending_handover || runs.size() < 2 || !runs.back().settled()) {
+            return;
+        }
+        pending_handover = false;
+        Run& prev = runs[runs.size() - 2];
+        Run& cur = runs.back();
+        const double x = prev.last_x, y = prev.last_y;
+        const double off_prev = std::abs(y - prev.wall_of_refclk(x));
+        const double off_cur = std::abs(y - cur.wall_of_refclk(x));
+        if (off_cur < off_prev) {
+            prev.remove_last();
+            cur.add(x, y);
+            cur.r_first = std::min(cur.r_first, x);
+            handed_over++;
+        }
+    }
+
+public:
+    // The run holding refclk r: the last one starting at or before it (the first, for anything earlier).
+    const Run& run_at(double r) const {
+        auto it = std::upper_bound(runs.begin(), runs.end(), r, [](double x, const Run& a) { return x < a.r_first; });
+        return it == runs.begin() ? runs.front() : *(it - 1);
+    }
+    // Where consecutive runs hand over: their lines' intersection, when it falls within kKnotSlackTicks of the seam
+    // (a small DVFS step stays inside the tracker's detection band for ~10 us, so the old run's last samples lie
+    // past the true transition). No value: the seam is bridged straight from a.r_last to b.r_first.
+    static constexpr double kKnotSlackTicks = 2500.0;
+    static std::optional<double> knot(const Run& a, const Run& b) {
+        const double ds = a.slope() - b.slope();
+        if (!(std::abs(ds) > 1e-6)) {
+            return std::nullopt;
+        }
+        const double r_x = (b.ay + b.intercept() - b.slope() * b.ax - a.ay - a.intercept() + a.slope() * a.ax) / ds;
+        if (std::isfinite(r_x) && r_x >= a.r_last - kKnotSlackTicks && r_x <= b.r_first + kKnotSlackTicks) {
+            return r_x;
+        }
+        return std::nullopt;
+    }
+    // The wall instant of refclk tick r exactly as the published correction places a record there: each run's line
+    // up to its knot with the next, a straight bridge across a seam without one. 0 when no line holds r yet.
+    double wall_at(double r) const {
+        if (runs.empty()) {
+            return 0.0;
+        }
+        const Run* run = &run_at(r);
+        const size_t idx = static_cast<size_t>(run - runs.data());
+        const auto usable = [](const Run& b) { return b.n >= 2 && b.slope() > 0.0; };
+        if (idx + 1 < runs.size() && usable(runs[idx + 1])) {
+            const Run& next = runs[idx + 1];
+            if (const auto k = knot(*run, next)) {
+                if (r >= *k) {
+                    run = &next;
+                }
+            } else if (r > run->r_last && r < next.r_first && usable(*run)) {
+                const double w0 = run->wall_of_refclk(run->r_last), w1 = next.wall_of_refclk(next.r_first);
+                return w0 + (w1 - w0) * (r - run->r_last) / (next.r_first - run->r_last);
+            }
+        }
+        if (run == &runs[idx] && idx > 0 && usable(runs[idx - 1])) {
+            if (const auto k = knot(runs[idx - 1], *run); k && r < *k) {
+                run = &runs[idx - 1];
+            }
+        }
+        return usable(*run) ? run->wall_of_refclk(r) : 0.0;
+    }
+    // The run holding wall tick w, by the runs' wall order (monotone with their refclk order).
+    const Run& run_at_wall(double w) const {
+        auto it = std::upper_bound(runs.begin(), runs.end(), w, [](double x, const Run& a) { return x < a.ay; });
+        return it == runs.begin() ? runs.front() : *(it - 1);
     }
 };
 
@@ -100,7 +241,7 @@ struct RefclkUnwrap {
 //   root chip r:      host(T) = H_r + (R_r(T) - R_r(A_r)) * P_r         (static host anchor o applied-AICLK term)
 //   non-root chip c:  host(T) = H_r + (link(R_c(T)) - R_r(A_r)) * P_r   (the same, on the root's timeline)
 //
-// where R_x(T) inverts the 1 ms bucket holding wall tick T, A_x/H_x are the chip's boot anchor (tick, host ns), P_x
+// where R_x(T) inverts the constant-rate run holding wall tick T, A_x/H_x are the chip's boot anchor (tick, host ns), P_x
 // its refclk period taken as k_mean/hz so it is consistent with that anchor, and link() maps c's refclk onto r's by
 // the solved offset and rate about the burst midpoint. Published incrementally for live sinks, finally at capture end.
 // Runs entirely on its consumer's thread.
@@ -111,50 +252,161 @@ public:
     void on_capture_end(const CaptureContext& ctx);
 
 private:
-    struct LinkSample {
-        uint64_t wall = 0;
-        uint64_t refclk = 0;
-    };
     struct LocalState {
         LocalClockFit fit;
-        RefclkUnwrap unwrap;
+        uint64_t next_publish_refclk = 0;
+        std::vector<std::pair<uint64_t, uint64_t>> samples;  // (refclk, wall) as received, kept for the CSV dump only
     };
-    struct LinkState {
-        RefclkUnwrap unwrap;
-        std::vector<LinkSample> samples;  // in emission order
+    // One end's stamp of a round: the reading (refclk ticks for software stamps, ns for hardware ones) and the eth
+    // core's wall clock when it was recorded.
+    struct Stamp {
+        uint64_t value = 0, wall = 0;
+        bool have = false;
+    };
+    // A round under the number the sender gave it, with both ends' stamps: the sender's frame egress and echo
+    // ingress, the receiver's frame ingress and echo egress, so each end has a midpoint.
+    struct Round {
+        uint32_t id = 0;
+        Stamp t0, t1, t1b, t2;
+        bool complete() const { return t0.have && t2.have && t1.have && t1b.have; }
+    };
+    // A link's rounds of one stamp kind: the complete ones in the order they completed, the rest waiting for their
+    // other end. A round whose other end never reports (no ring room there, a lapped consumer) is evicted once
+    // kPendingMax newer rounds are waiting; nothing behind it shifts.
+    struct LinkRounds {
+        std::vector<Round> rounds;
+        std::map<uint32_t, Round> pending;
+    };
+    struct LinkStreams {
+        LinkRounds sw, hw;
+        bool have_hw() const { return !hw.rounds.empty(); }
+        const LinkRounds& primary() const { return have_hw() ? hw : sw; }
     };
     // A solved link: receiver refclk = sender refclk + offset + rate * (sender refclk - mid).
     struct LinkSolution {
         bool ok = false;
+        bool hw = false;
+        size_t rounds_seen = 0;     // rounds available at the last solve (hardware path re-solves as they accumulate)
+        double precision_ns = 0.0;  // residual_rms_ns / sqrt(kept): the offset estimate's own precision
         uint32_t dev_snd = 0, dev_rcv = 0;
         double offset_ticks = 0.0, rate = 0.0, mid = 0.0;
         double offset_ns = 0.0, rate_ppm = 0.0, residual_rms_ns = 0.0;
-        size_t rounds = 0, kept = 0;
+        size_t rounds = 0, kept = 0, path_dropped = 0;
     };
     // A chip's refclk frame: its anchor tick's refclk and its refclk period, once its buckets allow.
     struct Frame {
         bool ok = false;
         double refclk_at_anchor = 0.0;
         double period_ns = 0.0;
-        double k_mean = 0.0;
     };
 
     int64_t core_index(uint32_t dev, const CoreCoord& eth) const;
+    // A round in the refclk domain: each end's midpoint, and for hardware rounds the sender's round trip, the
+    // receiver's turnaround and the one-way delay inside the stamps, in ns.
+    static double mid_a(const Round& r, bool hw);
+    static double mid_b(const Round& r, bool hw);
+    static double rtt_ns(const Round& r) {
+        return (static_cast<double>(r.t2.value) - static_cast<double>(r.t0.value)) * kHwUnitTicks * 20.0;
+    }
+    static double turn_ns(const Round& r) {
+        return (static_cast<double>(r.t1b.value) - static_cast<double>(r.t1.value)) * kHwUnitTicks * 20.0;
+    }
+    static double path_ns(const Round& r) { return 0.5 * (rtt_ns(r) - turn_ns(r)); }
+    static double path_median(const std::vector<Round>& rounds, size_t begin, size_t n);
+    // The fleet timeline's root: the lowest device index with an eth clock anchor, fixed for the capture. Taking the
+    // lowest index seen so far instead let whichever tracker decoded first be root for its first publish, and its
+    // identity nodes froze.
+    uint32_t root_dev() const;
     void try_solve_links(bool final);
+    // One round in the refclk domain: the sender's midpoint, the receiver's stamp minus it, and the round trip in
+    // wall ticks (0 for hardware stamps, which need no trip-time filter).
+    struct RoundPoint {
+        double mid, off, rtt;
+    };
+    // Whether the solution was accepted into `out`.
+    bool solve_link(const CaptureContext::Link& L, std::vector<RoundPoint> pts, bool hw, LinkSolution& out) const;
+    // A device's refclk onto the root's: root_refclk = scale * dev_refclk + shift.
+    struct RootXf {
+        double scale = 1.0, shift = 0.0;
+        bool ok = false;
+    };
+    std::map<uint32_t, RootXf> root_transforms(uint32_t root, std::vector<bool>* used) const;
     Frame frame_of(uint32_t dev) const;
-    void publish_all(bool final);
+    // frame_of(dev), computed once the chip's first bucket is complete and kept: the anchor precedes every bucket,
+    // so the frame never changes afterwards, and a walk over every bucket per publish is what it would cost.
+    const Frame& frame_cached(uint32_t dev);
+    void publish_all();
     void log_summary() const;
     void dump_csv() const;
     void publish_rate_plots();
+    void publish_error_plots() const;
+    // The receiver's stamp and the sender's round midpoint placed on the host timeline as the sink places records
+    // from each chip's eth core (baked eth anchor, then the published correction at that instant), and their
+    // difference in ns. False when a chip has no fitted run to place a stamp with.
+    // The conversion chain of one round, for the error CSV: each chip's wall instant, its host time before the
+    // correction, and the correction applied.
+    struct RoundTerms {
+        double wall_a = 0, wall_b = 0, baked_a = 0, baked_b = 0, corr_a = 0, corr_b = 0;
+    };
+    bool round_error(
+        const CaptureContext::Link& L,
+        const Round& r,
+        bool hw,
+        double& host_a,
+        double& err,
+        RoundTerms* terms = nullptr) const;
+    // Per link, the round errors computed with the corrections as they stood when the round's last stamp arrived:
+    // what a sink converting records on arrival actually applied, against the final map publish_error_plots uses.
+    std::vector<std::vector<SyncPlotPoint>> live_err_;
+    std::vector<size_t> live_done_;
 
+    // A correction node: at host time H the chip's record time moves by d (ns); r is the refclk it was placed at.
+    // Segments interpolate between nodes.
+    struct Node {
+        double H, d, r;
+    };
+    // Nodes already published for a chip are frozen: the sink has placed records against them, so a later publish
+    // only appends nodes beyond them, at the newest estimate's values.
+    // How far a series' nodes reach: the run boundaries (knots) already published and the refclk of its last node.
+    struct SeriesCursor {
+        size_t knots = 0;
+        double last_r = -1.0;
+    };
+    struct Published {
+        std::vector<Node> linked, local;
+        size_t dropped = 0;  // nodes with a non-finite or absurd correction, refused
+        SeriesCursor linked_cur, local_cur;
+    };
+    std::map<uint32_t, Published> published_;
+    std::map<uint32_t, Frame> frames_;
+    // The published form of a node series: host time rounded to the ns, a later node that rounds onto the same ns
+    // dropped (the correction cannot differ measurably within one ns).
+    static std::vector<SyncNode> to_published(const std::vector<Node>& nodes);
+    static void append_slewed(std::vector<Node>& frozen, std::vector<Node> fresh, size_t& dropped);
     CaptureContext ctx_;
-    std::map<uint32_t, LocalState> local_;                     // device index -> local fit
-    std::map<std::pair<uint32_t, uint32_t>, LinkState> link_;  // (device index, core index) -> link stamps
+    std::map<uint32_t, LocalState> local_;  // device index -> local fit
+    const char* const csv_path_ = std::getenv("TT_METAL_STREAMING_PROFILER_D2D_CSV");
+    std::vector<LinkStreams> links_;  // per ctx_.links index
+    // (device index, decoder core index) -> the link the core stamps for, and whether as its sender.
+    std::map<std::pair<uint32_t, uint32_t>, std::pair<size_t, bool>> side_of_;
     std::vector<LinkSolution> solved_;                         // per ctx_.links index
     uint64_t dropped_kind_ = 0;
-    size_t buckets_at_publish_ = 0;
-    static constexpr size_t kPublishEveryBuckets = 100;  // ~100 ms of tracker time between live publications
-    static constexpr size_t kLinkRounds = 240;           // the boot-time burst
+    // One hardware-stamp payload unit in 20 ns refclk ticks: the kernels report round averages in quarter-ns units
+    // (eth_ptp_link.hpp kHwUnitsPerNs); the two must agree.
+    static constexpr double kHwUnitTicks = 1.0 / 80.0;
+    // A hardware round whose one-way delay inside the stamps sits this far from the window's median had a frame
+    // delayed on one leg, and its offset is off by that same amount; the delay itself holds to 0.5 ns.
+    static constexpr double kPathDevNs = 2.0;
+    static constexpr double kProvisionalTicks = 1500.0;  // the open run's newest 30 us: no node is frozen there
+    static constexpr uint64_t kPublishEveryTicks = 2'500'000;  // 50 ms of a chip's tracker time between live publications
+    // A knot (where two runs' exact lines meet) must land within this much refclk (50 us) of the samples that
+    // bracket the transition; a split is detected up to ~10 us after the transition it follows.
+    // Rounds per link solve, re-solved every half window. Four averaged trips per round leave ~3 ns per round, so
+    // 250 rounds give ~0.2 ns on the offset and a rate centred 125 ms back: the crystals' thermal wander
+    // (~0.01 ppm/s under load) then costs ~1 ns of lag instead of ~5 at a 1 s window.
+    static constexpr size_t kLinkWindow = 250;
+    static constexpr size_t kFirstSolveRounds = 200;
+    static constexpr size_t kPendingMax = 4096;
 };
 
 }  // namespace tt::tt_metal::streaming_profiler

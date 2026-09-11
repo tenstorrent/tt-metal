@@ -124,14 +124,15 @@ inline constexpr size_t kFrameDataBytesReserve =
     kFrameRecsReserve * profiler::kSpscRecBytes + profiler::kSpscMaxPayloadWords * 4 + 32;
 
 // One stream's decode, owned by one thread; the wire-integrity totals are its owner's to report.
-// A decoded local-refclk sample from the idle-eth clock tracker (PP_CLOCK): chip, producing lane, clock kind
-// (CLOCK_LOCAL_REFCLK today), the 24-bit refclk value, and the full wall timestamp. The host fit unwraps value24
-// against ts. Routed to StreamDecoder::clock_fn at decode; never becomes a record.
+// A decoded PP_CLOCK sample: chip, producing lane, clock kind, the round and role a link stamp names, the whole
+// reading, and the full wall timestamp. Routed to StreamDecoder::clock_fn at decode; never becomes a record.
 struct ClockSample {
     uint32_t dev;
     uint32_t lane;
     uint32_t kind;
-    uint32_t value24;
+    uint32_t round;
+    uint32_t role;
+    uint64_t value;
     uint64_t ts;
 };
 
@@ -338,9 +339,9 @@ inline StreamDecoder::Produced StreamDecoder::decode_frame(const uint32_t* frame
                                            oreg += x.regressions;
                                        };
             if (t == PP_CLOCK) {
-                // 2-word local-refclk sample: word0 = type|kind<<shift|value24, word1 = wall_lo; full wall =
-                // this lane s sticky-timer hi | wall_lo. Route to the clock sink, produce no record, advance 2.
-                if (left >= 2u) {
+                // 4-word clock sample (spsc_packet.h); full wall = this lane's sticky-timer hi | wall_lo. Route to
+                // the clock sink, produce no record, advance 4.
+                if (left >= 4u) {
                     if (clock_fn) {
                         const uint32_t low27 = pp_low27(src[0]);
                         clock_fn(
@@ -349,11 +350,13 @@ inline StreamDecoder::Produced StreamDecoder::decode_frame(const uint32_t* frame
                                 clock_dev,
                                 lane,
                                 (low27 >> PP_CLOCK_KIND_SHIFT) & 0x7u,
-                                low27 & PP_CLOCK_VALUE_MASK,
+                                src[3] >> PP_CLOCK_ROUND_SHIFT,
+                                src[3] & PP_CLOCK_ROLE_MASK,
+                                (static_cast<uint64_t>(src[2]) << 24) | (low27 & PP_CLOCK_VALUE_MASK),
                                 lc.th_hi | src[1]});
                     }
                     ck++;
-                    got = 2;
+                    got = 4;
                 }
             } else if ((kSpscPointTypes >> t) & 1u) {
                 // Points: the same head record for every point kind, Data with a payload behind its size word. One

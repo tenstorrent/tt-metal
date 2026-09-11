@@ -133,6 +133,7 @@ template <typename F>
 concept batch_callback = is_batch<std::remove_cvref_t<callback_param_t<F>>>;
 
 int64_t sync_correction_ns(uint16_t chip_id, int64_t host_ns) noexcept;
+void sync_correction_span_ns(uint16_t chip_id, int64_t start_ns, int64_t end_ns, int64_t& d_start, int64_t& d_end) noexcept;
 }  // namespace detail
 
 /** @brief Base class of every record: its site, core, program id and clock. */
@@ -152,20 +153,23 @@ public:
     uint32_t runtime_id() const { return runtime_id_; }
     /** @brief The chip's clock frequency in GHz. */
     double frequency_ghz() const { return frequency_hz_ * 1e-9; }
+    /** @brief Host ns of a device tick from the chip's static anchor alone, before the d2d correction. */
+    int64_t base_ns(uint64_t ticks) const {
+        const double cycles = static_cast<double>(static_cast<int64_t>(ticks) + offset_);
+        return static_cast<int64_t>(cycles * 1e9 / frequency_hz_);
+    }
 
 protected:
     std::chrono::nanoseconds ticks_to_ns(uint64_t ticks) const {
         return std::chrono::nanoseconds(static_cast<int64_t>(static_cast<double>(ticks) * 1e9 / frequency_hz_));
     }
     std::chrono::steady_clock::time_point host_time(uint64_t ticks) const {
-        const double cycles = static_cast<double>(static_cast<int64_t>(ticks) + offset_);
-        // The baked scalar anchor (this record's own wall-clock domain -> host ns), composed with the chip's
-        // time-indexed d2d sync term. The term is keyed by HOST TIME, not wall ticks: eth and worker tiles keep
-        // different wall-clock totals (per-card duty cycle), so a correction measured on the eth core is applied
-        // to a worker zone through their common host reference -- each maps its own ticks to host, then looks up.
-        const int64_t base_ns = static_cast<int64_t>(cycles * 1e9 / frequency_hz_);
-        return std::chrono::steady_clock::time_point(
-            std::chrono::nanoseconds(base_ns + detail::sync_correction_ns(chip_id_, base_ns)));
+        // The baked scalar anchor composed with the chip's time-indexed d2d sync term. The term is keyed by HOST
+        // TIME, not wall ticks: eth and worker tiles keep different wall-clock totals (per-card duty cycle), so a
+        // correction measured on the eth core is applied to a worker zone through their common host reference --
+        // each maps its own ticks to host, then looks up.
+        const int64_t b = base_ns(ticks);
+        return std::chrono::steady_clock::time_point(std::chrono::nanoseconds(b + detail::sync_correction_ns(chip_id_, b)));
     }
 
     uint64_t timestamp_;
@@ -201,6 +205,15 @@ public:
     std::chrono::steady_clock::time_point start_time() const { return host_time(timestamp_); }
     /** @brief End of the zone on the host clock. */
     std::chrono::steady_clock::time_point end_time() const { return host_time(timestamp_ + duration_); }
+    /** @brief Start and end of the zone on the host's std::chrono::steady_clock, converted through one d2d correction snapshot. */
+    std::pair<std::chrono::steady_clock::time_point, std::chrono::steady_clock::time_point> host_span() const {
+        const int64_t b0 = base_ns(timestamp_), b1 = base_ns(timestamp_ + duration_);
+        int64_t d0 = 0, d1 = 0;
+        detail::sync_correction_span_ns(chip_id_, b0, b1, d0, d1);
+        return {
+            std::chrono::steady_clock::time_point(std::chrono::nanoseconds(b0 + d0)),
+            std::chrono::steady_clock::time_point(std::chrono::nanoseconds(b1 + d1))};
+    }
 };
 static_assert(sizeof(Zone) == 48 && std::is_standard_layout_v<Zone>);
 
