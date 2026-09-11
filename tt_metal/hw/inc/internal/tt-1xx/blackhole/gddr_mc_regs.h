@@ -4,10 +4,8 @@
 
 #pragma once
 
-// Curated DRISC-visible subset of the Blackhole GDDR memory-controller register
-// map. Source of truth:
-// ws-bh-soc/src/hardware/gddr_soc_logic/meta/registers/c/gddr_mc_reg.h
-// Do not include directly from public device APIs.
+// Hardware register map for the DRISC-visible Blackhole GDDR memory controller
+// priority fields — do not include directly.
 
 #ifdef COMPILE_FOR_DRISC
 
