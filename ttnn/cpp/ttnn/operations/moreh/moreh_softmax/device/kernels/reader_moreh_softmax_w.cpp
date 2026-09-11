@@ -31,11 +31,13 @@ void kernel_main() {
     constexpr bool is_fp32 = get_arg(args::is_fp32) == 1;
     const auto src_in = TensorAccessor(tensor::src);
 
-    // Generate scaler tiles: MAX needs row-0 fill (reduce LLK), SUM needs col-0 fill (matmul)
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<dfb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<dfb_sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+    using MaxAuxiliary =
+        ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb_max_scaler>;
+    using SumAuxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<
+        ttnn::kernel_lib::ReduceAuxiliaryArgs<MaxAuxiliary::next_compile_time_args_offset()>,
+        dfb_sum_scaler>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<MaxAuxiliary>();
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<SumAuxiliary>();
 
     // Generate mask tile
     DataflowBuffer dfb_mask_obj(dfb_mask);

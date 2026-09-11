@@ -42,7 +42,7 @@ void kernel_main() {
     DataflowBuffer dfb_acc(dfb::acc);
     DataflowBuffer dfb_ineg(dfb::ineg);
 
-    constexpr uint32_t row_chunk = compute_kernel_lib::DEST_AUTO_LIMIT;
+    constexpr uint32_t row_chunk = get_arg(args::reduce_output_tiles);
 
     compute_kernel_hw_startup(dfb::in0, dfb::scaler, dfb::out);
     dfb_scaler.wait_front(1);  // scaler tile from the reader

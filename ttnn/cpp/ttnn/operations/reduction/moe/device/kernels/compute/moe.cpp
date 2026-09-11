@@ -20,6 +20,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 using namespace ckernel;
 
 template <uint32_t in0_dfb, uint32_t in1_dfb, uint32_t rows, uint32_t cols>
@@ -212,26 +213,17 @@ void recip_block_inplace(uint32_t in_dfb, uint32_t num_tiles) {
     }
 }
 
-template <PoolType pool_type, ReduceDim reduce_dim, uint32_t in_dfb, uint32_t scale_dfb, uint32_t out_dfb>
-void reduce_c(uint32_t rows, uint32_t cols) {
-    // Precondition: in_cb has rows*cols produced. in_cb has tiles in row-major order
-    // Precondition: scale_cb has 1 produced
-    // Precondition: out_cb has rows free
-    // Postcondition: in_cb has rows*cols produced
-    // Postcondition: scale_cb has 1 produced
-    // Postcondition: out_cb has rows produced
-
-    compute_kernel_lib::reduce<
-        pool_type,
-        reduce_dim,
-        in_dfb,
-        scale_dfb,
-        out_dfb,
-        compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
-        compute_kernel_lib::ReduceInputBlockShape::of(rows, cols));
-
+template <typename Call>
+void reduce_c() {
+    compute_kernel_lib::reduce<Call>();
     UNPACK(tensix_sync());  // Workaround for issue #9370
 }
+
+using MoeMaxArgs = ttnn::kernel_lib::ReduceCallArgs<0>;
+using MoeSumArgs = ttnn::kernel_lib::ReduceCallArgs<MoeMaxArgs::next_compile_time_args_offset()>;
+using MoeMaxCall = ttnn::kernel_lib::BoundReduceCallArgs<MoeMaxArgs, dfb::values, dfb::scale, dfb::cur_max>;
+template <uint32_t Output>
+using MoeSumCall = ttnn::kernel_lib::BoundReduceCallArgs<MoeSumArgs, dfb::values, dfb::scale, Output>;
 
 template <
     uint32_t Ht,
@@ -474,9 +466,9 @@ void kernel_main() {
     eqz_block_inplace(dfb::output_ind, Ht * Kt);
 
     // softmax
-    reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb::values, dfb::scale, dfb::cur_max>(Ht, Kt);
+    reduce_c<MoeMaxCall>();
     sub_exp_block_bcast_cols_inplace<dfb::values, dfb::cur_max, Ht, Kt>();
-    reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, dfb::values, dfb::scale, dfb::cur_sum>(Ht, Kt);
+    reduce_c<MoeSumCall<dfb::cur_sum>>();
     recip_block_inplace(dfb::cur_sum, Ht);
     mul_block_bcast_cols_inplace(dfb::values, dfb::cur_sum, Ht, Kt);
 
@@ -484,5 +476,5 @@ void kernel_main() {
     mul_block_inplace(dfb::values, dfb::output_ind, Ht * Kt);
 
     // final sum
-    reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, dfb::values, dfb::scale, dfb::out>(Ht, Kt);
+    reduce_c<MoeSumCall<dfb::out>>();
 }

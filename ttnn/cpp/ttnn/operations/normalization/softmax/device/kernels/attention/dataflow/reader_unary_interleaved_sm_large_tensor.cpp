@@ -7,10 +7,19 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
+    using MaxAuxiliary =
+        ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::max_scaler>;
+    using SumAuxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<
+        ttnn::kernel_lib::ReduceAuxiliaryArgs<MaxAuxiliary::next_compile_time_args_offset()>,
+        dfb::sum_scaler>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<MaxAuxiliary>();
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<SumAuxiliary>();
+
     const std::uint32_t blk = get_arg(args::blk);
     const std::uint32_t NCht = get_arg(args::num_rows);
     const std::uint32_t tile_offset = get_arg(args::tile_offset);
@@ -55,19 +64,6 @@ void kernel_main() {
 #endif
 
     const auto src_a = TensorAccessor(tensor::src);
-
-    {
-        constexpr std::uint32_t dfb_max_scaler = dfb::max_scaler;
-        constexpr std::uint32_t dfb_sum_scaler = dfb::sum_scaler;
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-            dfb_max_scaler,
-            ckernel::PoolType::MAX,
-            ckernel::ReduceDim::REDUCE_ROW>();
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-            dfb_sum_scaler,
-            ckernel::PoolType::SUM,
-            ckernel::ReduceDim::REDUCE_ROW>();
-    }
 
     Noc noc;
 

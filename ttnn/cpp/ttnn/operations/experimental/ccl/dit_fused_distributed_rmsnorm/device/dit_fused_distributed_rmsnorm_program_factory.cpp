@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
 #include "dit_fused_distributed_rmsnorm_program_factory.hpp"
 
 #include <algorithm>
@@ -1055,6 +1056,25 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // Per-head norm reduces over head_dim only, so the AVG scalar divides by
     // head_dim instead of H_full.
     const uint32_t reduce_factor = args.per_head_norm ? (W / args.num_heads_per_device) : H_full;
+    namespace rh = ttnn::kernel_lib::host;
+    const auto make_local_call = [&](float scalar) {
+        auto plan = rh::make_reduce_plan(
+            rh::ReduceBlockSpec::tiled(32, 32, DataType::FLOAT32, DataType::FLOAT32),
+            ReduceOpMath::SUM,
+            ReduceOpDim::W,
+            scalar,
+            ReduceFp32Mode::Fast,
+            {device->arch(), fp32_dest_acc_en, false, device->l1_size_per_core()});
+        plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile;
+        return plan;
+    };
+    const auto pre_reduce_plan = make_local_call(1.0F);
+    const auto post_reduce_plan = make_local_call(1.0F / reduce_factor);
+    const auto append_reduce_auxiliary = [&](std::vector<uint32_t>& writer_args) {
+        rh::ReduceAuxiliaryArgs({reduce_scalar_sum_cb_id, pre_reduce_plan.auxiliary_tiles}).append_to(writer_args);
+        rh::ReduceAuxiliaryArgs({reduce_scalar_avg_cb_id, post_reduce_plan.auxiliary_tiles}).append_to(writer_args);
+    };
+
     std::vector<uint32_t> reader_compile_args = {
         input_cb_id,
         weight_cb_id,
@@ -1174,6 +1194,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
             TensorAccessorArgs(input_tensor.buffer()).append_to(writer_compile_args);  // dummy
         }
 
+        append_reduce_auxiliary(writer_compile_args);
         writer_kernel_id = CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/"
@@ -1216,6 +1237,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         } else {
             TensorAccessorArgs(input_tensor.buffer()).append_to(writer_compile_args);  // dummy
         }
+        append_reduce_auxiliary(writer_compile_args);
         writer_kernel_id = CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/"
@@ -1325,6 +1347,9 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         static_cast<uint32_t>(per_batch_bias),
         rows_per_batch_tiles,
     };
+
+    rh::ReduceCallArgs(pre_reduce_plan, {0, 1, 2}).append_to(compute_compile_args);
+    rh::ReduceCallArgs(post_reduce_plan, {0, 1, 2}).append_to(compute_compile_args);
 
     // fp32 dest accumulation is REQUIRED, unconditionally — not just for fp32
     // input. It is what keeps every internal CB (stats, reduce, intermediate,
@@ -1446,34 +1471,34 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     if (num_forwarders > 0) {
         const auto local_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
         for (uint32_t f = 0; f < num_forwarders; f++) {
-        const auto& core = forwarder_cores[f];
-        const uint32_t group_begin = f * workers_per_forwarder;
-        const uint32_t group_end = std::min(group_begin + workers_per_forwarder, num_workers);
-        std::vector<uint32_t> fwd_rt = {stats_dram_addr, out_ready_sem_bank_addr};
-        for (uint32_t w = group_begin; w < group_end; w++) {
-            fwd_rt.push_back(static_cast<uint32_t>(worker_virtual[w].x));
-            fwd_rt.push_back(static_cast<uint32_t>(worker_virtual[w].y));
-        }
-        for (uint32_t r = 0; r < max_rounds; r++) {
-            uint32_t pc = 0;
+            const auto& core = forwarder_cores[f];
+            const uint32_t group_begin = f * workers_per_forwarder;
+            const uint32_t group_end = std::min(group_begin + workers_per_forwarder, num_workers);
+            std::vector<uint32_t> fwd_rt = {stats_dram_addr, out_ready_sem_bank_addr};
             for (uint32_t w = group_begin; w < group_end; w++) {
-                if (worker_num_rows(w) > r) {
-                    pc++;
-                }
+                fwd_rt.push_back(static_cast<uint32_t>(worker_virtual[w].x));
+                fwd_rt.push_back(static_cast<uint32_t>(worker_virtual[w].y));
             }
-            fwd_rt.push_back(pc);
-        }
-        fwd_rt.push_back(forward_fabric_node_id.has_value() ? 1u : 0u);
-        if (forward_fabric_node_id.has_value()) {
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                local_node_id, forward_fabric_node_id.value(), /*link_idx=*/f, program, {core}, fwd_rt);
-        }
-        fwd_rt.push_back(backward_fabric_node_id.has_value() ? 1u : 0u);
-        if (backward_fabric_node_id.has_value()) {
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                local_node_id, backward_fabric_node_id.value(), /*link_idx=*/f, program, {core}, fwd_rt);
-        }
-        SetRuntimeArgs(program, forwarder_kernel_ids[f], core, fwd_rt);
+            for (uint32_t r = 0; r < max_rounds; r++) {
+                uint32_t pc = 0;
+                for (uint32_t w = group_begin; w < group_end; w++) {
+                    if (worker_num_rows(w) > r) {
+                        pc++;
+                    }
+                }
+                fwd_rt.push_back(pc);
+            }
+            fwd_rt.push_back(forward_fabric_node_id.has_value() ? 1u : 0u);
+            if (forward_fabric_node_id.has_value()) {
+                tt::tt_fabric::append_fabric_connection_rt_args(
+                    local_node_id, forward_fabric_node_id.value(), /*link_idx=*/f, program, {core}, fwd_rt);
+            }
+            fwd_rt.push_back(backward_fabric_node_id.has_value() ? 1u : 0u);
+            if (backward_fabric_node_id.has_value()) {
+                tt::tt_fabric::append_fabric_connection_rt_args(
+                    local_node_id, backward_fabric_node_id.value(), /*link_idx=*/f, program, {core}, fwd_rt);
+            }
+            SetRuntimeArgs(program, forwarder_kernel_ids[f], core, fwd_rt);
         }
     }
 

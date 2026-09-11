@@ -343,6 +343,29 @@ def run_moreh_norm_backward(
     assert passing
 
 
+@pytest.mark.parametrize("axis", [0, 1])
+@pytest.mark.parametrize("extent", [17, 256, 257, 769, 1025])
+@pytest.mark.parametrize("p", [0.0, float("inf"), float("-inf")])
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
+def test_moreh_norm_reduce_block_boundaries(device, axis, extent, p, fp32_dest_acc_en):
+    """Exercise seed, repeated middle, and partial final blocks across output tiles."""
+    torch.manual_seed(2026)
+    shape = [extent, 64] if axis == 0 else [64, extent]
+    torch_input = (torch.rand(shape) + 0.25).to(torch.bfloat16)
+    if p == 0.0:
+        torch_input[:, ::7] = 0
+    expected = torch.linalg.vector_norm(torch_input, ord=p, dim=axis, keepdim=True)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.operations.moreh.norm(
+        tt_input,
+        p=p,
+        dim=axis,
+        keepdim=True,
+        compute_kernel_config=get_compute_kernel_options(fp32_dest_acc_en),
+    )
+    torch.testing.assert_close(ttnn.to_torch(result), expected, rtol=0.02, atol=0.02)
+
+
 @pytest.mark.parametrize("p", [2.0, 2.5, -2.5, 0.0, float("inf"), float("-inf")])
 @pytest.mark.parametrize(
     "dim_rtol_atol",

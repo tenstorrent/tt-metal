@@ -15,20 +15,12 @@
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_types.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/host/reduce_host.hpp"
 
 namespace tt::tt_metal {
 class Buffer;
 class MeshTensor;
-}  // namespace tt::tt_metal
-
-namespace tt::tt_metal {
-
-enum class ReduceOpMath { SUM, AVG, MAX, MIN, STD, VAR };
-
-enum class ReduceOpDim { H, W, HW };
-
-enum class ReduceOpParallelizationStrategy { MULTI_CORE_H, MULTI_CORE_W, MULTI_CORE_HW, SINGLE_CORE_HW };
-
 }  // namespace tt::tt_metal
 
 namespace ttnn::prim {
@@ -102,6 +94,23 @@ struct RmPlan {
     uint32_t src_datum_size;
     uint32_t dst_datum_size;
 };
+
+// Tiled H readers group columns to match the planned DEST accumulators. RM readers
+// identity-pad their tilized chunks, which are combined by a planned sequence.
+// Logical CB IDs are input=0, auxiliary=1, output=2, accumulator=3.
+ttnn::kernel_lib::host::ReduceSequencePlan make_generic_reduce_sequence(
+    const tt::tt_metal::TensorSpec& input,
+    const tt::tt_metal::TensorSpec& output,
+    tt::tt_metal::ReduceOpMath math,
+    tt::tt_metal::ReduceOpDim dim,
+    float scalar,
+    ReduceFp32Mode fp32_mode,
+    const ttnn::kernel_lib::host::ReduceHardwareConfig& hardware,
+    uint32_t Ht,
+    uint32_t Wt,
+    uint32_t NC,
+    bool identity_padded,
+    const RmPlan* row_major = nullptr);
 
 // Populate an RmPlan from the input's padded + logical shapes, tile geometry, data formats
 // and the dim being reduced. Dim picks which of {wt,ht}_tiles_per_chunk is the variable

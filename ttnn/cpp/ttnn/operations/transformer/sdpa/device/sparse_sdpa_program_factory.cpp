@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sparse_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sparse_sdpa_common.hpp"
 #include <tt-metalium/buffer.hpp>
@@ -229,6 +230,9 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_ct, writer_crt);
     tt::tt_metal::TensorAccessorArgs(t.kv.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(writer_ct, writer_crt);
+    ttnn::kernel_lib::host::ReduceAuxiliaryArgs(
+        {cb_scale, {{1.0F, ttnn::kernel_lib::host::ReduceAuxiliaryTileType::FirstRow, 32}}})
+        .append_to(writer_ct);
 
     std::vector<uint32_t> compute_ct = {H,
                                         DHt,

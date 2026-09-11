@@ -418,13 +418,19 @@ void py_module_types(nb::module_& mod) {
     nb::class_<m2::KernelAdvancedOptions>(mod, "KernelAdvancedOptions")
         .def(
             "__init__",
-            [](m2::KernelAdvancedOptions* self, uint32_t num_runtime_varargs, uint32_t num_common_runtime_varargs) {
+            [](m2::KernelAdvancedOptions* self,
+               uint32_t num_runtime_varargs,
+               uint32_t num_common_runtime_varargs,
+               std::vector<uint32_t> compile_time_varargs) {
                 new (self) m2::KernelAdvancedOptions{};
                 self->num_runtime_varargs = num_runtime_varargs;
                 self->num_common_runtime_varargs = num_common_runtime_varargs;
+                self->compile_time_varargs = std::move(compile_time_varargs);
             },
             nb::arg("num_runtime_varargs") = 0,
-            nb::arg("num_common_runtime_varargs") = 0)
+            nb::arg("num_common_runtime_varargs") = 0,
+            nb::arg("compile_time_varargs") = std::vector<uint32_t>{})
+        .def_rw("compile_time_varargs", &m2::KernelAdvancedOptions::compile_time_varargs)
         .def_rw("num_runtime_varargs", &m2::KernelAdvancedOptions::num_runtime_varargs)
         .def_rw("num_common_runtime_varargs", &m2::KernelAdvancedOptions::num_common_runtime_varargs);
 

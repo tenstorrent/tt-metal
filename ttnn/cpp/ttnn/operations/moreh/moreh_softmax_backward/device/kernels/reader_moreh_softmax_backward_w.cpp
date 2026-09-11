@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -14,20 +13,14 @@ void kernel_main() {
     auto tile_offset = get_arg(args::tile_offset);
     auto Wt = get_arg(args::Wt);
 
-    auto mask_w = get_arg(args::mask_w);
-
-    uint32_t l1_write_addr_in;
-
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
 
     const auto y_in = TensorAccessor(tensor::y);
     const auto dy_in = TensorAccessor(tensor::dy);
 
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<dfb::scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
-    DataflowBuffer dfb_mask_obj(dfb::mask);
-    generate_mask_w(dfb_mask_obj, mask_w);
+    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::scaler>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 
     Noc noc;
     DataflowBuffer dfb_y_obj(dfb::y);

@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include <cstdint>
 
 #include "tt-metalium/constants.hpp"
@@ -111,6 +112,9 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
         }
     };
     fill_constant_tiles(eye, tril, ones, block_masks);
+    using Auxiliary =
+        ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::reduce_auxiliary>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 
     auto enqueue_value_read = [&](uint32_t head_chunk_index) {
         const uint32_t head = head_chunk_index / num_chunks;

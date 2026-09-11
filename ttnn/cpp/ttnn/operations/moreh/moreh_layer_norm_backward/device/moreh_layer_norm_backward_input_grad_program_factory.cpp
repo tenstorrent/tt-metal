@@ -6,6 +6,8 @@
 #include <bit>
 #include <string>
 
+#include "ttnn/operations/moreh/moreh_reduce.hpp"
+
 #include "moreh_layer_norm_backward_input_grad_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -121,6 +123,8 @@ MorehLayerNormBackwardInputGradOperation::MorehLayerNormBackwardInputGradFactory
     const DFBSpecName TMP1{"tmp1"};                // scratch; the compute kernel reaches it under
     const DFBSpecName TMP2{"tmp2"};                // several working names, all one buffer each
     const DFBSpecName TMP3{"tmp3"};
+    const DFBSpecName REDUCE_DY{"reduce_dy"};
+    const DFBSpecName REDUCE_YDY{"reduce_ydy"};
 
     const TensorParamName OUTPUT_GRAD{"output_grad"};
     const TensorParamName INPUT{"input"};
@@ -136,7 +140,6 @@ MorehLayerNormBackwardInputGradOperation::MorehLayerNormBackwardInputGradFactory
     const uint32_t in1_t = 1;                                 // input(==x)
     const uint32_t in2_t = 1;                                 // mean
     const uint32_t in3_t = 1;                                 // rstd
-    const uint32_t in4_t = 1;                                 // scaler
     const uint32_t in5_t = 2;                                 // n_recip_n
     const uint32_t in6_t = gamma_has_value ? 1 : 0;           // gamma
     const uint32_t in7_t = (do_mask_h || do_mask_w) ? 2 : 0;  // mask_h_w
@@ -158,10 +161,21 @@ MorehLayerNormBackwardInputGradOperation::MorehLayerNormBackwardInputGradFactory
     const auto single_tile_size = tt::tile_size(data_format);
     auto intermed_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
     const auto intermed_single_tile_size = tt::tile_size(intermed_format);
+    auto reduction = make_moreh_reduce_blocks(
+        num_inner,
+        (is_lastdim_layer_norm ? ReduceOpDim::W : ReduceOpDim::HW),
+        (fp32_dest_acc_en ? DataType::FLOAT32 : output_grad.dtype()),
+        (fp32_dest_acc_en ? DataType::FLOAT32 : output_grad.dtype()),
+        {arch, fp32_dest_acc_en, dst_full_sync_en, device->l1_size_per_core()});
+    const auto& auxiliary =
+        *reduction.sequence.calls.front().plan.find_cb(ttnn::kernel_lib::host::ReduceCbRole::Auxiliary);
+    const uint32_t in4_t = reduction.sequence.auxiliary.tiles.size();
 
     const uint32_t dfb_usage =
-        ((in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + in7_t + out0_t) * single_tile_size) +
-        ((im0_t + im1_t + im2_t + im3_t + im4_t + im5_t + im6_t + im7_t) * intermed_single_tile_size);
+        ((in0_t + in1_t + in2_t + in3_t + in5_t + in6_t + in7_t + out0_t) * single_tile_size) +
+        ((im0_t + im1_t + im2_t + im3_t + im4_t + im5_t + im6_t + im7_t + 2 * reduction.buffer_tiles) *
+         intermed_single_tile_size) +
+        in4_t * auxiliary.page_size;
     const uint32_t available_L1 =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
     const bool use_large_algorithm = dfb_usage >= available_L1;
@@ -194,7 +208,7 @@ MorehLayerNormBackwardInputGradOperation::MorehLayerNormBackwardInputGradFactory
     push_dfb(X, in1_t, data_format);
     push_dfb(MEAN, in2_t, data_format);
     push_dfb(RSTD, in3_t, data_format);
-    push_dfb(SCALER, in4_t, data_format);
+    push_dfb(SCALER, in4_t, auxiliary.data_format);
     push_dfb(N_RECIP_N, in5_t, data_format);
     push_dfb(GAMMA, in6_t, data_format);
     push_dfb(MASK_H_W, in7_t, data_format);
@@ -203,6 +217,8 @@ MorehLayerNormBackwardInputGradOperation::MorehLayerNormBackwardInputGradFactory
     push_dfb(Y, im1_t, intermed_format);
     push_dfb(DYSUM, im2_t, intermed_format);
     push_dfb(YDYSUM, im3_t, intermed_format);
+    push_dfb(REDUCE_DY, reduction.buffer_tiles, intermed_format);
+    push_dfb(REDUCE_YDY, reduction.buffer_tiles, intermed_format);
     // The last four buffers mean different things to the two compute kernels, so they are named for
     // the source that will actually be selected. The large kernel folds rstd/n into tmp3 and needs no
     // fourth scratch buffer, which is why im7_t is zeroed above.
@@ -224,14 +240,7 @@ MorehLayerNormBackwardInputGradOperation::MorehLayerNormBackwardInputGradFactory
     // the kernels as preprocessor defines: an unbound name does not exist in the generated header, and
     // a C++-level `if constexpr` would still name-look-up the discarded branch.
     KernelSpec::CompilerOptions::Defines reader_defines{};
-    KernelSpec::CompilerOptions::Defines compute_defines{
-        {"REDUCE_OP", "PoolType::AVG"},
-    };
-    if (is_lastdim_layer_norm) {
-        compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
-    } else {
-        compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_SCALAR";
-    }
+    KernelSpec::CompilerOptions::Defines compute_defines{};
     if (fp32_dest_acc_en) {
         reader_defines["FP32_DEST_ACC_EN"] = "1";
         compute_defines["FP32_DEST_ACC_EN"] = "1";
@@ -305,6 +314,7 @@ MorehLayerNormBackwardInputGradOperation::MorehLayerNormBackwardInputGradFactory
                      "mean_rstd_width"},
             },
         .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .advanced_options = {.compile_time_varargs = reduction.sequence.get_auxiliary_compile_time_args()},
     };
 
     KernelSpec writer{
@@ -356,6 +366,14 @@ MorehLayerNormBackwardInputGradOperation::MorehLayerNormBackwardInputGradFactory
         DFBBinding{.dfb_spec_name = TMP2, .accessor_name = "tmp2", .endpoint_type = DFBEndpointType::CONSUMER},
         DFBBinding{.dfb_spec_name = TMP3, .accessor_name = "tmp3", .endpoint_type = DFBEndpointType::PRODUCER},
         DFBBinding{.dfb_spec_name = TMP3, .accessor_name = "tmp3", .endpoint_type = DFBEndpointType::CONSUMER},
+        DFBBinding{
+            .dfb_spec_name = REDUCE_DY, .accessor_name = "reduce_dy", .endpoint_type = DFBEndpointType::PRODUCER},
+        DFBBinding{
+            .dfb_spec_name = REDUCE_DY, .accessor_name = "reduce_dy", .endpoint_type = DFBEndpointType::CONSUMER},
+        DFBBinding{
+            .dfb_spec_name = REDUCE_YDY, .accessor_name = "reduce_ydy", .endpoint_type = DFBEndpointType::PRODUCER},
+        DFBBinding{
+            .dfb_spec_name = REDUCE_YDY, .accessor_name = "reduce_ydy", .endpoint_type = DFBEndpointType::CONSUMER},
     };
     if (!use_large_algorithm) {
         compute_dfb_bindings.push_back(DFBBinding{
@@ -400,6 +418,9 @@ MorehLayerNormBackwardInputGradOperation::MorehLayerNormBackwardInputGradFactory
             .compile_time_args =
                 {
                     {"num_rows_per_core", num_rows_per_core},
+                    {"reduce_block_tiles", MorehReduceBlocks::tiles_per_block},
+                    {"reduce_buffer_tiles", reduction.buffer_tiles},
+                    {"reduce_aux_tiles", in4_t},
                     {"origin_H", origin_H},
                     {"origin_W", origin_W},
                     // Carried over as-is: the kernel calls this argument Wt, but the value is the
@@ -409,6 +430,7 @@ MorehLayerNormBackwardInputGradOperation::MorehLayerNormBackwardInputGradFactory
                     {"is_groupnorm", static_cast<uint32_t>(is_groupnorm)},
                 },
             .hw_config = compute_hw,
+            .advanced_options = {.compile_time_varargs = reduction.sequence.get_compile_time_args()},
         };
     };
 

@@ -47,7 +47,6 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
     // must not reach this code path. Instead negative scalers are handled via the two-step
     // W-then-H path where the scaler is applied once (see the reduce function in reduce_op.cpp).
     TT_FATAL(operation_attributes.scaler >= 0, "Scalar must be non-negative");
-    float scaler = std::sqrt(operation_attributes.scaler);
 
     TT_FATAL(
         H % tile_height == 0 && W % tile_width == 0, "Reduce HW expects tile-aligned padded shape H={}, W={}", H, W);
@@ -102,6 +101,23 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
     ProgramSpec spec;
     spec.name = "reduce_single_core_hw";
 
+    namespace rh = ttnn::kernel_lib::host;
+    const auto reduce_unit = make_generic_reduce_sequence(
+        a.tensor_spec(),
+        output.tensor_spec(),
+        operation_attributes.math_op,
+        ReduceOpDim::HW,
+        operation_attributes.scaler,
+        ReduceFp32Mode::Fast,
+        {a.device().arch(), fp32_dest_acc_en, false, a.device().l1_size_per_core()},
+        Ht,
+        Wt,
+        NC,
+        true);
+    const auto* auxiliary_cb = reduce_unit.calls.front().plan.find_cb(rh::ReduceCbRole::Auxiliary);
+    scaler_cb_data_format = auxiliary_cb->data_format;
+    scaler_single_tile_size = auxiliary_cb->page_size;
+
     // ---- Dataflow buffers ----
     constexpr uint32_t num_input_tiles = 2;
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
@@ -113,7 +129,7 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = SCALER_DFB,
         .entry_size = scaler_single_tile_size,
-        .num_entries = 1,
+        .num_entries = static_cast<uint32_t>(reduce_unit.auxiliary.tiles.size()),
         .data_format_metadata = scaler_cb_data_format,
     });
     constexpr uint32_t num_output_tiles = 2;
@@ -170,9 +186,9 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
                 },
             },
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "src"}},
-        .compile_time_args = {{"scaler_bits", std::bit_cast<uint32_t>(scaler)}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
         .hw_config = ttnn::create_reader_datamovement_config(a.device().arch()),
+        .advanced_options = {.compile_time_varargs = reduce_unit.get_auxiliary_compile_time_args()},
     });
 
     // ---- Writer kernel ----
@@ -290,6 +306,7 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
                 {"enable_fp32_sfpu", 0u},
             },
         .hw_config = compute_hw,
+        .advanced_options = {.compile_time_varargs = reduce_unit.get_compile_time_args()},
     });
 
     // ---- Work unit (placement) ----

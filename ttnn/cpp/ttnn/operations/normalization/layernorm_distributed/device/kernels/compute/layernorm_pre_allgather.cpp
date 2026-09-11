@@ -18,6 +18,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/compute_kernel_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "ttnn/operations/normalization/kernel_util/compute/pre_add.h"
 #include "experimental/kernel_args.h"
 
@@ -37,9 +38,6 @@ void kernel_main() {
     constexpr auto Wt = get_arg(args::Wt);
     constexpr auto blk = get_arg(args::blk);
     constexpr bool unpack_fp32_active = get_arg(args::unpack_fp32_active) != 0;
-    // Accurate mode only supports SUM; with the reader's scaler of 1.0, SUM and AVG are equivalent.
-    constexpr auto reduce_type = unpack_fp32_active ? PoolType::SUM : PoolType::AVG;
-    constexpr auto reduce_fp32_mode = unpack_fp32_active ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
 
     constexpr uint32_t onetile = 1;
 
@@ -109,30 +107,18 @@ void kernel_main() {
 
         // BulkWaitBulkPop: All Wt tiles already in the buffer (see cumulative wait above)
         // Bulk mode for optimal performance
-        compute_kernel_lib::reduce<
-            reduce_type,
-            ReduceDim::REDUCE_ROW,
-            dfb::x2,
-            dfb::reduce,
-            dfb::out,
-            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop,
-            compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-            reduce_fp32_mode>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+        using SquareCall =
+            ttnn::kernel_lib::BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallArgs<0>, dfb::x2, dfb::reduce, dfb::out>;
+        compute_kernel_lib::reduce<SquareCall>();
 
         /*
          * sum(x)
          */
         // BulkWaitBulkPop: All Wt tiles already in the buffer (see cumulative wait above)
         // Bulk mode for optimal performance
-        compute_kernel_lib::reduce<
-            reduce_type,
-            ReduceDim::REDUCE_ROW,
-            dfb_inp_id,
-            dfb::reduce,
-            dfb::out,
-            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop,
-            compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-            reduce_fp32_mode>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+        using MeanCall = ttnn::kernel_lib::
+            BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallArgs<0>, dfb_inp_id, dfb::reduce, dfb::out>;
+        compute_kernel_lib::reduce<MeanCall>();
     }
-    dfb_reduce.pop_front(1);
+    dfb_reduce.pop_front(ttnn::kernel_lib::ReduceCallArgs<0>::auxiliary_tile_count);
 }

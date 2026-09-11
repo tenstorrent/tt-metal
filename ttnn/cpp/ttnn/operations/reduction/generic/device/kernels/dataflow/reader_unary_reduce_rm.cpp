@@ -10,6 +10,7 @@
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/operations/pool/device/kernels/experimental_device_api.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/reduce_rm_dataflow_common.hpp"
 
 //
@@ -42,7 +43,6 @@ void reduce_rm_reader() {
     const uint32_t rt_start = get_arg(args::rt_start);
 
     // Compile-time args. Both paths receive the whole set; each branch reads the names it needs.
-    constexpr auto scaler_bits = get_arg(args::scaler_bits);
     constexpr auto W_logical = get_arg(args::W_logical);
     constexpr auto elem_bytes = get_arg(args::elem_bytes);
     constexpr auto padding_identity_bits = get_arg(args::padding_identity_bits);
@@ -60,15 +60,8 @@ void reduce_rm_reader() {
     DataflowBuffer dfb_clear_value(dfb::clear_value);
     Noc noc;
 
-    // Scaler entry — pushed once, used by every compute reduce() call.
-    const float scaler_f = __builtin_bit_cast(float, scaler_bits);
-    const uint32_t scaler_valid_for_reduce = []() -> uint32_t {
-        if constexpr (REDUCE_OP == ckernel::PoolType::SUM) {
-            return tt::constants::TILE_WIDTH;
-        }
-        return (W_logical < tt::constants::TILE_WIDTH) ? W_logical : tt::constants::TILE_WIDTH;
-    }();
-    dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, REDUCE_OP, DIM>(scaler_f, scaler_valid_for_reduce);
+    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::scaler>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 
     // Identity template — pre-built once, reused as the pad source for every staged slab.
     const uint32_t clear_template_bytes = dfb_clear_value.get_tile_size();

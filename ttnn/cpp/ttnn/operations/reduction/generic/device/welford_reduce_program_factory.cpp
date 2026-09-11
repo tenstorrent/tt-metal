@@ -309,8 +309,8 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
         // Welford processes one column at a time (SFPU can only track one running
         // mean/M2 state), so the reader must deliver tiles in strict column-major
         // order: all Ht tiles of column 0, then all Ht tiles of column 1, etc.
-        // enable_fp32_sfpu=0: Welford never uses the fp32-SFPU reduce path (use_welford=1 forces
-        // row_chunk=1). The arg keeps this reader's CT-arg set in lockstep with the reduce factories.
+        // The reduce_output_tiles argument below fixes the reader's row_chunk to one.
+        // Legacy flags remain in the shared reader's compile-time argument set.
         reader_source =
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
             "reader_unary_transpose_wh_universal_input_cols_partitioned.cpp";
@@ -332,6 +332,10 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
         reader_rta_names = {"num_tiles", "start_id"};
     }
 
+    reader_ct_args.emplace("reduce_output_tiles", 1U);
+    const auto auxiliary_args =
+        ttnn::kernel_lib::host::ReduceAuxiliaryArgs({0, {{0.0F, ttnn::kernel_lib::ReduceAuxiliaryTileType::Zero, 0}}})
+            .get_compile_time_args();
     spec.kernels.push_back(KernelSpec{
         .unique_id = READER,
         .source = reader_source,
@@ -362,6 +366,7 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
         .compile_time_args = std::move(reader_ct_args),
         .runtime_arg_schema = {.runtime_arg_names = std::move(reader_rta_names)},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .advanced_options = {.compile_time_varargs = auxiliary_args},
     });
 
     // --- Writer kernel ---

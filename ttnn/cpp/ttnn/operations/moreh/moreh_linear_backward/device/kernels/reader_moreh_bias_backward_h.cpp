@@ -14,18 +14,8 @@ void kernel_main() {
     const uint32_t Wt = get_arg(args::Wt);
     const uint32_t Wt_per_core = get_arg(args::Wt_per_core);
     const uint32_t start_id = get_arg(args::start_id);
-    const uint32_t mask_h = get_arg(args::mask_h);
-    const uint32_t mask_w = get_arg(args::mask_w);
-    const bool do_mask_h = (get_arg(args::do_mask_h) == 1);
-    const bool do_mask_w = (get_arg(args::do_mask_w) == 1);
-
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<dfb::scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>();
-
-    if (do_mask_h || do_mask_w) {
-        DataflowBuffer dfb_mask_h_w(dfb::mask_h_w);
-        generate_mask_h_w(dfb_mask_h_w, mask_h, mask_w);
-    }
+    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::scaler>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 
     const auto s0 = TensorAccessor(tensor::src0);
 

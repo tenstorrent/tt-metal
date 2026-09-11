@@ -4,6 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -13,8 +14,13 @@
 #include <cstdint>
 
 void kernel_main() {
-    constexpr auto dfb_max_scaler = dfb::max_scaler;
-    constexpr auto dfb_sum_scaler = dfb::sum_scaler;
+    using MaxAuxiliary =
+        ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::max_scaler>;
+    using SumAuxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<
+        ttnn::kernel_lib::ReduceAuxiliaryArgs<MaxAuxiliary::next_compile_time_args_offset()>,
+        dfb::sum_scaler>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<MaxAuxiliary>();
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<SumAuxiliary>();
 
 #if FUSED_SCALE_MASK
     Noc noc;
@@ -57,25 +63,9 @@ void kernel_main() {
             }
             noc.async_read_barrier();
             dfb_attn_obj.push_back(block_wt);
-
-            if (f == 0 && h == 0) {
-                dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-                    dfb_max_scaler,
-                    ckernel::PoolType::MAX,
-                    ckernel::ReduceDim::REDUCE_ROW>();
-                dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-                    dfb_sum_scaler,
-                    ckernel::PoolType::SUM,
-                    ckernel::ReduceDim::REDUCE_ROW>();
-            }
         }
     }
-#elif defined(CAUSAL_MASK) && defined(SHARDED_CAUSAL_MASK)
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<dfb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<dfb_sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
-#else
+#elif !defined(CAUSAL_MASK)
     dfb_attn_obj.reserve_back(block_wt);
     std::uint32_t write_offset = 0;
     for (std::uint32_t w = 0; w < block_wt; w++) {
@@ -86,16 +76,7 @@ void kernel_main() {
     noc.async_read_barrier();
     dfb_attn_obj.push_back(block_wt);
 
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<dfb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<dfb_sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
 #endif
 
-#else
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<dfb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<dfb_sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
 #endif
 }

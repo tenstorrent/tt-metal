@@ -10,7 +10,7 @@
 #include "api/compute/softmax.h"
 #include "api/compute/reduce.h"
 #include "api/dataflow/dataflow_buffer.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "softmax_reduce.hpp"
 #include "experimental/kernel_args.h"
 
 // for scale+mask+softmax:
@@ -27,14 +27,8 @@ void calc_numeric_stable(std::uint32_t Wt, std::uint32_t ndst) {
     DataflowBuffer dfb_out_obj(dfb_out);
 
     // calculate max val per row
-    compute_kernel_lib::reduce<
-        PoolType::MAX,
-        ReduceDim::REDUCE_ROW,
-        dfb_in,
-        dfb_max_scaler,
-        dfb_max,
-        compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop,
-        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+    using MaxCall = SoftmaxReduceCall<PoolType::MAX, 0, dfb_in, dfb_max_scaler, dfb_max>;
+    compute_kernel_lib::reduce<MaxCall>();
 
     // calculate x-max(x)
     exp_tile_init<EXP_APPROX>();
@@ -338,20 +332,11 @@ void kernel_main() {
 #endif  // FUSED_SCALE_MASK
 
         // SUM reduce with reciprocal post-processing (1/sum)
-        compute_kernel_lib::reduce<
-            PoolType::SUM,
-            ReduceDim::REDUCE_ROW,
-            dfb_exps,
-            dfb_sum_scaler,
-            dfb_recipsumexps,
-            compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
-            compute_kernel_lib::ReduceInputBlockShape::row(Wt),
-            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-            compute_kernel_lib::NoAccumulation{},
-            [](std::uint32_t) {
-                recip_tile_init();
-                recip_tile(0);
-            });
+        using SumCall = SoftmaxReduceCall<PoolType::SUM, 0, dfb_exps, dfb_sum_scaler, dfb_recipsumexps>;
+        compute_kernel_lib::reduce<SumCall>([](std::uint32_t) {
+            recip_tile_init();
+            recip_tile(0);
+        });
 
         dfb_recipsumexps_obj.wait_front(1);  // will reuse Wt times for bcast
 

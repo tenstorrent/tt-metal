@@ -20,11 +20,8 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     DataflowBuffer epsilon(dfb::epsilon);
     Noc noc;
 
-    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-        dfb::scaler,
-        ckernel::PoolType::AVG,
-        ckernel::ReduceDim::REDUCE_ROW,
-        Vt * tt::constants::TILE_WIDTH>();
+    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::scaler>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
     generate_bcast_col_scalar(epsilon, epsilon_bits);
 
     weight.reserve_back(Vt);

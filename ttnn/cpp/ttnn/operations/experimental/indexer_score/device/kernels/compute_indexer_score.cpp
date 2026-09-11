@@ -21,7 +21,8 @@
 #include "api/dataflow/circular_buffer.h"  // Device 2.0 CircularBuffer wrapper (cb ops)
 
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"  // block-max-pool: compute_kernel_lib::reduce
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"        // block-max-pool: compute_kernel_lib::reduce
 #include "indexer_score_common.hpp"                             // shared CB indices, compile-time dims, work-unit walk
 #include "api/compute/experimental/indexer_mul_custom.h"
 
@@ -594,17 +595,8 @@ void kernel_main() {
                     if constexpr (blocks_per_unit <= 8) {
                         block_max_pool_batched<cb_acc_strip, cb_scaler, cb_out_strip>(unit_strip);
                     } else {
-                        compute_kernel_lib::reduce<
-                            PoolType::MAX,
-                            ReduceDim::REDUCE_ROW,
-                            cb_acc_strip,
-                            cb_scaler,
-                            cb_out_strip,
-                            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
-                            compute_kernel_lib::ReduceInputBlockShape::of(
-                                /*rows = blocks/row */ blocks_per_unit,
-                                /*cols = tiles/block */ block_tiles,
-                                /*batches = q-rows */ q_tiles_per_unit));
+                        using Call = ttnn::kernel_lib::ReduceCallArgs<num_common_ct_args + 7>;
+                        compute_kernel_lib::reduce<Call>();
                     }
                 } else {
                     compute_kernel_lib::untilize<k_tiles_per_unit, cb_acc_strip, cb_out_strip>(q_tiles_per_unit);

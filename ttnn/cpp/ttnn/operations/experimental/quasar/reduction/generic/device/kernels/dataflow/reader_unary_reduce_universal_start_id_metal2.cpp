@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Metal 2.0 fork of reader_unary_reduce_universal_start_id.cpp. Identical dataflow: fill the reduce
-// scaler DFB once (prepare_reduce_scaler), then stream input tiles into the input DFB. CB indices →
+// scaler DFB once (host auxiliary recipe), then stream input tiles into the input DFB. CB indices →
 // dfb:: bindings, the source TensorAccessor → tensor:: binding (src_addr runtime arg gone), scaler_bits
 // → named CTA, count/start → named RTAs. The legacy copy is retained for not-yet-ported reduce factories.
 
@@ -14,15 +14,15 @@
 #include "api/tensor/noc_traits.h"
 #include "api/tensor/tensor_accessor.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
     const uint32_t num_tiles = get_arg(args::num_tiles);
     const uint32_t start_id = get_arg(args::start_id);
-    constexpr uint32_t scaler_bits = get_arg(args::scaler_bits);
 
-    float scaler_f = __builtin_bit_cast(float, scaler_bits);
-    dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, REDUCE_OP, REDUCE_DIM>(scaler_f);
+    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::scaler>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 
     const auto tensor_accessor = TensorAccessor(tensor::input);
 
