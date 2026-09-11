@@ -144,7 +144,7 @@ public:
      * @param fifo_size Size of the circular FIFO buffer in bytes. Must be PCIe-aligned.
      * @param config_buffer_address LIM address on the sender L2CPU for the socket metadata.
      *                              Must be L1-aligned, at least required_config_buffer_size()
-     *                              bytes, and within the L2CPU's LIM window.
+     *                              bytes, and within the L2CPU's IoWindow.
      */
     D2HSocket(
         MeshDevice& mesh_device, const MeshCoreCoord& sender_l2cpu, uint32_t fifo_size, uint32_t config_buffer_address);
