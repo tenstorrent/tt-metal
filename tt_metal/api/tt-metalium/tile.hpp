@@ -21,9 +21,30 @@ enum class DataFormat : uint8_t;
 namespace tt::tt_metal {
 
 struct Tile {
+    /**
+     * Construct a Tile with a given tile shape (H, W).
+     *
+     * The tile face shape is derived automatically from the tile shape.
+     */
     Tile(
         std::array<uint32_t, 2> tile_shape = {constants::TILE_HEIGHT, constants::TILE_WIDTH},
         bool transpose_tile = false);
+
+    /**
+     * Construct a Tile with a given tile shape (H, W) and custom face shape (H, W).
+     */
+    Tile(std::array<uint32_t, 2> tile_shape, std::array<uint32_t, 2> face_shape, bool transpose_tile = false);
+
+    /**
+     * Factory function to construct a Tile from tile shape in faces
+     *
+     * If a face shape is not provided, the default face shape (16x16) is used.
+     */
+    static Tile from_face_grid(
+        std::array<uint32_t, 2> tile_shape_in_faces,
+        std::array<uint32_t, 2> face_shape = {constants::FACE_HEIGHT, constants::FACE_WIDTH}) {
+        return Tile({face_shape[0] * tile_shape_in_faces[0], face_shape[1] * tile_shape_in_faces[1]}, face_shape);
+    }
 
     // Getter methods
     uint32_t get_height() const { return tile_shape[0]; }
