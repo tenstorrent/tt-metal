@@ -51,6 +51,7 @@ class TT_CCL:
     ):
         self.mode = mode
         self.is_qwen = is_qwen
+        self.prefill_mlp_output_dtype = getattr(model_args, "prefill_mlp_output_dtype", ttnn.bfloat8_b)
         # Wormhole / TG always run with the prefetcher; the Blackhole bring-up runs without it.
         # The no-prefetcher (Blackhole) buffer-sizing and stable-CCL fallbacks below are gated on
         # this so the prefetcher (Wormhole) path stays byte-for-byte identical to main.
@@ -99,6 +100,15 @@ class TT_CCL:
         self.use_ring_prefill = self.ring_topology and mode == "prefill"
         self.use_ring_ag_prefill = (self.ring_topology and not LINE_AG) and mode == "prefill"
         self.use_ring_rs_prefill = (self.ring_topology and not LINE_RS) and mode == "prefill"
+        # Keep this reduction sequence specific to Qwen3-32B on Wormhole Galaxy.
+        self.use_qwen_prefill_ff2_gather_reduce = (
+            self.is_qwen
+            and model_args.base_model_name == "Qwen3-32B"
+            and not self.is_blackhole
+            and self.use_prefetcher
+            and self.use_ring_ag_prefill
+            and self.use_ring_rs_prefill
+        )
         self.max_top_k = model_args.max_top_k
         self.max_batch_size = model_args.max_batch_size
 
@@ -642,6 +652,13 @@ class TT_CCL:
 
         return persistent_buffers
 
+    def _prefill_buffer_dtype(self, key):
+        if key in ("FF2", "FF2_batched"):
+            return self.prefill_mlp_output_dtype
+        if key == "LAYERNORM":
+            return ttnn.bfloat16
+        return ttnn.bfloat8_b
+
     def get_prefill_reduce_scatter_buffers(self):
         """
         Currently, this is hardcoded with llama specific shapes.
@@ -685,7 +702,7 @@ class TT_CCL:
                         torch.zeros(shape[1]),
                         device=self.mesh_device,
                         layout=ttnn.TILE_LAYOUT,
-                        dtype=ttnn.bfloat8_b,
+                        dtype=self._prefill_buffer_dtype(key),
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
                         mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                         cache_file_name=self.weight_cache_path / (f"pb_rs_00_{key}_{i}_{seqlen}"),
@@ -696,7 +713,7 @@ class TT_CCL:
                         torch.zeros(shape[0]),
                         device=self.mesh_device,
                         layout=ttnn.TILE_LAYOUT,
-                        dtype=ttnn.bfloat8_b,
+                        dtype=self._prefill_buffer_dtype(key),
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
                         mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                         cache_file_name=self.weight_cache_path / (f"pb_rs_01_{key}_{i}_{seqlen}"),
@@ -707,7 +724,7 @@ class TT_CCL:
                         torch.zeros(shape[1]),
                         device=self.mesh_device,
                         layout=ttnn.TILE_LAYOUT,
-                        dtype=ttnn.bfloat8_b,
+                        dtype=self._prefill_buffer_dtype(key),
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
                         mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                         cache_file_name=self.weight_cache_path / (f"pb_rs_02_{key}_{i}_{seqlen}"),
@@ -760,11 +777,13 @@ class TT_CCL:
                 }
             )
             for key, shape in buffers_dict.items():
+                if self.use_qwen_prefill_ff2_gather_reduce and key in ("FF2", "FF2_batched"):
+                    continue
                 tt_intermediate_buffer = ttnn.as_tensor(
                     torch.zeros(shape[0]),
                     device=self.mesh_device,
                     layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat8_b,
+                    dtype=self._prefill_buffer_dtype(key),
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                     cache_file_name=self.weight_cache_path / (f"pb_rs_01_{key}_0_{seqlen}"),
@@ -774,7 +793,7 @@ class TT_CCL:
                     torch.zeros(shape[1]),
                     device=self.mesh_device,
                     layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat8_b,
+                    dtype=self._prefill_buffer_dtype(key),
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                     cache_file_name=self.weight_cache_path / (f"pb_rs_00_{key}_0_{seqlen}"),
@@ -820,11 +839,13 @@ class TT_CCL:
                 }
             )
             for key, shape in buffers_dict.items():
+                if self.use_qwen_prefill_ff2_gather_reduce and key in ("FF2",):
+                    continue
                 tt_buffer = ttnn.as_tensor(
                     torch.zeros(shape[0]),
                     device=self.mesh_device,
                     layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat16 if key == "LAYERNORM" else ttnn.bfloat8_b,
+                    dtype=self._prefill_buffer_dtype(key),
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                     cache_file_name=self.weight_cache_path / ("pb_ag_" + key + str(seqlen)),
@@ -910,6 +931,8 @@ class TT_CCL:
                 persistent_buffer.deallocate(True)
 
         else:
+            if self.use_qwen_prefill_ff2_gather_reduce and buffer_key == "FF2":
+                return self._prefill_ff2_gather_reduce(input_tensor_mesh, cluster_axis, memory_config)
             if buffer_key == "WO_AG" or lm_head:
                 ttnn_tensor_gathered = self.line_all_gather(
                     input_tensor_mesh,
@@ -952,6 +975,33 @@ class TT_CCL:
 
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return output_tensor_mesh
+
+    def _prefill_ff2_gather_reduce(self, input_tensor_mesh, cluster_axis, memory_config):
+        """Gather FF2 partials in rank order, then reduce locally without intermediate ring sums."""
+        assert input_tensor_mesh.shape[0] == 1, "FF2 prefill requires a leading singleton dimension"
+        gathered = ttnn.experimental.all_gather_async(
+            input_tensor=input_tensor_mesh,
+            persistent_output_buffer=None,
+            dim=0,
+            multi_device_global_semaphore=self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
+            num_links=4,
+            barrier_semaphore=self.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Ring,
+            subdevice_id=self.worker_sub_device_id,
+            cluster_axis=cluster_axis,
+        )
+        self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+        output = ttnn.experimental.fast_reduce_nc(
+            gathered,
+            dims=[0],
+            output=None,
+            compute_kernel_config=None,
+            memory_config=memory_config,
+            sub_core_grids=self.sub_device_crs,
+        )
+        ttnn.deallocate(gathered)
+        return output
 
     def line_all_reduce_gather_reduce(self, input_tensor_mesh, cluster_axis, num_links, memory_config):
         # Stable all-reduce used for the wide Blackhole lm_head logits in decode. all_reduce_async's

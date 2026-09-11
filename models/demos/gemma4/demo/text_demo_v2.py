@@ -629,6 +629,7 @@ def test_demo_text(
         enable_trace=prefill_enable_trace,
         can_sample_on_device=can_sample,
         greedy_only=greedy_only,
+        decode_page_table=page_table,
     )
     logger.info("Warmup complete")
 

@@ -1197,13 +1197,15 @@ def test_demo_text(
 
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
-        # when doing repeating batches, set kv-caches to zero, to avoid context leaking
-        if batch_idx != 0:
-            model.switch_mode("prefill")
-            for layer in model.layers:
-                k_cache, v_cache = layer.attention.layer_past
-                k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
-                v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
+        # when doing repeating batches, set kv-caches to zero, to avoid context leaking.
+        # Also run it on the first batch, where it is a no-op on freshly allocated caches: it
+        # compiles the multiply here, before any trace is captured, instead of on batch 1 when
+        # the prefill traces are already live.
+        model.switch_mode("prefill")
+        for layer in model.layers:
+            k_cache, v_cache = layer.attention.layer_past
+            k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
+            v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
         temperature = sampling_params["temperature"]
