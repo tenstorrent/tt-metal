@@ -7,6 +7,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -83,6 +85,71 @@ void kernel_main() {}
     EXPECT_FALSE(artifacts.legacy_header);
     EXPECT_TRUE(artifacts.blaze_header);
     EXPECT_FALSE(artifacts.legacy_force_include);
+}
+
+TEST_F(NamedCtArgChannelsMockBlackholeFixture, PositionalValuesAndKernelDefinesShareFirmwarePch) {
+    const auto& options = MetalContext::instance().rtoptions();
+    if (!options.get_jit_pch_strict()) {
+        GTEST_SKIP() << "Run with TT_METAL_JIT_PCH=1 TT_METAL_JIT_PCH_STRICT=1 TT_METAL_FORCE_JIT_COMPILE=1";
+    }
+    ASSERT_TRUE(options.get_force_jit_compile());
+    std::map<std::filesystem::path, std::filesystem::file_time_type> first_pch;
+    for (const std::vector<uint32_t>& values : {std::vector<uint32_t>{7}, {21, 42}, {}}) {
+        const std::string source = R"(
+#include "api/compile_time_args.h"
+static_assert(kernel_compile_time_args.size() == EXPECTED_COUNT);
+#if EXPECTED_COUNT > 0
+static_assert(get_compile_time_arg_val(0) == EXPECTED_VALUE);
+#endif
+void kernel_main() {}
+)";
+        KernelDescriptor descriptor = {
+            .kernel_source = source,
+            .source_type = KernelDescriptor::SourceType::SOURCE_CODE,
+            .core_ranges = CoreRange(CoreCoord{0, 0}),
+            .compile_time_args = values,
+            .defines =
+                {{"EXPECTED_COUNT", std::to_string(values.size())},
+                 {"EXPECTED_VALUE", std::to_string(values.empty() ? 0 : values.front())}},
+            // Appended kernel include paths must not create new PCH profiles.
+            .compiler_include_paths =
+                {std::filesystem::path(options.get_root_dir()) / (values.empty() ? "tests" : "tt_metal")},
+        };
+        ProgramDescriptor::KernelDescriptors descriptors;
+        descriptor.config = DataMovementConfigDescriptor{};
+        descriptors.push_back(descriptor);
+        descriptor.config = DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_1};
+        descriptors.push_back(descriptor);
+        descriptor.config = ComputeConfigDescriptor{};
+        descriptors.push_back(descriptor);
+        Program program(ProgramDescriptor{.kernels = descriptors});
+        auto* device = devices_.at(0).get();
+        program.impl().compile(device);
+        const auto& env = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env;
+        std::map<std::filesystem::path, std::filesystem::file_time_type> accepted_pch;
+        for (size_t i = 0; i < descriptors.size(); ++i) {
+            const auto dir = std::filesystem::path(env.get_out_kernel_root_path()) /
+                             program.impl().get_kernel(i)->get_full_kernel_name();
+            for (const auto& file : std::filesystem::recursive_directory_iterator(dir)) {
+                if (!file.path().string().ends_with(".o.log")) {
+                    continue;
+                }
+                std::ifstream log(file.path());
+                for (std::string line; std::getline(log, line);) {
+                    if (line.starts_with("! ") && line.ends_with(".gch")) {
+                        const std::filesystem::path pch = line.substr(2);
+                        accepted_pch.emplace(pch, std::filesystem::last_write_time(pch));
+                    }
+                }
+            }
+        }
+        ASSERT_EQ(accepted_pch.size(), 5u) << "BRISC, NCRISC and all three TRISCs must consume a PCH";
+        if (first_pch.empty()) {
+            first_pch = accepted_pch;
+        } else {
+            EXPECT_EQ(accepted_pch, first_pch) << "Kernel values or include paths rebuilt a PCH";
+        }
+    }
 }
 
 TEST_F(NamedCtArgChannelsMockBlackholeFixture, LegacyFieldPreservesBothApis) {

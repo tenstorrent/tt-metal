@@ -68,6 +68,10 @@ std::vector<std::string> build_gpp_argv(
 // the RPC, where an absolute client-side path would not exist on the server.
 inline constexpr std::string_view NAMED_CT_ARG_MAP_HEADER = "named_ct_arg_map_generated.h";
 
+// Like the named map, positional values belong to the kernel, after PCH loading.
+inline constexpr std::string_view CT_ARGS_HEADER = "compile_time_args_generated.h";
+std::string format_ct_args_header(const std::vector<std::uint32_t>& args);
+
 // Render |named_args| as the initializer body of KERNEL_COMPILE_TIME_ARG_MAP:
 //   {"a",1},{"b",2}
 // Empty when |named_args| is empty. Entries are emitted in ascending key order so the text is

@@ -4,6 +4,10 @@
 
 #include "pch.hpp"
 
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
+
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -31,9 +35,60 @@ namespace {
 // Shared ownership keeps in-flight entries alive across cache clearing.
 struct PchEntry {
     std::mutex mutex;
-    bool ok = false;
     bool failed = false;
 };
+
+// Coordinate processes sharing TT_METAL_CACHE. O_CLOEXEC prevents the compiler
+// from keeping a lock alive if its parent exits during construction.
+class PchFileLock {
+public:
+    explicit PchFileLock(const fs::path& path) : fd_(::open(path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0600)) {
+        if (fd_ >= 0 && ::flock(fd_, LOCK_EX) != 0) {
+            ::close(fd_);
+            fd_ = -1;
+        }
+    }
+    ~PchFileLock() {
+        if (fd_ >= 0) {
+            ::close(fd_);
+        }
+    }
+    PchFileLock(const PchFileLock&) = delete;
+    PchFileLock& operator=(const PchFileLock&) = delete;
+    explicit operator bool() const { return fd_ >= 0; }
+
+private:
+    int fd_;
+};
+
+// A backstop for unusual combinations of firmware/compiler options. Count reserved
+// profile directories, including builds in flight, rather than just completed .gch
+// files. Never evict a PCH that a compiler may be about to consume.
+bool reserve_profile(const fs::path& cache, const fs::path& dir) {
+    constexpr size_t max_profiles = 64;
+    fs::create_directories(cache);
+    const PchFileLock lock(cache / "admission.lock");
+    if (!lock) {
+        return false;
+    }
+    if (fs::is_directory(dir)) {
+        return true;
+    }
+    size_t profiles = 0;
+    for (const auto& target : fs::directory_iterator(cache)) {
+        if (target.is_directory()) {
+            for (const auto& profile : fs::directory_iterator(target.path())) {
+                profiles += profile.is_directory();
+            }
+        }
+    }
+    if (profiles >= max_profiles) {
+        log_warning(tt::LogBuildKernels, "PCH: profile limit reached in {}; compiling without it", cache.string());
+        return false;
+    }
+    fs::create_directories(dir);
+    return true;
+}
 
 std::mutex pch_map_mutex;
 std::unordered_map<std::string, std::shared_ptr<PchEntry>> pch_entries;
@@ -113,7 +168,7 @@ void pch_cache_clear() {
 }
 
 // Returns the staged header to force-include, or empty to request ordinary compilation.
-// The caller must remove per-kernel -include pairs from defines.
+// The caller supplies only a shared firmware profile, with no kernel arguments.
 std::string ensure_pch(
     const std::string& gpp,
     const std::string& root,
@@ -135,9 +190,10 @@ std::string ensure_pch(
         include_args.push_back(std::move(tok));
     }
 
-    // Distinct flags, defines or include paths require separate PCH builds.
-    // Recipes with few consumers may cost more than ordinary compilation.
+    // Only genuine firmware/compiler profile differences create new PCH files.
+    // The output root is scoped by JitBuildEnv's build key, including SFPI version.
     tt::StableHasher hasher;
+    hasher.update(gpp);
     hasher.update(target_name);
     hasher.update(std::string(umbrella_rel));
     hasher.update(opt_level);
@@ -151,15 +207,14 @@ std::string ensure_pch(
     const uint64_t key = hasher.digest();
 
     const fs::path umbrella = fs::path(std::string(umbrella_rel));
-    const fs::path dir = fs::path(out_root) / "pch" / target_name / fmt::format("{:016x}", key);
+    const fs::path cache = fs::path(out_root) / "pch";
+    const fs::path dir = cache / target_name / fmt::format("{:016x}", key);
     const fs::path header = dir / umbrella.filename();
     const std::string gch = header.string() + ".gch";
     const std::string dep = header.string() + ".d";
     const std::string dephash = gch + ".dephash";
 
-    // Serialize validation/builds per entry, allowing different recipes to proceed.
-    // Fresh processes rebuild. Atomic renames protect each file from partial reads;
-    // publication of the header, .d, .gch and sidecar is not one transaction.
+    // Serialize validation/builds per entry, allowing different profiles to proceed.
     const std::shared_ptr<PchEntry> entry = pch_entry_for(header.string());
     std::lock_guard entry_lock(entry->mutex);
 
@@ -168,14 +223,33 @@ std::string ensure_pch(
         return {};
     }
 
+    try {
+        if (!reserve_profile(cache, dir)) {
+            entry->failed = true;
+            return {};
+        }
+    } catch (const fs::filesystem_error& error) {
+        log_warning(
+            tt::LogBuildKernels, "PCH: cannot reserve {}: {}; compiling without it", dir.string(), error.what());
+        entry->failed = true;
+        return {};
+    }
+    const PchFileLock process_lock(dir / "build.lock");
+    if (!process_lock) {
+        entry->failed = true;
+        return {};
+    }
+
     // Recipe keys exclude contents, so validate the dependency hashes before reuse.
-    if (entry->ok && jit_build::dependencies_up_to_date_file(dephash)) {
+    // The sidecar is published last under the process lock. A new process can reuse
+    // the files, while a crashed builder leaves an incomplete entry to rebuild.
+    if (fs::is_regular_file(gch) && fs::is_regular_file(dep) && jit_build::dependencies_up_to_date_file(dephash)) {
         return header.string();
     }
 
     const bool built = [&] {
         std::error_code ec;
-        fs::create_directories(dir, ec);
+        fs::remove(dephash, ec);
         const std::string header_tmp = tt::jit_build::utils::FileRenamer::generate_temp_path(header);
         fs::copy_file(fs::path(root) / umbrella, header_tmp, fs::copy_options::overwrite_existing, ec);
         if (!ec) {
@@ -244,7 +318,6 @@ std::string ensure_pch(
         }
         return ok;
     }();
-    entry->ok = built;
     entry->failed = !built;
     return built ? header.string() : std::string{};
 }

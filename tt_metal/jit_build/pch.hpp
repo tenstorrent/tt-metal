@@ -11,7 +11,8 @@
 namespace tt::jit_build {
 
 // Internal JIT cache helpers. An empty result asks the caller to compile without a PCH.
-// Defines must match the consumer's command line, with per-kernel -include pairs removed.
+// Pass only firmware profile defines and include roots, never kernel arguments or
+// source directories. out_root must include the toolchain/build identity.
 std::string ensure_pch(
     const std::string& gpp,
     const std::string& root,
