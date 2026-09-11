@@ -165,26 +165,41 @@ def _read_device_map(timeout_s: int, rank: int | None = None) -> dict:
     path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
     stem, ext = os.path.splitext(path)
 
-    def _matches():
-        # A KV read is UMD-local: read_dram_umd only reaches chips visible to THIS process. Under
-        # pipeline parallelism every rank exports its own map, and merging them all makes the caller
-        # believe it can resolve another galaxy's chips -- such a layer then clears the visibility
-        # guard and dies inside the read with "no visible chip with ASIC unique_id". So prefer this
-        # process's own rank-scoped map; the merge stays for the single-host layout.
-        if rank is not None and os.path.exists(f"{stem}_r{rank}{ext}"):
-            return [f"{stem}_r{rank}{ext}"]
+    # A KV read is UMD-local: read_dram_umd only reaches chips visible to THIS process. Under
+    # pipeline parallelism every rank exports its own map, and merging them all makes the caller
+    # believe it can resolve another galaxy's chips -- such a layer then clears the visibility guard
+    # and dies inside the read with "no visible chip with ASIC unique_id".
+    def _own():
+        # This rank's own map: the only chips this process can actually reach.
+        own = f"{stem}_r{rank}{ext}"
+        return [own] if os.path.exists(own) else []
+
+    def _any():
         return ([path] if os.path.exists(path) else []) + sorted(_glob.glob(f"{stem}_r*{ext}"))
 
+    # Waiting on _any() under pipeline parallelism is a race, not a fallback: the ranks write to a
+    # shared path at different times, so a rank whose own map is not out yet would see a PEER's and
+    # stop waiting immediately, picking up exactly the cross-galaxy map the rank-scoping exists to
+    # avoid. Wait for our own, or for nothing.
+    _wanted = _own if rank is not None else _any
+
     deadline = time.perf_counter() + timeout_s
-    files = _matches()
+    files = _wanted()
     while not files:
         if time.perf_counter() > deadline:
-            logger.warning(
-                f"[producer] device map {path} (or {stem}_r*{ext}) not found after {timeout_s}s; skipping KV read."
-            )
+            if rank is not None and _any():
+                logger.warning(
+                    f"[producer] rank {rank}'s own device map {stem}_r{rank}{ext} never appeared, though "
+                    f"other ranks' maps are present. Not merging them -- they describe chips this "
+                    f"process cannot reach. Skipping KV read."
+                )
+            else:
+                logger.warning(
+                    f"[producer] device map {path} (or {stem}_r*{ext}) not found after {timeout_s}s; skipping KV read."
+                )
             return {}
         time.sleep(0.1)
-        files = _matches()
+        files = _wanted()
 
     device_map = {}
     for f_path in files:
@@ -708,16 +723,24 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     tokens_per_block = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     read_len = ((real_len + tokens_per_block - 1) // tokens_per_block) * tokens_per_block
 
+    # Which layers own a KV slab according to the MODEL, not according to what happens to be on
+    # disk. A hybrid stack legitimately has goldens for only some layers, but a mispointed or partial
+    # PREFILL_TRACE_DIR looks exactly the same from a file-presence check, and skipping both leaves a
+    # gate that passes on whatever subset survived. None (every dense model) means every layer.
+    slab_layers = getattr(ADAPTER, "kv_slot_layer_ids", lambda n: None)(NUM_LAYERS)
+    expected_slabs = set(range(NUM_LAYERS)) if slab_layers is None else set(slab_layers)
+
     min_pcc = 1.0
     checked = 0
     unreferenced = []
+    missing_golden = []
     for layer in range(NUM_LAYERS):
         # A hybrid attention stack writes a KV slab on only some layers, so the golden references only
         # those and the table publishes rows for only those. Skip the rest explicitly: the loader
         # would raise on the missing file, and reading an unpublished row would score whatever sits
         # at the default location.
         if not kvpe_golden_present(trace_dir, layer):
-            unreferenced.append(layer)
+            (missing_golden if layer in expected_slabs else unreferenced).append(layer)
             continue
         loc0 = table.lookup(layer, 0, slot_id)
         try:
@@ -744,10 +767,18 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
         logger.info(f"[producer] slot {slot_id} layer {layer:>2} KV PCC: nope={pcc_nope:.5f} pe={pcc_pe:.5f}")
 
     logger.info(
-        f"[producer] slot {slot_id} KV PCC over [0,{real_len}) across {checked}/{NUM_LAYERS} local layers -> "
-        f"{min_pcc:.6f}"
+        f"[producer] slot {slot_id} KV PCC over [0,{real_len}) across {checked}/{len(expected_slabs)} "
+        f"slab-owning layers -> {min_pcc:.6f}"
         + (f"; {len(unreferenced)} layers carry no KV golden (hybrid stack): {unreferenced}" if unreferenced else "")
     )
+    if missing_golden:
+        # These layers DO own a slab, so the golden should have covered them. Naming them is the
+        # difference between a partial trace and a gate that quietly narrowed itself.
+        logger.warning(
+            f"[producer] slot {slot_id}: {len(missing_golden)} slab-owning layer(s) have no KV golden "
+            f"under {trace_dir} and were not scored: {missing_golden}. The trace is partial or "
+            f"PREFILL_TRACE_DIR is wrong; the PCC below covers only the rest."
+        )
     if checked == 0:
         raise RuntimeError(f"slot {slot_id}: no local layers resolved against the device map (nothing verified)")
 
