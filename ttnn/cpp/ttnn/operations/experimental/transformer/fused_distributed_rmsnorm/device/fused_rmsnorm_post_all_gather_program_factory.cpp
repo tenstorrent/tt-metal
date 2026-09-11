@@ -217,7 +217,6 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPostAllGatherProgramFactory::create_
     };
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
 
-    bool use_legacy_rsqrt = false;
     std::vector<uint32_t> compute_args = {
         input_cb_id,
         stats_cb_id,
@@ -234,7 +233,6 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPostAllGatherProgramFactory::create_
         num_tile_cols,
         dst_reg_count,
         stats_tiles_cols,
-        static_cast<uint32_t>(use_legacy_rsqrt),
         static_cast<uint32_t>(has_weight),
         static_cast<uint32_t>(fuse_rope),
         head_dim_tiles};

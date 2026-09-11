@@ -749,7 +749,7 @@ class REDUCE_POOL_TYPE(TemplateParameter):
 
 @dataclass
 class SDPA_OP(TemplateParameter):
-    sdpa_op: SdpaOp = SdpaOp.RecipLegacy
+    sdpa_op: SdpaOp = SdpaOp.RecipIter
 
     def convert_to_cpp(self) -> str:
         return f"constexpr int SDPA_OP = {self.sdpa_op.value};"
@@ -1127,16 +1127,6 @@ class SAMPLING_OP(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"#define SAMPLING_OP_{self.sampling_op.upper()}"
-
-
-@dataclass
-class SAMPLING_LEGACY_COMPAT(TemplateParameter):
-    """``legacy_compat`` template argument of ``calculate_sampling_recip_scalar``."""
-
-    legacy_compat: bool = True
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr bool SAMPLING_LEGACY_COMPAT = {str(self.legacy_compat).lower()};"
 
 
 @dataclass

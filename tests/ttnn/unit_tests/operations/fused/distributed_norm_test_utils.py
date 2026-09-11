@@ -176,7 +176,7 @@ def compute_ttnn_distributed_norm(
         norm_type: "layer_norm" or "rms_norm"
         eps: Epsilon value
         input_dtype: TTNN dtype for input/stats/gamma/beta (required)
-        use_legacy: Whether to use legacy reduction/rsqrt
+        use_legacy: Whether to use legacy reduction
         use_high_precision: Whether to use high precision compute config
         weight_layout: Memory layout for weight tensor
         bias_layout: Memory layout for bias tensor
@@ -258,13 +258,11 @@ def compute_ttnn_distributed_norm(
     if use_legacy:
         program_config = ttnn.LayerNormDefaultProgramConfig(
             legacy_reduction=True,
-            legacy_rsqrt=True,
             use_welford=False,
         )
     else:
         program_config = ttnn.LayerNormDefaultProgramConfig(
             legacy_reduction=False,
-            legacy_rsqrt=False,
             use_welford=use_welford,
         )
 
@@ -402,7 +400,7 @@ def run_distributed_norm_test(
         var: Variance of input distribution
         outlier_pct: Percentage of outliers
         outlier_var: Variance of outliers
-        use_legacy: Use legacy reduction/rsqrt
+        use_legacy: Use legacy reduction
         use_high_precision: Use high precision compute config
         verbose: Print results (default: False for minimal output)
         weight_layout: Memory layout for weight tensor (default: TILE_LAYOUT)

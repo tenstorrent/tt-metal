@@ -28,29 +28,20 @@ constexpr int FIRST_COLUMN_SLOT_STRIDE = 2;
 enum class SamplingBinaryOp { add, sub, mul };
 
 /**
- * @brief Compute 1/in for one SFPU slot, selecting the legacy-compatible or the sign-correct variant.
+ * @brief Compute 1/in for one SFPU slot.
  *
  * Returns by value on purpose. The caller copy-initializes from this prvalue, which is the same
  * construct as the original single-expression init, so C++17 guaranteed elision keeps `out` directly
- * initialized by the reciprocal call. Selecting the variant with a local `vFloat out;` + assignment
- * would instead route through vVal::operator= (__builtin_rvtt_sfpassign_lv) and change the emitted
- * SFPU sequence on the legacy path -- which must stay bit-identical for blaze.
+ * initialized by the reciprocal call.
  *
- * @tparam legacy_compat: Use blaze's bit-identical reciprocal, values = <true/false>
  * @param in: Value to invert.
- * @note Callers must pass in > 0. The two branches disagree on sign: _reciprocal_compat_ opens with
- *       setsgn(in, 1) and so returns the magnitude |1/in| (legacy_compat = true gives +0.25 for -4.0),
- *       while legacy_compat = false is sign-correct. Every caller today feeds a softmax partition
- *       function or a cumulative probability, both strictly positive. The legacy path must stay
- *       bit-identical for blaze, so the divergence is documented rather than fixed.
- * @note Call @ref sampling_recip_init with the matching legacy_compat before this function; the
- *       legacy_compat = false path reads vConstFloatPrgm0 as its Newton-Raphson constant.
+ * @note Callers must pass in > 0.
+ * @note Call @ref sampling_recip_init before this function; the reciprocal path reads
+ *       vConstFloatPrgm0 as its Newton-Raphson constant.
  */
-template <bool legacy_compat, bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat sampling_recip_value(sfpi::vFloat in) {
-    if constexpr (legacy_compat) {
-        return ckernel::sfpu::_reciprocal_compat_<APPROX ? 2 : 3>(in);
-    } else if constexpr (APPROX) {
+    if constexpr (APPROX) {
         return ckernel::sfpu::sfpu_reciprocal_iter<0>(in);
     } else if constexpr (is_fp32_dest_acc_en) {
         return ckernel::sfpu::sfpu_reciprocal_iter<2>(in);
@@ -62,20 +53,14 @@ sfpi_inline sfpi::vFloat sampling_recip_value(sfpi::vFloat in) {
 /**
  * @brief Program the SFPU constants the sampling reciprocal needs.
  *
- * @tparam legacy_compat: Must match the calculate_sampling_recip_scalar call it precedes.
- * @note Call before @ref calculate_sampling_recip_scalar. The legacy_compat = false path calls
+ * @note Call before @ref calculate_sampling_recip_scalar. The reciprocal path calls
  *       sfpu_reciprocal_iter, which reads sfpi::vConstFloatPrgm0 (LREG12) as its Newton-Raphson
  *       constant; only sfpu_reciprocal_init<false> writes the 2.0f it expects. recip_init /
  *       recip_tile_init do not. Without this, a kernel that ran e.g. exp_tile_init earlier leaves
  *       1.442695f there and every Newton step is silently wrong -- no assert, no build error.
- *       The legacy_compat = true path carries its own constants and needs no setup, so this is a
- *       no-op there.
  */
-template <bool legacy_compat = true>
 inline void sampling_recip_init() {
-    if constexpr (!legacy_compat) {
-        sfpu_reciprocal_init<APPROX>();
-    }
+    sfpu_reciprocal_init<APPROX>();
 }
 
 /**
@@ -85,16 +70,14 @@ inline void sampling_recip_init() {
  * picks the variant. On a 16-bit DEST outside APPROX it converts to bf16 with round-to-nearest
  * first, so the store does not truncate.
  *
- * @tparam legacy_compat: Use blaze's bit-identical reciprocal, values = <true/false>
- * @note Callers must pass values > 0: with legacy_compat = true the result is the magnitude
- *       |1/in| rather than 1/in -- see @ref sampling_recip_value for why that divergence stands.
- * @note Call @ref sampling_recip_init with the same legacy_compat before this function; the
- *       legacy_compat = false path reads vConstFloatPrgm0 as its Newton-Raphson constant.
+ * @note Callers must pass values > 0.
+ * @note Call @ref sampling_recip_init before this function; the reciprocal path reads
+ *       vConstFloatPrgm0 as its Newton-Raphson constant.
  */
-template <bool legacy_compat, bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en>
 inline void calculate_sampling_recip_scalar() {
     sfpi::vFloat in = sfpi::dst_reg[0];
-    sfpi::vFloat out = sampling_recip_value<legacy_compat, is_fp32_dest_acc_en>(in);
+    sfpi::vFloat out = sampling_recip_value<is_fp32_dest_acc_en>(in);
     if constexpr (!(is_fp32_dest_acc_en || APPROX)) {
         out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
     }

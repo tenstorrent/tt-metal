@@ -264,10 +264,8 @@ void kernel_main() {
             transpose_tile(invstd_cb, 0, var_dst);
             binop_with_scalar_tile_init();
             add_unary_tile(var_dst, eps_bits);
-            // legacy rsqrt to match the composite dit_layernorm baseline (it uses
-            // rsqrt_tile<true>); the non-legacy default diverges on low-variance rows.
-            rsqrt_tile_init<true>();
-            rsqrt_tile<true>(var_dst);
+            rsqrt_tile_init();
+            rsqrt_tile(var_dst);
             tile_regs_commit();
 
             cb_mean.pop_front(1);
@@ -292,8 +290,7 @@ void kernel_main() {
             // (squares only the small deviations), not the cancellation-prone
             // mean(mean_i^2) - mean_g^2 -- numerically identical to Welford's pairwise merge.
             // Gathered CB interleaves [mean_0, var_0, ...] (row 0): mean_i at 2i, var_i at 2i+1;
-            // output [mean_g, 1/std] (row 0) -> combine_cb for the downstream transpose. legacy
-            // rsqrt matches the composite dit_layernorm baseline.
+            // output [mean_g, 1/std] (row 0) -> combine_cb for the downstream transpose.
             constexpr uint32_t DM = 0;   // Σ mean_i  -> mean_g
             constexpr uint32_t DV = 1;   // Σ var_i   -> 1/std
             constexpr uint32_t DMM = 2;  // Σ (mean_i - mean_g)^2
@@ -341,8 +338,8 @@ void kernel_main() {
             binop_with_scalar_tile_init();
             mul_unary_tile(DV, recip_k_bits);  // DV = var_g
             add_unary_tile(DV, eps_bits);      // var_g + eps
-            rsqrt_tile_init<true>();
-            rsqrt_tile<true>(DV);  // DV = 1/std (legacy, matches baseline)
+            rsqrt_tile_init();
+            rsqrt_tile(DV);  // DV = 1/std
             tile_regs_commit();
             cb_combine.reserve_back(2);
             tile_regs_wait();

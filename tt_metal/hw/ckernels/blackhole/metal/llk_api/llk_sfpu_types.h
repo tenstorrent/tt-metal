@@ -174,8 +174,6 @@ enum class SfpuType {
     identity,
     sqrt_custom,
     tanh_derivative_lut,
-    rsqrt_compat,
-    reciprocal_compat,
     expm1_cw,
     softcap,
     situ_glu,
