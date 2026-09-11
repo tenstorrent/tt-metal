@@ -71,6 +71,78 @@ class MatmulConfig:
     dest_acc: DestAccumulation
 
 
+# Keep in sync with tests/helpers/include/perf.h (PERF_ADDRESS wrap).
+PERF_RING_TILES = 16
+
+# Dest occupancy (rt, ct) through dest Half 16-bit (8 tiles): 1×N, 2×N, 4×1 / 4×2.
+# Filtered by dest capacity. Dest-fill vectors/square and mid-fill stay separate.
+DEST_RT_CT_BLOCKS = (
+    (1, 1),
+    (1, 2),
+    (1, 3),
+    (1, 4),
+    (1, 5),
+    (1, 6),
+    (1, 7),
+    (1, 8),
+    (2, 1),
+    (2, 2),
+    (2, 3),
+    (2, 4),
+    (4, 1),
+    (4, 2),
+)
+
+DEST_HALF_BFP_PACK_HANG_REASON = (
+    "Dest Half + dest_acc=No + BFP pack hangs in _llk_pack_dest_section_done_ (#56073)"
+)
+
+
+def mid_fill_rt_ct_pairs(max_tiles: int) -> List[tuple]:
+    """Half-dest occupancy: 2×2, 1×(cap/2), (cap/2)×1 when they fit."""
+    half = max_tiles // 2
+    pairs = ((2, 2), (1, half), (half, 1))
+    return [
+        (rt, ct) for rt, ct in pairs if rt >= 1 and ct >= 1 and rt * ct <= max_tiles
+    ]
+
+
+def is_dest_half_bfp_pack_hang(
+    dest_sync: DestSync,
+    dest_acc: DestAccumulation,
+    formats: FormatConfig,
+) -> bool:
+    """True when Dest Half + dest_acc=No + BFP pack can hang (#56073).
+
+    BFP pack from 16-bit dest still holds dest on THCON after PACK looks idle.
+    Dest Half + LOOP_FACTOR>1 ping-pongs: ZEROACC CLR_HALF then races math
+    writing the other half. Dest Full serializes math off dest during the
+    clear; dest_acc=Yes uses a different packer dest-read path. Functional
+    tests at LOOP_FACTOR(1) never start the second half. Unskip after #56073.
+    """
+    return (
+        dest_sync == DestSync.Half
+        and dest_acc == DestAccumulation.No
+        and formats.output_format.is_block_float()
+    )
+
+
+def unpack_matmul_fits_perf_ring(
+    rt_dim: int, ct_dim: int, kt_dim: int, ring_tiles: int = PERF_RING_TILES
+) -> bool:
+    """True when one `_llk_unpack_AB_matmul_` from index 0 stays in the perf ring.
+
+    PERF_ADDRESS only wraps the caller-programmed base. The unpack MOP then
+    strides THCON: A by `kt_dim` for each extra output row, B by 1 for each
+    extra output column. Last A index is `(rt-1)*kt`; last B index is `ct-1`.
+    1×N keeps long-K (A does not stride); N×1 drops K that would walk A off
+    the ring (and through PERF_INPUT_B / past L1).
+    """
+    last_a = (rt_dim - 1) * kt_dim
+    last_b = ct_dim - 1
+    return last_a < ring_tiles and last_b < ring_tiles
+
+
 # ======================================================================
 # Helper Functions: Defining the Tile & Face Layout Dimensions for Matmul
 # ======================================================================

@@ -21,8 +21,8 @@
 #include "api/dataflow/dataflow_buffer.h"
 
 void kernel_main() {
-    constexpr std::uint32_t do_gamma = get_compile_time_arg_val(1);
-    constexpr std::uint32_t do_beta = get_compile_time_arg_val(2);
+    constexpr bool do_gamma = get_compile_time_arg_val(1) == 1;
+    constexpr bool do_beta = get_compile_time_arg_val(2) == 1;
 
     constexpr std::uint32_t num_batches = get_compile_time_arg_val(4);
     constexpr std::uint32_t num_groups = get_compile_time_arg_val(5);
@@ -87,17 +87,16 @@ void kernel_main() {
 #ifdef UNTILIZE_OUT
     constexpr std::uint32_t dfb_out_id = tt::CBIndex::c_30;
 #else
-    constexpr std::uint32_t dfb_out_id =
-        (do_gamma or do_beta) ? (((do_gamma and not do_beta) or (not do_gamma and do_beta)) ? dfb_in_id : dfb_out0_id)
-                              : dfb_out0_id;
+    // Exactly one of gamma/beta writes through dfb_in_id; both-or-neither goes to dfb_out0_id.
+    constexpr bool only_one_of_gamma_beta = do_gamma != do_beta;
+    constexpr std::uint32_t dfb_out_id = only_one_of_gamma_beta ? dfb_in_id : dfb_out0_id;
 #endif
 
 #ifdef UNTILIZE_OUT
     constexpr int dfb_outgamma_id = dfb_in_id;
     constexpr int dfb_outbeta_id = do_gamma ? dfb_out_id : dfb_in_id;
-    constexpr int dfb_untilize_in_id = (do_gamma and not do_beta) ? dfb_outgamma_id
-                                       : do_beta                  ? dfb_outbeta_id
-                                                                  : dfb_out_id;
+    constexpr int dfb_untilize_in_no_gamma_id = do_beta ? dfb_outbeta_id : dfb_out_id;
+    constexpr int dfb_untilize_in_id = (do_gamma and not do_beta) ? dfb_outgamma_id : dfb_untilize_in_no_gamma_id;
     constexpr int dfb_untilize_out_id =
 #ifdef READER_REPACK
         dfb_repack_out_id;
@@ -117,7 +116,7 @@ void kernel_main() {
     DataflowBuffer dfb_gamma(dfb_gamma_id);
     DataflowBuffer dfb_in(dfb_in_id);
     DataflowBuffer dfb_in_welford(dfb_in_welford_id);
-    DataflowBuffer dfb_in0_welford(dfb_in0_welford_id);
+    const DataflowBuffer dfb_in0_welford(dfb_in0_welford_id);
     DataflowBuffer dfb_input_mask(dfb_input_mask_id);
     DataflowBuffer dfb_x(dfb_x_id);
     DataflowBuffer dfb_xmm(dfb_xmm_id);
@@ -239,8 +238,8 @@ void kernel_main() {
                 std::uint32_t group_offset = 0;
                 for (std::uint32_t g = min_group; g < num_groups; ++g) {
                     // Start Welford's Calculation
-                    std::uint32_t cols_available = tile_width - group_offset;
-                    std::uint32_t cols_consumed = std::min(cols_available, channels_left);
+                    const std::uint32_t cols_available = tile_width - group_offset;
+                    const std::uint32_t cols_consumed = std::min(cols_available, channels_left);
 
                     welford_restore_state(mean_dst, g);
                     welford_update_rows<0>(input_dst, curr_xy_coord, group_offset, cols_consumed, empty_reciprocal_lut);
@@ -386,12 +385,9 @@ void kernel_main() {
                     if (group_offset != 0) {
                         // Not the first group for this tile: add what is already in cb_x.
                         reconfig_data_format_srca(dfb_x_id);
-                        binary_dest_reuse_tiles_init<
-                            EltwiseBinaryType::ELWADD,
-                            EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_x_id);
+                        add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_x_id);
                         dfb_x.wait_front(1);
-                        binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                            dfb_x_id, 0, dst0);
+                        add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_x_id, 0, dst0);
                         dfb_x.pop_front(1);
                     }
                     tile_regs_commit();
@@ -406,8 +402,8 @@ void kernel_main() {
                     // The blocks after this loop assume srcb still carries cb_xmm's format.
                     reconfig_data_format_srcb(dfb_xmm_id);
 
-                    std::uint32_t cols_available = tile_width - group_offset;
-                    std::uint32_t cols_consumed = std::min(cols_available, channels_left);
+                    const std::uint32_t cols_available = tile_width - group_offset;
+                    const std::uint32_t cols_consumed = std::min(cols_available, channels_left);
                     channels_left -= cols_consumed;
                     group_offset += cols_consumed;
 
@@ -493,7 +489,7 @@ void kernel_main() {
 #else
                 auto write_dfb_id = dfb_out0_id;
 #endif
-                DataflowBuffer write_dfb(write_dfb_id);
+                DataflowBuffer write_dfb(static_cast<uint16_t>(write_dfb_id));
                 write_dfb.reserve_back(1);
                 tile_regs_wait();
 #ifndef UNTILIZE_OUT
@@ -503,7 +499,7 @@ void kernel_main() {
                     pack_reconfig_data_format(write_dfb_id);
                 }
 #endif
-                pack_tile(dst0, write_dfb_id);
+                pack_tile(dst0, static_cast<uint32_t>(write_dfb_id));
 #ifndef UNTILIZE_OUT
                 if constexpr (enable_fp32_reconfig) {
                     pack_reconfig_data_format(dfb_xmm_id);

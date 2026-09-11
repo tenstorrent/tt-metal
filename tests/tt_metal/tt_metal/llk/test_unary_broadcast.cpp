@@ -53,10 +53,6 @@
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
-class IDevice;
-}  // namespace tt::tt_metal
-
-namespace tt::tt_metal {
 
 using std::map;
 using namespace tt;
@@ -637,7 +633,7 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixUnaryBcastRowIdFreeGolden) {
     auto golden = ::unit_tests::compute::gold_standard_tilize(bcast_packed, config);
 
     auto result = unit_tests::llk::single_core::run_unary(
-        *this->devices_.at(0),
+        this->device(),
         tt::DataFormat::Float16_b,
         tt::DataFormat::Float16_b,
         device_input,
