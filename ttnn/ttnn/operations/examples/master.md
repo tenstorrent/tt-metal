@@ -118,13 +118,13 @@ constexpr uint32_t N = B / 2;                       // B tiles to sum; the SECON
 ckl::eltwise_chain<ckl::SetupOwner::Caller>(
     ckl::EltwiseShape::tiles(N),
     ckl::BinaryFpu<cb_in, cb_in, Add, None, ..., D0,
-                   OperandKind::Block, OperandKind::Block,
-                   ckl::TileOffset::Unset, ckl::TileOffset::Set,
+                   InputTileMapping::Block, InputTileMapping::Block,
+                   ckl::TileAddressing::Direct, ckl::TileAddressing::Offset,
                    ckl::DestAccumulation::Enabled>{0, N},        // <- {A base, B base} IS the trick
     ckl::PackTile<cb_out, ckl::OutputLifecycle::DestAccumulation, ..., D0>{});
 ```
 `tiles(...)` is one contiguous shape, so the accumulation scope is `WholeShape`/`Enabled` (`PerRow` is
-rejected there); a 2D walk uses `grid(H, W)` with `TileOffset::Strided` + a `StridedTileRange{base,
+rejected there); a 2D walk uses `grid(H, W)` with `TileAddressing::Strided` + a `StridedTileRange{base,
 row_stride}` per operand. **Odd N does not tile into halves.** For the specific case of summing tiles that
 are ALREADY reduced (per-core partials from an earlier `REDUCE_ROW`), `reduce_helpers_compute.hpp` does it
 for you — `ReduceAlgorithm::AccumulateViaAdd` + `ReduceWithinTile::Skip`.
