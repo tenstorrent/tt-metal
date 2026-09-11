@@ -275,13 +275,16 @@ def test_sample_seeding(seeding_mesh, name, seed_axes, need_unseeded_nontrivial)
 
 
 def _positions_winners(B_total: int, T_pos: int, V_pos: int):
-    """Distinct winner per (row, token position) so a wrong row or wrong device shard
-    lands on a DIFFERENT id rather than coincidentally matching."""
+    """Row-tagged winners w(b, t) = (2*b + t) % V_pos, injective in BOTH directions once
+    V_pos >= 2*T_pos >= 2*B_total: for a fixed row, every position picks a different id (a row
+    read at ANOTHER ROW'S POSITION lands elsewhere), and for a fixed position, every row picks a
+    different id (a row fed ANOTHER ROW'S LOGITS shard lands elsewhere). Callers that only need
+    valid greedy logits (not the injectivity) may pass any tile-aligned T_pos == V_pos."""
     logits_np = np.full((B_total, 1, T_pos, V_pos), -1.0, dtype=np.float32)
     winner = np.zeros((B_total, T_pos), dtype=np.int64)
     for b in range(B_total):
         for t in range(T_pos):
-            w = ((b * T_pos + t) * 7) % V_pos
+            w = (2 * b + t) % V_pos
             logits_np[b, 0, t, w] = -0.5
             winner[b, t] = w
     return logits_np, winner
@@ -304,7 +307,13 @@ def test_sample_positions_sharded_selects_each_devices_rows(seeding_mesh):
     dp_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0)
     composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
 
-    B_total, T_pos, V_pos = 4 * n, 64, 64  # T spans two tile rows so positions cross a tile boundary
+    # T_pos >= B_total keeps 13*b % T_pos distinct for EVERY global row (a 32-device galaxy has
+    # B_total = 128 > 64, where rows b and b + 64 would otherwise share a position and a d <-> d+16
+    # positions-shard swap would go unnoticed). T spans at least two tile rows so positions cross
+    # a tile boundary; V_pos = 2 * T_pos gives _positions_winners room to tag each row's winner.
+    B_total = 4 * n
+    T_pos = max(64, B_total)
+    V_pos = 2 * T_pos
     logits_np, winner = _positions_winners(B_total, T_pos, V_pos)
     # Positions differ per row and cover first/last tile rows, so a stale or mis-sliced
     # device shard cannot pass by luck.

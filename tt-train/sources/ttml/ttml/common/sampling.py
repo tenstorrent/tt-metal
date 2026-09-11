@@ -34,9 +34,11 @@ def positions_to_tensor(
     measure, not a diagnosis. This assert is the loud, early check that names the offending rows.
     """
     positions = [int(p) for p in positions]
-    assert len(positions) == B, f"expected {B} positions, got {len(positions)}"
+    if len(positions) != B:
+        raise ValueError(f"expected {B} positions, got {len(positions)}")
     bad = [(b, p) for b, p in enumerate(positions) if not 0 <= p < tokens]
-    assert not bad, f"positions outside [0, {tokens}): {bad[:8]}"
+    if bad:
+        raise ValueError(f"positions outside [0, {tokens}): {bad[:8]}")
     if dp_mapper is not None:
         # A 1D shard mapper that receives fewer rows than it has shard slots SHRINKS the tensor's
         # distribution shape to the actual chunk count (distributed_tensor.cpp, "If the distribution
@@ -55,11 +57,11 @@ def positions_to_tensor(
         # so such callers must pass their shard count via ``num_shards``.
         if num_shards is None:
             num_shards = ttml.autograd.AutoContext.get_instance().get_device().get_num_devices()
-        assert B % num_shards == 0, (
-            f"batch of {B} rows does not divide across {num_shards} batch shards; a sharded "
-            f"positions tensor requires a divisible batch (pad or drop the tail batch before "
-            f"sampling)"
-        )
+        if B % num_shards != 0:
+            raise ValueError(
+                f"batch of {B} rows does not divide across {num_shards} batch shards; a sharded "
+                "positions tensor requires a divisible batch (pad or drop the tail batch before sampling)"
+            )
     return ttml.autograd.Tensor.from_numpy(
         np.asarray(positions, dtype=np.uint32).reshape(B, 1, 1, 1),
         ttnn.Layout.ROW_MAJOR,
