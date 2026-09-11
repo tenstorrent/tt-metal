@@ -1132,6 +1132,18 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
                     return core_work[seg_a.core_idx].head_work[seg_a.head_work_index].q_chunk_count >
                            core_work[seg_b.core_idx].head_work[seg_b.head_work_index].q_chunk_count;
                 });
+
+                // Do not build a chain when balancing would reverse its logical row-major topology.
+                // The affected cores read K/V independently instead of using an irregular unicast chain.
+                const bool is_row_major =
+                    std::is_sorted(chain_order.begin(), chain_order.end(), [&](std::size_t a, std::size_t b) {
+                        return segments[a].core_idx < segments[b].core_idx;
+                    });
+                if (!is_row_major) {
+                    chains_skipped++;
+                    log_debug(tt::LogOp, "Head {}: chain skipped - sorted cores are not row-major", head_id);
+                    continue;
+                }
             }
 
             const auto& inj_seg = segments[chain_order[0]];
