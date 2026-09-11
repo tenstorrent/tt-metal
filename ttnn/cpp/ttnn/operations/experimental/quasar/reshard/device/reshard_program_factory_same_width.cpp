@@ -126,7 +126,7 @@ ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output
             uint32_t local_units_to_transfer = std::min(local_units_per_core, local_units_per_kernel);
             if (local_units_to_transfer != 0) {
                 pa.local_offset = local_start_offset;
-                local_start_offset += local_units_to_transfer * (local_is_output ? local_unit_size_padded : unit_size);
+                local_start_offset += local_units_to_transfer * local_unit_size_padded;
                 while (local_units_to_transfer > 0) {
                     if (remote_core_units_rem == 0) {
                         remote_core_idx++;
@@ -162,16 +162,26 @@ ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output
     const char* count_name = local_is_output ? "num_reads" : "num_writes";
     const char* kernel_path = local_is_output ? kSWReaderKernelPath : kSWWriterKernelPath;
 
-    KernelSpec::CompileTimeArgs compile_time_args = {
+    const KernelSpec::CompileTimeArgs compile_time_args = {
         {"interface_with_dram", static_cast<uint32_t>(interface_with_dram)},
         {"unit_size", unit_size},
+        {"local_unit_size_padded", local_unit_size_padded},
+        {"remote_unit_size_padded", remote_unit_size_padded},
     };
-    if constexpr (local_is_output) {
-        compile_time_args.emplace("local_unit_size_padded", local_unit_size_padded);
-        compile_time_args.emplace("remote_unit_size_padded", remote_unit_size_padded);
-    }
 
-    const auto make_worker = [&](const char* name, DataMovementHardwareConfig hw_config, DFBEndpointType endpoint) {
+    auto make_cta = [&](uint32_t is_reader) {
+        KernelSpec::CompileTimeArgs cta = compile_time_args;
+        if (use_scratch) {
+            cta.emplace("is_reader", is_reader);
+            cta.emplace("remote_units_per_shard", remote_units_per_shard);
+        }
+        return cta;
+    };
+
+    const auto make_worker = [&](const char* name,
+                                 DataMovementHardwareConfig hw_config,
+                                 DFBEndpointType endpoint,
+                                 uint32_t is_reader) {
         KernelSpec k{
             .unique_id = KernelSpecName{name},
             .source = std::filesystem::path(kernel_path),
@@ -187,18 +197,20 @@ ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output
                  TensorBinding{
                      .tensor_parameter_name = TensorParamName{kSWLocalTensorParam},
                      .accessor_name = kSWLocalTensorParam}},
-            .compile_time_args = compile_time_args,
+            .compile_time_args = make_cta(is_reader),
             .runtime_arg_schema = {.runtime_arg_names = {off_name, count_name}},
             .hw_config = std::move(hw_config),
             .advanced_options = {.num_runtime_varargs = num_varargs},
         };
+        if (unaligned) {
+            k.compiler_options.defines.emplace("UNALIGNED", "1");
+        }
         if (use_scratch) {
             k.dfb_bindings.push_back(DFBBinding{
                 .dfb_spec_name = DFBSpecName{kSWScratchDfbName},
                 .accessor_name = kSWScratchDfbName,
                 .endpoint_type = endpoint,
             });
-            k.compiler_options.defines.emplace("UNALIGNED", "1");
         }
         return k;
     };
@@ -206,16 +218,23 @@ ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output
     KernelSpec k0 = make_worker(
         "reader",
         ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
-        DFBEndpointType::PRODUCER);
+        DFBEndpointType::PRODUCER,
+        /*is_reader=*/1);
     KernelSpec k1 = make_worker(
         "writer",
         ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
-        DFBEndpointType::CONSUMER);
+        DFBEndpointType::CONSUMER,
+        /*is_reader=*/0);
 
+    // Borrowed DFB size is checked against TensorSpec packed bytes (no Buffer at spec time), so
+    // clamp entry count rather than advertising the full padded shard.
+    const uint32_t shard_dfb_bytes = local_units_per_shard * local_unit_size_padded;
+    const uint32_t local_packed_bytes =
+        static_cast<uint32_t>(local_tensor.tensor_spec().compute_packed_buffer_size_bytes());
     DataflowBufferSpec shard_dfb{
         .unique_id = DFBSpecName{kSWShardDfbName},
-        .entry_size = unit_size,
-        .num_entries = local_units_per_shard,
+        .entry_size = local_unit_size_padded,
+        .num_entries = std::min(shard_dfb_bytes, local_packed_bytes) / local_unit_size_padded,
         .data_format_metadata = data_format,
         .borrowed_from = TensorParamName{kSWLocalTensorParam},
     };
@@ -225,7 +244,7 @@ ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output
         DataflowBufferSpec scratch_dfb{
             .unique_id = DFBSpecName{kSWScratchDfbName},
             .entry_size = remote_unit_size_padded,
-            .num_entries = remote_units_per_shard,
+            .num_entries = 2 * remote_units_per_shard,
             .data_format_metadata = data_format,
         };
         spec.dataflow_buffers = {shard_dfb, scratch_dfb};
