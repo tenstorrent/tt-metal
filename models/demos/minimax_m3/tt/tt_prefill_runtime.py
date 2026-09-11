@@ -552,6 +552,7 @@ class TtPrefillRuntime:
         chunk = self.config.chunk_size
         self._ensure_trace_buffers(n_chunks)
         for c in range(n_chunks):
+            logger.info(f"[trace] capturing bucket {c + 1}/{n_chunks} (cached_len={c * chunk})")
             self.capture_chunk_trace(c, kv_cache, slot_id=slot_id, cached_len=c * chunk)
         return self._trace_pool
 
