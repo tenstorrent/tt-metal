@@ -142,7 +142,11 @@ class UnsafeAllocationTracker:
         visited: set[int] = set()
 
         def _get_uid(obj):
-            if isinstance(obj, ttnn.Tensor):
+            try:
+                is_tensor = isinstance(obj, ttnn.Tensor)
+            except Exception:
+                return None
+            if is_tensor:
                 stats["tensors_seen"] += 1
                 try:
                     uid = obj.buffer_unique_id()
@@ -173,10 +177,19 @@ class UnsafeAllocationTracker:
             if depth <= 0:
                 return
 
-            if isinstance(val, (list, tuple)):
+            # Some objects raise a non-AttributeError on isinstance/hasattr (e.g. a Flask
+            # LocalProxy raises RuntimeError "working outside of application context"). Classify
+            # once behind a guard so one hostile referrer cannot abort the whole analysis.
+            try:
+                _is_seq = isinstance(val, (list, tuple))
+                _is_map = isinstance(val, dict)
+                _has_dict = (not _is_seq and not _is_map and hasattr(val, "__dict__") and not isinstance(val, type))
+            except Exception:
+                return
+            if _is_seq:
                 for idx, item in enumerate(val):
                     _scan_value(item, loc, f"{path}[{idx}]", depth - 1)
-            elif isinstance(val, dict):
+            elif _is_map:
                 # Snapshot to avoid RuntimeError if dict mutates concurrently.
                 # Some custom mapping types may still fail during snapshot; skip those.
                 try:
@@ -185,7 +198,7 @@ class UnsafeAllocationTracker:
                     return
                 for k, v in items:
                     _scan_value(v, loc, f"{path}[{k!r}]", depth - 1)
-            elif hasattr(val, "__dict__") and not isinstance(val, type):
+            elif _has_dict:
                 stats["objects_traversed"] += 1
                 try:
                     obj_dict = val.__dict__
