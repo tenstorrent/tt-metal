@@ -66,6 +66,7 @@ struct OpConfig {
         RSUB,
         GCD,
         LCM,
+        LOGADDEXP,
         LEFT_SHIFT,
         RIGHT_SHIFT,
         LOGICAL_RIGHT_SHIFT,
