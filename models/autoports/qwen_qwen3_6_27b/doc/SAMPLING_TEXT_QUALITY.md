@@ -1,5 +1,18 @@
 # r1_gpqa_diamond result: 0.60, and a text-quality defect the score hides
 
+> **RESOLVED 2026-09-11 -- see `doc/recurrent_state_corruption/`.**
+> The cause is `linear_recurrent_state_dtype: BFP8_B`: the gated-delta state is
+> re-quantized every decode step, so error accumulates with position. Both
+> mechanisms proposed below are wrong, and the discriminating test this doc
+> specifies ("Compare ... the token ids ... against a reference decode") is what
+> shows it. **B (assembly) is dead** -- the corruption is present in a one-shot
+> offline detokenization of the raw ids. **A (sampling exposes wrong logits) is
+> dead as written** -- identical sampling is clean for ~3500 tokens, then
+> degrades; the real discriminator is token position, and the greedy runs
+> compared against here looped early and never reached the degraded region.
+> Everything this doc says about the *shape* of the corruption is correct and
+> was the strongest clue. Setting the state to BF16 removes it for ~2% of decode.
+
 Measured 2026-08-17. Run: `tests/run_r1_gpqa.sh 0.05 32768` against the autoport,
 `--reasoning_parser qwen3` active, release sampling.
 

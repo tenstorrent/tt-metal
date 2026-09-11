@@ -735,6 +735,15 @@ available job logs do not carry per-request completion lines at this verbosity,
 so I cannot say from them whether the task set, the per-task token budget, or the
 client sets that figure. Recorded as unexplained rather than guessed at.
 
+> **Resolved 2026-09-11** (`doc/recurrent_state_corruption/`): the client sets
+> it. `mean_seconds_per_task` is the eval's wall clock over its ten documents,
+> and the wall clock is pinned by lm-eval's timeout ladder rather than by the
+> model — `ClientTimeout(total=1800)` x `stop_after_attempt(3)` = 5400 s
+> whenever at least one document never completes. Reproduced locally:
+> 5415.8 s / 10 = 541.58, against CI's 5416.1 / 10 = 541.61. The figure is a
+> constant while any document times out, and says nothing about decode speed;
+> it will only move once none do.
+
 **A crashed engine can report success.** Two evals runs reported job success with
 a dead EngineCore — `run-evals` exited 0 after the traceback. The tell is
 duration: 10 minutes, then 10 minutes, for a model that needs ~15 just to stage
