@@ -825,12 +825,32 @@ operations. Note that these are not short-circuiting.</p>
 <p>You may create predicate functions that return a <code class="docutils literal notranslate"><span class="pre">vBool</span></code>, but they
 must be invoked inside a <code class="docutils literal notranslate"><span class="pre">v_if</span></code> (or <code class="docutils literal notranslate"><span class="pre">v_elseif</span></code>) condition.  Do not
 store the return value and then interrogate it later.</p>
-<p>Note: There is currently a compiler defect regarding signed and
-unsigned integer comparisons, where ordering comparisons are only
-correct when the two operands are within 2^31 of eachother. Also,
-floating point comparisons use the multiply-add unit, which means
-comparisons are not strictly conforming – specifically infinities and
-signed zeroes behave differently.</p>
+<p>Float comparisons have the following properties:</p>
+<blockquote>
+<div>
+<ul class="simple">
+<li><p>Equality compares compare bit-patterns, thus <code class="docutils literal notranslate"><span class="pre">-0.0f</span></code> and
+<code class="docutils literal notranslate"><span class="pre">+0.0f</span></code> compare non-equal, as do all NaNs with different
+representations.</p></li>
+<li><p>On Wormhole, ordering compares use a floating point subtract and
+examine the resultant sign bit. Thus, due to rounding, <code class="docutils literal notranslate"><span class="pre">-0.0</span></code>
+compares less than or equal to <code class="docutils literal notranslate"><span class="pre">+0.0</span></code> and also greater than or
+equal to <code class="docutils literal notranslate"><span class="pre">+0.0</span></code> even though it also compares as not equal. NaNs
+might compare greater than or less than other values.</p></li>
+<li><p>On Blackhole and Quasar, a sign-magnitude comparison is used,
+which provides a complete ordering of floating point values. That
+ordering is <code class="docutils literal notranslate"><span class="pre">+NaN</span> <span class="pre">&gt;</span> <span class="pre">+Inf</span> <span class="pre">&gt;</span> <span class="pre">+normal</span> <span class="pre">&gt;</span> <span class="pre">+subnormal</span> <span class="pre">&gt;</span> <span class="pre">+0.0</span> <span class="pre">&gt;</span> <span class="pre">-0.0</span>
+<span class="pre">&gt;</span> <span class="pre">-subnormal</span> <span class="pre">&gt;</span> <span class="pre">-normal</span> <span class="pre">&gt;</span> <span class="pre">-Inf</span> <span class="pre">&gt;</span> <span class="pre">-NaN</span></code>.</p></li>
+<li><p>The IEEE feature that any comparison involving a NaN is false is
+not supported.</p></li>
+</ul>
+</div>
+</blockquote>
+<p>These features are determined by the hardware.</p>
+<p>Note: With the exception of signed integral compares on Quasar, there
+is currently a compiler defect regarding signed and unsigned integer
+comparisons, where ordering comparisons are only correct when the two
+operands are within 2^31 of each other.</p>
 </section>
 <section id="scalar-values">
 <h4>Scalar Values<a class="headerlink" href="#scalar-values" title="Permalink to this heading"></a>

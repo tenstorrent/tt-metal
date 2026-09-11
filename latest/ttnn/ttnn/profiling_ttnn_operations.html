@@ -549,12 +549,6 @@ cores fill up their profiling buffers faster and if only those cores are giving 
 <li><p><strong>NOC vs Compute Balance (%)</strong>: NOC cycles as a fraction of NOC + FPU cycles. &gt;50% = NOC-bound, &lt;50% = compute-bound.</p></li>
 <li><p><strong>TDMA vs NOC L1 Share (%)</strong>: RISC/TDMA traffic as a fraction of all L1 traffic. Shows how much bandwidth goes to firmware vs NOC.</p></li>
 </ul>
-<p><em>Fidelity Metrics</em></p>
-<ul class="simple">
-<li><p><strong>Fidelity Stall Rate (%)</strong>: Fraction of math-valid cycles spent in a fidelity phase (multi-HF-cycle math instruction). 0% = pure LoFi; &gt;0% = HiFi math is active.</p></li>
-<li><p><strong>HiFi Fraction (%)</strong>: Fraction of issued math instructions that took more than 1 HF cycle (HiFi2 + HiFi4 over total).</p></li>
-<li><p><strong>Avg HF Cycles Per Instrn</strong> (raw number): Weighted average of HF cycles per issued math instruction. 1.0 = all LoFi, 2.0 = all HiFi2, 4.0 = all HiFi4.</p></li>
-</ul>
 <p><em>Wormhole-Only Metrics</em></p>
 <p>These metrics depend on per-pack-engine hardware signals that don’t exist on Blackhole (<code class="docutils literal notranslate"><span class="pre">PACK_COUNT=1</span></code>).</p>
 <ul class="simple">
