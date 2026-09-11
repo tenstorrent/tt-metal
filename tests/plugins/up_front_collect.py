@@ -11,7 +11,8 @@ A hookwrapper (vs re-invoking tests) reuses each test's own fixtures, so any sui
 accumulates across tests.
 
 TWO PASSES: under NO_DISPATCH each body runs neutered (addr-0 buffers), so its asserts
-fail and are swallowed — pass 1 only collects + compiles. Re-run for the real, warm results:
+fail; the failure is neutralized at report time (see pytest_runtest_makereport) — pass 1 only
+collects + compiles. Re-run for the real, warm results:
 
     # pass 1 — collect + parallel-compile (warms the cache). Loading the plugin IS the opt-in.
     # PYTHONPATH=$PWD makes the local `tests` package win over any foreign checkout on sys.path.
@@ -55,6 +56,25 @@ _REAL_ALLOC = os.environ.get("UP_FRONT_REAL_ALLOC") == "1"
 _FAST_COLLECT = os.environ.get("UP_FRONT_FAST_COLLECT", "1") == "1"
 # Collect/dedup only, skip the session-end compile (isolates body-run cost when benchmarking).
 _NO_COMPILE = os.environ.get("UP_FRONT_COLLECT_NO_COMPILE") == "1"
+# Set on an item by the call-phase wrapper for the duration of one collected body; read and
+# cleared by pytest_runtest_makereport. Value = ops stashed before the body ran.
+_COLLECTED_BODY_KEY = pytest.StashKey()
+
+
+def _set_collect_tbstyle(config, on: bool):
+    """While collecting, have pytest build only the one-line crash summary for a failing body.
+
+    A collect-pass failure's traceback is discarded by pytest_runtest_makereport, but pytest has
+    already rendered it (item.repr_failure, source lines and all) by the time any wrapper runs:
+    ~12 ms per exception, 17 s over the rms_norm golden dir. --tb=no makes that a one-liner. The
+    user's setting is restored afterwards (inline mode: before the real pass)."""
+    if on:
+        config._up_front_saved_tbstyle = config.getoption("tbstyle", "auto")
+        config.option.tbstyle = "no"
+    elif hasattr(config, "_up_front_saved_tbstyle"):
+        config.option.tbstyle = config._up_front_saved_tbstyle
+        del config._up_front_saved_tbstyle
+
 
 # A body is skipped (cold-compiles in pass 2) if its source names any of these: trace/graph capture
 # needs the real dispatch + alloc that NO_DISPATCH blocks.
@@ -431,38 +451,72 @@ def pytest_runtest_call(item):
         return (yield)  # runs normally; cold-compiles in pass 2
 
     _STATS.bodies += 1
-    # UP_FRONT_LOG_SWALLOWED=1: per-body trace of throw + ops-stashed-before-throw (a throw BEFORE
-    # stashing is a real miss; one on the addr-0 readback after stashing is fine).
-    _log = os.environ.get("UP_FRONT_LOG_SWALLOWED")
-    n_before = ttnn.graph.up_front_num_collected() if _log else 0
-    swallowed = False
-    exc_info = ""
+    # Mark this item as a collected body (consumed by pytest_runtest_makereport below) and remember
+    # the stash count for the optional per-body trace line.
+    item.stash[_COLLECTED_BODY_KEY] = ttnn.graph.up_front_num_collected()
     ttnn.graph.up_front_begin_collect(clear=False, real_alloc=_REAL_ALLOC)  # accumulate; wraps ONLY the body
     try:
         with _collect_window(_STATS):
-            return (yield)  # ops stash into the collector as the body runs
-    except Exception as e:
-        # Expected under NO_DISPATCH: a readback/assert on an addr-0 output, after the program was
-        # already stashed. Swallow so pass 1 stays green (its results are meaningless).
-        _STATS.swallowed += 1
-        swallowed = True
-        exc_info = f"{type(e).__name__}: {str(e)[:140]}"
-        return None
+            # Ops stash into the collector as the body runs. A body exception (expected under
+            # NO_DISPATCH: a readback/assert on an addr-0 output after the program was stashed)
+            # is NOT caught here -- it propagates like any test failure so every makereport-time
+            # hook sees the real excinfo (e.g. a suite's release of the device tensors the failing
+            # frames hold). pytest_runtest_makereport then neutralizes the verdict.
+            return (yield)
     finally:
         ttnn.graph.up_front_end_collect()
-        if _log:
-            n_after = ttnn.graph.up_front_num_collected()
-            print(
-                f"UP_FRONT_BODY: {'SWALLOWED' if swallowed else 'ok       '} "
-                f"stashed={n_after - n_before:<3} {item.nodeid}" + (f"  -> {exc_info}" if swallowed else ""),
-                flush=True,
-            )
+
+
+@pytest.hookimpl(tryfirst=True, wrapper=True)
+def pytest_runtest_makereport(item, call):
+    """Swallow collect-pass body failures AT REPORT TIME so pass 1 stays green.
+
+    Under NO_DISPATCH every value a body computes is meaningless, so its assert/readback failure
+    carries no information; but the exception itself must still travel the normal pytest path,
+    because makereport-time hooks act on it -- notably eval/golden_tests/conftest.py, which walks
+    a failed call's traceback and deallocates the device tensors its frames hold. Swallowing in the
+    call phase (the previous design) hid the exception from those hooks, so under REAL_ALLOC the
+    failing cell's shards stayed pinned by the exc<->tb<->frame cycle and fragmented L1 for the
+    bodies that followed (186 collect-pass OOMs vs 21 in the real run on the rms_norm golden dir).
+
+    tryfirst => our post-yield runs after the other wrappers' (pytest's xfail handling, the
+    suites' conftests), so they see the genuine outcome and excinfo; only then is a FAILED call
+    report flipped to passed. Reports pytest already resolved (xfail -> skipped; XPASS(strict),
+    which has no excinfo) are left alone, so that telemetry is unchanged. Only Exception subclasses
+    qualify -- Skipped/Exit/KeyboardInterrupt were never swallowed and still are not.
+    """
+    rep = yield
+    if call.when != "call" or _COLLECTED_BODY_KEY not in item.stash:
+        return rep  # setup/teardown, a capture-driving body, or (inline mode) the real pass
+    n_before = item.stash[_COLLECTED_BODY_KEY]
+    del item.stash[_COLLECTED_BODY_KEY]  # never carries over into a later (real) run of this item
+    swallowed = False
+    exc_info = ""
+    if call.excinfo is not None and rep.outcome == "failed" and isinstance(call.excinfo.value, Exception):
+        _STATS.swallowed += 1
+        swallowed = True
+        exc_info = f"{call.excinfo.type.__name__}: {str(call.excinfo.value)[:140]}"
+        rep.outcome = "passed"
+        rep.longrepr = None
+    # UP_FRONT_LOG_SWALLOWED=1: per-body trace of throw + ops-stashed-before-throw (a throw BEFORE
+    # stashing is a real miss; one on the addr-0 readback after stashing is fine).
+    if os.environ.get("UP_FRONT_LOG_SWALLOWED"):
+        import ttnn
+
+        n_after = ttnn.graph.up_front_num_collected()
+        print(
+            f"UP_FRONT_BODY: {'SWALLOWED' if swallowed else 'ok       '} "
+            f"stashed={n_after - n_before:<3} {item.nodeid}" + (f"  -> {exc_info}" if swallowed else ""),
+            flush=True,
+        )
+    return rep
 
 
 def pytest_sessionstart(session):
     import ttnn
 
     ttnn.graph.up_front_clear()  # clean slate before the session
+    _set_collect_tbstyle(session.config, True)  # the whole session is a collect pass
 
 
 @pytest.hookimpl(trylast=True)
