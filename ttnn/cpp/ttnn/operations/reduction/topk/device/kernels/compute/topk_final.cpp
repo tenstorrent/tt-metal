@@ -185,9 +185,10 @@ void kernel_main() {
             // Split each packed key tile into staged 16-bit value/index tiles, then transpose
             // those back to row layout and emit (the only defuse of the whole pipeline). In fused
             // mode the c_5/c_7 CT-arg slots carry the two small final-core staging CBs.
+            constexpr std::uint32_t staging_values_dfb_index = index_dfb_index;  // c_5 by its fused-mode role
             defuse_and_pack_outputs<largest != 0>(
                 input_transposed_dfb_index,  // packed keys after the merge tree (c_6)
-                index_dfb_index,             // staging: defused bf16 values, column layout (c_5)
+                staging_values_dfb_index,    // staging: defused bf16 values, column layout (c_5)
                 index_transposed_dfb_index,  // staging: defused u16 indices, column layout (c_7)
                 values_dfb_index,
                 output_ind_dfb_index,

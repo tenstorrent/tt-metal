@@ -50,6 +50,10 @@ constexpr bool TOPK_UINT16_IN_FP32_DEST = false;
 // SFPSTORE mode 9 (SFPSTORE_MOD0_FMT_LO16): low→high 16-bit so packer sees UInt16 in 32-bit DEST.
 constexpr std::uint32_t TOPK_SFPSTORE_MODE_PACK_UINT16 = 9;
 
+// Low half of a 32-bit DEST word: the u16 datum under #50215 garbage, the u16 index half of a
+// fused [bf16|u16] key, and the fused tie-complement operand.
+constexpr std::uint32_t TOPK_LO16_MASK = 0x0000FFFF;
+
 // All lanes enabled, CC result true. A macro, not a function: some sites sit inside lltt::record windows.
 #define TOPK_SFPENCC_ALL_LANES_ON() TTI_SFPENCC(sfpi::SFPENCC_IMM12_BOTH, 0, 0, sfpi::SFPENCC_MOD1_EI_RI)
 
@@ -131,7 +135,7 @@ inline void topk_uint16_clear_value_tiles_high_bits()
 {
     if constexpr (TOPK_UINT16_IN_FP32_DEST)
     {
-        sfpi::vConstIntPrgm0 = 0x0000FFFF;
+        sfpi::vConstIntPrgm0 = TOPK_LO16_MASK;
         set_dst_write_addr(0);
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
         topk_uint16_strip_tile<0, static_cast<std::uint32_t>(InstrModLoadStore::INT32)>();
@@ -146,7 +150,8 @@ inline void topk_uint16_prepare_value_tile_for_pack(std::uint32_t dst_tile_index
 {
     if constexpr (TOPK_UINT16_IN_FP32_DEST)
     {
-        sfpi::vConstIntPrgm0 = 0x0000FFFF;
+        TOPK_SFPENCC_ALL_LANES_ON(); // the constant write and the strip sweep are lane-predicated
+        sfpi::vConstIntPrgm0 = TOPK_LO16_MASK;
         TTI_SETC16(ADDR_MOD_SET_Base_ADDR32, 1);
         TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
         set_dst_write_addr(0);
@@ -176,7 +181,8 @@ inline void topk_uint16_prepare_value_tile_for_pack(std::uint32_t dst_tile_index
 // after the transpose has drained. Called outside sfpu_start: enable addr_mod_base for ADDR_MOD_3.
 inline void _topk_uint16_move_dest_tile_to_pack_half_(std::uint32_t dst_tile_index)
 {
-    sfpi::vConstIntPrgm0 = 0x0000FFFF;
+    TOPK_SFPENCC_ALL_LANES_ON(); // the constant write and the strip sweep are lane-predicated
+    sfpi::vConstIntPrgm0 = TOPK_LO16_MASK;
     TTI_SETC16(ADDR_MOD_SET_Base_ADDR32, 1);
     TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
     set_dst_write_addr(0);
@@ -218,7 +224,7 @@ inline void _topk_fuse_tile_()
     // ambient CC state, disabled lanes would keep stale LREG12 bits and the mask/complement would
     // silently misfire in exactly those lanes.
     TOPK_SFPENCC_ALL_LANES_ON();
-    sfpi::vConstIntPrgm0 = 0x0000FFFF;
+    sfpi::vConstIntPrgm0 = TOPK_LO16_MASK;
 
     set_dst_write_addr(0);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -252,7 +258,7 @@ inline void _topk_defuse_tile_(const int num_tiles)
 {
     // Lanes-on FIRST — the constant write is lane-predicated (see _topk_fuse_tile_).
     TOPK_SFPENCC_ALL_LANES_ON();
-    sfpi::vConstIntPrgm0 = 0x0000FFFF;
+    sfpi::vConstIntPrgm0 = TOPK_LO16_MASK;
 
     set_dst_write_addr(0);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -918,6 +924,20 @@ inline void _topk_canonicalize_negzero_value_tiles_()
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 }
 
+// Mode-combination rules shared by the three network entry points (local sort, merge, rebuild).
+template <bool is_fp32_dest_acc_en, bool STABLE_SORT, bool FUSED, bool RANK_STAMPED, TopkTieOrder TIE_ORDER>
+inline void topk_validate_mode_combo()
+{
+    static_assert(!(FUSED && STABLE_SORT), "fused and comparator-stable modes are mutually exclusive");
+    static_assert(!STABLE_SORT || TIE_ORDER != TopkTieOrder::Unset, "comparator-stable topk requires an explicit tie order");
+    static_assert(!FUSED || is_fp32_dest_acc_en, "fused packed keys require 32-bit DEST");
+    static_assert(!(FUSED && TOPK_UINT16_IN_FP32_DEST), "fused keys and uint16-in-fp32-dest are mutually exclusive");
+    static_assert(!(RANK_STAMPED && STABLE_SORT), "rank-stamped and comparator-stable modes are mutually exclusive");
+    static_assert(!(RANK_STAMPED && FUSED), "rank-stamped and fused-key modes are mutually exclusive");
+    static_assert(!RANK_STAMPED || is_fp32_dest_acc_en, "rank-stamped tagged keys require 32-bit DEST");
+    static_assert(!(RANK_STAMPED && TOPK_UINT16_IN_FP32_DEST), "rank-stamped keys and uint16-in-fp32-dest are mutually exclusive");
+}
+
 template <
     bool APPROXIMATION_MODE,
     bool is_fp32_dest_acc_en,
@@ -935,14 +955,7 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
     // UInt16-in-32b-DEST: clear garbage high bits before compare-swap (#50215).
     topk_uint16_clear_value_tiles_high_bits();
 
-    static_assert(!(FUSED && STABLE_SORT), "fused and comparator-stable modes are mutually exclusive");
-    static_assert(!STABLE_SORT || TIE_ORDER != TopkTieOrder::Unset, "comparator-stable topk requires an explicit tie order");
-    static_assert(!FUSED || is_fp32_dest_acc_en, "fused packed keys require 32-bit DEST");
-    static_assert(!(FUSED && TOPK_UINT16_IN_FP32_DEST), "fused keys and uint16-in-fp32-dest are mutually exclusive");
-    static_assert(!(RANK_STAMPED && STABLE_SORT), "rank-stamped and comparator-stable modes are mutually exclusive");
-    static_assert(!(RANK_STAMPED && FUSED), "rank-stamped and fused-key modes are mutually exclusive");
-    static_assert(!RANK_STAMPED || is_fp32_dest_acc_en, "rank-stamped tagged keys require 32-bit DEST");
-    static_assert(!(RANK_STAMPED && TOPK_UINT16_IN_FP32_DEST), "rank-stamped keys and uint16-in-fp32-dest are mutually exclusive");
+    topk_validate_mode_combo<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER>();
     // Fused packed keys halve the load/store footprint; replay window bases stay put
     // (slots 4-7 / 12-15 simply go unused in fused mode).
     constexpr int ldst_count = FUSED ? 4 : 8;
@@ -1166,14 +1179,7 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
     // UInt16-in-32b-DEST: clear garbage high bits before compare-swap (#50215).
     topk_uint16_clear_value_tiles_high_bits();
 
-    static_assert(!(FUSED && STABLE_SORT), "fused and comparator-stable modes are mutually exclusive");
-    static_assert(!STABLE_SORT || TIE_ORDER != TopkTieOrder::Unset, "comparator-stable topk requires an explicit tie order");
-    static_assert(!FUSED || is_fp32_dest_acc_en, "fused packed keys require 32-bit DEST");
-    static_assert(!(FUSED && TOPK_UINT16_IN_FP32_DEST), "fused keys and uint16-in-fp32-dest are mutually exclusive");
-    static_assert(!(RANK_STAMPED && STABLE_SORT), "rank-stamped and comparator-stable modes are mutually exclusive");
-    static_assert(!(RANK_STAMPED && FUSED), "rank-stamped and fused-key modes are mutually exclusive");
-    static_assert(!RANK_STAMPED || is_fp32_dest_acc_en, "rank-stamped tagged keys require 32-bit DEST");
-    static_assert(!(RANK_STAMPED && TOPK_UINT16_IN_FP32_DEST), "rank-stamped keys and uint16-in-fp32-dest are mutually exclusive");
+    topk_validate_mode_combo<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER>();
 
     if constexpr (STABLE_SORT)
     {
@@ -1324,14 +1330,7 @@ inline void _bitonic_topk_rebuild(const bool idir, const int m_iter, const int k
     // UInt16-in-32b-DEST: clear garbage high bits before compare-swap (#50215).
     topk_uint16_clear_value_tiles_high_bits();
 
-    static_assert(!(FUSED && STABLE_SORT), "fused and comparator-stable modes are mutually exclusive");
-    static_assert(!STABLE_SORT || TIE_ORDER != TopkTieOrder::Unset, "comparator-stable topk requires an explicit tie order");
-    static_assert(!FUSED || is_fp32_dest_acc_en, "fused packed keys require 32-bit DEST");
-    static_assert(!(FUSED && TOPK_UINT16_IN_FP32_DEST), "fused keys and uint16-in-fp32-dest are mutually exclusive");
-    static_assert(!(RANK_STAMPED && STABLE_SORT), "rank-stamped and comparator-stable modes are mutually exclusive");
-    static_assert(!(RANK_STAMPED && FUSED), "rank-stamped and fused-key modes are mutually exclusive");
-    static_assert(!RANK_STAMPED || is_fp32_dest_acc_en, "rank-stamped tagged keys require 32-bit DEST");
-    static_assert(!(RANK_STAMPED && TOPK_UINT16_IN_FP32_DEST), "rank-stamped keys and uint16-in-fp32-dest are mutually exclusive");
+    topk_validate_mode_combo<is_fp32_dest_acc_en, STABLE_SORT, FUSED, RANK_STAMPED, TIE_ORDER>();
     // Fused packed keys halve the load/store parts of the composite replay windows.
     constexpr int ldst_count       = FUSED ? 4 : 8;   // bare load16/store16 windows
     constexpr int rebuild_win_ld8  = FUSED ? 18 : 22; // load8 + ph1 body + store8 + 8x INCRWC
@@ -1605,7 +1604,7 @@ inline void _init_topk()
     if constexpr (TOPK_UINT16_IN_FP32_DEST)
     {
         // Mask used to clear garbage high bits when loading UInt16 from 32-bit DEST (LREG12 / vConstIntPrgm0).
-        sfpi::vConstIntPrgm0 = 0x0000FFFF;
+        sfpi::vConstIntPrgm0 = TOPK_LO16_MASK;
     }
 }
 
@@ -1631,7 +1630,7 @@ inline void _init_topk_fused_()
 {
     topk_replay_init = 0;
     _sfpu_load_config32_(0xF, 0x0, 0x0); // SFPU_CONTROL_REG: ENABLE_DEST_INDEX (bit 2) = 0
-    sfpi::vConstIntPrgm0 = 0x0000FFFF;   // LREG12: #50215 mask + tie-complement operand
+    sfpi::vConstIntPrgm0 = TOPK_LO16_MASK; // LREG12: #50215 mask + tie-complement operand
 }
 
 } // namespace sfpu

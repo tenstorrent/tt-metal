@@ -99,7 +99,10 @@ Both `ROW_MAJOR` and `COL_MAJOR` shard orientations are accepted.
   tiles, with the tie-break polarity programmed once from the *global* sort
   order (never the per-block bitonic direction). Roughly doubles the SFPU
   cost of each compare-exchange; the data-movement-heavy phases of sort are
-  unaffected.
+  unaffected. On every factory the comparator's 32-bit-DEST tie sweep
+  canonicalizes `float32` `-0.0` → `+0.0` on entry, so the returned values
+  carry `+0.0` where the input had `-0.0`: numerically equal, visible only to
+  bit-exact consumers of signed zeros (`copysign`, `1/x`, `signbit`).
 
 #### Unstable index contract (`stable=False`)
 

@@ -381,28 +381,39 @@ ALWI void topk_canonicalize_negzero_values(uint32_t idst) {
 /**
  * Clears the low tag_bits bits (stale rank tags) of one rank-stamped value tile in DST, leaving
  * exact value words (e.g. [bf16|0x0000] for tag_bits = 16) so the following pack cannot round on
- * tag bits. Must run on MATH while DEST is still acquired, after the final transpose back to row
- * layout (same calling convention as topk_uint16_move_dest_tile_to_pack_half).
+ * tag bits. Requires 32-bit DEST (checked at compile time). Must run on MATH while DEST is still
+ * acquired, after the final transpose back to row layout (same calling convention as
+ * topk_uint16_move_dest_tile_to_pack_half).
  *
  * Return value: None
  *
- * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
- * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | tag_bits        | Rank tag field width in the value word's low bits; see topk_tile_init      | uint32_t | 6 to 16                                               | False    |
- * | idst            | The index of the value tile in the DST register buffer                     | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | Argument            | Description                                                                | Type     | Valid Range                                           | Required |
+ * |---------------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | tag_bits            | Rank tag field width in the value word's low bits; see topk_tile_init      | uint32_t | 6 to 16                                               | False    |
+ * | is_fp32_dest_acc_en | Must be true: the sweep moves 32-bit DEST words                            | bool     | true                                                  | False    |
+ * | idst                | The index of the value tile in the DST register buffer                     | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <std::uint32_t tag_bits = 16>
+template <std::uint32_t tag_bits = 16, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void topk_strip_rank_tags(std::uint32_t idst) {
+    static_assert(
+        is_fp32_dest_acc_en, "topk_strip_rank_tags moves 32-bit DEST words; it requires fp32 DEST accumulation");
     MATH((ckernel::sfpu::_topk_strip_rank_tags_<tag_bits>(idst)));
 }
 
 /**
  * Moves a uint16 index tile that lives in 32-bit DEST as a plain integer into the packer-visible
- * high half (SFPSTORE mode 9), before it is packed. Must run on MATH while DEST is still acquired
- * (before tile_regs_commit / pack_tile).
+ * high half (SFPSTORE mode 9), before it is packed. Requires 32-bit DEST (is_fp32_dest_acc_en,
+ * checked at compile time). Must run on MATH while DEST is still acquired (before tile_regs_commit
+ * / pack_tile).
  */
-ALWI void topk_finalize_uint16_indices(std::uint32_t idst) { MATH((ckernel::sfpu::_topk_finalize_hi16_index_tile_(idst))); }
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void topk_finalize_uint16_indices(std::uint32_t idst) {
+    static_assert(
+        is_fp32_dest_acc_en,
+        "topk_finalize_uint16_indices moves 32-bit DEST words; it requires fp32 DEST accumulation");
+    MATH((ckernel::sfpu::_topk_finalize_hi16_index_tile_(idst)));
+}
 
 /**
  * UInt16 values in 32-bit DEST: move cleaned values into the packer-visible high half (SFPSTORE mode 9).
@@ -416,10 +427,15 @@ ALWI void topk_uint16_prepare_value_tile_for_pack(uint32_t idst) {
 /**
  * Moves a u16 DEST tile's datums from the low half of each 32-bit DEST word (where a u16 transpose
  * lands them) into the packer-visible high half, stripping the stale garbage above them. Used by
- * the fused-key TopK final extraction; unconditional (not gated on TOPK_UINT16_FP32_DEST). Must
- * run on MATH while DEST is still acquired (before tile_regs_commit / pack_tile).
+ * the fused-key TopK final extraction; unconditional (not gated on TOPK_UINT16_FP32_DEST). Requires
+ * 32-bit DEST (is_fp32_dest_acc_en, checked at compile time). Must run on MATH while DEST is still
+ * acquired (before tile_regs_commit / pack_tile).
  */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void topk_uint16_move_dest_tile_to_pack_half(uint32_t idst) {
+    static_assert(
+        is_fp32_dest_acc_en,
+        "topk_uint16_move_dest_tile_to_pack_half moves 32-bit DEST words; it requires fp32 DEST accumulation");
     MATH((ckernel::sfpu::_topk_uint16_move_dest_tile_to_pack_half_(idst)));
 }
 
