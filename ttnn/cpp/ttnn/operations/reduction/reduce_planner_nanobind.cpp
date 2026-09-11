@@ -143,7 +143,8 @@ void bind_reduce_planner(nb::module_& mod) {
             nb::arg("num_valid_elements"))
         .def_ro("value", &host::ReduceAuxiliaryTileSpec::value)
         .def_ro("type", &host::ReduceAuxiliaryTileSpec::type)
-        .def_ro("num_valid_elements", &host::ReduceAuxiliaryTileSpec::num_valid_elements);
+        .def_ro("num_valid_elements", &host::ReduceAuxiliaryTileSpec::num_valid_elements)
+        .def_ro("runtime_extent_arg", &host::ReduceAuxiliaryTileSpec::runtime_extent_arg);
 
     nb::class_<host::ReduceAuxiliaryPlan>(planner, "ReduceAuxiliaryPlan")
         .def(nb::init<uint32_t, std::vector<host::ReduceAuxiliaryTileSpec>>(), nb::arg("cb_id"), nb::arg("tiles"))
@@ -180,6 +181,23 @@ void bind_reduce_planner(nb::module_& mod) {
         .def_ro("dst_datum_size", &host::DenseRowMajorPlan::dst_datum_size)
         .def_ro("staging_buffers", &host::DenseRowMajorPlan::staging_buffers);
 
+    nb::class_<host::ReduceTailConfig>(planner, "ReduceTailConfig")
+        .def(
+            nb::init<std::uint32_t, std::uint32_t>(),
+            nb::arg("compute_runtime_arg_offset") = 0,
+            nb::arg("auxiliary_runtime_arg_offset") = 0)
+        .def_rw("compute_runtime_arg_offset", &host::ReduceTailConfig::compute_runtime_arg_offset)
+        .def_rw("auxiliary_runtime_arg_offset", &host::ReduceTailConfig::auxiliary_runtime_arg_offset);
+    nb::class_<host::ReduceValidShape>(planner, "ReduceValidShape")
+        .def(
+            nb::init<std::uint32_t, std::uint32_t, std::uint32_t>(),
+            nb::arg("height"),
+            nb::arg("width"),
+            nb::arg("batches") = 1)
+        .def_rw("height", &host::ReduceValidShape::height)
+        .def_rw("width", &host::ReduceValidShape::width)
+        .def_rw("batches", &host::ReduceValidShape::batches);
+
     auto py_plan = nb::class_<host::ReducePlan>(planner, "ReducePlan");
     py_plan.def_ro("path", &host::ReducePlan::path)
         .def_ro("reduce_math", &host::ReducePlan::reduce_math)
@@ -194,6 +212,10 @@ void bind_reduce_planner(nb::module_& mod) {
         .def_ro("Ht", &host::ReducePlan::Ht)
         .def_ro("Wt", &host::ReducePlan::Wt)
         .def_ro("batches", &host::ReducePlan::batches)
+        .def_ro("tail", &host::ReducePlan::tail)
+        .def_ro("logical_h", &host::ReducePlan::logical_h)
+        .def_ro("logical_w", &host::ReducePlan::logical_w)
+        .def("get_runtime_shape_args", &host::ReducePlan::get_runtime_shape_args, nb::arg("shape"))
         .def_ro("input_row_stride_tiles", &host::ReducePlan::input_row_stride_tiles)
         .def_ro("reduce_factor", &host::ReducePlan::reduce_factor)
         .def_ro("post_scale", &host::ReducePlan::post_scale)
@@ -247,7 +269,8 @@ void bind_reduce_planner(nb::module_& mod) {
                tt::tt_metal::Tile output_tile,
                uint32_t input_row_stride_tiles,
                std::optional<uint32_t> resident_input_tiles,
-               std::optional<uint32_t> resident_output_tiles) {
+               std::optional<uint32_t> resident_output_tiles,
+               std::optional<host::ReduceTailConfig> tail) {
                 auto block =
                     host::ReduceBlockSpec::tiled(logical_h, logical_w, input_dtype, output_dtype, batches, input_tile);
                 block.padded_h = padded_h.value_or(block.padded_h);
@@ -258,6 +281,7 @@ void bind_reduce_planner(nb::module_& mod) {
                 block.input_row_stride_tiles = input_row_stride_tiles;
                 block.resident_input_tiles = resident_input_tiles;
                 block.resident_output_tiles = resident_output_tiles;
+                block.tail = tail;
                 new (self) host::ReduceBlockSpec(std::move(block));
             },
             nb::arg("logical_h"),
@@ -275,6 +299,7 @@ void bind_reduce_planner(nb::module_& mod) {
             nb::arg("input_row_stride_tiles") = 0,
             nb::arg("resident_input_tiles") = nb::none(),
             nb::arg("resident_output_tiles") = nb::none(),
+            nb::arg("tail") = nb::none(),
             "Local work for one reduction call on one core. Padding defaults to whole tiles; no tensor placement is "
             "inferred.")
         .def_rw("logical_h", &host::ReduceBlockSpec::logical_h)
@@ -290,7 +315,8 @@ void bind_reduce_planner(nb::module_& mod) {
         .def_rw("output_tile", &host::ReduceBlockSpec::output_tile)
         .def_rw("input_row_stride_tiles", &host::ReduceBlockSpec::input_row_stride_tiles)
         .def_rw("resident_input_tiles", &host::ReduceBlockSpec::resident_input_tiles)
-        .def_rw("resident_output_tiles", &host::ReduceBlockSpec::resident_output_tiles);
+        .def_rw("resident_output_tiles", &host::ReduceBlockSpec::resident_output_tiles)
+        .def_rw("tail", &host::ReduceBlockSpec::tail);
 
     nb::class_<host::ReduceCallConfig>(planner, "ReduceCallConfig")
         .def(

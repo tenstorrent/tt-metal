@@ -62,6 +62,8 @@ public:
         reduce_plan_args::auxiliary_configuration::valid_elements_shift,
         reduce_plan_args::auxiliary_configuration::valid_elements_mask);
     static constexpr std::uint32_t value_bits = word<reduce_plan_args::AuxiliaryTileWord::ValueBits>();
+    static constexpr std::uint32_t runtime_extent_arg = word<reduce_plan_args::AuxiliaryTileWord::RuntimeExtentArg>();
+    static constexpr bool has_runtime_extent = runtime_extent_arg != reduce_plan_args::no_runtime_arg;
 
     static_assert(
         type == ReduceAuxiliaryTileType::Zero || num_valid_elements > 0,
@@ -183,6 +185,10 @@ public:
     static constexpr std::uint32_t rows = word<reduce_plan_args::CallWord::Rows>();
     static constexpr std::uint32_t columns = word<reduce_plan_args::CallWord::Columns>();
     static constexpr std::uint32_t batches = word<reduce_plan_args::CallWord::Batches>();
+    static constexpr std::uint32_t tail_runtime_arg_offset = word<reduce_plan_args::CallWord::TailRuntimeArgOffset>();
+    static constexpr bool is_tail = tail_runtime_arg_offset != reduce_plan_args::no_runtime_arg;
+    static constexpr std::uint32_t logical_h = word<reduce_plan_args::CallWord::LogicalHeight>();
+    static constexpr std::uint32_t logical_w = word<reduce_plan_args::CallWord::LogicalWidth>();
     static constexpr std::uint32_t row_stride = word<reduce_plan_args::CallWord::RowStride>();
     static constexpr std::uint32_t reduce_factor = word<reduce_plan_args::CallWord::ReduceFactor>();
     static constexpr std::uint32_t reduce_axis_chunk_tiles = word<reduce_plan_args::CallWord::ReduceAxisChunkTiles>();

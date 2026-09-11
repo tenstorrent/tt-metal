@@ -15,6 +15,7 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/typecast.h"
+#include "api/compute/eltwise_unary/where.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack.h"
 #include "api/debug/assert.h"
@@ -249,7 +250,9 @@ ALWI void reduce_accumulate_via_add(
     // are simply never indexed. 0 => contiguous (row_pitch = Wt). Honored for ROW/COL under BulkWaitBulkPop;
     // SCALAR / streaming / cross-call accumulate require contiguous (asserted in reduce()).
     const uint32_t row_pitch = (input_memory_layout.row_stride > 0u) ? input_memory_layout.row_stride : Wt;
-    const uint32_t in_tiles = Ht * row_pitch * NC;
+    const uint32_t batch_pitch =
+        input_memory_layout.batch_stride > 0 ? input_memory_layout.batch_stride : Ht * row_pitch;
+    const uint32_t in_tiles = batch_pitch * NC;
 
     // DST accumulation format drives the SFPU finalize (fp32 DST when fp32_dest_acc_en is on).
     constexpr DataFormat dst_fmt = DST_ACCUM_MODE ? DataFormat::Float32 : DataFormat::Float16_b;
@@ -483,7 +486,9 @@ ALWI void reduce_accumulate_via_add(
 
                 for (uint32_t ht = 0; ht < Ht; ht += axis_chunk) {
                     const uint32_t current_rows = axis_chunk < Ht - ht ? axis_chunk : Ht - ht;
-                    const uint32_t input_tiles = current_rows * current_outputs;
+                    const uint32_t packet_columns = input_chunk.padded ? output_group : current_outputs;
+                    const uint32_t input_tiles =
+                        input_chunk.padded ? axis_chunk * output_group : current_rows * current_outputs;
                     input_dfb.wait_front(input_tiles);
 
                     const uint32_t remaining_full_rows = ht < full_cnt ? full_cnt - ht : 0;
@@ -530,8 +535,8 @@ ALWI void reduce_accumulate_via_add(
                     if (local_h < full_rows) {
                         add_tiles_init(input_dfb_id, input_dfb_id, true);
                         for (; local_h < full_rows; local_h += 2) {
-                            const uint32_t first_row = local_h * current_outputs;
-                            const uint32_t second_row = (local_h + 1) * current_outputs;
+                            const uint32_t first_row = local_h * packet_columns;
+                            const uint32_t second_row = (local_h + 1) * packet_columns;
                             for (uint32_t out = 0; out < current_outputs; ++out) {
                                 add_tiles(input_dfb_id, input_dfb_id, first_row + out, second_row + out, out);
                             }
@@ -540,7 +545,7 @@ ALWI void reduce_accumulate_via_add(
                     }
 
                     if (has_partial && ht + current_rows == Ht) {
-                        const uint32_t partial_row = (current_rows - 1) * current_outputs;
+                        const uint32_t partial_row = (current_rows - 1) * packet_columns;
                         for (uint32_t out = 0; out < current_outputs; ++out) {
                             fold_partial_last(partial_row + out, out);
                         }
@@ -592,60 +597,101 @@ ALWI void reduce_accumulate_via_add(
                 }
             }
 
-            uint32_t consumed = 0;
-            if (full_cnt & 1u) {
-                input_dfb.wait_front(1);
-                if (loaded_accumulator) {
-                    if constexpr (has_accum) {
-                        if (accumulate.reload == AccumulateReloadMode::CopySeedZeroPair) {
-                            add_tiles_init(input_dfb_id, scaler_dfb_id, true);
-                            add_tiles(input_dfb_id, scaler_dfb_id, 0, zero_idx, 0);
-                        } else {
+            if (input_chunk.padded) {
+                bool seeded = loaded_accumulator;
+                const uint32_t packet = input_chunk.reduce_axis_tiles;
+                for (uint32_t base = 0; base < cnt; base += packet) {
+                    input_dfb.wait_front(packet);
+                    const uint32_t remaining = base < full_cnt ? full_cnt - base : 0;
+                    const uint32_t full = remaining < packet ? remaining : packet;
+                    uint32_t k = 0;
+                    if (full & 1u) {
+                        if (seeded) {
                             binary_dest_reuse_tiles_init<
                                 ckernel::EltwiseBinaryType::ELWADD,
                                 ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(input_dfb_id);
                             binary_dest_reuse_tiles<
                                 ckernel::EltwiseBinaryType::ELWADD,
                                 ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(input_dfb_id, 0, 0);
+                        } else {
+                            copy_init(input_dfb_id);
+                            copy_tile(input_dfb_id, 0, 0);
+                        }
+                        k = 1;
+                    }
+                    if (k < full) {
+                        add_tiles_init(input_dfb_id, input_dfb_id, true);
+                        for (; k < full; k += 2) {
+                            add_tiles(input_dfb_id, input_dfb_id, k, k + 1, 0);
                         }
                     }
-                } else {
-                    copy_tile_init(input_dfb_id);
-                    copy_tile(input_dfb_id, 0, 0);
-                }
-                input_dfb.pop_front(1);
-                consumed = 1;
-            }
-            add_tiles_init(input_dfb_id, input_dfb_id, true);
-            if constexpr (chunked) {
-                while (consumed < full_cnt) {
-                    const uint32_t remaining = full_cnt - consumed;
-                    const uint32_t current_chunk =
-                        remaining < input_chunk.reduce_axis_tiles ? remaining : input_chunk.reduce_axis_tiles;
-                    ASSERT((current_chunk & 1u) == 0);
-                    input_dfb.wait_front(current_chunk);
-                    for (uint32_t k = 0; k < current_chunk; k += 2) {
-                        add_tiles(input_dfb_id, input_dfb_id, k, k + 1, 0);
+                    if (has_partial && cnt - base <= packet) {
+                        fold_partial_last(cnt - base - 1);
                     }
-                    input_dfb.pop_front(current_chunk);
-                    consumed += current_chunk;
+                    seeded = true;
+                    input_dfb.pop_front(packet);
+                }
+                if constexpr (has_accum) {
+                    if (loaded_accumulator) {
+                        accum_dfb.pop_front(1);
+                    }
                 }
             } else {
-                for (; consumed < full_cnt; consumed += 2) {
-                    input_dfb.wait_front(2);
-                    add_tiles(input_dfb_id, input_dfb_id, 0, 1, 0);
-                    input_dfb.pop_front(2);
+                uint32_t consumed = 0;
+                if (full_cnt & 1u) {
+                    input_dfb.wait_front(1);
+                    if (loaded_accumulator) {
+                        if constexpr (has_accum) {
+                            if (accumulate.reload == AccumulateReloadMode::CopySeedZeroPair) {
+                                add_tiles_init(input_dfb_id, scaler_dfb_id, true);
+                                add_tiles(input_dfb_id, scaler_dfb_id, 0, zero_idx, 0);
+                            } else {
+                                binary_dest_reuse_tiles_init<
+                                    ckernel::EltwiseBinaryType::ELWADD,
+                                    ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(input_dfb_id);
+                                binary_dest_reuse_tiles<
+                                    ckernel::EltwiseBinaryType::ELWADD,
+                                    ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(input_dfb_id, 0, 0);
+                            }
+                        }
+                    } else {
+                        copy_tile_init(input_dfb_id);
+                        copy_tile(input_dfb_id, 0, 0);
+                    }
+                    input_dfb.pop_front(1);
+                    consumed = 1;
                 }
-            }
-            if constexpr (has_accum) {
-                if (loaded_accumulator) {
-                    accum_dfb.pop_front(1);
+                add_tiles_init(input_dfb_id, input_dfb_id, true);
+                if constexpr (chunked) {
+                    while (consumed < full_cnt) {
+                        const uint32_t remaining = full_cnt - consumed;
+                        const uint32_t current_chunk =
+                            remaining < input_chunk.reduce_axis_tiles ? remaining : input_chunk.reduce_axis_tiles;
+                        ASSERT((current_chunk & 1u) == 0);
+                        input_dfb.wait_front(current_chunk);
+                        for (uint32_t k = 0; k < current_chunk; k += 2) {
+                            add_tiles(input_dfb_id, input_dfb_id, k, k + 1, 0);
+                        }
+                        input_dfb.pop_front(current_chunk);
+                        consumed += current_chunk;
+                    }
+                } else {
+                    for (; consumed < full_cnt; consumed += 2) {
+                        input_dfb.wait_front(2);
+                        add_tiles(input_dfb_id, input_dfb_id, 0, 1, 0);
+                        input_dfb.pop_front(2);
+                    }
                 }
-            }
-            if (has_partial) {  // ROW partial: the LAST reduce-dim tile is now at the CB front; fold it masked
-                input_dfb.wait_front(1);
-                fold_partial_last(0);
-                input_dfb.pop_front(1);
+                if constexpr (has_accum) {
+                    if (loaded_accumulator) {
+                        accum_dfb.pop_front(1);
+                    }
+                }
+                if (has_partial) {  // ROW partial: the LAST reduce-dim tile is now at the CB front; fold it masked
+                    input_dfb.wait_front(1);
+                    fold_partial_last(0);
+                    input_dfb.pop_front(1);
+                }
             }
         } else {
             // Indexed access into the resident block; `start` is output o's first reduce-dim tile. row_pitch
@@ -654,11 +700,11 @@ ALWI void reduce_accumulate_via_add(
             if constexpr (bulk_per_output) {
                 start = 0;
             } else if constexpr (is_row) {
-                start = o * row_pitch;
+                start = (o / Ht) * batch_pitch + (o % Ht) * row_pitch;
             } else if constexpr (is_col) {
-                start = (o / Wt) * (Ht * row_pitch) + (o % Wt);
+                start = (o / Wt) * batch_pitch + (o % Wt);
             } else {
-                start = o * (Ht * row_pitch);  // scalar: row_pitch == Wt (contiguous, asserted in reduce())
+                start = o * batch_pitch;  // scalar: row_pitch == Wt (contiguous, asserted in reduce())
             }
 
             if constexpr (has_accum) {
@@ -1335,7 +1381,9 @@ ALWI void reduce(
         // REDUCE_ROW: W reduction - each row -> 1 output tile (Ht outputs per batch)
         // =================================================================
         const uint32_t stride = (input_memory_layout.row_stride > 0) ? input_memory_layout.row_stride : Wt;
-        const uint32_t total_input_tiles = Ht * stride * num_batches;
+        const uint32_t batch_stride =
+            input_memory_layout.batch_stride > 0 ? input_memory_layout.batch_stride : Ht * stride;
+        const uint32_t total_input_tiles = batch_stride * num_batches;
         UNPACK(
             (assert_input_dfb_size<input_policy>(input_dfb_id, Wt, total_input_tiles, input_chunk.reduce_axis_tiles)));
         PACK((assert_output_dfb_size(output_dfb_id)));
@@ -1372,7 +1420,9 @@ ALWI void reduce(
                         const uint32_t remaining = Wt - wt;
                         const uint32_t current_chunk =
                             remaining < input_chunk.reduce_axis_tiles ? remaining : input_chunk.reduce_axis_tiles;
-                        input_dfb.wait_front(current_chunk);
+                        const uint32_t packet_tiles =
+                            input_chunk.padded ? input_chunk.reduce_axis_tiles : current_chunk;
+                        input_dfb.wait_front(packet_tiles);
                         for (uint32_t local_wt = 0; local_wt < current_chunk; ++local_wt) {
                             const uint32_t global_wt = wt + local_wt;
                             if constexpr (is_sfpu) {
@@ -1387,7 +1437,7 @@ ALWI void reduce(
                                     input_dfb_id, scaler_dfb_id, local_wt, scaler_idx, dst_idx);
                             }
                         }
-                        input_dfb.pop_front(current_chunk);
+                        input_dfb.pop_front(packet_tiles);
                         wt += current_chunk;
                     }
                 } else {
@@ -1464,6 +1514,9 @@ ALWI void reduce(
                     index_offset += stride;
                 }
             }
+            if constexpr (!should_pop(input_policy)) {
+                index_offset = (nc + 1) * batch_stride;
+            }
         }
     } else {
         // =================================================================
@@ -1476,10 +1529,13 @@ ALWI void reduce(
         // Auto-detect chunk size from DEST register capacity
         // Both reader (dataflow) and compute kernels compute this identically via DEST_AUTO_LIMIT
         constexpr uint32_t default_chunk_size = is_sfpu ? (DEST_AUTO_LIMIT - 1) : DEST_AUTO_LIMIT;
-        const uint32_t chunk_size = waits_chunked(input_policy) ? input_chunk.output_tiles : default_chunk_size;
+        const uint32_t requested_chunk = input_chunk.output_tiles > 0 ? input_chunk.output_tiles : default_chunk_size;
+        const uint32_t chunk_size = requested_chunk < default_chunk_size ? requested_chunk : default_chunk_size;
         const uint32_t stride = (input_memory_layout.row_stride > 0) ? input_memory_layout.row_stride : Wt;
         const uint32_t tiles_per_bulk = Ht * stride;
-        const uint32_t total_input_tiles = tiles_per_bulk * num_batches;
+        const uint32_t batch_stride =
+            input_memory_layout.batch_stride > 0 ? input_memory_layout.batch_stride : tiles_per_bulk;
+        const uint32_t total_input_tiles = batch_stride * num_batches;
         UNPACK((assert_input_dfb_size<input_policy>(
             input_dfb_id, Ht * chunk_size, total_input_tiles, input_chunk.reduce_axis_tiles * chunk_size)));
         PACK((assert_output_dfb_size(output_dfb_id)));
@@ -1519,14 +1575,16 @@ ALWI void reduce(
                         const uint32_t remaining = Ht - ht_base;
                         const uint32_t current_h =
                             remaining < input_chunk.reduce_axis_tiles ? remaining : input_chunk.reduce_axis_tiles;
-                        const uint32_t input_tiles = current_h * current_chunk;
+                        const uint32_t packet_columns = input_chunk.padded ? chunk_size : current_chunk;
+                        const uint32_t input_tiles =
+                            input_chunk.padded ? input_chunk.reduce_axis_tiles * chunk_size : current_h * current_chunk;
                         input_dfb.wait_front(input_tiles);
                         for (uint32_t local_ht = 0; local_ht < current_h; ++local_ht) {
                             const uint32_t ht = ht_base + local_ht;
                             uint32_t dst_idx = get_dst_index(accumulate);
                             const uint32_t scaler_idx = (ht == Ht - 1) ? partial_scaler_idx : full_scaler_idx;
                             for (uint32_t local_wt = 0; local_wt < current_chunk; ++local_wt) {
-                                const uint32_t tile_idx = local_ht * current_chunk + local_wt;
+                                const uint32_t tile_idx = local_ht * packet_columns + local_wt;
                                 if constexpr (is_sfpu) {
                                     const bool is_first_tile = detail::sfpu_is_first_tile(ht, accumulate);
                                     constexpr uint32_t sfpu_work_dst = default_chunk_size;
@@ -1626,7 +1684,7 @@ ALWI void reduce(
             }
             // Update batch_offset for indexed modes (PreloadedPolicy and PersistentPolicy)
             if constexpr (!should_pop(input_policy)) {
-                batch_offset += tiles_per_bulk;
+                batch_offset += batch_stride;
             }
         }
     }
@@ -1645,17 +1703,78 @@ ALWI void reduce(PostReduceOp post_reduce_op) {
         Call::path == ttnn::kernel_lib::ReducePath::Tiled,
         "The planned reduce<Call>() overload currently supports tiled calls only");
 
-    constexpr auto shape = ReduceInputBlockShape::of(Call::rows, Call::columns, Call::batches);
-    constexpr auto layout = Call::row_stride == 0 ? ReduceInputMemoryLayout::contiguous()
-                                                  : ReduceInputMemoryLayout::with_row_stride(Call::row_stride);
-    constexpr auto chunk = ReduceInputChunk::of(Call::reduce_axis_chunk_tiles, Call::output_chunk_tiles);
+    auto shape = ReduceInputBlockShape::of(Call::rows, Call::columns, Call::batches);
+    auto layout = Call::row_stride == 0 ? ReduceInputMemoryLayout::contiguous()
+                                        : ReduceInputMemoryLayout::with_row_stride(Call::row_stride);
+    constexpr auto chunk = Call::is_tail && should_pop(Call::input_policy)
+                               ? ReduceInputChunk::padded_to(Call::reduce_axis_chunk_tiles, Call::output_chunk_tiles)
+                               : ReduceInputChunk::of(Call::reduce_axis_chunk_tiles, Call::output_chunk_tiles);
+    [[maybe_unused]] uint32_t valid_h = Call::logical_h;
+    [[maybe_unused]] uint32_t valid_w = Call::logical_w;
+    [[maybe_unused]] uint32_t output_index = 0;
+    if constexpr (Call::is_tail) {
+        static_assert(Call::reduce_dim != ReduceDim::REDUCE_SCALAR, "Runtime tail shapes require W or H reduction");
+        valid_h = get_arg_val<uint32_t>(Call::tail_runtime_arg_offset);
+        valid_w = get_arg_val<uint32_t>(Call::tail_runtime_arg_offset + 1);
+        const uint32_t batches = get_arg_val<uint32_t>(Call::tail_runtime_arg_offset + 2);
+        ASSERT(valid_h > 0 && valid_h <= Call::logical_h);
+        ASSERT(valid_w > 0 && valid_w <= Call::logical_w);
+        ASSERT(batches > 0 && batches <= Call::batches);
+        shape = ReduceInputBlockShape::of((valid_h + 31) / 32, (valid_w + 31) / 32, batches);
+        if constexpr (!should_pop(Call::input_policy)) {
+            constexpr uint32_t row_pitch = Call::row_stride == 0 ? Call::columns : Call::row_stride;
+            layout = ReduceInputMemoryLayout::with_strides(row_pitch, Call::rows * row_pitch);
+        }
+        // The final recipe tile masks lanes on the non-reduced edge. Reserve one
+        // DEST slot for it; the planner has already limited H output groups.
+        DataflowBuffer(Call::auxiliary_cb_id).wait_front(Call::auxiliary_tile_offset + Call::auxiliary_tile_count);
+    }
 
     auto post_scale = [&](uint32_t dst_index) {
         if constexpr (Call::post_scale_bits != ttnn::kernel_lib::reduce_plan_args::float_one_bits) {
             constexpr DataFormat input_format = static_cast<DataFormat>(unpack_src_format[Call::input_cb_id]);
             detail::reduce_post_mul_tile<input_format>(dst_index, Call::post_scale_bits);
         }
+        if constexpr (Call::is_tail && Call::reduce_type == PoolType::AVG) {
+            // Preserve the caller's multiplier while replacing the nominal local
+            // AVG denominator with the runtime reduced extent. SUM scalars stay
+            // caller-owned, including global normalization in fused operations.
+            const float correction = Call::reduce_dim == ReduceDim::REDUCE_ROW
+                                         ? static_cast<float>(Call::logical_w) / valid_w
+                                         : static_cast<float>(Call::logical_h) / valid_h;
+            constexpr DataFormat input_format = static_cast<DataFormat>(unpack_src_format[Call::input_cb_id]);
+            detail::reduce_post_mul_tile<input_format>(dst_index, __builtin_bit_cast(uint32_t, correction));
+        }
         post_reduce_op(dst_index);
+        if constexpr (Call::is_tail) {
+            const uint32_t outputs_per_batch = Call::reduce_dim == ReduceDim::REDUCE_ROW ? shape.rows : shape.cols;
+            const uint32_t valid_lanes = Call::reduce_dim == ReduceDim::REDUCE_ROW ? valid_h % 32 : valid_w % 32;
+            if (++output_index % outputs_per_batch == 0 && valid_lanes != 0) {
+                constexpr uint32_t mask_dst = DEST_AUTO_LIMIT - 1;
+                constexpr uint32_t mask_tile = Call::auxiliary_tile_offset + Call::auxiliary_tile_count - 1;
+                constexpr DataFormat dst_format = DST_ACCUM_MODE ? DataFormat::Float32 : DataFormat::Float16_b;
+                reconfig_data_format_srca(Call::auxiliary_cb_id);
+                copy_init(Call::auxiliary_cb_id);
+                copy_tile(Call::auxiliary_cb_id, mask_tile, mask_dst);
+                where_tile_init();
+                // Select zero instead of multiplying by zero, so even NaNs in
+                // invalid rows/columns are removed from the output padding.
+                where_tile<dst_format>(mask_dst, dst_index, mask_dst, dst_index);
+                if constexpr (Call::algorithm == ReduceAlgorithm::AccumulateViaAdd) {
+                    reconfig_data_format(Call::input_cb_id, Call::input_cb_id);
+                    sfpu_reduce_init<PoolType::SUM, dst_format>();
+                } else {
+                    constexpr bool swap = reduce_swaps_operands<Call::reduce_type, Call::reduce_dim, false>();
+                    if constexpr (swap) {
+                        reconfig_data_format(Call::auxiliary_cb_id, Call::input_cb_id);
+                    } else {
+                        reconfig_data_format(Call::input_cb_id, Call::auxiliary_cb_id);
+                    }
+                    reduce_init<Call::reduce_type, Call::reduce_dim>(
+                        Call::input_cb_id, Call::auxiliary_cb_id, Call::output_cb_id);
+                }
+            }
+        }
     };
 
     if constexpr (Call::accumulation_mode == ttnn::kernel_lib::ReduceAccumulationMode::None) {

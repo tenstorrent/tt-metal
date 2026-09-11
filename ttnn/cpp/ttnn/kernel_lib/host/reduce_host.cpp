@@ -59,6 +59,22 @@ void validate_block(
         "Reduce planner: input CB budget must be positive; describe existing input with resident_input_tiles");
     const auto tile_h = block.input_tile.get_height();
     const auto tile_w = block.input_tile.get_width();
+    if (block.tail) {
+        TT_FATAL(
+            block.input_layout == Layout::TILE && block.output_layout == Layout::TILE && dim != ReduceOpDim::HW,
+            "Reduce planner: runtime tail shapes require a tiled W or H reduction");
+        TT_FATAL(
+            block.input_tile == tt::tt_metal::Tile{} && block.output_tile == tt::tt_metal::Tile{},
+            "Reduce planner: runtime tail masks require standard 32x32 input and output tiles");
+        // Metal validates the complete kernel's runtime-argument allocation,
+        // including caller-owned/common arguments. Here only prevent overflow
+        // and collision with the serialized "no runtime argument" sentinel.
+        constexpr auto max_offset = reduce_plan_args::no_runtime_arg - 3U;
+        TT_FATAL(
+            block.tail->compute_runtime_arg_offset <= max_offset &&
+                block.tail->auxiliary_runtime_arg_offset <= max_offset,
+            "Reduce planner: tail-shape runtime argument offsets overflow the argument record");
+    }
     const auto ht = div_up_u32(block.padded_h, tile_h);
     const auto wt = div_up_u32(block.padded_w, tile_w);
     if (block.input_layout == Layout::TILE) {
@@ -341,6 +357,20 @@ void configure_scalar_and_aux(
         }
     }
     plan.partial_reduce_axis_elements = has_partial ? partial_elements : 0U;
+    if (plan.tail) {
+        // Even an aligned maximum block can have a partial runtime edge. Keep
+        // the edge recipe active for aligned tails too: the generated mask then
+        // covers the whole last tile, so its location never depends on parity.
+        auto& edge = plan.auxiliary_tiles.back();
+        edge.runtime_extent_arg = plan.tail->auxiliary_runtime_arg_offset + (dim == ReduceOpDim::W ? 1U : 0U);
+        edge.num_valid_elements = dim == ReduceOpDim::W ? tile_w : tile_h;
+        plan.auxiliary_tiles.push_back(
+            {.value = 1.0F,
+             .type = dim == ReduceOpDim::W ? ReduceAuxiliaryTileType::FirstColumn : ReduceAuxiliaryTileType::FirstRow,
+             .num_valid_elements = dim == ReduceOpDim::W ? tile_h : tile_w,
+             .runtime_extent_arg = plan.tail->auxiliary_runtime_arg_offset + (dim == ReduceOpDim::W ? 0U : 1U)});
+        plan.partial_reduce_axis_elements = 0;  // Determined from the runtime shape.
+    }
 }
 
 ReducePlan make_tiled_plan(
@@ -355,6 +385,9 @@ ReducePlan make_tiled_plan(
     std::optional<std::uint32_t> threshold_axis_tiles) {
     ReducePlan plan;
     plan.path = ReducePath::Tiled;
+    plan.tail = block.tail;
+    plan.logical_h = block.logical_h;
+    plan.logical_w = block.logical_w;
 
     const auto tile = block.input_tile;
     const std::uint32_t tile_h = tile.get_height();
@@ -381,14 +414,14 @@ ReducePlan make_tiled_plan(
                                      : checked_mul_u32(logical_h, logical_w, "logical HW reduction volume"));
     const std::uint32_t partial_elements =
         dim == ReduceOpDim::W ? logical_w % tile_w : (dim == ReduceOpDim::H ? logical_h % tile_h : 0U);
-    const bool has_axis_partial = partial_elements != 0;
+    const bool has_axis_partial = partial_elements != 0 || block.tail.has_value();
     const bool uses_sfpu = requires_sfpu(block.input_dtype, fp32_mode);
     // The SFPU implementations do not consume scaler tiles. A ReduceTile plan
     // may use either GMPOOL or SFPU, depending on its dtype and accuracy mode.
     TT_FATAL(
         !uses_sfpu || !has_axis_partial,
-        "Reduce planner: SFPU reductions cannot mask a partial reduction axis; identity-pad the input and describe "
-        "the padded reduction view");
+        "Reduce planner: SFPU reductions cannot mask a partial reduction axis or a runtime tail shape; "
+        "identity-pad the input and describe a static padded reduction view");
     const bool scalar_has_2d_partial = dim == ReduceOpDim::HW && ((logical_h % tile_h) || (logical_w % tile_w));
 
     const auto automatic_algorithm = add_is_legal(block, math, dim, fp32_mode, hardware, scalar_has_2d_partial) &&
@@ -425,7 +458,8 @@ ReducePlan make_tiled_plan(
         plan.input_policy = ReduceInputPolicy::NoWaitNoPop;
         plan.chunk = {
             .reduce_axis_tiles = reduced_tiles,
-            .output_tiles = dim == ReduceOpDim::H ? std::min(plan.Wt, destination_tiles(hardware)) : 1U,
+            .output_tiles =
+                dim == ReduceOpDim::H ? std::min(plan.Wt, destination_tiles(hardware) - (block.tail ? 1U : 0U)) : 1U,
             .buffers = 0};
         const auto pages = *block.resident_input_tiles;
         add_requirement(
@@ -451,11 +485,16 @@ ReducePlan make_tiled_plan(
         const auto input_budget = available_for_input(hardware, fixed_owned_bytes, max_input_cb_bytes);
         std::uint32_t output_group = 1;
         if (dim == ReduceOpDim::H) {
-            const uint32_t output_slots = destination_tiles(hardware) - (uses_sfpu ? 1U : 0U);
+            const uint32_t output_slots = destination_tiles(hardware) - (uses_sfpu || block.tail ? 1U : 0U);
             TT_FATAL(output_slots > 0, "Reduce planner: H reduction has no DEST output slots");
             output_group = std::min(plan.Wt, output_slots);
         }
         choose_tiled_chunk(plan, dim, reduced_tiles, output_group, input_tile_bytes, input_budget);
+        if (block.tail) {
+            // Runtime extents cannot determine FIFO wrap boundaries. The reader
+            // and compute exchange fixed packets; unused tail pages are skipped.
+            plan.input_policy = ReduceInputPolicy::ChunkedWaitChunkedPop;
+        }
 
         // ROW/SCALAR pairwise streams use even chunks. COL carries a row-major output group and retains one
         // DEST accumulator per column, so any axis chunk of at least two rows can make additive progress.
@@ -479,6 +518,21 @@ ReducePlan make_tiled_plan(
                     partial_elements,
                     has_axis_partial,
                     uses_sfpu);
+                // A native edge needs another auxiliary tile. Rebudget the
+                // input after that change, including tail-only masks, rather
+                // than retaining a chunk sized for the smaller additive recipe.
+                const auto fallback_fixed = static_cast<std::size_t>(auxiliary_tile_count(plan)) * aux_tile_bytes +
+                                            (alias_output ? 0U : output_bytes);
+                choose_tiled_chunk(
+                    plan,
+                    dim,
+                    reduced_tiles,
+                    output_group,
+                    input_tile_bytes,
+                    available_for_input(hardware, fallback_fixed, max_input_cb_bytes));
+                if (block.tail) {
+                    plan.input_policy = ReduceInputPolicy::ChunkedWaitChunkedPop;
+                }
             }
         }
 
@@ -740,6 +794,21 @@ ReducePlan make_row_major_plan(
 
 }  // namespace
 
+std::vector<std::uint32_t> ReducePlan::get_runtime_shape_args(const ReduceValidShape& shape) const {
+    TT_FATAL(tail.has_value(), "Reduce planner: a static core does not take runtime shape arguments");
+    TT_FATAL(
+        shape.height > 0 && shape.height <= logical_h && shape.width > 0 && shape.width <= logical_w &&
+            shape.batches > 0 && shape.batches <= batches,
+        "Reduce planner: runtime valid shape ({}, {}, {}) must be nonzero and within ({}, {}, {})",
+        shape.height,
+        shape.width,
+        shape.batches,
+        logical_h,
+        logical_w,
+        batches);
+    return {shape.height, shape.width, shape.batches};
+}
+
 const ReduceCbRequirement* ReducePlan::find_cb(ReduceCbRole role) const {
     const auto it = std::find_if(cb_requirements.begin(), cb_requirements.end(), [role](const auto& requirement) {
         return requirement.role == role;
@@ -891,6 +960,11 @@ bool zero_pair_avoids_an_odd_fold(const ReducePlan& plan, ReduceOpDim dim, bool 
 }
 
 bool try_enable_zero_pair(ReducePlan& plan, const ReduceHardwareConfig& hardware) {
+    // Tail parity is a runtime property. The ordinary reload works for either
+    // parity and leaves the last auxiliary tile reserved for the output mask.
+    if (plan.tail) {
+        return false;
+    }
     auto auxiliary = std::find_if(plan.cb_requirements.begin(), plan.cb_requirements.end(), [](const auto& req) {
         return req.role == ReduceCbRole::Auxiliary;
     });
@@ -931,6 +1005,7 @@ bool try_enable_zero_pair(ReducePlan& plan, const ReduceHardwareConfig& hardware
 
 bool same_auxiliary_tile(const ReduceAuxiliaryTileSpec& lhs, const ReduceAuxiliaryTileSpec& rhs) {
     return lhs.type == rhs.type && lhs.num_valid_elements == rhs.num_valid_elements &&
+           lhs.runtime_extent_arg == rhs.runtime_extent_arg &&
            std::bit_cast<std::uint32_t>(lhs.value) == std::bit_cast<std::uint32_t>(rhs.value);
 }
 
@@ -1094,6 +1169,10 @@ ReduceSequencePlan make_reduce_sequence_plan(
     // caller multiplier; scalar * local_element_count must agree across calls, then the planner transfers that
     // multiplier to the grand-total normalization.
     if (accumulates && first_config.reduce_math == ReduceOpMath::AVG) {
+        TT_FATAL(
+            std::none_of(plans.begin(), plans.end(), [](const auto& plan) { return plan.tail.has_value(); }),
+            "Reduce planner: accumulated runtime-tail AVG needs a runtime union divisor; use SUM with explicit "
+            "normalization after the final call");
         std::uint64_t grand_reduce_elements = 0;
         float common_post_multiplier = 0.0F;
         for (std::size_t i = 0; i < reductions.size(); ++i) {
@@ -1155,6 +1234,19 @@ ReduceSequencePlan make_reduce_sequence_plan(
     auxiliary_tile_offsets.reserve(plans.size());
     for (const auto& plan : plans) {
         auxiliary_tile_offsets.push_back(append_auxiliary_recipe(sequence.auxiliary.tiles, plan.auxiliary_tiles));
+    }
+    // The whole aggregate recipe is resident while each call runs. Distinct
+    // runtime shape sources may prevent tiles from being shared across calls.
+    const auto aggregate_aux_bytes = sequence.auxiliary.tiles.size() * expected_aux->page_size;
+    for (const auto& plan : plans) {
+        const auto call_aux_bytes = plan.find_cb(ReduceCbRole::Auxiliary)->total_size_bytes;
+        const auto owned_bytes = plan.total_owned_l1_bytes - call_aux_bytes + aggregate_aux_bytes;
+        TT_FATAL(
+            owned_bytes <= hardware.available_l1_bytes,
+            "Reduce sequence planner: aggregate auxiliary tiles and call buffers require {} bytes, but only {} are "
+            "available",
+            owned_bytes,
+            hardware.available_l1_bytes);
     }
     TT_FATAL(
         sequence.auxiliary.tiles.size() <= reduce_plan_args::auxiliary_header::tile_count_mask,
@@ -1360,6 +1452,9 @@ ReduceCallArgs::ReduceCallArgs(const ReduceCallPlan& call) {
         encode_chunk_and_auxiliary(call),
         std::bit_cast<std::uint32_t>(plan.post_scale),
         call.accumulation_index,
+        plan.tail ? plan.tail->compute_runtime_arg_offset : reduce_plan_args::no_runtime_arg,
+        plan.logical_h,
+        plan.logical_w,
     };
     static_assert(std::size(record) == static_cast<std::size_t>(CallWord::Count));
     compile_time_args_.insert(compile_time_args_.end(), std::begin(record), std::end(record));
@@ -1390,6 +1485,7 @@ ReduceAuxiliaryArgs::ReduceAuxiliaryArgs(const ReduceAuxiliaryPlan& auxiliary) {
     for (const auto& tile : auxiliary.tiles) {
         compile_time_args_.push_back(encode_auxiliary_tile_configuration(tile));
         compile_time_args_.push_back(std::bit_cast<std::uint32_t>(tile.value));
+        compile_time_args_.push_back(tile.runtime_extent_arg.value_or(reduce_plan_args::no_runtime_arg));
     }
 }
 

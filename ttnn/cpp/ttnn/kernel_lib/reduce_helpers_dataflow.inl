@@ -150,6 +150,16 @@ FORCE_INLINE void prepare_tile() {
         "reduction auxiliary tiles only support Float16_b and Float32 formats");
     constexpr uint32_t face_rows = tile_r_dim / tt::constants::FACE_HEIGHT;
     constexpr uint32_t faces_per_row = tile_c_dim / tt::constants::FACE_WIDTH;
+    const uint32_t valid_elements = []() {
+        if constexpr (Tile::has_runtime_extent) {
+            const uint32_t extent = get_arg_val<uint32_t>(Tile::runtime_extent_arg);
+            ASSERT(extent > 0);
+            const uint32_t remainder = extent % Tile::num_valid_elements;
+            return remainder == 0 ? Tile::num_valid_elements : remainder;
+        } else {
+            return Tile::num_valid_elements;
+        }
+    }();
 
     if constexpr (tile_type == ttnn::kernel_lib::ReduceAuxiliaryTileType::FirstRow) {
         static_assert(
@@ -180,13 +190,13 @@ FORCE_INLINE void prepare_tile() {
         if (packed_value != 0) {
             if constexpr (tile_type == ttnn::kernel_lib::ReduceAuxiliaryTileType::FirstRow) {
                 fill_first_row_valid_columns<data_format, face_rows, faces_per_row>(
-                    addr_to_l1_ptr(write_addr), packed_value, Tile::num_valid_elements);
+                    addr_to_l1_ptr(write_addr), packed_value, valid_elements);
             } else if constexpr (tile_type == ttnn::kernel_lib::ReduceAuxiliaryTileType::FirstColumn) {
                 fill_each_face_col0_partial<data_format, face_rows, faces_per_row>(
-                    addr_to_l1_ptr(write_addr), packed_value, Tile::num_valid_elements);
+                    addr_to_l1_ptr(write_addr), packed_value, valid_elements);
             } else {
                 fill_first_row_per_face_row<data_format, face_rows, faces_per_row>(
-                    addr_to_l1_ptr(write_addr), packed_value, Tile::num_valid_elements);
+                    addr_to_l1_ptr(write_addr), packed_value, valid_elements);
             }
         }
     }

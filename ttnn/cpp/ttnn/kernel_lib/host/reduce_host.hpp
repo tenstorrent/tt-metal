@@ -48,6 +48,21 @@ namespace ttnn::kernel_lib::host {
 using ReducePath = ttnn::kernel_lib::ReducePath;
 using ReduceAuxiliaryTileType = ttnn::kernel_lib::ReduceAuxiliaryTileType;
 
+// Only kernels assigned to tail cores use these runtime arguments. Offsets are
+// word offsets in the compute and auxiliary-producing kernels, respectively.
+struct ReduceTailConfig {
+    std::uint32_t compute_runtime_arg_offset = 0;
+    std::uint32_t auxiliary_runtime_arg_offset = 0;
+};
+
+// Valid elements in one local block. The leading dimensions are flattened into
+// batches, just as in ReduceBlockSpec. Empty cores should not issue a reduction.
+struct ReduceValidShape {
+    std::uint32_t height;
+    std::uint32_t width;
+    std::uint32_t batches = 1;
+};
+
 enum class ReduceCbRole : std::uint8_t {
     Input,
     Output,
@@ -90,12 +105,16 @@ struct ReduceCbRequirement {
 };
 
 // One concrete tile for the dataflow-side auxiliary recipe. The planner has
-// already resolved why the tile is needed; the reader only needs these three
-// physical properties to materialize it.
+// already resolved why the tile is needed. A tail edge optionally takes its
+// valid extent from a runtime shape rather than a constant.
 struct ReduceAuxiliaryTileSpec {
     float value = 0.0F;
     ReduceAuxiliaryTileType type = ReduceAuxiliaryTileType::Zero;
     std::uint32_t num_valid_elements = 0;
+    // When present, read this element extent from the auxiliary kernel's runtime
+    // arguments. num_valid_elements is the tile extent; use the last tile's
+    // remainder, or the whole extent when the runtime dimension is aligned.
+    std::optional<std::uint32_t> runtime_extent_arg;
 };
 
 // The one shared auxiliary CB recipe for a complete planning unit. It carries
@@ -142,6 +161,9 @@ struct ReducePlan {
     // Zero means the ordinary contiguous Wt pitch.
     std::uint32_t input_row_stride_tiles = 0;
     std::uint32_t reduce_factor = 1;
+    std::optional<ReduceTailConfig> tail;
+    std::uint32_t logical_h = 0;
+    std::uint32_t logical_w = 0;
 
     // post_scale is applied once, after reduction finalization and before any
     // caller callback. The auxiliary recipe is already lowered to physical tile
@@ -159,6 +181,9 @@ struct ReducePlan {
     std::size_t total_owned_l1_bytes = 0;
 
     const ReduceCbRequirement* find_cb(ReduceCbRole role) const;
+    // Append these three words at the offsets in tail, on tail cores only.
+    // Validates the shape against the planned local bounds before serialization.
+    std::vector<std::uint32_t> get_runtime_shape_args(const ReduceValidShape& shape) const;
 };
 
 // The block consumed by one reduce invocation on one core. Shapes are in elements;
@@ -183,6 +208,12 @@ struct ReduceBlockSpec {
     // Absent: the planner sizes the corresponding FIFO/staging allocation.
     std::optional<std::uint32_t> resident_input_tiles;
     std::optional<std::uint32_t> resident_output_tiles;
+    // Absent: entirely static shape. Present: logical extents are upper bounds;
+    // this kernel reads [height, width, batches] at the configured runtime offset.
+    // Resident inputs retain the planned row and batch pitches. FIFO producers
+    // stream valid work in fixed-size packets of chunk.input_tiles() pages,
+    // padding the final axis/output group so each packet fits the CB ring.
+    std::optional<ReduceTailConfig> tail;
 
     // Convenience for a local tiled block with padding rounded to whole tiles.
     static ReduceBlockSpec tiled(

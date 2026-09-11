@@ -30,11 +30,13 @@ constexpr std::uint32_t input_tile_count() {
 
 template <typename Call>
 ALWI void make_streamed_input_available() {
+#ifndef EXTERNAL_READER
     if constexpr (Call::input_policy != compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop) {
         DataflowBuffer input(Call::input_cb_id);
         input.reserve_back(input_tile_count<Call>());
         input.push_back(input_tile_count<Call>());
     }
+#endif
 }
 
 template <typename Call>
