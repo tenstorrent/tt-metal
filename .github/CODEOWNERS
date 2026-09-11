@@ -536,6 +536,7 @@ ttnn/ttnn/graph_report.py @tenstorrent/thirdparty-lights-on-software @tenstorren
 /models/tt_cnn/ @esmalTT @tenstorrent/metalium-developers-convolutions
 /**/functional_*/ @uaydonat @esmalTT
 models/common @yieldthought @mtairum @uaydonat @gwangTT
+models/common/moe/ @yieldthought @mtairum @uaydonat @gwangTT
 models/common/sampling/ @sraizada-tt @djordje-tt @tchedaTT @mtairum
 models/common/warmup/ @nostojicTT @sraizada-tt @djordje-tt @tchedaTT
 models/datasets/llm_dataset_utils.py @mtairum @uaydonat

@@ -10,7 +10,6 @@ on:
         type: choice
         options:
           - all
-          - tttv2 modules
           - qwen3_vl
       platform:
         required: false

@@ -50,7 +50,7 @@ def is_global_rank_zero():
 
 def skip_if_unsupported_num_links(mesh_device, num_links):
     """Skip the test if the mesh device does not support the requested number of links."""
-    from models.common.modules.tt_ccl import get_num_links
+    from models.common.tt_ccl import get_num_links
 
     available_links = get_num_links(mesh_device)
 

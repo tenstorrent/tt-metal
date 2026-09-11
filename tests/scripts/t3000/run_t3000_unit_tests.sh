@@ -258,101 +258,6 @@ run_t3000_ccl_tests() {
   fi
 }
 
-run_t3000_tttv2_fast_unit_tests() {
-  fail=0
-
-  # Run non-module models/common unit tests
-  pytest --tb=short --ignore=models/common/tests/modules models/common/tests ; fail+=$?
-
-  # [INFO] HF_MODEL Only used for test_*_1d_vs_reference_from_model_args, which will retire with TTTv1
-  # Run MLP1D fast unit tests (full set is run in t3k_e2e_tests.yaml to match timeout values and frequency of runs)
-  HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-  TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/mlp_1d \
-  pytest models/common/tests/modules/mlp/test_mlp_1d.py \
-    -m "not slow" \
-    --tb=short \
-    --durations=10 \
-    --cov=models.common.modules.mlp.mlp_1d \
-    --cov-report=term-missing \
-    --cov-config=models/common/tests/setup.cfg ; fail+=$?
-
-  # Run RMSNorm1D tests
-  HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-  TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/rmsnorm_1d \
-  pytest models/common/tests/modules/rmsnorm/test_rmsnorm_1d.py \
-    -m "not slow" \
-    --tb=short \
-    --durations=10 \
-    --cov=models.common.modules.rmsnorm.rmsnorm_1d \
-    --cov-report=term-missing \
-    --cov-config=models/common/tests/setup.cfg ; fail+=$?
-
-  # Run Rope1D tests
-  HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-  TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/rope_1d \
-  pytest models/common/tests/modules/rope/test_rope_1d.py \
-    -m "not slow" \
-    --durations=10 \
-    --tb=short \
-    --cov=models.common.modules.rope.rope_1d \
-    --cov-report=term-missing \
-    --cov-config=models/common/tests/setup.cfg ; fail+=$?
-
-  # Run LMHead1D tests
-  HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-  TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/lm_head_1d \
-  pytest models/common/tests/modules/lm_head/test_lm_head_1d.py \
-    -m "not slow" \
-    --tb=short \
-    --durations=10 \
-    --cov=models.common.modules.lm_head.lm_head_1d \
-    --cov-report=term-missing \
-    --cov-config=models/common/tests/setup.cfg ; fail+=$?
-
-  # Run Attention1D tests
-  TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/attention_1d \
-  pytest models/common/tests/modules/attention/test_attention_1d.py \
-    -m "not slow" \
-    --tb=short \
-    --durations=10 \
-    --cov=models.common.modules.attention.attention_1d \
-    --cov-report=term-missing \
-    --cov-config=models/common/tests/setup.cfg ; fail+=$?
-
-  # Run Embedding1D tests
-  HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-  TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/embedding_1d \
-  pytest models/common/tests/modules/embedding/test_embedding_1d.py \
-    -m "not slow" \
-    --tb=short \
-    --durations=10 \
-    --cov=models.common.modules.embedding.embedding_1d \
-    --cov-report=term-missing \
-    --cov-config=models/common/tests/setup.cfg ; fail+=$?
-
-  # Run Penalties1D tests
-  pytest models/common/tests/modules/sampling/test_penalties_1d.py \
-    -m "not slow" \
-    --tb=short \
-    --durations=10 \
-    --cov=models.common.modules.sampling.penalties_1d \
-    --cov-report=term-missing \
-    --cov-config=models/common/tests/setup.cfg ; fail+=$?
-
-  # Run Sampling1D tests
-  pytest models/common/tests/modules/sampling/test_sampling_1d.py \
-    -m "not slow" \
-    --tb=short \
-    --durations=10 \
-    --cov=models.common.modules.sampling.sampling_1d \
-    --cov-report=term-missing \
-    --cov-config=models/common/tests/setup.cfg ; fail+=$?
-
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
 run_t3000_tests() {
   # Run ttmetal tests
   run_t3000_ttmetal_tests
@@ -362,9 +267,6 @@ run_t3000_tests() {
 
   # Run ttnn tests
   run_t3000_ttnn_tests
-
-  # Run tttv2 fast unit tests
-  run_t3000_tttv2_fast_unit_tests
 }
 
 fail=0
