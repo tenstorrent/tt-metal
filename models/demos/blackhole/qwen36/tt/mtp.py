@@ -33,6 +33,7 @@ the from_torch + ReplicateTensorToMesh path it replaces (verified including tile
 
 import ttnn
 from models.common.rmsnorm import RMSNorm
+from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
 from models.tt_transformers.tt.common import Mode
 
@@ -55,6 +56,20 @@ class Qwen36MTP:
         # mtp.norm's output instead of the raw block output.
         self.spec_postnorm = bool(getattr(parent, "spec_postnorm", False))
 
+        # Shard-argmax greedy pick: keep the drafter's logits vocab-sharded and reduce 8 scalars
+        # across the mesh instead of all-gathering the whole fp32 vocab row (that gather was 1.47 ms
+        # of a ~3.4 ms drafter leg on T3K/27B; a traced leg is 3986 -> 2684 us). Byte-identical to
+        # the gathered argmax, and measured to leave the drafted ids and the acceptance rate
+        # unchanged -- see tp_common.greedy_pick. Needs an evenly fractured head; env escape hatch
+        # Scoped to T3K (tpc.wh_t3k), the config it was measured and gated on.
+        self.shard_argmax = tpc.wh_t3k(args) and args.vocab_size % self.num_devices == 0
+        # Replicated offset constant for the combine. Built here so it predates any trace capture.
+        self._argmax_offsets = (
+            tpc.vocab_shard_offsets(mesh_device, self.num_devices, args.vocab_size // self.num_devices)
+            if self.shard_argmax
+            else None
+        )
+
         mtp_cache = (tensor_cache_path / "mtp") if tensor_cache_path is not None else None
 
         # Two pre-fc norms + the post-block norm, keyed under "mtp." (mtp.pre_fc_norm_embedding,
@@ -66,9 +81,42 @@ class Qwen36MTP:
         # fc (eh_proj): torch weight [dim, 2*dim] -> concat(token_emb, hidden)[..,2*dim] -> hidden.
         fc_w = state_dict["mtp.fc.weight"]
         assert fc_w.shape == (args.dim, 2 * args.dim), f"unexpected mtp.fc shape {tuple(fc_w.shape)}"
+        # A DRAFTER-ONLY bfloat4_b copy of the LM head (T3K). That matmul is
+        # 943 us -- 54% of a traced drafter leg -- and it is weight-streaming bound at ~60% of DRAM
+        # peak, so config tuning cannot move it (auto is optimal; in0 in L1 costs +1577 us) and the
+        # only lever left is bytes: bfp4 halves the 169 MB read. The base/verify head is untouched,
+        # so losslessness is unaffected by construction -- the drafter only PROPOSES and every
+        # proposal is still checked against the bf16 base argmax. What it can cost is ACCEPTANCE,
+        # which is why this is opt-in and measured rather than assumed: it only pays if the drafted
+        # tokens survive verification at nearly the old rate.
+        #
+        # MEASURED on T3K/27B, and acceptance does NOT suffer:
+        #   traced drafter leg   2513.2 -> 2108.4 us   (-16.1%, the LM head 943 -> ~540)
+        #   demo ISL 128, K=6    45.84 -> 47.26 tok/s  (+3.1%, 2 reps: 47.23 / 47.28)
+        #   acceptance           4.00/6 -> 4.10/6      (UP, or level within 10-iteration sampling)
+        #   spec lossless        unchanged -- same divergence point, same near-tie flip, 2.69/3
+        # Costs ~89 MB/device for the second copy (the bf16 base/verify head stays).
+        self._lm_head_bfp4 = None
+        if self.shard_argmax and "output.weight" in state_dict:
+            self._lm_head_bfp4 = ttnn.as_tensor(
+                state_dict["output.weight"].T.contiguous(),  # [dim, vocab], as the parent builds it
+                dtype=ttnn.bfloat4_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cache_file_name=(str(tensor_cache_path / "output.weight.vshard.bfp4") if tensor_cache_path else None),
+                **(
+                    dict(mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1))
+                    if getattr(parent, "_lmhead_vocab_sharded", False)
+                    else {}
+                ),
+            )
+        self._fc_decode_pc = (
+            tpc.fc_decode_program_config(mesh_device, 2 * args.dim, args.dim // self.num_devices)
+            if tpc.wh_t3k(args)
+            else None
+        )
         if self.num_devices > 1:
-            from models.demos.blackhole.qwen36.tt import tp_common as tpc
-
             self._fc_compute_cfg = tpc.COMPUTE_HIFI2
             # Column-parallel: transpose to [2*dim, dim] then shard dim=-1 -> [2*dim, dim/tp] per device.
             self.fc = tpc.shard_w(
@@ -93,7 +141,10 @@ class Qwen36MTP:
         # Reuse the full-attention decoder layer for mtp.layers.0. Remap the checkpoint keys to a
         # full-attention layer index L so is_full_attention_layer(L) is True and the substate loader
         # finds layers.{L}.self_attn.* / .mlp.* / .{input,post_attention}_layernorm.
-        L = next(i for i, t in enumerate(args.attention_type_list) if t == "full_attention")
+        L = next((i for i, t in enumerate(args.attention_type_list) if t == "full_attention"), None)
+        assert (
+            L is not None
+        ), f"checkpoint attention_type_list has no full_attention layer (len={len(args.attention_type_list)})"
         assert args.is_full_attention_layer(L), f"MTP host layer {L} is not full attention"
         self.mtp_host_layer = L
         prefix = f"layers.{L}."
@@ -173,27 +224,48 @@ class Qwen36MTP:
         if self.num_devices > 1 and mode == Mode.DECODE:
             nc = dict(self.args.get_norm_config("lm_head", Mode.DECODE))
             nc["output_mem_config"] = ttnn.DRAM_MEMORY_CONFIG
+        # NEGATIVE, do not retry: the two gathers these norms do (46 + 42 us, the biggest non-matmul
+        # cost in the prologue) look like one gather of the two inputs ROW-STACKED, since all_gather
+        # on dim 3 gathers each row independently. Both forms were built and measured on T3K/27B:
+        # a sharded-output gather is rejected outright (the 2-row stack is physical height 2, and
+        # the norm's width-shard spec requires tile-sized shards), and the DRAM-output form works
+        # and is bit-identical (same drafted ids) but costs +90 us/leg -- the interleaved gather is
+        # slower than the sharded one, and the stack/slice/reshard needed to split the rows back out
+        # adds five ops. Two cheap gathers beat one awkward one here.
         e = self.pre_fc_norm_embedding(token_emb, mode=mode, norm_config=nc)  # -> full [1,1,*,dim]
         h = self.pre_fc_norm_hidden(hidden_states, mode=mode, norm_config=nc)  # -> full [1,1,*,dim]
-        cat = ttnn.concat([e, h], dim=-1)  # [1,1,*,2*dim]  (order: [embedding, hidden])
+        # L1 for the fc's in0 (640 KB at 27B/TP=8): the tt-perf-report hint "place input 0 in L1"
+        # is worth -2.1 us here (72.5 -> 70.4). It is NOT worth taking on the LM head, where the same
+        # move costs +1577 us (962 -> 2539) -- see tp_common.fc_decode_program_config.
+        cat_mc = ttnn.L1_MEMORY_CONFIG if self._fc_decode_pc is not None else None
+        cat = ttnn.concat([e, h], dim=-1, **({"memory_config": cat_mc} if cat_mc else {}))  # [1,1,*,2*dim]
         ttnn.deallocate(e)
         ttnn.deallocate(h)
         kw = dict(compute_kernel_config=self._fc_compute_cfg) if self._fc_compute_cfg is not None else {}
+        # Swept program config for the 1-tile-tall form (every draft leg, and the batched reseed at
+        # B<=32). It is per_core_M=1 + fuse_batch, so anything taller -- prefill -- must keep auto or
+        # work_split trips. 2.3x on this matmul; see tp_common.fc_decode_program_config.
+        if self._fc_decode_pc is not None and int(cat.shape[-2]) <= 32:
+            kw["program_config"] = self._fc_decode_pc
         fused = ttnn.linear(cat, self.fc, memory_config=ttnn.DRAM_MEMORY_CONFIG, **kw)  # [1,1,*,dim/tp]
         ttnn.deallocate(cat)
         return fused
 
     def _argmax_last(self, logits):
-        """argmax over the vocab dim for ONE row -> [1,1,1] uint32 ROW_MAJOR.
+        """Greedy pick over the vocab dim for ONE row -> [1,1,1] uint32 ROW_MAJOR.
 
-        ttnn.argmax needs ROW_MAJOR: a TILE input takes a single-core internal-untilize path that is
-        catastrophically slow on a 248k-wide vocab. Deliberately NOT padded to 32 rows -- a
-        [1,1,1,vocab] row is already one tile row physically, so padding only moves ~32x the bytes.
+        Takes the shard-combine path when forward_decode left the logits vocab-sharded (the default
+        on a mesh), the plain untilize+argmax when they were gathered. Both live in
+        tp_common.greedy_pick, which documents why they return the same id.
         """
-        u = ttnn.untilize(logits, use_multicore=True)
-        out = ttnn.argmax(u, dim=-1, keepdim=False)
-        ttnn.deallocate(u)
-        return out
+        return tpc.greedy_pick(
+            logits,
+            self.mesh_device,
+            self.tt_ccl,
+            self.args.ccl_topology(),
+            shard_offsets=self._argmax_offsets if self.shard_argmax else None,
+            vocab_size=self.args.vocab_size,
+        )
 
     # ── traced draft window ──────────────────────────────────────────────────
     # A draft chain is K sequential legs, and MEASURED on T3K/27B each eager leg costs ~19 ms of
@@ -436,7 +508,13 @@ class Qwen36MTP:
         not a valid chain value under V3.
         """
         mode = Mode.DECODE
-        tok_emb = self.embd(token_ids)  # [B,1,dim/tp]
+        # T3K takes tpc.decode_embed rather than self.embd: at the drafter's B=1 the plain call's
+        # internal TilizeWithValPadding runs on ONE core (55.6 us for a [1,1,1,dim/tp] row, the
+        # leg's largest data-movement op). decode_embed splits it; bit-identical either way.
+        # Every other config keeps the plain call, so nothing about 9B/N300 changes here.
+        tok_emb = (
+            tpc.decode_embed(self.embd, token_ids, self.args) if tpc.wh_t3k(self.args) else self.embd(token_ids)
+        )  # [B,1,dim/tp]
         tok_emb = ttnn.reshape(tok_emb, (1, 1, tok_emb.shape[0] * tok_emb.shape[1], tok_emb.shape[-1]))
         fused = self._fuse(tok_emb, hidden_states, mode)
         ttnn.deallocate(tok_emb)
@@ -479,7 +557,23 @@ class Qwen36MTP:
             # fp32 for the DRAFTER only (the shared base/verify call keeps its default bf16 output —
             # losslessness is defined by the base argmax). The drafter's argmax consumes these
             # directly, so bf16 ties that used to discard a good draft are broken correctly.
-            logits = self._lm_head(normed, out_dtype=ttnn.float32)
+            #
+            # gather=False under shard_argmax: _argmax_last reduces the shards itself, so the fp32
+            # vocab all-gather is skipped entirely. The matmul is unchanged either way.
+            if self._lm_head_bfp4 is not None and self.shard_argmax:
+                logits = ttnn.linear(
+                    normed,
+                    self._lm_head_bfp4,
+                    dtype=ttnn.float32,
+                    compute_kernel_config=ttnn.init_device_compute_kernel_config(
+                        self.device.arch(),
+                        math_fidelity=ttnn.MathFidelity.LoFi,  # LoFi matches the bfp4 weight
+                        fp32_dest_acc_en=True,
+                        packer_l1_acc=False,
+                    ),
+                )
+            else:
+                logits = self._lm_head(normed, out_dtype=ttnn.float32, gather=not self.shard_argmax)
         ttnn.deallocate(normed)
         return logits, next_hidden
 
