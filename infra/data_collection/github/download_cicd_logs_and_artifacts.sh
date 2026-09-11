@@ -79,15 +79,32 @@ download_artifacts_created_since_attempt_start() {
         return
     fi
 
+    local -a fresh_names=()
     local -a name_args=()
     local name
     while IFS= read -r name; do
-        [[ -n "$name" ]] && name_args+=(--name "$name")
+        [[ -z "$name" ]] && continue
+        fresh_names+=("$name")
+        name_args+=(--name "$name")
     done <<< "$fresh"
-    echo "[info] downloading ${#name_args[@]} new test report artifact(s) for attempt $attempt_number"
+    echo "[info] downloading ${#fresh_names[@]} new test report artifact(s) for attempt $attempt_number"
+
+    # Every name goes in one `gh run download`: each invocation does its own artifact
+    # listing, so one call per artifact would cost two requests per report instead of one.
+    #
+    # The destination differs by count because gh's layout does. Several --name arguments
+    # each get their own <name>/ directory, but a lone --name flattens its files straight
+    # into -D -- and get_workflow_run_uuids_to_test_reports_paths_ globs for
+    # test_reports_* directories, so a flattened download silently yields no test results
+    # at all. Naming the directory ourselves in that case keeps the layout uniform.
+    local dest="generated/cicd/$workflow_run_id/artifacts"
+    if [[ "${#fresh_names[@]}" -eq 1 ]]; then
+        dest="$dest/${fresh_names[0]}"
+        mkdir -p "$dest"
+    fi
 
     local download_error
-    if ! download_error=$(gh run download --repo $repo -D generated/cicd/$workflow_run_id/artifacts "${name_args[@]}" $workflow_run_id 2>&1 >/dev/null); then
+    if ! download_error=$(gh run download --repo $repo -D "$dest" "${name_args[@]}" $workflow_run_id 2>&1 >/dev/null); then
         echo "[Warning] Test reports not downloaded for workflow run $workflow_run_id: ${download_error:-no reason given}"
     fi
 }
