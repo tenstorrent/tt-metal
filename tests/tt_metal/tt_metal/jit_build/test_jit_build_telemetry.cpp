@@ -219,17 +219,59 @@ protected:
         return BuildCacheTelemetry::inst().get_or_register_metric("jit_build_window").snapshot();
     }
 
-    // dump_metrics() is what collapses the window endpoints into the single sample the metric
-    // carries. Token aggregates outlive disable()/enable(), so return the span of the sample this
-    // call added rather than reading the token's absolute totals.
+    // dump_metrics() replaces the single window sample, including a snapshot left over from
+    // an earlier test's enable()/disable() cycle.
     static double dump_and_get_window_ms() {
-        const TelemetryTokenData before = window_snapshot();
         BuildCacheTelemetry::inst().dump_metrics();
         const TelemetryTokenData after = window_snapshot();
-        EXPECT_EQ(after.count, before.count + 1u) << "dump_metrics() should record exactly one window sample";
-        return after.total - before.total;
+        EXPECT_EQ(after.count, 1u) << "dump_metrics() should retain exactly one window sample";
+        EXPECT_DOUBLE_EQ(after.min_val, after.total);
+        EXPECT_DOUBLE_EQ(after.max_val, after.total);
+        return after.total;
     }
 };
+
+TEST_F(JitBuildWindowTest, RepeatedDumpsDoNotAccumulateTheSameWindow) {
+    using namespace std::chrono_literals;
+    auto& tel = BuildCacheTelemetry::inst();
+    const auto t0 = std::chrono::steady_clock::now();
+    tel.note_build_window(t0, t0 + 50ms);
+
+    EXPECT_DOUBLE_EQ(dump_and_get_window_ms(), 50.0);
+    EXPECT_DOUBLE_EQ(dump_and_get_window_ms(), 50.0);
+    // A final dump, as performed by the singleton destructor, must also be observational.
+    EXPECT_DOUBLE_EQ(dump_and_get_window_ms(), 50.0);
+}
+
+TEST_F(JitBuildWindowTest, LaterBuildsReplaceThePreviouslyDumpedSpan) {
+    using namespace std::chrono_literals;
+    auto& tel = BuildCacheTelemetry::inst();
+    const auto t0 = std::chrono::steady_clock::now();
+    tel.note_build_window(t0, t0 + 50ms);
+    EXPECT_DOUBLE_EQ(dump_and_get_window_ms(), 50.0);
+
+    // Widen both endpoints after the first dump. The new extent replaces the old sample;
+    // it must not be added to it, nor should dumping reset the original endpoints.
+    tel.note_build_window(t0 - 10ms, t0 + 80ms);
+    EXPECT_DOUBLE_EQ(dump_and_get_window_ms(), 90.0);
+    EXPECT_DOUBLE_EQ(dump_and_get_window_ms(), 90.0);
+}
+
+TEST_F(JitBuildWindowTest, ConcurrentDumpsRetainOneWindowSample) {
+    using namespace std::chrono_literals;
+    auto& tel = BuildCacheTelemetry::inst();
+    const auto t0 = std::chrono::steady_clock::now();
+    tel.note_build_window(t0, t0 + 50ms);
+
+    std::vector<std::thread> threads;
+    for (int i = 0; i < 16; ++i) {
+        threads.emplace_back([&] { tel.dump_metrics(); });
+    }
+    for (auto& thread : threads) {
+        thread.join();
+    }
+    EXPECT_DOUBLE_EQ(dump_and_get_window_ms(), 50.0);
+}
 
 TEST_F(JitBuildWindowTest, WindowMeasuresBuildSpanNotProcessLifetime) {
     using namespace std::chrono_literals;
