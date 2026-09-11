@@ -21,6 +21,7 @@
     # (variant-qualified markers, fail-closed unverifiable variants, sidecar single-load) that
     # every tt_transformers e2e leg depends on. See #45400.
     pytest --timeout 120 models/tt_transformers/tests/test_warm_cache_marker.py
+    pytest --timeout 300 models/tt_transformers/tests/test_traced_prefill_rope_slice.py
     pytest --timeout 300 models/tt_transformers/tests/test_embedding.py
     pytest --timeout 300 models/tt_transformers/tests/test_rms_norm.py
     pytest --timeout 600 models/tt_transformers/tests/test_mlp.py
