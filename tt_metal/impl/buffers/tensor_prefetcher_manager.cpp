@@ -533,9 +533,6 @@ void TensorPrefetcherManager::build_and_launch_programs(uint32_t stage_ring_base
     const uint32_t pcie_alignment =
         MetalContext::instance(mesh_device_->impl().get_context_id()).hal().get_alignment(HalMemType::HOST);
     const uint32_t socket_page_size = align_up(kRequestPageBytes, pcie_alignment);
-    const uint64_t dram_l1_noc_offset = MetalContext::instance(mesh_device_->impl().get_context_id())
-                                            .hal()
-                                            .get_l1_noc_offset(HalProgrammableCoreType::DRAM);
 
     programs_.clear();
     for (uint32_t d = 0; d < devices_.size(); ++d) {
@@ -589,8 +586,6 @@ void TensorPrefetcherManager::build_and_launch_programs(uint32_t stage_ring_base
                 cq_signal_l1_addr_,
                 cq_signal_slot_stride_,
                 shutdown_semaphore_id,
-                static_cast<uint32_t>(dram_l1_noc_offset),
-                static_cast<uint32_t>(dram_l1_noc_offset >> 32),
             };
 
             KernelHandle kernel_id = CreateKernel(
