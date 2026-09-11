@@ -10,8 +10,6 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
 
-#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
-
 #include "device/mix_streams_device_operation.hpp"
 #include "ttnn/operations/core/to_layout/to_layout_op.hpp"
 #include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
@@ -208,35 +206,6 @@ Tensor matmul_gather_in0_width_sharded(
         /*compute_kernel_config=*/compute_kernel_config);
 }
 
-Tensor to_interleaved(const Tensor& t) {
-    if (!t.is_sharded()) {
-        return t;
-    }
-    return ttnn::to_memory_config(t, MemoryConfig{TensorMemoryLayout::INTERLEAVED, t.memory_config().buffer_type()});
-}
-
-Tensor to_row_major(const Tensor& t) {
-    Tensor x = to_interleaved(t);
-    if (x.layout() == Layout::ROW_MAJOR) {
-        return x;
-    }
-    return ttnn::to_layout(x, Layout::ROW_MAJOR);
-}
-
-Tensor match_streams_layout(Tensor result, const Tensor& streams, const MemoryConfig& dst_mem_config) {
-    if (streams.layout() == Layout::TILE) {
-        result = to_interleaved(result);
-        if (result.layout() != Layout::TILE) {
-            result = ttnn::to_layout(result, Layout::TILE);
-        }
-    }
-    if (result.memory_config() != dst_mem_config &&
-        tt::tt_metal::can_shard_align(dst_mem_config, result.layout(), result.tensor_spec().tile())) {
-        result = ttnn::to_memory_config(result, dst_mem_config);
-    }
-    return result;
-}
-
 }  // namespace
 
 Tensor mix_streams(
@@ -249,27 +218,8 @@ Tensor mix_streams(
     validate_inputs(post, comb, sublayer_out, streams);
 
     namespace device = ttnn::operations::experimental::deepseek::mix_streams;
-    const MemoryConfig dst_mem_config = memory_config.value_or(streams.memory_config());
-
-    // Fused kernel is ROW_MAJOR. Decoder still feeds TILE post/comb (hyperconnection)
-    // plus RM attention output; tilizing the RM WIDTH_SHARDED residual (shard [hc, D/cores])
-    // is illegal for 32x32 tiles, so convert everything to interleaved RM first.
     if (device::is_fusable(post, comb, sublayer_out, streams)) {
-        return match_streams_layout(
-            ttnn::prim::mix_streams(post, comb, sublayer_out, streams, memory_config, compute_kernel_config),
-            streams,
-            dst_mem_config);
-    }
-
-    Tensor post_rm = to_row_major(post);
-    Tensor comb_rm = to_row_major(comb);
-    Tensor sub_rm = to_row_major(sublayer_out);
-    Tensor streams_rm = to_row_major(streams);
-    if (device::is_fusable(post_rm, comb_rm, sub_rm, streams_rm)) {
-        return match_streams_layout(
-            ttnn::prim::mix_streams(post_rm, comb_rm, sub_rm, streams_rm, std::nullopt, compute_kernel_config),
-            streams,
-            dst_mem_config);
+        return ttnn::prim::mix_streams(post, comb, sublayer_out, streams, memory_config, compute_kernel_config);
     }
 
     const auto& streams_shape = streams.logical_shape();
@@ -280,29 +230,28 @@ Tensor mix_streams(
     const uint32_t t = b * s;
     const auto ck_config = compute_kernel_config.value_or(default_hifi4_config());
 
-    auto post_t = ttnn::to_layout(to_interleaved(post_rm), Layout::TILE);
-    auto comb_t = ttnn::to_layout(to_interleaved(comb_rm), Layout::TILE);
-    auto sublayer_out_t = ttnn::to_layout(to_interleaved(sub_rm), Layout::TILE);
-    auto streams_t = ttnn::to_layout(to_interleaved(streams_rm), Layout::TILE);
+    Tensor sublayer = sublayer_out;
+    if (sublayer.layout() == Layout::ROW_MAJOR) {
+        if (sublayer.is_sharded()) {
+            sublayer = ttnn::to_memory_config(
+                sublayer, MemoryConfig{TensorMemoryLayout::INTERLEAVED, sublayer.memory_config().buffer_type()});
+        }
+        sublayer = ttnn::to_layout(sublayer, Layout::TILE);
+    }
 
-    // placement = post[..,None] * sublayer_out[..,None,:] -> [1, T, hc, D].
-    auto out = ttnn::reshape(sublayer_out_t, ttnn::Shape({1, t, 1, d}));
-    out = ttnn::repeat(out, ttnn::Shape({1, 1, hc, 1}));  // broadcast over the stream axis
-    auto placement = ttnn::multiply(out, ttnn::reshape(post_t, ttnn::Shape({1, t, hc, 1})));
+    auto out = ttnn::reshape(sublayer, ttnn::Shape({1, t, 1, d}));
+    out = ttnn::repeat(out, ttnn::Shape({1, 1, hc, 1}));
+    auto placement = ttnn::multiply(out, ttnn::reshape(post, ttnn::Shape({1, t, hc, 1})));
 
-    // mixed = matmul(comb^T, streams): sum over the FIRST hc axis.
-    auto comb_r = ttnn::reshape(comb_t, ttnn::Shape({1, t, hc, hc}));
-    auto streams_r = ttnn::reshape(streams_t, ttnn::Shape({1, t, hc, d}));
+    auto comb_r = ttnn::reshape(comb, ttnn::Shape({1, t, hc, hc}));
+    auto streams_r = ttnn::reshape(streams, ttnn::Shape({1, t, hc, d}));
+    const auto streams_mem_config = streams.memory_config();
 
     Tensor mixed;
     if (streams_r.is_sharded() && streams_r.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
         mixed = matmul_gather_in0_width_sharded(std::move(comb_r), std::move(streams_r), ck_config);
-        // Keep the add in the same WIDTH_SHARDED layout as the matmul output / residual.
         placement = ttnn::to_memory_config(placement, mixed.memory_config());
     } else {
-        // Interleaved path: fold the comb transpose into the matmul (transpose_a=True)
-        // to drop a separate transpose device op -- at 4x4 the transpose is ~30us of
-        // dispatch overhead for ~2us of compute, so the op is pure launch cost.
         mixed = ttnn::matmul(
             /*input_tensor_a=*/comb_r,
             /*input_tensor_b=*/streams_r,
@@ -316,7 +265,11 @@ Tensor mix_streams(
     }
 
     auto result = ttnn::reshape(ttnn::add(placement, mixed), ttnn::Shape({b, s, hc, d}));
-    return match_streams_layout(std::move(result), streams, dst_mem_config);
+    const MemoryConfig& dst_mem_config = memory_config.has_value() ? *memory_config : streams_mem_config;
+    if (result.memory_config() != dst_mem_config) {
+        result = ttnn::to_memory_config(result, dst_mem_config);
+    }
+    return result;
 }
 
 }  // namespace ttnn::experimental::deepseek::mix_streams
