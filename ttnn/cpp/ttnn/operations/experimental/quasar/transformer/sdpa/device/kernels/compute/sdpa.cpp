@@ -16,7 +16,13 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 #include "compute_common.hpp"
+#ifndef ARCH_QUASAR
+// The streaming compute path uses LLK primitives not available on Quasar (matmul_block_no_mop,
+// exp_packthread_tile, *_custom, mm_no_mop_*), so it is neither compiled nor selected there — Quasar
+// forces the non-streaming path (factory: use_streaming_compute=false on Quasar). See the guarded
+// streaming branch in kernel_main() below.
 #include "compute_streaming.hpp"
+#endif
 
 void kernel_main() {
     [[maybe_unused]] constexpr auto B = get_arg(args::B);
@@ -142,6 +148,8 @@ void kernel_main() {
     }
 
     if constexpr (use_streaming_compute) {
+#ifndef ARCH_QUASAR  // streaming path is not built on Quasar (see guarded include); use_streaming_compute
+                     // is forced false there, so this branch is also discarded at compile time.
         // Streaming SDPA v2: direct dfb_qkt_im writes via dfb_push_back_hold_wr_ptr.
         // No row buffers needed; a dedicated 1-tile DFB is used as recip scratch.
 
@@ -226,6 +234,7 @@ void kernel_main() {
             lw_mask,
             q_num_chunks,
             use_zigzag_balancing);
+#endif  // !ARCH_QUASAR
     } else {
         // Standard SDPA path (causal, masked, chunked, etc.)
         constexpr bool use_lightweight_causal_mask = is_causal && !use_provided_mask && (sliding_window_size == 0);
