@@ -116,6 +116,25 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
     const auto inputB_core_range_set = use_global_cb        ? operation_attributes.global_cb->receiver_cores()
                                        : packed.has_value() ? packed->cores
                                                             : input_tensor_b.memory_config().shard_spec().value().grid;
+    const bool in0_rm_hs = operation_attributes.in0_row_major_height_sharded;
+    if (in0_rm_hs) {
+        TT_FATAL(
+            inputA_core_range_set.contains(inputB_core_range_set),
+            "matmul_decode ROW_MAJOR HEIGHT_SHARDED input A requires A's core grid {} to contain B's core grid {}",
+            inputA_core_range_set.str(),
+            inputB_core_range_set.str());
+        TT_FATAL(
+            inputA_shard_shape[1] == static_cast<uint32_t>(operation_attributes.K),
+            "matmul_decode ROW_MAJOR HEIGHT_SHARDED input A requires shard width {} to equal K {}",
+            inputA_shard_shape[1],
+            operation_attributes.K);
+        TT_FATAL(
+            inputA_shard_shape[0] == batch * M_tiles * inputA_tile_height,
+            "matmul_decode ROW_MAJOR HEIGHT_SHARDED input A requires shard height {} to equal batch * M = {} * {}",
+            inputA_shard_shape[0],
+            batch,
+            operation_attributes.M);
+    }
 
     const uint32_t num_B_cores = inputB_core_range_set.num_cores();
     TT_FATAL(
@@ -369,14 +388,16 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
         }}},
     });
 
-    const uint32_t num_senders = inputA_core_range_set.num_cores();
-    const std::vector<CoreCoord> sender_cores = corerange_to_cores(inputA_core_range_set, std::nullopt, true);
+    const uint32_t num_senders = in0_rm_hs ? 1u : static_cast<uint32_t>(inputA_core_range_set.num_cores());
     std::vector<uint32_t> sender_phys_coords;
-    sender_phys_coords.reserve(2 * num_senders);
-    for (const auto& sender : sender_cores) {
-        const CoreCoord phys = device->worker_core_from_logical_core(sender);
-        sender_phys_coords.push_back(static_cast<uint32_t>(phys.x));
-        sender_phys_coords.push_back(static_cast<uint32_t>(phys.y));
+    if (!in0_rm_hs) {
+        const std::vector<CoreCoord> sender_cores = corerange_to_cores(inputA_core_range_set, std::nullopt, true);
+        sender_phys_coords.reserve(2 * num_senders);
+        for (const auto& sender : sender_cores) {
+            const CoreCoord phys = device->worker_core_from_logical_core(sender);
+            sender_phys_coords.push_back(static_cast<uint32_t>(phys.x));
+            sender_phys_coords.push_back(static_cast<uint32_t>(phys.y));
+        }
     }
 
     KernelDescriptor reader_kernel_desc;
@@ -419,13 +440,18 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
     if (use_custom_mm) {
         reader_kernel_desc.defines.emplace_back("USE_CUSTOM_MM", "1");
     }
+    if (in0_rm_hs) {
+        reader_kernel_desc.defines.emplace_back("IN0_REPLICATED", "1");
+    }
     reader_kernel_desc.runtime_args.reserve(b_cores.size());
     for (uint32_t idx = 0; idx < b_cores.size(); idx++) {
         const uint32_t b_idx = idx / n_blocks;
         KernelDescriptor::CoreRuntimeArgs args;
-        args.reserve(1 + sender_phys_coords.size());
         args.push_back(b_idx);
-        args.insert(args.end(), sender_phys_coords.begin(), sender_phys_coords.end());
+        if (!in0_rm_hs) {
+            args.reserve(1 + sender_phys_coords.size());
+            args.insert(args.end(), sender_phys_coords.begin(), sender_phys_coords.end());
+        }
         reader_kernel_desc.runtime_args.emplace_back(b_cores[idx], std::move(args));
     }
     desc.kernels.push_back(std::move(reader_kernel_desc));

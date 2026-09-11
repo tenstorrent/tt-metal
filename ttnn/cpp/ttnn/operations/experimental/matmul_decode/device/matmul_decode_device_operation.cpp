@@ -42,9 +42,6 @@ void validate_in0_row_major_height_sharded(
     bool batched,
     bool partial) {
     TT_FATAL(
-        !batched,
-        "matmul_decode ROW_MAJOR HEIGHT_SHARDED input A is only supported on the full-width factory, not batched");
-    TT_FATAL(
         !partial && !operation_attributes.partial_width_sharded,
         "matmul_decode ROW_MAJOR HEIGHT_SHARDED input A is only supported on the full-width factory, not "
         "partial_width_sharded");
@@ -87,11 +84,16 @@ void validate_in0_row_major_height_sharded(
         "matmul_decode replicated-A path requires A's shard width {} to be divisible by the 1x32 tile width {}",
         a_shard.shape[1],
         tt::constants::TILE_WIDTH);
+    const uint32_t expected_shard_h =
+        batched ? static_cast<uint32_t>(operation_attributes.batch) * static_cast<uint32_t>(operation_attributes.M)
+                : static_cast<uint32_t>(operation_attributes.M);
     TT_FATAL(
-        a_shard.shape[0] == static_cast<uint32_t>(operation_attributes.M),
-        "matmul_decode replicated-A path uses M = A's shard height, but shard height {} != M {}",
-        a_shard.shape[0],
-        operation_attributes.M);
+        a_shard.shape[0] == expected_shard_h,
+        "matmul_decode replicated-A path requires A's shard height {} to equal {} (the actual [batch*]M, replicated "
+        "on every core), but got {}",
+        batched ? "batch * M" : "M",
+        expected_shard_h,
+        a_shard.shape[0]);
     if (operation_attributes.M > 1) {
         log_warning(
             tt::LogOp,
@@ -99,10 +101,10 @@ void validate_in0_row_major_height_sharded(
             operation_attributes.M);
     }
     TT_FATAL(
-        a_shard.shape[0] >= 1 && a_shard.shape[0] <= 8,
-        "matmul_decode replicated-A path treats each row as a tile of height 1, so shard height (M) must be in [1, 8] "
-        "to fit DST, but got {}",
-        a_shard.shape[0]);
+        operation_attributes.M >= 1 && operation_attributes.M <= 8,
+        "matmul_decode replicated-A path treats each row as a tile of height 1, so M must be in [1, 8] to fit DST, "
+        "but got {}",
+        operation_attributes.M);
     TT_FATAL(
         input_tensor_a.logical_shape()[-1] == operation_attributes.K,
         "Input tensor A must have the same K dimension as the operation attributes");
@@ -204,8 +206,8 @@ void validate_rms_norm_group_size(const MatmulDecodeDeviceOperation::operation_a
 }  // namespace
 
 MatmulDecodeDeviceOperation::program_factory_t MatmulDecodeDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.input_tensor_a.logical_shape().rank() == 4 && operation_attributes.batch > 1) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
+    if (operation_attributes.batch > 1) {
         return BatchedWidthSharded{};
     }
     if (operation_attributes.all_gather) {
@@ -223,8 +225,9 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor_b = tensor_args.input_tensor_b;
 
     // Mirrors select_program_factory so the geometry validated here is always the geometry the
-    // chosen factory will consume.
-    const bool batched = input_tensor_a.logical_shape().rank() == 4 && operation_attributes.batch > 1;
+    // chosen factory will consume. Batch comes from the weight (packed spec or folded B), not
+    // from A's rank.
+    const bool batched = operation_attributes.batch > 1;
     const bool partial = !batched && operation_attributes.partial_width_sharded;
 
     if (operation_attributes.rms_norm) {
@@ -590,12 +593,13 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
         const int b_blocks = operation_attributes.b_blocks;
         const int n_blocks = operation_attributes.n_blocks;
 
-        TT_FATAL(
-            input_tensor_a.logical_shape()[0] * input_tensor_a.logical_shape()[1] == batch,
-            "Batched matmul_decode expects A leading dims {} x {} to multiply to the operation batch {}",
-            input_tensor_a.logical_shape()[0],
-            input_tensor_a.logical_shape()[1],
-            batch);
+        if (!operation_attributes.in0_row_major_height_sharded) {
+            TT_FATAL(
+                input_tensor_a.logical_shape().rank() == 4 &&
+                    input_tensor_a.logical_shape()[0] * input_tensor_a.logical_shape()[1] == batch,
+                "Batched matmul_decode expects A leading dims to multiply to the operation batch {}",
+                batch);
+        }
         // A real batch (> 1) requires rank-4 weights carrying the same batch size.
         if (batch > 1) {
             TT_FATAL(
@@ -845,7 +849,7 @@ MatmulDecodeDeviceOperation::spec_return_value_t MatmulDecodeDeviceOperation::co
     const tt::tt_metal::Tile output_tile = in0_tile_for_compute(input_tensor_a);
     const auto output_tile_height = input_tensor_a.layout() == Layout::ROW_MAJOR ? 1 : output_tile.get_height();
 
-    const bool batched = input_tensor_a.logical_shape().rank() == 4 && operation_attributes.batch > 1;
+    const bool batched = operation_attributes.batch > 1;
     const bool batched_out = batched && !operation_attributes.output_core_grid.has_value();
     // TILE batched output stays DRAM-interleaved. Rank-4 with batch == 1 is the full-width path.
     // ROW_MAJOR batched output is width-sharded on the weight grid in the same folded
@@ -1031,8 +1035,20 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
             input_tensor_a.memory_config().shard_spec().has_value(),
             "matmul_decode ROW_MAJOR HEIGHT_SHARDED input A requires a shard spec");
     }
-    const int in0_M = in0_rm_hs ? static_cast<int>(input_tensor_a.memory_config().shard_spec().value().shape[0])
-                                : input_tensor_a.logical_shape()[-2];
+    const int in0_shard_h =
+        in0_rm_hs ? static_cast<int>(input_tensor_a.memory_config().shard_spec().value().shape[0]) : 0;
+    const int in0_M = in0_rm_hs ? in0_shard_h : input_tensor_a.logical_shape()[-2];
+    auto m_from_replicated_shard = [&](int batch) {
+        if (batch <= 1) {
+            return in0_shard_h;
+        }
+        TT_FATAL(
+            in0_shard_h % batch == 0,
+            "matmul_decode ROW_MAJOR HEIGHT_SHARDED input A shard height {} must equal batch {} * M",
+            in0_shard_h,
+            batch);
+        return in0_shard_h / batch;
+    };
 
     // `compute_output_specs` runs before `validate_on_program_cache_miss` and already reads the
     // weight's ND shard shape on the GCB path, so these preconditions have to sit ahead of both --
@@ -1073,12 +1089,9 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
             pw.N,
             pw.num_cores());
 
-        const int M = in0_M;
         const bool batched = pw.batch > 1;
-        if (batched) {
-            TT_FATAL(
-                !in0_rm_hs,
-                "matmul_decode ROW_MAJOR HEIGHT_SHARDED input A is not supported with packed_weight batch > 1");
+        const int M = in0_rm_hs ? m_from_replicated_shard(static_cast<int>(pw.batch)) : in0_M;
+        if (batched && !in0_rm_hs) {
             TT_FATAL(
                 input_tensor_a.logical_shape().rank() == 4 &&
                     input_tensor_a.logical_shape()[0] * input_tensor_a.logical_shape()[1] == static_cast<int>(pw.batch),
@@ -1115,80 +1128,80 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
         return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
     }
 
+    auto launch_batched_from_weight = [&](int M, int batch, int K) {
+        TT_FATAL(
+            input_tensor_b.logical_shape().rank() == 4,
+            "batched matmul_decode with batch {} > 1 requires rank-4 weights, but got rank {}",
+            batch,
+            input_tensor_b.logical_shape().rank());
+        const int weight_height = input_tensor_b.logical_shape()[-2];  // = Bc * K
+        const int weight_width = input_tensor_b.logical_shape()[-1];   // = b_blocks * N
+        TT_FATAL(
+            K > 0 && weight_height % K == 0,
+            "batched matmul_decode: weight height {} must be a multiple of K {} (weight height = Bc * K)",
+            weight_height,
+            K);
+        const int Bc = weight_height / K;
+        TT_FATAL(
+            Bc > 0 && batch % Bc == 0,
+            "batched matmul_decode: batch {} must be a multiple of Bc {} (Bc = weight_height / K)",
+            batch,
+            Bc);
+        const int b_blocks = batch / Bc;
+        TT_FATAL(
+            weight_width % b_blocks == 0,
+            "batched matmul_decode: weight width {} must be a multiple of b_blocks {} (weight width = b_blocks * N)",
+            weight_width,
+            b_blocks);
+        const int N = weight_width / b_blocks;
+        const int num_B_cores =
+            global_cb.has_value()
+                ? static_cast<int>(gcb_num_receivers(*global_cb))
+                : static_cast<int>(input_tensor_b.memory_config().shard_spec().value().grid.num_cores());
+        TT_FATAL(
+            num_B_cores % b_blocks == 0,
+            "batched matmul_decode: number of weight cores {} must be a multiple of b_blocks {}",
+            num_B_cores,
+            b_blocks);
+        const int n_blocks = num_B_cores / b_blocks;
+        log_debug(
+            tt::LogOp,
+            "matmul_decode (batched) batch={}, M={}, N={}, K={}, Bc={}, b_blocks={}, n_blocks={}",
+            batch,
+            M,
+            N,
+            K,
+            Bc,
+            b_blocks,
+            n_blocks);
+        auto operation_attributes = with_all_gather(OperationType::operation_attributes_t{
+            M,
+            N,
+            K,
+            output_mem_config,
+            dtype.has_value() ? std::optional<DataType>(*dtype) : std::nullopt,
+            /*partial_width_sharded=*/false,
+            batch,
+            b_blocks,
+            n_blocks,
+            global_cb,
+            global_cb_k_blocks,
+        });
+        auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b, rms_norm_gamma_tensor};
+        return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+    };
+
+    const int K_a = input_tensor_a.logical_shape()[-1];
+    int batch_from_a = 1;
     if (input_tensor_a.logical_shape().rank() == 4) {
-        const int batch = input_tensor_a.logical_shape()[0] * input_tensor_a.logical_shape()[1];
-        const int M = in0_M;
-        const int K = input_tensor_a.logical_shape()[-1];
-        // A real batch (> 1) requires rank-4 weights carrying the same batch size.
-        if (batch > 1) {
-            TT_FATAL(
-                !in0_rm_hs,
-                "matmul_decode ROW_MAJOR HEIGHT_SHARDED input A is not supported with the batched width-sharded "
-                "factory");
-            TT_FATAL(
-                input_tensor_b.logical_shape().rank() == 4,
-                "batched matmul_decode with batch {} > 1 requires rank-4 weights, but got rank {}",
-                batch,
-                input_tensor_b.logical_shape().rank());
-            const int weight_height = input_tensor_b.logical_shape()[-2];  // = Bc * K
-            const int weight_width = input_tensor_b.logical_shape()[-1];   // = b_blocks * N
-            TT_FATAL(
-                K > 0 && weight_height % K == 0,
-                "batched matmul_decode: weight height {} must be a multiple of K {} (weight height = Bc * K)",
-                weight_height,
-                K);
-            const int Bc = weight_height / K;
-            TT_FATAL(
-                Bc > 0 && batch % Bc == 0,
-                "batched matmul_decode: batch {} must be a multiple of Bc {} (Bc = weight_height / K)",
-                batch,
-                Bc);
-            const int b_blocks = batch / Bc;
-            TT_FATAL(
-                weight_width % b_blocks == 0,
-                "batched matmul_decode: weight width {} must be a multiple of b_blocks {} (weight width = b_blocks * "
-                "N)",
-                weight_width,
-                b_blocks);
-            const int N = weight_width / b_blocks;
-            // A prefetcher weight is ND-sharded in DRAM and carries no legacy shard spec, so the
-            // weight-holding core count is the GCB receiver count.
-            const int num_B_cores =
-                global_cb.has_value()
-                    ? static_cast<int>(gcb_num_receivers(*global_cb))
-                    : static_cast<int>(input_tensor_b.memory_config().shard_spec().value().grid.num_cores());
-            TT_FATAL(
-                num_B_cores % b_blocks == 0,
-                "batched matmul_decode: number of weight cores {} must be a multiple of b_blocks {}",
-                num_B_cores,
-                b_blocks);
-            const int n_blocks = num_B_cores / b_blocks;
-            log_debug(
-                tt::LogOp,
-                "matmul_decode (batched) batch={}, M={}, N={}, K={}, Bc={}, b_blocks={}, n_blocks={}",
-                batch,
-                M,
-                N,
-                K,
-                Bc,
-                b_blocks,
-                n_blocks);
-            auto operation_attributes = with_all_gather(OperationType::operation_attributes_t{
-                M,
-                N,
-                K,
-                output_mem_config,
-                dtype.has_value() ? std::optional<DataType>(*dtype) : std::nullopt,
-                /*partial_width_sharded=*/false,
-                batch,
-                b_blocks,
-                n_blocks,
-                global_cb,
-                global_cb_k_blocks,
-            });
-            auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b, rms_norm_gamma_tensor};
-            return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
-        }
+        batch_from_a = input_tensor_a.logical_shape()[0] * input_tensor_a.logical_shape()[1];
+    }
+    // Batched mode is a property of the folded/packed weight. Rank-4 A with batch > 1 is the
+    // width-sharded path's way of naming that batch; a ROW_MAJOR HEIGHT_SHARDED replica instead
+    // carries [batch * M, K] in the shard spec (logical height is inflated by the core count).
+    if (batch_from_a > 1) {
+        const int M = in0_rm_hs ? m_from_replicated_shard(batch_from_a) : in0_M;
+        return launch_batched_from_weight(M, batch_from_a, K_a);
     }
 
     int M, N, K;

@@ -93,9 +93,11 @@ struct MatmulDecodeDeviceOperation {
         // matmul. Output storage is still allocated on the complete mesh so a
         // later point-to-point broadcast can populate the inactive ranks.
         std::optional<std::vector<ttnn::MeshCoordinate>> mesh_coords = std::nullopt;
-        // Full-width hub path only: A is ROW_MAJOR HEIGHT_SHARDED on B's grid, with the
-        // full [M, K] replica on every core. M is A's shard height; compute treats A as
-        // 1x32 tiles. Mutually exclusive with ring_gather, partial, and batched.
+        // A is ROW_MAJOR HEIGHT_SHARDED on a grid that contains B's cores, with the
+        // full activation replica on every A core. Shard shape is the actual 2D
+        // operand: [M, K] when batch == 1, [batch * M, K] when batched. Compute
+        // treats each row as a 1x32 tile. Mutually exclusive with ring_gather and
+        // partial.
         bool in0_row_major_height_sharded = false;
         // Full-width only: multicast a replica of [M, N] onto every core of this filled rectangle.
         // Absent: width-sharded [M, Nc] on the weight grid (legacy).

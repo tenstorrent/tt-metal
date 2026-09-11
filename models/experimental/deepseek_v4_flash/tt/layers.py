@@ -1076,8 +1076,9 @@ class BatchedLinearDecode(DeepSeekV4Module):
     per-batch weight ``[batch, K, N]`` that is folded along BOTH batch and N into a
     width-sharded ``[1, 1, Bc*K, b_blocks*N]`` tensor (``Bc = batch / b_blocks``,
     ``Nc = N / n_blocks``) laid across a ``b_blocks x n_blocks`` core grid -- the layout
-    the batched matmul_decode factory expects. The op infers ``b_blocks`` / ``n_blocks``
-    from the operand shapes and emits a DRAM-interleaved ``[d0, d1, M, N]`` result.
+    the batched matmul_decode factory expects. Batching is taken from that weight fold
+    (or from ``packed_weight.batch``). A ``ROW_MAJOR`` ``HEIGHT_SHARDED`` replica whose
+    shard is the actual ``[batch * M, K]`` is accepted without a width reshard.
 
     As in :class:`LinearDecode`, the (static) weight is prepared once here and only the
     activation is resharded per call. ``preprocess`` (optional) is applied to the raw
@@ -1236,6 +1237,14 @@ class BatchedLinearDecode(DeepSeekV4Module):
             kwargs["output_mcast_two_hub"] = True
         return kwargs
 
+    def b_core_grid(self) -> ttnn.CoreRangeSet:
+        """Weight B cores: packed spec, GCB receivers, or the L1 width-shard grid."""
+        if self.packed_weight_spec is not None:
+            return self.packed_weight_spec.cores
+        if self.global_cb is not None:
+            return self.global_cb.receiver_cores()
+        return self.weights_memory_config.shard_spec.grid
+
     def _init_prefetched_weight(
         self,
         weight,
@@ -1346,31 +1355,42 @@ class BatchedLinearDecode(DeepSeekV4Module):
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        # x: rank-4 [d0, d1, M, K] with d0*d1 == batch. Reshard to the width(K)-sharded L1 layout,
-        # then run the batched matmul_decode (b_blocks / n_blocks are inferred from the shapes).
+        # x: rank-4 [d0, d1, M, K] with d0*d1 == batch, or a ROW_MAJOR HEIGHT_SHARDED replica
+        # whose shard is the actual [batch * M, K]. Reshard to width(K)-sharded L1 unless the
+        # replica already matches; batched geometry comes from the weight.
         m = x.shape[-2]
+        rm_hs = (
+            x.layout == ttnn.ROW_MAJOR_LAYOUT
+            and x.is_sharded()
+            and x.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+            and x.memory_config().shard_spec is not None
+        )
+        print("rm_hs:", rm_hs)
+        if rm_hs:
+            shard_h = x.memory_config().shard_spec.shape[0]
+            if shard_h % self.batch:
+                raise ValueError(f"ROW_MAJOR HEIGHT_SHARDED A shard height {shard_h} must equal batch {self.batch} * M")
+            m = shard_h // self.batch
         if self.packed_weight_tensor is not None:
-            input_memory_config = self.get_input_memory_config(m, x.get_tile().tile_shape[0])
-            same_core_grid = x.is_sharded() and (
-                x.get_tile().tile_shape[0] < ttnn.TILE_SIZE
-                or _receiver_cores_in_order(x.memory_config().shard_spec.grid)
-                == _receiver_cores_in_order(input_memory_config.shard_spec.grid)
-            )
-            if not same_core_grid:
-                x = ttnn.to_memory_config(x, input_memory_config)
+            if not rm_hs:
+                input_memory_config = self.get_input_memory_config(m, x.get_tile().tile_shape[0])
+                same_core_grid = x.is_sharded() and (
+                    x.get_tile().tile_shape[0] < ttnn.TILE_SIZE
+                    or _receiver_cores_in_order(x.memory_config().shard_spec.grid)
+                    == _receiver_cores_in_order(input_memory_config.shard_spec.grid)
+                )
+                if not same_core_grid:
+                    x = ttnn.to_memory_config(x, input_memory_config)
             return ttnn.experimental.matmul_decode(
                 x, self.packed_weight_tensor, packed_weight=self.packed_weight_spec, **self._epilogue_kwargs()
             )
-        if not x.is_sharded():
-            x = ttnn.to_memory_config(x, self.get_input_memory_config(m))
-        elif x.layout == ttnn.ROW_MAJOR_LAYOUT:
-            # The batched factory reads a ROW_MAJOR A as 1x32 tiles, so a decode activation can
-            # reach it untilized. It still has to be width-sharded: matmul_decode reads a
-            # ROW_MAJOR HEIGHT_SHARDED A as its replicated-A path, which is full-width only and
-            # rejects a batched weight.
-            row_major_input_config = self.get_input_memory_config(m, tile_height=1)
-            if x.memory_config() != row_major_input_config:
-                x = ttnn.to_memory_config(x, row_major_input_config)
+        if not rm_hs:
+            if not x.is_sharded():
+                x = ttnn.to_memory_config(x, self.get_input_memory_config(m))
+            elif x.layout == ttnn.ROW_MAJOR_LAYOUT:
+                row_major_input_config = self.get_input_memory_config(m, tile_height=1)
+                if x.memory_config() != row_major_input_config:
+                    x = ttnn.to_memory_config(x, row_major_input_config)
         if self.use_prefetcher:
             # Exactly one queued request per matmul, as in LinearDecode.forward: a missing
             # request hangs it and a doubled one desynchronises the GCB pointers.
