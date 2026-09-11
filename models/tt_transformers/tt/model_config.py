@@ -336,6 +336,11 @@ class ModelOptimizations:
                 settings["OpFidelity"][OpGroup.LI_O_DECODE] = MathFidelitySetting.LOFI
                 settings["OpFidelity"][OpGroup.LI_FF2] = MathFidelitySetting.LOFI
                 settings["OpFidelity"][OpGroup.SDPA_DECODE] = MathFidelitySetting.LOFI
+                # Prefill SDPA is the last op left at the bring-up HiFi4 default, ~20 us
+                # per layer. Decode SDPA is already at LoFi on this model, so HiFi4 on
+                # the prefill scores is not an accuracy floor anyone established -- walk
+                # it one step and let the full-model gate decide.
+                settings["OpFidelity"][OpGroup.SDPA_PREFILL] = MathFidelitySetting.HIFI2
             if model_name.startswith("Phi-3-mini"):  # TODO: Only do this for N150
                 logger.info(
                     f"Model {model_name} is running out of L1 memory under standard high-performance settings, using FP16 accumulate in attention prefill QKV Matmul"
