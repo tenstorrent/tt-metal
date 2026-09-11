@@ -246,3 +246,21 @@ def test_invalid_request_tensor(device, expect_error, invalid):
     with expect_error(RuntimeError, "Request must"):
         pool.update(request_tensor(0, device), request_tensor(0, device), value)
     pool.check([0, 0, 0])
+
+
+@pytest.mark.parametrize("tensor_mask", range(1, 7))
+@pytest.mark.parametrize("warm_cache", [False, True])
+def test_mixed_request_inputs_rejected(device, expect_error, tensor_mask, warm_cache):
+    device.enable_program_cache()
+    pool = CachePool(device)
+    if warm_cache:
+        pool.update(0, 0, 32)
+        pool.update(*(request_tensor(value, device) for value in (0, 0, 32)))
+    pages = [1, 0, 0] if warm_cache else [0, 0, 0]
+    before = pool.check(pages)
+    args = [request_tensor(value, device) if tensor_mask & (1 << i) else value for i, value in enumerate((0, 0, 64))]
+    entries = device.num_program_cache_entries()
+    with expect_error(TypeError, "incompatible function arguments"):
+        pool.update(*args)
+    assert device.num_program_cache_entries() == entries
+    assert all(torch.equal(old, new) for old, new in zip(before, pool.check(pages)))
