@@ -297,12 +297,17 @@ namespace compute_kernel_lib {
  */
 struct ReduceInputMemoryLayout {
     std::uint32_t row_stride = 0;  // 0 = auto-detect from Wt (contiguous row-major)
+    std::uint32_t batch_stride = 0;  // 0 = rows * row_stride; resident inputs only
 
     explicit constexpr ReduceInputMemoryLayout() = default;
-    explicit constexpr ReduceInputMemoryLayout(std::uint32_t row) : row_stride(row) {}
+    explicit constexpr ReduceInputMemoryLayout(std::uint32_t row, std::uint32_t batch = 0) :
+        row_stride(row), batch_stride(batch) {}
 
     static constexpr ReduceInputMemoryLayout contiguous() { return ReduceInputMemoryLayout(); }
     static constexpr ReduceInputMemoryLayout with_row_stride(std::uint32_t s) { return ReduceInputMemoryLayout(s); }
+    static constexpr ReduceInputMemoryLayout with_strides(std::uint32_t row, std::uint32_t batch) {
+        return ReduceInputMemoryLayout(row, batch);
+    }
 };
 
 /**
@@ -315,10 +320,16 @@ struct ReduceInputMemoryLayout {
 struct ReduceInputChunk {
     std::uint32_t reduce_axis_tiles = 0;
     std::uint32_t output_tiles = 0;
+    // Tail FIFO readers pad every packet to this fixed geometry, including the
+    // last axis/output group. Compute skips padding but consumes the whole packet.
+    bool padded = false;
 
     static constexpr ReduceInputChunk automatic() { return {}; }
     static constexpr ReduceInputChunk of(std::uint32_t reduce_tiles, std::uint32_t outputs = 1) {
         return {reduce_tiles, outputs};
+    }
+    static constexpr ReduceInputChunk padded_to(std::uint32_t reduce_tiles, std::uint32_t outputs = 1) {
+        return {reduce_tiles, outputs, true};
     }
 };
 
