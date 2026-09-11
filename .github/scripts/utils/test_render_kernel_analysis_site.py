@@ -57,7 +57,7 @@ class ReportTests(unittest.TestCase):
         self.leg("third", '/work/tt_metal/header.h should add these lines:\n#include "old.h"\n\n')
         report = collect(self.legs)
         self.assertEqual(
-            report.findings,
+            set(report.findings),
             {
                 ("tt_metal/header.h", "add", "#include <cstdint>"),
                 ("tt_metal/header.h", "add", "namespace example { class Foo; }"),
@@ -65,7 +65,38 @@ class ReportTests(unittest.TestCase):
                 ("tt_metal/header.h", "remove", '#include "old.h"'),
             },
         )
+        self.assertEqual(report.findings[("tt_metal/header.h", "remove", '#include "old.h"')], {(12, 12), (99, 99)})
         self.assertFalse(report.incomplete)
+
+    def test_removal_locations_survive_deduplication_and_rendering(self):
+        source = "/work/tt_metal/header.h"
+        output = (
+            native_output(source)
+            + f"""{source} should remove these lines:
+- struct Entry;  // lines 30-31
+- #include "unlocated.h"
+
+"""
+        )
+        self.leg("first", output)
+        self.leg("duplicate", output)
+        self.leg("another-location", native_output(source, line=99))
+        report = collect(self.legs)
+        self.assertEqual(len(report.findings), 5)
+        self.assertEqual(report.findings[("tt_metal/header.h", "remove", "struct Entry;")], {(30, 31)})
+        self.assertEqual(report.findings[("tt_metal/header.h", "remove", '#include "unlocated.h"')], set())
+        self.assertEqual(report.findings[("tt_metal/header.h", "add", "#include <cstdint>")], set())
+        render_site(self.legs, self.site)
+        html = (self.site / "iwyu/index.html").read_text()
+        self.assertEqual(html.count('&quot;old.h&quot; <span class="muted">// lines 12, 99</span>'), 1)
+        self.assertIn('struct Entry; <span class="muted">// lines 30–31</span>', html)
+        self.assertNotIn("&quot;unlocated.h&quot; <span", html)
+        self.assertNotIn("#include &lt;cstdint&gt; <span", html)
+        self.leg("single-line", native_output("/work/another.h", line=7))
+        render_site(self.legs, self.site)
+        self.assertIn(
+            '&quot;old.h&quot; <span class="muted">// line 7</span>', (self.site / "iwyu/index.html").read_text()
+        )
 
     def test_unknown_paths_remain_distinct(self):
         self.leg("first", native_output("/cache/a/header.h") + native_output("/cache/b/header.h"))

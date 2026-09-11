@@ -25,6 +25,7 @@ from brand_kernel_tidy_site import FAVICON
 HEADING = re.compile(r"^(.+) should (add|remove) these lines:$")
 WHEEL_ROOT = re.compile(r"^/opt/venv/lib/python\d+\.\d+/site-packages/ttnn/")
 DIAGNOSTIC = re.compile(r"^(.+?):(\d+):(\d+): ((?:fatal )?error:.*)$")
+REMOVAL_LINES = re.compile(r"\s+// lines (\d+)-(\d+)\s*$")
 
 
 def source_path(path: str) -> str:
@@ -34,8 +35,9 @@ def source_path(path: str) -> str:
 
 @dataclass
 class Report:
-    # File, action, suggested source line. Groups and occurrences are discarded.
-    findings: set[tuple[str, str, str]] = field(default_factory=set)
+    # Key: file, action, suggested source line. Value: reported removal ranges.
+    # Locations are retained without making duplicate findings or tracking groups.
+    findings: dict[tuple[str, str, str], set[tuple[int, int]]] = field(default_factory=dict)
     errors: set[str] = field(default_factory=set)
     reports: int = 0
     incomplete: bool = False
@@ -65,11 +67,14 @@ def read_output(path: Path, report: Report) -> None:
                         source = action = None
                         continue
                     line = line[2:]
-                # Symbol explanations and original line numbers differ between
-                # invocations but do not change the suggested include/declaration.
+                # Deduplicate the suggestion independently of its explanation
+                # and location, but retain all reported removal line ranges.
                 code = re.split(r"\s+//", line, maxsplit=1)[0].strip()
                 if code:
-                    report.findings.add((source, action, code))
+                    locations = report.findings.setdefault((source, action, code), set())
+                    location = REMOVAL_LINES.search(line) if action == "remove" else None
+                    if location:
+                        locations.add((int(location[1]), int(location[2])))
 
 
 def collect(legs: Path) -> Report:
@@ -163,7 +168,13 @@ def render_iwyu(report: Report, enabled: bool) -> str:
         return page("Kernel Include What You Use", "<p>IWYU was disabled for this run.</p>", parent=True)
     sections: dict[str, dict[str, list[str]]] = {}
     for source, action, code in sorted(report.findings):
-        sections.setdefault(source, {"add": [], "remove": []})[action].append(code)
+        suggestion = escape(code)
+        locations = sorted(report.findings[(source, action, code)])
+        if locations:
+            ranges = ", ".join(str(start) if start == end else f"{start}–{end}" for start, end in locations)
+            label = "line" if len(locations) == 1 and locations[0][0] == locations[0][1] else "lines"
+            suggestion += f' <span class="muted">// {label} {ranges}</span>'
+        sections.setdefault(source, {"add": [], "remove": []})[action].append(suggestion)
     content = '<p class="muted">Consolidated include and forward-declaration recommendations.</p>'
     if report.incomplete:
         content += (
@@ -183,7 +194,7 @@ def render_iwyu(report: Report, enabled: bool) -> str:
         content += f'<details class="file"><summary><code>{escape(source)}</code></summary><div class="changes">'
         for action, title in (("add", "Add"), ("remove", "Remove")):
             code = "\n".join(changes[action])
-            lines = f"<pre><code>{escape(code)}</code></pre>" if code else '<p class="muted">None reported.</p>'
+            lines = f"<pre><code>{code}</code></pre>" if code else '<p class="muted">None reported.</p>'
             content += f'<section class="{action}"><h3>{title}</h3>{lines}</section>'
         content += "</div></details>"
     if report.errors:

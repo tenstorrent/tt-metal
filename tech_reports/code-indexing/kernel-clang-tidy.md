@@ -177,8 +177,10 @@ Both reports use the existing GitHub Pages repository and publication controls.
 
 `.github/scripts/utils/render_kernel_analysis_site.py` reads each leg's native
 `iwyu.txt` and deduplicates by source file, addition/removal, and suggested
-include or forward declaration. It strips explanatory comments and line-number
-annotations, and treats `/work/` and the installed wheel's `ttnn/` root as
+include or forward declaration. It strips explanatory comments while retaining
+IWYU's removal line ranges beside each suggestion. Repeated locations are merged
+without duplicating the finding. IWYU does not provide insertion line numbers
+for additions. It treats `/work/` and the installed wheel's `ttnn/` root as
 copies of the repository. Other paths are preserved. The report lists Add and
 Remove suggestions per file with a search box. It assumes a consistent kernel
 configuration across test groups; it does not track group provenance, count
