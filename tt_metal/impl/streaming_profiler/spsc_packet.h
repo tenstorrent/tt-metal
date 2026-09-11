@@ -44,14 +44,24 @@
 // EVENT (2 words): [0] type|id27 [1] timer_low; a flag with no payload and no size word.
 #define PP_EVENT 12u
 
-// CLOCK (2 words): [0] type | kind<<PP_CLOCK_KIND_SHIFT | value24  [1] wall_lo. A local-refclk sample from the
-// idle-eth clock tracker: value24 = this chip refclk low 24 bits, wall = lane sticky-timer hi | wall_lo. Routed
-// to the clock sink at decode, never delivered as a record. Must match ppfmt::T_CLOCK (kernel_profiler_streaming.hpp).
+// CLOCK (4 words): [0] type | kind<<PP_CLOCK_KIND_SHIFT | value[23:0]  [1] wall_lo  [2] value[55:24]
+// [3] round<<PP_CLOCK_ROUND_SHIFT | role. A clock read for the d2d sync: value is the whole reading (a 50 MHz
+// refclk count, or a 1588 stamp average in ns), wall = lane sticky-timer hi | wall_lo. A link stamp names its
+// round (the sender's counter, carried to the receiver inside the exchange frame) and which of the round's stamps
+// it is, so the host pairs the two ends by identity. Routed to the clock sink at decode, never delivered as a
+// record. Must match ppfmt::T_CLOCK (kernel_profiler_streaming.hpp).
 #define PP_CLOCK 5u
 #define PP_CLOCK_KIND_SHIFT 24u
 #define PP_CLOCK_VALUE_MASK 0xFFFFFFu
-#define PP_CLOCK_LOCAL_REFCLK 0u
-#define PP_CLOCK_LINK_REFCLK 1u
+#define PP_CLOCK_ROUND_SHIFT 2u
+#define PP_CLOCK_ROLE_MASK 0x3u
+#define PP_CLOCK_LOCAL_REFCLK 0u /* this chip's refclk against its wall clock, from the idle-eth tracker */
+#define PP_CLOCK_LINK_REFCLK 1u  /* a sync round's software stamp: the refclk read at the stamp */
+#define PP_CLOCK_LINK_PTP 2u     /* a sync round's 1588 hardware stamps averaged, in quarter-ns of the refclk domain */
+#define PP_CLOCK_ROLE_T0 0u      /* sender: its frame's egress */
+#define PP_CLOCK_ROLE_T1 1u      /* receiver: the frame's ingress */
+#define PP_CLOCK_ROLE_T1B 2u     /* receiver: its echo's egress */
+#define PP_CLOCK_ROLE_T2 3u      /* sender: the echo's ingress */
 
 /* 11 is retired (was ZONE_TOTAL); never reuse it. */
 
