@@ -541,6 +541,123 @@
   sp_config: sc1
 
 
+- name: "(Kimi-K3-2.8T) golden-contract, layer-schedule, cache and KV-ack gates"
+  # Host-only: no mesh device, no fabric. These are the gates that make every K3 device PCC number
+  # interpretable -- under AttnRes, seal() clears running_sum, so decoder_output_layer_0 carries no
+  # embedding term and reading the trace as a plain residual makes every layer look ~0.45 PCC wrong.
+  # test_golden_contract pins that reading host-only at 0.99999 with a failing control beside each
+  # assertion. Needs /mnt/models for the checkpoint and trace; skips cleanly without them.
+  cmd: |
+    export LOGURU_LEVEL=INFO
+    export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+    export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+    export KIMI_K3_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
+    export KIMI_K3_CKPT=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
+    python3 -m pytest -vvv --tb=short \
+      models/demos/deepseek_v3_d_p/tests/kimi_k3/test_golden_contract.py \
+      models/demos/deepseek_v3_d_p/tests/kimi_k3/test_layer_schedule.py \
+      models/demos/deepseek_v3_d_p/tests/kimi_k3/test_cache_contract.py \
+      models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kda_golden.py \
+      models/demos/deepseek_v3_d_p/tests/test_kv_ack.py \
+      models/demos/deepseek_v3_d_p/tests/attn_res/model/test_attn_res_pipeline_split.py
+  test_type: k3_contracts
+  test_tags: [kimi_k3]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 10
+      tier: 2
+      release_ready: false
+  owner_id: U0ACLAM77PS  # Kosta Grujcic
+  team: models
+  sp_config: sc1
+
+
+- name: "(Kimi-K3-2.8T) prefill transformer accuracy L12, L24 vs golden trace"
+  # FABRIC_2D, never a torus: attn_res_gather_softmax deadlocks under Topology::Ring (#54835), so
+  # this leg must not carry fabric_profile: torus_xy. The depth ladder scores decoder_output per
+  # layer against the 1M trace, which covers layers 0..24 of 93.
+  cmd: |
+    export LOGURU_LEVEL=INFO
+    export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+    export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+    export KIMI_K3_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
+    export KIMI_K3_CKPT=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
+    export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_transformer_depth.py -k "L12 or L24" -vvv --tb=short
+    '
+  test_type: k3_transformer_depth
+  test_tags: [kimi_k3, transformer]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 40
+      tier: 2
+      release_ready: false
+  owner_id: U0ACLAM77PS  # Kosta Grujcic
+  team: models
+  sp_config: sc1
+
+
+- name: "(Kimi-K3-2.8T) chunked prefill accuracy L5, L24 25k@5k vs golden trace"
+  # What a single chunk cannot prove: that the KDA recurrent AND convolution carries survive a chunk
+  # boundary. The conv carry is the causal conv's 3-token history, so getting it wrong corrupts only
+  # the first three tokens of a chunk -- invisible to a per-chunk PCC over 5120 tokens.
+  cmd: |
+    export LOGURU_LEVEL=INFO
+    export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+    export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+    export KIMI_K3_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
+    export KIMI_K3_CKPT=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
+    export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_chunked_prefill.py -vvv --tb=short
+    '
+  test_type: k3_chunked_prefill
+  test_tags: [kimi_k3, transformer]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 35
+      tier: 2
+      release_ready: false
+  owner_id: U0ACLAM77PS  # Kosta Grujcic
+  team: models
+  sp_config: sc1
+
+
+- name: "(Kimi-K3-2.8T) traced chunked prefill accuracy L24 55k@5k vs golden trace"
+  # The only K3 PCC gate on the CAPTURED-TRACE path rather than eager. A replay bakes in tensor
+  # addresses, so it can be fast and wrong, and K3 advances the KDA recurrent and convolution carries
+  # inside the captured region: capture costs chunk 0 two extra forwards, which is idempotent for KV
+  # but not for a recurrence, so the branch resets the carry after capture. Exactly the regression a
+  # CI leg should hold.
+  cmd: |
+    export LOGURU_LEVEL=INFO
+    export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+    export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+    export KIMI_K3_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
+    export KIMI_K3_CKPT=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
+    export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_k3_prefill_transformer_chunked -k "L24 and chunks_eleven and traced and iters1" -vvv --tb=short
+    '
+  test_type: k3_transformer_traced
+  test_tags: [kimi_k3, transformer]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 45
+      tier: 2
+      release_ready: false
+  owner_id: U0ACLAM77PS  # Kosta Grujcic
+  team: models
+  sp_config: sc1
+
 # ===== GLM-5.2-744B ====================================================================================
 
 - name: "(GLM-5.2-744B) sparse MLA accuracy + determinism, incl. chunked 5k@1k"
@@ -1213,6 +1330,61 @@
 #   ring_mla chunked     -> kimi50k and kimi_k3 for perf; kimi_k3 for accuracy and determinism
 # Uses real-time device program records, so it runs on the plain build without ENABLE_TRACY.
 # sp/tp are auto-selected by MeshConfig.detect() on Galaxy (sp=8, tp=4).
+
+# 4-galaxy (SC4) disaggregated prefill for Kimi-K3: all 93 layers as 24/24/24/21. Four ranks, not
+# two: ~717 MiB/chip/layer against 31.85 GiB/chip OOMs during weight load at 46/47 per rank, and
+# MLA's static CBs become unplaceable past ~36 layers on a rank (#54876). Every boundary is a
+# multiple of ATTN_RES_BLOCK_SIZE=12, or a rank inherits a partial sealed set and its local layer 0
+# seals a block that is not there; the adapter's layer_split_boundaries snaps the even split there,
+# so PREFILL_PP_LAYER_COUNTS is deliberately not pinned here.
+# No fabric_profile: torus_xy -- attn_res_gather_softmax deadlocks under Topology::Ring (#54835).
+- name: "(Kimi-K3-2.8T) disaggregated prefill KV accuracy 55k@5k, SC4"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3
+  test_type: prefill_runner_kv_pcc
+  test_tags: [kimi_k3, runner, kv_cache]
+  test_group: disagg_prefill
+  skus:
+    bh_sc4:
+      # 93 layers is the deepest model on this rig, and mesh bringup plus weight load dominates: the
+      # chunk loop is minutes of it. Counts against the shield/demo budget with the Kimi-K2.7 and
+      # GLM-5.2 entries.
+      timeout: 45
+      tier: 1
+      release_ready: false
+  owner_id: U0ACLAM77PS  # Kosta Grujcic
+  team: shield
+  sp_config: sc4
+
+
+# Single-galaxy rung of the same launcher. 93 layers do not fit one galaxy, so the sc1 arm overrides
+# the manifest depth to 24 -- which ends on an MLA layer and is the deepest depth the golden's
+# decoder-output stream covers, making this a real accuracy gate rather than a smaller copy of sc4.
+- name: "(Kimi-K3-2.8T) disaggregated prefill KV accuracy 55k@5k, SC1"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3 sc1
+  test_type: prefill_runner_kv_pcc
+  test_tags: [kimi_k3, runner, kv_cache]
+  test_group: disagg_prefill
+  skus:
+    bh_sc1:
+      timeout: 30
+  owner_id: U0ACLAM77PS  # Kosta Grujcic
+  team: shield
+  sp_config: sc1
+
 - name: "Ring joint SDPA perf + ring MLA chunked 55k@5k perf, accuracy, determinism"
   # Run both perf checks unconditionally (so both report numbers) but fail the step if either
   # fails - the harness only propagates the last command's exit code, so aggregate it ourselves.
