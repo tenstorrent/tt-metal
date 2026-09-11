@@ -59,9 +59,16 @@ ttnn::Tensor untilize_native(
     }
     bool fp32_dest_acc_en = input_tensor.dtype() == DataType::INT32 || input_tensor.dtype() == DataType::UINT32 ||
                             input_tensor.dtype() == DataType::FLOAT32;
+    // The native prim emits BFLOAT16 for a BFLOAT8_B input (UntilizeDeviceOperation::compute_output_specs),
+    // so size the output CB estimate and the pending output buffer by the output dtype: sizing them by the
+    // input's 1088 B tile under-reserves a 2048 B/tile output and can keep enough_space_height true for a row
+    // whose input+output CBs no longer fit beside the freshly allocated L1 output.
+    const DataType output_dtype =
+        input_tensor.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.dtype();
     auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_dtype);
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
-    uint32_t output_single_tile_size = input_single_tile_size;
+    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     uint32_t num_tiles_per_row = input_tensor.padded_shape()[-1] / tt::constants::TILE_WIDTH;
 
@@ -72,7 +79,7 @@ ttnn::Tensor untilize_native(
         input_tensor,
         input_tensor.padded_shape(),
         memory_config.value_or(input_tensor.memory_config()),
-        input_tensor.dtype(),
+        output_dtype,
         Layout::ROW_MAJOR);
 
     bool enough_space_height = operations::data_movement::is_enough_space(

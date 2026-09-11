@@ -3077,8 +3077,9 @@ def test_untilize_codegen_with_resident_l1_buffers(device, headroom_regime, warm
     Two regimes, both of which must simply produce the right answer:
       - shallower_cb_plan: enough headroom for the single-buffered codegen plan but not the
         double-buffered one, so the program factory must degrade the tier it picks.
-      - no_cb_plan_fits: not even the single-buffered codegen plan fits, so the program factory
-        must build the native-equivalent program instead of failing.
+      - no_cb_plan_fits: not even the single-buffered codegen plan fits, so ttnn.untilize's routing
+        (codegen_cb_plan_fits_live_l1) must send the call to the native untilize op instead of
+        dispatching a codegen program that has no CB plan.
 
     This asserts only on the result, never on which implementation served it.
 
@@ -3160,26 +3161,31 @@ def test_untilize_codegen_with_resident_l1_buffers(device, headroom_regime, warm
 
 
 @pytest.mark.parametrize(
-    "dtype, tile_aligned",
-    [(ttnn.bfloat8_b, True), (ttnn.bfloat16, False)],
-    ids=["bfloat8_b_tile_aligned", "bfloat16_unpadding"],
+    "dtype, tile_aligned, output_in_l1",
+    [(ttnn.bfloat8_b, True, False), (ttnn.bfloat8_b, True, True), (ttnn.bfloat16, False, False)],
+    ids=["bfloat8_b_tile_aligned", "bfloat8_b_tile_aligned_l1_output", "bfloat16_unpadding"],
 )
-def test_untilize_codegen_native_tier_routes_to_native(device, dtype, tile_aligned):
+def test_untilize_codegen_native_tier_routes_to_native(device, expect_error, dtype, tile_aligned, output_in_l1):
     """The codegen op's Native tier (no codegen CB plan fits live L1) is served by the native
     untilize op through ttnn.untilize's routing, not by the codegen op reaching into another
     device-op's program factories.
 
-    Both cases are in the codegen gate's static scope (supported_by_codegen is true), and both pin
+    All cases are in the codegen gate's static scope (supported_by_codegen is true), and all pin
     a resident L1 buffer so that not even the single-buffered codegen CB plan fits the L1 that is
-    free right now. The routed call must then produce the right answer via native.
+    free right now. The routed call must then produce the right answer via native, and the forced
+    codegen entry (which by design never falls back) must fail loudly on the same L1 state.
 
-      - bfloat8_b_tile_aligned: the codegen plan is sized by the bf16 OUTPUT tile (2048 B) while
-        the native op's own row-fits-in-L1 check (enough_space_height) uses the bf8_b INPUT tile
-        (1088 B). A headroom window between the two makes codegen land on Native while native
-        selects its ordinary multicore factory. Before the Native tier was lifted into
+      - bfloat8_b_tile_aligned: the codegen plan is sized by two bf16 OUTPUT tiles per Wt
+        (planning tile = max(in, out) = 2048 B) while the native op's row-fits-in-L1 check
+        (enough_space_height) sizes one bf8_b INPUT tile plus one bf16 OUTPUT tile per Wt
+        (1088 + 2048 B). A headroom window between the two makes codegen land on Native while
+        native selects its ordinary multicore factory. Before the Native tier was lifted into
         ttnn.untilize, this configuration threw ("native fallback selected a program factory
         without descriptor support") because that factory is Metal 2.0 and no longer exposes
         create_descriptor.
+      - bfloat8_b_tile_aligned_l1_output: same window, with the (bf16) output interleaved in L1,
+        so both the codegen gate and native's check must reserve the pending output by its
+        OUTPUT dtype; sizing that reservation by the bf8_b input under-reserves it by half.
       - bfloat16_unpadding: the non-tile-aligned (with-unpadding) codegen path, routed to the
         native untilize_with_unpadding op.
 
@@ -3196,9 +3202,9 @@ def test_untilize_codegen_native_tier_routes_to_native(device, dtype, tile_align
 
     if tile_aligned:
         wt = 128
-        # Native's enough_space_height threshold (input tile) .. codegen's single-buffer plan
-        # (planning tile = max(in, out) = bf16 out tile).
-        low_bound = 2 * wt * BF8_TILE_BYTES
+        # Native's enough_space_height threshold (one input tile + one output tile per Wt) ..
+        # codegen's single-buffer plan (two planning tiles = max(in, out) = bf16 out tile per Wt).
+        low_bound = wt * (BF8_TILE_BYTES + BF16_TILE_BYTES)
         single_buffer_bytes = 2 * wt * BF16_TILE_BYTES
         headroom_target = (low_bound + single_buffer_bytes) // 2
         expected_headroom = (low_bound, single_buffer_bytes)
@@ -3211,8 +3217,19 @@ def test_untilize_codegen_native_tier_routes_to_native(device, dtype, tile_align
         # Non-tile-aligned logical width (padded width stays 32 * wt).
         input_torch_tensor = torch.randn([1, total_tile_rows, 32, 32 * wt - 1], dtype=torch.bfloat16)
 
-    if info.cb_limit <= single_buffer_bytes:
-        pytest.skip(f"needs more than {single_buffer_bytes} B of CB space, device offers {info.cb_limit} B")
+    output_memory_config = ttnn.L1_MEMORY_CONFIG if output_in_l1 else ttnn.DRAM_MEMORY_CONFIG
+    if output_in_l1:
+        # Both the codegen gate and native's check reserve the output's per-core footprint out of
+        # the free L1 before deciding, so shift the window up by exactly that reservation: the
+        # busiest bank's share of the row-major (bf16) output pages.
+        out_row_bytes = 32 * wt * 2  # one row-major page: a bf16 row of the padded width
+        out_pages = total_tile_rows * 32
+        pending_out_bytes = -(-out_pages // info.l1_num_banks) * out_row_bytes
+        headroom_target += pending_out_bytes
+        expected_headroom = (expected_headroom[0] + pending_out_bytes, expected_headroom[1] + pending_out_bytes)
+
+    if info.cb_limit <= headroom_target:
+        pytest.skip(f"needs more than {headroom_target} B of CB space, device offers {info.cb_limit} B")
     tiles_per_bank = (info.cb_limit - headroom_target) // BF16_TILE_BYTES
     if tiles_per_bank <= 0:
         pytest.skip("device L1 is too small to leave a meaningful headroom window")
@@ -3236,7 +3253,12 @@ def test_untilize_codegen_native_tier_routes_to_native(device, dtype, tile_align
             low <= actual_headroom < high
         ), f"resident L1 buffer left {actual_headroom} B above the CB base; this case needs it in [{low}, {high})"
 
-        output = ttnn.untilize(input_ttnn_tensor)
+        # The forced codegen entry skips the live-L1 gate on purpose; with no codegen CB plan fitting
+        # it must fail in the codegen program factory rather than quietly serve native.
+        with expect_error(RuntimeError, "no codegen CB plan fits"):
+            _force_codegen(input_ttnn_tensor, memory_config=output_memory_config)
+
+        output = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config)
         assert output.layout == ttnn.ROW_MAJOR_LAYOUT
         assert_equal(golden, ttnn.to_torch(output))
     finally:

@@ -136,8 +136,16 @@ bool codegen_cb_plan_fits_live_l1(const Tensor& input, const tt::tt_metal::Memor
     // the hash and the program; routing runs before that allocation, so reserve the output's
     // per-core L1 footprint here to see the budget those two will (issue #21358 for the native op).
     const auto out_spec = ttnn::prim::UntilizeCodegenDeviceOperation::compute_output_specs(attrs, tensor_args);
+    // require_constructible: the spec was just built from these same (shape, dtype, layout, mem_config) by
+    // compute_output_specs, so a construction failure here is a bug, not a case to wave through with a 0 B
+    // reservation that would make this gate more permissive than the program factory it predicts.
     const uint32_t pending_l1_output_bytes = get_pending_l1_output_reservation(
-        input, out_spec.padded_shape(), output_mem_config, out_spec.data_type(), Layout::ROW_MAJOR);
+        input,
+        out_spec.padded_shape(),
+        output_mem_config,
+        out_spec.data_type(),
+        Layout::ROW_MAJOR,
+        /*require_constructible=*/true);
 
     return plan::choose_codegen_cb_plan(attrs, tensor_args, pending_l1_output_bytes).tier !=
            plan::CodegenCbPlan::Native;
