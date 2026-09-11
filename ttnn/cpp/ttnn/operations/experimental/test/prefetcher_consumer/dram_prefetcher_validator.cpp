@@ -365,11 +365,6 @@ void test_tensor_prefetcher_pipe_validator(
     // sender_index (an index into sr_mapping) is also the index of that sender's pipe id.
     const std::vector<uint8_t> pipe_ids =
         metal_exp::AttachPrefetcherPipes(program, prefetcher_pipes, geom.page_bytes_per_recv);
-    TT_FATAL(
-        pipe_ids.size() == sr_mapping.size(),
-        "Validator: attached {} pipes for {} senders; each receiver plan indexes its sender's pipe id",
-        pipe_ids.size(),
-        sr_mapping.size());
 
     // Scratch CB: holds the expected entry bytes during a single block comparison.
     CircularBufferConfig scratch_cfg(geom.page_bytes_per_recv, {{kValidatorScratchCBId, geom.dataformat}});

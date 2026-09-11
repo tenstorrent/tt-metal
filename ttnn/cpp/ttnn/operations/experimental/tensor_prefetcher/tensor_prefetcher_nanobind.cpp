@@ -14,6 +14,7 @@
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "tensor_prefetcher.hpp"
+#include <tt-metalium/experimental/global_circular_buffer.hpp>
 #include "ttnn/global_circular_buffer.hpp"
 
 namespace ttnn::operations::experimental {

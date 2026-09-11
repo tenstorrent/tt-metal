@@ -27,6 +27,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/global_circular_buffer.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
@@ -55,13 +56,11 @@ constexpr const char* kReceiverKernel = "tests/tt_metal/tt_metal/test_kernels/da
 constexpr uint32_t kEntrySize = 256;  // multiple of L1_ALIGNMENT (16 on Blackhole)
 constexpr uint32_t kRingDepth = 4;
 
-// A Tensor-prefetcher delivery target: the per-bank pipe groups the factory returns, plus the
-// bank-major flattening the rest of this file drives the senders through. Both views come from the
-// shared helpers -- flatten_prefetcher_pipe_banks and prefetcher_pipe_sender_receiver_mapping --
-// which is what a consumer one layer up holds a target as, so this test cannot disagree with it
-// about pipe order; `pipes` and `mapping` index alongside each other.
+// A Tensor-prefetcher delivery target: the bank-major pipe list the factory returns, plus the
+// sender topology read back out of it through prefetcher_pipe_sender_receiver_mapping -- the same
+// helper a consumer one layer up reads it through, so this test cannot disagree with it about pipe
+// order. `pipes` and `mapping` index alongside each other.
 struct PipeSet {
-    std::vector<experimental::TensorPrefetcherBankPipes> banks;
     // One entry per pipe, bank-major: that pipe's sender core and its receivers.
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping;
     std::vector<std::shared_ptr<experimental::PrefetcherPipe>> pipes;
@@ -74,14 +73,13 @@ PipeSet make_pipe_set(
     uint32_t entry_size = kEntrySize,
     uint32_t num_entries = kRingDepth) {
     PipeSet set;
-    set.banks = experimental::CreatePrefetcherPipesForTensorPrefetcher(
+    set.pipes = experimental::CreatePrefetcherPipesForTensorPrefetcher(
         mesh_device,
         bank_to_receivers,
         entry_size,
         num_entries,
         BufferType::L1,
         /*support_multi_receiver_shards=*/!dual_senders_per_bank);
-    set.pipes = experimental::flatten_prefetcher_pipe_banks(set.banks);
     set.mapping = experimental::prefetcher_pipe_sender_receiver_mapping(set.pipes);
     return set;
 }
@@ -284,8 +282,8 @@ TEST_F(PrefetcherPipeDramSenderFixture, SmokeOneSenderFourReceivers) {
     // off one DRISC core and the set collapses to one pipe.
     const PipeSet set =
         make_pipe_set(*mesh_device_, {{/*bank_id=*/0, receiver_cores}}, /*dual_senders_per_bank=*/false);
-    ASSERT_EQ(set.banks.size(), 1u);
-    ASSERT_EQ(set.banks[0].bank_id, 0u);
+    ASSERT_EQ(set.pipes.size(), 1u);
+    ASSERT_EQ(set.pipes[0]->sender_core().x, 0u) << "a pipe's DRAM-logical sender x is the bank it is fed from";
     ASSERT_EQ(set.pipes.size(), 1u);
     ASSERT_EQ(set.pipes[0]->sender_core_type(), experimental::SenderCoreType::Dram);
 
@@ -339,8 +337,7 @@ TEST_F(PrefetcherPipeDramSenderFixture, DualSendersSplitBankReceivers) {
     const CoreRangeSet receiver_cores(CoreRange({0, 0}, {kNumReceivers - 1, 0}));
 
     const PipeSet set = make_pipe_set(*mesh_device_, {{/*bank_id=*/0, receiver_cores}}, /*dual_senders_per_bank=*/true);
-    ASSERT_EQ(set.banks.size(), 1u);
-    ASSERT_EQ(set.banks[0].pipes.size(), 2u) << "expected the bank's receivers to be split across two DRISC senders";
+    ASSERT_EQ(set.pipes.size(), 2u) << "expected the bank's receivers to be split across two DRISC senders";
     ASSERT_EQ(set.mapping.at(0).second.num_cores(), 2u);
     ASSERT_EQ(set.mapping.at(1).second.num_cores(), 2u);
     ASSERT_NE(set.mapping.at(0).first, set.mapping.at(1).first);

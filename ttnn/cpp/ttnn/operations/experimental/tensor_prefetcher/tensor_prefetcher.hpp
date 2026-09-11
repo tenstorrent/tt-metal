@@ -18,12 +18,9 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
-namespace tt::tt_metal {
-class Program;
-namespace distributed {
+namespace tt::tt_metal::distributed {
 class MeshDevice;
 }
-}  // namespace tt::tt_metal
 
 namespace ttnn::operations::experimental {
 
