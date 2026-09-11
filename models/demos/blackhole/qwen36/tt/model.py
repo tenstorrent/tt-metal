@@ -687,8 +687,12 @@ class Qwen36Model:
             args.layer_indices = layer_indices
             args.n_layers = len(layer_indices)
         elif n_layers is not None:
+            # Keep attention_type_list WHOLE: n_layers alone decides how many layers get built, and
+            # each kept index's type is unchanged either way. Truncating it breaks the MTP head,
+            # which needs a real full_attention index from this list (they sit at 3, 7, ...), so any
+            # n_layers < 4 would leave it with none -- and the 8-layer CI config is only safe by
+            # accident.
             args.n_layers = n_layers
-            args.attention_type_list = args.attention_type_list[:n_layers]
 
         # NOTE: the warm-ttnn-cache HF-load skip is DISABLED for qwen3.6.
         # Its Gated-DeltaNet loader consumes conv weights on the host without a cache_file_name --
@@ -1581,7 +1585,12 @@ class Qwen36Model:
         self._vfy_kvpos_buf = ttnn.Tensor(
             list(range(warm_start, warm_start + T)), [T], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, dev
         )
+        # Only ALLOCATED here, at the captured width, and re-staged per replay by verify_traced (the
+        # same convention the prefill traces use) -- so a caller whose block table is owned by a
+        # scheduler can change it between replays. Rows stay identical: all T candidates belong to
+        # the one sequence.
         self._vfy_kvpt_buf = ttnn.Tensor(pt_row * T, [T, nb], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, dev)
+        self._vfy_pt_staged = list(pt_row)  # what the buffers currently hold; see verify_traced
         # ...plus the SAME table with one row per CANDIDATE GROUP, for the fused spec SDPA
         # (spec_multi_pos_tiles), which splits the T candidates across spec_sdpa_groups(T) batch
         # rows (1 at T=4, 2 at T=8) and wants one aliased page-table row per group. Both tables are
@@ -1589,6 +1598,7 @@ class Qwen36Model:
         # full-span — a full-span ttnn.slice aliases its input), the SDPA read needs this one.
         _att0 = next(layer.attention for layer in self.layers if layer.is_full_attention)
         _spec_groups = _att0.spec_sdpa_groups(T)
+        self._vfy_spec_groups = int(_spec_groups)
         self._vfy_kvpt1_buf = ttnn.Tensor(
             pt_row * _spec_groups, [_spec_groups, nb], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, dev
         )
@@ -1784,7 +1794,7 @@ class Qwen36Model:
             dn._conv_taps_stale, dn._conv_win_stale = False, True
             dn.sync_conv_win()
 
-    def verify_traced(self, draft_tokens, chunk_start, read_logits=False, clone_rows=True):
+    def verify_traced(self, draft_tokens, chunk_start, read_logits=False, clone_rows=True, page_table=None):
         """Replay the captured verify trace for `draft_tokens` at absolute `chunk_start`. Advances GDN
         in place + captures per-token slots (commit_verify_slot rolls to the accepted slot after).
         Returns (logits [T,vocab] host float or None, rows [1,1,T,dim/tp] device hidden, ids [T] host
@@ -1794,8 +1804,11 @@ class Qwen36Model:
         which needs the argmax ids alone (the trace produces them on device); the caller flips it via
         SpeculativeDecoder.read_verify_logits when it needs the distributions (future sampling).
 
-        No page table argument: the candidates' blocks live in the persistent _vfy_kvpt_buf, built
-        once at capture (all T rows are the same sequence)."""
+        page_table: this sequence's block table, [1, num_blocks] / [num_blocks] torch or a sequence
+        of ints. When given, BOTH persistent page-table buffers are re-staged for this replay
+        (clipped or padded to the captured width); None keeps whatever was staged last. Baking the
+        table in at capture would pin the trace to the blocks it was captured with, which is wrong
+        as soon as a scheduler owns the mapping."""
         assert getattr(self, "_vfy_trace_id", None) is not None, "call capture_verify_trace first"
         T = self._vfy_T
         assert len(draft_tokens) == T, f"expected {T} tokens, got {len(draft_tokens)}"
@@ -1805,6 +1818,20 @@ class Qwen36Model:
         # Stage per-replay inputs into the persistent buffers (addresses preserved).
         tok = [int(t) for t in draft_tokens]
         ttnn.copy_host_to_device_tensor(ttnn.Tensor(tok, [1, T], ttnn.uint32, rm), self._vfy_token_buf)
+        if page_table is not None:
+            # Both forms: the T-row table the per-candidate KV write consumes, and the
+            # per-candidate-group one the fused spec SDPA consumes. Rows are identical (all
+            # candidates are one sequence); width is clipped or zero-padded to the captured buffers.
+            # Skipped while the table is unchanged, which is every iteration of a single-sequence
+            # run -- the point of re-staging is that a scheduler CAN move the blocks, not that the
+            # demo pays two uploads per replay for a table that never moves.
+            row = [int(b) for b in (page_table.reshape(-1).tolist() if hasattr(page_table, "reshape") else page_table)]
+            width = int(self._vfy_kvpt_buf.shape[-1])
+            row = row[:width] + [0] * max(0, width - len(row))
+            if row != getattr(self, "_vfy_pt_staged", None):
+                for buf, rows in ((self._vfy_kvpt_buf, T), (self._vfy_kvpt1_buf, self._vfy_spec_groups)):
+                    ttnn.copy_host_to_device_tensor(ttnn.Tensor(row * rows, [rows, width], ttnn.int32, rm), buf)
+                self._vfy_pt_staged = row
         # Hybrid verify: per-ROW decode rope at the candidates' own positions.
         _cos, _sin = self._rope_tp_cos_sin_decode_rows(range(chunk_start, chunk_start + T))
         ttnn.copy(_cos, self._vfy_cos_buf)
@@ -3886,6 +3913,28 @@ class Qwen36Model:
         self.mtp.attention.B = batch_size
         self.mtp.attention._stable_state = True
         self._mtp_kv_cache = [mtp_k, mtp_v]
+
+    def set_gdn_fused_decode(self, enabled: bool) -> None:
+        """Select the GDN decode recurrence for EVERY GDN layer: the single fused device op
+        (``fused_recurrent_gated_delta_rule``) when ``enabled``, else the composite op chain.
+
+        Spec decode REQUIRES the fused op: the traced verify advances GDN with it, and decode has to
+        use identical math or greedy near-ties flip between the two paths -- acceptance measured
+        2.82 -> 2.00 / 3 when they disagreed at ~1e-5. It is also faster per layer (0.345 vs 0.541 ms
+        eager) and closer to the FLA reference.
+
+        This is the ONE place the switch flips. It is a visible, model-scoped choice rather than a
+        side effect of building a SpeculativeDecoder, because on a shared model it changes every
+        later plain decode too."""
+        for layer in self.layers:
+            if not layer.is_full_attention:
+                layer.attention.use_fused_recurrent_decode = bool(enabled)
+
+    @property
+    def gdn_fused_decode(self) -> bool:
+        """True when every GDN layer decodes with the fused recurrent op (see set_gdn_fused_decode)."""
+        gdn = [layer.attention for layer in self.layers if not layer.is_full_attention]
+        return bool(gdn) and all(dn.use_fused_recurrent_decode for dn in gdn)
 
     def free_kv_caches(self):
         """Release KV caches + GDN state for a fresh generation run."""

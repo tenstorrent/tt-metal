@@ -99,9 +99,13 @@ class SpeculativeDecoder:
         # The MTP layer keeps its own paged KV cache with its own (identity) page table.
         self.mtp_pt = ttnn.Tensor(self._pt_row, [1, len(self._pt_row)], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, self.mesh)
         self._gdn = [layer.attention for layer in model.layers if not layer.is_full_attention]
-        for gdn in self._gdn:
-            # verify and decode must share GDN math or near-tie argmax flips reduce acceptance
-            gdn.use_fused_recurrent_decode = True
+        # Verify and decode must share GDN math or near-tie argmax flips cost acceptance (measured
+        # 2.82 -> 2.00 / 3). Constructing a decoder must NOT flip that switch as a side effect: it is
+        # model-scoped and changes every later plain decode too, so the caller states the choice.
+        assert model.gdn_fused_decode, (
+            "SpeculativeDecoder needs model.set_gdn_fused_decode(True) before construction: the "
+            "traced verify advances GDN with the fused recurrent op and decode must use the same math"
+        )
         self._vfy_captured = False
         # QWEN36_SPEC_TRACED_COMMIT=0 reverts the commit phase to the eager per-layer
         # commit_verify_slot loop; the default replays one pre-captured trace per accepted-prefix
@@ -135,9 +139,13 @@ class SpeculativeDecoder:
         # The batched reseed's scratch block (its padding rows' KV sink) is the EXTRA block the MTP
         # cache carries past the page table's span — _allocate_mtp_kv_cache allocates num_blocks + 1.
         # It must not be one of the sequence's own blocks: stealing the last one caps the sequence at
-        # (nb - 1) * block_size, which the 256k demo case overruns by 36 tokens. The page table stays
-        # nb wide and identity, so nothing but the pad rows below ever names this block.
-        self._reseed_scratch_block = len(self._pt_row)
+        # (nb - 1) * block_size, which the 256k demo case overruns by 36 tokens.
+        #
+        # Derived from the CACHE, not from the page table's width: the scratch block is a property of
+        # the cache, and if the two ever disagree, indexing off the table would aim the padding rows'
+        # KV write at a block a real sequence owns. The assert below pins the invariant instead of
+        # assuming it.
+        self._reseed_scratch_block = None  # filled in generate(), once the KV caches exist
         self._reseed_block_size = 0  # filled in generate(), once the KV caches exist
         self.total_drafted = 0
         self.total_accepted = 0  # accepted DRAFT tokens (excludes the mandatory correction/bonus)
@@ -432,7 +440,7 @@ class SpeculativeDecoder:
         Returns (per-position argmax ids, per-position hidden rows [1,1,len,dim/tp]).
         """
         _lt, vhidden, ids = self.model.verify_traced(
-            tokens, p + 1, read_logits=self.read_verify_logits, clone_rows=False
+            tokens, p + 1, read_logits=self.read_verify_logits, clone_rows=False, page_table=self._pt_row
         )
         return ids, vhidden
 
@@ -628,6 +636,20 @@ class SpeculativeDecoder:
             f"feed={'V3' if self.spec_postnorm else 'V0'} max_new={max_new_tokens}"
         )
 
+        # Capacity check: bounded by the SPECULATIVE high-water slot, not the returned-token count.
+        # Verify writes K+1 candidate slots per iteration no matter how many are later accepted, and
+        # capture_verify_trace's throwaway warmup writes T+1..T+1+K even when the loop body never runs
+        # (max_new_tokens == 1). A slot past the cache reaches paged_update_cache, which indexes
+        # page_table[slot / block_size] with no bounds check. Runs before prefill/seed/warmup/capture,
+        # and for BOTH reseed modes (the eager one used to skip this check entirely).
+        self._reseed_block_size = int(self.mtp.attention.paged_k.shape[-2])
+        nb = self.page_table.shape[-1]
+        _hi = T + self.K + max(1, max_new_tokens - 1)
+        assert _hi < nb * self._reseed_block_size, (
+            f"high-water slot {_hi} (T={T}, max_new={max_new_tokens}, K={self.K}) does not fit the "
+            f"paged KV: {nb} blocks x {self._reseed_block_size} = {nb * self._reseed_block_size} slots"
+        )
+
         # Chunked prompt prefill (2048-token chunks + masked tail — the same path the demo uses, so
         # long prompts work). Each chunk's hidden warms the MTP drafter's KV in ONE forward before it
         # is freed, so the drafter never sees an empty cache and TTFT stays flat in prompt length.
@@ -670,19 +692,15 @@ class SpeculativeDecoder:
         Lp, Hp = self._seed(first, T - 1)
 
         # Batched-reseed warmup: compiles the B=K+1 drafter forward while nothing is traced yet.
+        # (The capacity bound is checked above, before prefill, for both reseed modes.)
         if self._batched_reseed:
-            self._reseed_block_size = self.mtp.attention.paged_k.shape[-2]
-            nb = self.page_table.shape[-1]
-            # The reseed scratch is its own block PAST the page table (the MTP cache is nb + 1
-            # blocks), so the sequence gets the whole page table: it only has to fit in nb blocks,
-            # the same bound the base KV cache imposes.
-            assert T + max_new_tokens <= nb * self._reseed_block_size, (
-                f"sequence does not fit the paged KV: {nb} blocks x {self._reseed_block_size} "
-                f"cannot hold {T} prompt + {max_new_tokens} generated tokens"
-            )
-            assert self.mtp.attention.paged_k.shape[0] > self._reseed_scratch_block, (
-                f"MTP KV cache has {self.mtp.attention.paged_k.shape[0]} blocks; the batched reseed's "
-                f"scratch block {self._reseed_scratch_block} needs one more than the page table's {nb}"
+            # Taken from the CACHE, never from the page table's width: the scratch block is a
+            # property of the cache, and if the two disagreed, indexing off the table would aim the
+            # padding rows' KV write at a block the sequence owns. The assert pins that invariant.
+            self._reseed_scratch_block = int(self.mtp.attention.paged_k.shape[0]) - 1
+            assert max(self._pt_row) < self._reseed_scratch_block, (
+                f"page table names block {max(self._pt_row)}, but the MTP cache's scratch block is "
+                f"{self._reseed_scratch_block}; the cache needs one block past every block the table uses"
             )
             self._reseed_warmup(self.K + 1, Hp.shape[-1], Hp.dtype)
 
@@ -766,7 +784,9 @@ class SpeculativeDecoder:
         self.prefill_time = time.perf_counter() - _t_start  # TTFT: prefill + MTP warm + seed
         _t_decode = time.perf_counter()
 
-        while len(out) < max_new_tokens:
+        # Prefill can emit a stop token directly (`first`); the loop must not extend past it.
+        _prefill_stop = first in self.stop_tokens
+        while not _prefill_stop and len(out) < max_new_tokens:
             _tm = self._tick() if self._timing else 0.0
             drafts = self._phase("draft", lambda: self._draft(pending, Hp, p))
             _t_draft = self._tick() if self._timing else 0.0
@@ -780,6 +800,12 @@ class SpeculativeDecoder:
                 vids, vhidden = self._phase("verify", lambda: self._verify([pending] + drafts, p))
             m = self._accept_greedy(drafts, vids)
             committed = [pending] + drafts[:m]
+            # The accept test can accept drafts PAST a stop token, so emit only through the first
+            # one. commit/anchor/reseed/p all follow the shortened prefix, since they derive from
+            # `committed`/`mi` below; acceptance stats deliberately keep the full `m`.
+            _stop_i = next((i for i, t in enumerate(committed) if t in self.stop_tokens), None)
+            if _stop_i is not None:
+                committed = committed[: _stop_i + 1]
             mi = len(committed) - 1  # accepted-prefix's last token index in the verify window
             _t_accept = time.perf_counter() if self._timing else 0.0  # host-only: no fence needed
             self._phase("commit", lambda: self._commit(mi))
