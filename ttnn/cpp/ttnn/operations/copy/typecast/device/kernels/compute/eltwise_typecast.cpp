@@ -8,7 +8,6 @@
 #include "api/compute/eltwise_unary/typecast.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
-#include "api/debug/dprint.h"  // [TC-DBG #51270] remove after typecast multi-tile isolation
 
 void kernel_main() {
     constexpr uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
@@ -22,26 +21,14 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb::in, dfb::out);
     copy_init(dfb::in);
-    // [TC-DBG #51270] per_core_block_cnt distinguishes the two grids: it is 2 on the single-compute-node
-    // 1x3 grid (both tiles on one core -> the failing path) and 1 on the 2x3 grid (one tile per core).
-    // Unguarded DPRINT (matches the eltwise compute-kernel idiom); may print once per active TRISC.
-    // sync: DstSync value the kernel compiled with (SyncHalf=0, SyncFull=1). Hypothesis: on the emulator
-    // this metal2 (QuasarComputeConfig) kernel falls back to SyncFull=1, which quirk #3 (TEN-4636) says
-    // zeros the upper DEST half -> the 2nd tile. accum: DST_ACCUM_MODE (fp32-dest = 1). tile 0 being
-    // bit-exact fp32 means accum must already be 1; if sync also prints 1 that confirms the Full trap.
-    DPRINT("TC_CMP cnt={} sync={} accum={}\n", per_core_block_cnt, (uint32_t)DST_SYNC_MODE, (uint32_t)DST_ACCUM_MODE);
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
-        // [TC-DBG #51270] block marker: confirms the loop runs twice on 1x3 and correlates the per-tile
-        // TYPECAST_LLK_INIT below with the tile the writer reports as wrong.
-        DPRINT("TC_CMP blk={}\n", block_index);
         dfb_out.reserve_back(per_core_block_dim);
 #ifdef ARCH_QUASAR
-        // [#51270] Re-point the packer's Buffer Descriptor at the current out_cb ring slot for EACH
-        // output block. compute_kernel_hw_startup runs llk_pack_init only once, and on Quasar the pack
-        // BD (which holds the L1 slot address) does not auto-advance across DFB ring slots. Without this
-        // the 2nd block packs to the already-consumed 1st slot, so out slot 1 is never written and reads
-        // back as zeros (confirmed by DPRINT: tile 1 fp32bits = 0). Same per-use pack_init the Quasar
-        // pool kernel uses; WH/BH need no repoint (pack_tile tracks the CB slot there).
+        // Re-point the packer's Buffer Descriptor at the current out_cb ring slot for each output block.
+        // compute_kernel_hw_startup runs llk_pack_init only once, and on Quasar the pack BD (which holds
+        // the L1 slot address) does not auto-advance across DFB ring slots, so a multi-block pack would
+        // otherwise keep writing the first slot. This mirrors the per-use pack_init the Quasar pool kernel
+        // uses; WH/BH need no repoint (pack_tile tracks the CB slot there).
         pack_init(dfb::out);
 #endif
         for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
