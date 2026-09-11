@@ -319,7 +319,8 @@ Gradients run_algorithm2(uint32_t C, const Reference& ref, uint32_t grid_w, uint
 // base + (u mod 2) * stride, which is where the receiver's write pointer
 // stands after u pushes; every core has the same layout, so a producer can
 // use its own base as the receiver's.
-Gradients run_relay(uint32_t C, const Reference& ref, uint32_t grid_w, uint32_t grid_h) {
+Gradients run_relay(
+    uint32_t C, const Reference& ref, uint32_t grid_w, uint32_t grid_h, bool endpoint_sync = false) {
     using namespace tt::tt_metal;
     auto* device = &ttml::autograd::ctx().get_device();
 
@@ -373,6 +374,7 @@ Gradients run_relay(uint32_t C, const Reference& ref, uint32_t grid_w, uint32_t 
     make_cb(tt::CBIndex::c_23, vWt, tt::DataFormat::Float32);
     make_cb(tt::CBIndex::c_24, 1, tt::DataFormat::Float32);  // readiness word
     make_cb(tt::CBIndex::c_25, 1, tt::DataFormat::Float32);  // release word
+    make_cb(tt::CBIndex::c_26, 1, tt::DataFormat::Float32);  // column-gradient progress
 
     const uint32_t arrive_sem = CreateSemaphore(program, region, 0);
     const uint32_t release_sem = CreateSemaphore(program, region, 0);
@@ -381,10 +383,17 @@ Gradients run_relay(uint32_t C, const Reference& ref, uint32_t grid_w, uint32_t 
     const uint32_t credit_prev_sem = CreateSemaphore(program, region, 0);
     const uint32_t credit_next_sem = CreateSemaphore(program, region, 0);
     const uint32_t credit_self_sem = CreateSemaphore(program, region, 0);
+    const uint32_t endpoint1_sem = CreateSemaphore(program, region, 0);
+    const uint32_t endpoint2_sem = CreateSemaphore(program, region, 0);
+
+    std::map<std::string, std::string> sync_defines;
+    if (endpoint_sync) {
+        sync_defines["ENDPOINT_SYNC"] = "1";
+    }
 
     std::vector<uint32_t> reader_args = {
         C, qWt, vWt, release_sem, ready0_sem, ready1_sem,
-        credit_prev_sem, credit_next_sem, credit_self_sem};
+        credit_prev_sem, credit_next_sem, credit_self_sem, endpoint1_sem, endpoint2_sem};
     for (const auto* t : {&query, &key, &value, &grad_output, &lse, &u_scalar, &grad_query,
                           &grad_key, &grad_value}) {
         tt::tt_metal::TensorAccessorArgs(*t->buffer()).append_to(reader_args);
@@ -394,7 +403,8 @@ Gradients run_relay(uint32_t C, const Reference& ref, uint32_t grid_w, uint32_t 
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::RISCV_1_default,
-            .compile_args = reader_args});
+            .compile_args = reader_args,
+            .defines = sync_defines});
 
     std::vector<uint32_t> writer_args = {C, qWt, vWt, arrive_sem, release_sem};
     for (const auto* t : {&grad_key, &grad_value}) {
@@ -405,7 +415,8 @@ Gradients run_relay(uint32_t C, const Reference& ref, uint32_t grid_w, uint32_t 
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
-            .compile_args = writer_args});
+            .compile_args = writer_args,
+            .defines = sync_defines});
 
     const uint32_t scaler = std::bit_cast<uint32_t>(1.0F / std::sqrt(static_cast<float>(ref.d)));
     const uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);
@@ -437,14 +448,20 @@ Gradients run_relay(uint32_t C, const Reference& ref, uint32_t grid_w, uint32_t 
         const auto neighbors = snake_neighbors(C, c);
         const auto prev = noc_of_core(neighbors.prev != kNoCore ? neighbors.prev : c);
         const auto next = noc_of_core(neighbors.next != kNoCore ? neighbors.next : c);
-        SetRuntimeArgs(
-            program, reader, core,
-            {c, query.buffer()->address(), key.buffer()->address(), value.buffer()->address(),
-             grad_output.buffer()->address(), lse.buffer()->address(), u_scalar.buffer()->address(),
-             grad_query.buffer()->address(), grad_key.buffer()->address(),
-             grad_value.buffer()->address(), static_cast<uint32_t>(prev.x),
-             static_cast<uint32_t>(prev.y), static_cast<uint32_t>(next.x),
-             static_cast<uint32_t>(next.y)});
+        std::vector<uint32_t> relay_reader_args = {
+            c, query.buffer()->address(), key.buffer()->address(), value.buffer()->address(),
+            grad_output.buffer()->address(), lse.buffer()->address(), u_scalar.buffer()->address(),
+            grad_query.buffer()->address(), grad_key.buffer()->address(),
+            grad_value.buffer()->address(), static_cast<uint32_t>(prev.x),
+            static_cast<uint32_t>(prev.y), static_cast<uint32_t>(next.x),
+            static_cast<uint32_t>(next.y)};
+        // Every core's coordinates, for endpoint publication by unicast.
+        for (uint32_t r = 1; r <= C; ++r) {
+            const auto rc = noc_of_core(r);
+            relay_reader_args.push_back(static_cast<uint32_t>(rc.x));
+            relay_reader_args.push_back(static_cast<uint32_t>(rc.y));
+        }
+        SetRuntimeArgs(program, reader, core, relay_reader_args);
         SetRuntimeArgs(
             program, writer, core,
             {c, grad_key.buffer()->address(), grad_value.buffer()->address(),
@@ -508,14 +525,15 @@ void check_algorithm2(uint32_t C, uint32_t grid_w, uint32_t grid_h, uint32_t d =
     expect_close(got.dV, ref.dV, 0.06F, "dV");
 }
 
-void check_relay(uint32_t C, uint32_t grid_w, uint32_t grid_h, uint32_t d = 64) {
+void check_relay(
+    uint32_t C, uint32_t grid_w, uint32_t grid_h, uint32_t d = 64, bool endpoint_sync = false) {
     const auto grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
     if (grid_w > grid.x || grid_h > grid.y) {
         GTEST_SKIP() << "needs " << grid_w << "x" << grid_h;
     }
     const uint32_t N = 2u * C * kTile;
     const auto ref = make_reference(N, d);
-    const auto got = run_relay(C, ref, grid_w, grid_h);
+    const auto got = run_relay(C, ref, grid_w, grid_h, endpoint_sync);
     expect_close(got.dQ, ref.dQ, 0.06F, "dQ");
     expect_close(got.dK, ref.dK, 0.06F, "dK");
     expect_close(got.dV, ref.dV, 0.06F, "dV");
@@ -573,4 +591,34 @@ TEST(CyclicSdpaBwRelayTest, FourCores) {
 
 TEST(CyclicSdpaBwRelayTest, EightCores) {
     check_relay(8, 4, 2);
+}
+
+// ------------------------------------------ Algorithm 4: no chip-wide barrier
+// Within a streak the packet is the ordering token. Across a gap, the two
+// endpoint counters order a reload after the preceding streak's spill. The
+// column gradients, which only pass through DRAM because this step has not
+// restored the paper's column residency, are ordered by a local word between
+// this core's own two data-movement RISCs -- no chip-wide anything.
+//
+// At C = 1 there is nothing to publish: both rows have a single streak, so
+// every spill is final. That makes it the configuration to run first, since
+// it checks that removing the barrier did not break the parts that do not
+// need it.
+TEST(CyclicSdpaBwEndpointTest, OneCore) {
+    check_relay(1, 1, 1, 64, /*endpoint_sync=*/true);
+}
+
+// C = 4 is the first size with later streak starts -- row 5's active
+// timesteps are {0}, {3,4}, {7,8}, so it reloads twice -- and therefore the
+// first that exercises publications and endpoint waits.
+TEST(CyclicSdpaBwEndpointTest, FourCores) {
+    check_relay(4, 2, 2, 64, true);
+}
+
+TEST(CyclicSdpaBwEndpointTest, EightCores) {
+    check_relay(8, 4, 2, 64, true);
+}
+
+TEST(CyclicSdpaBwEndpointTest, SixteenCores) {
+    check_relay(16, 4, 4, 64, true);
 }
