@@ -22,6 +22,7 @@ from tests.ttnn.unit_tests.operations.matmul.test_matmul import is_tiny_tile_com
 pytestmark = pytest.mark.use_module_device
 
 
+# Verifies the linear golden accepts a full per-row bias matrix and casts the result to the input dtype.
 def test_linear_golden_supports_full_two_row_bias_and_normalizes_dtype():
     input_tensor = torch.arange(6, dtype=torch.bfloat16).reshape(2, 3)
     weights = torch.arange(12, dtype=torch.float32).reshape(3, 4)
@@ -34,6 +35,7 @@ def test_linear_golden_supports_full_two_row_bias_and_normalizes_dtype():
     assert torch.equal(output, expected)
 
 
+# Verifies the matmul_batched_weights golden returns one output per weight tensor, in the original order.
 def test_matmul_batched_weights_golden_preserves_weight_order():
     input_tensor = torch.arange(6, dtype=torch.bfloat16).reshape(2, 3)
     weights = [

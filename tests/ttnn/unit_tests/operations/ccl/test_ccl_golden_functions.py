@@ -29,6 +29,7 @@ def _two_group_collective_inputs():
     ]
 
 
+# Verifies collective groups are formed from logical distribution coordinates rather than physical device order.
 def test_collective_groups_follow_logical_distribution_coordinates():
     mesh_coords = tuple(ttnn.MeshCoordinate(row, column) for row in range(2) for column in range(2))
     input_tensors = [torch.tensor([index + 1.0], dtype=torch.bfloat16) for index, mesh_coord in enumerate(mesh_coords)]
@@ -42,6 +43,7 @@ def test_collective_groups_follow_logical_distribution_coordinates():
     assert torch.equal(output, torch.tensor([10.0], dtype=torch.bfloat16))
 
 
+# Checks the all_broadcast golden produces the expected per-group broadcast for every collective group.
 def test_all_broadcast_golden_composes_every_collective_group():
     golden_function = ttnn.get_golden_function(ttnn.all_broadcast)
 
@@ -56,6 +58,7 @@ def test_all_broadcast_golden_composes_every_collective_group():
     assert torch.equal(outputs[1], torch.tensor([[3.0, 4.0], [30.0, 40.0]], dtype=torch.bfloat16))
 
 
+# Checks the all_gather golden concatenates shards within each collective group independently.
 def test_all_gather_golden_composes_every_collective_group():
     golden_function = ttnn.get_golden_function(ttnn.all_gather)
 
@@ -70,6 +73,7 @@ def test_all_gather_golden_composes_every_collective_group():
     assert torch.equal(output, expected)
 
 
+# Ensures all_gather output follows logical shard order even when topology coordinates are permuted.
 def test_all_gather_golden_preserves_logical_order_with_permuted_topology_coordinates():
     mesh_coords = ((0, 1), (0, 0), (1, 1), (1, 0))
     input_tensors = [
@@ -90,6 +94,7 @@ def test_all_gather_golden_preserves_logical_order_with_permuted_topology_coordi
     assert torch.equal(output, expected)
 
 
+# Ensures the golden raises when the provided mesh coordinates don't cover the full mesh volume.
 def test_collective_golden_rejects_incomplete_topology_coordinates(expect_error):
     with expect_error(ValueError, "mesh coordinates for mesh volume"):
         ttnn.get_golden_function(ttnn.all_reduce)(
@@ -99,6 +104,7 @@ def test_collective_golden_rejects_incomplete_topology_coordinates(expect_error)
         )
 
 
+# Checks the all_reduce golden sums shards within each collective group independently.
 def test_all_reduce_golden_composes_every_collective_group():
     golden_function = ttnn.get_golden_function(ttnn.all_reduce)
 
@@ -111,6 +117,7 @@ def test_all_reduce_golden_composes_every_collective_group():
     assert torch.equal(output, torch.tensor([[4.0, 6.0], [40.0, 60.0]], dtype=torch.bfloat16))
 
 
+# Checks the reduce_scatter golden reduces each group and returns the correct per-rank chunk.
 def test_reduce_scatter_golden_composes_every_rank_chunk():
     golden_function = ttnn.get_golden_function(ttnn.reduce_scatter)
 
@@ -165,6 +172,8 @@ def test_all_to_all_combine_golden_masks_duplicate_device_slots():
     assert torch.equal(output._ttnn_comparison_config.mask, expected_mask)
 
 
+# Verifies reduce_to_root reduces the per-device l/s/m states onto the root
+# and tags the outputs with the root's mesh coordinate.
 def test_reduce_to_root_golden_reduces_four_device_states():
     input_tensors_l = [torch.full((1, 1, 1, 32), value, dtype=torch.float32) for value in (1.0, 2.0, 3.0, 4.0)]
     input_tensors_s = [torch.ones((1, 1, 1, 32), dtype=torch.float32) for _ in range(4)]
@@ -207,6 +216,8 @@ def _expected_moe_routing_outputs(
     return torch.cat(outputs, dim=0)
 
 
+# Verifies point_to_point delivers the sender's shard to the receiver coordinate
+# and tags the output with the receiver's mesh coordinate.
 def test_point_to_point_golden_selects_nonzero_receiver_shard():
     input_tensors = [torch.full((1, 4), index, dtype=torch.bfloat16) for index in range(4)]
     golden_function = ttnn.get_golden_function(ttnn.point_to_point)
@@ -223,6 +234,7 @@ def test_point_to_point_golden_selects_nonzero_receiver_shard():
     assert output._ttnn_mesh_coord == (0, 1)
 
 
+# Checks moe_routing_remap partitions non-zero routing weights across mesh members along the cluster axis.
 @pytest.mark.parametrize("cluster_axis, expert_parallel_size", [(0, 2), (1, 4)])
 def test_moe_routing_remap_golden_partitions_each_mesh_member(cluster_axis, expert_parallel_size):
     routing_weights = torch.zeros((1, 32), dtype=torch.bfloat16)
@@ -251,6 +263,7 @@ def test_moe_routing_remap_golden_partitions_each_mesh_member(cluster_axis, expe
     assert not torch.equal(output[0], output[first_next_member])
 
 
+# Ensures moe_routing_remap output follows logical device order even with permuted topology coordinates.
 def test_moe_routing_remap_golden_preserves_logical_order_with_permuted_topology_coordinates():
     routing_weights = torch.zeros((1, 32), dtype=torch.bfloat16)
     routing_weights[0, [2, 4, 10, 13, 14, 18, 22, 24]] = torch.arange(1, 9, dtype=torch.bfloat16)

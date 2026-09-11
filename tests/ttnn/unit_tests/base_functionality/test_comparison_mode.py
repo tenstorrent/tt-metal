@@ -175,6 +175,8 @@ def test_scalar_output_comparison(monkeypatch, expect_error):
         )
 
 
+# Verifies mixed tensor/scalar structured outputs are paired in order
+# and that scalar-only outputs are routed to scalar comparison.
 def test_structured_output_pairs_preserve_order_and_scalar_routing(monkeypatch):
     golden_tensor = torch.tensor([1.0])
     output_tensor = torch.tensor([1.0])
@@ -203,6 +205,7 @@ def test_structured_output_pairs_preserve_order_and_scalar_routing(monkeypatch):
     assert all(record["matches"] for record in comparison_records)
 
 
+# Checks that None outputs (op produced no tensor) are skipped, yielding no comparison records.
 def test_none_outputs_produce_no_comparison_records():
     compare = ttnn.decorators.compare_tensors_using_pcc
     comparison_kwargs = {
@@ -216,6 +219,7 @@ def test_none_outputs_produce_no_comparison_records():
     assert compare(golden_outputs=(None,), outputs=(None,), **comparison_kwargs) == []
 
 
+# Ensures a TypeError is raised when golden and runtime outputs disagree on which outputs are None.
 @pytest.mark.parametrize(
     "golden_outputs, outputs",
     [
@@ -237,6 +241,7 @@ def test_none_output_structure_mismatch_raises(golden_outputs, outputs, expect_e
         )
 
 
+# Checks the stored global golden tensor preserves its mesh coordinate and comparison config metadata.
 def test_stored_global_golden_preserves_mesh_coordinate():
     output = torch.tensor([0.0])
     golden = torch.tensor([1.0])
@@ -255,6 +260,8 @@ def test_stored_global_golden_preserves_mesh_coordinate():
         ttnn.decorators.TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR.pop(output.tensor_id, None)
 
 
+# Verifies local comparison selects the device shard at the golden's mesh coordinate
+# and emits exactly one comparison record for it.
 def test_mesh_coordinate_selects_requested_device_shard_and_emits_one_record(monkeypatch):
     mesh_coords = (ttnn.MeshCoordinate(0, 1), ttnn.MeshCoordinate(0, 0))
     topology = _FakeTensorTopology(mesh_coords=mesh_coords)
@@ -283,6 +290,7 @@ def test_mesh_coordinate_selects_requested_device_shard_and_emits_one_record(mon
     assert "mesh_coord" not in comparison_records[0]
 
 
+# Ensures an error is raised when the runtime tensor has no shard at the golden's mesh coordinate.
 def test_mesh_coordinate_requires_matching_runtime_shard(monkeypatch, expect_error):
     topology = _FakeTensorTopology(mesh_coords=(ttnn.MeshCoordinate(0, 0),))
     runtime_output = _FakeDistributedTensor(topology=topology)
@@ -296,6 +304,7 @@ def test_mesh_coordinate_requires_matching_runtime_shard(monkeypatch, expect_err
         ttnn.decorators.to_torch_for_comparison(runtime_output, golden)
 
 
+# Verifies to_torch_for_comparison stitches per-device shards back into the full logical tensor.
 def test_to_torch_for_comparison_composes_mesh_shards(monkeypatch):
     topology = _FakeTensorTopology(mesh_coords=(), placements=(), distribution_shape=())
     runtime_output = _FakeDistributedTensor(topology=topology)
