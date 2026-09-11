@@ -28,6 +28,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from . import probes
 from .layer_depth import set_depth as _set_depth
 
 _DEPTH_GUARD = "models.experimental.perf_automation.agent.depth_guard_plugin"
@@ -73,6 +74,7 @@ def _run_gate(node: str, repo_root: Path, env=None, timeout=None) -> tuple:
     e = dict(os.environ)
     e.update(env or {})
     _set_depth(e, None)  # correctness always runs full depth (cap REMOVED, never sent as 0)
+    probes.wait_for_memory_headroom_before_device_work("pcc gate (full-depth)")
     try:
         r = subprocess.run(
             # -p depth_guard: correctness must run at FULL depth; see agent/depth_guard_plugin.py

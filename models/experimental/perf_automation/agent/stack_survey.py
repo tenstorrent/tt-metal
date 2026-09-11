@@ -128,6 +128,9 @@ def survey_model(repo_root, model_root, env=None, timeout_s: int = 1800, python_
     run_env = dict(os.environ)
     run_env.update(env or {})
     run_env.pop("TT_PERF_LAYERS", None)  # walk at FULL depth: a capped build hides short stacks
+    from .probes import wait_for_memory_headroom_before_device_work
+
+    wait_for_memory_headroom_before_device_work("stack survey (full-depth build)")
     try:
         proc = subprocess.run(
             [str(python_bin), str(probe), str(model_root), str(repo_root)],
@@ -188,6 +191,9 @@ def survey(repo_root, node, env=None, timeout_s: int = 3600, python_bin=None) ->
     # is not a stack -- so a capped build reports structure the model does not have.
     run_env.pop("TT_PERF_LAYERS", None)
     run_env["TT_PERF_OSL_TOKENS"] = "1"
+    from .probes import wait_for_memory_headroom_before_device_work
+
+    wait_for_memory_headroom_before_device_work("stack survey (full-depth build)")
     try:
         proc = subprocess.run(cmd, cwd=str(repo_root), env=run_env, capture_output=True, text=True, timeout=timeout_s)
     except Exception as exc:  # noqa: BLE001 -- an unwalkable model degrades to today's blind generation

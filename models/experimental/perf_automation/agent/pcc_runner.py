@@ -160,6 +160,7 @@ def run_pcc(ctx) -> dict:
     from .mesh_descriptor import apply_scope
 
     apply_scope(env, ctx.manifest.get("config", {}))
+    probes.wait_for_memory_headroom_before_device_work("check_pcc (full-depth)")
     try:
         r = subprocess.run(
             # -p depth_guard: correctness must run at FULL depth; see agent/depth_guard_plugin.py

@@ -2115,3 +2115,104 @@ def resolve_signposts(tests_dir, default_start="start", default_end="stop"):
             % (found, start, end)
         )
     return {"start_signpost": start, "end_signpost": end, "found": found, "warning": warning}
+
+
+_MEM_GATE_BROKEN = [False]
+
+
+def _mem_min_free_gb() -> float:
+    return float(os.environ.get("PERF_MCP_MIN_FREE_MEM_GB", "20"))
+
+
+def _mem_wait_s() -> float:
+    return float(os.environ.get("PERF_MCP_MEM_WAIT_S", "300"))
+
+
+def _mem_poll_s() -> float:
+    return float(os.environ.get("PERF_MCP_MEM_POLL_S", "15"))
+
+
+def available_memory_gb():
+    """Free-for-new-allocations memory right now, or None if it cannot be read.
+
+    MemAvailable, not MemFree: it already accounts for reclaimable cache/buffers the kernel would
+    give back under pressure, which is what actually decides whether the next allocation succeeds
+    -- MemFree alone undercounts by exactly the page cache a fresh process can evict.
+    """
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) / (1024.0 * 1024.0)
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def wait_for_memory_headroom_before_device_work(label: str = "") -> None:
+    """Refuse to add a heavy subprocess on top of a box already nearly out of memory.
+
+    THE GAP THIS CLOSES. A device-touching subprocess can load a full model checkpoint into host
+    RAM -- a per-model, per-call cost this generic launch point cannot estimate -- and on
+    2026-09-11 the kernel OOM-killed device subprocesses repeatedly across TWO separate launch
+    points: cc_optimize.run's own _run_device_proc (every measurement subprocess) AND
+    agent.stack_survey.survey_model's direct subprocess.run call (the discovery-time model build),
+    which does not go through run.py at all. The first fix covered only the first path -- the very
+    next run OOM-killed at Step 6 (pipeline mapping) exactly the same way, because survey_model
+    still had no gate. SHARED HERE so every current and future launch point calls the same one
+    check instead of growing its own copy, or being missed the way the first attempt was.
+
+    This cannot know how much the NEXT subprocess will need -- that is model- and call-specific --
+    but it can cheaply refuse to start one when the box is already in a state no subprocess would
+    survive. Same shape as the thermal gate refusing to start hot work on an already-hot board: a
+    bound on the STARTING condition, not a prediction of the work itself.
+
+    BEST-EFFORT, LIKE THE THERMAL GATE. Waits up to PERF_MCP_MEM_WAIT_S for headroom to return, then
+    proceeds anyway -- a reading that cannot be taken, or a wait that times out, must not stop the
+    work; a launch that still fails now fails as a plain OOM rather than a silent repeat of one.
+    """
+    try:
+        floor = _mem_min_free_gb()
+        wait_s = _mem_wait_s()
+        avail = available_memory_gb()
+        if avail is None or avail >= floor:
+            return
+        print(
+            "  [memory-gate] %s: %.1f GB available, below the %.1f GB floor -- waiting (up to %.0fs)"
+            % (label or "device work", avail, floor, wait_s),
+            file=sys.stderr,
+            flush=True,
+        )
+        t0 = time.time()
+        while time.time() - t0 < wait_s:
+            time.sleep(_mem_poll_s())
+            avail = available_memory_gb()
+            if avail is None or avail >= floor:
+                if avail is not None:
+                    print(
+                        "  [memory-gate] recovered -- %.1f GB available, resuming" % avail,
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                return
+        print(
+            "  [memory-gate] STILL %.1f GB available after %.0fs; launching anyway, the OOM killer decides"
+            % (avail if avail is not None else -1.0, wait_s),
+            file=sys.stderr,
+            flush=True,
+        )
+    except Exception as exc:  # noqa: BLE001 -- a gate that cannot run must not stop the work
+        _warn_mem_gate_broken(exc)
+
+
+def _warn_mem_gate_broken(exc: BaseException) -> None:
+    """Say ONCE that memory protection is not running, then let the work continue."""
+    if _MEM_GATE_BROKEN[0]:
+        return
+    _MEM_GATE_BROKEN[0] = True
+    print(
+        "  [memory-gate] WARNING: THE MEMORY GATE CANNOT RUN (%s: %s). Device work will proceed "
+        "with NO memory protection for the rest of this run." % (type(exc).__name__, str(exc)[:120]),
+        file=sys.stderr,
+        flush=True,
+    )
