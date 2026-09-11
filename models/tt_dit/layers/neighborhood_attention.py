@@ -400,6 +400,32 @@ def _tiles_per_kv_chunk(gather_brick_count: int) -> int:
     return 1
 
 
+def _compute_kernel_config() -> ttnn.WormholeComputeKernelConfig:
+    """The numerics the fused SDPA runs with, so the bricked op is compared like for like.
+
+    Until 2026-09-11 the op, left unspecified, fell back to ``DeviceComputeKernelConfig{}``: LoFi
+    matmuls and the approximate exp. The general SDPA op that the replicated reference and the
+    older block-permute executor run defaults to HiFi2 with an exact exp
+    (``SDPAProgramConfig(exp_approx_mode=False)``). Measured 2026-09-10 on the stage-5 decode gate:
+    the LoFi/approx default was a uniform ~5 % RMSE/sigma floor against the replicated reference
+    (PCC 99.89 %, flat across frames and columns -- not a seam, not a shape). The op's binding now
+    defaults to HiFi2/exact as well; this helper keeps the choice explicit and A/B-able.
+
+    ``DIFFVAE_NA_FIDELITY=lofi|hifi2|hifi4`` and ``DIFFVAE_NA_APPROX_EXP=1`` are A/B knobs only.
+    """
+    fidelity = {
+        "lofi": ttnn.MathFidelity.LoFi,
+        "hifi2": ttnn.MathFidelity.HiFi2,
+        "hifi4": ttnn.MathFidelity.HiFi4,
+    }[os.environ.get("DIFFVAE_NA_FIDELITY", "hifi2").lower()]
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=fidelity,
+        math_approx_mode=os.environ.get("DIFFVAE_NA_APPROX_EXP") == "1",
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+
 def neighborhood_attention_3d_bricked(
     query: ttnn.Tensor,
     key: ttnn.Tensor,
@@ -486,6 +512,7 @@ def neighborhood_attention_3d_bricked(
             head_count=head_count,
             scale=scale,
             tiles_per_kv_chunk=_tiles_per_kv_chunk(plan["gather_brick_count"]),
+            compute_kernel_config=_compute_kernel_config(),
         )
 
     with _deep_prof(device, "unbrick-permute", category=decode_tree.RESHAPE):
@@ -951,6 +978,7 @@ def neighborhood_attention_3d_bricked_w_sharded(
             head_count=head_count,
             scale=scale,
             tiles_per_kv_chunk=_tiles_per_kv_chunk(plan["gather_brick_count"]),
+            compute_kernel_config=_compute_kernel_config(),
         )
 
     _tp_trace(device, f"op returned -> {tuple(attended.shape)}")
@@ -968,17 +996,20 @@ def neighborhood_attention_3d_bricked_w_sharded(
         # [head0 | head1 | ...] -- the layout the replicated out-proj already expects.
         with _deep_prof(device, "head-allgather", category=decode_tree.ALLGATHER):
             sites_local = query_bricked_sites if already_bricked else time_extent * height_extent * width_local
-            # One head per chip is what makes the next line a VIEW: the buffer is site-major with
-            # the channels inside a site, so (b, heads, sites, head_dim) only coincides with it
-            # when heads == 1. With more heads left per chip this would need a real transpose, and
-            # reshaping instead would silently interleave them.
-            assert head_count == 1, (
-                f"TP over heads expects the column-parallel qkv (DIFFVAE_TP_PROJ) to leave one "
-                f"head per chip; got {head_count}"
-            )
-            _tp_trace(device, "entering TP block")
-            flat = ttnn.reshape(owned, (batch, head_count, sites_local, head_dim))
-            _tp_trace(device, f"reshaped to {tuple(flat.shape)}")
+            _tp_trace(device, f"entering TP block (heads per chip={head_count})")
+            # The buffer is site-major with this chip's heads inside each site: (sites, heads, hd).
+            # The gather wants head-major (heads, sites, hd) so that dim=1 concatenates whole heads
+            # in device order, [chip0 heads | chip1 heads | ...] = global head order. With one head
+            # per chip (stage 5 under TP4) the two layouts are the same bytes and the reshape is a
+            # view; with more heads per chip (the deterministic stages: 4/2/2 at TP4) it is a real
+            # transpose -- reshaping instead would silently interleave heads and sites, which is what
+            # the assert this replaced was guarding against.
+            if head_count == 1:
+                flat = ttnn.reshape(owned, (batch, head_count, sites_local, head_dim))
+            else:
+                by_site = ttnn.reshape(owned, (batch, sites_local, head_count, head_dim))  # a view
+                flat = ttnn.permute(by_site, (0, 2, 1, 3))  # (b, heads, sites, hd), new buffer
+            _tp_trace(device, f"head-major -> {tuple(flat.shape)}")
             # Two things this block has to be careful about, both of which show up as a HANG
             # rather than an error:
             #

@@ -14,6 +14,7 @@
 #include <nanobind/stl/vector.h>
 
 #include "ttnn/operations/transformer/sdpa/device/kernels/neighborhood_kernel_args.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/transformer/sdpa/device/neighborhood_sdpa_device_operation.hpp"
 
 namespace ttnn::operations::transformer {
@@ -222,7 +223,17 @@ void bind_neighborhood_sdpa(nb::module_& mod) {
                 scale,
                 tiles_per_kv_chunk,
                 memory_config.value_or(query_tensor.memory_config()),
-                compute_kernel_config.value_or(DeviceComputeKernelConfig{}));
+                // Match the general SDPA op's numerics (sdpa.cpp: HiFi2) rather than
+                // DeviceComputeKernelConfig{} (LoFi, approximate exp). math_approx_mode also selects
+                // EXP_APPROX_MODE in this op's compute kernel, so it is exact here. A caller that
+                // wants something else passes compute_kernel_config explicitly.
+                init_device_compute_kernel_config(
+                    query_tensor.device()->arch(),
+                    compute_kernel_config,
+                    tt::tt_metal::MathFidelity::HiFi2,
+                    /*default_approx_mode=*/false,
+                    /*default_fp32_acc=*/false,
+                    /*default_l1_acc=*/false));
         },
         nb::arg("query_tensor"),
         nb::arg("key_tensor"),

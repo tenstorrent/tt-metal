@@ -594,3 +594,63 @@ def test_diffusion_nablock_op_sp_w_sharded_matches_op(*, mesh_device, sp_axis):
     got = to_torch_replicated(out_shard, mesh_axes=[None, None, sp_axis, None])
     got = got.reshape(sp, T, H, wl, dim).permute(1, 2, 0, 3, 4).reshape(1, 1, tokens, dim)
     assert_quality(ref, got, pcc=0.999)
+
+
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+@pytest.mark.parametrize("heads", [4, 8], ids=["one_head_per_chip", "two_heads_per_chip"])
+@pytest.mark.parametrize(
+    "dims, kernel", [((4, 8, 64), (3, 3, 3)), ((6, 16, 128), (3, 5, 5))], ids=["w_local8", "w_local16"]
+)
+def test_bricked_w_sharded_tp_matches_host(*, mesh_device, heads, dims, kernel):
+    """The BRICKED W-sharded executor under TP over heads, with more than one head per chip.
+
+    Stage 5 runs this path at one head per chip (4 heads, TP4), where the site-major op output
+    and the head-major layout the head all-gather wants are the same bytes. The deterministic
+    stages have 16/8/8 heads, so TP4 leaves 4/2/2 per chip and the reassembly needs a real
+    site-major -> head-major permute before the gather (plan B2). ``two_heads_per_chip`` is the
+    case that used to trip the ``head_count == 1`` assert; ``one_head_per_chip`` is the control
+    that the stage-5 path is unchanged. Heads are presharded over tp_axis here because the bricked
+    executor does not slice them itself (the column-parallel qkv does that in production).
+    """
+    from ...layers.neighborhood_attention import neighborhood_attention_3d_bricked_w_sharded
+
+    sp_axis, tp_axis = 1, 0  # W over the 8-axis, heads over the 4-axis
+    T, H, W = dims
+    head_dim = 64
+    sp = list(mesh_device.shape)[sp_axis]
+    tp = list(mesh_device.shape)[tp_axis]
+    assert heads % tp == 0 and W % sp == 0
+
+    torch.manual_seed(0)
+    q, k, v = (torch.randn(1, T, H, W, heads, head_dim, dtype=torch.float32) for _ in range(3))
+    expected = na3d_torch(q, k, v, kernel, scale=1.0).reshape(1, T, H, W, heads * head_dim)
+
+    shard_axes = [None, None, None, sp_axis, tp_axis, None]  # W over sp_axis, heads over tp_axis
+    q_tt, k_tt, v_tt = (
+        from_torch(x, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=shard_axes)
+        for x in (q, k, v)
+    )
+    ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    out = neighborhood_attention_3d_bricked_w_sharded(
+        q_tt,
+        k_tt,
+        v_tt,
+        dims=dims,
+        kernel_size=kernel,
+        sp_axis=sp_axis,
+        ccl_manager=ccl_manager,
+        scale=1.0,
+        tp_axis=tp_axis,
+        heads_presharded=True,
+    )
+
+    # The TP branch returns (1, 1, sites_local, heads * head_dim) TILE, W-sharded over sp_axis and
+    # replicated over tp_axis, with sites in (t, h, w_local) order -- so concatenating the shards on
+    # the site axis interleaves W-bands, and the reassembly has to put W back together explicitly.
+    assert tuple(out.shape) == (1, 1, T * H * (W // sp), heads * head_dim), tuple(out.shape)
+    got = to_torch_replicated(out, mesh_axes=[None, None, sp_axis, None])
+    got = got.reshape(sp, T, H, W // sp, heads * head_dim).permute(1, 2, 0, 3, 4).reshape(1, T, H, W, heads * head_dim)
+    assert_quality(expected, got, pcc=0.999)

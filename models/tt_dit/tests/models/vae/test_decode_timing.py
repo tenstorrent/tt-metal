@@ -99,6 +99,13 @@ def test_decode_wsp_timing(*, mesh_device, latent_hw, decode_tree):
     # uniform across the mesh), which means stage 5 runs the FULL volume on every chip rather than
     # 1/sp of it -- the comparison is honest about speed but not about memory.
     stage5_b = os.environ.get("DIFFVAE_STAGE5_BACKEND", "op_sp_w_sharded")
+    # DIFFVAE_STAGES_SP_AXIS / DIFFVAE_STAGES_TP_AXIS move the deterministic stages' W-shard and
+    # head-TP onto the other mesh axes (0 = the size-4 rows, 1 = the size-8 cols) without touching
+    # stage 5. Prices PLAN_retire_block_permute.md D1 option 1: W over the size-4 axis gives a local
+    # width of 30 at 1080p stages 2-3 (brick-alignable) but breaks the same-axis W-sharded
+    # deterministic->stage-5 handoff, so the context is gathered and re-sharded instead.
+    stages_sp_axis = int(os.environ.get("DIFFVAE_STAGES_SP_AXIS", 1))
+    stages_tp_axis = int(os.environ["DIFFVAE_STAGES_TP_AXIS"]) if "DIFFVAE_STAGES_TP_AXIS" in os.environ else tp_axis
     dec = DiffVAEDecoder(
         config,
         mesh_device=mesh_device,
@@ -107,8 +114,8 @@ def test_decode_wsp_timing(*, mesh_device, latent_hw, decode_tree):
         stage5_sp_axis=1,
         stage5_tp_axis=tp_axis,
         stages_na3d_backend="op_sp_w_sharded" if stages_wsp else None,
-        stages_sp_axis=1 if stages_wsp else None,
-        stages_tp_axis=tp_axis if stages_wsp else None,  # 2-D SP x TP for the det stages too
+        stages_sp_axis=stages_sp_axis if stages_wsp else None,
+        stages_tp_axis=stages_tp_axis if stages_wsp else None,  # 2-D SP x TP for the det stages too
     )
     dec.load_checkpoint(CHECKPOINT)
 
@@ -123,7 +130,7 @@ def test_decode_wsp_timing(*, mesh_device, latent_hw, decode_tree):
         stage5_b if stage5_b != "op_sp_w_sharded" else ("fused" if os.environ.get("DIFFVAE_SP_FUSED") == "1" else "op")
     )
     tp = "+TP4" if tp_axis is not None else ""
-    det = "+detSP" if stages_wsp else ""
+    det = f"+detSP(sp_axis={stages_sp_axis},tp_axis={stages_tp_axis})" if stages_wsp else ""
     print(
         f"\n[decode W-SP({backend}){tp}{det} 4x8] latent(1,{config['in_channels']},{t_lat},{lh},{lw}) -> {px_shape}: {dt * 1000:8.0f} ms\n"
     )

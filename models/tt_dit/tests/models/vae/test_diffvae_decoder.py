@@ -240,8 +240,12 @@ def test_decode_matches_upstream(*, decoder):
 # path from production's t=84. latent_t 4 gives t=21, comfortably clear of it. Covering both is
 # what distinguishes "broken at degenerate t" from "broken generally".
 @pytest.mark.parametrize("latent_t", [2, 4], ids=["t_at_window", "t_clear_of_window"])
+# latent W 8 puts stage 5 at W=64, a local width of 8 against a 6-site halo -- the tightest shard the
+# brick chooser accepts. W 16 doubles the local width to 16, so a miss that appears only at 8 is
+# the near-full-width halo exchange, not the op.
+@pytest.mark.parametrize("latent_w", [8, 16], ids=["w_local8", "w_local16"])
 @pytest.mark.diffvae_gate
-def test_decode_stage5_bricked_matches_replicated(*, mesh_device, sp_axis, latent_t):
+def test_decode_stage5_bricked_matches_replicated(*, mesh_device, sp_axis, latent_t, latent_w):
     """Full decode with stage 5 on the BRICKED backend matches the replicated decode.
 
     The end-to-end companion to test_stage5_parity_w_sharded_bricked. Same shape as
@@ -261,7 +265,7 @@ def test_decode_stage5_bricked_matches_replicated(*, mesh_device, sp_axis, laten
         pytest.skip(f"missing {CHECKPOINT}")
     config = decoder_config(CHECKPOINT)
     torch.manual_seed(0)
-    latent = torch.randn(1, config["in_channels"], latent_t, 8, 8)
+    latent = torch.randn(1, config["in_channels"], latent_t, 8, latent_w)
 
     replicated = DiffVAEDecoder(config, mesh_device=mesh_device)
     replicated.load_checkpoint(CHECKPOINT)
@@ -287,4 +291,11 @@ def test_decode_stage5_bricked_matches_replicated(*, mesh_device, sp_axis, laten
     assert tuple(pixels_bricked.shape) == tuple(
         pixels_rep.shape
     ), f"{tuple(pixels_bricked.shape)} != {tuple(pixels_rep.shape)}"
+    if out := os.environ.get("DIFFVAE_DUMP_PIXELS"):
+        # Both arms, so a miss can be localised (a seam error sits at the W-shard boundaries,
+        # a math error is everywhere). Suffixed by latent_t and latent_w so the params do not overwrite.
+        path = Path(out).with_name(f"{Path(out).stem}_t{latent_t}_w{latent_w}{Path(out).suffix}")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save({"replicated": pixels_rep.cpu(), "bricked": pixels_bricked.cpu()}, path)
+        print(f"\nwrote both arms {tuple(pixels_rep.shape)} to {path}")
     assert_quality(pixels_rep, pixels_bricked, pcc=0.999)
