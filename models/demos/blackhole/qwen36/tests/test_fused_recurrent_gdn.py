@@ -375,3 +375,192 @@ def test_fused_verify_perf(mesh_device, K):
     logger.info(
         f"[verify perf] K={K} (T={T})  sequential={ms_seq:.4f} ms  fused={ms_f:.4f} ms  speedup={ms_seq/ms_f:.2f}x"
     )
+
+
+# ---------------------------------------------------------------------------
+# Batched (B>1) verify + "ring" mode (deferred per-head initial-state select, in place)
+# ---------------------------------------------------------------------------
+def _ref_per_token(q, k, v, beta, g, s0):
+    """FLA-naive multi-token recurrence with the op's internal L2-norm applied to q/k."""
+    return naive_recurrent_per_token_state(l2norm_fla(q), l2norm_fla(k), v, beta, g, scale=SCALE, initial_state=s0)
+
+
+def _ring_from_states(states, T, B, HV, DK_, DV_):
+    """[B,T,HV,K,V] per-token states -> the [T*BH,K,V] ring layout (block t*BH + b*HV + hv)."""
+    return states.permute(1, 0, 2, 3, 4).reshape(T * B * HV, DK_, DV_).contiguous()
+
+
+def _to_dev_rm_u32(mesh_device, t):
+    return ttnn.from_torch(
+        t.to(torch.uint32) if t.dtype != torch.uint32 else t,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+@_needs_op
+@torch.no_grad()
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize(
+    "B, HV, T",
+    [(2, 32, 4), (3, 32, 4), (2, 32, 8), (8, 8, 4)],
+    ids=["b2h32t4", "b3h32t4", "b2h32t8", "b8h8t4"],
+)
+def test_fused_verify_batched_matches_fla_naive(mesh_device, B, HV, T):
+    """Kernel 2 at B>1 (multi-user verify), non-ring path: per-token o and states vs FLA naive.
+
+    One Tensix core per (b, hv) head, so BH = B*HV must fit the compute grid. Also exercises the
+    B>1 per-token-state relayout in the host wrapper (token-major [T,B,HV,K,V] -> [B,T,HV,K,V]).
+    """
+    q, k, v, beta, g = make_gdn_inputs(T=T, H=HV, Dk=DK, Dv=DV, B=B, seed=B * 10 + T)
+    s0 = torch.randn(B, HV, DK, DV, dtype=torch.float32) * 0.1
+    o_ref, st_ref = _ref_per_token(q, k, v, beta, g, s0)
+
+    q_tt, k_tt, v_tt = (_to_dev(mesh_device, x) for x in (q, k, v))
+    beta_tt, g_tt, s0_tt = _to_dev(mesh_device, beta), _to_dev(mesh_device, g), _to_dev(mesh_device, s0)
+    o_tt, st_tt = fused_recurrent_gated_delta_rule_ttnn(
+        q_tt,
+        k_tt,
+        v_tt,
+        beta_tt,
+        g_tt,
+        scale=SCALE,
+        initial_state=s0_tt,
+        device=mesh_device,
+        output_per_token_state=True,
+    )
+    o_dev = _dev0(mesh_device, o_tt, first=B)  # [B,T,HV,V]
+    st_dev = _dev0(mesh_device, st_tt, first=B)  # [B,T,HV,K,V]
+
+    p_o = pcc(o_dev, o_ref)
+    p_s = pcc(st_dev, st_ref)
+    per_user = [pcc(st_dev[b], st_ref[b]) for b in range(B)]
+    logger.info(
+        f"[batched verify] B={B} HV={HV} T={T} PCC o={p_o:.6f} state={p_s:.6f} per-user={[f'{x:.5f}' for x in per_user]}"
+    )
+    assert p_o > 0.999, f"output PCC {p_o}"
+    assert p_s > 0.999, f"state PCC {p_s}"
+    assert min(per_user) > 0.999, f"per-user state min PCC {min(per_user)}"
+
+
+@_needs_op
+@torch.no_grad()
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize(
+    "B, HV, T",
+    [(1, 32, 4), (2, 32, 4), (8, 8, 4)],
+    ids=["b1h32t4", "b2h32t4", "b8h8t4"],
+)
+def test_fused_verify_ring_select(mesh_device, B, HV, T):
+    """Ring mode: head h starts from ring block idx[h] and writes its per-token states back into
+    the SAME buffer.
+
+    Window A seeds token-slot 0 (blocks [0,BH)) with S0 and uses idx[h] = h, so it is the ordinary
+    verify. Window B then commits a different accepted slot mi[b] per user by setting
+    idx[b*HV+hv] = (mi[b]*B + b)*HV + hv -- i.e. ring block mi[b]*BH + h, which satisfies the
+    idx[h] % BH == h contract. No copy, no extra dispatch.
+    """
+    BH = B * HV
+    nblk = T * BH
+
+    # ---- window A: ring = zeros, token-slot 0 seeded with S0, idx = identity ----
+    S0 = torch.randn(B, HV, DK, DV, dtype=torch.float32) * 0.1
+    ring = torch.zeros(nblk, DK, DV, dtype=torch.float32)
+    ring[:BH] = S0.reshape(BH, DK, DV)  # block h (t=0 slot) <- S0[b, hv], h = b*HV + hv
+    ring_tt = _to_dev(mesh_device, ring)
+    ring_addr = ring_tt.buffer_address()
+    idx_a = torch.arange(BH, dtype=torch.int64)
+    idx_a_tt = _to_dev_rm_u32(mesh_device, idx_a)
+
+    qa, ka, va, ba, ga = make_gdn_inputs(T=T, H=HV, Dk=DK, Dv=DV, B=B, seed=100 + B)
+    o_refA, stA = _ref_per_token(qa, ka, va, ba, ga, S0)
+
+    qa_tt, ka_tt, va_tt = (_to_dev(mesh_device, x) for x in (qa, ka, va))
+    ba_tt, ga_tt = _to_dev(mesh_device, ba), _to_dev(mesh_device, ga)
+    oA_tt, stA_tt = fused_recurrent_gated_delta_rule_ttnn(
+        qa_tt,
+        ka_tt,
+        va_tt,
+        ba_tt,
+        ga_tt,
+        scale=SCALE,
+        initial_state=ring_tt,
+        device=mesh_device,
+        output_per_token_state=True,
+        initial_state_block_idx=idx_a_tt,
+    )
+    # The state output IS the ring (same buffer, same shape) -- no copy, no relayout.
+    assert stA_tt.buffer_address() == ring_addr, "ring mode must return the initial_state buffer in place"
+    assert list(stA_tt.shape) == list(ring_tt.shape), f"ring shape changed: {stA_tt.shape} vs {ring_tt.shape}"
+
+    oA = _dev0(mesh_device, oA_tt, first=B)
+    ringA = _dev0(mesh_device, ring_tt, first=nblk)  # read the INPUT handle: proves in-place
+    p_oA = pcc(oA, o_refA)
+    p_rA = pcc(ringA, _ring_from_states(stA, T, B, HV, DK, DV))
+    logger.info(f"[ring A] B={B} HV={HV} T={T} PCC o={p_oA:.6f} ring={p_rA:.6f}")
+    assert p_oA > 0.999, f"window A output PCC {p_oA}"
+    assert p_rA > 0.999, f"window A ring PCC {p_rA}"
+
+    # ---- window B: commit a different accepted slot per user, then verify again ----
+    # mi covers 0 and T-1; the rest is a fixed pseudo-random spread.
+    mi = [0, T - 1] + [(3 * b + 1) % T for b in range(B - 2)]
+    mi = mi[:B]
+    idx_b = torch.tensor([(mi[b] * B + b) * HV + hv for b in range(B) for hv in range(HV)], dtype=torch.int64)
+    assert all(int(idx_b[h]) % BH == h for h in range(BH)), "idx[h] % BH == h contract"
+    idx_b_tt = _to_dev_rm_u32(mesh_device, idx_b)
+
+    s0B = torch.stack([stA[b, mi[b]] for b in range(B)], 0)  # [B,HV,K,V]
+    qb, kb, vb, bb, gb = make_gdn_inputs(T=T, H=HV, Dk=DK, Dv=DV, B=B, seed=200 + B)
+    o_refB, stB = _ref_per_token(qb, kb, vb, bb, gb, s0B)
+    ring_expected = _ring_from_states(stB, T, B, HV, DK, DV)
+
+    qb_tt, kb_tt, vb_tt = (_to_dev(mesh_device, x) for x in (qb, kb, vb))
+    bb_tt, gb_tt = _to_dev(mesh_device, bb), _to_dev(mesh_device, gb)
+
+    def run_window_b():
+        o_tt, st_tt = fused_recurrent_gated_delta_rule_ttnn(
+            qb_tt,
+            kb_tt,
+            vb_tt,
+            bb_tt,
+            gb_tt,
+            scale=SCALE,
+            initial_state=ring_tt,
+            device=mesh_device,
+            output_per_token_state=True,
+            initial_state_block_idx=idx_b_tt,
+        )
+        assert st_tt.buffer_address() == ring_addr
+        return _dev0(mesh_device, o_tt, first=B), _dev0(mesh_device, ring_tt, first=nblk)
+
+    cache_after_a = mesh_device.num_program_cache_entries()
+    oB, ringB = run_window_b()
+    # Window B reuses the cached program with a DIFFERENT idx buffer: no new cache entry, and the
+    # right answer only if the idx buffer address rebinds on the cache hit.
+    cache_after_b = mesh_device.num_program_cache_entries()
+    logger.info(f"[ring] program cache entries: after A={cache_after_a} after B={cache_after_b}")
+    assert cache_after_b == cache_after_a, "window B should hit the program cache (idx address rebinds)"
+    p_oB = pcc(oB, o_refB)
+    p_rB = pcc(ringB, ring_expected)
+    per_tok = [pcc(ringB.reshape(T, B, HV, DK, DV)[t], stB[:, t]) for t in range(T)]
+    logger.info(f"[ring B] mi={mi} PCC o={p_oB:.6f} ring={p_rB:.6f} per-tok={[f'{x:.5f}' for x in per_tok]}")
+    assert p_oB > 0.999, f"window B output PCC {p_oB}"
+    assert p_rB > 0.999, f"window B ring PCC {p_rB}"
+    assert min(per_tok) > 0.999, f"window B per-token ring min PCC {min(per_tok)}"
+
+    # ---- determinism: re-seed the ring to the post-A state and re-run window B ----
+    ttnn.copy_host_to_device_tensor(
+        ttnn.from_torch(
+            ringA,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        ),
+        ring_tt,
+    )
+    oB2, ringB2 = run_window_b()
+    assert torch.equal(oB, oB2), "ring mode output is not deterministic across identical runs"
+    assert torch.equal(ringB, ringB2), "ring mode state is not deterministic across identical runs"
