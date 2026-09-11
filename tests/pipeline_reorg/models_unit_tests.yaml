@@ -198,7 +198,7 @@
     pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_attention_tp.py
     pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_gdn_tp.py -k "not test_gdn_tp_prefill"
     pytest --timeout 60 models/demos/blackhole/qwen36/tests/test_mlp_tp.py
-    pytest --timeout 600 models/demos/blackhole/qwen36/tests/test_model_tp.py -k "not test_model_tp_decode_batched and not test_model_tp_long_prefill_traced"
+    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model_tp.py -k "not test_model_tp_decode_batched and not test_model_tp_long_prefill_traced"
     # test_all_buckets_fit_trace_region is deselected here and runs last on its own budget (see below);
     # the two kept here are host-only (monkeypatched, no device), so 120 s is ample.
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_decode_bucketing.py -k "test_bucket_warmup_compiles_all_widths_before_capture or test_bucket_trace_teardown_releases_all_stores"
