@@ -192,9 +192,8 @@ def test_layer_norm_welford_large_offset(device, width, has_residual):
     )
     actual = ttnn.to_torch(output).to(torch.float64)
 
-    error = actual - reference
     assert torch.isfinite(actual).all()
-    assert error.abs().max() < 0.025
+    assert_numeric_metrics(reference, actual, rtol=0, atol=0.025, frobenius_threshold=0.025)
     assert actual.mean(dim=-1).abs().max() < 0.004
 
 
@@ -230,7 +229,7 @@ def test_layer_norm_welford_fp32_residual_large_offset(device, rows, width):
 
     error = actual - reference
     assert torch.isfinite(actual).all()
-    assert error.abs().max() < 0.025
+    assert_numeric_metrics(reference, actual, rtol=0, atol=0.025, frobenius_threshold=0.025)
     assert error.abs().mean() < 0.004
 
 
@@ -292,7 +291,7 @@ def test_layer_norm_welford_fp32_finalizer_large_offset(device, rows, width, has
 
     error = actual - reference
     assert torch.isfinite(actual).all()
-    assert error.abs().max() < 0.025
+    assert_numeric_metrics(reference, actual, rtol=0, atol=0.025, frobenius_threshold=0.025)
     assert error.abs().mean() < 0.004
 
 
@@ -510,7 +509,7 @@ def test_layer_norm_fp32_residual_with_row_major_affine(device, has_gamma, has_b
     actual = ttnn.to_torch(output).to(torch.float64)
     error = actual - reference
     assert torch.isfinite(actual).all()
-    assert error.abs().max() < 0.025
+    assert_numeric_metrics(reference, actual, rtol=0, atol=0.025, frobenius_threshold=0.025)
     assert error.abs().mean() < 0.004
 
 
@@ -961,11 +960,12 @@ def test_layer_norm_bfp8_compensated_subtraction_tile_stride(device, shape, gamm
     # Check each tile separately so correct first tiles cannot hide subsequent
     # tiles with misaddressed mantissas or shared exponents.
     for tile_start in range(0, width, 32):
-        torch.testing.assert_close(
-            actual[..., tile_start : tile_start + 32],
+        assert_numeric_metrics(
             reference[..., tile_start : tile_start + 32],
+            actual[..., tile_start : tile_start + 32],
             rtol=0.02,
             atol=0.05,
+            frobenius_threshold=0.05,
         )
 
 

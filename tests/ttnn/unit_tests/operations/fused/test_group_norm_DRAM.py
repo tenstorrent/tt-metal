@@ -117,8 +117,9 @@ def test_group_norm_fp32_large_offset_DRAM(device, has_affine, num_groups, const
     if constant is not None:
         # Exact equality also detects small means flushed by premature scaling.
         assert torch.equal(actual, reference)
-    assert error.abs().max() < 0.015
-    assert error.abs().mean() < 0.004
+    else:
+        assert_numeric_metrics(reference, actual, rtol=0, atol=0.015, frobenius_threshold=0.02)
+        assert error.abs().mean() < 0.004
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
