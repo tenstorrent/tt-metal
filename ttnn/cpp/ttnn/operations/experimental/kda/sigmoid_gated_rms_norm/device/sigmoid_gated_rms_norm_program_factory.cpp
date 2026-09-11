@@ -79,10 +79,8 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
     namespace rh = ttnn::kernel_lib::host;
     const auto [reduce_fidelity, reduce_approx, reduce_fp32, reduce_l1_acc, reduce_full_sync] =
         get_compute_kernel_config_args(arch, attrs.compute_kernel_config);
-    const TensorLayout reduce_layout(DataType::FLOAT32, PageConfig(Layout::TILE), MemoryConfig{});
     auto reduce_plan = rh::make_reduce_plan(
-        TensorSpec(Shape{1 * TILE_HEIGHT, attrs.value_dim}, reduce_layout),
-        TensorSpec(Shape{1 * TILE_HEIGHT, 1}, reduce_layout),
+        rh::ReduceBlockSpec::tiled(1 * TILE_HEIGHT, attrs.value_dim, DataType::FLOAT32, DataType::FLOAT32),
         ReduceOpMath::SUM,
         ReduceOpDim::W,
         1.0F / attrs.value_dim,

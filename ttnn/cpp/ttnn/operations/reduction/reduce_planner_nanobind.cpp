@@ -230,35 +230,88 @@ void bind_reduce_planner(nb::module_& mod) {
             nb::arg("auxiliary_cb_id"),
             "Serialize this single call's independent auxiliary-CB record.");
 
+    nb::class_<host::ReduceBlockSpec>(planner, "ReduceBlockSpec")
+        .def(
+            "__init__",
+            [](host::ReduceBlockSpec* self,
+               uint32_t logical_h,
+               uint32_t logical_w,
+               tt::tt_metal::DataType input_dtype,
+               tt::tt_metal::DataType output_dtype,
+               uint32_t batches,
+               std::optional<uint32_t> padded_h,
+               std::optional<uint32_t> padded_w,
+               tt::tt_metal::Layout input_layout,
+               tt::tt_metal::Layout output_layout,
+               tt::tt_metal::Tile input_tile,
+               tt::tt_metal::Tile output_tile,
+               uint32_t input_row_stride_tiles,
+               std::optional<uint32_t> resident_input_tiles,
+               std::optional<uint32_t> resident_output_tiles) {
+                auto block =
+                    host::ReduceBlockSpec::tiled(logical_h, logical_w, input_dtype, output_dtype, batches, input_tile);
+                block.padded_h = padded_h.value_or(block.padded_h);
+                block.padded_w = padded_w.value_or(block.padded_w);
+                block.input_layout = input_layout;
+                block.output_layout = output_layout;
+                block.output_tile = output_tile;
+                block.input_row_stride_tiles = input_row_stride_tiles;
+                block.resident_input_tiles = resident_input_tiles;
+                block.resident_output_tiles = resident_output_tiles;
+                new (self) host::ReduceBlockSpec(std::move(block));
+            },
+            nb::arg("logical_h"),
+            nb::arg("logical_w"),
+            nb::arg("input_dtype"),
+            nb::arg("output_dtype"),
+            nb::kw_only(),
+            nb::arg("batches") = 1,
+            nb::arg("padded_h") = nb::none(),
+            nb::arg("padded_w") = nb::none(),
+            nb::arg("input_layout") = tt::tt_metal::Layout::TILE,
+            nb::arg("output_layout") = tt::tt_metal::Layout::TILE,
+            nb::arg("input_tile") = tt::tt_metal::Tile{},
+            nb::arg("output_tile") = tt::tt_metal::Tile{},
+            nb::arg("input_row_stride_tiles") = 0,
+            nb::arg("resident_input_tiles") = nb::none(),
+            nb::arg("resident_output_tiles") = nb::none(),
+            "Local work for one reduction call on one core. Padding defaults to whole tiles; no tensor placement is "
+            "inferred.")
+        .def_rw("logical_h", &host::ReduceBlockSpec::logical_h)
+        .def_rw("logical_w", &host::ReduceBlockSpec::logical_w)
+        .def_rw("padded_h", &host::ReduceBlockSpec::padded_h)
+        .def_rw("padded_w", &host::ReduceBlockSpec::padded_w)
+        .def_rw("batches", &host::ReduceBlockSpec::batches)
+        .def_rw("input_dtype", &host::ReduceBlockSpec::input_dtype)
+        .def_rw("output_dtype", &host::ReduceBlockSpec::output_dtype)
+        .def_rw("input_layout", &host::ReduceBlockSpec::input_layout)
+        .def_rw("output_layout", &host::ReduceBlockSpec::output_layout)
+        .def_rw("input_tile", &host::ReduceBlockSpec::input_tile)
+        .def_rw("output_tile", &host::ReduceBlockSpec::output_tile)
+        .def_rw("input_row_stride_tiles", &host::ReduceBlockSpec::input_row_stride_tiles)
+        .def_rw("resident_input_tiles", &host::ReduceBlockSpec::resident_input_tiles)
+        .def_rw("resident_output_tiles", &host::ReduceBlockSpec::resident_output_tiles);
+
     nb::class_<host::ReduceCallConfig>(planner, "ReduceCallConfig")
         .def(
             "__init__",
             [](host::ReduceCallConfig* self,
-               const tt::tt_metal::TensorSpec& input_spec,
-               const tt::tt_metal::TensorSpec& output_spec,
+               host::ReduceBlockSpec block,
                tt::tt_metal::ReduceOpMath reduce_math,
                tt::tt_metal::ReduceOpDim reduce_dim,
                float scalar,
                ReduceFp32Mode fp32_mode,
                std::optional<std::size_t> max_input_cb_bytes) {
                 new (self) host::ReduceCallConfig{
-                    .input_spec = input_spec,
-                    .output_spec = output_spec,
-                    .reduce_math = reduce_math,
-                    .reduce_dim = reduce_dim,
-                    .scalar = scalar,
-                    .fp32_mode = fp32_mode,
-                    .max_input_cb_bytes = max_input_cb_bytes};
+                    std::move(block), reduce_math, reduce_dim, scalar, fp32_mode, max_input_cb_bytes};
             },
-            nb::arg("input_spec"),
-            nb::arg("output_spec"),
+            nb::arg("block"),
             nb::arg("reduce_math"),
             nb::arg("reduce_dim"),
             nb::arg("scalar"),
             nb::arg("fp32_mode"),
             nb::arg("max_input_cb_bytes") = nb::none())
-        .def_rw("input_spec", &host::ReduceCallConfig::input_spec)
-        .def_rw("output_spec", &host::ReduceCallConfig::output_spec)
+        .def_rw("block", &host::ReduceCallConfig::block)
         .def_rw("reduce_math", &host::ReduceCallConfig::reduce_math)
         .def_rw("reduce_dim", &host::ReduceCallConfig::reduce_dim)
         .def_rw("scalar", &host::ReduceCallConfig::scalar)
@@ -333,16 +386,14 @@ void bind_reduce_planner(nb::module_& mod) {
     planner.def(
         "make_reduce_plan",
         nb::overload_cast<
-            const tt::tt_metal::TensorSpec&,
-            const tt::tt_metal::TensorSpec&,
+            const host::ReduceBlockSpec&,
             tt::tt_metal::ReduceOpMath,
             tt::tt_metal::ReduceOpDim,
             float,
             ReduceFp32Mode,
             const host::ReduceHardwareConfig&,
             std::optional<std::size_t>>(&host::make_reduce_plan),
-        nb::arg("input_spec"),
-        nb::arg("output_spec"),
+        nb::arg("block"),
         nb::arg("reduce_math"),
         nb::arg("reduce_dim"),
         nb::arg("scalar"),

@@ -57,10 +57,8 @@ tt::tt_metal::ProgramDescriptor HCSumReduceProgramFactory::create_descriptor(
     // call and the matching persistent auxiliary-tile recipe.
     namespace reduce_host = ttnn::kernel_lib::host;
     const auto intermediate_dtype = input_format == tt::DataFormat::Float32 ? DataType::FLOAT32 : DataType::BFLOAT16;
-    const TensorLayout intermediate_layout(intermediate_dtype, PageConfig(Layout::TILE), MemoryConfig{});
     auto reduce_plan = reduce_host::make_reduce_plan(
-        TensorSpec(Shape{32, 32}, intermediate_layout),
-        TensorSpec(Shape{1, 32}, intermediate_layout),
+        reduce_host::ReduceBlockSpec::tiled(32, 32, intermediate_dtype, intermediate_dtype),
         ReduceOpMath::SUM,
         ReduceOpDim::H,
         1.0F,

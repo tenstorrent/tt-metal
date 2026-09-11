@@ -365,20 +365,17 @@ def create_program_descriptor(
                 (
                     CB_IN0,
                     planner.ReduceCallConfig(
-                        input_spec=input_tensors[0].spec,
-                        output_spec=ttnn.TensorSpec(
-                            ttnn.Shape([32, 1]),
+                        block=planner.ReduceBlockSpec(
+                            32,
+                            num_tiles * 32,
                             ttnn.bfloat16,
-                            ttnn.TILE_LAYOUT,
-                            ttnn.TensorMemoryLayout.INTERLEAVED,
-                            None,
-                            ttnn.BufferType.L1,
+                            ttnn.bfloat16,
+                            resident_input_tiles=num_tiles,
                         ),
                         reduce_math=planner.ReduceMath.SUM,
                         reduce_dim=planner.ReduceDimension.ROW,
                         scalar=1.0,
                         fp32_mode=planner.ReduceFp32Mode.FAST,
-                        max_input_cb_bytes=0,
                     ),
                 )
             ],

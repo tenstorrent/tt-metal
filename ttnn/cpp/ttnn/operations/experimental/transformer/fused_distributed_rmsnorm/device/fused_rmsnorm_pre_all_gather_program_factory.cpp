@@ -99,8 +99,6 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPreAllGatherProgramFactory::create_d
     const uint32_t output_cb_id = tt::CBIndex::c_3;
     const uint32_t accumulator_cb_id = tt::CBIndex::c_4;
     namespace rh = ttnn::kernel_lib::host;
-    const TensorLayout intermediate_layout(DataType::FLOAT32, PageConfig(Layout::TILE), MemoryConfig{});
-    const TensorLayout result_layout(output_tensor.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
     const uint32_t num_reduce_calls = tt::div_up(num_tile_cols, dst_reg_count);
     std::vector<rh::ReduceCbConfig> reductions;
     for (uint32_t i = 0; i < std::min(3u, num_reduce_calls); ++i) {
@@ -111,8 +109,7 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPreAllGatherProgramFactory::create_d
         reductions.emplace_back(
             intermediate_cb_id,
             rh::ReduceCallConfig{
-                TensorSpec(Shape{TILE_HEIGHT, columns}, intermediate_layout),
-                TensorSpec(Shape{TILE_HEIGHT, 1}, result_layout),
+                rh::ReduceBlockSpec::tiled(TILE_HEIGHT, columns, DataType::FLOAT32, output_tensor.dtype()),
                 ReduceOpMath::SUM,
                 ReduceOpDim::W,
                 1.0F,

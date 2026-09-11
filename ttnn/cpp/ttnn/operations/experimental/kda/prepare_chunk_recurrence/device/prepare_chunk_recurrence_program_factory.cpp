@@ -114,10 +114,8 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
     namespace rh = ttnn::kernel_lib::host;
     const auto [reduce_fidelity, reduce_approx, reduce_fp32, reduce_l1_acc, reduce_full_sync] =
         get_compute_kernel_config_args(arch, attrs.compute_kernel_config);
-    const TensorLayout reduce_layout(DataType::FLOAT32, PageConfig(Layout::TILE), MemoryConfig{});
     auto reduce_plan = rh::make_reduce_plan(
-        TensorSpec(Shape{Ct * TILE_HEIGHT, attrs.key_dim}, reduce_layout),
-        TensorSpec(Shape{Ct * TILE_HEIGHT, 1}, reduce_layout),
+        rh::ReduceBlockSpec::tiled(Ct * TILE_HEIGHT, attrs.key_dim, DataType::FLOAT32, DataType::FLOAT32),
         ReduceOpMath::SUM,
         ReduceOpDim::W,
         1.0F,

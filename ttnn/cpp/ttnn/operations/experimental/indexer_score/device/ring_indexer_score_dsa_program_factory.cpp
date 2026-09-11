@@ -459,8 +459,7 @@ ProgramDescriptor build_ring_program_descriptor(
     const tt::tt_metal::TensorLayout pool_layout(
         DataType::BFLOAT16, tt::tt_metal::PageConfig(Layout::TILE), MemoryConfig{});
     auto pool_plan = rh::make_reduce_plan(
-        tt::tt_metal::TensorSpec(Shape{1, 32, 32}, pool_layout),
-        tt::tt_metal::TensorSpec(Shape{1, 32, 1}, pool_layout),
+        rh::ReduceBlockSpec::tiled(32, 32, DataType::BFLOAT16, DataType::BFLOAT16),
         tt::tt_metal::ReduceOpMath::MAX,
         tt::tt_metal::ReduceOpDim::W,
         1.0F,

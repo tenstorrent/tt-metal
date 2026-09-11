@@ -84,9 +84,7 @@ ttnn::kernel_lib::host::ReducePlan make_pre_norm_reduce_plan(
     const ttnn::kernel_lib::host::ReduceHardwareConfig& hardware) {
     using namespace ttnn::kernel_lib::host;
     auto plan = make_reduce_plan(
-        TensorSpec(
-            Shape{32, logical_width}, TensorLayout(intermediate_dtype, PageConfig(Layout::TILE), MemoryConfig{})),
-        TensorSpec(Shape{32, 1}, TensorLayout(output_dtype, PageConfig(Layout::TILE), MemoryConfig{})),
+        ReduceBlockSpec::tiled(32, logical_width, intermediate_dtype, output_dtype),
         ReduceOpMath::SUM,
         ReduceOpDim::W,
         1.0F,

@@ -365,9 +365,12 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     const tt::tt_metal::TensorLayout pool_layout(
         DataType::BFLOAT16, tt::tt_metal::PageConfig(Layout::TILE), MemoryConfig{});
     auto pool_plan = rh::make_reduce_plan(
-        tt::tt_metal::TensorSpec(
-            Shape{QC, (block_pool ? blocks_per_unit : 1) * 32, (block_pool ? block_tiles : 1) * 32}, pool_layout),
-        tt::tt_metal::TensorSpec(Shape{QC, (block_pool ? blocks_per_unit : 1) * 32, 1}, pool_layout),
+        rh::ReduceBlockSpec::tiled(
+            (block_pool ? blocks_per_unit : 1) * 32,
+            (block_pool ? block_tiles : 1) * 32,
+            DataType::BFLOAT16,
+            DataType::BFLOAT16,
+            (QC)),
         tt::tt_metal::ReduceOpMath::MAX,
         tt::tt_metal::ReduceOpDim::W,
         1.0F,

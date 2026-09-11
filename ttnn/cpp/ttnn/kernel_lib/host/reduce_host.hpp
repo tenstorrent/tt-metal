@@ -10,7 +10,9 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/spec/layout/layout.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
+#include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/arch.hpp>
 
@@ -159,12 +161,43 @@ struct ReducePlan {
     const ReduceCbRequirement* find_cb(ReduceCbRole role) const;
 };
 
-// Per-input configuration for one call in a cross-call reduction sequence. TensorSpec owns the shape, data
-// type, tile, and memory-layout information; the optional zero-byte cap retains its single-call alias meaning.
+// The block consumed by one reduce invocation on one core. Shapes are in elements;
+// padded extents describe the traversed block, independently of its allocation.
+// The factory owns core assignment, tensor placement and reader/writer addressing.
+struct ReduceBlockSpec {
+    std::uint32_t logical_h = 0;
+    std::uint32_t logical_w = 0;
+    std::uint32_t padded_h = 0;
+    std::uint32_t padded_w = 0;
+    std::uint32_t batches = 1;
+    tt::tt_metal::DataType input_dtype = tt::tt_metal::DataType::BFLOAT16;
+    tt::tt_metal::DataType output_dtype = tt::tt_metal::DataType::BFLOAT16;
+    tt::tt_metal::Layout input_layout = tt::tt_metal::Layout::TILE;
+    tt::tt_metal::Layout output_layout = tt::tt_metal::Layout::TILE;
+    tt::tt_metal::Tile input_tile;
+    tt::tt_metal::Tile output_tile;
+    // Tiled resident input only. Zero means contiguous at padded_w.
+    std::uint32_t input_row_stride_tiles = 0;
+    // Present: caller supplies an existing local allocation of this many tiles.
+    // Input is already available to compute; output follows the ordinary pack protocol.
+    // Absent: the planner sizes the corresponding FIFO/staging allocation.
+    std::optional<std::uint32_t> resident_input_tiles;
+    std::optional<std::uint32_t> resident_output_tiles;
+
+    // Convenience for a local tiled block with padding rounded to whole tiles.
+    static ReduceBlockSpec tiled(
+        std::uint32_t logical_h,
+        std::uint32_t logical_w,
+        tt::tt_metal::DataType input_dtype,
+        tt::tt_metal::DataType output_dtype,
+        std::uint32_t batches = 1,
+        tt::tt_metal::Tile tile = {});
+};
+
+// Per-input configuration for one call in a cross-call reduction sequence.
 // Multiple entries may name the same input CB when the kernel refills or reuses that CB between calls.
 struct ReduceCallConfig {
-    tt::tt_metal::TensorSpec input_spec;
-    tt::tt_metal::TensorSpec output_spec;
+    ReduceBlockSpec block;
     tt::tt_metal::ReduceOpMath reduce_math;
     tt::tt_metal::ReduceOpDim reduce_dim;
     float scalar;
@@ -248,10 +281,9 @@ private:
     std::vector<std::uint32_t> compile_time_args_;
 };
 
-// Plan a concrete reduction. A missing input-CB cap means "use the available
-// reduction-owned L1 budget". A cap of zero is a sentinel for an input tensor
-// already sharded in L1; in that case the input CB aliases the tensor and owns
-// no scratch allocation.
+// Plan one local reduction. A missing input-CB cap means "use the available
+// reduction-owned L1 budget". A supplied cap must be positive. Existing local
+// buffers are described by block.resident_input_tiles / resident_output_tiles.
 // INT32 and accurate FLOAT32 use SFPU SUM/MAX/MIN along W or H on non-Quasar
 // devices. Accurate FLOAT32 AVG must be lowered to SUM plus its normalization
 // scalar; SFPU HW reductions must be split into W and H. Tiled SFPU calls require
@@ -259,8 +291,7 @@ private:
 // that axis and describe the padded view. Dense row-major staging already pads
 // its input to the reduction identity before tilizing.
 ReducePlan make_reduce_plan(
-    const tt::tt_metal::TensorSpec& input_spec,
-    const tt::tt_metal::TensorSpec& output_spec,
+    const ReduceBlockSpec& block,
     tt::tt_metal::ReduceOpMath reduce_math,
     tt::tt_metal::ReduceOpDim reduce_dim,
     float scalar,

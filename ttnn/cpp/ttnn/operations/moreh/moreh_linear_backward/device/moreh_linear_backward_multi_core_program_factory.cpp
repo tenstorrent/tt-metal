@@ -96,11 +96,8 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create_program_artifacts
     // be handled at each batch boundary, using explicit accumulating calls.
     const uint32_t reduce_repetitions = has_partial_height ? batch_num : 1;
     const uint32_t call_height = has_partial_height ? logical_height : batch_num * logical_height;
-    const TensorLayout input_layout(output_grad.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
-    const TensorLayout output_layout(bias_grad.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
     const reduce_host::ReduceCallConfig reduction{
-        TensorSpec(Shape{call_height, 32}, input_layout),
-        TensorSpec(Shape{1, 32}, output_layout),
+        reduce_host::ReduceBlockSpec::tiled(call_height, 32, output_grad.dtype(), bias_grad.dtype()),
         ReduceOpMath::SUM,
         ReduceOpDim::H,
         1.0F,

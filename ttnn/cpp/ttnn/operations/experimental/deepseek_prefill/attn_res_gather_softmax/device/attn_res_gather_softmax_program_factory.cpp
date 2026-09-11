@@ -338,8 +338,7 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     // kernel never reads through it there.
     namespace rh = ttnn::kernel_lib::host;
     auto reduce_plan = rh::make_reduce_plan(
-        TensorSpec(Shape{32, Wt * 32}, TensorLayout(partial.dtype(), PageConfig(Layout::TILE), MemoryConfig{})),
-        TensorSpec(Shape{32, 1}, TensorLayout(shift.dtype(), PageConfig(Layout::TILE), MemoryConfig{})),
+        rh::ReduceBlockSpec::tiled(32, Wt * 32, partial.dtype(), shift.dtype()),
         ReduceOpMath::SUM,
         ReduceOpDim::W,
         1.0F,

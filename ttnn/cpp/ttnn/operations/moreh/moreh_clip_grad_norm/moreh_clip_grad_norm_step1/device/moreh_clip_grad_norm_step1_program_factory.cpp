@@ -103,7 +103,6 @@ ProgramDescriptor MorehClipGradNormStep1Operation::create_descriptor(
     const uint32_t cb_tile_size = tile_size(cb_data_format);
 
     namespace reduce_host = ttnn::kernel_lib::host;
-    const TensorLayout reduce_layout(tmp_pow_sum.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
     std::vector<reduce_host::ReduceSequencePlan> reductions;
     uint32_t auxiliary_tiles = 0;
     for (const auto& input : inputs) {
@@ -119,8 +118,7 @@ ProgramDescriptor MorehClipGradNormStep1Operation::create_descriptor(
             calls.emplace_back(
                 26,
                 reduce_host::ReduceCallConfig{
-                    TensorSpec(Shape{32, block_tiles * 32}, reduce_layout),
-                    TensorSpec(Shape{1, 1}, reduce_layout),
+                    reduce_host::ReduceBlockSpec::tiled(32, block_tiles * 32, tmp_pow_sum.dtype(), tmp_pow_sum.dtype()),
                     ReduceOpMath::SUM,
                     ReduceOpDim::HW,
                     1.0F,

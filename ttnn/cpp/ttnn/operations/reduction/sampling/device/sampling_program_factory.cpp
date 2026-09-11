@@ -198,14 +198,21 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
 
     namespace rh = ttnn::kernel_lib::host;
     // The top-k stage keeps 32 candidates; the writer masks the per-user k.
-    const TensorLayout reduce_layout(input_values_tensor.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
-    const TensorSpec values_spec(Shape{Ht * tile_height, 32}, reduce_layout);
-    const TensorSpec result_spec(Shape{Ht * tile_height, 1}, reduce_layout);
     const rh::ReduceHardwareConfig hardware{device->arch(), use_32bit_index, false, device->l1_size_per_core()};
     auto max_plan = rh::make_reduce_plan(
-        values_spec, result_spec, ReduceOpMath::MAX, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast, hardware);
+        rh::ReduceBlockSpec::tiled(Ht * tile_height, 32, input_values_tensor.dtype(), input_values_tensor.dtype()),
+        ReduceOpMath::MAX,
+        ReduceOpDim::W,
+        1.0F,
+        ReduceFp32Mode::Fast,
+        hardware);
     auto sum_plan = rh::make_reduce_plan(
-        values_spec, result_spec, ReduceOpMath::SUM, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast, hardware);
+        rh::ReduceBlockSpec::tiled(Ht * tile_height, 32, input_values_tensor.dtype(), input_values_tensor.dtype()),
+        ReduceOpMath::SUM,
+        ReduceOpDim::W,
+        1.0F,
+        ReduceFp32Mode::Fast,
+        hardware);
     max_plan.reconfig_mode = compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT;
     sum_plan.reconfig_mode = compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT;
     max_plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop;

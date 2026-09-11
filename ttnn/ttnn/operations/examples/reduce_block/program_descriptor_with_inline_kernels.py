@@ -244,23 +244,6 @@ def _scratch_cb(cb_id, data_format, num=1):
     )
 
 
-def _planner_tensor_spec(tensor, logical_shape, *, logical_output=False):
-    """Keep native dtype/layout/memory metadata while restoring the logical NC dimension."""
-    memory = tensor.memory_config()
-    return ttnn.TensorSpec(
-        ttnn.Shape(list(logical_shape)),
-        tensor.dtype,
-        tensor.layout,
-        # Column outputs pack batches side by side in the example's one-core
-        # allocation. The plan describes their logical tile stream, whose
-        # width need not match that allocation's physical shard width.
-        ttnn.TensorMemoryLayout.INTERLEAVED if logical_output else memory.memory_layout,
-        None if logical_output else memory.shard_spec,
-        memory.buffer_type,
-        tensor.spec.tile,
-    )
-
-
 def _logical_input_shape(dim, Ht, Wt, NC, partial_elems):
     height = Ht * TILE
     width = Wt * TILE
@@ -270,14 +253,6 @@ def _logical_input_shape(dim, Ht, Wt, NC, partial_elems):
         elif dim == "col":
             height = (Ht - 1) * TILE + partial_elems
     return (NC, height, width)
-
-
-def _logical_output_shape(dim, Ht, Wt, NC):
-    if dim == "row":
-        return (NC, Ht * TILE, TILE)
-    if dim == "col":
-        return (NC, TILE, Wt * TILE)
-    return (NC, TILE, TILE)
 
 
 def _mean_n(dim, Ht, Wt, partial_elems):
@@ -300,19 +275,10 @@ def _natural_input_cb_bytes(input_tensor, Ht, Wt, NC, row_stride=0):
     return NC * Ht * physical_wt * ttnn.tile_size(input_tensor.dtype)
 
 
-def _legacy_policy_cap(input_tensor, dim, Ht, Wt, NC, policy, row_stride=0):
-    """Translate old benchmark labels into the planner's supported L1 constraint."""
-    natural = _natural_input_cb_bytes(input_tensor, Ht, Wt, NC, row_stride)
+def _input_cb_budget(input_tensor, Ht, Wt, NC, policy):
     if policy == "stream":
         return 2 * ttnn.tile_size(input_tensor.dtype)
-    if policy == "no_wait":
-        memory_layout = input_tensor.memory_config().memory_layout
-        directly_aliasable = (dim == "row" and memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED) or (
-            dim == "col" and memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
-        )
-        if directly_aliasable:
-            return 0
-    return natural
+    return _natural_input_cb_bytes(input_tensor, Ht, Wt, NC)
 
 
 def _input_cb_ids(count):
@@ -336,21 +302,32 @@ def _make_sequence_plan(
     scalar,
     partial_elems,
     policy,
+    row_stride=0,
     max_input_cb_bytes=None,
 ):
-    input_spec = _planner_tensor_spec(input_tensor, _logical_input_shape(dim, Ht, Wt, NC, partial_elems))
-    output_spec = _planner_tensor_spec(output_tensor, _logical_output_shape(dim, Ht, Wt, NC), logical_output=True)
-    cap = (
-        max_input_cb_bytes
-        if max_input_cb_bytes is not None
-        else _legacy_policy_cap(input_tensor, dim, Ht, Wt, NC, policy)
+    _, logical_h, logical_w = _logical_input_shape(dim, Ht, Wt, NC, partial_elems)
+    resident = bool(row_stride) or (max_input_cb_bytes is None and policy == "no_wait" and dim != "scalar")
+    block = _PLANNER.ReduceBlockSpec(
+        logical_h,
+        logical_w,
+        input_tensor.dtype,
+        output_tensor.dtype,
+        batches=NC,
+        padded_h=Ht * TILE,
+        padded_w=Wt * TILE,
+        input_tile=input_tensor.spec.tile,
+        output_tile=output_tensor.spec.tile,
+        input_row_stride_tiles=row_stride,
+        resident_input_tiles=input_tensor.buffer_num_pages() if resident else None,
     )
+    cap = max_input_cb_bytes
+    if cap is None and not resident:
+        cap = _input_cb_budget(input_tensor, Ht, Wt, NC, policy)
     configs = [
         (
             cb_id,
             _PLANNER.ReduceCallConfig(
-                input_spec=input_spec,
-                output_spec=output_spec,
+                block=block,
                 reduce_math=reduce_math,
                 reduce_dim=_REDUCE_DIM[dim],
                 scalar=scalar,
@@ -455,8 +432,8 @@ def create_program_descriptor(
         policy = "stream"
     if policy not in POLICIES:
         raise ValueError(f"policy must be one of {POLICIES}, got {policy!r}")
-    if row_stride:
-        raise ValueError("row_stride is no longer a manual kernel lever; describe it in the tensor layout")
+    if row_stride and policy == "stream":
+        raise ValueError("row_stride requires a resident input block")
     if within_tile != "collapse":
         raise ValueError("within_tile is selected by the host planner")
     if reconfig is not None:
@@ -478,6 +455,7 @@ def create_program_descriptor(
         scalar=scalar,
         partial_elems=partial_elems,
         policy=policy,
+        row_stride=row_stride,
         max_input_cb_bytes=max_input_cb_bytes,
     )
     fidelity = math_fidelity or ttnn.MathFidelity.HiFi4
@@ -536,8 +514,6 @@ def create_accumulate_program_descriptor(
         raise ValueError("output must be float32 TILE_LAYOUT")
     if partial_elems and (not 1 <= partial_elems < TILE or dim == "scalar"):
         raise ValueError("partial_elems must be in [1, 31] and is supported for row/col only")
-    if row_stride:
-        raise ValueError("row_stride is no longer a manual kernel lever; describe it in the tensor layout")
     if acc_unpack_to_dest and accum != "fp32":
         raise ValueError("acc_unpack_to_dest requires accum='fp32'")
 
@@ -559,6 +535,7 @@ def create_accumulate_program_descriptor(
         scalar=scalar,
         partial_elems=partial_elems,
         policy="bulk",
+        row_stride=row_stride,
         max_input_cb_bytes=max_input_cb_bytes,
     )
 

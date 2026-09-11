@@ -100,16 +100,6 @@ def create_program_artifacts(
 
     planner = ttnn.reduce_planner
 
-    def reduce_spec(width, dtype):
-        return ttnn.TensorSpec(
-            ttnn.Shape([Ht * TILE_DIM, width]),
-            dtype,
-            ttnn.TILE_LAYOUT,
-            ttnn.TensorMemoryLayout.INTERLEAVED,
-            None,
-            ttnn.BufferType.L1,
-        )
-
     configs = []
     call_count = min(NUM_BLOCKS, 3)
     for i in range(call_count):
@@ -118,8 +108,7 @@ def create_program_artifacts(
             (
                 0,
                 planner.ReduceCallConfig(
-                    input_spec=reduce_spec(width, input_tensor.dtype),
-                    output_spec=reduce_spec(1, output_tensor.dtype),
+                    block=planner.ReduceBlockSpec(Ht * TILE_DIM, width, input_tensor.dtype, output_tensor.dtype),
                     reduce_math=planner.ReduceMath.SUM,
                     reduce_dim=planner.ReduceDimension.ROW,
                     scalar=1.0 / origin_W,

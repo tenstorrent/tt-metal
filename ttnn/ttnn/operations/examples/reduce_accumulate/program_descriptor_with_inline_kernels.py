@@ -287,19 +287,14 @@ def create_program_descriptor(
     # Keep the native reduce baseline distinct from the hand-written fast benchmark.
     planner = ttnn.reduce_planner
 
-    def spec(shape, dtype):
-        return ttnn.TensorSpec(
-            ttnn.Shape(shape), dtype, ttnn.TILE_LAYOUT, ttnn.TensorMemoryLayout.INTERLEAVED, None, ttnn.BufferType.L1
-        )
-
-    output_shape = [32, 1] if dim == "row" else ([1, 32] if dim == "col" else [1, 1])
     sequence = planner.make_reduce_sequence_plan(
         reductions=[
             (
                 CB_IN,
                 planner.ReduceCallConfig(
-                    input_spec=spec(list(input_shape(dim, num_tiles)), input_tensor.dtype),
-                    output_spec=spec(output_shape, output_tensor.dtype),
+                    block=planner.ReduceBlockSpec(
+                        *input_shape(dim, num_tiles), input_tensor.dtype, output_tensor.dtype
+                    ),
                     reduce_math=planner.ReduceMath.AVG,
                     reduce_dim={
                         "row": planner.ReduceDimension.ROW,

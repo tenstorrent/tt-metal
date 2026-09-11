@@ -145,10 +145,9 @@ tt::tt_metal::ProgramDescriptor DeepseekGroupedGateDeviceOperation::ProgramFacto
     // Normalization scalar CBs
     auto cb_reduce_ones_scalar = tt::CBIndex::c_17;
     namespace rh = ttnn::kernel_lib::host;
-    const TensorLayout reduce_layout(scores.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
     auto reduce_plan = rh::make_reduce_plan(
-        TensorSpec(Shape{tile_height, operation_attributes.n_activated_experts}, reduce_layout),
-        TensorSpec(Shape{tile_height, 1}, reduce_layout),
+        rh::ReduceBlockSpec::tiled(
+            tile_height, operation_attributes.n_activated_experts, scores.dtype(), scores.dtype()),
         ReduceOpMath::SUM,
         ReduceOpDim::W,
         1.0F,

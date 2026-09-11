@@ -39,23 +39,22 @@ inline SoftmaxReducePlans make_softmax_reduce_plans(
     namespace rh = ttnn::kernel_lib::host;
     const uint32_t passes = (width_tiles + pass_tiles - 1) / pass_tiles;
     const uint32_t descriptors = std::min(passes, 3U);
-    const TensorLayout max_layout(max_input_dtype, PageConfig(Layout::TILE), MemoryConfig{});
-    const TensorLayout intermediate_layout(intermediate_dtype, PageConfig(Layout::TILE), MemoryConfig{});
-    const TensorSpec output(Shape{32, 1}, intermediate_layout);
     std::vector<rh::ReduceCbConfig> max_calls;
     std::vector<rh::ReduceCbConfig> sum_calls;
     for (uint32_t i = 0; i < descriptors; ++i) {
         const uint32_t tiles = i + 1 == descriptors ? width_tiles - (passes - 1) * pass_tiles : pass_tiles;
-        const Shape shape{32, tiles * 32};
         max_calls.emplace_back(
             0,
             rh::ReduceCallConfig{
-                TensorSpec(shape, max_layout), output, ReduceOpMath::MAX, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast});
+                rh::ReduceBlockSpec::tiled(32, tiles * 32, max_input_dtype, intermediate_dtype),
+                ReduceOpMath::MAX,
+                ReduceOpDim::W,
+                1.0F,
+                ReduceFp32Mode::Fast});
         sum_calls.emplace_back(
             0,
             rh::ReduceCallConfig{
-                TensorSpec(shape, intermediate_layout),
-                output,
+                rh::ReduceBlockSpec::tiled(32, tiles * 32, intermediate_dtype, intermediate_dtype),
                 ReduceOpMath::SUM,
                 ReduceOpDim::W,
                 1.0F,

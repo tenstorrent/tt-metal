@@ -1057,11 +1057,9 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // head_dim instead of H_full.
     const uint32_t reduce_factor = args.per_head_norm ? (W / args.num_heads_per_device) : H_full;
     namespace rh = ttnn::kernel_lib::host;
-    const TensorLayout reduce_layout(DataType::FLOAT32, PageConfig(Layout::TILE), MemoryConfig{});
     const auto make_local_call = [&](float scalar) {
         auto plan = rh::make_reduce_plan(
-            TensorSpec(Shape{32, 32}, reduce_layout),
-            TensorSpec(Shape{32, 1}, reduce_layout),
+            rh::ReduceBlockSpec::tiled(32, 32, DataType::FLOAT32, DataType::FLOAT32),
             ReduceOpMath::SUM,
             ReduceOpDim::W,
             scalar,
@@ -1473,34 +1471,34 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     if (num_forwarders > 0) {
         const auto local_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
         for (uint32_t f = 0; f < num_forwarders; f++) {
-        const auto& core = forwarder_cores[f];
-        const uint32_t group_begin = f * workers_per_forwarder;
-        const uint32_t group_end = std::min(group_begin + workers_per_forwarder, num_workers);
-        std::vector<uint32_t> fwd_rt = {stats_dram_addr, out_ready_sem_bank_addr};
-        for (uint32_t w = group_begin; w < group_end; w++) {
-            fwd_rt.push_back(static_cast<uint32_t>(worker_virtual[w].x));
-            fwd_rt.push_back(static_cast<uint32_t>(worker_virtual[w].y));
-        }
-        for (uint32_t r = 0; r < max_rounds; r++) {
-            uint32_t pc = 0;
+            const auto& core = forwarder_cores[f];
+            const uint32_t group_begin = f * workers_per_forwarder;
+            const uint32_t group_end = std::min(group_begin + workers_per_forwarder, num_workers);
+            std::vector<uint32_t> fwd_rt = {stats_dram_addr, out_ready_sem_bank_addr};
             for (uint32_t w = group_begin; w < group_end; w++) {
-                if (worker_num_rows(w) > r) {
-                    pc++;
-                }
+                fwd_rt.push_back(static_cast<uint32_t>(worker_virtual[w].x));
+                fwd_rt.push_back(static_cast<uint32_t>(worker_virtual[w].y));
             }
-            fwd_rt.push_back(pc);
-        }
-        fwd_rt.push_back(forward_fabric_node_id.has_value() ? 1u : 0u);
-        if (forward_fabric_node_id.has_value()) {
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                local_node_id, forward_fabric_node_id.value(), /*link_idx=*/f, program, {core}, fwd_rt);
-        }
-        fwd_rt.push_back(backward_fabric_node_id.has_value() ? 1u : 0u);
-        if (backward_fabric_node_id.has_value()) {
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                local_node_id, backward_fabric_node_id.value(), /*link_idx=*/f, program, {core}, fwd_rt);
-        }
-        SetRuntimeArgs(program, forwarder_kernel_ids[f], core, fwd_rt);
+            for (uint32_t r = 0; r < max_rounds; r++) {
+                uint32_t pc = 0;
+                for (uint32_t w = group_begin; w < group_end; w++) {
+                    if (worker_num_rows(w) > r) {
+                        pc++;
+                    }
+                }
+                fwd_rt.push_back(pc);
+            }
+            fwd_rt.push_back(forward_fabric_node_id.has_value() ? 1u : 0u);
+            if (forward_fabric_node_id.has_value()) {
+                tt::tt_fabric::append_fabric_connection_rt_args(
+                    local_node_id, forward_fabric_node_id.value(), /*link_idx=*/f, program, {core}, fwd_rt);
+            }
+            fwd_rt.push_back(backward_fabric_node_id.has_value() ? 1u : 0u);
+            if (backward_fabric_node_id.has_value()) {
+                tt::tt_fabric::append_fabric_connection_rt_args(
+                    local_node_id, backward_fabric_node_id.value(), /*link_idx=*/f, program, {core}, fwd_rt);
+            }
+            SetRuntimeArgs(program, forwarder_kernel_ids[f], core, fwd_rt);
         }
     }
 

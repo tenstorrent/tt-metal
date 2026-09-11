@@ -112,7 +112,7 @@ class ReduceCase:
             self.pool in ("SUM", "AVG")
             and self.input_dtype in ("bf16", "fp32")
             and self.fp32_mode != "Accurate"
-            and reduced_tiles >= (4 if self.dim == "REDUCE_ROW" else 8)
+            and reduced_tiles * self.calls >= (4 if self.dim == "REDUCE_ROW" else 8)
         )
         return "ACCUMULATE_VIA_ADD" if additive else "REDUCE_TILE"
 
@@ -462,33 +462,12 @@ def _memory_strategy(case: ReduceCase) -> ttnn.ShardStrategy:
     return ttnn.ShardStrategy.WIDTH if case.dim == "REDUCE_COL" else ttnn.ShardStrategy.HEIGHT
 
 
-def _tensor_spec(
-    logical_shape: tuple[int, ...], dtype: ttnn.DataType, memory_config: ttnn.MemoryConfig
-) -> ttnn.TensorSpec:
-    return ttnn.TensorSpec(
-        ttnn.Shape(logical_shape),
-        dtype,
-        ttnn.TILE_LAYOUT,
-        memory_config.memory_layout,
-        memory_config.shard_spec,
-        memory_config.buffer_type,
-    )
-
-
-def _logical_output_shape(case: ReduceCase) -> tuple[int, int, int]:
-    if case.dim == "REDUCE_ROW":
-        return case.batches, case.rows * TILE, TILE
-    if case.dim == "REDUCE_COL":
-        return case.batches, TILE, case.cols * TILE
-    return case.batches, TILE, TILE
-
-
 def _max_input_cb_bytes(case: ReduceCase, input_dtype: ttnn.DataType) -> int | None:
     assert case.input_mode in INPUT_MODES
     if case.input_mode == "bulk":
         return None
     if case.input_mode == "alias":
-        return 0
+        return None
     assert case.input_mode == "chunked"
     # Keep two buffers of two reduction-axis tiles. H reductions retain four
     # output columns in DEST, so each input buffer needs eight tiles.
@@ -515,18 +494,24 @@ def _make_plan(
     case: ReduceCase,
     input_dtype: ttnn.DataType,
     output_dtype: ttnn.DataType,
-    input_memory_config: ttnn.MemoryConfig,
-    output_memory_config: ttnn.MemoryConfig,
     input_cb_ids: list[int],
 ):
-    input_spec = _tensor_spec((case.batches, case.logical_height, case.logical_width), input_dtype, input_memory_config)
-    output_spec = _tensor_spec(_logical_output_shape(case), output_dtype, output_memory_config)
+    block = _PLANNER.ReduceBlockSpec(
+        case.logical_height,
+        case.logical_width,
+        input_dtype,
+        output_dtype,
+        batches=case.batches,
+        padded_h=case.rows * TILE,
+        padded_w=case.cols * TILE,
+        resident_input_tiles=case.rows * case.cols * case.batches if case.input_mode == "alias" else None,
+        resident_output_tiles=case.output_tiles if case.dim != "REDUCE_SCALAR" else None,
+    )
     reductions = [
         (
             cb_id,
             _PLANNER.ReduceCallConfig(
-                input_spec=input_spec,
-                output_spec=output_spec,
+                block=block,
                 reduce_math=_REDUCE_MATH[case.pool],
                 reduce_dim=_REDUCE_DIM[case.dim],
                 scalar=case.planner_scalar,
@@ -596,7 +581,7 @@ def _assert_plan(case: ReduceCase, plan, input_cb_ids: list[int]) -> None:
             assert call.output_cb_id == (CB_OUTPUT if index + 1 == case.calls else CB_ACCUMULATOR)
 
 
-def _repeated_input_cb_plan_compile_args(input_tensor, output) -> tuple[list[int], list[int]]:
+def _repeated_input_cb_plan(input_tensor, output):
     """Build two compute calls sharing one input CB and one aggregate auxiliary payload."""
     planner = ttnn.reduce_planner
     hardware = planner.ReduceHardwareConfig(
@@ -609,13 +594,18 @@ def _repeated_input_cb_plan_compile_args(input_tensor, output) -> tuple[list[int
         (
             CB_INPUT,
             planner.ReduceCallConfig(
-                input_spec=input_tensor.spec,
-                output_spec=output.spec,
+                block=planner.ReduceBlockSpec(
+                    input_tensor.shape[-2],
+                    input_tensor.shape[-1],
+                    input_tensor.dtype,
+                    output.dtype,
+                    resident_input_tiles=input_tensor.buffer_num_pages(),
+                    resident_output_tiles=output.buffer_num_pages(),
+                ),
                 reduce_math=planner.ReduceMath.SUM,
                 reduce_dim=planner.ReduceDimension.ROW,
                 scalar=1.0,
                 fp32_mode=planner.ReduceFp32Mode.FAST,
-                max_input_cb_bytes=0,
             ),
         )
         for _ in range(2)
@@ -631,14 +621,18 @@ def _repeated_input_cb_plan_compile_args(input_tensor, output) -> tuple[list[int
     )
     assert len(plan) == plan.call_count == len(plan.calls) == 2
     assert plan.calls[0].input_cb_id == plan.calls[1].input_cb_id == CB_INPUT
-    assert plan.calls[0].plan.algorithm == planner.ReduceAlgorithm.REDUCE_TILE
+    # The two three-tile calls jointly clear the sequence's four-tile threshold.
+    assert plan.calls[0].plan.algorithm == planner.ReduceAlgorithm.ACCUMULATE_VIA_ADD
     assert plan.calls[0].accumulation_mode == planner.ReduceAccumulationMode.INTERMEDIATE
     assert plan.calls[1].accumulation_mode == planner.ReduceAccumulationMode.FINAL
-    assert plan.calls[0].auxiliary_tile_offset == plan.calls[1].auxiliary_tile_offset == 0
+    assert plan.calls[0].auxiliary_tile_offset == 0
+    # The odd second call reloads the accumulated tile with a zero-pair recipe.
+    assert plan.calls[1].auxiliary_tile_offset == 1
     assert plan.auxiliary.cb_id == CB_SCALER
-    assert len(plan.auxiliary.tiles) == 1
+    assert len(plan.auxiliary.tiles) == 2
+    assert plan.auxiliary.tiles[1].type == planner.ReduceAuxiliaryTileType.ZERO
 
-    return _serialize_plan(plan)
+    return plan
 
 
 def _compute_config(case: ReduceCase, input_cb_ids: list[int]) -> ttnn.ComputeConfigDescriptor:
@@ -787,8 +781,6 @@ def _run_case(device, case: ReduceCase) -> tuple[torch.Tensor, torch.Tensor]:
         case,
         input_dtype,
         output_dtype,
-        input_memory_config,
-        output_memory_config,
         input_cb_ids,
     )
     compute_compile_time_args, auxiliary_compile_time_args = _serialize_plan(plan)
@@ -854,6 +846,143 @@ def _run_case(device, case: ReduceCase) -> tuple[torch.Tensor, torch.Tensor]:
     return actual, _golden(case, logical_chunks)
 
 
+@pytest.mark.parametrize("dim", ("REDUCE_ROW", "REDUCE_COL"))
+@pytest.mark.parametrize("pool", ("SUM", "MAX"))
+def test_reduce_local_blocks_on_multiple_cores(device, dim, pool):
+    """Three cores share allocation sizes but reduce different local extents, including partial tiles."""
+    core_count, batches = 3, 2
+    allocation_rows, row_stride = 20, 8
+    output_capacity = 16
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_count - 1, 0))])
+    local_shapes = ((96, 256), (64, 135), (32, 17)) if dim == "REDUCE_ROW" else ((288, 160), (135, 96), (17, 32))
+    physical = torch.full((core_count, allocation_rows * TILE, row_stride * TILE), 128, dtype=torch.bfloat16)
+    expected = []
+    kernels, auxiliary_cbs = [], []
+    hardware = _PLANNER.ReduceHardwareConfig(
+        arch=device.arch(),
+        fp32_dest_acc_en=True,
+        dst_full_sync_en=False,
+        available_l1_bytes=ttnn.get_max_worker_l1_unreserved_size(),
+    )
+    scalar = 1.0 / TILE if pool == "SUM" else 1.0
+    for core_index, (height, width) in enumerate(local_shapes):
+        block = _PLANNER.ReduceBlockSpec(
+            height,
+            width,
+            ttnn.bfloat16,
+            ttnn.float32,
+            batches=batches,
+            input_row_stride_tiles=row_stride,
+            resident_input_tiles=allocation_rows * row_stride,
+            resident_output_tiles=output_capacity,
+        )
+        # Values differ between cores and batches; all unvisited tiles and edge
+        # padding retain a large sentinel which must never enter the reduction.
+        core_expected = []
+        for batch in range(batches):
+            values = (torch.arange(height * width).reshape(height, width) % 7 - 3 + core_index + batch).to(
+                torch.bfloat16
+            )
+            row_start = batch * block.padded_h
+            physical[core_index, row_start : row_start + height, :width] = values
+            axis = -1 if dim == "REDUCE_ROW" else -2
+            core_expected.append((values.float().sum(axis) * scalar) if pool == "SUM" else values.float().amax(axis))
+        expected.append(torch.stack(core_expected))
+        sequence = _PLANNER.make_reduce_sequence_plan(
+            reductions=[
+                (
+                    CB_INPUT,
+                    _PLANNER.ReduceCallConfig(
+                        block,
+                        _REDUCE_MATH[pool],
+                        _REDUCE_DIM[dim],
+                        scalar,
+                        _PLANNER.ReduceFp32Mode.FAST,
+                    ),
+                )
+            ],
+            cb_ids=_PLANNER.ReduceSequenceCbIds(CB_SCALER, CB_ACCUMULATOR, CB_OUTPUT),
+            hardware=hardware,
+        )
+        assert sequence.calls[0].plan.batches == batches
+        assert sequence.calls[0].plan.input_row_stride_tiles == row_stride
+        compute_args, auxiliary_args = _serialize_plan(sequence)
+        core = ttnn.CoreCoord(core_index, 0)
+        core_range = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
+        auxiliary_cbs.append(
+            ttnn.CBDescriptor(
+                total_size=len(sequence.auxiliary.tiles) * ttnn.tile_size(ttnn.bfloat16),
+                core_ranges=core_range,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=CB_SCALER,
+                        data_format=ttnn.bfloat16,
+                        page_size=ttnn.tile_size(ttnn.bfloat16),
+                    )
+                ],
+            )
+        )
+        kernels.extend(
+            [
+                ttnn.KernelDescriptor(
+                    kernel_source=PLAN_SEQUENCE_AUX_KERNEL,
+                    core_ranges=core_range,
+                    compile_time_args=auxiliary_args,
+                    config=ttnn.ReaderConfigDescriptor(),
+                ),
+                ttnn.KernelDescriptor(
+                    kernel_source=PLAN_SEQUENCE_KERNEL,
+                    core_ranges=core_range,
+                    compile_time_args=compute_args,
+                    config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True),
+                ),
+            ]
+        )
+
+    def memory(shard_shape):
+        return ttnn.create_sharded_memory_config(
+            shape=shard_shape,
+            core_grid=grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+    input_tensor = ttnn.from_torch(
+        physical.reshape(core_count * allocation_rows * TILE, row_stride * TILE),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory((allocation_rows * TILE, row_stride * TILE)),
+    )
+    output = ttnn.from_torch(
+        torch.full((core_count * output_capacity * TILE, TILE), -999.0),
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory((output_capacity * TILE, TILE)),
+    )
+    result = ttnn.generic_op(
+        [input_tensor, output],
+        ttnn.ProgramDescriptor(
+            kernels=kernels,
+            semaphores=[],
+            cbs=[
+                ttnn.cb_descriptor_from_sharded_tensor(CB_INPUT, input_tensor),
+                ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT, output),
+                *auxiliary_cbs,
+            ],
+        ),
+    )
+    output_tiles = ttnn.to_torch(result).reshape(core_count, output_capacity, TILE, TILE)
+    for index, golden in enumerate(expected):
+        count = golden.numel() // TILE
+        tiles = output_tiles[index, :count]
+        actual = tiles[:, :, 0] if dim == "REDUCE_ROW" else tiles[:, 0, :]
+        torch.testing.assert_close(actual.reshape_as(golden), golden, rtol=1e-3, atol=1e-3)
+        assert torch.all(output_tiles[index, count:] == -999), f"core {index}: wrote beyond local output"
+
+
 def test_reduce_plan_sequence_repeated_input_cb(device):
     """Two independently scheduled calls reduce the same reusable input CB into one accumulator."""
     input_shape = (TILE, 3 * TILE)
@@ -874,11 +1003,12 @@ def test_reduce_plan_sequence_repeated_input_cb(device):
         _sharded_memory_config(output_shape),
     )
 
-    compute_compile_time_args, auxiliary_compile_time_args = _repeated_input_cb_plan_compile_args(input_tensor, output)
+    plan = _repeated_input_cb_plan(input_tensor, output)
+    compute_compile_time_args, auxiliary_compile_time_args = _serialize_plan(plan)
     cbs = [
         ttnn.cb_descriptor_from_sharded_tensor(CB_INPUT, input_tensor),
         ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT, output),
-        _scratch_cb(CB_SCALER, ttnn.bfloat16, 1),
+        _scratch_cb(CB_SCALER, ttnn.bfloat16, len(plan.auxiliary.tiles)),
         _scratch_cb(CB_ACCUMULATOR, ttnn.bfloat16, 1),
     ]
     kernels = [

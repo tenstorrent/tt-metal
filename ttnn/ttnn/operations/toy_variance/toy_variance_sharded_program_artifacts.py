@@ -34,7 +34,6 @@ from pathlib import Path
 import ttnn
 from ttnn.mcast_spec import McastFamily
 
-
 KERNEL_DIR = Path(__file__).parent / "kernels"
 TILE_DIM = 32
 
@@ -143,30 +142,14 @@ def create_program_artifacts(input_tensor: ttnn.Tensor, output_tensor: ttnn.Tens
 
     # 1/N over the FULL width: each core's reduce already emits its share of the mean.
     planner = ttnn.reduce_planner
-    # Each node sees a resident Ht x Wt_local block. Describe that local alias
-    # independently of the global width-sharded tensor's placement.
-    local_memory = ttnn.create_sharded_memory_config(
-        shape=(origin_H, Wt_local * TILE_DIM),
-        core_grid=ttnn.CoreGrid(x=1, y=1),
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
-    local_spec = ttnn.TensorSpec(
-        ttnn.Shape([origin_H, Wt_local * TILE_DIM]),
+    # The factory partitions the global width; each node reduces only its local block.
+    block = planner.ReduceBlockSpec(origin_H, Wt_local * TILE_DIM, input_tensor.dtype, output_tensor.dtype)
+    resident_block = planner.ReduceBlockSpec(
+        origin_H,
+        Wt_local * TILE_DIM,
         input_tensor.dtype,
-        ttnn.TILE_LAYOUT,
-        local_memory.memory_layout,
-        local_memory.shard_spec,
-        ttnn.BufferType.L1,
-    )
-    result_spec = ttnn.TensorSpec(
-        ttnn.Shape([origin_H, 1]),
         output_tensor.dtype,
-        ttnn.TILE_LAYOUT,
-        ttnn.TensorMemoryLayout.INTERLEAVED,
-        None,
-        ttnn.BufferType.L1,
+        resident_input_tiles=shard_tiles,
     )
     hardware = planner.ReduceHardwareConfig(
         arch=device.arch(),
@@ -175,18 +158,15 @@ def create_program_artifacts(input_tensor: ttnn.Tensor, output_tensor: ttnn.Tens
         available_l1_bytes=ttnn.get_max_worker_l1_unreserved_size(),
     )
     mean_plan = planner.make_reduce_plan(
-        input_spec=local_spec,
-        output_spec=result_spec,
+        block=resident_block,
         reduce_math=planner.ReduceMath.SUM,
         reduce_dim=planner.ReduceDimension.ROW,
         scalar=1.0 / origin_W,
         fp32_mode=planner.ReduceFp32Mode.FAST,
         hardware=hardware,
-        max_input_cb_bytes=0,
     )
     variance_plan = planner.make_reduce_plan(
-        input_spec=local_spec,
-        output_spec=result_spec,
+        block=block,
         reduce_math=planner.ReduceMath.SUM,
         reduce_dim=planner.ReduceDimension.ROW,
         scalar=1.0 / origin_W,

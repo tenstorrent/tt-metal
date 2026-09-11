@@ -39,8 +39,6 @@ inline GroupNormReducePlans make_groupnorm_reduce_plans(
         compute_kernel_lib::ReduceDataFormatReconfigMode::NONE) {
     using namespace tt::tt_metal;
     namespace rh = ttnn::kernel_lib::host;
-    const TensorLayout layout(dtype, PageConfig(Layout::TILE), MemoryConfig{});
-    const TensorSpec output(Shape{1, 1}, layout);
     GroupNormReducePlans result;
     auto append = [&](uint32_t rows,
                       uint32_t columns,
@@ -50,8 +48,7 @@ inline GroupNormReducePlans make_groupnorm_reduce_plans(
                       compute_kernel_lib::ReduceDataFormatReconfigMode native_reconfig =
                           compute_kernel_lib::ReduceDataFormatReconfigMode::NONE) {
         auto plan = rh::make_reduce_plan(
-            TensorSpec(Shape{rows * 32, columns * 32}, layout),
-            output,
+            rh::ReduceBlockSpec::tiled(rows * 32, columns * 32, dtype, dtype),
             ReduceOpMath::SUM,
             ReduceOpDim::HW,
             scalar,

@@ -163,8 +163,6 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
     for (uint32_t i = input_rank - normalized_dims; i < input_rank; ++i) {
         reduce_elements *= input_shape_without_padding[i];
     }
-    const TensorLayout reduce_layout(
-        fp32_dest_acc_en ? DataType::FLOAT32 : input.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
     const uint32_t num_blocks = std::max(1U, num_inner / reduce_block_tiles);
     const uint32_t num_descriptors = std::min(num_blocks, 3U);
     std::vector<reduce_host::ReduceCbConfig> moment_calls;
@@ -177,8 +175,11 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
         moment_calls.emplace_back(
             0,
             reduce_host::ReduceCallConfig{
-                TensorSpec(Shape{32, width}, reduce_layout),
-                TensorSpec(is_lastdim_layer_norm ? Shape{32, 1} : Shape{1, 1}, reduce_layout),
+                reduce_host::ReduceBlockSpec::tiled(
+                    32,
+                    width,
+                    fp32_dest_acc_en ? DataType::FLOAT32 : input.dtype(),
+                    fp32_dest_acc_en ? DataType::FLOAT32 : input.dtype()),
                 ReduceOpMath::SUM,
                 is_lastdim_layer_norm ? ReduceOpDim::W : ReduceOpDim::HW,
                 1.0F / static_cast<float>(reduce_elements),

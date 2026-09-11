@@ -165,7 +165,6 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
 
     namespace reduce_host = ttnn::kernel_lib::host;
     const uint32_t reduce_elements = (num_channels / num_groups) * origin_h * origin_w;
-    const TensorLayout reduce_layout(input.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
     const uint32_t num_blocks = std::max(1U, num_inner_tiles / reduce_block_tiles);
     const uint32_t num_descriptors = std::min(num_blocks, 3U);
     std::vector<reduce_host::ReduceCbConfig> moment_calls;
@@ -178,8 +177,7 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
         moment_calls.emplace_back(
             0,
             reduce_host::ReduceCallConfig{
-                TensorSpec(Shape{32, width}, reduce_layout),
-                TensorSpec(is_lastdim_layernorm ? Shape{32, 1} : Shape{1, 1}, reduce_layout),
+                reduce_host::ReduceBlockSpec::tiled(32, width, input.dtype(), input.dtype()),
                 ReduceOpMath::SUM,
                 is_lastdim_layernorm ? ReduceOpDim::W : ReduceOpDim::HW,
                 1.0F / static_cast<float>(reduce_elements),

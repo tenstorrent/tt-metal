@@ -54,7 +54,6 @@ ttnn::device_operation::ProgramArtifacts MorehDotOperation::ProgramFactory::crea
     namespace reduce_host = ttnn::kernel_lib::host;
     const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
-    const TensorLayout tile_layout(input_a.dtype(), PageConfig(Layout::TILE), MemoryConfig{});
     std::vector<reduce_host::ReduceCbConfig> reductions;
     // Keep a seed, a reusable middle call, and a final call instead of
     // specializing one compute instantiation for every tile in a long vector.
@@ -64,8 +63,7 @@ ttnn::device_operation::ProgramArtifacts MorehDotOperation::ProgramFactory::crea
         reductions.emplace_back(
             0,
             reduce_host::ReduceCallConfig{
-                TensorSpec(Shape{32, width}, tile_layout),
-                TensorSpec(Shape{32, 1}, tile_layout),
+                reduce_host::ReduceBlockSpec::tiled(32, width, input_a.dtype(), input_a.dtype()),
                 ReduceOpMath::SUM,
                 ReduceOpDim::W,
                 1.0F,
