@@ -12,6 +12,7 @@
 #include <limits>
 
 #include "api/debug/assert.h"
+#include "hostdevcommon/fabric_common.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/named_types.hpp"
 
 #include "api/alignment.h"
@@ -113,9 +114,8 @@ FORCE_INLINE uint8_t distance_behind(const BufferPtr& trailing_ptr, const Buffer
 template <uint8_t NUM_BUFFERS>
 class ChannelBufferPointer {
     static_assert(
-        NUM_BUFFERS <= std::numeric_limits<uint8_t>::max() / 2,
-        "NUM_BUFFERS must be less than or half of std::numeric_limits<uint8_t>::max() due to the internal "
-        "implementation");
+        NUM_BUFFERS <= MAX_CHANNEL_BUFFER_SLOTS,
+        "NUM_BUFFERS must not exceed MAX_CHANNEL_BUFFER_SLOTS, since this class holds 2 * NUM_BUFFERS in a uint8_t");
 
 public:
     static constexpr bool is_size_pow2 = (NUM_BUFFERS & (NUM_BUFFERS - 1)) == 0;

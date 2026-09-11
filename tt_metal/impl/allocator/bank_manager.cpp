@@ -229,21 +229,9 @@ void BankManager::invalidate_allocated_ranges_cache_for_dependent_allocators(
     }
 }
 
-const std::vector<std::pair<DeviceAddr, DeviceAddr>>& BankManager::compute_merged_allocated_ranges(
-    BankManager::AllocatorDependencies::AllocatorID allocator_id) {
-    TT_FATAL(
-        allocator_id.get() < allocator_dependencies_.num_allocators(),
-        "Invalid allocator ID {} (num_allocators={})",
-        allocator_id.get(),
-        allocator_dependencies_.num_allocators());
-
-    // Return cached value if available
-    if (allocated_ranges_cache_[allocator_id.get()].has_value()) {
-        return allocated_ranges_cache_[allocator_id.get()].value();
-    }
-
+std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::merge_allocated_ranges_from(
+    const ttsl::SmallVector<AllocatorDependencies::AllocatorID>& dependent_allocators) {
     // Collect allocated address ranges per dependent allocator (single pass)
-    const auto& dependent_allocators = allocator_dependencies_.dependencies[allocator_id.get()];
     std::vector<std::pair<DeviceAddr, DeviceAddr>> all_allocated_ranges;
     for (const auto dep_allocator_id : dependent_allocators) {
         auto* dep_alloc = this->get_allocator_from_id(dep_allocator_id);
@@ -273,15 +261,53 @@ const std::vector<std::pair<DeviceAddr, DeviceAddr>>& BankManager::compute_merge
         }
     }
 
-    allocated_ranges_cache_[allocator_id.get()] = std::move(coalesced_ranges);
+    return coalesced_ranges;
+}
+
+const std::vector<std::pair<DeviceAddr, DeviceAddr>>& BankManager::compute_merged_allocated_ranges(
+    BankManager::AllocatorDependencies::AllocatorID allocator_id) {
+    TT_FATAL(
+        allocator_id.get() < allocator_dependencies_.num_allocators(),
+        "Invalid allocator ID {} (num_allocators={})",
+        allocator_id.get(),
+        allocator_dependencies_.num_allocators());
+
+    // Return cached value if available
+    if (allocated_ranges_cache_[allocator_id.get()].has_value()) {
+        return allocated_ranges_cache_[allocator_id.get()].value();
+    }
+
+    allocated_ranges_cache_[allocator_id.get()] =
+        this->merge_allocated_ranges_from(allocator_dependencies_.dependencies[allocator_id.get()]);
     return allocated_ranges_cache_[allocator_id.get()].value();
+}
+
+std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::compute_scoped_allocated_ranges(
+    BankManager::AllocatorDependencies::AllocatorID allocator_id,
+    const std::unordered_set<uint32_t>& scoped_dependent_allocators) {
+    TT_FATAL(
+        allocator_id.get() < allocator_dependencies_.num_allocators(),
+        "Invalid allocator ID {} (num_allocators={})",
+        allocator_id.get(),
+        allocator_dependencies_.num_allocators());
+
+    // Not cached: the cache is keyed by allocator id alone, and this result depends on the scope
+    // as well. Range lockstep buffers are the only caller, so the full merge keeps its fast path.
+    ttsl::SmallVector<AllocatorDependencies::AllocatorID> filtered;
+    for (const auto dep_allocator_id : allocator_dependencies_.dependencies[allocator_id.get()]) {
+        if (scoped_dependent_allocators.contains(dep_allocator_id.get())) {
+            filtered.push_back(dep_allocator_id);
+        }
+    }
+    return this->merge_allocated_ranges_from(filtered);
 }
 
 std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::compute_available_addresses(
     BankManager::AllocatorDependencies::AllocatorID allocator_id,
     DeviceAddr size_per_bank,
     DeviceAddr address_limit,
-    const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges) {
+    const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges,
+    const std::optional<std::unordered_set<uint32_t>>& scoped_dependent_allocators) {
     auto* alloc = this->get_allocator_from_id(allocator_id);
     TT_FATAL(alloc, "Allocator not initialized!");
 
@@ -310,8 +336,14 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::compute_available_ad
         return a.first < b.first;
     });
 
-    // Allocated ranges from dependent allocators; ranges are merged
-    const auto& allocated_ranges_in_dependent_allocators = this->compute_merged_allocated_ranges(allocator_id);
+    // Allocated ranges from dependent allocators; ranges are merged. A scope narrows that to the
+    // named allocators, which is how a range lockstep buffer avoids only its own cores here.
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> scoped_ranges;
+    if (scoped_dependent_allocators.has_value()) {
+        scoped_ranges = this->compute_scoped_allocated_ranges(allocator_id, *scoped_dependent_allocators);
+    }
+    const auto& allocated_ranges_in_dependent_allocators =
+        scoped_dependent_allocators.has_value() ? scoped_ranges : this->compute_merged_allocated_ranges(allocator_id);
 
     // Helper for subtracting allocated ranges from available ranges
     // Ranges consist of half-open intervals throughout: [start, end)
@@ -414,7 +446,8 @@ uint64_t BankManager::allocate_buffer(
     const CoreRangeSet& compute_grid,
     std::optional<uint32_t> num_shards,
     BankManager::AllocatorDependencies::AllocatorID allocator_id,
-    const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges) {
+    const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges,
+    const std::optional<std::unordered_set<uint32_t>>& scoped_dependent_allocators) {
     auto* alloc = this->get_allocator_from_id(allocator_id);
     TT_FATAL(alloc, "Allocator not initialized!");
 
@@ -478,8 +511,8 @@ uint64_t BankManager::allocate_buffer(
 
     // Get available address ranges after subtracting dependencies
     // The pair represents (start, end) of the available address range(s)
-    std::vector<std::pair<DeviceAddr, DeviceAddr>> available_ranges =
-        this->compute_available_addresses(allocator_id, size_per_bank, address_limit, additional_occupied_ranges);
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> available_ranges = this->compute_available_addresses(
+        allocator_id, size_per_bank, address_limit, additional_occupied_ranges, scoped_dependent_allocators);
 
     // Choose an address from the allowed ranges respecting alignment and direction
     // Addresses should already be aligned to alignment_bytes_
@@ -495,9 +528,11 @@ uint64_t BankManager::allocate_buffer(
     } else {
         for (ssize_t i = static_cast<ssize_t>(available_ranges.size()) - 1; i >= 0; --i) {
             const auto& r = available_ranges[static_cast<size_t>(i)];
-            DeviceAddr s = r.second - size_per_bank;
-            if (s >= r.first) {
-                chosen = s;
+            // Test the window's width rather than forming r.second - size_per_bank first: DeviceAddr
+            // is unsigned, so a request wider than r.second wraps to a huge value that compares
+            // >= r.first, and the allocation "succeeds" at a nonsense address instead of reporting.
+            if (r.second - r.first >= size_per_bank) {
+                chosen = r.second - size_per_bank;
                 break;
             }
         }
@@ -505,10 +540,21 @@ uint64_t BankManager::allocate_buffer(
 
     if (!chosen.has_value()) {
         auto mem_stats = alloc->get_statistics();
+        // The free/largest-free-block figures are this allocator's own view; dependency and
+        // additional ranges are subtracted before an address is chosen. Report what survived that
+        // too, or a failure with plenty free reads as capacity exhaustion.
+        DeviceAddr placeable_bytes = 0;
+        DeviceAddr largest_placeable = 0;
+        for (const auto& r : available_ranges) {
+            placeable_bytes += (r.second - r.first);
+            largest_placeable = std::max(largest_placeable, r.second - r.first);
+        }
         TT_FATAL(
             false,
             "Out of Memory: Not enough space after considering dependencies to allocate {} B {} across {} banks ({} B "
-            "per bank), bank size is {} B (allocated: {} B, free: {} B, largest free block: {} B)",
+            "per bank), bank size is {} B (allocated: {} B, free: {} B, largest free block: {} B). After subtracting "
+            "{} dependency range(s) and {} additional occupied range(s), {} B remained placeable across {} window(s), "
+            "largest {} B",
             size,
             enchantum::to_string(buffer_type_),
             num_banks,
@@ -516,7 +562,14 @@ uint64_t BankManager::allocate_buffer(
             bank_size(),
             mem_stats.total_allocated_bytes,
             mem_stats.total_free_bytes,
-            mem_stats.largest_free_block_bytes);
+            mem_stats.largest_free_block_bytes,
+            scoped_dependent_allocators.has_value()
+                ? this->compute_scoped_allocated_ranges(allocator_id, *scoped_dependent_allocators).size()
+                : this->compute_merged_allocated_ranges(allocator_id).size(),
+            additional_occupied_ranges.size(),
+            placeable_bytes,
+            available_ranges.size(),
+            largest_placeable);
     }
     TT_FATAL(
         chosen.value() % alignment_bytes_ == 0,

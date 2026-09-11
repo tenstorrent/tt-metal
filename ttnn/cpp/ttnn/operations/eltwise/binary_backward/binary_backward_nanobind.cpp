@@ -219,27 +219,30 @@ void bind_binary_backward_addalpha(
 
 template <ttnn::unique_string Name>
 void bind_binary_backward_bias_gelu(
-    nb::module_& mod,
-    const std::string& parameter_name_a,
-    const std::string& parameter_a_doc,
-    const std::string& parameter_name_b,
-    const std::string& parameter_b_doc,
-    std::string parameter_b_value,
-    const std::string& description,
-    const std::string& supported_dtype = "BFLOAT16",
-    const std::string_view note = "") {
+    nb::module_& mod, const std::string_view description, const std::string_view note = "") {
     auto doc = fmt::format(
         R"doc(
-        {7}
+        {2}
+
+        Supported call forms:
+
+            - ``ttnn.bias_gelu_bw(grad_tensor, input_tensor_a, input_tensor_b, ...)``
+            - ``ttnn.bias_gelu_bw(grad_tensor, input_tensor, bias, ...)``
 
         Args:
             grad_tensor (ttnn.Tensor): the input gradient tensor.
-            input_tensor_a (ttnn.Tensor): the input tensor.
-            input_tensor_b (ttnn.Tensor or Number): the input tensor.
+            input_tensor_a (ttnn.Tensor): the first input tensor for the tensor-bias overload.
+            input_tensor_b (ttnn.Tensor): the bias tensor for the tensor-bias overload.
+            input_tensor (ttnn.Tensor): the input tensor for the scalar-bias overload.
+            bias (float): the scalar bias for the scalar-bias overload.
 
         Keyword args:
-            {4} (string): {5}. Defaults to `{6}`.
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            variant (ttnn.GeluVariant, optional): Selects the GELU implementation. Defaults to `GeluVariant.Accurate`.
+                - `Accurate`: piecewise-CDF (BF16) or FP32-erf derivative.
+                - `Tanh`: derivative of the FP32 Hendrycks tanh approximation.
+                - `FastLut`: not supported because no matching backward kernel is available.
+            approximate (string): Legacy approximation mode (`"none"` or `"tanh"`).
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the output tensor. Defaults to `None`.
 
         Returns:
             List of ttnn.Tensor: the output tensor.
@@ -252,28 +255,33 @@ void bind_binary_backward_bias_gelu(
 
                * - Dtypes
                  - Layouts
-               * - {8}
-                 - TILE, ROW_MAJOR
+               * - BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B
+                 - TILE
 
-            bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
-
-            {9}
+            {3}
 
         )doc",
         std::string(Name),
         "ttnn." + std::string(Name),
-        parameter_name_a,
-        parameter_a_doc,
-        parameter_name_b,
-        parameter_b_doc,
-        parameter_b_value,
         description,
-        supported_dtype,
         note);
 
     ttnn::bind_function<Name>(
         mod,
         doc.c_str(),
+        ttnn::overload_t(
+            nb::overload_cast<
+                const ttnn::Tensor&,
+                const ttnn::Tensor&,
+                const ttnn::Tensor&,
+                ttnn::operations::unary::GeluVariant,
+                const std::optional<MemoryConfig>&>(&ttnn::bias_gelu_bw),
+            nb::arg("grad_tensor"),
+            nb::arg("input_tensor_a"),
+            nb::arg("input_tensor_b"),
+            nb::kw_only(),
+            nb::arg("variant") = ttnn::operations::unary::GeluVariant::ACCURATE,
+            nb::arg("memory_config") = nb::none()),
         ttnn::overload_t(
             nb::overload_cast<
                 const ttnn::Tensor&,
@@ -285,7 +293,20 @@ void bind_binary_backward_bias_gelu(
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
-            nb::arg(parameter_name_b.c_str()) = parameter_b_value,
+            nb::arg("approximate"),
+            nb::arg("memory_config") = nb::none()),
+        ttnn::overload_t(
+            nb::overload_cast<
+                const ttnn::Tensor&,
+                const ttnn::Tensor&,
+                float,
+                ttnn::operations::unary::GeluVariant,
+                const std::optional<MemoryConfig>&>(&ttnn::bias_gelu_bw),
+            nb::arg("grad_tensor"),
+            nb::arg("input_tensor"),
+            nb::arg("bias"),
+            nb::kw_only(),
+            nb::arg("variant") = ttnn::operations::unary::GeluVariant::ACCURATE,
             nb::arg("memory_config") = nb::none()),
         ttnn::overload_t(
             nb::overload_cast<
@@ -296,9 +317,9 @@ void bind_binary_backward_bias_gelu(
                 const std::optional<MemoryConfig>&>(&ttnn::bias_gelu_bw),
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
-            nb::arg(parameter_name_a.c_str()),
+            nb::arg("bias"),
             nb::kw_only(),
-            nb::arg(parameter_name_b.c_str()) = parameter_b_value,
+            nb::arg("approximate"),
             nb::arg("memory_config") = nb::none()));
 }
 
@@ -1009,14 +1030,7 @@ void py_module(nb::module_& module) {
 
     bind_binary_backward_bias_gelu<"bias_gelu_bw">(
         module,
-        "bias",
-        "Bias value",
-        "approximate",
-        "Approximation type",
-        "none",
-        R"doc(Performs backward operations for bias_gelu on :attr:`input_tensor_a` and :attr:`input_tensor_b` or :attr:`input_tensor` and :attr:`bias`, with given :attr:`grad_tensor` using given :attr:`approximate` mode.
-        :attr:`approximate` mode can be 'none', 'tanh'.)doc",
-        R"doc(BFLOAT16)doc",
+        R"doc(Performs backward operations for bias GELU on :attr:`input_tensor_a` and :attr:`input_tensor_b` or :attr:`input_tensor` and :attr:`bias`, with given :attr:`grad_tensor` and :attr:`variant`.)doc",
         R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 }
 

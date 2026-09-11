@@ -40,6 +40,19 @@ uint32_t get_worker_noc_hop_distance(
     const CoreCoord& logical_dst,
     NOC noc);
 
+// Represents a logical coord of a core at the specified distance from a reference point.
+// Reference point is context-defined. E.g. the closest worker to a given core returned
+// by a function which takes the reference point as an argument.
+struct CoreAtNocHops {
+    CoreCoord logical_coord;
+    uint32_t distance_in_noc_hops;
+};
+
+// Returns the logical worker coordinate with the fewest hops to logical_eth_core
+// on a given NOC, and that hop count. The distance is measured worker -> eth core.
+// This API is experimental and may evolve into a stable Device API in the future
+CoreAtNocHops get_closest_worker_to_eth_core(const IDevice& device, const CoreCoord& logical_eth_core, NOC noc);
+
 // Returns the virtual NoC coordinate of a logical worker core on the device at `mesh_coord`.
 // Unlike MeshDevice::worker_core_from_logical_core, this does not require every device in the mesh
 // to share a logical-to-virtual mapping, so it is exact on a heterogeneously harvested mesh.

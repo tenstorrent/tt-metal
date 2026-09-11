@@ -1498,7 +1498,7 @@ class ModelArgs:
                         num_workers_per_dram_bank=self.get_dram_sharded_matmul_num_workers(TensorGroup.FF2, self.dim),
                     )
         elif mode == Mode.PREFILL:
-            if seq_len > 128:
+            if self.use_minimal_prefill_matmul(seq_len):
                 grid = self.mlp2_grid(seq_len)
                 return ttnn.MinimalMatmulConfig(
                     M_block_size=8,
@@ -1848,8 +1848,13 @@ class ModelArgs:
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
+    def use_minimal_prefill_matmul(self, seq_len: int) -> bool:
+        # Qwen's 128-token prompts can run singly or be flattened into a larger
+        # batched prefill.
+        return seq_len > 128 or (seq_len == 128 and self.base_model_name == "Qwen3-32B" and self.device_name == "T3K")
+
     def use_minimal_qkv_prefill_matmul(self, seq_len: int) -> bool:
-        if seq_len > 128:
+        if self.use_minimal_prefill_matmul(seq_len):
             return True
 
         # The regular 128-token QKV prefill matmul over-allocates L1 on Llama 8B

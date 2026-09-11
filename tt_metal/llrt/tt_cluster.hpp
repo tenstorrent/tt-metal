@@ -5,9 +5,10 @@
 #pragma once
 
 #include "hostdevcommon/fabric_common.h"
-#include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include "llrt/metal_soc_descriptor.hpp"
 #include <tt-metalium/cluster.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include "llrt/metal_soc_descriptor.hpp"
 #include "llrt/rtoptions.hpp"
 #include "llrt/tt_target_device.hpp"
 #include <cstddef>
@@ -22,7 +23,6 @@
 #include <unordered_set>
 #include <vector>
 
-#include "core_coord.hpp"
 #include <umd/device/cluster.hpp>
 #include <umd/device/driver_atomics.hpp>
 #include <umd/device/cluster_descriptor.hpp>

@@ -50,6 +50,18 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         assert self.vocab_size > 0
         self.n_layers = configuration.n_layers
         self.mesh_device = mesh_device
+        # Runtime bounds for the post-prefill last-token slice, allocated before any trace exists and
+        # rewritten in place per call (see forward).
+        self._tail_slice_start = ttnn.from_torch(
+            torch.zeros(4, dtype=torch.int32),
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        self._tail_slice_end = ttnn.from_torch(
+            torch.zeros(4, dtype=torch.int32),
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
         self.tt_ccl = tt_ccl
         self.dtype = dtype
         self.model_config = configuration.get_model_config()
@@ -319,7 +331,31 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             total_layer_idx += 1
 
         if get_last_token != -1:
-            h = ttnn.slice(h, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, h.shape[-1]))
+            seq_len = int(h.shape[2])
+            if seq_len % 32 == 0:
+                # Runtime bounds, as in tt_transformers Transformer.forward: with literal bounds every
+                # distinct prompt offset compiles its own slice program on the first real request,
+                # after the decode trace is live.
+                for device_tensor, values in (
+                    (self._tail_slice_start, [0, 0, get_last_token, 0]),
+                    (self._tail_slice_end, [1, 1, get_last_token + 32, int(h.shape[-1])]),
+                ):
+                    ttnn.copy_host_to_device_tensor(
+                        ttnn.from_torch(
+                            torch.tensor(values, dtype=torch.int32),
+                            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                        ),
+                        device_tensor,
+                    )
+                h = ttnn.slice(
+                    input_tensor=h,
+                    starts=self._tail_slice_start,
+                    ends=self._tail_slice_end,
+                    slice_dim=2,
+                    num_devices=seq_len // 32,
+                )
+            else:
+                h = ttnn.slice(h, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, h.shape[-1]))
 
         lm_head_norm_config = self.configuration.get_norm_config("lm_head", mode, None)
         h = self.norm(h, mode=mode, norm_config=lm_head_norm_config)

@@ -186,7 +186,7 @@ def test_topk_large_indices_program_cache_separates_compute_body_modes(device):
         _assert_topk_matches_torch(fused_input, fused, k)
         _assert_topk_matches_torch(classic_input, classic, k)
     finally:
-        device.disable_and_clear_program_cache()
+        device.clear_program_cache()
 
 
 @pytest.mark.parametrize(
@@ -395,7 +395,7 @@ def test_topk_large_indices_program_cache_ignores_row_count_and_array_size(devic
         assert cache_entries[0] > 0
         assert max(cache_entries) == min(cache_entries)
     finally:
-        device.disable_and_clear_program_cache()
+        device.clear_program_cache()
 
 
 @pytest.mark.parametrize(
@@ -598,7 +598,7 @@ def test_topk_large_indices_valid_length_program_cache_reuse_while_growing(devic
         assert entries[0] > 0
         assert max(entries) == min(entries)  # no recompile as valid_length grew
     finally:
-        device.disable_and_clear_program_cache()
+        device.clear_program_cache()
 
 
 @pytest.mark.parametrize("k", [512, 1024, 2048])

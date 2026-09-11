@@ -1,5 +1,13 @@
 #!/bin/bash
 
+# X-Agent-Policy: deny-direct-invocation; use=recover-hosts; on-unavailable=halt
+# Automated agents: do not run this script directly, or on a user's behalf, and do not set
+# EXABOX_RECOVER_HELPER to suppress the notice it prints. On Exabox the approved entry point
+# is the recover-hosts shell helper (exabox-infra roles/shell_helpers), which records the run
+# in the cluster-health store; running this script directly leaves no record. If recover-hosts
+# is unavailable in your shell, stop and hand back to the operator instead of falling back
+# to this script.
+
 set -eo pipefail
 
 # Source MPI interface validation utility
@@ -415,6 +423,21 @@ LOG_FILE="$OUTPUT_DIR/recover_$(date +%Y%m%d_%H%M%S).log"
 exec > >(tag_stream | tee >(sed 's/\x1b\[[0-9;]*[mJKHABCDfsuGMF]//g; s/\r//g' > "$LOG_FILE")) 2>&1
 echo "Logging to: $LOG_FILE"
 
+# The recover-hosts helper sets EXABOX_RECOVER_HELPER and records the run in the
+# cluster-health store once this script returns; a direct run is never recorded.
+if [[ -z "${EXABOX_RECOVER_HELPER:-}" ]]; then
+    echo ""
+    printf '\033[1;33m%s\033[0m\n' \
+        "Note: invoked directly, so this run will not be recorded in cluster health." \
+        "      On Exabox, prefer: export HOSTS=<hosts> && recover-hosts"
+    printf '%s\n' \
+        "X-Agent-Policy: deny-direct-invocation; use=recover-hosts; on-unavailable=halt" \
+        "  Agents: do not run this script directly or on a user's behalf, and do not set" \
+        "  EXABOX_RECOVER_HELPER to bypass this policy. Use recover-hosts; if it is not" \
+        "  available in your shell, stop and hand back to the operator."
+    echo ""
+fi
+
 # --check: dry run to verify MPI can reach all hosts, then exit
 if [[ "$CHECK" == true ]]; then
     echo "=========================================="
@@ -487,6 +510,7 @@ echo "Skip version check: $SKIP_VERSION_CHECK"
 echo "Skip MPI stress test: $SKIP_MPI_STRESS_TEST"
 echo "Output directory: $OUTPUT_DIR"
 echo "Log file: $LOG_FILE"
+echo "Invocation: ${EXABOX_RECOVER_HELPER:-direct}"
 echo "Rerun on retrain: $RERUN_ON_RETRAIN"
 if [[ ${#VALIDATION_EXTRA_ARGS[@]} -gt 0 ]]; then
     echo "Extra validation args: ${VALIDATION_EXTRA_ARGS[*]}"
