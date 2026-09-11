@@ -34,7 +34,7 @@ void kernel_main() {
     Semaphore<> sender_sem(sender_sem_id);
     const UnicastEndpoint remote;
     DataflowBuffer values_dfb(values_dfb_index);
-    DataflowBuffer final_values_dfb(final_values_dfb_index);
+    const DataflowBuffer final_values_dfb(final_values_dfb_index);
 
     // Memory transfer configuration
     const std::uint32_t tile_bytes_values = values_dfb.get_entry_size();

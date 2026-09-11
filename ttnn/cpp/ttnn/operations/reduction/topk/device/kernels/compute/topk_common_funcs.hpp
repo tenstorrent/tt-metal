@@ -36,12 +36,12 @@ void process_and_sort_tiles(
     bool& ascending,
     int end_phase) {
     static_assert(!(fused && stable_sort), "fused and comparator-stable modes are mutually exclusive");
-    DataflowBuffer input_dfb(input_dfb_index);
-    DataflowBuffer index_dfb(index_dfb_index);
-    DataflowBuffer input_transposed_dfb(input_transposed_dfb_index);
-    DataflowBuffer index_transposed_dfb(index_transposed_dfb_index);
+    DataflowBuffer input_dfb(static_cast<uint16_t>(input_dfb_index));
+    DataflowBuffer index_dfb(static_cast<uint16_t>(index_dfb_index));
+    DataflowBuffer input_transposed_dfb(static_cast<uint16_t>(input_transposed_dfb_index));
+    DataflowBuffer index_transposed_dfb(static_cast<uint16_t>(index_transposed_dfb_index));
 
-    input_transposed_dfb.reserve_back(Wt);
+    input_transposed_dfb.reserve_back(static_cast<uint16_t>(Wt));
     if constexpr (!fused) {
         index_transposed_dfb.reserve_back(Wt);
     }
@@ -51,8 +51,8 @@ void process_and_sort_tiles(
         // local sort into k groups
         // for the last iteration, we only need to wait for 1 tile if Wt is odd, otherwise we wait for 2 tiles
         std::uint32_t tiles_to_wait = ((Wt % 2 != 0) && (wt + 2 > Wt)) ? 1 : 2;
-        input_dfb.wait_front(tiles_to_wait);
-        index_dfb.wait_front(tiles_to_wait);
+        input_dfb.wait_front(static_cast<uint16_t>(tiles_to_wait));
+        index_dfb.wait_front(static_cast<uint16_t>(tiles_to_wait));
 
         tile_regs_acquire();
         reconfig_data_format_srca(input_dfb_index);
@@ -104,7 +104,7 @@ void process_and_sort_tiles(
         ascending = switch_dir ? !ascending : ascending;
     }
 
-    input_transposed_dfb.push_back(Wt);
+    input_transposed_dfb.push_back(static_cast<uint16_t>(Wt));
     if constexpr (!fused) {
         index_transposed_dfb.push_back(Wt);
     }
@@ -200,7 +200,7 @@ void process_tiles(
     std::uint32_t index_dest_start,
     std::uint32_t index_dest_end,
     bool largest,
-    int seq_per_2tiles) {
+    uint32_t seq_per_2tiles) {
     std::uint32_t dist = ((1 << m_iter) * K) >> 5;
     for (std::uint32_t i = 0; i < num_k_sequences; i += seq_per_2tiles) {
         for (std::uint32_t t = 0; t < tiles_per_seq; t++) {
@@ -284,12 +284,12 @@ void process_iteration(
     bool largest,
     bool switch_dir,
     std::uint32_t logk,
-    int& seq_per_2tiles,
+    uint32_t& seq_per_2tiles,
     bool largest_param) {
     DataflowBuffer input_transposed_dfb(static_cast<uint16_t>(input_transposed_dfb_index));
     DataflowBuffer index_transposed_dfb(static_cast<uint16_t>(index_transposed_dfb_index));
 
-    input_transposed_dfb.wait_front(Wt);
+    input_transposed_dfb.wait_front(static_cast<uint16_t>(Wt));
     if constexpr (!fused) {
         index_transposed_dfb.wait_front(Wt);
     }
@@ -309,9 +309,9 @@ void process_iteration(
         largest_param,
         seq_per_2tiles);
 
-    input_transposed_dfb.reserve_back(Wt);
-    input_transposed_dfb.pop_front(Wt);
-    input_transposed_dfb.push_back(Wt);
+    input_transposed_dfb.reserve_back(static_cast<uint16_t>(Wt));
+    input_transposed_dfb.pop_front(static_cast<uint16_t>(Wt));
+    input_transposed_dfb.push_back(static_cast<uint16_t>(Wt));
     if constexpr (!fused) {
         index_transposed_dfb.reserve_back(Wt);
         index_transposed_dfb.pop_front(Wt);
@@ -327,7 +327,7 @@ void process_iteration(
     seq_per_2tiles = (seq_per_2tiles == 2) ? 2 : seq_per_2tiles >> 1;
     bool ascending = !largest;
 
-    input_transposed_dfb.wait_front(Wt);
+    input_transposed_dfb.wait_front(static_cast<uint16_t>(Wt));
     if constexpr (!fused) {
         index_transposed_dfb.wait_front(Wt);
     }
@@ -361,9 +361,9 @@ void process_iteration(
         }
     }
 
-    input_transposed_dfb.reserve_back(Wt);
-    input_transposed_dfb.pop_front(Wt);
-    input_transposed_dfb.push_back(Wt);
+    input_transposed_dfb.reserve_back(static_cast<uint16_t>(Wt));
+    input_transposed_dfb.pop_front(static_cast<uint16_t>(Wt));
+    input_transposed_dfb.push_back(static_cast<uint16_t>(Wt));
     if constexpr (!fused) {
         index_transposed_dfb.reserve_back(Wt);
         index_transposed_dfb.pop_front(Wt);
@@ -373,8 +373,8 @@ void process_iteration(
 
 void transpose_and_pack(
     std::uint32_t transposed_dfb_index, std::uint32_t dest_dfb_index, std::uint32_t Kt, std::uint32_t Wt) {
-    DataflowBuffer transposed_dfb(transposed_dfb_index);
-    DataflowBuffer dest_dfb(dest_dfb_index);
+    DataflowBuffer transposed_dfb(static_cast<uint16_t>(transposed_dfb_index));
+    DataflowBuffer dest_dfb(static_cast<uint16_t>(dest_dfb_index));
 
     reconfig_data_format_srca(transposed_dfb_index);
     transpose_init(transposed_dfb_index);
@@ -382,7 +382,7 @@ void transpose_and_pack(
     // intermediate) while dest_dfb is the original bfp8/bfp4 output format.
     pack_reconfig_data_format(dest_dfb_index);
 
-    transposed_dfb.wait_front(Kt);
+    transposed_dfb.wait_front(static_cast<uint16_t>(Kt));
     for (std::uint32_t i = 0; i < Kt; ++i) {
         tile_regs_acquire();
         transpose_tile(transposed_dfb_index, i, 0);

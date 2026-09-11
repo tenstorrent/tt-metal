@@ -139,8 +139,8 @@ void kernel_main() {
     DataflowBuffer values_dfb(values_dfb_index);
     DataflowBuffer output_ind_dfb(output_ind_dfb_index);
 
-    bool switch_dir = (K == 64);
-    int seq_per_2tiles = std::max((2 * 32) / K, (std::uint32_t)2);
+    const bool switch_dir = (K == 64);
+    uint32_t seq_per_2tiles = std::max<uint32_t>((2 * 32) / K, 2);
 
     // Process each height row independently
     for (std::uint32_t ht = 0; ht < Ht; ++ht) {
