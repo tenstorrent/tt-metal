@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -33,7 +33,7 @@ def golden_pack_complex_gradient(gradient):
     return torch.cat((torch.real(gradient), torch.imag(gradient)), dim=-1)
 
 
-def golden_select_optional_outputs(values, required):
+def FFgolden_select_optional_outputs(values, required):
     """Preserve optional output positions, using None for unrequested values."""
 
     if len(values) != len(required):
