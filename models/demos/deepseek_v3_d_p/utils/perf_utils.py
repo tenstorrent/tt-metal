@@ -197,7 +197,7 @@ def approximate_mla_galaxy_perf(csv_2x4: str, csv_8x4: str | None = None, use_av
 
 def run_model_device_perf_test_with_merge(
     command: str,
-    expected_device_perf_ns_per_iteration: float,
+    expected_device_perf_ns_per_iteration: float | None,
     subdir: str,
     model_name: str,
     num_iterations: int = 1,
@@ -218,7 +218,8 @@ def run_model_device_perf_test_with_merge(
 
     Args:
         command: Command to execute for running the model
-        expected_device_perf_ns_per_iteration: Expected device kernel duration in nanoseconds
+        expected_device_perf_ns_per_iteration: Expected device kernel duration in nanoseconds.
+            None records the measured result without a performance threshold.
         subdir: Subdirectory where performance logs will be stored
         model_name: Name of the model being tested
         num_iterations: Number of iterations (default: 1)
@@ -293,6 +294,11 @@ def run_model_device_perf_test_with_merge(
             pytest.fail(f"op_filter={op_filter!r} matched no rows in {filename}")
         logger.debug(f"Rows after op_filter={op_filter!r}: {len(df)}")
 
+    if expected_device_perf_ns_per_iteration is None:
+        durations = pd.to_numeric(df["DEVICE KERNEL DURATION [ns]"], errors="coerce")
+        if df.empty or not (durations.ge(0) & durations.lt(float("inf"))).all():
+            pytest.fail("Record-only performance measurement requires complete, finite, nonnegative kernel durations")
+
     logger.debug(f"Device rows before merge: {len(df)}")
     df_merged = merge_device_rows(df)
     logger.debug(f"Device rows after merge: {len(df_merged)}")
@@ -336,10 +342,17 @@ def run_model_device_perf_test_with_merge(
             for op_code, dur_ns in other_breakdown.items():
                 logger.info(f"  {op_code:<40} {dur_ns:>15,.0f} ns ({dur_ns / 1e3:>10,.1f} us)")
 
-    expected_perf_cols = {inference_time_key: expected_device_perf_ns_per_iteration}
-    expected_results = check_device_perf(
-        post_processed_results, margin=margin, expected_perf_cols=expected_perf_cols, assert_on_fail=True
-    )
+    expected_results = {}
+    if expected_device_perf_ns_per_iteration is not None:
+        expected_perf_cols = {inference_time_key: expected_device_perf_ns_per_iteration}
+        expected_results = check_device_perf(
+            post_processed_results, margin=margin, expected_perf_cols=expected_perf_cols, assert_on_fail=True
+        )
+    else:
+        measured_ns = post_processed_results.get(inference_time_key)
+        if df_merged.empty or not merged_kernel_durations or not (0 < measured_ns < float("inf")):
+            pytest.fail("Record-only performance measurement requires finite, positive device kernel durations")
+        logger.info("Recording measured device performance without a calibrated threshold")
     prep_device_perf_report(
         model_name=model_name,
         batch_size=batch_size,
