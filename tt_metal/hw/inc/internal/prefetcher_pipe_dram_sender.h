@@ -40,9 +40,14 @@
 #include <cstdint>
 
 #include "hostdev/remote_dfb_config_layout.h"
+#include "internal/dram_sender_credit_counters.h"
 #include "internal/risc_attribs.h"
 
 namespace experimental {
+
+// Byte stride between this sender's per-receiver counter pairs in its own L1: the pairs are
+// NOC-atomic targets, so entries_acked sits a whole L1_ALIGNMENT above entries_sent.
+inline constexpr uint32_t kPipeLocalCountersStride = 2 * L1_ALIGNMENT;
 
 // Working copy of a DRAM-sender PrefetcherPipe endpoint, loaded from its DRISC-L1 config page.
 struct PipeSenderCtx {
@@ -138,25 +143,10 @@ FORCE_INLINE void pipe_store_wr_offset(uint32_t local_counters_ptr, uint32_t num
 }
 
 // Free credit units (L1_ALIGNMENT-sized) at the most-backed-up receiver, without blocking. Lets a
-// batching caller size its next round the way poll_min_free_aligned_pages() does for a
-// GlobalCircularBuffer.
+// batching caller size its next round.
 FORCE_INLINE uint32_t pipe_poll_min_free_units(const PipeSenderCtx& ctx) {
-    const uint32_t ring_units = pipe_ring_units(ctx);
-    uint32_t min_free_units = ring_units;
-    invalidate_l1_cache();
-    for (uint32_t r = 0; r < ctx.num_receivers; ++r) {
-        volatile tt_l1_ptr uint32_t* sent_ptr = pipe_local_sent_ptr(ctx, r);
-        volatile tt_l1_ptr uint32_t* acked_ptr = sent_ptr + (L1_ALIGNMENT / sizeof(uint32_t));
-        const uint32_t outstanding = *sent_ptr - *acked_ptr;
-        // Clamp rather than subtract blindly: a resize padding credit can transiently push sent
-        // further ahead of acked than the ring holds, and an underflow here would wrap to a huge
-        // value and defeat receiver backpressure.
-        const uint32_t free_units = outstanding >= ring_units ? 0u : ring_units - outstanding;
-        if (free_units < min_free_units) {
-            min_free_units = free_units;
-        }
-    }
-    return min_free_units;
+    return dram_sender_min_free_units(
+        ctx.local_counters_ptr, ctx.num_receivers, kPipeLocalCountersStride, pipe_ring_units(ctx));
 }
 
 // Spin until every receiver can take num_entries more entries. The requirement is converted to
@@ -258,16 +248,7 @@ FORCE_INLINE void pipe_write_to_receiver(
 
 // Spin until every receiver has acked everything this core has sent.
 FORCE_INLINE void pipe_sender_barrier(const PipeSenderCtx& ctx) {
-    for (uint32_t r = 0; r < ctx.num_receivers; ++r) {
-        volatile tt_l1_ptr uint32_t* sent_ptr = pipe_local_sent_ptr(ctx, r);
-        volatile tt_l1_ptr uint32_t* acked_ptr = sent_ptr + (L1_ALIGNMENT / sizeof(uint32_t));
-        while (true) {
-            invalidate_l1_cache();
-            if (*acked_ptr == *sent_ptr) {
-                break;
-            }
-        }
-    }
+    dram_sender_barrier(ctx.local_counters_ptr, ctx.num_receivers, kPipeLocalCountersStride);
 }
 
 }  // namespace experimental
