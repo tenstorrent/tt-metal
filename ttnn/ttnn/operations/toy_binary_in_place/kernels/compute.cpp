@@ -17,7 +17,7 @@
 //
 // CB synchronization is expressed as an independent (wait, pop) pair per input and a
 // (reserve, push) pair per output:
-//   A operand : wait/pop per tile, front-relative (OperandKind::Scalar)
+//   A operand : wait/pop per tile, front-relative (InputTileMapping::Scalar)
 //   held B    : wait Upfront, then either pop AtEnd or never pop (PopPolicy::None)
 //   output    : reserve/push per tile
 // Broadcast B index: NONE->Block, ROW->Row, COL->Col, SCALAR->Scalar.
@@ -33,8 +33,8 @@ namespace ckl = compute_kernel_lib;
 using namespace compute_kernel_lib;
 
 // op_code: 0=add, 1=sub, 2=mul. Picks the eltwise convenience func at compile time.
-template <uint32_t op_code, ckl::InputSpec AInput, auto BInput, ckl::OutputSpec Output, ckl::IterationShapeKind Kind>
-ALWI void binary_dispatch(ckl::TypedIterationShape<Kind> shape) {
+template <uint32_t op_code, ckl::InputSpec AInput, auto BInput, ckl::OutputSpec Output>
+ALWI void binary_dispatch(ckl::IterationShape shape) {
     if constexpr (op_code == 0) {
         ckl::add<AInput, BInput, Output>(shape);
     } else if constexpr (op_code == 1) {
@@ -47,10 +47,10 @@ ALWI void binary_dispatch(ckl::TypedIterationShape<Kind> shape) {
 // In-place: cb_work = cb_work op cb_b. A (cb_work) is per-tile streamed, and the output
 // writes back into cb_work (same buffer, reserve/push per tile). The B policy / index follow
 // the original DISPATCH_IN_PLACE broadcast-specific policies.
-template <uint32_t op_code, uint32_t bcast_code, uint32_t CbWork, uint32_t CbB, ckl::IterationShapeKind Kind>
-ALWI void op_in_place(ckl::TypedIterationShape<Kind> shape) {
+template <uint32_t op_code, uint32_t bcast_code, uint32_t CbWork, uint32_t CbB>
+ALWI void op_in_place(ckl::IterationShape shape) {
     constexpr auto a_input =
-        ckl::input(CbWork, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::OperandKind::Scalar);
+        ckl::input(CbWork, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::InputTileMapping::Scalar);
     constexpr auto out = ckl::output(CbWork);
 
     if constexpr (bcast_code == 0) {
@@ -59,7 +59,11 @@ ALWI void op_in_place(ckl::TypedIterationShape<Kind> shape) {
             op_code,
             a_input,
             ckl::input(
-                CbB, ckl::BroadcastDim::None, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
+                CbB,
+                ckl::BroadcastDim::None,
+                ckl::WaitPolicy::Upfront,
+                ckl::PopPolicy::AtEnd,
+                ckl::InputTileMapping::Block),
             out>(shape);
     } else if constexpr (bcast_code == 1) {
         // ROW: B waits upfront and is never popped by the chain, B index Row.
@@ -67,7 +71,11 @@ ALWI void op_in_place(ckl::TypedIterationShape<Kind> shape) {
             op_code,
             a_input,
             ckl::input(
-                CbB, ckl::BroadcastDim::Row, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Row),
+                CbB,
+                ckl::BroadcastDim::Row,
+                ckl::WaitPolicy::Upfront,
+                ckl::PopPolicy::None,
+                ckl::InputTileMapping::Row),
             out>(shape);
     } else if constexpr (bcast_code == 2) {
         // COL: B waits upfront and pops at end, B index Col.
@@ -75,7 +83,11 @@ ALWI void op_in_place(ckl::TypedIterationShape<Kind> shape) {
             op_code,
             a_input,
             ckl::input(
-                CbB, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Col),
+                CbB,
+                ckl::BroadcastDim::Col,
+                ckl::WaitPolicy::Upfront,
+                ckl::PopPolicy::AtEnd,
+                ckl::InputTileMapping::Col),
             out>(shape);
     } else {
         // SCALAR: B waits upfront and is never popped by the chain, B index Scalar.
@@ -87,23 +99,17 @@ ALWI void op_in_place(ckl::TypedIterationShape<Kind> shape) {
                 ckl::BroadcastDim::Scalar,
                 ckl::WaitPolicy::Upfront,
                 ckl::PopPolicy::None,
-                ckl::OperandKind::Scalar),
+                ckl::InputTileMapping::Scalar),
             out>(shape);
     }
 }
 
 // Normal: cb_out = cb_input op cb_b. A (cb_input) always waits and pops per tile.
 // B policy / index follow the original DISPATCH_NORMAL broadcast-specific policies.
-template <
-    uint32_t op_code,
-    uint32_t bcast_code,
-    uint32_t CbIn,
-    uint32_t CbB,
-    uint32_t CbOut,
-    ckl::IterationShapeKind Kind>
-ALWI void op_normal(ckl::TypedIterationShape<Kind> shape) {
+template <uint32_t op_code, uint32_t bcast_code, uint32_t CbIn, uint32_t CbB, uint32_t CbOut>
+ALWI void op_normal(ckl::IterationShape shape) {
     constexpr auto a_input =
-        ckl::input(CbIn, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::OperandKind::Scalar);
+        ckl::input(CbIn, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::InputTileMapping::Scalar);
     constexpr auto out = ckl::output(CbOut);
 
     if constexpr (bcast_code == 0) {
@@ -116,7 +122,7 @@ ALWI void op_normal(ckl::TypedIterationShape<Kind> shape) {
                 ckl::BroadcastDim::None,
                 ckl::WaitPolicy::PerTile,
                 ckl::PopPolicy::PerTile,
-                ckl::OperandKind::Scalar),
+                ckl::InputTileMapping::Scalar),
             out>(shape);
     } else if constexpr (bcast_code == 1) {
         // ROW: B waits upfront and is never popped by the chain, B index Row.
@@ -124,7 +130,11 @@ ALWI void op_normal(ckl::TypedIterationShape<Kind> shape) {
             op_code,
             a_input,
             ckl::input(
-                CbB, ckl::BroadcastDim::Row, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Row),
+                CbB,
+                ckl::BroadcastDim::Row,
+                ckl::WaitPolicy::Upfront,
+                ckl::PopPolicy::None,
+                ckl::InputTileMapping::Row),
             out>(shape);
     } else if constexpr (bcast_code == 2) {
         // COL: B waits upfront and pops at end, B index Col. Consumes the same Ht tiles with
@@ -133,7 +143,11 @@ ALWI void op_normal(ckl::TypedIterationShape<Kind> shape) {
             op_code,
             a_input,
             ckl::input(
-                CbB, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Col),
+                CbB,
+                ckl::BroadcastDim::Col,
+                ckl::WaitPolicy::Upfront,
+                ckl::PopPolicy::AtEnd,
+                ckl::InputTileMapping::Col),
             out>(shape);
     } else {
         // SCALAR: B waits upfront and is never popped by the chain, B index Scalar.
@@ -145,7 +159,7 @@ ALWI void op_normal(ckl::TypedIterationShape<Kind> shape) {
                 ckl::BroadcastDim::Scalar,
                 ckl::WaitPolicy::Upfront,
                 ckl::PopPolicy::None,
-                ckl::OperandKind::Scalar),
+                ckl::InputTileMapping::Scalar),
             out>(shape);
     }
 }
@@ -163,7 +177,7 @@ void kernel_main() {
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
     constexpr uint32_t total_a_tiles = Ht * Wt;
-    constexpr auto shape = ckl::IterationShape::of(Ht, Wt);
+    constexpr auto shape = ckl::IterationShape::grid(Ht, Wt);
 
     if constexpr (in_place_flag == 1) {
         // === IN-PLACE MODE ===

@@ -48,7 +48,7 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb::in_tiles, dfb::scaler, dfb::out_tiles);
 
     constexpr auto reduce_block_shape = ckl::ReduceInputBlockShape::of(Ht, BLOCK_SIZE, /*NC=*/1);
-    constexpr auto bin_block_shape = ckl::IterationShape::of(Ht, BLOCK_SIZE);
+    constexpr auto bin_block_shape = ckl::IterationShape::grid(Ht, BLOCK_SIZE);
 
     // For non-tile-aligned W: select the partial scaler tile (idx 1) on the last W-tile. Only the
     // LAST block holds that tile, so the partial scaler is passed on the last block and ::none() on
@@ -79,13 +79,13 @@ void kernel_main() {
     // dfb::in_tiles is per-tile streamed by the reader -> A waits and pops per tile.
     for (uint32_t b = 0; b < NUM_BLOCKS; ++b) {
         ckl::sub<
-            ckl::input(dfb::in_tiles, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::OperandKind::Scalar),
+            ckl::input(dfb::in_tiles, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::InputTileMapping::Scalar),
             ckl::input(
                 dfb::mean,
                 ckl::BroadcastDim::Col,
                 ckl::WaitPolicy::Upfront,
                 ckl::PopPolicy::None,
-                ckl::OperandKind::Col),
+                ckl::InputTileMapping::Col),
             ckl::output(dfb::centered_sq)>(bin_block_shape);
 
         ckl::square<ckl::input(dfb::centered_sq), ckl::output(dfb::centered_sq)>(bin_block_shape);
