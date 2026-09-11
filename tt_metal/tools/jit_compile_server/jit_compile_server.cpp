@@ -156,8 +156,8 @@ void build_failure(
         fmt::format("{} {} failure -- cmd: {} (log file {} not found)", target, op, cmd, log_file));
 }
 
-bool need_compile(const std::string& out_dir, const std::string& obj) {
-    return !fs::exists(out_dir + obj) || !tt::jit_build::dependencies_up_to_date(out_dir, obj);
+bool need_compile(const std::string& out_dir, const std::string& obj, const std::string& umbrella) {
+    return !fs::exists(out_dir + obj) || !tt::jit_build::dependencies_up_to_date(out_dir, obj, umbrella);
 }
 
 bool need_link(const std::string& out_dir, const std::string& target_name) {
@@ -181,11 +181,7 @@ void append_tokenized(std::vector<std::string>& args, const std::string& flags) 
     args.insert(args.end(), std::make_move_iterator(tokens.begin()), std::make_move_iterator(tokens.end()));
 }
 
-std::string ensure_target_pch(
-    const std::string& gpp,
-    const tt::tt_metal::jit_server::TargetRecipe& target,
-    const std::string& out_dir,
-    const std::string& pch_root) {
+std::string find_target_pch_root(const tt::tt_metal::jit_server::TargetRecipe& target, const std::string& out_dir) {
     // Source-mode recipes already carry the tt-metal root as an include directory.
     // Resolve it as the compiler would, without constructing a device/MetalContext
     // or requiring an additional server environment variable or RPC field.
@@ -204,10 +200,7 @@ std::string ensure_target_pch(
         const fs::path root = fs::path(out_dir) / dir;
         std::error_code ec;
         if (fs::is_regular_file(root / tt::jit_build::PCH_UMBRELLA, ec)) {
-            // The umbrella contains only standard headers, resolved by the compiler's
-            // own search path. Kernel-specific -I paths must not create PCH variants.
-            return tt::jit_build::ensure_pch(
-                gpp, target.compiler_opt_level, target.cflags, "", root.string(), pch_root);
+            return root.string();
         }
     }
     // Older source trees may not ship the optional umbrella.
@@ -222,7 +215,8 @@ void compile_one(
     const std::string& out_dir,
     size_t src_index,
     const std::string& temp_obj,
-    const std::string& pch_root) {
+    const std::string& pch_root,
+    const std::string& source_root) {
     std::string obj_path = out_dir + target.objs[src_index];
     std::string obj_temp_path = out_dir + temp_obj;
     std::string temp_d_path = fs::path(obj_temp_path).replace_extension("d").string();
@@ -232,8 +226,10 @@ void compile_one(
     std::string cflags = target.cflags;
     // Preprocess-and-ship sends self-contained .ii files whose standard headers
     // are already expanded, so they cannot benefit from this shared prelude.
-    if (fs::path(target.srcs[src_index]).extension() != ".ii") {
-        const std::string pch = ensure_target_pch(gpp, target, out_dir, pch_root);
+    if (fs::path(target.srcs[src_index]).extension() != ".ii" && !source_root.empty()) {
+        // Only toolchain headers: kernel-specific -I paths must not create PCH variants.
+        const std::string pch =
+            tt::jit_build::ensure_pch(gpp, target.compiler_opt_level, target.cflags, "", source_root, pch_root);
         if (!pch.empty()) {
             defines.insert(defines.begin(), {"-include", pch});
             cflags += " -Winvalid-pch -Wno-error=invalid-pch";
@@ -260,7 +256,11 @@ void compile_one(
     // missing dephash conservatively forces a server-side recompile next time, and client-side reuse
     // rides on the client-written <elf> full-dephash sidecar instead.
     if (fs::path(target.srcs[src_index]).extension() != ".ii") {
-        tt::jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash");
+        tt::jit_build::write_dependency_hashes(
+            out_dir,
+            obj_temp_path,
+            obj_temp_path + ".dephash",
+            source_root.empty() ? "" : (fs::path(source_root) / tt::jit_build::PCH_UMBRELLA).string());
     }
     fs::remove(temp_d_path);
 }
@@ -326,9 +326,12 @@ void build_target(
         temp_objs.push_back(tt::jit_build::utils::FileRenamer::generate_temp_path(obj));
     }
 
+    const std::string source_root = find_target_pch_root(target, out_dir);
+    const std::string umbrella =
+        source_root.empty() ? "" : (fs::path(source_root) / tt::jit_build::PCH_UMBRELLA).string();
     std::vector<bool> compiled(num_objs, false);
     for (size_t i = 0; i < num_objs; ++i) {
-        if (need_compile(out_dir, target.objs[i])) {
+        if (need_compile(out_dir, target.objs[i], fs::path(target.srcs[i]).extension() == ".ii" ? "" : umbrella)) {
             compiled[i] = true;
         }
     }
@@ -348,7 +351,7 @@ void build_target(
 
     for (size_t i = 0; i < num_objs; ++i) {
         if (compiled[i]) {
-            compile_one(gpp, target, out_dir, i, temp_objs[i], pch_root);
+            compile_one(gpp, target, out_dir, i, temp_objs[i], pch_root, source_root);
         }
     }
 

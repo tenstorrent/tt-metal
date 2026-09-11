@@ -110,6 +110,30 @@ TEST_F(JitBuildDependencyTests, OutOfDateAfterDeletion) {
     EXPECT_FALSE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj_file_name));
 }
 
+TEST_F(JitBuildDependencyTests, ExplicitPchDependency) {
+    const std::string obj = "test.o";
+    const std::string hash_path = (out_dir_ / (obj + ".dephash")).string();
+    const std::string umbrella = (out_dir_ / "pch.h").string();
+    std::ofstream{out_dir_ / "test.cpp"} << "int value;\n";
+    std::ofstream{umbrella} << "#include <array>\n";
+    // GCC can omit the umbrella from the consuming object's dependency file.
+    std::ofstream{out_dir_ / "test.d"} << "test.o: test.cpp\n";
+
+    tt::jit_build::write_dependency_hashes(out_dir_.string(), obj, hash_path);
+    EXPECT_TRUE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj));
+    EXPECT_FALSE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj, umbrella));
+
+    tt::jit_build::write_dependency_hashes(out_dir_.string(), obj, hash_path, umbrella);
+    EXPECT_TRUE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj, umbrella));
+    std::ofstream{umbrella} << "#include <array>\n#include <tuple>\n";
+    EXPECT_FALSE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj, umbrella));
+
+    tt::jit_build::write_dependency_hashes(out_dir_.string(), obj, hash_path, umbrella);
+    EXPECT_TRUE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj, umbrella));
+    std::filesystem::remove(umbrella);
+    EXPECT_FALSE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj, umbrella));
+}
+
 TEST_F(JitBuildDependencyTests, DependencyHashesNotFound) {
     constexpr auto obj_file_name = "test.o";
     std::filesystem::remove_all(out_dir_);
