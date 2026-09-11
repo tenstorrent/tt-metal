@@ -92,10 +92,10 @@ public:
 
     // PrefetcherPipe delivery. Receiver-contiguous batched tensors only, all at the pipes' entry
     // size; the preconditions are checked here with the offending values in the message.
-    // `prefetcher_pipes` must be what CreatePrefetcherPipesForTensorPrefetcher returned (see the
-    // public QueueTensorPrefetcherRequest overload for what a group's pipe order fixes).
+    // `prefetcher_pipes` must be what CreatePrefetcherPipesForTensorPrefetcher returned, in that
+    // order (see the public QueueTensorPrefetcherRequest overload for what the order fixes).
     void queue(
-        const std::vector<experimental::TensorPrefetcherBankPipes>& prefetcher_pipes,
+        const std::vector<std::shared_ptr<experimental::PrefetcherPipe>>& prefetcher_pipes,
         const std::optional<MeshCoordinateRangeSet>& device_subset,
         const std::vector<experimental::TensorPrefetcherInput>& tensors,
         MeshCommandQueue* trace_capture_cq);
@@ -171,7 +171,7 @@ private:
     void worker_loop();
     void enumerate_dram_senders();
     RequestTarget target_for(const experimental::GlobalCircularBuffer& gcb) const;
-    RequestTarget target_for(const std::vector<experimental::TensorPrefetcherBankPipes>& prefetcher_pipes) const;
+    RequestTarget target_for(const std::vector<std::shared_ptr<experimental::PrefetcherPipe>>& prefetcher_pipes) const;
     std::vector<uint32_t> sender_indices_for_target(const RequestTarget& target) const;
     void build_and_launch_programs(uint32_t stage_ring_base, uint32_t stage_ring_size);
     void allocate_sockets();
