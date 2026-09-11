@@ -104,6 +104,21 @@
 #                 cosyvoice/utils/file_utils.py calls torchaudio.load(..., backend=
 #                 'soundfile'), and 2.9 ignores that argument and requires TorchCodec.
 #
+#   transformers  1 open, HIGH: CVE-2026-9856 (GHSA-xrqw-3rrv-vx5w,
+#                 PreTrainedTokenizerBase/ProcessorMixin.save_pretrained writing a
+#                 checkpoint's chat-template name as <name>.jinja without checking it
+#                 stays inside the target directory). Advisory names 5.10.0 as first
+#                 patched; that release was yanked by its own authors within the hour
+#                 ("missing a bunch of fixes"), so 5.10.1 carries the fix instead.
+#
+#                 Not reachable: this file's only transformers import never calls
+#                 save_pretrained, and upstream's three call sites are all off the
+#                 reference path (CUDA-only Triton export, a GRPO training example, a
+#                 vllm-only path saving a raw model, not a tokenizer). Held at 5.5.0
+#                 anyway -- unlike lightning this package sits in the AR decode loop,
+#                 so the bump needs an unrun golden check. docs/security.md has the
+#                 full disposition.
+#
 # onnxruntime is held at 1.18.0 on purpose, and not because of an advisory — it has
 # none. It runs speech_tokenizer_v1.onnx, and 1.23.2 emits a different token sequence
 # for the same audio. That reroutes the LLM and desynchronises every downstream RNG
