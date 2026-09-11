@@ -25,7 +25,11 @@ void kernel_main() {
     // [TC-DBG #51270] per_core_block_cnt distinguishes the two grids: it is 2 on the single-compute-node
     // 1x3 grid (both tiles on one core -> the failing path) and 1 on the 2x3 grid (one tile per core).
     // Unguarded DPRINT (matches the eltwise compute-kernel idiom); may print once per active TRISC.
-    DPRINT("TC_CMP cnt={}\n", per_core_block_cnt);
+    // sync: DstSync value the kernel compiled with (SyncHalf=0, SyncFull=1). Hypothesis: on the emulator
+    // this metal2 (QuasarComputeConfig) kernel falls back to SyncFull=1, which quirk #3 (TEN-4636) says
+    // zeros the upper DEST half -> the 2nd tile. accum: DST_ACCUM_MODE (fp32-dest = 1). tile 0 being
+    // bit-exact fp32 means accum must already be 1; if sync also prints 1 that confirms the Full trap.
+    DPRINT("TC_CMP cnt={} sync={} accum={}\n", per_core_block_cnt, (uint32_t)DST_SYNC_MODE, (uint32_t)DST_ACCUM_MODE);
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
         // [TC-DBG #51270] block marker: confirms the loop runs twice on 1x3 and correlates the per-tile
         // TYPECAST_LLK_INIT below with the tile the writer reports as wrong.
@@ -37,15 +41,6 @@ void kernel_main() {
             // Pop tile after tile, copy to DST and pack
             dfb_in.wait_front(1);
 
-#ifdef ARCH_QUASAR
-            // [#51270] Re-arm the datacopy unpack/math for EVERY tile on Quasar. Here bf16->fp32 runs a
-            // real SFPU op (typecast.h), and TYPECAST_LLK_INIT / TYPECAST_LLK below reconfigure the
-            // unpacker. A single copy_init before the loop therefore leaves the 2nd+ tile's copy_tile
-            // mis-armed, so it loads nothing into the next DEST half (half-sync ping-pong) and the tile
-            // packs all zeros (confirmed by DPRINT: tile 1 fp32bits = 0). WH/BH keep the single pre-loop
-            // copy_init: there bf16->fp32 is a packer no-op, so nothing reconfigures between tiles.
-            copy_init(dfb::in);
-#endif
             copy_tile(dfb::in, 0, 0);
 
             TYPECAST_LLK_INIT();
