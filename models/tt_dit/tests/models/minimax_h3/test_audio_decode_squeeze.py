@@ -68,8 +68,11 @@ RECIPES = {
     # packed resamplers (fixed kaiser taps) with a cheaper split than the convs
     "full_pack_rsact": {"pack": {5: 2, 6: 4}, "resamplers": "act"},
     "full_pack_rsoff": {"pack": {5: 2, 6: 4}, "resamplers": "off"},
+    # the same point built through the constructor path the pipeline uses
+    "rsoff_built": {"pack": {5: 2, 6: 4}, "build_kwargs": {"resampler_split_mode": "off"}},
 }
 RESAMPLERS_KEY = "resamplers"
+BUILD_KWARGS_KEY = "build_kwargs"  # extra constructor kwargs
 PACK_KEY = "pack"
 BUILD_KEY = "build"  # split_mode passed to the constructor (needed when it changes the weight shapes)
 
@@ -108,8 +111,8 @@ def apply_recipe(decoder, recipe: dict) -> dict:
         counts[f"resamplers_{recipe[RESAMPLERS_KEY]}"] = n
     if PACK_KEY in recipe:
         counts["pack"] = dict(recipe[PACK_KEY])
-    if BUILD_KEY in recipe or RESAMPLERS_KEY in recipe:
-        recipe = {k: v for k, v in recipe.items() if k not in (PACK_KEY, BUILD_KEY, RESAMPLERS_KEY)}
+    if BUILD_KEY in recipe or RESAMPLERS_KEY in recipe or BUILD_KWARGS_KEY in recipe:
+        recipe = {k: v for k, v in recipe.items() if k not in (PACK_KEY, BUILD_KEY, RESAMPLERS_KEY, BUILD_KWARGS_KEY)}
     for band, conv in _conv_modules_by_band(decoder):
         mode = None
         if "all" in recipe:
@@ -179,6 +182,7 @@ def test_audio_decode_squeeze(mesh_device, num_latent_frames, batch):
     baseline_out = None
     for name, recipe in _selected_recipes():
         build = {"split_mode": recipe[BUILD_KEY]} if BUILD_KEY in recipe else {}
+        build.update(recipe.get(BUILD_KWARGS_KEY, {}))
         decoder, _ = _load(mesh_device, pack_bands=recipe.get(PACK_KEY), **build)
         counts = apply_recipe(decoder, recipe)
         eager, _ = _best(lambda: decoder(latents), mesh_device, n=1)
