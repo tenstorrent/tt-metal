@@ -5,7 +5,7 @@
                 "FF1_FF3": "BFP8"
             },
             "fidelity_cfg": {
-                "LI_FF1_FF3": "HIFI2_FP16"
+                "LI_FF1_FF3": "LOFI"
             }
         }
     }
