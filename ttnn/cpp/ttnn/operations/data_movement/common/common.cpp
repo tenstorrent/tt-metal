@@ -12,11 +12,53 @@
 
 #include <numeric>
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/constants.hpp>
 
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::operations::data_movement {
+
+bool is_nd_sharded_memory_config(const tt::tt_metal::MemoryConfig& mem_config) {
+    return mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::ND_SHARDED ||
+           (mem_config.nd_shard_spec().has_value() && !mem_config.shard_spec().has_value());
+}
+
+tt::tt_metal::MemoryConfig derive_nd_shard_spec_for_reshaped_output(
+    const tt::tt_metal::MemoryConfig& src_cfg,
+    const ttnn::Shape& src_padded_shape,
+    const ttnn::Shape& out_padded_shape,
+    bool is_tiled) {
+    const auto& src_nd = src_cfg.nd_shard_spec().value();
+    if (src_nd.shard_shape.rank() != src_padded_shape.rank()) {
+        return src_cfg;  // shouldn't happen: a shard spec's rank always matches its own tensor's
+    }
+    const uint32_t rank = out_padded_shape.rank();
+    // A rank-changing reshape (e.g. an ND-normalized-to-2D input dropping rank): adapt the source
+    // shard and padded shape to the output rank by squeezing/unsqueezing first, so the derived spec
+    // matches the output's rank instead of handing BufferDistributionSpec a stale higher/lower-rank
+    // shard_shape it would abort on.
+    const ttnn::Shape src_shard = squeeze_or_unsqueeze_shape_to_ND(src_nd.shard_shape, rank);
+    const ttnn::Shape src_padded = squeeze_or_unsqueeze_shape_to_ND(src_padded_shape, rank);
+    ttsl::SmallVector<uint32_t> new_shard(rank);
+    for (uint32_t d = 0; d < rank; ++d) {
+        const uint32_t src_dim = src_padded[d] == 0 ? 1 : src_padded[d];
+        const uint32_t shard_d = src_shard[d] == 0 ? 1 : src_shard[d];
+        const uint32_t num_shards = (src_dim + shard_d - 1) / shard_d;  // per-dim shard count on the source
+        const uint32_t out_dim = out_padded_shape[d] == 0 ? 1 : out_padded_shape[d];
+        new_shard[d] = (out_dim + num_shards - 1) / num_shards;  // ceil-divide the output dim across those shards
+    }
+    if (is_tiled && rank >= 2) {
+        // Tiled shard shapes must be tile multiples on the inner two dims: round up, then clamp to
+        // the padded dim. A dim too small for that many tile-aligned shards (e.g. 64 fits two
+        // 32-tall shards, not four) lands on fewer cores; that is inherent, not a bug.
+        const uint32_t th = tt::constants::TILE_HEIGHT;
+        const uint32_t tw = tt::constants::TILE_WIDTH;
+        new_shard[rank - 1] = std::min(((new_shard[rank - 1] + tw - 1) / tw) * tw, out_padded_shape[rank - 1]);
+        new_shard[rank - 2] = std::min(((new_shard[rank - 2] + th - 1) / th) * th, out_padded_shape[rank - 2]);
+    }
+    return tt::tt_metal::MemoryConfig{src_cfg.buffer_type(), src_nd.with_shard_shape(ttnn::Shape(new_shard))};
+}
 
 ttnn::Shape squeeze_shape_to_ND(const ttnn::Shape& shape, const uint32_t n) {
     if (shape.rank() <= n) {
