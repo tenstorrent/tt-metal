@@ -134,6 +134,18 @@ _DEFAULT_AUDIO_T_FACTOR = 8
 # measured 0.53 -> 0.45 s traced at unchanged PSNR (layers/audio_pack.py).
 _AUDIO_PACK_ENV = "MINIMAX_H3_AUDIO_PACK"
 _DEFAULT_AUDIO_PACK = "5:2,6:4"
+# Split mode of the packed bands' anti-alias resamplers ("same" = the convs' mode). "off" is the measured 65 dB /
+# -72 ms point (layers/audio_pack.py).
+_AUDIO_RESAMPLER_SPLIT_ENV = "MINIMAX_H3_AUDIO_RESAMPLER_SPLIT"
+
+
+def _audio_resampler_split_mode() -> str | None:
+    raw = os.environ.get(_AUDIO_RESAMPLER_SPLIT_ENV, "same").strip()
+    if raw in ("", "same"):
+        return None
+    if raw not in ("off", "weight", "act", "full"):
+        raise ValueError(f"{_AUDIO_RESAMPLER_SPLIT_ENV}={raw!r} must be same, off, weight, act or full")
+    return raw
 
 
 def _audio_pack_bands() -> dict[int, int]:
@@ -1286,8 +1298,12 @@ class MiniMaxH3Pipeline:
                 parallel_config=audio_parallel_config,
                 split_mode=self.audio_split_mode,
                 pack_bands=_audio_pack_bands(),
+                resampler_split_mode=_audio_resampler_split_mode(),
             )
-            logger.info(f"Audio packing: {decoder.pack_bands or 'off'} ({_AUDIO_PACK_ENV})")
+            logger.info(
+                f"Audio packing: {decoder.pack_bands or 'off'} ({_AUDIO_PACK_ENV}), resampler split "
+                f"{decoder.resampler_split_mode or 'same'} ({_AUDIO_RESAMPLER_SPLIT_ENV})"
+            )
 
             def read_state() -> dict[str, torch.Tensor]:
                 """Only the decoder's half of the converted checkpoint.
@@ -1307,7 +1323,9 @@ class MiniMaxH3Pipeline:
                 # The audio precision levers change the module's parameter set, so they are part of
                 # the cache key -- read off the module so the key cannot drift from what was built.
                 subfolder="audio_decoder"
-                + weights_variant(decoder.split_mode, decoder.max_c_in_block, decoder.pack_bands),
+                + weights_variant(
+                    decoder.split_mode, decoder.max_c_in_block, decoder.pack_bands, decoder.resampler_split_mode
+                ),
                 parallel_config=self.vae_parallel_config,
                 mesh_shape=tuple(self.mesh_device.shape),
                 mesh_device=self.mesh_device,

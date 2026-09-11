@@ -43,7 +43,10 @@ DEFAULT_MAX_C_IN_BLOCK = 128
 
 
 def weights_variant(
-    split_mode: str, max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK, pack_bands: dict[int, int] | None = None
+    split_mode: str,
+    max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK,
+    pack_bands: dict[int, int] | None = None,
+    resampler_split_mode: str | None = None,
 ) -> str:
     """Cache-key suffix for the precision levers that change the prepared parameter set.
 
@@ -63,6 +66,8 @@ def weights_variant(
     if pack_bands:
         # Time-packed bands hold dense packed weights of other shapes (layers/audio_pack.py).
         suffix += "_pack" + "-".join(f"{b}x{k}" for b, k in sorted(pack_bands.items()))
+        if resampler_split_mode is not None and resampler_split_mode != split_mode:
+            suffix += f"_rs-{resampler_split_mode}"
     return suffix
 
 
