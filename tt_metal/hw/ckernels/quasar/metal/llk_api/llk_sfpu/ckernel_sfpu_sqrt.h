@@ -14,14 +14,14 @@ namespace sfpu {
 template <
     bool APPROXIMATION_MODE,
     int ITERATIONS = SFPU_ITERATIONS,
-    [[maybe_unused]] bool EN_32BIT_DEST,
-    [[maybe_unused]] bool FAST_APPROX = false>
+    bool EN_32BIT_DEST /*maybe_unused*/,
+    bool FAST_APPROX /*maybe_unused*/ = false>
 inline void calculate_sqrt() {
     static_assert(FAST_APPROX == false, "Non-default FAST_APPROX (true) not supported in Quasar sqrt");
     _calculate_sqrt_<APPROXIMATION_MODE, ITERATIONS>();
 }
 
-template <[[maybe_unused]] bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE /*maybe_unused*/>
 void sqrt_init() {
     // Empty function kept for backwards compatibility
 }
