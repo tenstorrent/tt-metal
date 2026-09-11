@@ -45,6 +45,12 @@ from models.demos.gemma4.utils.general_utils import get_cache_file_name
 # fall back to plain interleaved matmuls.
 _DRAM_SHARD_MLP = os.environ.get("GEMMA4_MLP_DRAM_SHARD", "1") != "0"
 
+# ``ttnn.gelu(variant=Accurate)`` lowers to exactly this op chain (see ``gelu``
+# in ttnn/cpp/ttnn/operations/eltwise/unary/unary.cpp), so running it as the
+# GeGLU multiply's input-A activation is the same SFPU work with one fewer
+# device op. Measured bit-identical at the decode GeGLU shape.
+_GELU_ACCURATE_ACT = ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0)
+
 
 def resolve_shared_mlp_intermediate_size(hf_config, state_dict=None, layer_idx=None) -> int:
     """Per-layer intermediate width for dense SharedMLP.
@@ -312,8 +318,13 @@ class SharedMLP:
 
         # Prefer Accurate over FastLut/Tanh for device PCC (see compute_config): the Tanh variant
         # dropped the E4B full-model PCC from 0.9846 to 0.9578 (gate 0.96) on bh_quietbox_2.
-        gate = ttnn.gelu(gate, variant=gelu_variant(), memory_config=geglu_memcfg)
-        hidden = ttnn.mul(gate, up, memory_config=geglu_memcfg)
+        # T3K dense decode folds that same Accurate GeLU into the multiply, which
+        # is one device op rather than two; every other mesh keeps the pair.
+        if self._tuned_decode and matmul_rows(gate) <= TILE_SIZE:
+            hidden = ttnn.mul(gate, up, input_tensor_a_activations=[_GELU_ACCURATE_ACT], memory_config=geglu_memcfg)
+        else:
+            gate = ttnn.gelu(gate, variant=gelu_variant(), memory_config=geglu_memcfg)
+            hidden = ttnn.mul(gate, up, memory_config=geglu_memcfg)
         gate.deallocate(True)
         up.deallocate(True)
 

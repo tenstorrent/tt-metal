@@ -46,6 +46,7 @@ from models.demos.gemma4.tt.attention import Gemma4Attention, Gemma4AttentionCon
 from models.demos.gemma4.tt.dram_sharded import is_t3k_dense_target
 from models.demos.gemma4.tt.gemma4_attention_config import get_attention_program_config
 from models.demos.gemma4.tt.moe import MoEBlock
+from models.demos.gemma4.tt.precision import resolve_single_tile_dest_acc
 from models.demos.gemma4.tt.rms_norm import RMSNorm, decode_width_shard_memcfg
 from models.demos.gemma4.tt.shared_mlp import SharedMLP
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
@@ -131,6 +132,23 @@ class Gemma4DecoderLayer:
         # instead of round-tripping it through DRAM between every op. Same gate
         # as the tuned matmul path; see dram_sharded.is_t3k_dense_target.
         self._tuned_decode = is_t3k_dense_target(mesh_device, hf_config)
+        # On that same target the layer scalar can ride the final residual add
+        # as an output activation instead of costing its own device op.
+        #
+        # Restricted to models that keep the m<=32 fp32 dest-accumulation on.
+        # ``single_tile_dest_acc=False`` marks a model already known to be
+        # fragile about where rounding happens in that path (31B and E2B set it;
+        # see precision_overrides.json), and 31B -- the one of those two that
+        # reaches here at all, E2B being held off by its per-layer inputs --
+        # proves the point: with the scalar fused, its long-context-128k answer
+        # collapses into the same 40x repetition loop that flag exists to
+        # prevent (532 chars, 27% unique words, reproduced twice), and
+        # test_full_model_decode PCC drops 0.99807 -> 0.99617. Gemma4-12B, which
+        # leaves the accumulation on, goes the other way: PCC 0.98840 -> 0.99121
+        # and 128k stays clean.
+        self._fuse_layer_scalar = (
+            self.layer_scalar != 1.0 and bool(resolve_single_tile_dest_acc(single_tile_dest_acc)) and self._tuned_decode
+        )
 
         # Attention
         attn_config = Gemma4AttentionConfig(hf_config, layer_idx)
@@ -249,6 +267,9 @@ class Gemma4DecoderLayer:
         # ``stream_memcfg`` stays None everywhere else, and every placement below
         # then resolves to the op default it uses today.
         stream_memcfg = None
+        # Short-circuits on the fusion gate so this shape read is unreachable on
+        # every mesh and model the fusion does not apply to.
+        decode_users = int(hidden_states.shape[-2]) if (is_decode and self._fuse_layer_scalar) else 0
         if is_decode and self._tuned_decode and not self.enable_moe_block and not self.hidden_size_per_layer_input:
             stream_memcfg = decode_width_shard_memcfg(self.mesh_device, hidden_states.shape[-1])
             if stream_memcfg is not None and not hidden_states.is_sharded():
@@ -344,10 +365,36 @@ class Gemma4DecoderLayer:
 
         # post_feedforward_layernorm -> residual add
         hidden_states = self.post_feedforward_layernorm.forward(hidden_states, keep_sharded=shard_stream)
+        # ``shard_stream`` is only set for dense decode with no per-layer inputs,
+        # which is exactly the case where nothing runs between this add and the
+        # layer_scalar multiply below, so the scalar can ride the add and save a
+        # device op per layer. Not bit-identical -- the fused form scales in the
+        # fp32 destination register where the two-op form packs the sum to bf16
+        # first -- which is why ``_fuse_layer_scalar`` is gated on the model's
+        # dest-accumulation policy.
+        #
+        # Restricted to one decode user, and the bound is measured, not derived.
+        # At batch-8 the fused form is not reproducible run to run: 13 repeats of
+        # the 12B batch-8 demo produced two distinct whole-batch outputs (10x and
+        # 3x), where 20 repeats of the two-op form produced one. Both outputs are
+        # coherent, so this is a token flip at an argmax near-tie rather than
+        # corruption, but a shipped bucket must not vary between runs. Batch-1 is
+        # stable over 15 repeats, and batch-32 does not reach the multi-user L1
+        # activation path at all. The root cause is not understood -- the
+        # arithmetic here is deterministic, so the suspicion is that being ~0.8%
+        # faster shifts timing in the CCL path -- so do not widen this without
+        # re-running the repeat test at the batch you are widening to.
+        fuse_scalar = self._fuse_layer_scalar and shard_stream and decode_users == 1
+        scalar_activation = (
+            {"activations": [ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, self.layer_scalar)]}
+            if fuse_scalar
+            else {}
+        )
         combined = ttnn.add(
             residual,
             hidden_states,
             memory_config=stream_memcfg if shard_stream else None,
+            **scalar_activation,
         )
         residual.deallocate(True)
         hidden_states.deallocate(True)
@@ -369,7 +416,7 @@ class Gemma4DecoderLayer:
                 hidden_states = ttnn.reshape(hidden_states, (1, 1, hidden_states.shape[-2], self.hidden_size))
 
         # Layer scalar — AFTER PLI (matching HF order)
-        if self.layer_scalar != 1.0:
+        if self.layer_scalar != 1.0 and not fuse_scalar:
             hidden_states = ttnn.mul(
                 hidden_states,
                 self.layer_scalar,
