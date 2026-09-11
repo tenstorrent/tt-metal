@@ -1407,12 +1407,28 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
         ),
+        # Same 8x4 mesh on a PLAIN 2D fabric, which wraps neither axis. The snake's closing edge spans a
+        # whole axis, so no cycle closes here and the full mesh resolves as an open Hamiltonian path --
+        # the tier the torus row above can never reach, because a torus always closes the ring. Both
+        # rows must produce the same PCCs: the transport-to-tensor mapping is the same row-major
+        # linearization either way, only the closing edge differs.
+        pytest.param(
+            (8, 4),
+            fabric2d_device_params(
+                fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE,
+                l1_small_size=GLM_L1_SMALL_SIZE,
+                trace_region_size=GLM_TRACE_REGION_SIZE,
+            ),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="fabric2d-8x4",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
 # KV dedup end-to-end through the full chunked transformer: tp_sharded must match the sp_only PCC, since
-# the deduped caches reconstruct the same block-cyclic buffer via the TP-inner all-gather. The 8x4 torus
-# always closes the snake ring, so this row covers the snake route only.
+# the deduped caches reconstruct the same block-cyclic buffer via the TP-inner all-gather. The torus row
+# covers the snake RING route; the fabric2d row covers the open PATH, where no cycle closes.
 @pytest.mark.parametrize("tp_shard_kv", [False, True], ids=["sp_only", "tp_sharded"])
 @pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm51", "glm52"])
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
