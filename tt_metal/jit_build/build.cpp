@@ -24,6 +24,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include <enchantum/enchantum.hpp>
@@ -837,7 +838,10 @@ void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const
 
 void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitBuildState* const> link_targets) const {
     TTZoneScopedD(JIT);
-    auto t0_build = std::chrono::steady_clock::now();
+    // Widens the process-wide JIT build window to cover this call, on every exit path -- including
+    // the warmed-ELF early return below, which is build activity even though it compiles nothing.
+    ScopedBuildWindow build_window;
+    const auto t0_build = build_window.start();
     auto kernel_name = settings ? std::string_view{settings->get_full_kernel_name()} : "";
     std::string out_dir = fmt::format("{}{}{}/", this->out_path_, kernel_name, this->target_name_);
 
@@ -871,7 +875,8 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
         }
     }
 
-    auto compiled = compile(out_dir, settings, state_changed);
+    static auto& tok_compile = BuildCacheTelemetry::inst().get_or_register_metric("JitBuildState::compile");
+    auto compiled = record_elapsed(tok_compile, [&] { return compile(out_dir, settings, state_changed); });
 
     string link_objs;
     // Populate link_objs once only when anything needs to be linked
@@ -905,10 +910,32 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
         fs::create_directories(target_out_dir);
         if (state_changed || compiled.any() || target->need_link(target_out_dir)) {
             populate_link_objs();
-            target->link(target_out_dir, settings, link_objs);
+            // target_name_ alone does not distinguish firmware from kernels, and firmware images are
+            // much larger/slower to link than a typical kernel -- sharing a key would let firmware set
+            // max and drag mean up, so the numbers would no longer describe kernels.
+            const std::string_view target_kind = target->is_fw_ ? "fw" : "kernel";
+            // Only link() is per-target work (compile() and populate_link_objs() are shared across
+            // targets), and only this branch links at all -- cache hits would record ~0 ms noise.
+            record_elapsed(
+                per_target_telemetry_token(fmt::format("{}_link_time", target_kind), target->target_name_, "ms"),
+                [&] { target->link(target_out_dir, settings, link_objs); });
             if (target->is_fw_) {
                 target->weaken(target_out_dir);
             }
+
+            // Inside the link branch so count is "binaries produced", not "times build() was called":
+            // on a warm cache every target would otherwise re-stat and re-record the same ELF.
+            // This is the on-disk ELF, which is neither stripped nor loaded as-is: it carries debug
+            // info when riscv_debug_info_enabled is set and relocations from -Wl,--emit-relocs, so it
+            // tracks build settings more than the device footprint and will not match
+            // program_config_size.kernel_text.
+            std::error_code elf_size_ec;
+            const auto elf_size = fs::file_size(target_out_dir + target->target_name_ + ".elf", elf_size_ec);
+            if (!elf_size_ec) {
+                per_target_telemetry_token(fmt::format("{}_elf_size", target_kind), target->target_name_, "B")
+                    .record(static_cast<double>(elf_size));
+            }
+
             // Record the build state used for linking so that future runs can detect
             // when link-affecting flags (lflags, linker script, etc.) change.
             target->write_build_state_hash(target_out_dir);
@@ -938,7 +965,7 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
     extract_zone_src_locations(out_dir);
 
     auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0_build).count();
-    static auto& tok_build = BuildCacheTelemetry::inst().register_metric("JitBuildState::build");
+    static auto& tok_build = BuildCacheTelemetry::inst().get_or_register_metric("JitBuildState::build");
     tok_build.record(elapsed_ms);
 
     // Per-kernel compile time makes a slow/stuck compile visible instead of silent, but a workload
@@ -1035,21 +1062,15 @@ tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSe
 
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
     TTZoneScopedD(JIT);
-    auto t0 = std::chrono::steady_clock::now();
-    build.build(settings);
-    auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-    static auto& tok = BuildCacheTelemetry::inst().register_metric("jit_build");
-    tok.record(elapsed_ms);
+    static auto& tok = BuildCacheTelemetry::inst().get_or_register_metric("jit_build");
+    record_elapsed(tok, [&] { build.build(settings); });
 }
 
 void jit_build_for_processors(std::span<const JitBuildState* const> targets, const JitBuildSettings* settings) {
     TT_ASSERT(!targets.empty());
-    auto t0 = std::chrono::steady_clock::now();
     const JitBuildState& primary = *targets[0];
-    primary.build(settings, targets);
-    auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-    static auto& tok = BuildCacheTelemetry::inst().register_metric("jit_build_for_processors");
-    tok.record(elapsed_ms);
+    static auto& tok = BuildCacheTelemetry::inst().get_or_register_metric("jit_build_for_processors");
+    record_elapsed(tok, [&] { primary.build(settings, targets); });
 }
 
 void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* settings) {

@@ -11,6 +11,7 @@ excludeAgent: "cloud-agent"
 - **Stable API surface discipline**: constants, types, or functions in stable public headers (`tt_metal/api/`) must not be removed or change semantics without a deprecation path. The `tt_metal/api/experimental/` subtree is exempt — experimental APIs may change or be removed freely without deprecation. If an internal-only constant (e.g., `max_runtime_args`) has no external consumers, move it to `impl/` rather than keeping it public "just in case."
 - **No singletons or global state without ContextID**: global instance lookups (e.g., `find_any_existing_instance()`) are fragile with multiple contexts. Pass an explicit `ContextID` or context reference to managers and builders.
 - **Kernel binary portability**: kernel binaries are per-device and per-architecture. Precompiled/cached binaries must include arch and device identifiers in their cache keys. Do not assume a binary compiled for one device works on another.
+- **Ringbuffer and credit-counter wrap**: verify that ring offsets remain correct when credit counters wrap. Deriving an offset with `counter % ring_units` preserves the ring position across wrap only if the counter modulus is divisible by `ring_units`. Wrap-safe credit accounting alone does not guarantee correct addressing.
 
 ## 🟡 IMPORTANT
 
@@ -54,3 +55,4 @@ excludeAgent: "cloud-agent"
 - [ ] Kernel helpers accept typed resource refs, not raw addresses
 - [ ] Tests prefer public APIs; impl access is justified (internal-invariant or non-public concept) or backed by a filed issue
 - [ ] Exclusive-mode resources have watcher checks for misuse
+- [ ] Ring offsets remain correct across both ring wrap and credit-counter wrap

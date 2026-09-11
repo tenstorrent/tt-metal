@@ -18,6 +18,15 @@ on:
       build-artifact-name:
         required: true
         type: string
+      prebuilt-image:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Env image carrying the source tree and build output at /work. When set,
+          the job mounts no /work, checks out only .github, and fetches no
+          artifact. Empty falls back to the artifact path, which is what forks and
+          a failed bake get.
       wheel-artifact-name:
         required: true
         type: string
@@ -87,7 +96,7 @@ jobs:
     # run_cpp_fabric_tests.sh / run_t3000_unit_tests.sh trip their -z guards on
     # unrecognized SKUs.
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ inputs.prebuilt-image || inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
@@ -99,7 +108,10 @@ jobs:
         # cost on non-TTNN entries; set universally rather than per-SKU.
         TTNN_CONFIG_OVERRIDES: '{"validate_program_args": true}'
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        # The image owns /work, so no bind mount: one would mask the payload. A
+        # single-path entry is an anonymous volume on an unused path, the same idiom
+        # as the hugepages opt-out below.
+        - ${{ inputs.prebuilt-image != '' && '/no_work_mount' || format('{0}/docker-job:/work', github.workspace) }} # Subdir to workaround https://github.com/actions/runner/issues/691
         # Coverage: mount /dev/hugepages-1G on non-viommu runners only. Viommu SKUs
         # (e.g. bh_p150b_civ2_viommu) bypass the hugepages path and must not have
         # the mount.
@@ -117,7 +129,10 @@ jobs:
         timeout-minutes: 20
         with:
           ref: ${{ inputs.ref || github.sha }}
-          submodules: recursive
+          # With an image the source is already at /work; the workspace copy only
+          # has to satisfy `uses: ./docker-job/...`, which resolves against it.
+          submodules: ${{ inputs.prebuilt-image == '' && 'recursive' || 'false' }}
+          sparse-checkout: ${{ inputs.prebuilt-image != '' && '.github' || '' }}
           path: docker-job
       - name: ⬇️  Setup Job
         uses: ./docker-job/.github/actions/setup-job
@@ -125,6 +140,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          env-from-image: ${{ inputs.prebuilt-image != '' }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
           # Coverage: enable runtime kernel ccache (Redis-backed) on WH-LB legs
           # where JIT compile amortizes across the run. Other SKUs skip ccache

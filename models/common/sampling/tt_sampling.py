@@ -94,27 +94,32 @@ class TTSampling(LightweightModule):
 
     @staticmethod
     def _untilize_chunk_count(width):
-        """Fewest tile-aligned even chunks of at most TOPK_MAX_WIDTH each, or 1
-        when the row is narrow enough (<= 2 * TOPK_MAX_WIDTH, the widest row
-        known to untilize in one program).
+        """Fewest tile-aligned chunks of at most TOPK_MAX_WIDTH each, or 1 when
+        the row is narrow enough (<= 2 * TOPK_MAX_WIDTH, the widest row known
+        to untilize in one program).
 
-        Raise rather than fall back: a wide row that cannot be cut would either
-        recreate the full-row circular-buffer/L1 compile clash (silent return 1)
-        or explode into thousands of tiny chunks (unbounded search), and both
-        are better caught at the source. The search is bounded so chunks stay at
-        least half of TOPK_MAX_WIDTH wide.
+        Prefer an even cut so every chunk is at least half of TOPK_MAX_WIDTH
+        wide (the search is bounded to twice the minimum count).
         """
+
         if width <= 2 * TOPK_MAX_WIDTH:
             return 1
-        num_chunks = -(-width // TOPK_MAX_WIDTH)
+        min_chunks = (width + TOPK_MAX_WIDTH - 1) // TOPK_MAX_WIDTH  # ceil(width / TOPK_MAX_WIDTH)
+        num_chunks = min_chunks
         max_chunks = 2 * num_chunks
         while num_chunks <= max_chunks:
             if width % num_chunks == 0 and (width // num_chunks) % ttnn.TILE_SIZE == 0:
                 return num_chunks
             num_chunks += 1
-        raise ValueError(
-            f"cannot cut an untilize row of width {width} into tile-aligned chunks of at most {TOPK_MAX_WIDTH}"
-        )
+        # INFO: split accepts an uneven trailing chunk.
+        return min_chunks
+
+    @staticmethod
+    def _untilize_chunk_width(width, num_chunks):
+        """Tile-aligned ttnn.split size that cuts `width` into `num_chunks` pieces
+        (the last one shorter when the row does not divide evenly)."""
+        per_chunk = (width + num_chunks - 1) // num_chunks  # ceil(width / num_chunks)
+        return (per_chunk + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE  # round up to a tile
 
     def _is_force_argmax_sampling(self, k, p, temp):
         """Detect whether all users request deterministic greedy decoding.
@@ -786,6 +791,40 @@ class TTSampling(LightweightModule):
         ttnn.deallocate(boost)
         return adjusted
 
+    def _untilize_for_argmax(self, x):
+        """Untilize a vocabulary row in bounded chunks while preserving its exact width."""
+        num_untilize_chunks = self._untilize_chunk_count(x.shape[-1])
+        # DRAM-interleaved ttnn.split/slice does not honor sub_core_grids (same
+        # senders-column spill as the vocab-trim slice above).
+        if num_untilize_chunks > 1 and self._force_argmax_sub_core_grids is None:
+            # Untilizing the full row in one program needs a static circular-buffer
+            # region proportional to the row width with past  around 150K elements it clashes
+            # with the model's resident L1 buffers at compile.
+            x_chunks = ttnn.split(x, self._untilize_chunk_width(x.shape[-1], num_untilize_chunks), dim=3)
+            untilized_chunks = []
+            for chunk in x_chunks:
+                # Free each tiled chunk as soon as its row-major copy exists,
+                # so peak memory holds around 1 full-vocab buffer less than freeing
+                # after the loop.
+                untilized_chunks.append(
+                    ttnn.untilize(
+                        chunk,
+                        use_multicore=True,
+                        sub_core_grids=self._force_argmax_sub_core_grids,
+                    )
+                )
+                chunk.deallocate()
+            x_untilized = ttnn.concat(
+                untilized_chunks,
+                dim=3,
+                sub_core_grids=self._force_argmax_sub_core_grids,
+            )
+            for chunk in untilized_chunks:
+                ttnn.deallocate(chunk)
+        else:
+            x_untilized = ttnn.untilize(x, use_multicore=True, sub_core_grids=self._force_argmax_sub_core_grids)
+        return x_untilized
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -870,46 +909,7 @@ class TTSampling(LightweightModule):
                 )
             if slice_valid_vocab:
                 x = self._slice_valid_vocab_for_argmax(x)
-            num_untilize_chunks = self._untilize_chunk_count(x.shape[-1])
-            # DRAM-interleaved ttnn.split/slice does not honor sub_core_grids (same
-            # senders-column spill as the vocab-trim slice above). Qwen3-32B Galaxy
-            # pads to 155648, which _untilize_chunk_count cuts into 4 chunks, so the
-            # post-main-rebase chunked path hits that fatal on the BH prefetcher
-            # worker sub-device. A single untilize of that width compiles there
-            # (Gemma-2's 256000-wide clash is the reason the chunked path exists;
-            # it stays for unpinned Wormhole grids).
-            if num_untilize_chunks > 1 and self._force_argmax_sub_core_grids is None:
-                # Untilizing the full row in one program needs a static circular-buffer
-                # region proportional to the row width; past ~150K elements it clashes
-                # with the model's resident L1 buffers at compile (Gemma-2's 256000-wide
-                # logits throw "circular buffers ... clash with L1 buffers"). The gate
-                # is width-based, not mesh-based: multi-device force-argmax gathers the
-                # full padded vocab onto every device and hits the same wall. Untilize
-                # in tile-aligned chunks and concat row-major instead.
-                x_chunks = ttnn.split(x, x.shape[-1] // num_untilize_chunks, dim=3)
-                untilized_chunks = []
-                for chunk in x_chunks:
-                    # Free each tiled chunk as soon as its row-major copy exists,
-                    # so peak memory holds ~1 full-vocab buffer less than freeing
-                    # after the loop (this runs inside the captured decode trace,
-                    # so the peak is baked into the trace region size).
-                    untilized_chunks.append(
-                        ttnn.untilize(
-                            chunk,
-                            use_multicore=True,
-                            sub_core_grids=self._force_argmax_sub_core_grids,
-                        )
-                    )
-                    chunk.deallocate()
-                x_untilized = ttnn.concat(
-                    untilized_chunks,
-                    dim=3,
-                    sub_core_grids=self._force_argmax_sub_core_grids,
-                )
-                for chunk in untilized_chunks:
-                    ttnn.deallocate(chunk)
-            else:
-                x_untilized = ttnn.untilize(x, use_multicore=True, sub_core_grids=self._force_argmax_sub_core_grids)
+            x_untilized = self._untilize_for_argmax(x)
             tt_out_tok = ttnn.argmax(
                 x_untilized,
                 dim=-1,
