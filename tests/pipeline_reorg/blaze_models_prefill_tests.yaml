@@ -1130,6 +1130,45 @@
   team: models
   sp_config: sc1
 
+# Traced-vs-eager KV equivalence for the #55126 per-offset query-scale fix. This is the ONLY gate on
+# that path: an unrefreshed scale buffer applies temperature 1.0, which moves the chunked PCC rows by
+# ~0.002 against a 0.98 threshold, so they cannot see it. The test asserts its own sensitivity control
+# FIRST -- suppressing the temperature must drive the deep layers BELOW the agreement bar -- so it
+# cannot pass vacuously.
+#
+# fabric_profile torus_xy is load-bearing, not decoration: conftest collect-skips TorusXY cases before
+# device open unless PREFILL_TORUS_XY_CERTIFIED is set, and only this profile's workflow step sets it.
+- name: "Mistral-Small-4-119B traced-vs-eager prefill KV equivalence 30k@5k"
+  fabric_profile: torus_xy
+  cmd: |
+    export MESH_DEVICE=TG
+    export LOGURU_LEVEL=INFO
+    export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
+    export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/CI
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -eo pipefail
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_chunk_traced_vs_eager.py -vvv --tb=short | tee /tmp/mistral4_traced_vs_eager.out
+      # The test self-skips without staged weights, and a leg whose only row skipped exits 0 and
+      # reads as green. Fail instead.
+      grep -qE "[0-9]+ passed" /tmp/mistral4_traced_vs_eager.out || { echo "::error::mistral4_traced_vs_eager: nothing ran; check the staged weight cache and the certified TorusXY allocation"; exit 1; }
+    '
+  test_type: mistral4_traced_vs_eager
+  test_tags: [mistral4, runner, kv_cache]
+  test_group: module
+  skus:
+    bh_sc1:
+      # Measured 2026-09-11 on bh-glx-120-b03u02: 1 min 24 s warm, 6 min 57 s with a cold kernel
+      # cache (runtime.compile() 31 s -> 189 s). 12 is ~1.7x the cold case, leaving room for a colder
+      # NFS weight read; the sibling traced padded leg above uses 10 against a 4.9 min measurement.
+      timeout: 12
+      tier: 2
+      release_ready: false
+  owner_id: U08GEEEEC75 # ssalice
+  team: models
+  sp_config: sc1
+
 
 # ===== GPT-OSS-120B ==================================================================================
 
