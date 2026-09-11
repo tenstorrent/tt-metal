@@ -419,29 +419,29 @@ namespace experimental {
 
 void ConfigureProgramWithoutLaunch(IDevice* device, Program& program) {
     ZoneScoped;
-    // Logged step by step: this runs only while capturing an image, and a hang here has no python
-    // frame below it.
-    log_warning(tt::LogMetal, "CFGONLY[{}] enter", device->id());
+    // Debug breadcrumbs, one per step: a hang in this path has no Python frame below it, and the
+    // step name is what says where it stopped.
+    log_debug(tt::LogMetal, "ConfigureProgramWithoutLaunch[{}] enter", device->id());
 
     // Same prologue as LaunchProgram: compile, finalize offsets, write configs and binaries, then
     // runtime args (configure first: it allocates the scratchpads whose addresses become CRTAs).
     detail::CompileProgram(device, program);
-    log_warning(tt::LogMetal, "CFGONLY[{}] compiled", device->id());
+    log_debug(tt::LogMetal, "ConfigureProgramWithoutLaunch[{}] compiled", device->id());
     program.impl().finalize_dataflow_buffer_configs();
     if (!program.impl().is_finalized()) {
         program.impl().finalize_offsets(device);
     }
-    log_warning(tt::LogMetal, "CFGONLY[{}] finalized", device->id());
+    log_debug(tt::LogMetal, "ConfigureProgramWithoutLaunch[{}] finalized", device->id());
     detail::ConfigureDeviceWithProgram(device, program, /*force_slow_dispatch=*/false);
-    log_warning(tt::LogMetal, "CFGONLY[{}] configured", device->id());
+    log_debug(tt::LogMetal, "ConfigureProgramWithoutLaunch[{}] configured", device->id());
     detail::WriteRuntimeArgsToDevice(device, program, /*force_slow_dispatch=*/false);
-    log_warning(tt::LogMetal, "CFGONLY[{}] rtargs written", device->id());
+    log_debug(tt::LogMetal, "ConfigureProgramWithoutLaunch[{}] rtargs written", device->id());
 
     auto device_id = device->id();
     MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
     metal_ctx.get_cluster().dram_barrier(device_id);
     metal_ctx.get_cluster().l1_barrier(device_id);
-    log_warning(tt::LogMetal, "CFGONLY[{}] barriers done", device->id());
+    log_debug(tt::LogMetal, "ConfigureProgramWithoutLaunch[{}] barriers done", device->id());
 
     // Only the launch message: it names kernel_config_base and the text offsets. send_go=false
     // leaves firmware parked.
@@ -464,7 +464,7 @@ void ConfigureProgramWithoutLaunch(IDevice* device, Program& program) {
                 /*send_go=*/false);
         }
     }
-    log_warning(tt::LogMetal, "CFGONLY[{}] launch msgs written, done", device_id);
+    log_debug(tt::LogMetal, "ConfigureProgramWithoutLaunch[{}] launch msgs written, done", device_id);
 }
 
 void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
@@ -1063,7 +1063,7 @@ void WaitProgramDone(IDevice* device, Program& program, bool read_device_profile
 
 CoreKernelConfig ReadKernelConfig(IDevice* device, const CoreCoord& logical_core) {
     // Decode through the generated view firmware compiles against, so the layout is stated once.
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = MetalContext::instance(extract_context_id(device)).hal();
     const auto core_type = HalProgrammableCoreType::TENSIX;
     auto factory = hal.get_dev_msgs_factory(core_type);
     auto launch = factory.create<dev_msgs::launch_msg_t>();

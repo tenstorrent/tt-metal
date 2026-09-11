@@ -19,7 +19,7 @@ namespace {
 // Set (or clear) one environment variable for the test's life and put the old value back.
 class ScopedEnv {
 public:
-    ScopedEnv(const char* name, std::optional<std::string> value) : name_(name) {
+    ScopedEnv(const char* name, const std::optional<std::string>& value) : name_(name) {
         if (const char* old = std::getenv(name)) {
             old_ = old;
         }

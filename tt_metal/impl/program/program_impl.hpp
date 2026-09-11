@@ -10,6 +10,7 @@
 #include "tt-metalium/circular_buffer.hpp"
 #include "tt-metalium/circular_buffer_constants.h"
 #include "tt-metalium/circular_buffer_config.hpp"
+#include <tt_stl/assert.hpp>
 #include "tt-metalium/core_coord.hpp"
 #include "tt-metalium/hal_types.hpp"       // HalProgrammableCoreType
 #include "tt-metalium/kernel_types.hpp"    // KernelHandle
@@ -272,13 +273,21 @@ public:
         this->reload_table_addr_ = addr;
         this->reload_core_ranges_ = cores;
     }
-    // The address applies only to the nominated cores; every other core sees 0.
-    // What the group's launch message carries: the table address if the group has a reloading
-    // core, else 0.
+    // What a kernel group's launch message carries: the table address if the group reloads, else 0.
+    // Every core of a group shares that launch message, so the nominated cores must cover the whole
+    // group or none of it: a partially covered group would hand its other cores a table they were
+    // not built for, and they would run another core's binary.
     uint32_t get_reload_table_addr(const CoreRangeSet& group_cores) const {
-        return (this->reload_table_addr_.has_value() && this->reload_core_ranges_.intersects(group_cores))
-                   ? *this->reload_table_addr_
-                   : 0;
+        if (!this->reload_table_addr_.has_value() || !this->reload_core_ranges_.intersects(group_cores)) {
+            return 0;
+        }
+        TT_FATAL(
+            this->reload_core_ranges_.contains(group_cores),
+            "reload_core_ranges {} covers only part of a kernel group {}: a kernel group shares one launch "
+            "message, so every core of the group must reload or none of it",
+            this->reload_core_ranges_,
+            group_cores);
+        return *this->reload_table_addr_;
     }
     const std::optional<uint64_t>& get_cached() const { return this->cached_device_hash_; }
     void set_program_binary_status(ChipId device_id, ProgramBinaryStatus status);

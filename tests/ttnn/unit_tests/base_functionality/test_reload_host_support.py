@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Host-side support for the runtime binary reload: raw L1 access by mesh coordinate, configuring a
-program without launching it, and the reload fields on ProgramDescriptor."""
+program without launching it, and the reload fields on ProgramDescriptor (including that a reload
+table is all-or-nothing per kernel group)."""
 
 import os
 
@@ -18,13 +19,13 @@ CORE_SET = ttnn.CoreRangeSet([ttnn.CoreRange(CORE, CORE)])
 WORDS = 32  # one [1, 32] uint32 tile per core
 
 
-def _l1_words(mesh_device):
-    """A tiny L1 tensor sharded on CORE and replicated across the mesh: scratch this test owns,
-    at the same address on every device."""
-    shard = ttnn.ShardSpec(CORE_SET, (1, WORDS), ttnn.ShardOrientation.ROW_MAJOR)
+def _l1_words(mesh_device, cores=CORE_SET):
+    """A tiny L1 tensor, one [1, WORDS] tile per core of ``cores`` and replicated across the mesh:
+    scratch this test owns, at the same address on every core and every device."""
+    shard = ttnn.ShardSpec(cores, (1, WORDS), ttnn.ShardOrientation.ROW_MAJOR)
     mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard)
     return ttnn.from_torch(
-        torch.zeros(1, WORDS, dtype=torch.int32),
+        torch.zeros(cores.num_cores(), WORDS, dtype=torch.int32),
         dtype=ttnn.uint32,
         layout=ttnn.TILE_LAYOUT,
         tile=ttnn.Tile([1, WORDS]),
@@ -34,14 +35,15 @@ def _l1_words(mesh_device):
     )
 
 
-def _marker_program(target):
-    """One data-movement kernel on CORE that writes MARKER to ``target``'s L1 address."""
+def _marker_program(target, cores=CORE_SET):
+    """One data-movement kernel on ``cores`` that writes MARKER to ``target``'s L1 address."""
     rt = ttnn.RuntimeArgs()
-    rt[CORE.x][CORE.y] = [target.buffer_address(), MARKER]
+    for core in ttnn.corerange_to_cores(cores, row_wise=True):
+        rt[core.x][core.y] = [target.buffer_address(), MARKER]
     kernel = ttnn.KernelDescriptor(
         kernel_source="tests/ttnn/unit_tests/base_functionality/kernels/write_marker.cpp",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-        core_ranges=CORE_SET,
+        core_ranges=cores,
         compile_time_args=[],
         runtime_args=rt,
         config=ttnn.WriterConfigDescriptor(),
@@ -112,6 +114,22 @@ def test_configure_only_installs_the_program_and_never_runs_it(mesh_device):
     ttnn.deallocate(other)
 
 
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 1), id="1x1")], indirect=True)
+def test_a_coordinate_outside_the_mesh_is_a_managed_error(mesh_device, expect_error):
+    """MeshDevice.get_device returns no device for a coordinate outside the mesh; the raw L1
+    accessors must say so instead of dereferencing it."""
+    scratch = _l1_words(mesh_device)
+    addr = scratch.buffer_address()
+    outside = ttnn.MeshCoordinate(0, 1)
+    with expect_error(RuntimeError, "outside the mesh"):
+        mesh_device.read_core_l1(CORE, addr, 4, outside)
+    with expect_error(RuntimeError, "outside the mesh"):
+        mesh_device.write_core_l1(CORE, addr, [0], outside)
+    with expect_error(RuntimeError, "outside the mesh"):
+        mesh_device.read_kernel_config(CORE, outside)
+    ttnn.deallocate(scratch)
+
+
 # ---------------------------------------------------------------- descriptor reload fields
 
 
@@ -140,6 +158,33 @@ def test_merging_descriptors_keeps_one_reload_table_or_refuses(expect_error):
     assert ttnn.merge_program_descriptors([pd(None), pd(None)]).reload_table_addr is None
     with expect_error(RuntimeError, "different reload_table_addr"):
         ttnn.merge_program_descriptors([pd(0x1000), pd(0x2000)])
+
+
+TWO_CORES = ttnn.CoreRangeSet([ttnn.CoreRange(CORE, ttnn.CoreCoord(1, 0))])
+
+
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 1), id="1x1")], indirect=True)
+def test_reload_core_ranges_must_cover_a_whole_kernel_group(mesh_device, expect_error):
+    """Every core of a kernel group shares one launch message, so the reload table address is
+    all-or-nothing per group: nominating one core of a two-core group is refused at program build,
+    nominating both is accepted (and inert under stock firmware)."""
+    scratch, other = _l1_words(mesh_device, TWO_CORES), _l1_words(mesh_device, TWO_CORES)
+
+    partial = _marker_program(scratch, TWO_CORES)
+    partial.reload_table_addr = 0x1000
+    partial.reload_core_ranges = CORE_SET
+    with expect_error(RuntimeError, "covers only part of a kernel group"):
+        ttnn.generic_op([other, scratch], partial)
+
+    whole = _marker_program(scratch, TWO_CORES)
+    whole.reload_table_addr = 0x1000
+    whole.reload_core_ranges = TWO_CORES
+    ttnn.generic_op([other, scratch], whole)
+    ttnn.synchronize_device(mesh_device)
+    for core in ttnn.corerange_to_cores(TWO_CORES, row_wise=True):
+        assert list(mesh_device.read_core_l1(core, scratch.buffer_address(), 4))[:1] == [MARKER]
+    ttnn.deallocate(scratch)
+    ttnn.deallocate(other)
 
 
 @pytest.mark.parametrize("mesh_device", [pytest.param((1, 1), id="1x1")], indirect=True)
