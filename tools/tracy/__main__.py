@@ -397,7 +397,22 @@ def main():
                 proc = subprocess.Popen([testCommand], shell=True, env=env, preexec_fn=os.setsid)
                 proc_holder["p"] = proc
                 logger.info("Test process started")
-                proc.communicate()
+                # TRACY_WORKLOAD_TIMEOUT (seconds) bounds the wait; on timeout or any interruption the
+                # workload's whole process group is killed so nothing outlives this wrapper.
+                workload_timeout = os.environ.get("TRACY_WORKLOAD_TIMEOUT")
+                try:
+                    proc.communicate(timeout=float(workload_timeout) if workload_timeout else None)
+                except subprocess.TimeoutExpired:
+                    logger.error(f"{testCommand} exceeded TRACY_WORKLOAD_TIMEOUT={workload_timeout}s; killing it")
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                    proc.communicate()
+                    sys.exit(4)
+                except BaseException:
+                    try:
+                        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    raise
                 if options.check_exit_code and proc.returncode != 0:
                     logger.error(f"{testCommand} exited with a non-zero return code")
                     sys.exit(4)
