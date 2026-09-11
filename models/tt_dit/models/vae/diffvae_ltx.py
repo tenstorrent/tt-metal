@@ -24,12 +24,7 @@ import ttnn
 
 from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear
 from ...layers.module import Module, ModuleList
-from ...layers.na3d import (
-    NA3DDevicePlan,
-    build_device_plan,
-    neighborhood_attention_3d,
-    plan_na3d,
-)
+from ...layers.na3d import NA3DDevicePlan, build_device_plan, neighborhood_attention_3d, plan_na3d
 from ...layers.neighborhood_attention import neighborhood_attention_3d_bricked_w_sharded
 from ...layers.normalization import RMSNorm
 from ...utils import decode_tree

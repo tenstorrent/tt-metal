@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from ..utils.tensor import from_torch, local_device_to_torch
+from ..utils.tensor import local_device_to_torch
 
 
 class CCLManager:
