@@ -262,6 +262,17 @@ def _t_neighbor_pad(
             x_BTC = ttnn.concat([x_BTC, zr], dim=1)
         return x_BTC
 
+    # neighbor_pad_async ships one T row per fabric packet and silently corrupts (wrong, nondeterministic) rows wider
+    # than the packet payload. Refuse instead: the mesh must be opened with a packet at least as wide as the widest
+    # halo row, e.g. `create_fabric_router_config(8192)` for the encoder's fp32 C=2048 trunk rows.
+    row_bytes = x_BTC.shape[-1] * ttnn.element_size(x_BTC.get_dtype())
+    max_payload = ttnn.get_tt_fabric_max_payload_size_bytes()
+    if row_bytes > max_payload:
+        raise ValueError(
+            f"T halo exchange of {row_bytes}-byte rows (C={x_BTC.shape[-1]}, {x_BTC.get_dtype()}) exceeds the fabric "
+            f"packet payload of {max_payload} bytes; open the mesh with a fabric_router_config whose "
+            f"max_packet_payload_size_bytes >= {row_bytes} (the pipeline's `_8k` device params)."
+        )
     outer_dims = x_BTC.shape[0]
     num_links = max(1, min(outer_dims, ccl_manager.num_links))
 
@@ -318,7 +329,7 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
 
     # Cache the prepared (tilized/sharded) weight to keep the on-device path; key on
     # (C, stride, taps) since the upsampler reuses one cache for distinct sub-tap vectors.
-    wkey = ("w", C, stride, K, tuple(taps))
+    wkey = ("w", C, stride, K, tuple(taps), B, T_pad)
     weight = cache.get(wkey)
     prepared = weight is not None
     if weight is None:
@@ -448,7 +459,7 @@ def _depthwise_tap_conv1d_chunked(
     the mantissa to TF32.
     """
     assert (chunk * 4) % 64 == 0, f"C-chunk {chunk} would make ttnn.concat(dim=-1) lossy in fp32"
-    wkey = ("w", chunk, stride, K, tuple(taps))
+    wkey = ("w", chunk, stride, K, tuple(taps), B, T_pad)
     weight = cache.get(wkey)
     prepared = weight is not None
     if weight is None:
