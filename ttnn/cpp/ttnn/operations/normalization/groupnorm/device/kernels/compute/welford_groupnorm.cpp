@@ -265,6 +265,9 @@ void kernel_main() {
         two_pass_stats_clear();
         uint32_t active_group = 0;
 
+        // Two-pass reuses Welford's register save/restore layout to retain each
+        // group's anchor and partial sums while traversal switches between groups.
+        // Initialise the inactive groups with the cleared state.
         for (uint32_t g = 1; g < num_groups; ++g) {
             welford_save_state(mean_dst, g);
         }

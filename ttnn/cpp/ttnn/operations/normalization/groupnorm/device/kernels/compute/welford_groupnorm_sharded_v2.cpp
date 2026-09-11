@@ -185,6 +185,8 @@ void kernel_main() {
         std::uint32_t active_group = 0;
         // Group 0 starts directly from the cleared LREG state. Only the
         // other groups need an initialized state in DST before first use.
+        // Two-pass reuses Welford's register save/restore layout for per-group
+        // anchors and partial sums. Seed inactive groups with the cleared state.
         for (std::uint32_t g = 1; g < num_groups; ++g) {
             welford_save_state(mean_dst, g);
         }
