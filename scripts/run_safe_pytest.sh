@@ -157,6 +157,10 @@ SIM_WORKERS_GIVEN=false
 # warm pass degrades gracefully to a cold run on any failure. For tight single-case iteration use
 # tt-probe (always inline) or --no-precompile.
 PRECOMPILE=true
+# --inline-precompile (PoC): fold the warm pass INTO the real pytest session (tests/plugins/
+# up_front_collect.py UP_FRONT_INLINE=1): collect pass -> parallel compile -> real pass, one process.
+# Saves the second interpreter + torch/ttnn import + collection (~8s per invocation).
+PRECOMPILE_INLINE=false
 PRECOMPILE_WORKERS="${PRECOMPILE_WORKERS:-$(nproc 2>/dev/null || echo 8)}"
 
 # JIT compile server is WARM-PASS-ONLY. The endpoint (if configured) is used ONLY inside the
@@ -219,6 +223,10 @@ while [[ $# -gt 0 ]]; do
             fi
             PRECOMPILE_WORKERS="$2"
             shift 2
+            ;;
+        --inline-precompile)
+            PRECOMPILE_INLINE=true
+            shift
             ;;
         --jit-server)
             # Route the warm-pass compile to a remote JIT server at host:port (warm-pass only;
@@ -643,6 +651,8 @@ if [[ "$PRECOMPILE" == true ]]; then
     if [[ "$SIM_MODE" == true ]]; then
         echo "PRECOMPILE: skipped under simulator (no warm benefit)" >&2
         TT_TIMING_PRECOMPILE_REASON="sim"
+    elif [[ "$PRECOMPILE_INLINE" == true ]]; then
+        echo "PRECOMPILE: inline — collect + compile happen inside the real pytest session (single process)" >&2
     else
         precompile_warm
     fi
@@ -696,6 +706,30 @@ if [[ "$PROFILE_MODE" == true ]]; then
     PYTEST_CMD=(python -m tracy -r -m pytest)
 else
     PYTEST_CMD=(pytest)
+fi
+# --inline-precompile: same plugin + env as precompile_warm, but loaded into the REAL session.
+# PYTHONPATH is prepended (not replaced) for the same reason as in precompile_warm.
+if [[ "$PRECOMPILE" == true && "$PRECOMPILE_INLINE" == true && "$SIM_MODE" == false ]]; then
+    # JIT server (warm-pass-only, same as precompile_warm): endpoint/preprocess/keepalive go into the
+    # process env, but the ENABLE bit is raised by the plugin only around its compile step
+    # (UP_FRONT_INLINE_JIT_SERVER=1), so pass 2's on-demand compiles stay local.
+    INLINE_SRV_ENV=()
+    INLINE_PC_ROUTE="local"
+    if [[ -n "$JIT_SERVER_ENDPOINT" && "$JIT_SERVER_DISABLED" == false ]]; then
+        _h="${JIT_SERVER_ENDPOINT%:*}"; _p="${JIT_SERVER_ENDPOINT##*:}"
+        if ! timeout 5 bash -c "exec 3<>/dev/tcp/${_h}/${_p}" 2>/dev/null; then
+            echo "SAFE_PYTEST_ERROR: JIT server '${JIT_SERVER_ENDPOINT}' unreachable — aborting." >&2
+            exit 4
+        fi
+        INLINE_PC_ROUTE="farm"
+        INLINE_SRV_ENV=(UP_FRONT_INLINE_JIT_SERVER=1 TT_METAL_JIT_SERVER_ENDPOINT="$JIT_SERVER_ENDPOINT" \
+                        TT_METAL_JIT_PREPROCESS=1 TT_METAL_JIT_SERVER_KEEPALIVE=1)
+        echo "PRECOMPILE: inline compile step -> JIT server ${JIT_SERVER_ENDPOINT} (real pass stays local)" >&2
+    fi
+    PYTEST_CMD=(env "${INLINE_SRV_ENV[@]}" UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 \
+                UP_FRONT_COLLECT_WORKERS="$PRECOMPILE_WORKERS" \
+                PYTHONPATH="$PRECOMPILE_PLUGIN_DIR${PYTHONPATH:+:$PYTHONPATH}" \
+                "${PYTEST_CMD[@]}" -p tests.plugins.up_front_collect)
 fi
 # -x: stop on first failure (avoids running tests after a hang bricks the device)
 # --run-all: skip -x to get full pass/fail counts (for eval scoring)
@@ -772,6 +806,18 @@ echo "========================================"
 # The triage-log guard matters in profile mode: the tracy wrapper exits 0 even
 # when the underlying test failed OR hung, so without it a hang would be reported
 # PASS and skip the device reset. An empty triage log means no hang fired.
+# --inline-precompile: the RESULT line now lives in the real run's stdout; record attribution.
+if [[ "$PRECOMPILE" == true && "$PRECOMPILE_INLINE" == true && "$SIM_MODE" == false ]]; then
+    _iline=$(grep -a '^UP_FRONT_COLLECT_RESULT:' "$PYTEST_STDOUT_LOG" 2>/dev/null | tail -1 || true)
+    _ireason=""; _iprogs=""
+    [[ "$_iline" =~ reason=([^[:space:]]+) ]] && _ireason="${BASH_REMATCH[1]}"
+    [[ "$_iline" =~ programs=([0-9]+) ]] && _iprogs="${BASH_REMATCH[1]}"
+    TT_TIMING_PRECOMPILE_MODE="inline_${INLINE_PC_ROUTE:-local}"
+    TT_TIMING_PRECOMPILE_REASON="${_ireason:-no_result_line}"
+    TT_TIMING_PRECOMPILE_PROGRAMS="${_iprogs:--1}"
+    grep -a '^UP_FRONT_INLINE:\|^UP_FRONT_COLLECT:' "$PYTEST_STDOUT_LOG" 2>/dev/null | sed 's/^/PRECOMPILE: /' >&2
+fi
+
 if [[ $EXIT_CODE -eq 0 && ! -s "$TRIAGE_LOG" ]]; then
     rm -f "$DIRTY_FLAG"
     rm -f "$TRIAGE_LOG"
