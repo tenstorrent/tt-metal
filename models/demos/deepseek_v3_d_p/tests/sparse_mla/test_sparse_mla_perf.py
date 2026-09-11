@@ -329,6 +329,8 @@ def _write_run_manifest(
             else None
         )
         case_filter = _profile_case_id(attn_mode, cache_format, tp_shard_kv)
+        if attn_mode == "sparse" and not tp_shard_kv:
+            case_filter = f"{case_filter} and not tp_sharded"
         reproducer = (
             f"DS_PERF_CACHE={CACHE_TOKENS} DS_PERF_CHUNK={CHUNK_TOKENS} DS_PERF_LONG_CACHE={LONG_CACHE_TOKENS} "
             f"{command} -k '{variant} and {scenario} and {case_filter}'"
