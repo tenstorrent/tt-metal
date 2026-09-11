@@ -12,7 +12,25 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "api/tensor/local_tensor_accessor.h"
 #include "experimental/kernel_args.h"
+
+#ifdef ARCH_QUASAR
+// Direct RISC L1->L1 copy for a transfer whose source and destination are both this core's L1
+// (the mcast group degenerates to the sender alone on a single-node grid). The Quasar emulator does
+// not reliably complete a NoC transfer to itself (recipe: "use a direct L1->L1 RISC copy, not a NoC
+// loopback"). Both sides go through the uncached L1 alias: the source so freshly NoC-written data is
+// seen without a cache invalidate, the destination so the unpacker (TL1) sees it without a flush.
+FORCE_INLINE void local_l1_copy(uint32_t dst_addr, uint32_t src_addr, uint32_t bytes) {
+    const auto uncached = [](uint32_t a) { return a >= MEM_L1_UNCACHED_BASE ? a : a + MEM_L1_UNCACHED_BASE; };
+    volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>((uintptr_t)uncached(dst_addr));
+    const volatile tt_l1_ptr uint32_t* src =
+        reinterpret_cast<const volatile tt_l1_ptr uint32_t*>((uintptr_t)uncached(src_addr));
+    for (uint32_t i = 0; i < bytes / sizeof(uint32_t); ++i) {
+        dst[i] = src[i];
+    }
+}
+#endif
 
 void kernel_main() {
     // COMPILE TIME ARGS
@@ -58,7 +76,8 @@ void kernel_main() {
 
     const Noc noc;
     DataflowBuffer dfb_in0(dfb::in0);
-    const DataflowBuffer dfb_in2(dfb::in0_sharded);  // Sharded in0
+    // The resident in0 width shard: only its L1 base address is needed (no FIFO traffic).
+    const LocalTensorAccessor<uint32_t> in0_shard(tensor::in0_shard);
     Semaphore sender_sem(sem::in0_mcast_sender);
     Semaphore receiver_sem(sem::in0_mcast_receiver);
 
@@ -69,7 +88,7 @@ void kernel_main() {
     // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
     // to receive the mcast
 
-    uint32_t local_read_addr = dfb_in2.get_read_ptr();
+    uint32_t local_read_addr = in0_shard.get_bank_base_address();
 
     if (worker_core_type == 1) {  // mcast sender + no compute
 
@@ -175,19 +194,27 @@ void kernel_main() {
                     }
                 }
 #ifndef SKIP_MCAST
-                const MulticastEndpoint mcast_dst;
-                noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
-                    CoreLocalMem<uint32_t>(local_read_addr),
-                    mcast_dst,
-                    in0_block_size_bytes,
-                    in0_mcast_num_cores,
-                    {},
-                    {.noc_x_start = in0_mcast_dest_noc_start_x,
-                     .noc_y_start = in0_mcast_dest_noc_start_y,
-                     .noc_x_end = in0_mcast_dest_noc_end_x,
-                     .noc_y_end = in0_mcast_dest_noc_end_y,
-                     .addr = mcast_l1_write_addr_in0},
-                    true);
+#ifdef ARCH_QUASAR
+                if constexpr (in0_mcast_num_cores == 1) {
+                    // Single-node grid: the only multicast destination is this core (see local_l1_copy).
+                    local_l1_copy(mcast_l1_write_addr_in0, local_read_addr, in0_block_size_bytes);
+                } else
+#endif
+                {
+                    const MulticastEndpoint mcast_dst;
+                    noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
+                        CoreLocalMem<uint32_t>(local_read_addr),
+                        mcast_dst,
+                        in0_block_size_bytes,
+                        in0_mcast_num_cores,
+                        {},
+                        {.noc_x_start = in0_mcast_dest_noc_start_x,
+                         .noc_y_start = in0_mcast_dest_noc_start_y,
+                         .noc_x_end = in0_mcast_dest_noc_end_x,
+                         .noc_y_end = in0_mcast_dest_noc_end_y,
+                         .addr = mcast_l1_write_addr_in0},
+                        true);
+                }
 #endif
                 // Set local semaphore to VALID. For single-core configurations, this is all we need.
                 receiver_sem.set(VALID);

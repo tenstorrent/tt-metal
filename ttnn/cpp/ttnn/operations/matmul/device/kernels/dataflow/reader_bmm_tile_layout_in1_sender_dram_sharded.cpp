@@ -11,7 +11,25 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "api/tensor/local_tensor_accessor.h"
 #include "experimental/kernel_args.h"
+
+#ifdef ARCH_QUASAR
+// Direct RISC L1->L1 copy for a write-back whose storage core is this core. The Quasar emulator does
+// not reliably complete a NoC transfer to itself (recipe: "use a direct L1->L1 RISC copy, not a NoC
+// loopback"). Both sides go through the uncached L1 alias: the source (the out DFB, packed by TRISC)
+// so no cache invalidate is needed, the destination (the output tensor shard) so a later NoC / host
+// read sees it without a flush.
+FORCE_INLINE void local_l1_copy(uint32_t dst_addr, uint32_t src_addr, uint32_t bytes) {
+    const auto uncached = [](uint32_t a) { return a >= MEM_L1_UNCACHED_BASE ? a : a + MEM_L1_UNCACHED_BASE; };
+    volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>((uintptr_t)uncached(dst_addr));
+    const volatile tt_l1_ptr uint32_t* src =
+        reinterpret_cast<const volatile tt_l1_ptr uint32_t*>((uintptr_t)uncached(src_addr));
+    for (uint32_t i = 0; i < bytes / sizeof(uint32_t); ++i) {
+        dst[i] = src[i];
+    }
+}
+#endif
 
 void kernel_main() {
     // RUNTIME ARGS
@@ -68,7 +86,8 @@ void kernel_main() {
     const Noc noc;
     DataflowBuffer dfb_in1(dfb::in1);
     DataflowBuffer dfb_out(dfb::out);
-    const DataflowBuffer dfb_out_reshard(dfb::out_reshard);
+    // The output tensor's own L1 shard: only its base address is needed (no FIFO traffic).
+    const LocalTensorAccessor<uint32_t> out_shard(tensor::out_shard);
 #ifdef FUSE_BIAS
     DataflowBuffer dfb_in3(dfb::bias);
 #endif
@@ -210,7 +229,7 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < num_shard_to_write_back; ++i) {
         uint32_t l1_read_addr_out = dfb_out.get_read_ptr() + l1_read_addr_out_offset;
-        uint32_t l1_write_addr_out_reshard = dfb_out_reshard.get_write_ptr();
+        uint32_t l1_write_addr_out_reshard = out_shard.get_bank_base_address();
 
         if (i == 0) {
             l1_write_addr_out_reshard += reshard_tensor_start_offset;
@@ -223,14 +242,27 @@ void kernel_main() {
 
         const UnicastEndpoint dst_ep;
         uint32_t reshard_dest_local_addr = l1_write_addr_out_reshard;
+#ifdef ARCH_QUASAR
+        // The storage core for this shard is this core: copy with the RISC (see local_l1_copy).
+        const bool reshard_is_local = noc.is_local_bank(in0_mcast_sender_noc_x, in0_mcast_sender_noc_y);
+#endif
 
         for (uint32_t h = 0; h < per_core_M; ++h) {
-            noc.async_write(
-                CoreLocalMem<uint32_t>(l1_read_addr_out),
-                dst_ep,
-                per_core_N_reshard_bytes,
-                {},
-                {.noc_x = in0_mcast_sender_noc_x, .noc_y = in0_mcast_sender_noc_y, .addr = reshard_dest_local_addr});
+#ifdef ARCH_QUASAR
+            if (reshard_is_local) {
+                local_l1_copy(reshard_dest_local_addr, l1_read_addr_out, per_core_N_reshard_bytes);
+            } else
+#endif
+            {
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(l1_read_addr_out),
+                    dst_ep,
+                    per_core_N_reshard_bytes,
+                    {},
+                    {.noc_x = in0_mcast_sender_noc_x,
+                     .noc_y = in0_mcast_sender_noc_y,
+                     .addr = reshard_dest_local_addr});
+            }
             l1_read_addr_out += out_tensor_stride_w_bytes;
             reshard_dest_local_addr += out_reshard_tensor_stride_w_bytes;
         }

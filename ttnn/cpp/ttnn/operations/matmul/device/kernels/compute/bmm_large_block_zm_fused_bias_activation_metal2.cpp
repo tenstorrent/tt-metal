@@ -269,6 +269,12 @@ void kernel_main() {
     constexpr uint32_t last_subblock_w_valid = out_subblock_w;
 #endif
     constexpr bool last_subblock_padded = last_subblock_w_valid < out_subblock_w;
+#ifdef ARCH_QUASAR
+    // Quasar's matmul LLK bakes ct_dim/rt_dim into the unpack/math MOPs at matmul_block_init; the
+    // narrowed matmul_block call below (effective_subblock_w < out_subblock_w) desynchronizes the
+    // src-register handshake and hangs. The factory must not pad per_core_N_compute on Quasar.
+    static_assert(!last_subblock_padded, "a narrowed last in1 subblock (padded per_core_N) is not supported on Quasar");
+#endif
 
 #ifdef SFPU_ACTIVATION
     constexpr KernelActivation activation_type = static_cast<KernelActivation>(get_arg(args::activation_type));
@@ -287,15 +293,26 @@ void kernel_main() {
 
     constexpr bool spill = num_blocks_inner_dim > 1;
 
+#ifdef ARCH_QUASAR
+    // The per-batch validity flag arrives through the BRISC mailbox (ckernel::ThreadId::BriscThreadId),
+    // which Quasar's ckernel has no equivalent of. No Quasar-capable factory sets it; refuse rather
+    // than silently run every batch. (kernel_main is not a template, so the discarded branch of the
+    // if-constexpr below is still compiled; the mailbox reads are therefore also #ifndef'd out.)
+    static_assert(
+        !get_batch_from_reader, "get_batch_from_reader (BRISC mailbox batch validity) is not supported on Quasar");
+#endif
+
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_dfb_id, in1_dfb_id, mm_partials_dfb_id);
     matmul_block_init(in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
             // Check whether this batch is valid
             bool is_batch_valid = false;
+#ifndef ARCH_QUASAR
             UNPACK(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
             MATH(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
             PACK(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
+#endif
             if (!is_batch_valid) {
                 continue;
             }
@@ -314,6 +331,12 @@ void kernel_main() {
 
                 if constexpr (batch > 1 || num_blocks_h_dim > 1 || num_blocks_w_dim > 1) {
                     PACK((pack_reconfig_data_format(mm_partials_dfb_id)));
+#ifdef ARCH_QUASAR
+                    // Quasar bakes the pack destination (its buffer descriptor) at pack_init;
+                    // pack_reconfig_data_format re-programs formats only. Re-target the packer
+                    // every time the output buffer changes (here: back to the partials buffer).
+                    pack_init(mm_partials_dfb_id);
+#endif
                 }
 
                 for (uint32_t block = 0; block < num_blocks_inner_dim; block++) {
@@ -330,6 +353,9 @@ void kernel_main() {
                         reconfig_data_format_srca(in1_dfb_id, in0_transpose_dfb_id);
                         transpose_init(in0_transpose_dfb_id);
                         PACK((pack_reconfig_data_format(in0_dfb_id)));
+#ifdef ARCH_QUASAR
+                        pack_init(in0_dfb_id);  // pack destination switch (see above)
+#endif
 #ifdef PACKER_L1_ACC
                         PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
@@ -338,7 +364,20 @@ void kernel_main() {
                         matmul_block_init(
                             in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
                         PACK((pack_reconfig_data_format(mm_partials_dfb_id)));
+#ifdef ARCH_QUASAR
+                        pack_init(mm_partials_dfb_id);  // pack destination switch (see above)
+#endif
                     }
+
+#ifdef ARCH_QUASAR
+                    // The last K block packs into mm_out_dfb instead of the partials buffer; on
+                    // Quasar that is a pack destination switch, so re-target once per block.
+                    if constexpr (mm_out_dfb_id != mm_partials_dfb_id) {
+                        if (last_out) {
+                            pack_init(mm_out_dfb_id);
+                        }
+                    }
+#endif
 
                     in0_dfb.wait_front(in0_block_num_tiles);
                     in1_dfb.wait_front(in1_block_num_tiles);
@@ -473,6 +512,11 @@ void kernel_main() {
                         // wait_front increments on a given buffer are identical.
                         for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
                             mm_partials_dfb.wait_front(out_subblock_num_tiles);
+#ifdef ARCH_QUASAR
+                            // TEN-4746: on Quasar a POP issued straight after its WAIT is not ordered
+                            // unless a real UNPACR sits between them; dummy_unpack reads nothing.
+                            dummy_unpack(mm_partials_dfb_id);
+#endif
                             mm_partials_dfb.pop_front(out_subblock_num_tiles);
                         }
                     }
@@ -483,6 +527,11 @@ void kernel_main() {
                     if (block < num_blocks_inner_dim - 2) {
                         for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
                             mm_partials_dfb.wait_front(out_subblock_num_tiles);
+#ifdef ARCH_QUASAR
+                            // TEN-4746: on Quasar a POP issued straight after its WAIT is not ordered
+                            // unless a real UNPACR sits between them; dummy_unpack reads nothing.
+                            dummy_unpack(mm_partials_dfb_id);
+#endif
                             mm_partials_dfb.pop_front(out_subblock_num_tiles);
                         }
                     }
@@ -496,6 +545,12 @@ void kernel_main() {
                     }
 #endif
 
+#if defined(SKIP_COMPUTE) && defined(ARCH_QUASAR)
+                    // With the matmul compiled out nothing unpacks in0/in1 between their WAIT and
+                    // POP; order the POPs (TEN-4746, see above).
+                    dummy_unpack(in0_dfb_id);
+                    dummy_unpack(in1_dfb_id);
+#endif
                     in0_dfb.pop_front(in0_block_num_tiles);
                     in1_dfb.pop_front(in1_block_num_tiles);
                 }
@@ -507,6 +562,13 @@ void kernel_main() {
 #endif
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
                 PACK((pack_reconfig_data_format(out_dfb_id)));
+#endif
+#ifdef ARCH_QUASAR
+                // The bias epilogue packs into the output buffer after the matmul stage packed into
+                // the partials buffer: a pack destination switch on Quasar (see above).
+                if constexpr (untilize_mode_out_dfb_id != mm_partials_dfb_id) {
+                    pack_init(untilize_mode_out_dfb_id);
+                }
 #endif
 #ifdef PACKER_L1_ACC
                 PACK((llk_pack_reconfig_l1_acc(0)));
