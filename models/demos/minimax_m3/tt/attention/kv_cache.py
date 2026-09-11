@@ -70,12 +70,8 @@ class MiniMaxKVCache(KvCaches):
     # Device-valued slot metadata (populated only under device_slot). A captured trace reads these tensors
     # by address, so set_read_user re-targets a user's slot in place without recapture; frozen_slots() holds
     # them fixed across a capture (a host copy inside a trace is illegal).
-    #   _read_slot_start — cache-read partition-slice begin [slot,0,0,0], one per layer. `_read_slot_end` is a
-    #                      constant companion (the reader ignores its value).
     #   _write_slot      — KV-write user slot (update_padded_kv_cache tensor form); one scalar, all layers.
     #   _write_kv_actual — KV-write prior-length scalar, one per distinct depth (bucket).
-    _read_slot_start: dict = field(default_factory=dict, repr=False)
-    _read_slot_end: object = field(default=None, repr=False)
     _write_slot: object = field(default=None, repr=False)
     _write_kv_actual: dict = field(default_factory=dict, repr=False)
     _slot_frozen: bool = field(default=False, repr=False)
@@ -97,15 +93,6 @@ class MiniMaxKVCache(KvCaches):
         if self._slot_frozen:
             raise RuntimeError(f"{what} would be allocated inside a trace capture; warm this path before capturing")
 
-    def _begin_index_tensor(self, values, mesh_device):
-        return ttnn.from_torch(
-            torch.tensor(values, dtype=torch.int32),
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
     def _meta_scalar(self, val, mesh_device):
         # 1-element uint32 replicated-DRAM scalar; update_padded_kv_cache's tensor form reads element [0].
         return ttnn.from_torch(
@@ -124,30 +111,6 @@ class MiniMaxKVCache(KvCaches):
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
-
-    def read_slot_start(self, layer_idx, slot, mesh_device):
-        """Persistent [slot,0,0,0] begin tensor for `layer_idx`, reused across chunks/users. Re-targets to
-        `slot` in place unless frozen — during capture the warm forward's value must be read as-is."""
-        t = self._read_slot_start.get(layer_idx)
-        if t is None:
-            self._guard_create(f"read-slot begin tensor for layer {layer_idx}")
-            self._read_slot_start[layer_idx] = t = self._begin_index_tensor([slot, 0, 0, 0], mesh_device)
-        elif not self._slot_frozen:
-            ttnn.copy_host_to_device_tensor(
-                ttnn.from_torch(
-                    torch.tensor([slot, 0, 0, 0], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
-                ),
-                t,
-            )
-        return t
-
-    def read_slot_end(self, max_rows, head_dim, mesh_device):
-        if self._read_slot_end is None:
-            self._guard_create("read-slot end tensor")
-            self._read_slot_end = self._begin_index_tensor(
-                [self.num_users * self.num_layers, 1, max_rows, head_dim], mesh_device
-            )
-        return self._read_slot_end
 
     def write_slot_tensor(self, slot_idx, mesh_device):
         """Persistent user-slot scalar for the traceable KV write. Updated in place unless frozen."""
@@ -168,17 +131,10 @@ class MiniMaxKVCache(KvCaches):
         return t
 
     def set_read_user(self, user_id):
-        """Point every device-valued slot tensor at `user_id` (read begins + the KV-write slot). Call before
-        replaying a captured trace for a different user (host update outside the trace). kv_actual is not
-        touched — depth is a per-bucket constant shared across users."""
-        for layer_idx, t in self._read_slot_start.items():
-            slot = user_id * self.num_layers + layer_idx
-            ttnn.copy_host_to_device_tensor(
-                ttnn.from_torch(
-                    torch.tensor([slot, 0, 0, 0], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
-                ),
-                t,
-            )
+        """Point the device-valued slot tensors at `user_id`. Call before replaying a captured trace for a
+        different user (host update outside the trace). kv_actual is not touched — depth is a per-bucket
+        constant shared across users. Today only the KV-write slot is device-valued; the cache reads
+        (msa_sp_attention_cache_read, dense_sp) still take the host slot."""
         if self._write_slot is not None:
             ttnn.copy_host_to_device_tensor(self._host_scalar(user_id), self._write_slot)
 
