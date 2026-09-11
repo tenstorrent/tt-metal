@@ -185,6 +185,12 @@ inline void calculate_sfpu_binary_div(
             // If in0*r = +/-inf, then the residual e = in0 - (+/-inf)*in1 = -/+inf and
             // result + e*r = inf + (-inf) = NaN, which would corrupt IEEE overflow behavior.
             v_if(sfpi::exexp(result, sfpi::ExponentMode::Biased) != 255) {
+                // The residual is equally unusable when in1 is non-finite, and that case
+                // reaches here because the quotient is finite rather than in spite of it:
+                // r = 1/inf = 0 and result = in0 * 0 = 0, so result * in1 is 0 * inf, the
+                // residual is NaN and the refinement destroys a correct zero. The guard is
+                // about whether the residual can be formed, not about the quotient's size.
+                v_and(sfpi::exexp(in1, sfpi::ExponentMode::Biased) != 255);
                 // Residual (Markstein) refinement removes the double-rounding of in0 * round(1/in1).
                 // The residual subtraction is exact under Sterbenz's lemma.
                 sfpi::vFloat e = in0 - result * in1;
@@ -193,14 +199,41 @@ inline void calculate_sfpu_binary_div(
             v_endif;
         }
 
-        v_if(in1 == 0) {
-            v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
+        // The zero and non-finite arms below test magnitudes rather than the values:
+        // the SFPU compare does not read -0.0 as equal to 0.0, so in0 == 0 misses a
+        // negative zero dividend and -0.0 / 0.0 came back -inf instead of NaN.
+        sfpi::vFloat abs_in0 = sfpi::setsgn(in0, 0);
+        sfpi::vFloat abs_in1 = sfpi::setsgn(in1, 0);
+        sfpi::vFloat vinf = std::numeric_limits<float>::infinity();
+
+        v_if(abs_in1 == 0.0f) {
+            v_if(abs_in0 == 0.0f) { result = std::numeric_limits<float>::quiet_NaN(); }
             v_else {
-                result = std::numeric_limits<float>::infinity();
+                result = vinf;
                 result = sfpi::copysgn(result, in0);
+                result = sfpi::copysgn(result, sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(in0) ^ sfpi::as<sfpi::vInt>(in1)));
             }
             v_endif;
         }
+        v_endif;
+
+        // A finite dividend over an infinite divisor is a signed zero, and the sign is
+        // the exclusive or of the operand signs. The multiply that produced it does not
+        // carry that sign, so put it back here.
+        v_if(sfpi::as<sfpi::vInt>(abs_in1) == sfpi::as<sfpi::vInt>(vinf)) {
+            v_if(sfpi::as<sfpi::vInt>(abs_in0) < sfpi::as<sfpi::vInt>(vinf)) {
+                result = 0.0f;
+                result = sfpi::copysgn(result, sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(in0) ^ sfpi::as<sfpi::vInt>(in1)));
+            }
+            v_endif;
+        }
+        v_endif;
+
+        // NaN in either operand propagates. It used to come out of the residual step by
+        // accident, so skipping that step for a non-finite divisor lost it for 0 / NaN.
+        v_if(sfpi::as<sfpi::vInt>(abs_in0) > sfpi::as<sfpi::vInt>(vinf)) { result = std::numeric_limits<float>::quiet_NaN(); }
+        v_endif;
+        v_if(sfpi::as<sfpi::vInt>(abs_in1) > sfpi::as<sfpi::vInt>(vinf)) { result = std::numeric_limits<float>::quiet_NaN(); }
         v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {
