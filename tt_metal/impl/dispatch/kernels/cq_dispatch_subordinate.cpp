@@ -27,6 +27,7 @@
 #endif
 
 #include <array>
+#include <cstdint>
 
 // dispatch_s has a customized command buffer allocation for NOC 1.
 // Cmd Buf 0 is used for regular writes.
@@ -34,48 +35,48 @@
 // Cmd Buf 2 is used for atomics.
 // Cmd Buf 3 is unavailable (used by dispatch_d).
 // Reads cannot be issued by dispatch_s.
-constexpr uint32_t DISPATCH_S_WR_REG_CMD_BUF = 1;
-constexpr uint32_t DISPATCH_S_ATOMIC_CMD_BUF = 2;
+constexpr std::uint32_t DISPATCH_S_WR_REG_CMD_BUF = 1;
+constexpr std::uint32_t DISPATCH_S_ATOMIC_CMD_BUF = 2;
 constexpr uintptr_t cb_base = CB_BASE;
-constexpr uint32_t cb_log_page_size = CB_LOG_PAGE_SIZE;
-constexpr uint32_t cb_size = CB_SIZE;
-constexpr uint32_t my_dispatch_cb_sem_id = MY_DISPATCH_CB_SEM_ID;
-constexpr uint32_t upstream_dispatch_cb_sem_id = UPSTREAM_DISPATCH_CB_SEM_ID;
-constexpr uint32_t dispatch_d_shutdown_sem_id = DISPATCH_D_SHUTDOWN_SEM_ID;
+constexpr std::uint32_t cb_log_page_size = CB_LOG_PAGE_SIZE;
+constexpr std::uint32_t cb_size = CB_SIZE;
+constexpr std::uint32_t my_dispatch_cb_sem_id = MY_DISPATCH_CB_SEM_ID;
+constexpr std::uint32_t upstream_dispatch_cb_sem_id = UPSTREAM_DISPATCH_CB_SEM_ID;
+constexpr std::uint32_t dispatch_d_shutdown_sem_id = DISPATCH_D_SHUTDOWN_SEM_ID;
 constexpr uintptr_t dispatch_s_sync_sem_base_addr = DISPATCH_S_SYNC_SEM_BASE_ADDR;
-constexpr uint32_t mcast_go_signal_addr = MCAST_GO_SIGNAL_ADDR;
-constexpr uint32_t unicast_go_signal_addr = UNICAST_GO_SIGNAL_ADDR;
-constexpr uint32_t distributed_dispatcher =
+constexpr std::uint32_t mcast_go_signal_addr = MCAST_GO_SIGNAL_ADDR;
+constexpr std::uint32_t unicast_go_signal_addr = UNICAST_GO_SIGNAL_ADDR;
+constexpr std::uint32_t distributed_dispatcher =
     DISTRIBUTED_DISPATCHER;  // dispatch_s and dispatch_d running on different cores
-constexpr uint32_t first_stream_used = FIRST_STREAM_USED;
-constexpr uint32_t completion_counter_offset = COMPLETION_COUNTER_OFFSET;
-constexpr uint32_t max_num_worker_sems = MAX_NUM_WORKER_SEMS;
-constexpr uint32_t max_num_go_signal_noc_data_entries = MAX_NUM_GO_SIGNAL_NOC_DATA_ENTRIES;
+constexpr std::uint32_t first_stream_used = FIRST_STREAM_USED;
+constexpr std::uint32_t completion_counter_offset = COMPLETION_COUNTER_OFFSET;
+constexpr std::uint32_t max_num_worker_sems = MAX_NUM_WORKER_SEMS;
+constexpr std::uint32_t max_num_go_signal_noc_data_entries = MAX_NUM_GO_SIGNAL_NOC_DATA_ENTRIES;
 constexpr uintptr_t dispatch_telemetry_control_addr = DISPATCH_TELEMETRY_CONTROL_ADDR;
 constexpr bool telemetry_enabled = !DISPATCH_TELEMETRY_DISABLED;
 constexpr uintptr_t dispatch_telemetry_base = DISPATCH_TELEMETRY_ADDR;
-constexpr uint32_t virtualize_unicast_cores = VIRTUALIZE_UNICAST_CORES;
-constexpr uint32_t num_virtual_unicast_cores = NUM_VIRTUAL_UNICAST_CORES;
-constexpr uint32_t num_physical_unicast_cores = NUM_PHYSICAL_UNICAST_CORES;
+constexpr std::uint32_t virtualize_unicast_cores = VIRTUALIZE_UNICAST_CORES;
+constexpr std::uint32_t num_virtual_unicast_cores = NUM_VIRTUAL_UNICAST_CORES;
+constexpr std::uint32_t num_physical_unicast_cores = NUM_PHYSICAL_UNICAST_CORES;
 volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchTelemetryControl* dispatch_telemetry_control =
     reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchTelemetryControl*>(
         dispatch_telemetry_control_addr);
 
-constexpr uint32_t worker_mcast_grid = WORKER_MCAST_GRID;
-constexpr uint32_t num_worker_cores_to_mcast = NUM_WORKER_CORES_TO_MCAST;
+constexpr std::uint32_t worker_mcast_grid = WORKER_MCAST_GRID;
+constexpr std::uint32_t num_worker_cores_to_mcast = NUM_WORKER_CORES_TO_MCAST;
 
 #if DEVICE_PRINT_DISPATCH_ENABLED
-constexpr uint32_t device_print_noc_locations_addr = DEVICE_PRINT_NOC_LOCATIONS_ADDR;
-constexpr uint32_t device_print_noc_locations_count = DEVICE_PRINT_NOC_LOCATIONS_COUNT;
-constexpr uint32_t device_print_l1_cache_addr = DEVICE_PRINT_L1_CACHE_ADDR;
-constexpr uint32_t device_print_l1_cache_size = DEVICE_PRINT_L1_CACHE_SIZE;
-constexpr uint16_t device_print_dram_x = DEVICE_PRINT_DRAM_X;
-constexpr uint16_t device_print_dram_y = DEVICE_PRINT_DRAM_Y;
-constexpr uint64_t device_print_dram_rw_ptrs = DEVICE_PRINT_DRAM_RW_PTRS;
-constexpr uint64_t device_print_dram_buf_addr = DEVICE_PRINT_DRAM_BUF_ADDR;
-constexpr uint32_t device_print_dram_buf_size = DEVICE_PRINT_DRAM_BUF_SIZE;
-constexpr uint64_t device_print_cycles_for_stall = DEVICE_PRINT_CYCLES_FOR_STALL;
-constexpr uint64_t device_print_cycles_for_full = DEVICE_PRINT_CYCLES_FOR_FULL;
+constexpr std::uint32_t device_print_noc_locations_addr = DEVICE_PRINT_NOC_LOCATIONS_ADDR;
+constexpr std::uint32_t device_print_noc_locations_count = DEVICE_PRINT_NOC_LOCATIONS_COUNT;
+constexpr std::uint32_t device_print_l1_cache_addr = DEVICE_PRINT_L1_CACHE_ADDR;
+constexpr std::uint32_t device_print_l1_cache_size = DEVICE_PRINT_L1_CACHE_SIZE;
+constexpr std::uint16_t device_print_dram_x = DEVICE_PRINT_DRAM_X;
+constexpr std::uint16_t device_print_dram_y = DEVICE_PRINT_DRAM_Y;
+constexpr std::uint64_t device_print_dram_rw_ptrs = DEVICE_PRINT_DRAM_RW_PTRS;
+constexpr std::uint64_t device_print_dram_buf_addr = DEVICE_PRINT_DRAM_BUF_ADDR;
+constexpr std::uint32_t device_print_dram_buf_size = DEVICE_PRINT_DRAM_BUF_SIZE;
+constexpr std::uint64_t device_print_cycles_for_stall = DEVICE_PRINT_CYCLES_FOR_STALL;
+constexpr std::uint64_t device_print_cycles_for_full = DEVICE_PRINT_CYCLES_FOR_FULL;
 
 // RAII guard for dispatch_s's NOC cmd_buf state on cmd_buf 0 (NCRISC_WR_CMD_BUF, used by
 // dispatch_s for regular writes) and cmd_buf 1 (NCRISC_RD_CMD_BUF, used by dispatch_s for
@@ -102,10 +103,10 @@ using DispatchSNocCmdBufGuard = device_print_dispatch::EmptyNocCmdBufGuard;
 // NOC_CTRL for our reads (cmd_buf 1) and writes (cmd_buf 0).
 // Destructor: restore the saved regs.
 struct DispatchSNocCmdBufGuard {
-    uint32_t saved_rd_ctrl;
-    uint32_t saved_rd_targ_coord;
-    uint32_t saved_wr_ctrl;
-    uint32_t saved_wr_ret_coord;
+    std::uint32_t saved_rd_ctrl;
+    std::uint32_t saved_rd_targ_coord;
+    std::uint32_t saved_wr_ctrl;
+    std::uint32_t saved_wr_ret_coord;
 
     DispatchSNocCmdBufGuard() {
         saved_rd_ctrl = NOC_CMD_BUF_READ_REG(NOC_INDEX, NCRISC_RD_CMD_BUF, NOC_CTRL);
@@ -144,12 +145,12 @@ void device_print_dispatcher_execute_hook() {
 }
 #endif
 
-constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
-constexpr uint32_t dispatch_d_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
-constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
-constexpr uint8_t my_noc_index = NOC_INDEX;
+constexpr std::uint32_t upstream_noc_xy = std::uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
+constexpr std::uint32_t dispatch_d_noc_xy = std::uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
+constexpr std::uint32_t my_noc_xy = std::uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
+constexpr std::uint8_t my_noc_index = NOC_INDEX;
 
-constexpr uint32_t cb_page_size = 1 << cb_log_page_size;
+constexpr std::uint32_t cb_page_size = 1 << cb_log_page_size;
 constexpr uintptr_t cb_end = cb_base + cb_size;
 
 // Dispatch-core-local L1 region assigned by DispatchMemMap via
@@ -161,47 +162,48 @@ volatile tt_l1_ptr realtime_profiler_msg_t* rt_profiler_msg =
 
 static bool rt_profiler_enabled = false;
 
-static uint32_t num_pages_acquired = 0;
-// Counts gos handed over by dispatch_d, regardless of their transport.
-static uint32_t num_mcasts_sent[max_num_worker_sems] = {0};
+static std::uint32_t num_pages_acquired = 0;
+// Counts go signals handed over by dispatch_d, regardless of their transport.
+static std::uint32_t num_mcasts_sent[max_num_worker_sems] = {0};
 static uintptr_t cmd_ptr;
 
 extern "C" {
 // These variables are used by triage to help report dispatcher state.
-volatile uint32_t last_wait_count = 0;
+volatile std::uint32_t last_wait_count = 0;
 #ifdef FDS_WORKER_GO
-volatile uint32_t last_go_token = 0;
+volatile std::uint32_t last_go_token = 0;
 #endif
-volatile uint32_t last_wait_stream = 0;
-constexpr uint32_t stream_addr0 = STREAM_REG_ADDR(0, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
-constexpr uint32_t stream_addr1 = STREAM_REG_ADDR(1, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
-constexpr uint32_t stream_width = MEM_WORD_ADDR_WIDTH;
+volatile std::uint32_t last_wait_stream = 0;
+constexpr std::uint32_t stream_addr0 = STREAM_REG_ADDR(0, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
+constexpr std::uint32_t stream_addr1 = STREAM_REG_ADDR(1, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
+constexpr std::uint32_t stream_width = MEM_WORD_ADDR_WIDTH;
 }
 
 // When dispatch_d and dispatch_s run on separate cores, dispatch_s gets the go signal update from workers.
 // dispatch_s is responsible for sending the latest worker completion count to dispatch_d.
 // To minimize the number of writes from dispatch_s to dispatch_d, locally track dispatch_d's copy.
-static uint32_t worker_count_update_for_dispatch_d[max_num_worker_sems] = {0};
+static std::uint32_t worker_count_update_for_dispatch_d[max_num_worker_sems] = {0};
 
-static uint32_t go_signal_noc_data[max_num_go_signal_noc_data_entries];
+static std::uint32_t go_signal_noc_data[max_num_go_signal_noc_data_entries];
 
-static uint32_t num_worker_sems = 1;
+static std::uint32_t num_worker_sems = 1;
 
 // The dispatch message entry limit also bounds the number of sub-devices.
-static std::array<uint32_t, max_num_worker_sems> workers_per_sub_device = {0};
+static std::array<std::uint32_t, max_num_worker_sems> workers_per_sub_device = {0};
 
 #ifdef FDS_WORKER_DONE
-static std::array<uint32_t, max_num_worker_sems> open_round_worker_count = {0};
-static std::array<uint32_t, max_num_worker_sems> open_round_credited_count = {0};
-static uint32_t open_round_mask = 0;
+static std::array<std::uint32_t, max_num_worker_sems> open_round_worker_count = {0};
+static std::array<std::uint32_t, max_num_worker_sems> open_round_credited_count = {0};
+static std::uint32_t open_round_mask = 0;
 #endif
 
 #ifdef FDS_WORKER_GO
-constexpr uint32_t kInitGoClearHoldCycles = 4096;
-static uint32_t next_go_token = 1;
+constexpr std::uint32_t kInitGoClearHoldCycles = 4096;
+constexpr std::uint32_t kFdsGoToken = 1;
+static std::array<bool, max_num_worker_sems> open_round_uses_fds_go = {false};
 
 FORCE_INLINE
-void write_go_verified(uint32_t value) {
+void write_go_verified(std::uint32_t value) {
     WAYPOINT("FGOW");
     do {
         overlay::fds_signalling::dispatch_write_go(value);
@@ -212,19 +214,19 @@ void write_go_verified(uint32_t value) {
 
 FORCE_INLINE
 void dispatch_s_wr_reg_cmd_buf_init() {
-    uint64_t xy_local_addr = get_noc_addr_helper(my_noc_xy, 0);
+    std::uint64_t xy_local_addr = get_noc_addr_helper(my_noc_xy, 0);
     noc_cmd_buf_set_targ_addr_coordinate(
-        my_noc_index, DISPATCH_S_WR_REG_CMD_BUF, (uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
+        my_noc_index, DISPATCH_S_WR_REG_CMD_BUF, (std::uint32_t)(xy_local_addr >> NOC_ADDR_COORD_SHIFT));
 }
 
 FORCE_INLINE
 void dispatch_s_atomic_cmd_buf_init() {
-    uint64_t atomic_ret_addr = get_noc_addr_helper(my_noc_xy, MEM_NOC_ATOMIC_RET_VAL_ADDR);
+    std::uint64_t atomic_ret_addr = get_noc_addr_helper(my_noc_xy, MEM_NOC_ATOMIC_RET_VAL_ADDR);
     noc_cmd_buf_set_ret_addr(my_noc_index, DISPATCH_S_ATOMIC_CMD_BUF, atomic_ret_addr);
 }
 
 FORCE_INLINE
-void dispatch_s_noc_semaphore_inc(uint64_t addr, uint32_t incr, uint8_t noc_id) {
+void dispatch_s_noc_semaphore_inc(std::uint64_t addr, std::uint32_t incr, std::uint8_t noc_id) {
     // dispatch_s specific atomic inc API, which will use DISPATCH_S_ATOMIC_CMD_BUF to ensure that
     // ncrisc and brisc don't clobber each other's resources when dispatch_s and dispatch_d are on
     // the same tensix core
@@ -246,19 +248,19 @@ void dispatch_s_noc_semaphore_inc(uint64_t addr, uint32_t incr, uint8_t noc_id) 
 #ifdef FDS_WORKER_DONE
 FORCE_INLINE
 void credit_open_rounds() {
-    uint32_t remaining_open_rounds = open_round_mask;
+    std::uint32_t remaining_open_rounds = open_round_mask;
     while (remaining_open_rounds != 0) {
-        const uint32_t sub_device_index = __builtin_ctz(remaining_open_rounds);
-        const uint32_t sub_device_mask = 1U << sub_device_index;
-        const uint32_t completed_worker_count =
+        const std::uint32_t sub_device_index = __builtin_ctz(remaining_open_rounds);
+        const std::uint32_t sub_device_mask = 1U << sub_device_index;
+        const std::uint32_t completed_worker_count =
             overlay::fds_signalling::dispatch_read_group_count(sub_device_index + 1);
-        const uint32_t expected_worker_count = open_round_worker_count[sub_device_index];
+        const std::uint32_t expected_worker_count = open_round_worker_count[sub_device_index];
         ASSERT(completed_worker_count <= expected_worker_count);
 
-        const uint32_t credited_worker_count = open_round_credited_count[sub_device_index];
+        const std::uint32_t credited_worker_count = open_round_credited_count[sub_device_index];
         if (completed_worker_count > credited_worker_count) {
             WAYPOINT("FCRW");
-            const uint32_t newly_completed_worker_count = completed_worker_count - credited_worker_count;
+            const std::uint32_t newly_completed_worker_count = completed_worker_count - credited_worker_count;
             const uintptr_t completion_counter_address =
                 DISPATCH_MESSAGE_ADDR + L1_ALIGNMENT * (completion_counter_offset + sub_device_index);
             dispatch_s_noc_semaphore_inc(
@@ -267,6 +269,14 @@ void credit_open_rounds() {
             WAYPOINT("FCRD");
         }
         if (completed_worker_count == expected_worker_count) {
+#ifdef FDS_WORKER_GO
+            if (open_round_uses_fds_go[sub_device_index]) {
+                // Clear the wire only after wait_for_workers has observed every worker in this round.
+                write_go_verified(0);
+                last_go_token = 0;
+                open_round_uses_fds_go[sub_device_index] = false;
+            }
+#endif
             open_round_mask &= ~sub_device_mask;
         }
 
@@ -276,7 +286,7 @@ void credit_open_rounds() {
 #endif
 
 FORCE_INLINE
-void dispatch_s_noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t noc_id, uint8_t be = 0xF) {
+void dispatch_s_noc_inline_dw_write(std::uint64_t addr, std::uint32_t val, std::uint8_t noc_id, std::uint8_t be = 0xF) {
     WAYPOINT("NWIW");
     DEBUG_SANITIZE_NOC_ADDR(noc_id, addr, 4);
     // Workaround for BH inline writes does not apply here because this writes to a stream register.
@@ -303,32 +313,32 @@ void signal_realtime_profiler_and_switch(volatile tt_l1_ptr realtime_profiler_ms
     msg->realtime_profiler_state = new_state;
 
     if (msg->realtime_profiler_core_noc_xy != 0) {
-        uint64_t realtime_profiler_addr =
+        std::uint64_t realtime_profiler_addr =
             get_noc_addr_helper(msg->realtime_profiler_core_noc_xy, msg->realtime_profiler_remote_state_addr);
-        dispatch_s_noc_inline_dw_write(realtime_profiler_addr, static_cast<uint32_t>(new_state), my_noc_index);
+        dispatch_s_noc_inline_dw_write(realtime_profiler_addr, static_cast<std::uint32_t>(new_state), my_noc_index);
     }
 }
 
 FORCE_INLINE
-uint32_t stream_wrap_gt(uint32_t a, uint32_t b) {
-    constexpr uint32_t shift = 32 - MEM_WORD_ADDR_WIDTH;
+std::uint32_t stream_wrap_gt(std::uint32_t a, std::uint32_t b) {
+    constexpr std::uint32_t shift = 32 - MEM_WORD_ADDR_WIDTH;
     // Careful below: have to take the signed diff for 2s complement to handle the wrap
     // Below relies on taking the diff first then the compare to move the wrap
     // to 2^31 away
-    int32_t diff = a - b;
+    std::int32_t diff = a - b;
     return (diff << shift) > 0;
 }
 
 FORCE_INLINE
-void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
+void wait_for_workers(std::uint32_t wait_count, std::uint32_t wait_stream) {
     WAYPOINT("WCW");
     last_wait_count = wait_count;
     last_wait_stream = wait_stream;
 #ifdef ARCH_QUASAR
-    volatile uint32_t* worker_sem =
+    volatile std::uint32_t* worker_sem =
         worker_completion_sem_addr(wait_stream, first_stream_used, completion_counter_offset);
 #else
-    volatile uint32_t* worker_sem = reinterpret_cast<volatile uint32_t*>(
+    volatile std::uint32_t* worker_sem = reinterpret_cast<volatile std::uint32_t*>(
         static_cast<uintptr_t>(STREAM_REG_ADDR(wait_stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX)));
 #endif
     DPRINT("DISPATCH_S: wait_for_workers: wait_count: {}, worker_sem: {}\n", wait_count, *worker_sem);
@@ -355,14 +365,14 @@ template <bool flush_write = false>
 FORCE_INLINE void update_worker_completion_count_on_dispatch_d() {
     if constexpr (distributed_dispatcher) {
         bool write = false;
-        for (uint32_t i = 0; i < num_worker_sems; i++) {
-            uint32_t num_workers_signalling_completion =
+        for (std::uint32_t i = 0; i < num_worker_sems; i++) {
+            std::uint32_t num_workers_signalling_completion =
                 NOC_STREAM_READ_REG(i + first_stream_used, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
             if (num_workers_signalling_completion != worker_count_update_for_dispatch_d[i]) {
                 worker_count_update_for_dispatch_d[i] = num_workers_signalling_completion;
                 // Writing to STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX sets
                 // STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX (rather than incrementing it).
-                uint64_t dispatch_d_dst = get_noc_addr_helper(
+                std::uint64_t dispatch_d_dst = get_noc_addr_helper(
                     dispatch_d_noc_xy, STREAM_REG_ADDR(i + first_stream_used, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX));
                 dispatch_s_noc_inline_dw_write(dispatch_d_dst, num_workers_signalling_completion, my_noc_index);
                 write = true;
@@ -376,12 +386,13 @@ FORCE_INLINE void update_worker_completion_count_on_dispatch_d() {
     }
 }
 
-template <uint32_t noc_xy, uint32_t sem_id>
-FORCE_INLINE void cb_acquire_pages_dispatch_s(uint32_t n) {
-    volatile tt_l1_ptr uint32_t* sem_addr = uncached_l1_ptr<uint32_t>(get_semaphore<programmable_core_type>(sem_id));
+template <std::uint32_t noc_xy, std::uint32_t sem_id>
+FORCE_INLINE void cb_acquire_pages_dispatch_s(std::uint32_t n) {
+    volatile tt_l1_ptr std::uint32_t* sem_addr =
+        uncached_l1_ptr<std::uint32_t>(get_semaphore<programmable_core_type>(sem_id));
 
     WAYPOINT("DAPW");
-    uint32_t heartbeat = 0;
+    std::uint32_t heartbeat = 0;
     // Stall until the number of pages already acquired + the number that need to be acquired is greater
     // than the number available
     while (wrap_gt(num_pages_acquired + n, *sem_addr)) {
@@ -399,8 +410,8 @@ FORCE_INLINE void cb_acquire_pages_dispatch_s(uint32_t n) {
     num_pages_acquired += n;
 }
 
-template <uint32_t noc_xy, uint32_t sem_id>
-FORCE_INLINE void cb_release_pages_dispatch_s(uint32_t n) {
+template <std::uint32_t noc_xy, std::uint32_t sem_id>
+FORCE_INLINE void cb_release_pages_dispatch_s(std::uint32_t n) {
 #ifdef ARCH_QUASAR
     Semaphore<programmable_core_type>(sem_id).up(n);
 #else
@@ -411,41 +422,46 @@ FORCE_INLINE void cb_release_pages_dispatch_s(uint32_t n) {
 
 #ifdef FDS_WORKER_DONE
 FORCE_INLINE
-void open_worker_completion_round(uint32_t sub_device_index) {
+void open_worker_completion_round(std::uint32_t sub_device_index) {
     WAYPOINT("FCLW");
     ASSERT(sub_device_index < max_num_worker_sems);
-    const uint32_t sub_device_mask = 1U << sub_device_index;
+    const std::uint32_t sub_device_mask = 1U << sub_device_index;
     ASSERT((open_round_mask & sub_device_mask) == 0);
     ASSERT(workers_per_sub_device[sub_device_index] != 0);
 
-    uint32_t workers_with_stale_completion = overlay::fds_signalling::dispatch_read_group_status(sub_device_index + 1);
+    std::uint32_t workers_with_stale_completion =
+        overlay::fds_signalling::dispatch_read_group_status(sub_device_index + 1);
     while (workers_with_stale_completion != 0) {
-        const uint32_t worker_lane = __builtin_ctz(workers_with_stale_completion);
+        const std::uint32_t worker_lane = __builtin_ctz(workers_with_stale_completion);
         overlay::fds_signalling::dispatch_clear_worker_status(worker_lane);
         workers_with_stale_completion &= ~(1U << worker_lane);
     }
 
     open_round_worker_count[sub_device_index] = workers_per_sub_device[sub_device_index];
     open_round_credited_count[sub_device_index] = 0;
+#ifdef FDS_WORKER_GO
+    open_round_uses_fds_go[sub_device_index] = false;
+#endif
     open_round_mask |= sub_device_mask;
     WAYPOINT("FCLD");
 }
 #endif
 
-// On Quasar dispatch engines with one CQ and one sub-device, RUN_MSG_GO uses alternating FDS tokens and DM0 writes
-// the worker mailbox signal byte. All other go commands use the NOC path.
+// On Quasar dispatch engines with one CQ and one sub-device, RUN_MSG_GO uses FDS token 1 and DM0 receives it
+// through a machine-external interrupt before writing the worker mailbox signal byte. The wire is 0 outside a round.
+// All other go commands use the NOC path.
 FORCE_INLINE
 void process_go_signal_mcast_cmd() {
     volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
-    uint32_t sync_index = load_aligned<uint32_t>(&cmd->mcast.wait_stream) - first_stream_used;
+    std::uint32_t sync_index = load_aligned<std::uint32_t>(&cmd->mcast.wait_stream) - first_stream_used;
     // Get semaphore that will be update by dispatch_d, signalling that it's safe to send a go signal
 
-    volatile tt_l1_ptr uint32_t* sync_sem_addr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dispatch_s_sync_sem_base_addr + sync_index * L1_ALIGNMENT);
+    volatile tt_l1_ptr std::uint32_t* sync_sem_addr =
+        reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(dispatch_s_sync_sem_base_addr + sync_index * L1_ALIGNMENT);
 
     WAYPOINT("DCW");
     // Wait for notification from dispatch_d, signalling that it's safe to send the go signal
-    uint32_t& mcasts_sent = num_mcasts_sent[sync_index];
+    std::uint32_t& mcasts_sent = num_mcasts_sent[sync_index];
     while (wrap_ge(mcasts_sent, *sync_sem_addr)) {
         invalidate_l1_cache();
         // Update dispatch_d with the latest num_workers
@@ -464,14 +480,14 @@ void process_go_signal_mcast_cmd() {
     // aligned_go_signal_storage at the cached alias for the NOC sources below.
     // CPU writes go through a separate uncached pointer so the value lands in L1 SRAM directly;
     // the NOC then reads the same physical location via the cached-form source address.
-    volatile uint32_t tt_l1_ptr* aligned_go_signal_storage = (volatile uint32_t tt_l1_ptr*)cmd_ptr;
-    volatile uint32_t tt_l1_ptr* aligned_go_signal_storage_uncached = uncached_l1_ptr<uint32_t>(cmd_ptr);
-    uint32_t go_signal_value = load_aligned<uint32_t>(&cmd->mcast.go_signal);
-    uint8_t go_signal_noc_data_idx = cmd->mcast.noc_data_start_index;
-    uint32_t multicast_go_offset = cmd->mcast.multicast_go_offset;
-    uint32_t num_unicasts = cmd->mcast.num_unicast_txns;
-    uint32_t wait_count = load_aligned<uint32_t>(&cmd->mcast.wait_count);
-    uint32_t wait_stream = load_aligned<uint32_t>(&cmd->mcast.wait_stream);
+    volatile std::uint32_t tt_l1_ptr* aligned_go_signal_storage = (volatile std::uint32_t tt_l1_ptr*)cmd_ptr;
+    volatile std::uint32_t tt_l1_ptr* aligned_go_signal_storage_uncached = uncached_l1_ptr<std::uint32_t>(cmd_ptr);
+    std::uint32_t go_signal_value = load_aligned<std::uint32_t>(&cmd->mcast.go_signal);
+    std::uint8_t go_signal_noc_data_idx = cmd->mcast.noc_data_start_index;
+    std::uint32_t multicast_go_offset = cmd->mcast.multicast_go_offset;
+    std::uint32_t num_unicasts = cmd->mcast.num_unicast_txns;
+    std::uint32_t wait_count = load_aligned<std::uint32_t>(&cmd->mcast.wait_count);
+    std::uint32_t wait_stream = load_aligned<std::uint32_t>(&cmd->mcast.wait_stream);
 
 #ifdef FDS_WORKER_GO
     wait_for_workers(wait_count, wait_stream);
@@ -481,21 +497,21 @@ void process_go_signal_mcast_cmd() {
     if (use_fds_go) {
         ASSERT(multicast_go_offset == 0);
         open_worker_completion_round(0);
-        last_go_token = next_go_token;
-        write_go_verified(next_go_token);
-        next_go_token = 3 - next_go_token;
+        open_round_uses_fds_go[0] = true;
+        last_go_token = kFdsGoToken;
+        write_go_verified(kFdsGoToken);
     } else if (multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET) {
-        uint64_t dst_noc_addr_multicast =
-            get_noc_addr_helper(worker_mcast_grid, mcast_go_signal_addr + sizeof(uint32_t) * multicast_go_offset);
-        uint32_t num_dests = num_worker_cores_to_mcast;
-        uint32_t storage_offset = multicast_go_offset % (L1_ALIGNMENT / sizeof(uint32_t));
+        std::uint64_t dst_noc_addr_multicast =
+            get_noc_addr_helper(worker_mcast_grid, mcast_go_signal_addr + sizeof(std::uint32_t) * multicast_go_offset);
+        std::uint32_t num_dests = num_worker_cores_to_mcast;
+        std::uint32_t storage_offset = multicast_go_offset % (L1_ALIGNMENT / sizeof(std::uint32_t));
         aligned_go_signal_storage_uncached[storage_offset] = go_signal_value;
 
         // The wait precedes NOC state programming so DEVICE_PRINT cannot clobber the state before the write.
         cq_noc_async_write_init_state<CQ_NOC_SNDL, true>(
-            static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&aligned_go_signal_storage[storage_offset])),
+            static_cast<std::uint32_t>(reinterpret_cast<uintptr_t>(&aligned_go_signal_storage[storage_offset])),
             dst_noc_addr_multicast,
-            sizeof(uint32_t),
+            sizeof(std::uint32_t),
             num_dests,
             noc_index);
         noc_increment_nonposted_writes_acked(noc_index, num_dests);
@@ -508,11 +524,11 @@ void process_go_signal_mcast_cmd() {
 #else
     if (multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET) {
         // Setup registers before waiting for workers so only the NOC_CMD_CTRL register needs to be touched after.
-        uint64_t dst_noc_addr_multicast =
-            get_noc_addr_helper(worker_mcast_grid, mcast_go_signal_addr + sizeof(uint32_t) * multicast_go_offset);
-        uint32_t num_dests = num_worker_cores_to_mcast;
+        std::uint64_t dst_noc_addr_multicast =
+            get_noc_addr_helper(worker_mcast_grid, mcast_go_signal_addr + sizeof(std::uint32_t) * multicast_go_offset);
+        std::uint32_t num_dests = num_worker_cores_to_mcast;
         // Ensure the offset with respect to L1_ALIGNMENT is the same for the source and destination.
-        uint32_t storage_offset = multicast_go_offset % (L1_ALIGNMENT / sizeof(uint32_t));
+        std::uint32_t storage_offset = multicast_go_offset % (L1_ALIGNMENT / sizeof(std::uint32_t));
         aligned_go_signal_storage_uncached[storage_offset] = go_signal_value;
 
 #if DEVICE_PRINT_DISPATCH_ENABLED
@@ -527,9 +543,9 @@ void process_go_signal_mcast_cmd() {
 #endif
 
         cq_noc_async_write_init_state<CQ_NOC_SNDL, true>(
-            static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&aligned_go_signal_storage[storage_offset])),
+            static_cast<std::uint32_t>(reinterpret_cast<uintptr_t>(&aligned_go_signal_storage[storage_offset])),
             dst_noc_addr_multicast,
-            sizeof(uint32_t),
+            sizeof(std::uint32_t),
             num_dests,
             noc_index);
 
@@ -540,7 +556,7 @@ void process_go_signal_mcast_cmd() {
         wait_for_workers(wait_count, wait_stream);
 #endif
 #ifdef FDS_WORKER_DONE
-        constexpr uint32_t go_signal_shift = 24;
+        constexpr std::uint32_t go_signal_shift = 24;
         if ((go_signal_value >> go_signal_shift) == RUN_MSG_GO) {
             open_worker_completion_round(multicast_go_offset);
         }
@@ -577,15 +593,17 @@ void process_go_signal_mcast_cmd() {
         }
     }
 
-    for (uint32_t i = 0; i < num_unicasts; ++i) {
-        uint64_t dst = get_noc_addr_helper(go_signal_noc_data[go_signal_noc_data_idx++], unicast_go_signal_addr);
+    for (std::uint32_t i = 0; i < num_unicasts; ++i) {
+        std::uint64_t dst = get_noc_addr_helper(go_signal_noc_data[go_signal_noc_data_idx++], unicast_go_signal_addr);
         noc_async_write_one_packet(
-            static_cast<uint32_t>(reinterpret_cast<uintptr_t>(aligned_go_signal_storage)), dst, sizeof(uint32_t));
+            static_cast<std::uint32_t>(reinterpret_cast<uintptr_t>(aligned_go_signal_storage)),
+            dst,
+            sizeof(std::uint32_t));
     }
 
     if (telemetry_enabled) {
-        static uint32_t local_launch_seq_counter = 0;
-        const uint32_t stream_index = wait_stream - first_stream_used;
+        static std::uint32_t local_launch_seq_counter = 0;
+        const std::uint32_t stream_index = wait_stream - first_stream_used;
         ASSERT(stream_index < max_num_worker_sems);
         auto dispatch_telemetry =
             reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchCoreTelemetry*>(
@@ -619,13 +637,13 @@ void process_dispatch_s_wait_cmd() {
     ASSERT(
         (cmd->wait.flags == (CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM)) &&
         distributed_dispatcher);
-    uint32_t stream = load_aligned<uint16_t>(&cmd->wait.stream);
-    uint32_t index = stream - first_stream_used;
-    volatile uint32_t* worker_sem = reinterpret_cast<volatile uint32_t*>(
+    std::uint32_t stream = load_aligned<std::uint16_t>(&cmd->wait.stream);
+    std::uint32_t index = stream - first_stream_used;
+    volatile std::uint32_t* worker_sem = reinterpret_cast<volatile std::uint32_t*>(
         static_cast<uintptr_t>(STREAM_REG_ADDR(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX)));
 
     // Wait for workers to complete
-    while (stream_wrap_gt(load_aligned<uint32_t>(&cmd->wait.count), *worker_sem)) {
+    while (stream_wrap_gt(load_aligned<std::uint32_t>(&cmd->wait.count), *worker_sem)) {
 #if DEVICE_PRINT_DISPATCH_ENABLED
         device_print_dispatcher.execute();
 #endif
@@ -647,7 +665,7 @@ void set_num_worker_sems() {
 #ifdef FDS_WORKER_DONE
     ASSERT(open_round_mask == 0);
 #endif
-    num_worker_sems = load_aligned<uint32_t>(&cmd->set_num_worker_sems.num_worker_sems);
+    num_worker_sems = load_aligned<std::uint32_t>(&cmd->set_num_worker_sems.num_worker_sems);
     ASSERT(num_worker_sems <= max_num_worker_sems);
     cmd_ptr += sizeof(CQDispatchCmd);
 }
@@ -655,15 +673,15 @@ void set_num_worker_sems() {
 FORCE_INLINE
 void set_go_signal_noc_data() {
     volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
-    uint32_t num_words = load_aligned<uint32_t>(&cmd->set_go_signal_noc_data.num_words);
+    std::uint32_t num_words = load_aligned<std::uint32_t>(&cmd->set_go_signal_noc_data.num_words);
     ASSERT(num_words <= max_num_go_signal_noc_data_entries);
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
     // Reaches past the header window invalidated at command entry.
-    invalidate_l2_cache_range(cmd_ptr + sizeof(CQDispatchCmd), num_words * sizeof(uint32_t));
+    invalidate_l2_cache_range(cmd_ptr + sizeof(CQDispatchCmd), num_words * sizeof(std::uint32_t));
 #endif
-    volatile tt_l1_ptr uint32_t* data_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cmd_ptr + sizeof(CQDispatchCmd));
-    for (uint32_t i = 0; i < num_words; ++i) {
+    volatile tt_l1_ptr std::uint32_t* data_ptr =
+        reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(cmd_ptr + sizeof(CQDispatchCmd));
+    for (std::uint32_t i = 0; i < num_words; ++i) {
         go_signal_noc_data[i] = *(data_ptr++);
     }
     cmd_ptr = round_up_pow2(reinterpret_cast<uintptr_t>(data_ptr), L1_ALIGNMENT);
@@ -682,20 +700,20 @@ void merge_dispatch_d_noc_counter_deltas() {
 
     constexpr auto dispatch_d_proc_type = static_cast<decltype(proc_type)>(TensixProcessorTypes::DM0);
 
-    volatile tt_l1_ptr uint32_t* shutdown_sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+    volatile tt_l1_ptr std::uint32_t* shutdown_sem_addr = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(
         get_semaphore<programmable_core_type>(dispatch_d_shutdown_sem_id));
     noc_semaphore_wait(shutdown_sem_addr, 1);
 
     invalidate_l1_cache();
-    const uint32_t reads_delta =
+    const std::uint32_t reads_delta =
         get_noc_counter_val<dispatch_d_proc_type, NocBarrierType::READS_NUM_ISSUED>(my_noc_index);
-    const uint32_t nonposted_writes_delta =
+    const std::uint32_t nonposted_writes_delta =
         get_noc_counter_val<dispatch_d_proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(my_noc_index);
-    const uint32_t nonposted_writes_acked_delta =
+    const std::uint32_t nonposted_writes_acked_delta =
         get_noc_counter_val<dispatch_d_proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(my_noc_index);
-    const uint32_t nonposted_atomics_acked_delta =
+    const std::uint32_t nonposted_atomics_acked_delta =
         get_noc_counter_val<dispatch_d_proc_type, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(my_noc_index);
-    const uint32_t posted_writes_delta =
+    const std::uint32_t posted_writes_delta =
         get_noc_counter_val<dispatch_d_proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(my_noc_index);
 
     if (reads_delta != 0) {
@@ -725,13 +743,13 @@ void kernel_main() {
     overlay::fds_signalling::dispatch_disable_auto_dispatch();
     overlay::fds_signalling::dispatch_config_filter_length(8);
     overlay::fds_signalling::dispatch_config_interrupt_enable(0);
-    for (uint32_t group_id = 1; group_id < 16; ++group_id) {
+    for (std::uint32_t group_id = 1; group_id < 16; ++group_id) {
         overlay::fds_signalling::dispatch_config_group(group_id, 0xFFFFFFFF, 0);
     }
 #endif
     if constexpr (distributed_dispatcher) {
         for (size_t i = 0; i < max_num_worker_sems; i++) {
-            uint32_t index = i + first_stream_used;
+            std::uint32_t index = i + first_stream_used;
 
             NOC_STREAM_WRITE_REG(
                 index,
@@ -746,7 +764,7 @@ void kernel_main() {
 
     cmd_ptr = cb_base;
     bool done = false;
-    uint32_t total_pages_acquired = 0;
+    std::uint32_t total_pages_acquired = 0;
 #if DEVICE_PRINT_DISPATCH_ENABLED
     device_print_dispatcher.init(
         device_print_noc_locations_addr,
@@ -765,7 +783,7 @@ void kernel_main() {
 #endif
 #ifdef FDS_WORKER_GO
     write_go_verified(0);
-    const uint32_t go_clear_start = get_timestamp_32b();
+    const std::uint32_t go_clear_start = get_timestamp_32b();
     while (get_timestamp_32b() - go_clear_start < kInitGoClearHoldCycles) {
 #if DEVICE_PRINT_DISPATCH_ENABLED
         device_print_dispatcher.execute();
@@ -775,7 +793,7 @@ void kernel_main() {
     while (!done) {
         DeviceZoneScopedN("CQ-DISPATCH-SUBORDINATE");
         rt_profiler_enabled = (rt_profiler_msg->realtime_profiler_core_noc_xy != 0);
-        uint32_t popped_pid = 0;
+        std::uint32_t popped_pid = 0;
         if (rt_profiler_enabled) {
             record_realtime_timestamp(rt_profiler_msg, true);
             popped_pid = pop_program_id(rt_profiler_msg);
@@ -791,13 +809,14 @@ void kernel_main() {
         invalidate_l2_cache_range(cmd_ptr, sizeof(CQDispatchCmd));
 #endif
         volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
-        DeviceTimestampedData("process_cmd_d_dispatch_subordinate", (uint32_t)cmd->base.cmd_id);
+        DeviceTimestampedData("process_cmd_d_dispatch_subordinate", (std::uint32_t)cmd->base.cmd_id);
         if (rt_profiler_enabled) {
             const bool is_profiled_cmd = cmd->base.cmd_id == CQ_DISPATCH_CMD_SEND_GO_SIGNAL ||
                                          cmd->base.cmd_id == CQ_DISPATCH_CMD_RT_PROFILER_FLUSH;
             write_buffer_id(
                 rt_profiler_msg,
-                is_profiled_cmd ? popped_pid : static_cast<uint32_t>(REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID));
+                is_profiled_cmd ? popped_pid
+                                : static_cast<std::uint32_t>(REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID));
         }
         switch (cmd->base.cmd_id) {
             case CQ_DISPATCH_CMD_SEND_GO_SIGNAL:
@@ -827,8 +846,8 @@ void kernel_main() {
             case CQ_DISPATCH_CMD_RT_PROFILER_FLUSH:
                 DPRINT("CQ_DISPATCH_CMD_RT_PROFILER_FLUSH\n");
                 wait_for_workers(
-                    load_aligned<uint32_t>(&cmd->rt_profiler_flush.wait_count),
-                    load_aligned<uint32_t>(&cmd->rt_profiler_flush.wait_stream));
+                    load_aligned<std::uint32_t>(&cmd->rt_profiler_flush.wait_count),
+                    load_aligned<std::uint32_t>(&cmd->rt_profiler_flush.wait_stream));
                 cmd_ptr += sizeof(CQDispatchCmd);
                 break;
             case CQ_DISPATCH_CMD_TERMINATE:
@@ -836,13 +855,13 @@ void kernel_main() {
                 if (rt_profiler_enabled) {
                     signal_realtime_profiler_and_switch(rt_profiler_msg);
                     noc_async_writes_flushed();
-                    for (volatile uint32_t delay = 0; delay < 5000; delay++) {
+                    for (volatile std::uint32_t delay = 0; delay < 5000; delay++) {
                     }
                 }
 
                 rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_TERMINATE;
                 if (rt_profiler_enabled) {
-                    uint64_t realtime_profiler_terminate_addr = get_noc_addr_helper(
+                    std::uint64_t realtime_profiler_terminate_addr = get_noc_addr_helper(
                         rt_profiler_msg->realtime_profiler_core_noc_xy,
                         rt_profiler_msg->realtime_profiler_remote_state_addr);
                     dispatch_s_noc_inline_dw_write(

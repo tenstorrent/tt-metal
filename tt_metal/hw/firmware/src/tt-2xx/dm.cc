@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
 #include "internal/firmware_common.h"
 // #include "risc_common.h"
 #include "internal/risc_attribs.h"
@@ -19,67 +20,95 @@
 
 #ifdef FDS_WORKER_DONE
 #include "overlay/fds_signalling.hpp"
+#include "quasar/plic.hpp"
 #endif
 
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
-thread_local uint32_t wIndex __attribute__((used));
-thread_local uint32_t stackSize __attribute__((used));
-thread_local uint32_t sums[SUM_COUNT] __attribute__((used));
-thread_local uint32_t sumIDs[SUM_COUNT] __attribute__((used));
-uint32_t traceCount __attribute__((used));
+thread_local std::uint32_t wIndex __attribute__((used));
+thread_local std::uint32_t stackSize __attribute__((used));
+thread_local std::uint32_t sums[SUM_COUNT] __attribute__((used));
+thread_local std::uint32_t sumIDs[SUM_COUNT] __attribute__((used));
+std::uint32_t traceCount __attribute__((used));
 }  // namespace kernel_profiler
 #endif
 
-uint8_t noc_index;
-constexpr uint8_t noc_mode = DM_DEDICATED_NOC;
+std::uint8_t noc_index;
+constexpr std::uint8_t noc_mode = DM_DEDICATED_NOC;
 
-constexpr uint32_t RISCV_IC_TRISC3_MASK = 0x1;
-constexpr uint32_t RISCV_IC_TRISC2_MASK = 0x2;
-constexpr uint32_t RISCV_IC_TRISC1_MASK = 0x4;
-constexpr uint32_t RISCV_IC_TRISC0_MASK = 0x8;
-constexpr uint32_t RISCV_IC_TRISC_ALL_MASK =
+constexpr std::uint32_t RISCV_IC_TRISC3_MASK = 0x1;
+constexpr std::uint32_t RISCV_IC_TRISC2_MASK = 0x2;
+constexpr std::uint32_t RISCV_IC_TRISC1_MASK = 0x4;
+constexpr std::uint32_t RISCV_IC_TRISC0_MASK = 0x8;
+constexpr std::uint32_t RISCV_IC_TRISC_ALL_MASK =
     RISCV_IC_TRISC0_MASK | RISCV_IC_TRISC1_MASK | RISCV_IC_TRISC2_MASK | RISCV_IC_TRISC3_MASK;
 
-uint8_t my_x[NUM_NOCS] __attribute__((used));
-uint8_t my_y[NUM_NOCS] __attribute__((used));
-uint8_t my_logical_x_ __attribute__((used));
-uint8_t my_logical_y_ __attribute__((used));
-uint8_t my_relative_x_ __attribute__((used));
-uint8_t my_relative_y_ __attribute__((used));
+std::uint8_t my_x[NUM_NOCS] __attribute__((used));
+std::uint8_t my_y[NUM_NOCS] __attribute__((used));
+std::uint8_t my_logical_x_ __attribute__((used));
+std::uint8_t my_logical_y_ __attribute__((used));
+std::uint8_t my_relative_x_ __attribute__((used));
+std::uint8_t my_relative_y_ __attribute__((used));
 
-uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
-uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
-uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
-uint32_t noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
-uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
+std::uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
+std::uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
+std::uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
+std::uint32_t noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
+std::uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
 
 // temporary for things to build
 thread_local CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
-thread_local uint32_t hw_thread_idx __attribute__((used));
-thread_local uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
-thread_local uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
-thread_local uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
+thread_local std::uint32_t hw_thread_idx __attribute__((used));
+thread_local std::uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
+thread_local std::uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
+thread_local std::uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
-thread_local uint32_t rta_count __attribute__((used));
-thread_local uint32_t crta_count __attribute__((used));
+thread_local std::uint32_t rta_count __attribute__((used));
+thread_local std::uint32_t crta_count __attribute__((used));
 #endif
 
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
 // FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
 bank_noc_xy_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
 bank_noc_xy_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
-int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
-int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
+std::int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
+std::int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(UNCACHED_MEM_MAILBOX_BASE);
 tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailboxes->subordinate_sync.map;
 
+#ifdef FDS_WORKER_DONE
+constexpr std::uint32_t fds_go_group_id = 1;
+
+__attribute__((interrupt)) void fds_go_interrupt_handler() {
+    const std::uint32_t claimed_source = overlay::quasar::plic_claim(0);
+    if (claimed_source == 0) {
+        return;
+    }
+
+    const std::uint32_t group_id = claimed_source - overlay::quasar::plic_source_base;
+    std::uint32_t dispatch_lanes = overlay::fds_signalling::worker_read_group_status(group_id);
+    while (dispatch_lanes != 0) {
+        const std::uint32_t dispatch_lane = __builtin_ctz(dispatch_lanes);
+        overlay::fds_signalling::worker_clear_dispatch_status(dispatch_lane);
+        dispatch_lanes &= ~(std::uint32_t{1} << dispatch_lane);
+    }
+
+    // Clear the FDS lanes and read them back before completing the claim so the live level cannot re-pend it.
+    (void)overlay::fds_signalling::worker_read_group_status(group_id);
+    overlay::quasar::plic_complete(0, claimed_source);
+
+    if (group_id == fds_go_group_id && mailboxes->go_message_index == 0) {
+        mailboxes->go_messages[0].signal = RUN_MSG_GO;
+    }
+}
+#endif
+
 inline void invalidate_kernel_binary_l2_cache(
-    uintptr_t kernel_lma, launch_msg_t* launch_msg, uint32_t processor_index) {
-    uint32_t kernel_size = launch_msg->kernel_config.kernel_text_size[processor_index];
+    uintptr_t kernel_lma, launch_msg_t* launch_msg, std::uint32_t processor_index) {
+    std::uint32_t kernel_size = launch_msg->kernel_config.kernel_text_size[processor_index];
     if (kernel_size == 0) {
         return;
     }
@@ -129,7 +158,7 @@ void deassert_trisc() {
     {
         auto* trisc_print = GET_MAILBOX_ADDRESS_DEV(dprint_buf.buffer_triscs);
         trisc_print->aux.lock = 0;
-        uint32_t wpos = trisc_print->aux.wpos;
+        std::uint32_t wpos = trisc_print->aux.wpos;
         if (wpos != DEBUG_PRINT_SERVER_DISABLED_MAGIC && wpos != DEBUG_PRINT_SERVER_STARTING_MAGIC) {
             trisc_print->aux.wpos = DEBUG_PRINT_SERVER_STARTING_MAGIC;
         }
@@ -148,23 +177,29 @@ overlay::RemapperAPI g_remapper_configurator __attribute__((used));
 volatile TxnDFBDescriptor g_txn_dfb_descriptor[32] __attribute__((used));
 volatile KernelBarrier g_kernel_barrier[NUM_KERNEL_BARRIERS] __attribute__((used));
 
-void device_setup() {
+void device_setup(std::uint32_t hardware_thread_id) {
     // instn_buf
     // pc_buf
     // clock gating
     set_deassert_addresses();
     setup_isr_csrs();
+#ifdef FDS_WORKER_DONE
+    if (hardware_thread_id == 0) {
+        register_handler_for_interrupt(MACHINE_EXTERNAL_INTERRUPT_OFFSET, fds_go_interrupt_handler);
+        invalidate_l1_icache();
+    }
+#endif
     // invalidate_l1_cache
     // clear_destination_registers
     // set_default_sfpu_constant_register_state
 }
 
 inline __attribute__((always_inline)) void signal_subordinate_completion() {
-    uint32_t hartid = internal_::get_hw_thread_idx();
-    *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) = RUN_SYNC_MSG_DONE;
+    std::uint32_t hartid = internal_::get_hw_thread_idx();
+    *((volatile std::uint8_t*)&(subordinate_sync->dm1) + hartid - 1) = RUN_SYNC_MSG_DONE;
 }
 
-inline void run_triscs(uint32_t enables) {
+inline void run_triscs(std::uint32_t enables) {
     // Wait for init_sync_registers to complete. Should always be done by the time we get here.
     DPRINT("DM-FW: waiting for TRISCs to complete\n");
     while (subordinate_sync->allNeo0 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
@@ -204,10 +239,10 @@ inline void run_triscs(uint32_t enables) {
     }
 }
 
-inline void start_subordinate_kernel_run_early(uint32_t enables) {
+inline void start_subordinate_kernel_run_early(std::uint32_t enables) {
     for (int i = 1; i < NUM_DM_CORES; i++) {  // start from 1 to skip DM0
         if (enables & (1u << i)) {
-            *((volatile uint8_t*)&(subordinate_sync->dm1) + i - 1) = RUN_SYNC_MSG_GO;
+            *((volatile std::uint8_t*)&(subordinate_sync->dm1) + i - 1) = RUN_SYNC_MSG_GO;
         }
     }
 }
@@ -215,7 +250,7 @@ inline void start_subordinate_kernel_run_early(uint32_t enables) {
 // Wake DM1 to run setup_dfb_remapper in parallel with DM0's ISR setup.
 // DM1 has a dedicated DFB-init-only loop and never runs user kernels.
 // Called before DM0's setup_dfb_implicit_sync so both run concurrently.
-inline void start_dm1_dfb_init() { *((volatile uint8_t*)&(subordinate_sync->dm1)) = RUN_SYNC_MSG_GO; }
+inline void start_dm1_dfb_init() { *((volatile std::uint8_t*)&(subordinate_sync->dm1)) = RUN_SYNC_MSG_GO; }
 
 inline void wait_subordinates() {
     WAYPOINT("NTW");
@@ -232,36 +267,15 @@ inline void wait_subordinates() {
 inline void trigger_sync_register_init() { subordinate_sync->neo0_trisc0 = RUN_SYNC_MSG_INIT_SYNC_REGISTERS; }
 
 #ifdef FDS_WORKER_DONE
-inline void try_consume_fds_go() {
-    const uint32_t go_message_index = mailboxes->go_message_index;
-    if (go_message_index >= DISPATCH_MESSAGE_ENTRIES) {
-        return;
-    }
-
-    uint32_t dispatch_lanes = overlay::fds_signalling::worker_read_go_status(2 * go_message_index + 1) |
-                              overlay::fds_signalling::worker_read_go_status(2 * go_message_index + 2);
-    if (dispatch_lanes == 0) {
-        return;
-    }
-
-    while (dispatch_lanes != 0) {
-        const uint32_t dispatch_lane = __builtin_ctz(dispatch_lanes);
-        overlay::fds_signalling::worker_clear_dispatch_status(dispatch_lane);
-        dispatch_lanes &= ~(1U << dispatch_lane);
-    }
-    mailboxes->go_messages[go_message_index].signal = RUN_MSG_GO;
-}
-
-inline uint32_t begin_worker_completion_round(launch_msg_t* launch_message, bool wait_for_go) {
+inline std::uint32_t begin_worker_completion_round(launch_msg_t* launch_message, bool wait_for_go) {
     if (launch_message->kernel_config.mode != DISPATCH_MODE_DEV) {
         return 0;
     }
 
-    const uint32_t go_message_index = mailboxes->go_message_index;
+    const std::uint32_t go_message_index = mailboxes->go_message_index;
     if (wait_for_go) {
         WAYPOINT("FGW");
         while (mailboxes->go_messages[go_message_index].signal != RUN_MSG_GO) {
-            try_consume_fds_go();
         }
         WAYPOINT("FGD");
     }
@@ -271,7 +285,7 @@ inline uint32_t begin_worker_completion_round(launch_msg_t* launch_message, bool
 }
 
 inline void wait_for_tile_noc_traffic() {
-    for (uint32_t noc = 0; noc < NUM_NOCS; ++noc) {
+    for (std::uint32_t noc = 0; noc < NUM_NOCS; ++noc) {
         WAYPOINT("FNW");
         while (NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT) !=
                    NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED) ||
@@ -286,29 +300,29 @@ inline void wait_for_tile_noc_traffic() {
 }
 #endif
 
-extern "C" uint32_t _start1() {
+extern "C" std::uint32_t _start1() {
     configure_csr();
     // Raw read: hw_thread_idx has not been filled yet, and do_thread_crt1() below zeroes the .tbss
     // it lives in, so caching it any earlier would just be discarded.
-    uint32_t hartid = internal_::read_hw_thread_idx();
+    std::uint32_t hartid = internal_::read_hw_thread_idx();
     if (hartid == 0) {
-        extern uint32_t __ldm_data_start[];
+        extern std::uint32_t __ldm_data_start[];
         do_crt1(__ldm_data_start);
         // Must precede the ready flag below, which releases the other pushers.
         WATCHER_RING_BUFFER_INIT();
         // There might be dirty lines in the cache at boot, so we discard them first (so they can't write
         // back over the zeros) and then write the zeros.
-        constexpr uint32_t sem_words_size = MEM_NOC_CAS_RET_SIZE + MEM_NOC_SEM_LOCK_SIZE + MEM_DM_CACHED_SEM_SIZE;
+        constexpr std::uint32_t sem_words_size = MEM_NOC_CAS_RET_SIZE + MEM_NOC_SEM_LOCK_SIZE + MEM_DM_CACHED_SEM_SIZE;
         invalidate_l2_cache_range(MEM_NOC_CAS_RET_BASE, sem_words_size);
         // Zero these words used for semaphores at boot
-        for (uint32_t w = 0; w < sem_words_size / 4; w++) {
-            reinterpret_cast<volatile uint32_t*>(MEM_L1_UNCACHED_BASE + MEM_NOC_CAS_RET_BASE)[w] = 0;
+        for (std::uint32_t w = 0; w < sem_words_size / 4; w++) {
+            reinterpret_cast<volatile std::uint32_t*>(MEM_L1_UNCACHED_BASE + MEM_NOC_CAS_RET_BASE)[w] = 0;
         }
-        // Originally initalized to WAIT by host firmware initializer.
+        // Originally initialized to WAIT by host firmware initializer.
         // Will be set back to WAIT immediately before running kernels.
         (*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[hartid] = SHARED_GLOBALS_READY_GO;
     }
-    extern uint32_t __ldm_tdata_init[];
+    extern std::uint32_t __ldm_tdata_init[];
     do_thread_crt1(__ldm_tdata_init);
     // .tbss has been zeroed: cache this thread's hw index.
     internal_::init_hw_thread_idx();
@@ -328,7 +342,7 @@ extern "C" uint32_t _start1() {
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
 
-    device_setup();
+    device_setup(hartid);
     if (hartid > 0) {
         signal_subordinate_completion();
     } else {  // This is DM0
@@ -337,7 +351,7 @@ extern "C" uint32_t _start1() {
         thread_sync_init();
 
         // Initialize wait for trisc FW
-        for (uint32_t i = MaxDMProcessorsPerCoreType; i < MaxNumKernels; i++) {
+        for (std::uint32_t i = MaxDMProcessorsPerCoreType; i < MaxNumKernels; i++) {
             mailboxes->fw_shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
         }
         deassert_trisc();
@@ -347,20 +361,33 @@ extern "C" uint32_t _start1() {
 
         noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
 #ifdef FDS_WORKER_DONE
+        const std::uint32_t plic_context = internal_::read_hw_thread_idx();
+        if (plic_context != 0) {
+            ASSERT(false, DebugAssertTripped);
+        }
         overlay::fds_signalling::worker_disable_auto_dispatch();
         overlay::fds_signalling::worker_config_filter_length(8);
         overlay::fds_signalling::worker_config_interrupt_enable(0);
         overlay::fds_signalling::worker_clear_done();
-        for (uint32_t dispatch_lane = 0; dispatch_lane < 3; ++dispatch_lane) {
+        for (std::uint32_t dispatch_lane = 0; dispatch_lane < 3; ++dispatch_lane) {
             overlay::fds_signalling::worker_clear_dispatch_status(dispatch_lane);
         }
+        overlay::fds_signalling::worker_config_group(fds_go_group_id, 0x7, 1);
+        overlay::quasar::plic_set_threshold(plic_context, 0);
+        overlay::quasar::plic_set_priority(overlay::quasar::plic_source_base + fds_go_group_id, 1);
+        overlay::quasar::plic_enable_source(plic_context, overlay::quasar::plic_source_base + fds_go_group_id, true);
+        overlay::quasar::plic_drain_pendings(plic_context);
+        // Thresholds and PLIC enables must be set before arming the FDS interrupt level at reset.
+        overlay::fds_signalling::worker_config_interrupt_enable(std::uint32_t{1} << fds_go_group_id);
+        asm volatile("csrrs zero, mie, %0" : : "r"(std::uint32_t{1} << MACHINE_EXTERNAL_INTERRUPT_OFFSET));
+        asm volatile("csrrs zero, mstatus, %0" : : "r"(std::uint32_t{1} << 3));
 #endif
         trigger_sync_register_init();
 
         DeviceProfilerInit();
         while (1) {
             WAYPOINT("GW");
-            uint8_t go_message_signal = RUN_MSG_DONE;
+            std::uint8_t go_message_signal = RUN_MSG_DONE;
             // kernel_configs.preload is last in the launch message. so other data is
             // valid by the time it's set. All multicast data from the dispatcher is
             // written in order, so it will arrive in order. We also have a barrier
@@ -382,29 +409,27 @@ extern "C" uint32_t _start1() {
                             DeviceIncrementTraceCount();
                             DeviceTraceOnlyProfilerInit();
                         }
-                        uint32_t go_message_index = mailboxes->go_message_index;
+                        std::uint32_t go_message_index = mailboxes->go_message_index;
                         // Querying the noc_index is safe here, since the RUN_MSG_RESET_READ_PTR go signal is currently
                         // guaranteed to only be seen after a RUN_MSG_GO signal, which will set the noc_index to a valid
                         // value. For future proofing, the noc_index value is initialized to 0, to ensure an invalid NOC
                         // txn is not issued.
-                        uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
+                        std::uint64_t dispatch_addr =
+                            calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
                         mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
                         // Notify dispatcher that this has been done
                         DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
                         notify_dispatch_core_done(dispatch_addr, noc_index);
                     }
                 }
-#ifdef FDS_WORKER_DONE
-                try_consume_fds_go();
-#endif
             }
 
             WAYPOINT("GD");
 
-            uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
+            std::uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
 #ifdef FDS_WORKER_DONE
-            uint32_t worker_completion_group = 0;
+            std::uint32_t worker_completion_group = 0;
             if (go_message_signal == RUN_MSG_GO) {
                 worker_completion_group = begin_worker_completion_round(launch_msg_address, false);
             }
@@ -416,7 +441,7 @@ extern "C" uint32_t _start1() {
                 DeviceZoneScopedMainN("DM0-FW");
                 DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
                 DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
-                uint32_t enables = launch_msg_address->kernel_config.enables;
+                std::uint32_t enables = launch_msg_address->kernel_config.enables;
                 // Trigger the NCRISC to start loading CBs and IRAM as soon as possible.
                 // if (enables &
                 //     (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM1)))
@@ -426,7 +451,7 @@ extern "C" uint32_t _start1() {
                 uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
 
                 // Initialize wait for kernels
-                for (uint32_t i = 0; i < MaxNumKernels; i++) {
+                for (std::uint32_t i = 0; i < MaxNumKernels; i++) {
                     mailboxes->shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
                 }
 
@@ -453,13 +478,13 @@ extern "C" uint32_t _start1() {
                 // }
                 // prev_noc_mode = noc_mode;
 
-                uint32_t tt_l1_ptr* dfb_l1_base =
-                    (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.local_cb_offset);
+                std::uint32_t tt_l1_ptr* dfb_l1_base =
+                    (std::uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.local_cb_offset);
                 start_subordinate_kernel_run_early(enables);
 
                 // DM0 needs to setup DFBs to program implicit synchronization regardless of whether it runs a kernel or
                 // not.
-                uint32_t num_local_dfbs = launch_msg_address->kernel_config.local_cb_mask;
+                std::uint32_t num_local_dfbs = launch_msg_address->kernel_config.local_cb_mask;
                 // Kick DM1 to run remapper config in parallel with DM0's ISR setup.
                 start_dm1_dfb_init();
                 WAYPOINT("R");
@@ -484,7 +509,7 @@ extern "C" uint32_t _start1() {
 
             // Signal host/dispatcher completion after the DM0-FW zone above has finalized, so DM0's markers
             // are readable when the host wakes on RUN_MSG_DONE.
-            uint32_t go_message_index = mailboxes->go_message_index;
+            std::uint32_t go_message_index = mailboxes->go_message_index;
 #ifdef FDS_WORKER_DONE
             if (worker_completion_group != 0) {
                 go_message_index = worker_completion_group - 1;
@@ -509,13 +534,13 @@ extern "C" uint32_t _start1() {
                     overlay::fds_signalling::worker_signal_done(worker_completion_group);
                 } else {
                     mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
-                    uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
+                    std::uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
                     DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
                     notify_dispatch_core_done(dispatch_addr, noc_index);
                 }
 #else
                 mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
-                uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
+                std::uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
                 DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
                 notify_dispatch_core_done(dispatch_addr, noc_index);
 #endif
@@ -530,28 +555,28 @@ extern "C" uint32_t _start1() {
         // WAYPOINT("GW");
         WAYPOINT("W1");
         while (true) {
-            if (*((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) == RUN_SYNC_MSG_GO ||
-                *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) == RUN_SYNC_MSG_LOAD) {
+            if (*((volatile std::uint8_t*)&(subordinate_sync->dm1) + hartid - 1) == RUN_SYNC_MSG_GO ||
+                *((volatile std::uint8_t*)&(subordinate_sync->dm1) + hartid - 1) == RUN_SYNC_MSG_LOAD) {
                 break;
             }
             asm("nop; nop; nop; nop; nop");
         }
-        uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
+        std::uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
         launch_msg_t* launch_msg = &(mailboxes->launch[launch_msg_rd_ptr]);
 
         uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
         int index = hartid;
 
         uintptr_t kernel_lma =
-            static_cast<uint32_t>(kernel_config_base) + launch_msg->kernel_config.kernel_text_offset[index];
+            static_cast<std::uint32_t>(kernel_config_base) + launch_msg->kernel_config.kernel_text_offset[index];
 
-        uint32_t tt_l1_ptr* dfb_l1_base =
-            (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
-        uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
+        std::uint32_t tt_l1_ptr* dfb_l1_base =
+            (std::uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
+        std::uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
 
         if (hartid == 1) {
             setup_dfb_remapper(dfb_l1_base, num_local_dfbs);
-            *((volatile uint8_t*)&(subordinate_sync->dm1)) = RUN_SYNC_MSG_DONE;
+            *((volatile std::uint8_t*)&(subordinate_sync->dm1)) = RUN_SYNC_MSG_DONE;
             continue;
         }
 
@@ -562,7 +587,7 @@ extern "C" uint32_t _start1() {
         overlay_cmd_buff_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
 
         WAYPOINT("R1");
-        while (*((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) != RUN_SYNC_MSG_GO) {
+        while (*((volatile std::uint8_t*)&(subordinate_sync->dm1) + hartid - 1) != RUN_SYNC_MSG_GO) {
             asm("nop; nop; nop; nop; nop");
         }
         // Invalidate the i$ now the kernels have loaded and before running
@@ -571,14 +596,14 @@ extern "C" uint32_t _start1() {
         {
             // Profiler FW zone for subordinate DMs (DM1-DM7).
             DeviceZoneScopedMainN("DM-FW");
-            auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
+            auto stack_free = reinterpret_cast<std::uint32_t (*)()>(kernel_lma)();
 
             record_stack_usage(stack_free);
         }
         WAYPOINT("D1");
         DEVICE_PRINT_KERNEL_FINISHED();
 
-        *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) = RUN_SYNC_MSG_DONE;
+        *((volatile std::uint8_t*)&(subordinate_sync->dm1) + hartid - 1) = RUN_SYNC_MSG_DONE;
     }
 
     return 0;
