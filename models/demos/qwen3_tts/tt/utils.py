@@ -38,6 +38,24 @@ except ModuleNotFoundError:  # non-tracy build
         pass
 
 
+def last_real_hidden_row(seq_len: int, real_seq_len: int) -> int:
+    """Row of a Talker hidden tensor that the CodePredictor must condition on.
+
+    Prefill is right-padded to a TRACE bucket, so the LAST row of a prefill hidden
+    tensor is a padding token — while code 0 was sampled from the logits of row
+    ``real_seq_len - 1``. Frame 0 has to hand the CP the row that produced code 0, not
+    the row that happens to sit last. Decode output has ``seq == 1``, where row 0 is
+    the only row.
+
+    This lives in one place on purpose: the selection was open-coded in the fused path
+    (``tt/server.py``), the per-step path (``ar_decode_loop`` below) and the full-model
+    PCC gate, and the three disagreed — the gate trimmed the padding first and got it
+    right, both production paths took the padded last row and got it wrong. The PCC
+    gate now calls this too, so a regression here fails that test.
+    """
+    return real_seq_len - 1 if seq_len > 1 else 0
+
+
 @dataclass
 class DecodeLoopState:
     """All state the AR decode loop reads or mutates.
@@ -450,7 +468,9 @@ def ar_decode_loop(
             _prof_frame = step == _profile_cp_frame
             if _prof_frame:
                 _signpost("cp_frame_start")
-            past_hidden_torch = _mesh_to_torch(talker_hidden_tt)[:, :, -1:, :].float()
+            _hid_t = _mesh_to_torch(talker_hidden_tt)
+            _hid_row = last_real_hidden_row(int(_hid_t.shape[2]), real_seq_len)
+            past_hidden_torch = _hid_t[:, :, _hid_row : _hid_row + 1, :].float()
             token_id_buf[0, 0] = token_0
             code0_embed = F.embedding(token_id_buf, codec_embed_torch).unsqueeze(1)
             cp_input = torch.cat([past_hidden_torch, code0_embed], dim=2)
