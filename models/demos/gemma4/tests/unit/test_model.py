@@ -22,6 +22,7 @@ from ...tests.test_factory import (
     get_pcc_threshold,
     num_layers_for_full_attention_group,
     parametrize_mesh_with_fabric,
+    with_l1_small,
 )
 
 
@@ -676,7 +677,7 @@ def _build_decode_harness(mesh_device, model_path, decode_pos, max_seq_len=8192,
     [
         pytest.param(
             (1, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000},
+            with_l1_small({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 200_000_000}),
             id="1x4",
         ),
     ],

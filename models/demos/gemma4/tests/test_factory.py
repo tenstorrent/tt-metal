@@ -18,6 +18,7 @@ import torch
 import ttnn
 
 from ..config import MeshConfig, ModeConfig
+from ..tt.ccl import default_l1_small_size
 from ..tt.model_config import Gemma4ModelArgs
 
 _DEFAULT_MODEL_PATH = "/mnt/MLPerf/tt_dnn-models/google/gemma-4-26B-A4B-it"
@@ -418,6 +419,18 @@ def _is_device_discovery_failure(exc):
     return any(marker in msg for marker in _DEVICE_DISCOVERY_FAILURE_MARKERS)
 
 
+def with_l1_small(device_params=None):
+    """Ensure ``device_params`` reserve L1_SMALL for CCL all_gather semaphores.
+
+    ``all_gather_multicast_factory`` allocates barrier semaphores in L1_SMALL
+    when that region is sized; otherwise it fragments the main L1 pool and
+    logs a warning. Callers that already set ``l1_small_size`` are unchanged.
+    """
+    out = dict(device_params or {})
+    out.setdefault("l1_small_size", default_l1_small_size())
+    return out
+
+
 def parametrize_mesh_with_fabric(mesh_shapes=None, device_params_extra=None):
     """Universal mesh parametrization with FABRIC_1D.
 
@@ -426,6 +439,8 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, device_params_extra=None):
 
     ``device_params_extra`` (dict) is merged into every param's device_params —
     e.g. ``{"trace_region_size": 256_000_000}`` for tests that capture a trace.
+    ``l1_small_size`` defaults to ``default_l1_small_size()`` so CCL all_gather
+    semaphores land in L1_SMALL (override via extra or ``GEMMA4_L1_SMALL_SIZE``).
 
     Fabric is enabled (FABRIC_1D) for multi-device shapes, and disabled for
     (1, 1). Launching fabric on a 1x1 mesh on a multi-device system fails the
@@ -458,7 +473,7 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, device_params_extra=None):
         params = [
             pytest.param(
                 (1, 1),
-                {"fabric_config": None, **dict(device_params_extra or {})},
+                with_l1_small({"fabric_config": None, **dict(device_params_extra or {})}),
                 id="device-unavailable",
                 marks=pytest.mark.skip(reason=f"Device discovery failed (unhealthy runner): {e}"),
             )
@@ -482,7 +497,7 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, device_params_extra=None):
     if os.getenv("CI") == "true" and len(mesh_shapes) > 1:
         mesh_shapes = [max(mesh_shapes, key=lambda s: s[0] * s[1])]
 
-    extra = dict(device_params_extra or {})
+    extra = with_l1_small(device_params_extra)
     if not mesh_shapes:
         params = [
             pytest.param(

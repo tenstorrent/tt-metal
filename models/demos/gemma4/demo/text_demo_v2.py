@@ -58,6 +58,7 @@ from models.demos.gemma4.demo.sampling_utils import (
     log_sampling_mode,
     model_can_sample_on_device,
 )
+from models.demos.gemma4.tt.ccl import default_l1_small_size
 from models.demos.gemma4.tt.generator import Gemma4Generator
 from models.demos.gemma4.tt.generator_trace import resolve_gemma4_demo_long_context
 from models.demos.utils.llm_demo_utils import create_benchmark_data
@@ -241,7 +242,7 @@ def _device_params():
         "fabric_config": fabric_config,
         "num_command_queues": num_cqs,
         # CCL all_gather allocates semaphores in L1_SMALL when this is > 0.
-        "l1_small_size": int(os.environ.get("GEMMA4_L1_SMALL_SIZE", 24576)),
+        "l1_small_size": default_l1_small_size(),
     }
     # Wormhole has 12 GB/ASIC vs Blackhole's 32 GB, so the trace budget is much
     # tighter, but 30 MB is not enough for the 31B/26B decode+prefill traces on

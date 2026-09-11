@@ -8,6 +8,19 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 
+# CCL all_gather allocates barrier semaphores in L1_SMALL when this is > 0
+# (see all_gather_multicast_factory.cpp). Demo and unit meshes must open with
+# this so those semaphores do not fragment the main L1 pool.
+_DEFAULT_L1_SMALL_SIZE = 24576
+
+
+def default_l1_small_size() -> int:
+    """L1_SMALL region size so CCL all_gather semaphores skip the main L1 pool.
+
+    Override with ``GEMMA4_L1_SMALL_SIZE``.
+    """
+    return int(os.environ.get("GEMMA4_L1_SMALL_SIZE", _DEFAULT_L1_SMALL_SIZE))
+
 
 def default_num_links():
     """Default TP-collective link count for the current arch.
