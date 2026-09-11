@@ -3038,10 +3038,10 @@ class ModelArgs:
             )
 
         if self.num_devices > 0 and self.cluster_shape != [1, 1]:
-            self.pad_logits_to_power_of_2 = should_pad_sampling_logits_to_power_of_2(
-                self.base_model_name, self.padded_vocab_size, self.num_devices
-            )
-        else:
+            # A/B: padding 32064 -> 32768 costs a Pad program and hands ttnn.topk a
+            # width whose core split leaves half the grid idle; measure the unpadded
+            # width instead.
+            self.pad_logits_to_power_of_2 = False
             # Off on [1, 1]: an A/B on the multi-step split path (PR #53167)
             # measured no end-to-end decode benefit from padding the topk chunks
             # to a power of two, so the flag stays multi-device only.
