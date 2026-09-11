@@ -86,3 +86,34 @@ def test_paged_update_cache_row_major_input(device, cache_dtype, paged):
 
         eq, _ = comp_pcc(cache, tt_got_back, pcc=0.99)
         assert eq
+
+
+def _width_sharded_rm_cache(device, cache, dtype):
+    height, width = cache.shape[0], cache.shape[-1]
+    xt = ttnn.Tensor(cache, dtype).to(ttnn.ROW_MAJOR_LAYOUT)
+    num_cores = width // 32
+    shard_grid = ttnn.num_cores_to_corerangeset(num_cores, device.compute_with_storage_grid_size(), True)
+    shard_spec = ttnn.ShardSpec(shard_grid, [height, 32], ttnn.ShardOrientation.ROW_MAJOR)
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+    return xt.to(device, mem_config)
+
+
+def test_paged_update_cache_rm_width_sharded(device):
+    torch.manual_seed(0)
+    num_users, compress_rate, head_dim = 2, 4, 128
+    height, width = num_users * compress_rate, head_dim
+    cache = torch.randn(height, 1, 1, width).bfloat16().float()
+    x = torch.randn(1, num_users, 1, width).bfloat16().float()
+    cache_idxs = [1, compress_rate + 2]
+
+    cachett = _width_sharded_rm_cache(device, cache, ttnn.bfloat16)
+    xt = _height_sharded_rm(device, x, ttnn.bfloat16)
+    cache_idxs_tt = ttnn.Tensor(torch.tensor(cache_idxs, dtype=torch.int32), ttnn.int32).to(device)
+    cachett = ttnn.experimental.paged_update_cache(cachett, xt, update_idxs_tensor=cache_idxs_tt)
+
+    for i, update_idx in enumerate(cache_idxs):
+        cache[update_idx, 0, 0, :] = x[0, i, 0, :]
+
+    tt_got_back = cachett.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    eq, _ = comp_equal(cache, tt_got_back)
+    assert eq
