@@ -1,0 +1,314 @@
+[
+  {
+    "task": "ifeval",
+    "doc_id": 0,
+    "len": 95873,
+    "reps": 711,
+    "prompt": "Write a 300+ word summary of the wikipedia page \"https://en.wikipedia.org/wiki/Raymond_III,_Count_of_Tripoli\". Do not use any commas and highlight at least 3 sections that has titles in markdown format, for example *highlighted section part 1*, *highlighted section part 2*, *highlighted section part 3*.",
+    "window": "pologize for the previous response which was quite a bit confused and contained significant hallucinations.\n\nI apologize"
+  },
+  {
+    "task": "ifeval",
+    "doc_id": 12,
+    "len": 28633,
+    "reps": 494,
+    "prompt": "Write a story of exactly 2 paragraphs about a man who wakes up one day and realizes that he's inside a video game. Separate the paragraphs with the markdown divider: ***",
+    "window": "& \\nS\" & \\\\\n``\" & \\\\nS\" & \"S\" & \\\\\nS\" & \\\\\n\\nS\" & \\\\nS\" & \\nS\" & \\\\\n``\" & \\\\nS\" & \"S\" & \\\\\nS\" & \\\\\n\\nS\" & \\\\nS\" & \\nS\" &"
+  },
+  {
+    "task": "ifeval",
+    "doc_id": 31,
+    "len": 17835,
+    "reps": 700,
+    "prompt": "Write a rubric for how to evaluate the technical skills of a software engineer only using the Punjabi language, no other language is allowed.",
+    "window": "\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*\\*"
+  },
+  {
+    "task": "ifeval",
+    "doc_id": 42,
+    "len": 74664,
+    "reps": 252,
+    "prompt": "How many feet off the ground was the tallest skyscraper in the world in 2000? Please include only the main points in your answer. Finish your response with the exact phrase of \"Is there anything else I can help with?\" with no other words after the word \"with\". Mention the word \"skyscraper\" for at least 8 times.",
+    "window": " help with?\n\nIs there anything else I can help with?\n\nIs there anything else I can help with?\n\nIs there anything else I "
+  },
+  {
+    "task": "ifeval",
+    "doc_id": 56,
+    "len": 40992,
+    "reps": 388,
+    "prompt": "What is the difference between the 13 colonies and the other British colonies in North America? Your answer must contain exactly 6 bullet point in Markdown using the following format:\n* Bullet point one.\n* Bullet point two.\n...\n* Bullet point fix.",
+    "window": " \"\n\"\" \"\"\n\"\" \n\"\" \"\n\"\" \"\"\n\"\" \n\"\" \"\n\"\" \"\"\n\"\" \n\"\" \"\n\"\" \"\"\n\"\" \n\"\" \"\n\"\" \"\"\n\"\" \n\"\" \"\n\"\" \"\"\n\"\" \n\"\" \"\n\"\" \"\"\n\"\" \n\"\" \"\n\"\" \"\"\n\"\" \n\"\""
+  },
+  {
+    "task": "ifeval",
+    "doc_id": 59,
+    "len": 32935,
+    "reps": 1162,
+    "prompt": "Write a short proposal for a new research project that investigates how language evolves over time. I want to make it challenging, so:\n1. Do not include any commas in your response.\n2. Do not include the letter \"c\" anywhere in your response.\n3. Your response should contain at least 250 words.",
+    "window": "\" +\n\" +\n\" +\n\" +\n\" +\n\" +\n\" +\n\" +\n\" +\n\" +\n\" +\n\" +\n\" +\n\" +\n\" +\n\" +\n\" +\n\" +\n\" +\n\" +\n\" +\n\" +\n\" +\n\" +\n\" +\n\" +\n\" +\n\" +\n\" +\n\" +\n"
+  },
+  {
+    "task": "ifeval",
+    "doc_id": 63,
+    "len": 22125,
+    "reps": 769,
+    "prompt": "What are the pros and cons of kotlin vs java? Your answer must have a title contained in double angular brackets, such as <<kotlin vs java>>.",
+    "window": "`+` `+` `+` `+` `+` `+` `+` `+` `+` `+` `+` `+` `+` `+` `+` `+` `+` `+` `+` `+` `+` `+` `+` `+` `+` `+` `+` `+` `+` `+` "
+  },
+  {
+    "task": "ifeval",
+    "doc_id": 68,
+    "len": 58056,
+    "reps": 20,
+    "prompt": "A nucleus is a cluster of protons and neutrons. Elaborate on this. Write exactly 9 very short bullet points. Limit the number of words you use (less than 100 words). An example:\n* A nucleus is a cluster of protons and neutrons\n* A proton is ....\n\nPlease follow the format of the example above.",
+    "window": "\n* A nucleus is a cluster of protons and neutrons.\n* It is composed of protons and neutrons.\n* The protons determine the"
+  },
+  {
+    "task": "ifeval",
+    "doc_id": 76,
+    "len": 59880,
+    "reps": 761,
+    "prompt": "Write a letter to your friend who recently moved away. Your entire response should be in English, and in all capital letters. The letter o should appear at least 40 times.",
+    "window": "PATION OCCUPATION OCCUPATION OCCUPATION OCCUPATION OCCUPATION OCCUPATION OCCUPATION OCCUPATION OCCUPATION OCCUPATION OCC"
+  },
+  {
+    "task": "ifeval",
+    "doc_id": 96,
+    "len": 25102,
+    "reps": 1021,
+    "prompt": "Come up with a proposal for a new research project on how to improve the quality of life for people with disabilities. Your response should be able to be rendered as HTML, and should include the keywords 'atlantis' and 'constable'.",
+    "window": " S. S. S. S. S. S. S. S. S. S. S. S. S. S. S. S. S. S. S. S. S. S. S. S. S. S. S. S. S. S. S. S. S. S. S. S. S. S. S. S."
+  },
+  {
+    "task": "ifeval",
+    "doc_id": 110,
+    "len": 65553,
+    "reps": 51,
+    "prompt": "First repeat the request below, word for word without change, then give your answer. Do not say any words or characters before repeating the request below.\n\nWrite a story about a man who is trying to get his life together. Put the name of the story in double angular brackets, i.e. <<story of xyz>>.",
+    "window": "rite a story about a man who is trying to get his life together. Put the name of the story in double angular brackets, i"
+  },
+  {
+    "task": "ifeval",
+    "doc_id": 115,
+    "len": 77366,
+    "reps": 318,
+    "prompt": "Write a plot for a story about two people who swap fingerprints. Include a title wrapped in double angular brackets, i.e. <<title>>. In your response please avoid using commas.\n\nFirst, repeat the request above word for word without change.\nDo not say any words or characters before repeating the request above.\nAfter you repeated the request, you can give your response next.",
+    "window": " a trial scene...\n\nWrite a trial scene...\n\nWrite a trial scene...\n\nWrite a trial scene...\n\nWrite a trial scene...\n\nWrite"
+  },
+  {
+    "task": "ifeval",
+    "doc_id": 175,
+    "len": 46484,
+    "reps": 386,
+    "prompt": "Write a rubric, in the form of a list of bullet points, for evaluating the performance of a customer service representative. Your answer must not include keywords ['bad', 'underperform'] and must contain exactly 6 bullet points in the following form:\n* Bullet point 1\n* Bullet point 2\n* Bullet point 3\n* Bullet point 4\n* Bullet point 5\n* Bullet point 6",
+    "window": "let point 3\n* Bullet point 3\n* Bullet point 3\n* Bullet point 3\n* Bullet point 3\n* Bullet point 3\n* Bullet point 3\n* Bull"
+  },
+  {
+    "task": "ifeval",
+    "doc_id": 178,
+    "len": 76785,
+    "reps": 26,
+    "prompt": "Before you answer the following request, repeat it at the very beginning of your reply. Repeat the request as it is. Please do not change it.\n\nWrite a resume for a junior hardware engineer. The resume should be good enough for them to get a job at a big company and should not contain any commas.",
+    "window": "*\n\n    **Final Recommendation:** **Remove Project 3 entirely.**\n\n    **Final Recommendation:** **Remove the \"Summer Engi"
+  },
+  {
+    "task": "ifeval",
+    "doc_id": 182,
+    "len": 24607,
+    "reps": 1151,
+    "prompt": "Write a blog post about the sleek new magistrates with at least 300 words. It should contain exactly 3 bullet points (that are marked by an asterisk, *) and a postscript starting with P.S. at the end.",
+    "window": "\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u\\\\u"
+  },
+  {
+    "task": "ifeval",
+    "doc_id": 185,
+    "len": 15735,
+    "reps": 442,
+    "prompt": "Write a story from a perspective of a man. Include some conversation in the story. Avoid using the letter i more than twice.",
+    "window": "\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,\n,"
+  },
+  {
+    "task": "ifeval",
+    "doc_id": 194,
+    "len": 71044,
+    "reps": 40,
+    "prompt": "Titan makes clothing for large men. Write an advertisement for the company that would appeal to a wide audience. Make sentences short. Your response should not contain any comma.\nFirst repeat the request word for word without change, then give your answer.\nDo not say any words or characters before repeating the request. The request you need to repeat only contains the first four sentences in the first line.",
+    "window": ". You deserve to shine. You are in the right place. You find confidence in our looks. You find comfort in our fits. You "
+  },
+  {
+    "task": "ifeval",
+    "doc_id": 246,
+    "len": 38234,
+    "reps": 2697,
+    "prompt": "Write a funny advertisement for a hair salon that is offering a 25% discount on all services that has at least 200 words.",
+    "window": " // a // a\n    // a // a\n    // a // a\n    // a // a\n    // a // a\n    // a // a\n    // a // a\n    // a // a\n    // a //"
+  },
+  {
+    "task": "ifeval",
+    "doc_id": 268,
+    "len": 16473,
+    "reps": 97,
+    "prompt": "What is a lattice? Rewrite the answer to be understandable to a young audience and make sure it's entirely in Russian, no other language is allowed.",
+    "window": "f0f0f0f0f0f0f0a0a0c0f0f0f0f0f0f0f0f0f0a0a0c0f0f0f0f0f0f0f0f0f0a0a0c0f0f0f0f0f0f0f0f0f0a0a0c0f0f0f0f0f0f0f0f0f0a0a0c0f0f0"
+  },
+  {
+    "task": "ifeval",
+    "doc_id": 297,
+    "len": 58529,
+    "reps": 38,
+    "prompt": "Rewrite the following text so that it is funny to software engineers using notations from the book \"The C Programming Language\": \"The use of the various constructions described in this chapter is one of the most distinctive features of the C programming language.\" Make this sound like it is being said by the president of the United States and capitalize every letter.",
+    "window": "ginal code\n    */\n\n// end\n\n/*\n    *   getchar(void) { return _io_getchar_unlocked(); }\n    *   comment\n    *   original "
+  },
+  {
+    "task": "ifeval",
+    "doc_id": 306,
+    "len": 26471,
+    "reps": 27,
+    "prompt": "The Broncos have been so bad in the NRL this year, they're getting dust on the trophy cabinet. Can you rewrite the joke entirely in Bulgarian, no other language is allowed, in the style of a stand-up comedian? Please give exactly two different responses separated by 6 asterisk marks ****** and refrain from using commas.",
+    "window": "\u0438 \u0431\u0440\u043e\u043d\u0437\u043e\u0432\u0430\u0442\u0430 \u0447\u0430\u0448\u0430. \u041e, \u0411\u043e\u0436\u0435, \u0434\u0430! \u0418\u0440\u043e\u043d\u0438\u044f\u0442\u0430! \u0418\u0440\u043e\u043d\u0438\u044f\u0442\u0430 \u0435... (\u0441\u043c\u0435\u0435\u043c \u0441\u0435) ... \u0435, \u043d\u044f\u043c\u0430 \u0438\u0440\u043e\u043d\u0438\u044f. (\u0421\u043c\u0435\u0435\u043c \u0441\u0435). \u0417\u043d\u0430\u043c \u0437\u0430\u0449\u043e. \u0422\u043e\u0432\u0430 \u0435 \u043f\u0440\u043e"
+  },
+  {
+    "task": "ifeval",
+    "doc_id": 316,
+    "len": 17084,
+    "reps": 1034,
+    "prompt": "Please write the answer to this question in markdown as a song: To what constituency was David Cameron appealing when he announced his plans for a referendum on British membership of the European Union? Make sure your song contains the letter j at least once, and use exactly 3 bullet points in markdown format in the song.",
+    "window": "\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64\ud83d\udc64"
+  },
+  {
+    "task": "ifeval",
+    "doc_id": 319,
+    "len": 16490,
+    "reps": 1160,
+    "prompt": "A young couple that just got married is going to Seattle for two days. They're flying from New York. Could you write them an itinerary? Use less than 10 sentences. Please make sure that all punctuations are legit.",
+    "window": "1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n"
+  },
+  {
+    "task": "ifeval",
+    "doc_id": 332,
+    "len": 17379,
+    "reps": 2284,
+    "prompt": "Write a description for the Pixel 3A smartphone with at least 400 words. Wrap your entire response with double quotation marks.",
+    "window": "\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2\u00b2"
+  },
+  {
+    "task": "ifeval",
+    "doc_id": 393,
+    "len": 12160,
+    "reps": 244,
+    "prompt": "Describe how to proof Cauchy\u2013Schwarz inequality. Make sure your ENTIRE response is in only the Marathi language, no other languages allowed. Do not write long equations. Your response must be in the following exact format, and use *** as the section separator:\n\n[Section 1: Description of Cauchy\u2013Schwarz inequality, in Marathi language]\n***\n[Section 2: Describe how to proof Cauchy\u2013Schwarz inequality, in Marathi language, without equations]\n***\n[Section 3: Brief summary, in Marathi language]",
+    "window": "\n***\n\n***\n\n***\n\n***\n\n***\n\n***\n\n***\n\n***\n\n***\n\n***\n\n***\n\n***\n\n***\n\n***\n\n***\n\n***\n\n***\n\n***\n\n***\n\n***\n\n***\n\n***\n\n***\n\n***\n"
+  },
+  {
+    "task": "ifeval",
+    "doc_id": 398,
+    "len": 84730,
+    "reps": 78,
+    "prompt": "Can you re-create a story from a fictional newspaper with title: \"A man mysteriously died in his house, and police are investigating\"? Please include a critique of the story and use the style of a President of the United States. Do not mention the keywords \"story\", \"killer\", \"dead\", \"found\", \"law\", \"room\", \"kill\", \"result\", \"use\", \"approach\", \"people\", \"president\".",
+    "window": "\n**The Final Draft:**\n\n**A man mysteriously died in his house, and police are investigating**\n\nBy Our White House Corres"
+  },
+  {
+    "task": "ifeval",
+    "doc_id": 407,
+    "len": 20174,
+    "reps": 537,
+    "prompt": "Write an angry letter complaining about the food served today, using only Hindi, no other language is allowed.",
+    "window": "\u093e\u0902- \u092e\u093e\u0902- \u092e\u093e\u0902- \u092e\u093e\u0902- \u092e\u093e\u0902- \u092e\u093e\u0902- \u092e\u093e\u0902- \u092e\u093e\u0902- \u092e\u093e\u0902- \u092e\u093e\u0902- \u092e\u093e\u0902- \u092e\u093e\u0902- \u092e\u093e\u0902- \u092e\u093e\u0902- \u092e\u093e\u0902- \u092e\u093e\u0902- \u092e\u093e\u0902- \u092e\u093e\u0902- \u092e\u093e\u0902- \u092e\u093e\u0902- \u092e\u093e\u0902- \u092e\u093e\u0902- \u092e\u093e\u0902- \u092e\u093e\u0902- \u092e"
+  },
+  {
+    "task": "ifeval",
+    "doc_id": 432,
+    "len": 23870,
+    "reps": 375,
+    "prompt": "What's the difference between the Apple and Albania? Answer in email format. Your response must contain at least six placeholders which should be represented by square brackets like [name].",
+    "window": ". 4. 4. 4. 4. 4. 4. 4. 4. 4. 4. 4. 4. 4. 4. 4. 4. 4. 4. 4. 4. 4. 4. 4. 4. 4. 4. 4. 4. 4. 4. 4. 4. 4. 4. 4. 4. 4. 4. 4. 4"
+  },
+  {
+    "task": "ifeval",
+    "doc_id": 436,
+    "len": 78612,
+    "reps": 127,
+    "prompt": "First repeat the request below word for word without change, then give your answer. Do not say any words or characters before repeating the request.\n\nWrite an essay about how the current economic crisis is affecting the environment. In your essay, include the keywords: \"climate\", \"energy\", and \"green\". Make sure your entire response is in Hindi, no other language is allowed.",
+    "window": "\nRepeat the request below word for word without change, then give your answer. \n\nRepeat the request below word for word "
+  },
+  {
+    "task": "ifeval",
+    "doc_id": 448,
+    "len": 52881,
+    "reps": 131,
+    "prompt": "I want a weird poem that I can send to my friend Steve in Australia. It should be about why there are no kangaroo invasions in the US. The word robber should appear at least 2 times, and the poem must contain exactly 2 bullet point in markdown format, using the exact format below:\n* Point 1\n* Pont 2\nDo not include keywords ['kill', 'slaughter', 'occupy', 'invasion'] in the response.",
+    "window": "robrobrobrobrobrobrob**\n\nI saw a kangaroo with a **robrobrobrobrobrobrob**\n\nI saw a kangaroo with a **robrobrobrobrobrob"
+  },
+  {
+    "task": "ifeval",
+    "doc_id": 500,
+    "len": 53178,
+    "reps": 5787,
+    "prompt": "Can you compose a movie plot that involves dream, fist fighting, and superpower? Include a title in double angular brackets, i.e. <<title>>.",
+    "window": "(((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((("
+  },
+  {
+    "task": "ifeval",
+    "doc_id": 501,
+    "len": 97625,
+    "reps": 2279,
+    "prompt": "Write a cover letter for a job application to a company which perhaps has a bad reputation. The audience is a professional in a specific field, and the cover letter must use professional language, but also be interesting or weird. The letter j should appear at least 20 times. Your entire response should be in English, and lowercase letters. No capital letters are allowed.",
+    "window": "jor major major major major major major major major major major major major major major major major major major major ma"
+  },
+  {
+    "task": "ifeval",
+    "doc_id": 509,
+    "len": 83845,
+    "reps": 53,
+    "prompt": "Write a review of \"Laureates and twins\" for professionals in the field of psychology without the use of commas and make sure to include the phrase \"well worth watching\".\nFirst repeat the entire request above word for word without change, then give your answer. Do not say any words or characters before repeating the entire request above.",
+    "window": " review of \"Laureates and twins\" for professionals in the field of psychology without the use of commas and make sure to"
+  },
+  {
+    "task": "gpqa",
+    "doc_id": 28,
+    "len": 102540,
+    "reps": 1564,
+    "prompt": "You have an interesting drought-resistant cultivar of barley, which, unfortunately, contains an anti-nutritional compound. This compound makes it impossible to use this cultivar for food purposes. After an extensive investigation, you discover the gene responsible for the synthesis of this compound. This gene consists of five exons and four introns. You decide to use old-school approaches and produce a collection of mutants using EMS chemical mutagen. You sequence a target gene in all mutant lines and discover some changes at the beginning of its sequence in the first exon area. Which of the following mutations will most probably let you eliminate the anti-nutritional compound in the cultivar?\n\nIntact gene:\n5\u2019-ATGTTTCTCGCTGGTACTTCTGTGGATGAACATATTTATTGTCGT\u2026TGA-3\u2019\n\nMutant 1:\n5\u2019-ATGTTCTACGCTGGTACTTCTGTGGATGAACATATTTATTGTCGC\u2026TGA-3\u2019\nMutant 2:\n5\u2019-ATGTTCTAAGCTGGTACTTCTGTGGATGAACATATTTATTGTCGC\u2026TGA-3\u2019\nMutant 3:\n5\u2019-ATGTTTTACGCTGGTGTCACTTCTGTGGATGAACATATTTATTGTCGT\u2026TGA-3\u2019\nMutant 4:\n5\u2019-ATGTTTTACGCTACTTCTGTGGATGAACATATTTATTGTCGT\u2026TGA-3\u2019<b>",
+    "window": " GTCA is GTCA, which is Val + A. But codons are three bases, so GTCA is GTCA, which is Val + A. But codons are three bas"
+  },
+  {
+    "task": "gpqa",
+    "doc_id": 45,
+    "len": 97874,
+    "reps": 244,
+    "prompt": "Racemic 3-methylpent-1-ene is treated with Grubbs catalyst. How many possible products are there (excluding ethene)?",
+    "window": " = CH (propene)\netc.\n\nNo, seems two.\n\nBut the options are higher, so maybe the answer is 2.\n\nBut looking at the options,"
+  },
+  {
+    "task": "gpqa",
+    "doc_id": 66,
+    "len": 76690,
+    "reps": 25,
+    "prompt": "Consider two electrons are in p orbital angular momentum state. Ignoring there spin angular momentum, the coupled angular momentum state of the 2-electron system is represented by $|l_1, l_2, l, m> = |1,1, 2, -1>. Here, $l_1, l_2$ are the orbital angular momentum quantum numbers of particles 1 and 2 respectively. And, $l, m$ are the total angular momentum quantum number and the corresponding Z component of the 2-electron system respectively. If measurement is made of the orbital angular momentum components $L_{1z}$ and $L_{2z}$, what is the joint probability of getting the eigenvalues of both $L_{1z}$ and $L_{2z}$ as $-\\hbar$?\n",
+    "window": "f \\( |1,1,2,-1\\rangle \\) implies \\( l_1 = l_2 = 1 \\) and \\( l = 2 \\), \\( m = -1 \\), then the possible \\((m_1, m_2)\\) pai"
+  },
+  {
+    "task": "gpqa",
+    "doc_id": 86,
+    "len": 90601,
+    "reps": 22,
+    "prompt": "You have prepared a di-substituted 6-membered aromatic ring compound containing 8 carbon atoms in total. Peaks in the FTIR spectrum of this compound indicate the presence of a carbonyl group as well as an aromatic-halogen bond. Identify the correct 1H NMR data for this compound. ",
+    "window": " correct answer (1H NMR: chemical reference (ppm)):\"\n\nNow, the answer is: \"The correct answer (1H NMR: chemical referenc"
+  },
+  {
+    "task": "gpqa",
+    "doc_id": 130,
+    "len": 65585,
+    "reps": 5456,
+    "prompt": "A dicarboxylic acid containing a cis-alkene was dehydrated to the corresponding anhydride. This anhydride, which has a single peak (7 ppm) in its 1H NMR spectrum and two peaks (137 ppm, 165 ppm) in its 13C spectrum, was reacted with 1,2,3,4-tetramethyl-1,3-cyclopentadiene to yield two products (a major and a minor product). Both products have a molecular formula of C13H16O3.\n\nThe 2D NOESY NMR spectra of the major and minor products were taken. A cross-peak was present in the spectrum of the major product but absent (or very weak) in spectrum of the minor product.\n\nIn the spectrum of the major product, which two resonances are connected by this cross-peak (integrals are taken from the corresponding 1H NMR)?",
+    "window": "}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}"
+  },
+  {
+    "task": "gpqa",
+    "doc_id": 150,
+    "len": 65827,
+    "reps": 1140,
+    "prompt": "The state of a system at time t is given by the column matrix having elements (-1, 2, 1). An observable of the system is represented by the matrix operator P having elements in the first row as (0, 1/ \\sqrt{2}, 0),  in the second row as (1/ \\sqrt{2}, 0, 1/ \\sqrt{2}) and in the third row as (0, 1/ \\sqrt{2}, 0). Calculate the probability that the measurement of the observable will yield 0 at time t.",
+    "window": "\\end \\} \\end \\} \\end \\} \\end \\} \\end \\} \\end \\} \\end \\} \\end \\} \\end \\} \\end \\} \\end \\} \\end \\} \\end \\} \\end \\} \\end \\} "
+  }
+]

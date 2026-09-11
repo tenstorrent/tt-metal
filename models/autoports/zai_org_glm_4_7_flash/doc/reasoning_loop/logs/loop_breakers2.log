@@ -1,0 +1,6 @@
+[t1_p95_nothink] finish=stop tokens=422 content=1907ch reasoning=0ch 13s (32.6 tok/s)
+     content head: 'Raymond III was Count of Tripoli from 1152 until his death in 1187. He was a major figure in the Kingdom of Jerusalem and a powerful lord. R'
+[t1_p95_topk20] finish=stop tokens=2892 content=1840ch reasoning=10537ch 94s (30.6 tok/s)
+     content head: 'Raymond III was Count of Tripoli from the year 1113 until his death in 1152. Raymond was the son of Count Raymond II and Countess Hodierna o'
+[t0.7_p1.0] finish=stop tokens=5986 content=7571ch reasoning=17524ch 213s (28.1 tok/s)
+     content head: '*Raymond III of Tripoli was born*\n\nin 1142 or later around *that year named 1142*, he was born *as a descendant of royal line named the Cape'

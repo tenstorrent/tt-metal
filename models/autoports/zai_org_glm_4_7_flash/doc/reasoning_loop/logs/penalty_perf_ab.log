@@ -1,0 +1,3 @@
+[no_penalty      ] tokens= 1512 wall=  47.3s   32.0 tok/s  finish=stop
+[rep1.05         ] tokens= 1303 wall=  55.5s   23.5 tok/s  finish=stop
+[no_penalty_again] tokens= 1512 wall=  47.3s   32.0 tok/s  finish=stop

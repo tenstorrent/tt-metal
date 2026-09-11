@@ -1,0 +1,8 @@
+[greedy_rep1.05] finish=stop tokens=2583 content=2726ch reasoning=10815ch 123s (21.0 tok/s)
+     content head: 'Raymond III originally named Raymond-Roupen emerged as a prominent figure in the tumultuous history of the Crusader states located in the Le'
+[greedy_nothink] finish=stop tokens=465 content=2059ch reasoning=0ch 14s (32.5 tok/s)
+     content head: 'Raymond III was a powerful nobleman who ruled the County of Tripoli from 1174 until his death in 1187. He was the son of Count Raymond II an'
+[greedy_pres0.5] finish=stop tokens=2377 content=2011ch reasoning=8893ch 102s (23.2 tok/s)
+     content head: 'Raymond III of Tripoli was a major nobleman within the Crusader states of the Levant during the Middle Ages. He held the title of Count of T'
+[t1_p95_rep1.05] finish=length tokens=16384 content=47266ch reasoning=39801ch 920s (17.8 tok/s)
+     content head: 'Raymond III styled Prince held office briefly appointed guardian watching protector acting administrator controlling realm managing finances'

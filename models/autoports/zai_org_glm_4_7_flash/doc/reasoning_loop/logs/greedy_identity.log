@@ -1,0 +1,9 @@
+=== greedy doc0 ALONE ===
+  doc0 finish=length tokens=16384 content=0ch reasoning=70667ch content_sha=e3b0c44298fc reasoning_sha=9b1201f4489c 745s
+=== greedy doc0+doc1+doc2 BATCHED ===
+  doc0 finish=length tokens=16384 content=0ch reasoning=70667ch content_sha=e3b0c44298fc reasoning_sha=9b1201f4489c 766s
+  doc1 finish=stop tokens=1512 content=711ch reasoning=5158ch content_sha=e0f952cbf7ec reasoning_sha=c37f74efc403 66s
+  doc2 finish=stop tokens=1758 content=2110ch reasoning=3986ch content_sha=5a8f525a3e8b reasoning_sha=e23152628937 77s
+message keys: ['annotations', 'audio', 'content', 'function_call', 'reasoning', 'refusal', 'role']
+doc0 content identical alone vs batched: True
+doc0 reasoning identical alone vs batched: True (len 70667 vs 70667)

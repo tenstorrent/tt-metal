@@ -1,0 +1,42 @@
+prompt tokens=80 device-generated tokens fed=804 (first 3200 chars of 70667)
+Loading weights:   0%|          | 0/751 [00:00<?, ?it/s]Loading weights:   2%|▏         | 17/751 [00:00<00:11, 62.90it/s]Loading weights:   4%|▍         | 33/751 [00:00<00:09, 74.27it/s]Loading weights:   7%|▋         | 49/751 [00:00<00:09, 77.36it/s]Loading weights:   9%|▊         | 65/751 [00:00<00:08, 79.11it/s]Loading weights:  11%|█         | 81/751 [00:01<00:08, 77.57it/s]Loading weights:  13%|█▎        | 97/751 [00:01<00:08, 77.38it/s]Loading weights:  15%|█▌        | 113/751 [00:01<00:07, 81.58it/s]Loading weights:  17%|█▋        | 129/751 [00:01<00:07, 82.43it/s]Loading weights:  19%|█▉        | 145/751 [00:01<00:07, 81.77it/s]Loading weights:  21%|██▏       | 161/751 [00:02<00:07, 80.93it/s]Loading weights:  24%|██▎       | 177/751 [00:02<00:06, 82.01it/s]Loading weights:  26%|██▌       | 193/751 [00:02<00:07, 78.51it/s]Loading weights:  28%|██▊       | 209/751 [00:02<00:06, 79.49it/s]Loading weights:  30%|██▉       | 225/751 [00:02<00:06, 81.77it/s]Loading weights:  32%|███▏      | 241/751 [00:03<00:06, 79.81it/s]Loading weights:  34%|███▍      | 257/751 [00:03<00:06, 81.00it/s]Loading weights:  36%|███▋      | 273/751 [00:03<00:05, 83.47it/s]Loading weights:  38%|███▊      | 289/751 [00:03<00:05, 82.68it/s]Loading weights:  41%|████      | 305/751 [00:03<00:05, 79.08it/s]Loading weights:  43%|████▎     | 321/751 [00:04<00:05, 82.33it/s]Loading weights:  45%|████▍     | 337/751 [00:04<00:04, 83.71it/s]Loading weights:  47%|████▋     | 353/751 [00:04<00:04, 85.02it/s]Loading weights:  49%|████▉     | 369/751 [00:04<00:04, 79.65it/s]Loading weights:  51%|█████▏    | 385/751 [00:04<00:04, 81.53it/s]Loading weights:  53%|█████▎    | 401/751 [00:04<00:04, 82.22it/s]Loading weights:  56%|█████▌    | 417/751 [00:05<00:04, 80.65it/s]Loading weights:  58%|█████▊    | 433/751 [00:05<00:04, 78.66it/s]Loading weights:  60%|█████▉    | 449/751 [00:05<00:03, 81.58it/s]Loading weights:  62%|██████▏   | 465/751 [00:05<00:03, 78.28it/s]Loading weights:  64%|██████▍   | 481/751 [00:06<00:03, 75.97it/s]Loading weights:  66%|██████▌   | 497/751 [00:06<00:03, 75.56it/s]Loading weights:  68%|██████▊   | 513/751 [00:06<00:03, 74.93it/s]Loading weights:  70%|███████   | 529/751 [00:06<00:02, 76.89it/s]Loading weights:  73%|███████▎  | 545/751 [00:06<00:02, 74.94it/s]Loading weights:  75%|███████▍  | 561/751 [00:07<00:02, 77.05it/s]Loading weights:  77%|███████▋  | 577/751 [00:07<00:02, 79.20it/s]Loading weights:  79%|███████▉  | 593/751 [00:07<00:02, 78.08it/s]Loading weights:  81%|████████  | 609/751 [00:07<00:01, 78.80it/s]Loading weights:  83%|████████▎ | 625/751 [00:07<00:01, 81.54it/s]Loading weights:  85%|████████▌ | 641/751 [00:08<00:01, 83.77it/s]Loading weights:  87%|████████▋ | 657/751 [00:08<00:01, 82.51it/s]Loading weights:  90%|████████▉ | 673/751 [00:08<00:00, 84.89it/s]Loading weights:  92%|█████████▏| 689/751 [00:08<00:00, 77.57it/s]Loading weights:  94%|█████████▍| 705/751 [00:08<00:00, 78.30it/s]Loading weights:  96%|█████████▌| 721/751 [00:09<00:00, 82.48it/s]Loading weights:  98%|█████████▊| 737/751 [00:09<00:00, 80.52it/s]Loading weights: 100%|██████████| 751/751 [00:09<00:00, 81.33it/s]
+HF model loaded on cpu bf16 in 10s
+teacher-forced forward over 884 tokens: 8s
+
+teacher-forced argmax agreement: 688/804 = 0.856
+  tokens   0-100: agree 0.910   mean p_ref(device token)=0.883  mean p_ref(top1)=0.908
+  tokens 100-250: agree 0.800   mean p_ref(device token)=0.690  mean p_ref(top1)=0.747
+  tokens 250-400: agree 0.847   mean p_ref(device token)=0.727  mean p_ref(top1)=0.766
+  tokens 400-550: agree 0.840   mean p_ref(device token)=0.732  mean p_ref(top1)=0.777
+  tokens 550-804: agree 0.882   mean p_ref(device token)=0.785  mean p_ref(top1)=0.825
+
+first disagreements (pos, device tok -> ref tok, p_ref(dev), p_ref(top)):
+    15:    ' Material' -> ':**'          p_dev=0.377 p_top=0.621
+    19:         ' for' -> ' "'           p_dev=0.438 p_top=0.438
+    34:       'Length' -> 'Task'         p_dev=0.243 p_top=0.661
+    71:       ' using' -> ' in'          p_dev=0.262 p_top=0.711
+    73:           ' (' -> ' format'      p_dev=0.235 p_top=0.639
+    81:            '*' -> ' part'        p_dev=0.181 p_top=0.813
+    91:     ' Content' -> ' Material'    p_dev=0.325 p_top=0.535
+    95:     ' Sandbox' -> ' Outline'     p_dev=0.327 p_top=0.327
+    96:           '/S' -> '/'            p_dev=0.093 p_top=0.253
+   108:           ' (' -> ' of'          p_dev=0.069 p_top=0.837
+   109:         'also' -> 'Ray'          p_dev=0.158 p_top=0.429
+   128:          '108' -> '112'          p_dev=0.093 p_top=0.154
+
+device tokens outside the reference top-p=0.95 nucleus: 1/804; device tokens ranked >32 by reference: 0/804
+
+free-running HF greedy for 200 tokens from loop entry (char 1727, 460 gen tokens in)...
+  102s. HF continuation:
+ *First Crusade Participation* He joined the First Crusade. He fought bravely at the Battle of Antioch. He also fought at the Battle of Ascalon. These battles were crucial for establishing the Crusader states.
+
+    *   *Rise to Power:*  *Count of Tripoli* Raymond became Count of Tripoli after his father died. He was very young at the time. He was placed under the guardianship of Tancred. Tancred was the regent for the Kingdom of Jerusalem. Raymond eventually took control of Tripoli. He ruled the county as a vassal of the King of Jerusalem.
+
+    *   *Marriage and Politics:*  *Marriage to Cecilia of France* Raymond married Cecilia of France. She was the sister of King Louis VI of France. This marriage strengthened the ties between the Crusader states and France. Raymond was a skilled diplomat. He navigated the complex politics of the region. He often clashed with Tancred
+
+  device continuation from the same point:
+*He participated in the First Crusade.* He was a close ally of Godfrey of Bouillon. He fought bravely at the Battle of Antioch. This battle was crucial for capturing the city. He also fought at the Battle of Ascalon. These battles helped establish the Latin presence in the region.
+
+    *   *Tripoli and Politics:* *He ruled Tripoli as a vassal of the Kingdom of Jerusalem.* His marriage to Cecilia of France was very important. Cecilia was the sister of King Louis VI of France. This marriage connected the Crusader states to the French monarchy. It was a political alliance that strengthened his position. He had to deal with internal conflicts within Tripoli. He also had to manage relations with other nobles like Tancred.
+
+    *   *Later Life and Death:* He died in 1105. He was a strong leader for his people. He left behind a legacy of military prowess and political skill. 
