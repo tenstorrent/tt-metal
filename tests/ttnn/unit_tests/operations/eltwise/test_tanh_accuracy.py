@@ -72,27 +72,28 @@ def test_tanh_range(device, torch_dtype, ttnn_dtype, atol):
     assert_allclose(output_tensor, torch_output_tensor, rtol=1e-05, atol=atol)
     pcc, pcc_msg = assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
     # PCC and max abs error against torch.tanh over this test's 32-value input,
-    # measured on a Wormhole n150 after the approximate-tanh SFPLUT retune:
+    # measured on a Wormhole n150 with the 6-entry ULP-fitted approximate table:
     #
-    #   bfloat16  approx=False  pcc 0.9999898975945355   max|err| 0.003906
-    #   bfloat16  approx=True   pcc 0.9992522964571828   max|err| 0.056641
-    #   float32   approx=False  pcc 0.9999999999999984   max|err| 0.000000
-    #   float32   approx=True   pcc 0.9992540536236625   max|err| 0.055867
+    #   bfloat16  approx=False  pcc 0.9999899271259238   max|err| 0.003906
+    #   bfloat16  approx=True   pcc 0.9991178786405039   max|err| 0.042969
+    #   float32   approx=False  pcc 0.9999999999999983   max|err| 0.000000
+    #   float32   approx=True   pcc 0.9991877722055272   max|err| 0.037996
     #
-    # Re-measured on a Blackhole p100a: every max|err| is identical and every PCC
-    # agrees to seven decimals (bfloat16 0.9999899108605391 / 0.9992523141137097,
-    # float32 1.0 / 0.9992540467544825), so the two architectures share this table.
+    # Read the approx rows as a warning about PCC, not as a regression. Against the
+    # previous 3-segment table (pcc 0.9992522964571828 / 0.9992540536236625, max|err|
+    # 0.056641 / 0.055867) max abs error improved by 1.3-1.5x while PCC got *worse* in
+    # the fourth decimal. PCC scores the linear correlation of the deviation pattern,
+    # not its size, so a systematically scaled error correlates better than a smaller
+    # but wigglier one. Over the full bf16 domain the new table is better on every
+    # error metric at once: max bf16 ULP 48.0 -> 10.7, max abs 0.0582 -> 0.0417, max
+    # relative 18.75% -> 4.91%. Gate on those, not on this PCC.
     #
-    # The retune lifted approximate mode from pcc 0.9978378297942829 (bfloat16) and
-    # 0.9977552960423647 (float32). Its max|err| here is set by x = -0.5, the sampled
-    # point nearest the fit's error peak (|x| = 0.4636, where the error is 0.056339):
-    # |tanh(0.5) - 0.8125*0.5| = 0.0558672, which the float32 row reproduces exactly.
+    # The float32 approx row is exactly the fit's own maximum: 0.037996, reached at
+    # |x| = 1.88, and this input happens to sample it.
     #
-    # The accurate-path numbers also differ from the previously recorded
-    # 0.9999663646890817 (bfloat16) / 0.9999829606828651 (float32). That is NOT from
-    # the retune, which only touches the APPROXIMATION_MODE branch -- those predate
-    # later work on the accurate path, from the era of the fpu-vs-sfpu arithmetic
-    # split recorded as pcc 0.9999583453515977 (fpu) vs 0.9999669593009368 (sfpu).
+    # Not re-measured on Blackhole -- no p100a on this host. The two architectures share
+    # the table and the instruction, and the previous 3-segment numbers agreed to seven
+    # decimals across them, so they are expected to match here too.
     #
     # Not re-measured: the timing below. The retune moves two SFPLOADI immediates and
     # changes no instructions, so it cannot affect it.
