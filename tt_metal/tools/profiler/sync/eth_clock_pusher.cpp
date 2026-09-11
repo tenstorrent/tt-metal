@@ -36,7 +36,7 @@
 constexpr uint32_t kStrideTicks = get_compile_time_arg_val(0);       // refclk ticks between samples (50/us)
 constexpr uint32_t kSocketConfigAddr = get_compile_time_arg_val(1);  // D2HSocket config in this core's L1
 constexpr uint32_t kStageAddr = get_compile_time_arg_val(2);         // one frame slot in this core's L1
-constexpr uint32_t kCtrlAddr = get_compile_time_arg_val(3);          // done at +0, heartbeat at +4, stop at +64
+constexpr uint32_t kCtrlAddr = get_compile_time_arg_val(3);          // done +0, heartbeat +4, go +8, stop +64
 constexpr uint32_t kMyXy = get_compile_time_arg_val(4);              // y << 16 | x, this core's frame identity
 // Scratch for a linked core: its control vector (256 B) at +0, then its two ring images (2 KiB each) -- 4608 B,
 // separate from the frame slot, which is sized for the packed payload alone.
@@ -67,23 +67,10 @@ constexpr uint32_t kShipWords = kRingWords / 4u;
 constexpr uint32_t kMaxDeferStrides = 333;
 constexpr uint32_t kMaxLinked = 16;  // BH has 14 eth cores
 
-// Reading L latches H, so L must be read first; both halves then belong to the same instant.
-inline __attribute__((always_inline)) void read_wall(uint32_t& hi, uint32_t& lo) {
-    lo = *reinterpret_cast<volatile uint32_t*>(kWallClockL);
-    hi = *reinterpret_cast<volatile uint32_t*>(kWallClockH);
-}
-// The refclk pair has no latch: hi/lo/hi guards a splice across a 2^32 boundary.
+// Reading the refclk (PTP CFR timer) LO latches its HI as well.
 inline __attribute__((always_inline)) void read_refclk(uint32_t& hi, uint32_t& lo) {
-    volatile uint32_t* lop = reinterpret_cast<volatile uint32_t*>(kRefclkLoAddr);
-    volatile uint32_t* hip = reinterpret_cast<volatile uint32_t*>(kRefclkHiAddr);
-    const uint32_t h1 = *hip;
-    uint32_t l = *lop;
-    const uint32_t h2 = *hip;
-    if (h1 != h2) {
-        l = *lop;
-    }
-    hi = h2;
-    lo = l;
+    lo = *reinterpret_cast<volatile uint32_t*>(kRefclkLoAddr);
+    hi = *reinterpret_cast<volatile uint32_t*>(kRefclkHiAddr);
 }
 inline __attribute__((always_inline)) uint64_t refclk64() {
     uint32_t hi, lo;
@@ -93,7 +80,7 @@ inline __attribute__((always_inline)) uint64_t refclk64() {
 
 #if defined(PROFILE_KERNEL)
 
-constexpr uint32_t kEmitWords = 1 + 2;  // optional sticky timer + w0 + wall_lo
+constexpr uint32_t kEmitWords = 1 + 4;  // optional sticky timer + the four clock words
 
 // RESERVE-OR-SKIP, never the blocking reserve: a producer on an eth core must not stall. The pairs are absolute,
 // so a gap is still measurable as a straight segment between its neighbours.
@@ -103,18 +90,99 @@ inline __attribute__((always_inline)) bool ring_has_room(uint32_t nwords) {
     return (kp::wIndex - head) <= (kp::RING_USABLE - nwords);
 }
 
-// The wall clock is the packet's own timestamp (low half here, high half from the sticky timer); the refclk low
-// 24 bits ride in low27. The refclk high half is read for the splice guard and never sent: it moves once per
-// 85.9 s and the host reconstructs it by unwrapping.
-inline __attribute__((always_inline)) void emit_pair() {
+// A tracker sample. The two LO reads go back to back: each latches its HI, so one register read is the whole skew
+// between the two domains -- a skew constant in AICLK cycles and therefore moving in ns with DVFS, so it has to be
+// minimal.
+struct Sample {
     uint32_t whi, wlo, rhi, rlo;
-    read_wall(whi, wlo);
-    read_refclk(rhi, rlo);
-    (void)rhi;
-    kp::ring_write_sticky_timer(whi);
-    kp::ring_write_word(kp::ppfmt::clock_w0(kp::ppfmt::CLOCK_LOCAL_REFCLK, rlo));
-    kp::ring_write_word(wlo);
+    uint64_t wall() const { return (static_cast<uint64_t>(whi) << 32) | wlo; }
+    uint64_t refclk() const { return (static_cast<uint64_t>(rhi) << 32) | rlo; }
+};
+inline __attribute__((always_inline)) Sample take_sample() {
+    Sample s;
+    s.wlo = *reinterpret_cast<volatile uint32_t*>(kWallClockL);
+    s.rlo = *reinterpret_cast<volatile uint32_t*>(kRefclkLoAddr);
+    s.whi = *reinterpret_cast<volatile uint32_t*>(kWallClockH);
+    s.rhi = *reinterpret_cast<volatile uint32_t*>(kRefclkHiAddr);
+    return s;
+}
+// The wall clock is the packet's own timestamp (low half here, high half from the sticky timer); the refclk goes
+// whole.
+inline __attribute__((always_inline)) void emit(const Sample& s) {
+    kp::ring_write_sticky_timer(s.whi);
+    kp::ring_write_word(kp::ppfmt::clock_w0(kp::ppfmt::CLOCK_LOCAL_REFCLK, s.rlo));
+    kp::ring_write_word(s.wlo);
+    kp::ring_write_word(kp::ppfmt::clock_w2(s.refclk()));
+    kp::ring_write_word(0);
     kp::publish_tail();
+}
+
+// What reaches the host. AICLK is a PLL multiple of the crystal the refclk counts, so between DVFS transitions the
+// wall clock is one straight line in the refclk, and the host fits exactly that: every stride is sampled, but a
+// sample is emitted only when it carries information. A new run (a sample off the line the current run predicts)
+// opens with a burst of kBurst consecutive samples -- the host needs that many to settle a line -- then a sample per
+// kTailTicks until the run is kTailTicks * kTailSamples old, so its slope is fixed to a few ppm before the gaps grow
+// to a keepalive per kKeepaliveTicks (the line's intercept stays fed). The line is anchored on
+// the run's first sample, its slope in eighths of a wall tick per refclk tick comes from the burst's span, and the
+// anchor is renewed every kReanchorTicks so the multiple is never extrapolated far.
+struct RateRun {
+    uint64_t r0 = 0, w0 = 0;  // anchor
+    uint64_t born = 0;        // refclk of the run's first sample
+    uint64_t last_emit = 0;   // refclk of the last emitted sample
+    uint32_t k8 = 0;          // wall ticks per refclk tick in eighths; 0 while the burst is still measuring it
+    uint32_t n = 0;           // samples since the anchor
+};
+constexpr uint32_t kBurst = 16;
+constexpr uint64_t kTailTicks = 5000;        // 100 us
+constexpr uint64_t kTailSamples = 10;        // the tail ends 1 ms into the run
+constexpr uint64_t kKeepaliveTicks = 50000;  // 1 ms
+// Quantisation puts a sample at most ~40 wall ticks off the anchored line; a single 1/8 step walks 19 per stride.
+constexpr int64_t kOffLineTicks = 64;
+constexpr uint64_t kReanchorTicks = 50'000'000;  // 1 s of refclk
+
+inline __attribute__((always_inline)) void restart(RateRun& run, uint64_t r, uint64_t w) {
+    run.r0 = r;
+    run.w0 = w;
+    run.born = r;
+    run.last_emit = r;
+    run.k8 = 0;
+    run.n = 1;
+}
+
+// Whether this sample goes to the host; updates the run.
+inline __attribute__((always_inline)) bool consider(RateRun& run, const Sample& s) {
+    const uint64_t w = s.wall(), r = s.refclk();
+    if (run.n == 0) {
+        restart(run, r, w);
+        return true;
+    }
+    if (run.k8 == 0) {
+        run.n++;
+        if (run.n >= kBurst) {
+            const uint64_t dr = r - run.r0, dw = w - run.w0;
+            run.k8 = static_cast<uint32_t>((dw * 8u + dr / 2u) / dr);
+        }
+        run.last_emit = r;
+        return true;
+    }
+    const int64_t pred =
+        static_cast<int64_t>(run.w0) + static_cast<int64_t>((static_cast<uint64_t>(run.k8) * (r - run.r0)) / 8u);
+    const int64_t off = static_cast<int64_t>(w) - pred;
+    if (off > kOffLineTicks || off < -kOffLineTicks) {
+        restart(run, r, w);
+        return true;
+    }
+    run.n++;
+    if (r - run.r0 > kReanchorTicks) {
+        run.r0 = r;
+        run.w0 = w;
+    }
+    const uint64_t spacing = (r - run.born < kTailTicks * kTailSamples) ? kTailTicks : kKeepaliveTicks;
+    if (r - run.last_emit >= spacing) {
+        run.last_emit = r;
+        return true;
+    }
+    return false;
 }
 
 // ---- egress ------------------------------------------------------------------------------------------------
@@ -280,9 +348,11 @@ void kernel_main() {
 #if defined(PROFILE_KERNEL)
     volatile tt_l1_ptr uint32_t* done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kCtrlAddr);
     volatile tt_l1_ptr uint32_t* hb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kCtrlAddr + 4);
+    volatile tt_l1_ptr uint32_t* go = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kCtrlAddr + 8);
     volatile tt_l1_ptr uint32_t* stop = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kCtrlAddr + 64);
     *done = 0;
     *hb = 0;
+    *go = 0;
     *stop = 0;
 
     // Linked cores: rt args [0] = n, then (xy, profiler L1 base) per core.
@@ -312,7 +382,15 @@ void kernel_main() {
         }
     };
 
+    // Sampling waits for the host's go word, written once the receiver's ingest threads drain this socket. Started
+    // at launch, the pusher fills its 1 MiB FIFO with pre-capture samples and then laps the consumers' first read.
+    while (*go == 0u && *stop == 0u) {
+        (*hb)++;
+        invalidate_l1_cache();
+    }
+
     uint32_t strides = 0;
+    RateRun run;
     uint64_t target = refclk64() + kStrideTicks;
     while (true) {
         // Pace in REFCLK, not wall clock: a cadence DVFS cannot stretch.
@@ -323,8 +401,9 @@ void kernel_main() {
         target = rc + kStrideTicks;
         (*hb)++;
 
-        if (ring_has_room(kEmitWords)) {
-            emit_pair();
+        const Sample smp = take_sample();
+        if (consider(run, smp) && ring_has_room(kEmitWords)) {
+            emit(smp);
         }
 
         // Sweep on fill or on time.
