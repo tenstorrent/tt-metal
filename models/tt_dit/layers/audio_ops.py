@@ -31,9 +31,11 @@ from ..utils.tensor import local_device_to_torch
 # Per-mesh cache of constant zeros buffers, keyed by id(mesh_device).
 _ZEROS_CACHE: dict = {}
 
-CONV_SPLIT_MODES = ("off", "weight", "act", "full")
+CONV_SPLIT_MODES = ("off", "weight", "act", "full", "stack")
 # Modes that carry a prepared weight residual (``weight_lo``).
 WEIGHT_SPLIT_MODES = ("weight", "full")
+# Operand blocks of the stacked split: one conv over [x_hi | x_hi | x_lo] against [W_hi ; W_lo ; W_hi].
+STACK_BLOCKS = 3
 
 # Default cap on conv3d's C_in_block for the H3 audio blocking table; the sweep that keeps it at
 # 128 lives in `blockings_minimax_h3_audio`.
@@ -75,6 +77,14 @@ def _split_operand(x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     return hi, ttnn.subtract(x, hi)
 
 
+def stack_operand(x_BTC: ttnn.Tensor) -> ttnn.Tensor:
+    """``[x_hi | x_hi | x_lo]`` along channels: the full split's three products as one conv over 3x the input
+    channels against ``[W_hi ; W_lo ; W_hi]`` -- 2 typecasts, 1 subtract, 1 concat and 1 conv3d instead of 8 ops,
+    the same FLOPs, one fp32 accumulator instead of two extra adds."""
+    x_hi, x_lo = _split_operand(x_BTC)
+    return ttnn.concat([x_hi, x_hi, x_lo], dim=-1)
+
+
 def conv3d_maybe_split(
     *,
     split_mode: str,
@@ -96,7 +106,7 @@ def conv3d_maybe_split(
 
     ``bias`` is applied to exactly one term, since it is not a factor of the product being split.
     """
-    if split_mode == "off":
+    if split_mode in ("off", "stack"):  # stack: the caller already stacked the input (stack_operand)
         return ttnn.experimental.conv3d(
             input_tensor=input_tensor, weight_tensor=weight_tensor, bias_tensor=bias_tensor, **conv_kwargs
         )
@@ -202,13 +212,15 @@ def prepare_conv3d_weight_state(
     unpadded_in: int | None = None,
     in_channels: int | None = None,
     split: bool = False,
+    stack: bool = False,
 ) -> None:
     """Zero-pad the 5D conv weight/bias to aligned size, prepare, and write to ``state``.
 
     With ``split``, also writes ``state["weight_lo"]``: the weight is decomposed into ``hi = bf16(w)`` and
     the exact residual ``lo = w - hi``, each prepared separately, so `conv3d_maybe_split` can recover the
     mantissa bits the ~11-bit multiplier drops. The padding above is applied once, before the split, so
-    the bias is never padded twice.
+    the bias is never padded twice. With ``stack``, the three terms of the full split are one weight
+    ``[W_hi ; W_lo ; W_hi]`` over ``3 * in_channels`` (see ``stack_operand``).
     """
     if out_channels != unpadded_out:
         pad_co = out_channels - unpadded_out
@@ -227,7 +239,10 @@ def prepare_conv3d_weight_state(
         # `ttnn.to_torch` refuses on a multi-host mesh; the helper reads a shard this host owns.
         return local_device_to_torch(prepared)
 
-    if split:
+    if stack:
+        w_hi = w_5d.float().bfloat16().float()
+        state["weight"] = _prepare(torch.cat([w_hi, w_5d.float() - w_hi, w_hi], dim=1))
+    elif split:
         w_hi = w_5d.float().bfloat16().float()
         state["weight"] = _prepare(w_hi)
         state["weight_lo"] = _prepare(w_5d.float() - w_hi)
@@ -910,6 +925,7 @@ class Conv2dViaConv3d(Module):
         # An explicit constructor argument: MiniMax-H3 opts in, LTX keeps the "off" default. See
         # `conv3d_maybe_split`; splitting only helps an fp32 datapath.
         self.split_mode = split_mode if dtype == ttnn.float32 else "off"
+        assert self.split_mode != "stack", "stacked split is implemented for Conv1dViaConv3d only"
 
         d = self.kernel_size[0] * self.kernel_size[1] * self.kernel_size[2] * self.in_channels
         self.weight = Parameter(total_shape=[d, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
@@ -1068,8 +1084,14 @@ class Conv1dViaConv3d(Module):
             self.halo_pad_left = 0
             self.halo_pad_right = 0
 
+        # An explicit constructor argument: MiniMax-H3 opts in, LTX's audio path keeps the fast
+        # default. Splitting only helps an fp32 datapath.
+        self.split_mode = split_mode if dtype == ttnn.float32 else "off"
+        # The conv3d's own input width: 3x under the stacked split (see stack_operand).
+        self.conv_in_channels = self.in_channels * (STACK_BLOCKS if self.split_mode == "stack" else 1)
+
         self.conv_config = get_conv3d_config(
-            self.in_channels,
+            self.conv_in_channels,
             self.out_channels,
             self.kernel_size,
             dtype,
@@ -1100,10 +1122,6 @@ class Conv1dViaConv3d(Module):
             packer_l1_acc=True,
         )
 
-        # An explicit constructor argument: MiniMax-H3 opts in, LTX's audio path keeps the fast
-        # default. Splitting only helps an fp32 datapath.
-        self.split_mode = split_mode if dtype == ttnn.float32 else "off"
-
         self.same_pad = same_pad
         self.eff_k = eff_k
         # Boundary fill of the T halo exchange at the global sequence ends ("zeros" | "replicate").
@@ -1132,6 +1150,7 @@ class Conv1dViaConv3d(Module):
                 unpadded_in=self.unpadded_in_channels,
                 in_channels=self.in_channels,
                 split=self.split_mode in WEIGHT_SPLIT_MODES,
+                stack=self.split_mode == "stack",
             )
         if "bias" in state and self.bias is not None:
             state["bias"] = state["bias"].reshape(1, -1)
@@ -1141,7 +1160,7 @@ class Conv1dViaConv3d(Module):
 
     def _alloc_weight_bias(self) -> None:
         """Allocate weight/bias; column-parallel shards C_out across the channel axis at load."""
-        d = self.kernel_size[0] * self.kernel_size[1] * self.kernel_size[2] * self.in_channels
+        d = self.kernel_size[0] * self.kernel_size[1] * self.kernel_size[2] * self.conv_in_channels
         mesh_axes = [None, channel_axis(self.parallel_config)] if self._is_col_parallel() else None
 
         self.weight = Parameter(
@@ -1210,6 +1229,8 @@ class Conv1dViaConv3d(Module):
             )
             x_BTC = ttnn.concat([zero_pad, x_BTC], dim=1)
 
+        if self.split_mode == "stack":
+            x_BTC = stack_operand(x_BTC)
         x_5d = ttnn.reshape(x_BTC, (x_BTC.shape[0], x_BTC.shape[1], 1, 1, x_BTC.shape[2]))
 
         out_5d = conv3d_maybe_split(
