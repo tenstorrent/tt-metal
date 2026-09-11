@@ -5,10 +5,10 @@
  "top1": 0.96,
  "top5": 1.0,
  "top100": 1.0,
- "decode_ms": 112.2,
- "prefill_s": 0.68,
+ "decode_ms": 91.2,
+ "prefill_s": 0.67,
  "degenerate": false,
  "paris": true,
  "meets_bars": true,
- "note": "bfp4_kvbfp8 was only 1.9% faster; accuracy preferred"
+ "note": "bfp4_kvbfp8 was only 1.5% faster; accuracy preferred"
 }
