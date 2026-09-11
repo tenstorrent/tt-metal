@@ -124,6 +124,34 @@ def _golden_function(input_tensor: ttnn.Tensor, weight=None, *, epsilon=1e-12, *
 
 ttnn.attach_golden_function(ttnn.rms_norm, golden_function=_golden_function)
 
+# Candidate replacement: bind ttnn.rms_norm to the generated op. Flip to False for native.
+# The import stays lazy because this module runs while ttnn is still half-built and the
+# generated op reads ttnn attributes at its own module scope. The bind is guarded because
+# this file is imported twice in some trees (as `normalization` and as
+# `ttnn.operations.normalization`); unguarded, the second pass records our own wrapper as
+# the native op. The true native op is stashed on ttnn, the one namespace both passes share.
+_USE_GENERATED_RMS_NORM = True
+
+if _USE_GENERATED_RMS_NORM and not getattr(ttnn.rms_norm, "_is_generated_rms_norm", False):
+    ttnn._native_rms_norm = ttnn.rms_norm
+
+    def rms_norm(*args, **kwargs):
+        from ttnn.operations.rms_norm_ttnn import rms_norm_ttnn
+
+        return rms_norm_ttnn(*args, **kwargs)
+
+    rms_norm._is_generated_rms_norm = True
+    rms_norm.__name__ = "rms_norm"
+    rms_norm.__qualname__ = "ttnn.rms_norm"
+    rms_norm.__doc__ = "rms_norm_ttnn, bound as ttnn.rms_norm by _USE_GENERATED_RMS_NORM"
+    # Carried onto the wrapper: get_golden_function raises without it, and upstream's
+    # sharded_test_utils.rms_norm_golden goes through it.
+    ttnn.attach_golden_function(rms_norm, golden_function=_golden_function)
+    ttnn.rms_norm = rms_norm
+
+#: What ttnn.rms_norm resolved to before the swap, for tests that want both sides.
+_native_rms_norm = getattr(ttnn, "_native_rms_norm", ttnn.rms_norm)
+
 LayerNormProgramConfig = ttnn._ttnn.operations.normalization.LayerNormProgramConfig
 LayerNormDefaultProgramConfig = ttnn._ttnn.operations.normalization.LayerNormDefaultProgramConfig
 LayerNormShardedMultiCoreProgramConfig = ttnn._ttnn.operations.normalization.LayerNormShardedMultiCoreProgramConfig
