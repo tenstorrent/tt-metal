@@ -20,6 +20,7 @@
 #include "hal_types.hpp"
 #include "sub_device.hpp"
 #include "sub_device_types.hpp"
+#include <tt_stl/assert.hpp>
 #include <impl/context/context_types.hpp>
 #include <tt-metalium/mesh_trace_id.hpp>
 
@@ -29,6 +30,20 @@ struct MeshTraceBuffer;
 namespace tt::tt_metal {
 
 class IDevice;
+
+inline std::uint32_t get_dispatch_worker_count(
+    std::uint32_t sub_device_index,
+    std::uint32_t tensix_worker_count,
+    std::uint32_t active_ethernet_core_count,
+    bool fds_worker_completion_enabled) {
+    if (fds_worker_completion_enabled) {
+        TT_FATAL(
+            active_ethernet_core_count == 0,
+            "FDS worker completion does not support ACTIVE_ETH cores in sub-device {}",
+            sub_device_index);
+    }
+    return tensix_worker_count + active_ethernet_core_count;
+}
 
 class SubDeviceManager {
 public:
@@ -51,12 +66,12 @@ public:
     const std::vector<SubDeviceId>& get_sub_device_ids() const;
     const SubDevice& sub_device(SubDeviceId sub_device_id) const;
 
-    const vector_aligned<uint32_t>& noc_mcast_unicast_data() const;
+    const vector_aligned<std::uint32_t>& noc_mcast_unicast_data() const;
     bool has_noc_mcast_txns(SubDeviceId sub_device_id) const;
-    uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const;
-    uint8_t noc_unicast_data_start_index(SubDeviceId sub_device_id) const;
+    std::uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const;
+    std::uint8_t noc_unicast_data_start_index(SubDeviceId sub_device_id) const;
 
-    const std::vector<std::pair<CoreRangeSet, uint32_t>>& get_core_go_message_mapping() const;
+    const std::vector<std::pair<CoreRangeSet, std::uint32_t>>& get_core_go_message_mapping() const;
 
     const std::unique_ptr<AllocatorImpl>& allocator(SubDeviceId sub_device_id) const;
     std::unique_ptr<AllocatorImpl>& sub_device_allocator(SubDeviceId sub_device_id);
@@ -67,7 +82,7 @@ public:
     std::shared_ptr<distributed::MeshTraceBuffer> get_trace(const distributed::MeshTraceId& trace_id);
     DeviceAddr get_max_trace_high_water_mark() const;
 
-    uint8_t num_sub_devices() const;
+    std::uint8_t num_sub_devices() const;
     bool has_allocations() const;
     DeviceAddr local_l1_size() const;
     DeviceAddr global_l1_bottom_reservation_size() const;
@@ -78,13 +93,13 @@ public:
 
 private:
     void validate_sub_devices() const;
-    uint8_t get_sub_device_index(SubDeviceId sub_device_id) const;
+    std::uint8_t get_sub_device_index(SubDeviceId sub_device_id) const;
     void populate_sub_device_ids();
     void populate_num_cores();
     void populate_sub_allocators();
     void populate_noc_data();
 
-    static std::atomic<uint64_t> next_sub_device_manager_id_;
+    static std::atomic<std::uint64_t> next_sub_device_manager_id_;
 
     SubDeviceManagerId id_;
 
@@ -103,14 +118,14 @@ private:
     // tracker teardown, when device_->allocator_impl() is no longer usable.
     std::vector<PersistentL1Arena::Seal> persistent_l1_seals_;
 
-    std::array<uint32_t, NumHalProgrammableCoreTypes> num_cores_{};
+    std::array<std::uint32_t, NumHalProgrammableCoreTypes> num_cores_{};
 
-    vector_aligned<uint32_t> noc_mcast_unicast_data_;
+    vector_aligned<std::uint32_t> noc_mcast_unicast_data_;
     std::vector<bool> has_noc_mcast_txns_;
-    std::vector<uint8_t> num_noc_unicast_txns_;
-    std::vector<uint8_t> noc_unicast_data_start_index_;
+    std::vector<std::uint8_t> num_noc_unicast_txns_;
+    std::vector<std::uint8_t> noc_unicast_data_start_index_;
 
-    std::vector<std::pair<CoreRangeSet, uint32_t>> core_go_message_mapping_;
+    std::vector<std::pair<CoreRangeSet, std::uint32_t>> core_go_message_mapping_;
 
     std::unordered_map<distributed::MeshTraceId, std::shared_ptr<distributed::MeshTraceBuffer>> trace_buffer_pool_;
 
