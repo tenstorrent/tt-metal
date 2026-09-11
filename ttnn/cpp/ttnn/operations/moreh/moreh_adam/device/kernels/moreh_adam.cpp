@@ -220,10 +220,10 @@ void kernel_main() {
 #endif
         sqrt_tile_init();
         sqrt_tile(dst0);
-        pack_tile_with_dt(dst0, dfb_tmp1_obj);
         tile_regs_commit();
 
         tile_regs_wait();
+        pack_tile_with_dt(dst0, dfb_tmp1_obj);
         dfb_tmp1_obj.pop_front(onetile);
         dfb_tmp1_obj.push_back(onetile);
 #ifdef AMSGRAD
