@@ -10,6 +10,10 @@
 #include <umd/device/types/arch.hpp>
 
 namespace {
+// NOCs a DRAM view names a preferred endpoint for. Matches the `noc < 2` contract both
+// preferred-endpoint accessors assert on, rather than being re-derived from one table's row length.
+constexpr uint8_t k_num_dram_endpoint_nocs = 2;
+
 // True if physical DRAM `channel` is harvested per `dram_harvesting_mask`. Single home for the
 // bit-masking convention used across the DRAM-view helpers below.
 bool is_dram_channel_harvested(uint32_t dram_harvesting_mask, size_t channel) {
@@ -40,31 +44,25 @@ tt::tt_metal::CoreCoord metal_SocDescriptor::get_preferred_worker_core_for_dram_
     return this->dram_view_worker_cores.at(dram_view).at(noc);
 };
 
-bool metal_SocDescriptor::is_noc0_dram_endpoint(const tt::tt_metal::CoreCoord& translated_coord) const {
-    // dram_view_worker_cores (and thus get_preferred_worker_core_for_dram_view) holds TRANSLATED
-    // coords, so this compares like-for-like against a TRANSLATED argument. See the header note.
-    for (size_t dram_view = 0; dram_view < this->dram_view_worker_cores.size(); ++dram_view) {
-        if (get_preferred_worker_core_for_dram_view(static_cast<int>(dram_view), /*noc=*/0) == translated_coord) {
-            return true;
-        }
-    }
-    return false;
-}
-
 uint8_t metal_SocDescriptor::get_dram_endpoint_noc_mask(const tt::tt_metal::CoreCoord& translated_coord) const {
     // Both endpoint tables matter: worker and eth DRAM reads can route through different subchannels,
-    // and a NIU serving either one has to keep forwarding to AXI.
+    // and a NIU serving either one has to keep forwarding to AXI. Both tables hold TRANSLATED coords
+    // (see the header note), so this compares like-for-like against a TRANSLATED argument.
     uint8_t mask = 0;
-    for (size_t dram_view = 0; dram_view < this->dram_view_worker_cores.size(); ++dram_view) {
-        const auto num_nocs = static_cast<uint8_t>(this->dram_view_worker_cores.at(dram_view).size());
-        for (uint8_t noc = 0; noc < num_nocs; ++noc) {
-            if (get_preferred_worker_core_for_dram_view(static_cast<int>(dram_view), noc) == translated_coord ||
-                get_preferred_eth_core_for_dram_view(static_cast<int>(dram_view), noc) == translated_coord) {
+    for (int dram_view = 0; dram_view < static_cast<int>(this->dram_view_worker_cores.size()); ++dram_view) {
+        for (uint8_t noc = 0; noc < k_num_dram_endpoint_nocs; ++noc) {
+            const bool is_view_endpoint = get_preferred_worker_core_for_dram_view(dram_view, noc) == translated_coord ||
+                                          get_preferred_eth_core_for_dram_view(dram_view, noc) == translated_coord;
+            if (is_view_endpoint) {
                 mask |= static_cast<uint8_t>(1u << noc);
             }
         }
     }
     return mask;
+}
+
+bool metal_SocDescriptor::is_noc0_dram_endpoint(const tt::tt_metal::CoreCoord& translated_coord) const {
+    return (get_dram_endpoint_noc_mask(translated_coord) & 0b1) != 0;
 }
 
 std::vector<tt::tt_metal::CoreCoord> metal_SocDescriptor::get_metal_dram_cores(tt::CoordSystem coord_system) const {

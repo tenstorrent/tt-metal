@@ -58,10 +58,8 @@ int main() {
 
     risc_init();
 
-    // NIU_CFG_0 persists across program runs (only cleared on chip reset: tt-smi -r),
-    // so write both NIUs on every boot rather than assuming the cold-boot value.
-    // This is the only place either NIU's mode is set: kernels run with whatever
-    // firmware picked here. See experimental/drisc_mode.h.
+    // The only place either NIU's mode is set: kernels run with whatever firmware
+    // picked here. See experimental/drisc_mode.h.
     experimental::drisc_init_niu_modes(mailboxes->core_info.noc2axi_niu_mask);
 
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);

@@ -48,12 +48,11 @@ namespace experimental {
     metal_SocDescriptor::get_dram_endpoint_noc_mask.
 
     On Blackhole that leaves NIU 0 in stream mode on every DRISC Metal
-    owns -- Metal never runs DRISC firmware on a view's NOC0 endpoint,
-    since that subchannel belongs to the syseng firmware and
-    get_metal_dram_cores excludes it. NIU 1 is in stream mode too on the
-    subchannels that are no view's NOC1 endpoint. A kernel initiates NOC
-    traffic on the NOC it was built for (CreateKernel(DramConfig{.noc =
-    ...})), so NOC0 works anywhere and NOC1 only where it is free.
+    owns, because get_metal_dram_cores hands back no core whose NOC0 bit
+    is set. NIU 1 is in stream mode too on the subchannels that are no
+    view's NOC1 endpoint. A kernel initiates NOC traffic on the NOC it
+    was built for (CreateKernel(DramConfig{.noc = ...})), so NOC0 works
+    anywhere and NOC1 only where it is free.
 
   NOC addressing note (on-chip, kernel-initiated):
     In NOC2AXI mode the bottom 8 GB of NIU address space maps to GDDR,
@@ -75,7 +74,8 @@ namespace experimental {
 //////////////////////////////////////////////////////////////////
 #ifdef COMPILE_FOR_DRISC
 /*
-  Local API: a DRISC inspects or configures its own NIU.
+  Local API: a DRISC inspects its own NIU (kernels and firmware), or sets
+  it (firmware only).
 
   Parameters:
     noc: NIU instance (0 or 1). Defaults to noc_index.
@@ -89,30 +89,21 @@ inline __attribute__((always_inline)) bool drisc_is_noc2axi_mode(uint8_t noc = n
     return (cfg >> NIU_CFG_0_AXI_SUBORDINATE_ENABLE) & 0x1;
 }
 
+// FW_BUILD (not the usual KERNEL_BUILD || FW_BUILD "device build" pair) on purpose:
+// the mode is boot state, not per-kernel state, so this must not compile into a
+// kernel. See "Who sets the mode" above.
 #ifdef FW_BUILD
-// The mode setters are firmware-only on purpose: the mode is boot state, not
-// per-kernel state. See "Who sets the mode" above.
-
-inline __attribute__((always_inline)) void drisc_set_stream_mode(uint8_t noc) {
-    uint32_t cfg = NOC_CFG_READ_REG(noc, NIU_CFG_0);
-    NOC_CFG_WRITE_REG(noc, NIU_CFG_0, cfg & ~(1u << NIU_CFG_0_AXI_SUBORDINATE_ENABLE));
-}
-
-inline __attribute__((always_inline)) void drisc_set_noc2axi_mode(uint8_t noc) {
-    uint32_t cfg = NOC_CFG_READ_REG(noc, NIU_CFG_0);
-    NOC_CFG_WRITE_REG(noc, NIU_CFG_0, cfg | (1u << NIU_CFG_0_AXI_SUBORDINATE_ENABLE));
-}
 
 // Put each NIU in its permanent mode: NOC2AXI for the NIUs named in
 // noc2axi_niu_mask (bit N = NIU N), stream mode for the rest. Called once per
-// firmware boot; no later caller changes either NIU.
+// firmware boot; no later caller changes either NIU. Inserting the mask bit
+// keeps one straight-line path per NIU -- an if/else here more than doubles the
+// code this costs in the DRISC firmware window.
 inline __attribute__((always_inline)) void drisc_init_niu_modes(uint8_t noc2axi_niu_mask) {
     for (uint8_t noc = 0; noc < NUM_NOCS; noc++) {
-        if (noc2axi_niu_mask & (1u << noc)) {
-            drisc_set_noc2axi_mode(noc);
-        } else {
-            drisc_set_stream_mode(noc);
-        }
+        uint32_t cfg = NOC_CFG_READ_REG(noc, NIU_CFG_0) & ~(1u << NIU_CFG_0_AXI_SUBORDINATE_ENABLE);
+        cfg |= static_cast<uint32_t>((noc2axi_niu_mask >> noc) & 0x1) << NIU_CFG_0_AXI_SUBORDINATE_ENABLE;
+        NOC_CFG_WRITE_REG(noc, NIU_CFG_0, cfg);
     }
 }
 

@@ -1519,13 +1519,14 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
         auto dram_go_msg = dram_dev_msgs_factory.create<dev_msgs::go_msg_t>();
         dram_go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
         const metal_SocDescriptor& soc_d = cluster_.get_soc_desc(device_id);
+        const uint64_t core_info_addr =
+            hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::CORE_INFO);
 
         for (const auto& virtual_dram_core : soc_d.get_metal_dram_cores(CoordSystem::TRANSLATED)) {
             dram_core_info.view().absolute_logical_x() = virtual_dram_core.x;
             dram_core_info.view().absolute_logical_y() = virtual_dram_core.y;
             // Firmware keeps these NIUs in NOC2AXI and puts the rest in stream mode.
             dram_core_info.view().noc2axi_niu_mask() = soc_d.get_dram_endpoint_noc_mask(virtual_dram_core);
-            uint64_t core_info_addr = hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::CORE_INFO);
             cluster_.write_core(
                 dram_core_info.data(),
                 dram_core_info.size(),
