@@ -2269,16 +2269,23 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         # allocating/freeing a fresh decoder's buffers (which fragments DRAM).
         # A bucket change (different prompt length band) releases + re-captures.
         dec = self._spec_decoder
-        # Cross-request decoder reuse, ON by default again now that the
-        # first-step hazard is fixed. reseed() re-points a CACHED decoder at a
-        # new request instead of capturing a fresh one; the leak was that
-        # step(first=True) SKIPS the trace replay and reads self._out, which
-        # capture() fills via its compile pass but reseed() never did -- so a
-        # reused session opened by reading the PREVIOUS request's output ids as
-        # its own drafts. DFlashFusedDecoder._replay_on_first now forces that
-        # first replay. Kill switch: GEMMA4_DFLASH_DECODER_REUSE=0 (fresh
-        # capture per request, ~1.3 s each, ~15-30% slower conc-1 decode).
-        _reuse_ok = os.environ.get("GEMMA4_DFLASH_DECODER_REUSE", "1").lower() in ("1", "true", "yes")
+        # Cross-request decoder reuse: DEFAULT OFF, now for a measured
+        # PERFORMANCE reason rather than the correctness one it was turned off
+        # for before. e62930d4d7d fixed the correctness half (a reseeded session
+        # no longer reads the previous request's output), but a reseeded session
+        # still DRAFTS worse than a freshly captured one -- some drafter state is
+        # still not restored by reseed(). Acceptance on a P150x8 31B server:
+        #   capture sessions 4.2-5.5 tokens/iter
+        #   reseeded sessions 1.9-3.7 tokens/iter
+        # and that halves conc-1 decode. Measured 1000/median_tpot, conc-1:
+        #   ISL 128:  reuse ON 80.7   reuse OFF 64.0
+        #   ISL 1024: reuse ON 43.8   reuse OFF 84.3
+        #   ISL 4096: reuse ON 38.5   reuse OFF 91.2
+        # So paying the ~1.3 s capture per request buys back ~2x the decode rate
+        # at ISL >= 1024. Re-enable with GEMMA4_DFLASH_DECODER_REUSE=1 (it is
+        # correct now, just slower); restoring capture-level acceptance on the
+        # reseed path is the open work that would make ON the better default.
+        _reuse_ok = os.environ.get("GEMMA4_DFLASH_DECODER_REUSE", "0").lower() in ("1", "true", "yes")
         reused = (
             _reuse_ok
             and dec is not None
