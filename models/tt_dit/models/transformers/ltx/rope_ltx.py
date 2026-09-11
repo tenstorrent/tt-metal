@@ -208,16 +208,21 @@ def precompute_freqs_cis(
 
 
 def pad_video_rope_sp(
-    cos_freq: torch.Tensor, sin_freq: torch.Tensor, sp_factor: int
+    cos_freq: torch.Tensor, sin_freq: torch.Tensor, sp_factor: int, video_N: int | None = None
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Right-pad video RoPE cos/sin on dim=2 to the SP boundary (``ttnn.TILE_SIZE * sp_factor``).
+    """Right-pad video RoPE cos/sin on dim=2 to an explicit or derived SP boundary.
 
     Padded slots use cos=1, sin=0 (identity rotation); SDPA still masks them via ``logical_n``.
     Same convention as the audio RoPE padding in ``prepare_audio_rope`` / ``prepare_av_cross_pe``.
     """
     video_N_real = cos_freq.shape[2]
     divisor = ttnn.TILE_SIZE * sp_factor
-    video_N = ((video_N_real + divisor - 1) // divisor) * divisor
+    if video_N is None:
+        video_N = ((video_N_real + divisor - 1) // divisor) * divisor
+    if video_N < video_N_real:
+        raise ValueError(f"video_N={video_N} is smaller than logical sequence length {video_N_real}")
+    if video_N % divisor != 0:
+        raise ValueError(f"video_N={video_N} must be divisible by TILE_SIZE * SP ({divisor})")
     if video_N == video_N_real:
         return cos_freq, sin_freq
     pad = video_N - video_N_real
@@ -242,6 +247,7 @@ def prepare_video_rope(
     mesh_device: ttnn.MeshDevice,
     parallel_config: DiTParallelConfig,
     fps: float = 24.0,
+    video_N: int | None = None,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Compute video RoPE in INTERLEAVED layout, SP×TP sharded onto the mesh."""
     v_shape = VideoLatentShape(batch=1, channels=128, frames=latent_frames, height=latent_height, width=latent_width)
@@ -264,7 +270,9 @@ def prepare_video_rope(
     sin_freq = reshape_interleaved_to_bhnd(sin_freq, num_attention_heads)
 
     # Pad seq dim to ttnn.TILE_SIZE * sp_factor; padded slots use cos=1, sin=0 (identity).
-    cos_freq, sin_freq = pad_video_rope_sp(cos_freq, sin_freq, parallel_config.sequence_parallel.factor)
+    cos_freq, sin_freq = pad_video_rope_sp(
+        cos_freq, sin_freq, parallel_config.sequence_parallel.factor, video_N=video_N
+    )
 
     sp_axis = parallel_config.sequence_parallel.mesh_axis
     tp_axis = parallel_config.tensor_parallel.mesh_axis
@@ -326,6 +334,7 @@ def prepare_av_cross_pe(
     parallel_config: DiTParallelConfig,
     fps: float = 24.0,
     cross_pe_max_pos: int = 20,
+    video_N: int | None = None,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
     """Temporal-only cross positional embeddings for A↔V cross-attention.
 
@@ -366,7 +375,7 @@ def prepare_av_cross_pe(
     a_cos = reshape_interleaved_to_bhnd(a_cos, num_heads=32)
     a_sin = reshape_interleaved_to_bhnd(a_sin, num_heads=32)
 
-    v_cos, v_sin = pad_video_rope_sp(v_cos, v_sin, parallel_config.sequence_parallel.factor)
+    v_cos, v_sin = pad_video_rope_sp(v_cos, v_sin, parallel_config.sequence_parallel.factor, video_N=video_N)
 
     if audio_N > audio_N_real:
         head_dim = a_cos.shape[-1]

@@ -78,4 +78,10 @@ inline uint32_t logical_tile_rows_clamped_to_cache(
            (chunk_global_tile_rows < remaining_tile_rows ? chunk_global_tile_rows : remaining_tile_rows);
 }
 
+inline uint32_t bounded_logical_n(uint32_t logical_n, uint32_t capacity_tokens) {
+    const bool valid = logical_n > 0 && logical_n <= capacity_tokens;
+    ASSERT(valid);
+    return valid ? logical_n : 1;
+}
+
 }  // namespace trace_metadata

@@ -1065,6 +1065,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t vDHt = vDH / tt::constants::TILE_WIDTH;
     const bool kv_pad_from_metadata = tensor_args.has_metadata() && tensor_args.is_chunked();
     const bool kv_pad_rotation_enabled = args.has_kv_pad_rotation() || kv_pad_from_metadata;
+    const bool dynamic_logical_n = tensor_args.has_dynamic_logical_n();
+    const bool runtime_geometry_from_tensor = kv_pad_from_metadata || dynamic_logical_n;
     const RingJointRuntimePlan runtime_plan = build_runtime_plan(args, tensor_args, ring_write_plan);
     const RingJointRuntimeArgLayout runtime_arg_layout = get_runtime_arg_layout(args, tensor_args);
     const uint32_t logical_nt = runtime_plan.logical_nt;
@@ -1117,9 +1119,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // masking is active.
     const bool local_n_has_padding = (kv_local_padded_Nt % Sk_chunk_t) != 0;
     const uint32_t global_n_partial_col = args.logical_n % tt::constants::TILE_HEIGHT;
-    const uint32_t compile_time_logical_n = kv_pad_rotation_enabled ? 0 : static_cast<uint32_t>(args.logical_n);
-    const uint32_t compile_time_logical_nt = kv_pad_rotation_enabled ? 0 : logical_nt;
-    const uint32_t compile_time_global_n_partial_col = kv_pad_rotation_enabled ? 0 : global_n_partial_col;
+    const uint32_t compile_time_logical_n =
+        dynamic_logical_n ? 1 : (kv_pad_rotation_enabled ? 0 : static_cast<uint32_t>(args.logical_n));
+    const uint32_t compile_time_logical_nt = runtime_geometry_from_tensor ? 0 : logical_nt;
+    const uint32_t compile_time_global_n_partial_col =
+        dynamic_logical_n ? 1 : (kv_pad_rotation_enabled ? 0 : global_n_partial_col);
 
     const bool global_n_has_padding = (compile_time_logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
     // Joint masking mirrors spatial's TWO independent enable flags (local_n AND global_n), not just
@@ -1323,9 +1327,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Ring-joint streaming supports single-Q-subblock shapes; only fp32 dest acc stays on the legacy path.
     const bool use_streaming_compute = !fp32_dest_acc_en;
     TT_FATAL(
-        !kv_pad_rotation_enabled || use_streaming_compute,
-        "kv_actual_isl requires the ring-joint streaming compute path; the compute_common.hpp path selected by "
-        "fp32_dest_acc_en=true is not supported.");
+        !runtime_geometry_from_tensor || use_streaming_compute,
+        "Runtime logical sequence geometry requires the ring-joint streaming compute path; set "
+        "fp32_dest_acc_en=false.");
     // Sharded joint with a padded tail (logical_l < padded L) needs the reader to skip joint K chunks
     // beyond the real tail. That skip is mirrored only in the streaming compute path (sdpa_ring_v2);
     // the legacy fp32 path (sdpa_ring/sdpa_inner_loop) would leave compute waiting on K/V chunks the
@@ -1446,9 +1450,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t active_ring_iter_mask = ring_work_plan.masks.active_ring_iter_mask;
     const uint32_t last_active_ring_iter = ring_work_plan.last_active_ring_iter;
     const uint32_t single_valid_kv_chunk_mask = ring_work_plan.masks.single_valid_kv_chunk_mask;
-    const uint32_t compile_time_active_ring_iter_mask = kv_pad_rotation_enabled ? 0 : active_ring_iter_mask;
-    const uint32_t compile_time_last_active_ring_iter = kv_pad_rotation_enabled ? 0 : last_active_ring_iter;
-    const uint32_t compile_time_single_valid_kv_chunk_mask = kv_pad_rotation_enabled ? 0 : single_valid_kv_chunk_mask;
+    const uint32_t compile_time_active_ring_iter_mask = runtime_geometry_from_tensor ? 0 : active_ring_iter_mask;
+    const uint32_t compile_time_last_active_ring_iter = runtime_geometry_from_tensor ? 0 : last_active_ring_iter;
+    const uint32_t compile_time_single_valid_kv_chunk_mask =
+        runtime_geometry_from_tensor ? 0 : single_valid_kv_chunk_mask;
     const KVPadQMapping compile_time_kv_pad_q_mapping = kv_pad_rotation_enabled ? KVPadQMapping{} : kv_pad_q_mapping;
     const auto& ag_attributes = args.all_gather_operation_attributes;
     const RingAttentionRankMapping rank_mapping{
@@ -1503,7 +1508,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         sliding_window_size,
         gathered_padded_Nt,
         static_cast<uint32_t>(slot_from_metadata),
-        static_cast<uint32_t>(kv_pad_from_metadata),
+        static_cast<uint32_t>(runtime_geometry_from_tensor),
         // Slots 37-38, sharded-joint path: Lt_local (Q-axis tile count = L_local/TILE_HEIGHT) and flag.
         Lt_local,
         static_cast<uint32_t>(joint_is_sharded),
@@ -1546,9 +1551,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // rotation derivation). The writer already appends kv_actual_isl's own accessor for the same reason.
     if (slot_from_metadata) {
         TensorAccessorArgs(tensor_args.slot_id->buffer()).append_to(reader_compile_time_args);
-        if (kv_pad_from_metadata) {
-            TensorAccessorArgs(tensor_args.kv_actual_isl->buffer()).append_to(reader_compile_time_args);
-        }
+    }
+    if (runtime_geometry_from_tensor) {
+        const Tensor& logical_source =
+            dynamic_logical_n ? tensor_args.logical_n.value() : tensor_args.kv_actual_isl.value();
+        TensorAccessorArgs(logical_source.buffer()).append_to(reader_compile_time_args);
     }
 
     /**
@@ -1671,7 +1678,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         sliding_window_size,
         // Slot 35: trace-safe KV-pad derivation -- the writer recomputes logical_nt + masks from
         // metadata[1] on-device (it's dataflow).
-        static_cast<uint32_t>(kv_pad_from_metadata),
+        static_cast<uint32_t>(runtime_geometry_from_tensor),
         // Slot 36: sharded-joint flag. When true, one shard per ring iteration; do_joint_kv fires every iter.
         static_cast<uint32_t>(joint_is_sharded),
         // Slot 37: true (unpadded) joint length in tiles (twins spatial logical_nt). Combined with
@@ -1687,8 +1694,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(stats_output_tensor.buffer()).append_to(writer_compile_time_args);
-    if (kv_pad_from_metadata) {
-        TensorAccessorArgs(tensor_args.kv_actual_isl->buffer()).append_to(writer_compile_time_args);
+    if (runtime_geometry_from_tensor) {
+        const Tensor& logical_source =
+            dynamic_logical_n ? tensor_args.logical_n.value() : tensor_args.kv_actual_isl.value();
+        TensorAccessorArgs(logical_source.buffer()).append_to(writer_compile_time_args);
     }
 
     std::vector<uint32_t> compute_compile_time_args = {
@@ -1746,7 +1755,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // Slot 51: trace-safe KV-pad derivation. When set, compute reads logical_nt / q-mapping /
         // active_ring_iter_mask from cb_kv_pad_derived (produced by the reader) instead of its runtime
         // args, so a captured trace replays across chunks.
-        static_cast<uint32_t>(kv_pad_from_metadata),
+        static_cast<uint32_t>(runtime_geometry_from_tensor),
         // Slot 52: sharded-joint flag. When true, one shard per ring iteration; do_joint_kv fires every iter.
         static_cast<uint32_t>(joint_is_sharded),
         // Slot 53: true (unpadded) joint length in tiles (twins spatial logical_nt). Drives the
@@ -2644,16 +2653,20 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     reader_kernel.compile_time_args = reader_compile_time_args;
     reader_kernel.defines = kernel_defines;
     reader_kernel.config = ReaderConfigDescriptor{};
-    if (slot_from_metadata) {
+    if (slot_from_metadata || runtime_geometry_from_tensor) {
+        const uint32_t slot_addr = slot_from_metadata ? tensor_args.slot_id->buffer()->address() : 0;
+        const uint32_t logical_source_addr =
+            dynamic_logical_n ? tensor_args.logical_n->buffer()->address()
+                              : (kv_pad_from_metadata ? tensor_args.kv_actual_isl->buffer()->address() : 0);
         reader_kernel.emplace_common_runtime_args(
-            {tensor_args.slot_id->buffer()->address(),  // smuggled-rta-ok: metadata tensor addr (on-device)
+            {slot_addr,  // smuggled-rta-ok: metadata tensor addr (on-device)
              args.kv_cache_num_layers,
              args.kv_cache_layer_idx,
              std::min(
                  tensor_args.input_k.logical_shape()[0],
                  tensor_args.input_v.has_value() ? tensor_args.input_v->logical_shape()[0]
                                                  : tensor_args.input_k.logical_shape()[0]),
-             tensor_args.kv_actual_isl->buffer()->address()});  // smuggled-rta-ok: metadata tensor addr (on-device)
+             logical_source_addr});  // smuggled-rta-ok: runtime sequence scalar address
     }
 
     KernelDescriptor writer_kernel{};
@@ -2664,9 +2677,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     writer_kernel.compile_time_args = writer_compile_time_args;
     writer_kernel.defines = kernel_defines;
     writer_kernel.config = WriterConfigDescriptor{};
-    if (kv_pad_from_metadata) {
+    if (runtime_geometry_from_tensor) {
+        const uint32_t logical_source_addr = dynamic_logical_n ? tensor_args.logical_n->buffer()->address()
+                                                               : tensor_args.kv_actual_isl->buffer()->address();
         writer_kernel.emplace_common_runtime_args(
-            {tensor_args.kv_actual_isl->buffer()->address()});  // smuggled-rta-ok: metadata tensor addr (on-device)
+            {logical_source_addr});  // smuggled-rta-ok: runtime sequence scalar address
     }
 
     KernelDescriptor compute_kernel{};

@@ -3,6 +3,7 @@
 
 import math
 import os
+from dataclasses import dataclass
 from io import BytesIO
 
 import torch
@@ -16,6 +17,143 @@ DEFAULT_IMAGE_CRF = 33
 # is a separate concept — do NOT replace `32 * sp_factor` padding math with these.
 TEMPORAL_COMPRESSION = 8
 SPATIAL_COMPRESSION = 32
+
+LTX_FAST_SP_FACTOR = 8
+LTX_FAST_LOWEST_BUCKET = "lowest"
+LTX_FAST_LOWEST_BUCKET_VIDEO_N = {"s1": 8704, "s2": 34560}
+LTX_FAST_LOWEST_BUCKET_AUDIO_N = 512
+LTX_FAST_FPS_VALUES = (24, 25, 48, 50)
+LTX_FAST_DURATION_VALUES = (6, 8, 10, 12, 14, 16, 18, 20)
+LTX_FAST_CANVASES = {
+    "720p-landscape": (704, 1280),
+    "720p-portrait": (1280, 704),
+    "1080p-landscape": (1088, 1920),
+    "1080p-portrait": (1920, 1088),
+    "1440p-landscape": (1440, 2560),
+    "1440p-portrait": (2560, 1440),
+    "4k-landscape": (2176, 3840),
+    "4k-portrait": (3840, 2176),
+}
+LTX_FAST_LOWEST_BUCKET_DURATIONS_BY_FPS = {
+    24: (6, 8, 10, 12),
+    25: (6, 8, 10, 12),
+    48: (6,),
+    50: (6,),
+}
+
+
+@dataclass(frozen=True)
+class LTXFastBucketRoute:
+    bucket: str
+    duration_seconds: int
+    latent_frames: int
+    stage_video_n_real: dict[str, int]
+    stage_video_n: dict[str, int]
+
+    def trace_key(self, stage: str) -> tuple[str, str]:
+        if stage not in self.stage_video_n:
+            raise ValueError(f"unknown LTX stage {stage!r}")
+        return stage, self.bucket
+
+
+def ltx_fast_aligned_num_frames(fps: int, duration_seconds: int) -> int:
+    """Return the first VAE-compatible frame count covering the requested duration."""
+    target_frames = fps * duration_seconds
+    return math.ceil((target_frames - 1) / TEMPORAL_COMPRESSION) * TEMPORAL_COMPRESSION + 1
+
+
+def ltx_fast_nominal_configs() -> tuple[tuple[str, int, int], ...]:
+    """The complete 8-canvas × 4-fps × 8-duration product grid."""
+    return tuple(
+        (canvas, fps, duration)
+        for canvas in LTX_FAST_CANVASES
+        for fps in LTX_FAST_FPS_VALUES
+        for duration in LTX_FAST_DURATION_VALUES
+    )
+
+
+def ltx_fast_lowest_bucket_configs() -> tuple[tuple[str, int, int], ...]:
+    """The 20 product configs served by the first Fast trace tier."""
+    return tuple(
+        (canvas, fps, duration)
+        for canvas in ("720p-landscape", "720p-portrait")
+        for fps, durations in LTX_FAST_LOWEST_BUCKET_DURATIONS_BY_FPS.items()
+        for duration in durations
+    )
+
+
+def ltx_fast_lowest_bucket_n(stage: str, n_real: int) -> int:
+    """Return the stage bucket at the inclusive upper boundary."""
+    if stage not in LTX_FAST_LOWEST_BUCKET_VIDEO_N:
+        raise ValueError(f"unknown LTX stage {stage!r}")
+    n_bucket = LTX_FAST_LOWEST_BUCKET_VIDEO_N[stage]
+    if n_real < 1:
+        raise ValueError(f"logical N must be positive, got {n_real}")
+    if n_real > n_bucket:
+        raise ValueError(f"{stage} logical N={n_real} exceeds lowest bucket N={n_bucket}")
+    return n_bucket
+
+
+def route_ltx_fast_lowest_bucket(
+    *,
+    num_frames: int,
+    height: int,
+    width: int,
+    fps: int,
+    sp_factor: int,
+    mode: str = "av",
+    image_conditioned: bool = False,
+) -> LTXFastBucketRoute:
+    """Route an exact T2V AV request to the first Fast trace bucket.
+
+    The boundary is inclusive: a real sequence equal to the bucket size is valid.
+    Requests outside the finalized 20-config grid fail instead of aliasing a trace.
+    """
+    if sp_factor != LTX_FAST_SP_FACTOR:
+        raise ValueError(f"LTX Fast lowest bucket requires SP=8, got SP={sp_factor}")
+    if mode != "av":
+        raise ValueError(f"LTX Fast lowest bucket supports AV mode only, got mode={mode!r}")
+    if image_conditioned:
+        raise ValueError("LTX Fast lowest bucket supports T2V only; I2V requires a separate trace class")
+
+    canvas = next(
+        (name for name in ("720p-landscape", "720p-portrait") if LTX_FAST_CANVASES[name] == (height, width)),
+        None,
+    )
+    if canvas is None:
+        raise ValueError(
+            "LTX Fast lowest bucket supports only 720p canvases "
+            f"{LTX_FAST_CANVASES['720p-landscape']} and {LTX_FAST_CANVASES['720p-portrait']}; "
+            f"got {(height, width)}"
+        )
+
+    durations = LTX_FAST_LOWEST_BUCKET_DURATIONS_BY_FPS.get(fps)
+    duration = next(
+        (seconds for seconds in durations or () if ltx_fast_aligned_num_frames(fps, seconds) == num_frames),
+        None,
+    )
+    if duration is None:
+        raise ValueError(
+            "unsupported LTX Fast lowest-bucket timing: "
+            f"{num_frames} frames at {fps} fps; supported (fps, seconds) pairs are "
+            f"{[(f, d) for f, ds in LTX_FAST_LOWEST_BUCKET_DURATIONS_BY_FPS.items() for d in ds]}"
+        )
+
+    latent_frames = (num_frames - 1) // TEMPORAL_COMPRESSION + 1
+    stage_n_real = {
+        "s1": latent_frames * (height // 2 // SPATIAL_COMPRESSION) * (width // 2 // SPATIAL_COMPRESSION),
+        "s2": latent_frames * (height // SPATIAL_COMPRESSION) * (width // SPATIAL_COMPRESSION),
+    }
+    stage_n = {stage: ltx_fast_lowest_bucket_n(stage, n_real) for stage, n_real in stage_n_real.items()}
+
+    return LTXFastBucketRoute(
+        bucket=LTX_FAST_LOWEST_BUCKET,
+        duration_seconds=duration,
+        latent_frames=latent_frames,
+        stage_video_n_real=stage_n_real,
+        stage_video_n=stage_n,
+    )
+
 
 DEFAULT_LTX_PROMPT = (
     "A young woman with shoulder-length wavy brown hair sits on a wooden stool, "

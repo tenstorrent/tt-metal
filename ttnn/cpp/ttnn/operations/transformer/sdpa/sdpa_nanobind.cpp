@@ -61,7 +61,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& slot_id,
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
-    std::optional<uint32_t> kv_cache_layer_idx) {
+    std::optional<uint32_t> kv_cache_layer_idx,
+    const std::optional<ttnn::Tensor>& logical_n_tensor) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
 
@@ -101,7 +102,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         slot_id,
         kv_actual_isl_tensor,
         kv_cache_num_layers,
-        kv_cache_layer_idx);
+        kv_cache_layer_idx,
+        logical_n_tensor);
     return outputs;
 }
 
@@ -665,6 +667,10 @@ void bind_sdpa(nb::module_& mod) {
                 slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx.
             kv_cache_layer_idx (int, optional): Layer within the cache-user slot. None uses 0 and the
                 value must be less than kv_cache_num_layers.
+            logical_n_tensor (ttnn.Tensor, optional): Exact logical sequence length read on-device on
+                every invocation. Must be a one-element UINT32 ROW_MAJOR DRAM tensor on the same mesh
+                device as Q. When supplied, it overrides logical_n for masking and ring-work derivation.
+                This non-causal path is independent of slot_id and kv_actual_isl_tensor.
 
         Chunked-prefill mode is entered implicitly when input_tensor_q's per-device seq
         length is less than input_tensor_k's (Q is the latest slab; K is the populated
@@ -724,7 +730,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("slot_id").noconvert() = nb::none(),
         nb::arg("kv_actual_isl_tensor").noconvert() = nb::none(),
         nb::arg("kv_cache_num_layers").noconvert() = nb::none(),
-        nb::arg("kv_cache_layer_idx").noconvert() = nb::none());
+        nb::arg("kv_cache_layer_idx").noconvert() = nb::none(),
+        nb::arg("logical_n_tensor").noconvert() = nb::none());
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.

@@ -18,7 +18,13 @@ import ttnn
 from ...models.transformers.ltx.rope_ltx import prepare_audio_rope, prepare_av_cross_pe, prepare_video_rope
 from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel, build_audio_masks, build_video_pad_mask
 from ...models.vae.vae_ltx import upsample_latent
-from ...utils.ltx import load_conditioning_image
+from ...utils.ltx import (
+    LTX_FAST_FPS_VALUES,
+    LTX_FAST_LOWEST_BUCKET_AUDIO_N,
+    LTXFastBucketRoute,
+    load_conditioning_image,
+    route_ltx_fast_lowest_bucket,
+)
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
 from ...utils.video import export_video_audio, export_video_audio_yuv
@@ -44,6 +50,35 @@ class LTXDistilledPipeline(LTXPipeline):
 
     HAS_UPSAMPLER = True
     DEFERS_ENCODE_TRACE = True
+
+    def _route_traced_request(
+        self,
+        *,
+        num_frames: int,
+        height: int,
+        width: int,
+        fps: int | None,
+        image_conditioned: bool = False,
+    ) -> tuple[LTXFastBucketRoute, int]:
+        fps_values = (fps,) if fps is not None else LTX_FAST_FPS_VALUES
+        failures = []
+        for candidate_fps in fps_values:
+            try:
+                return (
+                    route_ltx_fast_lowest_bucket(
+                        num_frames=num_frames,
+                        height=height,
+                        width=width,
+                        fps=candidate_fps,
+                        sp_factor=self.parallel_config.sequence_parallel.factor,
+                        mode=self.mode,
+                        image_conditioned=image_conditioned,
+                    ),
+                    candidate_fps,
+                )
+            except ValueError as error:
+                failures.append(str(error))
+        raise ValueError("request cannot use an LTX Fast resident trace: " + "; ".join(failures))
 
     @staticmethod
     def _post_process_latent_tt(
@@ -112,6 +147,7 @@ class LTXDistilledPipeline(LTXPipeline):
         width: int,
         num_inference_steps: int = 2,
         stages: tuple[str, ...] = ("s1", "s2"),
+        fps: int | None = None,
     ) -> None:
         """Compile both stages' programs (variant 0 for both); ``stages=("s1",)`` skips s2."""
         assert height % 64 == 0 and width % 64 == 0, f"H/W must be div by 64 (got {height}x{width})"
@@ -128,11 +164,33 @@ class LTXDistilledPipeline(LTXPipeline):
         v_p = torch.zeros(1, self.gemma_encoder_pair.sequence_length, self.gemma_encoder_pair.video_dim)
         a_p = torch.zeros(1, self.gemma_encoder_pair.sequence_length, self.gemma_encoder_pair.audio_dim)
 
-        # Allocate both stages' persistent trace I/O before any capture so all held inputs sit
-        # below both traces' activation regions and neither replay overwrites the other's inputs.
+        route = route_fps = None
         if self._traced:
-            self._prealloc_trace_io("s1", num_frames=num_frames, height=height // 2, width=width // 2)
-            self._prealloc_trace_io("s2", num_frames=num_frames, height=height, width=width)
+            route, route_fps = self._route_traced_request(
+                num_frames=num_frames,
+                height=height,
+                width=width,
+                fps=fps,
+            )
+            # Both address-bound states must exist before either trace captures.
+            self._prealloc_trace_io(
+                route.trace_key("s1"),
+                num_frames=num_frames,
+                height=height // 2,
+                width=width // 2,
+                fps=route_fps,
+                video_N=route.stage_video_n["s1"],
+                audio_N=LTX_FAST_LOWEST_BUCKET_AUDIO_N,
+            )
+            self._prealloc_trace_io(
+                route.trace_key("s2"),
+                num_frames=num_frames,
+                height=height,
+                width=width,
+                fps=route_fps,
+                video_N=route.stage_video_n["s2"],
+                audio_N=LTX_FAST_LOWEST_BUCKET_AUDIO_N,
+            )
 
         # Warm the encoder before any capture so its connector workspace isn't in a trace's
         # activation region (zeroed on replay). dynamic_load reloads per request → warms last.
@@ -156,6 +214,10 @@ class LTXDistilledPipeline(LTXPipeline):
                 width=s1_w,
                 sigma_values=s1_sigmas,
                 seed=0,
+                fps=route_fps or 24,
+                video_N_bucket=route.stage_video_n["s1"] if route else None,
+                audio_N_bucket=LTX_FAST_LOWEST_BUCKET_AUDIO_N if route else None,
+                trace_key=route.trace_key("s1") if route else None,
             )
 
         if "s2" in stages:
@@ -167,7 +229,7 @@ class LTXDistilledPipeline(LTXPipeline):
             latent_frames, full_lh, full_lw = latent_grid(num_frames, height, width)
             dummy_v_init = torch.zeros(1, latent_frames * full_lh * full_lw, self.in_channels)
             als = AudioLatentShape.from_video_pixel_shape(
-                VideoPixelShape(batch=1, frames=num_frames, height=height, width=width, fps=24)
+                VideoPixelShape(batch=1, frames=num_frames, height=height, width=width, fps=route_fps or 24)
             )
             dummy_a_init = torch.zeros(1, als.frames, self.in_channels)
 
@@ -182,6 +244,10 @@ class LTXDistilledPipeline(LTXPipeline):
                 seed=0,
                 initial_video_latent=dummy_v_init,
                 initial_audio_latent=dummy_a_init,
+                fps=route_fps or 24,
+                video_N_bucket=route.stage_video_n["s2"] if route else None,
+                audio_N_bucket=LTX_FAST_LOWEST_BUCKET_AUDIO_N if route else None,
+                trace_key=route.trace_key("s2") if route else None,
             )
 
             # Compile VAE decode at full-res (only s2 feeds decode in generate).
@@ -191,11 +257,10 @@ class LTXDistilledPipeline(LTXPipeline):
             if self._traced and self.vae_decoder is not None:
                 self.vae_decoder._vae_traced = True
 
-            # Warm the on-device audio decode eagerly at the real latent shape: compiles kernels,
-            # initializes lazy device state, and frees back to a deterministic allocator free-list,
-            # so the first real (traced) decode captures cleanly on warm state.
+            # Warm audio decode at the fixed trace shape; waveform cropping still uses request duration.
             logger.info("warmup audio decode (on-device, eager)")
-            self._warmup_audio_decode(torch.zeros(1, als.frames, self.in_channels), num_frames)
+            audio_decode_n = LTX_FAST_LOWEST_BUCKET_AUDIO_N if route else als.frames
+            self._warmup_audio_decode(torch.zeros(1, audio_decode_n, self.in_channels), num_frames, fps=route_fps or 24)
 
             self._prepare_transformer(0)
 
@@ -217,11 +282,21 @@ class LTXDistilledPipeline(LTXPipeline):
         logger.info(f"warmup (distilled 2-stage) done in {time.time() - t0:.1f}s")
 
     def _prepare_stage_statics(
-        self, state, *, latent_frames, latent_h, latent_w, video_N, video_N_real, audio_N, audio_N_real, sp_axis
+        self,
+        state,
+        *,
+        latent_frames,
+        latent_h,
+        latent_w,
+        video_N,
+        video_N_real,
+        audio_N,
+        audio_N_real,
+        sp_axis,
+        fps,
+        traced,
     ):
-        """Build a stage's static per-shape inputs once (rope/cross-PE/masks/trans_mat)."""
-        if state.tt_video_rope_cos is not None:
-            return
+        """Build or refresh a stage's request-dependent address-bound inputs."""
         v_cos, v_sin = prepare_video_rope(
             latent_frames,
             latent_h,
@@ -232,6 +307,8 @@ class LTXDistilledPipeline(LTXPipeline):
             max_pos=self.positional_embedding_max_pos,
             mesh_device=self.mesh_device,
             parallel_config=self.parallel_config,
+            fps=fps,
+            video_N=video_N,
         )
         a_cos, a_sin = prepare_audio_rope(
             audio_N,
@@ -257,35 +334,38 @@ class LTXDistilledPipeline(LTXPipeline):
             theta=self.positional_embedding_theta,
             mesh_device=self.mesh_device,
             parallel_config=self.parallel_config,
+            fps=fps,
+            video_N=video_N,
         )
         tt_attn_mask, tt_pad_mask_sp, tt_pad_mask_full = build_audio_masks(
             audio_N, audio_N_real, mesh_device=self.mesh_device, sp_axis=sp_axis
         )
-        state._tt_video_rope_cos.update(v_cos, False)
-        state._tt_video_rope_sin.update(v_sin, False)
-        state._tt_audio_rope_cos.update(a_cos, False)
-        state._tt_audio_rope_sin.update(a_sin, False)
-        state._tt_trans_mat.update(self._prepare_trans_mat(), False)
-        state._tt_video_cross_pe_cos.update(v_xpe_cos, False)
-        state._tt_video_cross_pe_sin.update(v_xpe_sin, False)
-        state._tt_audio_cross_pe_cos.update(a_xpe_cos, False)
-        state._tt_audio_cross_pe_sin.update(a_xpe_sin, False)
-        state._tt_audio_cross_pe_cos_full.update(a_xpe_cos_full, False)
-        state._tt_audio_cross_pe_sin_full.update(a_xpe_sin_full, False)
-        state._tt_audio_attn_mask.update(tt_attn_mask, False)
-        state._tt_audio_padding_mask.update(tt_pad_mask_sp, False)
-        state._tt_audio_padding_mask_full.update(tt_pad_mask_full, False)
+        state._tt_video_rope_cos.update(v_cos, traced)
+        state._tt_video_rope_sin.update(v_sin, traced)
+        state._tt_audio_rope_cos.update(a_cos, traced)
+        state._tt_audio_rope_sin.update(a_sin, traced)
+        if state.tt_trans_mat is None:
+            state._tt_trans_mat.update(self._prepare_trans_mat(), False)
+        state._tt_video_cross_pe_cos.update(v_xpe_cos, traced)
+        state._tt_video_cross_pe_sin.update(v_xpe_sin, traced)
+        state._tt_audio_cross_pe_cos.update(a_xpe_cos, traced)
+        state._tt_audio_cross_pe_sin.update(a_xpe_sin, traced)
+        state._tt_audio_cross_pe_cos_full.update(a_xpe_cos_full, traced)
+        state._tt_audio_cross_pe_sin_full.update(a_xpe_sin_full, traced)
+        state._tt_audio_attn_mask.update(tt_attn_mask, traced)
+        state._tt_audio_padding_mask.update(tt_pad_mask_sp, traced)
+        state._tt_audio_padding_mask_full.update(tt_pad_mask_full, traced)
         state._tt_video_padding_mask.update(
-            build_video_pad_mask(video_N, video_N_real, mesh_device=self.mesh_device, sp_axis=sp_axis), False
+            build_video_pad_mask(video_N, video_N_real, mesh_device=self.mesh_device, sp_axis=sp_axis), traced
         )
         v_mask = torch.ones(1, 1, video_N, self.in_channels)
         v_mask[:, :, video_N_real:, :] = 0.0
         a_mask = torch.ones(1, 1, audio_N, self.in_channels)
         a_mask[:, :, audio_N_real:, :] = 0.0
-        state._tt_video_pad_mask.update(v_mask, False, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device)
-        state._tt_audio_pad_mask.update(a_mask, False, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device)
+        state._tt_video_pad_mask.update(v_mask, traced, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device)
+        state._tt_audio_pad_mask.update(a_mask, traced, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device)
 
-    def _prealloc_trace_io(self, trace_key, *, num_frames, height, width):
+    def _prealloc_trace_io(self, trace_key, *, num_frames, height, width, fps, video_N, audio_N):
         """Allocate a stage's persistent trace inputs (constants, latent buffers, masks) up front.
 
         A ttnn trace bakes absolute tensor addresses; capture-time activations are freed and reused
@@ -293,12 +373,10 @@ class LTXDistilledPipeline(LTXPipeline):
         replay. Allocating every held input first keeps them below both traces' activations."""
         latent_frames, latent_h, latent_w = latent_grid(num_frames, height, width)
         video_N_real = latent_frames * latent_h * latent_w
-        video_N = self._sp_pad_len(video_N_real)
         als = AudioLatentShape.from_video_pixel_shape(
-            VideoPixelShape(batch=1, frames=num_frames, height=height, width=width, fps=24)
+            VideoPixelShape(batch=1, frames=num_frames, height=height, width=width, fps=fps)
         )
         audio_N_real = als.frames
-        audio_N = self._sp_pad_len(audio_N_real)
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
 
         state = self._trace_state.setdefault(trace_key, LTXTransformerState())
@@ -312,6 +390,8 @@ class LTXDistilledPipeline(LTXPipeline):
             audio_N=audio_N,
             audio_N_real=audio_N_real,
             sp_axis=sp_axis,
+            fps=fps,
+            traced=False,
         )
         # Reserve the latent buffers before capture so the trace bakes their addresses.
         if state.tt_video_lat is None:
@@ -326,6 +406,15 @@ class LTXDistilledPipeline(LTXPipeline):
                 False,
                 mesh_axes=[None, None, sp_axis, None],
                 device=self.mesh_device,
+            )
+            state._tt_video_logical_n.update(
+                ttnn.from_torch(
+                    torch.tensor([video_N_real], dtype=torch.uint32),
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=self.mesh_device,
+                ),
+                False,
             )
             # I2V pin buffers (mask + clean frame-0 latent): reserve here so replays can't clobber
             # them. Allocated for every stage even when unused by t2v — small and harmless. The mask
@@ -359,18 +448,25 @@ class LTXDistilledPipeline(LTXPipeline):
         image_cond_latent: torch.Tensor | None = None,
         image_cond_strength: float = 1.0,
         traced: bool = False,
-        trace_key: str | None = None,
+        trace_key: tuple[str, str] | None = None,
+        fps: int = 24,
+        video_N_bucket: int | None = None,
+        audio_N_bucket: int | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         B = 1
         latent_frames, latent_h, latent_w = latent_grid(num_frames, height, width)
         video_N_real = latent_frames * latent_h * latent_w
         # SP padding: round video seq dim up to TILE_SIZE * sp_factor for ring SDPA.
-        video_N = self._sp_pad_len(video_N_real)
+        video_N = video_N_bucket if video_N_bucket is not None else self._sp_pad_len(video_N_real)
+        if video_N < video_N_real:
+            raise ValueError(f"logical video N={video_N_real} exceeds physical N={video_N}")
         als = AudioLatentShape.from_video_pixel_shape(
-            VideoPixelShape(batch=B, frames=num_frames, height=height, width=width, fps=24)
+            VideoPixelShape(batch=B, frames=num_frames, height=height, width=width, fps=fps)
         )
         audio_N_real = als.frames
-        audio_N = self._sp_pad_len(audio_N_real)
+        audio_N = audio_N_bucket if audio_N_bucket is not None else self._sp_pad_len(audio_N_real)
+        if audio_N < audio_N_real:
+            raise ValueError(f"logical audio N={audio_N_real} exceeds physical N={audio_N}")
         sp_factor = self.parallel_config.sequence_parallel.factor
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
 
@@ -393,6 +489,8 @@ class LTXDistilledPipeline(LTXPipeline):
             audio_N=audio_N,
             audio_N_real=audio_N_real,
             sp_axis=sp_axis,
+            fps=fps,
+            traced=traced,
         )
 
         prompt_v = self._prepare_prompt(v_embeds)
@@ -459,6 +557,13 @@ class LTXDistilledPipeline(LTXPipeline):
         state._tt_audio_lat.update(
             audio_lat.unsqueeze(0), traced, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device
         )
+        logical_n = ttnn.from_torch(
+            torch.tensor([video_N_real], dtype=torch.uint32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+        )
+        state._tt_video_logical_n.update(logical_n, traced)
 
         tt_i2v_mask = tt_i2v_clean = None
         if image_cond:
@@ -500,7 +605,6 @@ class LTXDistilledPipeline(LTXPipeline):
                 )
                 video_ts_pair_tt = state.tt_video_ts_pair
                 video_pin_mask_tt = state.tt_video_pin_mask
-            # video_N_real is the logical (unpadded) count so ring SDPA masks padded K positions.
             v_out, a_out = self.transformer.inner_step(
                 video_1BNI=state.tt_video_lat,
                 timestep=state.tt_timestep,
@@ -510,7 +614,8 @@ class LTXDistilledPipeline(LTXPipeline):
                 video_prompt_1BLP=prompt_v,
                 video_rope_cos=state.tt_video_rope_cos,
                 video_rope_sin=state.tt_video_rope_sin,
-                video_N=video_N_real,
+                video_N=video_N,
+                video_logical_n_tensor=state.tt_video_logical_n,
                 trans_mat=state.tt_trans_mat,
                 audio_prompt_1BLP=prompt_a,
                 audio_rope_cos=state.tt_audio_rope_cos,
@@ -568,7 +673,8 @@ class LTXDistilledPipeline(LTXPipeline):
             sp_already_gathered=False,
             tp_already_gathered=True,
         ).squeeze(0)
-        return v_final[:, :video_N_real, :], a_final[:, :audio_N_real, :]
+        audio_return_n = audio_N if audio_N_bucket is not None else audio_N_real
+        return v_final[:, :video_N_real, :], a_final[:, :audio_return_n, :]
 
     def generate(
         self,
@@ -578,9 +684,9 @@ class LTXDistilledPipeline(LTXPipeline):
         output_type: str = "rgb",
         # I2V: list of (image_path, frame_idx, strength). Only frame_idx==0 is supported.
         images: list[tuple[str, int, float]] | None = None,
-        num_frames: int = 121,
-        height: int = 512,
-        width: int = 768,
+        num_frames: int = 145,
+        height: int = 704,
+        width: int = 1280,
         seed: int = 10,
         fps: int = 24,
     ):
@@ -591,6 +697,39 @@ class LTXDistilledPipeline(LTXPipeline):
         """
         assert height % 64 == 0, f"Height must be divisible by 64 (got {height})"
         assert width % 64 == 0, f"Width must be divisible by 64 (got {width})"
+
+        route = None
+        if self._traced:
+            route, _ = self._route_traced_request(
+                num_frames=num_frames,
+                height=height,
+                width=width,
+                fps=fps,
+                image_conditioned=bool(images),
+            )
+            trace_keys = (route.trace_key("s1"), route.trace_key("s2"))
+            present = tuple(key in self._trace_state for key in trace_keys)
+            if any(present) and not all(present):
+                raise RuntimeError("LTX Fast trace state is partially allocated; release traces and warm up again")
+            if not any(present):
+                self._prealloc_trace_io(
+                    trace_keys[0],
+                    num_frames=num_frames,
+                    height=height // 2,
+                    width=width // 2,
+                    fps=fps,
+                    video_N=route.stage_video_n["s1"],
+                    audio_N=LTX_FAST_LOWEST_BUCKET_AUDIO_N,
+                )
+                self._prealloc_trace_io(
+                    trace_keys[1],
+                    num_frames=num_frames,
+                    height=height,
+                    width=width,
+                    fps=fps,
+                    video_N=route.stage_video_n["s2"],
+                    audio_N=LTX_FAST_LOWEST_BUCKET_AUDIO_N,
+                )
 
         s1_height = height // 2
         s1_width = width // 2
@@ -658,7 +797,10 @@ class LTXDistilledPipeline(LTXPipeline):
             image_cond_latent=s1_cond_latent,
             image_cond_strength=cond_strength,
             traced=self._traced,
-            trace_key="s1",
+            trace_key=route.trace_key("s1") if route else None,
+            fps=fps,
+            video_N_bucket=route.stage_video_n["s1"] if route else None,
+            audio_N_bucket=LTX_FAST_LOWEST_BUCKET_AUDIO_N if route else None,
         )
         t_stage1 = time.time() - t0
         timings.append(("Stage 1 denoise", t_stage1))
@@ -692,7 +834,10 @@ class LTXDistilledPipeline(LTXPipeline):
             image_cond_latent=full_cond_latent,
             image_cond_strength=cond_strength,
             traced=self._traced,
-            trace_key="s2",
+            trace_key=route.trace_key("s2") if route else None,
+            fps=fps,
+            video_N_bucket=route.stage_video_n["s2"] if route else None,
+            audio_N_bucket=LTX_FAST_LOWEST_BUCKET_AUDIO_N if route else None,
         )
         t_stage2 = time.time() - t0
         timings.append(("Stage 2 denoise", t_stage2))
@@ -710,6 +855,10 @@ class LTXDistilledPipeline(LTXPipeline):
         decode_type = ("yuv" if yuv_export else "float") if output_path is not None else output_type
         t0 = time.time()
         video_pixels = self.decode_latents(s2_video, latent_frames, latent_h, latent_w, output_type=decode_type)
+        if decode_type == "yuv":
+            video_pixels = video_pixels[:num_frames]
+        else:
+            video_pixels = video_pixels[..., :num_frames, :height, :width]
         t_vae_decode = time.time() - t0
         timings.append(("VAE decode", t_vae_decode))
         logger.info(f"VAE decode (forward): {t_vae_decode:.1f}s — {tuple(video_pixels.shape)}")

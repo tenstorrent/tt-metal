@@ -77,17 +77,18 @@ class TransformerState:
 
 
 class LTXTransformerState:
-    """Per-stage (s1/s2) persistent trace I/O.
+    """Per-trace-key persistent trace I/O.
 
-    Static per-shape inputs (rope/cross-PE/masks/trans_mat) are bound once; the latent buffers and
-    timestep are refreshed each step — in place when traced (a ttnn trace bakes their addresses),
-    rebound otherwise. ``__getattr__`` returns the underlying tensor: update via
-    ``state._tt_x.update(...)``, read via ``state.tt_x``.
+    Shape-stable inputs are allocated before capture. Request-dependent values and latent buffers
+    are refreshed in place when traced (a ttnn trace bakes their addresses), rebound otherwise.
+    ``__getattr__`` returns the underlying tensor: update via ``state._tt_x.update(...)``, read via
+    ``state.tt_x``.
     """
 
     def __init__(self) -> None:
         self._tt_video_lat = StateTensor()
         self._tt_audio_lat = StateTensor()
+        self._tt_video_logical_n = StateTensor()
         self._tt_timestep = StateTensor()
         self._tt_video_timestep = StateTensor()
         self._tt_video_ts_pair = StateTensor()
@@ -113,7 +114,7 @@ class LTXTransformerState:
         self._tt_video_padding_mask = StateTensor()
 
     def __getattr__(self, name: str) -> ttnn.Tensor | None:
-        return object.__getattribute__(self, f"_{name}")._value
+        return object.__getattribute__(self, f"_{name}").value
 
 
 # =============================================================================
@@ -246,7 +247,7 @@ class LTXPipeline:
             tensor_parallel=ParallelFactor(factor=self.mesh_device.shape[1], mesh_axis=1),
         )
         self._traced = traced
-        self._trace_state: dict[str, LTXTransformerState] = {}
+        self._trace_state: dict[tuple[str, str], LTXTransformerState] = {}
         self._prompt_v = StateTensor()
         self._prompt_a = StateTensor()
         if ccl_manager.topology == ttnn.Topology.Linear:

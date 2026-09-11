@@ -280,6 +280,7 @@ void kernel_main() {
     // ring masks on-device, and hands the compute-needed values to the compute kernel via
     // cb_kv_pad_derived (compute cannot NoC-read the DRAM tensor).
     constexpr bool kv_pad_from_metadata = get_compile_time_arg_val(36) == 1;
+    constexpr bool logical_n_from_tensor = kv_pad_from_metadata && !slot_from_metadata;
     constexpr bool gqa_grouped_kv = ring_joint::is_gqa_grouped_kv_head_mode(v_shares_k_buffer, NH, NHK, NHV);
     constexpr bool k_uses_batch_chain = ring_joint::uses_shared_k_batch_chain(gqa_grouped_kv, NHK);
     constexpr bool use_head_chain = enable_kv_chains && !gqa_grouped_kv;
@@ -331,7 +332,9 @@ void kernel_main() {
     // read silently returned 0). Appended right after slot's when kv_pad_from_metadata; otherwise fall back
     // to a VALID accessor offset so the unconditional TensorAccessorArgs<> never names a non-accessor arg.
     constexpr uint32_t kv_meta_args_offset =
-        kv_pad_from_metadata ? meta_args.next_compile_time_args_offset() : meta_args_offset;
+        kv_pad_from_metadata
+            ? (slot_from_metadata ? meta_args.next_compile_time_args_offset() : post_tensor_args_offset)
+            : meta_args_offset;
     constexpr auto kv_meta_args = TensorAccessorArgs<kv_meta_args_offset>();
     constexpr uint32_t chains_base_no_kv_pad =
         slot_from_metadata ? meta_args.next_compile_time_args_offset() : post_tensor_args_offset;
@@ -477,18 +480,27 @@ void kernel_main() {
                 get_common_arg_val<uint32_t>(3));
         }
         if constexpr (kv_pad_from_metadata) {
-            uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
+            uint32_t logical_source = trace_metadata::read_metadata_scalar_u32(
                 meta_noc, kv_meta_args, get_common_arg_val<uint32_t>(4), meta_l1);
-            kv_actual_isl =
-                trace_metadata::bounded_kv_actual_isl(kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
-            const uint32_t kv_actual_tile_count = kv_actual_isl / 32;
-            logical_nt = trace_metadata::logical_tile_rows_clamped_to_cache(
-                kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
+            uint32_t kv_actual_tile_count = 0;
+            if constexpr (logical_n_from_tensor) {
+                logical_source = trace_metadata::bounded_logical_n(logical_source, kv_local_padded_Nt * ring_size * 32);
+                logical_nt = (logical_source + 31) / 32;
+            } else {
+                logical_source =
+                    trace_metadata::bounded_kv_actual_isl(logical_source, chunk_size_t, kv_local_padded_Nt * ring_size);
+                kv_actual_tile_count = logical_source / 32;
+                logical_nt = trace_metadata::logical_tile_rows_clamped_to_cache(
+                    logical_source, chunk_size_t, kv_local_padded_Nt * ring_size);
+            }
             const uint32_t tensor_rank =
                 ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
                     fused_op_receiver.seq.ring_index, mesh_rows, mesh_cols, snake_orientation);
-            const auto qmap = ring_joint::build_kv_pad_q_mapping_device(
-                kv_actual_tile_count, logical_nt, ring_size, q_local_padded_Nt, tensor_rank);
+            ring_joint::KvPadQMapping qmap = {};
+            if constexpr (!logical_n_from_tensor) {
+                qmap = ring_joint::build_kv_pad_q_mapping_device(
+                    kv_actual_tile_count, logical_nt, ring_size, q_local_padded_Nt, tensor_rank);
+            }
             const auto masks = ring_joint::build_ring_work_masks_device<full_mesh_rank_mapping>(
                 fused_op_receiver.seq.ring_index,
                 ring_size,

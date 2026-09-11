@@ -158,8 +158,10 @@ struct RingJointSDPAInputs {
     // replays across chunks. std::nullopt => classic host-scalar path (unchanged).
     std::optional<Tensor> slot_id;
     std::optional<Tensor> kv_actual_isl;
+    std::optional<Tensor> logical_n;
 
     bool has_metadata() const { return slot_id.has_value() && kv_actual_isl.has_value(); }
+    bool has_dynamic_logical_n() const { return logical_n.has_value(); }
 
     // Chunked-prefill is signalled implicitly by Q being shorter than the per-device K shard:
     // Q is the latest slab, K is the populated prefix from chunk 0 through the current chunk.

@@ -595,6 +595,7 @@ class LTXAttention(Module):
         skip_qk: bool = False,
         kv_replicated: bool = False,
         kv_logical_n: int | None = None,
+        logical_n_tensor: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """Same interface as WanAttention.forward(); pass k_rope_cos/sin for separate K RoPE
         in A2V/V2A cross-attention."""
@@ -736,6 +737,7 @@ class LTXAttention(Module):
             spatial_BHNE = v_BHNE
         elif prompt_1BLP is None:
             if sp_factor > 1 and attn_mask is None:
+                physical_global_n = q_BHNE.shape[2] * sp_factor
                 spatial_BHNE, _prompt_BHLE, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                     q_BHNE,
                     k_BHNE,
@@ -753,7 +755,8 @@ class LTXAttention(Module):
                     ),
                     joint_strategy="rear",
                     logical_n=N,
-                    program_config=self._ring_pc_by_n.get(N, self.ring_sdpa_program_config),
+                    logical_n_tensor=logical_n_tensor,
+                    program_config=self._ring_pc_by_n.get(physical_global_n, self.ring_sdpa_program_config),
                     compute_kernel_config=self.sdpa_compute_kernel_config,
                     dim=2,
                     multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
@@ -810,6 +813,7 @@ class LTXAttention(Module):
                 ),
                 joint_strategy="rear",
                 logical_n=kv_logical_n,
+                logical_n_tensor=logical_n_tensor,
                 is_cross=True,
                 program_config=self.cross_ring_sdpa_program_config,
                 compute_kernel_config=self.sdpa_compute_kernel_config,

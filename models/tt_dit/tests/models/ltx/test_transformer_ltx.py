@@ -31,6 +31,7 @@ from models.tt_dit.models.transformers.ltx.transformer_ltx import (
 from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
+from models.tt_dit.utils.ltx import LTX_FAST_LOWEST_BUCKET_VIDEO_N
 from models.tt_dit.utils.mochi import get_rot_transformation_mat
 from models.tt_dit.utils.patchifiers import AudioLatentShape, VideoPixelShape
 from models.tt_dit.utils.tensor import bf16_tensor, bf16_tensor_2dshard
@@ -123,6 +124,14 @@ _LTX_TRANSFORMER_SHAPE_PARAMS = [
 _LTX_TRANSFORMER_MODALITY_PARAMS = [
     pytest.param(False, id="video"),
     pytest.param(True, id="av"),
+]
+
+# LTX Fast lowest-bucket (720p T2V-AV) latent grids (F, H_lat, W_lat, stage). Real F·H·W is padded
+# to the fixed per-stage bucket N (8704 / 34560) and masked back via the device length tensor. Both
+# real lengths (4180, 16720) are non-tile-aligned, so they exercise the sub-tile partial-column mask.
+_LTX_LOWEST_BUCKET_SHAPE_PARAMS = [
+    pytest.param(19, 11, 20, "s1", id="lowest_s1_720p"),  # real 4180 -> bucket 8704
+    pytest.param(19, 22, 40, "s2", id="lowest_s2_720p"),  # real 16720 -> bucket 34560
 ]
 
 _LTX_TRANSFORMER_RUN_PCC_PARAMS = [pytest.param(_RUN_PCC_DEFAULT, id="pcc" if _RUN_PCC_DEFAULT else "nopcc")]
@@ -899,6 +908,126 @@ def test_ltx_transformer_block(
         logger.info(f"PASSED block PCC: video {tuple(tt_v_torch.shape)}")
     else:
         logger.info(f"PASSED block (no PCC): video {tuple(tt_v_torch.shape)}")
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    [_4x8sp1tp0nl2_ring_is_fsdp0],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(("F", "H", "W", "stage"), _LTX_LOWEST_BUCKET_SHAPE_PARAMS)
+def test_ltx_transformer_block_lowest_bucket(
+    mesh_device: ttnn.MeshDevice,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    topology: ttnn.Topology,
+    is_fsdp: bool,
+    F: int,
+    H: int,
+    W: int,
+    stage: str,
+    reset_seeds,
+) -> None:
+    """Validate the device-length (`logical_n_tensor`) bucket path used for LTX Fast trace reuse.
+
+    The video sequence is physically padded to the fixed lowest-bucket N and masked back to the real
+    length by a one-element on-device UINT32 tensor — the exact mechanism that lets one captured trace
+    serve every config in the bucket. Crucially the block is given ``video_N=<bucket>`` (not the real
+    length), so the scalar ``logical_n`` would disable spatial masking entirely; a passing PCC here can
+    only come from ring SDPA honouring the tensor override. Both 720p/24fps real lengths (4180, 16720)
+    are non-tile-aligned, exercising the sub-tile partial-column mask that ``ceil(logical_n/32)`` alone
+    would get wrong.
+    """
+    skip_if_unsupported_num_links(mesh_device, num_links)
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
+    video_N_real = F * H * W
+    video_N = LTX_FAST_LOWEST_BUCKET_VIDEO_N[stage]
+    assert video_N >= video_N_real, f"bucket N={video_N} < real N={video_N_real}"
+    assert video_N % (32 * sp_factor) == 0, f"bucket N={video_N} not sp/tile-aligned for sp={sp_factor}"
+    assert video_N_real % ttnn.TILE_SIZE != 0, "real length should be non-tile-aligned to exercise partial-col mask"
+
+    # Reference: diffusers LTX-2 block on the real (unpadded) token grid — padding must not change it.
+    torch_block = _make_diffusers_video_block()
+    torch_block.eval()
+    _scale_init_(torch_block)
+
+    ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
+    parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
+    tt_block = _make_tt_block(
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        is_fsdp=is_fsdp,
+        has_audio=False,
+    )
+    conv = _convert_diffusers_video_block_to_tt(torch_block.state_dict(), num_heads=NUM_HEADS, head_dim=HEAD_DIM)
+    tt_block.load_torch_state_dict({k: v.detach().clone() for k, v in conv.items()})
+
+    torch.manual_seed(INPUT_SEED)
+    x = torch.randn(1, video_N_real, DIM, dtype=torch.float32)
+    context = torch.randn(1, PROMPT_LEN, CTX_DIM, dtype=torch.float32)
+    temb = torch.randn(1, 1, 9 * DIM, dtype=torch.float32)
+    prompt_temb = torch.randn(1, 1, 2 * DIM, dtype=torch.float32)
+
+    cos_int, sin_int = _video_rope_freqs(F, H, W, rope_type=LTXRopeType.INTERLEAVED)
+    torch_out = _diffusers_video_block_ref(
+        torch_block, x=x, context=context, temb=temb, prompt_temb=prompt_temb, cos_i=cos_int, sin_i=sin_int
+    )
+
+    # TT side: pad the latent + RoPE to the bucket; the length tensor carries the real (global) count.
+    spatial = _pad_seq_dim(x, video_N, dim=1).unsqueeze(0)
+    tt_spatial = bf16_tensor_2dshard(spatial, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3})
+    tt_prompt = bf16_tensor(context.unsqueeze(0), device=mesh_device)
+    tt_temb = bf16_tensor(
+        temb.reshape(9, DIM).unsqueeze(1).unsqueeze(1), device=mesh_device, mesh_axis=tp_axis, shard_dim=3
+    )
+    tt_prompt_temb = bf16_tensor(prompt_temb.reshape(2, DIM).unsqueeze(1).unsqueeze(1), device=mesh_device)
+    tt_cos, tt_sin = _tt_rope(
+        _video_rope_freqs, F, H, W, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis, pad_to=video_N
+    )
+    tt_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
+
+    # One-element UINT32 ROW_MAJOR DRAM tensor, replicated across the mesh (mapper=None) — matches the
+    # pipeline's persistent logical-length StateTensor read on-device by ring SDPA each replay.
+    logical_n = ttnn.from_torch(
+        torch.tensor([video_N_real], dtype=torch.uint32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+    )
+
+    forward_kwargs = dict(
+        video_1BND=tt_spatial,
+        video_prompt=tt_prompt,
+        video_temb=tt_temb,
+        video_N=video_N,  # physical bucket length; masking must come from video_logical_n_tensor.
+        video_rope_cos=tt_cos,
+        video_rope_sin=tt_sin,
+        trans_mat=tt_trans_mat,
+        video_prompt_temb=tt_prompt_temb,
+        video_logical_n_tensor=logical_n,
+    )
+
+    tt_out = tt_block(**forward_kwargs)
+    ttnn.synchronize_device(mesh_device)
+
+    concat_dims = [None, None]
+    concat_dims[sp_axis] = 2
+    concat_dims[tp_axis] = 3
+    tt_v_torch = ttnn.to_torch(
+        tt_out,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=concat_dims, mesh_shape=tuple(mesh_device.shape)),
+    ).squeeze(0)[:, :video_N_real, :]
+
+    assert tt_v_torch.shape == (1, video_N_real, DIM), f"video shape {tt_v_torch.shape}"
+    assert torch.isfinite(tt_v_torch).all(), "video output NaN/Inf"
+
+    # 4x8 mesh has 8-way SP ring all-gathers — looser tolerance (mirrors the scalar-path block test).
+    pcc = 0.988 if mesh_device.get_num_devices() > 8 else 0.999
+    rmse = 0.10 if mesh_device.get_num_devices() > 8 else 0.032
+    assert_quality(torch_out, tt_v_torch, pcc=pcc, relative_rmse=rmse)
+    logger.info(f"PASSED lowest-bucket PCC ({stage}): real={video_N_real} bucket={video_N} {tuple(tt_v_torch.shape)}")
 
 
 @pytest.mark.parametrize(

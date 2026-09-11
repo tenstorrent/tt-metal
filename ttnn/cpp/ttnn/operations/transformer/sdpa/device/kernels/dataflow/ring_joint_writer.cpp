@@ -441,6 +441,7 @@ void kernel_main() {
     // kv_actual_isl tensor[0] (common runtime arg 0 = its DRAM addr) and recomputes logical_nt + ring
     // masks on-device (it's a dataflow kernel, can NoC-read), so a captured trace replays across chunks.
     constexpr bool kv_pad_from_metadata = get_compile_time_arg_val(35) == 1;
+    constexpr bool logical_n_from_tensor = kv_pad_from_metadata && !chunked_enabled;
     // Slot 36: sharded-joint flag (appended after upstream's kv_pad_from_metadata). When true, one L/P
     // shard arrives per ring iteration and do_joint_kv fires on every iteration rather than only the
     // last active iteration.
@@ -510,15 +511,23 @@ void kernel_main() {
     constexpr uint32_t stats_tile_bytes = get_tile_size(cb_max_in);
 
     Noc noc;
+    uint32_t runtime_global_n_partial_col = global_n_partial_col;
 
     if constexpr (kv_pad_from_metadata) {
         CircularBuffer cb_meta_scratch(cb_out);
-        uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
+        uint32_t logical_source = trace_metadata::read_metadata_scalar_u32(
             noc, meta_args, get_common_arg_val<uint32_t>(0), cb_meta_scratch.get_write_ptr());
-        kv_actual_isl =
-            trace_metadata::bounded_kv_actual_isl(kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
-        logical_nt = trace_metadata::logical_tile_rows_clamped_to_cache(
-            kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
+        if constexpr (logical_n_from_tensor) {
+            logical_source = trace_metadata::bounded_logical_n(logical_source, kv_local_padded_Nt * ring_size * 32);
+            logical_nt = (logical_source + 31) / 32;
+            const uint32_t remainder = logical_source % 32;
+            runtime_global_n_partial_col = remainder == 0 ? 32 : remainder;
+        } else {
+            logical_source =
+                trace_metadata::bounded_kv_actual_isl(logical_source, chunk_size_t, kv_local_padded_Nt * ring_size);
+            logical_nt = trace_metadata::logical_tile_rows_clamped_to_cache(
+                logical_source, chunk_size_t, kv_local_padded_Nt * ring_size);
+        }
         const auto masks = ring_joint::build_ring_work_masks_device<full_mesh_rank_mapping>(
             fused_op_receiver.seq.ring_index,
             ring_size,
@@ -533,7 +542,7 @@ void kernel_main() {
             logical_nt,
             num_joint_k_chunks,
             L,
-            true,
+            !logical_n_from_tensor,
             is_causal != 0,
             is_balanced != 0,
             mesh_rows,
@@ -588,7 +597,7 @@ void kernel_main() {
             joint_l_partial_col,
             cb_mask_in,
             (is_causal == 1) || chunked_enabled,
-            sliding_window_size>(noc);
+            sliding_window_size>(noc, runtime_global_n_partial_col);
     }
 
     const uint32_t ring_index =

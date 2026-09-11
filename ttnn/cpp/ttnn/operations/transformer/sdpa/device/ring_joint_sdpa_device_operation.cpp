@@ -241,6 +241,28 @@ void validate_metadata_tensors(const RingJointSDPAInputs& tensor_args) {
     validate_metadata_tensor(tensor_args.kv_actual_isl.value(), "kv_actual_isl_tensor");
 }
 
+void validate_logical_n_tensor(const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
+    if (!tensor_args.logical_n.has_value()) {
+        return;
+    }
+
+    const auto& tensor = tensor_args.logical_n.value();
+    TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "logical_n_tensor must be on device");
+    TT_FATAL(tensor.buffer() != nullptr, "logical_n_tensor must be allocated on device");
+    TT_FATAL(tensor.device() == tensor_args.input_q.device(), "logical_n_tensor must be on the same device as Q");
+    TT_FATAL(tensor.dtype() == DataType::UINT32, "logical_n_tensor must have UINT32 dtype");
+    TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "logical_n_tensor must use ROW_MAJOR layout");
+    TT_FATAL(tensor.logical_volume() == 1, "logical_n_tensor must contain exactly one element");
+    TT_FATAL(
+        tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM, "logical_n_tensor must be stored in DRAM");
+    TT_FATAL(!args.is_causal, "logical_n_tensor is supported only for non-causal ring-joint SDPA");
+    TT_FATAL(!args.is_balanced, "logical_n_tensor does not support balanced causal scheduling");
+    TT_FATAL(!args.has_kv_pad_rotation(), "logical_n_tensor is independent of kv_actual_isl");
+    TT_FATAL(!tensor_args.has_metadata(), "logical_n_tensor cannot be combined with chunked-cache metadata tensors");
+    TT_FATAL(!args.has_sliding_window(), "logical_n_tensor does not support sliding-window attention");
+    TT_FATAL(!tensor_args.joint_is_sharded(), "logical_n_tensor does not support sharded joint tensors");
+}
+
 // Re-validate the scalar args that are runtime-patched on a program-cache hit and therefore NOT part of
 // compute_program_hash: kv_cache_batch_idx (indexed KV cache) and logical_n / kv_actual_isl (KV-pad
 // rotation). Everything else is keyed by the hash, so a cache hit guarantees it already passed at miss
@@ -334,6 +356,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto& gathered_input_tensor_k = tensor_args.gathered_k;
 
     validate_metadata_tensors(tensor_args);
+    validate_logical_n_tensor(args, tensor_args);
     if (tensor_args.has_metadata()) {
         TT_FATAL(args.kv_cache_num_layers > 0, "kv_cache_num_layers must be greater than zero");
         TT_FATAL(
@@ -930,6 +953,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
 void RingJointSDPADeviceOperation::validate_on_program_cache_hit(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     validate_metadata_tensors(tensor_args);
+    validate_logical_n_tensor(args, tensor_args);
     validate_runtime_patched_scalars(args, tensor_args);
 }
 
@@ -980,7 +1004,8 @@ RingJointSDPAResult RingJointSDPADeviceOperation::create_output_tensors(
 ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     const bool kv_pad_rotation_enabled = args.has_kv_pad_rotation();
-    const auto cache_key_logical_n = kv_pad_rotation_enabled ? 0 : args.logical_n;
+    const auto cache_key_logical_n =
+        (kv_pad_rotation_enabled || tensor_args.has_dynamic_logical_n()) ? 0 : args.logical_n;
 
     std::vector<Tensor> input_tensors = {tensor_args.input_q, tensor_args.input_k};
     if (tensor_args.input_v.has_value()) {
@@ -1000,6 +1025,9 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
     if (tensor_args.attention_sink.has_value()) {
         input_tensors.emplace_back(tensor_args.attention_sink.value());
     }
+    if (tensor_args.logical_n.has_value()) {
+        input_tensors.emplace_back(tensor_args.logical_n.value());
+    }
 
     return tt::tt_metal::operation::hash_operation<RingJointSDPADeviceOperation>(
         input_tensors,
@@ -1018,6 +1046,7 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         args.kv_cache_batch_idx.has_value(),
         kv_pad_rotation_enabled,
         tensor_args.has_metadata(),
+        tensor_args.has_dynamic_logical_n(),
         args.kv_cache_num_layers,
         args.kv_cache_layer_idx,
         tensor_args.has_latent_v(),
@@ -1047,6 +1076,9 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
     }
     if (tensor_args.attention_sink.has_value()) {
         input_tensors.emplace_back(tensor_args.attention_sink.value());
+    }
+    if (tensor_args.logical_n.has_value()) {
+        input_tensors.emplace_back(tensor_args.logical_n.value());
     }
 
     auto& output_tensor = output_tensors[RING_JOINT_SDPA_OUTPUT_IDX];
@@ -1154,7 +1186,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     const uint32_t kv_cache_num_layers,
     const uint32_t kv_cache_layer_idx,
-    const std::optional<uint32_t> sliding_window_size) {
+    const std::optional<uint32_t> sliding_window_size,
+    const std::optional<ttnn::Tensor>& logical_n_tensor) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -1357,7 +1390,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         .gathered_joint_k = resolved_gathered_joint_k,
         .gathered_joint_v = resolved_gathered_joint_v,
         .slot_id = slot_id,
-        .kv_actual_isl = kv_actual_isl_tensor};
+        .kv_actual_isl = kv_actual_isl_tensor,
+        .logical_n = logical_n_tensor};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

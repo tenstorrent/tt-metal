@@ -616,7 +616,7 @@ template <
     uint32_t cb_mask_in,
     bool is_causal_lw = false,
     uint32_t sliding_window_size = 0>
-void generate_lightweight_mask_tiles(Noc noc) {
+void generate_lightweight_mask_tiles(Noc noc, uint32_t runtime_global_n_partial_col = global_n_partial_col) {
     constexpr uint32_t partial_mask_tiles = (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
     constexpr bool has_sliding_window = sliding_window_size > 0;
     constexpr uint32_t sliding_diag_tiles = has_sliding_window ? kSlidingWindowEdgeTiles : 0;
@@ -643,7 +643,7 @@ void generate_lightweight_mask_tiles(Noc noc) {
     // Subsequent tiles: partial mask tiles for boundary conditions
     if constexpr (partial_mask_tiles > 0) {
         if constexpr (global_n_partial_col > 0) {
-            fill_vertical_tile_bf16<mask_tile_size_bytes>(noc, cb_mask_in, tile_idx++, global_n_partial_col);
+            fill_vertical_tile_bf16<mask_tile_size_bytes>(noc, cb_mask_in, tile_idx++, runtime_global_n_partial_col);
         }
         if constexpr (joint_l_partial_col > 0) {
             fill_vertical_tile_bf16<mask_tile_size_bytes>(noc, cb_mask_in, tile_idx++, joint_l_partial_col);
