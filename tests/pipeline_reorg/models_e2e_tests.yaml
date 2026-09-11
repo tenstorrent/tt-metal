@@ -1105,10 +1105,6 @@
   team: shield
 
 # ── HunyuanImage-3.0 ───────────────────────────────────────────────
-# Smoke e2e (8L / 8 denoise steps): 32L cold MoE .tensorbin conversion on NFS exceeds
-# 35 min even when backbone weights hit the read-only NAS cache; ensure_cache_dir
-# mirrors misses to a writable job-local tree. Full quality: local HY_NUM_LAYERS=32
-# HY_STEPS=50. Job 95 min; pytest 5400 s (90 min headroom over ~45 min warm-path est.).
 - name: HunyuanImage-3.0 T2I e2e tests
   cmd: |
     export HF_HOME=/mnt/MLPerf/huggingface HUNYUAN_MODEL_DIR=/mnt/MLPerf/huggingface/tencent/HunyuanImage-3.0
@@ -1117,11 +1113,11 @@
     export HY_STEPS=8
     export HY_VERBOSE=1
     models/experimental/hunyuan_image_3_0/scripts/run_ci_pytest.sh e2e \
-      --timeout 5400 -s models/experimental/hunyuan_image_3_0/demo/test_demo.py
+      --timeout 1080 -s models/experimental/hunyuan_image_3_0/demo/test_demo.py
   model: hunyuan-image-3.0
   skus:
     bh_quietbox_2:
-      timeout: 95
+      timeout: 20
       tier: 3
   owner_id: D0B8130N4BW # Dalar Vartanians
   team: models

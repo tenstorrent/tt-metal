@@ -10,8 +10,10 @@
 # recaption(off) -> denoise -> VAE -> PNG chain runs end-to-end on the 2x2 mesh.
 #
 # Fast/real knobs come from the HY_* env (see demo.py header). CI sets HY_NUM_LAYERS=8 /
-# HY_STEPS=8 with a 90 min pytest ceiling — 32L cold MoE .tensorbin conversion on NFS
-# exceeds 35 min. ensure_cache_dir mirrors RO misses to a writable job-local tree.
+# HY_STEPS=8, which measures ~10 min on bh_quietbox_2 with the expert .tensorbin
+# conversion cold (the NAS TT_CACHE_PATH is read-only, so ensure_cache_dir mirrors every
+# miss to a job-local tree and nothing is reused across jobs). 32L exceeds 35 min and is
+# a local-only configuration.
 
 import os
 import subprocess

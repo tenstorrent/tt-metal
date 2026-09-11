@@ -369,7 +369,7 @@ models:
     wh_n300: 60
     bh_p150: 33
     bh_p300: 13
-    bh_quietbox_2: 65
+    bh_quietbox_2: 62
   unit_tier1:
     wh_llmbox: 150
     wh_n150: 118
@@ -397,7 +397,6 @@ models:
     wh_n300: 33
     bh_p150: 30
     bh_p300: 30
-    # Gemma-4-E4B (15) + HunyuanImage-3.0 lean denoise smoke (10)
     bh_quietbox_2: 25
   integration:
     wh_llmbox: 0
