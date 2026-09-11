@@ -284,7 +284,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "kimi_k2_7 and torus-xy-8x4 and L61 and preload0 and chunks_eleven and ten_iters and notrace" -xvs
     '
   test_type: kimi_chunked
-  test_tags: [kimi_k2_7, transformer]
+  test_tags: [kimi_k2_7, transformer, kimi_chunked_untraced_perf]
   test_group: module
   skus:
     bh_sc1_high_power:
@@ -696,7 +696,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm52 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and sp_only and notrace" -xvs
     '
   test_type: glm_chunked
-  test_tags: [glm_5_2, transformer]
+  test_tags: [glm_5_2, transformer, glm_chunked_untraced_perf]
   test_group: module
   skus:
     bh_sc1_high_power:
