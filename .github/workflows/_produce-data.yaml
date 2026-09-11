@@ -166,17 +166,6 @@ jobs:
           echo "attempt-number=$attempt_number" >> "$GITHUB_OUTPUT"
 
           echo "::notice title=target-workflow-link::The workflow being analyzed is available at https://github.com/${{ github.repository }}/actions/runs/${run_id}/attempts/${attempt_number}"
-      # There is deliberately no `gh api rate_limit` step here. GITHUB_TOKEN's budget is
-      # 15,000/hr shared across the whole repository, but that endpoint reports a
-      # per-token view: it printed "used: 0, remaining: 15000" sixty seconds before this
-      # job's next call was rejected with "API rate limit exceeded for installation", and
-      # it did so on every run while the repository was exhausting the shared budget. It
-      # is free to call and it misdirected three separate investigations, so it is worse
-      # than no signal at all.
-      #
-      # The honest signals are the x-ratelimit-* response headers on a real request
-      # (`gh api -i`), and the gh error text that the download script now surfaces
-      # instead of swallowing.
       - name: Output auxiliary values
         env:
           GH_TOKEN: ${{ github.token }}
