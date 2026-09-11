@@ -35,6 +35,15 @@ void kernel_main() {
         // TYPECAST_LLK_INIT below with the tile the writer reports as wrong.
         DPRINT("TC_CMP blk={}\n", block_index);
         dfb_out.reserve_back(per_core_block_dim);
+#ifdef ARCH_QUASAR
+        // [#51270] Re-point the packer's Buffer Descriptor at the current out_cb ring slot for EACH
+        // output block. compute_kernel_hw_startup runs llk_pack_init only once, and on Quasar the pack
+        // BD (which holds the L1 slot address) does not auto-advance across DFB ring slots. Without this
+        // the 2nd block packs to the already-consumed 1st slot, so out slot 1 is never written and reads
+        // back as zeros (confirmed by DPRINT: tile 1 fp32bits = 0). Same per-use pack_init the Quasar
+        // pool kernel uses; WH/BH need no repoint (pack_tile tracks the CB slot there).
+        pack_init(dfb::out);
+#endif
         for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
             tile_regs_acquire();
 
