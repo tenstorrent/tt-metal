@@ -177,7 +177,7 @@ std::string format_table(const RunStats& s) {
         if(hop_crosses_device_clock(h)) {
             return "dev";
 	}
-	else if(hop_crosses_host_clock(h)) {
+	if(hop_crosses_host_clock(h)) {
             return "host";
 	}
 	return "-";
