@@ -76,6 +76,8 @@ std::vector<tt::tt_metal::Program*> ProgramCollector::program_pointers() {
     return out;
 }
 
+bool should_defer_compile() { return ProgramCollector::active() != nullptr; }
+
 void begin_collect(bool clear, bool real_alloc) {
     if (clear) {
         ProgramCollector::instance().clear();
@@ -124,6 +126,11 @@ CompileStats parallel_compile(tt::tt_metal::distributed::MeshDevice* device, int
     CompileStats stats;
     stats.num_programs = progs.size();
     stats.max_workers = max_workers;
+    // Snapshot before compiling: anything already compiled was JIT'd inline during
+    // the collect pass, which is exactly what this pass exists to avoid. Reported so
+    // the degenerate case is visible instead of looking like a very fast run.
+    stats.num_already_compiled = static_cast<std::size_t>(
+        std::count_if(progs.begin(), progs.end(), [](tt::tt_metal::Program* p) { return p->is_compiled(); }));
 
     auto t0 = clock::now();
     if (!progs.empty()) {
