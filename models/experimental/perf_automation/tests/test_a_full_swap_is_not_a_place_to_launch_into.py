@@ -19,15 +19,17 @@ before starting -- the thermal gate protects the board, but a subprocess that lo
 reference model at full precision can exhaust 249 GB of RAM on its own, and no amount of board
 cooling touches that.
 
-THE HEADROOM WAIT AND THE HARD CAP ANSWER TWO DIFFERENT QUESTIONS. The third incident is why both
-exist: the wait only asks "is the box already too full to start something new" -- a question about
-the LOT, answerable before any car pulls in. It has no opinion once launched, because it cannot
-know how big the car will get; that is model- and call-specific, and this launch point is generic
-across every model. The answer is not a better prediction -- it is not needing one. memory_cap_
-preexec_fn puts a hard ceiling on the CHILD's own address space (RLIMIT_AS), sized off whatever is
-available at the moment of launch, so a subprocess that outgrows that ceiling hits its own allocator
-(an ordinary MemoryError/bad_alloc, the same shape of failure every caller here already treats as a
-crashed measurement) instead of the kernel picking a victim from the whole machine.
+THE HEADROOM WAIT ANSWERS ONE QUESTION: "is the box already too full to start something new" -- a
+question about the LOT, answerable before any car pulls in. It has no opinion once launched, because
+it cannot know how big the car will get; that is model- and call-specific.
+
+memory_cap_preexec_fn USED to also put a hard ceiling on the CHILD's own address space (RLIMIT_AS),
+sized off whatever was available at launch. RETIRED 2026-09-11: RLIMIT_AS caps total VIRTUAL address
+space, not physical use, and the device driver's own mesh-open/TLB-window setup needs large virtual
+mappings that carry no real memory pressure. With the cap on, a healthy run failed hard with a
+device-level error (`tt_tlb_alloc failed ... error code -12`); the identical run passed clean with
+PERF_MCP_DISABLE_MEM_CAP=1 -- confirmed by a direct A/B rerun. The function is now a no-op, kept only
+so every `preexec_fn=memory_cap_preexec_fn()` call site keeps working unchanged.
 
 SHARED IN ONE PLACE (agent.probes), not copied per launch point -- the first attempt at this fix
 lived only in cc_optimize.run and missed agent.stack_survey.survey_model, which builds the model via
@@ -109,65 +111,19 @@ def test_reads_meminfo_available_not_free(probes):
     assert val is None or val >= 0.0
 
 
-# ------------------------------------------------------------------- the hard cap on the child itself
+# ------------------------------------------------------------ the hard cap, retired -- now a no-op
 
 
-def test_the_cap_is_disabled_by_the_escape_hatch(monkeypatch, probes):
-    monkeypatch.setenv("PERF_MCP_DISABLE_MEM_CAP", "1")
+def test_the_cap_is_a_retired_no_op_regardless_of_env_or_reading(monkeypatch, probes):
+    """RLIMIT_AS capped VIRTUAL address space, which collided with the device driver's own
+    mesh-open/TLB-window mappings -- see the module docstring for the confirmed A/B rerun. The
+    function must return None under every input now, not just the old escape-hatch/no-reading cases,
+    so every existing `preexec_fn=memory_cap_preexec_fn()` call site keeps working unchanged."""
     monkeypatch.setattr(probes, "available_memory_gb", lambda: 64.0)
     assert probes.memory_cap_preexec_fn() is None
-
-
-def test_no_cap_without_a_reading(monkeypatch, probes):
-    """Same rule as the rest of the safety gates: a sensor that cannot be read is not a reason to
-    guess a number and cap the work on a fabricated basis."""
-    monkeypatch.delenv("PERF_MCP_DISABLE_MEM_CAP", raising=False)
+    assert probes.memory_cap_preexec_fn(margin_gb=10.0) is None
     monkeypatch.setattr(probes, "available_memory_gb", lambda: None)
     assert probes.memory_cap_preexec_fn() is None
-
-
-def test_it_returns_a_callable_sized_below_available(monkeypatch, probes):
-    monkeypatch.delenv("PERF_MCP_DISABLE_MEM_CAP", raising=False)
-    monkeypatch.setattr(probes, "available_memory_gb", lambda: 64.0)
-    fn = probes.memory_cap_preexec_fn(margin_gb=10.0)
-    assert callable(fn)
-
-
-def test_a_callable_that_cannot_set_the_limit_does_not_raise(monkeypatch, probes):
-    """BEST-EFFORT, LIKE EVERY OTHER GATE HERE: a platform without RLIMIT_AS, or a setrlimit call
-    that fails for any reason, must not take the subprocess down before it even starts."""
-    monkeypatch.delenv("PERF_MCP_DISABLE_MEM_CAP", raising=False)
-    monkeypatch.setattr(probes, "available_memory_gb", lambda: 64.0)
-    fn = probes.memory_cap_preexec_fn()
-    import resource as _resource
-
-    monkeypatch.setattr(_resource, "setrlimit", lambda *a: (_ for _ in ()).throw(OSError("no permission")))
-    fn()  # must not raise
-
-
-def test_the_cap_actually_constrains_a_real_child_process():
-    """The mechanism itself, not just the sizing arithmetic: a child given a small RLIMIT_AS must
-    fail to allocate past it. This is the one thing a mock cannot stand in for -- it is exactly the
-    gap the third incident exposed (a healthy headroom reading said nothing about what the child
-    would do once running)."""
-    import resource
-    import subprocess
-    import sys
-
-    cap_bytes = 200 * 1024 * 1024  # 200 MB -- enough to start Python, not enough for this allocation
-
-    def _preexec():
-        resource.setrlimit(resource.RLIMIT_AS, (cap_bytes, cap_bytes))
-
-    script = "import sys; b = bytearray(2 * 1024 * 1024 * 1024); sys.exit(0)"  # 2 GB, over the cap
-    proc = subprocess.run(
-        [sys.executable, "-c", script],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        preexec_fn=_preexec,
-    )
-    assert proc.returncode != 0, "a 2 GB allocation under a 200 MB cap should not have succeeded"
 
 
 # ------------------------------------------------------- detect a memory-cap hit, retry once, lower

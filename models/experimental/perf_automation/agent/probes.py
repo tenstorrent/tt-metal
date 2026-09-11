@@ -2150,43 +2150,18 @@ def available_memory_gb():
 
 
 def memory_cap_preexec_fn(margin_gb: float = None):
-    """A `preexec_fn` that caps the CHILD's own address space to what is available right now, minus
-    a safety margin -- so a single subprocess's own growth can kill only itself, not the machine.
-
-    THE GAP THE HEADROOM WAIT DOES NOT CLOSE. wait_for_memory_headroom_before_device_work refuses to
-    START a subprocess on a box already low; it says nothing once that subprocess is running, and on
-    2026-09-11 a full-depth PCC build passed a healthy headroom check, launched, and then grew past
-    120 GB on its own inside a box with plenty of free memory at launch time -- the kernel OOM-killed
-    it anyway, and everything else running got no warning either. A pre-launch check cannot predict
-    a model- and call-specific growth curve; a hard ceiling on the process itself does not need to.
-
-    RLIMIT_AS, not a monitoring loop: the kernel refuses the allocation THAT CROSSES the line, inside
-    the one process that asked for it, as an ordinary MemoryError/bad_alloc -- the same shape of
-    failure every caller here already treats as a crashed measurement (see _verdict_from_output,
-    _useful_tail). No other process on the box is ever touched. Sized off available memory taken at
-    the moment of launch (not the model, not the call) -- the same number the headroom wait already
-    reads -- so it needs no per-model estimate and adapts to however loaded the box already is.
-
-    Returns None (no cap applied) if available memory cannot be read or capping is disabled via
-    PERF_MCP_DISABLE_MEM_CAP=1 -- a cap that cannot be sized must not be guessed at.
+    """Historically returned a `preexec_fn` that capped the CHILD's own virtual address space via
+    RLIMIT_AS, sized off available memory at launch. Retired on 2026-09-11: RLIMIT_AS limits total
+    VIRTUAL address space, not physical use, and the device driver's own mesh-open/TLB-window setup
+    needs large virtual mappings that carry no real memory pressure. On this box that cap turned a
+    healthy run into a hard device-level failure (`tt_tlb_alloc failed ... error code -12`) with the
+    cap on, and the identical run passed clean with PERF_MCP_DISABLE_MEM_CAP=1 -- confirmed by a
+    direct A/B rerun, not inferred. Kept as a no-op (rather than deleted) so every call site that
+    passes it as `preexec_fn=memory_cap_preexec_fn()` keeps working unchanged; real OOM protection is
+    wait_for_memory_headroom_before_device_work (pre-launch) plus run_with_low_memory_fallback
+    (post-failure retry) -- neither one touches the process's address space.
     """
-    if os.environ.get("PERF_MCP_DISABLE_MEM_CAP") == "1":
-        return None
-    avail = available_memory_gb()
-    if avail is None:
-        return None
-    margin = margin_gb if margin_gb is not None else float(os.environ.get("PERF_MCP_MEM_CAP_MARGIN_GB", "10"))
-    cap_bytes = int(max(avail - margin, 1.0) * (1024.0**3))
-
-    def _set_rlimit():
-        try:
-            import resource
-
-            resource.setrlimit(resource.RLIMIT_AS, (cap_bytes, cap_bytes))
-        except Exception:  # noqa: BLE001 -- a cap that cannot be set must not stop the work
-            pass
-
-    return _set_rlimit
+    return None
 
 
 # THE STANDARD SIGNAL a model is expected to respect when its reference/golden build must shrink its
