@@ -173,19 +173,19 @@ std::string format_table(const RunStats& s) {
     o << "  stage                     count        min       mean        max     rel.sd     MB/s\n";
     o << "  ----------------------- ------- ---------- ---------- ---------- ---------- --------\n";
 
-    auto domain_fn = [](auto const& h) {
-        if(hop_crosses_device_clock(h)) {
+    auto domain_fn = [](const auto& h) {
+        if (hop_crosses_device_clock(h)) {
             return "dev";
-	}
-	if(hop_crosses_host_clock(h)) {
+        }
+        if (hop_crosses_host_clock(h)) {
             return "host";
-	}
-	return "-";
+        }
+        return "-";
     };
 
     for (uint32_t h = 0; h < kHopStageCount; ++h) {
         const Dist d = s.merged(h);
-	const char* domain = domain_fn(h);
+        const char* domain = domain_fn(h);
 
         if (d.n == 0) {
             // Printed, not skipped. A stage with no samples means that leg did not run in
@@ -253,13 +253,12 @@ std::string format_table(const RunStats& s) {
 
     auto bound_fn = [&s](auto const& h) -> uint64_t {
         uint64_t retval = 0;
-        if(hop_crosses_device_clock(h)) {
+        if (hop_crosses_device_clock(h)) {
             retval = s.device_clock_uncertainty_ns;
-	}
-	else if(hop_crosses_host_clock(h)) {
+        } else if (hop_crosses_host_clock(h)) {
             retval = s.host_clock_uncertainty_ns;
-	}
-	return retval;
+        }
+        return retval;
     };
 
     for (uint32_t h = 0; h < kHopStageCount; ++h) {
@@ -588,15 +587,24 @@ std::string format_csv(const RunStats& s, const std::string& tag) {
     std::ostringstream o;
     char line[1024];
 
-    auto bound_fn = [&s](auto const& h) -> uint64_t {
+    auto bound_fn = [&s](const auto& h) -> uint64_t {
         uint64_t retval = 0;
-        if(hop_crosses_device_clock(h)) {
+        if (hop_crosses_device_clock(h)) {
             retval = s.device_clock_uncertainty_ns;
-	}
-	else if(hop_crosses_host_clock(h)) {
+        } else if (hop_crosses_host_clock(h)) {
             retval = s.host_clock_uncertainty_ns;
-	}
-	return retval;
+        }
+        return retval;
+    };
+
+    auto domain_fn = [](const auto& h) -> const char* {
+        if (hop_crosses_device_clock(h)) {
+            return "device";
+        }
+        if (hop_crosses_host_clock(h)) {
+            return "host";
+        }
+        return "none";
     };
 
     for (uint32_t h = 0; h < kHopCount; ++h) {
@@ -605,8 +613,8 @@ std::string format_csv(const RunStats& s, const std::string& tag) {
             continue;
         }
         const int is_stage = h < kHopStageCount ? 1 : 0;
-	const uint64_t bound = bound_fn(h);
-        const char* domain = hop_crosses_device_clock(h) ? "device" : (hop_crosses_host_clock(h) ? "host" : "none");
+        const uint64_t bound = bound_fn(h);
+        const char* domain = domain_fn(h);
         const double mn = static_cast<double>(d.min), mx = static_cast<double>(d.max);
 
         char rate_mean[32] = "";

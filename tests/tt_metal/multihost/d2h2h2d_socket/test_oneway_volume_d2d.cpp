@@ -671,10 +671,10 @@ int run_common(D2DSocket& sock, Options& o, const std::string& provider_label_st
     stats.run_started_utc = utc_now_iso();
 
     auto stats_role_fn = [transport, &o]() {
-        if(transport == nullptr) {
+        if (transport == nullptr) {
             return "local";
         }
-        else if(o.host_ident == 0) {
+        if (o.host_ident == 0) {
             return "server";
         }
         return "peer";
@@ -807,6 +807,11 @@ int run_device(Options& o) {
     std::cout << "\n=== " << kProg << " on device " << o.device_id << " ===\n\n";
 
     namespace mh = tt::tt_metal::distributed::multihost;
+    // BY VALUE, NOT BY REFERENCE. get_current_world() returns a reference to the global
+    // current_world_; binding a reference here would make `world` alias whatever
+    // set_current_world(solo) installs below, and the restore at set_current_world(world) would
+    // assign it to itself -- leaving the solo (size 1) context current.
+    // NOLINTNEXTLINE(performance-unnecessary-copy-initialization) -- the copy IS the point.
     const mh::ContextPtr world = mh::DistributedContext::get_current_world();
     {
         const mh::ContextPtr solo =
@@ -877,13 +882,12 @@ int run_device(Options& o) {
 
     auto kernel_opcode_fn = [&o]() -> uint32_t {
         uint32_t retval = static_cast<uint32_t>(kOpRdmaWrite);
-        if(!o.store) {
+        if (!o.store) {
             retval = static_cast<uint32_t>(kOpSendUva);
-	}
-	else if(o.bytes <= kCtrlImmMax) {
+        } else if (o.bytes <= kCtrlImmMax) {
             retval = static_cast<uint32_t>(kOpRdmaWriteImm);
-	}
-	return retval;
+        }
+        return retval;
     };
 
     const uint32_t kernel_opcode = kernel_opcode_fn();
