@@ -1090,15 +1090,27 @@ class Conv1dViaConv3d(Module):
         # The conv3d's own input width: 3x under the stacked split (see stack_operand).
         self.conv_in_channels = self.in_channels * (STACK_BLOCKS if self.split_mode == "stack" else 1)
 
+        # Blockings are tabled for the real (in, out, k); under the stacked split the conv3d sees 3x the input
+        # channels, so the table's C_in block is widened until conv3d's "C_in blocks <= cores" limit holds.
+        grid = self.mesh_device.compute_with_storage_grid_size()
         self.conv_config = get_conv3d_config(
-            self.conv_in_channels,
-            self.out_channels,
-            self.kernel_size,
-            dtype,
-            grid_size=self.mesh_device.compute_with_storage_grid_size(),
-            h_factor=1,
-            w_factor=1,
+            self.in_channels, self.out_channels, self.kernel_size, dtype, grid_size=grid, h_factor=1, w_factor=1
         )
+        if self.conv_in_channels != self.in_channels:
+            cores = grid.x * grid.y
+            c_in_block = self.conv_config.C_in_block
+            while self.conv_in_channels // c_in_block > cores or self.conv_in_channels % c_in_block:
+                c_in_block += 32
+            self.conv_config = ttnn.Conv3dConfig(
+                weights_dtype=self.conv_config.weights_dtype,
+                output_layout=self.conv_config.output_layout,
+                T_out_block=self.conv_config.T_out_block,
+                W_out_block=self.conv_config.W_out_block,
+                H_out_block=self.conv_config.H_out_block,
+                C_out_block=self.conv_config.C_out_block,
+                C_in_block=c_in_block,
+                compute_with_storage_grid_size=grid,
+            )
 
         # Column-parallel C-TP: each chip owns out_channels/factor C_out; C_in stays full (gathered).
         self.out_channels_shard = self.out_channels // channel_factor(parallel_config)
