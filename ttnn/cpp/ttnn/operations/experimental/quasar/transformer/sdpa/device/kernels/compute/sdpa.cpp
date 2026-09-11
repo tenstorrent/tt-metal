@@ -94,7 +94,13 @@ void kernel_main() {
     constexpr auto dfb_out_im_A = dfb::out_im_A;
     constexpr auto dfb_out_im_B = dfb::out_im_B;
     constexpr auto dfb_max_A = dfb::max_A;
+#ifdef ARCH_QUASAR
+    // Quasar merges the max ping-pong into a single 2-deep DFB bound to max_A; there is no max_B
+    // binding (see sdpa_program_factory.cpp). sdpa_inner_loop ignores this arg on Quasar.
+    constexpr auto dfb_max_B = dfb::max_A;
+#else
     constexpr auto dfb_max_B = dfb::max_B;
+#endif
     constexpr auto dfb_sum_A = dfb::sum_A;
     constexpr auto dfb_sum_B = dfb::sum_B;
     constexpr auto dfb_exp_max_diff = dfb::exp_max_diff;
