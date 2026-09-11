@@ -17,28 +17,28 @@ constexpr size_t NUM_FPU_COUNTERS = 3;
 
 constexpr std::array<std::pair<PerfCounterType, std::uint16_t>, 18> unpack_counters = {
     {{PerfCounterType::MATH_SRC_DATA_READY, 0},
-     {PerfCounterType::DATA_HAZARD_STALLS_MOVD2A, 1},
+     {PerfCounterType::MATH_NOT_D2S_STALLED, 1},
      {PerfCounterType::MATH_INSTRN_STARTED, 3},
      {PerfCounterType::MATH_INSTRN_AVAILABLE, 4},
-     {PerfCounterType::SRCB_WRITE_AVAILABLE, 5},
-     {PerfCounterType::SRCA_WRITE_AVAILABLE, 6},
+     {PerfCounterType::SRCB_WRITE_REQ, 5},
+     {PerfCounterType::SRCA_WRITE_REQ, 6},
      {PerfCounterType::UNPACK0_BUSY_THREAD0, 7},
      {PerfCounterType::UNPACK1_BUSY_THREAD0, 8},
      {PerfCounterType::UNPACK0_BUSY_THREAD1, 9},
      {PerfCounterType::UNPACK1_BUSY_THREAD1, 10},
-     {PerfCounterType::SRCB_WRITE_ACTUAL, 259},
+     {PerfCounterType::SRCB_WRITE_NOT_BLOCKED_OVR, 259},
      {PerfCounterType::SRCB_WRITE_NOT_BLOCKED_PORT, 260},
      {PerfCounterType::SRCA_WRITE_NOT_BLOCKED_OVR, 261},
-     {PerfCounterType::SRCA_WRITE_ACTUAL, 262},
-     {PerfCounterType::SRCA_WRITE_THREAD0, 263},
-     {PerfCounterType::SRCB_WRITE_THREAD0, 264},
-     {PerfCounterType::SRCA_WRITE_THREAD1, 265},
-     {PerfCounterType::SRCB_WRITE_THREAD1, 266}}};
+     {PerfCounterType::SRCA_WRITE_NOT_BLOCKED_PORT, 262},
+     {PerfCounterType::SRCA_WRITE_TID_EVEN, 263},
+     {PerfCounterType::SRCB_WRITE_TID_EVEN, 264},
+     {PerfCounterType::SRCA_WRITE_TID_ODD, 265},
+     {PerfCounterType::SRCB_WRITE_TID_ODD, 266}}};
 constexpr size_t NUM_UNPACK_COUNTERS = unpack_counters.size();
 
 // PACK_COUNT=4 on WH.
 constexpr std::array<std::pair<PerfCounterType, std::uint16_t>, 14> pack_counters = {
-    {{PerfCounterType::PACKER_DEST_READ_AVAILABLE, 11},
+    {{PerfCounterType::PACKER0_DEST_READ_REQ, 11},
      {PerfCounterType::PACKER_DEST_READ_1, 12},
      {PerfCounterType::PACKER_DEST_READ_2, 13},
      {PerfCounterType::PACKER_DEST_READ_3, 14},
@@ -51,7 +51,7 @@ constexpr std::array<std::pair<PerfCounterType, std::uint16_t>, 14> pack_counter
      {PerfCounterType::DEST_READ_GRANTED_2, 269},
      {PerfCounterType::DEST_READ_GRANTED_3, 270},
      {PerfCounterType::MATH_NOT_STALLED_DEST_WR_PORT, 271},
-     {PerfCounterType::AVAILABLE_MATH, 272}}};
+     {PerfCounterType::MATH_NOT_SCOREBOARD_STALLED, 272}}};
 constexpr size_t NUM_PACK_COUNTERS = 14;
 
 // L1 bank 0 (MUX_CTRL[4] = 0): unpacker, TDMA bundles, ring0 NOC; port 1 = unpacker#1/ECC/pack1.
@@ -106,6 +106,8 @@ constexpr std::array<std::pair<PerfCounterType, std::uint16_t>, 0> l1_3_counters
 constexpr size_t NUM_L1_3_COUNTERS = 0;
 constexpr std::array<std::pair<PerfCounterType, std::uint16_t>, 0> l1_4_counters = {};
 constexpr size_t NUM_L1_4_COUNTERS = 0;
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 0> l1_5_counters = {};
+constexpr size_t NUM_L1_5_COUNTERS = 0;
 
 // WH INSTRN_THREAD: sel gaps at 9-11, replicated stall conditions at 27/30/33/36.
 constexpr size_t NUM_INSTRN_COUNTERS = 59;
@@ -116,8 +118,8 @@ constexpr std::array<std::pair<PerfCounterType, std::uint16_t>, NUM_INSTRN_COUNT
      {PerfCounterType::THCON_INSTRN_AVAILABLE_0, 6},   {PerfCounterType::THCON_INSTRN_AVAILABLE_1, 7},
      {PerfCounterType::THCON_INSTRN_AVAILABLE_2, 8},   {PerfCounterType::MOVE_INSTRN_AVAILABLE_0, 12},
      {PerfCounterType::MOVE_INSTRN_AVAILABLE_1, 13},   {PerfCounterType::MOVE_INSTRN_AVAILABLE_2, 14},
-     {PerfCounterType::FPU_INSTRN_AVAILABLE_0, 15},    {PerfCounterType::FPU_INSTRN_AVAILABLE_1, 16},
-     {PerfCounterType::FPU_INSTRN_AVAILABLE_2, 17},    {PerfCounterType::UNPACK_INSTRN_AVAILABLE_0, 18},
+     {PerfCounterType::MATH_INSTRN_AVAILABLE_0, 15},   {PerfCounterType::MATH_INSTRN_AVAILABLE_1, 16},
+     {PerfCounterType::MATH_INSTRN_AVAILABLE_2, 17},   {PerfCounterType::UNPACK_INSTRN_AVAILABLE_0, 18},
      {PerfCounterType::UNPACK_INSTRN_AVAILABLE_1, 19}, {PerfCounterType::UNPACK_INSTRN_AVAILABLE_2, 20},
      {PerfCounterType::PACK_INSTRN_AVAILABLE_0, 21},   {PerfCounterType::PACK_INSTRN_AVAILABLE_1, 22},
      {PerfCounterType::PACK_INSTRN_AVAILABLE_2, 23},   {PerfCounterType::THREAD_STALLS_0, 24},
@@ -127,16 +129,16 @@ constexpr std::array<std::pair<PerfCounterType, std::uint16_t>, NUM_INSTRN_COUNT
      {PerfCounterType::WAITING_FOR_THCON_IDLE_0, 39},  {PerfCounterType::WAITING_FOR_UNPACK_IDLE_0, 40},
      {PerfCounterType::WAITING_FOR_PACK_IDLE_0, 41},   {PerfCounterType::WAITING_FOR_MATH_IDLE_0, 42},
      {PerfCounterType::WAITING_FOR_NONZERO_SEM_0, 43}, {PerfCounterType::WAITING_FOR_NONFULL_SEM_0, 44},
-     {PerfCounterType::WAITING_FOR_MOVE_IDLE_0, 45},   {PerfCounterType::WAITING_FOR_MMIO_IDLE_0, 46},
+     {PerfCounterType::WAITING_FOR_MOVE_IDLE_0, 45},   {PerfCounterType::WAITING_FOR_CFG_IDLE_0, 46},
      {PerfCounterType::WAITING_FOR_SFPU_IDLE_0, 47},   {PerfCounterType::WAITING_FOR_THCON_IDLE_1, 48},
      {PerfCounterType::WAITING_FOR_UNPACK_IDLE_1, 49}, {PerfCounterType::WAITING_FOR_PACK_IDLE_1, 50},
      {PerfCounterType::WAITING_FOR_MATH_IDLE_1, 51},   {PerfCounterType::WAITING_FOR_NONZERO_SEM_1, 52},
      {PerfCounterType::WAITING_FOR_NONFULL_SEM_1, 53}, {PerfCounterType::WAITING_FOR_MOVE_IDLE_1, 54},
-     {PerfCounterType::WAITING_FOR_MMIO_IDLE_1, 55},   {PerfCounterType::WAITING_FOR_SFPU_IDLE_1, 56},
+     {PerfCounterType::WAITING_FOR_CFG_IDLE_1, 55},    {PerfCounterType::WAITING_FOR_SFPU_IDLE_1, 56},
      {PerfCounterType::WAITING_FOR_THCON_IDLE_2, 57},  {PerfCounterType::WAITING_FOR_UNPACK_IDLE_2, 58},
      {PerfCounterType::WAITING_FOR_PACK_IDLE_2, 59},   {PerfCounterType::WAITING_FOR_MATH_IDLE_2, 60},
      {PerfCounterType::WAITING_FOR_NONZERO_SEM_2, 61}, {PerfCounterType::WAITING_FOR_NONFULL_SEM_2, 62},
-     {PerfCounterType::WAITING_FOR_MOVE_IDLE_2, 63},   {PerfCounterType::WAITING_FOR_MMIO_IDLE_2, 64},
+     {PerfCounterType::WAITING_FOR_MOVE_IDLE_2, 63},   {PerfCounterType::WAITING_FOR_CFG_IDLE_2, 64},
      {PerfCounterType::WAITING_FOR_SFPU_IDLE_2, 65},   {PerfCounterType::THREAD_INSTRUCTIONS_0, 256},
      {PerfCounterType::THREAD_INSTRUCTIONS_1, 264},    {PerfCounterType::THREAD_INSTRUCTIONS_2, 272},
      {PerfCounterType::ANY_THREAD_STALL, 283}}};
