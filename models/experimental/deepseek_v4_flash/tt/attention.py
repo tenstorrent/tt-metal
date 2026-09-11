@@ -203,10 +203,9 @@ def build_static_layer_cache(
         """ROW_MAJOR L1 WIDTH_SHARDED ``[batch*rows, 1, 1, width]`` (1-high faces).
 
         The width split ``csa_pool_window`` consumes: ``width // 32`` cores, one
-        32-column shard each (32 cores at CSA ``2*Dh == 1024``). The op only reads
-        the packed row count and the shard spec, so the rows sit on dim 0 rather
-        than dim 2 -- that is the axis ``indexed_fill`` scatters a token into on its
-        shard-local path (see :func:`_scatter_window_rows`).
+        32-column shard each (32 cores at CSA ``2*Dh == 1024``). Rows sit on dim 0
+        (user-major packed ``B*cr``) so ``paged_update_cache`` can write a decode
+        token as a linear row (see :func:`_update_window_at`).
         """
         height = batch * rows
         cfg = width_sharded_l1_config(height, width, device, tile_height=1)
@@ -631,14 +630,13 @@ def _update_window_at(cache: ttnn.Tensor, row: ttnn.Tensor, index: ttnn.Tensor) 
     """Write ``row`` ``[1, B, 1, F]`` into a CSA window at the packed rows ``index``.
 
     CSA windows are user-major: user ``u``'s token ``t`` sits at row ``u*cr + t``, so
-    ``index`` carries one row per user.
+    ``index`` carries one row per user. Projections arrive as packed ``[1, 1, B, F]``
+    and are spread to height-sharded ``[1, B, 1, F]`` for ``paged_update_cache``.
     """
-    users, feat = row.shape[1], row.shape[-1]
-    # Interleaved first: the incoming row is height-sharded one user per core, and a
-    # reshape across that shard's dims is not a view.
-    src = ttnn.reshape(ttnn.to_memory_config(row, ttnn.DRAM_MEMORY_CONFIG), [users, 1, 1, feat])
-    _scatter_window_rows(cache, src, index)
-    ttnn.deallocate(src)
+    packed = _one_row_per_user(row)
+    ttnn.experimental.paged_update_cache(cache, packed, update_idxs_tensor=index)
+    if packed is not row:
+        ttnn.deallocate(packed)
 
 
 def _rm_width_sharded(tensor: ttnn.Tensor, height: int, width: int) -> ttnn.Tensor:
@@ -921,8 +919,8 @@ class DeepSeekV4CSACompressor:
         :meth:`DeepSeekV4HCACompressor._project`.
         """
         return (
-            ttnn.to_memory_config(self.kv_proj(tokens), ttnn.DRAM_MEMORY_CONFIG),
-            ttnn.to_memory_config(self.gate_proj(tokens), ttnn.DRAM_MEMORY_CONFIG),
+            self.kv_proj(tokens),
+            self.gate_proj(tokens),
         )
 
     def _pool_window(
@@ -979,8 +977,6 @@ class DeepSeekV4CSACompressor:
         feat = 2 * self.head_dim
         users = _packed_users(tokens)
         kv, gate = self._project(tokens)  # [1, 1, B, 2*Dh]
-        kv = _one_row_per_user(ttnn.reshape(kv, [1, 1, users, feat]))
-        gate = _one_row_per_user(ttnn.reshape(gate, [1, 1, users, feat]))
         win_index = self._win_index(win_slot, users)
         _update_window_at(scache.win_kv, kv, win_index)
         _update_window_at(scache.win_gate, gate, win_index)
@@ -1019,18 +1015,29 @@ def _compressor_projections(
 
     Shared by the two compressor kinds, which differ only in the projected width -- HCA
     projects a token to ``Dh``, CSA to ``2*Dh`` for its Ca/Cb pair -- which is why the layout
-    is keyed by ``layer_type``. Under the prefetcher the pair streams through the device's one
-    GCB, so they must be queued in the order :meth:`DeepSeekV4HCACompressor._project` runs
-    them, kv before gate, in the block's turn (see ``decode_prefetch``).
+    is keyed by ``layer_type``. Both use full-width hub-mode ``matmul_decode`` (ROW_MAJOR
+    HEIGHT_SHARDED A) so they can consume the decode all-gather replica in place. Under the
+    prefetcher CSA shares q_a's 32-receiver FIFO and HCA shares kv's 16-receiver FIFO,
+    queued after those projections in the block's turn (see ``decode_prefetch``).
     """
     feat = config.head_dim * (2 if layer_type == "compressed_sparse_attention" else 1)
-    layout = check_decode_layout(layer_type, config.hidden_size, feat)
+    layout = dict(check_decode_layout(layer_type, config.hidden_size, feat))
     if use_prefetcher and prefetch_buffers is None:
         prefetch_buffers = make_decode_prefetch_buffers(device, weight_dtype, num_prefetch_pages)
     prefetch = {"use_prefetcher": use_prefetcher}
     if use_prefetcher:
-        prefetch["global_cb"] = prefetch_buffers[layer_type]
-        prefetch["global_cb_page_bytes"] = decode_prefetch_page_bytes(weight_dtype)
+        # Same cut as q_a (32 cores) / kv (16 cores), so the same rings. Queued after
+        # those projections in :meth:`DeepSeekV4Attention.prefetch_weights`.
+        if layer_type == "compressed_sparse_attention":
+            prefetch["global_cb"] = ensure_named_gcb(
+                prefetch_buffers, Q_A_GCB, device, [DECODE_LAYOUTS["q_a_proj"]], weight_dtype
+            )
+            prefetch["global_cb_page_bytes"] = q_a_page_bytes(weight_dtype)
+        else:
+            prefetch["global_cb"] = ensure_named_gcb(
+                prefetch_buffers, KV_GCB, device, [DECODE_LAYOUTS["kv_proj"]], weight_dtype
+            )
+            prefetch["global_cb_page_bytes"] = kv_page_bytes(weight_dtype)
 
     def projection(name):
         packed = {}
@@ -1043,14 +1050,22 @@ def _compressor_projections(
         return LinearDecode(
             weights[f"compressor.{name}.weight"],
             device,
-            cache.file(f"compressor.{name}"),
+            cache.file(f"compressor.{name}.full"),
             dtype=weight_dtype,
             **layout,
             **prefetch,
             **packed,
+            rectangle_b_grid=True,
         )
 
-    return projection("kv_proj"), projection("gate_proj")
+    kv_proj = projection("kv_proj")
+    gate_proj = projection("gate_proj")
+    if packed_weights is None:
+        assert kv_proj._can_matmul_decode_rm_hs() and gate_proj._can_matmul_decode_rm_hs(), (
+            f"{layer_type} kv/gate must use ROW_MAJOR HEIGHT_SHARDED matmul_decode, "
+            f"but kv partial={kv_proj.partial_width_sharded} gate partial={gate_proj.partial_width_sharded}"
+        )
+    return kv_proj, gate_proj
 
 
 def _tp_group_slot_weight(source, groups: int, tp_size: int, slot: int):
@@ -1137,10 +1152,11 @@ class DeepSeekV4Attention(DeepSeekV4Module):
     all-reduces the full-hidden partials. Column-parallel ``o_b`` remains available.
 
     ``use_prefetcher=True`` switches the decode projections that still fit the shared
-    64-receiver GCB (q_b, batched o_a, row-parallel o_b, the compressor's kv/gate pair)
-    onto DRISC-prefetched weights. Sequential o_a, if opted into, stays on the DRAM->L1
-    copy: a private 32-core GCB on the same cores as the shared ring (and the pipeline
-    socket at ``(0,0)``) collides with ``fused_hyperconnection`` static CBs. Each prefetched
+    64-receiver GCB (q_b, batched o_a, row-parallel o_b) onto DRISC-prefetched weights.
+    The compressor pair rides q_a's 32-core ring (CSA) or kv's 16-core ring (HCA).
+    Sequential o_a, if opted into, stays on the DRAM->L1 copy: a private 32-core GCB on
+    the same cores as the shared ring (and the pipeline socket at ``(0,0)``) collides with
+    ``fused_hyperconnection`` static CBs. Each prefetched
     weight stays DRAM ND-sharded and the tensor prefetcher pushes it into the
     matmul's in1 buffer, instead of copying DRAM -> L1 before every call. Two
     things come with it:
@@ -1388,7 +1404,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             self.q_b_proj = projection("q_b_proj", cache_suffix=".rect", rectangle_b_grid=True)
         else:
             self.q_b_proj = projection("q_b_proj")
-        self.o_b_proj = projection("o_b_proj")
+        self.o_b_proj = projection("o_b_proj", cache_suffix=".rect", rectangle_b_grid=True)
         if self.fuse_q_a_norm:
             # Mcast a ROW_MAJOR HEIGHT_SHARDED replica of [M, q_lora] onto every q_b B
             # core so q_b can consume it as A without a DRAM round-trip.
@@ -1488,6 +1504,12 @@ class DeepSeekV4Attention(DeepSeekV4Module):
                     else {}
                 ),
             )
+            # Mcast packed ``[1, g * o_lora_rank]`` onto o_b's B-grid bounding box so
+            # o_b can consume it as replicated ROW_MAJOR HEIGHT_SHARDED A. Packed /
+            # GCB receiver sets can omit cores inside that box; NOC mcast still
+            # requires a filled rectangle.
+            bbox = self.o_b_proj.b_core_grid().bounding_box()
+            self.o_a_proj.set_output_core_grid(ttnn.CoreRangeSet({bbox}))
 
         # sinks live on host (folded into the softmax denominator), so there is
         # no tile cache for them -- always materialise.
@@ -1559,18 +1581,15 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         and o_b_proj are left out because their weights do not fit alongside the others.
 
         On the prefetcher path it instead queues each projection configured for a GCB.
-        Shared-ring weights (q_b, compressor, o_a/o_b, ...) use one FIFO. Full-width
-        q_a uses its own 32-receiver FIFO; balanced q_a/kv instead share
-        :data:`HC_FN_GCB` with the hyper-connections. They are still queued here in
+        Shared-ring weights (q_b, o_a/o_b, ...) use one FIFO. Full-width q_a uses its
+        32-receiver FIFO; CSA kv/gate are queued on that same ring after q_a. Full-width
+        kv uses its 16-receiver FIFO; HCA kv/gate follow it there. Balanced q_a/kv instead
+        share :data:`HC_FN_GCB` with the hyper-connections. They are still queued here in
         decode order so each ring stays in step. Column-parallel o_b and sequential
         o_a keep a local receiver grid and stay on the transient L1 path.
 
         Projections on the shared GCB use one FIFO, so they are queued here in the order
-        ``decode`` calls them -- which puts the compressor between kv_proj and o_a_proj, since
-        ``decode_static`` runs it after ``_qkv`` and before ``_attend`` reaches the output
-        projections (see ``_grouped_output``). Nothing checks the shared FIFO order: a
-        projection whose matmul runs out of turn pops its own page size off the head of another
-        weight's slab, which is wrong results rather than an error.
+        ``decode`` calls them. The compressor is not on that FIFO.
         """
         if not (self.dedicated_qkv_ranks and self.use_prefetcher):
             self.q_a_proj.fetch_weights()
@@ -1602,10 +1621,12 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         Drop-in for :meth:`_attention` on the decode paths: fuses the scale, the
         masking, the per-head sink, and both matmuls into one device op.
 
-        ``q`` ``[1, B, H, Dh]`` (already the op's decode head layout, produced by
-        :meth:`_qkv`); ``kv`` is the shared K==V ``[B, 1, Skv, Dh]`` (MQA, one KV head).
-        The op emits ``[1, B, H, Dh]`` too, so no head/seq transposes are needed around
-        the call.
+        ``q`` is packed ``[1, 1, B, H*Dh]`` WIDTH_SHARDED L1 from :meth:`_qkv`.
+        ``all_gather_for_matmul`` stitches the width shards and multicasts a ROW_MAJOR
+        HEIGHT_SHARDED replica onto the SDPA reducer cores; a view then exposes the
+        op's head layout ``[1, B, H, Dh]``. ``kv`` is the shared K==V
+        ``[B, 1, Skv, Dh]`` (MQA, one KV head). The op emits ``[1, B, H, Dh]`` too, so
+        no head/seq transposes are needed around the call.
 
         Two mutually exclusive ways to bound the KV axis (the op rejects an
         ``attn_mask`` in causal mode, so this is a real branch):
@@ -1642,30 +1663,13 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         reducer per user) with shard ``[H, Dh]``; see :func:`_sdpa_decode_output_config`.
         """
         h, dh = self.local_num_heads, self.head_dim
-        # Decode ``q`` from :meth:`_qkv` is still packed ``[1, 1, B, H*Dh]``; the PCC
-        # tests feed the op's head layout ``[1, B, H, Dh]`` directly.
-        packed = q.shape[-1] != dh
-        batch = q.shape[-2] if packed else q.shape[1]
+        batch = _packed_users(q)
         grid_size = self._sdpa_pcfg.compute_with_storage_grid_size
-        out_mem = _sdpa_decode_output_config(batch, h, dh, q.layout, grid_size)
-        # Reshard while the last dim still matches the producer: packed Q is
-        # ``H*Dh`` wide, so the move uses one row of ``H*Dh`` per user (same bytes
-        # as ``[H, Dh]`` for ROW_MAJOR). The head-axis view comes after, so SDPA
-        # sees ``[1, B, H, Dh]``.
-        if packed:
-            shard_h = 1 if q.layout == ttnn.ROW_MAJOR_LAYOUT else ttnn.TILE_SIZE
-            grid = ttnn.num_cores_to_corerangeset(batch, grid_size, row_wise=True)
-            q_mem = ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(grid, [shard_h, q.shape[-1]], ttnn.ShardOrientation.ROW_MAJOR),
-            )
-        else:
-            q_mem = out_mem
-        if q.memory_config() != q_mem:
-            q = ttnn.to_memory_config(q, q_mem)
-        if packed:
-            q = ttnn.experimental.view(q, [1, batch, h, dh])
+        out_mem = _sdpa_decode_output_config(batch, h, dh, ttnn.ROW_MAJOR_LAYOUT, grid_size)
+        gathered = ttnn.experimental.deepseek.all_gather_for_matmul(q, out_mem.shard_spec.grid)
+        if gathered is not q:
+            ttnn.deallocate(q)
+        q = ttnn.experimental.view(gathered, [1, batch, h, dh])
         if cur_pos is not None:
             bounds = {"is_causal": True, "cur_pos_tensor": cur_pos}
         else:
@@ -1712,8 +1716,8 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         Decode is a single token (``M == 1``), so ``[1, 1, H, Dh]`` is already
         group-major in memory: each group's ``K = H*Dh / g`` features are a
         contiguous slice. Batched ``matmul_decode`` reads that as ``[1, g, 1, K]``
-        (a view) and returns ``[1, g, 1, N]``, which is the same bytes as o_b's
-        packed ``[1, 1, 1, g*N]``.
+        (a view) and mcasts the packed ``g * o_lora_rank`` row onto every ``o_b``
+        core. Logical volume is ``num_cores * g * o_lora_rank``.
 
         With TP, each rank owns a contiguous set of complete groups. ``o_a`` is
         consequently group-sharded and runs locally. In the default row-parallel
@@ -1726,28 +1730,15 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         # view claims each row is only K wide, so the sharded conversion uses the wrong row
         # stride. Materialize the logical [H, Dh] tensor in tiled interleaved memory before
         # folding heads into groups.
-        if attn.layout == ttnn.ROW_MAJOR_LAYOUT:
-            attn = ttnn.to_layout(ttnn.to_memory_config(attn, ttnn.DRAM_MEMORY_CONFIG), ttnn.TILE_LAYOUT)
         _, m, h, dh = attn.shape
         groups = self.local_o_groups
         in_per_group = (h * dh) // groups
         assert not self.sequential_o_a, "decode o_a is batched (M == 1); sequential is not wired"
         assert m == 1, f"batched o_a is decode-only (M == 1), got M={m}"
-        x = ttnn.reshape(attn, [1, groups, 1, in_per_group])
-        y = self.o_a_proj(x)  # DRAM-interleaved [1, g, 1, N]
-        y = ttnn.reshape(y, [1, 1, 1, groups * self.o_lora_rank])
-        if self.tp_size > 1 and not self.row_parallel_o_b:
-            gathered = ttnn.all_gather(
-                y,
-                dim=3,
-                cluster_axis=_tp_cluster_axis(self.device),
-                num_links=1,
-                topology=ttnn.Topology.Linear,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            ttnn.deallocate(y)
-            y = gathered
-        output = ttnn.to_memory_config(self.o_b_proj(y), ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.experimental.view(attn, [1, groups, 1, in_per_group])
+        y = self.o_a_proj(x)
+        y = ttnn.experimental.view(y, [1, 1, y.shape[-2], groups * self.o_lora_rank])
+        output = self.o_b_proj(y)
         if self.tp_size > 1:
             if self.row_parallel_o_b:
                 gathered = ttnn.all_reduce(
@@ -1784,7 +1775,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         """Fused SDPA-decode + output RoPE + grouped output projection.
 
         Shared tail of :meth:`decode` / :meth:`decode_static`: ``q`` packed
-        ``[1, 1, B, H*Dh]`` (or already ``[1, B, H, Dh]``), the shared K==V ``kv``
+        ``[1, 1, B, H*Dh]`` WIDTH_SHARDED L1, the shared K==V ``kv``
         ``[B, 1, Skv, Dh]`` (or ``paged``'s block pool) and either ``sdpa_cur_pos`` or
         the additive ``mask`` ``[1,1,1,Skv]`` -> the block's hidden output on packed
         rows, ``[1,1,B,D]``. ``kv`` is the layer's persistent buffer, updated in place;
@@ -1821,9 +1812,9 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         rotated, replicated ``kv`` ``[1, 1, B, Dh]``, still on packed rows
         (pre-compressor, pre-cache). Shared by the decode paths.
 
-        ``q`` stays packed through RoPE; :meth:`_sdpa_decode` is the one op that
-        wants a head axis, and it views ``[1, B, H, Dh]`` after the height-shard
-        reshard. The projections and norms all run over the single tile-row the
+        ``q`` stays packed through RoPE; :meth:`_sdpa_decode` gathers it onto the
+        SDPA cores and views ``[1, B, H, Dh]``. The projections and norms all run
+        over the single tile-row the
         batch occupies, so a B-user step issues the same ops a one-user step does.
         """
         _profile(self.device)

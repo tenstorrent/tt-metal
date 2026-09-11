@@ -1134,6 +1134,7 @@ class BatchedLinearDecode(DeepSeekV4Module):
         self.prefetch_queued = False
         self.packed_weight_tensor = packed_weight_tensor
         self.packed_weight_spec = packed_weight_spec
+        self.output_core_grid = None
 
         # One batch per core row (Bc = 1) by default; widen N across as many cores as the grid
         # allows while keeping each N-shard tile-aligned.
@@ -1212,6 +1213,28 @@ class BatchedLinearDecode(DeepSeekV4Module):
         self.weight = _load_weight(
             w, device, cache_file_name=cache_file_name, dtype=dtype, mesh_mapper=self.mesh_mapper
         )
+
+    def set_output_core_grid(self, grid: ttnn.CoreRangeSet) -> None:
+        """Mcast the packed ``[M, b_blocks*N]`` result to every core of ``grid``.
+
+        Same dest contract as :meth:`LinearDecode.set_output_core_grid`: a filled
+        rectangle (NOC multicast). Each destination core then holds a replica of the
+        folded output (``o_groups * o_lora_rank`` wide at decode).
+        """
+        dest = {(c.x, c.y) for c in _receiver_cores_in_order(grid)}
+        xs = {x for x, _ in dest}
+        ys = {y for _, y in dest}
+        if len(dest) != len(xs) * len(ys) or len(xs) != max(xs) - min(xs) + 1 or len(ys) != max(ys) - min(ys) + 1:
+            raise ValueError(f"output mcast needs a filled rectangle of cores, but got {sorted(dest)}")
+        self.output_core_grid = grid
+
+    def _epilogue_kwargs(self) -> dict:
+        if self.output_core_grid is None:
+            return {}
+        kwargs = {"output_core_grid": self.output_core_grid}
+        if self.output_core_grid.num_cores() >= 2:
+            kwargs["output_mcast_two_hub"] = True
+        return kwargs
 
     def _init_prefetched_weight(
         self,
@@ -1335,7 +1358,9 @@ class BatchedLinearDecode(DeepSeekV4Module):
             )
             if not same_core_grid:
                 x = ttnn.to_memory_config(x, input_memory_config)
-            return ttnn.experimental.matmul_decode(x, self.packed_weight_tensor, packed_weight=self.packed_weight_spec)
+            return ttnn.experimental.matmul_decode(
+                x, self.packed_weight_tensor, packed_weight=self.packed_weight_spec, **self._epilogue_kwargs()
+            )
         if not x.is_sharded():
             x = ttnn.to_memory_config(x, self.get_input_memory_config(m))
         elif x.layout == ttnn.ROW_MAJOR_LAYOUT:
@@ -1354,15 +1379,19 @@ class BatchedLinearDecode(DeepSeekV4Module):
             self.prefetch_queued = False
             try:
                 return ttnn.experimental.matmul_decode(
-                    x, self.weight, global_cb=self.global_cb, global_cb_k_blocks=self.gcb_k_blocks
-                )  # DRAM-interleaved [d0, d1, M, N]
+                    x,
+                    self.weight,
+                    global_cb=self.global_cb,
+                    global_cb_k_blocks=self.gcb_k_blocks,
+                    **self._epilogue_kwargs(),
+                )  # HEIGHT_SHARDED replica when output_core_grid is set
             except Exception:
                 # See LinearDecode.forward: the request is already with the DRISC senders, so a
                 # rejected call must force-stop rather than leave slabs nothing will ever drain.
                 ttnn.experimental.stop_tensor_prefetcher(self.device, force=True)
                 raise
         l1_weights = ttnn.to_memory_config(self.weight, self.weights_memory_config)
-        y = ttnn.experimental.matmul_decode(x, l1_weights)  # DRAM-interleaved [d0, d1, M, N]
+        y = ttnn.experimental.matmul_decode(x, l1_weights, **self._epilogue_kwargs())
         l1_weights.deallocate()
         return y
 
