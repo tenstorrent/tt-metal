@@ -623,6 +623,17 @@ TEST(CyclicSdpaBwEndpointTest, SixteenCores) {
     check_relay(16, 4, 4, 64, true);
 }
 
+// Toward the target configuration: C = 32 is N = 2048 over 65 timesteps, and
+// C = 64 is N = 4096 over 129. The CPU reference is O(N^2 d), so these are
+// the slow tests in the suite.
+TEST(CyclicSdpaBwEndpointTest, ThirtyTwoCores) {
+    check_relay(32, 8, 4, 64, true);
+}
+
+TEST(CyclicSdpaBwEndpointTest, SixtyFourCores) {
+    check_relay(64, 8, 8, 64, true);
+}
+
 // ------------------------------------------------------- bitwise identity
 // The three variants run the same schedule, the same five matmuls and the
 // same accumulation order; only the synchronisation and the route the row
