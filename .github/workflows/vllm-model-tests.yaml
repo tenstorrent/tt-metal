@@ -20,6 +20,7 @@ on:
           - Qwen/Qwen3-VL-32B-Instruct
           - google/gemma-3-27b-it
           - google/gemma-4
+          - google/gemma-4-31B-it
           - openai/gpt-oss-120b
           - models/vllm_test_utils/no_op_test
       sku:
@@ -95,7 +96,7 @@ permissions:
   packages: write
   contents: read
 
-run-name: "Diagnostic PR perf Galaxy vLLM ${{ github.event_name == 'schedule' && '[scheduled]' || format('[{0}] [{1}] [{2}]', (inputs.model == 'all' && 'All models' || inputs.model), (inputs.sku == 'all' && 'All SKUs' || inputs.sku), (inputs.tier == 'all' && 'All tiers' || format('Tier {0}', inputs.tier))) }}"
+run-name: "Diagnostic PR QB2 no automatic pinning ${{ github.event_name == 'schedule' && '[scheduled]' || format('[{0}] [{1}] [{2}]', (inputs.model == 'all' && 'All models' || inputs.model), (inputs.sku == 'all' && 'All SKUs' || inputs.sku), (inputs.tier == 'all' && 'All tiers' || format('Tier {0}', inputs.tier))) }}"
 
 jobs:
   check-harbor:

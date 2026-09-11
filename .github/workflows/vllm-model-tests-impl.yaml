@@ -308,6 +308,12 @@ jobs:
           # vLLM environment variables
           export VLLM_RPC_TIMEOUT=300000
 
+          # Isolated startup diagnostic; keep the serving configuration unchanged.
+          if [ "$HF_MODEL" = "google/gemma-4-31B-it" ]; then
+            export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
+            echo "Diagnostic: TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0"
+          fi
+
           if [ -n "${{ matrix.test-group.tt_mm_throttle_perf }}" ]; then
             export TT_MM_THROTTLE_PERF="${{ matrix.test-group.tt_mm_throttle_perf }}"
           fi
