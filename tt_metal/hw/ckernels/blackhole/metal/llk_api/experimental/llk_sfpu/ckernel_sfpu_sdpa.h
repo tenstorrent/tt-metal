@@ -236,14 +236,17 @@ inline void calculate_exponential_first_column() {
     }
 }
 
-template <bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en, bool reuse_cur_max_tile = false>
 inline void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
     constexpr int ITERATIONS_HALF_FACE = 4;
     constexpr std::uint32_t prev_max_base_idx = 0;
     constexpr std::uint32_t worker_max_base_idx = 32;
     constexpr std::uint32_t cur_max_base_idx = 64;
     constexpr std::uint32_t prev_sum_base_idx = 96;
-    constexpr std::uint32_t worker_sum_base_idx = 128;
+    // The four-tile layout loads worker_sum from the cur_max output tile before
+    // overwriting it. This fits FP32 half-sync's four available DST slots.
+    static_assert(!reuse_cur_max_tile || is_fp32_dest_acc_en);
+    constexpr std::uint32_t worker_sum_base_idx = reuse_cur_max_tile ? cur_max_base_idx : 128;
 
     for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
         sfpi::vFloat prev_max_vec = sfpi::dst_reg[prev_max_base_idx];
@@ -268,11 +271,20 @@ inline void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
         sfpi::dst_reg[prev_max_base_idx] = exp_prev;
         sfpi::dst_reg[worker_max_base_idx] = exp_worker;
 
-        sfpi::dst_reg[worker_sum_base_idx] = exp_worker * worker_sum_vec;
-        sfpi::dst_reg[prev_sum_base_idx] = exp_prev * prev_sum_vec;
-        sfpi::vFloat corr_worker_sum = sfpi::dst_reg[worker_sum_base_idx];
-        sfpi::vFloat corr_prev_sum = sfpi::dst_reg[prev_sum_base_idx];
-        sfpi::dst_reg[prev_sum_base_idx] = corr_worker_sum + corr_prev_sum;
+        if constexpr (reuse_cur_max_tile) {
+            // Keep the corrected worker sum in an SFPU register: its input DST
+            // tile now holds cur_max, which must survive for the caller to pack.
+            sfpi::vFloat corr_worker_sum = exp_worker * worker_sum_vec;
+            sfpi::dst_reg[prev_sum_base_idx] = exp_prev * prev_sum_vec;
+            sfpi::vFloat corr_prev_sum = sfpi::dst_reg[prev_sum_base_idx];
+            sfpi::dst_reg[prev_sum_base_idx] = corr_worker_sum + corr_prev_sum;
+        } else {
+            sfpi::dst_reg[worker_sum_base_idx] = exp_worker * worker_sum_vec;
+            sfpi::dst_reg[prev_sum_base_idx] = exp_prev * prev_sum_vec;
+            sfpi::vFloat corr_worker_sum = sfpi::dst_reg[worker_sum_base_idx];
+            sfpi::vFloat corr_prev_sum = sfpi::dst_reg[prev_sum_base_idx];
+            sfpi::dst_reg[prev_sum_base_idx] = corr_worker_sum + corr_prev_sum;
+        }
         sfpi::dst_reg += 2;
     }
 }
