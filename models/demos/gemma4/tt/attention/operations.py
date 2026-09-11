@@ -336,15 +336,9 @@ def chunked_prefill_sdpa(
     # HiFi4 + FP32 dest-acc: restore the softmax-reduce precision #47311 removed.
     # Matches the non-chunked prefill SDPA so long-context (>32768) prefill keeps
     # the same accumulation precision as the short-seq path.
-    from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
+    from models.demos.gemma4.tt.compute_config import prefill_sdpa_compute_kernel_config
 
-    compute_kernel_config = ttnn.init_device_compute_kernel_config(
-        tt_q.device().arch(),
-        math_fidelity=sdpa_math_fidelity(ttnn.MathFidelity.HiFi4),
-        math_approx_mode=False,
-        fp32_dest_acc_en=sdpa_fp32_dest_acc_en(True),
-        packer_l1_acc=False,
-    )
+    compute_kernel_config = prefill_sdpa_compute_kernel_config(tt_q.device())
 
     # Page table row for this user: [1, num_pages], int32, ROW_MAJOR.
     num_pages = page_table.shape[-1]
@@ -455,15 +449,9 @@ def chunked_prefill_sdpa_sliding(tt_q, tt_k, tt_v, sliding_window, head_dim, sca
     stride = PREFILL_SLIDING_CHUNK_SIZE
     # HiFi4 + FP32 dest-acc: restore the softmax-reduce precision #47311 removed,
     # matching the non-chunked prefill SDPA on the long-context (>32768) path.
-    from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
+    from models.demos.gemma4.tt.compute_config import prefill_sdpa_compute_kernel_config
 
-    compute_kernel_config = ttnn.init_device_compute_kernel_config(
-        tt_q.device().arch(),
-        math_fidelity=sdpa_math_fidelity(ttnn.MathFidelity.HiFi4),
-        math_approx_mode=False,
-        fp32_dest_acc_en=sdpa_fp32_dest_acc_en(True),
-        packer_l1_acc=False,
-    )
+    compute_kernel_config = prefill_sdpa_compute_kernel_config(tt_q.device())
 
     outs = []
     start = 0
