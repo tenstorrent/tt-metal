@@ -61,7 +61,7 @@ def _call(**overrides):
         actual_end=5000,
         metadata=None,
         d2h_service=None,
-        record_dev=None,
+        metadata_msg=None,
         on_layer_complete=None,
         trace_controller=None,
     )
@@ -98,7 +98,7 @@ def test_device_ack_needs_no_sync(monkeypatch):
     """The d2h transport enqueues its ack on the same queue, so zero-completion is implied."""
     rec = _Recorder()
     rec.install(monkeypatch)
-    zero_pad_and_ack(**_call(d2h_service="SVC", record_dev="REC"))
+    zero_pad_and_ack(**_call(d2h_service="SVC", metadata_msg="REC"))
 
     assert len(rec.zero_calls) == 1
     assert rec.socket_syncs == [("SVC", "REC")]
@@ -154,6 +154,6 @@ def test_missing_end_and_metadata_is_rejected(expect_error):
         zero_pad_and_ack(**_call(actual_end=None, on_layer_complete=lambda _idx: None))
 
 
-def test_d2h_without_record_dev_is_rejected(expect_error):
-    with expect_error(AssertionError, "record_dev required"):
-        zero_pad_and_ack(**_call(d2h_service="SVC", record_dev=None))
+def test_d2h_without_metadata_msg_is_rejected(expect_error):
+    with expect_error(AssertionError, "metadata_msg required"):
+        zero_pad_and_ack(**_call(d2h_service="SVC", metadata_msg=None))
