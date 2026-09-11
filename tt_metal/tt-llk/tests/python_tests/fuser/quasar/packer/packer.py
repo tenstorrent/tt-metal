@@ -44,4 +44,4 @@ class Packer(BasePacker):
         config: GlobalConfig,
         block: BlockData,
     ) -> str:
-        return f"_llk_pack_({block.tile_id_block}, {block.tile_id_global}, ckernel::DEFAULT_TENSOR_SHAPE);\n"
+        return f"_llk_pack_({block.tile_id_dest}, {block.tile_id_out}, ckernel::DEFAULT_TENSOR_SHAPE);\n"

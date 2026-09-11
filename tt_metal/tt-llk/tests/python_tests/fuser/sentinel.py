@@ -510,6 +510,7 @@ class FuserSentinel:
         operation: "L1Operation",
         compute_node=None,
         output_format: DataFormat = DataFormat.Float16_b,
+        set_math_format: bool = True,
     ):
         """Compute and store format values for golden generation.
 
@@ -530,7 +531,8 @@ class FuserSentinel:
                 _, _, _, _, math_fmt, pack_src = self._infer_output_formats(
                     config, output_format
                 )
-            self.golden_math_format = math_fmt
+            if set_math_format:
+                self.golden_math_format = math_fmt
             self.golden_pack_src = pack_src
             return
 

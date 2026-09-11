@@ -232,15 +232,11 @@ class FuserConfigSchema(BaseModel):
             return None
         if isinstance(loop_spec, str):
             if loop_spec not in self.loops:
-                raise ValueError(
-                    f"loop '{loop_spec}' is not defined in the 'loops' section"
-                )
+                raise ValueError(f"unknown loop '{loop_spec}'")
             return self.loops[loop_spec]
         if loop_spec.ref is not None:
             if loop_spec.ref not in self.loops:
-                raise ValueError(
-                    f"loop '{loop_spec.ref}' is not defined in the 'loops' section"
-                )
+                raise ValueError(f"unknown loop '{loop_spec.ref}'")
             base = self.loops[loop_spec.ref]
             merged = {
                 slot: getattr(base, slot)

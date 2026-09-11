@@ -36,7 +36,7 @@ class Sfpu:
         4. Bind the corresponding callable from fuser.golden.sfpu
     """
 
-    granularity = InvocationGranularity.BLOCK
+    granularity = InvocationGranularity.NONE
     input_count = 1
 
     def init(

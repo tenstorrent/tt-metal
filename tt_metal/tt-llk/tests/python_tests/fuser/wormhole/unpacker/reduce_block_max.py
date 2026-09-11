@@ -27,7 +27,7 @@ class ReduceBlockMaxUnpacker(Unpacker):
         compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
-        ct_dim = block.block_tiles_x
+        ct_dim = block.block_cols
         dest_acc = config.dest_acc.cpp_enum_value
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         return f"_llk_unpack_AB_reduce_block_max_row_init_<{ct_dim}, {dest_acc}, /*respect_trigger=*/false>({tensor_shape});\n"
@@ -41,7 +41,7 @@ class ReduceBlockMaxUnpacker(Unpacker):
     ) -> str:
         buffer_a = compute_unit.src_a.cpp_name
         buffer_b = compute_unit.src_b.cpp_name
-        return f"_llk_unpack_AB_reduce_block_max_row_(L1_ADDRESS({buffer_a}[{block.tile_id_global}]), L1_ADDRESS({buffer_b}[{block.tile_id_global}]));\n"
+        return f"_llk_unpack_AB_reduce_block_max_row_(L1_ADDRESS({buffer_a}[{block.tile_id_src_a}]), L1_ADDRESS({buffer_b}[{block.tile_id_src_b}]));\n"
 
     def uninit(
         self,
@@ -59,7 +59,7 @@ class ReduceBlockMaxUnpacker(Unpacker):
         compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
-        ct_dim = block.block_tiles_x
+        ct_dim = block.block_cols
         return (
             f"_perf_unpack_loop_set_valid<false, true>(1);\n"
             f"_perf_unpack_loop_set_valid<true, false>({ct_dim});\n"
@@ -72,7 +72,7 @@ class ReduceBlockMaxUnpacker(Unpacker):
         compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
-        ct_dim = block.block_tiles_x
+        ct_dim = block.block_cols
         return (
             f"_perf_math_loop_clear_valid<true, false>({ct_dim});\n"
             f"_perf_math_loop_clear_valid<false, true>(1);\n"

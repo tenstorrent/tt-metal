@@ -75,8 +75,8 @@ class UnpackerTilizeA(Unpacker):
 
         return (
             f"{{\n"
-            f"std::uint32_t row = ({block.tile_id_global}) / {block_ct_dim};\n"
-            f"std::uint32_t col = ({block.tile_id_global}) % {block_ct_dim};\n"
+            f"std::uint32_t row = ({block.tile_id_src_a}) / {block_ct_dim};\n"
+            f"std::uint32_t col = ({block.tile_id_src_a}) % {block_ct_dim};\n"
             f"_llk_unpack_tilize_(L1_ADDRESS({buffer_a}[row * {block_ct_dim}]), col, {config.sentinel.unpack_a_src_format}, {config.sentinel.unpack_a_dst_format}, {block_ct_dim}, {face_r_dim}, {num_faces}, false);\n"
             f"}}\n"
         )

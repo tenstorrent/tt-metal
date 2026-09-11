@@ -79,7 +79,6 @@ operations:
         operation: "Reduce"
         reduce_dim: "REDUCE_ROW"
         reduce_pool: "AVG"
-        reduce_to_tile: true
         unpacker: "ReduceUnpacker"
         math_fidelity: "HiFi4"
     pack:
@@ -97,12 +96,18 @@ operations:
         operation: "Elwsub"
         unpacker: "UnpackerAB"
         broadcast_type: "COL"
-        broadcast_tile: 0
         math_fidelity: "LoFi"
+        loop:
+          in0: {count: 32}
+          in1: {count: 32, step: 0}
+          dest: [0]
     pack:
       - output: "xmm"
         block_size: [32, 32]
         packer: "Packer"
+        loop:
+          dest: [0]
+          out: {count: 32}
 
   # Step 3: (x - E[x])^2 — self-multiply
   - math:
@@ -127,7 +132,6 @@ operations:
         operation: "Reduce"
         reduce_dim: "REDUCE_ROW"
         reduce_pool: "AVG"
-        reduce_to_tile: true
         unpacker: "ReduceUnpacker"
         math_fidelity: "HiFi4"
     pack:
@@ -163,12 +167,18 @@ operations:
         operation: "Elwmul"
         unpacker: "UnpackerAB"
         broadcast_type: "COL"
-        broadcast_tile: 0
         math_fidelity: "HiFi4"
+        loop:
+          in0: {count: 32}
+          in1: {count: 32, step: 0}
+          dest: [0]
     pack:
       - output: "normalized"
         block_size: [32, 32]
         packer: "Packer"
+        loop:
+          dest: [0]
+          out: {count: 32}
 
   # Step 7: normalized * gamma — scale (broadcast row)
   - math:

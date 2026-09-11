@@ -32,7 +32,7 @@ class UnpackerTilizeA(Unpacker):
         block: BlockData,
     ) -> str:
         set_b = "true" if config.dest_acc == DestAccumulation.Yes else "false"
-        return f"_perf_unpack_loop_set_valid<true, {set_b}>({block.block_tiles_x});\n"
+        return f"_perf_unpack_loop_set_valid<true, {set_b}>({block.block_cols});\n"
 
     def perf_clear_valid(
         self,
@@ -42,7 +42,7 @@ class UnpackerTilizeA(Unpacker):
         block: BlockData,
     ) -> str:
         clear_b = "true" if config.dest_acc == DestAccumulation.Yes else "false"
-        return f"_perf_math_loop_clear_valid<true, {clear_b}>({block.block_tiles_x});\n"
+        return f"_perf_math_loop_clear_valid<true, {clear_b}>({block.block_cols});\n"
 
     def get_headers(self) -> List[str]:
         return [
@@ -61,7 +61,7 @@ class UnpackerTilizeA(Unpacker):
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         en_32bit_dest = config.dest_acc.cpp_enum_value
         full_ct_dim = compute_unit.src_a.tile_count_x
-        block_ct_dim = block.block_tiles_x
+        block_ct_dim = block.block_cols
 
         return (
             bfd_program + f"_llk_unpack_tilize_init_<p_unpacr::UNP_A, {en_32bit_dest}>"
@@ -80,7 +80,7 @@ class UnpackerTilizeA(Unpacker):
 
         return (
             f"_llk_unpack_tilize_<p_unpacr::UNP_A>"
-            f"({block.tile_id_global} * {num_faces_r_dim} * {face_r_dim});\n"
+            f"({block.tile_id_src_a} * {num_faces_r_dim} * {face_r_dim});\n"
         )
 
     def uninit(

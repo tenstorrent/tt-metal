@@ -76,16 +76,35 @@ class LoopSlotSpec(BaseModel):
     multipliers: Dict[str, int] = {}
 
 
+class LoopSequence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    start: int = 0
+    count: int = Field(gt=0)
+    step: int = 1
+
+    def expand(self) -> List[int]:
+        return [self.start + index * self.step for index in range(self.count)]
+
+
+LoopSlot = Union[List[int], int, LoopSlotSpec, LoopSequence]
+
+
 class LoopSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     ref: Optional[str] = None
-    in0: Optional[Union[List[int], int, LoopSlotSpec]] = None
-    in1: Optional[Union[List[int], int, LoopSlotSpec]] = None
-    dest: Optional[Union[List[int], int, LoopSlotSpec]] = None
-    out: Optional[Union[List[int], int, LoopSlotSpec]] = None
-    src0: Optional[Union[List[int], int, LoopSlotSpec]] = None
-    src1: Optional[Union[List[int], int, LoopSlotSpec]] = None
+    in0: Optional[LoopSlot] = None
+    in1: Optional[LoopSlot] = None
+    dest: Optional[LoopSlot] = None
+    out: Optional[LoopSlot] = None
+    src0: Optional[LoopSlot] = None
+    src1: Optional[LoopSlot] = None
+
+    @field_validator(*LOOP_SLOT_NAMES, mode="after")
+    @classmethod
+    def expand_sequence(cls, value):
+        return value.expand() if isinstance(value, LoopSequence) else value
 
     @model_validator(mode="after")
     def validate_lists(self) -> "LoopSchema":
@@ -109,7 +128,7 @@ class LoopSchema(BaseModel):
             )
         return self
 
-    def slot_overrides(self) -> Dict[str, Union[List[int], int, LoopSlotSpec]]:
+    def slot_overrides(self) -> Dict[str, LoopSlot]:
         return {
             slot: getattr(self, slot)
             for slot in LOOP_SLOT_NAMES
@@ -346,7 +365,7 @@ class UnarySfpuMathSchema(BaseModel):
     type: Literal["UnarySfpu"]
     operation: MathOperation
     approximation_mode: ApproximationMode = ApproximationMode.No
-    iterations: Annotated[int, Field(ge=1)] = 8
+    iterations: Literal[8, 16, 32] = 8
     dst_dest_tile_index: Annotated[int, Field(ge=0)] = 0
     fill_const_value: float = 1.0
     loop: Optional[Union[str, LoopSchema]] = None
@@ -401,7 +420,7 @@ class BinarySfpuMathSchema(BaseModel):
     type: Literal["BinarySfpu"]
     operation: MathOperation
     approximation_mode: ApproximationMode = ApproximationMode.No
-    iterations: Annotated[int, Field(ge=1)] = 8
+    iterations: Literal[8, 16, 32] = 8
     src1_dest_tile_index: Annotated[int, Field(ge=0)] = 0
     src2_dest_tile_index: Annotated[int, Field(ge=0)] = 0
     dst_dest_tile_index: Annotated[int, Field(ge=0)] = 0
@@ -461,7 +480,6 @@ class FpuMathSchemaBase(BaseModel):
     operation: str
     unpacker: Optional[str] = None
     broadcast_type: BroadcastType = BroadcastType.None_
-    broadcast_tile: Optional[Annotated[int, Field(ge=0)]] = None
     reuse_dest: EltwiseBinaryReuseDestType = EltwiseBinaryReuseDestType.NONE
     reduce_pool: Optional[ReducePool] = None
     reduce_dim: Optional[ReduceDimension] = None
@@ -471,7 +489,6 @@ class FpuMathSchemaBase(BaseModel):
     transpose_faces: Transpose = Transpose.No
     math_fidelity: MathFidelity = MathFidelity.LoFi
     unpack_to_dest: UnpackToDest = UnpackToDest.No
-    reduce_to_tile: bool = False
     in0: Optional[str] = None
     in1: Optional[str] = None
     loop: Optional[Union[str, LoopSchema]] = None
@@ -493,15 +510,6 @@ class FpuMathSchemaBase(BaseModel):
                 f"Unknown FPU operation: {v}, expected one of: {', '.join(valid_ops)}"
             )
         return v
-
-    @model_validator(mode="after")
-    def validate_broadcast_tile(self) -> "FpuMathSchemaBase":
-        if (
-            self.broadcast_tile is not None
-            and self.broadcast_type == BroadcastType.None_
-        ):
-            raise ValueError("broadcast_tile requires a broadcast_type")
-        return self
 
     @field_validator("unpacker", mode="after")
     @classmethod
@@ -560,14 +568,12 @@ class FpuMathSchemaBase(BaseModel):
             "transpose_within_face": self.transpose_within_face,
             "transpose_faces": self.transpose_faces,
             "broadcast_type": self.broadcast_type,
-            "broadcast_tile": self.broadcast_tile,
             "reuse_dest": self.reuse_dest,
             "math_fidelity": self.math_fidelity,
             "enforce_fp32_accumulation": self.enforce_fp32_accumulation,
             "clear_fp32_dst_acc": clear_fp32_dst_acc,
             "acc_to_dest": self.acc_to_dest,
             "unpack_to_dest": self.unpack_to_dest,
-            "reduce_to_tile": self.reduce_to_tile,
         }
         if self.unpacker is not None:
             unpacker_factory, _ = type(self)._unpacker_map[self.unpacker]
@@ -740,36 +746,28 @@ class OperationSchemaBase(BaseModel):
             dest_faces //= 2
         dest_tile_capacity = dest_faces // tile_shape.total_num_faces()
 
-        def node_block_tiles(schema):
+        def node_block_dims(schema):
             block_r, block_c = schema.block_size
             if block_r % tile_r != 0 or block_c % tile_c != 0:
                 raise ValueError(
                     f"block_size ({schema.block_size}) must be a multiple of tile "
                     f"dimensions ({tile_r}, {tile_c})"
                 )
-            tiles = (block_r // tile_r) * (block_c // tile_c)
-            if tiles > dest_tile_capacity:
-                raise ValueError(
-                    f"block_size {schema.block_size} requires {tiles} tiles "
-                    f"({tiles * tile_shape.total_num_faces()} faces) but dest can hold "
-                    f"{dest_tile_capacity} tiles ({dest_faces} faces) with "
-                    f"dest_sync={self.dest_sync.name}, dest_acc={dest_acc}"
-                )
-            return tiles
+            return (block_c // tile_c, block_r // tile_r)
 
-        # The dest bank is shared by the whole operation (math writes it, pack
-        # reads it), so every node must declare the same block_size. Divergent
-        # per-node batches are a future extension.
+        # Each node may use its own block_size; the shared dest bank spans the
+        # per-axis max. Nodes address dest tiles through their loop_spec arrays.
         all_schemas = list(self.math) + list(self.pack)
-        for schema in all_schemas:
-            node_block_tiles(schema)
-        bank_block_size = self.pack_schemas[0].block_size
-        if any(s.block_size != bank_block_size for s in all_schemas):
+        node_dims = [node_block_dims(s) for s in all_schemas]
+        bank_x = max(nx for nx, _ in node_dims)
+        bank_y = max(ny for _, ny in node_dims)
+        if bank_x * bank_y > dest_tile_capacity:
             raise ValueError(
-                "all math and pack nodes in an operation must share the same "
-                f"block_size (the shared dest bank); got "
-                f"{sorted({tuple(s.block_size) for s in all_schemas})}"
+                f"block bank needs {bank_x * bank_y} dest tiles but only "
+                f"{dest_tile_capacity} fit (dest_sync={self.dest_sync.name}, "
+                f"dest_acc={dest_acc})"
             )
+        bank_block_size = [bank_y * tile_r, bank_x * tile_c]
 
         for m in self.math:
             if isinstance(m, FpuMathSchemaBase):
@@ -789,6 +787,12 @@ class OperationSchemaBase(BaseModel):
                 math_ops.append(m.to_node(operands))
             except ValueError as e:
                 raise ValueError(f"Math node {i + 1} ({node_type})\n    {e}") from None
+
+        for schema, node in zip(
+            list(self.math) + list(self.pack), math_ops + pack_nodes
+        ):
+            node.block_tiles_x = schema.block_size[1] // tile_c
+            node.block_tiles_y = schema.block_size[0] // tile_r
 
         has_sfpu = any(isinstance(node, SfpuNode) for node in math_ops)
         has_fpu = any(isinstance(node, FpuNode) for node in math_ops)

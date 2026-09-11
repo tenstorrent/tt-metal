@@ -45,7 +45,7 @@ class DatacopyFpu(Fpu):
         face_r_dim = operation.tile_shape.face_r_dim
         num_rows_per_matrix = face_r_dim * num_faces
         en_32bit_dest = config.dest_acc.cpp_enum_value
-        num_matrices = block.block_tiles_x
+        num_matrices = block.block_cols
 
         return (
             f"// Operation {stage}: Datacopy FPU\n"
@@ -65,7 +65,7 @@ class DatacopyFpu(Fpu):
                 return ""
             return upk_to_dest_math_ack()
 
-        return f"_llk_math_eltwise_unary_datacopy_({block.tile_id_block});\n"
+        return f"_llk_math_eltwise_unary_datacopy_({block.tile_id_dest});\n"
 
     def uninit(
         self,

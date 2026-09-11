@@ -29,6 +29,9 @@ from .operand import Operand
 
 
 class FpuNode:
+    block_tiles_x = None
+    block_tiles_y = None
+
     def __init__(
         self,
         fpu: Fpu,
@@ -38,7 +41,6 @@ class FpuNode:
         transpose_faces: Transpose = Transpose.No,
         transpose_within_face: Transpose = Transpose.No,
         broadcast_type: BroadcastType = BroadcastType.None_,
-        broadcast_tile: int = None,
         data_copy_type: DataCopyType = DataCopyType.A2D,
         reuse_dest: EltwiseBinaryReuseDestType = EltwiseBinaryReuseDestType.NONE,
         math_fidelity: MathFidelity = MathFidelity.LoFi,
@@ -46,7 +48,6 @@ class FpuNode:
         clear_fp32_dst_acc: ClearFP32DstAcc = ClearFP32DstAcc.No,
         acc_to_dest: AccToDest = AccToDest.No,
         unpack_to_dest: UnpackToDest = UnpackToDest.No,
-        reduce_to_tile: bool = False,
         loop_spec=None,
     ):
         self.fpu = fpu
@@ -57,14 +58,12 @@ class FpuNode:
         self.transpose_faces = transpose_faces
         self.transpose_within_face = transpose_within_face
         self.broadcast_type = broadcast_type
-        self.broadcast_tile = broadcast_tile
         self.reuse_dest = reuse_dest
         self.math_fidelity = math_fidelity
         self.enforce_fp32_accumulation = enforce_fp32_accumulation
         self.clear_fp32_dst_acc = clear_fp32_dst_acc
         self.acc_to_dest = acc_to_dest
         self.unpack_to_dest = unpack_to_dest
-        self.reduce_to_tile = reduce_to_tile
 
         if (
             self.broadcast_type != BroadcastType.None_
@@ -98,9 +97,9 @@ class FpuNode:
     ) -> str:
         if self.unpacker is None or config.perf_run_type == PerfRunType.PACK_ISOLATE:
             return ""
-        block.tile_id_global = call.in0
+        block.tile_id_src_a = call.in0
         block.tile_id_src_b = call.in1
-        block.tile_id_block = call.dest
+        block.tile_id_dest = call.dest
         if config.perf_run_type == PerfRunType.MATH_ISOLATE:
             return self.unpacker.perf_set_valid(operation, config, self, block)
         return self.unpacker.unpack(operation, config, self, block)
@@ -134,9 +133,9 @@ class FpuNode:
     ) -> str:
         if config.perf_run_type == PerfRunType.PACK_ISOLATE:
             return ""
-        block.tile_id_global = call.in0
+        block.tile_id_src_a = call.in0
         block.tile_id_src_b = call.in1
-        block.tile_id_block = call.dest
+        block.tile_id_dest = call.dest
         if config.perf_run_type in (
             PerfRunType.UNPACK_ISOLATE,
             PerfRunType.L1_CONGESTION,

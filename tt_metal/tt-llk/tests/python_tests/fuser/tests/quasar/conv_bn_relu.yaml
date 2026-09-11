@@ -40,34 +40,48 @@ operations:
 
   - math:
       - type: "Fpu"
-        block_size: [64, 64]
+        block_size: [32, 32]
         in0: "conv_result"
         in1: "bn_scale"
         operation: "Elwmul"
         unpacker: "UnpackerAB"
         broadcast_type: "ROW"
-        broadcast_tile: 0
         math_fidelity: "HiFi2"
+        loop:
+          in0: {count: 16}
+          in1: {count: 16, step: 0}
+          dest: {count: 4}
     pack:
       - output: "scaled"
-        block_size: [64, 64]
+        block_size: [32, 32]
         packer: "Packer"
+        loop:
+          dest: {count: 4}
+          out: {count: 16}
 
   - math:
       - type: "Fpu"
-        block_size: [64, 64]
+        block_size: [32, 32]
         in0: "scaled"
         in1: "bn_shift"
         operation: "Elwadd"
         unpacker: "UnpackerAB"
         broadcast_type: "ROW"
-        broadcast_tile: 0
         math_fidelity: "LoFi"
+        loop:
+          in0: {count: 16}
+          in1: {count: 16, step: 0}
+          dest: {count: 4}
       - type: "UnarySfpu"
-        block_size: [64, 64]
+        block_size: [32, 32]
         operation: "Relu"
         iterations: 32
+        loop:
+          dest: {count: 4}
     pack:
       - output: "output"
-        block_size: [64, 64]
+        block_size: [32, 32]
         packer: "Packer"
+        loop:
+          dest: {count: 4}
+          out: {count: 16}

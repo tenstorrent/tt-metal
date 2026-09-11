@@ -56,7 +56,7 @@ class ReduceFpu(Fpu):
         reduce_dim_cpp = self.reduce_dim.cpp_enum_value
         return (
             f"_llk_math_reduce_<{pool_type_cpp}, {reduce_dim_cpp}>"
-            f"({block.tile_id_block}, {compute_unit.src_a.tile_shape.cpp_value});\n"
+            f"({block.tile_id_dest}, {compute_unit.src_a.tile_shape.cpp_value});\n"
         )
 
     def uninit(

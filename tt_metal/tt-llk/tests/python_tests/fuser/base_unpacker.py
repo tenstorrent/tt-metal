@@ -62,8 +62,9 @@ class Unpacker:
         compute_unit: "FpuNode",
         block: "BlockData",
     ) -> str:
-        """Return C++ code for one planned unpack call (L1 index in
-        block.tile_id_global, dest index in block.tile_id_block)."""
+        """Return C++ code for one planned unpack call (src_a index in
+        block.tile_id_src_a, src_b in block.tile_id_src_b, dest in
+        block.tile_id_dest)."""
         return ""
 
     def uninit(

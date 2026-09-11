@@ -227,6 +227,7 @@ class GoldenState:
         self.source_registers = SourceRegisters()
         self.output = None
         self.relu_configs = {} if relu_configs is None else relu_configs
+        self.reduced_tiles: set = set()
 
     def begin_fpu(self, inputs: Inputs) -> None:
         self.inputs = inputs

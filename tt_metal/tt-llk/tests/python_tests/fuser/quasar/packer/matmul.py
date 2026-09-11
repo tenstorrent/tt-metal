@@ -33,9 +33,12 @@ class MatmulPacker(Packer):
         config: GlobalConfig,
         block: BlockData,
     ) -> str:
-        subblock_r_dim = block.block_tiles_y
-        subblock_c_dim = block.block_tiles_x
-        num_subblocks_c_dim = block.tile_count_x // subblock_c_dim
+        subblock_r_dim = block.block_rows
+        subblock_c_dim = block.block_cols
+        tile_count_x = (
+            operation.max_output_dimensions[1] // operation.tile_shape.total_col_dim()
+        )
+        num_subblocks_c_dim = tile_count_x // subblock_c_dim
         return (
             pack_node.output.bfd_alloc_and_program(BfdResource.PACK0)
             + f"_llk_pack_matmul_init_({bfd_current(BfdResource.PACK0)}, "
@@ -49,4 +52,4 @@ class MatmulPacker(Packer):
         config: GlobalConfig,
         block: BlockData,
     ) -> str:
-        return f"_llk_pack_matmul_(0, {block.tile_id_global});\n"
+        return f"_llk_pack_matmul_({block.tile_id_dest}, {block.tile_id_out});\n"

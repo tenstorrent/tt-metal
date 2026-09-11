@@ -74,7 +74,7 @@ class EltwiseFpu(Fpu):
         op = self.operation.cpp_enum_value
 
         if compute_unit.broadcast_type != BroadcastType.None_:
-            return f"_llk_math_eltwise_binary_broadcast_({block.tile_id_block});\n"
+            return f"_llk_math_eltwise_binary_broadcast_({block.tile_id_dest});\n"
 
         tensor_shape = operation.tile_shape.cpp_value
         reuse_dest = compute_unit.reuse_dest.cpp_enum_value
@@ -82,7 +82,7 @@ class EltwiseFpu(Fpu):
 
         return (
             f"_llk_math_eltwise_binary_<ckernel::EltwiseBinaryType::{op}, {reuse_dest}>"
-            f"({block.tile_id_block}, {tensor_shape}, {clear_fp32_dst_acc});\n"
+            f"({block.tile_id_dest}, {tensor_shape}, {clear_fp32_dst_acc});\n"
         )
 
     def uninit(

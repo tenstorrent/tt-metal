@@ -14,6 +14,9 @@ from .indexing import KernelInvocation
 
 
 class SfpuNode:
+    block_tiles_x = None
+    block_tiles_y = None
+
     def __init__(self, sfpu: Sfpu, loop_spec=None):
         self.sfpu = sfpu
         self.loop_spec = loop_spec
@@ -37,9 +40,9 @@ class SfpuNode:
     ) -> str:
         if config.skip_math_init:
             return ""
-        block.tile_id_src_a = call.src0
-        block.tile_id_src_b = call.src1
-        block.tile_id_block = call.dest
+        block.dest_src0 = call.src0
+        block.dest_src1 = call.src1
+        block.tile_id_dest = call.dest
         return self.sfpu.calculate(operation, config, self, block)
 
     def sfpu_uninit(
