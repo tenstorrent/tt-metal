@@ -1892,20 +1892,36 @@ class ModelArgs:
                     compute_with_storage_grid_size=ttnn.CoreCoord(8, 10) if is_blackhole() else ttnn.CoreCoord(8, 8),
                 )
             else:
+                # Shape the mcast grid to the WORK, not to a fixed rectangle. The old
+                # (8, 10) grid gave grid_y 10 tile-row slots for a 128-token chunk that
+                # only has 4, so 48 of its 80 cores were allocated with nothing to own
+                # -- that is the grid=partial tag on this op, and with only ~32 cores
+                # issuing DRAM reads the weight stream cannot reach peak bandwidth.
+                # grid_x stays on the divisors of N_tiles so the output tiles divide
+                # evenly across the multicast row (a ragged last column is what the
+                # dram_shard_grid_width heuristic was avoiding).
+                m_tiles = max(1, math.ceil(seq_len / ttnn.TILE_SIZE))
+                n_tiles = math.ceil(self.qkv_size / self.cluster_shape[1] / ttnn.TILE_SIZE)
+                max_x, max_y = (self.max_grid_size.x, self.max_grid_size.y)
+                grid_y = max(1, min(max_y, m_tiles))
+                grid_x = max((c for c in range(1, min(max_x, n_tiles) + 1) if n_tiles % c == 0), default=1)
+                # NOTE: P100 runs OOM in L1 with a larger per_core_M (workaround for issue #50656).
+                per_core_M = 1 if self.device_name == "P100" else math.ceil(m_tiles / grid_y)
+                per_core_N = math.ceil(n_tiles / grid_x)
+                # Shape the work on the cores. in0_block_w=1 walked the 128-tile K
+                # dimension one tile at a time; take the largest K-block that divides
+                # it, and the widest output subblock the dest budget allows
+                # (out_subblock_h * out_subblock_w <= 4 with fp32_dest_acc_en).
+                k_tiles = max(1, self.dim // ttnn.TILE_SIZE)
+                in0_block_w = max(b for b in (8, 4, 2, 1) if k_tiles % b == 0)
+                out_subblock_w = max(w for w in range(1, 5) if per_core_N % w == 0)
                 return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(8, 10) if is_blackhole() else (8, 8),
-                    in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
+                    compute_with_storage_grid_size=(grid_x, grid_y),
+                    in0_block_w=in0_block_w,
                     out_subblock_h=1,  # Must be divisible by per_core_M
-                    out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                    # This branch is only reached when use_minimal_qkv_prefill_matmul() is False,
-                    # i.e. seq_len <= 128, so the former `8 if seq_len >= MAX_QKV_MM_SEQ_LEN` arm
-                    # (MAX_QKV_MM_SEQ_LEN == 2048) was unreachable and has been removed. At every
-                    # reachable seq_len the max(1, ...) floor makes this 1.
-                    # NOTE: P100 runs OOM in L1 with a larger per_core_M (workaround for issue #50656).
-                    per_core_M=1 if self.device_name == "P100" else max(1, math.ceil(seq_len / ttnn.TILE_SIZE / 8)),
-                    per_core_N=math.ceil(
-                        self.qkv_size / self.cluster_shape[1] / 32 / self.dram_shard_grid_width
-                    ),  # N / TILE_WIDTH / grid width
+                    out_subblock_w=out_subblock_w,
+                    per_core_M=per_core_M,
+                    per_core_N=per_core_N,
                     transpose_mcast=False,
                     fused_activation=None,
                     fuse_batch=seq_len <= self.MAX_QKV_MM_SEQ_LEN,
