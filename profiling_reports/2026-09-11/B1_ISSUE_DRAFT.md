@@ -4,7 +4,7 @@
 
 Dispatch and Combine account for **85.2% of the historical MoE cost gap between L18 and L23**. In isolated replays, balancing expert placement reduces Combine time by **38.36% and 25.82%**, respectively. This shows placement matters, but does not yet prove the full-model cause or a speedup. Next, capture actual PP routing and timings together.
 
-Owner: Sonnet. Draft for review with Alina; not posted.
+Owner: Sonnet. Published as [tt-metal #56304](https://github.com/tenstorrent/tt-metal/issues/56304).
 
 Reports and evidence branch: [`ssalice/mistral4-b1-investigation`](https://github.com/tenstorrent/tt-metal/tree/ssalice/mistral4-b1-investigation).
 
