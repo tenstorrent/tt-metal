@@ -214,6 +214,10 @@ def pytest_collection_modifyitems(config, items):
             (1, 8): [FC.FABRIC_2D_TORUS_X],
         },
         CT.BLACKHOLE_GALAXY: {
+            # A TT_VISIBLE_DEVICES-filtered Galaxy column retains its board type. The device
+            # count check below still requires exactly eight visible devices for this mesh;
+            # Torus-Y auto-discovery must map the selected chips into a physical ring.
+            (8, 1): [FC.FABRIC_2D_TORUS_Y],
             (32, 1): [FC.FABRIC_2D],
             (16, 2): [FC.FABRIC_2D],
             (8, 4): [FC.FABRIC_1D, FC.FABRIC_2D, FC.FABRIC_2D_TORUS_XY],
