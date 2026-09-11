@@ -46,14 +46,15 @@ static void WriteRealtimeRecordsToCsv(const tt::tt_metal::experimental::ProgramR
 
         fmt::format_to(
             out,
-            FMT_COMPILE("{},{},{},{},{},{:.6g},{:.6g},\""),
+            FMT_COMPILE("{},{},{},{},{},{:.6g},{:.6g},{},\""),
             record.runtime_id,
             record.chip_id,
             record.start_timestamp,
             record.end_timestamp,
             duration_cycles,
             duration_ns,
-            record.frequency);
+            record.frequency,
+            record.core_count);
 
         for (size_t i = 0; i < record.kernel_sources.size(); i++) {
             const std::string_view source = record.kernel_sources[i];
@@ -133,6 +134,7 @@ int main(int argc, char** argv) {
             return 1;
         }
         g_csv_file << "runtime_id,chip_id,start_timestamp,end_timestamp,duration_cycles,duration_ns,frequency_ghz,"
+                   << "core_count,"
                    << "kernel_sources\n";
 
         tt::tt_metal::experimental::ProgramRealtimeProfilerCallbackHandle callback_handle =
