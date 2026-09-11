@@ -122,7 +122,7 @@ def _fake_deepseek_generator(*, batch_size_per_row=8, sampling_dp=2):
         _apply_sampling_slot_remap = DeepseekGenerator._apply_sampling_slot_remap
         _sampling_device_seed_slots = DeepseekGenerator._sampling_device_seed_slots
         _to_local_sampling_params = DeepseekGenerator._to_local_sampling_params
-        _normalize_sampling_params_for_batch = DeepseekGenerator._normalize_sampling_params_for_batch
+        _normalize_sampling_params_for_batch = staticmethod(DeepseekGenerator._normalize_sampling_params_for_batch)
 
         def __init__(self):
             self.batch_size_per_row = batch_size_per_row
