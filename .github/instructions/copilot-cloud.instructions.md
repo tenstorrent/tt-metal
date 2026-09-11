@@ -73,12 +73,6 @@ you pass go straight through to `build_metal.sh`:
 `--enable-ccache` is always applied for you. Build the narrowest thing that
 actually exercises your change; do not reach for `--build-all`.
 
-If the wrapper warns that Garage credentials are missing, remote-cache
-acceleration is unavailable; the session's local cache can still be used.
-Missing credentials or a cold cache alone are not reasons to skip a required
-build. Run the narrowest appropriate build and monitor its progress against
-the remaining session time. If it cannot finish, report the command, progress,
-and actual limitation in the PR.
 
 ## What to do about a build
 
