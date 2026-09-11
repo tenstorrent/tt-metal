@@ -46,6 +46,8 @@ def test_std_var_hw_large_constant(device, ttnn_op, correction, value):
 @pytest.mark.parametrize(
     "shape,dim",
     [
+        ((1, 1, 32, 32), (-2, -1)),
+        ((16, 1, 64, 64), (-2, -1)),
         ((2, 1, 65, 128), (-2, -1)),
         ((2, 3, 33, 128), (1, 2, 3)),
         ((1, 1, 32, 10528), (-2, -1)),
@@ -60,6 +62,8 @@ def test_std_var_hw_large_constant(device, ttnn_op, correction, value):
         ((1, 32, 736, 96), (-2, -1)),
     ],
     ids=[
+        "single_tile",
+        "two_columns_multiple_outputs",
         "partial_height",
         "batch_merge",
         "uneven_tree",
@@ -175,7 +179,7 @@ def test_std_w_streaming_output_padding_is_finite(device):
     ],
     ids=["bf16", "fp32", "bfp8"],
 )
-@pytest.mark.parametrize("width", [96, 128], ids=["scalar_combine", "compact_combine"])
+@pytest.mark.parametrize("width", [96, 128], ids=["three_tiles", "four_tiles"])
 @pytest.mark.parametrize("height", [32, 64, 160], ids=["one_tile", "retained_pair", "streaming"])
 def test_std_var_hw_output_padding_is_zero(device, torch_dtype, ttnn_dtype, ttnn_op, width, height):
     torch.manual_seed(0)
