@@ -45,6 +45,7 @@
 #include "jit_build/depend.hpp"
 #include "jit_build_settings.hpp"
 #include "jit_build_utils.hpp"
+#include "pch.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "profiler_paths.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
@@ -665,6 +666,36 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
         cflags += " -save-temps=obj -fdump-tree-all -fdump-rtl-all";
     }
 
+    // Force-include the shared standard-library PCH. Added here rather than in
+    // export_target_recipe because the path is local to this machine's cache, and that recipe
+    // also travels to the JIT compile server (see program.cpp), where it would not resolve.
+    //
+    // The umbrella is keyed on the state's own includes, not the recipe's, because the recipe
+    // adds per-kernel -I paths that would otherwise give every kernel its own PCH. It is
+    // likewise keyed on recipe.cflags rather than cflags: build-map's dump flags are
+    // diagnostics that do not affect PCH validity, and building the umbrella under -save-temps
+    // would scatter dumps through the cache.
+    const std::string pch = tt::jit_build::ensure_pch(
+        env_.gpp_,
+        recipe.compiler_opt_level,
+        recipe.cflags,
+        this->includes_,
+        env_.root_,
+        fmt::format("{}{}/pch/", env_.out_root_, env_.build_key_));
+
+    // A copy rather than recipe.defines itself, because that vector is also what the watcher
+    // records as the kernel's compile-time defines below, and the PCH is not one of those.
+    std::vector<std::string> defines = recipe.defines;
+    if (!pch.empty()) {
+        // At the front: GCC ignores a PCH unless it is the first thing the translation unit
+        // reads, so it has to precede the named-compile-arg map header.
+        defines.insert(defines.begin(), {"-include", pch});
+        // Should GCC ever decline the PCH, say because a stale cache outlived an in-place
+        // compiler upgrade, say so instead of quietly parsing everything from source. Only the
+        // -Werror promotion is suppressed, so the warning still shows up.
+        cflags += " -Winvalid-pch -Wno-error=invalid-pch";
+    }
+
     const std::string obj_path = out_dir + this->objs_[src_index];
     const std::string obj_temp_path = out_dir + this->temp_objs_[src_index];
     const std::string temp_d_path = fs::path(obj_temp_path).replace_extension("d").string();
@@ -674,7 +705,7 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
         recipe.compiler_opt_level,
         cflags,
         recipe.includes,
-        recipe.defines,
+        defines,
         this->srcs_[src_index],
         tt::jit_build::utils::GppAction::Compile,
         obj_temp_path,
