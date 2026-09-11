@@ -80,6 +80,8 @@ elif [ "${CONFIG}" = sc2 ]; then
   NUM_USERS_DEFAULT=1
 fi
 
+# Investigation hook: pin the measured length so sc1 and sc2 cover the SAME 11 x 5120 chunks.
+MAX_SEQ_LEN="${PREFILL_MAX_SEQ_LEN_OVERRIDE:-${MAX_SEQ_LEN}}"
 REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))
 
 SC1_CHUNKS=$((SC1_MAX_SEQ_LEN / CHUNK_SIZE))
