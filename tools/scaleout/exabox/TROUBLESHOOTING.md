@@ -222,7 +222,7 @@ But `ip link show ens5f0np0` shows `state UP` (and `ip addr` shows a valid IP).
 **Cause**: The error message is misleading. The interface check in `utils/mpi_if_selection.sh` does **not** test whether the link is up — it runs a real MPI probe against the **first host** in `--hosts` and checks the exit code:
 
 ```bash
-timeout 3 mpirun --host "$FIRST_HOST" \
+timeout 30 mpirun --host "$FIRST_HOST" \
     --mca oob_tcp_if_include "$interface" \
     --mca btl_tcp_if_include "$interface" \
     -np 1 hostname &>/dev/null
