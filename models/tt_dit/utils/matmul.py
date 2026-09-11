@@ -867,6 +867,15 @@ fused_mmrs_configs = {
         # LTX ff2 @stage_2 (M = 38912/sp8), swept 2026-08-24 (windowed): 973.0 us vs ~1088 us for
         # the previous DRAM-era M7/K5/N6 blocking.
         (4864, 4096, 4096): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 4, 6, 2, 2, None, 1, 5),  # 973.0 us
+        # LTX ff2 at the trace-bucket rungs whose per-device M puts the v2.3 rules on the wide-N
+        # branch (pc_m >= 24 -> N_block 16). That branch budgets the CBs alone (~1376 KB) and the
+        # windowed L1 output handoff then clashes with them ("Statically allocated circular buffers
+        # ... clash with L1 buffers"), so these reuse the swept stage_2 blocking, which fits with
+        # 6+ M blocks per core. Unswept: sweep to tune.
+        **{
+            (m, 4096, 4096): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 4, 6, 2, 2, None, 1, 5)
+            for m in (11872, 16640, 23296, 32640)  # rungs 94976, 133120, 186368, 261120 / SP 8
+        },
         # Aang ff2 (same K/N family as Wan). Windowed beats the best DRAM blocking on both:
         # a2v 601.9 us vs 746.99 us DRAM-swept @ M6/K4/N8 (-19%); SR 2084.2 us vs 2191.75 us
         # DRAM-swept @ M6/K4/N7 (-5%).

@@ -36,6 +36,10 @@ from .ltx_mesh_params import (
     LTX_DISTILLED_AUDIO_MESH_PARAMS_DL,
     LTX_DISTILLED_I2V_MESH_PARAMS_DL,
     LTX_DISTILLED_MESH_PARAMS_DL,
+    _4x8sp1tp0nl2_ring_is_fsdp0,
+    _override_base_device_params,
+    _ring_trace,
+    _with_dynamic_load,
 )
 
 
@@ -737,3 +741,155 @@ def test_audio_decode_girl(mesh_device, sp_axis, tp_axis, num_links, dynamic_loa
     )
     assert torch.isfinite(wav).all(), "decoded waveform has non-finite samples"
     assert abs(dur - num_frames / 24.0) < 0.2, f"duration {dur:.2f}s != ~{num_frames/24.0:.2f}s"
+
+
+# Trace-bucket ladder: 4x8 BH ring, traced, no dynamic load (_ring_trace's region is sized for
+# every rung's resident trace).
+LTX_DISTILLED_BUCKET_MESH_PARAMS_DL = [
+    _with_dynamic_load(_override_base_device_params(_4x8sp1tp0nl2_ring_is_fsdp0, _ring_trace), False),
+]
+
+# (canvas, fps, duration) requests served from the same warmed pipeline. Three configs spanning
+# three distinct rung pairs; LTX_BUCKET_TEST_CONFIGS overrides (comma-separated canvas:fps:duration).
+_BUCKET_TEST_CONFIGS_DEFAULT = "720p-landscape:24:6,1080p-landscape:25:8,720p-landscape:50:20"
+
+
+@pytest.mark.skipif(
+    not _ltx_checkpoint_cached("ltx-2.3-22b-distilled-1.1.safetensors"),
+    reason="needs the LTX checkpoint (set LTX_CHECKPOINT to a local .safetensors)",
+)
+@pytest.mark.parametrize(
+    "mesh_device, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp, dynamic_load",
+    LTX_DISTILLED_BUCKET_MESH_PARAMS_DL,
+    indirect=["mesh_device", "device_params"],
+)
+# Warms every rung the served configs reach (compile pass + capture each) and then renders three
+# clips, one of them 1001 frames at 720p through the eager upsampler/VAE.
+@pytest.mark.timeout(7200)
+def test_pipeline_distilled_bucket_multi_rung(
+    mesh_device, sp_axis, tp_axis, num_links, dynamic_load, topology, is_fsdp, tmp_path, monkeypatch
+):
+    """One traced pipeline, several (canvas, fps, duration) requests, few traces.
+
+    Warms every rung the served configs route to (one denoise trace per rung, preallocated before
+    any capture), then generates each config back to back. Asserts the routing landed on the
+    expected rungs, that no new trace I/O was allocated under live traces, and that every request
+    produced an MP4 with the requested frame count and duration.
+    """
+    from models.tt_dit.utils.ltx import LTX_CANVASES, ltx_aligned_num_frames, route_ltx_config
+
+    skip_if_unsupported_num_links(mesh_device, num_links)
+
+    configs = [
+        (c, int(f), int(d))
+        for c, f, d in (
+            e.split(":") for e in os.environ.get("LTX_BUCKET_TEST_CONFIGS", _BUCKET_TEST_CONFIGS_DEFAULT).split(",")
+        )
+    ]
+    monkeypatch.setenv("LTX_SERVED_CONFIGS", ",".join(f"{c}:{f}:{d}" for c, f, d in configs))
+    hot_canvas, hot_fps, hot_duration = configs[0]
+    hot_h, hot_w = LTX_CANVASES[hot_canvas]
+    hot_frames = ltx_aligned_num_frames(hot_fps, hot_duration)
+
+    ckpt = default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")
+    parent_mesh = mesh_device
+    mesh_shape = tuple(parent_mesh.shape)
+    mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+
+    t0 = time.time()
+    pipeline = LTXDistilledPipeline.create_pipeline(
+        mesh_device=mesh_device,
+        checkpoint_name=ckpt,
+        gemma_path=default_ltx_gemma(),
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        num_links=num_links,
+        dynamic_load=dynamic_load,
+        topology=topology,
+        is_fsdp=is_fsdp,
+        run_warmup=True,
+        traced=True,
+        num_frames=hot_frames,
+        height=hot_h,
+        width=hot_w,
+    )
+    logger.info(f"pipeline + warmup: {time.time() - t0:.1f}s")
+
+    # Every served config's rungs are warm and hold preallocated I/O; the hot shape's exact
+    # SP-padded lengths were added as rungs of their own (exact_hot_rungs).
+    expected_rungs = set()
+    for c, f, d in configs:
+        route = route_ltx_config(c, f, d, ladder=pipeline.bucket_ladder)
+        expected_rungs.update(route.stage_rung.values())
+    assert pipeline._warm_rungs == frozenset(expected_rungs), (pipeline._warm_rungs, expected_rungs)
+    assert set(pipeline._trace_state) == expected_rungs
+    logger.info(f"{len(configs)} configs -> {len(expected_rungs)} rungs {sorted(expected_rungs)}")
+    baked_addrs = {
+        rung: (state.tt_video_lat.buffer_address(), state.tt_video_logical_n.buffer_address())
+        for rung, state in pipeline._trace_state.items()
+    }
+
+    if int(ttnn.distributed_context_get_rank()) != 0:
+        return
+
+    ffprobe = shutil.which("ffprobe")
+    for idx, (canvas, fps, duration) in enumerate(configs):
+        height, width = LTX_CANVASES[canvas]
+        num_frames = ltx_aligned_num_frames(fps, duration)
+        out = tmp_path / f"bucket_{canvas}_{fps}fps_{duration}s.mp4"
+        t0 = time.time()
+        pipeline.generate(
+            STEADY_STATE_LTX_PROMPT if idx else DEFAULT_LTX_PROMPT,
+            output_path=str(out),
+            num_frames=num_frames,
+            height=height,
+            width=width,
+            fps=fps,
+            seed=10 + idx,
+        )
+        logger.info(f"generate {canvas} {num_frames}f@{fps}fps: {time.time() - t0:.1f}s -> {out}")
+        print_ltx_timing_table(
+            pipeline,
+            label=f"LTX DISTILLED BUCKET [{canvas} {fps}fps {duration}s]",
+            num_frames=num_frames,
+            height=height,
+            width=width,
+            mesh_shape=mesh_shape,
+            sp_axis=sp_axis,
+            tp_axis=tp_axis,
+            topology=topology,
+            output_path=str(out),
+            prompt=DEFAULT_LTX_PROMPT,
+        )
+        assert out.exists() and out.stat().st_size > 0, f"no output for {canvas} {fps}fps {duration}s"
+        if ffprobe:
+            probe = (
+                subprocess.run(
+                    [
+                        ffprobe,
+                        "-v",
+                        "error",
+                        "-select_streams",
+                        "v:0",
+                        "-count_frames",
+                        "-show_entries",
+                        "stream=nb_read_frames,width,height",
+                        "-of",
+                        "csv=p=0",
+                        str(out),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                .stdout.strip()
+                .split(",")
+            )
+            probed_w, probed_h, probed_frames = int(probe[0]), int(probe[1]), int(probe[2])
+            assert (probed_h, probed_w) == (height, width), probe
+            assert probed_frames == num_frames, f"{probed_frames} frames written, requested {num_frames}"
+
+    # No rung's trace I/O moved: every request refreshed the preallocated buffers in place.
+    for rung, state in pipeline._trace_state.items():
+        assert (state.tt_video_lat.buffer_address(), state.tt_video_logical_n.buffer_address()) == baked_addrs[rung]
+    assert pipeline._warm_rungs == frozenset(expected_rungs)

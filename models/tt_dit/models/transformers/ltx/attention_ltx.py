@@ -16,6 +16,7 @@ from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
+from ....utils.ltx import LTX_AUDIO_N_BUCKET, LTX_BUCKET_LADDER, LTX_BUCKET_SP_FACTOR
 from ....utils.matmul import get_fabric_agmm_config, get_matmul_config
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
@@ -50,20 +51,32 @@ class LTXAttention(Module):
     }
     default_sdpa_chunk_size = (256, 256)
 
-    # Per-stage ring-SDPA chunk, keyed by (is_blackhole, sp, tp, N); N is the SP-padded
-    # sequence length passed to the op. Misses fall back to sdpa_chunk_size_map.
+    # Per-stage ring-SDPA chunk, keyed by (is_blackhole, sp, tp, N); N is the physical (SP-padded
+    # or bucket-rung) global sequence length the kernels see. Misses fall back to sdpa_chunk_size_map.
+    # The two legacy keys are the exact 1080p@145f stage shapes; the ladder rungs inherit the nearest
+    # swept value (small rungs the stage-1 chunk, large rungs the stage-2 chunk) pending a per-rung sweep.
     ring_sdpa_chunk_by_n = {
         (True, 8, 4, 9728): (96, 256),
         (True, 8, 4, 38912): (192, 512),
+        **{(True, 8, 4, rung): (96, 256) for rung in LTX_BUCKET_LADDER if rung <= 12288},
+        **{(True, 8, 4, rung): (192, 512) for rung in LTX_BUCKET_LADDER if rung >= 34560},
     }
 
     # Per-shape cross-attn SDPA chunk, keyed by (is_blackhole, q_seq, kv_seq); seqs are
     # the per-device Q shard and full K. Misses fall back to sdpa_program_config.
+    # Rung entries: q_seq = rung / SP; kv 32 is the text prompt, kv LTX_AUDIO_N_BUCKET the audio.
     sdpa_chunk_by_shape = {
         (True, 1216, 32): (128, 128),  # video text cross-attn, stage 1
         (True, 4864, 32): (192, 128),  # video text cross-attn, stage 2
         (True, 1216, 256): (128, 128),  # audio->video cross-attn, stage 1
         (True, 4864, 256): (192, 256),  # audio->video cross-attn, stage 2
+        **{
+            (True, rung // LTX_BUCKET_SP_FACTOR, 32): (128 if rung <= 12288 else 192, 128) for rung in LTX_BUCKET_LADDER
+        },
+        **{
+            (True, rung // LTX_BUCKET_SP_FACTOR, LTX_AUDIO_N_BUCKET): (128 if rung <= 12288 else 192, 256)
+            for rung in LTX_BUCKET_LADDER
+        },
     }
 
     def __init__(
@@ -595,9 +608,15 @@ class LTXAttention(Module):
         skip_qk: bool = False,
         kv_replicated: bool = False,
         kv_logical_n: int | None = None,
+        logical_n_tensor: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """Same interface as WanAttention.forward(); pass k_rope_cos/sin for separate K RoPE
-        in A2V/V2A cross-attention."""
+        in A2V/V2A cross-attention.
+
+        ``logical_n_tensor``: one-element uint32 device tensor holding the real (unpadded) video
+        length. When given, ``N`` / ``kv_logical_n`` are the physical (bucket-padded) lengths and ring
+        SDPA reads the live length on-device every dispatch, so one captured trace replays across
+        every request that pads to the same bucket."""
         if rope_cos is not None:
             assert rope_sin is not None
             assert trans_mat is not None, "INTERLEAVED RoPE requires trans_mat (load-time Q/K permute assumes it)"
@@ -736,6 +755,9 @@ class LTXAttention(Module):
             spatial_BHNE = v_BHNE
         elif prompt_1BLP is None:
             if sp_factor > 1 and attn_mask is None:
+                # Program config keys on the physical (padded) global N: under bucketing that is the
+                # rung, which is what the kernel shapes see; the live logical length only masks.
+                physical_global_n = q_BHNE.shape[2] * sp_factor
                 spatial_BHNE, _prompt_BHLE, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                     q_BHNE,
                     k_BHNE,
@@ -752,8 +774,8 @@ class LTXAttention(Module):
                         v_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=v_BHNE.get_dtype()
                     ),
                     joint_strategy="rear",
-                    logical_n=N,
-                    program_config=self._ring_pc_by_n.get(N, self.ring_sdpa_program_config),
+                    logical_n=logical_n_tensor if logical_n_tensor is not None else N,
+                    program_config=self._ring_pc_by_n.get(physical_global_n, self.ring_sdpa_program_config),
                     compute_kernel_config=self.sdpa_compute_kernel_config,
                     dim=2,
                     multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
@@ -809,7 +831,7 @@ class LTXAttention(Module):
                     v_BHNE.shape, 2, sp_mesh_axis, dtype=v_BHNE.get_dtype()
                 ),
                 joint_strategy="rear",
-                logical_n=kv_logical_n,
+                logical_n=logical_n_tensor if logical_n_tensor is not None else kv_logical_n,
                 is_cross=True,
                 program_config=self.cross_ring_sdpa_program_config,
                 compute_kernel_config=self.sdpa_compute_kernel_config,

@@ -77,15 +77,20 @@ class TransformerState:
 
 
 class LTXTransformerState:
-    """Per-stage (s1/s2) persistent trace I/O.
+    """Persistent trace I/O for one denoise trace (one bucket rung, or one stage when unbucketed).
 
-    Static per-shape inputs (rope/cross-PE/masks/trans_mat) are bound once; the latent buffers and
-    timestep are refreshed each step — in place when traced (a ttnn trace bakes their addresses),
-    rebound otherwise. ``__getattr__`` returns the underlying tensor: update via
-    ``state._tt_x.update(...)``, read via ``state.tt_x``.
+    Static per-config inputs (rope/cross-PE/masks/trans_mat) are refreshed in place whenever the
+    request config bound to the rung changes (``bound_config``); the latent buffers, timestep and
+    the live ``video_logical_n`` are refreshed each step/request — in place when traced (a ttnn
+    trace bakes their addresses), rebound otherwise. ``__getattr__`` returns the underlying tensor:
+    update via ``state._tt_x.update(...)``, read via ``state.tt_x``.
     """
 
     def __init__(self) -> None:
+        # The (shape, fps) tuple whose statics currently live in the buffers; None until first fill.
+        self.bound_config: tuple | None = None
+        # One-element uint32 device tensor: the real video token count ring SDPA masks to on replay.
+        self._tt_video_logical_n = StateTensor()
         self._tt_video_lat = StateTensor()
         self._tt_audio_lat = StateTensor()
         self._tt_timestep = StateTensor()
@@ -113,7 +118,7 @@ class LTXTransformerState:
         self._tt_video_padding_mask = StateTensor()
 
     def __getattr__(self, name: str) -> ttnn.Tensor | None:
-        return object.__getattribute__(self, f"_{name}")._value
+        return object.__getattribute__(self, f"_{name}").value
 
 
 # =============================================================================
@@ -246,7 +251,8 @@ class LTXPipeline:
             tensor_parallel=ParallelFactor(factor=self.mesh_device.shape[1], mesh_axis=1),
         )
         self._traced = traced
-        self._trace_state: dict[str, LTXTransformerState] = {}
+        # Keyed by bucket rung (int) for the bucketed distilled pipeline, by stage name otherwise.
+        self._trace_state: dict[int | str, LTXTransformerState] = {}
         self._prompt_v = StateTensor()
         self._prompt_a = StateTensor()
         if ccl_manager.topology == ttnn.Topology.Linear:

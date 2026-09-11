@@ -3,9 +3,12 @@
 
 import math
 import os
+from dataclasses import dataclass
 from io import BytesIO
 
 import torch
+
+from .patchifiers import AudioLatentShape, VideoPixelShape
 
 # I2V conditioning-image H.264 CRF: round-trip through the codec the VAE/DiT were trained on
 # before encoding (a pristine image gives OOD latents). Mirrors ltx_pipelines DEFAULT_IMAGE_CRF.
@@ -57,6 +60,237 @@ def latent_grid(num_frames: int, height: int, width: int) -> tuple[int, int, int
     """Map pixel dims to the LTX latent token grid ``(latent_frames, latent_h, latent_w)``."""
     latent_frames = (num_frames - 1) // TEMPORAL_COMPRESSION + 1
     return latent_frames, height // SPATIAL_COMPRESSION, width // SPATIAL_COMPRESSION
+
+
+# =============================================================================
+# Trace bucket ladder (sequence-length bucketing for trace reuse)
+# =============================================================================
+#
+# A ttnn trace bakes every activation shape, so without bucketing each (canvas, fps, duration)
+# would need its own captured denoise trace per stage. Instead the video token sequence is
+# zero-padded up to the smallest ladder rung that fits and the real length is handed to ring
+# SDPA as a one-element device tensor (``logical_n``), read on every replay. One capture per rung
+# then serves every config that lands on it. The pad tail costs memory everywhere and compute in
+# the row-independent matmuls (QKV/out/FFN/AdaLN), but ring SDPA masks and skips it, so attention
+# -- the only O(N^2) piece -- pays nothing for the padding.
+#
+# The ladder is shared by both distilled stages: s1 and s2 run the same ``inner_step``, so a trace
+# is keyed purely by its padded (video_N, audio_N) shapes, not by which stage is replaying it.
+
+# SP=8 on the 4x8 Galaxy: every rung must divide by ttnn.TILE_SIZE * sp_factor so the SP shard is
+# tile-aligned. Kept numeric here so this module stays importable without ttnn.
+LTX_BUCKET_SP_FACTOR = 8
+LTX_BUCKET_ALIGN = 32 * LTX_BUCKET_SP_FACTOR
+
+LTX_FPS_VALUES = (24, 25, 48, 50)
+LTX_DURATION_VALUES = (6, 8, 10, 12, 14, 16, 18, 20)
+LTX_CANVASES = {
+    "720p-landscape": (704, 1280),
+    "720p-portrait": (1280, 704),
+    "1080p-landscape": (1088, 1920),
+    "1080p-portrait": (1920, 1088),
+    "1440p-landscape": (1440, 2560),
+    "1440p-portrait": (2560, 1440),
+    "4k-landscape": (2176, 3840),
+    "4k-portrait": (3840, 2176),
+}
+# The canvases a single Galaxy commits to serving from resident traces. 1440p/4k stay in the table
+# (their token counts are still computable) but are rejected by ``route_ltx_request``.
+LTX_SERVED_CANVASES = ("720p-landscape", "720p-portrait", "1080p-landscape", "1080p-portrait")
+
+# ~1.4x geometric spacing, 256-aligned. Stage-2 real N over the served grid spans 16,720 (720p 24fps
+# 6s) to 257,040 (1080p 50fps 20s); stage-1 is ~1/4 of that (4,180 to 64,260). Eleven rungs cover
+# all 64 served configs at ~19% mean pad waste. Drop rungs from the top to shrink the envelope;
+# never insert a rung that is not a multiple of LTX_BUCKET_ALIGN.
+LTX_BUCKET_LADDER = (8704, 12288, 17408, 24576, 34560, 48384, 67840, 94976, 133120, 186368, 261120)
+
+# Audio real N over the served grid spans 151..505 latent frames; one bucket covers all of them.
+LTX_AUDIO_N_BUCKET = 512
+
+
+def validate_bucket_ladder(ladder: tuple[int, ...], align: int = LTX_BUCKET_ALIGN) -> None:
+    """A ladder must be non-empty, strictly increasing, and every rung a positive multiple of ``align``."""
+    if not ladder:
+        raise ValueError("bucket ladder must not be empty")
+    if align <= 0:
+        raise ValueError(f"bucket alignment must be positive, got {align}")
+    previous = 0
+    for rung in ladder:
+        if rung <= previous:
+            raise ValueError(f"bucket ladder must be strictly increasing, got {ladder}")
+        if rung % align != 0:
+            raise ValueError(f"bucket rung {rung} is not a multiple of {align}")
+        previous = rung
+
+
+def select_bucket(n: int, ladder: tuple[int, ...] = LTX_BUCKET_LADDER) -> int:
+    """Return the smallest rung that holds ``n`` tokens (inclusive); raise above the top rung."""
+    if n < 1:
+        raise ValueError(f"logical N must be positive, got {n}")
+    for rung in ladder:
+        if n <= rung:
+            return rung
+    raise ValueError(f"logical N={n} exceeds the top bucket rung {ladder[-1]}")
+
+
+def ltx_aligned_num_frames(fps: int, duration_seconds: int) -> int:
+    """First VAE-compatible frame count (8k+1) covering ``duration_seconds`` at ``fps``."""
+    target_frames = fps * duration_seconds
+    return math.ceil((target_frames - 1) / TEMPORAL_COMPRESSION) * TEMPORAL_COMPRESSION + 1
+
+
+def ltx_canvas_name(height: int, width: int) -> str | None:
+    """Name of the canvas with exactly this ``(height, width)``, or None."""
+    return next((name for name, hw in LTX_CANVASES.items() if hw == (height, width)), None)
+
+
+def ltx_stage_video_n_real(num_frames: int, height: int, width: int) -> dict[str, int]:
+    """Real (unpadded) video token count per distilled stage: s1 denoises at half resolution."""
+    lf, lh, lw = latent_grid(num_frames, height, width)
+    _, s1_lh, s1_lw = latent_grid(num_frames, height // 2, width // 2)
+    return {"s1": lf * s1_lh * s1_lw, "s2": lf * lh * lw}
+
+
+def ltx_audio_n_real(num_frames: int, fps: int, height: int, width: int) -> int:
+    return AudioLatentShape.from_video_pixel_shape(
+        VideoPixelShape(batch=1, frames=num_frames, height=height, width=width, fps=fps)
+    ).frames
+
+
+def ltx_served_configs(
+    canvases: tuple[str, ...] = LTX_SERVED_CANVASES,
+    fps_values: tuple[int, ...] = LTX_FPS_VALUES,
+    durations: tuple[int, ...] = LTX_DURATION_VALUES,
+) -> tuple[tuple[str, int, int], ...]:
+    """The ``(canvas, fps, duration_seconds)`` product grid a deployment serves."""
+    for canvas in canvases:
+        if canvas not in LTX_CANVASES:
+            raise ValueError(f"unknown LTX canvas {canvas!r}; known: {tuple(LTX_CANVASES)}")
+    return tuple((canvas, fps, duration) for canvas in canvases for fps in fps_values for duration in durations)
+
+
+@dataclass(frozen=True)
+class LTXBucketRoute:
+    """Where one request lands on the ladder: per-stage real lengths and the rung each stage replays."""
+
+    canvas: str
+    fps: int
+    num_frames: int
+    latent_frames: int
+    stage_video_n_real: dict[str, int]
+    stage_rung: dict[str, int]
+    audio_n_real: int
+    audio_n: int
+
+    def trace_key(self, stage: str) -> int:
+        if stage not in self.stage_rung:
+            raise ValueError(f"unknown LTX stage {stage!r}; expected one of {tuple(self.stage_rung)}")
+        return self.stage_rung[stage]
+
+    def video_n(self, stage: str) -> int:
+        return self.trace_key(stage)
+
+    def video_n_real(self, stage: str) -> int:
+        if stage not in self.stage_video_n_real:
+            raise ValueError(f"unknown LTX stage {stage!r}; expected one of {tuple(self.stage_video_n_real)}")
+        return self.stage_video_n_real[stage]
+
+    @property
+    def rungs(self) -> tuple[int, ...]:
+        return tuple(sorted(set(self.stage_rung.values())))
+
+
+def route_ltx_request(
+    *,
+    num_frames: int,
+    height: int,
+    width: int,
+    fps: int,
+    sp_factor: int,
+    mode: str = "av",
+    image_conditioned: bool = False,
+    ladder: tuple[int, ...] = LTX_BUCKET_LADDER,
+    served_canvases: tuple[str, ...] | None = LTX_SERVED_CANVASES,
+    audio_n_bucket: int = LTX_AUDIO_N_BUCKET,
+) -> LTXBucketRoute:
+    """Route an exact T2V AV request onto the trace ladder.
+
+    Rejects (instead of silently aliasing a trace) anything outside the served envelope: a canvas
+    not in ``served_canvases``, a frame count that is not ``8k+1``, I2V (separate trace class:
+    per-token timestep modulation), non-AV mode, and a mesh whose SP factor does not match the
+    ladder alignment. ``served_canvases=None`` accepts any 64-aligned ``(height, width)`` (the
+    canvas is then named ``"{height}x{width}"``); the ladder bound still applies.
+    """
+    if sp_factor != LTX_BUCKET_SP_FACTOR:
+        raise ValueError(f"LTX trace buckets are laid out for SP={LTX_BUCKET_SP_FACTOR}, got SP={sp_factor}")
+    if mode != "av":
+        raise ValueError(f"LTX trace buckets support AV mode only, got mode={mode!r}")
+    if image_conditioned:
+        raise ValueError("LTX trace buckets support T2V only; I2V requires a separate trace class")
+    validate_bucket_ladder(ladder, 32 * sp_factor)
+
+    canvas = ltx_canvas_name(height, width)
+    if served_canvases is None:
+        if height % 64 != 0 or width % 64 != 0:
+            raise ValueError(f"height/width must be multiples of 64, got {(height, width)}")
+        canvas = canvas or f"{height}x{width}"
+    elif canvas is None or canvas not in served_canvases:
+        served = {name: LTX_CANVASES[name] for name in served_canvases}
+        raise ValueError(f"canvas {(height, width)} is not served from resident traces; served: {served}")
+    if num_frames < 1 or (num_frames - 1) % TEMPORAL_COMPRESSION != 0:
+        raise ValueError(f"num_frames must be 8k+1 for the LTX VAE, got {num_frames}")
+    if fps not in LTX_FPS_VALUES:
+        raise ValueError(f"fps {fps} is not served; supported: {LTX_FPS_VALUES}")
+
+    latent_frames = (num_frames - 1) // TEMPORAL_COMPRESSION + 1
+    stage_n_real = ltx_stage_video_n_real(num_frames, height, width)
+    stage_rung = {stage: select_bucket(n_real, ladder) for stage, n_real in stage_n_real.items()}
+    audio_n_real = ltx_audio_n_real(num_frames, fps, height, width)
+    if audio_n_real > audio_n_bucket:
+        raise ValueError(f"audio N={audio_n_real} exceeds the audio bucket {audio_n_bucket}")
+
+    return LTXBucketRoute(
+        canvas=canvas,
+        fps=fps,
+        num_frames=num_frames,
+        latent_frames=latent_frames,
+        stage_video_n_real=stage_n_real,
+        stage_rung=stage_rung,
+        audio_n_real=audio_n_real,
+        audio_n=audio_n_bucket,
+    )
+
+
+def route_ltx_config(
+    canvas: str, fps: int, duration_seconds: int, *, sp_factor: int = LTX_BUCKET_SP_FACTOR, **kwargs
+) -> LTXBucketRoute:
+    """``route_ltx_request`` for a ``(canvas, fps, duration)`` grid entry."""
+    height, width = LTX_CANVASES[canvas]
+    return route_ltx_request(
+        num_frames=ltx_aligned_num_frames(fps, duration_seconds),
+        height=height,
+        width=width,
+        fps=fps,
+        sp_factor=sp_factor,
+        **kwargs,
+    )
+
+
+def rungs_for_configs(
+    configs: tuple[tuple[str, int, int], ...],
+    *,
+    sp_factor: int = LTX_BUCKET_SP_FACTOR,
+    ladder: tuple[int, ...] = LTX_BUCKET_LADDER,
+    served_canvases: tuple[str, ...] = LTX_SERVED_CANVASES,
+) -> tuple[int, ...]:
+    """The sorted set of rungs (== denoise traces) needed to serve ``configs`` on this ladder."""
+    rungs: set[int] = set()
+    for canvas, fps, duration in configs:
+        route = route_ltx_config(
+            canvas, fps, duration, sp_factor=sp_factor, ladder=ladder, served_canvases=served_canvases
+        )
+        rungs.update(route.stage_rung.values())
+    return tuple(sorted(rungs))
 
 
 def pad_hw_replicate(x_BCFHW: torch.Tensor, h_mult: int, w_mult: int) -> tuple[torch.Tensor, int, int]:

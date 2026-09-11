@@ -112,14 +112,15 @@ LTX_TWO_STAGES_MESH_PARAMS_DL = LTX_ONE_STAGE_MESH_PARAMS_DL
 #     tests.
 #   worker_l1_size: the WH 4x8 ring config's RingAttention otherwise hits a kernel code-size error;
 #     the larger worker L1 gives its command stream room.
-#   trace_region_size: under LTX_TRACED=1 both stage traces' command streams (stage-1 + the
-#     larger-sequence stage-2) live here; measured need is ~236 MB at 1080p (get_trace_buffers_size),
-#     so 500 MB leaves headroom.
+#   trace_region_size: the traced pipeline keeps one denoise trace per bucket rung resident
+#     (~108 MB each on the 4x8: 5 rungs measured 543 MB via get_trace_buffers_size). The traced
+#     default warms the whole served grid -- 11 ladder rungs + the hot shape's 2 exact rungs --
+#     so 1.6 GB covers that with headroom; a single-shape run (LTX_SERVED_CONFIGS=hot) needs ~240 MB.
 _line_l1small = {**_line, "l1_small_size": 32768}
 _ring_worker_l1 = {"worker_l1_size": 1344544, **_ring}
-_line_trace = {**_line, "trace_region_size": 500_000_000, "l1_small_size": 32768}
+_line_trace = {**_line, "trace_region_size": 1_600_000_000, "l1_small_size": 32768}
 # fabric_router_config (8 KB payload): the strided all-gather packs up to 4 bf16 tiles per fabric packet
-_ring_trace = {**ring_params_8k_req_exact_devices, "trace_region_size": 500_000_000, "l1_small_size": 32768}
+_ring_trace = {**ring_params_8k_req_exact_devices, "trace_region_size": 1_600_000_000, "l1_small_size": 32768}
 
 LTX_DISTILLED_MESH_PARAMS_DL = [
     _with_dynamic_load(_2x2sp0tp1nl2_line_is_fsdp1, False),

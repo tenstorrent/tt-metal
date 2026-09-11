@@ -368,6 +368,7 @@ class LTXTransformerBlock(Module):
         audio_padding_mask: ttnn.Tensor | None = None,
         audio_padding_mask_full: ttnn.Tensor | None = None,
         video_padding_mask: ttnn.Tensor | None = None,
+        video_logical_n_tensor: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
         # Video modulation; `_p1` chunks carry +1 baked into the scale slot (see _prepare_torch_state).
         shifted_v = self.scale_shift_table.data + video_temb
@@ -389,6 +390,7 @@ class LTXTransformerBlock(Module):
             addcmul_residual=video_1BND,
             addcmul_gate=v_gate_sa,
             skip_qk=skip_self_attn,
+            logical_n_tensor=video_logical_n_tensor,
         )
 
         # Video text cross-attention
@@ -523,6 +525,7 @@ class LTXTransformerBlock(Module):
                 k_rope_cos=video_cross_pe_cos,
                 k_rope_sin=video_cross_pe_sin,
                 kv_logical_n=video_N,
+                logical_n_tensor=video_logical_n_tensor,
                 trans_mat=trans_mat,
                 addcmul_residual=audio_1BND,
                 addcmul_gate=a_ca_gate,
@@ -786,6 +789,7 @@ class LTXTransformerModel(Module):
         audio_padding_mask: ttnn.Tensor | None = None,
         audio_padding_mask_full: ttnn.Tensor | None = None,
         video_padding_mask: ttnn.Tensor | None = None,
+        video_logical_n_tensor: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
         """Host entry: upload torch latents/timestep, then run the device-only inner_step."""
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
@@ -834,6 +838,7 @@ class LTXTransformerModel(Module):
             audio_padding_mask=audio_padding_mask,
             audio_padding_mask_full=audio_padding_mask_full,
             video_padding_mask=video_padding_mask,
+            video_logical_n_tensor=video_logical_n_tensor,
         )
 
     @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False, prep_run=False)
@@ -867,6 +872,7 @@ class LTXTransformerModel(Module):
         audio_padding_mask: ttnn.Tensor | None = None,
         audio_padding_mask_full: ttnn.Tensor | None = None,
         video_padding_mask: ttnn.Tensor | None = None,
+        video_logical_n_tensor: ttnn.Tensor | None = None,
         gather_output: bool = True,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
         """Device-only, trace-capturable denoising step. All tensor args are ttnn (no torch).
@@ -1017,6 +1023,7 @@ class LTXTransformerModel(Module):
                 audio_padding_mask=audio_padding_mask,
                 audio_padding_mask_full=audio_padding_mask_full,
                 video_padding_mask=video_padding_mask,
+                video_logical_n_tensor=video_logical_n_tensor,
             )
             if self.has_audio:
                 video_1BND, audio_1BND = result

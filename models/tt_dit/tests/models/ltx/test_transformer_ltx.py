@@ -901,6 +901,245 @@ def test_ltx_transformer_block(
         logger.info(f"PASSED block (no PCC): video {tuple(tt_v_torch.shape)}")
 
 
+# Real latent grids padded up to a trace-bucket rung (not just the SP boundary), with the real
+# length delivered through the on-device logical_n tensor the bucketed pipeline uses.
+#   (F, H_lat, W_lat, rung): 720p 6s stage 1 (4180 -> 8704), 1080p 6s stage 1 (9690 -> 12288),
+#   and a grid just under a rung (8664 -> 8704, ~0.5% pad) so the tail is a partial tile.
+_LTX_BUCKET_SHAPE_PARAMS = [
+    pytest.param(19, 11, 20, 8704, id="720p_s1_to_8704"),
+    pytest.param(19, 17, 30, 12288, id="1080p_s1_to_12288"),
+    pytest.param(19, 19, 24, 8704, id="near_full_8704"),
+]
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    [_4x8sp1tp0nl2_ring_is_fsdp0],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(("F", "H", "W", "rung"), _LTX_BUCKET_SHAPE_PARAMS)
+@pytest.mark.parametrize("has_audio", _LTX_TRANSFORMER_MODALITY_PARAMS)
+def test_ltx_transformer_block_bucket(
+    mesh_device: ttnn.MeshDevice,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    topology: ttnn.Topology,
+    is_fsdp: bool,
+    F: int,
+    H: int,
+    W: int,
+    rung: int,
+    has_audio: bool,
+    reset_seeds,
+) -> None:
+    """LTXTransformerBlock with the video sequence padded to a bucket rung and the real length read
+    on-device from a ``logical_n`` tensor (the trace-bucket contract).
+
+    Video mode: PCC against the diffusers LTX-2 block on the real tokens, and closeness against
+    the same TT block run at the plain SP-padded length with the scalar ``logical_n`` — padding to
+    the rung must change nothing but the pad tail. AV mode: the audio side sits at the audio bucket
+    (512) and V2A cross-attention gets the same tensor length; compared against the SP-padded TT
+    run only (no AV reference with cross-PE plumbing)."""
+    skip_if_unsupported_num_links(mesh_device, num_links)
+    from models.tt_dit.utils.ltx import LTX_AUDIO_N_BUCKET, LTX_BUCKET_ALIGN, LTX_BUCKET_LADDER
+
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
+    assert rung in LTX_BUCKET_LADDER and rung % LTX_BUCKET_ALIGN == 0
+    video_N_real = F * H * W
+    video_N_sp = _sp_pad_len(video_N_real, sp_factor)
+    assert video_N_sp <= rung, f"grid {video_N_real} does not fit rung {rung}"
+    # Audio at the bucket length with a production-like real count (6s @ 24fps -> 151 latent frames).
+    audio_N = LTX_AUDIO_N_BUCKET
+    audio_N_real = AudioLatentShape.from_video_pixel_shape(
+        VideoPixelShape(batch=1, frames=(F - 1) * 8 + 1, height=H * 32, width=W * 32, fps=24)
+    ).frames
+    assert audio_N_real <= audio_N
+
+    do_pcc = not has_audio
+    torch_block = None
+    if do_pcc:
+        torch_block = _make_diffusers_video_block()
+        torch_block.eval()
+        _scale_init_(torch_block)
+
+    ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
+    parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
+    tt_block = _make_tt_block(
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        is_fsdp=is_fsdp,
+        has_audio=has_audio,
+    )
+    if do_pcc:
+        conv = _convert_diffusers_video_block_to_tt(torch_block.state_dict(), num_heads=NUM_HEADS, head_dim=HEAD_DIM)
+        tt_block.load_torch_state_dict({k: v.detach().clone() for k, v in conv.items()})
+    else:
+        sd = _load_22b_state_dict(num_layers=1, checkpoint_path=_resolve_checkpoint_22b("fast"))
+        if sd is None:
+            pytest.skip("22B checkpoint not found")
+        block_sd = {
+            k[len("transformer_blocks.0.") :]: v for k, v in sd.items() if k.startswith("transformer_blocks.0.")
+        }
+        tt_block.load_torch_state_dict(block_sd, strict=False)
+
+    torch.manual_seed(INPUT_SEED)
+    x = torch.randn(1, video_N_real, DIM, dtype=torch.float32)
+    context = torch.randn(1, PROMPT_LEN, CTX_DIM, dtype=torch.float32)
+    temb = torch.randn(1, 1, 9 * DIM, dtype=torch.float32)
+    prompt_temb = torch.randn(1, 1, 2 * DIM, dtype=torch.float32)
+    # Audio inputs drawn once so both runs see identical data.
+    a_x = torch.zeros(1, audio_N, AUDIO_DIM, dtype=torch.float32)
+    a_x[:, :audio_N_real, :] = torch.randn(1, audio_N_real, AUDIO_DIM, dtype=torch.float32)
+    a_ctx = torch.randn(1, PROMPT_LEN, AUDIO_CTX_DIM, dtype=torch.float32)
+    a_temb = torch.randn(1, 1, 9 * AUDIO_DIM, dtype=torch.float32)
+    a_prompt_temb = torch.randn(1, 1, 2 * AUDIO_DIM, dtype=torch.float32)
+    av_ca_v = torch.randn(1, 1, 5 * DIM, dtype=torch.float32)
+    av_ca_a = torch.randn(1, 1, 5 * AUDIO_DIM, dtype=torch.float32)
+
+    torch_out = None
+    if do_pcc:
+        cos_int, sin_int = _video_rope_freqs(F, H, W, rope_type=LTXRopeType.INTERLEAVED)
+        torch_out = _diffusers_video_block_ref(
+            torch_block, x=x, context=context, temb=temb, prompt_temb=prompt_temb, cos_i=cos_int, sin_i=sin_int
+        )
+
+    tt_prompt = bf16_tensor(context.unsqueeze(0), device=mesh_device)
+    tt_temb = bf16_tensor(
+        temb.reshape(9, DIM).unsqueeze(1).unsqueeze(1), device=mesh_device, mesh_axis=tp_axis, shard_dim=3
+    )
+    tt_prompt_temb = bf16_tensor(prompt_temb.reshape(2, DIM).unsqueeze(1).unsqueeze(1), device=mesh_device)
+    tt_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
+    concat_dims = [None, None]
+    concat_dims[sp_axis] = 2
+    concat_dims[tp_axis] = 3
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=concat_dims, mesh_shape=tuple(mesh_device.shape))
+
+    def logical_n_tensor(n: int) -> ttnn.Tensor:
+        # Exactly what the pipeline writes into its per-rung StateTensor.
+        return ttnn.from_torch(
+            torch.tensor([n], dtype=torch.int64).reshape(1, 1, 1, 1),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+    def run(video_N: int, *, tensor_length: bool):
+        """One block forward at physical length video_N; the real length as a tensor or a scalar."""
+        spatial = _pad_seq_dim(x, video_N, dim=1).unsqueeze(0)
+        kwargs = dict(
+            video_1BND=bf16_tensor_2dshard(spatial, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3}),
+            video_prompt=tt_prompt,
+            video_temb=tt_temb,
+            video_N=video_N if tensor_length else video_N_real,
+            video_logical_n_tensor=logical_n_tensor(video_N_real) if tensor_length else None,
+            trans_mat=tt_trans_mat,
+            video_prompt_temb=tt_prompt_temb,
+        )
+        kwargs["video_rope_cos"], kwargs["video_rope_sin"] = _tt_rope(
+            _video_rope_freqs, F, H, W, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis, pad_to=video_N
+        )
+        if has_audio:
+            a_cos, a_sin = _tt_rope(
+                _audio_rope_freqs, audio_N, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis
+            )
+            vx_cos, vx_sin = _tt_rope(
+                _video_cross_pe_freqs,
+                F,
+                H,
+                W,
+                mesh_device=mesh_device,
+                sp_axis=sp_axis,
+                tp_axis=tp_axis,
+                pad_to=video_N,
+            )
+            ax_cos, ax_sin = _tt_rope(
+                _audio_cross_pe_freqs, audio_N, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis
+            )
+            ax_cos_full, ax_sin_full = _tt_rope_full(
+                _audio_cross_pe_freqs, audio_N, mesh_device=mesh_device, tp_axis=tp_axis
+            )
+            a_attn_mask, a_pad_sp, a_pad_full = build_audio_masks(
+                audio_N, audio_N_real, mesh_device=mesh_device, sp_axis=sp_axis
+            )
+            kwargs.update(
+                audio_1BND=bf16_tensor_2dshard(
+                    a_x.unsqueeze(0), device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3}
+                ),
+                audio_prompt=bf16_tensor(a_ctx.unsqueeze(0), device=mesh_device),
+                audio_temb=bf16_tensor(
+                    a_temb.reshape(9, AUDIO_DIM).unsqueeze(1).unsqueeze(1),
+                    device=mesh_device,
+                    mesh_axis=tp_axis,
+                    shard_dim=3,
+                ),
+                audio_prompt_temb=bf16_tensor(
+                    a_prompt_temb.reshape(2, AUDIO_DIM).unsqueeze(1).unsqueeze(1), device=mesh_device
+                ),
+                av_ca_temb=bf16_tensor(
+                    av_ca_v.reshape(5, DIM).unsqueeze(1).unsqueeze(1),
+                    device=mesh_device,
+                    mesh_axis=tp_axis,
+                    shard_dim=3,
+                ),
+                av_ca_audio_temb=bf16_tensor(
+                    av_ca_a.reshape(5, AUDIO_DIM).unsqueeze(1).unsqueeze(1),
+                    device=mesh_device,
+                    mesh_axis=tp_axis,
+                    shard_dim=3,
+                ),
+                audio_N=audio_N,
+                audio_rope_cos=a_cos,
+                audio_rope_sin=a_sin,
+                video_cross_pe_cos=vx_cos,
+                video_cross_pe_sin=vx_sin,
+                audio_cross_pe_cos=ax_cos,
+                audio_cross_pe_sin=ax_sin,
+                audio_cross_pe_cos_full=ax_cos_full,
+                audio_cross_pe_sin_full=ax_sin_full,
+                audio_attn_mask=a_attn_mask,
+                audio_padding_mask=a_pad_sp,
+                audio_padding_mask_full=a_pad_full,
+                video_padding_mask=build_video_pad_mask(
+                    video_N, video_N_real, mesh_device=mesh_device, sp_axis=sp_axis
+                ),
+            )
+        out = tt_block(**kwargs)
+        ttnn.synchronize_device(mesh_device)
+        tt_v, tt_a = out if has_audio else (out, None)
+        v = ttnn.to_torch(tt_v, mesh_composer=composer).squeeze(0)[:, :video_N_real, :]
+        a = None if tt_a is None else ttnn.to_torch(tt_a, mesh_composer=composer).squeeze(0)[:, :audio_N_real, :]
+        return v, a
+
+    # Reference TT run: SP-padded only, scalar logical_n (the pre-bucketing contract).
+    ref_v, ref_a = run(video_N_sp, tensor_length=False)
+    # Bucketed run: padded to the rung, real length via the device tensor.
+    got_v, got_a = run(rung, tensor_length=True)
+
+    assert got_v.shape == (1, video_N_real, DIM) and torch.isfinite(got_v).all()
+    # Same math on the real tokens: the rung pad tail must only add masked-out rows. bf16 accumulation
+    # order can shift with the padded shapes (matmul blocking), so compare tight-but-not-bitwise.
+    assert_quality(ref_v, got_v, pcc=0.999, relative_rmse=0.03)
+    if has_audio:
+        assert got_a.shape == (1, audio_N_real, AUDIO_DIM) and torch.isfinite(got_a).all()
+        # Gross-breakage bound only. The audio branch of this block is not run-to-run deterministic on the
+        # 4x8 even with identical scalar arguments (measured scalar-vs-scalar: PCC ~0.998, RMSE/σ ~5.7%,
+        # also with skip_cross_attn=True, so it is the audio self-attn/FFN path, not the V2A ring cross);
+        # the video branch is bit-exact scalar-vs-tensor at the same physical shape. A tighter bound here
+        # would measure that pre-existing noise, not the bucketing contract.
+        assert_quality(ref_a, got_a, pcc=0.98, relative_rmse=0.10)
+    if do_pcc:
+        pcc = 0.988 if mesh_device.get_num_devices() > 8 else 0.999
+        rmse = 0.10 if mesh_device.get_num_devices() > 8 else 0.032
+        assert_quality(torch_out, got_v, pcc=pcc, relative_rmse=rmse)
+    logger.info(
+        f"PASSED bucket block: real N={video_N_real} sp-pad={video_N_sp} rung={rung} "
+        f"({100.0 * (rung - video_N_real) / rung:.1f}% pad), audio {audio_N_real}/{audio_N}"
+    )
+
+
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     [_4x8sp1tp0nl2_ring_is_fsdp0],
