@@ -10,7 +10,6 @@
 #include <iterator>
 #include <mutex>
 #include <string>
-#include <string_view>
 #include <system_error>
 #include <unordered_map>
 #include <vector>
@@ -28,14 +27,6 @@ namespace tt::jit_build {
 
 namespace fs = std::filesystem;
 
-namespace {
-
-// Source of the umbrella, relative to the tt-metal root. Installed alongside the other
-// jit_build inputs, see tt_metal/hw/firmware/CMakeLists.txt.
-constexpr std::string_view UMBRELLA_REL_PATH = "tt_metal/hw/firmware/src/pch.h";
-
-}  // namespace
-
 std::string ensure_pch(
     const std::string& gpp,
     const std::string& opt_level,
@@ -43,7 +34,7 @@ std::string ensure_pch(
     const std::string& includes,
     const std::string& root,
     const std::string& pch_root) {
-    const fs::path umbrella = fs::path(root) / UMBRELLA_REL_PATH;
+    const fs::path umbrella = fs::path(root) / PCH_UMBRELLA;
 
     // The umbrella's own text is part of the key, so editing it produces a new artifact
     // instead of silently reusing the one built from the previous contents. Re-reading a
@@ -58,23 +49,25 @@ std::string ensure_pch(
     hasher.update(includes);
     hasher.update(umbrella_text);
     const std::string key = fmt::format("{:016x}", hasher.digest());
+    const fs::path dir = fs::absolute(fs::path(pch_root) / key);
 
-    // Built at most once per key per process. The map also caches failure (an empty string),
+    // A server handles multiple build keys and cache roots in one process; keep their
+    // staged paths separate even when the compiler flags and umbrella text match.
+    // Built at most once per directory per process. The map also caches failure (an empty string),
     // so a flag set whose PCH cannot be built is not retried on every compile.
     static std::mutex mutex;
     static std::unordered_map<std::string, std::string> staged;
     std::lock_guard lock(mutex);
-    if (auto it = staged.find(key); it != staged.end()) {
+    if (auto it = staged.find(dir.string()); it != staged.end()) {
         return it->second;
     }
-    std::string& result = staged[key];
+    std::string& result = staged[dir.string()];
 
     if (umbrella_text.empty()) {
         log_warning(tt::LogBuildKernels, "Skipping the shared PCH: cannot read {}.", umbrella.string());
         return result;
     }
 
-    const fs::path dir = fs::path(pch_root) / key;
     const fs::path header = dir / umbrella.filename();
     const fs::path gch = header.string() + ".gch";
 

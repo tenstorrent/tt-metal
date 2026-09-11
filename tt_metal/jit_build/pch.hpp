@@ -5,8 +5,12 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 
 namespace tt::jit_build {
+
+// Relative to the tt-metal root; installed alongside the other JIT inputs.
+inline constexpr std::string_view PCH_UMBRELLA = "tt_metal/hw/firmware/src/pch.h";
 
 // Build, once per process and per compiler flag set, the precompiled header shared by every
 // JIT target (hw/firmware/src/pch.h) and return the path of the staged copy to force-include
