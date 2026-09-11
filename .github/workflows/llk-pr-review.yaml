@@ -48,7 +48,7 @@ jobs:
     runs-on: tt-ubuntu-2204-small-stable
     timeout-minutes: 150         # measured full reviews can exceed 85 minutes
     permissions:
-      contents: write            # read the checkout
+      contents: read             # read the checkout
       pull-requests: write       # post inline review comments
       issues: write              # post acknowledgement / summary
       id-token: write            # OIDC, if the key path requires it
