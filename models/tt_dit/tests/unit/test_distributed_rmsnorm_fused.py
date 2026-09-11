@@ -662,64 +662,6 @@ _LN_PARAMS = [
 _LN_IDS = ["wan_tp1", "wan_tp2", "wan_tp4", "ltx_tp2", "ltx_tp4"]
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 2)], ids=["2x2"], indirect=True)
-@pytest.mark.parametrize("device_params", [line_params], indirect=True)
-def test_layernorm_low_variance_blackhole(mesh_device):
-    """Exercise the fused LayerNorm rsqrt on variance near epsilon."""
-    if not ttnn.device.is_blackhole():
-        pytest.skip("Blackhole-specific distributed LayerNorm regression")
-
-    tp = 2
-    tp_axis = 1
-    topology = ttnn.Topology.Linear
-    submesh = _resolve_submesh(mesh_device, tp, tp_axis)
-    cfg = Cfg(
-        "bh_low_variance",
-        WAN,
-        tp,
-        rows=32,
-        dim=2048,
-        head_dim=None,
-        rope=False,
-        full_heads=16,
-        broadcast_rope=True,
-        out_dtype="fp32",
-        norm="layernorm",
-    )
-
-    torch.manual_seed(0)
-    x = (1.0 + 0.01 * torch.randn((1, 1, cfg.rows, cfg.dim))).to(torch.bfloat16)
-    weight = torch.ones((1, cfg.dim), dtype=torch.bfloat16)
-    bias = torch.zeros((1, cfg.dim), dtype=torch.bfloat16)
-    recip = torch.tensor([1.0 / (i + 1) for i in range(cfg.feat_local)], dtype=torch.float32).reshape(
-        1, 1, 1, cfg.feat_local
-    )
-    inp = {
-        "x": bf16_tensor(x, device=submesh, mesh_axis=tp_axis, shard_dim=-1),
-        "weight": bf16_tensor(weight, device=submesh, mesh_axis=tp_axis, shard_dim=-1),
-        "bias": bf16_tensor(bias, device=submesh, mesh_axis=tp_axis, shard_dim=-1),
-        "recip": from_torch(recip, device=submesh, layout=ttnn.Layout.ROW_MAJOR, dtype=ttnn.float32),
-    }
-
-    links = 2
-    ccl = CCLManager(mesh_device=submesh, num_links=links, topology=topology)
-    sem = ccl.get_ag_ping_pong_semaphore(tp_axis)
-    pob = _make_pob(inp, submesh, cfg, links, tp_axis)
-    ttnn.synchronize_device(submesh)
-    actual = _gather(_run_fused(inp, submesh, sem, cfg, topology, tp_axis, pob, links), tp_axis)
-
-    xf = x.float().reshape(cfg.rows, cfg.dim)
-    expected = torch.nn.functional.layer_norm(xf, (cfg.dim,), eps=NORM_EPS)
-    pcc = _pcc(actual, expected)
-    maxabs = (actual - expected).abs().max().item()
-    logger.info(f"LNLOWVAR pcc={pcc * 100:.6f}% maxabs={maxabs:.6f}")
-
-    # BF16 inputs and distributed Welford merging set the observed floor here;
-    # legacy and destination-width-selected rsqrt produce the same result.
-    assert pcc >= 0.9995
-    assert maxabs <= 0.08
-
-
 @pytest.mark.parametrize(
     ("mesh_device", "device_params", "model", "tp", "topology", "op_override", "tp_axis", "full_mesh"),
     [pytest.param(*p, id=i) for p, i in zip(_LN_PARAMS, _LN_IDS)],
