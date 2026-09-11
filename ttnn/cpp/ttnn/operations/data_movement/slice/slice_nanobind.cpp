@@ -165,18 +165,10 @@ void bind_slice_descriptor(nb::module_& mod) {
             nb::arg("operation_attributes"),
             nb::arg("tensor_args"));
 
-    nb::class_<ttnn::prim::SliceTileProgramFactory>(mod, "SliceTileProgramFactory")
-        .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::SliceParams& operation_attributes,
-               const ttnn::prim::SliceInputs& tensor_args,
-               Tensor& tensor_return_value) {
-                return ttnn::prim::SliceTileProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"));
+    // The factory type stays exposed, but it no longer has a `create_descriptor`: it builds a
+    // ProgramSpec now, and there is no Python-side consumer for one. Callers that drove the
+    // descriptor directly have to move to the spec API once it is exposed.
+    nb::class_<ttnn::prim::SliceTileProgramFactory>(mod, "SliceTileProgramFactory");
 }
 
 }  // namespace ttnn::operations::data_movement::detail

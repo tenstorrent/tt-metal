@@ -6,11 +6,11 @@
  * TTNN Slice Operation - Multi-Core Writer Kernel (4D Support)
  *
  * This kernel handles the output data writing phase of the slice operation for multi-core
- * execution, writing sliced tensor data from circular buffer to output tensor memory.
+ * execution, writing sliced tensor data from dataflow buffer to output tensor memory.
  * Supports 1D, 2D, 3D, and 4D tensors with work distribution across cores.
  *
  * Key Responsibilities:
- * - Read sliced data from circular buffer (produced by reader kernel)
+ * - Read sliced data from dataflow buffer (produced by reader kernel)
  * - Write assigned portion of output data to DRAM using TensorAccessor
  * - Handle different tensor dimensions with proper address calculations
  * - Support different data types with proper element size handling
@@ -25,7 +25,7 @@
  * Memory Management:
  * - DRAM alignment: 32-byte boundaries for memory controller optimization
  * - L1 alignment: 16-byte boundaries for L1 cache efficiency
- * - Circular buffer: Double buffering synchronized with reader kernel
+ * - Dataflow buffer: Double buffering synchronized with reader kernel
  *
  * Data Type Support:
  * - Element size determined at compile time for performance
@@ -46,37 +46,34 @@
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     // Runtime arguments for 4D slice support with multi-core work distribution
-    uint32_t rt_args_idx = 0;
-    uint32_t dst_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t tensor_rank = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t output_w = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t output_h = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t output_d = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t output_n = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t element_size = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t num_rows_for_this_core = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t start_row_for_this_core = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t tensor_rank = get_arg(args::tensor_rank);
+    uint32_t output_w = get_arg(args::output_w);
+    uint32_t output_h = get_arg(args::output_h);
+    uint32_t output_d = get_arg(args::output_d);
+    uint32_t output_n = get_arg(args::output_n);
+    uint32_t element_size = get_arg(args::element_size);
+    uint32_t num_rows_for_this_core = get_arg(args::num_rows_for_this_core);
+    uint32_t start_row_for_this_core = get_arg(args::start_row_for_this_core);
 
     // Compile-time arguments
-    constexpr uint32_t dfb_id_in = get_compile_time_arg_val(0);
-    constexpr uint32_t compile_time_element_size = get_compile_time_arg_val(1);
-    constexpr auto dst_args = TensorAccessorArgs<2>();
+    constexpr auto compile_time_element_size = get_arg(args::compile_time_element_size);
 
     // Calculate sizes - working with rows, not tiles
     uint32_t output_bytes_per_row = output_w * element_size;  // Dynamic element size
 
     // Set up TensorAccessor for output data - use row size as page size
-    const auto s0 = TensorAccessor(dst_args, dst_addr);
+    const auto s0 = TensorAccessor(tensor::dst);
 
     Noc noc;
     // Create DataflowBuffer for Device 2.0 API
-    DataflowBuffer dfb_in(dfb_id_in);
+    DataflowBuffer dfb_in(dfb::in);
 
     // Multi-core work distribution: this core writes rows starting from start_row_for_this_core
-    // Write each row from circular buffer to output tensor at the correct logical position
+    // Write each row from dataflow buffer to output tensor at the correct logical position
     for (uint32_t local_row = 0; local_row < num_rows_for_this_core; ++local_row) {
         dfb_in.wait_front(1);
         uint32_t l1_read_addr = dfb_in.get_read_ptr();
