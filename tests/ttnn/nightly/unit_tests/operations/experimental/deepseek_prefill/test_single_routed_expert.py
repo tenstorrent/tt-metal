@@ -184,6 +184,8 @@ def run_single_routed_expert(
                 )
                 for name, frac, floor in tails:
                     assert frac >= floor, f"{name} coverage {frac:.1%} below {floor:.1%}"
+            else:
+                raise ValueError(f"min_cap_frac given for {activation}, which defines no cap to measure")
     logger.debug(f"Torch output shape: {torch_output_active.shape}")
 
     # Create TTNN input: 2D (allocated_tokens, emb_dim), replicated across the 1-device mesh.
