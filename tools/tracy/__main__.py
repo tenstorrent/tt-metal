@@ -284,9 +284,11 @@ def main():
             options.perf_counter_groups, options.perf_counter_multipass, can_replay=not options.noCapture
         )
 
-    if not (
-        options.no_runtime_analysis or options.do_sum or options.profile_dispatch_cores or options.perf_counter_groups
-    ):
+    # NOTE: perf_counter_groups is NOT a conflicting option anymore. The C++ fast post-process now
+    # emits the HW perf-counter columns itself (see impl/profiler/perf_counter_metrics.cpp), so a
+    # counter capture stays on the cpp path instead of falling back to the legacy Python parse of the
+    # full per-core device log (which OOMs at mesh scale).
+    if not (options.no_runtime_analysis or options.do_sum or options.profile_dispatch_cores):
         os.environ["TT_METAL_PROFILER_CPP_POST_PROCESS"] = "1"
     else:
         reasons = []
@@ -296,8 +298,6 @@ def main():
             reasons.append("--enable-sum-profiling")
         if options.profile_dispatch_cores:
             reasons.append("--profile-dispatch-cores")
-        if options.perf_counter_groups:
-            reasons.append("--profiler-capture-perf-counters")
 
         reason_str = ", ".join(reasons)
         logger.warning(
