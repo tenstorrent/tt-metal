@@ -155,6 +155,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/experimental/sdpa_sub_custom.h
     inc/api/compute/experimental/sdpa_weighted_reduce.h
     inc/api/compute/experimental/semaphore.h
+    inc/api/compute/experimental/semaphore_compute_impl.h
     inc/api/compute/experimental/sinkhorn.h
     inc/api/compute/experimental/softmax_k.h
     inc/api/compute/experimental/sum_reduce_scalar.h
@@ -206,6 +207,7 @@ set(HW_JIT_API_HEADERS
     inc/experimental/kernel_args.h
     inc/experimental/blaze_named_args.h
     inc/api/dataflow/noc_semaphore.h
+    inc/api/dataflow/semaphore_dm_impl.h
     inc/api/dataflow/semaphore_binding_token.h
     inc/api/core_local_mem.h
     inc/api/tensor/noc_traits.h

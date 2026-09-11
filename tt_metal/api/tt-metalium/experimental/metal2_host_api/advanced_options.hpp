@@ -233,6 +233,17 @@ struct SemaphoreAdvancedOptions {
     //       When cross-node DFB becomes available, non-zero initial values will be removed.
     [[deprecated("Non-zero semaphore initialization is deprecated and will be removed.")]]
     uint32_t initial_value = 0;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // Capacity (compute semaphores only)
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // For a semaphore bound by a Blackhole compute kernel: the capacity in credits, i.e. the depth of
+    // the L1 ring the semaphore guards. The producer's Semaphore::wait_not_full() blocks while the
+    // value is at this capacity, so the producer can never run more than max_value slots ahead of the
+    // consumer. Range 1..15 (the Tensix hardware semaphore is 4 bits). 0 = default capacity 15.
+    // Rejected unless the semaphore is bound only by compute kernels.
+    uint32_t max_value = 0;
 };
 
 }  // namespace tt::tt_metal::experimental
