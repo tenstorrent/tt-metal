@@ -4,12 +4,11 @@
 
 """Tests for the run-attempt log archive unpacker.
 
-The helper is standard-library-only by design, so these run without the rest of the
-data-collection dependency set.
+Standard-library-only, so these run without the data-collection dependency set.
 
-The cases that matter are the ones where a wrong answer is silent: an entry attributed to
-the wrong job produces a plausible, non-empty <job_id>.log, which the caller's "is the
-file missing?" fallback check cannot detect. Those are covered explicitly.
+The cases that matter are the silent ones: an entry attributed to the wrong job writes a
+plausible, non-empty <job_id>.log that the caller's "is the file missing?" fallback cannot
+detect.
 """
 
 import io
@@ -40,8 +39,7 @@ def test_maps_entries_to_job_ids_on_the_exact_archive_name():
 
 
 def test_slash_in_a_job_name_is_a_underscore_in_the_archive():
-    # "<caller job> / <called job>" is the shape every reusable-workflow job takes, and
-    # the "/" is the one character GitHub rewrites.
+    # The shape every reusable-workflow job takes; "/" is the one character GitHub rewrites.
     archive = _archive({"7_ttnn-merge-gate-tests _ fetch-ttsim (libttsim_bh.so).txt": "body"})
     jobs = _jobs((22, "ttnn-merge-gate-tests / fetch-ttsim (libttsim_bh.so)"))
     assert extractor.resolve_entries(archive, jobs) == {
@@ -50,8 +48,7 @@ def test_slash_in_a_job_name_is_a_underscore_in_the_archive():
 
 
 def test_emoji_and_punctuation_survive_byte_for_byte():
-    # `unzip -l` renders these as "?", but the central directory holds them verbatim, so
-    # the exact-name tier must match without any normalization.
+    # `unzip -l` renders these as "?", but the archive holds them verbatim.
     name = "build-sweeps _ build (Ubuntu 22.04, Release) _ 🛠️ Build Release"
     archive = _archive({f"50_{name}.txt": "body"})
     assert extractor.resolve_entries(archive, _jobs((33, name))) == {f"50_{name}.txt": 33}
@@ -63,14 +60,12 @@ def test_normalized_form_is_a_second_tier_when_the_exact_name_does_not_match():
 
 
 def test_two_jobs_sharing_a_name_are_left_unmapped():
-    # Rather than handing the entry to whichever job the API happened to list first.
     archive = _archive({"0_matrix leg.txt": "body"})
     assert extractor.resolve_entries(archive, _jobs((1, "matrix leg"), (2, "matrix leg"))) == {}
 
 
 def test_distinct_names_colliding_only_under_normalization_are_left_unmapped():
-    # "a/b" -> "a_b" and "a-b" both normalize to "ab". The exact tier still resolves
-    # "a_b", but "a-b" is ambiguous at the normalized tier and must not be guessed.
+    # "a/b" -> "a_b" and "a-b" both normalize to "ab", so the exact tier must resolve them.
     archive = _archive({"0_a_b.txt": "first", "1_a-b.txt": "second"})
     resolved = extractor.resolve_entries(archive, _jobs((1, "a/b"), (2, "a-b")))
     assert resolved == {"0_a_b.txt": 1, "1_a-b.txt": 2}
@@ -127,8 +122,7 @@ def test_ambiguous_job_gets_no_file_so_the_caller_falls_back(tmp_path):
 
 
 def test_an_existing_log_is_not_overwritten_by_an_older_attempt(tmp_path):
-    # The caller walks attempts newest-first, so a job re-run in attempt 3 must keep
-    # attempt 3's log when attempt 1's archive is opened afterwards.
+    # The walk is newest-first, so attempt 1's archive must not clobber attempt 3's log.
     archive_path = tmp_path / "older.zip"
     with zipfile.ZipFile(archive_path, "w") as archive:
         archive.writestr("0_flaky job.txt", "stale log from the first attempt")
@@ -143,8 +137,7 @@ def test_an_existing_log_is_not_overwritten_by_an_older_attempt(tmp_path):
 
 
 def test_an_empty_log_is_replaced_rather_than_kept(tmp_path):
-    # A zero-byte file is what a failed earlier write leaves behind; it carries no data,
-    # so an older attempt's real log is better than keeping it.
+    # A zero-byte file is a failed write; an older attempt's real log beats keeping it.
     archive_path = tmp_path / "older.zip"
     with zipfile.ZipFile(archive_path, "w") as archive:
         archive.writestr("0_job.txt", "real content")
@@ -159,9 +152,7 @@ def test_an_empty_log_is_replaced_rather_than_kept(tmp_path):
 
 
 def test_archive_that_adds_nothing_new_still_succeeds(tmp_path):
-    # Every attempt after the one that supplied a job's log resolves it again and writes
-    # nothing. That must not read as "archive unusable", or the walk would treat a normal
-    # step as a failure.
+    # Resolving without writing is normal mid-walk and must not read as "archive unusable".
     archive_path = tmp_path / "logs.zip"
     with zipfile.ZipFile(archive_path, "w") as archive:
         archive.writestr("0_job.txt", "body")

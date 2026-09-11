@@ -4,37 +4,30 @@
 
 """Unpack a GitHub run-attempt log archive into the <job_id>.log layout this pipeline expects.
 
-GitHub serves every job log for a run attempt as one zip:
+GitHub serves a run attempt's job logs as one zip:
 
     GET /repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/logs
 
-which replaces the one-request-per-job loop download_cicd_logs_and_artifacts.sh used to
-run. That loop made this pipeline's API cost scale with the size of the run being
-analyzed -- 129 requests for a 129-job merge-gate run, against the repository's shared
-15,000/hr GITHUB_TOKEN budget, ~173 times an hour.
+which replaces calling /actions/jobs/{job_id}/logs once per job.
 
-Everything downstream reads <job_id>.log, so archive entries have to be mapped back onto
-job ids. Entry names are the job name with "/" rewritten to "_" and nothing else changed
--- measured exact on 85/85 entries of run 34360282367 -- so that substitution is the
-primary match. Emoji and characters like "[", "]", "(" and "," survive byte-for-byte in
-the central directory; the "?" that `unzip -l` shows for them is its own display
-rendering, not archive content.
+Entries must be matched to jobs by NAME, not id: GitHub mints a fresh set of job ids for
+every attempt, so the ids in attempt n's jobs list do not appear in attempt n-1's. Entry
+names are the job name with "/" rewritten to "_" and nothing else changed, so that
+substitution is the primary match. Emoji and characters like "[", "]" and "," survive
+byte-for-byte; the "?" that `unzip -l` shows is its own display rendering.
 
-A normalized comparison (lowercased, everything but [a-z0-9] dropped) runs as a second
-tier in case GitHub ever changes the substitution. It is deliberately not the primary
-match: it maps distinct job names onto the same key ("a/b" and "a-b" both become "ab"),
-and a wrong match here is worse than a missing one, because it files a job's failure
-signature and runner telemetry under a different job.
+A normalized comparison (lowercased, everything but [a-z0-9] dropped) is a second tier in
+case that substitution ever changes. It is not the primary match because it maps distinct
+names onto one key ("a/b" and "a-b" both become "ab"), and a wrong match is worse than a
+missing one: it files a job's failure signature and runner telemetry under another job.
 
-So any name -- at either tier -- that does not resolve to exactly one job is left
-unmapped on purpose. The caller falls back to a per-job request for those, which costs
-one request and makes misattribution impossible rather than merely unobserved.
+So a name that does not resolve to exactly one job is left unmapped on purpose, for the
+caller to fall back on a per-job request.
 
-Reading the zip directly, rather than shelling out to `unzip`, also keeps archive-supplied
-names off the filesystem entirely: the only paths written are <job_id>.log. `unzip` can
-fail to create an entry whose name contains emoji, and having no tty to answer the
-"continue?" prompt that follows, it aborts and leaves a silently partial extraction --
-observed truncating at 46 of 85 job logs.
+Reading the zip in Python rather than shelling out to `unzip` also keeps archive-supplied
+names off the filesystem: the only paths written are <job_id>.log. `unzip` can fail to
+create a name containing emoji and, with no tty to answer its "continue?" prompt, aborts
+and leaves a silently partial extraction.
 """
 
 import argparse
@@ -62,10 +55,9 @@ def normalize(name: str) -> str:
 
 
 def _unique_index(jobs: list, key) -> dict:
-    """key(job name) -> job id, holding only keys that exactly one job produces.
+    """key(job name) -> job id, for keys that exactly one job produces.
 
-    Keys claimed by more than one job are dropped rather than resolved, so an ambiguous
-    name can never be silently attributed to whichever job happened to be listed first.
+    Keys several jobs produce are dropped rather than resolved by list order.
     """
     grouped = defaultdict(list)
     for job in jobs:
@@ -80,9 +72,8 @@ def _unique_index(jobs: list, key) -> dict:
 def resolve_entries(archive: zipfile.ZipFile, jobs: list) -> dict:
     """Archive entry name -> job id, for entries that map to exactly one job.
 
-    Both directions are checked for ambiguity: a name matching several jobs is dropped by
-    _unique_index, and a job claimed by several entries is dropped here. What survives is
-    a strict one-to-one mapping.
+    Ambiguity is checked both ways -- a name several jobs match, and a job several entries
+    claim -- so what survives is strictly one-to-one.
     """
     by_archive_name = _unique_index(jobs, archive_name_for)
     by_normalized = _unique_index(jobs, normalize)
@@ -110,13 +101,9 @@ def resolve_entries(archive: zipfile.ZipFile, jobs: list) -> dict:
 def extract(archive_path: pathlib.Path, jobs: list, logs_dir: pathlib.Path) -> tuple:
     """Write each resolved entry to <job_id>.log, leaving any that already exists alone.
 
-    An existing file is never overwritten because the caller walks attempts newest-first:
-    a job re-run in a later attempt must keep that attempt's log, not the stale one from
-    the attempt it originally ran in.
-
-    Returns (written, resolved) so a walk can tell an unusable archive from one that was
-    read fine but had nothing new to add -- the normal case for every attempt after the
-    first one that covers a job.
+    Nothing is overwritten because the caller walks attempts newest-first: a job re-run in
+    a later attempt must keep that attempt's log. Returns (written, resolved) so the walk
+    can tell an unusable archive from one that simply had nothing new.
     """
     written = 0
     resolved = 0
@@ -126,8 +113,6 @@ def extract(archive_path: pathlib.Path, jobs: list, logs_dir: pathlib.Path) -> t
             target_path = logs_dir / f"{job_id}.log"
             if target_path.exists() and target_path.stat().st_size > 0:
                 continue
-            # Written under an id we chose, so no archive-supplied name -- and no emoji
-            # or overlong path -- ever reaches the filesystem.
             with archive.open(entry_name) as source, open(target_path, "wb") as target:
                 while chunk := source.read(1024 * 1024):
                     target.write(chunk)
@@ -158,9 +143,8 @@ def main() -> int:
         print(f"[Warning] could not unpack the attempt log archive: {exc}", file=sys.stderr)
         return 1
 
-    # Nothing recognizable at all means the archive was not usable, so say so and let the
-    # caller move on. Resolving entries but writing none is different and expected during
-    # an attempt walk: a later attempt already supplied those logs.
+    # Resolving nothing means the archive was unusable. Resolving but writing nothing is
+    # expected during a walk: a later attempt already supplied those logs.
     if resolved == 0:
         print("[Warning] attempt log archive contained no recognizable job logs", file=sys.stderr)
         return 1

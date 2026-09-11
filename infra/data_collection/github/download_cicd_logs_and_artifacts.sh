@@ -13,14 +13,10 @@ set_up_dirs() {
     mkdir -p generated/cicd/$workflow_run_id/logs
 }
 
-# Artifacts persist across run attempts, so a re-run's analysis would otherwise
-# re-download every test_reports_* zip the original attempt produced -- 56 of them on
-# run 34609986416, none of them new. Attempts after the first therefore download only
-# the reports created since that attempt started; the rest were already collected when
-# the earlier attempt was analysed.
-#
-# First attempts (about two thirds of executions) keep the unconditional path, so the
-# common case pays no extra listing.
+# Artifacts persist across attempts, so a re-run would otherwise re-download every
+# test_reports_* zip the first attempt produced. Later attempts fetch only the reports
+# created since the attempt started; the rest were collected when the earlier attempt was
+# analysed. First attempts keep the unconditional path and pay no extra listing.
 download_artifacts() {
     local repo=$1
     local workflow_run_id=$2
@@ -46,9 +42,7 @@ download_artifacts() {
     fi
 }
 
-# Only the test_reports_* artifacts this attempt produced. One listing call replaces one
-# download call per stale artifact, and a re-run in which no job uploaded a fresh report
-# costs the listing alone.
+# Only the test_reports_* artifacts this attempt produced.
 download_artifacts_created_since_attempt_start() {
     local repo=$1
     local workflow_run_id=$2
@@ -68,8 +62,7 @@ download_artifacts_created_since_attempt_start() {
         return
     fi
 
-    # jq compares the ISO-8601 timestamps lexicographically, which is ordering-correct
-    # for the UTC "...Z" form the API returns.
+    # Lexicographic compare is ordering-correct for the UTC "...Z" form the API returns.
     local fresh
     fresh=$(printf '%s' "$listing" | jq -r --arg since "$attempt_started" \
         '[.artifacts[]? | select((.name | startswith("test_reports_")) and .created_at > $since) | .name] | unique | .[]')
@@ -89,14 +82,11 @@ download_artifacts_created_since_attempt_start() {
     done <<< "$fresh"
     echo "[info] downloading ${#fresh_names[@]} new test report artifact(s) for attempt $attempt_number"
 
-    # Every name goes in one `gh run download`: each invocation does its own artifact
-    # listing, so one call per artifact would cost two requests per report instead of one.
-    #
-    # The destination differs by count because gh's layout does. Several --name arguments
-    # each get their own <name>/ directory, but a lone --name flattens its files straight
-    # into -D -- and get_workflow_run_uuids_to_test_reports_paths_ globs for
-    # test_reports_* directories, so a flattened download silently yields no test results
-    # at all. Naming the directory ourselves in that case keeps the layout uniform.
+    # One invocation for all names, because each `gh run download` re-lists the artifacts.
+    # Its layout depends on the count: several --name args each get a <name>/ directory,
+    # but a lone --name flattens into -D. The parsers glob for test_reports_* directories,
+    # so a flattened download would silently yield no test results -- name that directory
+    # ourselves.
     local dest="generated/cicd/$workflow_run_id/artifacts"
     if [[ "${#fresh_names[@]}" -eq 1 ]]; then
         dest="$dest/${fresh_names[0]}"
@@ -160,42 +150,27 @@ get_jobs_with_pagination_fallback() {
     fi
 }
 
-# Fetch job logs an archive at a time instead of a job at a time.
-#
-# GitHub serves a run attempt's logs as a single zip:
+# Fetch job logs an archive at a time rather than a job at a time, via
 #   GET /repos/{repo}/actions/runs/{id}/attempts/{n}/logs
-# which replaces calling /actions/jobs/{job_id}/logs once per job -- 129 requests for a
-# 129-job merge-gate run, against the repository's shared 15,000/hr GITHUB_TOKEN budget,
-# with produce_data running hundreds of times an hour.
 #
 # An attempt's archive holds only the jobs that ran in THAT attempt, while the jobs list
-# returns every job of the run. So a re-run's archive is nearly empty even though its
-# jobs list is full: on run 34609986416 the attempt-3 archive had 2 logs and the
-# attempt-1 archive had 85, for a jobs list of 97 both times. Fetching only the current
-# attempt therefore left ~83 jobs to the per-job fallback and paid the old price for
-# them, which is what re-runs were costing (~129 calls each, a third of executions).
+# returns every job of the run. A re-run's archive is therefore nearly empty while its
+# jobs list is full, and fetching only the current attempt leaves most jobs to the
+# per-job fallback -- the old one-request-per-job cost.
 #
-# Hence the walk: extract attempt n, and while jobs that ran still have no log, extract
-# n-1, n-2 ... 1. That is one request per attempt rather than one per job. Walking
-# downward also means a job re-run in a later attempt keeps the later log, because the
-# extractor never overwrites one it has already written.
+# Hence the walk: extract attempt n, then n-1 ... 1 while jobs that ran still have no
+# log. One request per attempt instead of one per job. Newest-first also means a job
+# re-run in a later attempt keeps the later log, since the extractor never overwrites.
 #
-# The jobs list cannot shortcut this. Its run_attempt field is simply the attempt that
-# was queried -- attempt 1 and attempt 3 both return all 97 jobs, stamped 1 and 3
-# respectively -- so which attempt a job actually ran in is only knowable by elimination.
+# The jobs list cannot shortcut this: its run_attempt field is just the attempt that was
+# queried, and job ids are disjoint between attempts, so which attempt ran a job is only
+# knowable by elimination.
 #
-# The unpacking is a Python helper rather than `unzip` because archive entries carry job
-# and step names verbatim, emoji included: `unzip` can fail to create such a name, and
-# having no tty to answer its "continue?" prompt it then aborts and leaves a silently
-# partial extraction -- observed truncating at 46 of 85 job logs. See
-# extract_job_logs_from_archive.py, which also explains the entry-name-to-job-id mapping.
-#
-# Whatever no archive covers -- including any name that does not resolve to exactly one
-# job, which the helper leaves unmapped on purpose -- still falls through to the per-job
-# path in download_logs_for_all_jobs.
+# Unpacking is a Python helper rather than `unzip`; see extract_job_logs_from_archive.py,
+# which also covers the entry-name-to-job-id mapping. Anything no archive covers falls
+# through to the per-job path in download_logs_for_all_jobs.
 
-# Jobs whose conclusion says they ran but which still have no log on disk. Pure local
-# bookkeeping: no API calls, so it is cheap to consult between attempts.
+# Jobs whose conclusion says they ran but which still have no log. Local only, no API.
 count_ran_jobs_missing_logs() {
     local logs_dir=$1
     local jobs_data=$2
@@ -209,9 +184,8 @@ count_ran_jobs_missing_logs() {
     echo "$missing"
 }
 
-# Extract one attempt's archive into <job_id>.log. Returns non-zero only if the archive
-# could not be fetched or unpacked, which the caller treats as "try the next attempt"
-# rather than as fatal.
+# Extract one attempt's archive. Non-zero means the archive could not be fetched or
+# unpacked, which the caller treats as "try the next attempt" rather than as fatal.
 extract_one_attempt_archive() {
     local repo=$1
     local workflow_run_id=$2
@@ -225,10 +199,8 @@ extract_one_attempt_archive() {
     tmp_dir=$(mktemp -d)
     local archive="$tmp_dir/logs.zip"
 
-    # Same escape-sequence handling as the per-job path: gh >= 2.97.0 needs the flag,
-    # older images in the fleet do not have it. Both errors are surfaced rather than
-    # discarded -- a 403 here is the signal that the repository's hourly REST budget is
-    # gone, and silencing it turns that into an unexplained fallback.
+    # gh >= 2.97.0 needs the escape-sequence flag, older images in the fleet lack it.
+    # Errors are surfaced, not discarded: a 403 here means the repo's REST budget is gone.
     local archive_error retry_error
     if ! archive_error=$(gh api --allow-escape-sequences "/repos/$repo/actions/runs/$workflow_run_id/attempts/$attempt/logs" 2>&1 >"$archive"); then
         if ! retry_error=$(gh api "/repos/$repo/actions/runs/$workflow_run_id/attempts/$attempt/logs" 2>&1 >"$archive"); then
@@ -296,12 +268,9 @@ download_logs_for_all_jobs() {
     echo "$jobs_data" | jq -c '.jobs[] | {id: .id, conclusion: .conclusion}' | while read -r job; do
         job_id=$(echo "$job" | jq -r '.id')
         job_conclusion=$(echo "$job" | jq -r '.conclusion')
-        # The attempt archive above normally supplied this already, so only jobs it did
-        # not cover cost a request here. Skipped jobs and jobs that never reached a
-        # conclusion have no log to serve, and asking anyway cost *two* requests each:
-        # the 404 from the first call is a non-zero exit, so the "||" retry below fires
-        # and 404s in turn. On the run this was measured against that was 44 of 129 jobs,
-        # so 88 guaranteed-wasted requests.
+        # The archives above normally supplied this already, so only jobs they missed
+        # cost a request. Skipped jobs have no log to serve, and asking cost two requests
+        # each -- the first 404 is a non-zero exit, so the "||" retry fires and 404s too.
         if [[ ! -s generated/cicd/$workflow_run_id/logs/$job_id.log ]] &&
            [[ "$job_conclusion" != "skipped" && "$job_conclusion" != "null" && -n "$job_conclusion" ]]; then
             echo "[info] download logs for job with id $job_id, attempt number $attempt_number"
