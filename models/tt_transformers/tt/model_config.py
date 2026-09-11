@@ -1509,18 +1509,19 @@ class ModelArgs:
                         ),
                     )
         elif mode == Mode.PREFILL:
+            if not self.is_galaxy:
+                return self.prefill_matmul_2d_config(
+                    m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
+                    k=self.dim // self.cluster_shape[0],
+                    n=self.hidden_dim // self.cluster_shape[1],
+                    fp32_dest_acc_en=self.op_fp32_dest_acc_en(OpGroup.LI_FF1_FF3),
+                )
             return self.matmul_config(
                 m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
                 k=self.dim // self.cluster_shape[0],
                 n=self.hidden_dim // self.cluster_shape[1],
                 grid_size=self.mlp1_3_grid(seq_len),
-                per_core_N=(
-                    math.ceil(
-                        (self.hidden_dim // self.cluster_shape[1]) / (ttnn.TILE_SIZE * self.dram_shard_grid_width)
-                    )
-                    if not self.is_galaxy
-                    else None
-                ),
+                per_core_N=None,
             )
 
     @lru_cache(maxsize=None)
@@ -1572,16 +1573,19 @@ class ModelArgs:
                     compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
                 )
             else:
+                if not self.is_galaxy:
+                    return self.prefill_matmul_2d_config(
+                        m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
+                        k=self.hidden_dim // self.num_devices,
+                        n=self.dim,
+                        fp32_dest_acc_en=self.op_fp32_dest_acc_en(OpGroup.LI_FF2),
+                    )
                 return self.matmul_config(
                     m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
                     k=self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
                     n=self.dim,
                     grid_size=self.mlp2_grid(seq_len),
-                    per_core_N=(
-                        math.ceil(self.dim / (ttnn.TILE_SIZE * self.dram_shard_grid_width))
-                        if not self.is_galaxy
-                        else None
-                    ),
+                    per_core_N=None,
                 )
         else:
             raise ValueError(f"Invalid mode: {mode}")
@@ -3735,6 +3739,75 @@ class ModelArgs:
             transpose_mcast=False,
             fused_activation=fused_activation,
             fuse_batch=fuse_batch,
+        )
+
+    def op_fp32_dest_acc_en(self, op) -> bool:
+        """True when ANY decoder runs ``op`` with fp32 dest accumulation.
+
+        fp32 dest halves the dest-register budget (max out_subblock_h*out_subblock_w
+        drops from 8 to 4), and the program config is shared by every decoder, so the
+        answer has to be the conservative one across all of them. Unknown -> True.
+        """
+        opt = getattr(self, "optimizations", None)
+        if opt is None:
+            return True
+        try:
+            return any(
+                opt.get_math_fidelity(decoder_id=i, op=op, configuration=self).fp32_dest_acc_en
+                for i in range(self.n_layers)
+            )
+        except Exception:  # noqa: BLE001 -- an unreadable setting must not widen the budget
+            return True
+
+    def prefill_matmul_2d_config(self, m: int, k: int, n: int, fused_activation=None, fp32_dest_acc_en=True):
+        """2D-mcast config for a prefill projection, sized from the shape.
+
+        Replaces the fixed ``find_prefill_grid`` + ``dram_shard_grid_width`` pair with
+        the same two numbers derived from the shape: grid_y is the chunk's tile-row
+        count (no grid row allocated with nothing to own) and grid_x is the widest
+        DIVISOR of N_tiles the device has columns for.
+
+        grid_x must stay on a divisor. In a 2D mcast only the leading core ROW reads
+        in1, so widening that row is the obvious way to get more cores onto the weight
+        stream (these projections run at ~17 GB/s/core through 8 readers, ~3x off their
+        DRAM floor) -- but a ragged last column from a ``ceil`` per_core_N does not
+        merely waste the tail, it returns garbage: measured full-model PCC 0.0 at
+        grid_x=13, per_core_N=ceil(112/13). That is the failure the
+        ``dram_shard_grid_width`` heuristic was guarding against.
+        """
+        m_tiles = max(1, math.ceil(m / ttnn.TILE_SIZE))
+        n_tiles = max(1, math.ceil(n / ttnn.TILE_SIZE))
+        k_tiles = max(1, math.ceil(k / ttnn.TILE_SIZE))
+        grid_x = max(c for c in range(1, min(self.max_grid_size.x, n_tiles) + 1) if n_tiles % c == 0)
+        grid_y = max(1, min(self.max_grid_size.y, m_tiles))
+        # matmul_config's in0_block_w derivation asserts k divides TILE * grid_y.
+        while grid_y > 1 and (k % (ttnn.TILE_SIZE * grid_y)) != 0:
+            grid_y -= 1
+        per_core_M = math.ceil(m_tiles / grid_y)
+        per_core_N = math.ceil(n_tiles / grid_x)
+        # Shape the work on the cores. Both of the stock derivations are capped below
+        # what these shapes allow: find_largest_divisor stops at 8 K-tiles per block,
+        # and get_out_subblock_w stops at 4 output tiles even when fp32_dest_acc_en is
+        # off and the dest budget is 8. Take the real limits instead -- fewer K
+        # iterations and fuller dest registers per pass.
+        in0_block_w = max(b for b in range(1, min(16, k_tiles) + 1) if k_tiles % b == 0)
+        max_subblock = 4 if fp32_dest_acc_en else 8
+        out_subblock_w = max(w for w in range(1, min(max_subblock, per_core_N) + 1) if per_core_N % w == 0)
+        out_subblock_h = max(
+            h
+            for h in range(1, min(max_subblock // out_subblock_w, per_core_M) + 1)
+            if per_core_M % h == 0
+        )
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(grid_x, grid_y),
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+            transpose_mcast=False,
+            fused_activation=fused_activation,
+            fuse_batch=False,
         )
 
     def dram_shard_core_grid_for_k(self, k: int) -> Tuple[int, int]:
