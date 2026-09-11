@@ -383,9 +383,15 @@ def _validate_gate(
         broadcast_groups=n_tp_devices,
     )
 
+    # Compare the selected-weight distributions, not their slot alignment. The top-k slot is a write
+    # offset that tt_reduce's weighted sum collapses, so a device order differing from torch's near a
+    # selection tie leaves the routed output unchanged -- and the slots are ordered by score+bias while
+    # the values are the unbiased scores, so transposing two near-tied slots writes two materially
+    # different weights and costs a position-wise PCC as much as a genuine mis-route does. Membership
+    # is covered above by recall_topk_indices, which pairs every expert with its own weight.
     pcc_scores = validate_composed(
-        host_tt_topk_scores,
-        reference_topk_scores,
+        host_tt_topk_scores.sort(dim=-1, descending=True).values,
+        reference_topk_scores.sort(dim=-1, descending=True).values,
         1,
         n_sp_devices,
         compare_pcc(scores_pcc_threshold, label="pcc_scores"),
@@ -568,9 +574,9 @@ def test_forward_pass(
     else:
         recall_threshold = 0.95
         logits_pcc_threshold = 0.997
-        scores_pcc_threshold = 0.93
-        # Device-mode scores only: at high expert counts sigmoid near-ties the top-k boundary, so a
-        # small matmul difference swaps a pick and moves the weight vector. Others keep 0.93.
+        # Order-insensitive since pcc_scores sorts both sides, so near-tie slot swaps no longer cost
+        # anything and every model clears this without a per-model relaxation.
+        scores_pcc_threshold = 0.98
         scores_pcc_threshold = getattr(GATE_MODELS[gate_model], "GATE_SCORES_PCC_DEVICE", scores_pcc_threshold)
 
     _validate_gate(
@@ -751,5 +757,5 @@ def test_forward_pass_interleaved(mesh_device, num_links, topology, gate_model, 
         reference_logits,
         0.95,
         0.997,
-        getattr(GATE_MODELS[gate_model], "GATE_SCORES_PCC_DEVICE", 0.93),
+        getattr(GATE_MODELS[gate_model], "GATE_SCORES_PCC_DEVICE", 0.98),
     )

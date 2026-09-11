@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
-# Build tt-metal from inside the CI build image. Intended for coding agents
-# (see AGENTS.md); harmless for humans, but you probably want build_metal.sh.
+# Build tt-metal from inside the CI build image for the Copilot cloud agent.
+# See .github/instructions/copilot-cloud.instructions.md for authoring guidance.
+# For local development, you probably want build_metal.sh.
 #
 # Why a wrapper: the Copilot cloud agent cannot run inside a job `container:` -
 # its runtime stages a git-proxy binary on the host and then looks it up at the
