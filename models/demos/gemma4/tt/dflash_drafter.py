@@ -1381,6 +1381,11 @@ class DFlashFusedDecoder:
             )
         rows = torch.cat(chunks, dim=0) if len(chunks) > 1 else chunks[0]
         keep = min(self.cap, rows.shape[0], n)
+        # The mirror persists across REUSE. A shorter new prompt writes fewer
+        # rows than the previous request did, so anything above `keep` would
+        # still hold THAT request's projected context and get uploaded with
+        # the rest of the cap. A freshly constructed decoder has zeros there.
+        self.mirror.zero_()
         self.mirror[:keep] = rows[-keep:].to(torch.bfloat16)
         self.win_first = n - keep
         self.ctx_len = n
@@ -1601,9 +1606,40 @@ class DFlashFusedDecoder:
         first-iteration anchor/position into the persistent input buffers the
         captured body reads."""
         self.anchor, self.start = anchor_id, start
+        self._reset_per_request_state()
         if self.use_packed:
             self._pv_upload(start)
         self._upload_iter_inputs(anchor_id, start)
+
+    def _reset_per_request_state(self):
+        """Restore the PERSISTENT buffers the captured body reads to the state a
+        FRESHLY CAPTURED decoder has.
+
+        ``capture()`` runs against their construction values -- fc_prev zeros,
+        commit_pos zeros (which is what makes the start-of-replay commit a
+        no-op), merge_idx identity -- so a decoder re-pointed at a new request
+        has to be put back into exactly that state. Left as the previous
+        request finished them, the new request's FIRST replay commits the
+        PREVIOUS request's projected tap rows (fc_prev) at the PREVIOUS
+        request's absolute positions (commit_pos) through the PREVIOUS
+        request's row map (merge_idx). The drafter then continues the OLD
+        prompt -- and since the same stale rows are merged into the context the
+        verify attends over, those drafts are ACCEPTED rather than rejected, so
+        the new request's OUTPUT carries the old request's content. Observed on
+        a P150x8 server as request N reasoning about request N-1's prompt.
+        """
+        H = self.drafter.hidden
+        mkT = dict(dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=self._mapper)
+        mkU = dict(dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._mapper)
+        h = ttnn.from_torch(torch.zeros(1, 1, self.P_v, H, dtype=torch.bfloat16), **mkT)
+        ttnn.copy_host_to_device_tensor(h, self.fc_prev)
+        h.deallocate(True)
+        h = ttnn.from_torch(torch.zeros(1, self.P_v, dtype=torch.int64), **mkU)
+        ttnn.copy_host_to_device_tensor(h, self.commit_pos)
+        h.deallocate(True)
+        h = ttnn.from_torch(torch.arange(self.cap, dtype=torch.int64).reshape(1, self.cap), **mkU)
+        ttnn.copy_host_to_device_tensor(h, self.merge_idx)
+        h.deallocate(True)
 
     def pv_bucket(self, start, max_new):
         """The packed-verify width bucket for a (start, horizon) -- decoders are
