@@ -139,8 +139,7 @@ void JitBuildEnv::init(
     // Tools
     const static bool use_ccache = std::getenv("TT_METAL_CCACHE_KERNEL_SUPPORT") != nullptr;
     if (use_ccache) {
-        // ccache requires these settings for both PCH creation and consumption; otherwise
-        // it reports every PCH-backed compile as uncacheable. Scope them to device JIT commands.
+        // ccache requires sloppiness settings for both PCH creation and consumption
         this->gpp_ = "ccache sloppiness=pch_defines,time_macros ";
     } else {
         this->gpp_ = "";
@@ -655,12 +654,7 @@ void JitBuildState::write_reuse_cache(std::string_view kernel_name) const {
 void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* settings, size_t src_index) const {
     TTZoneScopedD(JIT);
 
-    // Build the compile recipe (opt/cflags/includes/defines, including kernel-specific include
-    // paths and the -include for the named-compile-arg map header) ONCE via export_target_recipe,
-    // then turn it into an argv with the shared builder and run it SHELL-FREE via exec_command —
-    // the same argv builder the JIT compile server and preprocess-and-ship use. Shell-free also
-    // means defines carrying shell metacharacters, like -DFULL_KERNEL_NAME="<name>", need no
-    // escaping — each define is one argv element, passed verbatim.
+    // Use the shared recipe and argv builder to pass defines verbatim without shell escaping.
     const tt::jit_build::TargetRecipe recipe = export_target_recipe(settings);
 
     std::string cflags = recipe.cflags;
@@ -668,15 +662,8 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
         cflags += " -save-temps=obj -fdump-tree-all -fdump-rtl-all";
     }
 
-    // Force-include the shared standard-library PCH. Added here rather than in
-    // export_target_recipe because the path is local to this machine's cache, and that recipe
-    // also travels to the JIT compile server (see program.cpp), where it would not resolve.
-    //
-    // The umbrella is keyed on the state's own includes, not the recipe's, because the recipe
-    // adds per-kernel -I paths that would otherwise give every kernel its own PCH. It is
-    // likewise keyed on recipe.cflags rather than cflags: build-map's dump flags are
-    // diagnostics that do not affect PCH validity, and building the umbrella under -save-temps
-    // would scatter dumps through the cache.
+    // Add the machine-local PCH here so exported recipes remain portable.
+    // Exclude per-kernel include paths and build-map dump flags from the PCH profile.
     const std::string pch = tt::jit_build::ensure_pch(
         env_.gpp_,
         recipe.compiler_opt_level,
@@ -685,16 +672,12 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
         env_.root_,
         fmt::format("{}{}/pch/", env_.out_root_, env_.build_key_));
 
-    // A copy rather than recipe.defines itself, because that vector is also what the watcher
-    // records as the kernel's compile-time defines below, and the PCH is not one of those.
+    // Preserve the recipe's defines for watcher logging.
     std::vector<std::string> defines = recipe.defines;
     if (!pch.empty()) {
-        // At the front: GCC ignores a PCH unless it is the first thing the translation unit
-        // reads, so it has to precede the named-compile-arg map header.
+        // Load the PCH before any other force-included header emits C++ tokens.
         defines.insert(defines.begin(), {"-include", pch});
-        // Should GCC ever decline the PCH, say because a stale cache outlived an in-place
-        // compiler upgrade, say so instead of quietly parsing everything from source. Only the
-        // -Werror promotion is suppressed, so the warning still shows up.
+        // Warn if GCC rejects the PCH, while allowing textual fallback.
         cflags += " -Winvalid-pch -Wno-error=invalid-pch";
     }
 

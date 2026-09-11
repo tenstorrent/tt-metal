@@ -1,4 +1,5 @@
 set(HW_JIT_API_HEADERS
+    firmware/src/pch.h
     inc/experimental/blaze_rt_arg.h
     inc/api/alignment.h
     inc/api/compile_time_args.h
