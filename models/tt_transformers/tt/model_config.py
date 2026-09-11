@@ -890,7 +890,22 @@ class ModelArgs:
 
             # For maximum performance, set the prefill grid row to 8, even if it can fit in a smaller grid
             self.prefill_rows = 8
-            self.attn_input_grid = self.dram_shard_core_grid_for_k(self.dim)
+            # Size this grid from BOTH the contraction dim and the QKV output width, the way
+            # mlp_core_grid already is. attn_input_grid is the core count the decode QKV
+            # dram-sharded matmul runs on (and the shard its input norm writes), and that matmul
+            # sets per_core_N = ceil(n_tiles / num_cores) -- so a core count that divides k but
+            # NOT n rounds the shard up and every core carries dead width. Llama-3.1-8B on 4
+            # devices is the case in point: k=4096 (128 tiles), n=qkv_size/4=1536 (48 tiles).
+            # The k-only helper picked 32 cores, which divides 128 but not 48, giving
+            # per_core_N=2 -> 32*64=2048 columns of work for 1536 columns of output, a third of
+            # it thrown away. The k-and-n helper picks 16, where 48/16=3 fits exactly.
+            # Measured (trace+1cq, 128 decode tokens): 32 cores 9.536 ms, 16 cores 9.390 ms,
+            # 8 cores 9.466 ms, 4 cores 9.674 ms -- the exact-fit grid is the optimum, and it is
+            # not the widest one, because M=32 leaves these matmuls launch- and DRAM-bound
+            # rather than core-bound.
+            self.attn_input_grid = self.dram_shard_core_grid_for_k_and_n(
+                self.dim, self.qkv_size // self.num_devices
+            )
             self.mlp1_3_grid = lambda seq_len: (
                 (8, min(min(seq_len, 1024) // 32, 4))
                 if self.is_galaxy
