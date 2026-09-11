@@ -175,7 +175,11 @@ def _selected_recipes():
 
 @pytest.mark.timeout(10800)
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESH, indirect=["mesh_device", "device_params"])
-@pytest.mark.parametrize(("num_latent_frames", "batch"), [(600, 1), (207, 2)], ids=["600lat_b1", "207lat_b2"])
+@pytest.mark.parametrize(
+    ("num_latent_frames", "batch"),
+    [(600, 1), (207, 2), (600, 2)],  # (600, 2) = the pipeline's shape: 15 s, stereo as two batch items
+    ids=["600lat_b1", "207lat_b2", "600lat_b2"],
+)
 def test_audio_decode_squeeze(mesh_device, num_latent_frames, batch):
     latents, expected = reference_clip(num_latent_frames, batch)
     rows = []
