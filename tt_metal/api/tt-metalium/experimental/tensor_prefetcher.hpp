@@ -142,14 +142,15 @@ void QueueTensorPrefetcherRequest(
 // requests against a GCB and against PrefetcherPipes may be interleaved on one running prefetcher.
 //
 // `prefetcher_pipes` must be what CreatePrefetcherPipesForTensorPrefetcher returned for the same
-// mesh device: each group's pipe order is what assigns its senders their bank-local slab bases.
+// mesh device, in that order: a bank's pipes must stay adjacent and in sender order, since that is
+// what assigns each sender its bank-local slab base.
 // Consumers of the delivered pages Attach each pipe on its own receivers and read through the
 // device-side experimental::PrefetcherPipe.
 //
 // Additional preconditions for this transport, all TT_FATAL with the offending values:
-//   - every pipe has a DRAM sender on its group's bank, and they share one entry size and ring
-//     size;
-//   - banks appear once each, and receiver sets are disjoint across every pipe;
+//   - every pipe has a DRAM sender, and they share one entry size and ring size;
+//   - each bank's pipes form one contiguous run, in sender order, and receiver sets are disjoint
+//     across every pipe;
 //   - every tensor must resolve to the receiver-contiguous layout (each receiver owning a disjoint
 //     contiguous shard). One receiver per bank qualifies: a bank's whole shard is then that
 //     receiver's slab, which is why such a weight is read as receiver-contiguous here even though
@@ -164,7 +165,7 @@ void QueueTensorPrefetcherRequest(
 // block of lookahead (a streaming matmul) needs two.
 void QueueTensorPrefetcherRequest(
     distributed::MeshDevice& mesh_device,
-    const std::vector<TensorPrefetcherBankPipes>& prefetcher_pipes,
+    const std::vector<std::shared_ptr<PrefetcherPipe>>& prefetcher_pipes,
     const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
     const std::vector<TensorPrefetcherInput>& input_tensors,
     distributed::MeshCommandQueue* trace_capture_cq = nullptr);

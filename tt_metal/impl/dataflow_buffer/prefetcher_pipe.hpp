@@ -134,6 +134,9 @@ private:
     // every device.
     void initialize_dram_sender_config_page();
     void write_config_to_device();
+    // Record the config-page geometry the credit reset works from: the counter pairs sit in the
+    // page's tail, so the reset window is everything from the first counter to the end of the page.
+    void set_config_page_geometry(uint32_t page_size, uint32_t counters_offset);
     void release_allocations() noexcept;
 
     uint64_t data_allocation_id_ = 0;

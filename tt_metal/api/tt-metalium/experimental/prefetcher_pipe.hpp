@@ -14,7 +14,6 @@
 
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/experimental/global_circular_buffer.hpp>
 
 namespace tt::tt_metal {
 
@@ -27,6 +26,12 @@ class MeshDevice;
 namespace experimental {
 
 class PrefetcherPipeImpl;
+
+// Defined in tt-metalium/experimental/global_circular_buffer.hpp; the DRAM-sender flavour of a
+// PrefetcherPipe names the same Worker/Dram distinction as a GlobalCircularBuffer. Declared
+// opaquely rather than included: naming the enum is all this header needs, and a caller that
+// compares against an enumerator includes the GlobalCircularBuffer header anyway.
+enum class SenderCoreType : uint8_t;
 
 /**
  * Host object for a durable cross-program remote DFB.
@@ -95,8 +100,9 @@ public:
 
     // The entry size a DRAM-sender pipe is created at: the ring is this many bytes times the
     // requested depth, and it is what a consumer attaching at this size skips the resize handshake
-    // for on the first program. Later Attaches and later requests may use any size that divides the
-    // ring. 0 for a worker-sender pipe, which is sized in bytes and resizes normally.
+    // for on the first program. Later Attaches and later requests may use any size the ring can
+    // hold; a size the ring does not divide leaves a trailing gap both endpoints credit at the
+    // wrap. 0 for a worker-sender pipe, which is sized in bytes and resizes normally.
     uint32_t initial_entry_size() const;
 
     // Reflection for op attribute hashing and serialization. These values identify *this* pipe, not
@@ -109,15 +115,13 @@ public:
     // Kept out of aggregate territory by the constructors above: tt_stl's json serializer has an
     // attribute_names specialization and an aggregate one that are unconstrained against each other,
     // and a type satisfying both is an ambiguous partial specialization.
-    // These attributes name the object, not its shape, so a shared_ptr to a pipe is traversed as the
-    // pipe rather than as its address.
     static constexpr bool ttsl_reflect_through_shared_ptr = true;
     static constexpr auto attribute_names = std::forward_as_tuple(
         "sender_core", "receiver_cores", "config_address", "buffer_address", "initial_entry_size", "ring_size");
-    auto attribute_values() const {
-        // make_tuple, not forward_as_tuple: every accessor but receiver_cores() returns by value.
-        return std::make_tuple(
-            sender_core(), receiver_cores(), config_address(), buffer_address(), initial_entry_size(), ring_size());
+    // Spelled out rather than deduced from make_tuple: every accessor but receiver_cores() returns
+    // by value, and holding that one by reference keeps a traversal from heap-copying the range set.
+    std::tuple<CoreCoord, const CoreRangeSet&, uint32_t, uint32_t, uint32_t, uint32_t> attribute_values() const {
+        return {sender_core(), receiver_cores(), config_address(), buffer_address(), initial_entry_size(), ring_size()};
     }
 
     // Internal: adopt an already-built implementation. The DRAM-sender factory uses it; a
@@ -179,25 +183,19 @@ uint8_t AttachPrefetcherPipe(
 // experimental::PrefetcherPipe (wait_front / scoped_read_lock / pop_front). Only the producer side
 // differs, and it is owned by the prefetcher.
 
-// The PrefetcherPipes driving one DRAM bank's receivers.
-struct TensorPrefetcherBankPipes {
-    uint32_t bank_id = 0;
-    // One pipe, or two when the bank is split across both of its DRISC sender cores. The split is
-    // ceil/floor over the bank's ordered receivers: pipes[0] owns the leading ceil(n/2) receivers
-    // (bank-local slab index 0), pipes[1] the rest. That order is what assigns each sender its
-    // bank-local slab base, so keep the pipes in it.
-    std::vector<std::shared_ptr<PrefetcherPipe>> pipes;
-};
-
-// Create the PrefetcherPipes that deliver one Tensor-prefetcher request, one group per
-// `bank_to_receivers` entry, in input order. Sender placement, the receiver split, and slab
-// numbering are the ones CreateGlobalCircularBufferForTensorPrefetcher uses, so a tensor laid out
-// for one transport is laid out for the other.
+// Create the PrefetcherPipes that deliver one Tensor-prefetcher request: one per DRAM sender core,
+// bank-major. A bank contributes one pipe, or two when its receivers are split across both of its
+// DRISC sender cores, and a bank's pipes stay adjacent and in sender order. That order is the
+// caller's to keep -- it is what assigns each sender its bank-local slab base, so an attach id, a
+// mapping entry and a pipe share an index. Sender placement, the receiver split, and slab numbering
+// are the ones CreateGlobalCircularBufferForTensorPrefetcher uses, so a tensor laid out for one
+// transport is laid out for the other.
 //
 // With `support_multi_receiver_shards` a bank is driven by a single sender, which is what the
 // legacy interleaved layout (a shard feeding more than one receiver) requires. Without it — the
 // default, matching the receiver-contiguous layout — a bank with more than one receiver gets two
-// senders, each pushing roughly half of them.
+// senders, each pushing roughly half of them: the split is ceil/floor over the bank's ordered
+// receivers, so the leading pipe owns ceil(n/2) of them at bank-local slab index 0.
 //
 // `entry_size` is the per-receiver push granularity a pipe starts life at, and `num_entries` is how
 // many of them a receiver's ring holds; together they fix the ring size, which never changes. A
@@ -215,7 +213,7 @@ struct TensorPrefetcherBankPipes {
 // destroying one frees its ring and config pages.
 //
 // MeshDevice-only: the DRISC L1 arena backing the sender config pages lives on MeshDeviceImpl.
-std::vector<TensorPrefetcherBankPipes> CreatePrefetcherPipesForTensorPrefetcher(
+std::vector<std::shared_ptr<PrefetcherPipe>> CreatePrefetcherPipesForTensorPrefetcher(
     distributed::MeshDevice& mesh_device,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t entry_size,
@@ -223,45 +221,15 @@ std::vector<TensorPrefetcherBankPipes> CreatePrefetcherPipesForTensorPrefetcher(
     BufferType buffer_type = BufferType::L1,
     bool support_multi_receiver_shards = false);
 
-// Flatten a bank-major group list into one (sender core, its receivers) entry per pipe, in the
-// order CreatePrefetcherPipesForTensorPrefetcher fixed: a bank's pipes stay adjacent and in their
-// own order. That order is what assigns each sender its bank-local slab base, so every layer that
-// walks the groups -- the prefetcher request path, a consumer op's cache key, a test -- must agree
-// on it. Derive it here rather than re-walking the groups.
+// One (sender core, its receivers) entry per pipe, in list order. Every layer that walks a pipe
+// list -- the prefetcher request path, a consumer op's cache key, a test -- reads the sender
+// topology through this, so that they cannot disagree about which sender owns which receivers.
 std::vector<std::pair<CoreCoord, CoreRangeSet>> prefetcher_pipe_sender_receiver_mapping(
-    const std::vector<TensorPrefetcherBankPipes>& banks);
-
-// The same mapping for a flat pipe list, which is the shape a caller that names pipes one at a time
-// -- a consumer op, Python -- holds them in. The group form delegates here.
-std::vector<std::pair<CoreCoord, CoreRangeSet>> prefetcher_pipe_sender_receiver_mapping(
-    const std::vector<std::shared_ptr<PrefetcherPipe>>& pipes);
-
-// Flatten a bank-major group list into one pipe per entry, keeping the order
-// CreatePrefetcherPipesForTensorPrefetcher fixed. This is the list a consumer names its delivery
-// target by, and the order matters: a pipe's position is what assigns its sender a bank-local slab
-// base, so an attach id, a mapping entry and a pipe share an index.
-std::vector<std::shared_ptr<PrefetcherPipe>> flatten_prefetcher_pipe_banks(
-    const std::vector<TensorPrefetcherBankPipes>& banks);
-
-// Regroup a flat pipe list into the per-bank groups the prefetcher's queue path takes. A pipe's bank
-// is its sender's DRAM-logical x, and pipes are grouped by *contiguous run* rather than by equal
-// bank id: a bank that reappears after its run has ended therefore yields a second group with that
-// bank id, which the queue path rejects, instead of being silently folded back into the first --
-// slab bases come from adjacency, so a list whose banks interleave numbers them wrong.
-//
-// A bank driven by two senders must present them in the order the factory placed them: the leading
-// pipe owns ceil(n/2) of the bank's receivers. Rejected here, since the split is what the two
-// senders' slab bases are derived from.
-std::vector<TensorPrefetcherBankPipes> group_prefetcher_pipes_by_bank(
     const std::vector<std::shared_ptr<PrefetcherPipe>>& pipes);
 
 // Every receiver of every pipe: the core set a consumer program attaches and runs its receiver
 // kernel on.
 CoreRangeSet prefetcher_pipe_receiver_cores(const std::vector<std::shared_ptr<PrefetcherPipe>>& pipes);
-
-// Each pipe's config page address, in list order. Identity rather than geometry: two live pipes over
-// the same receivers never share one, which is what makes this usable in a consuming op's cache key.
-std::vector<uint32_t> prefetcher_pipe_config_addresses(const std::vector<std::shared_ptr<PrefetcherPipe>>& pipes);
 
 // Attach every pipe to `program` on its own receiver cores, at `entry_size` bytes per entry -- the
 // size that program's kernels consume, which need not be the size a pipe was created at: a differing

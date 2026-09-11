@@ -107,6 +107,24 @@ uint32_t words_per_page(const PrefetcherPipePageCommon& common) {
     return common.layout.page_size / static_cast<uint32_t>(sizeof(uint32_t));
 }
 
+// word[0] of a config page: which end of the pipe the page configures.
+enum class PipeEndpoint : uint32_t { Receiver = 0, Sender = 1 };
+
+// Words 0-6, everything both ends of a pipe agree on. Returns the index of word[7], the first
+// word whose meaning depends on the endpoint.
+uint32_t write_shared_config_words(
+    std::vector<uint32_t>& page, const PrefetcherPipePageCommon& common, PipeEndpoint endpoint) {
+    uint32_t i = 0;
+    page[i++] = static_cast<uint32_t>(endpoint);
+    page[i++] = common.num_receivers;
+    page[i++] = common.data_base_addr;
+    page[i++] = common.ring_size;
+    page[i++] = common.data_base_addr;  // word[4]: initial fifo_ptr checkpoint
+    page[i++] = common.applied_entry_size;
+    page[i++] = common.layout.noc_xy_offset;
+    return i;
+}
+
 // The sender's config page. `pages_acked_offset` is word[8], the base of the *receivers'* counter
 // pairs relative to this page's own address: all of a pipe's receiver pages share one L1 address,
 // so that base plus 2*r*L1_ALIGNMENT reaches receiver r's slot. `receiver_noc_xy` is the receivers'
@@ -116,14 +134,7 @@ std::vector<uint32_t> build_sender_config_page(
     uint32_t pages_acked_offset,
     const std::vector<CoreCoord>& receiver_noc_xy) {
     std::vector<uint32_t> page(words_per_page(common), 0);
-    uint32_t i = 0;
-    page[i++] = 1;  // word[0]: is_sender
-    page[i++] = common.num_receivers;
-    page[i++] = common.data_base_addr;
-    page[i++] = common.ring_size;
-    page[i++] = common.data_base_addr;  // word[4]: initial fifo_ptr checkpoint
-    page[i++] = common.applied_entry_size;
-    page[i++] = common.layout.noc_xy_offset;
+    uint32_t i = write_shared_config_words(page, common, PipeEndpoint::Sender);
     page[i++] = common.layout.counters_offset;  // word[7]: this sender's own counter pairs
     page[i++] = pages_acked_offset;
     for (const CoreCoord& phys : receiver_noc_xy) {
@@ -144,14 +155,7 @@ std::vector<uint32_t> build_receiver_config_page(
     uint32_t pages_acked_offset,
     CoreCoord sender_noc_xy) {
     std::vector<uint32_t> page(words_per_page(common), 0);
-    uint32_t i = 0;
-    page[i++] = 0;  // word[0]: is_sender
-    page[i++] = common.num_receivers;
-    page[i++] = common.data_base_addr;
-    page[i++] = common.ring_size;
-    page[i++] = common.data_base_addr;  // word[4]: initial fifo_ptr checkpoint
-    page[i++] = common.applied_entry_size;
-    page[i++] = common.layout.noc_xy_offset;
+    uint32_t i = write_shared_config_words(page, common, PipeEndpoint::Receiver);
     // word[7]: this receiver's own counter pair (sent at +0, acked at +L1_ALIGNMENT). Offsets are
     // page-relative and every receiver page of a pipe sits at the same L1 address, which is what
     // lets the sender reach receiver r's slot as remote_counters_base + 2*r*L1_ALIGNMENT.
@@ -160,6 +164,43 @@ std::vector<uint32_t> build_receiver_config_page(
     page[i++] = static_cast<uint32_t>(sender_noc_xy.x);
     page[i++] = static_cast<uint32_t>(sender_noc_xy.y);
     return page;
+}
+
+// Receiver order, page layout, and the fields every config page of one pipe repeats: the preamble
+// each of the three page builders below would otherwise recompute.
+//
+// Receiver order is the pipe's slab-numbering contract, and the two sender flavours number
+// differently. A DRAM-sender pipe traverses row-wise, matching build_dram_sender_mapping's
+// ceil/floor receiver split and the GlobalCircularBuffer receiver tables, so a tensor laid out for
+// one DRAM-sender transport is laid out for the other. A worker-sender pipe keeps
+// corerange_to_cores' default order, which is what its receivers were created with.
+struct PrefetcherPipePageContext {
+    std::vector<CoreCoord> receivers;
+    PrefetcherPipePageCommon common;
+};
+
+PrefetcherPipePageContext build_page_context(
+    const CoreRangeSet& receiver_cores,
+    SenderCoreType sender_core_type,
+    uint32_t l1_alignment,
+    uint32_t data_base_addr,
+    uint32_t ring_size,
+    uint32_t applied_entry_size) {
+    auto receivers =
+        corerange_to_cores(receiver_cores, /*max_cores=*/std::nullopt, sender_core_type == SenderCoreType::Dram);
+    const auto num_recv = static_cast<uint32_t>(receivers.size());
+    return PrefetcherPipePageContext{
+        .receivers = std::move(receivers),
+        .common =
+            PrefetcherPipePageCommon{
+                .layout = compute_prefetcher_pipe_config_page_layout(num_recv, l1_alignment),
+                .l1_alignment = l1_alignment,
+                .num_receivers = num_recv,
+                .data_base_addr = data_base_addr,
+                .ring_size = ring_size,
+                .applied_entry_size = applied_entry_size,
+            },
+    };
 }
 
 }  // namespace
@@ -229,6 +270,12 @@ PrefetcherPipeImpl::PrefetcherPipeImpl(
     }
 }
 
+void PrefetcherPipeImpl::set_config_page_geometry(uint32_t page_size, uint32_t counters_offset) {
+    config_page_size_ = page_size;
+    credit_reset_offset_ = counters_offset;
+    credit_reset_size_ = page_size - counters_offset;
+}
+
 void PrefetcherPipeImpl::build_config_pages() {
     TT_FATAL(config_address_ != 0, "PrefetcherPipe config allocation must exist before building pages");
     TT_FATAL(data_address_ != 0, "PrefetcherPipe data address must be set before building config pages");
@@ -236,24 +283,15 @@ void PrefetcherPipeImpl::build_config_pages() {
     const auto context_id = extract_context_id(device_);
     const auto& hal = MetalContext::instance(context_id).hal();
     const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
-    const auto layout = compute_prefetcher_pipe_config_page_layout(receiver_cores_.num_cores(), l1_alignment);
-    config_page_size_ = layout.page_size;
-    credit_reset_offset_ = layout.counters_offset;
-    credit_reset_size_ = config_page_size_ - credit_reset_offset_;
+    // initial_entry_size_ is 0 for a worker-sender pipe: its first Attach sets the applied size.
+    const auto [receiver_vec, common] = build_page_context(
+        receiver_cores_, sender_core_type_, l1_alignment, data_address_, ring_size_, initial_entry_size_);
+    const auto& layout = common.layout;
+    set_config_page_geometry(layout.page_size, layout.counters_offset);
 
     config_pages_.clear();
 
-    const auto receiver_vec = corerange_to_cores(receiver_cores_);
-    const uint32_t num_recv = static_cast<uint32_t>(receiver_vec.size());
-
-    const PrefetcherPipePageCommon common{
-        .layout = layout,
-        .l1_alignment = l1_alignment,
-        .num_receivers = num_recv,
-        .data_base_addr = data_address_,
-        .ring_size = ring_size_,
-        .applied_entry_size = 0,  // set by the first Attach
-    };
+    const uint32_t num_recv = common.num_receivers;
 
     std::vector<CoreCoord> receiver_phys;
     receiver_phys.reserve(num_recv);
@@ -279,18 +317,10 @@ std::unordered_map<CoreCoord, std::vector<uint32_t>> PrefetcherPipeImpl::build_d
 
     const uint32_t l1_alignment =
         MetalContext::instance(extract_context_id(device_)).hal().get_alignment(HalMemType::L1);
-    const auto receiver_vec = corerange_to_cores(receiver_cores_, /*max_cores=*/std::nullopt, /*row_wise=*/true);
-    const uint32_t num_recv = static_cast<uint32_t>(receiver_vec.size());
-    const auto layout = compute_prefetcher_pipe_config_page_layout(num_recv, l1_alignment);
-
-    const PrefetcherPipePageCommon common{
-        .layout = layout,
-        .l1_alignment = l1_alignment,
-        .num_receivers = num_recv,
-        .data_base_addr = data_address_,
-        .ring_size = ring_size_,
-        .applied_entry_size = initial_entry_size_,
-    };
+    const auto [receiver_vec, common] = build_page_context(
+        receiver_cores_, sender_core_type_, l1_alignment, data_address_, ring_size_, initial_entry_size_);
+    const auto& layout = common.layout;
+    const uint32_t num_recv = common.num_receivers;
 
     // Base of the sender's counter pairs, inside its config page in DRISC L1.
     const uint32_t drisc_counters_base =
@@ -315,12 +345,12 @@ std::unordered_map<CoreCoord, std::vector<uint32_t>> PrefetcherPipeImpl::build_d
 void PrefetcherPipeImpl::initialize_dram_sender_config_page() {
     auto& metal_ctx = MetalContext::instance(device_->impl().get_context_id());
     const uint32_t l1_alignment = metal_ctx.hal().get_alignment(HalMemType::L1);
-    const auto receiver_vec = corerange_to_cores(receiver_cores_, /*max_cores=*/std::nullopt, /*row_wise=*/true);
-    const uint32_t num_recv = static_cast<uint32_t>(receiver_vec.size());
-    const auto layout = compute_prefetcher_pipe_config_page_layout(num_recv, l1_alignment);
-    config_page_size_ = layout.page_size;
-    credit_reset_offset_ = layout.counters_offset;
-    credit_reset_size_ = config_page_size_ - credit_reset_offset_;
+    // A DRAM sender never Attaches, so it could never answer a resize; pre-stamp its size.
+    const auto [receiver_vec, common] = build_page_context(
+        receiver_cores_, sender_core_type_, l1_alignment, data_address_, ring_size_, initial_entry_size_);
+    const auto& layout = common.layout;
+    const uint32_t num_recv = common.num_receivers;
+    set_config_page_geometry(layout.page_size, layout.counters_offset);
 
     // Reserved on this sender's core alone: a pipe on another bank can hold the same offset, so a
     // set of one-sender pipes costs the small DRISC zone one page rather than one page per pipe.
@@ -340,16 +370,6 @@ void PrefetcherPipeImpl::initialize_dram_sender_config_page() {
         "credits",
         receiver_counters_base,
         dev_msgs::REMOTE_CB_PACKED_ADDR_MASK);
-
-    const PrefetcherPipePageCommon common{
-        .layout = layout,
-        .l1_alignment = l1_alignment,
-        .num_receivers = num_recv,
-        .data_base_addr = data_address_,
-        .ring_size = ring_size_,
-        // A DRAM sender never Attaches, so it could never answer a resize; pre-stamp its size.
-        .applied_entry_size = initial_entry_size_,
-    };
 
     std::vector<CoreCoord> receiver_phys(num_recv);
     for (IDevice* dev : device_->get_devices()) {
@@ -580,16 +600,6 @@ CoreRangeSet prefetcher_pipe_receiver_cores(const std::vector<std::shared_ptr<Pr
         ranges.insert(ranges.end(), receivers.begin(), receivers.end());
     }
     return CoreRangeSet().merge(ranges);
-}
-
-std::vector<uint32_t> prefetcher_pipe_config_addresses(const std::vector<std::shared_ptr<PrefetcherPipe>>& pipes) {
-    std::vector<uint32_t> config_addresses;
-    config_addresses.reserve(pipes.size());
-    for (const auto& pipe : pipes) {
-        TT_FATAL(pipe != nullptr, "PrefetcherPipe list holds a null pipe at index {}", config_addresses.size());
-        config_addresses.push_back(pipe->config_address());
-    }
-    return config_addresses;
 }
 
 uint32_t CreatePrefetcherPipeRelayDataflowBuffer(

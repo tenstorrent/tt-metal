@@ -7,7 +7,6 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/experimental/tensor_prefetcher.hpp>
-#include <tt-metalium/program.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
@@ -60,7 +59,7 @@ void queue_tensor_prefetcher_request(
     auto* trace_cq = capture_into_trace ? &mesh_device->mesh_command_queue() : nullptr;
     if (has_pipes) {
         tt::tt_metal::experimental::QueueTensorPrefetcherRequest(
-            *mesh_device, metal_exp::group_prefetcher_pipes_by_bank(prefetcher_pipes), device_subset, inputs, trace_cq);
+            *mesh_device, prefetcher_pipes, device_subset, inputs, trace_cq);
     } else {
         tt::tt_metal::experimental::QueueTensorPrefetcherRequest(
             *mesh_device, *global_cb, device_subset, inputs, trace_cq);
@@ -74,8 +73,8 @@ std::vector<std::shared_ptr<metal_exp::PrefetcherPipe>> create_prefetcher_pipes_
     uint32_t num_entries,
     tt::tt_metal::BufferType buffer_type,
     bool support_multi_receiver_shards) {
-    return metal_exp::flatten_prefetcher_pipe_banks(metal_exp::CreatePrefetcherPipesForTensorPrefetcher(
-        *mesh_device, bank_to_receivers, entry_size, num_entries, buffer_type, support_multi_receiver_shards));
+    return metal_exp::CreatePrefetcherPipesForTensorPrefetcher(
+        *mesh_device, bank_to_receivers, entry_size, num_entries, buffer_type, support_multi_receiver_shards);
 }
 
 void wait_for_cq_on_tensor_prefetcher(

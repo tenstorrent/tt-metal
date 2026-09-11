@@ -518,12 +518,12 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
 }
 
 TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
-    const std::vector<experimental::TensorPrefetcherBankPipes>& prefetcher_pipes) const {
-    TT_FATAL(!prefetcher_pipes.empty(), "QueueTensorPrefetcherRequest requires at least one bank of PrefetcherPipes");
+    const std::vector<std::shared_ptr<experimental::PrefetcherPipe>>& prefetcher_pipes) const {
+    TT_FATAL(!prefetcher_pipes.empty(), "QueueTensorPrefetcherRequest requires at least one PrefetcherPipe");
 
     RequestTarget target;
     target.transport = TENSOR_PREFETCHER_TRANSPORT_PREFETCHER_PIPE;
-    // Bank-major mapping: a group's pipes stay adjacent and in their own order, which is what
+    // Bank-major mapping: a bank's pipes stay adjacent and in their own order, which is what
     // recv_index_bases_per_sender turns into each sender's bank-local slab base (0 for the first
     // pipe of a bank, the first pipe's receiver count for the second). Taken from the shared
     // helper so this order is the one a consumer op's cache key sees, not a re-derivation of it.
@@ -535,77 +535,107 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
     uint32_t total_receivers = 0;
     std::optional<uint32_t> first_entry_size;
 
-    size_t flat_pipe = 0;
-    for (const auto& bank : prefetcher_pipes) {
-        TT_FATAL(
-            seen_banks.insert(bank.bank_id).second,
-            "QueueTensorPrefetcherRequest requires each DRAM bank to appear once, but bank {} appears more than "
-            "once. Pass the groups CreatePrefetcherPipesForTensorPrefetcher returned: a bank's slab numbering is "
-            "shared by its pipes.",
-            bank.bank_id);
-        TT_FATAL(
-            bank.pipes.size() == 1 || bank.pipes.size() == 2,
-            "QueueTensorPrefetcherRequest requires 1 or 2 PrefetcherPipes per bank (a bank is driven by one DRISC "
-            "sender, or by two splitting its receivers), but bank {} holds {}.",
-            bank.bank_id,
-            bank.pipes.size());
-
-        for (size_t p = 0; p < bank.pipes.size(); ++p, ++flat_pipe) {
-            // Null pipes were rejected by prefetcher_pipe_sender_receiver_mapping above.
-            const experimental::PrefetcherPipe& pipe = *bank.pipes[p];
-            // Same reason as the GCB overload: state_addr_per_sender below is a DRISC L1 offset
-            // reserved on this mesh, so a pipe from another one would aim the sender at unrelated
-            // state instead of failing here.
+    // A pipe's bank is its sender's DRAM-logical x, and banks are taken as *contiguous runs* rather
+    // than looked up: a bank that reappears after its run has ended opens a second run with that
+    // bank id and is rejected below, instead of being silently folded back into the first. Slab
+    // bases come from adjacency, so a list whose banks interleave numbers them wrong.
+    uint32_t bank_id = 0;
+    uint32_t pipe_in_bank = 0;
+    size_t previous_role = 0;
+    std::vector<CoreCoord> bank_sender_roles;
+    for (size_t p = 0; p < prefetcher_pipes.size(); ++p) {
+        // Null pipes were rejected by prefetcher_pipe_sender_receiver_mapping above.
+        const experimental::PrefetcherPipe& pipe = *prefetcher_pipes[p];
+        const CoreCoord& sender = target.mapping[p].first;
+        const auto sender_bank = static_cast<uint32_t>(sender.x);
+        const bool starts_a_bank = p == 0 || sender_bank != bank_id;
+        if (starts_a_bank) {
+            bank_id = sender_bank;
+            pipe_in_bank = 0;
             TT_FATAL(
-                pipe.get_device() == mesh_device_,
-                "QueueTensorPrefetcherRequest requires PrefetcherPipes created on the prefetcher's own mesh device, "
-                "but bank {} pipe {} belongs to another",
-                bank.bank_id,
-                p);
-            TT_FATAL(
-                pipe.sender_core_type() == experimental::SenderCoreType::Dram,
-                "QueueTensorPrefetcherRequest requires DRAM-sender PrefetcherPipes, but bank {} pipe {} has a worker "
-                "sender. Build them with CreatePrefetcherPipesForTensorPrefetcher.",
-                bank.bank_id,
-                p);
-
-            const CoreCoord& sender = target.mapping[flat_pipe].first;
-            TT_FATAL(
-                static_cast<uint32_t>(sender.x) == bank.bank_id,
-                "QueueTensorPrefetcherRequest requires a bank's PrefetcherPipes to be driven from that bank, but "
-                "bank {} pipe {} has DRAM sender ({}, {}), which drives bank {}.",
-                bank.bank_id,
-                p,
-                sender.x,
-                sender.y,
-                sender.x);
-
-            const uint32_t entry_size = pipe.initial_entry_size();
-            const uint32_t ring_size = pipe.ring_size();
-            if (!first_entry_size.has_value()) {
-                first_entry_size = entry_size;
-                target.per_recv_capacity_bytes = ring_size;
-            }
-            TT_FATAL(
-                entry_size == *first_entry_size && ring_size == target.per_recv_capacity_bytes,
-                "QueueTensorPrefetcherRequest requires one geometry across every pipe: bank {} pipe {} has entry size "
-                "{} B and ring size {} B, but the first pipe has {} B and {} B. One request stamps one layout for "
-                "every sender.",
-                bank.bank_id,
-                p,
-                entry_size,
-                ring_size,
-                *first_entry_size,
-                target.per_recv_capacity_bytes);
-
-            const CoreRangeSet& receivers = target.mapping[flat_pipe].second;
-            for (const CoreCoord& receiver : corerange_to_cores(receivers)) {
-                distinct_receivers.insert(receiver);
-            }
-            total_receivers += receivers.num_cores();
-            target.state_addr_per_sender.push_back(
-                static_cast<uint32_t>(experimental::sender_state_drisc_l1_base(pipe)));
+                seen_banks.insert(bank_id).second,
+                "QueueTensorPrefetcherRequest requires each DRAM bank to appear once, but bank {} appears more than "
+                "once. Pass the pipes CreatePrefetcherPipesForTensorPrefetcher returned, in that order: a bank's "
+                "slab numbering is shared by its pipes and comes from their adjacency.",
+                bank_id);
+            // Any device of the mesh answers this: the roles are logical coords naming endpoint
+            // roles, which a well-formed descriptor set resolves the same way mesh-wide (only the
+            // physical subchannel behind a role moves with a device's DRAM harvest).
+            bank_sender_roles =
+                mesh_device_->impl().dram_sender_logical_cores(mesh_device_->get_devices().front(), bank_id);
+        } else {
+            ++pipe_in_bank;
         }
+        TT_FATAL(
+            pipe_in_bank < 2,
+            "QueueTensorPrefetcherRequest requires 1 or 2 PrefetcherPipes per bank (a bank is driven by one DRISC "
+            "sender, or by two splitting its receivers), but bank {} holds more.",
+            bank_id);
+
+        // Same reason as the GCB overload: state_addr_per_sender below is a DRISC L1 offset
+        // reserved on this mesh, so a pipe from another one would aim the sender at unrelated
+        // state instead of failing here.
+        TT_FATAL(
+            pipe.get_device() == mesh_device_,
+            "QueueTensorPrefetcherRequest requires PrefetcherPipes created on the prefetcher's own mesh device, "
+            "but bank {} pipe {} belongs to another",
+            bank_id,
+            pipe_in_bank);
+        TT_FATAL(
+            pipe.sender_core_type() == experimental::SenderCoreType::Dram,
+            "QueueTensorPrefetcherRequest requires DRAM-sender PrefetcherPipes, but bank {} pipe {} has a worker "
+            "sender. Build them with CreatePrefetcherPipesForTensorPrefetcher.",
+            bank_id,
+            pipe_in_bank);
+
+        // Which of the bank's two DRISC cores a pipe sends from is what orders the pair: the first
+        // role's pipe owns the bank's leading receivers, and slab bases are accumulated in list
+        // order, so a swapped pair would hand the trailing receivers base 0. Receiver counts cannot
+        // tell the two apart -- an even split gives both the same count.
+        const auto role = std::find(bank_sender_roles.begin(), bank_sender_roles.end(), sender);
+        TT_FATAL(
+            role != bank_sender_roles.end(),
+            "QueueTensorPrefetcherRequest: pipe {} sends from {}, which is not one of DRAM bank {}'s sender cores",
+            p,
+            sender.str(),
+            bank_id);
+        const auto role_index = static_cast<size_t>(std::distance(bank_sender_roles.begin(), role));
+        TT_FATAL(
+            starts_a_bank || role_index > previous_role,
+            "DRAM bank {}'s PrefetcherPipes are not in sender order: pipe {} sends from {}, its bank's sender {}, "
+            "after a pipe that sends from its sender {}. A sender's bank-local slab base is accumulated in list "
+            "order, so pass the pipes as CreatePrefetcherPipesForTensorPrefetcher returned them",
+            bank_id,
+            pipe_in_bank,
+            sender.str(),
+            role_index,
+            previous_role);
+        previous_role = role_index;
+
+        const uint32_t entry_size = pipe.initial_entry_size();
+        const uint32_t ring_size = pipe.ring_size();
+        if (!first_entry_size.has_value()) {
+            first_entry_size = entry_size;
+            target.per_recv_capacity_bytes = ring_size;
+        }
+        TT_FATAL(
+            entry_size == *first_entry_size && ring_size == target.per_recv_capacity_bytes,
+            "QueueTensorPrefetcherRequest requires one geometry across every pipe: bank {} pipe {} has entry size "
+            "{} B and ring size {} B, but the first pipe has {} B and {} B. One request stamps one layout for "
+            "every sender.",
+            bank_id,
+            pipe_in_bank,
+            entry_size,
+            ring_size,
+            *first_entry_size,
+            target.per_recv_capacity_bytes);
+
+        const CoreRangeSet& receivers = target.mapping[p].second;
+        for (const CoreCoord& receiver : corerange_to_cores(receivers)) {
+            distinct_receivers.insert(receiver);
+        }
+        total_receivers += receivers.num_cores();
+        target.state_addr_per_sender.push_back(static_cast<uint32_t>(experimental::sender_state_drisc_l1_base(pipe)));
     }
     TT_FATAL(
         distinct_receivers.size() == total_receivers,
@@ -1144,12 +1174,12 @@ void TensorPrefetcherManager::queue(
 }
 
 void TensorPrefetcherManager::queue(
-    const std::vector<experimental::TensorPrefetcherBankPipes>& prefetcher_pipes,
+    const std::vector<std::shared_ptr<experimental::PrefetcherPipe>>& prefetcher_pipes,
     const std::optional<MeshCoordinateRangeSet>& device_subset,
     const std::vector<experimental::TensorPrefetcherInput>& tensors,
     MeshCommandQueue* trace_capture_cq) {
-    // target_for validates the groups: one to two DRAM senders per bank, each on its own bank, one
-    // shared geometry, and disjoint receivers.
+    // target_for validates the list: banks in contiguous runs appearing once each, one to two DRAM
+    // senders per bank and in sender order, one shared geometry, and disjoint receivers.
     queue_to_target(target_for(prefetcher_pipes), device_subset, tensors, trace_capture_cq);
 }
 
@@ -1515,7 +1545,7 @@ void QueueTensorPrefetcherRequest(
 
 void QueueTensorPrefetcherRequest(
     distributed::MeshDevice& mesh_device,
-    const std::vector<TensorPrefetcherBankPipes>& prefetcher_pipes,
+    const std::vector<std::shared_ptr<PrefetcherPipe>>& prefetcher_pipes,
     const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
     const std::vector<TensorPrefetcherInput>& input_tensors,
     distributed::MeshCommandQueue* trace_capture_cq) {
