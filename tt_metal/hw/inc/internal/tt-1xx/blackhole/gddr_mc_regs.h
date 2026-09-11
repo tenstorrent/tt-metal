@@ -25,7 +25,7 @@ constexpr uint32_t gddr_mc_mpfe_weight_reg_addr(uint32_t port) {
         case 1: return GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_P1_REG_ADDR;
         case 2: return GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_P2_REG_ADDR;
         case 3: return GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_P3_REG_ADDR;
-        default: ASSERT(false, DebugAssertTripped); return 0;
+        default: ASSERT(false, DebugAssertTripped); __builtin_trap();
     }
 }
 
