@@ -99,6 +99,7 @@ jobs:
       status: ${{ steps.gate.outputs.status }}
       expected-leg-count: ${{ steps.gate.outputs.expected-leg-count }}
       review-leg-count: ${{ steps.gate.outputs.review-leg-count }}
+      review-met: ${{ steps.gate.outputs.review-met }}
       leg-digest: ${{ steps.gate.outputs.leg-digest }}
       needs-default: ${{ steps.gate.outputs.needs-default }}
       needs-profiler: ${{ steps.gate.outputs.needs-profiler }}
@@ -417,12 +418,18 @@ jobs:
               || fail "${{ needs.scope.outputs.leg-count }} leg(s) did not all pass (run-tests: ${{ needs.run-tests.result }})."
           fi
 
+          # The scope step reports the review verdict rather than failing on it, so
+          # the runnable legs still get dispatched and proven. Enforce it here.
+          if [[ '${{ needs.scope.outputs.review-met }}' == 'false' ]]; then
+            fail "${{ needs.scope.outputs.review-leg-count }} leg(s) on highly contended SKUs need an approving review from a code owner. See the scope job for which files and owners."
+          fi
+
           case '${{ needs.scope.outputs.status }}' in
             no_op)
               echo "No behaviour-affecting test-entry changes. Nothing to prove."
               ;;
             blocked)
-              echo "Legs this gate does not run carry an owner approval on the current head."
+              echo "${{ needs.scope.outputs.leg-count }} leg(s) ran; ${{ needs.scope.outputs.review-leg-count }} on highly contended SKUs carry a code owner's approval instead."
               ;;
             run)
               echo "All ${{ needs.scope.outputs.leg-count }} leg(s) passed."

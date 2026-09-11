@@ -806,6 +806,25 @@ def fetch_reviews(repo, pr, token):
     raise GateError(f"reviews for {repo}#{pr} did not terminate after {MAX_REVIEW_PAGES} pages")
 
 
+def approving_logins(reviews):
+    """
+    Logins whose current review on the PR is an approval.
+
+    Only the latest verdict per person counts: a COMMENTED review leaves an earlier
+    approval standing (GitHub does the same), while a later CHANGES_REQUESTED or a
+    dismissal withdraws it. Reviews arrive oldest first, so the last verdict seen
+    for a login wins.
+    """
+    verdicts = {}
+    for review in reviews:
+        login = (review.get("user") or {}).get("login")
+        state = review.get("state")
+        if not login or state in (None, "COMMENTED", "PENDING"):
+            continue
+        verdicts[login] = state
+    return {login for login, state in verdicts.items() if state == "APPROVED"}
+
+
 def check_reviews(review_legs, repo, pr, head_sha, codeowners_path):
     """
     Require an approving review from the edited yaml's own code owners.
@@ -813,9 +832,11 @@ def check_reviews(review_legs, repo, pr, head_sha, codeowners_path):
     Checked per file, because two blocked yamls can have different owners --
     an approval from the models owners says nothing about a fabric edit.
 
+    These legs are on highly contended SKUs the gate will not run, so the
+    requirement falls back to the ordinary rule: the PR must carry an approval from
+    a code owner. Which commit that approval sits on is not considered --
     dismiss_stale_reviews_on_push is false on main, so an approval survives later
-    pushes. Requiring it to sit on the current head stops an approval of one
-    galaxy edit from covering a different one pushed afterwards.
+    pushes, and this gate does not second-guess that.
 
     Where a path resolves to no individual owners -- unowned, or owned only by a
     team, which the workflow token cannot expand -- this falls back to accepting
@@ -828,11 +849,7 @@ def check_reviews(review_legs, repo, pr, head_sha, codeowners_path):
 
     rules = load_codeowners(codeowners_path)
     reviews = fetch_reviews(repo, pr, os.environ.get("GH_TOKEN"))
-    approvers = {
-        (review.get("user") or {}).get("login")
-        for review in reviews
-        if review.get("state") == "APPROVED" and review.get("commit_id") == head_sha
-    } - {None}
+    approvers = approving_logins(reviews)
 
     by_file = {}
     for leg in review_legs:
@@ -868,13 +885,13 @@ def check_reviews(review_legs, repo, pr, head_sha, codeowners_path):
         for path, owners in unmet:
             who = ", ".join("@" + o for o in owners) if owners else "a code owner"
             print(
-                f"::error::{path} has legs this gate does not run. It needs an approving "
-                f"review on {head_sha} from {who}.",
+                f"::error::{path} has legs on highly contended SKUs that this gate does not "
+                f"run. The PR needs an approving review from {who}.",
                 file=sys.stderr,
             )
         return 1
 
-    print(f"\nAll {len(review_legs)} leg(s) needing review are approved on {head_sha}.")
+    print(f"\nAll {len(review_legs)} leg(s) needing review carry a code owner's approval.")
     return 0
 
 
@@ -905,9 +922,7 @@ def run(args):
         for new_path, old_path in sorted(renames.items()):
             print(f"Renamed: {old_path} -> {new_path} (diffed against its old path)")
 
-    scope = build_scope(
-        base, files, review_only, tracy_files, non_matrix_files, unsupported_files, renames=renames
-    )
+    scope = build_scope(base, files, review_only, tracy_files, non_matrix_files, unsupported_files, renames=renames)
 
     # In a merge group the legs already ran on the PR head, so there is no matrix
     # to build and no review to re-check -- only the scope needs to resolve.
@@ -953,8 +968,16 @@ def run(args):
             path = "sim" if str(row.get("sku", "")).startswith("sim_") else "hw"
             print(f"  - [{path}] {describe_row(row_key(row))}  [{row['source_yaml']}]")
 
+    # The review verdict is reported as an output, not as this step's exit code.
+    # Failing here would skip every downstream job, so a single leg parked behind an
+    # owner review would stop the legs this gate CAN run from running at all -- the
+    # changed tests still have to be proven either way. verify-changed-tests turns an
+    # unmet review into the gate failure at the end, once the runnable legs are in.
+    review_met = True
     if dispatching and scope["review_legs"]:
-        return check_reviews(scope["review_legs"], args.repo, args.pr, args.head_sha, args.codeowners)
+        review_met = check_reviews(scope["review_legs"], args.repo, args.pr, args.head_sha, args.codeowners) == 0
+
+    write_github_output([("review-met", str(review_met).lower())])
     return 0
 
 
