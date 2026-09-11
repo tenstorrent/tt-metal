@@ -75,21 +75,23 @@ def test_tanh_range(device, torch_dtype, ttnn_dtype, atol):
     # measured on a Wormhole n150 with the 6-entry ULP-fitted approximate table:
     #
     #   bfloat16  approx=False  pcc 0.9999899271259238   max|err| 0.003906
-    #   bfloat16  approx=True   pcc 0.9991178786405039   max|err| 0.042969
+    #   bfloat16  approx=True   pcc 0.9999149051477796   max|err| 0.017578
     #   float32   approx=False  pcc 0.9999999999999983   max|err| 0.000000
-    #   float32   approx=True   pcc 0.9991877722055272   max|err| 0.037996
+    #   float32   approx=True   pcc 0.9999224853063899   max|err| 0.018962
     #
-    # Read the approx rows as a warning about PCC, not as a regression. Against the
-    # previous 3-segment table (pcc 0.9992522964571828 / 0.9992540536236625, max|err|
-    # 0.056641 / 0.055867) max abs error improved by 1.3-1.5x while PCC got *worse* in
-    # the fourth decimal. PCC scores the linear correlation of the deviation pattern,
-    # not its size, so a systematically scaled error correlates better than a smaller
-    # but wigglier one. Over the full bf16 domain the new table is better on every
-    # error metric at once: max bf16 ULP 48.0 -> 10.7, max abs 0.0582 -> 0.0417, max
-    # relative 18.75% -> 4.91%. Gate on those, not on this PCC.
+    # Over the full bf16 domain, against the 3-segment 0.8125 table this replaces:
+    # max bf16 ULP 48.0 -> 10.0, max abs 0.0582 -> 0.0184, max relative 18.75% -> 4.48%.
     #
-    # The float32 approx row is exactly the fit's own maximum: 0.037996, reached at
-    # |x| = 1.88, and this input happens to sample it.
+    # Gate on those rather than on PCC. An intermediate version of this table -- same
+    # global max ULP, 2x worse max absolute error -- scored pcc 0.9991178786405039 here,
+    # *below* the 0.9992522964571828 of the 3-segment table it beat on every error
+    # metric. PCC scores the linear correlation of the deviation pattern, not its size,
+    # so a systematically scaled error can outscore a smaller but wigglier one. It
+    # happens to agree with the error metrics for this table; that is not something to
+    # rely on.
+    #
+    # The float32 approx row is exactly the fit's own maximum: 0.018962, reached at
+    # |x| = 0.5, and this input happens to sample it.
     #
     # Not re-measured on Blackhole -- no p100a on this host. The two architectures share
     # the table and the instruction, and the previous 3-segment numbers agreed to seven

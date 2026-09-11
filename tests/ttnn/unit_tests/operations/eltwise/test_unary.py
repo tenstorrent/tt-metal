@@ -2029,12 +2029,12 @@ def test_unary_tanh_approx_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
     golden_tensor = golden_function(in_data1)
 
     # The approximate path is a 6-entry SFPLUTFP32 table fitted to minimise bf16 ULP error
-    # (see tanh_init in ckernel_sfpu_tanh.h): max abs error 0.0380 at the kernel, 0.0417 read
+    # (see tanh_init in ckernel_sfpu_tanh.h): max abs error 0.0190 at the kernel, 0.0184 read
     # back as bfloat16. atol was 0.15, sized for the 0.1447 of the original table, which left
-    # this test unable to notice a regression back to it. 0.06 is the LUT error plus room for
+    # this test unable to notice a regression back to it. 0.03 is the LUT error plus room for
     # output quantization -- bfloat8_b's shared-exponent step over a [-1, 1] block adds ~0.008
     # on top -- and is tight enough to fail if either 3-segment table (0.0582, 0.1447) returns.
-    assert_allclose(output_tensor, golden_tensor, rtol=1e-05, atol=0.06)
+    assert_allclose(output_tensor, golden_tensor, rtol=1e-05, atol=0.03)
 
 
 @pytest.mark.parametrize(
