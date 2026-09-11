@@ -578,6 +578,20 @@ class SpeculativeDecoder:
             f"max_new={max_new_tokens} {_samp}"
         )
 
+        # Capacity check: bounded by the SPECULATIVE high-water slot, not the returned-token count.
+        # Verify writes K+1 candidate slots per iteration no matter how many are later accepted, and
+        # capture_verify_trace's throwaway warmup writes T+1..T+1+K even when the loop body never runs
+        # (max_new_tokens == 1). A slot past the cache reaches paged_update_cache, which indexes
+        # page_table[slot / block_size] with no bounds check. Must run before prefill/seed/warmup/
+        # capture, and for both reseed modes (eager reseed used to skip this check entirely).
+        self._reseed_block_size = int(self.mtp.attention.paged_k.shape[-2])
+        nb = self.page_table.shape[-1]
+        _hi = T + self.K + max(1, max_new_tokens - 1)
+        assert _hi < nb * self._reseed_block_size, (
+            f"high-water slot {_hi} (T={T}, max_new={max_new_tokens}, K={self.K}) does not fit the "
+            f"paged KV: {nb} blocks x {self._reseed_block_size} = {nb * self._reseed_block_size} slots"
+        )
+
         # Chunked prompt prefill (2048-token chunks + masked tail — the same path the demo uses, so
         # long prompts work). Each chunk's hidden warms the MTP drafter's KV in ONE forward before it
         # is freed, so the drafter never sees an empty cache and TTFT stays flat in prompt length.
@@ -634,14 +648,6 @@ class SpeculativeDecoder:
 
         # Batched-reseed warmup: compiles the B=K+1 drafter forward while nothing is traced yet.
         if self._batched_reseed:
-            self._reseed_block_size = self.mtp.attention.paged_k.shape[-2]
-            nb = self.page_table.shape[-1]
-            # The reseed scratch is the cache's own extra block, so the sequence gets the whole page
-            # table: it only has to fit in nb blocks, the same bound the base KV cache imposes.
-            assert T + max_new_tokens <= nb * self._reseed_block_size, (
-                f"sequence does not fit the paged KV: {nb} blocks x {self._reseed_block_size} "
-                f"cannot hold {T} prompt + {max_new_tokens} generated tokens"
-            )
             self._reseed_warmup(self.K + 1, Hp.shape[-1], Hp.dtype)
 
         p = T
@@ -677,7 +683,9 @@ class SpeculativeDecoder:
         self.prefill_time = time.perf_counter() - _t_start  # TTFT: prefill + MTP warm + seed
         _t_decode = time.perf_counter()
 
-        while len(out) < max_new_tokens:
+        # Prefill can emit a stop token directly (`first`); the loop must not extend past it.
+        _prefill_stop = first in self.stop_tokens
+        while not _prefill_stop and len(out) < max_new_tokens:
             _tm = self._tick() if self._timing else 0.0
             drafts = self._draft(pending, Hp, p)
             _t_draft = self._tick() if self._timing else 0.0
@@ -706,6 +714,12 @@ class SpeculativeDecoder:
                 )
                 m, sampled_tok = self._accept_sample(drafts, vlogits, penalize_base)
             committed = [pending] + drafts[:m]
+            # The accept test can accept drafts PAST a stop token, so emit only through the first
+            # one. commit/anchor/reseed/p all follow the shortened prefix, since they derive from
+            # `committed`/`mi` below; acceptance stats deliberately keep the full `m`.
+            _stop_i = next((i for i, t in enumerate(committed) if t in self.stop_tokens), None)
+            if _stop_i is not None:
+                committed = committed[: _stop_i + 1]
             mi = len(committed) - 1  # accepted-prefix's last token index in the verify window
             _t_accept = time.perf_counter() if self._timing else 0.0  # host-only: no fence needed
             self._commit(mi)

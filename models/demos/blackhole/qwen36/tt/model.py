@@ -566,7 +566,7 @@ class Qwen36Model:
         )
 
         # layer_indices: run only these checkpoint layers (e.g. [0,3,31]) for profiling.
-        # Each keeps its real type via full attention_type_list. Overrides n_layers truncation.
+        # Each keeps its real type via full attention_type_list; n_layers below takes the first N layers instead.
         if layer_indices is not None:
             layer_indices = list(layer_indices)
             assert layer_indices, "layer_indices must be non-empty"
@@ -576,8 +576,10 @@ class Qwen36Model:
             args.layer_indices = layer_indices
             args.n_layers = len(layer_indices)
         elif n_layers is not None:
+            # Keep attention_type_list whole: n_layers alone decides how many layers get built
+            # (list(range(args.n_layers))); each kept index's type is unchanged either way, and MTP
+            # needs a real full_attention index from this list -- truncating below 4 layers drops it.
             args.n_layers = n_layers
-            args.attention_type_list = args.attention_type_list[:n_layers]
 
         # NOTE: the warm-ttnn-cache HF-load skip is DISABLED for qwen3.6.
         # Its Gated-DeltaNet loader consumes conv weights on the host without a cache_file_name --

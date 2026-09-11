@@ -32,13 +32,14 @@ fall back to plain decode. Knobs:
   QWEN35_PRESENCE_PENALTY vLLM presence penalty (float >= 0, default 0):
                           subtract from the logit of every GENERATED token
                           (prompt excluded) before temperature / top-k / top-p.
-                          Wired into spec: the penalty lands on the target rows
-                          the accept test uses, so acceptance stays lossless
-                          w.r.t. the penalized distribution and does not force
-                          plain decode (unlike a repetition penalty). The plain
-                          path (QWEN36_SPEC=0) applies it on device via the
-                          shared sampler (TTPenalties, inside the traced step),
-                          so a penalized plain run is still a full-speed
+                          Wired into spec only when QWEN35_TEMP > 0: it lands
+                          on the target rows the accept test uses, so
+                          acceptance stays lossless w.r.t. the penalized
+                          distribution. At QWEN35_TEMP <= 0 spec's argmax is
+                          unpenalized, so that falls back to plain decode. The
+                          plain path (QWEN36_SPEC=0) applies it on device via
+                          the shared sampler (TTPenalties, inside the traced
+                          step), so a penalized plain run is still a full-speed
                           on-device-sampler baseline.
   QWEN36_SPEC_TIMING=1    per-iteration phase breakdown ([SPEC_TIMING] logs).
 """
@@ -497,17 +498,20 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     _top_k = int(os.environ.get("QWEN35_TOP_K", "0") or 0)
     _top_p = float(os.environ.get("QWEN35_TOP_P", "1.0") or 1.0)
     # Presence penalty (vLLM): subtracted from every already-generated token's logit before temperature.
-    # Wired into both paths: spec penalizes the verify rows the accept test uses; plain _pick() penalizes the sampled row.
+    # Wired into spec only when temperature > 0 (penalizes the verify rows the accept test uses); plain
+    # _pick() applies it at any temperature, including 0 (penalizes the sampled row).
     _presence = float(os.environ.get("QWEN35_PRESENCE_PENALTY", "0.0") or 0.0)
     # Host RNG seed for spec sampling; unset = SpecSampler draws one and logs it (replayable).
     _seed = int(os.environ["QWEN35_SEED"]) if os.environ.get("QWEN35_SEED") else None
 
     # Spec decode is the default; QWEN36_SPEC=0 opts out. Temp 0 accepts the greedy argmax prefix; temp > 0
     # runs exact speculative rejection sampling. Repetition penalty / no-repeat-ngram are not wired into spec
-    # and fall through to plain decode; presence penalty is (it penalizes the verify rows), so it does not.
+    # and fall through to plain decode; presence penalty is wired into spec only when temp > 0 (it penalizes
+    # the verify rows the accept test uses); at temp <= 0 spec's argmax is unpenalized, so that case falls
+    # through to plain decode, whose _pick() applies the penalty.
     _spec_req = os.environ.get("QWEN36_SPEC", "1") != "0"
     if _spec_req:
-        if model.mtp is not None and _rep_pen == 1.0 and _no_repeat == 0:
+        if model.mtp is not None and _rep_pen == 1.0 and _no_repeat == 0 and not (_temp <= 0 and _presence > 0.0):
             from models.demos.blackhole.qwen36.tt.spec_sampling import SpecSamplingParams
 
             sampling = (
@@ -527,8 +531,9 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
             )
         logger.info(
             f"[TP] spec decode unavailable (mtp={model.mtp is not None}, rep={_rep_pen}, "
-            f"no_repeat={_no_repeat}); it needs an MTP head, and a repetition penalty / "
-            "no-repeat-ngram is not wired into the spec path. Using plain decode."
+            f"no_repeat={_no_repeat}, temp={_temp}, presence={_presence}); it needs an MTP head, a repetition "
+            "penalty / no-repeat-ngram is not wired into the spec path, and a presence penalty at temperature <= 0 "
+            "is not wired into spec greedy (SpecSamplingParams requires temperature > 0). Using plain decode."
         )
     else:
         logger.info("[TP] QWEN36_SPEC=0 -> plain single-token decode (spec-decode baseline)")
