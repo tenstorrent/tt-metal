@@ -114,24 +114,26 @@ void kernel_main() {
     constexpr auto dfb_kt = dfb::kt;  // K^T staging (Quasar: transpose K here, then matmul transpose=false)
     constexpr auto dfb_out_im = dfb::out_im;
     constexpr auto dfb_out_accumulate_im = dfb::out_accumulate_im;
-    // Merged max buffer (depth 2*Sq_chunk_t): max_1/max_2 collapsed into one DFB to free an intra-Tensix
-    // tile-counter slot (Quasar caps at 8). cur_max and prev_max alias this one buffer. Within a chunk the
-    // "prev" max block sits at the ring front [0, Sq_chunk_t) and reduce_c / correction_block / max_block
-    // append the freshly computed "cur" block behind it [Sq_chunk_t, 2*Sq_chunk_t) via reserve_back, and
-    // read prev at the front — so those helpers need no change. The helpers that READ cur
-    // (sub_exp_block_bcast_cols_inplace, sub_exp_block) take a cur-offset arg (Sq_chunk_t, or 0 on the very
-    // first chunk where cur lands at the front of the empty ring). The move_block(cur->prev) at each
-    // chunk/round end becomes a self-rotation on this single buffer that carries the running max forward.
-    constexpr auto dfb_max = dfb::max;
-    // Merged sum buffer (depth 2*Sq_chunk_t): sum_1/sum_2 collapsed into one DFB, the direct analog of
-    // the merged max buffer above, to free another intra-Tensix tile-counter slot (Quasar caps at 8).
-    // cur_sum and prev_sum alias this one buffer. Within a chunk the "prev" sum block sits at the ring
-    // front [0, Sq_chunk_t) and reduce_c / correction_block append the freshly computed "cur" block
-    // behind it [Sq_chunk_t, 2*Sq_chunk_t) via reserve_back, and read prev at the front — so those
-    // helpers need no change. The multi-chunk running-sum update is the one place a cur read needs the
-    // merged geometry: fma_block_merged_sum reads prev@front + cur@offset from the contiguous reduce_c
-    // layout in one fused pass (sum = cur + prev*exp_max_diff). The move_block(cur->prev) at each
-    // chunk/round end becomes a self-rotation on this single buffer that carries the running sum forward.
+    // Max ping-pong: two separate DFBs (each depth statistics_tiles). cur_max and prev_max are distinct
+    // physical buffers whose roles alternate by move_block(cur->prev) each chunk/round. Merging these into
+    // one 2-deep DFB with a cur-offset read is NOT correct multi-chunk: the offset read (fifo_rd_ptr +
+    // page_size*tile_index, no ring wrap) desyncs once the ring rotates off base, and reduce_c's prev==out
+    // in-place eltwise-max hits a self-aliasing hazard. Kept split (like the prefill sdpa sibling).
+    constexpr auto dfb_max_1 = dfb::max_1;
+    constexpr auto dfb_max_2 = dfb::max_2;
+    // Merged sum buffer (depth 2*statistics_tiles): sum_1/sum_2 collapsed into one DFB to free an
+    // intra-Tensix tile-counter slot (Quasar caps at 8). cur_sum and prev_sum alias this one buffer.
+    // Within a chunk the "prev" sum block sits at the ring front [0, Sq_chunk_t); reduce_c /
+    // correction_block append the freshly computed "cur" block behind it [Sq_chunk_t, 2*Sq_chunk_t) via
+    // reserve_back and read prev at the front (no change). The multi-chunk running-sum update
+    // (fma_block_merged_sum) reads prev@front + cur@offset from that contiguous layout in one fused pass
+    // (sum = cur + prev*exp_max_diff) and RE-BASES the ring: it pops BOTH prev and cur and re-pushes the
+    // running sum as the single contiguous front block, leaving rd_ptr at the buffer base for the next
+    // chunk. CRITICAL: there must be NO move_block(cur_sum->prev_sum) after the fma — the fma already
+    // re-based the ring, and an extra move_block would rotate it off base, desyncing the next chunk's
+    // cur offset read (fifo_rd_ptr + page_size*tile_index has no ring wrap). This is the single-buffer
+    // analog of the prefill sdpa sibling's merged-sum discipline. (Unlike max, sum has no reduce_c
+    // prev==out eltwise hazard — reduce_c<SUM> here runs do_eltwise=false — so sum is safe to merge.)
     constexpr auto dfb_sum = dfb::sum;
     constexpr auto dfb_exp_max_diff = dfb::exp_max_diff;
     // Tile-counter budget (Quasar caps intra-Tensix DFBs at 8; flash-decode declared 11). The 3
@@ -343,20 +345,19 @@ void kernel_main() {
     constexpr VectorMode vector_mode = use_half_tile ? VectorMode::R : VectorMode::RC;
 
     // We set up Ping Pong intermediate buffers between loops.
-    // max is a single merged buffer: cur and prev alias the same DFB and are distinguished by ring
-    // offset (prev at front, cur behind). The offset for cur READS is passed per-call below.
-    uint32_t dfb_cur_max = dfb_max;
-    uint32_t dfb_prev_max = dfb_max;
-    // sum is a single merged buffer: cur and prev alias the same DFB and are distinguished by ring
-    // offset (prev at front, cur behind), exactly like max above.
+    // max is a two-buffer ping-pong: cur and prev are distinct DFBs, swapped by move_block each chunk.
+    uint32_t dfb_cur_max = dfb_max_1;
+    uint32_t dfb_prev_max = dfb_max_2;
+    // sum is a single merged buffer: cur and prev alias the same DFB (prev at front, cur behind). The
+    // fma re-bases the ring each chunk, so no move_block(cur_sum->prev_sum) is needed (or allowed).
     uint32_t dfb_cur_sum = dfb_sum;
     uint32_t dfb_prev_sum = dfb_sum;
 
     // Loop through all heads assigned to core
     for (uint32_t cur_head_work = 0; cur_head_work < num_heads_per_core; ++cur_head_work) {
         // Reset ping-pong buffer assignments at the start of each head iteration
-        dfb_cur_max = dfb_max;
-        dfb_prev_max = dfb_max;
+        dfb_cur_max = dfb_max_1;
+        dfb_prev_max = dfb_max_2;
         dfb_cur_sum = dfb_sum;
         dfb_prev_sum = dfb_sum;
 
@@ -520,12 +521,9 @@ void kernel_main() {
             /**
              * sub_exp performs `QK = exp((QK - cur_max) * scale)`
              */
-            // Merged-max cur offset: on the first chunk reduce_c wrote cur into the empty buffer so it
-            // sits at the front (offset 0); on later chunks cur is appended behind the prev block, so
-            // reads must skip Sq_chunk_t (== statistics_tiles) tiles.
-            const uint32_t cur_max_offset = (k_chunk == k_chunk_start) ? 0 : Sq_chunk_t;
+            // Split max: cur_max is the front block of its own DFB, so no cur offset (defaults to 0).
             sub_exp_block_bcast_cols_inplace<dfb_qk_im, Sq_chunk_t, scale_fp32, true, false, vector_mode>(
-                dfb_cur_max, dfb_cur_sum, Sk_chunk_t_dynamic, cur_max_offset);
+                dfb_cur_max, dfb_cur_sum, Sk_chunk_t_dynamic);
             DataflowBuffer(dfb_qk_im).wait_front(qk_chunk_tiles_dynamic);
 
             // Reconfig register DF
@@ -571,22 +569,20 @@ void kernel_main() {
                 pack_reconfig_data_format(dfb_exp_max_diff);
 
                 /* EXP_MAX_DIFF = exp(PREV_MAX - CUR_MAX) */
-                // Merged max: prev is at the ring front (offset 0), cur is behind it (offset Sq_chunk_t),
-                // so cur is read with in1_offset = Sq_chunk_t. The pop_front drops the consumed prev block;
-                // the move_block(cur->prev) self-rotation at the chunk end then re-establishes the running
-                // max as the single front block for the next chunk.
-                sub_exp_block<scale_fp32>(dfb_prev_max, dfb_cur_max, dfb_exp_max_diff, Sq_chunk_t, Sq_chunk_t);
+                // Split max: prev_max and cur_max are distinct DFBs, each read at its own front (no offset).
+                sub_exp_block<scale_fp32>(dfb_prev_max, dfb_cur_max, dfb_exp_max_diff, Sq_chunk_t);
                 DataflowBuffer(dfb_prev_max).pop_front(Sq_chunk_t);
 
                 /* CUR_SUM = CUR_SUM + PREV_SUM * EXP_MAX_DIFF (fused) */
                 // Merged sum: cur_sum and prev_sum are the same DFB. reduce_c left the ring contiguous as
                 // [prev(front) | cur(behind at offset Sq_chunk_t)]. fma_block_merged_sum reads prev@front
-                // and cur@offset from that contiguous layout in one pass and writes the running sum back as
-                // the single front block. This replaces the old mul_block_inplace(prev) + add_block_inplace
-                // pair: mul_block_inplace rotated the full 2*Sq_chunk_t ring, which on WH (no ring wrap in
-                // tile addressing) desynced the cur offset read (PCC ~0.70). The merged max path likewise
-                // reads prev@front + cur@offset contiguously and never rotates the buffer. EXP_MAX_DIFF is
-                // read but not popped here; the OUT_ACC scaling below pops it.
+                // and cur@offset from that contiguous layout in one pass, then RE-BASES the ring (pops BOTH
+                // prev and cur, re-pushes the running sum as the single front block at rd_ptr==0). This
+                // replaces the old mul_block_inplace(prev) + add_block_inplace pair, and because it already
+                // re-bases the ring there must be NO move_block(cur_sum->prev_sum) after it (see below):
+                // an extra rotation would desync the next chunk's cur offset read (fifo_rd_ptr +
+                // page_size*tile_index, no ring wrap). EXP_MAX_DIFF is read but not popped here; the OUT_ACC
+                // scaling below pops it.
                 fma_block_merged_sum(dfb_cur_sum, dfb_exp_max_diff, Sq_chunk_t, Sq_chunk_t);
 
                 /* OUT_ACC *= EXP_MAX_DIFF */
@@ -601,20 +597,22 @@ void kernel_main() {
                 add_block_inplace<true>(dfb_out_accumulate_im, dfb_out_im, out_chunk_tiles);
             }
 
-            // More local chunks to process - move intermediate sum and max values to ping-pong buffers.
-            // Merged max: cur_max and prev_max are the same DFB, so this move_block is a self-rotation
-            // (copy the just-computed cur block through DST to the ring back, then pop the front) that
-            // leaves the running max as the single front block for the next chunk. Keeping the move (vs
-            // relying on the correction-branch pop alone) is required for correctness: the copy-through-
-            // DST is what the next chunk's reduce_c / the tree correction_block read back as prev.
+            // More local chunks to process - carry the running max forward to the prev buffer.
+            // Split max: cur_max (dfb_max_1) and prev_max (dfb_max_2) are distinct DFBs, so this move_block
+            // copies the just-computed running max from cur into prev (through DST) and pops cur, setting up
+            // prev for the next chunk's reduce_c / the tree correction_block.
             reconfig_data_format(dfb_cur_max, dfb_cur_max);
             pack_reconfig_data_format(dfb_prev_max);
 
             // PREV_MAX <- CUR_MAX
             move_block<true>(dfb_cur_max, dfb_prev_max, Sq_chunk_t);
 
-            // PREV_SUM <- CUR_SUM
-            move_block<true>(dfb_cur_sum, dfb_prev_sum, Sq_chunk_t);
+            // NOTE: no move_block for the merged sum in the flash loop. The multi-chunk fma re-bases the
+            // ring each chunk (pushes==pops==2N, running sum at rd_ptr==base) and an extra move_block would
+            // unbalance that and desync the next chunk's cur offset read. The single-chunk (batch1) case
+            // needs the running sum carried to the tree's expected position, but that carry is done once
+            // below (gated on the tree being active), not per-chunk here — the single-core flash->finalize
+            // path (batch32) reads the sum at the front directly and needs no carry at all.
         }
 
         /* END OF FLASH ATTENTION LOOP */
@@ -640,6 +638,11 @@ void kernel_main() {
         //   - dfb_prev_sum: local L (sum of exp)
         // Only receive from children that actually have data
         if (num_active_children > 0) {
+            // Merged sum: carry the flash-loop running sum into the ring position the tree's
+            // correction_block expects, ONCE before the rounds (the flash loop no longer does a per-chunk
+            // sum move_block). The single-core flash->finalize path (no children) skips this and reads the
+            // sum at the front directly.
+            move_block<true>(dfb_cur_sum, dfb_prev_sum, Sq_chunk_t);
             // Iterate through each round and receive from child if one exists AND has data
             for (uint32_t round = 0; round < num_active_rounds; ++round) {
                 uint32_t child_id = active_children_per_round[round];
@@ -685,12 +688,14 @@ void kernel_main() {
                     // OUT_ACC = OUT_ACC + OUT_ACC_2
                     add_block_inplace<true>(dfb_out_accumulate_im, dfb_out_accumulate_im_2, out_chunk_tiles);
 
-                    // Update prev buffers for next round
-                    // PREV_MAX <- CUR_MAX (merged-max self-rotation, see the flash-loop note above)
-                    // PREV_SUM <- CUR_SUM
+                    // Update prev buffers for next round.
+                    // Split max: pop the consumed prev_max (max_2), then move cur_max (max_1) into it.
                     DataflowBuffer(dfb_prev_max).pop_front(Sq_chunk_t);
                     DataflowBuffer(dfb_m_in).pop_front(Sq_chunk_t);
                     move_block<true>(dfb_cur_max, dfb_prev_max, Sq_chunk_t);
+                    // Merged sum, tree path: unlike the flash loop (where fma re-bases the ring), the tree
+                    // uses correction_block, whose front-reads + reserve_back/pop_front leave the running
+                    // sum needing an explicit carry to prev for the next round. Keep the move_block here.
                     move_block<true>(dfb_cur_sum, dfb_prev_sum, Sq_chunk_t);
                 }
             }
@@ -713,18 +718,18 @@ void kernel_main() {
                 // Use appropriate max buffer based on tree reduction
                 uint32_t max_dfb_for_sink = dfb_prev_max;
 
-                // m_new: max_block appends cur (m_new) behind the prev (max_dfb_for_sink) block in the
-                // merged max ring, so the two exp reads below take cur at offset Sq_chunk_t.
+                // m_new: max_block writes cur (m_new) into dfb_cur_max (max_1, its own DFB); split max
+                // means the two exp reads below take cur at its own front (no offset).
                 max_block<vector_mode>(dfb_attention_sink, max_dfb_for_sink, dfb_cur_max, Sq_chunk_t);
 
                 // exp(m - m_new)
-                sub_exp_block<scale_fp32>(max_dfb_for_sink, dfb_cur_max, dfb_exp_max_diff, Sq_chunk_t, Sq_chunk_t);
+                sub_exp_block<scale_fp32>(max_dfb_for_sink, dfb_cur_max, dfb_exp_max_diff, Sq_chunk_t);
 
                 // l -> l * exp(m - m_new)
                 mul_block_inplace(dfb_prev_sum, dfb_exp_max_diff, Sq_chunk_t);
 
                 // exp(sink - m_new)
-                sub_exp_block<scale_fp32>(dfb_attention_sink, dfb_cur_max, dfb_exp_max_diff_2, Sq_chunk_t, Sq_chunk_t);
+                sub_exp_block<scale_fp32>(dfb_attention_sink, dfb_cur_max, dfb_exp_max_diff_2, Sq_chunk_t);
                 // Pop the front block (prev/max_dfb_for_sink); the trailing pop below drains cur.
                 DataflowBuffer(dfb_cur_max).pop_front(Sq_chunk_t);
 
