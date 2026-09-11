@@ -244,15 +244,17 @@ def prepare_conv3d_weight_state(
         # `ttnn.to_torch` refuses on a multi-host mesh; the helper reads a shard this host owns.
         return local_device_to_torch(prepared)
 
+    w_hi = w_5d.float().bfloat16().float()
     if stack:
-        w_hi = w_5d.float().bfloat16().float()
         state["weight"] = _prepare(torch.cat([w_hi, w_5d.float() - w_hi, w_hi], dim=1))
     elif split:
-        w_hi = w_5d.float().bfloat16().float()
         state["weight"] = _prepare(w_hi)
         state["weight_lo"] = _prepare(w_5d.float() - w_hi)
     else:
-        state["weight"] = _prepare(w_5d)
+        # No residual term: hand the multiplier a weight it can represent. Measured on the packed resamplers,
+        # the FPU's own truncation of an fp32 weight lands at 60.8 dB where the same conv with the bf16-rounded
+        # weight lands at 65.1 dB (round-to-nearest beats the hardware's truncation).
+        state["weight"] = _prepare(w_hi)
 
 
 def _t_neighbor_pad(
