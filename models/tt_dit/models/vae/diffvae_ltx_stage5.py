@@ -1565,17 +1565,14 @@ class DiffVAEStage5(Module):
         """The brick the whole stage converts with -- same choice the attention op would make."""
         if self._brick is not None:
             return self._brick
-        from ...layers.neighborhood_attention import _choose_sharded_brick
+        from ...layers.neighborhood_attention import _choose_sharded_brick, brick_override
 
         sp = int(list(self.mesh_device.shape)[self.sp_axis]) if self._w_sharded else 1
         w_local = grid.w // sp
         volume = (grid.t, grid.h, grid.w)
         context_window = tuple(min(window, extent) for window, extent in zip(self.config.kernel_size, volume))
-        brick_env = os.environ.get("DIFFVAE_NA_BRICK")
-        self._brick = (
-            tuple(int(part) for part in brick_env.split(","))
-            if brick_env
-            else _choose_sharded_brick(volume, context_window, self.config.resolved_gna_stride, w_local, sp)
+        self._brick = brick_override(volume) or _choose_sharded_brick(
+            volume, context_window, self.config.resolved_gna_stride, w_local, sp
         )
         return self._brick
 

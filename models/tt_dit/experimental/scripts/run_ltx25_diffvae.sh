@@ -95,6 +95,7 @@ export OUTPUT_PATH="${OUTPUT_PATH:-$HOME/ltx25_diffvae_1080p.mp4}"
 export DIFFVAE_SLAB_FRAMES=${DIFFVAE_SLAB_FRAMES:-78} # changing to 48 fixes the issue!!
 export DIFFVAE_SP_FUSED=${DIFFVAE_SP_FUSED:-1}
 export DIFFVAE_STAGES_WSP=${DIFFVAE_STAGES_WSP:-1}
+export DIFFVAE_STAGES_BACKEND=${DIFFVAE_STAGES_BACKEND:-bricked_sp_w_sharded}  # or the strided reference op_sp_w_sharded; per stage "1:..,2:..,3:.."
 export DIFFVAE_SDPA_KCHUNK=${DIFFVAE_SDPA_KCHUNK:-256}
 export DIFFVAE_PAD_GATHER=${DIFFVAE_PAD_GATHER:-1}
 export DIFFVAE_DEVICE_NOISE=${DIFFVAE_DEVICE_NOISE:-1}
@@ -109,6 +110,12 @@ export DIFFVAE_DET_FUSED_ROPE=${DIFFVAE_DET_FUSED_ROPE:-1}
 export DIFFVAE_DET_FUSED_SWIGLU=${DIFFVAE_DET_FUSED_SWIGLU:-1}
 export DIFFVAE_DET_FLAT_SEQ=${DIFFVAE_DET_FLAT_SEQ:-1}
 export DIFFVAE_STAGE_TIMING=${DIFFVAE_STAGE_TIMING:-1}
+# Live progress: one "[stage HH:MM:SS] > label" line to stdout as each span opens and a "<" line
+# with its ms as it closes. Otherwise a decode is silent from the stage-5 plan line to the tree at
+# teardown, so a device-side hang and ordinary work look identical from outside (the broker only
+# notices at 300 s of silence). A hang reads as the last ">" with no matching "<". Does not change
+# the tree, so its numbers stay comparable. Replaces the old watch_run.sh heartbeat.
+export DIFFVAE_STAGE_LOG=${DIFFVAE_STAGE_LOG:-1}
 # Tree + per-stage/category breakdown, rendered at test teardown; DIFFVAE_TREE_ALL=1 also renders
 # the warm-up pass. Prefix DIFFVAE_BLOCK_PROF=1 to break the deterministic stages down into
 # attention/mlp as well -- that adds 64 device syncs, so the two modes are close but should not be

@@ -234,6 +234,67 @@ def test_decode_matches_upstream(*, decoder):
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
 )
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+@pytest.mark.parametrize("tp", [False, True], ids=["tp_off", "tp4"])
+def test_decode_full_bricked_matches_replicated(*, mesh_device, tp):
+    """Full decode with the deterministic stages AND stage 5 on the BRICKED executor matches the
+    replicated decode, on shipped weights.
+
+    The companion of test_decode_full_wsp_matches_replicated for ``bricked_sp_w_sharded``: stages
+    1-3 shard over W from stage 1 on, run the halo exchange + neighborhood op with a width-1 brick
+    where the shard is 15 wide, hand the W-band straight to stage 5 (same sp_axis), and stage 5 runs
+    its own bricked path. ``tp4`` adds TP over heads on the size-4 axis, which is production and puts
+    4/2/2 heads per chip through the executor's flat (B, NH, S, HD) handoff; ``tp_off`` keeps every
+    head on one chip, so the K/V halo stick is at its widest (1024 channels -> 16 sub-columns).
+
+    Latent W is 16, not the usual 8: at 8 the stage-2 shard is 2 columns wide against a halo of 3
+    and no brick can plan. At 16 the stages sit at W_local 4/4/8 (stage 5 at 16), the tightest
+    shards the chooser accepts, so a seam error shows up at its worst.
+    """
+
+    if not CHECKPOINT.exists():
+        pytest.skip(f"missing {CHECKPOINT}")
+    config = decoder_config(CHECKPOINT)
+    torch.manual_seed(0)
+    latent = torch.randn(1, config["in_channels"], 2, 8, 16)
+
+    replicated = DiffVAEDecoder(config, mesh_device=mesh_device)
+    replicated.load_checkpoint(CHECKPOINT)
+    pixels_rep = replicated.decode(latent, seed=0)
+
+    # Ring collectives as the runner ships; the halo exchange pins itself to Linear regardless.
+    from models.tt_dit.parallel.manager import CCLManager
+
+    ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Ring)
+    tp_axis = 0 if tp else None
+    bricked = DiffVAEDecoder(
+        config,
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        stage5_na3d_backend="bricked_sp_w_sharded",
+        stage5_sp_axis=1,
+        stage5_tp_axis=tp_axis,
+        stages_na3d_backend="bricked_sp_w_sharded",
+        stages_sp_axis=1,
+        stages_tp_axis=tp_axis,
+    )
+    bricked.load_checkpoint(CHECKPOINT)
+    pixels_bricked = bricked.decode(latent, seed=0)
+
+    assert tuple(pixels_bricked.shape) == tuple(
+        pixels_rep.shape
+    ), f"{tuple(pixels_bricked.shape)} != {tuple(pixels_rep.shape)}"
+    if out := os.environ.get("DIFFVAE_DUMP_PIXELS"):
+        path = Path(out).with_name(f"{Path(out).stem}_full_bricked_tp{int(tp)}{Path(out).suffix}")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save({"replicated": pixels_rep.cpu(), "bricked": pixels_bricked.cpu()}, path)
+        print(f"\nwrote both arms {tuple(pixels_rep.shape)} to {path}")
+    assert_quality(pixels_rep, pixels_bricked, pcc=0.999)
+
+
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
 @pytest.mark.parametrize("sp_axis", [1], ids=["sp_cols"])
 # latent_t 2 puts stage 5 at t=11, exactly the window extent -- every brick then reads as clamped
 # (brick_window_is_unclamped returns false when window >= volume on an axis), which is a different

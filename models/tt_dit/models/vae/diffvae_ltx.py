@@ -32,9 +32,42 @@ from ...layers.na3d import (
     neighborhood_attention_3d_op_sp_w_sharded,
     plan_na3d,
 )
+from ...layers.neighborhood_attention import neighborhood_attention_3d_bricked_w_sharded
 from ...layers.normalization import RMSNorm
 from ...utils import decode_tree
 from .diffvae_ltx_stage5 import TILE, block_prof, deep_prof, log_dram, stage_timer
+
+#: The executors that take this chip's W-band and reassemble the window across the shard seam.
+#: "op_sp_w_sharded" is the older strided executor (full-W K/V all-gather + retile, natural order);
+#: "bricked_sp_w_sharded" is the bricked one stage 5 runs (halo exchange, 32-site bricks, the
+#: dedicated neighborhood op). Membership here is what W-shards a deterministic stage.
+W_SHARDED_BACKENDS = frozenset({"op_sp_w_sharded", "bricked_sp_w_sharded"})
+
+
+def stages_backend_from_env(default: str = "bricked_sp_w_sharded") -> str | dict[int, str]:
+    """``DIFFVAE_STAGES_BACKEND``: the W-sharded executor for deterministic stages 1-3.
+
+    One name applies to every W-sharded stage. ``1:op_sp_w_sharded,2:bricked_sp_w_sharded,...``
+    sets them per stage index (stage 0 is never sharded and cannot be named); unnamed stages take
+    ``default``. Kept apart from ``DIFFVAE_STAGE5_BACKEND`` so a per-stage decision -- a window
+    too small for the bricked op to win on one stage -- does not move stage 5.
+
+    The default is the bricked executor since 2026-09-11: measured at 1080p (`s34x60`, TP4) it is
+    faster on every W-sharded stage -- 213/149/423 ms against the strided 288/205/746 ms, -470 ms per
+    decode -- at 99.997-99.998 % PCC per block and 99.992 % on the full-decode gate. The strided
+    ``op_sp_w_sharded`` remains selectable, per stage, as the reference executor.
+    """
+    env = os.environ.get("DIFFVAE_STAGES_BACKEND")
+    if not env:
+        return default
+    if ":" not in env:
+        return env
+    mapping = {1: default, 2: default, 3: default}
+    for entry in env.split(","):
+        stage, _, name = entry.partition(":")
+        mapping[int(stage)] = name
+    return mapping
+
 
 ROPE_BASE = 10000.0
 
@@ -282,17 +315,25 @@ class NeighborhoodAttention(Module):
         # take. The volume is an interface, not a computation: to_seq tears down what to_volume just
         # built, and the round trip copies q/k/v three times where the reorder needs one.
         # Needs the fused RoPE, which is the only form that leaves q/k in TILE (B, NH, S, HD).
-        # Backend-gated because only the W-sharded attention implements the flat path; the gather
+        # Backend-gated because only the W-sharded executors implement the flat path; the gather
         # backend takes the 6-D volume, and reaching it with flat_seq set would hand a replicated
-        # stage the sharded kernel.
+        # stage the sharded kernel. The bricked executor transposes the head-major flat form into
+        # its site-major volume itself, so the flat handoff is the same call for both.
         self.flat_seq = (
-            self.fused_rope and self.na3d_backend == "op_sp_w_sharded" and os.environ.get("DIFFVAE_DET_FLAT_SEQ") == "1"
+            self.fused_rope
+            and self.na3d_backend in W_SHARDED_BACKENDS
+            and os.environ.get("DIFFVAE_DET_FLAT_SEQ") == "1"
         )
         self._fused_rope_cache: dict = {}
         self.tp = int(list(mesh_device.shape)[tp_axis]) if tp_axis is not None else 1
         if self.fused_qkv:
             assert self.num_heads % self.tp == 0, f"num_heads={self.num_heads} not divisible by tp={self.tp}"
-        self.heads_local = self.num_heads // self.tp if self.fused_qkv else self.num_heads
+        # The bricked executor never slices heads itself under TP (its ``heads_presharded`` is a
+        # statement, not a request), so on that backend this block partitions the heads in every
+        # projection form, not only the fused one. The strided executor slices for itself when the
+        # heads arrive whole, which is why the unfused strided path keeps every head.
+        self.bricked = self.na3d_backend == "bricked_sp_w_sharded"
+        self.heads_local = self.num_heads // self.tp if (self.fused_qkv or self.bricked) else self.num_heads
 
         # Three projections rather than the checkpoint's fused one. Fused, the (rows, 3*dim) output
         # and the three slices taken from it are live together -- six activations, 15 GiB at 6s
@@ -403,8 +444,24 @@ class NeighborhoodAttention(Module):
                 )
                 ttnn.deallocate(qkv)
             else:
-                heads_shape = (tokens * self.num_heads, self.head_dim)
-                q, k, v = (ttnn.reshape(project(x), heads_shape) for project in (self.to_q, self.to_k, self.to_v))
+                heads_shape = (tokens * heads, self.head_dim)
+
+                def own_heads(part: ttnn.Tensor) -> ttnn.Tensor:
+                    """This chip's contiguous head block of a ``(tokens, dim)`` projection under TP.
+
+                    Only the bricked executor needs it here: handed every head, it would gather
+                    ``tp`` copies of them back and the out-proj would see ``tp * dim`` channels.
+                    """
+                    if self.tp == 1 or not self.bricked:
+                        return part
+                    rows = ttnn.reshape(part, (1, 1, tokens, self.dim))
+                    partitioned = ttnn.mesh_partition(rows, dim=3, cluster_axis=self.tp_axis)
+                    ttnn.deallocate(part)
+                    return partitioned
+
+                q, k, v = (
+                    ttnn.reshape(own_heads(project(x)), heads_shape) for project in (self.to_q, self.to_k, self.to_v)
+                )
                 ttnn.deallocate(x)
 
         with deep_prof(self.mesh_device, "qkv-norm", category=decode_tree.NORM_ROPE):
@@ -435,22 +492,44 @@ class NeighborhoodAttention(Module):
             return ttnn.reshape(part, shape)
 
         if self.flat_seq:
-            # The attention takes the (B, NH, S, HD) it was handed and returns (tokens, dim), so the
-            # volume never exists: building it costs a permute here and two more to undo, for a
-            # reorder of the sequence axis that one permute inside does on its own.
-            attended = neighborhood_attention_3d_op_sp_w_sharded(
-                q,
-                k,
-                v,
-                dims=(t, h, w * int(list(q.device().shape)[self.sp_axis])),
-                kernel_size=self.kernel_size,
-                sp_axis=self.sp_axis,
-                ccl_manager=self.ccl_manager,
-                scale=1.0,
-                tp_axis=self.tp_axis,
-                heads_presharded=True,
-                flat_seq=True,
-            )
+            # The attention takes the (B, NH, S, HD) it was handed, so the volume never exists here:
+            # building it costs a permute and two more to undo, for a reorder of the sequence axis
+            # that one permute inside does on its own.
+            full_dims = (t, h, w * int(list(q.device().shape)[self.sp_axis]))
+            if self.na3d_backend == "bricked_sp_w_sharded":
+                # Returns (1, 1, sites, dim) TILE under TP or the 5-D W-band volume without; either
+                # way the rows are this chip's tokens in (t, h, w_local) order, so the same reshape
+                # the volume path uses hands proj the (tokens, dim) it wants.
+                attended = neighborhood_attention_3d_bricked_w_sharded(
+                    q,
+                    k,
+                    v,
+                    dims=full_dims,
+                    kernel_size=self.kernel_size,
+                    sp_axis=self.sp_axis,
+                    ccl_manager=self.ccl_manager,
+                    scale=1.0,
+                    tp_axis=self.tp_axis,
+                    heads_presharded=True,
+                    stride=(1, 1, 1),
+                )
+                attended = _consume(
+                    attended, lambda a: ttnn.to_layout(ttnn.reshape(a, (tokens, self.dim)), ttnn.TILE_LAYOUT)
+                )
+            else:
+                attended = neighborhood_attention_3d_op_sp_w_sharded(
+                    q,
+                    k,
+                    v,
+                    dims=full_dims,
+                    kernel_size=self.kernel_size,
+                    sp_axis=self.sp_axis,
+                    ccl_manager=self.ccl_manager,
+                    scale=1.0,
+                    tp_axis=self.tp_axis,
+                    heads_presharded=True,
+                    flat_seq=True,
+                )
             for part in (q, k, v):
                 ttnn.deallocate(part)
             out = self.proj(attended)
@@ -495,6 +574,23 @@ class NeighborhoodAttention(Module):
                 scale=1.0,
                 tp_axis=self.tp_axis,
                 heads_presharded=self.fused_qkv,
+            )
+        elif self.na3d_backend == "bricked_sp_w_sharded":
+            # Same W-band contract as above, on the bricked executor: K/V halo-exchanged in bricked
+            # order instead of all-gathered, and the dedicated neighborhood op over 32-site bricks.
+            sp = int(list(q.device().shape)[self.sp_axis])
+            attended = neighborhood_attention_3d_bricked_w_sharded(
+                q,
+                k,
+                v,
+                dims=(t, h, w * sp),
+                kernel_size=self.kernel_size,
+                sp_axis=self.sp_axis,
+                ccl_manager=self.ccl_manager,
+                scale=1.0,
+                tp_axis=self.tp_axis,
+                heads_presharded=True,  # every projection form hands this executor its own heads
+                stride=(1, 1, 1),
             )
         else:
             # Stage 0's path: the grouped-gather executor. Named so stage 0 stops being one opaque row.
@@ -810,10 +906,14 @@ class DeterministicStages(Module):
         self.head_dim = head_dim
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
-        # Spatial-W SP for the deterministic stages: when the backend is "op_sp_w_sharded" the
+        # Spatial-W SP for the deterministic stages: when the backend is one of W_SHARDED_BACKENDS the
         # activation is W-sharded from stage 1 on (stage 0's W is not divisible by the mesh axis, so
         # it stays replicated), then gathered back to a replicated context at the end -- so the
         # handoff to stage 5 is unchanged. Defaults to the env override for the OOM diagnostic.
+        #
+        # The backend may also be a per-stage mapping {stage_index: name} over stages 1..3, so a
+        # stage whose window is too small for the bricked op to win can keep the strided executor
+        # while the others brick. Every named backend must be W-sharded.
         #
         # DET_ in the name because this reaches stages 1-4 ONLY, alongside the other DIFFVAE_DET_*
         # knobs. Stage 5 is selected separately by DIFFVAE_STAGE5_BACKEND; the two used to share the
@@ -821,21 +921,34 @@ class DeterministicStages(Module):
         self.na3d_backend = na3d_backend or os.environ.get("DIFFVAE_DET_NA3D_BACKEND", "gather")
         self.sp_axis = sp_axis
         # TP-over-heads on the orthogonal axis for the W-sharded stages (2-D SP x TP): the det stages
-        # otherwise run replicated over this axis. Only applied to the op_sp_w_sharded stages (1+).
+        # otherwise run replicated over this axis. Only applied to the W-sharded stages (1+).
         self.tp_axis = tp_axis
-        self._w_sharded = self.na3d_backend == "op_sp_w_sharded"
+        self._stage_backends: dict[int, str] = dict(self.na3d_backend) if isinstance(self.na3d_backend, dict) else {}
+        if self._stage_backends:
+            assert set(self._stage_backends) <= set(
+                range(1, len(upsamples))
+            ), f"per-stage backends name stages {sorted(self._stage_backends)}; only stages 1..{len(upsamples) - 1} shard"
+            assert set(self._stage_backends.values()) <= W_SHARDED_BACKENDS, self._stage_backends
+            # The mapping's first entry stands in as the module-level name; block_backend reads the map.
+            self.na3d_backend = next(iter(self._stage_backends.values()))
+        self._w_sharded = self.na3d_backend in W_SHARDED_BACKENDS
         self.sp = int(list(mesh_device.shape)[sp_axis]) if self._w_sharded else 1
         if self._w_sharded:
-            assert sp_axis is not None and ccl_manager is not None, "op_sp_w_sharded needs sp_axis + ccl_manager"
+            assert sp_axis is not None and ccl_manager is not None, f"{self.na3d_backend} needs sp_axis + ccl_manager"
         self.conv_in = Linear(in_channels, stage_channels[0], bias=True, mesh_device=mesh_device)
 
         def block_backend(stage: int) -> str:
             # Stage 0 runs replicated (its W is not shardable), but on the fast gather backend (its
             # plan query-shards across the mesh) -- NOT op, which is ~5x slower and would swamp the
-            # W-shard win on stages 1+. The rest shard over W.
+            # W-shard win on stages 1+. The rest shard over W on the configured executor, per stage
+            # when a mapping was given.
             if self._w_sharded:
-                return "gather" if stage == 0 else "op_sp_w_sharded"
+                if stage == 0:
+                    return "gather"
+                return self._stage_backends.get(stage, self.na3d_backend)
             return self.na3d_backend
+
+        self.block_backend = block_backend
 
         self.det_stages = ModuleList(
             [

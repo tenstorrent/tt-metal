@@ -624,7 +624,9 @@ stride) survives.
 
 The timing tree. `open_span` / `close_span`, `Node`, `roots()`, `render()`. Spans nest by a
 thread-local stack; siblings with the same label are pooled with an `n` count.
-`ENABLED` ← `DIFFVAE_STAGE_TIMING`, `DEEP` ← `DIFFVAE_BLOCK_PROF`.
+`ENABLED` ← `DIFFVAE_STAGE_TIMING`, `DEEP` ← `DIFFVAE_BLOCK_PROF`, `LIVE` ← `DIFFVAE_STAGE_LOG`
+(one stdout line per span open/close while the decode runs, so a hang shows as the last `>`
+with no `<`; the tree itself is unchanged).
 **Not valid under trace capture**, and absolute totals are inflated by one
 `synchronize_device` per span open/close.
 
@@ -658,10 +660,11 @@ stride larger than its kernel, reported in **op-order axes**.
 | --------------------------- | --------------------------------------------------------------------------------------------- |
 | `DIFFVAE_STAGE5_BACKEND`    | selects the stage-5 executor. `bricked_sp_w_sharded` is ours; unset gives the reference `op_sp_w_sharded` |
 | `DIFFVAE_DET_NA3D_BACKEND`  | same choice for the deterministic stages 1–4 only — **separate knob**, does not reach stage 5  |
+| `DIFFVAE_STAGES_BACKEND`    | the W-sharded executor for deterministic stages 1–3 when `DIFFVAE_STAGES_WSP=1`: `bricked_sp_w_sharded` (default since 2026-09-11, faster on every stage) or the strided reference `op_sp_w_sharded`; per stage as `1:..,2:..,3:..`. Read by the pipeline adapter and `test_decode_timing.py` |
 | `DIFFVAE_S5_GNA_STRIDE`     | stage-5 stride, physical `(t,h,w)`; read only by `DiffVAEStage5Config.resolved_gna_stride`, which feeds every stage-5 backend. An explicit `gna_stride=` on the config wins over it. |
 | `DIFFVAE_GNA_STRIDE`        | global stride; read by `na3d` for every stage                                                 |
 | `DIFFVAE_NA_WINDOW`         | overrides the architectural context window                                                    |
-| `DIFFVAE_NA_BRICK`          | overrides the derived brick                                                                   |
+| `DIFFVAE_NA_BRICK`          | overrides the derived brick: `bt,bh,bw` for every volume, or keyed by full volume `T,H,W:bt,bh,bw;...` so one stage can be forced without moving the others |
 | `DIFFVAE_NA_KV_CHUNK_TILES` | tiles per flash step; 8 = 256 tokens                                                          |
 
 Note that `DIFFVAE_GNA` (theirs, below) and `DIFFVAE_S5_GNA_STRIDE` (ours) are different knobs
@@ -701,7 +704,7 @@ never render a shipped frame.
 | `DIFFVAE_TP_PROJ`, `DIFFVAE_TP_HEADS`        | tensor-parallel over heads                               |
 | `DIFFVAE_STAGES_WSP=1`                       | W-shard the deterministic stages too                     |
 | `DIFFVAE_SLAB_FRAMES`                        | frame banding. **Off by default**; required at 6 s 1080p |
-| `DIFFVAE_STAGE_TIMING`, `DIFFVAE_BLOCK_PROF` | the decode tree                                          |
+| `DIFFVAE_STAGE_TIMING`, `DIFFVAE_BLOCK_PROF`, `DIFFVAE_STAGE_LOG` | the decode tree, and its live progress lines |
 | `DIFFVAE_NUM_LINKS`                          | CCL links                                                |
 
 

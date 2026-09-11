@@ -5,6 +5,85 @@ Phase 0 done; Phase 1 B2 done; D1 priced (axis swap rejected); Phase 4 (deletion
 Block order was found to be unused in production (Phase 1 notes). Remaining, optional: Phases 1 (B1),
 2, 3 and 5 = the "bricked deterministic stages" speed project; everything is uncommitted in the tree.
 
+## Bricked deterministic stages -- in progress 2026-09-11 (Phases 1-B1, 2, 3)
+
+Scope (James, 2026-09-11): stages 2-4 only; stage 1 stays replicated on the gather backend. Per-stage
+default by measurement: a stage where the bricked executor is slower keeps `op_sp_w_sharded`.
+Working plan with the geometry table and gates: `~/.claude/plans/right-now-the-deterministic-sparkling-pike.md`.
+
+Done in the tree (uncommitted):
+- B1 via brick width 1. `_choose_sharded_brick` searches odd widths; the non-hoisted K/V path bricks
+  the OWNED columns first and halo-exchanges on `W_br` (the hoisted path's exchange, shared as
+  `exchange(...)`), so the natural-order W-fold and its 128 B stick hazard are gone. Host planner
+  picks: stage 2 (8,4,1)/63, stage 3 (16,2,1)/45, stage 4 (8,2,2)/27; stage 5 unchanged (8,2,2)/147.
+- Flat `(1, heads, sites, hd)` input is transposed to site-major inside the executor when heads > 1
+  (the old reshape was a view only at one head per chip).
+- `DIFFVAE_NA_BRICK` accepts a volume-keyed form `T,H,W:bt,bh,bw;...`.
+- `NeighborhoodAttention` has a `bricked_sp_w_sharded` arm (flat and volume paths);
+  `DeterministicStages` takes a name or a per-stage `{1: .., 2: .., 3: ..}`; `DIFFVAE_STAGES_BACKEND`
+  (adapter, timing test, run scripts; default `op_sp_w_sharded`).
+- Tests: chooser pins for the six deterministic geometries; width-1 3-shard op case; executor cases at
+  W_local 15/30 with 2/4 heads per chip and a flat input; `bricked` / `bricked_volume` arms;
+  `test_decode_full_bricked_matches_replicated` (latent (2,8,16), TP on/off).
+
+### Device results so far (2026-09-11, jobs 415-417)
+
+- Unit (job 415): 102 passed -- chooser pins for all six deterministic geometries, the width-1 3-shard
+  op case, and every new executor case (W_local 15 with 2/4 heads per chip, flat head-major input).
+- Arms correctness (job 416): 28 passed; `bricked` / `bricked_volume` at 99.997-99.998 % PCC vs the
+  strided baseline on stages 2/3/4 (same band as `flat_seq`).
+- Arms timing (job 417, ITERS=10, ms/block x depth at the arms geometry (6,68,120)/(11,68,120)/(21,136,240)):
+
+| arm | stage 2 | stage 3 | stage 4 | total |
+|---|---|---|---|---|
+| baseline (strided, no flags) | 37.9 x6 = 227 | 35.3 x4 = 141 | 267.8 x2 = 536 | 904 |
+| flat_seq (strided, production flags) | 27.9 x6 = 167 | 27.1 x4 = 108 | 202.8 x2 = 406 | 681 |
+| bricked (flat handoff) | 11.1 x6 = 67 | 10.3 x4 = 41 | 47.7 x2 = 95 | 203 |
+| bricked_volume | 10.8 x6 = 65 | 10.0 x4 = 40 | 47.6 x2 = 95 | 200 |
+
+  Bricked wins every stage by 2.6-4.3x per block. The B3 worry (2-2.7x more keys gathered per
+  query) is outweighed: the strided executor's full-W K/V gather + retile + fused SDPA over the
+  W-outer sequence costs far more than the bricked op's small gather.
+
+- Decoder gate (job 418, latent (2,8,16)): `tp_off` PASSED at 99.9924 % PCC (RMSE/sigma 1.3 %); `tp4`
+  FAILED on a reshape volume mismatch at the out-proj: the gate runs without the production flags, so
+  the unfused projection handed the bricked executor every head and the TP head all-gather returned
+  `tp * dim` channels. Fixed by partitioning the `(tokens, dim)` projections over `tp_axis` on the
+  bricked backend (`own_heads` in `NeighborhoodAttention.forward`); re-run pending.
+- Decode `s34x60` (jobs 419/420, pipeline flags, TP4, SLAB 73, 145 frames), bricked vs strided
+  deterministic stages, stage 5 bricked in both:
+
+| row | bricked (ms) | strided (ms) |
+|---|---|---|
+| decode total | **13356** | 13826 |
+| det stage 0 (replicated, gather) | 1000 | 997 |
+| det stage 1 (21,68,120) | 213 | 288 |
+| det stage 2 (41,68,120) | 149 | 205 |
+| det stage 3 (81,136,240) | 423 | 746 |
+
+  Every W-sharded stage wins (-75 / -56 / -323 ms); -470 ms per decode (-3.4 %). Stage 1 (index 0,
+  replicated on the gather backend, 1000 ms) is now the largest deterministic stage by far.
+
+- Decoder gate re-run (job 421) after the `own_heads` fix: `tp_off` and `tp4` both PASSED at 99.9924 %.
+  **D2 decided: bricked on all three stages.** Default flipped in `stages_backend_from_env`
+  (`bricked_sp_w_sharded`); the run scripts' `DIFFVAE_STAGES_BACKEND` default follows.
+
+- Profiled pipeline (job 422, `PROFILE=1`, SLAB 73, BLOCK_PROF): PASSED, ANOMALIES none, video at
+  `generated/profile/20260911_064903/ltx25_1080p.mp4`. VAE decode 13.83 s under deep profiling (not
+  comparable to the 12.58 s production number; the plain run is job 423). Stage-2 breakdown (6 blocks,
+  BLOCK_PROF-inflated): attention 278 ms = neighborhood-sdpa 90, halo+brick-permute (k,v) 83, q-to-seq 29,
+  head-unflatten 19, head-allgather 11, unbrick 8. Layout work (~120 ms) now exceeds the op (~90 ms):
+  that is the case for the optional Phase 5 per-stage brick hoist (brick once at stage entry, unbrick
+  before the upsample, bricked RoPE tables), which would remove the per-block brick/unbrick permutes.
+  Stage 1 (index 0, replicated gather backend) at ~1000 ms is the largest deterministic stage and is out
+  of this round's scope.
+
+- Production-config pipeline (job 423, SLAB 78, untraced, bricked deterministic stages): PASSED, ANOMALIES
+  none, **VAE decode 12.35 s** vs the 12.58 s baseline (job 413), output `generated/bricked_det_stages.mp4`.
+
+**Bricked deterministic stages: DONE 2026-09-11.** Defaults flipped everywhere (`stages_backend_from_env`,
+both run scripts). Nothing committed. Next levers: Phase 5 per-stage brick hoist; stage 1 (index 0).
+
 ## Pickup -- state as of 2026-09-11 00:40 (read this first)
 
 **Where things stand.** Phase 0 (bricked executor is the stage-5 pipeline default, numerics fixed),

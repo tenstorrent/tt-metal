@@ -267,7 +267,18 @@ def test_shards_match_the_whole_volume(mesh_device):
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=["mesh_device"])
-def test_symmetric_halo_shards_match_the_whole_volume(mesh_device):
+@pytest.mark.parametrize(
+    "volume, context_window, brick, owned_width",
+    [
+        ((4, 8, 24), (3, 3, 3), None, 8),
+        # Brick width 1 with an owned width of 15: the deterministic stages' shard at 1080p. The
+        # middle shard's origin (15 - 3 = 12) is not even, so no even-width brick could plan it;
+        # width 1 is what the planner accepts, and the halo is 3 whole (1-wide) bricks.
+        ((8, 8, 45), (3, 7, 7), (8, 4, 1), 15),
+    ],
+    ids=["even_brick_owned8", "width1_brick_owned15"],
+)
+def test_symmetric_halo_shards_match_the_whole_volume(mesh_device, volume, context_window, brick, owned_width):
     """Three shards with a UNIFORM symmetric halo, including negative origins.
 
     A mesh runs one program, so every device must hold the same resident extent. A symmetric
@@ -276,11 +287,14 @@ def test_symmetric_halo_shards_match_the_whole_volume(mesh_device):
     no window reaches them -- which is why the origin has to be able to say "below zero" rather
     than being clamped to it. Clamping would silently renumber every column of that device.
     """
+    from models.tt_dit.layers.neighborhood_attention import halo_sites
+
     torch.manual_seed(0)
-    volume, context_window, stride = (4, 8, 24), (3, 3, 3), (1, 1, 1)
+    stride = (1, 1, 1)
     head_count, head_dim = 2, 64
-    brick = tuple(ttnn.transformer.neighborhood_choose_brick(context_window))
-    halo_width, owned_width = brick[2], 8
+    if brick is None:
+        brick = tuple(ttnn.transformer.neighborhood_choose_brick(context_window))
+    halo_width = halo_sites(context_window[2], brick[2])
     resident = (volume[0], volume[1], owned_width + 2 * halo_width)
 
     site_count = volume[0] * volume[1] * volume[2]
@@ -556,8 +570,19 @@ def _run_interior_table_case(mesh_device, owned_width, brick, volume):
         # deeper time brick measured 11% faster per query brick, and the -brick_time tiebreak
         # in the scoring tuple picks it.
         ((84, 272, 480), (11, 11, 11), 60, 8, (8, 2, 2), 147),
+        # Deterministic stages at 1080p, W over the size-8 axis. W_local 15 admits only brick
+        # width 1 (shard origins must be brick-aligned and 15 has no even divisor), so these pin
+        # that odd widths are searched at all; W_local 30 admits widths 1 and 2 and picks 2.
+        ((21, 68, 120), (3, 7, 7), 15, 8, (8, 4, 1), 63),
+        ((41, 68, 120), (3, 5, 5), 15, 8, (16, 2, 1), 45),
+        ((81, 136, 240), (3, 5, 5), 30, 8, (8, 2, 2), 27),
+        # The same stages at test_det_nablock_arms.py's shorter T, where the deep-in-time bricks
+        # exceed the volume and the chooser has to settle for shallower ones.
+        ((6, 68, 120), (3, 7, 7), 15, 8, (4, 8, 1), 42),
+        ((11, 68, 120), (3, 5, 5), 15, 8, (8, 4, 1), 30),
+        ((21, 136, 240), (3, 5, 5), 30, 8, (8, 2, 2), 27),
     ],
-    ids=["1080p_decode"],
+    ids=["1080p_decode", "det_stage2", "det_stage3", "det_stage4", "arms_stage2", "arms_stage3", "arms_stage4"],
 )
 def test_choose_sharded_brick_regression(
     mesh_device, volume, context_window, width_local, shard_count, expected_brick, expected_gather

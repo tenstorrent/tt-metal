@@ -40,7 +40,7 @@ import os
 import ttnn
 
 from ..utils import decode_tree
-from .neighborhood_permute import SITES_PER_BRICK, brick_count, brick_grid, to_bricked, to_natural
+from .neighborhood_permute import SITES_PER_BRICK, brick_count, brick_grid, to_bricked, to_bricked_grid, to_natural
 
 # Plans depend on no weights but do upload an index table, so rebuilding one per block would
 # dominate. Keyed on the geometry, exactly as the op's program cache is.
@@ -263,6 +263,27 @@ def _query_chunk_bricks(stride: tuple[int, int, int], brick: tuple[int, int, int
     )
 
 
+def brick_override(volume: tuple[int, int, int]) -> tuple[int, int, int] | None:
+    """``DIFFVAE_NA_BRICK``: force the brick instead of deriving it.
+
+    Two forms. ``bt,bh,bw`` applies to EVERY volume -- fine while stage 5 was the only bricked
+    caller, wrong once the deterministic stages brick too, since one brick cannot be forced on
+    (21,68,120) and (84,272,480) at once. ``T,H,W:bt,bh,bw;T,H,W:bt,bh,bw`` is keyed by the FULL
+    volume, so a per-stage A/B forces only the stage it names and every other stage keeps its
+    derived brick. Returns None when nothing applies.
+    """
+    env = os.environ.get("DIFFVAE_NA_BRICK")
+    if not env:
+        return None
+    if ":" not in env:
+        return tuple(int(part) for part in env.split(","))
+    for entry in env.split(";"):
+        key, _, value = entry.partition(":")
+        if tuple(int(part) for part in key.split(",")) == tuple(volume):
+            return tuple(int(part) for part in value.split(","))
+    return None
+
+
 def _cached_plan(volume, context_window, stride, brick, device, *, resident=None, shard_count=1, sp_axis=None):
     """Plan plus uploaded tables, cached per geometry. UNSHARDED IS THE ONE-SHARD CASE.
 
@@ -459,12 +480,7 @@ def neighborhood_attention_3d_bricked(
     # DIFFVAE_NA_BRICK overrides the derived brick. A brick 1 deep in time never needs time
     # padding, and output_frames = 8*latent_T - 7 is ALWAYS odd, so a 2-deep brick pads (and
     # therefore full-tensor copies q, k and v) on every single block.
-    brick_env = os.environ.get("DIFFVAE_NA_BRICK")
-    brick = (
-        tuple(int(part) for part in brick_env.split(","))
-        if brick_env
-        else tuple(ttnn.transformer.neighborhood_choose_brick(context_window))
-    )
+    brick = brick_override(volume) or tuple(ttnn.transformer.neighborhood_choose_brick(context_window))
     if scale is None:
         scale = head_dim**-0.5
 
@@ -563,7 +579,7 @@ def _choose_sharded_brick(volume, context_window, stride, width_local, shard_cou
         return cached
 
     default = tuple(ttnn.transformer.neighborhood_choose_brick(context_window))
-    best, best_gather = default, None
+    best, best_gather, best_query = default, None, None
     for brick_time in range(1, SITES_PER_BRICK + 1):
         for brick_height in range(1, SITES_PER_BRICK + 1):
             if SITES_PER_BRICK % (brick_time * brick_height):
@@ -571,10 +587,12 @@ def _choose_sharded_brick(volume, context_window, stride, width_local, shard_cou
             brick_width = SITES_PER_BRICK // (brick_time * brick_height)
             if brick_time * brick_height * brick_width != SITES_PER_BRICK:
                 continue
-            # An ODD brick width gives an odd halo, and the halo exchange then cannot fold its
-            # sticks up to 256 bytes -- `neighbor_pad` hangs at 128. See _halo_exchange.
-            if brick_width % 2:
-                continue
+            # Odd widths are legal. They were excluded while the K/V halo moved in NATURAL order,
+            # where an odd halo could not fold W columns into the stick and `neighbor_pad` hung at
+            # a 128 B stick. Every path now exchanges in bricked order (stick 32 * channels), so
+            # nothing depends on the halo's parity -- and width 1 is the ONLY brick the planner
+            # accepts at the deterministic stages' W_local = 15: shard origins must be brick-aligned,
+            # which reduces to brick_width | width_local, and 15 has no even divisor.
             brick = (brick_time, brick_height, brick_width)
             # A brick deeper than the volume on any axis is degenerate: it pads that axis out past
             # its own extent, so every brick is mostly ghost sites and the axis contributes a single
@@ -612,22 +630,30 @@ def _choose_sharded_brick(volume, context_window, stride, width_local, shard_cou
             if any(plan["gather_brick_count"] != plans[0]["gather_brick_count"] for plan in plans):
                 continue  # one program cannot serve shards that gather differently
             gather = plans[0]["gather_brick_count"]
+            query_bricks = plans[0]["query_brick_count"]
             # Tie-breaks, in order: fewest gathered bricks, then smallest halo, then the deepest
             # brick in TIME. A smaller halo is less to exchange, brick-permute and drop, and that
             # one is reasoned. Preferring depth in time is MEASURED and not explained -- shapes
             # that gather identically and carry the same halo do not run at the same speed, and
             # the deeper time extent won. It is a preference, not a rule: re-measure it if the
             # volume, window or shard count changes.
+            # Not scored: the query brick count (ghost padding). A total-work objective
+            # (query x gather) would flip the 1080p stage-5 pick from (8,2,2) to (2,8,2) against
+            # its measured 11 %/brick advantage, so the padding is logged for the reader instead.
             score = (gather, halo, -brick_time)
             if best_gather is None or score < best_gather:
-                best, best_gather = brick, score
+                best, best_gather, best_query = brick, score, query_bricks
 
     from loguru import logger
 
-    logger.info(
-        f"[neighborhood] brick {best} gathers {best_gather[0] if best_gather else '?'} bricks "
-        f"(choose_brick would pick {default})"
-    )
+    if best_gather is None:
+        logger.info(f"[neighborhood] no candidate brick plans at width_local={width_local}; using {default}")
+    else:
+        logger.info(
+            f"[neighborhood] brick {best} gathers {best_gather[0]} bricks over {best_query} query bricks "
+            f"({best_gather[0] * best_query} tile pairs per shard, halo {best_gather[1]}; "
+            f"choose_brick would pick {default})"
+        )
     _BRICK_CHOICE_CACHE[key] = best
     return best
 
@@ -658,9 +684,9 @@ MAX_HALO_STICK_BYTES = 4096
 def _halo_split(stick_elements: int, element_bytes: int) -> int:
     """How many sub-columns to cut one halo stick into so the exchange stays inside the bound.
 
-    Splits without moving a byte, the inverse of the W-fold in ``widened``: a ``[.., w, s]``
-    buffer is contiguous, so ``[.., w * parts, s / parts]`` is the SAME memory, and padding
-    ``parts``-scaled columns pads exactly the same halo. Halving keeps ``parts`` a divisor.
+    Splits without moving a byte: a ``[.., w_br, s]`` brick grid is contiguous, so
+    ``[.., w_br * parts, s / parts]`` is the SAME memory, and padding ``parts``-scaled columns
+    pads exactly the same halo. Halving keeps ``parts`` a divisor.
 
     Returns 1 whenever the stick already fits, so a configuration that was inside the bound keeps
     the exact call it had. Production under TP4 is one such: 32 sites x 64 channels x 2 B is 4 KB
@@ -747,13 +773,22 @@ def neighborhood_attention_3d_bricked_w_sharded(
     ``tp_axis`` adds TENSOR PARALLELISM OVER HEADS on a second, orthogonal mesh axis. Attention is
     independent per head, so each chip keeps ``heads/tp`` of them and they are all-gathered back
     right after the flash. Under the column-parallel qkv the projections already emit only this
-    chip's heads (``heads_presharded``), and with one head left the caller hands us the flat
-    ``(batch, heads, sites, head_dim)`` sequence rather than the 6-D volume -- both shapes are
-    accepted below, because refusing the flat one refuses the whole fast path.
+    chip's heads (``heads_presharded``), and the caller may hand us the flat HEAD-major
+    ``(batch, heads, sites, head_dim)`` that ``nlp_create_qkv_heads`` emits rather than the 6-D
+    volume -- both shapes are accepted, because refusing the flat one refuses the whole fast path.
+    The op is SITE-major, so at more than one head per chip the flat form is transposed here
+    (see ``as_volume``); at one head the two layouts are the same bytes.
 
     ``already_bricked``: sites are already in bricked order (a caller-side hoist). Q/K/V are
-    ``(batch, heads, bricked_sites, head_dim)``; the W halo is ``neighbor_pad`` on ``W_br``, and
+    site-major buffers labelled ``(batch, heads, bricked_sites, head_dim)`` -- read as
+    ``(batch, 1, sites, heads * head_dim)`` -- the W halo is ``neighbor_pad`` on ``W_br``, and
     the return stays bricked. ``brick`` is then required so the caller and the op cannot disagree.
+
+    K and V are halo-exchanged in BRICKED order on both paths: brick the owned columns first, then
+    pad ``W_br`` by whole bricks. That is the same tensor as bricking the widened natural volume
+    (the planner requires ``brick_w | width_local``, so no brick straddles a shard seam), and the
+    stick is ``32 * channels`` wide, clear of the 128 B width that hangs ``neighbor_pad``. The
+    natural-order exchange with its W-fold that this replaced is what kept odd brick widths out.
 
     ``stride`` is the GNA query-group stride in PHYSICAL (t, h, w) sites, defaulting to (1,1,1) --
     the shipped architecture, every query centred on its own window. It is the caller's knob: this
@@ -765,17 +800,15 @@ def neighborhood_attention_3d_bricked_w_sharded(
     width_local = dims[2] // shard_count
     if already_bricked:
         batch, head_count, _, head_dim = tuple(query.shape)
-        assert batch == 1, f"batched NA3D is not implemented; got batch={batch}"
         assert brick is not None, "already_bricked needs the brick the stage converted with"
+    elif len(query.shape) == 4:
+        # Flat HEAD-major (batch, heads, sites, head_dim); sites run (t, h, w_local). Turned into
+        # the site-major volume by ``as_volume`` below, not by a reshape: that was a view only at
+        # one head per chip and interleaved heads with sites at any other count.
+        batch, head_count, _, head_dim = tuple(query.shape)
     else:
-        if len(query.shape) == 4:
-            # Flat (batch, heads, sites, head_dim). Sites run (t, h, w_local) exactly as the volume
-            # form does, so this is a view, not a reorder.
-            batch, head_count, _, head_dim = tuple(query.shape)
-            volume_shape = (batch, time_extent, height_extent, width_local, head_count, head_dim)
-            query, key, value = (ttnn.reshape(tensor, volume_shape) for tensor in (query, key, value))
         batch, time_extent, height_extent, width_local, head_count, head_dim = tuple(query.shape)
-        assert batch == 1, f"batched NA3D is not implemented; got batch={batch}"
+    assert batch == 1, f"batched NA3D is not implemented; got batch={batch}"
 
     volume = dims
     assert (
@@ -785,12 +818,9 @@ def neighborhood_attention_3d_bricked_w_sharded(
     context_window = tuple(min(window, extent) for window, extent in zip(kernel_size, volume))
     if stride is None:
         stride = (1, 1, 1)
-    brick_env = os.environ.get("DIFFVAE_NA_BRICK")
     if brick is None:
-        brick = (
-            tuple(int(part) for part in brick_env.split(","))
-            if brick_env
-            else _choose_sharded_brick(volume, context_window, stride, width_local, shard_count)
+        brick = brick_override(volume) or _choose_sharded_brick(
+            volume, context_window, stride, width_local, shard_count
         )
     if scale is None:
         scale = head_dim**-0.5
@@ -828,26 +858,48 @@ def neighborhood_attention_3d_bricked_w_sharded(
     num_links = int(os.environ.get("DIFFVAE_NA_HALO_LINKS", 0)) or max(1, ccl_manager.num_links)
     semaphore = ccl_manager.get_np_ping_pong_semaphore(sp_axis)
 
-    def widened_bricked(tensor: ttnn.Tensor, lane: str = "?") -> ttnn.Tensor:
-        """K/V halo in bricked order: ``neighbor_pad`` on ``W_br``, no 7-D permute.
+    t_br, h_br, w_br = brick_grid(owned_volume, brick)
 
-        Last dim is ``32 * channels`` -- one brick of sites folded into the stick -- so no W-fold
-        is needed to clear the 128 B width that hangs in natural order. Halo is 3 bricks rather
-        than 6 sites at 1080p.
+    def as_volume(tensor: ttnn.Tensor, lane: str) -> ttnn.Tensor:
+        """``(b, heads, sites, hd)`` TILE or ``(b, t, h, w, heads, hd)`` -> ``(b, t, h, w_local, C)`` ROW_MAJOR.
 
-        But that stick has an UPPER bound too, and it is low: see ``_halo_split`` below.
+        The flat form is HEAD-major (what ``nlp_create_qkv_heads`` emits); the op is SITE-major, a
+        site's heads being its channels. With more than one head per chip the two differ by a real
+        transpose, paid here once per lane. With one head they are the same bytes and it is a view.
+        Until 2026-09-11 the flat form was reshaped straight into the volume, which is right only
+        at one head per chip (stage 5 under TP4) and silently interleaves heads and sites otherwise.
         """
-        t_br, h_br, w_br = brick_grid(owned_volume, brick)
-        halo_br = halo // brick[2]
-        parts = _halo_split(SITES_PER_BRICK * channels, tensor.element_size())
-        _tp_trace(device, f"{lane}: untilize in (already_bricked, channels={channels}, parts={parts})")
         with _deep_prof(device, f"{lane}: untilize", category=decode_tree.RESHAPE):
             rows = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
+        if len(rows.shape) == 4 and head_count > 1:
+            with _deep_prof(device, f"{lane}: heads-to-sites", category=decode_tree.RESHAPE):
+                moved = ttnn.permute(rows, (0, 2, 1, 3))
+            if rows is not tensor:
+                ttnn.deallocate(rows)
+            rows = moved
+        return ttnn.reshape(rows, (batch, time_extent, height_extent, width_local, channels))
+
+    def exchange(grid5: ttnn.Tensor, lane: str) -> ttnn.Tensor:
+        """Halo-exchange a ``(b, T_br, H_br, W_br, 32*C)`` ROW_MAJOR brick grid on ``W_br`` -> op layout.
+
+        One brick of sites is folded into the stick, so the stick is ``32 * channels`` wide -- never
+        near the 128 B width that hangs neighbor_pad in natural order -- and the halo is whole
+        bricks, the unit the planner addresses. The stick has an UPPER bound too, and it is low:
+        above 4 KB it is cut into sub-columns of the same memory (``_halo_split``) and the pad
+        scales with the cut.
+        """
+        halo_br = halo // brick[2]
+        parts = _halo_split(SITES_PER_BRICK * channels, grid5.element_size())
+        _tp_trace(
+            device,
+            f"{lane}: about to neighbor_pad halo_br={halo_br} links={num_links} parts={parts} "
+            f"stick={SITES_PER_BRICK * channels // parts * grid5.element_size()}B",
+        )
         with _deep_prof(device, f"{lane}: halo-exchange", category=decode_tree.ALLGATHER):
-            grid5 = ttnn.reshape(rows, (batch, t_br, h_br, w_br * parts, SITES_PER_BRICK * channels // parts))
+            split = ttnn.reshape(grid5, (batch, t_br, h_br, w_br * parts, SITES_PER_BRICK * channels // parts))
             exchanged = _halo_exchange(
                 ccl_manager,
-                grid5,
+                split,
                 dims=[3],
                 pad_left=[halo_br * parts],
                 pad_right=[halo_br * parts],
@@ -862,74 +914,36 @@ def neighborhood_attention_3d_bricked_w_sharded(
         _tp_trace(device, f"{lane}: tilized -> {tuple(out.shape)}")
         return out
 
+    def widened_bricked(tensor: ttnn.Tensor, lane: str = "?") -> ttnn.Tensor:
+        """K/V halo for the hoisted path: the sites are already bricked, so this is a reshape into
+        the brick grid and the exchange -- no 7-D permute."""
+        _tp_trace(device, f"{lane}: untilize in (already_bricked, channels={channels})")
+        with _deep_prof(device, f"{lane}: untilize", category=decode_tree.RESHAPE):
+            rows = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
+        grid5 = ttnn.reshape(rows, (batch, t_br, h_br, w_br, SITES_PER_BRICK * channels))
+        return exchange(grid5, lane)
+
     def widened(tensor: ttnn.Tensor, lane: str = "?") -> ttnn.Tensor:
         """This chip's shard plus a halo of each neighbour's edge, in op layout. K and V only:
         Q is bricked over the owned region alone and never comes through here.
 
-        Three spans per lane, so the collective and the reorder can be read apart -- the whole
-        point of the split is that they have different fixes. The untilize is its own span rather
-        than folded into either one: both the halo exchange and ``to_bricked`` need ROW_MAJOR, so
-        it is a prerequisite of both, and charging it to one would make that one look like the
-        cost. Under DEEP these spans also serialize q, k and v against each other, so the parent's
-        total inflates a little against a plain DIFFVAE_STAGE_TIMING run.
+        Brick FIRST, exchange SECOND. Bricking the owned columns and then padding ``W_br`` by
+        whole bricks gives the same tensor as bricking the widened natural volume: the planner
+        requires ``brick_w | width_local`` so no brick straddles a seam, ``W_br`` is the fastest
+        brick axis so the neighbours' slabs concatenate into the resident grid, and the T/H ghost
+        padding is the same on every shard. Doing it in this order is what lets the exchange run
+        on a ``32 * channels`` stick at ANY brick width; the natural-order exchange this replaced
+        had to fold W columns into the stick to clear 128 B, and an odd halo cannot fold -- which
+        is why odd brick widths, the only legal ones at W_local = 15, used to be excluded.
+
+        Spans stay split (untilize / brick-permute / halo-exchange / tilize) so the collective and
+        the reorder can be read apart; they have different fixes.
         """
-        _tp_trace(device, f"{lane}: untilize in (channels={channels})")
-        with _deep_prof(device, f"{lane}: untilize", category=decode_tree.RESHAPE):
-            rows = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
-        # The exchange hangs at a 128-byte stick (channels=64, i.e. one head per chip under TP)
-        # where it runs fine at 512 (channels=256, four heads). Neither the link count nor the
-        # persistent buffer is behind it -- both were ruled out by measurement.
-        #
-        # So widen the stick without moving a byte: fold whole groups of W columns into the
-        # channel axis. The buffer is [.., w, c] contiguous, so [.., w/f, c*f] is the SAME memory,
-        # and padding f-column groups by halo/f pads exactly the same halo. Requires f to divide
-        # both the halo and this chip's width, which 4 does at 1080p (halo 8, w_local 60).
-        # 256 CHANNELS is the target (512 bytes at bf16) -- the width measured working. Halve the
-        # candidate until it divides both the halo and this chip's width, so the fold is always
-        # legal: 64 channels -> 4, and 4 divides halo 8 and w_local 60.
-        fold = 1
-        if channels < 256 and 256 % channels == 0:
-            candidate = 256 // channels
-            while candidate > 1 and (halo % candidate or width_local % candidate):
-                candidate //= 2
-            fold = candidate
-        if os.environ.get("DIFFVAE_NA_HALO_FOLD") == "0":
-            fold = 1
-        exchange_channels, exchange_width, exchange_halo = channels * fold, width_local // fold, halo // fold
-        _tp_trace(
-            device,
-            f"{lane}: about to neighbor_pad halo={exchange_halo} links={num_links} "
-            f"fold={fold} stick={exchange_channels * 2}B",
-        )
-        # The fold reshape rides in the halo span: the fold exists only to widen this exchange's
-        # stick, so its cost belongs to the exchange it serves.
-        with _deep_prof(device, f"{lane}: halo-exchange", category=decode_tree.ALLGATHER):
-            volume_form = ttnn.reshape(rows, (batch, time_extent, height_extent, exchange_width, exchange_channels))
-            # DIFFVAE_NA_HALO_PERSISTENT=0 drops the persistent output buffer for this exchange.
-            # The buffer is keyed on the tensor shape, and TP narrows the channels from 256 to
-            # 64 -- a 128-byte stick -- so the pooled buffer is the next suspect after links.
-            exchanged = _halo_exchange(
-                ccl_manager,
-                volume_form,
-                dims=[3],
-                pad_left=[exchange_halo],
-                pad_right=[exchange_halo],
-                axes=[sp_axis],
-                neighbor_sems=[semaphore],
-                num_links=[num_links],
-            )
-        _tp_trace(device, f"{lane}: neighbor_pad done -> {tuple(exchanged.shape)}")
+        volume_form = as_volume(tensor, lane)
         with _deep_prof(device, f"{lane}: brick-permute", category=decode_tree.RESHAPE):
-            if fold > 1:  # unfold back to real columns; the same memory, read the other way
-                exchanged = ttnn.reshape(
-                    exchanged, (batch, time_extent, height_extent, width_local + 2 * halo, channels)
-                )
-            bricked = to_bricked(exchanged, volume=resident, brick=brick)
-            _tp_trace(device, f"{lane}: to_bricked done -> {tuple(bricked.shape)}")
-            site_major = ttnn.reshape(bricked, (batch, 1, bricked_sites, channels))
-            out = ttnn.to_layout(site_major, ttnn.TILE_LAYOUT)
-        _tp_trace(device, f"{lane}: tilized -> {tuple(out.shape)}")
-        return out
+            grid5 = to_bricked_grid(volume_form, volume=owned_volume, brick=brick)
+        _tp_trace(device, f"{lane}: to_bricked_grid done -> {tuple(grid5.shape)}")
+        return exchange(grid5, lane)
 
     widen = widened_bricked if already_bricked else widened
     with _deep_prof(device, "halo+brick-permute (k,v)", category=decode_tree.RESHAPE):
@@ -947,8 +961,7 @@ def neighborhood_attention_3d_bricked_w_sharded(
             query_op = ttnn.to_layout(site_major, ttnn.TILE_LAYOUT)
             _tp_trace(device, f"q: already bricked -> {tuple(query_op.shape)}")
         else:
-            rows = ttnn.to_layout(query, ttnn.ROW_MAJOR_LAYOUT)
-            volume_form = ttnn.reshape(rows, (batch, time_extent, height_extent, width_local, channels))
+            volume_form = as_volume(query, "q")
             bricked = to_bricked(volume_form, volume=owned_volume, brick=brick)
             site_major = ttnn.reshape(bricked, (batch, 1, query_bricked_sites, channels))
             query_op = ttnn.to_layout(site_major, ttnn.TILE_LAYOUT)
