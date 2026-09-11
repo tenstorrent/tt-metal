@@ -168,7 +168,7 @@ The following plot shows the Frobenious error (%) of a skewed random normal dist
 
 In this comparison, online Welford has lower global error than the raw-sum two-pass methods. With a large shifted mean, raw sums over widths on the order of ~1000 grow large enough to introduce numerical error. Welford avoids that growing sum by accumulating the difference $x_n - \bar{x}_{n-1}$, which tends to stay small.
 
-The current shifted two-pass backend achieves the same objective without summing large absolute values. It computes the mean relative to a representative input value, then computes squared deviations from that mean. Eligible inputs are replayed from L1, avoiding a second DRAM traversal. The optimised statistics backends can be requested as follows:
+The current shifted two-pass backend computes the mean relative to an input value, then computes squared deviations from that mean. The shift is the first valid sample in each independent accumulation stream (per row, block or lane, depending on the kernel); it is not an estimate of the mean. This removes a common large offset when the first sample is typical, but an outlier can still leave large shifted sums and introduce rounding error. Consequently, shifted two-pass is not universally more accurate than online Welford. Eligible inputs are replayed from L1, avoiding a second DRAM traversal. The optimised statistics backends can be requested as follows:
 
 LayerNorm (specified in program configs):
 

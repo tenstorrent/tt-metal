@@ -547,18 +547,23 @@ def test_var_bf16_scalar_applied_before_output_rounding(device, dim):
 # single-bit leaf count. Detects a re-widened centered-moment block by ~43x the 1% tolerance.
 @pytest.mark.parametrize("width", [10529], ids=["partial_leaf_uneven_tree"])
 @pytest.mark.parametrize("torch_dtype,ttnn_dtype", [(torch.bfloat16, ttnn.bfloat16), (torch.float32, ttnn.float32)])
-def test_std_var_wide_low_variance(device, torch_dtype, ttnn_dtype, width, correction):
+@pytest.mark.parametrize("dim", [-1, -2, (-2, -1)], ids=["W", "H", "HW"])
+def test_std_var_wide_low_variance(device, torch_dtype, ttnn_dtype, width, correction, dim):
     # The HW writer combines one equal-count partial per column. For sufficiently
     # wide inputs, directly subtracting the first and second moments of the partial
     # means can round to a negative M2 even though the input is non-constant.
     torch_input = torch.full((1, 1, 32, width), 1.1015625, dtype=torch_dtype)
     torch_input[:, :, :, 0] = 0.0
+    # The first sample is an unrepresentative anchor; nearly all samples are 1.1015625.
+    # Transpose for H so that the long reduction sees the same sample sequence.
+    if dim == -2:
+        torch_input = torch_input.transpose(-2, -1).contiguous()
 
     tt_input = ttnn.from_torch(torch_input, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
     for torch_op, ttnn_op in ((torch.var, ttnn.var), (torch.std, ttnn.std)):
-        reference = torch_op(torch_input.to(torch.float64), dim=(-2, -1), keepdim=True, correction=int(correction))
-        output = ttnn_op(tt_input, dim=(-2, -1), keepdim=True, correction=correction)
+        reference = torch_op(torch_input.to(torch.float64), dim=dim, keepdim=True, correction=int(correction))
+        output = ttnn_op(tt_input, dim=dim, keepdim=True, correction=correction)
         actual = ttnn.to_torch(ttnn.from_device(output)).to(torch.float64)
 
         assert torch.isfinite(actual).all()

@@ -158,6 +158,36 @@ def test_layer_norm(device, h, w, use_welford, dtype):
     assert_output_accuracy(torch_output_tensor, output_tensor, use_welford=use_welford)
 
 
+@pytest.mark.parametrize("width", [128, 4096, 16384])
+@pytest.mark.parametrize("outlier_column", [0, -1], ids=["outlier_anchor", "representative_anchor"])
+def test_layer_norm_welford_unrepresentative_anchor(device, width, outlier_column):
+    """An isolated outlier must not make the first-value shift lose row statistics."""
+    values = torch.full((32, width), 1.1015625, dtype=torch.float32)
+    values[:, outlier_column] = 0
+    epsilon = 1e-5
+    reference = torch.nn.functional.layer_norm(values.double(), [width], eps=epsilon)
+    input_tensor = ttnn.from_torch(values, layout=ttnn.TILE_LAYOUT, device=device)
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    output = ttnn.layer_norm(
+        input_tensor,
+        epsilon=epsilon,
+        program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=True),
+        recip_tensor=create_recip_tensor(device, width, use_welford=True),
+        compute_kernel_config=compute_config,
+    )
+    actual = ttnn.to_torch(output).double()
+    assert torch.isfinite(actual).all()
+    assert_numeric_metrics(reference, actual, rtol=5e-4, atol=1e-4, frobenius_threshold=5e-4)
+    # PCC alone cannot detect a common error in the subtracted mean.
+    assert actual.mean(dim=-1).abs().max() < 1e-4
+
+
 @pytest.mark.parametrize("width", [256, 16384])
 @pytest.mark.parametrize("has_residual", [False, True], ids=["plain", "residual"])
 def test_layer_norm_welford_large_offset(device, width, has_residual):
