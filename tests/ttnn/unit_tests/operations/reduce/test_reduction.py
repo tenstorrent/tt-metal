@@ -87,7 +87,8 @@ def test_std_var_hw_compact_lane_combine(device, enabled_program_cache, dtype, c
         for _ in range(3):
             actual = ttnn.to_torch(ttnn_op(tt_input, dim=dim, keepdim=True, correction=correction)).to(torch.float64)
             assert torch.isfinite(actual).all()
-            torch.testing.assert_close(actual, expected, rtol=rtol, atol=1e-7)
+            # Scalar or nearly constant variance outputs make correlation uninformative.
+            assert_numeric_metrics(expected, actual, rtol=rtol, atol=1e-7, frobenius_threshold=rtol, check_pcc=False)
 
 
 @pytest.mark.parametrize("height", [32, 65])
@@ -104,7 +105,7 @@ def test_std_var_hw_compact_lane_mean_variance(device, enabled_program_cache, he
         expected = torch_op(values.double(), dim=(-2, -1), keepdim=True, correction=0)
         for _ in range(3):
             actual = ttnn.to_torch(ttnn_op(tt_input, dim=(-2, -1), keepdim=True, correction=False)).double()
-            torch.testing.assert_close(actual, expected, rtol=2e-4, atol=1e-7)
+            assert_numeric_metrics(expected, actual, rtol=2e-4, atol=1e-7, frobenius_threshold=2e-4)
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -194,7 +195,9 @@ def test_std_var_hw_output_padding_is_zero(device, torch_dtype, ttnn_dtype, ttnn
 
     assert torch.isfinite(padded_output).all()
     assert torch.count_nonzero(padding) == 0
-    torch.testing.assert_close(padded_output[..., :1, :1].double(), expected, rtol=0.02, atol=1e-5)
+    assert_numeric_metrics(
+        expected, padded_output[..., :1, :1].double(), rtol=0.02, atol=1e-5, frobenius_threshold=0.02, check_pcc=False
+    )
 
 
 @pytest.mark.parametrize("ttnn_op,torch_op", [(ttnn.var, torch.var), (ttnn.std, torch.std)], ids=["var", "std"])
@@ -213,11 +216,13 @@ def test_std_var_w_h_output_padding_is_zero(device, ttnn_op, torch_op, dtype, di
     padded = output.cpu().to_torch_with_padded_shape()
     logical_h, logical_w = reference.shape[-2:]
     actual = padded[..., :logical_h, :logical_w].double()
-    torch.testing.assert_close(
-        actual,
+    assert_numeric_metrics(
         reference,
+        actual,
         rtol=1e-4 if dtype == ttnn.float32 else 0.03,
         atol=2e-6 if dtype == ttnn.float32 else 0.004,
+        frobenius_threshold=1e-4 if dtype == ttnn.float32 else 0.03,
+        check_pcc=False,
     )
     assert torch.isfinite(padded).all()
     padded[..., :logical_h, :logical_w] = 0
@@ -359,7 +364,7 @@ def test_var_fp32_large_reduction_translation_stability(device, shape, dim):
     tt_in = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     actual = ttnn.to_torch(ttnn.from_device(ttnn.var(tt_in, dim=dim, keepdim=True, correction=True)))
 
-    torch.testing.assert_close(actual, torch_ref, rtol=1e-3, atol=1e-3, check_dtype=False)
+    assert_numeric_metrics(torch_ref, actual, rtol=1e-3, atol=1e-3, frobenius_threshold=2e-3, check_pcc=False)
 
 
 def test_std_var_fp32_w_l1_replay_respects_occupied_l1(device, enabled_program_cache):
@@ -408,7 +413,7 @@ def test_std_var_fp32_w_l1_replay_respects_occupied_l1(device, enabled_program_c
         actual = ttnn.to_torch(ttnn.from_device(ttnn_op(tt_input, dim=-1, keepdim=True, correction=True)))
 
         assert torch.isfinite(actual).all()
-        torch.testing.assert_close(actual, reference, rtol=1e-3, atol=1e-3, check_dtype=False)
+        assert_numeric_metrics(reference, actual, rtol=1e-3, atol=1e-3, frobenius_threshold=2e-3, check_pcc=False)
 
     assert l1_pressure.is_allocated()
 
@@ -452,7 +457,7 @@ def test_std_var_fp32_w_l1_replay_preserves_l1_small(device, enabled_program_cac
         for torch_op, ttnn_op in ((torch.var, ttnn.var), (torch.std, ttnn.std)):
             reference = torch_op(torch_input.to(torch.float64), dim=-1, keepdim=True, correction=1)
             actual = ttnn.to_torch(ttnn_op(tt_input, dim=-1, keepdim=True, correction=True))
-            torch.testing.assert_close(actual, reference, rtol=1e-3, atol=1e-3, check_dtype=False)
+            assert_numeric_metrics(reference, actual, rtol=1e-3, atol=1e-3, frobenius_threshold=2e-3, check_pcc=False)
             torch.testing.assert_close(ttnn.to_torch(sentinel), sentinel_reference, rtol=0, atol=0)
 
 
@@ -543,7 +548,7 @@ def test_std_var_wide_low_variance(device, torch_dtype, ttnn_dtype, width, corre
         actual = ttnn.to_torch(ttnn.from_device(output)).to(torch.float64)
 
         assert torch.isfinite(actual).all()
-        torch.testing.assert_close(actual, reference, rtol=0.01, atol=1e-15)
+        assert_numeric_metrics(reference, actual, rtol=0.01, atol=1e-15, frobenius_threshold=0.01)
 
 
 def test_std_var_hw_reduce_batch_crosses_tree_block(device):
@@ -562,7 +567,7 @@ def test_std_var_hw_reduce_batch_crosses_tree_block(device):
         actual = ttnn.to_torch(ttnn.from_device(output)).to(torch.float64)
 
         assert torch.isfinite(actual).all()
-        torch.testing.assert_close(actual, reference, rtol=0.01, atol=1e-7)
+        assert_numeric_metrics(reference, actual, rtol=0.01, atol=1e-7, frobenius_threshold=0.01)
 
 
 @pytest.mark.parametrize("width", [96, 128], ids=["Wt3_retained", "Wt4_replay"])
@@ -579,7 +584,7 @@ def test_std_var_bfp8_two_pass_w_replay(device, width):
         )
 
         assert torch.isfinite(actual).all()
-        torch.testing.assert_close(actual, reference, rtol=0, atol=atol)
+        assert_numeric_metrics(reference, actual, rtol=0, atol=atol, frobenius_threshold=0.02, check_pcc=False)
 
 
 @pytest.mark.parametrize("dim", [-2, (-2, -1)], ids=["H", "HW"])
@@ -596,7 +601,7 @@ def test_std_var_bfp8_two_pass_h_replay(device, dim):
         )
 
         assert torch.isfinite(actual).all()
-        torch.testing.assert_close(actual, reference, rtol=0, atol=atol)
+        assert_numeric_metrics(reference, actual, rtol=0, atol=atol, frobenius_threshold=0.02, check_pcc=False)
 
 
 # Test a 1D, 2D, 3D, and 4D tensor
