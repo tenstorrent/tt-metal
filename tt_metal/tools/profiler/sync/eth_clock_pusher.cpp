@@ -64,46 +64,15 @@ constexpr uint32_t kShipWords = kRingWords / 4u;
 constexpr uint32_t kMaxDeferStrides = 333;
 constexpr uint32_t kMaxLinked = 16;  // BH has 14 eth cores
 
-inline __attribute__((always_inline)) uint64_t refclk64() { return tt::tt_metal::eth_ptp::read_cfr(); }
+namespace eth_ptp = tt::tt_metal::eth_ptp;
 
 #if defined(PROFILE_KERNEL)
 
-constexpr uint32_t kEmitWords = 1 + 4;  // optional sticky timer + the four clock words
-
-// RESERVE-OR-SKIP, never the blocking reserve: a producer on an eth core must not stall. The pairs are absolute,
-// so a gap is still measurable as a straight segment between its neighbours.
-inline __attribute__((always_inline)) bool ring_has_room(uint32_t nwords) {
-    invalidate_l1_cache();
-    const uint32_t head = kp::profiler_control_buffer[kp::HEAD_INDEX];
-    return (kp::wIndex - head) <= (kp::RING_USABLE - nwords);
-}
-
-// A tracker sample. The two LO reads go back to back: each latches its HI, so one register read is the whole skew
-// between the two domains -- a skew constant in AICLK cycles and therefore moving in ns with DVFS, so it has to be
-// minimal.
-struct Sample {
-    uint32_t whi, wlo, rhi, rlo;
-    uint64_t wall() const { return (static_cast<uint64_t>(whi) << 32) | wlo; }
-    uint64_t refclk() const { return (static_cast<uint64_t>(rhi) << 32) | rlo; }
-};
-inline __attribute__((always_inline)) Sample take_sample() {
-    Sample s;
-    const tt::tt_metal::eth_ptp::Instant t = tt::tt_metal::eth_ptp::read_instant();
-    s.wlo = t.wall_lo;
-    s.whi = t.wall_hi;
-    s.rlo = static_cast<uint32_t>(t.refclk);
-    s.rhi = static_cast<uint32_t>(t.refclk >> 32);
-    return s;
-}
-// The wall clock is the packet's own timestamp (low half here, high half from the sticky timer); the refclk goes
-// whole.
-inline __attribute__((always_inline)) void emit(const Sample& s) {
-    kp::ring_write_sticky_timer(s.whi);
-    kp::ring_write_word(kp::ppfmt::clock_w0(kp::ppfmt::CLOCK_LOCAL_REFCLK, s.rlo));
-    kp::ring_write_word(s.wlo);
-    kp::ring_write_word(kp::ppfmt::clock_w2(s.refclk()));
-    kp::ring_write_word(0);
-    kp::publish_tail();
+// A tracker sample is one Instant: the skew between the two clocks is one register read, constant in AICLK cycles and
+// therefore moving in ns with DVFS, so it has to be minimal. Emitted without room: skipped, never blocked on -- the
+// pairs are absolute, so a gap is still measurable as a straight segment between its neighbours.
+inline __attribute__((always_inline)) void emit(const eth_ptp::Instant& t) {
+    kp::ring_write_clock(kp::ppfmt::CLOCK_LOCAL_REFCLK, t.refclk, t.wall_lo, t.wall_hi, 0, 0);
 }
 
 // What reaches the host. AICLK is a PLL multiple of the crystal the refclk counts, so between DVFS transitions the
@@ -139,8 +108,8 @@ inline __attribute__((always_inline)) void restart(RateRun& run, uint64_t r, uin
 }
 
 // Whether this sample goes to the host; updates the run.
-inline __attribute__((always_inline)) bool consider(RateRun& run, const Sample& s) {
-    const uint64_t w = s.wall(), r = s.refclk();
+inline __attribute__((always_inline)) bool consider(RateRun& run, const eth_ptp::Instant& s) {
+    const uint64_t w = s.wall(), r = s.refclk;
     if (run.n == 0) {
         restart(run, r, w);
         return true;
@@ -380,18 +349,18 @@ void kernel_main() {
 
     uint32_t strides = 0;
     RateRun run;
-    uint64_t target = refclk64() + kStrideTicks;
+    uint64_t target = eth_ptp::read_cfr() + kStrideTicks;
     while (true) {
         // Pace in REFCLK, not wall clock: a cadence DVFS cannot stretch.
-        uint64_t rc = refclk64();
+        uint64_t rc = eth_ptp::read_cfr();
         while (rc < target) {
-            rc = refclk64();
+            rc = eth_ptp::read_cfr();
         }
         target = rc + kStrideTicks;
         (*hb)++;
 
-        const Sample smp = take_sample();
-        if (consider(run, smp) && ring_has_room(kEmitWords)) {
+        const eth_ptp::Instant smp = eth_ptp::read_instant();
+        if (consider(run, smp) && kp::ring_has_room(kp::CLOCK_RECORD_WORDS)) {
             emit(smp);
         }
 

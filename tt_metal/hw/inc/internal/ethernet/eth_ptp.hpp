@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Device-side access to the Blackhole Ethernet tile's IEEE-1588 hardware: the eth_ctrl PTP timer, the per-queue TX
-// timestamp command, the Rianta RSm410 MAC's two-step TX timestamp FIFO and the RX classifier's timestamp FIFO, ; the
+// timestamp command, the Rianta RSm410 MAC's two-step TX timestamp FIFO and the RX classifier's timestamp FIFO; the
 // tile's clocks are eth_ptp_clock.hpp. A StampSession owns the two timestamp FIFOs, one TX header row, one TCAM row
 // and one flow label for as long as it is open, and end() restores everything begin() changed. Register offsets
 // follow tt-isa-documentation (EthernetRxClassifier.md, the eth_ctrl and TXQ maps) and the Rianta RSm410 register
@@ -47,7 +47,7 @@ namespace tt::tt_metal::eth_ptp {
 // Per TX queue
 constexpr uint32_t kTxqRegsBase = ETH_TXQ0_REGS_START;
 constexpr uint32_t kTxqStride = ETH_TXQ_REGS_SIZE;
-constexpr uint32_t kNumTxq = 3;
+constexpr uint32_t kNumTxq = NUM_ETH_QUEUES;
 constexpr uint32_t kTxqTimestampOff = 0x90;      // [2:0] ts_cmd, [21:16] ts_offset (2-byte units)
 constexpr uint32_t kTxqRxTimestampLoOff = 0x94;  // drives TX_RX_TS[31:0], echoed in the MAC FIFO as the tag
 constexpr uint32_t kTxqRxTimestampHiOff = 0x98;  // drives TX_RX_TS[63:32]
@@ -340,22 +340,23 @@ __attribute__((noinline)) inline bool ptp_timer_start(uint32_t pti, uint32_t lea
     return acked;
 }
 
-// PTP64NS - 20 * CFR. The two counters advance on the same 50 MHz edge, so the difference is one constant, a multiple
-// of 20 ns, for as long as the timer runs; but a single pair of reads puts the register latency between them (a tick
-// or more) into it, and a stall between the two reads puts in several -- measured once at kernel start, that sat in
-// every stamp of one side for the whole run as an 80 ns link bias that came and went between launches. Each pair is
-// read in both orders so the skew cancels in the sum, the median over pairs discards a stalled one, and the result
-// is rounded to the tick.
-__attribute__((noinline)) inline int64_t ptp_ns_minus_20cfr() {
+// PTP64NS minus the CFR count in ns. The two counters advance on the same 50 MHz edge, so the difference is one
+// constant, a multiple of the tick, for as long as the timer runs; but a single pair of reads puts the register latency
+// between them (a tick or more) into it, and a stall between the two reads puts in several -- measured once at kernel
+// start, that sat in every stamp of one side for the whole run as an 80 ns link bias that came and went between
+// launches. Each pair is read in both orders so the skew cancels in the sum, the median over pairs discards a stalled
+// one, and the result is rounded to the tick.
+__attribute__((noinline)) inline int64_t ptp_offset_ns() {
     constexpr int kPairs = 16;
+    constexpr int64_t kTick = kNsPerRefclkTick;
     int64_t sum2[kPairs];
     for (int i = 0; i < kPairs; i++) {
         const uint64_t c1 = read_cfr();
         const uint64_t n1 = read_ptp64ns();
         const uint64_t n2 = read_ptp64ns();
         const uint64_t c2 = read_cfr();
-        const int64_t k1 = static_cast<int64_t>(n1) - static_cast<int64_t>(c1) * 20;
-        const int64_t k2 = static_cast<int64_t>(n2) - static_cast<int64_t>(c2) * 20;
+        const int64_t k1 = static_cast<int64_t>(n1) - static_cast<int64_t>(c1) * kTick;
+        const int64_t k2 = static_cast<int64_t>(n2) - static_cast<int64_t>(c2) * kTick;
         int64_t v = k1 + k2;
         int j = i;
         for (; j > 0 && sum2[j - 1] > v; j--) {
@@ -364,7 +365,7 @@ __attribute__((noinline)) inline int64_t ptp_ns_minus_20cfr() {
         sum2[j] = v;
     }
     const int64_t k = (sum2[kPairs / 2 - 1] + sum2[kPairs / 2]) / 4;
-    return ((k + (k >= 0 ? 10 : -10)) / 20) * 20;
+    return ((k + (k >= 0 ? kTick / 2 : -kTick / 2)) / kTick) * kTick;
 }
 
 // One end's use of the tile's 1588 hardware: frames sent on queue Txq carry kStampFrameDa through header row
@@ -379,14 +380,14 @@ struct StampSession {
     static_assert(Txq < kNumTxq);
     static_assert(Label <= kRxThLabelMask);
 
-    bool timer_ok = false;       // the PTP timer runs at kPtiRefclk; hardware stamps are meaningless otherwise
-    int64_t ns_minus_20cfr = 0;  // PTP64NS - 20 * CFR while this session's timer runs
+    bool timer_ok = false;      // the PTP timer runs at kPtiRefclk; hardware stamps are meaningless otherwise
+    int64_t ptp_offset_ns = 0;  // PTP64NS minus the CFR count in ns while this session's timer runs
     raw::TxHeaderPrev hdr_prev{};
     uint32_t no_match_prev = 0;
 
     __attribute__((noinline)) bool begin() {
         timer_ok = ptp_timer_start(kPtiRefclk, kTimerLeadTicks, kTimerAckSpins);
-        ns_minus_20cfr = ptp_ns_minus_20cfr();
+        ptp_offset_ns = eth_ptp::ptp_offset_ns();
         no_match_prev = raw::rd(kRxFlNoMatchActions);
         raw::rx_th_flush();
         raw::wr(kRxFlNoMatchActions, no_match_prev & ~kRxFlKeepTimestamp);
@@ -428,21 +429,23 @@ inline __attribute__((always_inline)) void send_stamped(
 }
 
 // The MAC's egress stamp of the frame send_stamped issued under `tag`: waits up to `spins` polls for the FIFO to
-// fill, clears the queue's stamp request (ts_cmd is sticky: a queue still armed at its idle timeout would stamp its
-// own keepalive under the same tag, so collect within that timeout, ~6 us), then pops entries up to the tag's.
-// 0 if no stamp appeared or the tag was not among them.
+// fill, clears the queue's stamp request, then drains the FIFO and returns the earliest entry under the tag. The
+// drain is what makes a late collect safe: ts_cmd is sticky, so a queue still armed at its idle timeout (~6 us) stamps
+// its own keepalive under the same tag, and that entry sits behind the frame's and is discarded here. 0 if no stamp
+// appeared or the tag was not among them.
 template <typename Session>
 inline __attribute__((always_inline)) uint64_t collect_tx_stamp(const Session&, uint64_t tag, uint32_t spins) {
     for (uint32_t spin = 0; spin < spins && !raw::mac_tx_fifo_not_empty(); spin++) {
     }
     raw::txq_clear_timestamp_cmd(Session::kTxq);
+    uint64_t ts = 0;
     raw::MacTxStamp s;
     while (raw::mac_tx_fifo_pop(s)) {
-        if (s.tag == tag) {
-            return s.tx_ts;
+        if (ts == 0 && s.tag == tag) {
+            ts = s.tx_ts;
         }
     }
-    return 0;
+    return ts;
 }
 
 // send_stamped followed by collect_tx_stamp, waiting up to kTxStampSpins for the stamp.

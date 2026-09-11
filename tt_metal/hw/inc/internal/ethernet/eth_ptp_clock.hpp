@@ -17,7 +17,8 @@
 namespace tt::tt_metal::eth_ptp {
 
 constexpr uint32_t kRefclkHz = 50'000'000;
-constexpr uint32_t kPtiRefclk = (1'000'000'000u / kRefclkHz) << 16;  // 20.0 ns per tick in the timer's 8.16 fixed point
+constexpr uint32_t kNsPerRefclkTick = 1'000'000'000u / kRefclkHz;  // 20
+constexpr uint32_t kPtiRefclk = kNsPerRefclkTick << 16;            // the timer's per-tick increment, 8.16 fixed point
 
 // ERISC wall clock (AICLK ticks). Reading LO latches HI into WALL_CLOCK_1_AT.
 constexpr uint32_t kWallClockLo = ETH_RISC_REGS_START + ETH_RISC_WALL_CLOCK_0;
