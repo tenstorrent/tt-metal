@@ -76,8 +76,6 @@ def _resolve_binary_backward_inputs(grad, input_tensor_a, input_tensor_b, kwargs
 def _golden_function_backward(torch_op, grad_tensor, input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
-    if torch_op == torch.add or torch_op == torch.sub or torch_op == torch.mul:
-        return _golden_function_backward_overload(torch_op, grad_tensor, input_tensor_a, input_tensor_b)
     if torch_op == "torch.squared_difference":
         pyt_y = torch.square(torch.sub(input_tensor_a, input_tensor_b))
     else:
@@ -158,30 +156,15 @@ def _golden_function_backward_with_string(
 ):
     import torch
 
-    if torch_op == "bias_gelu_bw":
-        sum_result = torch.add(input_tensor_a, input_tensor_b)
-        pyt_y = torch.nn.functional.gelu(sum_result, approximate=value)
-        sum_result.retain_grad()
-        pyt_y.backward(gradient=grad_tensor)
-        if isinstance(input_tensor_b, (float, int)):
-            golden_tensor = [sum_result.grad]
-        else:
-            golden_tensor = [sum_result.grad, sum_result.grad]
-        return golden_tensor
-    elif torch_op == torch.div:
-        pyt_y = torch_op(input_tensor_a, input_tensor_b, rounding_mode=value)
-    else:
-        pyt_y = torch_op(input_tensor_a, input_tensor_b, value=value)
-    if isinstance(input_tensor_b, (float, int)):
-        input_tensor_a.retain_grad()
-        pyt_y.backward(gradient=grad_tensor)
-        golden_tensor = [input_tensor_a.grad]
-        return golden_tensor
-    input_tensor_a.retain_grad()
-    input_tensor_b.retain_grad()
+    if torch_op != "bias_gelu_bw":
+        raise ValueError(f"Unsupported string backward operation: {torch_op}")
+    sum_result = torch.add(input_tensor_a, input_tensor_b)
+    pyt_y = torch.nn.functional.gelu(sum_result, approximate=value)
+    sum_result.retain_grad()
     pyt_y.backward(gradient=grad_tensor)
-    golden_tensor = [input_tensor_a.grad, input_tensor_b.grad]
-    return golden_tensor
+    if isinstance(input_tensor_b, (float, int)):
+        return [sum_result.grad]
+    return [sum_result.grad, sum_result.grad]
 
 
 def _golden_sub_bw(

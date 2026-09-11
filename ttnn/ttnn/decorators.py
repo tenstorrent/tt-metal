@@ -118,8 +118,12 @@ def compare_tensors_using_pcc(
             )
         return comparison_records
 
+    if golden_outputs is None and outputs is None:
+        return []
     if golden_outputs is None or outputs is None:
-        return list(_structured_output_pairs(golden_outputs, outputs))
+        raise TypeError(
+            f"Output structure mismatch: golden type {type(golden_outputs)} does not match output type {type(outputs)}"
+        )
 
     if isinstance(golden_outputs, numbers.Number) or isinstance(outputs, numbers.Number):
         if not isinstance(golden_outputs, numbers.Number) or not isinstance(outputs, numbers.Number):

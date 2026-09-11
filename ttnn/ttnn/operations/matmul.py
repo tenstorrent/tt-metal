@@ -44,6 +44,7 @@ def _matmul_reference(
     output_tensor = input_tensor_a @ input_tensor_b.to(input_tensor_a.dtype)
 
     if bias is not None:
+        # Preserve broadcastable full-output biases, including [M, N], while matching the matmul result dtype.
         output_tensor = output_tensor + bias.to(output_tensor.dtype)
 
     output_tensor = golden_apply_fused_activations(output_tensor, activation, program_config=program_config)

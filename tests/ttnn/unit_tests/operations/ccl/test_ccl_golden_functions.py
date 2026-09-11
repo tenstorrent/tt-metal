@@ -70,6 +70,35 @@ def test_all_gather_golden_composes_every_collective_group():
     assert torch.equal(output, expected)
 
 
+def test_all_gather_golden_preserves_logical_order_with_permuted_topology_coordinates():
+    mesh_coords = ((0, 1), (0, 0), (1, 1), (1, 0))
+    input_tensors = [
+        torch.tensor([[3.0, 4.0]], dtype=torch.bfloat16),
+        torch.tensor([[1.0, 2.0]], dtype=torch.bfloat16),
+        torch.tensor([[30.0, 40.0]], dtype=torch.bfloat16),
+        torch.tensor([[10.0, 20.0]], dtype=torch.bfloat16),
+    ]
+
+    output = ttnn.get_golden_function(ttnn.all_gather)(
+        input_tensors,
+        dim=1,
+        cluster_axis=1,
+        **_mesh_kwargs(mesh_coords=mesh_coords),
+    )
+
+    expected = torch.tensor([[3.0, 4.0, 1.0, 2.0], [30.0, 40.0, 10.0, 20.0]], dtype=torch.bfloat16)
+    assert torch.equal(output, expected)
+
+
+def test_collective_golden_rejects_incomplete_topology_coordinates(expect_error):
+    with expect_error(ValueError, "mesh coordinates for mesh volume"):
+        ttnn.get_golden_function(ttnn.all_reduce)(
+            _two_group_collective_inputs(),
+            cluster_axis=1,
+            **_mesh_kwargs(mesh_coords=((0, 0), (0, 1), (1, 0))),
+        )
+
+
 def test_all_reduce_golden_composes_every_collective_group():
     golden_function = ttnn.get_golden_function(ttnn.all_reduce)
 
@@ -220,3 +249,27 @@ def test_moe_routing_remap_golden_partitions_each_mesh_member(cluster_axis, expe
     assert torch.equal(output, expected)
     first_next_member = 4 if cluster_axis == 0 else 1
     assert not torch.equal(output[0], output[first_next_member])
+
+
+def test_moe_routing_remap_golden_preserves_logical_order_with_permuted_topology_coordinates():
+    routing_weights = torch.zeros((1, 32), dtype=torch.bfloat16)
+    routing_weights[0, [2, 4, 10, 13, 14, 18, 22, 24]] = torch.arange(1, 9, dtype=torch.bfloat16)
+    mesh_shape = (2, 4)
+    mesh_coords = tuple((row, column) for row in range(2) for column in reversed(range(4)))
+
+    output = ttnn.get_golden_function(ttnn.moe_routing_remap)(
+        routing_weights,
+        non_zero_weight_size=8,
+        expert_parallel_size=4,
+        cluster_axis=1,
+        **_mesh_kwargs(mesh_shape=mesh_shape, shard_dims=(None, None), mesh_coords=mesh_coords),
+    )
+    expected = _expected_moe_routing_outputs(
+        routing_weights,
+        non_zero_weight_size=8,
+        expert_parallel_size=4,
+        cluster_axis=1,
+        mesh_shape=mesh_shape,
+    )
+
+    assert torch.equal(output, expected)

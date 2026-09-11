@@ -203,6 +203,40 @@ def test_structured_output_pairs_preserve_order_and_scalar_routing(monkeypatch):
     assert all(record["matches"] for record in comparison_records)
 
 
+def test_none_outputs_produce_no_comparison_records():
+    compare = ttnn.decorators.compare_tensors_using_pcc
+    comparison_kwargs = {
+        "python_fully_qualified_name": "ttnn.test_operation",
+        "desired_pcc": 0.99,
+        "level": "globally",
+        "fail_on_bad_comparison": True,
+    }
+
+    assert compare(golden_outputs=None, outputs=None, **comparison_kwargs) == []
+    assert compare(golden_outputs=(None,), outputs=(None,), **comparison_kwargs) == []
+
+
+@pytest.mark.parametrize(
+    "golden_outputs, outputs",
+    [
+        (None, torch.tensor([1.0])),
+        (torch.tensor([1.0]), None),
+        ((None,), (torch.tensor([1.0]),)),
+        ((torch.tensor([1.0]),), (None,)),
+    ],
+)
+def test_none_output_structure_mismatch_raises(golden_outputs, outputs, expect_error):
+    with expect_error(TypeError, "Output structure mismatch"):
+        ttnn.decorators.compare_tensors_using_pcc(
+            "ttnn.test_operation",
+            golden_outputs,
+            outputs,
+            desired_pcc=0.99,
+            level="globally",
+            fail_on_bad_comparison=True,
+        )
+
+
 def test_stored_global_golden_preserves_mesh_coordinate():
     output = torch.tensor([0.0])
     golden = torch.tensor([1.0])
@@ -222,11 +256,11 @@ def test_stored_global_golden_preserves_mesh_coordinate():
 
 
 def test_mesh_coordinate_selects_requested_device_shard_and_emits_one_record(monkeypatch):
-    mesh_coords = (ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, 1))
+    mesh_coords = (ttnn.MeshCoordinate(0, 1), ttnn.MeshCoordinate(0, 0))
     topology = _FakeTensorTopology(mesh_coords=mesh_coords)
     runtime_output = _FakeDistributedTensor(topology=topology)
     runtime_output.tensor_id = 17
-    device_tensors = [_FakeDistributedTensor(torch.tensor([0.0])), _FakeDistributedTensor(torch.tensor([1.0]))]
+    device_tensors = [_FakeDistributedTensor(torch.tensor([1.0])), _FakeDistributedTensor(torch.tensor([0.0]))]
     golden = torch.tensor([1.0])
     golden._ttnn_mesh_coord = (0, 1)
     ttnn.decorators.set_tensor_id(golden, force=True)

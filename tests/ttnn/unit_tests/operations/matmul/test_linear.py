@@ -22,6 +22,32 @@ from tests.ttnn.unit_tests.operations.matmul.test_matmul import is_tiny_tile_com
 pytestmark = pytest.mark.use_module_device
 
 
+def test_linear_golden_supports_full_two_row_bias_and_normalizes_dtype():
+    input_tensor = torch.arange(6, dtype=torch.bfloat16).reshape(2, 3)
+    weights = torch.arange(12, dtype=torch.float32).reshape(3, 4)
+    bias = torch.arange(8, dtype=torch.float32).reshape(2, 4)
+
+    output = ttnn.get_golden_function(ttnn.linear)(input_tensor, weights, bias=bias)
+    expected = input_tensor @ weights.to(input_tensor.dtype) + bias.to(input_tensor.dtype)
+
+    assert output.dtype == input_tensor.dtype
+    assert torch.equal(output, expected)
+
+
+def test_matmul_batched_weights_golden_preserves_weight_order():
+    input_tensor = torch.arange(6, dtype=torch.bfloat16).reshape(2, 3)
+    weights = [
+        torch.arange(6, dtype=torch.bfloat16).reshape(3, 2),
+        torch.arange(6, 12, dtype=torch.bfloat16).reshape(3, 2),
+    ]
+
+    outputs = ttnn.get_golden_function(ttnn.matmul_batched_weights)(input_tensor, weights)
+
+    assert len(outputs) == len(weights)
+    for output, weight in zip(outputs, weights):
+        assert torch.equal(output, input_tensor @ weight)
+
+
 @pytest.mark.parametrize("batch_sizes", [(1,)])
 @pytest.mark.parametrize("m_size", [384])
 @pytest.mark.parametrize("k_size", [1024])
