@@ -50,32 +50,50 @@ _CMD_K3_CHUNKED_8X4 = (
     f"pytest {_CHUNKED_TEST_PATH} " "-k 'deep-50k+5k and k3 and func and torus-xy-8x4 and scalar' --wrapper-invocation"
 )
 
-# Mistral Small 4: same 50k+5k scenario and mesh as the two Kimi rows, so the three are directly
-# comparable per forward. This is the op-level iteration target for the PP=4 prefill work --
-# RingJointSDPA is the only op in a Mistral4 layer that grows with KV depth (5.46x across the ramp),
-# so it is the one worth optimising for long context, and it cannot be iterated on through the full
-# model.
+# Same 50k+5k scenario and mesh as the two Kimi rows, so the three are comparable per forward.
+# RingJointSDPA is the only op in a Mistral4 layer that grows with KV depth, so it is the lever for
+# long context.
 #
-# The selector pins FOUR axes, one more than the K3 row. 'scalar' and 'no_determinism' are both
-# load-bearing for the same reason: run_device_perf profiles the whole -k selection into a single CSV
-# and the signpost filter keeps every MLA_START/MLA_END region, so any unpinned axis multiplies the
-# measured total by the number of cases it admits. 'no_determinism' matters here because
-# reference='func' is exactly the case determinism_check does NOT skip -- 'with_determinism' would
-# add DETERMINISM_REPS forwards.
+# Every axis must be pinned: run_device_perf profiles the whole -k selection into one CSV and the
+# signpost filter keeps every MLA_START/MLA_END region, so an unpinned axis multiplies the total.
 _CMD_MISTRAL4_CHUNKED_8X4 = (
     f"pytest {_CHUNKED_TEST_PATH} "
     "-k 'deep-50k+5k and mistral4 and func and torus-xy-8x4 and scalar and no_determinism' "
     "--wrapper-invocation"
 )
-# Migration starting threshold, NOT a gate. Measured 2026-09-04 on bh-glx-120-b03u02, 8x4 TorusXY
-# certified, DDR 14000, single run: 3_301_775 ns, of which RingJointSDPA is 2_538_210 (76.9%) --
-# against DeepSeek's 50% at the same mesh, which is why this row is the lever for long context.
-#
-# The margin still admits any measurement, so the row reports rather than gates. That is deliberate:
-# this number is local, one run, and on DDR 14000 where the baselines in this file are cut at 16000
-# (the DeepSeek row measures +2.02% against its CI baseline on this same box). Replace BOTH with the
-# first certified TorusXY CI result before wiring this into a gating leg.
+# Record-only: one local run on DDR 14000 where the other baselines here are cut at 16000, so the
+# margin admits any measurement. Replace both with the first certified TorusXY CI result.
 _MISTRAL4_MLA_CHUNKED_NS_UNCALIBRATED = 3_301_775
+
+# Measures the actual SP8/TP1 shape; approximate_mla_galaxy_perf pins TP=4 and cannot express it.
+_CMD_MISTRAL4_CHUNKED_8X1 = (
+    "pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mistral4_mla_chunked_prefill_loudbox "
+    "--wrapper-invocation"
+)
+
+
+@pytest.mark.timeout(0)
+def test_mistral4_mla_chunked_perf_loudbox():
+    """Record the unapproximated PP4-stage MLA budget on eight Blackhole devices.
+
+    No threshold is assigned until a real LoudBox measurement is available. The reported number
+    sums merged operation durations inside one forward, not elapsed end-to-end request latency.
+    """
+    galaxy = _is_galaxy_env()
+    visible_devices = os.environ.get("TT_VISIBLE_DEVICES", "").split(",")
+    if galaxy and (len(visible_devices) != 8 or len(set(visible_devices)) != 8):
+        pytest.skip("Expose one eight-device Galaxy ring with TT_VISIBLE_DEVICES, or use a Blackhole LoudBox")
+    platform = "glx_column" if galaxy else "lb"
+    run_model_device_perf_test_with_merge(
+        command=_CMD_MISTRAL4_CHUNKED_8X1,
+        expected_device_perf_ns_per_iteration=None,
+        subdir="mistral4_mla",
+        model_name=f"mistral4_mla_chunked_{platform}_8x1_torus_y",
+        num_iterations=1,
+        batch_size=1,
+        between_signposts=("MLA_START", "MLA_END"),
+        comments=f"mistral4_chunked_50k+5k_{platform}_8x1_torus_y_record_only",
+    )
 
 
 @_REQUIRE_HIGH_POWER
@@ -138,8 +156,6 @@ def test_kimi_k3_mla_chunked_perf_galaxy():
         num_iterations=1,
         batch_size=1,
         margin=margin,
-        # Time only the forward: ops between MLA_START/MLA_END, excluding the one-time weight-load
-        # tilize/typecast dispatched at construction.
         between_signposts=("MLA_START", "MLA_END"),
         comments="kimi_k3_chunked_50k+5k_glx_8x4_ground_truth",
     )
@@ -163,17 +179,13 @@ def test_mistral4_mla_chunked_perf_galaxy():
 
     run_model_device_perf_test_with_merge(
         command=_CMD_MISTRAL4_CHUNKED_8X4,
-        # None is what record-only means: it logs the measurement and skips check_device_perf
-        # entirely. A finite margin does not, however wide -- _MISTRAL4_MLA_CHUNKED_NS_UNCALIBRATED
-        # with margin=10.0 still built an 11x UPPER bound and published threshold fields, so a
-        # genuine speedup could fail the row. Wire the constant in when a CI sample arms it.
+        # None skips check_device_perf entirely. A finite margin does not, however wide: it still
+        # builds an upper bound, so a genuine speedup could fail the row.
         expected_device_perf_ns_per_iteration=None,
         subdir="mistral4_mla",
         model_name="mistral4_mla_chunked_glx_8x4",
         num_iterations=1,
         batch_size=1,
-        # Time only the forward: ops between MLA_START/MLA_END, excluding the one-time weight-load
-        # tilize/typecast dispatched at construction.
         between_signposts=("MLA_START", "MLA_END"),
         comments="mistral4_chunked_50k+5k_glx_8x4_record_only",
     )
