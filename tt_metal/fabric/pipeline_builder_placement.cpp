@@ -82,12 +82,15 @@ struct LinkSearch {
     std::vector<size_t> last_required_edge_exclusive{};
     std::set<std::vector<size_t>> failed_link_states{};
     bool can_assign_host_endpoints = false;
+    bool allow_shared_chips = false;
 
     bool solve();
     bool search_links(size_t edge_index);
 
     std::optional<uint32_t> reserve_slot(const std::string& stage, uint32_t row, uint32_t col) {
-        auto& used_slots = used_slots_by_chip[{stage, row, col}];
+        const auto it = used_slots_by_chip.find({stage, row, col});
+        const auto used_slots = it == used_slots_by_chip.end() ? 0u : it->second;
+        if (!allow_shared_chips && stage != pipeline.stage_order.front() && used_slots != 0) { return std::nullopt; }
         const auto limit = pipeline.core_capacity(stage, pipeline.placement.at(stage));
         if (used_slots >= limit) {
             auto& failure = pipeline.failure;
@@ -98,7 +101,8 @@ struct LinkSearch {
             }
             return std::nullopt;
         }
-        return used_slots++;
+        used_slots_by_chip[{stage, row, col}] = used_slots + 1;
+        return used_slots;
     }
 
     void release_slot(const std::string& stage, uint32_t row, uint32_t col) {
@@ -106,12 +110,26 @@ struct LinkSearch {
         if (--it->second == 0) { used_slots_by_chip.erase(it); }
     }
 
-    bool place_host_endpoint(uint32_t& row, uint32_t& col, std::optional<uint32_t>& slot) {
+    bool place_host_endpoint(uint32_t& row, uint32_t& col, std::optional<uint32_t>& slot, bool input) {
         const auto& stage = pipeline.stage_order.front();
-        // Preserve the preference for separate host chips before folding.
-        for (bool already_used : {false, true}) {
+        std::optional<std::pair<uint32_t, uint32_t>> preferred;
+        for (const auto& edge : result.resolved_edges) {
+            if (input && edge.src == stage && !edge.is_loopback) {
+                preferred = {edge.exit_row, edge.exit_col};
+                break;
+            }
+            if (!input && edge.dst == stage && edge.is_loopback) {
+                preferred = {edge.entry_row, edge.entry_col};
+                break;
+            }
+        }
+        // Unused chips first; otherwise keep host traffic on its pipeline boundary
+        // (H2D beside forward send, D2H beside loopback receive), then try any chip.
+        for (int priority = 0; priority < 3; ++priority) {
             for (const auto& chip : pipeline.chips[pipeline.placement.at(stage)]) {
-                if (used_slots_by_chip.contains({stage, chip.row, chip.col}) != already_used) { continue; }
+                const int chip_priority = !used_slots_by_chip.contains({stage, chip.row, chip.col}) ? 0 :
+                    (preferred == std::pair{chip.row, chip.col} ? 1 : 2);
+                if (chip_priority != priority) { continue; }
                 if (auto candidate = reserve_slot(stage, chip.row, chip.col)) {
                     row = chip.row;
                     col = chip.col;
@@ -244,14 +262,19 @@ bool LinkSearch::solve() {
     }
     // Keep stage-zero occupancy in the cache until the host check below.
     if (can_assign_host_endpoints) { last_required_edge_exclusive[0] = pipeline.edges.size() + 1; }
+    // Prefer a complete link assignment with separate forwarding chips. If none
+    // fits this placement, retry with the configured capacities, including sharing.
+    if (search_links(0)) { return true; }
+    failed_link_states.clear();
+    allow_shared_chips = true;
     return search_links(0);
 }
 
 bool LinkSearch::search_links(size_t edge_index) {
     if (edge_index == pipeline.edges.size()) {
         if (!can_assign_host_endpoints) { return true; }
-        if (!place_host_endpoint(result.h2d_entry_row, result.h2d_entry_col, result.h2d_core_slot)) { return false; }
-        if (place_host_endpoint(result.d2h_exit_row, result.d2h_exit_col, result.d2h_core_slot)) { return true; }
+        if (!place_host_endpoint(result.h2d_entry_row, result.h2d_entry_col, result.h2d_core_slot, true)) { return false; }
+        if (place_host_endpoint(result.d2h_exit_row, result.d2h_exit_col, result.d2h_core_slot, false)) { return true; }
         release_slot(pipeline.stage_order.front(), result.h2d_entry_row, result.h2d_entry_col);
         return false;
     }

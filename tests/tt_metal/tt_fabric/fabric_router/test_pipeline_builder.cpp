@@ -399,6 +399,40 @@ TEST(PipelineBuilderCapacityTest, DefaultsAndOverridesRejectDisconnectedPlacemen
     }
 }
 
+TEST(PipelineBuilderCapacityTest, PrefersSeparateForwardingChipsAndLocalHostEndpoints) {
+    const auto nodes = build_ring_nodes(3);
+    const auto edges = build_ring_edges(3);
+    std::vector<std::vector<ChipTuple>> chips(3);
+    for (size_t i = 0; i < chips.size(); ++i) {
+        chips[i] = {{0, static_cast<uint32_t>(2 * i), 0, 0},
+                    {0, static_cast<uint32_t>(2 * i + 1), 0, 1}};
+    }
+    detail::DirectLinks links{
+        {{0, 1}, {{0, 1, 0, 0}, {0, 1, 0, 1}}},
+        {{1, 2}, {{0, 0, 0, 0}}},
+        {{2, 0}, {{0, 1, 0, 0}}}};
+    // The first incoming link would fold s1. Search must revisit that choice,
+    // not accept sharing immediately just because two slots are available.
+    for (auto capacity : {std::optional<uint32_t>{}, std::optional<uint32_t>{2}}) {
+        const auto result = detail::resolve_graph_layout_with_connections(nodes, edges, chips, {}, {}, capacity, &links);
+        ASSERT_EQ(result.resolved_edges.size(), 3u);
+        EXPECT_EQ(result.resolved_edges[0].entry_col, 1u);
+        EXPECT_EQ(result.resolved_edges[1].exit_col, 0u);
+        EXPECT_EQ(result.resolved_edges[1].entry_col, 0u);
+        EXPECT_EQ(result.resolved_edges[2].exit_col, 1u);
+        EXPECT_EQ(result.h2d_entry_col, 1u);
+        EXPECT_EQ(result.d2h_exit_col, 0u);
+        EXPECT_EQ(result.h2d_core_slot, 1u);
+        EXPECT_EQ(result.d2h_core_slot, 1u);
+    }
+    // When separation is impossible, the same default must still permit sharing.
+    links.at({0, 1}).resize(1);
+    const auto folded = detail::resolve_graph_layout_with_connections(nodes, edges, chips, {}, {}, 2, &links);
+    ASSERT_EQ(folded.resolved_edges.size(), 3u);
+    EXPECT_EQ(folded.resolved_edges[0].entry_col, folded.resolved_edges[1].exit_col);
+    EXPECT_NE(folded.resolved_edges[0].entry_core_slot, folded.resolved_edges[1].exit_core_slot);
+}
+
 TEST(PipelineBuilderCapacityTest, DefaultsAllowColocatedEndpointsOnSmallStages) {
     auto nodes = build_ring_nodes(4);
     auto edges = build_ring_edges(4);
