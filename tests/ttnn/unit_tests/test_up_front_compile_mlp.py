@@ -61,7 +61,8 @@ def test_mlp_up_front_compile(device):
     assert n_unique >= 1
 
     # Parallel compile warms the kernel cache and must build exactly the unique set, error-free.
-    num_programs, num_errors, _, _ = ttnn.graph.up_front_compile(device, 4)
+    num_programs, num_errors, _, _, num_already = ttnn.graph.up_front_compile(device, 4)
+    assert num_already == 0, f"{num_already}/{num_programs} arrived already compiled (compiled inline during collect)"
     assert num_errors == 0, "parallel compile reported errors"
     assert num_programs == n_unique, f"compiled {num_programs} programs, expected the {n_unique} unique collected"
 
