@@ -476,6 +476,11 @@ class MiniMaxH3Pipeline:
         # False during `warmup`: generation logs (stage times, per-step, VAE profile) are the
         # measured-call report, not the compile pass. Construction logs still go through `_host_log`.
         self._log_generation = True
+        # Warmup's trace-capture pass sets this so `_denoise_and_decode` records the denoise
+        # trace but skips decode: decode was compiled and its caches (e.g. the audio vocoder mask
+        # cache) populated in the untraced bind pass, and running it here would allocate buffers
+        # while this rung's just-captured trace is resident, to be stomped on a later replay.
+        self._skip_decode_in_capture = False
         # Per-rung device state -- one `_BucketState` per bucket-ladder rung the pipeline has served,
         # keyed by the rung when bucketing (or by 0 otherwise, where rebinding is harmless and one
         # slot avoids holding a set of tensors per distinct shape). See `_BucketState` and `_denoise`.
@@ -2151,6 +2156,11 @@ class MiniMaxH3Pipeline:
                 on_event=on_event,
             )
 
+        if self._skip_decode_in_capture:
+            # Trace-capture pass: the denoise trace is now recorded; skip decode so its buffers are
+            # not allocated under this resident trace (see `_skip_decode_in_capture` in __init__).
+            return None
+
         # VAE sub-models load on first use inside the section (warmup is what uploads them
         # for a served path; under coresident=False the reload is honest accounting).
         with event_section(on_event, "vae"):
@@ -2335,6 +2345,7 @@ class MiniMaxH3Pipeline:
             if not self.trace_denoise:
                 return
             capture_rungs = sorted(fitted, reverse=True)
+            self._skip_decode_in_capture = True
             if host:
                 _tqdm_spacer()
             for rung in tqdm.tqdm(
@@ -2349,6 +2360,7 @@ class MiniMaxH3Pipeline:
                     self._run_forced_fit(rung, prompt, fitted[rung], shrink=shrink)
         finally:
             self._log_generation = True
+            self._skip_decode_in_capture = False
 
     def _run_forced(self, rung: int, prompt: str, generation_kwargs: dict) -> None:
         """One short generation padded to `rung` regardless of its natural rung -- warmup's ladder walk."""
