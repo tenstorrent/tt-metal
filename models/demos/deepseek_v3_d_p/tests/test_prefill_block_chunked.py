@@ -81,6 +81,18 @@ _PADDED_FULL_55K = [
 assert sum(_PADDED_FULL_55K) == SEQ_CACHE and all(v % 32 == 0 and 0 < v <= CHUNK for v in _PADDED_FULL_55K)
 
 
+def _chunked_repeat_combos(**params):
+    """determinism_check repeats the whole chunk sweep num_iterations times -- that repetition IS the
+    stress run, and every pass must come back bit-identical to pass 0. num_iterations means nothing
+    without it, so the plain rows keep one value; iter2000 is pinned to one chunk and stays off CI."""
+    iters = params.get("num_iterations")
+    if not params.get("determinism_check"):
+        return iters != 2
+    if iters == 2000:
+        return params.get("n_chunks") != 1 or params["is_ci_env"] or params["is_ci_v2_env"]
+    return params.get("n_chunks") != 2
+
+
 def _resolve_trace_dir(variant) -> Path:
     """Golden chunked-prefill trace dir for `variant`: the model-agnostic PREFILL_TRACE_DIR env
     overrides the variant's prefill_trace_default. A vllm trace nests metadata.json + kv_cache under
@@ -121,15 +133,39 @@ def _pcc(label: str, ref: torch.Tensor, dev: torch.Tensor, thr: float) -> float:
 
 
 def _pcc_pe(label: str, ref_pe: torch.Tensor, dev_pe: torch.Tensor, thr: float) -> float:
-    """Compare a RoPE (pe) slice, trying both bases (the golden trace stores HF half-split, the
-    device uses Meta interleave). Logs both and asserts on the better one."""
-    _, direct = comp_pcc(ref_pe.float(), dev_pe.float())
-    _, interleaved = comp_pcc(interleave_pe(ref_pe).float(), dev_pe.float())
-    best = max(direct, interleaved)
-    basis = "interleaved" if interleaved >= direct else "direct"
-    logger.info(f"  {label} PCC: direct={direct:.6f} interleaved={interleaved:.6f} -> {best:.6f} [{basis}]")
-    assert best > thr, f"{label} PCC {best:.6f} below threshold {thr}"
-    return best
+    """Compare a ROTATED pe slice: the golden stores HF half-split, the device Meta interleave (the MLA
+    rope tables are always built with interleave=True). Committed rather than best-of-two, so a basis
+    change fails here instead of passing on the other basis. Measured on mesh-8x4: interleaved 0.99992
+    vs direct 0.00001. Pre-rope pe (compressed_kv) shares one layout and compares with _pcc instead."""
+    return _pcc(label, interleave_pe(ref_pe), dev_pe, thr)
+
+
+def _log_position_breakdown(label, golden, dev, split, bands, pe_interleave):
+    """Per-band PCC, so a localised miss (chunk boundary, pad tail) is distinguishable from a uniform
+    one -- the two need different fixes and a single PCC over n_chunks*CHUNK rows cannot tell them
+    apart. Set KVPE_POSITION_BREAKDOWN=1. Diagnostic: asserts nothing."""
+    ref_kv, dev_kv = golden[:, :split].float(), dev[:, :split].float()
+    ref_pe = golden[:, split:].float()
+    if pe_interleave:
+        ref_pe = interleave_pe(ref_pe)
+    dev_pe = dev[:, split:].float()
+
+    logger.info(f"{label} position breakdown:")
+    logger.info(f"{'band':>20} {'pe PCC':>10} {'kv PCC':>10} {'|ref|max':>10} {'|dev|max':>10}")
+    scored = []
+    for lo, hi, name in bands:
+        if hi <= lo:
+            continue
+        pe = float(comp_pcc(ref_pe[lo:hi], dev_pe[lo:hi], 0.0)[1])
+        kv = float(comp_pcc(ref_kv[lo:hi], dev_kv[lo:hi], 0.0)[1])
+        scored.append((pe, name))
+        logger.info(
+            f"{name:>20} {pe:>10.6f} {kv:>10.6f} "
+            f"{ref_pe[lo:hi].abs().max():>10.3f} {dev_pe[lo:hi].abs().max():>10.3f}"
+        )
+    if scored:
+        worst_pcc, worst_name = min(scored)
+        logger.info(f"{label} worst band: {worst_name} (pe PCC {worst_pcc:.6f})")
 
 
 def _gather_kv(tt: ttnn.Tensor, mesh_device) -> torch.Tensor:
@@ -142,7 +178,17 @@ def _gather_kv(tt: ttnn.Tensor, mesh_device) -> torch.Tensor:
 
 
 def run_chunked_block(
-    variant, config, mesh_device, weight_cache_path, n_chunks, layer_idx, gate_fallback_mode, num_links, topology
+    variant,
+    config,
+    mesh_device,
+    weight_cache_path,
+    n_chunks,
+    layer_idx,
+    gate_fallback_mode,
+    num_links,
+    topology,
+    determinism_check=False,
+    num_iterations=1,
 ):
     is_dense = layer_idx < variant.model_config.NUM_DENSE_LAYERS
     if weight_cache_path is None:
@@ -264,62 +310,101 @@ def run_chunked_block(
 
     mesh_device.enable_program_cache()
 
-    profiler.start("tt_forward")
-    for c in range(n_chunks):
-        kv_actual = c * CHUNK  # chunk-aligned -> rotation degenerates, no pad masking needed
-        valid_end = kv_actual + CHUNK  # full chunk (all positions real)
-        positions = rotated_chip_positions(kv_actual, sp, chunk_local)
-        flat = torch.tensor([positions[ch][r] for ch in range(sp) for r in range(chunk_local)], dtype=torch.long)
-        assert flat.min() >= kv_actual and flat.max() < kv_actual + CHUNK, "unexpected rotation for aligned chunk"
+    # Repeating the sweep is both the stress run and the determinism check: every pass rewrites the
+    # identical cache rows at identical offsets, so no cache reset is needed, and every pass must come
+    # back bit-identical to pass 0.
+    passes = num_iterations if determinism_check else 1
+    log_every = 100 if passes > 100 else 1
+    baseline, repeat_failures = None, []
 
-        chunk_in = input_hidden[flat].reshape(1, 1, CHUNK, emb_dim)
-        tt_h = ttnn.from_torch(
-            chunk_in,
-            device=mesh_device,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=hidden_shard_dims),
-        )
+    for it in range(passes):
+        profiler.start("tt_forward")
+        for c in range(n_chunks):
+            kv_actual = c * CHUNK  # chunk-aligned -> rotation degenerates, no pad masking needed
+            valid_end = kv_actual + CHUNK  # full chunk (all positions real)
+            positions = rotated_chip_positions(kv_actual, sp, chunk_local)
+            flat = torch.tensor([positions[ch][r] for ch in range(sp) for r in range(chunk_local)], dtype=torch.long)
+            assert flat.min() >= kv_actual and flat.max() < kv_actual + CHUNK, "unexpected rotation for aligned chunk"
 
-        tt_out, kvi = block.forward(
-            tt_h,
-            indexed_rope,
-            tt_kvpe_cache,
-            cache_layer_idx=0,
-            actual_start=kv_actual,
-            actual_end=valid_end,
-            cache_user_id=0,
-            return_kv_intermediates=True,
-        )
+            chunk_in = input_hidden[flat].reshape(1, 1, CHUNK, emb_dim)
+            tt_h = ttnn.from_torch(
+                chunk_in,
+                device=mesh_device,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=hidden_shard_dims),
+            )
 
-        out_flat = ttnn.to_torch(
-            tt_out,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=out_concat_dims, mesh_shape=mesh_device.shape),
-        ).to(torch.float32)[0, 0]
-        out_accum[flat] = out_flat
+            tt_out, kvi = block.forward(
+                tt_h,
+                indexed_rope,
+                tt_kvpe_cache,
+                cache_layer_idx=0,
+                actual_start=kv_actual,
+                actual_end=valid_end,
+                cache_user_id=0,
+                return_kv_intermediates=True,
+            )
 
-        for name in kv_accum:
-            kv_accum[name][flat] = _gather_kv(kvi[name], mesh_device)
-
-        # hidden intermediates: SP-sharded seq + TP-sharded hidden (same layout as the output).
-        for name in hidden_accum:
-            hidden_accum[name][flat] = ttnn.to_torch(
-                kvi[name],
+            out_flat = ttnn.to_torch(
+                tt_out,
                 mesh_composer=ttnn.ConcatMesh2dToTensor(
                     mesh_device, dims=out_concat_dims, mesh_shape=mesh_device.shape
                 ),
             ).to(torch.float32)[0, 0]
+            out_accum[flat] = out_flat
 
-        ttnn.synchronize_device(mesh_device)
-        logger.info(f"  chunk {c} done (kv_actual={kv_actual})")
-    profiler.end("tt_forward")
+            for name in kv_accum:
+                kv_accum[name][flat] = _gather_kv(kvi[name], mesh_device)
+
+            # hidden intermediates: SP-sharded seq + TP-sharded hidden (same layout as the output).
+            for name in hidden_accum:
+                hidden_accum[name][flat] = ttnn.to_torch(
+                    kvi[name],
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(
+                        mesh_device, dims=out_concat_dims, mesh_shape=mesh_device.shape
+                    ),
+                ).to(torch.float32)[0, 0]
+
+            ttnn.synchronize_device(mesh_device)
+            if passes == 1:
+                logger.info(f"  chunk {c} done (kv_actual={kv_actual})")
+        profiler.end("tt_forward")
+
+        if not determinism_check:
+            continue
+        if it == 0:
+            assert torch.isfinite(out_accum).all(), "iter 0 output is not finite; bit-identity would be vacuous"
+            baseline = (out_accum.clone(), kv_accum["tt_kvpe"].clone())
+        else:
+            for name, base, cur in (
+                ("output", baseline[0], out_accum),
+                ("kvpe", baseline[1], kv_accum["tt_kvpe"]),
+            ):
+                if not torch.equal(base, cur):
+                    repeat_failures.append(
+                        f"iter {it} {name}: {int((base != cur).sum())} elements differ, "
+                        f"PCC {comp_pcc(base, cur)[1]:.6f}"
+                    )
+        if it % log_every == 0 or it == passes - 1:
+            logger.info(f"  determinism pass {it + 1}/{passes} done")
+        if len(repeat_failures) >= 10:
+            break  # a 2000-pass run diverging every pass would otherwise stall in comp_pcc
+
+    if repeat_failures:
+        pytest.fail("determinism (baseline=iter0) failed: " + "; ".join(repeat_failures))
 
     # --- PCC comparisons over [:total_len] ---
     profiler.start("pcc_validation")
+    if os.environ.get("KVPE_POSITION_BREAKDOWN"):
+        bands = [(c * CHUNK, (c + 1) * CHUNK, f"chunk{c}") for c in range(n_chunks)]
+        last = (n_chunks - 1) * CHUNK
+        bands += [(last + i * chunk_local, last + (i + 1) * chunk_local, f"  last chip{i}") for i in range(sp)]
+        _log_position_breakdown("kv_post_transform", g_post, kv_accum["tt_kvpe"], kv_lora, bands, True)
     logger.info("Comparing KV intermediates vs golden trace:")
     _pcc("compressed_kv[nope]", g_compressed[:, :kv_lora], kv_accum["tt_kv"][:, :kv_lora], THRESHOLDS.kv_nope)
-    _pcc_pe("compressed_kv[pe]", g_compressed[:, kv_lora:], kv_accum["tt_kv"][:, kv_lora:], THRESHOLDS.kv_pe)
+    _pcc("compressed_kv[pe]", g_compressed[:, kv_lora:], kv_accum["tt_kv"][:, kv_lora:], THRESHOLDS.kv_pe)
     _pcc("kv_latent_normed", g_nope, kv_accum["tt_kv_nope"], THRESHOLDS.kv_nope)
     _pcc_pe("kv_kpe_roped", g_rope, kv_accum["tt_kv_rope"], THRESHOLDS.kv_pe)
     _pcc("kv_post_transform[nope]", g_post[:, :kv_lora], kv_accum["tt_kvpe"][:, :kv_lora], THRESHOLDS.kv_nope)
@@ -354,6 +439,9 @@ def run_chunked_block(
         logger.info(f"  {key}: {profiler.get(key) * 1000:.2f} ms")
 
 
+@pytest.mark.uncollect_if(pred=_chunked_repeat_combos)
+@pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
+@pytest.mark.parametrize("num_iterations", [2, 5, 2000], ids=["iter2", "iter5", "iter2000"])
 @pytest.mark.parametrize("n_chunks", [1, 2, 5, 10, 11], ids=["chunks1", "chunks2", "chunks5", "chunks10", "chunks11"])
 @pytest.mark.parametrize(
     "layer_idx, gate_fallback_mode",
@@ -375,7 +463,7 @@ def run_chunked_block(
 )
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
 @pytest.mark.skipif(not is_blackhole(), reason="DeepSeek prefill requires Blackhole")
-@pytest.mark.timeout(1800)
+@pytest.mark.timeout(3600)
 def test_ds_prefill_block_chunked(
     variant,
     config_only,
@@ -386,6 +474,8 @@ def test_ds_prefill_block_chunked(
     layer_idx,
     gate_fallback_mode,
     num_links,
+    determinism_check,
+    num_iterations,
 ):
     topology = per_axis_topology(device_params["fabric_config"])
     run_chunked_block(
@@ -398,6 +488,8 @@ def test_ds_prefill_block_chunked(
         gate_fallback_mode,
         num_links,
         topology,
+        determinism_check=determinism_check,
+        num_iterations=num_iterations,
     )
 
 
@@ -775,9 +867,15 @@ def run_chunked_block_padded(
 
     # --- PCC vs golden over the real tokens [:total_real] ---
     profiler.start("pcc_validation")
+    if os.environ.get("KVPE_POSITION_BREAKDOWN"):
+        bands, lo = [], 0
+        for i, isl in enumerate(splits):
+            bands.append((lo, lo + isl, f"split{i} isl{isl}"))
+            lo += isl
+        _log_position_breakdown("kv_post_transform", g_post, kv_accum["tt_kvpe"], kv_lora, bands, True)
     logger.info("KV intermediates vs golden trace:")
     _pcc("compressed_kv[nope]", g_compressed[:, :kv_lora], kv_accum["tt_kv"][:, :kv_lora], THRESHOLDS.kv_nope)
-    _pcc_pe("compressed_kv[pe]", g_compressed[:, kv_lora:], kv_accum["tt_kv"][:, kv_lora:], THRESHOLDS.kv_pe)
+    _pcc("compressed_kv[pe]", g_compressed[:, kv_lora:], kv_accum["tt_kv"][:, kv_lora:], THRESHOLDS.kv_pe)
     _pcc("kv_latent_normed", g_nope, kv_accum["tt_kv_nope"], THRESHOLDS.kv_nope)
     _pcc_pe("kv_kpe_roped", g_rope, kv_accum["tt_kv_rope"], THRESHOLDS.kv_pe)
     _pcc("kv_post_transform[nope]", g_post[:, :kv_lora], kv_accum["tt_kvpe"][:, :kv_lora], THRESHOLDS.kv_nope)
@@ -861,6 +959,9 @@ def test_ds_prefill_block_chunked_padded(
 # These skip until the Kimi golden trace lands (set PREFILL_TRACE_DIR; see tt/runners/adapters/).
 
 
+@pytest.mark.uncollect_if(pred=_chunked_repeat_combos)
+@pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
+@pytest.mark.parametrize("num_iterations", [2, 5, 2000], ids=["iter2", "iter5", "iter2000"])
 @pytest.mark.parametrize("n_chunks", [1, 2, 5, 10, 11], ids=["chunks1", "chunks2", "chunks5", "chunks10", "chunks11"])
 @pytest.mark.parametrize(
     "layer_idx, gate_fallback_mode",
@@ -882,7 +983,7 @@ def test_ds_prefill_block_chunked_padded(
 )
 @pytest.mark.parametrize("variant", ["kimi_k2_7"], indirect=True, ids=["kimi_k2_7"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
-@pytest.mark.timeout(1800)
+@pytest.mark.timeout(3600)
 def test_kimi_prefill_block_chunked(
     variant,
     config_only,
@@ -893,6 +994,8 @@ def test_kimi_prefill_block_chunked(
     layer_idx,
     gate_fallback_mode,
     num_links,
+    determinism_check,
+    num_iterations,
 ):
     topology = per_axis_topology(device_params["fabric_config"])
     run_chunked_block(
@@ -905,6 +1008,8 @@ def test_kimi_prefill_block_chunked(
         gate_fallback_mode,
         num_links,
         topology,
+        determinism_check=determinism_check,
+        num_iterations=num_iterations,
     )
 
 
