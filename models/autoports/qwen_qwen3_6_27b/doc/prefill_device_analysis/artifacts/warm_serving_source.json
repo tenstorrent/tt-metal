@@ -1,0 +1,21 @@
+{
+  "git_head": "bd537c04287373b4ff03cf3e847589093f3454cc",
+  "runtime_has_uncommitted_changes": true,
+  "command": "env QWEN36_TRACE_REPORT=1 bash models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/run_native_serving.sh --model-dir models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/warm_serving --stages serve,benchmark,sampling,qualitative",
+  "sha256": {
+    "models/autoports/qwen_qwen3_6_27b/tt/generator.py": "647c91314885b22c534deda073184828c412b0789cfc855e9a5373e10e37bd48",
+    "models/autoports/qwen_qwen3_6_27b/tt/generator_vllm.py": "2734ddd144f725dde6a319623168749c3cecc182481648a0002ee260f19298d4",
+    "models/autoports/qwen_qwen3_6_27b/tt/trace_reuse.py": "2c8254e3222c21cfc7a0d871e04a5f87283cffd37845d5758ec02cb09f3e714c",
+    "models/common/sampling/generator.py": "da165fe2bb06a55fd85e32c769d4fbdcae1097a20094b759b2d73b3bf71cedd0",
+    "models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/run_native_serving.sh": "5a0b0b69c7ae63eb012a027485ff12a990b0620b531dae971a60044187c5936c"
+  },
+  "prefix_caching": false,
+  "warmup_lengths": [
+    128,
+    4096
+  ],
+  "allocation_tracking": true,
+  "program_allocations_tracked": true,
+  "hardware_owner": "root",
+  "status": "running"
+}

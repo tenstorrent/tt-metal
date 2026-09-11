@@ -1,0 +1,142 @@
+{
+  "archive": "production_trace_reuse_evidence.tar.gz",
+  "archive_sha256": "f16f6047decfae9b283b463cbe99eb273ce9a820d6552d8c26e211fc572a3fac",
+  "members": {
+    "production_trace_reuse_4layer.json": {
+      "bytes": 190794,
+      "sha256": "555bf2baac5d3f4d2da583def2cb76ca6b2c9be82784fb24bcb149856c6f54ea"
+    },
+    "qwen_production_trace_reuse_4layer.log": {
+      "bytes": 24131,
+      "sha256": "e792ac606b73dd9cd1e52dd83935049e7eddfe20ac15b88a8c6c1370262114f3"
+    },
+    "production_trace_reuse_full64.json": {
+      "bytes": 1415998,
+      "sha256": "1e796783a4b74f841e6355a5e8a584314ebba35e6c142fe491a795aa0bd19cf0"
+    },
+    "qwen_production_trace_reuse_full64.log": {
+      "bytes": 117194,
+      "sha256": "cff547cb2c709a3bdf2cddf8fbbf38e34d809c967302d89d2a897f934052749e"
+    }
+  },
+  "results": {
+    "4layer": {
+      "status": "passed_reduced_adapter_correctness",
+      "startup_warmup_ms": 396.17456402629614,
+      "arms": {
+        "original": {
+          "median_ms": {
+            "prefill": 16.692920122295618,
+            "first_decode": 40.760149247944355,
+            "prefill_plus_first_decode": 57.45306937023997
+          },
+          "counters": {
+            "captures": 8
+          },
+          "correctness": [
+            null,
+            null,
+            null,
+            null
+          ]
+        },
+        "reuse": {
+          "median_ms": {
+            "prefill": 15.909328125417233,
+            "first_decode": 8.347962982952595,
+            "prefill_plus_first_decode": 24.28174763917923
+          },
+          "counters": {
+            "captures": 1,
+            "setup_reuses": 7
+          },
+          "correctness": [
+            {
+              "token_ids_exact": true,
+              "all_rank_active_tokens_exact": true,
+              "all_cache_digests_exact": true,
+              "positions_exact": true
+            },
+            {
+              "token_ids_exact": true,
+              "all_rank_active_tokens_exact": true,
+              "all_cache_digests_exact": true,
+              "positions_exact": true
+            },
+            {
+              "token_ids_exact": true,
+              "all_rank_active_tokens_exact": true,
+              "all_cache_digests_exact": true,
+              "positions_exact": true
+            },
+            {
+              "token_ids_exact": true,
+              "all_rank_active_tokens_exact": true,
+              "all_cache_digests_exact": true,
+              "positions_exact": true
+            }
+          ]
+        }
+      }
+    },
+    "full64": {
+      "status": "passed_full64_adapter_correctness",
+      "startup_warmup_ms": 1178.1276408582926,
+      "arms": {
+        "original": {
+          "median_ms": {
+            "prefill": 165.90834502130747,
+            "first_decode": 631.8238331004977,
+            "prefill_plus_first_decode": 798.8108522258699
+          },
+          "counters": {
+            "captures": 8
+          },
+          "correctness": [
+            null,
+            null,
+            null,
+            null
+          ]
+        },
+        "reuse": {
+          "median_ms": {
+            "prefill": 157.35812904313207,
+            "first_decode": 90.82194929942489,
+            "prefill_plus_first_decode": 248.15560085698962
+          },
+          "counters": {
+            "captures": 1,
+            "setup_reuses": 7
+          },
+          "correctness": [
+            {
+              "token_ids_exact": true,
+              "all_rank_active_tokens_exact": true,
+              "all_cache_digests_exact": true,
+              "positions_exact": true
+            },
+            {
+              "token_ids_exact": true,
+              "all_rank_active_tokens_exact": true,
+              "all_cache_digests_exact": true,
+              "positions_exact": true
+            },
+            {
+              "token_ids_exact": true,
+              "all_rank_active_tokens_exact": true,
+              "all_cache_digests_exact": true,
+              "positions_exact": true
+            },
+            {
+              "token_ids_exact": true,
+              "all_rank_active_tokens_exact": true,
+              "all_cache_digests_exact": true,
+              "positions_exact": true
+            }
+          ]
+        }
+      }
+    }
+  }
+}

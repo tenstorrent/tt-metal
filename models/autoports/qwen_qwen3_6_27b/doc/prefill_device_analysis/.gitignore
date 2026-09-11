@@ -4,3 +4,4 @@
 
 # Runtime evidence is archived because repository-wide rules ignore raw logs.
 !artifacts/runtime_logs.tar.gz
+!artifacts/production_trace_reuse_evidence.tar.gz

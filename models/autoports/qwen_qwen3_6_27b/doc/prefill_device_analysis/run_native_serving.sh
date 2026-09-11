@@ -11,6 +11,10 @@ export QWEN_AUTOPORT_MODEL_REVISION=1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0
 export EXTRA_MODELS_DIR="$PWD/models/autoports/vllm_bundles"
 export QWEN36_PREFILL_PER_REQUEST=1
 export QWEN36_PREFILL_LOG_K=1
+export TT_METAL_TRACE_ALLOC_TRACKING=1
+export TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=0
+export QWEN36_TRACE_REUSE="${QWEN36_TRACE_REUSE:-1}"
+export QWEN36_WARMUP_PREFILL_LENGTHS="${QWEN36_WARMUP_PREFILL_LENGTHS:-128,4096}"
 export TT_MESH_GRAPH_DESC_PATH="$PWD/tt_metal/fabric/mesh_graph_descriptors/p300_x2_mesh_graph_descriptor.textproto"
 # The shared runner uses model-dir only as its output root. Model selection is
 # the actual registered autoport bundle above; keep preexisting readiness files.

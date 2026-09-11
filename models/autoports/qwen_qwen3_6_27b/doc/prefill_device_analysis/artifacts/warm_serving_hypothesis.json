@@ -1,0 +1,22 @@
+{
+  "baseline_checkpoint": "4ea57c41431a1e80318c4d32d249d5552c4f165f",
+  "baseline_http_ttft_ms": 728.4818752668798,
+  "point": {
+    "isl": 128,
+    "osl": 252,
+    "concurrency": 1
+  },
+  "prediction_http_ttft_ms": [
+    200,
+    300
+  ],
+  "rationale": "Full64 setup 532.666ms; measured guarded reuse retains cache/output correctness. Startup warms configured shapes; retained traces avoid repeated setup. Remaining adapter/sampling/first-output delivery costs are not all span-attributed. Prediction registered before production HTTP run.",
+  "constraints": [
+    "fresh prompt computation, no prefix cache",
+    "real streaming benchmark endpoint",
+    "full model, allocated batch32, existing context/pool",
+    "allocation tracking enabled including program allocations; no corruptible exemptions",
+    "fallback before model replay for unsupported transition; late failure aborts"
+  ],
+  "status": "registered_before_production_validation"
+}

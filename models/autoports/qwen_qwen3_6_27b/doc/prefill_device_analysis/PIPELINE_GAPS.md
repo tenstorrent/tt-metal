@@ -1208,3 +1208,33 @@ CI uses FABRIC_1D versus local FABRIC_1D_RING, and long-context/concurrency poin
 have not yet been observed. Neither current run is expected to satisfy all
 latency targets. Dispatch inputs, pinned refs and build checks are retained in
 `artifacts/ci_dispatch_runs.json` and the adjacent CI input/validation JSONs.
+
+
+### Implementing warmed serving, beyond measuring decoder prefill
+
+The next user-directed change implements the previously empty model warmup
+hooks. `QWEN36_WARMUP_PREFILL_LENGTHS` selects explicit logical lengths; actual
+physical tile padding is retained and logged. The startup compile phase drives
+real prefill, sampler and decode preparation. A separate phase captures decode;
+the first real request still reloads scheduler-owned tokens, positions, pages
+and request sampling state. No dummy prompt is installed as a prefix-cache hit.
+Host tests check ragged padding, valid pages, phase ordering/idempotence,
+invalid lengths before device work, and failure without marking startup ready.
+
+The production reuse candidate retains full allocation tracking, including
+program-cache-owned buffers. Its local checked executor skips only Python GC;
+uncollected live allocations still reject replay, so the empty-map check is
+conservative. Both model and sampler are checked before the model advances
+state, then checked again at sampler replay. A late failure aborts: recapturing
+and retrying after model execution would incorrectly advance the same token
+twice. This requires the existing serialized device-submission owner; the
+query/execute pair is not a global lock against arbitrary other TTNN callers.
+The controller rejects bucketed sampler traces with corruptible exemptions.
+
+This is currently implementation in progress, not a passing serving result.
+The registered short-point HTTP hypothesis is200–300ms versus728.482ms, based
+on the measured~533ms setup opportunity. See
+`artifacts/warm_serving_hypothesis.json`. Warmup and recurring setup must be
+measured separately, with fresh-context requests and normal output delivery.
+The pipeline should have implemented real warmup hooks and verified capture
+counts across request boundaries before declaring serving performance ready.

@@ -175,7 +175,7 @@ class SamplingGenerator:
             except Exception:  # pragma: no cover - depends on the ttnn build
                 trace_id_text = f"<unprintable {type(slot['id']).__name__}>"
             logger.debug(
-                f"Resetting sampling trace (bucket={key.bucket}, penalties={key.penalties_on}, log_probs={key.log_probs_on}, force_argmax={key.force_argmax}, trace_id={slot['id']})"
+                f"Resetting sampling trace (bucket={key.bucket}, penalties={key.penalties_on}, log_probs={key.log_probs_on}, force_argmax={key.force_argmax}, trace_id={trace_id_text})"
             )
             try:
                 ttnn.release_trace(self.mesh_device, slot["id"])
@@ -430,14 +430,15 @@ class SamplingGenerator:
 
         return slot["output"]
 
-    def _execute_trace(self, key: _TraceKey) -> ttnn.Tensor:
+    def _execute_trace(self, key: _TraceKey, *, trace_executor=None) -> ttnn.Tensor:
         slot = self._trace_states.get(key)
         if slot is None:
             raise RuntimeError("Trace has not been captured yet.")
         if slot["id"] is None or slot["output"] is None:
             raise RuntimeError("Trace has not been captured yet.")
 
-        ttnn.execute_trace(self.mesh_device, slot["id"], cq_id=self.cq_id, blocking=False)
+        executor = ttnn.execute_trace if trace_executor is None else trace_executor
+        executor(self.mesh_device, slot["id"], cq_id=self.cq_id, blocking=False)
         return slot["output"]
 
     def sample(
@@ -448,6 +449,7 @@ class SamplingGenerator:
         tt_out_tok: Optional[ttnn.Tensor] = None,
         skip_precompile: bool = False,
         count_tokens: bool = True,
+        trace_executor=None,
     ) -> ttnn.Tensor:
         """
         Convenience wrapper that either runs the sampling module directly or
@@ -477,7 +479,7 @@ class SamplingGenerator:
                 )
 
             self._validate_trace_inputs(slot, logits, tt_out_tok)
-            tt_out = self._execute_trace(key)
+            tt_out = self._execute_trace(key, trace_executor=trace_executor)
 
         # The penalty update now runs inside _run_sampling, so it is captured with the rest of the sampled
         # step and replayed with it -- there is nothing to do here.

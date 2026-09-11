@@ -17,6 +17,7 @@ from transformers import AutoTokenizer
 import ttnn
 from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import LINEAR_PREFILL_CHUNK_SIZE, default_snapshot
 from models.autoports.qwen_qwen3_6_27b.tt.model import Qwen36Model
+from models.autoports.qwen_qwen3_6_27b.tt.trace_reuse import DecodeTraceReuse
 from models.common.modules.tt_ccl import get_tt_ccl
 from models.common.readiness_check.contract import Generator as ReadinessGenerator
 from models.common.readiness_check.contract import NextInputFn
@@ -111,6 +112,7 @@ class Qwen36Generator(ReadinessGenerator):
             "readbacks": 0,
         }
         self._slots_requiring_prefill = set()
+        self.trace_reuse = DecodeTraceReuse(self)
 
     def _upload(self, value, *, dtype=ttnn.uint32):
         torch_dtype = (
@@ -405,7 +407,7 @@ class Qwen36Generator(ReadinessGenerator):
             ttnn.deallocate(active_mask_tt)
 
     def _capture_token_out_trace(
-        self, first_token, start_pos, active_mask=None, page_table=None, *, preserve_sampling_history=True
+        self, first_token, start_pos, active_mask=None, page_table=None, *, preserve_sampling_history=True, capture=True
     ):
         tokens = torch.zeros((1, 1, 1, self.sampling.tt_sampling.max_batch_size), dtype=torch.uint32)
         first_tokens = torch.as_tensor(first_token, dtype=torch.uint32).reshape(-1)
@@ -449,6 +451,9 @@ class Qwen36Generator(ReadinessGenerator):
         )
         self._trace_active_state_mask = self._upload(active, dtype=ttnn.bfloat16)
         self._trace_page_table = self._page_table if page_table is None else page_table
+        # These exact host-write layouts are reused for authoritative request
+        # reloads, including both masks when a warmed C1 slot changes.
+        self._seed_token_out_trace(first_token, start_pos, active_mask=active)
 
         # Warmup and capture execute the stateful decoder graph. Preserve all
         # request state first, and keep backups allocated for the lifetime of
@@ -469,6 +474,7 @@ class Qwen36Generator(ReadinessGenerator):
         for pair, backups in zip(self.kv_cache, self._trace_cache_backups):
             for tensor, backup in zip(pair, backups):
                 ttnn.copy(backup, tensor)
+
         ttnn.synchronize_device(self.mesh_device)
 
         # Keep the counting ops in warmup so they cannot first compile behind
@@ -498,6 +504,14 @@ class Qwen36Generator(ReadinessGenerator):
         for _, backup in penalty_backups:
             ttnn.deallocate(backup)
 
+        if not capture:
+            for pair, backups in zip(self.kv_cache, self._trace_cache_backups):
+                for tensor, backup in zip(pair, backups):
+                    ttnn.copy(backup, tensor)
+            ttnn.synchronize_device(self.mesh_device)
+            ttnn.deallocate(logits)
+            return
+
         self._decode_trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         self._trace_logits = self.model.decode_forward(
             token_ids=self._trace_token,
@@ -521,6 +535,9 @@ class Qwen36Generator(ReadinessGenerator):
         for pair, backups in zip(self.kv_cache, self._trace_cache_backups):
             for tensor, backup in zip(pair, backups):
                 ttnn.copy(backup, tensor)
+        # All sampler modes retain complete checked execution. Only the
+        # independently supported C1 envelopes enable cross-request reuse.
+        self.trace_reuse.record_execution()
 
     def _sampling_logits(self, logits):
         """Return sampler-ready logits with the proven fixed-slot row shape."""
@@ -555,13 +572,23 @@ class Qwen36Generator(ReadinessGenerator):
         blocked = sorted(slot for slot in self._slots_requiring_prefill if active_values[slot])
         if blocked:
             raise RuntimeError(f"reset slots require prefill before decode: {blocked}")
+        if sampling_params is None:
+            sampling_params = SamplingParams(temperature=1.0, top_k=1, top_p=0.0)
+        if self.trace_reuse.can_reuse_setup(
+            sampling_params=sampling_params,
+            active_values=active_values,
+            page_table=page_table,
+            kv_cache=kv_cache,
+        ):
+            self.refresh_page_table(page_table)
+            self._seed_token_out_trace(tokens, positions, active_mask=active_values)
+            self.trace_reuse.counters["setup_reuses"] += 1
+            return self._token_out_state()
         self._release_traces()
         resolved_page_table = self._check_state(page_table, kv_cache)
         if isinstance(page_table, torch.Tensor):
             self.refresh_page_table(page_table)
             resolved_page_table = self._page_table
-        if sampling_params is None:
-            sampling_params = SamplingParams(temperature=1.0, top_k=1, top_p=0.0)
         self.sampling.reset_sampling_params(format_sampling_params(sampling_params, 32))
         self._capture_token_out_trace(
             tokens,
@@ -571,6 +598,10 @@ class Qwen36Generator(ReadinessGenerator):
             preserve_sampling_history=preserve_sampling_history,
         )
         self._seed_token_out_trace(tokens, positions)
+        self.trace_reuse.captured_setup(sampling_params)
+        return self._token_out_state()
+
+    def _token_out_state(self):
         return {
             "token": self._trace_token,
             "position": self._trace_position,
@@ -578,6 +609,39 @@ class Qwen36Generator(ReadinessGenerator):
             "kv_cache": self.kv_cache,
             "active_mask": self._trace_active_mask,
         }
+
+    def warmup_token_out_decode(
+        self, tokens, positions, *, page_table=None, kv_cache=None, active_mask=None, sampling_params=None, **kwargs
+    ):
+        """Compile the exact decode/restore path and release its temporary state."""
+        self._release_traces()
+        try:
+            resolved = self._check_state(page_table, kv_cache)
+            if isinstance(page_table, torch.Tensor):
+                self.refresh_page_table(page_table)
+                resolved = self._page_table
+            params = sampling_params or SamplingParams(temperature=1.0, top_k=1, top_p=0.0)
+            self.sampling.reset_sampling_params(format_sampling_params(params, 32))
+            self._capture_token_out_trace(
+                tokens,
+                positions,
+                active_mask=active_mask,
+                page_table=resolved,
+                preserve_sampling_history=kwargs.get("preserve_sampling_history", True),
+                capture=False,
+            )
+        finally:
+            self._release_traces()
+
+    def begin_prefill_trace_reuse(self, **kwargs):
+        return self.trace_reuse.begin_prefill(**kwargs)
+
+    def end_prefill_trace_reuse(self):
+        return self.trace_reuse.end_prefill()
+
+    def cancel_prefill_trace_reuse(self):
+        self._release_traces()
+        self.trace_reuse.request_key = None
 
     def remap_decode_slots(self, remap):
         """Release captured state, then gather model-owned request slots."""
@@ -602,7 +666,12 @@ class Qwen36Generator(ReadinessGenerator):
             import time as _time
 
             _p0 = _time.perf_counter()
-        ttnn.execute_trace(self.mesh_device, self._decode_trace_id, cq_id=0, blocking=False)
+        checked_executor = self.trace_reuse.execute if self.trace_reuse.execution is not None else None
+        # The checked executor validates BOTH trace allocation maps and sampler
+        # ownership before advancing model state. Its late sampler check aborts
+        # on failure; it never retries a partially executed decode step.
+        executor = ttnn.execute_trace if checked_executor is None else checked_executor
+        executor(self.mesh_device, self._decode_trace_id, cq_id=0, blocking=False)
         if _prof:
             # Fence between the two traces so model device time and sampler
             # device time are attributed separately. The model-only traced
@@ -610,7 +679,12 @@ class Qwen36Generator(ReadinessGenerator):
             # the sampler reduces [batch, vocab] = [32, 248320] per token.
             ttnn.synchronize_device(self.mesh_device)
             _p1 = _time.perf_counter()
-        self.sampling.sample(self._trace_logits, enable_trace=True, tt_out_tok=self._trace_token)
+        self.sampling.sample(
+            self._trace_logits,
+            enable_trace=True,
+            tt_out_tok=self._trace_token,
+            trace_executor=checked_executor,
+        )
         if _prof:
             _p2 = _time.perf_counter()
             # Both calls above only enqueue. Fence to separate host enqueue cost
@@ -645,7 +719,7 @@ class Qwen36Generator(ReadinessGenerator):
         values = ttnn.to_torch(ttnn.get_device_tensors(self._trace_token)[0]).reshape(-1)
         return [int(value) for value in values[: self.model.batch]]
 
-    def _seed_token_out_trace(self, tokens, positions):
+    def _seed_token_out_trace(self, tokens, positions, *, active_mask=None):
         """Seed stable trace inputs after real prefill, without rebuilding them."""
         token_values = torch.as_tensor(tokens, dtype=torch.uint32).reshape(-1)
         if token_values.numel() == 1:
@@ -663,6 +737,20 @@ class Qwen36Generator(ReadinessGenerator):
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(position_host, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT), self._trace_position
         )
+        if active_mask is not None:
+            active = torch.as_tensor(active_mask, dtype=torch.uint32).reshape(-1)
+            if active.numel() != self.model.batch:
+                raise ValueError("active_mask must have one value per fixed slot")
+            active_host = torch.zeros((1, 1, 1, 32), dtype=torch.uint32)
+            active_host[0, 0, 0, : self.model.batch] = active
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(active_host, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT), self._trace_active_mask
+            )
+            state_host = active.to(torch.bfloat16).reshape(tuple(self._trace_active_state_mask.shape))
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(state_host, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT),
+                self._trace_active_state_mask,
+            )
 
     def _capture_compatibility_trace(self, token: int, position: int):
         """Capture traced logits-only decode for explicit host-sampling tests."""
@@ -801,7 +889,12 @@ class Qwen36Generator(ReadinessGenerator):
     def reset_slots(self, slots) -> None:
         """Invalidate selected request slots without disturbing live peers."""
         slots = sorted({int(slot) for slot in slots})
-        self._release_traces()
+        if self.trace_reuse.preserve_reset:
+            if tuple(slots) != self.trace_reuse.request_slots:
+                raise RuntimeError("preserved reset slots differ from the prepared prefill envelope")
+            ttnn.synchronize_device(self.mesh_device)
+        else:
+            self._release_traces()
         self.model.reset_slots(slots)
         self._slots_requiring_prefill.update(slots)
 
@@ -812,6 +905,7 @@ class Qwen36Generator(ReadinessGenerator):
         # fence outstanding model/sampler work before releasing trace buffers
         # or deallocating their persistent cache snapshots.
         ttnn.synchronize_device(self.mesh_device)
+        self.trace_reuse.invalidate("traces released")
         if self._decode_trace_id is not None:
             ttnn.release_trace(self.mesh_device, self._decode_trace_id)
         if self._compat_trace_id is not None:

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import math
 import os
+import time
 from dataclasses import fields, replace
 from pathlib import Path
 from typing import Any
@@ -33,7 +34,7 @@ from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import MODEL_ID, MO
 from models.autoports.qwen_qwen3_6_27b.tt.generator import Qwen36Generator
 from models.autoports.qwen_qwen3_6_27b.tt.model import Qwen36Model, _shard
 from models.autoports.qwen_qwen3_6_27b.tt.precision_config import DEFAULT_PRECISION_CONFIG
-from models.common.sampling import format_sampling_params
+from models.common.sampling import SamplingParams, format_sampling_params
 
 MODEL_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SNAPSHOT = default_snapshot()
@@ -84,6 +85,10 @@ class Qwen36ForCausalLM(nn.Module, SupportsMultiModal):
         self._last_page_table: torch.Tensor | None = None
         self._sampling_contract_key: tuple[Any, ...] | None = None
         self._active_seed_slots: list[int] = []
+        self._prefill_warmup_complete = False
+        self._decode_compile_complete = False
+        self._decode_warmup_complete = False
+        self._warmup_decode_inputs = None
 
     @classmethod
     def get_max_tokens_all_users(
@@ -285,42 +290,57 @@ class Qwen36ForCausalLM(nn.Module, SupportsMultiModal):
         full_tokens, full_lengths, full_page_table, slots = self._full_slot_inputs(
             tokens, prompt_lens, empty_slots, page_table
         )
-        # Full-attention K/V is owned and invalidated by vLLM.  Linear-attention
-        # conv/recurrent state is model-owned, so a newly assigned physical slot
-        # must be cleared before its replacement request is prefetched.
-        gen.reset_slots(slots)
-        if sampling_params is not None:
-            formatted_params = self._format_slot_sampling(sampling_params, slots)
-            prompt_state = torch.zeros_like(full_tokens)
-            for slot, length in zip(slots, prompt_lens):
-                length = int(length)
-                prompt_state[slot, :length] = full_tokens[slot, :length]
-            gen.sampling.apply_prefill_state(
-                sampling_params=formatted_params,
-                prompt_tokens=prompt_state,
-                empty_slots=slots,
-                replicate_seeds=False,
-            )
-        gen.refresh_page_table(full_page_table)
-        logits = gen.prefill_forward(
-            full_tokens,
-            page_table=gen._page_table,
+        gen.begin_prefill_trace_reuse(
+            physical_seq_len=int(full_tokens.shape[-1]),
+            prompt_lens=tuple(int(length) for length in prompt_lens),
+            slots=tuple(slots),
+            page_table=full_page_table,
             kv_cache=kv_cache,
-            prompt_lens=full_lengths,
-            read_from_device=sampling_params is None,
+            sampling_params=sampling_params,
         )
-        self._last_page_table = full_page_table.clone()
-        self._decode_ready = False
-        if sampling_params is None:
-            output = logits[slots]
-        else:
-            sampler_logits = self._sampler_ready_prefill_logits(logits)
-            sampled, log_probs = gen.sampling.sample(sampler_logits, enable_trace=False)
-            host = ttnn.to_torch(ttnn.get_device_tensors(sampled)[0]).reshape(-1).to(torch.int32)
-            if sampler_logits is not logits:
-                ttnn.deallocate(sampler_logits)
-            ttnn.deallocate(logits)
-            output = (host[slots], log_probs)
+        try:
+            # Full-attention K/V is owned and invalidated by vLLM.  Linear-attention
+            # conv/recurrent state is model-owned, so a newly assigned physical slot
+            # must be cleared before its replacement request is prefetched.
+            gen.reset_slots(slots)
+            if sampling_params is not None:
+                formatted_params = self._format_slot_sampling(sampling_params, slots)
+                prompt_state = torch.zeros_like(full_tokens)
+                for slot, length in zip(slots, prompt_lens):
+                    length = int(length)
+                    prompt_state[slot, :length] = full_tokens[slot, :length]
+                gen.sampling.apply_prefill_state(
+                    sampling_params=formatted_params,
+                    prompt_tokens=prompt_state,
+                    empty_slots=slots,
+                    replicate_seeds=False,
+                )
+            gen.refresh_page_table(full_page_table)
+            logits = gen.prefill_forward(
+                full_tokens,
+                page_table=gen._page_table,
+                kv_cache=kv_cache,
+                prompt_lens=full_lengths,
+                read_from_device=sampling_params is None,
+            )
+            self._last_page_table = full_page_table.clone()
+            self._decode_ready = False
+            if sampling_params is None:
+                output = logits[slots]
+            else:
+                sampler_logits = self._sampler_ready_prefill_logits(logits)
+                sampled, log_probs = gen.sampling.sample(sampler_logits, enable_trace=False)
+                host = ttnn.to_torch(ttnn.get_device_tensors(sampled)[0]).reshape(-1).to(torch.int32)
+                if sampler_logits is not logits:
+                    ttnn.deallocate(sampler_logits)
+                ttnn.deallocate(logits)
+                output = (host[slots], log_probs)
+                ttnn.deallocate(sampled)
+
+            gen.end_prefill_trace_reuse()
+        except BaseException:
+            gen.cancel_prefill_trace_reuse()
+            raise
 
         # Transformers classifies Qwen3.6 under the Qwen3.5 MRoPE family, so
         # the shared runner persists a request-specific delta. Text-only input
@@ -433,9 +453,8 @@ class Qwen36ForCausalLM(nn.Module, SupportsMultiModal):
             else bool(reset_batch or not self._decode_ready or page_changed or remap_changed)
         )
         if os.environ.get("QWEN36_DECODE_LOG_SETUP"):
-            # Counts trace setup against decode steps. setup_token_out_decode
-            # performs capture, so if it fires every token the traced path is
-            # being rebuilt per step and decode cost is capture, not compute.
+            # Input reload can reuse a retained trace. Log actual captures and
+            # reuse separately below instead of counting every setup as capture.
             self._decode_steps = getattr(self, "_decode_steps", 0) + 1
             if will_setup:
                 self._decode_setups = getattr(self, "_decode_setups", 0) + 1
@@ -458,6 +477,8 @@ class Qwen36ForCausalLM(nn.Module, SupportsMultiModal):
             )
             self._decode_ready = True
             self._last_page_table = page_table.clone()
+            if os.environ.get("QWEN36_DECODE_LOG_SETUP") or os.environ.get("QWEN36_TRACE_REPORT"):
+                print(f"QWEN_TRACE_COUNTS {dict(gen.trace_reuse.counters)}", flush=True)
         if reset_batch:
             gen.sampling.reset_prompt_tokens(prompt_tokens)
             gen.sampling.reset_output_state(output_tokens)
@@ -542,13 +563,94 @@ class Qwen36ForCausalLM(nn.Module, SupportsMultiModal):
         host = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
         return host.reshape(-1)[: self.max_batch_size].to(torch.int32), None
 
-    def warmup_model_prefill(self, *args, **kwargs):
-        del args, kwargs
+    def _warmup_prefill_lengths(self):
+        """Select explicit benchmark lengths; physical padding remains real work."""
+        limit = min(self.max_seq_len - 1, self.generator.MAX_PREFILL_TOKENS)
+        configured = os.environ.get("QWEN36_WARMUP_PREFILL_LENGTHS")
+        lengths = [128, 4096] if configured is None else [int(value) for value in configured.split(",")]
+        if configured is not None and any(length < 1 or length > limit for length in lengths):
+            raise ValueError(f"QWEN36_WARMUP_PREFILL_LENGTHS must contain lengths in [1, {limit}]")
+        return sorted({length for length in lengths if 0 < length <= limit})
 
-    def warmup_model_decode(self, *args, **kwargs):
-        # Trace capture is stateful and is performed from the first real
-        # scheduler batch so its page table and active slots are exact.
-        del args, kwargs
+    def warmup_model_prefill(self, kv_cache, enable_trace=False, can_sample_on_device=True, **_):
+        """Compile configured fresh-context requests before retaining decode traces.
+
+        The plugin invokes compile and capture phases separately. Prefill remains
+        eager; only decode is captured. Dummy prompt state is overwritten by the
+        normal request reset/prefill path, and is never a prefix-cache entry.
+        """
+        if self._prefill_warmup_complete:
+            return
+        if enable_trace:
+            raise RuntimeError("prefill compilation must precede the trace-capture warmup phase")
+        gen = self._require_generator()
+        params = SamplingParams(temperature=1.0, top_k=1, top_p=0.0) if can_sample_on_device else None
+        columns = gen.page_table_host.shape[1]
+        page_table = torch.arange(columns, dtype=torch.int32).reshape(1, columns)
+        for length in self._warmup_prefill_lengths():
+            physical = ((length + 31) // 32) * 32
+            if physical > min(self.max_seq_len, gen.MAX_PREFILL_TOKENS):
+                raise ValueError(f"warmup length {length} pads beyond the supported physical context")
+            started = time.perf_counter()
+            output, _ = self.prefill_forward(
+                torch.full((1, physical), 1000, dtype=torch.long),
+                page_table=page_table,
+                kv_cache=kv_cache,
+                prompt_lens=[length],
+                sampling_params=params,
+                empty_slots=[0],
+            )
+            # Host sampling mode returns logits; its dummy token only warms
+            # decode's shape, so it does not need a host vocabulary argmax.
+            first_token = 1000 if params is None else int(output[0][0])
+            tokens = torch.zeros(gen.model.batch, dtype=torch.int32)
+            positions = torch.full((gen.model.batch,), -1, dtype=torch.int32)
+            tokens[0], positions[0] = first_token, length
+            self._warmup_decode_inputs = (tokens, positions, params)
+            ttnn.synchronize_device(self.mesh_device)
+            print(
+                f"QWEN_WARMUP prefill logical={length} physical={physical} "
+                f"elapsed_ms={(time.perf_counter() - started) * 1000:.3f}",
+                flush=True,
+            )
+        self._prefill_warmup_complete = True
+
+    def warmup_model_decode(self, kv_cache, enable_trace=False, can_sample_on_device=True, **_):
+        """Compile first, then retain a trace with reloadable request inputs."""
+        if self._decode_warmup_complete or (not enable_trace and self._decode_compile_complete):
+            return
+        if not self._prefill_warmup_complete:
+            raise RuntimeError("prefill warmup must complete before decode warmup")
+        if self._warmup_decode_inputs is None:
+            return
+        gen = self._require_generator()
+        tokens, positions, params = self._warmup_decode_inputs
+        if params is None:
+            params = SamplingParams(temperature=1.0, top_k=1, top_p=0.0)
+        started = time.perf_counter()
+        prepare = gen.setup_token_out_decode if enable_trace else gen.warmup_token_out_decode
+        prepare(
+            tokens,
+            positions,
+            page_table=gen.page_table_host,
+            kv_cache=kv_cache,
+            active_mask=positions >= 0,
+            sampling_params=params,
+        )
+        ttnn.synchronize_device(self.mesh_device)
+        if not enable_trace:
+            gen._release_traces()
+            self._decode_compile_complete = True
+        else:
+            self._decode_warmup_complete = True
+        # The first real scheduler batch must still reload token/position/page
+        # data and reset request sampling state, even when capture is retained.
+        self._decode_ready = False
+        print(
+            f"QWEN_WARMUP decode capture={bool(enable_trace)} "
+            f"elapsed_ms={(time.perf_counter() - started) * 1000:.3f}",
+            flush=True,
+        )
 
     def teardown(self):
         if self.generator is not None:

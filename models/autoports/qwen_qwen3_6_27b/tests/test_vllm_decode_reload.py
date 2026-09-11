@@ -335,6 +335,8 @@ class TestDecodeReload(unittest.TestCase):
             _page_table=object(),
             _upload=lambda value, **kwargs: value,
             _sampling_logits=lambda logits: logits,
+            _seed_token_out_trace=lambda *args, **kwargs: None,
+            trace_reuse=types.SimpleNamespace(record_execution=lambda: None),
             sampling=types.SimpleNamespace(
                 _penalties_active=True,
                 tt_penalties=types.SimpleNamespace(

@@ -30,6 +30,23 @@ from models.autoports.qwen_qwen3_6_27b.tt.generator_vllm import Qwen36ForCausalL
 from models.common.sampling import SamplingParams
 
 
+class ProductionTraceReuseControl:
+    """Toggle request-boundary reuse while retaining identical replay guards."""
+
+    def __init__(self, adapter, *, enabled):
+        self.generator = adapter.generator
+        self.controller = self.generator.trace_reuse
+        self.previous = self.controller.enabled
+        self.controller.enabled = enabled
+        self.controller.counters.clear()
+        self.counters = self.controller.counters
+        self.events = []
+
+    def close(self):
+        self.generator._release_traces()
+        self.controller.enabled = self.previous
+
+
 def cache_digests(generator):
     """Read all ranks and all fixed slots; digest logical tensor bytes exactly."""
     result = {}
@@ -129,6 +146,7 @@ def main():
     parser.add_argument("--num-layers", type=int, choices=(4, 64), default=4)
     parser.add_argument("--timed-requests", type=int, default=3)
     parser.add_argument("--correctness-only", action="store_true")
+    parser.add_argument("--production", action="store_true", help="Test integrated reuse without experimental patches")
     args = parser.parse_args()
     if not ttnn.TRACE_ALLOC_TRACKING:
         raise ValueError("TT_METAL_TRACE_ALLOC_TRACKING=1 is required at process startup")
@@ -148,6 +166,7 @@ def main():
         Path(__file__).with_name("serving_trace_reuse_plan.py").resolve(),
         model_dir / "tt/generator.py",
         model_dir / "tt/generator_vllm.py",
+        model_dir / "tt/trace_reuse.py",
         model_dir / "tt/model.py",
         repo / "models/common/sampling/generator.py",
         repo / "ttnn/ttnn/unsafe_allocation_tracker.py",
@@ -159,6 +178,7 @@ def main():
             "B32 allocated, C1 slot0 S128, max context256, three decode steps/request."
         ),
         "num_layers": args.num_layers,
+        "production_reuse": args.production,
         "git_head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip(),
         "source_sha256": {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in source_paths},
         "model_id": os.environ.get("QWEN_AUTOPORT_MODEL_ID"),
@@ -166,6 +186,7 @@ def main():
         "measurement": "Host request boundaries including token readback; allocation tracker enabled in both arms.",
         "actual_http_ttft": False,
         "allocation_tracking": True,
+        "replay_guard": "complete unsafe allocation map, no GC" if args.production else "default TTNN tracker with GC",
         "program_owned_allocations_included": True,
         "token_comparison_contract": (
             "All four ranks of active slot0 must match; inactive sampled tokens are diagnostic only. "
@@ -202,11 +223,19 @@ def main():
             prompts.append(ids)
         result["prompt_token_ids"] = prompts
         params = SamplingParams(temperature=1.0, top_k=1, top_p=0.0, seed=None)
+        if args.production:
+            started = time.perf_counter()
+            adapter.warmup_model_prefill(generator.kv_cache, enable_trace=False)
+            adapter.warmup_model_decode(generator.kv_cache, enable_trace=False)
+            adapter.warmup_model_prefill(generator.kv_cache, enable_trace=True)
+            adapter.warmup_model_decode(generator.kv_cache, enable_trace=True)
+            result["startup_warmup_ms"] = (time.perf_counter() - started) * 1000
         references = None
         for name, enabled in (("original", False), ("reuse", True)):
             generator.reset()
             adapter._decode_ready = False
-            experiment = ServingTraceReuseExperiment(adapter, enabled=enabled)
+            control = ProductionTraceReuseControl if args.production else ServingTraceReuseExperiment
+            experiment = control(adapter, enabled=enabled)
             arm = result["arms"][name] = {"correctness": [], "timing": []}
             for index in range(4):
                 row = request(adapter, generator, prompts[index % 2], correctness=True, sampling_params=params)
