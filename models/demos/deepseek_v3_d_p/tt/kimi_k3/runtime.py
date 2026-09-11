@@ -66,6 +66,12 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         first_slot = sum(1 for layer in mla_ids if layer < first_layer_idx)
         my_slots = [layer for layer in mla_ids if first_layer_idx <= layer < first_layer_idx + num_my_layers]
 
+        # `allocate_kv_cache` returns kvpe=None for a rank that owns no full-attention layer, which
+        # is reachable: a 1-layer bring-up run is layer 0, and layer 0 is KDA. No slabs, no stage.
+        if kv_caches.kvpe is None:
+            if my_slots:
+                raise RuntimeError(f"no KVPE cache allocated but layers {my_slots} own MLA slabs")
+            return []
         slabs_per_user = kv_caches.kvpe.storage.shape[0] // self.config.num_users
         if slabs_per_user != len(my_slots):
             raise RuntimeError(
@@ -107,7 +113,11 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         if actual_start == 0:
             states = getattr(self.model, "kda_states", None)
             if states is not None:
-                for slot in range(states.num_slots):
-                    states.reset(slot)
-                logger.debug(f"KDA carries reset for {states.num_slots} slot(s) at request head")
+                # This slot only. Zeroing every slot would wipe the in-flight carries of any OTHER
+                # user mid-prefill, and a recurrent carry cannot be rebuilt from the chunk in front
+                # of it -- the remaining chunks would be conditioned on nothing and the run would
+                # return a plausible answer computed from the wrong history, with no error.
+                slot_id = bound.arguments.get("slot_id", 0)
+                states.reset(slot_id)
+                logger.debug(f"KDA carries reset for slot {slot_id} at request head")
         return super().prefill_chunk(*args, **kwargs)
