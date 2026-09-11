@@ -84,7 +84,7 @@ class ReduceUnpacker(Unpacker):
         block: BlockData,
     ) -> str:
         return (
-            f"_llk_unpack_reduce_({block.tile_id_global}, {block.tile_id_global}, "
+            f"_llk_unpack_reduce_({block.tile_id_src_a}, {block.tile_id_src_b}, "
             f"{compute_unit.src_a.tile_shape.cpp_value});\n"
         )
 

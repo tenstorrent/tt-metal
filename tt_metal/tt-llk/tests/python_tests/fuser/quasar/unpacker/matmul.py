@@ -35,8 +35,8 @@ class MatmulUnpacker(Unpacker):
     ) -> str:
         num_cols = compute_unit.src_a.tile_shape.total_col_dim()
         kt_dim = compute_unit.src_a.dimensions[1] // num_cols
-        rt_dim = block.block_tiles_y
-        ct_dim = block.block_tiles_x
+        rt_dim = block.block_rows
+        ct_dim = block.block_cols
         return f"_perf_unpack_matmul_mock(1, {rt_dim}, {kt_dim}, {ct_dim});\n"
 
     def perf_clear_valid(
@@ -48,8 +48,8 @@ class MatmulUnpacker(Unpacker):
     ) -> str:
         num_cols = compute_unit.src_a.tile_shape.total_col_dim()
         kt_dim = compute_unit.src_a.dimensions[1] // num_cols
-        rt_dim = block.block_tiles_y
-        ct_dim = block.block_tiles_x
+        rt_dim = block.block_rows
+        ct_dim = block.block_cols
         return f"_perf_math_matmul_mock(1, {rt_dim}, {kt_dim}, {ct_dim});\n"
 
     def init(
@@ -64,8 +64,8 @@ class MatmulUnpacker(Unpacker):
         ) + compute_unit.src_b.bfd_alloc_and_program(BfdResource.UNP0)
         id_a = bfd_current(BfdResource.UNP1)
         id_b = bfd_current(BfdResource.UNP0)
-        rt_dim = block.block_tiles_y
-        ct_dim = block.block_tiles_x
+        rt_dim = block.block_rows
+        ct_dim = block.block_cols
         num_cols = compute_unit.src_a.tile_shape.total_col_dim()
         kt_dim = compute_unit.src_a.dimensions[1] // num_cols
 
@@ -81,20 +81,23 @@ class MatmulUnpacker(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        rt_dim = block.block_tiles_y
-        ct_dim = block.block_tiles_x
+        rt_dim = block.block_rows
+        ct_dim = block.block_cols
         num_cols = compute_unit.src_a.tile_shape.total_col_dim()
         kt_dim = compute_unit.src_a.dimensions[1] // num_cols
         full_ct_dim = (
             compute_unit.src_b.dimensions[1]
             // compute_unit.src_b.tile_shape.total_col_dim()
         )
-        output_ct_dim = compute_unit.src_b.tile_count_x
+        output_ct_dim = (
+            operation.max_output_dimensions[1]
+            // compute_unit.src_b.tile_shape.total_col_dim()
+        )
 
         return (
             f"{{\n"
-            f"    std::uint32_t row = ({block.tile_id_global}) / {output_ct_dim};\n"
-            f"    std::uint32_t col = ({block.tile_id_global}) % {output_ct_dim};\n"
+            f"    std::uint32_t row = ({block.tile_id_src_a}) / {output_ct_dim};\n"
+            f"    std::uint32_t col = ({block.tile_id_src_a}) % {output_ct_dim};\n"
             f"    for (std::uint32_t kt = 0; kt < {kt_dim}; ++kt) {{\n"
             f"        std::uint32_t srca_tile_idx = row * {kt_dim} + kt;\n"
             f"        std::uint32_t srcb_tile_idx = kt * {full_ct_dim} + col;\n"

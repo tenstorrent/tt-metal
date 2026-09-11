@@ -71,7 +71,7 @@ class EltwiseFpu(Fpu):
         return (
             f"_llk_math_eltwise_binary_<ckernel::EltwiseBinaryType::{op}, {broadcast_type}, {dest_sync},\n"
             f"{dest_acc}, {math_fidelity}, {reuse_dest}>"
-            f"({tensor_shape}, {block.tile_id_block}, {clear_fp32_dst_acc}\n"
+            f"({tensor_shape}, {block.tile_id_dest}, {clear_fp32_dst_acc}\n"
             f");\n"
         )
 

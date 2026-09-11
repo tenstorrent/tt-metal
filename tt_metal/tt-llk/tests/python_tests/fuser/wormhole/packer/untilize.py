@@ -40,7 +40,7 @@ class PackUntilize(Packer):
         config: GlobalConfig,
         block: BlockData,
     ) -> str:
-        block_ct_dim = block.block_tiles_x
+        block_ct_dim = block.block_cols
         full_ct_dim = pack_node.output.tile_count_x
         face_r_dim = pack_node.output.tile_shape.face_r_dim
         num_faces = pack_node.output.tile_shape.total_num_faces()
@@ -58,14 +58,14 @@ class PackUntilize(Packer):
         config: GlobalConfig,
         block: BlockData,
     ) -> str:
-        block_ct_dim = block.block_tiles_x
+        block_ct_dim = block.block_cols
         full_ct_dim = pack_node.output.tile_count_x
         face_r_dim = pack_node.output.tile_shape.face_r_dim
 
         return (
             f"_llk_pack_untilize_<{block_ct_dim}, {full_ct_dim}>(\n"
             f"    {untilize_l1_address(pack_node.output, block)},\n"
-            f"    {config.sentinel.pack_dst_format}, {face_r_dim}, {block.tile_id_block}\n"
+            f"    {config.sentinel.pack_dst_format}, {face_r_dim}, {block.tile_id_dest}\n"
             f");\n"
         )
 

@@ -14,7 +14,8 @@ def reduce_golden(call, state, node, operation, config):
     dimensions = single.max_output_dimensions
     tensor_a, tensor_b = state.source_registers.pop_operands(dimensions)
     reduced = reduce_tile(tensor_a, tensor_b, config, single, node)
-    if not node.reduce_to_tile:
+    if call.dest not in state.reduced_tiles:
+        state.reduced_tiles.add(call.dest)
         state.dest.set(call.dest, reduced)
     elif node.fpu.reduce_pool == ReducePool.Max:
         state.dest.set(call.dest, torch.maximum(state.dest.get(call.dest), reduced))

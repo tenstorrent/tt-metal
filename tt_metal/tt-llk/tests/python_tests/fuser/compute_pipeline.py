@@ -37,6 +37,7 @@ from .indexing import (
     DEST_SLOTS,
     INDEX_NAMES,
     BlockRegion,
+    InvocationGranularity,
     Level,
     LoopPlan,
     SlotIndex,
@@ -130,13 +131,15 @@ class ComputePipeline:
             elif isinstance(value, int):
                 slots[slot] = replace(index, base=index.base + value)
             else:
+                unknown = sorted(set(value.multipliers) - declared)
+                if unknown:
+                    raise ValueError(
+                        f"loop slot '{slot}' references undeclared loop vars: {unknown}"
+                    )
                 slots[slot] = replace(
                     index,
                     base=index.base + value.base,
-                    multipliers={
-                        **index.multipliers,
-                        **{v: m for v, m in value.multipliers.items() if v in declared},
-                    },
+                    multipliers={**index.multipliers, **value.multipliers},
                 )
         return replace(
             plan, slots=slots, origins=origins, blocks_per_bank=blocks_per_bank
@@ -152,22 +155,26 @@ class ComputePipeline:
         else:
             slots = ["dest"]
 
-        plan = default_plan(region, granularity, slots, row_tiles)
+        nx = node.block_tiles_x or region.block_tiles_x
+        ny = node.block_tiles_y or region.block_tiles_y
+        if region.block_tiles_x % nx == 0 and region.block_tiles_y % ny == 0:
+            plan = default_plan(region, granularity, slots, row_tiles, nx, ny)
+        else:
+            plan = default_plan(region, granularity, slots, row_tiles)
         overrides = {}
 
+        def shift(slot, base):
+            return replace(plan.slots[slot], base=plan.slots[slot].base + base)
+
         if role == "sfpu":
-            overrides["dest"] = SlotIndex(
-                base=getattr(node.sfpu, "dst_index_out", None)
-                or getattr(node.sfpu, "dest_idx", 0)
+            overrides["dest"] = shift(
+                "dest",
+                getattr(node.sfpu, "dst_index_out", None)
+                or getattr(node.sfpu, "dest_idx", 0),
             )
             if node.sfpu.input_count == 2:
-                overrides["src0"] = SlotIndex(base=node.sfpu.dst_index_in0)
-                overrides["src1"] = SlotIndex(base=node.sfpu.dst_index_in1)
-        if role in ("unpack", "math") and node.src_b is not None:
-            if node.broadcast_tile is not None:
-                overrides["in1"] = SlotIndex(base=node.broadcast_tile)
-        if role == "math" and getattr(node, "reduce_to_tile", False):
-            overrides["dest"] = SlotIndex()
+                overrides["src0"] = shift("src0", node.sfpu.dst_index_in0)
+                overrides["src1"] = shift("src1", node.sfpu.dst_index_in1)
         if role == "pack" and node.pack_l1_accumulation == L1Accumulation.Yes:
             multipliers = {
                 var: value
@@ -206,9 +213,6 @@ class ComputePipeline:
                 operation.max_output_dimensions[0]
                 // operation.tile_shape.total_row_dim()
             )
-        full_x_limit = tile_count_x // operation.block_tiles_x * operation.block_tiles_x
-        full_y_limit = tile_count_y // operation.block_tiles_y * operation.block_tiles_y
-
         row_tiles = dict.fromkeys(("in0", "in1", "out"), tile_count_x)
 
         planned = []
@@ -216,20 +220,16 @@ class ComputePipeline:
             tile_count_x, tile_count_y, operation.block_tiles_x, operation.block_tiles_y
         ):
             block = BlockData(
-                block_x=region.x.var if region.x.looped else region.x.origin,
-                block_y=region.y.var if region.y.looped else region.y.origin,
-                block_tiles_x=region.block_tiles_x,
-                block_tiles_y=region.block_tiles_y,
-                tile_count_x=tile_count_x,
-                tile_count_y=tile_count_y,
-                full_x_limit=full_x_limit,
-                full_y_limit=full_y_limit,
-                tile_id_global="0",
-                tile_id_block="0",
+                block_origin_x=region.x.var if region.x.looped else region.x.origin,
+                block_origin_y=region.y.var if region.y.looped else region.y.origin,
+                block_cols=region.block_tiles_x,
+                block_rows=region.block_tiles_y,
             )
             plans: Dict[Tuple[int, str], LoopPlan] = {}
 
             def add_plan(node, role, unit):
+                if unit.granularity == InvocationGranularity.NONE:
+                    raise ValueError(f"{type(unit).__name__} has no granularity set")
                 plans[(id(node), role)] = self._plan_node(
                     node, role, region, unit.granularity, row_tiles
                 )
@@ -239,6 +239,11 @@ class ComputePipeline:
                     add_plan(node, "sfpu", node.sfpu)
                 else:
                     if node.unpacker is not None:
+                        if node.unpacker.granularity != node.fpu.granularity:
+                            raise ValueError(
+                                "unpacker and fpu granularity must match, got "
+                                f"{node.unpacker.granularity} and {node.fpu.granularity}"
+                            )
                         add_plan(node, "unpack", node.unpacker)
                     add_plan(node, "math", node.fpu)
             for node in self.pack_nodes:
@@ -257,7 +262,51 @@ class ComputePipeline:
                     plans=plans,
                 )
             )
+            self._check_dest_reads(planned[-1])
         return planned
+
+    def _dest_tiles(self, planned, node, role, slots) -> set:
+        plan = planned.plan(node, role)
+        block = role == "math" and not plan.call_levels and not plan.fanout_levels
+        bx = (node.block_tiles_x or 1) if block else 1
+        by = (node.block_tiles_y or 1) if block else 1
+        offsets = [tx + ty * bx for ty in range(by) for tx in range(bx)]
+        tiles = set()
+        for bank in planned.bank.bank_assignments():
+            for call in plan.calls(bank):
+                for tile in (call,) + call.tiles:
+                    for slot in slots:
+                        value = getattr(tile, slot)
+                        if value is not None:
+                            tiles.update(value + off for off in offsets)
+        return tiles
+
+    def _check_dest_reads(self, planned: "PlannedBlock") -> None:
+        valid: set = set()
+
+        def check(node, role, reads):
+            missing = self._dest_tiles(planned, node, role, reads) - valid
+            if missing:
+                raise ValueError(
+                    f"{type(node).__name__} reads dest tiles {sorted(missing)} "
+                    "that no earlier node writes"
+                )
+
+        def sfpu_reads(node):
+            return ("src0", "src1") if node.sfpu.input_count == 2 else ("dest",)
+
+        for node in self.math_nodes:
+            if isinstance(node, SfpuNode):
+                check(node, "sfpu", sfpu_reads(node))
+                valid |= self._dest_tiles(planned, node, "sfpu", ("dest",))
+            else:
+                valid |= self._dest_tiles(planned, node, "math", ("dest",))
+        for node in self.pack_nodes:
+            if isinstance(node, SfpuNode):
+                check(node, "sfpu", sfpu_reads(node))
+                valid |= self._dest_tiles(planned, node, "sfpu", ("dest",))
+            else:
+                check(node, "pack", ("dest",))
 
     @staticmethod
     def _num_banks(plans) -> int:
@@ -266,14 +315,11 @@ class ComputePipeline:
             walked = [v for k, v in plan.origins.items() if not _is_template(k)]
             if walked:
                 counts.add(-(-len(walked[0]) // plan.blocks_per_bank))
-            elif plan.origins:
-                counts.add(1)
         if not counts:
             return 1
         if len(counts) != 1:
             raise ValueError(
-                f"custom nodes span differing dest-bank counts {sorted(counts)}; "
-                "every math and pack node must produce the same number of dest banks"
+                f"math and pack nodes disagree on dest-bank count: {sorted(counts)}"
             )
         return counts.pop()
 
@@ -605,6 +651,10 @@ class ComputePipeline:
         config: "GlobalConfig",
         golden_type: GoldenType,
     ):
+        if config.perf_run_type is not None:
+            raise ValueError(
+                f"golden() needs a functional run, got perf_run_type={config.perf_run_type}"
+            )
         tile_dims = tile_dimensions(operation.tile_shape)
         pack_nodes = self._get_pack_nodes()
         layouts = {id(node): self._output_layout(node) for node in pack_nodes}
@@ -648,7 +698,12 @@ class ComputePipeline:
                         golden_fn(call, state, node, operation, config)
 
                 for node in self.math_nodes:
-                    config.sentinel.configure_golden(config, operation, node)
+                    config.sentinel.configure_golden(
+                        config,
+                        operation,
+                        node,
+                        output_format=pack_nodes[0].output.data_format,
+                    )
                     if isinstance(node, SfpuNode):
                         run(node, "sfpu", node.sfpu.golden_fn)
                         continue
@@ -668,7 +723,10 @@ class ComputePipeline:
                         run(node, "sfpu", node.sfpu.golden_fn)
                         continue
                     config.sentinel.configure_golden(
-                        config, operation, output_format=node.output.data_format
+                        config,
+                        operation,
+                        output_format=node.output.data_format,
+                        set_math_format=False,
                     )
                     state.output = buffers[id(node)]
                     run(node, "pack", node.packer.golden_fn)

@@ -32,7 +32,7 @@ class Packer:
     """
 
     # Controls the tile iteration pattern for the pack loop.
-    granularity = InvocationGranularity.TILE
+    granularity = InvocationGranularity.NONE
 
     # Set `per_block_init = True` if init() needs block dimensions and must
     # be called per-block inside the batch loop rather than hoisted out.
@@ -66,7 +66,7 @@ class Packer:
         block: "BlockData",
     ) -> str:
         """Return C++ code for one planned pack call (dest index in
-        block.tile_id_block, L1 output index in block.tile_id_global)."""
+        block.tile_id_dest, L1 output index in block.tile_id_out)."""
         return ""
 
     def uninit(

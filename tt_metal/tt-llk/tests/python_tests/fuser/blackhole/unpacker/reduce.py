@@ -83,4 +83,4 @@ class ReduceUnpacker(Unpacker):
         buffer_b = compute_unit.src_b.cpp_name
         reduce_dim = self.reduce_dim.cpp_enum_value
         pool_type = self.reduce_pool.cpp_enum_value
-        return f"_llk_unpack_AB_reduce_<{pool_type}, {reduce_dim}>(L1_ADDRESS({buffer_a}[{block.tile_id_global}]), L1_ADDRESS({buffer_b}[{block.tile_id_global}]));\n"
+        return f"_llk_unpack_AB_reduce_<{pool_type}, {reduce_dim}>(L1_ADDRESS({buffer_a}[{block.tile_id_src_a}]), L1_ADDRESS({buffer_b}[{block.tile_id_src_b}]));\n"

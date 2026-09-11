@@ -96,14 +96,10 @@ class UnpackerAB(Unpacker):
         block: BlockData,
     ) -> str:
         if compute_unit.broadcast_type != BroadcastType.None_:
-            tile_id_b = (
-                block.tile_id_global
-                if compute_unit.broadcast_tile is None
-                else compute_unit.broadcast_tile
-            )
-            return f"_llk_unpack_binary_broadcast_operands_({block.tile_id_global}, {tile_id_b});\n"
+            tile_id_b = block.tile_id_src_b
+            return f"_llk_unpack_binary_broadcast_operands_({block.tile_id_src_a}, {tile_id_b});\n"
 
-        return f"_llk_unpack_binary_operands_({block.tile_id_global}, {block.tile_id_global});\n"
+        return f"_llk_unpack_binary_operands_({block.tile_id_src_a}, {block.tile_id_src_b});\n"
 
     def uninit(
         self,

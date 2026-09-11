@@ -45,7 +45,7 @@ class TransposeDestFpu(Fpu):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        return f"_llk_math_transpose_dest_({block.tile_id_block});\n"
+        return f"_llk_math_transpose_dest_({block.tile_id_dest});\n"
 
     def uninit(
         self,

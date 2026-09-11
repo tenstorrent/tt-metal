@@ -74,8 +74,8 @@ class UnpackerA(Unpacker):
             num_faces = compute_unit.src_a.tile_shape.total_num_faces()
             return "true", "true", num_faces
         if config.dest_acc == DestAccumulation.Yes:
-            return "true", "true", block.block_tiles_x
-        return "true", "false", block.block_tiles_x
+            return "true", "true", block.block_cols
+        return "true", "false", block.block_cols
 
     def perf_set_valid(
         self,
@@ -120,7 +120,7 @@ class UnpackerA(Unpacker):
         transpose_en = compute_unit.transpose_faces.cpp_enum_value
         unp_sel = _unp_sel(compute_unit)
         per_tile = compute_unit.reuse_dest != EltwiseBinaryReuseDestType.NONE
-        num_tiles = 1 if per_tile else block.block_tiles_x
+        num_tiles = 1 if per_tile else block.block_cols
 
         return (
             compute_unit.src_a.bfd_alloc_and_program(engine)
@@ -143,7 +143,7 @@ class UnpackerA(Unpacker):
 
         return (
             f"_llk_unpack_unary_operand_<{unp_sel}, {reuse_dest}, {unpack_to_dest}, {dest_sync}>"
-            f"({block.tile_id_global}, {tensor_shape});\n"
+            f"({block.tile_id_src_a}, {tensor_shape});\n"
         )
 
     def uninit(

@@ -26,6 +26,9 @@ class PackNode:
     independent relu or L1 accumulation configs.
     """
 
+    block_tiles_x = None
+    block_tiles_y = None
+
     def __init__(
         self,
         packer: Packer,
@@ -65,8 +68,8 @@ class PackNode:
             PerfRunType.MATH_ISOLATE,
         ):
             return ""
-        block.tile_id_block = call.dest
-        block.tile_id_global = call.out
+        block.tile_id_dest = call.dest
+        block.tile_id_out = call.out
         return self.packer.pack(self, operation, config, block)
 
     def uninit(

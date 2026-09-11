@@ -26,7 +26,7 @@ class ReduceBlockMaxUnpacker(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        ct_dim = block.block_tiles_x
+        ct_dim = block.block_cols
         dest_acc = config.dest_acc.cpp_enum_value
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         return f"_llk_unpack_AB_reduce_block_max_row_init_<{ct_dim}, {dest_acc}, /*respect_trigger=*/false>({tensor_shape});\n"
@@ -38,14 +38,17 @@ class ReduceBlockMaxUnpacker(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        ct_dim = block.block_tiles_x
-        tile_x_abs = f"(({block.tile_id_global}) % {block.tile_count_x})"
-        tile_x_in_block = f"({tile_x_abs} - {block.block_x})"
+        ct_dim = block.block_cols
+        tile_count_x = (
+            operation.max_output_dimensions[1] // operation.tile_shape.total_col_dim()
+        )
+        tile_x_abs = f"(({block.tile_id_src_a}) % {tile_count_x})"
+        tile_x_in_block = f"({tile_x_abs} - {block.block_origin_x})"
         buffer_a = compute_unit.src_a.cpp_name
         buffer_b = compute_unit.src_b.cpp_name
         return (
             f"if (({tile_x_in_block}) % {ct_dim} == 0 ) {{\n"
-            f"_llk_unpack_AB_reduce_block_max_row_(L1_ADDRESS({buffer_a}[{block.tile_id_global}]), L1_ADDRESS({buffer_b}[{block.tile_id_global}]));\n"
+            f"_llk_unpack_AB_reduce_block_max_row_(L1_ADDRESS({buffer_a}[{block.tile_id_src_a}]), L1_ADDRESS({buffer_b}[{block.tile_id_src_b}]));\n"
             f"}}\n"
         )
 
@@ -65,9 +68,12 @@ class ReduceBlockMaxUnpacker(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        ct_dim = block.block_tiles_x
-        tile_x_abs = f"(({block.tile_id_global}) % {block.tile_count_x})"
-        tile_x_in_block = f"({tile_x_abs} - {block.block_x})"
+        ct_dim = block.block_cols
+        tile_count_x = (
+            operation.max_output_dimensions[1] // operation.tile_shape.total_col_dim()
+        )
+        tile_x_abs = f"(({block.tile_id_src_a}) % {tile_count_x})"
+        tile_x_in_block = f"({tile_x_abs} - {block.block_origin_x})"
         return (
             f"if (({tile_x_in_block}) % {ct_dim} == 0) {{\n"
             f"    _perf_unpack_loop_set_valid<false, true>(1);\n"
@@ -82,8 +88,8 @@ class ReduceBlockMaxUnpacker(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        ct_dim = block.block_tiles_x
-        tile_x_in_block = f"(({block.tile_id_block}) % {block.block_tiles_x})"
+        ct_dim = block.block_cols
+        tile_x_in_block = f"(({block.tile_id_dest}) % {block.block_cols})"
         return (
             f"if (({tile_x_in_block}) % {ct_dim} == 0) {{\n"
             f"    _perf_math_loop_clear_valid<true, false>({ct_dim});\n"

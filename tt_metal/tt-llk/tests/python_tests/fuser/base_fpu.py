@@ -59,7 +59,7 @@ class Fpu:
         block: "BlockData",
     ) -> str:
         """Return C++ code that performs one planned math call (dest index in
-        block.tile_id_block)."""
+        block.tile_id_dest)."""
         return ""
 
     def uninit(

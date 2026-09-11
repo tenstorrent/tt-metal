@@ -75,7 +75,7 @@ class ReduceFpu(Fpu):
 
         return (
             f"_llk_math_reduce_<{pool_type_cpp}, {reduce_dim_cpp}, {dest_acc}, {math_fidelity}, {is_int_fpu_en}>(\n"
-            f"{block.tile_id_block}, {compute_unit.src_a.tile_shape.cpp_value}\n"
+            f"{block.tile_id_dest}, {compute_unit.src_a.tile_shape.cpp_value}\n"
             f");\n"
         )
 

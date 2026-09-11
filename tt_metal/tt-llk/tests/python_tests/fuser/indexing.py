@@ -94,8 +94,7 @@ class LoopPlan:
             unknown = sorted(set(index.multipliers) - declared)
             if unknown:
                 raise ValueError(
-                    f"slot '{name}' references undeclared loop vars {unknown}\n"
-                    f"declared: {sorted(declared)}"
+                    f"slot '{name}' references undeclared loop vars: {unknown}"
                 )
 
     @staticmethod
@@ -287,14 +286,19 @@ def default_plan(
     granularity: InvocationGranularity,
     slots: Sequence[str],
     row_tiles: Mapping[str, int],
+    node_block_x: Optional[int] = None,
+    node_block_y: Optional[int] = None,
 ) -> LoopPlan:
+    block_x = region.block_tiles_x if node_block_x is None else node_block_x
+    block_y = region.block_tiles_y if node_block_y is None else node_block_y
+
     if granularity == InvocationGranularity.TILE:
         levels = (
-            Level(var=TILE_X, count=region.block_tiles_x),
-            Level(var=TILE_Y, count=region.block_tiles_y),
+            Level(var=TILE_X, count=block_x),
+            Level(var=TILE_Y, count=block_y),
         )
     elif granularity == InvocationGranularity.ROW:
-        levels = (Level(var=TILE_Y, count=region.block_tiles_y),)
+        levels = (Level(var=TILE_Y, count=block_y),)
     else:
         levels = ()
     call_vars = {level.var for level in levels}
@@ -317,7 +321,7 @@ def default_plan(
         )
 
     if granularity == InvocationGranularity.ROW:
-        fanout_levels = (Level(var=TILE_X, count=region.block_tiles_x),)
+        fanout_levels = (Level(var=TILE_X, count=block_x),)
         fanout_slots = {
             slot: SlotIndex(multipliers={TILE_X: 1})
             for slot in slots
@@ -332,7 +336,7 @@ def default_plan(
         call_levels=levels,
         slots={
             slot: index(
-                region.block_tiles_x if slot in DEST_SLOTS else row_tiles[slot],
+                block_x if slot in DEST_SLOTS else row_tiles[slot],
                 banked=slot not in DEST_SLOTS,
             )
             for slot in slots

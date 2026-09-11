@@ -43,7 +43,7 @@ class TransposeDestFpu(Fpu):
     ) -> str:
         is_32bit = config.dest_acc.cpp_enum_value
         transpose_faces = compute_unit.transpose_faces.cpp_enum_value
-        return f"_llk_math_transpose_dest_<{transpose_faces}, {is_32bit}>({block.tile_id_block});\n"
+        return f"_llk_math_transpose_dest_<{transpose_faces}, {is_32bit}>({block.tile_id_dest});\n"
 
     def uninit(
         self,

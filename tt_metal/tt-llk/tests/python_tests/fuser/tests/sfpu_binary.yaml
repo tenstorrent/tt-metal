@@ -21,7 +21,7 @@ operations:
         math_fidelity: "LoFi"
         unpack_to_dest: true
       - type: "BinarySfpu"
-        block_size: [32, 128]
+        block_size: [32, 32]
         operation: "SfpuElwadd"
         approximation_mode: false
         iterations: 32

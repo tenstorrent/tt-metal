@@ -8,6 +8,7 @@ from fuser.base_sfpu import Sfpu
 from fuser.block_data import BlockData
 from fuser.fuser_config import GlobalConfig
 from fuser.golden.sfpu.unary import unary_golden
+from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
 from fuser.sfpu_node import SfpuNode
 from helpers.llk_params import (
@@ -17,6 +18,7 @@ from helpers.llk_params import (
 
 
 class UnarySfpu(Sfpu):
+    granularity = InvocationGranularity.TILE
     golden_fn = staticmethod(unary_golden)
 
     def __init__(
@@ -77,7 +79,7 @@ class UnarySfpu(Sfpu):
         return (
             f"test_utils::call_unary_sfpu_operation_quasar<"
             f"{op}, {dest_sync}, {en_32bit_dest}, {approx_mode}, {quasar_iterations}"
-            f">({block.tile_id_block}, {sfpu_format});\n"
+            f">({block.tile_id_dest}, {sfpu_format});\n"
         )
 
     def __str__(self) -> str:

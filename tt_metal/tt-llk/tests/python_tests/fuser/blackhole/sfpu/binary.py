@@ -8,6 +8,7 @@ from fuser.base_sfpu import Sfpu
 from fuser.block_data import BlockData
 from fuser.fuser_config import GlobalConfig
 from fuser.golden.sfpu.binary import binary_golden
+from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
 from fuser.sfpu_node import SfpuNode
 from helpers.llk_params import (
@@ -17,6 +18,7 @@ from helpers.llk_params import (
 
 
 class BinarySfpu(Sfpu):
+    granularity = InvocationGranularity.TILE
     input_count = 2
     golden_fn = staticmethod(binary_golden)
 
@@ -85,9 +87,9 @@ class BinarySfpu(Sfpu):
         approx_mode = self.approx_mode.cpp_enum_value
         dest_acc = config.dest_acc.cpp_enum_value
         iterations = self.iterations
-        src1 = block.tile_id_src_a
-        src2 = block.tile_id_src_b
-        dst = block.tile_id_block
+        src1 = block.dest_src0
+        src2 = block.dest_src1
+        dst = block.tile_id_dest
         format = self._format_arg(config)
 
         return (

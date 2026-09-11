@@ -50,9 +50,9 @@ class SubBcastColCustomFpu(EltwiseFpu):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        ct_dim = block.block_tiles_x
+        ct_dim = block.block_cols
         tensor_shape = operation.tile_shape.cpp_value
-        return f"_llk_math_sub_bcast_cols_reuse_custom_({ct_dim}, {tensor_shape}, {block.tile_id_block});\n"
+        return f"_llk_math_sub_bcast_cols_reuse_custom_({ct_dim}, {tensor_shape}, {block.tile_id_dest});\n"
 
     def uninit(
         self,

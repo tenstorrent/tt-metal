@@ -1,28 +1,38 @@
+# Reduce a row of input tiles into a single dest tile via custom loops:
+# in0 walks the input tiles, dest stays at tile 0 so each reduction accumulates
+# into it, and pack reads only that one tile.
+
 operands:
   - name: "input_A"
     dims: [128, 128]
     format: "Float16_b"
   - name: "input_B"
-    dims: [128, 128]
+    dims: [32, 32]
     format: "Float16_b"
     const_value: 1.0
   - name: "reduce_row_out"
-    dims: [128, 128]
+    dims: [32, 32]
     format: "Float16_b"
 
 operations:
   - math:
       - type: "Fpu"
-        block_size: [64, 128]
+        block_size: [32, 32]
         in0: "input_A"
         in1: "input_B"
         operation: "Reduce"
         reduce_dim: "REDUCE_ROW"
         reduce_pool: "SUM"
-        reduce_to_tile: true
         unpacker: "ReduceUnpacker"
         math_fidelity: "HiFi2"
+        loop:
+          in0: {count: 16}
+          in1: {count: 16, step: 0}
+          dest: {count: 16, step: 0}
     pack:
       - output: "reduce_row_out"
-        block_size: [64, 128]
+        block_size: [32, 32]
         packer: "Packer"
+        loop:
+          dest: [0]
+          out: [0]

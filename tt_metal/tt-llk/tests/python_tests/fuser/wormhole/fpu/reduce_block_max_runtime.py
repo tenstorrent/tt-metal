@@ -29,7 +29,7 @@ class ReduceBlockMaxRuntimeFpu(ReduceBlockMaxFpu):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        ct_dim = block.block_tiles_x
+        ct_dim = block.block_cols
         dest_acc = config.dest_acc.cpp_enum_value
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
         return f"_llk_math_reduce_block_max_row_init_runtime_<{dest_acc}>({ct_dim}, {tensor_shape});\n"
@@ -43,7 +43,7 @@ class ReduceBlockMaxRuntimeFpu(ReduceBlockMaxFpu):
     ) -> str:
         dest_acc = config.dest_acc.cpp_enum_value
         tensor_shape = compute_unit.src_a.tile_shape.cpp_value
-        return f"_llk_math_reduce_block_max_row_runtime_<{dest_acc}>({block.tile_id_block}, {tensor_shape});\n"
+        return f"_llk_math_reduce_block_max_row_runtime_<{dest_acc}>({block.tile_id_dest}, {tensor_shape});\n"
 
     def uninit(
         self,

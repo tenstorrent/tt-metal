@@ -50,4 +50,4 @@ class Packer(BasePacker):
         dest_acc = config.dest_acc.cpp_enum_value
         dest_sync = f"DstSync::Sync{operation.dest_sync.name}"
         buffer = pack_node.output.cpp_name
-        return f"_llk_pack_<{dest_sync}, {dest_acc}, ckernel::PackMode::Default>({block.tile_id_block}, L1_ADDRESS({buffer}[{block.tile_id_global}]));\n"
+        return f"_llk_pack_<{dest_sync}, {dest_acc}, ckernel::PackMode::Default>({block.tile_id_dest}, L1_ADDRESS({buffer}[{block.tile_id_out}]));\n"

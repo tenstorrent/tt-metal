@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 from helpers.golden_generators import ReduceGolden, get_golden_generator
 from helpers.llk_params import ReduceDimension, ReducePool
 from helpers.tilize_untilize import tilize_block, untilize_block
@@ -16,7 +15,6 @@ def reduce_tile(tensor_a, tensor_b, config, operation, node, block_max=False):
     num_faces = tile_shape.total_num_faces()
     reduce_dim = ReduceDimension.Row if block_max else node.fpu.reduce_dim
     pool_type = ReducePool.Max if block_max else node.fpu.reduce_pool
-    pool = torch.amax if pool_type == ReducePool.Max else torch.sum
     reduce = get_golden_generator(ReduceGolden)
 
     def reduce_one(tensor):
@@ -43,10 +41,9 @@ def reduce_tile(tensor_a, tensor_b, config, operation, node, block_max=False):
         ).flatten()
 
     src_reduced = reduce_one(tensor_a)
-    dest_reduced = torch.zeros_like(src_reduced)
     if pool_type == ReducePool.Average:
         span = tile_dims[1] if reduce_dim == ReduceDimension.Row else tile_dims[0]
-        result = (src_reduced * span + dest_reduced) * tensor_b.flatten()[0].item()
+        result = src_reduced * span * tensor_b.flatten()[0].item()
     else:
-        result = pool(torch.stack((src_reduced, dest_reduced)), dim=0)
+        result = src_reduced
     return result.reshape(dimensions).to(src_reduced.dtype)

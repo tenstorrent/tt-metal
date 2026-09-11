@@ -11,8 +11,8 @@
 
 loops:
   reverse_row:
-    in0: [3, 2, 1, 0]
-    dest: [0, 1, 2, 3]
+    in0: {start: 3, count: 4, step: -1}
+    dest: {count: 4}
 
 operands:
   - name: "sweep_a"
@@ -186,35 +186,47 @@ operations:
   # level must survive even though no index depends on it.
   - math:
       - type: "Fpu"
-        block_size: [32, 128]
+        block_size: [32, 32]
         in0: "sweep_out"
         in1: "ones"
         operation: "Reduce"
         reduce_dim: "REDUCE_ROW"
         reduce_pool: "MAX"
-        reduce_to_tile: true
         unpacker: "ReduceUnpacker"
         math_fidelity: "HiFi2"
+        loop:
+          in0: {count: 8}
+          in1: {count: 8, step: 0}
+          dest: {count: 4, step: 0}
     pack:
       - output: "rowmax"
-        block_size: [32, 128]
+        block_size: [32, 32]
         packer: "Packer"
+        loop:
+          dest: [0]
+          out: [0, 1]
 
   # Second operand pinned to one tile: in1 is a constant index while in0 sweeps.
   - math:
       - type: "Fpu"
-        block_size: [32, 64]
+        block_size: [32, 32]
         in0: "sweep_out"
         in1: "rowmax"
         operation: "Elwsub"
         unpacker: "UnpackerAB"
         broadcast_type: "COL"
-        broadcast_tile: 0
         math_fidelity: "LoFi"
+        loop:
+          in0: {count: 8}
+          in1: {count: 8, step: 0}
+          dest: [0, 1]
     pack:
       - output: "bcast_out"
-        block_size: [32, 64]
+        block_size: [32, 32]
         packer: "Packer"
+        loop:
+          dest: [0, 1]
+          out: {count: 8}
 
   # Two packs in one operation, again in a single-tile block with no scope of its
   # own, so both hoist l1_tile_id and dest_tile_id side by side. The second pack
