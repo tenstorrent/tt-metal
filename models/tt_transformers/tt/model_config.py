@@ -1966,7 +1966,10 @@ class ModelArgs:
             else:
                 return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            # L1 island through the attention chain: the fused QKV output is consumed
+            # only by nlp_create_qkv_heads, so a DRAM round-trip between them is pure
+            # waste. Interleaved L1, so the layout contract is unchanged.
+            return ttnn.DRAM_MEMORY_CONFIG if self.is_galaxy else ttnn.L1_MEMORY_CONFIG
         else:
             raise ValueError(f"Invalid mode: {mode}")
 

@@ -1115,7 +1115,9 @@ class Attention(LightweightModule):
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
             transpose_k_heads=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # Same L1 island: q/k/v here are consumed by the rotary embedding and SDPA
+            # in the same layer and by nothing else.
+            memory_config=ttnn.DRAM_MEMORY_CONFIG if self.TG else ttnn.L1_MEMORY_CONFIG,
         )
 
         norm_config = self.args.get_norm_config("attn", Mode.PREFILL, None)
@@ -1281,7 +1283,8 @@ class Attention(LightweightModule):
         ###
         attn_output_11SH = ttnn.experimental.nlp_concat_heads(
             attn_output_1QSD,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # Same L1 island: this feeds the wo projection and nothing else.
+            memory_config=ttnn.DRAM_MEMORY_CONFIG if self.TG else ttnn.L1_MEMORY_CONFIG,
         )
         ttnn.deallocate(attn_output_1QSD)
 
