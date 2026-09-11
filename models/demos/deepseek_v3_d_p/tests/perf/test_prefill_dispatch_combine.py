@@ -52,12 +52,6 @@ DISPATCH_BUFFER_CAPACITY_FACTOR = 8
 
 # One entry per model whose chunked-prefill capture we replay; add a model by extending this list.
 # "kimi26" / KimiK26Config: https://github.com/tenstorrent/tt-metal/issues/54972
-#
-# mistral4 (128 experts / top-4 at emb 4096 -> 32 per col, 4 per chip) is wired up but has no capture
-# yet: expert_routing_dispatch_combine_perf_mistral4.safetensors must be produced from a real
-# Mistral4 chunked-prefill run before this case can execute, and its hot (layer, col) picks ranked
-# with analyze_routing_send.py before test_dispatch_combine_perf can select it. Until then the case
-# is unreachable -- nothing sets TT_DS_CAPTURED_LAYER/COL for it, so it skips.
 _CHUNK_MODELS = [
     ("dsv3", DeepSeekV3Config),
     ("kimi26", KimiK26Config),
@@ -70,8 +64,8 @@ assert len(_TORUS_Y_MESH_CONFIGS) == 1, "LoudBox TorusY proxy config missing fro
 
 # One chunk (5120 tokens) spread over the 8-chip dispatch group => seq_len_per_chip 640. Expert
 # count / embedding size come off each reference config, so they live in one place;
-# experts_per_chip = experts_per_col / 8 (dsv3 256/4/8 = 8, kimi26 384/4/8 = 12), and
-# model selects the per-model capture file (expert_routing_dispatch_combine_perf_<model>.safetensors).
+# experts_per_chip = experts_per_col / 8 (dsv3 256/4/8 = 8, kimi26 384/4/8 = 12, mistral4 128/4/8 = 4),
+# and model selects the per-model capture file (expert_routing_<model>.safetensors).
 # The parametrize id is what test_dispatch_combine_perf selects with `-k "<id> and ..."`; since -k
 # matches substrings, no id may be a prefix of another or it would silently pull in the wrong entry too.
 @pytest.mark.parametrize(

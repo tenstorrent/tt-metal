@@ -43,14 +43,14 @@ _GLM52_CHUNK_PICKS = [
     (14, 2),  # 25.0%
     (10, 0),  # 25.0%
 ]
-# Mistral Small 4 does not have its routing capture in-tree yet. These are temporary record-only
-# starting points matching the same phase-1 pattern used by the other models until the real
-# Mistral4 capture and ranked hot columns are added.
+# Mistral 4 has 36 layers but its capture holds 0..34: the chunked-prefill leg it came from builds
+# the transformer kv_only_last_layer=True, so layer 35 returns before its MoE runs. Picks live in
+# 0..34.
 _MISTRAL4_CHUNK_PICKS = [
-    (19, 2),  # 37.2%
-    (29, 0),  # 37.0%
-    (4, 2),  # 25.0%
-    (56, 3),  # 25.0%
+    (18, 2),  # 42.91%
+    (16, 2),  # 41.27%
+    (19, 2),  # 24.99%
+    (15, 1),  # 25.03%
 ]
 # Key is (layer, col). The retained values are the old ring-profile measurements and are
 # migration starting points for Fabric2D TorusY on the same LoudBox proxy.
@@ -91,22 +91,26 @@ _COMBINE_GLM52_CHUNK_EXPECTED_NS: dict[tuple[int, int], int] = {
     (14, 2): 692_124,
     (10, 0): 806_988,
 }
-# These are temporary record-only starting thresholds until a real Mistral4 capture is available and
-# the ranked hot picks are added to the capture. They intentionally use the same rough magnitudes as
-# the existing dispatch/combine stage for the Mistral4 prefill path, so the test can be activated once
-# the capture is present without changing the overall structure of the perf harness.
+# PLACEHOLDERS, not measured -- REPLACE BEFORE THIS ROW GOES IN. Cut them from one CI LoudBox run
+# (see the note at the top of this branch), then drop _MARGINS below so mistral4 gates at the same
+# 0.045 as every other model. No case in this file gates today regardless: it is disabled in
+# blackhole_e2e_tests.yaml pending #47287.
 _DISPATCH_MISTRAL4_CHUNK_EXPECTED_NS: dict[tuple[int, int], int] = {
-    (19, 2): 2_080_000,
-    (29, 0): 2_050_000,
-    (4, 2): 1_820_000,
-    (56, 3): 1_900_000,
+    (18, 2): 2_080_000,
+    (16, 2): 2_050_000,
+    (19, 2): 1_820_000,
+    (15, 1): 1_900_000,
 }
 _COMBINE_MISTRAL4_CHUNK_EXPECTED_NS: dict[tuple[int, int], int] = {
-    (19, 2): 2_160_000,
-    (29, 0): 2_120_000,
-    (4, 2): 1_940_000,
-    (56, 3): 2_020_000,
+    (18, 2): 2_160_000,
+    (16, 2): 2_120_000,
+    (19, 2): 1_940_000,
+    (15, 1): 2_020_000,
 }
+
+# TEMPORARY: mistral4's baselines above are placeholders, so it reports instead of asserting.
+# Delete this and the _MARGINS lookup below once they are cut from a CI LoudBox run.
+_MARGINS = {"mistral4": 10.0}
 
 # model -> (picks, dispatch baselines, combine baselines).
 _MODELS = {
@@ -179,7 +183,7 @@ _DISPATCH_COMBINE_PERF_PARAMS = [
             "DispatchDeviceOperation": dispatch_ns[(layer, col)],
             "CombineDeviceOperation": combine_ns[(layer, col)],
         },
-        margin=0.045,
+        margin=_MARGINS.get(model, 0.045),
         captured_layer=layer,
         captured_col=col,
         model=model,
