@@ -11,6 +11,7 @@ import os
 
 import ttnn
 from models.demos.gemma4.tt.compute_config import decode_sdpa_compute_kernel_config
+from models.demos.gemma4.tt.dram_sharded import decode_in0_l1_enabled
 
 from .operations import (
     apply_allreduce,
@@ -95,7 +96,7 @@ def decode_forward(
     tp = mesh_config.tp if mesh_config else 1
 
     # 1. Fused QKV projection
-    xqkv = apply_qkv_projection(hidden_states, weights)
+    xqkv = apply_qkv_projection(hidden_states, weights, decode=True)
 
     # 2. Split into Q, K, V heads
     tt_q, tt_k, tt_v = split_qkv_heads_decode(
@@ -341,7 +342,9 @@ def decode_forward(
     tt_out = concat_heads(
         tt_sdpa, is_decode_mode=True, num_heads=num_local_heads, head_dim=config.head_dim, mesh_device=mesh_device
     )
-    tt_out = apply_output_projection(tt_out, weights)
+    tt_out = apply_output_projection(
+        tt_out, weights, memory_config=ttnn.L1_MEMORY_CONFIG if decode_in0_l1_enabled() else None
+    )
     tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)
 
     return tt_out
@@ -638,7 +641,7 @@ def packed_decode_forward(
     l1 = ttnn.L1_MEMORY_CONFIG
 
     # ── ① QKV projection (one call on the full B*P, output kept on L1) ──────
-    xqkv = apply_qkv_projection(hidden_states, weights, memory_config=l1)
+    xqkv = apply_qkv_projection(hidden_states, weights, memory_config=l1, decode=True)
     qkv_dim = xqkv.shape[-1]
 
     # ── ② L1 height-sharded MemoryConfig for the fallback paged_update_cache ─
@@ -838,6 +841,8 @@ def packed_decode_forward(
     tt_sdpa = ttnn.transpose(tt_sdpa, 1, 2)
     tt_out = ttnn.experimental.nlp_concat_heads(tt_sdpa, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(tt_sdpa)
-    tt_out = apply_output_projection(tt_out, weights)
+    tt_out = apply_output_projection(
+        tt_out, weights, memory_config=ttnn.L1_MEMORY_CONFIG if decode_in0_l1_enabled() else None
+    )
     tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)
     return tt_out

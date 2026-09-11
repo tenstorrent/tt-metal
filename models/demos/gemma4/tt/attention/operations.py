@@ -19,7 +19,7 @@ import os
 
 import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allreduce
-from models.demos.gemma4.tt.dram_sharded import DramShardedLinear
+from models.demos.gemma4.tt.dram_sharded import DramShardedLinear, matmul_rows
 
 from .weights import AttentionWeights
 
@@ -66,15 +66,30 @@ def prefill_short_lived_memcfg() -> ttnn.MemoryConfig:
     return ttnn.DRAM_MEMORY_CONFIG
 
 
-def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config=None):
+def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config=None, decode=False):
     """Fused QKV matmul (no bias for Gemma4).
 
     ``memory_config`` lets the packed-verify decode keep the projection output
     resident on L1; ``None`` keeps the op default (DRAM) for existing callers.
+
+    ``decode=True`` opts into the tuned 1D decode program config built at weight
+    load (``AttentionWeights.qkv_decode_config``) instead of the matmul op's
+    auto config. It is guarded on a single-tile activation height so a batched
+    caller never picks up a config shaped for one row. Prefill keeps the auto
+    config here; the tuned prefill configs land with the prefill matmul work.
     """
     if isinstance(weights.wqkv, DramShardedLinear):
         return weights.wqkv(hidden_states, out_memory_config=memory_config)
-    return ttnn.linear(hidden_states, weights.wqkv, memory_config=memory_config)
+    program_config = compute_kernel_config = None
+    if decode and weights.qkv_decode_config is not None and matmul_rows(hidden_states) <= ttnn.TILE_SIZE:
+        program_config, compute_kernel_config = weights.qkv_decode_config
+    return ttnn.linear(
+        hidden_states,
+        weights.wqkv,
+        memory_config=memory_config,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+    )
 
 
 def split_qkv_heads_decode(xqkv_fused, config, is_global: bool, tp: int = 1, kv_replicated: bool = False):
@@ -564,12 +579,17 @@ def concat_heads(
     return ttnn.experimental.nlp_concat_heads(tensor, memory_config=memory_config)
 
 
-def apply_output_projection(tensor, weights: AttentionWeights):
-    """Apply output projection (no bias for Gemma4)."""
+def apply_output_projection(tensor, weights: AttentionWeights, memory_config=None):
+    """Apply output projection (no bias for Gemma4).
+
+    ``memory_config`` lets decode keep the projection output in L1 so the
+    following all-reduce gathers from L1 rather than DRAM; ``None`` keeps the
+    op default for existing callers.
+    """
     if isinstance(weights.o_proj, DramShardedLinear):
-        out = weights.o_proj(tensor)
+        out = weights.o_proj(tensor, out_memory_config=memory_config)
     else:
-        out = ttnn.linear(tensor, weights.o_proj)
+        out = ttnn.linear(tensor, weights.o_proj, memory_config=memory_config)
     tensor.deallocate(True)
     return out
 

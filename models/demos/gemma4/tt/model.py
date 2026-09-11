@@ -1149,13 +1149,21 @@ class Gemma4Model:
         if is_decode:
             signpost(header=LM_HEAD_SIGNPOST)
         if self.lm_head_weight is not None:
-            lm_head_pc = _get_lm_head_program_config(
+            from models.demos.gemma4.tt.dram_sharded import lm_head_decode_config
+
+            lm_head_pc, lm_head_out_memcfg, lm_head_ckc = lm_head_decode_config(
                 self.mesh_device,
                 m=hidden_states.shape[2],
                 k=self.hidden_size,
                 n=self.lm_head_weight.shape[-1],
             )
-            logits = ttnn.linear(hidden_states, self.lm_head_weight, program_config=lm_head_pc)
+            logits = ttnn.linear(
+                hidden_states,
+                self.lm_head_weight,
+                program_config=lm_head_pc,
+                memory_config=lm_head_out_memcfg,
+                compute_kernel_config=lm_head_ckc,
+            )
             # ``deallocate_input=False`` is required when the caller owns a
             # *persistent* buffer that outlives this call — notably the batched
             # prefill-sampling trace, whose input is written by

@@ -22,7 +22,7 @@ import torch
 
 import ttnn
 from models.demos.gemma4.config import MeshConfig
-from models.demos.gemma4.tt.dram_sharded import DramShardedLinear, can_dram_shard
+from models.demos.gemma4.tt.dram_sharded import DramShardedLinear, can_dram_shard, decode_1d_matmul_config
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
 # DRAM-width-sharded QKV / O-proj decode matmuls (same size as the interleaved
@@ -41,6 +41,7 @@ class AttentionWeights:
     k_norm_weight: ttnn.Tensor  # Replicated across devices
     is_global: bool  # Controls K=V tying and partial RoPE
     kv_replicated: bool = False  # True when KV heads are replicated (not split) across TP devices
+    qkv_decode_config: object = None
 
 
 def load_attention_weights(
@@ -217,6 +218,10 @@ def load_attention_weights(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
+    qkv_decode_config = (
+        None if isinstance(wqkv, DramShardedLinear) else decode_1d_matmul_config(mesh_device, hidden_size, qkv_n)
+    )
+
     return AttentionWeights(
         wqkv=wqkv,
         o_proj=o_proj,
@@ -224,4 +229,5 @@ def load_attention_weights(
         k_norm_weight=k_norm_weight,
         is_global=is_global,
         kv_replicated=kv_replicated,
+        qkv_decode_config=qkv_decode_config,
     )
