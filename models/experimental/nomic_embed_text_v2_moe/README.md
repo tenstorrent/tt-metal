@@ -61,6 +61,7 @@ similarity = float(embeddings[0] @ embeddings[1])
 README.md                     this file: layout, setup, test commands
 common.py                     pinned revisions, contracts, checkpoint resolution, test helpers
 docs/ARCHITECTURE.md          what the model is; see Documentation below
+docs/OPERATOR_MAPPING.md      how each aten op maps onto TTNN, and its measured PCC
 reference/
   modeling_nomic_moe.py       golden PyTorch reference
   configuration_nomic_moe.py  config projected from the pinned config.json snapshot
@@ -74,14 +75,21 @@ reference/
 tests/
   conftest.py                 session-scoped checkpoint, model and tokenizer fixtures
   pcc/                        correctness tests
-tt/                           TTNN implementation (Phase 1)
+tt/
+  model_config.py             dtypes, layout and compute kernel configs, bound to a device
+  common.py                   weight reorientation, rotary tables, attention mask, reshapes
 ```
 
 ## Documentation
 
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) describes the model: dimensions, pinned
-revisions, checkpoint contract, operator inventory and embedding pipeline. Hand-written, and
-every number in it was measured against the pinned checkpoint.
+revisions, checkpoint contract, operator inventory and embedding pipeline.
+
+[`docs/OPERATOR_MAPPING.md`](docs/OPERATOR_MAPPING.md) maps that inventory onto TTNN: the
+operator each aten call becomes, the PCC it reaches, the API and shape differences, and the
+negative controls for the ways an operator can be wrong without failing.
+
+Both are hand-written, and every number in them was measured.
 
 ## Setup
 
@@ -96,24 +104,26 @@ Weights resolve from the Hugging Face cache at a pinned revision. Pre-fetch (1.8
 python -c "from models.experimental.nomic_embed_text_v2_moe.common import resolve_checkpoint; print(resolve_checkpoint())"
 ```
 
-Tests needing the checkpoint skip rather than fail when it is absent.
-
 ## Tests
 
 ```bash
 pytest models/experimental/nomic_embed_text_v2_moe/tests/pcc/ -v
 ```
 
-Every test needs the checkpoint and a warm HF cache or network; they skip rather than fail when
-the checkpoint is absent.
+Tests skip rather than fail when what they need is absent: the checkpoint, the network, or a
+Blackhole device.
 
-| File | Covers | Needs weights |
+| File | Covers | Needs |
 |---|---|---|
-| `test_checkpoint_contract.py` | 148 keys/shapes/dtypes generated from the config, absence assertions, strict load | yes |
-| `test_reference_vs_hf_e2e.py` | end to end vs upstream: per-layer parity, tokenizer, prefixes, model-card similarity, Matryoshka, ragged batches | yes, plus network |
+| `test_checkpoint_contract.py` | 148 keys/shapes/dtypes generated from the config, absence assertions, strict load | weights |
+| `test_reference_vs_hf_e2e.py` | end to end vs upstream: per-layer parity, tokenizer, prefixes, model-card similarity, Matryoshka, ragged batches | weights, network |
+| `test_ttnn_operators.py` | embedding, layer norm, the four projections, GELU, typecast, reshape, pooling, Matryoshka, L2 normalize | device, weights for the embedding and projections |
+| `test_ttnn_operators_attention.py` | QKV head split, rotary, SDPA masked, unmasked and causal, head concat | device |
+| `test_ttnn_operators_moe.py` | router linear, softmax, topk, scatter, both expert matmuls, gate multiply, expert reduce, shared bias | device, weights for the expert tensors |
 
-Phase 0 is CPU-only. Do not set `TT_VISIBLE_DEVICES`; on a p300c it fails with
-`Custom fabric mesh graph descriptor path must be specified for CUSTOM cluster type`.
+The three TTNN files need a Blackhole device and skip elsewhere. Do not set
+`TT_VISIBLE_DEVICES`; on a p300c it fails with `Custom fabric mesh graph descriptor path must
+be specified for CUSTOM cluster type`.
 
 ### Quick test
 
