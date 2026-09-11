@@ -130,6 +130,20 @@ AUDIO_SHIFT = 3.0
 
 _AUDIO_T_FACTOR_ENV = "MINIMAX_H3_AUDIO_T_FACTOR"
 _DEFAULT_AUDIO_T_FACTOR = 8
+# Time-packed late vocoder bands ("band:k,band:k"; "0" disables). Default: the two narrowest bands on 32-wide rows,
+# measured 0.53 -> 0.45 s traced at unchanged PSNR (layers/audio_pack.py).
+_AUDIO_PACK_ENV = "MINIMAX_H3_AUDIO_PACK"
+_DEFAULT_AUDIO_PACK = "5:2,6:4"
+
+
+def _audio_pack_bands() -> dict[int, int]:
+    raw = os.environ.get(_AUDIO_PACK_ENV, _DEFAULT_AUDIO_PACK).strip()
+    if raw in ("", "0", "off"):
+        return {}
+    try:
+        return {int(b): int(k) for b, k in (item.split(":") for item in raw.split(","))}
+    except ValueError:
+        raise ValueError(f"{_AUDIO_PACK_ENV}={raw!r} must look like '5:2,6:4' or '0'") from None
 
 
 def _requested_audio_t_factor(audio_t_factor: int | None) -> tuple[int, bool]:
@@ -1269,7 +1283,9 @@ class MiniMaxH3Pipeline:
                 ccl_manager=self.ccl_manager,
                 parallel_config=audio_parallel_config,
                 split_mode=self.audio_split_mode,
+                pack_bands=_audio_pack_bands(),
             )
+            logger.info(f"Audio packing: {decoder.pack_bands or 'off'} ({_AUDIO_PACK_ENV})")
 
             def read_state() -> dict[str, torch.Tensor]:
                 """Only the decoder's half of the converted checkpoint.
@@ -1288,7 +1304,8 @@ class MiniMaxH3Pipeline:
                 model_name=MODEL_NAME,
                 # The audio precision levers change the module's parameter set, so they are part of
                 # the cache key -- read off the module so the key cannot drift from what was built.
-                subfolder="audio_decoder" + weights_variant(decoder.split_mode, decoder.max_c_in_block),
+                subfolder="audio_decoder"
+                + weights_variant(decoder.split_mode, decoder.max_c_in_block, decoder.pack_bands),
                 parallel_config=self.vae_parallel_config,
                 mesh_shape=tuple(self.mesh_device.shape),
                 mesh_device=self.mesh_device,

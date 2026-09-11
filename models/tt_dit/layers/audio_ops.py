@@ -40,7 +40,9 @@ WEIGHT_SPLIT_MODES = ("weight", "full")
 DEFAULT_MAX_C_IN_BLOCK = 128
 
 
-def weights_variant(split_mode: str, max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK) -> str:
+def weights_variant(
+    split_mode: str, max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK, pack_bands: dict[int, int] | None = None
+) -> str:
     """Cache-key suffix for the precision levers that change the prepared parameter set.
 
     ``split_mode`` decides whether the ``weight_lo`` residual parameters exist, so device-weight
@@ -56,6 +58,9 @@ def weights_variant(split_mode: str, max_c_in_block: int = DEFAULT_MAX_C_IN_BLOC
     suffix = "" if split_mode == "off" else f"_split-{split_mode}"
     if max_c_in_block != DEFAULT_MAX_C_IN_BLOCK:
         suffix += f"_cinb{max_c_in_block}"
+    if pack_bands:
+        # Time-packed bands hold dense packed weights of other shapes (layers/audio_pack.py).
+        suffix += "_pack" + "-".join(f"{b}x{k}" for b, k in sorted(pack_bands.items()))
     return suffix
 
 
