@@ -622,3 +622,47 @@ TEST(CyclicSdpaBwEndpointTest, EightCores) {
 TEST(CyclicSdpaBwEndpointTest, SixteenCores) {
     check_relay(16, 4, 4, 64, true);
 }
+
+// ------------------------------------------------------- bitwise identity
+// The three variants run the same schedule, the same five matmuls and the
+// same accumulation order; only the synchronisation and the route the row
+// packet takes differ. So they should not merely agree to a tolerance, they
+// should produce identical bits -- the property test_precision.py pins in the
+// simulator, where the relay's DRAM round-trip costs nothing because it
+// happens at the accumulation dtype.
+//
+// This is a much sharper check than comparing each against the reference: it
+// fails on a single flipped bit anywhere in the transport, and it cannot be
+// satisfied by a transport that quietly reorders or drops an update.
+void expect_identical(
+    const xt::xarray<float>& a, const xt::xarray<float>& b, const std::string& what) {
+    ASSERT_EQ(a.size(), b.size()) << what;
+    const float* pa = a.data();
+    const float* pb = b.data();
+    for (size_t k = 0; k < a.size(); ++k) {
+        if (std::memcmp(&pa[k], &pb[k], sizeof(float)) != 0) {
+            FAIL() << what << ": first difference at element " << k << ", " << pa[k] << " against "
+                   << pb[k];
+        }
+    }
+}
+
+TEST(CyclicSdpaBwIdentityTest, AllThreeVariantsAgreeBitwise) {
+    const uint32_t C = 4;
+    const auto grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
+    if (grid.x < 2 || grid.y < 2) {
+        GTEST_SKIP() << "needs a 2x2 region";
+    }
+    const auto ref = make_reference(2u * C * kTile, 64);
+
+    const auto algorithm2 = run_algorithm2(C, ref, 2, 2);
+    const auto relay = run_relay(C, ref, 2, 2, /*endpoint_sync=*/false);
+    const auto endpoint = run_relay(C, ref, 2, 2, /*endpoint_sync=*/true);
+
+    expect_identical(algorithm2.dQ, relay.dQ, "dQ, Algorithm 2 against the relay");
+    expect_identical(algorithm2.dK, relay.dK, "dK, Algorithm 2 against the relay");
+    expect_identical(algorithm2.dV, relay.dV, "dV, Algorithm 2 against the relay");
+    expect_identical(relay.dQ, endpoint.dQ, "dQ, the relay against endpoint counters");
+    expect_identical(relay.dK, endpoint.dK, "dK, the relay against endpoint counters");
+    expect_identical(relay.dV, endpoint.dV, "dV, the relay against endpoint counters");
+}
