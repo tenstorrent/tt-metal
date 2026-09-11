@@ -13,7 +13,7 @@ first, publish the gap report, then implement the smallest missing layer.
 *__Important:__ this document still references the deprecated
 [vLLM TT Fork](https://github.com/tenstorrent/vllm/tree/dev) instead of
 [vLLM TT Plugin](https://github.com/tenstorrent/vllm-tt-plugin). Normally, only the paths to
-modules and scripts in the snippets above require fixes (i.e., from
+modules and scripts in the snippets below require fixes (i.e., from
 `plugins/vllm-tt-plugin/{src,examples}/` to `{src,examples}/`, assuming you're in the plugin
 directory), but further clarifications might be needed.*
 
