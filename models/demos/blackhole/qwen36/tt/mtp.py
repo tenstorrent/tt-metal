@@ -160,15 +160,19 @@ class Qwen36MTP:
         sharded_lm_head=False,
         need_logits=True,
         alias_kv_write=False,
+        spec_n_users=1,
     ):
         """One MTP draft step, or ONE batched KV-maintenance step over B rows.
         ``hidden_states`` [1,1,B,dim/tp] fractured: the base's drafter feed (spec_feed_rows:
         fractured final-norm output), or the previous step's next_hidden when chaining.
         ``token_ids`` [B,1] uint32: token just before what we predict. ``position_idxs`` [B] int32:
         KV write index (base cur_pos + step). ``cos``/``sin``: partial-RoPE. ``page_table`` [B, blocks]
-        for the MTP layer's own paged KV. ``alias_kv_write``: B rows belong to ONE sequence at
-        consecutive positions (batched reseed), so KV writes share physical blocks and must go row
-        by row (TPAttention.forward_decode). Returns (logits, next_hidden), both fractured
+        for the MTP layer's own paged KV. ``alias_kv_write``: the B rows are NOT independent users,
+        so their KV writes can share physical blocks and must not go out as one batched call
+        (TPAttention._write_kv_aliased). ``spec_n_users``: with alias_kv_write, how many real users
+        those rows carry — the batched reseed passes B (rows are USER-MAJOR, u*T + i), which lets
+        the write go out as T calls of B rows instead of B*T single-row calls. 1 (the default) keeps
+        the per-row loop. Returns (logits, next_hidden), both fractured
         [1,1,B,dim/tp]. need_logits=True: next_hidden is mtp.norm's output re-fractured to dim/tp
         (chain value). need_logits=False skips the head norm and returns RAW block output — KV maintenance only (reseed / catch-up); callers discard it, so it is not a valid chain value.
         """
@@ -186,6 +190,7 @@ class Qwen36MTP:
             position_tensor=position_idxs,
             page_table=page_table,
             alias_kv_write=alias_kv_write,
+            n_users=spec_n_users,
         )
         ttnn.deallocate(fused)
 
