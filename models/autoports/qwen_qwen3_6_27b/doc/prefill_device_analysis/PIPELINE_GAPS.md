@@ -1238,3 +1238,43 @@ on the measured~533ms setup opportunity. See
 measured separately, with fresh-context requests and normal output delivery.
 The pipeline should have implemented real warmup hooks and verified capture
 counts across request boundaries before declaring serving performance ready.
+
+
+### Warm HTTP hypothesis adjudicated:177ms, with original capacity
+
+The integrated checkpoint4a02bf62cf5 completed both HTTP benchmarks and the
+canonical sampling/qualitative stages, exit0. At128/252/C1, medianTTFT fell
+728.482→177.361ms, saving551.120ms (4.107×). Four requests produced all1008
+output tokens; meanTPOT88.740ms stayed essentially unchanged. Server telemetry
+shows one startup capture and four request reuses. This brings HTTP to1.487×
+the119.301ms B1 generator prefill time while leaving the60ms target unmet.
+
+The200–300ms hypothesis was conservative:177ms is below that predicted range.
+The full64 adapter's248ms includes waiting for first-decode readback; HTTP can
+publish before that entire step completes once synchronous setup is removed.
+That explanation is an inference from timing boundaries; exact first-output
+publication spans were not instrumented. The earlier claim that all HTTP delay
+was device prefill or network overhead would have missed the~551ms reduction.
+
+The4096/252/C8 burst completed8/8 with2016tokens at11285.561ms medianTTFT.
+The previous11443.820ms differs only1.38%; initial reuse is C1-only, so this
+is not claimed as a C8 reuse improvement. Canonical sampling passed3 tests
+with1 skip. Six greedy outputs match the previous checkpoint byte for byte;
+six sampled outputs are coherent, but some stories/thermodynamics/haiku/example
+text hits the fixed256-token budget. Both Fibonacci function bodies pass
+n=0,1,10. Quality evidence is not a claim that all tasks finished.
+
+The model now has real warmup hooks, a compile-before-capture phase, a retained
+trace path, request-state reloads and complete allocation guards. Pipeline-wide
+acceptance gates are still proposed rather than installed. Future orchestration
+should reject empty warmup hooks, verify capture counts across fresh repeated
+requests, check changed prompts/lengths/slots/modes, and measure first-output
+latency under the actual benchmark path. It should not stop at a per-layer
+profile or accept a huge unexplained serving/generator gap.
+
+ThirdCI34622652794 uses runtime4a02, inference-servered2ef012 and the same
+reused native image. Its thirteen requested points are unchanged; all eight
+required ISLs warm before timing. All build jobs are skipped, and the job is
+running onqb2-120-p03t06 while both earlier jobs continue on separate runners.
+Long-context CI results are pending. Exact inputs and validation are recorded
+in `artifacts/ci_dispatch_warm_inputs.json` / `ci_dispatch_warm_run.json`.

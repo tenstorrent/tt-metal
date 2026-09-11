@@ -164,8 +164,9 @@ class DecodeTraceReuse:
         self.preserve_reset = False
         self.request_key = None
         self.request_sampling = None
-        self.request_slots = tuple(int(slot) for slot in slots)
+        self.request_slots = ()
         try:
+            self.request_slots = tuple(int(slot) for slot in slots)
             signature = self._sampling_signature(sampling_params)
             lengths = tuple(int(length) for length in prompt_lens)
             if (
@@ -266,7 +267,6 @@ class DecodeTraceReuse:
         if bindings is None or self._unsafe():
             raise RuntimeError("new decode capture has unsafe allocations or missing sampler ownership")
         self.captured = (self._cache_bindings(), bindings, signature, self.mesh.num_program_cache_entries())
-        self.counters["captures"] += 1
 
     def record_execution(self):
         """Keep checked execution for all sampler modes, even without reuse."""

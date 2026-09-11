@@ -1,0 +1,71 @@
+{
+  "reviewed_by": "root",
+  "scope": "Manual review of all six greedy and six sampled texts from actual HTTP path; canonical chat prompts and unchanged256token limit.",
+  "greedy_exact_vs_device_fill": [
+    true,
+    true,
+    true,
+    true,
+    true,
+    true
+  ],
+  "all_greedy_exact": true,
+  "sampled_all_coherent": true,
+  "sampling_canonical": {
+    "passed": 3,
+    "skipped": 1,
+    "seconds": 24.3
+  },
+  "limitations": [
+    "Sampled haiku exhausted budget before completing final poem.",
+    "Both story outputs and both thermodynamics outputs truncated under256token budget; not complete task answers.",
+    "Sampled Fibonacci function complete, example truncated.",
+    "No full task/evaluation pass inferred from coherent text."
+  ],
+  "fibonacci_checks": [
+    {
+      "mode": "greedy_completion",
+      "function": "fibonacci",
+      "results": {
+        "0": [],
+        "1": [
+          0
+        ],
+        "10": [
+          0,
+          1,
+          1,
+          2,
+          3,
+          5,
+          8,
+          13,
+          21,
+          34
+        ]
+      }
+    },
+    {
+      "mode": "sampled_completion",
+      "function": "fibonacci_sequence",
+      "results": {
+        "0": [],
+        "1": [
+          0
+        ],
+        "10": [
+          0,
+          1,
+          1,
+          2,
+          3,
+          5,
+          8,
+          13,
+          21,
+          34
+        ]
+      }
+    }
+  ]
+}

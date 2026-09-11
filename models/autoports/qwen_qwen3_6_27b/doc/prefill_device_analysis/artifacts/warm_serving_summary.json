@@ -1,0 +1,52 @@
+{
+  "runtime_checkpoint": "4a02bf62cf510f3807f177ad826555bc9b648c0d",
+  "status": "completed",
+  "point": {
+    "isl": 128,
+    "osl": 252,
+    "concurrency": 1
+  },
+  "completed": 4,
+  "total_output_tokens": 1008,
+  "median_http_ttft_ms": 177.36140894703567,
+  "mean_http_ttft_ms": 180.00383267644793,
+  "p99_http_ttft_ms": 195.03932964522392,
+  "mean_tpot_ms": 88.7400657481206,
+  "prior_median_http_ttft_ms": 728.4818752668798,
+  "saved_ms": 551.1204663198441,
+  "speedup": 4.107330222463568,
+  "ratio_to_generator_prefill": 1.486666095343891,
+  "prefix_caching": false,
+  "capture_count": 1,
+  "benchmark_setup_reuses": 4,
+  "warmup_ms": {
+    "prefill128": 381.696,
+    "prefill4096": 1498.708,
+    "decode_compile": 286.473,
+    "decode_capture": 537.079
+  },
+  "predicted_http_ttft_ms": [
+    200,
+    300
+  ],
+  "hypothesis_adjudication": "Measured177.361ms beats200\u2013300ms range; model+firstdecode adapter248.156ms includes waiting for decode readback whereas HTTP can publish first output without waiting for that complete step. Exact publication spans not collected.",
+  "secondary": {
+    "isl": 4096,
+    "osl": 252,
+    "concurrency": 8,
+    "completed": 8,
+    "total_output_tokens": 2016,
+    "median_http_ttft_ms": 11285.560948541388,
+    "mean_tpot_ms": 90.355484314825,
+    "output_tokens_per_second": 59.50160437410725,
+    "prior_median_http_ttft_ms": 11443.820054177195,
+    "interpretation": "C8 is outside initial C1 request-reuse envelope; only1.38% observed reduction, not attributed to trace reuse."
+  },
+  "sampling": {
+    "passed": 3,
+    "skipped": 1,
+    "seconds": 24.3
+  },
+  "runner_exit_code": 0,
+  "qualitative_review": "warm_serving_qualitative_review.json"
+}

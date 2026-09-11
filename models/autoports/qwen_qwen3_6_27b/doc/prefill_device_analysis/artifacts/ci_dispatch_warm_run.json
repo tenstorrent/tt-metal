@@ -1,0 +1,32 @@
+{
+  "runtime_checkpoint": "4a02bf62cf510f3807f177ad826555bc9b648c0d",
+  "source_overlay_tag": "mvasiljevic/qwen38-warm-4a02bf62cf5",
+  "inference_server_sha": "ed2ef012fd91ff6f8b49119d216786609dbc6b68",
+  "run_id": 34622652794,
+  "url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/34622652794",
+  "runner": "qb2-120-p03t06",
+  "status_observed": "benchmark_job_in_progress",
+  "build_jobs": "skipped",
+  "base_native_checkpoint": "6f60917b27b63908f85fc982fe010b1d6ad76523",
+  "native_build_inputs_identical": true,
+  "native_build_validation_command": "git diff --name-only 6f60917b27b63908f85fc982fe010b1d6ad76523 4a02bf62cf5 -- . \":(exclude)models\"",
+  "inputs_artifact": "ci_dispatch_warm_inputs.json",
+  "matrix_points": 13,
+  "warmup_lengths": [
+    128,
+    1024,
+    4096,
+    16384,
+    32768,
+    65536,
+    131072,
+    261892
+  ],
+  "sampling_mode": "all",
+  "fabric": "FABRIC_1D",
+  "previous_runs_still_active": [
+    34617909914,
+    34618127149
+  ],
+  "config_changes": "Only source tag and five warmup/tracking/report environment variables; required matrix unchanged."
+}

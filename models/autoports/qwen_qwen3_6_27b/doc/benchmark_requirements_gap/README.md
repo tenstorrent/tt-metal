@@ -576,3 +576,27 @@ FABRIC_1D_RING while these CI configurations retain FABRIC_1D.
 The approximately521ms decode-setup opportunity remains open: guarded trace
 reuse passed reduced correctness but is still experimental, not a production
 HTTP speedup.
+
+
+### Warmed serving follow-up (2026-09-11)
+
+Startup warmup plus allocation-checked decode trace reuse reduced actual
+ISL128/OSL252/C1 median HTTP TTFT **728.482→177.361ms (4.107×)**. This is
+**1.487×** the119.301ms full-model B1 generator prefill time, and still
+**2.956× above the60ms target**. All4 requests completed1008 output tokens;
+meanTPOT remained88.740ms. The server retained one startup capture across all
+four measured requests. Prefix caching is disabled and the original full context
+and cache capacity remain configured.
+
+At4096/252/C8, medianTTFT was11285.561ms (8/8 requests,2016tokens), versus
+11443.820ms. This configuration falls outside the initial C1 reuse policy;
+the small change is not claimed as a reuse win. Canonical sampling passed3
+with1 skip. All six greedy strings are unchanged and sampled outputs coherent,
+with explicit256-token truncation limits. Full64 repeated-request A/B also
+matches active tokens, all cache/rank digests and positions.
+
+[Warm-serving CI](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/34622652794)
+now runs the same13 required points with all eight required ISLs warmed at
+startup, fixed runtime4a02bf62cf5 and reused native build. All build jobs were
+observed skipped; execution results remain pending. The earlier two runs remain
+active. See [warm serving evidence](../prefill_device_analysis/WARM_SERVING.md).

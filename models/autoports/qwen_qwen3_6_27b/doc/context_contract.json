@@ -354,8 +354,8 @@
         "concurrency": 1,
         "requests_completed": 4,
         "requests_requested": 4,
-        "median_http_ttft_ms": 728.4818752668798,
-        "artifact": "doc/prefill_device_analysis/device_fill_serving/readiness_vllm/vllm_benchmark.json"
+        "median_http_ttft_ms": 177.36140894703567,
+        "artifact": "doc/prefill_device_analysis/warm_serving/readiness_vllm/vllm_benchmark.json"
       },
       "secondary": {
         "isl": 4096,
@@ -363,19 +363,27 @@
         "concurrency": 8,
         "requests_completed": 8,
         "requests_requested": 8,
-        "median_http_ttft_ms": 11443.820054177195,
-        "artifact": "doc/prefill_device_analysis/device_fill_serving/readiness_vllm/vllm_ci_serving_benchmark.json"
+        "median_http_ttft_ms": 11285.560948541388,
+        "artifact": "doc/prefill_device_analysis/warm_serving/readiness_vllm/vllm_ci_serving_benchmark.json"
       },
-      "quality_status": "Selected device-fill serving validation complete: canonical3passed1skipped; six greedy outputs unchanged, six sampled outputs coherent with documented256-token budget truncations. Full64 production seed check:574 decode observations with exact TP rank agreement.",
-      "runtime_checkpoint": "4ea57c41431a1e80318c4d32d249d5552c4f165f",
+      "quality_status": "Canonical3passed1skipped; all six greedy outputs unchanged; six sampled outputs coherent with documented256-token budget truncations. Full64 reuse A/B matches active tokens, all512 cache/rank digests and positions.",
+      "runtime_checkpoint": "4a02bf62cf510f3807f177ad826555bc9b648c0d",
       "sampling_mode": "all",
-      "fabric": "FABRIC_1D_RING"
+      "fabric": "FABRIC_1D_RING",
+      "warmup_lengths": [
+        128,
+        4096
+      ],
+      "prefix_caching": false,
+      "trace_reuse_scope": "Exact warmed C1 greedy request envelope with complete allocation checks; other modes conservatively recapture."
     },
-    "required_ci_status": "two_runs_in_progress_decode_only_and_all_34617909914_34618127149",
+    "required_ci_status": "three_runs_in_progress_34617909914_34618127149_34622652794",
     "seed_policy_validation_artifact": "doc/prefill_device_analysis/artifacts/sampling_rank_full64_production.json",
     "seed_policy_serving_artifact": "doc/prefill_device_analysis/artifacts/seed_policy_serving_summary.json",
     "device_logits_scatter_artifact": "doc/prefill_device_analysis/artifacts/slot_logits_scatter.json",
     "device_fill_serving_artifact": "doc/prefill_device_analysis/artifacts/device_fill_serving_summary.json",
-    "required_ci_dispatch_artifact": "doc/prefill_device_analysis/artifacts/ci_dispatch_runs.json"
+    "required_ci_dispatch_artifact": "doc/prefill_device_analysis/artifacts/ci_dispatch_runs.json",
+    "warm_serving_artifact": "doc/prefill_device_analysis/artifacts/warm_serving_summary.json",
+    "warm_ci_dispatch_artifact": "doc/prefill_device_analysis/artifacts/ci_dispatch_warm_run.json"
   }
 }

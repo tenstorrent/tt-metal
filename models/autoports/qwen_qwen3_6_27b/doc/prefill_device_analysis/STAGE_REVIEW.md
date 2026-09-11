@@ -9,33 +9,37 @@ been installed into the pipeline.
 
 Verdict: more-work-needed
 
-## Current Review: Production Seed Policy and Slot-Logit Scatter
+## Current Review: Warmed HTTP Trace Reuse
 
-Independent source/artifact review on 2026-09-11. The current candidate uses
-native prefill, the Qwen-only per-step unseeded seed policy, the explicit v1
-reload contract, history-preserving warmup, and device-filled inactive logit
-rows. No new concrete implementation defect was found in the scatter change.
-The selected device-fill serving run is complete and its source, smoke,
-actual generated text and benchmarks have been reviewed. The proven serving
-finding is closed. Two required-point CI runs are active; their full matrices
-and the 60/500ms targets remain incomplete. Historical findings below retain
-their original wording; the dispositions in this section take precedence.
+Independent source/artifact review on 2026-09-11. Measured checkpoint
+`4a02bf62cf510f3807f177ad826555bc9b648c0d` adds startup compilation and checked
+reuse of resident decode traces to the previously reviewed native prefill,
+seed policy, explicit reload contract and device-filled logit rows. The
+requested warm-HTTP optimization is demonstrated: median 128/252/C1 TTFT falls
+from 728.482 to 177.361 ms, a 551.120 ms reduction and 4.107× speedup. This is
+1.487× the separate 119.301 ms B1 generator prefill measurement; it is not equality of those
+measurement boundaries. Full-model adapter state comparisons and the completed
+HTTP smoke, text and benchmarks support the measured change. No new concrete
+source defect was found in that valid-request path. Three required-point CI
+runs remain active, and the 60/500 ms targets remain unmet. Historical findings
+below retain their original wording; these current dispositions take precedence.
 
 ## Required Work
 
 - P1: Complete the required 13-point OSL252 CI execution and report its results.
-  Evidence: runs34617909914 (`decode_only`) and34618127149 (`all`) are active
-  on separate runners, with build jobs skipped. Their dispatch identities and
-  source overlays are verified, but neither complete matrix is available.
+  Evidence: runs34617909914 (`decode_only`),34618127149 (`all`) and34622652794
+  (warmed `all`) are active on separate runners, with build jobs skipped. Their
+  dispatch identities and source overlays are verified; no complete matrix
+  is available. The third run tests the measured warm-serving checkpoint.
   Two successful local benchmark points do not constitute that matrix.
   Required next step: inspect the executed rows, requested output counts and
-  long-context/concurrency results, and resolve any failures. Preserve both
-  runs; neither run's dispatch or intermediate progress is a pass.
+  long-context/concurrency results, and resolve any failures. Preserve all
+  runs; no run's dispatch or intermediate progress is a pass.
 
 - P1: The performance requirements remain unmet.
   Evidence: full64 B1 generator medians are119.301ms S128 and1299.242ms S4096
-  against60/500ms. Selected local median HTTP TTFT at128/252/C1 is728.482ms,
-  still12.14 times60ms. The4096/252/C8 burst is a different admission/concurrency
+  against60/500ms. Selected local median HTTP TTFT at128/252/C1 is177.361ms,
+  still2.956 times60ms. The4096/252/C8 burst is a different admission/concurrency
   regime and must not be compared to an isolated B1 S4096 target.
   Required next step: keep these targets open while the already-dispatched
   matrix establishes the current serving behavior. Report actual results and
@@ -44,7 +48,61 @@ their original wording; the dispositions in this section take precedence.
 
 ## Closed Findings and Verified Scope
 
-- **Selected scatter serving integration:** the unchanged canonical smoke
+- **Warm HTTP result and source identity:** raw
+  `warm_serving/readiness_vllm/vllm_result.json` confirms4/4 requests, zero
+  failures and all1008 requested output tokens at128/252/C1. Median TTFT is
+  177.361ms, mean180.004ms and p99195.039ms. The preceding device-fill run used
+  the same benchmark configuration and measured728.482ms median. Mean TPOT
+  is essentially unchanged,88.822 to88.740ms. Server logs show one eligible
+  startup capture and four setup reuses during this short benchmark. That
+  counter is not an all-mode capture total for the entire serving suite.
+  All five source hashes in `artifacts/warm_serving_source.json` match the
+  committed4a02 checkpoint, including the runner. Later invalid-input cleanup
+  and capture-counter hardening must not be represented as already measured
+  by this run.
+
+- **Full-model state and reuse evidence:** the reviewer independently compared
+  all four alternating request pairs in `production_trace_reuse_full64.json`.
+  Active tokens match on all four ranks, all512 cache/rank digests match, and
+  every position tensor matches exactly. The envelope is full64, B32 allocated,
+  C1 slot0, S128, context256 and three decode steps per request. Eight captures
+  become one capture plus seven reuses across correctness, warmup and timing
+  requests. Median adapter prefill plus first decode falls798.811 to248.156ms;
+  first decode falls631.824 to90.822ms. Both arms use complete allocation
+  checks without GC, isolating the reuse change. These include decode readback
+  and are not HTTP TTFT. The independent four-layer comparison also passes.
+
+- **Production ownership contract:** startup compilation precedes capture,
+  temporary decode state is restored/released, and real scheduler inputs still
+  require authoritative reload. Reuse checks warmed request shape/slot/sampling
+  signatures, stable cache and trace owners, and unchanged program-cache
+  counts. Complete C++ allocation maps, including program-owned allocations,
+  are checked before model state advances and again before sampler replay.
+  A late failure aborts without retrying a partially executed token. Both
+  active masks, tokens, positions and page-table contents refresh in place.
+  All live bucketed sampler namespaces with corruptible exemptions are
+  rejected. Shared sampler callers without the optional executor retain their
+  existing behavior. Omitting GC conservatively leaves uncollected allocations
+  unsafe; this does not disable allocation tracking. One serialized device
+  submission owner is required because allocation query and replay are not
+  atomic against unrelated external mesh submissions.
+
+- **Warm serving correctness and text:** the unchanged canonical smoke reports
+  3passed/1skipped in24.30s, covering mixed-request isolation, top-1 greedy and
+  host-path min-p. The all-vocabulary logprob skip proves no logprob accuracy.
+  The reviewer read all12 shared chat outputs and verified that all six greedy
+  strings are byte-identical to the previous device-fill run. Sampled text is
+  coherent, with no recurrence of the dropped words or inconsistent variables.
+  Both learning explanations and translations, the greedy haiku and greedy
+  Fibonacci answer are complete. Both stories and thermodynamics answers
+  reach the fixed256-token limit; the sampled haiku stops within reasoning.
+  The sampled Fibonacci function is complete, but its example comment is
+  truncated. Both complete function bodies pass reviewer host checks for
+  n=0,1,10. These limits do not constitute a complete-answer or release-quality
+  pass. The run reports exit0; abort-mode server shutdown remains distinct from
+  a graceful device-teardown test.
+
+- **Earlier scatter serving integration:** the unchanged canonical smoke
   in `device_fill_serving/readiness_vllm/sampling_tests.log` reports3passed/
   1skipped in23.86s. The reviewer read all12 generated strings and independently
   confirmed all six greedy outputs are byte-identical to the preceding
@@ -60,7 +118,7 @@ their original wording; the dispositions in this section take precedence.
   the requested counts. Median HTTP TTFT is728.482ms and11443.820ms respectively.
   The source summary records checkpoint4ea57c41431, and the actual server log
   confirms B32, max_model_len262144, sampling mode `all`, and FABRIC_1D_RING.
-  No experimental trace-reuse candidate is selected.
+  That earlier run did not use trace reuse; the warm run above does.
 
 - **Slot-logit scatter source/static boundary:** production's method body is
   AST-identical to the measured probe candidate, excluding its docstring.
@@ -125,15 +183,24 @@ their original wording; the dispositions in this section take precedence.
 
 ## Other Concerns
 
-The selected local HTTP run measures median TTFT728.482ms at128/252/C1
-and11443.820ms at4096/252/C8. The preceding seed-policy run measured
-910.998/12812.076ms in those same profiles: observed reductions are182.516ms
-and1368.256ms. The short-point result agrees with the isolated scatter saving;
-the C8 burst also includes admission and serialized per-request prefill. These
-are observed HTTP results, not estimates formed by subtracting static kernel
-or operation timing. Mean TPOT is88.822/90.415ms. The B1 generator result
-remains119.301/1299.242ms from the complete native validation, which is a
-separate measurement boundary.
+The selected local C8 burst completes8/8 requests and all2016 output tokens,
+with11285.561ms median HTTP TTFT,90.355ms mean TPOT and59.502 output tokens/s.
+This is only1.38% below the previous11443.820ms result. C8 lies outside the
+current C1 reuse envelope, and this small difference is not attributed to
+reuse. Seeded sampling, non-greedy sampling, penalties and logprobs likewise
+use normal capture rather than cross-request reuse. The full64 digest probe
+covers slot0 with fixed page mappings; the broader source support for warmed
+slot/mapping changes is not relabeled as independently measured digest coverage.
+
+The short result measures actual HTTP delivery with prefix caching disabled,
+B32, max_model_len262144 and FABRIC_1D_RING. Logs record startup prefill spans
+381.696ms at128 and1498.708ms at4096, decode compilation286.473ms, and retained
+capture537.079ms. Those costs move to startup; model loading and KV-pool
+allocation are additional startup costs. The177.361ms HTTP result and248.156ms
+adapter result use different publication/readback boundaries. Their difference
+does not establish a measured server-span breakdown. The B1 generator result
+remains119.301/1299.242ms from native validation. These are measured boundaries,
+not estimates formed by subtracting isolated kernel or operation timing.
 
 The latest benchmark summary correctly generates its ISL4096/OSL252/C8 label
 from the configuration. Earlier historical artifacts retain the stale
@@ -145,13 +212,13 @@ the pipeline was modified. No material overclaim was found in that ledger.
 
 ## Hard-Check Gaps
 
-The CI provenance is internally consistent. Both runs reuse the earlier
+The CI provenance is internally consistent. All three runs reuse the earlier
 image built from native checkpoint6f60917b27b63908f85fc982fe010b1d6ad76523
 with plugin c9cfebcf0490066ff85e1e3fba2c7d456ce5ce42. The reviewer independently
 verified no changes outside `models/` through source checkpoint
-4ea57c41431a1e80318c4d32d249d5552c4f165f, so the native build inputs are unchanged.
-The fixed tag `mvasiljevic/qwen38-perf-4ea57c41431` resolves to that exact
-checkpoint. Its three read-only source overlays include the autoport,
+4a02bf62cf510f3807f177ad826555bc9b648c0d, so the native build inputs are unchanged.
+The first two runs' fixed tag `mvasiljevic/qwen38-perf-4ea57c41431` resolves to
+4ea57c41431a1e80318c4d32d249d5552c4f165f. Their three read-only source overlays include the autoport,
 `models/autoports/vllm_bundles` and `models/common/sampling`; omitting the last
 path would have retained the old shared sampler in the image. The helper's
 `git clone --branch` accepts the fixed tag, while the dispatch's metal-ref
@@ -167,20 +234,29 @@ input alone does not select the overlay when image reuse skips SHA resolution.
   `sample_on_device_mode: all`, exercising device scatter with the same13
   required points. Both CI modes retain FABRIC_1D; local serving used
   FABRIC_1D_RING, so local results do not certify that CI configuration.
+- [Run34622652794](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/34622652794)
+  pins runtime4a02bf62cf510f3807f177ad826555bc9b648c0d and inference-server
+  ed2ef012fd91ff6f8b49119d216786609dbc6b68. The reviewer inspected its YAML
+  change: the fixed overlay tag becomes `mvasiljevic/qwen38-warm-4a02bf62cf5`,
+  with five tracking/reuse/report/warmup environment settings added. The
+  required13-point matrix remains unchanged. It warms all eight requested
+  input lengths,128 through261892, and retains sampling `all`/FABRIC_1D.
 
-At review, GitHub reports both benchmark jobs in progress, respectively on
-`120-qb2-p04t07` and `qb2-120-p01t03`, with all image-build jobs skipped.
+At review, direct GitHub job queries report all three benchmark jobs in
+progress, respectively on `120-qb2-p04t07`, `qb2-120-p01t03` and
+`qb2-120-p03t06`, with all image-build jobs skipped.
 The inspected dispatch/reusable workflow chain at
 ba2f03318608be52c5cb2085469598a89dcfa0fc contains no concurrency cancellation
-group; the first run remains active. Durable inputs, matrix and observed
+group; both earlier runs remain active. Durable inputs, matrix and observed
 statuses are in `artifacts/ci_dispatch*.json`, `required_ci_matrix.json` and
 `ci_overlay_validation.json`. They prove dispatch/provenance, not completed CI.
 
 Maximum-context/current native behavior and the complete13-point CI matrix
 are not certified by the short local smokes. The unsafe binary-SiLU candidate
-and allocation-tracked trace-reuse experiment remain outside production;
-their unresolved/performance-limited outcomes are not acceptance of those
-variants. The selected changes are Python-only, so the supplied AGENTS.md
+and earlier instance-hook trace-reuse prototype remain unselected. The current
+production reuse policy has separate full64 and HTTP evidence; those results
+do not retroactively select the earlier prototype. The selected changes are
+Python-only, so the supplied AGENTS.md
 requires no C++ build. The owner reports formatting checks; this reviewer
 independently ran only standard-library AST/JSON inspection and the12 host
 regressions, with no Torch/TTNN imports or device operations.
@@ -188,14 +264,14 @@ regressions, with no Torch/TTNN imports or device operations.
 ## Anomaly Ledger
 
 - Rank-divergent unseeded feedback and malformed sampled text: fixed for the
-  production seed policy by full64 rank controls and both reviewed HTTP runs,
-  including the selected device-fill implementation.
+  production seed policy by full64 rank controls and the reviewed HTTP runs,
+  including device-fill and warm-serving implementations.
 - Synthetic warmup token contaminated preserved penalty history: fixed;
   source ordering,12 host regressions and reduced B32 device evidence agree.
-- Excess serving TTFT: more-work-needed. Device scatter removes a measured
-  175–185ms static bottleneck; actual short-profile HTTP TTFT improves by
-  182.516ms and still misses60ms. Trace recapture remains an experimental
-  optimization opportunity.
+- Excess serving TTFT: improved but target unmet. Device scatter first reduced
+  short HTTP TTFT by182.516ms; production warm trace reuse then reduced it by
+  551.120ms to177.361ms. C1 reuse is now measured, while C8 continues to recapture
+  and the60ms requirement remains open.
 - Fixed-budget incomplete shared answers: controlled as truncation, with
   coherent text and explicit case-level limits; no blanket task-success or
   release-quality claim is made.
@@ -207,21 +283,29 @@ regressions, with no Torch/TTNN imports or device operations.
 
 ## Scope Inspected and Residual Risk
 
-Source: `tt/generator.py`, its vLLM consumers, common sampling generator,
-creation-op source, and `probe_slot_logits_scatter.py`. Evidence: static scatter
+Source: `tt/generator.py`, `tt/trace_reuse.py`, vLLM startup/reload consumers,
+common sampling generator, allocator/tracker/trace bindings, pinned c9 plugin
+submission/readback source, creation-op source and `probe_slot_logits_scatter.py`.
+Evidence: both production adapter JSONs, warm-serving source hashes compared
+with checkpoint4a02, actual warm text/raw benchmark/smoke/server logs, static scatter
 JSON and preserved baseline, production full64 sampling/source sidecar,
 penalty-history JSON, all shared text and test/benchmark outputs under
-`final_serving/` and `device_fill_serving/`, dispatch/overlay JSONs, exact
+`final_serving/`, `device_fill_serving/` and `warm_serving/`, dispatch/overlay JSONs, exact
 inference-server/workflow source diffs, and current GitHub run/job statuses.
 Commands were read-only
 `rg`, `sed`, `git diff`, small standard-library AST/JSON scripts, and
 `python3 -m unittest discover -s models/autoports/qwen_qwen3_6_27b/tests
 -p test_vllm_decode_reload.py` (12passed in the preceding source review).
-The completed-serving update reran no device or host tests; it inspected
-artifacts and used read-only `gh api` queries. Only this report was edited.
+This warm-serving update used no device operations or Torch/TTNN imports.
+It compared artifacts, used read-only `gh api` queries, and executed only the
+two reviewed generated Fibonacci function bodies with standard Python inputs.
+Only this report was edited. Source hardening after measured checkpoint4a02
+requires its own clearly labeled host checks; this review does not silently
+extend the hardware result to later edits.
 
-No additional source bug was found in the selected scatter or seed policy.
-The selected-code local serving finding is closed. The unfinished CI matrices
+No additional valid-request source bug was found in the measured reuse path.
+The requested warm-HTTP improvement and local serving integration are proven
+within the documented C1 envelope. The unfinished CI matrices
 and unmet targets retain the more-work-needed verdict. This targeted review
 is not formal pipeline completion, release certification or a target pass.
 

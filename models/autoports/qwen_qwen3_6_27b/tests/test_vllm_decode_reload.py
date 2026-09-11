@@ -14,6 +14,7 @@ import random
 import secrets
 import types
 import unittest
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -336,7 +337,7 @@ class TestDecodeReload(unittest.TestCase):
             _upload=lambda value, **kwargs: value,
             _sampling_logits=lambda logits: logits,
             _seed_token_out_trace=lambda *args, **kwargs: None,
-            trace_reuse=types.SimpleNamespace(record_execution=lambda: None),
+            trace_reuse=types.SimpleNamespace(record_execution=lambda: None, counters=Counter()),
             sampling=types.SimpleNamespace(
                 _penalties_active=True,
                 tt_penalties=types.SimpleNamespace(
@@ -353,6 +354,9 @@ class TestDecodeReload(unittest.TestCase):
             events, ["clone"] * 3 + ["counting warmup"] + ["restore"] * 3 + ["deallocate"] * 3 + ["begin trace"]
         )
         self.assertEqual(len(captured), 1)
+        # This B2 penalty-enabled capture is outside the C1 reuse envelope.
+        # Count the actual capture independently of eligibility for reuse.
+        self.assertEqual(generator.trace_reuse.counters["captures"], 1)
         self.assertTrue(captured[0]["skip_precompile"])
         self.assertNotIn("count_tokens", captured[0])  # real replay keeps its normal counting behavior
         events.clear()
@@ -360,6 +364,11 @@ class TestDecodeReload(unittest.TestCase):
             generator, HostTensor([10, 20]), HostTensor([3, 4]), preserve_sampling_history=False
         )
         self.assertEqual(events, ["counting warmup", "begin trace"])
+        self.assertEqual(generator.trace_reuse.counters["captures"], 2)
+        events.clear()
+        runtime["_capture_token_out_trace"](generator, HostTensor([10, 20]), HostTensor([3, 4]), capture=False)
+        self.assertNotIn("begin trace", events)
+        self.assertEqual(generator.trace_reuse.counters["captures"], 2)
 
 
 class SeedRefreshPolicyTests(unittest.TestCase):

@@ -1,6 +1,6 @@
 {
   "archive": "runtime_logs.tar.gz",
-  "scope": "Completed follow-up logs including selected device-fill serving. Active full64 trace-reuse experiment excluded. Raw .log files are globally gitignored; this archive preserves exact bytes.",
+  "scope": "Completed follow-up logs including device-fill and warmed serving. Production trace-reuse proofs are archived separately. Exact original log bytes preserved.",
   "members": [
     {
       "path": "artifacts/qwen_serving_trace_reuse_correctness.log",
@@ -21,6 +21,11 @@
       "path": "artifacts/qwen_slot_logits_scatter.log",
       "bytes": 6339,
       "sha256": "aef81b9138d0c6a79e26deed5a5f8fa08d367a98f8d8be28b871f6eade0d882d"
+    },
+    {
+      "path": "artifacts/qwen_warm_serving_runner.log",
+      "bytes": 8589,
+      "sha256": "36583bf443e605e362b258fbff1989fcdaeef77b12ef58ffc7149afd93598a76"
     },
     {
       "path": "device_fill_serving/readiness_vllm/sampling_tests.log",
@@ -116,6 +121,26 @@
       "path": "sampling_rank_full64_refresh.log",
       "bytes": 150299,
       "sha256": "d69d81810619eb68b32efba8a183e4943b06b63a1e8b970f1fa74f81dedff455"
+    },
+    {
+      "path": "warm_serving/readiness_vllm/sampling_tests.log",
+      "bytes": 1208,
+      "sha256": "714f56b8a25eb371d1fc9009f558470952672532372ad4acd87b060958ce2fee"
+    },
+    {
+      "path": "warm_serving/readiness_vllm/server.log",
+      "bytes": 259385,
+      "sha256": "1b3d7308acd62a93c47bbe376325a968dec2d1342d6b1d71927bf17d61e7febd"
+    },
+    {
+      "path": "warm_serving/readiness_vllm/vllm_benchmark.log",
+      "bytes": 10177,
+      "sha256": "0548caf57a1aec68d39c76692b3ae17d4adce1c2206960886fccf500e8973201"
+    },
+    {
+      "path": "warm_serving/readiness_vllm/vllm_ci_serving_benchmark.log",
+      "bytes": 9961,
+      "sha256": "256c622108400bf3fb8ee6e0fe425f864a59f77509c183e83014afa211d67e2d"
     }
   ]
 }

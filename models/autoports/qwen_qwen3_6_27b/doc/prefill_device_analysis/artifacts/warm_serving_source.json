@@ -17,5 +17,10 @@
   "allocation_tracking": true,
   "program_allocations_tracked": true,
   "hardware_owner": "root",
-  "status": "running"
+  "status": "completed_exit0",
+  "runtime_checkpoint": "4a02bf62cf510f3807f177ad826555bc9b648c0d",
+  "processes_closed": [
+    3029998,
+    3030516
+  ]
 }

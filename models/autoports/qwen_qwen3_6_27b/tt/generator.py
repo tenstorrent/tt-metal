@@ -538,6 +538,7 @@ class Qwen36Generator(ReadinessGenerator):
         # All sampler modes retain complete checked execution. Only the
         # independently supported C1 envelopes enable cross-request reuse.
         self.trace_reuse.record_execution()
+        self.trace_reuse.counters["captures"] += 1
 
     def _sampling_logits(self, logits):
         """Return sampler-ready logits with the proven fixed-slot row shape."""

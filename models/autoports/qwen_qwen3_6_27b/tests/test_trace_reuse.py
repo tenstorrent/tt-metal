@@ -320,6 +320,22 @@ class TestTraceReuse(unittest.TestCase):
         self.assertIsNone(runtime.controller.execution)
         self.assertIsNone(runtime.controller.request_key)
 
+    def test_malformed_slot_releases_existing_traces_before_raising(self):
+        runtime = Runtime()
+        runtime.warm()
+        with self.assertRaises(ValueError):
+            runtime.begin(slot="invalid slot")
+        self.assertIsNone(runtime.controller.execution)
+        self.assertIsNone(runtime.controller.request_key)
+        self.assertEqual(runtime.controller.request_slots, ())
+        self.assertEqual(runtime.releases, 2)
+
+    def test_recording_reuse_eligibility_does_not_double_count_captures(self):
+        runtime = Runtime()
+        runtime.warm()
+        self.assertIsNotNone(runtime.controller.captured)
+        self.assertEqual(runtime.controller.counters["captures"], 0)
+
     def test_warmed_slot_change_refreshes_both_mask_contents_in_place(self):
         runtime = Runtime()
         runtime.warm(slot=7)

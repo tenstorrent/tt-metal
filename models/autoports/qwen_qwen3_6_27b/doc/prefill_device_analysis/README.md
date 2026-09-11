@@ -21,32 +21,34 @@ dedicated gated RMSNorm, K-block limit8, and one MLP SiLU. Fresh pinned Qwen3.8
 checks measured **99/100 top1 and 100/100 top5** for both prefill and teacher
 forcing; the run counted1872 flat-native calls and zero rank4 calls.
 
-The selected device-fill implementation completed live serving validation:
-**728.482ms median HTTP TTFT at ISL128/OSL252/C1** (4/4 requests,1008 output
- tokens) and **11443.820ms at ISL4096/OSL252/C8** (8/8 requests,2016 tokens).
-The preceding corrected-sampling implementation measured910.998/12812.076ms;
-device fill saved182.516ms/1368.256ms respectively. The short-point saving
-closely matches the isolated175.451ms prediction. Canonical sampling passed
-3 tests with1 skip; all six greedy outputs were unchanged, and all six sampled
-responses were coherent, with documented output-budget truncations.
-See `artifacts/device_fill_serving_summary.json` and the qualitative review.
+The warmed serving checkpoint **4a02bf62cf5** measured **177.361ms median
+HTTP TTFT at ISL128/OSL252/C1**, down from728.482ms after device-fill alone:
+**4.107× faster**, and now **1.487× the119.301ms generator prefill time**.
+All4 requests completed with1008 output tokens; meanTPOT remains88.740ms.
+One startup capture served all four requests through checked trace reuse.
+Prefix caching is disabled and serving capacity is unchanged. At4096/252/C8,
+medianHTTP TTFT measured11285.561ms (8/8,2016tokens), versus11443.820ms;
+C8 remains outside the initial C1 reuse envelope, so its small change is not
+claimed as a trace-reuse win. Canonical sampling passed3 tests with1 skip;
+all six greedy outputs match the prior checkpoint exactly, and all six sampled
+responses are coherent with documented256-token budget truncations.
+See [warm serving implementation and evidence](WARM_SERVING.md).
 
 The119.301/1299.242ms figures are warmed generator measurements, **not
 serving/CI TTFT**. Their remaining gaps are1.988×/2.598× against60/500ms.
-Actual short-point HTTP TTFT remains **12.14× above60ms**. Full64 production
-sampling checks passed574 decode observations without TP rank disagreement.
-The full-batch32 native test exposed a core-count limit; device-side batch
-tiling passes aligned S128 and ragged S65 lifecycle checks across four layers.
+Actual short HTTP TTFT remains **2.956× above60ms**. Full64 production sampling
+checks passed574 decode observations without TP rank disagreement. The new
+trace-reuse full64 A/B also passes active tokens on all ranks, all512 cache/rank
+digests and positions across alternating requests. Its prefill-plus-first-decode
+latency fell798.811→248.156ms, replacing8 captures with1 plus7 reuses.
 
-Two CI benchmark runs are in progress, both pinned to runtime checkpoint
-`4ea57c41431` and reusing the previous native build (all build jobs skipped):
-[historical decode-only sampling](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/34617909914)
-and [sampling on device for prefill and decode](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/34618127149).
-Both retain the requested13-point OSL252 matrix; neither is a completed CI
-result. The second run exercises device prefill scatter; the first bypasses it.
-CI retains FABRIC_1D, whereas the local serving measurements use FABRIC_1D_RING.
-Trace reuse remains an unselected experiment aimed at the roughly500ms setup
-cost; no production HTTP improvement is claimed for it.
+Three CI benchmark runs are in progress, with native builds reused/skipped:
+[historical decode-only sampling](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/34617909914),
+[all-mode sampling before trace reuse](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/34618127149),
+and [warmed serving checkpoint](https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/34622652794).
+All retain the requested13-point OSL252 matrix; none is a completed CI result.
+The third run warms all eight required ISLs at startup with complete allocation
+tracking. CI retains FABRIC_1D, whereas local serving uses FABRIC_1D_RING.
 
 See [the complete additional-work and pipeline-gap ledger](PIPELINE_GAPS.md)
 for all follow-up actions, failed hypotheses, full-model artifacts, production
