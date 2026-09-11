@@ -123,8 +123,16 @@ void kernel_main() {
     // first chunk where cur lands at the front of the empty ring). The move_block(cur->prev) at each
     // chunk/round end becomes a self-rotation on this single buffer that carries the running max forward.
     constexpr auto dfb_max = dfb::max;
-    constexpr auto dfb_sum_1 = dfb::sum_1;
-    constexpr auto dfb_sum_2 = dfb::sum_2;
+    // Merged sum buffer (depth 2*Sq_chunk_t): sum_1/sum_2 collapsed into one DFB, the direct analog of
+    // the merged max buffer above, to free another intra-Tensix tile-counter slot (Quasar caps at 8).
+    // cur_sum and prev_sum alias this one buffer. Within a chunk the "prev" sum block sits at the ring
+    // front [0, Sq_chunk_t) and reduce_c / correction_block append the freshly computed "cur" block
+    // behind it [Sq_chunk_t, 2*Sq_chunk_t) via reserve_back, and read prev at the front — so those
+    // helpers need no change. The multi-chunk running-sum update is the one place a cur read needs the
+    // merged geometry: fma_block_merged_sum reads prev@front + cur@offset from the contiguous reduce_c
+    // layout in one fused pass (sum = cur + prev*exp_max_diff). The move_block(cur->prev) at each
+    // chunk/round end becomes a self-rotation on this single buffer that carries the running sum forward.
+    constexpr auto dfb_sum = dfb::sum;
     constexpr auto dfb_exp_max_diff = dfb::exp_max_diff;
     // Tile-counter budget (Quasar caps intra-Tensix DFBs at 8; flash-decode declared 11). The 3
     // tree-reduction temps reuse buffers that are idle during the tree phase, so none is allocated (11->8):
@@ -339,16 +347,18 @@ void kernel_main() {
     // offset (prev at front, cur behind). The offset for cur READS is passed per-call below.
     uint32_t dfb_cur_max = dfb_max;
     uint32_t dfb_prev_max = dfb_max;
-    uint32_t dfb_cur_sum = dfb_sum_1;
-    uint32_t dfb_prev_sum = dfb_sum_2;
+    // sum is a single merged buffer: cur and prev alias the same DFB and are distinguished by ring
+    // offset (prev at front, cur behind), exactly like max above.
+    uint32_t dfb_cur_sum = dfb_sum;
+    uint32_t dfb_prev_sum = dfb_sum;
 
     // Loop through all heads assigned to core
     for (uint32_t cur_head_work = 0; cur_head_work < num_heads_per_core; ++cur_head_work) {
         // Reset ping-pong buffer assignments at the start of each head iteration
         dfb_cur_max = dfb_max;
         dfb_prev_max = dfb_max;
-        dfb_cur_sum = dfb_sum_1;
-        dfb_prev_sum = dfb_sum_2;
+        dfb_cur_sum = dfb_sum;
+        dfb_prev_sum = dfb_sum;
 
         /******************************************************************************
          *                           FLASH ATTENTION LOOP                             *
@@ -568,19 +578,22 @@ void kernel_main() {
                 sub_exp_block<scale_fp32>(dfb_prev_max, dfb_cur_max, dfb_exp_max_diff, Sq_chunk_t, Sq_chunk_t);
                 DataflowBuffer(dfb_prev_max).pop_front(Sq_chunk_t);
 
-                /* PREV_SUM *= EXP_MAX_DIFF */
-                mul_block_inplace(dfb_prev_sum, dfb_exp_max_diff, Sq_chunk_t);
+                /* CUR_SUM = CUR_SUM + PREV_SUM * EXP_MAX_DIFF (fused) */
+                // Merged sum: cur_sum and prev_sum are the same DFB. reduce_c left the ring contiguous as
+                // [prev(front) | cur(behind at offset Sq_chunk_t)]. fma_block_merged_sum reads prev@front
+                // and cur@offset from that contiguous layout in one pass and writes the running sum back as
+                // the single front block. This replaces the old mul_block_inplace(prev) + add_block_inplace
+                // pair: mul_block_inplace rotated the full 2*Sq_chunk_t ring, which on WH (no ring wrap in
+                // tile addressing) desynced the cur offset read (PCC ~0.70). The merged max path likewise
+                // reads prev@front + cur@offset contiguously and never rotates the buffer. EXP_MAX_DIFF is
+                // read but not popped here; the OUT_ACC scaling below pops it.
+                fma_block_merged_sum(dfb_cur_sum, dfb_exp_max_diff, Sq_chunk_t, Sq_chunk_t);
 
                 /* OUT_ACC *= EXP_MAX_DIFF */
                 reconfig_data_format(dfb_out_accumulate_im, dfb_exp_max_diff);
                 pack_reconfig_data_format(dfb_out_accumulate_im);
                 mul_block_bcast_cols<Sq_chunk_t, vDHt, true, false>(
                     dfb_out_accumulate_im, dfb_exp_max_diff, dfb_out_accumulate_im);
-
-                /* CUR_SUM += PREV_SUM */
-                reconfig_data_format(dfb_cur_sum, dfb_prev_sum);
-                pack_reconfig_data_format(dfb_cur_sum);
-                add_block_inplace<true>(dfb_cur_sum, dfb_prev_sum, Sq_chunk_t);
 
                 /* OUT_ACC += OUT_IM */
                 reconfig_data_format(dfb_out_accumulate_im, dfb_out_im);
