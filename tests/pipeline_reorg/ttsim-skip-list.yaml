@@ -26,6 +26,7 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
+  - tests/ttnn/unit_tests/operations/transformers/test_update_cache_bundle_allocation.py
 
   # Long-running tests that cause the group's 40-minute job timeout on ttsim (#54860); still run on HW.
   - tests/ttnn/unit_tests/operations/reduce/test_reduction.py::test_std_var_wide_low_variance
@@ -49,6 +50,7 @@ blackhole:
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
+  - tests/ttnn/unit_tests/operations/transformers/test_update_cache_bundle_allocation.py
 
   # tensix_cfg_wr32 reg=119 (THCON_SEC1_REG1, the fp8/LF8 SEC1 config)
   - tests/ttnn/unit_tests/base_functionality/test_to_layout.py::test_to_layout_fp8_input_to_tile
