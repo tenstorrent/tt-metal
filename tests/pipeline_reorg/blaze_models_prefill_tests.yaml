@@ -1362,9 +1362,11 @@
   skus:
     bh_sc4:
       # 93 layers is the deepest model on this rig, and mesh bringup plus weight load dominates: the
-      # chunk loop is minutes of it. Counts against the shield/demo budget with the Kimi-K2.7 and
-      # GLM-5.2 entries.
-      timeout: 45
+      # chunk loop is minutes of it. Measured on run 34648535999, from test-step start: 42.6 min to
+      # all four ranks serving (24 MLA layers loaded, all ranks through warmup compile), then the
+      # producer connect, 11 chunks of 5120 and the KV read-back. 45 min cut that off mid-bringup.
+      # Counts against the shield/demo budget with the Kimi-K2.7 and GLM-5.2 entries.
+      timeout: 70
       tier: 1
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic

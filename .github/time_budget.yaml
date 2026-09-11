@@ -192,7 +192,7 @@ shield:
     wh_n150: 100
     bh_p150: 60
   demo:
-    bh_sc4: 95
+    bh_sc4: 120
     bh_sc1: 105
 
 scaleout:

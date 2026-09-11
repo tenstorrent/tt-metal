@@ -182,12 +182,20 @@ python3 "${TTRUN_PY}" \
 RUNNER_PID=$!
 cd "${TT_METAL_HOME}"
 
-for _ in $(seq 1 360); do
+# Bounds mesh bringup + weight load + warmup compile, not the chunk loop -- the table is published
+# once the runner starts serving. Scales with model depth, so it is sized for the deepest model on
+# the rig: Kimi-K3 at 93 layers over 4 ranks measured 42.6 min from step start to _serve_request
+# (run 34648535999), which overran the previous 30 min and made the script exit 1 while the ranks
+# were still compiling. The loop breaks as soon as the table appears, so a larger bound costs the
+# shallower models nothing. Keep it below the leg's job timeout, or the container is killed first
+# and this diagnostic never prints.
+TABLE_WAIT_SECS="${TABLE_WAIT_SECS:-3600}"
+for _ in $(seq 1 $((TABLE_WAIT_SECS / 5))); do
   [ -f "${TABLE_PATH}" ] && break
   kill -0 "${RUNNER_PID}" 2>/dev/null || { echo "runner exited before publishing the KV table"; wait "${RUNNER_PID}"; exit 1; }
   sleep 5
 done
-[ -f "${TABLE_PATH}" ] || { echo "KV table not published within timeout"; exit 1; }
+[ -f "${TABLE_PATH}" ] || { echo "KV table not published within ${TABLE_WAIT_SECS}s"; exit 1; }
 
 RANKFILE=$(ls -t "${TTRUN_CWD}"/generated/ttrun/*/rankfile 2>/dev/null | head -1)
 [ -f "${RANKFILE}" ] || { echo "tt-run rankfile not found under ${TTRUN_CWD}/generated/ttrun/*/rankfile"; exit 1; }
