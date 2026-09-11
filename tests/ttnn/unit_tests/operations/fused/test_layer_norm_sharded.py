@@ -189,10 +189,10 @@ def test_layer_norm_sharded_tile_backend_does_not_require_reciprocal(device):
     assert_numeric_metrics(
         reference,
         output,
-        pcc_threshold=0.9999,
-        rtol=0.065,
-        atol=0.065,
-        frobenius_threshold=0.014,
+        pcc_threshold=0.99999,
+        rtol=0,
+        atol=0.015,
+        frobenius_threshold=0.005,
     )
 
 
