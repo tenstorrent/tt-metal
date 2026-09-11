@@ -111,6 +111,35 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) {
 
 // clang-format off
 /**
+ * Re-arms the MATH<->PACK Dest synchronization mid-kernel: re-initializes the MATH thread's
+ * pack-sync state and the packer's Dest state for `ocb`.
+ *
+ * This is the alternative to re-running the more expensive compute_kernel_hw_startup in middle
+ * of a kernel. An op that disrupts the Dest handshake (e.g., a preceding matmul, reduce,
+ * tilize_uninit, SFPU section, unpack-to-dest path, etc.) may need the handshake re-armed
+ * before the next op.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name | Description                                       | Type     | Valid Range | Required |
+ * |------------|------|---------------------------------------------------|----------|-------------|----------|
+ * | Function   | ocb  | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31     | True     |
+ */
+// clang-format on
+ALWI void rearm_dest_sync([[maybe_unused]] uint32_t ocb) {
+    LLK_SAN_FUNCTION();
+
+#ifndef ARCH_QUASAR
+    MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>(ocb)));
+#else
+    MATH((llk_math_pack_sync_init()));
+    PACK((llk_pack_dest_init()));
+#endif
+}
+
+// clang-format off
+/**
  * Enables FP32 accumulation in the destination register.
  *
  * Configures both the math pipeline (ALU_ACC_CTRL Fp32_enabled and
