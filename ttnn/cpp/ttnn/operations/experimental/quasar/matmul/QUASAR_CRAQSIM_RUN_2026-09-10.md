@@ -90,3 +90,53 @@ qsr_test timeout 900 ./build_Release/test/tt_metal/unit_tests_api --gtest_filter
 Debug env used: `TT_METAL_WATCHER=1 TT_METAL_WATCHER_DUMP_ALL=1 TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1 TT_METAL_LLK_ASSERTS=1
 TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS=1` (no LLK assert fired before the sim abort; watcher dump never completes because the
 sim aborts the process).
+
+## craq-sim re-run 2026-09-11
+
+Same tree as above with the three committed fixes (Semaphore::value() in the in0 receiver, ARCH_QUASAR `pack_init` after every
+pack-destination switch, `separate_out_interm` forced on Quasar); host libs from `build_Release` (no rebuild needed).
+craq-sim `libttsim.so` (8x4 grid, 2 DRAM banks, ~1-2 kHz), `TT_METAL_CACHE=/localdev/vsuresh/tt-metal-cache-qsr-linear_rtl`.
+Graph cases via a temporary copy `graph_ops/test_tmp_linear_qsr.py` (`_OP = ttnn.experimental.quasar.linear`, config kinds
+resolved from `ttnn._ttnn.operations.experimental.quasar`, bf16, host tilize + `ttnn.to_device`, 2D cases: 12-bank DRAM-sharded
+weights -> DRAM interleaved, grid 8x8 -> 8x4 with per_core_M/out_block_h 4 -> 8; deleted after the run). The single-core 2D
+probes (`qsr_mm2d_probe.py`, archived in the session scratch dir) were run here first as a host-side check before the emulator.
+Wall time = whole process (open device, JIT, run) as measured around `qsr_test timeout ... python`.
+
+| Case | Factory | Shape / config | Result | PCC or exact error | Wall |
+|---|---|---|---|---|---|
+| `craqsim_mm_kspill_probe.py 128` | 1D mcast_in0 (M2.0), 1x1 grid | M=32 K=128 N=64, in0_block_w=2, 2 K-blocks (1 partials round trip) | **PASS** | PCC 0.999993 (sim 8676 cycles) | 15 s |
+| `craqsim_mm_kspill_probe.py 2048` | 1D mcast_in0 (M2.0), 1x1 grid | M=32 K=2048 N=64, in0_block_w=2, 32 K-blocks | **FAIL (sim abort)** | `[8334] UndefinedBehavior: qsr_tile_counter_check_error: tile counter occupancy=4 exceeds capacity=2 (posted=4 acked=0)` — identical signature to 2026-09-10 (craq-sim#355) | 15 s |
+| `qsr_mm2d_probe.py p2d` | **2D mcast (M2.0), 1x1 grid** | M=64 K=1024 N=64, in0_block_w=2, out_block 2x2, subblock 1x2 (2 subblocks), 16 K-blocks | **FAIL (sim abort)** | `[8624] ... occupancy=6 exceeds capacity=4 (posted=6 acked=0)` (capacity = out_block_tiles 4, +1 subblock of 2) — #355; host-side validation, JIT and first K-block OK | 14 s |
+| `qsr_mm2d_probe.py g06_1core` | 2D mcast (M2.0), 1x1 grid | case-06 per-core tile: M=128 K=2048 N=256, in0_block_w=1, out_block 4x8, subblock 1x4, 64 K-blocks | **FAIL (sim abort)** | `[10420] ... occupancy=36 exceeds capacity=32 (posted=36 acked=0)` — #355 | 14 s |
+| `qsr_mm2d_probe.py g05_1core` | 2D mcast (M2.0), 1x1 grid | case-05 per-core tile: M=128 K=2048 N=1024, in0_block_w=8, out_block 4x32, subblock 1x4, 8 K-blocks | **FAIL (sim abort)** | `[87606] ... occupancy=132 exceeds capacity=128 (posted=132 acked=0)` — #355 | 17 s |
+| graph `06_1024x2048_bf16_int-dram_qsr` | 2D mcast (M2.0), 8x4 grid | 1024x2048 @ 2048x2048 bf16, in0_block_w=1, per_core 8x8, out_block 8x8, subblock 1x4 | **FAIL (sim abort)** | `[12245] ... occupancy=68 exceeds capacity=64 (posted=68 acked=0)` — identical (same cycle) to 2026-09-10; #355 | 17 s |
+| graph `05_1024x2048_bf16_int-dram_qsr` | 2D mcast (M2.0), 8x4 grid | 1024x2048 @ 2048x8192 bf16, in0_block_w=8, per_core 8x32, out_block 8x32, subblock 1x4 | **FAIL (sim abort)** | `[59439] ... occupancy=260 exceeds capacity=256 (posted=260 acked=0)` — same counters as 2026-09-10 (cycle 63599 then); #355 | 39 s |
+| graph `02_32x2048_bf16_ws-l1_qsr` | DRAM-sharded (legacy `create_descriptor`, not ported) | 32x2048 @ 2048x3072, in0 L1 WS 8x4, in1 DRAM WS 2 banks | **FAIL (host)** | `TT_THROW @ tt_metal/common/core_assignment.cpp:279: Invalid Arch Name specified` via `get_optimal_dram_to_physical_worker_assignment` <- `Device::get_optimal_dram_bank_to_logical_worker_assignment(NOC)` (matmul_utilities.cpp:382) — unchanged (B2) | 16 s |
+
+Blockers: unchanged — **B1 = craq-sim#355** (every K-spill shape, 1D and 2D factories, single- and multi-core; owner craq-sim), **B2**
+DRAM-sharded factory legacy + `core_assignment.cpp` has no QUASAR arm (owner: matmul Quasar port / runtime). No op-side symptom
+appeared; no source edits made.
+
+## RTL emulator run 2026-09-11
+
+First run of the Quasar copy's **2D-mcast factory** (`MatmulMultiCoreReuseMcast2DProgramFactory`, Metal 2.0) on ZEBU
+`emu-quasar-1x3` (1 worker core, `device_grid=1-1`), same host libs/tree as the craq-sim re-run, `TT_METAL_CACHE=/localdev/vsuresh/tt-metal-cache-emu-1x3`,
+force-JIT off (cache cold on the first job). Script `qsr_mm2d_probe.py` (session scratch dir; bf16 DRAM-interleaved in0/in1/out,
+host tilize + `ttnn.to_device`, `ttnn.experimental.quasar.linear` with an explicit `MatmulMultiCoreReuseMultiCastProgramConfig` on a
+1x1 grid, HiFi4, fp16 acc, no `packer_l1_acc`, PCC vs torch fp32). On a 1x1 grid the in0/in1 senders multicast to zero other cores, so
+the run exercises the 2D factory's kernels + the intra-tensix `cb_intermed0` partials path (the one craq-sim#355 aborts on), not the mcast fabric.
+"Op wall" = `linear` + `to_torch` readback; "job wall" = whole process incl. emulator boot and JIT. Every job booted on the first try
+(no `WRP0625E` slot contention in the launcher logs); lock waits of 1-5 min behind other agents' jobs are excluded from both times.
+
+| Case | Factory | Shape / config (1x1 grid) | Result | PCC | Op wall / job wall |
+|---|---|---|---|---|---|
+| (1) `p2d` — brief's shape | 2D mcast (M2.0) | M=64 K=1024 N=64, in0_block_w=2, out_block 2x2, out_subblock 1x2 (2 subblocks), 16 K-blocks / 15 partials round trips | **PASS** | 0.99995 | 9.1 s / 52 s |
+| (2) `g06_1core` — graph case 06 shrunk to one core | 2D mcast (M2.0) | Captured 06 = 1024x2048 @ 2048x2048 on 8x8, per_core_M=4, per_core_N=8, in0_block_w=1, out_subblock 1x4, out_block 4x8, fuse_batch=1. **Changed:** grid 8x8 -> 1x1 and M,N cut to exactly one core's tile (M=128, N=256); K, per_core_M/N, in0_block_w, sub/out-block, fuse_batch unchanged; bf8 weights -> bf16; DRAM-sharded(12) weights -> DRAM interleaved. 64 K-blocks / 63 round trips, out_block_tiles=32 | **PASS** | 0.99991 | 44.1 s / 88 s |
+| (3) `g05_1core` — graph case 05 shrunk to one core | 2D mcast (M2.0) | Captured 05 = 1024x2048 @ 2048x8192 on 8x8, per_core_M=4, per_core_N=32, in0_block_w=8, out_subblock 1x4, out_block 4x32, fuse_batch=0. **Changed:** grid 8x8 -> 1x1, M=128, N=1024 (one core's tile); everything else as captured; bf4 weights -> bf16; DRAM-sharded(12) -> interleaved. 8 K-blocks / 7 round trips, out_block_tiles=128 | **PASS** | 0.99991 | 87.0 s / 134 s |
+
+Conclusion: all three K-spill shapes that abort craq-sim with `qsr_tile_counter_check_error` (see the re-run table above: `p2d` 6>4,
+`g06_1core` 36>32, `g05_1core` 132>128) run to correct results on RTL, on the 2D factory as well as the 1D factory (K=2048 probe,
+2026-09-10). This confirms **B1 is craq-sim#355** (owner: craq-sim), not this op or the runtime DFB layer. Not covered on RTL:
+multi-core mcast (1x3 has one worker core), the DRAM-sharded factory (B2, host-side `core_assignment.cpp:279`, no device needed to
+reproduce), fp32 accumulate (B3). No source edits were made; `test_tmp_linear_qsr.py` deleted; logs (`sim_*.log`, `emu_*.log`,
+`launcher_*_emu_*.log`, `qsr_mm2d_probe.py`) archived in the session scratch dir `qsr_linear_rtl/`.

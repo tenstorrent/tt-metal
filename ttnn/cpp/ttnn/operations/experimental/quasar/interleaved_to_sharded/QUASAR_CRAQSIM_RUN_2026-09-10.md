@@ -113,3 +113,59 @@ TT_METAL_LLK_ASSERTS=1 TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS=1 qsr_test timeout 24
 # as-written repo test (fails in the harness's on-device tilize, before the op)
 qsr_test timeout 2400 ./python_env/bin/python -m pytest models/experimental/llama32_1b_quasar/tests/prototype_ops/test_interleaved_to_sharded.py -k rope-cos-sin-32x64 -v -s
 ```
+
+---
+
+## craq-sim re-run 2026-09-11
+
+Same tree, HEAD `452fd8990cd` (merge of origin/vsureshTT/quasar_uplift_round_2), host libs `build_Release/lib/_ttnn.so` == `ttnn/ttnn/_ttnn.so` (2026-09-11 19:55, newer than every file under the op). Env `source /localdev/vsuresh/qsr-sim/env.sh i2s_rtl` (private `TT_METAL_CACHE=/localdev/vsuresh/tt-metal-cache-qsr-i2s_rtl`, JIT forced), one device session per pytest/script invocation, run via `qsr_test`. Golden = identity vs. the torch input. **No source edit; the op directory is untouched.** Temp harnesses (recreated from the description in §3, deleted after the run; archived in the scratch dir `.../scratchpad/qsr_i2s_rtl/`): `prototype_ops/test_tmp_i2s_proto_qsr.py`, `graph_ops/test_tmp_i2s_qsr.py`, `rm_height_sharded.py`.
+
+| # | Case | Path | Cores | Result | PCC / exactness | Wall (process, incl. ~5 s device open + JIT) |
+|---|---|---|---|---|---|---|
+| 1 | prototype `rope-cos-sin-32x64` HEIGHT | TILE reader + borrowed-output writer | 1 | **PASS** | 1.0, bit-exact | 3 cases in one session: 19 s total (op+readback 1.0 s) |
+| 2 | prototype `lm-head-input-32x2048` WIDTH | same | 1 | **PASS** | 1.0, bit-exact | (op+readback 0.1 s) |
+| 3 | prototype `kv-width-32x512` WIDTH | same | 1 | **PASS** | 1.0, bit-exact | (op+readback 0.0 s) |
+| 4 | graph `00_1x64_bf16_int-dram` | partial shard, 1 logical row | 1 | **PASS** | 1.0, bit-exact (floor 0.999 + `run_case` checks) | 15 s |
+| 5 | graph `01_32x2048_bf16_int-dram` | 32-core WIDTH, grid `[[0,0,7,3]]` | 32 | **PASS** | 1.0, bit-exact | 40 s |
+| 6 | RM `rm_h32_w40_1core` (80 B rows) | stick reader **unaligned**: Scratchpad TRID staging + same-core NoC loopback | 1 | **PASS** | bit-exact, PCC 1.0 | 12 s |
+| 7 | RM `rm_h64_w40_2core` (80 B rows) | same, 2 cores (yesterday's row 8) | 2 | **PASS** | bit-exact, PCC 1.0 | 12 s |
+| 8 | RM `rm_h32_w64_1core` (128 B rows) | stick reader aligned | 1 | **PASS** | bit-exact, PCC 1.0 | 11 s |
+| 9 | RM `rm_h64_w64_2core` (128 B rows) | stick reader aligned | 2 | **PASS** | bit-exact, PCC 1.0 | 11 s |
+
+Row 6 is new (1-core version of the unaligned path, so the ZEBU 1x3 run below has an identical craq-sim reference). `convert_df` bf16→fp32 was not re-run (craq-sim gap, §4 item 2, unchanged).
+
+## RTL emulator run 2026-09-11
+
+**First ZEBU run of this op.** Target `emu-quasar-1x3` (`/localdev/vsuresh/tt-umd-simulators/build/emu-quasar-1x3/soc_descriptor.yaml`: `functional_workers: [0-1]` → **1 worker core**, compute grid reported as 1x1, `dram: [[0-0]]` → 1 DRAM bank, `arch_name: QUASAR`). Env `source /localdev/vsuresh/qsr-sim/env_emu.sh 1x3` (`TT_METAL_CACHE=/localdev/vsuresh/tt-metal-cache-emu-1x3`, `TT_METAL_SLOW_DISPATCH_MODE=1`), one job = one device session run as `qsr_emu timeout 2700 ./python_env/bin/python ...` (exclusive emulator lock shared with other agents; queue waits of 0–158 s are excluded from the wall times). Same temp harnesses as the craq-sim re-run above; golden = identity vs. the torch input. **No source edit; no retry was needed; no job hit the 2700 s timeout.** Launcher logs (`emu_2026-09-11_20-{34,36,39,42,43}_.log`) moved to the scratch dir as `launcher_<tag>_*.log`; none contains `WRP0625E` (slot contention) or `ZTDB0349F`. Each launcher log carries one `ERROR: tt_tensix_neo toolchain files still missing after submodule update` line from the remote checkout step — benign, the run boots and passes regardless.
+
+| # | Case | Input → output | Factory path exercised | Result | PCC / exactness | Wall (job incl. ZEBU boot ≈ 36 s device open) |
+|---|---|---|---|---|---|---|
+| 1 | prototype `rope-cos-sin-32x64` | `[1,1,32,64]` bf16 TILE DRAM → HEIGHT shard `[32,64]` L1, 1 core | TILE reader + `writer_unary_sharded` (borrowed output DFB), no compute | **PASS** | 1.0, bit-exact | 50 s (pytest 39.3 s, op+readback 2.2 s) |
+| 2 | prototype `lm-head-input-32x2048` | `[1,1,32,2048]` → WIDTH shard `[32,2048]`, 1 core (64 tiles) | same | **PASS** | 1.0, bit-exact | 54 s (pytest 43.1 s, op+readback 4.7 s) |
+| 3 | graph `00_1x64_bf16_int-dram` | `[1,1,1,64]` TILE → HEIGHT shard grid `[[0,0,0,0]]` `[32,64]` (partial shard, 1 logical row) | same + `graph_case.run_case` shape/dtype/layout/memcfg/finiteness checks | **PASS** | 1.0, bit-exact (floor 0.999) | 60 s (pytest 48.9 s, run_case 1.5 s) |
+| 4 | RM unaligned `rm_h32_w40_1core` | `[1,1,32,40]` bf16 ROW_MAJOR (**80 B rows**: 16 B-aligned, not 64 B DRAM-aligned) DRAM → HEIGHT shard `[32,40]` L1, 1 core | stick-layout reader **`aligned=false`**: `Scratchpad` TRID staging + same-core NoC loopback `async_read` (`padded_offset_bytes=80`, `80 % 64 != 0`) — the branch recipe §6 warned may spin / drop on ZEBU | **PASS — no spin, no drop** | bit-exact, PCC 1.0 | 49 s (op+readback 4.6 s) |
+| 5 | RM aligned `rm_h32_w64_1core` | `[1,1,32,64]` ROW_MAJOR (128 B rows) → HEIGHT shard `[32,64]`, 1 core | stick-layout reader `aligned=true` | **PASS** | bit-exact, PCC 1.0 | 49 s (op+readback 2.6 s) |
+
+Not runnable on 1x3: graph `01_32x2048` (needs the 8x4 grid — `graph_case._shard_grid_fits` would skip it), the 2-core RM cases; prototype `kv-width-32x512` was skipped for budget (same path as rows 1–2, strictly between them in size).
+
+### Blockers / open items after the RTL run
+
+| # | Item | Status | Owner |
+|---|---|---|---|
+| 1 | §4 item 4 (RM unaligned same-core NoC loopback on ZEBU) | **Retired** for this op: row 4 above is bit-exact on RTL with the plain env (no watcher). | — |
+| 2 | §4 item 1 (repo tests use on-device tilize → `kernel.hpp:450` fatal on Quasar) | Unchanged; applies to the emulator too (same `DataMovementKernel` assert). Both repo tests still need the host-tilize harness change to run on either Quasar target. | llama32_1b_quasar test-suite owner |
+| 3 | §4 items 2, 3, 5 | Unchanged (craq-sim bf16→fp32 pack gap; `disable_dfb_implicit_sync_for_all=true` on both DM kernels; compute `opt_level` default O2). Nothing fired on RTL. | as listed in §4 |
+
+**Verdict:** GREEN on both Quasar targets for every 1-core llama32 shape and both ROW_MAJOR reader branches; craq-sim additionally GREEN for the 32-core graph shape. No fix needed in `ttnn/cpp/ttnn/operations/experimental/quasar/interleaved_to_sharded`.
+
+### Repro (RTL)
+
+```bash
+cd /localdev/vsuresh/tt-metal && source /localdev/vsuresh/qsr-sim/env_emu.sh 1x3
+# recreate the temp copies from the scratch archive first (see the craq-sim re-run section)
+qsr_emu timeout 2700 ./python_env/bin/python -m pytest models/experimental/llama32_1b_quasar/tests/prototype_ops/test_tmp_i2s_proto_qsr.py -k rope-cos-sin-32x64 -v -s
+qsr_emu timeout 2700 ./python_env/bin/python -m pytest models/experimental/llama32_1b_quasar/tests/prototype_ops/test_tmp_i2s_proto_qsr.py -k lm-head-input-32x2048 -v -s
+qsr_emu timeout 2700 ./python_env/bin/python -m pytest models/experimental/llama32_1b_quasar/tests/graph_ops/test_tmp_i2s_qsr.py -k 00_1x64 -v -s
+qsr_emu timeout 2700 ./python_env/bin/python $S/rm_height_sharded.py rm_h32_w40_1core   # unaligned / loopback
+qsr_emu timeout 2700 ./python_env/bin/python $S/rm_height_sharded.py rm_h32_w64_1core   # aligned
+```
