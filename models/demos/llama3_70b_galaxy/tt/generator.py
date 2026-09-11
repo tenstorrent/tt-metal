@@ -1511,6 +1511,9 @@ class Generator(WarmupForwardMixin):
             enable_trace = False
         if not enable_trace and not reload_inputs:
             raise ValueError("Non-traced Galaxy decode rebuilds all forward inputs and requires reload_inputs=True")
+        # Separated sampling consumes the same input-authority command as the
+        # forward that produced its logits.
+        self._decode_reload_inputs = reload_inputs
 
         if sampling_params is None and not defer_device_sampling:
             on_device_logits = False
@@ -1558,6 +1561,7 @@ class Generator(WarmupForwardMixin):
                 enable_trace=enable_trace,
                 reload_sampling_params=reload_sampling_params,
                 reset_sampling_state=reset_sampling_state,
+                reload_inputs=reload_inputs,
             )
 
         if read_from_device:
@@ -1901,7 +1905,10 @@ class Generator(WarmupForwardMixin):
         *,
         reload_sampling_params: bool,
         reset_sampling_state: bool,
+        reload_inputs: bool | None = None,
     ):
+        if reload_inputs is None:
+            reload_inputs = self._decode_reload_inputs
         tt_out_tok = self.trace_inputs_decode[True][0] if enable_trace and self.trace_inputs_decode[True] else None
         sampling_module = self.model.sampling
         seed_manager = sampling_module.seed_manager
@@ -1926,7 +1933,7 @@ class Generator(WarmupForwardMixin):
         formatted_sampling_params = sampling_params
         if reload_sampling_params and sampling_params is None:
             raise ValueError("Galaxy sampling parameter reload requires sampling_params")
-        if sampling_params is not None and (reload_sampling_params or reset_sampling_state):
+        if sampling_params is not None and (reload_inputs or reload_sampling_params or reset_sampling_state):
             formatted_sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
             if active_seed_slots is not None:
                 seed_values = _as_list(getattr(formatted_sampling_params, "seed", None))
@@ -1955,9 +1962,13 @@ class Generator(WarmupForwardMixin):
                 # Reset unconditionally, including seed=None, so decode-only
                 # sampling uploads fresh device seeds for the new state.
                 seed_manager.reset_seed_from_slots(seed_values, active_seed_slots)
-                seed_manager.align_seed_counters_to_positions(seed_values, active_seed_slots, start_pos)
             elif reload_sampling_params:
                 seed_manager.reset_seed_from_slots_if_needed(seed_values, active_seed_slots)
+            if reload_inputs:
+                # A full reload makes host positions authoritative even when
+                # no sampling reset was commanded. Steady async positions lag;
+                # their resident counters must simply advance once per token.
+                seed_manager.align_seed_counters_to_positions(seed_values, active_seed_slots, start_pos)
 
         # Advance seeds after parameter copies so seeded sampling observes
         # one ordered params/seed state for this token.

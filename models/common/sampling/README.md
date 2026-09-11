@@ -187,6 +187,14 @@ sampling-state reset because it has no request-owned prompt/output history.
 The SGLang bridge explicitly uses host sampling and reloads its authoritative
 token, position, and page table every step.
 
+Trace selection does not authorize a reload. Direct callers switching sampling
+mode or a Gemma4 decode batch bucket must explicitly reload inputs for the
+selected trace. The plugin commands full reloads on sampling-mode and request
+layout transitions; its decode bucket is derived from that request layout.
+Galaxy also carries `reload_inputs` from forward to separated sampling so it
+can realign seeded RNG counters on any authoritative full reload, even without
+a penalty-state reset. It never realigns from stale steady-decode positions.
+
 Stable-slot adapters must also preserve unscheduled rows when admitting a
 prefill. DeepSeek starts from its cached full-batch sampling parameters and
 scatters only the incoming requests into their assigned slots; filling every
