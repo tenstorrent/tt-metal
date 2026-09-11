@@ -74,9 +74,8 @@ void UpdateCacheBundleAllocationDeviceOperation::validate_on_program_cache_hit(
 
 void UpdateCacheBundleAllocationDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& a, const tensor_args_t& t) {
-    const auto tensors = metadata(t);
-    for (size_t i = 0; i < tensors.size(); ++i) {
-        const auto& tensor = *tensors[i];
+    for (const auto* metadata_tensor : metadata(t)) {
+        const auto& tensor = *metadata_tensor;
         TT_FATAL(tensor.storage_type() == StorageType::DEVICE && tensor.buffer(), "Metadata must be on device");
         TT_FATAL(tensor.device() == t.page_table.device(), "Metadata must use the same device");
         TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "Metadata must be ROW_MAJOR");
@@ -137,13 +136,13 @@ ProgramDescriptor CacheBundleAllocationProgramFactory::create_descriptor(
     const auto sizes = scratch_sizes(t);
     ct.insert(ct.end(), sizes.begin(), sizes.end());
     ct.push_back(t.free_list.buffer()->aligned_page_size());
-    for (uint8_t i = 0; i < sizes.size(); ++i) {
+    for (size_t i = 0; i < sizes.size(); ++i) {
         const uint32_t bytes = sizes[i];
         desc.cbs.push_back(CBDescriptor{
             .total_size = bytes,
             .core_ranges = cores,
-            .format_descriptors = {
-                {CBFormatDescriptor{.buffer_index = i, .data_format = tt::DataFormat::UInt32, .page_size = bytes}}}});
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(i), .data_format = tt::DataFormat::UInt32, .page_size = bytes}}}});
     }
     const auto request_tensors = requests(t);
     const bool use_slot_tensor = t.slot_id.has_value();
