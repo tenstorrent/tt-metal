@@ -45,7 +45,7 @@ skus:
   wh_galaxy_perf:
     runs_on:
       - arch-wormhole_b0
-      - pipeline-functional
+      - pipeline-perf
       - topology-6u
       - in-service
 
