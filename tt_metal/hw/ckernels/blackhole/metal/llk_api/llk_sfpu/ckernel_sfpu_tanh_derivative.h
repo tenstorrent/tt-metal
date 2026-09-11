@@ -44,17 +44,19 @@ inline void calculate_tanh_derivative() {
 
 template <bool APPROXIMATION_MODE>
 inline void tanh_derivative_init() {
-    // Same 3-segment SFPLUT table as tanh_init<APPROXIMATION_MODE=true>, kept in step with it
-    // deliberately: calculate_tanh_derivative computes 1 - lut(x)^2, so the tanh table IS this
-    // kernel's approximation. Retuned by Remez minimax fit; see tanh_init for the
-    // constraints and the coefficient encoding. tanh's own max abs error went
-    // 0.1447 -> 0.0563, which carries
-    // through here as roughly a 3x improvement in the core region (at x = 1, 1 - lut^2 was
-    // 0.1787 against a true sech^2 of 0.4200, and is now 0.3398).
+    // A 3-segment SFPLUT table, breakpoints |x| = 1 and 2. calculate_tanh_derivative computes
+    // 1 - lut(x)^2, so this table IS this deprecated kernel's approximation.
     //
-    // The cancellation blow-up for |x| > ~3.4 in the warning above is NOT helped: it comes
-    // from segment 2 returning exactly 1.0, so 1 - 1 = 0 against a small nonzero sech^2, and
-    // segment 2 is unchanged (it is exact, not fitted).
+    // It used to be the same table as tanh_init<APPROXIMATION_MODE=true> and was kept in step
+    // with it. It no longer is: tanh_init moved to the 6-entry SFPLUTFP32 table to cut ULP
+    // error, and this kernel keeps its own 3-entry table. That is deliberate rather than
+    // overlooked -- the objective here is sech^2, not tanh, so the tanh-optimal coefficients
+    // are not automatically right for 1 - lut^2, and this entry point is superseded by
+    // calculate_tanh_derivative_sech2. Fitting it properly is separate work.
+    //
+    // The cancellation blow-up for |x| > ~3.4 in the warning above comes from segment 2
+    // returning exactly 1.0, so 1 - 1 = 0 against a small nonzero sech^2. Segment 2 is exact
+    // rather than fitted, so no retune of this table helps it.
     //
     // UnarySFPUGolden._tanh_derivative_lut models this table by hand and must be updated
     // whenever these three pairs change.

@@ -150,23 +150,31 @@ sfpi_inline void _sfpu_tanh_polynomial_x2_(
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_tanh() {
     if constexpr (APPROXIMATION_MODE) {
-        // SFPU microcode
-        sfpi::vLut8si si0 = sfpi::l_reg[sfpi::LRegs::LReg0];
-        sfpi::vLut8si si1 = sfpi::l_reg[sfpi::LRegs::LReg1];
-        sfpi::vLut8si si2 = sfpi::l_reg[sfpi::LRegs::LReg2];
+        // SFPU microcode: 6-entry SFPLUTFP32 FP16 table (TABLE1), breakpoints |x| = 0.5/1/1.5/2/3.
+        // Slopes live in LReg0/1/2 packed hi/lo, intercepts in LReg4/5/6, which is where WH and BH
+        // keep this table; gelu_appx uses the same six registers the same way.
+        sfpi::vLut16ss s01 = l_reg[sfpi::LRegs::LReg0];
+        sfpi::vLut16ss s23 = l_reg[sfpi::LRegs::LReg1];
+        sfpi::vLut16ss s45 = l_reg[sfpi::LRegs::LReg2];
+        sfpi::vLut16ii i01 = l_reg[sfpi::LRegs::LReg4];
+        sfpi::vLut16ii i23 = l_reg[sfpi::LRegs::LReg5];
+        sfpi::vLut16ii i45 = l_reg[sfpi::LRegs::LReg6];
 
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
-            val = sfpi::lut(val, si0, si1, si2);
+            val = sfpi::lut(val, s01, i01, s23, i23, s45, i45, sfpi::LutSign::Retain);
             sfpi::dst_reg[0] = val;
 
             sfpi::dst_reg++;
         }
 
-        sfpi::l_reg[sfpi::LRegs::LReg0] = si0;
-        sfpi::l_reg[sfpi::LRegs::LReg1] = si1;
-        sfpi::l_reg[sfpi::LRegs::LReg2] = si2;
+        l_reg[sfpi::LRegs::LReg0] = s01;
+        l_reg[sfpi::LRegs::LReg1] = s23;
+        l_reg[sfpi::LRegs::LReg2] = s45;
+        l_reg[sfpi::LRegs::LReg4] = i01;
+        l_reg[sfpi::LRegs::LReg5] = i23;
+        l_reg[sfpi::LRegs::LReg6] = i45;
     } else if constexpr (is_fp32_dest_acc_en) {  // APPROXIMATION_MODE is false
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
@@ -206,28 +214,28 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void tanh_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (APPROXIMATION_MODE) {
-        // 3-segment SFPLUT: |x| buckets split at exactly 1.0 and 2.0, SGN_RETAIN, so the
-        // result is sign(x) * (A*|x| + B) and the kernel is odd.
+        // 6-entry SFPLUTFP32 FP16 table, TABLE1 breakpoints |x| = 0.5, 1.0, 1.5, 2.0, 3.0.
+        // SGN_RETAIN, so the result is sign(x) * (A*|x| + B) and the kernel stays odd.
         //
-        // Remez minimax fit under three constraints -- tanh(0) = 0, continuity at |x| = 1,
-        // and exact 1.0 saturation from |x| = 2 -- which leave a single free parameter
-        // (LReg0's slope); LReg1's pair follows from it as (1 - A, 2A - 1), and LReg2 is
-        // fixed by correctness rather than fitted, since tanh is exactly 1.0 out at infinity.
-        // Max abs error 0.0563, against 0.1447 for the previous 0.90625 / 0.09375+0.8125
-        // table, whose peak sat at x = 1.0 and exceeded the unary sweep's default 5% rtol.
+        // Fit minimises max bf16 ULP error, not max absolute error. Parameterised by the node
+        // values at the breakpoints so continuity -- and therefore monotonicity -- is structural;
+        // fitting the six segments independently buys 0.1 ULP and steps DOWN at three knees.
+        // Node 0 is pinned to 0 (a nonzero intercept in segment 0 makes ULP error diverge as
+        // x -> 0, since ulp(tanh x) shrinks with x and the intercept does not) and the last node
+        // to exactly 1.0, so the kernel still saturates to 1.0 rather than 0.9967.
         //
-        // Coefficients are the SFPLUT FP8 byte -- S1 E3 M4, exponent negated, 0xFF meaning
-        // 0.0 -- packed as imm16 (A << 8) | B: LReg0 0x1AFF (was 0x1DFF), LReg1 0x3814
-        // (was 0x481A), LReg2 0xFF00. That grid is 1/32 wide around A, and only 16 of its
-        // values keep 1 - A and 2A - 1 representable as well; 0.8125 is the best of those,
-        // 3.1% off the continuous optimum of 0.054625 at A = 0.816218753.
-        //
-        // Rejected: freeing LReg0's bias reaches 0.0409, but SGN_RETAIN computes
-        // sign(x) * (A|x| + B), so a nonzero B puts a jump of 0.0817 across the origin --
-        // larger than the error it buys down, and it would break monotonicity.
-        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut8si(0.8125f, 0.0f);
-        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vLut8si(0.1875f, 0.625f);
-        sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vLut8si(0.0f, 1.0f);
+        // Max 9.74 bf16 ULP, against 37.0 for the 3-entry 0.90625 table and 48.0 for the
+        // 0.8125 retune; max abs error 0.0380, better than both of those as well. The binding
+        // constraint is segment 0: a line through the origin on [0, 0.5) has an irreducible
+        // floor of 255*|1 - A| ULP, here 255*0.0381 = 9.71.
+        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut16ss(0.96191406f, 0.51416016f);
+        sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vLut16ii(0.0f, 0.22399902f);
+
+        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vLut16ss(0.28979492f, 0.088562012f);
+        sfpi::l_reg[sfpi::LRegs::LReg5] = sfpi::vLut16ii(0.44824219f, 0.75f);
+
+        sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vLut16ss(0.072753906f, 0.0f);
+        sfpi::l_reg[sfpi::LRegs::LReg6] = sfpi::vLut16ii(0.78173828f, 1.0f);
     } else {
         if constexpr (is_fp32_dest_acc_en) {
             sfpi::vConstFloatPrgm0 = 2.0f * 1.442695f;      // 2 * log2(e) == 2 / ln(2)
