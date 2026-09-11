@@ -28,11 +28,13 @@ ee209de41d5 (Tier-2 deletion of the general-SDPA executors), 955898dba2b (pickup
 (pre-commit fixups), then the commit carrying this note and the GNA-parity test fix.
 
 Open:
-1. **Broker job 431** re-runs `test_diffvae_stage5.py::test_stage5_gna_parity_w_sharded` (5 cases) after
-   the grid was widened to W=64 so the stride-(1,2,2) brick's 8-site halo fits an 8-column shard (at
-   W=32 it asserted "a 8-site halo exceeds the 4-site shard"). Read `generated/del_gna_parity.log`:
-   the two stride-(1,1,1) rows must pass at PCC >= 0.999; the stride > 1 rows only log a PCC. If green,
-   the deletion is fully verified.
+1. `test_stage5_gna_parity_w_sharded` at W=64 (job 431): 4 of 5 PASSED (both stride-1 rows at
+   PCC >= 0.999, strides (1,2,2) and (1,4,4) logged). `t22_stride11_4_8` FAILED with the planner's
+   "a multi-brick query chunk must equal the stride exactly": a T stride of 11 is not a whole number of
+   (2,4,4) bricks, a bricked-op constraint, not the deletion. The row is now stride (2,4,8)
+   (`t22_stride2_4_8`), **unverified on device**: run
+   `pytest models/tt_dit/tests/models/vae/test_diffvae_stage5.py -k gna_parity_w_sharded` (needs
+   `LTX_CORE_SRC=/home/noblewoodall/LTX-2/packages/ltx-core/src`) to close it.
 2. `test_stage5_bricked_matches_upstream_at_production_width[w480_h272]` times out at pytest's 300 s
    (jobs 426/427). PRE-EXISTING: the same case failed on 2026-08-31 at PCC 1.6-1.8 % (jobs 876/885).
    Not caused by the deletion; either investigate (first-run JIT for that geometry vs a real hang --

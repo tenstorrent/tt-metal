@@ -548,9 +548,12 @@ def test_resolved_gna_stride(monkeypatch):
         (Grid(batch=1, t=12, h=32, w=64), (1, 2, 2), None),
         (Grid(batch=1, t=12, h=32, w=64), (1, 4, 4), None),
         (Grid(batch=1, t=22, h=32, w=64), (1, 1, 1), 0.999),
-        (Grid(batch=1, t=22, h=32, w=64), (11, 4, 8), None),
+        # Every stride axis must be a whole number of bricks (or at most one brick), or the planner
+        # refuses the multi-brick chunk: with the (2,4,4) brick a T stride of 11 is not representable,
+        # so the T-stride row uses 2 (one brick deep) instead.
+        (Grid(batch=1, t=22, h=32, w=64), (2, 4, 8), None),
     ],
-    ids=["t12_stride111", "t12_stride122", "t12_stride144", "t22_stride111", "t22_stride11_4_8"],
+    ids=["t12_stride111", "t12_stride122", "t12_stride144", "t22_stride111", "t22_stride2_4_8"],
 )
 def test_stage5_gna_parity_w_sharded(*, mesh_device, device_params, sp_axis, grid, stride, pcc):
     """Stage 5 on the PRODUCTION W-sharded backend against the ltx_core reference, per GNA stride.
