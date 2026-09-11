@@ -2774,6 +2774,9 @@ class MiniMaxH3Pipeline:
             )
 
             # On-device Euler
+            ttnn.synchronize_device(self.mesh_device)
+            if ttnn.using_distributed_env():
+                ttnn.distributed_context_barrier()
             ttnn.multiply_(video_velocity, float(scheduler.step_coefficient(i)))
             ttnn.add_(self._tt_video.value, video_velocity)
             ttnn.multiply_(audio_velocity, float(audio_scheduler.step_coefficient(i)))
@@ -2799,6 +2802,10 @@ class MiniMaxH3Pipeline:
 
         # condition rows live in their own arenas, so `[:num_cond]` stays pristine -- the return
         # contract (cond | target, cond first) and the decoders are unchanged, and the anchor check
+        # below.
+        ttnn.synchronize_device(self.mesh_device)
+        if ttnn.using_distributed_env():
+            ttnn.distributed_context_barrier()
         video_rows[num_cond:] = (
             local_device_to_torch(self._tt_video.value)
             .reshape(-1, video_rows.shape[-1])[:v_target]
