@@ -479,3 +479,39 @@ Expected: still passing on WH — the ARCH_QUASAR guards left the WH path unchan
 - **Spec coverage:** audit blocker #1 (SFPU LLK) → Task 3 (swap, not port); #2 (out_o multi-binding, decode self-loops) → Task 2 (stash) + verified; #3 (formats) → Task 4; #4 (runtime reduce/matmul/transpose) → Tasks 6–11 iterative; #5 (bare packer pair, DFB→NoC aliases) → Task 9. Semaphore-API build breakage (not in audit) → Task 2. `wait_front`/`read_tile_value` prereq (not in audit) → Task 1. Prefill's streaming `evil_set_write_ptr` and `WINDOWED` STOP are **out of scope** (decode-first; prefill is Phase-3 follow-on).
 - **Type consistency:** `out_worker`/`out_o` roles, `intermed_out` scratchpad `unique_id`, and `read_tile_value` signature are used identically across Tasks 1, 2, 6, 10.
 - **Known open decision:** Task 3 interception is fork-local helper bodies (chosen for WH-green + fork-hygiene); if execution finds the helpers too entangled, the fallback is an ARCH_QUASAR branch in the shared `api/compute/experimental/sdpa.h` front-end — a shared-header change requiring extra care.
+
+---
+
+## Appendix A — Recipe: merging a `_1`/`_2` ping-pong DFB to free a tile-counter slot
+
+Added 2026-09-11 after the transpose-free QK^T work (`kt` DFB) pushed the op to 9 intra-Tensix DFBs (Quasar caps at 8). Worked example: **`max_1`/`max_2` → one `max` DFB, commit `7cdb2dcb98b`, 9→8 DFBs, WH batch1+batch32 green.** Reuse this for `sum_1`/`sum_2` and (harder) `out_im`/`out_accumulate_im`.
+
+### Why / when
+Each intra-Tensix **compute self-loop** DFB costs 2 of Quasar's 16 tile counters → cap of 8 (`program_spec.cpp:1304`). To add a DFB (e.g. `kt` for the transpose-free QK^T), free one by collapsing a redundant `prev`/`cur` ping-pong (`max`, `sum`) or the O accumulator pair into a single 2-deep DFB.
+
+### The scheme
+- One merged DFB of depth `2*B`, where `B` = per-block tiles (`statistics_tiles` for max/sum; `out_tiles = PNHt*vDHt` for O).
+- **`prev` block at the ring FRONT `[0,B)`; `cur` appended BEHIND it `[B,2B)`** via `reserve_back`+push.
+- `prev` and `cur` are the **same size** → no ring-wrap corruption. (Reusing ONE DFB for two *different-sized* things in a round is a *different* trap that gives PCC ~0.68 — not this.)
+
+### Recipe (steps)
+1. **Factory** (`*_program_factory.cpp`): replace the two `add_compute_intermediate(DFB_X_1…)/(DFB_X_2…)` with ONE `add_compute_intermediate(DFB_X, "x", tile_size, 2*B, df, &tile)`; drop the `_1`/`_2` `DFBSpecName`s, add `DFB_X`. Host C++ → needs `./build_metal.sh --build-all`. → DFB count −1.
+2. **Kernel** (`sdpa_flash_decode.cpp`): `dfb_x = dfb::x`; set `dfb_cur_x = dfb_prev_x = dfb_x`.
+3. **Classify the readers** of the pair:
+   - Reads `prev` at the FRONT and writes `cur` via `reserve_back` behind → **NO CHANGE**. `reduce_c` is the canonical one (reads prev via `copy_tile(prev, i)` — it does *not* pop; writes cur via reserve/push, which lands behind the un-acked prev).
+   - **Reads `cur`** → add a *defaulted* `in1_offset` (or `cur_offset`) param (default 0 preserves every other caller) that shifts the `sub_tiles*` tile index **and** the `wait_front` count. For `max` these were `sub_exp_block_bcast_cols_inplace` (reads cur_max) and `sub_exp_block` (reads prev@front + cur@offset).
+4. **Cur-offset value** = `B` on all chunks EXCEPT the very first flash-loop chunk, where `reduce_c` wrote cur into the *empty* ring so it lands at the FRONT → offset `0`. Pass `(k_chunk == k_chunk_start) ? 0 : B`.
+5. **KEEP `move_block(cur→prev)`** at each chunk/round end. With cur/prev aliased it becomes a **self-rotation** (copy-through-DST to the ring back + front-pop) — the copy is exactly what the next chunk's `reduce_c` and the tree `correction_block` read back as `prev`.
+6. **`correction_block` (tree path)** reads cur/prev too → apply the same offset there.
+7. **Validate**: `--build-all`, then WH `-k batch1` **and** `-k batch32`. These configs are *tree-based* (one K-chunk/core; max correction happens across cores in `correction_block`), so the flash-loop multi-chunk offset path and the attention-sink path are correct-by-construction but **not exercised** — say so in the commit.
+
+### Pitfalls (each one cost real debugging time)
+- **Deleting `move_block(cur→prev)` breaks PCC (0.197), NOT a hang.** It looks like a redundant self-copy on a merged buffer but is load-bearing (see step 5). This was the single biggest trap — the plan's original "delete the move" instinct is wrong.
+- **FIFO pop/push imbalance → device HANG** (watcher: unpack starved `UABD` on all worker cores; writer `CWFW`). Count pushes vs pops per chunk exactly. `TT_METAL_WATCHER=1 TT_METAL_SLOW_DISPATCH_MODE=1` → `generated/watcher/watcher.log`.
+- **Chunk-0 special case**: cur is at the FRONT (offset 0) on the first chunk, at offset `B` after → the cur-read offset is chunk-dependent.
+- `move_block` is **pop+push, not memcpy**; `reduce_c` does **NOT** pop `prev`.
+- **Validation gap is real**: WH configs never hit the multi-chunk / sink offset paths, so those ship unexercised.
+
+### Applying to the remaining pairs
+- **`sum_1`/`sum_2`** (`B = statistics_tiles`, easy — same as max): cur-sum readers to offset — `add_block_inplace<true>(cur_sum, prev_sum)` (reads cur + pops prev; check which arg is cur) and any `sub_exp_block_bcast_cols_inplace` that produces/uses cur_sum; `mul_block_inplace(prev_sum,…)` is prev@front (no change). `reduce_c` writes cur_sum (no change).
+- **`out_im`/`out_accumulate_im`** (`B = out_tiles`, **do LAST, hardest**): larger working set, and the first-chunk `dfb_out_mm = dfb_out_im` switch (`sdpa_flash_decode.cpp` ~537) means the PV `matmul_blocks` packs into cur vs the accumulator. With a merged buffer that becomes **"pack into the back (cur) vs the front (prev/accumulator)"** — the PV matmul output reserve/offset and the `add_block_inplace(out_accumulate_im, out_im)` both need the offset treatment. Expect more care than max/sum.
