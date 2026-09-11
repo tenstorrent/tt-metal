@@ -55,9 +55,8 @@ StreamPlacements decide_device_placement(
             nbr_node,
             num_links);
         for (uint32_t k = 0; k < num_links; k++) {
-            uint32_t noc_hops = 0;
-            const tt::tt_metal::CoreCoord worker = tt::tt_metal::experimental::Device::get_closest_worker_to_eth_core(
-                dev, tt::tt_fabric::get_forwarding_eth_core(self_node, nbr_node, k), SENDER_NOC, noc_hops);
+            const auto [worker, noc_hops] = tt::tt_metal::experimental::Device::get_closest_worker_to_eth_core(
+                *dev, tt::tt_fabric::get_forwarding_eth_core(self_node, nbr_node, k), SENDER_NOC);
             candidates.emplace(make_stream_id(k, delta == 1), WorkerCandidate{worker, noc_hops, *nbr, nbr_node});
         }
     }
