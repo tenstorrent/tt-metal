@@ -10,7 +10,7 @@ Uses HF-style ttnn.experimental.rotary_embedding (no transformation matrices).
 import os
 
 import ttnn
-from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
+from models.demos.gemma4.tt.compute_config import decode_sdpa_compute_kernel_config
 
 from .operations import (
     apply_allreduce,
@@ -319,6 +319,7 @@ def decode_forward(
                 block_size=effective_block_size(k_cache, config.head_dim, sdpa_num_local_kv_heads),
                 num_kv_heads=sdpa_num_local_kv_heads,
             ),
+            compute_kernel_config=decode_sdpa_compute_kernel_config(tt_q.device()),
             **paged_modulo_kwargs,
         )
     else:
@@ -331,6 +332,7 @@ def decode_forward(
             sliding_window_size=sliding_window,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=sdpa_program_config,
+            compute_kernel_config=decode_sdpa_compute_kernel_config(tt_q.device()),
         )
     tt_q.deallocate(True)
 
@@ -449,9 +451,9 @@ def _packed_verify_sdpa(
     compute_kernel_config = (
         ttnn.init_device_compute_kernel_config(
             _dev.arch(),
-            math_fidelity=sdpa_math_fidelity(ttnn.MathFidelity.HiFi2),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=True,
-            fp32_dest_acc_en=sdpa_fp32_dest_acc_en(True),
+            fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
         if _num_dev == 1
