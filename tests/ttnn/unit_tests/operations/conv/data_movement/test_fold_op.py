@@ -487,3 +487,12 @@ def run_fold_sharded_test(device, act_shape, stride_h, stride_w, padding, core_g
 )
 def test_fold_sharded(device, act_shape, stride_h, stride_w, padding, core_grid):
     run_fold_sharded_test(device, act_shape, stride_h, stride_w, padding, core_grid)
+
+
+def test_fold_tile_partial_tile_width_rejected(device, expect_error):
+    """Logical W=48 padded to 64: 64%32==0 hides the partial-tile W the tile-native writer would OOB into. validate_fold must FATAL on logical_shape now."""
+    shape = (1, 32, 48, 32)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    with expect_error(RuntimeError, "stride_w|logical W"):
+        ttnn.fold(ttnn_in, 32, 32)
