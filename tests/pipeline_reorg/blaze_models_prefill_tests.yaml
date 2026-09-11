@@ -594,7 +594,9 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 40
+      # Measured 57 min for the pair on one galaxy (L12 17.5, L24 27.5, plus device open and weight
+      # load), against a 70:36 three-case ladder including L5. Headroom for a cold kernel JIT cache.
+      timeout: 70
       tier: 2
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic
@@ -622,7 +624,8 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 35
+      # Measured 74:32 for both cases on one galaxy. Eleven chunks each, so this is mostly real work.
+      timeout: 90
       tier: 2
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic

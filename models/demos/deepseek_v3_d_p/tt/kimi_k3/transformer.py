@@ -291,12 +291,22 @@ class TtKimiK3Transformer(LightweightModule):
                     **block_kwargs,
                 )
             )
-            # This layer's tensorbins are now all written, so its cache is known complete. Marking
-            # here rather than after the whole stack means an interrupted build keeps the layers it
-            # finished: a 24-layer run that dies at layer 22 would otherwise leave 22 layers of
-            # tensorbins on disk with nothing recording that they are usable, and the next run would
-            # rebuild every one of them.
-            mark_layer_cached(weight_cache_path, layer_idx)
+            # A marker asserts one thing: every tensorbin for this layer was written from real
+            # weights. Marking here rather than after the whole stack means an interrupted build
+            # keeps the layers it finished -- a 24-layer run that dies at layer 22 would otherwise
+            # leave 22 layers of tensorbins on disk with nothing recording that they are usable.
+            #
+            # Two builds do not satisfy the claim and must not stamp one:
+            #   * kv_only -- the block returns before `ffn_norm` and `ffn` exist, so their
+            #     tensorbins were never written. The runner and the traced driver both build their
+            #     last layer this way, so without the guard a full-depth run at the same cache path
+            #     later reports that layer complete and `ttnn.as_tensor` loads `torch.empty`
+            #     placeholders for its FFN -- #54841, the hole this design exists to close.
+            #   * no real weights for this layer -- the build read whatever the cache already held.
+            #     If the cache was complete its marker is already on disk and nothing is lost; if it
+            #     was not, the layer is placeholders and marking it would make them permanent.
+            if layer_state and not (kv_only_last_layer and is_last):
+                mark_layer_cached(weight_cache_path, layer_idx)
 
         if kda_layers:
             self.kda_states = KdaStateCache(kda_layers, num_slots=cache_slots)
