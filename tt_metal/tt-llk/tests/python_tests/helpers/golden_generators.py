@@ -2332,8 +2332,6 @@ class UnarySFPUGolden:
             MathOperation.Sign: self._sign,
             MathOperation.TanhDerivative: self._tanh_derivative,
             MathOperation.TanhDerivativeLut: self._tanh_derivative_lut,
-            MathOperation.RsqrtCompat: self._rsqrt,
-            MathOperation.ReciprocalCompat: self._reciprocal,
             MathOperation.Expm1Cw: self._expm1,
             MathOperation.Hardmish: self._hardmish,
             MathOperation.Lgamma: self._lgamma,
@@ -5045,10 +5043,8 @@ class SdpaSfpuGolden:
         x = input_2d.to(torch.float32).clone()
         out = x.clone()
 
-        if op in (SdpaOp.RecipLegacy, SdpaOp.RecipIter):
-            # Both are 1/x. RecipLegacy used to be 1/|x| -- _reciprocal_compat_ returns a
-            # magnitude, and the legacy branch of calculate_recip_first_column called it bare
-            # instead of through _reciprocal_compat_signed_, which restores the sign.
+        if op == SdpaOp.RecipIter:
+            # 1/x; the sign has to survive the kernel.
             transformed = torch.reciprocal(x)
         elif op in (SdpaOp.ExpAccurate, SdpaOp.ExpPoly):
             # Both fold the scale, so the reference is exp(scale * x).

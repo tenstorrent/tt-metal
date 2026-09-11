@@ -8,12 +8,12 @@
  * @brief Math SFPU op structs for the eltwise chain — Exp, Log, Sqrt, Rsqrt, Power, ...
  *
  * Each op derives from `UnaryOp<Self, Slot>` (CRTP) and supplies static `init()` + `exec_impl()`.
- * Template parameters carry approx / legacy / fast-and-approx mode + DEST slot at compile time.
+ * Template parameters carry approx / fast-and-approx mode + DEST slot at compile time.
  * Runtime-param ops (Power, Rpow) override `exec(uint32_t)` directly to capture instance state.
  */
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/op_params.hpp"  // Approx, Legacy
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/op_params.hpp"  // Approx
 
 namespace compute_kernel_lib {
 
@@ -34,7 +34,7 @@ template <Dst Slot = Dst::D0>
 struct Recip;
 
 // ---- Rsqrt ----
-template <Approx fast = Approx::Exact, Legacy legacy = Legacy::Off, Dst Slot = Dst::D0>
+template <Approx fast = Approx::Exact, Dst Slot = Dst::D0>
 struct Rsqrt;
 
 // ---- Cbrt ----

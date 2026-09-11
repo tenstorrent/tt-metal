@@ -61,37 +61,37 @@ void kernel_main() {
     constexpr uint32_t num_tile_cols = get_compile_time_arg_val(15);
     constexpr uint32_t block_size = get_compile_time_arg_val(16);
     constexpr uint32_t ring_size = get_compile_time_arg_val(17);  // stats_tiles_cols (== TP shards)
-    constexpr uint32_t has_weight = get_compile_time_arg_val(19);
-    constexpr uint32_t is_tp_1 = get_compile_time_arg_val(22);
-    constexpr uint32_t stats_local_cb = get_compile_time_arg_val(23);     // local partial (mean, var) row 0
-    constexpr uint32_t stats_gathered_cb = get_compile_time_arg_val(24);  // ring partials [mean_d, var_d] row 0
-    constexpr uint32_t bias_cb = get_compile_time_arg_val(27);
-    constexpr uint32_t has_bias = get_compile_time_arg_val(28);
-    constexpr uint32_t per_token_weight = get_compile_time_arg_val(31);
-    constexpr uint32_t per_token_bias = get_compile_time_arg_val(32);
-    constexpr uint32_t eps_bits = get_compile_time_arg_val(33);
+    constexpr uint32_t has_weight = get_compile_time_arg_val(18);
+    constexpr uint32_t is_tp_1 = get_compile_time_arg_val(21);
+    constexpr uint32_t stats_local_cb = get_compile_time_arg_val(22);     // local partial (mean, var) row 0
+    constexpr uint32_t stats_gathered_cb = get_compile_time_arg_val(23);  // ring partials [mean_d, var_d] row 0
+    constexpr uint32_t bias_cb = get_compile_time_arg_val(26);
+    constexpr uint32_t has_bias = get_compile_time_arg_val(27);
+    constexpr uint32_t per_token_weight = get_compile_time_arg_val(30);
+    constexpr uint32_t per_token_bias = get_compile_time_arg_val(31);
+    constexpr uint32_t eps_bits = get_compile_time_arg_val(32);
     // Wide-shard layout: streaming_low_l1 streams the input (Welford PRE consumes
     // the reader's 1st pass block-by-block; POST consumes the 2nd pass).
     // block_major_post fuses (x-mean)*1/std*w+b per block so intermediate/output
     // CBs stay O(block_size). For wide LayerNorm the factory sets both together.
-    constexpr uint32_t streaming_low_l1 = get_compile_time_arg_val(34);
-    constexpr uint32_t block_major_post = get_compile_time_arg_val(36);
-    // Reciprocal LUT (CT 39/40): when use_recip_lut, recip_lut_cb holds reduce_width fp32
+    constexpr uint32_t streaming_low_l1 = get_compile_time_arg_val(33);
+    constexpr uint32_t block_major_post = get_compile_time_arg_val(35);
+    // Reciprocal LUT (CT 37/38): when use_recip_lut, recip_lut_cb holds reduce_width fp32
     // reciprocals [1/1..1/reduce_width] (reader filled it once from DRAM). The Welford LLK
     // does an array load instead of a soft-float 1/(N+1) per sample. Absent -> runtime div.
-    constexpr uint32_t recip_lut_cb = get_compile_time_arg_val(38);
-    constexpr uint32_t use_recip_lut = get_compile_time_arg_val(39);
+    constexpr uint32_t recip_lut_cb = get_compile_time_arg_val(37);
+    constexpr uint32_t use_recip_lut = get_compile_time_arg_val(38);
     // Zeroed welford-state CB (2 tiles: mean=0, M2=0). Captured once below while the SFPU is clean,
     // reloaded per row to reset the welford accumulator; see the cold-start capture.
-    constexpr uint32_t welford_zero_cb = get_compile_time_arg_val(40);
-    // Per-batch adaLN (CT 41/42/43): weight/bias is [batch,1,H] — broadcast over seq (so the
+    constexpr uint32_t welford_zero_cb = get_compile_time_arg_val(39);
+    // Per-batch adaLN (CT 40/41/42): weight/bias is [batch,1,H] — broadcast over seq (so the
     // bcast_rows path applies) but distinct per batch. The reader streams THIS row's batch slice
     // (batch index = global_tile_row / rows_per_batch_tiles, computed reader-side) to the front of
     // weight_cb / bias_cb per row, so compute consumes per row with NO batch offset here —
     // identical to per-token. For a true-broadcast weight per_batch_* is 0.
-    constexpr uint32_t per_batch_weight = get_compile_time_arg_val(41);
-    constexpr uint32_t per_batch_bias = get_compile_time_arg_val(42);
-    constexpr uint32_t rows_per_batch_tiles = get_compile_time_arg_val(43);
+    constexpr uint32_t per_batch_weight = get_compile_time_arg_val(40);
+    constexpr uint32_t per_batch_bias = get_compile_time_arg_val(41);
+    constexpr uint32_t rows_per_batch_tiles = get_compile_time_arg_val(42);
 
     CircularBuffer cb_input(input_cb);
     CircularBuffer cb_mean(mean_cb);
@@ -264,10 +264,8 @@ void kernel_main() {
             transpose_tile(invstd_cb, 0, var_dst);
             binop_with_scalar_tile_init();
             add_unary_tile(var_dst, eps_bits);
-            // legacy rsqrt to match the composite dit_layernorm baseline (it uses
-            // rsqrt_tile<true>); the non-legacy default diverges on low-variance rows.
-            rsqrt_tile_init<true>();
-            rsqrt_tile<true>(var_dst);
+            rsqrt_tile_init();
+            rsqrt_tile(var_dst);
             tile_regs_commit();
 
             cb_mean.pop_front(1);
@@ -341,8 +339,8 @@ void kernel_main() {
             binop_with_scalar_tile_init();
             mul_unary_tile(DV, recip_k_bits);  // DV = var_g
             add_unary_tile(DV, eps_bits);      // var_g + eps
-            rsqrt_tile_init<true>();
-            rsqrt_tile<true>(DV);  // DV = 1/std (legacy, matches baseline)
+            rsqrt_tile_init();
+            rsqrt_tile(DV);  // DV = 1/std
             tile_regs_commit();
             cb_combine.reserve_back(2);
             tile_regs_wait();

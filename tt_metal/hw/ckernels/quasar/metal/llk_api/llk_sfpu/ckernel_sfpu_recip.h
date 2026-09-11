@@ -75,17 +75,11 @@ inline void _init_reciprocal_() {
  * @tparam EN_32BIT_DEST: is_fp32_dest_acc_en; when true and not APPROXIMATION_MODE, run the
  *         Newton-Raphson refinement for a full-precision 32-bit Dest result.
  * @tparam ITERATIONS: Number of SFPU loop iterations over the Dest tile.
- * @tparam legacy_compat: ABI-parity shim; must be true (enforced by static_assert).
  * @note Call @ref recip_init with matching template args first — it programs the Newton-Raphson
  *       constant (vConstFloatPrgm0) that @ref _sfpu_reciprocal_ refines with.
  */
-template <
-    bool APPROXIMATION_MODE,
-    bool EN_32BIT_DEST,
-    int ITERATIONS = SFPU_ITERATIONS,
-    bool legacy_compat /*maybe_unused*/ = true>
+template <bool APPROXIMATION_MODE, bool EN_32BIT_DEST, int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_reciprocal() {
-    static_assert(legacy_compat == true, "Non-default legacy_compat (false) not supported in Quasar reciprocal");
     constexpr int max_iter = (!EN_32BIT_DEST || APPROXIMATION_MODE) ? 0 : 2;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -95,9 +89,8 @@ inline void calculate_reciprocal() {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool EN_32BIT_DEST /*maybe_unused*/, bool legacy_compat /*maybe_unused*/ = true>
+template <bool APPROXIMATION_MODE, bool EN_32BIT_DEST /*maybe_unused*/>
 void recip_init() {
-    static_assert(legacy_compat == true, "Non-default legacy_compat (false) not supported in Quasar reciprocal");
     llk_math_eltwise_unary_sfpu_init<SfpuType::reciprocal>();
     // Program the Newton-Raphson constant the non-approximate reciprocal refines with.
     _init_reciprocal_<APPROXIMATION_MODE>();

@@ -29,42 +29,23 @@ constexpr bool sdpa_can_preload_ln2_constants() {
     return (USE_SFPARECIP_INSTR || POLY_DEGREE == 1 || POLY_DEGREE == 2);
 }
 
-template <bool legacy_compat, bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en>
 inline void calculate_recip_first_column() {
     constexpr int ITERATIONS_HALF_FACE = 4;
-    if constexpr (legacy_compat) {
-        for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
-            sfpi::vFloat in = sfpi::dst_reg[0];
-            // _reciprocal_compat_signed_ is the bare _reciprocal_compat_ plus the sign restore
-            // the primitive drops; this path used to call the primitive directly and so returned
-            // 1/|x| rather than 1/x. The one consumer that still takes it bare is
-            // sampling_recip_value in blackhole's ckernel_sfpu_sampling.h, which keeps |1/x|
-            // deliberately because its legacy path has to stay bit-identical for blaze. No such
-            // contract covers legacy_compat here -- it selects the algorithm, nothing pins the
-            // output bits -- so the sign is restored rather than documented.
-            sfpi::vFloat out = ckernel::sfpu::_reciprocal_compat_signed_<APPROX ? 2 : 3>(in);
-            if constexpr (!(is_fp32_dest_acc_en || APPROX)) {
-                out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
-            }
-            sfpi::dst_reg[0] = out;
-            sfpi::dst_reg += 2;
-        }
-    } else {
-        for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
-            sfpi::vFloat in = sfpi::dst_reg[0];
-            sfpi::vFloat out;
+    for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
+        sfpi::vFloat in = sfpi::dst_reg[0];
+        sfpi::vFloat out;
 
-            if constexpr (APPROX) {
-                out = ckernel::sfpu::sfpu_reciprocal_iter<0>(in);
-            } else if constexpr (is_fp32_dest_acc_en) {
-                out = ckernel::sfpu::sfpu_reciprocal_iter<2>(in);
-            } else {
-                out = ckernel::sfpu::sfpu_reciprocal_iter<1>(in);
-                out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
-            }
-            sfpi::dst_reg[0] = out;
-            sfpi::dst_reg += 2;
+        if constexpr (APPROX) {
+            out = ckernel::sfpu::sfpu_reciprocal_iter<0>(in);
+        } else if constexpr (is_fp32_dest_acc_en) {
+            out = ckernel::sfpu::sfpu_reciprocal_iter<2>(in);
+        } else {
+            out = ckernel::sfpu::sfpu_reciprocal_iter<1>(in);
+            out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
         }
+        sfpi::dst_reg[0] = out;
+        sfpi::dst_reg += 2;
     }
 }
 

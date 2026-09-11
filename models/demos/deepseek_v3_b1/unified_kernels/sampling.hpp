@@ -135,16 +135,15 @@ FORCE_INLINE void generate_row0_bcast(const uint32_t cb_id, uint16_t bf16_val) {
 #if defined(TRISC_MATH)
 #include "experimental/llk_math_top32_rm_api.h"
 #include "sfpu/experimental/ckernel_sfpu_deepseek_top32_rm.h"
-template <bool legacy_compat = true>
 ALWI void sampling_recip_tile_scalar(uint32_t idst) {
-    // Programs the Newton-Raphson constant the legacy_compat=false path reads from
-    // vConstFloatPrgm0; compile-time no-op on the legacy path used here.
-    ckernel::sfpu::sampling_recip_init<legacy_compat>();
+    // Programs the Newton-Raphson constant that calculate_sampling_recip_scalar reads from
+    // vConstFloatPrgm0.
+    ckernel::sfpu::sampling_recip_init();
     SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_sampling_recip_scalar,
-        (legacy_compat, DST_ACCUM_MODE),
+        (DST_ACCUM_MODE),
         idst,
         VectorMode::None);
 }

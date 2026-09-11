@@ -448,17 +448,6 @@ _OP_DOMAIN_REGISTRY: Dict[
             distribution=DistributionKind.LOG_UNIFORM, low=1e-4, high=100.0
         )
     ),
-    # rsqrt_compat (legacy reciprocal-root): domain x > 0. Keep the range a bit
-    # tighter than accurate rsqrt — the compat approximation loses accuracy at the
-    # extreme small-input end (rsqrt -> very large).
-    MathOperation.RsqrtCompat: OperandSpecs(
-        spec_A=StimuliSpec(
-            distribution=DistributionKind.LOG_UNIFORM, low=1e-2, high=100.0
-        )
-    ),
-    # reciprocal_compat (legacy exponent-difference reciprocal): same domain as the
-    # accurate Reciprocal -- everything except the pole, both signs.
-    MathOperation.ReciprocalCompat: _reciprocal_spec,
     # expm1_cw (component-wise expm1): same safe range as the standalone expm1.
     MathOperation.Expm1Cw: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
@@ -1111,7 +1100,6 @@ _SFPU_UNDEFINED_RANGES: Dict[
 ] = {
     # ── Unary: only spec_A has a hole ────────────────────────────────────────
     MathOperation.Reciprocal: {Operand.A: [(-1e-6, 1e-6)]},
-    MathOperation.ReciprocalCompat: {Operand.A: [(-1e-6, 1e-6)]},
     MathOperation.Log: {Operand.A: [(-float("inf"), 1e-6)]},
     MathOperation.Sqrt: {Operand.A: [(-float("inf"), 0.0)]},
     MathOperation.Atanh: {
@@ -1432,8 +1420,6 @@ _OP_SINGULARITIES: Dict[
     MathOperation.Sqrt: {Operand.A: ((0.0, _ABOVE),)},
     MathOperation.SqrtCustom: {Operand.A: ((0.0, _ABOVE),)},
     MathOperation.Rsqrt: {Operand.A: ((0.0, _ABOVE),)},
-    MathOperation.RsqrtCompat: {Operand.A: ((0.0, _ABOVE),)},
-    MathOperation.ReciprocalCompat: {Operand.A: ((0.0, _BOTH),)},
     # Inverse functions defined only on (-1, 1) or [-1, 1]: the interior is the defined
     # side, so -1 is probed upward and +1 downward.
     MathOperation.Atanh: {Operand.A: ((-1.0, _ABOVE), (1.0, _BELOW))},
@@ -1977,7 +1963,7 @@ SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
 #
 # Log stays out: the kernel clamps a non-finite input to the format maximum and logs that, so
 # every special comes back finite where the golden gives inf or NaN. Kernel behaviour with no
-# ISA ruling, so the right outcome needs an owner -- as does RsqrtCompat(0).
+# ISA ruling, so the right outcome needs an owner.
 
 
 def _dest_acc_flag(dest_acc: Union[bool, Enum]) -> bool:

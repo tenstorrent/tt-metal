@@ -43,7 +43,7 @@ from helpers.utils import passed_test
 
 TILE_DIMENSIONS = [TILE_DIM, TILE_DIM]
 
-RECIP_OPS = (SdpaOp.RecipLegacy, SdpaOp.RecipIter)
+RECIP_OPS = (SdpaOp.RecipIter,)
 EXP_OPS = (SdpaOp.ExpAccurate, SdpaOp.ExpPoly)
 
 # The exp bodies take their scale as a uint16_t bf16 pattern, so only bf16-exact values
@@ -118,8 +118,7 @@ def _ramp(lo: float, hi: float) -> torch.Tensor:
 # produces, so the floor doesn't decide a comparison.
 
 # Most paths that pack into bf16 share one pair because packer rounding is the main source of error.
-# The exceptions are the two paths that are not limited by the rounding precision: correction
-# accumulates across five tiles, and RecipLegacy under APPROX is a 7-bit arecip with no Newton step.
+# The exception is correction, which accumulates across five tiles.
 _TOLERANCES = {
     # op, approx (None where the body ignores it): bf16-packed, fp32 end-to-end
     (SdpaOp.Correction, None): ((1.5e-4, 2.5e-2), (1.0e-6, 2.5e-7)),
@@ -128,8 +127,6 @@ _TOLERANCES = {
     (SdpaOp.Softplus, None): ((1.0e-4, 1.0e-2), (1.0e-4, 4.0e-3)),
     (SdpaOp.RecipIter, False): ((2.5e-3, 1.2e-2), (1.2e-7, 2.5e-7)),
     (SdpaOp.RecipIter, True): ((2.5e-3, 1.2e-2), (2.5e-3, 1.2e-2)),
-    (SdpaOp.RecipLegacy, False): ((2.5e-3, 1.2e-2), (1.5e-3, 3.0e-3)),
-    (SdpaOp.RecipLegacy, True): ((2.5e-3, 1.0e-1), (2.5e-3, 8.0e-2)),
 }
 
 
@@ -180,9 +177,8 @@ def _stimulus(variant: Variant) -> torch.Tensor:
         # keeps any element from being its own reciprocal, which would be written yet compare
         # equal to the input and read as a footprint gap.
 
-        # Both bodies return 1/x, so the sign has to survive the kernel; RecipLegacy used to
-        # return |1/x| and no longer does. Sign alternates by row, not by flat index, because
-        # the kernel writes every other row.
+        # The body returns 1/x, so the sign has to survive the kernel. Sign alternates by row,
+        # not by flat index, because the kernel writes every other row.
         magnitudes = _ramp(1.25, 5.0)
         rows = torch.arange(ELEMENTS_PER_TILE) // TILE_DIM
         signs = torch.where(rows % 2 == 0, torch.tensor(1.0), torch.tensor(-1.0))

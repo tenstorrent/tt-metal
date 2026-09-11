@@ -1279,7 +1279,6 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         num_tile_cols,
         block_size,
         /*stats_tiles_cols=*/args.ring_size,
-        /*use_legacy_rsqrt=*/0u,
         static_cast<uint32_t>(has_weight),
         static_cast<uint32_t>(fuse_rope),
         head_dim_tiles,
@@ -1309,14 +1308,14 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         static_cast<uint32_t>(fuse_mm_rope),      // block-major POST: fuse matmul+rope per block (rotated block-local)
         static_cast<uint32_t>(block_major_post),  // full block-major POST (all sub-phases per block; wide low-TP)
         static_cast<uint32_t>(args.norm_type),    // 0=RMS (sum-of-squares), 1=Welford LayerNorm (mean/variance)
-        // CT 38/39: recip LUT (LayerNorm). When use_recip the LN kernel reads recip_lut_cb
+        // CT 37/38: recip LUT (LayerNorm). When use_recip the LN kernel reads recip_lut_cb
         // as a std::array<uint32_t, reduce_width> and passes it to welford_update/finalize
         // (array load vs soft-float 1/(N+1)); else it uses the runtime-division fallback.
         recip_lut_cb_id,
         static_cast<uint32_t>(use_recip_lut),
-        // CT 40: zeroed welford-state CB (LayerNorm warm-row accumulator reset).
+        // CT 39: zeroed welford-state CB (LayerNorm warm-row accumulator reset).
         welford_zero_cb_id,
-        // CT 41/42/43: per-batch adaLN. per_batch_weight/bias tell the compute to consume + POP
+        // CT 40/41/42: per-batch adaLN. per_batch_weight/bias tell the compute to consume + POP
         // weight_cb/bias_cb per row (the reader streams each row's batch slice, face-row broadcast)
         // using mul_bcast_rows — same per-row consumption as per-token, broadcast op.
         // rows_per_batch_tiles is unused by compute now (the reader owns batch indexing); kept for

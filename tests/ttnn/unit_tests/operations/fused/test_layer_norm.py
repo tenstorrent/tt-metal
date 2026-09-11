@@ -348,8 +348,7 @@ def test_large_layer_norm_with_bias(device, h, w, use_welford):
 
 @pytest.mark.parametrize("h, w", [(24, 42), (2048, 2048)])
 @pytest.mark.parametrize("legacy_reduction", [True, False])
-@pytest.mark.parametrize("legacy_rsqrt", [True, False])
-def test_large_layer_norm_with_legacy_reduction_and_rsqrt(device, h, w, legacy_reduction, legacy_rsqrt):
+def test_large_layer_norm_with_legacy_reduction(device, h, w, legacy_reduction):
     torch.manual_seed(0)
     dtype = torch.bfloat16
 
@@ -363,7 +362,7 @@ def test_large_layer_norm_with_legacy_reduction_and_rsqrt(device, h, w, legacy_r
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
     program_config = ttnn.LayerNormDefaultProgramConfig(
-        legacy_reduction=legacy_reduction, legacy_rsqrt=legacy_rsqrt, use_welford=False
+        legacy_reduction=legacy_reduction, use_welford=False
     )
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
