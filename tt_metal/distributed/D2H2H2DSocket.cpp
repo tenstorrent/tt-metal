@@ -8,6 +8,7 @@
 #include <cstring>
 #include <iostream>
 #include <sstream>
+#include <utility>
 
 namespace tt::tt_metal::experimental {
 
@@ -31,7 +32,7 @@ D2H2H2DSocket::D2H2H2DSocket(HostRegion& region, Deliverer* deliverer, HostTopol
     : region_(region),
       deliverer_(deliverer),
       topo_(topo),
-      clock_(clock),
+      clock_(std::move(clock)),
       cfg_(cfg),
       transport_(transport),
       credit_out_(topo.num > 0 ? topo.num : 1),
@@ -256,6 +257,16 @@ uint64_t D2H2H2DSocket::deliver_to_l1(const Job& job, WorkerStats& ws, uint32_t 
             // a 'forged' doorbell releases a kernel for bytes that never arrived, which is why
             // this is a fault and not a clamp.
             why = "overlaps a doorbell word (rdma_signal / rdma_completion / stop)";
+        } else if (store_guard_.ring_bytes != 0 &&
+                   static_cast<uint64_t>(off) + length > store_guard_.ring_bytes) {
+            // PAST THE END OF THE RING, which lo/hi cannot see: they bound L1, and this offset
+            // is about to be handed to a kernel that reads pcie_data_addr + off out of the
+            // aliased host ring. Under the sizing the socket path uses today -- one payload per
+            // ring -- every store lands here, which is correct: a store needs the ring sized to
+            // the whole L1 mirror (arena minus a page) and that is not implemented. Faulting
+            // here is the refusal, and it also stops a peer-supplied offset from reaching MPI.
+            why = "runs past the end of the aliased H2D ring -- a store needs the ring sized to "
+                  "the L1 mirror, which this build does not do";
         }
         if (why != nullptr) {
             store_faults_.fetch_add(1, std::memory_order_relaxed);
@@ -401,12 +412,8 @@ uint64_t D2H2H2DSocket::service_tx(const Job& job, WorkerStats& ws, bool rec) {
     bool usable = false;
     uint64_t visibility_ns = 0;
     uint64_t accumulated = elapsed_ns_of(job, usable, visibility_ns);
-    // commented out b/c deadcode
-    // const bool returning = (ctrl_flags(job.ctrl) & kFlagReply) != 0;
     if (!usable) {
         accumulated = 0;
-    // commented out b/c deadcode
-    // } else if (!returning && accumulated > 0) {
     } else if (accumulated > 0) {
         add_sample_with_window(ws, rec, kHopT6ToHost, accumulated, length, timed_start_ns(), now_ns());
         if (visibility_ns > 0) {
@@ -455,8 +462,6 @@ uint64_t D2H2H2DSocket::service_tx(const Job& job, WorkerStats& ws, bool rec) {
 
         case kHostReachRemote:
             counters_.routed_remote.fetch_add(1, std::memory_order_relaxed);
-            // commented out b/c deadcode
-            // return deliver_remote(job, ws, dest_core, length, accumulated, returning);
             return deliver_remote(job, ws, dest_core, length, accumulated);
 
         default:
@@ -602,9 +607,6 @@ void D2H2H2DSocket::return_credit(uint32_t origin_selector, uint64_t turnaround_
     }
 }
 
-// commented out b/c deadcode -- the trailing `bool reply` is always false
-// uint64_t D2H2H2DSocket::deliver_remote(const Job& job, WorkerStats& ws, uint32_t dest_core,
-//                                        uint64_t length, uint64_t accumulated_ns, bool reply) {
 uint64_t D2H2H2DSocket::deliver_remote(const Job& job, WorkerStats& ws, uint32_t dest_core,
                                        uint64_t length, uint64_t accumulated_ns) {
     (void)ws; // trick to pass compile b/c while not used it's part of the interface
@@ -619,9 +621,27 @@ uint64_t D2H2H2DSocket::deliver_remote(const Job& job, WorkerStats& ws, uint32_t
     const uint32_t want_host = uva_target_host(job.operand[kArgDestUva], topo_);
     {
         uint32_t why = kPeerOk;
-        if (peers_.for_host(want_host, why) == nullptr) {
+        Transport* dest = peers_.for_host(want_host, why);
+        if (dest == nullptr) {
             std::ostringstream m;
             m << "UVA names host " << want_host << ": " << peer_why_name(why);
+            fail(m.str());
+            counters_.routed_nowhere.fetch_add(1, std::memory_order_relaxed);
+            counters_.tx_done.fetch_add(1, std::memory_order_release);
+            retire_tx(job.core);
+            return 0;
+        }
+        // AND THE CORE, the other half of the same decoded word. t6_selector_core() is
+        // `selector % kT6CoresPerChip`, so a UVA decodes core indices through 255 while the
+        // peer provisions cores_in_use arenas. Unbounded, that index becomes
+        // rx_arena_off(dest_core) as an MPI target displacement and reg_offset(dest_core) as a
+        // notice target -- one past the end of the peer's window, the other inside it in dead
+        // padding. Refused and counted exactly like the host above, for the reason the store
+        // guard exists: this word arrived from another machine.
+        if (dest_core >= dest->peer().cores_in_use) {
+            std::ostringstream m;
+            m << "UVA names core " << dest_core << " on host " << want_host << ", which provisions "
+              << dest->peer().cores_in_use << " cores";
             fail(m.str());
             counters_.routed_nowhere.fetch_add(1, std::memory_order_relaxed);
             counters_.tx_done.fetch_add(1, std::memory_order_release);
@@ -643,8 +663,6 @@ uint64_t D2H2H2DSocket::deliver_remote(const Job& job, WorkerStats& ws, uint32_t
     r.dest_core = dest_core;
     r.length = length;
     r.accumulated_ns = accumulated_ns;
-    // commented out b/c deadcode
-    // r.reply = reply;
     r.t_queued = now_ns();
 
     // Register kArgDestUva holds the destination in BOTH store encodings: the immediate form
@@ -737,19 +755,13 @@ bool D2H2H2DSocket::send_try_start(SendSlot& slot, uint32_t core, WorkerStats& w
         m << "store fault: destination offset 0x" << std::hex << store_off << std::dec << " + length "
           << r.length << " runs past the " << kArenaBytes << " B arena and into the next core's";
         fail(m.str());
-        // commented out b/c deadcode
-        // if (!r.reply) {
         counters_.tx_done.fetch_add(1, std::memory_order_release);
         retire_tx(r.src_core);
-        // commented out b/c deadcode
-        // }
         return false;
     }
     // ONE RECEIVE SLOT. The aliased ring's data region is exactly one payload, so the arena
     // start is the only place a payload can land.
     //
-    // commented out b/c deadcode
-    // slot.rx_slot = 0;
     const uint64_t remote_off = HostRegion::rx_arena_off(r.dest_core) + store_off;
 
     // The endpoint for this message's destination, resolved on the posting thread.
@@ -757,12 +769,8 @@ bool D2H2H2DSocket::send_try_start(SendSlot& slot, uint32_t core, WorkerStats& w
     Transport* const tp = peers_.for_host(r.dest_host, why);
     if (tp == nullptr) {
         fail("send: host " + std::to_string(r.dest_host) + ": " + peer_why_name(why));
-        // commented out b/c deadcode
-        // if (!r.reply) {
         counters_.tx_done.fetch_add(1, std::memory_order_release);
         retire_tx(r.src_core);
-        // commented out b/c deadcode
-        // }
         return false;
     }
 
@@ -777,12 +785,8 @@ bool D2H2H2DSocket::send_try_start(SendSlot& slot, uint32_t core, WorkerStats& w
         fail("transport post: " + e);
         transport_failed_.store(true, std::memory_order_release);
         sender_state_.store(0, std::memory_order_relaxed);
-        // commented out b/c deadcode
-        // if (!r.reply) {
         counters_.tx_done.fetch_add(1, std::memory_order_release);
         retire_tx(r.src_core);
-        // commented out b/c deadcode
-        // }
         return false;
     }
     slot.phase = SendSlot::kAwaitPayload;
@@ -865,12 +869,8 @@ bool D2H2H2DSocket::send_poll(SendSlot& slot, WorkerStats& ws, bool rec) {
                 ws.timed_bytes += moved;
                 trace_add(ws, rec, timed_start_ns(), moved, stage_ns);
             }
-            // commented out b/c deadcode
-            // if (!slot.r.reply) {
             counters_.tx_done.fetch_add(1, std::memory_order_release);
             retire_tx(slot.r.src_core);
-            // commented out b/c deadcode
-            // }
             slot.phase = SendSlot::kIdle;
             return true;
         }
@@ -885,21 +885,14 @@ bool D2H2H2DSocket::send_poll(SendSlot& slot, WorkerStats& ws, bool rec) {
 void D2H2H2DSocket::send_fail_slot(SendSlot& slot) {
     transport_failed_.store(true, std::memory_order_release);
     sender_state_.store(0, std::memory_order_relaxed);
-    // commented out b/c deadcode
-    // if (!slot.r.reply) {
     counters_.tx_done.fetch_add(1, std::memory_order_release);
     retire_tx(slot.r.src_core);
-    // commented out b/c deadcode
-    // }
     slot.phase = SendSlot::kIdle;
 }
 
 bool D2H2H2DSocket::send_arm_notice(SendSlot& slot) {
     sender_state_.store(3, std::memory_order_relaxed);
     if (const std::string e = slot.tp->post_notice(
-            // commented out b/c deadcode
-            //   slot.rx_slot -> 0        (the field was always 0)
-            //   slot.r.reply -> false    (nothing ever set it)
             slot.r.dest_core, /*rx_slot=*/0u, slot.r.length,
             t6_global_selector(topo_.ident, cfg_.chip, slot.r.src_core, topo_.chips_per_host),
             slot.r.accumulated_ns + (now_ns() - slot.t0), /*reply=*/false, my_stage_slot(),

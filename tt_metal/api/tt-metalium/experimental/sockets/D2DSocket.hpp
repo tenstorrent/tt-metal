@@ -23,6 +23,11 @@ namespace tt::tt_metal::experimental {
 struct L1Map {
     static constexpr uint32_t kStageSlotBytes = 16;
     static constexpr uint32_t kStageSlots = 5;
+    // A doorbell gets its own cache line, so ringing one never disturbs a neighbour's meaning.
+    static constexpr uint32_t kDoorbellBytes = 64;
+    // The receive SCR. host_deliver.cpp writes it as ONE 8-byte strict-ordered UC store and
+    // kernels/test_kernel_pull.cpp reads it back as a uint64_t, so 8 is exact, not a round-up.
+    static constexpr uint32_t kDestWordBytes = 8;
 
     uint32_t l1_size = 0;  // bytes of L1 per core; the guard's upper bound
 
@@ -36,6 +41,16 @@ struct L1Map {
     uint32_t deliver_addr = 0;
 
     static L1Map compute(uint32_t l1_base, uint32_t l1_size, uint32_t payload_bytes);
+
+    // One past the last byte compute() claimed. dest_word_addr is the highest field, so this
+    // is the number the L1 bound has to be taken against -- not payload_addr + payload_bytes,
+    // which leaves control_bytes() of tail unchecked.
+    uint32_t end() const { return dest_word_addr + kDestWordBytes; }
+
+    // Everything compute() stacks ABOVE the payload: the staging slots, the three doorbell
+    // lines, the dest word. Measured from stage_addr, so it is independent of payload_bytes,
+    // and a field added anywhere below end() is accounted for without editing a tally.
+    uint32_t control_bytes() const { return end() - stage_addr; }
 
     std::string fits(uint32_t payload_bytes) const;
 

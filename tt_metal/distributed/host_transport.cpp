@@ -298,7 +298,9 @@ private:
     std::string check_memory_model() {
         int* model = nullptr;
         int flag = 0;
-        MPI_Win_get_attr(win_, MPI_WIN_MODEL, &model, &flag);
+        // The void* out-parameter receives a POINTER to the attribute, so &model is an
+        // int** -- cast it explicitly rather than leave a multilevel conversion implicit.
+        MPI_Win_get_attr(win_, MPI_WIN_MODEL, static_cast<void*>(&model), &flag);
         if (flag == 0 || model == nullptr) {
             model_ = "unknown";
             return "the runtime did not report MPI_WIN_MODEL; this transport needs MPI_WIN_UNIFIED "
@@ -342,7 +344,7 @@ struct MpiOp {
 
 class MpiRmaTransport final : public Transport {
 public:
-    explicit MpiRmaTransport(TransportConfig cfg) : cfg_(std::move(cfg)) {
+    explicit MpiRmaTransport(TransportConfig cfg) : cfg_(cfg) {
         ops_.reserve(kMaxOutstandingOps);
         free_slots_.reserve(kMaxOutstandingOps);
         for (uint32_t i = 0; i < kMaxOutstandingOps; ++i) {
@@ -388,6 +390,16 @@ public:
         op = OpHandle{};
         if (local_offset + bytes > region_bytes_) {
             return "post: local offset+len runs off the end of the region";
+        }
+        // AND THE REMOTE HALF. This displacement is rx_arena_off(dest_core) of a core index
+        // decoded out of a peer-supplied UVA, and nothing upstream bounded it. Past the end of
+        // the peer's window the standard says the Rput is erroneous and what you actually get
+        // is an MPI error or a NIC completion failure -- a backstop, but the wrong layer
+        // reporting it. Checked here, where the number becomes a remote address.
+        if (remote_offset + bytes > peer_.region_bytes) {
+            return "post: remote offset " + std::to_string(remote_offset) + " + " +
+                   std::to_string(bytes) + " B runs past the end of the peer's " +
+                   std::to_string(peer_.region_bytes) + " B window";
         }
         if (bytes > static_cast<uint64_t>(INT32_MAX)) {
             return "post: " + std::to_string(bytes) +
@@ -448,7 +460,7 @@ public:
         // MPI_WIN_NULL only if the credit window failed to open, and open() turns that into a
         // connect failure -- so a live transport always has one. Guarded anyway: a null window
         // here would abort inside MPI rather than report.
-        if (const MPI_Win cwin = MpiWindow::instance().credit_win(); cwin != MPI_WIN_NULL) {
+        if (MPI_Win cwin = MpiWindow::instance().credit_win(); cwin != MPI_WIN_NULL) {
             std::lock_guard<std::mutex> g(credit_m_);
             const int crc = MPI_Win_flush(peer_rank_, cwin);
             if (crc != MPI_SUCCESS) {
@@ -508,6 +520,18 @@ public:
         }
 
         const uint64_t target = reg_offset(dest_core, rx_slot_reg(rx_slot));
+        // BOUNDED AGAINST THE BANK ARRAY, NOT THE WINDOW, because the window check would pass:
+        // the array holds kProvisionedCores banks of kBankBytes inside the first 2 MiB, so
+        // reg_offset() of an out-of-range core stays comfortably INSIDE the peer's window and
+        // lands in the padding above the banks. That write succeeds, the notice is never seen,
+        // and no counter moves -- the quietest failure in this file.
+        if (dest_core >= kProvisionedCores) {
+            return "post_notice: core " + std::to_string(dest_core) + " is outside the " +
+                   std::to_string(kProvisionedCores) + " provisioned register banks";
+        }
+        if (target + notice_bytes > peer_.region_bytes) {
+            return "post_notice: register offset runs past the end of the peer's window";
+        }
 
         std::string acq_err;
         MpiOp* mop = acquire_op(dest_core, acq_err);
@@ -700,6 +724,13 @@ private:
         if (off + sizeof(uint64_t) > region_bytes_) {
             return "staged word: slot " + std::to_string(stage_slot) + " lies outside the region";
         }
+        // The credit window is created over the same base and span as the main one, so the
+        // peer's region_bytes bounds both. The local staging offset is checked above; this is
+        // the remote target, which credit_word_offset() derives from a core index.
+        if (remote_offset + sizeof(uint64_t) > peer_.region_bytes) {
+            return "staged word: remote offset " + std::to_string(remote_offset) +
+                   " runs past the end of the peer's window";
+        }
         auto* staged = reinterpret_cast<uint64_t*>(region_ + off);
 
         std::lock_guard<std::mutex> g(credit_m_);
@@ -832,9 +863,7 @@ private:
         if (retire_n_ == 1 || ns < retire_min_) {
             retire_min_ = ns;
         }
-        if (ns > retire_max_) {
-            retire_max_ = ns;
-        }
+	retire_max_ = std::max(ns, retire_max_);
         const double d = static_cast<double>(ns) - retire_mean_;
         retire_mean_ += d / static_cast<double>(retire_n_);
         retire_m2_ += d * (static_cast<double>(ns) - retire_mean_);

@@ -41,9 +41,7 @@ BankScanner::BankScanner(HostRegion& region, ScanConfig cfg, ServiceFn service, 
     // box) and per-thread bandwidth degrading past it, so oversubscription here is a
     // known-bad regime rather than a hypothetical one.
     const uint32_t cores = region_.cores_in_use();
-    if (cfg_.workers > cores) {
-        cfg_.workers = cores;
-    }
+    cfg_.workers = std::min(cfg_.workers, cores);
 
     deques_.reserve(cfg_.workers);
     for (uint32_t i = 0; i < cfg_.workers; ++i) {
@@ -57,15 +55,15 @@ BankScanner::BankScanner(HostRegion& region, ScanConfig cfg, ServiceFn service, 
         w.ladder_sync = cfg_.ladder_sync;
         w.ladder_workers = cfg_.workers;
     }
-    for (int d = 0; d < 2; ++d) {
-        // kSeqNever, not 0: sequence 0 is a legitimate value a bank's FIRST message can
-        // carry, and initialising to it would make that message look already-serviced.
-        // ONE SEQUENCE PER (DIRECTION, CORE, SLOT). It was per (direction, core), which was
-        // right while a core had one receive slot with one lifetime sender. Pool slots are
-        // independent streams -- slot 2's sequence says nothing about slot 5's -- and sharing
-        // one counter would drop a legitimate message as a duplicate whenever two slots
-        // happened to carry the same sequence number.
-        last_seq_[d].assign(static_cast<size_t>(cores) * kRxNoticeSlots, kSeqNever);
+    // kSeqNever, not 0: sequence 0 is a legitimate value a bank's FIRST message can
+    // carry, and initialising to it would make that message look already-serviced.
+    // ONE SEQUENCE PER (DIRECTION, CORE, SLOT). It was per (direction, core), which was
+    // right while a core had one receive slot with one lifetime sender. Pool slots are
+    // independent streams -- slot 2's sequence says nothing about slot 5's -- and sharing
+    // one counter would drop a legitimate message as a duplicate whenever two slots
+    // happened to carry the same sequence number.
+    for (auto& per_direction : last_seq_) {
+        per_direction.assign(static_cast<size_t>(cores) * kRxNoticeSlots, kSeqNever);
     }
 }
 
@@ -123,7 +121,7 @@ bool BankScanner::try_pop_local(uint32_t id, Job& out) {
     }
     // LIFO for the owner: the job just pushed is the one whose operands are still in this
     // core's cache.
-    out = std::move(d.q.back());
+    out = d.q.back();
     d.q.pop_back();
     return true;
 }
@@ -150,7 +148,7 @@ bool BankScanner::try_steal(uint32_t id, Job& out) {
             continue;
         }
         // FIFO from the tail: the oldest job, farthest from what the owner will take next.
-        out = std::move(d.q.front());
+        out = d.q.front();
         d.q.pop_front();
         stats_[id].stolen++;
         stats_[victim].donated++;
@@ -424,7 +422,13 @@ RunStats BankScanner::collect() const {
     RunStats s;
     s.per_worker = stats_;
     s.clock_overhead_ns = clock_overhead_;
-    s.wall_ns = (t_end_ > t_start_) ? (t_end_ - t_start_) : (t_start_ ? now_ns() - t_start_ : 0);
+    s.wall_ns = 0;
+    if(t_end_ > t_start_) {
+       s.wall_ns = t_end_ - t_start_;
+    }
+    else if(t_start_) {
+       s.wall_ns = now_ns() - t_start_;
+    }
     return s;
 }
 

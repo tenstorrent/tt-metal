@@ -64,14 +64,10 @@ struct SocketConfig {
     // Payload. Needed only to size the receive-slot sweep: the number of
     // slots a message of this size leaves in an arena is what the scanner should look at, not
     // the maximum.
-    // commented out b/c deadcode
-    // uint32_t payload_bytes = 0;
     uint32_t chip = 0;     // our own chip index, for the origin selector a notice carries
     uint32_t cores = 0;    // cores in use; bounds the stall dump and the local check
     uint32_t workers = 0;  // 0 => one per CPU, capped at cores
     bool pin = true;
-    // commented out b/c deadcode
-    // bool roundtrip = false;
 
     // `send_window` 0 means unset -> cores-in-use; `send_blocking` selects
     // post-and-wait and implies a window of 1. The window caps concurrency; the shape decides
@@ -187,6 +183,13 @@ public:
         uint32_t signal_addr = 0;
         uint32_t completion_addr = 0;
         uint32_t stop_addr = 0;
+        // THE OBJECT THE OFFSET ACTUALLY INDEXES. A store's offset is an L1 address, but on
+        // the H2DSocket path the pull kernel reads pcie_data_addr + off -- so the aliased
+        // RING, not L1, is what has to contain it. lo/hi bound the L1 side; this bounds the
+        // host side, and without it a legal L1 address indexes past the end of the ring.
+        // 0 disables the check, for a deliverer that has no ring: the direct-write path
+        // addresses L1 itself and needs lo/hi alone.
+        uint32_t ring_bytes = 0;
     };
     void set_store_guard(const StoreGuard& g) { store_guard_ = g; }
     uint64_t store_faults() const { return store_faults_.load(std::memory_order_relaxed); }

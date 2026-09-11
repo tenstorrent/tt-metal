@@ -487,17 +487,11 @@ bool verify_delivery(Deliverer& deliverer, const Options& o, std::string& detail
         uint32_t stamp = 0;
         std::memcpy(&stamp, got.data() + kPayloadStampOffset, sizeof(stamp));
 
-        const uint32_t oldest_ok = last;
-        if (stamp < oldest_ok || stamp > last) {
+        // One sender per destination at depth 1, so iters-1 is the only acceptable stamp.
+        // See test_oneway_volume.cpp for why a wider window would need more than one source.
+        if (stamp != last) {
             std::ostringstream m;
-            m << "core " << core << " L1 holds iteration stamp " << stamp << ", expected ";
-            if (oldest_ok == last) {
-                m << last;
-            } else {
-                m << oldest_ok << ".." << last << " (any of the last " << o.cores
-                  << " iterations -- with a rotating destination the sources are unordered "
-                     "against each other)";
-            }
+            m << "core " << core << " L1 holds iteration stamp " << stamp << ", expected " << last;
             detail = m.str();
             return false;
         }
@@ -675,7 +669,18 @@ int run_common(D2DSocket& sock, Options& o, const std::string& provider_label_st
 
     stats.run_id = make_run_id();
     stats.run_started_utc = utc_now_iso();
-    stats.role = transport == nullptr ? "local" : (o.host_ident == 0 ? "server" : "peer");
+
+    auto stats_role_fn = [transport, &o]() {
+        if(transport == nullptr) {
+            return "local";
+        }
+        else if(o.host_ident == 0) {
+            return "server";
+        }
+        return "peer";
+    };
+
+    stats.role = stats_role_fn();
     stats.host_ident = o.host_ident;
     stats.symmetric = true;
     stats.h2d = o.h2d_socket ? "socket" : "write";
@@ -870,10 +875,18 @@ int run_device(Options& o) {
     std::cout << "  clock: " << sock->clock().describe() << "\n";
     std::cout << "  l1 map        " << l1.describe() << "\n";
 
-    const uint32_t kernel_opcode =
-        !o.store ? static_cast<uint32_t>(kOpSendUva)
-                 : (o.bytes <= kCtrlImmMax ? static_cast<uint32_t>(kOpRdmaWriteImm)
-                                           : static_cast<uint32_t>(kOpRdmaWrite));
+    auto kernel_opcode_fn = [&o]() -> uint32_t {
+        uint32_t retval = static_cast<uint32_t>(kOpRdmaWrite);
+        if(!o.store) {
+            retval = static_cast<uint32_t>(kOpSendUva);
+	}
+	else if(o.bytes <= kCtrlImmMax) {
+            retval = static_cast<uint32_t>(kOpRdmaWriteImm);
+	}
+	return retval;
+    };
+
+    const uint32_t kernel_opcode = kernel_opcode_fn();
     const uint32_t store_dest_addr = l1.store_dest(o.dest_offset, o.store);
 
     o.l1_lo = l1.payload_addr;
@@ -915,11 +928,7 @@ int run_device(Options& o) {
 
     for (uint32_t i = 0; i < o.cores; ++i) {
         const uint32_t sel = t6_global_selector(dest_host, o.chip, i, o.chips_per_host);
-        const uint32_t rnd_hosts = 0u;  // fixed destination: the kernel does not walk
-        const uint32_t seed = 0x9E3779B9u ^ (i * 2654435761u) ^ (o.host_ident * 40503u);
-        SetRuntimeArgs(program, kernel, core_list[i],
-                       {sel, store_dest_addr, rnd_hosts, o.chips_per_host, o.cores, seed,
-                        o.host_ident, o.chip});
+        SetRuntimeArgs(program, kernel, core_list[i], {sel, store_dest_addr});
     }
 
     for (uint32_t i = 0; i < o.cores; ++i) {

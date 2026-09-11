@@ -16,7 +16,7 @@
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/experimental/cluster_noc_helpers.hpp>
+#include <internal/cluster_noc_helpers.hpp>
 
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
@@ -41,6 +41,26 @@ namespace tt::tt_metal::experimental {
 
 
 namespace {
+
+// THE INTERNAL SHIMS TAKE A BYTE SPAN, not a string_view -- tt::tt_metal::internal is the one
+// copy of these NOC wrappers (api/internal/cluster_noc_helpers.hpp, upstream), and this file
+// used to carry a duplicate of it under tt::tt_metal::distributed. Every payload below is
+// either a small POD or a slice of the caller's buffer, so the cast lives here once.
+ttsl::Span<const std::byte> byte_span(const void* p, std::size_t n) {
+    return ttsl::Span<const std::byte>(static_cast<const std::byte*>(p), n);
+}
+
+// Deliverer::read_payload is declared std::vector<uint8_t> and noc_read returns
+// std::vector<std::byte>. Copied rather than reinterpreted, and rather than widening the
+// change into the Deliverer interface and every test that reads a payload back: both callers
+// are verification-only paths that never run under measurement.
+std::vector<uint8_t> to_u8(const std::vector<std::byte>& in) {
+    std::vector<uint8_t> out(in.size());
+    if (!in.empty()) {
+        std::memcpy(out.data(), in.data(), in.size());
+    }
+    return out;
+}
 
 uint64_t now_ns_local() {
     timespec ts;
@@ -115,9 +135,9 @@ public:
         uint32_t off = 0;
         while (off < bytes) {
             const uint32_t chunk = std::min(bytes - off, max_host_write());
-            tt::tt_metal::distributed::noc_write(
+            tt::tt_metal::internal::noc_write(
                 device_id_, static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y), dst + off,
-                std::string_view(reinterpret_cast<const char*>(src + off), chunk));
+                byte_span(src + off, chunk));
             off += chunk;
         }
         return {};
@@ -132,9 +152,9 @@ public:
         // landed" true. A relaxed write here can be combined ahead of the payload it
         // advertises, and the kernel then wakes on a buffer still being filled -- a torn
         // payload with nothing reporting an error.
-        tt::tt_metal::distributed::noc_write_immediate(
+        tt::tt_metal::internal::noc_write_immediate(
             device_id_, static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y), layout_.signal_addr,
-            std::string_view(reinterpret_cast<const char*>(&value), sizeof(value)));
+            byte_span(&value, sizeof(value)));
         return {};
     }
 
@@ -146,9 +166,9 @@ public:
         // Same strict-ordering UC path as the signal. This word releases the kernel to
         // reuse its control register, so it must not be reordered ahead of anything -- and
         // unlike the signal it says nothing about payload, only that the request retired.
-        tt::tt_metal::distributed::noc_write_immediate(
+        tt::tt_metal::internal::noc_write_immediate(
             device_id_, static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y), layout_.completion_addr,
-            std::string_view(reinterpret_cast<const char*>(&value), sizeof(value)));
+            byte_span(&value, sizeof(value)));
         return {};
     }
 
@@ -157,7 +177,7 @@ public:
             return 0;
         }
         const auto& v = virt_[core];
-        return tt::tt_metal::distributed::noc_read_reg_u32(
+        return tt::tt_metal::internal::noc_read_reg_u32(
             device_id_, static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y), layout_.signal_addr);
     }
 
@@ -167,9 +187,9 @@ public:
         }
         const auto& v = virt_[core];
         // Non-posted PCIe read, 22.5 ns/byte. Verification only -- never on a data path.
-        return tt::tt_metal::distributed::noc_read(
+        return to_u8(tt::tt_metal::internal::noc_read(
             device_id_, static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y),
-            (src_l1 != 0) ? src_l1 : layout_.payload_addr, bytes);
+            (src_l1 != 0) ? src_l1 : layout_.payload_addr, bytes));
     }
 
     uint32_t read_reg32(uint32_t core, uint64_t addr) override {
@@ -177,7 +197,7 @@ public:
             return 0;
         }
         const auto& v = virt_[core];
-        return tt::tt_metal::distributed::noc_read_reg_u32(
+        return tt::tt_metal::internal::noc_read_reg_u32(
             device_id_, static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y), addr);
     }
 
@@ -333,9 +353,9 @@ public:
             // written after it, and the core is polling this very word.
             const uint64_t scr = rx_scr_encode(dst_l1, bytes);
             const auto& v = virt_[core];
-            tt::tt_metal::distributed::noc_write_immediate(
+            tt::tt_metal::internal::noc_write_immediate(
                 device_id_, static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y), layout_.dest_word_addr,
-                std::string_view(reinterpret_cast<const char*>(&scr), sizeof(scr)));
+                byte_span(&scr, sizeof(scr)));
             // NOTHING ELSE TO DO. The bytes are already in the ring (the peer RMA'd them
             // there), and the core finds them from the SCR rather than from bytes_sent. The
             // socket's page bookkeeping is not in the addressing path at all here.
@@ -422,9 +442,9 @@ public:
             return {};
         }
         const auto& v = virt_[core];
-        tt::tt_metal::distributed::noc_write_immediate(
+        tt::tt_metal::internal::noc_write_immediate(
             device_id_, static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y), layout_.signal_addr,
-            std::string_view(reinterpret_cast<const char*>(&value), sizeof(value)));
+            byte_span(&value, sizeof(value)));
         return {};
     }
 
@@ -436,9 +456,9 @@ public:
         // rung by this host after servicing the core's TX word -- it never travels the H2D
         // data path, so it keeps the strict-ordering UC write whatever the payload does.
         const auto& v = virt_[core];
-        tt::tt_metal::distributed::noc_write_immediate(
+        tt::tt_metal::internal::noc_write_immediate(
             device_id_, static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y), layout_.completion_addr,
-            std::string_view(reinterpret_cast<const char*>(&value), sizeof(value)));
+            byte_span(&value, sizeof(value)));
         return {};
     }
 
@@ -447,7 +467,7 @@ public:
             return 0;
         }
         const auto& v = virt_[core];
-        return tt::tt_metal::distributed::noc_read_reg_u32(
+        return tt::tt_metal::internal::noc_read_reg_u32(
             device_id_, static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y), layout_.signal_addr);
     }
 
@@ -459,9 +479,9 @@ public:
             return {};
         }
         const auto& v = virt_[core];
-        return tt::tt_metal::distributed::noc_read(
+        return to_u8(tt::tt_metal::internal::noc_read(
             device_id_, static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y),
-            (src_l1 != 0) ? src_l1 : layout_.payload_addr, bytes);
+            (src_l1 != 0) ? src_l1 : layout_.payload_addr, bytes));
     }
 
     uint32_t read_reg32(uint32_t core, uint64_t addr) override {
@@ -469,7 +489,7 @@ public:
             return 0;
         }
         const auto& v = virt_[core];
-        return tt::tt_metal::distributed::noc_read_reg_u32(
+        return tt::tt_metal::internal::noc_read_reg_u32(
             device_id_, static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y), addr);
     }
 
@@ -537,9 +557,9 @@ public:
         const uint32_t zero = 0;
         for (uint32_t c = 0; c < cores_; ++c) {
             const auto& v = virt_[c];
-            tt::tt_metal::distributed::noc_write_immediate(
+            tt::tt_metal::internal::noc_write_immediate(
                 device_id_, static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y), layout_.stop_addr,
-                std::string_view(reinterpret_cast<const char*>(&zero), sizeof(zero)));
+                byte_span(&zero, sizeof(zero)));
         }
         return {};
     }
@@ -553,9 +573,9 @@ public:
         const uint32_t one = 1;
         for (uint32_t c = 0; c < cores_; ++c) {
             const auto& v = virt_[c];
-            tt::tt_metal::distributed::noc_write_immediate(
+            tt::tt_metal::internal::noc_write_immediate(
                 device_id_, static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y), layout_.stop_addr,
-                std::string_view(reinterpret_cast<const char*>(&one), sizeof(one)));
+                byte_span(&one, sizeof(one)));
         }
         return {};
     }
@@ -753,10 +773,10 @@ public:
         }
 
         const auto& v = virt_[core];
-        tt::tt_metal::distributed::noc_write_immediate(
+        tt::tt_metal::internal::noc_write_immediate(
             device_id_, static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y),
             cfg_addr_[core] + offsetof(receiver_socket_md, bytes_sent),
-            std::string_view(reinterpret_cast<const char*>(&sent_[core]), sizeof(uint32_t)));
+            byte_span(&sent_[core], sizeof(uint32_t)));
         return {};
     }
 

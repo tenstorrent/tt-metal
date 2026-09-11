@@ -115,18 +115,6 @@ struct Options {
     uint32_t send_window = 0;
     bool send_blocking = false;
 
-    //
-    // This is the GUPS shape, and it is the first mode where the ADDRESS varies. Every other
-    // mode computes dest_uva once outside the kernel's loop, so they measure the transport
-    // and never the addressing -- the same numbers would come from a hardcoded destination.
-    // Needs no wire change: register 0 was already written every iteration and simply held
-    // a constant.
-    //
-    // REMOTE ONLY. A random draw hits this host 1/N of the time and real GUPS counts those,
-    // but a local destination is not deliverable here (one shared L1 slot per core, and the
-    // aliased-ring refusal). Not GUPS-conformant, and the results must
-    // say so.
-
     uint32_t host_ident = 0;
     uint32_t host_num = 1;
     uint32_t chips_per_host = 1;
@@ -519,10 +507,6 @@ bool parse(int argc, char** argv, Options& o) {
         return false;
     }
 
-    // --random-dest NEEDS SOMEWHERE TO SEND. At --host-num 1 every draw is this host, and
-    // a local destination is not deliverable on this path -- so the mode would silently
-    // degenerate to the fixed destination and report a "random" measurement that was not.
-    // Refused by name instead.
     // The payload carries an 8-byte header (iteration, then the destination selector), and
     // the verifier reads both. A payload shorter than that would overlap them with data and
     // the routing check would compare against bytes that are payload, not address.
@@ -631,38 +615,22 @@ bool verify_delivery(Deliverer& deliverer, const Options& o, std::string& detail
         uint32_t stamp = 0;
         std::memcpy(&stamp, got.data() + kPayloadStampOffset, sizeof(stamp));
 
-        // WHICH ITERATION MAY BE THE LAST ONE IN THIS L1?
+        // WHICH ITERATION MAY BE THE LAST ONE IN THIS L1? Exactly one: core c receives only
+        // from core c, and that source is depth 1, so its messages land in order and the
+        // last is iters-1.
         //
-        // With a fixed destination, exactly one: core c receives only from core c, and that
-        // source is depth 1, so its messages land in order and the last is iters-1.
+        // ONE SENDER PER DESTINATION IS WHAT MAKES iters-1 HONEST. If a core were targeted
+        // by several sources there would be no ordering BETWEEN them -- different receive
+        // slots, different workers -- and the final content would be whichever source
+        // completed last, so this would have to loosen to the last `cores` iterations.
+        // Measured exactly there while a rotating destination existed: 2 cores, 65536
+        // iterations, core 1 holding stamp 65534 where 65535 was expected; both were
+        // legitimately last. Restore the window with the mode, not before it.
         //
-        // With a rotating destination, core d is targeted at EVERY iteration but by a
-        // DIFFERENT source each time -- (d - i) mod cores. Each source is still depth 1, so
-        // its own messages are ordered, but there is no ordering BETWEEN sources: they take
-        // different receive slots and are serviced by different workers. So the final content
-        // is whichever source's last message to d completed last, and that source's last
-        // message is somewhere in the final `cores` iterations.
-        //
-        // Measured exactly there: 2 cores, 65536 iterations, core 1 holding stamp 65534 while
-        // 65535 was expected. 65535 was core 0's message to core 1 and 65534 was core 1's own;
-        // both are legitimately last, and which one wins is a race the protocol never promised
-        // to settle. Demanding iters-1 asserts an ordering that does not exist.
-        //
-        // The check is not dropped -- it still catches a STALE arena, which is what it is for.
-        // It is loosened to the window that ordering actually permits.
-        // The newest stamp is the only acceptable one; with a fixed destination per core there
-        // is exactly one sender. This widened to a window of --cores for --random-dest.
-        const uint32_t oldest_ok = last;
-        if (stamp < oldest_ok || stamp > last) {
+        // What the check is for is a STALE arena, and it still catches that.
+        if (stamp != last) {
             std::ostringstream m;
-            m << "core " << core << " L1 holds iteration stamp " << stamp << ", expected ";
-            if (oldest_ok == last) {
-                m << last;
-            } else {
-                m << oldest_ok << ".." << last << " (any of the last " << o.cores
-                  << " iterations -- with a rotating destination the sources are unordered "
-                     "against each other)";
-            }
+            m << "core " << core << " L1 holds iteration stamp " << stamp << ", expected " << last;
             detail = m.str();
             return false;
         }
@@ -802,8 +770,12 @@ int run_common(HostRegion& region, Options& o, Transport* transport, Deliverer* 
     // was set on the transport branch only, which left the local one with lo == hi == 0 and
     // every store faulting as "runs past the end of this core's L1" -- 160 service errors, 0
     // delivered. With one path there is nowhere for it to be missed.
+    // ring_bytes: the aliased ring is sized to one payload (see scfg.fifo_size below), and
+    // that is the span a store's offset actually indexes -- the pull kernel reads
+    // pcie_data_addr + off. o.bytes rather than a fifo_size read back because the two are the
+    // same number by construction and this runs before the deliverer is built.
     sock->set_store_guard(D2H2H2DSocket::StoreGuard{o.l1_lo, o.l1_hi, o.l1_signal,
-                                                    o.l1_completion, o.l1_stop});
+                                                    o.l1_completion, o.l1_stop, o.bytes});
     std::cout << "  socket        D2H2H2DSocket\n";
 
     const uint64_t msgs = static_cast<uint64_t>(o.cores) * o.iters;
@@ -972,7 +944,18 @@ int run_common(HostRegion& region, Options& o, Transport* transport, Deliverer* 
     // that cannot be used in the comparison.
     stats.run_id = make_run_id();
     stats.run_started_utc = utc_now_iso();
-    stats.role = transport == nullptr ? "local" : (o.host_ident == 0 ? "server" : "peer");
+
+    auto stats_role_fn = [transport, &o]() {
+        if(transport == nullptr) {
+            return "local";
+	}
+	else if(o.host_ident == 0) {
+            return "server";
+	}
+	return "peer";
+    };
+
+    stats.role = stats_role_fn();
     stats.host_ident = o.host_ident;
     stats.symmetric = true;
     stats.h2d = o.h2d_socket ? "socket" : "write";
@@ -1316,10 +1299,19 @@ int run_device(Options& o) {
 
     const uint32_t l1_size = static_cast<uint32_t>(device->l1_size_per_core());
 
-    const uint32_t kernel_opcode =
-        !o.store ? static_cast<uint32_t>(kOpSendUva)
-                 : (o.bytes <= kCtrlImmMax ? static_cast<uint32_t>(kOpRdmaWriteImm)
-                                           : static_cast<uint32_t>(kOpRdmaWrite));
+    auto kernel_opcode_fn = [&o]() -> uint32_t {
+	uint32_t retval = static_cast<uint32_t>(kOpRdmaWrite);
+        if(!o.store) {
+            retval = static_cast<uint32_t>(kOpSendUva);
+	}
+	else if(o.bytes <= kCtrlImmMax) {
+            retval = static_cast<uint32_t>(kOpRdmaWriteImm);
+	}
+	return retval;
+    };
+
+    const uint32_t kernel_opcode = kernel_opcode_fn();
+
     // The effective address the kernel will name -- absolute in the far core's L1. The caller
     // gives an offset from payload_addr; the allocator base is added here, where it is known.
     const uint32_t store_dest_addr = o.store ? (payload_addr + o.dest_offset) : 0u;
@@ -1340,12 +1332,28 @@ int run_device(Options& o) {
                         : "rdma_write (length in a register)",
                     store_dest_addr, payload_addr, o.dest_offset);
     }
+    // Matches kLandingProbeBytes in kernels/test_kernel.cpp: the probe reads 16 B back.
+    constexpr uint32_t kLandingProbeBytes = 16;
+    // One past the last byte this map claims. landing_addr is the highest field, so this is
+    // what the L1 bound has to be taken against: the control words are stacked ABOVE the
+    // aligned payload, so bounding the payload span alone left control_bytes of tail
+    // unchecked -- and every word up there gets written by a kernel or by host delivery.
+    const uint32_t map_end = landing_addr + kLandingProbeBytes;
+    // Everything above the payload. Measured from stage_addr, so payload-independent, and a
+    // field added anywhere below map_end is accounted for without editing a tally.
+    const uint32_t control_bytes = map_end - stage_addr;
+
     const uint32_t copies = 1u;
-    if (payload_addr + copies * o.bytes + (deliver_addr - payload_addr - (copies - 1) * o.bytes) > l1_size ||
-        deliver_addr + o.bytes > l1_size) {
-        const uint32_t overhead =
-            stage_addr - payload_addr - static_cast<uint32_t>(o.bytes) + 5 * 16 + 128 + 64;
-        const uint32_t ceiling = ((l1_size - payload_addr - overhead) / copies) & ~0x3Fu;
+    if (map_end > l1_size || deliver_addr + o.bytes > l1_size) {
+        const uint32_t aligned = stage_addr - payload_addr;  // align64(o.bytes), as built
+        const uint32_t pad = aligned > o.bytes ? aligned - o.bytes : 0u;
+        const uint32_t overhead = control_bytes + pad;
+        // The largest --bytes that WOULD fit is 64-aligned and so carries no pad of its own,
+        // which makes control_bytes alone the floor -- min_l1 is what a zero-byte payload
+        // already costs. Guarded: a high allocator base can put min_l1 above l1_size, and
+        // unguarded this wrapped and advertised a ~4 GB ceiling.
+        const uint32_t min_l1 = payload_addr + control_bytes;
+        const uint32_t ceiling = l1_size > min_l1 ? (((l1_size - min_l1) / copies) & ~0x3Fu) : 0u;
         std::cerr << "error: --bytes " << o.bytes << " does not fit L1 on this core.\n"
                   << "  L1 per core        " << l1_size << " B\n"
                   << "  allocator base     " << payload_addr << " B\n"
@@ -1513,18 +1521,7 @@ int run_device(Options& o) {
 
     for (uint32_t i = 0; i < o.cores; ++i) {
         const uint32_t sel = t6_global_selector(dest_host, o.chip, i, o.chips_per_host);
-        // ARGS 2..7 ARM THE RANDOM DESTINATION; host_num 0 leaves the kernel on its fixed
-        // target, so a run without --random-dest is bit-for-bit what it always was.
-        //
-        // SEEDED PER CORE. One seed for all of them would make every core walk the same
-        // address stream in lockstep and hammer one destination at a time -- that measures
-        // contention, not random access. The seed is derived, not random, so a run is
-        // reproducible: same cores, same stream, same traffic pattern.
-        const uint32_t rnd_hosts = 0u;  // fixed destination: the kernel does not walk
-        const uint32_t seed = 0x9E3779B9u ^ (i * 2654435761u) ^ (o.host_ident * 40503u);
-        SetRuntimeArgs(program, kernel, core_list[i],
-                       {sel, store_dest_addr, rnd_hosts, o.chips_per_host, o.cores, seed,
-                        o.host_ident, o.chip});
+        SetRuntimeArgs(program, kernel, core_list[i], {sel, store_dest_addr});
     }
 
     // Seed each core's payload in L1. BYTE pattern, not a word value: filling uint32
@@ -1597,6 +1594,7 @@ int run_device(Options& o) {
                               },
                               [&] {
                                   std::vector<Transport*> v;
+				  v.reserve(mesh_owned.size());
                                   for (auto& up : mesh_owned) {
                                       v.push_back(up.get());
                                   }
