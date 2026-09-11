@@ -83,6 +83,14 @@ on:
           On every HW leg, capture that leg's runtime JIT kernel compiles and run clang-tidy on them post-hoc
           via CodeChecker, uploading one capture artifact per leg. Non-blocking. The capture defeats all
           kernel-compile caches, so legs run slower. Default off, no overhead when disabled.
+      enable-kernel-iwyu:
+        required: false
+        type: boolean
+        default: false
+        description: >-
+          On every HW leg, run Include What You Use on captured runtime JIT kernel compiles.
+          Shares capture with kernel clang-tidy, but can run independently. Non-blocking;
+          recommendations are uploaded in the per-leg capture artifact. Defeats kernel-compile caches.
     outputs:
       matrix:
         description: "Filtered matrix of legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)"
@@ -412,9 +420,9 @@ jobs:
             # The JIT build logs each kernel compile command into this leg's
             # run log; every kernel-compile cache layer is defeated so each
             # compile, and its logged command, actually happens.
-            KERNEL_TIDY_THIS="${{ inputs.enable-kernel-clang-tidy }}"
+            KERNEL_TIDY_THIS="${{ inputs.enable-kernel-clang-tidy || inputs.enable-kernel-iwyu }}"
             if [ "$KERNEL_TIDY_THIS" = "true" ]; then
-              echo "kernel clang-tidy capture ENABLED for '$TEST_GROUP_NAME'"
+              echo "kernel analysis capture ENABLED for '$TEST_GROUP_NAME'"
               export TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1
               export TT_LOGGER_LEVEL=info
               export TT_METAL_FORCE_JIT_COMPILE=1
@@ -477,18 +485,21 @@ jobs:
                 exit 1
               '
 
-      # Translate the captured SFPI-GCC compile commands for clang and run
-      # clang-tidy through CodeChecker, exporting an HTML report. Non-blocking.
-      - name: Run clang-tidy via CodeChecker on captured JIT kernel compiles (kernel clang-tidy)
-        if: ${{ !cancelled() && inputs.enable-kernel-clang-tidy && !startsWith(matrix.test-group.sku, 'sim_') }}
+      # Both analyzers need the same real wrapper TUs, role defines and generated
+      # headers. Translate once, independently of either analyzer's success.
+      - name: Translate captured JIT kernel compiles
+        id: kernel-commands
+        if: >-
+          ${{ !cancelled() && (inputs.enable-kernel-clang-tidy || inputs.enable-kernel-iwyu) &&
+              !startsWith(matrix.test-group.sku, 'sim_') }}
         continue-on-error: true
-        timeout-minutes: 45
+        timeout-minutes: 10
         env:
           KERNEL_TIDY_GROUP: ${{ matrix.test-group.name }}
         run: |
           RUN_LOG="generated/test_logs/${KERNEL_TIDY_GROUP}.log"
           if [ ! -s "$RUN_LOG" ]; then
-            echo "::warning::run log '$RUN_LOG' missing/empty; skipping clang-tidy."
+            echo "::warning::run log '$RUN_LOG' missing/empty; skipping kernel analysis."
             exit 0
           fi
           mkdir -p /work/kernel_tidy
@@ -497,11 +508,53 @@ jobs:
             --output-dir /work/kernel_tidy | tee /work/kernel_tidy/summary.txt
           # An empty capture is '[]', which is non-empty as a file.
           n_entries=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' \
-            /work/kernel_tidy/compile_commands.json 2>/dev/null || echo 0)
+            /work/kernel_tidy/compile_commands.json)
+          echo "entries=$n_entries" >> "$GITHUB_OUTPUT"
           if [ "$n_entries" -eq 0 ]; then
-            echo "::warning::no kernel compile commands captured; skipping clang-tidy."
-            exit 0
+            echo "::warning::no kernel compile commands captured; skipping kernel analysis."
           fi
+
+      - name: Run Include What You Use on captured JIT kernel compiles
+        if: ${{ !cancelled() && inputs.enable-kernel-iwyu && steps.kernel-commands.outputs.entries > 0 }}
+        continue-on-error: true
+        timeout-minutes: 45
+        run: |
+          # The ci-test image ships IWYU 0.24 with Clang 20. Its driver replays
+          # every database entry in its own cwd, including repeated wrapper paths.
+          # --check_also reaches the #included kernel sources and project headers;
+          # --keep preserves the JIT's deliberate implementation-file includes.
+          # Default exit status is zero for recommendations, nonzero for errors.
+          include-what-you-use --version > /work/kernel_tidy/iwyu-version.txt
+          status=0
+          iwyu_tool.py -p /work/kernel_tidy -j 8 -- \
+            -Xiwyu "--check_also=$PWD/*" \
+            -Xiwyu '--check_also=*/tt_metal/*' \
+            -Xiwyu '--check_also=*/ttnn/*' \
+            -Xiwyu '--check_also=*/tt-metal-cache/*' \
+            -Xiwyu '--keep=*.cpp' \
+            -Xiwyu '--keep=*.cc' \
+            > /work/kernel_tidy/iwyu.txt 2>&1 || status=$?
+          echo "$status" > /work/kernel_tidy/iwyu-exit-code.txt
+          {
+            echo '### Kernel Include What You Use (non-blocking)'
+            echo ''
+            cat /work/kernel_tidy/iwyu-version.txt
+            echo ''
+            echo "Analyzer exit code: $status (0 means analysis completed, not that includes are clean)."
+            echo 'Recommendations and parse errors: `iwyu.txt` in the per-leg kernel-clang-tidy artifact.'
+            echo 'Advice is per captured configuration; review across roles before applying changes.'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$status" -ne 0 ]; then
+            echo "::warning::IWYU reported analysis failures; see iwyu.txt in the capture artifact."
+          fi
+          exit "$status"
+
+      # Non-blocking and independent of IWYU, including when IWYU timed out.
+      - name: Run clang-tidy via CodeChecker on captured JIT kernel compiles (kernel clang-tidy)
+        if: ${{ !cancelled() && inputs.enable-kernel-clang-tidy && steps.kernel-commands.outputs.entries > 0 }}
+        continue-on-error: true
+        timeout-minutes: 45
+        run: |
           # Checkers, check options and scoping all come from codechecker.json.
           CodeChecker analyze /work/kernel_tidy/compile_commands.json \
             --config tt_metal/jit_build/kernel_clang_tidy/codechecker.json \
@@ -550,8 +603,10 @@ jobs:
             echo '</details>'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload kernel clang-tidy capture (kernel clang-tidy)
-        if: ${{ !cancelled() && inputs.enable-kernel-clang-tidy && !startsWith(matrix.test-group.sku, 'sim_') }}
+      - name: Upload kernel analysis capture
+        if: >-
+          ${{ !cancelled() && (inputs.enable-kernel-clang-tidy || inputs.enable-kernel-iwyu) &&
+              !startsWith(matrix.test-group.sku, 'sim_') }}
         continue-on-error: true
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:

@@ -1,10 +1,10 @@
-# Post-hoc clang-tidy on JIT-compiled kernel code
+# Post-hoc clang-tidy and IWYU on JIT-compiled kernel code
 
 Device kernels are compiled at runtime by `tt_metal/jit_build/` with the SFPI
 cross-compiler, so the host build's static analysis never sees them. This flow
 lints them after the fact: run any workload with the JIT build's compile-command
 logging enabled, parse the logged compiler invocations, translate them for
-clang, and run clang-tidy.
+clang, and run clang-tidy and Include What You Use (IWYU).
 
 Nothing is synthesized — no stub headers, no enumerated kernel configs. The
 runtime already produced the real compile-time args, defines and generated
@@ -72,6 +72,40 @@ bear 3.0.x's intercept channel is a gRPC server on loopback, and gRPC routes
 loopback through `http_proxy` unless `no_proxy` covers it — which is why it
 fails outright in containers that set a proxy, CI's included.
 
+### Include What You Use
+
+The same translated database also works with IWYU. The ci-test image includes
+IWYU 0.24 and its `iwyu_tool.py` driver, matched to Clang 20. After step 5 above
+(omit `--run` if only IWYU is wanted), run this from the repository root while
+the generated JIT sources and wheel-installed headers still exist:
+
+```bash
+iwyu_tool.py -p /tmp/kernel_tidy -j 8 -- \
+    -Xiwyu "--check_also=$PWD/*" \
+    -Xiwyu '--check_also=*/tt_metal/*' \
+    -Xiwyu '--check_also=*/ttnn/*' \
+    -Xiwyu '--check_also=*/tt-metal-cache/*' \
+    -Xiwyu '--keep=*.cpp' \
+    -Xiwyu '--keep=*.cc' \
+    > /tmp/kernel_tidy/iwyu.txt 2>&1
+```
+
+`iwyu_tool.py` replays every database entry with its own working directory and
+arguments, preserving the real wrapper TU and UNPACK/MATH/PACK context. IWYU
+normally reports only on the main source and its associated headers;
+`--check_also` also selects the included kernel sources, checkout headers,
+wheel-installed device headers, and generated files in the default kernel cache.
+For a custom cache outside these paths, add a `--check_also` glob for that path.
+The `--keep` globs preserve intentional `.cpp`/`.cc` includes used by JIT glue.
+
+The report contains native IWYU add/remove recommendations and parse errors.
+Recommendations return zero; a nonzero exit status signals analysis failures.
+No fixes are applied. A recommendation describes the captured configuration:
+review other roles and compile-time arguments before changing shared headers.
+The default `--dedupe kernel-role` capture still samples one configuration per
+kernel and RISC target; use `--dedupe none` when investigating configuration
+differences.
+
 ## What the translation does
 
 See the docstring of `scripts/build_kernel_clang_tidy_commands.py` for the full
@@ -92,11 +126,14 @@ with the first-captured config. Pass `--dedupe none` to lint every configuration
 
 `.github/workflows/kernel-clang-tidy.yaml` is the entry point: build → run the
 ttnn sanity suite on hardware via `ttnn-sanity-tests-impl.yaml` with
-`enable-kernel-clang-tidy: true` → a `consolidate-report` job that merges every
+`enable-kernel-clang-tidy: true` and `enable-kernel-iwyu: true` → a `consolidate-report` job that merges every
 leg's findings into one report and publishes it to
 `tenstorrent/tt-metal-kernel-clang-tidy-results` gh-pages. It runs weekly on
 Saturdays at noon PST, and on dispatch. The weekly run publishes because it is
 on main; a dispatch publishes only with `publish-html: true`.
+IWYU runs on the weekly schedule and defaults on for dispatches; set
+`enable-iwyu=false` on a dispatch to run clang-tidy alone. The reusable sanity
+workflow defaults both analyzers off and permits either one independently.
 
 ```sh
 gh workflow run kernel-clang-tidy.yaml --ref <branch> \
@@ -115,6 +152,15 @@ tt_metal/jit_build/kernel_clang_tidy/codechecker.json` — the same tooling
 finding counts, and the generated JIT sources those plists reference.
 CodeChecker's `reports/fixit` suggestions are deleted first: 304 MB of an 880 MB
 artifact, and nothing downstream reads them.
+
+When IWYU is enabled, the same artifact also contains `iwyu.txt`,
+`iwyu-version.txt`, and `iwyu-exit-code.txt`. Translation runs once; IWYU and
+CodeChecker have separate non-blocking steps and 45-minute limits, so an IWYU
+failure does not prevent clang-tidy or artifact upload. A timed-out IWYU run
+can leave partial output without an exit-code file. The job summary records
+IWYU's status and points to the artifact. IWYU's native recommendations are
+kept per leg; they are not CodeChecker plists and are not part of the merged
+CodeChecker HTML site. Coverage and configuration limits apply to both tools.
 
 CodeChecker's compilation-database parser consults `ClangSA.analyzer_binary()`
 unconditionally, so a `clang` binary must be resolvable even though only

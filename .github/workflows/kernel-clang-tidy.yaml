@@ -1,10 +1,11 @@
-name: "Kernel clang-tidy"
+name: "Kernel clang-tidy and IWYU"
 
-# Post-hoc clang-tidy on runtime-JIT-compiled kernel code.
+# Post-hoc clang-tidy and Include What You Use on runtime-JIT-compiled kernel code.
 # Runs the ttnn sanity suite on hardware with kernel clang-tidy enabled on every
 # leg: each leg captures its own JIT kernel compiles, lints them via CodeChecker
-# and uploads the raw plists. A final job merges those, renders one deduplicated
-# CodeChecker report and publishes it to GitHub Pages.
+# and IWYU, and uploads the raw plists and include recommendations. A final job
+# merges the plists, renders one deduplicated CodeChecker report and publishes
+# it to GitHub Pages. IWYU recommendations remain in the per-leg artifacts.
 # See tech_reports/code-indexing/kernel-clang-tidy.md.
 
 on:
@@ -24,6 +25,11 @@ on:
         required: false
         type: boolean
         default: false
+      enable-iwyu:
+        description: "Run Include What You Use on the captured kernels (reports in per-leg artifacts)"
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   check-harbor:
@@ -55,6 +61,7 @@ jobs:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-kernel-clang-tidy: true
+      enable-kernel-iwyu: ${{ github.event_name == 'schedule' || inputs.enable-iwyu }}
 
   consolidate-report:
     name: "Consolidate & publish report"
