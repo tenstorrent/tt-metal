@@ -18,7 +18,7 @@ import torch
 import ttnn
 
 from ..config import MeshConfig, ModeConfig
-from ..tt.ccl import default_l1_small_size
+from ..tt.ccl import default_l1_small_size, fabric_router_config_from_env
 from ..tt.model_config import Gemma4ModelArgs
 
 _DEFAULT_MODEL_PATH = "/mnt/MLPerf/tt_dnn-models/google/gemma-4-26B-A4B-it"
@@ -445,7 +445,10 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, device_params_extra=None):
     Fabric is enabled (FABRIC_1D) for multi-device shapes, and disabled for
     (1, 1). Launching fabric on a 1x1 mesh on a multi-device system fails the
     is_device_active() check because fabric expects every device in the system
-    to be opened, but only device 0 is open in a 1x1 mesh.
+    to be opened, but only device 0 is open in a 1x1 mesh. Multi-device params
+    also apply ``fabric_router_config_from_env`` (Wormhole uses 6144 B packets
+    so 2048 B CCL pages pack 3-wide; Blackhole keeps Fabric's 4352 B default)
+    unless ``device_params_extra`` already sets ``fabric_router_config``.
 
     Default shapes: (1,1) single card, (1,2) N300, (1,8) T3K.
 
@@ -508,14 +511,16 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, device_params_extra=None):
             )
         ]
     else:
-        params = [
-            pytest.param(
-                s,
-                {"fabric_config": None if s == (1, 1) else ttnn.FabricConfig.FABRIC_1D, **extra},
-                id=f"{s[0]}x{s[1]}",
-            )
-            for s in mesh_shapes
-        ]
+        router = None if "fabric_router_config" in extra else fabric_router_config_from_env()
+        params = []
+        for shape in mesh_shapes:
+            device_params = {
+                "fabric_config": None if shape == (1, 1) else ttnn.FabricConfig.FABRIC_1D,
+                **extra,
+            }
+            if shape != (1, 1) and router is not None:
+                device_params["fabric_router_config"] = router
+            params.append(pytest.param(shape, device_params, id=f"{shape[0]}x{shape[1]}"))
 
     def decorator(func):
         return pytest.mark.parametrize("mesh_device, device_params", params, indirect=True)(func)

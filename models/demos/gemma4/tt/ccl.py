@@ -12,6 +12,9 @@ from models.common.utility_functions import is_blackhole
 # (see all_gather_multicast_factory.cpp). Demo and unit meshes must open with
 # this so those semaphores do not fragment the main L1 pool.
 _DEFAULT_L1_SMALL_SIZE = 24576
+# Wormhole: three 2048 B CCL tiles per packet (validate_packet_size ideal).
+# Do not use 3840 B for 12B — vocab all-gather hung after prefill-trace capture.
+_WH_CCL_PACKET_BYTES = 6144
 
 
 def default_l1_small_size() -> int:
@@ -37,6 +40,36 @@ def default_num_links():
     if env is not None:
         return max(1, int(env))
     return 2 if is_blackhole() else 1
+
+
+def default_ccl_packet_bytes():
+    """Wormhole packet-width override; Blackhole keeps the Fabric default.
+
+    6144 B is three 2048 B tiles (the SharedMLP / all-gather page size).
+    Blackhole stays on Fabric's 4352 B default: matching page width was
+    slower end-to-end on P150x8. Override with ``GEMMA4_CCL_PACKET_BYTES``.
+    """
+    if is_blackhole():
+        return None
+    return _WH_CCL_PACKET_BYTES
+
+
+def fabric_router_config_from_env():
+    """Build the Gemma4 Fabric router override selected before mesh open."""
+    pkt_env = os.environ.get("GEMMA4_CCL_PACKET_BYTES")
+    if pkt_env is None:
+        pkt_bytes = default_ccl_packet_bytes()
+    elif pkt_env.strip().lower() in ("0", "none", "default", ""):
+        pkt_bytes = None
+    else:
+        pkt_bytes = max(4352, int(pkt_env))
+    if pkt_bytes is None:
+        return None
+    if not is_blackhole():
+        pkt_bytes = min(pkt_bytes, 7616)
+    router = ttnn.FabricRouterConfig()
+    router.max_packet_payload_size_bytes = pkt_bytes
+    return router
 
 
 def ccl_chunks_per_sync() -> int:

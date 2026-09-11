@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-only tests for Gemma4 CCL topology / async / L1 env knobs."""
+"""Host-only tests for Gemma4 CCL topology / async / packet / L1 env knobs."""
 
 import math
 from pathlib import Path
@@ -14,7 +14,7 @@ from models.demos.gemma4.tt.attention.operations import (
     PREFILL_SDPA_MAX_SEQ,
     prefill_short_lived_memcfg,
 )
-from models.demos.gemma4.tt.ccl import ccl_async_enabled, default_ccl_topology
+from models.demos.gemma4.tt.ccl import ccl_async_enabled, default_ccl_packet_bytes, default_ccl_topology
 from models.demos.gemma4.tt.dram_sharded import can_dram_shard
 
 
@@ -73,6 +73,15 @@ def test_ccl_async_env(monkeypatch):
     assert ccl_async_enabled() is False
     monkeypatch.setenv("GEMMA4_CCL_ASYNC", "1")
     assert ccl_async_enabled() is True
+
+
+def test_default_ccl_packet_bytes_wormhole_packs_2048_tiles(monkeypatch):
+    """WH fabric default 4352 B cannot hold an integer number of 2048 B pages."""
+    monkeypatch.delenv("GEMMA4_CCL_PACKET_BYTES", raising=False)
+    monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_blackhole", lambda: False)
+    assert default_ccl_packet_bytes() == 6144
+    monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_blackhole", lambda: True)
+    assert default_ccl_packet_bytes() is None
 
 
 def test_prefill_l1_act_env(monkeypatch):

@@ -58,7 +58,7 @@ from models.demos.gemma4.demo.sampling_utils import (
     log_sampling_mode,
     model_can_sample_on_device,
 )
-from models.demos.gemma4.tt.ccl import default_l1_small_size
+from models.demos.gemma4.tt.ccl import default_l1_small_size, fabric_router_config_from_env
 from models.demos.gemma4.tt.generator import Gemma4Generator
 from models.demos.gemma4.tt.generator_trace import resolve_gemma4_demo_long_context
 from models.demos.utils.llm_demo_utils import create_benchmark_data
@@ -193,27 +193,6 @@ def _host_sample(logits, temperature, top_p):
     return torch.gather(sorted_idx, -1, choice)
 
 
-def _default_ccl_packet_bytes():
-    """Leave Fabric's default packet size.
-
-    This used to return 4x the CCL page width (5376 for 31B, 3840 for 12B) to
-    satisfy the ``validate_packet_size`` "suboptimal packet size" warning. That
-    warning optimises single-op page packing, but measured end-to-end it costs
-    both TTFT and decode on P150x8 -- the tuned values are *slower* than the
-    Fabric default:
-
-        12B / P150x8 / long-context-4k, batch-1
-          packet 3840 (old default) : TTFT 543.7 ms, 44.62 tok/s/user
-          Fabric default (4352)     : TTFT 461.6 ms, 46.86 tok/s/user
-
-    Gains hold across ISLs (4k/32k/128k) on 12B and 31B. Blackhole-only path;
-    Wormhole already used the Fabric default and is unaffected. Set
-    ``GEMMA4_CCL_PACKET_BYTES`` to pin a value (e.g. to reproduce the old
-    behaviour or re-sweep).
-    """
-    return None
-
-
 def _device_params():
     """Blackhole needs a larger trace region; CQ count is env-tunable.
 
@@ -226,8 +205,11 @@ def _device_params():
       ``GEMMA4_FABRIC=ring`` → ``FABRIC_1D_RING`` (default ``1d``; ring
         regressed TTFT ~28.8s→~30.9s on 31B/P150x8 — leave off).
       ``GEMMA4_CCL_PACKET_BYTES`` → FabricRouterConfig max payload.
-        BH defaults: 5376 (31B) / 3840 (12B) to match CCL page packing.
-        Set ``0`` / ``none`` / ``default`` to keep Fabric's default.
+        Demo on Wormhole keeps Fabric's 4352 B default (ETH heartbeat). On
+        Blackhole, matching page width (3840/5376) was slower than 4352
+        (12B/P150x8 4k: TTFT 544→462 ms). Unit tests on Wormhole use 6144 B
+        so 2048 B pages pack 3-wide. Set ``0`` / ``none`` / ``default`` for
+        Fabric's default.
     ``l1_small_size`` is set so all_gather semaphores land in L1_SMALL (avoids
     fragmenting the main L1 pool).
     """
@@ -251,17 +233,15 @@ def _device_params():
     default_trace_region = 256_000_000 if is_blackhole() else 90_000_000
     params["trace_region_size"] = int(os.environ.get("GEMMA4_TRACE_REGION_SIZE", default_trace_region))
 
-    pkt_env = os.environ.get("GEMMA4_CCL_PACKET_BYTES")
-    if pkt_env is None:
-        pkt_bytes = _default_ccl_packet_bytes() if is_blackhole() else None
-    elif pkt_env.strip().lower() in ("0", "none", "default", ""):
-        pkt_bytes = None
-    else:
-        pkt_bytes = max(4352, int(pkt_env))
-    if pkt_bytes is not None:
-        router = ttnn.FabricRouterConfig()
-        router.max_packet_payload_size_bytes = pkt_bytes
-        params["fabric_router_config"] = router
+    # Wormhole keeps Fabric's default packet payload in the *demo*. Unit tests
+    # apply ``default_ccl_packet_bytes`` (6144 B) so 2048 B CCL pages pack 3-wide.
+    # A non-default payload is Fabric-wide; ETH-heartbeat wedges on this box
+    # sit in the fabric, so the demo does not follow the unit-test override.
+    # ``GEMMA4_CCL_PACKET_BYTES`` still pins a value explicitly on either arch.
+    if is_blackhole() or os.environ.get("GEMMA4_CCL_PACKET_BYTES") is not None:
+        router = fabric_router_config_from_env()
+        if router is not None:
+            params["fabric_router_config"] = router
     return params
 
 
