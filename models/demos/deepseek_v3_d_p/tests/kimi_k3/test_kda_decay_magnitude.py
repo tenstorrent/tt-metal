@@ -45,7 +45,6 @@ PCC is dominated by the diagonal. Its strictly-lower part alone scored 0.935. Se
 `test_kda_prepare_vs_scan.py` for the attribution and the kernel's `invert_horner` for the fix.
 """
 
-from pathlib import Path
 
 import pytest
 from loguru import logger
@@ -67,8 +66,10 @@ SP_AXIS, TP_AXIS = 0, 1
 
 @pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=True)
 def test_decay_magnitude_is_the_variable(mesh_device, device_params):
-    checkpoint = Path(resolve_checkpoint())
+    checkpoint = resolve_checkpoint()
     trace = resolve_trace(TRACE_100K)
+    if checkpoint is None or trace is None:
+        pytest.skip("needs KIMI_K3_HF_MODEL and the 100k golden trace")
     kda_cfg = kimi_k3_kda_config()
     tp_topology = per_axis_topology()[TP_AXIS]
 

@@ -64,6 +64,9 @@ ITERATIONS = 5
 @pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=True)
 @pytest.mark.parametrize("num_layers", DEPTHS, ids=[f"L{n}" for n in DEPTHS])
 @pytest.mark.parametrize("num_chunks", CHUNK_COUNTS, ids=[f"{n}chunk" for n in CHUNK_COUNTS])
+# pytest.ini caps every test at 300 s. The deeper rungs build and run a multi-layer model and blow
+# straight through that, so the cap kills the run rather than the test reporting a number.
+@pytest.mark.timeout(4800)
 def test_prefill_cost(mesh_device, device_params, num_layers, num_chunks):
     checkpoint = resolve_checkpoint()
     trace = resolve_trace(TRACE_100K)

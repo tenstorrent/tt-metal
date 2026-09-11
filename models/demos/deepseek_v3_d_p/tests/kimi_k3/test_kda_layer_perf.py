@@ -28,6 +28,8 @@ ITERATIONS = 20
 
 
 @pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=True)
+# Same 300 s pytest.ini cap: weight load alone exceeds it on a cold cache.
+@pytest.mark.timeout(1800)
 def test_kda_layer_forward_cost(mesh_device, device_params):
     checkpoint = resolve_checkpoint()
     trace = resolve_trace(TRACE_100K)
