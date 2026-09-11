@@ -152,9 +152,13 @@ TEST_F(DramKernelFixture, DramKernelNiuModesSetByFirmware) {
     constexpr uint32_t bank = 0;
 
     const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device_->build_id());
-    const CoreCoord noc1_worker_ep = logical_dram_endpoint_for_noc(soc_desc, bank, NOC::NOC_1);
-    const CoreCoord noc1_eth_ep = soc_desc.get_logical_dram_core_from_translated(
-        soc_desc.get_preferred_eth_core_for_dram_view(bank, static_cast<uint8_t>(NOC::NOC_1)));
+    // Both endpoint tables feed the mask, so an endpoint named by either one keeps its NOC1 NIU in
+    // NOC2AXI. Same inversion for both: translated preferred coord -> logical {view, subchannel}.
+    constexpr auto kNoc1 = static_cast<uint8_t>(NOC::NOC_1);
+    const CoreCoord noc1_worker_ep =
+        soc_desc.get_logical_dram_core_from_translated(soc_desc.get_preferred_worker_core_for_dram_view(bank, kNoc1));
+    const CoreCoord noc1_eth_ep =
+        soc_desc.get_logical_dram_core_from_translated(soc_desc.get_preferred_eth_core_for_dram_view(bank, kNoc1));
 
     uint32_t num_noc1_stream = 0;
     for (const uint32_t sub : usable_dram_endpoints(bank)) {
@@ -174,7 +178,7 @@ TEST_F(DramKernelFixture, DramKernelNiuModesSetByFirmware) {
                 DramConfig{.noc = NOC::NOC_0, .compile_args = {drisc_l1_base_}});
             run_workload(std::move(program));
 
-            std::vector<uint32_t> modes(2, 0xFFFFFFFF);
+            std::vector<uint32_t> modes(2);
             MetalContext::instance().get_cluster().read_core(
                 modes.data(),
                 2 * sizeof(uint32_t),

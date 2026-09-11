@@ -102,8 +102,9 @@ private:
     // index get_dram_core_for_channel expects; callers want the logical one.
     size_t get_physical_channel_for_dram_view(int dram_view) const;
 
-    // True if `translated_coord` is any DRAM view's NOC0 worker endpoint (the subchannel a NOC0 DRAM
-    // access routes to) -- the syseng-owned endpoint excluded by get_metal_dram_cores on Blackhole.
+    // True if `translated_coord` is any DRAM view's NOC0 endpoint (the subchannel a NOC0 DRAM access
+    // routes to) -- the syseng-owned endpoint excluded by get_metal_dram_cores on Blackhole. The NOC0
+    // bit of get_dram_endpoint_noc_mask, named for its one caller.
     // Argument must be a TRANSLATED (UMD) coord; a metal-logical {view, subchannel} coord never matches.
     bool is_noc0_dram_endpoint(const tt::tt_metal::CoreCoord& translated_coord) const;
 
