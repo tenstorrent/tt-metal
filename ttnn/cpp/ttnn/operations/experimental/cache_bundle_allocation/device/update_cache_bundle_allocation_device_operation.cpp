@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -16,7 +17,6 @@ namespace ttnn::experimental::prim {
 // A 4 KiB window amortizes stack transfers while keeping scratch independent of pool capacity.
 namespace {
 constexpr uint32_t kFreeListWindowBytes = 4096;
-constexpr uint32_t kMaxScratchBytes = 512 * 1024;
 
 std::array<const Tensor*, 4> metadata(const CacheBundleAllocationInputs& t) {
     return {&t.page_table, &t.allocated_pages, &t.free_list, &t.free_count};
@@ -107,7 +107,17 @@ void UpdateCacheBundleAllocationDeviceOperation::validate_on_program_cache_miss(
     for (const auto bytes : scratch_sizes(t)) {
         scratch_bytes += bytes;
     }
-    TT_FATAL(scratch_bytes <= kMaxScratchBytes, "Metadata rows require more than 512 KiB of L1 scratch");
+    // CBs start above the device's reserved L1 region. Program allocation also checks
+    // for collisions with existing L1 buffers on the core.
+    const auto* device = t.page_table.device();
+    const uint64_t l1_size = device->l1_size_per_core();
+    const uint64_t l1_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint64_t max_scratch_bytes = l1_size > l1_base ? l1_size - l1_base : 0;
+    TT_FATAL(
+        scratch_bytes <= max_scratch_bytes,
+        "Metadata rows require {} bytes of L1 scratch, exceeding the device's {}-byte unreserved L1 capacity",
+        scratch_bytes,
+        max_scratch_bytes);
     validate_on_program_cache_hit(a, t);
 }
 

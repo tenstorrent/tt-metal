@@ -48,7 +48,8 @@ remain fixed within a trace. Tensor request values must satisfy the same range
 constraints as scalars; the caller ensures this without host readback.
 
 The kernel stages one table row, the counter rows, and at most 4 KiB of a
-free-list row, with a 512 KiB total scratch limit. Pools may
+free-list row. Total scratch must fit the device's L1 capacity after its reserved
+region, and must not overlap existing L1 allocations. Pools may
 exceed 65,536 bundles per SP; size them for all simultaneously live slots.
 IDs are in [0, bundles_per_sp); no ID is reserved as a sentinel. Metadata row
 byte sizes must fit 32-bit NoC offsets; tensor storage is limited by available DRAM.
