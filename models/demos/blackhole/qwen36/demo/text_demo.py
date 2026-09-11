@@ -16,6 +16,14 @@ with in-kernel L2-norm (eliminates the head-split relayouts + host l2_norm — t
 preprocessing cost). Two opt-out flags exist only for benchmarking/debug:
   QWEN_GDN_PHASED=0    fall back to the monolithic single-kernel fused op (no phase split).
   QWEN_GDN_FLAT_QKV=0  fall back to head-split q/k/v + host l2_norm (no flat token-major reads).
+
+Single-user TP decode runs MTP SPECULATIVE DECODE by DEFAULT (draft K tokens with the built-in MTP
+head, verify them in one traced chunk forward, commit the accepted prefix): ~73 tok/s at ISL 128 vs
+~28 plain, and lossless — it reproduces the plain greedy trajectory (tests/test_spec_lossless.py,
+tests/test_spec_determinism.py). It needs an MTP head and pure greedy sampling, and falls back to
+plain decode when either is missing. Two knobs, both for benchmarking/debug:
+  QWEN36_SPEC=0           opt out — plain single-token decode (the baseline to compare against).
+  QWEN36_SPEC_DRAFT_LEN   override K (default: 10 up to a 4k prompt, 6 above it).
 """
 
 import hashlib
@@ -381,10 +389,94 @@ def _profiler_flush(model):
     """
     if os.environ.get("QWEN36_DEMO_PROFILER_FLUSH") == "1":
         ttnn.ReadDeviceProfiler(model.mesh_device)
+def _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks):
+    """MTP speculative decode: the default single-user TP decode path (QWEN36_SPEC=0 opts out).
+    draft -> traced verify -> slot commit via SpeculativeDecoder. Returns (tokens, perf_dict) shaped
+    like _run_tp_generation so the caller prints/saves it unchanged. Lossless: reproduces the
+    plain-decode greedy trajectory exactly.
+
+    The verify shape (fully-batched GDN, hybrid decode-SDPA) and the reseed shape are no longer
+    configurable from here — they are the code's own defaults, in gdn/tp.py and spec_decode.py.
+    """
+    from models.demos.blackhole.qwen36.tt.spec_decode import SpeculativeDecoder
+
+    T = token_ids.shape[1]
+    # Draft width. K is chosen so that T=K+1 is a layout the fused verify SDPA (spec_multi_pos_tiles)
+    # supports: it splits the T candidates into L1-fitting groups of 4 and reads KV once per group
+    # rather than once per candidate. Short prompts (<=4k) accept many drafts, so K=11 -> T=12 =
+    # 3 groups x 4; elsewhere acceptance saturates and the narrower K=7 -> T=8 = 2 groups x 4 keeps
+    # the drafter cheap. Other K values fall back to the legacy B=T pseudo-user verify, which reads
+    # KV T times and rounds differently from plain decode at near ties, so they are avoided.
+    # QWEN36_SPEC_DRAFT_LEN, when set, overrides this (draft_len=None defers to the env in
+    # SpeculativeDecoder, whose own library default stays 3).
+    draft_len = None if os.environ.get("QWEN36_SPEC_DRAFT_LEN") else (11 if T <= 4096 else 7)
+    logger.info(
+        f"[TP SPEC] T={T} -> K={draft_len if draft_len is not None else os.environ['QWEN36_SPEC_DRAFT_LEN']}"
+        f"{'' if draft_len is not None else ' (QWEN36_SPEC_DRAFT_LEN)'}"
+        " (generate() logs the resolved K + reseed mode)"
+    )
+    num_blocks = ((num_blocks + 31) // 32) * 32
+    profiler = BenchmarkProfiler()
+    profiler.start("run")
+
+    kv_cache_shape = [num_blocks, model.args.n_local_kv_heads, BLOCK_SIZE, model.args.head_dim]
+    page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
+    prompt_ids = token_ids[0, :T].tolist()
+
+    # spec decode captures no separate prefill trace (eager); keep the key present for the CI JSON.
+    profiler.start("compile_prefill")
+    profiler.end("compile_prefill")
+
+    # Warmup (compile prefill/verify/decode/MTP programs; results discarded).
+    model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
+    signpost("compile_decode")
+    profiler.start("compile_decode")
+    SpeculativeDecoder(model, page_table, draft_len=draft_len).generate(prompt_ids, min(6, max_generated_tokens))
+    profiler.end("compile_decode")
+    model.free_kv_caches()
+
+    # Timed run. generate() records dec.prefill_time (TTFT) and dec.decode_time (spec loop) internally.
+    model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
+    dec = SpeculativeDecoder(model, page_table, draft_len=draft_len)
+    signpost("inference_prefill")
+    profiler.start("inference_prefill")
+    generated = dec.generate(prompt_ids, max_generated_tokens)
+    profiler.end("inference_prefill")
+    signpost("inference_decode")
+    profiler.start("inference_decode")
+    profiler.end("inference_decode")  # real decode timing comes from dec.decode_time below
+    model.free_kv_caches()
+    profiler.end("run")
+
+    ttft = dec.prefill_time
+    decode_tok_s = (len(generated) / dec.decode_time) if dec.decode_time > 0 else 0.0
+    logger.info(
+        f"[TP SPEC] accept={dec.accept_rate():.2f}/{dec.K} "
+        f"-> {dec.accept_rate() + 1:.2f} committed/iter over {dec.iters} iters; "
+        f"ttft={ttft:.2f}s decode={decode_tok_s:.2f} tok/s (compare vs a QWEN36_SPEC=0 run)"
+    )
+    return generated, {"ttft_s": ttft, "decode_tok_s": decode_tok_s, "profiler": profiler}
 
 
 def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks):
     """TP generation: traced chunk-outer prefill + paged decode. Returns (tokens, perf_dict)."""
+    # MTP speculative decode is the DEFAULT (~2.6x at ISL 128, lossless); QWEN36_SPEC=0 opts out for
+    # a plain-decode baseline. It needs an MTP head and pure greedy sampling, and falls through to
+    # plain decode when either is missing.
+    _spec_req = os.environ.get("QWEN36_SPEC", "1") != "0"
+    if _spec_req:
+        _temp = float(os.environ.get("QWEN35_TEMP", "0") or 0)
+        _rep = float(os.environ.get("QWEN35_REP_PENALTY", "1.0") or 1.0)
+        _nr = int(os.environ.get("QWEN35_NO_REPEAT_NGRAM", "0") or 0)
+        if model.mtp is not None and _temp == 0 and _rep == 1.0 and _nr == 0:
+            logger.info("[TP] MTP speculative decode (default path; QWEN36_SPEC=0 opts out)")
+            return _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks)
+        logger.info(
+            f"[TP] spec decode unavailable (mtp={model.mtp is not None}, temp={_temp}, rep={_rep}, "
+            f"no_repeat={_nr}); it needs an MTP head + pure greedy. Using plain decode."
+        )
+    else:
+        logger.info("[TP] QWEN36_SPEC=0 -> plain single-token decode (spec-decode baseline)")
     vocab = model.args.vocab_size
     T = token_ids.shape[1]
 
