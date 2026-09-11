@@ -186,7 +186,6 @@ class TTBEVFormerLayer:
 
         spatial_query = self.spatial_cross_attention(
             query=bev_query,
-            key=key,
             value=value,
             residual=bev_query,
             query_pos=bev_pos,
