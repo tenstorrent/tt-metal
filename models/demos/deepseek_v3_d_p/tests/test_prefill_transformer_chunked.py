@@ -1469,6 +1469,18 @@ def test_glm_prefill_transformer_chunked(
     )
 
 
+def _llama4_scale_buffer(transformer, chunk_size_global):
+    """Mistral's persistent query-scale buffer, or None for every other variant.
+
+    `make_llama4_scale_buffer` already returns None unless the config carries llama_4_scaling_beta,
+    so the only thing separating variants here is whether there is a `rope_setup` to ask. Kimi-K3 is
+    NoPE and builds none, and reaching through the missing attribute is an AttributeError rather than
+    the None the call would have produced anyway.
+    """
+    rope_setup = getattr(transformer, "rope_setup", None)
+    return rope_setup.make_llama4_scale_buffer(chunk_size_global) if rope_setup is not None else None
+
+
 def run_chunked_transformer_updated(
     variant,
     config,
@@ -1901,12 +1913,13 @@ def run_chunked_transformer_updated(
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, None)),
         )
         # ChunkMetadata, not a bare 3-tuple: the replay reads llama4_scale at a captured address
-        # (mirrors TtPrefillRuntime._setup_trace). None for every non-Mistral variant.
+        # (mirrors TtPrefillRuntime._setup_trace). None for every non-Mistral variant -- including,
+        # via getattr, a NoPE variant that builds no RotarySetup to ask at all.
         trace_metadata = ChunkMetadata(
             _meta1(0),
             _meta1(preload_isl),
             _meta1(preload_isl + CHUNK),
-            transformer.rope_setup.make_llama4_scale_buffer(CHUNK),
+            _llama4_scale_buffer(transformer, CHUNK),
         )
         host_tok = [
             ttnn.from_torch(
@@ -3018,12 +3031,13 @@ def run_chunked_transformer_padded_trace(
         )
 
     # ChunkMetadata, not a bare 3-tuple: the replay reads llama4_scale at a captured address
-    # (mirrors TtPrefillRuntime._setup_trace). None for every non-Mistral variant.
+    # (mirrors TtPrefillRuntime._setup_trace). None for every non-Mistral variant -- including, via
+    # getattr, a NoPE variant that builds no RotarySetup to ask at all.
     trace_metadata = ChunkMetadata(
         _meta1_dev(0),
         _meta1_dev(starts[0][0]),
         _meta1_dev(starts[0][1]),
-        transformer.rope_setup.make_llama4_scale_buffer(CHUNK),
+        _llama4_scale_buffer(transformer, CHUNK),
     )
     tok_host_tt = [
         ttnn.from_torch(t, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=sp_mapper)
