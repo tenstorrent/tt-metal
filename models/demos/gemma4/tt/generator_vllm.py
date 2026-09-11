@@ -2013,6 +2013,10 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         self._spec_decoder_bucket = None  # packed-verify width bucket of the cached decoder (reuse key)
         self._spec_trace_ids = []
         self._spec_pending = None  # (taps, prompt_len) awaiting first decode
+        # Identity of the request the pending/active session BELONGS to (see
+        # _spec_pt_identity). The session is a single global slot, so a solo
+        # decode must refuse taps captured for a different prompt.
+        self._spec_pending_owner = None
         self._spec_active = False
         self._spec_horizon = int(os.environ.get("GEMMA4_DFLASH_SERVE_HORIZON", "2048"))
         logger.info(
@@ -2067,6 +2071,54 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         del args, kwargs
         self._decode_warmup_complete = True
 
+    @staticmethod
+    def _spec_pt_identity(page_table):
+        """Stable identity for the request a spec session belongs to: the first
+        block id of its page-table row.
+
+        Serving runs with prefix caching OFF, so live requests own disjoint KV
+        blocks and a row's first block does not move while the request lives.
+        Available on BOTH the prefill and the decode call (``page_table``
+        kwarg), which is what lets the owner recorded at capture time be
+        re-checked before the taps are bootstrapped.
+        """
+        if page_table is None:
+            return None
+        try:
+            row = page_table[0] if page_table.dim() > 1 else page_table
+            return int(row.reshape(-1)[0])
+        except Exception:
+            return None
+
+    def _spec_pending_is_mine(self, page_table):
+        """True when the pending session was captured for the request whose
+        page table this is. Unknown identity on either side (no page table)
+        falls back to True: that is the pre-existing single-session behaviour,
+        and the scheduler's mirror still owns the width contract."""
+        owner = self._spec_pending_owner
+        cur = self._spec_pt_identity(page_table)
+        if owner is None or cur is None:
+            return True
+        return owner == cur
+
+    def _spec_drop_session(self, why):
+        """Drop the single global spec session (pending taps AND any live one).
+
+        Called on every path that serves a prefill as plain baseline. The taps
+        are only valid for the prompt they were captured from, and the session
+        slot is global: leaving it armed lets an unrelated later solo decode
+        bootstrap another prompt's residuals, and leaving a live session armed
+        lets it outlive the request whose width the scheduler reserved. The
+        plugin's scheduler mirrors exactly these transitions, so the reserved
+        width and the emitted width stay in lockstep.
+        """
+        if self._spec_pending is not None or self._spec_active:
+            logger.info(f"Gemma4DFlash: dropping spec session ({why})")
+        self._spec_pending = None
+        self._spec_pending_owner = None
+        if self._spec_active:
+            self._spec_release_decoder()
+
     # -- prefill: capture taps (untraced) ------------------------------------
     def prefill_forward(self, *args, **kwargs):
         tokens = kwargs.get("tokens")
@@ -2085,6 +2137,7 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
                 self.model[0].dflash_capture_taps(None)
             except Exception:
                 pass
+            self._spec_drop_session("baseline prefill")
             if self._SPEC_BLOCK > 1:
                 # gemma4's prefill KV-history write (_left_pad_kv_to_hist) is not
                 # trace-safe; the dFlash spec prefill runs untraced for the same
@@ -2125,6 +2178,7 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
                     f"Gemma4DFlash: prompt {_n0} > spec ceiling {_max_spec_isl}; "
                     "serving as plain baseline (no spec session)"
                 )
+                self._spec_drop_session("prompt over spec ceiling")
                 return super().prefill_forward(*args, **kwargs)
         model0.dflash_capture_taps(drafter.target_layer_ids, keep_last=12)
         try:
@@ -2135,6 +2189,7 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         prompt_lens = kwargs.get("prompt_lens")
         n = int(prompt_lens[0]) if prompt_lens is not None else int(tokens.shape[1])
         self._spec_pending = (taps, n)
+        self._spec_pending_owner = self._spec_pt_identity(kwargs.get("page_table"))
         self._spec_active = False
         return out
 
@@ -2146,6 +2201,7 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
 
         taps, n = self._spec_pending
         self._spec_pending = None
+        self._spec_pending_owner = None
         if start != n:
             logger.warning(f"Gemma4DFlash: first decode start_pos {start} != prompt_len {n}")
         kv_layers = kv_cache
@@ -2191,7 +2247,18 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         # allocating/freeing a fresh decoder's buffers (which fragments DRAM).
         # A bucket change (different prompt length band) releases + re-captures.
         dec = self._spec_decoder
-        reused = dec is not None and pt is not None and dec.pv_bucket(int(start), horizon) == self._spec_decoder_bucket
+        # Kill switch for the cross-request decoder reuse (GEMMA4_DFLASH_DECODER_REUSE=0
+        # forces a fresh capture per request). Reuse re-points a CACHED decoder at a
+        # new request, so any per-request state it fails to reset leaks into the next
+        # request's drafts -- set this to isolate the reuse path when output looks
+        # contaminated by a previous request.
+        _reuse_ok = os.environ.get("GEMMA4_DFLASH_DECODER_REUSE", "1").lower() in ("1", "true", "yes")
+        reused = (
+            _reuse_ok
+            and dec is not None
+            and pt is not None
+            and dec.pv_bucket(int(start), horizon) == self._spec_decoder_bucket
+        )
         if reused:
             dec.refresh_page_tables(pt)
             dec.prefill_ingest(taps, n)
@@ -2305,6 +2372,19 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
             # rows commit through the adaptive scheduler's non-block path.
             return super().decode_forward(*args, page_tables_per_layer=page_tables_per_layer, **kwargs)
         anchor_from_runner = int(tokens.reshape(-1)[0])
+        if self._spec_pending is not None and not self._spec_pending_is_mine(kwargs.get("page_table")):
+            # The pending taps were captured for a DIFFERENT request (its
+            # owner finished or was aborted before it ever decoded).
+            # Bootstrapping them here would speculate from another prompt's
+            # residuals and another prompt's length -- wrong tokens, not just
+            # a wrong width. Drop them and serve this request as plain
+            # baseline, which is also the width the scheduler reserved (its
+            # session mirror sees this request as a non-owner too).
+            logger.warning(
+                "Gemma4DFlash: pending spec session belongs to another request; " "serving this one as plain baseline"
+            )
+            self._spec_pending = None
+            self._spec_pending_owner = None
         if self._spec_pending is not None:
             start = int(start_pos.reshape(-1)[0]) if start_pos is not None else None
             self._spec_bootstrap(
@@ -2413,10 +2493,12 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         self._spec_iters = 0
         self._spec_tokens = 0
         self._spec_pending = None
+        self._spec_pending_owner = None
         self._spec_active = False  # session inactive, decoder retained for reuse
 
     def release_persistent_capture(self) -> None:
         self._spec_pending = None
+        self._spec_pending_owner = None
         self._spec_release_decoder()
 
 
