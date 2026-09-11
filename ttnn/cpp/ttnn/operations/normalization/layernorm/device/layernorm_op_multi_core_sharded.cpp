@@ -7,6 +7,7 @@
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_common.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation_types.hpp"
+#include "ttnn/operations/normalization/layernorm/device/layernorm_stats_selector.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
@@ -20,8 +21,8 @@
 
 #include <optional>
 #include <bit>
+#include <cstdint>
 
-using uint32_t = std::uint32_t;
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
@@ -87,12 +88,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
 
     // Extract program config
     CoreCoord compute_with_storage_grid_size;
-    uint32_t subblock_wt = 0;
-    uint32_t block_ht = 0;
-    uint32_t block_wt = 0;
+    std::uint32_t subblock_wt = 0;
+    std::uint32_t block_ht = 0;
+    std::uint32_t block_wt = 0;
     bool legacy_reduction = false;
     bool legacy_rsqrt = false;
-    bool use_welford = false;
+    bool requested_use_welford = false;
     std::visit(
         [&](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
@@ -103,14 +104,14 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
                 block_wt = program_config.block_w;
                 legacy_reduction = program_config.legacy_reduction;
                 legacy_rsqrt = program_config.legacy_rsqrt;
-                use_welford = program_config.use_welford;
+                requested_use_welford = program_config.use_welford;
             }
         },
         operation_attributes.program_config);
 
-    const uint32_t tile_width = a.tensor_spec().tile().get_width();
+    const std::uint32_t tile_width = a.tensor_spec().tile().get_width();
 
-    uint32_t block_wt_resharded = output.shard_spec().value().shape[1] / tile_width;
+    std::uint32_t block_wt_resharded = output.shard_spec().value().shape[1] / tile_width;
     bool skip_write_back = output.shard_spec().value() == a.shard_spec().value();
     // The write-back reads runtime arguments that only the post-all-gather stage supplies, so the
     // build that compiles it is the build where those arguments exist.
@@ -126,6 +127,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+
+    const auto statistics_backend =
+        layernorm::select_sharded_statistics_backend(requested_use_welford, device->arch(), fp32_dest_acc_en);
+    const bool use_welford = statistics_backend == layernorm::StatisticsBackend::SFPU_TWO_PASS;
 
     assert_subblock_compute_config_compatible(dst_full_sync_en, fp32_dest_acc_en, subblock_wt);
 
@@ -148,13 +153,13 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
 
     // tensor shape
     const auto& shape = a.padded_shape();
-    uint32_t K = shape[-1];
-    uint32_t Kt = K / tile_width;
-    uint32_t block_w = block_wt * tile_width;
+    std::uint32_t K = shape[-1];
+    std::uint32_t Kt = K / tile_width;
+    std::uint32_t block_w = block_wt * tile_width;
     // Logical (un-padded) width. Welford normalizes over the true element count N, so a
     // non-tile-aligned width must exclude the tile padding columns from both the running count
     // and the final 1/N divisor rather than folding them into the mean and variance.
-    const uint32_t logical_K = a.logical_shape()[-1];
+    const std::uint32_t logical_K = a.logical_shape()[-1];
 
     // Compute grid and worker distribution using helper structs
     auto grid = GridParams::compute(a, block_ht, device->compute_with_storage_grid_size());
@@ -178,9 +183,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    uint32_t pre_all_gather_stats_block_tiles = rms_norm ? 1 : 2;
-    uint32_t post_all_gather_stats_block_tiles = 1;
-    uint32_t num_distributed_devices = 1;
+    std::uint32_t pre_all_gather_stats_block_tiles = rms_norm ? 1 : 2;
+    std::uint32_t post_all_gather_stats_block_tiles = 1;
+    std::uint32_t num_distributed_devices = 1;
     if (is_post_all_gather && stats.has_value()) {
         post_all_gather_stats_block_tiles = stats.value().padded_shape()[-1] / tile_width;
         num_distributed_devices = post_all_gather_stats_block_tiles / pre_all_gather_stats_block_tiles;
@@ -236,7 +241,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     }
 
     // Pack eps for later use
-    uint32_t eps_u = std::bit_cast<uint32_t>(eps);
+    std::uint32_t eps_u = std::bit_cast<std::uint32_t>(eps);
 
     // Enumerate the shard grid as given, not core_ranges.all_cores: that is merge_ranges()'d, and merging
     // can re-partition a non-rectangular grid into different rectangles whose traversal order no longer
@@ -245,7 +250,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     const auto& shard_grid = grid.shard_spec.grid;
     const auto& cores = corerange_to_cores(shard_grid, shard_grid.num_cores(), grid.row_wise);
 
-    uint32_t last_core_width_index =
+    std::uint32_t last_core_width_index =
         grid.mcast_1d ? (cores.size() - 1) : (grid.row_wise ? (grid.grid_size.x - 1) : (grid.grid_size.y - 1));
 
     // A column mask is needed only when a reduced tile contains padding, i.e. the last tile of the
@@ -271,14 +276,14 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     auto bfloat_winv = bfloat16(winv);
 
     // Build mcast NOC coordinates
-    std::vector<uint32_t> mcast_noc_x, mcast_noc_y;
+    std::vector<std::uint32_t> mcast_noc_x, mcast_noc_y;
     mcast_noc_x.reserve(grid.grid_size.x);
     mcast_noc_y.reserve(grid.grid_size.y);
     CoreCoord core_start_offset = grid.grid_offset.value_or(CoreCoord{0, 0});
-    for (uint32_t x = core_start_offset.x; x < grid.grid_size.x + core_start_offset.x; ++x) {
+    for (std::uint32_t x = core_start_offset.x; x < grid.grid_size.x + core_start_offset.x; ++x) {
         mcast_noc_x.push_back(device->worker_core_from_logical_core({x, core_start_offset.y}).x);
     }
-    for (uint32_t y = core_start_offset.y; y < grid.grid_size.y + core_start_offset.y; ++y) {
+    for (std::uint32_t y = core_start_offset.y; y < grid.grid_size.y + core_start_offset.y; ++y) {
         mcast_noc_y.push_back(device->worker_core_from_logical_core({core_start_offset.x, y}).y);
     }
 
@@ -397,7 +402,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         .reader_noc = reader_noc,
         .storage_core_noc_x = std::move(storage_core_noc_x),
         .storage_core_noc_y = std::move(storage_core_noc_y),
-        .num_storage_cores = (uint32_t)all_storage_cores.num_cores()};
+        .num_storage_cores = (std::uint32_t)all_storage_cores.num_cores()};
 
     // The write-back segment block's length is measured per node while the run args are built, and
     // the kernel specs declare it, so the run args come first.

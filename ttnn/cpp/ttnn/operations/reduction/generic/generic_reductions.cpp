@@ -393,7 +393,7 @@ static Tensor std_var_impl(
     uint64_t divisor = correction ? (reduced_volume - 1) : reduced_volume;
     TT_FATAL(divisor > 0, "Reduction is performed on too few elements, yielding divisor of {}", divisor);
 
-    // Welford single-pass algorithm
+    // Numerically stable statistics reductions use an SFPU two-pass algorithm for all supported input dtypes.
     bool single_h = (dim.size() == 1 && dim[0] == rank - 2);
     bool single_w = (dim.size() == 1 && dim[0] == rank - 1);
 

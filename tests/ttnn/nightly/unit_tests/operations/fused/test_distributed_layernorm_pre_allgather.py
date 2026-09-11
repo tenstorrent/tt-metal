@@ -715,6 +715,8 @@ def test_residual_logical_shape_mismatch_rejected(device, op_name, inp_shape, re
     "inp_shape",
     [
         (1, 1, 32, 128),
+        (1, 1, 32, 256),
+        (1, 1, 32, 288),
         (1, 1, 32, 1024),
         (1, 1, 37, 72),
     ],

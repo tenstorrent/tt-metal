@@ -6,13 +6,14 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import is_watcher_enabled
+from models.common.utility_functions import is_watcher_enabled, run_for_blackhole
 from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     layernorm_test_main,
     single_stage_param_sets,
     simple_size_params,
     generate_input_tensor,
     ttnn_layer_norm_sharded,
+    create_sharded_mem_config,
     run_sharded_norm_logical_width_multicore,
     cores_of,
     non_rectangular_width_shard_config,
@@ -159,6 +160,39 @@ def test_layer_norm_sharded_with_weight_and_bias_row_major(device, use_welford, 
         weight=weight[0],
         bias=bias[0],
         weight_bias_layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+
+@run_for_blackhole("Blackhole selects tile reductions for non-distributed sharded LayerNorm")
+def test_layer_norm_sharded_tile_backend_does_not_require_reciprocal(device):
+    torch.manual_seed(20260824)
+    h, w, num_cores_h, num_cores_w, block_ht, block_wt, _ = simple_size_params(False)
+    torch_input = torch.rand((h, w), dtype=torch.float32)
+    reference = torch.nn.functional.layer_norm(torch_input, normalized_shape=[w])
+    memory_config = create_sharded_mem_config(h, w, num_cores_h, num_cores_w, two_stage=False)
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+    )
+
+    output = ttnn_layer_norm_sharded(
+        device,
+        input_tensor,
+        use_welford=True,
+        block_ht=block_ht,
+        block_wt=block_wt,
+        provide_reciprocal=False,
+    )
+
+    assert_numeric_metrics(
+        reference,
+        output,
+        pcc_threshold=0.9999,
+        rtol=0.065,
+        atol=0.065,
+        frobenius_threshold=0.014,
     )
 
 
