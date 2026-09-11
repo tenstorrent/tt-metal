@@ -21,6 +21,8 @@ After the run, analyze the CSV::
 
 from __future__ import annotations
 
+import os
+
 
 def _inner_command() -> str:
     profile_test = (
@@ -48,14 +50,25 @@ def main() -> int:
     samples_cols = [col + " SAMPLES/S" for col in cols]
 
     clear_profiler_runtime_artifacts()
-    run_device_profiler(
-        command,
-        subdir,
-        check_test_return_code=False,
-        device_analysis_types=["device_kernel_duration"],
-        op_support_count=op_support_count,
-        mid_run_device_data=True,
-    )
+    # The workload returns right after the profiled frame, so device profiler data has to
+    # be flushed mid-run.  This is the env var ``python -m tracy --dump-device-data-mid-run``
+    # sets; the tracy subprocess and the pytest workload inherit it.  Restored afterwards so
+    # it does not leak into the rest of the process.
+    prev_mid_run_dump = os.environ.get("TT_METAL_PROFILER_MID_RUN_DUMP")
+    os.environ["TT_METAL_PROFILER_MID_RUN_DUMP"] = "1"
+    try:
+        run_device_profiler(
+            command,
+            subdir,
+            check_test_return_code=False,
+            device_analysis_types=["device_kernel_duration"],
+            op_support_count=op_support_count,
+        )
+    finally:
+        if prev_mid_run_dump is None:
+            os.environ.pop("TT_METAL_PROFILER_MID_RUN_DUMP", None)
+        else:
+            os.environ["TT_METAL_PROFILER_MID_RUN_DUMP"] = prev_mid_run_dump
 
     raw = post_process_ops_log(subdir, duration_cols, has_signposts=True)
     post_processed_results = {}
