@@ -27,6 +27,7 @@ from ..stimuli_config import StimuliConfig
 from ..test_config import BuildMode, ProfilerBuild, TestConfig
 from ..test_variant_parameters import PERF_RUN_TYPE, RuntimeParameter, TemplateParameter
 from .relevance import (
+    PerfRelevance,
     RunTypeRelevance,
     execute_key,
     project_runtimes,
@@ -805,7 +806,7 @@ class PerfConfig(TestConfig):
         l1_acc=L1Accumulation.No,
         skip_build_header: bool = False,
         compile_time_formats: bool = False,
-        relevance: dict[PerfRunType, RunTypeRelevance] | None = None,
+        relevance: dict[PerfRunType, RunTypeRelevance] | PerfRelevance | None = None,
     ):
 
         # Initialize passed templates and runtimes here so we don't get variant hash issues
@@ -813,7 +814,9 @@ class PerfConfig(TestConfig):
         self.passed_templates = templates.copy()
         self.passed_runtimes = runtimes.copy()
         self.current_run_type = None
-        self.relevance = relevance
+        self.relevance = (
+            relevance.as_map() if isinstance(relevance, PerfRelevance) else relevance
+        )
 
         # TODO Add check here for all selected runs, to see if the profiler/counter supports them
         self.run_configs = [

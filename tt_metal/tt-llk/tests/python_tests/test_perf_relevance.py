@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from helpers.format_config import DataFormat, FormatConfig
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
@@ -16,7 +17,11 @@ from helpers.llk_params import (
 )
 from helpers.perf.core import PerfConfig, PerfReport, postprocess_tile_loop
 from helpers.perf.relevance import (
+    MATH_MATMUL_RELEVANCE,
     MATMUL_RELEVANCE,
+    PACK_RELEVANCE,
+    PACK_UNTILIZE_RELEVANCE,
+    UNPACK_TILIZE_RELEVANCE,
     execute_key,
     pin_template,
     project_templates,
@@ -27,10 +32,14 @@ from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     DEST_SYNC,
+    INPUT_DIMENSIONS,
     LOOP_FACTOR,
     MATH_FIDELITY,
+    NUM_BLOCKS,
     NUM_FACES,
+    NUM_TILES_IN_BLOCK,
     PERF_RUN_TYPE,
+    RELU_CONFIG,
     THROTTLE_LEVEL,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
@@ -330,3 +339,192 @@ def test_postprocess_tile_loop_pack_uses_rt_ct_not_kt():
     assert tl[stat_column("L1_CONGESTION[PACK]", MEAN)] == 3.0
     assert init[stat_column("PACK_ISOLATE", MEAN)] == 80.0
     assert tl["L1_TO_L1_mean(fpu_utilization_pct)"] == 60.0
+
+
+def _execute_kwargs(test_name, templates, runtimes, formats=None):
+    return dict(
+        test_name=test_name,
+        dest_acc=DestAccumulation.No,
+        templates=templates,
+        runtimes=runtimes,
+        formats=formats,
+        speed_of_light=False,
+    )
+
+
+def _format(inp: DataFormat, out: DataFormat) -> FormatConfig:
+    return FormatConfig(
+        unpack_A_src=inp,
+        unpack_A_dst=inp,
+        pack_src=out,
+        pack_dst=out,
+        math=inp,
+    )
+
+
+def test_math_matmul_num_blocks_changes_isolate_keys():
+    templates = [
+        MATH_FIDELITY(MathFidelity.LoFi),
+        DEST_SYNC(DestSync.Half),
+        THROTTLE_LEVEL(0),
+    ]
+    shared = [
+        UNPACK_TRANS_FACES(Transpose.No),
+        NUM_FACES(),
+        LOOP_FACTOR(64),
+        CRK_TILE_DIMM(2, 2, 1),
+    ]
+    rt_1 = shared + [NUM_BLOCKS(1)]
+    rt_4 = shared + [NUM_BLOCKS(4)]
+    for run_type in (
+        PerfRunType.UNPACK_ISOLATE,
+        PerfRunType.MATH_ISOLATE,
+        PerfRunType.PACK_ISOLATE,
+        PerfRunType.L1_CONGESTION,
+    ):
+        spec = MATH_MATMUL_RELEVANCE[run_type]
+        assert execute_key(
+            run_type=run_type,
+            spec=spec,
+            **_execute_kwargs("perf_math_matmul", templates, rt_1),
+        ) != execute_key(
+            run_type=run_type,
+            spec=spec,
+            **_execute_kwargs("perf_math_matmul", templates, rt_4),
+        )
+
+
+def test_math_matmul_fidelity_reuses_unpack_and_pack_keys():
+    t_lo, runtimes = _matmul_params(MathFidelity.LoFi)
+    t_hi, _ = _matmul_params(MathFidelity.HiFi4)
+    runtimes = runtimes + [NUM_BLOCKS(1)]
+    unpack = MATH_MATMUL_RELEVANCE[PerfRunType.UNPACK_ISOLATE]
+    pack = MATH_MATMUL_RELEVANCE[PerfRunType.PACK_ISOLATE]
+    math = MATH_MATMUL_RELEVANCE[PerfRunType.MATH_ISOLATE]
+    base = dict(
+        test_name="perf_math_matmul",
+        dest_acc=DestAccumulation.No,
+        runtimes=runtimes,
+        formats=None,
+        speed_of_light=False,
+    )
+    assert execute_key(
+        run_type=PerfRunType.UNPACK_ISOLATE, templates=t_lo, spec=unpack, **base
+    ) == execute_key(
+        run_type=PerfRunType.UNPACK_ISOLATE, templates=t_hi, spec=unpack, **base
+    )
+    assert execute_key(
+        run_type=PerfRunType.PACK_ISOLATE, templates=t_lo, spec=pack, **base
+    ) == execute_key(
+        run_type=PerfRunType.PACK_ISOLATE, templates=t_hi, spec=pack, **base
+    )
+    assert execute_key(
+        run_type=PerfRunType.MATH_ISOLATE, templates=t_lo, spec=math, **base
+    ) != execute_key(
+        run_type=PerfRunType.MATH_ISOLATE, templates=t_hi, spec=math, **base
+    )
+
+
+def test_pack_relu_hits_unpack_math_misses_pack_cong():
+    templates = [DEST_SYNC(DestSync.Half)]
+    shared = [
+        NUM_BLOCKS(1),
+        NUM_TILES_IN_BLOCK(1),
+        LOOP_FACTOR(32),
+        NUM_FACES(),
+    ]
+    rt_off = shared + [RELU_CONFIG(0)]
+    rt_on = shared + [RELU_CONFIG(1)]
+    hits = (PerfRunType.UNPACK_ISOLATE, PerfRunType.MATH_ISOLATE)
+    misses = (PerfRunType.PACK_ISOLATE, PerfRunType.L1_CONGESTION)
+    for run_type in hits:
+        spec = PACK_RELEVANCE[run_type]
+        assert execute_key(
+            run_type=run_type,
+            spec=spec,
+            **_execute_kwargs("perf_pack", templates, rt_off),
+        ) == execute_key(
+            run_type=run_type,
+            spec=spec,
+            **_execute_kwargs("perf_pack", templates, rt_on),
+        )
+    for run_type in misses:
+        spec = PACK_RELEVANCE[run_type]
+        assert execute_key(
+            run_type=run_type,
+            spec=spec,
+            **_execute_kwargs("perf_pack", templates, rt_off),
+        ) != execute_key(
+            run_type=run_type,
+            spec=spec,
+            **_execute_kwargs("perf_pack", templates, rt_on),
+        )
+
+
+def test_pack_untilize_input_format_reuses_pack_not_l1():
+    templates = [INPUT_DIMENSIONS(2, 2, 2, 2)]
+    runtimes = [TILE_COUNT(4), LOOP_FACTOR(32)]
+    fmt_a = _format(DataFormat.Float16, DataFormat.Float32)
+    fmt_b = _format(DataFormat.Float16_b, DataFormat.Float32)
+    pack = PACK_UNTILIZE_RELEVANCE[PerfRunType.PACK_ISOLATE]
+    l1 = PACK_UNTILIZE_RELEVANCE[PerfRunType.L1_TO_L1]
+    assert execute_key(
+        run_type=PerfRunType.PACK_ISOLATE,
+        spec=pack,
+        **_execute_kwargs("perf_pack_untilize", templates, runtimes, fmt_a),
+    ) == execute_key(
+        run_type=PerfRunType.PACK_ISOLATE,
+        spec=pack,
+        **_execute_kwargs("perf_pack_untilize", templates, runtimes, fmt_b),
+    )
+    assert execute_key(
+        run_type=PerfRunType.L1_TO_L1,
+        spec=l1,
+        **_execute_kwargs("perf_pack_untilize", templates, runtimes, fmt_a),
+    ) != execute_key(
+        run_type=PerfRunType.L1_TO_L1,
+        spec=l1,
+        **_execute_kwargs("perf_pack_untilize", templates, runtimes, fmt_b),
+    )
+
+
+def test_unpack_tilize_output_format_reuses_unpack():
+    runtimes = [INPUT_DIMENSIONS(2, 2, 2, 2), TILE_COUNT(4), LOOP_FACTOR(256)]
+    fmt_a = _format(DataFormat.Float16, DataFormat.Float16)
+    fmt_b = _format(DataFormat.Float16, DataFormat.Float32)
+    unpack = UNPACK_TILIZE_RELEVANCE[PerfRunType.UNPACK_ISOLATE]
+    assert execute_key(
+        run_type=PerfRunType.UNPACK_ISOLATE,
+        spec=unpack,
+        **_execute_kwargs("perf_unpack_tilize", [], runtimes, fmt_a),
+    ) == execute_key(
+        run_type=PerfRunType.UNPACK_ISOLATE,
+        spec=unpack,
+        **_execute_kwargs("perf_unpack_tilize", [], runtimes, fmt_b),
+    )
+
+
+def test_unpack_tilize_same_tile_cnt_reuses_pack_not_unpack():
+    rt_2x4 = [INPUT_DIMENSIONS(2, 4, 4, 2), TILE_COUNT(8), LOOP_FACTOR(256)]
+    rt_4x2 = [INPUT_DIMENSIONS(4, 2, 2, 4), TILE_COUNT(8), LOOP_FACTOR(256)]
+    fmt = _format(DataFormat.Float16, DataFormat.Float16)
+    pack = UNPACK_TILIZE_RELEVANCE[PerfRunType.PACK_ISOLATE]
+    unpack = UNPACK_TILIZE_RELEVANCE[PerfRunType.UNPACK_ISOLATE]
+    assert execute_key(
+        run_type=PerfRunType.PACK_ISOLATE,
+        spec=pack,
+        **_execute_kwargs("perf_unpack_tilize", [], rt_2x4, fmt),
+    ) == execute_key(
+        run_type=PerfRunType.PACK_ISOLATE,
+        spec=pack,
+        **_execute_kwargs("perf_unpack_tilize", [], rt_4x2, fmt),
+    )
+    assert execute_key(
+        run_type=PerfRunType.UNPACK_ISOLATE,
+        spec=unpack,
+        **_execute_kwargs("perf_unpack_tilize", [], rt_2x4, fmt),
+    ) != execute_key(
+        run_type=PerfRunType.UNPACK_ISOLATE,
+        spec=unpack,
+        **_execute_kwargs("perf_unpack_tilize", [], rt_4x2, fmt),
+    )

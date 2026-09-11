@@ -18,12 +18,20 @@ from ..llk_params import DestSync, MathFidelity, PerfRunType
 from ..test_variant_parameters import (
     CRK_TILE_DIMM,
     DEST_SYNC,
+    IN_TILE_DIMS,
+    INPUT_DIMENSIONS,
     LOOP_FACTOR,
     MATH_FIDELITY,
+    NUM_BLOCKS,
     NUM_FACES,
+    NUM_TILES_IN_BLOCK,
+    PARTIAL_FACE,
     PERF_RUN_TYPE,
+    RELU_CONFIG,
     THROTTLE_LEVEL,
+    TILE_COUNT,
     UNPACK_TRANS_FACES,
+    UNPACK_TRANS_WITHIN_FACE,
     RuntimeParameter,
     TemplateParameter,
 )
@@ -51,35 +59,148 @@ _PACK_FORMATS = frozenset({"pack_src", "pack_dst"})
 _ALL_FORMATS = (
     _UNPACK_FORMATS | _PACK_FORMATS | frozenset({"math", "sfpu_src", "sfpu_dst"})
 )
+_MATH_FORMATS = frozenset({"math"})
+_IO_FORMATS = _UNPACK_FORMATS | _PACK_FORMATS
 
-MATMUL_RELEVANCE: dict[PerfRunType, RunTypeRelevance] = {
-    PerfRunType.L1_TO_L1: RunTypeRelevance(),
-    PerfRunType.UNPACK_ISOLATE: RunTypeRelevance(
-        templates=frozenset(),
-        runtime_types=frozenset(
-            {UNPACK_TRANS_FACES, NUM_FACES, LOOP_FACTOR, CRK_TILE_DIMM}
-        ),
-        format_fields=_UNPACK_FORMATS,
-    ),
-    PerfRunType.MATH_ISOLATE: RunTypeRelevance(
-        templates=frozenset({MATH_FIDELITY, THROTTLE_LEVEL}),
-        runtime_types=frozenset({UNPACK_TRANS_FACES, LOOP_FACTOR, CRK_TILE_DIMM}),
-        format_fields=frozenset({"math"}),
-    ),
-    PerfRunType.PACK_ISOLATE: RunTypeRelevance(
-        templates=frozenset({DEST_SYNC}),
-        runtime_types=frozenset({LOOP_FACTOR, CRK_TILE_DIMM}),
-        runtime_fields=frozenset({"loop_factor", "c_dimm", "r_dimm"}),
-        format_fields=_PACK_FORMATS,
-    ),
-    PerfRunType.L1_CONGESTION: RunTypeRelevance(
-        templates=frozenset({DEST_SYNC}),
-        runtime_types=frozenset(
-            {UNPACK_TRANS_FACES, NUM_FACES, LOOP_FACTOR, CRK_TILE_DIMM}
-        ),
-        format_fields=_UNPACK_FORMATS | _PACK_FORMATS,
-    ),
-}
+_ALL_RUN_TYPES = (
+    PerfRunType.L1_TO_L1,
+    PerfRunType.UNPACK_ISOLATE,
+    PerfRunType.MATH_ISOLATE,
+    PerfRunType.PACK_ISOLATE,
+    PerfRunType.L1_CONGESTION,
+)
+
+
+class PerfRelevance:
+    """Isolate-mode TILE_LOOP defaults. Subclasses add test-specific runtimes.
+
+    L1_TO_L1 always keeps every field. Runtime slots default to ``None`` (keep
+    whatever the test passed). Subclasses set frozensets to drop unused types.
+    """
+
+    run_types: tuple[PerfRunType, ...] = _ALL_RUN_TYPES
+
+    unpack_templates: frozenset[type] | None = frozenset()
+    math_templates: frozenset[type] | None = frozenset({MATH_FIDELITY, THROTTLE_LEVEL})
+    pack_templates: frozenset[type] | None = frozenset({DEST_SYNC})
+    cong_templates: frozenset[type] | None = frozenset({DEST_SYNC})
+
+    unpack_runtimes: frozenset[type] | None = None
+    math_runtimes: frozenset[type] | None = None
+    pack_runtimes: frozenset[type] | None = None
+    cong_runtimes: frozenset[type] | None = None
+
+    unpack_runtime_fields: frozenset[str] | None = None
+    math_runtime_fields: frozenset[str] | None = None
+    pack_runtime_fields: frozenset[str] | None = None
+    cong_runtime_fields: frozenset[str] | None = None
+
+    unpack_formats: frozenset[str] | None = _UNPACK_FORMATS
+    math_formats: frozenset[str] | None = _MATH_FORMATS
+    pack_formats: frozenset[str] | None = _PACK_FORMATS
+    cong_formats: frozenset[str] | None = _IO_FORMATS
+
+    def as_map(self) -> dict[PerfRunType, RunTypeRelevance]:
+        specs = {
+            PerfRunType.L1_TO_L1: RunTypeRelevance(),
+            PerfRunType.UNPACK_ISOLATE: RunTypeRelevance(
+                templates=self.unpack_templates,
+                runtime_types=self.unpack_runtimes,
+                runtime_fields=self.unpack_runtime_fields,
+                format_fields=self.unpack_formats,
+            ),
+            PerfRunType.MATH_ISOLATE: RunTypeRelevance(
+                templates=self.math_templates,
+                runtime_types=self.math_runtimes,
+                runtime_fields=self.math_runtime_fields,
+                format_fields=self.math_formats,
+            ),
+            PerfRunType.PACK_ISOLATE: RunTypeRelevance(
+                templates=self.pack_templates,
+                runtime_types=self.pack_runtimes,
+                runtime_fields=self.pack_runtime_fields,
+                format_fields=self.pack_formats,
+            ),
+            PerfRunType.L1_CONGESTION: RunTypeRelevance(
+                templates=self.cong_templates,
+                runtime_types=self.cong_runtimes,
+                runtime_fields=self.cong_runtime_fields,
+                format_fields=self.cong_formats,
+            ),
+        }
+        return {run_type: specs[run_type] for run_type in self.run_types}
+
+    def __getitem__(self, run_type: PerfRunType) -> RunTypeRelevance:
+        return self.as_map()[run_type]
+
+
+class MatmulRelevance(PerfRelevance):
+    unpack_runtimes = frozenset(
+        {UNPACK_TRANS_FACES, NUM_FACES, LOOP_FACTOR, CRK_TILE_DIMM}
+    )
+    math_runtimes = frozenset({UNPACK_TRANS_FACES, LOOP_FACTOR, CRK_TILE_DIMM})
+    pack_runtimes = frozenset({LOOP_FACTOR, CRK_TILE_DIMM})
+    cong_runtimes = frozenset(
+        {UNPACK_TRANS_FACES, NUM_FACES, LOOP_FACTOR, CRK_TILE_DIMM}
+    )
+    pack_runtime_fields = frozenset({"loop_factor", "c_dimm", "r_dimm"})
+
+
+class MathMatmulRelevance(MatmulRelevance):
+    _EXTRA = frozenset(
+        {NUM_BLOCKS, PARTIAL_FACE, IN_TILE_DIMS, UNPACK_TRANS_WITHIN_FACE}
+    )
+    unpack_runtimes = MatmulRelevance.unpack_runtimes | _EXTRA
+    math_runtimes = MatmulRelevance.math_runtimes | _EXTRA
+    pack_runtimes = MatmulRelevance.pack_runtimes | frozenset({NUM_BLOCKS})
+    cong_runtimes = MatmulRelevance.cong_runtimes | _EXTRA
+    pack_runtime_fields = MatmulRelevance.pack_runtime_fields | frozenset(
+        {"num_blocks"}
+    )
+
+
+_PACK_BLOCK_RUNTIMES = frozenset(
+    {NUM_BLOCKS, NUM_TILES_IN_BLOCK, LOOP_FACTOR, NUM_FACES}
+)
+
+
+class PackRelevance(PerfRelevance):
+    math_templates = frozenset({DEST_SYNC})
+    unpack_runtimes = _PACK_BLOCK_RUNTIMES
+    math_runtimes = _PACK_BLOCK_RUNTIMES
+    pack_runtimes = _PACK_BLOCK_RUNTIMES | frozenset({RELU_CONFIG})
+    cong_runtimes = _PACK_BLOCK_RUNTIMES | frozenset({RELU_CONFIG})
+
+
+class PackUntilizeRelevance(PerfRelevance):
+    run_types = (
+        PerfRunType.L1_TO_L1,
+        PerfRunType.PACK_ISOLATE,
+        PerfRunType.L1_CONGESTION,
+    )
+    pack_templates = None
+    pack_runtimes = None
+
+
+class UnpackTilizeRelevance(PerfRelevance):
+    run_types = (
+        PerfRunType.L1_TO_L1,
+        PerfRunType.UNPACK_ISOLATE,
+        PerfRunType.PACK_ISOLATE,
+        PerfRunType.L1_CONGESTION,
+    )
+    _DIM_RUNTIMES = frozenset({INPUT_DIMENSIONS, TILE_COUNT, LOOP_FACTOR})
+    unpack_runtimes = _DIM_RUNTIMES
+    pack_templates = frozenset()
+    pack_runtimes = frozenset({TILE_COUNT, LOOP_FACTOR})
+    cong_runtimes = _DIM_RUNTIMES
+
+
+MATMUL_RELEVANCE = MatmulRelevance()
+MATH_MATMUL_RELEVANCE = MathMatmulRelevance()
+PACK_RELEVANCE = PackRelevance()
+PACK_UNTILIZE_RELEVANCE = PackUntilizeRelevance()
+UNPACK_TILIZE_RELEVANCE = UnpackTilizeRelevance()
 
 
 def pin_template(param: TemplateParameter) -> TemplateParameter:

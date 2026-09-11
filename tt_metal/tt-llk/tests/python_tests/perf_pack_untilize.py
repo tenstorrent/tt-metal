@@ -12,6 +12,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.perf.core import PerfConfig
+from helpers.perf.relevance import PACK_UNTILIZE_RELEVANCE
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,
@@ -97,6 +98,7 @@ def test_perf_pack_untilize(
             tile_count_res=tile_count,
         ),
         unpack_to_dest=formats.input_format.is_32_bit(),
+        relevance=PACK_UNTILIZE_RELEVANCE,
     )
 
     configuration.run(perf_report)
