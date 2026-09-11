@@ -1,5 +1,10 @@
 # What the benchmarks measure, and what Rev 0.11 asks for
 
+The original analysis below describes its cited historical runs. For the
+2026-09-11 native-prefill implementation, exact required-point CI follow-up,
+and newly measured serving bottlenecks, see the final section and the
+[complete experiment ledger](../prefill_device_analysis/PIPELINE_GAPS.md).
+
 Source of truth: `doc/QB2 Model Support Requirements - qwen3.8-27b (agentic
 coding) - p150x4 _ p300x2 - qwen3.8-27b (coding).csv`, Rev 0.11. "What we run"
 is read out of the CI benchmarks job for `38153c48c8a`
@@ -384,6 +389,16 @@ implies **>27.5 ms/token** at that length.
 
 ## 4d. Why prefill is slow: op count, not overhead
 
+**2026-09-11 follow-up:** the per-op-floor explanation below is superseded by
+[direct device profiling and controlled trace experiments](../prefill_device_analysis/README.md).
+On the current TP4 path, an S128 linear layer has 16.6 ms of kernel work and
+45.6 ms of inter-op gaps in a 62.1 ms profiled window. A recurrence trace with
+protected intermediate buffers reduces unprofiled full-model S128 prefill from
+2,537 ms to 999 ms with bit-exact checked outputs. Op count is still the central
+problem, but dividing TTFT by op count does **not** establish device-kernel
+latency or rule out submission overhead. The measurements below are historical;
+the linked investigation records current shapes, hypotheses, failures, and scope.
+
 TTFT is the larger of the two gaps (52-1563x over target against decode's flat
 4.7-5.3x), so it is worth knowing what it actually is. It is **device time, and
 it is the per-op latency floor multiplied by an enormous op count** — not
@@ -514,3 +529,39 @@ In rough order of value per hour of runner time:
 
 Items 1, 2 and 4 are edits to the benchmark point list. Item 3 is a new
 benchmark invocation. Items 5 and 7 are model/serving work, not configuration.
+
+
+### Native GDN follow-up (2026-09-11; CI pending)
+
+The integrated native-prefill graph measured full64 B1 S128 **2480.102 →
+119.301 ms (20.79×)** in a matched generator benchmark, and S4096 **1299.242
+ms** after the additional gated-norm and matmul-config changes. These remain
+**1.988× / 2.598×** above the 60/500 ms requirements and
+are not HTTP/CI TTFT. Fresh pinned Qwen3.8 100-token checks measured 99% top1
+and 100% top5 for both prefill and teacher forcing after removing a duplicate
+SiLU. See the [additional-work and pipeline-gap ledger](../prefill_device_analysis/PIPELINE_GAPS.md)
+for every added experiment, rejected hypothesis, state oracle, integration
+change, exact required CI matrix, and outstanding validation. It supersedes
+the earlier trace prototype as the selected implementation.
+
+
+The first follow-up HTTP benchmark is also available: ISL128/OSL252/C1
+median TTFT **890.998ms** (4/4 requests), and ISL4096/OSL252/C8 burst median
+**13039.632ms** (8/8), with all requested output tokens produced. The short
+HTTP point is still **14.85× above60ms**; generator prefill is not a substitute
+for this serving metric. Matched same-prompt output1 versus output2 requests
+measured330.309 versus850.969ms before first-token delivery, localizing about
+521ms to a first-decode setup effect. Trace reuse is being investigated.
+The sampled-text failure was reproduced as TP rank feedback disagreement and
+repaired with shared per-step entropy seeds. The production full64 check
+passed574 decode observations; live shared outputs are coherent, with explicit
+256-token completion limits recorded. That rerun measured910.998ms short-point
+HTTP TTFT and12812.076ms at4096/252/C8.
+
+A further tensor-construction audit found host BFP8 packing in inactive-logit
+expansion. Replacing it with a device-filled row and concatenation reduced
+that operation from176–185ms to0.5–1.0ms with exact all-rank results. It is
+integrated, and a fresh full serving rerun is in progress before CI dispatch.
+The approximately521ms decode-setup opportunity remains open: guarded trace
+reuse passed reduced correctness but is still experimental, not a production
+HTTP speedup.

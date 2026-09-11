@@ -1,0 +1,23 @@
+{
+  "date": "2026-09-11",
+  "snapshot": "Qwen/Qwen3.8-27B@1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+  "hardware": "4 Blackhole p300c devices, mesh 1x4, FABRIC_1D_RING",
+  "baseline_profile_raw": "/tmp/qwen_prefill_profile_baseline/reports/2026_09_11_12_06_08/ops_perf_results_2026_09_11_12_06_08.csv",
+  "raw_profile_policy": "Raw multi-GB dumps remain under /tmp; compact reports retained here",
+  "initial_user_changes": [
+    "readiness_vllm/server.log",
+    "readiness_vllm/vllm_benchmark.json",
+    "readiness_vllm/vllm_benchmark.log",
+    "readiness_vllm/vllm_result.json"
+  ],
+  "runtime_source_changes": "none",
+  "git_head": "761f5e2ff138f173f80c4681bb087b77a08f7e08",
+  "source_sha256": {
+    "tt/multichip_decoder.py": "4a38cb173b5f7ca0ea531e043439b25eb5fe024a12c87a57e4525f0a71ef0c6a",
+    "tt/model.py": "bb5d7129daa93e327cbc1554618b4b673c4a9ef4eac6fa1d5c9f8a3800e90663",
+    "tt/generator.py": "9c96004f9d878cfe92508ee086030cf018c085cf315bcf6ed62a27962945f2a4",
+    "tt/generator_vllm.py": "b1a811fe9d674a408a3c2ce62111f9aed010aae1da6a4f0db6e24797dedf6c1d",
+    "doc/datatype_sweep/selected_precision_config.json": "4f07b96250249e9d8b7c7f242461d57d782f589ab97bba30346273d93a9620f1"
+  },
+  "protected_profile_raw": "/tmp/qwen_prefill_profile_protected/reports/2026_09_11_12_43_11/ops_perf_results_2026_09_11_12_43_11.csv"
+}

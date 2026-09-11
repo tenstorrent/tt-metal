@@ -185,7 +185,10 @@
   },
   "full_model": {
     "status": "implemented_and_physically_validated",
-    "target_mesh": [1, 4],
+    "target_mesh": [
+      1,
+      4
+    ],
     "tensor_parallel_size": 4,
     "batch_1_supported_context": 262144,
     "batch_1_decode_cache_context": 262144,
@@ -225,7 +228,10 @@
   "optimized_full_model": {
     "status": "optimized_full_model_validation_complete",
     "target_hardware": "4x Blackhole p300c",
-    "target_mesh": [1, 4],
+    "target_mesh": [
+      1,
+      4
+    ],
     "tensor_parallel_size": 4,
     "fabric": "FABRIC_1D_RING",
     "supported_context": 262144,
@@ -233,7 +239,12 @@
     "batch_1_supported_context": 262144,
     "batch_32_largest_feasible_context": 78016,
     "batch_32_smallest_failed_context": 78080,
-    "non_aligned_generator_sequences_tested": [63, 65, 161, 261],
+    "non_aligned_generator_sequences_tested": [
+      63,
+      65,
+      161,
+      261
+    ],
     "split_sampling": {
       "default": true,
       "greedy_device_owned": true,
@@ -263,7 +274,12 @@
     "batch_1_supported_context": 262144,
     "batch_32_largest_feasible_context": 78016,
     "batch_32_smallest_failed_context": 78080,
-    "non_aligned_prompt_lengths_revalidated": [63, 65, 161, 261],
+    "non_aligned_prompt_lengths_revalidated": [
+      63,
+      65,
+      161,
+      261
+    ],
     "capacity_artifacts": {
       "batch_1": "doc/datatype_sweep/artifacts/capacity_bfp8_selected_b1/capacity_b1.json",
       "batch_32": "doc/datatype_sweep/artifacts/capacity_bfp8_selected/capacity_b32.json"
@@ -285,5 +301,76 @@
   "notes": [
     "Public prompt/context accepts the HF-advertised 262144 tokens through bounded full-stack streaming prefill; exact-maximum all-64-layer execution completed with finite terminal logits and request-state cleanup.",
     "Decode cache allocation and absolute positions remain supported through 262144."
-  ]
+  ],
+  "native_prefill_followup": {
+    "model_id": "Qwen/Qwen3.8-27B",
+    "model_revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+    "date": "2026-09-11",
+    "status": "seed_policy_full64_and_serving_validated_device_fill_serving_in_progress",
+    "prior_sections_scope": "Historical Qwen3.6 evidence retained under its original top-level identity; not revalidated as Qwen3.8 native-prefill capacity results.",
+    "advertised_context_target": 262144,
+    "configured_context_reduced": false,
+    "outer_chunk_tokens": 512,
+    "native_internal_chunk_tokens": 32,
+    "persistent_native_constants_bytes_per_device": 24576,
+    "constant_storage": "Six FP32 32x32 tiles (eye, tril, ones and three quadrant masks), shared across layers. No persistent activation trace.",
+    "full64_prefill_sequences_tested": [
+      128,
+      4096
+    ],
+    "full64_quality_prompt_tokens": 203,
+    "allocated_batch32_ragged_prompt_tokens_tested": 65,
+    "allocated_batch32_layers_tested": 4,
+    "slot_lifecycle_artifact": "doc/prefill_device_analysis/artifacts/native_slot_lifecycle_b32.json",
+    "full_model_artifact": "doc/prefill_device_analysis/artifacts/native_final_full_validation.json",
+    "capacity_note": "Native constants and outer chunk workspace changed; prior largest feasible cache capacity numbers are not freshly certified. Full serving will retain max_model_len262144 and existing total-token pool; required CI13point matrix must validate long-context behavior.",
+    "full64_quality_physical_prompt_tokens": 224,
+    "full64_prefill_check_physical_tokens": 320,
+    "full64_warmed_prefill_ms": {
+      "128": 119.301442,
+      "4096": 1299.242485
+    },
+    "full_active_batch32_prompt_tokens_tested": [
+      128,
+      65
+    ],
+    "native_batch_partition_on_this_mesh": [
+      9,
+      9,
+      9,
+      5
+    ],
+    "full_active_batch32_artifacts": [
+      "doc/prefill_device_analysis/artifacts/native_batched_b32_s128.json",
+      "doc/prefill_device_analysis/artifacts/native_batched_b32_s65.json"
+    ],
+    "serving_benchmarks": {
+      "runtime_plugin_revision": "c9cfebcf0490066ff85e1e3fba2c7d456ce5ce42",
+      "allocated_batch": 32,
+      "configured_max_model_len": 262144,
+      "primary": {
+        "isl": 128,
+        "osl": 252,
+        "concurrency": 1,
+        "requests_completed": 4,
+        "requests_requested": 4,
+        "median_http_ttft_ms": 890.9982368,
+        "artifact": "doc/prefill_device_analysis/readiness_vllm/vllm_benchmark.json"
+      },
+      "secondary": {
+        "isl": 4096,
+        "osl": 252,
+        "concurrency": 8,
+        "requests_completed": 8,
+        "requests_requested": 8,
+        "median_http_ttft_ms": 13039.631769,
+        "artifact": "doc/prefill_device_analysis/readiness_vllm/vllm_ci_serving_benchmark.json"
+      },
+      "quality_status": "Full64 production seed policy:574 decode observations with exact TP rank agreement; live shared outputs coherent with documented256-token budget truncations. New device-fill scatter final serving rerun in progress."
+    },
+    "required_ci_status": "not_dispatched_pending_final_integration_validation",
+    "seed_policy_validation_artifact": "doc/prefill_device_analysis/artifacts/sampling_rank_full64_production.json",
+    "seed_policy_serving_artifact": "doc/prefill_device_analysis/artifacts/seed_policy_serving_summary.json",
+    "device_logits_scatter_artifact": "doc/prefill_device_analysis/artifacts/slot_logits_scatter.json"
+  }
 }

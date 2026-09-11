@@ -1,0 +1,14 @@
+{
+  "tokens": 4096,
+  "reference": "FP64 sequential recurrence, captured real TT inputs, no intermediate cache quantization",
+  "baseline": {
+    "relative_l2": 0.2610242542060842,
+    "pcc": 0.9687384824562538,
+    "max_abs": 14.936065622118296
+  },
+  "native": {
+    "relative_l2": 0.020292047157999708,
+    "pcc": 0.999794089303738,
+    "max_abs": 0.5405808956601028
+  }
+}

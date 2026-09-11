@@ -99,30 +99,15 @@ def default_snapshot():
 
 
 def _linear_prefill_chunk_size() -> int:
-    """Tunable prefill scan chunk, default unchanged at 32.
+    """Outer prefill chunk: 512 for native GDN, 32 for eager recurrence.
 
-    The chunk is scanned with a Hillis-Steele affine scan costing ``log2(chunk)``
-    batched matmuls, so a sequence of length ``S`` needs ``(S/chunk) *
-    log2(chunk)`` sequential scan steps -- a *decreasing* function of chunk. At
-    S=128 that is 4x5=20 steps at chunk 32 but 1x7=7 at chunk 128. Each chunk
-    also costs five host uploads (one sequence mask, four conv-state lane
-    selectors), so uploads scale as ``5 * ceil(S/chunk)``.
-
-    Larger chunks therefore reduce both sequential depth and host traffic, and
-    cost memory: the scan materialises ``[groups, chunk, ...]`` intermediates, so
-    footprint grows linearly with the chunk. 32 is the value the port was
-    validated at; this hook exists so the trade can be measured instead of
-    assumed. Everything inside the chunk derives from the chunk's actual
-    ``sequence`` extent (the scan loop is ``while distance < sequence``), so no
-    other constant has to move.
-
-    Must be a multiple of the 32-element tile. ``model.py`` ties the streaming
-    prefill quantum to ``lcm(page_size, chunk)``, so changing this changes that
-    quantum too.
+    The native operator still uses internal chunks of 32. A larger outer chunk
+    amortizes projections, collectives and cache updates. Explicit overrides
+    must be tile aligned; model streaming uses lcm(page_size, outer chunk).
     """
     raw = os.environ.get("QWEN36_LINEAR_PREFILL_CHUNK_SIZE")
     if raw is None:
-        return 32
+        return 512 if os.environ.get("QWEN36_PREFILL_RECURRENCE", "native") == "native" else 32
     value = int(raw)
     if value < 32 or value % 32:
         raise ValueError(f"QWEN36_LINEAR_PREFILL_CHUNK_SIZE must be a multiple of 32, got {value}")
@@ -246,9 +231,7 @@ def _scan_matmul(a, b, *, compute_kernel_config=None):
     # Requiring every LOGICAL extent to be at least a full tile keeps the
     # measured 4.21x on the scan matmul and leaves the degenerate ones to
     # ttnn's own selection.
-    tuned_shape = (
-        min(int(a.shape[-1]), int(a.shape[-2]), int(b.shape[-1])) >= ttnn.TILE_SIZE
-    )
+    tuned_shape = min(int(a.shape[-1]), int(a.shape[-2]), int(b.shape[-1])) >= ttnn.TILE_SIZE
     if grid != "0" and a.layout == ttnn.TILE_LAYOUT and tuned_shape and min(k_tiles, m_tiles, n_tiles) >= 1:
         gx, gy = (int(v) for v in grid.split("x"))
         kwargs["program_config"] = ttnn.MatmulMultiCoreReuseProgramConfig(

@@ -1,0 +1,87 @@
+{
+  "kernel_us": 1241.5494999999999,
+  "gap_us": 1224.251,
+  "ops": 62,
+  "by_op": {
+    "MatmulDeviceOperation": {
+      "count": 5,
+      "device_us": 636.608,
+      "gap_us": 46.11300000000001
+    },
+    "LayerNormDeviceOperation": {
+      "count": 4,
+      "device_us": 159.115,
+      "gap_us": 54.2
+    },
+    "ReduceScatterDeviceOperation": {
+      "count": 2,
+      "device_us": 91.12875,
+      "gap_us": 1.2
+    },
+    "ReshapeViewDeviceOperation": {
+      "count": 3,
+      "device_us": 88.249,
+      "gap_us": 41.379
+    },
+    "BinaryNgDeviceOperation": {
+      "count": 10,
+      "device_us": 55.216,
+      "gap_us": 303.20699999999994
+    },
+    "AllGatherDeviceOperation": {
+      "count": 2,
+      "device_us": 53.87775,
+      "gap_us": 2.1740000000000004
+    },
+    "SliceDeviceOperation": {
+      "count": 13,
+      "device_us": 40.764,
+      "gap_us": 279.347
+    },
+    "TransposeDeviceOperation": {
+      "count": 3,
+      "device_us": 35.0,
+      "gap_us": 4.024
+    },
+    "SDPAOperation": {
+      "count": 1,
+      "device_us": 24.238,
+      "gap_us": 51.716
+    },
+    "NLPConcatHeadsDeviceOperation": {
+      "count": 1,
+      "device_us": 20.407,
+      "gap_us": 2.188
+    },
+    "UnaryDeviceOperation": {
+      "count": 4,
+      "device_us": 13.614,
+      "gap_us": 89.45200000000001
+    },
+    "EmbeddingsDeviceOperation": {
+      "count": 4,
+      "device_us": 9.748,
+      "gap_us": 87.03300000000002
+    },
+    "ConcatDeviceOperation": {
+      "count": 4,
+      "device_us": 6.021,
+      "gap_us": 110.82400000000001
+    },
+    "PagedFillCacheDeviceOperation": {
+      "count": 2,
+      "device_us": 2.811,
+      "gap_us": 35.352000000000004
+    },
+    "RepeatCodegenDeviceOperation": {
+      "count": 2,
+      "device_us": 2.467,
+      "gap_us": 63.174
+    },
+    "TypecastDeviceOperation": {
+      "count": 2,
+      "device_us": 2.285,
+      "gap_us": 52.868
+    }
+  }
+}

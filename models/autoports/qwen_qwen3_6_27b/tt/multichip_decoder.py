@@ -13,6 +13,7 @@ than the measured coherent fractured-residual alternative.
 from __future__ import annotations
 
 import math
+import os
 from collections.abc import Mapping
 
 import torch
@@ -669,16 +670,16 @@ class MultichipDecoder(OptimizedDecoder):
                     rows=rows,
                     k=k,
                     n=n,
-                    in0_block_w_limit=self.policy.prefill_in0_block_w,
+                    in0_block_w_limit=getattr(self, "_prefill_in0_block_w_limit", self.policy.prefill_in0_block_w),
                     grid_y=self.policy.prefill_grid_y,
                     fused_activation=fused_activation,
                 )
         output = ttnn.linear(hidden_states, self.weights[weight_name], **kwargs)
-        if not decode and fused_activation == ttnn.UnaryOpType.SILU:
+        if not decode and "program_config" not in kwargs and fused_activation == ttnn.UnaryOpType.SILU:
             output = ttnn.silu(output)
         if not row:
             return output
-        role = "mlp" if weight_name == "mlp_down_decode" else "token_mixer"
+        role = "mlp" if weight_name in ("mlp_down_decode", "mlp_down_prefill") else "token_mixer"
         configured_ccl_dtype = self.ccl_mlp_dtype if role == "mlp" else self.ccl_token_mixer_dtype
         ccl_bfp8 = configured_ccl_dtype == ttnn.bfloat8_b
         ccl_bfp8 |= self._multichip_candidate == "multichip_bfp8_ccl_all"
@@ -1030,6 +1031,10 @@ class MultichipDecoder(OptimizedDecoder):
         key_width, value_width = 512, 1536
         sequence = hidden_states.shape[2]
         groups = self.batch * value_heads
+        recurrence = getattr(self, "_prefill_recurrence", None)
+        flat_native = (
+            hasattr(recurrence, "flat_forward") and sequence % 32 == 0 and os.environ.get("QWEN_GDN_PHASED", "1") != "0"
+        )
 
         mixed = self._tp_linear(
             hidden_states,
@@ -1079,17 +1084,37 @@ class MultichipDecoder(OptimizedDecoder):
                 selector = ttnn.reshape(selector, (1, self.batch, 1, sequence + 4))
                 selected.append(ttnn.sum(ttnn.multiply(conv_input, selector), dim=-1, keepdim=True))
             next_conv_state = ttnn.concat(selected, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        convolved = ttnn.multiply(conv_input[..., 1 : sequence + 1], self.weights["conv"][..., 0:1])
-        for kernel_index in range(1, self.caches["conv"].shape[-1]):
-            convolved = ttnn.add(
-                convolved,
-                ttnn.multiply(
-                    conv_input[..., kernel_index + 1 : kernel_index + sequence + 1],
-                    self.weights["conv"][..., kernel_index : kernel_index + 1],
-                ),
+        if flat_native and self.batch == 1 and os.environ.get("QWEN36_PREFILL_FUSED_CONV", "1") == "1":
+            chunk = ttnn.to_layout(
+                ttnn.reshape(ttnn.permute(mixed, (0, 1, 3, 2)), (1, sequence, -1)), ttnn.ROW_MAJOR_LAYOUT
             )
+            history = ttnn.permute(self.caches["conv"], (0, 1, 3, 2))
+            history = ttnn.to_layout(ttnn.reshape(history[:, :, 1:, :], (1, 3, -1)), ttnn.ROW_MAJOR_LAYOUT)
+            mixed = ttnn.experimental.kda.qkv_causal_conv1d_silu(
+                chunk,
+                history,
+                *[self.weights[f"conv_tap{i}"] for i in range(4)],
+                key_width,
+                key_width,
+                value_width,
+                program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=256),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            convolved = ttnn.multiply(conv_input[..., 1 : sequence + 1], self.weights["conv"][..., 0:1])
+            for kernel_index in range(1, self.caches["conv"].shape[-1]):
+                convolved = ttnn.add(
+                    convolved,
+                    ttnn.multiply(
+                        conv_input[..., kernel_index + 1 : kernel_index + sequence + 1],
+                        self.weights["conv"][..., kernel_index : kernel_index + 1],
+                    ),
+                )
+            mixed = ttnn.silu(ttnn.permute(convolved, (0, 1, 3, 2)))
         ttnn.copy(next_conv_state, self.caches["conv"])
-        mixed = ttnn.silu(ttnn.permute(convolved, (0, 1, 3, 2)))
+
+        if flat_native:
+            return self._linear_attention_native_prefill(mixed, z, beta, decay, sequence, recurrence)
 
         query = ttnn.reshape(mixed[..., :key_width], (self.batch, sequence, key_heads, key_dim))
         key = ttnn.reshape(mixed[..., key_width : 2 * key_width], (self.batch, sequence, key_heads, key_dim))
@@ -1139,7 +1164,7 @@ class MultichipDecoder(OptimizedDecoder):
                 ttnn.add(decay, inverted, output_tensor=decay)
                 ttnn.deallocate(inverted)
                 ttnn.deallocate(scan_mask)
-            attended, final_state = _sequential_recurrence(
+            attended, final_state = getattr(self, "_prefill_recurrence", _sequential_recurrence)(
                 query,
                 key,
                 value,
@@ -1207,6 +1232,50 @@ class MultichipDecoder(OptimizedDecoder):
 
         return self._linear_attention_prefill_chunk_tail(
             _scan_matmul(query, states), z, sequence, value_heads, value_dim, value_width
+        )
+
+    def _linear_attention_native_prefill(self, mixed, z, beta, decay, sequence, recurrence):
+        """Keep token-major QKV and log decay through the native GDN boundary."""
+        if isinstance(mixed, tuple):
+            query, key, value = mixed
+        else:
+            query = ttnn.reshape(mixed[..., :512], (self.batch, sequence, 512))
+            key = ttnn.reshape(mixed[..., 512:1024], (self.batch, sequence, 512))
+            value = ttnn.reshape(mixed[..., 1024:], (self.batch, sequence, 1536))
+        beta = ttnn.reshape(ttnn.typecast(ttnn.sigmoid(beta), ttnn.float32), (self.batch, sequence, 12))
+        log_decay = ttnn.multiply(self.weights["a"], ttnn.softplus(ttnn.add(decay, self.weights["dt_bias"])))
+        log_decay = ttnn.reshape(ttnn.typecast(log_decay, ttnn.float32), (self.batch, sequence, 12))
+        mask = getattr(self, "_sequence_mask", None)
+        if mask is not None:
+            mask = ttnn.typecast(ttnn.reshape(mask, (self.batch, sequence, 1)), ttnn.float32)
+            # beta=0 and log_decay=0 carry inactive/padded state unchanged.
+            beta = ttnn.multiply(beta, mask)
+            log_decay = ttnn.multiply(log_decay, mask)
+        attended, final_state = recurrence.flat_forward(
+            query, key, value, log_decay, beta, self.caches["recurrent"], 128**-0.5
+        )
+        ttnn.copy(ttnn.typecast(final_state, self.policy.linear_recurrent_state_dtype), self.caches["recurrent"])
+        z = ttnn.reshape(z, (self.batch, sequence, 1536))
+        output = ttnn.experimental.kda.sigmoid_gated_rms_norm(
+            attended,
+            z,
+            ttnn.reshape(self.weights["gated_norm"], (128,)),
+            12,
+            epsilon=self.eps,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_dtype=ttnn.bfloat16,
+        )
+        # The dedicated op uses sigmoid(z). Multiplying by z supplies SiLU's
+        # remaining factor while keeping the result in flat token-major form.
+        output = ttnn.reshape(ttnn.multiply(output, z), (1, self.batch, sequence, 1536))
+        return self._tp_linear(
+            output,
+            "out_proj",
+            k=1536,
+            n=5120,
+            decode=False,
+            row=True,
+            compute_kernel_config=self.linear_output_compute_kernel_config,
         )
 
     def _linear_attention_prefill_chunk_tail(self, attended, z, sequence, value_heads, value_dim, value_width):

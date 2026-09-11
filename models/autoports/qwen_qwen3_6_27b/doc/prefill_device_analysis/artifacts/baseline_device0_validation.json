@@ -1,0 +1,158 @@
+{
+  "0": {
+    "host_window_ms": 62.18033,
+    "ops": 2218,
+    "kernel_ms": 16.282152,
+    "gap_ms": 45.904544,
+    "collectives": [
+      {
+        "OP CODE": "ReduceScatterMinimalDirectDeviceOperation",
+        "DEVICE ID": "0",
+        "INPUT_0_W_PAD[LOGICAL]": "1[1]",
+        "INPUT_0_Z_PAD[LOGICAL]": "1[1]",
+        "INPUT_0_Y_PAD[LOGICAL]": "32[32]",
+        "INPUT_0_X_PAD[LOGICAL]": "5120[5120]",
+        "INPUT_0_DATATYPE": "BFLOAT16",
+        "DEVICE KERNEL DURATION [ns]": "23867"
+      },
+      {
+        "OP CODE": "AllGatherDeviceOperation",
+        "DEVICE ID": "0",
+        "INPUT_0_W_PAD[LOGICAL]": "1[1]",
+        "INPUT_0_Z_PAD[LOGICAL]": "1[1]",
+        "INPUT_0_Y_PAD[LOGICAL]": "32[32]",
+        "INPUT_0_X_PAD[LOGICAL]": "1280[1280]",
+        "INPUT_0_DATATYPE": "BFLOAT16",
+        "DEVICE KERNEL DURATION [ns]": "15952"
+      },
+      {
+        "OP CODE": "ReduceScatterMinimalDirectDeviceOperation",
+        "DEVICE ID": "0",
+        "INPUT_0_W_PAD[LOGICAL]": "1[1]",
+        "INPUT_0_Z_PAD[LOGICAL]": "1[1]",
+        "INPUT_0_Y_PAD[LOGICAL]": "32[32]",
+        "INPUT_0_X_PAD[LOGICAL]": "5120[5120]",
+        "INPUT_0_DATATYPE": "BFLOAT16",
+        "DEVICE KERNEL DURATION [ns]": "21659"
+      },
+      {
+        "OP CODE": "AllGatherDeviceOperation",
+        "DEVICE ID": "0",
+        "INPUT_0_W_PAD[LOGICAL]": "1[1]",
+        "INPUT_0_Z_PAD[LOGICAL]": "1[1]",
+        "INPUT_0_Y_PAD[LOGICAL]": "32[32]",
+        "INPUT_0_X_PAD[LOGICAL]": "1280[1280]",
+        "INPUT_0_DATATYPE": "BFLOAT16",
+        "DEVICE KERNEL DURATION [ns]": "15913"
+      },
+      {
+        "OP CODE": "ReduceScatterMinimalDirectDeviceOperation",
+        "DEVICE ID": "0",
+        "INPUT_0_W_PAD[LOGICAL]": "1[1]",
+        "INPUT_0_Z_PAD[LOGICAL]": "1[1]",
+        "INPUT_0_Y_PAD[LOGICAL]": "32[32]",
+        "INPUT_0_X_PAD[LOGICAL]": "5120[5120]",
+        "INPUT_0_DATATYPE": "BFLOAT16",
+        "DEVICE KERNEL DURATION [ns]": "23710"
+      },
+      {
+        "OP CODE": "AllGatherDeviceOperation",
+        "DEVICE ID": "0",
+        "INPUT_0_W_PAD[LOGICAL]": "1[1]",
+        "INPUT_0_Z_PAD[LOGICAL]": "1[1]",
+        "INPUT_0_Y_PAD[LOGICAL]": "32[32]",
+        "INPUT_0_X_PAD[LOGICAL]": "1280[1280]",
+        "INPUT_0_DATATYPE": "BFLOAT16",
+        "DEVICE KERNEL DURATION [ns]": "17471"
+      },
+      {
+        "OP CODE": "ReduceScatterMinimalDirectDeviceOperation",
+        "DEVICE ID": "0",
+        "INPUT_0_W_PAD[LOGICAL]": "1[1]",
+        "INPUT_0_Z_PAD[LOGICAL]": "1[1]",
+        "INPUT_0_Y_PAD[LOGICAL]": "32[32]",
+        "INPUT_0_X_PAD[LOGICAL]": "5120[5120]",
+        "INPUT_0_DATATYPE": "BFLOAT16",
+        "DEVICE KERNEL DURATION [ns]": "20507"
+      },
+      {
+        "OP CODE": "AllGatherDeviceOperation",
+        "DEVICE ID": "0",
+        "INPUT_0_W_PAD[LOGICAL]": "1[1]",
+        "INPUT_0_Z_PAD[LOGICAL]": "1[1]",
+        "INPUT_0_Y_PAD[LOGICAL]": "32[32]",
+        "INPUT_0_X_PAD[LOGICAL]": "1280[1280]",
+        "INPUT_0_DATATYPE": "BFLOAT16",
+        "DEVICE KERNEL DURATION [ns]": "14133"
+      },
+      {
+        "OP CODE": "ReduceScatterDeviceOperation",
+        "DEVICE ID": "0",
+        "INPUT_0_W_PAD[LOGICAL]": "1[1]",
+        "INPUT_0_Z_PAD[LOGICAL]": "1[1]",
+        "INPUT_0_Y_PAD[LOGICAL]": "128[128]",
+        "INPUT_0_X_PAD[LOGICAL]": "5120[5120]",
+        "INPUT_0_DATATYPE": "BFLOAT16",
+        "DEVICE KERNEL DURATION [ns]": "45479"
+      },
+      {
+        "OP CODE": "AllGatherDeviceOperation",
+        "DEVICE ID": "0",
+        "INPUT_0_W_PAD[LOGICAL]": "1[1]",
+        "INPUT_0_Z_PAD[LOGICAL]": "1[1]",
+        "INPUT_0_Y_PAD[LOGICAL]": "128[128]",
+        "INPUT_0_X_PAD[LOGICAL]": "1280[1280]",
+        "INPUT_0_DATATYPE": "BFLOAT16",
+        "DEVICE KERNEL DURATION [ns]": "25968"
+      }
+    ]
+  },
+  "3": {
+    "host_window_ms": 2.525931,
+    "ops": 62,
+    "kernel_ms": 1.222636,
+    "gap_ms": 1.506272,
+    "collectives": [
+      {
+        "OP CODE": "ReduceScatterDeviceOperation",
+        "DEVICE ID": "0",
+        "INPUT_0_W_PAD[LOGICAL]": "1[1]",
+        "INPUT_0_Z_PAD[LOGICAL]": "1[1]",
+        "INPUT_0_Y_PAD[LOGICAL]": "128[128]",
+        "INPUT_0_X_PAD[LOGICAL]": "5120[5120]",
+        "INPUT_0_DATATYPE": "BFLOAT16",
+        "DEVICE KERNEL DURATION [ns]": "44125"
+      },
+      {
+        "OP CODE": "AllGatherDeviceOperation",
+        "DEVICE ID": "0",
+        "INPUT_0_W_PAD[LOGICAL]": "1[1]",
+        "INPUT_0_Z_PAD[LOGICAL]": "1[1]",
+        "INPUT_0_Y_PAD[LOGICAL]": "128[128]",
+        "INPUT_0_X_PAD[LOGICAL]": "1280[1280]",
+        "INPUT_0_DATATYPE": "BFLOAT16",
+        "DEVICE KERNEL DURATION [ns]": "27110"
+      },
+      {
+        "OP CODE": "ReduceScatterDeviceOperation",
+        "DEVICE ID": "0",
+        "INPUT_0_W_PAD[LOGICAL]": "1[1]",
+        "INPUT_0_Z_PAD[LOGICAL]": "1[1]",
+        "INPUT_0_Y_PAD[LOGICAL]": "128[128]",
+        "INPUT_0_X_PAD[LOGICAL]": "5120[5120]",
+        "INPUT_0_DATATYPE": "BFLOAT16",
+        "DEVICE KERNEL DURATION [ns]": "44816"
+      },
+      {
+        "OP CODE": "AllGatherDeviceOperation",
+        "DEVICE ID": "0",
+        "INPUT_0_W_PAD[LOGICAL]": "1[1]",
+        "INPUT_0_Z_PAD[LOGICAL]": "1[1]",
+        "INPUT_0_Y_PAD[LOGICAL]": "128[128]",
+        "INPUT_0_X_PAD[LOGICAL]": "1280[1280]",
+        "INPUT_0_DATATYPE": "BFLOAT16",
+        "DEVICE KERNEL DURATION [ns]": "27336"
+      }
+    ]
+  }
+}

@@ -1077,8 +1077,10 @@ def _main() -> None:
                         output_dir=output_dir,
                         profile_name="ci_serving_burst",
                         comparison_scope=(
-                            "vLLM-nightly-style 100/100/32 serving-burst profile for CI parity and serving "
-                            "capacity. Do not use as headline decode t/s/u because burst admission and chunked "
+                            f"Serving-burst profile at ISL{args.ci_benchmark_prompt_len}/"
+                            f"OSL{args.ci_benchmark_output_len}/C{args.ci_benchmark_concurrency} "
+                            "for CI parity and serving capacity. Do not use as headline decode t/s/u "
+                            "because burst admission and chunked "
                             "prefill can affect TPOT."
                         ),
                         raw_result_filename="vllm_ci_serving_result.json",

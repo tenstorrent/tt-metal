@@ -1,0 +1,96 @@
+{
+  "scope": "Pure-host policy transitions; no TTNN import, device run or production integration.",
+  "passed": 18,
+  "cases": [
+    {
+      "case": "cold request",
+      "action": "release_and_capture",
+      "reason": "no captured contract"
+    },
+    {
+      "case": "same shape, slot and owners",
+      "action": "preserve_until_prefill_finishes",
+      "reason": "matching prewarmed request contract"
+    },
+    {
+      "case": "new logical/physical prompt shape",
+      "action": "release_and_capture",
+      "reason": "request shape, mode, slot or persistent ownership changed"
+    },
+    {
+      "case": "new active slot",
+      "action": "release_and_capture",
+      "reason": "request shape, mode, slot or persistent ownership changed"
+    },
+    {
+      "case": "concurrent active requests",
+      "action": "release_and_capture",
+      "reason": "prototype supports one active request"
+    },
+    {
+      "case": "new cache owner",
+      "action": "release_and_capture",
+      "reason": "request shape, mode, slot or persistent ownership changed"
+    },
+    {
+      "case": "external page table",
+      "action": "release_and_capture",
+      "reason": "request shape, mode, slot or persistent ownership changed"
+    },
+    {
+      "case": "sampling parameters changed",
+      "action": "release_and_capture",
+      "reason": "request shape, mode, slot or persistent ownership changed"
+    },
+    {
+      "case": "request seed",
+      "action": "release_and_capture",
+      "reason": "sampler mode is outside the initial prototype"
+    },
+    {
+      "case": "penalties",
+      "action": "release_and_capture",
+      "reason": "sampler mode is outside the initial prototype"
+    },
+    {
+      "case": "log probabilities",
+      "action": "release_and_capture",
+      "reason": "sampler mode is outside the initial prototype"
+    },
+    {
+      "case": "slot remap",
+      "action": "release_and_capture",
+      "reason": "slot permutation is outside the initial prototype"
+    },
+    {
+      "case": "validated boundary reload",
+      "action": "refresh_and_replay",
+      "reason": "resident trace ownership and prefill envelope verified"
+    },
+    {
+      "case": "new cached program after prefill",
+      "action": "release_and_capture",
+      "reason": "eager prefill created or replaced program-cache entries"
+    },
+    {
+      "case": "surviving buffer unverified",
+      "action": "release_and_capture",
+      "reason": "surviving post-capture allocations are unverified"
+    },
+    {
+      "case": "sampler trace lost",
+      "action": "release_and_capture",
+      "reason": "trace IDs or persistent trace I/O owners changed"
+    },
+    {
+      "case": "scheduler inputs stale",
+      "action": "reject",
+      "reason": "new request requires authoritative reload_inputs"
+    },
+    {
+      "case": "reset slot missing prefill",
+      "action": "reject",
+      "reason": "reset request slot has not completed prefill"
+    }
+  ]
+}

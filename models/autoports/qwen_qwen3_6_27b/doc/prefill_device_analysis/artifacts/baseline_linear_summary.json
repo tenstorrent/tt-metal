@@ -1,0 +1,112 @@
+{
+  "kernel_us": 16629.109999999997,
+  "gap_us": 45646.772000000004,
+  "ops": 2218,
+  "by_op": {
+    "MatmulDeviceOperation": {
+      "count": 407,
+      "device_us": 8937.734000000002,
+      "gap_us": 6977.521000000002
+    },
+    "BinaryNgDeviceOperation": {
+      "count": 619,
+      "device_us": 3009.2249999999967,
+      "gap_us": 16979.051000000007
+    },
+    "SliceDeviceOperation": {
+      "count": 688,
+      "device_us": 1374.3709999999976,
+      "gap_us": 13234.267999999998
+    },
+    "ReshapeViewDeviceOperation": {
+      "count": 56,
+      "device_us": 850.99,
+      "gap_us": 765.106
+    },
+    "UntilizeWithUnpaddingDeviceOperation": {
+      "count": 52,
+      "device_us": 531.2070000000002,
+      "gap_us": 1935.2509999999997
+    },
+    "TilizeWithValPaddingDeviceOperation": {
+      "count": 48,
+      "device_us": 356.47900000000016,
+      "gap_us": 624.1719999999998
+    },
+    "TransposeDeviceOperation": {
+      "count": 164,
+      "device_us": 286.624,
+      "gap_us": 1934.9029999999998
+    },
+    "PermuteDeviceOperation": {
+      "count": 32,
+      "device_us": 285.4079999999999,
+      "gap_us": 79.458
+    },
+    "LayerNormDeviceOperation": {
+      "count": 6,
+      "device_us": 163.93099999999998,
+      "gap_us": 70.22500000000001
+    },
+    "FillPadDeviceOperation": {
+      "count": 16,
+      "device_us": 128.35500000000002,
+      "gap_us": 115.47100000000003
+    },
+    "TilizeDeviceOperation": {
+      "count": 16,
+      "device_us": 124.299,
+      "gap_us": 257.055
+    },
+    "ConcatDeviceOperation": {
+      "count": 15,
+      "device_us": 116.74199999999999,
+      "gap_us": 358.7339999999999
+    },
+    "TypecastDeviceOperation": {
+      "count": 16,
+      "device_us": 99.52799999999999,
+      "gap_us": 476.02700000000004
+    },
+    "AllGatherDeviceOperation": {
+      "count": 5,
+      "device_us": 79.0545,
+      "gap_us": 102.42399999999999
+    },
+    "ReduceScatterMinimalDirectDeviceOperation": {
+      "count": 4,
+      "device_us": 78.35624999999999,
+      "gap_us": 309.545
+    },
+    "UnaryDeviceOperation": {
+      "count": 29,
+      "device_us": 66.75200000000001,
+      "gap_us": 735.961
+    },
+    "ReduceDeviceOperation": {
+      "count": 24,
+      "device_us": 64.865,
+      "gap_us": 306.774
+    },
+    "ReduceScatterDeviceOperation": {
+      "count": 1,
+      "device_us": 45.41225,
+      "gap_us": 0.602
+    },
+    "CopyDeviceOperation": {
+      "count": 8,
+      "device_us": 13.032,
+      "gap_us": 144.247
+    },
+    "RepeatInterleaveCodegenDeviceOperation": {
+      "count": 8,
+      "device_us": 9.883,
+      "gap_us": 114.11899999999999
+    },
+    "RepeatDeviceOperation": {
+      "count": 4,
+      "device_us": 6.862,
+      "gap_us": 125.85799999999999
+    }
+  }
+}

@@ -155,6 +155,8 @@ class TTSampling(LightweightModule):
         if num_chunks < 1 or not is_power_of_2(num_chunks):
             raise ValueError(f"local_topk_num_chunks must be a positive power of two, got {num_chunks}")
         padded_width = upper_power_of_2(per_device_vocab_size)
+        if padded_width > 65536:
+            raise ValueError("Local chunk indices require a padded vocabulary shard of at most 65536 entries")
         if padded_width % num_chunks != 0:
             raise ValueError(f"Cannot split padded local vocabulary width {padded_width} into {num_chunks} chunks")
         chunk_width = padded_width // num_chunks
@@ -164,6 +166,29 @@ class TTSampling(LightweightModule):
                 f"for local width {per_device_vocab_size} and {num_chunks} chunks"
             )
         return chunk_width, padded_width
+
+    def _split_local_topk_logits(self, logits):
+        """Pad tiled local logits, then split with physical-index offsets.
+
+        Prefill can supply ROW_MAJOR logits. Its wide-row pad factory reserves
+        multi-row L1 buffers and cannot fit Qwen's 62,080-wide TP4 shard. TopK
+        consumes TILE tensors, whose pad factory streams fixed-size tiles.
+        """
+        pad_width = self.local_topk_padded_width - logits.shape[-1]
+        if pad_width < 0:
+            raise ValueError(
+                f"Local sampling logits width {logits.shape[-1]} exceeds the configured "
+                f"padded shard width {self.local_topk_padded_width}; preserve vocabulary sharding"
+            )
+        logits = ttnn.to_layout(logits, ttnn.TILE_LAYOUT)
+        if pad_width:
+            logits = ttnn.pad(
+                logits,
+                [(0, 0), (0, 0), (0, 0), (0, pad_width)],
+                value=torch.finfo(torch.bfloat16).min,
+                sub_core_grids=self.sub_core_grids,
+            )
+        return ttnn.split(logits, self.local_topk_chunk_width, dim=3)
 
     @property
     def force_argmax_sampling(self) -> bool:
@@ -251,8 +276,13 @@ class TTSampling(LightweightModule):
         self.local_topk_chunk_width, self.local_topk_padded_width = self._plan_local_topk_chunks(
             per_device_vocab_size, self.local_topk_num_chunks
         )
-        if self.local_topk_num_chunks > 1 and not self.pad_to_power_of_2:
-            raise ValueError("local_topk_num_chunks > 1 requires pad_logits_to_power_of_2=True")
+        if self.local_topk_num_chunks > 1:
+            if num_sampling_devices < 2:
+                raise ValueError("Explicit local TopK chunks require multi-device vocabulary sampling")
+            if not self.pad_to_power_of_2:
+                raise ValueError("local_topk_num_chunks > 1 requires pad_logits_to_power_of_2=True")
+            if self.local_topk_chunk_width < self.max_top_k:
+                raise ValueError("Local TopK chunk width must be at least max_top_k")
 
         self.tt_invalid_vocab_mask = None
         if self.mask_invalid_vocab and self.vocab_size < self.padded_vocab_size:
@@ -992,8 +1022,12 @@ class TTSampling(LightweightModule):
         x_bf16 = ttnn.typecast(x, dtype=ttnn.bfloat16, sub_core_grids=self.sub_core_grids)
         x_bf16 = self._mask_invalid_vocab_logits(x_bf16)
 
-        if self.multi_step_reduction:
-            x_bf16_list = ttnn.split(x_bf16, x_bf16.shape[-1] // self._num_vocab_splits, dim=3)
+        if self.multi_step_reduction or self.local_topk_num_chunks > 1:
+            if self.local_topk_num_chunks > 1:
+                split_width = self.local_topk_chunk_width
+                x_bf16_list = self._split_local_topk_logits(x_bf16)
+            else:
+                x_bf16_list = ttnn.split(x_bf16, x_bf16.shape[-1] // self._num_vocab_splits, dim=3)
             topk_values_list = []
             topk_indices_list = []
 
@@ -1011,9 +1045,8 @@ class TTSampling(LightweightModule):
             )
 
             for i in range(len(x_bf16_list)):
-                # Chunks are not padded to a power of two here: an A/B on this path
-                # (PR #53167) measured no end-to-end decode benefit from steering
-                # ttnn.topk to the multi-core factory, so single-core chunks stay.
+                # The default single-device path keeps its existing widths
+                # (PR #53167). Explicit local chunks use the model's padded plan.
                 topk_values, topk_indices = ttnn.topk(
                     x_bf16_list[i],
                     k=self.max_top_k,
@@ -1087,7 +1120,6 @@ class TTSampling(LightweightModule):
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     num_links=self.num_gather_links,
                     buffer_key="SAMPLING_INDICES",
-                    dtype=ttnn.uint16,
                 )
 
         else:

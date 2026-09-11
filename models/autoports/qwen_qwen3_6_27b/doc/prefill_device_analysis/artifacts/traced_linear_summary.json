@@ -1,0 +1,14 @@
+{
+  "ops": 2250,
+  "kernel_ms": 19.269626,
+  "gap_ms": 6.164784,
+  "synchronized_wall_ms": 24.71643080934882,
+  "host_signpost_ms": 24.815627,
+  "device0_kernel_ms": 18.428655,
+  "ops_per_device": {
+    "0": 2250,
+    "1": 2250,
+    "2": 2250,
+    "3": 2250
+  }
+}

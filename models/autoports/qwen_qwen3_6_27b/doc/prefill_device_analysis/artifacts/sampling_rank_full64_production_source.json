@@ -1,0 +1,10 @@
+{
+  "captured_utc": "2026-09-11T15:10:11.736822+00:00",
+  "source_sha256": {
+    "models/common/sampling/generator.py": "6df6b6dd3308063772198e0a4b73d136e9f95b43a586be8654f8ac3d9c591a97",
+    "models/common/sampling/tt_sampling.py": "4f170d60c7585739a8979196442fb94bc00188a2c2812b28becead8ab25684d0",
+    "models/autoports/qwen_qwen3_6_27b/tt/generator.py": "372149b5db83b464f6026b3392462e4c7b60e0eb5b60bc650f6bded40c867c9c",
+    "models/autoports/qwen_qwen3_6_27b/tt/generator_vllm.py": "3fedd468f4c705b4e0581b157645164c236a63e5b6ad050484ba0c15651e7580",
+    "models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/validate_penalty_recapture.py": "74bf22772d15d4cbb78c83a41c348070b0e91e423a194789a66b7db66b92776a"
+  }
+}

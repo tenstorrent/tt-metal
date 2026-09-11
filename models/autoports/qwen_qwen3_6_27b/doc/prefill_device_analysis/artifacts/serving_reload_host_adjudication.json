@@ -1,0 +1,20 @@
+{
+  "method": "AST extracted unchanged Qwen decode_forward and invoked its real sampling-state boundary using fake generator; no torch/TTNN imports",
+  "calls": [
+    {
+      "reset_batch": false,
+      "refresh_sampling_params": false,
+      "prompt_tokens": "authoritative prompts",
+      "output_tokens": "authoritative outputs",
+      "case": "contract_v1"
+    },
+    {
+      "reset_batch": true,
+      "refresh_sampling_params": false,
+      "prompt_tokens": "authoritative prompts",
+      "output_tokens": "authoritative outputs",
+      "case": "legacy"
+    }
+  ],
+  "assertions_passed": true
+}

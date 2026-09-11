@@ -1,0 +1,85 @@
+[
+  {
+    "candidate": "selected",
+    "returncode": 0,
+    "log": "/tmp/qwen_native_residual_selected.log",
+    "command": [
+      "/home/mvasiljevic/tt-metal/python_env/bin/python",
+      "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/probe.py",
+      "--candidate",
+      "runtime",
+      "--sequence",
+      "128",
+      "--iterations",
+      "3",
+      "--result",
+      "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/artifacts/native_residual_selected.json",
+      "--save",
+      "/tmp/qwen_native_selected.pt"
+    ]
+  },
+  {
+    "candidate": "compact",
+    "returncode": 0,
+    "log": "/tmp/qwen_native_residual_compact.log",
+    "command": [
+      "/home/mvasiljevic/tt-metal/python_env/bin/python",
+      "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/probe.py",
+      "--candidate",
+      "runtime",
+      "--sequence",
+      "128",
+      "--iterations",
+      "3",
+      "--result",
+      "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/artifacts/native_residual_compact.json",
+      "--compact-native-output",
+      "--reference",
+      "/tmp/qwen_native_selected.pt"
+    ]
+  },
+  {
+    "candidate": "compact_block8",
+    "returncode": 0,
+    "log": "/tmp/qwen_native_residual_compact_block8.log",
+    "command": [
+      "/home/mvasiljevic/tt-metal/python_env/bin/python",
+      "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/probe.py",
+      "--candidate",
+      "runtime",
+      "--sequence",
+      "128",
+      "--iterations",
+      "3",
+      "--result",
+      "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/artifacts/native_residual_compact_block8.json",
+      "--compact-native-output",
+      "--program-block-limit",
+      "8",
+      "--reference",
+      "/tmp/qwen_native_selected.pt"
+    ]
+  },
+  {
+    "candidate": "compact_block16",
+    "returncode": 0,
+    "log": "/tmp/qwen_native_residual_compact_block16.log",
+    "command": [
+      "/home/mvasiljevic/tt-metal/python_env/bin/python",
+      "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/probe.py",
+      "--candidate",
+      "runtime",
+      "--sequence",
+      "128",
+      "--iterations",
+      "3",
+      "--result",
+      "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/artifacts/native_residual_compact_block16.json",
+      "--compact-native-output",
+      "--program-block-limit",
+      "16",
+      "--reference",
+      "/tmp/qwen_native_selected.pt"
+    ]
+  }
+]

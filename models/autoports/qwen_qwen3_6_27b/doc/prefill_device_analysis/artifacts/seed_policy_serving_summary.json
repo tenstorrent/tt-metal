@@ -1,0 +1,35 @@
+{
+  "status": "completed_with_documented_qualitative_budget_limits",
+  "model": "Qwen/Qwen3.8-27B",
+  "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+  "plugin_revision": "c9cfebcf0490066ff85e1e3fba2c7d456ce5ce42",
+  "runner_command": "bash models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/run_native_serving.sh --model-dir models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/final_serving",
+  "exit_code": 0,
+  "sampling": {
+    "passed": 3,
+    "skipped": 1,
+    "seconds": 30.37
+  },
+  "qualitative_review": "final_serving_qualitative_review.json",
+  "benchmarks": [
+    {
+      "isl": 128,
+      "osl": 252,
+      "concurrency": 1,
+      "completed": 4,
+      "output_tokens": 1008,
+      "median_http_ttft_ms": 910.9980470966548
+    },
+    {
+      "isl": 4096,
+      "osl": 252,
+      "concurrency": 8,
+      "completed": 8,
+      "output_tokens": 2016,
+      "median_http_ttft_ms": 12812.076004454866
+    }
+  ],
+  "experimental_trace_reuse_enabled": false,
+  "new_logits_scatter_enabled": false,
+  "ci_dispatched": false
+}

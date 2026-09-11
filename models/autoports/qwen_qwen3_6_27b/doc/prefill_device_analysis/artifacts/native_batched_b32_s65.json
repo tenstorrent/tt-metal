@@ -1,0 +1,19 @@
+{
+  "batch": 32,
+  "num_layers": 4,
+  "reset_slots": [
+    3,
+    17
+  ],
+  "fused_kda_decode_layers": "3/3",
+  "reset_not_zeroed": 0,
+  "reset_disturbed_peers": 0,
+  "remap_misplaced": 0,
+  "narrow_slot": 9,
+  "narrow_view_calls": [
+    9
+  ],
+  "narrowed_state_moved": 6,
+  "narrow_disturbed_peers": 0,
+  "status": "SLOT_LIFECYCLE_EXACT"
+}

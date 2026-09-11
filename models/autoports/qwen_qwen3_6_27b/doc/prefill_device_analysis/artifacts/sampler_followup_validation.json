@@ -1,0 +1,28 @@
+{
+  "status": "passed",
+  "split_sampler_exit_code": 0,
+  "adapter_exit_code": 0,
+  "environment": {
+    "QWEN_AUTOPORT_MODEL_ID": "Qwen/Qwen3.8-27B",
+    "QWEN_AUTOPORT_MODEL_REVISION": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+    "QWEN36_PREFILL_PER_REQUEST": "1",
+    "HF_HUB_OFFLINE": "1"
+  },
+  "checks": {
+    "/tmp/qwen_sampler_split_repair.log": [
+      "SPLIT_TOPK_SAMPLER_OK [0, 32767, 32768, 248063]"
+    ],
+    "/tmp/qwen_native_vllm_adapter_repaired.log": [
+      "REDUCED_INIT_OK batch=32 fused_kda_decode=3/3",
+      "REDUCED_PREFILL_OK (32,)",
+      "REDUCED_DECODE_OK [220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220] {'replays': 1, 'token_host_refreshes': 0, 'position_host_refreshes': 0, 'page_table_refreshes': 0, 'readbacks': 0}",
+      "REDUCED_STALE_INPUT_OK [220, 220, 220, 220, 11, 220, 220, 220, 11, 220, 220, 220, 11, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220] {'replays': 1, 'token_host_refreshes': 0, 'position_host_refreshes': 0, 'page_table_refreshes': 0, 'readbacks': 0} {'replays': 2, 'token_host_refreshes': 0, 'position_host_refreshes': 0, 'page_table_refreshes': 0, 'readbacks': 0}",
+      "REDUCED_SLOT_REMAP_OK [220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 11, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220, 220]"
+    ]
+  },
+  "limitations": [
+    "Reduced 4-layer adapter smoke is not full-model qualitative accuracy",
+    "No watcher/profiler enabled",
+    "Default native flat/fused-convolution prefill, outer512 at execution"
+  ]
+}

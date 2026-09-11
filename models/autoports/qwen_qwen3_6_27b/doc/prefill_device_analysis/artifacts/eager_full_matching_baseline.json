@@ -1,0 +1,17 @@
+{
+  "reference": "/tmp/qwen38_prefill_followup_aime100.refpt",
+  "hf_model_id": "/home/mvasiljevic/.cache/huggingface/hub/models--Qwen--Qwen3.8-27B/snapshots/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+  "variants": {
+    "current_silu": {
+      "prefill_s128": {
+        "cold_ms": 2620.1688069850206,
+        "warmed_ms": [
+          2480.1021348685026,
+          2483.1646638922393,
+          2460.9321244060993
+        ],
+        "median_ms": 2480.1021348685026
+      }
+    }
+  }
+}

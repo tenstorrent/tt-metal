@@ -1,0 +1,207 @@
+{
+  "native_final_linear_perf": {
+    "operations": 84,
+    "kernel_ms": 1.4986220000000001,
+    "gap_ms": 2.288803,
+    "groups": {
+      "LayerNormDeviceOperation": {
+        "calls": 2,
+        "kernel_ms": 0.14705500000000002,
+        "gap_ms": 0.012641999999999999
+      },
+      "MatmulDeviceOperation": {
+        "calls": 8,
+        "kernel_ms": 0.5747470000000001,
+        "gap_ms": 0.159015
+      },
+      "TransposeDeviceOperation": {
+        "calls": 5,
+        "kernel_ms": 0.011240999999999998,
+        "gap_ms": 0.115526
+      },
+      "UntilizeWithUnpaddingDeviceOperation": {
+        "calls": 8,
+        "kernel_ms": 0.06688499999999999,
+        "gap_ms": 0.44783900000000004
+      },
+      "PermuteDeviceOperation": {
+        "calls": 8,
+        "kernel_ms": 0.098667,
+        "gap_ms": 0.06685400000000001
+      },
+      "ConcatDeviceOperation": {
+        "calls": 2,
+        "kernel_ms": 0.008622000000000001,
+        "gap_ms": 0.01905
+      },
+      "TilizeWithValPaddingDeviceOperation": {
+        "calls": 9,
+        "kernel_ms": 0.060603000000000004,
+        "gap_ms": 0.251406
+      },
+      "BinaryNgDeviceOperation": {
+        "calls": 12,
+        "kernel_ms": 0.12095499999999998,
+        "gap_ms": 0.5488120000000001
+      },
+      "FillPadDeviceOperation": {
+        "calls": 4,
+        "kernel_ms": 0.030076,
+        "gap_ms": 0.047208999999999994
+      },
+      "ReduceDeviceOperation": {
+        "calls": 4,
+        "kernel_ms": 0.014141,
+        "gap_ms": 0.094481
+      },
+      "UntilizeCodegenDeviceOperation": {
+        "calls": 1,
+        "kernel_ms": 0.004976,
+        "gap_ms": 0.042571
+      },
+      "SliceDeviceOperation": {
+        "calls": 1,
+        "kernel_ms": 0.003376,
+        "gap_ms": 0.001278
+      },
+      "QkvCausalConv1dSiluOperation": {
+        "calls": 1,
+        "kernel_ms": 0.032117,
+        "gap_ms": 0.041373
+      },
+      "CopyDeviceOperation": {
+        "calls": 2,
+        "kernel_ms": 0.007149,
+        "gap_ms": 0.010058
+      },
+      "UnaryDeviceOperation": {
+        "calls": 2,
+        "kernel_ms": 0.004216,
+        "gap_ms": 0.091444
+      },
+      "TypecastDeviceOperation": {
+        "calls": 5,
+        "kernel_ms": 0.014999000000000002,
+        "gap_ms": 0.078735
+      },
+      "ReshapeViewDeviceOperation": {
+        "calls": 3,
+        "kernel_ms": 0.027673999999999997,
+        "gap_ms": 0.074762
+      },
+      "ChunkGdnPrepOperation": {
+        "calls": 1,
+        "kernel_ms": 0.060715000000000005,
+        "gap_ms": 0.10380800000000001
+      },
+      "ChunkGdnScanOperation": {
+        "calls": 1,
+        "kernel_ms": 0.049329,
+        "gap_ms": 0.022550999999999998
+      },
+      "SigmoidGatedRmsNormOperation": {
+        "calls": 1,
+        "kernel_ms": 0.014189,
+        "gap_ms": 0.017606999999999998
+      },
+      "ReduceScatterDeviceOperation": {
+        "calls": 2,
+        "kernel_ms": 0.09380725000000001,
+        "gap_ms": 0.039504
+      },
+      "AllGatherDeviceOperation": {
+        "calls": 2,
+        "kernel_ms": 0.05308275,
+        "gap_ms": 0.002278
+      }
+    }
+  },
+  "native_final_full_attention_perf": {
+    "operations": 61,
+    "kernel_ms": 1.1131005,
+    "gap_ms": 1.250988,
+    "groups": {
+      "LayerNormDeviceOperation": {
+        "calls": 4,
+        "kernel_ms": 0.15853,
+        "gap_ms": 0.059315
+      },
+      "MatmulDeviceOperation": {
+        "calls": 5,
+        "kernel_ms": 0.515873,
+        "gap_ms": 0.038454
+      },
+      "SliceDeviceOperation": {
+        "calls": 13,
+        "kernel_ms": 0.034922,
+        "gap_ms": 0.318499
+      },
+      "ReshapeViewDeviceOperation": {
+        "calls": 3,
+        "kernel_ms": 0.088043,
+        "gap_ms": 0.039329
+      },
+      "TransposeDeviceOperation": {
+        "calls": 3,
+        "kernel_ms": 0.037139,
+        "gap_ms": 0.003496
+      },
+      "EmbeddingsDeviceOperation": {
+        "calls": 4,
+        "kernel_ms": 0.010138999999999999,
+        "gap_ms": 0.08269399999999999
+      },
+      "RepeatCodegenDeviceOperation": {
+        "calls": 2,
+        "kernel_ms": 0.002444,
+        "gap_ms": 0.07165
+      },
+      "BinaryNgDeviceOperation": {
+        "calls": 10,
+        "kernel_ms": 0.056434000000000005,
+        "gap_ms": 0.288209
+      },
+      "UnaryDeviceOperation": {
+        "calls": 3,
+        "kernel_ms": 0.006665999999999999,
+        "gap_ms": 0.09181199999999999
+      },
+      "ConcatDeviceOperation": {
+        "calls": 4,
+        "kernel_ms": 0.009566,
+        "gap_ms": 0.11799299999999999
+      },
+      "TypecastDeviceOperation": {
+        "calls": 2,
+        "kernel_ms": 0.002299,
+        "gap_ms": 0.053977
+      },
+      "PagedFillCacheDeviceOperation": {
+        "calls": 2,
+        "kernel_ms": 0.0028399999999999996,
+        "gap_ms": 0.031335
+      },
+      "SDPAOperation": {
+        "calls": 1,
+        "kernel_ms": 0.024447,
+        "gap_ms": 0.046338000000000004
+      },
+      "NLPConcatHeadsDeviceOperation": {
+        "calls": 1,
+        "kernel_ms": 0.020315,
+        "gap_ms": 0.004466
+      },
+      "ReduceScatterDeviceOperation": {
+        "calls": 2,
+        "kernel_ms": 0.09105225,
+        "gap_ms": 0.001213
+      },
+      "AllGatherDeviceOperation": {
+        "calls": 2,
+        "kernel_ms": 0.05239125,
+        "gap_ms": 0.002208
+      }
+    }
+  },
+  "scope": "Final runtime, reduced layers 0 and 3, B1 S128; profile overhead and per-layer synchronization included. Four-device merged report, gaps are not kernel execution."
+}

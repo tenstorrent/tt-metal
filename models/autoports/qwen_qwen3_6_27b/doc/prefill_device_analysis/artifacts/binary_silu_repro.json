@@ -1,0 +1,56 @@
+{
+  "shape": [
+    1,
+    12,
+    128,
+    128
+  ],
+  "input_ranges": {
+    "gate": [
+      -20,
+      20
+    ],
+    "value": [
+      -9.1875,
+      9.25
+    ]
+  },
+  "cases": {
+    "rhs_silu": {
+      "nonfinite": 0,
+      "max_abs": 0.0,
+      "relative_l2": 0.0,
+      "range": [
+        -152.0,
+        166.0
+      ]
+    },
+    "lhs_silu_commuted": {
+      "nonfinite": 0,
+      "max_abs": 0.0,
+      "relative_l2": 0.0,
+      "range": [
+        -152.0,
+        166.0
+      ]
+    },
+    "rhs_silu_fp32_output": {
+      "nonfinite": 0,
+      "max_abs": 0.46484375,
+      "relative_l2": 0.0016503733349964023,
+      "range": [
+        -151.984375,
+        165.5859375
+      ]
+    }
+  },
+  "baseline": {
+    "nonfinite": 0,
+    "max_abs": 0.46484375,
+    "relative_l2": 0.001686505158431828,
+    "range": [
+      -152.0,
+      166.0
+    ]
+  }
+}

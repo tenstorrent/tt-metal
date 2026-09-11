@@ -1,0 +1,5711 @@
+{
+  "invocation": [
+    "models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/validate_penalty_recapture.py",
+    "--output",
+    "models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/artifacts/sampling_rank_full64_refresh.json",
+    "--num-layers",
+    "64",
+    "--max-context",
+    "512",
+    "--sampling-consistency-steps",
+    "160",
+    "--chat-prompt-id",
+    "1",
+    "--skip-penalty-check",
+    "--refresh-unseeded-each-step",
+    "--sampling-cases",
+    "unseeded_traced",
+    "unseeded_eager"
+  ],
+  "batch": 32,
+  "num_layers": 64,
+  "max_context": 512,
+  "prompt": {
+    "id": 1,
+    "prompt": "Explain the difference between supervised and unsupervised learning in simple terms.",
+    "rendered_prompt": "<|im_start|>system\nReasoning effort is set to xhigh. Please think carefully through the task, validate key assumptions, consider plausible alternatives, and prioritize correctness, consistency, and clarity in the final answer.<|im_end|>\n<|im_start|>user\nExplain the difference between supervised and unsupervised learning in simple terms.<|im_end|>\n<|im_start|>assistant\n<think>\n",
+    "prompt_token_ids": [
+      248045,
+      8678,
+      198,
+      24342,
+      286,
+      4879,
+      369,
+      716,
+      310,
+      830,
+      11553,
+      13,
+      5044,
+      1683,
+      15060,
+      1472,
+      279,
+      3274,
+      11,
+      9307,
+      1328,
+      30800,
+      11,
+      2814,
+      47675,
+      25605,
+      11,
+      321,
+      60445,
+      55404,
+      11,
+      27224,
+      11,
+      321,
+      30246,
+      303,
+      279,
+      1534,
+      4087,
+      13,
+      248046,
+      198,
+      248045,
+      846,
+      198,
+      814,
+      20139,
+      279,
+      6463,
+      1881,
+      56994,
+      321,
+      6758,
+      446,
+      75318,
+      6618,
+      303,
+      4145,
+      3665,
+      13,
+      248046,
+      198,
+      248045,
+      74455,
+      198,
+      248068,
+      198
+    ]
+  },
+  "model": "Qwen/Qwen3.8-27B",
+  "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+  "sampling_rank_controls": {
+    "unseeded_traced": {
+      "request_seed": null,
+      "force_internal_sampling_trace": true,
+      "refresh_unseeded_each_step": true,
+      "prefill_tokens_by_rank": [
+        1596,
+        1596,
+        1596,
+        1596
+      ],
+      "prompt_logical_length": 67,
+      "prompt_physical_length": 128,
+      "synchronized_prefill_seconds": 0.43523669289425015,
+      "synchronized_prefill_sampling_seconds": 0.08409490110352635,
+      "synchronized_setup_seconds": 0.6254164958372712,
+      "steps": [
+        {
+          "step": 0,
+          "tokens_by_rank": [
+            1144,
+            1144,
+            1144,
+            1144
+          ],
+          "seeds_by_rank": [
+            919907,
+            919907,
+            919907,
+            919907
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 1,
+          "tokens_by_rank": [
+            4087,
+            4087,
+            4087,
+            4087
+          ],
+          "seeds_by_rank": [
+            817524,
+            817524,
+            817524,
+            817524
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 2,
+          "tokens_by_rank": [
+            1156,
+            1156,
+            1156,
+            1156
+          ],
+          "seeds_by_rank": [
+            134866,
+            134866,
+            134866,
+            134866
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 3,
+          "tokens_by_rank": [
+            25,
+            25,
+            25,
+            25
+          ],
+          "seeds_by_rank": [
+            185429,
+            185429,
+            185429,
+            185429
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 4,
+          "tokens_by_rank": [
+            79091,
+            79091,
+            79091,
+            79091
+          ],
+          "seeds_by_rank": [
+            785568,
+            785568,
+            785568,
+            785568
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 5,
+          "tokens_by_rank": [
+            6463,
+            6463,
+            6463,
+            6463
+          ],
+          "seeds_by_rank": [
+            554640,
+            554640,
+            554640,
+            554640
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 6,
+          "tokens_by_rank": [
+            1881,
+            1881,
+            1881,
+            1881
+          ],
+          "seeds_by_rank": [
+            799773,
+            799773,
+            799773,
+            799773
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 7,
+          "tokens_by_rank": [
+            56994,
+            56994,
+            56994,
+            56994
+          ],
+          "seeds_by_rank": [
+            217777,
+            217777,
+            217777,
+            217777
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 8,
+          "tokens_by_rank": [
+            321,
+            321,
+            321,
+            321
+          ],
+          "seeds_by_rank": [
+            844843,
+            844843,
+            844843,
+            844843
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 9,
+          "tokens_by_rank": [
+            6758,
+            6758,
+            6758,
+            6758
+          ],
+          "seeds_by_rank": [
+            422481,
+            422481,
+            422481,
+            422481
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 10,
+          "tokens_by_rank": [
+            446,
+            446,
+            446,
+            446
+          ],
+          "seeds_by_rank": [
+            101583,
+            101583,
+            101583,
+            101583
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 11,
+          "tokens_by_rank": [
+            75318,
+            75318,
+            75318,
+            75318
+          ],
+          "seeds_by_rank": [
+            427443,
+            427443,
+            427443,
+            427443
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 12,
+          "tokens_by_rank": [
+            6618,
+            6618,
+            6618,
+            6618
+          ],
+          "seeds_by_rank": [
+            973378,
+            973378,
+            973378,
+            973378
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 13,
+          "tokens_by_rank": [
+            303,
+            303,
+            303,
+            303
+          ],
+          "seeds_by_rank": [
+            928410,
+            928410,
+            928410,
+            928410
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 14,
+          "tokens_by_rank": [
+            4145,
+            4145,
+            4145,
+            4145
+          ],
+          "seeds_by_rank": [
+            224551,
+            224551,
+            224551,
+            224551
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 15,
+          "tokens_by_rank": [
+            3665,
+            3665,
+            3665,
+            3665
+          ],
+          "seeds_by_rank": [
+            351597,
+            351597,
+            351597,
+            351597
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 16,
+          "tokens_by_rank": [
+            13,
+            13,
+            13,
+            13
+          ],
+          "seeds_by_rank": [
+            864609,
+            864609,
+            864609,
+            864609
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 17,
+          "tokens_by_rank": [
+            14235,
+            14235,
+            14235,
+            14235
+          ],
+          "seeds_by_rank": [
+            830310,
+            830310,
+            830310,
+            830310
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 18,
+          "tokens_by_rank": [
+            1534,
+            1534,
+            1534,
+            1534
+          ],
+          "seeds_by_rank": [
+            247386,
+            247386,
+            247386,
+            247386
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 19,
+          "tokens_by_rank": [
+            61446,
+            61446,
+            61446,
+            61446
+          ],
+          "seeds_by_rank": [
+            91129,
+            91129,
+            91129,
+            91129
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 20,
+          "tokens_by_rank": [
+            694,
+            694,
+            694,
+            694
+          ],
+          "seeds_by_rank": [
+            576376,
+            576376,
+            576376,
+            576376
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 21,
+          "tokens_by_rank": [
+            2708,
+            2708,
+            2708,
+            2708
+          ],
+          "seeds_by_rank": [
+            645501,
+            645501,
+            645501,
+            645501
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 22,
+          "tokens_by_rank": [
+            13,
+            13,
+            13,
+            13
+          ],
+          "seeds_by_rank": [
+            427404,
+            427404,
+            427404,
+            427404
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 23,
+          "tokens_by_rank": [
+            2233,
+            2233,
+            2233,
+            2233
+          ],
+          "seeds_by_rank": [
+            918084,
+            918084,
+            918084,
+            918084
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 24,
+          "tokens_by_rank": [
+            1144,
+            1144,
+            1144,
+            1144
+          ],
+          "seeds_by_rank": [
+            99976,
+            99976,
+            99976,
+            99976
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 25,
+          "tokens_by_rank": [
+            6150,
+            6150,
+            6150,
+            6150
+          ],
+          "seeds_by_rank": [
+            835437,
+            835437,
+            835437,
+            835437
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 26,
+          "tokens_by_rank": [
+            13,
+            13,
+            13,
+            13
+          ],
+          "seeds_by_rank": [
+            203241,
+            203241,
+            203241,
+            203241
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 27,
+          "tokens_by_rank": [
+            198,
+            198,
+            198,
+            198
+          ],
+          "seeds_by_rank": [
+            272185,
+            272185,
+            272185,
+            272185
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 28,
+          "tokens_by_rank": [
+            248069,
+            248069,
+            248069,
+            248069
+          ],
+          "seeds_by_rank": [
+            672189,
+            672189,
+            672189,
+            672189
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 29,
+          "tokens_by_rank": [
+            271,
+            271,
+            271,
+            271
+          ],
+          "seeds_by_rank": [
+            96477,
+            96477,
+            96477,
+            96477
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 30,
+          "tokens_by_rank": [
+            9751,
+            9751,
+            9751,
+            9751
+          ],
+          "seeds_by_rank": [
+            642449,
+            642449,
+            642449,
+            642449
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 31,
+          "tokens_by_rank": [
+            75318,
+            75318,
+            75318,
+            75318
+          ],
+          "seeds_by_rank": [
+            497292,
+            497292,
+            497292,
+            497292
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 32,
+          "tokens_by_rank": [
+            6618,
+            6618,
+            6618,
+            6618
+          ],
+          "seeds_by_rank": [
+            862815,
+            862815,
+            862815,
+            862815
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 33,
+          "tokens_by_rank": [
+            369,
+            369,
+            369,
+            369
+          ],
+          "seeds_by_rank": [
+            283465,
+            283465,
+            283465,
+            283465
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 34,
+          "tokens_by_rank": [
+            1040,
+            1040,
+            1040,
+            1040
+          ],
+          "seeds_by_rank": [
+            473819,
+            473819,
+            473819,
+            473819
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 35,
+          "tokens_by_rank": [
+            6618,
+            6618,
+            6618,
+            6618
+          ],
+          "seeds_by_rank": [
+            937367,
+            937367,
+            937367,
+            937367
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 36,
+          "tokens_by_rank": [
+            440,
+            440,
+            440,
+            440
+          ],
+          "seeds_by_rank": [
+            351833,
+            351833,
+            351833,
+            351833
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 37,
+          "tokens_by_rank": [
+            449,
+            449,
+            449,
+            449
+          ],
+          "seeds_by_rank": [
+            365398,
+            365398,
+            365398,
+            365398
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 38,
+          "tokens_by_rank": [
+            4087,
+            4087,
+            4087,
+            4087
+          ],
+          "seeds_by_rank": [
+            329412,
+            329412,
+            329412,
+            329412
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 39,
+          "tokens_by_rank": [
+            1328,
+            1328,
+            1328,
+            1328
+          ],
+          "seeds_by_rank": [
+            424836,
+            424836,
+            424836,
+            424836
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 40,
+          "tokens_by_rank": [
+            13,
+            13,
+            13,
+            13
+          ],
+          "seeds_by_rank": [
+            858151,
+            858151,
+            858151,
+            858151
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 41,
+          "tokens_by_rank": [
+            1394,
+            1394,
+            1394,
+            1394
+          ],
+          "seeds_by_rank": [
+            751077,
+            751077,
+            751077,
+            751077
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 42,
+          "tokens_by_rank": [
+            2873,
+            2873,
+            2873,
+            2873
+          ],
+          "seeds_by_rank": [
+            448872,
+            448872,
+            448872,
+            448872
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 43,
+          "tokens_by_rank": [
+            279,
+            279,
+            279,
+            279
+          ],
+          "seeds_by_rank": [
+            249786,
+            249786,
+            249786,
+            249786
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 44,
+          "tokens_by_rank": [
+            1558,
+            1558,
+            1558,
+            1558
+          ],
+          "seeds_by_rank": [
+            34343,
+            34343,
+            34343,
+            34343
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 45,
+          "tokens_by_rank": [
+            9989,
+            9989,
+            9989,
+            9989
+          ],
+          "seeds_by_rank": [
+            328697,
+            328697,
+            328697,
+            328697
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 46,
+          "tokens_by_rank": [
+            321,
+            321,
+            321,
+            321
+          ],
+          "seeds_by_rank": [
+            593816,
+            593816,
+            593816,
+            593816
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 47,
+          "tokens_by_rank": [
+            836,
+            836,
+            836,
+            836
+          ],
+          "seeds_by_rank": [
+            753384,
+            753384,
+            753384,
+            753384
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 48,
+          "tokens_by_rank": [
+            4252,
+            4252,
+            4252,
+            4252
+          ],
+          "seeds_by_rank": [
+            728860,
+            728860,
+            728860,
+            728860
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 49,
+          "tokens_by_rank": [
+            8928,
+            8928,
+            8928,
+            8928
+          ],
+          "seeds_by_rank": [
+            935896,
+            935896,
+            935896,
+            935896
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 50,
+          "tokens_by_rank": [
+            11,
+            11,
+            11,
+            11
+          ],
+          "seeds_by_rank": [
+            657020,
+            657020,
+            657020,
+            657020
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 51,
+          "tokens_by_rank": [
+            321,
+            321,
+            321,
+            321
+          ],
+          "seeds_by_rank": [
+            475863,
+            475863,
+            475863,
+            475863
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 52,
+          "tokens_by_rank": [
+            424,
+            424,
+            424,
+            424
+          ],
+          "seeds_by_rank": [
+            845373,
+            845373,
+            845373,
+            845373
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 53,
+          "tokens_by_rank": [
+            44669,
+            44669,
+            44669,
+            44669
+          ],
+          "seeds_by_rank": [
+            896165,
+            896165,
+            896165,
+            896165
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 54,
+          "tokens_by_rank": [
+            310,
+            310,
+            310,
+            310
+          ],
+          "seeds_by_rank": [
+            783490,
+            783490,
+            783490,
+            783490
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 55,
+          "tokens_by_rank": [
+            6805,
+            6805,
+            6805,
+            6805
+          ],
+          "seeds_by_rank": [
+            246391,
+            246391,
+            246391,
+            246391
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 56,
+          "tokens_by_rank": [
+            8928,
+            8928,
+            8928,
+            8928
+          ],
+          "seeds_by_rank": [
+            487321,
+            487321,
+            487321,
+            487321
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 57,
+          "tokens_by_rank": [
+            364,
+            364,
+            364,
+            364
+          ],
+          "seeds_by_rank": [
+            210170,
+            210170,
+            210170,
+            210170
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 58,
+          "tokens_by_rank": [
+            491,
+            491,
+            491,
+            491
+          ],
+          "seeds_by_rank": [
+            296156,
+            296156,
+            296156,
+            296156
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 59,
+          "tokens_by_rank": [
+            9989,
+            9989,
+            9989,
+            9989
+          ],
+          "seeds_by_rank": [
+            455912,
+            455912,
+            455912,
+            455912
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 60,
+          "tokens_by_rank": [
+            13,
+            13,
+            13,
+            13
+          ],
+          "seeds_by_rank": [
+            160301,
+            160301,
+            160301,
+            160301
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 61,
+          "tokens_by_rank": [
+            271,
+            271,
+            271,
+            271
+          ],
+          "seeds_by_rank": [
+            480726,
+            480726,
+            480726,
+            480726
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 62,
+          "tokens_by_rank": [
+            12929,
+            12929,
+            12929,
+            12929
+          ],
+          "seeds_by_rank": [
+            817260,
+            817260,
+            817260,
+            817260
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 63,
+          "tokens_by_rank": [
+            25,
+            25,
+            25,
+            25
+          ],
+          "seeds_by_rank": [
+            933255,
+            933255,
+            933255,
+            933255
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 64,
+          "tokens_by_rank": [
+            8755,
+            8755,
+            8755,
+            8755
+          ],
+          "seeds_by_rank": [
+            730751,
+            730751,
+            730751,
+            730751
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 65,
+          "tokens_by_rank": [
+            7022,
+            7022,
+            7022,
+            7022
+          ],
+          "seeds_by_rank": [
+            956059,
+            956059,
+            956059,
+            956059
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 66,
+          "tokens_by_rank": [
+            28853,
+            28853,
+            28853,
+            28853
+          ],
+          "seeds_by_rank": [
+            76023,
+            76023,
+            76023,
+            76023
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 67,
+          "tokens_by_rank": [
+            1001,
+            1001,
+            1001,
+            1001
+          ],
+          "seeds_by_rank": [
+            565193,
+            565193,
+            565193,
+            565193
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 68,
+          "tokens_by_rank": [
+            4466,
+            4466,
+            4466,
+            4466
+          ],
+          "seeds_by_rank": [
+            52350,
+            52350,
+            52350,
+            52350
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 69,
+          "tokens_by_rank": [
+            828,
+            828,
+            828,
+            828
+          ],
+          "seeds_by_rank": [
+            591732,
+            591732,
+            591732,
+            591732
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 70,
+          "tokens_by_rank": [
+            321,
+            321,
+            321,
+            321
+          ],
+          "seeds_by_rank": [
+            950205,
+            950205,
+            950205,
+            950205
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 71,
+          "tokens_by_rank": [
+            1001,
+            1001,
+            1001,
+            1001
+          ],
+          "seeds_by_rank": [
+            466599,
+            466599,
+            466599,
+            466599
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 72,
+          "tokens_by_rank": [
+            17907,
+            17907,
+            17907,
+            17907
+          ],
+          "seeds_by_rank": [
+            321371,
+            321371,
+            321371,
+            321371
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 73,
+          "tokens_by_rank": [
+            2340,
+            2340,
+            2340,
+            2340
+          ],
+          "seeds_by_rank": [
+            326823,
+            326823,
+            326823,
+            326823
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 74,
+          "tokens_by_rank": [
+            1179,
+            1179,
+            1179,
+            1179
+          ],
+          "seeds_by_rank": [
+            483460,
+            483460,
+            483460,
+            483460
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 75,
+          "tokens_by_rank": [
+            9859,
+            9859,
+            9859,
+            9859
+          ],
+          "seeds_by_rank": [
+            396741,
+            396741,
+            396741,
+            396741
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 76,
+          "tokens_by_rank": [
+            279,
+            279,
+            279,
+            279
+          ],
+          "seeds_by_rank": [
+            600558,
+            600558,
+            600558,
+            600558
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 77,
+          "tokens_by_rank": [
+            1558,
+            1558,
+            1558,
+            1558
+          ],
+          "seeds_by_rank": [
+            32469,
+            32469,
+            32469,
+            32469
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 78,
+          "tokens_by_rank": [
+            310,
+            310,
+            310,
+            310
+          ],
+          "seeds_by_rank": [
+            845406,
+            845406,
+            845406,
+            845406
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 79,
+          "tokens_by_rank": [
+            46522,
+            46522,
+            46522,
+            46522
+          ],
+          "seeds_by_rank": [
+            293666,
+            293666,
+            293666,
+            293666
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 80,
+          "tokens_by_rank": [
+            491,
+            491,
+            491,
+            491
+          ],
+          "seeds_by_rank": [
+            86770,
+            86770,
+            86770,
+            86770
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 81,
+          "tokens_by_rank": [
+            7022,
+            7022,
+            7022,
+            7022
+          ],
+          "seeds_by_rank": [
+            945104,
+            945104,
+            945104,
+            945104
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 82,
+          "tokens_by_rank": [
+            13,
+            13,
+            13,
+            13
+          ],
+          "seeds_by_rank": [
+            212915,
+            212915,
+            212915,
+            212915
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 83,
+          "tokens_by_rank": [
+            271,
+            271,
+            271,
+            271
+          ],
+          "seeds_by_rank": [
+            322184,
+            322184,
+            322184,
+            322184
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 84,
+          "tokens_by_rank": [
+            1743,
+            1743,
+            1743,
+            1743
+          ],
+          "seeds_by_rank": [
+            20897,
+            20897,
+            20897,
+            20897
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 85,
+          "tokens_by_rank": [
+            12410,
+            12410,
+            12410,
+            12410
+          ],
+          "seeds_by_rank": [
+            325549,
+            325549,
+            325549,
+            325549
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 86,
+          "tokens_by_rank": [
+            75318,
+            75318,
+            75318,
+            75318
+          ],
+          "seeds_by_rank": [
+            131868,
+            131868,
+            131868,
+            131868
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 87,
+          "tokens_by_rank": [
+            6618,
+            6618,
+            6618,
+            6618
+          ],
+          "seeds_by_rank": [
+            362870,
+            362870,
+            362870,
+            362870
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 88,
+          "tokens_by_rank": [
+            369,
+            369,
+            369,
+            369
+          ],
+          "seeds_by_rank": [
+            169644,
+            169644,
+            169644,
+            169644
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 89,
+          "tokens_by_rank": [
+            1040,
+            1040,
+            1040,
+            1040
+          ],
+          "seeds_by_rank": [
+            577074,
+            577074,
+            577074,
+            577074
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 90,
+          "tokens_by_rank": [
+            6618,
+            6618,
+            6618,
+            6618
+          ],
+          "seeds_by_rank": [
+            632915,
+            632915,
+            632915,
+            632915
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 91,
+          "tokens_by_rank": [
+            1973,
+            1973,
+            1973,
+            1973
+          ],
+          "seeds_by_rank": [
+            957802,
+            957802,
+            957802,
+            957802
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 92,
+          "tokens_by_rank": [
+            449,
+            449,
+            449,
+            449
+          ],
+          "seeds_by_rank": [
+            527835,
+            527835,
+            527835,
+            527835
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 93,
+          "tokens_by_rank": [
+            4087,
+            4087,
+            4087,
+            4087
+          ],
+          "seeds_by_rank": [
+            470313,
+            470313,
+            470313,
+            470313
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 94,
+          "tokens_by_rank": [
+            1328,
+            1328,
+            1328,
+            1328
+          ],
+          "seeds_by_rank": [
+            6326,
+            6326,
+            6326,
+            6326
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 95,
+          "tokens_by_rank": [
+            13,
+            13,
+            13,
+            13
+          ],
+          "seeds_by_rank": [
+            391882,
+            391882,
+            391882,
+            391882
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 96,
+          "tokens_by_rank": [
+            1394,
+            1394,
+            1394,
+            1394
+          ],
+          "seeds_by_rank": [
+            759513,
+            759513,
+            759513,
+            759513
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 97,
+          "tokens_by_rank": [
+            2873,
+            2873,
+            2873,
+            2873
+          ],
+          "seeds_by_rank": [
+            429871,
+            429871,
+            429871,
+            429871
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 98,
+          "tokens_by_rank": [
+            279,
+            279,
+            279,
+            279
+          ],
+          "seeds_by_rank": [
+            60004,
+            60004,
+            60004,
+            60004
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 99,
+          "tokens_by_rank": [
+            1558,
+            1558,
+            1558,
+            1558
+          ],
+          "seeds_by_rank": [
+            921248,
+            921248,
+            921248,
+            921248
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 100,
+          "tokens_by_rank": [
+            795,
+            795,
+            795,
+            795
+          ],
+          "seeds_by_rank": [
+            389170,
+            389170,
+            389170,
+            389170
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 101,
+          "tokens_by_rank": [
+            11,
+            11,
+            11,
+            11
+          ],
+          "seeds_by_rank": [
+            606060,
+            606060,
+            606060,
+            606060
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 102,
+          "tokens_by_rank": [
+            321,
+            321,
+            321,
+            321
+          ],
+          "seeds_by_rank": [
+            760115,
+            760115,
+            760115,
+            760115
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 103,
+          "tokens_by_rank": [
+            424,
+            424,
+            424,
+            424
+          ],
+          "seeds_by_rank": [
+            478752,
+            478752,
+            478752,
+            478752
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 104,
+          "tokens_by_rank": [
+            15818,
+            15818,
+            15818,
+            15818
+          ],
+          "seeds_by_rank": [
+            980910,
+            980910,
+            980910,
+            980910
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 105,
+          "tokens_by_rank": [
+            310,
+            310,
+            310,
+            310
+          ],
+          "seeds_by_rank": [
+            889330,
+            889330,
+            889330,
+            889330
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 106,
+          "tokens_by_rank": [
+            1423,
+            1423,
+            1423,
+            1423
+          ],
+          "seeds_by_rank": [
+            304671,
+            304671,
+            304671,
+            304671
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 107,
+          "tokens_by_rank": [
+            12261,
+            12261,
+            12261,
+            12261
+          ],
+          "seeds_by_rank": [
+            403221,
+            403221,
+            403221,
+            403221
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 108,
+          "tokens_by_rank": [
+            466,
+            466,
+            466,
+            466
+          ],
+          "seeds_by_rank": [
+            484603,
+            484603,
+            484603,
+            484603
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 109,
+          "tokens_by_rank": [
+            5759,
+            5759,
+            5759,
+            5759
+          ],
+          "seeds_by_rank": [
+            502336,
+            502336,
+            502336,
+            502336
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 110,
+          "tokens_by_rank": [
+            383,
+            383,
+            383,
+            383
+          ],
+          "seeds_by_rank": [
+            887651,
+            887651,
+            887651,
+            887651
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 111,
+          "tokens_by_rank": [
+            1141,
+            1141,
+            1141,
+            1141
+          ],
+          "seeds_by_rank": [
+            735578,
+            735578,
+            735578,
+            735578
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 112,
+          "tokens_by_rank": [
+            1765,
+            1765,
+            1765,
+            1765
+          ],
+          "seeds_by_rank": [
+            712392,
+            712392,
+            712392,
+            712392
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 113,
+          "tokens_by_rank": [
+            13,
+            13,
+            13,
+            13
+          ],
+          "seeds_by_rank": [
+            782471,
+            782471,
+            782471,
+            782471
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 114,
+          "tokens_by_rank": [
+            271,
+            271,
+            271,
+            271
+          ],
+          "seeds_by_rank": [
+            963926,
+            963926,
+            963926,
+            963926
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 115,
+          "tokens_by_rank": [
+            12929,
+            12929,
+            12929,
+            12929
+          ],
+          "seeds_by_rank": [
+            332722,
+            332722,
+            332722,
+            332722
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 116,
+          "tokens_by_rank": [
+            25,
+            25,
+            25,
+            25
+          ],
+          "seeds_by_rank": [
+            974310,
+            974310,
+            974310,
+            974310
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 117,
+          "tokens_by_rank": [
+            6866,
+            6866,
+            6866,
+            6866
+          ],
+          "seeds_by_rank": [
+            244238,
+            244238,
+            244238,
+            244238
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 118,
+          "tokens_by_rank": [
+            424,
+            424,
+            424,
+            424
+          ],
+          "seeds_by_rank": [
+            794254,
+            794254,
+            794254,
+            794254
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 119,
+          "tokens_by_rank": [
+            264,
+            264,
+            264,
+            264
+          ],
+          "seeds_by_rank": [
+            847211,
+            847211,
+            847211,
+            847211
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 120,
+          "tokens_by_rank": [
+            15038,
+            15038,
+            15038,
+            15038
+          ],
+          "seeds_by_rank": [
+            945987,
+            945987,
+            945987,
+            945987
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 121,
+          "tokens_by_rank": [
+            314,
+            314,
+            314,
+            314
+          ],
+          "seeds_by_rank": [
+            238203,
+            238203,
+            238203,
+            238203
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 122,
+          "tokens_by_rank": [
+            5813,
+            5813,
+            5813,
+            5813
+          ],
+          "seeds_by_rank": [
+            649849,
+            649849,
+            649849,
+            649849
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 123,
+          "tokens_by_rank": [
+            795,
+            795,
+            795,
+            795
+          ],
+          "seeds_by_rank": [
+            720690,
+            720690,
+            720690,
+            720690
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 124,
+          "tokens_by_rank": [
+            321,
+            321,
+            321,
+            321
+          ],
+          "seeds_by_rank": [
+            212436,
+            212436,
+            212436,
+            212436
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 125,
+          "tokens_by_rank": [
+            9859,
+            9859,
+            9859,
+            9859
+          ],
+          "seeds_by_rank": [
+            22943,
+            22943,
+            22943,
+            22943
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 126,
+          "tokens_by_rank": [
+            424,
+            424,
+            424,
+            424
+          ],
+          "seeds_by_rank": [
+            6655,
+            6655,
+            6655,
+            6655
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 127,
+          "tokens_by_rank": [
+            310,
+            310,
+            310,
+            310
+          ],
+          "seeds_by_rank": [
+            837799,
+            837799,
+            837799,
+            837799
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 128,
+          "tokens_by_rank": [
+            1809,
+            1809,
+            1809,
+            1809
+          ],
+          "seeds_by_rank": [
+            899711,
+            899711,
+            899711,
+            899711
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 129,
+          "tokens_by_rank": [
+            4283,
+            4283,
+            4283,
+            4283
+          ],
+          "seeds_by_rank": [
+            761596,
+            761596,
+            761596,
+            761596
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 130,
+          "tokens_by_rank": [
+            6112,
+            6112,
+            6112,
+            6112
+          ],
+          "seeds_by_rank": [
+            294155,
+            294155,
+            294155,
+            294155
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 131,
+          "tokens_by_rank": [
+            3658,
+            3658,
+            3658,
+            3658
+          ],
+          "seeds_by_rank": [
+            421718,
+            421718,
+            421718,
+            421718
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 132,
+          "tokens_by_rank": [
+            13,
+            13,
+            13,
+            13
+          ],
+          "seeds_by_rank": [
+            93148,
+            93148,
+            93148,
+            93148
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 133,
+          "tokens_by_rank": [
+            248046,
+            248046,
+            248046,
+            248046
+          ],
+          "seeds_by_rank": [
+            525244,
+            525244,
+            525244,
+            525244
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": true,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        }
+      ],
+      "generated_token_ids": [
+        1596,
+        1144,
+        4087,
+        1156,
+        25,
+        79091,
+        6463,
+        1881,
+        56994,
+        321,
+        6758,
+        446,
+        75318,
+        6618,
+        303,
+        4145,
+        3665,
+        13,
+        14235,
+        1534,
+        61446,
+        694,
+        2708,
+        13,
+        2233,
+        1144,
+        6150,
+        13,
+        198,
+        248069,
+        271,
+        9751,
+        75318,
+        6618,
+        369,
+        1040,
+        6618,
+        440,
+        449,
+        4087,
+        1328,
+        13,
+        1394,
+        2873,
+        279,
+        1558,
+        9989,
+        321,
+        836,
+        4252,
+        8928,
+        11,
+        321,
+        424,
+        44669,
+        310,
+        6805,
+        8928,
+        364,
+        491,
+        9989,
+        13,
+        271,
+        12929,
+        25,
+        8755,
+        7022,
+        28853,
+        1001,
+        4466,
+        828,
+        321,
+        1001,
+        17907,
+        2340,
+        1179,
+        9859,
+        279,
+        1558,
+        310,
+        46522,
+        491,
+        7022,
+        13,
+        271,
+        1743,
+        12410,
+        75318,
+        6618,
+        369,
+        1040,
+        6618,
+        1973,
+        449,
+        4087,
+        1328,
+        13,
+        1394,
+        2873,
+        279,
+        1558,
+        795,
+        11,
+        321,
+        424,
+        15818,
+        310,
+        1423,
+        12261,
+        466,
+        5759,
+        383,
+        1141,
+        1765,
+        13,
+        271,
+        12929,
+        25,
+        6866,
+        424,
+        264,
+        15038,
+        314,
+        5813,
+        795,
+        321,
+        9859,
+        424,
+        310,
+        1809,
+        4283,
+        6112,
+        3658,
+        13,
+        248046
+      ],
+      "generated_text": "We need answer user: Explain difference between supervised and unsupervised learning in simple terms. Need final concise but clear. No need complex.\n</think>\n\nSupervised learning is like learning with an answer key. You give the model examples and their correct labels, and it learns to predict labels for new examples.\n\nExample: showing photos labeled \u201ccat\u201d and \u201cdog,\u201d then asking the model to classify new photos.\n\nUnsupervised learning is like learning without an answer key. You give the model data, and it tries to find patterns or structure on its own.\n\nExample: giving it a bunch of customer data and asking it to group similar customers together.<|im_end|>",
+      "stopped_on_eos": true,
+      "divergent_step_count": 0,
+      "first_divergence": null
+    },
+    "unseeded_eager": {
+      "request_seed": null,
+      "force_internal_sampling_trace": false,
+      "refresh_unseeded_each_step": true,
+      "prefill_tokens_by_rank": [
+        1596,
+        1596,
+        1596,
+        1596
+      ],
+      "prompt_logical_length": 67,
+      "prompt_physical_length": 128,
+      "synchronized_prefill_seconds": 0.3175629349425435,
+      "synchronized_prefill_sampling_seconds": 0.0019169161096215248,
+      "synchronized_setup_seconds": 0.5005920780822635,
+      "steps": [
+        {
+          "step": 0,
+          "tokens_by_rank": [
+            1144,
+            1144,
+            1144,
+            1144
+          ],
+          "seeds_by_rank": [
+            346024,
+            346024,
+            346024,
+            346024
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 1,
+          "tokens_by_rank": [
+            310,
+            310,
+            310,
+            310
+          ],
+          "seeds_by_rank": [
+            942639,
+            942639,
+            942639,
+            942639
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 2,
+          "tokens_by_rank": [
+            4087,
+            4087,
+            4087,
+            4087
+          ],
+          "seeds_by_rank": [
+            158454,
+            158454,
+            158454,
+            158454
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 3,
+          "tokens_by_rank": [
+            1156,
+            1156,
+            1156,
+            1156
+          ],
+          "seeds_by_rank": [
+            807359,
+            807359,
+            807359,
+            807359
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 4,
+          "tokens_by_rank": [
+            25,
+            25,
+            25,
+            25
+          ],
+          "seeds_by_rank": [
+            596012,
+            596012,
+            596012,
+            596012
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 5,
+          "tokens_by_rank": [
+            328,
+            328,
+            328,
+            328
+          ],
+          "seeds_by_rank": [
+            613545,
+            613545,
+            613545,
+            613545
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 6,
+          "tokens_by_rank": [
+            814,
+            814,
+            814,
+            814
+          ],
+          "seeds_by_rank": [
+            496310,
+            496310,
+            496310,
+            496310
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 7,
+          "tokens_by_rank": [
+            20139,
+            20139,
+            20139,
+            20139
+          ],
+          "seeds_by_rank": [
+            43510,
+            43510,
+            43510,
+            43510
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 8,
+          "tokens_by_rank": [
+            279,
+            279,
+            279,
+            279
+          ],
+          "seeds_by_rank": [
+            475526,
+            475526,
+            475526,
+            475526
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 9,
+          "tokens_by_rank": [
+            6463,
+            6463,
+            6463,
+            6463
+          ],
+          "seeds_by_rank": [
+            646609,
+            646609,
+            646609,
+            646609
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 10,
+          "tokens_by_rank": [
+            1881,
+            1881,
+            1881,
+            1881
+          ],
+          "seeds_by_rank": [
+            821524,
+            821524,
+            821524,
+            821524
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 11,
+          "tokens_by_rank": [
+            56994,
+            56994,
+            56994,
+            56994
+          ],
+          "seeds_by_rank": [
+            760282,
+            760282,
+            760282,
+            760282
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 12,
+          "tokens_by_rank": [
+            321,
+            321,
+            321,
+            321
+          ],
+          "seeds_by_rank": [
+            144085,
+            144085,
+            144085,
+            144085
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 13,
+          "tokens_by_rank": [
+            6758,
+            6758,
+            6758,
+            6758
+          ],
+          "seeds_by_rank": [
+            645715,
+            645715,
+            645715,
+            645715
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 14,
+          "tokens_by_rank": [
+            446,
+            446,
+            446,
+            446
+          ],
+          "seeds_by_rank": [
+            282298,
+            282298,
+            282298,
+            282298
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 15,
+          "tokens_by_rank": [
+            75318,
+            75318,
+            75318,
+            75318
+          ],
+          "seeds_by_rank": [
+            899962,
+            899962,
+            899962,
+            899962
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 16,
+          "tokens_by_rank": [
+            6618,
+            6618,
+            6618,
+            6618
+          ],
+          "seeds_by_rank": [
+            736959,
+            736959,
+            736959,
+            736959
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 17,
+          "tokens_by_rank": [
+            303,
+            303,
+            303,
+            303
+          ],
+          "seeds_by_rank": [
+            958871,
+            958871,
+            958871,
+            958871
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 18,
+          "tokens_by_rank": [
+            4145,
+            4145,
+            4145,
+            4145
+          ],
+          "seeds_by_rank": [
+            44511,
+            44511,
+            44511,
+            44511
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 19,
+          "tokens_by_rank": [
+            3665,
+            3665,
+            3665,
+            3665
+          ],
+          "seeds_by_rank": [
+            810414,
+            810414,
+            810414,
+            810414
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 20,
+          "tokens_by_rank": [
+            1149,
+            1149,
+            1149,
+            1149
+          ],
+          "seeds_by_rank": [
+            326804,
+            326804,
+            326804,
+            326804
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 21,
+          "tokens_by_rank": [
+            8722,
+            8722,
+            8722,
+            8722
+          ],
+          "seeds_by_rank": [
+            388674,
+            388674,
+            388674,
+            388674
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 22,
+          "tokens_by_rank": [
+            11,
+            11,
+            11,
+            11
+          ],
+          "seeds_by_rank": [
+            486184,
+            486184,
+            486184,
+            486184
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 23,
+          "tokens_by_rank": [
+            4222,
+            4222,
+            4222,
+            4222
+          ],
+          "seeds_by_rank": [
+            9696,
+            9696,
+            9696,
+            9696
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 24,
+          "tokens_by_rank": [
+            874,
+            874,
+            874,
+            874
+          ],
+          "seeds_by_rank": [
+            466797,
+            466797,
+            466797,
+            466797
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 25,
+          "tokens_by_rank": [
+            1144,
+            1144,
+            1144,
+            1144
+          ],
+          "seeds_by_rank": [
+            528276,
+            528276,
+            528276,
+            528276
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 26,
+          "tokens_by_rank": [
+            6150,
+            6150,
+            6150,
+            6150
+          ],
+          "seeds_by_rank": [
+            419635,
+            419635,
+            419635,
+            419635
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 27,
+          "tokens_by_rank": [
+            13,
+            13,
+            13,
+            13
+          ],
+          "seeds_by_rank": [
+            418553,
+            418553,
+            418553,
+            418553
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 28,
+          "tokens_by_rank": [
+            14235,
+            14235,
+            14235,
+            14235
+          ],
+          "seeds_by_rank": [
+            902533,
+            902533,
+            902533,
+            902533
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 29,
+          "tokens_by_rank": [
+            1534,
+            1534,
+            1534,
+            1534
+          ],
+          "seeds_by_rank": [
+            457350,
+            457350,
+            457350,
+            457350
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 30,
+          "tokens_by_rank": [
+            61446,
+            61446,
+            61446,
+            61446
+          ],
+          "seeds_by_rank": [
+            799739,
+            799739,
+            799739,
+            799739
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 31,
+          "tokens_by_rank": [
+            694,
+            694,
+            694,
+            694
+          ],
+          "seeds_by_rank": [
+            541635,
+            541635,
+            541635,
+            541635
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 32,
+          "tokens_by_rank": [
+            89274,
+            89274,
+            89274,
+            89274
+          ],
+          "seeds_by_rank": [
+            508539,
+            508539,
+            508539,
+            508539
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 33,
+          "tokens_by_rank": [
+            13,
+            13,
+            13,
+            13
+          ],
+          "seeds_by_rank": [
+            948625,
+            948625,
+            948625,
+            948625
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 34,
+          "tokens_by_rank": [
+            14235,
+            14235,
+            14235,
+            14235
+          ],
+          "seeds_by_rank": [
+            614818,
+            614818,
+            614818,
+            614818
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 35,
+          "tokens_by_rank": [
+            6970,
+            6970,
+            6970,
+            6970
+          ],
+          "seeds_by_rank": [
+            177349,
+            177349,
+            177349,
+            177349
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 36,
+          "tokens_by_rank": [
+            9989,
+            9989,
+            9989,
+            9989
+          ],
+          "seeds_by_rank": [
+            828897,
+            828897,
+            828897,
+            828897
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 37,
+          "tokens_by_rank": [
+            13,
+            13,
+            13,
+            13
+          ],
+          "seeds_by_rank": [
+            235250,
+            235250,
+            235250,
+            235250
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 38,
+          "tokens_by_rank": [
+            198,
+            198,
+            198,
+            198
+          ],
+          "seeds_by_rank": [
+            969019,
+            969019,
+            969019,
+            969019
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 39,
+          "tokens_by_rank": [
+            248069,
+            248069,
+            248069,
+            248069
+          ],
+          "seeds_by_rank": [
+            788729,
+            788729,
+            788729,
+            788729
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 40,
+          "tokens_by_rank": [
+            271,
+            271,
+            271,
+            271
+          ],
+          "seeds_by_rank": [
+            884409,
+            884409,
+            884409,
+            884409
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 41,
+          "tokens_by_rank": [
+            9751,
+            9751,
+            9751,
+            9751
+          ],
+          "seeds_by_rank": [
+            973422,
+            973422,
+            973422,
+            973422
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 42,
+          "tokens_by_rank": [
+            75318,
+            75318,
+            75318,
+            75318
+          ],
+          "seeds_by_rank": [
+            497929,
+            497929,
+            497929,
+            497929
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 43,
+          "tokens_by_rank": [
+            6618,
+            6618,
+            6618,
+            6618
+          ],
+          "seeds_by_rank": [
+            716432,
+            716432,
+            716432,
+            716432
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 44,
+          "tokens_by_rank": [
+            369,
+            369,
+            369,
+            369
+          ],
+          "seeds_by_rank": [
+            163334,
+            163334,
+            163334,
+            163334
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 45,
+          "tokens_by_rank": [
+            1040,
+            1040,
+            1040,
+            1040
+          ],
+          "seeds_by_rank": [
+            88275,
+            88275,
+            88275,
+            88275
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 46,
+          "tokens_by_rank": [
+            6618,
+            6618,
+            6618,
+            6618
+          ],
+          "seeds_by_rank": [
+            257646,
+            257646,
+            257646,
+            257646
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 47,
+          "tokens_by_rank": [
+            440,
+            440,
+            440,
+            440
+          ],
+          "seeds_by_rank": [
+            364783,
+            364783,
+            364783,
+            364783
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 48,
+          "tokens_by_rank": [
+            264,
+            264,
+            264,
+            264
+          ],
+          "seeds_by_rank": [
+            360322,
+            360322,
+            360322,
+            360322
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 49,
+          "tokens_by_rank": [
+            10756,
+            10756,
+            10756,
+            10756
+          ],
+          "seeds_by_rank": [
+            369406,
+            369406,
+            369406,
+            369406
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 50,
+          "tokens_by_rank": [
+            25,
+            25,
+            25,
+            25
+          ],
+          "seeds_by_rank": [
+            651628,
+            651628,
+            651628,
+            651628
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 51,
+          "tokens_by_rank": [
+            488,
+            488,
+            488,
+            488
+          ],
+          "seeds_by_rank": [
+            643687,
+            643687,
+            643687,
+            643687
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 52,
+          "tokens_by_rank": [
+            2873,
+            2873,
+            2873,
+            2873
+          ],
+          "seeds_by_rank": [
+            141036,
+            141036,
+            141036,
+            141036
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 53,
+          "tokens_by_rank": [
+            279,
+            279,
+            279,
+            279
+          ],
+          "seeds_by_rank": [
+            502897,
+            502897,
+            502897,
+            502897
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 54,
+          "tokens_by_rank": [
+            6165,
+            6165,
+            6165,
+            6165
+          ],
+          "seeds_by_rank": [
+            468273,
+            468273,
+            468273,
+            468273
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 55,
+          "tokens_by_rank": [
+            9989,
+            9989,
+            9989,
+            9989
+          ],
+          "seeds_by_rank": [
+            183476,
+            183476,
+            183476,
+            183476
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 56,
+          "tokens_by_rank": [
+            440,
+            440,
+            440,
+            440
+          ],
+          "seeds_by_rank": [
+            436519,
+            436519,
+            436519,
+            436519
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 57,
+          "tokens_by_rank": [
+            279,
+            279,
+            279,
+            279
+          ],
+          "seeds_by_rank": [
+            590807,
+            590807,
+            590807,
+            590807
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 58,
+          "tokens_by_rank": [
+            4252,
+            4252,
+            4252,
+            4252
+          ],
+          "seeds_by_rank": [
+            220467,
+            220467,
+            220467,
+            220467
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 59,
+          "tokens_by_rank": [
+            10926,
+            10926,
+            10926,
+            10926
+          ],
+          "seeds_by_rank": [
+            47982,
+            47982,
+            47982,
+            47982
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 60,
+          "tokens_by_rank": [
+            11,
+            11,
+            11,
+            11
+          ],
+          "seeds_by_rank": [
+            262623,
+            262623,
+            262623,
+            262623
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 61,
+          "tokens_by_rank": [
+            321,
+            321,
+            321,
+            321
+          ],
+          "seeds_by_rank": [
+            786473,
+            786473,
+            786473,
+            786473
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 62,
+          "tokens_by_rank": [
+            424,
+            424,
+            424,
+            424
+          ],
+          "seeds_by_rank": [
+            215145,
+            215145,
+            215145,
+            215145
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 63,
+          "tokens_by_rank": [
+            44669,
+            44669,
+            44669,
+            44669
+          ],
+          "seeds_by_rank": [
+            48147,
+            48147,
+            48147,
+            48147
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 64,
+          "tokens_by_rank": [
+            310,
+            310,
+            310,
+            310
+          ],
+          "seeds_by_rank": [
+            763461,
+            763461,
+            763461,
+            763461
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 65,
+          "tokens_by_rank": [
+            1236,
+            1236,
+            1236,
+            1236
+          ],
+          "seeds_by_rank": [
+            881185,
+            881185,
+            881185,
+            881185
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 66,
+          "tokens_by_rank": [
+            19292,
+            19292,
+            19292,
+            19292
+          ],
+          "seeds_by_rank": [
+            283194,
+            283194,
+            283194,
+            283194
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 67,
+          "tokens_by_rank": [
+            13,
+            13,
+            13,
+            13
+          ],
+          "seeds_by_rank": [
+            567286,
+            567286,
+            567286,
+            567286
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 68,
+          "tokens_by_rank": [
+            271,
+            271,
+            271,
+            271
+          ],
+          "seeds_by_rank": [
+            991098,
+            991098,
+            991098,
+            991098
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 69,
+          "tokens_by_rank": [
+            12929,
+            12929,
+            12929,
+            12929
+          ],
+          "seeds_by_rank": [
+            768337,
+            768337,
+            768337,
+            768337
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 70,
+          "tokens_by_rank": [
+            25,
+            25,
+            25,
+            25
+          ],
+          "seeds_by_rank": [
+            48165,
+            48165,
+            48165,
+            48165
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 71,
+          "tokens_by_rank": [
+            68524,
+            68524,
+            68524,
+            68524
+          ],
+          "seeds_by_rank": [
+            980259,
+            980259,
+            980259,
+            980259
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 72,
+          "tokens_by_rank": [
+            7022,
+            7022,
+            7022,
+            7022
+          ],
+          "seeds_by_rank": [
+            365804,
+            365804,
+            365804,
+            365804
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 73,
+          "tokens_by_rank": [
+            28853,
+            28853,
+            28853,
+            28853
+          ],
+          "seeds_by_rank": [
+            569976,
+            569976,
+            569976,
+            569976
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 74,
+          "tokens_by_rank": [
+            1001,
+            1001,
+            1001,
+            1001
+          ],
+          "seeds_by_rank": [
+            406915,
+            406915,
+            406915,
+            406915
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 75,
+          "tokens_by_rank": [
+            4466,
+            4466,
+            4466,
+            4466
+          ],
+          "seeds_by_rank": [
+            138023,
+            138023,
+            138023,
+            138023
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 76,
+          "tokens_by_rank": [
+            828,
+            828,
+            828,
+            828
+          ],
+          "seeds_by_rank": [
+            478619,
+            478619,
+            478619,
+            478619
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 77,
+          "tokens_by_rank": [
+            321,
+            321,
+            321,
+            321
+          ],
+          "seeds_by_rank": [
+            714702,
+            714702,
+            714702,
+            714702
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 78,
+          "tokens_by_rank": [
+            1001,
+            1001,
+            1001,
+            1001
+          ],
+          "seeds_by_rank": [
+            328216,
+            328216,
+            328216,
+            328216
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 79,
+          "tokens_by_rank": [
+            17907,
+            17907,
+            17907,
+            17907
+          ],
+          "seeds_by_rank": [
+            783323,
+            783323,
+            783323,
+            783323
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 80,
+          "tokens_by_rank": [
+            2340,
+            2340,
+            2340,
+            2340
+          ],
+          "seeds_by_rank": [
+            924900,
+            924900,
+            924900,
+            924900
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 81,
+          "tokens_by_rank": [
+            1179,
+            1179,
+            1179,
+            1179
+          ],
+          "seeds_by_rank": [
+            352821,
+            352821,
+            352821,
+            352821
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 82,
+          "tokens_by_rank": [
+            9859,
+            9859,
+            9859,
+            9859
+          ],
+          "seeds_by_rank": [
+            737970,
+            737970,
+            737970,
+            737970
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 83,
+          "tokens_by_rank": [
+            424,
+            424,
+            424,
+            424
+          ],
+          "seeds_by_rank": [
+            100401,
+            100401,
+            100401,
+            100401
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 84,
+          "tokens_by_rank": [
+            310,
+            310,
+            310,
+            310
+          ],
+          "seeds_by_rank": [
+            990708,
+            990708,
+            990708,
+            990708
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 85,
+          "tokens_by_rank": [
+            2306,
+            2306,
+            2306,
+            2306
+          ],
+          "seeds_by_rank": [
+            166124,
+            166124,
+            166124,
+            166124
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 86,
+          "tokens_by_rank": [
+            491,
+            491,
+            491,
+            491
+          ],
+          "seeds_by_rank": [
+            725929,
+            725929,
+            725929,
+            725929
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 87,
+          "tokens_by_rank": [
+            7022,
+            7022,
+            7022,
+            7022
+          ],
+          "seeds_by_rank": [
+            507688,
+            507688,
+            507688,
+            507688
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 88,
+          "tokens_by_rank": [
+            13,
+            13,
+            13,
+            13
+          ],
+          "seeds_by_rank": [
+            341699,
+            341699,
+            341699,
+            341699
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 89,
+          "tokens_by_rank": [
+            271,
+            271,
+            271,
+            271
+          ],
+          "seeds_by_rank": [
+            893592,
+            893592,
+            893592,
+            893592
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 90,
+          "tokens_by_rank": [
+            1743,
+            1743,
+            1743,
+            1743
+          ],
+          "seeds_by_rank": [
+            723092,
+            723092,
+            723092,
+            723092
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 91,
+          "tokens_by_rank": [
+            12410,
+            12410,
+            12410,
+            12410
+          ],
+          "seeds_by_rank": [
+            656301,
+            656301,
+            656301,
+            656301
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 92,
+          "tokens_by_rank": [
+            75318,
+            75318,
+            75318,
+            75318
+          ],
+          "seeds_by_rank": [
+            75905,
+            75905,
+            75905,
+            75905
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 93,
+          "tokens_by_rank": [
+            6618,
+            6618,
+            6618,
+            6618
+          ],
+          "seeds_by_rank": [
+            825523,
+            825523,
+            825523,
+            825523
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 94,
+          "tokens_by_rank": [
+            369,
+            369,
+            369,
+            369
+          ],
+          "seeds_by_rank": [
+            403869,
+            403869,
+            403869,
+            403869
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 95,
+          "tokens_by_rank": [
+            1040,
+            1040,
+            1040,
+            1040
+          ],
+          "seeds_by_rank": [
+            37255,
+            37255,
+            37255,
+            37255
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 96,
+          "tokens_by_rank": [
+            6618,
+            6618,
+            6618,
+            6618
+          ],
+          "seeds_by_rank": [
+            944203,
+            944203,
+            944203,
+            944203
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 97,
+          "tokens_by_rank": [
+            383,
+            383,
+            383,
+            383
+          ],
+          "seeds_by_rank": [
+            461064,
+            461064,
+            461064,
+            461064
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 98,
+          "tokens_by_rank": [
+            1141,
+            1141,
+            1141,
+            1141
+          ],
+          "seeds_by_rank": [
+            742380,
+            742380,
+            742380,
+            742380
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 99,
+          "tokens_by_rank": [
+            1765,
+            1765,
+            1765,
+            1765
+          ],
+          "seeds_by_rank": [
+            370558,
+            370558,
+            370558,
+            370558
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 100,
+          "tokens_by_rank": [
+            25,
+            25,
+            25,
+            25
+          ],
+          "seeds_by_rank": [
+            512525,
+            512525,
+            512525,
+            512525
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 101,
+          "tokens_by_rank": [
+            488,
+            488,
+            488,
+            488
+          ],
+          "seeds_by_rank": [
+            63475,
+            63475,
+            63475,
+            63475
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 102,
+          "tokens_by_rank": [
+            2873,
+            2873,
+            2873,
+            2873
+          ],
+          "seeds_by_rank": [
+            328337,
+            328337,
+            328337,
+            328337
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 103,
+          "tokens_by_rank": [
+            424,
+            424,
+            424,
+            424
+          ],
+          "seeds_by_rank": [
+            980666,
+            980666,
+            980666,
+            980666
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 104,
+          "tokens_by_rank": [
+            795,
+            795,
+            795,
+            795
+          ],
+          "seeds_by_rank": [
+            370144,
+            370144,
+            370144,
+            370144
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 105,
+          "tokens_by_rank": [
+            1973,
+            1973,
+            1973,
+            1973
+          ],
+          "seeds_by_rank": [
+            584675,
+            584675,
+            584675,
+            584675
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 106,
+          "tokens_by_rank": [
+            10926,
+            10926,
+            10926,
+            10926
+          ],
+          "seeds_by_rank": [
+            54448,
+            54448,
+            54448,
+            54448
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 107,
+          "tokens_by_rank": [
+            11,
+            11,
+            11,
+            11
+          ],
+          "seeds_by_rank": [
+            934402,
+            934402,
+            934402,
+            934402
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 108,
+          "tokens_by_rank": [
+            321,
+            321,
+            321,
+            321
+          ],
+          "seeds_by_rank": [
+            321643,
+            321643,
+            321643,
+            321643
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 109,
+          "tokens_by_rank": [
+            424,
+            424,
+            424,
+            424
+          ],
+          "seeds_by_rank": [
+            988651,
+            988651,
+            988651,
+            988651
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 110,
+          "tokens_by_rank": [
+            15818,
+            15818,
+            15818,
+            15818
+          ],
+          "seeds_by_rank": [
+            507452,
+            507452,
+            507452,
+            507452
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 111,
+          "tokens_by_rank": [
+            310,
+            310,
+            310,
+            310
+          ],
+          "seeds_by_rank": [
+            731906,
+            731906,
+            731906,
+            731906
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 112,
+          "tokens_by_rank": [
+            1423,
+            1423,
+            1423,
+            1423
+          ],
+          "seeds_by_rank": [
+            719026,
+            719026,
+            719026,
+            719026
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 113,
+          "tokens_by_rank": [
+            12261,
+            12261,
+            12261,
+            12261
+          ],
+          "seeds_by_rank": [
+            776806,
+            776806,
+            776806,
+            776806
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 114,
+          "tokens_by_rank": [
+            466,
+            466,
+            466,
+            466
+          ],
+          "seeds_by_rank": [
+            989397,
+            989397,
+            989397,
+            989397
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 115,
+          "tokens_by_rank": [
+            5038,
+            5038,
+            5038,
+            5038
+          ],
+          "seeds_by_rank": [
+            867578,
+            867578,
+            867578,
+            867578
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 116,
+          "tokens_by_rank": [
+            13,
+            13,
+            13,
+            13
+          ],
+          "seeds_by_rank": [
+            178133,
+            178133,
+            178133,
+            178133
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 117,
+          "tokens_by_rank": [
+            271,
+            271,
+            271,
+            271
+          ],
+          "seeds_by_rank": [
+            838985,
+            838985,
+            838985,
+            838985
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 118,
+          "tokens_by_rank": [
+            12929,
+            12929,
+            12929,
+            12929
+          ],
+          "seeds_by_rank": [
+            388194,
+            388194,
+            388194,
+            388194
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 119,
+          "tokens_by_rank": [
+            25,
+            25,
+            25,
+            25
+          ],
+          "seeds_by_rank": [
+            878601,
+            878601,
+            878601,
+            878601
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 120,
+          "tokens_by_rank": [
+            55911,
+            55911,
+            55911,
+            55911
+          ],
+          "seeds_by_rank": [
+            542760,
+            542760,
+            542760,
+            542760
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 121,
+          "tokens_by_rank": [
+            424,
+            424,
+            424,
+            424
+          ],
+          "seeds_by_rank": [
+            317964,
+            317964,
+            317964,
+            317964
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 122,
+          "tokens_by_rank": [
+            264,
+            264,
+            264,
+            264
+          ],
+          "seeds_by_rank": [
+            308361,
+            308361,
+            308361,
+            308361
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 123,
+          "tokens_by_rank": [
+            1103,
+            1103,
+            1103,
+            1103
+          ],
+          "seeds_by_rank": [
+            167909,
+            167909,
+            167909,
+            167909
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 124,
+          "tokens_by_rank": [
+            314,
+            314,
+            314,
+            314
+          ],
+          "seeds_by_rank": [
+            748992,
+            748992,
+            748992,
+            748992
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 125,
+          "tokens_by_rank": [
+            1208,
+            1208,
+            1208,
+            1208
+          ],
+          "seeds_by_rank": [
+            81134,
+            81134,
+            81134,
+            81134
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 126,
+          "tokens_by_rank": [
+            321,
+            321,
+            321,
+            321
+          ],
+          "seeds_by_rank": [
+            16158,
+            16158,
+            16158,
+            16158
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 127,
+          "tokens_by_rank": [
+            19581,
+            19581,
+            19581,
+            19581
+          ],
+          "seeds_by_rank": [
+            444763,
+            444763,
+            444763,
+            444763
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 128,
+          "tokens_by_rank": [
+            424,
+            424,
+            424,
+            424
+          ],
+          "seeds_by_rank": [
+            89578,
+            89578,
+            89578,
+            89578
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 129,
+          "tokens_by_rank": [
+            1809,
+            1809,
+            1809,
+            1809
+          ],
+          "seeds_by_rank": [
+            809400,
+            809400,
+            809400,
+            809400
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 130,
+          "tokens_by_rank": [
+            1070,
+            1070,
+            1070,
+            1070
+          ],
+          "seeds_by_rank": [
+            36320,
+            36320,
+            36320,
+            36320
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 131,
+          "tokens_by_rank": [
+            539,
+            539,
+            539,
+            539
+          ],
+          "seeds_by_rank": [
+            515125,
+            515125,
+            515125,
+            515125
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 132,
+          "tokens_by_rank": [
+            4092,
+            4092,
+            4092,
+            4092
+          ],
+          "seeds_by_rank": [
+            463590,
+            463590,
+            463590,
+            463590
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 133,
+          "tokens_by_rank": [
+            11,
+            11,
+            11,
+            11
+          ],
+          "seeds_by_rank": [
+            438207,
+            438207,
+            438207,
+            438207
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 134,
+          "tokens_by_rank": [
+            11435,
+            11435,
+            11435,
+            11435
+          ],
+          "seeds_by_rank": [
+            509410,
+            509410,
+            509410,
+            509410
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 135,
+          "tokens_by_rank": [
+            11,
+            11,
+            11,
+            11
+          ],
+          "seeds_by_rank": [
+            737096,
+            737096,
+            737096,
+            737096
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 136,
+          "tokens_by_rank": [
+            466,
+            466,
+            466,
+            466
+          ],
+          "seeds_by_rank": [
+            70206,
+            70206,
+            70206,
+            70206
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 137,
+          "tokens_by_rank": [
+            11494,
+            11494,
+            11494,
+            11494
+          ],
+          "seeds_by_rank": [
+            534712,
+            534712,
+            534712,
+            534712
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 138,
+          "tokens_by_rank": [
+            24964,
+            24964,
+            24964,
+            24964
+          ],
+          "seeds_by_rank": [
+            135813,
+            135813,
+            135813,
+            135813
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 139,
+          "tokens_by_rank": [
+            13,
+            13,
+            13,
+            13
+          ],
+          "seeds_by_rank": [
+            467806,
+            467806,
+            467806,
+            467806
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        },
+        {
+          "step": 140,
+          "tokens_by_rank": [
+            248046,
+            248046,
+            248046,
+            248046
+          ],
+          "seeds_by_rank": [
+            689282,
+            689282,
+            689282,
+            689282
+          ],
+          "all_seed_vectors_equal": true,
+          "internal_sampling_trace": false,
+          "actual_explicit_seed_active": false,
+          "active_tokens_equal": true
+        }
+      ],
+      "generated_token_ids": [
+        1596,
+        1144,
+        310,
+        4087,
+        1156,
+        25,
+        328,
+        814,
+        20139,
+        279,
+        6463,
+        1881,
+        56994,
+        321,
+        6758,
+        446,
+        75318,
+        6618,
+        303,
+        4145,
+        3665,
+        1149,
+        8722,
+        11,
+        4222,
+        874,
+        1144,
+        6150,
+        13,
+        14235,
+        1534,
+        61446,
+        694,
+        89274,
+        13,
+        14235,
+        6970,
+        9989,
+        13,
+        198,
+        248069,
+        271,
+        9751,
+        75318,
+        6618,
+        369,
+        1040,
+        6618,
+        440,
+        264,
+        10756,
+        25,
+        488,
+        2873,
+        279,
+        6165,
+        9989,
+        440,
+        279,
+        4252,
+        10926,
+        11,
+        321,
+        424,
+        44669,
+        310,
+        1236,
+        19292,
+        13,
+        271,
+        12929,
+        25,
+        68524,
+        7022,
+        28853,
+        1001,
+        4466,
+        828,
+        321,
+        1001,
+        17907,
+        2340,
+        1179,
+        9859,
+        424,
+        310,
+        2306,
+        491,
+        7022,
+        13,
+        271,
+        1743,
+        12410,
+        75318,
+        6618,
+        369,
+        1040,
+        6618,
+        383,
+        1141,
+        1765,
+        25,
+        488,
+        2873,
+        424,
+        795,
+        1973,
+        10926,
+        11,
+        321,
+        424,
+        15818,
+        310,
+        1423,
+        12261,
+        466,
+        5038,
+        13,
+        271,
+        12929,
+        25,
+        55911,
+        424,
+        264,
+        1103,
+        314,
+        1208,
+        321,
+        19581,
+        424,
+        1809,
+        1070,
+        539,
+        4092,
+        11,
+        11435,
+        11,
+        466,
+        11494,
+        24964,
+        13,
+        248046
+      ],
+      "generated_text": "We need to answer user: \"Explain the difference between supervised and unsupervised learning in simple terms.\" Simple, likely no need complex. Need final concise but explanatory. Need maybe examples.\n</think>\n\nSupervised learning is like learning with a teacher: you give the computer examples with the correct answers, and it learns to make predictions.\n\nExample: Showing photos labeled \u201ccat\u201d and \u201cdog,\u201d then asking it to label new photos.\n\nUnsupervised learning is like learning on its own: you give it data without answers, and it tries to find patterns or groups.\n\nExample: Giving it a list of people and letting it group them by age, interests, or buying habits.<|im_end|>",
+      "stopped_on_eos": true,
+      "divergent_step_count": 0,
+      "first_divergence": null
+    }
+  },
+  "sampling_rank_agreement": true,
+  "status": "SAMPLING_RANK_CONTROLS_COMPLETE",
+  "runtime_config": {
+    "precision_config": {
+      "activation_residual_dtype": "BF16",
+      "base_policy": {
+        "full_attention": "final_cumulative",
+        "linear_attention": "linear_kda_conv"
+      },
+      "ccl_dtype": {
+        "mlp": "BF16",
+        "token_mixer": "BF16"
+      },
+      "compute_fidelities": {
+        "full_attention_o": "LoFi",
+        "full_attention_qkv": "LoFi",
+        "full_attention_sdpa": "LoFi",
+        "linear_attention_internal": "LoFi",
+        "linear_input_projection": "LoFi",
+        "linear_output_projection": "LoFi",
+        "linear_recurrent": "HiFi2",
+        "mlp": "LoFi"
+      },
+      "config_id": "full_attention_bfp4_lofi_kda_conv",
+      "kv_cache_dtype": "BFP8_B",
+      "layer_exceptions": [],
+      "linear_recurrent_state_dtype": "BFP8_B",
+      "logits_sampling": {
+        "lm_head_compute_fidelity": "HiFi2",
+        "lm_head_output_dtype": "BFP8_B",
+        "lm_head_weight_dtype": "BFP8_B",
+        "sampled_token_dtype": "UINT32",
+        "sampling_logits_dtype": "BFP8_B"
+      },
+      "schema_version": 1,
+      "sha256": "37840ec069718c45e8c9651af8953ba2bcc661acd3eccd788f011cbe27583bd8",
+      "source": "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/datatype_sweep/selected_precision_config.json",
+      "weight_groups": {
+        "full_attention_o": "BFP4_B",
+        "full_attention_qkv": "BFP4_B",
+        "linear_attention_internal": "BFP4_B",
+        "linear_input_projection": "BFP4_B",
+        "linear_output_projection": "BFP4_B",
+        "mlp_down": "BFP4_B",
+        "mlp_gate_up": "BFP4_B"
+      }
+    },
+    "prefill_graph": {
+      "flat_qkv": true,
+      "flat_tail": "sigmoid_gated_rms_norm followed by z multiply",
+      "fused_prefill_conv": true,
+      "native_compute_config": "operator default: HiFi4, FP32 accumulation",
+      "native_internal_chunk_tokens": 32,
+      "outer_chunk_tokens": 512,
+      "recurrence": "native",
+      "shape_note": "Flat QKV requires physical sequence divisible by 32; fused conv also requires active batch 1"
+    }
+  },
+  "device_close_observed": "2026-09-11 15:02:06.063 UTC",
+  "exit_code": 0
+}

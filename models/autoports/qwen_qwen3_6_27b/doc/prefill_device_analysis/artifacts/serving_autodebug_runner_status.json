@@ -1,0 +1,10 @@
+{
+  "session_id": "01a090d1-691b-7f12-a602-41cd65dafb3a",
+  "pid": 2660132,
+  "exit_code": 1,
+  "stop": "SIGINT requested by parent; process exited",
+  "failure": "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted",
+  "report_produced": false,
+  "retained_tool_log": "/tmp/qwen38-serving-seed-autodebug/runner_tool_outputs.log",
+  "note": "No nested report used; independently adjudicated findings are in SERVING_SEED_AUTODEBUG.md"
+}

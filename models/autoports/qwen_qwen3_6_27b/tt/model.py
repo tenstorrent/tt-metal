@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import json
 import math
+import os
 from pathlib import Path
 from typing import Mapping
 
@@ -215,6 +216,17 @@ class Qwen36Model:
             )
             for i in selected_layers
         ]
+        self.prefill_recurrence = None
+        recurrence_mode = os.environ.get("QWEN36_PREFILL_RECURRENCE", "native")
+        if recurrence_mode not in ("native", "eager"):
+            raise ValueError(f"Unsupported QWEN36_PREFILL_RECURRENCE={recurrence_mode!r}")
+        if recurrence_mode == "native":
+            from models.autoports.qwen_qwen3_6_27b.tt.prefill_recurrence import NativeGatedDeltaRule
+
+            self.prefill_recurrence = NativeGatedDeltaRule(mesh_device)
+            for layer in self.layers:
+                layer._prefill_recurrence = self.prefill_recurrence
+                layer._prefill_in0_block_w_limit = 8
         self.kv_cache = [
             [
                 layer.caches[name]
@@ -247,11 +259,25 @@ class Qwen36Model:
                     "linear_output_fidelity": str(p.linear_output_fidelity),
                     "linear_recurrent_state_dtype": str(p.linear_recurrent_state_dtype),
                     "linear_recurrent_fidelity": str(p.linear_recurrent_fidelity),
+                    "prefill_in0_block_w_limit": getattr(layer, "_prefill_in0_block_w_limit", p.prefill_in0_block_w),
                     "ccl_token_mixer_dtype": str(layer.ccl_token_mixer_dtype),
                     "ccl_mlp_dtype": str(layer.ccl_mlp_dtype),
                 }
             )
         return {
+            "prefill_graph": {
+                "recurrence": "native" if self.prefill_recurrence is not None else "eager",
+                "outer_chunk_tokens": LINEAR_PREFILL_CHUNK_SIZE,
+                "native_internal_chunk_tokens": 32 if self.prefill_recurrence is not None else None,
+                "native_compute_config": (
+                    "operator default: HiFi4, FP32 accumulation" if self.prefill_recurrence is not None else None
+                ),
+                "flat_qkv": os.environ.get("QWEN_GDN_PHASED", "1") != "0" and self.prefill_recurrence is not None,
+                "fused_prefill_conv": os.environ.get("QWEN36_PREFILL_FUSED_CONV", "1") == "1"
+                and self.prefill_recurrence is not None,
+                "flat_tail": "sigmoid_gated_rms_norm followed by z multiply",
+                "shape_note": "Flat QKV requires physical sequence divisible by 32; fused conv also requires active batch 1",
+            },
             "precision_config": self.precision_config.summary(),
             "activation_residual_dtype": str(self.precision_config.activation_residual_dtype),
             "lm_head_weight_dtype": str(self.precision_config.lm_head_weight_dtype),

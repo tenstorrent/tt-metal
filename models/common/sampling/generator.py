@@ -132,6 +132,7 @@ class SamplingGenerator:
             self.tt_sampling,
             max_batch_size=seed_batch_size,
             salt_duplicate_seeds=getattr(args, "salt_duplicate_seeds", True),
+            reseed_unseeded_each_step=getattr(args, "reseed_unseeded_each_step", False),
         )
 
     def _new_trace_state(self):
@@ -788,12 +789,16 @@ class SeedManager:
     (SKIP) so the device advances via ``rand_tile`` on its own, then skips all
     subsequent decode pushes until the next ``reset_seed``.
 
+    Models whose tensor-parallel ranks do not preserve identical RNG state
+    between draws can opt into reseeding unseeded users on every step.
+
     `reset_seed` updates host RNGs only. `get_new_values` advances RNGs and
     writes to device. `write_device_seed_values` writes explicit seeds only.
     """
 
-    def __init__(self, tt_sampling, max_batch_size=32, salt_duplicate_seeds=True):
+    def __init__(self, tt_sampling, max_batch_size=32, salt_duplicate_seeds=True, reseed_unseeded_each_step=False):
         self.max_batch_size = max_batch_size
+        self.reseed_unseeded_each_step = reseed_unseeded_each_step
         # When False, concurrent slots sharing a request seed keep salt 0, so two independent
         # requests carrying the same seed stay bit-identical (the OpenAI/vLLM reproducibility
         # contract, asserted by the vLLM TT sampling suite).
@@ -1105,6 +1110,11 @@ class SeedManager:
         vLLM batch-layout changes cannot reset a request's random stream.
 
         **Unseeded path** (``_seed_active=False``):
+        With ``reseed_unseeded_each_step``, pushes fresh per-user entropy
+        seeds every call, preserving identical RNG initialization across TP
+        ranks without marking requests as explicitly seeded.
+
+        Otherwise:
         Uses a three-state machine to ensure each user gets a unique device
         RNG state without redundant host-to-device copies during decode:
 
@@ -1127,9 +1137,9 @@ class SeedManager:
 
         if not self._seed_active:
             self._active_request_seed = False
-            if self._reseted:
+            if self._reseted or self.reseed_unseeded_each_step:
                 new_seeds = [self._next_unseeded_device_seed() for _ in range(self.max_batch_size)]
-                self._needs_skip = True
+                self._needs_skip = not self.reseed_unseeded_each_step
             elif self._needs_skip:
                 new_seeds = [MAX_UINT32] * self.max_batch_size
                 self._needs_skip = False

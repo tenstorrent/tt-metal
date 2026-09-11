@@ -1,0 +1,215 @@
+{
+  "status": "experimental_unselected",
+  "production_files_modified_by_this_experiment": false,
+  "actual_http_ttft": false,
+  "hardware_clean_close_utc": "2026-09-11 15:09:00.711",
+  "scope": "Qwen3.8-27B revision 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0, layers 0-3, TP4, B32 allocated, C1 slot0, logical/physical S128, max context256, unseeded greedy, identical page mappings.",
+  "runs": {
+    "correctness": {
+      "artifact": "serving_trace_reuse_correctness.json",
+      "log": "qwen_serving_trace_reuse_correctness.log",
+      "status": "passed_reduced_adapter_correctness",
+      "invocation": [
+        "models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/validate_serving_trace_reuse.py",
+        "--correctness-only",
+        "--output",
+        "models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/artifacts/serving_trace_reuse_correctness.json"
+      ],
+      "arms": {
+        "original": {
+          "timed_samples": 0,
+          "counters": {
+            "release_calls": 8,
+            "live_trace_releases": 3,
+            "setup_recaptures": 4,
+            "model_capture_calls": 4
+          },
+          "correctness_requests": 4,
+          "all_comparisons_passed": null,
+          "compared_cache_tensors_per_request": 32,
+          "allocation_observations": 0,
+          "max_surviving_ordinary_allocations": null,
+          "max_surviving_program_owned_allocations": null,
+          "preserved_program_counts": [],
+          "reference_arm": true
+        },
+        "reuse": {
+          "timed_samples": 0,
+          "counters": {
+            "release_calls": 2,
+            "live_trace_releases": 0,
+            "setup_recaptures": 1,
+            "model_capture_calls": 1,
+            "resets_preserving_trace": 3,
+            "setup_reuses": 3
+          },
+          "correctness_requests": 4,
+          "all_comparisons_passed": true,
+          "compared_cache_tensors_per_request": 32,
+          "allocation_observations": 3,
+          "max_surviving_ordinary_allocations": 0,
+          "max_surviving_program_owned_allocations": 0,
+          "preserved_program_counts": [
+            [
+              282,
+              282
+            ]
+          ]
+        }
+      }
+    },
+    "explicit_gc_regression": {
+      "artifact": "serving_trace_reuse_timing.json",
+      "log": "qwen_serving_trace_reuse_timing.log",
+      "status": "passed_reduced_adapter_correctness",
+      "invocation": [
+        "models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/validate_serving_trace_reuse.py",
+        "--timed-requests",
+        "3",
+        "--output",
+        "models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/artifacts/serving_trace_reuse_timing.json"
+      ],
+      "arms": {
+        "original": {
+          "timed_samples": 3,
+          "counters": {
+            "release_calls": 16,
+            "live_trace_releases": 7,
+            "setup_recaptures": 8,
+            "model_capture_calls": 8
+          },
+          "correctness_requests": 4,
+          "all_comparisons_passed": null,
+          "compared_cache_tensors_per_request": 32,
+          "allocation_observations": 0,
+          "max_surviving_ordinary_allocations": null,
+          "max_surviving_program_owned_allocations": null,
+          "preserved_program_counts": [],
+          "median_ms": {
+            "prefill": 197.5848712027073,
+            "first_decode": 660.0056779570878,
+            "prefill_plus_first_decode": 857.590549159795
+          },
+          "median_spans_ms": {
+            "prefill_work": 197.31309404596686,
+            "prefill_guard": 0.23362506181001663,
+            "setup_work": 33.02079206332564,
+            "setup_guard": 0.019305851310491562
+          },
+          "reference_arm": true
+        },
+        "reuse": {
+          "timed_samples": 3,
+          "counters": {
+            "release_calls": 2,
+            "live_trace_releases": 0,
+            "setup_recaptures": 1,
+            "model_capture_calls": 1,
+            "resets_preserving_trace": 7,
+            "setup_reuses": 7
+          },
+          "correctness_requests": 4,
+          "all_comparisons_passed": true,
+          "compared_cache_tensors_per_request": 32,
+          "allocation_observations": 7,
+          "max_surviving_ordinary_allocations": 0,
+          "max_surviving_program_owned_allocations": 0,
+          "preserved_program_counts": [
+            [
+              282,
+              282
+            ]
+          ],
+          "median_ms": {
+            "prefill": 513.203561771661,
+            "first_decode": 939.984880387783,
+            "prefill_plus_first_decode": 1455.1895996555686
+          },
+          "median_spans_ms": {
+            "prefill_work": 198.23111174628139,
+            "prefill_guard": 314.85774274915457,
+            "setup_work": 0.41796592995524406,
+            "setup_guard": 313.4555649012327
+          }
+        }
+      }
+    },
+    "without_explicit_gc": {
+      "artifact": "serving_trace_reuse_without_gc_timing.json",
+      "log": "qwen_serving_trace_reuse_without_gc_timing.log",
+      "status": "passed_reduced_adapter_correctness",
+      "invocation": [
+        "models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/validate_serving_trace_reuse.py",
+        "--timed-requests",
+        "2",
+        "--output",
+        "models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/artifacts/serving_trace_reuse_without_gc_timing.json"
+      ],
+      "arms": {
+        "original": {
+          "timed_samples": 2,
+          "counters": {
+            "release_calls": 14,
+            "live_trace_releases": 6,
+            "setup_recaptures": 7,
+            "model_capture_calls": 7
+          },
+          "correctness_requests": 4,
+          "all_comparisons_passed": null,
+          "compared_cache_tensors_per_request": 32,
+          "allocation_observations": 0,
+          "max_surviving_ordinary_allocations": null,
+          "max_surviving_program_owned_allocations": null,
+          "preserved_program_counts": [],
+          "median_ms": {
+            "prefill": 183.4052661433816,
+            "first_decode": 664.5223975647241,
+            "prefill_plus_first_decode": 847.9276637081057
+          },
+          "median_spans_ms": {
+            "prefill_work": 183.13925014808774,
+            "prefill_guard": 0.2301668282598257,
+            "setup_work": 32.86739531904459,
+            "setup_guard": 0.018475577235221863
+          },
+          "reference_arm": true
+        },
+        "reuse": {
+          "timed_samples": 2,
+          "counters": {
+            "release_calls": 2,
+            "live_trace_releases": 0,
+            "setup_recaptures": 1,
+            "model_capture_calls": 1,
+            "resets_preserving_trace": 6,
+            "setup_reuses": 6
+          },
+          "correctness_requests": 4,
+          "all_comparisons_passed": true,
+          "compared_cache_tensors_per_request": 32,
+          "allocation_observations": 6,
+          "max_surviving_ordinary_allocations": 0,
+          "max_surviving_program_owned_allocations": 0,
+          "preserved_program_counts": [
+            [
+              282,
+              282
+            ]
+          ],
+          "median_ms": {
+            "prefill": 189.20048605650663,
+            "first_decode": 632.1543860249221,
+            "prefill_plus_first_decode": 821.3548720814288
+          },
+          "median_spans_ms": {
+            "prefill_work": 188.27663594856858,
+            "prefill_guard": 0.8878859225660563,
+            "setup_work": 0.11090305633842945,
+            "setup_guard": 0.18911296501755714
+          }
+        }
+      }
+    }
+  },
+  "runtime_current_sha256": "ccf66db6cbcd0cc5a423dc81aefb846528133d3379f6a294e33400a4f7b5936a"
+}

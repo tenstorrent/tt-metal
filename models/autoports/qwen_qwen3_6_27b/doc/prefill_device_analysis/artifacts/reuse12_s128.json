@@ -1,0 +1,191 @@
+{
+  "candidate": "reuse12",
+  "sequence": 128,
+  "batch": 1,
+  "layer_indices": [
+    0,
+    3
+  ],
+  "snapshot": "/home/mvasiljevic/.cache/huggingface/hub/models--Qwen--Qwen3.8-27B/snapshots/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+  "precision": {
+    "precision_config": {
+      "source": "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/datatype_sweep/selected_precision_config.json",
+      "sha256": "37840ec069718c45e8c9651af8953ba2bcc661acd3eccd788f011cbe27583bd8",
+      "schema_version": 1,
+      "config_id": "full_attention_bfp4_lofi_kda_conv",
+      "base_policy": {
+        "full_attention": "final_cumulative",
+        "linear_attention": "linear_kda_conv"
+      },
+      "weight_groups": {
+        "full_attention_qkv": "BFP4_B",
+        "full_attention_o": "BFP4_B",
+        "linear_attention_internal": "BFP4_B",
+        "linear_input_projection": "BFP4_B",
+        "linear_output_projection": "BFP4_B",
+        "mlp_gate_up": "BFP4_B",
+        "mlp_down": "BFP4_B"
+      },
+      "layer_exceptions": [],
+      "compute_fidelities": {
+        "full_attention_sdpa": "LoFi",
+        "full_attention_qkv": "LoFi",
+        "full_attention_o": "LoFi",
+        "linear_attention_internal": "LoFi",
+        "linear_input_projection": "LoFi",
+        "linear_output_projection": "LoFi",
+        "linear_recurrent": "HiFi2",
+        "mlp": "LoFi"
+      },
+      "activation_residual_dtype": "BF16",
+      "ccl_dtype": {
+        "token_mixer": "BF16",
+        "mlp": "BF16"
+      },
+      "kv_cache_dtype": "BFP8_B",
+      "linear_recurrent_state_dtype": "BFP8_B",
+      "logits_sampling": {
+        "lm_head_weight_dtype": "BFP8_B",
+        "lm_head_output_dtype": "BFP8_B",
+        "lm_head_compute_fidelity": "HiFi2",
+        "sampling_logits_dtype": "BFP8_B",
+        "sampled_token_dtype": "UINT32"
+      }
+    },
+    "activation_residual_dtype": "DataType.BFLOAT16",
+    "lm_head_weight_dtype": "DataType.BFLOAT8_B",
+    "lm_head_output_dtype": "DataType.BFLOAT8_B",
+    "lm_head_fidelity": "MathFidelity.HiFi2",
+    "sampling_logits_dtype": "DataType.BFLOAT8_B",
+    "sampled_token_dtype": "DataType.UINT32",
+    "layers": [
+      {
+        "layer_idx": 0,
+        "layer_kind": "linear_attention",
+        "attention_weight_dtype": "DataType.BFLOAT4_B",
+        "mlp_gate_up_dtype": "DataType.BFLOAT4_B",
+        "mlp_down_dtype": "DataType.BFLOAT4_B",
+        "cache_dtype": "DataType.BFLOAT8_B",
+        "attention_fidelity": "MathFidelity.LoFi",
+        "qkv_fidelity": "MathFidelity.LoFi",
+        "o_fidelity": "MathFidelity.LoFi",
+        "mlp_fidelity": "MathFidelity.LoFi",
+        "linear_input_weight_dtype": "DataType.BFLOAT4_B",
+        "linear_input_fidelity": "MathFidelity.LoFi",
+        "linear_output_weight_dtype": "DataType.BFLOAT4_B",
+        "linear_output_fidelity": "MathFidelity.LoFi",
+        "linear_recurrent_state_dtype": "DataType.BFLOAT8_B",
+        "linear_recurrent_fidelity": "MathFidelity.HiFi2",
+        "ccl_token_mixer_dtype": "DataType.BFLOAT16",
+        "ccl_mlp_dtype": "DataType.BFLOAT16"
+      },
+      {
+        "layer_idx": 3,
+        "layer_kind": "full_attention",
+        "attention_weight_dtype": "DataType.BFLOAT4_B",
+        "mlp_gate_up_dtype": "DataType.BFLOAT4_B",
+        "mlp_down_dtype": "DataType.BFLOAT4_B",
+        "cache_dtype": "DataType.BFLOAT8_B",
+        "attention_fidelity": "MathFidelity.LoFi",
+        "qkv_fidelity": "MathFidelity.LoFi",
+        "o_fidelity": "MathFidelity.LoFi",
+        "mlp_fidelity": "MathFidelity.LoFi",
+        "linear_input_weight_dtype": "DataType.BFLOAT16",
+        "linear_input_fidelity": "MathFidelity.HiFi2",
+        "linear_output_weight_dtype": "DataType.BFLOAT16",
+        "linear_output_fidelity": "MathFidelity.HiFi2",
+        "linear_recurrent_state_dtype": "DataType.FLOAT32",
+        "linear_recurrent_fidelity": "MathFidelity.HiFi2",
+        "ccl_token_mixer_dtype": "DataType.BFLOAT16",
+        "ccl_mlp_dtype": "DataType.BFLOAT16"
+      }
+    ]
+  },
+  "samples_ms": [
+    63.632018864154816,
+    65.84880081936717,
+    64.79469686746597
+  ],
+  "median_ms": 64.79469686746597,
+  "layer_samples_ms": {
+    "0": [
+      51.89332319423556,
+      52.39188019186258,
+      53.38429473340511
+    ],
+    "3": [
+      2.2166408598423004,
+      2.3059197701513767,
+      2.2535808384418488
+    ]
+  },
+  "layer_median_ms": {
+    "0": 52.39188019186258,
+    "3": 2.2535808384418488
+  },
+  "measurement": "warmed eager generator prefill with synchronized per-layer boundaries",
+  "recurrence_trace_probe": {},
+  "recurrence_trace_count": 0,
+  "recurrence_oracle": {
+    "sequence": 32,
+    "groups": 12,
+    "output": {
+      "pcc": 0.9999344944953918,
+      "max_abs": 0.09283566474914551,
+      "relative_l2": 0.023312970995903015,
+      "finite": true
+    },
+    "state": {
+      "pcc": 0.9998407363891602,
+      "max_abs": 0.5207548141479492,
+      "relative_l2": 0.018187375739216805,
+      "finite": true
+    },
+    "reference": "FP64 recurrence using the exact TT preprocessed Q/K/V/beta/decay and entry cache"
+  },
+  "comparison": {
+    "layer_0": {
+      "pcc": 0.999988853931427,
+      "max_abs": 0.1875,
+      "relative_l2": 0.005143547896295786,
+      "finite": true
+    },
+    "layer_3": {
+      "pcc": 0.9999796748161316,
+      "max_abs": 0.25,
+      "relative_l2": 0.006354315672069788,
+      "finite": true
+    },
+    "logits": {
+      "pcc": 0.9998630881309509,
+      "max_abs": 0.5,
+      "relative_l2": 0.007377220317721367,
+      "finite": true
+    },
+    "cache_0_conv": {
+      "pcc": 1.0,
+      "max_abs": 0.0,
+      "relative_l2": 0.0,
+      "finite": true
+    },
+    "cache_0_recurrent": {
+      "pcc": 0.9997709393501282,
+      "max_abs": 0.625,
+      "relative_l2": 0.02322566881775856,
+      "finite": true
+    },
+    "cache_3_key": {
+      "pcc": 0.9998494982719421,
+      "max_abs": 0.25,
+      "relative_l2": 0.01729617826640606,
+      "finite": true
+    },
+    "cache_3_value": {
+      "pcc": 0.9997326135635376,
+      "max_abs": 0.078125,
+      "relative_l2": 0.023687880486249924,
+      "finite": true
+    }
+  },
+  "logits_top1_equal": true
+}

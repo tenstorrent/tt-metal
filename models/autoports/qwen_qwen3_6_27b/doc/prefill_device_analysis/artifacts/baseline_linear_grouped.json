@@ -1,0 +1,421 @@
+{
+  "MatmulDeviceOperation b={12} x 32 x 128 x 128": {
+    "count": 256,
+    "kernel_us": 5240.144000000004,
+    "gap_us": 3764.6000000000017,
+    "cores": [
+      "4"
+    ],
+    "fidelity": [
+      "HiFi2 BF16 x BF16 => BF16"
+    ],
+    "advice": [
+      "If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED) \u2022 Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible \u2022 If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy"
+    ]
+  },
+  "BinaryNgDeviceOperation": {
+    "count": 619,
+    "kernel_us": 3009.2249999999967,
+    "gap_us": 16979.051000000007,
+    "cores": [
+      "110"
+    ],
+    "fidelity": [
+      "BF16 => BF16",
+      "BF16, BF16 => BF16",
+      "BF16, FP32 => BF16",
+      "FP32, BF16 => FP32"
+    ],
+    "advice": [
+      ""
+    ]
+  },
+  "MatmulDeviceOperation b={12} x 128 x 32 x 128": {
+    "count": 128,
+    "kernel_us": 2508.5239999999994,
+    "gap_us": 2831.2159999999985,
+    "cores": [
+      "16"
+    ],
+    "fidelity": [
+      "HiFi2 BF16 x BF16 => BF16"
+    ],
+    "advice": [
+      "If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED) \u2022 in0_block_w=1 is small, try in0_block_w=2 or above \u2022 Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible \u2022 If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy"
+    ]
+  },
+  "SliceDeviceOperation": {
+    "count": 688,
+    "kernel_us": 1374.3709999999976,
+    "gap_us": 13234.267999999998,
+    "cores": [
+      "110",
+      "12",
+      "16",
+      "48",
+      "80"
+    ],
+    "fidelity": [
+      "BF16 => BF16"
+    ],
+    "advice": [
+      ""
+    ]
+  },
+  "ReshapeViewDeviceOperation": {
+    "count": 56,
+    "kernel_us": 850.99,
+    "gap_us": 765.106,
+    "cores": [
+      "110",
+      "32",
+      "48"
+    ],
+    "fidelity": [
+      "BF16 => BF16",
+      "FP32 => FP32"
+    ],
+    "advice": [
+      ""
+    ]
+  },
+  "UntilizeWithUnpaddingDeviceOperation": {
+    "count": 52,
+    "kernel_us": 531.2070000000002,
+    "gap_us": 1935.2509999999997,
+    "cores": [
+      "80"
+    ],
+    "fidelity": [
+      "BF16 => BF16"
+    ],
+    "advice": [
+      ""
+    ]
+  },
+  "TilizeWithValPaddingDeviceOperation": {
+    "count": 48,
+    "kernel_us": 356.47900000000016,
+    "gap_us": 624.1719999999998,
+    "cores": [
+      "1",
+      "80",
+      "96"
+    ],
+    "fidelity": [
+      "BF16 => BF16"
+    ],
+    "advice": [
+      ""
+    ]
+  },
+  "TransposeDeviceOperation": {
+    "count": 164,
+    "kernel_us": 286.624,
+    "gap_us": 1934.9029999999998,
+    "cores": [
+      "110",
+      "32",
+      "48",
+      "80"
+    ],
+    "fidelity": [
+      "BF16 => BF16",
+      "FP32 => FP32"
+    ],
+    "advice": [
+      ""
+    ]
+  },
+  "PermuteDeviceOperation": {
+    "count": 32,
+    "kernel_us": 285.4079999999999,
+    "gap_us": 79.458,
+    "cores": [
+      "110",
+      "80"
+    ],
+    "fidelity": [
+      "BF16 => BF16"
+    ],
+    "advice": [
+      ""
+    ]
+  },
+  "MatmulDeviceOperation 128 x 5120 x 4352": {
+    "count": 2,
+    "kernel_us": 271.84000000000003,
+    "gap_us": 1.081,
+    "cores": [
+      "32"
+    ],
+    "fidelity": [
+      "LoFi BF16 x BFP4 => BF16"
+    ],
+    "advice": [
+      "If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED) \u2022 Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible \u2022 Use HiFi2 or HiFi4 with BF16 activations for improved accuracy"
+    ]
+  },
+  "MatmulDeviceOperation 32 x 5120 x 2560": {
+    "count": 4,
+    "kernel_us": 269.422,
+    "gap_us": 245.812,
+    "cores": [
+      "8"
+    ],
+    "fidelity": [
+      "LoFi BF16 x BFP4 => BF16"
+    ],
+    "advice": [
+      "If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED) \u2022 in0_block_w=4 and output subblock 1x2 look good \ud83e\udd37 \u2022 Use HiFi2 or HiFi4 with BF16 activations for improved accuracy"
+    ]
+  },
+  "MatmulDeviceOperation 32 x 5120 x 1536": {
+    "count": 4,
+    "kernel_us": 193.139,
+    "gap_us": 2.401,
+    "cores": [
+      "8"
+    ],
+    "fidelity": [
+      "LoFi BF16 x BFP4 => BF16"
+    ],
+    "advice": [
+      "If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED) \u2022 in0_block_w=4 and output subblock 1x3 look good \ud83e\udd37 \u2022 Use HiFi2 or HiFi4 with BF16 activations for improved accuracy"
+    ]
+  },
+  "MatmulDeviceOperation 32 x 5120 x 32": {
+    "count": 8,
+    "kernel_us": 172.37,
+    "gap_us": 8.608999999999998,
+    "cores": [
+      "1"
+    ],
+    "fidelity": [
+      "LoFi BF16 x BFP4 => BF16"
+    ],
+    "advice": [
+      "If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED) \u2022 Output subblock 1x1 is small, try out_subblock_h * out_subblock_w >= 2 if possible \u2022 Use HiFi2 or HiFi4 with BF16 activations for improved accuracy"
+    ]
+  },
+  "LayerNormDeviceOperation": {
+    "count": 6,
+    "kernel_us": 163.93099999999998,
+    "gap_us": 70.22500000000001,
+    "cores": [
+      "12",
+      "4"
+    ],
+    "fidelity": [
+      "BF16, BF16 => BF16"
+    ],
+    "advice": [
+      ""
+    ]
+  },
+  "MatmulDeviceOperation 32 x 1536 x 5120": {
+    "count": 4,
+    "kernel_us": 156.543,
+    "gap_us": 123.215,
+    "cores": [
+      "8"
+    ],
+    "fidelity": [
+      "LoFi BF16 x BFP4 => BF16"
+    ],
+    "advice": [
+      "If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED) \u2022 in0_block_w=4 and output subblock 1x4 look good \ud83e\udd37 \u2022 Use HiFi2 or HiFi4 with BF16 activations for improved accuracy"
+    ]
+  },
+  "FillPadDeviceOperation": {
+    "count": 16,
+    "kernel_us": 128.35500000000002,
+    "gap_us": 115.47100000000003,
+    "cores": [
+      "80"
+    ],
+    "fidelity": [
+      "BF16 => BF16"
+    ],
+    "advice": [
+      ""
+    ]
+  },
+  "MatmulDeviceOperation 128 x 4352 x 5120": {
+    "count": 1,
+    "kernel_us": 125.752,
+    "gap_us": 0.587,
+    "cores": [
+      "32"
+    ],
+    "fidelity": [
+      "LoFi BF16 x BFP4 => BF16"
+    ],
+    "advice": [
+      "If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED) \u2022 in0_block_w=4 and output subblock 1x4 look good \ud83e\udd37 \u2022 Use HiFi2 or HiFi4 with BF16 activations for improved accuracy"
+    ]
+  },
+  "TilizeDeviceOperation": {
+    "count": 16,
+    "kernel_us": 124.299,
+    "gap_us": 257.055,
+    "cores": [
+      "80"
+    ],
+    "fidelity": [
+      "BF16 => BF16"
+    ],
+    "advice": [
+      ""
+    ]
+  },
+  "ConcatDeviceOperation": {
+    "count": 15,
+    "kernel_us": 116.74199999999999,
+    "gap_us": 358.7339999999999,
+    "cores": [
+      "110",
+      "36",
+      "4"
+    ],
+    "fidelity": [
+      "BF16, BF16 => BF16"
+    ],
+    "advice": [
+      ""
+    ]
+  },
+  "TypecastDeviceOperation": {
+    "count": 16,
+    "kernel_us": 99.52799999999999,
+    "gap_us": 476.02700000000004,
+    "cores": [
+      "110"
+    ],
+    "fidelity": [
+      "BF16 => BF16",
+      "BF16 => BFP8",
+      "BFP8 => BF16",
+      "FP32 => BF16"
+    ],
+    "advice": [
+      ""
+    ]
+  },
+  "AllGatherDeviceOperation": {
+    "count": 5,
+    "kernel_us": 79.0545,
+    "gap_us": 102.42399999999999,
+    "cores": [
+      "2"
+    ],
+    "fidelity": [
+      "BF16 => BF16"
+    ],
+    "advice": [
+      ""
+    ]
+  },
+  "ReduceScatterMinimalDirectDeviceOperation": {
+    "count": 4,
+    "kernel_us": 78.35624999999999,
+    "gap_us": 309.545,
+    "cores": [
+      "1"
+    ],
+    "fidelity": [
+      "BF16 => BF16"
+    ],
+    "advice": [
+      ""
+    ]
+  },
+  "UnaryDeviceOperation": {
+    "count": 29,
+    "kernel_us": 66.75200000000001,
+    "gap_us": 735.961,
+    "cores": [
+      "110"
+    ],
+    "fidelity": [
+      "BF16 => BF16",
+      "FP32 => FP32"
+    ],
+    "advice": [
+      ""
+    ]
+  },
+  "ReduceDeviceOperation": {
+    "count": 24,
+    "kernel_us": 64.865,
+    "gap_us": 306.774,
+    "cores": [
+      "12",
+      "80"
+    ],
+    "fidelity": [
+      "BF16 => BF16"
+    ],
+    "advice": [
+      ""
+    ]
+  },
+  "ReduceScatterDeviceOperation": {
+    "count": 1,
+    "kernel_us": 45.41225,
+    "gap_us": 0.602,
+    "cores": [
+      "6"
+    ],
+    "fidelity": [
+      "BF16 => BF16"
+    ],
+    "advice": [
+      ""
+    ]
+  },
+  "CopyDeviceOperation": {
+    "count": 8,
+    "kernel_us": 13.032,
+    "gap_us": 144.247,
+    "cores": [
+      "110",
+      "80"
+    ],
+    "fidelity": [
+      "BF16, BF16 => BF16",
+      "BFP8, BFP8 => BFP8"
+    ],
+    "advice": [
+      ""
+    ]
+  },
+  "RepeatInterleaveCodegenDeviceOperation": {
+    "count": 8,
+    "kernel_us": 9.883,
+    "gap_us": 114.11899999999999,
+    "cores": [
+      "48"
+    ],
+    "fidelity": [
+      "BF16 => BF16"
+    ],
+    "advice": [
+      ""
+    ]
+  },
+  "RepeatDeviceOperation": {
+    "count": 4,
+    "kernel_us": 6.862,
+    "gap_us": 125.85799999999999,
+    "cores": [
+      "110"
+    ],
+    "fidelity": [
+      "BF16 => BF16"
+    ],
+    "advice": [
+      ""
+    ]
+  }
+}

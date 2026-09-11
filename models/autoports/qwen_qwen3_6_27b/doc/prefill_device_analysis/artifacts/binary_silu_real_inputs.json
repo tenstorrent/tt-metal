@@ -1,0 +1,80 @@
+[
+  {
+    "a_range": [
+      -0.875,
+      10.1875
+    ],
+    "b_range": [
+      -16.25,
+      15.625
+    ],
+    "a_shape": [
+      1,
+      12,
+      128,
+      128
+    ],
+    "a_padded": [
+      1,
+      12,
+      128,
+      128
+    ],
+    "b_padded": [
+      1,
+      12,
+      128,
+      128
+    ],
+    "a_dtype": "DataType.BFLOAT16",
+    "b_dtype": "DataType.BFLOAT16",
+    "fused_vs_separate": {
+      "nonfinite": 0,
+      "max_abs": 0.0,
+      "relative_l2": 0.0,
+      "range": [
+        -2.546875,
+        0.73828125
+      ]
+    }
+  },
+  {
+    "a_range": [
+      -0.875,
+      10.1875
+    ],
+    "b_range": [
+      -16.25,
+      15.625
+    ],
+    "a_shape": [
+      1,
+      12,
+      128,
+      128
+    ],
+    "a_padded": [
+      1,
+      12,
+      128,
+      128
+    ],
+    "b_padded": [
+      1,
+      12,
+      128,
+      128
+    ],
+    "a_dtype": "DataType.BFLOAT16",
+    "b_dtype": "DataType.BFLOAT16",
+    "fused_vs_separate": {
+      "nonfinite": 0,
+      "max_abs": 0.0,
+      "relative_l2": 0.0,
+      "range": [
+        -2.546875,
+        0.73828125
+      ]
+    }
+  }
+]

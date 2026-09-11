@@ -1,0 +1,39 @@
+{
+  "model": "Qwen/Qwen3.8-27B",
+  "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+  "artifact": "final_serving/readiness_vllm/vllm_qualitative_outputs.json",
+  "scope": "Manual review of all six greedy/sample pairs; requested max_new_tokens256 with checkpoint default reasoning. Completion is not equivalent to task success.",
+  "rank_divergence_regression": "Prior dropped-word/malformed sampled text is absent; learning explanation and story now coherent; sampled Python variable names consistent.",
+  "cases": [
+    {
+      "prompt": "Write a haiku about machine learning.",
+      "judgment": "Greedy final haiku coherent; sampled reasoning coherent but budget ends before final haiku."
+    },
+    {
+      "prompt": "Explain the difference between supervised and unsupervised learning in simple terms.",
+      "judgment": "Both explanations complete, coherent and correct at this level."
+    },
+    {
+      "prompt": "Complete this story: Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered",
+      "judgment": "Both stories coherent; both budget-truncated."
+    },
+    {
+      "prompt": "What are the three laws of thermodynamics?",
+      "judgment": "Both explanations coherent; budget ends before full requested answer."
+    },
+    {
+      "prompt": "Translate the following to French: \"Hello, how are you today?\"",
+      "judgment": "Both complete translations are correct."
+    },
+    {
+      "prompt": "Write a Python function to calculate the Fibonacci sequence.",
+      "judgment": "Both generated function bodies correct; sampled example output budget-truncated."
+    }
+  ],
+  "python_function_checks": {
+    "greedy_completion": "parsed and returned expected values at n=0,1,10",
+    "sampled_completion": "parsed and returned expected values at n=0,1,10"
+  },
+  "status": "coherent_sampled_regression_fixed_with_documented_budget_truncations",
+  "remaining_limit": "Not a complete-answer pass for all prompts; longer reasoning budget or an explicitly tested reasoning policy needed for that claim."
+}

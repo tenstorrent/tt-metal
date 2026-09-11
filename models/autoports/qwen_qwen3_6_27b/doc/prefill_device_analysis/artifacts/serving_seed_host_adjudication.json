@@ -1,0 +1,62 @@
+{
+  "method": "AST extraction of unchanged SamplingArgs, SeedManager and hash function; fake ttnn/torch objects; no device or external library imports",
+  "sampling_args_has_salt_field": false,
+  "current_default": true,
+  "current_AB": {
+    "A": {
+      "slot": 0,
+      "salt": 0,
+      "device_seed_at_counter0": 275414,
+      "device_seed_at_counter1": 526445
+    },
+    "B": {
+      "slot": 1,
+      "salt": 1,
+      "device_seed_at_counter0": 62798,
+      "device_seed_at_counter1": 425635
+    }
+  },
+  "current_BA": {
+    "B": {
+      "slot": 0,
+      "salt": 0,
+      "device_seed_at_counter0": 275414,
+      "device_seed_at_counter1": 526445
+    },
+    "A": {
+      "slot": 1,
+      "salt": 1,
+      "device_seed_at_counter0": 62798,
+      "device_seed_at_counter1": 425635
+    }
+  },
+  "disabled_AB": {
+    "A": {
+      "slot": 0,
+      "salt": 0,
+      "device_seed_at_counter0": 275414,
+      "device_seed_at_counter1": 526445
+    },
+    "B": {
+      "slot": 1,
+      "salt": 0,
+      "device_seed_at_counter0": 275414,
+      "device_seed_at_counter1": 526445
+    }
+  },
+  "disabled_BA": {
+    "B": {
+      "slot": 0,
+      "salt": 0,
+      "device_seed_at_counter0": 275414,
+      "device_seed_at_counter1": 526445
+    },
+    "A": {
+      "slot": 1,
+      "salt": 0,
+      "device_seed_at_counter0": 275414,
+      "device_seed_at_counter1": 526445
+    }
+  },
+  "assertions_passed": true
+}

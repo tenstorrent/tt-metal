@@ -1,0 +1,54 @@
+{
+  "status": "accuracy_completed_generation_failed",
+  "failure": "TTSampling._perform_all_gather unexpected dtype keyword",
+  "source_log": "/tmp/qwen_native_flat_full_validation.log",
+  "model": "Qwen/Qwen3.8-27B",
+  "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+  "physical_padding": "ceil32, logical lengths preserved",
+  "metrics": {
+    "prefill_accuracy": {
+      "top1": 1.0,
+      "top5": 1.0,
+      "top100": 1.0,
+      "matches_top1": 100,
+      "matches_top5": 100,
+      "matches_top100": 100,
+      "total": 100,
+      "k": 100
+    },
+    "teacher_accuracy": {
+      "top1": 0.99,
+      "top5": 1.0,
+      "top100": 1.0,
+      "matches_top1": 99,
+      "matches_top5": 100,
+      "matches_top100": 100,
+      "total": 100,
+      "k": 100,
+      "elapsed_s": 17.064928204752505,
+      "e2e_t/s/u": 5.859971914335418,
+      "ttft_ms": 3817.309700883925,
+      "decode_tokens": 99.0,
+      "decode_elapsed_s": 13.247589227743447,
+      "decode_t/s/u": 7.473057799276537
+    },
+    "s128": {
+      "samples_ms": [
+        308.927,
+        139.872,
+        134.544,
+        134.745
+      ],
+      "warm_median_ms": 134.745
+    },
+    "s4096": {
+      "samples_ms": [
+        2032.498,
+        1834.894,
+        1834.972,
+        1834.532
+      ],
+      "warm_median_ms": 1834.894
+    }
+  }
+}

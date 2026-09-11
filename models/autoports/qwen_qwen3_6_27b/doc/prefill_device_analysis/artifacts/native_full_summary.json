@@ -1,0 +1,87 @@
+{
+  "ops": 61,
+  "kernel_ms": 1.233454,
+  "gap_ms": 1.594434,
+  "by_op": {
+    "MatmulDeviceOperation": [
+      5,
+      635.916,
+      55.254
+    ],
+    "LayerNormDeviceOperation": [
+      4,
+      158.88799999999998,
+      77.422
+    ],
+    "ReduceScatterDeviceOperation": [
+      2,
+      91.27825,
+      1.221
+    ],
+    "ReshapeViewDeviceOperation": [
+      3,
+      86.241,
+      59.244
+    ],
+    "BinaryNgDeviceOperation": [
+      10,
+      54.43899999999999,
+      386.294
+    ],
+    "AllGatherDeviceOperation": [
+      2,
+      51.960750000000004,
+      2.223
+    ],
+    "SliceDeviceOperation": [
+      13,
+      41.111999999999995,
+      359.30499999999995
+    ],
+    "TransposeDeviceOperation": [
+      3,
+      37.759,
+      18.998
+    ],
+    "SDPAOperation": [
+      1,
+      25.429,
+      52.991
+    ],
+    "NLPConcatHeadsDeviceOperation": [
+      1,
+      20.253,
+      4.755
+    ],
+    "EmbeddingsDeviceOperation": [
+      4,
+      9.735,
+      122.33600000000001
+    ],
+    "UnaryDeviceOperation": [
+      3,
+      6.619999999999999,
+      115.59899999999999
+    ],
+    "ConcatDeviceOperation": [
+      4,
+      6.212,
+      145.462
+    ],
+    "PagedFillCacheDeviceOperation": [
+      2,
+      2.828,
+      40.712
+    ],
+    "RepeatCodegenDeviceOperation": [
+      2,
+      2.474,
+      81.648
+    ],
+    "TypecastDeviceOperation": [
+      2,
+      2.309,
+      70.97
+    ]
+  }
+}

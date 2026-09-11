@@ -1,0 +1,72 @@
+{
+  "model": "Qwen/Qwen3.8-27B",
+  "prior_run": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/34479389468",
+  "inference_server_ref": "0fcbc763bfcb95ba6e87eb70aa4360d23c0c2c96",
+  "points": [
+    {
+      "isl": 128,
+      "osl": 252,
+      "concurrency": 1
+    },
+    {
+      "isl": 1024,
+      "osl": 252,
+      "concurrency": 1
+    },
+    {
+      "isl": 4096,
+      "osl": 252,
+      "concurrency": 1
+    },
+    {
+      "isl": 16384,
+      "osl": 252,
+      "concurrency": 1
+    },
+    {
+      "isl": 32768,
+      "osl": 252,
+      "concurrency": 1
+    },
+    {
+      "isl": 65536,
+      "osl": 252,
+      "concurrency": 1
+    },
+    {
+      "isl": 131072,
+      "osl": 252,
+      "concurrency": 1
+    },
+    {
+      "isl": 261892,
+      "osl": 252,
+      "concurrency": 1
+    },
+    {
+      "isl": 4096,
+      "osl": 252,
+      "concurrency": 8
+    },
+    {
+      "isl": 32768,
+      "osl": 252,
+      "concurrency": 8
+    },
+    {
+      "isl": 131072,
+      "osl": 252,
+      "concurrency": 8
+    },
+    {
+      "isl": 4096,
+      "osl": 252,
+      "concurrency": 16
+    },
+    {
+      "isl": 32768,
+      "osl": 252,
+      "concurrency": 16
+    }
+  ]
+}

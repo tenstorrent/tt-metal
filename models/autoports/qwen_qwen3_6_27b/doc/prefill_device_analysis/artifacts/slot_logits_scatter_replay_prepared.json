@@ -1,0 +1,71 @@
+{
+  "invocation": [
+    "models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/probe_slot_logits_scatter.py",
+    "--inspect-source",
+    "--baseline-artifact",
+    "models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/artifacts/slot_logits_scatter.json",
+    "--output",
+    "models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/artifacts/slot_logits_scatter_replay_prepared.json"
+  ],
+  "status": "source_prepared_no_device_execution",
+  "source_sha256": {
+    "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/probe_slot_logits_scatter.py": "7efe47bf22bb9fc03ce4dbd8d0a8f1131862468f416133fb3f03fb3c36d64b3e",
+    "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tt/generator.py": "590cac7224ca6a5c5910b929cdd1636198cf99faef53845d5bd86a41ab54fc12",
+    "/home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/creation/creation.cpp": "c304c0a7ef9b0832aa0cfc77cf66ef639107ae396fc3694cd43bc892cda74bfa",
+    "/home/mvasiljevic/tt-metal/tt_metal/impl/tensor/host_tensor_factory.cpp": "be0e5499dd649b08d9438d80e2a03c9f841ad0a359b4da44945b9ceb0cc88de3",
+    "/home/mvasiljevic/tt-metal/tt_metal/impl/tensor/tensor_impl.cpp": "b3b6cba9aa727d11a30e5b95d4118a59557eb512a22b7dc5643225ef90291d89",
+    "/home/mvasiljevic/.cache/huggingface/hub/models--Qwen--Qwen3.8-27B/snapshots/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/config.json": "191e0af232104ed8b65258cf3fb2b842e288008baca7633c11b82a1ac7203aab"
+  },
+  "baseline_method": "def _scatter_slot_logits(self, logits, slot: int, batch: int):\n        \"\"\"Widen one-slot device logits back to the fixed slot count.\n\n        The on-device sampler path keeps logits on device, and both it and\n        generator_vllm address rows by absolute slot, so a narrowed prefill has\n        to restore the full height. Inactive rows carry zeros, which is what\n        they already contributed before the batch was narrowed -- their active\n        mask discards them either way.\n        \"\"\"\n        if batch == 1:\n            return logits\n        shape = list(logits.shape)\n        zero_rows = []\n        if slot:\n            head = list(shape)\n            head[1] = slot\n            zero_rows.append((\"head\", head))\n        if slot + 1 < batch:\n            tail = list(shape)\n            tail[1] = batch - slot - 1\n            zero_rows.append((\"tail\", tail))\n        pieces = []\n        made = []\n        for where, dims in zero_rows:\n            block = ttnn.zeros(ttnn.Shape(dims), dtype=logits.dtype, layout=logits.layout, device=self.mesh_device)\n            made.append(block)\n            if where == \"head\":\n                pieces.append(block)\n        pieces.append(logits)\n        for where, _ in zero_rows:\n            if where == \"tail\":\n                pieces.append(made[-1])\n        widened = ttnn.concat(pieces, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)\n        for block in made:\n            ttnn.deallocate(block)\n        ttnn.deallocate(logits)\n        return widened",
+  "baseline_origin": {
+    "kind": "preserved_artifact_method",
+    "path": "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/artifacts/slot_logits_scatter.json",
+    "artifact_sha256": "17b2852e450d61cbffc7b05781021e42492966b9bd3ce520bf5989bfb5d5f47c",
+    "recorded_generator_sha256": "372149b5db83b464f6026b3392462e4c7b60e0eb5b60bc650f6bded40c867c9c"
+  },
+  "baseline_method_sha256": "5a31b9a0bd43deeefa36d10575244cffb4baca0d25e0f796ef5e680be576ea2b",
+  "vocab_size": 248320,
+  "padded_vocab_size": 248320,
+  "local_vocab": 62080,
+  "width_matches_checkpoint": true,
+  "logical_input_shape_per_rank": [
+    1,
+    1,
+    1,
+    62080
+  ],
+  "padded_input_shape_per_rank": [
+    1,
+    1,
+    32,
+    62080
+  ],
+  "dtype": "BFLOAT8_B",
+  "batch": 32,
+  "slots": [
+    0,
+    7,
+    31
+  ],
+  "mesh": [
+    1,
+    4
+  ],
+  "weights_loaded": false,
+  "trace_capture": false,
+  "logical_zero_float_bytes_baseline": 7697920,
+  "padded_zero_float_bytes_baseline": 246333440,
+  "measurement": "Host method plus device completion; input cloning, readback and output release excluded equally",
+  "correctness": {},
+  "timing": {},
+  "batch1_host_contract": {
+    "original": {
+      "same_object": true,
+      "ttnn_attribute_accesses": 0
+    },
+    "device_fill": {
+      "same_object": true,
+      "ttnn_attribute_accesses": 0
+    }
+  }
+}

@@ -1,0 +1,165 @@
+2026-09-11 12:17:06.661 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-09-11 12:17:08.049 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:227)
+2026-09-11 12:17:08.049 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-09-11 12:17:08.049 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-09-11 12:17:08.049 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-09-11 12:17:08.054 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:575)
+2026-09-11 12:17:08.055 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-09-11 12:17:08.133 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-09-11 12:17:08.133 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-09-11 12:17:08.133 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-09-11 12:17:08.133 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-09-11 12:17:08.134 | info     |             UMD | Starting devices in cluster (cluster.cpp:1188)
+2026-09-11 12:17:08.312 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1196)
+2026-09-11 12:17:08.439 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:422)
+2026-09-11 12:17:08.439 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:484)
+2026-09-11 12:17:08.439 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-09-11 12:17:08.439 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3368)
+2026-09-11 12:17:08.439 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3376)
+2026-09-11 12:17:08.482 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:308)
+2026-09-11 12:17:08.504 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:455)
+2026-09-11 12:17:08.504 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:325)
+2026-09-11 12:17:09.873 | info     |           Metal | Pinned source memory start address 0x706f89400098 must be aligned 64 B (dispatch.cpp:1195)
+2026-09-11 12:17:18.055 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_multicast_factory.cpp:42)
+2026-09-11 12:17:18.055 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-09-11 12:17:18.055 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-09-11 12:17:18.055 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-09-11 12:17:18.055 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+/home/mvasiljevic/tt-metal/ttnn/ttnn/unsafe_allocation_tracker.py:145: FutureWarning: `torch.distributed.reduce_op` is deprecated, please use `torch.distributed.ReduceOp` instead
+  if isinstance(obj, ttnn.Tensor):
+/home/mvasiljevic/tt-metal/ttnn/ttnn/unsafe_allocation_tracker.py:176: FutureWarning: `torch.distributed.reduce_op` is deprecated, please use `torch.distributed.ReduceOp` instead
+  if isinstance(val, (list, tuple)):
+/home/mvasiljevic/tt-metal/ttnn/ttnn/unsafe_allocation_tracker.py:179: FutureWarning: `torch.distributed.reduce_op` is deprecated, please use `torch.distributed.ReduceOp` instead
+  elif isinstance(val, dict):
+/home/mvasiljevic/tt-metal/ttnn/ttnn/unsafe_allocation_tracker.py:188: FutureWarning: `torch.distributed.reduce_op` is deprecated, please use `torch.distributed.ReduceOp` instead
+  elif hasattr(val, "__dict__") and not isinstance(val, type):
+/home/mvasiljevic/tt-metal/ttnn/ttnn/unsafe_allocation_tracker.py:191: FutureWarning: `torch.distributed.reduce_op` is deprecated, please use `torch.distributed.ReduceOp` instead
+  obj_dict = val.__dict__
+PRECISION_CONFIG {"activation_residual_dtype": "DataType.BFLOAT16", "layers": [{"attention_fidelity": "MathFidelity.LoFi", "attention_weight_dtype": "DataType.BFLOAT4_B", "cache_dtype": "DataType.BFLOAT8_B", "ccl_mlp_dtype": "DataType.BFLOAT16", "ccl_token_mixer_dtype": "DataType.BFLOAT16", "layer_idx": 0, "layer_kind": "linear_attention", "linear_input_fidelity": "MathFidelity.LoFi", "linear_input_weight_dtype": "DataType.BFLOAT4_B", "linear_output_fidelity": "MathFidelity.LoFi", "linear_output_weight_dtype": "DataType.BFLOAT4_B", "linear_recurrent_fidelity": "MathFidelity.HiFi2", "linear_recurrent_state_dtype": "DataType.BFLOAT8_B", "mlp_down_dtype": "DataType.BFLOAT4_B", "mlp_fidelity": "MathFidelity.LoFi", "mlp_gate_up_dtype": "DataType.BFLOAT4_B", "o_fidelity": "MathFidelity.LoFi", "qkv_fidelity": "MathFidelity.LoFi"}, {"attention_fidelity": "MathFidelity.LoFi", "attention_weight_dtype": "DataType.BFLOAT4_B", "cache_dtype": "DataType.BFLOAT8_B", "ccl_mlp_dtype": "DataType.BFLOAT16", "ccl_token_mixer_dtype": "DataType.BFLOAT16", "layer_idx": 3, "layer_kind": "full_attention", "linear_input_fidelity": "MathFidelity.HiFi2", "linear_input_weight_dtype": "DataType.BFLOAT16", "linear_output_fidelity": "MathFidelity.HiFi2", "linear_output_weight_dtype": "DataType.BFLOAT16", "linear_recurrent_fidelity": "MathFidelity.HiFi2", "linear_recurrent_state_dtype": "DataType.FLOAT32", "mlp_down_dtype": "DataType.BFLOAT4_B", "mlp_fidelity": "MathFidelity.LoFi", "mlp_gate_up_dtype": "DataType.BFLOAT4_B", "o_fidelity": "MathFidelity.LoFi", "qkv_fidelity": "MathFidelity.LoFi"}], "lm_head_fidelity": "MathFidelity.HiFi2", "lm_head_output_dtype": "DataType.BFLOAT8_B", "lm_head_weight_dtype": "DataType.BFLOAT8_B", "precision_config": {"activation_residual_dtype": "BF16", "base_policy": {"full_attention": "final_cumulative", "linear_attention": "linear_kda_conv"}, "ccl_dtype": {"mlp": "BF16", "token_mixer": "BF16"}, "compute_fidelities": {"full_attention_o": "LoFi", "full_attention_qkv": "LoFi", "full_attention_sdpa": "LoFi", "linear_attention_internal": "LoFi", "linear_input_projection": "LoFi", "linear_output_projection": "LoFi", "linear_recurrent": "HiFi2", "mlp": "LoFi"}, "config_id": "full_attention_bfp4_lofi_kda_conv", "kv_cache_dtype": "BFP8_B", "layer_exceptions": [], "linear_recurrent_state_dtype": "BFP8_B", "logits_sampling": {"lm_head_compute_fidelity": "HiFi2", "lm_head_output_dtype": "BFP8_B", "lm_head_weight_dtype": "BFP8_B", "sampled_token_dtype": "UINT32", "sampling_logits_dtype": "BFP8_B"}, "schema_version": 1, "sha256": "37840ec069718c45e8c9651af8953ba2bcc661acd3eccd788f011cbe27583bd8", "source": "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/datatype_sweep/selected_precision_config.json", "weight_groups": {"full_attention_o": "BFP4_B", "full_attention_qkv": "BFP4_B", "linear_attention_internal": "BFP4_B", "linear_input_projection": "BFP4_B", "linear_output_projection": "BFP4_B", "mlp_down": "BFP4_B", "mlp_gate_up": "BFP4_B"}}, "sampled_token_dtype": "DataType.UINT32", "sampling_logits_dtype": "DataType.BFLOAT8_B"}
+Traceback (most recent call last):
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/probe.py", line 343, in <module>
+    main()
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/probe.py", line 299, in main
+    logits = gen.prefill_forward(tokens, page_table=gen._page_table, kv_cache=gen.kv_cache,
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tt/generator.py", line 321, in prefill_forward
+    logits = self.model.prefill_forward(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tt/model.py", line 643, in prefill_forward
+    hidden = layer.prefill_forward(
+             ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/probe.py", line 280, in timed
+    value = _original(**kwargs)
+            ^^^^^^^^^^^^^^^^^^^
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tt/optimized_decoder.py", line 1974, in prefill_forward
+    hidden_states = self._token_mixer_prefill(hidden_states, page_table, current_positions)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tt/functional_decoder.py", line 594, in _token_mixer_prefill
+    return self._linear_attention_prefill(hidden_states)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tt/functional_decoder.py", line 615, in _linear_attention_prefill
+    chunk = self._linear_attention_prefill_chunk(chunk)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tt/multichip_decoder.py", line 1026, in _linear_attention_prefill_chunk
+    return self._linear_attention_prefill_chunk_impl(hidden_states)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tt/multichip_decoder.py", line 1142, in _linear_attention_prefill_chunk_impl
+    attended, final_state = _sequential_recurrence(
+                            ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/probe.py", line 178, in cached_recurrence
+    ttnn.execute_trace(mesh, trace, cq_id=0, blocking=False)
+  File "/home/mvasiljevic/tt-metal/ttnn/ttnn/__init__.py", line 194, in execute_trace
+    UnsafeAllocationTracker(device).verify_before_replay(trace_id)
+  File "/home/mvasiljevic/tt-metal/ttnn/ttnn/unsafe_allocation_tracker.py", line 115, in verify_before_replay
+    raise RuntimeError("".join(parts))
+RuntimeError: Found 3 device buffer(s) still alive before trace replay. These will be corrupted on replay.
+Buffer 8931 [op: program_cache: CopyDeviceOperation output_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) output_dtype=DataType::BFLOAT16 backwards=false]
+  allocated at:
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/probe.py", line 343, in <module>
+    main()
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/probe.py", line 299, in main
+    logits = gen.prefill_forward(tokens, page_table=gen._page_table, kv_cache=gen.kv_cache,
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tt/generator.py", line 321, in prefill_forward
+    logits = self.model.prefill_forward(
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tt/model.py", line 643, in prefill_forward
+    hidden = layer.prefill_forward(
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/probe.py", line 280, in timed
+    value = _original(**kwargs)
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tt/optimized_decoder.py", line 1974, in prefill_forward
+    hidden_states = self._token_mixer_prefill(hidden_states, page_table, current_positions)
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tt/functional_decoder.py", line 594, in _token_mixer_prefill
+    return self._linear_attention_prefill(hidden_states)
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tt/functional_decoder.py", line 615, in _linear_attention_prefill
+    chunk = self._linear_attention_prefill_chunk(chunk)
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tt/multichip_decoder.py", line 1026, in _linear_attention_prefill_chunk
+    return self._linear_attention_prefill_chunk_impl(hidden_states)
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tt/multichip_decoder.py", line 1142, in _linear_attention_prefill_chunk_impl
+    attended, final_state = _sequential_recurrence(
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/probe.py", line 175, in cached_recurrence
+    ttnn.copy(source, destination)
+Buffer 8941 [op: program_cache: CopyDeviceOperation output_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) output_dtype=DataType::BFLOAT16 backwards=false]
+  allocated at:
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/probe.py", line 343, in <module>
+    main()
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/probe.py", line 299, in main
+    logits = gen.prefill_forward(tokens, page_table=gen._page_table, kv_cache=gen.kv_cache,
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tt/generator.py", line 321, in prefill_forward
+    logits = self.model.prefill_forward(
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tt/model.py", line 643, in prefill_forward
+    hidden = layer.prefill_forward(
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/probe.py", line 280, in timed
+    value = _original(**kwargs)
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tt/optimized_decoder.py", line 1974, in prefill_forward
+    hidden_states = self._token_mixer_prefill(hidden_states, page_table, current_positions)
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tt/functional_decoder.py", line 594, in _token_mixer_prefill
+    return self._linear_attention_prefill(hidden_states)
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tt/functional_decoder.py", line 615, in _linear_attention_prefill
+    chunk = self._linear_attention_prefill_chunk(chunk)
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tt/multichip_decoder.py", line 1026, in _linear_attention_prefill_chunk
+    return self._linear_attention_prefill_chunk_impl(hidden_states)
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tt/multichip_decoder.py", line 1142, in _linear_attention_prefill_chunk_impl
+    attended, final_state = _sequential_recurrence(
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/probe.py", line 175, in cached_recurrence
+    ttnn.copy(source, destination)
+Buffer 8951 [op: program_cache: CopyDeviceOperation output_mem_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) output_dtype=DataType::BFLOAT8_B backwards=false]
+  allocated at:
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/probe.py", line 343, in <module>
+    main()
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/probe.py", line 299, in main
+    logits = gen.prefill_forward(tokens, page_table=gen._page_table, kv_cache=gen.kv_cache,
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tt/generator.py", line 321, in prefill_forward
+    logits = self.model.prefill_forward(
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tt/model.py", line 643, in prefill_forward
+    hidden = layer.prefill_forward(
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/probe.py", line 280, in timed
+    value = _original(**kwargs)
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tt/optimized_decoder.py", line 1974, in prefill_forward
+    hidden_states = self._token_mixer_prefill(hidden_states, page_table, current_positions)
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tt/functional_decoder.py", line 594, in _token_mixer_prefill
+    return self._linear_attention_prefill(hidden_states)
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tt/functional_decoder.py", line 615, in _linear_attention_prefill
+    chunk = self._linear_attention_prefill_chunk(chunk)
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tt/multichip_decoder.py", line 1026, in _linear_attention_prefill_chunk
+    return self._linear_attention_prefill_chunk_impl(hidden_states)
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tt/multichip_decoder.py", line 1142, in _linear_attention_prefill_chunk_impl
+    attended, final_state = _sequential_recurrence(
+  File "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/prefill_device_analysis/probe.py", line 175, in cached_recurrence
+    ttnn.copy(source, destination)
+
+--- Python referrer analysis ---
+
+[scan stats] threads=1, frames=14, locals=201, objects_traversed=34532, tensors_seen=120, uid_ok=112, uid_none=8, uid_exc=0, matched=0
+[buffer IDs seen (110 unique)] [0, 5, 10, 15, 20, 25, 35, 55, 65, 85, 95, 110, 115, 120, 130, 150, 165, 170, 175, 180, 185, 195, 215, 235, 245, 255, 265, 285, 299, 323]
+[looking for IDs (3)] [8931, 8941, 8951]...
+
+3 buffer(s) not found in any Python stack frame.
+Hint: these may be program cache buffers (tracked by default; disable with TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE=1), or held deeper than the referrer search depth (currently 10 levels).
+Use corruptible_allocation_scope() for acknowledged-corruptible tensors, or ensure temporary tensors are freed before replay.
+2026-09-11 12:17:27.774 | info     |    BuildKernels | JIT cache stats: 317/317 hits (100.0%) [317 cached, 259 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-09-11 12:17:27.774 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-09-11 12:17:27.789 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:547)
+2026-09-11 12:17:27.789 | info     |             UMD | Closing devices in cluster (cluster.cpp:1201)
+2026-09-11 12:17:28.324 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1210)
+2026-09-11 12:17:28.324 | info     |             UMD | Cluster destructor started. (cluster.cpp:916)
+2026-09-11 12:17:28.324 | info     |             UMD | Cluster destructor completed. (cluster.cpp:919)

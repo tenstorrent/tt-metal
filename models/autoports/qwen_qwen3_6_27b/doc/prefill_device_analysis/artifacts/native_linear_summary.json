@@ -1,0 +1,112 @@
+{
+  "ops": 91,
+  "kernel_ms": 2.0203235,
+  "gap_ms": 2.1803820000000003,
+  "by_op": {
+    "MatmulDeviceOperation": [
+      8,
+      642.012,
+      90.933
+    ],
+    "ReshapeViewDeviceOperation": [
+      7,
+      434.69699999999995,
+      115.315
+    ],
+    "LayerNormDeviceOperation": [
+      3,
+      154.643,
+      12.799000000000001
+    ],
+    "BinaryNgDeviceOperation": [
+      12,
+      125.99,
+      511.26800000000003
+    ],
+    "ReduceScatterDeviceOperation": [
+      2,
+      100.756,
+      1.204
+    ],
+    "PermuteDeviceOperation": [
+      8,
+      97.668,
+      67.822
+    ],
+    "UntilizeWithUnpaddingDeviceOperation": [
+      8,
+      66.76,
+      405.475
+    ],
+    "TilizeWithValPaddingDeviceOperation": [
+      9,
+      60.892,
+      261.505
+    ],
+    "ChunkGdnPrepOperation": [
+      1,
+      60.73,
+      126.179
+    ],
+    "AllGatherDeviceOperation": [
+      2,
+      53.6755,
+      1.818
+    ],
+    "ChunkGdnScanOperation": [
+      1,
+      49.233,
+      22.165
+    ],
+    "TransposeDeviceOperation": [
+      7,
+      46.059,
+      137.325
+    ],
+    "QkvCausalConv1dSiluOperation": [
+      1,
+      32.938,
+      34.462
+    ],
+    "FillPadDeviceOperation": [
+      4,
+      30.052,
+      49.967
+    ],
+    "TypecastDeviceOperation": [
+      5,
+      15.678,
+      82.992
+    ],
+    "ReduceDeviceOperation": [
+      4,
+      14.062,
+      88.74000000000001
+    ],
+    "UnaryDeviceOperation": [
+      3,
+      12.697,
+      98.23599999999999
+    ],
+    "CopyDeviceOperation": [
+      2,
+      6.728,
+      11.2
+    ],
+    "ConcatDeviceOperation": [
+      2,
+      6.726,
+      19.094
+    ],
+    "UntilizeCodegenDeviceOperation": [
+      1,
+      4.916,
+      40.618
+    ],
+    "SliceDeviceOperation": [
+      1,
+      3.411,
+      1.265
+    ]
+  }
+}

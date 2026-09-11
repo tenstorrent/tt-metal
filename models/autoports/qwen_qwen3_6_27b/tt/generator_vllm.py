@@ -11,8 +11,8 @@ reads logits in the performance path.
 
 from __future__ import annotations
 
-import os
 import math
+import os
 from dataclasses import fields, replace
 from pathlib import Path
 from typing import Any
@@ -83,6 +83,7 @@ class Qwen36ForCausalLM(nn.Module, SupportsMultiModal):
         self._decode_ready = False
         self._last_page_table: torch.Tensor | None = None
         self._sampling_contract_key: tuple[Any, ...] | None = None
+        self._active_seed_slots: list[int] = []
 
     @classmethod
     def get_max_tokens_all_users(
@@ -341,6 +342,10 @@ class Qwen36ForCausalLM(nn.Module, SupportsMultiModal):
         prompt_tokens=None,
         output_tokens=None,
         slot_remap=None,
+        reload_inputs=None,
+        reload_page_table=False,
+        reload_sampling_params=False,
+        reset_sampling_state=False,
         **_: Any,
     ):
         if not enable_trace:
@@ -375,9 +380,21 @@ class Qwen36ForCausalLM(nn.Module, SupportsMultiModal):
             _t = [("entry", _time.perf_counter())]
         sampling_key = self._sampling_key(sampling_params)
         sampling_changed = sampling_key != self._sampling_contract_key
+        explicit_reload = reload_inputs is not None
+        if explicit_reload:
+            if reset_sampling_state and not reload_inputs:
+                raise ValueError("reset_sampling_state requires reload_inputs")
+            if reload_page_table and reload_inputs:
+                raise ValueError("reload_page_table cannot accompany reload_inputs")
+            sampling_changed = bool(reload_sampling_params)
+            reset_batch = bool(reset_sampling_state)
+            if not reload_inputs and not self._decode_ready:
+                raise RuntimeError("decode inputs must be loaded before resident replay")
         gen.sampling.apply_decode_state(
             [sampling_params],
-            reset_batch=reset_batch,
+            # Trace setup runs a sampling warmup. Restore authoritative penalty
+            # history afterwards so its synthetic token is never counted.
+            reset_batch=False,
             refresh_sampling_params=sampling_changed,
             prompt_tokens=prompt_tokens,
             output_tokens=output_tokens,
@@ -385,27 +402,41 @@ class Qwen36ForCausalLM(nn.Module, SupportsMultiModal):
         if _prof:
             _t.append(("apply_decode_state", _time.perf_counter()))
         self._sampling_contract_key = sampling_key
-        start_values = start_pos.reshape(-1)[: gen.model.batch].tolist()
-        active_seed_slots = [slot for slot, pos in enumerate(start_values) if int(pos) >= 0]
-        formatted_params = format_sampling_params(sampling_params, 32)
-        seed_values = formatted_params.seed
-        remap_changed = slot_remap is not None
-        if slot_remap is not None:
-            remap = torch.as_tensor(slot_remap).reshape(-1)[: gen.model.batch].tolist()
-            gen.remap_decode_slots(remap)
-            gen.sampling.seed_manager.apply_slot_remap(remap)
-        if active_seed_slots:
-            gen.sampling.seed_manager.reset_seed_from_slots_if_needed(seed_values, active_seed_slots)
-            gen.sampling.seed_manager.align_seed_counters_to_positions(seed_values, active_seed_slots, start_values)
+        remap_changed = slot_remap is not None and (not explicit_reload or reload_inputs)
+        if not explicit_reload or reload_inputs:
+            start_values = start_pos.reshape(-1)[: gen.model.batch].tolist()
+            self._active_seed_slots = [slot for slot, pos in enumerate(start_values) if int(pos) >= 0]
+            seed_values = format_sampling_params(sampling_params, 32).seed
+            if remap_changed:
+                remap = torch.as_tensor(slot_remap).reshape(-1)[: gen.model.batch].tolist()
+                gen.remap_decode_slots(remap)
+                gen.sampling.seed_manager.apply_slot_remap(remap)
+            gen.sampling.seed_manager.deactivate_slots_except(self._active_seed_slots)
+            if self._active_seed_slots:
+                gen.sampling.seed_manager.reset_seed_from_slots_if_needed(seed_values, self._active_seed_slots)
+                gen.sampling.seed_manager.align_seed_counters_to_positions(
+                    seed_values, self._active_seed_slots, start_values
+                )
+        # In overlapped decode the host position can trail the device. Keep the
+        # counter advancing until the runner explicitly reloads authoritative inputs.
+        active_seed_slots = self._active_seed_slots
         if _prof:
             _t.append(("seed_align+remap", _time.perf_counter()))
-        page_changed = self._last_page_table is None or not torch.equal(page_table, self._last_page_table)
+        page_changed = (
+            bool(reload_page_table)
+            if explicit_reload
+            else self._last_page_table is None or not torch.equal(page_table, self._last_page_table)
+        )
+        will_setup = (
+            bool(reload_inputs)
+            if explicit_reload
+            else bool(reset_batch or not self._decode_ready or page_changed or remap_changed)
+        )
         if os.environ.get("QWEN36_DECODE_LOG_SETUP"):
             # Counts trace setup against decode steps. setup_token_out_decode
             # performs capture, so if it fires every token the traced path is
             # being rebuilt per step and decode cost is capture, not compute.
             self._decode_steps = getattr(self, "_decode_steps", 0) + 1
-            will_setup = bool(reset_batch or not self._decode_ready or page_changed or remap_changed)
             if will_setup:
                 self._decode_setups = getattr(self, "_decode_setups", 0) + 1
             print(
@@ -415,7 +446,7 @@ class Qwen36ForCausalLM(nn.Module, SupportsMultiModal):
                 f"page_changed={bool(page_changed)} remap_present={bool(remap_changed)}",
                 flush=True,
             )
-        if reset_batch or not self._decode_ready or page_changed or remap_changed:
+        if will_setup:
             gen.setup_token_out_decode(
                 tokens.reshape(-1)[: gen.model.batch],
                 start_pos.reshape(-1)[: gen.model.batch],
@@ -423,9 +454,13 @@ class Qwen36ForCausalLM(nn.Module, SupportsMultiModal):
                 kv_cache=kv_cache,
                 active_mask=start_pos.reshape(-1)[: gen.model.batch] >= 0,
                 sampling_params=sampling_params,
+                preserve_sampling_history=not reset_batch,
             )
             self._decode_ready = True
             self._last_page_table = page_table.clone()
+        if reset_batch:
+            gen.sampling.reset_prompt_tokens(prompt_tokens)
+            gen.sampling.reset_output_state(output_tokens)
         # Trace setup performs sampler warm/capture executions.  Write the
         # request's intended per-token device seeds afterwards so capture-side
         # RNG consumption cannot perturb the first real replay.
@@ -434,7 +469,12 @@ class Qwen36ForCausalLM(nn.Module, SupportsMultiModal):
         gen.sampling.seed_manager.get_new_values(active_seed_slots)
         if _prof:
             _t.append(("seed_new_values", _time.perf_counter()))
-        tt_out = gen.token_out_decode_step(readback=False)
+        tt_out = gen.token_out_decode_step(
+            page_table=page_table if explicit_reload and reload_page_table else None,
+            readback=False,
+        )
+        if explicit_reload and reload_page_table:
+            self._last_page_table = page_table.clone()
         if _prof:
             _t.append(("token_out_decode_step", _time.perf_counter()))
         if read_from_device:

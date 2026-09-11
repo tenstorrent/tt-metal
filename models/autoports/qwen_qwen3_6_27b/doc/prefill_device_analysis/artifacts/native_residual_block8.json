@@ -1,0 +1,181 @@
+{
+  "candidate": "runtime",
+  "sequence": 128,
+  "batch": 1,
+  "active_slot": 0,
+  "linear_chunk_size": 512,
+  "layer_indices": [
+    0,
+    3
+  ],
+  "snapshot": "/home/mvasiljevic/.cache/huggingface/hub/models--Qwen--Qwen3.8-27B/snapshots/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+  "precision": {
+    "precision_config": {
+      "source": "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/datatype_sweep/selected_precision_config.json",
+      "sha256": "37840ec069718c45e8c9651af8953ba2bcc661acd3eccd788f011cbe27583bd8",
+      "schema_version": 1,
+      "config_id": "full_attention_bfp4_lofi_kda_conv",
+      "base_policy": {
+        "full_attention": "final_cumulative",
+        "linear_attention": "linear_kda_conv"
+      },
+      "weight_groups": {
+        "full_attention_qkv": "BFP4_B",
+        "full_attention_o": "BFP4_B",
+        "linear_attention_internal": "BFP4_B",
+        "linear_input_projection": "BFP4_B",
+        "linear_output_projection": "BFP4_B",
+        "mlp_gate_up": "BFP4_B",
+        "mlp_down": "BFP4_B"
+      },
+      "layer_exceptions": [],
+      "compute_fidelities": {
+        "full_attention_sdpa": "LoFi",
+        "full_attention_qkv": "LoFi",
+        "full_attention_o": "LoFi",
+        "linear_attention_internal": "LoFi",
+        "linear_input_projection": "LoFi",
+        "linear_output_projection": "LoFi",
+        "linear_recurrent": "HiFi2",
+        "mlp": "LoFi"
+      },
+      "activation_residual_dtype": "BF16",
+      "ccl_dtype": {
+        "token_mixer": "BF16",
+        "mlp": "BF16"
+      },
+      "kv_cache_dtype": "BFP8_B",
+      "linear_recurrent_state_dtype": "BFP8_B",
+      "logits_sampling": {
+        "lm_head_weight_dtype": "BFP8_B",
+        "lm_head_output_dtype": "BFP8_B",
+        "lm_head_compute_fidelity": "HiFi2",
+        "sampling_logits_dtype": "BFP8_B",
+        "sampled_token_dtype": "UINT32"
+      }
+    },
+    "activation_residual_dtype": "DataType.BFLOAT16",
+    "lm_head_weight_dtype": "DataType.BFLOAT8_B",
+    "lm_head_output_dtype": "DataType.BFLOAT8_B",
+    "lm_head_fidelity": "MathFidelity.HiFi2",
+    "sampling_logits_dtype": "DataType.BFLOAT8_B",
+    "sampled_token_dtype": "DataType.UINT32",
+    "layers": [
+      {
+        "layer_idx": 0,
+        "layer_kind": "linear_attention",
+        "attention_weight_dtype": "DataType.BFLOAT4_B",
+        "mlp_gate_up_dtype": "DataType.BFLOAT4_B",
+        "mlp_down_dtype": "DataType.BFLOAT4_B",
+        "cache_dtype": "DataType.BFLOAT8_B",
+        "attention_fidelity": "MathFidelity.LoFi",
+        "qkv_fidelity": "MathFidelity.LoFi",
+        "o_fidelity": "MathFidelity.LoFi",
+        "mlp_fidelity": "MathFidelity.LoFi",
+        "linear_input_weight_dtype": "DataType.BFLOAT4_B",
+        "linear_input_fidelity": "MathFidelity.LoFi",
+        "linear_output_weight_dtype": "DataType.BFLOAT4_B",
+        "linear_output_fidelity": "MathFidelity.LoFi",
+        "linear_recurrent_state_dtype": "DataType.BFLOAT8_B",
+        "linear_recurrent_fidelity": "MathFidelity.HiFi2",
+        "ccl_token_mixer_dtype": "DataType.BFLOAT16",
+        "ccl_mlp_dtype": "DataType.BFLOAT16"
+      },
+      {
+        "layer_idx": 3,
+        "layer_kind": "full_attention",
+        "attention_weight_dtype": "DataType.BFLOAT4_B",
+        "mlp_gate_up_dtype": "DataType.BFLOAT4_B",
+        "mlp_down_dtype": "DataType.BFLOAT4_B",
+        "cache_dtype": "DataType.BFLOAT8_B",
+        "attention_fidelity": "MathFidelity.LoFi",
+        "qkv_fidelity": "MathFidelity.LoFi",
+        "o_fidelity": "MathFidelity.LoFi",
+        "mlp_fidelity": "MathFidelity.LoFi",
+        "linear_input_weight_dtype": "DataType.BFLOAT16",
+        "linear_input_fidelity": "MathFidelity.HiFi2",
+        "linear_output_weight_dtype": "DataType.BFLOAT16",
+        "linear_output_fidelity": "MathFidelity.HiFi2",
+        "linear_recurrent_state_dtype": "DataType.FLOAT32",
+        "linear_recurrent_fidelity": "MathFidelity.HiFi2",
+        "ccl_token_mixer_dtype": "DataType.BFLOAT16",
+        "ccl_mlp_dtype": "DataType.BFLOAT16"
+      }
+    ]
+  },
+  "samples_ms": [
+    14.529233798384666,
+    14.583818148821592,
+    14.171893242746592
+  ],
+  "median_ms": 14.529233798384666,
+  "layer_samples_ms": {
+    "0": [
+      3.2964288257062435,
+      3.2921512611210346,
+      3.3379080705344677
+    ],
+    "3": [
+      2.2123740054666996,
+      2.1174331195652485,
+      2.137932926416397
+    ]
+  },
+  "layer_median_ms": {
+    "0": 3.2964288257062435,
+    "3": 2.137932926416397
+  },
+  "measurement": "warmed eager generator prefill with synchronized per-layer boundaries",
+  "recurrence_trace_probe": {},
+  "recurrence_trace_count": 0,
+  "trace_retained_tensors": 0,
+  "recurrence_oracle": {},
+  "silu_oracle": {},
+  "trace_tensor_packed_bytes_per_device": 0,
+  "trace_unique_buffers": 0,
+  "comparison": {
+    "layer_0": {
+      "pcc": 0.9999861269877165,
+      "max_abs": 0.25,
+      "relative_l2": 0.007146734796763569,
+      "finite": true
+    },
+    "layer_3": {
+      "pcc": 0.9999732006317271,
+      "max_abs": 0.5,
+      "relative_l2": 0.008104275031172349,
+      "finite": true
+    },
+    "logits": {
+      "pcc": 0.9997435403363847,
+      "max_abs": 0.4375,
+      "relative_l2": 0.013955755220556152,
+      "finite": true
+    },
+    "cache_0_conv": {
+      "pcc": 0.9999657889731008,
+      "max_abs": 0.75,
+      "relative_l2": 0.009062264726297432,
+      "finite": true
+    },
+    "cache_0_recurrent": {
+      "pcc": 0.9999173754997159,
+      "max_abs": 0.3125,
+      "relative_l2": 0.013133153710240032,
+      "finite": true
+    },
+    "cache_3_key": {
+      "pcc": 0.9998245364140295,
+      "max_abs": 0.25,
+      "relative_l2": 0.01873100546221111,
+      "finite": true
+    },
+    "cache_3_value": {
+      "pcc": 0.9997196836146951,
+      "max_abs": 0.125,
+      "relative_l2": 0.026776247836406707,
+      "finite": true
+    }
+  },
+  "logits_top1_equal": true
+}

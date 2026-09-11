@@ -1,0 +1,53 @@
+{
+  "date": "2026-09-11",
+  "build_required": false,
+  "reason": "Python and documentation changes only; no C++/CMake/kernel edits.",
+  "checks": [
+    {
+      "command": "python_env/bin/pre-commit run --files <all 149 staged task files>",
+      "exit_code": 0,
+      "log": "/tmp/qwen_prefill_precommit_staged.log"
+    },
+    {
+      "command": "git diff --cached --check",
+      "exit_code": 0,
+      "log": "/tmp/qwen_prefill_diff_check.log"
+    },
+    {
+      "command": "python_env/bin/python -m pytest models/common/sampling/tests/test_local_topk_plan.py -q",
+      "passed": 9,
+      "log": "/tmp/qwen_sampler_host_tests_final.log"
+    },
+    {
+      "command": "python_env/bin/python -m pytest models/autoports/qwen_qwen3_6_27b/tests/test_prefill_recurrence_batching.py -q",
+      "passed": 5,
+      "evidence": "../BATCH_CAPACITY_FOLLOWUP.md"
+    },
+    {
+      "command": "python3 -m unittest discover -s models/autoports/qwen_qwen3_6_27b/tests -p test_vllm_decode_reload.py -v",
+      "passed": 7,
+      "log": "/tmp/qwen_vllm_reload_host_final.log"
+    },
+    {
+      "command": "python3 -m unittest discover -s models/autoports/qwen_qwen3_6_27b/tests -p test_vllm_decode_reload.py -v",
+      "passed": 9,
+      "evidence": "../SERVING_SEED_AUTODEBUG.md; independent STAGE_REVIEW.md repeat",
+      "scope": "Includes real capture-method history preservation and no-snapshot opt-out ordering."
+    },
+    {
+      "command": "python3 -m unittest discover -s models/autoports/qwen_qwen3_6_27b/tests -p test_vllm_decode_reload.py -v",
+      "passed": 12,
+      "exit_code": 0,
+      "log": "/tmp/qwen_vllm_reload_host_final.log",
+      "scope": "Adds Qwen opt-in shared entropy refresh, unchanged common default and explicit/mixed stream invariance."
+    },
+    {
+      "command": "python_env/bin/pre-commit run --files <196 completed task files; active device_fill_serving logs excluded>",
+      "exit_code": 0,
+      "log": "/tmp/qwen_followup_all_precommit.log",
+      "note": "First pass added missing terminal newlines to six completed serving JSONs; second pass passed. Measurement values and generated text unchanged."
+    }
+  ],
+  "scope": "Task files only; preexisting readiness_vllm user modifications excluded. CSV line endings normalized to LF; measurement values unchanged.",
+  "environment_note": "Host python3 has unittest but no pytest. Pytest checks use the existing python_env interpreter; no dependencies installed."
+}
