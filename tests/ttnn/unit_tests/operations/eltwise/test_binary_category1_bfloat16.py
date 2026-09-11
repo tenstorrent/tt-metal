@@ -24,9 +24,9 @@ Category 1: basic_binary_arithmetic
 """
 
 
-def _pairwise_inputs(include_spl_values=False):
+def _pairwise_inputs(include_spl_values=False, include_zero=False):
     """Outer product of the 2048-value binary grid: A[i, j] = v[i], B[i, j] = v[j]."""
-    values = generate_bfloat16_binary_grid(include_spl_values=include_spl_values)
+    values = generate_bfloat16_binary_grid(include_spl_values=include_spl_values, include_zero=include_zero)
     a, b = torch.meshgrid(values, values, indexing="ij")
     return a.contiguous(), b.contiguous()
 
@@ -38,7 +38,7 @@ def test_addlike_ops(device, ttnn_op, fast_and_approximate_mode, ulp_threshold):
     Values selected from the range between 3.3895e+38 and -3.3895e+38
     EX: FPU overflow: 3.3895 + 6.6201 = 1.0009e+39 → torch → max; FPU → +inf
     """
-    input_a, input_b = _pairwise_inputs()
+    input_a, input_b = _pairwise_inputs(include_zero=True)
 
     tt_a = to_tt_tensor(input_a, device)
     tt_b = to_tt_tensor(input_b, device)
@@ -86,7 +86,7 @@ def test_mul(device, fast_and_approximate_mode, ulp_threshold):
     (e.g. 2.342e-38 × 16.125 → 8 ULP). Overflow-to-zero: golden ±inf vs
     device +0 rewritten to match (2^{18} × 2^{127}).
     """
-    input_a, input_b = _pairwise_inputs()
+    input_a, input_b = _pairwise_inputs(include_zero=True)
     ttnn_op = ttnn.mul
 
     tt_a = to_tt_tensor(input_a, device)
@@ -142,9 +142,7 @@ def test_div(device, fast_and_approximate_mode, ulp_threshold):
     (recip flush / overflow-to-zero) is rewritten, as is FPU ±max vs
     torch ±inf when ea−eb = 128 (7.96875 / 2.342e-38).
     """
-    input_a, input_b = _pairwise_inputs()
-    # Replace ±0 to avoid dividing by zero.
-    input_b = torch.where(input_b == 0, torch.ones_like(input_b), input_b)
+    input_a, input_b = _pairwise_inputs(include_zero=False)
     ttnn_op = ttnn.divide
 
     tt_a = to_tt_tensor(input_a, device)

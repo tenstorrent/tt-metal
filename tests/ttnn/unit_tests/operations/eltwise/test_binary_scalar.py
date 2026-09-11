@@ -6,6 +6,7 @@ import torch
 import pytest
 import ttnn
 import random
+from tests.ttnn.utils_for_testing import assert_with_ulp
 
 pytestmark = pytest.mark.use_module_device
 

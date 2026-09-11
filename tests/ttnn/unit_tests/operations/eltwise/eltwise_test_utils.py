@@ -117,7 +117,7 @@ def _bf16_binary_grid_extra_bits():
     return extra
 
 
-def generate_bfloat16_binary_grid(dtype=torch.bfloat16, include_spl_values=False):
+def generate_bfloat16_binary_grid(dtype=torch.bfloat16, include_spl_values=False, include_zero=False):
     """
     Generate a stratified bfloat16 grid for pairwise (binary) op testing.
 
@@ -134,12 +134,15 @@ def generate_bfloat16_binary_grid(dtype=torch.bfloat16, include_spl_values=False
     The remaining 16 slots (2032 → 2048) are 1.5 × 2^e at e ∈ [-3, 4], both
     signs. When include_spl_values is True, the last 5 of those extras are
     replaced by +0, -0, +inf, -inf, and one canonical qNaN, keeping the length
-    at exactly 2048 unique encodings.
+    at exactly 2048 unique encodings. When include_zero is True (and
+    include_spl_values is False), only +0 replaces one fill value.
 
     Args:
         dtype (torch.dtype, optional): Target dtype. Defaults to torch.bfloat16.
         include_spl_values (bool, optional): If True, replace 5 fill values with
             ±0, ±inf, and one NaN. Defaults to False.
+        include_zero (bool, optional): If True and include_spl_values is False,
+            replace one fill value with +0. Defaults to False.
 
     Returns:
         torch.Tensor: 1D tensor of length 2048, all unique bit patterns.
@@ -154,6 +157,9 @@ def generate_bfloat16_binary_grid(dtype=torch.bfloat16, include_spl_values=False
     if include_spl_values:
         bits.extend(extra[: len(extra) - len(_BF16_SPECIAL_BITS)])
         bits.extend(_BF16_SPECIAL_BITS)
+    elif include_zero:
+        bits.extend(extra[:-1])
+        bits.append(0x0000)  # +0
     else:
         bits.extend(extra)
 
