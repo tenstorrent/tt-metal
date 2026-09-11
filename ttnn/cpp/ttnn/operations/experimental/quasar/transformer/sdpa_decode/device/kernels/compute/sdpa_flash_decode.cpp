@@ -114,8 +114,15 @@ void kernel_main() {
     constexpr auto dfb_kt = dfb::kt;  // K^T staging (Quasar: transpose K here, then matmul transpose=false)
     constexpr auto dfb_out_im = dfb::out_im;
     constexpr auto dfb_out_accumulate_im = dfb::out_accumulate_im;
-    constexpr auto dfb_max_1 = dfb::max_1;
-    constexpr auto dfb_max_2 = dfb::max_2;
+    // Merged max buffer (depth 2*Sq_chunk_t): max_1/max_2 collapsed into one DFB to free an intra-Tensix
+    // tile-counter slot (Quasar caps at 8). cur_max and prev_max alias this one buffer. Within a chunk the
+    // "prev" max block sits at the ring front [0, Sq_chunk_t) and reduce_c / correction_block / max_block
+    // append the freshly computed "cur" block behind it [Sq_chunk_t, 2*Sq_chunk_t) via reserve_back, and
+    // read prev at the front — so those helpers need no change. The helpers that READ cur
+    // (sub_exp_block_bcast_cols_inplace, sub_exp_block) take a cur-offset arg (Sq_chunk_t, or 0 on the very
+    // first chunk where cur lands at the front of the empty ring). The move_block(cur->prev) at each
+    // chunk/round end becomes a self-rotation on this single buffer that carries the running max forward.
+    constexpr auto dfb_max = dfb::max;
     constexpr auto dfb_sum_1 = dfb::sum_1;
     constexpr auto dfb_sum_2 = dfb::sum_2;
     constexpr auto dfb_exp_max_diff = dfb::exp_max_diff;
@@ -327,17 +334,19 @@ void kernel_main() {
     // NOTE: Using VectorMode::RC for 16x32 tiles will be correct accuracy, just slower due to unnecessary math
     constexpr VectorMode vector_mode = use_half_tile ? VectorMode::R : VectorMode::RC;
 
-    // We set up Ping Pong intermediate buffers between loops
-    uint32_t dfb_cur_max = dfb_max_1;
-    uint32_t dfb_prev_max = dfb_max_2;
+    // We set up Ping Pong intermediate buffers between loops.
+    // max is a single merged buffer: cur and prev alias the same DFB and are distinguished by ring
+    // offset (prev at front, cur behind). The offset for cur READS is passed per-call below.
+    uint32_t dfb_cur_max = dfb_max;
+    uint32_t dfb_prev_max = dfb_max;
     uint32_t dfb_cur_sum = dfb_sum_1;
     uint32_t dfb_prev_sum = dfb_sum_2;
 
     // Loop through all heads assigned to core
     for (uint32_t cur_head_work = 0; cur_head_work < num_heads_per_core; ++cur_head_work) {
         // Reset ping-pong buffer assignments at the start of each head iteration
-        dfb_cur_max = dfb_max_1;
-        dfb_prev_max = dfb_max_2;
+        dfb_cur_max = dfb_max;
+        dfb_prev_max = dfb_max;
         dfb_cur_sum = dfb_sum_1;
         dfb_prev_sum = dfb_sum_2;
 
@@ -501,8 +510,12 @@ void kernel_main() {
             /**
              * sub_exp performs `QK = exp((QK - cur_max) * scale)`
              */
+            // Merged-max cur offset: on the first chunk reduce_c wrote cur into the empty buffer so it
+            // sits at the front (offset 0); on later chunks cur is appended behind the prev block, so
+            // reads must skip Sq_chunk_t (== statistics_tiles) tiles.
+            const uint32_t cur_max_offset = (k_chunk == k_chunk_start) ? 0 : Sq_chunk_t;
             sub_exp_block_bcast_cols_inplace<dfb_qk_im, Sq_chunk_t, scale_fp32, true, false, vector_mode>(
-                dfb_cur_max, dfb_cur_sum, Sk_chunk_t_dynamic);
+                dfb_cur_max, dfb_cur_sum, Sk_chunk_t_dynamic, cur_max_offset);
             DataflowBuffer(dfb_qk_im).wait_front(qk_chunk_tiles_dynamic);
 
             // Reconfig register DF
@@ -548,7 +561,11 @@ void kernel_main() {
                 pack_reconfig_data_format(dfb_exp_max_diff);
 
                 /* EXP_MAX_DIFF = exp(PREV_MAX - CUR_MAX) */
-                sub_exp_block<scale_fp32>(dfb_prev_max, dfb_cur_max, dfb_exp_max_diff, Sq_chunk_t);
+                // Merged max: prev is at the ring front (offset 0), cur is behind it (offset Sq_chunk_t),
+                // so cur is read with in1_offset = Sq_chunk_t. The pop_front drops the consumed prev block;
+                // the move_block(cur->prev) self-rotation at the chunk end then re-establishes the running
+                // max as the single front block for the next chunk.
+                sub_exp_block<scale_fp32>(dfb_prev_max, dfb_cur_max, dfb_exp_max_diff, Sq_chunk_t, Sq_chunk_t);
                 DataflowBuffer(dfb_prev_max).pop_front(Sq_chunk_t);
 
                 /* PREV_SUM *= EXP_MAX_DIFF */
@@ -571,7 +588,12 @@ void kernel_main() {
                 add_block_inplace<true>(dfb_out_accumulate_im, dfb_out_im, out_chunk_tiles);
             }
 
-            // More local chunks to process - move intermediate sum and max values to ping-pong buffers
+            // More local chunks to process - move intermediate sum and max values to ping-pong buffers.
+            // Merged max: cur_max and prev_max are the same DFB, so this move_block is a self-rotation
+            // (copy the just-computed cur block through DST to the ring back, then pop the front) that
+            // leaves the running max as the single front block for the next chunk. Keeping the move (vs
+            // relying on the correction-branch pop alone) is required for correctness: the copy-through-
+            // DST is what the next chunk's reduce_c / the tree correction_block read back as prev.
             reconfig_data_format(dfb_cur_max, dfb_cur_max);
             pack_reconfig_data_format(dfb_prev_max);
 
@@ -651,7 +673,7 @@ void kernel_main() {
                     add_block_inplace<true>(dfb_out_accumulate_im, dfb_out_accumulate_im_2, out_chunk_tiles);
 
                     // Update prev buffers for next round
-                    // PREV_MAX <- CUR_MAX
+                    // PREV_MAX <- CUR_MAX (merged-max self-rotation, see the flash-loop note above)
                     // PREV_SUM <- CUR_SUM
                     DataflowBuffer(dfb_prev_max).pop_front(Sq_chunk_t);
                     DataflowBuffer(dfb_m_in).pop_front(Sq_chunk_t);
@@ -678,17 +700,19 @@ void kernel_main() {
                 // Use appropriate max buffer based on tree reduction
                 uint32_t max_dfb_for_sink = dfb_prev_max;
 
-                // m_new
+                // m_new: max_block appends cur (m_new) behind the prev (max_dfb_for_sink) block in the
+                // merged max ring, so the two exp reads below take cur at offset Sq_chunk_t.
                 max_block<vector_mode>(dfb_attention_sink, max_dfb_for_sink, dfb_cur_max, Sq_chunk_t);
 
                 // exp(m - m_new)
-                sub_exp_block<scale_fp32>(max_dfb_for_sink, dfb_cur_max, dfb_exp_max_diff, Sq_chunk_t);
+                sub_exp_block<scale_fp32>(max_dfb_for_sink, dfb_cur_max, dfb_exp_max_diff, Sq_chunk_t, Sq_chunk_t);
 
                 // l -> l * exp(m - m_new)
                 mul_block_inplace(dfb_prev_sum, dfb_exp_max_diff, Sq_chunk_t);
 
                 // exp(sink - m_new)
-                sub_exp_block<scale_fp32>(dfb_attention_sink, dfb_cur_max, dfb_exp_max_diff_2, Sq_chunk_t);
+                sub_exp_block<scale_fp32>(dfb_attention_sink, dfb_cur_max, dfb_exp_max_diff_2, Sq_chunk_t, Sq_chunk_t);
+                // Pop the front block (prev/max_dfb_for_sink); the trailing pop below drains cur.
                 DataflowBuffer(dfb_cur_max).pop_front(Sq_chunk_t);
 
                 // l -> l + exp(sink - m_new)
