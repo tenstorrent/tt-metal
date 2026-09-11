@@ -145,8 +145,14 @@ class LoopContext:
             )
         append_jsonl(self._agent_calls, row)
         self.state["cost_usd"] = round(self.state.get("cost_usd", 0.0) + (usage.get("cost_usd") or 0.0), 6)
-        self.state["tokens_in"] = self.state.get("tokens_in", 0) + (usage.get("tokens_in") or 0)
-        self.state["tokens_out"] = self.state.get("tokens_out", 0) + (usage.get("tokens_out") or 0)
+        for field in (
+            "tokens_in",
+            "tokens_input_uncached",
+            "tokens_cache_creation",
+            "tokens_cached",
+            "tokens_out",
+        ):
+            self.state[field] = self.state.get(field, 0) + (usage.get(field) or 0)
 
     def log_event(self, stage: str, status: str, detail: str = "") -> None:
         write_event(

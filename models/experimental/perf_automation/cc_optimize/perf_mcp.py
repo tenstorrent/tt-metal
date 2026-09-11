@@ -2936,10 +2936,16 @@ def _run_full_pipeline_ms():
     # The test already declares the unit (TT_PERF_ISL_TOKENS / TT_PERF_OSL_TOKENS, both 128). Honour it:
     # take OSL from the declared value so the measured unit and the reported unit are the same thing.
     # PERF_MCP_FULLPIPE_TOKENS still overrides for a cheap steering measurement.
-    env["TT_PERF_OSL_TOKENS"] = os.environ.get("PERF_MCP_FULLPIPE_TOKENS") or os.environ.get(
-        "TT_PERF_OSL_TOKENS", "128"
-    )
-    env.setdefault("TT_PERF_TRACE", "1")
+    _verdict_osl = os.environ.get("PERF_MCP_FULLPIPE_TOKENS") or os.environ.get("TT_PERF_OSL_TOKENS", "128")
+    env["TT_PERF_OSL_TOKENS"] = _verdict_osl
+    # This gate's contract is trace+1CQ. A caller's earlier eager profiling command can leave
+    # TT_PERF_TRACE=0 in a persistent shell; setdefault preserved that unrelated value and silently
+    # changed the production verdict to eager_wall.
+    env["TT_PERF_TRACE"] = "1"
+    # Name the role so the gate can REFUSE a configuration that cannot be a verdict (capped depth,
+    # eager dispatch, or a decode too short to be a rate) instead of silently measuring it. Only this
+    # path is a verdict: _full_depth_op_probe runs the same node at OSL=1 on purpose.
+    env["PERF_GATE_ROLE"] = "verdict"
     # TRACE EVERY STAGE THE MODEL DECLARES, not the one an LLM happens to have. This set a single
     # TT_PERF_PREFILL_TRACE for every model measured, so a pipeline whose stages are encode/vocode
     # had no way to be told to trace them -- the flag names the stage, and only one stage had a name
@@ -3019,9 +3025,13 @@ def _run_full_pipeline_ms():
     # moved -- until someone sets the override for a cheap steering measurement, and it is silently
     # ignored. Re-asserted rather than exempted from the strip: the profiling window must come off,
     # and the gate's own value must go back on, and those are two different statements.
-    _gate_tokens = os.environ.get("PERF_MCP_FULLPIPE_TOKENS")
-    if _gate_tokens:
-        env[_tokens_env()] = _gate_tokens
+    # THE DECLARED UNIT, NOT ONLY THE OVERRIDE. The value set above was the declared OSL (256 here),
+    # but PERF_MCP_PROFILE_ENV -- the depth bridge's {TT_PERF_LAYERS: 2, TT_PERF_OSL_TOKENS: 2}
+    # profiling window -- is merged into env AFTER it, so the verdict inherited the 2-token
+    # profiling window whenever no override was set. 2026-09-10: the BEFORE bookend ran OSL=2 (one
+    # decode step, 31.90 "ms/token") and, once the gate refused that configuration, crashed. Put the
+    # verdict's own unit back unconditionally; the override still wins when it is set.
+    env[_tokens_env()] = os.environ.get("PERF_MCP_FULLPIPE_TOKENS") or _verdict_osl
     # -p depth_guard: this gate asks for ALL layers by removing the cap, and a perf test can fill
     # it back in at import via setdefault. The guard drops it again before the test body builds.
     cmd = [sys.executable, "-m", "pytest", "-p", _DEPTH_GUARD, "-o", "timeout=0", "-s", node]
@@ -4773,6 +4783,9 @@ def _full_depth_op_probe():
     _set_depth(env, None)  # ALL layers: cap REMOVED, never sent as 0 (see agent/layer_depth.py)
     env["TT_PERF_OSL_TOKENS"] = "1"
     env.pop("TT_METAL_DEVICE_PROFILER", None)
+    # One token is deliberate here -- this probe reads op SIGNATURES, not a rate -- so it must not be
+    # held to the verdict path's sustained-decode requirement.
+    env["PERF_GATE_ROLE"] = "op_probe"
     cmd = [sys.executable, str(Path(__file__).parent / "_op_sig_probe.py"), node]
     if case:
         cmd.append(case)
@@ -5213,7 +5226,14 @@ def git_revert(sha: str) -> dict:
     # tracked files are restored above; files the edit CREATED are not, so remove those too
     _removed = []
     try:
-        _removed = gitio.remove_new_untracked(repo, _read_untracked_baseline(), pathspec)
+        # NO SNAPSHOT IS NOT AN EMPTY SNAPSHOT. _read_untracked_baseline() returns set() both when
+        # git_head recorded "nothing was untracked" and when it was never called this run. With the
+        # second meaning, every pre-existing untracked file under the model dir -- the operator's
+        # own gate tests, RUN_REPORT.md -- reads as "created by the edit" and is deleted here.
+        if _untracked_baseline_path().is_file():
+            _removed = gitio.remove_new_untracked(repo, _read_untracked_baseline(), pathspec)
+        else:
+            _write_untracked_baseline()
     except Exception:  # noqa: BLE001
         pass
     _discard_fullpipe_pending()

@@ -638,7 +638,14 @@ def before_loop(
 
     stages.start("discover", "Mapping the model's pipelines & building perf tests")
     agent_calls_path = run.dir / "agent_calls.jsonl"
-    agent_totals = {"tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0}
+    agent_totals = {
+        "tokens_in": 0,
+        "tokens_input_uncached": 0,
+        "tokens_cache_creation": 0,
+        "tokens_cached": 0,
+        "tokens_out": 0,
+        "cost_usd": 0.0,
+    }
 
     def record_agent_call(stage: str, role: str, model: str, usage: dict | None) -> str:
         """Append one row per query(); accumulate totals; return event suffix."""
@@ -656,7 +663,7 @@ def before_loop(
             seq=next_agent_call_seq(agent_calls_path),
         )
         append_jsonl(agent_calls_path, row)
-        for k in ("tokens_in", "tokens_out"):
+        for k in ("tokens_in", "tokens_input_uncached", "tokens_cache_creation", "tokens_cached", "tokens_out"):
             agent_totals[k] += usage.get(k) or 0
         agent_totals["cost_usd"] += usage.get("cost_usd") or 0.0
         if not usage:
@@ -699,7 +706,40 @@ def before_loop(
             )
     if pathmap is None:
         raise _last_exc if _last_exc else RuntimeError("discover produced no pathmap")
-    if pcc_abs is not None:
+    explicit_perf = config.get("perf_test")
+    if pcc_abs is not None and explicit_perf:
+        # An operator-supplied perf test is already the measurement contract. Do not spend a Claude
+        # call generating a second test from the PCC wrapper, then validate/profile that different
+        # workload. Besides wasting a device build, the generated test can drop setup that lives in
+        # the supplied wrapper (for example a fresh TT_CACHE_PATH used to avoid a broken warm-cache
+        # loader). Keep one perf node in both the top-level pathmap and the per-pipeline list so
+        # before_loop and optimize_pipeline measure the same code.
+        _perf_file, _, _perf_case = str(explicit_perf).partition("::")
+        _perf_abs = (Path(_perf_file) if os.path.isabs(_perf_file) else tt_root / _perf_file).resolve()
+        if not _perf_abs.is_file():
+            raise RuntimeError(f"--perf-test file {_perf_file!r} not found (looked under {tt_root})")
+        _perf_rel_model = os.path.relpath(_perf_abs, model_root)
+        _perf_node_model = _perf_rel_model + (f"::{_perf_case}" if _perf_case else "")
+        pathmap["perf_test"] = {
+            "path": _perf_rel_model,
+            "case": _perf_case,
+            "note": "operator-supplied --perf-test",
+        }
+        pathmap["perf_tests"] = [pathmap["perf_test"]]
+        pathmap["pipelines"] = [
+            {
+                "task": "main",
+                "perf_test": _perf_node_model,
+                "pcc_test": pcc_override["path"],
+            }
+        ]
+        pathmap["is_multimodal"] = False
+        print(
+            f"      supplied perf test -> {_perf_node_model} (skipping PCC-derived generation)",
+            file=sys.stderr,
+            flush=True,
+        )
+    elif pcc_abs is not None:
         from .perf_test_gen import generate_perf_test
 
         _task = "main"
@@ -1211,6 +1251,9 @@ def before_loop(
             "max_iter": config.get("max_iter"),
             "cost_usd": round(agent_totals["cost_usd"], 6),
             "tokens_in": agent_totals["tokens_in"],
+            "tokens_input_uncached": agent_totals["tokens_input_uncached"],
+            "tokens_cache_creation": agent_totals["tokens_cache_creation"],
+            "tokens_cached": agent_totals["tokens_cached"],
             "tokens_out": agent_totals["tokens_out"],
             "git_sha_clean": None,
             "candidates": [],

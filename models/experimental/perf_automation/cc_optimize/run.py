@@ -192,6 +192,29 @@ def discover(
 ) -> dict | None:
     """Run before_loop (discovery + per-pipeline perf-test auto-gen) and return the manifest dict."""
     perf_dir = repo_root / PERF_DIR
+    reuse_manifest = os.environ.get("PERF_MCP_REUSE_DISCOVERY_MANIFEST", "").strip()
+    if reuse_manifest:
+        reuse_path = Path(reuse_manifest).resolve()
+        try:
+            reused = json.loads(reuse_path.read_text())
+            config = reused.get("config") or {}
+            if Path(config.get("model_root") or "").resolve() != Path(demo_dir).resolve():
+                raise ValueError("model root differs")
+            if str(config.get("perf_test") or "") != str(perf_test or ""):
+                raise ValueError("performance gate differs")
+            if str(config.get("pcc_test") or "") != str(pcc_test or ""):
+                raise ValueError("correctness gate differs")
+            profile = json.loads((reuse_path.parent / "profiles" / "baseline_profile.json").read_text())
+            if not _perf_mcp()._is_credible_profile(profile):
+                raise ValueError("stored Tracy baseline is not credible")
+        except Exception as exc:  # noqa: BLE001
+            print(f"  [optimize/cc] refusing discovery reuse: {exc}", flush=True)
+            return None
+        print(
+            f"  [optimize/cc] reusing validated discovery + Tracy baseline from {reuse_path.parent.name}",
+            flush=True,
+        )
+        return reused
     cmd = [
         _python_bin(repo_root),
         "-m",
@@ -246,7 +269,33 @@ def discover(
                 flush=True,
             )
             return None
-        print("  [optimize/cc] discovery exited %s but the manifest is complete; continuing." % rc, flush=True)
+        # A manifest describes what to run; it is not a measured baseline. Continuing after Tracy
+        # failed used one full Claude round with no operation timings and no valid comparison point.
+        # Only tolerate a late discovery error when this same run already persisted a credible
+        # baseline profile.
+        _profile = {}
+        try:
+            _profile = json.loads((mani.parent / "profiles" / "baseline_profile.json").read_text())
+        except Exception:  # noqa: BLE001
+            _profile = {}
+        try:
+            # Use the same credibility predicate that rejected the baseline inside before_loop.
+            # A separate weaker spelling here accepted 0.085 ms of datamove-only setup as a model
+            # profile and overrode the rejection.
+            _credible = bool(_perf_mcp()._is_credible_profile(_profile))
+        except Exception:  # noqa: BLE001
+            _credible = False
+        if not _credible:
+            print(
+                "  [optimize/cc] discovery exited %s before producing a credible Tracy baseline — "
+                "refusing to spend an optimization-agent round." % rc,
+                flush=True,
+            )
+            return None
+        print(
+            "  [optimize/cc] discovery exited %s after persisting a credible baseline; continuing." % rc,
+            flush=True,
+        )
     return json.loads(mani.read_text())
 
 
@@ -255,16 +304,27 @@ def pipelines_from_manifest(manifest: dict, model_rel: str) -> list[dict]:
     'main' pipeline from the top-level perf_test. Paths are made model-root-relative for the mcp env."""
     pm = manifest.get("pathmap", {})
     resolved_case = (manifest.get("perf_test_resolved") or {}).get("case")
+    resolved_node = str((manifest.get("perf_test_resolved") or {}).get("path") or "")
+    resolved_file, _, resolved_node_case = resolved_node.partition("::")
+    # Pytest rewrites an external absolute path to a node id relative to its own rootdir. Passing that
+    # rewritten id to a later subprocess whose cwd is tt-metal points at a different file. Preserve
+    # the operator-supplied absolute file for the single explicitly resolved pipeline.
+    external_perf_file = resolved_file if Path(resolved_file).is_absolute() else ""
+    source_pipelines = pm.get("pipelines", []) or []
     out = []
-    for p in pm.get("pipelines", []) or []:
+    for p in source_pipelines:
         if not p.get("perf_test"):
             continue
         out.append(
             {
                 "task": p.get("task", "main"),
-                "perf_test": f"{model_rel}/{p['perf_test']}",
+                "perf_test": (
+                    external_perf_file
+                    if external_perf_file and len(source_pipelines) == 1
+                    else f"{model_rel}/{p['perf_test']}"
+                ),
                 "pcc_test": f"{model_rel}/{p['pcc_test']}" if p.get("pcc_test") else "",
-                "case": p.get("case") or resolved_case,
+                "case": p.get("case") or resolved_case or resolved_node_case or None,
             }
         )
     if not out and pm.get("perf_test", {}).get("path"):
@@ -405,6 +465,33 @@ def _mcp_config(repo_root: Path, manifest_path: str, pipe: dict, devices: str, k
     ):
         _v = os.environ.get(_k)
         if _v:
+            env[_k] = _v
+    # THE SERVER RUNS THE MODEL, SO IT NEEDS WHAT THE MODEL READS. The Claude CLI spawns a stdio MCP
+    # server with a six-variable allowlist (HOME, LOGNAME, PATH, SHELL, TERM, USER) plus this dict --
+    # not its own environment. Every device step before the loop runs in the orchestrator, which
+    # inherits the operator's shell, so a model whose loader reads HF_MODEL / MESH_DEVICE profiled
+    # perfectly at the baseline and then failed on the first check_pcc inside the round. The same
+    # split silently changed the measurement unit: TT_PERF_OSL_TOKENS=256 reached the BEFORE bookend
+    # and the in-round verdict fell back to its 128 default. Forward the model-facing names the
+    # operator exported, and every PERF_MCP_* knob, without overriding anything set above.
+    for _k in (
+        "HF_MODEL",
+        "HF_HOME",
+        "HF_TOKEN",
+        "HF_HUB_OFFLINE",
+        "LLAMA_DIR",
+        "MESH_DEVICE",
+        "TT_METAL_CACHE",
+        "TT_CACHE_PATH",
+        "TT_PERF_OSL_TOKENS",
+        "TT_PERF_ISL_TOKENS",
+        "TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT",
+    ):
+        _v = os.environ.get(_k)
+        if _v and _k not in env:
+            env[_k] = _v
+    for _k, _v in os.environ.items():
+        if _k.startswith("PERF_MCP_") and _v and _k not in env:
             env[_k] = _v
     return {
         "mcpServers": {
@@ -4357,8 +4444,72 @@ def watchdog_decide(ev: dict, agent=_watchdog_ask_agent) -> str:
     return "wait"
 
 
+def _record_round_agent_usage(agent_log: str, start_offset: int, agent_calls_path, iteration: int, task: str) -> None:
+    """Append the final Claude stream-json usage record for one optimization round."""
+    if not agent_calls_path:
+        return
+    try:
+        with open(agent_log, encoding="utf-8", errors="ignore") as fh:
+            fh.seek(start_offset)
+            result = None
+            for line in fh:
+                try:
+                    event = json.loads(line)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+                if isinstance(event, dict) and event.get("type") == "result":
+                    result = event
+        if not result:
+            return
+        raw = result.get("usage") or {}
+        tokens_in = sum(
+            int(raw.get(key) or 0)
+            for key in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
+        )
+        usage = {
+            "tokens_in": tokens_in or None,
+            "tokens_input_uncached": raw.get("input_tokens"),
+            "tokens_cache_creation": raw.get("cache_creation_input_tokens"),
+            "tokens_cached": raw.get("cache_read_input_tokens"),
+            "tokens_out": raw.get("output_tokens"),
+            "cost_usd": result.get("total_cost_usd"),
+            "latency_s": round(float(result.get("duration_ms") or 0) / 1000.0, 2),
+        }
+        from agent.events import append_jsonl, make_agent_call_row, next_agent_call_seq
+
+        path = Path(agent_calls_path)
+        append_jsonl(
+            path,
+            make_agent_call_row(
+                run_id=path.parent.name,
+                phase="optimize",
+                iteration=iteration,
+                stage="agent_round",
+                role=task,
+                model="claude-cli",
+                usage=usage,
+                seq=next_agent_call_seq(path),
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 -- telemetry must never fail the optimization
+        print(f"  [optimize/cc] WARN could not record Claude usage: {str(exc)[:160]}", flush=True)
+
+
+def _operator_stop(signum, frame):
+    """SIGTERM handler for the round loop: unwind (so `finally` runs) with the conventional 128+N exit."""
+    raise SystemExit(128 + int(signum))
+
+
 def _run_round_with_watchdog(
-    cmd: list, repo_root: Path, devices: str, kernel_log: str, stall_sec: int, agent_env: dict | None = None
+    cmd: list,
+    repo_root: Path,
+    devices: str,
+    kernel_log: str,
+    stall_sec: int,
+    agent_env: dict | None = None,
+    agent_calls_path=None,
+    iteration: int = 1,
+    task: str = "main",
 ) -> bool:
     """Run one agent round under a forward-progress watchdog. If neither a commit nor a kernel
     attempt is recorded for stall_sec while the round is alive, treat it as a device wedge: SIGKILL the
@@ -4366,6 +4517,10 @@ def _run_round_with_watchdog(
     if the round was killed as wedged, False if it exited on its own. The NEXT round re-spawns a fresh
     mcp server + runs on the reset mesh, so a stale cached-mesh handle can't persist across the wedge."""
     agent_log = str(kernel_log) + ".agent.log"
+    try:
+        _agent_log_start = os.path.getsize(agent_log)
+    except OSError:
+        _agent_log_start = 0
     try:
         _lf = open(agent_log, "a", buffering=1, errors="ignore")
     except Exception:  # noqa: BLE001
@@ -4389,6 +4544,16 @@ def _run_round_with_watchdog(
         _pgid = os.getpgid(proc.pid)
     except Exception:  # noqa: BLE001
         _pgid = None
+    # SIGTERM MUST REACH THE `finally` BELOW. Python's default action for it is to die on the spot,
+    # running no cleanup at all, so a `timeout` wrapper, a `kill <pid>` or a closing terminal that
+    # sends TERM left the round's process group alive and unrecorded. Raising SystemExit instead
+    # unwinds through the cleanup that kills the group. Restored on the way out; a handler that
+    # cannot be installed (not the main thread) leaves the old behaviour for that round.
+    _prev_term = None
+    try:
+        _prev_term = signal.signal(signal.SIGTERM, _operator_stop)
+    except (ValueError, OSError, TypeError):
+        _prev_term = None
 
     def _liveness():
         # A slow-but-WORKING round advances one of these even before it commits: the agent transcript
@@ -4423,12 +4588,14 @@ def _run_round_with_watchdog(
     last_real = _now0  # last REAL progress (commit / recorded kernel attempt)
     _reprieves = [0]  # how many times the watchdog has re-armed this round; see below
     _stuck_since = [None]  # when real progress was last seen; NOT rewound by a reprieve
+    _exited = False  # the agent ended the round itself (vs. this watchdog, vs. the operator)
     _t0 = _now0
     wedge_reason = ""
     try:
         while True:
             try:
                 proc.wait(timeout=60)
+                _exited = True
                 return False
             except subprocess.TimeoutExpired:
                 _now = time.monotonic()
@@ -4508,15 +4675,56 @@ def _run_round_with_watchdog(
         # BUG 4 (#3): feed the real round duration back so later budgets scale off OBSERVED
         # cost instead of a baseline-derived proxy. Without this the adaptive path never
         # learns and every timer stays on its estimate.
+        #
+        # A ROUND THE OPERATOR STOPPED MEASURED NOTHING. This recorded every way out of the loop,
+        # including SIGTERM/Ctrl-C on the whole run, which reaches this `finally` as an exception with
+        # neither `_exited` nor `wedge_reason` set. Such a round is shorter than a cycle by however
+        # long the operator waited, and it became the cycle's own history: on 2026-09-10 a run
+        # stopped at 273 s (its first measurement still in flight) set the next run's round cap at
+        # 2 x 273 = 546 s -- less than this model's PCC gate alone -- and its first healthy round
+        # was put to the watchdog at nine minutes. A round the agent ended, or this watchdog killed,
+        # is still recorded: the timer must keep learning from the kills it causes itself.
         try:
-            record_observed(repo_root, "round", time.monotonic() - _now0)
+            if _exited or wedge_reason:
+                record_observed(repo_root, "round", time.monotonic() - _now0)
         except Exception:  # noqa: BLE001
             pass
+        # AN OPERATOR STOP MUST TAKE THE ROUND WITH IT. The agent runs in its own session
+        # (start_new_session=True) so the watchdog can SIGKILL the whole group -- which also means a
+        # SIGTERM or Ctrl-C delivered to THIS process never reaches it. The wedge path below kills the
+        # group; this path, the only other way out while the child is alive, did not. Measured on
+        # 2026-09-11: a 3-hour `timeout` wrapper ended the driver at 01:53Z and the Claude session it
+        # had launched ran on alone until 02:38Z, holding the mesh through its MCP server, spending
+        # $93.69 that no agent_calls record ever saw, with no driver left to launch the next round or
+        # to write the run's ending. A stopped run should stop.
+        if not _exited and not wedge_reason and proc.poll() is None:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except Exception:  # noqa: BLE001
+                try:
+                    proc.kill()
+                except Exception:  # noqa: BLE001
+                    pass
+            try:
+                proc.wait(timeout=30)
+            except Exception:  # noqa: BLE001
+                pass
+            print(
+                "  [optimize/cc] run stopped by the operator: killed the round's agent process group so the "
+                "session does not keep running (and paying) without a driver.",
+                flush=True,
+            )
+        if _prev_term is not None:
+            try:
+                signal.signal(signal.SIGTERM, _prev_term)
+            except (ValueError, OSError, TypeError):
+                pass
         try:
             if _lf not in (None, subprocess.DEVNULL):
                 _lf.close()
         except Exception:  # noqa: BLE001
             pass
+        _record_round_agent_usage(agent_log, _agent_log_start, agent_calls_path, iteration, task)
     _record_wedge_to_log(kernel_log, f"wedged: round killed ({wedge_reason})")
     try:
         os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
@@ -5407,7 +5615,15 @@ def optimize_pipeline(
                 "  [optimize/cc] round %d starts with stacks still short of their band: %s" % (rounds + 1, st["short"])
             )
         wedged = _run_round_with_watchdog(
-            round_cmd, repo_root, devices, kernel_log, stall_sec, agent_env=_round_launch.env
+            round_cmd,
+            repo_root,
+            devices,
+            kernel_log,
+            stall_sec,
+            agent_env=_round_launch.env,
+            agent_calls_path=Path(manifest_path).parent / "agent_calls.jsonl",
+            iteration=rounds + 1,
+            task=task,
         )
         # A ROUND THAT WAS NEVER LET IN IS NOT A ROUND THAT FOUND NOTHING. A refused credential
         # produces a round that runs, writes a transcript and exits cleanly having done nothing,
@@ -6613,6 +6829,41 @@ def _stamp_model_root(demo_dir) -> str:
     return os.environ["PERF_MCP_MODEL_ROOT"]
 
 
+def _preflight_explicit_gate(repo_root: Path, node, *, performance: bool) -> tuple[bool, str]:
+    """Validate an operator-supplied pytest gate before device work or an agent call."""
+    if not node:
+        return True, ""
+    file_name, _, case = str(node).partition("::")
+    path = Path(file_name)
+    if not path.is_absolute():
+        path = repo_root / path
+    path = path.resolve()
+    if not path.is_file():
+        return False, f"gate file does not exist: {path}"
+    if performance:
+        source = path.read_text(errors="ignore")
+        if "TRACE_PER_TOKEN_MS=" not in source and "FORWARD_WALL_MS=" not in source:
+            return False, "performance gate emits neither TRACE_PER_TOKEN_MS nor FORWARD_WALL_MS"
+        if "TT_PERF_LAYERS" not in source:
+            return False, "performance gate has no TT_PERF_LAYERS profiling-depth control"
+    collect_node = str(path) + (f"::{case}" if case else "")
+    try:
+        proc = subprocess.run(
+            [_python_bin(repo_root), "-m", "pytest", "-o", "addopts=", collect_node, "--collect-only", "-q"],
+            cwd=str(repo_root),
+            env=cc_env(repo_root, "all"),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return False, f"pytest collection failed to start: {exc}"
+    if proc.returncode != 0 or "::" not in (proc.stdout or ""):
+        tail = "\n".join(((proc.stdout or "") + "\n" + (proc.stderr or "")).splitlines()[-8:])
+        return False, f"pytest collects no matching gate\n{tail}"
+    return True, ""
+
+
 def run_cc_optimize(
     demo_dir: Path,
     repo_root: Path,
@@ -6643,6 +6894,14 @@ def run_cc_optimize(
     if not _preflight_tool(repo_root):
         print("  [optimize/cc] refusing to start against a tool whose own tests fail.", flush=True)
         raise SystemExit(EXIT_REFUSED)
+    for _node, _performance, _label in (
+        (perf_test, True, "performance"),
+        (pcc_test, False, "correctness"),
+    ):
+        _ok, _why = _preflight_explicit_gate(repo_root, _node, performance=_performance)
+        if not _ok:
+            print(f"  [optimize/cc] refusing invalid explicit {_label} gate: {_why}", flush=True)
+            raise SystemExit(EXIT_REFUSED)
     # ONCE, AT THE START, AND NOWHERE ELSE. The 65C gate used to run before EVERY device process,
     # which meant waiting on a board that idles in the sixties over and over for a threshold that
     # barely separates clamped runs from clean ones (its own data: medians 72.5C vs 70.8C, ranges

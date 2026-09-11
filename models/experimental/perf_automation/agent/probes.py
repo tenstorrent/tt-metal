@@ -294,11 +294,41 @@ def _usage_summary(result_msg) -> dict:
     )
     return {
         "tokens_in": tokens_in or None,
+        "tokens_input_uncached": u.get("input_tokens"),
+        "tokens_cache_creation": u.get("cache_creation_input_tokens"),
         "tokens_cached": u.get("cache_read_input_tokens"),
         "tokens_out": u.get("output_tokens"),
         "cost_usd": getattr(result_msg, "total_cost_usd", None),
         "latency_s": round(getattr(result_msg, "duration_ms", 0) / 1000.0, 2),
     }
+
+
+def _cli_result_and_usage(stdout: str) -> tuple[str, dict | None]:
+    """Return the Claude CLI result text and its token/cost accounting.
+
+    ``--output-format json`` emits one result object. Fall back to plain text so older/fake CLIs
+    remain readable, but make the missing usage explicit instead of inventing zero cost.
+    """
+    try:
+        result = json.loads((stdout or "").strip())
+        if not isinstance(result, dict) or result.get("type") != "result":
+            return stdout or "", None
+        usage = result.get("usage") or {}
+        tokens_in = sum(
+            int(usage.get(key) or 0)
+            for key in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
+        )
+        return str(result.get("result") or ""), {
+            "tokens_in": tokens_in or None,
+            "tokens_input_uncached": usage.get("input_tokens"),
+            "tokens_cache_creation": usage.get("cache_creation_input_tokens"),
+            "tokens_cached": usage.get("cache_read_input_tokens"),
+            "tokens_out": usage.get("output_tokens"),
+            "cost_usd": result.get("total_cost_usd"),
+            "latency_s": round(float(result.get("duration_ms") or 0) / 1000.0, 2),
+        }
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return stdout or "", None
 
 
 def cli_model_files_runner(max_turns: int = 24) -> Callable[[str], str]:
@@ -311,6 +341,7 @@ def cli_model_files_runner(max_turns: int = 24) -> Callable[[str], str]:
     )
 
     def runner(prompt: str) -> str:
+        runner.last_usage = None
         env = dict(os.environ)
         for _k in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"):
             env.pop(_k, None)
@@ -323,7 +354,7 @@ def cli_model_files_runner(max_turns: int = 24) -> Callable[[str], str]:
                     "-p",
                     prompt,
                     "--output-format",
-                    "text",
+                    "json",
                     "--system-prompt",
                     _sys,
                     "--allowedTools",
@@ -341,8 +372,24 @@ def cli_model_files_runner(max_turns: int = 24) -> Callable[[str], str]:
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(f"cc discovery (claude CLI) failed to run: {exc}") from exc
         if r.returncode != 0:
-            raise RuntimeError(f"cc discovery (claude CLI) exit {r.returncode}: {(r.stderr or '')[-200:]}")
-        return _extract_json_object(r.stdout or "")
+            # With --output-format json the CLI reports WHY it failed (subtype such as
+            # error_max_turns / error_during_execution, and the result text) on STDOUT and leaves
+            # stderr empty. Reporting only stderr printed "exit 1: " twice on 2026-09-10 and hid
+            # the reason for two lost attempts.
+            _why = (r.stderr or "").strip()[-200:]
+            try:
+                _doc = json.loads((r.stdout or "").strip())
+                if isinstance(_doc, dict):
+                    _why = " ".join(
+                        str(_doc.get(k)) for k in ("subtype", "result", "error") if _doc.get(k)
+                    )[:400] or _why
+                    runner.last_usage = _cli_result_and_usage(r.stdout or "")[1]
+            except (TypeError, ValueError, json.JSONDecodeError):
+                if not _why:
+                    _why = (r.stdout or "").strip()[-200:]
+            raise RuntimeError(f"cc discovery (claude CLI) exit {r.returncode}: {_why}")
+        result_text, runner.last_usage = _cli_result_and_usage(r.stdout or "")
+        return _extract_json_object(result_text)
 
     runner.last_usage = None
     runner.model = "claude-cli"
@@ -1542,6 +1589,12 @@ def resolve_node_id(
             chosen = sub[0] if len(sub) == 1 else None
     if chosen is None:
         chosen = ids[0]
+    source_file = str(perf_test).split("::", 1)[0]
+    if Path(source_file).is_absolute() and "::" in chosen:
+        # Pytest prints external nodes relative to the common rootdir (for example
+        # ``benchmark-results/test.py::test_case``). That spelling is invalid when Tracy later runs
+        # from tt-metal. Keep pytest's selected case, but put the original absolute file back.
+        chosen = source_file + "::" + chosen.split("::", 1)[1]
     _NODE_ID_CACHE[key] = (mtime, chosen, case)
     return chosen
 
@@ -1654,10 +1707,26 @@ def make_run_profiled(
                     if _attempt >= retries:
                         raise
                     device_reset()
-            if code != 0:
-                tail = _salient_tail(log_path.read_text()) if log_path.is_file() else ""
-                raise TracyRunError(f"tracy run exit {code} (log: {log_path})\n{tail}")
             log_text = log_path.read_text() if log_path.is_file() else ""
+            if code != 0:
+                # A marker overflow severe enough to leave ops out of the CSV makes tracy's own
+                # post-processor assert ("Device data missing: Op N not present ... for device D") and
+                # exit non-zero. Raising here on that exit skipped the buffer-growth heal below, which
+                # exists for exactly this overflow: tt_transformers at TT_PERF_LAYERS=16 dropped 2,200
+                # marker batches and failed outright instead of re-profiling with a larger buffer.
+                drop = detect_marker_drop(log_text)
+                if drop and support_count < _MAX_PROFILER_SUPPORT_COUNT and heal_attempt < _MAX_HEAL_ATTEMPTS:
+                    heal_attempt += 1
+                    support_count = min(max(support_count, 1000) * _HEAL_GROWTH, _MAX_PROFILER_SUPPORT_COUNT)
+                    with open(log_path, "a") as fh:
+                        fh.write(
+                            f"\n[harness] tracy exit {code} after dropped markers; profiler buffer grew to "
+                            f"TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT={support_count}; re-profiling "
+                            f"(heal {heal_attempt}/{_MAX_HEAL_ATTEMPTS})\n"
+                        )
+                    continue
+                tail = _salient_tail(log_text)
+                raise TracyRunError(f"tracy run exit {code} (log: {log_path})\n{tail}")
             if detect_overheat(log_text):
                 # DISCARD AND RE-MEASURE. This used to cool and then KEEP the number, which is the
                 # worst of both: it paid for the wait and still banked a reading taken at 800 MHz
@@ -1951,6 +2020,7 @@ def cli_lead_review_gate(
     # parser uses, so it can never scold the reviewer for something the parser would have accepted.
     _tries = max(1, int(os.environ.get("PERF_MCP_REVIEW_TRIES", "5") or "5"))
     _ask, decision, reasoning = prompt, None, ""
+    _usage_rows = []
     for _attempt in range(1, _tries + 1):
         r = subprocess.run(
             [
@@ -1958,7 +2028,7 @@ def cli_lead_review_gate(
                 "-p",
                 _ask,
                 "--output-format",
-                "text",
+                "json",
                 "--system-prompt",
                 "You make go/no-go calls for an automated perf-optimization harness.",
             ],
@@ -1969,6 +2039,9 @@ def cli_lead_review_gate(
         )
         if r.returncode != 0:
             raise DiscoveryRejected(f"cc lead review (claude CLI) exit {r.returncode}: {(r.stderr or '')[-200:]}")
+        _review_text, _review_usage = _cli_result_and_usage(r.stdout or "")
+        if _review_usage:
+            _usage_rows.append(_review_usage)
         # A VERDICT THAT WILL NOT PARSE IS UNKNOWN, NOT A REFUSAL, and not an approval either.
         #
         # strict=False in the parser, because the failure was never about the DECISION. Run 9:
@@ -1985,10 +2058,10 @@ def cli_lead_review_gate(
         # conflating them turned a formatting glitch into a stopped run. So an unreadable answer is
         # neither: it is a question worth asking again. A genuine `stop` still stops, and a non-zero
         # exit above still refuses.
-        decision, reasoning = parse_review_verdict(r.stdout or "")
+        decision, reasoning = parse_review_verdict(_review_text)
         if decision is not None:
             break
-        _why = review_verdict_complaint(r.stdout or "")
+        _why = review_verdict_complaint(_review_text)
         print(
             "  [probes] lead review stated no decision (attempt %d/%d): %s%s"
             % (_attempt, _tries, _why, " Asking again." if _attempt < _tries else " Out of attempts."),
@@ -2002,7 +2075,7 @@ def cli_lead_review_gate(
             + "\n\nYOUR PREVIOUS ANSWER COULD NOT BE READ, so the question stands unanswered.\n"
             + _why
             + "\n\nThis is what you sent (verbatim, truncated):\n"
-            + (r.stdout or "").strip()[:1500]
+            + _review_text.strip()[:1500]
             + "\n\nAnswer again. The FIRST line must be exactly `DECISION: continue` or `DECISION: stop` "
             "-- one word, no bar, no brackets, no emphasis, nothing before it. Put your reasoning after "
             "it on a `REASON:` line, where it may run to any length. Judge the findings themselves; do "
@@ -2026,7 +2099,21 @@ def cli_lead_review_gate(
         )
     if decision == "stop":
         raise DiscoveryRejected(f"cc lead agent stopped the run: {reasoning}")
-    return {"decision": decision, "reasoning": reasoning, "model": "claude-cli", "usage": None}
+    _usage = None
+    if _usage_rows:
+        _usage = {}
+        for _field in (
+            "tokens_in",
+            "tokens_input_uncached",
+            "tokens_cache_creation",
+            "tokens_cached",
+            "tokens_out",
+            "cost_usd",
+            "latency_s",
+        ):
+            _values = [row.get(_field) for row in _usage_rows if row.get(_field) is not None]
+            _usage[_field] = sum(_values) if _values else None
+    return {"decision": decision, "reasoning": reasoning, "model": "claude-cli", "usage": _usage}
 
 
 # ---------------------------------------------------------------------------

@@ -133,6 +133,32 @@ def test_run_profiled_crash_on_nonzero_exit(tmp_path):
         rp("e2e", 1, 128, tmp_path / "profiles", 0)
 
 
+def test_run_profiled_heals_overflow_even_when_tracy_exits_nonzero(tmp_path):
+    """A marker overflow that makes tracy's post-processor assert exits non-zero. That exit must
+    reach the buffer-growth heal, not be raised as a plain crash (tt_transformers, 16 layers,
+    2026-09-10: 2,200 dropped-marker lines, then 'Device data missing ... device 3', exit 1)."""
+    attempts = []
+
+    def overflow_then_ok(cmd, cwd, env, timeout_s, log_path):
+        attempts.append(env.get("TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT"))
+        if len(attempts) == 1:
+            Path(log_path).write_text(
+                "Profiler DRAM buffers were full, markers were dropped!\n"
+                "AssertionError: Device data missing: Op 1213443 not present in "
+                "cpp_device_perf_report.csv for device 3 (trace_id=None)\n"
+            )
+            return 1
+        return _fake_execute(csv_in_outdir=True)(cmd, cwd, env, timeout_s, log_path)
+
+    rp = make_run_profiled(tmp_path, "t.py", execute=overflow_then_ok, collect_runner=_COLLECT_ONE)
+    csv_path, _ = rp("e2e", 1, 128, tmp_path / "profiles", 0)
+
+    assert csv_path.read_text().startswith("OP CODE")
+    assert attempts[0] is None, "first attempt runs with the default buffer"
+    assert int(attempts[1]) >= 8000, "second attempt runs with a grown buffer"
+    assert len(attempts) == 2
+
+
 def test_run_profiled_crash_when_no_csv_found(tmp_path):
     rp = make_run_profiled(tmp_path, "t.py", execute=_fake_execute(), collect_runner=_COLLECT_ONE)
     with pytest.raises(TracyRunError, match="no ops_perf_results"):  # allow-pytest.raises: no expect_error fixture
