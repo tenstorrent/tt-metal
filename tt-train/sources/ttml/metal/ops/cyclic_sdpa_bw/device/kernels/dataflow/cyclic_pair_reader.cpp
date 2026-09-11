@@ -37,6 +37,9 @@ void kernel_main() {
     constexpr auto grad_output_args = TensorAccessorArgs<value_args.next_compile_time_args_offset()>();
     constexpr auto lse_args = TensorAccessorArgs<grad_output_args.next_compile_time_args_offset()>();
     constexpr auto u_args = TensorAccessorArgs<lse_args.next_compile_time_args_offset()>();
+#if SEED_DQ
+    constexpr auto seed_args = TensorAccessorArgs<u_args.next_compile_time_args_offset()>();
+#endif
 
     constexpr uint32_t cb_query = tt::CBIndex::c_0;
     constexpr uint32_t cb_key = tt::CBIndex::c_1;
@@ -44,6 +47,12 @@ void kernel_main() {
     constexpr uint32_t cb_grad_output = tt::CBIndex::c_3;
     constexpr uint32_t cb_lse = tt::CBIndex::c_4;
     constexpr uint32_t cb_u_scalar = tt::CBIndex::c_5;
+#if SEED_DQ
+    // A separate buffer from the accumulator: the compute kernel copies it in
+    // through its own reserve/push cycle, which is what gives the packer a
+    // valid write pointer before the accumulate path packs without reserving.
+    constexpr uint32_t cb_grad_query_seed = tt::CBIndex::c_19;
+#endif
 #ifdef DIAGONAL_BLOCK
     constexpr uint32_t cb_attn_mask = tt::CBIndex::c_6;
     generate_causal_mask_tile(cb_attn_mask);
@@ -58,6 +67,18 @@ void kernel_main() {
     const auto grad_output = TensorAccessor(grad_output_args, grad_output_addr, tile_bytes);
     const auto lse = TensorAccessor(lse_args, lse_addr, interm_bytes);
     const auto u_scalar = TensorAccessor(u_args, u_scalar_addr, interm_bytes);
+
+#if SEED_DQ
+    // The previous dQ, loaded once into the accumulator the compute kernel
+    // then adds to. Its address follows the first pair's row block.
+    {
+        const uint32_t seed_addr = get_arg_val<uint32_t>(pair_args + 2u * num_pairs);
+        const uint32_t seed_row = get_arg_val<uint32_t>(pair_args);
+        const uint32_t seed_bytes = get_tile_size(cb_grad_query_seed);
+        const auto seed = TensorAccessor(seed_args, seed_addr, seed_bytes);
+        read_tiles_by_row(cb_grad_query_seed, seed, seed_row * qWt, qWt, seed_bytes, qWt);
+    }
+#endif
 
     for (uint32_t pair = 0; pair < num_pairs; ++pair) {
         const uint32_t row_block = get_arg_val<uint32_t>(pair_args + 2u * pair);
