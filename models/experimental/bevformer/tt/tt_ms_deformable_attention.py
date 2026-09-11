@@ -14,7 +14,6 @@ Key components:
 - TTMSDeformableAttention: Main attention class with parameter management
 """
 
-from typing import Optional
 import ttnn
 
 import torch
@@ -135,7 +134,7 @@ class TTMSDeformableAttention:
     Based on the MMCV/BEVFormer approach.
     """
 
-    def __init__(self, config: DeformableAttentionConfig, device, params=None):
+    def __init__(self, config: DeformableAttentionConfig, device, params=None, *, spatial_shapes):
         """
         Initialize TTNN Multi-Scale Deformable Attention module.
 
@@ -149,13 +148,32 @@ class TTMSDeformableAttention:
             device: TTNN device for tensor operations
             params: Pre-computed TTNN parameters containing linear layer weights and biases.
                 Should include: value_proj, sampling_offsets, attention_weights, output_proj
+            spatial_shapes: Feature-map (H, W) per level. Fixed for the lifetime of the
+                module: it is folded into the sampling-offset Linear here and forward takes
+                no shapes of its own. Features at a different resolution require a new
+                instance.
 
         Raises:
-            ValueError: If embed_dims is not divisible by num_heads
+            ValueError: If the configuration or spatial shapes are invalid.
         """
         # Validate configuration
         if config.embed_dims % config.num_heads != 0:
             raise ValueError(f"embed_dims ({config.embed_dims}) must be divisible by num_heads ({config.num_heads})")
+
+        if spatial_shapes is None:
+            raise ValueError("spatial_shapes is required")
+        if not isinstance(spatial_shapes, torch.Tensor):
+            spatial_shapes = torch.as_tensor(spatial_shapes)
+        if spatial_shapes.ndim != 2 or spatial_shapes.shape[1] != 2:
+            raise ValueError(f"spatial_shapes must have shape [num_levels, 2], got {tuple(spatial_shapes.shape)}")
+        if spatial_shapes.shape[0] != config.num_levels:
+            raise ValueError(
+                f"spatial_shapes has {spatial_shapes.shape[0]} levels, but config requires {config.num_levels}"
+            )
+        if spatial_shapes.dtype not in (torch.int8, torch.int16, torch.int32, torch.int64, torch.uint8):
+            raise ValueError(f"spatial_shapes must contain integers, got {spatial_shapes.dtype}")
+        if torch.any(spatial_shapes <= 0):
+            raise ValueError(f"spatial_shapes dimensions must be positive, got {spatial_shapes.tolist()}")
 
         # Set attributes
         self.embed_dims = config.embed_dims
@@ -165,8 +183,48 @@ class TTMSDeformableAttention:
         self.batch_first = config.batch_first
         self.device = device
         self.params = params
+        self.spatial_shapes = spatial_shapes.to(dtype=torch.long).clone()
+        self.total_keys = int(self.spatial_shapes.prod(dim=1).sum().item())
+        self.sampling_offsets_weight, self.sampling_offsets_bias = self._fold_offset_normalizer(self.spatial_shapes)
 
         self.head_dim = self.embed_dims // self.num_heads
+
+    def _fold_offset_normalizer(self, spatial_shapes):
+        """Pre-scale the ``sampling_offsets`` Linear so its output is already normalized.
+
+        The normalizer is ``[W, H]`` per level and fixed by config, so dividing the
+        Linear's output by it is a constant per-channel scale that folds into the
+        parameters exactly: ``s * (Wx + b) == (Wx + b) / normalizer``. That drops a
+        broadcast divide from every forward.
+
+        One ``(1, out)`` row scales weight and bias alike, because the Linear emits
+        channels ordered (head, level, point, xy) and preprocessing stores the weight as
+        ``(in, out)`` with the bias as ``(1, out)``.
+        """
+        sampling_offsets = getattr(self.params, "sampling_offsets", None)
+        if sampling_offsets is None:
+            return None, None
+
+        weight = sampling_offsets.weight
+        out_features = weight.shape[-1]
+        expected = self.num_heads * self.num_levels * self.num_points * 2
+        # Asserted against the weight's real width: a config/checkpoint mismatch would
+        # otherwise scale the wrong channels silently.
+        assert out_features == expected, f"sampling_offsets width {out_features} != {expected}"
+
+        scale = torch.ones(self.num_heads, self.num_levels, self.num_points, 2, dtype=torch.float32)
+        for level, (h, w) in enumerate(spatial_shapes.tolist()):
+            scale[:, level, :, 0] = 1.0 / float(w)
+            scale[:, level, :, 1] = 1.0 / float(h)
+        scale_tt = ttnn.from_torch(
+            scale.reshape(1, out_features), device=self.device, dtype=weight.dtype, layout=ttnn.TILE_LAYOUT
+        )
+
+        bias = getattr(sampling_offsets, "bias", None)
+        folded_weight = ttnn.mul(weight, scale_tt)
+        folded_bias = ttnn.mul(bias, scale_tt) if bias is not None else None
+        ttnn.deallocate(scale_tt)
+        return folded_weight, folded_bias
 
     def forward(
         self,
@@ -176,7 +234,6 @@ class TTMSDeformableAttention:
         query_pos=None,
         key_padding_mask=None,
         reference_points=None,
-        spatial_shapes: Optional[torch.Tensor] = None,
         **kwargs,
     ):
         """
@@ -189,7 +246,6 @@ class TTMSDeformableAttention:
             query_pos: [bs, num_queries, embed_dims] Query positional encoding
             key_padding_mask: [bs, num_keys] Padding mask for keys
             reference_points: [bs, num_queries, num_points_in_pillar, 2] Reference points
-            spatial_shapes: [num_levels, 2] Spatial shapes (H, W) for each level
 
         Returns:
             output: [bs, num_queries, embed_dims]
@@ -206,9 +262,7 @@ class TTMSDeformableAttention:
             query = ttnn.add(query, query_pos)
 
         if use_signpost:
-            signpost(
-                header=f"TT MS Deformable Attn Module Start, {query.shape[1]} - {spatial_shapes.prod(dim=1).sum()}"
-            )
+            signpost(header=f"TT MS Deformable Attn Module Start, {query.shape[1]} - {self.total_keys}")
 
         # Handle batch_first format
         if not self.batch_first:
@@ -216,17 +270,19 @@ class TTMSDeformableAttention:
             value = ttnn.permute(value, (1, 0, 2))
             identity = ttnn.permute(identity, (1, 0, 2))
 
-        bs, num_queries, _ = query.shape
-        bs, num_keys, _ = value.shape
-        bs, num_queries, D, _ = reference_points.shape
-
-        # Validate required inputs
-        assert spatial_shapes is not None, "spatial_shapes is required"
         assert reference_points is not None, "reference_points is required"
 
+        # query is the authority on batch and query count; reference_points only supplies
+        # the pillar depth. Reading bs from it would silently mis-shape a broadcast grid.
+        bs, num_queries, _ = query.shape
+        num_keys = value.shape[1]
+        D = reference_points.shape[2]
+        assert reference_points.shape[0] == bs and reference_points.shape[1] == num_queries, (
+            f"reference_points {list(reference_points.shape)} does not match " f"query [{bs}, {num_queries}, ...]"
+        )
+
         # Verify spatial shapes consistency
-        total_keys = spatial_shapes.prod(dim=1).sum()
-        assert total_keys == num_keys, f"Inconsistent keys: {total_keys} != {num_keys}"
+        assert self.total_keys == num_keys, f"Inconsistent keys: {self.total_keys} != {num_keys}"
 
         if ENABLE_LOGGING:
             logger.info("MSDA Value Projection Start")
@@ -248,9 +304,8 @@ class TTMSDeformableAttention:
 
         # Generate sampling offsets
         query = ttnn.to_layout(query, ttnn.TILE_LAYOUT)
-        sampling_offsets = ttnn.linear(
-            query, self.params.sampling_offsets.weight, bias=self.params.sampling_offsets.bias
-        )
+        # The Linear carries the offset normalizer, so its output is already normalized.
+        sampling_offsets = ttnn.linear(query, self.sampling_offsets_weight, bias=self.sampling_offsets_bias)
         sampling_offsets = ttnn.reshape(
             sampling_offsets, (bs * num_queries * self.num_heads, self.num_levels, self.num_points, 2)
         )
@@ -276,23 +331,6 @@ class TTMSDeformableAttention:
 
         # Handle different reference point formats
         if reference_points.shape[-1] == 2:
-            # D represents the number of depth levels in 3D point sampling (e.g., 4 points per pillar)
-            D = reference_points.shape[2]
-
-            spatial_shapes_tt = ttnn.from_torch(
-                spatial_shapes, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            )
-
-            # Create offset normalizer to convert pixel-space offsets to normalized coordinates [0,1]
-            offset_normalizer = ttnn.stack([spatial_shapes_tt[..., 1], spatial_shapes_tt[..., 0]], dim=-1)
-
-            # sampling_offsets: [bs*num_queries*num_heads, num_levels, num_points, 2]
-            # offset_normalizer: [num_levels, 2] -> [1, num_levels, 1, 2] for broadcasting
-            offset_normalizer = ttnn.unsqueeze(offset_normalizer, 0)  # Add batch * query * head dimension
-            offset_normalizer = ttnn.unsqueeze(offset_normalizer, -2)  # Add point dimension
-
-            sampling_offsets = ttnn.div(sampling_offsets, offset_normalizer)
-
             # reference_points: [bs, num_queries, D, 2] -> [bs, num_queries, 1, 1, 1, D, 2]
             reference_points_expanded = ttnn.unsqueeze(reference_points, 2)  # Add head dimension
             reference_points_expanded = ttnn.unsqueeze(reference_points_expanded, 3)  # Add level dimension
@@ -315,7 +353,7 @@ class TTMSDeformableAttention:
         # Apply multi-scale deformable attention
         output = multi_scale_deformable_attn_ttnn(
             value=value,
-            value_spatial_shapes=spatial_shapes,
+            value_spatial_shapes=self.spatial_shapes,
             sampling_locations=sampling_locations,
             attention_weights=attention_weights,
             device=self.device,
