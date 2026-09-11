@@ -220,30 +220,15 @@ inline void tanh_init() {
         // 6-entry SFPLUTFP32 FP16 table, TABLE1 breakpoints |x| = 0.5, 1.0, 1.5, 2.0, 3.0.
         // SGN_RETAIN, so the result is sign(x) * (A*|x| + B) and the kernel stays odd.
         //
-        // Fit minimises max bf16 ULP error, not max absolute error. Parameterised by the node
-        // values at the breakpoints so continuity -- and therefore monotonicity -- is structural;
-        // fitting the six segments independently buys 0.1 ULP and steps DOWN at three knees.
-        // Node 0 is pinned to 0 (a nonzero intercept in segment 0 makes ULP error diverge as
-        // x -> 0, since ulp(tanh x) shrinks with x and the intercept does not) and the last node
-        // to exactly 1.0, so the kernel still saturates to 1.0 rather than 0.9967.
+        // Fitted to minimise max bfloat16 ULP error rather than max absolute error. The two
+        // have different optima, so this is not the table an absolute-error fit would give.
+        // tests/python_tests/test_tanh_ulp_sweep.py measures both over every finite bf16 value.
         //
-        // Two stages, because the minimax optimum here is a face rather than a point:
-        //
-        //   1. Minimise the max ULP over the whole domain. That bottoms out at 9.698 and cannot
-        //      go lower -- segment 0 is a line through the origin on [0, 0.5), so its ULP error
-        //      has an irreducible floor of 255*|1 - A|, here 255*0.0381 = 9.71. Certified by
-        //      four independent optimizers plus a convexity argument.
-        //   2. The floor is set by segments 0-1 alone, which leaves segments 2-4 free. Solving
-        //      again with the stage-1 bound held and the max over |x| >= 1 minimised drops them
-        //      from ~9.7 ULP to 1.91 each, for free: same instruction, same global max.
-        //
-        // Skipping stage 2 is easy to miss, since stage 1 returns a vertex that happens to spend
-        // the full 9.7 ULP everywhere. It is worth 2.0x on max absolute error (0.0380 -> 0.0190)
-        // and it is what keeps max relative error at 4.10% rather than 4.52%.
-        //
-        // Measured over all 65,279 finite bf16 values: max 9.74 bf16 ULP and max abs error
-        // 0.0190, against 37.0 / 0.1447 for the 3-entry 0.90625 table and 48.0 / 0.0563 for the
-        // 0.8125 retune.
+        // Three properties to preserve if you retune. Segment 0's intercept must stay 0:
+        // SGN_RETAIN would otherwise put a jump across the origin, and ULP error diverges as
+        // x -> 0, since ulp(tanh x) shrinks with x while the intercept does not. The last
+        // segment must stay exactly (0, 1.0), so the kernel saturates to 1.0. And the segments
+        // must stay continuous at the breakpoints, which is what keeps the result monotone.
         sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut16ss(0.96191406f, 0.57617188f);
         sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vLut16ii(0.0f, 0.19299316f);
 
