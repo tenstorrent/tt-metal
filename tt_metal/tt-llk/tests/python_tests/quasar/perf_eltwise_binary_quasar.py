@@ -8,6 +8,7 @@ from helpers.llk_params import (
     PERF_RUN_TYPES_QUASAR,
 )
 from helpers.param_config import parametrize
+from helpers.tile_shape import construct_tile_shape
 from quasar.test_eltwise_binary_quasar import (
     ELTWISE_FORMATS,
     eltwise_binary_dest_acc,
@@ -21,6 +22,11 @@ from quasar.test_eltwise_binary_quasar import test_eltwise_binary as run_eltwise
 from quasar.test_eltwise_binary_quasar import (
     valid_acc_to_dest,
 )
+
+# Quasar FPU eltwise binary steps 8 dest rows per instruction. A tile with
+# faces * face_r_dim < 8 programs MOP_OUTER_LOOP = 0 and hangs (unpack dvalid
+# is never consumed). In PERF_TILE_SIZES that is [1, 32].
+_ELTWISE_MATH_ROWS = 8
 
 
 @pytest.mark.perf
@@ -62,6 +68,15 @@ def test_perf_eltwise_binary_quasar(
     loop_factor,
     is_perf,
 ):
+    tile_shape = construct_tile_shape(tile_dimensions)
+    dest_rows = tile_shape.total_num_faces() * tile_shape.face_r_dim
+    if dest_rows < _ELTWISE_MATH_ROWS:
+        pytest.skip(
+            "Quasar eltwise binary math MOP outer loop is 0 when "
+            f"faces*face_r_dim={dest_rows} < {_ELTWISE_MATH_ROWS} "
+            f"(tile {list(tile_dimensions)})"
+        )
+
     run_eltwise_binary(
         formats,
         math_op,
