@@ -988,8 +988,11 @@ def test_mla_chunked_tp_shard_kv_perf(request, mesh_device, device_params, varia
     """What TP-deduping the KVPE cache costs the dense chunked path: 50k prefix + one 5k chunk.
 
     Reports rather than gates -- there is no recorded baseline for either arm. Run both ids and diff
-    the two numbers; the delta is the ag-before TP gather plus the slot slice, since the ring_mla call
-    itself is bit-identical between the arms (same slab, same ring, same program config).
+    the two numbers; the delta is the ag-before TP gather and nothing else, since the ring_mla call is
+    bit-identical between the arms (same slab, same ring, same program config) and the gather neither
+    copies nor reshapes -- it reads the cache in place. At this depth the whole cache is populated, so
+    the gather is at its worst case: all 11 stripes move, and the prefix bound buys nothing. Shallower
+    prefixes are where it does.
     """
     total_ns = _run_chunked_prefill(
         request,
