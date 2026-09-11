@@ -281,6 +281,28 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreBlockProgramFactory::c
             compute_cfg.unpack_modes.insert({in_dfb_of(set), UnpackMode::UnpackToDest});
         }
 
+        // Gen2 (Quasar): KernelSpec::hw_config must hold the target generation's alternative -- the
+        // spec validator rejects a ComputeGen1Config on Quasar. Copy across only the field the Gen1
+        // config sets (enable_32_bit_dest); the Gen2-only enable_2x_src_register is left at its
+        // default. WH/BH take the Gen1 config unchanged.
+        //
+        // unpack_modes is NOT carried across: on Quasar the pack_untilize compute path always unpacks
+        // to SrcA (pack_untilize.h, ARCH_QUASAR branch passes unpack_to_dest=false), while any
+        // UnpackToDest entry makes the JIT emit the kernel-wide UnpackToDestEn=true, which moves
+        // llk_math_wait_for_dest_available onto the UNPACK_MATH semaphore that this path never posts
+        // -> MATH hangs on the first tile (observed on craq-sim for a Float32 input). Until the Quasar
+        // pack_untilize LLK gains an unpack-to-dest route, the 32-bit input keeps an explicit
+        // UnpackToSrc here (the Float32 DFB still needs an entry for the spec validator).
+        ComputeHardwareConfig compute_hw_config = compute_cfg;
+        if (device->arch() == tt::ARCH::QUASAR) {
+            // TODO(#52269): Quasar unpack_modes are derived from Gen1 and not yet optimized for Quasar.
+            ComputeGen2Config gen2_cfg{.enable_32_bit_dest = compute_cfg.enable_32_bit_dest};
+            if (fp32_dest_acc_en) {
+                gen2_cfg.unpack_modes.insert({in_dfb_of(set), UnpackMode::UnpackToSrc});
+            }
+            compute_hw_config = std::move(gen2_cfg);
+        }
+
         const bool is_cliff_row_set = (&set == &cliffrow_set);
         spec.kernels.push_back(KernelSpec{
             .unique_id = id,
@@ -303,7 +325,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreBlockProgramFactory::c
                     {"block_size_row", block_size_row},
                     {"third_dim", third_dim},
                 },
-            .hw_config = std::move(compute_cfg),
+            .hw_config = std::move(compute_hw_config),
         });
         spec.work_units.push_back(WorkUnitSpec{
             .name = work_unit_name,
