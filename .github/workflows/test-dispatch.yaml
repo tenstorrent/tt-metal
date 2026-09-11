@@ -54,11 +54,22 @@ jobs:
           use-evaluation-image: true
           enable-kernel-ccache: true
           redis-ccache-storage: redis://${{ vars.REDIS_CCACHE_USER }}:${{ secrets.REDIS_CCACHE_PASSWORD }}@${{ vars.REDIS_CCACHE_HOST }}:${{ vars.REDIS_CCACHE_PORT }}${{ vars.REDIS_CCACHE_IS_READONLY == 'true' && '|read-only=true' || '' }}
-      - name: Isolated failing test and complete pool sweep
+      - name: Isolated failing test
         uses: ./docker-job/.github/actions/run-with-log
         with:
-          log-file: generated/pch-diagnosis/tests.log
-          run: python3 -u .github/scripts/diagnose_pch_pool.py --pch ${{ matrix.pch }}
+          log-file: generated/pch-diagnosis/isolated.log
+          run: python3 -u .github/scripts/diagnose_pch_pool.py --pch ${{ matrix.pch }} --phase isolated
+      - name: Upload isolated test diagnostics immediately
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pch-isolated-diagnosis-${{ matrix.pch }}
+          path: docker-job/generated/pch-diagnosis
+      - name: Complete pool sweep
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: generated/pch-diagnosis/suite.log
+          run: python3 -u .github/scripts/diagnose_pch_pool.py --pch ${{ matrix.pch }} --phase suite
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

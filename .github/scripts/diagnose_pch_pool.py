@@ -21,6 +21,7 @@ def snapshot(root, phase):
         "phase": phase,
         "time": time.time(),
         "free_bytes": {p: shutil.disk_usage(p).free for p in ["/work", "/github/home", "/tmp"]},
+        "free_inodes": {p: os.statvfs(p).f_favail for p in ["/work", "/github/home", "/tmp"]},
         "cache_bytes": 0,
         "pch_bytes": 0,
         "gch_count": 0,
@@ -138,17 +139,14 @@ def run_phase(phase, target, pch):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--pch", choices=["0", "1"], required=True)
+    parser.add_argument("--phase", choices=["isolated", "suite"], required=True)
     args = parser.parse_args()
     OUTPUT.mkdir(parents=True, exist_ok=True)
     subprocess.run(["df", "-h", "/", "/work", "/github/home", "/tmp"], check=True)
-    isolated = run_phase(
-        "isolated",
-        "tests/ttnn/unit_tests/operations/pool/test_upsample.py::test_nearest_upsample_with_uneven_input_shards",
-        args.pch,
-    )
-    if isolated:
-        return isolated
-    return run_phase("suite", "tests/ttnn/unit_tests/operations/pool", args.pch)
+    target = "tests/ttnn/unit_tests/operations/pool"
+    if args.phase == "isolated":
+        target += "/test_upsample.py::test_nearest_upsample_with_uneven_input_shards"
+    return run_phase(args.phase, target, args.pch)
 
 
 if __name__ == "__main__":
