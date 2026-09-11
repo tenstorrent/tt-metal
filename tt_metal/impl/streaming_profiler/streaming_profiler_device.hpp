@@ -67,6 +67,10 @@ public:
     // Launch the planned boot-time eth link syncs. MUST be called after the host receiver's ingest threads
     // are draining the sockets, or the armed sync kernels wedge on a FIFO no reader empties.
     void run_link_sync();
+    // Start the idle-eth clock pushers sampling. MUST be called after the receiver's ingest threads are draining
+    // the sockets: a pusher sampling earlier fills its FIFO before any consumer attaches, and the consumers then
+    // start behind frames the device is already overwriting.
+    void release_eth_pushers();
     // Stop every resident link sync at quiesce: the sender first (its final round still echoes off the live
     // receiver), then the receiver, each confirmed by its done word.
     void stop_link_syncs(tt::Cluster& cluster);
