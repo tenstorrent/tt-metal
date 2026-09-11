@@ -679,7 +679,7 @@ TEST_F(DramKernelFixture, DramKernelDRISCRTensixParallelDRAMReads) {
     }
 }
 
-TEST_F(DramKernelFixture, DISABLED_MpfePriorityWeightBenchmark) {
+TEST_F(DramKernelFixture, MpfePriorityWeightBenchmark) {
     if (std::getenv("TT_METAL_RUN_BH_MPFE_BENCHMARK") == nullptr) {
         GTEST_SKIP() << "Set TT_METAL_RUN_BH_MPFE_BENCHMARK=1 to run the MPFE weight sweep";
     }
@@ -757,6 +757,22 @@ TEST_F(DramKernelFixture, DISABLED_MpfePriorityWeightBenchmark) {
 
         const uint64_t drisc_cycles = read_timing_cycles(drisc_virtual, drisc_l1_noc_addr_ + bytes_per_iter);
         const uint64_t ordinary_cycles = read_timing_cycles(tensix_virtual, tensix_l1_base_ + bytes_per_iter);
+        const size_t elements_per_iter = bytes_per_iter / sizeof(uint32_t);
+        std::vector<uint32_t> drisc_result(elements_per_iter);
+        std::vector<uint32_t> ordinary_result(elements_per_iter);
+        MetalContext::instance().get_cluster().read_core(
+            drisc_result.data(),
+            bytes_per_iter,
+            tt_cxy_pair(mesh_device_->build_id(), drisc_virtual),
+            drisc_l1_noc_addr_);
+        MetalContext::instance().get_cluster().read_core(
+            ordinary_result.data(),
+            bytes_per_iter,
+            tt_cxy_pair(mesh_device_->build_id(), tensix_virtual),
+            tensix_l1_base_);
+        EXPECT_TRUE(std::equal(drisc_result.begin(), drisc_result.end(), data.begin()));
+        EXPECT_TRUE(std::equal(ordinary_result.begin(), ordinary_result.end(), data.end() - elements_per_iter));
+
         log_info(
             LogTest,
             "BH MPFE benchmark case={} weights={}/{}/{} active_port=P{} ordinary_port=P{} "

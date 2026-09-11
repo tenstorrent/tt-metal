@@ -232,6 +232,8 @@ void kernel_main() {
     constexpr uint32_t cq_signal_l1_base = get_compile_time_arg_val(4);
     constexpr uint32_t cq_signal_slot_stride = get_compile_time_arg_val(5);
     constexpr uint32_t shutdown_semaphore_id = get_compile_time_arg_val(6);
+    constexpr uint64_t dram_l1_noc_offset =
+        static_cast<uint64_t>(get_compile_time_arg_val(7)) | (static_cast<uint64_t>(get_compile_time_arg_val(8)) << 32);
     constexpr uint32_t ring_half = stage_ring_size / 2;
     constexpr uint32_t stage_slot_a = stage_ring_base;
     constexpr uint32_t stage_slot_b = stage_ring_base + ring_half;
@@ -268,7 +270,10 @@ void kernel_main() {
     const uint32_t shutdown_semaphore_addr = get_semaphore(shutdown_semaphore_id);
     volatile tt_l1_ptr uint32_t* shutdown_semaphore =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(shutdown_semaphore_addr);
-    const uint64_t peer_shutdown_semaphore = get_noc_addr(peer_noc_x, peer_noc_y, shutdown_semaphore_addr);
+    const uint64_t peer_shutdown_semaphore = NOC_XY_ADDR(
+        DYNAMIC_NOC_X(noc_index, peer_noc_x),
+        DYNAMIC_NOC_Y(noc_index, peer_noc_y),
+        dram_l1_noc_offset + shutdown_semaphore_addr);
 
     RemoteSenderCBInterface& iface = get_remote_sender_cb_interface(remote_cb_id);
     bool has_loaded_sender_state = false;
