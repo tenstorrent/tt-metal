@@ -1698,7 +1698,6 @@ class DeepSeekV4Attention(DeepSeekV4Module):
                 cache_position_modulo=paged.position_modulo,
                 **common,
             )
-        kv = ttnn.to_memory_config(kv, ttnn.DRAM_MEMORY_CONFIG)
         return ttnn.transformer.scaled_dot_product_attention_decode(
             q,
             kv,
@@ -1715,9 +1714,10 @@ class DeepSeekV4Attention(DeepSeekV4Module):
 
         Decode is a single token (``M == 1``), so ``[1, 1, H, Dh]`` is already
         group-major in memory: each group's ``K = H*Dh / g`` features are a
-        contiguous slice. Batched ``matmul_decode`` reads that as ``[1, g, 1, K]``
-        (a view) and mcasts the packed ``g * o_lora_rank`` row onto every ``o_b``
-        core. Logical volume is ``num_cores * g * o_lora_rank``.
+        contiguous slice. ``all_gather_for_matmul`` multicasts that ``[g, K]``
+        replica from the (single-user) SDPA core onto ``o_a``'s weight grid so
+        batched ``matmul_decode`` can consume it as ROW_MAJOR HEIGHT_SHARDED A.
+        A view then names the group batch ``[1, g, num_cores, K]``.
 
         With TP, each rank owns a contiguous set of complete groups. ``o_a`` is
         consequently group-sharded and runs locally. In the default row-parallel
@@ -1725,20 +1725,22 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         all-reduces them. Column mode instead gathers all groups, computes N/TP
         hidden features per rank, and gathers the final hidden state.
         """
-        # SDPA-decode returns ROW_MAJOR data height-sharded by user. Do not reinterpret that
-        # shard as group-major and reshard the view: the physical row is H*Dh wide while the
-        # view claims each row is only K wide, so the sharded conversion uses the wrong row
-        # stride. Materialize the logical [H, Dh] tensor in tiled interleaved memory before
-        # folding heads into groups.
         _, m, h, dh = attn.shape
         groups = self.local_o_groups
         in_per_group = (h * dh) // groups
         assert not self.sequential_o_a, "decode o_a is batched (M == 1); sequential is not wired"
         assert m == 1, f"batched o_a is decode-only (M == 1), got M={m}"
-        x = ttnn.experimental.view(attn, [1, groups, 1, in_per_group])
-        y = self.o_a_proj(x)
+        oa_grid = self.o_a_proj.b_core_grid()
+        oa_dest = ttnn.CoreRangeSet({oa_grid.bounding_box()})
+        gathered = ttnn.experimental.deepseek.all_gather_for_matmul(attn, oa_dest)
+        if gathered is not attn:
+            ttnn.deallocate(attn)
+        attn = ttnn.experimental.view(gathered, [1, groups, oa_dest.num_cores(), in_per_group])
+        y = self.o_a_proj(attn)
         y = ttnn.experimental.view(y, [1, 1, y.shape[-2], groups * self.o_lora_rank])
         output = self.o_b_proj(y)
+        output = ttnn.to_memory_config(output, ttnn.L1_MEMORY_CONFIG)
+        output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
         if self.tp_size > 1:
             if self.row_parallel_o_b:
                 gathered = ttnn.all_reduce(
