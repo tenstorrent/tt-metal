@@ -3367,16 +3367,22 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
 // Public Entry Points
 // ============================================================================
 
-Program MakeProgramFromSpec(distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation) {
+Program MakeProgramFromSpec(
+    distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation, bool defer_compile) {
     Program program = BuildProgramFromSpec(mesh_device, spec, skip_validation);
-    program.impl().compile_and_allocate(&mesh_device, false);
+    // defer_compile: hand back a built-but-uncompiled Program. The caller takes
+    // responsibility for compiling it before any dispatch.
+    if (!defer_compile) {
+        program.impl().compile_and_allocate(&mesh_device, false);
+    }
     return program;
 }
 
 distributed::MeshWorkload MakeMeshWorkloadFromSpecs(
     distributed::MeshDevice& mesh_device,
     const std::unordered_map<distributed::MeshCoordinateRange, ProgramSpec>& program_specs,
-    bool skip_validation) {
+    bool skip_validation,
+    bool defer_compile) {
     const distributed::MeshCoordinateRange mesh_extent(mesh_device.shape());
     distributed::MeshWorkload workload;
     TT_FATAL(!program_specs.empty(), "At least one ProgramSpec is required to create a MeshWorkload.");
@@ -3388,17 +3394,23 @@ distributed::MeshWorkload MakeMeshWorkloadFromSpecs(
             mesh_device.shape());
         workload.impl().add_program(device_range, BuildProgramFromSpec(mesh_device, program_spec, skip_validation));
     }
-    workload.impl().compile(&mesh_device);
+    // defer_compile: skip compile + CB/DFB allocation + finalize, handing back an
+    // uncompiled, unfinalized MeshWorkload. Not dispatch-ready; see the header.
+    if (!defer_compile) {
+        workload.impl().compile(&mesh_device);
+    }
     return workload;
 }
 
 distributed::MeshWorkload MakeMeshWorkloadFromSpec(
-    distributed::MeshDevice& mesh_device, const ProgramSpec& program_spec, bool skip_validation) {
+    distributed::MeshDevice& mesh_device, const ProgramSpec& program_spec, bool skip_validation, bool defer_compile) {
     distributed::MeshWorkload workload;
     workload.impl().add_program(
         distributed::MeshCoordinateRange(mesh_device.shape()),
         BuildProgramFromSpec(mesh_device, program_spec, skip_validation));
-    workload.impl().compile(&mesh_device);
+    if (!defer_compile) {
+        workload.impl().compile(&mesh_device);
+    }
     return workload;
 }
 
