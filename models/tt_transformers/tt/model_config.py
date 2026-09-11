@@ -1630,7 +1630,9 @@ class ModelArgs:
             else:
                 return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         elif mode == Mode.PREFILL:
-            return ttnn.DRAM_MEMORY_CONFIG
+            # Same L1 island: consumed by the trailing reduce-scatter, which takes an
+            # interleaved input in either memory space.
+            return ttnn.DRAM_MEMORY_CONFIG if self.is_galaxy else ttnn.L1_MEMORY_CONFIG
         else:
             raise ValueError(f"Invalid mode: {mode}")
 

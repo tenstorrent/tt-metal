@@ -1319,7 +1319,9 @@ class Attention(LightweightModule):
             self.wo,
             compute_kernel_config=self.li_o_prefill_compute_kernel_cfg,
             dtype=self.activation_dtype or ttnn.bfloat8_b,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # Same L1 island: consumed by the trailing reduce-scatter, which takes an
+            # interleaved input in either memory space.
+            memory_config=ttnn.DRAM_MEMORY_CONFIG if self.TG else ttnn.L1_MEMORY_CONFIG,
             program_config=self.args.get_attn_wo_program_config(Mode.PREFILL, seq_len, None),
         )
 

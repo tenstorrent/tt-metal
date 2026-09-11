@@ -250,7 +250,10 @@ class DistributedNorm(LightweightModule):
                     },
                 )
                 ttnn.deallocate(x_sharded)
-                x = ttnn.sharded_to_interleaved(y, ttnn.DRAM_MEMORY_CONFIG)
+                # L1, not DRAM: this feeds the QKV / ff1-ff3 projection in the same layer
+                # and nothing else, so a DRAM round-trip here is ~2 MB of pure waste per
+                # norm. Interleaved, so the projection's in0 contract is unchanged.
+                x = ttnn.sharded_to_interleaved(y, ttnn.L1_MEMORY_CONFIG)
                 ttnn.deallocate(y)
             else:
                 x = self.norm(
