@@ -249,15 +249,8 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
 }
 
 #ifdef TRISC_MATH
-template <bool legacy_compat = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void recip_tile_first_column(uint32_t idst) {
-    SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_recip_first_column,
-        (legacy_compat, is_fp32_dest_acc_en),
-        idst,
-        VectorMode::C);
+    SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_recip_first_column, idst, VectorMode::C);
 }
 #endif
 
@@ -660,7 +653,7 @@ void exp_tile_first_column(uint32_t idst) {
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_exponential_first_column,
-        (SDPA_EXP_APPROX_MODE, scale_bf16, is_fp32_dest_acc_en),
+        (SDPA_EXP_APPROX_MODE, scale_bf16),
         idst,
         VectorMode::C);
 }
@@ -703,14 +696,8 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
 #ifdef TRISC_MATH
 template <VectorMode vector_mode = VectorMode::C, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void fused_max_sub_exp_add_tile(uint32_t idst, int scale_bf16) {
-    SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_fused_max_sub_exp_add_tile,
-        (is_fp32_dest_acc_en),
-        idst,
-        vector_mode,
-        scale_bf16);
+    SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_fused_max_sub_exp_add_tile, idst, vector_mode, scale_bf16);
 }
 #endif
 
@@ -906,11 +893,10 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
 #ifdef TRISC_MATH
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void softplus_tile_first_column(uint32_t idst, uint beta, uint beta_reciprocal, uint threshold) {
-    SFPU_UNARY_CALL(
+    SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_softplus_first_column,
-        (is_fp32_dest_acc_en),
         idst,
         VectorMode::C,
         beta,

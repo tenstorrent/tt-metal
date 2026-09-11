@@ -12,7 +12,7 @@
 //
 // Entry points, and the DEST region each one touches (all inside face 0):
 //
-//   recip_scalar<legacy_compat>()          one SFPU slot  -> rows 0-3
+//   recip_scalar()                         one SFPU slot  -> rows 0-3
 //   clamp_max_scalar(max)                  one SFPU slot  -> rows 0-3
 //   mul_unary_scalar_first_column(k)       4 slots, +4     -> rows 0-15
 //   binary_comp_first_column<le|lt|ge>()   4 slots, +4     -> rows 0-15
@@ -110,7 +110,7 @@ namespace
 inline void run_sampling_op()
 {
 #if defined(SAMPLING_OP_RECIP_SCALAR)
-    ckernel::sfpu::calculate_sampling_recip_scalar<SAMPLING_LEGACY_COMPAT, is_fp32_dest_acc_en>();
+    ckernel::sfpu::calculate_sampling_recip_scalar<is_fp32_dest_acc_en>();
 #elif defined(SAMPLING_OP_CLAMP_MAX_SCALAR)
     ckernel::sfpu::calculate_sampling_clamp_max_scalar(SFPU_UNARY_SCALAR);
 #elif defined(SAMPLING_OP_MUL_UNARY_SCALAR)
@@ -144,14 +144,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
         TILE_NUM_FACES, formats.math);
 
-    // The header's own init: programs vConstFloatPrgm0 for the non-legacy reciprocal
-    // path and is a no-op for legacy_compat. Everything else needs only the invariant
+    // The header's own init programs vConstFloatPrgm0 for the reciprocal
+    // path. Everything else needs only the invariant
     // SFPU config + ADDR_MOD_7 from the LLK init.
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
 
 #if defined(SAMPLING_POLLUTE_PRGM0)
     // Stand in for an earlier op in the same kernel that owns vConstFloatPrgm0. log_init
-    // sets it to LOG_TWO * 2^-23 (~8.3e-8); the non-legacy reciprocal's Newton-Raphson
+    // sets it to LOG_TWO * 2^-23 (~8.3e-8); the reciprocal's Newton-Raphson
     // step needs 2.0f, so this is the cross-op hazard sampling_recip_init exists to
     // repair -- see tt-metal #52745. Any vConstFloatPrgm0 writer would do; log is picked
     // because its constant is nine orders of magnitude away, so a surviving pollution is
@@ -160,7 +160,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
 #if !defined(SAMPLING_SKIP_RECIP_INIT)
-    ckernel::sfpu::sampling_recip_init<SAMPLING_LEGACY_COMPAT>();
+    ckernel::sfpu::sampling_recip_init();
 #endif
 
     _llk_math_wait_for_dest_available_<DST_SYNC>();

@@ -389,13 +389,11 @@ void recip_init() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     math::reset_counters(p_setrwc::SET_ABD_F);
-    if constexpr (!legacy_compat) {
-        sfpu_reciprocal_init<false>();  // set vConstFloatPrgm0 for sfpu_reciprocal_iter
-        if constexpr (is_fp32_dest_acc_en) {
-            _init_reciprocal_fast_24b_5c_();
-        } else {
-            _init_reciprocal_fast_8b_3c_();
-        }
+    sfpu_reciprocal_init<false>();  // set vConstFloatPrgm0 for sfpu_reciprocal_iter
+    if constexpr (is_fp32_dest_acc_en) {
+        _init_reciprocal_fast_24b_5c_();
+    } else {
+        _init_reciprocal_fast_8b_3c_();
     }
 }
 

@@ -87,7 +87,7 @@ inline void sdpa_fw_op_init()
 {
     if constexpr (SDPA_FW_OP == OP_FW_RECIP)
     {
-        sfpu::recip_init<APPROX_MODE, is_fp32_dest_acc_en, false /* legacy_compat */>();
+        sfpu::recip_init<is_fp32_dest_acc_en>();
     }
     else
     {

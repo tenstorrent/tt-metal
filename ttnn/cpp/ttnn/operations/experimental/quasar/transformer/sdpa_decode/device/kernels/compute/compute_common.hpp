@@ -257,15 +257,8 @@ void reduce_c(uint32_t out_dfb, uint32_t prev_dfb, uint32_t cols, bool do_eltwis
 }
 
 #ifdef TRISC_MATH
-template <bool legacy_compat = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void recip_tile_first_column(uint32_t idst) {
-    SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_recip_first_column,
-        (legacy_compat, is_fp32_dest_acc_en),
-        idst,
-        VectorMode::C);
+    SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_recip_first_column, idst, VectorMode::C);
 }
 #endif
 

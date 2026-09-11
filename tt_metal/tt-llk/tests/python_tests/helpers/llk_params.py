@@ -168,12 +168,10 @@ class MathOperation(Enum):
     # LUT (distinct kernel path from the accurate sech2 TanhDerivative above).
     TanhDerivativeLut = OpSpec("tanh_derivative_lut", MathOpType.SFPU_UNARY)
     # Legacy-compat rsqrt (reciprocal-root method); distinct kernel path from the
-    # accurate Rsqrt (which uses legacy_compat=false).
-    RsqrtCompat = OpSpec("rsqrt_compat", MathOpType.SFPU_UNARY)
+    # accurate Rsqrt implementation.
     # Legacy-compat reciprocal (exponent-difference method); distinct kernel path from
-    # the accurate Reciprocal (which uses legacy_compat=false). This is the path the
+    # the accurate Reciprocal. This is the path the
     # Compute API's recip_tile() reaches by default, so it is the one production runs.
-    ReciprocalCompat = OpSpec("reciprocal_compat", MathOpType.SFPU_UNARY)
     # Component-wise expm1 shared helper (used by ELU/CELU/SELU); distinct from the
     # standalone Expm1 kernel.
     Expm1Cw = OpSpec("expm1_cw", MathOpType.SFPU_UNARY)
@@ -778,7 +776,6 @@ class ReluConfig(Enum):
 class SdpaOp(Enum):
     """Selects which body of llk_sfpu/ckernel_sfpu_sdpa.h the sfpu_sdpa test drives."""
 
-    RecipLegacy = 0  # calculate_recip_first_column<true>, _reciprocal_compat_
     RecipIter = 1  # calculate_recip_first_column<false>, sfpu_reciprocal_iter
     ExpAccurate = 2  # calculate_exponential_first_column<true,  scale>
     ExpPoly = 3  # calculate_exponential_first_column<false, scale>

@@ -776,7 +776,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     } else {
         compute.compile_time_args.emplace("tile_width", tile_width);
         compute.compile_time_args.emplace("float32_reduction", static_cast<uint32_t>(float32_reduction));
-        compute.compile_time_args.emplace("legacy_rsqrt", static_cast<uint32_t>(legacy_rsqrt));
     }
 
     // FUSE_PRE_ADD reaches every compute kernel, not only the non-Welford ones: the Welford
