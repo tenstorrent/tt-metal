@@ -357,7 +357,7 @@ models:
     bh_quietbox_2: 390
     bh_galaxy: 78
     bh_sc1: 335
-    bh_sc4: 120
+    bh_sc4: 160
   e2e_tier2:
     wh_llmbox_perf: 266
     wh_n150: 45
