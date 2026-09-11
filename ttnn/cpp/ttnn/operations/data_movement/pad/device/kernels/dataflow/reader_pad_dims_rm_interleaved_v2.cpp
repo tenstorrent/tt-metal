@@ -103,8 +103,11 @@ void kernel_main() {
     // (WormholeB0/TensixTile/BabyRISCV/MemoryOrdering.md). load_blocking the last filled word (blocking
     // load + memory clobber) to force the fill to be processed before the first loop-back read is issued.
     // One-time cost, outside the per-stick loop.
-    (void)ckernel::load_blocking(
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pad_val_addr) + (stick_size_padded / sizeof(uint32_t)) - 1);
+    // Index must match fill_pad_dfb_with_val's ceil-rounded word count: fencing on floor(size/4)-1 would
+    // block on the word before a non-4B-aligned tail (leaving its store to race the read) and underflow
+    // for a sub-4B stick. stick_size_padded > 0, so the ceil count is >= 1 and the index never underflows.
+    constexpr uint32_t pad_last_word = (stick_size_padded + sizeof(uint32_t) - 1) / sizeof(uint32_t) - 1;
+    (void)ckernel::load_blocking(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pad_val_addr) + pad_last_word);
 
     uint32_t i_page = start_page_id;
     uint32_t curr_c = get_arg(args::start_dim_offset_c), curr_h = get_arg(args::start_dim_offset_h),
