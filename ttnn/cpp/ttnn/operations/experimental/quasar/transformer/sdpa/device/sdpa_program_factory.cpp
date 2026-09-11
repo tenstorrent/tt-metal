@@ -362,6 +362,11 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
+    // Quasar cannot do 32-bit-DEST block reduce_max (used in the softmax), so force bf16 DEST there.
+    if (device->arch() == tt::ARCH::QUASAR) {
+        fp32_dest_acc_en = false;
+    }
+
     bool use_attention_sink = attention_sink.has_value();
 
     CoreCoord grid_size = program_config.has_value() ? program_config->compute_with_storage_grid_size
@@ -409,7 +414,10 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
     auto [qk_out_subblock_h, qk_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
 
-    const bool use_streaming_compute = can_use_streaming_compute(fp32_dest_acc_en);
+    // The streaming compute path uses LLK primitives not available on Quasar; it is neither built nor
+    // selected there (compute kernel guards the include under #ifndef ARCH_QUASAR). Force the standard path.
+    const bool use_streaming_compute =
+        can_use_streaming_compute(fp32_dest_acc_en) && device->arch() != tt::ARCH::QUASAR;
 
     const bool has_sliding_window = sliding_window_size.value_or(0) != 0;
     // A user-provided dense mask on the streaming path takes its own per-chunk apply
@@ -1677,6 +1685,12 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
     }
 
     auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config);
+    // to_compute_hardware_config bakes enable_32_bit_dest from the ORIGINAL config; Quasar cannot do
+    // 32-bit-DEST block reduce_max (softmax), so force it off here too (mirrors fp32_dest_acc_en above,
+    // which the JIT reads via this config, not the local).
+    if (device->arch() == tt::ARCH::QUASAR) {
+        enable_32_bit_dest(compute_hw) = false;
+    }
     if (fp32_dest_acc_en) {
         // qk_im / sum_A / sum_B are Float32 when enable_32_bit_dest is on; the validator requires an
         // explicit unpack_modes entry for each Float32 DFB the compute consumes. Legacy defaulted to
@@ -1694,7 +1708,9 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
     KernelSpec compute{
         .unique_id = COMPUTE,
         .source = "ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/kernels/compute/sdpa.cpp",
-        .compiler_options = {.defines = compute_defines, .opt_level = KernelBuildOptLevel::O3},
+        .compiler_options =
+            {.defines = compute_defines,
+             .opt_level = (device->arch() == tt::ARCH::QUASAR) ? KernelBuildOptLevel::Os : KernelBuildOptLevel::O3},
         .dfb_bindings = compute_dfbs,
         .compile_time_args = compute_cta,
         .runtime_arg_schema =
