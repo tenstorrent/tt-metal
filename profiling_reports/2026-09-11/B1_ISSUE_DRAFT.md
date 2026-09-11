@@ -1,18 +1,16 @@
 # Investigate expert placement and MoE cost variation in Mistral Small 4 prefill
 
+## TL;DR
+
+Dispatch and Combine account for **85.2% of the historical MoE cost gap between L18 and L23**. In isolated replays, balancing expert placement reduces Combine time by **38.36% and 25.82%**, respectively. This shows placement matters, but does not yet prove the full-model cause or a speedup. Next, capture actual PP routing and timings together.
+
 Owner: Sonnet. Draft for review with Alina; not posted.
-
-## Finding
-
-Dispatch and Combine account for most of the historical difference in MoE cost between L18 and L23 on the same PP4 stage. Controlled replays now show that changing expert placement reduces isolated Combine time by **38.36% for L18 and 25.82% for L23**.
-
-This demonstrates placement sensitivity in the controlled replay. It does not yet establish the cause of the historical full-model slowdown or an end-to-end speedup.
 
 ## Evidence
 
 The September 8 eager 36-layer PP4 capture shows MoE costs of 6.129–10.377 ms (+69.31%). L18 and L23, on the same devices, differ by 4.005 ms; Dispatch and Combine account for 3.413 ms (85.2%). These values sum each operation's maximum device duration; they are not elapsed layer times. The plan's original +54% came from a different capture or metric.
 
-The September 11 replay uses all 128 experts on eight Galaxy devices at SP8/TP1, with 16 experts per chip, 5,120 tokens and top-4 routing. Twelve successful captures cover two processes per layer and routing case. Each retains nine iterations after discarding the first. Results average the two process means, using the maximum device kernel duration for each iteration.
+The September 11 replay uses all 128 experts on eight Galaxy devices, with 16 experts per chip, 5,120 tokens and top-4 routing. Twelve successful captures cover two processes per layer and routing case. Each retains nine iterations after discarding the first. Results average the two process means, using the maximum device kernel duration for each iteration.
 
 | Routing source | Captured placement: Combine | Balanced placement: Combine | Combine change | Dispatch change |
 |---|---:|---:|---:|---:|
@@ -24,7 +22,7 @@ Shuffling source tokens preserves destination totals and fanout distribution but
 ## Limits
 
 - Balanced placement changes load, tile padding, ordering, fanout and locality together. Load imbalance alone is not a proven cause.
-- The routing came from a separate TP run. Replaying it with PP placement does not directly explain the historical PP timings.
+- The routing was captured separately from the historical timing run. These replays do not directly explain the historical PP timings.
 - The worker replaces FFN with layout conversion and omits concurrent shared-expert work and downstream weighted reduction. It does not check numerical outputs.
 - Successful captures pass device-count, iteration, duration and operation-order checks. Failed attempts are excluded; some repetitions required targeted resets. Startup failures and an initial stall remain unexplained.
 
@@ -33,7 +31,7 @@ Shuffling source tokens preserves destination totals and fanout distribution but
 1. **Capture PP routing and timings together.** Start with L18/L23 on the same request, chunk and rank. Record expert mapping, valid tokens and per-device Dispatch, Combine and FFN durations. Export indices after measurement and check whether instrumentation changes timing.
 2. **Separate placement effects.** Permute expert slots within each device to test ordering without changing destination traffic or padded totals. Compare placements that balance raw assignments versus tile-rounded load, and record fanout and locality.
 3. **Separate source traffic from token ordering.** Compare whole-source-shard permutations with within-source token permutations, using fixed seeds and randomized run order.
-4. **Validate any production change.** Move expert weights consistently, check correctness, then measure matched traced throughput for TP and PP4 separately.
+4. **Validate any production change.** Move expert weights consistently, check correctness, then measure matched traced PP4 throughput.
 
 Completion requires an explanation linking routing and mapping to cost variation in the same full-model run, or evidence that narrows the cause another way. A production speedup additionally needs correctness and end-to-end measurements. These results do not rule out improvements to static program settings.
 
