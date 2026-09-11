@@ -21,10 +21,8 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
+#include "tt-train/sources/ttml/metal/common/first_column_compute_utils.hpp"
 #include "tt-train/sources/ttml/metal/common/sdpa_compute_utils_common.hpp"
-#ifdef TRISC_MATH
-#include "experimental/llk_sfpu/ckernel_sfpu_sdpa_fw.h"
-#endif
 
 constexpr uint32_t onetile = 1U;
 
@@ -37,17 +35,8 @@ inline constexpr uint32_t round_up(uint32_t a, uint32_t b) {
     return ((a + b - 1U) / b) * b;
 }
 
-// SFPU intrinsics for first-column-only operations.
-// Column vectors (from row-reduce) only have meaningful data in column 0,
-// so we process 4 SFPU iterations (half-face) instead of the standard 8,
-// saving ~75% of SFPU cycles.
-#ifdef TRISC_MATH
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-void recip_tile_first_column(uint32_t idst) {
-    SFPU_UNARY_CALL(
-        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_recip_first_column, (is_fp32_dest_acc_en), idst, VectorMode::C);
-}
-#endif  // TRISC_MATH
+// recip_tile_first_column now lives in metal/common/first_column_compute_utils.hpp
+// so that other ops (PolyNorm) can use it too.
 
 // Apply an attention mask to a Q@K^T score tile already sitting in DST register `register_idx`.
 //
