@@ -186,6 +186,7 @@ def manual_group_norm(input_tensor, num_groups, eps=1e-2):
 @pytest.mark.parametrize("base, amplitude", [(1.0, 0.01), (10.0, 0.05)])
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 def test_group_norm_stable_stats_translation_stability(device, base, amplitude):
+    """Preserve low BF16 group variance in the presence of a shared input offset."""
     torch.manual_seed(7)
     N, C, H, W, num_groups = 1, 1280, 32, 32, 32
     grid = ttnn.CoreGrid(y=8, x=8)
