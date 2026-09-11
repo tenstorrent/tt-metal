@@ -151,6 +151,14 @@ void DataCollector::RecordProgramMetadata(ProgramImpl& program) {
         }
     }
     runtime_id_to_kernel_sources_[runtime_id].store(&it->second, std::memory_order_release);
+
+    auto [core_count_it, core_count_inserted] = program_id_to_core_count_.try_emplace(program_id, 0);
+    if (core_count_inserted) {
+        for (const auto& cores : program.logical_cores()) {
+            core_count_it->second += cores.size();
+        }
+    }
+    runtime_id_to_core_count_[runtime_id].store(core_count_it->second, std::memory_order_release);
 }
 
 void DataCollector::RecordProgramSubDevice(
