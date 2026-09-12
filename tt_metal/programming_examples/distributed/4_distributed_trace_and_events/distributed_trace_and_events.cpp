@@ -4,9 +4,11 @@
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <iostream>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -126,6 +128,12 @@ int main() {
     constexpr uint32_t ADD_OP_ID = 0;
     constexpr uint32_t MULTIPLY_OP_ID = 1;
     constexpr uint32_t SUBTRACT_OP_ID = 2;
+    constexpr size_t required_devices = 8;
+    if (tt::tt_metal::GetNumAvailableDevices() < required_devices) {
+        std::cout << "distributed_trace_and_events requires " << required_devices << " devices, skipping\n";
+        return 0;
+    }
+
     // Create a 2x4 MeshDevice with 2 MeshCQs, 16MB allocated to the trace region and Ethernet Dispatch enabled
     auto mesh_device = MeshDevice::create(
         MeshDeviceConfig(MeshShape(2, 4)),  // Shape of MeshDevice
