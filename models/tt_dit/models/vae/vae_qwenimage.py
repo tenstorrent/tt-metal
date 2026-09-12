@@ -59,7 +59,7 @@ class QwenImageVaeDecoder:
     def load_torch_state_dict(self, state_dict: dict[str, torch.Tensor]) -> None:
         if self.wan_decoder is None:
             self.wan_decoder = WanDecoder(**self.params)
-        self.wan_decoder.load_state_dict(state_dict)
+        self.wan_decoder.load_torch_state_dict(state_dict)
         self._is_loaded = True
 
     def deallocate_weights(self) -> None:
