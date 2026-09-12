@@ -9,7 +9,7 @@ import pytest
 from models.common.utility_functions import torch_random
 from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-from tests.ttnn.utils_for_testing import assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp
 
 pytestmark = pytest.mark.use_module_device
 
@@ -395,6 +395,44 @@ def test_remainder_nan(testing_dtype, device):
     output_tensor = ttnn.to_torch(tt_result)
 
     assert torch.equal(torch.isnan(golden), torch.isnan(output_tensor))
+
+
+@pytest.mark.parametrize(
+    "testing_dtype",
+    ["bfloat16", "float32"],
+)
+def test_remainder_negative_zero(testing_dtype, device):
+    torch_dtype = getattr(torch, testing_dtype)
+    ttnn_dtype = getattr(ttnn, testing_dtype)
+
+    # remainder(-0.0, b) is zero, not b. SFPSETCC is unspecified for -0.0 (VectorUnit.md), so the
+    # sign correction's zero guard admitted it. Only b > 0 trips it, since the correction is
+    # gated on result and b disagreeing in the sign bit.
+    torch_input_a = torch.tensor([-0.0, -0.0, -0.0, -0.0, 0.0, 0.0], dtype=torch_dtype)
+    torch_input_b = torch.tensor([2.0, 3.0, 0.5, -3.0, 3.0, -3.0], dtype=torch_dtype)
+
+    golden_function = ttnn.get_golden_function(ttnn.remainder)
+    golden = golden_function(torch_input_a, torch_input_b, device=device)
+
+    tt_in_a = ttnn.from_torch(
+        torch_input_a,
+        dtype=ttnn_dtype,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    tt_in_b = ttnn.from_torch(
+        torch_input_b,
+        dtype=ttnn_dtype,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output_tensor = ttnn.to_torch(ttnn.remainder(tt_in_a, tt_in_b))
+
+    assert_equal(golden, output_tensor)
 
 
 @pytest.mark.parametrize(
