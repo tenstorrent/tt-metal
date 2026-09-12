@@ -34,6 +34,15 @@ Still missing for a working version: ``grid=(R, C)`` alone does NOT distribute t
 loops -- every core would run the identical program and race on the output. Real
 distribution goes through the ``indexing_maps`` / ``iterator_types`` arguments of
 ``ttl.operation``, which this attempt did not reach.
+
+SECOND FINDING -- the sampling top-k cannot be written in tt-lang AT ALL, at any k.
+``ttnn.topk``'s contract is ``(values, indices)``. ttl 1.0.1 exposes exactly two
+reductions, ``ttl.math.reduce_max`` and ``ttl.math.reduce_sum``, and NO sort, top-k,
+argmax or any other index-producing primitive (checked against ``dir(ttl)`` and
+``dir(ttl.math)``: the set of names matching sort/topk/argmax/index/select/gather is
+empty). The values half is expressible; the indices half has no primitive behind it.
+This is a language gap, not an authoring one -- the same path type-checked the matmul
+above all the way down to its dtype error.
 """
 
 import ttl
@@ -115,3 +124,4 @@ def make_fused_swiglu_ff13(grid):
                         ttl.copy(y_blk, y[mt, nt]).wait()
 
     return fused_swiglu_ff13
+
