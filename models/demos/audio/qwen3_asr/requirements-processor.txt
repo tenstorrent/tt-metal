@@ -1,0 +1,16 @@
+# Qwen3-ASR prompt template + log-mel front-end (``Qwen3ASRProcessor``), pinned.
+#
+# MUST be installed with --no-deps:
+#
+#   pip install --no-deps -r models/demos/audio/qwen3_asr/requirements-processor.txt
+#
+# Why --no-deps: qwen-asr declares transformers==4.57.6 for its CPU modeling stack, which
+# conflicts with the transformers version tt-metal pins. The TT port only uses the
+# processor module, which needs numpy plus four stable transformers utility modules that
+# are present in both versions, and reference/qwen_asr_processor.py imports that module
+# without executing the package __init__ chain that would pull in the modeling stack.
+# Installing with --no-deps therefore leaves tt-metal's environment untouched.
+#
+# This replaces the previous `COPY qwen_asr` from an out-of-repo build context, so the
+# server image and the tests are buildable/runnable from a clean checkout.
+qwen-asr==0.0.6
