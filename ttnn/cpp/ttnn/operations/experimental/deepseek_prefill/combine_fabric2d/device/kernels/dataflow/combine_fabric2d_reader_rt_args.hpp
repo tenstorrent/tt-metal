@@ -4,26 +4,19 @@
 
 #pragma once
 
-// The reader kernel's runtime arguments. One field list: the host constructor takes what the program factory
-// already has and derives every field from it, the kernel constructor reads the same fields back in the same
-// order. Same contract as combine_fabric2d_reader_ct_args.hpp, for the args that cannot be compile-time.
+// The reader kernel's runtime arguments, the counterpart to combine_fabric2d_reader_ct_args.hpp.
 //
-// Which is these: a buffer's address is assigned by the allocator, so it describes an allocation and not a
-// program. Held in compile-time args it survived into every program cache hit, and a hit re-dispatched
-// against buffers the caller had reallocated read its inputs and wrote its output at the previous call's
-// addresses.
+// ReaderRtArgManager owns the one thing the two sides have to agree on: the order. It emplaces the args on
+// the host and reads them back on the kernel, and only it can build a ReaderRtArgs.
 //
-// Being runtime args is not by itself what fixes that. A uint32_t runtime arg is embedded when the program is
-// built and never touched again -- same staleness, one arg list further along. What fixes it is the
-// BufferBinding the framework patches on every dispatch, so this struct states both halves off the one field
-// order: to_rt_arg_vector() is the values the args start at, buffer_bindings() is the positions the framework
-// overwrites. Add a field and both follow; the kernel reads the same index either way.
+// The args are the DRAM base addresses, which cannot be compile-time: a buffer's address is assigned by the
+// allocator, so it describes an allocation and not a program, and a cached program is re-dispatched against
+// whatever buffers the caller hands it. The manager keeps the buffers rather than their addresses so it
+// emplaces them as buffers, which is what gets each position rebound on every dispatch.
 
 #include "combine_fabric2d_kernel_interface.hpp"
 
 #ifndef KERNEL_BUILD
-#include <vector>
-
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -32,10 +25,10 @@
 namespace cmbf2d {
 
 #ifdef KERNEL_BUILD
-// Reads like get_compile_time_arg_val on the other side of the pair, so the two constructors below stay
-// visibly symmetric.
 inline uint32_t get_rt_arg(uint32_t idx) { return get_arg_val<uint32_t>(idx); }
 #endif
+
+struct ReaderRtArgManager;
 
 struct ReaderRtArgs {
     uint32_t dram_in;
@@ -46,33 +39,10 @@ struct ReaderRtArgs {
     uint32_t dram_region;
     uint32_t dram_expert_offsets;
 
-#ifndef KERNEL_BUILD
-    explicit ReaderRtArgs(const op::DramBuffers& dram) :
-        dram_in(static_cast<uint32_t>(dram.in->address())),
-        dram_out(static_cast<uint32_t>(dram.out->address())),
-        dram_fwd(static_cast<uint32_t>(dram.fwd->address())),
-        dram_meta(static_cast<uint32_t>(dram.meta->address())),
-        dram_counts(static_cast<uint32_t>(dram.counts->address())),
-        dram_region(static_cast<uint32_t>(dram.region->address())),
-        dram_expert_offsets(static_cast<uint32_t>(dram.expert_offsets->address())),
-        dram_(dram) {}
+private:
+    friend struct ReaderRtArgManager;
 
-    std::vector<uint32_t> to_rt_arg_vector() const {
-        return {dram_in, dram_out, dram_fwd, dram_meta, dram_counts, dram_region, dram_expert_offsets};
-    }
-
-    // The same order as to_rt_arg_vector(), as arg positions the framework rewrites per dispatch. Without
-    // these the addresses above would be baked into the cached program, which is the bug this file exists for.
-    tt::tt_metal::KernelDescriptor::BufferBindings buffer_bindings(const tt::tt_metal::CoreCoord& core) const {
-        tt::tt_metal::KernelDescriptor::BufferBindings bindings;
-        uint32_t idx = 0;
-        for (auto* buffer :
-             {dram_.in, dram_.out, dram_.fwd, dram_.meta, dram_.counts, dram_.region, dram_.expert_offsets}) {
-            bindings.push_back(tt::tt_metal::BufferBinding{core, idx++, buffer});
-        }
-        return bindings;
-    }
-#else
+#ifdef KERNEL_BUILD
     ReaderRtArgs() :
         dram_in(get_rt_arg(0)),
         dram_out(get_rt_arg(1)),
@@ -81,12 +51,24 @@ struct ReaderRtArgs {
         dram_counts(get_rt_arg(4)),
         dram_region(get_rt_arg(5)),
         dram_expert_offsets(get_rt_arg(6)) {}
+#else
+    ReaderRtArgs() = default;
 #endif
+};
 
+struct ReaderRtArgManager {
 #ifndef KERNEL_BUILD
+    explicit ReaderRtArgManager(const op::DramBuffers& dram) : dram_(dram) {}
+
+    void setup_rt_args(tt::tt_metal::KernelDescriptor& kernel_desc, const tt::tt_metal::CoreCoord& core) const {
+        kernel_desc.emplace_runtime_args(
+            core, {dram_.in, dram_.out, dram_.fwd, dram_.meta, dram_.counts, dram_.region, dram_.expert_offsets});
+    }
+
 private:
-    // Held only to state the bindings above; the args themselves are the uint32_t fields.
-    const op::DramBuffers& dram_;
+    op::DramBuffers dram_;
+#else
+    static ReaderRtArgs get_rt_args() { return ReaderRtArgs(); }
 #endif
 };
 

@@ -98,7 +98,7 @@ struct Dram {
 };
 
 Dram open_dram() {
-    const cmbf2d::ReaderRtArgs rt{};
+    const auto rt = cmbf2d::ReaderRtArgManager::get_rt_args();
     return Dram{
         TensorAccessor(ct.dram_in_args, rt.dram_in),
         TensorAccessor(ct.dram_out_args, rt.dram_out),

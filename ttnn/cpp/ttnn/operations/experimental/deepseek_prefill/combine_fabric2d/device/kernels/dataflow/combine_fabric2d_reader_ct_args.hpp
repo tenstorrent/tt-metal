@@ -12,8 +12,6 @@
 //   [SCALAR_CT_ARGS ..)          schedule, `schedule_len` words
 //   [schedule end ..)            assignments, ASSIGNMENT_WORDS each
 //   [assignments end ..)         TensorAccessorArgs, chained on by the program factory
-//
-// The DRAM base addresses are NOT here: they are runtime args, in combine_fabric2d_reader_rt_args.hpp.
 
 #include "combine_fabric2d_kernel_interface.hpp"
 

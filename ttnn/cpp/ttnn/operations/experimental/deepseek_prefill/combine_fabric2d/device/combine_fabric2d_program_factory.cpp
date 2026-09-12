@@ -287,11 +287,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::NOC_0,
         };
-        // The DRAM addresses, plus the bindings that make the framework rewrite them per dispatch instead of
-        // letting the cached program keep whatever the allocation held when it was built.
-        const cmbf2d::ReaderRtArgs rdr_rt(dram);
-        rdr.runtime_args.emplace_back(self.worker_logical, rdr_rt.to_rt_arg_vector());
-        rdr.buffer_bindings = rdr_rt.buffer_bindings(self.worker_logical);
+        cmbf2d::ReaderRtArgManager(dram).setup_rt_args(rdr, self.worker_logical);
         desc.kernels.push_back(std::move(rdr));
 
         std::vector<uint32_t> rt_raw{1u};  // num_connections
