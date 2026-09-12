@@ -1331,13 +1331,12 @@ std::vector<Tensor> exp2_bw(
     return grad_tensor;
 }
 
-// bw(expm1) = grad * expm1(input) + 1
+// bw(expm1) = grad * exp(input)
 std::vector<Tensor> expm1_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor eresult = ttnn::expm1(input, output_mem_config);
-    Tensor rp1 = ttnn::add(eresult, 1.0f, std::nullopt, output_mem_config);
-    Tensor result = ttnn::multiply(grad, rp1, std::nullopt, output_mem_config);
+    Tensor eresult = ttnn::exp(input, false, output_mem_config);
+    Tensor result = ttnn::multiply(grad, eresult, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
 }
