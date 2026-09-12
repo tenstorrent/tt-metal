@@ -25,6 +25,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.blackhole.qwen36.tt.attention.rope_tp import apply_partial_rope_decode, apply_partial_rope_prefill
+from models.demos.blackhole.qwen36.tt.attention.tp import KV_GROUP_WRITE_OK, _aliases
 from models.demos.blackhole.qwen36.tt.dflash2 import (
     CKC,
     HD,
@@ -320,27 +321,87 @@ class DFlash2DrafterTP:
         v = ttnn.reshape(self._lin(hctx, lw["v"]), (1, n, self.NKVl, HD))
         return kn, v
 
+    def _kv_cfg(self, n):
+        """HEIGHT shard for an n-row paged_update_cache input (one 32-row tile per core), cached per n."""
+        cache = getattr(self, "_kv_cfg_cache", None)
+        if cache is None:
+            cache = self._kv_cfg_cache = {}
+        if n not in cache:
+            cols = next(c for c in range(min(8, n), 0, -1) if n % c == 0)
+            cache[n] = ttnn.create_sharded_memory_config(
+                shape=(ttnn.TILE_SIZE, HD),
+                core_grid=ttnn.CoreGrid(x=cols, y=n // cols),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+        return cache[n]
+
     def _write_rows(self, li, k, v, pos_t, pt_t):
+        """Write the R = U*block draft/extend rows' K/V into the paged context cache.
+
+        Rows of ONE user are consecutive positions of one sequence, so they share a cache tile and
+        must never ride one paged_update_cache call (several cores would read-modify-write the same
+        tile; last writer wins). Rows of DIFFERENT users live in different blocks. So at U > 1 the
+        write goes out GROUPED by in-block index j: call j carries rows {u*block + j}, one row per
+        user, U rows -> 2*block calls per layer instead of 2*R (TPAttention._write_kv_aliased's
+        idiom: tile-view reshape [1,R,32,HD] -> [1,U,block*32,HD], tile-aligned slice, strided
+        slices of the per-row position / page-table tensors). Padding rows of different users all
+        name the scratch block and may collide there: that block is write-only junk.
+        QWEN36_DFLASH_KV_GROUP_WRITE=0 keeps the per-row loop (A/B)."""
         kc, vc = self.kv[li]
-        B = k.shape[1]
+        R = k.shape[1]
         nb = pt_t.shape[-1]
-        k_p = ttnn.pad(k, [1, B, ttnn.TILE_SIZE, HD], [0, 0, 0, 0], 0.0)
-        v_p = ttnn.pad(v, [1, B, ttnn.TILE_SIZE, HD], [0, 0, 0, 0], 0.0)
+        tile = ttnn.TILE_SIZE
+        k_p = ttnn.pad(k, [1, R, tile, HD], [0, 0, 0, 0], 0.0)
+        v_p = ttnn.pad(v, [1, R, tile, HD], [0, 0, 0, 0], 0.0)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
-        for i in range(B):
-            pos_i = ttnn.slice(pos_t, (i,), (i + 1,))
-            pt_i = ttnn.slice(pt_t, (i, 0), (i + 1, nb))
-            for cache, src in ((kc, k_p), (vc, v_p)):
-                row = ttnn.slice(src, (0, i, 0, 0), (1, i + 1, ttnn.TILE_SIZE, HD))
-                row_sh = ttnn.to_memory_config(row, self._sc1)
-                ttnn.deallocate(row)
-                ttnn.experimental.paged_update_cache(cache, row_sh, update_idxs_tensor=pos_i, page_table=pt_i)
-                ttnn.deallocate(row_sh)
-            ttnn.deallocate(pos_i)
-            ttnn.deallocate(pt_i)
-        ttnn.deallocate(k_p)
-        ttnn.deallocate(v_p)
+        U, Bk = self.U, self.block
+        grouped = (
+            U > 1
+            and Bk >= 2
+            and R == U * Bk
+            and KV_GROUP_WRITE_OK
+            and os.environ.get("QWEN36_DFLASH_KV_GROUP_WRITE", "1") != "0"
+        )
+        if not grouped:
+            for i in range(R):
+                pos_i = ttnn.slice(pos_t, (i,), (i + 1,))
+                pt_i = ttnn.slice(pt_t, (i, 0), (i + 1, nb))
+                for cache, src in ((kc, k_p), (vc, v_p)):
+                    row = ttnn.slice(src, (0, i, 0, 0), (1, i + 1, tile, HD))
+                    row_sh = ttnn.to_memory_config(row, self._sc1)
+                    ttnn.deallocate(row)
+                    ttnn.experimental.paged_update_cache(cache, row_sh, update_idxs_tensor=pos_i, page_table=pt_i)
+                    ttnn.deallocate(row_sh)
+                ttnn.deallocate(pos_i)
+                ttnn.deallocate(pt_i)
+            ttnn.deallocate(k_p)
+            ttnn.deallocate(v_p)
+            return
+        cfg = self._kv_cfg(U)
+        view = ttnn.Shape([1, U, Bk * tile, HD])
+        srcs = []
+        for t in (k_p, v_p):
+            vw = ttnn.reshape(t, view, view)  # tile-view alias (same buffer) -- see _write_kv_aliased
+            srcs.append((vw, None if _aliases(vw, t) else t))
+        (k_v, k_orig), (v_v, v_orig) = srcs
+        for j in range(Bk):
+            r0 = j * tile
+            pos_j = ttnn.slice(pos_t, (j,), (R,), (Bk,))  # rows j, j+Bk, ... = user 0..U-1 at in-block index j
+            pt_j = ttnn.slice(pt_t, (j, 0), (R, nb), (Bk, 1))
+            for cache, src in ((kc, k_v), (vc, v_v)):
+                grp = ttnn.slice(src, (0, 0, r0, 0), (1, U, r0 + tile, HD))
+                grp_sh = ttnn.to_memory_config(grp, cfg)
+                ttnn.deallocate(grp)
+                ttnn.experimental.paged_update_cache(cache, grp_sh, update_idxs_tensor=pos_j, page_table=pt_j)
+                ttnn.deallocate(grp_sh)
+            ttnn.deallocate(pos_j)
+            ttnn.deallocate(pt_j)
+        for t in (k_v, v_v, k_orig, v_orig):
+            if t is not None:
+                ttnn.deallocate(t)
 
     # ------------------------------------------------------------------ per-generate state
     def alloc(self, page_tables_torch, block_size, tap_bufs):
