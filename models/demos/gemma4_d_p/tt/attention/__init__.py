@@ -50,7 +50,7 @@ class Gemma4Attention:
         layer_idx,
         tensor_cache_path=None,
         max_batch_size=1,
-        max_seq_len=131072,
+        max_seq_len=262144,
         weight_dtype=ttnn.bfloat16,
         ring_kv_cache=None,
         ring_layer_idx=0,

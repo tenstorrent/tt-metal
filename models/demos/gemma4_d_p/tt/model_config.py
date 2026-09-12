@@ -192,7 +192,7 @@ class Gemma4ModelArgs:
 
     @property
     def max_seq_len(self):
-        return getattr(self, "_max_seq_len", 131072)
+        return getattr(self, "_max_seq_len", 262144)
 
     @max_seq_len.setter
     def max_seq_len(self, value):

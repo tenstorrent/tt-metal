@@ -174,7 +174,7 @@ class Gemma4Model:
         prefill_chunk_size,
         dtype=ttnn.bfloat16,
         tensor_cache_path=None,
-        max_seq_len=131072,
+        max_seq_len=262144,
         max_local_batch_size=1,
         num_layers=None,
         precision=None,
