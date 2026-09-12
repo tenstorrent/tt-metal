@@ -48,6 +48,9 @@ serve:
   # environment/user/assistant turns (OpenCode T7: read(...) delivered as content, no tool call). vllm_bundle/olmo3/
   # generation_config.json is the upstream file plus 100265; it must come in via --generation-config <dir> because vLLM
   # 0.26's --override-generation-config only reaches the sampling defaults, not the eos list.
+  # The same file lowers the server-side default temperature from Olmo's 0.6 to 0.3 (top_p 0.95 kept): on the bfp4 p150
+  # profile, 0.6 derailed on OpenCode's 7k-token agentic prompt in ~15% of replies (copying tool-schema text to the cap);
+  # 0.3 was 20/20 clean and 0.15 10/10 (campaign fix round 5, 2026-09-12). Clients that send their own temperature are unaffected.
   args:
     - [--generation-config, /opt/tt-metal/models/autoports/allenai_olmo_3_1_32b_instruct/vllm_bundle/olmo3]
     - [--tool-parser-plugin, /opt/tt-metal/models/autoports/allenai_olmo_3_1_32b_instruct/vllm_bundle/olmo3/olmo3_tt_tool_parser.py]

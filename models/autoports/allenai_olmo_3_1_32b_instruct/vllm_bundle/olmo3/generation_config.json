@@ -6,7 +6,7 @@
   ],
   "pad_token_id": 100277,
   "transformers_version": "4.57.1",
-  "temperature": 0.6,
+  "temperature": 0.3,
   "top_p": 0.95,
   "max_new_tokens": 32768
 }
