@@ -158,7 +158,7 @@ class MLP:
                 tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
             )
 
-    def __call__(self, hidden_states, is_decode):
+    def __call__(self, hidden_states, is_decode, routing_mask=None):
         """Forward pass: route -> experts
         Args:
             hidden_states: Input tensor [batch, seq_len, hidden_size]
@@ -166,6 +166,15 @@ class MLP:
             Expert output tensor [batch, seq_len, hidden_size]
         """
         expert_indices, expert_weights = self.router(hidden_states, self.use_throughput_experts)
+        if routing_mask is not None and not self.use_throughput_experts:
+            # Rows a server pads a decode step with (position -1) still route: their hidden states are meaningless
+            # after the skipped attention, so their top-k lands on arbitrary experts and the union of experts the
+            # batched decode runs grows towards all of them (measured on P150x8: a single user in a 32-slot server
+            # paid the full batch-32 step time). Zero their routing weights: they leave the union and contribute 0.
+            mask_shape = tuple(int(d) for d in expert_weights.shape)[:-1] + (1,)  # ttnn.Shape has no slicing
+            expert_weights = ttnn.mul(
+                expert_weights, ttnn.reshape(routing_mask, mask_shape), output_tensor=expert_weights
+            )
         expert_output = self.experts(
             hidden_states, topk_expert_indices=expert_indices, topk_expert_weights=expert_weights, is_decode=is_decode
         )

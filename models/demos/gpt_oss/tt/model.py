@@ -385,6 +385,7 @@ class Model:
         batch_size=1,
         skip_lm_head=False,
         page_tables_per_layer=None,
+        routing_mask=None,
     ):
         """
         Shared forward pass through decoder layers and final projection.
@@ -429,6 +430,7 @@ class Model:
                 is_decode=is_decode,
                 user_id=user_id,
                 batch_size=batch_size,
+                routing_mask=routing_mask,
             )
         logits = hidden_states
 
@@ -538,6 +540,18 @@ class Model:
             )
             ttnn.copy_host_to_device_tensor(host_pt, persistent[i])
 
+    def _decode_row_mask(self, current_pos):
+        """[1, 1, B, 1] bf16 tile: 1.0 for the rows of this decode step that hold a user (position >= 0), 0.0 for the
+        rows a server pads the batch with (position -1). Derived on device from the position tensor, which is already
+        a decode-trace input, so it is trace-safe; the MLP zeroes the padding rows' routing weights with it."""
+        batch = current_pos.shape[-1]
+        pos = ttnn.to_layout(ttnn.reshape(current_pos, (1, 1, batch, 1)), ttnn.TILE_LAYOUT)
+        pos_bf16 = ttnn.typecast(pos, ttnn.bfloat16)  # only the sign matters (-1 vs >= 0)
+        pos.deallocate(True)
+        mask = ttnn.ge(pos_bf16, 0.0)
+        pos_bf16.deallocate(True)
+        return mask
+
     def ttnn_decode_forward(
         self,
         tokens,
@@ -583,6 +597,7 @@ class Model:
         rope_mats = self.rope_setup.get_rot_mats(self.get_tt_pos_idx(rot_mat_idxs))
 
         # Forward through layers and head (shared with prefill)
+        routing_mask = self._decode_row_mask(current_pos)
         out = self._forward_layers_and_head(
             hidden_states=input_embeds,
             rope_mats=rope_mats,
@@ -591,7 +606,9 @@ class Model:
             kv_cache=kv_cache,
             is_decode=True,
             page_tables_per_layer=page_tables_per_layer,
+            routing_mask=routing_mask,
         )
+        routing_mask.deallocate(True)
 
         if on_device_logits:
             assert self.sampling is not None, (
