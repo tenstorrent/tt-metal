@@ -101,8 +101,8 @@ private:
         int64_t timestamp_ns,
         uint32_t runtime_id,
         std::span<const uint64_t> values);
-    // Device<->device sync plots, all RATES. Per chip and per sync kind (the 3 us LOCAL tracker, the 1 ms LINK
-    // stamps): the chip's applied AICLK over the ROOT chip's at the same instant -- the factor that scales its
+    // Device<->device sync plots, all RATES. Per chip and per sync kind (the 3 us LOCAL tracker, the LINK stamps
+    // at the rounds' cadence): the chip's applied AICLK over the ROOT chip's at the same instant -- the factor that scales its
     // wall-clock rate onto the root's; the root reads exactly 1. Each stream's AICLK comes from a sliding
     // dwall/drefclk over its PP_CLOCK samples. Plus the cross-chip refclk scale regression the d2d consumer publishes
     // through SyncPlots.

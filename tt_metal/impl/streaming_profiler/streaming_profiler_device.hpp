@@ -175,7 +175,7 @@ private:
     bool aeth_ok_ = false;  // ACTIVE_ETH profiler base resolved: the pusher can drain active eth cores
     uint64_t aeth_prof_l1_ = 0;
     uint32_t aeth_unreserved_ = 0, aeth_unres_size_ = 0;  // ACTIVE_ETH unreserved region: the resident sync stop word
-    // Resident 1 kHz link sync programs (a sender+receiver pair per link), launched after the receiver is up and
+    // Resident link sync programs (a sender+receiver pair per link), launched after the receiver is up and
     // stopped at quiesce. Kept alive here so the Program objects outlive the run, like the relays and pushers.
     struct ResidentSync {
         std::unique_ptr<Program> ps, pr;

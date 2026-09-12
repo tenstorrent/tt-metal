@@ -161,7 +161,7 @@ void kernel_main() {
 
     run_loop_iteration<false>(channel_addrs, channel_sync_addrs, full_payload_size, full_payload_size_eth_words);
 #if defined(PROFILE_STREAMING)
-    // The streaming backend always runs resident at 1 kHz. Runtime args carry the stop word and the pace interval:
+    // The streaming backend always runs resident. Runtime args carry the stop word and the pace interval:
     // positional compile args past index 2 do not reach this kernel (Kernel::compute_hash ignores them), so these
     // must be runtime args. Pace in DVFS-immune refclk; each round's PP_CLOCK(LINK) t0/t2 stamps drain through the
     // idle pusher. Teardown stops the sender first, so the receiver still echoes through this final round.
