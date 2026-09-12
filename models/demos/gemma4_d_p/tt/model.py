@@ -10,8 +10,9 @@ from models.common.tensor_utils import get_rot_transformation_mat
 from models.demos.gemma4_d_p.tt.attention.global_kv_cache import pack_global_rope_device, pack_sliding_rope_device
 from models.demos.gemma4_d_p.tt.attention.ring_prefill import ring_cache_capacity
 from models.demos.gemma4_d_p.tt.layer import Gemma4DecoderLayer
+from models.demos.gemma4_d_p.tt.precision import dtype_to_str
 from models.demos.gemma4_d_p.tt.rms_norm import RMSNorm
-from models.demos.gemma4_d_p.utils.general_utils import cast_host_for_ttnn, get_cache_file_name
+from models.demos.gemma4_d_p.utils.general_utils import get_cache_file_name
 from models.demos.gemma4_d_p.utils.substate import substate
 
 
@@ -239,10 +240,8 @@ class Gemma4Model:
         # Embedding
         is_mesh = hasattr(mesh_device, "shape")
         replicate = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
-        tp = mesh_config.tp_degree if mesh_config else 1
+        tp = mesh_config.tp_degree
         tp_suffix = f"_tp{tp}" if tp > 1 else ""
-
-        from models.demos.gemma4_d_p.tt.precision import dtype_to_str
 
         if state_dict and "model.language_model.embed_tokens.weight" in state_dict:
             embed_key = "model.language_model.embed_tokens.weight"
@@ -251,7 +250,7 @@ class Gemma4Model:
         else:
             embed_key = None
 
-        if embed_key and state_dict:
+        if embed_key:
             embed_weight = state_dict[embed_key]
 
             # Embedding: column-parallel (shard hidden dim across TP devices)
@@ -262,7 +261,7 @@ class Gemma4Model:
                 embed_mapper = replicate
             embed_suffix = f"_{dtype_to_str(embedding_dtype)}"
             self.embedding_weight = ttnn.as_tensor(
-                cast_host_for_ttnn(embed_weight.unsqueeze(0).unsqueeze(0), embedding_dtype),
+                embed_weight.unsqueeze(0).unsqueeze(0),
                 device=mesh_device,
                 dtype=embedding_dtype,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -271,29 +270,9 @@ class Gemma4Model:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-            # LM head (tied with embeddings): column-parallel (shard vocab dim)
-            # Each device holds [hidden, vocab/TP]; all-gather logits after softcapping.
-            # Default is bfloat16 — bfloat8_b is generally too lossy for 262k-vocab
-            # argmax, but the override is exposed for systems that genuinely
-            # need the DRAM relief and can tolerate the precision loss.
-            lm_head_weight = embed_weight.transpose(0, 1).unsqueeze(0).unsqueeze(0)
-            if tp > 1:
-                lm_mapper = mesh_config.column_parallel()
-            else:
-                lm_mapper = replicate
-            lm_head_suffix = f"_{dtype_to_str(lm_head_dtype)}"
-            self.lm_head_weight = ttnn.as_tensor(
-                lm_head_weight,
-                device=mesh_device,
-                dtype=lm_head_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=lm_mapper,
-                cache_file_name=get_cache_file_name(tensor_cache_path, f"lm_head.weight{tp_suffix}{lm_head_suffix}"),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            # Don't load LM head
         else:
             self.embedding_weight = None
-            self.lm_head_weight = None
 
         # Each layer owns a ring cache unless the caller supplies one.
         self.layers = []
