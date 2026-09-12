@@ -7,6 +7,7 @@ import math
 import ttnn
 import torch
 from tests.tt_eager.python_api_testing.sweep_tests.model_tests import TorchConvConv, TorchConvReluConv, BertFeedForward
+from tests.ttnn.python_api_testing.typecast_test_helpers import device_truncates_float_to_uint16
 import transformers
 from loguru import logger
 
@@ -224,8 +225,13 @@ def _simulate_bfp_quantization(x, man_bits):
 
 
 def _float_to_uint16_clamp(x):
-    # Device float_to_uint16 converts to float32 before std::round; match in float32.
-    return torch.clamp(torch.floor(x.float() + 0.5).to(torch.int32), min=0, max=65535)
+    # Truncation, matching every other float -> integer typecast destination and the host path,
+    # on the architectures whose uint16 kernel truncates. The rest still round to nearest with
+    # ties away from zero; see device_truncates_float_to_uint16.
+    values = x.float()
+    if not device_truncates_float_to_uint16():
+        values = torch.floor(values + 0.5)
+    return torch.clamp(values.to(torch.int32), min=0, max=65535)
 
 
 def eltwise_typecast(x, *args, tt_input_dtype, tt_output_dtype, **kwargs):
