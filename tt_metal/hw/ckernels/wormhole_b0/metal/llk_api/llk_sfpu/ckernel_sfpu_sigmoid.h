@@ -61,7 +61,10 @@ inline void calculate_sigmoid() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+// Second parameter accepted for signature parity with Blackhole, where it gates
+// an exp_21f coefficient preload. Here recip_init claims all three program
+// registers, leaving nothing to preload.
+template <bool APPROXIMATION_MODE, bool /*is_fp32_dest_acc_en*/ = false>
 inline void sigmoid_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (!APPROXIMATION_MODE) {

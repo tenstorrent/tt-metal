@@ -284,7 +284,7 @@ struct DRAMStreamingExpertsMatmul {
             }
 
             if constexpr (CTArgs::fuse_silu) {
-                PACK(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (false /*APPROXIMATE*/)));
+                PACK(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (false /*APPROXIMATE*/, CTArgs::fp32_dest_acc_en)));
             }
 
             cb_wait_front(CTArgs::cb_in0, num_tiles_k);
