@@ -38,6 +38,7 @@
 #include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
+#include "metal/operations.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "core/xtensor_utils.hpp"
 #include "metal/ops/cyclic_sdpa_bw/device/parity_snake.hpp"
@@ -991,6 +992,72 @@ TEST(CyclicSdpaBwProfileTest, DISABLED_ProfileTheRelay) {
 // blocks cut the compute per unit of arithmetic by 1.9x without touching the
 // dataflow, so the dataflow's share of the total goes up and this is where
 // the three algorithms should be compared.
+// Against the repository's own backward. ttml::metal::sdpa_bw splits causal
+// work as NC * St/2 pairs -- batch times heads times sequence tiles over two,
+// pairing an early row with a late one to balance the triangle -- so at
+// batch 1, head 1 and S = 4096 it has 64 pairs and fills the same 8x8 grid
+// this port uses at C = 64. Same shape, same cores, same arithmetic: a fair
+// comparison, and the one that says whether any of this was worth doing.
+//
+// The caveat is that sdpa_bw computes the forward statistics itself from an
+// attention output, while this port is handed L and D. Both are timed over
+// the backward call alone.
+void compare_with_sdpa_bw(uint32_t C, uint32_t grid_w, uint32_t grid_h, uint32_t Bt) {
+    using namespace tt::tt_metal;
+    auto* device = &ttml::autograd::ctx().get_device();
+    const auto grid = device->compute_with_storage_grid_size();
+    if (grid_w > grid.x || grid_h > grid.y) {
+        GTEST_SKIP() << "needs " << grid_w << "x" << grid_h;
+    }
+    const uint32_t N = 2u * C * Bt * kTile;
+    const uint32_t d = 64;
+
+    // This port's number, at its own best block shape.
+    const auto ref = make_reference(N, d);
+    double relay_seconds = 0.0;
+    run_relay(C, ref, grid_w, grid_h, /*endpoint_sync=*/true, &relay_seconds, Bt);
+
+    // The repository's, on the same tensors.
+    const auto query = ttml::core::from_xtensor(as_4d(ref.Q), device);
+    const auto key = ttml::core::from_xtensor(as_4d(ref.K), device);
+    const auto value = ttml::core::from_xtensor(as_4d(ref.V), device);
+    const auto grad_output = ttml::core::from_xtensor(as_4d(ref.dO), device);
+    const auto forward = ttml::metal::sdpa_fw(
+        query, key, value, ttml::metal::AttentionMaskType::Causal, std::nullopt, 0.0F,
+        /*return_intermediates=*/true);
+    const auto attn_output = forward[0].value();
+    const auto intermediates = forward[1].value();
+
+    const auto call = [&]() {
+        const auto out = ttml::metal::sdpa_bw(
+            grad_output, attn_output, query, key, value, intermediates,
+            ttml::metal::AttentionMaskType::Causal, std::nullopt, 0.0F);
+        distributed::Finish(device->mesh_command_queue());
+    };
+    call();  // warm
+    std::vector<double> samples;
+    for (uint32_t k = 0; k < 5; ++k) {
+        const auto start = std::chrono::steady_clock::now();
+        call();
+        samples.push_back(std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+    }
+    std::sort(samples.begin(), samples.end());
+    const double sdpa_seconds = samples[samples.size() / 2];
+
+    std::cout << "  N=" << N << " d=" << d << " on " << grid_w << "x" << grid_h << " ("
+              << C << " cores, Bt=" << Bt << "): sdpa_bw " << sdpa_seconds * 1e6
+              << " us, cyclic " << relay_seconds * 1e6 << " us | cyclic "
+              << sdpa_seconds / relay_seconds << "x\n";
+}
+
+TEST(CyclicSdpaBwTimingTest, DISABLED_CompareWithTheRepositorysBackward) {
+    compare_with_sdpa_bw(64, 8, 8, /* Bt */ 1);
+    compare_with_sdpa_bw(32, 8, 4, /* Bt */ 2);
+    compare_with_sdpa_bw(16, 4, 4, /* Bt */ 4);
+    compare_with_sdpa_bw(64, 8, 8, /* Bt */ 2);
+    compare_with_sdpa_bw(64, 8, 8, /* Bt */ 4);
+}
+
 TEST(CyclicSdpaBwTimingTest, DISABLED_CompareTheThreeVariantsWithTallBlocks) {
     time_one_size(16, 4, 4, 64, /* Bt */ 4);
     time_one_size(32, 8, 4, 64, /* Bt */ 4);
