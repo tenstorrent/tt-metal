@@ -28,6 +28,7 @@ set(UNIT_TESTS_LLK_SRC
     test_single_core_matmul_int8.cpp
     test_top32_rm_dev.cpp
     test_transpose.cpp
+    test_triangle_solve.cpp
     test_unary_broadcast.cpp
     test_untilize_tilize.cpp
 )
