@@ -1,0 +1,35 @@
+training_config:
+  project_name: "tt_train_dit"
+  seed: 5489
+  batch_size: 32
+  max_steps: 5000
+  model_save_interval: 1000
+  data_path: "data/cifar-10"
+  output_dir: "runs/dit"
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/dit_tiny.yaml"
+  optimizer:
+    type: AdamW
+    lr: 0.0001
+    beta1: 0.9
+    beta2: 0.999
+    epsilon: 1.0e-8
+    weight_decay: 0.0
+
+diffusion_config:
+  timesteps: 1000
+  beta_start: 0.0001
+  beta_end: 0.02
+  cfg_drop_prob: 0.1
+
+eval_config:
+  sample_interval: 1000
+  sample_steps: 50
+  cfg_scale: 2.0
+
+logging_config:
+  log_interval: 50
+  wandb: false
+
+device_config:
+  enable_ddp: false
+  mesh_shape: [1, 1]
