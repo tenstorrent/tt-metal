@@ -1042,46 +1042,50 @@ std::vector<tt::tt_fabric::GroupingInfo> flattened_mesh_to_topology_variants(
     // name_suffix gives each topology variant a distinct grouping name (in addition to the GroupingInfo::type
     // field) so logs and committed groupings make clear which variant matched/placed. The MESH variant keeps
     // the plain "_flat" name; torus variants append "_torus_x/_y/_xy".
-    static const std::array<std::tuple<const char*, const char*, std::array<bool, 2>>, 4> k_variants = {{
-        {"MESH", "", {false, false}},
-        {"TORUSX", "_torus_x", {true, false}},
-        {"TORUSY", "_torus_y", {false, true}},
-        {"TORUSXY", "_torus_xy", {true, true}},
-    }};
-
-    std::vector<tt::tt_fabric::GroupingInfo> result;
-    result.reserve(k_variants.size());
+    struct TopologyVariantSpec {
+        const char* type;
+        const char* name_suffix;
+        std::array<bool, 2> ring_dims;
+    };
 
     const auto& node_grid_dims = mesh.node_grid_dims;
     const size_t expected_node_count = node_grid_dims.size() >= 2
                                            ? static_cast<size_t>(node_grid_dims[0] * node_grid_dims[1])
                                            : mesh.graph.get_nodes().size();
     const bool can_add_torus_wrap = node_grid_dims.size() >= 2 && mesh.graph.get_nodes().size() == expected_node_count;
+    // Size-1 and size-2 axes are ordinary mesh links; only dims > 2 can carry a distinct torus wrap.
+    const bool wrap_x = can_add_torus_wrap && is_genuine_torus_dimension(node_grid_dims[0]);
+    const bool wrap_y =
+        can_add_torus_wrap && node_grid_dims.size() > 1 && is_genuine_torus_dimension(node_grid_dims[1]);
 
-    for (const auto& [topo_type, name_suffix, ring_dims_template] : k_variants) {
+    std::vector<TopologyVariantSpec> variant_specs;
+    variant_specs.reserve(4);
+    variant_specs.push_back({"MESH", "", {false, false}});
+    if (wrap_x) {
+        variant_specs.push_back({"TORUSX", "_torus_x", {true, false}});
+    }
+    if (wrap_y) {
+        variant_specs.push_back({"TORUSY", "_torus_y", {false, true}});
+    }
+    if (wrap_x && wrap_y) {
+        variant_specs.push_back({"TORUSXY", "_torus_xy", {true, true}});
+    }
+
+    std::vector<tt::tt_fabric::GroupingInfo> result;
+    result.reserve(variant_specs.size());
+
+    for (const auto& spec : variant_specs) {
         tt::tt_fabric::GroupingInfo info = grouping;
-        info.name = grouping.name + "_flat" + name_suffix;
-        info.type = topo_type;
+        info.name = grouping.name + "_flat" + spec.name_suffix;
+        info.type = spec.type;
         rebuild_items_from_flattened_mesh(info, mesh);
 
-        const bool is_mesh = std::strcmp(topo_type, "MESH") == 0;
+        const bool is_mesh = std::strcmp(spec.type, "MESH") == 0;
         if (is_mesh) {
             info.adjacency_graph = mesh.graph;
-        } else if (can_add_torus_wrap) {
-            std::vector<bool> ring_dims(ring_dims_template.begin(), ring_dims_template.end());
-            // Drop wrap only on axes of size 2 or less; keep any genuine wrap on the other axis.
-            if (ring_dims[0] && !is_genuine_torus_dimension(node_grid_dims[0])) {
-                ring_dims[0] = false;
-            }
-            if (ring_dims.size() > 1 && ring_dims[1] && !is_genuine_torus_dimension(node_grid_dims[1])) {
-                ring_dims[1] = false;
-            }
-            if (!ring_dims[0] && (ring_dims.size() < 2 || !ring_dims[1])) {
-                continue;
-            }
-            info.adjacency_graph = add_torus_wrap_edges(mesh, ring_dims);
         } else {
-            continue;
+            std::vector<bool> ring_dims(spec.ring_dims.begin(), spec.ring_dims.end());
+            info.adjacency_graph = add_torus_wrap_edges(mesh, ring_dims);
         }
 
         info.flattened_node_grid_dims = node_grid_dims;
