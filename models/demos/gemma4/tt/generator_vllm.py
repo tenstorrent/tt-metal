@@ -2297,7 +2297,9 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
             dec.prefill_ingest(taps, n)
             dec.reseed(int(anchor_id), int(start))
         else:
-            self._spec_release_decoder()
+            # Keep the per-layer tables installed above: the new decoder reads
+            # them in __init__ (see _spec_release_decoder's drop_page_tables).
+            self._spec_release_decoder(drop_page_tables=False)
             dec = DFlashFusedDecoder(model0, self._spec_get_drafter(), kv_layers, pt)
             dec.prefill_ingest(taps, n)
             dec.capture(int(anchor_id), int(start), max_new=horizon)
@@ -2314,7 +2316,7 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
             f"(anchor={int(anchor_id)}, start={start}, bucket={self._spec_decoder_bucket})"
         )
 
-    def _spec_release_decoder(self):
+    def _spec_release_decoder(self, drop_page_tables=True):
         dec = self._spec_decoder
         self._spec_decoder = None
         self._spec_decoder_bucket = None
@@ -2323,11 +2325,20 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         # BATCHED baseline decode (adaptive fallback) rebuilds its own set instead
         # of reading this request's stale ring tables. Re-installed on next
         # bootstrap; kept alive DURING the session because refresh reads it.
-        try:
-            if hasattr(self.model[0], "_active_page_tables_per_layer"):
-                del self.model[0]._active_page_tables_per_layer
-        except Exception:
-            pass
+        #
+        # ``drop_page_tables=False`` is for the one caller that releases the OLD
+        # decoder AFTER installing the NEW request's tables (_spec_bootstrap's
+        # no-reuse branch). Dropping them there deletes the install that the
+        # DFlashFusedDecoder constructed on the next line depends on: its v_ptl
+        # comes from model._active_page_tables_per_layer, so the new session
+        # would fall back to the FLAT table for sliding layers and decode
+        # garbage at long context.
+        if drop_page_tables:
+            try:
+                if hasattr(self.model[0], "_active_page_tables_per_layer"):
+                    del self.model[0]._active_page_tables_per_layer
+            except Exception:
+                pass
         if dec is None:
             return
         try:
