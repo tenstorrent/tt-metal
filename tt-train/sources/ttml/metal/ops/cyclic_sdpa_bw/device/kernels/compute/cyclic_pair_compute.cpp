@@ -58,6 +58,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
+#include "tools/profiler/kernel_profiler.hpp"
 #include "tt-train/sources/ttml/metal/ops/sdpa_bw/device/kernels/compute/sdpa_bw_compute_utils.hpp"
 
 #ifndef COMPUTE_STAGE
@@ -91,6 +92,19 @@ constexpr uint32_t scaler_bits = get_compile_time_arg_val(2);  // 1/sqrt(d), flo
 constexpr uint32_t minus_one_bits = get_compile_time_arg_val(3);
 constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(4);
 constexpr uint32_t block_size = get_compile_time_arg_val(5);
+// Row-tiles per block: B = Bt * 32. Bt > 1 is what lets the score matmuls of
+// one row issue back to back, so the matmul pipeline latency is paid once per
+// row instead of once per tile. Profiling put that latency at ~1.4 us against
+// 0.076 us for each additional tile issued behind it.
+constexpr uint32_t Bt = get_compile_time_arg_val(6);
+constexpr uint32_t score_tiles = Bt * Bt;
+
+// Score tiles live in even registers because both apply_mask_on_reg and the
+// softmax step need a scratch register next to the one they work on, and
+// several score tiles are live at once. Bt <= 4 fits the eight FP32 registers.
+constexpr uint32_t score_reg(uint32_t b) {
+    return 2u * b;
+}
 
 constexpr uint32_t cb_query = tt::CBIndex::c_0;
 constexpr uint32_t cb_key = tt::CBIndex::c_1;
@@ -111,6 +125,31 @@ constexpr uint32_t cb_grad_query = tt::CBIndex::c_16;  // dQ_i
 constexpr uint32_t cb_grad_key = tt::CBIndex::c_17;    // dK_j
 constexpr uint32_t cb_grad_value = tt::CBIndex::c_18;  // dV_j
 constexpr uint32_t cb_grad_query_seed = tt::CBIndex::c_19;  // previous dQ_i
+
+// The same fused FP32 softmax as sdpa_bw's apply_softmax_statistics_on_dst,
+// but reading L from a chosen tile and taking the scratch register as an
+// argument: that helper uses scores_reg + 1, which is another score tile
+// here. At Bt = 1 with tmp = scores_reg + 1 this is the same sequence.
+void softmax_on_dst(
+    const uint32_t scores_reg,
+    const uint32_t tmp_reg,
+    const uint32_t cb_statistics,
+    const uint32_t stat_tile) {
+    reconfig_data_format_srcb(cb_statistics);
+    UNPACK((llk_unpack_A_init<BroadcastType::COL, false, EltwiseBinaryReuseDestType::NONE, false>(
+        false, false, cb_statistics)));
+    MATH((llk_math_eltwise_unary_datacopy_init<
+          ckernel::DataCopyType::B2D,
+          DST_ACCUM_MODE,
+          BroadcastType::COL>(cb_statistics)));
+    unary_bcast<BroadcastType::COL>(cb_statistics, stat_tile, tmp_reg);
+
+    sub_binary_tile_init();
+    sub_binary_tile(scores_reg, tmp_reg, scores_reg);
+
+    sdpa_exp_tile_init();
+    sdpa_exp_tile(scores_reg);
+}
 
 // Copy one tile from a CB to the probe output, leaving the source in place.
 //
@@ -151,10 +190,10 @@ void probe_tile(uint32_t cb_source) {
 // dQ and dV looked fine. So dS is duplicated inside DST with
 // copy_dest_values, one copy is transposed and one is not, and all three
 // operands are packed from registers.
-void compute_grad_scores_with_transposes(bool want_probe) {
-    cb_wait_front(cb_grad_attn_weights, onetile);
-    cb_wait_front(cb_attention_weights, onetile);
-    cb_wait_front(cb_u_scalar, onetile);
+void compute_grad_scores_with_transposes(bool want_probe, uint32_t a = 0, uint32_t b = 0) {
+    // The score tile of this (row, column) tile pair, and the row's D.
+    const uint32_t score_tile = a * Bt + b;
+    const uint32_t transposed_tile = b * Bt + a;
 
     constexpr uint32_t grad_reg = 0;      // dS, then dS^T
     constexpr uint32_t attn_reg = 1;      // P, then P^T
@@ -163,13 +202,13 @@ void compute_grad_scores_with_transposes(bool want_probe) {
     tile_regs_acquire();
     reconfig_data_format(cb_grad_attn_weights, cb_u_scalar);
     sub_bcast_cols_init(cb_grad_attn_weights, cb_u_scalar);
-    sub_tiles_bcast_cols(cb_grad_attn_weights, cb_u_scalar, 0, 0, grad_reg);
+    sub_tiles_bcast_cols(cb_grad_attn_weights, cb_u_scalar, score_tile, a, grad_reg);
 
     // P is copied to DST, which is why cb_attention_weights is the one CB
     // declared UnpackToDestFp32: it keeps the elementwise chain at full FP32.
     reconfig_data_format_srca(cb_grad_attn_weights, cb_attention_weights);
     copy_init(cb_attention_weights);
-    copy_tile(cb_attention_weights, 0, attn_reg);
+    copy_tile(cb_attention_weights, score_tile, attn_reg);
 
     mul_binary_tile_init();
     mul_binary_tile(grad_reg, attn_reg, grad_reg);
@@ -187,15 +226,14 @@ void compute_grad_scores_with_transposes(bool want_probe) {
 
     tile_regs_commit();
     tile_regs_wait();
-    cb_reserve_back(cb_grad_scores, onetile);
-    cb_reserve_back(cb_grad_scores_transposed, onetile);
-    cb_reserve_back(cb_attn_weights_transposed, onetile);
+    // Out-of-order packing, because dS is indexed by (row, column) and its
+    // transpose by (column, row): one of the two cannot be sequential.
     pack_reconfig_data_format(cb_grad_attn_weights, cb_grad_scores);
-    pack_tile(grad_keep_reg, cb_grad_scores);
+    pack_tile</* out_of_order */ true>(grad_keep_reg, cb_grad_scores, score_tile);
     pack_reconfig_data_format(cb_grad_scores, cb_grad_scores_transposed);
-    pack_tile(grad_reg, cb_grad_scores_transposed);
+    pack_tile</* out_of_order */ true>(grad_reg, cb_grad_scores_transposed, transposed_tile);
     pack_reconfig_data_format(cb_grad_scores_transposed, cb_attn_weights_transposed);
-    pack_tile(attn_reg, cb_attn_weights_transposed);
+    pack_tile</* out_of_order */ true>(attn_reg, cb_attn_weights_transposed, transposed_tile);
     // The probe holds one tile, so only the last pair leaves its dS there.
     if (want_probe) {
         cb_reserve_back(cb_probe, onetile);
@@ -204,9 +242,6 @@ void compute_grad_scores_with_transposes(bool want_probe) {
         cb_push_back(cb_probe, onetile);
     }
     tile_regs_release();
-    cb_push_back(cb_grad_scores, onetile);
-    cb_push_back(cb_grad_scores_transposed, onetile);
-    cb_push_back(cb_attn_weights_transposed, onetile);
 }
 
 }  // namespace
@@ -217,9 +252,12 @@ void kernel_main() {
     matmul_init(cb_query, cb_key);
 
 #if SEED_DQ
-    pack_tiles_to_output(cb_grad_query_seed, cb_grad_query, qWt);
+    pack_tiles_to_output(cb_grad_query_seed, cb_grad_query, Bt * qWt);
 #endif
 
+#if COMPUTE_STAGE < 5
+    // The staged probes look at one tile, so they stay a single-tile tool.
+    static_assert(Bt == 1u, "the intermediate stages are only defined for Bt == 1");
     for (uint32_t pair = 0; pair < NUM_PAIRS; ++pair) {
     const bool accumulate = pair > 0;
     cb_wait_front(cb_query, qWt);
@@ -316,4 +354,237 @@ void kernel_main() {
 #endif
 #endif
     }
+#else
+    for (uint32_t pair = 0; pair < NUM_PAIRS; ++pair) {
+        DeviceZoneScopedN("PAIR");
+        const bool accumulate = pair > 0;
+        cb_wait_front(cb_query, Bt * qWt);
+        cb_wait_front(cb_key, Bt * qWt);
+        cb_wait_front(cb_value, Bt * vWt);
+        cb_wait_front(cb_grad_output, Bt * vWt);
+        cb_wait_front(cb_lse, Bt);
+        cb_wait_front(cb_u_scalar, Bt);
+
+        // ---- S = Q K^T / sqrt(d), then P = exp(S - L), a row of tiles at a
+        // time. Every column tile of a row is issued into DST before any of
+        // them is read back, which is the whole point of Bt > 1: the matmul
+        // pipeline latency is paid once for the row instead of once per tile.
+        cb_reserve_back(cb_attention_weights, score_tiles);
+        for (uint32_t a = 0; a < Bt; ++a) {
+            reconfig_data_format(cb_query, cb_key);
+            matmul_init(cb_query, cb_key, /* transpose */ 1);
+            tile_regs_acquire();
+            for (uint32_t b = 0; b < Bt; ++b) {
+                for (uint32_t k = 0; k < qWt; ++k) {
+                    matmul_tiles(cb_query, cb_key, a * qWt + k, b * qWt + k, score_reg(b));
+                }
+            }
+            for (uint32_t b = 0; b < Bt; ++b) {
+#ifdef DIAGONAL_BLOCK
+                if (b == a) {
+                    // The one tile the triangle actually cuts through.
+                    apply_mask_on_reg(
+                        score_reg(b), cb_attn_mask, scaler_bits, minus_one_bits, custom_inf_bits);
+                } else {
+                    binop_with_scalar_tile_init();
+                    mul_unary_tile(score_reg(b), scaler_bits);
+                }
+#else
+                binop_with_scalar_tile_init();
+                mul_unary_tile(score_reg(b), scaler_bits);
+#endif
+                softmax_on_dst(score_reg(b), score_reg(b) + 1u, cb_lse, a);
+#ifdef DIAGONAL_BLOCK
+                if (b > a) {
+                    // Wholly above the diagonal. P is zero there, and zeroing
+                    // it here is what lets every later sum run over all tiles
+                    // without knowing anything about the triangle: dS
+                    // inherits the zero through its P factor.
+                    binop_with_scalar_tile_init();
+                    mul_unary_tile(score_reg(b), /* 0.0f */ 0u);
+                }
+#endif
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_reconfig_data_format(cb_attention_weights);
+            for (uint32_t b = 0; b < Bt; ++b) {
+                pack_tile</* out_of_order */ true>(
+                    score_reg(b), cb_attention_weights, a * Bt + b);
+            }
+            tile_regs_release();
+        }
+        cb_push_back(cb_attention_weights, score_tiles);
+        cb_wait_front(cb_attention_weights, score_tiles);
+
+        // ---- dP = dO V^T, the same row-at-a-time shape
+        cb_reserve_back(cb_grad_attn_weights, score_tiles);
+        for (uint32_t a = 0; a < Bt; ++a) {
+            reconfig_data_format(cb_grad_output, cb_value);
+            matmul_init(cb_grad_output, cb_value, /* transpose */ 1);
+            tile_regs_acquire();
+            for (uint32_t b = 0; b < Bt; ++b) {
+                for (uint32_t k = 0; k < vWt; ++k) {
+                    matmul_tiles(cb_grad_output, cb_value, a * vWt + k, b * vWt + k, b);
+                }
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_reconfig_data_format(cb_attention_weights, cb_grad_attn_weights);
+            for (uint32_t b = 0; b < Bt; ++b) {
+                pack_tile</* out_of_order */ true>(b, cb_grad_attn_weights, a * Bt + b);
+            }
+            tile_regs_release();
+        }
+        cb_push_back(cb_grad_attn_weights, score_tiles);
+        cb_wait_front(cb_grad_attn_weights, score_tiles);
+
+        // ---- dS, and dS^T and P^T alongside, one tile pair at a time. This
+        // stage is elementwise and transposes, so there is no latency to
+        // amortize and three DST registers per tile to respect.
+        cb_reserve_back(cb_grad_scores, score_tiles);
+        cb_reserve_back(cb_grad_scores_transposed, score_tiles);
+        cb_reserve_back(cb_attn_weights_transposed, score_tiles);
+        for (uint32_t a = 0; a < Bt; ++a) {
+            for (uint32_t b = 0; b < Bt; ++b) {
+                compute_grad_scores_with_transposes(
+                    /* want_probe */ (pair + 1u == NUM_PAIRS) && a == 0u && b == 0u, a, b);
+            }
+        }
+        cb_push_back(cb_grad_scores, score_tiles);
+        cb_push_back(cb_grad_scores_transposed, score_tiles);
+        cb_push_back(cb_attn_weights_transposed, score_tiles);
+        cb_wait_front(cb_grad_scores, score_tiles);
+        cb_wait_front(cb_grad_scores_transposed, score_tiles);
+        cb_wait_front(cb_attn_weights_transposed, score_tiles);
+
+        // ---- dQ_i += dS K_j. The sum that used to be one tile product is
+        // now over the block's column tiles, and it accumulates in DST before
+        // anything is packed, so the extra depth costs no extra packs.
+        const bool seed_dq = accumulate || (SEED_DQ != 0);
+        pack_reconfig_data_format(cb_attn_weights_transposed, cb_grad_query);
+        if (!seed_dq) {
+            cb_reserve_back(cb_grad_query, Bt * qWt);
+        } else {
+            pack_reconfig_l1_acc(true);
+        }
+        for (uint32_t a = 0; a < Bt; ++a) {
+            for (uint32_t k0 = 0; k0 < qWt; k0 += block_size) {
+                tile_regs_acquire();
+                reconfig_data_format_srca(cb_grad_query, cb_key);
+                matmul_init(cb_grad_scores, cb_key, /* transpose */ 0);
+                for (uint32_t bi = 0; bi < block_size; ++bi) {
+                    for (uint32_t b = 0; b < Bt; ++b) {
+                        matmul_tiles(
+                            cb_grad_scores, cb_key, a * Bt + b, b * qWt + k0 + bi, bi);
+                    }
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t bi = 0; bi < block_size; ++bi) {
+                    pack_tile(bi, cb_grad_query);
+                }
+                tile_regs_release();
+            }
+        }
+        if (seed_dq) {
+            pack_reconfig_l1_acc(false);
+            cb_pop_front(cb_grad_query, Bt * qWt);
+            cb_reserve_back(cb_grad_query, Bt * qWt);
+        }
+        cb_push_back(cb_grad_query, Bt * qWt);
+        cb_wait_front(cb_grad_query, Bt * qWt);
+
+        // ---- dV_j += P^T dO_i, summed over the block's row tiles
+        pack_reconfig_data_format(cb_grad_query, cb_grad_value);
+        if (!accumulate) {
+            cb_reserve_back(cb_grad_value, Bt * vWt);
+        } else {
+            pack_reconfig_l1_acc(true);
+        }
+        for (uint32_t b = 0; b < Bt; ++b) {
+            for (uint32_t k0 = 0; k0 < vWt; k0 += block_size) {
+                tile_regs_acquire();
+                reconfig_data_format_srca(cb_grad_value, cb_grad_output);
+                matmul_init(cb_attn_weights_transposed, cb_grad_output, /* transpose */ 0);
+                for (uint32_t bi = 0; bi < block_size; ++bi) {
+                    for (uint32_t a = 0; a < Bt; ++a) {
+                        matmul_tiles(
+                            cb_attn_weights_transposed,
+                            cb_grad_output,
+                            b * Bt + a,
+                            a * vWt + k0 + bi,
+                            bi);
+                    }
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t bi = 0; bi < block_size; ++bi) {
+                    pack_tile(bi, cb_grad_value);
+                }
+                tile_regs_release();
+            }
+        }
+        if (accumulate) {
+            pack_reconfig_l1_acc(false);
+            cb_pop_front(cb_grad_value, Bt * vWt);
+            cb_reserve_back(cb_grad_value, Bt * vWt);
+        }
+        cb_push_back(cb_grad_value, Bt * vWt);
+        cb_wait_front(cb_grad_value, Bt * vWt);
+
+        // ---- dK_j += dS^T Q_i, likewise. The reconfig arguments name what
+        // the previous operation left in the packer and in SrcA, which here
+        // is the dV update just above.
+        pack_reconfig_data_format(cb_grad_value, cb_grad_key);
+        if (!accumulate) {
+            cb_reserve_back(cb_grad_key, Bt * qWt);
+        } else {
+            pack_reconfig_l1_acc(true);
+        }
+        for (uint32_t b = 0; b < Bt; ++b) {
+            for (uint32_t k0 = 0; k0 < qWt; k0 += block_size) {
+                tile_regs_acquire();
+                reconfig_data_format_srca(cb_grad_output, cb_query);
+                matmul_init(cb_grad_scores_transposed, cb_query, /* transpose */ 0);
+                for (uint32_t bi = 0; bi < block_size; ++bi) {
+                    for (uint32_t a = 0; a < Bt; ++a) {
+                        matmul_tiles(
+                            cb_grad_scores_transposed,
+                            cb_query,
+                            b * Bt + a,
+                            a * qWt + k0 + bi,
+                            bi);
+                    }
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t bi = 0; bi < block_size; ++bi) {
+                    pack_tile(bi, cb_grad_key);
+                }
+                tile_regs_release();
+            }
+        }
+        if (accumulate) {
+            pack_reconfig_l1_acc(false);
+            cb_pop_front(cb_grad_key, Bt * qWt);
+            cb_reserve_back(cb_grad_key, Bt * qWt);
+        }
+        cb_push_back(cb_grad_key, Bt * qWt);
+        cb_wait_front(cb_grad_key, Bt * qWt);
+
+        // This pair's operands are done with; the next pair's are behind them.
+        cb_pop_front(cb_query, Bt * qWt);
+        cb_pop_front(cb_key, Bt * qWt);
+        cb_pop_front(cb_value, Bt * vWt);
+        cb_pop_front(cb_grad_output, Bt * vWt);
+        cb_pop_front(cb_lse, Bt);
+        cb_pop_front(cb_u_scalar, Bt);
+        cb_pop_front(cb_attention_weights, score_tiles);
+        cb_pop_front(cb_grad_attn_weights, score_tiles);
+        cb_pop_front(cb_grad_scores, score_tiles);
+        cb_pop_front(cb_grad_scores_transposed, score_tiles);
+        cb_pop_front(cb_attn_weights_transposed, score_tiles);
+    }
+#endif
 }
