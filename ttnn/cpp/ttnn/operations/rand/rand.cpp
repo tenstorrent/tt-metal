@@ -6,8 +6,10 @@
 #include "rand.hpp"
 
 #include <cstdint>
+#include <functional>
 
 #include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/rand/device/rand_device_operation.hpp"
 #include "ttnn/operations/uniform/uniform_range.hpp"
@@ -79,8 +81,19 @@ Tensor rand(
     float from,
     float to,
     std::uint32_t seed,
-    const std::optional<tt::tt_metal::distributed::MeshMapperConfig>& mesh_mapper) {
+    const std::optional<tt::tt_metal::distributed::MeshMapperConfig>& mesh_mapper,
+    RandGenerator generator,
+    const std::optional<Tensor>& state) {
     TT_FATAL(is_supported_output_dtype(dtype), "[ttnn::rand] Output dtype {} is not supported.", dtype);
+    if (state.has_value()) {
+        const CoreCoord grid = device.compute_with_storage_grid_size();
+        const ttnn::Shape& state_shape = state->logical_shape();
+        TT_FATAL(
+            state->dtype() == DataType::UINT32 && state->layout() == Layout::ROW_MAJOR && state_shape.rank() == 2 &&
+                state_shape[1] == 32 && state_shape[0] >= grid.x * grid.y && state->device() == std::addressof(device),
+            "ttnn::rand: state must come from ttnn::rand_state on the same device (uint32 row-major [>= {}, 32])",
+            grid.x * grid.y);
+    }
 
     const bool needs_typecast = dtype != DataType::FLOAT32 && dtype != DataType::BFLOAT16;
     const DataType generation_dtype = needs_typecast ? DataType::FLOAT32 : dtype;
@@ -121,7 +134,9 @@ Tensor rand(
         output_range.upper_bound,
         seed,
         std::move(mesh_dim_is_sharded),
-        tensor_topology);
+        tensor_topology,
+        generator,
+        state);
     if (needs_typecast) {
         tensor = ttnn::typecast(tensor, dtype);
     }
@@ -134,6 +149,17 @@ Tensor rand(
     }
 
     return tensor;
+}
+
+Tensor rand_state(MeshDevice& device) {
+    const CoreCoord grid = device.compute_with_storage_grid_size();
+    const uint32_t num_cores = static_cast<uint32_t>(grid.x * grid.y);
+    return ttnn::zeros(
+        ttnn::Shape({num_cores, 32u}),
+        DataType::UINT32,
+        Layout::ROW_MAJOR,
+        std::ref(device),
+        types::DRAM_MEMORY_CONFIG);
 }
 
 }  // namespace ttnn

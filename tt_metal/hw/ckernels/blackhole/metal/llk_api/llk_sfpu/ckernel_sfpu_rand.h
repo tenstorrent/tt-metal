@@ -122,7 +122,7 @@ inline void rand_rows() {
 }
 
 template <bool APPROXIMATION_MODE>
-inline void rand(std::uint32_t from, std::uint32_t scale) {
+inline void rand(std::uint32_t from, std::uint32_t scale, std::uint32_t salt) {
     constexpr std::uint32_t exponent_shift = 23;
     constexpr std::uint32_t exponent_mask = 0xFF;
     constexpr std::uint32_t normalization_exponent = 31;
@@ -146,6 +146,11 @@ inline void rand(std::uint32_t from, std::uint32_t scale) {
     TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_UPPER, from >> 16);
 
     make_lane_salt();
+    if (salt != 0) {
+        TT_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_LOWER, salt & 0xFFFF);
+        TT_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_UPPER, salt >> 16);
+        TTI_SFPXOR(0, p_sfpu::LREG5, p_sfpu::LREG3, 0);
+    }
     rand_prng<p_sfpu::LREG0>();
     TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
     begin_mix_uint32_mul24();
