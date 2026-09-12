@@ -20,9 +20,11 @@ class Cluster;
 namespace tt::tt_metal::streaming_profiler::link_sync {
 
 constexpr uint32_t kPaceTicks = 500000;  // a round every 10 ms of the eth tile's 50 MHz refclk
-// The top of the active eth core's unreserved region: the frame slots, then the stop, done and diagnostic words at
-// +64, where the resident kernels keep theirs too.
-constexpr uint32_t kL1Bytes = 128;
+// The top of the active eth core's unreserved region: the pilot's landing place and the frame slots (eth_ptp.hpp
+// kPilotOffset, kSlotsOffset), then the stop, done and diagnostic words at kCtlOffset, where the resident kernels
+// keep theirs too.
+constexpr uint32_t kL1Bytes = 640;
+constexpr uint32_t kCtlOffset = 480;
 
 enum class Role : uint32_t { None = 0, Sender = 1, Receiver = 2 };
 // TT_METAL_STREAMING_PROFILER_LINK_SYNC=0 leaves the link sync out of a profiler session: no links planned, every

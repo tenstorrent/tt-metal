@@ -18,10 +18,17 @@
 //   - The RX stamp is pushed at start-of-frame, before the RX queue's L1 write of the frame is visible to the ERISC,
 //     so a poller that drains the FIFO while waiting for a frame consumes that frame's stamp.
 //   - The link is never idle: each TX queue sends a sequence-number keepalive after LOCAL_SEQ_UPDATE_TIMEOUT idle
-//     cycles (0x1f40 at boot, ~6 us), and every keepalive gets an RX stamp under the no-match label. One issued
-//     between arming the stamp request and the first frame is stamped under the frame's tag (measured: 1-2 % of
-//     rounds). The timeout cannot be held off to avoid that: with it at its maximum the peer's queue retransmits
+//     cycles (0x1f40 at boot; measured 8002 AICLK cycles apart), and every keepalive gets an RX stamp under the
+//     no-match label. A keepalive waiting at the MAC when the stamp request is armed is stamped under the frames'
+//     tag. The timeout cannot be held off to avoid that: with it at its maximum the peer's queue retransmits
 //     (duplicate frames, so duplicate ingress stamps, in every round after the first), the updates being its acks.
+//   - The queue's counters see every hand-off, keepalives included, and in a fixed order: PKT_START_CNT moves 86
+//     cycles after the command (the L1 fetch), PKT_END_CNT 22 cycles later, the MAC FIFO entry 65 cycles after that
+//     (35 after a keepalive's count), whatever the frame's size. WORD_CNT counts 96-byte units on the wire: one for a
+//     keepalive or a frame of up to 64 bytes of payload, two from 80 bytes of payload to 128. Keepalives carry no
+//     sequence number (the RX queues' sequence registers stand still through them) and, per the ISA documentation, are
+//     generated only when the queue has no other packet to carry the numbers, so none is sent between or behind queued
+//     frames.
 //   - Reading the LO half of CFR or PTP64NS captures its HI half (tt_ptp_timer.sv: the HI register loads on the LO
 //     read strobe). The wall clock has two HI addresses: WALL_CLOCK_1 is live, WALL_CLOCK_1_AT is the value at the
 //     last LO read; only the latter pairs with LO.
@@ -159,6 +166,10 @@ inline __attribute__((always_inline)) void txq_request_two_step(uint32_t q, uint
 inline __attribute__((always_inline)) void txq_clear_timestamp_cmd(uint32_t q) {
     wr(txq_reg(q, kTxqTimestampOff), TS_CMD_NOP);
 }
+inline __attribute__((always_inline)) uint32_t txq_pkt_start_cnt(uint32_t q) {
+    return rd(txq_reg(q, ETH_TXQ_PKT_START_CNT));
+}
+inline __attribute__((always_inline)) uint32_t txq_word_cnt(uint32_t q) { return rd(txq_reg(q, ETH_TXQ_WORD_CNT)); }
 
 struct MacTxStamp {
     uint64_t tag;  // the TX_RX_TS value the queue drove when the frame entered the MAC
@@ -341,7 +352,7 @@ inline void rx_stamp_rule_remove(uint32_t row) {
 // Programs the per-tick increment through the timer's scheduled-update mechanism and enables the main counter.
 // A timer already running at the requested increment is left alone. If the hardware never acknowledges the update
 // within spin_limit polls the timer is left as it was and false is returned.
-__attribute__((noinline)) inline bool ptp_timer_start(uint32_t pti, uint32_t lead_ticks, uint32_t spin_limit) {
+__attribute__((noinline, cold)) inline bool ptp_timer_start(uint32_t pti, uint32_t lead_ticks, uint32_t spin_limit) {
     if ((raw::rd(kPtpTimerCtrl) & 1u) && (raw::rd(kPtpPtiStat) & 0xFFFFFFu) == pti) {
         return true;
     }
@@ -361,23 +372,26 @@ __attribute__((noinline)) inline bool ptp_timer_start(uint32_t pti, uint32_t lea
     return acked;
 }
 
+// The once-per-session routines are cold: in a kernel built -O3 (the fabric router) they would otherwise unroll into
+// a couple of KB of a 26 KB kernel budget shared with the router, for code that runs once.
 // PTP64NS minus the CFR count in ns. The two counters advance on the same 50 MHz edge, so the difference is one
 // constant, a multiple of the tick, for as long as the timer runs; but a single pair of reads puts the register latency
 // between them (a tick or more) into it, and a stall between the two reads puts in several -- measured once at kernel
 // start, that sat in every stamp of one side for the whole run as an 80 ns link bias that came and went between
 // launches. Each pair is read in both orders so the skew cancels in the sum, the median over pairs discards a stalled
 // one, and the result is rounded to the tick.
-__attribute__((noinline)) inline int64_t ptp_offset_ns() {
+__attribute__((noinline, cold)) inline int64_t ptp_offset_ns() {
     constexpr int kPairs = 16;
-    constexpr int64_t kTick = kNsPerRefclkTick;
+    constexpr uint32_t kTick = kNsPerRefclkTick;
+    static_assert(kTick == 20);
     int64_t sum2[kPairs];
     for (int i = 0; i < kPairs; i++) {
         const uint64_t c1 = read_cfr();
         const uint64_t n1 = read_ptp64ns();
         const uint64_t n2 = read_ptp64ns();
         const uint64_t c2 = read_cfr();
-        const int64_t k1 = static_cast<int64_t>(n1) - static_cast<int64_t>(c1) * kTick;
-        const int64_t k2 = static_cast<int64_t>(n2) - static_cast<int64_t>(c2) * kTick;
+        const int64_t k1 = static_cast<int64_t>(n1 - ((c1 << 4) + (c1 << 2)));
+        const int64_t k2 = static_cast<int64_t>(n2 - ((c2 << 4) + (c2 << 2)));
         int64_t v = k1 + k2;
         int j = i;
         for (; j > 0 && sum2[j - 1] > v; j--) {
@@ -385,8 +399,14 @@ __attribute__((noinline)) inline int64_t ptp_offset_ns() {
         }
         sum2[j] = v;
     }
-    const int64_t k = (sum2[kPairs / 2 - 1] + sum2[kPairs / 2]) / 4;
-    return ((k + (k >= 0 ? kTick / 2 : -kTick / 2)) / kTick) * kTick;
+    const int64_t k = (sum2[kPairs / 2 - 1] + sum2[kPairs / 2]) >> 2;
+    // Rounded to the tick in 32-bit arithmetic (2^32 = 16 mod 20): a 64-bit division here is the largest routine
+    // in an otherwise small kernel.
+    const bool neg = k < 0;
+    const uint64_t a = neg ? static_cast<uint64_t>(-k) : static_cast<uint64_t>(k);
+    const uint32_t r = ((static_cast<uint32_t>(a >> 32) % kTick) * 16u + static_cast<uint32_t>(a) % kTick) % kTick;
+    const uint64_t rounded = a - r + (r >= kTick / 2 ? kTick : 0u);
+    return neg ? -static_cast<int64_t>(rounded) : static_cast<int64_t>(rounded);
 }
 
 // One end's use of the tile's 1588 hardware: frames sent on queue Txq carry kStampFrameDa through header row
@@ -406,7 +426,7 @@ struct StampSession {
     raw::TxHeaderPrev hdr_prev{};
     uint32_t no_match_prev = 0;
 
-    __attribute__((noinline)) bool begin() {
+    __attribute__((noinline, cold)) bool begin() {
         timer_ok = ptp_timer_start(kPtiRefclk, kTimerLeadTicks, kTimerAckSpins);
         ptp_offset_ns = eth_ptp::ptp_offset_ns();
         no_match_prev = raw::rd(kRxFlNoMatchActions);
@@ -418,7 +438,7 @@ struct StampSession {
         raw::mac_tx_fifo_drain();
         return timer_ok;
     }
-    __attribute__((noinline)) void end() {
+    __attribute__((noinline, cold)) void end() {
         raw::txq_clear_timestamp_cmd(kTxq);
         raw::tx_header_row_restore(kTxq, kHeaderRow, hdr_prev);
         raw::rx_stamp_rule_remove(kTcamRow);
@@ -436,22 +456,25 @@ struct StampSession {
 //
 // ts_cmd is sticky and the queue reports idle before the MAC has taken a frame's command (measured: a clear at queue
 // idle lost the stamp of one frame in fifteen), so disarm only once tx_stamps_drain has delivered the last frame's
-// stamp. The tag, like the command, is sampled when a frame is handed to the MAC, which is what tells the frames
-// apart from the queue's own keepalives: a queue idle for its keepalive timeout when armed may have a keepalive
-// ahead of the first frame, and it is handed off at once while the frame still has its L1 read ahead of it, so
-// stamps_retag right after the first frame's command names that frame and everything after it, and the keepalive
-// keeps the tag it was armed under.
+// stamp. The tag, like the command, is sampled when the queue latches a frame's command, 24 to 32 cycles after the
+// write (measured: a request armed 24 cycles after the command still stamps the frame, one armed 32 after does not)
+// and some 60 before PKT_START_CNT counts the hand-off; a keepalive samples them 15 to 73 cycles before its count.
+// A keepalive of the queue's own that samples an armed request is stamped under the tag like a frame, and the
+// counters are what tell them apart (eth_ptp_link.hpp, collect_burst).
 template <typename Session>
 inline __attribute__((always_inline)) void stamps_arm(const Session&, uint64_t tag) {
     raw::txq_request_two_step(Session::kTxq, tag);
 }
 template <typename Session>
-inline __attribute__((always_inline)) void stamps_retag(const Session&, uint64_t tag) {
-    raw::txq_set_tag(Session::kTxq, tag);
-}
-template <typename Session>
 inline __attribute__((always_inline)) void stamps_disarm(const Session&) {
     raw::txq_clear_timestamp_cmd(Session::kTxq);
+}
+// Points the queue's software frames at its boot header row (`boot`), under which the peer's classifier leaves them
+// unstamped like the queue's keepalives, or back at the session's row. The row is latched with a frame's command,
+// so switch back once the queue reports the command taken.
+template <typename Session>
+inline __attribute__((always_inline)) void tx_header_row_select(const Session& s, bool boot) {
+    raw::wr(txq_reg(Session::kTxq, kTxqPktCfgSelSwOff), boot ? s.hdr_prev.sel_sw : Session::kHeaderRow * 0x111u);
 }
 template <typename Sink>
 inline __attribute__((always_inline)) uint32_t tx_stamps_drain(uint32_t tag_lo, Sink&& sink) {
