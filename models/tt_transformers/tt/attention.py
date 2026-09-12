@@ -1104,6 +1104,14 @@ class Attention(LightweightModule):
                 )
                 else self.wqkv
             )
+            # The 1D mcast multicasts in0 from a single sender, which has to READ the
+            # whole activation first; handing it the activation already width-sharded in
+            # L1 leaves only the broadcast.
+            _qkv_in0_cfg = self.args.prefill_1d_in0_memcfg(qkv_pc)
+            if _qkv_in0_cfg is not None and x_11SH.memory_config() != _qkv_in0_cfg:
+                x_sharded = ttnn.to_memory_config(x_11SH, _qkv_in0_cfg)
+                ttnn.deallocate(x_11SH)
+                x_11SH = x_sharded
             xqkv_fused = ttnn.linear(
                 x_11SH,
                 qkv_w,
@@ -1356,6 +1364,11 @@ class Attention(LightweightModule):
             if (self.wo_prefill is not None and isinstance(wo_pc, ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig))
             else self.wo
         )
+        _wo_in0_cfg = self.args.prefill_1d_in0_memcfg(wo_pc)
+        if _wo_in0_cfg is not None and attn_output_11SH.memory_config() != _wo_in0_cfg:
+            _wo_in_sharded = ttnn.to_memory_config(attn_output_11SH, _wo_in0_cfg)
+            ttnn.deallocate(attn_output_11SH)
+            attn_output_11SH = _wo_in_sharded
         output_11SH = ttnn.linear(
             attn_output_11SH,
             wo_w,

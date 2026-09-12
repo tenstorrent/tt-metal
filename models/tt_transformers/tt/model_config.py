@@ -85,6 +85,17 @@ class PrecisionSetting(Enum):
     BF16 = "bf16"
 
 
+def _prefill_1d_key(pc):
+    """Identity of a 1D-mcast program config, for looking its in0 shard back up.
+
+    Keyed on the fields rather than on the object so a config rebuilt for the same
+    shape resolves to the same entry (and so nothing holds a reference to a nanobind
+    object just to key a dict).
+    """
+    grid = pc.compute_with_storage_grid_size
+    return (grid.x, grid.y, pc.in0_block_w, pc.per_core_M, pc.per_core_N)
+
+
 class OpGroup(Enum):
     """
     LI_* are linear operator groups
@@ -3856,6 +3867,8 @@ class ModelArgs:
             fuse_batch=False,
         )
 
+    _prefill_1d_in0_shard: dict = {}
+
     def prefill_matmul_1d_config(self, m: int, k: int, n: int, fused_activation=None, fp32_dest_acc_en=True):
         """1D (N-parallel) mcast config for a SHORT prefill chunk, or ``None``.
 
@@ -3907,13 +3920,37 @@ class ModelArgs:
 
         per_core_M = m_tiles
         per_core_N = n_tiles // num_cores
-        in0_block_w = max(b for b in range(1, min(8, k_tiles) + 1) if k_tiles % b == 0)
+
+        # in0 SHARD PLAN. With in0 interleaved the factory picks ONE sender core, which
+        # has to READ the whole activation before it can multicast it -- and that read is
+        # what qkv and ff1 are actually waiting on: both take ~37 us for the same 0.55 MB
+        # activation despite carrying different weights. Width-sharding in0 in L1 across
+        # the leading cores of the same rectangle removes the read (each owner multicasts
+        # out of its own L1) and costs one reshard. The shard has to be a multiple of the
+        # rectangle's WIDTH so the factory's row-major sender cores land on it, and its
+        # per-core width in tiles has to be divisible by in0_block_w. Rank the candidates
+        # by K-BLOCK first and only then by width: measured, a 32-core shard that halves
+        # in0_block_w (8 -> 4, doubling the K loop to 32 passes) costs ff1 more than the
+        # removed read saves -- 37.6 -> 43.3 us. The shard is worth having; the shorter
+        # K loop is worth more.
+        shard_choices = []
+        for c in range(grid_x, num_cores + 1, grid_x):
+            if k_tiles % c:
+                continue
+            shard_w = k_tiles // c
+            shard_choices.append((c, max(b for b in range(1, min(8, shard_w) + 1) if shard_w % b == 0)))
+        in0_shard_cores, in0_block_w = (
+            max(shard_choices, key=lambda t: (t[1], t[0]))
+            if shard_choices
+            else (0, max(b for b in range(1, min(8, k_tiles) + 1) if k_tiles % b == 0))
+        )
+
         max_subblock = 4 if fp32_dest_acc_en else 8
         out_subblock_w = max(w for w in range(1, min(max_subblock, per_core_N) + 1) if per_core_N % w == 0)
         out_subblock_h = max(
             h for h in range(1, min(max_subblock // out_subblock_w, per_core_M) + 1) if per_core_M % h == 0
         )
-        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(grid_x, grid_y),
             in0_block_w=in0_block_w,
             out_subblock_h=out_subblock_h,
@@ -3924,6 +3961,26 @@ class ModelArgs:
             fused_activation=fused_activation,
             mcast_in0=True,
         )
+        if in0_shard_cores:
+            self._prefill_1d_in0_shard[_prefill_1d_key(pc)] = ttnn.create_sharded_memory_config(
+                shape=(m_tiles * ttnn.TILE_SIZE, k // in0_shard_cores),
+                core_grid=ttnn.CoreGrid(y=in0_shard_cores // grid_x, x=grid_x),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+        return pc
+
+    def prefill_1d_in0_memcfg(self, program_config):
+        """The L1 width shard ``program_config``'s in0 must arrive in, or ``None``.
+
+        Only meaningful for a config built by ``prefill_matmul_1d_config``; anything else
+        (a 2D mcast, a minimal-matmul config, ``None``) answers None and the caller leaves
+        its activation where it is.
+        """
+        if not isinstance(program_config, ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig):
+            return None
+        return self._prefill_1d_in0_shard.get(_prefill_1d_key(program_config))
 
     def dram_shard_core_grid_for_k(self, k: int) -> Tuple[int, int]:
         rows, cols = self.find_grid(k // ttnn.TILE_SIZE)

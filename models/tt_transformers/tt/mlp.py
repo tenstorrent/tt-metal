@@ -210,6 +210,16 @@ class MLP(LightweightModule):
         w1 = self.w1_prefill if (_is_1d and self.w1_prefill is not None) else self.w1
         w3 = self.w3_prefill if (_is_1d and self.w3_prefill is not None) else self.w3
 
+        # ...and it multicasts in0 from a single sender, which has to READ the whole
+        # activation first. Handing it the activation already width-sharded in L1 lets
+        # each owner multicast out of its own shard, so only the broadcast is left. One
+        # reshard serves both ff1 and ff3.
+        _in0_cfg = self.args.prefill_1d_in0_memcfg(pc_1)
+        if _in0_cfg is not None and x.memory_config() != _in0_cfg:
+            x_sharded = ttnn.to_memory_config(x, _in0_cfg)
+            ttnn.deallocate(x)
+            x = x_sharded
+
         w1_out = ttnn.linear(
             x,
             w1,
@@ -376,6 +386,11 @@ class MLP(LightweightModule):
         else:
             _ff2_is_1d = isinstance(pc_2, ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig)
             w2 = self.w2_prefill if (_ff2_is_1d and self.w2_prefill is not None) else self.w2
+            _ff2_in0_cfg = self.args.prefill_1d_in0_memcfg(pc_2)
+            if _ff2_in0_cfg is not None and w2_in.memory_config() != _ff2_in0_cfg:
+                w2_in_sharded = ttnn.to_memory_config(w2_in, _ff2_in0_cfg)
+                ttnn.deallocate(w2_in)
+                w2_in = w2_in_sharded
             w2_out = ttnn.linear(
                 w2_in,
                 w2,
