@@ -7,6 +7,7 @@ Correctness uses SMALL parametric shapes (the golden gathers sel[S,k,D]; the ful
 640/2048/56320 shape is ~2.8 GiB and is only exercised by the perf-only test in the nightly suite).
 """
 
+import pytest
 import torch
 
 import ttnn
@@ -103,3 +104,20 @@ def run_op(
 
 def pcc(out, golden_t):
     return torch.corrcoef(torch.stack([out.flatten().float(), golden_t.flatten().float()]))[0, 1].item()
+
+
+# DeepSeek-V4 CSA geometries, shared by correctness, determinism, and performance tests.
+ATTENTION_SINK_SHAPES = [
+    pytest.param(128, 4, 128, 64, 32, id="small-boundaries"),
+    pytest.param(64, 640, 128 + 512, 512, 128, id="v4-flash-full-selection"),
+    pytest.param(128, 640, 128 + 1024, 512, 128, id="v4-pro-full-selection"),
+]
+
+
+def make_attention_sink_inputs(H, S, TOPK, dim):
+    # Keep the boundary smoke's partial chunks; CSA cases use every selected key.
+    q, kv, indices = make_inputs(H, S, 2 * TOPK, TOPK, dim, lambda s: [1, 31, 65, TOPK][s] if S == 4 else TOPK)
+    scale = dim**-0.5
+    # Span negligible to dominant sinks in the scaled-logit domain for every head dimension.
+    sink = (torch.linspace(-4, 8, H) / scale).reshape(1, 1, 1, H).to(torch.bfloat16)
+    return q.to(torch.bfloat16), kv.to(torch.bfloat16), indices, sink, scale

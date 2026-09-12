@@ -15,6 +15,8 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from tests.ttnn.unit_tests.operations.sdpa.sparse_sdpa_test_utils import (
+    ATTENTION_SINK_SHAPES,
+    make_attention_sink_inputs,
     make_inputs,
     golden,
     to_dev,
@@ -563,27 +565,37 @@ def test_sparse_sdpa_bad_layout_rejected_on_hit(device, expect_error):
 
 
 @run_for_blackhole()
-def test_sparse_sdpa_attention_sink(device):
-    # One multi-chunk shape covers masks, head/face boundaries, and an idle-core tail.
-    H, S, T, TOPK, dim, kc, scale = 128, 4, 256, 128, 64, 32, 0.125
-    q, kv, indices = make_inputs(H, S, T, TOPK, dim, lambda s: [1, 31, 65, TOPK][s])
+@pytest.mark.parametrize("H,S,TOPK,dim,kc", ATTENTION_SINK_SHAPES)
+def test_sparse_sdpa_attention_sink(device, H, S, TOPK, dim, kc):
+    q, kv, indices, sinks, scale = make_attention_sink_inputs(H, S, TOPK, dim)
     tt_q = to_dev(q, device, ttnn.bfloat16)
     tt_kv = to_dev(kv, device, ttnn.bfloat16)
     tt_indices = to_dev(indices.to(torch.int32), device, ttnn.uint32)
-    sinks = torch.linspace(-32, 64, H).reshape(1, 1, 1, H)
-    tt_sink = ttnn.from_torch(sinks, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_sink = to_dev(sinks, device, ttnn.bfloat16)
     out = ttnn.transformer.sparse_sdpa(
         tt_q, tt_kv, tt_indices, dim, kv_format=BF16_KV, scale=scale, k_chunk_size=kc, attention_sink=tt_sink
     )
-    expected = golden(
-        ttnn.to_torch(tt_q).float(),
-        ttnn.to_torch(tt_kv).float(),
-        indices,
-        scale,
-        dim,
-        attention_sink=ttnn.to_torch(tt_sink).float().reshape(1, H, 1, 1),
-    )
     actual = ttnn.to_torch(out).float()
+    # Compute the PyTorch reference in batches of query positions to limit host memory use.
+    # This batch size is independent of hardware tiles and the device k_chunk_size.
+    # Concatenating along the query axis restores the full expected output for every head.
+    reference_query_batch_size = 32
+    expected = torch.cat(
+        [
+            golden(
+                q[:, :, start : start + reference_query_batch_size].float(),
+                kv.float(),
+                indices[:, :, start : start + reference_query_batch_size],
+                scale,
+                dim,
+                attention_sink=sinks.float().reshape(1, H, 1, 1),
+            )
+            for start in range(0, S, reference_query_batch_size)
+        ],
+        dim=2,
+    )
+    score = pcc(actual, expected)
+    assert score >= 0.99, f"Attention sink PCC {score:.5f}"
     # Correlation alone would miss the sink's suppression of the output magnitude.
     torch.testing.assert_close(actual, expected, atol=0.035, rtol=0.08)
 
@@ -686,7 +698,10 @@ def test_sparse_sdpa_attention_sink_dense_parity(device):
             compute_with_storage_grid_size=device.compute_with_storage_grid_size(), q_chunk_size=S, k_chunk_size=T
         ),
     )
-    torch.testing.assert_close(ttnn.to_torch(sparse).float(), ttnn.to_torch(dense).float(), atol=0.035, rtol=0.08)
+    actual, expected = ttnn.to_torch(sparse).float(), ttnn.to_torch(dense).float()
+    score = pcc(actual, expected)
+    assert score >= 0.99, f"Sparse/dense attention sink PCC {score:.5f}"
+    torch.testing.assert_close(actual, expected, atol=0.035, rtol=0.08)
 
 
 @run_for_blackhole()
