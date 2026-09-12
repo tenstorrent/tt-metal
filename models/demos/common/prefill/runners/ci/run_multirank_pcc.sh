@@ -4,7 +4,16 @@
 set -euo pipefail
 
 MODEL="${1:?usage: run_multirank_pcc.sh <model-key> [config]}"
-CONFIG="${2:-sc4}"
+# First entry is the default; membership is the validation. mistral4 is PP4-only, so sc1 only.
+case "${MODEL}" in
+  mistral4) MODEL_CONFIGS="sc1" ;;
+  *)        MODEL_CONFIGS="sc4 sc1" ;;
+esac
+CONFIG="${2:-${MODEL_CONFIGS%% *}}"
+case " ${MODEL_CONFIGS} " in
+  *" ${CONFIG} "*) ;;
+  *) echo "${MODEL} does not support config '${CONFIG}' (supported: ${MODEL_CONFIGS})" >&2; exit 2 ;;
+esac
 
 : "${TT_METAL_HOME:?TT_METAL_HOME must be set}"
 : "${PREFILL_SUMMARIES:?PREFILL_SUMMARIES must be set by the blaze impl (shared /ci scratch for the KV table)}"
@@ -16,17 +25,22 @@ CHUNK_SIZE=5120
 GOLDEN_LEN=56320
 WARMUP_CHUNKS=10
 PCC_THRESHOLD=0.85
+# Throughput gate (B4). Default off, so every existing caller keeps today's PCC-only behaviour.
+# Reads the runner-side probe in summarize_ci_run.py's perf JSON, not the producer's own log line:
+# that one times the push schedule, which returns long before the model is done (run 34491555152
+# reported 139,694 tok/s off wall=0.4s). The probes are device-side and cross-rank, and are taken
+# during the measured request, so PCC readback is outside them -- one leg gates both.
+EXPECTED_TPS="${PREFILL_EXPECTED_TPS:-}"
+PERF_MARGIN="${PREFILL_PERF_MARGIN:-0.15}"
+# Demand a measurement even before a baseline exists, so a leg being calibrated cannot pass green
+# on nothing.
+REQUIRE_TPS="${PREFILL_REQUIRE_TPS:-0}"
 RUNNER_ENV=""
 PRODUCER_ENV=""
 TP_SHARD_KV_DEFAULT=0
-
-case "${CONFIG}" in
-  sc1|sc4) ;;
-  *)
-    echo "unknown config '${CONFIG}' (expected sc1 or sc4)" >&2
-    exit 2
-    ;;
-esac
+# Non-zero for a pipeline-parallel model: the rank count its binding fixes. Set in the case block.
+PP_RANKS=0
+PP_EVIDENCE_DIR=""
 
 case "${MODEL}" in
   kimi27)
@@ -53,17 +67,46 @@ case "${MODEL}" in
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
         export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k;"
     ;;
+  mistral4)
+    export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/mistral4_pp4_kv}"
+    MANIFEST="${MANIFEST_DIR}/mistral4.json"
+    # Launches from a pre-generated 4-rank binding on ONE host, not from tt-run discovery across
+    # hosts. Everything below keys off PP_RANKS rather than re-testing the model name, so the next
+    # pipeline-parallel model sets this and needs no other change.
+    PP_RANKS=4
+    PP_EVIDENCE_DIR="${PREFILL_SUMMARIES}/pcc/mistral4_pp4"
+    # A correctness leg: validate the entire 36-layer golden, including positions >8192.
+    # Keep the shared full-depth PCC floor; PP4 calibration requires a silicon run.
+    MAX_SEQ_LEN=${GOLDEN_LEN}
+    NUM_USERS_DEFAULT=1
+    # sc1 is the only config, so the sc1 window below must not widen it to the 256k default.
+    SC1_MAX_SEQ_LEN=${GOLDEN_LEN}
+    MISTRAL_MODEL="${PREFILL_HF_MODEL:-/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603}"
+    MISTRAL_CACHE="${PREFILL_TTNN_CACHE:-/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/CI}"
+    MISTRAL_GOLDEN="${PREFILL_TRACE_DIR:-/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/golden/mistral4_56320_36L}"
+    # torus_y, not the 2d_torus_xy the runner now defaults to: a PP=4 stage is [8,1], so only the
+    # SP axis wraps, and a RING collective on an axis the fabric does not wrap hangs at bring-up.
+    RUNNER_ENV="export PREFILL_HF_MODEL='${MISTRAL_MODEL}'; export PREFILL_TTNN_CACHE='${MISTRAL_CACHE}'; \
+        export PREFILL_FABRIC_MODE=2d_torus_y; \
+        export PREFILL_USE_TRACE=1; export PREFILL_LAYER_ACK_D2H=1; \
+        export TT_METAL_OPERATION_TIMEOUT_SECONDS=0;"
+    PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
+        export PREFILL_TRACE_DIR='${MISTRAL_GOLDEN}'; export PREFILL_SP=8; export PREFILL_TP=1;"
+    ;;
   *)
     echo "unknown model key '${MODEL}'" >&2
     exit 2
     ;;
 esac
 
-MGD="${MGD_DIR}/${MODEL}_${CONFIG}_mgd.textproto"
-[ -f "${MGD}" ] || { echo "no mesh-graph descriptor for ${MODEL}/${CONFIG} at ${MGD}" >&2; exit 2; }
+# A PP model carries its descriptor in its rank binding; the discovery path looks one up per config.
+if [ "${PP_RANKS}" -eq 0 ]; then
+  MGD="${MGD_DIR}/${MODEL}_${CONFIG}_mgd.textproto"
+  [ -f "${MGD}" ] || { echo "no mesh-graph descriptor for ${MODEL}/${CONFIG} at ${MGD}" >&2; exit 2; }
+fi
 
 SC4_MAX_SEQ_LEN=${MAX_SEQ_LEN}
-SC1_MAX_SEQ_LEN=256000
+SC1_MAX_SEQ_LEN="${SC1_MAX_SEQ_LEN:-256000}"
 if [ "${CONFIG}" = sc1 ]; then
   MAX_SEQ_LEN=${SC1_MAX_SEQ_LEN}
   NUM_USERS_DEFAULT=1
@@ -73,13 +116,18 @@ REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))
 
 SC1_CHUNKS=$((SC1_MAX_SEQ_LEN / CHUNK_SIZE))
 SC4_CHUNKS=$((SC4_MAX_SEQ_LEN / CHUNK_SIZE))
-PROBE_CHUNKS="0,$((50000 / CHUNK_SIZE)),$((SC1_CHUNKS / 2 - 1)),$((SC1_CHUNKS - 1)),$((SC4_CHUNKS / 2 - 1)),$((SC4_CHUNKS - 1))"
+# Start, ~50k, and the midpoint + tail of each config's window. Sorted and deduped: where the two
+# windows coincide (a model offering only one config) the raw list repeats itself -- mistral4 gives
+# 0,9,4,10,4,10 -- which probes the same chunk twice and labels it twice in the summary JSON.
+PROBE_CHUNKS=$(printf '%s\n' 0 "$((50000 / CHUNK_SIZE))" "$((SC1_CHUNKS / 2 - 1))" "$((SC1_CHUNKS - 1))" \
+  "$((SC4_CHUNKS / 2 - 1))" "$((SC4_CHUNKS - 1))" | sort -n -u | paste -sd,)
 
 mkdir -p "${PIPELINE_DIR}"
 TTRUN_DIR="${TTRUN_DIR:-/etc/ttop}"
 TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
+MPIRUN=$(command -v mpirun-ulfm || command -v mpirun)
 
-RESOLVED_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+RESOLVED_HOSTS=$(awk 'NF && $1 !~ /^#/ {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
 TTRUN_CWD="${PIPELINE_DIR}/ttrun-cwd"
 mkdir -p "${TTRUN_CWD}"
 
@@ -90,9 +138,22 @@ RANKLOGS="${MR_DIR}/ranklogs"
 TIMING_DIR="${MR_DIR}/timing"
 mkdir -p "${TIMING_DIR}"
 
+SUMMARY_DONE=0
+emit_summary() {
+  [ "${SUMMARY_DONE}" = 1 ] && return 0
+  SUMMARY_DONE=1
+  python3 "${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/summarize_ci_run.py" \
+    --ranklogs "${RANKLOGS}" --timing-dir "${TIMING_DIR}" --real-chunks "${REAL_CHUNKS}" \
+    --chunk-size "${CHUNK_SIZE}" \
+    --probe-chunks "${PROBE_CHUNKS}" \
+    --summary-name "${MODEL}_${CONFIG}" \
+    || echo "summary generation failed (non-fatal)"
+}
+
 cleanup() {
   if [ -n "${RUNNER_PID:-}" ] && kill -0 "${RUNNER_PID}" 2>/dev/null; then
-    kill "${RUNNER_PID}" 2>/dev/null || true
+    kill -- "-${RUNNER_PID}" 2>/dev/null || true
+    timeout 10 tail --pid="${RUNNER_PID}" -f /dev/null 2>/dev/null || kill -KILL -- "-${RUNNER_PID}" 2>/dev/null || true
     wait "${RUNNER_PID}" 2>/dev/null || true
   fi
   echo "==================== per-cache PCC verdicts (PROD_RC=${PROD_RC:-<unset>}) ===================="
@@ -100,18 +161,19 @@ cleanup() {
     [ -e "$f" ] || { echo "no PCC verdict files under ${PCC_DIR}"; break; }
     echo "$(basename "$f"): $(cat "$f")"
   done
+  if [ -n "${PP_EVIDENCE_DIR}" ]; then
+    mkdir -p "${PP_EVIDENCE_DIR}"
+    for path in "${PCC_DIR}" "${RANKLOGS}" "${BINDING:-}"; do
+      [ -n "${path}" ] && [ -e "${path}" ] && cp -r "${path}" "${PP_EVIDENCE_DIR}/" || true
+    done
+  fi
   if [ -d "${RANKLOGS}" ]; then
     echo "==================== ranklog tails ===================="
     find "${RANKLOGS}" -type f | sort | while read -r f; do
       echo "---- ${f#"${RANKLOGS}"/} ----"
       tail -n 40 "$f" 2>/dev/null || true
     done
-    python3 "${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/summarize_ci_run.py" \
-      --ranklogs "${RANKLOGS}" --timing-dir "${TIMING_DIR}" --real-chunks "${REAL_CHUNKS}" \
-      --chunk-size "${CHUNK_SIZE}" \
-      --probe-chunks "${PROBE_CHUNKS}" \
-      --summary-name "${MODEL}_${CONFIG}" \
-      || echo "summary generation failed (non-fatal)"
+    emit_summary
     if [ "$(find "${TIMING_DIR}" -name '*.csv' 2>/dev/null | wc -l)" -ge 2 ]; then
       GANTT_DIR="${PREFILL_SUMMARIES}/plots"
       mkdir -p "${GANTT_DIR}"
@@ -129,18 +191,48 @@ cleanup() {
 }
 trap cleanup EXIT
 
+if [ "${PP_RANKS}" -ne 0 ]; then
+  # The CI controller has no chips. Probe the allocated worker, not localhost, and
+  # never reuse the template's device IDs: galaxy column enumeration is host-specific.
+  [ -n "${RESOLVED_HOSTS}" ] && [[ "${RESOLVED_HOSTS}" != *,* ]] || {
+    echo "mistral4 PP4 requires exactly one Galaxy host in ${TTRUN_DIR}/hostfile" >&2; exit 2;
+  }
+  HOSTS="${RESOLVED_HOSTS}:${PP_RANKS}"
+  EXPECTED_RANKS=${PP_RANKS}
+  BINDING="${MR_DIR}/mistral4_pp4_binding.yaml"
+  "${MPIRUN}" -np 1 --host "${RESOLVED_HOSTS}:1" --bind-to none --allow-run-as-root \
+    bash -lc "set -e; cd '${TT_METAL_HOME}'; \
+      test -r '${MISTRAL_MODEL}/config.json' || { echo 'Mistral checkpoint missing: ${MISTRAL_MODEL}' >&2; exit 1; }; \
+      test -d '${MISTRAL_CACHE}/mistral_small_4_bh_8dev/8x1' || { echo 'Stage the PP4 8dev/8x1 weight cache under ${MISTRAL_CACHE} (or set PREFILL_TTNN_CACHE)' >&2; exit 1; }; \
+      for layer in {0..35}; do \
+        test -r '${MISTRAL_GOLDEN}/kv_cache/layer_'\${layer}'.safetensors' || { echo \"Missing golden KV layer \${layer} in ${MISTRAL_GOLDEN}\" >&2; exit 1; }; \
+      done; \
+      export PYTHONPATH='${TT_METAL_HOME}'; \
+      export TT_METAL_OPERATION_TIMEOUT_SECONDS=0; \
+      export TT_MESH_GRAPH_DESC_PATH='${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto'; \
+      exec python3 models/demos/deepseek_v3_d_p/tests/perf/gen_pipeline_binding.py --out '${BINDING}'"
+  TTRUN_ARGS=(--rank-binding "${BINDING}")
+  RUNNER_PLACEMENT="--host ${HOSTS} --map-by slot"
+  # Each producer reads its matching stage's nine layers. Unique sidecars avoid
+  # stale maps; do not merge all four maps and read the entire Galaxy four times.
+  RUNNER_ENV+=" export PREFILL_MIGRATION_DEVICE_MAP_PATH='${MR_DIR}/device_map.json';"
+  PRODUCER_ENV+=" export PREFILL_MIGRATION_DEVICE_MAP_PATH='${MR_DIR}/device_map_r'\${OMPI_COMM_WORLD_RANK}'.json';"
+else
+  TTRUN_ARGS=(--force-rediscovery --mesh-graph-descriptor "${MGD}" --hosts "${RESOLVED_HOSTS}")
+  RUNNER_PLACEMENT=""
+fi
+
 cd "${TTRUN_CWD}"
-python3 "${TTRUN_PY}" \
+setsid python3 "${TTRUN_PY}" \
   --skip-executable-check \
-  --force-rediscovery \
   --tcp-interface ens5f0np0 \
-  --mesh-graph-descriptor "${MGD}" \
-  --hosts "${RESOLVED_HOSTS}" \
-  --mpi-args "--bind-to none --tag-output --allow-run-as-root --wdir ${TT_METAL_HOME} --output-filename ${RANKLOGS}/runner -x PATH -x LD_LIBRARY_PATH" \
+  "${TTRUN_ARGS[@]}" \
+  --mpi-args "${RUNNER_PLACEMENT} --bind-to none --tag-output --allow-run-as-root --wdir ${TT_METAL_HOME} --output-filename ${RANKLOGS}/runner -x PATH -x LD_LIBRARY_PATH" \
   bash -lc "cd '${TT_METAL_HOME}'; \
     export PYTHONPATH='${TT_METAL_HOME}'; \
     export PYTHONUNBUFFERED=1; \
     export PREFILL_MANIFEST='${MANIFEST}'; \
+    export PREFILL_CHUNK_SIZE=${CHUNK_SIZE}; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
     export PREFILL_NUM_USERS=${PREFILL_NUM_USERS:-${NUM_USERS_DEFAULT}}; \
     export PREFILL_TP_SHARD_KV=${PREFILL_TP_SHARD_KV:-${TP_SHARD_KV_DEFAULT}}; \
@@ -162,21 +254,25 @@ for _ in $(seq 1 360); do
 done
 [ -f "${TABLE_PATH}" ] || { echo "KV table not published within timeout"; exit 1; }
 
-RANKFILE=$(ls -t "${TTRUN_CWD}"/generated/ttrun/*/rankfile 2>/dev/null | head -1)
-[ -f "${RANKFILE}" ] || { echo "tt-run rankfile not found under ${TTRUN_CWD}/generated/ttrun/*/rankfile"; exit 1; }
-HOSTS=$(awk '/^rank[[:space:]]+[0-9]+=/ {n=$2; sub(/=.*/,"",n); h=$2; sub(/^[0-9]+=/,"",h); print n" "h}' "${RANKFILE}" | sort -n | awk '{printf "%s%s:1", (NR>1?",":""), $2}')
-[ -n "${HOSTS}" ] || { echo "failed to parse producer host order from ${RANKFILE}"; exit 1; }
-echo "producer host order from tt-run discovery: ${HOSTS}"
+# A PP binding already fixed the rank count and host; only discovery has to parse them back out.
+if [ "${PP_RANKS}" -eq 0 ]; then
+  RANKFILE=$(ls -t "${TTRUN_CWD}"/generated/ttrun/*/rankfile 2>/dev/null | head -1)
+  [ -f "${RANKFILE}" ] || { echo "tt-run rankfile not found under ${TTRUN_CWD}/generated/ttrun/*/rankfile"; exit 1; }
+  HOSTS=$(awk '/^rank[[:space:]]+[0-9]+=/ {n=$2; sub(/=.*/,"",n); h=$2; sub(/^[0-9]+=/,"",h); print n" "h}' "${RANKFILE}" | sort -n | awk '{printf "%s%s:1", (NR>1?",":""), $2}')
+  [ -n "${HOSTS}" ] || { echo "failed to parse producer host order from ${RANKFILE}"; exit 1; }
+  echo "producer host order from tt-run discovery: ${HOSTS}"
+  EXPECTED_RANKS=$(printf '%s' "${HOSTS}" | tr ',' '\n' | grep -c .)
+fi
 
-MPIRUN=$(command -v mpirun-ulfm || command -v mpirun)
 set +e
 "${MPIRUN}" \
-  --host "${HOSTS}" --map-by slot --bind-to none --tag-output --allow-run-as-root \
+  -np "${EXPECTED_RANKS}" --host "${HOSTS}" --map-by slot --bind-to none --tag-output --allow-run-as-root \
   --output-filename "${RANKLOGS}/producer" \
   --mca btl self,tcp --mca btl_tcp_if_include ens5f0np0 \
   bash -lc "cd '${TT_METAL_HOME}'; \
     export PYTHONPATH='${TT_METAL_HOME}'; \
     export PYTHONUNBUFFERED=1; \
+    export PREFILL_CHUNK_SIZE=${CHUNK_SIZE}; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
     export PREFILL_PRODUCER_CHUNKS=${REAL_CHUNKS}; \
     export PREFILL_PRODUCER_WARMUP_CHUNKS=${WARMUP_CHUNKS}; \
@@ -193,19 +289,64 @@ set +e
 PROD_RC=$?
 set -e
 
+RUNNER_RC=0
 if [ "${PROD_RC}" -eq 0 ]; then
-  wait "${RUNNER_PID}" || echo "runner exited non-zero after producer success (rc=$?)"
+  # A producer can finish successfully while a runner hangs during shutdown.
+  if timeout 120 tail --pid="${RUNNER_PID}" -f /dev/null; then
+    wait "${RUNNER_PID}" || RUNNER_RC=$?
+  else
+    echo "runner did not shut down within 120 seconds" >&2
+    RUNNER_RC=124
+  fi
 fi
 
-EXPECTED_RANKS=$(printf '%s' "${HOSTS}" | tr ',' '\n' | grep -c .)
-PCC_GATE_RC=0
-python3 - "${PCC_DIR}" "${EXPECTED_RANKS}" <<'PY' || PCC_GATE_RC=$?
-import glob, json, os, sys
+TPS_GATE_RC=0
+if [ "${REQUIRE_TPS}" = 1 ] || [ -n "${EXPECTED_TPS}" ]; then
+  # The summary normally runs in the EXIT trap, after this point; force it early so the gate has
+  # a file to read. The trap's own call is a no-op once this one has run.
+  emit_summary
+  python3 - "${PREFILL_SUMMARIES}/perf_json/${MODEL}_${CONFIG}.json" "${EXPECTED_TPS}" "${PERF_MARGIN}" \
+    <<'TPSPY' || TPS_GATE_RC=$?
+import json, sys
 
-pcc_dir, expected = sys.argv[1], int(sys.argv[2])
+path, expected, margin = sys.argv[1], sys.argv[2], float(sys.argv[3])
+try:
+    rec = json.load(open(path))
+except Exception as e:
+    print(f"TPS GATE FAIL: no perf metrics at {path}: {type(e).__name__}: {e}", file=sys.stderr)
+    sys.exit(1)
+
+probes, index = rec.get("throughput_tok_s") or {}, rec.get("chunk_index") or {}
+# Gate the deepest probe: throughput falls as the KV cache grows, so it is the worst case and the
+# one a full-context user sees.
+label = max(probes, key=lambda k: index.get(k, -1), default=None)
+if label is None:
+    print(f"TPS GATE FAIL: {path} has no throughput probes; the run measured nothing", file=sys.stderr)
+    sys.exit(1)
+
+tps = probes[label]
+if not expected:
+    print(f"TPS: {tps:,.0f} tok/s {label} (no PREFILL_EXPECTED_TPS set -- reporting, not gating)")
+    sys.exit(0)
+
+expected = float(expected)
+lo, hi = expected * (1 - margin), expected * (1 + margin)
+print(f"TPS GATE {label}: {tps:,.0f} tok/s vs {expected:,.0f} +/- {margin * 100:.0f}% [{lo:,.0f}, {hi:,.0f}]")
+if not lo <= tps <= hi:
+    print(f"TPS GATE FAIL: {tps:,.0f} outside [{lo:,.0f}, {hi:,.0f}]", file=sys.stderr)
+    sys.exit(1)
+print("TPS GATE PASS")
+TPSPY
+fi
+
+PCC_GATE_RC=0
+python3 - "${PCC_DIR}" "${EXPECTED_RANKS}" "${PCC_THRESHOLD}" <<'PY' || PCC_GATE_RC=$?
+import glob, json, math, os, sys
+
+pcc_dir, expected, threshold = sys.argv[1], int(sys.argv[2]), float(sys.argv[3])
 files = sorted(glob.glob(os.path.join(pcc_dir, "rank*.json")))
-if len(files) < expected:
-    print(f"PCC GATE FAIL: {len(files)}/{expected} producer verdict file(s) present", file=sys.stderr)
+if {os.path.basename(f) for f in files} != {f"rank{r}.json" for r in range(expected)}:
+    print(f"PCC GATE FAIL: expected exactly ranks 0..{expected - 1}, found {files}", file=sys.stderr)
     sys.exit(1)
 bad = 0
 for f in files:
@@ -216,9 +357,31 @@ for f in files:
         print(f"PCC GATE FAIL: {name} unreadable: {e}", file=sys.stderr)
         bad += 1
         continue
-    status = "ok" if v.get("ok") else "FAIL"
-    print(f"  {name}: {status} min_pcc={v.get('min_pcc')} threshold={v.get('threshold')} per_cache={v.get('per_cache')}")
-    if not v.get("ok"):
+    per_cache = v.get("per_cache") or {}
+    scores = [v.get("min_pcc"), *per_cache.values()]
+
+    def unusable(s):
+        return not isinstance(s, (int, float)) or isinstance(s, bool) or not math.isfinite(s) or not threshold <= s <= 1
+
+    # A verdict is trusted only if it says so AND proves it did the work. Checked as a list so the
+    # log names the clause that tripped -- "unvalidated" and "below threshold" need different fixes.
+    reason = next(
+        (m for ok, m in (
+            (v.get("ok") is True, "ok is not literally true"),
+            (v.get("rank") == int(name[4:-5]), "rank field does not match the filename"),
+            (v.get("slots_checked", 0) > 0, "slots_checked is 0, so nothing was compared"),
+            (bool(per_cache), "per_cache is empty, so no cache was compared"),
+            (v.get("threshold") == threshold, f"threshold is not the {threshold} this gate demands"),
+            (not any(unusable(s) for s in scores), f"a score is missing, non-finite, or outside [{threshold}, 1]"),
+        ) if not ok),
+        None,
+    )
+    print(
+        f"  {name}: {'ok' if reason is None else 'FAIL'} min_pcc={v.get('min_pcc')} "
+        f"threshold={v.get('threshold')} per_cache={per_cache}"
+        + (f"  <-- {reason}" if reason else "")
+    )
+    if reason is not None:
         bad += 1
 if bad:
     print(f"PCC GATE FAIL: {bad}/{len(files)} rank(s) below threshold or unvalidated", file=sys.stderr)
@@ -228,5 +391,12 @@ PY
 
 if [ "${PROD_RC}" -ne 0 ]; then
   exit "${PROD_RC}"
+fi
+if [ "${RUNNER_RC}" -ne 0 ]; then
+  echo "runner exited non-zero after producer success (rc=${RUNNER_RC})" >&2
+  exit "${RUNNER_RC}"
+fi
+if [ "${TPS_GATE_RC}" -ne 0 ]; then
+  exit "${TPS_GATE_RC}"
 fi
 exit "${PCC_GATE_RC}"

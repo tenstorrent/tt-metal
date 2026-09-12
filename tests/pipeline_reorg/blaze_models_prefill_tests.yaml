@@ -1078,6 +1078,35 @@
 # before deleting it. Decoder outputs gate on nPCC (adapter.gate_hidden_states_on_npcc).
 # PREFILL_TRACE_DIR deliberately unexported, unlike the sibling rows: the adapter's default points at
 # the staged golden.
+- name: "Mistral-Small-4-119B chunked prefill throughput 100k"
+  # Required, not decoration: without it the workflow skips its TorusXY fabric-profile step, so
+  # PREFILL_TORUS_XY_CERTIFIED is unset and conftest skips every row before device open.
+  fabric_profile: torus_xy
+  cmd: |
+    export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
+    export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/CI
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -eo pipefail
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_mistral4_prefill_transformer_chunked_no_pcc -k "mistral4 and torus-xy-8x4 and L36 and chunks20 and ten_iters" -vvv --tb=short | tee /tmp/mistral4_chunked_perf.out
+      # A leg whose rows all skip exits 0 and reads as green. Fail instead.
+      grep -qE "[0-9]+ passed" /tmp/mistral4_chunked_perf.out || { echo "::error::mistral4_chunked_perf: every row skipped, so the leg measured nothing; check the TorusXY fabric profile and the certified allocation"; exit 1; }
+    '
+  test_type: mistral4_chunked_perf
+  test_tags: [mistral4, transformer]
+  test_group: module
+  skus:
+    bh_sc1_high_power:
+      # ~1.4x the worst observed test step (24.9 min over three runs, on bh_sc1). The run-to-run swing is the
+      # weight cache -- tt_transformer_creation ranges 1-17 min on page-cache warmth while tt_forward
+      # is stable -- and it does not show up in the per-chunk medians, which have their own bands.
+      timeout: 35
+  owner_id: U08GEEEEC75 # ssalice
+  team: models
+  sp_config: sc1
+
+
 - name: "Mistral-Small-4-119B chunked prefill padded accuracy 55k@5k (no trace)"
   fabric_profile: torus_xy
   cmd: |
@@ -1137,6 +1166,45 @@
   owner_id: U08GEEEEC75 # ssalice
   team: models
   budget_type: demo
+  sp_config: sc1
+
+# Traced-vs-eager KV equivalence for the #55126 per-offset query-scale fix. This is the ONLY gate on
+# that path: an unrefreshed scale buffer applies temperature 1.0, which moves the chunked PCC rows by
+# ~0.002 against a 0.98 threshold, so they cannot see it. The test asserts its own sensitivity control
+# FIRST -- suppressing the temperature must drive the deep layers BELOW the agreement bar -- so it
+# cannot pass vacuously.
+#
+# fabric_profile torus_xy is load-bearing, not decoration: conftest collect-skips TorusXY cases before
+# device open unless PREFILL_TORUS_XY_CERTIFIED is set, and only this profile's workflow step sets it.
+- name: "Mistral-Small-4-119B traced-vs-eager prefill KV equivalence 30k@5k"
+  fabric_profile: torus_xy
+  cmd: |
+    export MESH_DEVICE=TG
+    export LOGURU_LEVEL=INFO
+    export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
+    export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/CI
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -eo pipefail
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_chunk_traced_vs_eager.py -vvv --tb=short | tee /tmp/mistral4_traced_vs_eager.out
+      # The test self-skips without staged weights, and a leg whose only row skipped exits 0 and
+      # reads as green. Fail instead.
+      grep -qE "[0-9]+ passed" /tmp/mistral4_traced_vs_eager.out || { echo "::error::mistral4_traced_vs_eager: nothing ran; check the staged weight cache and the certified TorusXY allocation"; exit 1; }
+    '
+  test_type: mistral4_traced_vs_eager
+  test_tags: [mistral4, runner, kv_cache]
+  test_group: module
+  skus:
+    bh_sc1:
+      # Measured 2026-09-11 on bh-glx-120-b03u02: 1 min 24 s warm, 6 min 57 s with a cold kernel
+      # cache (runtime.compile() 31 s -> 189 s). 12 is ~1.7x the cold case, leaving room for a colder
+      # NFS weight read; the sibling traced padded leg above uses 10 against a 4.9 min measurement.
+      timeout: 12
+      tier: 2
+      release_ready: false
+  owner_id: U08GEEEEC75 # ssalice
+  team: models
   sp_config: sc1
 
 
@@ -1248,6 +1316,42 @@
   budget_type: demo
   sp_config: sc1
 
+# Four pipeline ranks share one galaxy (SP=8, TP=1 per rank). Probe its physical columns before
+# launching: the TT_VISIBLE_DEVICES mapping differs between galaxies. This checks the entire
+# 56,320-token golden KV window over 36 layers with traced execution, and gates the whole-sequence
+# throughput the same run measures.
+- name: "Mistral-Small-4-119B PP4 prefill KV accuracy + throughput 55k@5k, SC1"
+  fabric_profile: torus_xy
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    # Throughput too: one run gates both. The gate reads the deepest probe in the runner-side perf
+    # JSON (@55k), which is device-side and taken during the measured request, so the KV readback
+    # sits outside it.
+    #
+    # Centred so both measured galaxies pass: run 34491555152 read 23,689 tok/s @55k and
+    # bh-glx-120-b03u02 reads 32,466 on the same code, a 37% spread. A band on either sample at
+    # MiniMax's +/-15% would fail the other box for being the wrong speed, so this spans them with
+    # ~4% headroom each side and catches a >20% move. Re-cut it tighter once several runs on one
+    # pool establish the real spread.
+    export PREFILL_EXPECTED_TPS=28000
+    export PREFILL_PERF_MARGIN=0.20
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh mistral4
+  test_type: mistral4_pp4_kv_pcc
+  test_tags: [mistral4, runner, kv_cache]
+  test_group: module
+  skus:
+    bh_sc1:
+      # Initial correctness budget includes per-galaxy probing, weight loading and compilation.
+      # Revisit after the first completed hardware CI run.
+      timeout: 60
+  owner_id: U08GEEEEC75 # ssalice
+  team: models
+  sp_config: sc1
 
 # ===== Disaggregated prefill, SC4 -- one launcher shared by both entries, keep them adjacent ===========
 
