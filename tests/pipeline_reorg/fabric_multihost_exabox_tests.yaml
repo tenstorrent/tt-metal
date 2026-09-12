@@ -22,6 +22,7 @@
       timeout: 10
   owner_id: U0845EV7A5U # Umair Cheema
   team: scaleout
+  budget_type: e2e
   sp_config: sc4
 
 - name: "System Health Check (SC4)"
@@ -33,6 +34,7 @@
       timeout: 10
   owner_id: U0845EV7A5U # Umair Cheema
   team: scaleout
+  budget_type: e2e
   sp_config: sc4
 
 - name: "Fabric stability short (SC4)"
@@ -62,6 +64,7 @@
       timeout: 20
   owner_id: U0845EV7A5U # Umair Cheema
   team: scaleout
+  budget_type: e2e
   sp_config: sc4
 
 - name: "DC validation (quad) neighbor exchange"
@@ -122,4 +125,5 @@
       timeout: 20
   owner_id: U0845EV7A5U # Umair Cheema
   team: scaleout
+  budget_type: e2e
   sp_config: sc4

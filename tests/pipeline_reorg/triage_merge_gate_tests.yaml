@@ -13,3 +13,4 @@
       timeout: 11
   owner_id: U09UX6JLA3U # Ognjen Nenezic
   team: triage
+  budget_type: merge_gate
