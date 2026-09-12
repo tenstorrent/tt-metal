@@ -13,26 +13,6 @@ import os
 from . import gitio
 
 
-def _coverage_sized_osl(ctx) -> str | None:
-    """The declared OSL is too expensive to profile at full width on a model dense enough per layer:
-    nemotron-3.5-lightning-30b's per-op tracy capture (6-7 coverage layers x 128 decode steps x its
-    attention/mamba/MoE/MLP/norm op mix) produced a 27 GB tracy_ops_times.csv and OOM'd mid-round.
-
-    Reuses layer_depth.depth_in_force -- the tool's one existing answer to "what depth is this build
-    capped at", already correct for both single-stack (TT_PERF_LAYERS) and multi-stack
-    (TT_PERF_STACK{i}_LAYERS / TT_PERF_<STAGE>_LAYERS) models -- and layer_depth.token_window, the
-    same coverage-depth-to-token-count rule _bridge_depth_env already applies elsewhere. No new
-    number, no model name: a model whose coverage depth is small profiles with a small window
-    instead of always paying for 128; a model with no active depth cap ("all") is left alone, since
-    there is no coverage number to size the window from and 128 is what the run declared."""
-    from . import layer_depth
-
-    depth = layer_depth.depth_in_force(model_root=ctx.model_root())
-    if depth == "all":
-        return None
-    return str(layer_depth.token_window(depth))
-
-
 def measure_runs(ctx) -> list[dict]:
     from .probes import make_run_profiled
     from .tracy_tool import profile_model
@@ -58,14 +38,9 @@ def measure_runs(ctx) -> list[dict]:
     #
     # THE COST IS REAL: 128 decode steps is ~32x the markers and ~32x the eager time of 4, every
     # round. The drain (TT_PERF_FLUSH_EVERY) keeps that safe rather than fast. PERF_MCP_PROFILE_TOKENS
-    # buys the old behaviour back for anyone who would rather have a quick, skewed ranking -- and
-    # below that, a model dense enough per layer gets the same relief automatically, sized off its
-    # own coverage depth rather than a number typed for one model.
-    xenv["TT_PERF_OSL_TOKENS"] = (
-        os.environ.get("TT_PERF_OSL_TOKENS")
-        or os.environ.get("PERF_MCP_PROFILE_TOKENS")
-        or _coverage_sized_osl(ctx)
-        or "128"
+    # buys the old behaviour back for anyone who would rather have a quick, skewed ranking.
+    xenv["TT_PERF_OSL_TOKENS"] = os.environ.get("TT_PERF_OSL_TOKENS") or os.environ.get(
+        "PERF_MCP_PROFILE_TOKENS", "128"
     )
     from .mesh_descriptor import apply_scope
 
