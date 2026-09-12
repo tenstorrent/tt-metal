@@ -576,7 +576,7 @@ class MiniMaxH3Vae:
             [0, 0],
             ccl_manager=self.ccl_manager,
             pre_transfer_fn=pre_fn,
-            use_persistent_buffer=False,
+            use_persistent_buffer=True,
         )
 
     def _report_profile(self, total: float) -> None:
@@ -671,7 +671,7 @@ class MiniMaxH3Vae:
         def read_wave(encoded: ttnn.Tensor, count: int) -> list[torch.Tensor]:
             mark = time.perf_counter()
             out = fast_device_to_host(
-                encoded, self.mesh_device, [0, 0], ccl_manager=self.ccl_manager, use_persistent_buffer=False
+                encoded, self.mesh_device, [0, 0], ccl_manager=self.ccl_manager, use_persistent_buffer=True
             ).float()
             elapsed = time.perf_counter() - mark
             profile["readback"] += elapsed
@@ -1376,7 +1376,7 @@ class MiniMaxH3Vae:
         canvas = ttnn.mesh_partition(canvas, dim=-1, cluster_axis=1)
 
         planar = fast_device_to_host_yuv(
-            canvas, self.mesh_device, ccl_manager=self.ccl_manager, use_persistent_buffer=False
+            canvas, self.mesh_device, ccl_manager=self.ccl_manager, use_persistent_buffer=True
         )
         return planar.reshape(planar.shape[0], height * 3 // 2, width)
 
