@@ -118,10 +118,10 @@ class KimiLinearModelForGenerator(KimiLinearModel):
         B = logits.shape[2]
         if on_device_logits and B < self.max_batch_size:
             # a bucketed step: hand the sampling module the same 32-row shape as the full-width step (its per-user
-            # parameter tensors are max_batch_size rows); the idle rows are zeros and are dropped by the consumer
-            padded = ttnn.pad(logits, [(0, 0), (0, 0), (0, self.max_batch_size - B), (0, 0)], value=0.0)
-            ttnn.deallocate(logits)
-            logits = padded
+            # parameter tensors are max_batch_size rows); the idle rows are zeros and are dropped by the consumer.
+            # NB: this pad only widens the logical shape inside the tile padding, i.e. it returns a VIEW of the same
+            # buffer (verified on device) -- the original must not be deallocated.
+            logits = ttnn.pad(logits, [(0, 0), (0, 0), (0, self.max_batch_size - B), (0, 0)], value=0.0)
         return logits  # a plain tensor, like tt_transformers
 
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False, is_log_probs=False):
