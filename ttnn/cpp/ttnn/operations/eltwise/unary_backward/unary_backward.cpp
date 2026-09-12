@@ -1674,8 +1674,13 @@ std::vector<Tensor> prod_bw(
             prod_result, grad, std::nullopt, output_memory_config);  // result is stored in the first position
         Tensor fill_tensor = ttnn::fill_first_val_into_tensor<::bfloat16>(
             temp, temp.dtype(), temp.layout(), temp.device(), output_memory_config);
-        Tensor all_dimension_result = ttnn::multiply(
-            ttnn::reciprocal(input, output_memory_config), fill_tensor, std::nullopt, output_memory_config);
+        // Safe prod_bw for inputs containing zeros (Issue #54551)
+        Tensor is_zero = ttnn::eqz(input, output_memory_config);
+        Tensor safe_input = ttnn::where(is_zero, 1.0f, input, output_memory_config);
+        Tensor safe_reciprocal = ttnn::reciprocal(safe_input, output_memory_config);
+        Tensor nonzero_grad = ttnn::multiply(safe_reciprocal, fill_tensor, std::nullopt, output_memory_config);
+        // Where input is zero, grad is the non-zero product; where nonzero, grad is nonzero_grad
+        Tensor all_dimension_result = ttnn::where(is_zero, fill_tensor, nonzero_grad, output_memory_config);
         grad_tensor.emplace_back(all_dimension_result);
         return grad_tensor;
     }
@@ -1712,7 +1717,10 @@ std::vector<Tensor> prod_bw(
             }
         }
     }
-    Tensor reciprocal_input = ttnn::reciprocal(input, output_memory_config);
+    // Safe prod_bw per-dimension for inputs with zeros (Issue #54551)
+    Tensor is_zero = ttnn::eqz(input, output_memory_config);
+    Tensor safe_input = ttnn::where(is_zero, 1.0f, input, output_memory_config);
+    Tensor reciprocal_input = ttnn::reciprocal(safe_input, output_memory_config);
     Tensor temp = ttnn::multiply(
         prod_result,
         (*dim == 1 || *dim == 0 || *dim == -4 || *dim == -3) ? grad : updated_grad,
