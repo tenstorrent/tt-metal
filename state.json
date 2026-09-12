@@ -1,9 +1,9 @@
 {
   "last_run": {
-    "run_id": 34633480518,
-    "timestamp": "2026-09-11T18:34:00Z"
+    "run_id": 34663215773,
+    "timestamp": "2026-09-12T01:01:00Z"
   },
-  "run_id": 34633480518,
+  "run_id": 34663215773,
   "open_prs": {
     "52106": {
       "issue": 51660,
@@ -546,7 +546,11 @@
       "note": "pending CodeOwners group approval (tests/tt_metal/tt_metal/deployment/), [skip ci] prefix"
     },
     "38627": "2026-08-26 author nudge - mergeable_state=dirty, PR Gate Status failing, stale since 2026-07-30",
-    "36120": "2026-08-26 codeowners ping - review-ready, 5 requested reviewers pending, stale since 2026-07-26",
+    "36120": {
+      "last_ping": "2026-09-12",
+      "type": "codeowners",
+      "note": "re-pinged, approved by yieldthought, others pending"
+    },
     "36267": {
       "date": "2026-08-26",
       "type": "author"
@@ -556,8 +560,9 @@
       "type": "codeowners_ping"
     },
     "36184": {
-      "date": "2026-08-26",
-      "type": "codeowners_ping"
+      "last_ping": "2026-09-12",
+      "type": "codeowners",
+      "note": "re-pinged, no reviews yet, 6 requested reviewers"
     },
     "50277": {
       "date": "2026-08-26",
@@ -671,9 +676,9 @@
       "note": "mergeable_state behind, matmul transpose_a fix (fork developerfred), asked to rebase or hand off"
     },
     "24164": {
-      "date": "2026-09-06",
-      "type": "codeowners_ping",
-      "note": "2 groups still pending, prior ping 2026-08-07 not recorded in memory"
+      "last_ping": "2026-09-12",
+      "type": "codeowners",
+      "note": "re-pinged, approved by bbradelTT, other reviewers still pending"
     },
     "44398": {
       "date": "2026-09-06",
@@ -774,7 +779,8 @@
     "task1_task2_2026_09_11": "reviewed newest issues 56194 down to 56066; opened fix PR for 56194 (quasar strided pack); confirmed 56173 covered by PR 56174; reviewed 56171/56192/56122 no action; next run continue below 56066",
     "task5_2026_09_11": "re-verified 13 tracked PRs, all unchanged except 54246 now dirty (needs rebase, flagged); 55435 still stuck (broken details_url, action_required)",
     "task1_task2_2026_09_11b": "reviewed newest issues 56283 down to 56230 - confirmed+commented+labeled bug on 56283 (Quasar copy_via_memmove double-uncached-offset, DFB reshape_view) and 56254 (BH tall/narrow uint8 tilize cliff-row core-0 exclusion), both root causes verified against current source with exact line citations; labeled bug on 56281/56238/56263 (well-scoped Quasar/KV-table defect reports); 56273 corrected to no-label (missing-kernel checklist, not confirmed defect); 56240/56239/56275 are KDA/Quasar architectural/perf tracking issues, no label; 56231/56230 are empty/stub tracking issues, skipped",
-    "task6_2026_09_11b": "nudged 3 never-pinged non-draft stale PRs (23234 codeowners, 44787/44765 author) from oldest-updated search; next run continue scanning further down the non-draft list (page2+)"
+    "task6_2026_09_11b": "nudged 3 never-pinged non-draft stale PRs (23234 codeowners, 44787/44765 author) from oldest-updated search; next run continue scanning further down the non-draft list (page2+)",
+    "task1_task2_2026_09_12": "reviewed newest issues 56312 down to 56120; labeled+commented 56120 (bug) and 56239 (performance monitoring); confirmed 56295/56233/56304/56275/56298/56231/56230 covered or no-action; next run continue below 56120 (56167/56122 area onward, previously scanned range starts ~55971 so gap 56120-55971 still needs a look)"
   },
   "labeled_issues": {
     "53866": {
@@ -1075,6 +1081,11 @@
     }
   },
   "run_history": [
+    {
+      "run_id": "34663215773",
+      "date": "2026-09-12T01:01:00Z",
+      "summary": "Task1/2: reviewed fresh newest issues 56312 down to 56120; confirmed+commented+labeled bug on #56120 (MiniMax-H3 ring-attention SDPA silent wrong values traced to #55107 Blackhole Stall_Clr_Cntrl=1 unpack change, verified _llk_unpack_set_srcb_dummy_valid_ in tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_unpack_common.h unchanged on main) and #56239 (KDA prepare_chunk_recurrence perf baseline stale after #55626, verified _PRODUCTION_EXPECTED_DURATION_NS constant unchanged, labeled performance monitoring). Confirmed 56295->PR#56296, 56233->PR#56235 already covered (no dup); 56304/56275 architectural tracking already assigned; 56298 already labeled; 56231/56230 tracking placeholders, no action. Task5: re-verified all 12 tracked repo-assist PRs via pull_request_read/get_check_runs - no regressions, all unchanged from prior run (55670/55688 still 5/5 green, mergeable_state behind). Task6: re-pinged CodeOwners on 3 long-stale reviewer-blocked non-repo-assist PRs never previously nudged in this cycle: #24164 (approved by bbradelTT, other reviewers pending), #36120 (approved by yieldthought, others pending), #36184 (6 requested reviewers, no reviews yet). Task8: updated monthly summary #55015 with new suggested actions and prepended run history entry."
+    },
     {
       "run_id": "34633480518",
       "date": "2026-09-11T18:34:00Z",
