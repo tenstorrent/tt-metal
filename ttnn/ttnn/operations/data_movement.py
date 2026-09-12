@@ -547,6 +547,5 @@ ttnn.attach_golden_function(ttnn.kv_cache.update_cache_for_token_, golden_functi
 SliceParams = ttnn._ttnn.operations.data_movement.SliceParams
 SliceInputs = ttnn._ttnn.operations.data_movement.SliceInputs
 SliceDeviceOperation = ttnn._ttnn.operations.data_movement.SliceDeviceOperation
-SliceTileProgramFactory = ttnn._ttnn.operations.data_movement.SliceTileProgramFactory
 
 __all__ = []

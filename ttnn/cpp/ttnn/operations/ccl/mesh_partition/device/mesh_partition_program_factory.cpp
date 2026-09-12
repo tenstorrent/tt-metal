@@ -4,7 +4,7 @@
 
 #include "mesh_partition_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tuple>
 #include <vector>
 #include "ttnn/distributed/types.hpp"
@@ -125,11 +125,18 @@ MeshPartitionDeviceOperation::MeshPartition::create_at(
 
     SliceOp::validate_on_program_cache_miss(slice_attrs, slice_tensor_args);
     auto program_factory = SliceOp::select_program_factory(slice_attrs, slice_tensor_args);
+
+    // Slice's factories are on Metal 2.0, so they hand back a ProgramSpec plus its run args rather
+    // than a Program. MeshPartition builds one Program per mesh coordinate itself, so it performs
+    // here the two steps TTNN's Metal 2.0 adapter would otherwise perform for a single-program op.
     Program program = std::visit(
         [&](auto&& factory) -> Program {
             using Factory = std::decay_t<decltype(factory)>;
-            auto descriptor = Factory::create_descriptor(slice_attrs, slice_tensor_args, tensor_return_value);
-            return Program{descriptor};
+            auto artifacts = Factory::create_program_artifacts(slice_attrs, slice_tensor_args, tensor_return_value);
+            Program p =
+                tt::tt_metal::experimental::MakeProgramFromSpec(*tensor_args.input_tensor.device(), artifacts.spec);
+            tt::tt_metal::experimental::SetProgramRunArgs(p, artifacts.run_params);
+            return p;
         },
         program_factory);
 
@@ -149,11 +156,13 @@ void MeshPartitionDeviceOperation::MeshPartition::override_runtime_arguments(
         auto [slice_attrs, slice_tensor_args] =
             compute_slice_parameters(operation_attributes, tensor_args, mesh_coordinate);
 
-        // Re-apply this coord's per-dispatch state to the cached Program, through the same patch the
-        // slice op uses -- addresses only. CB total_size/page_size are not re-applied on a hit, so any
-        // sizing that varies across calls must be in compute_program_hash().
-        ttnn::prim::patch_slice_program_addresses(
-            program, shared_variables.slice_program_factory, slice_attrs, slice_tensor_args, tensor_return_value);
+        // Re-apply this coord's per-dispatch state to the cached Program, through the same run args
+        // the slice op uses. DFB entry_size / num_entries are not re-applied on a hit, so any sizing
+        // that varies across calls must be in compute_program_hash().
+        tt::tt_metal::experimental::UpdateProgramRunArgs(
+            program,
+            ttnn::prim::slice_program_run_args(
+                shared_variables.slice_program_factory, slice_attrs, slice_tensor_args, tensor_return_value));
     }
 }
 
