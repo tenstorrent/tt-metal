@@ -164,10 +164,6 @@ def load_attention_weights(
     if is_global and is_context_parallel:
         o_proj_cache_suffix += "_packed640"
     tp_suffix = f"_tp{tp}" if tp > 1 else ""
-    # Tag the wqkv / o_proj cache filenames with their dtype so flipping
-    # ``attention`` precision in precision_overrides.json doesn't reuse a
-    # stale cached tensor at the previous dtype. q_norm / k_norm stay at
-    # bfloat16 (no override) and don't need the suffix.
     from models.demos.gemma4_d_p.tt.precision import dtype_to_str
 
     dtype_suffix = f"_{dtype_to_str(weight_dtype)}"
