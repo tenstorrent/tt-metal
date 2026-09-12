@@ -1042,18 +1042,23 @@ std::vector<Tensor> asin_bw(
 
 // Asinh
 // result: grad * (self * self + 1).rsqrt()
+// For |x| >= 2^64, x*x overflows float32 to inf; in that regime, 1/sqrt(1 + x^2) == 1/|x|
 std::vector<Tensor> asinh_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
+    grad_tensor.reserve(1);
     using ttnn::operations::unary::EltwiseUnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
     std::vector<EltwiseUnaryWithParam> ops_chain = {
         EltwiseUnaryWithParam{UnaryOpType::SQUARE},
         EltwiseUnaryWithParam{UnaryOpType::ADD_UNARY_SFPU, 1.0f},
         EltwiseUnaryWithParam{UnaryOpType::RSQRT}};
-    Tensor grad_result =
-        ttnn::multiply(grad, ttnn::unary_chain(input, ops_chain, output_mem_config), std::nullopt, output_mem_config);
-    grad_tensor.emplace_back(grad_result);
+    Tensor in_abs = ttnn::abs(input, output_mem_config);
+    Tensor is_overflow = ttnn::gtz(ttnn::add(in_abs, -1e18f, std::nullopt, output_mem_config), output_mem_config);
+    Tensor safe_recip = ttnn::reciprocal(in_abs, output_mem_config);
+    Tensor chain_grad = ttnn::unary_chain(input, ops_chain, output_mem_config);
+    Tensor deriv = ttnn::where(is_overflow, safe_recip, chain_grad, output_mem_config);
+    grad_tensor.emplace_back(ttnn::multiply(grad, deriv, std::nullopt, output_mem_config));
     return grad_tensor;
 }
 
