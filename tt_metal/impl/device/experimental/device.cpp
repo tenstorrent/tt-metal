@@ -95,8 +95,8 @@ CoreAtNocHops get_closest_worker_to_eth_core(const IDevice& device, const CoreCo
     CoreAtNocHops closest{CoreCoord{0, 0}, std::numeric_limits<uint32_t>::max()};
     for (uint32_t y = 0; y < worker_grid_size.y; y++) {
         for (uint32_t x = 0; x < worker_grid_size.x; x++) {
-            uint32_t hops = noc_hop_distance(
-                dev.physical_worker_core_from_logical_core(CoreCoord{x, y}), eth_core, grid_size, noc);
+            uint32_t hops =
+                noc_hop_distance(dev.physical_worker_core_from_logical_core(CoreCoord{x, y}), eth_core, grid_size, noc);
             if (hops < closest.distance_in_noc_hops) {
                 closest = CoreAtNocHops{CoreCoord{x, y}, hops};
             }
@@ -104,6 +104,20 @@ CoreAtNocHops get_closest_worker_to_eth_core(const IDevice& device, const CoreCo
     }
 
     return closest;
+}
+
+CoreCoord worker_core_from_logical_core(
+    distributed::MeshDevice& mesh_device,
+    const distributed::MeshCoordinate& mesh_coord,
+    const CoreCoord& logical_core) {
+    const auto& mesh_device_impl = mesh_device.impl();
+    TT_FATAL(
+        mesh_device_impl.is_local(mesh_coord),
+        "worker_core_from_logical_core: MeshCoordinate {} maps to a device this rank does not drive. The "
+        "logical-to-virtual worker mapping is read from that chip's SoC descriptor, which is available only for "
+        "local devices.",
+        mesh_coord);
+    return mesh_device_impl.get_device(mesh_coord)->worker_core_from_logical_core(logical_core);
 }
 
 }  // namespace tt::tt_metal::experimental::Device
