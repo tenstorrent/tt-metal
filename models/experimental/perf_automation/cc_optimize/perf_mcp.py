@@ -2379,7 +2379,12 @@ def _adaptive_run(cmd, cwd, env, label="device run", stall_s=None, backstop=None
         backstop = _abs(3600)
     else:
         backstop = int(backstop)
-    from agent.probes import memory_cap_preexec_fn, wait_for_memory_headroom_before_device_work
+    from agent.probes import (
+        LOW_MEM_REFERENCE_ENV,
+        memory_cap_preexec_fn,
+        should_use_low_mem_reference,
+        wait_for_memory_headroom_before_device_work,
+    )
 
     # THE SIXTH LAUNCH POINT, FOUND LATE. This drives _run_full_pipeline_ms's BEFORE/AFTER bookend,
     # which explicitly builds the model at FULL uncapped depth (_set_depth(env, None)) -- the exact
@@ -2388,8 +2393,11 @@ def _adaptive_run(cmd, cwd, env, label="device run", stall_s=None, backstop=None
     # cc_optimize.run's _run_device_proc: a live, streamed subprocess through a stall/backstop
     # watchdog, not a single completed result, so the auto-retry-with-fallback stays out of scope
     # here for the same reason it does there -- retrofitting a retry into a streaming launcher is a
-    # separate, larger change than this one.
+    # separate, larger change than this one. The PROACTIVE low-mem-reference decision has no such
+    # shape dependency (a plain bool check), so it applies here same as everywhere else.
     wait_for_memory_headroom_before_device_work(label)
+    if LOW_MEM_REFERENCE_ENV not in env and should_use_low_mem_reference():
+        env[LOW_MEM_REFERENCE_ENV] = "1"
     proc = _sp.Popen(
         list(cmd),
         cwd=str(cwd),

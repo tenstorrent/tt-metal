@@ -3689,6 +3689,11 @@ def _run_device_proc(
     _wait_for_thermal_headroom_before_device_work(label)
     _wait_for_memory_headroom_before_device_work(label)
     from agent.probes import memory_cap_preexec_fn
+    import agent.probes as _pr
+
+    _lm = _pr.LOW_MEM_REFERENCE_ENV
+    if _lm not in env and _pr.should_use_low_mem_reference():
+        env[_lm] = "1"
 
     _obs_t0 = time.monotonic()
     _therm = _thermal_watch_new()

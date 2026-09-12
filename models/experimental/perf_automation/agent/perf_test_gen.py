@@ -462,6 +462,20 @@ def _run_perf_node(node_abs: str, extra_env: dict, timeout_s: int = 2400):
         cmd = [sys.executable, "-m", "pytest", "-o", "timeout=0", "-s", node_abs]
         from . import probes as _pr
 
+        # THE LAUNCH POINT THAT HAD NEITHER GATE. Every OTHER subprocess that can build a full model
+        # reference (pcc_gate_gen, pcc_runner, stack_survey x2) waits for headroom and proactively
+        # asks for a low-memory reference build on a loaded box; this one -- generated-test
+        # validation, which ALSO calls build_pipeline(model=None) and loads the same reference --
+        # had neither, and is exactly where nvidia_nemotron_3_5_lightning_30b_a3b_bf16's fp32
+        # reference build hit ~117-120 GB RSS and OOM-killed the whole session, twice, on
+        # 2026-09-12. should_use_low_mem_reference is launcher-shape-agnostic by design (a plain
+        # bool, not tied to subprocess.run's completed-result shape), which is exactly what lets it
+        # slot into _execute's streaming launcher where the completed-result retry wrapper
+        # (run_with_low_memory_fallback) does not fit -- same reason _run_device_proc was scoped out
+        # of that wrapper originally.
+        _pr.wait_for_memory_headroom_before_device_work("perf-test validation")
+        if _pr.LOW_MEM_REFERENCE_ENV not in env and _pr.should_use_low_mem_reference():
+            env[_pr.LOW_MEM_REFERENCE_ENV] = "1"
         log = Path(tempfile.mkdtemp(prefix="perf_node_")) / "run.log"
         stall = int(os.environ.get("PERF_MCP_VALIDATE_STALL_SEC", "300") or "300")
         try:
