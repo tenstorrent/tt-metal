@@ -1233,3 +1233,145 @@ def test_binary_composite_output_dtype_defaults_to_input(device):
     assert ttnn.bias_gelu(a, 1.0).dtype == ttnn.bfloat16
     assert ttnn.gcd(int_a, int_b).dtype == ttnn.int32
     assert ttnn.lcm(int_a, int_b).dtype == ttnn.int32
+
+
+# DeepSeek-V4's swiglu_limit.
+CLAMPED_SILU_GLU_LIMIT = 10.0
+
+# bfp8_b quantizes the inputs before the op runs and shares one exponent per 16-element block,
+# which costs hundreds of bf16 ULP regardless of op accuracy, so that arm is gated by PCC only.
+CLAMPED_SILU_GLU_ULP = 4
+CLAMPED_SILU_GLU_BF16_PCC = 0.9999
+CLAMPED_SILU_GLU_BFP8_PCC = 0.999
+
+
+def _clamped_silu_glu_inputs(shape):
+    # Spans well past both clamps on either side.
+    torch.manual_seed(0)
+    span = 3 * CLAMPED_SILU_GLU_LIMIT
+    return (
+        torch.empty(shape, dtype=torch.bfloat16).uniform_(-span, span),
+        torch.empty(shape, dtype=torch.bfloat16).uniform_(-span, span),
+    )
+
+
+def _assert_clamped_silu_glu_values(gate, up, out, ttnn_dtype):
+    golden = ttnn.get_golden_function(ttnn.clamped_silu_glu)(gate, up, limit=CLAMPED_SILU_GLU_LIMIT)
+    tt_res = ttnn.to_torch(out)
+
+    is_bfp8 = ttnn_dtype == ttnn.bfloat8_b
+    # silu(min(gate, lim)) <= lim and |clamp(up)| <= lim, so the product is bounded by lim^2.
+    bound = CLAMPED_SILU_GLU_LIMIT**2 * (1.0 + (5e-2 if is_bfp8 else 2**-8))
+    max_abs = tt_res.to(torch.float32).abs().max().item()
+    assert max_abs <= bound, f"clamped_silu_glu overshoot: max |out| {max_abs:.4f} > bound {bound:.4f}"
+
+    if is_bfp8:
+        assert_with_pcc(golden, tt_res, pcc=CLAMPED_SILU_GLU_BFP8_PCC)
+    else:
+        assert_with_ulp(expected_result=golden, actual_result=tt_res, ulp_threshold=CLAMPED_SILU_GLU_ULP)
+        assert_with_pcc(golden, tt_res, pcc=CLAMPED_SILU_GLU_BF16_PCC)
+
+
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bfp8_b"])
+def test_clamped_silu_glu(ttnn_dtype, device):
+    shape = torch.Size([1, 1, 512, 3072])
+    gate, up = _clamped_silu_glu_inputs(shape)
+
+    gate_tt = ttnn.from_torch(gate, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    up_tt = ttnn.from_torch(up, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    out = ttnn.clamped_silu_glu(gate_tt, up_tt, CLAMPED_SILU_GLU_LIMIT)
+
+    assert out.memory_config().buffer_type == gate_tt.memory_config().buffer_type
+    _assert_clamped_silu_glu_values(gate, up, out, ttnn_dtype)
+
+
+@pytest.mark.parametrize(
+    "sub_core_grid",
+    [
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))]),
+        ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 4)),
+                ttnn.CoreRange(ttnn.CoreCoord(3, 2), ttnn.CoreCoord(4, 3)),
+            ]
+        ),
+    ],
+    ids=["contiguous", "disjoint"],
+)
+def test_clamped_silu_glu_sub_core_grids(device, sub_core_grid):
+    shape = torch.Size([1, 1, 512, 3072])
+    gate, up = _clamped_silu_glu_inputs(shape)
+
+    gate_tt = ttnn.from_torch(gate, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    up_tt = ttnn.from_torch(up, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    out = ttnn.clamped_silu_glu(gate_tt, up_tt, CLAMPED_SILU_GLU_LIMIT, sub_core_grids=sub_core_grid)
+
+    assert out.memory_config().buffer_type == gate_tt.memory_config().buffer_type
+    _assert_clamped_silu_glu_values(gate, up, out, ttnn.bfloat16)
+
+
+def test_clamped_silu_glu_sub_core_grids_allow_interleaved_l1(device):
+    # Nothing is allocated on the cores a restriction exists to stay off, so an interleaved-L1
+    # output is safe here.
+    shape = torch.Size([1, 1, 32, 3072])
+    gate, up = _clamped_silu_glu_inputs(shape)
+
+    gate_tt = ttnn.from_torch(gate, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    up_tt = ttnn.from_torch(up, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    out = ttnn.clamped_silu_glu(
+        gate_tt,
+        up_tt,
+        CLAMPED_SILU_GLU_LIMIT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))]),
+    )
+
+    assert out.memory_config().buffer_type == ttnn.BufferType.L1
+    _assert_clamped_silu_glu_values(gate, up, out, ttnn.bfloat16)
+
+
+def test_clamped_silu_glu_sub_core_grids_conflict(device, expect_error):
+    shape = torch.Size([1, 1, 32, 32])
+    gate = ttnn.zeros(shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # sub_device_id is resolved into a core set, so the two cannot both be honoured.
+    with expect_error(RuntimeError, "Cannot specify both sub_core_grids and sub_device_id"):
+        ttnn.clamped_silu_glu(
+            gate,
+            gate,
+            CLAMPED_SILU_GLU_LIMIT,
+            sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))]),
+            sub_device_id=ttnn.SubDeviceId(0),
+        )
+
+
+@pytest.mark.skipif(is_slow_dispatch(), reason="sub-device managers are unsupported with slow dispatch")
+def test_clamped_silu_glu_requires_cores_when_sub_devices_loaded(device, expect_error):
+    shape = torch.Size([1, 1, 32, 32])
+    grid = device.compute_with_storage_grid_size()
+    first = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, 0))})
+    rest = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    manager = device.create_sub_device_manager([ttnn.SubDevice([first]), ttnn.SubDevice([rest])], 0)
+    device.load_sub_device_manager(manager)
+    try:
+        gate = ttnn.zeros(shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        # Unrestricted, multiply would take sub-device 0 rather than the full grid, with no error
+        # to show it.
+        with expect_error(RuntimeError, "sub-devices are loaded"):
+            ttnn.clamped_silu_glu(gate, gate, CLAMPED_SILU_GLU_LIMIT)
+    finally:
+        device.clear_loaded_sub_device_manager()
+        device.remove_sub_device_manager(manager)
+
+
+@pytest.mark.parametrize("limit", [0.0, -CLAMPED_SILU_GLU_LIMIT], ids=["zero", "negative"])
+def test_clamped_silu_glu_limit_guard(device, expect_error, limit):
+    shape = torch.Size([1, 1, 32, 32])
+    gate = ttnn.zeros(shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # At limit <= 0 the gate half is the constant silu(limit).
+    with expect_error(RuntimeError, "limit must be positive"):
+        ttnn.clamped_silu_glu(gate, gate, limit)

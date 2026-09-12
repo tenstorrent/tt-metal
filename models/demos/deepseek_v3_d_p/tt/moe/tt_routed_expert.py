@@ -50,8 +50,8 @@ ROUTED_EXPERT_ACTIVATION_BY_NAME = {
     "situ": ttnn.RoutedExpertActivation.SituGlu,
 }
 
-# Activations whose fused kernel path carries the bias branch (gate/up bias before the
-# activation, down bias after the down matmul). SiLU has no bias branch.
+# Activations allowed to carry expert biases. ClampedSiluGlu is excluded because
+# DeepSeek-V4's experts are bias-free, not because the kernel lacks a bias branch.
 _BIAS_CAPABLE_ACTIVATIONS = (
     ttnn.RoutedExpertActivation.SwiGluOai,
     ttnn.RoutedExpertActivation.SituGlu,
@@ -414,13 +414,12 @@ class TtRoutedExpert(LightweightModule):
                 "the fallback path computes SiLU"
             )
 
-        # Optional per-expert projection biases (gpt-oss). Supported by any fused binary
-        # activation (the kernel adds gate/up bias before the activation and down bias
-        # after the down matmul). Converted + distributed like the weights below.
+        # Optional per-expert projection biases (gpt-oss). Converted + distributed like the
+        # weights below.
         if torch_biases is not None and activation not in _BIAS_CAPABLE_ACTIVATIONS:
             raise ValueError(
-                "TtRoutedExpert expert biases require a fused binary activation "
-                "(RoutedExpertActivation.SwiGluOai or .SituGlu); the SiLU path has no bias branch."
+                "TtRoutedExpert expert biases are enabled only for "
+                f"RoutedExpertActivation.SwiGluOai and .SituGlu, not {activation}."
             )
 
         total_experts = self.num_devices * experts_per_chip
