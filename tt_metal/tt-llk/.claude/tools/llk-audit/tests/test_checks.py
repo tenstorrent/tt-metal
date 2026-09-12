@@ -3804,6 +3804,51 @@ def test_mop_end_op_flip_is_recalled_with_the_wrap_note():
 
 
 @case
+def test_mop_end_op_flip_recalled_through_the_clr_src_alias():
+    """The in-tree binary kernels spell the selector `CLR_SRC`, an alias for
+    CLR_A / CLR_AB. A slotted flip must be recalled through the alias, or the
+    Src-bank audit loses exactly the sites this check exists to surface."""
+    out = _mr(
+        [
+            fn("configure_mop", _MR_F, 100, 200),
+            call(
+                _MR_F,
+                120,
+                "set_end_op",
+                text="tmp.set_end_op",
+                func="configure_mop",
+                arg0="TT_OP_SETRWC(CLR_SRC, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB)",
+                argc=1,
+            ),
+        ]
+    )
+    assert _hints(out) == ["MOP_SLOTTED_SRC_FLIP"], out
+    assert out[0].kind == "END_OP0", out[0].kind
+
+
+@case
+def test_mop_longer_clr_src_spellings_are_not_bank_flips():
+    """`CLR_SRC_NEGINF` and friends name a clear VALUE or a dvalid clear, not a
+    bank hand-back; a substring match on the alias would misread them."""
+    for selector in ("CLR_SRC_NEGINF", "CLR_SRC_0", "CLR_SRCB_VLD", "CLR_NONE"):
+        out = _mr(
+            [
+                fn("configure_mop", _MR_F, 100, 200),
+                call(
+                    _MR_F,
+                    120,
+                    "set_end_op",
+                    text="tmp.set_end_op",
+                    func="configure_mop",
+                    arg0=f"TT_OP_SETRWC({selector}, p_setrwc::CR_AB, 0, 0, 0, 0)",
+                    argc=1,
+                ),
+            ]
+        )
+        assert _hints(out) == ["MOP_SLOTTED_WORD"], (selector, out)
+
+
+@case
 def test_mop_last_inner_loop_instr_flip_slot():
     out = _mr(
         [

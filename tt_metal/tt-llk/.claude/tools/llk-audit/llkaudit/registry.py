@@ -317,8 +317,11 @@ SRC_FLIP_OP_SUBSTR = (
     "GMPOOL",
     "DOTPV",
 )
-#: A real clear selector. `CLR_NONE` deliberately excluded — it flips nothing.
-SRC_FLIP_CLR_TOKENS = ("CLR_A", "CLR_B", "CLR_AB")
+#: A clear selector that hands a Src bank back, matched on word boundaries. The
+#: in-tree alias `CLR_SRC` resolves to `CLR_A` or `CLR_AB` and must match; the
+#: longer `CLR_SRC_*` / `CLR_SRC?_VLD` spellings name a clear VALUE or a dvalid
+#: clear, not a bank hand-back, and must not. `CLR_NONE` flips nothing.
+SRC_FLIP_CLR_RE = re.compile(r"\bCLR_(?:A|B|AB|SRC)\b")
 
 #: Opcode-value words whose SLOT changes another audit's verdict: a Src bank
 #: flip, an inter-thread sync op (balance is per MOP ITERATION, not per source
@@ -411,7 +414,7 @@ def mop_word_flips_src(text: str) -> bool:
         return True
     if not any(t in up for t in SRC_FLIP_OP_SUBSTR):
         return False
-    return any(t in up for t in SRC_FLIP_CLR_TOKENS)
+    return bool(SRC_FLIP_CLR_RE.search(up))
 
 
 def classify_macro(name: str):
@@ -1121,14 +1124,12 @@ def required_vld_token(name: str):
 # A Src bank flip re-arms the hazard the MATH drain was taken to settle: the drain
 # proves the FPU pipe was empty AT THE STALL, so a flipping op issued after it
 # re-introduces exactly the in-flight-epilogue race. SETRWC with CLR_A/CLR_B/CLR_AB
-# and a matrix op with clr_src both flip; CLR_NONE does not (and is the common case
-# in-tree, so it must not be mistaken for one). Non-flipping FPU ops - including the
-# MOVD2A/MOVD2B of the same burst - do NOT re-arm it.
-_CLR_FLIP_RE = re.compile(r"\bCLR_(?:A|B|AB|SRC)\b")
-
-
+# (or the in-tree CLR_SRC alias for one of them) and a matrix op with clr_src both
+# flip; CLR_NONE does not (and is the common case in-tree, so it must not be
+# mistaken for one). Non-flipping FPU ops - including the MOVD2A/MOVD2B of the
+# same burst - do NOT re-arm it.
 def is_bank_flip_macro(text: str) -> bool:
-    return bool(_CLR_FLIP_RE.search(text))
+    return bool(SRC_FLIP_CLR_RE.search(text))
 
 
 def is_dest_to_src_move(name: str) -> bool:
