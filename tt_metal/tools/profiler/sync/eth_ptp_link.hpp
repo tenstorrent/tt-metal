@@ -198,6 +198,7 @@ struct StopDiag {
     }
 };
 
+
 // The records: one PP_CLOCK per stamp, this core's refclk against its wall clock with the round's number and the
 // stamp's role (spsc_packet.h), so the host pairs the two ends by identity and fits refclk against refclk: DVFS on
 // either chip's wall clock cannot enter the link solve.
@@ -229,5 +230,275 @@ inline void record_sw(const Instant&, uint32_t, uint32_t) {}
 inline void record_hw(uint64_t, uint32_t, uint32_t) {}
 #endif
 }  // namespace link
+
+// The two ends of a link, driven by whoever owns the core -- a resident kernel or the fabric router: open() before
+// the link handshake, start() once the peer is up, step() as often as the core can spare, stop() at teardown. A step
+// returns at once when nothing is due; when a burst (sender) or a frame (receiver) is due it is handled whole, so a
+// step holds the core for ~1 us at most. SwStamps adds the round's first trip as software stamps, a second stream
+// the host checks the hardware one against; it costs the sender a wait for that trip's echo, ~1 us once per round,
+// so a router leaves it off. Both are constant-initialised: the ERISC runs no dynamic init.
+constexpr uint32_t kRatioTicks = 1000;  // 20 us before a slot: read jitter of tens of cycles is under a tenth of a step
+
+template <bool SwStamps>
+struct SenderLink {
+    LinkSession sess;
+    uint32_t slot_base = 0, burst_ticks = 0;
+    // Wall cycles per refclk tick, x16: the frames' phases of the tick are spun in wall cycles, and a grid scaled by
+    // the wrong AICLK covers more or less than the tick, which biases the stamps' rounding by stamp kind. AICLK is a
+    // PLL multiple of the refclk's crystal in steps of an eighth (6.25 MHz, measured: every run's slope is on that
+    // grid to 1e-9), so a rough ratio over the kRatioTicks before each slot rounds to the exact value; one that
+    // rounds badly has a DVFS step inside it and the previous value stands. 1.25 GHz until measured.
+    uint32_t c16 = 400;
+    uint64_t slot_cfr = 0, bursts = 0;
+    uint32_t next_round = 0;
+    Instant start_at{}, pre{};
+    Pacer pacer;
+    StopDiag diag;
+    HwRound rnd;
+    uint32_t round = 0;
+    bool emit = false, ok = false;
+    Instant t0{}, t2{};
+
+    bool open() { return sess.begin(); }
+    void start(uint32_t slots, uint32_t pace_ticks) {
+        slot_base = slots;
+        burst_ticks = pace_ticks / kBurstsPerRound;
+        for (uint32_t j = 0; j < kBurstFrames; j++) {
+            volatile eth_channel_sync_t* s = slot(slot_base, j);
+            s->bytes_sent = 0;
+            s->receiver_ack = 0;
+            s->src_id = 0;
+            s->reserved_2 = 0;
+        }
+        pacer.calibrate();
+        start_at = read_instant();
+        slot_cfr = start_at.refclk + kFrameTicks;
+    }
+    __attribute__((always_inline)) void step() {
+        const uint64_t cfr = read_cfr();
+        if (cfr < slot_cfr) {
+            if (pre.refclk == 0 && cfr + kRatioTicks >= slot_cfr) {
+                pre = read_instant();
+            }
+            return;
+        }
+        burst();
+    }
+    void stop(uint32_t stop_addr) {
+        sess.end();
+        const Instant end = read_instant();
+        diag.timer = sess.timer_ok ? 1u : 2u;
+        diag.span_wall = end.wall() - start_at.wall();
+        diag.span_refclk = end.refclk - start_at.refclk;
+        diag.write(stop_addr);
+    }
+
+private:
+    static void issue(volatile eth_channel_sync_t* s) {
+        const uint32_t addr = reinterpret_cast<uint32_t>(s);
+        internal_::eth_send_packet(kLinkTxq, addr >> 4, addr >> 4, sizeof(eth_channel_sync_t) >> 4);
+    }
+    void close_round() {
+        if (emit) {
+            if constexpr (SwStamps) {
+                link::record_sw(t0, round, link::kRoleT0);
+                link::record_sw(t2, round, link::kRoleT2);
+            }
+            if (ok && sess.timer_ok && rnd.complete(kTripsPerRound)) {
+                link::record_hw(rnd.tx.q(sess), round, link::kRoleT0);
+                link::record_hw(rnd.rx.q(sess), round, link::kRoleT2);
+            }
+        }
+        diag.note_round(rnd, ok);
+    }
+    // A burst: the previous burst's echo stamps, the round's records at a round boundary, then kBurstFrames frames
+    // kFrameTicks apart from the first, each at its phase of the tick, all in wall cycles from one reading (the slot
+    // wait's exit shifts the whole burst alike, which the grid does not mind), and their egress stamps.
+    __attribute__((noinline)) void burst() {
+        const Instant now = read_instant();
+        const uint32_t hold0 = now.wall_lo;
+        if (pre.refclk != 0 && now.refclk > pre.refclk) {
+            const uint32_t q8 = (static_cast<uint32_t>(now.wall() - pre.wall()) * 256u) /
+                                static_cast<uint32_t>(now.refclk - pre.refclk);  // ratio x256: a grid step is 32
+            const uint32_t snapped = ((q8 + 16u) / 32u) * 32u;
+            if (q8 + 12u >= snapped && q8 <= snapped + 12u) {
+                c16 = snapped >> 4;
+            }
+        }
+        pre = Instant{};
+        rx_stamps_drain(sess, [&](uint64_t ts) { rnd.rx.add(ts); });
+        const uint32_t j0 = static_cast<uint32_t>(bursts % kBurstsPerRound) * kBurstFrames;
+        if (j0 == 0) {
+            if (bursts != 0) {
+                close_round();
+            }
+            round = next_round++;
+            rnd.begin(round);
+            emit = link::room(SwStamps ? 4 : 2);
+            ok = true;
+        }
+        stamps_arm(sess, kGapTag);
+        const uint64_t tag = 0x5000'0000'0000'0000ull | bursts;
+        const uint32_t spacing = (kFrameTicks * c16) >> 4;
+        const uint32_t phase0 = frame_phase_cycles(j0, c16);
+        const uint32_t w0 = rd(kWallClockLo) + 32 + phase0;
+        for (uint32_t i = 0; i < kBurstFrames; i++) {
+            const uint32_t j = j0 + i;
+            volatile eth_channel_sync_t* s = slot(slot_base, i);
+            pacer.until(w0 + i * spacing + frame_phase_cycles(j, c16) - phase0);
+            s->reserved_2 = round;
+            s->bytes_sent = frame_key(round, j);
+            if constexpr (SwStamps) {
+                if (j == 0) {
+                    t0 = read_instant();
+                }
+            }
+            issue(s);
+            if (i == 0) {
+                stamps_retag(sess, tag);
+            }
+            if constexpr (SwStamps) {
+                if (j == 0) {
+                    for (uint32_t spin = 0; s->bytes_sent != 0; spin++) {
+                        if (spin == kEchoSpins) {
+                            ok = false;
+                            break;
+                        }
+                        invalidate_l1_cache();
+                    }
+                    t2 = read_instant();
+                }
+            }
+        }
+        if (!collect_burst(sess, static_cast<uint32_t>(tag), rnd.tx)) {
+            ok = false;
+        }
+        diag.note_hold(rd(kWallClockLo) - hold0);
+        bursts++;
+        slot_cfr += burst_ticks;
+    }
+};
+
+template <bool SwStamps>
+struct ReceiverLink {
+    LinkSession sess;
+    uint32_t slot_base = 0;
+    uint32_t round = 0, expect = 0;
+    bool started = false, emit = false, ok = false;
+    Instant start_at{}, t1{}, t1b{};
+    StopDiag diag;
+    HwRound rnd;
+
+    bool open() { return sess.begin(); }
+    void start(uint32_t slots) {
+        slot_base = slots;
+        for (uint32_t j = 0; j < kBurstFrames; j++) {
+            volatile eth_channel_sync_t* s = slot(slot_base, j);
+            s->bytes_sent = 0;
+            s->receiver_ack = 0;
+            s->src_id = 0;
+            s->reserved_2 = 0;
+        }
+        start_at = read_instant();
+    }
+    // The next frame in order, or a round's first frame in slot 0 if the order broke.
+    __attribute__((always_inline)) void step() {
+        volatile eth_channel_sync_t* s = slot(slot_base, expect);
+        uint32_t key = s->bytes_sent;
+        if (key == 0) {
+            volatile eth_channel_sync_t* first = slot(slot_base, 0);
+            if (s == first) {
+                return;
+            }
+            key = first->bytes_sent;
+            if ((key & kTripMask) != 1) {
+                return;
+            }
+            s = first;
+        }
+        frame(s, key);
+    }
+    void stop(uint32_t stop_addr) {
+        sess.end();
+        const Instant end = read_instant();
+        diag.timer = sess.timer_ok ? 1u : 2u;
+        diag.span_wall = end.wall() - start_at.wall();
+        diag.span_refclk = end.refclk - start_at.refclk;
+        diag.write(stop_addr);
+    }
+
+private:
+    // A round closes once the next round's first frame has been echoed, so the close's record writes do not sit
+    // inside that frame's turnaround; the closed round's state is carried over as a copy.
+    struct Closed {
+        HwRound rnd;
+        uint32_t round;
+        bool emit, ok;
+        Instant t1, t1b;
+    };
+    void close_round(const Closed& c) {
+        if (c.emit) {
+            if constexpr (SwStamps) {
+                link::record_sw(c.t1, c.round, link::kRoleT1);
+                link::record_sw(c.t1b, c.round, link::kRoleT1B);
+            }
+            if (c.ok && sess.timer_ok && c.rnd.complete(kTripsPerRound)) {
+                link::record_hw(c.rnd.rx.q(sess), c.round, link::kRoleT1);
+                link::record_hw(c.rnd.tx.q(sess), c.round, link::kRoleT1B);
+            }
+        }
+        diag.note_round(c.rnd, c.ok);
+    }
+    // A frame: its ingress stamp, its echo from the same slot, and after a burst's last echo the burst's egress
+    // stamps. The round's number is the sender's, read from the frame.
+    __attribute__((noinline)) void frame(volatile eth_channel_sync_t* s, uint32_t key) {
+        const Instant now = read_instant();
+        const uint32_t j = (key & kTripMask) - 1;
+        Closed closed{};
+        bool close_after_echo = false;
+        if (j == 0) {
+            if (started) {
+                closed = Closed{rnd, round, emit, ok, t1, t1b};
+                close_after_echo = true;
+            }
+            started = true;
+            round = s->reserved_2;
+            rnd.begin(round);
+            emit = link::room(SwStamps ? 4 : 2);
+            ok = true;
+            t1 = now;
+        } else if (key != frame_key(round, j)) {
+            s->bytes_sent = 0;  // a frame of a round already given up
+            return;
+        } else if (j != expect) {
+            ok = false;
+        }
+        rx_stamps_drain(sess, [&](uint64_t ts) { rnd.rx.add(ts); });
+        const uint32_t i = j % kBurstFrames;
+        const uint64_t tag = 0x5200'0000'0000'0000ull | (round * kBurstsPerRound + j / kBurstFrames);
+        if (i == 0) {
+            stamps_arm(sess, kGapTag);
+        }
+        s->bytes_sent = 0;
+        if constexpr (SwStamps) {
+            if (j == 0) {
+                t1b = read_instant();
+            }
+        }
+        const uint32_t addr = reinterpret_cast<uint32_t>(s);
+        internal_::eth_send_packet(kLinkTxq, addr >> 4, addr >> 4, sizeof(eth_channel_sync_t) >> 4);
+        if (i == 0) {
+            stamps_retag(sess, tag);
+        }
+        if (close_after_echo) {
+            close_round(closed);
+        }
+        if (i == kBurstFrames - 1 && !collect_burst(sess, static_cast<uint32_t>(tag), rnd.tx)) {
+            ok = false;
+        }
+        expect = j + 1;
+        diag.note_hold(rd(kWallClockLo) - now.wall_lo);
+    }
+};
 
 }  // namespace tt::tt_metal::eth_ptp

@@ -14,7 +14,7 @@ namespace link = tt::tt_metal::eth_ptp::link;
 
 #if defined(PROFILE_KERNEL) && defined(PROFILE_STREAMING) && defined(D2D_HW_TS)
 #define LINK_HW 1
-static eth_ptp::LinkSession g_hw;
+static eth_ptp::SenderLink<true> g_link;
 static uint32_t g_slot_base = 0;  // the kBurstFrames sync words behind the channel region
 #endif
 static uint32_t g_round = 0;  // the sender numbers the rounds; the receiver reads the number from the frame
@@ -84,128 +84,6 @@ FORCE_INLINE void run_loop_iteration(
     }
 }
 
-#if defined(LINK_HW)
-// The resident hardware-stamped sync (eth_ptp_link.hpp): kBurstsPerRound bursts a round, pace_ticks / kBurstsPerRound
-// apart on the refclk, each frame at its phase of the stamp tick. A burst starts by taking the previous burst's echo
-// stamps; a round's records go out at the start of the next round's first burst, once its last echoes are in.
-static void hw_sender_loop(uint32_t stop_addr, uint32_t pace_ticks) {
-    volatile tt_l1_ptr uint32_t* stopw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stop_addr);
-    const uint32_t burst_ticks = pace_ticks / eth_ptp::kBurstsPerRound;
-    const eth_ptp::Instant start = eth_ptp::read_instant();
-    // Wall cycles per refclk tick, x16: the frames' phases of the tick are spun in wall cycles, and a grid scaled by
-    // the wrong AICLK covers more or less than the tick, which biases the stamps' rounding by stamp kind. AICLK is a
-    // PLL multiple of the refclk's crystal in steps of an eighth (6.25 MHz, measured: every run's slope is on that
-    // grid to 1e-9), so a rough ratio over the kRatioTicks before each slot rounds to the exact value; one that
-    // rounds badly has a DVFS step inside it and the previous value stands. 1.25 GHz until measured.
-    uint32_t c16 = 400;
-    constexpr uint32_t kRatioTicks = 1000;  // 20 us: read jitter of tens of cycles is under a tenth of a step
-    eth_ptp::Pacer pacer;
-    pacer.calibrate();
-    eth_ptp::StopDiag diag;
-    eth_ptp::HwRound rnd;
-    uint32_t round = 0;
-    bool emit = false, ok = false;
-    eth_ptp::Instant t0{}, t2{};
-    const auto issue = [](volatile eth_channel_sync_t* s) {
-        const uint32_t addr = reinterpret_cast<uint32_t>(s);
-        internal_::eth_send_packet(eth_ptp::kLinkTxq, addr >> 4, addr >> 4, sizeof(eth_channel_sync_t) >> 4);
-    };
-    const auto close_round = [&]() {
-        if (emit) {
-            link::record_sw(t0, round, link::kRoleT0);
-            link::record_sw(t2, round, link::kRoleT2);
-            if (ok && g_hw.timer_ok && rnd.complete(eth_ptp::kTripsPerRound)) {
-                link::record_hw(rnd.tx.q(g_hw), round, link::kRoleT0);
-                link::record_hw(rnd.rx.q(g_hw), round, link::kRoleT2);
-            }
-        }
-        diag.note_round(rnd, ok);
-    };
-    uint64_t slot_cfr = start.refclk + eth_ptp::kFrameTicks;
-    bool stop = false;
-    for (uint64_t b = 0; !stop; b++, slot_cfr += burst_ticks) {
-        eth_ptp::Instant pre{};
-        uint64_t cfr;
-        while ((cfr = eth_ptp::read_cfr()) < slot_cfr) {
-            if (pre.refclk == 0 && cfr + kRatioTicks >= slot_cfr) {
-                pre = eth_ptp::read_instant();
-            }
-            if (*stopw != 0) {
-                stop = true;
-                break;
-            }
-            invalidate_l1_cache();
-        }
-        if (stop) {
-            break;
-        }
-        const eth_ptp::Instant now = eth_ptp::read_instant();
-        const uint32_t hold0 = now.wall_lo;
-        if (pre.refclk != 0 && now.refclk > pre.refclk) {
-            const uint32_t q8 = (static_cast<uint32_t>(now.wall() - pre.wall()) * 256u) /
-                                static_cast<uint32_t>(now.refclk - pre.refclk);  // ratio x256: a grid step is 32
-            const uint32_t snapped = ((q8 + 16u) / 32u) * 32u;
-            if (q8 + 12u >= snapped && q8 <= snapped + 12u) {
-                c16 = snapped >> 4;
-            }
-        }
-        eth_ptp::rx_stamps_drain(g_hw, [&](uint64_t ts) { rnd.rx.add(ts); });
-        const uint32_t j0 = static_cast<uint32_t>(b % eth_ptp::kBurstsPerRound) * eth_ptp::kBurstFrames;
-        if (j0 == 0) {
-            if (b != 0) {
-                close_round();
-            }
-            round = g_round++;
-            rnd.begin(round);
-            emit = link::room(4);
-            ok = true;
-        }
-        eth_ptp::stamps_arm(g_hw, eth_ptp::kGapTag);
-        const uint64_t tag = 0x5000'0000'0000'0000ull | b;
-        // The burst's frames sit kFrameTicks apart from the first, each at its phase of the tick, all in wall cycles
-        // from one reading: the slot wait's exit shifts the whole burst by the same amount, which the grid does not
-        // mind.
-        const uint32_t spacing = (eth_ptp::kFrameTicks * c16) >> 4;
-        const uint32_t phase0 = eth_ptp::frame_phase_cycles(j0, c16);
-        const uint32_t w0 = eth_ptp::rd(eth_ptp::kWallClockLo) + 32 + phase0;
-        for (uint32_t i = 0; i < eth_ptp::kBurstFrames; i++) {
-            const uint32_t j = j0 + i;
-            volatile eth_channel_sync_t* s = eth_ptp::slot(g_slot_base, i);
-            pacer.until(w0 + i * spacing + eth_ptp::frame_phase_cycles(j, c16) - phase0);
-            s->reserved_2 = round;
-            s->bytes_sent = eth_ptp::frame_key(round, j);
-            if (j == 0) {
-                t0 = eth_ptp::read_instant();
-            }
-            issue(s);
-            if (i == 0) {
-                eth_ptp::stamps_retag(g_hw, tag);
-            }
-            if (j == 0) {
-                for (uint32_t spin = 0; s->bytes_sent != 0; spin++) {
-                    if (spin == eth_ptp::kEchoSpins) {
-                        ok = false;
-                        break;
-                    }
-                    invalidate_l1_cache();
-                }
-                t2 = eth_ptp::read_instant();
-            }
-        }
-        if (!eth_ptp::collect_burst(g_hw, static_cast<uint32_t>(tag), rnd.tx)) {
-            ok = false;
-        }
-        diag.note_hold(eth_ptp::rd(eth_ptp::kWallClockLo) - hold0);
-    }
-    g_hw.end();
-    const eth_ptp::Instant end = eth_ptp::read_instant();
-    diag.timer = g_hw.timer_ok ? 1u : 2u;
-    diag.span_wall = end.wall() - start.wall();
-    diag.span_refclk = end.refclk - start.refclk;
-    diag.write(stop_addr);
-}
-#endif
-
 void kernel_main() {
     const uint32_t message_size_eth_words = MESSAGE_SIZE >> 4;
 
@@ -226,18 +104,11 @@ void kernel_main() {
         }
 #if defined(LINK_HW)
         g_slot_base = channel_addr;
-        for (uint32_t j = 0; j < eth_ptp::kBurstFrames; j++) {
-            volatile eth_channel_sync_t* s = eth_ptp::slot(g_slot_base, j);
-            s->bytes_sent = 0;
-            s->receiver_ack = 0;
-            s->src_id = 0;
-            s->reserved_2 = 0;
-        }
 #endif
     }
 
 #if defined(LINK_HW)
-    g_hw.begin();
+    g_link.open();
 #endif
     eth_setup_handshake(HANDSHAKE_ADDR, true);
 
@@ -250,7 +121,13 @@ void kernel_main() {
     const uint32_t stop_addr = get_arg_val<uint32_t>(0);
     const uint32_t pace_ticks = get_arg_val<uint32_t>(1);
 #if defined(LINK_HW)
-    hw_sender_loop(stop_addr, pace_ticks);
+    g_link.start(g_slot_base, pace_ticks);
+    volatile tt_l1_ptr uint32_t* stopw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stop_addr);
+    while (*stopw == 0) {
+        g_link.step();
+        invalidate_l1_cache();
+    }
+    g_link.stop(stop_addr);
 #else
     volatile tt_l1_ptr uint32_t* stopw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stop_addr);
     const eth_ptp::Instant start = eth_ptp::read_instant();
