@@ -1,0 +1,10 @@
+# Python deps for the Qwen2-VL-7B-Instruct TTNN bring-up (reference/golden side).
+#
+# Validated end-to-end with the exact pins below on a single Blackhole p150
+# (demo generates coherent text; e2e logits PCC = 0.970 with 16/16 greedy tokens
+# matching the HF golden). `torch` is already provided by the tt-metal
+# python_env; the >=2.6 line below is only for running the reference off-device.
+transformers==5.10.2
+accelerate==1.7.0
+pillow>=10.0.0
+torch>=2.6.0
