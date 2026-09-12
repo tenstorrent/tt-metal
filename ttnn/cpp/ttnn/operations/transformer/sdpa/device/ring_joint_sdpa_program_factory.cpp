@@ -2035,6 +2035,27 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         return std::pair<uint32_t, uint32_t>{head, q_chunk};
     };
 
+    // Describe a core's flat Q range for K/V chain construction.
+    auto append_head_work = [&](uint32_t core_idx, uint32_t flat_chunk, uint32_t remaining) {
+        auto& work = core_work.at(core_idx);
+        while (remaining > 0) {
+            const auto [head_idx, q_chunk_idx] = decode_flat_chunk(flat_chunk);
+            const uint32_t take = std::min(remaining, num_q_chunks - q_chunk_idx);
+            work.head_work.push_back(CoreHeadWork{.head = head_idx, .q_chunk_count = take});
+            if (use_head_chain) {
+                TT_FATAL(
+                    head_idx < head_segments.size(),
+                    "Head-chain segment index {} is outside {} configured query heads",
+                    head_idx,
+                    head_segments.size());
+                head_segments[head_idx].push_back(HeadSegmentRef{
+                    .core_idx = core_idx, .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
+            }
+            remaining -= take;
+            flat_chunk += take;
+        }
+    };
+
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
         uint32_t chunk_count = base_chunks_per_core + ((i < cores_doing_extra_work) ? extra_chunks_per_core : 0);
@@ -2049,31 +2070,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         work.global_q_start = next_global_chunk;
         work.global_q_count = chunk_count;
 
-        uint32_t remaining = chunk_count;
-        uint32_t flat_chunk = next_global_chunk;
-        while (remaining > 0) {
-            auto [head_idx, q_chunk_idx] = decode_flat_chunk(flat_chunk);
-            uint32_t chunk_capacity_in_head = num_q_chunks - q_chunk_idx;
-            uint32_t chunk_take = std::min(remaining, chunk_capacity_in_head);
-
-            if (enable_kv_chains) {
-                work.head_work.push_back(CoreHeadWork{
-                    .head = head_idx,
-                    .q_chunk_count = chunk_take,
-                });
-                if (use_head_chain) {
-                    TT_FATAL(
-                        head_idx < head_segments.size(),
-                        "Head-chain segment index {} is outside {} configured query heads",
-                        head_idx,
-                        head_segments.size());
-                    head_segments[head_idx].push_back(HeadSegmentRef{
-                        .core_idx = i, .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
-                }
-            }
-
-            remaining -= chunk_take;
-            flat_chunk += chunk_take;
+        if (enable_kv_chains) {
+            append_head_work(i, next_global_chunk, chunk_count);
         }
 
         next_global_chunk += chunk_count;
@@ -2385,36 +2383,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         }
     }
 
-    // Rotated per-ring-iteration Q distribution ("rotated q split").
-    //
-    // With row-wide K mcast each grid row is a lockstep pipe paying ring_size * (row max chunks)
-    // K-stream slots, so the flat split's remainder ("float") chunks make their rows pay a +1 slot
-    // on EVERY iteration -- ring_size * ceil(U/C) against an ideal U * ring_size / C. The (m, l, O)
-    // accumulators already round-trip through DRAM addressed by chunk identity, so floats can change
-    // owner core between iterations; rotate them across rows to spread that +1. Cross-core ordering
-    // uses handoff semaphores (chunked_prefill_utils.hpp): the donor signals after a write barrier
-    // on its save TRID, the receiver waits before its restore reads. Floats sit LAST in every list,
-    // giving that pair about one ring iteration of slack.
-    // Aliased from the flat split above rather than recomputed, so the two cannot drift.
+    // Rotate remainder Q chunks across multicast groups between active ring iterations.
+    // Saved (m, l, O) state is addressed by chunk ID; semaphore handoffs protect migration.
     const uint32_t rotated_base_chunks = base_chunks_per_core;
     const uint32_t rotated_float_chunks = cores_doing_extra_work;
-    //
-    // LOCKSTEP GROUPS. The unit the rotation balances is not "a grid row" but "a set of cores that
-    // one injector multicasts to, waiting for every receiver before each broadcast"
-    // (chain_link.hpp sets sender_wait_count_ = mcast_num_dests for mcast, 1 otherwise). That
-    // barrier is what makes ONE +1-chunk core cost its WHOLE group an extra slot on EVERY ring
-    // iteration -- the cost this rotation exists to spread.
-    //
-    // Store-and-forward (linear) chains are deliberately NOT groups. They rendezvous pairwise and
-    // gate forwarding on the successor's own count, so their cost is a pipeline, not
-    // group_size * max(slots); rotating floats across them would balance nothing.
-    //
-    // Binding to the live family rather than to batch_chain_configs by name is what lets GQA
-    // (is_gqa_grouped_kv_head_mode, NHK == 1) use this: it runs the SAME
-    // select_row_wide_chain_mcast / configure_row_wide_chain_mcast, just into gqa_chain_configs,
-    // and has exactly one live chain family just as latent-V MLA does (uses_v_head_chain and
-    // uses_shared_k_batch_chain are both false when gqa_grouped_kv). The two families are mutually
-    // exclusive by construction, so at most one pointer is ever taken.
+
+    // Only multicast groups share a row-wide barrier: linear chains do not have
+    // the same per-row cost. Use the live shared-K or GQA K/V multicast family.
     struct LockstepGroup {
         std::vector<uint32_t> members;  // core indices in mcast rectangle order
         uint32_t injector_pos = 0;      // index INTO members, not a core index
@@ -2425,10 +2400,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     } else if (gqa_mcast_enabled) {
         rotated_mcast_configs = &gqa_chain_configs;
     }
-    // Both mcast passes lay a group over a full logical row (configure_row_wide_chain_mcast writes
-    // col 0..grid_size.x-1 of `row`), so groups are rows HERE -- but the schedule below only ever
-    // reads members/injector_pos, so a future non-row group (e.g. a padded head chain, which spans
-    // a sub-row segment) needs no change to the rotation itself.
+    // Both multicast families cover full logical rows.
     std::vector<LockstepGroup> rotated_groups;
     std::string rotated_group_reject;
     if (rotated_mcast_configs == nullptr) {
@@ -2443,21 +2415,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             for (uint32_t col = 0; col < grid_size.x; ++col) {
                 const auto& cfg = (*rotated_mcast_configs)[row * grid_size.x + col];
                 if (!cfg.participates) {
-                    // A partially-participating row cannot host floats, and a core outside every
-                    // group would still be handed base chunks below. Reject rather than rotate a
-                    // grid the schedule does not fully describe. Unreachable while
-                    // rotated_base_chunks >= 1, which forces work onto every core.
+                    // Every scheduled core must belong to a multicast group.
                     rotated_group_reject = fmt::format("row {} has a non-participating core", row);
                     break;
                 }
                 if (cfg.is_injector) {
-                    // mcast_num_dests is written only by configure_row_wide_chain_mcast, never by
-                    // build_linear_chain, so it is what actually distinguishes a lockstep group from
-                    // a store-and-forward chain. participates/is_injector are set by BOTH, and are
-                    // safe here only because every row a live mcast family skipped happens to be
-                    // all-zero-work and therefore non-participating -- a non-local invariant two
-                    // passes away. Check the distinguishing field instead, so a future change that
-                    // breaks that invariant declines loudly rather than silently rotating a pipeline.
+                    // Unlike participates/is_injector, this field distinguishes multicast
+                    // injectors from linear-chain injectors.
                     if (cfg.mcast_num_dests == 0) {
                         rotated_group_reject = fmt::format("row {} injector is not a mcast injector", row);
                         break;
@@ -2515,9 +2479,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         rotated_base_chunks >= 1;
 
     struct RotatedIterSched {
-        std::vector<uint32_t> my_chunks;   // flat chunk ids; base chunks first, float (if any) last
-        uint32_t group_slot_count = 0;     // group max chunk count this iteration = mcast slots to run
-        uint32_t float_migrated_in = 0;    // 1 if the last chunk was owned by another core last iteration
+        std::vector<uint32_t> my_chunks;       // flat chunk ids; base chunks first, float (if any) last
+        uint32_t group_slot_count = 0;         // group max chunk count this iteration = mcast slots to run
+        uint32_t float_migrated_in = 0;        // 1 if the last chunk was owned by another core last iteration
         uint32_t float_dest = kRotatedNoDest;  // packed physical core owning this float next iteration
     };
     std::vector<std::vector<RotatedIterSched>> rotated_sched;  // [core][ring_iter]
@@ -2532,17 +2496,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     if (use_rotated_q_split) {
         const uint32_t num_groups = static_cast<uint32_t>(rotated_groups.size());
         const uint32_t groups_needed = rotated_groups_needed;
-        // The row-wide mcast machinery assumes the injector never runs a padded iteration (it is
-        // chosen among group-max cores; padded members freeze their K-CB write phase, and the mcast
-        // lands at the injector's phase). Preserve that invariant per iteration: within a group
-        // hosting floats, the injector takes the first float. rotated_groups already carries
-        // injector_pos, validated at construction, so there is no second scan to keep in sync.
-        // Float f's owner at iteration t: groups rotate by groups_needed each iteration so every
-        // group hosts floats (the +1 mcast slot) an equal ~ring_size*groups_needed/num_groups share
-        // of iterations. (group, position) is unique per f within an iteration, so a core owns at
-        // most one float at a time; position 0 maps to the group's injector.
-        // Identical to the previous row-indexed form when groups are rows in column order, which
-        // is what configure_row_wide_chain_mcast always produces -- latent-V output is unchanged.
+        // Put the first remainder on the injector so it never runs padded slots.
+        // Rotate groups each iteration; each core owns at most one remainder.
         auto float_owner = [&](uint32_t ring_iter, uint32_t float_idx) {
             const uint32_t group_idx = ((ring_iter * groups_needed) + (float_idx / rotated_group_size)) % num_groups;
             const auto& group = rotated_groups[group_idx];
@@ -2560,48 +2515,36 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 }
             }
         }
-        // owner_of[ring_iter][float_idx]: which core holds float `float_idx` on that iteration.
-        // Materialized because the loop below needs each float's owner in the previous and next
-        // iterations as well as this one, and re-evaluating float_owner four times per (iter, float)
-        // is what made this schedule hard to check.
-        std::vector<std::vector<uint32_t>> owner_of(ring_size, std::vector<uint32_t>(rotated_float_chunks));
         for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
             for (uint32_t float_idx = 0; float_idx < rotated_float_chunks; ++float_idx) {
-                owner_of[ring_iter][float_idx] = float_owner(ring_iter, float_idx);
-            }
-        }
-        for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
-            for (uint32_t float_idx = 0; float_idx < rotated_float_chunks; ++float_idx) {
-                const uint32_t owner = owner_of[ring_iter][float_idx];
+                const uint32_t owner = float_owner(ring_iter, float_idx);
                 auto& sched = rotated_sched[owner][ring_iter];
                 sched.my_chunks.push_back(rotated_base_chunks * num_cores + float_idx);
                 // (row, pos) is unique per float within an iteration, so a core holds at most one
                 // float and these two fields are assigned at most once each.
                 TT_ASSERT(sched.my_chunks.size() == rotated_base_chunks + 1);
-                sched.float_migrated_in = (ring_iter > 0 && owner_of[ring_iter - 1][float_idx] != owner) ? 1 : 0;
-                if (ring_iter + 1 < ring_size) {
-                    const uint32_t next_owner = owner_of[ring_iter + 1][float_idx];
-                    if (next_owner != owner) {
-                        const auto& dest_phys = core_work[next_owner].physical_core;
-                        // rotated_pack_dest packs y into the low 8 bits; a wider coord would alias
-                        // silently into x and signal the wrong core's handoff semaphore.
+                if (ring_iter > 0) {
+                    const uint32_t previous_owner = float_owner(ring_iter - 1, float_idx);
+                    if (previous_owner != owner) {
+                        // Record both ends of this handoff together.
+                        const auto& dest_phys = core_work[owner].physical_core;
                         TT_FATAL(
                             dest_phys.y < 256 && dest_phys.x < (1u << 24),
                             "Rotated Q split cannot pack physical core ({}, {}) into a handoff dest",
                             dest_phys.x,
                             dest_phys.y);
-                        sched.float_dest = rotated_pack_dest(dest_phys.x, dest_phys.y);
+                        sched.float_migrated_in = 1;
+                        rotated_sched[previous_owner][ring_iter - 1].float_dest =
+                            rotated_pack_dest(dest_phys.x, dest_phys.y);
                     }
                 }
             }
             // Every core in a group runs the group's max slot count, so padded members still relay
             // the mcast handshakes.
             for (const auto& group : rotated_groups) {
-                uint32_t group_max = 0;
-                for (const uint32_t ci : group.members) {
-                    group_max =
-                        std::max(group_max, static_cast<uint32_t>(rotated_sched[ci][ring_iter].my_chunks.size()));
-                }
+                // The injector owns the first remainder, so its count is the group maximum.
+                const uint32_t group_max =
+                    static_cast<uint32_t>(rotated_sched[group.members[group.injector_pos]][ring_iter].my_chunks.size());
                 for (const uint32_t ci : group.members) {
                     rotated_sched[ci][ring_iter].group_slot_count = group_max;
                 }
@@ -2616,31 +2559,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             }
         }
 
-        // Separate-V: the V head chain's per-(head, core) forwarding counts come from
-        // head_work/head_segments, which were derived from the STATIC flat split. Under rotation
-        // each core instead owns the contiguous base range [i*base, (i+1)*base) on every
-        // iteration, so rebuild both from that. Floats are deliberately NOT added: they are the
-        // tail flat ids and, by the head-boundary term in the predicate, live only in heads with
-        // no base chunks -- heads whose chain is therefore never built (segs.size() < 2), so the
-        // reader's `nq != chain_head` fallback reads their V from DRAM.
-        // Only the head chain, built below, sees this rebuilt version. The K chain was built above
-        // from the static head_work, but on this path that is moot rather than merely satisfied:
-        // the rotation requires a live row-wide mcast family, and configure_row_wide_chain_mcast
-        // rewrites every field of every batch_chain_configs entry, so the linear K chain built
-        // earlier is discarded wholesale before any of it is used.
-        //
-        // RECOVERED from 6c319e724e9. It was still present when separate-V rotation was gated out
-        // (409d944b14d removed only the predicate), became unreachable at that point, and was then
-        // dropped as dead code by the squash. Re-enabling the predicate WITHOUT it deadlocks the V
-        // relay -- the head chain forwards against the static split while the rotation ships a
-        // different one. Verified: that is exactly the hang seen before this was restored.
-        // GUARD IS use_head_chain, NOT !v_shares_k_buffer as in the original 6c319e724e9. Back then
-        // the predicate's separate-V disjunct implied use_head_chain, so the two agreed. This
-        // predicate also admits GQA, where !v_shares_k_buffer holds but use_head_chain is FALSE and
-        // head_segments is therefore sized 0 -- the TT_FATAL below would fire on the first chunk.
-        // use_head_chain is also the precise condition on its own terms: this block exists to make
-        // the V HEAD CHAIN describe the rotated split, so with no head chain there is nothing to
-        // rebuild, and core_work.head_work must be left alone for the GQA grouped chains that read it.
+        // Rebuild separate-V chains from fixed base ranges. The head-boundary guard
+        // keeps remainder heads out of these chains; their V reads go directly to DRAM.
+        // GQA must retain its original head_work for the grouped K/V chains.
         if (use_head_chain) {
             for (auto& work : core_work) {
                 work.head_work.clear();
@@ -2649,34 +2570,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 segs.clear();
             }
             for (uint32_t i = 0; i < num_cores; ++i) {
-                auto& work = core_work.at(i);
-                uint32_t flat_chunk = i * rotated_base_chunks;
-                uint32_t remaining = rotated_base_chunks;
-                while (remaining > 0) {
-                    const auto [head_idx, q_chunk_idx] = decode_flat_chunk(flat_chunk);
-                    const uint32_t take = std::min(remaining, num_q_chunks - q_chunk_idx);
-                    work.head_work.push_back(CoreHeadWork{.head = head_idx, .q_chunk_count = take});
-                    TT_FATAL(
-                        head_idx < head_segments.size(),
-                        "Rotated head-chain segment index {} is outside {} configured query heads",
-                        head_idx,
-                        head_segments.size());
-                    head_segments[head_idx].push_back(HeadSegmentRef{
-                        .core_idx = i, .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
-                    remaining -= take;
-                    flat_chunk += take;
-                }
+                append_head_work(i, i * rotated_base_chunks, rotated_base_chunks);
             }
         }
-        // Handoff semaphores for the iterations that can RECEIVE a migrated float (1..ring_size-1;
-        // iteration 0 starts fresh). Receiver resets its slot to 0 after the wait so a cached
-        // program replays cleanly. Slots are REUSED across iterations as a ring of
-        // kRotatedHandoffSemDepth (see rotated_handoff_sem_count) rather than one per iteration: program
-        // semaphores are a scarce resource (NUM_SEMAPHORES=16, shared with the chain and fused
-        // all-gather sems), and one-per-iteration made this feature the largest single consumer
-        // (7 of 16 at ring-8) and scaled with ring length. With the V head chain skipped for
-        // latent-V, ring-8 now fits comfortably and the count no longer grows with ring_size; the
-        // TT_FATAL below keeps that true rather than leaving it to this comment.
+        // Reuse a bounded ring of handoff semaphores; receivers reset their slots
+        // after waiting, including across cached program replays.
         for (uint32_t sem_slot = 0; sem_slot < rotated_handoff_sem_count(ring_size); ++sem_slot) {
             const uint32_t sem_id = static_cast<uint32_t>(desc.semaphores.size());
             // The descriptor path has no budget check of its own: an id >= NUM_SEMAPHORES surfaces

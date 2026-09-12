@@ -6409,7 +6409,7 @@ if MESH_CONFIG.is_galaxy:
         ("kimi50k", 32, 640, 8, 68.5),
         # Kimi-K3: same chunk and tuned q32/k640, H_loc 24 vs 16. Measured 2026-08-05 on
         # bh_sc1_high_power -- 9.680 ms vs kimi50k's 5.722, i.e. 1.69x time for 1.5x ideal work.
-        ("kimi_k3", 32, 640, 8, 61.03),
+        ("kimi_k3", 32, 640, 8, 68.04),
     ]
 else:
     RING_MLA_CHUNKED_PERF_CHECK_CONFIGS = [
