@@ -17,7 +17,7 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "api/kernel_thread_globals.h"
 
-#ifdef FDS_WORKER_DONE
+#ifdef FDS_SIGNALLING
 #include "overlay/fds_signalling.hpp"
 #include "quasar/plic.hpp"
 #endif
@@ -78,7 +78,7 @@ int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(UNCACHED_MEM_MAILBOX_BASE);
 tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailboxes->subordinate_sync.map;
 
-#ifdef FDS_WORKER_DONE
+#ifdef FDS_SIGNALLING
 constexpr uint32_t fds_go_group_id = 1;
 constexpr uint32_t fds_num_dispatch_lanes = 3;
 constexpr uint32_t fds_dispatch_lane_mask = (uint32_t{1} << fds_num_dispatch_lanes) - 1;
@@ -262,7 +262,7 @@ inline void wait_subordinates() {
 
 inline void trigger_sync_register_init() { subordinate_sync->neo0_trisc0 = RUN_SYNC_MSG_INIT_SYNC_REGISTERS; }
 
-#ifdef FDS_WORKER_DONE
+#ifdef FDS_SIGNALLING
 inline uint32_t begin_worker_completion_round(launch_msg_t* launch_message, bool wait_for_go) {
     if (launch_message->kernel_config.mode != DISPATCH_MODE_DEV) {
         return 0;
@@ -299,7 +299,7 @@ inline void wait_for_tile_noc_traffic() {
 // Publishes RUN_MSG_DONE and tells the dispatcher. worker_completion_group is the FDS group for this
 // round, or 0 when the round is on the NOC.
 inline void signal_dispatch_core_done(uint32_t go_message_index, uint32_t worker_completion_group) {
-#ifdef FDS_WORKER_DONE
+#ifdef FDS_SIGNALLING
     if (worker_completion_group != 0) {
         // FDS does not share the NOC's ordering, so all tile traffic must leave the NIU before completion.
         wait_for_tile_noc_traffic();
@@ -376,7 +376,7 @@ extern "C" uint32_t _start1() {
         mailboxes->go_messages[0].signal = RUN_MSG_DONE;
 
         noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
-#ifdef FDS_WORKER_DONE
+#ifdef FDS_SIGNALLING
         register_handler_for_interrupt(MACHINE_EXTERNAL_INTERRUPT_OFFSET, fds_go_interrupt_handler);
         invalidate_l1_icache();
         overlay::fds_signalling::worker_disable_auto_dispatch();
@@ -436,7 +436,7 @@ extern "C" uint32_t _start1() {
 
             uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
-#ifdef FDS_WORKER_DONE
+#ifdef FDS_SIGNALLING
             uint32_t worker_completion_group = 0;
             if (go_message_signal == RUN_MSG_GO) {
                 worker_completion_group = begin_worker_completion_round(launch_msg_address, false);
@@ -501,7 +501,7 @@ extern "C" uint32_t _start1() {
                 setup_dfb_implicit_sync(dfb_l1_base, num_local_dfbs);
                 WAYPOINT("D");
 
-#ifdef FDS_WORKER_DONE
+#ifdef FDS_SIGNALLING
                 if (worker_completion_group == 0 && go_message_signal != RUN_MSG_GO) {
                     worker_completion_group = begin_worker_completion_round(launch_msg_address, true);
                 }

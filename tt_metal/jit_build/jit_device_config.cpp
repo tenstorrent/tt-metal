@@ -59,7 +59,7 @@ JitDeviceConfig create_jit_device_config(ChipId device_id, uint8_t num_hw_cqs, C
         .harvesting_mask = cluster.get_harvesting_mask(device_id),
         .dispatch_core_type = dispatch_core_config.get_dispatch_core_type(),
         .resolved_dispatch_core_type = resolved_dispatch_core_type,
-        .fds_worker_done = ctx.get_dispatch_query_manager().fds_worker_completion_enabled(),
+        .fds_signalling = ctx.get_dispatch_query_manager().fds_signalling_enabled(),
         .dispatch_core_axis = dispatch_core_config.get_dispatch_core_axis(),
         .coordinate_virtualization_enabled = hal.is_coordinate_virtualization_enabled(),
         .dispatch_message_addr = ctx.dispatch_mem_map().get_dispatch_message_addr_start(),
@@ -213,7 +213,7 @@ void enumerate_jit_device_configs(
                             .harvesting_mask = 0,
                             .dispatch_core_type = dispatch_core_type,
                             .resolved_dispatch_core_type = resolve_dispatch_core_type(arch, dispatch_core_type),
-                            // fds_worker_done keeps its default. FDS needs the live dispatch core placement and
+                            // fds_signalling keeps its default. FDS needs the live dispatch core placement and
                             // the FDS runtime options, neither available offline, but only Quasar can enable it
                             // and resolve_dispatch_core_type above already rejects Quasar here.
                             .dispatch_core_axis = dispatch_core_axis,

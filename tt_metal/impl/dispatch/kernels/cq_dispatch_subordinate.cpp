@@ -22,7 +22,7 @@
 #include "hostdev/dev_msgs.h"
 #include "risc_common.h"
 
-#ifdef FDS_WORKER_DONE
+#ifdef FDS_SIGNALLING
 #include "overlay/fds_signalling.hpp"
 #endif
 
@@ -169,7 +169,7 @@ static uintptr_t cmd_ptr;
 extern "C" {
 // These variables are used by triage to help report dispatcher state.
 volatile uint32_t last_wait_count = 0;
-#ifdef FDS_WORKER_DONE
+#ifdef FDS_SIGNALLING
 volatile uint32_t last_go_token = 0;
 #endif
 volatile uint32_t last_wait_stream = 0;
@@ -190,7 +190,7 @@ static uint32_t num_worker_sems = 1;
 // The dispatch message entry limit also bounds the number of sub-devices.
 static std::array<uint32_t, max_num_worker_sems> workers_per_sub_device = {0};
 
-#ifdef FDS_WORKER_DONE
+#ifdef FDS_SIGNALLING
 static std::array<uint32_t, max_num_worker_sems> open_round_worker_count = {0};
 static std::array<uint32_t, max_num_worker_sems> open_round_credited_count = {0};
 static uint32_t open_round_mask = 0;
@@ -241,7 +241,7 @@ void dispatch_s_noc_semaphore_inc(uint64_t addr, uint32_t incr, uint8_t noc_id) 
     WAYPOINT("NSID");
 }
 
-#ifdef FDS_WORKER_DONE
+#ifdef FDS_SIGNALLING
 FORCE_INLINE
 void credit_open_rounds() {
     uint32_t remaining_open_rounds = open_round_mask;
@@ -337,7 +337,7 @@ void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
 #else
     while (stream_wrap_gt(wait_count, *worker_sem)) {
 #endif
-#ifdef FDS_WORKER_DONE
+#ifdef FDS_SIGNALLING
         credit_open_rounds();
 #endif
         if (rt_profiler_enabled) {
@@ -387,7 +387,7 @@ FORCE_INLINE void cb_acquire_pages_dispatch_s(uint32_t n) {
     while (wrap_gt(num_pages_acquired + n, *sem_addr)) {
         invalidate_l1_cache();
         update_worker_completion_count_on_dispatch_d();
-#ifdef FDS_WORKER_DONE
+#ifdef FDS_SIGNALLING
         credit_open_rounds();
 #endif
 #if DEVICE_PRINT_DISPATCH_ENABLED
@@ -409,7 +409,7 @@ FORCE_INLINE void cb_release_pages_dispatch_s(uint32_t n) {
 #endif
 }
 
-#ifdef FDS_WORKER_DONE
+#ifdef FDS_SIGNALLING
 FORCE_INLINE
 void open_worker_completion_round(uint32_t sub_device_index) {
     WAYPOINT("FCLW");
@@ -475,7 +475,7 @@ void process_go_signal_mcast_cmd() {
     uint32_t wait_count = load_aligned<uint32_t>(&cmd->mcast.wait_count);
     uint32_t wait_stream = load_aligned<uint32_t>(&cmd->mcast.wait_stream);
 
-#ifdef FDS_WORKER_DONE
+#ifdef FDS_SIGNALLING
     wait_for_workers(wait_count, wait_stream);
     const bool use_fds_go = multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET &&
                             (go_signal_value >> 24) == RUN_MSG_GO && num_worker_sems == 1 && num_unicasts == 0;
@@ -600,7 +600,7 @@ void process_go_signal_mcast_cmd() {
     device_print_dispatcher.notify_kernel_start();
 #endif
 
-#ifdef FDS_WORKER_DONE
+#ifdef FDS_SIGNALLING
     credit_open_rounds();
 #endif
     update_worker_completion_count_on_dispatch_d();
@@ -640,7 +640,7 @@ void process_dispatch_s_wait_cmd() {
 FORCE_INLINE
 void set_num_worker_sems() {
     volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
-#ifdef FDS_WORKER_DONE
+#ifdef FDS_SIGNALLING
     ASSERT(open_round_mask == 0);
 #endif
     num_worker_sems = load_aligned<uint32_t>(&cmd->set_num_worker_sems.num_worker_sems);
@@ -717,7 +717,7 @@ void kernel_main() {
     // Initialize customized command buffers.
     dispatch_s_wr_reg_cmd_buf_init();
     dispatch_s_atomic_cmd_buf_init();
-#ifdef FDS_WORKER_DONE
+#ifdef FDS_SIGNALLING
     overlay::fds_signalling::dispatch_disable_auto_dispatch();
     overlay::fds_signalling::dispatch_config_filter_length(8);
     overlay::fds_signalling::dispatch_config_interrupt_enable(0);
@@ -759,7 +759,7 @@ void kernel_main() {
     // notify_kernel_start() is invoked from process_go_signal_mcast_cmd, after the
     // go signal is sent — the stall-detection window is per-program, not per-dispatch_s.
 #endif
-#ifdef FDS_WORKER_DONE
+#ifdef FDS_SIGNALLING
     write_go_verified(0);
     const uint32_t go_clear_start = get_timestamp_32b();
     while (get_timestamp_32b() - go_clear_start < kInitGoClearHoldCycles) {
