@@ -30,6 +30,7 @@
 #include <fstream>
 #include <functional>
 #include <deque>
+#include <list>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -699,8 +700,67 @@ static void fill_dfb_slots(tt_emule::EmuleDFBInterface& iface, uint32_t n, SlotF
 // JIT Compilation Cache (in-memory + persistent disk cache)
 // ---------------------------------------------------------------------------
 
+struct JitCacheEntry {
+    std::function<void()> fn;
+    std::list<std::string>::iterator lru_it;
+};
+
 static std::mutex g_jit_cache_mutex;
-static std::unordered_map<std::string, std::function<void()>> g_jit_cache;
+static std::unordered_map<std::string, JitCacheEntry> g_jit_cache;
+static std::list<std::string> g_jit_cache_lru;
+
+static size_t cache_entry_limit(const char* name, size_t fallback) {
+    const char* value = std::getenv(name);
+    if (value == nullptr || value[0] == '\0') {
+        return fallback;
+    }
+    errno = 0;
+    char* end = nullptr;
+    const unsigned long long parsed = std::strtoull(value, &end, 10);
+    if (end == value || *end != '\0' || errno == ERANGE || std::strchr(value, '-') != nullptr ||
+        parsed > std::numeric_limits<size_t>::max()) {
+        log_warning(tt::LogMetal, "{}='{}' is not a valid cache entry limit; using {}", name, value, fallback);
+        return fallback;
+    }
+    return static_cast<size_t>(parsed);
+}
+
+static size_t jit_memory_cache_entry_limit() {
+    // Each callable owns a dlopen handle. An unbounded cache can exhaust Linux's
+    // vm.max_map_count in a long model run even though the persistent disk cache
+    // itself is harmless. 4096 leaves ample VMA headroom on the usual 65530 limit.
+    static const size_t limit = cache_entry_limit("TT_EMULE_JIT_MEMORY_CACHE_ENTRIES", 4096);
+    return limit;
+}
+
+static std::function<void()> jit_cache_lookup(const std::string& key) {
+    std::lock_guard<std::mutex> lock(g_jit_cache_mutex);
+    auto it = g_jit_cache.find(key);
+    if (it == g_jit_cache.end()) {
+        return nullptr;
+    }
+    g_jit_cache_lru.splice(g_jit_cache_lru.end(), g_jit_cache_lru, it->second.lru_it);
+    return it->second.fn;
+}
+
+static void jit_cache_insert(const std::string& key, const std::function<void()>& fn) {
+    std::lock_guard<std::mutex> lock(g_jit_cache_mutex);
+    const size_t limit = jit_memory_cache_entry_limit();
+    if (limit == 0) {
+        return;
+    }
+    if (auto it = g_jit_cache.find(key); it != g_jit_cache.end()) {
+        it->second.fn = fn;
+        g_jit_cache_lru.splice(g_jit_cache_lru.end(), g_jit_cache_lru, it->second.lru_it);
+        return;
+    }
+    while (g_jit_cache.size() >= limit && !g_jit_cache_lru.empty()) {
+        g_jit_cache.erase(g_jit_cache_lru.front());
+        g_jit_cache_lru.pop_front();
+    }
+    g_jit_cache_lru.push_back(key);
+    g_jit_cache.emplace(key, JitCacheEntry{fn, std::prev(g_jit_cache_lru.end())});
+}
 
 // ---------------------------------------------------------------------------
 // Disk JIT cache — survives process restarts (critical for --forked mode)
@@ -1880,12 +1940,10 @@ static void collect_kernels(
                 return key;
             };
 
-            auto register_cache_key = [&](const std::string& key,
-                                          const std::map<std::string, std::string>& defs) {
-                std::lock_guard<std::mutex> lock(g_jit_cache_mutex);
-                auto it = g_jit_cache.find(key);
-                if (it != g_jit_cache.end()) {
-                    resolved_fns[key] = it->second;
+            auto register_cache_key = [&](const std::string& key, const std::map<std::string, std::string>& defs) {
+                auto memory_fn = jit_cache_lookup(key);
+                if (memory_fn) {
+                    resolved_fns[key] = memory_fn;
                 } else if (
                     resolved_fns.find(key) == resolved_fns.end() &&
                     deferred_compiles.find(key) == deferred_compiles.end()) {
@@ -1893,7 +1951,7 @@ static void collect_kernels(
                     auto disk_fn = disk_cache_lookup(key, mtime_path);
                     if (disk_fn) {
                         resolved_fns[key] = disk_fn;
-                        g_jit_cache[key] = disk_fn;
+                        jit_cache_insert(key, disk_fn);
                     } else {
                         deferred_compiles[key] = DeferredCompile{
                             src_path,
@@ -2087,13 +2145,9 @@ static void jit_compile_pending(
                 std::lock_guard<std::mutex> lock(g_compile_inflight_mutex);
                 // Another thread may have already finished this key (published to g_jit_cache) or be
                 // mid-compile (published an inflight future) since we built deferred_compiles.
-                {
-                    std::lock_guard<std::mutex> clock(g_jit_cache_mutex);
-                    auto cit = g_jit_cache.find(key);
-                    if (cit != g_jit_cache.end()) {
-                        resolved_fns[key] = cit->second;
-                        continue;
-                    }
+                if (auto cached_fn = jit_cache_lookup(key)) {
+                    resolved_fns[key] = cached_fn;
+                    continue;
                 }
                 auto iit = g_compile_inflight.find(key);
                 if (iit != g_compile_inflight.end()) {
@@ -2137,10 +2191,7 @@ static void jit_compile_pending(
         for (auto& [key, fut] : futures) {
             auto fn = fut.get();
             resolved_fns[key] = fn;
-            {
-                std::lock_guard<std::mutex> lock(g_jit_cache_mutex);
-                g_jit_cache[key] = fn;
-            }
+            jit_cache_insert(key, fn);
             std::lock_guard<std::mutex> lock(g_compile_inflight_mutex);
             g_compile_inflight.erase(key);
         }
@@ -3576,7 +3627,11 @@ struct ResolvedProgram {
 // shared_ptr: every fiber holds a ref, so LRU eviction must drop only the CACHE's or a KernelInfo* dangles.
 static std::unordered_map<ProgramId, std::shared_ptr<ResolvedProgram>> g_resolved_programs;
 static std::deque<ProgramId> g_resolved_lru;
-static constexpr size_t kMaxResolvedPrograms = 256;
+
+static size_t resolved_program_cache_entry_limit() {
+    static const size_t limit = cache_entry_limit("TT_EMULE_RESOLVED_PROGRAM_CACHE_ENTRIES", 256);
+    return limit;
+}
 
 // Per-program fabric routing, keyed by ProgramId. record_conn populates the globals g_conn_route/g_mux_dir
 // during host program construction, but ttnn's program cache SKIPS construction on a cache hit, so an
@@ -3900,12 +3955,17 @@ static std::shared_ptr<ResolvedProgram> prepare_program(IDevice* device, Program
     }
 
     // LRU-bound the cache; erasing drops only the cache's ref, so a parked run's entry survives eviction.
-    if (g_resolved_programs.size() >= kMaxResolvedPrograms && !g_resolved_lru.empty()) {
+    // Zero disables retention while the returned/fiber-owned shared_ptr still keeps this dispatch safe.
+    const size_t cache_limit = resolved_program_cache_entry_limit();
+    while (g_resolved_programs.size() >= cache_limit && !g_resolved_lru.empty()) {
         g_resolved_programs.erase(g_resolved_lru.front());
         g_resolved_lru.pop_front();
     }
-    g_resolved_lru.push_back(pid);
     auto entry = std::make_shared<ResolvedProgram>(std::move(resolved));
+    if (cache_limit == 0) {
+        return entry;
+    }
+    g_resolved_lru.push_back(pid);
     return g_resolved_programs.emplace(pid, std::move(entry)).first->second;
 }
 
