@@ -39,7 +39,14 @@ constexpr uint32_t kBurstsPerRound = kTripsPerRound / kBurstFrames;
 constexpr uint32_t kFrameTicks = 12;       // 240 ns between a burst's frames: a receiver takes a frame in ~150 cycles
 constexpr uint32_t kFramePhaseStep = 157;  // odd, so the 256 phases are a permutation
 constexpr uint32_t kEchoSpins = 50'000;    // polls for the first frame's echo before the round is given up: ~1 ms
-constexpr uint32_t kBurstStampSpins = 64;  // drains for a burst's egress stamps before it is given up: ~2 us
+// Waits on a link the fabric may be loading: our frames queue behind its at the MAC on the way out, and the frames
+// of a burst then reach the receiver spread out. Both are bounds on a step's hold.
+constexpr uint32_t kBurstStampSpins = 256;   // drains for a burst's egress stamps before it is given up: ~8 us
+constexpr uint32_t kBurstFollowSpins = 256;  // polls for a burst's next frame once its first is in: ~6 us
+// The control word at the diagnostics' base, the host's: rounds are issued only while it reads kCtlRun, and a
+// resident kernel exits on kCtlStop. Set once the profiler's consumer and trackers are up, so no round predates
+// the clock coverage that places it.
+constexpr uint32_t kCtlRun = 1, kCtlStop = 2;
 constexpr uint32_t kHwUnitsPerNs = 4;
 static_assert(kTripsPerRound % kBurstFrames == 0 && kBurstFrames >= 2 && (kFramePhaseStep & 1) == 1);
 
@@ -124,10 +131,12 @@ struct HwRound {
 // The egress stamps of a burst's frames, added to `into`. The request is armed under kGapTag before the burst and
 // retagged with the burst's tag right after the first frame's command, so a keepalive the idle queue stamped ahead
 // of the frames carries kGapTag and the frames the burst's; this waits for the frames' count under it, clears the
-// request, and discards the rest. False if more turned up or they did not come.
+// request, and discards the rest. Over: more turned up under the burst's tag, a keepalive the queue slipped in while
+// the frames waited behind the fabric's at the MAC. Short: they did not come in time.
 constexpr uint64_t kGapTag = 0x4A4A'4A4A'FFFF'FFFFull;
+enum class Burst : uint32_t { Ok, Over, Short };
 template <typename Session>
-__attribute__((noinline)) inline bool collect_burst(const Session& s, uint32_t tag_lo, StampSum& into) {
+__attribute__((noinline)) inline Burst collect_burst(const Session& s, uint32_t tag_lo, StampSum& into) {
     uint64_t got[kBurstFrames] = {};
     uint32_t n = 0;
     const auto take = [&](uint64_t ts) {
@@ -136,26 +145,29 @@ __attribute__((noinline)) inline bool collect_burst(const Session& s, uint32_t t
         }
         n++;
     };
-    bool ok = true;
-    for (uint32_t spin = 0; ok && n < kBurstFrames; spin++) {
+    uint32_t spin = 0;
+    while (n < kBurstFrames && spin < kBurstStampSpins) {
         tx_stamps_drain(tag_lo, take);
-        ok = n <= kBurstFrames && spin < kBurstStampSpins;
+        spin++;
     }
     stamps_disarm(s);
-    if (!ok) {
-        return false;
+    if (n > kBurstFrames) {
+        return Burst::Over;
+    }
+    if (n < kBurstFrames) {
+        return Burst::Short;
     }
     for (uint32_t i = 0; i < kBurstFrames; i++) {
         into.add(got[i]);
     }
-    return true;
+    return Burst::Ok;
 }
 
-// What each end leaves past its stop word for the host's log at stop (streaming_profiler_device.cpp reads it back):
-// +8 rounds, +12 the timer word (0 no hardware path, 1 ran, 2 never acknowledged its rate), +16 wall cycles inside
+// What each end leaves past its control word for the host's log (streaming_profiler_device.cpp reads it back): +8
+// rounds, +12 the timer word (0 no hardware path, 1 ran, 2 never acknowledged its rate), +16 wall cycles inside
 // bursts and +24 wall cycles of the run (two words each), +32 refclk ticks of the run (two words), +40 the longest
-// burst in wall cycles, +44 rounds dropped for a stamp count off the frame count, then egress stamps over, under,
-// ingress stamps off, and waits given up.
+// burst in wall cycles, +44 rounds dropped, then bursts with an egress stamp over the frame count, bursts whose
+// stamps did not come, rounds with the ingress count off, and waits for a frame or echo given up.
 struct StopDiag {
     uint32_t rounds = 0, timer = 0;
     uint64_t hold = 0, span_wall = 0, span_refclk = 0;
@@ -165,15 +177,15 @@ struct StopDiag {
         hold += cycles;
         hold_max = cycles > hold_max ? cycles : hold_max;
     }
-    __attribute__((always_inline)) void note_round(const HwRound& r, bool ok) {
+    __attribute__((always_inline)) void note_burst(Burst b) {
+        drop[1] += b == Burst::Over;
+        drop[2] += b == Burst::Short;
+    }
+    __attribute__((always_inline)) void note_round(const HwRound& r, bool ok, bool waits_given_up) {
         rounds++;
-        if (!r.complete(kTripsPerRound)) {
-            drop[0]++;
-            drop[1] += r.tx.n > kTripsPerRound;
-            drop[2] += r.tx.n < kTripsPerRound;
-            drop[3] += r.rx.n != kTripsPerRound;
-        }
-        drop[4] += !ok;
+        drop[0] += !(ok && r.complete(kTripsPerRound));
+        drop[3] += r.rx.n != kTripsPerRound;
+        drop[4] += waits_given_up;
     }
     void write(uint32_t stop_addr) const {
         volatile tt_l1_ptr uint32_t* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stop_addr + 8);
@@ -250,18 +262,19 @@ struct SenderLink {
     // rounds badly has a DVFS step inside it and the previous value stands. 1.25 GHz until measured.
     uint32_t c16 = 400;
     uint64_t slot_cfr = 0, bursts = 0;
-    uint32_t next_round = 0;
+    uint32_t next_round = 0, diag_addr = 0;
     Instant start_at{}, pre{};
     Pacer pacer;
     StopDiag diag;
     HwRound rnd;
     uint32_t round = 0;
-    bool emit = false, ok = false;
+    bool emit = false, ok = false, gave_up = false;
     Instant t0{}, t2{};
 
     bool open() { return sess.begin(); }
-    void start(uint32_t slots, uint32_t pace_ticks) {
+    void start(uint32_t slots, uint32_t pace_ticks, uint32_t diag) {
         slot_base = slots;
+        diag_addr = diag;
         burst_ticks = pace_ticks / kBurstsPerRound;
         for (uint32_t j = 0; j < kBurstFrames; j++) {
             volatile eth_channel_sync_t* s = slot(slot_base, j);
@@ -275,6 +288,11 @@ struct SenderLink {
         slot_cfr = start_at.refclk + kFrameTicks;
     }
     __attribute__((always_inline)) void step() {
+        invalidate_l1_cache();
+        if (rd(diag_addr) != kCtlRun) {
+            slot_cfr = read_cfr() + kFrameTicks;  // rounds resume on a fresh slot, not a backlog of missed ones
+            return;
+        }
         const uint64_t cfr = read_cfr();
         if (cfr < slot_cfr) {
             if (pre.refclk == 0 && cfr + kRatioTicks >= slot_cfr) {
@@ -284,19 +302,26 @@ struct SenderLink {
         }
         burst();
     }
-    void stop(uint32_t stop_addr) {
+    void stop() {
         sess.end();
-        const Instant end = read_instant();
-        diag.timer = sess.timer_ok ? 1u : 2u;
-        diag.span_wall = end.wall() - start_at.wall();
-        diag.span_refclk = end.refclk - start_at.refclk;
-        diag.write(stop_addr);
+        write_diag();
     }
 
 private:
+    // The diagnostics are rewritten at every round's close, so a host that cannot stop this end (a router) still
+    // reads the current figures.
+    void write_diag() {
+        const Instant now = read_instant();
+        diag.timer = sess.timer_ok ? 1u : 2u;
+        diag.span_wall = now.wall() - start_at.wall();
+        diag.span_refclk = now.refclk - start_at.refclk;
+        diag.write(diag_addr);
+    }
+    // No context switch while the queue is busy: the core's owner may be a router, whose switches to base firmware
+    // are coordinated with the tile's other RISC.
     static void issue(volatile eth_channel_sync_t* s) {
         const uint32_t addr = reinterpret_cast<uint32_t>(s);
-        internal_::eth_send_packet(kLinkTxq, addr >> 4, addr >> 4, sizeof(eth_channel_sync_t) >> 4);
+        internal_::eth_send_packet<false>(kLinkTxq, addr >> 4, addr >> 4, sizeof(eth_channel_sync_t) >> 4);
     }
     void close_round() {
         if (emit) {
@@ -309,7 +334,8 @@ private:
                 link::record_hw(rnd.rx.q(sess), round, link::kRoleT2);
             }
         }
-        diag.note_round(rnd, ok);
+        diag.note_round(rnd, ok, gave_up);
+        write_diag();
     }
     // A burst: the previous burst's echo stamps, the round's records at a round boundary, then kBurstFrames frames
     // kFrameTicks apart from the first, each at its phase of the tick, all in wall cycles from one reading (the slot
@@ -336,6 +362,7 @@ private:
             rnd.begin(round);
             emit = link::room(SwStamps ? 4 : 2);
             ok = true;
+            gave_up = false;
         }
         stamps_arm(sess, kGapTag);
         const uint64_t tag = 0x5000'0000'0000'0000ull | bursts;
@@ -362,6 +389,7 @@ private:
                     for (uint32_t spin = 0; s->bytes_sent != 0; spin++) {
                         if (spin == kEchoSpins) {
                             ok = false;
+                            gave_up = true;
                             break;
                         }
                         invalidate_l1_cache();
@@ -370,7 +398,9 @@ private:
                 }
             }
         }
-        if (!collect_burst(sess, static_cast<uint32_t>(tag), rnd.tx)) {
+        const Burst b = collect_burst(sess, static_cast<uint32_t>(tag), rnd.tx);
+        diag.note_burst(b);
+        if (b != Burst::Ok) {
             ok = false;
         }
         diag.note_hold(rd(kWallClockLo) - hold0);
@@ -382,16 +412,17 @@ private:
 template <bool SwStamps>
 struct ReceiverLink {
     LinkSession sess;
-    uint32_t slot_base = 0;
+    uint32_t slot_base = 0, diag_addr = 0;
     uint32_t round = 0, expect = 0;
-    bool started = false, emit = false, ok = false;
+    bool started = false, emit = false, ok = false, mid_burst = false;
     Instant start_at{}, t1{}, t1b{};
     StopDiag diag;
     HwRound rnd;
 
     bool open() { return sess.begin(); }
-    void start(uint32_t slots) {
+    void start(uint32_t slots, uint32_t diag) {
         slot_base = slots;
+        diag_addr = diag;
         for (uint32_t j = 0; j < kBurstFrames; j++) {
             volatile eth_channel_sync_t* s = slot(slot_base, j);
             s->bytes_sent = 0;
@@ -401,33 +432,50 @@ struct ReceiverLink {
         }
         start_at = read_instant();
     }
-    // The next frame in order, or a round's first frame in slot 0 if the order broke.
+    // Every frame waiting: the next in order, or a round's first frame in slot 0 if the order broke. A burst's
+    // frames are echoed within one step, waiting up to kBurstFollowSpins for each of the rest to land once the
+    // first has: the owner of the core may come by rarely, and the queue idle between echoes for its keepalive
+    // timeout would stamp a keepalive into the burst.
     __attribute__((always_inline)) void step() {
-        volatile eth_channel_sync_t* s = slot(slot_base, expect);
-        uint32_t key = s->bytes_sent;
-        if (key == 0) {
-            volatile eth_channel_sync_t* first = slot(slot_base, 0);
-            if (s == first) {
-                return;
+        uint32_t spins = 0;
+        invalidate_l1_cache();
+        for (;;) {
+            volatile eth_channel_sync_t* s = slot(slot_base, expect);
+            uint32_t key = s->bytes_sent;
+            if (key == 0) {
+                volatile eth_channel_sync_t* first = slot(slot_base, 0);
+                if (s != first) {
+                    key = first->bytes_sent;
+                    if ((key & kTripMask) == 1) {
+                        s = first;
+                    }
+                }
+                if (key == 0 || s != first || (key & kTripMask) != 1) {
+                    if (mid_burst && spins < kBurstFollowSpins) {
+                        spins++;
+                        invalidate_l1_cache();
+                        continue;
+                    }
+                    return;
+                }
             }
-            key = first->bytes_sent;
-            if ((key & kTripMask) != 1) {
-                return;
-            }
-            s = first;
+            mid_burst = frame(s, key);
+            spins = 0;
         }
-        frame(s, key);
     }
-    void stop(uint32_t stop_addr) {
+    void stop() {
         sess.end();
-        const Instant end = read_instant();
-        diag.timer = sess.timer_ok ? 1u : 2u;
-        diag.span_wall = end.wall() - start_at.wall();
-        diag.span_refclk = end.refclk - start_at.refclk;
-        diag.write(stop_addr);
+        write_diag();
     }
 
 private:
+    void write_diag() {
+        const Instant now = read_instant();
+        diag.timer = sess.timer_ok ? 1u : 2u;
+        diag.span_wall = now.wall() - start_at.wall();
+        diag.span_refclk = now.refclk - start_at.refclk;
+        diag.write(diag_addr);
+    }
     // A round closes once the next round's first frame has been echoed, so the close's record writes do not sit
     // inside that frame's turnaround; the closed round's state is carried over as a copy.
     struct Closed {
@@ -447,11 +495,12 @@ private:
                 link::record_hw(c.rnd.tx.q(sess), c.round, link::kRoleT1B);
             }
         }
-        diag.note_round(c.rnd, c.ok);
+        diag.note_round(c.rnd, c.ok, false);
+        write_diag();
     }
     // A frame: its ingress stamp, its echo from the same slot, and after a burst's last echo the burst's egress
-    // stamps. The round's number is the sender's, read from the frame.
-    __attribute__((noinline)) void frame(volatile eth_channel_sync_t* s, uint32_t key) {
+    // stamps. The round's number is the sender's, read from the frame. True while the burst has frames to come.
+    __attribute__((noinline)) bool frame(volatile eth_channel_sync_t* s, uint32_t key) {
         const Instant now = read_instant();
         const uint32_t j = (key & kTripMask) - 1;
         Closed closed{};
@@ -469,7 +518,7 @@ private:
             t1 = now;
         } else if (key != frame_key(round, j)) {
             s->bytes_sent = 0;  // a frame of a round already given up
-            return;
+            return false;
         } else if (j != expect) {
             ok = false;
         }
@@ -486,18 +535,23 @@ private:
             }
         }
         const uint32_t addr = reinterpret_cast<uint32_t>(s);
-        internal_::eth_send_packet(kLinkTxq, addr >> 4, addr >> 4, sizeof(eth_channel_sync_t) >> 4);
+        internal_::eth_send_packet<false>(kLinkTxq, addr >> 4, addr >> 4, sizeof(eth_channel_sync_t) >> 4);
         if (i == 0) {
             stamps_retag(sess, tag);
         }
         if (close_after_echo) {
             close_round(closed);
         }
-        if (i == kBurstFrames - 1 && !collect_burst(sess, static_cast<uint32_t>(tag), rnd.tx)) {
-            ok = false;
+        if (i == kBurstFrames - 1) {
+            const Burst b = collect_burst(sess, static_cast<uint32_t>(tag), rnd.tx);
+            diag.note_burst(b);
+            if (b != Burst::Ok) {
+                ok = false;
+            }
         }
         expect = j + 1;
         diag.note_hold(rd(kWallClockLo) - now.wall_lo);
+        return i != kBurstFrames - 1;
     }
 };
 

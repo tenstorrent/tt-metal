@@ -153,13 +153,12 @@ void kernel_main() {
 #if defined(PROFILE_STREAMING)
     g_stop_addr = get_arg_val<uint32_t>(0);
 #if defined(LINK_HW)
-    g_link.start(g_slot_base);
-    volatile tt_l1_ptr uint32_t* stopw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(g_stop_addr);
-    while (*stopw == 0) {
+    g_link.start(g_slot_base, g_stop_addr);
+    volatile tt_l1_ptr uint32_t* ctl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(g_stop_addr);
+    while (*ctl != eth_ptp::kCtlStop) {
         g_link.step();
-        invalidate_l1_cache();
     }
-    g_link.stop(g_stop_addr);
+    g_link.stop();
 #else
     volatile tt_l1_ptr uint32_t* stopw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(g_stop_addr);
     const eth_ptp::Instant start = eth_ptp::read_instant();
