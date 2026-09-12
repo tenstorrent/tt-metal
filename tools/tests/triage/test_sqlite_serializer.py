@@ -36,6 +36,8 @@ class Row:
     pc: "int | None" = triage_field("PC", hex_serializer)
     rate: float = triage_field("Heartbeats/s")
     enabled: bool = triage_field("Preload")
+    offset: "int | None" = triage_field("Kernel Offset", hex_serializer, verbose=1)
+    rd_ptr: int = triage_field("RD PTR", verbose=2)
 
 
 @dataclass
@@ -46,7 +48,7 @@ class Inner:
 @dataclass
 class DuplicateLoc:
     loc: str = triage_field("Loc")
-    inner: Inner = recurse_field()
+    inner: Inner = recurse_field(verbose=2)
 
 
 @dataclass
@@ -62,7 +64,7 @@ class Wide:
 
 def write(path, script_name, result, **kwargs):
     """Serialize one result and return a connection to the finished database."""
-    serializer = SqliteSerializer(str(path), lambda: 0)
+    serializer = SqliteSerializer(str(path))
     serializer.emit(
         script_name=script_name,
         execution_time="",
@@ -136,13 +138,15 @@ def test_round_trip_column_types_and_values(tmp_path):
     con = write(
         tmp_path / "t.db",
         "dump_callstacks.py",
-        [Row("matmul", 0x1000, 9.5, True), Row("add", None, 0.5, False)],
+        [Row("matmul", 0x1000, 9.5, True, 0x20, 3), Row("add", None, 0.5, False, None, 4)],
     )
     schema = con.execute("SELECT sql FROM sqlite_master WHERE name='dump_callstacks'").fetchone()[0]
     assert '"Kernel Name" TEXT' in schema
     assert '"PC" INTEGER' in schema
     assert '"Heartbeats/s" REAL' in schema
     assert '"Preload" INTEGER' in schema
+    assert '"Kernel Offset" INTEGER' in schema
+    assert '"RD PTR" INTEGER' in schema
 
     # A hex-serialized field stays numerically comparable, and NULL is NULL.
     assert con.execute('SELECT count(*) FROM dump_callstacks WHERE "PC" > 4000').fetchone()[0] == 1
@@ -151,16 +155,18 @@ def test_round_trip_column_types_and_values(tmp_path):
     assert con.execute('SELECT printf(\'0x%X\', "PC") FROM dump_callstacks WHERE "PC" IS NOT NULL').fetchone() == (
         "0x1000",
     )
+    # The verbose-gated values are stored, not just their columns.
+    assert con.execute('SELECT "Kernel Offset", "RD PTR" FROM dump_callstacks').fetchall() == [(32, 3), (None, 4)]
 
 
 def test_column_names_are_the_display_headers(tmp_path):
-    con = write(tmp_path / "t.db", "demo.py", [Row("matmul", 1, 1.0, True)])
+    con = write(tmp_path / "t.db", "demo.py", [Row("matmul", 1, 1.0, True, 2, 3)])
     names = [row[1] for row in con.execute("PRAGMA table_info(demo)")]
-    assert names == ["Kernel Name", "PC", "Heartbeats/s", "Preload"]
+    assert names == ["Kernel Name", "PC", "Heartbeats/s", "Preload", "Kernel Offset", "RD PTR"]
 
 
 def test_diagnostics_table_exists_even_when_empty(tmp_path):
-    con = write(tmp_path / "t.db", "demo.py", [Row("matmul", 1, 1.0, True)])
+    con = write(tmp_path / "t.db", "demo.py", [Row("matmul", 1, 1.0, True, 2, 3)])
     assert con.execute(f"SELECT count(*) FROM {quote_identifier(DIAGNOSTICS_TABLE)}").fetchone()[0] == 0
 
 
@@ -205,9 +211,9 @@ def test_ragged_rows_raise_through_emit(tmp_path):
 
 def test_existing_database_is_not_reused(tmp_path):
     path = tmp_path / "t.db"
-    write(path, "demo.py", [Row("matmul", 1, 1.0, True)])
+    write(path, "demo.py", [Row("matmul", 1, 1.0, True, 2, 3)])
     with pytest.raises(FileExistsError):  # allow-pytest.raises: no expect_error fixture
-        SqliteSerializer(str(path), lambda: 0)
+        SqliteSerializer(str(path))
     # the original database is left untouched
     con = sqlite3.connect(str(path))
     assert con.execute("SELECT count(*) FROM demo").fetchone()[0] == 1
@@ -217,7 +223,7 @@ def test_record_diagnostics_without_a_result(tmp_path):
     # main() prints skipped scripts and failed providers itself, so they arrive
     # through record_diagnostics rather than emit.
     path = tmp_path / "t.db"
-    serializer = SqliteSerializer(str(path), lambda: 0)
+    serializer = SqliteSerializer(str(path))
     serializer.record_diagnostics("inspector_data.py", [], [], True, "Inspector unavailable")
     serializer.record_diagnostics("dump_configuration.py", [], [], True, "Skipped: dependency failed.")
     serializer.record_diagnostics("dispatcher_data.py", [], ["Device 0: no rank"], False, None)
@@ -237,7 +243,7 @@ def test_record_diagnostics_without_a_result(tmp_path):
 
 def test_record_diagnostics_with_nothing_to_record(tmp_path):
     path = tmp_path / "t.db"
-    serializer = SqliteSerializer(str(path), lambda: 0)
+    serializer = SqliteSerializer(str(path))
     serializer.record_diagnostics("elfs_cache.py", [], [], False, None)
     serializer.close()
     con = sqlite3.connect(str(path))
@@ -246,9 +252,9 @@ def test_record_diagnostics_with_nothing_to_record(tmp_path):
 
 def test_multiple_scripts_share_one_database(tmp_path):
     path = tmp_path / "t.db"
-    serializer = SqliteSerializer(str(path), lambda: 0)
+    serializer = SqliteSerializer(str(path))
     for script in ("check_arc.py", "device_info.py"):
-        serializer.emit(script, "", [Row("matmul", 1, 1.0, True)], [], [], False, None, None)
+        serializer.emit(script, "", [Row("matmul", 1, 1.0, True, 2, 3)], [], [], False, None, None)
     serializer.close()
     con = sqlite3.connect(str(path))
     tables = sorted(row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'"))
