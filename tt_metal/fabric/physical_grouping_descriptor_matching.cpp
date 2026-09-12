@@ -158,6 +158,7 @@ AdjacencyGraph<GroupingChipId> build_row_major_mesh_graph(
 
 struct MgdDeviceTopology {
     std::vector<int32_t> dims;
+    std::vector<int32_t> host_dims;
     std::vector<bool> ring_dims;
 };
 
@@ -193,10 +194,12 @@ std::optional<MgdDeviceTopology> get_mgd_instance_device_topology(
     const auto& instance = mesh_graph_descriptor.get_instance(instance_ids[0]);
 
     const proto::TorusTopology* device_topology = nullptr;
+    const proto::MeshTopology* host_topology = nullptr;
     if (instance.kind == NodeKind::Mesh) {
         const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
         if (mesh_desc != nullptr) {
             device_topology = &mesh_desc->device_topology();
+            host_topology = &mesh_desc->host_topology();
         }
     } else if (instance.kind == NodeKind::Switch) {
         const auto* switch_desc = std::get<const proto::SwitchDescriptor*>(instance.desc);
@@ -210,6 +213,9 @@ std::optional<MgdDeviceTopology> get_mgd_instance_device_topology(
 
     MgdDeviceTopology topo;
     topo.dims.assign(device_topology->dims().begin(), device_topology->dims().end());
+    if (host_topology != nullptr && !host_topology->dims().empty()) {
+        topo.host_dims.assign(host_topology->dims().begin(), host_topology->dims().end());
+    }
     topo.ring_dims.reserve(device_topology->dim_types_size());
     for (int i = 0; i < device_topology->dim_types_size(); ++i) {
         const bool declared_ring = device_topology->dim_types(i) == proto::TorusTopology::RING;
@@ -874,6 +880,33 @@ std::map<LogicalChipId, tt::tt_metal::ASICPosition> compose_mesh_node_to_asic_po
     return node_to_position;
 }
 
+// Compose PGD grouping-node -> host partition index from an MGD<->PGD topology match and the matched MGD
+// host_topology. Empty when the MGD is single-host. Called at PGD<->MGD commit time in get_valid_groupings_for_mgd.
+std::map<LogicalChipId, uint32_t> compose_mesh_node_to_host_group_from_mgd_match(
+    const std::optional<MgdDeviceTopology>& mgd_topo,
+    const std::map<LogicalChipId, GroupingChipId>& mgd_node_to_grouping_node) {
+    std::map<LogicalChipId, uint32_t> node_to_host_group;
+    if (!mgd_topo.has_value() || mgd_topo->host_dims.empty() || mgd_topo->dims.empty()) {
+        return node_to_host_group;
+    }
+
+    int64_t host_count = 1;
+    for (int32_t dim : mgd_topo->host_dims) {
+        host_count *= dim;
+    }
+    if (host_count <= 1) {
+        return node_to_host_group;
+    }
+
+    for (const auto& [mgd_node, grouping_node] : mgd_node_to_grouping_node) {
+        node_to_host_group.emplace(
+            grouping_node,
+            host_partition_index_for_row_major_chip(
+                static_cast<uint32_t>(mgd_node), mgd_topo->dims, mgd_topo->host_dims));
+    }
+    return node_to_host_group;
+}
+
 // Applies MGD pinning groups as required constraints. `resolve_globals_at_position` maps each
 // pinned ASIC position to the globals that occupy it (PGD grouping nodes, or PSD AsicIDs).
 template <typename GlobalNode, typename ResolveGlobals>
@@ -931,22 +964,24 @@ using tt::tt_metal::AsicID;
 using tt::tt_metal::ASICLocation;
 using tt::tt_metal::TrayID;
 
-// Host boundaries come only from the PSD (get_host_name_for_asic). Global groups are one set per host (variable
-// size). One PGD mesh target group: hard same-rank if some host has >= mesh ASICs; otherwise preferred ASICs on a
-// greedy minimal set of largest hosts (by ASIC count) to bias toward fewer cross-host hops.
-void configure_pgd_psd_host_alignment_constraints(
-    const GroupingInfo& grouping_info,
+std::vector<std::set<AsicID>> collect_psd_host_groups(
     const AdjacencyGraph<AsicID>& physical_graph,
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    MappingConstraints<LogicalChipId, AsicID>& constraints) {
-    // Collect hostname map for all asics in physical graph
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
     std::map<std::string, std::set<AsicID>> host_to_asics;
     for (const AsicID& asic_id : physical_graph.get_nodes()) {
         host_to_asics[physical_system_descriptor.get_host_name_for_asic(asic_id)].insert(asic_id);
     }
+    std::vector<std::set<AsicID>> global_groups;
+    global_groups.reserve(host_to_asics.size());
+    for (auto& [_, asics] : host_to_asics) {
+        if (!asics.empty()) {
+            global_groups.push_back(std::move(asics));
+        }
+    }
+    return global_groups;
+}
 
-    // Collect all targets from PGD grouping info. These are LogicalChipIds: mesh-local nodes of
-    // grouping_info.adjacency_graph, the same ids MappingConstraints<LogicalChipId, AsicID> constrains.
+std::set<LogicalChipId> collect_pgd_asic_targets(const GroupingInfo& grouping_info) {
     std::set<LogicalChipId> all_targets;
     for (LogicalChipId node_id : grouping_info.adjacency_graph.get_nodes()) {
         if (node_id >= grouping_info.items.size()) {
@@ -958,30 +993,76 @@ void configure_pgd_psd_host_alignment_constraints(
         }
         all_targets.insert(node_id);
     }
+    return all_targets;
+}
 
+// When GroupingInfo carries a host split, require each PGD host group to map to a distinct PSD host partition.
+// Single-host groupings only get a soft same-host preference so cross-host torus embeddings remain possible.
+bool configure_pgd_psd_host_alignment_constraints(
+    const GroupingInfo& grouping_info,
+    const AdjacencyGraph<AsicID>& physical_graph,
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    MappingConstraints<LogicalChipId, AsicID>& constraints) {
+    const std::set<LogicalChipId> all_targets = collect_pgd_asic_targets(grouping_info);
     if (all_targets.empty()) {
-        return;
-    }
-    if (host_to_asics.size() <= 1) {
-        return;
+        return true;
     }
 
-    std::vector<std::set<AsicID>> global_groups;
-    global_groups.reserve(host_to_asics.size());
-    for (auto& [_, asics] : host_to_asics) {
-        if (!asics.empty()) {
-            global_groups.push_back(std::move(asics));
+    const std::vector<std::set<AsicID>> global_groups =
+        collect_psd_host_groups(physical_graph, physical_system_descriptor);
+    if (global_groups.size() <= 1) {
+        return true;
+    }
+
+    if (!grouping_info.mesh_node_to_host_group.empty()) {
+        std::map<uint32_t, std::set<LogicalChipId>> targets_by_group;
+        for (LogicalChipId node_id : all_targets) {
+            const auto group_it = grouping_info.mesh_node_to_host_group.find(node_id);
+            if (group_it == grouping_info.mesh_node_to_host_group.end()) {
+                log_debug(
+                    tt::LogFabric,
+                    "PGD host split '{}' is missing host group for node {}",
+                    grouping_info.name,
+                    node_id);
+                return false;
+            }
+            targets_by_group[group_it->second].insert(node_id);
         }
+        if (targets_by_group.size() < 2) {
+            log_debug(
+                tt::LogFabric,
+                "PGD host split '{}' resolved to a single host group; skipping strict partition",
+                grouping_info.name);
+            return true;
+        }
+
+        std::vector<std::set<LogicalChipId>> target_groups;
+        target_groups.reserve(targets_by_group.size());
+        for (auto& [_, nodes] : targets_by_group) {
+            target_groups.push_back(std::move(nodes));
+        }
+        if (target_groups.size() > global_groups.size()) {
+            log_debug(
+                tt::LogFabric,
+                "PGD host split '{}' needs {} host partitions but PSD exposes {}",
+                grouping_info.name,
+                target_groups.size(),
+                global_groups.size());
+            return false;
+        }
+        if (!constraints.set_same_rank_groups_constraint(target_groups, global_groups)) {
+            log_debug(
+                tt::LogFabric,
+                "PGD host split '{}' could not register required host-partition constraints",
+                grouping_info.name);
+            return false;
+        }
+        constraints.set_max_same_rank_groups_used(target_groups.size());
+        return true;
     }
 
     const auto [single_group_fits, preferred_globals] =
         ::tt::tt_fabric::PhysicalGroupingDescriptor::find_minimum_coverage_group(all_targets, global_groups);
-    // Same-host is a PREFERENCE, not a hard requirement. We prefer keeping the whole mesh on one host when it
-    // fits, but must allow cross-host placement when that is the only valid embedding of the requested topology
-    // -- e.g. a 4x4 RING/RING torus that physically spans two galaxies through inter-host links. A required
-    // same-rank constraint here wrongly forbids such legitimate cross-host meshes (it pins all nodes to one
-    // host purely because the node count fits), so a torus that only closes across hosts can never be placed.
-    // Using a preferred constraint keeps single-host meshes on one host while letting cross-host meshes embed.
     if (!preferred_globals.empty()) {
         if (!single_group_fits) {
             log_debug(
@@ -995,6 +1076,7 @@ void configure_pgd_psd_host_alignment_constraints(
             constraints.add_preferred_constraint(target, preferred_globals);
         }
     }
+    return true;
 }
 
 // Add the PGD→PSD embedding constraints (trait + host alignment) to `constraints`, in place and on top
@@ -1074,20 +1156,46 @@ bool add_pgd_to_psd_constraints(
         }
     }
 
-    // PSD-only host partition (ASIC -> hostname): same-rank when the full mesh fits on one host, else unconstrained.
-    configure_pgd_psd_host_alignment_constraints(
-        grouping_info, physical_graph, physical_system_descriptor, constraints);
+    if (!configure_pgd_psd_host_alignment_constraints(
+            grouping_info, physical_graph, physical_system_descriptor, constraints)) {
+        if (error_out != nullptr) {
+            *error_out =
+                fmt::format("Failed to configure host alignment constraints for grouping '{}'", grouping_info.name);
+        }
+        return false;
+    }
 
     return true;
 }
 
 // Enumerate up to `max_solutions` distinct image-set placements of `grouping_info` on `physical_graph`.
-// Wraps solve_topology_mapping_n with unique_shapes=true so the solver skips permutations that hit the same ASIC set.
-// `constraints` is the caller's own object: it is used as-is and the grouping's trait and host-alignment
-// constraints are added to it in place. Callers with nothing to anchor pass a default-constructed one, so
-// that the object's lifetime and reuse across solves is always the caller's decision rather than a hidden
-// temporary here.
-// Returns the (possibly empty) list of successful MappingResults.
+// Resumable enumeration of one grouping variant's placements. Bundles the grouping being enumerated with
+// everything that must outlive a single call so the next one continues the same search instead of
+// re-encoding it: the session, the grouping's constraints (encoded once), and the append-only list of
+// mappings already returned. `solves` is the running inner-solve count; `exhausted` is the terminal "no
+// further distinct mapping" signal, and the ONLY trustworthy "this list is complete" flag. Never moved
+// once used -- the DFS engine keeps pointers into the session's own snapshots -- so keep it behind a
+// unique_ptr (or in an object that is itself never moved) when it lives in a container.
+struct GroupingVariantEnumeration {
+    const GroupingInfo* variant = nullptr;  // the grouping being enumerated
+    TopologyMappingEnumerationSession<LogicalChipId, AsicID> session;
+    MappingConstraints<LogicalChipId, AsicID> constraints;  // trait / host-alignment, encoded once
+    std::vector<std::map<LogicalChipId, AsicID>> excluded;  // mappings already returned
+    std::size_t solves = 0;
+    bool started = false;
+    bool exhausted = false;
+};
+
+// Enumerate distinct placements (unique_shapes=true, so the solver skips permutations that reuse the same
+// ASIC set) of one grouping against the physical graph, returning up to `max_solutions` of them
+// (max_solutions == 0 means "up to the enumeration safety cap").
+//
+// One session drives every call. A one-shot caller (resume == nullptr) gets a fresh session on the stack
+// that is discarded on return; a resuming caller supplies its own via `resume`, so repeated calls continue
+// ONE enumeration -- each returns the next batch at one incremental solve apiece rather than re-deriving
+// the earlier ones -- and passes resume->constraints as `constraints`. Everything between the two is
+// identical, which is the point of sharing this body. `stats` is aggregate per-call accounting for the
+// non-resuming callers; a resuming caller passes nullptr and does its own.
 std::vector<MappingResult<LogicalChipId, AsicID>> enumerate_distinct_placements_for_grouping(
     const GroupingInfo& grouping_info,
     const AdjacencyGraph<AsicID>& physical_graph,
@@ -1095,20 +1203,61 @@ std::vector<MappingResult<LogicalChipId, AsicID>> enumerate_distinct_placements_
     size_t max_solutions,
     MappingConstraints<LogicalChipId, AsicID>& constraints,
     ConnectionValidationMode validation_mode = ConnectionValidationMode::STRICT,
-    PlacementSolveStats* stats = nullptr) {
-    if (!add_pgd_to_psd_constraints(grouping_info, physical_graph, physical_system_descriptor, constraints, nullptr)) {
+    PlacementSolveStats* stats = nullptr,
+    GroupingVariantEnumeration* resume = nullptr,
+    bool unique_shapes = true) {
+    // A one-shot call owns its enumeration state for the duration of the call; a resuming one borrows the
+    // caller's. `local` is constructed only when there is no session to resume, so the resume path pays
+    // nothing for it.
+    std::optional<GroupingVariantEnumeration> local;
+    if (resume == nullptr) {
+        local.emplace();
+    }
+    GroupingVariantEnumeration& state = (resume != nullptr) ? *resume : *local;
+
+    if (state.exhausted) {
         return {};
     }
+    if (!state.started) {
+        if (state.variant == nullptr) {
+            state.variant = &grouping_info;
+        }
+        // Encode the grouping's trait / host-alignment constraints once; the session snapshots them on its
+        // first next() and must not see them change afterward.
+        if (!add_pgd_to_psd_constraints(
+                grouping_info, physical_graph, physical_system_descriptor, constraints, nullptr)) {
+            state.exhausted = true;
+            return {};
+        }
+        state.started = true;
+    }
+    if (max_solutions == 0 || max_solutions > kTopologyMappingEnumerateSolutionsHardCap) {
+        max_solutions = kTopologyMappingEnumerateSolutionsHardCap;  // same clamp solve_topology_mapping_n applies
+    }
+
     const auto solve_start = std::chrono::steady_clock::now();
-    auto mappings = solve_topology_mapping_n<LogicalChipId, AsicID>(
-        grouping_info.adjacency_graph,
-        physical_graph,
-        constraints,
-        max_solutions,
-        validation_mode,
-        /*quiet_mode=*/true,
-        TopologyMappingSolverEngine::Auto,
-        /*unique_shapes=*/true);
+    std::vector<MappingResult<LogicalChipId, AsicID>> mappings;
+    for (size_t i = 0; i < max_solutions; ++i) {
+        MappingResult<LogicalChipId, AsicID> mapping = state.session.next(
+            grouping_info.adjacency_graph,
+            physical_graph,
+            constraints,
+            state.excluded,
+            validation_mode,
+            /*quiet_mode=*/true,
+            TopologyMappingSolverEngine::Auto,
+            unique_shapes);
+        ++state.solves;
+        if (!mapping.success) {
+            state.exhausted = true;
+            break;
+        }
+        state.excluded.push_back(mapping.target_to_global);
+        mappings.push_back(std::move(mapping));
+    }
+
+    // Aggregate per-call stats for the non-resuming callers. Inner per-solve counts are deliberately not
+    // threaded through: a resuming caller passes stats=nullptr and tracks candidates its own way.
     if (stats != nullptr) {
         const auto elapsed =
             std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - solve_start);
@@ -1397,6 +1546,8 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                     // now so downstream consumes it directly without re-deriving the intermediate node pairing.
                     committed.mesh_node_to_asic_position =
                         compose_mesh_node_to_asic_position_from_pgd_match(committed, match.mapping.target_to_global);
+                    committed.mesh_node_to_host_group =
+                        compose_mesh_node_to_host_group_from_mgd_match(device_topo, match.mapping.target_to_global);
                     return committed;
                 };
 
@@ -2698,418 +2849,426 @@ AssignedMeshes start_adjacency_guided_dfs(
 // Column generation: the lists are pulled in batches from resumable per-variant enumeration sessions,
 // and grown only when the master problem comes back UNSAT. Truncation degrades in one direction only: a
 // SAT model is always a real placement, and UNSAT is trustworthy only when every session is exhausted
-// (MasterCandidateLists::complete()).
+// (CandidatePool::complete() on every mesh).
 // =====================================================================================================
-
-// Dense 0..N-1 numbering of the fabric's ASICs. Built once from the physical graph, whose node order is
-// already deterministic (AdjacencyMap is a std::map), so the numbering agrees across ranks and runs.
-class AsicIndex {
-public:
-    explicit AsicIndex(const AdjacencyGraph<AsicID>& physical_graph) {
-        const auto& nodes = physical_graph.get_nodes();
-        dense_to_asic_.reserve(nodes.size());
-        asic_to_dense_.reserve(nodes.size());
-        for (const AsicID& asic : nodes) {
-            asic_to_dense_.emplace(asic, dense_to_asic_.size());
-            dense_to_asic_.push_back(asic);
-        }
-    }
-
-    std::size_t size() const { return dense_to_asic_.size(); }
-    std::size_t dense(const AsicID& asic) const { return asic_to_dense_.at(asic); }
-    AsicID asic(std::size_t dense) const { return dense_to_asic_[dense]; }
-
-private:
-    std::unordered_map<AsicID, std::size_t> asic_to_dense_;
-    std::vector<AsicID> dense_to_asic_;
-};
-
-// Fixed-width bitset over the dense ASIC index. The word count is a runtime value (fabric size varies by
-// system) so this is a vector rather than std::bitset, but it is never resized after construction.
-class AsicBitset {
-public:
-    AsicBitset() = default;
-    explicit AsicBitset(std::size_t bit_count) : words_((bit_count + 63) / 64, 0) {}
-
-    void set(std::size_t bit) { words_[bit >> 6] |= (uint64_t{1} << (bit & 63)); }
-    bool test(std::size_t bit) const { return ((words_[bit >> 6] >> (bit & 63)) & 1) != 0; }
-
-    bool intersects(const AsicBitset& other) const {
-        for (std::size_t i = 0; i < words_.size(); ++i) {
-            if ((words_[i] & other.words_[i]) != 0) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    const std::vector<uint64_t>& words() const { return words_; }
-
-private:
-    std::vector<uint64_t> words_;
-};
 
 // One legal seating of one grouping variant. Footprint-only: the per-node mapping from the inner solve is
 // deliberately dropped, matching what next_step_pool keeps today -- downstream reconstructs positions
 // from the variant's pinning map, not from the embedding.
-struct MasterCandidate {
-    AsicBitset footprint;
-    std::vector<AsicID> asics;  // same content as the footprint, for building PsdPlacement directly
-    // Dense index of the far end of every fabric link leaving the footprint. Parallel links are duplicate
-    // entries, so intersecting this with another footprint counts links rather than chips.
-    std::vector<uint32_t> boundary_dense;
-    // Borrowed, never owned: name, type and mesh_node_to_asic_position live on the grouping, which is
-    // identical across every placement of the variant. global_mesh_groupings holds the vectors by value
-    // and outlives the solve; it must not be mutated once these pointers are taken.
-    const GroupingInfo* variant = nullptr;
-    uint16_t hosts_spanned = 1;
-    // True when the variant is the definition's top-ranked grouping (same name as the first variant
-    // get_valid_groupings_for_mgd committed). The master solve tries to seat every mesh on a preferred
-    // candidate before it admits the rest, which is the global form of the DFS trying variants in order.
-    bool preferred = true;
-};
+//
+// Construction (AsicID -> dense) is private to CandidatePool. The SAT layer only reads the already-dense
+// footprint, the AsicID list for decode, and seam queries.
+class Candidate {
+public:
+    const std::vector<uint64_t>& internal_footprint_words() const { return internal_footprint_bitset_.words(); }
 
-// A variant with no per-node tray / ASIC-location trait is the MGD fallback (or an unpinned PGD
-// grouping). Its enumeration is unbounded by anything but the fabric size, so it is held back until the
-// pinned variants alone have been shown not to suffice.
-bool variant_is_trait_free(const GroupingInfo& grouping) {
-    for (LogicalChipId node_id : grouping.adjacency_graph.get_nodes()) {
-        if (node_id >= grouping.items.size()) {
-            continue;
-        }
-        const GroupingItemInfo& item = grouping.items[node_id];
-        if (item.type != GroupingItemInfo::ItemType::ASIC_LOCATION) {
-            continue;
-        }
-        if (*item.tray_id > 0 || *item.asic_location <= 8) {
-            return false;
-        }
+    const std::vector<uint32_t>& dense_asics() const { return dense_asics_; }
+
+    const std::vector<AsicID>& asics() const { return asics_; }
+
+    const GroupingInfo* variant() const { return variant_; }
+
+    bool adjacent_to(const Candidate& other) const {
+        return boundary_bitset_.intersects(other.internal_footprint_bitset_) ||
+               other.boundary_bitset_.intersects(internal_footprint_bitset_);
     }
-    return true;
-}
 
-// One live enumeration per (definition, variant). TopologyMappingEnumerationSession holds a single
-// search engine and appends blocking clauses between next() calls, so resuming costs one solve rather
-// than a re-encode. Heap-allocated and never moved: the DFS engine keeps pointers into the session's own
-// graph/constraint snapshots.
-struct VariantSource {
-    const GroupingInfo* variant = nullptr;
-    TopologyMappingEnumerationSession<LogicalChipId, AsicID> session;
-    MappingConstraints<LogicalChipId, AsicID> constraints;  // trait / host-alignment, encoded once
-    std::vector<std::map<LogicalChipId, AsicID>> excluded;  // mappings already returned
-    std::vector<MasterCandidate> found;                     // stable: only ever appended to
-    std::size_t solves = 0;
-    bool exhausted = false;
-    bool session_started = false;
-    bool preferred = true;
-};
-
-struct MasterEnumerationContext {
-    const AdjacencyGraph<AsicID>& physical_graph;
-    const tt::tt_metal::PhysicalSystemDescriptor& psd;
-    const AsicIndex& asic_index;
-    ConnectionValidationMode validation_mode;
-    // Per-definition footprints already listed by a higher-priority variant. Variants of one definition
-    // often share footprints (torus variants differ only in adjacency), and a duplicate seat would be
-    // pure symmetry for the master solve. First variant wins, which is the "PGD first, MGD last" order
-    // get_valid_groupings_for_mgd committed.
-    std::set<std::vector<uint64_t>>& seen_footprints;
-    PlacementSolveStats* stats;
-};
-
-// Pull up to `batch` more placements from one variant. Returns how many were added. Sets `exhausted`
-// when the session reports no further distinct mapping -- the only signal that this variant's list is
-// COMPLETE, and therefore the only condition under which a later UNSAT is trustworthy.
-std::size_t grow_variant(VariantSource& source, MasterEnumerationContext& ctx, std::size_t batch) {
-    if (source.exhausted) {
-        return 0;
-    }
-    if (!source.session_started) {
-        // Same constraint construction enumerate_distinct_placements_for_grouping performs.
-        if (!add_pgd_to_psd_constraints(*source.variant, ctx.physical_graph, ctx.psd, source.constraints, nullptr)) {
-            source.exhausted = true;
+    // Fabric links crossing from this seating into `other`. Symmetric when the physical graph lists both
+    // ends of every link.
+    std::size_t seam_link_count(const Candidate& other) const {
+        if (!boundary_bitset_.intersects(other.internal_footprint_bitset_)) {
             return 0;
         }
-        source.session_started = true;
-    }
-
-    std::size_t added = 0;
-    while (added < batch) {
-        MappingResult<LogicalChipId, AsicID> mapping = source.session.next(
-            source.variant->adjacency_graph,
-            ctx.physical_graph,
-            source.constraints,
-            source.excluded,
-            ctx.validation_mode,
-            /*quiet_mode=*/true,
-            TopologyMappingSolverEngine::Auto,
-            /*unique_shapes=*/true);
-        ++source.solves;
-        if (ctx.stats != nullptr) {
-            ++ctx.stats->inner_solver_calls;
-            if (mapping.stats.used_sat) {
-                ++ctx.stats->inner_solver_sat_calls;
-            } else {
-                ++ctx.stats->inner_solver_dfs_calls;
+        std::size_t links = 0;
+        for (const uint32_t dense : boundary_link_dense_) {
+            if (other.internal_footprint_bitset_.test(dense)) {
+                ++links;
             }
         }
-        if (!mapping.success) {
-            source.exhausted = true;
-            break;
-        }
-        source.excluded.push_back(mapping.target_to_global);
-        if (ctx.stats != nullptr) {
-            ++ctx.stats->inner_solutions_found;
-        }
+        return links;
+    }
 
-        MasterCandidate candidate;
-        candidate.footprint = AsicBitset(ctx.asic_index.size());
-        candidate.variant = source.variant;
-        candidate.preferred = source.preferred;
-        candidate.asics.reserve(mapping.target_to_global.size());
-        std::set<std::string> hosts;
-        for (const auto& [node, asic] : mapping.target_to_global) {
-            candidate.footprint.set(ctx.asic_index.dense(asic));
-            candidate.asics.push_back(asic);
-            hosts.insert(ctx.psd.get_host_name_for_asic(asic));
-        }
-        if (!ctx.seen_footprints.insert(candidate.footprint.words()).second) {
-            continue;  // a higher-priority variant already offers this footprint
-        }
-        candidate.hosts_spanned = static_cast<uint16_t>(hosts.size());
-        for (const AsicID& chip : candidate.asics) {
-            for (const AsicID& neighbor : ctx.physical_graph.get_neighbors(chip)) {
-                const std::size_t dense = ctx.asic_index.dense(neighbor);
-                if (!candidate.footprint.test(dense)) {
-                    candidate.boundary_dense.push_back(static_cast<uint32_t>(dense));
+private:
+    friend class CandidatePool;
+
+    Candidate(std::size_t asic_count, const GroupingInfo* variant) :
+        internal_footprint_bitset_(asic_count), boundary_bitset_(asic_count), variant_(variant) {}
+
+    void add_asic(std::size_t dense, AsicID asic) {
+        internal_footprint_bitset_.set(dense);
+        dense_asics_.push_back(static_cast<uint32_t>(dense));
+        asics_.push_back(asic);
+    }
+
+    // Build boundary_link_dense_ (one entry per fabric link leaving the footprint) and boundary_bitset_
+    // (deduped exterior shell for fast adjacency tests). `neighbors_of_dense[i]` is the dense-id neighbor
+    // list of ASIC i. Call once the footprint is complete.
+    void build_boundary(const std::vector<std::vector<uint32_t>>& neighbors_of_dense) {
+        boundary_link_dense_.clear();
+        boundary_bitset_.clear();
+        for (const uint32_t chip : dense_asics_) {
+            for (const uint32_t neighbor : neighbors_of_dense[chip]) {
+                if (!internal_footprint_bitset_.test(neighbor)) {
+                    boundary_link_dense_.push_back(neighbor);
+                    boundary_bitset_.set(neighbor);
                 }
             }
         }
-        source.found.push_back(std::move(candidate));
-        ++added;
     }
-    return added;
-}
 
-// Fabric links crossing from footprint `a` into footprint `b`. Symmetric, since every link is listed from
-// both ends in the physical graph.
-std::size_t seam_link_count(const MasterCandidate& a, const MasterCandidate& b) {
-    std::size_t links = 0;
-    for (const uint32_t dense : a.boundary_dense) {
-        if (b.footprint.test(dense)) {
-            ++links;
+    // Dense ASIC membership set. Each candidate footprint is keyed by 0..N-1 for the whole physical
+    // fabric, not by AsicID, so disjointness and seam checks are word-wise ANDs instead of set lookups
+    // over variable chip ids. The numbering lives on CandidatePool and is applied only at construction.
+    //
+    // std::bitset is not used because N is runtime (system size). Two instances per candidate:
+    //   internal_footprint_bitset_ — chips occupied by this seating;
+    //   boundary_bitset_ — exterior shell (neighbors not in the footprint); intersects() answers
+    //     "does this seating touch that one?" in O(N/64) and gates seam_link_count.
+    //
+    // boundary_link_dense_ (outside Bitset) keeps per-link multiplicity for seam SAT clauses; the bitset
+    // alone would collapse parallel links between the same chip pair.
+    struct Bitset {
+        explicit Bitset(std::size_t bit_count) : words_((bit_count + 63) / 64, 0) {}
+
+        void clear() { std::fill(words_.begin(), words_.end(), 0); }
+        void set(std::size_t bit) { words_[bit >> 6] |= (uint64_t{1} << (bit & 63)); }
+        bool test(std::size_t bit) const { return ((words_[bit >> 6] >> (bit & 63)) & 1) != 0; }
+
+        // Any shared bit => the two sets overlap (adjacent footprints or duplicate ASIC).
+        bool intersects(const Bitset& other) const {
+            for (std::size_t i = 0; i < words_.size(); ++i) {
+                if ((words_[i] & other.words_[i]) != 0) {
+                    return true;
+                }
+            }
+            return false;
         }
+
+        const std::vector<uint64_t>& words() const { return words_; }
+
+    private:
+        std::vector<uint64_t> words_;
+    };
+
+    Bitset internal_footprint_bitset_;
+    Bitset boundary_bitset_;
+    std::vector<uint32_t> boundary_link_dense_;
+    std::vector<uint32_t> dense_asics_;
+    std::vector<AsicID> asics_;
+    // Borrowed, never owned: name, type and mesh_node_to_asic_position live on the grouping, which is
+    // identical across every placement of the variant. global_mesh_groupings holds the vectors by value
+    // and outlives the solve; it must not be mutated once these pointers are taken.
+    const GroupingInfo* variant_;
+};
+
+// Split `amount` across `slots` by weights (front_loaded: n..1, else uniform). Shares sum to `amount`.
+std::vector<std::size_t> distribute_grow_shares(std::size_t amount, std::size_t slots, bool front_loaded) {
+    std::vector<std::size_t> shares(slots, 0);
+    if (amount == 0 || slots == 0) {
+        return shares;
     }
-    return links;
+    std::vector<std::size_t> weights(slots);
+    std::size_t weight_sum = 0;
+    for (std::size_t i = 0; i < slots; ++i) {
+        weights[i] = front_loaded ? (slots - i) : 1;
+        weight_sum += weights[i];
+    }
+    struct Remainder {
+        std::size_t rem;
+        std::size_t index;
+    };
+    std::vector<Remainder> remainders;
+    remainders.reserve(slots);
+    std::size_t distributed = 0;
+    for (std::size_t i = 0; i < slots; ++i) {
+        const std::size_t numer = amount * weights[i];
+        shares[i] = numer / weight_sum;
+        distributed += shares[i];
+        remainders.push_back({numer % weight_sum, i});
+    }
+    std::sort(remainders.begin(), remainders.end(), [](const Remainder& a, const Remainder& b) {
+        return a.rem > b.rem || (a.rem == b.rem && a.index < b.index);
+    });
+    for (std::size_t i = 0; distributed < amount && i < remainders.size(); ++i) {
+        ++shares[remainders[i].index];
+        ++distributed;
+    }
+    return shares;
 }
 
-// Candidate lists keyed by mesh DEFINITION (the address of the grouping-variant vector held in
-// global_mesh_groupings, shared by every instance of that definition). All 52 S4x1 meshes of a
-// descriptor share one entry.
-class MasterCandidateLists {
+// All grouping variants and enumerated candidates for one global mesh instance.
+class CandidatePool {
 public:
-    using DefinitionKey = const std::vector<GroupingInfo>*;
-
-    // Pinned variants become live sources immediately; trait-free ones are deferred until
-    // enable_mgd_fallback. That split is what makes "prefer an all-PGD placement" a GLOBAL property: the
-    // DFS could only prefer PGD locally, which is why its traces show MGD fallbacks committed at depth
-    // 17-19 while PGD options remained elsewhere.
-    void add_definition(DefinitionKey key) {
-        Definition& definition = definitions_[key];
-        // The committed list is in preference order, and every flattened variant of one PGD grouping
-        // shares its name, so "same name as the first" marks the top-ranked grouping's variants.
-        std::optional<std::string> preferred_name;
-        for (const GroupingInfo& variant : *key) {
-            if (variant.adjacency_graph.get_nodes().empty()) {
+    CandidatePool(
+        const std::vector<GroupingInfo>& groupings,
+        const AdjacencyGraph<AsicID>& physical_graph,
+        const tt::tt_metal::PhysicalSystemDescriptor& psd,
+        ConnectionValidationMode validation_mode) :
+        physical_graph_(physical_graph), psd_(psd), validation_mode_(validation_mode), asic_index_(physical_graph) {
+        neighbors_of_dense_.assign(asic_index_.size(), {});
+        for (const AsicID& asic : physical_graph.get_nodes()) {
+            auto& nbrs = neighbors_of_dense_[asic_index_.dense(asic)];
+            for (const AsicID& neighbor : physical_graph.get_neighbors(asic)) {
+                nbrs.push_back(static_cast<uint32_t>(asic_index_.dense(neighbor)));
+            }
+        }
+        // TODO(preferred-meshes): Rework variant ranking for the master solve. Grouping priority from
+        // get_valid_groupings_for_mgd is not a simple boolean (PGD vs MGD vs torus variant vs footprint
+        // quality); encode it as a proper ranking/objective once the placement model is settled.
+        for (const GroupingInfo& grouping : groupings) {
+            if (grouping.adjacency_graph.get_nodes().empty()) {
                 continue;
             }
-            if (!preferred_name.has_value()) {
-                preferred_name = variant.name;
-            }
-            auto source = std::make_unique<VariantSource>();
-            source->variant = &variant;
-            source->preferred = (variant.name == *preferred_name);
-            if (variant_is_trait_free(variant)) {
-                definition.deferred.push_back(std::move(source));
-            } else {
-                definition.active.push_back(std::move(source));
-            }
+            GroupingVariant variant;
+            variant.grouping = &grouping;
+            variant.enumeration.variant = &grouping;
+            variants_.emplace(&grouping, std::move(variant));
+            variant_order_.push_back(&grouping);
         }
     }
 
-    // Promote the deferred (trait-free) variants of every definition to live sources. Returns how many.
-    std::size_t enable_mgd_fallback() {
-        std::size_t promoted = 0;
-        for (auto& [_, definition] : definitions_) {
-            for (auto& source : definition.deferred) {
-                definition.active.push_back(std::move(source));
-                ++promoted;
-            }
-            definition.deferred.clear();
-        }
-        return promoted;
-    }
+    std::size_t asic_count() const { return asic_index_.size(); }
 
-    // Pull up to `batch_per_variant` more candidates from every live source of `key`. Returns how many
-    // were added across variants. Any addition invalidates `candidates()` ordering assumptions held by a
-    // previous encoding, which is why the master problem is re-encoded after growth.
-    std::size_t grow(DefinitionKey key, std::size_t batch_per_variant, MasterEnumerationContext& ctx) {
-        Definition& definition = definitions_.at(key);
+    // Pull up to `total_amount` more candidates for this pool. May return less when variants exhaust.
+    std::size_t grow(std::size_t total_amount) {
+        const auto allocations = allocate_grow_budget(total_amount);
+        if (allocations.empty()) {
+            return 0;
+        }
+
         std::size_t added = 0;
-        for (auto& source : definition.active) {
-            if (definition.total_found() >= kMaxCandidatesPerDefinition) {
-                break;
-            }
-            added += grow_variant(*source, ctx, batch_per_variant);
+        for (const auto& [grouping, batch] : allocations) {
+            added += grow_variant(variants_.at(grouping), batch);
         }
         if (added != 0) {
-            rebuild_flat(definition);
-            ++generation_;
+            rebuild_flat();
         }
         return added;
     }
 
-    const std::vector<const MasterCandidate*>& candidates(DefinitionKey key) const { return definitions_.at(key).flat; }
+    const std::vector<const Candidate*>& candidates() const { return flat_; }
 
-    // True only when every live variant of every definition reported exhaustion and nothing is deferred.
-    // UNSAT is meaningless otherwise.
-    bool complete() const {
-        for (const auto& [_, definition] : definitions_) {
-            if (!definition.deferred.empty()) {
+    bool variants_exhausted() const {
+        for (const GroupingInfo* grouping : variant_order_) {
+            if (!variants_.at(grouping).enumeration.exhausted) {
                 return false;
-            }
-            for (const auto& source : definition.active) {
-                if (!source->exhausted) {
-                    return false;
-                }
             }
         }
         return true;
     }
 
-    // Whether any live source can still yield candidates (bounded by the per-definition cap).
-    bool can_grow() const {
-        for (const auto& [_, definition] : definitions_) {
-            if (definition.total_found() >= kMaxCandidatesPerDefinition) {
+    // PGD_DFS_DEBUG — delete after candidate-pool enumeration investigation.
+    // Per-variant counts: "name[count found, solves solves, exhausted?] ...".
+    std::string format_variant_breakdown() const {  // PGD_DFS_DEBUG
+        std::string breakdown;
+        for (const GroupingInfo* grouping : variant_order_) {
+            const GroupingVariant& variant = variants_.at(grouping);
+            if (!breakdown.empty()) {
+                breakdown += ' ';
+            }
+            breakdown += fmt::format(
+                "{}[{} found, {} solves{}]",
+                grouping->name,
+                variant.candidates.size(),
+                variant.enumeration.solves,
+                variant.enumeration.exhausted ? ", exhausted" : "");
+        }
+        return breakdown;
+    }
+
+    std::map<std::string, std::size_t> candidate_counts_by_grouping_name() const {  // PGD_DFS_DEBUG
+        std::map<std::string, std::size_t> counts;
+        for (const GroupingInfo* grouping : variant_order_) {
+            counts[grouping->name] += variants_.at(grouping).candidates.size();
+        }
+        return counts;
+    }
+
+private:
+    // Split `total_amount` across non-exhausted variants: front-loaded by grouping name (variant_order_
+    // first appearance), then evenly within each name. Returns only entries with batch > 0.
+    std::vector<std::pair<const GroupingInfo*, std::size_t>> allocate_grow_budget(std::size_t total_amount) const {
+        std::vector<std::pair<const GroupingInfo*, std::size_t>> allocations;
+        if (total_amount == 0) {
+            return allocations;
+        }
+
+        std::vector<std::vector<const GroupingInfo*>> active_by_name;
+        std::unordered_map<std::string, std::size_t> name_to_group;
+        active_by_name.reserve(variant_order_.size());
+        for (const GroupingInfo* grouping : variant_order_) {
+            if (variants_.at(grouping).enumeration.exhausted) {
                 continue;
             }
-            for (const auto& source : definition.active) {
-                if (!source->exhausted) {
-                    return true;
+            const auto [it, inserted] = name_to_group.emplace(grouping->name, active_by_name.size());
+            if (inserted) {
+                active_by_name.push_back({grouping});
+            } else {
+                active_by_name[it->second].push_back(grouping);
+            }
+        }
+        if (active_by_name.empty()) {
+            return allocations;
+        }
+
+        const std::vector<std::size_t> group_shares =
+            distribute_grow_shares(total_amount, active_by_name.size(), /*front_loaded=*/true);
+        allocations.reserve(variant_order_.size());
+        for (std::size_t group = 0; group < active_by_name.size(); ++group) {
+            const std::vector<std::size_t> variant_shares =
+                distribute_grow_shares(group_shares[group], active_by_name[group].size(), /*front_loaded=*/false);
+            for (std::size_t slot = 0; slot < active_by_name[group].size(); ++slot) {
+                if (variant_shares[slot] != 0) {
+                    allocations.emplace_back(active_by_name[group][slot], variant_shares[slot]);
                 }
             }
         }
-        return false;
+        return allocations;
     }
 
-    std::size_t total_candidates() const {
+    // One grouping variant: the grouping definition, resumable enumeration state, and the candidates
+    // discovered so far. Stored in a map node and never moved -- the DFS engine keeps pointers into the
+    // session's own graph/constraint snapshots.
+    struct GroupingVariant {
+        const GroupingInfo* grouping = nullptr;
+        GroupingVariantEnumeration enumeration;
+        std::vector<Candidate> candidates;  // stable: only ever appended to
+    };
+
+    // Pull up to `batch` more distinct placements from one variant. Returns how many were added. The
+    // resuming enumeration session tracks excluded full mappings; unique_shapes=false keeps orientations
+    // that share an ASIC set but differ in logical-to-physical connectivity.
+    std::size_t grow_variant(GroupingVariant& variant, std::size_t batch) {
+        GroupingVariantEnumeration& state = variant.enumeration;
+        if (state.exhausted) {
+            return 0;
+        }
+
+        std::size_t added = 0;
+        while (added < batch && !state.exhausted) {
+            const auto mappings = enumerate_distinct_placements_for_grouping(
+                *variant.grouping,
+                physical_graph_,
+                psd_,
+                batch - added,
+                state.constraints,
+                validation_mode_,
+                nullptr,
+                &state,
+                /*unique_shapes=*/false);
+            if (mappings.empty()) {
+                break;
+            }
+            for (const auto& mapping : mappings) {
+                if (!mapping.success) {
+                    continue;
+                }
+                Candidate candidate(asic_index_.size(), variant.grouping);
+                for (const auto& [node, asic] : mapping.target_to_global) {
+                    candidate.add_asic(asic_index_.dense(asic), asic);
+                }
+                candidate.build_boundary(neighbors_of_dense_);
+                variant.candidates.push_back(std::move(candidate));
+                ++added;
+                if (added >= batch) {
+                    break;
+                }
+            }
+        }
+        return added;
+    }
+
+    void rebuild_flat() {
+        flat_.clear();
+        for (const GroupingInfo* grouping : variant_order_) {
+            for (const Candidate& candidate : variants_.at(grouping).candidates) {
+                flat_.push_back(&candidate);
+            }
+        }
+    }
+
+    std::size_t total_found() const {
         std::size_t total = 0;
-        for (const auto& [_, definition] : definitions_) {
-            total += definition.flat.size();
+        for (const GroupingInfo* grouping : variant_order_) {
+            total += variants_.at(grouping).candidates.size();
         }
         return total;
     }
 
-    // Bumped on every growth; seam caches key on it so a stale matrix is never reused.
-    std::size_t generation() const { return generation_; }
-
-    std::string describe(DefinitionKey key) const {
-        const Definition& definition = definitions_.at(key);
-        std::string text;
-        for (const auto& source : definition.active) {
-            text += fmt::format(
-                "{}[{} found, {} solves{}] ",
-                source->variant->name,
-                source->found.size(),
-                source->solves,
-                source->exhausted ? ", exhausted" : "");
-        }
-        if (!definition.deferred.empty()) {
-            text += fmt::format("({} trait-free variant(s) deferred)", definition.deferred.size());
-        }
-        return text;
-    }
-
-    // Guards a trait-free variant from enumerating its whole symmetric solution space: past this many
-    // candidates for one definition the list stops growing and is reported incomplete.
-    static constexpr std::size_t kMaxCandidatesPerDefinition = 8192;
-
-private:
-    struct Definition {
-        std::vector<std::unique_ptr<VariantSource>> active;
-        std::vector<std::unique_ptr<VariantSource>> deferred;
-        std::set<std::vector<uint64_t>> seen_footprints;
-        std::vector<const MasterCandidate*> flat;  // rebuilt after each grow(); variant order, then discovery
-
-        std::size_t total_found() const {
-            std::size_t total = 0;
-            for (const auto& source : active) {
-                total += source->found.size();
+    // Dense 0..N-1 numbering of this pool's physical graph. Node order is deterministic (AdjacencyMap
+    // is a std::map), so every pool built from the same graph agrees. Not visible outside CandidatePool:
+    // callers see asic_count() and Candidate::dense_asics() only.
+    struct AsicIndex {
+        explicit AsicIndex(const AdjacencyGraph<AsicID>& physical_graph) {
+            const auto& nodes = physical_graph.get_nodes();
+            dense_to_asic_.reserve(nodes.size());
+            asic_to_dense_.reserve(nodes.size());
+            for (const AsicID& asic : nodes) {
+                asic_to_dense_.emplace(asic, dense_to_asic_.size());
+                dense_to_asic_.push_back(asic);
             }
-            return total;
         }
+
+        std::size_t size() const { return dense_to_asic_.size(); }
+        std::size_t dense(const AsicID& asic) const { return asic_to_dense_.at(asic); }
+
+    private:
+        std::unordered_map<AsicID, std::size_t> asic_to_dense_;
+        std::vector<AsicID> dense_to_asic_;
     };
 
-    static void rebuild_flat(Definition& definition) {
-        definition.flat.clear();
-        for (const auto& source : definition.active) {
-            for (const MasterCandidate& candidate : source->found) {
-                definition.flat.push_back(&candidate);
-            }
-        }
-    }
-
-    std::map<DefinitionKey, Definition> definitions_;
-    std::size_t generation_ = 0;
-
-public:
-    // The per-definition footprint dedup set, handed to the enumeration context of that definition.
-    std::set<std::vector<uint64_t>>& seen_footprints(DefinitionKey key) { return definitions_.at(key).seen_footprints; }
+    const AdjacencyGraph<AsicID>& physical_graph_;
+    const tt::tt_metal::PhysicalSystemDescriptor& psd_;
+    ConnectionValidationMode validation_mode_;
+    AsicIndex asic_index_;
+    std::vector<std::vector<uint32_t>> neighbors_of_dense_;
+    std::map<const GroupingInfo*, GroupingVariant> variants_;
+    std::vector<const GroupingInfo*> variant_order_;  // PGD-first order from get_valid_groupings
+    std::vector<const Candidate*> flat_;              // rebuilt after each grow(); variant order, then discovery
 };
 
-// Link-count matrices between the candidate lists of two definitions, computed once per unordered pair
-// and shared by every mesh-level edge joining instances of those definitions. On the Gemma descriptor
-// that is 6 matrices standing in for 71 edges.
+// Link-count matrices between the candidate lists of two meshes, computed once per mesh pair.
 class SeamLinkMatrices {
 public:
-    using DefinitionKey = MasterCandidateLists::DefinitionKey;
-
-    // Entry (i, j) is the number of fabric links between candidate i of `d1` and candidate j of `d2`,
+    // Entry (i, j) is the number of fabric links between candidate i of `m1` and candidate j of `m2`,
     // saturated at 255. The row/column roles follow the argument order, so callers may pass either order.
     const std::vector<uint8_t>& matrix(
-        DefinitionKey d1, DefinitionKey d2, const MasterCandidateLists& lists, std::size_t& cols_out) {
-        if (lists.generation() != generation_) {
+        GlobalMeshId m1,
+        GlobalMeshId m2,
+        const std::map<GlobalMeshId, CandidatePool>& pools,
+        std::size_t pools_generation,
+        std::size_t& cols_out) {
+        if (pools_generation != generation_) {
             cache_.clear();
-            generation_ = lists.generation();
+            generation_ = pools_generation;
         }
-        const auto& c1 = lists.candidates(d1);
-        const auto& c2 = lists.candidates(d2);
+        const auto& c1 = pools.at(m1).candidates();
+        const auto& c2 = pools.at(m2).candidates();
         cols_out = c2.size();
-        auto it = cache_.find({d1, d2});
+        auto it = cache_.find({m1, m2});
         if (it != cache_.end()) {
             return it->second;
         }
         std::vector<uint8_t> m(c1.size() * c2.size(), 0);
         for (std::size_t i = 0; i < c1.size(); ++i) {
             for (std::size_t j = 0; j < c2.size(); ++j) {
-                const std::size_t links = seam_link_count(*c1[i], *c2[j]);
+                const std::size_t links = c1[i]->seam_link_count(*c2[j]);
                 m[i * c2.size() + j] = static_cast<uint8_t>(std::min<std::size_t>(links, 255));
             }
         }
-        return cache_.emplace(std::make_pair(d1, d2), std::move(m)).first->second;
+        return cache_.emplace(std::make_pair(m1, m2), std::move(m)).first->second;
     }
 
 private:
-    std::map<std::pair<DefinitionKey, DefinitionKey>, std::vector<uint8_t>> cache_;
+    std::map<std::pair<GlobalMeshId, GlobalMeshId>, std::vector<uint8_t>> cache_;
     std::size_t generation_ = static_cast<std::size_t>(-1);
 };
 
 // One variable per (mesh INSTANCE, candidate). Instances cannot share variables even when they share a
 // candidate list, because they take different seats.
 struct SeatVars {
-    std::map<GlobalMeshId, std::vector<int>> by_mesh;  // parallel to lists.candidates(definition_of(mesh))
+    std::map<GlobalMeshId, std::vector<int>> by_mesh;  // parallel to pool.candidates(mesh_id)
     std::vector<std::vector<int>> by_dense_asic;       // asic -> vars whose footprint covers it
-    std::vector<int> non_preferred;                    // seats on a lower-ranked variant; assumed false first
 };
 
 struct MasterEncodingSize {
@@ -3195,31 +3354,29 @@ bool encode_master_problem(
     tt::tt_fabric::detail::TopologySatSolver& sat,
     SeatVars& vars,
     MasterEncodingSize& size,
-    const std::map<GlobalMeshId, MasterCandidateLists::DefinitionKey>& definition_of,
-    const MasterCandidateLists& lists,
+    const std::map<GlobalMeshId, std::vector<GroupingInfo>>& global_mesh_groupings,
+    const std::map<GlobalMeshId, CandidatePool>& pools,
+    std::size_t pools_generation,
     const std::map<std::pair<GlobalMeshId, GlobalMeshId>, std::size_t>& mesh_edges,
     SeamLinkMatrices& seams,
-    const AsicIndex& asic_index,
     bool relaxed_tier) {
-    vars.by_dense_asic.assign(asic_index.size(), {});
+    const std::size_t asic_count = pools.empty() ? 0 : pools.begin()->second.asic_count();
+    vars.by_dense_asic.assign(asic_count, {});
 
     // (1) Variables, at-least-one, at-most-one.
-    for (const auto& [mesh_id, definition] : definition_of) {
-        const auto& candidates = lists.candidates(definition);
+    for (const auto& [mesh_id, _] : global_mesh_groupings) {
+        const auto& candidates = pools.at(mesh_id).candidates();
         if (candidates.empty()) {
             return false;
         }
         std::vector<int>& lits = vars.by_mesh[mesh_id];
         lits.reserve(candidates.size());
-        for (const MasterCandidate* cand : candidates) {
+        for (const Candidate* cand : candidates) {
             const int var = sat.declare_one_more_variable();
             ++size.vars;
             lits.push_back(var);
-            if (!cand->preferred) {
-                vars.non_preferred.push_back(var);
-            }
-            for (const AsicID& asic : cand->asics) {
-                vars.by_dense_asic[asic_index.dense(asic)].push_back(var);
+            for (const uint32_t dense : cand->dense_asics()) {
+                vars.by_dense_asic[dense].push_back(var);
             }
         }
         for (const int lit : lits) {
@@ -3239,12 +3396,10 @@ bool encode_master_problem(
     for (const auto& [edge, channels] : mesh_edges) {
         const auto& [m1, m2] = edge;
         const std::size_t need = std::min<std::size_t>(relaxed_tier ? 1 : channels, 255);
-        const auto d1 = definition_of.at(m1);
-        const auto d2 = definition_of.at(m2);
         const std::vector<int>& l1 = vars.by_mesh.at(m1);
         const std::vector<int>& l2 = vars.by_mesh.at(m2);
         std::size_t cols = 0;
-        const std::vector<uint8_t>& m = seams.matrix(d1, d2, lists, cols);
+        const std::vector<uint8_t>& m = seams.matrix(m1, m2, pools, pools_generation, cols);
         TT_ASSERT(cols == l2.size() && m.size() == l1.size() * l2.size());
 
         for (std::size_t i = 0; i < l1.size(); ++i) {
@@ -3275,12 +3430,12 @@ bool encode_master_problem(
 AssignedMeshes decode_master_model(
     const tt::tt_fabric::detail::TopologySatSolver& sat,
     const SeatVars& vars,
-    const std::map<GlobalMeshId, MasterCandidateLists::DefinitionKey>& definition_of,
-    const MasterCandidateLists& lists) {
+    const std::map<GlobalMeshId, std::vector<GroupingInfo>>& global_mesh_groupings,
+    const std::map<GlobalMeshId, CandidatePool>& pools) {
     AssignedMeshes assignment;
-    assignment.reserve(definition_of.size());
-    for (const auto& [mesh_id, definition] : definition_of) {
-        const auto& candidates = lists.candidates(definition);
+    assignment.reserve(global_mesh_groupings.size());
+    for (const auto& [mesh_id, _] : global_mesh_groupings) {
+        const auto& candidates = pools.at(mesh_id).candidates();
         const std::vector<int>& lits = vars.by_mesh.at(mesh_id);
         for (std::size_t i = 0; i < lits.size(); ++i) {
             if (sat.val(lits[i]) <= 0) {
@@ -3288,13 +3443,13 @@ AssignedMeshes decode_master_model(
             }
             PsdPlacement placement;
             // The pinning map belongs to the variant and cannot be recovered from the footprint.
-            placement.mesh_node_to_asic_position = candidates[i]->variant->mesh_node_to_asic_position;
-            placement.asics.insert(candidates[i]->asics.begin(), candidates[i]->asics.end());
+            placement.mesh_node_to_asic_position = candidates[i]->variant()->mesh_node_to_asic_position;
+            placement.asics.insert(candidates[i]->asics().begin(), candidates[i]->asics().end());
             assignment.push_back(PlacedMesh{
                 mesh_id,
                 std::move(placement),
-                candidates[i]->variant->name,    // PGD_DFS_DEBUG
-                candidates[i]->variant->type});  // PGD_DFS_DEBUG
+                candidates[i]->variant()->name,    // PGD_DFS_DEBUG
+                candidates[i]->variant()->type});  // PGD_DFS_DEBUG
             break;                               // exactly-one guarantees no second true literal
         }
     }
@@ -3314,11 +3469,11 @@ constexpr int kDiagnosisConflictBudgetPerMesh = 20000;
 
 // Returns the decoded partial placement of the maximal subset (empty if even one mesh could not be seated).
 AssignedMeshes diagnose_unsat_master(
-    const std::map<GlobalMeshId, MasterCandidateLists::DefinitionKey>& definition_of,
-    const MasterCandidateLists& lists,
+    const std::map<GlobalMeshId, std::vector<GroupingInfo>>& global_mesh_groupings,
+    const std::map<GlobalMeshId, CandidatePool>& pools,
+    std::size_t pools_generation,
     const std::map<std::pair<GlobalMeshId, GlobalMeshId>, std::size_t>& mesh_edges,
     SeamLinkMatrices& seams,
-    const AsicIndex& asic_index,
     bool relaxed_tier,
     const std::map<GlobalMeshId, std::string>& mesh_id_to_label) {
     using tt::tt_fabric::detail::TopologySatSolver;
@@ -3330,16 +3485,17 @@ AssignedMeshes diagnose_unsat_master(
     TopologySatSolver sat;
     MasterEncodingSize size;
     SeatVars vars;
-    vars.by_dense_asic.assign(asic_index.size(), {});
+    const std::size_t asic_count = pools.empty() ? 0 : pools.begin()->second.asic_count();
+    vars.by_dense_asic.assign(asic_count, {});
     std::map<GlobalMeshId, int> relax_of;
-    for (const auto& [mesh_id, definition] : definition_of) {
-        const auto& candidates = lists.candidates(definition);
+    for (const auto& [mesh_id, _] : global_mesh_groupings) {
+        const auto& candidates = pools.at(mesh_id).candidates();
         std::vector<int>& lits = vars.by_mesh[mesh_id];
-        for (const MasterCandidate* cand : candidates) {
+        for (const Candidate* cand : candidates) {
             const int var = sat.declare_one_more_variable();
             lits.push_back(var);
-            for (const AsicID& asic : cand->asics) {
-                vars.by_dense_asic[asic_index.dense(asic)].push_back(var);
+            for (const uint32_t dense : cand->dense_asics()) {
+                vars.by_dense_asic[dense].push_back(var);
             }
         }
         const int relax = sat.declare_one_more_variable();
@@ -3360,7 +3516,7 @@ AssignedMeshes diagnose_unsat_master(
         const std::vector<int>& l1 = vars.by_mesh.at(m1);
         const std::vector<int>& l2 = vars.by_mesh.at(m2);
         std::size_t cols = 0;
-        const std::vector<uint8_t>& m = seams.matrix(definition_of.at(m1), definition_of.at(m2), lists, cols);
+        const std::vector<uint8_t>& m = seams.matrix(m1, m2, pools, pools_generation, cols);
         // A seam only binds when BOTH meshes are placed: a placed m1 seat forces a compatible m2 seat
         // unless m2 is relaxed away, and vice versa.
         for (std::size_t i = 0; i < l1.size(); ++i) {
@@ -3401,7 +3557,7 @@ AssignedMeshes diagnose_unsat_master(
             placed.push_back(mesh_id);
             // The model seats every assumed mesh and possibly more; keep only the assumed ones so the
             // reported subset is exactly what was proven co-placeable.
-            AssignedMeshes model = decode_master_model(sat, vars, definition_of, lists);
+            AssignedMeshes model = decode_master_model(sat, vars, global_mesh_groupings, pools);
             closest.clear();
             for (PlacedMesh& seated : model) {
                 if (std::find(placed.begin(), placed.end(), seated.mesh_id) != placed.end()) {
@@ -3440,75 +3596,70 @@ AssignedMeshes diagnose_unsat_master(
     return closest;
 }
 
-// Batch sizes for column generation. Pinned PGD variants have on the order of one placement per host, so
-// the initial batch usually exhausts them outright; the growth batch matters only for trait-free variants.
-constexpr std::size_t kInitialBatchPerVariant = 64;
-constexpr std::size_t kGrowthBatchPerVariant = 128;
+// Pool-level grow budget for column generation (initial enumeration and each UNSAT growth round).
+// CandidatePool::grow(total_amount) front-loads this across grouping names in variant_order_ (PGD-first),
+// then splits each name's share evenly across same-named variants. Sized for ~64 candidates per name tier
+// on typical pools (~4 tiers); growth rounds add more if the first solve is UNSAT.
+constexpr std::size_t kGrowBudgetPerPool = 256;
 // Conflict budget for the strict-seam tier under a RELAXED policy. That tier is a preference (the mapper
 // accepts a narrower seam and warns), so it is not worth an unbounded UNSAT proof; the relaxed tier that
 // follows is solved without a cap. 0 = unbounded.
 constexpr int kStrictTierConflictBudget = 50000;
-// Conflict budget for the preferred-variant pass of each attempt (see encode: SeatVars::non_preferred).
-constexpr int kPreferredPassConflictBudget = 50000;
 
 // TODO(multi-solution): the master solve returns the FIRST model only. Make it enumerate placements the way
 // the inner solver does (TopologySatSolver::configure_for_blocking_clause_enumeration + a blocking clause
 // over the chosen seat literals after each model), so that:
 //   - a caller can ask for the next placement when the downstream inter-mesh mapping rejects this one,
 //     instead of failing the whole solve;
-//   - alternatives can be ranked (seam width, hosts spanned, preferred variants) rather than accepting
+//   - alternatives can be ranked (seam width, hosts spanned, grouping variant quality) rather than accepting
 //     whichever model CaDiCaL happens to find first;
 //   - "SAT" can be turned into "how many placements exist", which is what the plan's completeness
 //     reporting needs to be useful on a solvable descriptor.
 // Blocking on seat literals alone would re-enumerate the same footprint set under a different variant;
-// block on footprints (one literal per (mesh, footprint), or the dedup already in MasterCandidateLists).
+// block on footprints (one literal per (mesh, footprint), or the dedup already in CandidatePool).
 AssignedMeshes start_sat_placement(
-    const std::map<GlobalMeshId, MasterCandidateLists::DefinitionKey>& definition_of,
+    const std::map<GlobalMeshId, std::vector<GroupingInfo>>& global_mesh_groupings,
     const AdjacencyGraph<GlobalMeshId>& mesh_level_graph,
     const AdjacencyGraph<AsicID>& physical_graph,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     bool relaxed_inter_mesh_policy,
+    const std::map<GlobalMeshId, ConnectionValidationMode>& sat_intra_mesh_mode_by_mesh,
     PlacementSolveStats* stats,
     const std::map<GlobalMeshId, std::string>& mesh_id_to_label,  // PGD_DFS_DEBUG
-    AssignedMeshes* closest_out) {
+    AssignedMeshes* closest_out) {                                // PGD_DFS_DEBUG
     using tt::tt_fabric::detail::TopologySatSolver;
 
     if (stats != nullptr) {
         stats->master_solve_attempted = true;
     }
-    const AsicIndex asic_index(physical_graph);
-    const ConnectionValidationMode validation_mode =
-        relaxed_inter_mesh_policy ? ConnectionValidationMode::RELAXED : ConnectionValidationMode::STRICT;
 
-    MasterCandidateLists lists;
-    std::vector<MasterCandidateLists::DefinitionKey> definitions;  // distinct, in first-seen order
-    for (const auto& [mesh_id, key] : definition_of) {
-        if (std::find(definitions.begin(), definitions.end(), key) == definitions.end()) {
-            definitions.push_back(key);
-            lists.add_definition(key);
-        }
+    std::map<GlobalMeshId, CandidatePool> pools;
+    for (const auto& [mesh_id, groupings] : global_mesh_groupings) {
+        const auto mode_it = sat_intra_mesh_mode_by_mesh.find(mesh_id);
+        TT_FATAL(
+            mode_it != sat_intra_mesh_mode_by_mesh.end(),
+            "Internal error: SAT joint placement: mesh {} has no intra-mesh validation mode",
+            *mesh_id);
+        pools.emplace(mesh_id, CandidatePool(groupings, physical_graph, physical_system_descriptor, mode_it->second));
     }
-    // Every mesh in the graph must have a definition, or the encoding would silently drop it.
+    std::size_t pools_generation = 0;
+    // Every mesh in the graph must have grouping variants, or the encoding would silently drop it.
     for (const GlobalMeshId& mesh_id : mesh_level_graph.get_nodes()) {
-        if (!definition_of.contains(mesh_id)) {
+        if (!global_mesh_groupings.contains(mesh_id)) {
             log_warning(tt::LogFabric, "SAT joint placement: mesh {} has no grouping variants; falling back", *mesh_id);
             return {};
         }
     }
     const auto mesh_edges = collect_mesh_edges(mesh_level_graph);
 
-    auto grow_all = [&](std::size_t batch) {
+    auto grow_all = [&](std::size_t budget_per_pool) {
         const auto start = std::chrono::steady_clock::now();
         std::size_t grown = 0;
-        for (const auto key : definitions) {
-            MasterEnumerationContext ctx{
-                physical_graph,
-                physical_system_descriptor,
-                asic_index,
-                validation_mode,
-                lists.seen_footprints(key),
-                stats};
-            grown += lists.grow(key, batch, ctx);
+        for (const auto& [mesh_id, _] : global_mesh_groupings) {
+            grown += pools.at(mesh_id).grow(budget_per_pool);
+        }
+        if (grown != 0) {
+            ++pools_generation;
         }
         if (stats != nullptr) {
             stats->master_enumeration_elapsed +=
@@ -3516,149 +3667,152 @@ AssignedMeshes start_sat_placement(
         }
         return grown;
     };
-    auto log_lists = [&](std::string_view when) {
-        for (const auto key : definitions) {
-            // Label by the first instance of this definition.
-            std::string label;
-            for (const auto& [mesh_id, definition] : definition_of) {
-                if (definition == key) {
-                    label = mesh_label_for_id(mesh_id, mesh_id_to_label);
-                    break;
-                }
+
+    grow_all(kGrowBudgetPerPool);
+    for (const auto& [mesh_id, pool] : pools) {
+        log_info(
+            tt::LogFabric,
+            "SAT joint placement initial enumeration: {} (global mesh {}): {} candidate(s)",
+            mesh_label_for_id(mesh_id, mesh_id_to_label),
+            *mesh_id,
+            pool.candidates().size());
+    }
+    // PGD_DFS_DEBUG — delete after candidate-pool enumeration investigation.
+    {
+        std::map<std::string, std::size_t> global_counts_by_grouping_name;
+        for (const auto& [mesh_id, pool] : pools) {
+            for (const auto& [name, count] : pool.candidate_counts_by_grouping_name()) {
+                global_counts_by_grouping_name[name] += count;
             }
             log_info(
                 tt::LogFabric,
-                "SAT joint placement {}: definition {}: {} candidate(s): {}",
-                when,
-                label,
-                lists.candidates(key).size(),
-                lists.describe(key));
+                "SAT joint placement DEBUG initial enumeration: {} (global mesh {}): {}",
+                mesh_label_for_id(mesh_id, mesh_id_to_label),
+                *mesh_id,
+                pool.format_variant_breakdown());
         }
-    };
-
-    grow_all(kInitialBatchPerVariant);
-    log_lists("initial enumeration");
+        std::vector<std::pair<std::string, std::size_t>> sorted_global(
+            global_counts_by_grouping_name.begin(), global_counts_by_grouping_name.end());
+        std::sort(sorted_global.begin(), sorted_global.end(), [](const auto& a, const auto& b) {
+            return a.second > b.second || (a.second == b.second && a.first < b.first);
+        });
+        std::string summary;
+        for (const auto& [name, count] : sorted_global) {
+            if (!summary.empty()) {
+                summary += ' ';
+            }
+            summary += fmt::format("{}={}", name, count);
+        }
+        std::size_t total_candidates = 0;
+        for (const auto& [_, count] : global_counts_by_grouping_name) {
+            total_candidates += count;
+        }
+        log_info(
+            tt::LogFabric,
+            "SAT joint placement DEBUG initial enumeration summary: {} candidate(s) across {} mesh(es): {}",
+            total_candidates,
+            pools.size(),
+            summary);
+    }
 
     SeamLinkMatrices seams;
     std::size_t growth_rounds = 0;
     std::size_t attempts = 0;
-    // Tier 0: pinned (PGD) variants only. Tier 1: trait-free (MGD fallback) variants added. Within a tier,
-    // under a RELAXED policy the strict seam threshold is tried first, then the threshold drops to 1 --
-    // mirroring next_step_pool's per-seam fallback, but as a global preference rather than a local one.
-    for (int tier = 0; tier < 2; ++tier) {
-        if (tier == 1) {
-            if (lists.enable_mgd_fallback() == 0) {
-                break;  // nothing was deferred
-            }
-            grow_all(kInitialBatchPerVariant);
-            log_lists("after enabling trait-free variants");
+    auto count_candidates = [&]() {
+        std::size_t total = 0;
+        for (const auto& [_, pool] : pools) {
+            total += pool.candidates().size();
         }
-        for (;;) {
-            for (const bool relaxed_tier : {false, true}) {
-                if (relaxed_tier && !relaxed_inter_mesh_policy) {
-                    continue;
-                }
-                // Re-encoded per attempt rather than extended in place: CNF clauses cannot gain literals
-                // after the fact, so a grown candidate list would need extension literals on every
-                // at-least-one and support clause. Encoding is cheap and attempts are few; the EXPENSIVE
-                // state (the enumeration sessions) persists across attempts.
-                ++attempts;
-                const auto encode_start = std::chrono::steady_clock::now();
-                TopologySatSolver sat;
-                SeatVars vars;
-                MasterEncodingSize size;
-                const bool encoded = encode_master_problem(
-                    sat, vars, size, definition_of, lists, mesh_edges, seams, asic_index, relaxed_tier);
-                const auto encode_end = std::chrono::steady_clock::now();
-                if (stats != nullptr) {
-                    stats->master_encode_elapsed +=
-                        std::chrono::duration_cast<std::chrono::microseconds>(encode_end - encode_start);
-                    stats->master_sat_vars = size.vars;
-                    stats->master_sat_clauses = size.clauses;
-                    stats->master_sat_attempts = attempts;
-                }
-                if (!encoded) {
-                    log_info(
-                        tt::LogFabric,
-                        "SAT joint placement: attempt {} (tier {}, {} seams): a mesh has no candidates; skipping solve",
-                        attempts,
-                        tier,
-                        relaxed_tier ? "relaxed" : "strict");
-                    break;  // growing is the only thing that can help; skip the relaxed re-encode
-                }
-                // Preferred-variant pass: assume every lower-ranked seat false, so a model (if one exists)
-                // seats every mesh on its definition's top-ranked grouping. Assumptions are retracted after
-                // the solve, so a failure here costs one budgeted solve and the unconstrained one below still
-                // sees every candidate.
-                int verdict = 0;
-                if (!vars.non_preferred.empty()) {
-                    for (const int lit : vars.non_preferred) {
-                        sat.assume(-lit);
-                    }
-                    verdict = sat.solve_limited(kPreferredPassConflictBudget);
-                    log_info(
-                        tt::LogFabric,
-                        "SAT joint placement: attempt {} preferred-variant pass ({} lower-ranked seats assumed off) -> "
-                        "{}",
-                        attempts,
-                        vars.non_preferred.size(),
-                        verdict == TopologySatSolver::kSat     ? "SAT"
-                        : verdict == TopologySatSolver::kUnsat ? "UNSAT"
-                                                               : "unknown (conflict budget)");
-                }
-                if (verdict != TopologySatSolver::kSat) {
-                    const bool budgeted = !relaxed_tier && relaxed_inter_mesh_policy && kStrictTierConflictBudget > 0;
-                    verdict = budgeted ? sat.solve_limited(kStrictTierConflictBudget) : sat.solve();
-                }
-                const auto solve_end = std::chrono::steady_clock::now();
-                if (stats != nullptr) {
-                    stats->master_solve_elapsed +=
-                        std::chrono::duration_cast<std::chrono::microseconds>(solve_end - encode_end);
-                }
+        return total;
+    };
+    auto pools_enumeration_complete = [&]() {
+        for (const auto& [_, pool] : pools) {
+            if (!pool.variants_exhausted()) {
+                return false;
+            }
+        }
+        return true;
+    };
+    // Under a RELAXED policy the strict seam threshold is tried first, then the threshold drops to 1 --
+    // mirroring next_step_pool's per-seam fallback, but as a global preference rather than a local one.
+    for (;;) {
+        for (const bool relaxed_tier : {false, true}) {
+            if (relaxed_tier && !relaxed_inter_mesh_policy) {
+                continue;
+            }
+            // Re-encoded per attempt rather than extended in place: CNF clauses cannot gain literals
+            // after the fact, so a grown candidate list would need extension literals on every
+            // at-least-one and support clause. Encoding is cheap and attempts are few; the EXPENSIVE
+            // state (the enumeration sessions) persists across attempts.
+            ++attempts;
+            const auto encode_start = std::chrono::steady_clock::now();
+            TopologySatSolver sat;
+            SeatVars vars;
+            MasterEncodingSize size;
+            const bool encoded = encode_master_problem(
+                sat, vars, size, global_mesh_groupings, pools, pools_generation, mesh_edges, seams, relaxed_tier);
+            const auto encode_end = std::chrono::steady_clock::now();
+            if (stats != nullptr) {
+                stats->master_encode_elapsed +=
+                    std::chrono::duration_cast<std::chrono::microseconds>(encode_end - encode_start);
+                stats->master_sat_vars = size.vars;
+                stats->master_sat_clauses = size.clauses;
+                stats->master_sat_attempts = attempts;
+            }
+            if (!encoded) {
                 log_info(
                     tt::LogFabric,
-                    "SAT joint placement: attempt {} (tier {}, {} seams): {} vars, {} clauses, {} candidates; encode "
-                    "{} ms, solve {} ms -> {}",
+                    "SAT joint placement: attempt {} ({} seams): a mesh has no candidates; skipping solve",
                     attempts,
-                    tier,
-                    relaxed_tier ? "relaxed" : "strict",
-                    size.vars,
-                    size.clauses,
-                    lists.total_candidates(),
-                    std::chrono::duration_cast<std::chrono::milliseconds>(encode_end - encode_start).count(),
-                    std::chrono::duration_cast<std::chrono::milliseconds>(solve_end - encode_end).count(),
-                    verdict == TopologySatSolver::kSat     ? "SAT"
-                    : verdict == TopologySatSolver::kUnsat ? "UNSAT"
-                                                           : "unknown (conflict budget)");
-                if (verdict == TopologySatSolver::kSat) {
-                    if (stats != nullptr) {
-                        stats->master_solve_success = true;
-                        stats->master_growth_rounds = growth_rounds;
-                        stats->master_candidates_enumerated = lists.total_candidates();
-                        stats->candidate_lists_complete = lists.complete();
-                    }
-                    AssignedMeshes assignment = decode_master_model(sat, vars, definition_of, lists);
-                    log_adjacency_guided_placement_assignment(
-                        assignment, mesh_id_to_label, "complete (SAT joint placement)");  // PGD_DFS_DEBUG
-                    return assignment;
+                    relaxed_tier ? "relaxed" : "strict");
+                break;  // growing is the only thing that can help; skip the relaxed re-encode
+            }
+            const bool budgeted = !relaxed_tier && relaxed_inter_mesh_policy && kStrictTierConflictBudget > 0;
+            const int verdict = budgeted ? sat.solve_limited(kStrictTierConflictBudget) : sat.solve();
+            const auto solve_end = std::chrono::steady_clock::now();
+            if (stats != nullptr) {
+                stats->master_solve_elapsed +=
+                    std::chrono::duration_cast<std::chrono::microseconds>(solve_end - encode_end);
+            }
+            log_info(
+                tt::LogFabric,
+                "SAT joint placement: attempt {} ({} seams): {} vars, {} clauses, {} candidates; encode "
+                "{} ms, solve {} ms -> {}",
+                attempts,
+                relaxed_tier ? "relaxed" : "strict",
+                size.vars,
+                size.clauses,
+                count_candidates(),
+                std::chrono::duration_cast<std::chrono::milliseconds>(encode_end - encode_start).count(),
+                std::chrono::duration_cast<std::chrono::milliseconds>(solve_end - encode_end).count(),
+                verdict == TopologySatSolver::kSat     ? "SAT"
+                : verdict == TopologySatSolver::kUnsat ? "UNSAT"
+                                                       : "unknown (conflict budget)");
+            if (verdict == TopologySatSolver::kSat) {
+                if (stats != nullptr) {
+                    stats->master_solve_success = true;
+                    stats->master_growth_rounds = growth_rounds;
+                    stats->master_candidates_enumerated = count_candidates();
+                    stats->candidate_lists_complete = pools_enumeration_complete();
                 }
+                AssignedMeshes assignment = decode_master_model(sat, vars, global_mesh_groupings, pools);
+                log_adjacency_guided_placement_assignment(
+                    assignment, mesh_id_to_label, "complete (SAT joint placement)");  // PGD_DFS_DEBUG
+                return assignment;
             }
-            if (!lists.can_grow()) {
-                break;  // every live session exhausted (or capped) at this tier
-            }
-            ++growth_rounds;
-            const std::size_t grown = grow_all(kGrowthBatchPerVariant);
-            log_info(tt::LogFabric, "SAT joint placement: growth round {} added {} candidate(s)", growth_rounds, grown);
-            if (grown == 0) {
-                break;
-            }
+        }
+        ++growth_rounds;
+        std::size_t grown = grow_all(kGrowBudgetPerPool);
+        log_info(tt::LogFabric, "SAT joint placement: growth round {} added {} candidate(s)", growth_rounds, grown);
+        if (grown == 0) {
+            break;
         }
     }
 
-    const bool complete = lists.complete();
+    const bool complete = pools_enumeration_complete();
     if (stats != nullptr) {
         stats->master_growth_rounds = growth_rounds;
-        stats->master_candidates_enumerated = lists.total_candidates();
+        stats->master_candidates_enumerated = count_candidates();
         stats->candidate_lists_complete = complete;
     }
     log_warning(
@@ -3667,14 +3821,14 @@ AssignedMeshes start_sat_placement(
         "candidate lists {} -- the UNSAT verdict is {}",
         attempts,
         growth_rounds,
-        lists.total_candidates(),
+        count_candidates(),
         complete ? "COMPLETE" : "TRUNCATED",
         complete ? "trustworthy" : "NOT trustworthy");
 
     // The closest thing to an answer: a maximal set of meshes that CAN be seated together, under the most
     // permissive seam tier the policy allows, with every enumerated candidate in play.
     AssignedMeshes closest = diagnose_unsat_master(
-        definition_of, lists, mesh_edges, seams, asic_index, relaxed_inter_mesh_policy, mesh_id_to_label);
+        global_mesh_groupings, pools, pools_generation, mesh_edges, seams, relaxed_inter_mesh_policy, mesh_id_to_label);
     if (stats != nullptr) {
         stats->master_closest_meshes_placed = closest.size();
     }
@@ -3780,11 +3934,6 @@ std::vector<PsdPlacement> PhysicalGroupingDescriptor::solve_adjacency_guided_pla
     // Global mesh ID -> grouping variants, remapped from mesh_groupings via local_to_global_mesh_ids.
     const std::unordered_map<InstanceName, std::vector<GroupingInfo>>& mesh_groupings = mesh_it->second;
     std::map<MeshId, std::vector<GroupingInfo>> global_mesh_groupings;
-    // Mesh instance -> its DEFINITION's variant vector inside `valid_groupings`. Every instance of one
-    // mesh definition resolves to the same vector, which is what lets the SAT path enumerate each
-    // definition once and share the candidate list across instances. global_mesh_groupings holds
-    // per-instance COPIES, so its addresses would not do.
-    std::map<MeshId, const std::vector<GroupingInfo>*> mesh_definition_of;
     std::map<GlobalMeshId, std::string> mesh_id_to_label;  // PGD_DFS_DEBUG
     const std::size_t mgd_count = mesh_graph_descriptors.size();
     for (std::size_t mgd_index = 0; mgd_index < local_to_global_mesh_ids.size(); ++mgd_index) {
@@ -3812,22 +3961,21 @@ std::vector<PsdPlacement> PhysicalGroupingDescriptor::solve_adjacency_guided_pla
                 grouping_key,
                 *global_mesh_id);
             global_mesh_groupings.emplace(global_mesh_id, groupings_it->second);
-            mesh_definition_of.emplace(global_mesh_id, &groupings_it->second);
             mesh_id_to_label.emplace(global_mesh_id, grouping_key);  // PGD_DFS_DEBUG
         }
     }
 
-    // One inter-mesh channel policy for the whole solve, which is all the rest of the stack supports: the
-    // mapper applies a single validation mode to every seam. Descriptors merged together are required to
-    // agree (validate_shared_inter_mesh_policy, called where they are assembled), so the first one to state
-    // a policy speaks for the set and the rest either match it or state nothing. A set that states nothing
-    // stays STRICT, matching MeshGraph's default.
-    bool relaxed_inter_mesh_policy = false;
-    for (const MeshGraphDescriptor* descriptor : mesh_graph_descriptors) {
-        const auto policy = descriptor->inter_mesh_policy();
-        if (policy.has_value()) {
-            relaxed_inter_mesh_policy = (*policy == InterMeshChannelPolicy::Relaxed);
-            break;
+    // Channel validation policy for the whole solve. Descriptors merged together must agree on
+    // inter-mesh policy (validate_shared_inter_mesh_policy); every MGD defaults to STRICT when it states none.
+    const bool relaxed_inter_mesh_policy = mesh_graph_descriptors.front()->is_inter_mesh_policy_relaxed();
+    std::map<GlobalMeshId, ConnectionValidationMode> sat_intra_mesh_mode_by_mesh;
+    for (std::size_t mgd_index = 0; mgd_index < local_to_global_mesh_ids.size() && mgd_index < mgd_count; ++mgd_index) {
+        const MeshGraphDescriptor& mgd = *mesh_graph_descriptors[mgd_index];
+        for (const auto& [local_mesh_id, global_mesh_id] : local_to_global_mesh_ids[mgd_index]) {
+            sat_intra_mesh_mode_by_mesh.emplace(
+                global_mesh_id,
+                mgd.is_intra_mesh_policy_relaxed(local_mesh_id) ? ConnectionValidationMode::RELAXED
+                                                                : ConnectionValidationMode::STRICT);
         }
     }
 
@@ -3845,11 +3993,12 @@ std::vector<PsdPlacement> PhysicalGroupingDescriptor::solve_adjacency_guided_pla
     AssignedMeshes closest_partial;  // SAT path's maximal co-placeable subset when it fails
     if (solver_choice != PlacementSolverChoice::Dfs) {
         mesh_placements = start_sat_placement(
-            mesh_definition_of,
+            global_mesh_groupings,
             merged.mesh_level_graph_,
             physical_graph,
             physical_system_descriptor,
             relaxed_inter_mesh_policy,
+            sat_intra_mesh_mode_by_mesh,
             stats,
             mesh_id_to_label,  // PGD_DFS_DEBUG
             &closest_partial);

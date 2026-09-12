@@ -623,33 +623,26 @@ LogicalMultiMeshGraph remap_logical_multi_mesh_for_merge(
 
 void validate_shared_inter_mesh_policy(
     const std::vector<const ::tt::tt_fabric::MeshGraphDescriptor*>& mesh_graph_descriptors) {
-    const auto policy_name = [](::tt::tt_fabric::InterMeshChannelPolicy policy) {
-        return policy == ::tt::tt_fabric::InterMeshChannelPolicy::Relaxed ? "RELAXED" : "STRICT";
-    };
-
-    std::optional<::tt::tt_fabric::InterMeshChannelPolicy> shared;
+    std::optional<bool> shared_relaxed;
     std::size_t shared_index = 0;
     for (std::size_t index = 0; index < mesh_graph_descriptors.size(); ++index) {
         TT_FATAL(mesh_graph_descriptors[index] != nullptr, "Mesh graph descriptor {} is null", index);
-        const auto policy = mesh_graph_descriptors[index]->inter_mesh_policy();
-        if (!policy.has_value()) {
-            continue;
-        }
-        if (!shared.has_value()) {
-            shared = policy;
+        const bool relaxed = mesh_graph_descriptors[index]->is_inter_mesh_policy_relaxed();
+        if (!shared_relaxed.has_value()) {
+            shared_relaxed = relaxed;
             shared_index = index;
             continue;
         }
         TT_FATAL(
-            *policy == *shared,
+            relaxed == *shared_relaxed,
             "Mesh graph descriptors merged into one topology must agree on the inter-mesh channel policy, but "
             "descriptor {} is {} while descriptor {} is {}. Mixed policies are not supported yet: the merged solve "
             "applies one policy to every seam, so one descriptor's policy would be applied to the other's. "
             "See https://github.com/tenstorrent/tt-metal/issues/49960",
             shared_index,
-            policy_name(*shared),
+            *shared_relaxed ? "RELAXED" : "STRICT",
             index,
-            policy_name(*policy));
+            relaxed ? "RELAXED" : "STRICT");
     }
 }
 

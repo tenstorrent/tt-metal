@@ -89,6 +89,10 @@ struct GroupingInfo {
     // match (callers then assume row-major identity).
     std::map<LogicalChipId, tt::tt_metal::ASICPosition> mesh_node_to_asic_position;
 
+    // PGD node -> host partition index from the matched MGD host_topology at PGD<->MGD commit time. Empty for
+    // single-host meshes; enumerate then uses a soft same-host preference instead of a required partition.
+    std::map<LogicalChipId, uint32_t> mesh_node_to_host_group;
+
     GroupingInfo();
     ~GroupingInfo();
     GroupingInfo(const GroupingInfo&);

@@ -191,9 +191,9 @@ TEST_F(ControlPlaneFixture, TestControlPlaneInitNoMGD) {
     EXPECT_NE(control_plane.get_mesh_graph().get_mesh_ids().size(), 0u);
 }
 
-// Galaxy layout validation: MGD host topology vs runtime, plus per-host rank-group tray/asic
-// checks for shapes 1x1, 1x2, 2x2, 2x4, 2x8, 4x4 (two-tray), 4x8, 4x16, 4x32, 8x16 (rank 0 only in multihost).
-// Four-tray 4x4 split-host layouts use TestGalaxy4x4SplitHostLayoutCheck instead.
+// Galaxy layout validation: MGD host topology vs runtime, plus per-host rank-group tray/asic checks.
+// Two-tray 4x4 rank groups and four-tray split-host 4x4 layouts are both handled here; split-host is
+// selected when the mesh spans multiple hosts or uses trays {1,2,3,4}.
 TEST_F(ControlPlaneFixture, TestGalaxyLayoutCheck) {
     tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
     tt::tt_metal::MetalContext::instance().set_fabric_config(
@@ -203,24 +203,6 @@ TEST_F(ControlPlaneFixture, TestGalaxyLayoutCheck) {
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     expect_mesh_graph_host_topology_matches_runtime(control_plane);
     expect_galaxy_rank_group_checks(control_plane);
-}
-
-// Split-host 4x4 four-tray layout for subtorus_4x4_ring_ring_* MGDs (mesh-level trays {1,2,3,4}).
-TEST_F(ControlPlaneFixture, TestGalaxy4x4SplitHostLayoutCheck) {
-    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
-    tt::tt_metal::MetalContext::instance().set_fabric_config(
-        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
-    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
-
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    expect_mesh_graph_host_topology_matches_runtime(control_plane);
-
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
-    const auto mpi_rank = *distributed_context.rank();
-    const auto mpi_size = *distributed_context.size();
-    if (mpi_size <= 1 || static_cast<int>(mpi_rank) == 0) {
-        expect_galaxy_4x4_split_host_mesh_checks(control_plane);
-    }
 }
 
 // Galaxy corner folding: mesh endpoints (first/last logical chips) must map to tray-corner ASICs.

@@ -1216,92 +1216,138 @@ void expect_galaxy_rank_group_8x16_check(const ControlPlane& control_plane, Mesh
                                     << " 8x16 rank group fabric nodes must be on exactly four hosts";
 }
 
-void expect_galaxy_rank_group_checks(const ControlPlane& control_plane) {
-    const auto& mesh_graph = control_plane.get_mesh_graph();
-    for (const MeshId mesh_id : mesh_graph.get_mesh_ids()) {
-        for (const auto& [_, host_rank] : mesh_graph.get_host_ranks(mesh_id)) {
-            const MeshShape rank_shape = mesh_graph.get_mesh_shape(mesh_id, host_rank);
+namespace {
 
-            if (rank_group_shape_is(rank_shape, 1, 1)) {
-                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 1, 1);
-                expect_galaxy_rank_group_1x1_check(control_plane, mesh_id, host_rank);
-            } else if (rank_group_shape_is(rank_shape, 1, 2)) {
-                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 1, 2);
-                expect_galaxy_rank_group_1x2_check(control_plane, mesh_id, host_rank);
-            } else if (rank_group_shape_is(rank_shape, 2, 2)) {
-                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 2, 2);
-                expect_galaxy_rank_group_2x2_check(control_plane, mesh_id, host_rank);
-            } else if (rank_group_shape_is(rank_shape, 2, 4)) {
-                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 2, 4);
-                expect_galaxy_rank_group_2x4_check(control_plane, mesh_id, host_rank);
-            } else if (rank_group_shape_is(rank_shape, 2, 8)) {
-                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 2, 8);
-                expect_galaxy_rank_group_2x8_check(control_plane, mesh_id, host_rank);
-            } else if (rank_group_shape_is(rank_shape, 4, 1)) {
-                // 4x1 (or 1x4) column slice: e.g. a 4x4 mesh split across hosts with host_topology [1,4].
-                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 4, 1);
-                expect_galaxy_rank_group_4x1_check(control_plane, mesh_id, host_rank);
-            } else if (rank_group_shape_is(rank_shape, 4, 4)) {
-                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 4, 4);
-                expect_galaxy_rank_group_4x4_check(control_plane, mesh_id, host_rank);
-            } else if (rank_group_shape_is(rank_shape, 4, 8)) {
-                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 4, 8);
-                expect_galaxy_rank_group_4x8_check(control_plane, mesh_id, host_rank);
-            } else if (rank_group_shape_is(rank_shape, 4, 16)) {
-                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 4, 16);
-                expect_galaxy_rank_group_4x16_check(control_plane, mesh_id, host_rank);
-            } else if (rank_group_shape_is(rank_shape, 4, 32)) {
-                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 4, 32);
-                expect_galaxy_rank_group_4x32_check(control_plane, mesh_id, host_rank);
-            } else if (rank_group_shape_is(rank_shape, 8, 16)) {
-                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 8, 16);
-                expect_galaxy_rank_group_8x16_check(control_plane, mesh_id, host_rank);
-            } else {
-                ADD_FAILURE() << "mesh " << *mesh_id << " host_rank " << *host_rank << " rank group shape "
-                              << rank_shape << " is not tested; please add test";
-            }
+struct MeshTrayHostSummary {
+    std::set<std::string> hostnames;
+    std::set<uint32_t> trays;
+};
+
+MeshTrayHostSummary collect_mesh_tray_host_summary(const ControlPlane& control_plane, MeshId mesh_id) {
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto& psd = control_plane.get_physical_system_descriptor();
+    MeshTrayHostSummary summary;
+    for (const auto& [_, chip_id] : mesh_graph.get_chip_ids(mesh_id)) {
+        const FabricNodeId fabric_node_id(mesh_id, static_cast<std::uint32_t>(chip_id));
+        const auto asic_id = control_plane.get_asic_id_from_fabric_node_id(fabric_node_id);
+        summary.hostnames.insert(psd.get_host_name_for_asic(asic_id));
+        summary.trays.insert(*psd.get_tray_id(asic_id));
+    }
+    return summary;
+}
+
+// Split-host 4x4 layouts span multiple hosts and/or use all four trays {1,2,3,4}. Two-tray 4x4 rank
+// groups stay on one host with trays {1,2} or {3,4} (rev-C) / {1,3} or {2,4} (rev-A/B).
+bool mesh_uses_4x4_split_host_layout(const ControlPlane& control_plane, MeshId mesh_id) {
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    if (!rank_group_shape_is(mesh_graph.get_mesh_shape(mesh_id), 4, 4)) {
+        return false;
+    }
+    const MeshTrayHostSummary summary = collect_mesh_tray_host_summary(control_plane, mesh_id);
+    if (summary.hostnames.size() > 1) {
+        return true;
+    }
+    static const std::set<uint32_t> all_trays = {1, 2, 3, 4};
+    return summary.trays == all_trays;
+}
+
+void expect_galaxy_standard_rank_group_checks_for_mesh(const ControlPlane& control_plane, MeshId mesh_id) {
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    for (const auto& [_, host_rank] : mesh_graph.get_host_ranks(mesh_id)) {
+        const MeshShape rank_shape = mesh_graph.get_mesh_shape(mesh_id, host_rank);
+
+        if (rank_group_shape_is(rank_shape, 1, 1)) {
+            expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 1, 1);
+            expect_galaxy_rank_group_1x1_check(control_plane, mesh_id, host_rank);
+        } else if (rank_group_shape_is(rank_shape, 1, 2)) {
+            expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 1, 2);
+            expect_galaxy_rank_group_1x2_check(control_plane, mesh_id, host_rank);
+        } else if (rank_group_shape_is(rank_shape, 2, 2)) {
+            expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 2, 2);
+            expect_galaxy_rank_group_2x2_check(control_plane, mesh_id, host_rank);
+        } else if (rank_group_shape_is(rank_shape, 2, 4)) {
+            expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 2, 4);
+            expect_galaxy_rank_group_2x4_check(control_plane, mesh_id, host_rank);
+        } else if (rank_group_shape_is(rank_shape, 2, 8)) {
+            expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 2, 8);
+            expect_galaxy_rank_group_2x8_check(control_plane, mesh_id, host_rank);
+        } else if (rank_group_shape_is(rank_shape, 4, 1)) {
+            // 4x1 (or 1x4) column slice: e.g. a 4x4 mesh split across hosts with host_topology [1,4].
+            expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 4, 1);
+            expect_galaxy_rank_group_4x1_check(control_plane, mesh_id, host_rank);
+        } else if (rank_group_shape_is(rank_shape, 4, 4)) {
+            expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 4, 4);
+            expect_galaxy_rank_group_4x4_check(control_plane, mesh_id, host_rank);
+        } else if (rank_group_shape_is(rank_shape, 4, 8)) {
+            expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 4, 8);
+            expect_galaxy_rank_group_4x8_check(control_plane, mesh_id, host_rank);
+        } else if (rank_group_shape_is(rank_shape, 4, 16)) {
+            expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 4, 16);
+            expect_galaxy_rank_group_4x16_check(control_plane, mesh_id, host_rank);
+        } else if (rank_group_shape_is(rank_shape, 4, 32)) {
+            expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 4, 32);
+            expect_galaxy_rank_group_4x32_check(control_plane, mesh_id, host_rank);
+        } else if (rank_group_shape_is(rank_shape, 8, 16)) {
+            expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 8, 16);
+            expect_galaxy_rank_group_8x16_check(control_plane, mesh_id, host_rank);
+        } else {
+            ADD_FAILURE() << "mesh " << *mesh_id << " host_rank " << *host_rank << " rank group shape " << rank_shape
+                          << " is not tested; please add test";
         }
     }
 }
 
-void expect_galaxy_4x4_split_host_mesh_checks(const ControlPlane& control_plane) {
+void expect_galaxy_4x4_split_host_rank_group_checks_for_mesh(
+    const ControlPlane& control_plane, MeshId mesh_id, bool run_mesh_wide_check) {
     const auto& mesh_graph = control_plane.get_mesh_graph();
-    for (const MeshId mesh_id : mesh_graph.get_mesh_ids()) {
-        if (!rank_group_shape_is(mesh_graph.get_mesh_shape(mesh_id), 4, 4)) {
-            continue;
-        }
+    bool ran_4x4split_check = false;
+    for (const auto& [_, host_rank] : mesh_graph.get_host_ranks(mesh_id)) {
+        const MeshShape rank_shape = mesh_graph.get_mesh_shape(mesh_id, host_rank);
 
-        bool ran_4x4split_check = false;
-        for (const auto& [_, host_rank] : mesh_graph.get_host_ranks(mesh_id)) {
-            const MeshShape rank_shape = mesh_graph.get_mesh_shape(mesh_id, host_rank);
-
-            if (rank_group_shape_is(rank_shape, 1, 1)) {
-                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 1, 1);
-                expect_galaxy_rank_group_1x1_check(control_plane, mesh_id, host_rank);
-            } else if (rank_group_shape_is(rank_shape, 1, 2)) {
-                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 1, 2);
-                expect_galaxy_rank_group_1x2_check(control_plane, mesh_id, host_rank);
-            } else if (rank_group_shape_is(rank_shape, 2, 2)) {
-                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 2, 2);
-                expect_galaxy_rank_group_2x2_check(control_plane, mesh_id, host_rank);
-            } else if (rank_group_shape_is(rank_shape, 2, 4)) {
-                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 2, 4);
-                expect_galaxy_rank_group_2x4_check(control_plane, mesh_id, host_rank);
-            } else if (rank_group_shape_is(rank_shape, 4, 4)) {
-                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 4, 4);
-                if (!ran_4x4split_check) {
-                    expect_galaxy_rank_group_4x4_4x4split_check(control_plane, mesh_id, host_rank);
-                    ran_4x4split_check = true;
-                }
-            } else if (rank_group_shape_is(rank_shape, 4, 1)) {
-                // 4x1 (or 1x4) column slice: e.g. a 4x4 mesh split across hosts with host_topology [1,4].
-                expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 4, 1);
-                expect_galaxy_rank_group_4x1_check(control_plane, mesh_id, host_rank);
-            } else {
-                ADD_FAILURE() << "mesh " << *mesh_id << " host_rank " << *host_rank
-                              << " split-host 4x4 layout rank shape must be 1x1, 1x2, 2x2, 2x4, 4x1, or 4x4, got "
-                              << rank_shape;
+        if (rank_group_shape_is(rank_shape, 1, 1)) {
+            expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 1, 1);
+            expect_galaxy_rank_group_1x1_check(control_plane, mesh_id, host_rank);
+        } else if (rank_group_shape_is(rank_shape, 1, 2)) {
+            expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 1, 2);
+            expect_galaxy_rank_group_1x2_check(control_plane, mesh_id, host_rank);
+        } else if (rank_group_shape_is(rank_shape, 2, 2)) {
+            expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 2, 2);
+            expect_galaxy_rank_group_2x2_check(control_plane, mesh_id, host_rank);
+        } else if (rank_group_shape_is(rank_shape, 2, 4)) {
+            expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 2, 4);
+            expect_galaxy_rank_group_2x4_check(control_plane, mesh_id, host_rank);
+        } else if (rank_group_shape_is(rank_shape, 4, 4)) {
+            expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 4, 4);
+            if (run_mesh_wide_check && !ran_4x4split_check) {
+                expect_galaxy_rank_group_4x4_4x4split_check(control_plane, mesh_id, host_rank);
+                ran_4x4split_check = true;
             }
+        } else if (rank_group_shape_is(rank_shape, 4, 1)) {
+            // 4x1 (or 1x4) column slice: e.g. a 4x4 mesh split across hosts with host_topology [1,4].
+            expect_rank_group_shape_and_size(mesh_id, host_rank, rank_shape, 4, 1);
+            expect_galaxy_rank_group_4x1_check(control_plane, mesh_id, host_rank);
+        } else {
+            ADD_FAILURE() << "mesh " << *mesh_id << " host_rank " << *host_rank
+                          << " split-host 4x4 layout rank shape must be 1x1, 1x2, 2x2, 2x4, 4x1, or 4x4, got "
+                          << rank_shape;
+        }
+    }
+}
+
+}  // namespace
+
+void expect_galaxy_rank_group_checks(const ControlPlane& control_plane) {
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
+    const auto mpi_rank = *distributed_context.rank();
+    const auto mpi_size = *distributed_context.size();
+    const bool run_mesh_wide_check = mpi_size <= 1 || static_cast<int>(mpi_rank) == 0;
+
+    for (const MeshId mesh_id : mesh_graph.get_mesh_ids()) {
+        if (mesh_uses_4x4_split_host_layout(control_plane, mesh_id)) {
+            expect_galaxy_4x4_split_host_rank_group_checks_for_mesh(control_plane, mesh_id, run_mesh_wide_check);
+        } else {
+            expect_galaxy_standard_rank_group_checks_for_mesh(control_plane, mesh_id);
         }
     }
 }

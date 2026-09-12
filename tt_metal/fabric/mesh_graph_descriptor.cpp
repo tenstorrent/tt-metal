@@ -224,31 +224,13 @@ std::vector<std::string> MeshGraphDescriptor::get_all_mesh_names() const {
     return out;
 }
 
-std::optional<InterMeshChannelPolicy> MeshGraphDescriptor::inter_mesh_policy() const {
-    // Anything that is not RELAXED is taken as STRICT, including INVALID_POLICY, which is what the rest of
-    // the stack has always defaulted to.
-    const auto from_proto = [](proto::Policy policy) {
-        return policy == proto::Policy::RELAXED ? InterMeshChannelPolicy::Relaxed : InterMeshChannelPolicy::Strict;
-    };
-
-    if (has_connections_of_type("FABRIC")) {
-        const auto& fabric_connections = connections_by_type("FABRIC");
-        if (!fabric_connections.empty()) {
-            return from_proto(get_connection(fabric_connections[0]).policy);
-        }
-    }
-
-    // No connections to read, so the top-level graph topology is the only place a policy can be stated.
-    const auto& top_level_instance = top_level();
-    if (top_level_instance.kind == NodeKind::Graph) {
-        const auto* graph_desc = std::get<const proto::GraphDescriptor*>(top_level_instance.desc);
-        if (graph_desc != nullptr && graph_desc->has_graph_topology() && graph_desc->graph_topology().has_channels()) {
-            return from_proto(graph_desc->graph_topology().channels().policy());
-        }
-    }
-
-    return std::nullopt;
+bool MeshGraphDescriptor::is_intra_mesh_policy_relaxed(MeshId mesh_id) const {
+    const auto it = intra_mesh_relaxed_policy_.find(mesh_id);
+    TT_FATAL(it != intra_mesh_relaxed_policy_.end(), "No intra-mesh policy for mesh_id {}", *mesh_id);
+    return it->second;
 }
+
+bool MeshGraphDescriptor::is_inter_mesh_policy_relaxed() const { return inter_mesh_relaxed_policy_; }
 
 std::unordered_map<MeshId, std::string> MeshGraphDescriptor::mesh_id_to_instance_name() const {
     std::unordered_map<MeshId, std::string> mesh_id_to_name;
@@ -454,7 +436,29 @@ void MeshGraphDescriptor::populate() {
 
     populate_connections();
 
+    populate_inter_mesh_policy();
+
     populate_pinnings();
+}
+
+void MeshGraphDescriptor::populate_inter_mesh_policy() {
+    inter_mesh_relaxed_policy_ = false;
+
+    if (has_connections_of_type("FABRIC")) {
+        const auto& fabric_connections = connections_by_type("FABRIC");
+        if (!fabric_connections.empty()) {
+            inter_mesh_relaxed_policy_ = get_connection(fabric_connections[0]).policy == proto::Policy::RELAXED;
+            return;
+        }
+    }
+
+    const auto& top_level_instance = top_level();
+    if (top_level_instance.kind == NodeKind::Graph) {
+        const auto* graph_desc = std::get<const proto::GraphDescriptor*>(top_level_instance.desc);
+        if (graph_desc != nullptr && graph_desc->has_graph_topology() && graph_desc->graph_topology().has_channels()) {
+            inter_mesh_relaxed_policy_ = graph_desc->graph_topology().channels().policy() == proto::Policy::RELAXED;
+        }
+    }
 }
 
 void MeshGraphDescriptor::populate_top_level_instance() {
@@ -1128,10 +1132,24 @@ void MeshGraphDescriptor::add_to_fast_lookups(const InstanceData& instance) {
 
     // Add to kind-specific lookups
     switch (instance.kind) {
-        case NodeKind::Mesh: mesh_instances_.push_back(instance.global_id); break;
+        case NodeKind::Mesh: {
+            mesh_instances_.push_back(instance.global_id);
+            const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
+            TT_FATAL(mesh_desc != nullptr, "Mesh descriptor is null for mesh instance {}", instance.name);
+            intra_mesh_relaxed_policy_[MeshId{instance.local_id}] =
+                mesh_desc->channels().policy() == proto::Policy::RELAXED;
+            break;
+        }
         case NodeKind::Graph: graph_instances_.push_back(instance.global_id); break;
         case NodeKind::Device: device_instances_.push_back(instance.global_id); break;
-        case NodeKind::Switch: switch_instances_.push_back(instance.global_id); break;
+        case NodeKind::Switch: {
+            switch_instances_.push_back(instance.global_id);
+            const auto* switch_desc = std::get<const proto::SwitchDescriptor*>(instance.desc);
+            TT_FATAL(switch_desc != nullptr, "Switch descriptor is null for switch instance {}", instance.name);
+            intra_mesh_relaxed_policy_[MeshId{instance.local_id}] =
+                switch_desc->channels().policy() == proto::Policy::RELAXED;
+            break;
+        }
     }
 }
 

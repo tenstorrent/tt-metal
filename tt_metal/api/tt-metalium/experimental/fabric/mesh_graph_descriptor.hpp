@@ -216,15 +216,13 @@ public:
         return get_instance(ids[0]).type;
     }
 
-    // The descriptor's inter-mesh channel policy, or nullopt when it states none. Taken from the first
-    // FABRIC connection, which speaks for all of them since validation forbids mixing policies within one
-    // descriptor, and falling back to the top-level graph topology when there are no connections.
-    //
-    // Callers must decide what "unspecified" means for them rather than reading it as STRICT: a descriptor
-    // that is silent should not override a sibling that is not. Per-connection policies are not supported
-    // downstream, which is why this is one value for the whole descriptor.
-    // https://github.com/tenstorrent/tt-metal/issues/49960
-    std::optional<InterMeshChannelPolicy> inter_mesh_policy() const;
+    // Intra-mesh channel policy for a mesh or switch instance, keyed by its local mesh id (same sources and
+    // semantics as MeshGraph::is_intra_mesh_policy_relaxed).
+    bool is_intra_mesh_policy_relaxed(MeshId mesh_id) const;
+
+    // Inter-mesh channel policy from the first FABRIC connection, or top-level graph topology when there are
+    // none. Defaults to STRICT when the descriptor states none (mirrors MeshGraph::is_inter_mesh_policy_relaxed).
+    bool is_inter_mesh_policy_relaxed() const;
 
     // Calculate chip count from device_topology dimensions for a mesh instance
     // Returns the product of all dimensions in device_topology.dims()
@@ -288,6 +286,8 @@ private:
     std::unordered_map<GlobalNodeId, std::vector<ConnectionId>> connections_by_source_device_id_;
 
     std::map<MeshId, std::vector<AsicPinningGroup>> pinnings_;
+    std::unordered_map<MeshId, bool> intra_mesh_relaxed_policy_;
+    bool inter_mesh_relaxed_policy_ = false;
 
     static void set_defaults(proto::MeshGraphDescriptor& proto);
     static std::vector<std::string> static_validate(
@@ -333,6 +333,7 @@ private:
 
     // Populate Connections
     void populate_connections();
+    void populate_inter_mesh_policy();
 
     void pre_populate_connections_lookups();
 
