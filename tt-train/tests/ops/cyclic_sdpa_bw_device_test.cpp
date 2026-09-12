@@ -101,6 +101,29 @@ struct Reference {
     xt::xarray<float> dQ, dK, dV;
 };
 
+// Inputs only, with no host-side gradients. make_reference does an O(N^3)
+// dense backward pass to check against, which at N = 7040 -- one schedule on
+// the whole 11x10 grid -- is 350 GFLOP and a couple of gigabytes on the host.
+// A timing run checks nothing, so it does not need any of that. L and D are
+// plausible rather than consistent, which changes what the kernel computes
+// not at all: the same tiles move and the same arithmetic runs on them.
+Reference make_reference_inputs_only(uint32_t N, uint32_t d) {
+    Reference r;
+    r.N = N;
+    r.d = d;
+    r.Q = random_bf16_matrix(N, d, 1);
+    r.K = random_bf16_matrix(N, d, 2);
+    r.V = random_bf16_matrix(N, d, 3);
+    r.dO = random_bf16_matrix(N, d, 4);
+    r.lse_tile = xt::zeros<float>({1u, 1u, N, kTile});
+    r.u_tile = xt::zeros<float>({1u, 1u, N, kTile});
+    for (uint32_t i = 0; i < N; ++i) {
+        r.lse_tile(0, 0, i, 0) = 1.0F + 0.001F * static_cast<float>(i % 97u);
+        r.u_tile(0, 0, i, 0) = 0.01F * static_cast<float>(i % 13u);
+    }
+    return r;
+}
+
 Reference make_reference(uint32_t N, uint32_t d) {
     Reference r;
     r.N = N;
@@ -456,17 +479,26 @@ Gradients run_relay(
     for (uint32_t g = 0; g < groups; ++g) {
         group_origin.push_back(CoreCoord{(g % groups_x) * grid_w, (g / groups_x) * grid_h});
     }
-    const auto last = group_origin.back();
-    TT_FATAL(
-        last.x + grid_w <= dev_grid.x && last.y + grid_h <= dev_grid.y,
-        "{} groups of {}x{} do not fit a {}x{} grid",
-        groups,
-        grid_w,
-        grid_h,
-        dev_grid.x,
-        dev_grid.y);
-    const auto region = CoreRange(
-        CoreCoord{0, 0}, CoreCoord{last.x + grid_w - 1, last.y + grid_h - 1});
+    // The union of the group rectangles, not their bounding box. A bounding
+    // box is wrong whenever the groups do not tile it exactly -- on an 11x10
+    // grid, eight groups of 2x2 occupy 8x2 and 4x2 across two rows, and the
+    // enclosing 10x4 box holds eight cores belonging to no group. Those cores
+    // still get the kernels, never get runtime arguments, and then wait on
+    // semaphores that nobody will ever post to: a hang, not an error.
+    std::vector<CoreRange> group_range;
+    for (const auto& o : group_origin) {
+        TT_FATAL(
+            o.x + grid_w <= dev_grid.x && o.y + grid_h <= dev_grid.y,
+            "group at ({}, {}) of {}x{} runs off a {}x{} grid",
+            o.x,
+            o.y,
+            grid_w,
+            grid_h,
+            dev_grid.x,
+            dev_grid.y);
+        group_range.emplace_back(o, CoreCoord{o.x + grid_w - 1, o.y + grid_h - 1});
+    }
+    const auto region = CoreRangeSet(group_range);
 
     const uint32_t bf16_tile = 2 * kTile * kTile;
     const uint32_t fp32_tile = 4 * kTile * kTile;
@@ -812,6 +844,14 @@ TEST(CyclicSdpaBwGroupTest, FourGroupsOfSixteen) {
     check_relay_groups(16, 4, 4, /* groups */ 4);
 }
 
+TEST(CyclicSdpaBwGroupTest, EightGroupsOfFour) {
+    check_relay_groups(4, 2, 2, /* groups */ 8);
+}
+
+TEST(CyclicSdpaBwGroupTest, SixteenGroupsOfFour) {
+    check_relay_groups(4, 2, 2, /* groups */ 16);
+}
+
 TEST(CyclicSdpaBwGroupTest, FourGroupsWithTallBlocks) {
     check_relay_groups(4, 2, 2, /* groups */ 4, /* Bt */ 2);
 }
@@ -1106,7 +1146,8 @@ TEST(CyclicSdpaBwProfileTest, DISABLED_ProfileTheRelay) {
 // The caveat is that sdpa_bw computes the forward statistics itself from an
 // attention output, while this port is handed L and D. Both are timed over
 // the backward call alone.
-void compare_with_sdpa_bw(uint32_t C, uint32_t grid_w, uint32_t grid_h, uint32_t Bt) {
+void compare_with_sdpa_bw(
+    uint32_t C, uint32_t grid_w, uint32_t grid_h, uint32_t Bt, uint32_t groups = 1) {
     using namespace tt::tt_metal;
     auto* device = &ttml::autograd::ctx().get_device();
     const auto grid = device->compute_with_storage_grid_size();
@@ -1115,17 +1156,20 @@ void compare_with_sdpa_bw(uint32_t C, uint32_t grid_w, uint32_t grid_h, uint32_t
     }
     const uint32_t N = 2u * C * Bt * kTile;
     const uint32_t d = 64;
-
-    // This port's number, at its own best block shape.
-    const auto ref = make_reference(N, d);
+    // Inputs only: nothing here is checked, and the dense host backward at
+    // these sizes costs more than the measurement.
+    const auto ref = make_reference_inputs_only(N, d);
     double relay_seconds = 0.0;
-    run_relay(C, ref, grid_w, grid_h, /*endpoint_sync=*/true, &relay_seconds, Bt);
+    run_relay(C, ref, grid_w, grid_h, /*endpoint_sync=*/true, &relay_seconds, Bt, groups);
 
-    // The repository's, on the same tensors.
-    const auto query = ttml::core::from_xtensor(as_4d(ref.Q), device);
-    const auto key = ttml::core::from_xtensor(as_4d(ref.K), device);
-    const auto value = ttml::core::from_xtensor(as_4d(ref.V), device);
-    const auto grad_output = ttml::core::from_xtensor(as_4d(ref.dO), device);
+    // The repository's, on the same tensors. With `groups` slices this is
+    // NC = groups for sdpa_bw too, which is where it has its own parallelism:
+    // it splits NC * St/2 pairs across the grid, so a short sequence with
+    // several heads fills it as readily as one long sequence does.
+    const auto query = ttml::core::from_xtensor(as_4d_repeated(ref.Q, groups), device);
+    const auto key = ttml::core::from_xtensor(as_4d_repeated(ref.K, groups), device);
+    const auto value = ttml::core::from_xtensor(as_4d_repeated(ref.V, groups), device);
+    const auto grad_output = ttml::core::from_xtensor(as_4d_repeated(ref.dO, groups), device);
     const auto forward = ttml::metal::sdpa_fw(
         query, key, value, ttml::metal::AttentionMaskType::Causal, std::nullopt, 0.0F,
         /*return_intermediates=*/true);
@@ -1148,10 +1192,10 @@ void compare_with_sdpa_bw(uint32_t C, uint32_t grid_w, uint32_t grid_h, uint32_t
     std::sort(samples.begin(), samples.end());
     const double sdpa_seconds = samples[samples.size() / 2];
 
-    std::cout << "  N=" << N << " d=" << d << " on " << grid_w << "x" << grid_h << " ("
-              << C << " cores, Bt=" << Bt << "): sdpa_bw " << sdpa_seconds * 1e6
-              << " us, cyclic " << relay_seconds * 1e6 << " us | cyclic "
-              << sdpa_seconds / relay_seconds << "x\n";
+    std::cout << "  N=" << N << " d=" << d << " NC=" << groups << " (" << groups
+              << " group(s) of " << C << " cores, Bt=" << Bt << "): sdpa_bw "
+              << sdpa_seconds * 1e6 << " us, cyclic " << relay_seconds * 1e6
+              << " us | cyclic " << sdpa_seconds / relay_seconds << "x\n";
 }
 
 // What running several heads side by side is worth. One 16-core schedule
@@ -1170,12 +1214,34 @@ TEST(CyclicSdpaBwTimingTest, DISABLED_ScaleTheGroups) {
     }
 }
 
+// Against the repository's own backward, on a full chip every time.
+//
+// All 64 cores are busy in every row; what varies is how the chip is cut up.
+// One schedule needs N = 2 C Bt 32 rows, so a shorter sequence means a
+// smaller schedule, and the chip is filled by running several of them side by
+// side -- which is also the shape sdpa_bw fills a grid with, since it splits
+// NC * St/2 pairs across the cores. So these are matched on cores, on shape,
+// and on total arithmetic.
 TEST(CyclicSdpaBwTimingTest, DISABLED_CompareWithTheRepositorysBackward) {
-    compare_with_sdpa_bw(64, 8, 8, /* Bt */ 1);
-    compare_with_sdpa_bw(32, 8, 4, /* Bt */ 2);
-    compare_with_sdpa_bw(16, 4, 4, /* Bt */ 4);
-    compare_with_sdpa_bw(64, 8, 8, /* Bt */ 2);
-    compare_with_sdpa_bw(64, 8, 8, /* Bt */ 4);
+    struct Shape {
+        uint32_t C, w, h, Bt, groups;
+    };
+    // The compute grid is 11x10, so a full chip is 110 cores, and these are
+    // the ways to tile it exactly: one schedule of 110, or 2, 5 and 10 groups
+    // whose rectangles are 11 wide. Everything here keeps all 110 busy.
+    for (const auto sh : {
+             Shape{11, 11, 1, 1, 10},   // NC=10, N=704
+             Shape{22, 11, 2, 1, 5},    // NC=5,  N=1408
+             Shape{55, 11, 5, 1, 2},    // NC=2,  N=3520
+             Shape{110, 11, 10, 1, 1},  // NC=1,  N=7040
+             Shape{22, 11, 2, 2, 5},    // NC=5,  N=2816
+             Shape{55, 11, 5, 2, 2},    // NC=2,  N=7040
+             Shape{110, 11, 10, 2, 1},  // NC=1,  N=14080
+             Shape{55, 11, 5, 4, 2},    // NC=2,  N=14080
+             Shape{110, 11, 10, 4, 1},  // NC=1,  N=28160
+         }) {
+        compare_with_sdpa_bw(sh.C, sh.w, sh.h, sh.Bt, sh.groups);
+    }
 }
 
 TEST(CyclicSdpaBwTimingTest, DISABLED_CompareTheThreeVariantsWithTallBlocks) {
