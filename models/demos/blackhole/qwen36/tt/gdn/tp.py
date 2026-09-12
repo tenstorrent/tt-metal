@@ -2109,7 +2109,9 @@ class TPGatedDeltaNet:
         row = ttnn.slice(self.rec_state, (u, 0, 0, 0), (u + 1, Nv, Dk, Dv))  # [1, Nv, Dk, Dv]
         cast = None if row.dtype == ttnn.float32 else ttnn.typecast(row, ttnn.float32)
         sharded = ttnn.to_memory_config(row if cast is None else cast, self._row_shard_memcfg(Nv * Dk, Dv))
-        ttnn.deallocate(row)
+        # B == 1: the full-range slice is a no-op that RETURNS rec_state itself; never free the live state.
+        if row.buffer_address() != self.rec_state.buffer_address():
+            ttnn.deallocate(row)
         if cast is not None:
             ttnn.deallocate(cast)
         ring4 = ttnn.reshape(self._spec_ring, (1, T * B * Nv, Dk, Dv))
