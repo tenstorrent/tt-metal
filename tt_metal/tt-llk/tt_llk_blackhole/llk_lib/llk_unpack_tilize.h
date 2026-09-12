@@ -93,8 +93,9 @@ inline void _llk_unpack_tilize_init_(
     // programmed here.
     TTI_SETADCXY(0b001, 0, 0, 0, 0, 0b1111);
 
-    // Program descriptor Z_dim = num_faces so Ch0 auto-addressing wraps at the
-    // correct face count. Mirrors the restore in _llk_unpack_tilize_uninit_.
+    // Descriptor Z_dim = num_faces, the per-operand baseline. It is consumed by the BFP
+    // exponent section size (XDim*YDim*ZDim*WDim), not by any address wrap: ZDim only
+    // multiplies ADC_ZW.W, which tilize clears to 0.
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, TILE_DESC_UPPER_HALFWORD_MASK>(num_faces);
 
     const std::uint32_t block_c_dim = ct_dim * (narrow_tile ? FACE_C_DIM : TILE_C_DIM);
@@ -356,13 +357,13 @@ inline void _llk_unpack_tilize_(
 /**
  * @brief Restore unpacker state after a tilize operation.
  *
- * Reverts the tile descriptor Z-dimension to default and rewrites the unpack config (clearing
- * tilize mode) so subsequent ops see a normal tile layout. x-start/x-end is transient and
- * reprogrammed by the next operation's init (see tt-llk#1036), so it is not restored here.
+ * Reverts the config @ref _llk_unpack_tilize_init_ wrote: tile-descriptor X/Z dim, unpack config
+ * word 0 (clearing tilize and haloize mode) and Tile_x_dim_cntx0. x-start/x-end and the MOP are
+ * reprogrammed by the next operation's init, so they are not restored here.
  *
  * @param unpack_dst_format: Destination data format to restore in the unpack config.
- * @param tensor_shape: Tile geometry; total_num_faces() restores the Z dimension (valid values
- *                      = <1, 2, 4>) and face_r_dim restores the canonical Tile_x_dim.
+ * @param tensor_shape: Tile geometry; total_num_faces() restores the descriptor Z dimension
+ *                      (valid values = <1, 2, 4>) and face_r_dim restores the canonical Tile_x_dim.
  * @note Call @ref _llk_unpack_tilize_init_ before this function.
  */
 inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
@@ -373,17 +374,11 @@ inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, co
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
-    // Restore tile-descriptor Z and X dim to the canonical baseline programmed by
-    // configure_unpack_AB. Z-dim equals the operand's num_faces; X-dim is 0 because the
-    // per-context override in Tile_x_dim_cntx0 (set below) is what the unpacker actually
-    // consumes for srcA. The non-8-bit init path mutates X-dim (to face_r_dim*num_faces*FACE_C_DIM)
-    // so it must be reverted here too to keep the operand operation-restorable.
+    // X-dim is 0 because Tile_x_dim_cntx0 below is what the unpacker consumes for srcA.
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, TILE_DESC_UPPER_HALFWORD_MASK>(num_faces);
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32, 16, TILE_DESC_UPPER_HALFWORD_MASK>(CANONICAL_UNPA_TILE_X_DIM);
 
-    // The unpack-config[0] write below also clears tileize_mode, haloize_mode, and the
-    // other word-0 fields back to 0, mirroring what the zero-initialised config struct
-    // produces in configure_unpack_AB.
+    // Zeroed config clears tileize_mode and haloize_mode along with the rest of word 0.
     unpack_config_u config = {0};
 
     config.f.out_data_format = unpack_dst_format;
@@ -393,9 +388,6 @@ inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, co
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
     // Load unpack config[0]
     TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC0_REG2_Out_data_format_ADDR32);
-    // Restore Tile_x_dim_cntx0 to the canonical face_dim-derived value. The previous
-    // FACE_DIM_16x16 GPR was correct only for face_r_dim=16; tiny tiles need a
-    // face_r_dim-aware value to match the baseline programmed by configure_unpack_AB.
     cfg_reg_rmw_tensix<THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32, 0, 0xffffffff>(canonical_unpA_tile_x_dim_cntx(face_r_dim));
     TTI_NOP;
 }
@@ -611,9 +603,9 @@ inline void _llk_unpack_tilizeA_B_(
 /**
  * @brief Restore unpacker state after a tilize-A-with-unpack-B operation.
  *
- * Reverts the SrcA Y counter and rewrites the unpack config and tile X-dim back to the default
- * 16x16 face layout. x-start/x-end is transient and reprogrammed by the next operation's init
- * (see tt-llk#1036), so it is not restored here.
+ * Reverts the config @ref _llk_unpack_tilizeA_B_init_ wrote: unpack config word 0 (clearing
+ * haloize mode) and the SrcA Y stride. x-start/x-end and the MOP are reprogrammed by the next
+ * operation's init, so they are not restored here.
  *
  * @param unpack_dst_format: Destination data format to restore in the unpack config.
  * @note Call @ref _llk_unpack_tilizeA_B_init_ before this function.
@@ -634,11 +626,6 @@ inline void _llk_unpack_tilizeA_B_uninit_(const std::uint32_t unpack_dst_format)
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
     // Load unpack config[0]
     TTI_WRCFG(p_gpr_unpack::TMP0, 0, THCON_SEC0_REG2_Out_data_format_ADDR32);
-    // GPR preloaded with  16 | (16 << 16)}
-    TTI_WRCFG(p_gpr_unpack::FACE_DIM_16x16, 0, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
-    // Restore canonical srcA Y-stride. _llk_unpack_tilizeA_B_init_ mutates it to a per-op
-    // value (SCALE_DATUM_SIZE(unpack_dst_format, FACE_C_DIM)); restoring the baseline
-    // programmed by configure_unpack_AB keeps this op from leaking Y-stride to the next op.
     cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32, UNP0_ADDR_CTRL_XY_REG_0_Ystride_SHAMT, UNP0_ADDR_CTRL_XY_REG_1_Ystride_MASK>(
         canonical_unpA_y_stride(unpack_dst_format));
     TTI_NOP;
