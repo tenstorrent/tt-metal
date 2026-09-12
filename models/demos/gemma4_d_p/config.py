@@ -35,9 +35,10 @@ class MeshConfig:
         return self.mesh_shape[self.tp_axis]
 
     def shard_mapper(self, mesh_device, tensor_dim=None, mesh_dims=None):
-        return ttnn.ShardTensor2dMesh(
-            mesh_device, mesh_device.shape, dims=mesh_dims if mesh_dims is not None else (None, tensor_dim)
-        )
+        if mesh_dims is None:
+            mesh_dims = [None, None]
+            mesh_dims[self.tp_axis] = tensor_dim
+        return ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=mesh_dims)
 
     def column_parallel(self, mesh_device):
         return self.shard_mapper(mesh_device, tensor_dim=-1)

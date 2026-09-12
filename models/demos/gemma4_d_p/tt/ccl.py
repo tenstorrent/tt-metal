@@ -8,6 +8,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.gemma4_d_p.config import MeshConfig
 
 
 def default_num_links():
@@ -213,14 +214,14 @@ class CCLManager:
         CP rows — the layout the ring op reconstructs into.
 
         ``n_kv_local`` is the per-device head count. The buffer is built at the global
-        size ``n_kv_local * tp_cols`` and sharded across the TP columns so each device
+        size ``n_kv_local * tp_degree`` and sharded across the TP columns so each device
         ends up with its own ``n_kv_local`` heads. Passing the local count straight to
         the sharder fails ("number of chunks N to match the mesh dimension size"), and
         it also has to work for kv-replicated layers where the model's global KV head
         count is smaller than the TP width.
         """
-        rows, cols = tuple(self.mesh_device.shape)
-        n_kv_global = n_kv_local * cols
+        mesh_config = MeshConfig(self.mesh_device.shape)
+        n_kv_global = n_kv_local * mesh_config.tp_degree
         cache_key = (key, n_kv_global, seq, head_dim, str(dtype), str(memory_config))
         if cache_key not in self._ring_gather_buffers:
             self._ring_gather_buffers[cache_key] = ttnn.from_torch(
@@ -229,7 +230,7 @@ class CCLManager:
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=memory_config,
-                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=(rows, cols), dims=[None, 1]),
+                mesh_mapper=mesh_config.shard_mapper(self.mesh_device, tensor_dim=1),
             )
         return self._ring_gather_buffers[cache_key]
 

@@ -49,7 +49,6 @@ def _load_full_weights():
 
 
 def _mesh_config(mesh_device):
-    tp = mesh_device.shape[1]
     return MeshConfig(mesh_device.shape)
 
 
@@ -141,7 +140,7 @@ def _cp_gather_torch(tensor, mesh_device, mesh_config):
     The output of a CP prefill is sharded along the sequence axis and replicated
     across TP (the TP all-reduce leaves every column identical), so take one device
     per CP row and concatenate along the sequence. Device tensors come back in the
-    mesh's row-major order, so CP row r at column 0 is index ``r * num_cols``.
+    mesh's row-major order; the CP axis determines the stride between ranks.
 
     Falls back to device 0 alone when CP is off, matching ``_first_device_torch``.
     """
@@ -151,8 +150,8 @@ def _cp_gather_torch(tensor, mesh_device, mesh_config):
     if cp <= 1:
         return ttnn.to_torch(shards[0]).float()
 
-    num_cols = mesh_device.shape[1]
-    rows = [ttnn.to_torch(shards[r * num_cols]).float() for r in range(cp)]
+    cp_stride = mesh_config.tp_degree if mesh_config.cp_axis == 0 else 1
+    rows = [ttnn.to_torch(shards[r * cp_stride]).float() for r in range(cp)]
     return torch.cat(rows, dim=-2)
 
 
@@ -176,14 +175,15 @@ def _build_prefill_model(mesh_device, model_path, chunk_size, context_len=None):
     mesh_config = _mesh_config(mesh_device)
     if mesh_config.cp_degree <= 1:
         raise ValueError("This demo requires context parallel prefill")
-    tp = mesh_device.shape[1]
     context_len = context_len or chunk_size
     max_seq_len = int(os.environ.get("GEMMA4_MAX_SEQ_LEN", context_len))
 
     hf_config = Gemma4ModelArgs.load_hf_config(model_path)
     num_layers = Gemma4ModelArgs.from_hf_config(hf_config).num_hidden_layers
 
-    logger.info(f"Creating Gemma4 ({num_layers} layers, TP={tp}, max_seq_len={max_seq_len})...")
+    logger.info(
+        f"Creating Gemma4 ({num_layers} layers, CP={mesh_config.cp_degree}, TP={mesh_config.tp_degree}, max_seq_len={max_seq_len})..."
+    )
     t0 = time.time()
     model_args, model, kv_cache, _state_dict = create_tt_model(
         mesh_device=mesh_device,
