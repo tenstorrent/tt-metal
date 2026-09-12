@@ -14,6 +14,16 @@
 
 namespace ttnn::operations::experimental::quasar {
 
+// Output-dtype rule: FLOAT32/UINT16 pass through; every other input dtype collapses to BFLOAT16 on RM output.
+tt::tt_metal::DataType fold_output_dtype(tt::tt_metal::DataType input_dtype);
+
+// Bytes the tile-native writer's per-super-block RM scratch needs (one output row of contiguous sticks).
+uint64_t tile_native_fold_scratch_bytes(const Tensor& input_tensor, uint32_t stride_h, uint32_t stride_w);
+
+// Tile-native tiled factory needs `scratch + src0 + src1 CBs` to fit per-core L1 (src0/src1 scale with C_tiles);
+// if not, composite untilize→RM handles the same case with 1-stick scratch.
+bool tile_native_fold_scratch_fits_l1(const Tensor& input_tensor, uint32_t stride_h, uint32_t stride_w);
+
 struct Fold {
     struct operation_attributes_t {
         uint32_t stride_h{};

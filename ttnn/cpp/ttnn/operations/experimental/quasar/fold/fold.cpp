@@ -633,9 +633,17 @@ Tensor fold(
     const auto in_channels = shape[3];
     const bool was_tiled = processed_tensor.layout() == Layout::TILE;
 
-    // The interleaved fold kernels operate on row-major data, so untilize first.
+    // Tile-native writer hits the NoC self-copy path only when c_bytes is 16B-aligned; sub-16B c_bytes
+    // fall to per-pixel CPU memmove and lose ~2x to untilize→RM for small C. Scratch-overflow shapes
+    // route the same way (RM path is 1-stick).
     if (was_tiled) {
-        processed_tensor = ttnn::operations::experimental::quasar::to_layout(processed_tensor, Layout::ROW_MAJOR);
+        const uint32_t out_elem_bytes = tt::datum_size(datatype_to_dataformat_converter(
+            ttnn::operations::experimental::quasar::fold_output_dtype(processed_tensor.dtype())));
+        const uint32_t c_bytes = processed_tensor.logical_shape()[-1] * out_elem_bytes;
+        if (c_bytes % 16 != 0 || !ttnn::operations::experimental::quasar::tile_native_fold_scratch_fits_l1(
+                                     processed_tensor, stride_h, stride_w)) {
+            processed_tensor = ttnn::operations::experimental::quasar::to_layout(processed_tensor, Layout::ROW_MAJOR);
+        }
     }
 
     auto output_tensor = ttnn::prim::qsr::fold(processed_tensor, stride_h, stride_w);
