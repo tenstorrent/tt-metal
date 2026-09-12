@@ -3539,7 +3539,16 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             if page_table.shape[1] < num_blocks:
                 padding = torch.ones(1, num_blocks - page_table.shape[1], dtype=torch.int32) * -1
                 page_table = torch.cat([page_table, padding], dim=1)
-            return page_table[:, :num_blocks]
+            page_table = page_table[:, :num_blocks].clone()
+            # The prompt only owns blocks for ``prefill_len`` tokens; the entries between that and the padded prefill
+            # width are whatever vLLM's block-table row held before (a longer request that occupied the same row), i.e.
+            # ids of blocks that may now belong to this or another live request. ``paged_fill_cache`` writes the padded
+            # positions too, so leaving them in would overwrite live KV with pad-token garbage (seen as intermittent
+            # word-salad replies after a burst / long-context load). -1 is the kernel's skip sentinel.
+            owned_blocks = num_blocks_in_seq(prefill_len, block_size)
+            if owned_blocks < num_blocks:
+                page_table[:, owned_blocks:] = -1
+            return page_table
 
     ## Destructor
 
