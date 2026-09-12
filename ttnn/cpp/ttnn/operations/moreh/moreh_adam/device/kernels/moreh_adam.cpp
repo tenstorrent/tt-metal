@@ -146,8 +146,8 @@ void kernel_main() {
         tile_regs_acquire();
         copy_tile_init_with_dt(dfb_scalar_args_obj);
         copy_tile(cb_scalar_args, beta2_tile, dst0);
-        power_tile_init();
-        power_tile(dst0, step);
+        power_iterative_tile_init();
+        power_iterative_tile(dst0, step);
         tile_regs_commit();
 
         tile_regs_wait();
@@ -220,10 +220,10 @@ void kernel_main() {
 #endif
         sqrt_tile_init();
         sqrt_tile(dst0);
-        pack_tile_with_dt(dst0, dfb_tmp1_obj);
         tile_regs_commit();
 
         tile_regs_wait();
+        pack_tile_with_dt(dst0, dfb_tmp1_obj);
         dfb_tmp1_obj.pop_front(onetile);
         dfb_tmp1_obj.push_back(onetile);
 #ifdef AMSGRAD
@@ -255,8 +255,8 @@ void kernel_main() {
         dfb_tmp2_obj.reserve_back(onetile);
         copy_tile_init_with_dt(dfb_scalar_args_obj);
         copy_tile(cb_scalar_args, beta1_tile, dst0);
-        power_tile_init();
-        power_tile(dst0, step);
+        power_iterative_tile_init();
+        power_iterative_tile(dst0, step);
         tile_regs_commit();
 
         tile_regs_wait();
