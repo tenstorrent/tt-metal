@@ -85,6 +85,14 @@ FORCE_INLINE KernelProfilerNocEventMetadata createNocEventDstTrailer(uint32_t sr
     return ev_md;
 }
 
+constexpr kernel_profiler::PacketTypes NOC_EVENT_PACKET_TYPE =
+    kernel_profiler::NON_DROPPING ? kernel_profiler::PacketTypes::TS_DATA_16B : kernel_profiler::PacketTypes::TS_DATA;
+constexpr uint32_t NOC_EVENT_PACKET_SLOTS = kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE *
+                                            (1 + kernel_profiler::TimestampedDataSize<NOC_EVENT_PACKET_TYPE>::size);
+static_assert(
+    kernel_profiler::TimestampedDataSize<NOC_EVENT_PACKET_TYPE>::size != 0,
+    "NOC events need a packet type with a known data count to size the flush reservation");
+
 template <
     KernelProfilerNocEventMetadata::NocEventType noc_event_type,
     bool posted,
@@ -108,20 +116,17 @@ FORCE_INLINE void recordNocEvent(
     local_noc_event.noc_type =
         (noc == 1) ? KernelProfilerNocEventMetadata::NocType::NOC_1 : KernelProfilerNocEventMetadata::NocType::NOC_0;
 
+    kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>(NOC_EVENT_PACKET_SLOTS - 1);
+
     if constexpr (kernel_profiler::NON_DROPPING) {
         KernelProfilerNocEventMetadata dst_data =
             createNocEventDstTrailer<noc_event_type, posted>(local_addr, dst_local_addr);
 
-        kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>(
-            kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 3);
-
-        kernel_profiler::timeStampedData<
-            STATIC_ID,
-            kernel_profiler::DoingDispatch::DISPATCH,
-            kernel_profiler::PacketTypes::TS_DATA_16B>(ev_md.asU64(), dst_data.asU64());
+        kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH, NOC_EVENT_PACKET_TYPE>(
+            ev_md.asU64(), dst_data.asU64());
     } else {
-        kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
-        kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
+        kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH, NOC_EVENT_PACKET_TYPE>(
+            ev_md.asU64());
     }
 }
 
@@ -152,21 +157,18 @@ FORCE_INLINE void recordMulticastNocEvent(
     local_noc_event.noc_type =
         (noc == 1) ? KernelProfilerNocEventMetadata::NocType::NOC_1 : KernelProfilerNocEventMetadata::NocType::NOC_0;
 
+    kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>(NOC_EVENT_PACKET_SLOTS - 1);
+
     if constexpr (kernel_profiler::NON_DROPPING) {
         uint32_t dst_local_addr = decode_noc_addr_to_local_addr(dst_noc_addr);
         KernelProfilerNocEventMetadata dst_data =
             createNocEventDstTrailer<noc_event_type, posted>(local_addr, dst_local_addr);
 
-        kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>(
-            kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 3);
-
-        kernel_profiler::timeStampedData<
-            STATIC_ID,
-            kernel_profiler::DoingDispatch::DISPATCH,
-            kernel_profiler::PacketTypes::TS_DATA_16B>(ev_md.asU64(), dst_data.asU64());
+        kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH, NOC_EVENT_PACKET_TYPE>(
+            ev_md.asU64(), dst_data.asU64());
     } else {
-        kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
-        kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
+        kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH, NOC_EVENT_PACKET_TYPE>(
+            ev_md.asU64());
     }
 }
 
