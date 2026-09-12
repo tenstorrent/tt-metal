@@ -189,8 +189,8 @@ FORCE_INLINE void get_and_propagate_adder_cube(
         WriteCBGuard cb_output_write_guard{cb_output, ONE_TILE};
         tile_regs_acquire();
 
-        // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
-        compute_kernel_hw_startup(cb_cumsum_stage_X, cb_axis_3_buffer_read, cb_output);
+        reconfig_data_format(cb_cumsum_stage_X, cb_axis_3_buffer_read);
+        rearm_dest_sync(cb_output);
         bcast_init<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(cb_cumsum_stage_X, cb_axis_3_buffer_read);
 
         constexpr uint32_t LAST_ROW_INDEX = TILE_HEIGHT - 1;
