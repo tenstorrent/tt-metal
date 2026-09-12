@@ -517,8 +517,9 @@ void kernel_main() {
              */
 
             // == 1 ==
-            // skip for the first two chunks (2 chunks are allocated, and both are initially empty)
-            if (num_chunks_sent >= 2) {
+            // Two chunks fit in the matmul input double buffer, but the next tilize linked mcast must not overlap the
+            // current chunk's matmul/A2A/writeback traffic on NoC1.
+            if (num_chunks_sent >= 1) {
                 // wait_min as MM may signal twice (once per buffer slot) before we acknowledge the first (empty) buffer
                 // slot
                 matmul_chunk_available_sem.wait_min(matmul_chunk_available_semaphore_wait_value);
