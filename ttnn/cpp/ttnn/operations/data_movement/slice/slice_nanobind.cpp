@@ -164,19 +164,6 @@ void bind_slice_descriptor(nb::module_& mod) {
             &ttnn::prim::SliceDeviceOperation::compute_output_specs,
             nb::arg("operation_attributes"),
             nb::arg("tensor_args"));
-
-    nb::class_<ttnn::prim::SliceTileProgramFactory>(mod, "SliceTileProgramFactory")
-        .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::SliceParams& operation_attributes,
-               const ttnn::prim::SliceInputs& tensor_args,
-               Tensor& tensor_return_value) {
-                return ttnn::prim::SliceTileProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"));
 }
 
 }  // namespace ttnn::operations::data_movement::detail
