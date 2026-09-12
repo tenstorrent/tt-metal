@@ -11,13 +11,16 @@
 //
 //   A. Its OWN assignments — its plane's share of this chip's movements. Each destination is either our
 //      immediate neighbour (=> CMD_FINAL_WRITE, the neighbour writes it straight into its output region) or
-//      further away (=> CMD_FORWARD into the neighbour's forwarding buffer). A forwarding assignment ends
-//      with a SENTINEL token so the downstream reader knows where the chunk stops.
+//      further away (=> CMD_FORWARD into the neighbour's forwarding buffer).
 //
-//   B. The chunks that arrived in OUR quarter of the forwarding buffer, written by the upstream chip's
+//   B. The chunks that arrived in OUR region of the forwarding buffer, written by the upstream chip's
 //      sender on the same (plane, direction). Each is pushed one more hop: final-write if its destination
-//      is now our neighbour, re-forward otherwise. A sentinel is passed on only when re-forwarding — a final
-//      write leaves no chunk downstream to terminate.
+//      is now our neighbour, re-forward otherwise.
+//
+// The forwarding buffer is DENSE: a chunk occupies exactly as many pages as it has tokens, and starts where
+// the previous one ended. Nothing is exchanged to make the writer and the reader of a region agree on those
+// boundaries — both compute every chunk's length from the same replicated expert_offsets, using the chunk
+// descriptors the host packed in the same order the upstream sender emits them.
 //
 // The stream ends with a CMD_END slot, because its length is not knowable up front: how much this core
 // re-forwards depends on chunk sizes decided upstream.
@@ -64,11 +67,11 @@ constexpr uint32_t meta_pads_addr = ct.control_addr;
 constexpr uint32_t META_READ_BYTES = cmbf2d::META_PAD_STRIDE;  // fill the whole pad; the record is shorter
 constexpr uint32_t control_tables_addr = ct.control_addr + ct.meta_prefetch_cap * cmbf2d::META_PAD_STRIDE;
 
-// Page of a chunk within OUR quarter. The same formula serves both directions: the quarter index is ours
-// either way, only the chip differs, and the buffer's device-local address is uniform across the mesh.
-constexpr uint32_t fwd_page(uint32_t chunk, uint32_t token) {
-    return ct.my_quarter * ct.fwd_chunks_per_quarter * ct.fwd_pages_per_chunk + chunk * ct.fwd_pages_per_chunk + token;
-}
+// Page of our region of the forwarding buffer. The same formula serves both directions: the stream index
+// is ours either way, only the chip differs, and the buffer's device-local address is uniform across the
+// mesh. Chunk boundaries do not appear here — a chunk is just a run of consecutive pages, so both sides
+// address the region by a single running page count.
+constexpr uint32_t fwd_page(uint32_t page_in_stream) { return ct.my_stream * ct.fwd_pages_per_stream + page_in_stream; }
 
 // Our slice of a run: of [begin, end) take [begin + n*idx/count, begin + n*(idx+1)/count). Integer
 // arithmetic, so consecutive slices meet exactly — no gaps, no overlap, whatever n is.
@@ -85,6 +88,16 @@ bool is_direct(uint32_t dst_chip_id) { return dst_chip_id == ct.nbr_chip_id; }
 volatile tt_l1_ptr cmbf2d::FwdMetadata* slot_metadata(uint32_t slot) {
     return reinterpret_cast<volatile tt_l1_ptr cmbf2d::FwdMetadata*>(slot_addr_of(slot) + ct.token_size_bytes);
 }
+
+cmbf2d::ChunkDescriptor forwarding_chunk(uint32_t chunk) {
+    return cmbf2d::ChunkDescriptor::from_words(
+        &kernel_compile_time_args[ct.forwarding_chunk_base + chunk * cmbf2d::CHUNK_WORDS]);
+}
+
+// Experts hosted by any chip on our ring. The dispatch group's experts are laid out in dispatch-group-index order, so
+// our own base locates every other chip's — which is what lets us size a chunk we neither produced nor receive.
+constexpr uint32_t group_expert_base = ct.my_expert_base - ct.my_dg_index * ct.experts_per_chip;
+constexpr uint32_t expert_base(uint32_t dg_index) { return group_expert_base + dg_index * ct.experts_per_chip; }
 
 // Every DRAM buffer this kernel touches, so the phases take one argument instead of seven.
 struct Dram {
@@ -109,7 +122,7 @@ Dram open_dram() {
         TensorAccessor(ct.dram_expert_offsets_args, rt.dram_expert_offsets)};
 }
 
-// Where origin chip `row`'s tokens for expert `e` start, and where they end. The runs are laid out in
+// Where origin chip `dg_index`'s tokens for expert `e` start, and where they end. The runs are laid out in
 // origin-chip order inside the expert's region, so one run ends where the next begins; the last one ends
 // at the expert's total count past its region base, which is the only thing expert_offsets cannot say.
 struct ControlTables {
@@ -117,10 +130,10 @@ struct ControlTables {
     volatile tt_l1_ptr uint32_t* counts;
     volatile tt_l1_ptr uint32_t* region;
 
-    uint32_t run_begin(uint32_t row, uint32_t e) const { return offsets[row * ct.num_routed_experts + e]; }
-    uint32_t run_end(uint32_t row, uint32_t e) const {
-        return row + 1 < ct.dispatch_group_size ? offsets[(row + 1) * ct.num_routed_experts + e]
-                                                : region[e] + counts[e];
+    uint32_t run_begin(uint32_t dg_index, uint32_t e) const { return offsets[dg_index * ct.num_routed_experts + e]; }
+    uint32_t run_end(uint32_t dg_index, uint32_t e) const {
+        return dg_index + 1 < ct.dispatch_group_size ? offsets[(dg_index + 1) * ct.num_routed_experts + e]
+                                                     : region[e] + counts[e];
     }
 };
 
@@ -147,7 +160,7 @@ ControlTables read_control_tables(const Dram& dram) {
 }
 
 // Everything the phases share: the ring's flow control, where the next downstream chunk goes, and how far
-// into our own quarter we have consumed.
+// into our own region we have consumed.
 //
 // `published` counts slots ANNOUNCED to the sender; `claimed` counts slots we have taken. They differ
 // because reads are issued in batches: a batch's slots are all claimed and their reads all issued before
@@ -164,11 +177,12 @@ struct Reader {
     uint32_t claimed = 0;
     // Publishing is batched so the atomic is amortised, matching the sender's batch.
     uint32_t pending_publish = 0;
-    // Which chunk of the neighbour's quarter the next forwarding batch goes into. Our own forwarding
-    // assignments take 0.., then our re-forwards continue from there — and the downstream reader walks its
-    // chunks in exactly that order, which is what makes the two agree with no negotiation.
-    uint32_t out_chunk = 0;
-    // Forwarded pages (sentinels included) taken out of our quarter.
+    // How far into the downstream chip's region we have written, and where the chunk in progress ends. The
+    // downstream reader walks its chunks in exactly the order we emit them, sizing each the same way we do,
+    // so this single counter is all the two chips need to agree on to place every page.
+    uint32_t out_page = 0;
+    uint32_t out_chunk_end = 0;
+    // Pages taken out of our own region, which for the same reason IS the page the next chunk starts at.
     uint32_t consumed = 0;
 
     void flush_publish() {
@@ -214,10 +228,34 @@ struct Reader {
         noc_async_read_barrier();
     }
 
+    // The token count of one forwarding chunk: the destination chip's tokens sitting under the origin
+    // chip's experts, narrowed to the share the two chips agreed on. Every term is readable on any chip of
+    // the ring, which is what makes a chunk's length agree between the chip that writes it and the chip that
+    // reads it without either telling the other.
+    uint32_t chunk_tokens(const cmbf2d::ChunkDescriptor& desc) const {
+        const uint32_t base = expert_base(desc.origin_dg_index);
+        uint32_t tokens = 0;
+        for (uint32_t le = 0; le < ct.experts_per_chip; le++) {
+            const uint32_t e = base + le;
+            const uint32_t begin = ctl.run_begin(desc.dst_dg_index, e);
+            const uint32_t n = ctl.run_end(desc.dst_dg_index, e) - begin;
+            tokens += slice_begin(begin, n, desc.split_idx + 1, desc.split_count) -
+                      slice_begin(begin, n, desc.split_idx, desc.split_count);
+        }
+        return tokens;
+    }
+
+    // Point one slot at `page` of the downstream chip's region. The chunk's last page is marked so the
+    // sender bumps that chip's arrival counter right there, rather than leaving a partial bump batch
+    // uncounted until end of stream.
+    void aim_at_downstream(volatile tt_l1_ptr cmbf2d::FwdMetadata* metadata, uint32_t page) const {
+        metadata->cmd = (page + 1 == out_chunk_end) ? cmbf2d::CMD_FORWARD_END : cmbf2d::CMD_FORWARD;
+        metadata->this_addr = dram.fwd.get_noc_addr(fwd_page(page));
+    }
+
     // Issues one token's read and fills its metadata but does NOT barrier or announce it: the caller does
-    // both once per batch, so several reads are in flight together. `chunk_page` is where the token goes in
-    // the downstream forwarding chunk, and is ignored for a direct write.
-    void issue_token(uint32_t dst_chip_id, uint32_t in_page, uint32_t pad, uint32_t chunk_page) {
+    // both once per batch, so several reads are in flight together.
+    void issue_token(uint32_t dst_chip_id, uint32_t in_page, uint32_t pad) {
         const uint32_t slot = claim_slot();
         volatile tt_l1_ptr cmbf2d::FwdMetadata* metadata = slot_metadata(slot);
         volatile tt_l1_ptr uint32_t* meta =
@@ -227,25 +265,22 @@ struct Reader {
         // Everything below runs while that read is in flight, which is the point of prefetching the metadata.
         // Record layout: [0] linearized_coord, [1] token_idx, [2] topk_idx; the destination chip is already
         // known from the run this token came out of.
-        const uint32_t out_page = meta[1] * ct.num_experts_per_tok + meta[2];
+        const uint32_t token_out_page = meta[1] * ct.num_experts_per_tok + meta[2];
         // Computed once and then travelling with the token for however many hops it takes. Valid on any chip
         // because the output buffer's base address and interleaved bank mapping are uniform across the mesh.
-        const uint64_t final_addr = dram.out.get_noc_addr(out_page);
+        const uint64_t final_addr = dram.out.get_noc_addr(token_out_page);
         if (is_direct(dst_chip_id)) {
             metadata->cmd = cmbf2d::CMD_FINAL_WRITE;
             metadata->this_addr = final_addr;
         } else {
             metadata->final_addr = final_addr;
             metadata->dst_chip = (uint64_t)dst_chip_id;
-            metadata->cmd = cmbf2d::CMD_FORWARD;
-            metadata->this_addr = dram.fwd.get_noc_addr(fwd_page(out_chunk, chunk_page));
+            aim_at_downstream(metadata, out_page++);
         }
     }
 
     // Stage [lo, hi) of one run: prefetch their metadata, then issue and announce them `batch` at a time.
-    // Returns how many were staged, which is what advances the caller's position in the downstream chunk.
-    uint32_t stage_run_slice(uint32_t dst_chip_id, uint32_t lo, uint32_t hi, uint32_t chunk_page) {
-        uint32_t staged = 0;
+    void stage_run_slice(uint32_t dst_chip_id, uint32_t lo, uint32_t hi) {
         for (uint32_t base = lo; base < hi; base += ct.meta_prefetch_cap) {
             const uint32_t end = (hi - base) > ct.meta_prefetch_cap ? base + ct.meta_prefetch_cap : hi;
             prefetch_metadata(base, end);
@@ -253,38 +288,13 @@ struct Reader {
             for (uint32_t q = base; q < end;) {
                 const uint32_t k = (end - q) > ct.batch ? ct.batch : (end - q);
                 for (uint32_t j = 0; j < k; j++) {
-                    issue_token(dst_chip_id, q + j, q + j - base, chunk_page + staged);
-                    if (!is_direct(dst_chip_id)) {
-                        staged++;
-                    }
+                    issue_token(dst_chip_id, q + j, q + j - base);
                 }
                 noc_async_read_barrier();  // every token of the ct.batch is in L1 before any is announced
                 publish_n(k);
                 q += k;
             }
         }
-        return staged;
-    }
-
-    // Sentinel: terminates this chunk for the downstream reader. Carries no usable token, so no DRAM read —
-    // only the metadata matters. Chunk lengths are data-dependent now, which is exactly what the sentinel
-    // exists for: nothing downstream assumes a chunk is full.
-    //
-    // It carries the chunk's destination in the otherwise-unused FINAL_ADDR word, because from phase 10 a
-    // chunk can be EMPTY — a sender's slice of a run may hold no tokens at all. The relay decides
-    // final-write-vs-re-forward from the first token it sees, and an empty chunk has none, so without this
-    // the decision would be undecidable and the chunk count downstream would drift. Both words travel with a
-    // forwarded packet (token + 16 bytes), so it propagates hop to hop for free.
-    void close_chunk(uint32_t dst_chip_id, uint32_t chunk_page) {
-        volatile tt_l1_ptr cmbf2d::FwdMetadata* metadata = slot_metadata(claim_slot());
-        metadata->final_addr = (uint64_t)dst_chip_id;
-        metadata->dst_chip = cmbf2d::SENTINEL_DST_CHIP;
-        metadata->cmd = cmbf2d::CMD_FORWARD;
-        metadata->this_addr = dram.fwd.get_noc_addr(fwd_page(out_chunk, chunk_page));
-        published++;
-        pending_publish++;
-        flush_publish();  // a chunk boundary: do not let it sit unpublished
-        out_chunk++;
     }
 
     // One own assignment: everything this chip owes ONE destination chip, over all the experts it hosts,
@@ -292,24 +302,24 @@ struct Reader {
     // one (this chip -> that chip) term, and which expert a token sat under is not something the forwarding
     // protocol needs to know.
     void do_own_assignment(uint32_t a) {
-        const uint32_t dst_chip_id = kernel_compile_time_args[ct.assignment_base + a * cmbf2d::ASSIGNMENT_WORDS + 0];
-        const uint32_t dst_row = kernel_compile_time_args[ct.assignment_base + a * cmbf2d::ASSIGNMENT_WORDS + 1];
-        const uint32_t split_idx = kernel_compile_time_args[ct.assignment_base + a * cmbf2d::ASSIGNMENT_WORDS + 2];
-        const uint32_t split_count = kernel_compile_time_args[ct.assignment_base + a * cmbf2d::ASSIGNMENT_WORDS + 3];
-        uint32_t chunk_page = 0;  // position in the downstream chunk, continuous across our experts
+        const uint32_t w = ct.assignment_base + a * cmbf2d::ASSIGNMENT_WORDS;
+        const uint32_t dst_chip_id = kernel_compile_time_args[w + 0];
+        const cmbf2d::ChunkDescriptor desc{
+            ct.my_dg_index,
+            kernel_compile_time_args[w + 1],
+            kernel_compile_time_args[w + 2],
+            kernel_compile_time_args[w + 3]};
+        const bool direct = is_direct(dst_chip_id);
+        // Sized before the first page is placed, because the last page has to be recognisable when it comes.
+        out_chunk_end = out_page + (direct ? 0 : chunk_tokens(desc));
         for (uint32_t le = 0; le < ct.experts_per_chip; le++) {
             const uint32_t e = ct.my_expert_base + le;
-            const uint32_t begin = ctl.run_begin(dst_row, e);
-            const uint32_t n = ctl.run_end(dst_row, e) - begin;
-            chunk_page += stage_run_slice(
+            const uint32_t begin = ctl.run_begin(desc.dst_dg_index, e);
+            const uint32_t n = ctl.run_end(desc.dst_dg_index, e) - begin;
+            stage_run_slice(
                 dst_chip_id,
-                slice_begin(begin, n, split_idx, split_count),
-                slice_begin(begin, n, split_idx + 1, split_count),
-                chunk_page);
-        }
-
-        if (!is_direct(dst_chip_id)) {
-            close_chunk(dst_chip_id, chunk_page);
+                slice_begin(begin, n, desc.split_idx, desc.split_count),
+                slice_begin(begin, n, desc.split_idx + 1, desc.split_count));
         }
     }
 
@@ -319,92 +329,49 @@ struct Reader {
     // sender puts H*H/2 = 8 tok packets on its cable but only ~1.75 tok of those are its own, so ~78% is
     // relayed. Batching the reads here is therefore what the reader's throughput actually turns on.
     //
-    // Batching has to be SPECULATIVE, because a chunk's length is only discovered by reading its sentinel.
-    // Two facts bound the speculation:
-    //   * having read a non-sentinel page, the next page of this chunk certainly exists;
-    //   * the upstream watermark says how many pages upstream has written, though not how they divide
-    //     between this chunk and later ones.
-    // So we read up to `batch` pages at once and stop at the sentinel. Pages read past a sentinel are
-    // garbage upstream never wrote — harmless, since they are discarded and their slots handed straight back
-    // (nothing was announced for them, so the sender never saw them). The waste is at most batch-1 reads
-    // per chunk against a mean chunk of tok pages, and it buys `batch` reads in flight.
+    // The chunk's length is computed rather than discovered, so the reads are batched with nothing
+    // speculative about them: `batch` pages at a time, capped by what is left of the chunk and by what
+    // upstream says has arrived. An EMPTY chunk occupies no pages at all and so is simply not there.
     void do_forward_chunk(uint32_t chunk) {
+        uint32_t remaining = chunk_tokens(forwarding_chunk(chunk));
+        if (remaining == 0) {
+            return;
+        }
+        out_chunk_end = out_page + remaining;  // where the marker goes, should this chunk be re-forwarded
+
         // Every token of a chunk shares one final destination (a chunk IS one (chip -> chip) term), so the
         // first page decides for the whole chunk whether this hop is the last one.
         bool reforward = false;
         bool decided = false;
-        uint32_t i = 0;  // page index within the chunk
-        bool at_end = false;
-
-        while (!at_end) {
-            const uint32_t k = read_arrived_pages(chunk, i);
-
-            uint32_t used = 0;  // pages of this ct.batch that really belong to the chunk
-            uint32_t pub = 0;   // of those, the ones we hand to the sender
+        while (remaining > 0) {
+            const uint32_t k = read_arrived_pages(remaining);
             const uint32_t first_slot = claimed - k;
             for (uint32_t j = 0; j < k; j++) {
                 volatile tt_l1_ptr cmbf2d::FwdMetadata* metadata = slot_metadata((first_slot + j) % ct.num_l1_slots);
-                const uint64_t dst_chip = metadata->dst_chip;
-                used++;
-
-                if (dst_chip == cmbf2d::SENTINEL_DST_CHIP) {
-                    // An EMPTY chunk reaches its sentinel with nothing having decided for it, so the
-                    // sentinel's own destination word decides. The chunk still has to be passed on when it is
-                    // not for our neighbour: the downstream reader counts chunks positionally, so silently
-                    // dropping one would shift every chunk after it.
-                    if (!decided) {
-                        reforward = (metadata->final_addr != (uint64_t)ct.nbr_chip_id);
-                        decided = true;
-                    }
-                    if (reforward) {
-                        // Pass the terminator on, at the end of the chunk we have been writing downstream.
-                        // Its destination word is already in place — it came in with the sentinel.
-                        metadata->cmd = cmbf2d::CMD_FORWARD;
-                        metadata->this_addr = dram.fwd.get_noc_addr(fwd_page(out_chunk, i + j));
-                        pub++;
-                    }
-                    at_end = true;
-                    break;
-                }
-
                 if (!decided) {
-                    reforward = (dst_chip != (uint64_t)ct.nbr_chip_id);
+                    reforward = (metadata->dst_chip != (uint64_t)ct.nbr_chip_id);
                     decided = true;
                 }
                 if (reforward) {
-                    metadata->cmd = cmbf2d::CMD_FORWARD;
-                    metadata->this_addr = dram.fwd.get_noc_addr(fwd_page(out_chunk, i + j));
+                    aim_at_downstream(metadata, out_page++);
                 } else {
                     metadata->cmd = cmbf2d::CMD_FINAL_WRITE;
                     metadata->this_addr = metadata->final_addr;
                 }
-                pub++;
             }
-
-            // Announce only the pages we are passing on, in claim order. A sentinel we swallow (last hop) and
-            // any speculative reads past it are not announced, so their slots go back by rewinding `claimed`
-            // — legitimate precisely because the sender was never told about them.
-            if (pub > 0) {
-                publish_n(pub);
-            }
-            claimed -= (k - pub);
-            consumed += used;
-            i += used;
-            if (at_end) {
-                flush_publish();  // a chunk boundary: do not let it sit unannounced
-            }
-        }
-        if (reforward) {
-            out_chunk++;
+            publish_n(k);
+            consumed += k;
+            remaining -= k;
         }
     }
 
-    // Wait for upstream to have written past `consumed`, then read as many of chunk `chunk`'s pages from
-    // page `i` as are both available and still inside the chunk. Returns how many slots were claimed.
-    uint32_t read_arrived_pages(uint32_t chunk, uint32_t i) {
+    // Wait for upstream to have written past `consumed`, then read as many of the chunk in progress as are
+    // both available and still inside it — `remaining` is what is left of it. Returns how many slots were
+    // claimed, all of which belong to the chunk.
+    uint32_t read_arrived_pages(uint32_t remaining) {
         volatile tt_l1_ptr uint32_t* fwd_arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.fwd_sem_addr);
-        // Do not outpace the upstream sender. It bumps this counter every fwd_bump_every pages and ALWAYS
-        // right after a sentinel, so a chunk boundary is never left unreachable.
+        // Do not outpace the upstream sender. It bumps this counter every fwd_bump_every pages and ALWAYS on
+        // the last page of a chunk, so a chunk boundary is never left unreachable.
         invalidate_l1_cache();
         if (*fwd_arrived <= consumed) {
             flush_publish();  // let the sender work while we wait on upstream
@@ -419,22 +386,22 @@ struct Reader {
         if (k > ct.batch) {
             k = ct.batch;
         }
-        if (k > ct.fwd_pages_per_chunk - i) {
-            k = ct.fwd_pages_per_chunk - i;  // never read outside this chunk's own page range
+        if (k > remaining) {
+            k = remaining;
         }
 
         for (uint32_t j = 0; j < k; j++) {
             const uint32_t slot = claim_slot();
             // ONE read brings the token AND the [final_addr][dst_chip] pair straight into the slot's
             // metadata, because the page layout was chosen to match the slot layout exactly.
-            noc_async_read(dram.fwd.get_noc_addr(fwd_page(chunk, i + j)), slot_addr_of(slot), fwd_read_bytes);
+            noc_async_read(dram.fwd.get_noc_addr(fwd_page(consumed + j)), slot_addr_of(slot), fwd_read_bytes);
         }
         noc_async_read_barrier();
         return k;
     }
 
     // Walk the schedule. Forwarding chunks always appear in increasing order, so `consumed` stays a valid
-    // watermark into our quarter however the own assignments are interleaved around them.
+    // watermark into our region however the own assignments are interleaved around them.
     void run_schedule() {
         for (uint32_t si = 0; si < ct.schedule_len; si++) {
             const uint32_t entry = kernel_compile_time_args[ct.schedule_base + si];
@@ -464,10 +431,10 @@ struct Reader {
         const uint32_t slot_addr = slot_addr_of(claim_slot());
         for (uint32_t le = 0; le < ct.experts_per_chip; le++) {
             const uint32_t e = ct.my_expert_base + le;
-            const uint32_t begin = ctl.run_begin(ct.my_row, e);
-            const uint32_t n = ctl.run_end(ct.my_row, e) - begin;
-            const uint32_t lo = slice_begin(begin, n, ct.my_quarter, ct.local_split_count);
-            const uint32_t hi = slice_begin(begin, n, ct.my_quarter + 1, ct.local_split_count);
+            const uint32_t begin = ctl.run_begin(ct.my_dg_index, e);
+            const uint32_t n = ctl.run_end(ct.my_dg_index, e) - begin;
+            const uint32_t lo = slice_begin(begin, n, ct.my_stream, ct.local_split_count);
+            const uint32_t hi = slice_begin(begin, n, ct.my_stream + 1, ct.local_split_count);
             for (uint32_t base = lo; base < hi; base += ct.meta_prefetch_cap) {
                 const uint32_t end = (hi - base) > ct.meta_prefetch_cap ? base + ct.meta_prefetch_cap : hi;
                 prefetch_metadata(base, end);
@@ -507,8 +474,8 @@ void kernel_main() {
     reader.end_stream();
 
     // Back to zero for the next launch, which starts its own count at zero. The upstream sender cannot bump
-    // this again: we only got past the last chunk by reading its sentinel, so everything it owes us has
-    // arrived, and its drain targets a sink address rather than this semaphore.
+    // this again: its bumps sum to exactly the pages of our region and we consumed all of them, so the last
+    // one has already landed — and its drain targets a sink address rather than this semaphore.
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.fwd_sem_addr), 0);
     // Do not exit with `filled` increments still in the NIU.
     noc_async_atomic_barrier();
