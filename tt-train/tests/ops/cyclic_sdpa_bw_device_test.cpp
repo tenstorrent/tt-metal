@@ -390,6 +390,9 @@ Gradients run_relay(
     if (endpoint_sync) {
         sync_defines["ENDPOINT_SYNC"] = "1";
     }
+    // The relay keeps the column state resident, as the paper specifies.
+    std::map<std::string, std::string> compute_defines = sync_defines;
+    compute_defines["COLUMN_RESIDENT"] = "1";
 
     std::vector<uint32_t> reader_args = {
         C, qWt, vWt, release_sem, ready0_sem, ready1_sem,
@@ -428,7 +431,8 @@ Gradients run_relay(
         ComputeConfig{
             .fp32_dest_acc_en = true,
             .unpack_to_dest_mode = unpack_mode,
-            .compile_args = {C, qWt, vWt, scaler, minus_one, custom_inf, 1u}});
+            .compile_args = {C, qWt, vWt, scaler, minus_one, custom_inf, 1u},
+            .defines = compute_defines});
 
     const auto coordinator_logical = placement_of(C, grid_w, 1);
     const auto coordinator = device->worker_core_from_logical_core(

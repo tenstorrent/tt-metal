@@ -256,10 +256,17 @@ void kernel_main() {
         const uint32_t j = pair.j;
         const uint32_t slot = t % 2u;
 
-        // Column state: still read from DRAM every timestep. Restoring the
-        // paper's residency belongs with a later step.
-        read_tiles_by_row(cb_key, key, (j - 1u) * qWt, qWt, tile_bytes, qWt);
-        read_tiles_by_row(cb_value, value, (j - 1u) * vWt, vWt, tile_bytes, vWt);
+        // Column state, resident for a whole residency interval: K_j and V_j
+        // are read only when the column changes, which the schedule says
+        // happens exactly twice per core over T + 1 timesteps, always at a
+        // diagonal block. The reserve waits for the compute kernel to have
+        // popped the previous column, which is the paper's rule that all
+        // operations using that storage complete before it is reused.
+        const bool column_changed = (t == 0u) || (sched.pair(my_core, t - 1u).j != j);
+        if (column_changed) {
+            read_tiles_by_row(cb_key, key, (j - 1u) * qWt, qWt, tile_bytes, qWt);
+            read_tiles_by_row(cb_value, value, (j - 1u) * vWt, vWt, tile_bytes, vWt);
+        }
 
         // The column gradients this core wrote at an earlier timestep. Only
         // this core's own write kernel produces them, so with the barrier

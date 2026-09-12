@@ -61,6 +61,16 @@
 #include "tt-train/sources/ttml/metal/ops/cyclic_sdpa_bw/device/cyclic_schedule.hpp"
 #include "tt-train/sources/ttml/metal/ops/sdpa_bw/device/kernels/compute/sdpa_bw_compute_utils.hpp"
 
+// COLUMN_RESIDENT: keep the column state across a residency interval instead
+// of taking it fresh every timestep. The reader then loads K_j and V_j only
+// when the column changes -- twice per core over T + 1 timesteps, always at a
+// diagonal block -- and this kernel releases the storage by popping at the
+// change. Algorithm 2's reader still supplies them per timestep, so the two
+// have to agree, hence a switch rather than a change.
+#ifndef COLUMN_RESIDENT
+#define COLUMN_RESIDENT 0
+#endif
+
 namespace {
 
 constexpr uint32_t kCores = get_compile_time_arg_val(0);
@@ -168,6 +178,15 @@ void kernel_main() {
         const auto pair = sched.pair(my_core, t);
         const bool diagonal = pair.i == pair.j;
 
+#if COLUMN_RESIDENT
+        // Popped only when the column changes, which releases the storage for
+        // the next column. Waiting every timestep is free once it is there.
+        const bool column_changed = (t == 0u) || (sched.pair(my_core, t - 1u).j != pair.j);
+        if (column_changed && t > 0u) {
+            cb_pop_front(cb_key, qWt);
+            cb_pop_front(cb_value, vWt);
+        }
+#endif
         cb_wait_front(cb_query, qWt);
         cb_wait_front(cb_key, qWt);
         cb_wait_front(cb_value, vWt);
@@ -243,8 +262,10 @@ void kernel_main() {
         pack_tiles_to_output(cb_grad_key_accum, cb_grad_key_out, qWt);
 
         cb_pop_front(cb_query, qWt);
+#if !COLUMN_RESIDENT
         cb_pop_front(cb_key, qWt);
         cb_pop_front(cb_value, vWt);
+#endif
         cb_pop_front(cb_grad_output, vWt);
         cb_pop_front(cb_lse, onetile);
         cb_pop_front(cb_u_scalar, onetile);
