@@ -254,7 +254,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreBlockInterleavedPr
             single_block_size_col_arg = single_block_size_cliff_col;
             single_sub_block_size_row_arg = single_block_size_cliff_row;
 
-        } else if (has_cliff_row && i != 0 && ((i + 1) % (full_cores_per_row + 1)) == 0) {
+        } else if (has_cliff_row && ((i + 1) % (full_cores_per_row + 1)) == 0) {
             single_block_size_row_arg = single_block_size_cliff_row;
             single_block_size_col_arg = single_block_size;
             single_sub_block_size_row_arg = single_block_size_cliff_row;
