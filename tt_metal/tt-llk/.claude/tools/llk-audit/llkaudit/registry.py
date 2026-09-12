@@ -278,8 +278,10 @@ REPLAY_BUF_SIZE = 32
 
 #: ckernel_template (MOP template 1) slot setters -> the expander slot filled.
 #: Per outer iteration the expander issues START_OP, then the inner loop, then
-#: END_OP0/END_OP1 — so an END_OP is immediately followed by the NEXT outer
-#: iteration's START_OP, an adjacency that exists nowhere in the source text.
+#: END_OP0, then END_OP1 — the latter only when END_OP0 is not a plain NOP. So
+#: whichever of those is the last live word is immediately followed by the NEXT
+#: outer iteration's START_OP, an adjacency that exists nowhere in the source
+#: text. set_end_op installs a plain-NOP END_OP1, leaving END_OP0 that word.
 #: LOOP0_LAST / LOOP1_LAST override the LAST inner iteration (LOOP0_LAST when it
 #: is also the last outer iteration, LOOP1_LAST when it is not), so the executed
 #: stream is not uniform across iterations.
@@ -406,8 +408,9 @@ def is_mop_word(macro_name: str) -> bool:
 def mop_word_flips_src(text: str) -> bool:
     """True if a slotted word hands a Src bank back / flips the bank pointer.
 
-    A flip in an END_OP lands immediately before the next iteration's START_OP,
-    which is what makes a textual reading of the flip's position wrong.
+    A flip in the last live END slot lands immediately before the next outer
+    iteration's START_OP, which is what makes a textual reading of the flip's
+    position wrong.
     """
     up = (text or "").upper()
     if "CLEARDVALID" in up:

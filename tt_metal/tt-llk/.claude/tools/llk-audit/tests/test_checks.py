@@ -3804,6 +3804,43 @@ def test_mop_end_op_flip_is_recalled_with_the_wrap_note():
 
 
 @case
+def test_mop_slot_notes_name_the_right_executed_neighbour():
+    """END_OP1 is issued only when END_OP0 is not a plain NOP, so the word that
+    precedes the next START_OP depends on the live slots. A _LAST override
+    replaces the last inner-loop op and the END ops still follow it — claiming
+    direct next-START adjacency for it would invent an executed edge."""
+    flip = "TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB)"
+
+    def detail_for(setter):
+        out = _mr(
+            [
+                fn("configure_mop", _MR_F, 100, 200),
+                call(
+                    _MR_F,
+                    120,
+                    setter,
+                    text=f"tmp.{setter}",
+                    func="configure_mop",
+                    arg0=flip,
+                    argc=1,
+                ),
+            ]
+        )
+        assert _hints(out) == ["MOP_SLOTTED_SRC_FLIP"], out
+        return out[0].detail
+
+    # set_end_op leaves END_OP1 a plain NOP, so END_OP0 really is that word
+    assert "next outer iteration's START_OP" in detail_for("set_end_op")
+    # set_end_ops reports arg0 only, and END_OP1 still follows it
+    assert "END_OP1 still follows it" in detail_for("set_end_ops")
+    # a _LAST override is followed by the END ops, not by the next START_OP
+    for setter in ("set_last_inner_loop_instr", "set_last_outer_loop_instr"):
+        d = detail_for(setter)
+        assert "replaces the last inner-loop op" in d, d
+        assert "any live END op issues after" in d, d
+
+
+@case
 def test_mop_end_op_flip_recalled_through_the_clr_src_alias():
     """The in-tree binary kernels spell the selector `CLR_SRC`, an alias for
     CLR_A / CLR_AB. A slotted flip must be recalled through the alias, or the

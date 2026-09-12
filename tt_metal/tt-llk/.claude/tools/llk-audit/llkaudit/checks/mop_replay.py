@@ -9,8 +9,11 @@ issues it later, so its execution POSITION, its repeat COUNT and its
 NEIGHBOURS come from the MOP/replay program and never from the source order.
 Reading such a word as though it executed at its line is the dominant recall
 error on this surface: a `static constexpr TT_OP_UNPACR(...)` above a site
-guards nothing, and an `END_OP` flip lands immediately before the NEXT outer
-iteration's `START_OP` — an adjacency that exists nowhere in the text.
+guards nothing, and the word that ends an outer iteration lands immediately
+before the NEXT outer iteration's `START_OP` — an adjacency that exists nowhere
+in the text. Which word that is depends on the live END slots: `END_OP1` when
+both are live, `END_OP0` when `END_OP1` is a plain NOP, and the last inner-loop
+word (possibly a `*_LAST` override) when `END_OP0` is a NOP.
 
 Per the ISA, `ckernel_template` programs MOP template 1 (loop-counted from
 MopCfg: `START_OP`, inner loop, `END_OP0`/`END_OP1`, with `LOOP0_LAST` /
@@ -31,10 +34,29 @@ from .. import registry
 from ..factbase import FactBase
 from .base import Check, Finding
 
-#: Slots whose executed position is the one a textual reading gets wrong: an
-#: END_OP precedes the NEXT outer iteration's START_OP, and a *_LAST override
-#: replaces a loop op only on the last inner iteration.
-_NON_OBVIOUS_SLOTS = ("END_OP0", "END_OP0/END_OP1", "LOOP0_LAST", "LOOP1_LAST")
+#: Slots whose executed neighbourhood a textual reading gets wrong, each with the
+#: neighbourhood that replaces it. Per outer iteration the expander issues
+#: START_OP, the inner loop, then END_OP0, then END_OP1 — and END_OP1 is issued
+#: only when END_OP0 is not a plain NOP (see ExpandTemplate1 in MOPExpander.md),
+#: so which word ends an iteration depends on which END slots are live.
+_SLOT_NEIGHBOUR_NOTE = {
+    "END_OP0": (
+        "set_end_op leaves END_OP1 a plain NOP, so this word ends the outer "
+        "iteration and immediately precedes the next outer iteration's START_OP"
+    ),
+    "END_OP0/END_OP1": (
+        "only the captured END_OP0 is reported; END_OP1 still follows it, and "
+        "that word — not this one — precedes the next outer iteration's START_OP"
+    ),
+    "LOOP0_LAST": (
+        "this replaces the last inner-loop op, so any live END op issues after "
+        "it and the next outer iteration's START_OP follows that"
+    ),
+    "LOOP1_LAST": (
+        "this replaces the last inner-loop op, so any live END op issues after "
+        "it and the next outer iteration's START_OP follows that"
+    ),
+}
 
 
 def _is_literal(text: str) -> bool:
@@ -100,11 +122,9 @@ class MopReplay(Check):
                     f"a Src bank flip is installed as the MOP's {slot}; it hands the "
                     "bank back where the MOP issues it, not at this line"
                 )
-                if slot in _NON_OBVIOUS_SLOTS:
-                    detail += (
-                        " — and an END_OP/_LAST flip immediately precedes the next"
-                        " outer iteration's START_OP"
-                    )
+                note = _SLOT_NEIGHBOUR_NOTE.get(slot)
+                if note:
+                    detail += f" — {note}"
             else:
                 hint = "MOP_SLOTTED_WORD"
                 detail = (

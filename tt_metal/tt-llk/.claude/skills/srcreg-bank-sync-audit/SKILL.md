@@ -144,9 +144,12 @@ A desync → the FPU reads a bank the unpacker is still filling, or a thread clo
    grep -rInE "(SETRWC|MVMUL|ELWADD|ELWSUB|ELWMUL|GAPOOL|GMPOOL|DOTPV)[^;]*CLR_(A|B|AB)\b|CLEARDVALID|set_(start|end)_ops?\(|set_last_(inner|outer)_loop_instr\(" \
         tt_metal/tt-llk/tt_llk_* ttnn/cpp models --include=*.h --include=*.cpp 2>/dev/null | grep -v /tests/
    ```
-   `CLR_NONE` flips nothing — exclude it. For a slotted flip, resolve the
-   position per `race-audit-all` → *"A word's SLOT, not its line"*: an `END_OP`
-   flip lands immediately before the **next** outer iteration's `START_OP`, which
+   `CLR_NONE` flips nothing — exclude it (`CLR_SRC` is an in-tree alias for
+   `CLR_A`/`CLR_AB` and DOES flip). For a slotted flip, resolve the position per
+   `race-audit-all` → *"A word's SLOT, not its line"*: a flip in the **last live
+   END slot** lands immediately before the **next** outer iteration's `START_OP`
+   (`END_OP1` when both END slots are live, `END_OP0` when `END_OP1` is a plain
+   NOP — what `set_end_op` installs), which
    is exactly the "bank-flipping op still in flight" precondition of check 5(a)
    — and it is invisible to a textual read of the function that runs the MOP. The
    `mop-replay` tool check recalls these as `MOP_SLOTTED_SRC_FLIP` (slot known)
