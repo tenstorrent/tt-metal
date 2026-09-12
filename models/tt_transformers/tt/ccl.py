@@ -239,9 +239,18 @@ def tt_all_reduce(
     if mesh_shape == [1, 1] or (cluster_axis == 1 and 1 in list(mesh_device.shape)):
         return input_tensor
 
-    # Auto-detect num_links if not provided
+    # Auto-detect num_links if not provided. ONE link for the reduce-scatter, not the
+    # fabric's maximum: this collective already spreads its payload over 4 workers per
+    # link, and a second link splits that payload again rather than adding throughput to
+    # it, so each worker ends up with a shorter run and the same per-chunk sync. Measured
+    # on the prefill trace (Llama-3.1-8B, P150 x4, 128-token chunk, replay-only so the
+    # number is pure device time): 2 links 10.743 ms, 1 link 10.632 ms. The worker and
+    # sync counts around it are already at their optimum -- 1/2/8 workers give 11.340 /
+    # 10.733 / 10.789 and chunks_per_sync 4/20/40 all land within 0.002 ms of 10 -- so the
+    # link count was the one parameter still set by "whatever the fabric offers".
+    # Decode does not reach here (it takes the fused all_reduce) and measures unchanged.
     if num_reduce_scatter_links is None:
-        num_reduce_scatter_links = tt_ccl.get_num_links(cluster_axis)
+        num_reduce_scatter_links = 1 if 1 in list(mesh_device.shape) else tt_ccl.get_num_links(cluster_axis)
     if num_all_gather_links is None:
         num_all_gather_links = tt_ccl.get_num_links(cluster_axis)
 
