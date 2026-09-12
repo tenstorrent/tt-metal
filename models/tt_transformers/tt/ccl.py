@@ -191,6 +191,8 @@ def tt_all_reduce_fused(
         topology=topology,
         num_links=num_links if num_links is not None else tt_ccl.get_num_links(cluster_axis),
         subdevice_id=subdevice_id,
+        # The op carries a Llama-shaped fast path; this is the shape it was written for.
+        use_optimal_ccl_for_llama=True,
     )
 
 
