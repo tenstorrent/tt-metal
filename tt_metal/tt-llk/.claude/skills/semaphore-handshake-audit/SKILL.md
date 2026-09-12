@@ -48,16 +48,16 @@ The three Tensix threads coordinate through **8 hardware semaphores** (`Semaphor
 - LLK wrappers (`ckernel.h`): `t6_semaphore_init(idx, min, max)` → `TTI_SEMINIT(max, min, …)` (so wrapper `min` = initial `Value`, `max` = `Max`). `t6_semaphore_post/get` are Tensix `SEMPOST/SEMGET` (in-stream, ordered). `semaphore_post/get` (no `t6_`) are **RISC MMIO** writes to `pc_buf_base[PC_BUF_SEMAPHORE_BASE+idx]` — asynchronous to the Tensix stream. The `LLK_ASSERT(value<MAX)` / `(value>0)` guards are **debug-only** → release builds silently over/underflow.
 
 ## Semaphore map (WH/BH — `ckernel_structs.h`)
-| # | Name | Roles |
-|---|------|-------|
-|0|`FPU_SFPU`| fpu↔sfpu; also reused (aliased `SFPU_FPU`) in some experimental kernels |
-|1|`MATH_PACK`| math↔pack on **dest** register (the main double-buffer) |
-|2|`UNPACK_TO_DEST`| unpack↔math, unpack-direct-to-dest |
-|3|`UNPACK_OPERAND_SYNC`| unpack↔pack/math operand get/release |
-|4|`PACK_DONE`| pack iteration begin/end (perf) |
-|5|`UNPACK_SYNC`| RISC↔unpack, config-context acquire/release |
-|6|`UNPACK_MATH_DONE`| (see name reuse note below) |
-|7|`MATH_DONE`| math-done barrier for unpack-to-dest |
+| #   | Name                  | Roles |
+| --- | --------------------- | ------- |
+| 0   | `FPU_SFPU`            | fpu↔sfpu; also reused (aliased `SFPU_FPU`) in some experimental kernels |
+| 1   | `MATH_PACK`           | math↔pack on **dest** register (the main double-buffer) |
+| 2   | `UNPACK_TO_DEST`      | unpack↔math, unpack-direct-to-dest |
+| 3   | `UNPACK_OPERAND_SYNC` | unpack↔pack/math operand get/release |
+| 4   | `PACK_DONE`           | pack iteration begin/end (perf) |
+| 5   | `UNPACK_SYNC`         | RISC↔unpack, config-context acquire/release |
+| 6   | `UNPACK_MATH_DONE`    | (see name reuse note below) |
+| 7   | `MATH_DONE`           | math-done barrier for unpack-to-dest |
 
 ## What to check — and the rules
 
