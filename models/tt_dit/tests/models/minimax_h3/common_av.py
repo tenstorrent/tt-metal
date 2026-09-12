@@ -1049,7 +1049,7 @@ def run_user_generations(
         last = Image.open(last_image).convert("RGB") if last_image else None
         profiler = BenchmarkProfiler()
         try:
-            height, width = resolve_canvas_size(*aspect_ratio)
+            height, width = resolve_canvas_size(*aspect_ratio) if image is None else (None, None)
             num_frames = align_num_frames(round(duration_s * MINIMAX_H3_FPS))
             with profiler("run", iteration=0):
                 output = pipeline(
@@ -1059,6 +1059,7 @@ def run_user_generations(
                     num_frames=num_frames,
                     height=height,
                     width=width,
+                    aspect_ratio=aspect_ratio,
                     num_inference_steps=num_steps,
                     seed=seed,
                     on_event=profiler_event_callback(profiler, 0),
