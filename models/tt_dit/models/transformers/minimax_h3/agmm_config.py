@@ -32,9 +32,12 @@ from __future__ import annotations
 # The op derives its worker grid from the device, reserving the mux axis: M parallelizes over 12
 # cores when transposed (narrow output, M > N) and 10 otherwise. per_core_M -- the M-tiles each core
 # walks -- follows.
+import os
+
 _TILE = 32
 _M_CORES_TRANSPOSED = 12
 _M_CORES_NON_TRANSPOSED = 10
+_EXACT_ONLY = os.environ.get("MINIMAX_H3_AGMM_EXACT_ONLY", "1") == "1"
 
 
 def _per_core_m(m: int, n: int) -> int:
@@ -107,6 +110,8 @@ def agmm_block_size(k: int, n: int, m: int) -> tuple[int, int, int] | None:
     """
     per_core_m = _per_core_m(m, n)
     swept = [pcm for (kk, nn, pcm) in AGMM_BLOCK_SIZES if kk == k and nn == n]
+    if _EXACT_ONLY:
+        return AGMM_BLOCK_SIZES.get((k, n, per_core_m))
     divisors = [pcm for pcm in swept if per_core_m % pcm == 0]
     if not divisors:
         return None
