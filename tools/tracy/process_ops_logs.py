@@ -39,10 +39,10 @@ from tracy.common import (
 from tracy import device_post_proc_config
 from tracy.perf_counter_analysis import (
     PERF_COUNTER_CSV_HEADERS,
-    RATIO_LABELS,
     compute_device_only_metrics,
     compute_perf_counter_metrics,
     extract_perf_counters,
+    is_ratio_label,
     print_counter_statistics_summary,
     print_efficiency_metrics_summary,
     get_device_op_data,
@@ -913,10 +913,10 @@ def _enrich_ops_from_device_logs(
                 device_op["avg_math_count"] = per_op_counts.get("avg_math_count", {}).get(lookup_key, nan)
 
                 # One loop over per_op_stats, keyed by METRIC_LABELS, so the CSV cannot drift from the engine;
-                # RATIO_LABELS get a "(ratio)" unit. The "Avg ... util on full grid" columns are filled separately
+                # the ratio family gets a "(ratio)" unit. The "Avg ... util on full grid" columns are filled separately
                 # from the grid-wide counts over the kernel duration.
                 for base_name, mstat in per_op_stats.items():
-                    suffix = " (ratio)" if base_name in RATIO_LABELS else " (%)"
+                    suffix = " (ratio)" if is_ratio_label(base_name) else " (%)"
                     device_op[f"{base_name} Min{suffix}"] = mstat["min"].get(lookup_key, nan)
                     device_op[f"{base_name} Median{suffix}"] = mstat["median"].get(lookup_key, nan)
                     device_op[f"{base_name} Max{suffix}"] = mstat["max"].get(lookup_key, nan)
@@ -1178,7 +1178,7 @@ def get_device_data_generate_report(
                     for base_name, m in metrics.items():
                         # The ratio family gets "(ratio)", everything else "(%)". The grid-wide "Avg ... util on
                         # full grid" columns need the kernel duration, which a device-only run does not have.
-                        suffix = " (ratio)" if base_name in RATIO_LABELS else " (%)"
+                        suffix = " (ratio)" if is_ratio_label(base_name) else " (%)"
                         rowDict[f"{base_name} Avg{suffix}"] = m["avg"].get(lookup_key, nan)
                         rowDict[f"{base_name} Min{suffix}"] = m["min"].get(lookup_key, nan)
                         rowDict[f"{base_name} Median{suffix}"] = m["median"].get(lookup_key, nan)
@@ -1243,6 +1243,10 @@ def get_device_data_generate_report(
                 for header in OPS_CSV_HEADER + PERF_COUNTER_CSV_HEADERS:
                     if header in csv_row_headers:
                         allHeaders.append(header)
+                # Dynamic l1_client columns must be in fieldnames or DictWriter raises.
+                allHeaders += sorted(
+                    h for h in csv_row_headers if str(h).startswith("L1_CLIENT_") and h not in allHeaders
+                )
                 writer = csv.DictWriter(allOpsCSV, fieldnames=allHeaders, extrasaction="ignore")
                 writer.writeheader()
                 for rowDict in rowDicts:
@@ -1625,7 +1629,11 @@ def generate_reports(
                     for header, value in device_perf_row.items():
                         if header in skip_headers:
                             continue
-                        if header not in OPS_CSV_HEADER and header not in _PERF_COUNTER_CSV_HEADERS_SET:
+                        if (
+                            header not in OPS_CSV_HEADER
+                            and header not in _PERF_COUNTER_CSV_HEADERS_SET
+                            and not header.startswith("L1_CLIENT_")
+                        ):
                             continue
                         if value in (None, ""):
                             continue
@@ -1735,6 +1743,8 @@ def generate_reports(
         for row in csv_rows:
             all_row_keys.update(row.keys())
         active_perf_headers = [h for h in PERF_COUNTER_CSV_HEADERS if h in all_row_keys]
+        # Quasar l1_client selections produce dynamically named columns.
+        active_perf_headers += sorted(h for h in all_row_keys if str(h).startswith("L1_CLIENT_"))
 
         ioHeaderIndex = OPS_CSV_HEADER.index("INPUTS")
         head_part = list(OPS_CSV_HEADER[:ioHeaderIndex])

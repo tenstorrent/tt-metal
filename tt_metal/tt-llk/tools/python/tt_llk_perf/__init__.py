@@ -21,7 +21,12 @@ from .metrics import (
     RATIO_KEYS,
     RATIO_LABELS,
     CounterView,
+    compute_l1_client_metrics,
     compute_metrics,
+    is_ratio_label,
+    metric_label,
+    quasar_l1_client_label,
+    quasar_l1_client_selection_is_valid,
 )
 
 __all__ = [
@@ -32,9 +37,14 @@ __all__ = [
     "CounterEntry",
     "CounterView",
     "bank_tables",
+    "compute_l1_client_metrics",
     "compute_metrics",
     "counter_type_names",
     "find_include_dir",
     "headers",
+    "is_ratio_label",
+    "metric_label",
     "metrics",
+    "quasar_l1_client_label",
+    "quasar_l1_client_selection_is_valid",
 ]

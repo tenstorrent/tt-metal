@@ -8,19 +8,23 @@ from pathlib import Path
 import pandas as pd
 from loguru import logger
 from tt_llk_perf.headers import bank_tables
+from tt_llk_perf.metrics import quasar_l1_client_label
 
-from .chip_architecture import get_chip_architecture
+from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .device_io import read_words_from_device
 from .test_config import TestConfig
 
 COUNTER_SLOT_COUNT = TestConfig._PERF_COUNTERS_CONFIG_WORDS
 
-# Order matches llk::perf::Bank (perf_counters/types.h) and the config-word bank field.
+_IS_QUASAR = get_chip_architecture() == ChipArchitecture.QUASAR
+
+# Order matches llk::perf::Bank (perf_counters/types.h) and the config-word bank field. Quasar has
+# no L1 counter bank, so slot 3 carries the l1_client event CSR there (counter_sel = subport*8 + event).
 COUNTER_BANK_NAMES = {
     0: "INSTRN_THREAD",
     1: "FPU",
     2: "TDMA_UNPACK",
-    3: "L1",
+    3: "L1_CLIENT" if _IS_QUASAR else "L1",
     4: "TDMA_PACK",
 }
 
@@ -66,8 +70,8 @@ PERF_CFG_BANK_MASK = _PERF_CFG["BANK_MASK"]
 
 
 def _load_counter_names(arch) -> dict:
-    """{bank: {select: name}} from the tt-llk tables; L1 is keyed by (select, mux). Quasar: empty."""
-    banks = {bank: {} for bank in COUNTER_BANK_NAMES.values()}
+    """{bank: {select: name}} from the tt-llk tables; L1 is keyed by (select, mux), empty on Quasar."""
+    banks = {bank: {} for bank in _TABLE_BANK_TO_HARNESS.values()}
     for table_bank, entries in bank_tables(arch).items():
         bank = _TABLE_BANK_TO_HARNESS[table_bank]
         for entry in entries:
@@ -165,29 +169,9 @@ def _read_zone_counters(location: str, zone: int, zone_name: str) -> list[dict]:
         if (config_word & PERF_CFG_VALID_BIT) == 0:
             continue
 
-        bank_id = config_word & PERF_CFG_BANK_MASK
-        counter_id = (config_word >> PERF_CFG_COUNTER_SHIFT) & PERF_CFG_COUNTER_MASK
-        l1_mux = (config_word >> PERF_CFG_L1_MUX_SHIFT) & PERF_CFG_L1_MUX_MASK
-
-        bank_name = COUNTER_BANK_NAMES.get(bank_id, f"UNKNOWN_{bank_id}")
-
-        if bank_name == "L1" and l1_mux != TestConfig.PERF_L1_MUX_GROUP:
-            # The group is baked into brisc.elf and nothing keys a rebuild on it, so a stale ELF
-            # would otherwise return a self-consistently mislabelled dataset.
-            raise RuntimeError(
-                f"L1 counters were captured with mux group {l1_mux}, but "
-                f"LLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP} was requested. The ELF predates "
-                "the change; recompile the producer (the group is a compile-time constant)."
-            )
-
-        if bank_name == "L1":
-            counter_name = COUNTER_NAMES["L1"].get(
-                (counter_id, l1_mux), f"L1_UNKNOWN_{counter_id}_{l1_mux}"
-            )
-        else:
-            counter_name = COUNTER_NAMES.get(bank_name, {}).get(
-                counter_id, f"{bank_name}_UNKNOWN_{counter_id}"
-            )
+        bank_id, bank_name, counter_id, counter_name, l1_mux = decode_config_word(
+            config_word
+        )
 
         cycles = bank_cycles[bank_id] if bank_id < bank_cycles_words else 0
         count = counter_counts[count_idx]
@@ -201,11 +185,52 @@ def _read_zone_counters(location: str, zone: int, zone_name: str) -> list[dict]:
                 "counter_id": counter_id,
                 "cycles": cycles,
                 "count": count,
-                "l1_mux": l1_mux if bank_name == "L1" else None,
+                "l1_mux": l1_mux,
             }
         )
 
     return results
+
+
+def decode_config_word(config_word: int) -> tuple:
+    """(bank_id, bank_name, counter_id, counter_name, l1_mux) for one valid config word.
+
+    l1_mux is None outside the tt-1xx L1 bank. Quasar's slot 3 is the l1_client CSR, whose
+    counter_sel is the subport*8 + event selection and names itself through the shared engine.
+    """
+    bank_id = config_word & PERF_CFG_BANK_MASK
+    counter_id = (config_word >> PERF_CFG_COUNTER_SHIFT) & PERF_CFG_COUNTER_MASK
+    l1_mux = (config_word >> PERF_CFG_L1_MUX_SHIFT) & PERF_CFG_L1_MUX_MASK
+
+    bank_name = COUNTER_BANK_NAMES.get(bank_id, f"UNKNOWN_{bank_id}")
+
+    if bank_name == "L1" and l1_mux != TestConfig.PERF_L1_MUX_GROUP:
+        # The group is baked into brisc.elf and nothing keys a rebuild on it, so a stale ELF
+        # would otherwise return a self-consistently mislabelled dataset.
+        raise RuntimeError(
+            f"L1 counters were captured with mux group {l1_mux}, but "
+            f"LLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP} was requested. The ELF predates "
+            "the change; recompile the producer (the group is a compile-time constant)."
+        )
+
+    if bank_name == "L1":
+        counter_name = COUNTER_NAMES["L1"].get(
+            (counter_id, l1_mux), f"L1_UNKNOWN_{counter_id}_{l1_mux}"
+        )
+    elif bank_name == "L1_CLIENT":
+        counter_name = quasar_l1_client_label(counter_id)
+    else:
+        counter_name = COUNTER_NAMES.get(bank_name, {}).get(
+            counter_id, f"{bank_name}_UNKNOWN_{counter_id}"
+        )
+
+    return (
+        bank_id,
+        bank_name,
+        counter_id,
+        counter_name,
+        l1_mux if bank_name == "L1" else None,
+    )
 
 
 def read_counters(location: str = "0,0") -> pd.DataFrame:
