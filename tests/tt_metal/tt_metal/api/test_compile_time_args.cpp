@@ -30,7 +30,7 @@ class IDevice;
 
 using namespace tt;
 using namespace tt::tt_metal;
-using CompileTimeArgsTest = GenericMeshDeviceFixture;
+using CompileTimeArgsTest = MeshDevice1x1Fixture;
 
 TEST_F(MeshDeviceFixture, TensixTestTwentyThousandCompileTimeArgs) {
     for (const auto& mesh_device : this->devices_) {
