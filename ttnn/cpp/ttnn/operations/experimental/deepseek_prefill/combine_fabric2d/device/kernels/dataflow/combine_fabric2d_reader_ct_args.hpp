@@ -22,7 +22,7 @@
 namespace cmbf2d {
 
 // Scalars packed before the variable-length blocks, i.e. the index the schedule starts at.
-constexpr uint32_t READER_SCALAR_CT_ARGS = 31;
+constexpr uint32_t READER_SCALAR_CT_ARGS = 24;
 
 struct ReaderCtArgs {
     uint32_t num_l1_slots;
@@ -32,9 +32,6 @@ struct ReaderCtArgs {
     uint32_t ring_addr;
     uint32_t filled_addr;
     uint32_t freed_addr;
-    uint32_t dram_in_base_addr;
-    uint32_t dram_out_base_addr;
-    uint32_t dram_fwd_base_addr;
     uint32_t fwd_chunks_per_quarter;
     uint32_t fwd_pages_per_chunk;
     uint32_t my_quarter;
@@ -43,10 +40,6 @@ struct ReaderCtArgs {
     uint32_t nbr_chip_id;
     uint32_t num_assignments;
     uint32_t schedule_len;
-    uint32_t dram_meta_base_addr;
-    uint32_t dram_counts_base_addr;
-    uint32_t dram_region_base_addr;
-    uint32_t dram_expert_offsets_base_addr;
     uint32_t num_routed_experts;
     uint32_t experts_per_chip;
     uint32_t my_expert_base;
@@ -65,8 +58,7 @@ struct ReaderCtArgs {
         const op::StreamPlacement& self,
         const std::vector<op::Assignment>& work,
         const op::L1Layout& l1,
-        const op::KernelPlan& plan,
-        const op::DramBuffers& dram) :
+        const op::KernelPlan& plan) :
         num_l1_slots(NUM_L1_SLOTS),
         token_size_bytes(op::token_size_bytes(tensor_args)),
         forwarding_metadata_size(FORWARDING_METADATA_SIZE),
@@ -74,9 +66,6 @@ struct ReaderCtArgs {
         ring_addr(l1.ring),
         filled_addr(plan.ring_filled_addr),
         freed_addr(plan.ring_freed_addr),
-        dram_in_base_addr(static_cast<uint32_t>(dram.in->address())),
-        dram_out_base_addr(static_cast<uint32_t>(dram.out->address())),
-        dram_fwd_base_addr(static_cast<uint32_t>(dram.fwd->address())),
         fwd_chunks_per_quarter(op::relay_chunks_per_stream(op::ring_extent(args))),
         fwd_pages_per_chunk(plan.pages_per_chunk),
         // Our quarter of the forwarding buffer. (plane, direction) identifies the upstream sender uniquely
@@ -89,10 +78,6 @@ struct ReaderCtArgs {
         nbr_chip_id(static_cast<uint32_t>(self.downstream_node.chip_id)),
         num_assignments(count_own_assignments(work)),
         schedule_len(static_cast<uint32_t>(work.size())),
-        dram_meta_base_addr(static_cast<uint32_t>(dram.meta->address())),
-        dram_counts_base_addr(static_cast<uint32_t>(dram.counts->address())),
-        dram_region_base_addr(static_cast<uint32_t>(dram.region->address())),
-        dram_expert_offsets_base_addr(static_cast<uint32_t>(dram.expert_offsets->address())),
         num_routed_experts(op::num_routed_experts(tensor_args)),
         experts_per_chip(args.experts_per_chip),
         my_expert_base(plan.my_expert_base),
@@ -128,9 +113,6 @@ struct ReaderCtArgs {
             ring_addr,
             filled_addr,
             freed_addr,
-            dram_in_base_addr,
-            dram_out_base_addr,
-            dram_fwd_base_addr,
             fwd_chunks_per_quarter,
             fwd_pages_per_chunk,
             my_quarter,
@@ -139,10 +121,6 @@ struct ReaderCtArgs {
             nbr_chip_id,
             num_assignments,
             schedule_len,
-            dram_meta_base_addr,
-            dram_counts_base_addr,
-            dram_region_base_addr,
-            dram_expert_offsets_base_addr,
             num_routed_experts,
             experts_per_chip,
             my_expert_base,
@@ -164,35 +142,28 @@ struct ReaderCtArgs {
         ring_addr(get_compile_time_arg_val(4)),
         filled_addr(get_compile_time_arg_val(5)),
         freed_addr(get_compile_time_arg_val(6)),
-        dram_in_base_addr(get_compile_time_arg_val(7)),
-        dram_out_base_addr(get_compile_time_arg_val(8)),
-        dram_fwd_base_addr(get_compile_time_arg_val(9)),
-        fwd_chunks_per_quarter(get_compile_time_arg_val(10)),
-        fwd_pages_per_chunk(get_compile_time_arg_val(11)),
-        my_quarter(get_compile_time_arg_val(12)),
-        num_incoming_chunks(get_compile_time_arg_val(13)),
-        fwd_sem_addr(get_compile_time_arg_val(14)),
-        nbr_chip_id(get_compile_time_arg_val(15)),
-        num_assignments(get_compile_time_arg_val(16)),
-        schedule_len(get_compile_time_arg_val(17)),
-        dram_meta_base_addr(get_compile_time_arg_val(18)),
-        dram_counts_base_addr(get_compile_time_arg_val(19)),
-        dram_region_base_addr(get_compile_time_arg_val(20)),
-        dram_expert_offsets_base_addr(get_compile_time_arg_val(21)),
-        num_routed_experts(get_compile_time_arg_val(22)),
-        experts_per_chip(get_compile_time_arg_val(23)),
-        my_expert_base(get_compile_time_arg_val(24)),
-        num_experts_per_tok(get_compile_time_arg_val(25)),
-        dispatch_group_size(get_compile_time_arg_val(26)),
-        local_split_count(get_compile_time_arg_val(27)),
-        my_row(get_compile_time_arg_val(28)),
-        control_addr(get_compile_time_arg_val(29)),
-        meta_prefetch_cap(get_compile_time_arg_val(30)) {}
+        fwd_chunks_per_quarter(get_compile_time_arg_val(7)),
+        fwd_pages_per_chunk(get_compile_time_arg_val(8)),
+        my_quarter(get_compile_time_arg_val(9)),
+        num_incoming_chunks(get_compile_time_arg_val(10)),
+        fwd_sem_addr(get_compile_time_arg_val(11)),
+        nbr_chip_id(get_compile_time_arg_val(12)),
+        num_assignments(get_compile_time_arg_val(13)),
+        schedule_len(get_compile_time_arg_val(14)),
+        num_routed_experts(get_compile_time_arg_val(15)),
+        experts_per_chip(get_compile_time_arg_val(16)),
+        my_expert_base(get_compile_time_arg_val(17)),
+        num_experts_per_tok(get_compile_time_arg_val(18)),
+        dispatch_group_size(get_compile_time_arg_val(19)),
+        local_split_count(get_compile_time_arg_val(20)),
+        my_row(get_compile_time_arg_val(21)),
+        control_addr(get_compile_time_arg_val(22)),
+        meta_prefetch_cap(get_compile_time_arg_val(23)) {}
 
     static constexpr uint32_t schedule_base = READER_SCALAR_CT_ARGS;
-    static constexpr uint32_t assignment_base = schedule_base + get_compile_time_arg_val(17);  // schedule_len
+    static constexpr uint32_t assignment_base = schedule_base + get_compile_time_arg_val(14);  // schedule_len
     static constexpr uint32_t accessor_base =
-        assignment_base + ASSIGNMENT_WORDS * get_compile_time_arg_val(16);  // num_assignments
+        assignment_base + ASSIGNMENT_WORDS * get_compile_time_arg_val(13);  // num_assignments
 
     // One accessor per DRAM buffer the program factory chained on, in that order.
     static constexpr auto dram_in_args = TensorAccessorArgs<accessor_base>();
