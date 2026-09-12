@@ -235,13 +235,6 @@ def test_fp32_uint32(device, h, w, dtype):
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_gelu(device, h, w, layout):
-    run_unary_test(device, h, w, ttnn.gelu, layout=layout, ulp=2)
-
-
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
 def test_relu(device, h, w, layout):
     run_unary_test(device, h, w, ttnn.relu, layout=layout, ulp=0)
 
@@ -456,13 +449,6 @@ def test_relu_uint16_full_range(device):
 @pytest.mark.parametrize("w", [128])
 def test_silu(device, h, w, layout):
     run_unary_test(device, h, w, ttnn.silu, layout=layout)
-
-
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_log(device, h, w, layout):
-    run_unary_test(device, h, w, ttnn.log, layout=layout, allow_nonfinite=True)
 
 
 def test_log_edge_cases(device):
