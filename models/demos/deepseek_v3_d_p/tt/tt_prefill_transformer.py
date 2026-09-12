@@ -215,6 +215,10 @@ class TtPrefillTransformer(LightweightModule):
         # With kv_only_last_layer, the last block is built kv_only=True (only attn_norm + the KV
         # branch of MLA).
         self.layers = []
+        # One llama4 query-scale cache for every layer: its contents depend only on the chunk offset
+        # and mesh/config geometry, all layer-invariant (see ttMLA._llama4_scale). Per-layer dicts held
+        # 36 byte-identical copies of each offset's tensor.
+        self._llama4_scale_cache: dict = {}
         for local_idx in range(num_layers):
             layer_idx = first_layer_idx + local_idx
             is_last = local_idx == num_layers - 1
@@ -251,6 +255,7 @@ class TtPrefillTransformer(LightweightModule):
                 overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
                 first_layer_idx=first_layer_idx,
                 tp_shard_kv=tp_shard_kv,
+                llama4_scale_cache=self._llama4_scale_cache,
             )
             self.layers.append(layer)
 

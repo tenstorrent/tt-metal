@@ -326,6 +326,7 @@ class ttMLA:
         active_seq_len: Optional[int] = None,
         first_layer_idx: Optional[int] = None,
         tp_shard_kv: bool = False,
+        llama4_scale_cache: Optional[dict] = None,
     ):
         # DSA indexer weights (v3.2 / GLM): extract NON-mutating, so the caller's state_dict survives
         # repeated construction / cache build+load (the old pop() emptied it on the first pass). Dense
@@ -435,7 +436,9 @@ class ttMLA:
         # leaves every other variant's op graph byte-identical.
         self._llama4_beta = rope_scaling.get("llama_4_scaling_beta")
         self._llama4_orig_max = rope_scaling.get("original_max_position_embeddings")
-        self._llama4_cache: dict = {}
+        # Shared across layers when the caller threads one dict down (TtPrefillTransformer does);
+        # a bare ttMLA keeps its own. Contents are layer-invariant -- see _llama4_scale.
+        self._llama4_cache: dict = llama4_scale_cache if llama4_scale_cache is not None else {}
 
         self.default_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -1158,34 +1161,50 @@ class ttMLA:
         Metadata/traced path reads ChunkMetadata.llama4_scale -- a captured graph can only read device
         memory, and write_chunk_metadata refreshes it alongside the scalars. Building a host tensor
         there would bake one chunk's offset into the capture. The host-scalar path builds it fresh and
-        caches on (start, seq_len_local), since the same offsets recur on every layer.
+        caches on (start, seq_len_local) in a dict shared by all layers, since the same offsets recur
+        on every layer.
 
         The geometry is re-derived from this object's own axes rather than through
         rope._llama4_scale_geometry: that helper reads mesh_device.shape[1 - sp_axis] where this reads
         self.tp_factor, which are the same value on a 2-D mesh but reached from different state. Keep
         the two in step by hand -- a divergence shows up only as a copy/shape failure at runtime.
 
-        NOTE ON RESIDENCY: the cache is per ttMLA, i.e. per layer, and holds one
-        [1, heads_local, chunk, width] bf16 tensor per distinct offset -- 3.28 MB per entry at 8x4 /
-        chunk 5120, freed only with the model. Growth is linear in context depth, since an offset is
-        visited once per request and never repeats:
+        NOTE ON RESIDENCY: the cache holds one [1, heads_local, chunk, width] bf16 tensor per distinct
+        offset -- 3.28 MB per entry at 8x4 / chunk 5120, freed only with the model. Growth is linear in
+        context depth, since an offset is visited once per request and never repeats.
+        TtPrefillTransformer builds ONE dict and threads it down, so the layers pay that once. Measured
+        at 102,400 tokens (20 offsets, L36 chunked): 20 tensors / 0.07 GB per device against 700 /
+        2.30 GB per-layer, i.e. 2.23 GB per device off allocated DRAM. 700 and not 720 because chunked
+        prefill builds the last layer kv_only and it never reaches _q_stem. Extrapolated, 1,048,576
+        (MAX_POSITION_EMBEDDINGS, 204 offsets) is 0.67 GB shared against 23.4 GB, which left no room
+        for weights and KV cache. Sharing is sound because every input to the tensor (offset, sp_factor,
+        seq_len_local, heads_local, width, beta, orig_max) comes from the chunk, the config or the mesh;
+        none varies by layer. The traced path never had the x36 problem: RotarySetup.make_llama4_scale_buffer
+        allocates one buffer per runtime and rope.refresh_llama4_scale rewrites it per chunk, so all
+        layers read the single ChunkMetadata.llama4_scale.
 
-            261,120 tokens (the longest row tested)   51 offsets  ->  6.0 GB per device
-            1,048,576 tokens (MAX_POSITION_EMBEDDINGS) 204 offsets -> 24.1 GB per device
-
-        Both are before weights and KV cache, so the advertised max context does not fit. The
-        contents are layer-invariant, so sharing one set across layers cuts either figure by 36x
-        (to 0.17 / 0.67 GB), and a single buffer refreshed in place cuts it to one tensor.
-
-        Left as follow-up rather than fixed here, and deliberately joined to
-        https://github.com/tenstorrent/tt-metal/issues/55126: the chosen fix there is to pre-build
-        one device buffer per deterministic k * chunk_size offset and reuse it, which is the same
-        machinery this needs. Refreshing in place additionally requires validating that no other
-        layer's enqueued multiply is still reading the buffer; doing both under one validation pass
-        is cheaper than doing them twice.
+        A shared per-offset SET, not one buffer refreshed in place: an entry is never mutated, so "is
+        another layer's enqueued multiply still reading this?" never arises. That is settled only for a
+        device-to-device refresh (copy and replay both on cq 0) and open for a host write, which is why
+        the sharing stops here.
 
         An LRU cap is NOT the answer: offsets never repeat within a request, so every chunk would
-        miss and rebuild a ~105 MB host tensor, which measured 3x slower at long context.
+        miss and rebuild a 52 MB host tensor ([1, 8, 5120, 320] fp32), which measured 3x slower at
+        long context.
+
+        BUILDING THESE AT WARM-UP instead of lazily is the natural next step, and the transformer is
+        already the owner that would do it. One entry costs 71.5 ms at 8x4 (11.3 ms host build +
+        60.2 ms sharded from_torch, measured over 23 offsets), so the full set is 1.4 s at 102,400
+        tokens and 14.6 s at 1,048,576. That is a relocation, not an addition: the same misses are
+        paid today at one per chunk on whichever layer runs first. It buys fixed allocation addresses,
+        which is what tracing the eager path and closing op2op gaps will need.
+
+        Prebuild only covers the chunk-aligned offsets k * chunk_size_global, though. _q_stem asks
+        only for tile alignment (see the assert in _chunked_attn), and a rotated mid-slab start -- a
+        continued request resuming at the previous turn's real token count -- is a key no warm-up loop
+        can enumerate. Those still miss lazily, so a prebuild pass caps the common case without
+        bounding the cache. Computing the scale on device from the offset scalar, the other option
+        raised in review, is the one that would.
 
         Full width rather than [1, 1, S, 1] + broadcast: a width-1 TILE_LAYOUT operand is tile-padded
         to 32, and relying on bcast to read only column 0 is not worth the risk.

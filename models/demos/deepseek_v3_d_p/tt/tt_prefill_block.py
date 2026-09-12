@@ -268,6 +268,7 @@ class TtPrefillBlock(LightweightModule):
         overlap_shared_expert_with_dispatch: bool = True,
         first_layer_idx: Optional[int] = None,
         tp_shard_kv: bool = False,
+        llama4_scale_cache: Optional[dict] = None,
     ):
         super().__init__()
         self.routing_use_l1_small_for_semaphores = routing_use_l1_small_for_semaphores
@@ -349,6 +350,7 @@ class TtPrefillBlock(LightweightModule):
             sparse_kv_cache_format=sparse_kv_cache_format,
             first_layer_idx=first_layer_idx,
             tp_shard_kv=tp_shard_kv,
+            llama4_scale_cache=llama4_scale_cache,
         )
 
         if kv_only:
