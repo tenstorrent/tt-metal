@@ -9,10 +9,16 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
+#include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.hpp"
+#include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/core/core.hpp"
+
+#include <variant>
+#include <vector>
 
 // Implementation macros for binary operations (must match declarations in binary.hpp)
 #define TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(NAME, OP_TYPE)                             \
@@ -1137,12 +1143,247 @@ TTNN_BINARY_OP_TENSOR_SCALAR_IMPL(logical_xor, LOGICAL_XOR)
 TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(ldexp, LDEXP)
 TTNN_BINARY_OP_TENSOR_SCALAR_IMPL(ldexp, LDEXP)
 TTNN_BINARY_OP_INPLACE_IMPL(ldexp_, LDEXP)
-TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(logaddexp, LOGADDEXP)
-TTNN_BINARY_OP_TENSOR_SCALAR_IMPL(logaddexp, LOGADDEXP)
-TTNN_BINARY_OP_INPLACE_IMPL(logaddexp_, LOGADDEXP)
-TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(logaddexp2, LOGADDEXP2)
-TTNN_BINARY_OP_TENSOR_SCALAR_IMPL(logaddexp2, LOGADDEXP2)
-TTNN_BINARY_OP_INPLACE_IMPL(logaddexp2_, LOGADDEXP2)
+// Overflow-safe logaddexp/logaddexp2 (see #52037).
+//
+// The fused pipeline composes these as log(exp(a) + exp(b)), so exp() saturates
+// for |a| or |b| above ~88.7 and the op returns inf even though the exact result
+// is bounded by max(a, b) + ln 2. The reformulation keeps every intermediate in
+// range:
+//
+//   logaddexp(a, b)  = max(a, b) + log1p(exp(-|a - b|))
+//   logaddexp2(a, b) = max(a, b) + log1p(exp2(-|a - b|)) * (1 / ln 2)
+//
+// -|a - b| <= 0, so the exp term stays in (0, 1] and cannot overflow; the result
+// inherits its magnitude from max(a, b). log1p (rather than log(1 + x)) preserves
+// the correction term when |a - b| is large and exp(-|a - b|) underflows toward 0.
+// When a == b == +-inf the difference is NaN, so the |a - b| path is bypassed and
+// max(a, b) is returned, matching torch.
+namespace {
+
+Tensor logaddexp_apply_activations(
+    const Tensor& input,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> activations,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    if (activations.empty()) {
+        return input;
+    }
+    return operations::unary::detail::unary_impl(
+        input,
+        std::vector<operations::unary::EltwiseUnaryWithParam>(activations.begin(), activations.end()),
+        std::nullopt,
+        std::nullopt,
+        sub_core_grids);
+}
+
+Tensor logaddexp_composite(
+    const Tensor& lhs,
+    const Tensor& rhs,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    bool base2) {
+    Tensor a = logaddexp_apply_activations(lhs, lhs_activations, sub_core_grids);
+    Tensor b = logaddexp_apply_activations(rhs, rhs_activations, sub_core_grids);
+
+    Tensor max_ab = ttnn::maximum(a, b);
+    Tensor neg_abs_diff = ttnn::neg(ttnn::abs(ttnn::subtract(a, b)));
+    Tensor correction =
+        base2 ? ttnn::multiply(
+                    ttnn::log1p(ttnn::exp2(neg_abs_diff)), operations::unary::ScalarVariant{1.4426950408889634f})
+                : ttnn::log1p(ttnn::exp(neg_abs_diff));
+    Tensor composite = ttnn::add(max_ab, correction, output_dtype);
+
+    // |a - b| is NaN when a == b == +-inf; return max(a, b) there, matching torch.
+    Tensor same_inf = ttnn::logical_and(ttnn::eq(a, b), ttnn::isinf(a));
+    Tensor result = ttnn::where(
+        same_inf,
+        max_ab,
+        composite,
+        memory_config,
+        post_activations.empty() ? output : std::optional<Tensor>{},
+        sub_core_grids);
+    if (!post_activations.empty()) {
+        result = operations::unary::detail::unary_impl(
+            result,
+            std::vector<operations::unary::EltwiseUnaryWithParam>(post_activations.begin(), post_activations.end()),
+            memory_config,
+            output,
+            sub_core_grids);
+    }
+    return result;
+}
+
+}  // namespace
+
+Tensor logaddexp(
+    const Tensor& lhs,
+    const Tensor& rhs,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    return logaddexp_composite(
+        lhs,
+        rhs,
+        output_dtype,
+        memory_config,
+        output,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        sub_core_grids,
+        /*base2=*/false);
+}
+
+Tensor logaddexp(
+    const Tensor& lhs,
+    operations::unary::ScalarVariant rhs,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    Tensor rhs_tensor = std::visit(
+        [&](auto value) { return ttnn::full_like(lhs, static_cast<float>(value)); }, rhs);
+    return logaddexp_composite(
+        lhs,
+        rhs_tensor,
+        output_dtype,
+        memory_config,
+        output,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        sub_core_grids,
+        /*base2=*/false);
+}
+
+Tensor logaddexp_(
+    const Tensor& lhs,
+    const Tensor& rhs,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    return logaddexp_composite(
+        lhs,
+        rhs,
+        std::nullopt,
+        std::nullopt,
+        lhs,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        sub_core_grids,
+        /*base2=*/false);
+}
+
+Tensor logaddexp_(
+    const Tensor& lhs,
+    operations::unary::ScalarVariant rhs,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    return logaddexp(
+        lhs, rhs, std::nullopt, std::nullopt, lhs, post_activations, lhs_activations, rhs_activations, sub_core_grids, sub_device_id);
+}
+
+Tensor logaddexp2(
+    const Tensor& lhs,
+    const Tensor& rhs,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    return logaddexp_composite(
+        lhs,
+        rhs,
+        output_dtype,
+        memory_config,
+        output,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        sub_core_grids,
+        /*base2=*/true);
+}
+
+Tensor logaddexp2(
+    const Tensor& lhs,
+    operations::unary::ScalarVariant rhs,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    Tensor rhs_tensor = std::visit(
+        [&](auto value) { return ttnn::full_like(lhs, static_cast<float>(value)); }, rhs);
+    return logaddexp_composite(
+        lhs,
+        rhs_tensor,
+        output_dtype,
+        memory_config,
+        output,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        sub_core_grids,
+        /*base2=*/true);
+}
+
+Tensor logaddexp2_(
+    const Tensor& lhs,
+    const Tensor& rhs,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    return logaddexp_composite(
+        lhs,
+        rhs,
+        std::nullopt,
+        std::nullopt,
+        lhs,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        sub_core_grids,
+        /*base2=*/true);
+}
+
+Tensor logaddexp2_(
+    const Tensor& lhs,
+    operations::unary::ScalarVariant rhs,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    return logaddexp2(
+        lhs, rhs, std::nullopt, std::nullopt, lhs, post_activations, lhs_activations, rhs_activations, sub_core_grids, sub_device_id);
+}
 TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(squared_difference, SQUARED_DIFFERENCE)
 TTNN_BINARY_OP_TENSOR_SCALAR_IMPL(squared_difference, SQUARED_DIFFERENCE)
 TTNN_BINARY_OP_INPLACE_IMPL(squared_difference_, SQUARED_DIFFERENCE)
