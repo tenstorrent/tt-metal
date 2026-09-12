@@ -228,10 +228,58 @@ enum PerfCounterType : std::uint16_t
     L1_1_UNPACKER1_EXT_IF_1_GRANT,
     L1_1_UNPACKER1_EXT_IF_2_GRANT,
     L1_1_UNPACKER1_EXT_IF_3_GRANT,
-    // counter_type is an 8-bit field on tt-1xx; keep every value below 256.
+    // === Quasar (A0) ===
+    // Thread 3 variants (Quasar NEOs run 4 threads)
+    CFG_INSTRN_AVAILABLE_3,
+    SYNC_INSTRN_AVAILABLE_3,
+    THCON_INSTRN_AVAILABLE_3,
+    MATH_INSTRN_AVAILABLE_3,
+    UNPACK_INSTRN_AVAILABLE_3,
+    PACK_INSTRN_AVAILABLE_3,
+    THREAD_STALLS_3,
+    THREAD_INSTRUCTIONS_3,
+    // Quasar-only instruction classes. XSEARCH requests are tied to 0 in the RTL and its grants alias
+    // THREAD_INSTRUCTIONS, so it is not in the table; the enumerators stay so the ordinals below do not shift.
+    XSEARCH_INSTRN_AVAILABLE_0,
+    XSEARCH_INSTRN_AVAILABLE_1,
+    XSEARCH_INSTRN_AVAILABLE_2,
+    XSEARCH_INSTRN_AVAILABLE_3,
+    INSTISSUE_INSTRN_AVAILABLE_0,
+    INSTISSUE_INSTRN_AVAILABLE_1,
+    INSTISSUE_INSTRN_AVAILABLE_2,
+    INSTISSUE_INSTRN_AVAILABLE_3,
+    // Stall reasons, OR-reduced across the 4 threads (Quasar has no per-thread reason counters)
+    TILE_COUNTER_STALL_PACK,
+    TILE_COUNTER_STALL_UNPACK,
+    SRCS_STALL_PACK,
+    SRCS_STALL_SFPU,
+    SRCS_STALL_UNPACK,
+    DEST_STALL_PACK,
+    DEST_STALL_SFPU,
+    DEST_STALL_MATH,
+    DEST_STALL_UNPACK,
+    SFPU_DATA_HAZARD_STALL,
+    FPU_DATA_HAZARD_STALL,
+    SRCB_STALL_UNPACK,
+    SRCA_STALL_UNPACK,
+    DVALID_STALL_MATH,
+    SRCA_STALL_MATH,
+    // The l1_client CSR event counter; records carry QUASAR_L1_CLIENT_EVENT_BASE + (subport*8 + event).
+    QUASAR_L1_CLIENT_EVENT,
+    // Quasar runs 3 unpackers per thread.
+    UNPACK2_BUSY_THREAD0,
+    // Values stay below 256: the l1_client selections are encoded above them in counter_type.
 };
 
-static_assert(L1_1_UNPACKER1_EXT_IF_3_GRANT <= 255, "PerfCounterType enum exceeds 8-bit counter_type field");
+static_assert(UNPACK2_BUSY_THREAD0 <= 255, "PerfCounterType must leave 256 and up for l1_client selections");
+
+// Quasar's l1_client counter has 296 selections (subport*8 + event) behind one enum value. A record
+// carries QUASAR_L1_CLIENT_EVENT_BASE + selection in counter_type; the host maps it back.
+inline constexpr std::uint32_t QUASAR_L1_CLIENT_EVENT_BASE    = 256;
+inline constexpr std::uint32_t QUASAR_L1_CLIENT_NUM_SUBPORTS  = 37;
+inline constexpr std::uint32_t QUASAR_L1_CLIENT_NUM_EVENTS    = 8;
+inline constexpr std::uint32_t QUASAR_L1_CLIENT_NUM_SELECTIONS = QUASAR_L1_CLIENT_NUM_SUBPORTS * QUASAR_L1_CLIENT_NUM_EVENTS;
+static_assert(QUASAR_L1_CLIENT_NUM_SELECTIONS == 296, "the host side hard-codes 296 l1_client selections");
 
 // One physical counter block each. The order is the LLK harness on-wire bank id, so it must not change.
 enum class Bank : std::uint8_t
