@@ -89,17 +89,4 @@ void throttle_mm_perf(
     }
 }
 
-void add_dram_skip_defines_if_needed(
-    const tt::ARCH arch, std::map<std::string, std::string>& mm_in1_sender_writer_defines) {
-    const bool skip_in1_dram = std::getenv("TT_MM_SKIP_IN1_DRAM");
-    if (skip_in1_dram && (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE)) {
-        mm_in1_sender_writer_defines["SKIP_IN1_DRAM"] = "1";
-    }
-}
-
-bool should_sync_after_in1_dram(const tt::ARCH arch) {
-    const bool sync_in1_dram = std::getenv("TT_MM_SYNC_AFTER_IN1_DRAM");
-    return sync_in1_dram && (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE);
-}
-
 }  // namespace ttnn::operations::compute_throttle_utils
