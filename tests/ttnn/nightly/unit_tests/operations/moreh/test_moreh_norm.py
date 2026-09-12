@@ -501,6 +501,75 @@ def test_moreh_norm_rank_1_global_dim(p, dim, keepdim, device, is_linalg_vector_
     )
 
 
+def make_no_tie_inf_input(input_shape, dim, *, dtype=torch.float32):
+    """Input whose |x| values are distinct within every group reduced by `dim` (exact in bf16).
+
+    Along the reduced dim the magnitudes run through odd/256 values — adjacent
+    magnitudes differ by 2/256, far above bfloat16's rounding step for values
+    below 1 — with alternating signs, so argmax(|x|) and argmin(|x|) along
+    `dim` are unique and torch's gradient is a non-degenerate single point.
+    Non-reduced positions get a per-group scale (group_id % 61)/64 so groups
+    hold different values.
+    """
+    shape = list(input_shape)
+    red = dim
+    red_numel = shape[red]
+    pos = torch.arange(red_numel, dtype=torch.float64)
+    odd = (2 * pos + 1) / 256.0
+    sign = torch.where(pos % 2 == 0, 1.0, -1.0)
+    v = (odd * sign).reshape([-1 if i == red else 1 for i in range(len(shape))]).expand(shape)
+    grid = torch.meshgrid(*[torch.arange(s) for s in shape], indexing="ij")
+    gid = torch.zeros(shape, dtype=torch.float64)
+    for i in range(len(shape)):
+        if i != red:
+            gid = gid * shape[i] + grid[i].double()
+    scale = 1.0 + (gid % 61.0) / 64.0
+    return (v.double() * scale).to(dtype).requires_grad_()
+
+
+@pytest.mark.parametrize("p", [float("inf"), float("-inf")])
+@pytest.mark.parametrize(
+    "dim_rtol_atol",
+    [
+        [0, 0.06, 0.06],
+        [1, 0.06, 0.06],
+        [2, 0.06, 0.06],
+        [3, 0.06, 0.06],
+    ],
+    ids=["N", "C", "H", "W"],
+)
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        [5, 8, 78, 77],
+    ],
+)
+@pytest.mark.parametrize("keepdim", [True, False])
+def test_moreh_norm_backward_p_inf(input_shape, p, dim_rtol_atol, keepdim, device):
+    """p = ±inf backward: dx = sign(x) * dy at argmax(|x|) (+inf) / argmin(|x|) (-inf).
+
+    Before the fix the kernel fed floor(±inf) into the uint32 exponent path of the
+    power ladder and produced garbage (#56248). The inputs are constructed so the
+    arg-extremum of |x| is unique per reduced group (torch would otherwise split the
+    gradient 1/T across a tie set, which the single-point sub-gradient does not model).
+    """
+    torch.manual_seed(2024)
+    dim, rtol, atol = dim_rtol_atol
+    check_dim(input_shape, dim, keepdim)
+    input = make_no_tie_inf_input(input_shape, dim)
+    output_grad_shape, _ = compute_output_shape(input_shape, dim, keepdim=keepdim)
+    output_grad = torch.empty(output_grad_shape, dtype=torch.float32).uniform_(-1, 1)
+    _, expected_input_grad = torch_norm(
+        input, output_grad, p=p, dim=dim, keepdim=keepdim, do_backward=True
+    )
+    _, actual_input_grad = ttnn_norm(
+        input, output_grad, p=p, dim=dim, keepdim=keepdim, do_backward=True, device=device
+    )
+    passing, out = comp_allclose(expected_input_grad, actual_input_grad, rtol=rtol, atol=atol)
+    logger.info(f"input_grad's {out}")
+    assert passing
+
+
 @pytest.mark.parametrize("p", [2.0, 2.5, -2.5])
 @pytest.mark.parametrize(
     "dim_rtol_atol",
