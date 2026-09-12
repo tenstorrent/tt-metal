@@ -132,6 +132,14 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
             "Cache tensor batch size ({}) must be <= input tensor height ({})",
             cache_tensor.padded_shape()[0],
             input_tensor.padded_shape()[-2]);
+        // Reject Bcache > 32 that is not a multiple of 32; those sizes silently corrupt the cache (#52671).
+        {
+            const uint32_t Bcache = cache_tensor.padded_shape()[0];
+            TT_FATAL(
+                Bcache <= 32 || Bcache % 32 == 0,
+                "update_cache requires the cache batch to be at most 32 or a multiple of 32, got {}",
+                Bcache);
+        }
         // batch offset is only valid if num_user less than 32 and batch_offset + num_user <= 32
         if (cache_tensor.padded_shape()[0] < 32) {
             TT_FATAL(
