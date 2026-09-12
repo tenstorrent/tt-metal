@@ -3,7 +3,6 @@
 
 """Configuration and checkpoint loading for Gemma4-31B-it."""
 
-import errno
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,45 +13,6 @@ from tqdm import tqdm
 from transformers import AutoConfig, AutoModelForCausalLM
 
 from models.demos.gemma4_d_p.tt.precision import dtype_to_str
-
-_RO_ERRNOS = (errno.EROFS, errno.EACCES, errno.EPERM)
-
-
-def _writable_cache_mirror(preferred: Path) -> Path:
-    """Writable mirror for a preferred cache dir on RO mounts (CI MLPerf :ro)."""
-    root = Path(os.environ.get("TT_METAL_HOME") or os.environ.get("HOME") or "/tmp")
-    suffix = Path(*preferred.parts[-2:]) if len(preferred.parts) >= 2 else Path(preferred.name)
-    return root / "generated" / "gemma4_tt_cache" / suffix
-
-
-def _ensure_cache_dir(path: Path) -> Path:
-    """Return ``path``, creating it when possible.
-
-    CI mounts ``/mnt/MLPerf/huggingface`` read-only (``MLPERF_READ_ONLY``).
-    ``Path.mkdir`` then raises ``OSError: [Errno 30] Read-only file system``
-    when the cache subdir is missing. Reuse an existing dir; otherwise mirror
-    under ``$TT_METAL_HOME/generated/gemma4_tt_cache/...`` so cold builds can
-    still write.
-    """
-    if path.is_dir():
-        return path
-    try:
-        path.mkdir(parents=True, exist_ok=True)
-        return path
-    except OSError as e:
-        if e.errno not in _RO_ERRNOS:
-            raise
-        if path.is_dir():
-            return path
-        alt = _writable_cache_mirror(path)
-        logger.warning(
-            "Gemma4 weight cache: {} is not writable ({}); using {}.",
-            path,
-            e,
-            alt,
-        )
-        alt.mkdir(parents=True, exist_ok=True)
-        return alt
 
 
 def validate_31b_config(config):
@@ -240,7 +200,7 @@ class Gemma4ModelArgs:
 
     @staticmethod
     def resolve_model_cache_path(model_path):
-        """Resolve the cache root for model artifacts."""
+        """Resolve an existing cache root for model artifacts."""
         cache_dir = os.getenv("TT_CACHE_PATH")
         if cache_dir:
             cache_dir = Path(cache_dir)
@@ -256,10 +216,12 @@ class Gemma4ModelArgs:
             hf_home = os.getenv("HF_HOME") or os.path.expanduser("~/.cache/huggingface")
             sanitized = str(model_path).replace("/", "--")
             cache_dir = Path(hf_home) / "tt_cache" / sanitized
-        return _ensure_cache_dir(cache_dir)
+        if not cache_dir.is_dir():
+            raise FileNotFoundError(f"Cache directory does not exist or is not a directory: {cache_dir}")
+        return cache_dir
 
     def weight_cache_path(self, dtype, mesh_shape=None):
-        """Return the weight cache directory for this dtype and Galaxy mesh geometry."""
+        """Return an existing weight cache directory for this dtype and mesh geometry."""
         if self.model_cache_path is None:
             raise ValueError("model_cache_path must be initialized before requesting a weight cache path")
         dtype_str = dtype_to_str(dtype)
@@ -267,4 +229,7 @@ class Gemma4ModelArgs:
         if shape is None:
             raise ValueError("Mesh shape must be initialized before requesting a weight cache path")
         mesh_suffix = "x".join(str(d) for d in shape)
-        return _ensure_cache_dir(self.model_cache_path / f"tensor_cache_{dtype_str}_mesh{mesh_suffix}")
+        path = self.model_cache_path / f"tensor_cache_{dtype_str}_mesh{mesh_suffix}"
+        if not path.is_dir():
+            raise FileNotFoundError(f"Weight cache directory does not exist or is not a directory: {path}")
+        return path
