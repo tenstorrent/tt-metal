@@ -62,10 +62,33 @@ def _load_kv_pt_trace(pt_path: str) -> dict:
     return cached
 
 
-def _load_golden_kv_post(trace_dir, layer_idx: int, total_len: int) -> "torch.Tensor":
-    """[total_len, 576] golden kv_post_transform for one layer, format-agnostic:
+def _load_sharded_golden_rows(layer_dir: Path, key: str, row_start: int, row_end: int) -> "torch.Tensor":
+    """Rows ``[row_start, row_end)`` of one ``rows_<start>_<end>.safetensors`` stream, in row order.
+
+    Shard names carry the row span they hold, so only the shards overlapping the request are read.
+    """
+    import torch
+    from safetensors import safe_open
+
+    rows = []
+    for shard in sorted(layer_dir.glob("rows_*.safetensors"), key=lambda p: int(p.stem.split("_")[1])):
+        start, end = (int(x) for x in shard.stem.split("_")[1:3])
+        if end <= row_start or start >= row_end:
+            continue
+        with safe_open(shard, framework="pt") as f:
+            t = f.get_tensor(key)
+        rows.append(t[max(row_start - start, 0) : min(row_end - start, t.shape[0])])
+    if not rows:
+        raise FileNotFoundError(f"{layer_dir} has no shard covering rows [{row_start},{row_end})")
+    return torch.cat(rows, dim=0)
+
+
+def _load_golden_kv_post(trace_dir, layer_idx: int, total_len: int, row_start: int = 0) -> "torch.Tensor":
+    """[total_len - row_start, 576] golden kv_post_transform rows for one layer, format-agnostic:
     - DeepSeek: a single kv_cache/layer_N.safetensors holding the full tensor.
     - Kimi (vllm): kv_cache/layer_N/rows_<start>_<end>.safetensors shards, concatenated by start row.
+
+    Rows are trace-relative; a windowed trace's row 0 is not prompt position 0.
     """
     import torch
     from safetensors import safe_open
@@ -74,18 +97,9 @@ def _load_golden_kv_post(trace_dir, layer_idx: int, total_len: int) -> "torch.Te
     single = Path(trace_dir) / "kv_cache" / f"layer_{layer_idx}.safetensors"
     if single.exists():
         with safe_open(single, framework="pt") as f:
-            return f.get_slice(key)[:total_len].to(torch.float32)
+            return f.get_slice(key)[row_start:total_len].to(torch.float32)
     layer_dir = Path(trace_dir) / "kv_cache" / f"layer_{layer_idx}"
-    shards = sorted(layer_dir.glob("rows_*.safetensors"), key=lambda p: int(p.stem.split("_")[1]))
-    rows, have = [], 0
-    for shard in shards:
-        with safe_open(shard, framework="pt") as f:
-            t = f.get_tensor(key)
-        rows.append(t)
-        have += t.shape[0]
-        if have >= total_len:
-            break
-    return torch.cat(rows, dim=0)[:total_len].to(torch.float32)
+    return _load_sharded_golden_rows(layer_dir, key, row_start, total_len).to(torch.float32)
 
 
 def index_golden_present(trace_dir) -> bool:
@@ -93,34 +107,19 @@ def index_golden_present(trace_dir) -> bool:
 
     Some vLLM dumps store only ``dsa/dsa_topk_indices_layer_*``, so a trace can hold a valid KVPE golden
     and no indexer key at all. Callers use this to skip index-cache validation instead of failing on the
-    empty ``torch.cat([])`` the loader would hit. Lives next to the loader so the ``dsa/indexer_k_layer_*``
+    missing-shard error the loader would raise. Lives next to the loader so the ``dsa/indexer_k_layer_*``
     layout stays encoded in exactly one place."""
-    from pathlib import Path
-
     dsa_dir = Path(trace_dir) / "dsa"
     return dsa_dir.is_dir() and any(dsa_dir.glob("indexer_k_layer_*"))
 
 
-def _load_golden_index_k(trace_dir, layer_idx: int, total_len: int) -> "torch.Tensor":
-    """[total_len, index_head_dim] golden indexer key for one layer, from the vLLM trace's row-sharded
-    dsa/indexer_k_layer_N/rows_<start>_<end>.safetensors shards (concatenated by start row). Mirrors
+def _load_golden_index_k(trace_dir, layer_idx: int, total_len: int, row_start: int = 0) -> "torch.Tensor":
+    """[total_len - row_start, index_head_dim] golden indexer key rows for one layer, from the vLLM
+    trace's row-sharded dsa/indexer_k_layer_N/rows_<start>_<end>.safetensors shards. Mirrors
     _load_golden_kv_post but reads the dsa/ subdir and the indexer_k_layer_N key."""
-    from pathlib import Path
-
-    from safetensors import safe_open
-
     key = f"indexer_k_layer_{layer_idx}"
     layer_dir = Path(trace_dir) / "dsa" / key
-    shards = sorted(layer_dir.glob("rows_*.safetensors"), key=lambda p: int(p.stem.split("_")[1]))
-    rows, have = [], 0
-    for shard in shards:
-        with safe_open(shard, framework="pt") as f:
-            t = f.get_tensor(key)
-        rows.append(t)
-        have += t.shape[0]
-        if have >= total_len:
-            break
-    return torch.cat(rows, dim=0)[:total_len].to(torch.float32)
+    return _load_sharded_golden_rows(layer_dir, key, row_start, total_len).to(torch.float32)
 
 
 def kv_cache_pcc_check(
