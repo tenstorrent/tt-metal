@@ -83,6 +83,9 @@ struct p_unpacr_nop
     constexpr static std::uint32_t UNP_ZEROSRC_RESET_ALL_BANKS    = 0b1001; // default is clear current bank
     constexpr static std::uint32_t UNP_ZEROSRC_STALL_RESET_WR_RDY = 0b10001;
     constexpr static std::uint32_t UNP_ZEROSRC_SET_DVALID         = 0b1000001;
+    // WaitLikeUnpacr<<4 | NegativeInfSrcA<<2 | 0x1 — the neginf sibling of
+    // UNP_ZEROSRC_STALL_RESET_WR_RDY.
+    constexpr static std::uint32_t UNP_NEGINFSRC_STALL_RESET_WR_RDY = 0b10101;
 
     constexpr static std::uint32_t UNP0 = 0x0;
     constexpr static std::uint32_t UNP1 = 0x1;

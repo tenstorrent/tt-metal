@@ -35,7 +35,8 @@ inline void _llk_unpack_tilize_mop_config_(const bool unpack_to_dest = false)
         TT_OP_UNPACR(SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr std::uint32_t unpack_srca_to_dest =
         TT_OP_UNPACR(0, 0b00010001 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    static constexpr std::uint32_t unpack_srcb_set_dvalid = TT_OP_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+    static constexpr std::uint32_t unpack_srcb_set_dvalid =
+        TT_OP_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1 /* wait like UNPACR */, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
 
     ckernel_template tmp(1 /*outerloop*/, 1 /*innerloop*/, unpack_to_dest ? unpack_srca_to_dest : unpack_srcb_set_dvalid);
 
@@ -568,11 +569,11 @@ inline void _llk_unpack_tilizeA_B_(
 
         if constexpr (neginf_srcA)
         {
-            TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 0, 0, p_unpacr::UNP_CLRSRC_NEGINF, p_unpacr::UNP_CLRSRC);
+            TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1 /* wait like UNPACR */, 0, p_unpacr::UNP_CLRSRC_NEGINF, p_unpacr::UNP_CLRSRC);
         }
         else if constexpr (zero_srcA_reduce)
         {
-            TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 0, 0, p_unpacr::UNP_CLRSRC_ZERO, p_unpacr::UNP_CLRSRC);
+            TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1 /* wait like UNPACR */, 0, p_unpacr::UNP_CLRSRC_ZERO, p_unpacr::UNP_CLRSRC);
         }
 
         // Validate and configure addresses

@@ -33,7 +33,7 @@ inline void _llk_unpack_tilize_mop_config_(const bool narrow_tile = false, const
         TT_OP_UNPACR(SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr std::uint32_t unpack_srca_to_dest =
         TT_OP_UNPACR(SrcA, 0b00010001 /*CH0/CH1 Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    static constexpr std::uint32_t unpack_srcb_zerosrc    = TT_OP_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC);
+    static constexpr std::uint32_t unpack_srcb_zerosrc    = TT_OP_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC_STALL_RESET_WR_RDY);
     static constexpr std::uint32_t unpack_srcb_set_dvalid = TT_OP_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_SET_DVALID); // WA for tenstorrent/budabackend#1230
 
     const std::uint32_t outerloop     = narrow_tile ? 1 : 2;
@@ -326,8 +326,8 @@ inline void _llk_unpack_tilizeA_B_mop_config_(const std::uint32_t num_faces = 4)
         0,
         0,
         1); // Skip face ptr inc if same face is reloaded into srcB
-    static constexpr std::uint32_t unpack_neginf_srca = TT_OP_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_NEGINFSRC); // Needed for max pool
-    static constexpr std::uint32_t unpack_zero_srca   = TT_OP_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC);   // Needed for dot product
+    static constexpr std::uint32_t unpack_neginf_srca = TT_OP_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_NEGINFSRC_STALL_RESET_WR_RDY); // Needed for max pool
+    static constexpr std::uint32_t unpack_zero_srca   = TT_OP_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC_STALL_RESET_WR_RDY);   // Needed for dot product
     static constexpr std::uint32_t unpack_srcb_2_face =
         TT_OP_UNPACR(SrcB, 0b100010, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1); // Needed for dot product
     static constexpr std::uint32_t unpack_srca_dat_valid =
@@ -508,7 +508,7 @@ inline void _llk_unpack_tilizeA_B_(
         {
             if (num_faces == 4 && n == 0)
             {
-                TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC);
+                TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC_STALL_RESET_WR_RDY);
             }
 
             ckernel::ckernel_template::run();

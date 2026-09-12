@@ -72,7 +72,7 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape tensor_
 
     if (is_tiny || is_scalar)
     {
-        ckernel_template tmp(1, innerloop, TT_OP_UNPACR_NOP(clear_src, 0, 0, 0, 0, 0, 0, clear_val, p_unpacr_nop::CLR_SRC), replay);
+        ckernel_template tmp(1, innerloop, TT_OP_UNPACR_NOP(clear_src, 0, 0, 0, 0, 1 /* wait like UNPACR */, 0, clear_val, p_unpacr_nop::CLR_SRC), replay);
         tmp.program();
     }
     else
