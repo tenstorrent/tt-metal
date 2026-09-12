@@ -31,7 +31,13 @@ Tensor unary_impl(
     const std::optional<CoreRangeSet>& sub_core_grids) {
     TT_FATAL(!op_chain.empty(), "Op chain cannot be empty");
     DataType input_dtype = input_tensor.dtype();
-    DataType output_dtype = input_dtype;
+    // A preallocated output decides the dtype, the same way it already decides the memory config
+    // below: the program factory takes the output CB's data format and page size from that tensor,
+    // while compute_program_hash sees only this attribute. Defaulting to the input's dtype instead
+    // let two calls differing solely in the preallocated output dtype collide, and the second then
+    // ran the first's page size against the other's buffer. A trailing TYPECAST or BITCAST still
+    // wins below -- both entry points already require the two to agree.
+    DataType output_dtype = optional_output_tensor.has_value() ? optional_output_tensor->dtype() : input_dtype;
     if (op_chain.back().type() == unary::UnaryOpType::TYPECAST ||
         op_chain.back().type() == unary::UnaryOpType::BITCAST) {
         output_dtype = static_cast<DataType>(*op_chain.back().get_param_if<float>(1));
