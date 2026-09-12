@@ -64,6 +64,7 @@ def run_single_routed_expert(
     active_tokens: int = None,
     x_row_major: bool = False,
     weights_dram_sharded: bool = False,
+    in0_block_w_gu: int = 0,
     activation=None,
     weight_scale: float = 0.02,
     weights_dtype=ttnn.bfloat4_b,
@@ -206,6 +207,7 @@ def run_single_routed_expert(
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=weights_dtype,
         weights_dram_sharded=weights_dram_sharded,
+        in0_block_w_gu=in0_block_w_gu,
         activation=activation,
     )
 

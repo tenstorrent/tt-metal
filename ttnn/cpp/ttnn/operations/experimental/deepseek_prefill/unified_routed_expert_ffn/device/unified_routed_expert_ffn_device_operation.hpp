@@ -54,6 +54,7 @@ ttnn::Tensor unified_routed_expert_moe(
     const std::vector<ttnn::Tensor>& up_biases = {},
     const std::vector<ttnn::Tensor>& down_biases = {},
     uint32_t min_active_tokens = 0,
-    uint32_t max_active_tokens = std::numeric_limits<uint32_t>::max());
+    uint32_t max_active_tokens = std::numeric_limits<uint32_t>::max(),
+    uint32_t in0_block_w_gu = 0);
 
 }  // namespace ttnn::prim

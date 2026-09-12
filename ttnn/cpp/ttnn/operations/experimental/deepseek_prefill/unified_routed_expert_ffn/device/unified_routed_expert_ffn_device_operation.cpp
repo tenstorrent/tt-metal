@@ -200,6 +200,10 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     // An inverted band drops every expert down the same count-0 path a genuine skip takes, so the
     // op would run to completion and write nothing rather than fail.
     TT_FATAL(
+        op.in0_block_w_gu == 0 || (op.in0_block_w_gu >= 1 && op.in0_block_w_gu <= 64),
+        "in0_block_w_gu must be 0 (op default) or in [1, 64], got {}",
+        op.in0_block_w_gu);
+    TT_FATAL(
         op.min_active_tokens <= op.max_active_tokens,
         "unified_routed_expert_ffn: active-token band is inverted: min_active_tokens {} > "
         "max_active_tokens {}",
@@ -398,7 +402,8 @@ ttnn::Tensor unified_routed_expert_moe(
     const std::vector<ttnn::Tensor>& up_biases,
     const std::vector<ttnn::Tensor>& down_biases,
     uint32_t min_active_tokens,
-    uint32_t max_active_tokens) {
+    uint32_t max_active_tokens,
+    uint32_t in0_block_w_gu) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::UnifiedRoutedExpertFfnDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
@@ -410,7 +415,8 @@ ttnn::Tensor unified_routed_expert_moe(
             .fuse_bias = !gate_biases.empty(),
             .compute_kernel_config = compute_kernel_config,
             .min_active_tokens = min_active_tokens,
-            .max_active_tokens = max_active_tokens},
+            .max_active_tokens = max_active_tokens,
+            .in0_block_w_gu = in0_block_w_gu},
         OperationType::tensor_args_t{
             .x = x,
             .gate_projs = gate_projs,

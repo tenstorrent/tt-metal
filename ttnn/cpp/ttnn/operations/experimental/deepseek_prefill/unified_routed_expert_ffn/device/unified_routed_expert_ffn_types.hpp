@@ -97,6 +97,16 @@ struct UnifiedRoutedExpertFfnParams {
     uint32_t min_active_tokens = 0;
     uint32_t max_active_tokens = std::numeric_limits<uint32_t>::max();
 
+    // Requested gate/up K-block width, in tiles; 0 = the op's own default. Only a REQUEST:
+    // the program factory still snaps it down to a divisor of K_gate_tiles and then to what
+    // L1 holds, so an unreachable value costs nothing but is not honoured either. Raising it
+    // trades L1 against a lower K-block count, which shortens the row-major x read (one
+    // request per token row PER BLOCK) -- worth ~1.02-1.04x below 256 active tokens on
+    // 6144x2048 with DRAM ND-sharded weights, and nothing on shapes whose fitted width does
+    // not move. Per-model rather than a new default because the fitted width, and hence the
+    // perf baseline, would otherwise shift on shapes that were never re-measured.
+    uint32_t in0_block_w_gu = 0;
+
     static constexpr auto attribute_names = std::forward_as_tuple(
         "m_tiles",
         "experts_per_chip",
@@ -104,10 +114,18 @@ struct UnifiedRoutedExpertFfnParams {
         "activation",
         "fuse_bias",
         "min_active_tokens",
-        "max_active_tokens");
+        "max_active_tokens",
+        "in0_block_w_gu");
     auto attribute_values() const {
         return std::forward_as_tuple(
-            m_tiles, experts_per_chip, x_is_row_major, activation, fuse_bias, min_active_tokens, max_active_tokens);
+            m_tiles,
+            experts_per_chip,
+            x_is_row_major,
+            activation,
+            fuse_bias,
+            min_active_tokens,
+            max_active_tokens,
+            in0_block_w_gu);
     }
 };
 

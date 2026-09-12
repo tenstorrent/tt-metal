@@ -158,7 +158,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // chunks to divisors of per_core_M_max.
     constexpr uint32_t kMaxChunkMTiles = 4 * kCoreGridY;  // per_core_M <= 4 (see above)
     uint32_t chunk_M_tiles = kMaxChunkMTiles;
-    uint32_t in0_block_w_gu = 16;
+    // 16 unless the caller asked for a specific width (op.in0_block_w_gu); either way the
+    // divisor snap and the L1 fit below get the last word.
+    uint32_t in0_block_w_gu = op.in0_block_w_gu != 0 ? op.in0_block_w_gu : 16;
     const auto grid_size = t.x.device()->compute_with_storage_grid_size();
     TT_FATAL(
         grid_size.x >= kCoreGridX && grid_size.y >= kCoreGridY,
