@@ -1182,6 +1182,7 @@
       timeout: 35
   owner_id: U08HM8SL5U4 # Maciek Dragula
   team: models
+  budget_type: demo
   sp_config: sc1
 
 # Same harness/goldens at the variable-chunk small size (PREFILL_CHUNK_SIZE=1024 -> 5 chunks
@@ -1213,6 +1214,7 @@
       timeout: 35
   owner_id: U08HM8SL5U4 # Maciek Dragula
   team: models
+  budget_type: demo
   sp_config: sc1
 
 # Variable-chunk smoke (models/demos/gpt_oss_d_p/tests/variable_chunk_smoke.py):
@@ -1243,6 +1245,7 @@
       timeout: 30
   owner_id: U08HM8SL5U4 # Maciek Dragula
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
