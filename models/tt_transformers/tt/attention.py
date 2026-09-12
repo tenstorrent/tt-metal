@@ -745,6 +745,24 @@ class Attention(LightweightModule):
 
         return q_heads_1QSD, k_heads_1KSD
 
+    @staticmethod
+    def _qkv_head_split_takes_shard(xqkv_fused_sharded: ttnn.Tensor) -> bool:
+        """Whether nlp_create_qkv_heads_decode's SHARDED factory accepts this tensor as-is.
+
+        Its contract (see the op's validate): bf16, WIDTH sharded, ROW_MAJOR orientation,
+        and one shard per core spanning the full height. Anything else has to take the
+        interleaved factory, which runs the split on one core.
+        """
+        if xqkv_fused_sharded.dtype != ttnn.bfloat16 or not xqkv_fused_sharded.is_sharded():
+            return False
+        memcfg = xqkv_fused_sharded.memory_config()
+        if memcfg.memory_layout != ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+            return False
+        shard_spec = memcfg.shard_spec
+        if shard_spec is None or shard_spec.orientation != ttnn.ShardOrientation.ROW_MAJOR:
+            return False
+        return shard_spec.shape[0] == xqkv_fused_sharded.shape[-2]
+
     def forward_decode(self, x: ttnn.Tensor, current_pos, rot_mats=None, page_table=None, kv_cache=None) -> ttnn.Tensor:
         """
         x: (seq_len, 1, batch, dim)
@@ -810,8 +828,17 @@ class Attention(LightweightModule):
                 memory_config=self.args.get_attn_create_head_input_mem_config(Mode.DECODE),
             )
         else:
-            # bfloat16 is required by nlp_create_qkv_heads_decode
-            if self.prefetcher is None:
+            # bfloat16 is required by nlp_create_qkv_heads_decode.
+            #
+            # The head split has a WIDTH-SHARDED program factory as well as an interleaved
+            # one, and the interleaved path does the whole split on a SINGLE core: 4.3
+            # us/layer to move 96 KB, plus 0.7 for the sharded_to_interleaved that fed it.
+            # The projection already hands over a bf16 width shard in L1, which is exactly
+            # what the sharded factory takes, so hand it over unchanged and let the split
+            # run on the shard's cores. Fall back to the interleaved path if the
+            # projection's output ever stops satisfying the op's contract (bf16, width
+            # sharded, row-major, full height per shard).
+            if self.prefetcher is None and not self._qkv_head_split_takes_shard(xqkv_fused_sharded):
                 xqkv_fused = ttnn.sharded_to_interleaved(xqkv_fused_sharded, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
                 ttnn.deallocate(xqkv_fused_sharded)
             else:
