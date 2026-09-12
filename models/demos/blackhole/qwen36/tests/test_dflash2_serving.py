@@ -6,9 +6,9 @@ runner's anchor) -> step() until the block budget is met -> end, then the next r
 trace/buffer (different prompt, different page-table row). Same bar and method as
 test_dflash2_lossless (plain greedy reference; the first mismatch must be a near-tie).
 
-Sessions: A = prompt 1 on the identity page table (also performs the one-time capture); B = a
-different prompt on a PERMUTED page table (exercises refresh_verify_page_table); C = prompt 1 again
-(persistence: identical to A).
+Sessions: A = prompt 1 on the identity page table (also performs the one-time capture; eager seed);
+B = a different prompt on a PERMUTED page table (exercises refresh_verify_page_table; traced seed);
+C, D = prompt 1 again through the traced seed (persistence: D identical to C).
 
 Run: MESH_DEVICE=P150x4 pytest models/demos/blackhole/qwen36/tests/test_dflash2_serving.py -v -s
 """
@@ -143,7 +143,11 @@ def test_dflash2_serving_sessions_are_lossless(mesh_device):
         _check("serving-B(permuted)", ref_b, gaps_b, got_b, tokenizer, near_tie_gap)
         got_c = _serving_session(dec, model, prompt_a, ident, MAX_NEW)
         _check("serving-C", ref_a, gaps_a, got_c, tokenizer, near_tie_gap)
-        assert got_c == got_a, "the same prompt on the same captures must reproduce session A exactly"
+        # A seeded eagerly (before the capture), B/C/D through the verify trace: A and C may differ at a
+        # near-tie (both pass the bar above); two traced-seed sessions of the same prompt must be identical.
+        got_d = _serving_session(dec, model, prompt_a, ident, MAX_NEW)
+        _check("serving-D", ref_a, gaps_a, got_d, tokenizer, near_tie_gap)
+        assert got_d == got_c, "the same prompt on the same captures must reproduce the previous traced-seed session"
     finally:
         dec.release()
         model.free_kv_caches()
