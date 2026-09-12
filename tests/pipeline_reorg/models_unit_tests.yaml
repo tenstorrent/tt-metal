@@ -320,6 +320,19 @@
   team: ttnn
   budget_type: unit
 
+- name: ModernBERT-base unit tests
+  cmd: |
+    export HF_HOME=/mnt/MLPerf/huggingface HF_HUB_OFFLINE=0
+    pytest --timeout 480 models/experimental/modernbert/tests/test_ttnn_layer.py
+  model: modernbert-base
+  model_family: ModernBERT
+  skus:
+    wh_n300:
+      timeout: 8
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
 - name: ResNet-50 unit tests
   cmd: |
     pytest --timeout 300 \
