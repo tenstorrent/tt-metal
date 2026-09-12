@@ -136,3 +136,37 @@ def test_na3d_sharded_matches_host(*, mesh_device, dims, kernel, chunk_budget):
 
     assert tuple(actual.shape) == tuple(expected.shape), f"{tuple(actual.shape)} != {tuple(expected.shape)}"
     assert_quality(expected, to_torch_replicated(actual), pcc=0.999)
+
+
+# --- plan description, host only ------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "dims, kernel, stride",
+    [((13, 68, 120), (11, 11, 11), (1, 1, 1)), ((6, 68, 120), (3, 7, 7), (1, 1, 1)), ((8, 4, 6), (5, 3, 3), (4, 2, 3))],
+    ids=["stage5_like", "stage2_like", "gna"],
+)
+def test_plan_describe_accounts_for_every_tile(dims, kernel, stride):
+    """``describe()`` is what a person reads instead of the dataclass; its numbers must be the plan's."""
+    plan = plan_na3d(dims, kernel, stride=stride)
+    text = plan.describe()
+    assert str(plan) == text
+
+    tiles_per_axis = [-(-d // t) for d, t in zip(dims, plan.tile)]
+    total_tiles = 1
+    for n in tiles_per_axis:
+        total_tiles *= n
+    assert f"= {total_tiles} tile" in text
+    assert f"{len(plan.groups)} distinct window geometr" in text
+
+    # Every group line reports its tile count; together they must cover the whole tiling.
+    listed = sum(
+        int(line.split("tile")[0].split(":")[-1]) for line in text.splitlines() if line.strip().startswith("group")
+    )
+    assert listed == total_tiles == sum(len(g.query_slices) for g in plan.groups)
+    if stride != (1, 1, 1):
+        assert f"GNA stride {stride}" in text and "steps of" in text
+
+    # Truncation keeps the totals and says what it dropped.
+    short = plan.describe(max_groups=1)
+    assert short.splitlines()[:3] == text.splitlines()[:3]
+    if len(plan.groups) > 1:
+        assert f"{len(plan.groups) - 1} more groups" in short

@@ -124,6 +124,71 @@ class NA3DPlan:
     groups: tuple[TileGroup, ...]
     stride: tuple[int, int, int] = (1, 1, 1)
 
+    def describe(self, max_groups: int | None = None) -> str:
+        """The plan as prose: what is tiled how, how many distinct masks that makes, and what it costs.
+
+        One line per group, largest first, each naming the per-axis regime in words -- ``slides``
+        (the interior: each query tile's window starts one site later than the last), ``low edge``
+        / ``high edge`` (every query in the tile shares the clamped window), ``whole axis`` (the axis
+        is no wider than the window). ``max_groups`` truncates the listing; the totals never are.
+        """
+        axis_names = ("t", "h", "w")
+        dims, kernels, tile = self.dims, self.kernels, self.tile
+        tiles_per_axis = [-(-extent // step) for extent, step in zip(dims, tile)]
+        total_tiles = math.prod(tiles_per_axis)
+        sites = math.prod(dims)
+
+        lines = [
+            f"NA3D plan over volume (t,h,w)={dims}: {sites:,} sites, window {kernels}"
+            + (
+                f" ({', '.join(n for n, k, d in zip(axis_names, kernels, dims) if k == d)} attended in full)"
+                if any(k == d for k, d in zip(kernels, dims))
+                else ""
+            )
+            + (f", GNA stride {self.stride}" if self.stride != (1, 1, 1) else ""),
+            f"  query tile {tile}: {' x '.join(map(str, tiles_per_axis))} = {total_tiles} tile{'s' * (total_tiles != 1)}, "
+            f"{len(self.groups)} distinct window geometr{'ies' if len(self.groups) != 1 else 'y'} (one additive mask each)",
+        ]
+
+        # Cost: the score block every tile actually computes, against the dense volume and the
+        # ideal (every query sees exactly its window).
+        planned_scores = sum(len(group.query_slices) * group.n_queries * group.n_keys for group in self.groups)
+        ideal_scores = sites * math.prod(kernels)
+        lines.append(
+            f"  scores: {planned_scores:,} planned vs {ideal_scores:,} ideal (x{planned_scores / ideal_scores:.2f} "
+            f"window waste) vs {sites * sites:,} dense ({sites * sites / planned_scores:,.0f}x sparser)"
+        )
+
+        def regime(group: TileGroup, axis: int) -> str:
+            starts, _ = group.geometry[axis]
+            key_slice = group.key_slices[0][axis]
+            span = key_slice.stop - key_slice.start
+            if span <= kernels[axis] and key_slice.start == 0 and key_slice.stop == dims[axis]:
+                return "whole axis"
+            if len(set(starts)) == 1:
+                return "low edge" if key_slice.start == 0 else "high edge"
+            step = self.stride[axis]
+            return "slides" if step == 1 else f"slides in steps of {step}"
+
+        ordered = sorted(self.groups, key=lambda g: (-len(g.query_slices), -g.n_keys))
+        shown = ordered if max_groups is None else ordered[:max_groups]
+        for index, group in enumerate(shown, 1):
+            regimes = ", ".join(f"{name}={regime(group, axis)}" for axis, name in enumerate(axis_names))
+            q_shape = " x ".join(str(s.stop - s.start) for s in group.query_slices[0])
+            k_shape = " x ".join(str(s.stop - s.start) for s in group.key_slices[0])
+            lines.append(
+                f"  group {index:>2}: {len(group.query_slices):>4} tile{'s' if len(group.query_slices) != 1 else ''}, "
+                f"{q_shape} = {group.n_queries:,} queries "
+                f"each see {k_shape} = {group.n_keys:,} keys  [{regimes}]"
+            )
+        if len(shown) < len(ordered):
+            rest = ordered[len(shown) :]
+            lines.append(f"  ... {len(rest)} more groups covering {sum(len(g.query_slices) for g in rest)} tiles")
+        return "\n".join(lines)
+
+    def __str__(self) -> str:
+        return self.describe()
+
 
 def plan_na3d(
     dims: tuple[int, int, int],
