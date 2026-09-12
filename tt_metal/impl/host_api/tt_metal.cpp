@@ -538,7 +538,21 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
     }
 }
 
-CoreKernelConfig ReadKernelConfig(IDevice* device, const CoreCoord& logical_core) {
+struct CapturedKernelConfig::Impl {
+    uint32_t kernel_config_base;
+    uint32_t kernel_config_size;
+    std::vector<uint8_t> launch_kernel_config;
+};
+
+CapturedKernelConfig::CapturedKernelConfig(std::shared_ptr<const Impl> impl) : impl_(std::move(impl)) {}
+
+uint32_t CapturedKernelConfig::kernel_config_base() const { return impl_->kernel_config_base; }
+
+uint32_t CapturedKernelConfig::kernel_config_size() const { return impl_->kernel_config_size; }
+
+const std::vector<uint8_t>& CapturedKernelConfig::launch_kernel_config() const { return impl_->launch_kernel_config; }
+
+CapturedKernelConfig CaptureKernelConfig(IDevice* device, const CoreCoord& logical_core) {
     // Decode through the generated view firmware compiles against, so the layout is stated once.
     const auto& hal = MetalContext::instance(extract_context_id(device)).hal();
     const auto core_type = HalProgrammableCoreType::TENSIX;
@@ -557,23 +571,15 @@ CoreKernelConfig ReadKernelConfig(IDevice* device, const CoreCoord& logical_core
     auto view = factory.create_view<dev_msgs::launch_msg_t>(reinterpret_cast<const std::byte*>(raw.data()));
     auto kc = view.kernel_config();
 
-    CoreKernelConfig out;
-    for (uint32_t i = 0; i < kc.kernel_config_base().size(); i++) {
-        out.kernel_config_base.push_back(kc.kernel_config_base()[i]);
-        out.sem_offset.push_back(kc.sem_offset()[i]);
-    }
+    uint32_t kernel_config_size = 0;
     for (uint32_t i = 0; i < kc.kernel_text_offset().size(); i++) {
-        out.kernel_text_offset.push_back(kc.kernel_text_offset()[i]);
-        out.kernel_text_size.push_back(kc.kernel_text_size()[i]);
-        out.rta_offset.push_back(kc.rta_offset()[i].rta_offset());
-        out.crta_offset.push_back(kc.rta_offset()[i].crta_offset());
+        kernel_config_size = std::max(kernel_config_size, kc.kernel_text_offset()[i] + kc.kernel_text_size()[i]);
     }
-    out.local_cb_offset = kc.local_cb_offset();
-    out.remote_cb_offset = kc.remote_cb_offset();
-    out.local_cb_mask = kc.local_cb_mask();
-    out.enables = kc.enables();
-    out.min_remote_cb_start_index = kc.min_remote_cb_start_index();
-    return out;
+
+    std::vector<uint8_t> launch_kernel_config(kc.size());
+    std::memcpy(launch_kernel_config.data(), kc.data(), kc.size());
+    return CapturedKernelConfig(std::make_shared<CapturedKernelConfig::Impl>(
+        kc.kernel_config_base()[0], kernel_config_size, std::move(launch_kernel_config)));
 }
 
 }  // namespace experimental

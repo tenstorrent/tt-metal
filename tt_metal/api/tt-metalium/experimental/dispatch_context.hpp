@@ -69,29 +69,29 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program);
 
 // Configure a program on a device without running it: binaries, CB configs, runtime args and the
 // launch message land in L1, but no go signal is sent. The kernel-config block can then be read
-// back (ReadKernelConfig) without the program having executed. Safe to repeat on one
+// back (CaptureKernelConfig) without the program having executed. Safe to repeat on one
 // device; each call overwrites the previous config.
 void ConfigureProgramWithoutLaunch(IDevice* device, Program& program);
 
-// The kernel config a core currently runs, read back from its launch message. Circular buffers,
-// runtime args, semaphores and text are all addressed as kernel_config_base plus offset, so these
-// offsets and the bytes at that base describe the program on a core; the runtime binary reload
-// captures both and replays them at another base. Exposes launch-message layout, hence experimental.
-struct CoreKernelConfig {
-    std::vector<uint32_t> kernel_config_base;  // per programmable core type
-    std::vector<uint32_t> kernel_text_offset;  // per processor
-    std::vector<uint32_t> kernel_text_size;    // per processor
-    std::vector<uint32_t> sem_offset;          // per programmable core type
-    std::vector<uint32_t> rta_offset;          // per processor
-    std::vector<uint32_t> crta_offset;         // per processor
-    uint32_t local_cb_offset = 0;
-    uint32_t remote_cb_offset = 0;
-    uint64_t local_cb_mask = 0;
-    uint32_t enables = 0;
-    uint32_t min_remote_cb_start_index = 0;
+// A relocatable capture of the kernel config a core currently runs. The detailed launch-message
+// layout remains private to Metal; consumers get only the source block's L1 range and an opaque
+// copy of the launch kernel config needed to restore it at another base.
+class CapturedKernelConfig {
+public:
+    uint32_t kernel_config_base() const;
+    uint32_t kernel_config_size() const;
+    const std::vector<uint8_t>& launch_kernel_config() const;
+
+private:
+    struct Impl;
+    explicit CapturedKernelConfig(std::shared_ptr<const Impl> impl);
+
+    std::shared_ptr<const Impl> impl_;
+
+    friend CapturedKernelConfig CaptureKernelConfig(IDevice* device, const CoreCoord& logical_core);
 };
 
-CoreKernelConfig ReadKernelConfig(IDevice* device, const CoreCoord& logical_core);
+CapturedKernelConfig CaptureKernelConfig(IDevice* device, const CoreCoord& logical_core);
 
 }  // namespace experimental
 
