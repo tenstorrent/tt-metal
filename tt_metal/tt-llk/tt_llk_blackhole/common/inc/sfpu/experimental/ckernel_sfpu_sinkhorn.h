@@ -157,6 +157,16 @@ inline void _sinkhorn_program_parity_mask_()
     TTI_SFPCONFIG(0x5555, /*LREG11=*/11, /*MOD1_IMM16_IS_LANE_MASK=*/8);
 }
 
+// Put -1.0 back into LREG11. LCONST_neg1 is a core-wide constant every other SFPU
+// kernel reads, so it must hold -1.0 again by the time this one returns.
+inline void _sinkhorn_restore_lconst_neg1_()
+{
+    // fp32 -1.0 == 0xBF800000, loaded as two halves then copied into the constant.
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0xBF80);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0x0000);
+    TTI_SFPCONFIG(0x5555, /*LREG11=*/11, /*MOD1_IMM16_IS_LANE_MASK=*/8);
+}
+
 // Program the persistent constants (see file header): LREG11 = lane-parity
 // mask, LREG13 = eps. Called once per tile (exp_tile_init reprograms
 // LREG12..14 every tile, so this must run after exp, inside the tile loop).
@@ -427,6 +437,8 @@ inline void _sinkhorn_4x4_()
         // Face 3, strips 2+3.
         _sinkhorn_strip_pair_multi_<56, 58, 60, 62>(ITERS);
     }
+
+    _sinkhorn_restore_lconst_neg1_();
 }
 
 } // namespace sfpu
