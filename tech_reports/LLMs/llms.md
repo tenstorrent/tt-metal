@@ -392,9 +392,11 @@ An end-to-end example of the prefill attention module is in the [attention.py](.
      - `q`: Query tensor of shape `(1, n_q_heads, seqlen, head_dim)`.
      - `k`: Key tensor of shape `(1, n_kv_heads, cache_len, head_dim)`.
      - `v`: Value tensor of shape `(1, n_kv_heads, cache_len, head_dim)`.
-     - `attn_mask`: Defaults to `None`. [b x 1 x cache_len x seqlen]. Head broadcasting is implied.
-     - `is_causal`: bool, defaults to `true`. Whether to apply causal masking.
+     - `attn_mask`: Defaults to `None`. Shape `(bsz or 1, n_q_heads or 1, seqlen, cache_len)`, where a `1` in dim 0 or dim 1 broadcasts. Batch is `1` in this prefill flow, but the OP takes the full batch too. Dims 2 and 3 must match Q's and K's sequence lengths exactly. Must be on device, `TILE_LAYOUT`, in DRAM, and `bfloat16`, `bfloat8_b` or `bfloat4_b`.
+     - `is_causal`: bool, defaults to `true`. Whether to apply causal masking. Mutually exclusive with `attn_mask` and with `sliding_window_size`. Since the default is `true`, passing `attn_mask` without also setting `is_causal=False` raises.
      - `scale`: float, defaults to `None`.
+     - `sliding_window_size`: int, defaults to `None`. With `is_causal=True`, attends only to the last `sliding_window_size` tokens; with `is_causal=False`, to a window centred on the current position. Generated on device, so it cannot be combined with `attn_mask`.
+     - `cu_window_seqlens`: Defaults to `None`. 1D `int32`/`uint32` ROW_MAJOR tensor of cumulative window boundaries, giving block-diagonal attention with the mask built on device. Non-causal, and mutually exclusive with `attn_mask`, `is_causal` and `sliding_window_size`.
      - `program_config`: Defaults to `None`.
      - `compute_kernel_config`: Defaults to `None`.
 
@@ -473,10 +475,11 @@ An end-to-end example of the decode attention module is in the [attention.py](..
      - `k`: Key tensor of shape `(1, bsz, cache_len, head_dim)`.
      - `v`: Value tensor of shape `(1, bsz, cache_len, head_dim)`.
      - `is_causal`: Bool, defaults to `true`. Whether to apply causal masking.
-     - `attn_mask`: Optional attention mask tensor. Defaults to `None` and only used if `is_causal=False`.
+     - `attn_mask`: Defaults to `None`, and only valid with `is_causal=False`. Dim 2 must match `q`'s dim 2 — the padded per-device Q head count, not a sequence length — and dim 3 must match `k`'s `cache_len`. Dim 3 must also be a multiple of `k_chunk_size`: unpaged decode defaults it to `min(512, largest power-of-two divisor of cache_len)`, paged decode defaults it to `32` through `SDPAProgramConfig`, and paged non-causal attention requires an explicit positive `k_chunk_size`. For a reference construction, see the `tt_xattn_mask` reshape in [models/tt_transformers/tt/multimodal/llama_vision_model.py](../../models/tt_transformers/tt/multimodal/llama_vision_model.py), which pads the per-device head count (dim 2) to 32, not the head dimension.
      - `cur_pos`: (Required for is_causal=True) List of current positions in the sequence for each batch. Defaults to `None`. Must be provided if `cur_pos_tensor` is not provided.
      - `cur_pos_tensor`: (Required for is_causal=True) Optional current position tensor. Defaults to `None`. Must be provided if `cur_pos` is not provided.
      - `scale`: Optional scale factor. Defaults to `None`.
+     - `sliding_window_size`: int, defaults to `None`. Restricts attention to the last `sliding_window_size` tokens, generated on device.
      - `program_config`: Optional program configuration. Defaults to `None`.
      - `compute_kernel_config`: Optional compute kernel configuration. Defaults to `None`.
      - `memory_config`: Optional memory configuration for output tensor. Defaults to `None`.
@@ -487,7 +490,7 @@ An end-to-end example of the decode attention module is in the [attention.py](..
      ```
    - For non-causal attention, `attn_mask` must be provided. An example is in the cross attention case in visual language models. For example:
      ```python
-     attn_output = ttnn.transformer.paged_scaled_dot_product_at tention_decode(Q, K, V, attn_mask=mask, is_causal=False)
+     attn_output = ttnn.transformer.paged_scaled_dot_product_attention_decode(Q, K, V, attn_mask=mask, is_causal=False)
      ```
 
 6. **Output Reshape and Output Matmul**
@@ -501,7 +504,68 @@ An end-to-end example of the decode attention module is in the [attention.py](..
      (1, bsz, n_q_heads, head_dim) -> (1, 1, bsz, hidden_dim) -> (1, 1, bsz, hidden_dim)
      ```
 
-### 2.4.3 Miscellaneous Facts
+### 2.4.3 Attention Masks
+
+The steps above take a mask as given, but a tokenizer does not produce one in a form any attention OP accepts.
+
+For purely causal attention you do not need this section: prefer `is_causal=True` as described in [2.4.1](#241-attention-prefill) and [2.4.2](#242-attention-decode), which builds causality on device with no mask tensor at all. What follows applies when you do need an explicit mask.
+
+#### Three kinds of mask
+
+| Kind | Origin | Shape |
+| --- | --- | --- |
+| Causal | Structural, derivable from shape alone | `[1, 1, q_len, kv_len]`, upper triangle blocked |
+| Padding | The tokenizer, when batching variable-length inputs | `[batch, seq]`, expanded to 4D |
+| Tile padding | KV length padded up to a multiple of 32 | the padded columns must be masked |
+
+The third is specific to tile-based hardware. Tensors are stored in 32x32 tiles, so a `kv_len` of 100 occupies 128 columns. Those 28 extra columns are part of the tensor the softmax sees; unless they are masked they contribute to its denominator, which raises no error and silently changes the result. Build the mask at the padded width and block the added columns — see the decode path in [models/demos/ttnn_falcon7b/tt/common.py](../../models/demos/ttnn_falcon7b/tt/common.py), which rounds `kv_len` up to a multiple of 32 and fills the added columns with the blocking value.
+
+#### Converting a 2D mask to a 4D additive mask
+
+A tokenizer returns `[batch, seq]`, where `1` marks a real token and `0` marks padding. Attention scores are `[batch, heads, q_len, kv_len]`. Two things must change: the mask gains two axes, and it becomes **additive** — `0` to attend, a large negative value to block — because it is added to the scores before the softmax.
+
+Combine the two halves as booleans first, then convert to additive **once**. Summing two masks that are already additive can overflow the dtype and produce `-inf`, which the fill-value rules below explain how to avoid.
+
+```python
+# Causal half: block j > i.                       -> [q_len, kv_len]
+causal_block = torch.ones(q_len, kv_len, dtype=torch.bool).triu(diagonal=1)
+
+# Padding half: block positions the tokenizer marked as padding.  -> [batch, 1, kv_len]
+padding_block = (attention_mask_2d == 0)[:, None, :]
+
+# Combine, then apply a single fill value.        -> [batch, 1, q_len, kv_len]
+blocked = causal_block[None, None, :, :] | padding_block[:, :, None, :]
+mask_4d = blocked.to(torch.bfloat16) * -1e3
+
+tt_mask = ttnn.from_torch(mask_4d, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+```
+
+This yields `[batch, 1, q_len, kv_len]`, which is the prefill and fused-softmax layout. Decode needs `[1, b, nh, s]` instead — see the table below.
+
+Dim 1 is left at `1` so the mask broadcasts across heads; expand it only if the OP requires an explicit head dimension. If you need the causal half alone, `AttentionMaskConverter(is_causal=True).to_causal_4d(...)` from `transformers.modeling_attn_mask_utils` produces it in one call, using `torch.finfo(dtype).min` as its fill value.
+
+#### Fill values
+
+Use a large finite negative number. This codebase uses `-1e3`, and `-1e5` on the sharded softmax path. Avoid `float('-inf')`: a numerically stable softmax subtracts the row maximum, so a fully masked row computes `-inf - (-inf)` and yields `NaN`. Rows can become fully masked in ordinary situations — a padded-out batch entry, or a tile-padded block that falls entirely outside the real sequence. A large finite value keeps those rows well defined. HuggingFace applies the same reasoning, filling with `torch.finfo(dtype).min` rather than `-inf`.
+
+#### Which OP accepts which shape
+
+Mask shapes are enforced with hard asserts, so a mismatch is a crash rather than a silent error.
+
+| OP | Mask shape | Constraint |
+| --- | --- | --- |
+| `scaled_dot_product_attention` | none, with `is_causal=True` | `attn_mask` and `is_causal` are mutually exclusive |
+| `scaled_dot_product_attention` | `(bsz or 1, n_q_heads or 1, seqlen, cache_len)` | dims 2 and 3 must match Q and K exactly |
+| `scaled_dot_product_attention_decode` | `[1, b, nh, s]` | dim 2 is the padded Q head count; dim 3 is the KV length and must be a multiple of `k_chunk_size` |
+| `scale_mask_softmax`, interleaved | height (dim -2) `1` or the tile height (32) | intermediate dims must all be `1`; inner dim and batch must match the input |
+| `scale_mask_softmax`, sharded | equal to the input's padded shape | mask must be in `TILE` layout |
+| `ttnn.add` then `ttnn.softmax` | anything broadcastable | unfused, so slower |
+
+Two consequences of the interleaved `scale_mask_softmax` row. A full causal mask of `[batch, 1, q_len, kv_len]` is rejected unless `q_len` is `1` or `32`, so callers on that path reshape to `(batch, 1, -1, 32)`. And since every intermediate dimension must be `1`, it accepts only **head-uniform** masks: a per-head bias — ALiBi, or any learned relative-position bias — needs a separate `ttnn.add` before `ttnn.softmax`, forgoing the fusion.
+
+These constraints are defined in [softmax_device_operation.cpp](../../ttnn/cpp/ttnn/operations/normalization/softmax/device/softmax_device_operation.cpp) and [sdpa_decode_device_operation.cpp](../../ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/sdpa_decode_device_operation.cpp); the [softmax OP documentation](../../ttnn/cpp/ttnn/operations/normalization/softmax/docs/Softmax.md) covers the full set of softmax variants.
+
+### 2.4.4 Miscellaneous Facts
 Flash attention and flash decode are the major OPs for attention. They are optimized for latency and throughput, and perform better than vanilla implementations. For more information see: [Flash Attention Tech Report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/FlashAttention/FlashAttention.md).
 
 Here are some useful details regarding attention OPs for efficient and bug-free code writing:
