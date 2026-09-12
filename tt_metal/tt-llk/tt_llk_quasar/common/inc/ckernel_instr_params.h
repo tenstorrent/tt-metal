@@ -433,10 +433,11 @@ struct p_sfpu
 
     struct cc
     {
-        constexpr static std::uint32_t SET_CC    = 0x2;
-        constexpr static std::uint32_t CLR_CC    = 0x1;
-        constexpr static std::uint32_t SET_CC_EN = 0x1;
-        constexpr static std::uint32_t CLR_CC_EN = 0x0;
+        constexpr static std::uint32_t SET_CC       = 0x2;
+        constexpr static std::uint32_t CLR_CC       = 0x1;
+        constexpr static std::uint32_t SET_CC_EN    = 0x1;
+        constexpr static std::uint32_t CLR_CC_EN    = 0x0;
+        constexpr static std::uint32_t FP32_SM32_EN = 0x800; // if src_c should be interpreted as a FP32/SMAG32 value
     };
 
     struct sfp_sfpcast_mod

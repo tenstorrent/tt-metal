@@ -751,11 +751,12 @@ def generate_sfpu_unary_combinations(*, is_perf=False):
         )
         for variant in format_variants:
             dest_sync_modes = (DestSync.Half,) if is_perf else cfg.dest_sync_modes
-            implied_math_formats = (
-                (ImpliedMathFormat.Yes,)
-                if is_perf
-                else (ImpliedMathFormat.No, ImpliedMathFormat.Yes)
-            )
+            if cfg.mathop == MathOperation.Typecast:
+                implied_math_formats = (ImpliedMathFormat.No,)
+            elif is_perf:
+                implied_math_formats = (ImpliedMathFormat.Yes,)
+            else:
+                implied_math_formats = (ImpliedMathFormat.No, ImpliedMathFormat.Yes)
             input_dims = (
                 select_perf_input_dimensions(cfg.input_dims)
                 if is_perf
@@ -1115,3 +1116,201 @@ def test_cumsum_tilized_dest_quasar(cumsum_formats_dest_acc):
     assert torch.allclose(
         result, expected, rtol=0, atol=1e-3
     ), f"cumsum mismatch:\ngot\n{result}\nexpected\n{expected}"
+
+
+# ---------------------------------------------------------------------------
+# Float32 -> UInt16 negative-clamp and rounding detector.
+#
+# The Typecast sweep above feeds this pair through _prepare_typecast_input, which sets
+# lo = 0.0 whenever an endpoint is unsigned and rounds every value to a whole number. So
+# the sweep only ever supplies non-negative integers.
+
+# The sweep cannot simply be widened, because TypecastGolden models float -> int with
+# torch.trunc (it says so: whole-number stimuli make trunc == round). Fractional stimuli
+# would make the golden disagree with correct hardware. This test therefore carries its
+# own exact oracle instead, like test_cumsum_tilized_dest_quasar above.
+#
+
+# (input fp32, expected uint16) pairs, grouped by the kernel property each one pins.
+_TYPECAST_NEGATIVE_CASES = (
+    (-1.0, 0),
+    (-0.5, 0),
+    (-2.5, 0),
+    (-1000.25, 0),
+    (-65535.0, 0),
+    # -0.0 expects 0 whether or not the sign test treats it as negative, so it covers the
+    # signed-zero lane without betting on an ISA detail.
+    (-0.0, 0),
+)
+
+_TYPECAST_FRACTIONAL_CASES = (
+    (0.25, 0),
+    (0.75, 1),
+    (1.25, 1),
+    (1.75, 2),
+    (99.4, 99),
+    (100.6, 101),
+)
+
+# The discriminator: these separate round-nearest-even from round-half-away-from-zero
+# (which would give 1, 2, 3, 4, 5, 101, 102) and from truncation (0, 1, 2, 3, 4, 100, 101).
+_TYPECAST_TIE_CASES = (
+    (0.5, 0),
+    (1.5, 2),
+    (2.5, 2),
+    (3.5, 4),
+    (4.5, 4),
+    (100.5, 100),
+    (101.5, 102),
+)
+
+_TYPECAST_EXACT_CASES = (
+    (0.0, 0),
+    (1.0, 1),
+    (65534.5, 65534),
+    (65535.0, 65535),
+)
+
+# Inputs beyond the UInt16 range saturate to 65535 rather than wrapping modulo 65536, matching
+# TypecastGolden and ttnn.typecast, both of which clamp UInt16 results.
+_TYPECAST_SATURATION_CASES = (
+    (65535.5, 65535),
+    (65536.0, 65535),
+    (65537.0, 65535),
+    (70000.0, 65535),
+    (1000000.0, 65535),
+    (1000000000.0, 65535),
+)
+
+_TYPECAST_EDGE_GROUPS = (
+    ("negative clamp", _TYPECAST_NEGATIVE_CASES),
+    ("fractional rounding", _TYPECAST_FRACTIONAL_CASES),
+    ("round-nearest-even ties", _TYPECAST_TIE_CASES),
+    ("exact values", _TYPECAST_EXACT_CASES),
+    ("upper saturation", _TYPECAST_SATURATION_CASES),
+)
+
+_TYPECAST_EDGE_CASES = tuple(
+    case for _, group in _TYPECAST_EDGE_GROUPS for case in group
+)
+
+
+def _typecast_edge_case_tile() -> tuple:
+    """Tile the edge cases over a full 32x32 tile, plus the matching expected tensor.
+
+    The case list is repeated rather than front-loaded and padded: 29 cases into 1024
+    elements is coprime with the 16-wide face row, so each case lands on a different SFPU
+    lane, column parity and face on successive repeats. A clamp that is wrong on only some
+    lanes (the failure mode a mis-set CC enable produces) survives a front-loaded stimulus.
+    """
+    element_count = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
+    repeats = math.ceil(element_count / len(_TYPECAST_EDGE_CASES))
+
+    inputs = [value for value, _ in _TYPECAST_EDGE_CASES] * repeats
+    expected = [result for _, result in _TYPECAST_EDGE_CASES] * repeats
+
+    return (
+        torch.tensor(inputs[:element_count], dtype=torch.float32),
+        torch.tensor(expected[:element_count], dtype=torch.int64),
+    )
+
+
+@pytest.mark.quasar
+@parametrize(dest_sync=[DestSync.Half, DestSync.Full])
+def test_typecast_fp32_to_uint16_edge_cases_quasar(dest_sync):
+    """
+    Deterministic proof that Float32 -> UInt16 clamps negatives to 0, rounds nearest-even and
+    saturates above 65535, none of which the randomised Typecast sweep can observe.
+    """
+    dest_sync = dest_sync[0]
+
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.UInt16)
+    variants = generate_quasar_sfpu_format_variants(MathOperation.Typecast, [formats])
+    assert len(variants) == 1, (
+        "expected exactly one Float32 -> UInt16 Quasar variant, got "
+        f"{len(variants)}: {variants}"
+    )
+    variant = variants[0]
+
+    input_dimensions = [DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM]
+    src_A, expected_flat = _typecast_edge_case_tile()
+    # src_B is unused by a unary op, but StimuliConfig requires an operand-B buffer.
+    src_B = torch.zeros_like(src_A)
+
+    configuration = create_test_or_perf_config(
+        is_perf=False,
+        run_types=(PerfRunType.L1_TO_L1,),
+        test_config_kwargs={
+            "test_name": "sources/quasar/eltwise_unary_sfpu_quasar_test.cpp",
+            "formats": formats,
+            "templates": [
+                MATH_OP(mathop=MathOperation.Typecast),
+                APPROX_MODE(ApproximationMode.No),
+                # Typecast names every Dest access format explicitly, so the implied
+                # math format must be off — same as the sweep.
+                IMPLIED_MATH_FORMAT(ImpliedMathFormat.No),
+                DATA_COPY_TYPE(DataCopyType.A2D),
+                UNPACKER_ENGINE_SEL(
+                    UnpackerEngine.UnpDest
+                    if variant.unpack_to_dest
+                    else UnpackerEngine.UnpA
+                ),
+                DEST_SYNC(dest_sync),
+                TYPECAST_FORMATS(
+                    input_format=variant.sfpu_src,
+                    output_format=variant.sfpu_dst,
+                ),
+            ],
+            "runtimes": [
+                TILE_COUNT(1),
+                NUM_FACES(MAX_NUM_FACES),
+                TEST_FACE_DIMS(),
+                DEST_INDEX(0),
+                LOOP_FACTOR(1),
+            ],
+            "variant_stimuli": StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=1,
+                tile_count_B=1,
+                tile_count_res=1,
+                num_faces=MAX_NUM_FACES,
+            ),
+            "unpack_to_dest": variant.unpack_to_dest,
+            "dest_acc": variant.dest_acc,
+        },
+    )
+
+    variant.apply_formats(configuration.formats_config)
+
+    res_from_L1 = configuration.run().result
+
+    # Typecast is element-wise (not in LAYOUT_SENSITIVE_OPS), so the packed result is read
+    # back in the same row-major order the stimulus was written in — no untilize needed.
+    result = torch.tensor(res_from_L1, dtype=torch.int64)
+    assert (
+        result.numel() == expected_flat.numel()
+    ), f"result has {result.numel()} elements, expected {expected_flat.numel()}"
+
+    period = len(_TYPECAST_EDGE_CASES)
+    case_index = 0
+    for group_name, group in _TYPECAST_EDGE_GROUPS:
+        for value, want in group:
+            # Every repeat of this case across the tile, so a lane-dependent failure shows.
+            got = result[case_index::period]
+            mismatched = (got != want).nonzero().flatten()
+            assert mismatched.numel() == 0, (
+                f"{group_name}: input {value} should convert to {want}, got "
+                f"{got[mismatched[:8]].tolist()} at {mismatched.numel()} of "
+                f"{got.numel()} tile positions"
+            )
+            case_index += 1
+
+    assert torch.equal(result, expected_flat), (
+        "Float32 -> UInt16 mismatch:\n"
+        f"got      {result[:32].tolist()}\n"
+        f"expected {expected_flat[:32].tolist()}"
+    )
