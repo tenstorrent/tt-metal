@@ -97,14 +97,23 @@ constexpr uint32_t block_size = get_compile_time_arg_val(5);
 // row instead of once per tile. Profiling put that latency at ~1.4 us against
 // 0.076 us for each additional tile issued behind it.
 constexpr uint32_t Bt = get_compile_time_arg_val(6);
+// sqrt(d), the reciprocal of the softmax scale. The scale itself is folded
+// into the exponential, which applies it to the whole subtraction, so the
+// statistic it subtracts has to be divided by it first -- once per row of
+// score tiles, rather than scaling each of the Bt tiles.
+constexpr uint32_t inv_scaler_bits = get_compile_time_arg_val(7);
 constexpr uint32_t score_tiles = Bt * Bt;
 
-// Score tiles live in even registers because both apply_mask_on_reg and the
-// softmax step need a scratch register next to the one they work on, and
-// several score tiles are live at once. Bt <= 4 fits the eight FP32 registers.
+// Score tiles are contiguous, with two shared scratch registers above them:
+// one for the row's broadcast statistic, one for the causal mask. That needs
+// Bt + 2 registers where an interleaved layout with per-tile scratch needs
+// 2 * Bt, and it is what allows the row's statistic to be broadcast once
+// rather than once per score tile.
 constexpr uint32_t score_reg(uint32_t b) {
-    return 2u * b;
+    return b;
 }
+constexpr uint32_t stat_reg = Bt;
+constexpr uint32_t mask_reg = Bt + 1u;
 
 constexpr uint32_t cb_query = tt::CBIndex::c_0;
 constexpr uint32_t cb_key = tt::CBIndex::c_1;
@@ -126,15 +135,37 @@ constexpr uint32_t cb_grad_key = tt::CBIndex::c_17;    // dK_j
 constexpr uint32_t cb_grad_value = tt::CBIndex::c_18;  // dV_j
 constexpr uint32_t cb_grad_query_seed = tt::CBIndex::c_19;  // previous dQ_i
 
-// The same fused FP32 softmax as sdpa_bw's apply_softmax_statistics_on_dst,
-// but reading L from a chosen tile and taking the scratch register as an
-// argument: that helper uses scores_reg + 1, which is another score tile
-// here. At Bt = 1 with tmp = scores_reg + 1 this is the same sequence.
-void softmax_on_dst(
+// sdpa_bw's apply_mask_on_reg with the scratch register named rather than
+// assumed to be the next one along: score tiles are contiguous here, so the
+// register after one is another score tile.
+void apply_mask_at(
     const uint32_t scores_reg,
-    const uint32_t tmp_reg,
-    const uint32_t cb_statistics,
-    const uint32_t stat_tile) {
+    const uint32_t mask_register,
+    const uint32_t cb_mask,
+    const uint32_t minus_one,
+    const uint32_t custom_inf) {
+    copy_init(cb_mask);
+    copy_tile(cb_mask, /* tile_idx */ 0, mask_register);
+
+    mask_tile_init();
+    mask_tile(scores_reg, mask_register);
+
+    // No scale here: the exponential applies it. The mask's minus infinity
+    // survives it either way, and so does a large finite stand-in.
+    binop_with_scalar_tile_init();
+    add_unary_tile(mask_register, minus_one);
+    mul_unary_tile(mask_register, custom_inf);
+
+    add_binary_tile_init();
+    add_binary_tile(scores_reg, mask_register, scores_reg);
+}
+
+// Broadcast a row's statistic into DST. Split out of the softmax step because
+// it is the same for every column tile of the row: sdpa_bw folds the two
+// together, which is right when a row has one score tile and wasteful when it
+// has Bt of them.
+void broadcast_statistic_to_dst(
+    const uint32_t tmp_reg, const uint32_t cb_statistics, const uint32_t stat_tile) {
     reconfig_data_format_srcb(cb_statistics);
     UNPACK((llk_unpack_A_init<BroadcastType::COL, false, EltwiseBinaryReuseDestType::NONE, false>(
         false, false, cb_statistics)));
@@ -143,12 +174,35 @@ void softmax_on_dst(
           DST_ACCUM_MODE,
           BroadcastType::COL>(cb_statistics)));
     unary_bcast<BroadcastType::COL>(cb_statistics, stat_tile, tmp_reg);
+}
 
+// The same fused FP32 softmax as sdpa_bw's apply_softmax_statistics_on_dst,
+// but reading L from a chosen tile and taking the scratch register as an
+// argument: that helper uses scores_reg + 1, which is another score tile
+// here. At Bt = 1 with tmp = scores_reg + 1 this is the same sequence.
+// P = exp(a(S - L/a)) for every score tile of one row, with the scale folded
+// into the exponential rather than applied to S beforehand.
+//
+// sdpa_exp_tile_scaled folds the whole FP32 scale into LREG12 at init time on
+// Blackhole -- one SFPU pass per score tile that no longer happens -- and
+// pre-multiplies by a bfloat16 scale on Wormhole. It computes exp(a * x), so
+// the caller supplies L/a and the identity exp(a(S - L/a)) = exp(aS - L) does
+// the rest. sdpa_fw already works this way, keeping its scores and its
+// running maximum unscaled.
+//
+// Both SFPU programs are configured once for the row rather than once per
+// tile, which is only possible because the subtracts and the exponentials are
+// no longer interleaved: an init between them would reprogram the unit.
+void subtract_and_exp_row(const uint32_t first_reg, const uint32_t count, const uint32_t broadcast_reg) {
     sub_binary_tile_init();
-    sub_binary_tile(scores_reg, tmp_reg, scores_reg);
+    for (uint32_t b = 0; b < count; ++b) {
+        sub_binary_tile(first_reg + b, broadcast_reg, first_reg + b);
+    }
 
-    sdpa_exp_tile_init();
-    sdpa_exp_tile(scores_reg);
+    sdpa_exp_tile_init</*approx*/ false, /*SCALE_EN*/ true, scaler_bits>();
+    for (uint32_t b = 0; b < count; ++b) {
+        sdpa_exp_tile(first_reg + b);
+    }
 }
 
 // Copy one tile from a CB to the probe output, leaving the source in place.
@@ -379,22 +433,28 @@ void kernel_main() {
                     matmul_tiles(cb_query, cb_key, a * qWt + k, b * qWt + k, score_reg(b));
                 }
             }
+#ifdef DIAGONAL_BLOCK
+            cb_wait_front(cb_attn_mask, onetile);
+#endif
             for (uint32_t b = 0; b < Bt; ++b) {
 #ifdef DIAGONAL_BLOCK
                 if (b == a) {
                     // The one tile the triangle actually cuts through.
-                    apply_mask_on_reg(
-                        score_reg(b), cb_attn_mask, scaler_bits, minus_one_bits, custom_inf_bits);
-                } else {
-                    binop_with_scalar_tile_init();
-                    mul_unary_tile(score_reg(b), scaler_bits);
+                    apply_mask_at(
+                        score_reg(b), mask_reg, cb_attn_mask, minus_one_bits, custom_inf_bits);
                 }
-#else
-                binop_with_scalar_tile_init();
-                mul_unary_tile(score_reg(b), scaler_bits);
 #endif
-                softmax_on_dst(score_reg(b), score_reg(b) + 1u, cb_lse, a);
+            }
+
+            // One broadcast for the row, not one per column tile, and one
+            // configuration of each SFPU program for the row as well.
+            broadcast_statistic_to_dst(stat_reg, cb_lse, a);
+            binop_with_scalar_tile_init();
+            mul_unary_tile(stat_reg, inv_scaler_bits);
+            subtract_and_exp_row(score_reg(0), Bt, stat_reg);
 #ifdef DIAGONAL_BLOCK
+            for (uint32_t b = 0; b < Bt; ++b) {
+                {
                 if (b > a) {
                     // Wholly above the diagonal. P is zero there, and zeroing
                     // it here is what lets every later sum run over all tiles
@@ -403,8 +463,9 @@ void kernel_main() {
                     binop_with_scalar_tile_init();
                     mul_unary_tile(score_reg(b), /* 0.0f */ 0u);
                 }
-#endif
+                }
             }
+#endif
             tile_regs_commit();
             tile_regs_wait();
             pack_reconfig_data_format(cb_attention_weights);

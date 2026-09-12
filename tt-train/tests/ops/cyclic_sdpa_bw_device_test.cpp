@@ -325,6 +325,9 @@ Gradients run_algorithm2(
 
     const uint32_t scaler = std::bit_cast<uint32_t>(1.0F / std::sqrt(static_cast<float>(ref.d)));
     const uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);
+    // sqrt(d): the kernel folds the softmax scale into the exponential, so it
+    // needs the reciprocal to divide the statistic it subtracts.
+    const uint32_t inv_scaler = std::bit_cast<uint32_t>(std::sqrt(static_cast<float>(ref.d)));
     const uint32_t custom_inf = std::bit_cast<uint32_t>(tt::tt_metal::hal::get_inf());
     // Every buffer that is copied into DST rather than fed to a matmul keeps
     // FP32 through the copy: P for the elementwise dS chain, and the gradient
@@ -342,7 +345,7 @@ Gradients run_algorithm2(
             // half-sync buys.
             .dst_full_sync_en = Bt > 2,
             .unpack_to_dest_mode = unpack_mode,
-            .compile_args = {C, qWt, vWt, scaler, minus_one, custom_inf, block_size, Bt}});
+            .compile_args = {C, qWt, vWt, scaler, minus_one, custom_inf, block_size, Bt, inv_scaler}});
 
     const auto coordinator_logical = placement_of(C, grid_w, 1);
     const auto coordinator = device->worker_core_from_logical_core(
@@ -588,6 +591,9 @@ Gradients run_relay(
 
     const uint32_t scaler = std::bit_cast<uint32_t>(1.0F / std::sqrt(static_cast<float>(ref.d)));
     const uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);
+    // sqrt(d): the kernel folds the softmax scale into the exponential, so it
+    // needs the reciprocal to divide the statistic it subtracts.
+    const uint32_t inv_scaler = std::bit_cast<uint32_t>(std::sqrt(static_cast<float>(ref.d)));
     const uint32_t custom_inf = std::bit_cast<uint32_t>(tt::tt_metal::hal::get_inf());
     std::vector<UnpackToDestMode> unpack_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     unpack_mode[tt::CBIndex::c_10] = UnpackToDestMode::UnpackToDestFp32;
@@ -602,7 +608,7 @@ Gradients run_relay(
             // half-sync buys.
             .dst_full_sync_en = Bt > 2,
             .unpack_to_dest_mode = unpack_mode,
-            .compile_args = {C, qWt, vWt, scaler, minus_one, custom_inf, block_size, Bt},
+            .compile_args = {C, qWt, vWt, scaler, minus_one, custom_inf, block_size, Bt, inv_scaler},
             .defines = compute_defines});
 
     // Everything below is per group: the snake, the barrier's coordinator and

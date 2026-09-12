@@ -251,6 +251,9 @@ Outputs run_pair(const Problem& p, uint32_t stage) {
 
     const uint32_t scaler = std::bit_cast<uint32_t>(1.0F / std::sqrt(static_cast<float>(p.d)));
     const uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);
+    // sqrt(d): the kernel folds the softmax scale into the exponential, so it
+    // needs the reciprocal to divide the statistic it subtracts.
+    const uint32_t inv_scaler = std::bit_cast<uint32_t>(std::sqrt(static_cast<float>(p.d)));
     const uint32_t custom_inf = std::bit_cast<uint32_t>(tt::tt_metal::hal::get_inf());
     // P is copied into DST and must stay FP32 through the elementwise dS
     // chain, so its CB unpacks to dest at FP32. The transposed CBs must not:
@@ -263,7 +266,7 @@ Outputs run_pair(const Problem& p, uint32_t stage) {
         ComputeConfig{
             .fp32_dest_acc_en = true,
             .unpack_to_dest_mode = unpack_mode,
-            .compile_args = {qWt, vWt, scaler, minus_one, custom_inf, get_block_size(qWt, 4U), Bt},
+            .compile_args = {qWt, vWt, scaler, minus_one, custom_inf, get_block_size(qWt, 4U), Bt, inv_scaler},
             .defines = defines});
     (void)compute;
 
@@ -626,6 +629,9 @@ Outputs run_pairs(
 
     const uint32_t scaler = std::bit_cast<uint32_t>(1.0F / std::sqrt(static_cast<float>(b.d)));
     const uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);
+    // sqrt(d): the kernel folds the softmax scale into the exponential, so it
+    // needs the reciprocal to divide the statistic it subtracts.
+    const uint32_t inv_scaler = std::bit_cast<uint32_t>(std::sqrt(static_cast<float>(b.d)));
     const uint32_t custom_inf = std::bit_cast<uint32_t>(tt::tt_metal::hal::get_inf());
     std::vector<UnpackToDestMode> unpack_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     unpack_mode[tt::CBIndex::c_10] = UnpackToDestMode::UnpackToDestFp32;
@@ -634,7 +640,7 @@ Outputs run_pairs(
         ComputeConfig{
             .fp32_dest_acc_en = true,
             .unpack_to_dest_mode = unpack_mode,
-            .compile_args = {qWt, vWt, scaler, minus_one, custom_inf, get_block_size(qWt, 4U), Bt},
+            .compile_args = {qWt, vWt, scaler, minus_one, custom_inf, get_block_size(qWt, 4U), Bt, inv_scaler},
             .defines = defines});
 
     std::vector<uint32_t> args = {
