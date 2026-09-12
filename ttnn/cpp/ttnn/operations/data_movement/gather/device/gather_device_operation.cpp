@@ -22,13 +22,8 @@ GatherDeviceOperation::program_factory_t GatherDeviceOperation::select_program_f
     const auto input_index_tensor_shape = tensor_args.input_index_tensor.padded_shape();
 
     if (tensor_args.input_tensor.layout() == Layout::ROW_MAJOR) {
-        // Multi-core splits over W_index only (each core owns a slice of every output row);
-        // W_input is mirrored in full to every core, so it gives no parallelism gain.
-        const uint32_t W_index = input_index_tensor_shape[-1];
-        constexpr uint32_t rm_w_threshold = GATHER_WT_THRESHOLD * tt::constants::TILE_WIDTH;
-        if (W_index > rm_w_threshold) {
-            return RmSingleRowMultiCore{};
-        }
+        // RmSingleRowSingleCore distributes work across cores by rows H safely.
+        // RmSingleRowMultiCore column-splits W_index, which causes data corruption from concurrent unaligned DRAM writes (#55450).
         return RmSingleRowSingleCore{};
     }
 
