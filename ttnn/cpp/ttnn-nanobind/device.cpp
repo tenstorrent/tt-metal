@@ -173,6 +173,10 @@ void py_device_module_types(nb::module_& m_device) {
             &tt::tt_metal::experimental::ProgramRealtimeRecord::frequency,
             "Device clock frequency (cycles per ns)")
         .def_ro("chip_id", &tt::tt_metal::experimental::ProgramRealtimeRecord::chip_id, "Device chip ID")
+        .def_ro(
+            "core_count",
+            &tt::tt_metal::experimental::ProgramRealtimeRecord::core_count,
+            "Number of distinct programmable cores used by the program")
         .def_prop_ro(
             "kernel_sources",
             [](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
