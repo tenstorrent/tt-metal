@@ -198,7 +198,11 @@ SECTIONS
 
 /* Begin the data area.  */
 #if defined(TYPE_FIRMWARE)
-  PROVIDE(__global_pointer$ = DATA_START + 0x7f0);
+  /* kernels get __global_pointer$ from the firmware ELF via --just-symbols, so it must be in the firmware's symbol
+     table even when the firmware itself never references it.  Every processor must initialize gp in its startup
+     code (tmu-crt0.S, or active_erisc-crt0.cc for the BH erisc0 that skips it) -- defining the symbol lets the
+     linker relax to gp-relative addressing, which reads garbage if gp was never set up.  */
+  __global_pointer$ = DATA_START + 0x7f0;
   .data DATA_START :
 #define SECTION(NEW, PREV) NEW :
 #else
