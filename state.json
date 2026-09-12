@@ -1,9 +1,9 @@
 {
   "last_run": {
-    "run_id": 34663215773,
-    "timestamp": "2026-09-12T01:01:00Z"
+    "run_id": 34678492970,
+    "timestamp": "2026-09-12T06:40:00Z"
   },
-  "run_id": 34663215773,
+  "run_id": 34678492970,
   "open_prs": {
     "52106": {
       "issue": 51660,
@@ -326,7 +326,10 @@
     "55823": "Open fix PR #55824 already exists - confirmed via search, no duplicate needed.",
     "56021": "fix in open PR #56025 (binary_ng fused activation dtype define)",
     "56008": "fix in open PR #56012 (all_gather scatter-write state)",
-    "56073": "fix in open PR #54157 (LLK perf matmul coverage)"
+    "56073": "fix in open PR #54157 (LLK perf matmul coverage)",
+    "55744": "already fixed and MERGED via PR #55938 (llk_wait_tiles block-until-resolved fix); remove from active tracking",
+    "55996": "fix in open PR #55997 (moe_compute tilize total_chunks single consumer)",
+    "56068": "fix in open PR #56198 (ttnn.reshape ND shard spec normalized-to-2D input and ND output)"
   },
   "dropped_fix_targets": {
     "51845": "maintainer jasondavies rejected both proposed remedies 2026-08-05 -- do not attempt fix",
@@ -433,7 +436,8 @@
     "55965": "Quasar STALLWAIT math-drain, already bug-labeled + assigned amahmudTT, statically-audited findings for Quasar owner",
     "55920": "eltwise perf-test alignment BH/QSR, already assigned ndivnicTT, tracking issue",
     "55913": "LLK Sanitizer epic/tracker, assigned sstanisicTT, no action needed",
-    "56056": "ttnn.softmax NaN/inf handling - confirmed all-(-inf)-row mechanism (exp SFPU CLAMP_NEGATIVE sanitize) against current source; labeled bug + commented; no fix attempted, shared hand-tuned HW kernel needs careful review beyond repo-assist scope"
+    "56056": "ttnn.softmax NaN/inf handling - confirmed all-(-inf)-row mechanism (exp SFPU CLAMP_NEGATIVE sanitize) against current source; labeled bug + commented; no fix attempted, shared hand-tuned HW kernel needs careful review beyond repo-assist scope",
+    "55988": "2026-09-12: investigated BH tilize tall-narrow cliff-row assert (tilize_multi_core_block_program_factory.cpp:295); traced split_blocks_for_tilize_wh/compute_ncores_wh_sb path in work_split_tilize.hpp and buffer_set_for_core in common.cpp but could not conclusively identify the exact core/width mismatch for the specific (1,1,4096,32) uint8 shape on Blackhole's grid without hardware/sim access; left unlabeled/uncommented, revisit with more time budget"
   },
   "stale_pr_nudges": {
     "34933": {
@@ -762,6 +766,21 @@
       "date": "2026-09-11",
       "type": "author_checkin",
       "note": "CHANGES_REQUESTED review from bbradelTT unanswered since June (overlap with merged #46112), dirty mergeable_state"
+    },
+    "45631": {
+      "date": "2026-09-12",
+      "note": "approved by dstoiljkovicTT but unresolved comments from ruizhangTT/nkapreTT since Aug, mergeable_state=blocked, never previously nudged",
+      "type": "author_checkin"
+    },
+    "46054": {
+      "date": "2026-09-12",
+      "note": "open review comments from fvranicTT since June, mergeable_state=dirty, never previously nudged",
+      "type": "author_checkin"
+    },
+    "46842": {
+      "date": "2026-09-12",
+      "note": "approved by ndivnicTT but ongoing discussion from peter941221/ncvetkovicTT/amahmudTT through July, mergeable_state=dirty, never previously nudged",
+      "type": "author_checkin"
     }
   },
   "backlog_cursor": {
@@ -780,7 +799,8 @@
     "task5_2026_09_11": "re-verified 13 tracked PRs, all unchanged except 54246 now dirty (needs rebase, flagged); 55435 still stuck (broken details_url, action_required)",
     "task1_task2_2026_09_11b": "reviewed newest issues 56283 down to 56230 - confirmed+commented+labeled bug on 56283 (Quasar copy_via_memmove double-uncached-offset, DFB reshape_view) and 56254 (BH tall/narrow uint8 tilize cliff-row core-0 exclusion), both root causes verified against current source with exact line citations; labeled bug on 56281/56238/56263 (well-scoped Quasar/KV-table defect reports); 56273 corrected to no-label (missing-kernel checklist, not confirmed defect); 56240/56239/56275 are KDA/Quasar architectural/perf tracking issues, no label; 56231/56230 are empty/stub tracking issues, skipped",
     "task6_2026_09_11b": "nudged 3 never-pinged non-draft stale PRs (23234 codeowners, 44787/44765 author) from oldest-updated search; next run continue scanning further down the non-draft list (page2+)",
-    "task1_task2_2026_09_12": "reviewed newest issues 56312 down to 56120; labeled+commented 56120 (bug) and 56239 (performance monitoring); confirmed 56295/56233/56304/56275/56298/56231/56230 covered or no-action; next run continue below 56120 (56167/56122 area onward, previously scanned range starts ~55971 so gap 56120-55971 still needs a look)"
+    "task1_task2_2026_09_12": "reviewed newest issues 56312 down to 56120; labeled+commented 56120 (bug) and 56239 (performance monitoring); confirmed 56295/56233/56304/56275/56298/56231/56230 covered or no-action; next run continue below 56120 (56167/56122 area onward, previously scanned range starts ~55971 so gap 56120-55971 still needs a look)",
+    "task1_task2_2026_09_12b": "reviewed previously-flagged gap 55944-56119 for coverage: confirmed 56068 covered by open PR #56198, 55996 covered by open PR #55997, 55744 already fixed+merged via #55938 (moved to covered_no_duplicate); investigated 55988 (BH tilize tall-narrow assert) but could not conclusively pin the defect in the work-split/buffer-set interaction (traced split_blocks_for_tilize_wh / buffer_set_for_core / make_block_plan across work_split_tilize.hpp and common.cpp), left unlabeled/uncommented rather than guess; other gap issues (56100/56096/56090/55957/55953) already correctly labeled, no dup PR found, no new action. Next run continue below 55944 or re-attempt 55988 root cause with more budget."
   },
   "labeled_issues": {
     "53866": {
@@ -1082,6 +1102,11 @@
   },
   "run_history": [
     {
+      "run_id": "34678492970",
+      "date": "2026-09-12T06:40:00Z",
+      "summary": "Task1/2: reviewed previously-flagged gap 55944-56119; confirmed 56068->PR#56198, 55996->PR#55997 already covered (no dup); confirmed 55744 already fixed+merged via PR#55938, moved to covered list; investigated 55988 (BH tilize tall-narrow assert) but could not conclusively pin exact defect, left unlabeled/uncommented rather than guess. Task5: re-verified all 14 tracked repo-assist PRs, no regressions, 55847 PR Gate now green (still CodeOwners-pending). Task6: nudged 3 never-pinged author-blocked stale PRs (45631, 46054, 46842), all long-stale with unresolved review feedback and blocked/dirty mergeable state. Task8: rewrote monthly summary #55015 to remove an accidentally duplicated body section from a prior run and refreshed suggested actions + run history."
+    },
+    {
       "run_id": "34663215773",
       "date": "2026-09-12T01:01:00Z",
       "summary": "Task1/2: reviewed fresh newest issues 56312 down to 56120; confirmed+commented+labeled bug on #56120 (MiniMax-H3 ring-attention SDPA silent wrong values traced to #55107 Blackhole Stall_Clr_Cntrl=1 unpack change, verified _llk_unpack_set_srcb_dummy_valid_ in tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_unpack_common.h unchanged on main) and #56239 (KDA prepare_chunk_recurrence perf baseline stale after #55626, verified _PRODUCTION_EXPECTED_DURATION_NS constant unchanged, labeled performance monitoring). Confirmed 56295->PR#56296, 56233->PR#56235 already covered (no dup); 56304/56275 architectural tracking already assigned; 56298 already labeled; 56231/56230 tracking placeholders, no action. Task5: re-verified all 12 tracked repo-assist PRs via pull_request_read/get_check_runs - no regressions, all unchanged from prior run (55670/55688 still 5/5 green, mergeable_state behind). Task6: re-pinged CodeOwners on 3 long-stale reviewer-blocked non-repo-assist PRs never previously nudged in this cycle: #24164 (approved by bbradelTT, other reviewers pending), #36120 (approved by yieldthought, others pending), #36184 (6 requested reviewers, no reviews yet). Task8: updated monthly summary #55015 with new suggested actions and prepended run history entry."
@@ -1191,5 +1216,6 @@
   },
   "task5_maintain_20260908": "re-verified check-runs on tracked PRs 55670/55424/54932/54792 (all 5/5 green pre-checks unchanged, no build-artifact.yaml run, no new reviews); 53690/54666/51868/54246/55293 unchanged",
   "monthly_summary_issue": 55015,
-  "task5_maintain_20260911": "re-verified check-runs + mergeable_state on all 13 tracked PRs (56195/55847/55688/55670/55435/54932/54862/54792/54666/54246/53690/53113/52106/51868) - no CI regressions found (55435 RTL Sim CI still failing since 09-04, pre-existing, noted); 51868 confirmed green after 09-10 test-add push; 55847 author (mmoscickiTT) actively iterating with reviewer directly, no repo-assist action needed"
+  "task5_maintain_20260911": "re-verified check-runs + mergeable_state on all 13 tracked PRs (56195/55847/55688/55670/55435/54932/54862/54792/54666/54246/53690/53113/52106/51868) - no CI regressions found (55435 RTL Sim CI still failing since 09-04, pre-existing, noted); 51868 confirmed green after 09-10 test-add push; 55847 author (mmoscickiTT) actively iterating with reviewer directly, no repo-assist action needed",
+  "task5_maintain_2026_09_12": "re-verified all 14 tracked repo-assist PRs via pull_request_read - no regressions; 55847 PR Gate now green (still CodeOwners-pending 2 groups, no new action); all others unchanged (behind/blocked/dirty as before)"
 }
