@@ -24,8 +24,19 @@ namespace tt {
 template <typename A, typename B>
 constexpr auto div_up(A a, B b) noexcept -> std::common_type_t<A, B> {
     using T = std::common_type_t<A, B>;
+    static_assert(std::is_integral_v<T>, "tt::div_up only supports integral types");
     assert(b != 0 && "Divide by zero error in div_up");
-    return static_cast<T>((static_cast<T>(a) + static_cast<T>(b) - 1) / static_cast<T>(b));
+    const auto ta = static_cast<T>(a);
+    const auto tb = static_cast<T>(b);
+    if constexpr (std::is_unsigned_v<T>) {
+        return static_cast<T>(ta / tb + (ta % tb != 0 ? 1 : 0));
+    } else {
+        if ((ta >= 0 && tb > 0) || (ta <= 0 && tb < 0)) {
+            return static_cast<T>(ta / tb + (ta % tb != 0 ? 1 : 0));
+        } else {
+            return static_cast<T>(ta / tb);
+        }
+    }
 }
 
 /**
