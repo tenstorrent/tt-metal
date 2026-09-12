@@ -85,6 +85,10 @@ public:
 
     static MeshToTensor create(const MeshDevice& mesh_device, const MeshComposerConfig& config);
 
+    // Shape-only overload for callers without a `MeshDevice` handle (e.g. composing an already
+    // host-side distributed tensor). Mirrors the shape-only `TensorToMesh::create` overload.
+    static MeshToTensor create(const MeshShape& mesh_shape, const MeshComposerConfig& config);
+
     // Composes a tensor distributed over a mesh.
     // The input tensor is expected to be distributed over a mesh of the same shape as the mesh device.
     // The output tensor will be a host-side tensor consisting of 1 device shard (i.e., mapped to 1x1 mesh).
