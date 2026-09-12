@@ -53,10 +53,9 @@ from models.demos.blackhole.qwen36.tt.dflash2_serving import (  # noqa: E402
 from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM, TT_Qwen3_5ProcessingInfo  # noqa: E402
 
 _W = serve_block_size() if _SPEC_ON else 1
-# Spec-eligible prompt length. Capped at one prefill chunk MINUS ONE: a prompt that is an exact multiple of
-# the 2048-token chunk replays the chunk-prefill TRACE (no python-side tap clones), so it cannot seed the
-# drafter; every shorter prompt takes the eager masked bucket, which does. The scheduler gates on the same
-# number, so a 2048-token prompt is served as plain width-1 decode by both sides.
+# Longest prompt that takes the single eager MASKED-BUCKET prefill (one chunk minus one token); longer
+# prompts take the eager CHUNKED spec prefill (prefill_for_spec: 2048-token chunks + masked tail, drafter
+# context filled per chunk). Both capture the drafter taps; neither replays the chunk-prefill trace.
 _PREFILL_CHUNK = 2048
 _MAX_PROMPT = min(int(os.environ.get("QWEN36_DFLASH_MAX_PROMPT", "2048")), _PREFILL_CHUNK - 1)
 # Every DFlash checkpoint drafts at most block-1 <= 15 tokens; the KV lookahead only has to bound the
@@ -77,9 +76,13 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
         "output_tokens_per_step": _W,
         # Block only when decoding alone; prefill anchors and batched steps are plain width-1 rows.
         "tt_adaptive_block_output": _W > 1,
-        # Prompts longer than this are served as plain baseline for their whole lifetime (the drafter
-        # only sees a 2048-token context window, where native decode is faster anyway).
-        "tt_adaptive_block_max_prompt_tokens": _MAX_PROMPT if _W > 1 else 0,
+        # EVERY text prompt speculates (0 = no prompt-length frontier): a long prompt takes the eager
+        # chunked spec prefill instead of the chunk-prefill trace. The drafter only sees a 2048-token
+        # window, so acceptance drops with context, but it stays ahead of plain decode (demo: 58 tok/s
+        # at 4k, 43 at 16k vs 32.6 plain serving) -- and, decisively, it keeps the plain decode /
+        # chunk-prefill TRACES out of the request path: a spec session that follows a replay of those
+        # traces hangs the device (see DFlash2ServingDecoder.recapture), so this profile never runs them.
+        "tt_adaptive_block_max_prompt_tokens": 0,
         # The block step writes the W committed positions AND the last verify's K+1 candidate rows into
         # the paged KV inside one step: have the scheduler allocate that reach up front.
         "tt_block_output_kv_lookahead_tokens": (_W + _MAX_DRAFT + 1) if _W > 1 else 0,
@@ -143,7 +146,7 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
     def _spec_drop_pending(self):
         if self._spec_pending is not None:
             taps, _, _ = self._spec_pending
-            for t in taps:
+            for t in taps or ():
                 ttnn.deallocate(t)
             self._spec_pending = None
 
@@ -237,9 +240,19 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
             _, taps = self._spec_prefill_taps(model, dummy_prompt(T), pt_pref, T)
             assert taps is not None, "eager masked prefill captured no drafter taps (bucket trace gate on?)"
             dec.ingest_prompt(taps, T)
+        # 1b) The eager CHUNKED spec prefill for long prompts: one full chunk + a masked tail, and an exact
+        #     chunk multiple (its own logits path), each ingesting the drafter context per chunk.
+        for T in (_PREFILL_CHUNK + buckets[0], _PREFILL_CHUNK):
+            self._spec = dec  # _spec_prefill_chunked ingests into the live decoder
+            try:
+                self._spec_prefill_chunked(model, dummy_prompt(T, seed=T), pt_pref, T)
+            finally:
+                self._spec = None
         # 2) Seed (allocates the persistent anchor buffer, compiles the eager verify + extend) and the
         #    eager draft (compiles every draft program) -- all before any trace exists.
         S = min(buckets[-1], _MAX_PROMPT)
+        _, taps = self._spec_prefill_taps(model, dummy_prompt(S), pt_pref, S)
+        dec.ingest_prompt(taps, S)
         dec.begin(first=int(dummy_prompt(1, seed=99)[0, 0]), T=S, page_table_row=pt)
         dec.prepare_draft()
         # 3) The plain-block fallback's eager decode step (spec-eligible request without taps).
@@ -320,13 +333,18 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
         self._spec_req_prompt_len = T
         eligible = (
             int(tokens.shape[0]) == 1
-            and T <= _MAX_PROMPT
             and not self._has_visual(kwargs, "pixel_values")
             and not self._has_visual(kwargs, "pixel_values_videos")
         )
         if not eligible:
             model._dflash_tap = False
+            self._spec.stale = True  # the plain path (chunk-prefill trace / plain decode trace) is about to run
             return super().prefill_forward(tokens, page_table, kv_cache, prompt_lens, **kwargs)
+        row = torch.as_tensor(page_table)[:1].clone()
+        if T > _MAX_PROMPT:
+            out = self._spec_prefill_chunked(model, tokens, page_table, T)
+            self._spec_pending = (None, T, row)  # drafter context already filled per chunk
+            return out
         model._dflash_tap = True
         try:
             out = super().prefill_forward(tokens, page_table, kv_cache, prompt_lens, **kwargs)
@@ -338,9 +356,39 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
                 f"Qwen36DFlash: prefill T={T} captured no drafter taps; this request decodes in plain blocks"
             )
             return out
-        row = torch.as_tensor(page_table)[:1].clone()
         self._spec_pending = (taps, T, row)
         return out
+
+    def _spec_prefill_chunked(self, model, tokens, page_table, T):
+        """Eager chunked prefill (the demo's spec prefill): 2048-token chunks + a masked tail, each chunk's
+        drafter taps ingested into the drafter's context KV as it completes. Returns vLLM's (host logits
+        [1,1,vocab], zero rope_deltas) like _prefill_forward_tp."""
+        dec = self._spec
+        pt = self._spec_pref_pt(model, torch.as_tensor(page_table)[:1].to(torch.int32))
+        prompt = torch.as_tensor(tokens)[:1, :T].to(torch.int32)
+        logger.info(f"Prefilling User 1 up to {T} tokens (TP eager chunked spec prefill)")
+        dec.ctx_len = 0
+
+        def on_chunk(hidden, chunk_start, valid_len):
+            taps = model.take_dflash_eager_taps()
+            assert taps is not None, "eager chunk prefill captured no drafter taps"
+            dec.ingest_prompt(taps, chunk_start + valid_len, chunk_start=chunk_start)
+
+        model._dflash_tap = True
+        try:
+            logits_dev = model.prefill_for_spec(prompt, pt, T, on_chunk)
+        finally:
+            model._dflash_tap = False
+        lt = (
+            ttnn.to_torch(logits_dev, mesh_composer=ttnn.ConcatMeshToTensor(model.mesh_device, dim=0))
+            .reshape(-1, model.vocab_size)[:1]
+            .float()
+            .view(1, 1, -1)
+        )
+        ttnn.deallocate(logits_dev)
+        assert dec.ctx_len == T, f"chunked spec prefill covered {dec.ctx_len} of {T} positions"
+        logger.info(f"Finished prefill up to {T} tokens, starting decode...")
+        return lt, torch.zeros(1, dtype=torch.long)
 
     # ------------------------------------------------------------------ decode: one block per solo step
     def decode_forward(self, *args, **kwargs):
@@ -355,6 +403,7 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
             self._spec_drop_pending()
             if self._spec.active:
                 self._spec.end()
+            self._spec.stale = True
             return super().decode_forward(*args, **kwargs)
         anchor = int(tokens.reshape(-1)[0])
         pos = int(start_pos.reshape(-1)[0]) if start_pos is not None else None
@@ -365,19 +414,16 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
             self._spec_pending = None
             if pos is not None and pos != T:
                 logger.warning(f"Qwen36DFlash: first decode start_pos {pos} != prompt_len {T}")
-            dec.ingest_prompt(taps, T)
+            if taps is not None:
+                dec.ingest_prompt(taps, T)
             dec.begin(anchor, T, row if row is not None else pt_row)
             self._spec_last_pt = dec.page_table.clone()
             self._spec_carry = []
             self._spec_prev_tail = None
             self._spec_anchor_warned = False
-        block_step = self._spec_req_prompt_len is not None and self._spec_req_prompt_len <= _MAX_PROMPT
         if not dec.active:
-            if not block_step:
-                # Long prompt: the scheduler reserved width 1 for every step of this request.
-                return super().decode_forward(*args, **kwargs)
-            # Spec-eligible request without a session (no taps / multimodal): the scheduler still
-            # reserved a W-token block, so honour the contract with a plain greedy block.
+            # Every solo text request is a block request (no prompt-length frontier): a request without
+            # a session (no taps) still owes the scheduler a W-token block -> plain greedy block.
             return self._plain_block(anchor, pos, row)
         # vLLM allocates a new block every block_size tokens: re-point the verify trace when its row changes.
         if row is not None:

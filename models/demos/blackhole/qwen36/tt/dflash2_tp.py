@@ -383,6 +383,24 @@ class DFlash2DrafterTP:
             "xsin": self._dev(z(1, B, 1, HD, dtype=torch.bfloat16)),
         }
 
+    def release_traces(self):
+        """Drop the draft/extend traces (and their output tensors) but keep the KV + staging buffers, so
+        the next armed draft/extend re-captures against the same addresses."""
+        ttnn.synchronize_device(self.mesh)
+        self._trace_armed = False
+        for tid in (self._draft_tid, self._ext_tid):
+            if tid is not None:
+                ttnn.release_trace(self.mesh, tid)
+        self._draft_tid = self._ext_tid = None
+        if self._draft_out is not None:
+            for t in self._draft_out:
+                if t is not None:
+                    try:
+                        ttnn.deallocate(t)
+                    except Exception:
+                        pass
+        self._draft_out = None
+
     def free(self):
         ttnn.synchronize_device(self.mesh)  # a non-blocking replay may still be in flight (exception path)
         self._trace_armed = False

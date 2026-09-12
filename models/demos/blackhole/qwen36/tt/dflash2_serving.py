@@ -15,7 +15,9 @@ server-lifetime part and a per-request part:
            compiles or allocates after this.
   begin()  per request, at its first decode step: fill the drafter's context KV from the prompt taps
            the eager masked prefill left behind, re-point the verify trace at the request's vLLM page
-           table, eager-seed the anchor token (position T) -> pending token; no capture.
+           table, seed the anchor token (position T) THROUGH the verify trace (row 0 of a [first, pad]
+           replay; the eager T=1 seed is warmup-only because it re-allocates GDN buffers the parked
+           trace baked) -> pending token; no capture, no allocation.
   step()   ONE draft + traced verify + greedy accept + traced commit + extend; returns the committed
            tokens ([pending] + accepted drafts). The caller loops it to fill a block.
   end()    per request: leave the GDN taps live for whatever runs next.
@@ -96,12 +98,13 @@ class DFlash2ServingDecoder(DFlash2Decoder):
         )
 
     # ------------------------------------------------------------------ per-request context
-    def ingest_prompt(self, taps, T):
-        """Prompt taps (list of 5 fractured [1,1,S,dim/tp] device tensors from the eager masked prefill,
-        S = bucket rows >= T) -> the drafter's context KV at positions 0..S-1. Frees the taps."""
+    def ingest_prompt(self, taps, T, chunk_start=0):
+        """Prompt taps (list of 5 fractured [1,1,S,dim/tp] device tensors from an eager prefill chunk, S =
+        bucket/chunk rows) -> the drafter's context KV at positions chunk_start..chunk_start+S-1. ``T`` is
+        the number of prompt positions covered after this chunk. Frees the taps."""
         assert self._alloc_done
-        _dbg(f"ingest_prompt T={T} rows={taps[0].shape[-2]}")
-        self.drafter.fill_context(taps, 0)
+        _dbg(f"ingest_prompt T={T} rows={taps[0].shape[-2]} start={chunk_start}")
+        self.drafter.fill_context(taps, int(chunk_start))
         for t in taps:
             ttnn.deallocate(t)
         self.ctx_len = int(T)
@@ -123,24 +126,65 @@ class DFlash2ServingDecoder(DFlash2Decoder):
         if self._captured:
             self.model.refresh_verify_page_table(self.page_table)
 
+    def reset_ccl_semaphores(self):
+        """Quiesce the mesh and zero every TT_CCL global semaphore (barrier / all-gather / reduce-scatter
+        pools). The CCL kernels expect a semaphore at 0 on entry and reset it on exit; two independent
+        trace streams (the plain decode trace and the spec traces) bake handles from the same 2-deep
+        rings without the alternation a single stream has, so a stream switch re-establishes the
+        invariant explicitly. QWEN36_DFLASH_CCL_RESET=0 disables (A/B)."""
+        if os.environ.get("QWEN36_DFLASH_CCL_RESET", "0") != "1":  # opt-in diagnostic; not needed for correctness
+            return
+        ccl = getattr(self.model, "tt_ccl", None)
+        if ccl is None:
+            return
+        ttnn.synchronize_device(self.mesh)
+        n = 0
+        for pool in (ccl.barrier_semaphore_handles, ccl.ag_semaphore_handles, ccl.rs_semaphore_handles):
+            for per_axis in pool:
+                for entry in per_axis:
+                    for h in entry if isinstance(entry, (list, tuple)) else (entry,):
+                        try:
+                            ttnn.reset_global_semaphore_value(h, 0)
+                            n += 1
+                        except Exception as e:  # pragma: no cover - diagnostic
+                            logger.warning(f"[dflash2-serve] semaphore reset failed: {e!r}")
+                            return
+        ttnn.synchronize_device(self.mesh)
+        _dbg(f"reset {n} CCL semaphores")
+
     def begin(self, first, T, page_table_row):
         """Start a request's session after ingest_prompt: seed the anchor token ``first`` at position T
         (eager verify; also extends the drafter context by slot T) and derive the pending token."""
         assert self._alloc_done and self.ctx_len == T, f"ingest_prompt({T}) must precede begin (ctx_len={self.ctx_len})"
         self._t_begin = time.perf_counter()
+        self.reset_ccl_semaphores()
         self.set_page_table(page_table_row)
-        for dn in self._gdn:
-            dn._capture_slots = False  # the eager seed must not write the trace's slot buffers
-        self.model._dflash_tap = True  # the seed's eager verify clones its taps for the drafter
-        try:
-            Lp, Hp = self._seed(int(first), T - 1)
-        finally:
-            self.model._dflash_tap = False
+        if self._captured and getattr(self, "stale", False):
+            self.recapture(warm_start=T)
+            self.stale = False
+        if self._captured:
+            # TRACED seed: once the verify trace exists, the eager seed must not run again -- its T=1
+            # fullbatch verify frees and re-allocates the GDN window/slot buffers the parked trace baked
+            # (fine before capture, fatal after: the next replay writes freed memory -- observed as a
+            # device hang once another request had shifted the allocator). Verify [first, pad x K] at
+            # T..T+K instead: row 0 IS the seed (its logits give `pending`, its hidden the anchor, its
+            # GDN slot the committed state, its tap row the drafter's context slot T); rows 1..K are
+            # junk the next verify overwrites. No allocation, no compile, and faster than the eager seed.
+            self.pending = self._traced_seed(int(first), int(T))
+            self.Hp = self._hp_buf
+        else:
             for dn in self._gdn:
-                dn._capture_slots = True
+                dn._capture_slots = False  # the eager seed must not write the trace's slot buffers
+            self.model._dflash_tap = True  # the seed's eager verify clones its taps for the drafter
+            try:
+                Lp, Hp = self._seed(int(first), T - 1)
+            finally:
+                self.model._dflash_tap = False
+                for dn in self._gdn:
+                    dn._capture_slots = True
+            self.pending = int(Lp.argmax())
+            self.Hp = Hp
         self.p = int(T)
-        self.pending = int(Lp.argmax())
-        self.Hp = Hp
         self.active = True
         self.iters = 0
         self.total_drafted = 0
@@ -148,6 +192,87 @@ class DFlash2ServingDecoder(DFlash2Decoder):
         self.accept_hist = [0] * (self.K + 1)
         self.depth_hits = [0] * self.K
         self.zero_accept = 0
+
+    _VFY_BUFS = (
+        "_vfy_token_buf",
+        "_vfy_kvpos_buf",
+        "_vfy_kvpt_buf",
+        "_vfy_kvpt1_buf",
+        "_vfy_cos_buf",
+        "_vfy_sin_buf",
+        "_vfy_logits_out",
+        "_vfy_rows_out",
+        "_vfy_ids_out",
+    )
+
+    def _release_verify_captures(self):
+        """Release the verify + commit traces and the verify's persistent I/O buffers (capture_verify_trace
+        allocates fresh ones each time)."""
+        model = self.model
+        ttnn.synchronize_device(self.mesh)
+        model.release_commit_traces()
+        tid = getattr(model, "_vfy_trace_id", None)
+        if tid is not None:
+            ttnn.release_trace(model.mesh_device, tid)
+            model._vfy_trace_id = None
+        for name in self._VFY_BUFS:
+            t = getattr(model, name, None)
+            if t is not None:
+                try:
+                    ttnn.deallocate(t)
+                except Exception:
+                    pass
+                setattr(model, name, None)
+        self._vfy_captured = False
+        self._captured = False
+
+    def recapture(self, warm_start):
+        """Re-arm every spec trace after ANOTHER trace stream ran on the model (the plain decode trace
+        for a long prompt, the chunk-prefill trace): a parked spec trace does not survive that -- its
+        first replay afterwards hangs the device (measured; the eager passes of the same ops are fine,
+        so it is the captured state, not the device state). Every program is already compiled and every
+        buffer the captures bake is persistent, so this is capture-only (~1.5 s + the drafter's lazy
+        draft/extend re-capture on the next step). ``warm_start`` = the seed position of the request
+        about to start: the throwaway passes write junk KV there, which the seed/verify overwrite."""
+        assert not self.active
+        model = self.model
+        self._release_verify_captures()
+        self.drafter.release_traces()
+        self._armed = False
+        model._dflash_tap = True
+        try:
+            model.capture_verify_trace(
+                self.page_table,
+                self.K + 1,
+                warm_start=int(warm_start),
+                decode_cfg=True,
+                commit_warmup=self.traced_commit,
+            )
+        finally:
+            model._dflash_tap = False
+        model._vfy_owner = self
+        self._vfy_captured = True
+        self._commit_traced = bool(self.traced_commit and model.capture_commit_traces())
+        ttnn.synchronize_device(self.mesh)
+        self._captured = True
+        model.refresh_verify_page_table(self.page_table)
+        self.recaptures = getattr(self, "recaptures", 0) + 1
+        logger.info(f"[dflash2-serve] re-armed the spec captures after a plain-path request (#{self.recaptures})")
+
+    def _traced_seed(self, first, T):
+        """Seed through the captured verify trace (see begin). Returns the pending token id."""
+        assert self.ctx_len == T, f"ingest_prompt({T}) must precede the seed (ctx_len={self.ctx_len})"
+        _dbg(f"traced seed T={T}")
+        K = self.K
+        _lt, vhidden, vids = self.model.verify_traced([first] * (K + 1), T, read_logits=False, clone_rows=False)
+        self._commit(0)  # durable GDN state = after `first` at position T
+        self._set_anchor(vhidden, 0)
+        # The verify trace copied its taps (rows = positions T..T+K) into the tap bufs: row 0 -> slot T.
+        from models.demos.blackhole.qwen36.tt.dflash2_decode import _DRAFT_TRACED
+
+        self.drafter.extend_context(T, 1, traced=_DRAFT_TRACED)
+        self.ctx_len = T + 1
+        return int(vids[0])
 
     # ------------------------------------------------------------------ one-time captures
     def prepare_draft(self):
@@ -193,10 +318,12 @@ class DFlash2ServingDecoder(DFlash2Decoder):
             logger.warning(f"[dflash2-serve] position {p} near capacity {self.max_pos}: ending the session")
             return None
         drafts = self._draft(pending, self.Hp, p)
+        _dbg(f"verify p+1={p + 1}")
         vids, vhidden = self._verify([pending] + drafts, p)
         m = self._accept_greedy(drafts, vids)
         committed = [pending] + drafts[:m]
         mi = len(committed) - 1
+        _dbg(f"commit mi={mi}")
         self._commit(mi)
         next_pending = vids[mi]
         self._set_anchor(vhidden, mi)
@@ -215,6 +342,7 @@ class DFlash2ServingDecoder(DFlash2Decoder):
         self.active = False
         for dn in self._gdn:
             dn.sync_conv_taps()
+        self.reset_ccl_semaphores()
         if self.iters:
             dt = time.perf_counter() - self._t_begin
             n_tok = self.iters + self.total_accepted

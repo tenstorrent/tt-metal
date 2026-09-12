@@ -71,7 +71,8 @@ serve:
     # once before `tt-model serve` (quickstart below). QWEN36_DRAFTER=mtp turns speculation off (batch32 profile).
     DFLASH_WEIGHTS: incoai/Qwen3.8-27B-DFlash2@dedf8df68adfb1afeaf7b7480c0a0243108177b4
     QWEN36_DFLASH_BLOCK: "8"
-    QWEN36_DFLASH_MAX_PROMPT: "2048"     # prompts above this decode plain (the drafter sees a 2048-token window)
+    QWEN36_DFLASH_MAX_PROMPT: "2048"     # prompts up to this take the single masked-bucket prefill; longer ones the
+                                         # eager chunked spec prefill. EVERY text prompt speculates.
     QWEN36_DFLASH_SERVE_BLOCK: "32"      # tokens committed per vLLM step on a speculative request
   args:
     - [--max-num-batched-tokens, "262144"]
@@ -117,13 +118,14 @@ card:
   quickstart: |
     ### Profiles
 
-    * `single-user-dflash2` (default): `--max-num-seqs 1`, speculative decoding on every request whose prompt
-      is at most 2047 tokens (longer prompts decode plain, one token per step). Output is greedy: the
-      speculative loop reproduces the target model's own greedy trajectory (verified token-for-token against
-      plain greedy decode on-device; against a plain vLLM server it can diverge where the target's top-2
-      logits are nearly tied, exactly like the demo's spec loop), so `temperature` and friends only affect
-      the first token of a response. `logprobs`, structured outputs and `min_p`/`logit_bias` are rejected
-      or neutralised by the plugin for this profile.
+    * `single-user-dflash2` (default): `--max-num-seqs 1`, speculative decoding on EVERY text request (the
+      drafter only sees a 2048-token window, so long prompts accept fewer drafts per step but still beat
+      plain decode: 58 tok/s at 4k, 43 at 16k in the demo). Output is greedy: the speculative loop
+      reproduces the target model's own greedy trajectory (verified token-for-token against plain greedy
+      decode on-device; against a plain vLLM server it can diverge where the target's top-2 logits are
+      nearly tied, exactly like the demo's spec loop), so `temperature` and friends only affect the first
+      token of a response. `logprobs`, structured outputs, `min_p`/`logit_bias` and multimodal prompts are
+      rejected or neutralised by the plugin for this profile; long prompts pay an eager (untraced) prefill.
     * `batch32`: `tt-model serve --profile batch32 changh95/qwen3.8-27b-dflash2-p300x2` — plain decode, up to
       32 users, full sampling support.
 
@@ -139,7 +141,8 @@ card:
     ### Tuning knobs (container env)
 
     `QWEN36_DFLASH_SERVE_BLOCK` (default 32) = tokens committed per vLLM step (streaming granularity);
-    `QWEN36_DFLASH_MAX_PROMPT` (default 2048, capped at 2047) = longest prompt that speculates;
+    `QWEN36_DFLASH_MAX_PROMPT` (default 2048) = longest prompt that takes the one-shot masked prefill
+    (longer prompts take the chunked one; both speculate);
     `QWEN36_DRAFTER=mtp` = speculation off. The same image also contains the single-user demo/benchmark
     (`models/demos/blackhole/qwen36/demo/text_demo.py`, `-k "traced_128 and not traced_128k and not g8"`),
     where DFlash2 reaches 103.7 tok/s on a document continuation vs 94.2 for the built-in MTP drafter.

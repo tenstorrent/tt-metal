@@ -70,6 +70,9 @@ def use_tp_drafter():
 
 
 _DEBUG = os.environ.get("QWEN36_DFLASH_DEBUG", "0") == "1"
+# QWEN36_DFLASH_DRAFT_TRACE=0: run the TP drafter's draft/extend EAGERLY (no draft/extend trace capture) -- an
+# A/B switch for trace-interaction problems; ~2x slower drafts.
+_DRAFT_TRACED = os.environ.get("QWEN36_DFLASH_DRAFT_TRACE", "1") != "0"
 
 
 def _dbg(msg):
@@ -201,13 +204,13 @@ class DFlash2Decoder(SpeculativeDecoder):
     # ------------------------------------------------------------------ loop hooks
     def _draft(self, pending_tok, anchor_hidden, p):
         assert self.ctx_len == p + 1, f"draft at p={p} but context covers {self.ctx_len}"
-        if self.tp and not self._armed:
+        if self.tp and not self._armed and _DRAFT_TRACED:
             # First loop draft: the verify + commit traces are captured and every drafter program has
             # run eagerly, so the drafter may now capture its own draft/extend traces.
             self.drafter.arm_traces()
             self._armed = True
         _dbg(f"draft C={p + 1}")
-        out = self.drafter.draft(int(pending_tok), p + 1)
+        out = self.drafter.draft(int(pending_tok), p + 1, traced=_DRAFT_TRACED)
         if _DEBUG:
             ttnn.synchronize_device(self.mesh)
         _dbg(f"draft done {out}")
@@ -221,7 +224,7 @@ class DFlash2Decoder(SpeculativeDecoder):
         n = len(tokens) + 1
         _dbg(f"extend slot0={slot0} n={n}")
         if self.tp:
-            self.drafter.extend_context(slot0, n)
+            self.drafter.extend_context(slot0, n, traced=_DRAFT_TRACED)
         else:
             self.drafter.extend_context(self.model.dflash_taps(), slot0, n)
         if _DEBUG:
