@@ -311,6 +311,12 @@ Gradients run_algorithm2(
         program, kComputePath, region,
         ComputeConfig{
             .fp32_dest_acc_en = true,
+            // Half-sync DST holds four Float32 tiles, and Bt = 2 needs
+            // exactly four: two score tiles in even registers with a scratch
+            // register beside each. Taller blocks need the whole register
+            // file, which costs the pipelining between math and pack that
+            // half-sync buys.
+            .dst_full_sync_en = Bt > 2,
             .unpack_to_dest_mode = unpack_mode,
             .compile_args = {C, qWt, vWt, scaler, minus_one, custom_inf, block_size, Bt}});
 
@@ -502,6 +508,12 @@ Gradients run_relay(
         program, kComputePath, region,
         ComputeConfig{
             .fp32_dest_acc_en = true,
+            // Half-sync DST holds four Float32 tiles, and Bt = 2 needs
+            // exactly four: two score tiles in even registers with a scratch
+            // register beside each. Taller blocks need the whole register
+            // file, which costs the pipelining between math and pack that
+            // half-sync buys.
+            .dst_full_sync_en = Bt > 2,
             .unpack_to_dest_mode = unpack_mode,
             .compile_args = {C, qWt, vWt, scaler, minus_one, custom_inf, block_size, Bt},
             .defines = compute_defines});
@@ -692,6 +704,13 @@ TEST(CyclicSdpaBwRelayTest, FourCoresTallBlocks) {
     check_relay(4, 2, 2, 64, /* endpoint_sync */ false, /* Bt */ 2);
 }
 
+// Four tiles tall, which is the most the register scheme allows: score tiles
+// sit in even registers so that the mask and the softmax each have a scratch
+// register beside them, and FP32 dest has eight.
+TEST(CyclicSdpaBwRelayTest, FourCoresFourTileBlocks) {
+    check_relay(4, 2, 2, 64, /* endpoint_sync */ false, /* Bt */ 4);
+}
+
 // ------------------------------------------ Algorithm 4: no chip-wide barrier
 // Within a streak the packet is the ordering token. Across a gap, the two
 // endpoint counters order a reload after the preceding streak's spill. The
@@ -727,6 +746,12 @@ TEST(CyclicSdpaBwEndpointTest, SixteenCores) {
 // the slow tests in the suite.
 TEST(CyclicSdpaBwEndpointTest, ThirtyTwoCores) {
     check_relay(32, 8, 4, 64, true);
+}
+
+// The barrier-free variant with tall blocks: the endpoint counters order a
+// reload against a spill of a whole block now, not a single tile row.
+TEST(CyclicSdpaBwEndpointTest, FourCoresTallBlocks) {
+    check_relay(4, 2, 2, 64, /* endpoint_sync */ true, /* Bt */ 2);
 }
 
 TEST(CyclicSdpaBwEndpointTest, SixtyFourCores) {
@@ -939,7 +964,8 @@ TEST(CyclicSdpaBwTimingTest, DISABLED_CompareBlockShapes) {
     for (const auto s : {Shape{16, 4, 4, 1}, Shape{8, 4, 2, 2},
                          Shape{32, 8, 4, 1}, Shape{16, 4, 4, 2},
                          Shape{64, 8, 8, 1}, Shape{32, 8, 4, 2},
-                         Shape{64, 8, 8, 2}}) {
+                         Shape{8, 4, 2, 4}, Shape{16, 4, 4, 4},
+                         Shape{64, 8, 8, 2}, Shape{64, 8, 8, 4}}) {
         const auto grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
         if (s.w > grid.x || s.h > grid.y) {
             continue;
