@@ -988,9 +988,9 @@ void Devices::run_link_sync() {
         log_info(tt::LogMetal, "[streaming profiler] link sync: 1588 hardware stamps");
     }
     // The stop/done words sit at the top of the active eth core's UNRESERVED region, clear of the sync kernel's eth
-    // channels (which start at its base) and its profiler ring: stop at -64, done at -60. A router-hosted end keeps
-    // its diagnostics at the same place (link_sync::kL1Bytes).
-    const uint32_t stop_addr = aeth_unreserved_ + aeth_unres_size_ - 64;
+    // channels (which start at its base) and its profiler ring, past the frame slots of a router-hosted end, which
+    // keeps its diagnostics at the same place (link_sync::kL1Bytes, kCtlOffset).
+    const uint32_t stop_addr = aeth_unreserved_ + aeth_unres_size_ - link_sync::kL1Bytes + link_sync::kCtlOffset;
     for (const CaptureContext::Link& L : links_) {
         IDevice* dev_a = devices_[L.dev_a].device;
         IDevice* dev_b = devices_[L.dev_b].device;
@@ -1119,9 +1119,9 @@ void Devices::stop_link_syncs(tt::Cluster& cluster) {
         }
         // What each end left past its control word (eth_ptp::StopDiag): rounds, the timer word (0 no hardware path,
         // 1 ran, 2 never acknowledged its rate, in which case that end emitted no hardware stamps), wall cycles
-        // inside bursts, wall cycles and refclk ticks of the run, the longest burst in wall cycles, and the rounds
-        // dropped, then bursts with an egress stamp over the frame count, bursts whose stamps did not come, rounds
-        // with the ingress count off, and waits for a frame or echo given up.
+        // inside bursts, wall cycles and refclk ticks of the run, the longest burst in wall cycles, then rounds
+        // dropped, bursts with a hand-off beyond the frames, bursts whose frames did not all hand off or stamp in
+        // time, rounds with the ingress count off, and waits for a frame or echo given up.
         struct StopDiag {
             uint32_t rounds, timer, hold_lo, hold_hi, wall_lo, wall_hi, ref_lo, ref_hi, hold_max, drop[5];
         };
@@ -1156,11 +1156,14 @@ void Devices::stop_link_syncs(tt::Cluster& cluster) {
             pct(db),
             longest_us(db));
         for (const auto& [chip, name, d] : {std::tuple{r.chip_a, "sender", &da}, std::tuple{r.chip_b, "receiver", &db}}) {
-            if (d->drop[0] != 0 || d->drop[4] != 0) {
+            if (d->drop[0] != 0 || d->drop[1] != 0 || d->drop[4] != 0) {
                 log_info(
                     tt::LogMetal,
-                    "[streaming profiler] link sync chip {} {} dropped {} hardware rounds: bursts with an egress "
-                    "stamp over {}, bursts short {}, ingress count off {}, waits given up {}",
+                    "[streaming profiler] link sync chip {} {} dropped {} hardware rounds: bursts with a hand-off "
+                    "beyond "
+                    "the frames {}, bursts whose frames did not all stamp in time {}, ingress count off {}, waits "
+                    "given "
+                    "up {}",
                     chip,
                     name,
                     d->drop[0],

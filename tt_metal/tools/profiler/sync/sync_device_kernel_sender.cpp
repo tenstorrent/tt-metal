@@ -15,7 +15,7 @@ namespace link = tt::tt_metal::eth_ptp::link;
 #if defined(PROFILE_KERNEL) && defined(PROFILE_STREAMING) && defined(D2D_HW_TS)
 #define LINK_HW 1
 static eth_ptp::SenderLink<true> g_link;
-static uint32_t g_slot_base = 0;  // the kBurstFrames sync words behind the channel region
+static uint32_t g_slot_base = 0;  // the link's L1 (pilot, slots) behind the channel region
 #endif
 static uint32_t g_round = 0;  // the sender numbers the rounds; the receiver reads the number from the frame
 

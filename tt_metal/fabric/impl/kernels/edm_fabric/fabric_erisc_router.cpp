@@ -50,15 +50,15 @@ namespace link_sync {
 constexpr bool kActive = MY_ERISC_ID == 0 && link_sync_role != 0;
 using End = std::conditional_t<
     link_sync_role == 1,
-    tt::tt_metal::eth_ptp::SenderLink<false>,
-    tt::tt_metal::eth_ptp::ReceiverLink<false>>;
+    tt::tt_metal::eth_ptp::SenderLink<false, ENABLE_RISC_CPU_DATA_CACHE>,
+    tt::tt_metal::eth_ptp::ReceiverLink<false, ENABLE_RISC_CPU_DATA_CACHE>>;
 static End g_end;
 template <typename E>
 FORCE_INLINE void start_end(E& end) {
-    if constexpr (std::is_same_v<E, tt::tt_metal::eth_ptp::SenderLink<false>>) {
-        end.start(link_sync_addr, link_sync_pace, link_sync_addr + 64);
+    if constexpr (std::is_same_v<E, tt::tt_metal::eth_ptp::SenderLink<false, ENABLE_RISC_CPU_DATA_CACHE>>) {
+        end.start(link_sync_addr, link_sync_pace, link_sync_addr + tt::tt_metal::eth_ptp::kCtlOffset);
     } else {
-        end.start(link_sync_addr, link_sync_addr + 64);
+        end.start(link_sync_addr, link_sync_addr + tt::tt_metal::eth_ptp::kCtlOffset);
     }
 }
 FORCE_INLINE void open() {
