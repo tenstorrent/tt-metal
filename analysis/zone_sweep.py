@@ -47,7 +47,7 @@ def test_zone_sweep(device):
     print(
         f"\n[zone_sweep] S={s} nh={nh} nkv={nkv} d={d} q_chunk={qc} k_chunk={kc} causal={causal} "
         f"dtype={os.environ.get('SDPA_DTYPE', 'bfp8_b')} kv_dtype={os.environ.get('SDPA_KV_DTYPE', '')} fidelity={os.environ.get('SDPA_FIDELITY', 'HiFi2')} "
-        f"exp_approx={exp_approx} grid={grid.x}x{grid.y} iters={iters}",
+        f"exp_approx={exp_approx} grid={grid.x}x{grid.y} iters={iters} batch={os.environ.get('SDPA_BATCH', '1')}",
         flush=True,
     )
     program_config = ttnn.SDPAProgramConfig(
@@ -66,9 +66,10 @@ def test_zone_sweep(device):
         packer_l1_acc=packer_l1_acc,
     )
     print(f"[zone_sweep] fp32_dest_acc_en={fp32_acc} packer_l1_acc={packer_l1_acc} math_approx_mode={math_approx}", flush=True)
-    Q = fa_rand(1, nh, s, d)
-    K = fa_rand(1, nkv, s, d)
-    V = fa_rand(1, nkv, s, d)
+    batch = int(os.environ.get("SDPA_BATCH", "1"))  # hold-out axis (R1c)
+    Q = fa_rand(batch, nh, s, d)
+    K = fa_rand(batch, nkv, s, d)
+    V = fa_rand(batch, nkv, s, d)
     kw = dict(dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG, device=device, pad_value=0.0)
     tt_Q = ttnn.from_torch(Q, **kw)
     kwkv = dict(kw, dtype=kv_dtype)
