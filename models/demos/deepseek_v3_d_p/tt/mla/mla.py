@@ -21,7 +21,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
 )
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG, MLA_SDPA_CONFIG
 from models.demos.deepseek_v3_d_p.tt.mla.utils import llama4_scale_host
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, resolve_per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat, MlaKvCacheGeometry
 
 # Axis 0 is N/S (mesh rows), axis 1 is E/W (mesh cols) -- the same convention high_bw_all_gather uses.
@@ -502,16 +502,9 @@ class ttMLA:
         # ring_joint_sdpa) runs on the SP axis (cluster_axis=sp_axis) and MUST use sp_ccl_topology.
         # Conflating them deadlocks the SDPA when the two axes differ: e.g. under FABRIC_2D_TORUS_X the
         # TP axis is Ring but the SP axis has no physical wrap, so a TP-Ring topology on the SP-axis
-        # SDPA waits forever on a missing wrap link. A scalar applies to both axes (preserves 1D-ring /
-        # non-torus behavior).
-        if isinstance(topology, tuple):
-            # The tuple is (dim0, dim1); unpacking as (sp, tp) is only correct when sp_axis=0/tp_axis=1.
-            # Guard it so a future sp_axis/tp_axis swap fails loudly here instead of silently cross-
-            # wiring Ring onto the wrong axis (a runtime deadlock). Mirrors the sparse-path assert below.
-            assert self.sp_axis == 0 and self.tp_axis == 1, "per-axis topology tuple assumes sp_axis=0, tp_axis=1"
-            self.sp_ccl_topology, self.tp_ccl_topology = topology  # (sp_axis_0, tp_axis_1)
-        else:
-            self.sp_ccl_topology = self.tp_ccl_topology = topology
+        # SDPA waits forever on a missing wrap link. See tt_ccl.resolve_per_axis_topology, which the V4
+        # attention blocks and compressors share with this.
+        self.sp_ccl_topology, self.tp_ccl_topology = resolve_per_axis_topology(topology, self.sp_axis, self.tp_axis)
 
         # Ring-attention persistent buffers. Chunked prefill (ring_mla) and the standard ring
         # joint SDPA use disjoint buffer sets, so allocate only the one the configured mode needs --
