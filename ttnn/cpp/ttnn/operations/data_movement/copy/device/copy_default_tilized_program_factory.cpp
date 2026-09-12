@@ -41,7 +41,10 @@ constexpr const char* KERNEL_READER_INTERLEAVED =
     "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id_metal2.cpp";
 constexpr const char* KERNEL_WRITER_INTERLEAVED =
     "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id_metal2.cpp";
-constexpr const char* KERNEL_COMPUTE_ELTWISE_COPY =
+// Distinct from copy_same_memory_config_program_factory.cpp's same-purpose constant: that one names
+// the shared kernel, this one the sharded copy's. The two sit in anonymous namespaces, which a unity
+// build merges, so the names must differ.
+constexpr const char* KERNEL_COMPUTE_ELTWISE_COPY_SHARDED =
     "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/compute/eltwise_copy_metal2.cpp";
 
 }  // namespace
@@ -163,7 +166,7 @@ ttnn::device_operation::ProgramArtifacts CopyDeviceOperation::DefaultTilized::cr
     // to O3 explicitly (legacy compute defaults to O3; Metal 2.0 CompilerOptions defaults to O2).
     m2::KernelSpec compute{
         .unique_id = COMPUTE,
-        .source = KERNEL_COMPUTE_ELTWISE_COPY,
+        .source = KERNEL_COMPUTE_ELTWISE_COPY_SHARDED,
         .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings =
             {

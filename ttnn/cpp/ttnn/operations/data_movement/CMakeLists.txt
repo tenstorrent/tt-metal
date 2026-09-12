@@ -18,6 +18,7 @@ file(
     bcast/device/kernels/*.cpp
     clone/device/kernels/*.cpp
     concat/device/kernels/*.cpp
+    concat/codegen/kernels/*.cpp
     common/kernels/*.hpp
     common/kernels/codegen/*.cpp
     common/kernels/codegen/*.h

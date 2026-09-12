@@ -378,9 +378,9 @@ inline __attribute__((always_inline)) uint32_t seq_pad_next(SeqPadState& st) {
 // =====================================================================
 // CONCAT sequencer (2-tensor page interleave)
 //
-// After calling seq_concat_next(), check st.curr_tensor to know
-// which TensorAccessor to use for the NOC read.
-// The returned value is the page_id within that tensor.
+// Read st.curr_tensor BEFORE calling seq_concat_next() to know which TensorAccessor the
+// returned page_id belongs to: the call advances the cursor, so afterwards st.curr_tensor
+// already names the tensor the NEXT page comes from.
 // =====================================================================
 
 inline __attribute__((always_inline)) SeqConcatState seq_concat_init(
@@ -395,7 +395,6 @@ inline __attribute__((always_inline)) SeqConcatState seq_concat_init(
 
 inline __attribute__((always_inline)) uint32_t seq_concat_next(SeqConcatState& st) {
     uint32_t result;
-    uint32_t read_tensor = st.curr_tensor;  // save for caller
 
     if (st.curr_tensor == 0) {
         result = st.page_id_0++;
