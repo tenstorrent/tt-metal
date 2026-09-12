@@ -167,15 +167,12 @@ def trace_ttnn_operation(pretty_operation_name, operation):
         function_args, function_kwargs = preprocess_args_and_kwargs(*function_args, **function_kwargs)
         input_tensors = get_input_tensors(function_args) + get_input_tensors(function_kwargs)
 
-        GRAPH_STACK.append(nx.MultiDiGraph())
-
         node_name = f"{pretty_operation_name}_{ttnn.torch_tracer.get_unique_id()}"
 
-        operation_return_type = operation(*function_args, **function_kwargs)
+        with ttnn.torch_tracer.pushed_graph():
+            operation_return_type = operation(*function_args, **function_kwargs)
 
-        output_tensors = preprocess_return_value(operation_return_type)
-
-        GRAPH_STACK.pop()
+            output_tensors = preprocess_return_value(operation_return_type)
 
         shapes = tuple(tensor.shape for tensor in output_tensors)
         dtypes = tuple(tensor.dtype for tensor in output_tensors)
@@ -464,8 +461,9 @@ def enable_tracing():
         raise ValueError("Tracing is not supported in fast runtime mode.")
     if ENABLE_TRACER:
         raise ValueError("Tracing is already enabled.")
-    ENABLE_TRACER = True
+    # Only claim the flag once the torch side is actually on, or a failure here leaves tracing half-enabled.
     ttnn.torch_tracer.enable_tracing()
+    ENABLE_TRACER = True
     GRAPH_STACK = ttnn.torch_tracer.GRAPH_STACK
 
 
@@ -484,8 +482,11 @@ def is_tracing_enabled():
 @contextmanager
 def trace():
     enable_tracing()
-    yield
-    disable_tracing()
+    try:
+        yield
+    finally:
+        # Without this, an error escaping the block leaves the tracer enabled process-wide.
+        disable_tracing()
 
 
 def get_module_input_nodes(module_operation):
