@@ -59,8 +59,10 @@ def drafter_weights_dir(weights_dir=None):
 
 def default_draft_len(weights_dir=None):
     """K the checkpoint drafts (block_size - 1), or the QWEN36_DFLASH_BLOCK override - 1."""
+    cfg_block = load_config(drafter_weights_dir(weights_dir))["block"]
     b = os.environ.get("QWEN36_DFLASH_BLOCK")
-    return (int(b) if b else load_config(drafter_weights_dir(weights_dir))["block"]) - 1
+    # Never above the checkpoint's own block (a block-16 v1 default of 12 clamps to 8 for DFlash2).
+    return (min(int(b), cfg_block) if b else cfg_block) - 1
 
 
 def use_tp_drafter():

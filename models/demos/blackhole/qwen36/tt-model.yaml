@@ -1,0 +1,110 @@
+# tt-model.yaml — Qwen/Qwen3.8-27B on a P300x2 (2x P300 boards = 4 Blackhole chips, (1,4) mesh) via vLLM,
+# shipping the DFlash2 block-diffusion speculative-decode drafter (models/demos/blackhole/qwen36/tt/dflash2*.py).
+#
+#   tt-model package --container models/demos/blackhole/qwen36/tt-model.yaml --out <builds>
+#   tt-model serve   <builds>/qwen3.8-27b-dflash2-p300x2/tt_kernel_manifest.json
+#   tt-model push    <builds>/qwen3.8-27b-dflash2-p300x2 --private
+schema: "5.1"
+repo: changh95/qwen3.8-27b-dflash2-p300x2
+name: qwen3.8-27b-dflash2-p300x2
+weights:
+  repo: Qwen/Qwen3.8-27B
+  revision: 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0   # refs/main as validated, 2026-09-12
+kind: vllm-plugin
+arch: blackhole
+
+source:
+  tt_metal: /home/ttuser/experiments/qwen36_27b/tt-metal      # branch qwen36-prefill-opt-dflash
+  code:                                                        # import closure of qwen36_vllm.py + the demo/spec-decode path
+    - models/common
+    - models/tt_transformers
+    - models/demos/blackhole/qwen36                            # model, DFlash drafters, demo, tests, vllm_bundle
+    - models/demos/qwen3_vl/tt/common.py
+    - models/demos/utils
+    - models/experimental/gated_attention_gated_deltanet
+    - models/perf
+    - models/tt_dit/utils/tensor.py
+    - models/model_trace_region_sizes.yaml
+    - models/model_targets.yaml
+  ubuntu: "22.04"
+  python: "3.12"
+
+runtime:
+  vllm: {version: "0.26.0"}                                    # the validated serving venv: vllm 0.26.0 (empty target)
+  plugin: {repo: https://github.com/tenstorrent/vllm-tt-plugin, ref: bef89e429e202caa38d3e3c8a24da4e8cc02405a}
+  extra_models_dir: models/demos/blackhole/qwen36/vllm_bundle  # same adapter the plugin registers built-in
+
+serve:
+  hardware: p300x2
+  mesh_device: P150x4          # tt-metal's name for the (1,4) Blackhole mesh a P300x2 opens
+  port: 8000
+  max_model_len: 262144
+  max_num_seqs: 32             # ceiling of the TP decode path (supported_batches = {1,2,4,8,16,32})
+  block_size: 64
+  capabilities:
+    tool_parser: qwen3_coder
+    reasoning_parser: qwen3
+  additional_config:
+    tt:
+      fabric_config: FABRIC_1D
+      trace_region_size: 1073741824
+      l1_small_size: 24576
+      sample_on_device_mode: decode_only
+  env:
+    ARCH_NAME: blackhole
+    TT_QWEN35_TEXT_VER: qwen36_blackhole
+    TT_MESH_GRAPH_DESC_PATH: /opt/tt-metal/tt_metal/fabric/mesh_graph_descriptors/p300_x2_mesh_graph_descriptor.textproto
+    QWEN36_MAX_TOKENS_ALL_USERS: "525312"
+    VLLM_RPC_TIMEOUT: "900000"
+    VLLM_CONFIGURE_LOGGING: "1"
+    TORCHDYNAMO_DISABLE: "1"
+    HF_HUB_OFFLINE: "1"
+    # DFlash2 speculative decoding (incoai/Qwen3.8-27B-DFlash2, block 8 -> 7 drafts/iter, lossless).
+    # NOTE: vLLM serving through the Tenstorrent plugin does not run speculative decoding yet (the plugin
+    # rejects speculative_config); these knobs configure the single-user demo/benchmark path shipped in
+    # the image (models/demos/blackhole/qwen36/demo/text_demo.py). The drafter is resolved from the HF
+    # cache mounted at /hf: `hf download incoai/Qwen3.8-27B-DFlash2 --revision dedf8df68adfb1afeaf7b7480c0a0243108177b4`.
+    QWEN36_DRAFTER: dflash2
+    DFLASH_WEIGHTS: incoai/Qwen3.8-27B-DFlash2@dedf8df68adfb1afeaf7b7480c0a0243108177b4
+    QWEN36_DFLASH_BLOCK: "8"
+  args:
+    - --max-num-batched-tokens
+    - "262144"
+
+verify:
+  - "from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM; assert Qwen36ForCausalLM"
+  - "from models.demos.blackhole.qwen36.tt.dflash2_decode import DFlash2Decoder; from models.demos.blackhole.qwen36.tt.dflash2_tp import DFlash2DrafterTP; assert DFlash2Decoder and DFlash2DrafterTP"
+  - "import vllm.model_executor.models.qwen3_5"
+  - "import transformers.models.qwen3_5"
+  - "from pathlib import Path; assert Path('/opt/tt-metal/tt_metal/fabric/mesh_graph_descriptors/p300_x2_mesh_graph_descriptor.textproto').is_file()"
+  - "from pathlib import Path; assert Path('/opt/tt-metal/models/model_trace_region_sizes.yaml').is_file()"
+  - "from pathlib import Path; assert Path('/opt/tt-metal/models/demos/blackhole/qwen36/vllm_bundle/qwen36/vllm_metadata.json').is_file()"
+
+card:
+  description: >
+    Qwen3.8-27B (hybrid Gated-DeltaNet + gated-attention dense 27B, reasoning model, 256K context) served on
+    two Tenstorrent P300 boards (4 Blackhole chips, 4-way tensor parallel) through vLLM, up to 32 concurrent
+    users. The image also ships the DFlash2 block-diffusion speculative-decode drafter (incoai/Qwen3.8-27B-DFlash2)
+    integrated into this model's lossless spec-decode loop, which reaches 103.7 tok/s single-user vs 94.2 tok/s
+    for the built-in MTP drafter at 128-token prompts (7.00/7 drafts accepted); today that loop runs through the
+    bundled demo/benchmark path because the Tenstorrent vLLM plugin does not yet execute speculative decoding.
+  quickstart: |
+    ### DFlash2 speculative decoding (demo/benchmark path)
+
+    The OpenAI endpoint above decodes one token per step (the vLLM plugin does not run speculative
+    decoding yet). The same image contains the lossless DFlash2 spec-decode loop; to run it, fetch the
+    drafter into the HF cache the container mounts at `/hf` and run the single-user demo inside the image:
+
+    ```bash
+    hf download incoai/Qwen3.8-27B-DFlash2 --revision dedf8df68adfb1afeaf7b7480c0a0243108177b4
+    docker run --rm -it --device /dev/tenstorrent --ipc host --mount type=bind,src=/dev/hugepages-1G,dst=/dev/hugepages-1G \
+      -v ~/.cache/huggingface:/hf -e HF_HOME=/hf -e HF_HUB_OFFLINE=1 -v ~/.cache/tt-model/qwen3.8-27b-dflash2-p300x2/tensors:/tensor-cache \
+      -e TT_CACHE_PATH=/tensor-cache -e MESH_DEVICE=P150x4 -e ARCH_NAME=blackhole -e HF_MODEL=Qwen/Qwen3.8-27B \
+      -e QWEN36_DRAFTER=dflash2 -e DFLASH_WEIGHTS=incoai/Qwen3.8-27B-DFlash2@dedf8df68adfb1afeaf7b7480c0a0243108177b4 -e QWEN36_DFLASH_BLOCK=8 \
+      --entrypoint bash <image> -lc 'cd /opt/tt-metal && python -m pytest models/demos/blackhole/qwen36/demo/text_demo.py -v -s -k "traced_128 and not traced_128k and not g8"'
+    ```
+
+    `QWEN36_DRAFTER=mtp` selects the model's built-in MTP head instead; `QWEN36_SPEC=0` is plain decode.
+    Measured on this configuration (single user, greedy, 50 generated tokens, ISL 128): plain decode ~37 tok/s,
+    native MTP 94.2 tok/s (8.50/11 drafts accepted), DFlash2 103.7 tok/s (7.00/7 accepted, block-saturated),
+    all three token-identical to plain greedy decoding.

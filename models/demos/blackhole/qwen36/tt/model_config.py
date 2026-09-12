@@ -39,11 +39,12 @@ _QWEN36_SERVING_OPT_DEFAULTS = {
     # (tt/dflash2_decode.py) on the same verify/accept substrate; "mtp" = the native MTP head.
     # Measured 2026-09-12 (ISL 130, lossless): DFlash v1 K=11 107.8 tok/s vs native MTP 80.9.
     "QWEN36_DRAFTER": "dflash2",
-    # The drafter checkpoint MUST match the served target: z-lab/Qwen3.6-27B-DFlash for Qwen3.6-27B
-    # (the incoai/z-lab *DFlash2* drafters target Qwen3.8-27B, a different checkpoint).
-    "DFLASH_WEIGHTS": "/home/ttuser/experiments/qwen36_27b/dflash_v1_weights",
-    # Draft block: 12 -> K=11 -> T=12 fused verify SDPA (the measured sweet spot; 16 = the
-    # checkpoint's native block, legacy T=16 verify).
+    # The drafter checkpoint MUST match the served target (a local dir or an HF repo id resolved through
+    # the HF cache): z-lab/Qwen3.6-27B-DFlash for Qwen3.6-27B; incoai/Qwen3.8-27B-DFlash2 for Qwen3.8-27B
+    # (the *DFlash2* drafters target 3.8, a different checkpoint).
+    "DFLASH_WEIGHTS": "z-lab/Qwen3.6-27B-DFlash",
+    # Draft block: 12 -> K=11 -> T=12 fused verify SDPA (the measured sweet spot for the block-16 v1
+    # drafter); clamped to the checkpoint's own block_size (8 for DFlash2 -> K=7).
     "QWEN36_DFLASH_BLOCK": "12",
 }
 for _k, _v in _QWEN36_SERVING_OPT_DEFAULTS.items():

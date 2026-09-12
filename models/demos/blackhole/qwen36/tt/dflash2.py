@@ -33,7 +33,21 @@ BLOCK, MASK_ID = 8, 248070
 K_DRAFT = BLOCK - 1
 TAP_LAYERS = (5, 19, 33, 47, 61)
 SLIDING_WINDOW = 2048
-DEFAULT_WEIGHTS = "/home/ttuser/experiments/qwen36_27b/dflash_weights"
+# Drafter checkpoint: a local directory or a Hugging Face repo id (resolved through the HF cache,
+# honouring HF_HUB_OFFLINE). incoai/Qwen3.8-27B-DFlash2 targets Qwen3.8-27B; the served Qwen3.6-27B
+# needs z-lab/Qwen3.6-27B-DFlash (model_config sets that default via DFLASH_WEIGHTS).
+DEFAULT_WEIGHTS = "incoai/Qwen3.8-27B-DFlash2"
+
+
+def resolve_weights_dir(weights):
+    """Local dir -> itself; otherwise an HF repo id ('org/name' or 'org/name@revision') snapshotted
+    into the HF cache (local_files_only when HF_HUB_OFFLINE=1)."""
+    if os.path.isdir(weights):
+        return weights
+    from huggingface_hub import snapshot_download
+
+    repo, _, rev = weights.partition("@")
+    return snapshot_download(repo, revision=rev or None, local_files_only=os.environ.get("HF_HUB_OFFLINE") == "1")
 
 
 def load_config(weights_dir):
@@ -42,7 +56,7 @@ def load_config(weights_dir):
     sliding layers + a bidirectional full-attention last layer, block 16, taps [1,16,31,46,61])."""
     import json
 
-    with open(f"{weights_dir}/config.json") as f:
+    with open(f"{resolve_weights_dir(weights_dir)}/config.json") as f:
         c = json.load(f)
     d = c.get("dflash_config") or {}
     n = int(c.get("num_hidden_layers", 5))
@@ -128,6 +142,7 @@ class DFlash2Draft:
         self.block = self.cfg["block"]
         self.taps = self.cfg["taps"]
         self.mask_id = self.cfg["mask_id"]
+        weights_dir = resolve_weights_dir(weights_dir)
         s = {}
         for f in sorted(glob.glob(f"{weights_dir}/*.safetensors")):
             s.update(load_file(f))

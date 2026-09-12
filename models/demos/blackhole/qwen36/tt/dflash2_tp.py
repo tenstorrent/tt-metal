@@ -34,6 +34,7 @@ from models.demos.blackhole.qwen36.tt.dflash2 import (
     _expansion,
     _shift,
     load_config,
+    resolve_weights_dir,
     rope_tables,
     select_path,
 )
@@ -88,6 +89,7 @@ class DFlash2DrafterTP:
         if cache_dir:
             os.makedirs(cache_dir, exist_ok=True)
 
+        weights_dir = resolve_weights_dir(weights_dir)
         s = {}
         for f in sorted(glob.glob(f"{weights_dir}/*.safetensors")):
             s.update(load_file(f))
