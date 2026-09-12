@@ -18,7 +18,10 @@
 //   - The RX stamp is pushed at start-of-frame, before the RX queue's L1 write of the frame is visible to the ERISC,
 //     so a poller that drains the FIFO while waiting for a frame consumes that frame's stamp.
 //   - The link is never idle: each TX queue sends a sequence-number keepalive after LOCAL_SEQ_UPDATE_TIMEOUT idle
-//     cycles (0x1f40 at boot, ~6 us), and every keepalive gets an RX stamp under the no-match label.
+//     cycles (0x1f40 at boot, ~6 us), and every keepalive gets an RX stamp under the no-match label. One issued
+//     between arming the stamp request and the first frame is stamped under the frame's tag (measured: 1-2 % of
+//     rounds). The timeout cannot be held off to avoid that: with it at its maximum the peer's queue retransmits
+//     (duplicate frames, so duplicate ingress stamps, in every round after the first), the updates being its acks.
 //   - Reading the LO half of CFR or PTP64NS captures its HI half (tt_ptp_timer.sv: the HI register loads on the LO
 //     read strobe). The wall clock has two HI addresses: WALL_CLOCK_1 is live, WALL_CLOCK_1_AT is the value at the
 //     last LO read; only the latter pairs with LO.
@@ -30,9 +33,11 @@
 //   using Session = StampSession<kTxq, kHeaderRow, kTcamRow, kLabel>;   // the configuration is compile-time: no loads
 //   static Session sess;                                    // on the per-frame path; the ERISC runs no dynamic init
 //   sess.begin();                                           // false if the timer never acknowledged its rate
-//   const uint64_t t0 = send_and_stamp(sess, tag, src, dst, words);  // the MAC's egress stamp of that frame, 0 if none
-//   RxStamps rx; ... const uint64_t t1 = rx.take<Session>();       // the newest ingress stamp under the label, 0 if
-//   none sess.end();
+//   stamps_arm(sess, tag);                                  // every frame the queue sends from here is stamped
+//   internal_::eth_send_packet(Session::kTxq, ...);         // ... per frame
+//   tx_stamps_drain(tag_lo, sink); rx_stamps_drain(sess, sink);  // egress stamps; the peer's frames' ingress stamps
+//   stamps_disarm(sess);                                    // once the last frame's egress stamp has been drained
+//   sess.end();
 // The two FIFOs are the tile's: a second session on the same tile would consume the first one's stamps.
 
 #pragma once
@@ -131,7 +136,7 @@ constexpr uint64_t kStampFrameDa = 0x02A5'A5A5'A5A5ull;
 
 constexpr uint32_t kTimerLeadTicks = 5000;    // the scheduled rate update lands this far ahead of the CFR: 100 us
 constexpr uint32_t kTimerAckSpins = 200'000;  // polls of the update status before ptp_timer_start gives up
-constexpr uint32_t kTxStampSpins = 4096;      // polls of the MAC FIFO for a frame's egress stamp before it is given up
+constexpr uint32_t kTxStampSpins = 4096;      // drains of the MAC FIFO for a burst's last egress stamp before it is given up
 
 // Register-level operations. Each one changes tile state that outlives the kernel; StampSession is the pairing of
 // changes and their restores, and the API below it is what a kernel is meant to call.
@@ -140,11 +145,15 @@ namespace raw {
 using eth_ptp::rd;
 using eth_ptp::wr;
 
+// The tag the MAC files queue q's egress stamps under, sampled when a frame is handed to the MAC.
+inline __attribute__((always_inline)) void txq_set_tag(uint32_t q, uint64_t tag) {
+    wr(txq_reg(q, kTxqRxTimestampLoOff), static_cast<uint32_t>(tag));
+    wr(txq_reg(q, kTxqRxTimestampHiOff), static_cast<uint32_t>(tag >> 32));
+}
 // Arms the MAC to push {tag, egress timestamp} into its FIFO for every frame queue q sends until the command is
 // cleared.
 inline __attribute__((always_inline)) void txq_request_two_step(uint32_t q, uint64_t tag) {
-    wr(txq_reg(q, kTxqRxTimestampLoOff), static_cast<uint32_t>(tag));
-    wr(txq_reg(q, kTxqRxTimestampHiOff), static_cast<uint32_t>(tag >> 32));
+    txq_set_tag(q, tag);
     wr(txq_reg(q, kTxqTimestampOff), TS_CMD_TWO_STEP_FIFO);
 }
 inline __attribute__((always_inline)) void txq_clear_timestamp_cmd(uint32_t q) {
@@ -169,6 +178,18 @@ inline __attribute__((always_inline)) bool mac_tx_fifo_pop(MacTxStamp& out) {
     const uint32_t w3 = rd(kMacTsFifo3);
     out.tag = (static_cast<uint64_t>(w1) << 32) | w0;
     out.tx_ts = (static_cast<uint64_t>(w3) << 32) | w2;
+    return true;
+}
+// Pops one entry reading its tag's low word and the stamp only; the tag's high word is the caller's own.
+inline __attribute__((always_inline)) bool mac_tx_fifo_pop_ts(uint32_t& tag_lo, uint64_t& tx_ts) {
+    const uint32_t w0 = rd(kMacTsFifo0);
+    if (w0 == 0xFFFFFFFFu) {
+        return false;
+    }
+    const uint32_t w2 = rd(kMacTsFifo2);
+    const uint32_t w3 = rd(kMacTsFifo3);
+    tag_lo = w0;
+    tx_ts = (static_cast<uint64_t>(w3) << 32) | w2;
     return true;
 }
 inline void mac_tx_fifo_drain() {
@@ -406,84 +427,56 @@ struct StampSession {
     }
 };
 
-// Issues one frame of `words` 16-byte words on the session's queue under a two-step stamp request and returns once
-// the queue is idle again. The request stays armed until collect_tx_stamp clears it: measured, a clear at queue
-// idle loses the stamp of one frame in fifteen, so the queue reports idle before the MAC has taken the frame's
-// command. `before_issue` runs with the queue armed, right before the frame is issued: where a software stamp of the
-// same instant belongs.
-template <typename Session, typename BeforeIssue>
-inline __attribute__((always_inline)) void send_stamped(
-    const Session&, uint64_t tag, uint32_t src_addr, uint32_t dst_addr, uint32_t words, BeforeIssue&& before_issue) {
-    while (internal_::eth_txq_is_busy(Session::kTxq)) {
-    }
+// A run of stamped frames on the session's queue: stamps_arm(tag) once, then every frame the queue sends until
+// stamps_disarm() is stamped under `tag` into the MAC's 128-deep egress FIFO, and every frame the peer's session
+// sends is stamped on ingress under this session's label into the 16-deep RX FIFO. The drains take whatever a FIFO
+// holds, each stamp to sink(uint64_t ts), and return how many carried the tag's low word or the label; the rest are
+// discarded. Ingress stamps are pushed at start-of-frame, before the frame's bytes are visible in L1, so a frame
+// that has been seen has its stamp waiting.
+//
+// ts_cmd is sticky and the queue reports idle before the MAC has taken a frame's command (measured: a clear at queue
+// idle lost the stamp of one frame in fifteen), so disarm only once tx_stamps_drain has delivered the last frame's
+// stamp. The tag, like the command, is sampled when a frame is handed to the MAC, which is what tells the frames
+// apart from the queue's own keepalives: a queue idle for its keepalive timeout when armed may have a keepalive
+// ahead of the first frame, and it is handed off at once while the frame still has its L1 read ahead of it, so
+// stamps_retag right after the first frame's command names that frame and everything after it, and the keepalive
+// keeps the tag it was armed under.
+template <typename Session>
+inline __attribute__((always_inline)) void stamps_arm(const Session&, uint64_t tag) {
     raw::txq_request_two_step(Session::kTxq, tag);
-    before_issue();
-    internal_::eth_send_packet(Session::kTxq, src_addr >> 4, dst_addr >> 4, words);
-    while (internal_::eth_txq_is_busy(Session::kTxq)) {
-    }
 }
 template <typename Session>
-inline __attribute__((always_inline)) void send_stamped(
-    const Session& s, uint64_t tag, uint32_t src_addr, uint32_t dst_addr, uint32_t words) {
-    send_stamped(s, tag, src_addr, dst_addr, words, [] {});
+inline __attribute__((always_inline)) void stamps_retag(const Session&, uint64_t tag) {
+    raw::txq_set_tag(Session::kTxq, tag);
 }
-
-// The MAC's egress stamp of the frame send_stamped issued under `tag`: waits up to `spins` polls for the FIFO to
-// fill, clears the queue's stamp request, then drains the FIFO and returns the earliest entry under the tag. The
-// drain is what makes a late collect safe: ts_cmd is sticky, so a queue still armed at its idle timeout (~6 us) stamps
-// its own keepalive under the same tag, and that entry sits behind the frame's and is discarded here. 0 if no stamp
-// appeared or the tag was not among them.
 template <typename Session>
-inline __attribute__((always_inline)) uint64_t collect_tx_stamp(const Session&, uint64_t tag, uint32_t spins) {
-    for (uint32_t spin = 0; spin < spins && !raw::mac_tx_fifo_not_empty(); spin++) {
-    }
+inline __attribute__((always_inline)) void stamps_disarm(const Session&) {
     raw::txq_clear_timestamp_cmd(Session::kTxq);
+}
+template <typename Sink>
+inline __attribute__((always_inline)) uint32_t tx_stamps_drain(uint32_t tag_lo, Sink&& sink) {
+    uint32_t got_tag = 0;
     uint64_t ts = 0;
-    raw::MacTxStamp s;
-    while (raw::mac_tx_fifo_pop(s)) {
-        if (ts == 0 && s.tag == tag) {
-            ts = s.tx_ts;
+    uint32_t n = 0;
+    while (raw::mac_tx_fifo_pop_ts(got_tag, ts)) {
+        if (got_tag == tag_lo) {
+            sink(ts);
+            n++;
         }
     }
-    return ts;
+    return n;
 }
-
-// send_stamped followed by collect_tx_stamp, waiting up to kTxStampSpins for the stamp.
-template <typename Session, typename BeforeIssue>
-inline __attribute__((always_inline)) uint64_t send_and_stamp(
-    const Session& s, uint64_t tag, uint32_t src_addr, uint32_t dst_addr, uint32_t words, BeforeIssue&& before_issue) {
-    send_stamped(s, tag, src_addr, dst_addr, words, before_issue);
-    return collect_tx_stamp(s, tag, kTxStampSpins);
-}
-template <typename Session>
-inline __attribute__((always_inline)) uint64_t
-send_and_stamp(const Session& s, uint64_t tag, uint32_t src_addr, uint32_t dst_addr, uint32_t words) {
-    return send_and_stamp(s, tag, src_addr, dst_addr, words, [] {});
-}
-
-// Ingress stamps land in the RX FIFO at start-of-frame, before the frame's bytes are visible in L1, so a wait loop
-// polls them as they come and take() hands over the newest one under the session's label once the frame has been
-// seen.
-struct RxStamps {
-    uint64_t newest = 0;
-    bool have = false;
-    template <typename Session>
-    __attribute__((always_inline)) void poll() {
-        raw::RxStamp s;
-        while (raw::rx_th_pop(s)) {
-            if (s.valid && s.label == Session::kLabel) {
-                newest = s.rx_ts;
-                have = true;
-            }
+template <typename Session, typename Sink>
+inline __attribute__((always_inline)) uint32_t rx_stamps_drain(const Session&, Sink&& sink) {
+    raw::RxStamp s;
+    uint32_t n = 0;
+    while (raw::rx_th_pop(s)) {
+        if (s.valid && s.label == Session::kLabel) {
+            sink(s.rx_ts);
+            n++;
         }
     }
-    template <typename Session>
-    __attribute__((always_inline)) uint64_t take() {
-        poll<Session>();
-        const uint64_t ts = have ? newest : 0;
-        have = false;
-        return ts;
-    }
-};
+    return n;
+}
 
 }  // namespace tt::tt_metal::eth_ptp

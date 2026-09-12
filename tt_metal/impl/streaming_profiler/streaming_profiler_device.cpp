@@ -75,10 +75,10 @@ static_assert(
 constexpr uint32_t kLinkSyncChannels = 1;
 constexpr uint32_t kLinkSyncSamples = 240;
 constexpr uint32_t kLinkSyncSampleSize = 16;
-// Rounds per second of the resident link sync, as a refclk interval. The link relation is two crystals against each
-// other and the host fits it over a 250 ms window, so the cadence only sets how many rounds the fit averages: at
-// 100 Hz the fit's own noise is ~0.1 ns against the tracker's ~0.6 ns floor, and each end spends 2 % of its time in
-// rounds instead of the 20 % it did at 1 kHz.
+// The resident link sync's round period, as a refclk interval; the sender spreads a round's frames over it in bursts
+// (eth_ptp_link.hpp). The link relation is two crystals against each other and the host fits it over a 250 ms
+// window, so the cadence only sets how many rounds the fit averages: at 100 Hz the fit's own noise is ~0.1 ns against
+// the tracker's ~0.6 ns floor.
 constexpr uint32_t kLinkSyncPaceTicks = 500000;  // 10 ms at the eth tile's 50 MHz refclk
 
 // Bring-up runs several MMIO paths and a hang in any of them reports only "MMIO per-op timeout"; this names
@@ -1072,31 +1072,58 @@ void Devices::stop_link_syncs(tt::Cluster& cluster) {
         // Sender first: its current round still completes off the live receiver, then it exits between rounds.
         cluster.write_core(&one, sizeof(one), tt_cxy_pair(r.chip_a, r.virt_a), r.stop_a);
         poll_done(r.chip_a, r.virt_a, r.stop_a + 4, "sender");
-        // Kernel diagnostics past the stop and done words: rounds, duration in ms, the 1588 timer word (0 no hardware
-        // path, 1 ran, 2 never acknowledged its rate, in which case that end emitted no hardware stamps) and the
-        // refclk ticks spent inside rounds, low word then high: the share of the core's time the sync takes.
-        uint32_t diag[5] = {0, 0, 0, 0, 0};
-        cluster.read_core(diag, sizeof(diag), tt_cxy_pair(r.chip_a, r.virt_a), r.stop_a + 8);
+        // What each end left past its stop word (eth_ptp::StopDiag): rounds, the timer word (0 no hardware path,
+        // 1 ran, 2 never acknowledged its rate, in which case that end emitted no hardware stamps), wall cycles
+        // inside bursts, wall cycles and refclk ticks of the run, the longest burst in wall cycles, and the rounds
+        // dropped: any stamp count off the frame count, then egress stamps over, under, ingress stamps off, and
+        // waits given up.
+        struct StopDiag {
+            uint32_t rounds, timer, hold_lo, hold_hi, wall_lo, wall_hi, ref_lo, ref_hi, hold_max, drop[5];
+        };
+        static_assert(sizeof(StopDiag) == 14 * sizeof(uint32_t));
+        StopDiag da{}, db{};
+        cluster.read_core(&da, sizeof(da), tt_cxy_pair(r.chip_a, r.virt_a), r.stop_a + 8);
         // Now the receiver's message wait sees no further message; its stop breaks it.
         cluster.write_core(&one, sizeof(one), tt_cxy_pair(r.chip_b, r.virt_b), r.stop_b);
         poll_done(r.chip_b, r.virt_b, r.stop_b + 4, "receiver");
-        uint32_t diag_b[3] = {0, 0, 0};
-        cluster.read_core(diag_b, sizeof(diag_b), tt_cxy_pair(r.chip_b, r.virt_b), r.stop_b + 16);
-        const auto pct = [&](uint32_t lo, uint32_t hi) {
-            const double ticks = static_cast<double>((static_cast<uint64_t>(hi) << 32) | lo);
-            return diag[1] == 0 ? 0.0 : 100.0 * ticks / (50'000.0 * static_cast<double>(diag[1]));
+        cluster.read_core(&db, sizeof(db), tt_cxy_pair(r.chip_b, r.virt_b), r.stop_b + 8);
+        const auto u64 = [](uint32_t lo, uint32_t hi) { return static_cast<double>((uint64_t{hi} << 32) | lo); };
+        const auto pct = [&](const StopDiag& d) {
+            const double wall = u64(d.wall_lo, d.wall_hi);
+            return wall == 0.0 ? 0.0 : 100.0 * u64(d.hold_lo, d.hold_hi) / wall;
+        };
+        const auto longest_us = [&](const StopDiag& d) {
+            const double wall = u64(d.wall_lo, d.wall_hi);
+            return wall == 0.0 ? 0.0 : d.hold_max * (u64(d.ref_lo, d.ref_hi) * 20.0 / wall) / 1000.0;
         };
         log_info(
             tt::LogMetal,
-            "[streaming profiler] resident link sync chip {} -> chip {}: {} rounds over {} ms; inside rounds: sender "
-            "{:.1f} %, receiver {:.1f} %",
+            "[streaming profiler] resident link sync chip {} -> chip {}: {} rounds over {:.0f} ms; core time in bursts: "
+            "sender {:.2f} % (longest {:.2f} us), receiver {:.2f} % (longest {:.2f} us)",
             r.chip_a,
             r.chip_b,
-            diag[0],
-            diag[1],
-            pct(diag[3], diag[4]),
-            pct(diag_b[1], diag_b[2]));
-        for (const auto& [chip, word] : {std::pair{r.chip_a, diag[2]}, std::pair{r.chip_b, diag_b[0]}}) {
+            da.rounds,
+            u64(da.ref_lo, da.ref_hi) / 50'000.0,
+            pct(da),
+            longest_us(da),
+            pct(db),
+            longest_us(db));
+        for (const auto& [chip, name, d] : {std::tuple{r.chip_a, "sender", &da}, std::tuple{r.chip_b, "receiver", &db}}) {
+            if (d->drop[0] != 0 || d->drop[4] != 0) {
+                log_info(
+                    tt::LogMetal,
+                    "[streaming profiler] resident link sync chip {} {} dropped {} hardware rounds (egress stamps over "
+                    "{}, under {}, ingress off {}) and gave up {} waits",
+                    chip,
+                    name,
+                    d->drop[0],
+                    d->drop[1],
+                    d->drop[2],
+                    d->drop[3],
+                    d->drop[4]);
+            }
+        }
+        for (const auto& [chip, word] : {std::pair{r.chip_a, da.timer}, std::pair{r.chip_b, db.timer}}) {
             if (word == 2) {
                 log_warning(
                     tt::LogMetal,
