@@ -1,0 +1,14 @@
+# Pre-existing config writes that can land under a held math instruction (Wormhole).
+#
+# The check fails only on sites NOT listed here, so this file is the record of what was
+# reviewed and why it was accepted. Removing a line is how you assert a site is now guarded.
+# Adding one requires a reason: "it passes today" is not a reason, because a dead detector
+# and a genuinely safe site look identical.
+
+# Measured on n150 2026-09-12. Shipped code passes; the detector for this site is LIVE
+# (forcing the wrong format fails 3 of 33 in test_bcast.py), so the pass is meaningful and
+# not a blind spot. Reproducing the hazard here required INJECTING a different inducer:
+# the MOVB2D -> Dest-reader hold present in shipped code does not open the window, while an
+# injected MOVD2B before the MOVB2D victim at :79 does (3/33, closed by the ordering stall).
+# Kept as a candidate for a guard, not as a bug.
+tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_datacopy.h:90
