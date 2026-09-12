@@ -12,14 +12,14 @@
 #include <string>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 
-#include "tt-metalium/experimental/fabric/fabric.hpp"
-
 namespace ttml::ttnn_fixed::distributed {
 
 namespace {
 
 const char* kTTMetalRuntimeRootEnvVar = "TT_METAL_RUNTIME_ROOT";
 const char* kTTMeshGraphDescriptorEnvVar = "TT_MESH_GRAPH_DESC_PATH";
+
+std::optional<tt::tt_fabric::FabricConfig> g_selected_fabric_config;
 
 // Convert FabricType (inferred from MGD dim_types) to the appropriate 2D FabricConfig
 tt::tt_fabric::FabricConfig get_2d_fabric_config_from_type(tt::tt_fabric::FabricType fabric_type) {
@@ -98,18 +98,24 @@ void enable_fabric(uint32_t num_devices) {
     auto mgd_path = get_mgd_path(num_devices);
 
     if (mgd_path.has_value()) {
+        // get_mgd_path has exported the descriptor through TT_MESH_GRAPH_DESC_PATH.
+        // The MetalEnv that ttml::core::MeshDevice builds reads it from there.
+        //
         // Infer the fabric config from the MGD's dim_types (LINE vs RING per axis)
         // This automatically selects FABRIC_2D, FABRIC_2D_TORUS_X, FABRIC_2D_TORUS_Y, or FABRIC_2D_TORUS_XY
-        auto fabric_config = infer_fabric_config_from_mgd(mgd_path.value());
-        tt::tt_fabric::SetFabricConfig(fabric_config);
+        g_selected_fabric_config = infer_fabric_config_from_mgd(mgd_path.value());
     } else {
-        // No MGD available, use default FABRIC_2D
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D);
+        // No MGD available, use default FABRIC_2D over the auto-discovered topology.
+        g_selected_fabric_config = tt::tt_fabric::FabricConfig::FABRIC_2D;
     }
 }
 
 void disable_fabric() {
-    tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
+    g_selected_fabric_config.reset();
+}
+
+std::optional<tt::tt_fabric::FabricConfig> selected_fabric_config() {
+    return g_selected_fabric_config;
 }
 
 }  // namespace ttml::ttnn_fixed::distributed

@@ -89,6 +89,10 @@ void AutoContext::close_device() {
     ttnn_fixed::distributed::disable_fabric();
 }
 
+bool AutoContext::is_device_open() const {
+    return m_device != nullptr;
+}
+
 ttnn::distributed::MeshDevice& AutoContext::get_device() {
     if (!m_device) {
         open_device();
