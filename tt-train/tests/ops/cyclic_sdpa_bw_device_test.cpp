@@ -379,8 +379,12 @@ Gradients run_relay(
 
     const uint32_t arrive_sem = CreateSemaphore(program, region, 0);
     const uint32_t release_sem = CreateSemaphore(program, region, 0);
-    const uint32_t ready0_sem = CreateSemaphore(program, region, 0);
-    const uint32_t ready1_sem = CreateSemaphore(program, region, 0);
+    // Two readiness words per slot: the immutable fields and dQ arrive, and
+    // are needed, at different times.
+    const uint32_t ready_imm0_sem = CreateSemaphore(program, region, 0);
+    const uint32_t ready_imm1_sem = CreateSemaphore(program, region, 0);
+    const uint32_t ready_dq0_sem = CreateSemaphore(program, region, 0);
+    const uint32_t ready_dq1_sem = CreateSemaphore(program, region, 0);
     const uint32_t credit_prev_sem = CreateSemaphore(program, region, 0);
     const uint32_t credit_next_sem = CreateSemaphore(program, region, 0);
     const uint32_t credit_self_sem = CreateSemaphore(program, region, 0);
@@ -397,8 +401,9 @@ Gradients run_relay(
     compute_defines["RELEASE_TOKEN"] = "1";
 
     std::vector<uint32_t> reader_args = {
-        C, qWt, vWt, release_sem, ready0_sem, ready1_sem,
-        credit_prev_sem, credit_next_sem, credit_self_sem, endpoint1_sem, endpoint2_sem};
+        C, qWt, vWt, release_sem, ready_imm0_sem, ready_imm1_sem, ready_dq0_sem,
+        ready_dq1_sem, credit_prev_sem, credit_next_sem, credit_self_sem, endpoint1_sem,
+        endpoint2_sem};
     for (const auto* t : {&query, &key, &value, &grad_output, &lse, &u_scalar, &grad_query,
                           &grad_key, &grad_value}) {
         tt::tt_metal::TensorAccessorArgs(*t->buffer()).append_to(reader_args);
