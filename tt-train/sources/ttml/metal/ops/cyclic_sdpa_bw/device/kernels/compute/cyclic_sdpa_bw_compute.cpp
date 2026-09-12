@@ -102,6 +102,19 @@ constexpr uint32_t scaler_bits = get_compile_time_arg_val(3);
 constexpr uint32_t minus_one_bits = get_compile_time_arg_val(4);
 constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(5);
 constexpr uint32_t block_size = get_compile_time_arg_val(6);
+// Row-tiles per block: B = Bt * 32. What it buys is in the block-pair
+// kernel's commit message and in docs/overlaps.md -- at Bt = 1 the score
+// stages are one tile each and the matmul pipeline latency has nothing to
+// hide behind.
+constexpr uint32_t Bt = get_compile_time_arg_val(7);
+constexpr uint32_t score_tiles = Bt * Bt;
+
+// Score tiles sit in even registers: apply_mask_on_reg and the softmax step
+// both want a scratch register next to the one they work on, and several
+// score tiles are live at once. Bt <= 4 with FP32 dest.
+constexpr uint32_t score_reg(uint32_t b) {
+    return 2u * b;
+}
 
 // Operands, all per timestep.
 constexpr uint32_t cb_query = tt::CBIndex::c_0;
@@ -136,10 +149,35 @@ constexpr uint32_t cb_grad_value_out = tt::CBIndex::c_23;
 // mode, because matmul Src registers do not support Float32 unpack, so a
 // copy_tile out of one lands in DST in a layout the 32-bit transpose_dest
 // scrambles. copy_dest_values duplicates dS inside DST instead.
-void grad_scores_and_transposes() {
-    cb_wait_front(cb_grad_attn_weights, onetile);
-    cb_wait_front(cb_attention_weights, onetile);
-    cb_wait_front(cb_u_scalar, onetile);
+// The same fused FP32 softmax as sdpa_bw's, but reading L from a chosen tile
+// and taking its scratch register as an argument: that helper uses
+// scores_reg + 1, which is another score tile here.
+void softmax_on_dst(
+    const uint32_t scores_reg,
+    const uint32_t tmp_reg,
+    const uint32_t cb_statistics,
+    const uint32_t stat_tile) {
+    reconfig_data_format_srcb(cb_statistics);
+    UNPACK((llk_unpack_A_init<BroadcastType::COL, false, EltwiseBinaryReuseDestType::NONE, false>(
+        false, false, cb_statistics)));
+    MATH((llk_math_eltwise_unary_datacopy_init<
+          ckernel::DataCopyType::B2D,
+          DST_ACCUM_MODE,
+          BroadcastType::COL>(cb_statistics)));
+    unary_bcast<BroadcastType::COL>(cb_statistics, stat_tile, tmp_reg);
+
+    sub_binary_tile_init();
+    sub_binary_tile(scores_reg, tmp_reg, scores_reg);
+
+    sdpa_exp_tile_init();
+    sdpa_exp_tile(scores_reg);
+}
+
+// One tile pair of the block. The caller reserves and pushes the three
+// output buffers around the whole block, so this only packs.
+void grad_scores_and_transposes(uint32_t a, uint32_t b) {
+    const uint32_t score_tile = a * Bt + b;
+    const uint32_t transposed_tile = b * Bt + a;
 
     constexpr uint32_t grad_reg = 0;
     constexpr uint32_t attn_reg = 1;
@@ -148,11 +186,11 @@ void grad_scores_and_transposes() {
     tile_regs_acquire();
     reconfig_data_format(cb_grad_attn_weights, cb_u_scalar);
     sub_bcast_cols_init(cb_grad_attn_weights, cb_u_scalar);
-    sub_tiles_bcast_cols(cb_grad_attn_weights, cb_u_scalar, 0, 0, grad_reg);
+    sub_tiles_bcast_cols(cb_grad_attn_weights, cb_u_scalar, score_tile, a, grad_reg);
 
     reconfig_data_format_srca(cb_grad_attn_weights, cb_attention_weights);
     copy_init(cb_attention_weights);
-    copy_tile(cb_attention_weights, 0, attn_reg);
+    copy_tile(cb_attention_weights, score_tile, attn_reg);
 
     mul_binary_tile_init();
     mul_binary_tile(grad_reg, attn_reg, grad_reg);
@@ -168,19 +206,15 @@ void grad_scores_and_transposes() {
 
     tile_regs_commit();
     tile_regs_wait();
-    cb_reserve_back(cb_grad_scores, onetile);
-    cb_reserve_back(cb_grad_scores_transposed, onetile);
-    cb_reserve_back(cb_attn_weights_transposed, onetile);
+    // dS is indexed (row, column) and its transpose (column, row), so one of
+    // the two cannot be sequential: both transposed operands go out of order.
     pack_reconfig_data_format(cb_grad_attn_weights, cb_grad_scores);
-    pack_tile(grad_keep_reg, cb_grad_scores);
+    pack_tile</* out_of_order */ true>(grad_keep_reg, cb_grad_scores, score_tile);
     pack_reconfig_data_format(cb_grad_scores, cb_grad_scores_transposed);
-    pack_tile(grad_reg, cb_grad_scores_transposed);
+    pack_tile</* out_of_order */ true>(grad_reg, cb_grad_scores_transposed, transposed_tile);
     pack_reconfig_data_format(cb_grad_scores_transposed, cb_attn_weights_transposed);
-    pack_tile(attn_reg, cb_attn_weights_transposed);
+    pack_tile</* out_of_order */ true>(attn_reg, cb_attn_weights_transposed, transposed_tile);
     tile_regs_release();
-    cb_push_back(cb_grad_scores, onetile);
-    cb_push_back(cb_grad_scores_transposed, onetile);
-    cb_push_back(cb_attn_weights_transposed, onetile);
 }
 
 }  // namespace
@@ -218,14 +252,14 @@ void kernel_main() {
             (t + 1u == kTimesteps) || (sched.pair(my_core, t + 1u).j != pair.j);
         const uint32_t owned_slot = (pair.j == owned.first) ? 0u : 1u;
         if (column_changed && t > 0u) {
-            cb_pop_front(cb_key, qWt);
-            cb_pop_front(cb_value, vWt);
+            cb_pop_front(cb_key, Bt * qWt);
+            cb_pop_front(cb_value, Bt * vWt);
         }
         if (column_changed) {
             if (visited[owned_slot]) {
                 // A revisit: the interval starts from what is in DRAM.
-                pack_tiles_to_output(cb_grad_key_seed, cb_grad_key_accum, qWt);
-                pack_tiles_to_output(cb_grad_value_seed, cb_grad_value_accum, vWt);
+                pack_tiles_to_output(cb_grad_key_seed, cb_grad_key_accum, Bt * qWt);
+                pack_tiles_to_output(cb_grad_value_seed, cb_grad_value_accum, Bt * vWt);
                 column_accumulating = true;
             } else {
                 // A first visit: the first update writes rather than adds, so
@@ -237,175 +271,297 @@ void kernel_main() {
 #endif
         {
             DeviceZoneScopedN("WAIT-PACKET");
-            cb_wait_front(cb_query, qWt);
-            cb_wait_front(cb_key, qWt);
-            cb_wait_front(cb_value, vWt);
-            cb_wait_front(cb_grad_output, vWt);
-            cb_wait_front(cb_lse, onetile);
+            cb_wait_front(cb_query, Bt * qWt);
+            cb_wait_front(cb_key, Bt * qWt);
+            cb_wait_front(cb_value, Bt * vWt);
+            cb_wait_front(cb_grad_output, Bt * vWt);
+            cb_wait_front(cb_lse, Bt);
+            cb_wait_front(cb_u_scalar, Bt);
         }
 
-        // ---- S = Q K^T / sqrt(d), masked when i == j, then P = exp(S - L)
-        //
-        // The sub-zones here are worth reading with the LLK pipeline in mind.
-        // S-MM measures only the *issue* of the matmuls, some 0.03 us; the
-        // FPU then drains asynchronously and the first dependent SFPU
-        // operation pays for it, so S-SCALE's 1.5 us on the MATH RISC is
-        // mostly the matmul finishing, not a scalar multiply. S-SOFTMAX does
-        // two SFPU passes over the tile in 0.5 us, which is what an SFPU pass
-        // actually costs here.
+        // ---- S = Q K^T / sqrt(d), masked when i == j, then P = exp(S - L).
+        // A row of tiles at a time: every column tile of the row is issued
+        // into DST before any is read back, so the matmul pipeline latency is
+        // paid once for the row rather than once per tile. At Bt = 1 that is
+        // one tile and the latency -- measured at 1.4 us against 0.076 for
+        // each tile issued behind it -- is entirely exposed.
         {
         DeviceZoneScopedN("SCORES");
-        constexpr uint32_t scores_reg = 0;
-        reconfig_data_format(cb_query, cb_key);
-        matmul_init(cb_query, cb_key, /* transpose */ 1);
-        tile_regs_acquire();
-        {
-            DeviceZoneScopedN("S-MM");
-            for (uint32_t k = 0; k < qWt; ++k) {
-                matmul_tiles(cb_query, cb_key, k, k, scores_reg);
+        cb_reserve_back(cb_attention_weights, score_tiles);
+        for (uint32_t a = 0; a < Bt; ++a) {
+            reconfig_data_format(cb_query, cb_key);
+            matmul_init(cb_query, cb_key, /* transpose */ 1);
+            tile_regs_acquire();
+            for (uint32_t b = 0; b < Bt; ++b) {
+                for (uint32_t k = 0; k < qWt; ++k) {
+                    matmul_tiles(cb_query, cb_key, a * qWt + k, b * qWt + k, score_reg(b));
+                }
             }
-        }
-        {
-            DeviceZoneScopedN("S-SCALE");
-            if (diagonal) {
-                apply_mask_on_reg(
-                    scores_reg, cb_attn_mask, scaler_bits, minus_one_bits, custom_inf_bits);
-            } else {
-                binop_with_scalar_tile_init();
-                mul_unary_tile(scores_reg, scaler_bits);
+            for (uint32_t b = 0; b < Bt; ++b) {
+                if (diagonal && b == a) {
+                    apply_mask_on_reg(
+                        score_reg(b), cb_attn_mask, scaler_bits, minus_one_bits, custom_inf_bits);
+                } else {
+                    binop_with_scalar_tile_init();
+                    mul_unary_tile(score_reg(b), scaler_bits);
+                }
+                softmax_on_dst(score_reg(b), score_reg(b) + 1u, cb_lse, a);
+                if (diagonal && b > a) {
+                    // Wholly above the diagonal. Zeroing P there lets every
+                    // later sum run over all of the block's tiles without
+                    // knowing about the triangle: dS inherits the zero
+                    // through its P factor.
+                    binop_with_scalar_tile_init();
+                    mul_unary_tile(score_reg(b), /* 0.0f */ 0u);
+                }
             }
-        }
-        {
-            DeviceZoneScopedN("S-SOFTMAX");
-            apply_softmax_statistics_on_dst(scores_reg, cb_lse);
-        }
-        tile_regs_commit();
-        {
-            DeviceZoneScopedN("S-PACK");
+            tile_regs_commit();
             tile_regs_wait();
-            cb_reserve_back(cb_attention_weights, onetile);
             pack_reconfig_data_format(cb_attention_weights);
-            pack_tile(scores_reg, cb_attention_weights);
+            for (uint32_t b = 0; b < Bt; ++b) {
+                pack_tile</* out_of_order */ true>(
+                    score_reg(b), cb_attention_weights, a * Bt + b);
+            }
             tile_regs_release();
         }
-        cb_push_back(cb_attention_weights, onetile);
+        cb_push_back(cb_attention_weights, score_tiles);
+        cb_wait_front(cb_attention_weights, score_tiles);
         }
 
-        // ---- dP = dO V^T, then dS with its transposes
+        // ---- dP = dO V^T, the same shape
         {
             DeviceZoneScopedN("GRAD-WEIGHTS");
-            compute_grad_attn_weights(
-                cb_grad_output,
-                cb_value,
-                vWt,
-                cb_grad_attn_weights,
-                cb_attention_weights,
-                scaler_bits);
-        }
-        {
-            DeviceZoneScopedN("GRAD-SCORES");
-            grad_scores_and_transposes();
+            cb_reserve_back(cb_grad_attn_weights, score_tiles);
+            for (uint32_t a = 0; a < Bt; ++a) {
+                reconfig_data_format(cb_grad_output, cb_value);
+                matmul_init(cb_grad_output, cb_value, /* transpose */ 1);
+                tile_regs_acquire();
+                for (uint32_t b = 0; b < Bt; ++b) {
+                    for (uint32_t k = 0; k < vWt; ++k) {
+                        matmul_tiles(cb_grad_output, cb_value, a * vWt + k, b * vWt + k, b);
+                    }
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_reconfig_data_format(cb_attention_weights, cb_grad_attn_weights);
+                for (uint32_t b = 0; b < Bt; ++b) {
+                    pack_tile</* out_of_order */ true>(b, cb_grad_attn_weights, a * Bt + b);
+                }
+                tile_regs_release();
+            }
+            cb_push_back(cb_grad_attn_weights, score_tiles);
+            cb_wait_front(cb_grad_attn_weights, score_tiles);
         }
 
-        // ---- dQ_i = (dQ_i from DRAM) + dS K_j
+        // ---- dS, with dS^T and P^T alongside, one tile pair at a time:
+        // elementwise work with three registers per tile and no latency to
+        // amortize.
+        {
+            DeviceZoneScopedN("GRAD-SCORES");
+            cb_reserve_back(cb_grad_scores, score_tiles);
+            cb_reserve_back(cb_grad_scores_transposed, score_tiles);
+            cb_reserve_back(cb_attn_weights_transposed, score_tiles);
+            for (uint32_t a = 0; a < Bt; ++a) {
+                for (uint32_t b = 0; b < Bt; ++b) {
+                    grad_scores_and_transposes(a, b);
+                }
+            }
+            cb_push_back(cb_grad_scores, score_tiles);
+            cb_push_back(cb_grad_scores_transposed, score_tiles);
+            cb_push_back(cb_attn_weights_transposed, score_tiles);
+            cb_wait_front(cb_grad_scores, score_tiles);
+            cb_wait_front(cb_grad_scores_transposed, score_tiles);
+            cb_wait_front(cb_attn_weights_transposed, score_tiles);
+        }
+
+
+        // ---- dQ_i = (dQ_i from DRAM) + dS K_j. The sum runs over the
+        // block's column tiles as well as the head dimension, and it
+        // accumulates in DST, so the extra depth costs no extra packs. The
+        // loops replace update_grad_query, which cannot express the inner
+        // sum, but keep its reconfig arguments and its L1-accumulate dance.
         {
             DeviceZoneScopedN("SEED-DQ");
-            pack_tiles_to_output(cb_grad_query_seed, cb_grad_query_accum, qWt);
+            pack_tiles_to_output(cb_grad_query_seed, cb_grad_query_accum, Bt * qWt);
         }
         {
             DeviceZoneScopedN("UPDATE-DQ");
-            update_grad_query(
-                cb_grad_scores,
-                cb_key,
-                cb_grad_query_accum,
-                qWt,
-                block_size,
-                /* accumulate */ true);
+            pack_reconfig_data_format(cb_grad_scores, cb_grad_query_accum);
+            pack_reconfig_l1_acc(true);
+            for (uint32_t a = 0; a < Bt; ++a) {
+                for (uint32_t k0 = 0; k0 < qWt; k0 += block_size) {
+                    tile_regs_acquire();
+                    reconfig_data_format_srca(cb_grad_query_accum, cb_key);
+                    matmul_init(cb_grad_scores, cb_key, /* transpose */ 0);
+                    for (uint32_t bi = 0; bi < block_size; ++bi) {
+                        for (uint32_t b = 0; b < Bt; ++b) {
+                            matmul_tiles(
+                                cb_grad_scores, cb_key, a * Bt + b, b * qWt + k0 + bi, bi);
+                        }
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t bi = 0; bi < block_size; ++bi) {
+                        pack_tile(bi, cb_grad_query_accum);
+                    }
+                    tile_regs_release();
+                }
+            }
+            pack_reconfig_l1_acc(false);
+            cb_pop_front(cb_grad_query_accum, Bt * qWt);
+            cb_reserve_back(cb_grad_query_accum, Bt * qWt);
+            cb_push_back(cb_grad_query_accum, Bt * qWt);
+            cb_wait_front(cb_grad_query_accum, Bt * qWt);
         }
         {
             DeviceZoneScopedN("EMIT-DQ");
-            pack_tiles_to_output(cb_grad_query_accum, cb_grad_query_out, qWt);
+            pack_tiles_to_output(cb_grad_query_accum, cb_grad_query_out, Bt * qWt);
         }
 
-        // ---- dV_j += P^T dO_i
-#if COLUMN_RESIDENT
+        // ---- dV_j += P^T dO_i, summed over the block's row tiles
         {
             DeviceZoneScopedN("UPDATE-DV");
-            update_grad_value(
-                cb_attn_weights_transposed,
-                cb_grad_output,
-                cb_grad_value_accum,
-                vWt,
-                block_size,
-                column_accumulating);
-            cb_wait_front(cb_grad_value_accum, vWt);
-        }
-#else
-        pack_tiles_to_output(cb_grad_value_seed, cb_grad_value_accum, vWt);
-        update_grad_value(
-            cb_attn_weights_transposed,
-            cb_grad_output,
-            cb_grad_value_accum,
-            vWt,
-            block_size,
-            /* accumulate */ true);
-        pack_tiles_to_output(cb_grad_value_accum, cb_grad_value_out, vWt);
-#endif
-
-        // ---- dK_j += dS^T Q_i
-#if !COLUMN_RESIDENT
-        pack_tiles_to_output(cb_grad_key_seed, cb_grad_key_accum, qWt);
-#endif
-        {
-        DeviceZoneScopedN("UPDATE-DK");
-        // The last two arguments must name what the *previous* operation
-        // actually left in the packer and in SrcA, because the reconfigs they
-        // drive are conditional and skip when the formats match. The
-        // preceding pack_tiles_to_output packed to cb_grad_value_out and read
-        // cb_grad_value_accum, both Float32; naming cb_grad_output here
-        // instead -- which is what sdpa_bw's own call site names, because
-        // there the previous operation is different -- makes the SrcA
-        // reconfig look unnecessary and leaves the unpacker in Float32 while
-        // the matmul needs Q in bfloat16. dK then comes out wrong while dQ
-        // and dV are fine.
-        update_grad_key(
-            cb_grad_scores_transposed,
-            cb_query,
-            cb_grad_key_accum,
-            qWt,
-            block_size,
 #if COLUMN_RESIDENT
-            // The preceding operation is update_grad_value, so its accumulator
-            // is what the packer and SrcA were last set from.
-            /* cb_prev_pack */ cb_grad_value_accum,
-            /* cb_prev_srca */ cb_grad_output,
-            column_accumulating);
-        cb_wait_front(cb_grad_key_accum, qWt);
-        column_accumulating = true;
-
-        // Hand both column gradients over once, at the end of the interval.
-        if (column_ends) {
-            pack_tiles_to_output(cb_grad_value_accum, cb_grad_value_out, vWt);
-            pack_tiles_to_output(cb_grad_key_accum, cb_grad_key_out, qWt);
-        }
+            const bool dv_accumulate = column_accumulating;
 #else
-            /* cb_prev_pack */ cb_grad_value_out,
-            /* cb_prev_srca */ cb_grad_value_accum,
-            /* accumulate */ true);
-        pack_tiles_to_output(cb_grad_key_accum, cb_grad_key_out, qWt);
+            pack_tiles_to_output(cb_grad_value_seed, cb_grad_value_accum, Bt * vWt);
+            const bool dv_accumulate = true;
+#endif
+            pack_reconfig_data_format(cb_attn_weights_transposed, cb_grad_value_accum);
+            if (!dv_accumulate) {
+                cb_reserve_back(cb_grad_value_accum, Bt * vWt);
+            } else {
+                pack_reconfig_l1_acc(true);
+            }
+            for (uint32_t b = 0; b < Bt; ++b) {
+                for (uint32_t k0 = 0; k0 < vWt; k0 += block_size) {
+                    tile_regs_acquire();
+                    reconfig_data_format_srca(cb_grad_value_accum, cb_grad_output);
+                    matmul_init(cb_attn_weights_transposed, cb_grad_output, /* transpose */ 0);
+                    for (uint32_t bi = 0; bi < block_size; ++bi) {
+                        for (uint32_t a = 0; a < Bt; ++a) {
+                            matmul_tiles(
+                                cb_attn_weights_transposed,
+                                cb_grad_output,
+                                b * Bt + a,
+                                a * vWt + k0 + bi,
+                                bi);
+                        }
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t bi = 0; bi < block_size; ++bi) {
+                        pack_tile(bi, cb_grad_value_accum);
+                    }
+                    tile_regs_release();
+                }
+            }
+            if (dv_accumulate) {
+                pack_reconfig_l1_acc(false);
+                cb_pop_front(cb_grad_value_accum, Bt * vWt);
+                cb_reserve_back(cb_grad_value_accum, Bt * vWt);
+            }
+            cb_push_back(cb_grad_value_accum, Bt * vWt);
+            cb_wait_front(cb_grad_value_accum, Bt * vWt);
+#if !COLUMN_RESIDENT
+            pack_tiles_to_output(cb_grad_value_accum, cb_grad_value_out, Bt * vWt);
 #endif
         }
 
-        cb_pop_front(cb_query, qWt);
-#if !COLUMN_RESIDENT
-        cb_pop_front(cb_key, qWt);
-        cb_pop_front(cb_value, vWt);
+        // ---- dK_j += dS^T Q_i. The reconfig arguments must name what the
+        // previous operation actually left in the packer and in SrcA, because
+        // those reconfigs are conditional and skip when the formats already
+        // match: naming cb_grad_output as the previous SrcA -- which is what
+        // sdpa_bw's own call site does, its previous operation being a
+        // different one -- leaves the unpacker in Float32 while this matmul
+        // needs Q in bfloat16, and dK comes out wrong while dQ and dV are
+        // fine. Here the previous operation is the dV update just above.
+        {
+            DeviceZoneScopedN("UPDATE-DK");
+#if COLUMN_RESIDENT
+            const bool dk_accumulate = column_accumulating;
+#else
+            pack_tiles_to_output(cb_grad_key_seed, cb_grad_key_accum, Bt * qWt);
+            const bool dk_accumulate = true;
 #endif
-        cb_pop_front(cb_grad_output, vWt);
-        cb_pop_front(cb_lse, onetile);
-        cb_pop_front(cb_u_scalar, onetile);
-        cb_pop_front(cb_attention_weights, onetile);
-        cb_pop_front(cb_grad_attn_weights, onetile);
+#if COLUMN_RESIDENT
+            // The previous operation is the dV update, so its accumulator is
+            // what the packer was last set from and dO what SrcA was.
+            constexpr uint32_t cb_prev_pack = cb_grad_value_accum;
+            constexpr uint32_t cb_prev_srca = cb_grad_output;
+#else
+            // Here the previous operation is the dK seed copy just above,
+            // which packed to the accumulator and read the seed. Naming dO as
+            // the previous SrcA -- correct in the resident path -- makes the
+            // reconfig below look unnecessary, because dO and Q are both
+            // bfloat16, and leaves the unpacker in Float32 where the seed copy
+            // put it. dK then comes out wrong while dQ and dV are fine.
+            constexpr uint32_t cb_prev_pack = cb_grad_key_accum;
+            constexpr uint32_t cb_prev_srca = cb_grad_key_seed;
+#endif
+            pack_reconfig_data_format(cb_prev_pack, cb_grad_key_accum);
+            if (!dk_accumulate) {
+                cb_reserve_back(cb_grad_key_accum, Bt * qWt);
+            } else {
+                pack_reconfig_l1_acc(true);
+            }
+            for (uint32_t b = 0; b < Bt; ++b) {
+                for (uint32_t k0 = 0; k0 < qWt; k0 += block_size) {
+                    tile_regs_acquire();
+                    reconfig_data_format_srca(cb_prev_srca, cb_query);
+                    matmul_init(cb_grad_scores_transposed, cb_query, /* transpose */ 0);
+                    for (uint32_t bi = 0; bi < block_size; ++bi) {
+                        for (uint32_t a = 0; a < Bt; ++a) {
+                            matmul_tiles(
+                                cb_grad_scores_transposed,
+                                cb_query,
+                                b * Bt + a,
+                                a * qWt + k0 + bi,
+                                bi);
+                        }
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t bi = 0; bi < block_size; ++bi) {
+                        pack_tile(bi, cb_grad_key_accum);
+                    }
+                    tile_regs_release();
+                }
+            }
+            if (dk_accumulate) {
+                pack_reconfig_l1_acc(false);
+                cb_pop_front(cb_grad_key_accum, Bt * qWt);
+                cb_reserve_back(cb_grad_key_accum, Bt * qWt);
+            }
+            cb_push_back(cb_grad_key_accum, Bt * qWt);
+            cb_wait_front(cb_grad_key_accum, Bt * qWt);
+#if COLUMN_RESIDENT
+            column_accumulating = true;
+            // Hand both column gradients over once, at the end of the interval.
+            if (column_ends) {
+                pack_tiles_to_output(cb_grad_value_accum, cb_grad_value_out, Bt * vWt);
+                pack_tiles_to_output(cb_grad_key_accum, cb_grad_key_out, Bt * qWt);
+            }
+#else
+            pack_tiles_to_output(cb_grad_key_accum, cb_grad_key_out, Bt * qWt);
+#endif
+        }
+
+        cb_pop_front(cb_query, Bt * qWt);
+#if !COLUMN_RESIDENT
+        cb_pop_front(cb_key, Bt * qWt);
+        cb_pop_front(cb_value, Bt * vWt);
+#endif
+        cb_pop_front(cb_grad_output, Bt * vWt);
+        cb_pop_front(cb_lse, Bt);
+        cb_pop_front(cb_u_scalar, Bt);
+        cb_pop_front(cb_attention_weights, score_tiles);
+        cb_pop_front(cb_grad_attn_weights, score_tiles);
+        // The helpers used to pop these; the loops above read them by index
+        // and leave them alone, so they are released here with the rest.
+        cb_pop_front(cb_grad_scores, score_tiles);
+        cb_pop_front(cb_grad_scores_transposed, score_tiles);
+        cb_pop_front(cb_attn_weights_transposed, score_tiles);
 
 #if RELEASE_TOKEN
         // Slot t mod 2 is free now: every read of it is done.

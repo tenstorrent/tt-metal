@@ -37,7 +37,12 @@ void kernel_main() {
     constexpr uint32_t qWt = get_compile_time_arg_val(1);
     constexpr uint32_t vWt = get_compile_time_arg_val(2);
     constexpr uint32_t release_sem_id = get_compile_time_arg_val(3);
-    constexpr auto query_args = TensorAccessorArgs<4>();
+    // Row-tiles per block: B = Bt * 32, so a block is Bt * qWt tiles wide in
+    // memory and the statistics are Bt tiles instead of one.
+    constexpr uint32_t Bt = get_compile_time_arg_val(4);
+    constexpr uint32_t row_tiles = Bt * qWt;
+    constexpr uint32_t val_tiles = Bt * vWt;
+    constexpr auto query_args = TensorAccessorArgs<5>();
     constexpr auto key_args = TensorAccessorArgs<query_args.next_compile_time_args_offset()>();
     constexpr auto value_args = TensorAccessorArgs<key_args.next_compile_time_args_offset()>();
     constexpr auto grad_output_args = TensorAccessorArgs<value_args.next_compile_time_args_offset()>();
@@ -83,12 +88,12 @@ void kernel_main() {
         const uint32_t i = pair.i;
         const uint32_t j = pair.j;
 
-        read_tiles_by_row(cb_query, query, (i - 1u) * qWt, qWt, tile_bytes, qWt);
-        read_tiles_by_row(cb_key, key, (j - 1u) * qWt, qWt, tile_bytes, qWt);
-        read_tiles_by_row(cb_value, value, (j - 1u) * vWt, vWt, tile_bytes, vWt);
-        read_tiles_by_row(cb_grad_output, grad_output, (i - 1u) * vWt, vWt, tile_bytes, vWt);
-        read_one_tile(cb_lse, lse, i - 1u);
-        read_one_tile(cb_u_scalar, u_scalar, i - 1u);
+        read_tiles_by_row(cb_query, query, (i - 1u) * row_tiles, row_tiles, tile_bytes, row_tiles);
+        read_tiles_by_row(cb_key, key, (j - 1u) * row_tiles, row_tiles, tile_bytes, row_tiles);
+        read_tiles_by_row(cb_value, value, (j - 1u) * val_tiles, val_tiles, tile_bytes, val_tiles);
+        read_tiles_by_row(cb_grad_output, grad_output, (i - 1u) * val_tiles, val_tiles, tile_bytes, val_tiles);
+        read_tiles_by_row(cb_lse, lse, (i - 1u) * Bt, Bt, interm_bytes, Bt);
+        read_tiles_by_row(cb_u_scalar, u_scalar, (i - 1u) * Bt, Bt, interm_bytes, Bt);
 
         if (t > 0u) {
             WAYPOINT("BARW");
@@ -98,8 +103,8 @@ void kernel_main() {
             WAYPOINT("BARD");
         }
 
-        read_tiles_by_row(cb_grad_query_seed, grad_query, (i - 1u) * qWt, qWt, grad_bytes, qWt);
-        read_tiles_by_row(cb_grad_key_seed, grad_key, (j - 1u) * qWt, qWt, grad_bytes, qWt);
-        read_tiles_by_row(cb_grad_value_seed, grad_value, (j - 1u) * vWt, vWt, grad_bytes, vWt);
+        read_tiles_by_row(cb_grad_query_seed, grad_query, (i - 1u) * row_tiles, row_tiles, grad_bytes, row_tiles);
+        read_tiles_by_row(cb_grad_key_seed, grad_key, (j - 1u) * row_tiles, row_tiles, grad_bytes, row_tiles);
+        read_tiles_by_row(cb_grad_value_seed, grad_value, (j - 1u) * val_tiles, val_tiles, grad_bytes, val_tiles);
     }
 }
