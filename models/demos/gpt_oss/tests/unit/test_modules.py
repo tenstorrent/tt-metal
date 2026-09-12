@@ -2,11 +2,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
+
+# The expert-sorted prefill program warm-up (Model.__init__, experts/prefill.py) exists for servers that capture
+# traces; unit tests never trace, so skip its ~20-60 s per Model construction unless the caller opted in.
+os.environ.setdefault("GPT_OSS_PREFILL_PROGRAM_WARMUP", "0")
 from models.common.utility_functions import is_blackhole
 from models.tt_transformers.tt.common import gather_cos_sin, precompute_freqs
 from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
@@ -782,6 +788,10 @@ def test_decoder(
             "across rows (row-sharded, batch > 32); the single-row multi-user path is covered on 1xN."
         )
 
+    if seq_len == 1 and batch_size > 1 and not paged:
+        pytest.skip("multi-user decode is served with paged attention; the unpaged variant is legacy-only")
+    if batch_size == 22 and not is_blackhole():
+        pytest.skip("22 users exercises Blackhole's 13-wide compute grid; on an 8-wide grid it is the batch-32 layout")
     if is_blackhole() and mesh_device.shape[0] > 1 and batch_size * seq_len > 1:
         pytest.skip(
             f"Skipping batch={batch_size} seq_len={seq_len} on Blackhole {tuple(mesh_device.shape)}: "

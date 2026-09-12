@@ -741,7 +741,7 @@
   skus:
     # Wormhole
     wh_llmbox:
-      timeout: 35
+      timeout: 28
       tier: 1
     wh_galaxy:
       timeout: 40
