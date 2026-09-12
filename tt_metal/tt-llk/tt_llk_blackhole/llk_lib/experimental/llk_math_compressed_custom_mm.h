@@ -162,6 +162,19 @@ inline void _llk_math_compressed_custom_mm_(
     const std::uint32_t replay_buf_len = operandB_face_r_dim == 8 ? 11 : 9;
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 
+    // One 3-bit format meta per tile, ten per 32-bit word: the metadata buffer holds
+    // ceil(kt_dim * ct_dim / tiles_per_meta_word) words, and num_meta_words is deliberately spelled with
+    // the caller's own sizing expression so the bound and the allocation cannot drift apart.
+    constexpr std::uint32_t tiles_per_meta_word = 10;
+    const std::uint32_t num_meta_words          = (kt_dim * ct_dim + tiles_per_meta_word - 1) / tiles_per_meta_word;
+    // Each reload below advances meta_index *after* consuming an item. Only the row-tail site can
+    // actually step past the end, and only at finalize == false, where the last of the kt_dim * ct_dim
+    // items is a row tail: on an exact multiple of tiles_per_meta_word its index++ drives meta_index to
+    // num_meta_words. The other two sites are always followed by another consume in the same pass, so
+    // meta_index stays <= (kt_dim * ct_dim - 1) / tiles_per_meta_word, and at finalize == true the walk
+    // ends on an item that does no index++ at all. Bounding all three keeps every meta_ptr load
+    // in-bounds by inspection, rather than by that whole-function argument continuing to hold.
+
     const std::uint32_t iterations = finalize ? kt_dim - 1 : kt_dim;
     const std::uint32_t* meta_ptr  = reinterpret_cast<const std::uint32_t*>(base_address_meta);
     std::uint32_t index            = 0;
@@ -185,11 +198,14 @@ inline void _llk_math_compressed_custom_mm_(
                 // TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_AB);
             }
             index++;
-            if (index == 10)
+            if (index == tiles_per_meta_word)
             {
                 index = 0;
                 meta_index++;
-                meta = meta_ptr[meta_index] >> 3;
+                if (meta_index < num_meta_words)
+                {
+                    meta = meta_ptr[meta_index] >> 3;
+                }
             }
             else
             {
@@ -208,11 +224,14 @@ inline void _llk_math_compressed_custom_mm_(
             TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
         }
         index++;
-        if (index == 10)
+        if (index == tiles_per_meta_word)
         {
             index = 0;
             meta_index++;
-            meta = meta_ptr[meta_index] >> 3;
+            if (meta_index < num_meta_words)
+            {
+                meta = meta_ptr[meta_index] >> 3;
+            }
         }
         else
         {
@@ -235,11 +254,14 @@ inline void _llk_math_compressed_custom_mm_(
                 lltt::replay(ckernel::math::replay_buf_offset + 4, replay_buf_len - 4);
             }
             index++;
-            if (index == 10)
+            if (index == tiles_per_meta_word)
             {
                 index = 0;
                 meta_index++;
-                meta = meta_ptr[meta_index] >> 3;
+                if (meta_index < num_meta_words)
+                {
+                    meta = meta_ptr[meta_index] >> 3;
+                }
             }
             else
             {
