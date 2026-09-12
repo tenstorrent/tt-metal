@@ -886,6 +886,12 @@ class ModelArgs:
             # DRAM weight grid specs for dram sharding matmuls
             grid = self.mesh_device.compute_with_storage_grid_size()
             self.max_grid_size = ttnn.CoreGrid(x=grid.x, y=grid.y)
+            # Run the short-chunk prefill projections as a 1D mcast over N (see
+            # prefill_matmul_1d_config). That factory aliases in1's circular buffer to the
+            # weight buffer, which only works for an L1 or INTERLEAVED in1 -- the decode
+            # weights are DRAM WIDTH-sharded -- so the modules that opt in must also hold a
+            # DRAM-interleaved view of the weight for prefill to read.
+            self.use_prefill_1d_projection = not self.is_galaxy and self.prefetcher is None
             self.dram_weight_grid = ttnn.CoreRangeSet(
                 {
                     ttnn.CoreRange(
@@ -1515,12 +1521,13 @@ class ModelArgs:
                     )
         elif mode == Mode.PREFILL:
             if not self.is_galaxy:
-                return self.prefill_matmul_2d_config(
-                    m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
-                    k=self.dim // self.cluster_shape[0],
-                    n=self.hidden_dim // self.cluster_shape[1],
-                    fp32_dest_acc_en=self.op_fp32_dest_acc_en(OpGroup.LI_FF1_FF3),
-                )
+                _m = min(seq_len, self.prefill_len_cutoff)  # 512 if BH, 1024 if WH
+                _k = self.dim // self.cluster_shape[0]
+                _n = self.hidden_dim // self.cluster_shape[1]
+                _fp32 = self.op_fp32_dest_acc_en(OpGroup.LI_FF1_FF3)
+                return self.prefill_matmul_1d_config(
+                    m=_m, k=_k, n=_n, fp32_dest_acc_en=_fp32
+                ) or self.prefill_matmul_2d_config(m=_m, k=_k, n=_n, fp32_dest_acc_en=_fp32)
             return self.matmul_config(
                 m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
                 k=self.dim // self.cluster_shape[0],
@@ -1579,12 +1586,12 @@ class ModelArgs:
                 )
             else:
                 if not self.is_galaxy:
-                    return self.prefill_matmul_2d_config(
-                        m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
-                        k=self.hidden_dim // self.num_devices,
-                        n=self.dim,
-                        fp32_dest_acc_en=self.op_fp32_dest_acc_en(OpGroup.LI_FF2),
-                    )
+                    _m = min(seq_len, self.prefill_len_cutoff)  # 512 if BH, 1024 if WH
+                    _k = self.hidden_dim // self.num_devices
+                    _fp32 = self.op_fp32_dest_acc_en(OpGroup.LI_FF2)
+                    return self.prefill_matmul_1d_config(
+                        m=_m, k=_k, n=self.dim, fp32_dest_acc_en=_fp32
+                    ) or self.prefill_matmul_2d_config(m=_m, k=_k, n=self.dim, fp32_dest_acc_en=_fp32)
                 return self.matmul_config(
                     m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
                     k=self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
@@ -3822,6 +3829,75 @@ class ModelArgs:
             transpose_mcast=False,
             fused_activation=fused_activation,
             fuse_batch=False,
+        )
+
+    def prefill_matmul_1d_config(self, m: int, k: int, n: int, fused_activation=None, fp32_dest_acc_en=True):
+        """1D (N-parallel) mcast config for a SHORT prefill chunk, or ``None``.
+
+        The 2D config above is stuck at 32 cores for these shapes, but the cost is not
+        the idle cores -- it is that a 2D mcast reads in1 through its leading core ROW
+        only. grid_x cores issue the whole weight stream (8 here, because grid_x has to
+        stay on a divisor of N_tiles and 112/128 have none between 9 and the grid width),
+        and 8 readers leave the projection at ~39% of what the cores it does hold could
+        do. A 1D mcast over N hands every core its own in1 column strip, so the reader
+        count becomes the CORE count: 8 -> 56 on ff1/ff3, 8 -> 64 on ff2.
+
+        The price is that in0 is multicast from a single sender, so this only pays while
+        the activation is small -- a short prefill chunk, which is where the 2D grid was
+        starved anyway. Returns ``None`` (caller keeps the 2D config) when the chunk is
+        too tall or when N_tiles has no divisor that beats the 2D grid; per_core_N stays
+        EXACT, since a ragged last column returns garbage rather than merely wasting the
+        tail (see ``prefill_matmul_2d_config``).
+
+        CALLER CONTRACT: the 1D factory aliases in1's circular buffer to the weight
+        buffer, so a DRAM WIDTH-SHARDED weight fatals with "Only L1 buffers can have an
+        associated circular buffer". Pass this config only alongside an INTERLEAVED view
+        of the weight.
+        """
+        m_tiles = max(1, math.ceil(m / ttnn.TILE_SIZE))
+        n_tiles = max(1, math.ceil(n / ttnn.TILE_SIZE))
+        k_tiles = max(1, math.ceil(k / ttnn.TILE_SIZE))
+        # mcast_in0 requires the whole M to live in one per_core_M block, and that block
+        # sits in every core's in0 CB -- cap it so the CB stays affordable.
+        if not getattr(self, "use_prefill_1d_projection", False) or m_tiles > 8:
+            return None
+        max_x, max_y = self.max_grid_size.x, self.max_grid_size.y
+        # The 2D grid this replaces; only worth the switch if we beat its in1 reader row.
+        grid_x_2d = max(c for c in range(1, min(max_x, n_tiles) + 1) if n_tiles % c == 0)
+
+        best = None
+        for num_cores in range(1, min(max_x * max_y, n_tiles) + 1):
+            if n_tiles % num_cores:
+                continue
+            # Express the core count as a (x, y) rectangle the device actually has.
+            gx = max(
+                (c for c in range(1, min(max_x, num_cores) + 1) if num_cores % c == 0 and num_cores // c <= max_y),
+                default=None,
+            )
+            if gx is not None:
+                best = (gx, num_cores // gx, num_cores)
+        if best is None or best[2] <= grid_x_2d:
+            return None
+        grid_x, grid_y, num_cores = best
+
+        per_core_M = m_tiles
+        per_core_N = n_tiles // num_cores
+        in0_block_w = max(b for b in range(1, min(8, k_tiles) + 1) if k_tiles % b == 0)
+        max_subblock = 4 if fp32_dest_acc_en else 8
+        out_subblock_w = max(w for w in range(1, min(max_subblock, per_core_N) + 1) if per_core_N % w == 0)
+        out_subblock_h = max(
+            h for h in range(1, min(max_subblock // out_subblock_w, per_core_M) + 1) if per_core_M % h == 0
+        )
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(grid_x, grid_y),
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+            fuse_batch=True,
+            fused_activation=fused_activation,
+            mcast_in0=True,
         )
 
     def dram_shard_core_grid_for_k(self, k: int) -> Tuple[int, int]:

@@ -101,6 +101,19 @@ class MLP(LightweightModule):
         self.w2 = as_sharded_tensor("w2_sharded", self.ff2_dtype, dims=w2_dims)
         self.w3 = as_sharded_tensor("w3_sharded", self.ff1_3_dtype, dims=w1_dims)
 
+        # Prefill reads the projections through a 1D mcast over N so that every core --
+        # not just the leading row of a 2D multicast grid -- issues part of the weight
+        # stream. That matmul factory aliases in1's circular buffer to the weight buffer,
+        # which a DRAM WIDTH-sharded tensor cannot back, so prefill needs an interleaved
+        # view of each weight. Decode keeps reading the sharded originals (its
+        # DRAM-sharded matmul requires them); the copy costs DRAM, not bandwidth, since
+        # each mode reads only its own view.
+        self.w1_prefill = self.w2_prefill = self.w3_prefill = None
+        if getattr(args, "use_prefill_1d_projection", False):
+            self.w1_prefill = ttnn.to_memory_config(self.w1, ttnn.DRAM_MEMORY_CONFIG)
+            self.w2_prefill = ttnn.to_memory_config(self.w2, ttnn.DRAM_MEMORY_CONFIG)
+            self.w3_prefill = ttnn.to_memory_config(self.w3, ttnn.DRAM_MEMORY_CONFIG)
+
         # Default activation is SILU
         self.activation_type = (
             args.mlp_activation_type if hasattr(args, "mlp_activation_type") else ttnn.UnaryOpType.SILU
@@ -191,9 +204,15 @@ class MLP(LightweightModule):
         if use_tg_decode_no_prefetch:
             x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
 
+        # The 1D-mcast prefill config cannot read a DRAM width-sharded weight (its in1 CB
+        # aliases the weight buffer); take the interleaved view whenever that config won.
+        _is_1d = isinstance(pc_1, ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig)
+        w1 = self.w1_prefill if (_is_1d and self.w1_prefill is not None) else self.w1
+        w3 = self.w3_prefill if (_is_1d and self.w3_prefill is not None) else self.w3
+
         w1_out = ttnn.linear(
             x,
-            self.w1,
+            w1,
             dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
             compute_kernel_config=li_ff1_3_compute_kernel_cfg,
@@ -210,7 +229,7 @@ class MLP(LightweightModule):
         )
         w3_out = ttnn.linear(
             x,
-            self.w3,
+            w3,
             dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
             compute_kernel_config=li_ff1_3_compute_kernel_cfg,
@@ -355,9 +374,11 @@ class MLP(LightweightModule):
                 config=pc_2,
             )
         else:
+            _ff2_is_1d = isinstance(pc_2, ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig)
+            w2 = self.w2_prefill if (_ff2_is_1d and self.w2_prefill is not None) else self.w2
             w2_out = ttnn.linear(
                 w2_in,
-                self.w2,
+                w2,
                 compute_kernel_config=li_ff2_compute_kernel_cfg,
                 # ff2's only consumer is the reduce-scatter below, and that collective is
                 # byte-bound: pack the projection straight to the CCL dtype instead of
