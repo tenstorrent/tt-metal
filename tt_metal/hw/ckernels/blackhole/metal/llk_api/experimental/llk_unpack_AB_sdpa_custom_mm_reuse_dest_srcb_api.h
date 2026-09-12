@@ -38,7 +38,7 @@ inline void llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb(
     const std::uint32_t operand1,
     const std::uint32_t tile_index_0,
     const std::uint32_t tile_index_1,
-    const std::uint32_t kt_dim = 1,
+    const std::uint32_t kt_dim = 2,
     const std::uint32_t nt_dim = 1,
     const std::uint32_t in1_k_stride = 1) {
     SAN_HOOK(unsupported());
