@@ -97,9 +97,10 @@ from models.demos.minimax_m3.utils.fabric_env import ccl_topology_from_env, fabr
 
 
 def _raise_nproc_limit():
-    """tt-metal JIT-compiles device kernels in parallel and each `g++ -flto=auto` fans out to
-    `make -j<nproc>`; a low RLIMIT_NPROC makes clone3 fail mid-build ("posix_spawn: Operation not
-    permitted"). Raise the soft limit to the hard limit. Copied from galaxy_prefill_kv_pcc.py."""
+    """tt-metal JIT-compiles device kernels in parallel and each target spawns its own chain of
+    short-lived processes (g++, cc1plus/lto1, as, ld); a low RLIMIT_NPROC makes clone3 fail
+    mid-build ("posix_spawn: Operation not permitted"). Raise the soft limit to the hard limit.
+    Copied from galaxy_prefill_kv_pcc.py."""
     soft, hard = resource.getrlimit(resource.RLIMIT_NPROC)
     if soft != resource.RLIM_INFINITY and (hard == resource.RLIM_INFINITY or soft < hard):
         try:

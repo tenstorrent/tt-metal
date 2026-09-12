@@ -169,8 +169,13 @@ void JitBuildEnv::init(
         "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval "
         // Ban dynamic initializations, via a check we've added
         "-ftt-no-dyninit "
-        // Rely on Link Time Optimization (removes globally unreachable code)
-        "-flto=auto "
+        // Rely on Link Time Optimization (removes globally unreachable code).
+        // Partitioning and job count are pinned rather than left to -flto=auto: the JIT
+        // scheduler already builds ~30 kernels at once, and with no make jobserver to
+        // consult 'auto' resolves to the host CPU count, letting each of those links fan
+        // out on top of it. A single partition is what kernels this size already produce,
+        // so pinning holds current behavior instead of leaving it to a size threshold.
+        "-flto=1 -flto-partition=one "
         // Fast math allows non-IEEE compliant optimizations ...
         "-ffast-math "
         // ... but we require these IEEE behaviors
