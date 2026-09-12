@@ -360,6 +360,26 @@ def _golden_function_softplus(input_tensor, *args, beta=1.0, threshold=20.0, **k
 ttnn.attach_golden_function(ttnn.softplus, golden_function=_golden_function_softplus)
 
 
+def _golden_function_tril(input_tensor, *args, diagonal=0, **kwargs):
+    import torch
+
+    # The generic unary wrapper drops parameters, and diagonal is keyword-only on the binding.
+    return torch.tril(input_tensor, diagonal)
+
+
+ttnn.attach_golden_function(ttnn.tril, golden_function=_golden_function_tril)
+
+
+def _golden_function_triu(input_tensor, *args, diagonal=0, **kwargs):
+    import torch
+
+    # Same as tril above: forward the diagonal the generic wrapper discards.
+    return torch.triu(input_tensor, diagonal)
+
+
+ttnn.attach_golden_function(ttnn.triu, golden_function=_golden_function_triu)
+
+
 def _preprocess_inverse_trig_golden_inputs(function_args, function_kwargs):
     """Preserve block-float input identity for inverse-trigonometric goldens.
     Adds a BF8 flag used to select out-of-domain comparison behavior.
