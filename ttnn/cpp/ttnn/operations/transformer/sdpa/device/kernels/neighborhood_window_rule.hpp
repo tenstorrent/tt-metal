@@ -64,8 +64,12 @@ inline constexpr uint32_t window_origin_on_axis(
                                          ? (group_first_site + stride_extent_sites - 1)
                                          : (volume_extent_sites - 1);
 
-    // Centre on the group, so a group wider than one site is not lopsided in its own window.
-    const uint32_t group_centre_site = group_first_site + (group_last_site - group_first_site) / 2;
+    // The group's leader is its centre-most site; an even-sized group takes the one just right of
+    // centre. That is NATTEN's GNA default (`(index / stride) * stride + stride / 2`, capped at the
+    // last site): a leader biased one to the right cancels an even window's left bias, which is what
+    // lets stride == window collapse to perfectly block-sparse attention. Rewritten from first/last so
+    // a truncated tail group gets the same answer as NATTEN's cap.
+    const uint32_t group_centre_site = group_first_site + (group_last_site - group_first_site + 1) / 2;
     const uint32_t half_window_sites = window_extent_sites / 2;
     const uint32_t highest_origin = volume_extent_sites - window_extent_sites;
 

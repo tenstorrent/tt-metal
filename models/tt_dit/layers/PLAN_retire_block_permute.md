@@ -1,6 +1,6 @@
 # Plan: retire `block_permute.py` by moving stages 2-5 onto the bricked neighborhood attention
 
-Status: PHASE 4 VERIFIED; TIER 3 DONE; na3d/neighborhood_attention boundary cut and one torch oracle, 2026-09-11 23:59. Branch `na-integration`. Owner: James Lee.
+Status: PHASE 4 VERIFIED; TIER 3 DONE; one torch oracle; GNA even-stride leader aligned with NATTEN, 2026-09-12 00:30. PAUSED. Branch `na-integration`. Owner: James Lee.
 Phase 0 done; Phase 1 B2 done; D1 priced (axis swap rejected); Phase 4 (deletion) done; every gate green.
 Block order was found to be unused in production (Phase 1 notes). Remaining, optional: Phases 1 (B1),
 2, 3 and 5 = the "bricked deterministic stages" speed project; everything is uncommitted in the tree.
@@ -21,7 +21,45 @@ Block order was found to be unused in production (Phase 1 notes). Remaining, opt
   captured; single-case rerun is job 430).
 - Pre-commit on the deletion commit: isort/autoflake fixups committed as cb8e1ffb2dd.
 
-## na3d.py / neighborhood_attention.py boundary + one torch oracle (2026-09-11 23:59, DONE; read this first)
+## GNA even-stride leader now matches NATTEN (2026-09-12 00:30, DONE, device-verified; read this first)
+
+**Why.** Consolidating the two torch oracles (section below) exposed that they disagreed at even GNA strides,
+and James asked which one the reference implementation uses. Checked against the source of truth: NATTEN's
+reference mask (`csrc/include/natten/cuda/reference/mask.hpp`) elects the group leader as
+`min((index / stride) * stride + stride / 2, length - 1)`, and the GNA paper (arXiv 2504.16922, section 3)
+states the default: the centre-most query, biased to the RIGHT for an even-sized group, so that it cancels an
+even window's left bias and stride == window can become perfectly block-sparse. That was the rule of the deleted
+general op's `nbr_shift_start` and of the old `na3d.window_bounds`. The bricked op's `window_origin_on_axis`
+(and its Python transcriptions) used `first + (last - first) / 2`, i.e. biased LEFT -- a latent disagreement
+with NATTEN since the op was written, pinned by nothing: both search oracles (gtest and Python) ran at stride 1
+only. Odd strides and stride 1 were never affected; upstream LTX passes no stride to NATTEN, and production runs
+(1,1,1), so no shipped output changes.
+
+**What changed (one token, three places, plus tests).** The centre is now `first + (last - first + 1) / 2`,
+which equals NATTEN's formula for full and truncated tail groups alike, in:
+- `kernels/neighborhood_window_rule.hpp::window_origin_on_axis` (host planner AND device mask; rebuild + JIT);
+- `layers/neighborhood_reference.py::context_window_origin` (the dense oracle, hence `na3d.window_bounds`/`na3d_torch`);
+- `layers/neighborhood_attention.py::_window_origin` (the host regime-mask builder -- a third copy, easy to miss).
+Brick snapping sits downstream of the centre and was left alone; the stride-equals-brick gtests still pass.
+Tests: `test_neighborhood_reference.py::test_window_origin_matches_natten_leader_at_every_stride` (strides 1-8
+incl. even, tail groups, 240 params) and gtest `NeighborhoodContextWindow.MatchesNattenLeaderAtEveryStride`
+(same sweep, `brick=0`); both use the existing search oracle centred on NATTEN's leader. Host: `window_bounds`
+equals NATTEN's start formula for every length < 30, kernel < 14, dividing stride (0 mismatches); Python suite
+234 passed; gtest 11 passed (standalone build, recipe in memory note `gtest-build-disabled-in-build-release`).
+
+**Device (jobs 448/449, after `./build_metal.sh --release`).** `test_neighborhood_reference.py` +
+`test_neighborhood_sdpa.py` + `test_na3d_bricked_w_sharded.py` + `unit/test_na3d.py`: **307 passed, 76 skipped**
+(JIT 1315/1358 hits -- the 43 misses are the mask kernels recompiling on the header change). Stage-5 parity
+99.9936 % + GNA parity 5/5, **6 passed**. GNA rows vs the stride-1 upstream reference, before -> after:
+(1,2,2) 0.999925 -> 0.999925, (1,4,4) 0.999912 -> 0.999912, (2,4,8) 0.999884 -> 0.999890. The unchanged
+rows are expected: against an all-centred reference, "one member centred, one shifted left" and "one centred,
+one shifted right" are mirror images, so the PCC magnitude is the same; only the snapped (2,4,8) row moved.
+
+**Paused here at James's request.** Not done: the production pipeline was not re-run (stride 1 is provably
+unchanged: bit-identical `window_bounds`, and the stride-1 oracle tests are untouched); `NEIGHBORHOOD_ATTENTION.md`
+has no sentence on the leader rule yet -- section 2.1 (`neighborhood_window_rule.hpp`) is where one belongs.
+
+## na3d.py / neighborhood_attention.py boundary + one torch oracle (2026-09-11 23:59, DONE)
 
 James asked whether the two modules could be combined. Answer given and accepted: no merge (two unrelated
 executors, and the gather backend is stage 1's only executor plus the sharded tests' replicated oracle), but

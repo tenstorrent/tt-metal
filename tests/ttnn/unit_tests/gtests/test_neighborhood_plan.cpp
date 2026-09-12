@@ -14,6 +14,7 @@
 
 #include "gtest/gtest.h"
 #include "ttnn/operations/transformer/sdpa/device/neighborhood_plan.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/neighborhood_window_rule.hpp"
 
 namespace ttnn::transformer::neighborhood {
 
@@ -270,6 +271,39 @@ TEST(NeighborhoodContextWindow, MatchesOracleAtStrideOne) {
                         config.context_window.by_axis[axis_index]);
                     EXPECT_EQ(window.origin.by_axis[axis_index], expected_origin)
                         << "axis " << axis_index << " at site " << site_time << "," << site_height << "," << site_width;
+                }
+            }
+        }
+    }
+}
+
+// NATTEN's GNA leader, verbatim from its reference mask (csrc/.../reference/mask.hpp):
+// min((index / stride) * stride + stride / 2, length - 1). The centre-most member of the group,
+// from the RIGHT half when the group is even-sized.
+uint32_t natten_group_leader(uint32_t site_index, uint32_t stride_extent_sites, uint32_t volume_extent_sites) {
+    return std::min(
+        (site_index / stride_extent_sites) * stride_extent_sites + stride_extent_sites / 2, volume_extent_sites - 1);
+}
+
+TEST(NeighborhoodContextWindow, MatchesNattenLeaderAtEveryStride) {
+    // Pins the even-group choice the stride-one oracle cannot see: a group of two at sites 2, 3
+    // leads from site 3. The rule placed it one site to the left until 2026-09-12. Volumes the
+    // stride does not divide exercise NATTEN's cap on a truncated tail group. No brick snapping.
+    for (uint32_t volume_extent : {2u, 4u, 6u, 7u, 8u, 12u, 13u, 25u}) {
+        for (uint32_t context_window_extent : {3u, 4u, 5u, 8u, 11u}) {
+            const uint32_t window_extent = std::min(context_window_extent, volume_extent);
+            for (uint32_t stride_extent : {1u, 2u, 3u, 4u, 5u, 8u}) {
+                if (stride_extent > window_extent) {
+                    continue;  // validate() rejects a stride wider than the window
+                }
+                for (uint32_t site_index = 0; site_index < volume_extent; ++site_index) {
+                    const uint32_t leader = natten_group_leader(site_index, stride_extent, volume_extent);
+                    const uint32_t expected = oracle_window_origin(leader, volume_extent, context_window_extent);
+                    const uint32_t actual = window_origin_on_axis(
+                        site_index / stride_extent, stride_extent, window_extent, volume_extent, /*brick=*/0);
+                    EXPECT_EQ(actual, expected)
+                        << "volume " << volume_extent << " window " << window_extent << " stride " << stride_extent
+                        << " site " << site_index << " leader " << leader;
                 }
             }
         }

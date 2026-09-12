@@ -49,9 +49,10 @@ def context_window_origin(
 ) -> int:
     """Where one query group's context window starts on one axis.
 
-    Transcribed from ``window_origin_on_axis`` in ``neighborhood_plan.cpp``. Both are checked
-    against the same independent search-based oracle in their respective tests, which is what
-    keeps them from drifting apart.
+    Transcribed from ``window_origin_on_axis`` in ``neighborhood_window_rule.hpp``. Both are
+    checked against the same independent search-based oracle in their respective tests, at stride 1
+    and at even and odd strides, which is what keeps them from drifting apart -- and from NATTEN,
+    whose reference mask is where the even-group leader rule comes from.
 
     ``brick_extent`` enables brick snapping -- pass what ``snap_extent`` returns, never the
     brick directly. Centring is not the only legal placement: any origin keeping the window in
@@ -62,7 +63,10 @@ def context_window_origin(
     """
     group_first_site = query_group_index * stride_extent
     group_last_site = min(group_first_site + stride_extent - 1, volume_extent - 1)
-    group_centre_site = group_first_site + (group_last_site - group_first_site) // 2
+    # NATTEN's GNA leader: the centre-most site, taken from the right half of an even-sized group
+    # (``min(first + stride // 2, volume - 1)``). Written from first/last so a truncated tail group
+    # agrees with that cap.
+    group_centre_site = group_first_site + (group_last_site - group_first_site + 1) // 2
 
     origin = group_centre_site - window_extent // 2
     highest_origin = volume_extent - window_extent

@@ -62,9 +62,10 @@ def window_bounds(length: int, kernel: int, stride: int = 1) -> tuple[list[int],
 
     ``stride`` is GNA's query-group size: runs of ``stride`` queries share one window, placed by
     ``context_window_origin`` -- the rule the bricked op ships (``window_origin_on_axis`` in
-    ``neighborhood_plan.cpp``), centred on the group's centre site, biased LEFT for even groups.
-    No brick snapping: pass ``brick=`` to the dense reference for that. ``stride=1`` is standard
-    neighborhood attention, every query centred on its own window.
+    ``neighborhood_window_rule.hpp``), which is NATTEN's default: the group's centre-most site leads,
+    taken from the right for an even-sized group. No brick snapping: pass ``brick=`` to the dense
+    reference for that. ``stride=1`` is standard neighborhood attention, every query centred on its
+    own window.
     """
     kernel = min(kernel, length)
     starts = [context_window_origin(i // stride, stride, kernel, length) for i in range(length)]

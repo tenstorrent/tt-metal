@@ -60,7 +60,7 @@ def _window_origin(group_index, stride, window, volume, snap=0):
     kernel then reads; the kernel keeps its own copy of the rule for boundary bricks."""
     first = group_index * stride
     last = min(first + stride - 1, volume - 1)
-    centre = first + (last - first) // 2
+    centre = first + (last - first + 1) // 2  # NATTEN's leader: right of centre for an even group
     highest = volume - window
     origin = 0 if centre < window // 2 else min(centre - window // 2, highest)
     if snap <= 1:

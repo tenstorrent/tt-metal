@@ -40,6 +40,15 @@ def oracle_window_origin(site_index: int, volume_extent: int, context_window_ext
     return best_origin
 
 
+def natten_group_leader(site_index: int, stride_extent: int, volume_extent: int) -> int:
+    """NATTEN's GNA leader, verbatim from its reference mask (``csrc/.../reference/mask.hpp``):
+    ``min((index / stride) * stride + stride / 2, length - 1)``. The centre-most member of the
+    group, taken from the RIGHT half when the group is even-sized -- the paper's stated default,
+    chosen so the leader's right bias cancels an even window's left bias.
+    """
+    return min((site_index // stride_extent) * stride_extent + stride_extent // 2, volume_extent - 1)
+
+
 @pytest.mark.parametrize("volume_extent", [1, 2, 5, 7, 8, 11, 25])
 @pytest.mark.parametrize("context_window_extent", [1, 3, 5, 11, 32])
 def test_window_origin_matches_oracle_at_stride_one(volume_extent, context_window_extent):
@@ -48,6 +57,27 @@ def test_window_origin_matches_oracle_at_stride_one(volume_extent, context_windo
         assert context_window_origin(site_index, 1, window_extent, volume_extent) == oracle_window_origin(
             site_index, volume_extent, context_window_extent
         ), f"site {site_index} of {volume_extent}, window {context_window_extent}"
+
+
+@pytest.mark.parametrize("volume_extent", [2, 4, 6, 7, 8, 12, 13, 25])
+@pytest.mark.parametrize("context_window_extent", [3, 4, 5, 8, 11])
+@pytest.mark.parametrize("stride_extent", [1, 2, 3, 4, 5, 8])
+def test_window_origin_matches_natten_leader_at_every_stride(volume_extent, context_window_extent, stride_extent):
+    """Strided placement == the search oracle centred on NATTEN's group leader.
+
+    Pins the even-group choice (a group of two at sites 2, 3 leads from site 3), which the stride-one
+    oracle above cannot see and which the op got wrong -- one site to the left -- until 2026-09-12.
+    Tail groups shorter than the stride are included (volumes the stride does not divide); NATTEN
+    caps the leader at the last site and so does the rule. No brick snapping here.
+    """
+    if stride_extent > min(context_window_extent, volume_extent):
+        pytest.skip("a stride wider than the window is rejected by validate()")
+    window_extent = min(context_window_extent, volume_extent)
+    for site_index in range(volume_extent):
+        leader = natten_group_leader(site_index, stride_extent, volume_extent)
+        expected = oracle_window_origin(leader, volume_extent, context_window_extent)
+        actual = context_window_origin(site_index // stride_extent, stride_extent, window_extent, volume_extent)
+        assert actual == expected, f"site {site_index}: leader {leader}, origin {actual} != oracle {expected}"
 
 
 @pytest.mark.parametrize(
