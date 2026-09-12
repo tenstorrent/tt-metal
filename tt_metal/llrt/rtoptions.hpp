@@ -742,7 +742,7 @@ public:
     bool get_jit_analytics_enabled() const { return jit_analytics_enabled; }
     void set_jit_analytics_enabled(bool enable) { jit_analytics_enabled = enable; }
 
-    // Whether to compile with -g to include DWARF debug info in the binary.
+    // Whether to compile with -g1 to include minimal DWARF debug info in the binary.
     bool get_riscv_debug_info_enabled() const { return riscv_debug_info_enabled; }
     void set_riscv_debug_info_enabled(bool enable) { riscv_debug_info_enabled = enable; }
 
