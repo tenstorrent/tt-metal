@@ -245,28 +245,49 @@ void kernel_main() {
         }
 
         // ---- S = Q K^T / sqrt(d), masked when i == j, then P = exp(S - L)
+        //
+        // The sub-zones here are worth reading with the LLK pipeline in mind.
+        // S-MM measures only the *issue* of the matmuls, some 0.03 us; the
+        // FPU then drains asynchronously and the first dependent SFPU
+        // operation pays for it, so S-SCALE's 1.5 us on the MATH RISC is
+        // mostly the matmul finishing, not a scalar multiply. S-SOFTMAX does
+        // two SFPU passes over the tile in 0.5 us, which is what an SFPU pass
+        // actually costs here.
         {
         DeviceZoneScopedN("SCORES");
         constexpr uint32_t scores_reg = 0;
         reconfig_data_format(cb_query, cb_key);
         matmul_init(cb_query, cb_key, /* transpose */ 1);
         tile_regs_acquire();
-        for (uint32_t k = 0; k < qWt; ++k) {
-            matmul_tiles(cb_query, cb_key, k, k, scores_reg);
+        {
+            DeviceZoneScopedN("S-MM");
+            for (uint32_t k = 0; k < qWt; ++k) {
+                matmul_tiles(cb_query, cb_key, k, k, scores_reg);
+            }
         }
-        if (diagonal) {
-            apply_mask_on_reg(scores_reg, cb_attn_mask, scaler_bits, minus_one_bits, custom_inf_bits);
-        } else {
-            binop_with_scalar_tile_init();
-            mul_unary_tile(scores_reg, scaler_bits);
+        {
+            DeviceZoneScopedN("S-SCALE");
+            if (diagonal) {
+                apply_mask_on_reg(
+                    scores_reg, cb_attn_mask, scaler_bits, minus_one_bits, custom_inf_bits);
+            } else {
+                binop_with_scalar_tile_init();
+                mul_unary_tile(scores_reg, scaler_bits);
+            }
         }
-        apply_softmax_statistics_on_dst(scores_reg, cb_lse);
+        {
+            DeviceZoneScopedN("S-SOFTMAX");
+            apply_softmax_statistics_on_dst(scores_reg, cb_lse);
+        }
         tile_regs_commit();
-        tile_regs_wait();
-        cb_reserve_back(cb_attention_weights, onetile);
-        pack_reconfig_data_format(cb_attention_weights);
-        pack_tile(scores_reg, cb_attention_weights);
-        tile_regs_release();
+        {
+            DeviceZoneScopedN("S-PACK");
+            tile_regs_wait();
+            cb_reserve_back(cb_attention_weights, onetile);
+            pack_reconfig_data_format(cb_attention_weights);
+            pack_tile(scores_reg, cb_attention_weights);
+            tile_regs_release();
+        }
         cb_push_back(cb_attention_weights, onetile);
         }
 
