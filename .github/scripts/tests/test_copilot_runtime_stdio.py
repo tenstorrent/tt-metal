@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import signal
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -143,17 +144,25 @@ os.write(1, b'::fixture-token::\\n')
         env_file = self.root / "github-env"
         env = dict(self.env, BASH_ENV=str(previous), GITHUB_ENV=str(env_file))
         subprocess.run([sys.executable, str(RELAY), "--install"], env=env, check=True, capture_output=True)
-        env["BASH_ENV"] = env_file.read_text().strip().split("=", 1)[1]
+        env["BASH_ENV"] = env_file.read_text().splitlines()[-1].split("=", 1)[1]
         return env
 
     def test_bash_startup_only_wraps_runtime_and_preserves_previous_startup(self):
+        # macOS can have both system Bash 3.2 and Homebrew Bash >=5.2. Ubuntu
+        # 22.04 uses Bash 5.1, before $0 was set to the script during BASH_ENV.
+        shells = {str(Path(path).resolve()) for path in (shutil.which("bash"), "/bin/bash") if path}
+        for shell in sorted(shells):
+            with self.subTest(shell=shell):
+                self.check_bash_startup(shell)
+
+    def check_bash_startup(self, shell):
         env = self.install()
         script = self.root / "step.sh"
         script.write_text(
             f"{shlex.quote(sys.executable)} -c 'import os,stat; print(stat.S_ISREG(os.fstat(1).st_mode))'\n"
             'printf "%s\\n" "$PREVIOUS_LOADED" "$1"\n'
         )
-        command = ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", str(script), "space argument"]
+        command = [shell, "--noprofile", "--norc", "-e", "-o", "pipefail", str(script), "space argument"]
         ordinary = subprocess.run(command, env=env, capture_output=True, text=True, check=True, timeout=5)
         self.assertEqual(ordinary.stdout, "False\nx\nspace argument\n")
         env["COPILOT_AGENT_RUNTIME_VERSION"] = "test-runtime"

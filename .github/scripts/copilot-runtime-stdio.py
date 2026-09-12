@@ -31,17 +31,25 @@ def install():
     if previous != str(startup):
         # Only the generated Processing Request step has this runtime marker
         # after user setup. Ordinary Actions steps and nested shells keep their
-        # normal behavior. Re-execute the same script with its generated flags.
+        # normal behavior. Before Bash 5.2, $0 is still the shell name while
+        # reading BASH_ENV. Defer re-exec until the first script command, when
+        # the script name and arguments are available on Ubuntu 22.04's Bash.
+        relaunch = f"""trap - DEBUG
+export TT_COPILOT_STDIO_SPOOLED=1
+exec {shlex.quote(sys.executable)} {shlex.quote(str(relay))} -- \\
+  "$BASH" --noprofile --norc -e -o pipefail "$0" "$@"
+"""
         content = f"""# Installed by copilot-runtime-stdio.py
 if [ -n "${{COPILOT_AGENT_RUNTIME_VERSION:-}}" ] &&
-   [ "${{TT_COPILOT_STDIO_SPOOLED:-}}" != 1 ] && [ -f "$0" ]; then
-  export TT_COPILOT_STDIO_SPOOLED=1
-  exec {shlex.quote(sys.executable)} {shlex.quote(str(relay))} -- \\
-    "$BASH" --noprofile --norc -e -o pipefail "$0" "$@"
-fi
+   [ "${{TT_COPILOT_STDIO_SPOOLED:-}}" != 1 ]; then
+  trap {shlex.quote(relaunch)} DEBUG
+else
 """
         if previous:
             content += f"if [ -f {shlex.quote(previous)} ]; then . {shlex.quote(previous)}; fi\n"
+        else:
+            content += ":\n"
+        content += "fi\n"
         startup.write_text(content)
     with open(os.environ["GITHUB_ENV"], "a") as env_file:
         env_file.write(f"BASH_ENV={startup}\n")
