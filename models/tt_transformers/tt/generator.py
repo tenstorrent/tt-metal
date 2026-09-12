@@ -745,6 +745,64 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         """Prepare and immediately capture the batched prefill sampling trace."""
         return self._record_trace_prefill_sampling(self._prepare_trace_prefill_sampling(model_id, sampling_batch))
 
+    def _traced_prefill_tail(self, model_id, hidden, last_token_idx, prefill_seq_len):
+        """Run the single-user post-prefill tail as ONE captured trace, or return ``None``.
+
+        The traced prefill body ends at the hidden states; the norm, the LM head and the
+        sampler then run EAGERLY -- around 70 host-dispatched ops for ~0.6 ms of device
+        work. While the host keeps ahead of the device that is free, because those ops are
+        issued into the queue behind a 10.7 ms trace replay. When it does not, the device
+        drains and waits on Python, and the same prefill takes 11.9 ms or 15.3 ms from one
+        run to the next with nothing about the model changed. Measured on this box, with
+        the trace replay itself constant to 0.01 ms across both.
+
+        Batched prefill already solves this: it captures norm + lm_head + sampling as a
+        second trace over a ``[1, 1, sampling_batch, dim]`` block. A single-user prefill
+        samples the 32-row block holding its last token, and sampling_batch is 32, so the
+        same trace fits it exactly -- the only difference is how the block is delivered.
+        Batched prefill round-trips it through the host; here it never leaves the device.
+
+        ``None`` whenever the shape is outside what the captured trace covers, and the
+        caller keeps the eager tail.
+        """
+        sampling_module, sampling_dp, group_batch, _ = self._get_sampling_contract(model_id)
+        if sampling_module is None or sampling_dp != 1 or not group_batch:
+            return None
+        block = int(group_batch)
+        get_last = (int(last_token_idx) // block) * block
+        if int(hidden.shape[-2]) < get_last + block:
+            return None
+
+        key = f"tail_{prefill_seq_len}_{model_id}_{block}"
+        if self.trace_id_prefill_sampling[key] is None:
+            trace_id, trace_out, trace_in = self._capture_trace_prefill_sampling(model_id, block)
+            self.trace_id_prefill_sampling[key] = trace_id
+            self.trace_output_prefill_sampling[key] = trace_out
+            self.trace_input_prefill_sampling[key] = trace_in
+
+        trace_in = self.trace_input_prefill_sampling[key]
+        user_hidden = ttnn.slice(
+            hidden,
+            (0, 0, get_last, 0),
+            (1, 1, get_last + block, hidden.shape[-1]),
+            memory_config=trace_in.memory_config(),
+        )
+        if user_hidden.dtype != trace_in.dtype:
+            recast = ttnn.typecast(user_hidden, trace_in.dtype)
+            ttnn.deallocate(user_hidden)
+            user_hidden = recast
+        # Into the trace's own input buffer: capture froze that address, so the replay
+        # reads whatever is there and nothing else.
+        ttnn.copy(user_hidden, trace_in)
+        ttnn.deallocate(user_hidden)
+        ttnn.execute_trace(
+            self.model_args[model_id].mesh_device,
+            self.trace_id_prefill_sampling[key],
+            cq_id=0,
+            blocking=False,
+        )
+        return self.trace_output_prefill_sampling[key]
+
     def _row_sharded_batched_prefill(
         self,
         tokens,
@@ -1426,6 +1484,18 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     )
                     continue
                 else:
+                    # Prefer the traced tail: same norm + lm_head + sampling, one trace
+                    # replay instead of ~70 eager dispatches (see _traced_prefill_tail).
+                    traced_tail = (
+                        self._traced_prefill_tail(model_id, logits, last_token_idx_for_trace, prefill_seq_len)
+                        if sampling_enabled
+                        else None
+                    )
+                    if traced_tail is not None:
+                        self._append_prefill_result(
+                            prefill_results, idx, model_id, last_token_idx, traced_tail, True
+                        )
+                        continue
                     logits = self.model[model_id].process_logits_after_prefill_trace(logits, last_token_idx_for_trace)
             else:
                 if return_hidden_states:
