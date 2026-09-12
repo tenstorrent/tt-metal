@@ -2565,7 +2565,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             TT_FATAL(
                 sem_id < kSemaphoresPerCore,
                 "Ring MLA rotated Q split needs {} handoff semaphores, but the program has already "
-                "allocated {} and a core supports {}. Reduce semaphore usage (e.g. skip the V head chain).",
+                "allocated {} and a core supports {}.",
                 rotated_handoff_sem_count(ring_size),
                 desc.semaphores.size(),
                 kSemaphoresPerCore);
@@ -2577,13 +2577,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             });
             rotated_handoff_sem_ids.push_back(sem_id);
         }
-        // log_info, matching the decline branch below: one line per program compile (programs are
-        // cached), and it is the only way a user can confirm the rotation is actually active for a
-        // given shape and core count.
+        // Report the selected schedule once per program compilation.
         log_info(
             tt::LogOp,
             "Rotated Q split ACTIVE: base={} floats={} groups={}x{} groups_needed={} ring_size={} "
-            "active_iters={} kv_pad_rotation={} (ideal slots {} vs flat {})",
+            "active_iters={} kv_pad_rotation={}",
             rotated_base_chunks,
             rotated_float_chunks,
             num_groups,
@@ -2591,48 +2589,23 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             groups_needed,
             ring_size,
             std::popcount(active_ring_iter_mask),
-            kv_pad_rotation_enabled,
-            total_q_chunks * ring_size / num_cores,
-            ring_size * (rotated_base_chunks + 1));
+            kv_pad_rotation_enabled);
     } else if (kernel_chunked || use_head_chain) {
-        // use_head_chain covers the NON-CHUNKED head-chain paths (MHA video generation here:
-        // wan2_2, videogen_model1_*). They previously printed nothing at all -- neither ACTIVE nor
-        // declined -- so "the rotation does not apply there" was invisible rather than stated.
-        // Say why at a level a user actually sees, for EVERY chunked ring-joint program rather
-        // than only the two paths the rotation can currently take. Two different situations are
-        // worth telling apart, and a bare "not supported" conflates them:
-        //   - a lockstep group EXISTS and something else declined it (this is a missed win), and
-        //   - no lockstep group exists at all, because the K/V transport is a store-and-forward
-        //     chain or there is no chain (sliding window, B > 1). There the rotation would move
-        //     zero slots, so declining is not a gap -- `ideal == flat` below shows that directly
-        //     rather than asserting it.
-        // Silently taking the +1-slot-every-iteration split reads as an unexplained regression.
         log_info(
             tt::LogOp,
-            "Ring joint rotated Q split declined (base={} floats={} groups_needed={} of {} groups, "
-            "ring_size={}, balanced={} head_chain={} streaming={} groups=\"{}\"; "
-            "would-be slots ideal {} vs flat {}; cores={} num_q_chunks={} heads_per_core_exact={}); "
+            "Ring joint rotated Q split declined: base={} floats={} groups_needed={} of {} groups, "
+            "balanced={} head_chain={} streaming={} attention_sink={} kv_chains={} groups=\"{}\"; "
             "using the static flat split.",
             rotated_base_chunks,
             rotated_float_chunks,
             rotated_groups_needed,
             rotated_groups.size(),
-            ring_size,
             args.is_balanced,
             use_head_chain,
             use_streaming_compute,
-            rotated_group_reject.empty() ? "ok" : rotated_group_reject,
-            // What the rotation would have been worth here. Equal values mean there is nothing to
-            // win -- the honest form of "unsupported" for a transport with no lockstep barrier.
-            num_cores ? total_q_chunks * ring_size / num_cores : 0,
-            ring_size * (rotated_base_chunks + 1),
-            num_cores,
-            num_q_chunks,
-            // Whether each core's base range lies inside ONE head. This is the precondition for
-            // ever deriving lockstep groups from the per-head chains (the only transport MHA has):
-            // if a core straddles heads it belongs to several head chains at once, and the
-            // one-core-one-group assumption behind float_owner/group_slot_count breaks.
-            (num_q_chunks != 0 && rotated_base_chunks != 0 && num_q_chunks % rotated_base_chunks == 0));
+            use_attention_sink,
+            build_kv_chains,
+            rotated_group_reject.empty() ? "ok" : rotated_group_reject);
     }
 
     // Rotated Q split, compile-time: the per-iteration chunk-list length (base chunks plus one

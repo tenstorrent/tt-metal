@@ -6405,10 +6405,8 @@ def test_ring_mla_create_chunked_perf_table(model_name, q_chunk_size, k_chunk_si
 if MESH_CONFIG.is_galaxy:
     RING_MLA_CHUNKED_PERF_CHECK_CONFIGS = [
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
-        # 8-device ring (Galaxy, sp=8 tp=4, 100 SDPA cores)
+        # 8-device ring (Galaxy, sp=8 tp=4)
         ("kimi50k", 32, 640, 8, 68.5),
-        # Kimi-K3: same chunk and tuned q32/k640, H_loc 24 vs 16. Measured 2026-08-05 on
-        # bh_sc1_high_power -- 9.680 ms vs kimi50k's 5.722, i.e. 1.69x time for 1.5x ideal work.
         ("kimi_k3", 32, 640, 8, 68.04),
     ]
 else:
@@ -6416,8 +6414,6 @@ else:
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
         # 4-device ring (QuietBox, 100 SDPA cores)
         ("kimi50k", 32, 640, 4, 66.05),
-        # Kimi-K3, measured 2026-08-05 on bh_quietbox_2 (run 31003064713): 4.845 ms. Inert until
-        # #52190 ungates this test here; kimi50k read 65.89 vs its committed 66.05 in the same run.
         ("kimi_k3", 32, 640, 4, 67.07),
     ]
 
