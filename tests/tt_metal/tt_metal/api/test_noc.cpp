@@ -556,7 +556,6 @@ TEST_F(MeshDeviceFixture, TensixInlineWriteDynamicNoc) {
 }
 
 void run_local_noc_stream_reg_inc(
-    MeshDispatchFixture* /*fixture*/,
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const CoreCoord& core,
     const HalProgrammableCoreType& hal_programmable_core_type) {
@@ -652,7 +651,7 @@ TEST_F(MeshDeviceFixture, TensixTestNocStreamRegs) {
     // Get first tensix core (0,0)
     CoreCoord tensix_core(0, 0);
 
-    run_local_noc_stream_reg_inc(this, mesh_device, tensix_core, HalProgrammableCoreType::TENSIX);
+    run_local_noc_stream_reg_inc(mesh_device, tensix_core, HalProgrammableCoreType::TENSIX);
 }
 
 TEST_F(MeshDeviceFixture, ActiveEthTestNocStreamRegs) {
@@ -667,7 +666,7 @@ TEST_F(MeshDeviceFixture, ActiveEthTestNocStreamRegs) {
     // Get first active ethernet core
     CoreCoord eth_core = *(device->get_active_ethernet_cores(true).begin());
 
-    run_local_noc_stream_reg_inc(this, mesh_device, eth_core, HalProgrammableCoreType::ACTIVE_ETH);
+    run_local_noc_stream_reg_inc(mesh_device, eth_core, HalProgrammableCoreType::ACTIVE_ETH);
 }
 
 TEST_F(MeshDeviceFixture, IdleEthTestNocStreamRegs) {
@@ -682,7 +681,7 @@ TEST_F(MeshDeviceFixture, IdleEthTestNocStreamRegs) {
     // Get first idle ethernet core
     CoreCoord eth_core = *(device->get_inactive_ethernet_cores().begin());
 
-    run_local_noc_stream_reg_inc(this, mesh_device, eth_core, HalProgrammableCoreType::IDLE_ETH);
+    run_local_noc_stream_reg_inc(mesh_device, eth_core, HalProgrammableCoreType::IDLE_ETH);
 }
 
 // Increment and read back local DRISC Stream Registers
@@ -694,7 +693,7 @@ TEST_F(BlackholeSingleCardFixture, DramKernelStreamRegInc) {
 
     auto mesh_device = this->devices_[0];
     // Subchannel 0 is the syseng-owned NOC0 DRAM endpoint (no DRISC firmware); use subchannel 1.
-    run_local_noc_stream_reg_inc(this, mesh_device, CoreCoord{0, 1}, HalProgrammableCoreType::DRAM);
+    run_local_noc_stream_reg_inc(mesh_device, CoreCoord{0, 1}, HalProgrammableCoreType::DRAM);
 }
 
 // Tensix to DRISC stream register round trip DRISC test:
