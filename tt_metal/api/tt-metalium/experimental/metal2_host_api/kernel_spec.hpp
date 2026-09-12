@@ -129,8 +129,14 @@ struct KernelSpec {
     ///////////////////////////////////////////////////////////////////
 
     // DFB bindings
-    // Declares that this kernel requires a DFB resource (declared at the ProgramSpec level)
-    // The kernel constructs a DataflowBuffer from the binding token:
+    // Declares that this kernel accesses a DFB resource.
+    // The underlying resource can be:
+    //  - A local DataflowBuffer (declared at the ProgramSpec level)
+    //  - A cross-node DataflowBuffer (declared at the ProgramSpec level)
+    //  - A PrefetcherPipe (a user-managed resource - the ProgramSpec declares
+    //      the parameter, and the PrefetcherPipe argument is passed at runtime)
+    //
+    // The kernel constructs a DataflowBuffer object from the binding token:
     //   DataflowBuffer(dfb::<accessor_name>)
     struct DFBBinding {
         // Endpoint role this binding plays for the DFB.
@@ -143,19 +149,44 @@ struct KernelSpec {
         //            (NOT YET SUPPORTED — currently rejected at runtime)
         enum class AccessPattern { STRIDED, ALL, BLOCKED };
 
-        DFBSpecName dfb_spec_name;   // identify the DFB within the ProgramSpec
-        std::string accessor_name;   // DFB accessor name (used in the kernel source code)
-        EndpointType endpoint_type;  // producer or consumer
+        // A DFB binding can refer to a local DFB, a cross-node DFB, or a prefetcher pipe.
+        typedef std::variant<DFBSpecName, CrossNodeDFBSpecName, PrefetcherPipeParamName> DFBResourceName;
+
+        DFBResourceName dfb_resource_name;  // The resource this binding refers to
+        std::string accessor_name;          // DFB binding token name (used in the kernel source code)
+        EndpointType endpoint_type;         // producer or consumer
         AccessPattern access_pattern = AccessPattern::STRIDED;
     };
     Group<DFBBinding> dfb_bindings;
 
+    // DFB relay bindings
+    // If a compute kernel is bound to a cross-node DFB or a prefetcher pipe, a DM kernel from the
+    // same WorkUnitSpec must provide a relay binding in order to mediate its NoC access.
+    // Only DM cores can serve as relays, so only DM kernels can have DFB relay bindings.
+    // Prefer a DM kernel with a light workload to serve as a relay.
+    //
+    // The kernel constructs a ??? object from the binding token:
+    //   RelayDataflowBuffer(dfb::<accessor_name>) // <-- AK: is it a special object?
+    // The DM kernel code does not interact directly with the relay object. <-- AK: true??
+    struct DFBRelayBinding {
+        typedef std::variant<CrossNodeDFBSpecName, PrefetcherPipeParamName> DFBResourceName;
+
+        DFBResourceName dfb_resource_name;  // The resource this binding refers to
+        std::string accessor_name;          // Binding token name (used in the kernel source code)
+    };
+    Group<DFBRelayBinding> dfb_relay_bindings;
+
     // Semaphore bindings
     // Declares that this kernel accesses a semaphore resource (declared at the ProgramSpec level)
-    // The kernel constructs a Semaphore from the emitted id: Semaphore(sem::<accessor_name>)
+    // or a user-managed GlobalSemaphore resource (declared as a ProgramSpec parameter).
+    //
+    // The kernel constructs a Semaphore from the resulting binding token:
+    //   Semaphore(sem::<accessor_name>)
     struct SemaphoreBinding {
-        SemaphoreSpecName semaphore_spec_name;  // identify the semaphore within the ProgramSpec
-        std::string accessor_name;              // semaphore accessor name (used in the kernel source code)
+        typedef std::variant<SemaphoreSpecName, GlobalSemaphoreParamName> SemaphoreResourceName;
+
+        SemaphoreResourceName semaphore_spec_name;  // identify the semaphore within the ProgramSpec
+        std::string accessor_name;                  // binding token name (used in the kernel source code)
     };
     Group<SemaphoreBinding> semaphore_bindings;
 
@@ -165,7 +196,7 @@ struct KernelSpec {
     //   Scratchpad<uint32_t>(scratch::<accessor_name>)
     struct ScratchpadBinding {
         ScratchpadSpecName scratchpad_spec_name;  // identify the scratchpad within the ProgramSpec
-        std::string accessor_name;                // scratchpad accessor name (used in the kernel source code)
+        std::string accessor_name;                // binding token name (used in the kernel source code)
     };
     Group<ScratchpadBinding> scratchpad_bindings;
 
@@ -179,7 +210,7 @@ struct KernelSpec {
     //   TensorAccessor(tensor::<accessor_name>)
     struct TensorBinding {
         TensorParamName tensor_parameter_name;  // identify the TensorParameter within the ProgramSpec
-        std::string accessor_name;              // tensor accessor name (used in the kernel source code)
+        std::string accessor_name;              // binding token name (used in the kernel source code)
     };
     Group<TensorBinding> tensor_bindings;
 
