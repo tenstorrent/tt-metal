@@ -22,6 +22,15 @@ enum PtpFlags : uint32_t {
     PTP_FLAG_TXQ2 = 1u << 6,                  // send the sync frames on TX queue 2 (fabric uses queue 0)
     PTP_FLAG_TCAM_LABEL = 1u << 7,            // own header row + TCAM rule: only sync frames get RX stamps, labeled
     PTP_FLAG_LAZY_POLL = 1u << 8,             // poll for frames only every ~5 us, as a core busy with other work would
+    PTP_FLAG_FRAME_WORDS_SHIFT = 9,           // [11:9] extra 16-byte words in each sync frame (payload 16..128 bytes)
+    PTP_FLAG_COUNTER_TRACE = 1u << 12,  // the sender traces its queue's counters and the MAC FIFO around each frame
+    PTP_FLAG_KEEPALIVE_TRACE =
+        1u << 13,  // the sender arms at arbitrary phases and records whether the next keepalive is stamped
+    PTP_FLAG_FRAME_ARM_SWEEP =
+        1u << 14,  // the sender arms a swept delay after each frame's command and records whether it is stamped
+    PTP_FLAG_BLEED_TEST =
+        1u << 15,  // the sender pairs each armed queue-2 frame with an unarmed queue-0 packet right behind (even
+                   // samples) or ahead (odd) and records how many stamps the MAC produced
 };
 
 struct PtpSample {
