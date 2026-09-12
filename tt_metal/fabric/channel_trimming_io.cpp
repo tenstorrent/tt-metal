@@ -5,6 +5,9 @@
 #include "channel_trimming_io.hpp"
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/fmt.hpp>
+
+#include <tt-metalium/distributed_context.hpp>
 
 namespace tt::tt_fabric {
 
@@ -37,6 +40,43 @@ std::vector<std::string> collect_map_keys(const YAML::Node& map_node) {
         }
     }
     return keys;
+}
+
+int get_channel_trimming_capture_rank() {
+    namespace multihost = tt::tt_metal::distributed::multihost;
+    if (!multihost::DistributedContext::is_initialized()) {
+        return 0;
+    }
+    return *multihost::DistributedContext::get_current_world()->rank();
+}
+
+std::filesystem::path get_channel_trimming_capture_dir(const std::string& logs_dir) {
+    return std::filesystem::path(logs_dir) / "generated" / "reports" / "channel_trimming_capture";
+}
+
+std::filesystem::path get_channel_trimming_capture_path(const std::string& logs_dir) {
+    return get_channel_trimming_capture_dir(logs_dir) /
+           fmt::format("rank_{}.yaml", get_channel_trimming_capture_rank());
+}
+
+std::filesystem::path resolve_channel_trimming_profile_path(const std::string& profile_path) {
+    if (std::filesystem::is_regular_file(profile_path)) {
+        return profile_path;
+    }
+    TT_FATAL(
+        std::filesystem::is_directory(profile_path),
+        "Channel trimming profile path '{}' is neither a regular file nor a directory",
+        profile_path);
+    const int world_rank = get_channel_trimming_capture_rank();
+    auto rank_file = std::filesystem::path(profile_path) / fmt::format("rank_{}.yaml", world_rank);
+    TT_FATAL(
+        std::filesystem::exists(rank_file),
+        "Channel trimming profile directory '{}' has no capture for rank {} (expected '{}'). "
+        "Capture and replay must use the same world size and mesh-to-rank binding.",
+        profile_path,
+        world_rank,
+        rank_file);
+    return rank_file;
 }
 
 }  // namespace tt::tt_fabric

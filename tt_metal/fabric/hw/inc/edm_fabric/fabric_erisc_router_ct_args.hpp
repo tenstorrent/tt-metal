@@ -260,6 +260,16 @@ constexpr std::array<bool, MAX_NUM_RECEIVER_CHANNELS> is_receiver_channel_servic
     static_cast<bool>(NAMED_CT_ARG("IS_RECEIVER_CHANNEL_2_SERVICED")),
 };
 
+// Trimming-aware downstream connection open gates, resolved by the builder (which knows the VC1
+// mode). VC1 opens follow receiver 0 on VC0→VC1 crossover routers and receiver 1 on VC1-serviced
+// routers — receiver 1 is legitimately trimmed on crossover routers even when VC1 traffic flows.
+constexpr bool open_downstream_vc0_connections = static_cast<bool>(NAMED_CT_ARG("OPEN_DOWNSTREAM_VC0_CONNECTIONS"));
+constexpr bool open_downstream_vc1_connections = static_cast<bool>(NAMED_CT_ARG("OPEN_DOWNSTREAM_VC1_CONNECTIONS"));
+
+// Structural per-RISC role flags (2-erisc split), deliberately independent of trimming.
+constexpr bool risc_services_sender_channels = static_cast<bool>(NAMED_CT_ARG("RISC_SERVICES_SENDER_CHANNELS"));
+constexpr bool risc_services_receiver_channels = static_cast<bool>(NAMED_CT_ARG("RISC_SERVICES_RECEIVER_CHANNELS"));
+
 // ============================================================================
 // RISC configuration
 // ============================================================================
