@@ -24,6 +24,8 @@
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -167,11 +169,34 @@ xt::xarray<float> as_4d(const xt::xarray<float>& m) {
     return out;
 }
 
+// Median wall time of a workload already built and warmed up. Crude on
+// purpose: it is dispatch-to-finish on the host, with no attribution and no
+// profiler, so it says whether a change moves the needle and nothing about
+// where the time goes. Tracy is the instrument for that, and it needs the
+// llvm-20 binutils this build does not have.
+double median_enqueue_seconds(
+    tt::tt_metal::distributed::MeshCommandQueue& cq,
+    tt::tt_metal::distributed::MeshWorkload& workload,
+    uint32_t repeats) {
+    using clock = std::chrono::steady_clock;
+    tt::tt_metal::distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);  // warm
+    std::vector<double> samples;
+    samples.reserve(repeats);
+    for (uint32_t k = 0; k < repeats; ++k) {
+        const auto start = clock::now();
+        tt::tt_metal::distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+        samples.push_back(std::chrono::duration<double>(clock::now() - start).count());
+    }
+    std::sort(samples.begin(), samples.end());
+    return samples[samples.size() / 2];
+}
+
 struct Gradients {
     xt::xarray<float> dQ, dK, dV;
 };
 
-Gradients run_algorithm2(uint32_t C, const Reference& ref, uint32_t grid_w, uint32_t grid_h) {
+Gradients run_algorithm2(
+    uint32_t C, const Reference& ref, uint32_t grid_w, uint32_t grid_h, double* seconds = nullptr) {
     using namespace tt::tt_metal;
     auto* device = &ttml::autograd::ctx().get_device();
 
@@ -299,6 +324,9 @@ Gradients run_algorithm2(uint32_t C, const Reference& ref, uint32_t grid_w, uint
     auto workload = tt_dist::MeshWorkload();
     workload.add_program(tt_dist::MeshCoordinateRange(device->shape()), std::move(program));
     tt_dist::EnqueueMeshWorkload(device->mesh_command_queue(), workload, /*blocking=*/true);
+    if (seconds != nullptr) {
+        *seconds = median_enqueue_seconds(device->mesh_command_queue(), workload, 5);
+    }
 
     Gradients out;
     out.dQ = ttml::core::to_xtensor(grad_query);
@@ -320,7 +348,12 @@ Gradients run_algorithm2(uint32_t C, const Reference& ref, uint32_t grid_w, uint
 // stands after u pushes; every core has the same layout, so a producer can
 // use its own base as the receiver's.
 Gradients run_relay(
-    uint32_t C, const Reference& ref, uint32_t grid_w, uint32_t grid_h, bool endpoint_sync = false) {
+    uint32_t C,
+    const Reference& ref,
+    uint32_t grid_w,
+    uint32_t grid_h,
+    bool endpoint_sync = false,
+    double* seconds = nullptr) {
     using namespace tt::tt_metal;
     auto* device = &ttml::autograd::ctx().get_device();
 
@@ -486,6 +519,9 @@ Gradients run_relay(
     auto workload = tt_dist::MeshWorkload();
     workload.add_program(tt_dist::MeshCoordinateRange(device->shape()), std::move(program));
     tt_dist::EnqueueMeshWorkload(device->mesh_command_queue(), workload, /*blocking=*/true);
+    if (seconds != nullptr) {
+        *seconds = median_enqueue_seconds(device->mesh_command_queue(), workload, 5);
+    }
 
     Gradients out;
     out.dQ = ttml::core::to_xtensor(grad_query);
@@ -736,4 +772,61 @@ TEST(CyclicSdpaBwIdentityTest, ResidencyIsTheMoreAccurateColumnPath) {
               << "\n";
     EXPECT_LE(resident_dk, reload_dk);
     EXPECT_LE(resident_dv, reload_dv);
+}
+
+// A first indication of whether any of this is faster, not a verdict. The
+// numbers are host dispatch-to-finish with no attribution: the plan's Phase 8
+// wants profiler timestamps around the named operations, and the build has no
+// Tracy because the clang-20 binutils are missing. Repeated enqueues also
+// accumulate into the same gradient tensors, which is harmless for timing and
+// meaningless for correctness, so nothing is checked here.
+//
+// Disabled by default: it is slow and it measures rather than asserts.
+void time_one_size(uint32_t C, uint32_t grid_w, uint32_t grid_h) {
+    const auto grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
+    if (grid_w > grid.x || grid_h > grid.y) {
+        GTEST_SKIP() << "needs " << grid_w << "x" << grid_h;
+    }
+    const auto ref = make_reference(2u * C * kTile, 64);
+
+    double dram_seconds = 0.0;
+    double relay_seconds = 0.0;
+    double endpoint_seconds = 0.0;
+    run_algorithm2(C, ref, grid_w, grid_h, &dram_seconds);
+    run_relay(C, ref, grid_w, grid_h, /*endpoint_sync=*/false, &relay_seconds);
+    run_relay(C, ref, grid_w, grid_h, /*endpoint_sync=*/true, &endpoint_seconds);
+
+    // How much publication traffic Algorithm 4 adds: one inter-streak spill
+    // per streak that is followed by another, each publishing to every core.
+    const CyclicSchedule sched(C);
+    uint32_t inter_streak_spills = 0;
+    for (uint32_t i = 1; i <= sched.T(); ++i) {
+        for (uint32_t t = 0; t <= sched.T(); ++t) {
+            if (sched.is_active(i, t) && sched.streak_at(i, t).end == t &&
+                sched.has_later_active(i, t)) {
+                ++inter_streak_spills;
+            }
+        }
+    }
+
+    const double us = 1e6;
+    std::cout << "  C=" << C << " N=" << 2u * C * kTile << " on " << grid_w << "x" << grid_h
+              << ": DRAM " << dram_seconds * us << " us, relay " << relay_seconds * us
+              << " us, endpoint " << endpoint_seconds * us << " us"
+              << " | relay speedup " << dram_seconds / relay_seconds << "x"
+              << ", endpoint against relay " << endpoint_seconds / relay_seconds << "x"
+              << " | " << inter_streak_spills << " publications of " << C << " writes = "
+              << inter_streak_spills * C << "\n";
+}
+
+// Does the endpoint variant's deficit against the barrier variant scale with
+// C? It should if the publication traffic is what causes it: a publication is
+// C unicast writes, and the number of publications grows with C too, so the
+// cost is quadratic in C while the work per core is not.
+TEST(CyclicSdpaBwTimingTest, DISABLED_CompareTheThreeVariants) {
+    time_one_size(4, 2, 2);
+    time_one_size(8, 4, 2);
+    time_one_size(16, 4, 4);
+    time_one_size(32, 8, 4);
+    time_one_size(64, 8, 8);
 }
