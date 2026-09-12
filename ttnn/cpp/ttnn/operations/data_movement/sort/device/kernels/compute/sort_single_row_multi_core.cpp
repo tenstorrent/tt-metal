@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,9 +24,8 @@ void kernel_main() {
     constexpr uint32_t number_of_available_cores = get_arg(args::number_of_available_cores);
     constexpr uint32_t compute_with_storage_grid_size_x = get_arg(args::compute_with_storage_grid_size_x);
     constexpr bool descending = get_arg(args::descending);
-    // Comparator-stable network (issue #33492): on exact value ties the index tiles are
-    // compare-exchanged so equal values keep their original (ascending-index) order, matching
-    // torch.sort(stable=True) in both directions.
+    // Comparator-stable network: on exact value ties the index tiles are
+    // compare-exchanged so equal values keep their original (ascending-index) order.
     constexpr bool stable = get_arg(args::stable);
     constexpr uint32_t log2Wt = get_arg(args::log2Wt);
 
