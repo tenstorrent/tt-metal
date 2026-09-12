@@ -1352,6 +1352,13 @@ class Attention(LightweightModule):
                 scale=self.scale,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
                 program_config=self.args.get_attn_sdpa_program_config(Mode.PREFILL, sdpa_seq_len, None, None),
+                # L1, not the DRAM default. The only consumer is nlp_concat_heads below,
+                # and that op parallelises over tile ROWS of the sequence -- four of them
+                # for a short prompt -- so it reads this whole tensor back through four
+                # cores and spends 13.6 us/layer on ~128 KB, which is DRAM latency, not
+                # bandwidth. Keeping it in L1 removes the round trip for a tensor that is
+                # written and read once, in the same layer.
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
 
         # deallocate keys and values
