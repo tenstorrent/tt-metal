@@ -516,7 +516,8 @@ def run_warm_generation(pipeline, prompt: str, *, seed: int, profiler=None, prof
     if ttnn.using_distributed_env():
         ttnn.distributed_context_barrier()
 
-    on_event = profiler_event_callback(profiler, profiler_iteration) if profiler is not None else None
+    # MINIMAX_H3_NO_ON_EVENT=1: run the measured generation without the profiler callback (probe parity experiment)
+    on_event = None if os.environ.get("MINIMAX_H3_NO_ON_EVENT") else (profiler_event_callback(profiler, profiler_iteration) if profiler is not None else None)
     if profiler is not None:
         with profiler("run", iteration=profiler_iteration):
             output = pipeline(prompt, seed=seed, on_event=on_event, **gen_kwargs)
