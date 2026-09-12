@@ -14,12 +14,10 @@
 #include "profiler.h" // the zone/timestamp layer (TRISC only)
 
 // BRISC builds the config only; the per-zone measurement layer below also needs LLK_PROFILER.
+// Quasar has no BRISC in this harness: the unpack TRISC does the one-time setup before it releases the others.
 
-#ifdef ARCH_QUASAR
-#error "Perf counters are not supported on Quasar yet (no Quasar tables in perf_counters/; untested register set)."
-#endif
-
-// Counter inventory, register map and register primitives are shared with the metal profiler.
+// Counter inventory, register map and register primitives are shared with the metal profiler. On Quasar
+// bank_regs() defaults to the TRISC-local window, so every thread reaches its own NEO's block.
 #include <array>
 
 #include "perf_counters/hw.h"
@@ -74,8 +72,21 @@ constexpr std::uint32_t PERF_CFG_COUNTER_SHIFT = 8; // bits 16:8 (9-bit counter_
 constexpr std::uint32_t PERF_CFG_COUNTER_MASK  = 0x1FFu;
 constexpr std::uint32_t PERF_CFG_BANK_MASK     = 0xFFu; // bits 7:0
 
-// The arch header is the authority and L1_MUX_MASK arrives already shifted.
+// The arch header is the authority and L1_MUX_MASK arrives already shifted (0 on Quasar, which has no L1 mux).
 constexpr std::uint32_t PERF_L1_MUX_MAX = llk::perf::L1_MUX_MASK >> llk::perf::L1_MUX_SHIFT;
+
+#if defined(ARCH_QUASAR)
+// No L1 counter bank: bank slot 3 carries the l1_client CSR, its counter_sel field holding the subport*8+event
+// selection. -1 leaves it out; otherwise the same encoding as TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL in metal.
+#ifndef LLK_PERF_L1_CLIENT_SEL
+#define LLK_PERF_L1_CLIENT_SEL (-1)
+#endif
+constexpr int L1_CLIENT_SEL      = LLK_PERF_L1_CLIENT_SEL;
+constexpr bool L1_CLIENT_ENABLED = L1_CLIENT_SEL >= 0;
+static_assert(
+    !L1_CLIENT_ENABLED || llk::perf::l1_client_selection_is_valid(static_cast<std::uint32_t>(L1_CLIENT_SEL)),
+    "LLK_PERF_L1_CLIENT_SEL is subport*8 + event below 296 with event not 0; THCON events 1-3 alias selections 1-3");
+#endif
 
 constexpr std::uint32_t _perf_cfg(std::uint8_t bank, std::uint16_t cid, std::uint8_t mux = 0)
 {
@@ -83,8 +94,15 @@ constexpr std::uint32_t _perf_cfg(std::uint8_t bank, std::uint16_t cid, std::uin
            (static_cast<std::uint32_t>(cid & PERF_CFG_COUNTER_MASK) << PERF_CFG_COUNTER_SHIFT) | static_cast<std::uint32_t>(bank);
 }
 
+// bank_regs() hands out a reference into a table on tt-1xx and a value (offset plus window) on Quasar.
+#if defined(ARCH_QUASAR)
+using BankRegsRef = llk::perf::BankRegs;
+#else
+using BankRegsRef = const llk::perf::BankRegs&;
+#endif
+
 // The volatile index stops GCC emitting a CSWTCH table, which shifts GP offsets and breaks NC/WC .text equality.
-inline const llk::perf::BankRegs& get_bank_regs(Bank bank)
+inline BankRegsRef get_bank_regs(Bank bank)
 {
     static_assert(static_cast<std::uint32_t>(Bank::TDMA_PACK) == COUNTER_BANK_COUNT - 1, "Bank enumerators must be contiguous 0..COUNTER_BANK_COUNT-1");
     static constexpr llk::perf::BankRegs none {};
@@ -100,6 +118,13 @@ inline const llk::perf::BankRegs& get_bank_regs(Bank bank)
 
 constexpr std::uint8_t L1_MUX_GROUP = LLK_PERF_L1_MUX_GROUP;
 
+#if defined(ARCH_QUASAR)
+// Slot 3 holds the one l1_client selection when it is enabled.
+constexpr std::uint32_t l1_group_size(std::uint8_t)
+{
+    return L1_CLIENT_ENABLED ? 1u : 0u;
+}
+#else
 constexpr std::uint32_t l1_group_size(std::uint8_t mux)
 {
     return llk::perf::table_for(Bank::L1, mux).size;
@@ -108,6 +133,7 @@ constexpr std::uint32_t l1_group_size(std::uint8_t mux)
 static_assert(L1_MUX_GROUP <= PERF_L1_MUX_MAX, "LLK_PERF_L1_MUX_GROUP does not fit this architecture's PERF_CNT_MUX_CTRL mux field");
 static_assert(L1_MUX_GROUP < llk::perf::L1_MUX_POSITIONS, "LLK_PERF_L1_MUX_GROUP is past the L1 mux positions this architecture decodes");
 static_assert(l1_group_size(L1_MUX_GROUP) > 0, "LLK_PERF_L1_MUX_GROUP selects an L1 mux group this architecture does not expose");
+#endif
 
 constexpr std::uint32_t builtin_counter_count()
 {
@@ -132,7 +158,14 @@ constexpr std::array<std::uint32_t, builtin_counter_count()> build_builtin_confi
     emit(Bank::FPU, 0);
     emit(Bank::TDMA_UNPACK, 0);
     emit(Bank::TDMA_PACK, 0);
+#if defined(ARCH_QUASAR)
+    if constexpr (L1_CLIENT_ENABLED)
+    {
+        cfg[k++] = _perf_cfg(static_cast<std::uint8_t>(Bank::L1), static_cast<std::uint16_t>(L1_CLIENT_SEL), 0);
+    }
+#else
     emit(Bank::L1, L1_MUX_GROUP);
+#endif
     return cfg;
 }
 
@@ -165,11 +198,24 @@ inline void configure_hardware()
             continue;
         }
         const Bank bank = static_cast<Bank>(bank_id);
+#if defined(ARCH_QUASAR)
+        if (bank == Bank::L1)
+        {
+            // The l1_client CSR: route the selection and clear it; there is no bank to configure.
+            if constexpr (L1_CLIENT_ENABLED)
+            {
+                llk::perf::l1_client_start(llk::perf::l1_client_regs(), static_cast<std::uint32_t>(L1_CLIENT_SEL));
+            }
+            configured_mask |= bank_bit;
+            continue;
+        }
+#else
         if (bank == Bank::L1)
         {
             const std::uint8_t l1_mux = (metadata >> PERF_CFG_L1_MUX_SHIFT) & PERF_CFG_L1_MUX_MASK;
             llk::perf::set_l1_mux(l1_mux);
         }
+#endif
         llk::perf::configure(get_bank_regs(bank));
         configured_mask |= bank_bit;
     }
@@ -183,7 +229,13 @@ inline void arm_hardware()
         {
             continue;
         }
-        const llk::perf::BankRegs& regs = get_bank_regs(static_cast<Bank>(b));
+        const BankRegsRef regs = get_bank_regs(static_cast<Bank>(b));
+#if defined(ARCH_QUASAR)
+        if (regs.control == 0)
+        {
+            continue; // slot 3: the l1_client CSR has no start/stop register
+        }
+#endif
         llk::perf::write(regs.control, llk::perf::START);
         llk::perf::write(regs.control, 0);
     }
@@ -226,8 +278,9 @@ inline void configure_all_zones()
     }
 }
 
-// Write shared config to L1, clear per-zone data, then configure + arm hw.
-inline void configure_and_arm_from_brisc()
+// Write shared config to L1, clear per-zone data, then configure + arm hw. BRISC runs it on tt-1xx before it
+// releases the TRISCs; on Quasar the unpack TRISC runs it before it releases the other three (trisc.cpp).
+inline void configure_and_arm()
 {
     volatile std::uint32_t* shared_config = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_SHARED_CONFIG_ADDR);
     for (std::uint32_t i = 0; i < BUILTIN_COUNTER_COUNT; i++)
@@ -254,6 +307,11 @@ inline void configure_and_arm_from_brisc()
     }
 
     configure_all_zones();
+}
+
+inline void configure_and_arm_from_brisc()
+{
+    configure_and_arm();
 }
 
 namespace detail
@@ -300,12 +358,20 @@ __attribute__((always_inline)) inline std::uint32_t get_zone_id(std::uint32_t ha
 static_assert(PERF_COUNTERS_LAYOUT_END <= llk_profiler::EPOCH_ADDR, "Perf counter L1 layout overflows into the profiler region");
 
 // PERF_CNT_ALL reaches only INSTRN_THREAD and FPU; the other banks take the pulse on their own control register.
+// Quasar has no L1 bank: the l1_client CSR is clear-on-read, so its window starts with a read instead.
 inline __attribute__((always_inline)) void arm_all_counters()
 {
     ckernel::fence_compiler();
     llk::perf::start_all();
     llk::perf::write(llk::perf::bank_regs(Bank::TDMA_UNPACK).control, llk::perf::START);
+#if defined(ARCH_QUASAR)
+    if constexpr (L1_CLIENT_ENABLED)
+    {
+        (void)llk::perf::l1_client_read(llk::perf::l1_client_regs());
+    }
+#else
     llk::perf::write(llk::perf::bank_regs(Bank::L1).control, llk::perf::START);
+#endif
     llk::perf::write(llk::perf::bank_regs(Bank::TDMA_PACK).control, llk::perf::START);
     ckernel::fence_compiler();
 }
@@ -315,7 +381,9 @@ inline __attribute__((always_inline)) void freeze_and_read_all_counters(std::uin
     ckernel::fence_compiler();
     llk::perf::stop_all();
     llk::perf::write(llk::perf::bank_regs(Bank::TDMA_UNPACK).control, llk::perf::STOP);
+#if !defined(ARCH_QUASAR)
     llk::perf::write(llk::perf::bank_regs(Bank::L1).control, llk::perf::STOP);
+#endif
     llk::perf::write(llk::perf::bank_regs(Bank::TDMA_PACK).control, llk::perf::STOP);
 
     std::uint32_t cycles_base              = PERF_COUNTERS_ZONES_BASE + zone_id * PERF_COUNTERS_ZONE_SIZE;
@@ -324,7 +392,14 @@ inline __attribute__((always_inline)) void freeze_and_read_all_counters(std::uin
     // One reference count per bank, in Bank order.
     for (std::uint32_t b = 0; b < COUNTER_BANK_COUNT; ++b)
     {
+#if defined(ARCH_QUASAR)
+        // Slot 3 has no reference counter; every bank is armed within a few cycles of INSTRN, so its count is
+        // reported over the INSTRN reference.
+        const llk::perf::BankRegs regs = llk::perf::bank_regs(static_cast<Bank>(b));
+        bank_cycles[b]                  = regs.out_l ? llk::perf::read_ref(regs) : bank_cycles[0];
+#else
         bank_cycles[b] = llk::perf::read_ref(llk::perf::bank_regs(static_cast<Bank>(b)));
+#endif
     }
 
     const volatile std::uint32_t* cfg = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_SHARED_CONFIG_ADDR);
@@ -343,7 +418,15 @@ inline __attribute__((always_inline)) void freeze_and_read_all_counters(std::uin
         {
             continue; // corrupt config word: do not index the register table out of range
         }
-        const llk::perf::BankRegs& regs = llk::perf::bank_regs(static_cast<Bank>(bank_id));
+#if defined(ARCH_QUASAR)
+        if (bank_id == static_cast<std::uint32_t>(Bank::L1))
+        {
+            counter_counts[out_idx] = llk::perf::l1_client_read(llk::perf::l1_client_regs()); // clear-on-read
+            ++out_idx;
+            continue;
+        }
+#endif
+        const BankRegsRef regs = llk::perf::bank_regs(static_cast<Bank>(bank_id));
         // No mux write: it is fixed once by configure_hardware and cannot be re-aimed afterwards.
         // select() polls the mode register back; without that the read samples the previous counter.
         llk::perf::select<MODE_REG_POLL_LIMIT>(regs, static_cast<std::uint16_t>(counter_id));
@@ -357,7 +440,8 @@ inline __attribute__((always_inline)) void freeze_and_read_all_counters(std::uin
 
 constexpr bool is_single_thread_runtype(PerfRunType run_type)
 {
-    return run_type == PerfRunType::UNPACK_ISOLATE || run_type == PerfRunType::MATH_ISOLATE || run_type == PerfRunType::PACK_ISOLATE;
+    return run_type == PerfRunType::UNPACK_ISOLATE || run_type == PerfRunType::MATH_ISOLATE || run_type == PerfRunType::PACK_ISOLATE ||
+           run_type == PerfRunType::SFPU_ISOLATE;
 }
 
 // MATH and PACK_ISOLATE freeze on the measured thread; the rest need every thread stopped first.
@@ -374,6 +458,8 @@ constexpr bool is_measured_thread(PerfRunType run_type)
     return run_type == PerfRunType::MATH_ISOLATE;
 #elif defined(LLK_TRISC_PACK)
     return run_type == PerfRunType::PACK_ISOLATE;
+#elif defined(LLK_TRISC_ISOLATE_SFPU)
+    return run_type == PerfRunType::SFPU_ISOLATE;
 #else
     return false;
 #endif
@@ -401,7 +487,8 @@ struct perf_counter_scoped
         ckernel::fence_compiler();
         const std::uint32_t zid = zone_id;
         static_assert(
-            exit_barrier_for(RUN_TYPE) || RUN_TYPE == PerfRunType::MATH_ISOLATE || RUN_TYPE == PerfRunType::PACK_ISOLATE,
+            exit_barrier_for(RUN_TYPE) || RUN_TYPE == PerfRunType::MATH_ISOLATE || RUN_TYPE == PerfRunType::PACK_ISOLATE ||
+                RUN_TYPE == PerfRunType::SFPU_ISOLATE,
             "a run type that skips the exit barrier needs a measured thread in is_measured_thread() to freeze the counters");
         if constexpr (!exit_barrier_for(RUN_TYPE))
         {
@@ -432,8 +519,8 @@ struct perf_counter_scoped
 
 #else // !PERF_COUNTERS_COMPILED
 
-// rendezvous() only exists off Quasar, which reaches this branch with LLK_PROFILER but not counters.
-#if defined(LLK_PROFILER) && !defined(ARCH_QUASAR)
+// The NC build keeps the zone rendezvous so both builds measure the same window.
+#if defined(LLK_PROFILER)
 #define MEASURE_PERF_COUNTERS(zone_name) llk_barrier::rendezvous(llk_barrier::is_action_thread());
 #else
 #define MEASURE_PERF_COUNTERS(zone_name)
@@ -441,6 +528,10 @@ struct perf_counter_scoped
 
 namespace llk_perf
 {
+inline void configure_and_arm()
+{
+}
+
 inline void configure_and_arm_from_brisc()
 {
 }

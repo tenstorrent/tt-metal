@@ -15,6 +15,7 @@
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h"
 #include "hostdev/dev_msgs.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "tools/profiler/perf_counters.hpp"
 #include "api/kernel_thread_globals.h"
 
 #if defined(PROFILE_KERNEL)
@@ -354,6 +355,8 @@ extern "C" uint32_t _start1() {
                     mailboxes->shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
                 }
 
+                // Arm the perf counters on all NEOs right before the TRISCs go.
+                StartPerfCounters();
                 run_triscs(enables);
 
                 // noc_index = launch_msg_address->kernel_config.brisc_noc_id;
@@ -391,6 +394,10 @@ extern "C" uint32_t _start1() {
                 WAYPOINT("D");
 
                 wait_subordinates();
+
+                // Every NEO's TRISCs are done: freeze the counters and file each NEO's readout into its TRISC buffers.
+                StopPerfCounters();
+                ReadPerfCounters(enables);
 
                 trigger_sync_register_init();
 
