@@ -23,12 +23,38 @@ struct ArgMaxMultiCoreProgramFactory {
         const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value);
 };
 
+// ArgMaxPath::Rvv: TILE-layout last-dim argmax on the pack RISC's RVV (Zve32f)
+// unit (Blackhole), single- or multi-core (the reduction dim's tiles are split
+// across cores); returns indices and (optionally) max values.
+struct ArgMaxRvvTileProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value);
+};
+
+// ArgMaxPath::Sfpu: TILE-layout last-dim argmax on the SFPU (Blackhole).
+// Lane-parallel phase 1 reduces every tile of a 32-row tile-row to one (max
+// value, winning tile) candidate per column in DST; a scalar phase 2 on the
+// dataflow RISC finishes each row with 32 lexicographic compares. Multicore
+// splits the reduction dim's tiles across cores, each producing per-row
+// candidates that a gather core merges by scalar compare. Returns indices and
+// (optionally) max values. Compare semantics: the SFPU normalises NaN, signed
+// zero and denormal inputs before an IEEE fp32 compare; the consequences are
+// detailed in kernels/argmax_sfpu_tile_compute.cpp.
+struct ArgMaxSfpuTileProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value);
+};
+
 struct ArgMaxDeviceOperation {
     using operation_attributes_t = ArgmaxParams;
     using tensor_args_t = ArgmaxInputs;
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<ArgMaxSingleCoreProgramFactory, ArgMaxMultiCoreProgramFactory>;
+    using program_factory_t = std::variant<
+        ArgMaxSingleCoreProgramFactory,
+        ArgMaxMultiCoreProgramFactory,
+        ArgMaxRvvTileProgramFactory,
+        ArgMaxSfpuTileProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -46,6 +72,8 @@ ttnn::Tensor argmax(
     bool keepdim,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt);
+    std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt,
+    ArgMaxPath path = ArgMaxPath::ScalarReader,
+    std::optional<ttnn::Tensor> optional_maxval_tensor = std::nullopt);
 
 }  // namespace ttnn::prim
