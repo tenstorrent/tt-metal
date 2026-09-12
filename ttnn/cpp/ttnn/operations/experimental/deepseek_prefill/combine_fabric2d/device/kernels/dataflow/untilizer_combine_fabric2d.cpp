@@ -25,6 +25,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "combine_fabric2d_untilizer_ct_args.hpp"
+#include "combine_fabric2d_untilizer_rt_args.hpp"
 #include "combine_fabric2d_group_walk.hpp"
 
 constexpr cmbf2d::UntilizerCtArgs ct{};
@@ -37,11 +38,12 @@ struct Dram {
 };
 
 Dram open_dram() {
+    const auto rt = cmbf2d::UntilizerRtArgManager::get_rt_args();
     return Dram{
-        TensorAccessor(ct.dram_in_args, ct.dram_in_base_addr),
-        TensorAccessor(ct.dram_counts_args, ct.dram_counts_base_addr),
-        TensorAccessor(ct.dram_region_args, ct.dram_region_base_addr),
-        TensorAccessor(ct.dram_expert_offsets_args, ct.dram_expert_offsets_base_addr)};
+        TensorAccessor(ct.dram_in_args, rt.dram_in),
+        TensorAccessor(ct.dram_counts_args, rt.dram_counts),
+        TensorAccessor(ct.dram_region_args, rt.dram_region),
+        TensorAccessor(ct.dram_expert_offsets_args, rt.dram_expert_offsets)};
 }
 
 cmbf2d::ControlTables read_control_tables(const Dram& dram) {

@@ -7,6 +7,7 @@
 #include "combine_fabric2d_assignments.hpp"
 #include "kernels/dataflow/combine_fabric2d_reader_ct_args.hpp"
 #include "kernels/dataflow/combine_fabric2d_reader_rt_args.hpp"
+#include "kernels/dataflow/combine_fabric2d_untilizer_rt_args.hpp"
 #include "kernels/dataflow/combine_fabric2d_sender_ct_args.hpp"
 #include "kernels/dataflow/combine_fabric2d_untilizer_ct_args.hpp"
 
@@ -434,8 +435,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             kernel.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
             kernel.core_ranges = core;
             kernel.compile_time_args =
-                cmbf2d::UntilizerCtArgs(args, tensor_args, coord, work_by_stream.at(first), plan, dram)
-                    .to_ct_word_arr();
+                cmbf2d::UntilizerCtArgs(args, tensor_args, coord, work_by_stream.at(first), plan).to_ct_word_arr();
             for (auto* buf : {dram.in, dram.counts, dram.region, dram.expert_offsets}) {
                 tt::tt_metal::TensorAccessorArgs(buf).append_to(kernel.compile_time_args);
             }
@@ -443,6 +443,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = tt::tt_metal::NOC::NOC_0,
             };
+            cmbf2d::UntilizerRtArgManager(dram).setup_rt_args(kernel, groups[g][j].logical);
             desc.kernels.push_back(std::move(kernel));
 
             tt::tt_metal::KernelDescriptor untilize;
