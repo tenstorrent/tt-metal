@@ -719,7 +719,6 @@
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.erfinv_bw.html">ttnn.erfinv_bw</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.exp2_bw.html">ttnn.exp2_bw</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.exp_bw.html">ttnn.exp_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="api/ttnn.experimental.gelu_bw.html">ttnn.experimental.gelu_bw</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.expm1_bw.html">ttnn.expm1_bw</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.fill_bw.html">ttnn.fill_bw</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.fill_zero_bw.html">ttnn.fill_zero_bw</a></li>
@@ -2639,7 +2638,7 @@ use <code class="docutils literal notranslate"><span class="pre">align_shape_to_
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.bias_gelu_bw.html#ttnn.bias_gelu_bw" title="ttnn.bias_gelu_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.bias_gelu_bw</span></code></a></p>
-<p class="tt-api-card-desc">Performs backward operations for bias_gelu on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code> or <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">bias</span></code>, with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code> using given <code class="xref py py-attr docutils literal notranslate"><span class="pre">approximate</span></code> mode.</p>
+<p class="tt-api-card-desc">Performs backward operations for bias GELU on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code> or <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">bias</span></code>, with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">variant</span></code>.</p>
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.ceil_bw.html#ttnn.ceil_bw" title="ttnn.ceil_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.ceil_bw</span></code></a></p>
@@ -2718,10 +2717,6 @@ use <code class="docutils literal notranslate"><span class="pre">align_shape_to_
 <p class="tt-api-card-desc">Performs backward operations for exponential function on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code>.</p>
 </div>
 <div class="tt-api-card docutils container">
-<p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.experimental.gelu_bw.html#ttnn.experimental.gelu_bw" title="ttnn.experimental.gelu_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.experimental.gelu_bw</span></code></a></p>
-<p class="tt-api-card-desc">Applies the backward pass of the GELU function using ttnn experimental kernels.</p>
-</div>
-<div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.expm1_bw.html#ttnn.expm1_bw" title="ttnn.expm1_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.expm1_bw</span></code></a></p>
 <p class="tt-api-card-desc">Performs backward operations for expm1 on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code></p>
 </div>
@@ -2747,7 +2742,7 @@ use <code class="docutils literal notranslate"><span class="pre">align_shape_to_
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.gelu_bw.html#ttnn.gelu_bw" title="ttnn.gelu_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.gelu_bw</span></code></a></p>
-<p class="tt-api-card-desc">Performs backward operations for gelu on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code> using given <code class="xref py py-attr docutils literal notranslate"><span class="pre">approximate</span></code> mode.</p>
+<p class="tt-api-card-desc">Performs backward operations for GELU on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">variant</span></code>.</p>
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.hardshrink_bw.html#ttnn.hardshrink_bw" title="ttnn.hardshrink_bw"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.hardshrink_bw</span></code></a></p>

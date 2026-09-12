@@ -459,8 +459,8 @@ cores fill up their profiling buffers faster and if only those cores are giving 
 <li><p><code class="docutils literal notranslate"><span class="pre">fpu</span></code> — compute utilization (FPU, SFPU, math counters)</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">pack</span></code> — packer activity (dest read, packer busy, scoreboard)</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">unpack</span></code> — unpacker activity, math pipeline stalls, source register writes</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">l1_0</span></code> — L1 memory ports 0-7 (unpacker, packer, TDMA, NOC Ring 0)</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">l1_1</span></code> — L1 memory ports 8-15 (extended unpacker, NOC Ring 1)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">l1_0</span></code> — L1 memory ports 0-7 (unpackers, TDMA bundles, NOC Ring 0; port 1 also carries the packer on Wormhole)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">l1_1</span></code> — L1 memory ports 8-15 (packer port 8, unpacker 1’s extended read interfaces, NOC Ring 1)</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">instrn</span></code> — per-thread instruction availability, stalls, and issue counts</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">all</span></code> — all of the above (recommended starting point)</p></li>
 </ul>
@@ -478,11 +478,11 @@ cores fill up their profiling buffers faster and if only those cores are giving 
 </ul>
 <p><em>Pipeline Efficiency</em></p>
 <ul class="simple">
-<li><p><strong>Packer Efficiency (%)</strong>: Fraction of packer-busy cycles where dest data was available (<code class="docutils literal notranslate"><span class="pre">PACKER_DEST_READ_AVAILABLE</span> <span class="pre">/</span> <span class="pre">PACKER_BUSY</span></code>). For workloads that don’t use the packer (<code class="docutils literal notranslate"><span class="pre">PACKER_BUSY</span> <span class="pre">=</span> <span class="pre">0</span></code>), falls back to the dest-read grant rate (<code class="docutils literal notranslate"><span class="pre">DEST_READ_GRANTED_0</span> <span class="pre">/</span> <span class="pre">PACKER_DEST_READ_AVAILABLE</span></code>). 100% means the packer never waited for data.</p></li>
-<li><p><strong>Math-to-Pack Handoff Ratio (%)</strong>: Ratio of math-availability cycles to packer-busy cycles (<code class="docutils literal notranslate"><span class="pre">AVAILABLE_MATH</span> <span class="pre">/</span> <span class="pre">PACKER_BUSY</span></code>). Values &gt;100% mean math produces output faster than packer consumes it; &lt;100% means packer is the consumer bottleneck. Falls back to <code class="docutils literal notranslate"><span class="pre">AVAILABLE_MATH</span> <span class="pre">/</span> <span class="pre">ref_cnt</span></code> when the packer isn’t used.</p></li>
+<li><p><strong>Packer Efficiency (%)</strong>: Fraction of packer-busy cycles where dest data was available (<code class="docutils literal notranslate"><span class="pre">PACKER0_DEST_READ_REQ</span> <span class="pre">/</span> <span class="pre">PACKER_BUSY</span></code>). For workloads that don’t use the packer (<code class="docutils literal notranslate"><span class="pre">PACKER_BUSY</span> <span class="pre">=</span> <span class="pre">0</span></code>), falls back to the dest-read grant rate (<code class="docutils literal notranslate"><span class="pre">DEST_READ_GRANTED_0</span> <span class="pre">/</span> <span class="pre">PACKER0_DEST_READ_REQ</span></code>). 100% means the packer never waited for data.</p></li>
+<li><p><strong>Math-to-Pack Handoff Ratio (%)</strong>: Ratio of math-availability cycles to packer-busy cycles (<code class="docutils literal notranslate"><span class="pre">MATH_NOT_SCOREBOARD_STALLED</span> <span class="pre">/</span> <span class="pre">PACKER_BUSY</span></code>). Values &gt;100% mean math produces output faster than packer consumes it; &lt;100% means packer is the consumer bottleneck. Falls back to <code class="docutils literal notranslate"><span class="pre">MATH_NOT_SCOREBOARD_STALLED</span> <span class="pre">/</span> <span class="pre">ref_cnt</span></code> when the packer isn’t used.</p></li>
 <li><p><strong>Unpacker-to-Math Data Flow (%)</strong>: Ratio of source register write availability to unpacker busy time. Higher means data flows smoothly from unpack to math.</p></li>
 <li><p><strong>Math Pipeline Utilization (%)</strong>: Fraction of math-available cycles where the math instruction actually issued (<code class="docutils literal notranslate"><span class="pre">MATH_INSTRN_STARTED</span> <span class="pre">/</span> <span class="pre">MATH_INSTRN_AVAILABLE</span></code>). 100% means every available math instruction issued immediately.</p></li>
-<li><p><strong>FPU Execution Efficiency (%)</strong>: FPU active cycles as fraction of math instruction availability on thread 1 (<code class="docutils literal notranslate"><span class="pre">FPU_COUNTER</span> <span class="pre">/</span> <span class="pre">FPU_INSTRN_AVAILABLE_1</span></code>). Distinguishes compute-bound (high) from stall-bound (low) workloads.</p></li>
+<li><p><strong>FPU Execution Efficiency (%)</strong>: FPU active cycles as fraction of math instruction availability on thread 1 (<code class="docutils literal notranslate"><span class="pre">FPU_COUNTER</span> <span class="pre">/</span> <span class="pre">MATH_INSTRN_AVAILABLE_1</span></code>). Distinguishes compute-bound (high) from stall-bound (low) workloads.</p></li>
 </ul>
 <p><em>Thread Analysis</em></p>
 <ul class="simple">
@@ -503,7 +503,7 @@ cores fill up their profiling buffers faster and if only those cores are giving 
 </ul>
 <p><em>TDMA Stall Metrics</em></p>
 <ul class="simple">
-<li><p><strong>Data Hazard Stall Rate (%)</strong>: Fraction of math-valid cycles stalled by dest-to-src data hazards (MOVD2A/MOVD2B). Computed as <code class="docutils literal notranslate"><span class="pre">(MATH_INSTRN_AVAILABLE</span> <span class="pre">-</span> <span class="pre">DATA_HAZARD_STALLS_MOVD2A)</span> <span class="pre">/</span> <span class="pre">MATH_INSTRN_AVAILABLE</span></code>.</p></li>
+<li><p><strong>Data Hazard Stall Rate (%)</strong>: Fraction of math-valid cycles stalled by dest-to-src data hazards (MOVD2A/MOVD2B). Computed as <code class="docutils literal notranslate"><span class="pre">(MATH_INSTRN_AVAILABLE</span> <span class="pre">-</span> <span class="pre">MATH_NOT_D2S_STALLED)</span> <span class="pre">/</span> <span class="pre">MATH_INSTRN_AVAILABLE</span></code>.</p></li>
 <li><p><strong>SrcA Write Port Blocked Rate (%)</strong>: Fraction of srcA DMA write attempts blocked by port unavailability (DMA mux contention).</p></li>
 <li><p><strong>SrcB Write Port Blocked Rate (%)</strong>: Same for srcB.</p></li>
 <li><p><strong>SrcA Write Overwrite Blocked Rate (%)</strong>: Fraction of srcA write attempts blocked by overwrite protection — math hasn’t consumed the previous value yet. High values indicate math-consumer bottleneck.</p></li>
@@ -520,9 +520,9 @@ cores fill up their profiling buffers faster and if only those cores are giving 
 </ul>
 <p><em>Write Port Analysis</em></p>
 <ul class="simple">
-<li><p><strong>SrcA Write Actual Efficiency (%)</strong>: Fraction of srcA write attempts not blocked by port contention (<code class="docutils literal notranslate"><span class="pre">SRCA_WRITE_ACTUAL</span> <span class="pre">/</span> <span class="pre">SRCA_WRITE_AVAILABLE</span></code>). 100% = no port blocking.</p></li>
-<li><p><strong>SrcB Write Actual Efficiency (%)</strong>: Same for srcB (<code class="docutils literal notranslate"><span class="pre">SRCB_WRITE_NOT_BLOCKED_PORT</span> <span class="pre">/</span> <span class="pre">SRCB_WRITE_AVAILABLE</span></code>).</p></li>
-<li><p><strong>Unpacker0 Write Efficiency (%)</strong>: Fraction of Unpacker 0 busy cycles where the srcA write succeeded (<code class="docutils literal notranslate"><span class="pre">SRCA_WRITE_ACTUAL</span> <span class="pre">/</span> <span class="pre">UNPACK0_BUSY_THREAD0</span></code>).</p></li>
+<li><p><strong>SrcA Write Actual Efficiency (%)</strong>: Fraction of srcA write attempts not blocked by port contention (<code class="docutils literal notranslate"><span class="pre">SRCA_WRITE_NOT_BLOCKED_PORT</span> <span class="pre">/</span> <span class="pre">SRCA_WRITE_REQ</span></code>). 100% = no port blocking.</p></li>
+<li><p><strong>SrcB Write Actual Efficiency (%)</strong>: Same for srcB (<code class="docutils literal notranslate"><span class="pre">SRCB_WRITE_NOT_BLOCKED_PORT</span> <span class="pre">/</span> <span class="pre">SRCB_WRITE_REQ</span></code>).</p></li>
+<li><p><strong>Unpacker0 Write Efficiency (%)</strong>: Fraction of Unpacker 0 busy cycles where the srcA write succeeded (<code class="docutils literal notranslate"><span class="pre">SRCA_WRITE_NOT_BLOCKED_PORT</span> <span class="pre">/</span> <span class="pre">UNPACK0_BUSY_THREAD0</span></code>).</p></li>
 <li><p><strong>Unpacker1 Write Efficiency (%)</strong>: Same for Unpacker 1 using srcB.</p></li>
 <li><p><strong>Unpacker Write Efficiency (%)</strong>: Average of Unpacker0/1 Write Efficiency (per core, then aggregated).</p></li>
 </ul>
@@ -531,7 +531,7 @@ cores fill up their profiling buffers faster and if only those cores are giving 
 <li><p><strong>L1 Unpacker/Packer Port Util (%)</strong>: Fraction of cycles the unpacker or packer L1 port had a transaction.</p></li>
 <li><p><strong>L1 TDMA Bundle Util (%)</strong>: Average utilization of the two TDMA/RISC L1 ports.</p></li>
 <li><p><strong>NOC Ring 0/1 Outgoing/Incoming Util (%)</strong>: Average utilization of NOC channels on each ring.</p></li>
-<li><p><strong>RISC Core L1 Util (%)</strong>: RISC core L1 access utilization (Blackhole only, requires L1_1 group).</p></li>
+<li><p><strong>L1 Packer Port 8 Util (%)</strong>: packer L1 port utilization on port 8 (<code class="docutils literal notranslate"><span class="pre">L1_1_TDMA_PACKER_2</span></code> on Wormhole, <code class="docutils literal notranslate"><span class="pre">L1_1_PACKER_IF_0</span></code> on Blackhole; requires the L1_1 group).</p></li>
 </ul>
 <p><em>L1 Backpressure</em></p>
 <ul class="simple">

@@ -290,7 +290,6 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.erfinv_bw.html">ttnn.erfinv_bw</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.exp2_bw.html">ttnn.exp2_bw</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.exp_bw.html">ttnn.exp_bw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.experimental.gelu_bw.html">ttnn.experimental.gelu_bw</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.expm1_bw.html">ttnn.expm1_bw</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.fill_bw.html">ttnn.fill_bw</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.fill_zero_bw.html">ttnn.fill_zero_bw</a></li>
@@ -433,27 +432,41 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.bias_gelu_bw">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">bias_gelu_bw</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">grad_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor_a</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor_b</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span> <span class="pre">or</span> <span class="pre">Number</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">approximate</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">string</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">none</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">List</span> <span class="pre">of</span> <span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.bias_gelu_bw" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">bias_gelu_bw</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">grad_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor_a</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor_b</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">bias</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">variant</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.GeluVariant</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">GeluVariant.Accurate</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">approximate</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">string</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">List</span> <span class="pre">of</span> <span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.bias_gelu_bw" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Performs backward operations for bias_gelu on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code> or <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">bias</span></code>, with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code> using given <code class="xref py py-attr docutils literal notranslate"><span class="pre">approximate</span></code> mode.
-<code class="xref py py-attr docutils literal notranslate"><span class="pre">approximate</span></code> mode can be ‘none’, ‘tanh’.</p>
+<p>Performs backward operations for bias GELU on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code> or <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">bias</span></code>, with given <code class="xref py py-attr docutils literal notranslate"><span class="pre">grad_tensor</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">variant</span></code>.</p>
+<p>Supported call forms:</p>
+<blockquote>
+<div>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">ttnn.bias_gelu_bw(grad_tensor,</span> <span class="pre">input_tensor_a,</span> <span class="pre">input_tensor_b,</span> <span class="pre">...)</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">ttnn.bias_gelu_bw(grad_tensor,</span> <span class="pre">input_tensor,</span> <span class="pre">bias,</span> <span class="pre">...)</span></code></p></li>
+</ul>
+</div>
+</blockquote>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
 <li><p><span class="tt-api-param-name"><strong>grad_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the input gradient tensor.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>input_tensor_a</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the input tensor.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>input_tensor_b</strong> (<em>ttnn.Tensor</em><em> or </em><em>Number</em>)</span><span class="tt-api-param-desc">the input tensor.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>input_tensor_a</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the first input tensor for the tensor-bias overload.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>input_tensor_b</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the bias tensor for the tensor-bias overload.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>input_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the input tensor for the scalar-bias overload.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>bias</strong> (<em>float</em>)</span><span class="tt-api-param-desc">the scalar bias for the scalar-bias overload.</span></p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><span class="tt-api-param-name"><strong>approximate</strong> (<em>string</em>)</span><span class="tt-api-param-desc">Approximation type. Defaults to <cite>none</cite>.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Memory configuration for the operation. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>variant</strong> (<em>ttnn.GeluVariant</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Selects the GELU implementation. Defaults to <cite>GeluVariant.Accurate</cite>.
+- <cite>Accurate</cite>: piecewise-CDF (BF16) or FP32-erf derivative.
+- <cite>Tanh</cite>: derivative of the FP32 Hendrycks tanh approximation.
+- <cite>FastLut</cite>: not supported because no matching backward kernel is available.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>approximate</strong> (<em>string</em>)</span><span class="tt-api-param-desc">Legacy approximation mode (<cite>“none”</cite> or <cite>“tanh”</cite>).</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Memory configuration for the output tensor. Defaults to <cite>None</cite>.</span></p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
@@ -474,12 +487,11 @@
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16</p></td>
-<td><p>TILE, ROW_MAJOR</p></td>
+<td><p>BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B</p></td>
+<td><p>TILE</p></td>
 </tr>
 </tbody>
 </table>
-<p>bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT</p>
 <p>For more details about BFLOAT8_B, refer to the <a class="reference external" href="../tensor.html#limitation-of-bfloat8-b">BFLOAT8_B limitations</a>.</p>
 </div>
 <div class="admonition-example admonition">
