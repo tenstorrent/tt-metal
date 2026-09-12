@@ -367,8 +367,8 @@ inline void _gmg_merge4_runs_raw()
     TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + 4);
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-inline void _generalized_moe_gate_top8(std::uint32_t eps, std::uint32_t scale)
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool do_extra_scale = false>
+inline void _generalized_moe_gate_top8(std::uint32_t eps, std::uint32_t scale, std::uint32_t extra_scale = 0x3f800000)
 {
     // Merge the 4 runs into the raw top-8 (idx -> indices+0/+4, score -> scores+0/+4).
     _gmg_merge4_runs_raw<is_fp32_dest_acc_en, 0>();
@@ -395,11 +395,16 @@ inline void _generalized_moe_gate_top8(std::uint32_t eps, std::uint32_t scale)
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
     TTI_SFPCONFIG(0, 0xF, 1);
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
-    sfpi::vFloat l0                 = sfpi::l_reg[sfpi::LRegs::LReg0];
-    sfpi::vFloat eps_value          = Converter::as_float(eps);
-    l0                              = l0 + eps_value;
-    l0                              = sfpu_reciprocal<APPROXIMATION_MODE>(l0);
-    sfpi::vFloat scale_value        = Converter::as_float(scale);
+    sfpi::vFloat l0          = sfpi::l_reg[sfpi::LRegs::LReg0];
+    sfpi::vFloat eps_value   = Converter::as_float(eps);
+    l0                       = l0 + eps_value;
+    l0                       = sfpu_reciprocal<APPROXIMATION_MODE>(l0);
+    sfpi::vFloat scale_value = Converter::as_float(scale);
+    if constexpr (do_extra_scale)
+    {
+        // Fold the deferred normalization scale in before applying it to the winners.
+        scale_value = scale_value * Converter::as_float(extra_scale);
+    }
     l0                              = l0 * scale_value;
     sfpi::l_reg[sfpi::LRegs::LReg0] = l0;
     TTI_SFPNOP;

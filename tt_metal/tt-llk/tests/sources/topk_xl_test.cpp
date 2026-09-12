@@ -599,7 +599,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(pack_dst_format, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */);
     _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
 
-    if constexpr (INDEX_OP_REMOVE_MSB)
+    if constexpr (INDEX_OP_REMOVE_MSB && !ckernel::sfpu::topk_xl_blaze_compat)
     {
         ckernel::sfpu::_topk_xl_remove_msb_values_init_();
     }
@@ -616,7 +616,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             // Zero the value half on PACK, then pack the fused region as [0|index].
             // Includes the trailing SFPU drain before the pack below.
+            if constexpr (ckernel::sfpu::topk_xl_blaze_compat)
+            {
+                // SyncFull keeps MATH quiescent until PACK releases this section.
+                // Re-establish PACK's address modifiers after the row's MATH init.
+                TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::WAIT_SFPU);
+                addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+                ckernel::sfpu::_topk_xl_remove_msb_values_init_();
+            }
             pack_remove_msb_values<TOPK_XL_K>(SLOT0);
+            if constexpr (ckernel::sfpu::topk_xl_blaze_compat)
+            {
+                TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU);
+            }
         }
 
         std::uint32_t res = r * RESULT_TILES_PER_ROW;

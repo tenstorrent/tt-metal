@@ -25,6 +25,7 @@ from helpers.golden_generators import (
     get_golden_generator,
     rope_bands,
     rope_rotated_rows,
+    truncate_to_bfloat16,
 )
 from helpers.llk_params import format_dict
 from helpers.param_config import parametrize
@@ -115,7 +116,15 @@ def _stimuli(geometry, tiles, seed):
     return dest.to(torch.bfloat16)
 
 
-def _run(geometry, tiles, dest, scale_fp32=None):
+def _run(
+    geometry,
+    tiles,
+    dest,
+    scale_fp32=None,
+    fused_cos_sin=False,
+    tile_h=1,
+    cos_sin_per_row=False,
+):
     assert tiles <= MAX_DEST_TILES, f"{tiles} tiles is past the Dest half"
 
     configuration = TestConfig(
@@ -123,6 +132,9 @@ def _run(geometry, tiles, dest, scale_fp32=None):
         FORMATS,
         templates=[
             ROPE(
+                fused_cos_sin=fused_cos_sin,
+                tile_h=tile_h,
+                cos_sin_per_row=cos_sin_per_row,
                 has_scale=scale_fp32 is not None,
                 scale_fp32=0 if scale_fp32 is None else scale_fp32,
                 **geometry,
@@ -258,3 +270,65 @@ def test_rope_quarter_turn():
     assert torch.equal(
         device[rotated][:, odd], dest[rotated][:, even]
     ), "a quarter turn must send x_odd to x_even"
+
+
+@parametrize(
+    tile_h=[1, 2, 4, 8, 16, 32], per_row=[False, True], scale=[None, 0.0, -2.0]
+)
+def test_rope_fused_cos_sin(tile_h, per_row, scale):
+    """Fused phase tiles, including bottom faces and untouched destination rows."""
+    ht, wt, cs_base = 2, 2, 256
+    geometry = dict(
+        ht=ht,
+        wt=wt,
+        x_base=0,
+        x_stride=64,
+        cos_base=cs_base,
+        sin_base=cs_base,
+        cs_stride=64,
+    )
+    generator = torch.Generator().manual_seed(707)
+    dest = (
+        torch.empty((6 * TILE_ROWS, ROW_DATUMS))
+        .uniform_(-1.0, 1.0, generator=generator)
+        .to(torch.bfloat16)
+    )
+    # Independent phase for each lane/row distinguishes a per-row load from a
+    # reused decode phase. Distinct heads expose an incorrect x head stride.
+    for w in range(wt):
+        for row in range(TILE_ROWS):
+            for pair in range(ROW_DATUMS // 2):
+                angle = 0.07 * row + 0.19 * pair + 0.3 * w
+                dest[cs_base + 64 * w + row, 2 * pair] = math.cos(angle)
+                dest[cs_base + 64 * w + row, 2 * pair + 1] = math.sin(angle)
+    golden = dest.clone()
+    effective_scale = 1.0 if scale is None else scale
+    for h in range(ht):
+        for w in range(wt):
+            for logical_row in range(((tile_h + 3) // 4) * 4):
+                for face in range(2):
+                    row = (logical_row // 16) * 32 + face * 16 + logical_row % 16
+                    phase_row = row if per_row else face * 16 + logical_row % 4
+                    phase = dest[cs_base + 64 * w + phase_row].float()
+                    x_row = 64 * (h * wt + w) + row
+                    values = dest[x_row].float()
+                    cos = phase[0::2] * effective_scale
+                    sin = phase[1::2] * effective_scale
+                    golden[x_row, 0::2] = truncate_to_bfloat16(
+                        cos * values[0::2] - sin * values[1::2]
+                    )
+                    golden[x_row, 1::2] = truncate_to_bfloat16(
+                        sin * values[0::2] + cos * values[1::2]
+                    )
+    device = _run(
+        geometry,
+        6,
+        dest,
+        scale_fp32=None if scale is None else _bf16_bits(scale),
+        fused_cos_sin=True,
+        tile_h=tile_h,
+        cos_sin_per_row=per_row,
+    )
+    # Match RopeGolden's SFPSTORE truncation, not PyTorch's default BF16 rounding.
+    # Keep the comparison bitwise, including every untouched destination row.
+    assert torch.equal(device, golden)

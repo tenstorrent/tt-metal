@@ -116,7 +116,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // ITERATIONS=8 with VectorMode::RC is exactly what add_rsqrt_tile dispatches.
     _llk_math_eltwise_unary_sfpu_params_(
-        [] { ckernel::sfpu::calculate_add_rsqrt<APPROX_MODE, 8 /* ITERATIONS */, is_fp32_dest_acc_en, SFPU_FAST_APPROX>(SFPU_UNARY_SCALAR); },
+        []
+        {
+            ckernel::sfpu::calculate_add_rsqrt<APPROX_MODE, 8 /* ITERATIONS */, is_fp32_dest_acc_en, SFPU_FAST_APPROX, SFPU_TYPED_BF16_STORE>(
+                SFPU_UNARY_SCALAR);
+        },
         0 /* dst_index */,
         VECTOR_MODE);
 
