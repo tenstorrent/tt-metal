@@ -193,7 +193,15 @@ class TPGatedDeltaNet:
         # PREFILL out-proj fusion (matmul_reduce_scatter, (8,8) grid). Slight TTFT cost at small ISL
         # (~13k crossover from a fixed warmup/compile overhead) but a large win at long ISL (e.g.
         # 128k ~-2s); overlaps the fp32 GDN-out reduce-scatter with the matmul.
-        self._fuse_out_mmrs_prefill = not self._out_sharded and args.num_devices > 1
+        # 2-device meshes with a unit dimension (e.g. P300 1x2 p150a): the fused experimental op
+        # deadlocks there in every offset/links/topology config probed (gdn-silicon-mmrs-probe{,2,3}
+        # .log), while the unfused _row_proj + tt_all_reduce path (reduce_scatter_minimal_async)
+        # is silicon-proven on the same mesh (gdn-silicon-mmrs-probe4.log PASS pcc 1.0007). Keep the
+        # fusion only on the topologies it was validated on (P150x4).
+        _mesh_shape = list(mesh.shape)
+        self._fuse_out_mmrs_prefill = (
+            not self._out_sharded and args.num_devices > 1 and not (args.num_devices == 2 and 1 in _mesh_shape)
+        )
         # Pre-build chunk masks once (trace-safe; avoids from_torch inside captured trace)
         self.chunk_seq_masks = create_chunk_masks_seq(args.gdn_chunk_size, mesh)
         # Prefill fused-op constant tiles, owned by this layer (avoids process-lifetime C++ cache vs device lifetime).
