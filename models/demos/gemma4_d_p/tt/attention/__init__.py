@@ -20,7 +20,7 @@ class Gemma4AttentionConfig:
         self.rms_norm_eps = hf_config.rms_norm_eps
 
         self.is_sliding = self.layer_type == "sliding_attention"
-        self.use_kv_tying = getattr(hf_config, "attention_k_eq_v", False) and not self.is_sliding
+        self.use_kv_tying = hf_config.attention_k_eq_v and not self.is_sliding
 
         if self.is_sliding:
             self.num_key_value_heads = hf_config.num_key_value_heads
@@ -29,10 +29,8 @@ class Gemma4AttentionConfig:
             self.rope_theta = hf_config.rope_theta
             self.partial_rotary_factor = 1.0
         else:
-            # Global KV heads: use num_global_key_value_heads if set, else fall back to sliding
-            global_kv = getattr(hf_config, "num_global_key_value_heads", None)
-            self.num_key_value_heads = global_kv if global_kv else hf_config.num_key_value_heads
-            self.head_dim = getattr(hf_config, "global_head_dim", hf_config.head_dim)
+            self.num_key_value_heads = hf_config.num_global_key_value_heads
+            self.head_dim = hf_config.global_head_dim
             self.sliding_window = None
             self.rope_theta = hf_config.global_rope_theta
             self.partial_rotary_factor = hf_config.partial_rotary_factor
