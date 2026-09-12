@@ -306,6 +306,7 @@ void kernel_main() {
     noc_async_atomic_barrier();
 
     for (uint32_t t = 0; t < kTimesteps; ++t) {
+        DeviceZoneScopedN("RELAY-READER-STEP");
         const auto pair = sched.pair(my_core, t);
         const uint32_t i = pair.i;
         const uint32_t j = pair.j;
@@ -350,11 +351,14 @@ void kernel_main() {
         }
         // Reserve this timestep's slot in every packet buffer, which is the
         // release of t - 2 becoming a credit for whoever fills it.
-        cb_reserve_back(cb_query, qWt);
-        cb_reserve_back(cb_grad_output, vWt);
-        cb_reserve_back(cb_lse, 1);
-        cb_reserve_back(cb_u_scalar, 1);
-        cb_reserve_back(cb_grad_query_seed, qWt);
+        {
+            DeviceZoneScopedN("SLOT-RESERVE");
+            cb_reserve_back(cb_query, qWt);
+            cb_reserve_back(cb_grad_output, vWt);
+            cb_reserve_back(cb_lse, 1);
+            cb_reserve_back(cb_u_scalar, 1);
+            cb_reserve_back(cb_grad_query_seed, qWt);
+        }
 
         const uint32_t qs = base_query + slot * stride_query;
         const uint32_t os = base_grad_output + slot * stride_grad_output;
@@ -367,6 +371,7 @@ void kernel_main() {
             // Inside a streak: Q, dO, L and D arrive first, and they are all
             // the compute kernel needs to get as far as dS. The credit for
             // this slot was granted at its release, two timesteps back.
+            DeviceZoneScopedN("RECV-IMM");
             WAYPOINT("RDYW");
             do {
                 invalidate_l1_cache();
@@ -405,6 +410,7 @@ void kernel_main() {
                 WAYPOINT("ENDD");
             }
 #endif
+            DeviceZoneScopedN("LOAD-IMM-DRAM");
             for (uint32_t k = 0; k < qWt; ++k) {
                 noc_async_read_page((i - 1u) * qWt + k, query, qs + k * tile_bytes);
             }
@@ -441,6 +447,8 @@ void kernel_main() {
             noc_xy_of(receiver, receiver_x, receiver_y);
         }
 
+        {
+            DeviceZoneScopedN("SEND-IMM");
         if (receiver == my_core) {
             // The self-transition: reserving the destination slot is the
             // credit, and the copies are local.
@@ -473,16 +481,19 @@ void kernel_main() {
             noc_inline_dw_write(
                 get_noc_addr(receiver_x, receiver_y, get_semaphore(ready_imm_sem_id[dst])), u + 1u);
         }
+        }
 
         // Now dQ, which is the one field that has to wait for arithmetic --
         // it is the accumulator each consumer adds to.
         if (producer.internal) {
+            DeviceZoneScopedN("RECV-DQ");
             WAYPOINT("DQRW");
             do {
                 invalidate_l1_cache();
             } while ((*ready_dq_sem[slot]) < t + 1u);
             WAYPOINT("DQRD");
         } else {
+            DeviceZoneScopedN("LOAD-DQ-DRAM");
             for (uint32_t k = 0; k < qWt; ++k) {
                 noc_async_read_page((i - 1u) * qWt + k, grad_query, gs + k * grad_bytes);
             }
@@ -491,9 +502,14 @@ void kernel_main() {
         cb_push_back(cb_grad_query_seed, qWt);
 
         // This core's contribution closes the packet.
-        cb_wait_front(cb_grad_query_out, qWt);
+        {
+            DeviceZoneScopedN("WAIT-COMPUTE-DQ");
+            cb_wait_front(cb_grad_query_out, qWt);
+        }
         const uint32_t dq_out = get_read_ptr(cb_grad_query_out);
 
+        {
+            DeviceZoneScopedN("SEND-DQ");
         if (receiver == my_core) {
             noc_async_write(dq_out, get_noc_addr(dst_grad_query), stride_grad_query);
             noc_async_write_barrier();
@@ -529,6 +545,8 @@ void kernel_main() {
 #endif
         }
 
+        }
+
         cb_pop_front(cb_grad_query_out, qWt);
 
         // The compute kernel has popped this timestep's slot, so it is free
@@ -536,16 +554,20 @@ void kernel_main() {
         // when this core reaches t + 2. That is the paper's release timing,
         // and it is what lets a producer forward as soon as its payload is
         // ready instead of waiting for its receiver to arrive.
-        cb_wait_front(cb_slot_release, 1);
-        cb_pop_front(cb_slot_release, 1);
-        const uint32_t released_for = t + 2u;
-        if (released_for < kTimesteps) {
-            const auto next_producer = sched.producer(my_core, released_for);
-            if (next_producer.internal && next_producer.core != my_core) {
-                grant_credit_to(next_producer.core);
+        {
+            DeviceZoneScopedN("RELEASE");
+            cb_wait_front(cb_slot_release, 1);
+            cb_pop_front(cb_slot_release, 1);
+            const uint32_t released_for = t + 2u;
+            if (released_for < kTimesteps) {
+                const auto next_producer = sched.producer(my_core, released_for);
+                if (next_producer.internal && next_producer.core != my_core) {
+                    grant_credit_to(next_producer.core);
+                }
+                // A self-transition needs no credit: it reserves the
+                // destination slot itself. And a DRAM load needs none, the
+                // slot being its own.
             }
-            // A self-transition needs no credit: it reserves the destination
-            // slot itself. And a DRAM load needs none, the slot being its own.
         }
     }
 

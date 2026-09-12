@@ -845,6 +845,23 @@ TEST(CyclicSdpaBwTimingTest, DISABLED_CompareTheThreeVariants) {
 // barrier, kernel overhead -- from the part that scales. If the relay's
 // advantage and the endpoint deficit both shrink as d grows, the fixed costs
 // are being amortized and the port is moving toward compute bound.
+// One profiled run, then an explicit device close. The device profiler
+// writes its CSV from ProfilerInitializer::post_teardown, which only runs on
+// a real device close -- the process-exit path deliberately skips it, because
+// the dump spawns threads and that is unsafe during termination. So a
+// profiling run has to close the device itself.
+//
+//   TT_METAL_DEVICE_PROFILER=1 ttml_tests \
+//     --gtest_filter=CyclicSdpaBwProfileTest.* --gtest_also_run_disabled_tests
+//
+// then generated/profiler/.logs/profile_log_device.csv holds the zones.
+TEST(CyclicSdpaBwProfileTest, DISABLED_ProfileTheRelay) {
+    const uint32_t C = 16;
+    const auto ref = make_reference(2u * C * kTile, 64);
+    run_relay(C, ref, 4, 4, /*endpoint_sync=*/false, nullptr);
+    ttml::autograd::ctx().close_device();
+}
+
 TEST(CyclicSdpaBwTimingTest, DISABLED_ScaleTheHeadDimension) {
     for (uint32_t d : {32u, 64u, 128u, 256u}) {
         time_one_size(16, 4, 4, d);
