@@ -196,9 +196,14 @@ inline void calculate_remainder() {
         v_if(s == 0) { v = std::numeric_limits<float>::quiet_NaN(); }
         v_endif;
 
-        constexpr auto iter = 10;
+        // Normalize the residual into [0, s). The quotient estimate carries a
+        // few-ulp relative error, so for large quotients the residual can be
+        // wrong by several multiples of s and can also be negative; walk it in
+        // both directions until it lands in range.
+        constexpr auto iter = 32;
         for (int l = 0; l < iter; l++) {
-            v_if(v >= s) { v = v - s; }
+            v_if(v <= -s) { v = v + s; }
+            v_else_if(v >= s) { v = v - s; }
             v_endif;
         }
         v_if(sfpi::abs(v) - s == 0.0f) { v = 0.0f; }
