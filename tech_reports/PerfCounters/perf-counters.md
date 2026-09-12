@@ -10,7 +10,7 @@
 
 ## Overview
 
-Each Tensix core contains hardware performance counters organized into five banks (FPU, TDMA_UNPACK, TDMA_PACK, INSTRN_THREAD, L1). These counters measure cycle-level events: how many cycles the FPU was active, how many cycles a thread was stalled, how many cycles each L1 memory port had traffic, and so on.
+Each Tensix core contains hardware performance counters organized into five banks (FPU, TDMA_UNPACK, TDMA_PACK, INSTRN_THREAD, L1). These counters measure cycle-level events: how many cycles the FPU was active, how many cycles a thread was stalled, how many cycles each L1 memory port had traffic, and so on. Quasar has the first four banks in every NEO and no L1 bank; one l1_client event CSR per NEO stands in for it.
 
 The counters are built from a reusable RTL module (`tt_perf_cnt`) that provides three values per event: **req_cnt** (cycles the event signal was high), **grant_cnt** (cycles the grant/ready signal was high), and **ref_cnt** (total elapsed cycles). From these raw values, the profiler computes derived metrics like utilization (`req_cnt / ref_cnt`), backpressure (`(req_cnt - grant_cnt) / req_cnt`), and cross-bank ratios that combine counters from different banks.
 
@@ -28,9 +28,11 @@ The counters are built from a reusable RTL module (`tt_perf_cnt`) that provides 
 
 6. **Python processes**: `tools/tracy/perf_counter_analysis.py` resolves the ordinals to names with `tt_llk_perf.headers.counter_type_names()` (parsed from `types.h`, see below) and computes the derived metrics per operation and core with `tt_llk_perf.metrics` (the same package the tt-llk test harness uses, so both report the same numbers from the same counters). Results are written to CSV and printed to console.
 
+On Quasar the DM0 core does both halves: it calls `start_perf_counter()` before it releases the TRISCs and `stop_perf_counter()` plus `read_perf_counters()` after they finish, looping over the four NEOs through the NoC window (`neo_window(n)`, see the register reference). DM0 has no profiler buffer of its own, so it writes each NEO's records into that NEO's four TRISC profiler buffers; NEOs with no enabled TRISC are skipped. Every record carries the NEO index in a 4-bit `neo` field next to the 16-bit counter type (tt-1xx records are unchanged: type below 256, `neo` 0), and the host reports metrics per NEO with `risc_type` set to `QUASAR_NEO<n>`.
+
 ### Where the definitions live
 
-Everything that describes the hardware is in tt-llk, under `tt_metal/tt-llk/tools/include/perf_counters/` (namespace `llk::perf`): `types.h` (the `PerfCounterType` enum, whose ordinal is the wire format, and the `Bank` enum), `blackhole.h` and `wormhole.h` (per-bank `{name, select}` tables), `inventory.h` (arch selection and `table_for`), `registers.h` (debug register addresses and bit constants) and `hw.h` (the register primitives). The Python package `tt_metal/tt-llk/tools/python/tt_llk_perf/` parses names and tables from those headers (`headers.py`) and holds the metric engine (`metrics.py`). `tt_metal/tools/profiler/perf_counters.hpp` adds only the profiler policy: the record format, the `TT_METAL_PROFILE_PERF_COUNTERS` group bits and the emission into the profiler buffer. Adding a counter means appending to the enum and adding a table entry; no host code changes.
+Everything that describes the hardware is in tt-llk, under `tt_metal/tt-llk/tools/include/perf_counters/` (namespace `llk::perf`): `types.h` (the `PerfCounterType` enum, whose ordinal is the wire format, and the `Bank` enum), `blackhole.h`, `wormhole.h` and `quasar.h` (per-bank `{name, select}` tables), `inventory.h` (arch selection and `table_for`), `registers.h` (debug register addresses and bit constants; on Quasar the per-bank offsets, the two address windows and the l1_client CSR pair) and `hw.h` (the register primitives). The Python package `tt_metal/tt-llk/tools/python/tt_llk_perf/` parses names and tables from those headers (`headers.py`) and holds the metric engine (`metrics.py`). `tt_metal/tools/profiler/perf_counters.hpp` adds only the profiler policy: the record format, the `TT_METAL_PROFILE_PERF_COUNTERS` group bits and the emission into the profiler buffer. Adding a counter means appending to the enum and adding a table entry; no host code changes.
 
 ### How to Run
 
@@ -42,7 +44,7 @@ python -m tracy --perf-counter-multipass --profiler-capture-perf-counters=all \
 
 With `--perf-counter-multipass` a request is split into passes (at most three groups and one L1 bank per pass) and `all` expands to the architecture's full group set.
 
-Available counter groups for `--profiler-capture-perf-counters`: `fpu`, `pack`, `unpack`, `l1_0`, `l1_1`, `instrn`, `all`. Blackhole also supports `l1_2`, `l1_3`, `l1_4`, `l1_5`; `all` expands to the running architecture's full set.
+Available counter groups for `--profiler-capture-perf-counters`: `fpu`, `pack`, `unpack`, `l1_0`, `l1_1`, `instrn`, `all`. Blackhole also supports `l1_2`, `l1_3`, `l1_4`, `l1_5`; `all` expands to the running architecture's full set. Quasar has no L1 groups: `all` there is `fpu,pack,unpack,instrn` and a request naming an `l1_*` group is rejected. The multipass scheduler still splits those four groups 3 + 1; the environment variable path below takes all four in one run.
 
 Two limits force a request like `all` into several capture passes: the BRISC firmware image only fits the readout code for 3 counter groups, and the L1 banks share one count-time mux, so at most one L1 bank can count per run. `python -m tracy` schedules the passes automatically. A request that fits one pass runs once, exactly as before; a request that does not stops with the printed pass plan unless `--perf-counter-multipass` is given, in which case the workload is replayed once per pass and the per-pass device logs are merged. See the [user guide](../../docs/source/ttnn/ttnn/profiling_ttnn_operations.rst) for details.
 
@@ -71,15 +73,26 @@ export TT_METAL_PROFILE_PERF_COUNTERS=11   # FPU | PACK | L1 bank 0
 
 **L1 bank mutual exclusion:** all L1 banks share the same hardware mux (selected via `MUX_CTRL`), so only one L1 bank may be enabled per run; the env-var path throws if more than one L1 bit is set. For anything that needs several passes, use `python -m tracy --perf-counter-multipass` (above), which schedules the passes and merges the results.
 
+**Quasar mask:** the L1 bits do not exist there. `tt_metal/jit_build/build.cpp` remaps the front end's `all` mask 47 to 39 (`FPU | PACK | UNPACK | INSTRN`) and fails with `TT_FATAL` on any other mask with a bit outside those four; `perf_counters.hpp` has a matching `#error`. The four groups fit the DM0 firmware in one run.
+
+**`TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL`** (Quasar only, default -1 = off) routes the one l1_client event counter of every NEO for the run. The value is `subport * 8 + event`: 37 subports (0-3 TRISC, 4 THCON, 5-24 unpacker read interfaces, 25-36 packer write interfaces) by 8 events, 296 selections of which 256 are valid. Event 0 reads 0 in the RTL and the THCON subport's events 1 to 3 duplicate the TRISC port's SBank 0, so `build.cpp` rejects those (same rule as `llk::perf::l1_client_selection_is_valid` in `quasar.h`, which the firmware `static_assert`s). The CSR has no reference counter; its record carries the wall-clock span between arm and freeze, and the host names the resulting column after the selection (see [L1 client events (Quasar)](#l1-client-events-quasar)).
+
+```bash
+export TT_METAL_PROFILE_PERF_COUNTERS=39        # FPU | PACK | UNPACK | INSTRN, the Quasar "all"
+export TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL=41 # subport 5 (unpacker 0, interface 0), event 1: L1_CLIENT_UNPACK0_IF0_SBANK0_SBANK_POP
+```
+
 ### Architecture Summary
 
-The per-architecture inventory is the set of tables in `tt_metal/tt-llk/tools/include/perf_counters/blackhole.h` and `wormhole.h`; the derived-metric catalogue below is shared, and a metric whose counters exist on only one architecture reports N/A on the other.
+The per-architecture inventory is the set of tables in `tt_metal/tt-llk/tools/include/perf_counters/blackhole.h`, `wormhole.h` and `quasar.h`; the derived-metric catalogue below is shared, and a metric whose counters exist on only one architecture reports N/A on the others.
 
 **Wormhole** has `PACK_COUNT=4` (4 packer engines), active `o_math_instrnbuf_rden`, and all TDMA counters live. The L1 mux is 1-bit (2 positions: ports 0-7 and 8-15).
 
 **Blackhole** has fewer raw TDMA counters because `PACK_COUNT=1` ties the per-engine busy and dest-read signals for engines 1-3 to constants. Only RTL-live signals are read from hardware. Any counter whose RTL signal is hardwired to a constant has been omitted from the arch tables, and any aliased grant counter is consolidated to one canonical entry. `Math-to-Pack Handoff Efficiency` falls back to the bank's reference cycles as denominator when `PACKER_BUSY` is 0 for a given workload (e.g. pure-SFPU ops that don't drive the packer); `Packer Efficiency` reports N/A there. TDMA_UNPACK grant banks 4-6 (sels 260-262) have identical RTL wiring on WH and BH (verified: srcB port, srcA overwrite, srcA port). Blackhole has more L1 mux positions (6 vs 2 for Tensix, `L1_MUX_POSITIONS` in the arch headers).
 
-**INSTRN_THREAD bank.** `perf_cnt_instrn_thread` is built from a Verilog generate array in `tt_instruction_thread.sv` and has architecture-specific counter_sel mappings. Req-side: sels 0-23 are per-thread instruction-type availability (CFG/SYNC/THCON/MOVE/FPU/UNPACK/PACK, 3 threads each), sels 24-26 are per-thread total stall cycles, and sels 27+ are stall reasons. On WH the shared stall conditions (SRCA/B clear/valid) are replicated across 3 slots each (sels 27-38); on BH they occupy 1 slot each (sels 27-30). Per-thread stall reasons are thread-major: WH sels 39-65 (9 types x 3 threads), BH sels 31-57. Grant-side: the RTL wires grant as `{8{ibuffer_rden[th]}}` per instance and `{9{inst_stall_thread[th]}}` per per-thread stall-reason instance, so the 24 possible issue-count sels collapse to 3 distinct per-thread values and the per-thread stall-reason grants reproduce `THREAD_STALLS_{th}`. We expose only the distinct grants: `THREAD_INSTRUCTIONS_{0,1,2}` at sels 256/264/272 (one per instance) and `ANY_THREAD_STALL` at sel 283. The tables are in the arch headers `blackhole.h` and `wormhole.h`; `inventory.h` picks one from `ARCH_*` and `perf_counters.hpp` is arch-agnostic (`table_for` returns an empty table for the L1 mux positions Wormhole does not decode).
+**INSTRN_THREAD bank.** `perf_cnt_instrn_thread` is built from a Verilog generate array in `tt_instruction_thread.sv` and has architecture-specific counter_sel mappings. Req-side: sels 0-23 are per-thread instruction-type availability (CFG/SYNC/THCON/MOVE/FPU/UNPACK/PACK, 3 threads each), sels 24-26 are per-thread total stall cycles, and sels 27+ are stall reasons. On WH the shared stall conditions (SRCA/B clear/valid) are replicated across 3 slots each (sels 27-38); on BH they occupy 1 slot each (sels 27-30). Per-thread stall reasons are thread-major: WH sels 39-65 (9 types x 3 threads), BH sels 31-57. Grant-side: the RTL wires grant as `{8{ibuffer_rden[th]}}` per instance and `{9{inst_stall_thread[th]}}` per per-thread stall-reason instance, so the 24 possible issue-count sels collapse to 3 distinct per-thread values and the per-thread stall-reason grants reproduce `THREAD_STALLS_{th}`. We expose only the distinct grants: `THREAD_INSTRUCTIONS_{0,1,2}` at sels 256/264/272 (one per instance) and `ANY_THREAD_STALL` at sel 283. The tables are in the arch headers `blackhole.h`, `wormhole.h` and `quasar.h`; `inventory.h` picks one from `ARCH_*` and `perf_counters.hpp` is arch-agnostic (`table_for` returns an empty table for the L1 mux positions Wormhole does not decode, and for the L1 bank on Quasar).
+
+**Quasar** keeps four of the banks in every NEO (`quasar.h`: FPU 3, TDMA_UNPACK 18, TDMA_PACK 5, INSTRN_THREAD 51 entries) and DM0 reads all four NEOs. FPU exposes selects 0 and 1 plus the grant of 1 (`MATH_COUNTER`); the grant of select 0 is tied to 0. TDMA_UNPACK and TDMA_PACK index one shared readout of 21 slices through their two register sets: slices 0 to 10 are the unpack instance (18 live selections including the grants), slices 11 to 18 the pack instance (request slices 12 to 17 are tied to 0, so only `PACKER0_DEST_READ_REQ`, `PACKER_BUSY` and the grants at 11, 15 and 16 are read), slices 19 and 20 are constant 0 and selects 21 to 31 read 0. INSTRN_THREAD has 51 slices: selects 0 to 31 are instruction class times thread (`class*4 + thread` over CFG, SYNC, THCON, XSEARCH, INSTISSUE, MATH, UNPACK, PACK; XSEARCH is tied to 0 and left out of the table), 32 to 35 the per-thread stall counts, 36 to 50 fifteen backend stall reasons OR-reduced across the four threads; the grant of every class select is that thread's issue count (`THREAD_INSTRUCTIONS_t`). There is no L1 counter bank (`table_for(Bank::L1)` is empty, `L1_MUX_POSITIONS` is 0). Instead every NEO has one clear-on-read l1_client CSR behind a 37 subport by 8 event mux, routed per run with `TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL` (above).
 
 ---
 
@@ -92,7 +105,7 @@ Metrics come in two families, told apart by the key suffix:
 - `*_pct`: percentages bounded to 0-100 by construction: the numerator counts a subset of the cycles or events the denominator counts (a 1-bit counter over its bank's `ref_cnt`, an RTL-proven subset such as an arbiter accept over its request, or a share of a sum). Where a row says "clamped", the value is additionally clamped to 0..100 and the row states why.
 - `*_ratio`: unbounded raw ratios that can exceed 1.0 by design, because the numerator and denominator come from different measurement domains or because overlapping events are summed. Reported with a `(ratio)` unit and never clamped; the excess over 1.0 is the signal.
 
-A metric whose counters do not exist on the running architecture reports N/A (blank), never 0: the Wormhole-only per-engine packer metrics are N/A on Blackhole, and the Blackhole-only extended L1 groups are N/A on Wormhole. Cross-bank metrics are likewise N/A when one of their counter groups was not captured in the run.
+A metric whose counters do not exist on the running architecture reports N/A (blank), never 0: the Wormhole-only per-engine packer metrics are N/A on Blackhole, the Blackhole-only extended L1 groups are N/A on Wormhole, every L1 and NoC row is N/A on Quasar, and the Quasar-only rows (thread 3, the INSTISSUE class, the OR-reduced stall reasons, unpacker 2) are N/A on Wormhole and Blackhole. Cross-bank metrics are likewise N/A when one of their counter groups was not captured in the run.
 
 In the formulas, "fpu / instrn / pack / l1 cycles" is that bank's reference-cycle count (`ref_cnt`, the elapsed cycles between counter start and stop), and `1 - x / y` denotes the complement of a counter that counts not-stalled or granted cycles.
 
@@ -239,6 +252,104 @@ In the formulas, "fpu / instrn / pack / l1 cycles" is that bank's reference-cycl
 | L1 Contention Index (%) | `l1_contention_index_pct` | `mean of (1 - grant/request) over the five primary request/grant pairs` | One number for L1 bank-0 contention. The grant counter is the L1 arbiter accept for the port, so grant <= request by construction; clamped to 0..100 only as a guard. |
 | NOC vs Compute Balance (%) | `noc_vs_compute_balance_pct` | `ring0 traffic / (ring0 traffic + FPU_COUNTER)` | Above 50% = NoC-bound, below = compute-bound. |
 
+### Per-class availability, unpacker busy and issue-ready ratios
+
+The (class, thread) availability pairs, per-unpacker busy splits and issue-ready ratios that the sections above do not already carry. They compute wherever the counter exists: on Wormhole and Blackhole for threads 0-2 and unpackers 0-1, on Quasar for all four threads.
+
+| Metric (Tracy CSV label) | Key (LLK CSV column) | Formula | Notes |
+|---|---|---|---|
+| CFG Instrn Avail Rate T1 (%) | `cfg_instrn_avail_t1_pct` | `CFG_INSTRN_AVAILABLE_1 / instrn cycles` | Cycles the head instruction on thread 1 is a CFG instruction not blocked by its unit (a blocked head counts in Thread 1 Stall Rate). |
+| CFG Instrn Avail Rate T2 (%) | `cfg_instrn_avail_t2_pct` | `CFG_INSTRN_AVAILABLE_2 / instrn cycles` | Cycles the head instruction on thread 2 is a CFG instruction not blocked by its unit (a blocked head counts in Thread 2 Stall Rate). |
+| SYNC Instrn Avail Rate T1 (%) | `sync_instrn_avail_t1_pct` | `SYNC_INSTRN_AVAILABLE_1 / instrn cycles` | Cycles the head instruction on thread 1 is a SYNC instruction not blocked by its unit (a blocked head counts in Thread 1 Stall Rate). |
+| SYNC Instrn Avail Rate T2 (%) | `sync_instrn_avail_t2_pct` | `SYNC_INSTRN_AVAILABLE_2 / instrn cycles` | Cycles the head instruction on thread 2 is a SYNC instruction not blocked by its unit (a blocked head counts in Thread 2 Stall Rate). |
+| THCON Instrn Avail Rate T1 (%) | `thcon_instrn_avail_t1_pct` | `THCON_INSTRN_AVAILABLE_1 / instrn cycles` | Cycles the head instruction on thread 1 is a THCON instruction not blocked by its unit (a blocked head counts in Thread 1 Stall Rate). |
+| THCON Instrn Avail Rate T2 (%) | `thcon_instrn_avail_t2_pct` | `THCON_INSTRN_AVAILABLE_2 / instrn cycles` | Cycles the head instruction on thread 2 is a THCON instruction not blocked by its unit (a blocked head counts in Thread 2 Stall Rate). |
+| MATH Instrn Avail Rate T0 (%) | `math_instrn_avail_t0_pct` | `MATH_INSTRN_AVAILABLE_0 / instrn cycles` | Cycles the head instruction on thread 0 is a MATH instruction not blocked by its unit (a blocked head counts in Thread 0 Stall Rate). |
+| MATH Instrn Avail Rate T2 (%) | `math_instrn_avail_t2_pct` | `MATH_INSTRN_AVAILABLE_2 / instrn cycles` | Cycles the head instruction on thread 2 is a MATH instruction not blocked by its unit (a blocked head counts in Thread 2 Stall Rate). |
+| UNPACK Instrn Avail Rate T1 (%) | `unpack_instrn_avail_t1_pct` | `UNPACK_INSTRN_AVAILABLE_1 / instrn cycles` | Cycles the head instruction on thread 1 is a UNPACK instruction not blocked by its unit (a blocked head counts in Thread 1 Stall Rate). |
+| UNPACK Instrn Avail Rate T2 (%) | `unpack_instrn_avail_t2_pct` | `UNPACK_INSTRN_AVAILABLE_2 / instrn cycles` | Cycles the head instruction on thread 2 is a UNPACK instruction not blocked by its unit (a blocked head counts in Thread 2 Stall Rate). |
+| PACK Instrn Avail Rate T0 (%) | `pack_instrn_avail_t0_pct` | `PACK_INSTRN_AVAILABLE_0 / instrn cycles` | Cycles the head instruction on thread 0 is a PACK instruction not blocked by its unit (a blocked head counts in Thread 0 Stall Rate). |
+| PACK Instrn Avail Rate T1 (%) | `pack_instrn_avail_t1_pct` | `PACK_INSTRN_AVAILABLE_1 / instrn cycles` | Cycles the head instruction on thread 1 is a PACK instruction not blocked by its unit (a blocked head counts in Thread 1 Stall Rate). |
+| Unpacker0 Busy T0 Util (%) | `unpack0_busy_t0_pct` | `UNPACK0_BUSY_THREAD0 / unpack cycles` | Unpacker 0 busy on behalf of thread 0. |
+| Unpacker1 Busy T0 Util (%) | `unpack1_busy_t0_pct` | `UNPACK1_BUSY_THREAD0 / unpack cycles` | Unpacker 1 busy on behalf of thread 0. |
+| Unpacker0 Busy T1 Util (%) | `unpack0_busy_t1_pct` | `UNPACK0_BUSY_THREAD1 / unpack cycles` | Unpacker 0 busy on behalf of thread 1. |
+| Unpacker1 Busy T1 Util (%) | `unpack1_busy_t1_pct` | `UNPACK1_BUSY_THREAD1 / unpack cycles` | Unpacker 1 busy on behalf of thread 1. N/A on Quasar, which does not wire UNPACK1_BUSY_THREAD1. |
+| Math Src Data Ready Rate (%) | `math_src_data_ready_pct` | `MATH_SRC_DATA_READY / unpack cycles` | Cycles a math ALU instruction was valid with both source registers ready. |
+| FPU SFPU Overlap (%) | `fpu_sfpu_overlap_pct` | `max(0, FPU_COUNTER + SFPU_COUNTER - MATH_COUNTER) / fpu cycles` | Cycles the FPU and SFPU were both active. |
+| T0 Instrn Per Issue-Ready Cycle (ratio) | `thread0_instrn_per_ready_cycle_ratio` | `THREAD_INSTRUCTIONS_0 / max(1, instrn cycles - THREAD_STALLS_0)` | UNBOUNDED ratio: instructions issued per cycle thread 0 was not stalled. |
+| T1 Instrn Per Issue-Ready Cycle (ratio) | `thread1_instrn_per_ready_cycle_ratio` | `THREAD_INSTRUCTIONS_1 / max(1, instrn cycles - THREAD_STALLS_1)` | UNBOUNDED ratio: instructions issued per cycle thread 1 was not stalled. |
+| T2 Instrn Per Issue-Ready Cycle (ratio) | `thread2_instrn_per_ready_cycle_ratio` | `THREAD_INSTRUCTIONS_2 / max(1, instrn cycles - THREAD_STALLS_2)` | UNBOUNDED ratio: instructions issued per cycle thread 2 was not stalled. |
+
+### Quasar only
+
+Counters only Quasar's NEOs expose: a fourth thread, the INSTISSUE instruction class, fifteen stall reasons OR-reduced across the threads and a third unpacker. N/A on Wormhole and Blackhole.
+
+| Metric (Tracy CSV label) | Key (LLK CSV column) | Formula | Notes |
+|---|---|---|---|
+| Thread 3 Stall Rate (%) | `thread3_stall_pct` | `THREAD_STALLS_3 / instrn cycles` | Fraction of cycles thread 3 was stalled. Quasar only (fourth thread). |
+| T3 Instrn Issue Rate (%) | `thread3_ipc_pct` | `THREAD_INSTRUCTIONS_3 / instrn cycles` | Instructions issued per cycle on thread 3, as a percentage. Quasar only. |
+| CFG Instrn Avail Rate T3 (%) | `cfg_instrn_avail_t3_pct` | `CFG_INSTRN_AVAILABLE_3 / instrn cycles` | Cycles the head instruction on thread 3 is a CFG instruction not blocked by its unit (a blocked head counts in Thread 3 Stall Rate). Quasar only (four threads; the MATH class also counts instissue instructions). |
+| SYNC Instrn Avail Rate T3 (%) | `sync_instrn_avail_t3_pct` | `SYNC_INSTRN_AVAILABLE_3 / instrn cycles` | Cycles the head instruction on thread 3 is a SYNC instruction not blocked by its unit (a blocked head counts in Thread 3 Stall Rate). Quasar only (four threads; the MATH class also counts instissue instructions). |
+| THCON Instrn Avail Rate T3 (%) | `thcon_instrn_avail_t3_pct` | `THCON_INSTRN_AVAILABLE_3 / instrn cycles` | Cycles the head instruction on thread 3 is a THCON instruction not blocked by its unit (a blocked head counts in Thread 3 Stall Rate). Quasar only (four threads; the MATH class also counts instissue instructions). |
+| INSTISSUE Instrn Avail Rate T0 (%) | `instissue_instrn_avail_t0_pct` | `INSTISSUE_INSTRN_AVAILABLE_0 / instrn cycles` | Cycles the head instruction on thread 0 is an INSTISSUE instruction not blocked by its unit (a blocked head counts in Thread 0 Stall Rate). Quasar only (four threads; the MATH class also counts instissue instructions). |
+| INSTISSUE Instrn Avail Rate T1 (%) | `instissue_instrn_avail_t1_pct` | `INSTISSUE_INSTRN_AVAILABLE_1 / instrn cycles` | Cycles the head instruction on thread 1 is an INSTISSUE instruction not blocked by its unit (a blocked head counts in Thread 1 Stall Rate). Quasar only (four threads; the MATH class also counts instissue instructions). |
+| INSTISSUE Instrn Avail Rate T2 (%) | `instissue_instrn_avail_t2_pct` | `INSTISSUE_INSTRN_AVAILABLE_2 / instrn cycles` | Cycles the head instruction on thread 2 is an INSTISSUE instruction not blocked by its unit (a blocked head counts in Thread 2 Stall Rate). Quasar only (four threads; the MATH class also counts instissue instructions). |
+| INSTISSUE Instrn Avail Rate T3 (%) | `instissue_instrn_avail_t3_pct` | `INSTISSUE_INSTRN_AVAILABLE_3 / instrn cycles` | Cycles the head instruction on thread 3 is an INSTISSUE instruction not blocked by its unit (a blocked head counts in Thread 3 Stall Rate). Quasar only (four threads; the MATH class also counts instissue instructions). |
+| MATH Instrn Avail Rate T3 (%) | `math_instrn_avail_t3_pct` | `MATH_INSTRN_AVAILABLE_3 / instrn cycles` | Cycles the head instruction on thread 3 is a MATH instruction not blocked by its unit (a blocked head counts in Thread 3 Stall Rate). Quasar only (four threads; the MATH class also counts instissue instructions). |
+| UNPACK Instrn Avail Rate T3 (%) | `unpack_instrn_avail_t3_pct` | `UNPACK_INSTRN_AVAILABLE_3 / instrn cycles` | Cycles the head instruction on thread 3 is a UNPACK instruction not blocked by its unit (a blocked head counts in Thread 3 Stall Rate). Quasar only (four threads; the MATH class also counts instissue instructions). |
+| PACK Instrn Avail Rate T3 (%) | `pack_instrn_avail_t3_pct` | `PACK_INSTRN_AVAILABLE_3 / instrn cycles` | Cycles the head instruction on thread 3 is a PACK instruction not blocked by its unit (a blocked head counts in Thread 3 Stall Rate). Quasar only (four threads; the MATH class also counts instissue instructions). |
+| Tile Counter Stall Pack Rate (%) | `tile_counter_stall_pack_pct` | `TILE_COUNTER_STALL_PACK / instrn cycles` | Cycles the INSTRN unit reported this stall reason, OR-reduced across the four threads. Quasar only. |
+| Tile Counter Stall Unpack Rate (%) | `tile_counter_stall_unpack_pct` | `TILE_COUNTER_STALL_UNPACK / instrn cycles` | Cycles the INSTRN unit reported this stall reason, OR-reduced across the four threads. Quasar only. |
+| Srcs Stall Pack Rate (%) | `srcs_stall_pack_pct` | `SRCS_STALL_PACK / instrn cycles` | Cycles the INSTRN unit reported this stall reason, OR-reduced across the four threads. Quasar only. |
+| Srcs Stall SFPU Rate (%) | `srcs_stall_sfpu_pct` | `SRCS_STALL_SFPU / instrn cycles` | Cycles the INSTRN unit reported this stall reason, OR-reduced across the four threads. Quasar only. |
+| Srcs Stall Unpack Rate (%) | `srcs_stall_unpack_pct` | `SRCS_STALL_UNPACK / instrn cycles` | Cycles the INSTRN unit reported this stall reason, OR-reduced across the four threads. Quasar only. |
+| Dest Stall Pack Rate (%) | `dest_stall_pack_pct` | `DEST_STALL_PACK / instrn cycles` | Cycles the INSTRN unit reported this stall reason, OR-reduced across the four threads. Quasar only. |
+| Dest Stall SFPU Rate (%) | `dest_stall_sfpu_pct` | `DEST_STALL_SFPU / instrn cycles` | Cycles the INSTRN unit reported this stall reason, OR-reduced across the four threads. Quasar only. |
+| Dest Stall Math Rate (%) | `dest_stall_math_pct` | `DEST_STALL_MATH / instrn cycles` | Cycles the INSTRN unit reported this stall reason, OR-reduced across the four threads. Quasar only. |
+| Dest Stall Unpack Rate (%) | `dest_stall_unpack_pct` | `DEST_STALL_UNPACK / instrn cycles` | Cycles the INSTRN unit reported this stall reason, OR-reduced across the four threads. Quasar only. |
+| SFPU Data Hazard Stall Rate (%) | `sfpu_data_hazard_stall_pct` | `SFPU_DATA_HAZARD_STALL / instrn cycles` | Cycles the INSTRN unit reported this stall reason, OR-reduced across the four threads; the RTL folds dest data-valid stalls into it, so it overlaps the Dest Stall rows. Quasar only. |
+| FPU Data Hazard Stall Rate (%) | `fpu_data_hazard_stall_pct` | `FPU_DATA_HAZARD_STALL / instrn cycles` | Cycles the INSTRN unit reported this stall reason, OR-reduced across the four threads; the RTL folds dest data-valid stalls into it, so it overlaps the Dest Stall rows. Quasar only. |
+| SrcB Stall Unpack Rate (%) | `srcb_stall_unpack_pct` | `SRCB_STALL_UNPACK / instrn cycles` | Cycles the INSTRN unit reported this stall reason, OR-reduced across the four threads. Quasar only. |
+| SrcA Stall Unpack Rate (%) | `srca_stall_unpack_pct` | `SRCA_STALL_UNPACK / instrn cycles` | Cycles the INSTRN unit reported this stall reason, OR-reduced across the four threads. Quasar only. |
+| Src Valid Stall Math Rate (%) | `dvalid_stall_math_pct` | `DVALID_STALL_MATH / instrn cycles` | Cycles math waited for srcA or srcB to become valid, OR-reduced across the four threads; SrcA Stall Math Rate is the srcA part and SrcB Stall Math Rate the remainder. Quasar only. |
+| SrcA Stall Math Rate (%) | `srca_stall_math_pct` | `SRCA_STALL_MATH / instrn cycles` | Cycles the INSTRN unit reported this stall reason, OR-reduced across the four threads. Quasar only. |
+| SrcB Stall Math Rate (%) | `srcb_stall_math_pct` | `(DVALID_STALL_MATH - SRCA_STALL_MATH) / instrn cycles` | The srcB part of the src-valid stall (the RTL counts srcA and the total so srcB can be recovered). Quasar only. |
+| Tile Counter Stall Pack Share (%) | `tile_counter_stall_pack_share_pct` | `TILE_COUNTER_STALL_PACK / sum of the captured stall reasons` | Share of tile counter stall pack among the OR-reduced stall reasons (src-valid counted once, as its srcA and srcB parts); N/A with fewer than two reasons captured. Quasar only. |
+| Tile Counter Stall Unpack Share (%) | `tile_counter_stall_unpack_share_pct` | `TILE_COUNTER_STALL_UNPACK / sum of the captured stall reasons` | Share of tile counter stall unpack among the OR-reduced stall reasons (src-valid counted once, as its srcA and srcB parts); N/A with fewer than two reasons captured. Quasar only. |
+| Srcs Stall Pack Share (%) | `srcs_stall_pack_share_pct` | `SRCS_STALL_PACK / sum of the captured stall reasons` | Share of srcs stall pack among the OR-reduced stall reasons (src-valid counted once, as its srcA and srcB parts); N/A with fewer than two reasons captured. Quasar only. |
+| Srcs Stall SFPU Share (%) | `srcs_stall_sfpu_share_pct` | `SRCS_STALL_SFPU / sum of the captured stall reasons` | Share of srcs stall sfpu among the OR-reduced stall reasons (src-valid counted once, as its srcA and srcB parts); N/A with fewer than two reasons captured. Quasar only. |
+| Srcs Stall Unpack Share (%) | `srcs_stall_unpack_share_pct` | `SRCS_STALL_UNPACK / sum of the captured stall reasons` | Share of srcs stall unpack among the OR-reduced stall reasons (src-valid counted once, as its srcA and srcB parts); N/A with fewer than two reasons captured. Quasar only. |
+| Dest Stall Pack Share (%) | `dest_stall_pack_share_pct` | `DEST_STALL_PACK / sum of the captured stall reasons` | Share of dest stall pack among the OR-reduced stall reasons (src-valid counted once, as its srcA and srcB parts); N/A with fewer than two reasons captured. Quasar only. |
+| Dest Stall SFPU Share (%) | `dest_stall_sfpu_share_pct` | `DEST_STALL_SFPU / sum of the captured stall reasons` | Share of dest stall sfpu among the OR-reduced stall reasons (src-valid counted once, as its srcA and srcB parts); N/A with fewer than two reasons captured. Quasar only. |
+| Dest Stall Math Share (%) | `dest_stall_math_share_pct` | `DEST_STALL_MATH / sum of the captured stall reasons` | Share of dest stall math among the OR-reduced stall reasons (src-valid counted once, as its srcA and srcB parts); N/A with fewer than two reasons captured. Quasar only. |
+| Dest Stall Unpack Share (%) | `dest_stall_unpack_share_pct` | `DEST_STALL_UNPACK / sum of the captured stall reasons` | Share of dest stall unpack among the OR-reduced stall reasons (src-valid counted once, as its srcA and srcB parts); N/A with fewer than two reasons captured. Quasar only. |
+| SFPU Data Hazard Stall Share (%) | `sfpu_data_hazard_stall_share_pct` | `SFPU_DATA_HAZARD_STALL / sum of the captured stall reasons` | Share of sfpu data hazard stall among the OR-reduced stall reasons (src-valid counted once, as its srcA and srcB parts); N/A with fewer than two reasons captured. Quasar only. |
+| FPU Data Hazard Stall Share (%) | `fpu_data_hazard_stall_share_pct` | `FPU_DATA_HAZARD_STALL / sum of the captured stall reasons` | Share of fpu data hazard stall among the OR-reduced stall reasons (src-valid counted once, as its srcA and srcB parts); N/A with fewer than two reasons captured. Quasar only. |
+| SrcB Stall Unpack Share (%) | `srcb_stall_unpack_share_pct` | `SRCB_STALL_UNPACK / sum of the captured stall reasons` | Share of srcb stall unpack among the OR-reduced stall reasons (src-valid counted once, as its srcA and srcB parts); N/A with fewer than two reasons captured. Quasar only. |
+| SrcA Stall Unpack Share (%) | `srca_stall_unpack_share_pct` | `SRCA_STALL_UNPACK / sum of the captured stall reasons` | Share of srca stall unpack among the OR-reduced stall reasons (src-valid counted once, as its srcA and srcB parts); N/A with fewer than two reasons captured. Quasar only. |
+| SrcA Stall Math Share (%) | `srca_stall_math_share_pct` | `SRCA_STALL_MATH / sum of the captured stall reasons` | Share of srca stall math among the OR-reduced stall reasons (the src-valid total is replaced by its srcA and srcB parts so nothing is counted twice); N/A with fewer than two reasons captured. Quasar only. |
+| SrcB Stall Math Share (%) | `srcb_stall_math_share_pct` | `(DVALID_STALL_MATH - SRCA_STALL_MATH) / sum of the captured stall reasons` | Share of the srcB part of the src-valid stall; N/A with fewer than two reasons captured. Quasar only. |
+| Unpacker2 Busy T0 Util (%) | `unpack2_busy_t0_pct` | `UNPACK2_BUSY_THREAD0 / unpack cycles` | Unpacker 2 busy on behalf of thread 0. Quasar only. |
+| T3 Instrn Per Issue-Ready Cycle (ratio) | `thread3_instrn_per_ready_cycle_ratio` | `THREAD_INSTRUCTIONS_3 / max(1, instrn cycles - THREAD_STALLS_3)` | UNBOUNDED ratio: instructions issued per cycle thread 3 was not stalled. Quasar only. |
+
+### L1 client events (Quasar)
+
+Quasar has no L1 counter bank. Each NEO has one l1_client event counter behind a 37 subport by 8 event mux, so a run measures one selection per NEO, chosen with `TT_METAL_PROFILE_PERF_COUNTERS_L1_SEL` (metal) or `LLK_PERF_L1_CLIENT_SEL` (tt-llk harness). Its metric is not a fixed catalogue row: `tt_llk_perf.metrics.quasar_l1_client_label(sel)` names the counter `L1_CLIENT_<PORT>_<EVENT>`, `compute_l1_client_metrics()` divides the count by the capture's cycles, and the column appears after the fixed metric columns as `<name lower-cased>_pct` (label `<name> Rate`), or `_ratio` (label `<name> Mean Outstanding`) for the pending-request carry. The Tracy CSV and the harness report both add these columns dynamically.
+
+`<PORT>` is `TRISC<n>` (subports 0-3), `THCON` (4), `UNPACK<u>_IF<i>_LANE<l>` (5-24: three unpackers, two interfaces each except unpacker 2 with one, four lanes) or `PACK<p>_IF<i>_LANE<l>` (25-36: packer 0 interfaces 0-1, packer 1 interface 0). Events 1 to 3 count per SBank of the whole port, not per lane, so their names carry `SBANK<n>` instead of `LANE<n>` (`L1_CLIENT_UNPACK0_IF0_SBANK0_SBANK_POP` for selection 41). Event 0 is unused and the THCON subport's events 1 to 3 duplicate the TRISC port's SBank 0 counters; those 40 selections are rejected at build time, leaving 256 valid ones.
+
+| Event | Name | Value reported |
+|---|---|---|
+| 1 | `SBANK_POP` | per-cycle indicator; count / cycles is a rate |
+| 2 | `ISSUE_STALL_CARRY` | fires once per four lane events; count / cycles is the mean per-lane fraction of stalled issue cycles |
+| 3 | `ISSUE_WORK_CARRY` | same carry; mean per-lane fraction of issuing cycles |
+| 4 | `FLEX_STALL_CARRY` | same carry, flex path |
+| 5 | `FLEX_WORK_CARRY` | same carry, flex path |
+| 6 | `PENDING_REQS_CARRY` | fires once per 64 outstanding-request cycles (128 on packer 0's two interfaces); count x divisor / cycles is the mean number of outstanding requests, reported as a ratio |
+| 7 | `ORDER_FIFO_ACTIVE` | per-cycle indicator; count / cycles is a rate |
+
+The reference cycles differ between the two consumers: the metal profiler stamps the wall-clock span between arm and freeze (the CSR has no reference counter), the harness uses the INSTRN bank's cycle count of the zone.
+
 ## Hardware Register Reference
 
 Each counter bank `<X>` (`FPU`, `TDMA_PACK`, `TDMA_UNPACK`, `L1`, `INSTRN_THREAD`) is programmed via three RISC-V debug registers. The addresses and bit constants are in `tt_metal/tt-llk/tools/include/perf_counters/registers.h` (`bank_regs(Bank)` returns the five registers of a bank; the arch `tensix.h` macros are cross-checked by `static_assert`), and the write sequences used by `start_perf_counter()` / `stop_perf_counter()` / `read_perf_counters()` are the primitives in `hw.h`.
@@ -263,6 +374,30 @@ Each counter bank `<X>` (`FPU`, `TDMA_PACK`, `TDMA_UNPACK`, `L1`, `INSTRN_THREAD
 
 Because the software must toggle bit [16] and re-read to get both `req` and `grant`, each counter is read twice (the grant entries in the tables carry selects of 256 and up, which is bit [16] after the shift). Every mode-register write is followed by a readback poll (`llk::perf::select`) so the hardware has committed the new selection before the output registers are sampled; `volatile` reads alone do not provide MMIO ordering guarantees on RISC-V. The tt-llk harness bounds the poll at 1024 reads; the BRISC firmware polls without a bound because it sits a few bytes under its size limit.
 
+### Quasar windows
+
+The same `tt_perf_cnt` protocol applies, but the debug block is per NEO and has two addresses. `registers.h` keeps the per-bank offsets once (`detail::BANK_OFFSETS`) and adds them to a window base: `bank_regs(bank, window)`, `perf_cnt_all(window)`, `dbg_feature_disable(window)` and `l1_client_regs(window)`, with `LOCAL_REGS_WINDOW` as the default.
+
+| Window | Base | Who uses it |
+|---|---|---|
+| Local | 0x00800000 (`LOCAL_REGS_WINDOW`, the `LOCAL_REGS_BASE` macro of `tt_t6_trisc_map.h`) | a TRISC reaching its own NEO (the tt-llk harness) |
+| NoC | 0x01800000 + neo x 0x10000 (`neo_window(neo)`, `NUM_NEOS` = 4) | DM0 reaching every NEO (the metal profiler) |
+
+| Bank or register | Offsets in the window | Notes |
+|---|---|---|
+| INSTRN_THREAD | control 0x0, 0x4, 0x8; OUT_L 0x98, OUT_H 0x9C | started and stopped by `PERF_CNT_ALL` too |
+| TDMA_UNPACK | control 0xC, 0x10, 0x14; OUT_L 0xA0, OUT_H 0xA4 | own start/stop only |
+| FPU | control 0x18, 0x1C, 0x20; OUT_L 0xB0, OUT_H 0xB4 | started and stopped by `PERF_CNT_ALL` too |
+| TDMA_PACK | control 0x8C, 0x90, 0x94; OUT_L 0xA8, OUT_H 0xAC | own start/stop only |
+| L1 | none | no L1 bank; `bank_regs(Bank::L1)` is all zero and `table_for(Bank::L1)` is empty |
+| `PERF_CNT_ALL` | 0x24 | global start/stop for INSTRN_THREAD and FPU |
+| `DBG_FEATURE_DISABLE` | 0x40 | cleared by the harness before arming |
+| `PERF_CNT_MUX_CTRL` | 0xF4 | present but unused (no L1 bank) |
+| l1_client `CTRL` | 0xA0AC | bit 0 enable, bits [9:4] subport, bits [14:12] event (`l1_client_ctrl_word(sel)` in `hw.h`) |
+| l1_client `CNT` | 0xA0B0 | clear-on-read event count |
+
+The offsets are `static_assert`ed against `NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_*_REG_ADDR` and the l1_client macros of `tensix_neo_reg.h` whenever that header is visible. The l1_client sequence in `hw.h` is `l1_client_start(regs, sel)` (write `CTRL`, read `CNT` once to clear it), `l1_client_read(regs)` and `l1_client_stop(regs)` (write `CTRL` 0).
+
 ---
 
 ## Hardware Limitations
@@ -276,6 +411,6 @@ Because the software must toggle bit [16] and re-read to get both `req` and `gra
 
 ### Counter Set
 
-Verified against the `wormhole_rtl` and `blackhole_rtl` branches. Every counter in the `blackhole.h` / `wormhole.h` tables is driven by a real RTL signal. Signals that are hardwired to a constant, or whose grant/req line is an alias of another counter already exposed, are omitted from the tables entirely. No post-hoc filtering is applied; every emitted counter is reported as-is.
+Verified against the `wormhole_rtl` and `blackhole_rtl` branches and, for `quasar.h`, the Quasar A0 tapeout RTL. Every counter in the `blackhole.h` / `wormhole.h` / `quasar.h` tables is driven by a real RTL signal. Signals that are hardwired to a constant, or whose grant/req line is an alias of another counter already exposed, are omitted from the tables entirely. No post-hoc filtering is applied; every emitted counter is reported as-is.
 
-Some counters are live wires that no tt-metal op has exercised so far. In a sweep of every selector over 22 Blackhole ops these read 0 throughout: the TRISC1 unpack path (`UNPACK0/1_BUSY_THREAD1`, `SRCA/SRCB_WRITE_TID_ODD`), the MOVE class, `THCON_INSTRN_AVAILABLE_1`, `UNPACK_INSTRN_AVAILABLE_1/2`, `PACK_INSTRN_AVAILABLE_0/1`, `WAITING_FOR_SRCA/SRCB_CLEAR` and the per-thread waits a thread never performs (for example `WAITING_FOR_SFPU_IDLE_0`). They stay in the tables because other kernels can drive them (the LLK perf suite does hit `WAITING_FOR_SRCA_CLEAR`); metrics built on them read 0%, not N/A.
+Some counters are live wires that no tt-metal op has exercised so far. In a sweep of every selector over 22 Blackhole ops these read 0 throughout: the TRISC1 unpack path (`UNPACK0/1_BUSY_THREAD1`, `SRCA/SRCB_WRITE_TID_ODD`), the MOVE class, `THCON_INSTRN_AVAILABLE_1`, `UNPACK_INSTRN_AVAILABLE_1/2`, `PACK_INSTRN_AVAILABLE_0/1`, `WAITING_FOR_SRCA/SRCB_CLEAR` and the per-thread waits a thread never performs (for example `WAITING_FOR_SFPU_IDLE_0`). They stay in the tables because other kernels can drive them (the LLK perf suite does hit `WAITING_FOR_SRCA_CLEAR`); metrics built on them read 0%, not N/A. On Quasar the emulator sweep over 23 ops left 24 entries at zero: everything on thread 3, the THCON class, `CFG_INSTRN_AVAILABLE_1`, `UNPACK_INSTRN_AVAILABLE_1/2`, `PACK_INSTRN_AVAILABLE_0/1`, `SRCS_STALL_PACK/SFPU/UNPACK`, `UNPACK2_BUSY_THREAD0`, `UNPACK0_BUSY_THREAD1` and `SRCA/SRCB_WRITE_TID_ODD`.

@@ -6,6 +6,7 @@
 #include <cstdio>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
 #include "perf.h"
@@ -38,7 +39,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_tiles_per_unpack = unpack_to_dest ? tiles_in_block : 1;
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         if constexpr (unpack_to_dest)
         {
             if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
@@ -70,7 +71,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
@@ -150,7 +151,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             if constexpr (unpack_to_dest)
@@ -192,7 +193,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
@@ -263,7 +264,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         // PACK_ISOLATE and L1_CONGESTION pack without a math↔pack handshake.
         // Explicitly clear wait_mask — CFG can persist across run-types in the same session.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
@@ -290,7 +291,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
