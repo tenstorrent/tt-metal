@@ -1042,17 +1042,31 @@ std::vector<Tensor> asin_bw(
 
 // Asinh
 // result: grad * (self * self + 1).rsqrt()
+// d/dx asinh(x) = 1 / sqrt(1 + x^2)
+// The square overflows for |x| > 2^64 and rsqrt(inf) is 0, so the derivative used to vanish
+// over the whole band 2^64 < |x| <= FLT_MAX even though 1/sqrt(1 + x^2) tends to 1/|x| and
+// stays a normal float down to 2.9e-39. Past kAsinhReciprocalCutoff = 2^62, 1/x^2 is below
+// 2^-124, so 1/sqrt(1 + x^2) and 1/|x| agree to far under half a float32 ULP and the
+// reciprocal can be taken directly. Below the cutoff the square is finite and the chain is
+// unchanged, so no previously correct value moves.
 std::vector<Tensor> asinh_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     using ttnn::operations::unary::EltwiseUnaryWithParam;
     using ttnn::operations::unary::UnaryOpType;
+    constexpr float kAsinhReciprocalCutoff = 4611686018427387904.0f;  // 2^62
     std::vector<EltwiseUnaryWithParam> ops_chain = {
         EltwiseUnaryWithParam{UnaryOpType::SQUARE},
         EltwiseUnaryWithParam{UnaryOpType::ADD_UNARY_SFPU, 1.0f},
         EltwiseUnaryWithParam{UnaryOpType::RSQRT}};
-    Tensor grad_result =
-        ttnn::multiply(grad, ttnn::unary_chain(input, ops_chain, output_mem_config), std::nullopt, output_mem_config);
+    std::vector<EltwiseUnaryWithParam> abs_recip = {
+        EltwiseUnaryWithParam{UnaryOpType::ABS}, EltwiseUnaryWithParam{UnaryOpType::RECIP}};
+    Tensor derivative = ttnn::where(
+        ttnn::gt(ttnn::abs(input, output_mem_config), kAsinhReciprocalCutoff, std::nullopt, output_mem_config),
+        ttnn::unary_chain(input, abs_recip, output_mem_config),
+        ttnn::unary_chain(input, ops_chain, output_mem_config),
+        output_mem_config);
+    Tensor grad_result = ttnn::multiply(grad, derivative, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;
 }
