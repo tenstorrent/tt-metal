@@ -258,14 +258,6 @@ Tensor div_no_nan(
     operations::unary::ScalarVariant value,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
-Tensor floor_div(
-    const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-
-Tensor floor_div(
-    const Tensor& input_a,
-    operations::unary::ScalarVariant value,
-    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-
 Tensor outer(
     const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 

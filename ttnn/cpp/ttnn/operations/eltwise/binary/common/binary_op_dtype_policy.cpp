@@ -32,6 +32,7 @@ std::span<const DataType> supported_tensor_a_dtypes(BinaryOpType op) {
         case BinaryOpType::MAXIMUM:
         case BinaryOpType::MINIMUM: return float_and_int32_uint32;
         case BinaryOpType::DIV:
+        case BinaryOpType::DIV_FLOOR:
         case BinaryOpType::FMOD:
         case BinaryOpType::ISCLOSE: return float_and_int32;
         case BinaryOpType::BITWISE_XOR:
@@ -42,7 +43,6 @@ std::span<const DataType> supported_tensor_a_dtypes(BinaryOpType op) {
         case BinaryOpType::LOGICAL_RIGHT_SHIFT: return logical_right_shift;
         case BinaryOpType::GCD:
         case BinaryOpType::LCM:
-        case BinaryOpType::DIV_FLOOR:
         case BinaryOpType::DIV_TRUNC: return int32_only;
         case BinaryOpType::REQUANT:
         case BinaryOpType::DEQUANT: return requant_dequant;
@@ -93,7 +93,8 @@ bool supports_mixed_float_inputs(BinaryOpType op) {
         case BinaryOpType::GE:
         case BinaryOpType::EQ:
         case BinaryOpType::NE:
-        case BinaryOpType::DIV: return true;
+        case BinaryOpType::DIV:
+        case BinaryOpType::DIV_FLOOR: return true;
         default: return false;
     }
 }

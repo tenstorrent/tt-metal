@@ -51,6 +51,20 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
     for (uint32_t i = 0; i < n; ++i) {
         copy_tile(cb_post_lhs.get_cb_id(), i, i * 2);
     }
+#ifdef SCALAR_RHS_ONCE
+#if HAS_ACTIVATIONS(POST)
+#error "SCALAR_RHS_ONCE floor_div path does not implement POST activations or BINARY_SFPU_INIT"
+#endif
+    constexpr uint32_t scalar_dst = ckernel::kScalarFloorDivScalarDst;
+    constexpr uint32_t recip_dst = ckernel::kScalarFloorDivRecipDst;
+    reconfig_data_format_srca(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
+    copy_init(cb_post_rhs.get_cb_id());
+    copy_tile(cb_post_rhs.get_cb_id(), 0, scalar_dst);
+    floor_div_binary_scalar_recip_tile(scalar_dst, recip_dst);
+    for (uint32_t i = 0; i < n; ++i) {
+        BINARY_SFPU_OP(i * 2, scalar_dst, i * 2);
+    }
+#else
     reconfig_data_format_srca(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
     copy_init(cb_post_rhs.get_cb_id());
     for (uint32_t i = 0; i < n; ++i) {
@@ -65,6 +79,7 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
 #endif
         PROCESS_POST_ACTIVATIONS(i * 2);
     }
+#endif
     tile_regs_commit();
 
     tile_regs_wait();

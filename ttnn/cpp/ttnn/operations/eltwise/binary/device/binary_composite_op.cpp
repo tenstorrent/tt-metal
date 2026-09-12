@@ -810,32 +810,6 @@ Tensor fmod(
     return ttnn::unary_fmod(input, scalar_f, output_mem_config, std::nullopt, sub_core_grids);
 }
 
-Tensor floor_div(
-    const Tensor& input_a, unary::ScalarVariant value, const std::optional<MemoryConfig>& output_mem_config) {
-    float value_f = std::visit([](auto v) -> float { return static_cast<float>(v); }, value);
-    if (value_f == 0) {
-        float t_inf = std::numeric_limits<float>::infinity();
-        float t_nan = std::nanf("");
-        return ttnn::where(
-            ttnn::eqz(input_a, output_mem_config),
-            t_nan,
-            ttnn::multiply(ttnn::sign(input_a, output_mem_config), t_inf, std::nullopt, output_mem_config));
-    }
-    Tensor temp = ttnn::multiply(input_a, (1.0f / value_f), std::nullopt, output_mem_config);
-    return ttnn::floor(temp);
-}
-
-Tensor floor_div(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor temp = ttnn::div(input_a, input_b, false, std::nullopt, std::nullopt, output_mem_config);
-    Tensor result = ttnn::div(input_a, input_b, false, "floor", std::nullopt, output_mem_config);
-    // floor(inf, -inf) = inf, -inf. isinf tests both in a single SFPU pass,
-    // replacing two eq's and a logical_or. The dropped eq(temp, nan) term was
-    // always false under IEEE, so NaN selects the floored value here exactly as
-    // it did before; isinf (rather than !isfinite) keeps that branch identical
-    // without relying on floor propagating NaN.
-    return ttnn::where(ttnn::isinf(temp, output_mem_config), temp, result);
-}
-
 // outer(a, b) treats each input's last dim as a vector and broadcasts the
 // leading dims: a:[..., N], b:[..., M] -> [..., N, M], equivalent to
 // a.unsqueeze(-1) * b.unsqueeze(-2).

@@ -163,7 +163,14 @@ OpConfig::OpConfig(
                 binary_op = FpuBinaryOp::MUL;
             }
             break;
-        case BinaryOpType::DIV_FLOOR: binary_op = SfpuBinaryOp::DIV_FLOOR; break;
+        case BinaryOpType::DIV_FLOOR:
+            if (dtype == DataType::INT32) {
+                binary_op = SfpuBinaryOp::DIV_FLOOR;
+            } else {
+                binary_op = SfpuBinaryOp::DIV;
+                postprocess = unary::UnaryOpType::FLOOR;
+            }
+            break;
         case BinaryOpType::DIV_TRUNC: binary_op = SfpuBinaryOp::DIV_TRUNC; break;
         case BinaryOpType::REMAINDER: binary_op = SfpuBinaryOp::REMAINDER; break;
         case BinaryOpType::FMOD: binary_op = SfpuBinaryOp::FMOD; break;
