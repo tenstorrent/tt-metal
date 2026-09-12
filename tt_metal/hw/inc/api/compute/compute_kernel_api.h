@@ -61,6 +61,7 @@
 #include "llk_math_eltwise_binary_sfpu_mul_int.h"
 #include "llk_math_eltwise_binary_sfpu_binary_comp.h"
 #include "ckernel_sfpu_topk.h"
+#include "ckernel_sfpu_reduce.h"
 #endif
 #define MATH(...) __VA_ARGS__
 #else
@@ -165,7 +166,12 @@ ALWI void silu_tile(uint32_t idst) {
         DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_silu, (8 /*ITERATIONS*/), idst, ::ckernel::VectorMode::RC));
 #else
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_silu, (is_fp32_dest_acc_en, 8 /* ITERATIONS */), idst, VectorMode::RC));
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_silu,
+        (is_fp32_dest_acc_en, 8 /* ITERATIONS */),
+        idst,
+        VectorMode::RC));
 #endif
 }
 
@@ -597,14 +603,21 @@ ALWI void power_iterative_tile_init() { MATH(SFPU_UNARY_INIT(power)); }
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void exp2_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_exp2, (true /* APPROXIMATE */, is_fp32_dest_acc_en), idst, VectorMode::RC));
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_exp2,
+        (true /* APPROXIMATE */, is_fp32_dest_acc_en),
+        idst,
+        VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void exp2_tile_init() { MATH(SFPU_UNARY_INIT_FN(exp2, sfpu::exp2_init, (true /*APPROXIMATE*/, is_fp32_dest_acc_en))); }
+ALWI void exp2_tile_init() {
+    MATH(SFPU_UNARY_INIT_FN(exp2, sfpu::exp2_init, (true /*APPROXIMATE*/, is_fp32_dest_acc_en)));
+}
 
 // heaviside : y = 0 if x < 0 , 1 if x > 0 , else value
 // clang-format off
@@ -668,7 +681,12 @@ ALWI void expm1_tile_init() {
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void silu_tile_pack(uint32_t idst) {
     PACK(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_silu, (is_fp32_dest_acc_en, 8 /* ITERATIONS */), idst, VectorMode::RC));
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_silu,
+        (is_fp32_dest_acc_en, 8 /* ITERATIONS */),
+        idst,
+        VectorMode::RC));
 }
 ALWI void silu_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (APPROX))); }
 
@@ -838,6 +856,112 @@ ALWI void topk_uint16_prepare_value_tile_for_pack(uint32_t idst) {
     MATH((ckernel::sfpu::topk_uint16_prepare_value_tile_for_pack(idst)));
 }
 
+// Formats the SFPU reduce kernel implements on this arch. Mirrors is_supported_reduce_format() in the
+// arch's ckernel_sfpu_reduce.h, which is only included on the MATH TRISC and so cannot be used here.
+#ifdef ARCH_QUASAR
+#define SFPU_REDUCE_SUPPORTED_FORMATS "Float32, Float16_b, Float16, Int32"
+constexpr bool sfpu_reduce_format_supported(DataFormat format) {
+    return format == DataFormat::Float32 || format == DataFormat::Float16_b || format == DataFormat::Float16 ||
+           format == DataFormat::Int32;
+}
+#else
+#define SFPU_REDUCE_SUPPORTED_FORMATS "Float32, Int32, UInt32, UInt16, Float16_b"
+constexpr bool sfpu_reduce_format_supported(DataFormat format) {
+    return format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32 ||
+           format == DataFormat::UInt16 || format == DataFormat::Float16_b;
+}
+#endif
+
+// clang-format off
+/**
+ * Performs reduce operation (sum, average, max, min) on a 32x32 tile for column reduction and multiple tiles for row reduction, placing output values into the first row.
+ * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Only 32x32 tile dimensions are supported
+ *  - This kernel is optimized for 32x32 tile dimensions and uses VectorMode::RC_custom for customized reduction
+ *  - Column reduction (REDUCE_COL) is supported for all pool types; row reduction (REDUCE_ROW) is supported for SUM, MAX and MIN only.
+ *  - REDUCE_COL operates on a single tile only (ct_dim = 1, rt_dim = 1).
+ *  - REDUCE_ROW supports multiple tiles: ct_dim and rt_dim specify the tile block dimensions to reduce over.
+ *
+ * | Argument        | Description                                                                     | Type      | Valid Range
+ * |-----------------|---------------------------------------------------------------------------------|-----------|-------------------------------------------------------
+ * | pool_type       | The type of reduction operation                                                 | PoolType  | SUM, AVG, MAX, MIN
+ * | format          | The data format for the reduction operation                                     | DataFormat| WH/BH: Float32, Int32, UInt32, UInt16, Float16_b. Quasar: Float32, Float16_b, Float16, Int32
+ * | reduce_dim      | The reduction dimension                                                         | ReduceDim | REDUCE_COL or REDUCE_ROW (REDUCE_ROW only for SUM, MAX and MIN)
+ * | idst            | The index of the tile in DST register containing the data to be reduced         | uint32_t  | Must be less than the size of the DST register buffer
+ * | ct_dim          | Tile dimension along columns (runtime); must be 1 when reduce_dim is REDUCE_COL | uint32_t  | >= 1; default 1
+ * | rt_dim          | Tile dimension along rows (runtime); must be 1 when reduce_dim is REDUCE_COL    | uint32_t  | >= 1; default 1
+ */
+// clang-format on
+template <
+    PoolType pool_type,
+    DataFormat format,
+    ReduceDim reduce_dim = ReduceDim::REDUCE_COL,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void sfpu_reduce(uint32_t idst, uint32_t ct_dim = 1, uint32_t rt_dim = 1) {
+    static_assert(
+        reduce_dim == ReduceDim::REDUCE_COL ||
+            (reduce_dim == ReduceDim::REDUCE_ROW &&
+             (pool_type == PoolType::SUM || pool_type == PoolType::MAX || pool_type == PoolType::MIN)),
+        "Only column reduction (REDUCE_COL) is supported for all pool types; row reduction (REDUCE_ROW) is only "
+        "supported for SUM, MAX and MIN");
+    static_assert(
+        sfpu_reduce_format_supported(format),
+        "Unsupported data format. Supported formats: " SFPU_REDUCE_SUPPORTED_FORMATS);
+    static_assert(
+        pool_type == PoolType::SUM || pool_type == PoolType::AVG || pool_type == PoolType::MAX ||
+            pool_type == PoolType::MIN,
+        "Unsupported pool type. Supported pool types: SUM, AVG, MAX, MIN");
+
+    // This kernel is optimized for 32x32 tiles and uses RC_custom vector mode for custom reduction
+#ifdef ARCH_QUASAR
+    // Quasar's calculate_reduce takes the Dest sync mode as its fifth template parameter, so the
+    // kernel sizes its Dest section to match the program. On WH/BH that slot is the output format.
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_reduce,
+        (pool_type, reduce_dim, format, is_fp32_dest_acc_en, DST_SYNC_MODE),
+        idst,
+        VectorMode::RC_custom,
+        ct_dim,
+        rt_dim));
+#else
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_reduce,
+        (pool_type, reduce_dim, format, is_fp32_dest_acc_en),
+        idst,
+        VectorMode::RC_custom,
+        ct_dim,
+        rt_dim));
+#endif
+}
+
+/**
+ * @brief Initialization for SFPU reduce kernel.
+ *        Must be called before sfpu_reduce() to set up the necessary configurations for reduction operations.
+ *        The same init is used for both REDUCE_COL and REDUCE_ROW; it does not take tile dimensions.
+ * @tparam pool_type The reduction operation, currently supported: (SUM, AVG, MAX, MIN)
+ * @tparam format The data format. WH/BH: Float32, Int32, UInt32, UInt16, Float16_b.
+ *                Quasar: Float32, Float16_b, Float16, Int32.
+ */
+template <PoolType pool_type, DataFormat format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void sfpu_reduce_init() {
+    static_assert(
+        pool_type == PoolType::SUM || pool_type == PoolType::AVG || pool_type == PoolType::MAX ||
+            pool_type == PoolType::MIN,
+        "Unsupported pool type. Supported pool types: SUM, AVG, MAX, MIN");
+    static_assert(
+        sfpu_reduce_format_supported(format),
+        "Unsupported data format. Supported formats: " SFPU_REDUCE_SUPPORTED_FORMATS);
+
+    MATH(SFPU_UNARY_INIT_FN_ARGS(
+        reduce, sfpu::init_reduce, (pool_type, format, is_fp32_dest_acc_en), 1 /* block_ct_dim */));
+}
+
 #ifndef ARCH_QUASAR  // BH/WH-only ops below
 
 // clang-format off
@@ -862,7 +986,8 @@ template <
     int num_rows = 9,
     ckernel::DataLayout layout = ckernel::DataLayout::TILE,
     bool accumulate = false,
-    int ITERATIONS = 8, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+    int ITERATIONS = 8,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void max_reduce_with_indices(uint32_t idst, uint32_t idst_idx, uint32_t chunk = 0) {
     static_assert(num_rows <= 32, "num_rows must be <= 32");
     MATH((SFPU_BINARY_CALL(
@@ -884,78 +1009,6 @@ template <ckernel::DataLayout layout = ckernel::DataLayout::TILE>
 ALWI void max_reduce_with_indices_init() {
     MATH((SFPU_BINARY_INIT_FN(
         max_pool_with_indices, sfpu::init_max_pool_with_indices, (true /* APPROXIMATE */, layout))));
-}
-
-// clang-format off
-/**
- * Performs reduce operation (sum, average, max, min) on a 32x32 tile for column reduction and multiple tiles for row reduction, placing output values into the first row.
- * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only
- * available on the compute engine.
- *
- * Only 32x32 tile dimensions are supported
- *  - This kernel is optimized for 32x32 tile dimensions and uses VectorMode::RC_custom for customized reduction
- *  - Column reduction (REDUCE_COL) is supported for all pool types; row reduction (REDUCE_ROW) is supported for SUM, MAX and MIN only.
- *  - REDUCE_COL operates on a single tile only (ct_dim = 1, rt_dim = 1).
- *  - REDUCE_ROW supports multiple tiles: ct_dim and rt_dim specify the tile block dimensions to reduce over.
- *
- * | Argument        | Description                                                                     | Type      | Valid Range
- * |-----------------|---------------------------------------------------------------------------------|-----------|-------------------------------------------------------
- * | pool_type       | The type of reduction operation                                                 | PoolType  | SUM, AVG, MAX, MIN
- * | format          | The data format for the reduction operation                                     | DataFormat| Float32, Int32, UInt32, UInt16, Float16_b
- * | reduce_dim      | The reduction dimension                                                         | ReduceDim | REDUCE_COL or REDUCE_ROW (REDUCE_ROW only for SUM, MAX and MIN)
- * | idst            | The index of the tile in DST register containing the data to be reduced         | uint32_t  | Must be less than the size of the DST register buffer
- * | ct_dim          | Tile dimension along columns (runtime); must be 1 when reduce_dim is REDUCE_COL | uint32_t  | >= 1; default 1
- * | rt_dim          | Tile dimension along rows (runtime); must be 1 when reduce_dim is REDUCE_COL    | uint32_t  | >= 1; default 1
- */
-// clang-format on
-template <PoolType pool_type, DataFormat format, ReduceDim reduce_dim = ReduceDim::REDUCE_COL, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void sfpu_reduce(uint32_t idst, uint32_t ct_dim = 1, uint32_t rt_dim = 1) {
-    static_assert(
-        reduce_dim == ReduceDim::REDUCE_COL ||
-            (reduce_dim == ReduceDim::REDUCE_ROW &&
-             (pool_type == PoolType::SUM || pool_type == PoolType::MAX || pool_type == PoolType::MIN)),
-        "Only column reduction (REDUCE_COL) is supported for all pool types; row reduction (REDUCE_ROW) is only "
-        "supported for SUM, MAX and MIN");
-    static_assert(
-        format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32 ||
-            format == DataFormat::UInt16 || format == DataFormat::Float16_b,
-        "Unsupported data format. Supported formats: Float32, Int32, UInt32, UInt16, Float16_b");
-    static_assert(
-        pool_type == PoolType::SUM || pool_type == PoolType::AVG || pool_type == PoolType::MAX ||
-            pool_type == PoolType::MIN,
-        "Unsupported pool type. Supported pool types: SUM, AVG, MAX, MIN");
-
-    // This kernel is optimized for 32x32 tiles and uses RC_custom vector mode for custom reduction
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
-        calculate_reduce,
-        (pool_type, reduce_dim, format, is_fp32_dest_acc_en),
-        idst,
-        VectorMode::RC_custom,
-        ct_dim,
-        rt_dim));
-}
-
-/**
- * @brief Initialization for SFPU reduce kernel.
- *        Must be called before sfpu_reduce() to set up the necessary configurations for reduction operations.
- *        The same init is used for both REDUCE_COL and REDUCE_ROW; it does not take tile dimensions.
- * @tparam pool_type The reduction operation, currently supported: (SUM, AVG, MAX, MIN)
- * @tparam format The data format, currently supported: (Float32, Int32, UInt32, UInt16, Float16_b)
- */
-template <PoolType pool_type, DataFormat format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void sfpu_reduce_init() {
-    static_assert(
-        pool_type == PoolType::SUM || pool_type == PoolType::AVG || pool_type == PoolType::MAX ||
-            pool_type == PoolType::MIN,
-        "Unsupported pool type. Supported pool types: SUM, AVG, MAX, MIN");
-    static_assert(
-        format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32 ||
-            format == DataFormat::UInt16 || format == DataFormat::Float16_b,
-        "Unsupported data format. Supported formats: Float32, Int32, UInt32, UInt16, Float16_b");
-
-    MATH(SFPU_UNARY_INIT_FN_ARGS(reduce, sfpu::init_reduce, (pool_type, format, is_fp32_dest_acc_en), 1 /* block_ct_dim */));
 }
 
 // clang-format off
