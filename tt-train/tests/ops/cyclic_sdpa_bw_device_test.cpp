@@ -862,6 +862,74 @@ TEST(CyclicSdpaBwGroupTest, FourGroupsWithTallBlocks) {
     check_relay_groups(4, 2, 2, /* groups */ 4, /* Bt */ 2);
 }
 
+// ------------------------------------------------------------------ the op
+// Everything above builds its own program. This is the op: it derives the
+// layout from the tensor shapes and the device's grid, allocates its own
+// outputs, and is what a model would call.
+void check_op(uint32_t C, uint32_t Bt, uint32_t slices, bool use_barrier, uint32_t d = 64) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    const uint32_t N = 2u * C * Bt * kTile;
+    const auto ref = make_reference(N, d);
+
+    const auto query = ttml::core::from_xtensor(as_4d_repeated(ref.Q, slices), device);
+    const auto key = ttml::core::from_xtensor(as_4d_repeated(ref.K, slices), device);
+    const auto value = ttml::core::from_xtensor(as_4d_repeated(ref.V, slices), device);
+    const auto grad_output = ttml::core::from_xtensor(as_4d_repeated(ref.dO, slices), device);
+    const auto lse = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(
+        repeat_4d(ref.lse_tile, slices), device);
+    const auto row_scalar = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(
+        repeat_4d(ref.u_tile, slices), device);
+
+    const auto [grad_query, grad_key, grad_value] =
+        ttml::metal::cyclic_sdpa_bw(query, key, value, grad_output, lse, row_scalar, Bt, use_barrier);
+
+    const auto dQ = ttml::core::to_xtensor(grad_query);
+    const auto dK = ttml::core::to_xtensor(grad_key);
+    const auto dV = ttml::core::to_xtensor(grad_value);
+    for (uint32_t g = 0; g < slices; ++g) {
+        const std::string at = " slice " + std::to_string(g);
+        expect_close(dQ, ref.dQ, 0.06F, "dQ" + at, g);
+        expect_close(dK, ref.dK, 0.06F, "dK" + at, g);
+        expect_close(dV, ref.dV, 0.06F, "dV" + at, g);
+    }
+}
+
+TEST(CyclicSdpaBwOpTest, OneSlice) {
+    check_op(/* C */ 4, /* Bt */ 1, /* slices */ 1, /* use_barrier */ false);
+}
+
+// C is not passed in: it follows from the sequence length and the block
+// height, so N = 512 with Bt = 1 asks for eight cores by arithmetic alone.
+TEST(CyclicSdpaBwOpTest, CoresFollowFromTheSequenceLength) {
+    check_op(/* C */ 8, /* Bt */ 1, /* slices */ 1, /* use_barrier */ false);
+}
+
+TEST(CyclicSdpaBwOpTest, TallBlocks) {
+    check_op(/* C */ 4, /* Bt */ 2, /* slices */ 1, /* use_barrier */ false);
+}
+
+TEST(CyclicSdpaBwOpTest, WiderHead) {
+    check_op(/* C */ 4, /* Bt */ 1, /* slices */ 1, /* use_barrier */ false, /* d */ 128);
+}
+
+// Several (batch, head) slices at once, each on its own rectangle.
+TEST(CyclicSdpaBwOpTest, FourSlices) {
+    check_op(/* C */ 4, /* Bt */ 1, /* slices */ 4, /* use_barrier */ false);
+}
+
+// The barrier variant, reachable through the same entry point.
+TEST(CyclicSdpaBwOpTest, WithTheBarrier) {
+    check_op(/* C */ 4, /* Bt */ 1, /* slices */ 1, /* use_barrier */ true);
+}
+
+// The op is program-cached, so a second call with different tensors must be
+// re-pointed at the new buffers rather than rebuilt. That path is
+// override_runtime_arguments, and it is where a stale address would show.
+TEST(CyclicSdpaBwOpTest, SurvivesAProgramCacheHit) {
+    check_op(/* C */ 4, /* Bt */ 1, /* slices */ 1, /* use_barrier */ false);
+    check_op(/* C */ 4, /* Bt */ 1, /* slices */ 1, /* use_barrier */ false);
+}
+
 // ------------------------------------------ Algorithm 4: no chip-wide barrier
 // Within a streak the packet is the ordering token. Across a gap, the two
 // endpoint counters order a reload after the preceding streak's spill. The
