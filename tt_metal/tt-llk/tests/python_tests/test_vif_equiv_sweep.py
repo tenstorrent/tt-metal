@@ -181,19 +181,21 @@ assert set(_NONFINITE_EXPECTED) == set(_FLOAT_OPS)
 # test, on the one path where -0.0 actually reaches the LREG (see
 # _SIGNED_ZERO_FORMAT).
 #
-# Two of these rows disagree with torch, and deliberately so:
-# sign(-0.0) -> -1 where IEEE says -0.0, and heaviside(-0.0) -> 0 where
-# -0.0 == 0 would give the 0.5 scalar. Both fall out of SFPSETCC, which
+# sign and heaviside used to disagree with torch here, and this table used to
+# pin that: sign(-0.0) -> -1 where IEEE says -0.0, and heaviside(-0.0) -> 0
+# where -0.0 == 0 gives the scalar. Both fell out of SFPSETCC, which
 # tt-isa-documentation specifies only "provided that VC is neither negative zero
-# nor any kind of NaN" -- so the sign-bit read on -0.0 is outside the
-# primitive's contract rather than a hardware fault. test_eltwise_unary_sfpu
-# carries the same two divergences as documented xfails; this test pins them
-# bit-exactly so a rewrite of these kernels cannot move them unnoticed.
+# nor any kind of NaN", so the sign-bit read on -0.0 was outside the primitive's
+# contract rather than a hardware fault. Both kernels now take the zero arm on
+# -0.0 by testing sfpi::abs(v), which is inside that contract, so those two rows
+# agree with torch and every row below is now the IEEE answer. The table stays
+# because ulp_sweep still cannot reach -0.0, and it still pins these bit-exactly
+# so a later rewrite of these kernels cannot move them unnoticed.
 #
 #                        -0.0,  +0.0
 _SIGNED_ZERO_EXPECTED = {
-    "sign": (-1.0, 0.0),
-    "heaviside": (0.0, 0.5),
+    "sign": (0.0, 0.0),
+    "heaviside": (0.5, 0.5),
     "hardshrink": (0.0, 0.0),
     "unary_eq": (0.0, 0.0),
     "unary_ne": (1.0, 1.0),
@@ -506,8 +508,8 @@ def test_equiv_signed_zero(op_name):
     """-0.0 and +0.0 on the unpack-to-dest path, bit for bit.
 
     The exhaustive finite sweep cannot cover this: ulp_sweep dedupes the two
-    zeros. Asserted against _SIGNED_ZERO_EXPECTED rather than the golden, which
-    follows torch and so disagrees with the hardware on sign and heaviside.
+    zeros. Asserted against _SIGNED_ZERO_EXPECTED, which is the IEEE answer for
+    every op here now that sign and heaviside take the zero arm on -0.0.
     """
     # -0.0 and +0.0 first, then ordinary values as controls that the op ran.
     values = [-0.0, 0.0, -1.5, 1.5] + [7.0] * (_FACE_ELEMENTS - 4)
