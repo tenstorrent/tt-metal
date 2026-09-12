@@ -78,8 +78,10 @@ inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_pack
             if (!pwr) {
                 break;
             }
-            // The last squaring goes into val as two multiplies, so no power of x is formed on its
-            // own: x^(2^k) alone can flush while val * x^(2^k) is still a normal float.
+            // The last squaring goes into val as two multiplies, so the top power of x is never
+            // formed on its own: x^(2^k) alone can flush while val * x^(2^k) is still a normal
+            // float. The lower squares stay normal well past the x where the result itself leaves
+            // fp32 range, so they are still formed directly.
             if (pwr == 1) {
                 val *= x;
                 val *= x;
