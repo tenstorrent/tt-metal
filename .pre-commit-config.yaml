@@ -149,6 +149,14 @@ repos:
       args: ["--fix", "--quiet"]
       files: ^tt_metal/tt-llk/.*\.(cpp|cc|h|hpp|py)$
       exclude: tensix\.h$
+    - id: llk-cfg-hold-adjacency
+      name: "llk: config write under a held math instruction (wormhole)"
+      entry: python3 tt_metal/tt-llk/infra/check_cfg_hold_adjacency.py
+      language: system
+      args: ["--baseline", "tt_metal/tt-llk/infra/cfg_hold_adjacency_baseline.txt"]
+      # Wormhole only: Blackhole and Quasar capture math config into the instruction as it is
+      # accepted, so this shape is not a hazard there. See the script docstring.
+      files: ^tt_metal/tt-llk/tt_llk_wormhole_b0/.*\.(h|hpp)$
 - repo: https://github.com/PyCQA/autoflake
   rev: v2.3.1
   hooks:
