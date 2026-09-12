@@ -74,15 +74,21 @@
 // later streak start and progress is published only for spill events, so
 // waiting for t waits for a publication that never comes.
 //
-// Publication is a set of ordered unicast writes rather than a multicast,
-// which the paper explicitly allows. A multicast issued from this RISC hung
-// in its write barrier: this kernel runs on the data-movement RISC whose
-// default NoC is 1, the two NoCs have mirrored coordinates, and retargeting
-// the multicast would mean recomputing the rectangle in the other NoC's
-// frame. Unicast writes need none of that and use the same primitive the
-// readiness tags already use here. They also satisfy the ordering rule the
-// paper asks for, being issued in increasing value order on one NoC from one
-// thread.
+// Publication is a set of ordered unicast writes, which the paper allows
+// alongside multicast. Multicast would be one write instead of C, and it is
+// measurably worth having -- at C = 32 there are 93 inter-streak spills, each
+// writing 32 semaphores, and that is enough to put Algorithm 4 *behind*
+// Algorithm 3 on a first timing. But a multicast issued from this kernel
+// hangs in its write barrier, on this RISC's own NoC 1 and on NoC 0 with the
+// rectangle and the write both named there. The release multicast in the write
+// kernel, on the same rectangle, works; so the obstacle is which RISC issues
+// it, not the coordinates.
+//
+// Getting the multicast therefore means moving publication to the write
+// kernel, which needs a local handoff to tell it what to publish and when.
+// That is worth doing and is not done here. The unicast version is correct
+// and satisfies the ordering rule the paper asks for, being issued in
+// increasing value order on one NoC from one thread.
 #ifndef ENDPOINT_SYNC
 #define ENDPOINT_SYNC 0
 #endif
@@ -488,6 +494,8 @@ void kernel_main() {
                 *scratch = t + 1u;
                 for (uint32_t r = 1; r <= kCores; ++r) {
                     if (r == my_core) {
+                        // Its own copy, which matters: a later streak of this
+                        // row may well be consumed here.
                         noc_semaphore_set(endpoint_sem[my_core - 1u], t + 1u);
                         continue;
                     }
@@ -495,6 +503,8 @@ void kernel_main() {
                     const uint32_t y = get_arg_val<uint32_t>(core_coords_arg + 2u * (r - 1u) + 1u);
                     noc_semaphore_set_remote(scratch_l1, get_noc_addr(x, y, get_semaphore(sem_id)));
                 }
+                // Keep the source word valid until every publication is done
+                // with it, and order this publication before the next.
                 noc_async_write_barrier();
             }
 #endif
