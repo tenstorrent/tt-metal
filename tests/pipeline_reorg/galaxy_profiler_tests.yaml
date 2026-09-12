@@ -12,7 +12,7 @@
 # For max allowed timeout refer to .github/time_budget.yaml
 
 - name: Galaxy device profiler regressions
-  cmd: run_device_profiler_test
+  cmd: bash tests/scripts/wh_6u/run_wh_6u_profiler_tests.sh run_device_profiler_test
   skus:
     wh_galaxy:
       timeout: 30
@@ -20,7 +20,7 @@
   team: runtime
 
 - name: Galaxy realtime profiler cross-reference (TG)
-  cmd: run_realtime_profiler_cross_reference_tg_test
+  cmd: bash tests/scripts/wh_6u/run_wh_6u_profiler_tests.sh run_realtime_profiler_cross_reference_tg_test
   skus:
     wh_galaxy:
       timeout: 15
