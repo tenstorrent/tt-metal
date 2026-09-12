@@ -87,6 +87,13 @@ std::array<Logs, SyncCorrections::kMaxChips>& logs() {
     static std::array<Logs, SyncCorrections::kMaxChips> l;
     return l;
 }
+alignas(64) std::atomic<uint64_t> g_cover_generation{0};
+std::atomic<double> g_asymmetry_ns{0.0};
+inline void covers_moved(SyncSeries series) {
+    if (series == SyncSeries::Linked) {
+        g_cover_generation.fetch_add(1, std::memory_order_release);
+    }
+}
 
 // A reader's place in one series: the segment [a, b) it last converted in and that segment's line. For the open
 // segment b is one past the cover the reader last saw, so a record past that cover re-reads it.
@@ -97,7 +104,10 @@ struct Cursor {
     int64_t b = 0;
     double d = 0.0;
     double slope = 0.0;
+    float sigma = 0.0f;  // of the segment's value: its nodes' largest, plus the freeze margin on the open tangent
 };
+// The margin a frontier may sit from the frozen tangent before a node is frozen (D2dSyncConsumer::kFreezeNs).
+constexpr float kOpenMarginNs = 0.25f;
 constinit thread_local Cursor t_cursors[2][SyncCorrections::kMaxChips];
 
 inline int64_t on_line(const Cursor& c, int64_t t) noexcept {
@@ -133,14 +143,14 @@ int64_t refill(Log& log, Cursor& c, int64_t t) noexcept {
     const int64_t cover = log.cover.load(std::memory_order_acquire);
     const uint32_t n = log.count.load(std::memory_order_acquire);
     if (n == 0) {
-        c = Cursor{.gen = gen};
+        c = Cursor{.gen = gen, .sigma = std::numeric_limits<float>::infinity()};
         return 0;
     }
     const SyncNode& first = log.at(0);
     if (t < first.host_ns) {
         // Constant before the first node; the segment's start only has to lie below every host time a record can
         // carry without the difference overflowing.
-        c = Cursor{gen, 0, std::numeric_limits<int64_t>::min() / 2, first.host_ns, first.delta_ns, 0.0};
+        c = Cursor{gen, 0, std::numeric_limits<int64_t>::min() / 2, first.host_ns, first.delta_ns, 0.0, first.sigma_ns};
         return on_line(c, t);
     }
     const uint32_t i = locate(log, n, c.gen == gen ? c.i : 0, t);
@@ -153,17 +163,18 @@ int64_t refill(Log& log, Cursor& c, int64_t t) noexcept {
             a.host_ns,
             b.host_ns,
             a.delta_ns,
-            (b.delta_ns - a.delta_ns) / static_cast<double>(b.host_ns - a.host_ns)};
+            (b.delta_ns - a.delta_ns) / static_cast<double>(b.host_ns - a.host_ns),
+            std::max(a.sigma_ns, b.sigma_ns)};
         return on_line(c, t);
     }
     if (t <= cover) {
         const int64_t b = cover == std::numeric_limits<int64_t>::max() ? cover : cover + 1;
-        c = Cursor{gen, i, a.host_ns, b, a.delta_ns, a.tangent};
+        c = Cursor{gen, i, a.host_ns, b, a.delta_ns, a.tangent, a.sigma_ns + kOpenMarginNs};
         return on_line(c, t);
     }
     // Past the cover (a consumer that does not wait for the sync): the tangent, then a hold. Not cached, the cover
     // moves.
-    c = Cursor{.gen = gen, .i = i};
+    c = Cursor{.gen = gen, .i = i, .sigma = a.sigma_ns + kOpenMarginNs};
     const int64_t tt = std::min(t, cover + SyncCorrections::kHoldNs);
     return static_cast<int64_t>(a.delta_ns + a.tangent * static_cast<double>(tt - a.host_ns));
 }
@@ -180,6 +191,16 @@ inline int64_t lookup(uint32_t chip_id, int64_t t, SyncSeries series) noexcept {
     return refill(log, c, t);
 }
 
+// The cursor placed on t (refilled when it is not there), for the segment's uncertainty.
+inline const Cursor& cursor_at(uint32_t chip_id, int64_t t) noexcept {
+    Log& log = logs()[chip_id].linked;
+    Cursor& c = t_cursors[0][chip_id];
+    if (!(c.gen == log.gen.load(std::memory_order_relaxed) && t >= c.a && t < c.b)) {
+        refill(log, c, t);
+    }
+    return c;
+}
+
 }  // namespace
 
 void SyncCorrections::append(uint32_t chip_id, SyncNode node, SyncSeries series) {
@@ -194,17 +215,20 @@ void SyncCorrections::append(uint32_t chip_id, SyncNode node, SyncSeries series)
         node.delta_ns,
         node.tangent);
     logs()[chip_id].of(series).append(chip_id, node);
+    covers_moved(series);
 }
 
 void SyncCorrections::extend(uint32_t chip_id, int64_t cover_ns, SyncSeries series) {
     if (chip_id < kMaxChips) {
         logs()[chip_id].of(series).extend(cover_ns);
+        covers_moved(series);
     }
 }
 
 void SyncCorrections::finish(uint32_t chip_id, SyncSeries series) {
     if (chip_id < kMaxChips) {
         logs()[chip_id].of(series).extend(std::numeric_limits<int64_t>::max());
+        covers_moved(series);
     }
 }
 
@@ -222,6 +246,8 @@ int64_t SyncCorrections::cover_ns(uint32_t chip_id) noexcept {
     return logs()[chip_id].linked.cover.load(std::memory_order_acquire);
 }
 
+uint64_t SyncCorrections::cover_generation() noexcept { return g_cover_generation.load(std::memory_order_acquire); }
+
 size_t SyncCorrections::published(uint32_t chip_id) noexcept {
     return chip_id < kMaxChips ? logs()[chip_id].linked.count.load(std::memory_order_acquire) : 0;
 }
@@ -229,6 +255,20 @@ size_t SyncCorrections::published(uint32_t chip_id) noexcept {
 int64_t SyncCorrections::lookup_ns(uint32_t chip_id, int64_t host_ns, SyncSeries series) noexcept {
     return lookup(chip_id, host_ns, series);
 }
+
+int64_t SyncCorrections::lookup_error_ns(uint32_t chip_id, int64_t host_ns) noexcept {
+    if (chip_id >= kMaxChips) {
+        return std::numeric_limits<int64_t>::max();
+    }
+    const Cursor& c = cursor_at(chip_id, host_ns);
+    if (!std::isfinite(c.sigma)) {
+        return std::numeric_limits<int64_t>::max();
+    }
+    const double e = kSigmas * static_cast<double>(c.sigma) + g_asymmetry_ns.load(std::memory_order_relaxed);
+    return static_cast<int64_t>(std::ceil(e));
+}
+
+void SyncCorrections::set_asymmetry_ns(double ns) noexcept { g_asymmetry_ns.store(ns, std::memory_order_relaxed); }
 
 void SyncCorrections::lookup_span_ns(
     uint32_t chip_id, int64_t start_ns, int64_t end_ns, int64_t& d_start, int64_t& d_end) noexcept {
@@ -309,6 +349,9 @@ int64_t sync_correction_ns(uint16_t chip_id, int64_t host_ns) noexcept {
 void sync_correction_span_ns(
     uint16_t chip_id, int64_t start_ns, int64_t end_ns, int64_t& d_start, int64_t& d_end) noexcept {
     tt::tt_metal::streaming_profiler::SyncCorrections::lookup_span_ns(chip_id, start_ns, end_ns, d_start, d_end);
+}
+int64_t sync_error_ns(uint16_t chip_id, int64_t host_ns) noexcept {
+    return tt::tt_metal::streaming_profiler::SyncCorrections::lookup_error_ns(chip_id, host_ns);
 }
 
 }  // namespace tt::tt_metal::experimental::streaming_profiler::detail

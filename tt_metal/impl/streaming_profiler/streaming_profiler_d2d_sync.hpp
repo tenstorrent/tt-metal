@@ -49,7 +49,7 @@ struct LocalClockFit {
         double r_first = 0.0, r_last = 0.0;
         double last_x = 0.0, last_y = 0.0;  // the newest sample, so it can be handed to the next run
         double prev_x = 0.0;                // the sample before it, for r_last once the newest is removed
-        long double sx = 0, sy = 0, sxx = 0, sxy = 0;
+        long double sx = 0, sy = 0, sxx = 0, sxy = 0, syy = 0;
         uint64_t n = 0;
         // Wall ticks per refclk tick over this run: the applied AICLK / 50 MHz.
         double fitted_slope() const {
@@ -102,7 +102,36 @@ struct LocalClockFit {
             sy += dy;
             sxx += dx * dx;
             sxy += dx * dy;
+            syy += dy * dy;
             n++;
+        }
+        // The scatter of the run's samples about its line, in wall ticks: the refclk's 20 ns quantisation spread
+        // over the ~27 wall ticks it spans, ~8 ticks for any run long enough to fit.
+        double residual_ticks() const {
+            if (n < 3) {
+                return 0.0;
+            }
+            const long double b = slope();
+            const long double a = intercept();
+            const long double rss =
+                syy - 2 * a * sy - 2 * b * sxy + static_cast<long double>(n) * a * a + 2 * a * b * sx + b * b * sxx;
+            return rss > 0 ? std::sqrt(static_cast<double>(rss / static_cast<long double>(n - 2))) : 0.0;
+        }
+        // Standard error of the line's wall value at refclk r: the intercept's alone when the slope is the exact PLL
+        // multiple, with the slope's contribution when it had to be fitted.
+        double se_ticks(double r) const {
+            if (n < 3) {
+                return 0.0;
+            }
+            const double nn = static_cast<double>(n);
+            const double sigma = residual_ticks();
+            if (ratio() != 0.0) {
+                return sigma / std::sqrt(nn);
+            }
+            const double xbar = static_cast<double>(sx) / nn;
+            const double sxx_c = static_cast<double>(sxx) - static_cast<double>(sx) * xbar;
+            const double dx = (r - ax) - xbar;
+            return sigma * std::sqrt(1.0 / nn + (sxx_c > 0.0 ? dx * dx / sxx_c : 0.0));
         }
         // A sample older than the run's own (handed over from the run before): the sums and the start move, the
         // newest-sample bookkeeping does not.
@@ -113,6 +142,7 @@ struct LocalClockFit {
             sy += dy;
             sxx += dx * dx;
             sxy += dx * dy;
+            syy += dy * dy;
             n++;
         }
         // Takes the newest sample back out; the sums are exact, so this is exact.
@@ -122,6 +152,7 @@ struct LocalClockFit {
             sy -= dy;
             sxx -= dx * dx;
             sxy -= dx * dy;
+            syy -= dy * dy;
             n--;
             last_x = prev_x;
             r_last = prev_x;
@@ -334,11 +365,15 @@ private:
     };
     // Whether the solution was accepted into `out`.
     bool solve_link(const CaptureContext::Link& L, std::vector<RoundPoint> pts, bool hw, LinkSolution& out) const;
-    // A device's refclk onto the root's: root_refclk = scale * dev_refclk + shift.
+    // A device's refclk onto the root's: root_refclk = scale * dev_refclk + shift; prec_ns the precision of the
+    // solutions composed along the way.
     struct RootXf {
-        double scale = 1.0, shift = 0.0;
+        double scale = 1.0, shift = 0.0, prec_ns = 0.0;
         bool ok = false;
     };
+    // The largest disagreement of a solved link with the tree's composition around its loop: the fleet's path
+    // asymmetry as far as its loops reveal it.
+    double max_closure_ns() const;
     std::map<uint32_t, RootXf> root_transforms(uint32_t root, std::vector<bool>* used) const;
     Frame frame_of(uint32_t dev) const;
     // frame_of(dev), computed once the chip's first bucket is complete and kept: the anchor precedes every bucket,
@@ -369,10 +404,11 @@ private:
     std::vector<std::vector<SyncPlotPoint>> live_err_;
     std::vector<size_t> live_done_;
 
-    // A correction node: at host time H the chip's record time moves by d (ns); r is the refclk it was placed at and
-    // tangent the correction's slope along the run it sits on (ns per ns), the map past the newest node.
+    // A correction node: at host time H the chip's record time moves by d (ns); r is the refclk it was placed at,
+    // tangent the correction's slope along the run it sits on (ns per ns), the map past the newest node, and sigma
+    // the standard deviation of d (the run's line at r, and the link solutions the chip reaches the root through).
     struct Node {
-        double H, d, r, tangent;
+        double H, d, r, tangent, sigma;
     };
     // One published series of a chip. Its nodes are frozen (consumers have placed records against them), so a
     // publish only appends beyond them; `cover_H` is how far the newest node's tangent has been confirmed by the
@@ -402,7 +438,8 @@ private:
         size_t knots_after = 0;  // run boundaries consumed once the knots are placed
     };
     template <typename Corr>
-    Fresh fresh_nodes(const Series& s, const LocalClockFit& fit, const DeviceClock& eclk, const Corr& corr) const;
+    Fresh fresh_nodes(
+        const Series& s, const LocalClockFit& fit, const DeviceClock& eclk, double prec_ns, const Corr& corr) const;
     // Publishes one chip's series from its fit as it stands; true when the chip's linked cover moved.
     bool publish_dev(uint32_t dev);
     // Appends the knots and, if the frontier left the newest tangent by more than kFreezeNs, freezes the tangent where

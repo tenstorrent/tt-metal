@@ -7,12 +7,13 @@
 // A three-chip CHAIN: root(0) -- mid(1) -- leaf(2), with solved links only for (0,1) and (1,2). The leaf has NO
 // direct link to the root, so it can only reach the fleet timeline by composing the two hops -- that composition is
 // what this test exercises beyond the single-link case. The chips' refclks run at exactly 50 MHz with known offsets;
-// their AICLKs are known functions of true time (chip 0 slows 1% mid-session: DVFS; chips 1 and 2 steady); and their
-// boot anchors are what the device layer would measure (exact at the anchor, at the rate that applied then) except
-// that chips 1 and 2 have deliberately-late host anchors. The record's own conversion (Record::host_time, reproduced
-// bit for bit with the baked hz/offset) plus the published correction must recover TRUE host time in every case:
+// their AICLKs are known functions of true time (chip 0 drops one DVFS step mid-session; chips 1 and 2 steady); and
+// their boot anchors are what the device layer would measure (exact at the anchor, at the rate that applied then)
+// except that chips 1 and 2 have deliberately-late host anchors. The record's own conversion (Record::host_time,
+// reproduced bit for bit with the baked hz/offset) plus the published correction must recover TRUE host time in every
+// case:
 //   (a) chip 0 before its switch: the anchor is right, the term is ~0;
-//   (b) chip 0 after its switch: the base under-counts by 1%, the local term restores it (root too);
+//   (b) chip 0 after its switch: the base under-counts by the step, the local term restores it (root too);
 //   (c) chip 1 (one hop): only the 0-1 link removes its anchor error;
 //   (d) chip 2 (two hops): only 0-1 composed with 1-2 removes its anchor error and its refclk offset.
 //
@@ -20,6 +21,7 @@
 // each link owns its own eth core -- so its two stamp streams stay separate.
 
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
@@ -42,11 +44,21 @@ static void check_near(const char* what, double got, double want, double tol) {
         std::printf("ok   %s: err %.3f ns (tol %.1f)\n", what, got - want, tol);
     }
 }
+// The published uncertainty must cover the model error.
+static void check_bound(const char* what, double err, int64_t bound) {
+    if (bound == INT64_MAX || std::fabs(err) > static_cast<double>(bound)) {
+        std::printf(
+            "FAIL %s: error %.3f ns outside the published bound %lld ns\n", what, err, static_cast<long long>(bound));
+        g_fail++;
+    } else {
+        std::printf("ok   %s: bound %lld ns covers %.3f\n", what, static_cast<long long>(bound), err);
+    }
+}
 
 // ---- truth model ---------------------------------------------------------------------------------------------
 constexpr double kRefHz = 50e6;
 constexpr double kF0 = 1.35e9;        // AICLK at boot on every chip; the boot anchors measure exactly this rate
-constexpr double kSlow = 0.99;        // chip 0's AICLK after its DVFS switch
+constexpr double kSlow = 26.875 / 27.0;  // chip 0's AICLK after its DVFS switch: one 1/8 step of the PLL multiple
 constexpr double kTauSwitch = 0.300;  // s, when chip 0 slows
 constexpr double kOneWay = 1.0e-6;    // s, symmetric link one-way delay
 constexpr double kTurn = 350e-9;      // s, the receiver's turnaround: its echo leaves this long after the frame arrived
@@ -212,6 +224,16 @@ int main() {
     for (double tau : {0.050, 0.500, 0.950}) {
         std::snprintf(what, sizeof what, "(d) chip2 two hops tau=%.3f", tau);
         check_near(what, record_host_ns(2, wall(2, tau)), host_ns(tau), 400.0);
+    }
+    for (int c : {0, 1, 2}) {
+        for (double tau : {0.050, 0.500, 0.950}) {
+            std::snprintf(what, sizeof what, "bound chip%d tau=%.3f", c, tau);
+            const int64_t base = base_ns(c, wall(c, tau));
+            check_bound(
+                what,
+                record_host_ns(c, wall(c, tau)) - host_ns(tau),
+                SyncCorrections::lookup_error_ns(static_cast<uint32_t>(c), base));
+        }
     }
     check_near(
         "(d) chip2 term ~ -anchor error (proves 2-hop composition ran)",

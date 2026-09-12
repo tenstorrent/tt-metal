@@ -15,6 +15,7 @@
 #include <utility>
 
 #include <tracy/Tracy.hpp>
+#include <x86intrin.h>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/indestructible.hpp>
@@ -45,12 +46,27 @@ struct Service::AttachedStream {
     uint64_t dropped = 0;  // bytes of frames this consumer never saw
     uint64_t stalls_reported = 0;
     uint32_t chip = 0;
-    bool blocked = false;  // within one drain: a batch of this stream waits, so its later ones wait too
+    std::deque<Parked*> pending;                               // this stream's undelivered batches, in decode order
+    int64_t cover_seen = std::numeric_limits<int64_t>::min();  // the chip's cover as last read for this stream
 };
 struct Service::Attached {
     Producer* producer = nullptr;
     uint64_t capture = 0;
     std::vector<std::unique_ptr<AttachedStream>> streams;  // stable: dec.st points into the stream
+};
+// A decoded batch, waiting in the arenas until the sync covers its newest record (or at once, for a consumer that
+// does not wait). Released in decode order once delivered; `a` is null once its producer detached.
+struct Service::Parked {
+    Attached* a;
+    uint32_t stream;
+    bool delivered;
+    uint8_t* zones;
+    uint8_t* events;
+    uint8_t* data;
+    StreamDecoder::Produced n;
+    uint64_t dropped;
+    uint64_t stalls;
+    int64_t parked_at_ns;
 };
 
 // Frames decoded per delivery; bounds the consumer's scratch and the callback's batch.
@@ -139,6 +155,8 @@ struct Service::Consumer {
     std::vector<std::pair<Producer*, bool>> control;  // (producer, attach), in order
     std::atomic<uint64_t> dropped{0};
     std::atomic<uint64_t> unplaced{0};  // batches delivered before the sync covered them
+    // Consumer-thread only: what a capture cost this consumer, in TSC cycles, reported when its producer detaches.
+    uint64_t batches = 0, records = 0, cb_cycles = 0, decode_cycles = 0;
 };
 
 Service::Service() { init_site_registry(); }
@@ -312,23 +330,12 @@ void Service::consumer_thread(Consumer& c) {
     tracy::SetThreadName(name.c_str());
     set_os_thread_name(name);
     t_in_consumer = true;
+    const uint64_t tsc_epoch = __rdtsc();
+    const int64_t tsc_epoch_ns = now_ns();
     std::vector<std::unique_ptr<Attached>> attached;
     Arena zones_arena(kZonesArenaBytes), events_arena(kEventsArenaBytes), data_arena(kDataArenaBytes);
-    // A decoded batch, waiting in the arenas until the sync covers its newest record (or at once, for a consumer
-    // that does not wait). Released in decode order once delivered; `a` is null once its producer detached.
-    struct Parked {
-        Attached* a;
-        uint32_t stream;
-        bool delivered;
-        uint8_t* zones;
-        uint8_t* events;
-        uint8_t* data;
-        StreamDecoder::Produced n;
-        uint64_t dropped;
-        uint64_t stalls;
-        int64_t parked_at_ns;
-    };
-    std::deque<Parked> parked;
+    std::deque<Parked> parked;  // every undelivered or unreleased batch, in decode order
+    uint64_t covers_seen = ~0ull;
     constexpr size_t kFramesBytes = size_t{kBatchFrames} * profiler::kSpscMaxFrameWords * 4;
     std::array<uint32_t, kBatchFrames> frame_words;
     auto frames_buf = std::make_unique_for_overwrite<std::byte[]>(kFramesBytes);
@@ -380,11 +387,15 @@ void Service::consumer_thread(Consumer& c) {
             api::TimestampedData::iterator(reinterpret_cast<const std::byte*>(pk.data) + pk.n.data_bytes));
         b.dropped_ = pk.dropped;
         b.stall_count_ = pk.stalls;
+        const uint64_t t0 = __rdtsc();
         try {
             c.cb(b, pk.a->capture);
         } catch (const std::exception& ex) {
             log_warning(tt::LogMetal, "[streaming profiler] consumer \"{}\" threw: {}", c.name, ex.what());
         }
+        c.cb_cycles += __rdtsc() - t0;
+        c.batches++;
+        c.records += size_t{pk.n.zones} + pk.n.events;
         pk.delivered = true;
     };
     auto release_delivered = [&] {
@@ -396,35 +407,41 @@ void Service::consumer_thread(Consumer& c) {
             parked.pop_front();
         }
     };
-    // Delivers, per stream in decode order, every batch the sync covers, then frees behind the delivered ones.
+    // Delivers each stream's batches in decode order while the sync covers them, then frees behind the delivered
+    // ones. A chip's cover is re-read only once some cover has moved since the last drain, so a blocked stream costs
+    // one compare per pass. A batch parked longer than kMaxParkNs goes out regardless and is counted.
     auto drain = [&] {
         bool any = false;
-        for (auto& a : attached) {
-            for (auto& s : a->streams) {
-                s->blocked = false;
-            }
-        }
+        const uint64_t gen = SyncCorrections::cover_generation();
+        const bool moved = gen != covers_seen;
+        covers_seen = gen;
         int64_t now = 0;
-        for (Parked& pk : parked) {
-            if (pk.delivered) {
-                continue;
-            }
-            AttachedStream& s = *pk.a->streams[pk.stream];
-            if (s.blocked) {
-                continue;
-            }
-            if (c.hooks.waits_for_sync && pk.n.newest_ns > SyncCorrections::cover_ns(s.chip)) {
-                if (now == 0) {
-                    now = now_ns();
+        for (auto& a : attached) {
+            for (auto& sp : a->streams) {
+                AttachedStream& s = *sp;
+                bool reread = !moved;
+                while (!s.pending.empty()) {
+                    Parked& pk = *s.pending.front();
+                    if (c.hooks.waits_for_sync && pk.n.newest_ns > s.cover_seen) {
+                        if (!reread) {
+                            s.cover_seen = SyncCorrections::cover_ns(s.chip);
+                            reread = true;
+                        }
+                        if (pk.n.newest_ns > s.cover_seen) {
+                            if (now == 0) {
+                                now = now_ns();
+                            }
+                            if (now - pk.parked_at_ns < kMaxParkNs) {
+                                break;
+                            }
+                            c.unplaced.fetch_add(1, std::memory_order_relaxed);
+                        }
+                    }
+                    deliver(pk);
+                    s.pending.pop_front();
+                    any = true;
                 }
-                if (now - pk.parked_at_ns < kMaxParkNs) {
-                    s.blocked = true;
-                    continue;
-                }
-                c.unplaced.fetch_add(1, std::memory_order_relaxed);
             }
-            deliver(pk);
-            any = true;
         }
         release_delivered();
         return any;
@@ -448,6 +465,7 @@ void Service::consumer_thread(Consumer& c) {
             for (Parked& pk : parked) {
                 if (!pk.delivered) {
                     deliver(pk);
+                    pk.a->streams[pk.stream]->pending.pop_front();
                     c.unplaced.fetch_add(1, std::memory_order_relaxed);
                     break;
                 }
@@ -472,6 +490,7 @@ void Service::consumer_thread(Consumer& c) {
         }
         s.cursor = w.cursor;
         s.dropped += w.dropped;
+        const uint64_t t0 = __rdtsc();
         size_t words = 0;
         for (uint32_t i = 0; i < w.frames; i++) {
             words += frame_words[i];
@@ -509,7 +528,9 @@ void Service::consumer_thread(Consumer& c) {
             .dropped = w.dropped,
             .stalls = s.dec.stall_zones - s.stalls_reported,
             .parked_at_ns = c.hooks.waits_for_sync ? now_ns() : 0});
+        s.pending.push_back(&parked.back());
         s.stalls_reported = s.dec.stall_zones;
+        c.decode_cycles += __rdtsc() - t0;
         return true;
     };
     // One batch per stream per pass, so no stream's ring laps while an earlier one is drained to empty.
@@ -529,10 +550,11 @@ void Service::consumer_thread(Consumer& c) {
         while (pass(a)) {
         }
         // The producer's waiting batches go out now: the sync's consumer detached first, so their covers are final.
-        for (Parked& pk : parked) {
-            if (!pk.delivered && pk.a == &a) {
-                deliver(pk);
+        for (auto& sp : a.streams) {
+            for (Parked* pk : sp->pending) {
+                deliver(*pk);
             }
+            sp->pending.clear();
         }
         release_delivered();
         for (Parked& pk : parked) {
@@ -542,6 +564,21 @@ void Service::consumer_thread(Consumer& c) {
         }
         if (c.hooks.on_capture_end) {
             c.hooks.on_capture_end(p->capture_context());
+        }
+        if (c.records != 0) {
+            const double ns_per_cycle =
+                static_cast<double>(now_ns() - tsc_epoch_ns) / static_cast<double>(__rdtsc() - tsc_epoch);
+            log_info(
+                tt::LogMetal,
+                "[streaming profiler] consumer \"{}\": {} batches, {} zones and events; per record {:.2f} ns decoding "
+                "and "
+                "parking, {:.2f} ns in the callback",
+                c.name,
+                c.batches,
+                c.records,
+                static_cast<double>(c.decode_cycles) * ns_per_cycle / static_cast<double>(c.records),
+                static_cast<double>(c.cb_cycles) * ns_per_cycle / static_cast<double>(c.records));
+            c.batches = c.records = c.cb_cycles = c.decode_cycles = 0;
         }
         for (size_t i = 0; i < a.streams.size(); i++) {
             c.dropped.fetch_add(a.streams[i]->dropped, std::memory_order_relaxed);

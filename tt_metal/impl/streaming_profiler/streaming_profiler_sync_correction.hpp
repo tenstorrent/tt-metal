@@ -23,6 +23,7 @@ struct SyncNode {
     int64_t host_ns = 0;
     double delta_ns = 0.0;
     double tangent = 0.0;
+    float sigma_ns = 0.0f;  // standard deviation of delta_ns
 };
 
 enum class SyncSeries : uint8_t { Linked, Local };
@@ -54,10 +55,19 @@ public:
     // Both ends of one record; the end never precedes the start.
     static void lookup_span_ns(
         uint32_t chip_id, int64_t start_ns, int64_t end_ns, int64_t& d_start, int64_t& d_end) noexcept;
+    // The uncertainty of a record's corrected host time against other chips' records: kSigmas standard deviations
+    // of its segment's nodes plus the fleet's path asymmetry; INT64_MAX before the chip's first node.
+    static int64_t lookup_error_ns(uint32_t chip_id, int64_t host_ns) noexcept;
+    static constexpr double kSigmas = 3.0;
+    // The largest loop closure the link solutions have shown, the part of a placement's error the loops can see
+    // but no link's stamps can.
+    static void set_asymmetry_ns(double ns) noexcept;
     // How many linked nodes a chip has (0 = none).
     static size_t published(uint32_t chip_id) noexcept;
     // The base host time the chip's linked series covers: INT64_MIN before its first node, INT64_MAX once finished.
     static int64_t cover_ns(uint32_t chip_id) noexcept;
+    // Moves whenever any chip's linked cover does, so a consumer holding batches re-reads covers only then.
+    static uint64_t cover_generation() noexcept;
 };
 
 // A named (host ns, value) series a consumer computes once a capture is complete -- the d2d sync's running
