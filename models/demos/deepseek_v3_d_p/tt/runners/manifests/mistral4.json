@@ -1,7 +1,5 @@
 {
   "env": {
-    "PREFILL_MODEL": "mistral_small_4",
-    "PREFILL_NUM_LAYERS": "36",
-    "PREFILL_GATE_FALLBACK_MODE": "GPT_DEVICE"
+    "PREFILL_MODEL": "mistral_small_4"
   }
 }
