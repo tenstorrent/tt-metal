@@ -23,7 +23,18 @@ namespace ckernel::sfpu {
 // both matching stock calculate_tanh / tanh_tile rather than torch. Leaves rounding to the
 // caller, so fused callers can round once at the end.
 sfpi_inline sfpi::vFloat _sfpu_softcap_(sfpi::vFloat x, sfpi::vFloat beta, sfpi::vFloat inv_beta) {
-    return _sfpu_tanh_polynomial_(x * inv_beta) * beta;
+    sfpi::vFloat y = x * inv_beta;
+    sfpi::vFloat result = _sfpu_tanh_polynomial_(y) * beta;
+
+    // x * inv_beta flushes to zero for |x| < beta * 2^-126, and beta * tanh(0) = 0 throws the
+    // input away even though softcap(x) = x - x^3/(3 beta^2) + ... is still a normal float there
+    // (beta = 30 loses every |x| < 3.53e-37). tanh(y) = y to under half an fp32 ULP for
+    // |y| <= 2^-12, so beta * tanh(y) = x over that whole range: return x unchanged, which also
+    // drops the two roundings the rescale would otherwise introduce.
+    v_if(sfpi::setsgn(y, 0) <= 0x1.0p-12f) { result = x; }
+    v_endif;
+
+    return result;
 }
 
 inline void softcap_init() { tanh_init</*APPROXIMATION_MODE=*/false, /*is_fp32_dest_acc_en=*/false>(); }
