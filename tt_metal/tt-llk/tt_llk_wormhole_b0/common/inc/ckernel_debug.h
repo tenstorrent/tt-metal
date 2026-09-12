@@ -181,11 +181,16 @@ inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t 
         // Clear counters
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
         TTI_SFPLOAD(p_sfpu::LREG3, 0, 0, 0); // Save dest addr 0 (even cols) to LREG_3
-        TTI_SFPLOAD(p_sfpu::LREG3, 0, 0, 2); // Save dest addr 0 (odd cols)  to LREG_3
+        TTI_SFPLOAD(p_sfpu::LREG4, 0, 0, 2); // Save dest addr 0 (odd cols)  to LREG_4
 
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SFPU1);
 
-        // Move to the last used bank
+        // Move to the last used bank. NOTE: this hands the bank being left to the unpackers as
+        // well as flipping -- see CLEARDVALID's model -- so across this bracket's two flips BOTH
+        // SrcA banks end up owned by the unpackers and the caller's SrcA validity is not restored.
+        // Flipping without giving the bank away needs SETRWC under CLR_DVALID_SrcA_Disable; the
+        // SETDVALID pairing used by the SrcB branch below is not the answer here, as SETDVALID is
+        // documented as unsupported on Blackhole.
         TTI_CLEARDVALID(0b01, 0);
 
         // Copy single row from SrcA[row_addr] to dest location 0
@@ -272,7 +277,7 @@ inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t 
     if (array_id == dbg_array_id::SRCA)
     {
         TTI_SFPSTORE(p_sfpu::LREG3, 0, 0, 0); // Restore dest addr 0 (even cols) from LREG_3
-        TTI_SFPSTORE(p_sfpu::LREG3, 0, 0, 2); // Restore dest addr 0 (odd cols) from LREG_3
+        TTI_SFPSTORE(p_sfpu::LREG4, 0, 0, 2); // Restore dest addr 0 (odd cols) from LREG_4
         // Move to the current bank
         TTI_CLEARDVALID(1, 0);
     }
