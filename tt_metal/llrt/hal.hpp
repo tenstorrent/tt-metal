@@ -183,7 +183,6 @@ private:
     bool supports_cbs_ = false;
     bool supports_dfbs_ = false;
     bool supports_receiving_multicast_cmds_ = false;
-    bool supports_sending_fds_go_cmds_ = false;
     dev_msgs::Factory dev_msgs_factory_;
     tt::tt_fabric::fabric_telemetry::Factory fabric_telemetry_factory_;
     realtime_profiler_msgs::Factory realtime_profiler_msgs_factory_;
@@ -201,7 +200,6 @@ public:
         bool supports_cbs,
         bool supports_dfbs,
         bool supports_receiving_multicast_cmds,
-        bool supports_sending_fds_go_cmds,
         dev_msgs::Factory dev_msgs_factory,
         tt::tt_fabric::fabric_telemetry::Factory fabric_telemetry_factory,
         realtime_profiler_msgs::Factory realtime_profiler_msgs_factory,
@@ -218,7 +216,6 @@ public:
         supports_cbs_(supports_cbs),
         supports_dfbs_(supports_dfbs),
         supports_receiving_multicast_cmds_(supports_receiving_multicast_cmds),
-        supports_sending_fds_go_cmds_(supports_sending_fds_go_cmds),
         dev_msgs_factory_(dev_msgs_factory),
         fabric_telemetry_factory_(fabric_telemetry_factory),
         realtime_profiler_msgs_factory_(realtime_profiler_msgs_factory) {}
@@ -390,6 +387,7 @@ private:
     uint32_t noc_stream_remote_dest_buf_space_available_update_reg_index_{};
     uint32_t operand_start_stream_{};
     bool has_stream_registers_{};
+    bool supports_fds_{};
     NoCTopologyType noc_topology_{};
     std::vector<uint32_t> noc_x_id_translate_table_;
     std::vector<uint32_t> noc_y_id_translate_table_;
@@ -503,6 +501,7 @@ public:
         return noc_stream_remote_dest_buf_space_available_update_reg_index_;
     }
     uint32_t get_operand_start_stream() const { return operand_start_stream_; }
+    bool supports_fds() const { return supports_fds_; }
     bool has_stream_registers() const { return has_stream_registers_; }
     bool has_tile_counter_registers() const { return has_tile_counter_registers_; }
     bool supports_implicit_dfb_sync() const { return supports_implicit_dfb_sync_; }
@@ -614,8 +613,6 @@ public:
     bool get_supports_dfbs(uint32_t programmable_core_type_index) const;
 
     bool get_supports_receiving_multicasts(uint32_t programmable_core_type_index) const;
-
-    bool get_supports_sending_fds_go_cmds(uint32_t programmable_core_type_index) const;
 
     uint32_t get_num_risc_processors(HalProgrammableCoreType programmable_core_type) const;
     // Returns the processor index within a core.  There is a 1-1 mapping between
@@ -831,10 +828,6 @@ inline bool Hal::get_supports_dfbs(uint32_t programmable_core_type_index) const 
 
 inline bool Hal::get_supports_receiving_multicasts(uint32_t programmable_core_type_index) const {
     return this->core_info_[programmable_core_type_index].supports_receiving_multicast_cmds_;
-}
-
-inline bool Hal::get_supports_sending_fds_go_cmds(uint32_t programmable_core_type_index) const {
-    return this->core_info_[programmable_core_type_index].supports_sending_fds_go_cmds_;
 }
 
 inline uint32_t Hal::get_num_risc_processors(HalProgrammableCoreType programmable_core_type) const {

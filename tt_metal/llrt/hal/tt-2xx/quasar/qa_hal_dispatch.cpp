@@ -145,7 +145,6 @@ HalCoreInfoType create_dispatch_mem_map() {
         true /*supports_cbs*/,
         true /*supports_dfbs*/,
         false /*supports_receiving_multicast_cmds*/,
-        true /*supports_sending_fds_go_cmds*/,
         dispatch_dev_msgs::create_factory(),
         dispatch_fabric_telemetry::create_factory(),
         dispatch_realtime_profiler_msgs::create_factory());

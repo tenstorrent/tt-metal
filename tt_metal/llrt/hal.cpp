@@ -81,7 +81,6 @@ HalCoreInfoType create_unregistered_programmable_core(
         false,
         false,
         false,
-        false,
         factory_source.get_dev_msgs_factory(),
         factory_source.get_fabric_telemetry_factory(),
         factory_source.get_realtime_profiler_msgs_factory());

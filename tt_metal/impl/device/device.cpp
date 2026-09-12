@@ -505,8 +505,8 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
 
     // Set num_worker_sems and go_signal_noc_data on dispatch for the default sub device config
     const CoreCoord compute_grid_size = compute_with_storage_grid_size();
-    if (context_->get_dispatch_query_manager().fds_worker_completion_enabled()) {
-        TT_FATAL(active_eth_cores.empty(), "FDS worker completion does not support ACTIVE_ETH cores");
+    if (context_->get_dispatch_query_manager().fds_signalling_enabled()) {
+        TT_FATAL(active_eth_cores.empty(), "FDS worker signalling does not support ACTIVE_ETH cores");
     }
     const uint32_t default_sub_device_worker_count =
         compute_grid_size.x * compute_grid_size.y + static_cast<uint32_t>(active_eth_cores.size());
