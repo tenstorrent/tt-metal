@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 import torch
 from helpers.accuracy_metrics import compute_pointwise_metrics
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     UnarySFPUGolden,
@@ -20,14 +21,19 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     ApproximationMode,
+    DataCopyType,
     DestAccumulation,
+    DestSync,
     FastMode,
+    ImpliedMathFormat,
     MathOperation,
     PerfRunType,
     StableSort,
     Transpose,
+    UnpackerEngine,
     format_dict,
 )
+from helpers.param_config import QuasarSfpuVariant, resolve_quasar_sfpu_variant
 from helpers.perf.core import PerfConfig
 from helpers.sfpu_domains import for_op
 from helpers.stimuli_config import StimuliConfig
@@ -41,16 +47,23 @@ from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     CLAMP_NEGATIVE,
+    DATA_COPY_TYPE,
+    DEST_INDEX,
+    DEST_SYNC,
     FAST_MODE,
+    IMPLIED_MATH_FORMAT,
     ITERATIONS,
     LOOP_FACTOR,
     MATH_OP,
     NUM_FACES,
     PERF_RUN_TYPE,
     STABLE_SORT,
+    TEST_FACE_DIMS,
     TILE_COUNT,
+    TYPECAST_FORMATS,
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
+    UNPACKER_ENGINE_SEL,
 )
 
 _THIS_DIR = Path(__file__).resolve().parent
@@ -114,6 +127,82 @@ FLOAT_FORMAT = "%.9g"
 
 # How many input points each op's curve is sampled at.
 DEFAULT_SWEEP_POINTS = 2048
+
+# ── Per-arch kernel selection ──────────────────────────────────────────────────
+WH_BH_KERNEL = "sources/eltwise_unary_sfpu_perf.cpp"
+QUASAR_KERNEL = "sources/quasar/eltwise_unary_sfpu_quasar_test.cpp"
+
+# Quasar-only knobs the accuracy sweep pins rather than sweeps. DestSync is a
+# synchronisation mode and should not change numerics. ImpliedMathFormat does
+# (it decides whether Float16 lives in Dest as FP16A or BF16), but the shard
+# schema has no column for it; sweeping it is a separate schema decision.
+QUASAR_DEST_SYNC = DestSync.Half
+QUASAR_IMPLIED_MATH_FORMAT = ImpliedMathFormat.Yes
+
+
+def kernel_source_for(arch: ChipArchitecture) -> str:
+    """Kernel source path for *arch* (relative to tests/)."""
+    return QUASAR_KERNEL if arch == ChipArchitecture.QUASAR else WH_BH_KERNEL
+
+
+def resolve_quasar_variant(
+    op: MathOperation, formats: InputOutputFormat, dest_acc: DestAccumulation
+) -> QuasarSfpuVariant:
+    """Resolve the Quasar data route for one (op, formats, dest_acc).
+
+    Quasar cannot take an arbitrary triple: the resolver picks the Dest,
+    SFPU and packer formats and rejects routes the hardware cannot execute.
+    Raises ValueError (rather than returning None) so a bad sweep entry fails
+    loudly instead of silently producing no shard.
+    """
+    variant = resolve_quasar_sfpu_variant(op, formats, dest_acc)
+    if variant is None:
+        raise ValueError(
+            f"{op.name}: Quasar cannot execute {formats.input_format.name} -> "
+            f"{formats.output_format.name} with dest_acc={dest_acc.name}"
+        )
+    return variant
+
+
+def quasar_templates(
+    op: MathOperation,
+    approx_mode: ApproximationMode,
+    fast_mode: FastMode,
+    unpack_to_dest: bool,
+) -> list:
+    """Compile-time parameters for the Quasar unary SFPU kernel.
+
+    Mirrors the template list in quasar/test_eltwise_unary_sfpu_quasar.py for
+    a non-typecast op, with the Quasar-only knobs pinned (see module constants).
+    """
+    if fast_mode == FastMode.Yes:
+        raise ValueError(
+            f"{op.name}: the Quasar unary SFPU kernel has no fast mode; "
+            "sweep FastMode.No only"
+        )
+    return [
+        PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
+        MATH_OP(mathop=op),
+        APPROX_MODE(approx_mode),
+        IMPLIED_MATH_FORMAT(QUASAR_IMPLIED_MATH_FORMAT),
+        DATA_COPY_TYPE(DataCopyType.A2D),
+        UNPACKER_ENGINE_SEL(
+            UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
+        ),
+        DEST_SYNC(QUASAR_DEST_SYNC),
+        TYPECAST_FORMATS(),
+    ]
+
+
+def quasar_runtimes(tile_cnt: int, num_faces: int) -> list:
+    """Runtime parameters for the Quasar unary SFPU kernel: one pass over the data."""
+    return [
+        TILE_COUNT(tile_cnt),
+        NUM_FACES(num_faces=num_faces),
+        TEST_FACE_DIMS(),
+        DEST_INDEX(0),
+        LOOP_FACTOR(1),
+    ]
 
 
 def _write_op_file(df: "pd.DataFrame", stem: str, output_format: str) -> Path:
@@ -420,17 +509,38 @@ def run_case(
         tile_count_res=tile_cnt_A,
     )
 
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
-
     _, _, faces_to_generate = calculate_tile_and_face_counts(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
     )
 
-    if run_mode == RunMode.ACCURACY:
+    arch = get_chip_architecture()
+    if arch == ChipArchitecture.QUASAR:
+        if run_mode != RunMode.ACCURACY:
+            raise NotImplementedError(
+                f"run_mode={run_mode.value} is not supported on Quasar; "
+                "only RunMode.ACCURACY"
+            )
+        # On Quasar the data route (and therefore unpack_to_dest) is decided by
+        # the resolver, not by the WH/BH "32-bit input + dest_acc" rule.
+        quasar_variant = resolve_quasar_variant(op, formats, dest_acc)
+        unpack_to_dest = quasar_variant.unpack_to_dest
         configuration = TestConfig(
-            "sources/eltwise_unary_sfpu_perf.cpp",
+            QUASAR_KERNEL,
+            formats,
+            templates=quasar_templates(op, approx_mode, fast_mode, unpack_to_dest),
+            runtimes=quasar_runtimes(tile_cnt_A, faces_to_generate),
+            variant_stimuli=variant_stimuli,
+            dest_acc=dest_acc,
+            unpack_to_dest=unpack_to_dest,
+        )
+        quasar_variant.apply_formats(configuration.formats_config)
+        res_from_L1 = configuration.run().result
+    elif run_mode == RunMode.ACCURACY:
+        unpack_to_dest = (
+            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+        )
+        configuration = TestConfig(
+            WH_BH_KERNEL,
             formats,
             templates=[
                 PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
@@ -454,6 +564,9 @@ def run_case(
         )
         res_from_L1 = configuration.run().result
     else:
+        unpack_to_dest = (
+            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+        )
         run_types = (
             _ACCURACY_CAPABLE_RUN_TYPES
             if run_mode == RunMode.BOTH
