@@ -2140,6 +2140,22 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         self._spec_pending_owner = None
         if self._spec_active:
             self._spec_release_decoder()
+        # DISARM the residual-tap hook. capture() arms it with buffers=tap_bufs,
+        # which are sized for the fused DECODE body (P_v rows), and nothing
+        # disarms it when the session ends -- so it stays armed after any spec
+        # request. A later prefill served as plain baseline then runs the eager
+        # chunked forward with that hook still live and ttnn.copy's a full
+        # prefill chunk into a P_v-row buffer, killing the engine:
+        #   TT_FATAL: Input tensor shape Shape([1, 1, 4096, 5376]) does not
+        #   match output tensor shape Shape([1, 1, 6, 5376])
+        # (copy_device_operation.cpp:112 -- 4096 = prefill chunk, 6 = P_v at
+        # GEMMA4_DFLASH_VERIFY=5). Reproduced on a P150x8 256K benchmark sweep at
+        # the first point above GEMMA4_DFLASH_MAX_SPEC_ISL: 131072 served fine,
+        # 196608 took the engine down. Disarming here covers every drop path.
+        try:
+            self.model[0].dflash_capture_taps(None)
+        except Exception:
+            pass
 
     # -- prefill: capture taps (untraced) ------------------------------------
     def prefill_forward(self, *args, **kwargs):
