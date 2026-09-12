@@ -134,6 +134,10 @@ template <
     uint32_t out_subblock_num_tiles,
     uint32_t out_block_num_tiles,
     bool apply_silu_on_final,
+    // Width of the LAST N-subblock. Equals out_subblock_w for an exact subblock grid; smaller
+    // when the grid is ragged, which the program factory allows only when no divisor of
+    // per_core_N clears the width where this matmul stops being math-bound.
+    uint32_t out_subblock_w_tail = out_subblock_w,
     uint32_t d_per_core_N = 0,
     // Real (unpadded) K-tiles of the reduction dim. Defaults to the full padded
     // extent (reduce everything); the down phase passes the true count so no
@@ -150,8 +154,10 @@ FORCE_INLINE void matmul_phase(
     // sb_m indexes tile-rows directly, so m_subblocks (a tile-row count) bounds it
     // only at unit subblock height.
     static_assert(out_subblock_h == 1, "m_subblocks bounds sb_m only when out_subblock_h == 1");
+    static_assert(out_subblock_w_tail >= 1 && out_subblock_w_tail <= out_subblock_w, "bad tail width");
     static_assert(
-        in0_num_subblocks * in1_num_subblocks * out_subblock_num_tiles == out_block_num_tiles,
+        in0_num_subblocks * ((in1_num_subblocks - 1) * out_subblock_w + out_subblock_w_tail) * out_subblock_h ==
+            out_block_num_tiles,
         "subblock grid must tile the output block exactly");
     static_assert(real_k_tiles <= num_blocks * in0_block_w, "real_k_tiles must not exceed the padded K extent");
     // Adaptive per_core_M: this core's down output is m_subblocks tile-rows this
@@ -166,7 +172,9 @@ FORCE_INLINE void matmul_phase(
     // M bound this does NOT shrink EFF_OUT — the partials ring and the final_cb
     // push stay full width, since the writer drains a fixed subblock count.
     const uint32_t EFF_M = m_subblocks;
-    const uint32_t EFF_OUT = m_subblocks * in1_num_subblocks * out_subblock_num_tiles;
+    // Tiles per output row once the ragged tail is counted -- i.e. the true per_core_N.
+    constexpr uint32_t N_PER_ROW = (in1_num_subblocks - 1) * out_subblock_w + out_subblock_w_tail;
+    const uint32_t EFF_OUT = m_subblocks * N_PER_ROW * out_subblock_h;
     // Reconfig packer for partials format (previous phase's final_cb format
     // would otherwise leak). pack_reconfig_data_format (the reconfig variant)
     // does NOT reset L1_ACC — we do that explicitly below.
@@ -227,6 +235,9 @@ FORCE_INLINE void matmul_phase(
                 for (uint32_t sb_n = 0; sb_n < in1_num_subblocks; ++sb_n) {
                     // Phantom-column subblocks: no MAC, no pack. The slot counters still
                     // advance so the surviving subblocks keep their absolute partials slots.
+                    // Ragged grid: the last N-subblock is narrower, so it MACs and packs fewer
+                    // tiles. Identical to out_subblock_w on an exact grid.
+                    const uint32_t this_w = (sb_n + 1 == in1_num_subblocks) ? out_subblock_w_tail : out_subblock_w;
                     if (sb_n < n_subblocks) {
                         tile_regs_acquire();
                         {
@@ -240,7 +251,7 @@ FORCE_INLINE void matmul_phase(
                                     in1_index,
                                     /*dst_index=*/0,
                                     /*transpose=*/0,
-                                    out_subblock_w,
+                                    this_w,
                                     out_subblock_h,
                                     in0_block_w);
                                 in0_index += 1;
@@ -249,12 +260,12 @@ FORCE_INLINE void matmul_phase(
                         }
                         tile_regs_commit();
                         tile_regs_wait();
-                        for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
+                        for (uint32_t i = 0; i < this_w * out_subblock_h; ++i) {
                             pack_tile<true>(i, partials_cb_id, partials_slot_idx + i);
                         }
                         tile_regs_release();
                     }
-                    partials_slot_idx += out_subblock_num_tiles;
+                    partials_slot_idx += this_w * out_subblock_h;
 
                     in1_index_subblock_offset += out_subblock_w;
                 }
@@ -310,35 +321,45 @@ FORCE_INLINE void matmul_phase(
     copy_init(partials_cb_id);
 #endif
 
-    const uint32_t eff_subblocks = EFF_OUT / out_subblock_num_tiles;
-    for (uint32_t sb = 0; sb < eff_subblocks; ++sb) {
-        tile_regs_acquire();
-        partials_cb.wait_front(out_subblock_num_tiles);
-        for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
+    // Walk (sb_m, sb_n) rather than a flat subblock count: on a ragged grid the last
+    // N-subblock is narrower, so the drain must pop and push exactly what the MAC packed.
+    // Tiles still leave in row-major (m, n) order and still total m_subblocks * per_core_N,
+    // so the writer's fixed drain contract is unchanged -- only the subblock widths differ.
+    uint32_t flat_base = 0;
+    for (uint32_t sb_m = 0; sb_m < EFF_M; ++sb_m) {
+        for (uint32_t sb_n = 0; sb_n < in1_num_subblocks; ++sb_n) {
+            const uint32_t this_w = (sb_n + 1 == in1_num_subblocks) ? out_subblock_w_tail : out_subblock_w;
+            const uint32_t this_tiles = this_w * out_subblock_h;
+            tile_regs_acquire();
+            partials_cb.wait_front(this_tiles);
+            for (uint32_t i = 0; i < this_tiles; ++i) {
 #ifdef FUSE_BIAS
-            const uint32_t flat = sb * out_subblock_num_tiles + i;
-            add_tiles_bcast_rows(partials_cb_id, down_bias_cb_id, i, flat % d_per_core_N, i);
+                // Column of this tile within the core's N slice, from the true (m, n) position.
+                const uint32_t flat = flat_base + i;
+                add_tiles_bcast_rows(partials_cb_id, down_bias_cb_id, i, flat % d_per_core_N, i);
 #else
-            copy_tile(partials_cb_id, i, i);
+                copy_tile(partials_cb_id, i, i);
 #endif
+            }
+            partials_cb.pop_front(this_tiles);
+
+            tile_regs_commit();
+
+            if constexpr (apply_silu_on_final) {
+                apply_activation_from_pack<KernelActivation::SILU>(this_tiles);
+            } else {
+                tile_regs_wait();
+            }
+
+            final_cb.reserve_back(this_tiles);
+            for (uint32_t i = 0; i < this_tiles; ++i) {
+                pack_tile(i, final_cb_id);
+            }
+            final_cb.push_back(this_tiles);
+
+            tile_regs_release();
+            flat_base += this_tiles;
         }
-        partials_cb.pop_front(out_subblock_num_tiles);
-
-        tile_regs_commit();
-
-        if constexpr (apply_silu_on_final) {
-            apply_activation_from_pack<KernelActivation::SILU>(out_subblock_num_tiles);
-        } else {
-            tile_regs_wait();
-        }
-
-        final_cb.reserve_back(out_subblock_num_tiles);
-        for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
-            pack_tile(i, final_cb_id);
-        }
-        final_cb.push_back(out_subblock_num_tiles);
-
-        tile_regs_release();
     }
 
     // Pointer-only drain of the partials tail: slots [EFF_OUT, out_block_num_tiles)
@@ -355,10 +376,16 @@ FORCE_INLINE void matmul_phase(
     // runtime per_core_M via its own row guards. Hand it the leftover slots WITHOUT
     // packing: their L1 holds stale bytes that are never written out, so the
     // reserve/push pair alone is enough to keep producer and consumer aligned.
-    constexpr uint32_t FULL_SUBBLOCKS = out_block_num_tiles / out_subblock_num_tiles;
-    for (uint32_t sb = eff_subblocks; sb < FULL_SUBBLOCKS; ++sb) {
-        final_cb.reserve_back(out_subblock_num_tiles);
-        final_cb.push_back(out_subblock_num_tiles);
+    // Pad the SAME ragged width sequence the writer waits on, row by row: it drains
+    // in0_num_subblocks M-rows of in1_num_subblocks subblocks each, and a uniform-width pad
+    // would desynchronise its wait_front on a ragged grid.
+    for (uint32_t sb_m = EFF_M; sb_m < in0_num_subblocks; ++sb_m) {
+        for (uint32_t sb_n = 0; sb_n < in1_num_subblocks; ++sb_n) {
+            const uint32_t pad_tiles =
+                ((sb_n + 1 == in1_num_subblocks) ? out_subblock_w_tail : out_subblock_w) * out_subblock_h;
+            final_cb.reserve_back(pad_tiles);
+            final_cb.push_back(pad_tiles);
+        }
     }
 }
 
@@ -888,30 +915,34 @@ void kernel_main() {
     constexpr uint32_t gu_out_block_num_tiles = get_compile_time_arg_val(26);
     constexpr uint32_t d_out_subblock_h = get_compile_time_arg_val(27);
     constexpr uint32_t d_out_subblock_w = get_compile_time_arg_val(28);
+    // Width of the LAST down N-subblock. Equals d_out_subblock_w unless the down subblock grid
+    // is ragged -- which the program factory allows only when no divisor of per_core_N_d clears
+    // the 3-tile width where the matmul goes unpack-bound.
+    constexpr uint32_t d_out_subblock_w_tail = get_compile_time_arg_val(29);
     constexpr uint32_t d_out_subblock_num_tiles = d_out_subblock_h * d_out_subblock_w;
-    constexpr uint32_t d_out_block_num_tiles = get_compile_time_arg_val(29);
+    constexpr uint32_t d_out_block_num_tiles = get_compile_time_arg_val(30);
     // Multi-chunk: the number of chunks is chosen at RUNTIME from each expert's
     // device token count (see the picker below). num_chunks_max is the compile-time
     // upper bound (host = ceil(M_tiles_full / min_chunk)) used only to clamp the
     // runtime chunk count defensively. chunk_M_max is the CB-sized maximum
     // chunk (per_core_M_max * GRID_Y); the picker never returns more than this.
-    constexpr uint32_t num_chunks_max = get_compile_time_arg_val(30);
-    constexpr uint32_t experts_per_chip = get_compile_time_arg_val(31);
+    constexpr uint32_t num_chunks_max = get_compile_time_arg_val(31);
+    constexpr uint32_t experts_per_chip = get_compile_time_arg_val(32);
     // chunk_M_max is the CB-sized MAXIMUM chunk (per_core_M_max * GRID_Y). The
     // runtime picker (adaptive_chunk::num_chunks) sizes the actual chunk to the
     // device token count and never exceeds this.
-    constexpr uint32_t chunk_M_max = get_compile_time_arg_val(32);
+    constexpr uint32_t chunk_M_max = get_compile_time_arg_val(33);
     // x_is_row_major: tilize cb_x_rm -> cb_in0_x before the gate/up matmul.
     // 0 => x already TILE in cb_in0_x.
-    constexpr uint32_t x_is_row_major = get_compile_time_arg_val(33);
+    constexpr uint32_t x_is_row_major = get_compile_time_arg_val(34);
     // Real (unpadded) down-K tiles. The down K-loop runs over the GRID-padded
     // extent (K_down_tiles_padded), and the down phase skips every K position at
     // or past this count — whole padded blocks and the partial tail alike. That
     // is what lets the reader and writer leave the padded down weights and the
     // padded hidden (gate/up N-OOB) columns unwritten: nothing ever reduces them.
-    constexpr uint32_t d_K_down_tiles = get_compile_time_arg_val(34);
-    constexpr uint32_t min_active_tokens = get_compile_time_arg_val(35);
-    constexpr uint32_t max_active_tokens = get_compile_time_arg_val(36);
+    constexpr uint32_t d_K_down_tiles = get_compile_time_arg_val(35);
+    constexpr uint32_t min_active_tokens = get_compile_time_arg_val(36);
+    constexpr uint32_t max_active_tokens = get_compile_time_arg_val(37);
 
     // CBs
     constexpr uint32_t cb_in0_x = get_named_compile_time_arg_val("cb_in0_x");
@@ -1115,6 +1146,7 @@ void kernel_main() {
                 d_out_subblock_num_tiles,
                 d_out_block_num_tiles,
                 /*apply_silu_on_final=*/false,
+                /*out_subblock_w_tail=*/d_out_subblock_w_tail,
                 /*d_per_core_N=*/d_in1_per_core_w,
                 /*real_k_tiles=*/d_K_down_tiles>(
                 cb_in0_down_full,
