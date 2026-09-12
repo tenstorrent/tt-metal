@@ -132,7 +132,7 @@ int64_t D2dSyncConsumer::core_index(uint32_t dev, const CoreCoord& eth) const {
     return -1;
 }
 
-// Both stamp kinds solve in the refclk domain over the latest kLinkWindow rounds with one regression. Hardware
+// Both stamp kinds solve in the refclk domain over the latest window of rounds with one regression. Hardware
 // stamps are refclk ticks already. Software wall stamps are put there through the tracker's run map (one line per
 // constant-rate run, so a DVFS excursion inside the window no longer bends them as one ratio per window did) and
 // keep their fastest quartile by round trip, since an ERISC stalled inside a round shows in its trip time.
@@ -168,19 +168,33 @@ void D2dSyncConsumer::try_solve_links(bool final) {
                 ls.hw.rounds.size(),
                 ls.hw.pending.size());
         }
-        // Live: wait for the whole burst. Final: take what arrived, if it is enough for a fit at all. Re-solved as
-        // rounds accumulate, so the solution follows the crystals' slow rate wander instead of freezing a boot-time
-        // burst.
-        // A link's first solution comes early so held records are released after 0.2 s, and it is re-solved as its
-        // window grows by half each time until the full window: a 0.2 s window fixes the rate only to ~10 ppb, which
-        // would otherwise run for the 0.8 s to the next solve.
-        const size_t next = out.ok ? std::min(out.rounds_seen + kLinkWindow / 2, out.rounds_seen * 3 / 2) : kFirstSolveRounds;
-        if (n < (final ? 8u : std::max<size_t>(next, kFirstSolveRounds))) {
+        const auto la = local_.find(L.dev_a);
+        const auto lb = local_.find(L.dev_b);
+        if (n == 0 || (!hw && (la == local_.end() || lb == local_.end() || la->second.fit.runs.empty() ||
+                               lb->second.fit.runs.empty()))) {
             continue;
         }
-        const size_t w = std::min(n, kLinkWindow);
-        const size_t begin = n - w;
-        out.rounds_seen = n;
+        const auto to_refclk = [](const LocalClockFit& fit, uint64_t wall) {
+            const double wd = static_cast<double>(wall);
+            return fit.run_at_wall(wd).refclk_of_wall(wd);
+        };
+        const auto pos = [&](const Round& r) { return hw ? mid_a(r, true) : to_refclk(la->second.fit, r.t0.wall); };
+        const double newest = pos(rounds[n - 1]);
+        // Live: the first solution once kFirstSolveTicks of rounds are in, so held records are released, then one
+        // every half window. Final: whatever the window holds, if it is enough for a fit at all.
+        if (!final && (out.ok ? newest < out.solved_at + kLinkWindowTicks / 2
+                              : newest - pos(rounds[0]) < kFirstSolveTicks)) {
+            continue;
+        }
+        size_t begin = n;
+        while (begin > 0 && pos(rounds[begin - 1]) > newest - kLinkWindowTicks) {
+            begin--;
+        }
+        const size_t w = n - begin;
+        if (w < kMinSolveRounds) {
+            continue;
+        }
+        out.solved_at = newest;
         std::vector<RoundPoint> pts;
         pts.reserve(w);
         if (hw) {
@@ -196,16 +210,6 @@ void D2dSyncConsumer::try_solve_links(bool final) {
                 pts.push_back(RoundPoint{mid, mid_b(r, true) - mid, 0.0});
             }
         } else {
-            const auto la = local_.find(L.dev_a);
-            const auto lb = local_.find(L.dev_b);
-            if (la == local_.end() || lb == local_.end() || la->second.fit.runs.empty() ||
-                lb->second.fit.runs.empty()) {
-                continue;
-            }
-            const auto to_refclk = [](const LocalClockFit& fit, uint64_t wall) {
-                const double wd = static_cast<double>(wall);
-                return fit.run_at_wall(wd).refclk_of_wall(wd);
-            };
             for (size_t i = begin; i < n; i++) {
                 const Round& r = rounds[i];
                 if (r.t0.wall == 0 || r.t2.wall == 0 || r.t1.wall == 0 || r.t1b.wall == 0 || r.t2.wall < r.t0.wall) {

@@ -75,7 +75,11 @@ static_assert(
 constexpr uint32_t kLinkSyncChannels = 1;
 constexpr uint32_t kLinkSyncSamples = 240;
 constexpr uint32_t kLinkSyncSampleSize = 16;
-constexpr uint32_t kLinkSyncPaceTicks = 50000;  // 1 ms at the eth tile's 50 MHz refclk: the resident 1 kHz cadence
+// Rounds per second of the resident link sync, as a refclk interval. The link relation is two crystals against each
+// other and the host fits it over a 250 ms window, so the cadence only sets how many rounds the fit averages: at
+// 100 Hz the fit's own noise is ~0.1 ns against the tracker's ~0.6 ns floor, and each end spends 2 % of its time in
+// rounds instead of the 20 % it did at 1 kHz.
+constexpr uint32_t kLinkSyncPaceTicks = 500000;  // 10 ms at the eth tile's 50 MHz refclk
 
 // Bring-up runs several MMIO paths and a hang in any of them reports only "MMIO per-op timeout"; this names
 // the stall site.
@@ -984,7 +988,7 @@ void Devices::run_link_sync() {
         const uint32_t zero[2] = {0, 0};  // stop + done, clear before launch
         cluster.write_core(zero, sizeof(zero), tt_cxy_pair(L.chip_a, virt_a), stop_addr);
         cluster.write_core(zero, sizeof(zero), tt_cxy_pair(L.chip_b, virt_b), stop_addr);
-        // resident = 1, plus the stop address and the 1 kHz pace; the receiver ignores the pace arg.
+        // resident = 1, plus the stop address and the pace; the receiver ignores the pace arg.
         const std::vector<uint32_t> ct = {kLinkSyncChannels, kLinkSyncSamples, kLinkSyncSampleSize};
         auto ps = std::make_unique<Program>(CreateProgram());
         auto pr = std::make_unique<Program>(CreateProgram());
@@ -1016,7 +1020,7 @@ void Devices::run_link_sync() {
         }
         detail::WriteRuntimeArgsToDevice(dev_a, *ps, /*force_slow_dispatch=*/true);
         detail::WriteRuntimeArgsToDevice(dev_b, *pr, /*force_slow_dispatch=*/true);
-        // Resident: launch and do NOT wait; they run at 1 kHz for the session and stop at quiesce.
+        // Resident: launch and do NOT wait; they run for the session and stop at quiesce.
         detail::LaunchProgram(dev_a, *ps, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
         detail::LaunchProgram(dev_b, *pr, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
         link_syncs_.push_back(ResidentSync{
@@ -1032,13 +1036,14 @@ void Devices::run_link_sync() {
             .stop_b = stop_addr});
         log_info(
             tt::LogMetal,
-            "[streaming profiler] link sync {} eth({},{}) -> {} eth({},{}): RESIDENT at 1 kHz",
+            "[streaming profiler] link sync {} eth({},{}) -> {} eth({},{}): RESIDENT at {} Hz",
             L.chip_a,
             L.eth_a.x,
             L.eth_a.y,
             L.chip_b,
             L.eth_b.x,
-            L.eth_b.y);
+            L.eth_b.y,
+            50'000'000u / kLinkSyncPaceTicks);
     }
 }
 

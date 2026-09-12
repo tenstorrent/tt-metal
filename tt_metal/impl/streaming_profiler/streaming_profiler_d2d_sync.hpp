@@ -286,7 +286,7 @@ private:
     struct LinkSolution {
         bool ok = false;
         bool hw = false;
-        size_t rounds_seen = 0;     // rounds available at the last solve (hardware path re-solves as they accumulate)
+        double solved_at = 0.0;     // the sender chip's refclk at the newest round of the last solve
         double precision_ns = 0.0;  // residual_rms_ns / sqrt(kept): the offset estimate's own precision
         uint32_t dev_snd = 0, dev_rcv = 0;
         double offset_ticks = 0.0, rate = 0.0, mid = 0.0;
@@ -401,11 +401,13 @@ private:
     static constexpr uint64_t kPublishEveryTicks = 2'500'000;  // 50 ms of a chip's tracker time between live publications
     // A knot (where two runs' exact lines meet) must land within this much refclk (50 us) of the samples that
     // bracket the transition; a split is detected up to ~10 us after the transition it follows.
-    // Rounds per link solve, re-solved every half window. Four averaged trips per round leave ~3 ns per round, so
-    // 250 rounds give ~0.2 ns on the offset and a rate centred 125 ms back: the crystals' thermal wander
-    // (~0.01 ppm/s under load) then costs ~1 ns of lag instead of ~5 at a 1 s window.
-    static constexpr size_t kLinkWindow = 250;
-    static constexpr size_t kFirstSolveRounds = 200;
+    // The link solve's window in the sender chip's refclk, re-solved every half window. Two chips' crystals hold a
+    // line to ~0.4 ns over 250 ms and their rate moves a few ppb from one such window to the next (measured on the
+    // 8-chip runs), so a fit extrapolated half a window past its end stays within ~0.4 ns rms and doubles that at
+    // 500 ms. The rounds inside the window only average the fit's own noise, ~0.1 ns at 100 Hz.
+    static constexpr double kLinkWindowTicks = 12'500'000.0;  // 250 ms
+    static constexpr double kFirstSolveTicks = 10'000'000.0;  // 200 ms of rounds before the first live solution
+    static constexpr size_t kMinSolveRounds = 8;
     static constexpr size_t kPendingMax = 4096;
 };
 
