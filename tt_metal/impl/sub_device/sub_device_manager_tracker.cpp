@@ -74,8 +74,7 @@ SubDeviceManagerId SubDeviceManagerTracker::create_sub_device_manager(
 void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDeviceManager>& sub_device_manager) {
     auto num_sub_devices = sub_device_manager->num_sub_devices();
     MetalContext& metal_context = MetalContext::instance(extract_context_id(device_));
-    const bool fds_worker_completion_enabled =
-        metal_context.get_dispatch_query_manager().fds_worker_completion_enabled();
+    const bool fds_signalling_enabled = metal_context.get_dispatch_query_manager().fds_signalling_enabled();
     std::vector<uint32_t> workers_per_sub_device;
     workers_per_sub_device.reserve(num_sub_devices);
     for (uint8_t i = 0; i < num_sub_devices; ++i) {
@@ -83,10 +82,10 @@ void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDe
         const auto& sub_device = sub_device_manager->sub_device(sub_device_id);
         const uint32_t active_ethernet_core_count =
             sub_device.impl()->cores(HalProgrammableCoreType::ACTIVE_ETH).num_cores();
-        if (fds_worker_completion_enabled) {
+        if (fds_signalling_enabled) {
             TT_FATAL(
                 active_ethernet_core_count == 0,
-                "FDS worker completion does not support ACTIVE_ETH cores in sub-device {}",
+                "FDS worker signalling does not support ACTIVE_ETH cores in sub-device {}",
                 i);
         }
         workers_per_sub_device.push_back(
