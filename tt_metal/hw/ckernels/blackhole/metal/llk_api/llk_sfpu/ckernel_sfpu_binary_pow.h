@@ -227,6 +227,16 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     sfpi::vFloat pc = pow * VELTKAMP_SPLIT;
     sfpi::vFloat pow_hi = pc - (pc - pow);
     sfpi::vFloat pow_lo = pow - pow_hi;
+    // pc overflows to inf once |pow| > FLT_MAX/VELTKAMP_SPLIT, and pc - (pc - pow) is then
+    // inf - inf = NaN, which propagates through z_hi and z_lo into the result. FLT_MAX/4097
+    // lies inside [2**115, 2**116), so 115 is the first exponent that can overflow. A |pow|
+    // that large drives pow*log2(base) far outside the 2**z range for every base except 1,
+    // where exp_f32 and ln_m are both zero, so the split has nothing left to preserve.
+    v_if(sfpi::exexp(pow) >= 115) {
+        pow_hi = pow;
+        pow_lo = 0.0f;
+    }
+    v_endif;
 
     sfpi::vFloat z_hi = pow_hi * exp_f32;
     sfpi::vFloat z_lo = pow_lo * exp_f32 + pow * (ln_m * vConst1Ln2);
