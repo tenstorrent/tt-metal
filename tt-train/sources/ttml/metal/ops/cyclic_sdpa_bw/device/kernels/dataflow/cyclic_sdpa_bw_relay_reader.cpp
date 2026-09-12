@@ -54,6 +54,14 @@
 #include "tt-train/sources/ttml/metal/ops/cyclic_sdpa_bw/device/cyclic_schedule.hpp"
 #include "tt-train/sources/ttml/metal/ops/cyclic_sdpa_bw/device/parity_snake.hpp"
 
+// The forward is split, because only one of the packet's five fields depends
+// on this core's arithmetic. Q, dO, L and D are immutable -- the packet
+// carries them unchanged -- so they go out the moment they arrive, before any
+// compute. dQ is the accumulator each consumer adds to, so it goes last, with
+// its own readiness tag. A consumer can then get as far as dS on the
+// immutable fields alone, which is exactly how long it has before it needs
+// dQ: the compute kernel does not touch it until after dS.
+//
 // ENDPOINT_SYNC selects Algorithm 4: no chip-wide barrier. Within a streak
 // the packet is itself the ordering token -- a consumer cannot update dQ_i
 // before the previous consumer forwards it. Across a gap, two endpoint
@@ -104,18 +112,24 @@ void kernel_main() {
     constexpr uint32_t qWt = get_compile_time_arg_val(1);
     constexpr uint32_t vWt = get_compile_time_arg_val(2);
     constexpr uint32_t release_sem_id = get_compile_time_arg_val(3);
-    // One readiness word per slot, carrying the destination timestep's tag
-    // rather than a count: a slot's uses are u, u + 2, ... so the tags
+    // Two readiness words per slot, each carrying the destination timestep's
+    // tag rather than a count: a slot's uses are u, u + 2, ... so the tags
     // u + 1, u + 3, ... increase, and a stale tag from the slot's previous
     // use cannot satisfy the wait.
-    constexpr uint32_t ready_sem_id[2] = {
+    //
+    // Two rather than one because the packet's four immutable fields and its
+    // dQ become available at different times, and a consumer needs them at
+    // different times too.
+    constexpr uint32_t ready_imm_sem_id[2] = {
         get_compile_time_arg_val(4), get_compile_time_arg_val(5)};
-    constexpr uint32_t credit_prev_sem_id = get_compile_time_arg_val(6);
-    constexpr uint32_t credit_next_sem_id = get_compile_time_arg_val(7);
-    constexpr uint32_t credit_self_sem_id = get_compile_time_arg_val(8);
-    constexpr uint32_t endpoint1_sem_id = get_compile_time_arg_val(9);
-    constexpr uint32_t endpoint2_sem_id = get_compile_time_arg_val(10);
-    constexpr auto query_args = TensorAccessorArgs<11>();
+    constexpr uint32_t ready_dq_sem_id[2] = {
+        get_compile_time_arg_val(6), get_compile_time_arg_val(7)};
+    constexpr uint32_t credit_prev_sem_id = get_compile_time_arg_val(8);
+    constexpr uint32_t credit_next_sem_id = get_compile_time_arg_val(9);
+    constexpr uint32_t credit_self_sem_id = get_compile_time_arg_val(10);
+    constexpr uint32_t endpoint1_sem_id = get_compile_time_arg_val(11);
+    constexpr uint32_t endpoint2_sem_id = get_compile_time_arg_val(12);
+    constexpr auto query_args = TensorAccessorArgs<13>();
     constexpr auto key_args = TensorAccessorArgs<query_args.next_compile_time_args_offset()>();
     constexpr auto value_args = TensorAccessorArgs<key_args.next_compile_time_args_offset()>();
     constexpr auto grad_output_args = TensorAccessorArgs<value_args.next_compile_time_args_offset()>();
@@ -179,9 +193,12 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* release_sem =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(release_sem_id));
-    volatile tt_l1_ptr uint32_t* ready_sem[2] = {
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ready_sem_id[0])),
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ready_sem_id[1]))};
+    volatile tt_l1_ptr uint32_t* ready_imm_sem[2] = {
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ready_imm_sem_id[0])),
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ready_imm_sem_id[1]))};
+    volatile tt_l1_ptr uint32_t* ready_dq_sem[2] = {
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ready_dq_sem_id[0])),
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ready_dq_sem_id[1]))};
     const uint32_t scratch_l1 = get_write_ptr(cb_scratch);
     volatile tt_l1_ptr uint32_t* scratch = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_l1);
     volatile tt_l1_ptr uint32_t* credit_from_prev =
@@ -321,16 +338,21 @@ void kernel_main() {
         cb_reserve_back(cb_u_scalar, 1);
         cb_reserve_back(cb_grad_query_seed, qWt);
 
+        const uint32_t qs = base_query + slot * stride_query;
+        const uint32_t os = base_grad_output + slot * stride_grad_output;
+        const uint32_t ls = base_lse + slot * stride_interm;
+        const uint32_t ds = base_u_scalar + slot * stride_interm;
+        const uint32_t gs = base_grad_query + slot * stride_grad_query;
+
         const auto producer = sched.producer(my_core, t);
         if (producer.internal) {
-            // Inside a streak: the packet arrives over the NoC, or locally
-            // for the one self-transition. The credit for this slot was
-            // granted at its release, two timesteps back, so the producer's
-            // forward did not have to wait for this core to get here.
+            // Inside a streak: Q, dO, L and D arrive first, and they are all
+            // the compute kernel needs to get as far as dS. The credit for
+            // this slot was granted at its release, two timesteps back.
             WAYPOINT("RDYW");
             do {
                 invalidate_l1_cache();
-            } while ((*ready_sem[slot]) < t + 1u);
+            } while ((*ready_imm_sem[slot]) < t + 1u);
             WAYPOINT("RDYD");
         } else {
             // A streak start: load the packet from DRAM. dQ_i must carry
@@ -349,14 +371,8 @@ void kernel_main() {
                 WAYPOINT("ENDD");
             }
 #endif
-            const uint32_t qs = base_query + slot * stride_query;
-            const uint32_t os = base_grad_output + slot * stride_grad_output;
-            const uint32_t ls = base_lse + slot * stride_interm;
-            const uint32_t ds = base_u_scalar + slot * stride_interm;
-            const uint32_t gs = base_grad_query + slot * stride_grad_query;
             for (uint32_t k = 0; k < qWt; ++k) {
                 noc_async_read_page((i - 1u) * qWt + k, query, qs + k * tile_bytes);
-                noc_async_read_page((i - 1u) * qWt + k, grad_query, gs + k * grad_bytes);
             }
             for (uint32_t k = 0; k < vWt; ++k) {
                 noc_async_read_page((i - 1u) * vWt + k, grad_output, os + k * tile_bytes);
@@ -366,64 +382,95 @@ void kernel_main() {
             noc_async_read_barrier();
         }
 
+        // The compute kernel can start on S, P, dP and dS now. It does not
+        // touch dQ until after dS, so the rest of the packet has that long to
+        // arrive.
         cb_push_back(cb_query, qWt);
         cb_push_back(cb_grad_output, vWt);
         cb_push_back(cb_lse, 1);
         cb_push_back(cb_u_scalar, 1);
+
+        // Forward the immutable fields straight away, before this core has
+        // computed anything: the packet carries them unchanged, so they never
+        // depend on the arithmetic. Only dQ does.
+        const uint32_t receiver = sched.next_consumer(i, t);
+        const uint32_t u = t + 1u;
+        const uint32_t dst = u % 2u;
+        const uint32_t dst_query = base_query + dst * stride_query;
+        const uint32_t dst_grad_output = base_grad_output + dst * stride_grad_output;
+        const uint32_t dst_lse = base_lse + dst * stride_interm;
+        const uint32_t dst_u_scalar = base_u_scalar + dst * stride_interm;
+        const uint32_t dst_grad_query = base_grad_query + dst * stride_grad_query;
+        uint32_t receiver_x = 0;
+        uint32_t receiver_y = 0;
+        if (receiver != kNoCore && receiver != my_core) {
+            noc_xy_of(receiver, receiver_x, receiver_y);
+        }
+
+        if (receiver == my_core) {
+            // The self-transition: reserving the destination slot is the
+            // credit, and the copies are local.
+            cb_reserve_back(cb_query, qWt);
+            cb_reserve_back(cb_grad_output, vWt);
+            cb_reserve_back(cb_lse, 1);
+            cb_reserve_back(cb_u_scalar, 1);
+            cb_reserve_back(cb_grad_query_seed, qWt);
+            noc_async_write(qs, get_noc_addr(dst_query), stride_query);
+            noc_async_write(os, get_noc_addr(dst_grad_output), stride_grad_output);
+            noc_async_write(ls, get_noc_addr(dst_lse), stride_interm);
+            noc_async_write(ds, get_noc_addr(dst_u_scalar), stride_interm);
+            noc_async_write_barrier();
+            noc_semaphore_set(ready_imm_sem[dst], u + 1u);
+        } else if (receiver != kNoCore) {
+            await_credit(receiver);
+            noc_async_write(qs, get_noc_addr(receiver_x, receiver_y, dst_query), stride_query);
+            noc_async_write(
+                os, get_noc_addr(receiver_x, receiver_y, dst_grad_output), stride_grad_output);
+            noc_async_write(ls, get_noc_addr(receiver_x, receiver_y, dst_lse), stride_interm);
+            noc_async_write(
+                ds, get_noc_addr(receiver_x, receiver_y, dst_u_scalar), stride_interm);
+            // Payload complete before readiness, as the contract requires.
+            noc_async_write_barrier();
+            *scratch = u + 1u;
+            noc_semaphore_set_remote(
+                scratch_l1,
+                get_noc_addr(receiver_x, receiver_y, get_semaphore(ready_imm_sem_id[dst])));
+            noc_async_write_barrier();
+        }
+
+        // Now dQ, which is the one field that has to wait for arithmetic --
+        // it is the accumulator each consumer adds to.
+        if (producer.internal) {
+            WAYPOINT("DQRW");
+            do {
+                invalidate_l1_cache();
+            } while ((*ready_dq_sem[slot]) < t + 1u);
+            WAYPOINT("DQRD");
+        } else {
+            for (uint32_t k = 0; k < qWt; ++k) {
+                noc_async_read_page((i - 1u) * qWt + k, grad_query, gs + k * grad_bytes);
+            }
+            noc_async_read_barrier();
+        }
         cb_push_back(cb_grad_query_seed, qWt);
-        // The compute kernel's updated dQ closes the packet.
+
+        // This core's contribution closes the packet.
         cb_wait_front(cb_grad_query_out, qWt);
         const uint32_t dq_out = get_read_ptr(cb_grad_query_out);
 
-        const uint32_t receiver = sched.next_consumer(i, t);
-        if (receiver != kNoCore) {
-            const uint32_t u = t + 1u;
-            const uint32_t dst = u % 2u;
-
-            const uint32_t qs = base_query + slot * stride_query;
-            const uint32_t os = base_grad_output + slot * stride_grad_output;
-            const uint32_t ls = base_lse + slot * stride_interm;
-            const uint32_t ds = base_u_scalar + slot * stride_interm;
-            const uint32_t dq_dst = base_grad_query + dst * stride_grad_query;
-
-            if (receiver == my_core) {
-                // The self-transition: reserving the destination slot is the
-                // credit, and the copy is local.
-                cb_reserve_back(cb_query, qWt);
-                cb_reserve_back(cb_grad_output, vWt);
-                cb_reserve_back(cb_lse, 1);
-                cb_reserve_back(cb_u_scalar, 1);
-                cb_reserve_back(cb_grad_query_seed, qWt);
-                noc_async_write(qs, get_noc_addr(base_query + dst * stride_query), stride_query);
-                noc_async_write(
-                    os, get_noc_addr(base_grad_output + dst * stride_grad_output), stride_grad_output);
-                noc_async_write(ls, get_noc_addr(base_lse + dst * stride_interm), stride_interm);
-                noc_async_write(ds, get_noc_addr(base_u_scalar + dst * stride_interm), stride_interm);
-                noc_async_write(dq_out, get_noc_addr(dq_dst), stride_grad_query);
-                noc_async_write_barrier();
-                noc_semaphore_set(ready_sem[dst], u + 1u);
-            } else {
-                await_credit(receiver);
-                uint32_t x = 0;
-                uint32_t y = 0;
-                noc_xy_of(receiver, x, y);
-                // Five payload writes, completed before readiness is published.
-                noc_async_write(qs, get_noc_addr(x, y, base_query + dst * stride_query), stride_query);
-                noc_async_write(
-                    os,
-                    get_noc_addr(x, y, base_grad_output + dst * stride_grad_output),
-                    stride_grad_output);
-                noc_async_write(ls, get_noc_addr(x, y, base_lse + dst * stride_interm), stride_interm);
-                noc_async_write(
-                    ds, get_noc_addr(x, y, base_u_scalar + dst * stride_interm), stride_interm);
-                noc_async_write(dq_out, get_noc_addr(x, y, dq_dst), stride_grad_query);
-                noc_async_write_barrier();
-                *scratch = u + 1u;
-                noc_semaphore_set_remote(scratch_l1, get_noc_addr(x, y, get_semaphore(ready_sem_id[dst])));
-                // The tag is a 4-byte write out of that word; complete it
-                // before the word is reused.
-                noc_async_write_barrier();
-            }
+        if (receiver == my_core) {
+            noc_async_write(dq_out, get_noc_addr(dst_grad_query), stride_grad_query);
+            noc_async_write_barrier();
+            noc_semaphore_set(ready_dq_sem[dst], u + 1u);
+        } else if (receiver != kNoCore) {
+            noc_async_write(
+                dq_out, get_noc_addr(receiver_x, receiver_y, dst_grad_query), stride_grad_query);
+            noc_async_write_barrier();
+            *scratch = u + 1u;
+            noc_semaphore_set_remote(
+                scratch_l1,
+                get_noc_addr(receiver_x, receiver_y, get_semaphore(ready_dq_sem_id[dst])));
+            noc_async_write_barrier();
         } else {
             // Streak end: spill dQ_i and complete the write, so the reload at
             // the next streak start observes it.
@@ -434,15 +481,13 @@ void kernel_main() {
 #if ENDPOINT_SYNC
             // An inter-streak spill certifies itself for the later streak's
             // reload. By the endpoint spill property this core is 1 or 2, and
-            // the loopback multicast writes its own copy too -- which matters,
-            // since a later streak of this row may well be consumed here.
+            // it writes its own copy too, since a later streak of this row may
+            // well be consumed here.
             if (sched.has_later_active(i, t)) {
                 const uint32_t sem_id = endpoint_sem_ids[my_core - 1u];
                 *scratch = t + 1u;
                 for (uint32_t r = 1; r <= kCores; ++r) {
                     if (r == my_core) {
-                        // Its own copy, which matters: a later streak of this
-                        // row may well be consumed here.
                         noc_semaphore_set(endpoint_sem[my_core - 1u], t + 1u);
                         continue;
                     }
@@ -450,8 +495,6 @@ void kernel_main() {
                     const uint32_t y = get_arg_val<uint32_t>(core_coords_arg + 2u * (r - 1u) + 1u);
                     noc_semaphore_set_remote(scratch_l1, get_noc_addr(x, y, get_semaphore(sem_id)));
                 }
-                // The value is a 4-byte write out of that word: complete every
-                // publication before the word is reused.
                 noc_async_write_barrier();
             }
 #endif
