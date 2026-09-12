@@ -385,6 +385,18 @@ class Attention(LightweightModule):
                 cache_name("wo_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo")
             ),
         )
+        # Prefill reads qkv/wo through a 1D mcast over N so every core -- not just the
+        # leading row of a 2D multicast grid -- issues part of the weight stream. That
+        # factory aliases in1's circular buffer to the weight buffer, which a DRAM
+        # WIDTH-sharded tensor cannot back, so prefill needs an interleaved view of each
+        # weight. Decode keeps reading the sharded originals (its DRAM-sharded matmul
+        # requires them); the copy costs DRAM capacity, not bandwidth, since each mode
+        # reads only its own view.
+        self.wqkv_prefill = self.wo_prefill = None
+        if getattr(configuration, "use_prefill_1d_projection", False):
+            self.wqkv_prefill = ttnn.to_memory_config(self.wqkv, ttnn.DRAM_MEMORY_CONFIG)
+            self.wo_prefill = ttnn.to_memory_config(self.wo, ttnn.DRAM_MEMORY_CONFIG)
+
         if not use_paged_kv_cache:
             # vLLM provides its own kv cache
             self.init_kv_cache(configuration, weight_cache_path)
@@ -1081,13 +1093,24 @@ class Attention(LightweightModule):
                 config=self.args.get_attn_qkv_program_config(Mode.PREFILL, seq_len, None),
             )
         else:
+            qkv_pc = self.args.get_attn_qkv_program_config(Mode.PREFILL, seq_len, None)
+            # The 1D-mcast config cannot read a DRAM width-sharded weight (its in1 CB
+            # aliases the weight buffer); take the interleaved view when that config won.
+            qkv_w = (
+                self.wqkv_prefill
+                if (
+                    self.wqkv_prefill is not None
+                    and isinstance(qkv_pc, ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig)
+                )
+                else self.wqkv
+            )
             xqkv_fused = ttnn.linear(
                 x_11SH,
-                self.wqkv,
+                qkv_w,
                 dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
                 memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.PREFILL, None),
                 compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
-                program_config=self.args.get_attn_qkv_program_config(Mode.PREFILL, seq_len, None),
+                program_config=qkv_pc,
             )
 
         # FIXME: surely ttnn.linear bias should work?
@@ -1325,15 +1348,23 @@ class Attention(LightweightModule):
                 num_buffers_per_channel=2,
             )
 
+        wo_pc = self.args.get_attn_wo_program_config(Mode.PREFILL, seq_len, None)
+        # The 1D-mcast config cannot read a DRAM width-sharded weight (its in1 CB aliases
+        # the weight buffer); take the interleaved view whenever that config won.
+        wo_w = (
+            self.wo_prefill
+            if (self.wo_prefill is not None and isinstance(wo_pc, ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig))
+            else self.wo
+        )
         output_11SH = ttnn.linear(
             attn_output_11SH,
-            self.wo,
+            wo_w,
             compute_kernel_config=self.li_o_prefill_compute_kernel_cfg,
             dtype=self.activation_dtype or ttnn.bfloat8_b,
             # Same L1 island: consumed by the trailing reduce-scatter, which takes an
             # interleaved input in either memory space.
             memory_config=ttnn.DRAM_MEMORY_CONFIG if self.TG else ttnn.L1_MEMORY_CONFIG,
-            program_config=self.args.get_attn_wo_program_config(Mode.PREFILL, seq_len, None),
+            program_config=wo_pc,
         )
 
         if seq_len > 1024:

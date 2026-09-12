@@ -1922,6 +1922,17 @@ class ModelArgs:
                 # grid_x stays on the divisors of N_tiles so the output tiles divide
                 # evenly across the multicast row (a ragged last column is what the
                 # dram_shard_grid_width heuristic was avoiding).
+                # Same reader starvation the MLP had: the 2D mcast issues the whole qkv
+                # weight stream from its leading core row. Go 1D over N where the shape
+                # allows so every core reads its own column strip.
+                mm_1d = self.prefill_matmul_1d_config(
+                    m=min(seq_len, self.prefill_len_cutoff),
+                    k=self.dim,
+                    n=self.qkv_size // self.cluster_shape[1],
+                    fp32_dest_acc_en=self.op_fp32_dest_acc_en(OpGroup.LI_QKV_PREFILL),
+                )
+                if mm_1d is not None:
+                    return mm_1d
                 m_tiles = max(1, math.ceil(seq_len / ttnn.TILE_SIZE))
                 n_tiles = math.ceil(self.qkv_size / self.cluster_shape[1] / ttnn.TILE_SIZE)
                 max_x, max_y = (self.max_grid_size.x, self.max_grid_size.y)
@@ -2261,6 +2272,20 @@ class ModelArgs:
                 if self.is_galaxy
                 else (self.n_heads * self.head_dim) // self.num_devices
             )
+            # Same reader starvation the MLP had: the 2D mcast issues the whole wo weight
+            # stream from its leading core row. Go 1D over N where the shape allows.
+            mm_1d = (
+                None
+                if self.is_galaxy
+                else self.prefill_matmul_1d_config(
+                    m=min(seq_len, 1024),
+                    k=k_dim,
+                    n=n_dim,
+                    fp32_dest_acc_en=self.op_fp32_dest_acc_en(OpGroup.LI_O_PREFILL),
+                )
+            )
+            if mm_1d is not None:
+                return mm_1d
             return self.matmul_config(
                 m=min(seq_len, 1024),
                 k=k_dim,
