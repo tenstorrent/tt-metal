@@ -171,8 +171,11 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
 
     std::uint32_t B = input_tensor.padded_shape()[-2];
     std::uint32_t Bcache = cache_tensor.padded_shape()[0];
-    const std::uint32_t granularity =
-        std::min(static_cast<std::uint32_t>(2), Bcache);  // granularity = 2 best for performance
+    // Kernels visit u_count * granularity users per head; that product must equal
+    // min(32, Bcache). 2 is faster but only when it divides (odd Bcache >= 3).
+    const std::uint32_t u_range = std::min(static_cast<std::uint32_t>(32), Bcache);
+    const std::uint32_t granularity = (u_range % 2 == 0) ? 2u : 1u;
+    const std::uint32_t u_count = u_range / granularity;
     std::uint32_t num_batched_heads = input_tensor.padded_shape()[1] * B / tt::constants::TILE_HEIGHT;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -267,9 +270,6 @@ ttnn::device_operation::ProgramArtifacts UpdateCacheMultiCoreProgramFactory::cre
 
     const TensorParameter cache_param{.unique_id = CACHE, .spec = cache_tensor.tensor_spec()};
     const TensorParameter input_param{.unique_id = INPUT, .spec = input_tensor.tensor_spec()};
-
-    const std::uint32_t u_range = std::min(static_cast<std::uint32_t>(32), Bcache);
-    const std::uint32_t u_count = u_range / granularity;
 
     // ---- Reader ----
     KernelSpec::CompilerOptions::Defines reader_defines;
