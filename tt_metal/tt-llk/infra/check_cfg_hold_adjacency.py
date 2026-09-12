@@ -24,6 +24,7 @@ write, closed by one slot of separation) which this check does not model. Pointi
 another architecture produces false positives and hides the real rule.
 """
 import argparse
+import hashlib
 import re
 import sys
 
@@ -49,7 +50,11 @@ READER = re.compile(
     r"\bTTI?_(" + ANY_MOVE + r"|MVMUL|ELWADD|ELWSUB|ELWMUL|GMPOOL|GAPOOL|DOTPV)\b"
 )
 
-WINDOW = 2  # instructions between victim and write; the longest documented hold is 3-4 cycles
+# How far after the reader a config write can still land inside the hold. Calibrated against a
+# measured dose-response, not guessed: with the reader held, 1 and 2 filler instructions between it
+# and the write STILL corrupt, 3 and 4 do not. So a write up to 3 instructions after the reader is
+# in scope; 4 is out.
+WINDOW = 3
 
 
 def opcode(line):
@@ -74,8 +79,53 @@ def holds(inducer, victim):
     return None
 
 
+def site_key(path, inducer_line, victim_line, cfg_line):
+    """Content identity for the baseline.
+
+    A line number is not a stable identity: inserting an unrelated line above a site makes that
+    unchanged site look new, and replacing the sequence at an accepted line keeps it silently
+    allowlisted. Key on what the site IS -- the two opcodes and the register written -- so the
+    entry survives code motion and stops applying the moment the sequence changes.
+    """
+    reg = NUMERIC_CFG.search(cfg_line)
+    ident = "|".join(
+        [
+            opcode(inducer_line) or "?",
+            opcode(victim_line) or "?",
+            reg.group(1) if reg else "?",
+        ]
+    )
+    return f"{path}:{hashlib.sha1(ident.encode()).hexdigest()[:10]}  # {ident}"
+
+
 def is_guard(line):
     return bool(GUARD.search(line) and "MATH" in line)
+
+
+def logical_statements(lines):
+    """Join continuation lines into whole statements, keyed by their FIRST line number.
+
+    A call split over several lines (`cfg_reg_rmw_tensix<` with its register on the next line
+    occurs in this tree) would otherwise never match both the call and the register pattern, and
+    the check would silently pass over it."""
+    out, buf, start = [], "", None
+    for i, l in enumerate(lines):
+        t = l.strip()
+        if not t or t.startswith(("//", "*", "/*", "#")):
+            if buf:
+                out.append((start, buf))
+                buf, start = "", None
+            continue
+        if start is None:
+            start = i
+        buf = (buf + " " + t).strip()
+        # a statement ends at ';', or at a brace when it is not a continued call
+        if t.endswith((";", "{", "}")) or len(buf) > 2000:
+            out.append((start, buf))
+            buf, start = "", None
+    if buf:
+        out.append((start, buf))
+    return out
 
 
 def scan(path):
@@ -142,9 +192,9 @@ def main():
         if "tt_llk_wormhole_b0" not in path:
             continue
         for cfg_line, (iline, ltxt), (vline, vtxt), cfgtxt, rule in scan(path):
-            key = f"{path}:{cfg_line}"
+            key = site_key(path, ltxt, vtxt, cfgtxt)
             found.append(key)
-            if key not in accepted:
+            if key.split("#")[0].strip() not in accepted:
                 new.append((key, iline, ltxt, vline, vtxt, cfg_line, cfgtxt, rule))
 
     if args.write_baseline:
@@ -164,7 +214,7 @@ def main():
         return 0
 
     for key, iline, ltxt, vline, vtxt, cfg_line, cfgtxt, rule in new:
-        path = key.rsplit(":", 1)[0]
+        path = key.split(":")[0]
         print(
             f"{path}:{cfg_line}: config write can land while an earlier instruction is held at issue"
         )
