@@ -2,20 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Host-only check of the d2d sync's time-indexed correction against a synthetic truth model, no device needed.
+// Host-only check of the d2d sync's placement against a synthetic truth model, no device needed.
 //
 // A three-chip CHAIN: root(0) -- mid(1) -- leaf(2), with solved links only for (0,1) and (1,2). The leaf has NO
-// direct link to the root, so it can only reach the fleet timeline by composing the two hops -- that composition is
-// what this test exercises beyond the single-link case. The chips' refclks run at exactly 50 MHz with known offsets;
-// their AICLKs are known functions of true time (chip 0 drops one DVFS step mid-session; chips 1 and 2 steady); and
-// their boot anchors are what the device layer would measure (exact at the anchor, at the rate that applied then)
-// except that chips 1 and 2 have deliberately-late host anchors. The record's own conversion (Record::host_time,
-// reproduced bit for bit with the baked hz/offset) plus the published correction must recover TRUE host time in every
-// case:
-//   (a) chip 0 before its switch: the anchor is right, the term is ~0;
-//   (b) chip 0 after its switch: the base under-counts by the step, the local term restores it (root too);
-//   (c) chip 1 (one hop): only the 0-1 link removes its anchor error;
-//   (d) chip 2 (two hops): only 0-1 composed with 1-2 removes its anchor error and its refclk offset.
+// direct link to the root, so it can only reach the host through the two hops composed -- that composition is what
+// this test exercises beyond the single-link case. The chips' refclks run at exactly 50 MHz with known offsets; their
+// AICLKs are known functions of true time (chip 0 drops one DVFS step mid-session; chips 1 and 2 steady); the host
+// series ties the root's refclk to a TSC of known rate. The placement every record converts through
+// (SyncCorrections::lookup_tsc on the record's eth wall tick) must recover TRUE host time in every case:
+//   (a) chip 0 before its switch;
+//   (b) chip 0 after its switch: the run boundary must be placed where the two lines meet;
+//   (c) chip 1 (one hop): only the 0-1 link places it;
+//   (d) chip 2 (two hops): only 0-1 composed with 1-2 places it, refclk offset and all.
+// The root-refclk placement (the d2d level, which the host series never enters), the steady_clock view
+// (tsc_to_mono_ns through a known segment) and the published bound are checked alongside.
 //
 // Chip 1 is a receiver (of 0-1) AND a sender (of 1-2), on two DIFFERENT eth cores -- exactly as real hardware, where
 // each link owns its own eth core -- so its two stamp streams stay separate.
@@ -57,16 +57,17 @@ static void check_bound(const char* what, double err, int64_t bound) {
 
 // ---- truth model ---------------------------------------------------------------------------------------------
 constexpr double kRefHz = 50e6;
-constexpr double kF0 = 1.35e9;        // AICLK at boot on every chip; the boot anchors measure exactly this rate
+constexpr double kF0 = 1.35e9;           // AICLK at boot on every chip
 constexpr double kSlow = 26.875 / 27.0;  // chip 0's AICLK after its DVFS switch: one 1/8 step of the PLL multiple
-constexpr double kTauSwitch = 0.300;  // s, when chip 0 slows
-constexpr double kOneWay = 1.0e-6;    // s, symmetric link one-way delay
-constexpr double kTurn = 350e-9;      // s, the receiver's turnaround: its echo leaves this long after the frame arrived
+constexpr double kTauSwitch = 0.300;     // s, when chip 0 slows
+constexpr double kOneWay = 1.0e-6;       // s, symmetric link one-way delay
+constexpr double kTurn = 350e-9;  // s, the receiver's turnaround: its echo leaves this long after the frame arrived
 // chip c refclk = kDref[c] + 50 MHz * tau (the offsets the links must recover); wall origin kW0[c].
 constexpr double kDref[3] = {0.0, 1.0e6, 3.0e6};
 constexpr double kW0[3] = {1.0e9, 7.0e9, 4.0e9};
-constexpr double kAnchorErr[3] = {0.0, 50000.0, 30000.0};  // ns, how late each chip's own host anchor is
-constexpr double kHostBase = 5.0e12;                       // steady_clock ns at tau = 0
+constexpr double kTsc0 = 7.0e14;      // host TSC at tau = 0
+constexpr double kHostBase = 5.0e12;  // steady_clock ns at tau = 0
+constexpr double kTicksPerNs = 3.0;   // the modelled TSC rate
 
 double refclk(int chip, double tau) { return kDref[chip] + kRefHz * tau; }
 double wall(int chip, double tau) {
@@ -75,6 +76,7 @@ double wall(int chip, double tau) {
     }
     return kW0[chip] + kF0 * kTauSwitch + kSlow * kF0 * (tau - kTauSwitch);
 }
+double tsc(double tau) { return kTsc0 + tau * 1e9 * kTicksPerNs; }
 double host_ns(double tau) { return kHostBase + tau * 1e9; }
 
 ClockSample sample(uint32_t dev, uint32_t lane, uint32_t kind, uint32_t round, uint32_t role, double rc, double w) {
@@ -85,7 +87,6 @@ ClockSample sample(uint32_t dev, uint32_t lane, uint32_t kind, uint32_t round, u
 int main() {
     constexpr uint32_t kN = profiler::kSpscNRiscDecode;
     const CoreCoord e0{0, 11}, e1{1, 11};  // two distinct eth cores, for a chip that hosts two links
-    const double tau_anchor[3] = {0.010, 0.012, 0.014};
 
     // Per chip, the eth cores in its decode roster (the order fixes each core's index).
     const std::vector<std::vector<CoreCoord>> eth = {{e0}, {e0, e1}, {e0}};
@@ -107,10 +108,6 @@ int main() {
         d.n_eth_cores = static_cast<uint32_t>(eth[c].size());
         d.clock.chip_id = static_cast<uint32_t>(c);
         d.clock.frequency_ghz = kF0 * 1e-9;
-        d.clock.anchor_ticks = static_cast<uint64_t>(std::llround(wall(c, tau_anchor[c])));
-        d.clock.anchor_host_ns = static_cast<int64_t>(std::llround(host_ns(tau_anchor[c]) + kAnchorErr[c]));
-        // The truth model uses one wall() for both tiles, so the eth clock (which the correction is built from)
-        // carries the same anchor and rate as the worker clock, including this chip's static host-anchor error.
         d.eth_clock = d.clock;
         ctx.devices.push_back(d);
     }
@@ -119,6 +116,19 @@ int main() {
         CaptureContext::Link{.dev_a = 0, .dev_b = 1, .chip_a = 0, .chip_b = 1, .eth_a = e0, .eth_b = e0});
     ctx.links.push_back(
         CaptureContext::Link{.dev_a = 1, .dev_b = 2, .chip_a = 1, .chip_b = 2, .eth_a = e1, .eth_b = e0});
+    ctx.root_dev = 0;
+    // The host series as the probe would write it: exact nodes at two bursts, so the checks cross a node and run
+    // out along a tangent.
+    for (double tau : {0.0, 0.6}) {
+        SyncCorrections::append_host(
+            HostNode{.at = refclk(0, tau), .value = tsc(tau), .tangent = kTicksPerNs * 1e9 / kRefHz, .sigma_ns = 5.0f});
+    }
+    SteadySegment seg;
+    seg.tsc0 = static_cast<int64_t>(kTsc0);
+    seg.mono0 = static_cast<int64_t>(kHostBase);
+    seg.ns_per_tick = 1.0 / kTicksPerNs;
+    seg.ok = true;
+    SyncCorrections::set_steady(seg);
 
     D2dSyncConsumer sync;
     sync.on_attach(ctx);
@@ -136,9 +146,8 @@ int main() {
     }
     // Two boot-time link bursts, 300 rounds each, 10 us apart. For (snd_dev, snd_lane) sender and (rcv_dev, rcv_lane)
     // receiver: sender stamps round start and end, receiver the arrival and its echo. The streams are damaged the way
-    // a lapped
-    // consumer or a full ring damages them: the receiver's stamp is missing for every seventh round, the sender's end
-    // stamp for every eleventh, and one receiver stamp arrives five rounds late.
+    // a lapped consumer or a full ring damages them: the receiver's stamp is missing for every seventh round, the
+    // sender's end stamp for every eleventh, and one receiver stamp arrives five rounds late.
     const auto burst = [&](uint32_t snd_dev, uint32_t snd_lane, uint32_t rcv_dev, uint32_t rcv_lane) {
         const auto receiver = [&](uint32_t k) {
             const double t = 0.020 + k * 10e-6;
@@ -185,63 +194,58 @@ int main() {
     burst(/*snd*/ 1, 1 * kN, /*rcv*/ 2, 0 * kN);  // link (1 e1 -> 2 e0): chip 1's e1 is core index 1
     sync.on_capture_end(ctx);
     std::printf(
-        "segments published: chip0 %zu chip1 %zu chip2 %zu\n",
+        "nodes published: chip0 %zu chip1 %zu chip2 %zu\n",
         SyncCorrections::published(0),
         SyncCorrections::published(1),
         SyncCorrections::published(2));
 
-    // Record::host_time, reproduced: the baked hz/offset exactly as record_consts bakes them, plus the term.
-    const auto base_ns = [&](int c, double T) -> int64_t {
-        const DeviceClock& k = ctx.devices[c].clock;
-        const uint32_t hz = static_cast<uint32_t>(std::llround(k.frequency_ghz * 1e9));
-        const int64_t offset =
-            std::llround(static_cast<double>(k.anchor_host_ns) * (hz * 1e-9)) - static_cast<int64_t>(k.anchor_ticks);
-        const uint64_t ticks = static_cast<uint64_t>(std::llround(T));
-        const double cycles = static_cast<double>(static_cast<int64_t>(ticks) + offset);
-        return static_cast<int64_t>(cycles * 1e9 / hz);
+    // A record's placement: its eth wall tick through the chip's series, as Record::host_time<tsc_clock> does.
+    const auto placed_ns = [&](int c, double tau) {
+        const int64_t t = SyncCorrections::lookup_tsc(static_cast<uint32_t>(c), std::llround(wall(c, tau)));
+        return (static_cast<double>(t) - tsc(tau)) / kTicksPerNs;  // ns from the truth
     };
-    const auto record_host_ns = [&](int c, double T) {
-        const int64_t base = base_ns(c, T);
-        return static_cast<double>(base + SyncCorrections::lookup_ns(static_cast<uint32_t>(c), base));
+    const auto steady_ns = [&](int c, double tau) {
+        return static_cast<double>(SyncCorrections::tsc_to_mono_ns(
+            SyncCorrections::lookup_tsc(static_cast<uint32_t>(c), std::llround(wall(c, tau)))));
     };
     char what[112];
     for (double tau : {0.050, 0.150, 0.280}) {
         std::snprintf(what, sizeof what, "(a) chip0 root pre-switch  tau=%.3f", tau);
-        check_near(what, record_host_ns(0, wall(0, tau)), host_ns(tau), 200.0);
+        check_near(what, placed_ns(0, tau), 0.0, 5.0);
     }
-    // (b): without the term the error here would be 0.01 * (tau - 0.3) s, i.e. 1 to 6.5 ms.
+    // (b): a node frozen on the wrong side of the switch would be off by 1/216 of the time since it, i.e. ms.
     for (double tau : {0.400, 0.700, 0.950}) {
         std::snprintf(what, sizeof what, "(b) chip0 root post-switch tau=%.3f", tau);
-        check_near(what, record_host_ns(0, wall(0, tau)), host_ns(tau), 2000.0);
+        check_near(what, placed_ns(0, tau), 0.0, 5.0);
     }
-    // (c) chip 1, one hop: without the link the error would be its 50 us anchor error.
     for (double tau : {0.050, 0.500, 0.950}) {
         std::snprintf(what, sizeof what, "(c) chip1 one hop  tau=%.3f", tau);
-        check_near(what, record_host_ns(1, wall(1, tau)), host_ns(tau), 300.0);
+        check_near(what, placed_ns(1, tau), 0.0, 5.0);
     }
-    // (d) chip 2, TWO hops (no direct link to root): without the composition the error would be its 30 us anchor
-    // error, and a single-hop-only implementation would leave it uncorrected entirely.
+    // (d) chip 2, TWO hops (no direct link to root): a single-hop-only implementation would never place it.
     for (double tau : {0.050, 0.500, 0.950}) {
         std::snprintf(what, sizeof what, "(d) chip2 two hops tau=%.3f", tau);
-        check_near(what, record_host_ns(2, wall(2, tau)), host_ns(tau), 400.0);
+        check_near(what, placed_ns(2, tau), 0.0, 5.0);
+        std::snprintf(what, sizeof what, "(d) chip2 on the root refclk tau=%.3f", tau);
+        check_near(
+            what,
+            (SyncCorrections::lookup_root(2, std::llround(wall(2, tau))) - refclk(0, tau)) * (1e9 / kRefHz),
+            0.0,
+            5.0);
     }
     for (int c : {0, 1, 2}) {
         for (double tau : {0.050, 0.500, 0.950}) {
+            std::snprintf(what, sizeof what, "steady chip%d tau=%.3f", c, tau);
+            check_near(what, steady_ns(c, tau), host_ns(tau), 6.0);
             std::snprintf(what, sizeof what, "bound chip%d tau=%.3f", c, tau);
-            const int64_t base = base_ns(c, wall(c, tau));
             check_bound(
                 what,
-                record_host_ns(c, wall(c, tau)) - host_ns(tau),
-                SyncCorrections::lookup_error_ns(static_cast<uint32_t>(c), base));
+                placed_ns(c, tau),
+                SyncCorrections::lookup_error_ns(static_cast<uint32_t>(c), std::llround(wall(c, tau))));
         }
     }
-    check_near(
-        "(d) chip2 term ~ -anchor error (proves 2-hop composition ran)",
-        static_cast<double>(SyncCorrections::lookup_ns(2, base_ns(2, wall(2, 0.5)))),
-        -kAnchorErr[2],
-        400.0);
     if (SyncCorrections::published(2) == 0) {
-        std::printf("FAIL (d) chip2 published 0 segments: the leaf never reached the root timeline\n");
+        std::printf("FAIL (d) chip2 published 0 nodes: the leaf never reached the root\n");
         g_fail++;
     }
     if (g_fail != 0) {

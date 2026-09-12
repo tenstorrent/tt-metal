@@ -158,9 +158,9 @@ struct StreamDecoder {
     struct Produced {
         uint32_t zones, events;
         uint32_t data_bytes;
-        // The newest record end the frame decoded, on the base host timeline (Record::base_ns); INT64_MIN when it
-        // decoded none. What the sync's cover is compared against before the frame's records are delivered.
-        int64_t newest_ns;
+        // The newest record end the frame decoded, in the chip's eth wall domain (a worker lane's tick plus its
+        // tile offset); INT64_MIN when it decoded none. What the sync's cover is compared against before delivery.
+        int64_t newest_ticks;
     };
     Produced decode_frame(const uint32_t* frame, uint32_t frame_words, Out out);
 
@@ -499,19 +499,18 @@ inline StreamDecoder::Produced StreamDecoder::decode_frame(const uint32_t* frame
     stats.epoch_fixes += fixes;
     stats.clock_samples += ck;
     stall_zones += sz;
-    int64_t newest_ns = std::numeric_limits<int64_t>::min();
+    int64_t newest_ticks = std::numeric_limits<int64_t>::min();
     if (frame_ts != 0) {
         const uint32_t* tail = lane_consts[core * kSpscNRiscDecode].tail;
         const int64_t offset =
             static_cast<int64_t>(static_cast<uint64_t>(tail[2]) | (static_cast<uint64_t>(tail[3]) << 32));
-        newest_ns = static_cast<int64_t>(
-            static_cast<double>(static_cast<int64_t>(frame_ts) + offset) * 1e9 / static_cast<double>(tail[1]));
+        newest_ticks = static_cast<int64_t>(frame_ts) + offset;
     }
     return Produced{
         static_cast<uint32_t>(zoff / kSpscRecBytes),
         static_cast<uint32_t>(static_cast<uint32_t>(pt_off) / kSpscRecBytes),
         static_cast<uint32_t>(pt_off >> 32),
-        newest_ns};
+        newest_ticks};
 }
 
 }  // namespace tt::tt_metal::streaming_profiler

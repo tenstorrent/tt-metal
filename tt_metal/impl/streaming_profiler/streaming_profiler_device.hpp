@@ -18,6 +18,7 @@
 #include <tt-metalium/experimental/streaming_profiler.hpp>
 #include "impl/context/context_types.hpp"
 #include "impl/streaming_profiler/streaming_profiler_consumer.hpp"
+#include "impl/streaming_profiler/streaming_profiler_host_probe.hpp"
 
 namespace tt::tt_metal {
 
@@ -76,6 +77,8 @@ public:
     void stop_link_syncs(tt::Cluster& cluster);
     // The eth link syncs launch_link_sync() ran at boot, for the consumers' CaptureContext.
     const std::vector<CaptureContext::Link>& links() const { return links_; }
+    // The root chip's refclk on the host TSC (null when no chip has an eth tracker), and that chip's index.
+    uint32_t root_dev() const { return root_dev_; }
 
 private:
     static constexpr uint32_t kMaxRelays = 8;
@@ -193,6 +196,8 @@ private:
     uint32_t spool_addr_ = 0;
     std::vector<DeviceCtx> devices_;
     std::vector<CaptureContext::Link> links_;
+    std::shared_ptr<HostProbe> host_probe_;  // on the root chip: the lowest device with an eth tracker
+    uint32_t root_dev_ = 0;
 };
 
 }  // namespace streaming_profiler

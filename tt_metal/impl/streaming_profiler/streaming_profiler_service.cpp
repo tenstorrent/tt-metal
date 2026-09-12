@@ -356,10 +356,10 @@ void Service::consumer_thread(Consumer& c) {
             const size_t n_eth_lanes = static_cast<size_t>(dev.n_eth_cores) * profiler::kSpscNRiscDecode;
             const size_t worker_lanes =
                 dev.lanes.size() >= n_eth_lanes ? dev.lanes.size() - n_eth_lanes : dev.lanes.size();
+            const double ghz = p->clock(ps.dev).frequency_ghz;
             for (size_t li = 0; li < dev.lanes.size(); li++) {
-                const DeviceClock& clk =
-                    (li >= worker_lanes && dev.eth_clock.frequency_ghz > 0.0) ? dev.eth_clock : p->clock(ps.dev);
-                s->lanes.push_back(record_consts(dev.lanes[li], clk));
+                const bool eth_lane = li >= worker_lanes && dev.eth_clock.frequency_ghz > 0.0;
+                s->lanes.push_back(record_consts(dev.lanes[li], ghz, eth_lane ? 0 : dev.eth_minus_worker_ticks));
             }
             s->dec.st = &s->state;
             s->dec.lanes = s->lanes.data();
@@ -422,12 +422,12 @@ void Service::consumer_thread(Consumer& c) {
                 bool reread = !moved;
                 while (!s.pending.empty()) {
                     Parked& pk = *s.pending.front();
-                    if (c.hooks.waits_for_sync && pk.n.newest_ns > s.cover_seen) {
+                    if (c.hooks.waits_for_sync && pk.n.newest_ticks > s.cover_seen) {
                         if (!reread) {
-                            s.cover_seen = SyncCorrections::cover_ns(s.chip);
+                            s.cover_seen = SyncCorrections::cover_ticks(s.chip);
                             reread = true;
                         }
-                        if (pk.n.newest_ns > s.cover_seen) {
+                        if (pk.n.newest_ticks > s.cover_seen) {
                             if (now == 0) {
                                 now = now_ns();
                             }
@@ -510,7 +510,7 @@ void Service::consumer_thread(Consumer& c) {
             n.zones += out.zones;
             n.events += out.events;
             n.data_bytes += out.data_bytes;
-            n.newest_ns = std::max(n.newest_ns, out.newest_ns);
+            n.newest_ticks = std::max(n.newest_ticks, out.newest_ticks);
             p += size_t{fw} * 4;
         }
         s.dec.commit();

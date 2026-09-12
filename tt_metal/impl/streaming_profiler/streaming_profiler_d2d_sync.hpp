@@ -333,12 +333,6 @@ private:
         double offset_ns = 0.0, rate_ppm = 0.0, residual_rms_ns = 0.0;
         size_t rounds = 0, kept = 0, path_dropped = 0;
     };
-    // A chip's refclk frame: its anchor tick's refclk and its refclk period, once its buckets allow.
-    struct Frame {
-        bool ok = false;
-        double refclk_at_anchor = 0.0;
-        double period_ns = 0.0;
-    };
 
     int64_t core_index(uint32_t dev, const CoreCoord& eth) const;
     // A round in the refclk domain: each end's midpoint, and for hardware rounds the sender's round trip, the
@@ -353,10 +347,8 @@ private:
     }
     static double path_ns(const Round& r) { return 0.5 * (rtt_ns(r) - turn_ns(r)); }
     static double path_median(const std::vector<Round>& rounds, size_t begin, size_t n);
-    // The fleet timeline's root: the lowest device index with an eth clock anchor, fixed for the capture. Taking the
-    // lowest index seen so far instead let whichever tracker decoded first be root for its first publish, and its
-    // identity nodes froze.
-    uint32_t root_dev() const;
+    // The fleet timeline's root: the chip the host probe reads, fixed for the capture.
+    uint32_t root_dev() const { return ctx_.root_dev; }
     void try_solve_links(bool final);
     // One round in the refclk domain: the sender's midpoint, the receiver's stamp minus it, and the round trip in
     // wall ticks (0 for hardware stamps, which need no trip-time filter).
@@ -375,28 +367,22 @@ private:
     // asymmetry as far as its loops reveal it.
     double max_closure_ns() const;
     std::map<uint32_t, RootXf> root_transforms(uint32_t root, std::vector<bool>* used) const;
-    Frame frame_of(uint32_t dev) const;
-    // frame_of(dev), computed once the chip's first bucket is complete and kept: the anchor precedes every bucket,
-    // so the frame never changes afterwards, and a walk over every bucket per publish is what it would cost.
-    const Frame& frame_cached(uint32_t dev);
     void publish_all();
     void log_summary() const;
     void dump_csv() const;
     void publish_rate_plots();
     void publish_error_plots() const;
-    // The receiver's stamp and the sender's round midpoint placed on the host timeline as the sink places records
-    // from each chip's eth core (baked eth anchor, then the published correction at that instant), and their
-    // difference in ns. False when a chip has no fitted run to place a stamp with.
-    // The conversion chain of one round, for the error CSV: each chip's wall instant, its host time before the
-    // correction, and the correction applied.
+    // The receiver's stamp and the sender's round midpoint placed on the root's refclk as the sink places records
+    // from each chip's eth core, and their difference in ns; tsc_a is the sender's host placement, the plots'
+    // abscissa. False when a chip has no fitted run or no node to place a stamp with.
     struct RoundTerms {
-        double wall_a = 0, wall_b = 0, baked_a = 0, baked_b = 0, corr_a = 0, corr_b = 0;
+        double wall_a = 0, wall_b = 0, root_a = 0, root_b = 0;
     };
     bool round_error(
         const CaptureContext::Link& L,
         const Round& r,
         bool hw,
-        double& host_a,
+        int64_t& tsc_a,
         double& err,
         RoundTerms* terms = nullptr) const;
     // Per link, the round errors computed with the corrections as they stood when the round's last stamp arrived:
@@ -404,11 +390,12 @@ private:
     std::vector<std::vector<SyncPlotPoint>> live_err_;
     std::vector<size_t> live_done_;
 
-    // A correction node: at host time H the chip's record time moves by d (ns); r is the refclk it was placed at,
-    // tangent the correction's slope along the run it sits on (ns per ns), the map past the newest node, and sigma
-    // the standard deviation of d (the run's line at r, and the link solutions the chip reaches the root through).
+    // A placement node: at eth wall tick H the chip sits at root refclk tick `root`; r is the chip's own refclk it
+    // was placed at, tangent the run's rate on the root (root refclk ticks per wall tick), the map past the newest
+    // node, and sigma the standard deviation of `root` in ns (the run's line at r and the link solutions the chip
+    // reaches the root through).
     struct Node {
-        double H, d, r, tangent, sigma;
+        double H, root, r, tangent, sigma;
     };
     // One published series of a chip. Its nodes are frozen (consumers have placed records against them), so a
     // publish only appends beyond them; `cover_H` is how far the newest node's tangent has been confirmed by the
@@ -423,10 +410,9 @@ private:
         size_t extended = 0;  // frontier samples that only advanced the cover
     };
     struct Published {
-        Series linked, local;
+        Series linked;
     };
     std::map<uint32_t, Published> published_;
-    std::map<uint32_t, Frame> frames_;
     // The composed root transforms as of the newest accepted link solution.
     std::map<uint32_t, RootXf> to_root_;
     uint64_t solve_gen_ = 0;
@@ -437,16 +423,14 @@ private:
         std::optional<Node> frontier;
         size_t knots_after = 0;  // run boundaries consumed once the knots are placed
     };
-    template <typename Corr>
-    Fresh fresh_nodes(
-        const Series& s, const LocalClockFit& fit, const DeviceClock& eclk, double prec_ns, const Corr& corr) const;
-    // Publishes one chip's series from its fit as it stands; true when the chip's linked cover moved.
+    Fresh fresh_nodes(const Series& s, const LocalClockFit& fit, const RootXf& xf) const;
+    // Publishes one chip's series from its fit as it stands; true when the chip's cover moved.
     bool publish_dev(uint32_t dev);
     // Appends the knots and, if the frontier left the newest tangent by more than kFreezeNs, freezes the tangent where
     // it stood and appends the frontier; otherwise advances the cover. True when the cover moved.
-    bool advance(Series& s, SyncSeries kind, uint32_t chip, Fresh fresh);
-    void freeze_append(Series& s, SyncSeries kind, uint32_t chip, const Node& n);
-    void push_node(Series& s, SyncSeries kind, uint32_t chip, const Node& n);
+    bool advance(Series& s, uint32_t chip, Fresh fresh);
+    void freeze_append(Series& s, uint32_t chip, const Node& n);
+    void push_node(Series& s, uint32_t chip, const Node& n);
     CaptureContext ctx_;
     std::map<uint32_t, LocalState> local_;  // device index -> local fit
     const char* const csv_path_ = std::getenv("TT_METAL_STREAMING_PROFILER_D2D_CSV");

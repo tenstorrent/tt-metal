@@ -74,6 +74,7 @@ Receiver::Receiver(std::unique_ptr<Devices> relays, std::vector<CapturedDevice> 
         ctx_.devices.back().clock = dev.clock;
     }
     ctx_.links = relays_->links();
+    ctx_.root_dev = relays_->root_dev();
     for (const auto& st : streams_) {
         streams_view_.push_back(
             {st->fifo, &st->walked_bytes, st->dev, std::span<const std::atomic<uint64_t>>(st->marks)});

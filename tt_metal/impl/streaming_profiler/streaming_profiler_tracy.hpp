@@ -5,22 +5,19 @@
 #pragma once
 
 #include <array>
-#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <tracy/TracyTTDevice.hpp>
 #include <tt-metalium/experimental/streaming_profiler.hpp>
 
 #include "impl/streaming_profiler/streaming_profiler_consumer.hpp"
-
-#include <string>
-#include <unordered_set>
 
 namespace tt::tt_metal::streaming_profiler {
 
@@ -29,6 +26,9 @@ class Service;
 // The built-in Tracy sink: registers for every record type and pushes each record onto Tracy's device timeline, one
 // context per (chip, core). Constructing it registers; destroying it unregisters. Everything after construction
 // runs on the callback's thread.
+//
+// Records are read in tsc_clock, the counter Tracy's own timer is: a record's timeline position is its TSC tick
+// through Tracy's calibrated multiplier, with no second clock and no map between them.
 class TracySink {
 public:
     explicit TracySink(Service& service);
@@ -56,72 +56,47 @@ private:
         const void* srcloc = nullptr;
     };
 
-    void on_batch(const Batch& batch, uint64_t capture);
+    void on_batch(const Batch& batch);
     // TT_METAL_STREAMING_PROFILER_TRACY_PLOTS_ONLY: the trace carries the clock and d2d sync plots and no records,
     // so an hours-long stress capture stays a few MB.
     const bool plots_only_ = std::getenv("TT_METAL_STREAMING_PROFILER_TRACY_PLOTS_ONLY") != nullptr;
     void emit_zone(const experimental::streaming_profiler::Zone& z);
     void emit_data(const experimental::streaming_profiler::TimestampedData& d);
     void emit_event(const experimental::streaming_profiler::Event& e);
-    // Records are placed by their steady_clock time through a continuous piecewise-linear map onto Tracy's timeline:
-    // a fresh segment per capture, then one per second whose slope is the two clocks' rate ratio measured over the
-    // whole baseline since construction. Continuity keeps order and containment exact across segments.
-    struct Probe {
-        int64_t steady_ns;
-        int64_t tracy_ns;
-    };
-    struct Segment {
-        int64_t steady_ns;  // from here on
-        int64_t tracy_ns;   // the map's value here
-        double slope;       // timeline ns per steady_clock ns
-    };
-    Probe probe() const;
-    double slope_since_base(const Probe& p) const;
-    void start_capture_map();
-    void refine_map();
-    int64_t to_timeline(int64_t steady_ns) const;
+    // A TSC tick as a GPU-context timestamp: nanoseconds from the contexts' origin.
+    int64_t timeline_ns(int64_t tsc) const;
     Lane lane(const Core& core);
     const void* srcloc(std::string_view name, uint32_t color, uint32_t risc);
     const void* srcloc_slow(std::string_view name, uint32_t color, uint32_t risc);
-    void push_zone(const Core& core, std::string_view name, int64_t start_ns, int64_t end_ns, uint32_t color);
+    void push_zone(const Core& core, std::string_view name, int64_t start_tsc, int64_t end_tsc, uint32_t color);
     void push_marker(
-        const Core& core,
-        std::string_view name,
-        int64_t timestamp_ns,
-        uint32_t runtime_id,
-        std::span<const uint64_t> values);
+        const Core& core, std::string_view name, int64_t tsc, uint32_t runtime_id, std::span<const uint64_t> values);
     // Device<->device sync plots, all RATES. Per chip and per sync kind (the 3 us LOCAL tracker, the LINK stamps
     // at the rounds' cadence): the chip's applied AICLK over the ROOT chip's at the same instant -- the factor that
     // scales its wall-clock rate onto the root's; the root reads exactly 1. Each stream's AICLK comes from a sliding
     // dwall/drefclk over its PP_CLOCK samples. Plus the cross-chip refclk scale regression the d2d consumer publishes
     // through SyncPlots.
     struct FreqPoint {
-        int64_t host_ns;
+        int64_t tsc;
         double ghz;
     };
     std::vector<FreqPoint> compute_frequency(size_t begin, size_t end) const;
     const char* intern_name(const std::string& name);
-    // Plots are emitted at capture end, not during decode: at decode time the correction is not yet solved
-    // (lookup returns 0) and the timeline map has no segments (points land at raw, hours-off timestamps).
+    // Plots are emitted at capture end, not during decode: at decode time the placement is not yet solved (a lookup
+    // returns 0) and the points would land at the origin.
     void emit_plots();
-    int64_t plot_stamp(int64_t host_ns) const;  // the PlotDataAt stamp for a point at this host time
-    void plot_point(const char* name, double value, int64_t host_ns);
+    void plot_point(const char* name, double value, int64_t tsc);
 
     Service& service_;
     ConsumerHandle handle_ = 0;
-    uint64_t capture_ = 0;  // the capture the map holds for; a new one starts a new map
     // Read only from the Tracy-enabled paths below, so it is unused in a build without Tracy.
     [[maybe_unused]] int64_t anchor_tracy_ = 0;  // Tracy timer at construction; every context's cpuTime
-    // The GPU contexts' origin sits this far before anchor_tracy_, so a record or clock sample from device bring-up,
-    // or one moved a little earlier by its d2d correction, keeps its real place instead of falling off the front.
-    // Corrections are bounded to a second by the consumer, so nothing legitimate can reach the origin.
+    // The GPU contexts' origin sits this far before anchor_tracy_, so a record from device bring-up keeps its real
+    // place instead of falling off the front.
     int64_t origin_margin_ns_ = 0;
-    // Records the origin still could not hold (a correction beyond its bound): clamped to the origin and counted;
-    // nonzero means a defect upstream, never expected in a healthy capture.
+    // Records the origin still could not hold: clamped to the origin and counted; nonzero means a defect upstream,
+    // never expected in a healthy capture.
     uint64_t clamped_zones_ = 0, clamped_markers_ = 0, clamped_plot_points_ = 0;
-    Probe base_{};  // taken at construction; every slope is measured against it
-    std::vector<Segment> segments_;
-    int64_t next_refine_ns_ = 0;
     uint64_t lane_key_ = ~uint64_t{0};
     Lane lane_hit_;
     std::unordered_map<uint64_t, CoreEntry> cores_;
@@ -129,13 +104,13 @@ private:
     std::vector<SrclocEntry> srcloc_table_;     // open addressing, power-of-two size, at most half full
     [[maybe_unused]] size_t srcloc_count_ = 0;  // ditto: only the Tracy-enabled srcloc path touches it
     std::unordered_map<std::string, const void*> srclocs_;
-    std::vector<DeviceClock> clocks_;      // per device index, for mapping a clock sample's device time to the timeline
-    std::vector<DeviceClock> eth_clocks_;  // per device index, the idle-eth wall anchor for PP_CLOCK samples
+    std::vector<uint32_t> chips_;  // per device index, the chip id the placement is keyed by
+    uint32_t root_dev_ = 0;
     struct PlotSample {
         uint32_t dev;
         uint32_t kind;
         uint32_t core;  // eth core index on the device: one refclk counter per stream
-        uint64_t ts;
+        uint64_t ts;    // the eth tile's wall tick
         uint64_t value;  // the refclk reading
     };
     std::vector<PlotSample> plot_samples_;        // accumulated during the capture, drained in emit_plots()

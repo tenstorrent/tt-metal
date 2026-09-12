@@ -330,6 +330,13 @@ std::vector<CapturedDevice> Devices::boot(const std::shared_ptr<distributed::Mes
     if (!devices_.empty()) {
         plan_link_sync();
     }
+    for (uint32_t di = 0; di < devices_.size(); di++) {
+        if (!devices_[di].eth.empty()) {
+            host_probe_ = std::make_shared<HostProbe>(cluster, devices_[di].chip_id);
+            root_dev_ = di;
+            break;
+        }
+    }
     if (!devices_.empty()) {
         log_info(
             tt::LogMetal,
@@ -391,6 +398,13 @@ bool Devices::boot_device(
         // Same chip AICLK as the workers: reuse the worker's reliably-measured frequency, keep only the eth
         // anchor tick (the counter's zero). The idle-eth core runs the pusher, so its own slope read is noisier.
         ctx.out.ctx.eth_clock.frequency_ghz = ctx.out.clock.frequency_ghz;
+        // The two counters share AICLK, so their offset is one constant: the two anchors' ticks at a common host
+        // instant, good to the anchors' ~15 ns until the pusher measures it over the NoC.
+        const DeviceClock& e = ctx.out.ctx.eth_clock;
+        const DeviceClock& w = ctx.out.clock;
+        ctx.out.ctx.eth_minus_worker_ticks = std::llround(
+            static_cast<double>(e.anchor_ticks) - static_cast<double>(w.anchor_ticks) -
+            static_cast<double>(e.anchor_host_ns - w.anchor_host_ns) * w.frequency_ghz);
     }
     TT_FATAL(
         ctx.out.clock.frequency_ghz > 0.0,
@@ -1127,6 +1141,9 @@ void Devices::stop_link_syncs(tt::Cluster& cluster) {
 
 void Devices::quiesce(const RelayStateFn& on_state) {
     auto& cluster = MetalContext::instance(context_id_).get_cluster();
+    if (host_probe_) {
+        host_probe_->stop();
+    }
     stop_link_syncs(cluster);
     for (uint32_t di = 0; di < devices_.size(); di++) {
         const DeviceCtx& ctx = devices_[di];

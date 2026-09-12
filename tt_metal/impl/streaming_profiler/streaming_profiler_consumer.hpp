@@ -49,9 +49,11 @@ struct CaptureContext {
         std::vector<experimental::streaming_profiler::Core> lanes;  // index by the record's lane
         std::vector<uint32_t> core_xy;  // core index -> packed NoC (y << 16) | x, the identity a frame carries
         uint32_t chip_id = 0;
-        DeviceClock clock;  // the baked anchor the records carry; the d2d sync composes its term with it
-        DeviceClock eth_clock;     // the idle-eth core's own wall-clock anchor, for placing PP_CLOCK plot samples
-        uint32_t n_eth_cores = 0;  // trailing cores in `lanes` that are eth (idle + active); they use eth_clock
+        DeviceClock clock;         // the worker wall clock's rate, for record durations
+        DeviceClock eth_clock;     // the idle-eth tile's wall clock: frequency_ghz > 0 marks a chip with a tracker
+        uint32_t n_eth_cores = 0;  // trailing cores in `lanes` that are eth (idle + active)
+        // eth wall tick minus worker wall tick on this chip: both count AICLK, so it is one constant per device init.
+        int64_t eth_minus_worker_ticks = 0;
     };
     std::vector<Device> devices;
     // A boot-time eth link sync: the sender on device index dev_a at logical eth core eth_a, the receiver on dev_b
@@ -62,16 +64,16 @@ struct CaptureContext {
         CoreCoord eth_a, eth_b;
     };
     std::vector<Link> links;
+    uint32_t root_dev = 0;  // index into `devices`: the chip the host probe reads and every link path leads to
 };
 
 // What the decoder writes into every record of a lane besides the packet's own words (Record's coordinate, chip,
-// RISC, frequency and offset fields), in the record's byte layout.
-inline profiler::SpscRecConsts record_consts(const experimental::streaming_profiler::Core& core, const DeviceClock& k) {
+// RISC, frequency and offset fields), in the record's byte layout. `offset` takes the lane's ticks into the chip's
+// eth wall domain: the tile offset for a worker lane, 0 for an eth lane.
+inline profiler::SpscRecConsts record_consts(
+    const experimental::streaming_profiler::Core& core, double frequency_ghz, int64_t offset) {
     const auto hz = static_cast<uint32_t>(
-        std::clamp<int64_t>(std::llround(k.frequency_ghz * 1e9), 1, std::numeric_limits<uint32_t>::max()));
-    // The offset is taken against the frequency as the record rounds it, so the anchor itself converts exactly.
-    const int64_t offset =
-        std::llround(static_cast<double>(k.anchor_host_ns) * (hz * 1e-9)) - static_cast<int64_t>(k.anchor_ticks);
+        std::clamp<int64_t>(std::llround(frequency_ghz * 1e9), 1, std::numeric_limits<uint32_t>::max()));
     return profiler::SpscRecConsts{
         .coords =
             {static_cast<uint32_t>(core.logical.x & 0xFFFFu) | (static_cast<uint32_t>(core.logical.y & 0xFFFFu) << 16),

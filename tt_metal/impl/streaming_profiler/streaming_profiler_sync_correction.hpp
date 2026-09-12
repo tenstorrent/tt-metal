@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -14,67 +15,88 @@
 
 namespace tt::tt_metal::streaming_profiler {
 
-// One frozen node of a chip's time-indexed correction, keyed by the record's host time BEFORE the correction (its
-// static anchor's placing): the correction is delta_ns there, linear to the next node, and past the newest node it
-// follows that node's tangent (the correction's slope along the chip's current constant-rate run) as far as the
-// series' cover reaches. The d2d sync freezes a node where the map bends (a DVFS transition) and where its estimate
-// has drifted from the frozen tangent; between nodes the chip's clock ran at one rate.
-struct SyncNode {
-    int64_t host_ns = 0;
-    double delta_ns = 0.0;
+// One frozen node of a placement series: at `at` the placement is `value`, linear to the next node, and past the
+// newest node along `tangent` (d value / d at) as far as the series' cover reaches. sigma_ns is the standard
+// deviation of `value` at the node, in ns.
+template <typename Key>
+struct PlacementNode {
+    Key at{};
+    double value = 0.0;
     double tangent = 0.0;
-    float sigma_ns = 0.0f;  // standard deviation of delta_ns
+    float sigma_ns = 0.0f;
+};
+// A chip's series: its eth wall tick -> the root chip's refclk tick, from the link solutions and the local fits alone,
+// so two chips' records at one instant differ by nothing the host contributes. Worker lanes reach the eth wall
+// domain through their chip's constant tile offset, so one series places every record of a chip.
+using SyncNode = PlacementNode<int64_t>;
+// The fleet's one host series: the root's refclk tick -> host TSC tick, from the host probe.
+using HostNode = PlacementNode<double>;
+
+// The host TSC on CLOCK_MONOTONIC, one line between two NTP slews: mono_ns = mono0 + (tsc - tsc0) * ns_per_tick.
+struct SteadySegment {
+    int64_t tsc0 = 0, mono0 = 0;
+    double ns_per_tick = 0.0;
+    bool ok = false;
+    int64_t mono_of(int64_t tsc) const { return mono0 + std::llrint(static_cast<double>(tsc - tsc0) * ns_per_tick); }
 };
 
-enum class SyncSeries : uint8_t { Linked, Local };
-
-// Per-chip append-only series of frozen nodes, strictly increasing in host_ns, written by the d2d sync consumer and
-// read by every consumer thread converting a record's time. Nodes never move or go away within a capture, so a
-// reader keeps a thread-local cursor on the segment it last used and converts without touching shared state until
-// the record leaves the segment. Before any node the correction is 0 and records convert exactly as they did
-// without the d2d sync; before a chip's first node it is that node's value.
+// Append-only series of frozen nodes, strictly increasing in their key: one per chip, written by the d2d sync
+// consumer, and the host series, written by the probe; read by every consumer thread converting a record's time.
+// Nodes never move or go away within a capture, so a reader keeps a thread-local cursor on the segment it last used
+// and converts without touching shared state until the record leaves the segment. Before a chip's first node, or
+// the host's, its records have no place on the host timeline.
 //
-// The cover is the base host time up to which the newest node's tangent has been confirmed: a record at or before it
+// A series' cover is the key up to which the newest node's tangent has been confirmed: a record at or before it
 // converts against frozen data on both sides. Writer order is nodes, count, cover (release); readers load the cover
 // before the count (acquire), so a cover a reader sees implies the nodes behind it.
 class SyncCorrections {
 public:
     static constexpr uint32_t kMaxChips = 256;
-    // Beyond the cover the newest tangent is extended, but only this far; further out the correction holds constant
-    // rather than extrapolating a slope.
-    static constexpr int64_t kHoldNs = 50'000'000;
-    // Appends a node past every earlier one (a node at the last node's ns is dropped) and moves the cover to it.
-    static void append(uint32_t chip_id, SyncNode node, SyncSeries series = SyncSeries::Linked);
-    // The newest node's tangent holds up to cover_ns; the cover never moves back.
-    static void extend(uint32_t chip_id, int64_t cover_ns, SyncSeries series = SyncSeries::Linked);
+    // Beyond the cover the newest tangent is extended, but only this far; further out the placement holds still
+    // rather than extrapolating a slope. ~50 ms of wall ticks for a chip, 1 s of refclk for the host series (its
+    // nodes come every 100 ms while the probe runs).
+    static constexpr int64_t kHoldTicks = 67'500'000;
+    static constexpr double kHoldRootTicks = 50'000'000.0;
+    // Appends a node past every earlier one (a node at the last node's key is dropped) and moves the cover to it.
+    static void append(uint32_t chip_id, SyncNode node);
+    // The newest node's tangent holds up to cover_ticks; the cover never moves back.
+    static void extend(uint32_t chip_id, int64_t cover_ticks);
     // The series is complete for the capture: every later instant converts on the newest tangent.
-    static void finish(uint32_t chip_id, SyncSeries series = SyncSeries::Linked);
-    // Empties both of a chip's series for a new capture.
+    static void finish(uint32_t chip_id);
+    // Empties a chip's series for a new capture.
     static void clear(uint32_t chip_id);
-    static int64_t lookup_ns(uint32_t chip_id, int64_t host_ns, SyncSeries series = SyncSeries::Linked) noexcept;
-    // Both ends of one record; the end never precedes the start.
-    static void lookup_span_ns(
-        uint32_t chip_id, int64_t start_ns, int64_t end_ns, int64_t& d_start, int64_t& d_end) noexcept;
-    // The uncertainty of a record's corrected host time against other chips' records: kSigmas standard deviations
-    // of its segment's nodes plus the fleet's path asymmetry; INT64_MAX before the chip's first node.
-    static int64_t lookup_error_ns(uint32_t chip_id, int64_t host_ns) noexcept;
+    static void append_host(HostNode node);
+    static void extend_host(double cover_root);
+    // The root refclk tick of a chip's eth wall tick; 0 before the chip's first node.
+    static double lookup_root(uint32_t chip_id, int64_t wall) noexcept;
+    // The host TSC tick of a chip's eth wall tick; 0 before the chip's first node or the host's.
+    static int64_t lookup_tsc(uint32_t chip_id, int64_t wall) noexcept;
+    // The uncertainty of that placement against other chips' records: kSigmas standard deviations of its segment's
+    // nodes plus the fleet's path asymmetry; INT64_MAX before the chip's first node.
+    static int64_t lookup_error_ns(uint32_t chip_id, int64_t wall) noexcept;
     static constexpr double kSigmas = 3.0;
     // The largest loop closure the link solutions have shown, the part of a placement's error the loops can see
     // but no link's stamps can.
     static void set_asymmetry_ns(double ns) noexcept;
-    // How many linked nodes a chip has (0 = none).
+    // How many nodes a chip has (0 = none).
     static size_t published(uint32_t chip_id) noexcept;
-    // The base host time the chip's linked series covers: INT64_MIN before its first node, INT64_MAX once finished.
-    static int64_t cover_ns(uint32_t chip_id) noexcept;
-    // Moves whenever any chip's linked cover does, so a consumer holding batches re-reads covers only then.
+    static size_t host_published() noexcept;
+    // A copy of the host series, for the capture-end dumps.
+    static std::vector<HostNode> host_nodes();
+    // The wall tick the chip's series covers: INT64_MIN before its first node, INT64_MAX once finished.
+    static int64_t cover_ticks(uint32_t chip_id) noexcept;
+    // Moves whenever any chip's cover does, so a consumer holding batches re-reads covers only then.
     static uint64_t cover_generation() noexcept;
+    // The steady_clock view of the host TSC, kept by the host probe; readers cache it per thread.
+    static void set_steady(const SteadySegment& segment) noexcept;
+    static int64_t tsc_to_mono_ns(int64_t tsc) noexcept;
 };
 
-// A named (host ns, value) series a consumer computes once a capture is complete -- the d2d sync's running
+// A named (host TSC tick, value) series a consumer computes once a capture is complete -- the d2d sync's running
 // cross-chip rate estimates -- for a plotting sink to place on the device timeline. Not a hot path: published once at
 // capture end, drained once by the sink.
 struct SyncPlotPoint {
-    int64_t host_ns = 0;
+    int64_t tsc = 0;
     double value = 0.0;
 };
 class SyncPlots {

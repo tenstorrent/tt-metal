@@ -7,10 +7,14 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <type_traits>
 
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/streaming_profiler.hpp>
+#include <x86intrin.h>
+#include <ctime>
+#include "impl/streaming_profiler/streaming_profiler_host_probe.hpp"
 
 #include <condition_variable>
 #include <limits>
@@ -22,25 +26,46 @@ namespace tt::tt_metal::streaming_profiler {
 
 namespace {
 
+template <typename Key>
+constexpr Key key_min() {
+    if constexpr (std::is_same_v<Key, double>) {
+        return -std::numeric_limits<double>::infinity();
+    } else {
+        return std::numeric_limits<Key>::min();
+    }
+}
+template <typename Key>
+constexpr Key key_max() {
+    if constexpr (std::is_same_v<Key, double>) {
+        return std::numeric_limits<double>::infinity();
+    } else {
+        return std::numeric_limits<Key>::max();
+    }
+}
+
 // One series: nodes in fixed chunks reached through a fixed table, so an append never moves a node a reader may be
 // looking at; the chunks stay allocated across captures.
+constexpr uint32_t kHostSeries = std::numeric_limits<uint32_t>::max();
+
+template <typename Key>
 struct Log {
+    using Node = PlacementNode<Key>;
     static constexpr uint32_t kChunkShift = 12;
     static constexpr uint32_t kChunkNodes = 1u << kChunkShift;
     static constexpr uint32_t kChunks = 256;
     static constexpr uint32_t kCapacity = kChunks * kChunkNodes;
-    std::array<std::atomic<SyncNode*>, kChunks> chunks{};
+    std::array<std::atomic<Node*>, kChunks> chunks{};
     alignas(64) std::atomic<uint32_t> count{0};
-    alignas(64) std::atomic<int64_t> cover{std::numeric_limits<int64_t>::min()};
+    alignas(64) std::atomic<Key> cover{key_min<Key>()};
     alignas(64) std::atomic<uint32_t> gen{0};  // bumped by clear(): cursors built on an earlier capture miss
     bool full_warned = false;
 
-    const SyncNode& at(uint32_t i) const noexcept {
+    const Node& at(uint32_t i) const noexcept {
         return chunks[i >> kChunkShift].load(std::memory_order_relaxed)[i & (kChunkNodes - 1)];
     }
-    void append(uint32_t chip_id, const SyncNode& node) {
+    void append(uint32_t chip_id, const Node& node) {
         const uint32_t n = count.load(std::memory_order_relaxed);
-        if (n != 0 && node.host_ns <= at(n - 1).host_ns) {
+        if (n != 0 && node.at <= at(n - 1).at) {
             return;
         }
         if (n >= kCapacity) {
@@ -48,79 +73,85 @@ struct Log {
                 full_warned = true;
                 log_warning(
                     tt::LogMetal,
-                    "[streaming profiler] d2d sync: chip {} has {} correction nodes, the series' capacity; later "
-                    "records convert on the newest tangent",
-                    chip_id,
+                    "[streaming profiler] d2d sync: {} has {} placement nodes, the series' capacity; later records "
+                    "convert on the newest tangent",
+                    chip_id == kHostSeries ? std::string("the host") : "chip " + std::to_string(chip_id),
                     n);
             }
-            extend(node.host_ns);
+            extend(node.at);
             return;
         }
-        SyncNode* chunk = chunks[n >> kChunkShift].load(std::memory_order_relaxed);
+        Node* chunk = chunks[n >> kChunkShift].load(std::memory_order_relaxed);
         if (chunk == nullptr) {
-            chunk = new SyncNode[kChunkNodes];
+            chunk = new Node[kChunkNodes];
             chunks[n >> kChunkShift].store(chunk, std::memory_order_release);
         }
         chunk[n & (kChunkNodes - 1)] = node;
         count.store(n + 1, std::memory_order_release);
-        extend(node.host_ns);
+        extend(node.at);
     }
-    void extend(int64_t c) {
+    void extend(Key c) {
         if (c > cover.load(std::memory_order_relaxed)) {
             cover.store(c, std::memory_order_release);
         }
     }
     void clear() {
         gen.fetch_add(1, std::memory_order_release);
-        cover.store(std::numeric_limits<int64_t>::min(), std::memory_order_release);
+        cover.store(key_min<Key>(), std::memory_order_release);
         count.store(0, std::memory_order_release);
         full_warned = false;
     }
 };
 
-struct Logs {
-    Log linked, local;
-    Log& of(SyncSeries s) { return s == SyncSeries::Linked ? linked : local; }
-};
-
-std::array<Logs, SyncCorrections::kMaxChips>& logs() {
-    static std::array<Logs, SyncCorrections::kMaxChips> l;
+std::array<Log<int64_t>, SyncCorrections::kMaxChips>& logs() {
+    static std::array<Log<int64_t>, SyncCorrections::kMaxChips> l;
+    return l;
+}
+Log<double>& host_log() {
+    static Log<double> l;
     return l;
 }
 alignas(64) std::atomic<uint64_t> g_cover_generation{0};
 std::atomic<double> g_asymmetry_ns{0.0};
-inline void covers_moved(SyncSeries series) {
-    if (series == SyncSeries::Linked) {
-        g_cover_generation.fetch_add(1, std::memory_order_release);
-    }
-}
+// The steady view: double-buffered under a generation, so a reader that sees the new generation sees the whole
+// segment.
+struct SteadySlots {
+    SteadySegment seg[2];
+    std::atomic<uint32_t> gen{0};
+};
+SteadySlots g_steady;
 
-// A reader's place in one series: the segment [a, b) it last converted in and that segment's line. For the open
-// segment b is one past the cover the reader last saw, so a record past that cover re-reads it.
+// A reader's place in one series: the segment [a, b] it last converted in and that segment's line through
+// (origin, value). For the open segment b is the cover the reader last saw, so a record past that cover re-reads it.
+template <typename Key>
 struct Cursor {
     uint32_t gen = 0;
     uint32_t i = 0;
-    int64_t a = 0;
-    int64_t b = 0;
-    double d = 0.0;
+    Key a = key_max<Key>();
+    Key b = key_min<Key>();
+    Key origin{};
+    double value = 0.0;
     double slope = 0.0;
     float sigma = 0.0f;  // of the segment's value: its nodes' largest, plus the freeze margin on the open tangent
 };
 // The margin a frontier may sit from the frozen tangent before a node is frozen (D2dSyncConsumer::kFreezeNs).
 constexpr float kOpenMarginNs = 0.25f;
-constinit thread_local Cursor t_cursors[2][SyncCorrections::kMaxChips];
+constinit thread_local Cursor<int64_t> t_cursors[SyncCorrections::kMaxChips];
+constinit thread_local Cursor<double> t_host_cursor;
 
-inline int64_t on_line(const Cursor& c, int64_t t) noexcept {
-    return static_cast<int64_t>(c.d + c.slope * static_cast<double>(t - c.a));
+template <typename Key>
+inline double on_line(const Cursor<Key>& c, Key t) noexcept {
+    return c.value + c.slope * static_cast<double>(t - c.origin);
 }
 
 // The last node at or before t, from a hint; records arrive nearly in order, so a few steps usually reach it.
-uint32_t locate(const Log& log, uint32_t n, uint32_t hint, int64_t t) noexcept {
+template <typename Key>
+uint32_t locate(const Log<Key>& log, uint32_t n, uint32_t hint, Key t) noexcept {
     uint32_t i = hint < n ? hint : 0;
     for (int steps = 0; steps < 8; steps++) {
-        if (i + 1 < n && log.at(i + 1).host_ns <= t) {
+        if (i + 1 < n && log.at(i + 1).at <= t) {
             i++;
-        } else if (i > 0 && log.at(i).host_ns > t) {
+        } else if (i > 0 && log.at(i).at > t) {
             i--;
         } else {
             return i;
@@ -129,7 +160,7 @@ uint32_t locate(const Log& log, uint32_t n, uint32_t hint, int64_t t) noexcept {
     uint32_t lo = 0, hi = n;  // first node past t
     while (lo < hi) {
         const uint32_t mid = lo + (hi - lo) / 2;
-        if (log.at(mid).host_ns <= t) {
+        if (log.at(mid).at <= t) {
             lo = mid + 1;
         } else {
             hi = mid;
@@ -138,145 +169,193 @@ uint32_t locate(const Log& log, uint32_t n, uint32_t hint, int64_t t) noexcept {
     return lo - 1;
 }
 
-int64_t refill(Log& log, Cursor& c, int64_t t) noexcept {
+template <typename Key>
+bool refill(Log<Key>& log, Cursor<Key>& c, Key t, Key hold, double& value) noexcept {
+    using Node = PlacementNode<Key>;
     const uint32_t gen = log.gen.load(std::memory_order_acquire);
-    const int64_t cover = log.cover.load(std::memory_order_acquire);
+    const Key cover = log.cover.load(std::memory_order_acquire);
     const uint32_t n = log.count.load(std::memory_order_acquire);
     if (n == 0) {
-        c = Cursor{.gen = gen, .sigma = std::numeric_limits<float>::infinity()};
-        return 0;
+        c = Cursor<Key>{.gen = gen, .sigma = std::numeric_limits<float>::infinity()};
+        return false;
     }
-    const SyncNode& first = log.at(0);
-    if (t < first.host_ns) {
-        // Constant before the first node; the segment's start only has to lie below every host time a record can
-        // carry without the difference overflowing.
-        c = Cursor{gen, 0, std::numeric_limits<int64_t>::min() / 2, first.host_ns, first.delta_ns, 0.0, first.sigma_ns};
-        return on_line(c, t);
+    const Node& first = log.at(0);
+    if (t < first.at) {
+        // Before the first node: back along its tangent, measured from the node itself.
+        c = Cursor<Key>{gen, 0, key_min<Key>(), first.at, first.at, first.value, first.tangent, first.sigma_ns};
+        value = on_line(c, t);
+        return true;
     }
     const uint32_t i = locate(log, n, c.gen == gen ? c.i : 0, t);
-    const SyncNode& a = log.at(i);
+    const Node& a = log.at(i);
     if (i + 1 < n) {
-        const SyncNode& b = log.at(i + 1);
-        c = Cursor{
+        const Node& b = log.at(i + 1);
+        c = Cursor<Key>{
             gen,
             i,
-            a.host_ns,
-            b.host_ns,
-            a.delta_ns,
-            (b.delta_ns - a.delta_ns) / static_cast<double>(b.host_ns - a.host_ns),
+            a.at,
+            b.at,
+            a.at,
+            a.value,
+            (b.value - a.value) / static_cast<double>(b.at - a.at),
             std::max(a.sigma_ns, b.sigma_ns)};
-        return on_line(c, t);
+        value = on_line(c, t);
+        return true;
     }
     if (t <= cover) {
-        const int64_t b = cover == std::numeric_limits<int64_t>::max() ? cover : cover + 1;
-        c = Cursor{gen, i, a.host_ns, b, a.delta_ns, a.tangent, a.sigma_ns + kOpenMarginNs};
-        return on_line(c, t);
+        c = Cursor<Key>{gen, i, a.at, cover, a.at, a.value, a.tangent, a.sigma_ns + kOpenMarginNs};
+        value = on_line(c, t);
+        return true;
     }
     // Past the cover (a consumer that does not wait for the sync): the tangent, then a hold. Not cached, the cover
     // moves.
-    c = Cursor{.gen = gen, .i = i, .sigma = a.sigma_ns + kOpenMarginNs};
-    const int64_t tt = std::min(t, cover + SyncCorrections::kHoldNs);
-    return static_cast<int64_t>(a.delta_ns + a.tangent * static_cast<double>(tt - a.host_ns));
+    c = Cursor<Key>{.gen = gen, .i = i, .sigma = a.sigma_ns + kOpenMarginNs};
+    const Key tt = std::min(t, static_cast<Key>(cover + hold));
+    value = a.value + a.tangent * static_cast<double>(tt - a.at);
+    return true;
 }
 
-inline int64_t lookup(uint32_t chip_id, int64_t t, SyncSeries series) noexcept {
-    if (chip_id >= SyncCorrections::kMaxChips) {
-        return 0;
+// Places t on the series through the cursor (refilled when it is not there); false when the series has no node.
+template <typename Key>
+inline bool place(Log<Key>& log, Cursor<Key>& c, Key t, Key hold, double& value) noexcept {
+    if (c.gen == log.gen.load(std::memory_order_relaxed) && t >= c.a && t <= c.b) {
+        value = on_line(c, t);
+        return true;
     }
-    Log& log = logs()[chip_id].of(series);
-    Cursor& c = t_cursors[static_cast<size_t>(series)][chip_id];
-    if (c.gen == log.gen.load(std::memory_order_relaxed) && t >= c.a && t < c.b) {
-        return on_line(c, t);
-    }
-    return refill(log, c, t);
+    return refill(log, c, t, hold, value);
 }
 
-// The cursor placed on t (refilled when it is not there), for the segment's uncertainty.
-inline const Cursor& cursor_at(uint32_t chip_id, int64_t t) noexcept {
-    Log& log = logs()[chip_id].linked;
-    Cursor& c = t_cursors[0][chip_id];
-    if (!(c.gen == log.gen.load(std::memory_order_relaxed) && t >= c.a && t < c.b)) {
-        refill(log, c, t);
-    }
-    return c;
+inline bool place_root(uint32_t chip_id, int64_t wall, double& root) noexcept {
+    return place(logs()[chip_id], t_cursors[chip_id], wall, SyncCorrections::kHoldTicks, root);
 }
 
 }  // namespace
 
-void SyncCorrections::append(uint32_t chip_id, SyncNode node, SyncSeries series) {
+void SyncCorrections::append(uint32_t chip_id, SyncNode node) {
     if (chip_id >= kMaxChips) {
         return;
     }
     TT_FATAL(
-        std::isfinite(node.delta_ns) && std::isfinite(node.tangent) && std::abs(node.tangent) < 1.0,
-        "streaming profiler: correction node for chip {} at {} is not a slope below one: delta {} tangent {}",
+        std::isfinite(node.value) && std::isfinite(node.tangent) && node.tangent > 0.0 && node.tangent < 1.0,
+        "streaming profiler: placement node for chip {} at wall {} is not a rate: root {} tangent {}",
         chip_id,
-        node.host_ns,
-        node.delta_ns,
+        node.at,
+        node.value,
         node.tangent);
-    logs()[chip_id].of(series).append(chip_id, node);
-    covers_moved(series);
+    logs()[chip_id].append(chip_id, node);
+    g_cover_generation.fetch_add(1, std::memory_order_release);
 }
 
-void SyncCorrections::extend(uint32_t chip_id, int64_t cover_ns, SyncSeries series) {
+void SyncCorrections::extend(uint32_t chip_id, int64_t cover_ticks) {
     if (chip_id < kMaxChips) {
-        logs()[chip_id].of(series).extend(cover_ns);
-        covers_moved(series);
+        logs()[chip_id].extend(cover_ticks);
+        g_cover_generation.fetch_add(1, std::memory_order_release);
     }
 }
 
-void SyncCorrections::finish(uint32_t chip_id, SyncSeries series) {
+void SyncCorrections::finish(uint32_t chip_id) {
     if (chip_id < kMaxChips) {
-        logs()[chip_id].of(series).extend(std::numeric_limits<int64_t>::max());
-        covers_moved(series);
+        logs()[chip_id].extend(std::numeric_limits<int64_t>::max());
+        g_cover_generation.fetch_add(1, std::memory_order_release);
     }
 }
 
 void SyncCorrections::clear(uint32_t chip_id) {
     if (chip_id < kMaxChips) {
-        logs()[chip_id].linked.clear();
-        logs()[chip_id].local.clear();
+        logs()[chip_id].clear();
     }
 }
 
-int64_t SyncCorrections::cover_ns(uint32_t chip_id) noexcept {
+void SyncCorrections::append_host(HostNode node) {
+    TT_FATAL(
+        std::isfinite(node.at) && std::isfinite(node.value) && std::isfinite(node.tangent) && node.tangent > 0.0 &&
+            node.tangent < 1e4,
+        "streaming profiler: host placement node at refclk {} is not a rate: tsc {} tangent {}",
+        node.at,
+        node.value,
+        node.tangent);
+    host_log().append(kHostSeries, node);
+}
+
+void SyncCorrections::extend_host(double cover_root) { host_log().extend(cover_root); }
+
+int64_t SyncCorrections::cover_ticks(uint32_t chip_id) noexcept {
     if (chip_id >= kMaxChips) {
         return std::numeric_limits<int64_t>::max();
     }
-    return logs()[chip_id].linked.cover.load(std::memory_order_acquire);
+    return logs()[chip_id].cover.load(std::memory_order_acquire);
 }
 
 uint64_t SyncCorrections::cover_generation() noexcept { return g_cover_generation.load(std::memory_order_acquire); }
 
 size_t SyncCorrections::published(uint32_t chip_id) noexcept {
-    return chip_id < kMaxChips ? logs()[chip_id].linked.count.load(std::memory_order_acquire) : 0;
+    return chip_id < kMaxChips ? logs()[chip_id].count.load(std::memory_order_acquire) : 0;
 }
 
-int64_t SyncCorrections::lookup_ns(uint32_t chip_id, int64_t host_ns, SyncSeries series) noexcept {
-    return lookup(chip_id, host_ns, series);
+size_t SyncCorrections::host_published() noexcept { return host_log().count.load(std::memory_order_acquire); }
+
+std::vector<HostNode> SyncCorrections::host_nodes() {
+    const Log<double>& log = host_log();
+    const uint32_t n = log.count.load(std::memory_order_acquire);
+    std::vector<HostNode> out;
+    out.reserve(n);
+    for (uint32_t i = 0; i < n; i++) {
+        out.push_back(log.at(i));
+    }
+    return out;
 }
 
-int64_t SyncCorrections::lookup_error_ns(uint32_t chip_id, int64_t host_ns) noexcept {
-    if (chip_id >= kMaxChips) {
+double SyncCorrections::lookup_root(uint32_t chip_id, int64_t wall) noexcept {
+    double root = 0.0;
+    if (chip_id >= kMaxChips || !place_root(chip_id, wall, root)) {
+        return 0.0;
+    }
+    return root;
+}
+
+int64_t SyncCorrections::lookup_tsc(uint32_t chip_id, int64_t wall) noexcept {
+    double root = 0.0, tsc = 0.0;
+    if (chip_id >= kMaxChips || !place_root(chip_id, wall, root) ||
+        !place(host_log(), t_host_cursor, root, kHoldRootTicks, tsc)) {
+        return 0;
+    }
+    return std::llrint(tsc);
+}
+
+int64_t SyncCorrections::lookup_error_ns(uint32_t chip_id, int64_t wall) noexcept {
+    double root = 0.0;
+    if (chip_id >= kMaxChips || !place_root(chip_id, wall, root)) {
         return std::numeric_limits<int64_t>::max();
     }
-    const Cursor& c = cursor_at(chip_id, host_ns);
-    if (!std::isfinite(c.sigma)) {
-        return std::numeric_limits<int64_t>::max();
-    }
+    const Cursor<int64_t>& c = t_cursors[chip_id];
     const double e = kSigmas * static_cast<double>(c.sigma) + g_asymmetry_ns.load(std::memory_order_relaxed);
     return static_cast<int64_t>(std::ceil(e));
 }
 
 void SyncCorrections::set_asymmetry_ns(double ns) noexcept { g_asymmetry_ns.store(ns, std::memory_order_relaxed); }
 
-void SyncCorrections::lookup_span_ns(
-    uint32_t chip_id, int64_t start_ns, int64_t end_ns, int64_t& d_start, int64_t& d_end) noexcept {
-    d_start = lookup(chip_id, start_ns, SyncSeries::Linked);
-    d_end = lookup(chip_id, end_ns, SyncSeries::Linked);
-    if (end_ns + d_end < start_ns + d_start) {
-        d_end = d_start;  // unreachable for a continuous series with |slope| << 1; never let an end precede its start
+void SyncCorrections::set_steady(const SteadySegment& segment) noexcept {
+    const uint32_t g = g_steady.gen.load(std::memory_order_relaxed);
+    g_steady.seg[(g + 1) & 1] = segment;
+    g_steady.gen.store(g + 1, std::memory_order_release);
+}
+
+int64_t SyncCorrections::tsc_to_mono_ns(int64_t tsc) noexcept {
+    thread_local uint32_t gen = ~0u;
+    thread_local SteadySegment seg;
+    const uint32_t g = g_steady.gen.load(std::memory_order_acquire);
+    if (g != gen) {
+        seg = g_steady.seg[g & 1];
+        gen = g;
     }
+    if (!seg.ok) {
+        // No probe has published a segment: the pair is taken here, once per thread and generation.
+        timespec ts{};
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        const int64_t mono = static_cast<int64_t>(ts.tv_sec) * 1'000'000'000 + ts.tv_nsec;
+        seg = SteadySegment{static_cast<int64_t>(__rdtsc()), mono, 1.0 / tsc_ticks_per_ns(), true};
+    }
+    return seg.mono_of(tsc);
 }
 
 namespace {
@@ -340,18 +419,25 @@ void SyncPlots::wait_complete(std::chrono::milliseconds timeout) {
 
 }  // namespace tt::tt_metal::streaming_profiler
 
+namespace tt::tt_metal::experimental::streaming_profiler {
+tsc_clock::time_point tsc_clock::now() noexcept {
+    return time_point(duration(tt::tt_metal::streaming_profiler::tsc_now()));
+}
+std::chrono::nanoseconds tsc_clock::to_ns(duration d) noexcept {
+    return std::chrono::nanoseconds(
+        static_cast<int64_t>(static_cast<double>(d.count()) / tt::tt_metal::streaming_profiler::tsc_ticks_per_ns()));
+}
+double tsc_clock::ticks_per_second() noexcept { return tt::tt_metal::streaming_profiler::tsc_ticks_per_ns() * 1e9; }
+}  // namespace tt::tt_metal::experimental::streaming_profiler
+
 namespace tt::tt_metal::experimental::streaming_profiler::detail {
-
-int64_t sync_correction_ns(uint16_t chip_id, int64_t host_ns) noexcept {
-    return tt::tt_metal::streaming_profiler::SyncCorrections::lookup_ns(chip_id, host_ns);
+int64_t sync_place_tsc(uint16_t chip_id, int64_t wall) noexcept {
+    return tt::tt_metal::streaming_profiler::SyncCorrections::lookup_tsc(chip_id, wall);
 }
-
-void sync_correction_span_ns(
-    uint16_t chip_id, int64_t start_ns, int64_t end_ns, int64_t& d_start, int64_t& d_end) noexcept {
-    tt::tt_metal::streaming_profiler::SyncCorrections::lookup_span_ns(chip_id, start_ns, end_ns, d_start, d_end);
+int64_t sync_error_ns(uint16_t chip_id, int64_t wall) noexcept {
+    return tt::tt_metal::streaming_profiler::SyncCorrections::lookup_error_ns(chip_id, wall);
 }
-int64_t sync_error_ns(uint16_t chip_id, int64_t host_ns) noexcept {
-    return tt::tt_metal::streaming_profiler::SyncCorrections::lookup_error_ns(chip_id, host_ns);
+int64_t tsc_to_steady_ns(int64_t tsc) noexcept {
+    return tt::tt_metal::streaming_profiler::SyncCorrections::tsc_to_mono_ns(tsc);
 }
-
 }  // namespace tt::tt_metal::experimental::streaming_profiler::detail
