@@ -10,8 +10,10 @@ Each script's output becomes one table, named after the script, with a row per
 result and a column per displayed field. Columns are INTEGER, REAL or TEXT,
 chosen from the values the script produced.
 
-A shared `diagnostics` table collects the check failures, warnings and script
-errors reported alongside those results.
+A shared `diagnostics` table collects the errors and warnings reported alongside
+those results. The reporting context is kept in its own columns (`Device`,
+`Location`, `RISC`) instead of being prefixed onto `Message`, so the same report
+from many cores groups into one row with `GROUP BY "Message"`.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ import os
 import sqlite3
 from typing import Any, Callable, Iterable
 
+from triage import CheckEntry, CheckType
 from serializers import OutputSerializer, strip_rich_markup, extract_table_data
 
 
@@ -100,6 +103,14 @@ def _column_type(values: Iterable[Any]) -> str:
 
 
 DIAGNOSTICS_TABLE = "diagnostics"
+DIAGNOSTICS_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("Script", "TEXT NOT NULL"),
+    ("Type", "TEXT NOT NULL"),
+    ("Device", "INTEGER"),
+    ("Location", "TEXT"),
+    ("RISC", "TEXT"),
+    ("Message", "TEXT NOT NULL"),
+)
 
 
 class SqliteSerializer(OutputSerializer):
@@ -116,24 +127,21 @@ class SqliteSerializer(OutputSerializer):
         self._verbose_getter = verbose_level_getter
         self._con = sqlite3.connect(path)
         # Created up front so it can always be queried, even on a clean run.
-        self._con.execute(
-            f"CREATE TABLE {quote_identifier(DIAGNOSTICS_TABLE)} "
-            f'("Script" TEXT NOT NULL, "Severity" TEXT NOT NULL, "Message" TEXT NOT NULL)'
-        )
+        spec = ", ".join(f"{quote_identifier(name)} {declared_type}" for name, declared_type in DIAGNOSTICS_COLUMNS)
+        self._con.execute(f"CREATE TABLE {quote_identifier(DIAGNOSTICS_TABLE)} ({spec})")
 
     def emit(
         self,
         script_name: str | None,
         execution_time: str,
         result: Any,
-        failures: list[str],
-        warnings: list[str],
+        checks: list[CheckEntry],
         script_failed: bool,
         failure_message: str | None,
         documentation: str | None,
     ) -> None:
         assert script_name is not None, "cannot serialize a result without a script name"
-        self._insert_diagnostics(script_name, failures, warnings, script_failed, failure_message)
+        self._insert_diagnostics(script_name, checks, script_failed, failure_message)
 
         table_data = extract_table_data(result, self._verbose_getter())
         if table_data is None or not table_data.rows:
@@ -166,32 +174,40 @@ class SqliteSerializer(OutputSerializer):
     def record_diagnostics(
         self,
         script_name: str,
-        failures: list[str],
-        warnings: list[str],
+        checks: list[CheckEntry],
         script_failed: bool,
         failure_message: str | None,
     ) -> None:
-        self._insert_diagnostics(script_name, failures, warnings, script_failed, failure_message)
+        self._insert_diagnostics(script_name, checks, script_failed, failure_message)
         self._con.commit()
 
     def _insert_diagnostics(
         self,
         script_name: str,
-        failures: list[str],
-        warnings: list[str],
+        checks: list[CheckEntry],
         script_failed: bool,
         failure_message: str | None,
     ) -> None:
-        rows = [(script_name, "failure", message) for message in failures]
-        rows += [(script_name, "warning", message) for message in warnings]
+        rows: list[tuple[Any, ...]] = [
+            (
+                script_name,
+                check.type.value,
+                check.device_id,
+                check.location_str,
+                check.risc_name,
+                strip_rich_markup(check.message),
+            )
+            for check in checks
+        ]
         if script_failed:
-            rows.append((script_name, "error", failure_message or "script failed"))
+            # A script that raised (or was skipped) reports no context of its own.
+            message = strip_rich_markup(failure_message or "script failed")
+            rows.append((script_name, CheckType.ERROR.value, None, None, None, message))
         if not rows:
             return
-        self._con.executemany(
-            f"INSERT INTO {quote_identifier(DIAGNOSTICS_TABLE)} VALUES (?, ?, ?)",
-            [(script, severity, strip_rich_markup(message)) for script, severity, message in rows],
-        )
+        names = ", ".join(quote_identifier(name) for name, _ in DIAGNOSTICS_COLUMNS)
+        marks = ", ".join("?" for _ in DIAGNOSTICS_COLUMNS)
+        self._con.executemany(f"INSERT INTO {quote_identifier(DIAGNOSTICS_TABLE)} ({names}) VALUES ({marks})", rows)
 
     def close(self) -> None:
         try:

@@ -22,6 +22,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, fields, is_dataclass
 from typing import Any, Callable, Iterable
 
+from triage import CheckEntry, CheckType
+
 
 @dataclass
 class TableData:
@@ -98,6 +100,11 @@ def extract_table_data(result: Any, verbose_level: int = 0) -> TableData | None:
     return TableData(columns=columns, rows=rows, unserialized_values=unserialized_values)
 
 
+def formatted_messages(checks: Iterable[CheckEntry], check_type: CheckType) -> list[str]:
+    """The formatted messages of every entry of one type, in report order."""
+    return [check.formatted_message for check in checks if check.type is check_type]
+
+
 class OutputSerializer(ABC):
     """Turns one script's result into output. Subclasses pick the format
     (Rich tables, CSV, future JSON, …). The *destination* is handled by a
@@ -109,8 +116,7 @@ class OutputSerializer(ABC):
         script_name: str | None,
         execution_time: str,
         result: Any,
-        failures: list[str],
-        warnings: list[str],
+        checks: list[CheckEntry],
         script_failed: bool,
         failure_message: str | None,
         documentation: str | None,
@@ -120,8 +126,7 @@ class OutputSerializer(ABC):
     def record_diagnostics(
         self,
         script_name: str,
-        failures: list[str],
-        warnings: list[str],
+        checks: list[CheckEntry],
         script_failed: bool,
         failure_message: str | None,
     ) -> None:
@@ -192,8 +197,7 @@ class RichSerializer(OutputSerializer):
         script_name: str | None,
         execution_time: str,
         result: Any,
-        failures: list[str],
-        warnings: list[str],
+        checks: list[CheckEntry],
         script_failed: bool,
         failure_message: str | None,
         documentation: str | None,
@@ -201,6 +205,9 @@ class RichSerializer(OutputSerializer):
         from rich.table import Table
 
         utils = self._utils
+        failures = formatted_messages(checks, CheckType.ERROR)
+        warnings = formatted_messages(checks, CheckType.WARNING)
+
         if script_name is not None:
             print()
             utils.INFO(f"{script_name}{execution_time}:")
@@ -297,12 +304,14 @@ class CsvSerializer(OutputSerializer):
         script_name: str | None,
         execution_time: str,
         result: Any,
-        failures: list[str],
-        warnings: list[str],
+        checks: list[CheckEntry],
         script_failed: bool,
         failure_message: str | None,
         documentation: str | None,
     ) -> None:
+        failures = formatted_messages(checks, CheckType.ERROR)
+        warnings = formatted_messages(checks, CheckType.WARNING)
+
         if script_name is not None:
             self._print()
             self._print(f"{script_name}{execution_time}:")
@@ -353,8 +362,7 @@ class MultiSerializer(OutputSerializer):
         script_name: str | None,
         execution_time: str,
         result: Any,
-        failures: list[str],
-        warnings: list[str],
+        checks: list[CheckEntry],
         script_failed: bool,
         failure_message: str | None,
         documentation: str | None,
@@ -364,8 +372,7 @@ class MultiSerializer(OutputSerializer):
                 script_name=script_name,
                 execution_time=execution_time,
                 result=result,
-                failures=failures,
-                warnings=warnings,
+                checks=checks,
                 script_failed=script_failed,
                 failure_message=failure_message,
                 documentation=documentation,
@@ -374,13 +381,12 @@ class MultiSerializer(OutputSerializer):
     def record_diagnostics(
         self,
         script_name: str,
-        failures: list[str],
-        warnings: list[str],
+        checks: list[CheckEntry],
         script_failed: bool,
         failure_message: str | None,
     ) -> None:
         for s in self._serializers:
-            s.record_diagnostics(script_name, failures, warnings, script_failed, failure_message)
+            s.record_diagnostics(script_name, checks, script_failed, failure_message)
 
     def close(self) -> None:
         for s in self._serializers:
