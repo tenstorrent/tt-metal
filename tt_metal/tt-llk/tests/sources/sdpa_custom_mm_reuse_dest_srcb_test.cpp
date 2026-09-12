@@ -55,10 +55,9 @@
 // (the first face-row band the op writes for a [1,32] tile) are validated -- the
 // remaining DEST rows are left undefined by the op and must not be asserted on.
 //
-// NO Blackhole card is available in this environment, so this test is validated
-// only at (a) a clean BH compile and (b) golden-mirrors-header inspection. The
-// exact DEST<->SrcB row walk should be confirmed on a BH p100a before this test's
-// numeric assertion is trusted; see the python xfail/notes.
+// The asserted lanes pass on a Blackhole p100a, so the DEST<->SrcB row walk this
+// test depends on is confirmed. The unasserted regions noted in the python
+// docstring are still unconfirmed.
 
 #include <cstdint>
 
@@ -136,8 +135,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // single collapsed MOP walks all KT_DIM x NT_DIM SrcA tiles.
     _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init_(NT_DIM, FACE_R_DIM, 4 /* unpA_num_faces */);
     _llk_unpack_A_sdpa_set_srcb_dummy_valid_();
-    _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_(
-        L1_ADDRESS(params.buffer_A[0]), 0 /* tile_index_a */, params.TILE_SIZE_UNPACK_A, KT_DIM, NT_DIM, 1 /* in1_k_stride: contiguous V tiles */);
+    if constexpr (DEFAULTED_DIMS)
+    {
+        // Take the header's defaults for kt_dim/nt_dim/in1_k_stride. They must be a
+        // legal configuration on their own: kt_dim reaches the collapsed MOP as
+        // (kt_dim / 2) - 1, so any default below 2 is not a representable loop count.
+        _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_(L1_ADDRESS(params.buffer_A[0]), 0 /* tile_index_a */, params.TILE_SIZE_UNPACK_A);
+    }
+    else
+    {
+        _llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_(
+            L1_ADDRESS(params.buffer_A[0]), 0 /* tile_index_a */, params.TILE_SIZE_UNPACK_A, KT_DIM, NT_DIM, 1 /* in1_k_stride: contiguous V tiles */);
+    }
 }
 
 #endif
@@ -184,10 +193,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // reuse unpack, accumulating O into DEST at DST_INDEX. signal_output=false ->
     // no FPU->SFPU handshake, so the op runs standalone. output_granularity=1,
     // input_granularity=1 are the header defaults.
-    _llk_math_sdpa_custom_mm_reuse_dest_srcb_init_<MATH_FIDELITY>(
-        TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false /* partial_face */, 0 /* transpose */, KT_DIM);
-    _llk_math_sdpa_custom_mm_reuse_dest_srcb_<1 /* output_granularity */, 1 /* input_granularity */>(
-        SRC_INDEX, DST_INDEX, false /* transpose */, KT_DIM, NT_DIM, false /* signal_output */);
+    if constexpr (DEFAULTED_DIMS)
+    {
+        _llk_math_sdpa_custom_mm_reuse_dest_srcb_init_<MATH_FIDELITY>(
+            TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false /* partial_face */, 0 /* transpose */);
+        _llk_math_sdpa_custom_mm_reuse_dest_srcb_<1 /* output_granularity */, 1 /* input_granularity */>(SRC_INDEX, DST_INDEX);
+    }
+    else
+    {
+        _llk_math_sdpa_custom_mm_reuse_dest_srcb_init_<MATH_FIDELITY>(
+            TILE_R_DIM, TILE_C_DIM, TILE_R_DIM, TILE_C_DIM, false /* partial_face */, 0 /* transpose */, KT_DIM);
+        _llk_math_sdpa_custom_mm_reuse_dest_srcb_<1 /* output_granularity */, 1 /* input_granularity */>(
+            SRC_INDEX, DST_INDEX, false /* transpose */, KT_DIM, NT_DIM, false /* signal_output */);
+    }
 
     _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 }
