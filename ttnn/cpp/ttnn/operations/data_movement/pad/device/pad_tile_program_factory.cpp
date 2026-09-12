@@ -23,7 +23,7 @@ namespace {
 const KernelSpecName TILE_SC_READER{"reader"};
 const KernelSpecName TILE_SC_WRITER{"writer"};
 const DFBSpecName TILE_SC_IN0{"in0"};
-const DFBSpecName TILE_SC_PAD{"pad"};
+const ScratchpadSpecName TILE_SC_PAD{"pad"};
 const TensorParamName TILE_SC_INPUT{"input"};
 const TensorParamName TILE_SC_OUTPUT{"output"};
 }  // namespace
@@ -66,13 +66,11 @@ ttnn::device_operation::ProgramArtifacts PadTileCoreProgramFactory::create_progr
 
     // Pad buffer: the writer reserves an entry and fills it with the pad value, then NoC-writes
     // that entry out repeatedly. Nothing ever pushes or drains it, so the writer is its only
-    // toucher and binds both endpoints (self-loop).
-    const uint32_t num_pad_tiles = 1;
-    DataflowBufferSpec pad_dfb{
+    // toucher. Formerly a fake-FIFO self-loop DFB (single DM kernel filled and drained it);
+    // converted to a writer-private Scratchpad, which Quasar requires (it rejects DM self-loops).
+    ScratchpadSpec pad_scratch{
         .unique_id = TILE_SC_PAD,
-        .entry_size = single_tile_size,
-        .num_entries = num_pad_tiles,
-        .data_format_metadata = dfb_data_format,
+        .size_per_node = single_tile_size,  // entry_size * num_entries (1)
     };
 
     uint32_t packed_pad_value;
@@ -138,16 +136,10 @@ ttnn::device_operation::ProgramArtifacts PadTileCoreProgramFactory::create_progr
                     .accessor_name = "out0",
                     .endpoint_type = DFBEndpointType::CONSUMER,
                 },
-                DFBBinding{
-                    .dfb_spec_name = TILE_SC_PAD,
-                    .accessor_name = "pad",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = TILE_SC_PAD,
-                    .accessor_name = "pad",
-                    .endpoint_type = DFBEndpointType::CONSUMER,
-                },
+            },
+        .scratchpad_bindings =
+            {
+                ScratchpadBinding{.scratchpad_spec_name = TILE_SC_PAD, .accessor_name = "pad"},
             },
         .tensor_bindings =
             {
@@ -175,7 +167,8 @@ ttnn::device_operation::ProgramArtifacts PadTileCoreProgramFactory::create_progr
     ProgramSpec spec{
         .name = "pad_tile_single_core",
         .kernels = {std::move(reader), std::move(writer)},
-        .dataflow_buffers = {std::move(in0_dfb), std::move(pad_dfb)},
+        .dataflow_buffers = {std::move(in0_dfb)},
+        .scratchpads = {std::move(pad_scratch)},
         .tensor_parameters =
             {
                 TensorParameter{.unique_id = TILE_SC_INPUT, .spec = input_mesh_tensor.tensor_spec()},

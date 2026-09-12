@@ -33,8 +33,8 @@ uint32_t get_num_stick_per_barrier(uint32_t stick_size_padded_aligned) {
 const KernelSpecName RM_DEF_READER{"reader"};
 const KernelSpecName RM_DEF_WRITER{"writer"};
 const DFBSpecName RM_DEF_IN0{"in0"};
-const DFBSpecName RM_DEF_PAD{"pad"};
-const DFBSpecName RM_DEF_PAD_ALIGN{"pad_align"};
+const ScratchpadSpecName RM_DEF_PAD{"pad"};
+const ScratchpadSpecName RM_DEF_PAD_ALIGN{"pad_align"};
 const TensorParamName RM_DEF_INPUT{"input"};
 const TensorParamName RM_DEF_OUTPUT{"output"};
 
@@ -115,27 +115,24 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreDefaultProgra
 
     Group<DataflowBufferSpec> dataflow_buffers;
 
-    // pad: reused for pad-value scratch on every dispatch. Only the reader touches it — it fills
-    // the entry with baby-RISCV stores and loop-back-reads it per stick, with no FIFO ops — so the
-    // reader binds both endpoints (self-loop).
-    dataflow_buffers.push_back(DataflowBufferSpec{
+    // pad: reused for pad-value scratch on every dispatch. Only the reader touches it — it fills the
+    // entry with baby-RISCV stores and loop-back-reads it per stick, with no FIFO ops. Formerly a
+    // sync-free self-loop DFB; converted to a private Scratchpad (Quasar rejects DM self-loops).
+    Group<ScratchpadSpec> scratchpads;
+    scratchpads.push_back(ScratchpadSpec{
         .unique_id = RM_DEF_PAD,
-        .entry_size = stick_size_padded_DRAM_aligned,
-        .num_entries = 1,
-        .data_format_metadata = dfb_data_format,
+        .size_per_node = stick_size_padded_DRAM_aligned,  // entry_size * num_entries (1)
     });
 
-    // pad_align: a realignment staging area, allocated only when the reader can actually take one
-    // of the two branches that use it. The kernel gates its construction and every reference to it
-    // on the matching PAD_ALIGN_DFB define, because a kernel may not name a DFB it has not bound.
+    // pad_align: a realignment staging area, allocated only when the reader can actually take one of
+    // the two branches that use it. Registration and binding stay gated on needs_pad_align_dfb /
+    // PAD_ALIGN_DFB — an unbound declared scratchpad is rejected at program creation.
     bool unaligned = stick_size_padded_aligned % hal::get_dram_alignment() != 0;
     const bool needs_pad_align_dfb = stick_size_padded_front != 0 || unaligned;
     if (needs_pad_align_dfb) {
-        dataflow_buffers.push_back(DataflowBufferSpec{
+        scratchpads.push_back(ScratchpadSpec{
             .unique_id = RM_DEF_PAD_ALIGN,
-            .entry_size = stick_size_padded_DRAM_aligned,
-            .num_entries = 1,
-            .data_format_metadata = dfb_data_format,
+            .size_per_node = stick_size_padded_DRAM_aligned,
         });
     }
 
@@ -145,29 +142,15 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreDefaultProgra
             .accessor_name = "in0",
             .endpoint_type = DFBEndpointType::PRODUCER,
         },
-        DFBBinding{
-            .dfb_spec_name = RM_DEF_PAD,
-            .accessor_name = "pad",
-            .endpoint_type = DFBEndpointType::PRODUCER,
-        },
-        DFBBinding{
-            .dfb_spec_name = RM_DEF_PAD,
-            .accessor_name = "pad",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        },
+    };
+    // pad / pad_align are reader-private scratchpads (formerly self-loop DFBs).
+    Group<ScratchpadBinding> reader_scratchpad_bindings = {
+        ScratchpadBinding{.scratchpad_spec_name = RM_DEF_PAD, .accessor_name = "pad"},
     };
     KernelSpec::CompilerOptions::Defines reader_defines;
     if (needs_pad_align_dfb) {
-        reader_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = RM_DEF_PAD_ALIGN,
-            .accessor_name = "pad_align",
-            .endpoint_type = DFBEndpointType::PRODUCER,
-        });
-        reader_dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = RM_DEF_PAD_ALIGN,
-            .accessor_name = "pad_align",
-            .endpoint_type = DFBEndpointType::CONSUMER,
-        });
+        reader_scratchpad_bindings.push_back(
+            ScratchpadBinding{.scratchpad_spec_name = RM_DEF_PAD_ALIGN, .accessor_name = "pad_align"});
         reader_defines.emplace("PAD_ALIGN_DFB", "1");
     }
 
@@ -178,6 +161,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreDefaultProgra
             "reader_pad_dims_rm_interleaved_v2.cpp",
         .compiler_options = {.defines = std::move(reader_defines)},
         .dfb_bindings = std::move(reader_dfb_bindings),
+        .scratchpad_bindings = std::move(reader_scratchpad_bindings),
         .tensor_bindings =
             {
                 TensorBinding{
@@ -333,6 +317,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreDefaultProgra
         .name = "pad_rm_reader_writer_multi_core_default",
         .kernels = {std::move(reader), std::move(writer)},
         .dataflow_buffers = std::move(dataflow_buffers),
+        .scratchpads = std::move(scratchpads),
         .tensor_parameters =
             {
                 TensorParameter{.unique_id = RM_DEF_INPUT, .spec = input_mesh_tensor.tensor_spec()},
