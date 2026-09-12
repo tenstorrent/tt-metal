@@ -35,7 +35,6 @@ void kernel_main() {
     constexpr auto num_tiles_per_block = get_arg(args::num_tiles_per_block);
     constexpr bool FLOAT32_DTYPE = get_arg(args::float32_dtype) == 1;
     constexpr bool FP32_DEST_ACC = compute_kernel_lib::get_fp32_dest_acc_enabled();
-    constexpr bool LEGACY_RSQRT = get_arg(args::legacy_rsqrt) == 1;
     constexpr auto num_blocks_second_stage = get_arg(args::num_blocks_second_stage);
     // gamma and beta each gate a buffer that only exists when their tensor was supplied, so the flag
     // has to reach the preprocessor as well as `if constexpr`.
@@ -456,8 +455,8 @@ void kernel_main() {
                 add_init(dfb_ex2_id, dfb_eps);
                 add_tiles(dfb_ex2_id, dfb_eps, i, 0, dst0);
                 tile_regs_wait();
-                rsqrt_tile_init<LEGACY_RSQRT>();
-                rsqrt_tile<LEGACY_RSQRT>(dst0);
+                rsqrt_tile_init();
+                rsqrt_tile(dst0);
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_tile(dst0, dfb_ex2pe_id);

@@ -183,14 +183,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
 
     // Extract program config
     bool legacy_reduction = false;
-    bool legacy_rsqrt = false;
     bool use_welford = false;
     std::visit(
         [&](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, LayerNormDefaultProgramConfig>) {
                 legacy_reduction = program_config.legacy_reduction;
-                legacy_rsqrt = program_config.legacy_rsqrt;
                 use_welford = program_config.use_welford;
             }
         },
@@ -778,7 +776,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     } else {
         compute.compile_time_args.emplace("tile_width", tile_width);
         compute.compile_time_args.emplace("float32_reduction", static_cast<uint32_t>(float32_reduction));
-        compute.compile_time_args.emplace("legacy_rsqrt", static_cast<uint32_t>(legacy_rsqrt));
     }
 
     // FUSE_PRE_ADD reaches every compute kernel, not only the non-Welford ones: the Welford

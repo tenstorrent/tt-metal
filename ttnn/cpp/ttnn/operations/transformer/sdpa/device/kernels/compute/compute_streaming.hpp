@@ -263,7 +263,7 @@ ALWI void recip_tile_first_column_wh_idst0_direct() {
 
 #pragma GCC unroll 0
     for (int face = 0; face < 2; face++) {
-        ckernel::sfpu::calculate_recip_first_column</*legacy_compat=*/true, DST_ACCUM_MODE>();
+        ckernel::sfpu::calculate_recip_first_column<DST_ACCUM_MODE>();
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
@@ -751,8 +751,8 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
                 add_binary_tile(0, 1, 0);
             }
 #ifdef ARCH_BLACKHOLE
-            recip_tile_init<false>();
-            MATH((recip_tile<false>(0 /*dst_index*/, VectorMode::C)));
+            recip_tile_init();
+            MATH((recip_tile(0 /*dst_index*/, VectorMode::C)));
 #else
             recip_tile_init();
             MATH((recip_tile_first_column_wh_idst0_direct()));

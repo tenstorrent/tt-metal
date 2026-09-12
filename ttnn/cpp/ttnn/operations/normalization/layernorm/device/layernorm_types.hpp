@@ -18,7 +18,6 @@ enum class DistributedLayerNormStage { NOT_DISTRIBUTED, PRE_ALL_GATHER, POST_ALL
 
 struct LayerNormDefaultProgramConfig {
     bool legacy_reduction = false;
-    bool legacy_rsqrt = false;
     bool use_welford = false;
 };
 struct LayerNormShardedMultiCoreProgramConfig {
@@ -28,7 +27,6 @@ struct LayerNormShardedMultiCoreProgramConfig {
     std::size_t block_w{};
     bool inplace{};
     bool legacy_reduction = false;
-    bool legacy_rsqrt = false;
     bool use_welford = false;
 };
 

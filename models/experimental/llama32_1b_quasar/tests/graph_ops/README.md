@@ -107,7 +107,7 @@ Exact, straight from the capture:
   DRAM-sharded weight really is DRAM-sharded across 12 banks, and a width-sharded
   activation really spans its 32 captured cores);
 - program configs field-for-field (`in0_block_w`, `per_core_M/N`, LayerNorm's
-  `block_h/block_w/subblock_w` and `legacy_reduction`/`legacy_rsqrt`/`use_welford`,
+  `block_h/block_w/subblock_w`, `legacy_reduction`, and `use_welford`,
   SDPA's chunk sizes and `max_cores_per_head_batch`, `MinimalMatmulConfig` blocks);
 - scalar kwargs (`epsilon`, `scale`, `num_heads`, `is_decode_mode`, activations …);
 - the shape, dtype, layout and memory config of every returned tensor to assert
