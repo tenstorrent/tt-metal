@@ -1558,11 +1558,20 @@ class ModelArgs:
                         num_global_cb_receivers=prefetcher.num_receiver_cores,
                     )
                 else:
+                    # SPREAD THE GATED PAIR. ff1/ff3 feed one elementwise multiply that
+                    # carries the SiLU, and that activation is what the multiply costs:
+                    # the same op without it runs in 0.97 us against 8.4 with it, i.e.
+                    # ~1 us of SFPU exp per tile per core. The multiply inherits the
+                    # projection's output shard, which was 16 cores x 7 tiles; widening
+                    # the OUTPUT alone (the K block stays on the activation's shard)
+                    # hands every core a couple of tiles of exp instead of seven, and
+                    # costs no reshard because the matmul writes it there directly.
                     return self.dram_matmul_config(
                         m=self.tile_padded_batch_rows,
                         k=self.dim,
                         n=self.hidden_dim // self.cluster_shape[1],
                         num_cores=self.mlp_core_grid.num_cores,
+                        out_num_cores=self.widest_exact_core_count(self.hidden_dim // self.cluster_shape[1]),
                         num_workers_per_dram_bank=self.get_dram_sharded_matmul_num_workers(
                             TensorGroup.FF1_FF3, self.hidden_dim // self.cluster_shape[1]
                         ),
@@ -1664,6 +1673,9 @@ class ModelArgs:
                     use_height_and_width_as_shard_shape=True,
                 )
             else:
+                # The DRAM-sharded matmul derives its own output shard from the program
+                # config's per_core_N, so this stays generic -- see the out_num_cores
+                # argument in get_mlp_ff1_3_prg_config for where that grid is chosen.
                 return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
         elif mode == Mode.PREFILL:
             # L1 island for the gated pair. ff1 and ff3 both feed one elementwise
@@ -4189,7 +4201,18 @@ class ModelArgs:
         num_cores=None,
         fused_activation=None,
         num_workers_per_dram_bank: int = 1,
+        out_num_cores=None,
     ):
+        """``num_cores`` sizes the K BLOCK; ``out_num_cores`` sizes the OUTPUT SHARD.
+
+        The two are separate things this signature used to conflate. ``in0_block_w`` is
+        bounded by the ACTIVATION's width shard -- the op requires it to divide that
+        shard's per-core tile count -- while ``per_core_N`` is what the op sizes its
+        OUTPUT shard from, and the output's grid is free (the compute runs on one worker
+        per DRAM bank and writes back). Pass ``out_num_cores`` to spread the result over
+        more cores than the activation sits on, for the benefit of whatever consumes it,
+        without shortening the K block and lengthening the matmul's own loop.
+        """
         # in0_block_w must evenly divide k and be no larger than tile_size * num_cores
         if num_cores is None:
             # num_cores = self.dram_shard_core_grid_for_k(k).num_cores
@@ -4201,7 +4224,7 @@ class ModelArgs:
         return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
             in0_block_w=self.find_largest_divisor(k // (ttnn.TILE_SIZE * num_cores)),
             per_core_M=math.ceil(m / ttnn.TILE_SIZE),
-            per_core_N=math.ceil(n / (ttnn.TILE_SIZE * num_cores)),
+            per_core_N=math.ceil(n / (ttnn.TILE_SIZE * (out_num_cores or num_cores))),
             fused_activation=fused_activation,
             num_workers_per_dram_bank=num_workers_per_dram_bank,
         )
@@ -4355,6 +4378,22 @@ class ModelArgs:
             is_fp32_accumulate,
             overwrite_subblock_w=overwrite_subblock_w,
             overwrite_subblock_h=overwrite_subblock_h,
+        )
+
+    @lru_cache(maxsize=None)
+    def widest_exact_core_count(self, n: int) -> int:
+        """The most cores the device can give ``n`` columns with an EXACT tile split.
+
+        Exact, not ceil: a DRAM-sharded matmul sizes its output shard from per_core_N, and
+        a ragged last shard there is a correctness problem rather than merely wasted width.
+        """
+        n_tiles = n // ttnn.TILE_SIZE
+        grid = self.max_grid_size
+        return max(
+            c
+            for c in range(1, min(grid.x * grid.y, n_tiles) + 1)
+            if n_tiles % c == 0
+            and any(c % x == 0 and c // x <= grid.y for x in range(1, min(grid.x, c) + 1))
         )
 
     def create_sharded_norm_config(self, grid):
