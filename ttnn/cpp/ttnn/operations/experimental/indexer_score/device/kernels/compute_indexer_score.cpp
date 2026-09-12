@@ -19,6 +19,7 @@
 #include "api/compute/reduce.h"            // block-max-pool: PoolType / ReduceDim enums
 #include "api/compute/reduce_custom.h"     // block-max-pool: batched reduce_block_max_row (scaler-resident)
 #include "api/dataflow/circular_buffer.h"  // Device 2.0 CircularBuffer wrapper (cb ops)
+#include "indexer_score_metadata.hpp"
 
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"  // block-max-pool: compute_kernel_lib::reduce
@@ -44,7 +45,13 @@ constexpr bool fused_stream_k = get_compile_time_arg_val(num_common_ct_args + 5)
 constexpr bool fused_ring_enabled = get_compile_time_arg_val(num_common_ct_args + 6) != 0;
 constexpr bool shard_block_cyclic = get_compile_time_arg_val(num_common_ct_args + 7) != 0;
 constexpr uint32_t shard_chunk_local = get_compile_time_arg_val(num_common_ct_args + 8);
-constexpr uint32_t shard_sp = get_compile_time_arg_val(num_common_ct_args + 9);
+constexpr uint32_t shard_key_stripes = get_compile_time_arg_val(num_common_ct_args + 9);
+constexpr uint32_t shard_physical_sp = get_compile_time_arg_val(num_common_ct_args + 10);
+// Metadata-derived causal values arrive through a reader-produced mailbox because compute cannot issue
+// NoC reads. Appended after main's shard block, so both factories push these last. #55617 inserted
+// shard_key_stripes ahead of the physical SP size, so these moved from +10/+11 to +11/+12.
+constexpr bool chunk_start_from_metadata = get_compile_time_arg_val(num_common_ct_args + 11) != 0;
+constexpr uint32_t cb_meta_derived = get_compile_time_arg_val(num_common_ct_args + 12);
 
 // k-cols sharing ONE dest acquire in the blocked-custom mul (dest-bounded). One unpack context per head
 // (w[h] + ct_dim qk cols), so unpack-context sync is paid 1/ct_dim of the per-tile bcast-mul rate.
@@ -421,10 +428,12 @@ inline void stamp_masked_suffix(
     }
 }
 
-/** Causal mask for a shard-major packed unit. Its logical tile ids are monotone but may jump between
- *  block-cyclic runs, so find the prefix below the diagonal using the inverse physical mapping. */
+/** Causal and runtime-prefix mask for a shard-major packed unit. Retain the monotonic prefix walk for
+ *  contiguous/SP-only layouts. TP-striped logical tile ids can reset at stripe-capacity boundaries, so
+ *  classify every physical column independently there. */
 inline void stamp_masked_shard_major(
-    const ShardMajorWorkUnitSpan<shard_block_cyclic, shard_chunk_local, shard_sp>& shard_span,
+    const ShardMajorWorkUnitSpan<shard_block_cyclic, shard_chunk_local, shard_key_stripes, shard_physical_sp>&
+        shard_span,
     uint32_t q_row,
     uint32_t slot_base,
     uint32_t k_tiles_in_unit,
@@ -434,14 +443,23 @@ inline void stamp_masked_shard_major(
     const uint32_t q_row_abs = shard_span.q_tile_start() + q_row;
     const uint32_t diag_tile =
         iscore::causal_diag_tile(q_row_abs, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles);
-    uint32_t valid = 0;
-    while (valid < k_tiles_in_unit && shard_span.logical_tile(valid) < diag_tile) {
-        ++valid;
-    }
     const uint32_t capacity = shard_span.capacity_tiles();
-    for (uint32_t k_col = valid; k_col < k_tiles_per_unit; ++k_col) {
-        const uint32_t logical_tile = k_col < capacity ? shard_span.logical_tile(k_col) : 0xFFFFFFFFu;
-        stamp_mask_tile<cb_acc_strip, cb_mask>(slot_base + k_col, logical_tile, diag_tile);
+    if constexpr (!shard_block_cyclic || shard_key_stripes == shard_physical_sp) {
+        uint32_t valid = 0;
+        while (valid < k_tiles_in_unit && shard_span.logical_tile(valid) < diag_tile) {
+            ++valid;
+        }
+        for (uint32_t k_col = valid; k_col < k_tiles_per_unit; ++k_col) {
+            const uint32_t logical_tile = k_col < capacity ? shard_span.logical_tile(k_col) : 0xFFFFFFFFu;
+            stamp_mask_tile<cb_acc_strip, cb_mask>(slot_base + k_col, logical_tile, diag_tile);
+        }
+    } else {
+        for (uint32_t k_col = 0; k_col < k_tiles_per_unit; ++k_col) {
+            const uint32_t logical_tile = k_col < capacity ? shard_span.logical_tile(k_col) : 0xFFFFFFFFu;
+            if (k_col >= k_tiles_in_unit || logical_tile >= shard_span.valid_k_len_tiles || logical_tile >= diag_tile) {
+                stamp_mask_tile<cb_acc_strip, cb_mask>(slot_base + k_col, logical_tile, diag_tile);
+            }
+        }
     }
 }
 
@@ -457,18 +475,30 @@ void kernel_main() {
     const uint32_t max_bands = get_arg_val<uint32_t>(5);  // row's widest column; streaming drains q to this
     // Valid KV length in tiles: caps each cell's valid cols (mask suffix grows over the tail). Full when
     // unset (dense path unchanged). Hash-excluded.
-    const uint32_t kv_len_tiles = get_arg_val<uint32_t>(6);
+    uint32_t kv_len_tiles = get_arg_val<uint32_t>(6);
     // Per-device chunk-start offset (tiles); runtime so distinct values reuse one program.
-    const uint32_t chunk_start_tiles = get_arg_val<uint32_t>(7);
+    uint32_t chunk_start_tiles = get_arg_val<uint32_t>(7);
     // Mid-slab boundary-chip diagonal straddle (tiles): q-rows >= straddle_q_tile jump by straddle_jump_tiles.
     // Both 0 on every non-boundary device and in the chunk-aligned case, leaving the diagonal linear.
-    const uint32_t straddle_q_tile = get_arg_val<uint32_t>(8);
-    const uint32_t straddle_jump_tiles = get_arg_val<uint32_t>(9);
+    uint32_t straddle_q_tile = get_arg_val<uint32_t>(8);
+    uint32_t straddle_jump_tiles = get_arg_val<uint32_t>(9);
+
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q, cb_k, cb_qk);
+
+    if constexpr (chunk_start_from_metadata) {
+        // Consume the unconditional mailbox publication before the zero-work return.
+        CircularBuffer cb_derived(cb_meta_derived);
+        cb_derived.wait_front(1);
+        kv_len_tiles = ckernel::read_tile_value(cb_meta_derived, 0, indexer_score_kv_len_tiles_word);
+        chunk_start_tiles = ckernel::read_tile_value(cb_meta_derived, 0, indexer_score_chunk_start_tiles_word);
+        straddle_q_tile = ckernel::read_tile_value(cb_meta_derived, 0, indexer_score_straddle_q_tile_word);
+        straddle_jump_tiles = ckernel::read_tile_value(cb_meta_derived, 0, indexer_score_straddle_jump_tiles_word);
+        cb_derived.pop_front(1);
+    }
     if (num_groups == 0 || num_bands == 0) {
         return;
     }
 
-    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q, cb_k, cb_qk);
     matmul_block_init(
         cb_q, cb_k, 1 /*transpose k*/, 1 /*ct_dim*/, heads_per_dest_pass /*rt_dim*/, head_dim_tiles /*kt_dim*/);
     CircularBuffer(cb_mask).wait_front(num_mask_tiles);  // never popped
@@ -482,7 +512,7 @@ void kernel_main() {
 
     WorkUnitSpan span;
     span.set_valid_k_len_tiles(kv_len_tiles);
-    ShardMajorWorkUnitSpan<shard_block_cyclic, shard_chunk_local, shard_sp> shard_span;
+    ShardMajorWorkUnitSpan<shard_block_cyclic, shard_chunk_local, shard_key_stripes, shard_physical_sp> shard_span;
     shard_span.set_valid_k_len_tiles(kv_len_tiles);
 
     constexpr uint32_t unit_strip = q_tiles_per_unit * k_tiles_per_unit;  // QC x KC accumulator slots
@@ -500,7 +530,7 @@ void kernel_main() {
             uint32_t k_tiles_in_unit = 0;
             if constexpr (fused_ring_enabled) {
                 const uint32_t physical_start = get_arg_val<uint32_t>(10 + band_i);
-                shard_span.set(group, physical_start, k_len_tiles / shard_sp);
+                shard_span.set(group, physical_start, k_len_tiles / shard_physical_sp);
                 k_tiles_in_unit = shard_span.k_tiles();
             } else {
                 span.set(group, band0 + band);

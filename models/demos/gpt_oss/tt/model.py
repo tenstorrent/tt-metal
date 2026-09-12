@@ -119,6 +119,18 @@ class Model:
             mesh_config: Mesh configuration for parallelization
         """
         self.mesh_device = mesh_device
+        # Runtime bounds for the post-prefill tail's slice. Allocated here, before any trace
+        # exists: created lazily on first use they would themselves be stranded across replays.
+        self._tail_slice_start = ttnn.from_torch(
+            torch.zeros(4, dtype=torch.int32),
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        self._tail_slice_end = ttnn.from_torch(
+            torch.zeros(4, dtype=torch.int32),
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
         self.vocab_size = hf_config.vocab_size
         self.hf_config = hf_config
         self.core_grid = ttnn.CoreCoord(8, 8)
@@ -437,8 +449,8 @@ class Model:
                 for t in tiles:
                     t.deallocate(True)
             else:
-                # Single-user eager prefill: the tile position depends on the prompt length, see _select_token_tile.
-                logits_tile = self._select_token_tile(logits, get_last_token)
+                # Single-user eager prefill: the tile position depends on the prompt length, see _slice_token_tile.
+                logits_tile = self._slice_token_tile(logits, get_last_token)
                 logits.deallocate(True)
                 logits = logits_tile
             hidden_states = logits
@@ -653,35 +665,42 @@ class Model:
         applies final norm + lm_head, so this method only slices logits.
         """
         get_last_token = (last_token_idx // 32) * 32
-        return self._select_token_tile(logits, get_last_token)
+        return self._slice_token_tile(logits, get_last_token)
 
-    def _select_token_tile(self, x, start):
-        """[1, 1, S, N] -> [1, 1, 32, N]: rows start .. start + 31 (the tile holding the last prompt token), as a one-hot
-        [32, S] x [S, N] matmul.
+    def _slice_token_tile(self, x, start):
+        """[1, 1, S, N] -> [1, 1, 32, N]: the 32-row tile at `start` (the one holding the last prompt token).
 
-        Not ttnn.slice: the slice op hashes its start/end into the program-cache key, so every distinct last-token
-        tile position (the prompt length modulo the padded length) compiles a NEW program on first use. In a server
-        that first use happens after the decode/prefill traces were captured, and programs compiled then can be
-        overwritten by trace replays (tenstorrent/tt-metal#55588): intermittent garbage or a hang on prompts whose
-        tile the warm-up never saw. Here the only device program is a matmul whose key depends on the shapes alone
-        (warmed with the padded length); the selection itself is data uploaded from the host, so this must not run
-        under trace capture (the batched row-sharded path keeps ttnn.slice with its fixed tile for that reason).
-        The math is an exact copy: one non-zero term per output element, and bf8 rows re-quantise identically block
-        by block."""
-        total = x.shape[2]
-        onehot = torch.zeros(1, 1, 32, total, dtype=torch.bfloat16)
-        onehot[0, 0, torch.arange(32), start + torch.arange(32)] = 1.0
-        onehot_tt = ttnn.from_torch(
-            onehot,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
-        out = ttnn.matmul(onehot_tt, x, dtype=x.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        onehot_tt.deallocate(True)
-        return out
+        The offset is passed at runtime, not as a compile-time attribute. With literal bounds every distinct prompt
+        offset compiles its own slice program (SliceDeviceOperation hashes slice_start/slice_end), and in a server
+        that first happens after the prefill/decode traces are captured, so each one is stranded across trace
+        replays (tenstorrent/tt-metal#55588: intermittent garbage or a hang on prompts whose tile the warm-up never
+        saw -- warm-up only sees bucket-length mock prompts, real prompts are shorter). The tensor-args path needs a
+        tile-aligned slice, which this is (32 rows starting at a multiple of 32), so num_devices = S // 32 selects
+        exactly that window and the program keys on the prefill bucket instead of the offset. The bound tensors are
+        allocated at construction, before any trace exists (created lazily they would be stranded themselves).
+        Used by single-user eager prefill and by the traced-prefill output; the row-sharded batched path keeps the
+        literal slice, whose fixed tile is captured inside its trace."""
+        seq_len = int(x.shape[-2])
+        if seq_len % 32 == 0:
+            for device_tensor, values in (
+                (self._tail_slice_start, [0, 0, start, 0]),
+                (self._tail_slice_end, [1, 1, start + 32, int(x.shape[-1])]),
+            ):
+                ttnn.copy_host_to_device_tensor(
+                    ttnn.from_torch(
+                        torch.tensor(values, dtype=torch.int32),
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                    ),
+                    device_tensor,
+                )
+            return ttnn.slice(
+                input_tensor=x,
+                starts=self._tail_slice_start,
+                ends=self._tail_slice_end,
+                slice_dim=2,
+                num_devices=seq_len // 32,
+            )
+        return ttnn.slice(x, (0, 0, start, 0), (1, 1, start + 32, x.shape[-1]))
 
     def prepare_row_sharded_prefill_iter(
         self, tokens, page_table, prompt_lens, iter_idx, max_padded_len, max_num_blocks, users_per_row_per_iter=1

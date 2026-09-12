@@ -22,9 +22,9 @@ void kernel_main() {
     constexpr auto num_blocks_first_stage = get_arg(args::num_blocks_first_stage);
     constexpr auto block_w = get_arg(args::block_w);
     constexpr auto block_h_const = get_arg(args::block_h);
-    volatile uint32_t block_h_volatile = get_arg(args::block_h);
+    const volatile uint32_t block_h_volatile = get_arg(args::block_h);
     constexpr auto subblock_w_const = get_arg(args::subblock_w);
-    volatile uint32_t subblock_w_volatile = get_arg(args::subblock_w);
+    const volatile uint32_t subblock_w_volatile = get_arg(args::subblock_w);
     constexpr auto num_subblocks_w = get_arg(args::num_subblocks_w);
     constexpr auto num_tiles_per_block = get_arg(args::num_tiles_per_block);
     constexpr bool FLOAT32_DTYPE = get_arg(args::float32_dtype) == 1;
@@ -84,7 +84,7 @@ void kernel_main() {
 
     DataflowBuffer dfb_scaler(dfb_scaler_id);
     DataflowBuffer dfb_x2(dfb_x2_id);
-    DataflowBuffer dfb_ex_partial2(dfb_ex_partial2_id);
+    const DataflowBuffer dfb_ex_partial2(dfb_ex_partial2_id);
     DataflowBuffer dfb_scaler_global(dfb_scaler_global_id);
     DataflowBuffer dfb_ex_external2(dfb_ex_external2_id);
 
@@ -92,9 +92,9 @@ void kernel_main() {
     const uint32_t block_h = (block_w == 1) ? block_h_volatile : block_h_const;
     const uint32_t subblock_w = (block_w <= 2) ? subblock_w_volatile : subblock_w_const;
 
-    int index_subblock_w_offset = 0;
-    int index_h_offset = 0;
-    int index = 0;
+    uint32_t index_subblock_w_offset = 0;
+    uint32_t index_h_offset = 0;
+    uint32_t index = 0;
 
     uint32_t num_tiles_per_partial_result = 2;
 #ifdef RMSNORM
@@ -219,8 +219,8 @@ void kernel_main() {
             }
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t i = 0; i < subblock_w; i++) {
-                pack_tile(i, dfb_x2_id);
+            for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
+                pack_tile(dst_i, dfb_x2_id);
             }
             tile_regs_release();
             index_subblock_w_offset += subblock_w;
@@ -273,7 +273,8 @@ void kernel_main() {
         reconfig_data_format(dfb_scaler_global_id, dfb_ex_external2_id);
         pack_reconfig_data_format(dfb_reduction_out);
         reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(dfb_ex_external2_id, dfb_scaler_global_id, dfb_reduction_out);
-        DataflowBuffer(dfb_reduction_out).reserve_back(num_tiles_per_partial_result * num_tiles_per_allgather_worker);
+        DataflowBuffer(static_cast<uint16_t>(dfb_reduction_out))
+            .reserve_back(static_cast<uint16_t>(num_tiles_per_partial_result * num_tiles_per_allgather_worker));
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {  // loops over height
             tile_regs_acquire();
@@ -298,7 +299,8 @@ void kernel_main() {
             tile_regs_release();
         }
         reduce_uninit();
-        DataflowBuffer(dfb_reduction_out).push_back(num_tiles_per_partial_result * num_tiles_per_allgather_worker);
+        DataflowBuffer(static_cast<uint16_t>(dfb_reduction_out))
+            .push_back(static_cast<uint16_t>(num_tiles_per_partial_result * num_tiles_per_allgather_worker));
         // The global-reduce scaler tile is pushed once (only on all-gather worker cores) and read by
         // tile index throughout the global reduce above without being popped. Pop it once here, inside
         // the same guard that gated the wait, so the buffer is left balanced on every core.

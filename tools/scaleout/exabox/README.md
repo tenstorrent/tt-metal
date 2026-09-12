@@ -133,15 +133,14 @@ The script returns exit codes enabling automated troubleshooting (e.g., Ansible 
 **Cluster health record:** after analyze, emit a portable JSON line (does not change analyze pass/fail):
 
 ```bash
+python3 tools/scaleout/exabox/analyze_validation_results.py "$OUTPUT_DIR"
 python3 tools/scaleout/exabox/report_cluster_health.py \
   --test-type physical \
-  --hosts <hosts> \
-  --analyzer-code "$ANALYSIS_RC" \
-  --artifact-dir validation_output/ \
+  --artifact-dir "$OUTPUT_DIR" \
   --dry-run
 ```
 
-Stdout is always one compact JSON object. Pass `--store-root DIR` (or set `CLUSTER_HEALTH_STORE_ROOT`) if your site persists files; there is no default directory. Layout is `DIR/<YYYY-MM-DD>/<record_id>.json` (one compact JSON line per file). The date directory is created `03770` (setgid, sticky, owner/group write — not world-writable) with DIR's group, so later users in that group can add records the same day instead of hitting the first writer's umask-masked `0755`. Only that directory is chmod'd; DIR and its ancestors are left as they are, so point DIR at a directory whose group already covers everyone who shares the store. Record files themselves follow the caller's umask, so a restrictive umask (`0077`) writes records your log shipper cannot read. Writes use a dotted temp in that same directory then an exclusive (no-clobber) link onto the final name; if that name already exists with different content the file is left in place and stdout omits `record_id`. Scrapers should glob `*.json` and ignore `*.tmp`. Optional `--cabling` / `--deployment` / `--fsd` / `--gsd` / `--rankfile` / `--rank-bindings` fill portable `topology` from native artifacts. Optional `--label key=value` stores opaque site aliases under `labels`. Non-passing records automatically include a concise `labels.failure_reason` derived from the test type and analyzer code; an explicit `--label failure_reason=...` overrides it with caller-specific context.
+`--hosts` and `--analyzer-code` remain valid overrides. For physical, the reporter infers them (and optional `pass_pct`, the analyzer success rate 0–100) from `--artifact-dir` logs when omitted. Other test types still require `--hosts` and `--analyzer-code`. Stdout is always one compact JSON object. Pass `--store-root DIR` (or set `CLUSTER_HEALTH_STORE_ROOT`) if your site persists files; there is no default directory. Layout is `DIR/<YYYY-MM-DD>/<record_id>.json` (one compact JSON line per file). The date directory is created `03770` (setgid, sticky, owner/group write — not world-writable) with DIR's group, so later users in that group can add records the same day instead of hitting the first writer's umask-masked `0755`. Only that directory is chmod'd; DIR and its ancestors are left as they are, so point DIR at a directory whose group already covers everyone who shares the store. Record files themselves follow the caller's umask, so a restrictive umask (`0077`) writes records your log shipper cannot read. Writes use a dotted temp in that same directory then an exclusive (no-clobber) link onto the final name; if that name already exists with different content the file is left in place and stdout omits `record_id`. Scrapers should glob `*.json` and ignore `*.tmp`. Optional `--cabling` / `--deployment` / `--fsd` / `--gsd` / `--rankfile` / `--rank-bindings` fill portable `topology` from native artifacts. Optional `--label key=value` stores opaque site aliases under `labels`. Non-passing records automatically include a concise `labels.failure_reason` derived from the test type and analyzer code; an explicit `--label failure_reason=...` overrides it with caller-specific context.
 
 Replay leftover dumps without re-running validation:
 
@@ -305,28 +304,47 @@ For day-to-day use when you just need to verify a cluster is working. `recover.s
   mpirun --host "$HOSTS" hostname   # prints each hostname; if it hangs or prompts, fix SSH first
   ```
 
-**On Exabox, always run from the vetted pre-built path — no image, nothing to compile:**
+**On Exabox, use the `recover-hosts` helper:**
+```bash
+export HOSTS=<comma-separated-hosts>
+recover-hosts
+```
+
+`recover-hosts` is a shell function installed on every Exabox host (`/etc/profile.d/exabox-helpers.sh`, from exabox-infra `roles/shell_helpers`). Use it instead of calling `recover.sh` yourself — it does the bookkeeping that a hand-run misses:
+
+- gates on `scan-hosts` and aborts if a host is unreachable
+- runs from the vetted pre-built path, so there is nothing to clone or build
+- pins `--mpi-if ens5f0np0` and `--config 4x32`
+- writes logs to a durable per-run directory under `/data/dcamp/cluster-health-check/logs/recover/` and prints the path
+- files a cluster health record, so the run shows up on the Exabox Cluster Health dashboard
+
+Use `recover-hosts-ill-wait` on a stubborn cluster — same helper with `--max-attempts 15`.
+
+Arguments you append are forwarded to `recover.sh` and override the helper's defaults, so `recover-hosts --num-iterations 10` works. Don't pass your own `--output`: the helper already sets one, and overriding it leaves the health record pointing at an empty directory.
+
+The helpers are defined for interactive shells only, so they are not available in `ssh <host> '<command>'` — use `ssh -t <host>` and run from the prompt.
+
+**Running `recover.sh` directly** is still supported, and is what you want off Exabox or when testing your own build:
 ```bash
 cd /data/local-syseng-manual/tt-metal-recover
 ./tools/scaleout/exabox/recover.sh --hosts <hosts> --mpi-if ens5f0np0
-# or for 8x16 configuration:
-./tools/scaleout/exabox/recover.sh --hosts <hosts> --config 8x16 --mpi-if ens5f0np0
 ```
 
-This is the path everyone should use for a quick health check — it's already built and kept current, so you don't need to clone or build anything. (On another site the NIC name differs, so drop `--mpi-if` to auto-detect, or pin the right interface.)
+Nothing records a direct run, so it never reaches the dashboard — the script prints a notice saying so. (On another site the NIC name differs, so drop `--mpi-if` to auto-detect, or pin the right interface.)
 
 Look for `All Detected Links are healthy` in the output. No banner means it isn't done.
 
 **Rules — do / don't:**
 
 DO:
-- **Always run from the vetted path** `/data/local-syseng-manual/tt-metal-recover` — pre-built, no image needed.
-- **Pin the MPI interface** with `--mpi-if ens5f0np0` on Exabox (other sites: check `ip link`, or omit `--mpi-if` to auto-detect).
+- **Use `recover-hosts` on Exabox** — it runs the vetted pre-built path, keeps the logs, and records the run.
+- **Pin the MPI interface** with `--mpi-if ens5f0np0` if you are running `recover.sh` directly (other sites: check `ip link`, or omit `--mpi-if` to auto-detect). `recover-hosts` already does this.
 - **If a run fails, power-cycle the affected hosts via `#bmc-bots` and re-run** before escalating — this clears most transient stalls and hangs.
 - **Confirm `All Detected Links are healthy`** before calling it done.
 
 DON'T:
-- **Don't run from your own checkout** (`/data/<user>/tt-metal`) unless you specifically need to test a local change — use the vetted path.
+- **Don't call `recover.sh` by hand on Exabox** when `recover-hosts` is available — the run is not recorded and does not appear on the cluster health dashboard.
+- **Don't run from your own checkout** (`/data/<user>/tt-metal`) unless you specifically need to test a local change — use `recover-hosts`, or the vetted path.
 - **Don't reach for image-based or hand-built runs** unless the vetted path can't do what you need.
 - **Don't flash or update firmware** on cluster machines — ever. They run debug FW (see [Do NOT Update Firmware on Cluster Machines](./TROUBLESHOOTING.md#do-not-update-firmware-on-cluster-machines)).
 - **Don't power-cycle on your own** — go through `#bmc-bots` (coordinate with the infra/cloud cluster managers).
@@ -353,6 +371,8 @@ If you see `could not access or execute an executable`, the build is missing —
 **Tolerating missing cables:** by default, recovery fails if any expected cable is missing — either with `Encountered unrecoverable state` after 5 retrain attempts, or by early-exiting after a successful retrain without sending traffic. To validate the rest of the cluster when one or more cables are down, forward `--min-connections N` (relaxed mode, ASIC pair passes if it has at least N connections) via `--validation-args` and/or pass `--rerun-on-retrain` (rerun validation after a successful retrain so traffic actually runs).
 
 ```bash
+recover-hosts --validation-args "--min-connections 3" --rerun-on-retrain
+# or, running the script directly:
 ./tools/scaleout/exabox/recover.sh --hosts <hosts> --validation-args "--min-connections 3" --rerun-on-retrain
 ```
 

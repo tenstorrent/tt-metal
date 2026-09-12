@@ -53,10 +53,6 @@
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
-class IDevice;
-}  // namespace tt::tt_metal
-
-namespace tt::tt_metal {
 
 using std::map;
 using namespace tt;
@@ -425,7 +421,7 @@ void run_single_core_unary_broadcast_quasar(
         in_t, out_t, num_tiles, test_config.broadcast_dim, packed_tilized_input, golden_packed_tilized_output);
     slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), packed_tilized_input);
 
-    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program));
 
     std::vector<uint32_t> dest_buffer_data;
     slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), dest_buffer_data);
@@ -637,7 +633,7 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixUnaryBcastRowIdFreeGolden) {
     auto golden = ::unit_tests::compute::gold_standard_tilize(bcast_packed, config);
 
     auto result = unit_tests::llk::single_core::run_unary(
-        *this->devices_.at(0),
+        this->device(),
         tt::DataFormat::Float16_b,
         tt::DataFormat::Float16_b,
         device_input,

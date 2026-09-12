@@ -24,11 +24,11 @@
 #include <utility>
 #include <vector>
 #include "llrt/hal_proc_set.hpp"  // HalProcessorSet — internal, no full Hal singleton
-#include "core_coord.hpp"
-#include "dispatch_core_common.hpp"  // For DispatchCoreConfig
 #include "tt_target_device.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>  // For DispatchCoreConfig
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h"
 
@@ -388,6 +388,9 @@ class RunTimeOptions {
 
     // Bypass FD CQ payload copies for simulator tensor preloads (TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1)
     bool simulator_direct_tensor_writes = false;
+
+    // NOC API version for Quasar
+    uint32_t quasar_noc_api_version = 2;
 
     // To be used for NUMA node based thread binding
     bool numa_based_affinity = false;
@@ -935,6 +938,8 @@ public:
     void set_dram_backed_cq(bool enable) { dram_backed_cq = enable; }
 
     bool get_simulator_direct_tensor_writes() const { return simulator_direct_tensor_writes; }
+
+    uint32_t get_quasar_noc_api_version() const { return quasar_noc_api_version; }
 
     std::optional<uint32_t> get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
 

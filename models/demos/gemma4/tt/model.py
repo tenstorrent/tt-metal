@@ -15,7 +15,6 @@ Supports both prefill and decode modes with paged attention.
 Compatible with tt_transformers Generator interface.
 """
 
-
 import os
 
 import torch
@@ -266,6 +265,18 @@ class Gemma4Model:
         transformation_mats=None,
     ):
         self.mesh_device = mesh_device
+        # Keep prompt-dependent slice bounds in persistent buffers. Literal
+        # offsets compile a new program after prefill traces are already live.
+        self._tail_slice_start = ttnn.from_torch(
+            torch.zeros(4, dtype=torch.int32),
+            device=mesh_device,
+            mesh_mapper=self._replicate_to_mesh_mapper(),
+        )
+        self._tail_slice_end = ttnn.from_torch(
+            torch.zeros(4, dtype=torch.int32),
+            device=mesh_device,
+            mesh_mapper=self._replicate_to_mesh_mapper(),
+        )
         self.hf_config = hf_config
         self.mesh_config = mesh_config
         self.hidden_size = hf_config.hidden_size
@@ -1820,10 +1831,14 @@ class Gemma4Model:
         lst = getattr(self, "_g4_retired_dev_tensors", None)
         if lst:
             for t in lst:
-                try:
-                    t.deallocate(True)
-                except Exception:
-                    pass
+                # Already-freed tensors are the benign case (the shared
+                # consumption released them); a real deallocation failure
+                # must PROPAGATE — continuing would let the next trace
+                # replay run with a retired buffer still allocated (the
+                # exact #30187 aliasing this scavenge exists to prevent).
+                if hasattr(t, "is_allocated") and not t.is_allocated():
+                    continue
+                t.deallocate(True)
             lst.clear()
 
     def _g4_retire(self, t):
@@ -1860,10 +1875,23 @@ class Gemma4Model:
         # decode may be the next call).
         self._g4_retire_scavenge()
         get_last_token = (last_token_idx // 32) * 32
+        for device_tensor, values in (
+            (self._tail_slice_start, [0, 0, get_last_token, 0]),
+            (self._tail_slice_end, [1, 1, get_last_token + 32, int(hidden_states.shape[-1])]),
+        ):
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(
+                    torch.tensor(values, dtype=torch.int32),
+                    mesh_mapper=self._replicate_to_mesh_mapper(),
+                ),
+                device_tensor,
+            )
         sliced = ttnn.slice(
-            hidden_states,
-            (0, 0, get_last_token, 0),
-            (1, 1, get_last_token + 32, hidden_states.shape[-1]),
+            input_tensor=hidden_states,
+            starts=self._tail_slice_start,
+            ends=self._tail_slice_end,
+            slice_dim=2,
+            num_devices=int(hidden_states.shape[-2]) // 32,
         )
         if batched and hidden_states is not sliced:
             hidden_states.deallocate(True)

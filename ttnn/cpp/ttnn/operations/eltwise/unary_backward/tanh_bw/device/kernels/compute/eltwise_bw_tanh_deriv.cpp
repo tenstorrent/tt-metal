@@ -2,60 +2,52 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Compute kernel for tanh backward using sech²(x) = 4·exp(-2|x|) / (1 + exp(-2|x|))²
-// Avoids catastrophic cancellation in the naive 1 - tanh²(x) formula.
+// Uses sech^2(x) = 4*exp(-2*abs(x)) / (1+exp(-2*abs(x)))^2 to avoid catastrophic
+// cancellation in the naive 1-tanh(x)^2 formula.
 
 #include <cstdint>
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/compute/common.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/tanh_derivative.h"
-#include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/compute_kernel_api.h"
-#include "api/dataflow/dataflow_buffer.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/activations.hpp"  // TanhDerivative
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
+
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
-    uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
-    uint32_t per_core_block_size = get_arg_val<uint32_t>(1);
+    uint32_t per_core_tile_cnt = get_arg_val<uint32_t>(0);
 
-    constexpr auto cb_grad_out = tt::CBIndex::c_0;
-    constexpr auto cb_input = tt::CBIndex::c_1;
-    constexpr auto cb_grad_in = tt::CBIndex::c_2;
+    constexpr auto dfb_grad_out_id = tt::CBIndex::c_0;
+    constexpr auto dfb_input_id = tt::CBIndex::c_1;
+    constexpr auto dfb_grad_in_id = tt::CBIndex::c_2;
 
-    DataflowBuffer exp_dfb_grad_out(cb_grad_out);
-    DataflowBuffer exp_dfb_input(cb_input);
-    DataflowBuffer exp_dfb_grad_in(cb_grad_in);
+    compute_kernel_hw_startup(dfb_grad_out_id, dfb_grad_in_id);
 
-    compute_kernel_hw_startup(cb_grad_out, cb_grad_in);
-    copy_init(cb_grad_out);
-    tanh_derivative_tile_init<false>();
-    mul_binary_tile_init();
+    const auto shape = ckl::IterationShape::tiles(per_core_tile_cnt);
 
-    for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
-        exp_dfb_grad_in.reserve_back(per_core_block_size);
-        exp_dfb_grad_out.wait_front(per_core_block_size);
-        exp_dfb_input.wait_front(per_core_block_size);
-
-        for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            tile_regs_acquire();
-
-            copy_tile(cb_grad_out, i, 0);    // dest[0] = grad_out
-            copy_tile(cb_input, i, 1);       // dest[1] = input
-            tanh_derivative_tile<false>(1);  // dest[1] = sech²(input)
-            mul_binary_tile(0, 1, 0);        // dest[0] = grad_out * sech²(input)
-
-            tile_regs_commit();
-            tile_regs_wait();
-
-            pack_tile(0, cb_grad_in);
-
-            tile_regs_release();
-        }
-
-        exp_dfb_grad_out.pop_front(per_core_block_size);
-        exp_dfb_input.pop_front(per_core_block_size);
-        exp_dfb_grad_in.push_back(per_core_block_size);
-    }
+    ckl::eltwise_chain(
+        shape,
+        // dest[0] = grad_out
+        ckl::CopyTile<
+            ckl::input(
+                dfb_grad_out_id,
+                ckl::WaitPolicy::PerBlockSize,
+                ckl::PopPolicy::PerBlockSize,
+                ckl::InputTileMapping::Block,
+                ckl::DataFormatReconfig::Disabled),
+            ckl::Dst::D0>{},
+        ckl::CopyTile<
+            ckl::input(
+                dfb_input_id,
+                ckl::WaitPolicy::PerBlockSize,
+                ckl::PopPolicy::PerBlockSize,
+                ckl::InputTileMapping::Block,
+                ckl::DataFormatReconfig::Disabled),
+            ckl::Dst::D1>{},
+        ckl::TanhDerivative<ckl::Approx::Exact, ckl::Dst::D1>{},     // dest[1] = sech²(input)
+        ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},  // dest[0] = grad_out * sech²(input)
+        ckl::PackTile<ckl::output(
+            dfb_grad_in_id,
+            ckl::ReservePolicy::PerBlockSize,
+            ckl::PushPolicy::PerBlockSize,
+            ckl::DataFormatReconfig::Disabled)>{});
 }
