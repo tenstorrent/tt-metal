@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import torch
 from loguru import logger
 
@@ -156,6 +158,31 @@ class Model:
             shard_batch_to_mesh_dim=0,
         )
 
+        # Attention decode places user b's Q/K/V shard on the core RotarySetup put user b's cos/sin/trans_mat
+        # on (rotary_embedding_llama reads them from the local core's L1). Both derive the placement from
+        # the same rule (ProgramConfig.get_decode_user_grid mirrors RotarySetup.get_batch_grid); fail at
+        # construction rather than silently rotating users with each other's angles if they ever diverge.
+        if not users_row_sharded:
+            from .attention.config import ProgramConfig as _AttnProgramConfig
+
+            user_cores, _ = _AttnProgramConfig.get_decode_user_grid(mesh_device, max_local_batch_size)
+            rope_grid = self.rope_setup.batch_grid
+            if isinstance(rope_grid, ttnn.CoreGrid):
+                # RotarySetup returns a CoreGrid on Blackhole for batches that are multiples of 32 (rotary_embedding_llama
+                # then lays the users out row-major over it); normalise so the comparison below covers that case too.
+                rope_grid = ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(rope_grid.x - 1, rope_grid.y - 1))}
+                )
+            expected = [(c.x, c.y) for c in ttnn.corerange_to_cores(user_cores, None, True)]
+            rope_cores = [(c.x, c.y) for c in ttnn.corerange_to_cores(rope_grid, None, True)]
+            actual = rope_cores[: len(expected)]
+            if len(rope_cores) < len(expected) or expected != actual:
+                raise RuntimeError(
+                    f"RoPE core placement {actual[:4]}... does not match attention's per-user grid "
+                    f"{expected[:4]}... for max_local_batch_size={max_local_batch_size}; update "
+                    "ProgramConfig.get_decode_user_grid to mirror RotarySetup.get_batch_grid"
+                )
+
         # Keep references for compatibility
         self.cos_matrix = self.rope_setup.cos_matrix
         self.sin_matrix = self.rope_setup.sin_matrix
@@ -199,6 +226,12 @@ class Model:
             )
             for layer_idx in range(hf_config.num_hidden_layers)
         ]
+        # Compile the prompt-data-dependent prefill programs before any trace exists (experts/prefill.py
+        # warmup_prefill_programs; all layers share them). GPT_OSS_PREFILL_PROGRAM_WARMUP=0 skips it.
+        if os.getenv("GPT_OSS_PREFILL_PROGRAM_WARMUP", "1") == "1" and self.layers:
+            experts = getattr(self.layers[0].mlp, "experts", None)
+            if hasattr(experts, "warmup_prefill_programs"):
+                experts.warmup_prefill_programs((1024, 64 * 1024))  # both down-split lengths (1024, and 512 above 32K)
         self.norm = RMSNorm(
             mesh_device,
             hf_config,
@@ -352,6 +385,7 @@ class Model:
         batch_size=1,
         skip_lm_head=False,
         page_tables_per_layer=None,
+        routing_mask=None,
     ):
         """
         Shared forward pass through decoder layers and final projection.
@@ -396,6 +430,7 @@ class Model:
                 is_decode=is_decode,
                 user_id=user_id,
                 batch_size=batch_size,
+                routing_mask=routing_mask,
             )
         logits = hidden_states
 
@@ -403,7 +438,8 @@ class Model:
             if len(logits.shape) == 3:
                 logits = ttnn.unsqueeze(logits, dim=1)
             if batch_size > 1:
-                # Batch>1: tokens are concatenated [1,1,B*S,H]. Extract each user's 32-token tile.
+                # Batch>1 (row-sharded batched prefill, possibly under trace capture with a fixed tile): tokens are
+                # concatenated [1,1,B*S,H]. Extract each user's 32-token tile.
                 per_user_seq = logits.shape[2] // batch_size
                 tiles = []
                 for b in range(batch_size):
@@ -415,11 +451,10 @@ class Model:
                 for t in tiles:
                     t.deallocate(True)
             else:
-                logits_sliced = ttnn.slice(
-                    logits, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, logits.shape[-1])
-                )
+                # Single-user eager prefill: the tile position depends on the prompt length, see _slice_token_tile.
+                logits_tile = self._slice_token_tile(logits, get_last_token)
                 logits.deallocate(True)
-                logits = logits_sliced
+                logits = logits_tile
             hidden_states = logits
 
         if skip_lm_head:
@@ -505,6 +540,18 @@ class Model:
             )
             ttnn.copy_host_to_device_tensor(host_pt, persistent[i])
 
+    def _decode_row_mask(self, current_pos):
+        """[1, 1, B, 1] bf16 tile: 1.0 for the rows of this decode step that hold a user (position >= 0), 0.0 for the
+        rows a server pads the batch with (position -1). Derived on device from the position tensor, which is already
+        a decode-trace input, so it is trace-safe; the MLP zeroes the padding rows' routing weights with it."""
+        batch = current_pos.shape[-1]
+        pos = ttnn.to_layout(ttnn.reshape(current_pos, (1, 1, batch, 1)), ttnn.TILE_LAYOUT)
+        pos_bf16 = ttnn.typecast(pos, ttnn.bfloat16)  # only the sign matters (-1 vs >= 0)
+        pos.deallocate(True)
+        mask = ttnn.ge(pos_bf16, 0.0)
+        pos_bf16.deallocate(True)
+        return mask
+
     def ttnn_decode_forward(
         self,
         tokens,
@@ -528,6 +575,16 @@ class Model:
         """
         # For non-row-sharded b<32, token buffer is padded to 32 — only embed real tokens
         actual_batch = current_pos.shape[-1]
+        if not self.users_row_sharded and actual_batch != self.max_local_batch_size:
+            # KV-update shard grid, RoPE cos/sin batch and the sampling lanes are all sized from
+            # max_local_batch_size at construction; a partial batch must be padded by the caller
+            # (unused slots: any token, position -1 is skipped by the on-device position increment).
+            raise ValueError(
+                f"Decode got {actual_batch} users but the model was built for max_local_batch_size="
+                f"{self.max_local_batch_size}; pad the batch to the configured size. (If this fires from "
+                "Generator's decode-trace warmup, the warmup page table has fewer rows than the batch: "
+                "run with warmup_prefill=False and pass the full page table to the first prefill.)"
+            )
         if not self.users_row_sharded and tokens.shape[-1] > actual_batch:
             tokens_for_embed = tokens[:, :, :, :actual_batch]
         else:
@@ -540,6 +597,7 @@ class Model:
         rope_mats = self.rope_setup.get_rot_mats(self.get_tt_pos_idx(rot_mat_idxs))
 
         # Forward through layers and head (shared with prefill)
+        routing_mask = self._decode_row_mask(current_pos)
         out = self._forward_layers_and_head(
             hidden_states=input_embeds,
             rope_mats=rope_mats,
@@ -548,7 +606,9 @@ class Model:
             kv_cache=kv_cache,
             is_decode=True,
             page_tables_per_layer=page_tables_per_layer,
+            routing_mask=routing_mask,
         )
+        routing_mask.deallocate(True)
 
         if on_device_logits:
             assert self.sampling is not None, (
@@ -622,19 +682,26 @@ class Model:
         applies final norm + lm_head, so this method only slices logits.
         """
         get_last_token = (last_token_idx // 32) * 32
-        seq_len = int(logits.shape[-2])
-        # Pass the offset at runtime rather than as a compile-time attribute. With literal bounds
-        # every distinct prompt offset compiles its own slice program, and this runs after the
-        # prefill traces are captured, so each one is stranded across trace replays. Warmup cannot
-        # cover it either: it only sees bucket-length mock prompts, and real prompts are shorter.
-        #
-        # The tensor-args path needs a tile-aligned slice, which this already is - 32 rows starting
-        # at a multiple of 32 - so num_devices = seq_len // 32 selects exactly that window and the
-        # program keys on the prefill bucket instead of the offset.
+        return self._slice_token_tile(logits, get_last_token)
+
+    def _slice_token_tile(self, x, start):
+        """[1, 1, S, N] -> [1, 1, 32, N]: the 32-row tile at `start` (the one holding the last prompt token).
+
+        The offset is passed at runtime, not as a compile-time attribute. With literal bounds every distinct prompt
+        offset compiles its own slice program (SliceDeviceOperation hashes slice_start/slice_end), and in a server
+        that first happens after the prefill/decode traces are captured, so each one is stranded across trace
+        replays (tenstorrent/tt-metal#55588: intermittent garbage or a hang on prompts whose tile the warm-up never
+        saw -- warm-up only sees bucket-length mock prompts, real prompts are shorter). The tensor-args path needs a
+        tile-aligned slice, which this is (32 rows starting at a multiple of 32), so num_devices = S // 32 selects
+        exactly that window and the program keys on the prefill bucket instead of the offset. The bound tensors are
+        allocated at construction, before any trace exists (created lazily they would be stranded themselves).
+        Used by single-user eager prefill and by the traced-prefill output; the row-sharded batched path keeps the
+        literal slice, whose fixed tile is captured inside its trace."""
+        seq_len = int(x.shape[-2])
         if seq_len % 32 == 0:
             for device_tensor, values in (
-                (self._tail_slice_start, [0, 0, get_last_token, 0]),
-                (self._tail_slice_end, [1, 1, get_last_token + 32, int(logits.shape[-1])]),
+                (self._tail_slice_start, [0, 0, start, 0]),
+                (self._tail_slice_end, [1, 1, start + 32, int(x.shape[-1])]),
             ):
                 ttnn.copy_host_to_device_tensor(
                     ttnn.from_torch(
@@ -644,19 +711,13 @@ class Model:
                     device_tensor,
                 )
             return ttnn.slice(
-                input_tensor=logits,
+                input_tensor=x,
                 starts=self._tail_slice_start,
                 ends=self._tail_slice_end,
                 slice_dim=2,
                 num_devices=seq_len // 32,
             )
-
-        logits = ttnn.slice(
-            logits,
-            (0, 0, get_last_token, 0),
-            (1, 1, get_last_token + 32, logits.shape[-1]),
-        )
-        return logits
+        return ttnn.slice(x, (0, 0, start, 0), (1, 1, start + 32, x.shape[-1]))
 
     def prepare_row_sharded_prefill_iter(
         self, tokens, page_table, prompt_lens, iter_idx, max_padded_len, max_num_blocks, users_per_row_per_iter=1
