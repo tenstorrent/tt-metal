@@ -2486,121 +2486,32 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     if (!rotated_group_reject.empty()) {
         rotated_groups.clear();
     }
-    // Uniform for row-wide mcast (always grid_size.x). Variable-size groups need a packing rule
-    // instead of the divide/modulo below; that arrives with padded head chains, not before.
+    // Each accepted group contains exactly grid_size.x members by construction.
+    // Variable-size groups would need a different packing rule for the divide/modulo below.
     const uint32_t rotated_group_size =
         rotated_groups.empty() ? 0 : static_cast<uint32_t>(rotated_groups.front().members.size());
-    const bool rotated_groups_uniform =
-        !rotated_groups.empty() && std::all_of(rotated_groups.begin(), rotated_groups.end(), [&](const auto& g) {
-            return g.members.size() == rotated_group_size;
-        });
     // Groups hosting floats on one iteration. The win comes from float-free groups, so at
     // rotated_groups_needed == rotated_groups.size() ownership never actually moves.
     const uint32_t rotated_groups_needed =
         rotated_group_size ? tt::div_up(rotated_float_chunks, rotated_group_size) : 0;
-    // A/B kill switch: RING_MLA_DISABLE_ROTATED_Q_SPLIT=1 forces the static flat split. Parsed
-    // rather than presence-tested so "=0" leaves the feature on, and latched once per process --
-    // toggling it between dispatches has no effect, so A/B across two runs.
-    static const bool rotated_q_split_disabled = []() {
-        const char* value = std::getenv("RING_MLA_DISABLE_ROTATED_Q_SPLIT");
-        return value != nullptr && value[0] != '\0' && std::string_view(value) != "0";
-    }();
-    // Head-chain paths (separate-V shared-K) opt-in: RING_MLA_ROTATE_SEPARATE_V=1.
-    // The MECHANISM for these is present and was verified correct -- the head chains are built
-    // after the rotated-Q-split decision precisely so their per-(head, core) forwarding counts
-    // describe the rotated split. It was gated out (commit 409d944b14d) not because it was broken
-    // but because the rule that ENABLED it was fitted to four points and predicted backwards once
-    // grid rows were varied, while the feature measured -11.4% at 110 cores and -2.7% at 48.
-    // Restoring it as an explicit opt-in keeps all three things that mattered: the case is
-    // SUPPORTED and testable, no measured regression ships, and no unexplainable perf guard
-    // re-enters the default predicate. Do NOT re-fit an enablement rule to turn this on by
-    // default -- that is exactly what was removed.
+    // Separate-V rotation is opt-in because it regressed performance on some configurations.
     static const bool rotate_head_chain_opt_in = []() {
         const char* value = std::getenv("RING_MLA_ROTATE_SEPARATE_V");
         return value != nullptr && value[0] != '\0' && std::string_view(value) != "0";
     }();
-    // Validated by sweeping RING_MLA_SDPA_GRID_OVERRIDE on ring-8: PCC passes for base 1..9 over
-    // rows_needed 1..9 and floats 0..80, plus the decline cases, with no perf regression where it
-    // engages. The win tracks float-free rows (grid_size.y - rotated_groups_needed), not base.
-    // Per-config numbers are in the commit message; the attempt trail is on
-    // backup/ring-mla-work-split-pre-squash.
-    //
-    // Every term below is load-bearing; the first thing each one breaks:
-    //   rotated_groups       a lockstep group exists only under row-wide MCAST, whose injector
-    //                        waits for every receiver before each broadcast; that barrier is what
-    //                        makes one +1 core cost its whole group a slot every iteration. Linear
-    //                        chains rendezvous pairwise and are pipelines, so there is nothing to
-    //                        rebalance -- they are not excluded, they gain provably zero.
-    //                        `uniform` guards the divide/modulo float placement below.
-    //   build_kv_chains      carries B == 1. Removing it is a SILENT wrong answer: the row mcast
-    //                        stays live and the injector multicasts K for ITS nb to peers whose
-    //                        rotated slot decodes a different nb.
-    //   !use_head_chain      "exactly one live chain family". A second family (separate-V's or
-    //                        MHA's per-head V chain) takes its forwarding counts from the STATIC
-    //                        split -> V relay mismatch -> hang.
-    //   !args.is_balanced    two independent breaks. Zigzag counts extra chunks in PAIRS while this
-    //                        schedule appends ONE float per owner, leaving ids unscheduled and a
-    //                        receiver waiting on a donor that never runs (MEASURED: HANGS). And
-    //                        balanced_skip_q's parity desyncs injector from receivers at the float
-    //                        slot -- the harder of the two; fix it first if retrying. Kept broader
-    //                        than !enable_zigzag_balancing since narrowing admits balanced chunked
-    //                        prefill, which nothing in the tree exercises and which hangs on failure.
-    //   base_chunks >= 1     definitional; at base 0 the compute static_assert fires first.
-    //
-    // Removed terms: !kv_pad_rotation_enabled and the full-mask check (both subsumed by ordinal
-    // indexing), and rotated_float_chunks != 0 / rotated_groups_needed < grid_size.y (cost guards,
-    // provable no-ops). The full-mask value still feeds the decline log line.
+    // Active-iteration indexing handles partial masks and KV padding. No remainder
+    // or no change in ownership needs no special exclusion.
     const bool use_rotated_q_split =
-        !rotated_q_split_disabled &&
-        // A lockstep group must exist. Groups come from whichever row-wide MCAST family is live --
-        // the shared-K batch chain (latent-V) or the GQA-grouped K/V chain -- and only mcast makes a
-        // group: its injector waits for every receiver before each broadcast, which is what makes
-        // one +1-chunk core cost its whole group a slot on EVERY ring iteration. Store-and-forward
-        // chains rendezvous pairwise and are pipelines, so they have nothing to rebalance.
-        // `uniform` guards the divide/modulo float placement below, and implies non-empty.
-        // build_kv_chains carries B == 1; dropping it is a SILENT wrong answer, because the row
-        // mcast stays live and the injector multicasts K for ITS nb to peers whose rotated slot
-        // decodes a different nb.
-        rotated_groups_uniform && build_kv_chains &&
-        // Exactly ONE chain family may be live. !use_head_chain is precisely that condition:
-        // uses_v_head_chain is false for latent-V (v_shares_k_buffer) and for GQA-grouped KV, and
-        // true for separate-V and MHA. With a head chain live, its per-(head, core) forwarding
-        // counts come from the STATIC split, so a migrated float desyncs the V relay and hangs.
-        // separate-V IS reachable, via the opt-in below: the head chains are rebuilt from the
-        // ROTATED base ranges (see the head_work/head_segments rebuild inside the rotation branch),
-        // which is what makes their forwarding counts describe the split that actually ships. That
-        // rebuild is load-bearing -- without it this deadlocks; it is not about mcast padding.
-        // MHA stays out for a different reason: it has no row-wide mcast family at all, so no
-        // group exists and the term above already excludes it.
-        (!use_head_chain ||
-         // Head-chain paths need the base/float boundary to land on a HEAD boundary, so a float
-         // never lands on a core outside its head's V chain (the B2 problem). This is the
-         // condition the removed branch carried, and it is a real structural requirement, not a
-         // perf heuristic -- unlike the even-fill rule beside it, which is NOT restored.
-         (rotate_head_chain_opt_in && num_q_chunks != 0 && (rotated_base_chunks * num_cores) % num_q_chunks == 0)) &&
-        // Both were previously subsumed by v_shares_k_buffer. GQA satisfies !use_head_chain
-        // without implying either, so they are now explicit: the compute kernel static_asserts
-        // the streaming path, and the op rejects latent-V + attention sink outright.
+        // Valid groups are full multicast rows with Q work, implying num_q_chunks > 0.
+        // build_kv_chains requires B == 1 so a row cannot mix batches' K/V data.
+        !rotated_groups.empty() && build_kv_chains &&
+        // Separate-V rebuilds its V chains from base work. Keep the remainder on
+        // separate heads to avoid unmatched receives from those chains.
+        (!use_head_chain || (rotate_head_chain_opt_in && (rotated_base_chunks * num_cores) % num_q_chunks == 0)) &&
+        // Only streaming compute consumes rotated IDs. Sink paths remain excluded;
+        // balanced allocation and per-Q skips are incompatible with this schedule.
         use_streaming_compute && !use_attention_sink && !args.is_balanced &&
-        // Partial active masks are handled, not excluded: the schedule is indexed by ordinal within
-        // the active subsequence (rotated_active_ordinal), so consecutive ordinals are consecutive
-        // EXECUTED iterations and a skip cannot split the donor-signal / receiver-wait pair. That is
-        // what unblocked kv-pad, where the mask is device-derived from trace metadata the host never
-        // sees: the host need not agree, since every per-ordinal entry it emits is already a valid
-        // partition of all Q chunks and the kernels choose which get used. The last active iteration
-        // needs no guard either -- it takes the final-output branch and creates no deferred save.
-        //
-        // Degenerate cases need no guard, both measured: at rotated_float_chunks == 0 each core's
-        // rotated range is identical to its static one, and at rotated_groups_needed == grid_size.y
-        // the cycle merely permutes which row hosts which float.
-        //
-        // rotated_base_chunks >= 1 is required: the reader decodes slot (rotated_my_count - 1) on
-        // padded iterations and would underflow at 0. base == 1 is the largest win, being the worst
-        // static imbalance.
-        // Reaching base == 1 took three writer/reader fixes, all no-ops at base >= 3: pinning
-        // need_q_read and single_q_chunk to the fixed slot count rather than the static one,
-        // comparing flat chunk ids for the early flush instead of the positional q_per_core == 2
-        // proxy, and postponing the cross-ring prefetch when it targets this slot's own chunk.
+        // Every core needs a real chunk: padded reader slots decode my_count - 1.
         rotated_base_chunks >= 1;
 
     struct RotatedIterSched {
@@ -2777,8 +2688,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             TT_FATAL(
                 sem_id < kSemaphoresPerCore,
                 "Ring MLA rotated Q split needs {} handoff semaphores, but the program has already "
-                "allocated {} and a core supports {}. Free some (e.g. skip the V head chain) or set "
-                "RING_MLA_DISABLE_ROTATED_Q_SPLIT=1.",
+                "allocated {} and a core supports {}. Reduce semaphore usage (e.g. skip the V head chain).",
                 rotated_handoff_sem_count(ring_size),
                 desc.semaphores.size(),
                 kSemaphoresPerCore);
@@ -2823,7 +2733,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         log_info(
             tt::LogOp,
             "Ring joint rotated Q split declined (base={} floats={} groups_needed={} of {} groups, "
-            "ring_size={}, disabled={} balanced={} head_chain={} streaming={} groups=\"{}\"; "
+            "ring_size={}, balanced={} head_chain={} streaming={} groups=\"{}\"; "
             "would-be slots ideal {} vs flat {}; cores={} num_q_chunks={} heads_per_core_exact={}); "
             "using the static flat split.",
             rotated_base_chunks,
@@ -2831,7 +2741,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             rotated_groups_needed,
             rotated_groups.size(),
             ring_size,
-            rotated_q_split_disabled,
             args.is_balanced,
             use_head_chain,
             use_streaming_compute,
