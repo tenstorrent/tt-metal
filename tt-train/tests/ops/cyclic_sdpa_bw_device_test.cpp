@@ -772,6 +772,20 @@ TEST(CyclicSdpaBwIdentityTest, ResidencyIsTheMoreAccurateColumnPath) {
               << "\n";
     EXPECT_LE(resident_dk, reload_dk);
     EXPECT_LE(resident_dv, reload_dv);
+
+    // An absolute bound as well as a relative one. Dropping the compute
+    // kernels from the default HiFi4 to HiFi2 -- on the argument that every
+    // matmul operand is bfloat16, so there should be no mantissa bits for the
+    // extra fidelity phases to resolve -- made dK's error 9.8e-3 against the
+    // 1.05e-3 here, nine times worse, and bought 3 to 4% of runtime. Every
+    // other test in this file passed with that change in place: the
+    // gradient-accuracy tolerances are loose enough to hide it, and the
+    // relative comparison above only asks that residency beat the reload,
+    // which it still did. This is the assertion that catches it.
+    EXPECT_LT(resident_dk, 2.5e-3F);
+    EXPECT_LT(resident_dv, 2.5e-3F);
+    EXPECT_LT(reload_dk, 2.5e-3F);
+    EXPECT_LT(reload_dv, 2.5e-3F);
 }
 
 // A first indication of whether any of this is faster, not a verdict. The
