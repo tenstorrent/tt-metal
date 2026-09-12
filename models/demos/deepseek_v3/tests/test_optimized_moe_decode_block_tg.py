@@ -909,6 +909,25 @@ def test_optimized_moe_decode_block(
         tt_preallocated_dispatch_output_expert_scores,
     )
 
+    # Preallocate combine outputs outside the traced region. Allocating via moreh_full inside
+    # run_op (and thus inside begin/end_trace_capture) captures host allocations that are not
+    # valid on execute_trace replay and hangs dispatch on TG 8x4 + fabric_1D_ring.
+    # One buffer per iteration so verification is not overwritten by a later iteration.
+    tt_preallocated_combine_outputs = [
+        ttnn.from_torch(
+            torch.zeros(
+                [select_experts_k, tokens_per_device, hidden_size],
+                dtype=tt_to_torch_dtype(dispatch_output_sparse_buffer_dtype),
+            ),
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=dispatch_output_sparse_buffer_dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        for _ in range(num_iterations)
+    ]
+
     logger.info(f"Done creating persistent dispatch output tensors")
 
     ############################################
@@ -971,18 +990,7 @@ def test_optimized_moe_decode_block(
             memory_config=dispatch_input_expert_scores_memory_config,
         )
 
-        # create persistent output tensor for combine
-        # runtime since it needs to be a zeroed out tensor (for each layer)
-        # allocated before dispatch, as dispatch serves as the barrier to ensure the tensor is allocated on all devices
-        # [select_experts_k, tokens_per_device, hidden_size] per device
-        tt_preallocated_combine_output = ttnn.moreh_full(
-            shape=[select_experts_k, tokens_per_device, hidden_size],
-            fill_value=0,
-            device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        tt_preallocated_combine_output = tt_preallocated_combine_outputs[iteration]
 
         (
             tt_dispatch_output_sparse_buffer,
@@ -1083,6 +1091,12 @@ def test_optimized_moe_decode_block(
         ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
         logger.info(f"Done compiling op")
 
+        # Restore CCL semaphores to the values assumed at the start of a captured iteration.
+        # Compile and capture both run the fused block; leftover semaphore state deadlocks
+        # fabric mux / reduce_scatter_minimal_direct on execute_trace (TG 8x4 ring).
+        ttnn.reset_global_semaphore_value(dispatch_global_semaphore, 0)
+        ttnn.reset_global_semaphore_value(combine_global_semaphore, 0)
+
         logger.info(f"Begin capturing trace")
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         for iteration in range(num_iterations):
@@ -1092,6 +1106,9 @@ def test_optimized_moe_decode_block(
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(mesh_device, sub_device_ids=[ttnn.SubDeviceId(0)])
         logger.info(f"Done capturing trace")
+
+        ttnn.reset_global_semaphore_value(dispatch_global_semaphore, 0)
+        ttnn.reset_global_semaphore_value(combine_global_semaphore, 0)
 
         logger.info(f"Begin executing trace")
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
