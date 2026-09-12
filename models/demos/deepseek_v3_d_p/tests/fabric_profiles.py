@@ -120,19 +120,28 @@ def tp_axis_is_wrapped(mesh_device) -> bool:
     The mesh graph descriptor cannot answer this: it is absent whenever the graph came from
     auto-discovery, which is the one path that substitutes a fabric for the requested one.
     Routing tables are always populated, and they are what the collective actually consumes,
-    so a wrap is detected by where a route goes rather than by what the topology claims. The
-    far peer sits one hop behind on a ring and `cols - 1` hops ahead on a line.
+    so a wrap is detected by where the opened mesh maps its TP endpoints. A straight torus has
+    the same forwarding direction from column 0 to the last column as from column 1 to column 0.
+    A 1xN view over a 2D system mesh can instead close through a direct perimeter edge.
     """
     _, cols = tuple(mesh_device.shape)
     mesh_shapes = ttnn.get_physical_mesh_shapes()
     assert len(mesh_shapes) == 1, f"expected a single local mesh, got {mesh_shapes}"
-    mesh_id = ttnn.MeshId(next(iter(mesh_shapes)))
+    _, physical_cols = next(iter(mesh_shapes.values()))
 
-    def direction(src, dst):
-        node = lambda col: ttnn.FabricNodeId(mesh_id, col)  # noqa: E731 -- row 0, so chip id is the column
-        value = ttnn.get_eth_forwarding_direction(node(src), node(dst))
-        assert value is not None, f"no TP route from column {src} to {dst}"
+    def node(col):
+        return mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(0, col))
+
+    def direction(src_col, dst_col):
+        value = ttnn.get_eth_forwarding_direction(node(src_col), node(dst_col))
+        assert value is not None, f"no TP route from column {src_col} to {dst_col}"
         return value
+
+    first, last = node(0), node(cols - 1)
+    first_row, first_col = divmod(first.chip_id, physical_cols)
+    last_row, last_col = divmod(last.chip_id, physical_cols)
+    if abs(first_row - last_row) + abs(first_col - last_col) == 1:
+        return True
 
     return direction(0, cols - 1) == direction(1, 0)
 
