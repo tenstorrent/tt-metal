@@ -1,9 +1,9 @@
 {
   "last_run": {
-    "run_id": 34678492970,
-    "timestamp": "2026-09-12T06:40:00Z"
+    "run_id": 34693855928,
+    "timestamp": "2026-09-12T12:35:00Z"
   },
-  "run_id": 34678492970,
+  "run_id": 34693855928,
   "open_prs": {
     "52106": {
       "issue": 51660,
@@ -329,7 +329,11 @@
     "56073": "fix in open PR #54157 (LLK perf matmul coverage)",
     "55744": "already fixed and MERGED via PR #55938 (llk_wait_tiles block-until-resolved fix); remove from active tracking",
     "55996": "fix in open PR #55997 (moe_compute tilize total_chunks single consumer)",
-    "56068": "fix in open PR #56198 (ttnn.reshape ND shard spec normalized-to-2D input and ND output)"
+    "56068": "fix in open PR #56198 (ttnn.reshape ND shard spec normalized-to-2D input and ND output)",
+    "56324": "already fixed via open PR #55589 (tt_transformers prefill page table fix included), no dup needed",
+    "56290": "bounty issue, multiple community PRs already open (56296/56301/56309/56325/56326/56327), no repo-assist action",
+    "56281": "already labeled bug, tracking issue referencing 54630, no action",
+    "56277": "bounty feature request, already labeled, no action"
   },
   "dropped_fix_targets": {
     "51845": "maintainer jasondavies rejected both proposed remedies 2026-08-05 -- do not attempt fix",
@@ -473,8 +477,9 @@
       "note": "commented asking author to rebase/confirm status; mergeable_state dirty/behind, no reviews yet or reviewer-blocked pending rebase"
     },
     "49800": {
-      "date": "2026-08-21",
-      "note": "codeowners ping (reviewer-blocked, approved by mgajewskiTT, several CODEOWNERS still requested, no prior repo-assist ping found)"
+      "last_ping": "2026-09-12",
+      "type": "author_checkin",
+      "note": "approved x2 (mgajewskiTT, gsarabandoTT) but dirty mergeable_state, needs rebase"
     },
     "51004": {
       "last_ping": "2026-08-23",
@@ -584,14 +589,14 @@
       "note": "codeowners ping, Quasar exp overflow/underflow guard restore, stale since 2026-07-30"
     },
     "51567": {
-      "date": "2026-08-26",
-      "type": "codeowners_ping",
-      "note": "codeowners ping, host init/teardown runtime-perf benchmark, stale since 2026-07-31"
+      "last_ping": "2026-09-12",
+      "type": "author_checkin",
+      "note": "unresolved review comment from abhullar-tt (09-08) re per-SKU golden gating, plus dirty mergeable_state"
     },
     "51558": {
-      "date": "2026-08-26",
-      "type": "codeowners_ping",
-      "note": "codeowners ping, profiler overhead benchmark, stale since 2026-07-30; note failing check runtime_perf_profiler_overhead[wh_n300_civ2] flagged for maintainer"
+      "last_ping": "2026-09-12",
+      "type": "author_checkin",
+      "note": "approved by tdowdallTT but dirty mergeable_state, needs rebase"
     },
     "51487": {
       "last_ping": "2026-08-27",
@@ -1060,7 +1065,8 @@
       "label": "bug",
       "date": "2026-09-11",
       "note": "moreh_norm_backward p=+/-inf UB, root cause confirmed against current source"
-    }
+    },
+    "56323": "bug (front-padding silently ignored in single-core row-major pad factory, confirmed against pad_rm_reader_writer_program_factory.cpp)"
   },
   "issues_commented": {
     "53922": {
@@ -1098,9 +1104,15 @@
     "56248": {
       "date": "2026-09-11",
       "note": "confirming comment posted with source citations"
-    }
+    },
+    "56323": "2026-09-12: confirmed root cause, noted contributor Kaustubh1235 already volunteered to fix, no dup PR opened"
   },
   "run_history": [
+    {
+      "run_id": "34693855928",
+      "date": "2026-09-12T12:35:00Z",
+      "summary": "Task1/2: reviewed newest issues 56336 down to 56230; confirmed+commented+labeled bug on #56323 (ttnn.pad single-core row-major front-padding silently dropped, root cause verified against pad_rm_reader_writer_program_factory.cpp/reader_pad_dims_rm_interleaved.cpp), no fix PR opened since contributor Kaustubh1235 already volunteered in issue comments; confirmed #56324 already fixed via open PR #55589 (tt_transformers vLLM page-table fix bundled in that PR), no dup; confirmed 56290 (bounty, 5 community PRs open)/56281/56277 already correctly labeled/covered, no action; skipped 56269/56268/56267/56266 (auto-expiring [aw] bot infra issues, not actionable). Task5: re-verified all 13 tracked repo-assist PRs (51868/52106/53113/53690/54246/54666/54792/54932/54862/55435/55670/55688/55847) via pull_request_read - no new activity since last run, all unchanged (blocked/behind/dirty as before). Task6: nudged 3 author-blocked stale PRs never previously pinged by repo-assist this cycle - #49800 (approved x2, dirty, needs rebase), #51567 (unresolved abhullar-tt review comment + dirty), #51558 (approved by tdowdallTT, dirty, needs rebase). Task8: updated monthly summary #55015 with refreshed suggested actions and prepended run history entry."
+    },
     {
       "run_id": "34678492970",
       "date": "2026-09-12T06:40:00Z",
