@@ -43,7 +43,7 @@ public:
     NOC go_signal_noc() const;
     // Quasar FDS query. When enabled, workers receive the go signal and signal completion over FDS
     // instead of over the NOC.
-    bool fds_worker_completion_enabled() const;
+    bool fds_signalling_enabled() const;
     // General Dispatch related queries - configs and core placement
     const std::vector<CoreCoord>& get_logical_dispatch_cores(uint32_t device_id) const;
     const std::vector<CoreCoord>& get_logical_dispatch_cores_on_user_chips() const;
@@ -59,7 +59,7 @@ private:
     dispatch_core_manager& core_manager_;
     bool dispatch_s_enabled_ = false;
     bool distributed_dispatcher_ = false;
-    bool fds_worker_completion_enabled_ = false;
+    bool fds_signalling_enabled_ = false;
     NOC go_signal_noc_ = NOC::NOC_0;
     CommandQueueDispatchLayout cq_dispatch_layout_;
     CoreType resolved_dispatch_core_type_ = CoreType::WORKER;
