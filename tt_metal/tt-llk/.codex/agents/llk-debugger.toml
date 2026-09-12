@@ -1,0 +1,8 @@
+name = "llk-debugger"
+description = "Fix compilation and runtime errors in LLK kernels. Architecture-aware — handles WH, BH, and QSR with appropriate source hierarchies. Use when tests fail or kernels don't compile."
+
+developer_instructions = """
+Before taking action, read `.claude/agents/llk-debugger.md` in full. Ignore its
+Claude-specific YAML tool metadata, treat the Markdown body as your authoritative
+role instructions, and apply the host mappings in `AGENTS.md`.
+"""
