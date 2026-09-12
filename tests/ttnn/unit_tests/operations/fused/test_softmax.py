@@ -8,7 +8,7 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
 from models.common.utility_functions import torch_random
 
 TEST_PADDING_VALUE = -42
@@ -292,6 +292,103 @@ def test_softmax_sharded_stable_with_program_cache(
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
     assert device.cache_entries_counter.total == 1
+
+
+# The sharded compute kernel keeps subblock_w tiles live in Dest, so a subblock_w above the Dest
+# capacity used to run to completion and return wrong numbers with no diagnostic. The capacity is
+# 8 tiles by default, 4 with fp32_dest_acc_en and 16 with dst_full_sync_en, so the guard has to read
+# the compute config rather than assume the default. subblock_w = 0 is the other end of the same
+# bound: block_w % subblock_w == 0 is only checked when a mask is present, so without one a zero
+# used to reach block_w / subblock_w in the program factory and take the process down with SIGFPE.
+@pytest.mark.parametrize(
+    "fp32_acc_en, dst_full_sync_en, subblock_w, expect_raise",
+    [
+        (False, False, 0, True),
+        (False, False, 8, False),
+        (False, False, 16, True),
+        (True, False, 4, False),
+        (True, False, 8, True),
+        (False, True, 16, False),
+    ],
+)
+def test_softmax_sharded_subblock_w_dest_capacity(
+    device, expect_error, fp32_acc_en, dst_full_sync_en, subblock_w, expect_raise
+):
+    torch.manual_seed(0)
+    grid_size = (8, 4)
+    batch_size, num_heads, h, w = 8, 4, 128, 512
+
+    torch_input_tensor = torch_random((batch_size, num_heads, h, w), -10, 10, dtype=torch.bfloat16)
+    memory_config = ttnn.create_sharded_memory_config(
+        torch_input_tensor.shape,
+        core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        subblock_w=subblock_w,
+        block_h=batch_size * num_heads * h // 32 // (grid_size[0] * grid_size[1]),
+        block_w=w // 32,
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=fp32_acc_en,
+        packer_l1_acc=False,
+        dst_full_sync_en=dst_full_sync_en,
+    )
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
+
+    if expect_raise:
+        # The bound is enforced by two checks now: the zero end runs ahead of the mask branch, which
+        # carries a block_w % subblock_w, and the capacity end needs the compute config.
+        message = "subblock_w must be greater than 0" if subblock_w == 0 else "must be at most the Dest capacity"
+        with expect_error(RuntimeError, message):
+            ttnn.softmax_in_place(
+                input_tensor, program_config=program_config, compute_kernel_config=compute_kernel_config
+            )
+        return
+
+    output_tensor = ttnn.softmax_in_place(
+        input_tensor, program_config=program_config, compute_kernel_config=compute_kernel_config
+    )
+    torch_output_tensor = F.softmax(torch_input_tensor.float(), dim=-1)
+    assert_with_pcc(torch_output_tensor, ttnn.to_torch(output_tensor).float(), 0.999)
+
+
+# subblock_w = 0 with a mask present used to reach `block_w % subblock_w` in the mask branch of
+# validate_on_program_cache_miss, which is a modulo by zero, before any check on subblock_w itself
+# ran. The zero check is hoisted ahead of both branches, so this path raises like the unmasked one.
+def test_softmax_sharded_masked_subblock_w_zero(device, expect_error):
+    torch.manual_seed(0)
+    grid_size = (8, 4)
+    batch_size, num_heads, h, w = 8, 4, 128, 512
+
+    torch_input_tensor = torch_random((batch_size, num_heads, h, w), -10, 10, dtype=torch.bfloat16)
+    attention_mask = torch.zeros(batch_size, 1, 1, w, dtype=torch.bfloat16)
+    attention_mask_t = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    memory_config = ttnn.create_sharded_memory_config(
+        torch_input_tensor.shape,
+        core_grid=ttnn.CoreGrid(y=grid_size[1], x=grid_size[0]),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        subblock_w=0,
+        block_h=batch_size * num_heads * h // 32 // (grid_size[0] * grid_size[1]),
+        block_w=w // 32,
+    )
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
+
+    with expect_error(RuntimeError, "subblock_w must be greater than 0"):
+        ttnn.scale_mask_softmax_in_place(input_tensor, 1.0, attention_mask_t, program_config=program_config)
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
