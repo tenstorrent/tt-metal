@@ -72,11 +72,15 @@ constexpr std::uint32_t DEQUANT_REPLAY_LEN = 5;
 // helper is what keeps them from drifting apart.
 template <DataFormat OUTPUT_FORMAT>
 inline constexpr std::uint32_t quant_replay_len() {
+    static_assert(
+        OUTPUT_FORMAT != DataFormat::Int8, "int8 output records its own body; replay it with the _int8_pack kernels");
     return OUTPUT_FORMAT == DataFormat::UInt8 ? QUANT_REPLAY_LEN_UINT8_OUT : QUANT_REPLAY_LEN;
 }
 
 template <DataFormat OUTPUT_FORMAT>
 inline constexpr std::uint32_t requant_replay_len() {
+    static_assert(
+        OUTPUT_FORMAT != DataFormat::Int8, "int8 output records its own body; replay it with the _int8_pack kernels");
     return OUTPUT_FORMAT == DataFormat::UInt8 ? REQUANT_REPLAY_LEN_UINT8_OUT : REQUANT_REPLAY_LEN;
 }
 
@@ -148,8 +152,9 @@ inline void calculate_quant_int32(const uint dst_index_in0, const uint dst_index
     // Operand A is input (fp32).
     // Operand B is scaling factor (fp32).
     // LREG2 holds the zero-point constant (fp32) loaded by _init_quant_int32_.
-    // Output is int32 scaled to int8 range (sign-magnitude or 2's-complement
-    // depending on SIGN_MAGNITUDE_FORMAT - the conversion is done by SFPSTORE).
+    // Output is int32 holding the quantized value in the output dtype's range:
+    // int8 (sign-magnitude or 2's-complement depending on SIGN_MAGNITUDE_FORMAT
+    // - the conversion is done by SFPSTORE), or [0, 255] for uint8.
     //
     // Tile layout in Dest: each tile occupies 64 dest-address units. Each
     // SFPLOAD/SFPSTORE moves 4 dest rows x 8 SFPU lanes, so advancing dst_reg
@@ -191,7 +196,8 @@ inline void calculate_requant_int32(const uint dst_index_in0, const uint dst_ind
     // Operand A is input to requant (int32, sign-magnitude or 2's complement bits or UInt8-unpacked int8 byte).
     // Operand B is scaling factor (fp32).
     // LREG2 holds the zero-point constant (fp32) loaded by _init_requant_int32_.
-    // Output is int32 scaled to int8 range.
+    // Output is int32 holding the quantized value in the output dtype's range:
+    // int8 (sign-magnitude or 2's-complement), or [0, 255] for uint8.
     //
     // The int32 in/out format conversion is done by the SFPLOAD/SFPSTORE
     // instr_mod0 field (INT32 vs INT32_2S_COMP); the recorded compute body

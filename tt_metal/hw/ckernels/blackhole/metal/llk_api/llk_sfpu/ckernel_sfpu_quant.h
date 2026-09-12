@@ -90,6 +90,8 @@ constexpr std::uint32_t DEQUANT_REPLAY_LEN_SIGN_MAGN = 3;
 // helper is what keeps them from drifting apart.
 template <bool SIGN_MAGNITUDE_FORMAT, DataFormat OUTPUT_FORMAT>
 inline constexpr std::uint32_t quant_replay_len() {
+    static_assert(
+        OUTPUT_FORMAT != DataFormat::Int8, "int8 output records its own body; replay it with the _int8_pack kernels");
     if constexpr (OUTPUT_FORMAT == DataFormat::UInt8) {
         return QUANT_REPLAY_LEN_UINT8_OUT;
     } else {
@@ -99,6 +101,8 @@ inline constexpr std::uint32_t quant_replay_len() {
 
 template <bool SIGN_MAGNITUDE_FORMAT, DataFormat OUTPUT_FORMAT, bool INT8_INPUT>
 inline constexpr std::uint32_t requant_replay_len() {
+    static_assert(
+        OUTPUT_FORMAT != DataFormat::Int8, "int8 output records its own body; replay it with the _int8_pack kernels");
     if constexpr (OUTPUT_FORMAT == DataFormat::UInt8) {
         return (SIGN_MAGNITUDE_FORMAT || INT8_INPUT) ? REQUANT_REPLAY_LEN_UINT8_OUT
                                                      : REQUANT_REPLAY_LEN_UINT8_OUT_INT32_IN;
@@ -235,8 +239,9 @@ void quant_init(const uint zero_point) {
     lltt::record<lltt::NoExec>(QUANT_REPLAY_SLOT, REPLAY_LEN);
     {
         // D(LREG0) = LREG0 * LREG1 + LREG2 (zero point). The Blackhole SFPU
-        // implicitly stalls SFP_STOCH_RND below until SFPMAD's LREG0 write
-        // retires, so no explicit pipeline-bubble TTI_SFPNOP is needed here.
+        // implicitly stalls the next instruction (SFP_STOCH_RND, or SFPSETCC on
+        // the uint8 path) until SFPMAD's LREG0 write retires, so no explicit
+        // pipeline-bubble TTI_SFPNOP is needed here.
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG0, 0 /*mod1*/);
         // fp32 -> int. LCONST_0 (LREG9) is the HW-provided 0.0 used as the zero
         // descale. For unsigned (uint8) output, round into the full [0, 255]
@@ -332,8 +337,9 @@ void requant_init(const uint zero_point) {
         // int32 sign-magnitude -> fp32.
         TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPCAST_MOD1_INT32_TO_FP32_RNE);
         // D(LREG0) = LREG0 * LREG1 + LREG2 (zero point). BH SFPU implicitly
-        // stalls STOCH_RND below until SFPMAD's LREG0 write retires, so no
-        // explicit pipeline-bubble TTI_SFPNOP is needed here.
+        // stalls the next instruction (STOCH_RND, or SFPSETCC on the uint8 path)
+        // until SFPMAD's LREG0 write retires, so no explicit pipeline-bubble
+        // TTI_SFPNOP is needed here.
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG0, 0 /*mod1*/);
         // fp32 -> int. LCONST_0 (LREG9) provides the 0.0 descale. For unsigned
         // (uint8) output, round into the full [0, 255] range; otherwise clamp to
@@ -410,7 +416,8 @@ inline void calculate_quant_int32(const uint dst_index_in0, const uint dst_index
     // Operand A is input (fp32).
     // Operand B is scaling factor (fp32).
     // LREG2 holds the zero-point constant (fp32) loaded by _init_quant_int32_.
-    // Output is int32 scaled to int8 range (sign-magnitude or 2's-complement).
+    // Output is int32 holding the quantized value in the output dtype's range:
+    // int8 (sign-magnitude or 2's-complement), or [0, 255] for uint8.
     //
     // Tile layout in Dest: each tile occupies 64 dest-address units (4 faces
     // x 16 addr/face). Each SFPLOAD/SFPSTORE moves 4 dest rows x 8 SFPU lanes,
@@ -419,7 +426,8 @@ inline void calculate_quant_int32(const uint dst_index_in0, const uint dst_index
     //
     // The replay-buffer body at QUANT_REPLAY_SLOT and ADDR_MOD_6's dest+=2
     // slot are programmed by _init_quant_int32_<APPROXIMATION_MODE,
-    // SIGN_MAGNITUDE_FORMAT>, which must run before the first call here.
+    // SIGN_MAGNITUDE_FORMAT, OUTPUT_FORMAT>, which must run before the first
+    // call here.
     constexpr std::uint32_t dst_tile_size = 64;
 
     constexpr std::uint32_t REPLAY_LEN = quant_replay_len<SIGN_MAGNITUDE_FORMAT, OUTPUT_FORMAT>();
@@ -436,7 +444,7 @@ inline void calculate_quant_int32(const uint dst_index_in0, const uint dst_index
     for (int d = 0; d < ITERATIONS; d++) {
         TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_7, in0_off);  // operand A (fp32)
         TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, in1_off);  // operand B (fp32 scaler)
-        lltt::replay(QUANT_REPLAY_SLOT, REPLAY_LEN);                              // MAD + STOCH_RND + (CAST + SETSGN)
+        lltt::replay(QUANT_REPLAY_SLOT, REPLAY_LEN);  // MAD + [clamp] + STOCH_RND + (CAST + SETSGN)
         TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_6, out_off);  // store + dst_reg += 2
     }
 }
@@ -450,7 +458,8 @@ template <
 inline void calculate_requant_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // Operand A is input to requant (int32, sign-magnitude or 2's complement bits or UInt8-unpacked int8 byte in [0,
     // 255]). Operand B is scaling factor (fp32). LREG2 holds the zero-point constant (fp32) loaded by
-    // _init_requant_int32_. Output is int32 scaled to int8 range (sign-magnitude or 2's-complement).
+    // _init_requant_int32_. Output is int32 holding the quantized value in the output dtype's range: int8
+    // (sign-magnitude or 2's-complement), or [0, 255] for uint8.
     //
     // The replay-buffer body at REQUANT_REPLAY_SLOT and ADDR_MOD_6's dest+=2
     // slot are programmed by _init_requant_int32_<APPROXIMATION_MODE,

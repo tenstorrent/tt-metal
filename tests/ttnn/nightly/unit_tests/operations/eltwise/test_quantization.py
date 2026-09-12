@@ -657,6 +657,23 @@ def test_quantize_uint8_lower_saturation(device):
     assert torch.equal(result, expected), f"got {result.tolist()} expected {expected.tolist()}"
 
 
+def test_quantize_uint8_lower_saturation_composite(device):
+    """Test quantize uint8 lower saturation to 0 on the composite path, reached with a tensor zero point"""
+    row = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 2.0, 5.0]
+    input_tr = torch.tensor([row, [-v for v in row]], dtype=torch.float32)
+    scale, zero_point = 1.0 / 255.0, 0
+    expected = torch.clamp(torch.round(input_tr / scale + zero_point), 0, 255).to(torch.uint8)
+
+    input_tt = ttnn.from_torch(input_tr, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    zero_point_tt = ttnn.from_torch(
+        torch.zeros(1, 1, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    out_tt = ttnn.quantize(input_tt, scale, zero_point_tt, dtype=ttnn.uint8)
+    assert out_tt.dtype == ttnn.uint8
+    result = ttnn.to_torch(out_tt)
+    assert torch.equal(result, expected), f"got {result.tolist()} expected {expected.tolist()}"
+
+
 def test_requantize_uint8_upper_saturation(device):
     """Test requantize uint8 upper saturation to 255 on the output side"""
     q_in = torch.tensor([[0, 50, 100, 200, 255, 300, 1000]], dtype=torch.int32)
