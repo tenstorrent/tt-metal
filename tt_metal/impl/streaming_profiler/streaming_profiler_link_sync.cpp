@@ -5,6 +5,8 @@
 #include "impl/streaming_profiler/streaming_profiler_link_sync.hpp"
 
 #include <algorithm>
+#include <cstdlib>
+#include <cstring>
 #include <tuple>
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -14,6 +16,14 @@
 #include "llrt/tt_cluster.hpp"
 
 namespace tt::tt_metal::streaming_profiler::link_sync {
+
+bool enabled() {
+    static const bool on = [] {
+        const char* v = std::getenv("TT_METAL_STREAMING_PROFILER_LINK_SYNC");
+        return v == nullptr || std::strcmp(v, "0") != 0;
+    }();
+    return on;
+}
 
 namespace {
 // Whether an eth core can carry the sync: any connected core without fabric; with fabric, only a core the topology

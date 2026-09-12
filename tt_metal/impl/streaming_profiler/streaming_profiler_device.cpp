@@ -934,6 +934,10 @@ void Devices::set_producers_armed(const DeviceCtx& ctx, bool armed) {
 void Devices::plan_link_sync() {
     auto& mc = MetalContext::instance(context_id_);
     fabric_link_sync_ = mc.get_fabric_config() != tt_fabric::FabricConfig::DISABLED;
+    if (!link_sync::enabled()) {
+        log_info(tt::LogMetal, "[streaming profiler] link sync left out (TT_METAL_STREAMING_PROFILER_LINK_SYNC=0)");
+        return;
+    }
     auto& cluster = mc.get_cluster();
     for (size_t a = 0; a < devices_.size(); a++) {
         const uint32_t chip_a = devices_[a].chip_id;
