@@ -1,0 +1,77 @@
+name: "TTNOP Injector"
+
+on:
+  workflow_call:
+    inputs:
+      architecture:
+        required: false
+        default: all
+        type: string
+      test_selection:
+        required: false
+        default: changed
+        type: string
+  workflow_dispatch:
+    inputs:
+      architecture:
+        description: "Architecture to run ttnop on"
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - wormhole
+          - blackhole
+      test_selection:
+        description: "Tests to sweep"
+        required: true
+        default: changed
+        type: choice
+        options:
+          - changed
+          - full
+  schedule:
+    # Fridays at 03:17 UTC
+    - cron: "17 3 * * 5"
+
+permissions:
+  actions: read
+  contents: read
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.architecture || 'all' }}-${{
+    github.ref_protected && github.run_id || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-images:
+    name: "Docker setup"
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
+
+  wormhole:
+    name: "Wormhole"
+    if: >-
+      github.event_name == 'schedule' ||
+      inputs.architecture == 'all' ||
+      inputs.architecture == 'wormhole'
+    needs: build-images
+    uses: ./.github/workflows/ttnop-injector-impl.yaml
+    with:
+      architecture: wormhole
+      docker-image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      changed-only: ${{ github.event_name == 'schedule' || inputs.test_selection == 'changed' }}
+
+  blackhole:
+    name: "Blackhole"
+    if: >-
+      github.event_name == 'schedule' ||
+      inputs.architecture == 'all' ||
+      inputs.architecture == 'blackhole'
+    needs: build-images
+    uses: ./.github/workflows/ttnop-injector-impl.yaml
+    with:
+      architecture: blackhole
+      docker-image: ${{ needs.build-images.outputs.llk-ci-tag }}
+      changed-only: ${{ github.event_name == 'schedule' || inputs.test_selection == 'changed' }}
