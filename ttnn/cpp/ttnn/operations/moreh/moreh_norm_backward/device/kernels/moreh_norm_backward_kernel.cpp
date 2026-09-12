@@ -49,6 +49,111 @@ void kernel_main() {
 
         sign_tile_to_cb(dfb_x_obj, dfb_sign_obj, 0, /*pop=*/0);
 
+#ifdef NORM_INF
+        // ±inf sub-gradient: dx = sign(x) * dy * eq(|x|, y). The mask eq(|x| - y, 0) selects the
+        // argmax(|x|) set for p = +inf and the argmin(|x|) set for p = -inf, because y equals
+        // the norm value (max|x| / min|x|) either way — only equality matters, not the order.
+        // step 1: tmp4 = |x|
+        {
+            dfb_tmp4_obj.reserve_back(onetile);
+            tile_regs_acquire();
+            copy_tile_init_with_dt(dfb_x_obj);
+            copy_tile(dfb::x, 0, dst0);
+            abs_tile_init();
+            abs_tile(dst0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile_with_dt(dst0, dfb_tmp4_obj);
+            tile_regs_release();
+            dfb_tmp4_obj.push_back(onetile);
+        }
+        // step 2: tmp5 = |x| - y   (y broadcast along the reduced dims; A = full tile, B = y)
+        {
+            dfb_tmp4_obj.wait_front(onetile);
+            dfb_tmp5_obj.reserve_back(onetile);
+            tile_regs_acquire();
+            if (ht_need_bcast && wt_need_bcast) {
+                sub_bcast_scalar_init_with_dt(dfb_tmp4_obj, dfb_y_obj);
+                sub_tiles_bcast_scalar(dfb::tmp4, dfb::y, 0, 0, dst0);
+            } else if (ht_need_bcast) {
+                sub_bcast_rows_init_with_dt(dfb_tmp4_obj, dfb_y_obj);
+                sub_tiles_bcast_rows(dfb::tmp4, dfb::y, 0, 0, dst0);
+            } else if (wt_need_bcast) {
+                sub_bcast_cols_init_with_dt(dfb_tmp4_obj, dfb_y_obj);
+                sub_tiles_bcast_cols(dfb::tmp4, dfb::y, 0, 0, dst0);
+            } else {
+                sub_tiles_init_with_dt(dfb_tmp4_obj, dfb_y_obj);
+                sub_tiles(dfb::tmp4, dfb::y, 0, 0, dst0);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile_with_dt(dst0, dfb_tmp5_obj);
+            tile_regs_release();
+            dfb_tmp4_obj.pop_front(onetile);
+            dfb_tmp5_obj.push_back(onetile);
+        }
+        // step 3: tmp4 = eq(tmp5, 0) — the argmax(|x|) / argmin(|x|) mask
+        {
+            dfb_tmp5_obj.wait_front(onetile);
+            dfb_tmp4_obj.reserve_back(onetile);
+            tile_regs_acquire();
+            copy_tile_init_with_dt(dfb_tmp5_obj);
+            copy_tile(dfb::tmp5, 0, dst0);
+            unary_eq_tile_init();
+            unary_eq_tile(dst0, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile_with_dt(dst0, dfb_tmp4_obj);
+            tile_regs_release();
+            dfb_tmp5_obj.pop_front(onetile);
+            dfb_tmp4_obj.push_back(onetile);
+        }
+        // step 4: tmp5 = sign(x) * dy  (A = sign full tile, B = dy broadcast along reduced dims)
+        {
+            dfb_sign_obj.wait_front(onetile);
+            dfb_tmp5_obj.reserve_back(onetile);
+            tile_regs_acquire();
+            if (ht_need_bcast && wt_need_bcast) {
+                mul_bcast_scalar_init_with_dt(dfb_sign_obj, dfb_dy_obj);
+                mul_tiles_bcast_scalar(dfb::sign, dfb::dy, 0, 0, dst0);
+            } else if (ht_need_bcast) {
+                mul_bcast_rows_init_with_dt(dfb_sign_obj, dfb_dy_obj);
+                mul_tiles_bcast_rows(dfb::sign, dfb::dy, 0, 0, dst0);
+            } else if (wt_need_bcast) {
+                mul_bcast_cols_init_with_dt(dfb_sign_obj, dfb_dy_obj);
+                mul_tiles_bcast_cols(dfb::sign, dfb::dy, 0, 0, dst0);
+            } else {
+                mul_tiles_init_with_dt(dfb_sign_obj, dfb_dy_obj);
+                mul_tiles(dfb::sign, dfb::dy, 0, 0, dst0);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile_with_dt(dst0, dfb_tmp5_obj);
+            tile_regs_release();
+            dfb_sign_obj.pop_front(onetile);
+            dfb_tmp5_obj.push_back(onetile);
+        }
+        // step 5: dx = (sign(x) * dy) * mask
+        {
+            dfb_tmp5_obj.wait_front(onetile);
+            dfb_tmp4_obj.wait_front(onetile);
+            dfb_dx_obj.reserve_back(onetile);
+            tile_regs_acquire();
+            mul_tiles_init_with_dt(dfb_tmp5_obj, dfb_tmp4_obj);
+            mul_tiles(dfb::tmp5, dfb::tmp4, 0, 0, dst0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile_with_dt(dst0, dfb_dx_obj);
+            tile_regs_release();
+            dfb_tmp5_obj.pop_front(onetile);
+            dfb_tmp4_obj.pop_front(onetile);
+            dfb_dx_obj.push_back(onetile);
+        }
+
+        dfb_x_obj.pop_front(onetile);
+        dfb_y_obj.pop_front(onetile);
+        dfb_dy_obj.pop_front(onetile);
+#else
         // x^(p - 1)
         power_tile_with_abs_x_to_cb(
             dfb_x_obj,
@@ -158,6 +263,7 @@ void kernel_main() {
 
         // multiply abs sign
         mul_tiles_to_cb(dfb_sign_obj, dfb_tmp4_obj, dfb_dx_obj, 0, 0);
+#endif
     }
 
     dfb_decimal_obj.pop_front(onetile);
