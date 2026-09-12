@@ -109,6 +109,7 @@ from ...layers.linear import Linear
 from ...layers.module import Module, ModuleList, Parameter
 from ...layers.na3d import neighborhood_attention_3d as na3d_on_device
 from ...layers.na3d import window_bounds
+from ...layers.neighborhood_attention import neighborhood_attention_3d_bricked
 from ...layers.neighborhood_permute import (
     SITES_PER_BRICK,
     brick_count,
@@ -308,14 +309,16 @@ def neighborhood_attention_3d(
     full volume on every chip, so nothing downstream changes.
 
     ``backend`` picks the executor: ``"gather"`` (default) is the grouped gather path that the
-    ``ccl_manager`` split rides on; ``"op"`` uses the SDPA op's on-device neighborhood mask and
-    runs replicated (it ignores ``ccl_manager``), so it is the single-chip / pre-sharding path.
+    ``ccl_manager`` split rides on; ``"bricked"`` is our op run replicated over the whole volume
+    (it ignores ``ccl_manager``), the oracle the W-sharded bricked path is compared against.
 
     This was a swap point for a host fallback while the device primitive was being written.
     The dispatch is now direct and unconditional on purpose: a fallback selected by
     ``except ImportError`` would move attention to the host silently, and every parity test
     here would still pass — slower, and no longer measuring the device.
     """
+    if backend == "bricked":
+        return neighborhood_attention_3d_bricked(q, k, v, kernel_size=kernel_size, scale=scale, stride=gna_stride)
     return na3d_on_device(
         q, k, v, kernel_size=kernel_size, scale=scale, ccl_manager=ccl_manager, backend=backend, gna_stride=gna_stride
     )
@@ -1165,8 +1168,8 @@ class _NeighborhoodAttention3D(Module):
                     stride=cfg.resolved_gna_stride,
                 )
             case _:
-                # Replicated: the whole volume on every chip. na3d's own dispatcher picks the
-                # executor from the same name.
+                # Replicated: the whole volume on every chip. The module-level wrapper above picks
+                # gather or the unsharded bricked executor from the same name.
                 out = neighborhood_attention_3d(
                     q,
                     k,

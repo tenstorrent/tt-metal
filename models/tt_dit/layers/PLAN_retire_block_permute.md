@@ -1,6 +1,6 @@
 # Plan: retire `block_permute.py` by moving stages 2-5 onto the bricked neighborhood attention
 
-Status: PHASE 4 VERIFIED; TIER 3 (C++ excision of the general op's neighborhood mode) DONE, 2026-09-11 23:06. Branch `na-integration`. Owner: James Lee.
+Status: PHASE 4 VERIFIED; TIER 3 DONE; na3d/neighborhood_attention boundary cut and one torch oracle, 2026-09-11 23:59. Branch `na-integration`. Owner: James Lee.
 Phase 0 done; Phase 1 B2 done; D1 priced (axis swap rejected); Phase 4 (deletion) done; every gate green.
 Block order was found to be unused in production (Phase 1 notes). Remaining, optional: Phases 1 (B1),
 2, 3 and 5 = the "bricked deterministic stages" speed project; everything is uncommitted in the tree.
@@ -21,7 +21,39 @@ Block order was found to be unused in production (Phase 1 notes). Remaining, opt
   captured; single-case rerun is job 430).
 - Pre-commit on the deletion commit: isort/autoflake fixups committed as cb8e1ffb2dd.
 
-## Tier 3 -- the general SDPA op's neighborhood mode excised (2026-09-11, DONE and device-verified; read this first)
+## na3d.py / neighborhood_attention.py boundary + one torch oracle (2026-09-11 23:59, DONE; read this first)
+
+James asked whether the two modules could be combined. Answer given and accepted: no merge (two unrelated
+executors, and the gather backend is stage 1's only executor plus the sharded tests' replicated oracle), but
+(1) cut the one cross-import and (2) consolidate the two torch oracles. Both done:
+
+1. `na3d.neighborhood_attention_3d` serves only `backend="gather"`; the `"bricked"` branch and its import of
+   `neighborhood_attention.py` are gone. Stage 5's module-level wrapper dispatches `"bricked"` straight to
+   `neighborhood_attention_3d_bricked` (module-level import; a first attempt put the name in the W-sharded
+   match arm's local import, autoflake dropped it as unused there, and `test_decode_timing[gather+bricked5]`
+   failed with NameError -- job 444). `na3d.py` no longer imports `neighborhood_attention.py`.
+2. ONE window rule in Python: `na3d.window_bounds` now wraps `neighborhood_reference.context_window_origin`
+   (the bricked op's `window_origin_on_axis`). Measured before the change: identical at stride 1 for every
+   (length < 40, kernel < 16); at even GNA strides the old `window_bounds` placed the group leader one site to
+   the RIGHT (the deleted general op's `nbr_shift_start` rule) while the shipped op centres it biased left
+   (139 of 331 stride > 1 cases differed, none at odd stride). `na3d_torch` is therefore now the tiled form of
+   the dense reference, and `test_neighborhood_reference.py` holds them equal (`test_window_bounds_is_the_reference_rule`,
+   `test_tiled_reference_matches_dense_reference`, 10 volume/stride cases each incl. even stride and stride == kernel).
+   Deleted as the duplicated test: `tests/unit/test_neighborhood_3d_geometry.py` (220 lines) -- "Step 1" of the
+   general op's 3D-neighborhood generalization; its `in_axis` longhand encoded the deleted kernel's biased-right
+   rule and would now fail by design; everything else it pinned is covered by the two new tests.
+
+Device (jobs 444/446/447): reference + gather + bricked-vs-`na3d_torch` units **120 passed, 5 skipped**
+(`test_neighborhood_reference.py`, `unit/test_na3d.py`, `vae/test_na3d.py`, `test_na3d_bricked_w_sharded.py`,
+`test_neighborhood_sdpa.py::test_matches_torch_reference`); `test_decode_timing[s16-gather+bricked5]` PASSED;
+stage-5 parity + GNA parity 6 passed. Job 444 also showed a pre-existing hazard: after the NameError mid-decode
+the pytest process never exited (device teardown hang), so run risky blocks as separate broker jobs.
+
+Remaining duplicates worth a look later: `unit/test_na3d.py` (gather vs tiled oracle with chunking/sharding)
+and `vae/test_na3d.py::test_na3d_op_vs_gather` (same comparison at decoder volumes plus a perf print) overlap
+in purpose but not in geometry; not deleted.
+
+## Tier 3 -- the general SDPA op's neighborhood mode excised (2026-09-11, DONE and device-verified)
 
 James asked "what else can be deleted" after the Tier-2 verification closed, and approved items 1-3
 of the answer (item 4, the ~50 MB of untracked scratch at the repo root, was NOT approved and is left).

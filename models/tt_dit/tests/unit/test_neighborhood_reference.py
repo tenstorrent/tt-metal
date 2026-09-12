@@ -12,6 +12,7 @@ the SAME independent, search-derived oracle, which is what stops them drifting a
 import pytest
 import torch
 
+from models.tt_dit.layers.na3d import na3d_torch, window_bounds
 from models.tt_dit.layers.neighborhood_reference import (
     context_window_origin,
     neighborhood_attention_3d,
@@ -119,3 +120,67 @@ def test_narrow_window_actually_restricts():
     # The edge query's window slid inward instead of truncating.
     assert mask[0].nonzero().flatten().tolist() == [0, 1, 2]
     assert mask[15].nonzero().flatten().tolist() == [13, 14, 15]
+
+
+# --- The tiled reference in na3d.py is the same rule ----------------------------------------------
+#
+# ``na3d_torch`` executes the gather planner's tile groups on host, which is what lets it scale to
+# the decoder's real volumes; this dense reference cannot, but it IS the definition. The two used to
+# carry separate window rules (the tiled one matched a since-deleted kernel and placed even GNA
+# groups one site to the right); ``window_bounds`` now wraps ``context_window_origin``, and these
+# tests are what hold the two executors of that one rule together. Volumes are small enough for the
+# dense side; each stride divides its axis and is <= its kernel, which is what the op validates.
+TILED_VS_DENSE_CASES = [
+    ((5, 4, 4), (3, 3, 3), (1, 1, 1)),
+    ((4, 3, 5), (3, 3, 3), (1, 1, 1)),
+    ((7, 4, 4), (5, 3, 3), (1, 1, 1)),
+    ((5, 5, 5), (5, 5, 5), (1, 1, 1)),
+    ((3, 4, 4), (5, 3, 3), (1, 1, 1)),  # kernel deeper than the axis: whole-axis clamp
+    ((4, 4, 4), (3, 3, 3), (2, 2, 2)),  # even stride: the case the old rules disagreed on
+    ((6, 4, 4), (3, 3, 3), (3, 1, 1)),
+    ((4, 4, 4), (3, 3, 3), (1, 2, 1)),
+    ((8, 4, 6), (5, 3, 3), (4, 2, 3)),
+    ((5, 5, 5), (5, 5, 5), (5, 5, 5)),  # stride == kernel: block-sparse extreme
+]
+
+
+@pytest.mark.parametrize("volume, context_window, stride", TILED_VS_DENSE_CASES)
+def test_window_bounds_is_the_reference_rule(volume, context_window, stride):
+    """Per axis, ``window_bounds`` must reproduce ``neighborhood_mask``'s row support exactly."""
+    mask = neighborhood_mask(volume, context_window, stride)
+    volume_time, volume_height, volume_width = volume
+    bounds = [window_bounds(extent, window, s) for extent, window, s in zip(volume, context_window, stride)]
+    for query_time in range(volume_time):
+        for query_height in range(volume_height):
+            for query_width in range(volume_width):
+                query_index = (query_time * volume_height + query_height) * volume_width + query_width
+                keys = torch.nonzero(mask[query_index]).flatten().tolist()
+                key_time = sorted({k // (volume_height * volume_width) for k in keys})
+                key_height = sorted({(k // volume_width) % volume_height for k in keys})
+                key_width = sorted({k % volume_width for k in keys})
+                for axis, (site, present) in enumerate(
+                    zip((query_time, query_height, query_width), (key_time, key_height, key_width))
+                ):
+                    starts, ends = bounds[axis]
+                    assert present == list(range(starts[site], ends[site])), f"axis {axis} site {site}"
+
+
+@pytest.mark.parametrize("volume, context_window, stride", TILED_VS_DENSE_CASES)
+def test_tiled_reference_matches_dense_reference(volume, context_window, stride):
+    """``na3d_torch`` (tiled, per group) == ``neighborhood_attention_3d`` (dense, whole volume)."""
+    torch.manual_seed(0)
+    heads, head_dim = 2, 8
+    volume_time, volume_height, volume_width = volume
+    site_count = volume_time * volume_height * volume_width
+    q, k, v = (torch.randn(1, volume_time, volume_height, volume_width, heads, head_dim) for _ in range(3))
+
+    tiled = na3d_torch(q, k, v, context_window, stride=stride).reshape(1, site_count, heads, head_dim)
+    dense = neighborhood_attention_3d(
+        q.reshape(1, site_count, heads, head_dim),
+        k.reshape(1, site_count, heads, head_dim),
+        v.reshape(1, site_count, heads, head_dim),
+        volume=volume,
+        context_window=context_window,
+        stride=stride,
+    )
+    torch.testing.assert_close(tiled, dense, rtol=1e-4, atol=1e-5)

@@ -516,27 +516,20 @@ The op test's parametrisation is where the coverage lives:
 
 ### `models/tt_dit/layers/na3d.py` (~680 lines)
 
-The torch reference, the planner, the sharding descriptors, and the dispatcher for the two device
-executors that remain: the replicated `gather` backend (stage 1) and the unsharded `bricked` one.
-The six executors that drove the general SDPA op's neighborhood mode were deleted on 2026-09-11.
+The tiled torch reference, the planner, the sharding descriptors, and the replicated `gather`
+executor that stage 1 runs. Since 2026-09-11 it serves nothing else: the six executors that drove the
+general SDPA op's neighborhood mode were deleted, and the `bricked` executors are dispatched to by
+their callers directly (`diffvae_ltx_stage5.py` for the replicated one, the decoder blocks for the
+W-sharded one), so this module no longer imports `neighborhood_attention.py`.
 
 
 | symbol                                                          | is                                                            |
 | --------------------------------------------------------------- | ------------------------------------------------------------- |
-| `window_bounds(length, kernel, stride)`                         | their clamping rule — returns per-site window `starts`/`ends` |
+| `window_bounds(length, kernel, stride)` | per-site window `starts`/`ends`; a wrapper over `neighborhood_reference.context_window_origin`, so there is ONE window rule in Python |
 | `plan_na3d`, `NA3DPlan`, `TileGroup`                            | group queries into tiles, build masks                         |
-| `na3d_torch`                                                    | torch reference                                               |
+| `na3d_torch` | the tiled torch reference: the same rule as `neighborhood_reference.py`, scaling to real volumes; the two are held equal in `test_neighborhood_reference.py` |
 | `NA3DShard`, `NA3DGroup`, `NA3DDevicePlan`, `build_device_plan` | multi-device query sharding                                   |
-| `neighborhood_attention_3d(...)`                                | the dispatcher; `backend=` selects one of the below           |
-
-
-Executors, in rough order of specialisation:
-
-
-| backend                                | function                                                                          |
-| -------------------------------------- | --------------------------------------------------------------------------------- |
-| `"gather"`                             | the grouped gather + dense masked attention (default)                             |
-| `"bricked"` / `"bricked_sp_w_sharded"` | **ours**                                                                          |
+| `neighborhood_attention_3d(...)` | the `gather` executor (grouped gather + dense masked attention); `backend=` accepts only `"gather"` |
 
 
 ### `models/tt_dit/layers/block_permute.py` -- RETIRED 2026-09-10

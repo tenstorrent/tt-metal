@@ -18,6 +18,13 @@ wrong everywhere near an edge.
 The plan is separated from execution because the index arithmetic is the hard part and is
 shared: :func:`plan_na3d` is pure Python, :func:`na3d_torch` executes it on host (and is what
 the parity test holds against upstream), and the ttnn executor consumes the same plan.
+
+The window rule itself is not defined here. :func:`window_bounds` is a thin wrapper over
+``neighborhood_reference.context_window_origin``, the Python transcription of the bricked op's
+``window_origin_on_axis``; that keeps one rule for the dense reference, this tiled reference and
+the device op. :func:`na3d_torch` is that same reference in tiled form -- it scales to the full
+decoder volumes the dense one cannot hold -- and the two are held equal in
+``tests/unit/test_neighborhood_reference.py``.
 """
 
 from __future__ import annotations
@@ -30,6 +37,7 @@ import torch
 import ttnn
 
 from ..utils.tensor import from_torch
+from .neighborhood_reference import context_window_origin
 
 # Cap on one tile group's [Nq, Nk] score block. Bounds both the additive mask allocation and
 # the score materialization; the tile search shrinks axes until the product fits.
@@ -48,20 +56,18 @@ DEFAULT_CHUNK_BUDGET = 2**29
 def window_bounds(length: int, kernel: int, stride: int = 1) -> tuple[list[int], list[int]]:
     """Per-index ``(start, end)`` of the attended window along one axis.
 
-    Implements NATTEN's constant-size inward-shifted window: the start is the query index
-    less half the kernel, clamped so the window never leaves ``[0, length)``. When the axis
-    is shorter than the kernel every query attends to the whole axis.
+    NATTEN's constant-size inward-shifted window: the start is the query index less half the
+    kernel, clamped so the window never leaves ``[0, length)``. When the axis is shorter than the
+    kernel every query attends to the whole axis.
 
-    ``stride`` is GNA's query-group size: runs of ``stride`` queries share the window of their
-    center-most member, biased right for even groups so the bias opposes the inward shift's.
-    ``stride=1`` is standard neighborhood attention, every query centered on its own window.
-    The C++ twin is ``nbr_shift_start`` in windowed_loop_geometry.hpp; they must agree exactly.
+    ``stride`` is GNA's query-group size: runs of ``stride`` queries share one window, placed by
+    ``context_window_origin`` -- the rule the bricked op ships (``window_origin_on_axis`` in
+    ``neighborhood_plan.cpp``), centred on the group's centre site, biased LEFT for even groups.
+    No brick snapping: pass ``brick=`` to the dense reference for that. ``stride=1`` is standard
+    neighborhood attention, every query centred on its own window.
     """
     kernel = min(kernel, length)
-    half = kernel // 2
-    last_start = length - kernel
-    leaders = [min((i // stride) * stride + stride // 2, length - 1) for i in range(length)]
-    starts = [min(max(q - half, 0), last_start) for q in leaders]
+    starts = [context_window_origin(i // stride, stride, kernel, length) for i in range(length)]
     return starts, [s + kernel for s in starts]
 
 
@@ -551,31 +557,23 @@ def neighborhood_attention_3d(
     every chip either way. ``ccl_manager`` is only consulted when this builds its own plan; a
     plan passed in carries the manager it was built with.
 
-    ``backend`` selects the executor. ``"gather"`` (default) is the grouped gather + dense masked
-    attention below; it is what stage 1 of the DiffVAE decoder runs. ``"bricked"`` routes to the
-    unsharded bricked executor in ``neighborhood_attention.py`` (the replicated oracle of the sharded
-    bricked executor's tests). The gather-only arguments (``device_plan``, ``chunk_budget``) do not
-    apply to it. The executors that drove the general SDPA op's neighborhood mode (``op``, ``fused``,
-    ``op_sp``, ``op_sp_w``, ``op_sp_sharded``, ``op_sp_w_sharded``) were deleted on 2026-09-11 once
-    every W-sharded stage ran the bricked executor.
+    ``backend`` names the executor and only ``"gather"`` remains here: the grouped gather + dense
+    masked attention below, which is what stage 1 of the DiffVAE decoder runs. The bricked executors
+    live in ``neighborhood_attention.py`` and are dispatched to by their callers directly (the stage-5
+    module for the replicated one, the decoder blocks for the W-sharded one); the executors that
+    drove the general SDPA op's neighborhood mode were deleted on 2026-09-11.
 
     ``gna_stride`` is the GNA query-group stride in PHYSICAL (t, h, w) sites; the trivial (1,1,1)
-    means the shipped architecture, so callers may pass it to either backend. Only ``"bricked"``
-    honours a real stride -- ``"gather"`` has no stride parameter, so one aimed at it is REFUSED
-    rather than dropped: silently ignoring it is how a caller ends up measuring standard NA and
-    reporting it as GNA.
+    means the shipped architecture, so callers may pass it. The gather has no stride parameter, so
+    a real stride is REFUSED rather than dropped: silently ignoring it is how a caller ends up
+    measuring standard NA and reporting it as GNA.
     """
-    if backend == "bricked":
-        # Our op: tokens in bricked site order, one tile row per 3D brick.
-        from .neighborhood_attention import neighborhood_attention_3d_bricked
-
-        return neighborhood_attention_3d_bricked(q, k, v, kernel_size=kernel_size, scale=scale, stride=gna_stride)
     assert gna_stride in (None, (1, 1, 1)), (
-        f"backend {backend!r} has no stride parameter, so gna_stride={gna_stride} would be ignored; "
-        f'use backend="bricked" (or the sharded bricked executor, which takes it directly)'
+        f"the gather backend has no stride parameter, so gna_stride={gna_stride} would be ignored; "
+        f"use the bricked executor in neighborhood_attention.py, which takes it directly"
     )
     if backend != "gather":
-        raise ValueError(f"unknown NA3D backend {backend!r}; expected 'gather' or 'bricked'")
+        raise ValueError(f"unknown NA3D backend {backend!r}; only 'gather' is served here")
 
     batch, t, h, w, heads, head_dim = tuple(q.shape)
     assert batch == 1, f"batched NA3D is not implemented; got batch={batch}"
