@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import torch
+
 import ttnn
 from models.common.modules.tt_ccl import get_num_links as get_common_num_links
 
@@ -47,6 +49,8 @@ class TT_CCL:
                 )
             }
         )
+
+        self._all_reduce_buffers = {}
 
         self.barrier_semaphore_idx = [0, 0, 0]
         self.barrier_semaphore_handles = [[], [], []]
@@ -107,6 +111,87 @@ class TT_CCL:
         current_idx = self.rs_semaphores_idx[semaphore_index]
         self.rs_semaphores_idx[semaphore_index] = (current_idx + 1) % 2
         return self.rs_semaphore_handles[semaphore_index][current_idx]
+
+    def get_all_reduce_buffer(self, output_memory_config, ring_size, dtype=ttnn.bfloat16):
+        """Persistent scratch for the single-program all_reduce, allocated once and reused.
+
+        The op wants a WIDTH_SHARDED buffer whose per-core shard can hold ring_size copies
+        of the output's shard (it stages every peer's contribution there before reducing),
+        and whose grid contains the output's. Keyed by the output spec so the two
+        collectives in a layer -- and all 32 layers -- share one allocation; they run
+        strictly in sequence, so reuse is safe.
+        """
+        shard = output_memory_config.shard_spec
+        grid = shard.grid
+        key = (str(grid), shard.shape[0], shard.shape[1], int(ring_size), str(dtype))
+        buf = self._all_reduce_buffers.get(key)
+        if buf is None:
+            rows, cols = shard.shape[0], shard.shape[1] * ring_size
+            num_cores = grid.num_cores()
+            buf = ttnn.from_torch(
+                torch.zeros(1, 1, rows, cols * num_cores),
+                device=self.mesh_device,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(grid, [rows, cols], ttnn.ShardOrientation.ROW_MAJOR),
+                ),
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            self._all_reduce_buffers[key] = buf
+        return buf
+
+
+def tt_all_reduce_fused(
+    input_tensor,
+    mesh_device,
+    tt_ccl,
+    cluster_axis,
+    memory_config,
+    dtype=None,
+    topology=ttnn.Topology.Linear,
+    num_links=None,
+    subdevice_id=None,
+):
+    """One-program all-reduce, returning the sum REPLICATED across the axis.
+
+    The fractured-residual scheme costs two collectives per sub-layer: a reduce-scatter
+    to fold the projection's partials, then an all-gather to put the activation back
+    together for the next norm. Each of those is ~9.5 us of fabric/barrier latency plus a
+    small byte term -- at decode's payload they are ~80% fixed cost, which is why no
+    channel parameter moved them. Folding the pair into a single all_reduce pays that
+    latency once and keeps the residual replicated instead; the residual add then runs on
+    the full width, which is ~1 us more, against ~9 us saved.
+
+    Returns ``None`` when the shapes do not satisfy the op (caller falls back).
+    """
+    shape = list(mesh_device.shape)
+    if 1 not in shape or not memory_config.is_sharded():
+        return None
+    ring_size = max(shape)
+    if ring_size % 2 or not input_tensor.is_sharded():
+        return None
+    # The caller's cluster_axis follows tt_all_reduce, which ignores it on a 1-D mesh.
+    # all_reduce_async does not: it reads ring_size off the named axis, so name the axis
+    # that actually has the devices on it (a 1x4 mesh reduces along axis 1, not 0).
+    cluster_axis = shape.index(ring_size)
+    # The op sizes its staging CB from the buffer's page, in the WIDE format -- a bf8_b
+    # buffer gives a 34 KB bank against the 64 KB CB it asks for. Keep the scratch bf16.
+    buffer = tt_ccl.get_all_reduce_buffer(memory_config, ring_size, ttnn.bfloat16)
+    return ttnn.experimental.all_reduce_async(
+        input_tensor,
+        buffer,
+        cluster_axis=cluster_axis,
+        mesh_device=mesh_device,
+        multi_device_global_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+        dtype=dtype,
+        memory_config=memory_config,
+        topology=topology,
+        num_links=num_links if num_links is not None else tt_ccl.get_num_links(cluster_axis),
+        subdevice_id=subdevice_id,
+    )
 
 
 def tt_all_reduce(

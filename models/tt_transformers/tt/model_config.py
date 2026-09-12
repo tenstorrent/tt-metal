@@ -914,6 +914,19 @@ class ModelArgs:
             # weights are DRAM WIDTH-sharded -- so the modules that opt in must also hold a
             # DRAM-interleaved view of the weight for prefill to read.
             self.use_prefill_1d_projection = not self.is_galaxy and self.prefetcher is None
+            # Carry the DECODE residual replicated instead of fractured. Fractured costs
+            # two collectives per sub-layer -- a reduce-scatter to fold the projection's
+            # partials and the norm's all-gather to put the activation back together --
+            # and at decode's payload each is ~80% fixed fabric/barrier latency (~9.5 us),
+            # which no channel parameter reaches. Replicated, one all_reduce does both.
+            # The price is the residual add running on the full hidden dim (~1 us) and one
+            # gather after the embedding, against ~9 us x 2 saved in every layer.
+            self.decode_residual_replicated = (
+                not self.is_galaxy
+                and self.prefetcher is None
+                and self.num_devices > 1
+                and 1 in list(self.mesh_device.shape)
+            )
             self.dram_weight_grid = ttnn.CoreRangeSet(
                 {
                     ttnn.CoreRange(
@@ -1451,6 +1464,19 @@ class ModelArgs:
                 )
             elif self.is_galaxy:
                 return ttnn.L1_MEMORY_CONFIG
+            elif self.decode_residual_replicated:
+                # REPLICATED residual: the decode residual stream carries the full hidden
+                # dim on every device rather than this device's quarter of it. See
+                # ModelArgs.decode_residual_replicated -- it is what lets a sub-layer fold
+                # its reduce-scatter and the norm's all-gather into ONE all_reduce. Laid
+                # out exactly as the norm wants its input, so nothing reshards in between.
+                return ttnn.create_sharded_memory_config(
+                    (self.tile_padded_batch_rows, self.dim // self.mlp_core_grid.num_cores),
+                    self.mlp_core_grid,
+                    ttnn.ShardStrategy.WIDTH,
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
             else:
                 residual_grid = self.dram_shard_core_grid_for_k(self.dim // self.num_devices)
                 return ttnn.create_sharded_memory_config(

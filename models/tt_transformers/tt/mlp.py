@@ -7,7 +7,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import copy_to_buffer
-from models.tt_transformers.tt.ccl import tt_all_reduce
+from models.tt_transformers.tt.ccl import tt_all_reduce, tt_all_reduce_fused
 from models.tt_transformers.tt.common import Mode, pad_to_size
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
@@ -416,6 +416,23 @@ class MLP(LightweightModule):
             )
         ttnn.deallocate(w2_in)
 
+        # With a replicated residual the reduce-scatter and the norm's all-gather collapse
+        # into ONE collective (see ccl.tt_all_reduce_fused).
+        w2_out_reduced = (
+            tt_all_reduce_fused(
+                w2_out,
+                self.mesh_device,
+                self.tt_ccl,
+                cluster_axis=0,
+                memory_config=self.args.get_residual_mem_config(Mode.DECODE, self.prefetcher),
+                topology=self.args.ccl_topology(),
+            )
+            if (mode == Mode.DECODE and self.args.decode_residual_replicated)
+            else None
+        )
+        if w2_out_reduced is not None:
+            ttnn.deallocate(w2_out)
+            return w2_out_reduced
         w2_out_reduced = tt_all_reduce(
             w2_out,
             self.mesh_device,

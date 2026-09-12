@@ -10,7 +10,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.common.utility_functions import copy_to_buffer, nearest_32
-from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
+from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce, tt_all_reduce_fused
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup, num_to_corerange
 
@@ -1020,7 +1020,22 @@ class Attention(LightweightModule):
 
             ttnn.deallocate(attn_output_cat)
 
-            # All reduce
+            # All reduce. With a replicated residual the reduce-scatter and the norm's
+            # all-gather collapse into ONE collective (see ccl.tt_all_reduce_fused).
+            dense_out_reduced = (
+                tt_all_reduce_fused(
+                    dense_out_sharded,
+                    self.mesh_device,
+                    self.tt_ccl,
+                    cluster_axis=0,
+                    memory_config=self.args.get_residual_mem_config(Mode.DECODE, self.prefetcher),
+                    topology=self.ccl_topology,
+                )
+                if self.args.decode_residual_replicated
+                else None
+            )
+            if dense_out_reduced is not None:
+                return dense_out_reduced
             dense_out_reduced = tt_all_reduce(
                 dense_out_sharded,
                 self.mesh_device,

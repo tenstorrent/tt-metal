@@ -186,7 +186,10 @@ class DistributedNorm(LightweightModule):
         input_mem_cfg = sharded_output_config if mode == Mode.DECODE else ttnn.DRAM_MEMORY_CONFIG
 
         # Distributed norm already performs a gather
-        if self.args.is_multichip and not self.args.is_distributed_norm(mode):
+        # ...and so does a replicated decode residual: the sub-layer's all_reduce left the
+        # activation whole on every device, so there is nothing here to gather.
+        skip_gather = mode == Mode.DECODE and getattr(self.args, "decode_residual_replicated", False)
+        if self.args.is_multichip and not self.args.is_distributed_norm(mode) and not skip_gather:
             # NOTE: the `mode == "decode"` tests below are comparing a Mode enum member against
             # a str, so they are always False and the per-model *_LN_AG_CONFIG has never been
             # read here. Left as-is: the only configs it would select are the Galaxy-tuned ones

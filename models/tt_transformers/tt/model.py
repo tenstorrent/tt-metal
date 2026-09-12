@@ -634,6 +634,24 @@ class Transformer(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG if self.prefetcher is None else decode_residual_mem_cfg,
         )
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
+        if getattr(self.args, "decode_residual_replicated", False):
+            # The embedding is column-fractured, so its output is this device's quarter of
+            # the hidden dim. With a replicated residual there is no per-layer gather to
+            # widen it any more -- gather it ONCE here instead. One collective per token
+            # against the two per layer that the replicated scheme removes.
+            tt_tokens = ttnn.experimental.all_gather_async(
+                tt_tokens,
+                persistent_output_buffer=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                num_links=self.tt_ccl.get_num_links(1),
+                topology=self.args.ccl_topology(),
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
+            )
         tt_tokens = ttnn.to_memory_config(tt_tokens, decode_residual_mem_cfg)
         return tt_tokens
 
