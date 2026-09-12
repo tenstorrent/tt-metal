@@ -16,6 +16,7 @@ from models.experimental.nomic_embed_text_v2_moe.reference.loader import (
     load_pretrained_reference_model,
     load_state_dict_from_safetensors,
 )
+from models.experimental.nomic_embed_text_v2_moe.tt.model_config import TtModelConfig
 
 
 def pytest_configure(config):
@@ -71,6 +72,16 @@ def tokenizer():
         return load_tokenizer()
     except Exception as exc:
         pytest.skip(f"could not load the tokenizer: {type(exc).__name__}: {exc}")
+
+
+@pytest.fixture
+def tt_config(device):
+    """TTNN dtypes, layout and the compute kernel config bound to the test device.
+
+    Function-scoped and cheap: it only reads the grid and architecture off an already-open
+    device. Requesting it is what makes a test device-bound.
+    """
+    return TtModelConfig.from_device(device)
 
 
 @pytest.fixture(autouse=True)
