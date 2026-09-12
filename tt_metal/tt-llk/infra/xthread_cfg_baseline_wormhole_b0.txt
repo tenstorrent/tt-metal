@@ -1,0 +1,21 @@
+# Cross-thread config-register writes accepted for now (wormhole_b0).
+#
+# Key is path:kind:field -- content, not line numbers, so an entry survives code motion and stops
+# applying when the sequence changes. Multiple sites in one file for one field share an entry.
+#
+# The check fails only on sites NOT listed here. Removing a line is how you assert a site is fixed.
+# Adding one requires a reason; "it passes today" is not a reason.
+
+# ALU_ACC_CTRL_Zero_Flag_disabled_src -- word 2 bit 0, written by BOTH the MATH and UNPACK threads
+# with no mutex::REG_RMW, and consumed by the Matrix Unit (per the hazard database's reader rows).
+#
+# KNOWN OUTSTANDING, not accepted as correct. The surrounding cross-thread config work moved the
+# other shared fields to their consuming thread; this one was not completed. It is baselined so the
+# check can guard against NEW cross-thread writes while this remains open -- delete these lines as
+# part of the fix.
+tt_metal/tt-llk/tt_llk_wormhole_b0/common/inc/cmath_common.h:SAME-FIELD:ALU_ACC_CTRL_Zero_Flag_disabled_src
+tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib/experimental/llk_math_reduce_custom.h:SAME-FIELD:ALU_ACC_CTRL_Zero_Flag_disabled_src
+tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib/experimental/llk_math_reduce_runtime_custom.h:SAME-FIELD:ALU_ACC_CTRL_Zero_Flag_disabled_src
+tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib/experimental/llk_unpack_AB_reduce_custom.h:SAME-FIELD:ALU_ACC_CTRL_Zero_Flag_disabled_src
+tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib/experimental/llk_unpack_AB_reduce_custom_runtime.h:SAME-FIELD:ALU_ACC_CTRL_Zero_Flag_disabled_src
+tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_datacopy.h:SAME-FIELD:ALU_ACC_CTRL_Zero_Flag_disabled_src
