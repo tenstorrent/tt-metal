@@ -209,17 +209,6 @@ def attention_forward(
             # the split full/sliding caches. batch_idx is the flat slot, so the op call below passes
             # slot_idx=batch_idx, layer_idx=0, num_layers=1 (the kernel linearizes identically).
             cache_k, cache_v, cache_batch_idx, cache_capacity, cache_bounded = kv_cache.layer_view(user_id, layer_idx)
-            if cache_bounded:
-                # The ring cache-read cannot un-rotate a circular cache (needs the ring op's
-                # slab-wrap support), and the cache-backed ring path serves every chunk — so
-                # bounded sliding layers cannot take any chunked SP read here. Fail loud instead
-                # of reading garbage KV.
-                raise NotImplementedError(
-                    f"bounded_sliding_kv_cache: on-device cache-read of a bounded sliding layer "
-                    f"(layer {layer_idx}, cached_len={cached_len}) is not supported — this build "
-                    f"has allocation + the circular write only; validate via host readback "
-                    f"(kv_cache_pcc_check)."
-                )
             tt_sdpa_out = dense_sp_attention(
                 tt_q,
                 cache_k,
@@ -239,6 +228,10 @@ def attention_forward(
                 cluster_axis=mesh_config.sp_axis,
                 attention_sink=weights.sinks,
                 sliding_window_size=config.sliding_window,
+                # Circular sliding cache (False on full layers / unbounded caches); the op
+                # derives the slab count from the cache/Q geometry and validates it. kv_actual /
+                # logical_n above stay TRUE ABSOLUTE lengths.
+                circular_kv_cache=cache_bounded,
                 slot_idx=cache_batch_idx,
                 layer_idx=0,
                 num_layers=1,

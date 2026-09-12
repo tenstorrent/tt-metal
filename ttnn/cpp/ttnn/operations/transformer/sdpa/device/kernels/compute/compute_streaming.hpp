@@ -967,7 +967,8 @@ template <
     uint32_t kv_pad_q_local_padded_Nt = 0,
     uint32_t kv_pad_chunk_size_t = 0,
     uint32_t kv_pad_kv_local_padded_Nt = 0,
-    uint32_t sliding_window_size = 0>
+    uint32_t sliding_window_size = 0,
+    bool bounded_kv_cache = false>
 static void apply_lightweight_mask_streaming(
     uint32_t mask_cb,
     uint32_t out_cb,
@@ -1039,9 +1040,14 @@ static void apply_lightweight_mask_streaming(
                             l1_acc_single_tile(mask_cb, neginf_idx, out_cb, row_offset + col);
                             continue;
                         }
+                        // Bounded circular cache: this chunk's absolute K origin (sliding chunks never
+                        // straddle a slab). Inverting local rows is ambiguous once several chunk groups
+                        // alias one local slab; unbounded caches keep the inversion.
                         const uint32_t k_pos_u32 =
-                            chunked_kv_global_tile_for_local<kv_pad_chunk_size_t, kv_pad_q_local_padded_Nt>(
-                                kv_pad_rotation.ring_id, local_k_tile);
+                            bounded_kv_cache
+                                ? k_start_tile + col
+                                : chunked_kv_global_tile_for_local<kv_pad_chunk_size_t, kv_pad_q_local_padded_Nt>(
+                                      kv_pad_rotation.ring_id, local_k_tile);
                         if (k_pos_u32 >= kv_pad_rotation.logical_tile_count) {
                             l1_acc_single_tile(mask_cb, neginf_idx, out_cb, row_offset + col);
                             continue;
@@ -1253,7 +1259,10 @@ template <
     bool use_provided_mask = false,
     // Compile-time gate for q_base_tiles: only the head-serial ring passes read Q at an offset,
     // and every other caller keeps the original constant-zero index math (and codegen).
-    bool has_q_base_tiles = false>
+    bool has_q_base_tiles = false,
+    // Bounded circular sliding KV cache: mask K origins come from the work plan, not from
+    // inverting local cache rows (ambiguous once chunk groups alias one local slab).
+    bool bounded_kv_cache = false>
 static void sdpa_inner_loop_step(
     AccumulatorHalf& prev,
     AccumulatorHalf& cur,
@@ -1441,7 +1450,8 @@ static void sdpa_inner_loop_step(
                     kv_pad_q_local_padded_Nt,
                     kv_pad_chunk_size_t,
                     kv_pad_kv_local_padded_Nt,
-                    sliding_window_size>(
+                    sliding_window_size,
+                    bounded_kv_cache>(
                     cb_mask_in,
                     cb_qkt_im,
                     q_subblock,
@@ -2299,6 +2309,9 @@ template <
     bool v_shares_k_buffer = false,
     bool kt_inplace_v = false,
     uint32_t sliding_window_size = 0,
+    // Bounded circular sliding KV cache slab count (0/1 = unbounded); wraps the sliding work
+    // plan's local slab addressing. See sliding_window_work_plan.hpp.
+    uint32_t bounded_kv_slab_count = 0,
     uint32_t ring_size = 1,
     bool use_attention_sink = false,
     uint32_t cb_attention_sink = INVALID_CB,
@@ -2500,6 +2513,7 @@ void sdpa_ring_v2(
         }
 
         ttnn::operations::transformer::sdpa::ring_joint::SlidingQWorkPlan sliding_q_plan;
+        constexpr bool bounded_kv_cache = bounded_kv_slab_count > 1;
         if constexpr (has_sliding_window) {
             sliding_q_plan = ttnn::operations::transformer::sdpa::ring_joint::build_sliding_q_work_plan(
                 q_chunk * Sq_chunk_t,
@@ -2511,7 +2525,8 @@ void sdpa_ring_v2(
                 TILE_HEIGHT,
                 local_padded_Nt,
                 Sk_chunk_t,
-                logical_nt);
+                logical_nt,
+                bounded_kv_slab_count);
             ASSERT(sliding_q_plan.is_valid);
             ASSERT(sliding_q_plan.total_k_chunk_count > 0);
         }
@@ -2557,6 +2572,21 @@ void sdpa_ring_v2(
         const uint32_t q_k_loop_count = has_sliding_window ? per_q_valid_kv : num_kv_chunks;
         for (uint32_t k_chunk = 0; k_chunk < q_k_loop_count; ++k_chunk) {
             const auto sliding_k_chunk = sliding_q_plan.k_chunk_at(k_chunk);
+            // Bounded circular cache: absolute K-chunk index of this work item from the plan's ranges.
+            // Inverting local cache rows to global positions is ambiguous once several chunk groups
+            // alias one local slab; unbounded caches keep the inversion.
+            uint32_t bounded_global_k_chunk = 0;
+            if constexpr (bounded_kv_cache) {
+                uint32_t remaining = k_chunk;
+                for (uint32_t r = 0; r < sliding_q_plan.source_range_count; ++r) {
+                    const auto& range = sliding_q_plan.source_ranges[r];
+                    if (remaining < range.k_chunk_count()) {
+                        bounded_global_k_chunk = range.first_global_k_chunk + remaining;
+                        break;
+                    }
+                    remaining -= range.k_chunk_count();
+                }
+            }
             const uint32_t source_ring_id = has_sliding_window ? sliding_k_chunk.source_ring_id : ring_id;
             const uint32_t source_k_chunk = has_sliding_window ? sliding_k_chunk.source_k_chunk : k_chunk;
             const bool kv_chunk_is_joint = !has_sliding_window && k_chunk >= num_local_k_chunks;
@@ -2678,8 +2708,10 @@ void sdpa_ring_v2(
             if constexpr (is_causal_sdpa && !kv_pad_rotation_enabled) {
                 if constexpr (has_sliding_window) {
                     const uint32_t k_global_start =
-                        kv_global_tile_for_local<true, local_padded_Nt, chunk_size_t, q_local_padded_Nt>(
-                            source_ring_id, source_k_chunk * Sk_chunk_t);
+                        bounded_kv_cache
+                            ? bounded_global_k_chunk * Sk_chunk_t
+                            : kv_global_tile_for_local<true, local_padded_Nt, chunk_size_t, q_local_padded_Nt>(
+                                  source_ring_id, source_k_chunk * Sk_chunk_t);
                     const uint32_t q_global_end = q_start_tile + Sq_chunk_t;
                     if (k_global_start < q_global_end && q_global_end - k_global_start < active_Sk_param) {
                         active_Sk_param = q_global_end - k_global_start;
@@ -2711,7 +2743,7 @@ void sdpa_ring_v2(
             }
 
             // K start tile fed to diag stamp must share Q's coord frame (local for is_causal, global for chunked).
-            const uint32_t step_k_start_tile = [&]() {
+            const uint32_t step_k_start_tile_local = [&]() {
                 if constexpr (has_sliding_window) {
                     return kv_global_tile_for_local<true, local_padded_Nt, chunk_size_t, q_local_padded_Nt>(
                         source_ring_id, source_k_chunk * Sk_chunk_t);
@@ -2722,6 +2754,9 @@ void sdpa_ring_v2(
                     return k_chunk * Sk_chunk_t;
                 }
             }();
+            // Bounded circular cache: the plan's absolute origin replaces the inversion above.
+            const uint32_t step_k_start_tile =
+                bounded_kv_cache ? bounded_global_k_chunk * Sk_chunk_t : step_k_start_tile_local;
             const bool step_apply_causal = [&]() {
                 if constexpr (has_sliding_window) {
                     return q_start_tile < step_k_start_tile + Sk_chunk_t &&
@@ -2796,8 +2831,9 @@ void sdpa_ring_v2(
                 sliding_window_size,
                 use_attention_sink,
                 cb_attention_sink,
-                false,               // use_provided_mask
-                use_l1_state_fifo>(  // has_q_base_tiles: head-serial passes read Q at q_base_tiles
+                false,              // use_provided_mask
+                use_l1_state_fifo,  // has_q_base_tiles: head-serial passes read Q at q_base_tiles
+                bounded_kv_cache>(
                 q_prev,
                 q_cur,
                 is_last_k_of_last_ring_iter,
