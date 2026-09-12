@@ -13,7 +13,11 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <algorithm>
 #include <chrono>
+#include <exception>
 #include <random>
+#include <stdexcept>
+#include <string>
+#include <thread>
 #include "gmock/gmock.h"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -23,6 +27,8 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "tt_metal/distributed/mesh_socket_serialization.hpp"
+#include "tt_metal/impl/buffers/d2h_socket_internal.hpp"
+#include "tt_metal/impl/buffers/h2d_socket_internal.hpp"
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <tt-metalium/system_mesh.hpp>
@@ -230,7 +236,7 @@ void test_hd_socket_loopback(
                 static_cast<uint32_t>(scratch_buffer->address()),
             }});
 
-    uint32_t num_txns = data_size / page_size;
+    const uint32_t num_txns = data_size / page_size;
     std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
     std::vector<uint32_t> dst_vec(data_size / sizeof(uint32_t));
 
@@ -313,32 +319,81 @@ void test_hd_socket_multithreaded_loopback(
     input_socket.set_page_size(page_size);
     output_socket.set_page_size(page_size);
 
-    uint32_t page_size_words = page_size / sizeof(uint32_t);
-    uint32_t data_size_words = data_size / sizeof(uint32_t);
+    const uint32_t page_size_words = page_size / sizeof(uint32_t);
+    const uint32_t data_size_words = data_size / sizeof(uint32_t);
+    const uint32_t total_pages = num_iterations * num_txns;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
 
-    // Socket Read/Write done over different threads.
-    std::thread write_thread([&]() {
-        for (uint32_t i = 0; i < num_iterations; i++) {
-            for (uint32_t j = 0; j < num_txns; j++) {
-                input_socket.write(src_vec.data() + (i * data_size_words) + (j * page_size_words), 1);
+    auto retry_until_deadline =
+        [deadline](auto&& operation, const char* timeout_message, uint32_t completed_pages, uint32_t total_pages) {
+            while (!operation()) {
+                if (std::chrono::steady_clock::now() >= deadline) {
+                    throw std::runtime_error(
+                        std::string(timeout_message) + " after " + std::to_string(completed_pages) + "/" +
+                        std::to_string(total_pages) + " pages completed");
+                }
+                std::this_thread::yield();
             }
+        };
+
+    std::exception_ptr write_error;
+    std::exception_ptr read_error;
+
+    // Socket read/write are done on different threads, with each socket confined to one host thread.
+    std::thread write_thread([&]() {
+        try {
+            for (uint32_t i = 0; i < num_iterations; i++) {
+                for (uint32_t j = 0; j < num_txns; j++) {
+                    retry_until_deadline(
+                        [&]() {
+                            return experimental::detail::try_write(
+                                input_socket,
+                                src_vec.data() + (i * data_size_words) + (j * page_size_words),
+                                /*num_pages=*/1);
+                        },
+                        "Timed out waiting for space in the H2D socket",
+                        i * num_txns + j,
+                        total_pages);
+                }
+            }
+        } catch (...) {
+            write_error = std::current_exception();
         }
     });
 
     std::thread read_thread([&]() {
-        for (uint32_t i = 0; i < num_iterations; i++) {
-            for (uint32_t j = 0; j < num_txns; j++) {
-                output_socket.read(dst_vec.data() + (i * data_size_words) + (j * page_size_words), 1);
+        try {
+            for (uint32_t i = 0; i < num_iterations; i++) {
+                for (uint32_t j = 0; j < num_txns; j++) {
+                    retry_until_deadline(
+                        [&]() {
+                            return experimental::detail::try_read(
+                                output_socket,
+                                dst_vec.data() + (i * data_size_words) + (j * page_size_words),
+                                /*num_pages=*/1);
+                        },
+                        "Timed out waiting for data in the D2H socket",
+                        i * num_txns + j,
+                        total_pages);
+                }
             }
+        } catch (...) {
+            read_error = std::current_exception();
         }
     });
-    // Barrier with a timeout in the main thread ensure that the read/write threads are not hung.
-    input_socket.barrier(10000);
-    output_socket.barrier(10000);
 
     write_thread.join();
     read_thread.join();
 
+    if (write_error) {
+        std::rethrow_exception(write_error);
+    }
+    if (read_error) {
+        std::rethrow_exception(read_error);
+    }
+
+    input_socket.barrier(10000);
+    output_socket.barrier(10000);
     EXPECT_EQ(src_vec, dst_vec);
 }
 

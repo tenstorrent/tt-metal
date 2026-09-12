@@ -13,6 +13,10 @@ namespace tt::umd {
 class TlbWindow;
 }
 
+namespace tt::tt_metal::experimental::detail {
+struct D2HSocketTryReadAccess;
+}  // namespace tt::tt_metal::experimental::detail
+
 namespace tt::tt_metal::distributed {
 
 class NamedShm;
@@ -41,7 +45,13 @@ struct HDSocketConnectorState;
  * - Device kernel writes data and calls `socket_push_pages()` + `socket_notify_receiver()`
  * - Host calls `read()` which waits for data, copies it, and acknowledges consumption
  *
-
+ * Thread safety:
+ * - The FIFO is single-producer/single-consumer: one device producer writes data and one
+ *   host consumer reads and acknowledges it.
+ * - A D2HSocket instance is not internally synchronized. Calls on the same instance
+ *   must not overlap across host threads unless the caller provides external synchronization.
+ * - A descriptor attaches another handle to the same FIFO; it does not create an independent
+ *   channel. At most one host process may actively read through the owner/connector handles.
  *
  * Usage:
  * @code
@@ -363,8 +373,15 @@ private:
         const std::shared_ptr<MeshDevice>& mesh_device, std::optional<uint32_t> device_id = std::nullopt);
 
     void wait_for_bytes(uint32_t num_bytes);
+    void read_available(void* data, uint32_t num_bytes, bool notify_sender);
     void pop_bytes(uint32_t num_bytes);
     void notify_sender();
+
+    // Non-blocking read. Returns false if the FIFO does not currently contain `num_pages`.
+    // Accessible only via tt::tt_metal::experimental::detail::try_read.
+    bool try_read_impl(void* data, uint32_t num_pages, bool notify_sender);
+
+    friend struct tt::tt_metal::experimental::detail::D2HSocketTryReadAccess;
 
     // Shared host-side init: pins host memory (or hugepage fallback), writes socket metadata
     // into `config_buffer_address_`, and configures the sender-side TLB. The caller must
