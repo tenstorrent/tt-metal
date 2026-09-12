@@ -84,10 +84,10 @@ def load_attention_weights(
         k_w = k_w.reshape(config.num_key_value_heads, config.head_dim, -1).index_select(1, adjacent_order)
         k_w = k_w.reshape(kv_size, -1)
 
-    if not is_global:
-        v_w = state_dict["v_proj.weight"]  # [kv_size, H]
-    else:
+    if is_global:
         v_w = k_w  # K=V tying: duplicate K as V
+    else:
+        v_w = state_dict["v_proj.weight"]  # [kv_size, H]
 
     if tp > 1:
         # Chunk Q/K/V per TP device, fuse per-device, then concatenate across devices
