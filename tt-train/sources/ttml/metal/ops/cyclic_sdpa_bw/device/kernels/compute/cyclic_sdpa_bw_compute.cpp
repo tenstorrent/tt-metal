@@ -55,6 +55,7 @@
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/mask.h"
 #include "api/compute/matmul.h"
+#include "tools/profiler/kernel_profiler.hpp"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose_dest.h"
@@ -234,13 +235,18 @@ void kernel_main() {
             }
         }
 #endif
-        cb_wait_front(cb_query, qWt);
-        cb_wait_front(cb_key, qWt);
-        cb_wait_front(cb_value, vWt);
-        cb_wait_front(cb_grad_output, vWt);
-        cb_wait_front(cb_lse, onetile);
+        {
+            DeviceZoneScopedN("WAIT-PACKET");
+            cb_wait_front(cb_query, qWt);
+            cb_wait_front(cb_key, qWt);
+            cb_wait_front(cb_value, vWt);
+            cb_wait_front(cb_grad_output, vWt);
+            cb_wait_front(cb_lse, onetile);
+        }
 
         // ---- S = Q K^T / sqrt(d), masked when i == j, then P = exp(S - L)
+        {
+        DeviceZoneScopedN("SCORES");
         constexpr uint32_t scores_reg = 0;
         reconfig_data_format(cb_query, cb_key);
         matmul_init(cb_query, cb_key, /* transpose */ 1);
@@ -262,28 +268,57 @@ void kernel_main() {
         pack_tile(scores_reg, cb_attention_weights);
         tile_regs_release();
         cb_push_back(cb_attention_weights, onetile);
+        }
 
         // ---- dP = dO V^T, then dS with its transposes
-        compute_grad_attn_weights(
-            cb_grad_output, cb_value, vWt, cb_grad_attn_weights, cb_attention_weights, scaler_bits);
-        grad_scores_and_transposes();
+        {
+            DeviceZoneScopedN("GRAD-WEIGHTS");
+            compute_grad_attn_weights(
+                cb_grad_output,
+                cb_value,
+                vWt,
+                cb_grad_attn_weights,
+                cb_attention_weights,
+                scaler_bits);
+        }
+        {
+            DeviceZoneScopedN("GRAD-SCORES");
+            grad_scores_and_transposes();
+        }
 
         // ---- dQ_i = (dQ_i from DRAM) + dS K_j
-        pack_tiles_to_output(cb_grad_query_seed, cb_grad_query_accum, qWt);
-        update_grad_query(
-            cb_grad_scores, cb_key, cb_grad_query_accum, qWt, block_size, /* accumulate */ true);
-        pack_tiles_to_output(cb_grad_query_accum, cb_grad_query_out, qWt);
+        {
+            DeviceZoneScopedN("SEED-DQ");
+            pack_tiles_to_output(cb_grad_query_seed, cb_grad_query_accum, qWt);
+        }
+        {
+            DeviceZoneScopedN("UPDATE-DQ");
+            update_grad_query(
+                cb_grad_scores,
+                cb_key,
+                cb_grad_query_accum,
+                qWt,
+                block_size,
+                /* accumulate */ true);
+        }
+        {
+            DeviceZoneScopedN("EMIT-DQ");
+            pack_tiles_to_output(cb_grad_query_accum, cb_grad_query_out, qWt);
+        }
 
         // ---- dV_j += P^T dO_i
 #if COLUMN_RESIDENT
-        update_grad_value(
-            cb_attn_weights_transposed,
-            cb_grad_output,
-            cb_grad_value_accum,
-            vWt,
-            block_size,
-            column_accumulating);
-        cb_wait_front(cb_grad_value_accum, vWt);
+        {
+            DeviceZoneScopedN("UPDATE-DV");
+            update_grad_value(
+                cb_attn_weights_transposed,
+                cb_grad_output,
+                cb_grad_value_accum,
+                vWt,
+                block_size,
+                column_accumulating);
+            cb_wait_front(cb_grad_value_accum, vWt);
+        }
 #else
         pack_tiles_to_output(cb_grad_value_seed, cb_grad_value_accum, vWt);
         update_grad_value(
@@ -300,6 +335,8 @@ void kernel_main() {
 #if !COLUMN_RESIDENT
         pack_tiles_to_output(cb_grad_key_seed, cb_grad_key_accum, qWt);
 #endif
+        {
+        DeviceZoneScopedN("UPDATE-DK");
         // The last two arguments must name what the *previous* operation
         // actually left in the packer and in SrcA, because the reconfigs they
         // drive are conditional and skip when the formats match. The
@@ -336,6 +373,7 @@ void kernel_main() {
             /* accumulate */ true);
         pack_tiles_to_output(cb_grad_key_accum, cb_grad_key_out, qWt);
 #endif
+        }
 
         cb_pop_front(cb_query, qWt);
 #if !COLUMN_RESIDENT
