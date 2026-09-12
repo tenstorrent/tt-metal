@@ -956,14 +956,39 @@ def _coverage_cache_get(repo_root: Path, node, case):
     return None
 
 
-def _coverage_cache_put(repo_root: Path, node, case, k: int) -> None:
+def coverage_cache_get_ops_per_step(repo_root: Path, node, case):
+    """Total op INVOCATIONS the k=0 coverage probe's own capture already saw in one decode step
+    (len(seq) at cache-write time), or None if never recorded (older cache entry, or the probe that
+    wrote it had none). Same fingerprint/invalidation rule as _coverage_cache_get -- this reads the
+    SAME cache entry that call already writes, not a second probe.
+
+    nvidia_nemotron_3_5_lightning_30b_a3b_bf16 (2026-09-12): 27,577 op invocations in ONE decode step
+    at its coverage depth (TT_PERF_LAYERS=6, dense 128-expert MoE dominating) -- the number
+    agent.measure's profiling capture needs to know a declared OSL=128 means ~3.5M profiled op
+    invocations, which is what produced a 27+ GB tracy_ops_times.csv and OOM'd mid-round."""
+    try:
+        _fp = _coverage_fingerprint(node, repo_root)
+        if not _fp:
+            return None
+        entry = json.loads(_coverage_cache_path(repo_root).read_text()).get(f"{node}|{case}")
+        if entry and entry.get("fp") == _fp and entry.get("ops"):
+            return int(entry["ops"])
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _coverage_cache_put(repo_root: Path, node, case, k: int, ops_per_step: int | None = None) -> None:
     try:
         path = _coverage_cache_path(repo_root)
         data = json.loads(path.read_text()) if path.is_file() else {}
         _fp = _coverage_fingerprint(node, repo_root)
         if not _fp:
             return
-        data[f"{node}|{case}"] = {"k": int(k), "fp": _fp}
+        entry = {"k": int(k), "fp": _fp}
+        if ops_per_step:
+            entry["ops"] = int(ops_per_step)
+        data[f"{node}|{case}"] = entry
         path.write_text(json.dumps(data, indent=1))
     except Exception:  # noqa: BLE001
         pass
@@ -2981,7 +3006,7 @@ def _coverage_layers(
         # Cache stores the maximum depth across stacks (an int); the full per-stack dict is
         # reconstructed on the live path and not preserved in the on-disk cache.
         _cache_val = max(_cov_dict.values()) if isinstance(_cov_repr, dict) else _cov_repr
-        _coverage_cache_put(repo_root, node, case, _cache_val)
+        _coverage_cache_put(repo_root, node, case, _cache_val, ops_per_step=len(seq))
         return _cov_dict, facts
     k, n_kinds = _config_layer_kinds(config_ref or model_name)
     if k is None:
