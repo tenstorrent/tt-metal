@@ -1402,6 +1402,50 @@ TEST(CyclicSdpaBwTimingTest, DISABLED_ScaleTheGroups) {
 // d = 256 a packet is four times heavier while the score stages are
 // identical. If the ratio climbs past what fusion and block height explain,
 // the saved traffic has started to pay.
+// How close to the machine does this get, and where does the head dimension
+// take it? Causal attention backward is five matmuls of N x N x d, halved by
+// the triangle, so 2.5 N^2 d multiply-accumulates. A tile matmul at HiFi4 is
+// 64 cycles for 32768 of them, which is 512 per cycle per core, so 110 cores
+// at 1.35 GHz peak at about 152 TFLOP/s.
+//
+// That peak counts only matmul work. This algorithm also has O(N^2)
+// elementwise work -- the exponential, the dS chain, the transposes -- which
+// costs real time and appears in no FLOP count, so the percentage below is a
+// share of a roof this kernel cannot reach, not a share of what is available.
+// It is still the right number to watch as d grows, because the matmul work
+// per score tile grows with d while the elementwise work does not.
+void report_efficiency(uint32_t C, uint32_t grid_w, uint32_t grid_h, uint32_t Bt, uint32_t d) {
+    const auto grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
+    if (grid_w > grid.x || grid_h > grid.y) {
+        GTEST_SKIP() << "needs " << grid_w << "x" << grid_h;
+    }
+    const uint32_t N = 2u * C * Bt * kTile;
+    const auto ref = make_reference_inputs_only(N, d);
+    double seconds = 0.0;
+    run_relay(C, ref, grid_w, grid_h, /*endpoint_sync=*/true, &seconds, Bt, 1U);
+
+    const double flops = 5.0 * static_cast<double>(N) * static_cast<double>(N) * d;
+    const double achieved = flops / seconds / 1e12;
+    constexpr double kPeakTflops = 152.0;
+    std::cout << "  N=" << N << " d=" << d << " Bt=" << Bt << " on " << C << " cores: "
+              << seconds * 1e6 << " us, " << achieved << " TFLOP/s = " << 100.0 * achieved / kPeakTflops
+              << "% of matmul peak\n";
+}
+
+TEST(CyclicSdpaBwTimingTest, DISABLED_PushTheHeadDimension) {
+    // d rises while the block stays short, so the matmul share of each score
+    // tile grows and the elementwise share does not.
+    report_efficiency(110, 11, 10, /* Bt */ 1, /* d */ 64);
+    report_efficiency(110, 11, 10, /* Bt */ 1, /* d */ 128);
+    report_efficiency(110, 11, 10, /* Bt */ 1, /* d */ 256);
+    report_efficiency(110, 11, 10, /* Bt */ 1, /* d */ 512);
+    // and then both levers together, as far as L1 allows.
+    report_efficiency(110, 11, 10, /* Bt */ 2, /* d */ 128);
+    report_efficiency(110, 11, 10, /* Bt */ 2, /* d */ 256);
+    report_efficiency(110, 11, 10, /* Bt */ 4, /* d */ 64);
+    report_efficiency(110, 11, 10, /* Bt */ 4, /* d */ 128);
+}
+
 TEST(CyclicSdpaBwTimingTest, DISABLED_CompareAcrossHeadDimensions) {
     for (uint32_t d : {64u, 128u, 256u}) {
         compare_with_sdpa_bw(110, 11, 10, /* Bt */ 1, /* groups */ 1, d);
