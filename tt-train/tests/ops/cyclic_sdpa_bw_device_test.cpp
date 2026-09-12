@@ -796,15 +796,21 @@ void time_one_size(uint32_t C, uint32_t grid_w, uint32_t grid_h) {
     run_relay(C, ref, grid_w, grid_h, /*endpoint_sync=*/false, &relay_seconds);
     run_relay(C, ref, grid_w, grid_h, /*endpoint_sync=*/true, &endpoint_seconds);
 
-    // How much publication traffic Algorithm 4 adds: one inter-streak spill
-    // per streak that is followed by another, each publishing to every core.
+    // What Algorithm 4 adds over the barrier: one endpoint write per
+    // inter-streak spill, and one wait -- a handful of remote reads -- per
+    // later streak start. Both grow linearly in C, which is why the deficit
+    // stopped growing once publication stopped being C writes each.
     const CyclicSchedule sched(C);
     uint32_t inter_streak_spills = 0;
+    uint32_t endpoint_waits = 0;
     for (uint32_t i = 1; i <= sched.T(); ++i) {
         for (uint32_t t = 0; t <= sched.T(); ++t) {
             if (sched.is_active(i, t) && sched.streak_at(i, t).end == t &&
                 sched.has_later_active(i, t)) {
                 ++inter_streak_spills;
+            }
+            if (sched.is_later_streak_start(i, t)) {
+                ++endpoint_waits;
             }
         }
     }
@@ -815,8 +821,8 @@ void time_one_size(uint32_t C, uint32_t grid_w, uint32_t grid_h) {
               << " us, endpoint " << endpoint_seconds * us << " us"
               << " | relay speedup " << dram_seconds / relay_seconds << "x"
               << ", endpoint against relay " << endpoint_seconds / relay_seconds << "x"
-              << " | " << inter_streak_spills << " publications of " << C << " writes = "
-              << inter_streak_spills * C << "\n";
+              << " | " << inter_streak_spills << " endpoint writes, " << endpoint_waits
+              << " endpoint waits\n";
 }
 
 // Does the endpoint variant's deficit against the barrier variant scale with
