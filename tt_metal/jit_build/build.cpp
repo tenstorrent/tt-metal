@@ -7,6 +7,7 @@
 #include "build_cache_telemetry.hpp"
 #include "jit_build_cache.hpp"
 #include "jit_device_config.hpp"
+#include "pch.hpp"
 
 #include <algorithm>
 #include <array>
@@ -79,6 +80,24 @@ void report_result(const string& target_name, string_view op, const string& cmd,
     } else if (!result) {
         TT_THROW("Failed to open {} failure log file {}", op, log_file);
     }
+}
+
+// Match architecture-qualified sources; other targets compile without a PCH.
+std::string_view pch_umbrella_for(std::string_view kernel_src_path) {
+    auto matches = [&](std::string_view suffix) {
+        return kernel_src_path.size() >= suffix.size() &&
+               kernel_src_path.substr(kernel_src_path.size() - suffix.size()) == suffix;
+    };
+    if (matches("/tt-1xx/trisck.cc")) {
+        return "tt_metal/hw/firmware/src/tt-1xx/trisc_pch.h";
+    }
+    if (matches("/tt-1xx/brisck.cc")) {
+        return "tt_metal/hw/firmware/src/tt-1xx/brisc_pch.h";
+    }
+    if (matches("/tt-1xx/ncrisck.cc")) {
+        return "tt_metal/hw/firmware/src/tt-1xx/ncrisc_pch.h";
+    }
+    return {};
 }
 
 void hard_link_or_copy(const std::filesystem::path& target, const std::filesystem::path& link) {
@@ -669,12 +688,59 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     const std::string obj_temp_path = out_dir + this->temp_objs_[src_index];
     const std::string temp_d_path = fs::path(obj_temp_path).replace_extension("d").string();
 
+    std::vector<std::string> defines = recipe.defines;
+    // TRISC generated defines arrive too late for Watcher's FORCE_WATCHER_OFF handling.
+    const auto& rtoptions = env_.get_rtoptions();
+    const bool pch_defines_visible = this->process_defines_at_compile_ || !rtoptions.get_watcher_enabled();
+    const bool pch_strict = rtoptions.get_jit_pch_strict();
+    const auto pch_umbrella = pch_umbrella_for(this->srcs_[src_index]);
+    const bool use_pch = rtoptions.get_jit_pch_enabled() && pch_defines_visible && !pch_umbrella.empty();
+    TT_FATAL(
+        !pch_strict || pch_umbrella.empty() || use_pch,
+        "Strict PCH mode requires PCH enabled and compatible Watcher settings for {}",
+        target_name_);
+    std::string pch_header;
+    std::string pch_dep_path;
+    if (use_pch) {
+        // Share a firmware profile, independent of kernel values, names and source
+        // directories. NOC selection affects the shared prelude and has a fixed set
+        // of variants. Other kernel defines stay on the consumer command line: GCC
+        // rejects the PCH if one changes a macro actually used by the prelude.
+        std::vector<std::string> pch_defines = tt::jit_build::utils::tokenize_flags(defines_);
+        for (const auto& define : defines) {
+            if (define.starts_with("-DNOC_INDEX=") || define.starts_with("-DNOC_MODE=")) {
+                pch_defines.push_back(define);
+            }
+        }
+        pch_defines.emplace_back("-DTT_METAL_PCH_BUILD=1");
+        pch_header = jit_build::ensure_pch(
+            env_.gpp_,
+            env_.get_root_path(),
+            (fs::path(env_.get_out_root_path()) / std::to_string(env_.get_build_key())).string(),
+            target_name_,
+            pch_umbrella,
+            recipe.compiler_opt_level,
+            cflags,
+            includes_,
+            pch_defines);
+        TT_FATAL(!pch_strict || !pch_header.empty(), "Strict PCH mode: creation failed for {}", target_name_);
+        if (!pch_header.empty()) {
+            // Must precede every other -include so no token is seen first.
+            defines.insert(defines.begin(), pch_header);
+            defines.insert(defines.begin(), "-include");
+            defines.emplace_back("-DTT_METAL_PCH_BUILD=1");
+            // Normal builds warn and fall back; strict validation requires actual consumption.
+            cflags += pch_strict ? " -H -Werror=invalid-pch" : " -Winvalid-pch -Wno-error=invalid-pch";
+            pch_dep_path = pch_header + ".d";
+        }
+    }
+
     std::vector<std::string> args = tt::jit_build::utils::build_gpp_argv(
         env_.gpp_,
         recipe.compiler_opt_level,
         cflags,
         recipe.includes,
-        recipe.defines,
+        defines,
         this->srcs_[src_index],
         tt::jit_build::utils::GppAction::Compile,
         obj_temp_path,
@@ -695,6 +761,12 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     fs::remove(log_file.path());
     bool result = tt::jit_build::utils::exec_command(args, out_dir, log_file.path());
     report_result(this->target_name_, "compile", fmt::format("{}", fmt::join(args, " ")), log_file.path(), result);
+    if (pch_strict && !pch_umbrella.empty()) {
+        jit_build::require_pch_consumed(log_file.path(), pch_header);
+    }
+    if (result && !pch_dep_path.empty()) {
+        jit_build::merge_pch_deps_into_kernel_d(temp_d_path, obj_temp_path, pch_dep_path);
+    }
     jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash");
     fs::remove(temp_d_path);  // .d file not needed after hash is written
 }
@@ -1025,15 +1097,16 @@ tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSe
         });
     }
     if (settings) {
-        // FULL_KERNEL_NAME: consumed by the LLK sanitizer (CTSTR(FULL_KERNEL_NAME)). Emitted
-        // shell-free as one verbatim argv element with literal quotes (the unified/remote-JIT
-        // path does no shell expansion).
-        defines.push_back(fmt::format(R"(-DFULL_KERNEL_NAME="{}")", settings->get_full_kernel_name()));
-        settings->process_compile_time_args([&defines](const std::vector<uint32_t>& values) {
-            if (!values.empty()) {
-                defines.push_back(fmt::format("-DKERNEL_COMPILE_TIME_ARGS={}", fmt::join(values, ",")));
-            }
-        });
+        // Only the sanitizer needs this unique name. Omitting it otherwise permits PCH sharing
+        // and keeps exported recipes independent of the client's PCH setting.
+        if (env_.get_rtoptions().get_sanitizer_settings().enabled) {
+            defines.push_back(fmt::format(R"(-DFULL_KERNEL_NAME="{}")", settings->get_full_kernel_name()));
+        }
+        // Always supply the header, including for an empty list. It completes the
+        // positional API after PCH loading; the exported recipe is also valid when
+        // compiling ordinarily or on the remote server.
+        defines.emplace_back("-include");
+        defines.emplace_back(tt::jit_build::utils::CT_ARGS_HEADER);
         // KERNEL_COMPILE_TIME_ARG_MAP arrives as a force-included header (written by genfiles,
         // see write_named_ct_arg_map_header) rather than a -D define, because one define is one
         // argv element and the map alone can exceed the per-element MAX_ARG_STRLEN. Two argv
@@ -1121,6 +1194,7 @@ void jit_build_once(size_t hash, const std::function<void()>& build_fn) {
 void jit_build_cache_clear() {
     JitBuildCache::inst().clear();
     jit_build::clear_file_hash_cache();
+    jit_build::pch_cache_clear();
 }
 
 }  // namespace tt::tt_metal

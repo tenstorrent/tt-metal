@@ -28,15 +28,18 @@ std::vector<std::string> tokenize_flags(const std::string& flags);
 
 // What a gpp invocation should do with its source.
 enum class GppAction {
-    Compile,     // -c -o <out_obj> <src> -MF <dep>   (produces an object + .d depfile)
-    Preprocess,  // -E -o <out>        <src>          (self-contained .ii; keeps line markers)
+    Compile,           // -c -o <out_obj> <src> -MF <dep>                (produces an object + .d depfile)
+    Preprocess,        // -E -o <out>        <src>                       (self-contained .ii; keeps line markers)
+    PrecompileHeader,  // -x c++-header -o <out_gch> <src> -MF <dep>     (produces a .gch + .d depfile)
 };
 // Build the argv for a single gpp invocation from recipe fields. The argv is for
 // exec_command() (posix_spawn, NO shell), so defines/flags containing shell metacharacters
 // (e.g. -DFULL_KERNEL_NAME="<name>") are passed verbatim — each define is
 // its own argv element and is never re-quoted or shell-split. `opt_level` is the bare level
-// without the leading dash (e.g. "O3"). `dep_path` is used only for Compile.
-// One argv builder shared by the local compile, the remote compile server, and preprocess-and-ship.
+// without the leading dash (e.g. "O3"). `dep_path` is used only for Compile and PrecompileHeader.
+// One argv builder shared by the local compile, the remote compile server, preprocess-and-ship,
+// and the PCH build — sharing it is what keeps PCH flags and compile flags from drifting apart,
+// which GCC would answer by silently rejecting the PCH.
 std::vector<std::string> build_gpp_argv(
     const std::string& gpp,
     const std::string& opt_level,
@@ -64,6 +67,10 @@ std::vector<std::string> build_gpp_argv(
 // both the local and the JIT-compile-server layouts. That keeps one recipe valid on both sides of
 // the RPC, where an absolute client-side path would not exist on the server.
 inline constexpr std::string_view NAMED_CT_ARG_MAP_HEADER = "named_ct_arg_map_generated.h";
+
+// Like the named map, positional values belong to the kernel, after PCH loading.
+inline constexpr std::string_view CT_ARGS_HEADER = "compile_time_args_generated.h";
+std::string format_ct_args_header(const std::vector<std::uint32_t>& args);
 
 // Render |named_args| as the initializer body of KERNEL_COMPILE_TIME_ARG_MAP:
 //   {"a",1},{"b",2}

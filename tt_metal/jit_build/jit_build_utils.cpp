@@ -24,6 +24,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <fmt/ranges.h>
+
 #include <tt-logger/tt-logger.hpp>
 
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
@@ -107,6 +109,18 @@ std::vector<std::string> build_gpp_argv(
             args.push_back("-o");
             args.push_back(out_path);
             args.push_back(src);
+            break;
+        case GppAction::PrecompileHeader:
+            // -x c++-header must precede the input for GCC to emit a PCH. The -MF pins
+            // down the .d that the -MMD in the base cflags would otherwise derive from
+            // -o; ensure_pch merges it into each consuming kernel's .d.
+            args.push_back("-x");
+            args.push_back("c++-header");
+            args.push_back("-o");
+            args.push_back(out_path);
+            args.push_back(src);
+            args.push_back("-MF");
+            args.push_back(dep_path);
             break;
     }
     return args;
@@ -248,9 +262,24 @@ std::string format_named_ct_arg_map(const std::unordered_map<std::string, std::u
     return out;
 }
 
+std::string format_ct_args_header(const std::vector<std::uint32_t>& args) {
+    // Without PCH, firmware includes declare the API once FORCE_INLINE is available.
+    // With PCH, the shared declarations already exist; finish the API here, before
+    // any later firmware headers or kernel body can use the positional arguments.
+    return fmt::format(
+        "// AUTO-GENERATED -- do not edit.\n#pragma once\n\n#define KERNEL_COMPILE_TIME_ARGS {}\n"
+        "#ifdef TT_METAL_PCH_BUILD\n#undef TT_METAL_PCH_BUILD\n"
+        "#include \"api/compile_time_args.h\"\n#endif\n",
+        fmt::join(args, ","));
+}
+
 std::string format_named_ct_arg_map_header(const std::unordered_map<std::string, std::uint32_t>& named_args) {
+    // Declare the named API as soon as the map is available. In a PCH build the
+    // earlier include of compile_time_args.h saw no map, and consumers need not
+    // include it again. The separate API header also avoids requiring FORCE_INLINE
+    // while this generated header is being force-included.
     return "// AUTO-GENERATED -- do not edit.\n#pragma once\n\n#define KERNEL_COMPILE_TIME_ARG_MAP " +
-           format_named_ct_arg_map(named_args) + "\n";
+           format_named_ct_arg_map(named_args) + "\n\n#include \"api/named_compile_time_args.h\"\n";
 }
 
 void create_file(const std::string& file_path_str) {

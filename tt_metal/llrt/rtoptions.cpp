@@ -115,6 +115,8 @@ enum class EnvVarID {
     TT_METAL_DISABLE_MULTI_AERISC,                      // Disable multi-erisc mode (inverted logic, enabled by default)
     TT_METAL_USE_MGD_2_0,                               // Use mesh graph descriptor 2.0
     TT_METAL_FORCE_JIT_COMPILE,                         // Force JIT compilation
+    TT_METAL_JIT_PCH,                                   // Enable kernel precompiled headers
+    TT_METAL_JIT_PCH_STRICT,                            // Require PCH creation and consumption
     TT_METAL_DISABLE_SFPLOADMACRO,                      // Disable use of SFPLOADMACRO instructions
     TT_METAL_DRAM_BACKED_CQ,                            // Store command queues in device DRAM
     TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES,            // Simulator tensor preload bypasses FD CQ copies
@@ -788,6 +790,8 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (uses dependency tracking)
         // Usage: export TT_METAL_FORCE_JIT_COMPILE=1
         case EnvVarID::TT_METAL_FORCE_JIT_COMPILE: this->force_jit_compile = true; break;
+        case EnvVarID::TT_METAL_JIT_PCH: this->jit_pch_enabled = is_env_enabled(value); break;
+        case EnvVarID::TT_METAL_JIT_PCH_STRICT: this->jit_pch_strict = is_env_enabled(value); break;
 
         // TT_METAL_FORCE_REINIT
         // Force context reinitialization on each run.
