@@ -72,15 +72,17 @@ constexpr std::uint32_t DEQUANT_REPLAY_LEN = 5;
 // helper is what keeps them from drifting apart.
 template <DataFormat OUTPUT_FORMAT>
 inline constexpr std::uint32_t quant_replay_len() {
-    static_assert(
-        OUTPUT_FORMAT != DataFormat::Int8, "int8 output records its own body; replay it with the _int8_pack kernels");
+    if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
+        return QUANT_REPLAY_LEN_INT8_OUT;
+    }
     return OUTPUT_FORMAT == DataFormat::UInt8 ? QUANT_REPLAY_LEN_UINT8_OUT : QUANT_REPLAY_LEN;
 }
 
 template <DataFormat OUTPUT_FORMAT>
 inline constexpr std::uint32_t requant_replay_len() {
-    static_assert(
-        OUTPUT_FORMAT != DataFormat::Int8, "int8 output records its own body; replay it with the _int8_pack kernels");
+    if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
+        return REQUANT_REPLAY_LEN_INT8_OUT;
+    }
     return OUTPUT_FORMAT == DataFormat::UInt8 ? REQUANT_REPLAY_LEN_UINT8_OUT : REQUANT_REPLAY_LEN;
 }
 
@@ -361,7 +363,7 @@ void quant_init(const uint zero_point) {
         _int8_bias_zero_point_();  // fold +128 into the fp32 zero-point in LREG2
         _quant_kernels_configure_dest_incr_addrmod_();
         // Record the int8 body (MAD + offset-128 pack)
-        lltt::record<lltt::NoExec>(QUANT_REPLAY_SLOT, QUANT_REPLAY_LEN_INT8_OUT);
+        lltt::record<lltt::NoExec>(QUANT_REPLAY_SLOT, quant_replay_len<OUTPUT_FORMAT>());
         {
             TTI_SFPMAD(
                 p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG0, 0 /*mod1*/);  // v = A * B + (zp + 128)
@@ -417,7 +419,7 @@ void requant_init(const uint zero_point) {
         _int8_bias_zero_point_();  // fold +128 into the fp32 zero-point in LREG2
         _quant_kernels_configure_dest_incr_addrmod_();
         // Record the int8 body (CAST + MAD + offset-128 pack)
-        lltt::record<lltt::NoExec>(REQUANT_REPLAY_SLOT, REQUANT_REPLAY_LEN_INT8_OUT);
+        lltt::record<lltt::NoExec>(REQUANT_REPLAY_SLOT, requant_replay_len<OUTPUT_FORMAT>());
         {
             TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPCAST_MOD1_INT32_TO_FP32_RNE);  // int32 -> fp32
             TTI_SFPMAD(

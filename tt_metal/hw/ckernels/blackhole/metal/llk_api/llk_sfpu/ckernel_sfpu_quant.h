@@ -90,9 +90,9 @@ constexpr std::uint32_t DEQUANT_REPLAY_LEN_SIGN_MAGN = 3;
 // helper is what keeps them from drifting apart.
 template <bool SIGN_MAGNITUDE_FORMAT, DataFormat OUTPUT_FORMAT>
 inline constexpr std::uint32_t quant_replay_len() {
-    static_assert(
-        OUTPUT_FORMAT != DataFormat::Int8, "int8 output records its own body; replay it with the _int8_pack kernels");
-    if constexpr (OUTPUT_FORMAT == DataFormat::UInt8) {
+    if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
+        return QUANT_REPLAY_LEN_INT8_OUT;
+    } else if constexpr (OUTPUT_FORMAT == DataFormat::UInt8) {
         return QUANT_REPLAY_LEN_UINT8_OUT;
     } else {
         return SIGN_MAGNITUDE_FORMAT ? QUANT_REPLAY_LEN_SIGN_MAGN : QUANT_REPLAY_LEN_2S_COMP;
@@ -101,9 +101,9 @@ inline constexpr std::uint32_t quant_replay_len() {
 
 template <bool SIGN_MAGNITUDE_FORMAT, DataFormat OUTPUT_FORMAT, bool INT8_INPUT>
 inline constexpr std::uint32_t requant_replay_len() {
-    static_assert(
-        OUTPUT_FORMAT != DataFormat::Int8, "int8 output records its own body; replay it with the _int8_pack kernels");
-    if constexpr (OUTPUT_FORMAT == DataFormat::UInt8) {
+    if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
+        return INT8_INPUT ? REQUANT_REPLAY_LEN_INT8_OUT : REQUANT_REPLAY_LEN_INT8_OUT_INT32_IN;
+    } else if constexpr (OUTPUT_FORMAT == DataFormat::UInt8) {
         return (SIGN_MAGNITUDE_FORMAT || INT8_INPUT) ? REQUANT_REPLAY_LEN_UINT8_OUT
                                                      : REQUANT_REPLAY_LEN_UINT8_OUT_INT32_IN;
     } else {
@@ -224,7 +224,7 @@ void quant_init(const uint zero_point) {
         _int8_bias_zero_point_();  // fold +128 into the fp32 zero-point in LREG2
         _quant_kernels_configure_dest_incr_addrmod_();
         // Record the int8 body (MAD + offset-128 pack)
-        lltt::record<lltt::NoExec>(QUANT_REPLAY_SLOT, QUANT_REPLAY_LEN_INT8_OUT);
+        lltt::record<lltt::NoExec>(QUANT_REPLAY_SLOT, quant_replay_len<SIGN_MAGNITUDE_FORMAT, OUTPUT_FORMAT>());
         {
             TTI_SFPMAD(
                 p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG0, 0 /*mod1*/);  // v = A * B + (zp + 128)
@@ -298,8 +298,7 @@ void requant_init(const uint zero_point) {
         // Record the int8 body. Int8 input is unbiased (byte ^ 0x80) inline by the kernel
         // before the replay, so its body is just CAST + MAD + offset-128 pack (7). Int32
         // input runs the 2's-complement -> sign-magnitude fixup inside the recorded body (9).
-        constexpr std::uint32_t REPLAY_LEN =
-            INT8_INPUT ? REQUANT_REPLAY_LEN_INT8_OUT : REQUANT_REPLAY_LEN_INT8_OUT_INT32_IN;
+        constexpr std::uint32_t REPLAY_LEN = requant_replay_len<SIGN_MAGNITUDE_FORMAT, OUTPUT_FORMAT, INT8_INPUT>();
         lltt::record<lltt::NoExec>(REQUANT_REPLAY_SLOT, REPLAY_LEN);
         {
             if constexpr (!INT8_INPUT) {
