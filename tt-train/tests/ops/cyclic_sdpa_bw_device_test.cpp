@@ -97,6 +97,7 @@ struct Reference {
     uint32_t N = 0;
     uint32_t d = 0;
     xt::xarray<float> Q, K, V, dO;
+    xt::xarray<float> O;                 // the forward's output, P V
     xt::xarray<float> lse_tile, u_tile;  // (1,1,N,32), per-row value in column 0
     xt::xarray<float> dQ, dK, dV;
 };
@@ -152,7 +153,8 @@ Reference make_reference(uint32_t N, uint32_t d) {
         }
     }
 
-    const xt::xarray<float> O = xt::linalg::dot(P, r.V);
+    r.O = xt::linalg::dot(P, r.V);
+    const xt::xarray<float>& O = r.O;
     const xt::xarray<float> dP = xt::linalg::dot(r.dO, xt::transpose(r.V));
     std::vector<float> u(N, 0.0F);
     for (uint32_t i = 0; i < N; ++i) {
@@ -928,6 +930,33 @@ TEST(CyclicSdpaBwOpTest, WithTheBarrier) {
 TEST(CyclicSdpaBwOpTest, SurvivesAProgramCacheHit) {
     check_op(/* C */ 4, /* Bt */ 1, /* slices */ 1, /* use_barrier */ false);
     check_op(/* C */ 4, /* Bt */ 1, /* slices */ 1, /* use_barrier */ false);
+}
+
+// The overload that takes what a forward pass hands back, computing
+// D = rowsum(dO . O) itself. This is the path a model would use, so what it
+// tests is the convention: that a width reduction leaves the row value where
+// the kernel reads it, in column 0 of a tile.
+TEST(CyclicSdpaBwOpTest, ComputesTheRowScalarFromTheAttentionOutput) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    const uint32_t C = 4;
+    const uint32_t d = 64;
+    const auto ref = make_reference(2u * C * kTile, d);
+
+    const auto query = ttml::core::from_xtensor(as_4d_repeated(ref.Q, 1), device);
+    const auto key = ttml::core::from_xtensor(as_4d_repeated(ref.K, 1), device);
+    const auto value = ttml::core::from_xtensor(as_4d_repeated(ref.V, 1), device);
+    const auto grad_output = ttml::core::from_xtensor(as_4d_repeated(ref.dO, 1), device);
+    const auto lse = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(
+        repeat_4d(ref.lse_tile, 1), device);
+    // O = P V, which is what the forward leaves behind.
+    const auto attn_output = ttml::core::from_xtensor(as_4d_repeated(ref.O, 1), device);
+
+    const auto [grad_query, grad_key, grad_value] = ttml::metal::cyclic_sdpa_bw_from_forward(
+        query, key, value, grad_output, attn_output, lse, /* Bt */ 1, /* use_barrier */ false);
+
+    expect_close(ttml::core::to_xtensor(grad_query), ref.dQ, 0.06F, "dQ from the forward's output");
+    expect_close(ttml::core::to_xtensor(grad_key), ref.dK, 0.06F, "dK from the forward's output");
+    expect_close(ttml::core::to_xtensor(grad_value), ref.dV, 0.06F, "dV from the forward's output");
 }
 
 // ------------------------------------------ Algorithm 4: no chip-wide barrier
