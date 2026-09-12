@@ -907,7 +907,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     };
     if (operation_attributes.binary_op_type == BinaryOpType::QUANT) {
         if (c_dtype == DataType::UINT8) {
-            compute_kernel_defines["BINARY_SFPU_INIT"] = std::string("quant_uint8_tile_init") + quant_zp_arg;
+            set_sfpu_op("quant_uint8_tile_init", "quant_uint8_tile");
         } else if (c_dtype == DataType::INT8) {
             set_sfpu_op("quant_int8_tile_init", "quant_int8_tile");
         }
@@ -921,11 +921,12 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 int8_in ? "requant_int8_in_int8_out_tile_init" : "requant_int8_tile_init",
                 int8_in ? "requant_int8_in_int8_out_tile" : "requant_int8_tile");
         } else if (c_dtype == DataType::UINT8) {
-            // uint8 output uses the standard packer narrowing (int32 SFPU result -> uint8), so it reuses
-            // the int32-output op body; only the init differs, to select FP32_TO_UINT8 rounding.
+            // uint8 output uses the standard packer narrowing (int32 SFPU result -> uint8), but the SFPU
+            // body clamps negatives before the FP32_TO_UINT8 rounding, so it records and replays a length
+            // of its own and needs the matching uint8 op, not the int32-output one.
             set_sfpu_op(
                 int8_in ? "requant_int8_in_uint8_out_tile_init" : "requant_uint8_tile_init",
-                int8_in ? "requant_int8_in_tile" : "requant_tile");
+                int8_in ? "requant_int8_in_uint8_out_tile" : "requant_uint8_tile");
         } else if (int8_in) {
             set_sfpu_op("requant_int8_in_tile_init", "requant_int8_in_tile");
         }
