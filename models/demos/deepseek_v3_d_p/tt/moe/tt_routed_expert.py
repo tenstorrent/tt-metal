@@ -397,6 +397,7 @@ class TtRoutedExpert(LightweightModule):
         weights_dtype=DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_LOFI,
         weights_dram_sharded: bool = False,
+        in0_block_w_gu: int = 0,
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
         *,
@@ -446,6 +447,12 @@ class TtRoutedExpert(LightweightModule):
         # DRAM ND-sharded weights: one NoC request per K-row slice instead of one per tile, with
         # the shard->bank round-robin rotating banks across K-rows. See dram_nd_shard_spec.
         self.weights_dram_sharded = weights_dram_sharded
+        # Requested gate/up K-block width in tiles (0 = the op's default). A wider block means
+        # fewer K-blocks and so fewer row-major x reads, at the cost of L1; the op snaps the
+        # request to a divisor of K and to what fits. Measured worth ~1.02-1.04x below 256
+        # active tokens on emb 6144 / hidden 2048 with ND-sharded weights, and nothing on the
+        # shapes whose fitted width does not move -- so it is set per model, not globally.
+        self.in0_block_w_gu = in0_block_w_gu
         self.compute_kernel_config = compute_kernel_config
         self.weight_cache_path = weight_cache_path
         self.cache_name_prefix = cache_name_prefix
@@ -722,6 +729,7 @@ class TtRoutedExpert(LightweightModule):
                     up_biases=self.up_biases,
                     down_biases=self.down_biases,
                     min_active_tokens=0 if threshold is None else threshold + 1,
+                    in0_block_w_gu=self.in0_block_w_gu,
                 )
             else:
                 # Nobody allocated for us. Match what the composite hands back: one shared
