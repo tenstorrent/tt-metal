@@ -200,6 +200,11 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_column_progress));
 #endif
 
+    // Which columns this core owns, and whether each has been resident.
+    const auto owned = sched.owned_columns(my_core);
+    const uint32_t owned_column[2] = {owned.first, owned.second};
+    bool visited[2] = {false, false};
+
     uint32_t sent_to_prev = 0;
     uint32_t sent_to_next = 0;
     uint32_t sent_to_self = 0;
@@ -268,25 +273,31 @@ void kernel_main() {
             read_tiles_by_row(cb_value, value, (j - 1u) * vWt, vWt, tile_bytes, vWt);
         }
 
-        // The column gradients this core wrote at an earlier timestep. Only
-        // this core's own write kernel produces them, so with the barrier
-        // gone a local word is enough.
-        if (t > 0u) {
-            WAYPOINT("COLW");
+        // Accumulated column gradients are needed only where an interval
+        // starts on a column this core has been resident on before -- one
+        // revisit per core, its third interval. They were stored by this
+        // core's own write kernel at the end of the earlier interval, so the
+        // wait is on that kernel's progress, not on anything chip-wide.
+        if (column_changed) {
+            const uint32_t owned_slot = (j == owned_column[0]) ? 0u : 1u;
+            if (visited[owned_slot]) {
+                WAYPOINT("COLW");
 #if ENDPOINT_SYNC
-            do {
-                invalidate_l1_cache();
-            } while ((*column_progress) < t);
+                do {
+                    invalidate_l1_cache();
+                } while ((*column_progress) < t);
 #else
-            do {
-                invalidate_l1_cache();
-            } while ((*release_sem) < t);
+                do {
+                    invalidate_l1_cache();
+                } while ((*release_sem) < t);
 #endif
-            WAYPOINT("COLD");
+                WAYPOINT("COLD");
+                read_tiles_by_row(cb_grad_key_seed, grad_key, (j - 1u) * qWt, qWt, grad_bytes, qWt);
+                read_tiles_by_row(
+                    cb_grad_value_seed, grad_value, (j - 1u) * vWt, vWt, grad_bytes, vWt);
+            }
+            visited[owned_slot] = true;
         }
-        read_tiles_by_row(cb_grad_key_seed, grad_key, (j - 1u) * qWt, qWt, grad_bytes, qWt);
-        read_tiles_by_row(cb_grad_value_seed, grad_value, (j - 1u) * vWt, vWt, grad_bytes, vWt);
-
         // Reserve this timestep's slot in every packet buffer, which is the
         // release of t - 2 becoming a credit for whoever fills it.
         cb_reserve_back(cb_query, qWt);
@@ -348,7 +359,6 @@ void kernel_main() {
         cb_push_back(cb_lse, 1);
         cb_push_back(cb_u_scalar, 1);
         cb_push_back(cb_grad_query_seed, qWt);
-
         // The compute kernel's updated dQ closes the packet.
         cb_wait_front(cb_grad_query_out, qWt);
         const uint32_t dq_out = get_read_ptr(cb_grad_query_out);

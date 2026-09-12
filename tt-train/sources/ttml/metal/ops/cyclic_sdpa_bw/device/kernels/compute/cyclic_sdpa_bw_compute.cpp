@@ -61,12 +61,22 @@
 #include "tt-train/sources/ttml/metal/ops/cyclic_sdpa_bw/device/cyclic_schedule.hpp"
 #include "tt-train/sources/ttml/metal/ops/sdpa_bw/device/kernels/compute/sdpa_bw_compute_utils.hpp"
 
-// COLUMN_RESIDENT: keep the column state across a residency interval instead
-// of taking it fresh every timestep. The reader then loads K_j and V_j only
-// when the column changes -- twice per core over T + 1 timesteps, always at a
-// diagonal block -- and this kernel releases the storage by popping at the
-// change. Algorithm 2's reader still supplies them per timestep, so the two
-// have to agree, hence a switch rather than a change.
+// COLUMN_RESIDENT: keep the whole column state across a residency interval
+// instead of taking it fresh every timestep, which is the paper's
+// column-state management. Each core changes its resident column exactly
+// twice over T + 1 timesteps, always at a diagonal block, giving three
+// intervals: its first column, its other column, then the first again.
+//
+// K_j and V_j are read once per interval, and this kernel releases the
+// storage by popping at the change. dK_j and dV_j accumulate in L1 for the
+// whole interval and are handed over once, at its end, for the write kernel
+// to store. At an interval start they either begin from nothing -- a first
+// visit, where the first update overwrites rather than accumulates, so the
+// zeros never come from DRAM -- or from the value in DRAM, on the one
+// revisit each core makes.
+//
+// Algorithm 2's reader still supplies the column per timestep, so the two
+// have to agree on who pops and when, hence a switch rather than a change.
 #ifndef COLUMN_RESIDENT
 #define COLUMN_RESIDENT 0
 #endif
@@ -169,6 +179,15 @@ void kernel_main() {
     constexpr CyclicSchedule sched(kCores);
     constexpr uint32_t kTimesteps = 2u * kCores + 1u;
 
+#if COLUMN_RESIDENT
+    // Which columns this core owns, whether each has been resident before --
+    // a first visit starts the gradients from nothing, a revisit from DRAM --
+    // and whether the current interval's updates accumulate or overwrite.
+    const auto owned = sched.owned_columns(my_core);
+    bool visited[2] = {false, false};
+    bool column_accumulating = false;
+#endif
+
     compute_kernel_hw_startup(cb_query, cb_key, cb_attention_weights);
     copy_init(cb_query);
     matmul_init(cb_query, cb_key);
@@ -182,9 +201,25 @@ void kernel_main() {
         // Popped only when the column changes, which releases the storage for
         // the next column. Waiting every timestep is free once it is there.
         const bool column_changed = (t == 0u) || (sched.pair(my_core, t - 1u).j != pair.j);
+        const bool column_ends =
+            (t + 1u == kTimesteps) || (sched.pair(my_core, t + 1u).j != pair.j);
+        const uint32_t owned_slot = (pair.j == owned.first) ? 0u : 1u;
         if (column_changed && t > 0u) {
             cb_pop_front(cb_key, qWt);
             cb_pop_front(cb_value, vWt);
+        }
+        if (column_changed) {
+            if (visited[owned_slot]) {
+                // A revisit: the interval starts from what is in DRAM.
+                pack_tiles_to_output(cb_grad_key_seed, cb_grad_key_accum, qWt);
+                pack_tiles_to_output(cb_grad_value_seed, cb_grad_value_accum, vWt);
+                column_accumulating = true;
+            } else {
+                // A first visit: the first update writes rather than adds, so
+                // the gradients start at zero without reading zeros.
+                column_accumulating = false;
+                visited[owned_slot] = true;
+            }
         }
 #endif
         cb_wait_front(cb_query, qWt);
@@ -227,7 +262,17 @@ void kernel_main() {
             cb_grad_scores, cb_key, cb_grad_query_accum, qWt, block_size, /* accumulate */ true);
         pack_tiles_to_output(cb_grad_query_accum, cb_grad_query_out, qWt);
 
-        // ---- dV_j = (dV_j from DRAM) + P^T dO_i
+        // ---- dV_j += P^T dO_i
+#if COLUMN_RESIDENT
+        update_grad_value(
+            cb_attn_weights_transposed,
+            cb_grad_output,
+            cb_grad_value_accum,
+            vWt,
+            block_size,
+            column_accumulating);
+        cb_wait_front(cb_grad_value_accum, vWt);
+#else
         pack_tiles_to_output(cb_grad_value_seed, cb_grad_value_accum, vWt);
         update_grad_value(
             cb_attn_weights_transposed,
@@ -237,9 +282,12 @@ void kernel_main() {
             block_size,
             /* accumulate */ true);
         pack_tiles_to_output(cb_grad_value_accum, cb_grad_value_out, vWt);
+#endif
 
-        // ---- dK_j = (dK_j from DRAM) + dS^T Q_i
+        // ---- dK_j += dS^T Q_i
+#if !COLUMN_RESIDENT
         pack_tiles_to_output(cb_grad_key_seed, cb_grad_key_accum, qWt);
+#endif
         // The last two arguments must name what the *previous* operation
         // actually left in the packer and in SrcA, because the reconfigs they
         // drive are conditional and skip when the formats match. The
@@ -256,10 +304,26 @@ void kernel_main() {
             cb_grad_key_accum,
             qWt,
             block_size,
+#if COLUMN_RESIDENT
+            // The preceding operation is update_grad_value, so its accumulator
+            // is what the packer and SrcA were last set from.
+            /* cb_prev_pack */ cb_grad_value_accum,
+            /* cb_prev_srca */ cb_grad_output,
+            column_accumulating);
+        cb_wait_front(cb_grad_key_accum, qWt);
+        column_accumulating = true;
+
+        // Hand both column gradients over once, at the end of the interval.
+        if (column_ends) {
+            pack_tiles_to_output(cb_grad_value_accum, cb_grad_value_out, vWt);
+            pack_tiles_to_output(cb_grad_key_accum, cb_grad_key_out, qWt);
+        }
+#else
             /* cb_prev_pack */ cb_grad_value_out,
             /* cb_prev_srca */ cb_grad_value_accum,
             /* accumulate */ true);
         pack_tiles_to_output(cb_grad_key_accum, cb_grad_key_out, qWt);
+#endif
 
         cb_pop_front(cb_query, qWt);
 #if !COLUMN_RESIDENT
