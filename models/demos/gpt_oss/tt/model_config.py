@@ -122,7 +122,12 @@ class ModelArgs:
             self.processor = None  # GPT-OSS doesn't use vision processor
 
         self.disable_batched_prefill = True
-        self.capped_warmup_seq_len = 2048
+        # Prefill lengths up to this are compiled during warm-up, BEFORE the decode/prefill traces are captured. A
+        # length first used after that compiles its programs next to live traces, which can corrupt them
+        # (tenstorrent/tt-metal#55588: garbage or a hang on the first such request). tt_transformers' default is
+        # 2048; GPT-OSS serves 4K/8K prompts routinely, so warm those too (~30-40 s each for the 20B on P150x8).
+        # Servers with a larger max_model_len should raise this further.
+        self.capped_warmup_seq_len = 8192
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
 
     def get_warmup_prefill_supported_seq_lens(self):
