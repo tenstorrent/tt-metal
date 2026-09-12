@@ -12,6 +12,10 @@
 #include <chrono>
 #include <set>
 #include <string>
+#include <cmath>
+#include <limits>
+#include <fmt/format.h>
+#include <umd/device/driver_atomics.hpp>
 #include <thread>
 #include <unordered_map>
 
@@ -165,11 +169,36 @@ DeviceClock sync_device_clock(tt::Cluster& cluster, uint32_t chip_id, const Core
     out.frequency_ghz = slope / ns_per_tick;
     // Anchor on the sample mean: extrapolating an intercept to host_time=0 turns a tiny slope error into a huge
     // offset. The samples bracket Tracy's timer while the public clock is std::chrono::steady_clock, so the anchor
-    // is re-expressed in steady_clock terms here, once.
+    // is re-expressed in steady_clock terms here, once, through the tightest of several timer/steady/timer
+    // brackets, so a preemption between the two reads cannot land in the anchor.
     out.anchor_ticks = static_cast<uint64_t>(dy);
+    int64_t best_gap = std::numeric_limits<int64_t>::max();
+    int64_t bracket_mid = 0, bracket_steady = 0;
+    for (int i = 0; i < 16; i++) {
+        const int64_t t0 = profiler_ticks_now();
+        tt_driver_atomics::lfence();
+        const int64_t sn = steady_now_ns();
+        tt_driver_atomics::lfence();
+        const int64_t t1 = profiler_ticks_now();
+        if (t1 - t0 < best_gap) {
+            best_gap = t1 - t0;
+            bracket_mid = t0 + (t1 - t0) / 2;
+            bracket_steady = sn;
+        }
+    }
     out.anchor_host_ns =
-        steady_now_ns() -
-        static_cast<int64_t>(static_cast<double>(profiler_ticks_now() - static_cast<int64_t>(hx)) * ns_per_tick);
+        bracket_steady -
+        static_cast<int64_t>(static_cast<double>(bracket_mid - static_cast<int64_t>(hx)) * ns_per_tick);
+    double rss = 0;
+    for (const auto& s : samples) {
+        const double r = static_cast<double>(s.dev) - dy - slope * (static_cast<double>(s.host_mid) - hx);
+        rss += r * r;
+    }
+    if (samples.size() > 2 && out.frequency_ghz > 0.0) {
+        out.anchor_sigma_ns =
+            std::sqrt(rss / static_cast<double>(samples.size() - 2) / static_cast<double>(samples.size())) /
+            out.frequency_ghz;
+    }
     return out;
 }
 
@@ -400,10 +429,16 @@ bool Devices::boot_device(
         ctx.out.ctx.eth_clock = sync_device_clock(cluster, ctx.chip_id, ctx.eth.front().virt);
         log_info(
             tt::LogMetal,
-            "[streaming profiler] Device {}: eth clock anchor_ticks {} ghz {:.5f} (worker ghz {:.5f})",
+            "[streaming profiler] Device {}: eth clock anchor_ticks {} at host ns {} (+-{:.0f} ns) ghz {:.5f}; worker "
+            "clock anchor_ticks {} at host ns {} (+-{:.0f} ns) ghz {:.5f}",
             ctx.chip_id,
             ctx.out.ctx.eth_clock.anchor_ticks,
+            ctx.out.ctx.eth_clock.anchor_host_ns,
+            ctx.out.ctx.eth_clock.anchor_sigma_ns,
             ctx.out.ctx.eth_clock.frequency_ghz,
+            ctx.out.clock.anchor_ticks,
+            ctx.out.clock.anchor_host_ns,
+            ctx.out.clock.anchor_sigma_ns,
             ctx.out.clock.frequency_ghz);
         // Same chip AICLK as the workers: reuse the worker's reliably-measured frequency, keep only the eth
         // anchor tick (the counter's zero). The idle-eth core runs the pusher, so its own slope read is noisier.
