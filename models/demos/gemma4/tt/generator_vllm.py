@@ -2269,22 +2269,28 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         # allocating/freeing a fresh decoder's buffers (which fragments DRAM).
         # A bucket change (different prompt length band) releases + re-captures.
         dec = self._spec_decoder
-        # Cross-request decoder reuse: DEFAULT OFF, now for a measured
-        # PERFORMANCE reason rather than the correctness one it was turned off
-        # for before. e62930d4d7d fixed the correctness half (a reseeded session
-        # no longer reads the previous request's output), but a reseeded session
-        # still DRAFTS worse than a freshly captured one -- some drafter state is
-        # still not restored by reseed(). Acceptance on a P150x8 31B server:
-        #   capture sessions 4.2-5.5 tokens/iter
-        #   reseeded sessions 1.9-3.7 tokens/iter
-        # and that halves conc-1 decode. Measured 1000/median_tpot, conc-1:
-        #   ISL 128:  reuse ON 80.7   reuse OFF 64.0
-        #   ISL 1024: reuse ON 43.8   reuse OFF 84.3
-        #   ISL 4096: reuse ON 38.5   reuse OFF 91.2
-        # So paying the ~1.3 s capture per request buys back ~2x the decode rate
-        # at ISL >= 1024. Re-enable with GEMMA4_DFLASH_DECODER_REUSE=1 (it is
-        # correct now, just slower); restoring capture-level acceptance on the
-        # reseed path is the open work that would make ON the better default.
+        # Cross-request decoder reuse: DEFAULT OFF, conservatively -- the two
+        # paths are now EQUIVALENT, so OFF is simply the unchanged behaviour and
+        # not a considered preference.
+        #
+        # The earlier rationale here ("reseeded sessions draft worse": capture
+        # 4.2-5.5 vs reseeded 1.9-3.7 tokens/iter, reuse ON ~2x slower at
+        # ISL >= 1024) was an ARTIFACT of the page-table lifetime bug and is
+        # retracted. That bug corrupted the no-reuse branch only -- release
+        # deleted the per-layer tables the bootstrap had just installed -- so it
+        # made freshly CAPTURED sessions look bad and, when the numbers happened
+        # to fall the other way, reuse look bad. reseed() was never the problem.
+        #
+        # Re-measured on a P150x8 31B server AFTER that fix, 40,624-token prompt,
+        # 4 identical requests, temperature 0 -- byte-identical replies both ways:
+        #   acceptance   OFF 3.05/4.12/4.16/4.16   ON 3.05/4.12/4.16/4.16
+        #   wall/request OFF 13.8-13.9 s           ON 12.7-12.8 s
+        #   median TPOT  OFF 29.16 ms              ON 30.16 ms  (random ISL 32768)
+        # ON saves the ~1.1 s capture per request and costs nothing measurable in
+        # TPOT, so GEMMA4_DFLASH_DECODER_REUSE=1 is a safe win on workloads that
+        # stay inside one packed-verify width bucket; it is not the default only
+        # because bucket churn re-captures anyway and the DRAM-fragmentation
+        # question for long-lived servers has not been measured.
         _reuse_ok = os.environ.get("GEMMA4_DFLASH_DECODER_REUSE", "0").lower() in ("1", "true", "yes")
         reused = (
             _reuse_ok
